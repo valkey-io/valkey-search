@@ -17,6 +17,10 @@
 #include "src/schema_manager.h"
 #include "vmsdk/src/command_parser.h"
 
+namespace valkey_search::query {
+struct SearchResult;
+}
+
 namespace valkey_search {
 namespace aggregate {
 
@@ -24,6 +28,7 @@ class Command;
 class Record;
 class RecordSet;
 class Stage;
+class SortBy;
 
 struct IndexInterface {
   virtual absl::StatusOr<indexes::IndexerType> GetFieldType(
@@ -37,10 +42,9 @@ struct IndexInterface {
 struct AggregateParameters : public expr::Expression::CompileContext,
                              public QueryCommand {
   ~AggregateParameters() override = default;
-  AggregateParameters() = default;
+  AggregateParameters(int db_num) : QueryCommand(db_num){};
   absl::Status ParseCommand(vmsdk::ArgsIterator& itr) override;
-  void SendReply(ValkeyModuleCtx* ctx,
-                 std::deque<indexes::Neighbor>& neighbors) override;
+  void SendReply(ValkeyModuleCtx* ctx, query::SearchResult& result) override;
   bool loadall_{false};
   std::vector<std::string> loads_;
   bool load_key{false};
@@ -60,6 +64,10 @@ struct AggregateParameters : public expr::Expression::CompileContext,
       return absl::NotFoundError(absl::StrCat("parameter ", s, " not found."));
     }
   }
+
+  // Determine if we need full results or if we can optimize with trimming via
+  // LIMIT offset & count.
+  bool RequiresCompleteResults() const override;
 
   //
   // Information for each index position in a Record

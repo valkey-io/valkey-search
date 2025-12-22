@@ -30,6 +30,13 @@ config::Number& GetReaderThreadCount();
 /// number of writer threads
 config::Number& GetWriterThreadCount();
 
+/// Return the configuration entry that allows the caller to control the
+/// number of utility threads
+config::Number& GetUtilityThreadCount();
+
+/// Return the configuration entry for search result background cleanup
+const config::Boolean& GetSearchResultBackgroundCleanup();
+
 /// Return the max time in seconds that the worker thread pool is
 /// suspended after fork started
 config::Number& GetMaxWorkerSuspensionSecs();
@@ -49,8 +56,11 @@ config::Enum& GetLogLevel();
 /// Reset the state of the options (mainly needed for testing)
 absl::Status Reset();
 
-/// Allow delivery of partial results when timeout occurs
-const config::Boolean& GetEnablePartialResults();
+/// Default option of delivering partial results when timeout occurs
+const config::Boolean& GetPreferPartialResults();
+
+/// Default option of delivering consistent results when timeout occurs
+const config::Boolean& GetPreferConsistentResults();
 
 /// Return the configuration entry for high priority weight in thread pools
 config::Number& GetHighPriorityWeight();
@@ -67,6 +77,9 @@ config::Number& GetLocalFanoutQueueWaitThreshold();
 
 /// Return the sample queue size for thread pool wait time tracking
 config::Number& GetThreadPoolWaitTimeSamples();
+
+/// Return the search result buffer multiplier value
+double GetSearchResultBufferMultiplier();
 
 }  // namespace options
 }  // namespace valkey_search

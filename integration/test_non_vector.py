@@ -83,6 +83,11 @@ def validate_non_vector_queries(client: Valkey):
     document = result[2]
     doc_fields = dict(zip(document[::2], document[1::2]))
     assert doc_fields == expected_hash_value
+    # Test NOCONTENT on Hash documents
+    result = client.execute_command(*(numeric_query + ["NOCONTENT"]))
+    assert len(result) == 2
+    assert result[0] == 1  # Number of documents found
+    assert result[1] == expected_hash_key  # Only key, no content
     # Validate a numeric query on JSON documents.
     result = client.execute_command(*numeric_query_on_json)
     assert len(result) == 3
@@ -95,6 +100,11 @@ def validate_non_vector_queries(client: Valkey):
         assert key in doc, f"Key '{key}' not found in the document"
         assert doc[key] == value, f"Expected {key}={value}, got {key}={doc[key]}"
     assert set(doc.keys()) == set(expected_numeric_json_value.keys()), "Document contains unexpected fields"
+    # Test NOCONTENT on JSON documents
+    result = client.execute_command(*(numeric_query_on_json + ["NOCONTENT"]))
+    assert len(result) == 2
+    assert result[0] == 1  # Number of documents found
+    assert result[1] == expected_numeric_json_key  # Only key, no content
     # Validate that a tag + numeric query on JSON document works.
     result = client.execute_command(*numeric_tag_query_on_json)
     assert len(result) == 3
@@ -107,6 +117,113 @@ def validate_non_vector_queries(client: Valkey):
         assert key in doc, f"Key '{key}' not found in the document"
         assert doc[key] == value, f"Expected {key}={value}, got {key}={doc[key]}"
     assert set(doc.keys()) == set(expected_numeric_tag_json_value.keys()), "Document contains unexpected fields"
+
+def validate_limit_queries(client: Valkey):
+    """
+        Test LIMIT functionality on non-vector queries.
+    """
+    # Test LIMIT 0 2 - get first 2 results
+    result = client.execute_command("FT.SEARCH", "products", "@price:[0 +inf]", "LIMIT", "0", "2")
+    assert result[0] == 4  # Total count
+    assert len(result) == 5  # 1 count + 2 docs (key + content each)
+    # Test LIMIT 1 1 - skip first, get next 1
+    result = client.execute_command("FT.SEARCH", "products", "@price:[0 +inf]", "LIMIT", "1", "1")
+    assert result[0] == 4  # Total count
+    assert len(result) == 3  # 1 count + 1 doc (key + content)
+    # Test LIMIT with NOCONTENT
+    result = client.execute_command("FT.SEARCH", "products", "@price:[0 +inf]", "LIMIT", "0", "2", "NOCONTENT")
+    assert result[0] == 4  # Total count
+    assert len(result) == 3  # 1 count + 2 keys only
+    # Test LIMIT 0 0 - no results
+    result = client.execute_command("FT.SEARCH", "products", "@price:[0 +inf]", "LIMIT", "0", "0")
+    assert result[0] == 4  # Total count only
+    assert len(result) == 1
+
+def create_bulk_data_standalone(client: Valkey):
+    """
+        Create bulk data for standalone testing.
+    """
+    bulk_index = "FT.CREATE bulk_products ON HASH PREFIX 1 bulk_product: SCHEMA price NUMERIC category TAG rating NUMERIC"
+    assert client.execute_command(bulk_index) == b"OK"
+    # Insert 2500 documents with varying prices and categories
+    for i in range(2500):
+        price = 10 + (i * 2)  # Prices from 10 to 5008
+        category = "cat" + str(i % 10)  # 10 different categories
+        rating = 3.0 + (i % 3)  # Ratings 3.0, 4.0, 5.0
+        client.execute_command("HSET", f"bulk_product:{i}", "price", str(price), "category", category, "rating", str(rating))
+
+def create_bulk_data_cluster(index_client: Valkey, data_client):
+    """
+        Create bulk data for cluster testing.
+    """
+    bulk_index = "FT.CREATE bulk_products ON HASH PREFIX 1 bulk_product: SCHEMA price NUMERIC category TAG rating NUMERIC"
+    assert index_client.execute_command(bulk_index) == b"OK"
+    # Insert 2500 documents with varying prices and categories
+    for i in range(2500):
+        price = 10 + (i * 2)  # Prices from 10 to 5008
+        category = "cat" + str(i % 10)  # 10 different categories
+        rating = 3.0 + (i % 3)  # Ratings 3.0, 4.0, 5.0
+        data_client.execute_command("HSET", f"bulk_product:{i}", "price", str(price), "category", category, "rating", str(rating))
+
+def validate_buffer_multiplier_config(client: Valkey):
+    """
+        Test search result buffer multiplier configuration validation.
+    """
+    import pytest
+    # Test valid positive values
+    assert client.execute_command("CONFIG SET search.search-result-buffer-multiplier 2.5") == b"OK"
+    assert client.execute_command("CONFIG SET search.search-result-buffer-multiplier 1.2") == b"OK"
+    # Test that values outside range are rejected
+    with pytest.raises(ResponseError, match=r"Buffer multiplier must be between 1.0 and 1000.0"):
+        client.execute_command("CONFIG SET search.search-result-buffer-multiplier -1.0")
+    with pytest.raises(ResponseError, match=r"Buffer multiplier must be between 1.0 and 1000.0"):
+        client.execute_command("CONFIG SET search.search-result-buffer-multiplier 0.5")
+    with pytest.raises(ResponseError, match=r"Buffer multiplier must be between 1.0 and 1000.0"):
+        client.execute_command("CONFIG SET search.search-result-buffer-multiplier 1001.0")
+    # Test that invalid strings are rejected
+    with pytest.raises(ResponseError, match=r"Buffer multiplier must be a valid number"):
+        client.execute_command("CONFIG SET search.search-result-buffer-multiplier invalid")
+
+def validate_bulk_limit_queries(client: Valkey):
+    """
+        Test bulk operations with various LIMIT and OFFSET combinations to validate background limit changes.
+    """
+    validate_buffer_multiplier_config(client)
+    assert client.execute_command("CONFIG SET search.search-result-buffer-multiplier 1.2") == b"OK"
+    # Test various limit/offset combinations
+    test_cases = [
+        (0, 100),    # First 100 results
+        (500, 50),   # 50 results starting from position 500
+        (1000, 100), # 100 results starting from position 1000
+        (2400, 200), # Last 100 results (should only return 100)
+        (0, 1000),   # Large batch
+        (2500, 10),  # Offset beyond available data
+    ]
+    for offset, limit in test_cases:
+        # Test with content
+        result = client.execute_command("FT.SEARCH", "bulk_products", "@price:[0 +inf]", "LIMIT", str(offset), str(limit))
+        total_count = result[0]
+        assert total_count == 2500  # Always should report total count
+        expected_results = min(limit, max(0, 2500 - offset))
+        actual_results = (len(result) - 1) // 2  # Subtract count, divide by 2 for key+content pairs
+        assert actual_results == expected_results, f"Offset {offset}, Limit {limit}: expected {expected_results}, got {actual_results}"
+        # Test with NOCONTENT
+        result_nocontent = client.execute_command("FT.SEARCH", "bulk_products", "@price:[0 +inf]", "LIMIT", str(offset), str(limit), "NOCONTENT")
+        assert result_nocontent[0] == 2500  # Total count
+        actual_keys = len(result_nocontent) - 1  # Subtract count
+        assert actual_keys == expected_results, f"NOCONTENT Offset {offset}, Limit {limit}: expected {expected_results}, got {actual_keys}"
+    
+    # Test filtered queries with limits
+    result = client.execute_command("FT.SEARCH", "bulk_products", "@category:{cat0}", "LIMIT", "0", "50")
+    assert result[0] == 250  # Should find 250 documents in cat0 (2500/10)
+    assert (len(result) - 1) // 2 == 50  # Should return 50 results
+    
+    # Test with complex filter and offset
+    result = client.execute_command("FT.SEARCH", "bulk_products", "@price:[100 500] @rating:[4.0 +inf]", "LIMIT", "2", "3")
+    total_count = result[0]
+    actual_results = (len(result) - 1) // 2
+    assert actual_results <= 3  # Should return at most 3 results
+    assert actual_results == min(3, max(0, total_count - 2))  # Respect offset of 2
 
 class TestNonVector(ValkeySearchTestCaseBase):
 
@@ -124,6 +241,8 @@ class TestNonVector(ValkeySearchTestCaseBase):
             assert client.execute_command(*doc) == b"OK"
         # Validation of numeric and tag queries.
         validate_non_vector_queries(client)
+        # Test LIMIT functionality
+        validate_limit_queries(client)
 
     def test_uningested_multi_field(self):
         """
@@ -145,6 +264,14 @@ class TestNonVector(ValkeySearchTestCaseBase):
         assert result[0] == 1
         assert result[1] == b'multifield_product:4'
 
+    def test_bulk_limit_background_changes(self):
+        """
+            Test bulk operations with various LIMIT and OFFSET combinations to validate background limit changes.
+        """
+        client: Valkey = self.server.get_new_client()
+        create_bulk_data_standalone(client)
+        validate_bulk_limit_queries(client)
+
 class TestNonVectorCluster(ValkeySearchClusterTestCase):
 
     def test_non_vector_cluster(self):
@@ -160,6 +287,11 @@ class TestNonVectorCluster(ValkeySearchClusterTestCase):
             assert cluster_client.execute_command(*doc) == 5
         for doc in json_docs:
             assert cluster_client.execute_command(*doc) == b"OK"
+        create_bulk_data_cluster(client, cluster_client)
         time.sleep(1)
         # Validation of numeric and tag queries.
         validate_non_vector_queries(client)
+        # Test LIMIT functionality
+        validate_limit_queries(client)
+        # Test bulk limit functionality
+        validate_bulk_limit_queries(client)

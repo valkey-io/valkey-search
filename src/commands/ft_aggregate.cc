@@ -42,11 +42,10 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
   // Figure out what fields actually need to be returned by the aggregation
   // operation. And modify the common search returns list accordingly
   CHECK(!params.no_content);
+  bool content = false;
   if (params.loadall_) {
     CHECK(params.return_attributes.empty());
-  } else if (params.loads_.empty()) {
-    // Nothing, don't load anything
-    params.no_content = true;
+    return absl::OkStatus();
   } else {
     for (const auto &load : params.loads_) {
       //
@@ -59,6 +58,7 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
       if (load == vmsdk::ToStringView(params.score_as.get())) {
         continue;
       }
+      content = true;
       VMSDK_ASSIGN_OR_RETURN(auto indexer, params.index_schema->GetIndex(load));
       auto indexer_type = indexer->GetIndexerType();
       auto schema_identifier = params.index_schema->GetIdentifier(load);
@@ -77,6 +77,7 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
       }
     }
   }
+  params.no_content = !content;
   return absl::OkStatus();
 }
 
@@ -108,6 +109,7 @@ absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator &itr) {
                                                         // 10 from search
 
   VMSDK_RETURN_IF_ERROR(PostParseQueryString(*this));
+  VMSDK_RETURN_IF_ERROR(VerifyQueryString(*this));
   VMSDK_RETURN_IF_ERROR(ManipulateReturnsClause(*this));
 
   return absl::OkStatus();
@@ -165,26 +167,37 @@ bool ReplyWithValue(ValkeyModuleCtx *ctx,
 absl::Status SendReplyInner(ValkeyModuleCtx *ctx,
                             std::deque<indexes::Neighbor> &neighbors,
                             AggregateParameters &parameters) {
-  auto identifier =
-      parameters.index_schema->GetIdentifier(parameters.attribute_alias);
-  if (!identifier.ok()) {
-    ++Metrics::GetStats().query_failed_requests_cnt;
-    return identifier.status();
-  }
-
-  query::ProcessNeighborsForReply(
-      ctx, parameters.index_schema->GetAttributeDataType(), neighbors,
-      parameters, identifier.value());
-
   size_t key_index = 0, scores_index = 0;
-  if (parameters.load_key) {
-    key_index = parameters.AddRecordAttribute("__key", "__key",
-                                              indexes::IndexerType::kNone);
-  }
   if (parameters.IsVectorQuery()) {
-    auto score_sv = vmsdk::ToStringView(parameters.score_as.get());
-    scores_index = parameters.AddRecordAttribute(score_sv, score_sv,
-                                                 indexes::IndexerType::kNone);
+    auto identifier =
+        parameters.index_schema->GetIdentifier(parameters.attribute_alias);
+    if (!identifier.ok()) {
+      ++Metrics::GetStats().query_failed_requests_cnt;
+      return identifier.status();
+    }
+
+    query::ProcessNeighborsForReply(
+        ctx, parameters.index_schema->GetAttributeDataType(), neighbors,
+        parameters, identifier.value());
+
+    if (parameters.load_key) {
+      key_index = parameters.AddRecordAttribute("__key", "__key",
+                                                indexes::IndexerType::kNone);
+    }
+    if (parameters.IsVectorQuery()) {
+      auto score_sv = vmsdk::ToStringView(parameters.score_as.get());
+      scores_index = parameters.AddRecordAttribute(score_sv, score_sv,
+                                                   indexes::IndexerType::kNone);
+    }
+  } else {
+    query::ProcessNonVectorNeighborsForReply(
+        ctx, parameters.index_schema->GetAttributeDataType(), neighbors,
+        parameters);
+
+    if (parameters.load_key) {
+      key_index = parameters.AddRecordAttribute("__key", "__key",
+                                                indexes::IndexerType::kNone);
+    }
   }
 
   //
@@ -302,13 +315,24 @@ absl::Status SendReplyInner(ValkeyModuleCtx *ctx,
   return absl::OkStatus();
 }
 
+// TODO: Implement the correct logic to detect if the FT.AGGREGATE query has a
+// clause (e.g. sorting) that requires all neighbors to be returned for the
+// correct search result.
+bool AggregateParameters::RequiresCompleteResults() const {
+  for (const auto &stage : stages_) {
+    if (dynamic_cast<const SortBy *>(stage.get()) != nullptr) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void AggregateParameters::SendReply(ValkeyModuleCtx *ctx,
-                                    std::deque<indexes::Neighbor> &neighbors) {
-  auto identifier = index_schema->GetIdentifier(attribute_alias);
-  auto result = SendReplyInner(ctx, neighbors, *this);
-  if (!result.ok()) {
+                                    query::SearchResult &result) {
+  auto status = SendReplyInner(ctx, result.neighbors, *this);
+  if (!status.ok()) {
     ++Metrics::GetStats().query_failed_requests_cnt;
-    ValkeyModule_ReplyWithError(ctx, result.message().data());
+    ValkeyModule_ReplyWithError(ctx, status.message().data());
   }
 }
 
@@ -318,7 +342,8 @@ absl::Status FTAggregateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                             int argc) {
   return QueryCommand::Execute(
       ctx, argv, argc,
-      std::unique_ptr<QueryCommand>(new aggregate::AggregateParameters));
+      std::unique_ptr<QueryCommand>(
+          new aggregate::AggregateParameters(ValkeyModule_GetSelectedDb(ctx))));
 }
 
 }  // namespace valkey_search

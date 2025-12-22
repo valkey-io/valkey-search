@@ -85,7 +85,7 @@ struct ControlledBase {
 
 template <typename T>
 struct Controlled : private ControlledBase {
-  bool GetValue() const { return value_; }
+  T GetValue() const { return value_.load(std::memory_order_relaxed); }
   std::string DisplayValue() const override {
     std::ostringstream os;
     os << value_.load(std::memory_order_relaxed);

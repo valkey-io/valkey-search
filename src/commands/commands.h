@@ -54,9 +54,6 @@ const absl::flat_hash_set<absl::string_view> kListCmdPermissions{
 const absl::flat_hash_set<absl::string_view> kDebugCmdPermissions{
     kSearchCategory, kReadCategory, kSlowCategory, kAdminCategory};
 
-extern ValkeyModuleCommandArg ftCreateArgs[];
-extern const ValkeyModuleCommandInfo ftCreateInfo;
-
 inline absl::flat_hash_set<absl::string_view> PrefixACLPermissions(
     const absl::flat_hash_set<absl::string_view> &cmd_permissions,
     absl::string_view command) {
@@ -84,7 +81,7 @@ absl::Status FTAggregateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
 // Common stuff for FT.SEARCH and FT.AGGREGATE command
 //
 struct QueryCommand : public query::SearchParameters {
-  QueryCommand() : query::SearchParameters(0, nullptr) {}
+  QueryCommand(int db_num) : query::SearchParameters(0, nullptr, db_num) {}
   //
   // Start of command.
   //
@@ -99,7 +96,7 @@ struct QueryCommand : public query::SearchParameters {
   // Executed on Main Thread after merge
   //
   virtual void SendReply(ValkeyModuleCtx *ctx,
-                         std::deque<indexes::Neighbor> &neighbors) = 0;
+                         query::SearchResult &search_result) = 0;
 };
 
 namespace async {

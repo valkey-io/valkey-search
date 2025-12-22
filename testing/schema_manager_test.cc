@@ -139,8 +139,9 @@ TEST_F(SchemaManagerTest, TestCreateIndexSchemaAlreadyExists) {
                       .CreateIndexSchema(&fake_ctx_, test_index_schema_proto_)
                       .status();
     EXPECT_EQ(status.code(), absl::StatusCode::kAlreadyExists);
-    EXPECT_EQ(status.message(),
-              absl::StrFormat("Index %s already exists.", index_name_));
+    EXPECT_EQ(
+        status.message(),
+        absl::StrFormat("Index %s in database 0 already exists.", index_name_));
     EXPECT_EQ(callback_triggered, 1);
   }
 }
@@ -381,7 +382,7 @@ TEST_F(SchemaManagerTest, TestLoadIndexExistingData) {
 }
 
 TEST_F(SchemaManagerTest, OnServerCronCallback) {
-  InitThreadPools(10, 5);
+  InitThreadPools(10, 5, 1);
   auto test_index_schema_or = CreateVectorHNSWSchema(
       "index_schema_key", &fake_ctx_, nullptr, {}, db_num_);
   ValkeyModuleEvent eid;

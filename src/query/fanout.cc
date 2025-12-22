@@ -37,6 +37,7 @@
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
 #include "valkey_search_options.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -46,10 +47,20 @@
 
 namespace valkey_search::query::fanout {
 
+CONTROLLED_BOOLEAN(ForceInvalidSlotFingerprint, false);
+
 struct NeighborComparator {
   bool operator()(indexes::Neighbor &a, indexes::Neighbor &b) const {
+    // Primary sort: by distance
     // We use a max heap, to pop off the furthest vector during aggregation.
-    return a.distance < b.distance;
+    if (a.distance != b.distance) {
+      return a.distance < b.distance;
+    }
+    // Secondary sort: by key for consistent ordering when distances are equal.
+    // Primarily used in non vector queries without scores (distance = 0).
+    // The full string compare is required because for external keys there is no
+    // guarantee of the stability of the InternedStringPtr across invocations.
+    return a.external_id.get()->Str() > b.external_id.get()->Str();
   }
 };
 
@@ -65,6 +76,8 @@ struct SearchPartitionResultsTracker {
   query::SearchResponseCallback callback;
   std::unique_ptr<SearchParameters> parameters ABSL_GUARDED_BY(mutex);
   std::atomic_bool reached_oom{false};
+  std::atomic_bool consistency_failed{false};
+  std::atomic<size_t> accumulated_total_count{0};
 
   SearchPartitionResultsTracker(int outstanding_requests, int k,
                                 query::SearchResponseCallback callback,
@@ -76,16 +89,22 @@ struct SearchPartitionResultsTracker {
   void HandleResponse(coordinator::SearchIndexPartitionResponse &response,
                       const std::string &address, const grpc::Status &status) {
     if (!status.ok()) {
+      if (parameters->enable_consistency &&
+          status.error_code() == grpc::FAILED_PRECONDITION) {
+        consistency_failed.store(true);
+      }
       bool should_cancel = status.error_code() == grpc::RESOURCE_EXHAUSTED ||
-                           !options::GetEnablePartialResults().GetValue();
+                           !parameters->enable_partial_results ||
+                           consistency_failed.load();
       if (status.error_code() == grpc::RESOURCE_EXHAUSTED) {
         reached_oom.store(true);
       }
       if (should_cancel) {
         parameters->cancellation_token->Cancel();
       }
-      if (status.error_code() != grpc::DEADLINE_EXCEEDED &&
-          status.error_code() != grpc::RESOURCE_EXHAUSTED) {
+      if (status.error_code() != grpc::DEADLINE_EXCEEDED ||
+          status.error_code() != grpc::RESOURCE_EXHAUSTED ||
+          status.error_code() != grpc::FAILED_PRECONDITION) {
         VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
             << "Error during handling of FT.SEARCH on node " << address << ": "
             << status.error_message();
@@ -94,6 +113,8 @@ struct SearchPartitionResultsTracker {
     }
 
     absl::MutexLock lock(&mutex);
+    accumulated_total_count.fetch_add(response.total_count(),
+                                      std::memory_order_relaxed);
     while (response.neighbors_size() > 0) {
       auto neighbor_entry = std::unique_ptr<coordinator::NeighborEntry>(
           response.mutable_neighbors()->ReleaseLast());
@@ -122,10 +143,14 @@ struct SearchPartitionResultsTracker {
     }
   }
 
+  void AddTotalCount(size_t count) {
+    accumulated_total_count.fetch_add(count, std::memory_order_relaxed);
+  }
+
   void AddResult(indexes::Neighbor &neighbor)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex) {
     // For non-vector queries, we can add the result directly.
-    if (parameters->attribute_alias.empty()) {
+    if (parameters->IsNonVectorQuery()) {
       results.emplace(std::move(neighbor));
       return;
     }
@@ -139,16 +164,23 @@ struct SearchPartitionResultsTracker {
 
   ~SearchPartitionResultsTracker() {
     absl::MutexLock lock(&mutex);
-    absl::StatusOr<std::deque<indexes::Neighbor>> result =
-        std::deque<indexes::Neighbor>();
-    if (reached_oom) {
+    absl::StatusOr<SearchResult> result;
+    if (consistency_failed) {
+      result = absl::FailedPreconditionError(kFailedPreconditionMsg);
+    } else if (reached_oom) {
       result = absl::ResourceExhaustedError(kOOMMsg);
     } else {
+      std::deque<indexes::Neighbor> neighbors;
       while (!results.empty()) {
-        result->push_back(
+        neighbors.push_back(
             std::move(const_cast<indexes::Neighbor &>(results.top())));
         results.pop();
       }
+      // SearchResult construction automatically applies trimming based on LIMIT
+      // offset count IF the command allows it (ie - it does not require
+      // complete results).
+      result = SearchResult(accumulated_total_count, std::move(neighbors),
+                            *parameters);
     }
     callback(result, std::move(parameters));
   }
@@ -192,10 +224,19 @@ absl::Status PerformSearchFanoutAsync(
     std::unique_ptr<SearchParameters> parameters,
     vmsdk::ThreadPool *thread_pool, query::SearchResponseCallback callback) {
   auto request = coordinator::ParametersToGRPCSearchRequest(*parameters);
-  // There should be no limit for the fanout search, so put some safe values,
-  // so that the default values are not used during the local search.
-  request->mutable_limit()->set_first_index(0);
-  request->mutable_limit()->set_number(parameters->k);
+  if (parameters->IsNonVectorQuery()) {
+    // For non vector, use the LIMIT based range. Ensure we fetch enough
+    // results to cover offset + number.
+    request->mutable_limit()->set_first_index(0);
+    request->mutable_limit()->set_number(parameters->limit.first_index +
+                                         parameters->limit.number);
+  } else {
+    // Vector searches: Use k as the limit to find top k results. In worst case,
+    // all top k results are from a single shard, so no need to fetch more than
+    // k.
+    request->mutable_limit()->set_first_index(0);
+    request->mutable_limit()->set_number(parameters->k);
+  }
   auto tracker = std::make_shared<SearchPartitionResultsTracker>(
       search_targets.size(), parameters->k, std::move(callback),
       std::move(parameters));
@@ -211,6 +252,15 @@ absl::Status PerformSearchFanoutAsync(
     auto request_copy =
         std::make_unique<coordinator::SearchIndexPartitionRequest>();
     request_copy->CopyFrom(*request);
+
+    if (ForceInvalidSlotFingerprint.GetValue()) {
+      // test only: set an invalid slot fingerprint and force failure
+      request_copy->set_slot_fingerprint(0);
+    } else if (node.shard != nullptr) {
+      // avoid accessing node.shard if it is not valid in unit tests
+      request_copy->set_slot_fingerprint(node.shard->slots_fingerprint);
+    }
+
     // At 30 requests, it takes ~600 micros to enqueue all the requests.
     // Putting this into the background thread pool will save us time on
     // machines with multiple cores.
@@ -232,17 +282,18 @@ absl::Status PerformSearchFanoutAsync(
         coordinator::GRPCSearchRequestToParameters(*request, nullptr));
     VMSDK_RETURN_IF_ERROR(query::SearchAsync(
         std::move(local_parameters), thread_pool,
-        [tracker](absl::StatusOr<std::deque<indexes::Neighbor>> &neighbors,
+        [tracker](absl::StatusOr<SearchResult> &result,
                   std::unique_ptr<SearchParameters> parameters) {
-          if (neighbors.ok()) {
-            tracker->AddResults(*neighbors);
+          if (result.ok()) {
+            tracker->AddResults(result->neighbors);
+            tracker->AddTotalCount(result->total_count);
           } else {
-            if (absl::IsResourceExhausted(neighbors.status())) {
+            if (absl::IsResourceExhausted(result.status())) {
               tracker->reached_oom.store(true);
             }
             VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
                 << "Error during local handling of FT.SEARCH: "
-                << neighbors.status().message();
+                << result.status().message();
           }
         },
         SearchMode::kLocal))

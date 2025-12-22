@@ -26,14 +26,21 @@ struct LimitParameter {
 
 absl::Status PreParseQueryString(query::SearchParameters &parameters);
 absl::Status PostParseQueryString(query::SearchParameters &parameters);
+absl::Status VerifyQueryString(query::SearchParameters &parameters);
 
 //
 // Data Unique to the FT.SEARCH command
 //
 struct SearchCommand : public QueryCommand {
+  SearchCommand(int db_num) : QueryCommand(db_num) {}
   absl::Status ParseCommand(vmsdk::ArgsIterator &itr) override;
   void SendReply(ValkeyModuleCtx *ctx,
-                 std::deque<indexes::Neighbor> &neighbors) override;
+                 query::SearchResult &search_result) override;
+  // By default, FT.SEARCH does not require complete results and can optimized
+  // with LIMIT based trimming.
+  // TODO: When SORTBY or similar clauses are supported, implement the correct
+  // logic here to return true when those clauses are present.
+  bool RequiresCompleteResults() const override { return false; }
 };
 
 }  // namespace valkey_search

@@ -144,14 +144,6 @@ size_t DisplayAsSIBytes(size_t bytes, char *buffer, size_t buffer_size) {
   }
 }
 
-std::string DisplayValkeyVersion(int version_word) {
-  char storage[50];
-  size_t chars =
-      snprintf(storage, sizeof(storage), "%d.%d.%d", version_word >> 16,
-               (version_word) >> 8 & 0xFF, version_word & 0xff);
-  return {storage, chars};
-}
-
 absl::Status VerifyRange(long long num_value, std::optional<long long> min,
                          std::optional<long long> max) {
   if (min.has_value() && num_value < min.value()) {
@@ -315,15 +307,46 @@ std::optional<std::string> JsonUnquote(absl::string_view sv) {
   return result;
 }
 
+static const char *hex_chars = "0123456789abcdef";
+
+std::string PrintableBytes(absl::string_view sv) {
+  std::string result;
+  for (const auto &c : sv) {
+    if (std::isprint(c)) {
+      if (c == '\\') {
+        result += c;
+      }
+      result += c;
+    } else {
+      result += '\\';
+      switch (c) {
+        case '\n':
+          result += 'n';
+          break;
+        case '\r':
+          result += 'r';
+          break;
+        case '\t':
+          result += 't';
+          break;
+        default:
+          result += hex_chars[(c >> 4) & 0xf];
+          result += hex_chars[c & 0xf];
+          break;
+      }
+    }
+  }
+  return result;
+}
+
 std::string StringToHex(std::string_view s) {
   std::string result;
-  static char hex[] = "0123456789ABCDEF";
   for (auto &c : s) {
     if (&c != s.begin()) {
       result += ' ';
     }
-    result += hex[(c >> 4) & 0xF];
-    result += hex[c & 0xF];
+    result += hex_chars[(c >> 4) & 0xF];
+    result += hex_chars[c & 0xF];
   }
   return result;
 }

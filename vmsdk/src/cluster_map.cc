@@ -515,6 +515,25 @@ std::shared_ptr<ClusterMap> ClusterMap::CreateNewClusterMap(
     }
   }
 
+  // Cache reference to current node's shard for quick access
+  for (const auto& [shard_id, shard_info] : new_map->shards_) {
+    // Check if primary is local
+    if (shard_info.primary.has_value() && shard_info.primary->is_local) {
+      new_map->current_node_shard_ = &shard_info;
+      break;
+    }
+    // Check if any replica is local
+    for (const auto& replica : shard_info.replicas) {
+      if (replica.is_local) {
+        new_map->current_node_shard_ = &shard_info;
+        break;
+      }
+    }
+    if (new_map->current_node_shard_ != nullptr) {
+      break;
+    }
+  }
+
   // Build slot-to-shard map
   new_map->BuildSlotToShardMap(slot_ranges);
 

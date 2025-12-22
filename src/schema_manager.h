@@ -22,26 +22,22 @@
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "src/coordinator/coordinator.pb.h"
-#include "src/coordinator/metadata_manager.h"
 #include "src/index_schema.h"
 #include "src/index_schema.pb.h"
+#include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 
+namespace coordinator {
+class ObjName;
+}
+
 constexpr absl::string_view kSchemaManagerMetadataTypeName{"vs_index_schema"};
-constexpr uint32_t kMetadataEncodingVersion = 1;
 
-namespace options {
-
-/// Return the maximum number of indexes allowed to create.
-vmsdk::config::Number &GetMaxIndexes();
-
-}  // namespace options
 class SchemaManager {
  public:
   SchemaManager(ValkeyModuleCtx *ctx,
@@ -109,6 +105,10 @@ class SchemaManager {
   absl::Status SaveIndexes(ValkeyModuleCtx *ctx, SafeRDB *rdb, int when);
   static absl::StatusOr<uint64_t> ComputeFingerprint(
       const google::protobuf::Any &metadata);
+  absl::StatusOr<vmsdk::ValkeyVersion> GetMinVersion() const;
+
+  absl::Status ShowIndexSchemas(ValkeyModuleCtx *ctx,
+                                vmsdk::ArgsIterator &itr) const;
 
  private:
   absl::Status RemoveAll()
@@ -118,7 +118,7 @@ class SchemaManager {
   vmsdk::ThreadPool *mutations_thread_pool_;
   vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx_;
 
-  absl::Status OnMetadataCallback(absl::string_view id,
+  absl::Status OnMetadataCallback(const coordinator::ObjName &obj_name,
                                   const google::protobuf::Any *metadata,
                                   uint64_t fingerprint, uint32_t version)
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);

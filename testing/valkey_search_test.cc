@@ -23,6 +23,7 @@
 #include "src/index_schema.h"
 #include "src/metrics.h"
 #include "src/utils/string_interning.h"
+#include "src/version.h"
 #include "testing/common.h"
 #include "testing/coordinator/common.h"
 #include "valkey_search_options.h"
@@ -334,7 +335,10 @@ TEST_P(LoadTest, load) {
     EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))
         .WillRepeatedly(testing::Return(0));
   }
-  vmsdk::module::Options options;
+  vmsdk::module::Options options = {
+      .version = kModuleVersion,
+      .minimum_valkey_server_version = kMinimumServerVersion,
+  };
   auto load_res = vmsdk::module::OnLoadDone(
       ValkeySearch::Instance().OnLoad(&fake_ctx_, args.data(), args.size()),
       &fake_ctx_, options);
@@ -367,7 +371,7 @@ TEST_P(LoadTest, load) {
 
 TEST_F(ValkeySearchTest, FullSyncFork) {
   VMSDK_EXPECT_OK(options::GetMaxWorkerSuspensionSecs().SetValue(1));
-  InitThreadPools(2, 2);
+  InitThreadPools(2, 2, 1);
   auto writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
   auto reader_thread_pool = ValkeySearch::Instance().GetReaderThreadPool();
   ValkeySearch::Instance().AtForkPrepare();
@@ -393,7 +397,7 @@ TEST_F(ValkeySearchTest, FullSyncFork) {
 }
 
 TEST_F(ValkeySearchTest, Info) {
-  InitThreadPools(10, 5);
+  InitThreadPools(10, 5, 1);
   auto writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
   auto reader_thread_pool = ValkeySearch::Instance().GetReaderThreadPool();
   VMSDK_EXPECT_OK(writer_thread_pool->SuspendWorkers());
@@ -537,7 +541,7 @@ TEST_F(ValkeySearchTest, Info) {
 }
 
 TEST_F(ValkeySearchTest, OnForkChildDiedCallback) {
-  InitThreadPools(std::nullopt, 5);
+  InitThreadPools(std::nullopt, 5, 1);
   auto writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
   VMSDK_EXPECT_OK(writer_thread_pool->SuspendWorkers());
   ValkeyModuleEvent eid;
@@ -555,7 +559,7 @@ TEST_F(ValkeySearchTest, OnForkChildDiedCallback) {
 
 TEST_F(ValkeySearchTest, OnForkChildBornCallback) {
   VMSDK_EXPECT_OK(options::GetMaxWorkerSuspensionSecs().SetValue(0));
-  InitThreadPools(std::nullopt, 5);
+  InitThreadPools(std::nullopt, 5, 1);
   auto writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
   VMSDK_EXPECT_OK(writer_thread_pool->SuspendWorkers());
   ValkeyModuleEvent eid;

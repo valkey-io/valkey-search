@@ -176,7 +176,7 @@ void SendReplyTest::DoSendReplyTest(
   for (const auto &neighbor : input.neighbors) {
     neighbors.push_back(ToIndexesNeighbor(neighbor));
   }
-  auto parameters = std::make_unique<SearchCommand>();
+  auto parameters = std::make_unique<SearchCommand>(0);
   parameters->timeout_ms = 10000;
   parameters->index_schema = test_index_schema;
   parameters->attribute_alias = attribute_alias;
@@ -188,8 +188,10 @@ void SendReplyTest::DoSendReplyTest(
     parameters->return_attributes.push_back(
         ToReturnAttribute(return_attribute));
   }
-  parameters->SendReply(&fake_ctx, neighbors);
-
+  auto neighbor_count = neighbors.size();
+  query::SearchResult wrapper(neighbor_count, std::move(neighbors),
+                              *parameters);
+  parameters->SendReply(&fake_ctx, wrapper);
   EXPECT_EQ(ParseRespReply(fake_ctx.reply_capture.GetReply()), expected_output);
 }
 
@@ -469,7 +471,7 @@ TEST_P(FTSearchTest, FTSearchTests) {
   auto &params = GetParam();
   bool use_thread_pool = std::get<1>(params);
   if (use_thread_pool) {
-    InitThreadPools(5, std::nullopt);
+    InitThreadPools(5, std::nullopt, 1);
   }
   bool use_fanout = std::get<0>(params);
   if (use_fanout) {

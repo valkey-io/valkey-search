@@ -23,6 +23,10 @@
 
 namespace valkey_search {
 
+namespace options {
+vmsdk::config::Number& GetMaxIndexes();
+}
+
 namespace {
 
 using ::testing::TestParamInfo;
@@ -181,6 +185,26 @@ INSTANTIATE_TEST_SUITE_P(
                     {
                         .attribute_alias = "vector",
                         .indexer_type = indexes::IndexerType::kFlat,
+                    },
+                },
+        },
+        {
+            .test_name = "happy_path_sortable",
+            .argv = {"FT.CREATE", "test_index_schema", "schema", "field1",
+                     "numeric", "SORTABLE", "field2", "tag", "separator", "|",
+                     "sortable"},
+            .index_schema_name = "test_index_schema",
+            .expected_run_return = VALKEYMODULE_OK,
+            .expected_reply_message = "+OK\r\n",
+            .expected_indexes =
+                {
+                    {
+                        .attribute_alias = "field1",
+                        .indexer_type = indexes::IndexerType::kNumeric,
+                    },
+                    {
+                        .attribute_alias = "field2",
+                        .indexer_type = indexes::IndexerType::kTag,
                     },
                 },
         },

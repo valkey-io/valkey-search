@@ -39,8 +39,8 @@
 namespace valkey_search {
 
 constexpr absl::string_view kMaxKnnConfig{"max-vector-knn"};
-constexpr int kDefaultKnnLimit{128};
-constexpr int kMaxKnn{1000};
+constexpr int kDefaultKnnLimit{10000};
+constexpr int kMaxKnn{100000};
 
 /// Register the "--max-knn" flag. Controls the max KNN parameter for vector
 /// search.
@@ -69,6 +69,10 @@ constexpr absl::string_view kReturnParam{"RETURN"};
 constexpr absl::string_view kTimeoutParam{"TIMEOUT"};
 constexpr absl::string_view kAsParam{"AS"};
 constexpr absl::string_view kLocalOnly{"LOCALONLY"};
+constexpr absl::string_view kAllShards{"ALLSHARDS"};
+constexpr absl::string_view KSomeShards{"SOMESHARDS"};
+constexpr absl::string_view kConsistent{"CONSISTENT"};
+constexpr absl::string_view kInconsistent{"INCONSISTENT"};
 constexpr absl::string_view kVectorFilterDelimiter = "=>";
 
 absl::StatusOr<absl::string_view> SubstituteParam(
@@ -195,51 +199,6 @@ absl::Status ParseKNN(query::SearchParameters &parameters,
                                          close_position - position - 1));
 }
 
-absl::Status Verify(query::SearchParameters &parameters) {
-  // Only verify the vector KNN parameters for vector based queries.
-  if (!parameters.IsNonVectorQuery()) {
-    if (parameters.query.empty()) {
-      return absl::InvalidArgumentError("Invalid Query Syntax");
-    }
-    if (parameters.ef.has_value()) {
-      auto max_ef_runtime_value = options::GetMaxEfRuntime().GetValue();
-      VMSDK_RETURN_IF_ERROR(
-          vmsdk::VerifyRange(parameters.ef.value(), 1, max_ef_runtime_value))
-          << "`EF_RUNTIME` must be a positive integer greater than 0 and "
-             "cannot "
-             "exceed "
-          << max_ef_runtime_value << ".";
-    }
-    auto max_knn_value = options::GetMaxKnn().GetValue();
-    VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(parameters.k, 1, max_knn_value))
-        << "KNN parameter must be a positive integer greater than 0 and cannot "
-           "exceed "
-        << max_knn_value << ".";
-  }
-  if (parameters.timeout_ms > query::kMaxTimeoutMs) {
-    return absl::InvalidArgumentError(
-        absl::StrCat(kTimeoutParam,
-                     " must be a positive integer greater than 0 and "
-                     "cannot exceed ",
-                     query::kMaxTimeoutMs, "."));
-  }
-  if (parameters.dialect < 2 || parameters.dialect > 4) {
-    return absl::InvalidArgumentError(
-        "DIALECT requires a non negative integer >=2 and <= 4");
-  }
-
-  // Validate all parameters used, nuke the map to avoid dangling pointers
-  while (!parameters.parse_vars.params.empty()) {
-    auto begin = parameters.parse_vars.params.begin();
-    if (begin->second.first == 0) {
-      return absl::NotFoundError(
-          absl::StrCat("Parameter `", begin->first, "` not used."));
-    }
-    parameters.parse_vars.params.erase(begin);
-  }
-  return absl::OkStatus();
-}
-
 std::unique_ptr<vmsdk::ParamParser<query::SearchParameters>>
 ConstructLimitParser() {
   return std::make_unique<vmsdk::ParamParser<query::SearchParameters>>(
@@ -327,6 +286,18 @@ vmsdk::KeyValueParser<query::SearchParameters> CreateSearchParser() {
       kDialectParam, GENERATE_VALUE_PARSER(query::SearchParameters, dialect));
   parser.AddParamParser(
       kLocalOnly, GENERATE_FLAG_PARSER(query::SearchParameters, local_only));
+  parser.AddParamParser(kAllShards,
+                        GENERATE_NEGATED_FLAG_PARSER(query::SearchParameters,
+                                                     enable_partial_results));
+  parser.AddParamParser(
+      KSomeShards,
+      GENERATE_FLAG_PARSER(query::SearchParameters, enable_partial_results));
+  parser.AddParamParser(
+      kConsistent,
+      GENERATE_FLAG_PARSER(query::SearchParameters, enable_consistency));
+  parser.AddParamParser(kInconsistent,
+                        GENERATE_NEGATED_FLAG_PARSER(query::SearchParameters,
+                                                     enable_consistency));
   parser.AddParamParser(
       kTimeoutParam,
       GENERATE_VALUE_PARSER(query::SearchParameters, timeout_ms));
@@ -443,6 +414,51 @@ absl::Status PostParseQueryString(query::SearchParameters &parameters) {
   return absl::OkStatus();
 }
 
+absl::Status VerifyQueryString(query::SearchParameters &parameters) {
+  // Only verify the vector KNN parameters for vector based queries.
+  if (!parameters.IsNonVectorQuery()) {
+    if (parameters.query.empty()) {
+      return absl::InvalidArgumentError("Invalid Query Syntax");
+    }
+    if (parameters.ef.has_value()) {
+      auto max_ef_runtime_value = options::GetMaxEfRuntime().GetValue();
+      VMSDK_RETURN_IF_ERROR(
+          vmsdk::VerifyRange(parameters.ef.value(), 1, max_ef_runtime_value))
+          << "`EF_RUNTIME` must be a positive integer greater than 0 and "
+             "cannot "
+             "exceed "
+          << max_ef_runtime_value << ".";
+    }
+    auto max_knn_value = options::GetMaxKnn().GetValue();
+    VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(parameters.k, 1, max_knn_value))
+        << "KNN parameter must be a positive integer greater than 0 and cannot "
+           "exceed "
+        << max_knn_value << ".";
+  }
+  if (parameters.timeout_ms > query::kMaxTimeoutMs) {
+    return absl::InvalidArgumentError(
+        absl::StrCat(kTimeoutParam,
+                     " must be a positive integer greater than 0 and "
+                     "cannot exceed ",
+                     query::kMaxTimeoutMs, "."));
+  }
+  if (parameters.dialect < 2 || parameters.dialect > 4) {
+    return absl::InvalidArgumentError(
+        "DIALECT requires a non negative integer >=2 and <= 4");
+  }
+
+  // Validate all parameters used, nuke the map to avoid dangling pointers
+  while (!parameters.parse_vars.params.empty()) {
+    auto begin = parameters.parse_vars.params.begin();
+    if (begin->second.first == 0) {
+      return absl::NotFoundError(
+          absl::StrCat("Parameter `", begin->first, "` not used."));
+    }
+    parameters.parse_vars.params.erase(begin);
+  }
+  return absl::OkStatus();
+}
+
 absl::Status SearchCommand::ParseCommand(vmsdk::ArgsIterator &itr) {
   VMSDK_RETURN_IF_ERROR(SearchParser.Parse(*this, itr));
   if (itr.DistanceEnd() > 0) {
@@ -452,7 +468,7 @@ absl::Status SearchCommand::ParseCommand(vmsdk::ArgsIterator &itr) {
   }
   VMSDK_RETURN_IF_ERROR(PreParseQueryString(*this));
   VMSDK_RETURN_IF_ERROR(PostParseQueryString(*this));
-  VMSDK_RETURN_IF_ERROR(Verify(*this));
+  VMSDK_RETURN_IF_ERROR(VerifyQueryString(*this));
   return absl::OkStatus();
 }
 

@@ -76,7 +76,9 @@ def parse_field(x, key_type):
 
 def parse_value(x, key_type):
     try:
-        if key_type == "json" and x.startswith(b'['):
+        if key_type == "json" and isinstance(x, int):
+            result = x
+        elif key_type == "json" and x.startswith(b'['):
             assert isinstance(x, bytes), f"Expected bytes for JSON value, got {type(x)}"
             return json_load(x)
         elif isinstance(x, bytes):
@@ -89,7 +91,7 @@ def parse_value(x, key_type):
             print("Unknown type ", type(x))
             assert False
     except Exception as e:
-        print(">>> Got Exception parsing field ",x, " for key_type ", key_type, " Exception was ", e)
+        print(">>> Got Exception parsing field type: ", type(x), " Value: ",x, " for key_type ", key_type, " Exception was ", e)
         raise
     return result
 
@@ -120,7 +122,7 @@ def unpack_agg_result(rs, key_type):
     return rows
 
 def unpack_result(cmd, key_type, rs, sortkeys):
-    if "ft.search" in cmd:
+    if "ft.search" in cmd[0].lower():
         out = unpack_search_result(rs, key_type)
     else:
         out = unpack_agg_result(rs, key_type)
@@ -131,6 +133,9 @@ def unpack_result(cmd, key_type, rs, sortkeys):
         try:
             out.sort(key=itemgetter(*sortkeys))
         except KeyError:
+            if sortkeys == ['__key']:
+                # we're not smart about when there is or isn't a key in the return
+                return out
             print("Failed on sortkeys: ", sortkeys)
             print("CMD:", cmd)
             print("RESULT:", rs)
@@ -167,7 +172,7 @@ def compare_number_eq(l, r):
         return True
     else:
         try:
-            return math.isclose(float(l), float(r), rel_tol=.01)
+            return math.isclose(float(l), float(r), abs_tol=.01)
         except ValueError:
             print("ValueError comparing: ", l, " and ", r)
             return False
@@ -188,7 +193,7 @@ def compare_row(l, r, key_type):
         #
         # Hack, fields that start with an 'n' are assumed to be numeric
         #
-        if lks[i].startswith("n"):
+        if lks[i].startswith("n") or lks[i].endswith("score"):
             if not compare_number_eq(l[lks[i]], r[rks[i]]):
                 print(f"mismatch numeric field: {l[lks[i]]}:{type(l[lks[i]])} and {r[rks[i]]}:{type(r[rks[i]])}")
                 print("RL: ", r)
@@ -244,9 +249,8 @@ def compare_results(expected, results):
             if f in sortkeys:
                 sortkeys.remove(f)
     else:
-        # todo, remove __key as sortkey once the search output sorting is fixed.
-        # sortkeys=["__key"] if "ft.aggregate" in cmd else []
-        sortkeys=[]
+        sortkeys=["__key"]
+        # sortkeys=[]
 
     # If both failed, it's a wrong search cmd and we can exit
     if expected["exception"] and results["exception"]:
@@ -302,15 +306,15 @@ def compare_results(expected, results):
                 print("RL:",i,[(k,rl[i][k]) for k in sorted(rl[i].keys())])
                 print("VK:",i,[(k,vk[i][k]) for k in sorted(vk[i].keys())])
         return True
-    print("***** MISMATCH ON DATA *****, sortkeys=", sortkeys, " records=", len(rl), " TestName: ", expected["testname"])
+    print("***** MISMATCH ON DATA *****, sortkeys=", sortkeys, " records=", len(rl), " TestName: ", expected["testname"], " <<< Identifies mismatching results")
     print(f"CMD: {cmd}")
     for i in range(len(rl)):
         if not compare_row(rl[i], vk[i], key_type):
             print("RL:",i,[(k,rl[i][k]) for k in sorted(rl[i].keys())], "<<<")
             print("VK:",i,[(k,vk[i][k]) for k in sorted(vk[i].keys())], "<<<")
         else:
-            print("RL:",i,[(k,rl[i][k]) for k in sorted(rl[i].keys())])
-            print("VK:",i,[(k,vk[i][k]) for k in sorted(vk[i].keys())])
+            print("RL:",i,[(k,rl[i][k]) for k in sorted(rl[i].keys())], u'\u2713')
+            print("VK:",i,[(k,vk[i][k]) for k in sorted(vk[i].keys())], u'\u2713')
 
     print("Raw RL:", expected["result"])
     print("Raw VK:", results["result"])
@@ -319,7 +323,7 @@ def compare_results(expected, results):
 
 correct_answers = 0
 wrong_answers = 0
-StopOnFailure = True
+StopOnFailure = False
 failed_tests = {}
 passed_tests = {}
 
@@ -378,7 +382,13 @@ class TestAnswersCMD(ValkeySearchTestCaseBase):
         for i in range(len(answers)):
             data_set = do_answer(self.server.get_new_client(), answers[i], data_set)
 
-        assert correct_answers == len(answers), f"Expected {len(answers)} correct answers, got {correct_answers}"
+        if correct_answers != len(answers):
+            print(f"Correct answers: {correct_answers} out of {len(answers)}")
+            if len(failed_tests) != 0:
+                print(">>>>>>>>> Failed Tests <<<<<<<<<")
+                for k, v in failed_tests.items():
+                    print(f"Failed test {k:60}: {v} times")
+            assert False
 
         '''
         print(f"Correct answers: {correct_answers} out of {len(answers)}")

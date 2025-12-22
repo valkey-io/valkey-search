@@ -9,7 +9,6 @@
 #define VALKEYSEARCH_SRC_POOLED_MEMORY_H_
 
 #include <memory_resource>
-#include <atomic>
 
 #include "absl/container/inlined_vector.h"
 namespace vmsdk {
@@ -20,6 +19,7 @@ class PooledMemory : public std::pmr::memory_resource {
   ~PooledMemory() override;
 
   size_t GetInUse() const { return inuse_; } // For testing.
+  size_t GetMallocs() const { return mallocs_; } // For testing.
 
  private:
   void* do_allocate(size_t bytes,
@@ -46,6 +46,8 @@ class PooledMemory : public std::pmr::memory_resource {
   };
   absl::InlinedVector<Chunk*, 10> chunks_;
 };
+
+using Allocator = std::pmr::polymorphic_allocator<char>;
 
 }  // namespace vmsdk
 

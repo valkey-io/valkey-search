@@ -227,7 +227,7 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
 
   EXPECT_EQ(search_params.ok(), expected_success);
   if (search_params.ok()) {
-    EXPECT_EQ(search_params.value()->index_schema_name, key_str);
+    EXPECT_EQ(search_params.value()->index_schema_name, std::string_view(key_str));
     if (test_case.vector_query) {
       // Vector query specific checks
       std::string vector_str((char *)(&floats[0]),
@@ -235,7 +235,7 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
       EXPECT_EQ(search_params.value()->query, vector_str.c_str());
       EXPECT_EQ(search_params.value()->k, test_case.k);
       EXPECT_EQ(search_params.value()->ef, test_case.ef);
-      EXPECT_EQ(search_params.value()->attribute_alias,
+      EXPECT_EQ(std::string_view(search_params.value()->attribute_alias),
                 test_case.attribute_alias);
       auto score_as = vmsdk::MakeUniqueValkeyString(test_case.score_as);
       if (test_case.score_as.empty()) {

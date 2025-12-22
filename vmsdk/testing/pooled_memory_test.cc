@@ -7,12 +7,11 @@
 
 #include "vmsdk/src/pooled_memory.h"
 
-#include <absl/container/flat_hash_set.h>
-
 #include <string>
 #include <unordered_set>
 #include <vector>
 
+#include "vmsdk/src/type_conversions.h"
 #include "gtest/gtest.h"
 
 namespace vmsdk {
@@ -33,6 +32,7 @@ TEST(MemoryPoolTest, Vector) {
       ASSERT_GT(pool.GetInUse(), 0);
     }
     ASSERT_EQ(pool.GetInUse(), 0);
+
   }
 }
 
@@ -49,9 +49,22 @@ TEST(MemoryPoolTest, String) {
         ASSERT_EQ(buffer[i], 'a');
       }
       ASSERT_GT(pool.GetInUse(), 0);
+      ASSERT_GT(pool.GetMallocs(), 0);
     }
     ASSERT_EQ(pool.GetInUse(), 0);
   }
+}
+
+TEST(MemoryPoolTest, StringAssign) {
+    vmsdk::PooledMemory pool(17);
+    {
+      ASSERT_EQ(pool.GetInUse(), 0);
+      std::pmr::string buffer(&pool);
+      buffer = std::pmr::string("abczdefghijklasdfsadfasdfasdfasdf", &pool);
+      ASSERT_GT(pool.GetInUse(), 0);
+      ASSERT_GT(pool.GetMallocs(), 0);
+    }
+    ASSERT_EQ(pool.GetInUse(), 0);
 }
 
 TEST(MemoryPoolTest, HashSet) {
@@ -67,6 +80,7 @@ TEST(MemoryPoolTest, HashSet) {
         ASSERT_TRUE(buffer.find(i) != buffer.end());
       }
       ASSERT_GT(pool.GetInUse(), 0);
+      ASSERT_GT(pool.GetMallocs(), 0);
     }
     ASSERT_EQ(pool.GetInUse(), 0);
   }

@@ -30,9 +30,30 @@ struct TextParsingOptions {
   bool inorder = false;
   std::optional<uint32_t> slop = std::nullopt;
 };
+enum class QueryOperations : uint8_t {
+  kNone = 0,
+  kContainsOr = 1 << 0,
+  kContainsAnd = 1 << 1,
+  // Other operations can be tracked here
+};
+
+inline QueryOperations operator|(QueryOperations a, QueryOperations b) {
+  return static_cast<QueryOperations>(static_cast<uint8_t>(a) |
+                                      static_cast<uint8_t>(b));
+}
+
+inline QueryOperations& operator|=(QueryOperations& a, QueryOperations b) {
+  return a = a | b;
+}
+
+inline bool operator&(QueryOperations a, QueryOperations b) {
+  return static_cast<uint8_t>(a) & static_cast<uint8_t>(b);
+}
+
 struct FilterParseResults {
   std::unique_ptr<query::Predicate> root_predicate;
   absl::flat_hash_set<std::string> filter_identifiers;
+  QueryOperations query_operations = QueryOperations::kNone;
 };
 class FilterParser {
  public:
@@ -48,6 +69,7 @@ class FilterParser {
   size_t pos_{0};
   size_t node_count_{0};
   absl::flat_hash_set<std::string> filter_identifiers_;
+  QueryOperations query_operations_{QueryOperations::kNone};
 
   absl::StatusOr<bool> HandleBackslashEscape(const indexes::text::Lexer& lexer,
                                              std::string& processed_content);

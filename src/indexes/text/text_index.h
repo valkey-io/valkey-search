@@ -170,6 +170,21 @@ class TextIndexSchema {
   const absl::node_hash_map<Key, TextIndex>& GetPerKeyTextIndexes() const {
     return per_key_text_indexes_;
   }
+
+  // Helper function to lookup text index for a key
+  static const TextIndex* LookupTextIndex(
+      const absl::node_hash_map<Key, TextIndex>& per_key_indexes,
+      const Key& key) {
+    if (!key) {
+      CHECK(false) << "Invalid null key passed to LookupTextIndex";
+      return nullptr;
+    }
+    if (auto it = per_key_indexes.find(key); it != per_key_indexes.end()) {
+      return &it->second;
+    }
+    // Key not found in text indexes - this is normal for keys without text data
+    return nullptr;
+  }
 };
 
 }  // namespace valkey_search::indexes::text

@@ -53,7 +53,8 @@ struct FuzzySearch {
                                 << " iter.CanDescend()=" << iter.CanDescend();
     if (!iter.Done()) {
       VMSDK_LOG(WARNING, nullptr)
-          << "Root iter.GetPath()='" << iter.GetPath() << "' and iter.GetChildEdge() is '" << iter.GetChildEdge() << "'";
+          << "Root iter.GetPath()='" << iter.GetPath()
+          << "' and iter.GetChildEdge() is '" << iter.GetChildEdge() << "'";
     }
 
     SearchRecursive(iter, pattern, max_distance, "", '\0', prev_prev, prev,
@@ -65,8 +66,8 @@ struct FuzzySearch {
   static void SearchRecursive(
       typename RadixTree<Target>::PathIterator iter, absl::string_view pattern,
       size_t max_distance,
-      std::string word,  // Current word being built
-      char prev_tree_ch,    // Previous character (for transposition detection)
+      std::string word,   // Current word being built
+      char prev_tree_ch,  // Previous character (for transposition detection)
       absl::InlinedVector<size_t, 32>&
           prev_prev,  // Row i-2 of DP matrix (for transposition)
       absl::InlinedVector<size_t, 32>&

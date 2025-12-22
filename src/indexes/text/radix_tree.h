@@ -334,7 +334,7 @@ struct RadixTree {
     // position asserts if !CanDescend()
     PathIterator DescendNew() const;
 
-    // get current Path. If IsWord is true, then there's a word here....
+    // Get current Path. If IsWord is true, then there's a word here....
     absl::string_view GetPath() const;
 
     // Get the edge label for the current child being iterated
@@ -908,7 +908,6 @@ absl::string_view RadixTree<Target>::PathIterator::GetPath() const {
   return path_;
 }
 
-
 template <typename Target>
 const Target& RadixTree<Target>::PathIterator::GetTarget() const {
   CHECK(IsWord());
@@ -917,7 +916,7 @@ const Target& RadixTree<Target>::PathIterator::GetTarget() const {
 
 template <typename Target>
 void RadixTree<Target>::PathIterator::Defrag() {
-  // TODO: Implement defragmentation
+  throw std::logic_error("TODO");
 }
 
 /*** Debug ***/

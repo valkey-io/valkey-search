@@ -616,72 +616,37 @@ TEST_F(RadixTreeTest, WordIteratorPrefixPartialMatch) {
   VerifyIterator("ca", {{"can", 2}, {"cat", 1}});
 }
 
-TEST_F(RadixTreeTest, PathIteratorBasic) {
-  AddWords({{"cat", 1}, {"car", 2}, {"dog", 3}});
-
-  // Test root iterator - root should have children
-  auto iter = prefix_tree_.GetPathIterator("");
-  EXPECT_FALSE(iter.Done());
-  EXPECT_TRUE(iter.CanDescend());
-
-  // Descend from root - should get first child
-  auto child_iter = iter.DescendNew();
-  EXPECT_FALSE(child_iter.Done());
-
-  // Should be able to get path (edge label)
-  auto path = child_iter.GetPath();
-  EXPECT_FALSE(path.empty());
-}
-
-TEST_F(RadixTreeTest, PathIteratorSingleWord) {
-  AddWords({{"application", 1}});
-  prefix_tree_.DebugPrintTree("Single Word Tree");
-
-  auto iter = prefix_tree_.GetPathIterator("");
-
-  std::string word;
-  while (!iter.Done()) {
-    word += std::string(iter.GetPath());
-    if (iter.CanDescend()) {
-      iter = iter.DescendNew();
-    } else {
-      break;
-    }
-  }
-
-  EXPECT_EQ(word, "application");
-  EXPECT_TRUE(iter.IsWord());
-}
-
-TEST_F(RadixTreeTest, PathIteratorTraversal) {
+// Tests for PathIterator APIs
+TEST_F(RadixTreeTest, PathIteratorAPIs) {
   AddWords({{"cat", 1}, {"car", 2}, {"can", 3}});
-  prefix_tree_.DebugPrintTree("Traversal Test");
 
-  auto iter = prefix_tree_.GetPathIterator("");
+  auto root_iter = prefix_tree_.GetPathIterator("");
+  EXPECT_FALSE(root_iter.Done());
+  EXPECT_TRUE(root_iter.CanDescend());
 
-  std::vector<std::string> found_words;
-  std::function<void(decltype(iter), std::string)> traverse;
-  traverse = [&](auto it, std::string accumulated) {
-    while (!it.Done()) {
-      std::string word = accumulated + std::string(it.GetPath());
-      if (it.IsWord()) {
-        found_words.push_back(word);
-      }
-      if (it.CanDescend()) {
-        traverse(it.DescendNew(), word);
-      }
-      it.Next();
-    }
-  };
+  // Descend to "ca" node (first child of root)
+  auto ca_iter = root_iter.DescendNew();
+  EXPECT_EQ(ca_iter.GetPath(), "ca");
+  EXPECT_EQ(ca_iter.GetChildEdge(), "n");
+  EXPECT_FALSE(ca_iter.IsWord());
 
-  traverse(iter, "");
+  // Descend to first child "can"
+  auto can_iter = ca_iter.DescendNew();
+  EXPECT_EQ(can_iter.GetPath(), "can");
+  EXPECT_EQ(can_iter.GetChildEdge(), "");
+  EXPECT_TRUE(can_iter.IsWord());
+  EXPECT_EQ(can_iter.GetTarget().value, 3);
 
-  EXPECT_EQ(found_words.size(), 3);
-  std::sort(found_words.begin(), found_words.end());
-  EXPECT_EQ(found_words[0], "can");
-  EXPECT_EQ(found_words[1], "car");
-  EXPECT_EQ(found_words[2], "cat");
+  // Iterate through ca_iter's children (siblings: "can", "car", "cat")
+  EXPECT_EQ(ca_iter.GetChildEdge(), "n");
+  ca_iter.NextSibling();
+  EXPECT_FALSE(ca_iter.Done());
+  EXPECT_EQ(ca_iter.GetChildEdge(), "r");
+  ca_iter.NextSibling();
+  EXPECT_FALSE(ca_iter.Done());
+  EXPECT_EQ(ca_iter.GetChildEdge(), "t");
+  ca_iter.NextSibling();
+  EXPECT_TRUE(ca_iter.Done());
 }
-
 }  // namespace
 }  // namespace valkey_search::indexes::text

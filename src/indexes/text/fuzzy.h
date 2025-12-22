@@ -15,7 +15,6 @@
 #include "absl/strings/string_view.h"
 #include "posting.h"
 #include "radix_tree.h"
-#include "vmsdk/src/log.h"
 
 namespace valkey_search::indexes::text {
 
@@ -41,22 +40,9 @@ struct FuzzySearch {
     for (size_t i = 0; i <= pattern.length(); ++i) {
       prev[i] = i;
     }
-    // Remove - temporary log for the tree
-    tree.DebugPrintTree("Fuzzy Search Tree");
 
     // Start traversal from root to explore all words in the tree
     auto iter = tree.GetPathIterator("");
-    // Remove - temporary logs
-    VMSDK_LOG(WARNING, nullptr) << "Starting fuzzy search for pattern='"
-                                << pattern << "' max_distance=" << max_distance;
-    VMSDK_LOG(WARNING, nullptr) << "Root iter.Done()='" << iter.Done()
-                                << " iter.CanDescend()=" << iter.CanDescend();
-    if (!iter.Done()) {
-      VMSDK_LOG(WARNING, nullptr)
-          << "Root iter.GetPath()='" << iter.GetPath()
-          << "' and iter.GetChildEdge() is '" << iter.GetChildEdge() << "'";
-    }
-
     SearchRecursive(iter, pattern, max_distance, "", '\0', prev_prev, prev,
                     curr, key_iterators);
     return key_iterators;
@@ -78,11 +64,6 @@ struct FuzzySearch {
     // Iterate over siblings at current tree level
     while (!iter.Done()) {
       absl::string_view edge = iter.GetChildEdge();
-      VMSDK_LOG(WARNING, nullptr)
-          << "  edge='" << edge << "' edge.empty()=" << edge.empty()
-          << " edge.length()=" << edge.length()
-          << " iter.IsWord()=" << iter.IsWord()
-          << " iter.CanDescend()=" << iter.CanDescend();
       std::string new_word = word;
       // Minimum edit distance in the current DP row after processing the edge.
       // Used for pruning: if min_dist > max_distance, skip entire subtree.
@@ -145,7 +126,6 @@ struct FuzzySearch {
       // Since distance can only increase with more characters, if we're already
       // too far, no word in this subtree can match.
       bool should_prune = (min_dist > max_distance);
-      VMSDK_LOG(WARNING, nullptr) << "  should_prune=" << should_prune;
       if (should_prune) {
         // Restore state for next sibling (each sibling starts from same parent
         // state)
@@ -159,16 +139,10 @@ struct FuzzySearch {
       // Descend to the child node at the end of this edge
       if (iter.CanDescend()) {
         auto child_iter = iter.DescendNew();
-        VMSDK_LOG(WARNING, nullptr)
-            << "     After descend: child_iter.IsWord()=" << child_iter.IsWord()
-            << " new_word='" << new_word
-            << "' distance=" << prev[pattern.length()];
-
         // Check if the node has a word and edit distance is within the limit
         // The edit distance is in prev row now as we did the row swap
         // in loop above
         if (child_iter.IsWord() && prev[pattern.length()] <= max_distance) {
-          VMSDK_LOG(WARNING, nullptr) << "     ADDING RESULT: " << new_word;
           key_iterators.emplace_back(child_iter.GetTarget()->GetKeyIterator());
         }
 

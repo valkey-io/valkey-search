@@ -202,9 +202,6 @@ FuzzyPredicate::FuzzyPredicate(
       distance_(distance) {}
 
 EvaluationResult FuzzyPredicate::Evaluate(Evaluator& evaluator) const {
-  VMSDK_LOG(WARNING, nullptr)
-      << "In FuzzyPredicate::Evaluate(eval), the type of eval is "
-      << evaluator.IsPrefilterEvaluator();
   return evaluator.EvaluateText(*this, false);
 }
 
@@ -225,11 +222,6 @@ EvaluationResult FuzzyPredicate::Evaluate(
       filtered_key_iterators.emplace_back(std::move(key_iter));
     }
   }
-
-  VMSDK_LOG(WARNING, nullptr)
-      << "In FuzzyPredicate::Evaluate , key iter size is "
-      << filtered_key_iterators.size();
-
   if (filtered_key_iterators.empty()) {
     return EvaluationResult(false);
   }

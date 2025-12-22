@@ -175,7 +175,7 @@ def validate_fulltext_search(client: Valkey):
     result = client.execute_command("FT.SEARCH", "products", '@desc:"inspector\'s palm"')
     assert result[0] == 1
     assert result[1] == b"product:5"
-    # Validate the nuanced behavaior of exact phrase search where:
+    # Validate the nuanced behavior of exact phrase search where:
     # 1. Stopwords are not removed. (`these are not` - in this example)
     # 2. Stemming is not done on words. (`words` is not stemmed and the ingestion is not)
     # 3. Punctuation is applied (removal of `,` in this example).
@@ -1419,7 +1419,6 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         client.execute_command("HSET", "doc:1", "content", "I am going to a race")
         client.execute_command("HSET", "doc:2", "content", "Carrie needs to take care")
         client.execute_command("HSET", "doc:3", "content", "who is driving?")
-        # client.execute_command("HSET", "doc:4", "content", "Driver drove the car?") // fails as ? is not ignored
         client.execute_command("HSET", "doc:4", "content", "Driver drove the car!")
         # Wait for index backfill to complete
         IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx1")
@@ -1450,10 +1449,12 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         result = client.execute_command("FT.SEARCH", "idx1", 'drove the %car%', "INORDER")
         assert (result[0], set(result[1::2])) == (1, {b"doc:4"})
         client.execute_command("DEL", "doc:11")
-        # Stemming case
-        result = client.execute_command("FT.SEARCH", "idx2", '%%drive%%')
+        # Stemming test
+        # NOSTEM index (idx1) should give only one match
+        result = client.execute_command("FT.SEARCH", "idx1", '%%drive%%')
         assert (result[0], set(result[1::2])) == (1, {b"doc:4"})
-        # Not working. Expect driving to be treated as drive?
+        # stemming enabled should give doc:3 (with word 'driving')
+        # TODO: fails as ? is not ignored. enable after fix
         # result = client.execute_command("FT.SEARCH", "idx2", '%%drive%%')
         # assert (result[0], set(result[1::2])) == (2, {b"doc:3", b"doc:4"}) 
         # Higher edit distance test (ED=10)
@@ -1478,7 +1479,7 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         result = client.execute_command("FT.SEARCH", "idx1", '%%%%%%%%%%xyzbcdefghnalization%%%%%%%%%%')
         assert result[0] >= 1 and b"doc:7" in result[1::2]
         # Multiple fields
-        # Known crash with Return clause
+        # Known crash with Return clause. TODO: Enable after fix
         # client.execute_command("HSET", "doc:5", "content", "I am going to a race", "content2", "Driver drove the car?")
         # result = client.execute_command("FT.SEARCH", "idx1", '%%drive%%', "return", "1", "content2")
         # print(result)

@@ -350,6 +350,15 @@ def do_answer(client, expected, data_set):
         client.execute_command("FLUSHALL SYNC")
         load_data(client, expected['data_set_name'], expected['key_type'])
         data_set = (expected['data_set_name'], expected['key_type'])
+
+    # Set Valkey-specific config for inorder tests
+    if 'inorder' or 'slop' in expected['testname']:
+        try:
+            client.execute_command("CONFIG", "SET", "search.proximity-inorder-compat-mode", "yes")
+            print(f"✓ Set Valkey compat mode for test: {expected['testname']}")
+        except:
+            pass
+    
     result = {}
     try:
         print(f">>>>>> Starting Test {expected['testname']} So Far: Correct:{correct_answers} Wrong:{wrong_answers} <<<<<<<<<")
@@ -370,10 +379,17 @@ def do_answer(client, expected, data_set):
     return data_set
 
 class TestAnswersCMD(ValkeySearchTestCaseBase):
-    @pytest.mark.parametrize("answers", ["aggregate-answers.pickle.gz"])
+    @pytest.mark.parametrize("answers", ["aggregate-answers.pickle.gz", "text-search-answers.pickle.gz"])
     def test_answers(self, answers):
         global client, data_set
         global correct_answers, failed_tests, passed_tests
+
+        # RESET GLOBAL COUNTERS AT START OF EACH TEST
+        correct_answers = 0
+        wrong_answers = 0
+        failed_tests = {}
+        passed_tests = {}
+
         print("Running test_answers with answers file:", answers)
         with gzip.open(os.getenv("ROOT_DIR") + "/integration/compatibility/" + answers, "rb") as answer_file:
             answers = pickle.load(answer_file)

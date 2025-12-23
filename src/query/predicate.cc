@@ -405,7 +405,7 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
     }
   }
   // No matches found.
-  if (!require_positions) {
+  if (!require_positions || filter_iterators.empty()) {
     return EvaluationResult(false);
   }
   // In case positional awareness is required, use a OrProximityIterator.

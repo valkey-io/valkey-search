@@ -35,7 +35,10 @@ class ExactPhraseTerm(BaseTerm):
     """Represents an exact phrase match with multiple words."""
     words: List[str]
 
-# renders
+
+# ============================================================================
+# Term Renderer
+# ============================================================================
 
 # ============================================================================
 # Term Renderer
@@ -62,7 +65,6 @@ class TermRenderer:
             return '"' + " ".join(term.words) + '"'
         raise TypeError(f"Unknown term type: {type(term)}")
 
-renderer = TermRenderer()
 
 # ============================================================================
 # Shape Rendering (for complex queries)
@@ -166,8 +168,17 @@ def gen_prefix(vocab: List[str], rng: random.Random) -> List[PrefixTerm]:
         result.append(PrefixTerm(word[:prefix_len] + "*"))
     return result
 
-def sample_shape_upto(depth: int, rng: random.Random):
-    """Generate a shape with depth <= given depth."""
+
+# ============================================================================
+# Shape Generators
+# ============================================================================
+Mode = Literal["exact", "upto"]
+
+OPS_BINARY = ["AND", "OR"]
+OPS_UNARY = ["G"]
+
+def sample_shape(depth: int, rng: random.Random):
+    """Generate a valid query shape with exact depth."""
     if depth == 0:
         return "A"
 
@@ -206,6 +217,7 @@ def gen_depth1(vocab: List[str], rng: random.Random) -> str:
     return render_shape(shape, vocab, rng)
 
 def gen_atom(vocab: List[str], rng: random.Random) -> WordTerm:
+    """Generate a single word term (used internally by shape rendering)."""
     return WordTerm(rng.choice(vocab))
 
 def gen_depth2(vocab: List[str], rng: random.Random) -> str:

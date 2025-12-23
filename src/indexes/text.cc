@@ -9,6 +9,7 @@
 
 #include <stdexcept>
 
+#include "absl/container/inlined_vector.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "src/index_schema.pb.h"
@@ -136,7 +137,9 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
       static_cast<const indexes::Text::EntriesFetcher*>(fetcher_ptr);
   auto word_iter =
       fetcher->text_index_->GetPrefix().GetWordIterator(GetTextString());
-  std::vector<indexes::text::Postings::KeyIterator> key_iterators;
+  absl::InlinedVector<indexes::text::Postings::KeyIterator,
+                      indexes::text::kWordExpansionInlineCapacity>
+      key_iterators;
   while (!word_iter.Done()) {
     if (word_iter.GetWord() == GetTextString()) {
       key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
@@ -156,7 +159,9 @@ std::unique_ptr<indexes::text::TextIterator> PrefixPredicate::BuildTextIterator(
       static_cast<const indexes::Text::EntriesFetcher*>(fetcher_ptr);
   auto word_iter =
       fetcher->text_index_->GetPrefix().GetWordIterator(GetTextString());
-  std::vector<indexes::text::Postings::KeyIterator> key_iterators;
+  absl::InlinedVector<indexes::text::Postings::KeyIterator,
+                      indexes::text::kWordExpansionInlineCapacity>
+      key_iterators;
   while (!word_iter.Done()) {
     key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
     word_iter.Next();
@@ -178,7 +183,9 @@ std::unique_ptr<indexes::text::TextIterator> SuffixPredicate::BuildTextIterator(
   auto word_iter =
       fetcher->text_index_->GetSuffix().value().get().GetWordIterator(
           reversed_word);
-  std::vector<indexes::text::Postings::KeyIterator> key_iterators;
+  absl::InlinedVector<indexes::text::Postings::KeyIterator,
+                      indexes::text::kWordExpansionInlineCapacity>
+      key_iterators;
   while (!word_iter.Done()) {
     key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
     word_iter.Next();
@@ -188,20 +195,6 @@ std::unique_ptr<indexes::text::TextIterator> SuffixPredicate::BuildTextIterator(
   return std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), fetcher->field_mask_, fetcher->untracked_keys_,
       require_positions);
-}
-
-std::unique_ptr<indexes::text::TextIterator>
-ProximityPredicate::BuildTextIterator(const void* fetcher_ptr) const {
-  const auto* fetcher =
-      static_cast<const indexes::Text::EntriesFetcher*>(fetcher_ptr);
-  std::vector<std::unique_ptr<indexes::text::TextIterator>> vec;
-  vec.reserve(terms_.size());
-  for (const auto& term : terms_) {
-    vec.emplace_back(term->BuildTextIterator(fetcher));
-  }
-  return std::make_unique<indexes::text::ProximityIterator>(
-      std::move(vec), slop_, inorder_, fetcher->field_mask_,
-      fetcher->untracked_keys_);
 }
 
 std::unique_ptr<indexes::text::TextIterator> InfixPredicate::BuildTextIterator(
@@ -226,11 +219,6 @@ size_t PrefixPredicate::EstimateSize() const {
 }
 
 size_t SuffixPredicate::EstimateSize() const {
-  // TODO: Implementation
-  return 0;
-}
-
-size_t ProximityPredicate::EstimateSize() const {
   // TODO: Implementation
   return 0;
 }

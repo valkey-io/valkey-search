@@ -66,7 +66,7 @@ using Position = uint32_t;
 class FieldMask;
 
 // FlatPositionMap is a compact byte array representation
-// Layout: [Variable Header][Optional Partition Map][Position/Field Data]
+// Layout: [Bitfield Header][Optional Partition Map][Position/Field Data]
 class FlatPositionMap {
  public:
   // Constructor from PositionMap: serializes position map
@@ -93,7 +93,23 @@ class FlatPositionMap {
   const char* data() const { return data_; }
 
  private:
-  char* data_;
+  friend class PositionIterator;  // Allow iterator to access bitfield members
+
+  // Helper methods (implemented in .cc)
+  static uint8_t BytesNeeded(uint32_t value);
+  std::pair<uint32_t, uint32_t> ReadCounts(const char*& p) const;
+  void WriteCounts(char*& p, uint32_t num_positions,
+                   uint32_t num_partitions) const;
+
+  // Bitfield members for automatic packing/unpacking (no manual operations)
+  uint8_t header_scheme_ : 1;    // Bit 0: Header selection (0 or 1)
+  uint8_t encoding_scheme_ : 2;  // Bits 1-2: Encoding scheme (0 to 3)
+  uint8_t pos_bytes_ : 2;        // Bits 3-4: Position bytes count (0 to 3)
+  uint8_t part_bytes_ : 2;       // Bits 5-6: Partition bytes count (0 to 3)
+  uint8_t unused_ : 1;           // Bit 7: Reserved
+
+  char* data_;  // Points to: [num_positions][num_partitions][Partition
+                // Map][Position/Field Data]
 };
 
 // Iterator for FlatPositionMap

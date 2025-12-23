@@ -22,6 +22,7 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
+#include "malloc_capture.h"
 #include "src/attribute_data_type.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
@@ -490,7 +491,6 @@ void SearchResult::TrimResults(std::deque<indexes::Neighbor> &neighbors,
   // Apply limiting with buffer
   this->is_limited_with_buffer = true;
   neighbors.erase(neighbors.begin() + max_needed, neighbors.end());
-  return;
 }
 
 // Determine the range of neighbors to serialize in the response.
@@ -523,6 +523,7 @@ SerializationRange SearchResult::GetSerializationRange(
 
 absl::StatusOr<SearchResult> Search(const SearchParameters &parameters,
                                     SearchMode search_mode) {
+  vmsdk::malloc_capture::Enable enable_capture;
   auto result =
       MaybeAddIndexedContent(DoSearch(parameters, search_mode), parameters);
   if (!result.ok()) {
@@ -545,5 +546,13 @@ absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
       vmsdk::ThreadPool::Priority::kHigh);
   return absl::OkStatus();
 }
+
+SearchParameters::SearchParameters(uint64_t timeout,
+                                   grpc::CallbackServerContext *context,
+                                   uint32_t db_num)
+    : query_pool(options::GetQueryPoolChunkSize()),  // Must be first
+      cancellation_token(cancel::Make(timeout, context)),
+      timeout_ms(timeout),
+      db_num_(db_num) {}
 
 }  // namespace valkey_search::query

@@ -197,8 +197,7 @@ TEST_F(ResponseGeneratorTest, ProcessNeighborsForReplyContentLimits) {
   EXPECT_CALL(data_type, FetchAllRecords(
                              &fake_ctx, parameters.attribute_alias, testing::_,
                              absl::string_view("small_content_id"), testing::_))
-      .WillOnce([](ValkeyModuleCtx *ctx,
-                   const std::string &query_attribute_alias,
+      .WillOnce([](ValkeyModuleCtx *ctx, std::string_view query_attribute_alias,
                    ValkeyModuleKey *open_key, absl::string_view key,
                    const absl::flat_hash_set<absl::string_view> &identifiers)
                     -> absl::StatusOr<RecordsMap> {
@@ -218,7 +217,7 @@ TEST_F(ResponseGeneratorTest, ProcessNeighborsForReplyContentLimits) {
                              absl::string_view("large_content_id"), testing::_))
       .WillOnce([test_size_limit](
                     ValkeyModuleCtx *ctx,
-                    const std::string &query_attribute_alias,
+                    std::string_view query_attribute_alias,
                     ValkeyModuleKey *open_key, absl::string_view key,
                     const absl::flat_hash_set<absl::string_view> &identifiers)
                     -> absl::StatusOr<RecordsMap> {
@@ -236,8 +235,7 @@ TEST_F(ResponseGeneratorTest, ProcessNeighborsForReplyContentLimits) {
   EXPECT_CALL(data_type,
               FetchAllRecords(&fake_ctx, parameters.attribute_alias, testing::_,
                               absl::string_view("many_fields_id"), testing::_))
-      .WillOnce([](ValkeyModuleCtx *ctx,
-                   const std::string &query_attribute_alias,
+      .WillOnce([](ValkeyModuleCtx *ctx, std::string_view query_attribute_alias,
                    ValkeyModuleKey *open_key, absl::string_view key,
                    const absl::flat_hash_set<absl::string_view> &identifiers)
                     -> absl::StatusOr<RecordsMap> {

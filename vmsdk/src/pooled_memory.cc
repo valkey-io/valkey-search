@@ -1,0 +1,95 @@
+/*
+ * Copyright (c) 2025, valkey-search contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
+ *
+ */
+
+#include "vmsdk/src/pooled_memory.h"
+
+#include <absl/log/check.h>
+
+#include "vmsdk/src/info.h"
+
+namespace vmsdk {
+
+// Current stat
+DEV_INTEGER_COUNTER(PooledMemoryStats, pooled_memory_active);
+// Historic stat, updated on pool destruction
+DEV_INTEGER_COUNTER(PooledMemoryStats, pooled_memory_total_mallocs);
+DEV_INTEGER_COUNTER(PooledMemoryStats, pooled_memory_total_chunks);
+DEV_INTEGER_COUNTER(PooledMemoryStats, pooled_memory_total_bytes);
+DEV_INTEGER_COUNTER(PooledMemoryStats, pooled_memory_total_max_inuse);
+DEV_INTEGER_COUNTER(PooledMemoryStats, pooled_memory_total_pools);
+
+void PooledMemory::NewChunk(size_t data_size) {
+  auto this_chunk_size = std::max(data_size, chunk_size_);
+  auto chunk =
+      reinterpret_cast<Chunk*>(new char[this_chunk_size + sizeof(Chunk)]);
+  chunk->size_ = this_chunk_size;
+  chunk->leftoff_ = 0;
+  allocated_ += this_chunk_size;
+  chunks_.emplace_back(chunk);
+}
+
+PooledMemory::PooledMemory(size_t chunk_size) {
+  // Externally chunks are sized to fit efficiently into slabs, so our
+  // internal chunk size gets reduced accordingly.
+  CHECK(chunk_size > sizeof(Chunk));
+  chunk_size_ = chunk_size - sizeof(Chunk);
+  NewChunk(0);
+  pooled_memory_active.Increment();
+}
+
+size_t ComputeBytes(size_t bytes, size_t alignment) {
+  CHECK(alignment <= 16);  // Only currently supported value
+  // Round up the bytes to the alignment,
+  return (bytes + 15ul) & ~(15ul);
+}
+
+void* PooledMemory::do_allocate(size_t bytes, size_t alignment) {
+  CHECK(!chunks_.empty());
+  size_t this_bytes = ComputeBytes(bytes, alignment);
+  Chunk* chunk = chunks_.back();
+  if (chunk->leftoff_ + this_bytes > chunk->size_) {
+    NewChunk(this_bytes);
+    chunk = chunks_.back();
+  }
+  CHECK(chunk->leftoff_ + this_bytes <= chunk->size_);
+  void* p = chunk->data_ + chunk->leftoff_;
+  chunk->leftoff_ += this_bytes;
+  inuse_ += this_bytes;
+  mallocs_++;
+  max_inuse_ = std::max(max_inuse_, inuse_);
+  return p;
+}
+
+void PooledMemory::do_deallocate(void* p, size_t bytes, size_t alignment) {
+  //
+  // Note, because of the way things get destructed, we might get called to
+  // deallocate after the pool itself has been destroyed. So be care here....
+  //
+  alignment = std::max(alignment, 16ul);
+  bytes = (bytes + alignment - 1) & ~(alignment - 1);
+  CHECK(inuse_ >= bytes);
+  inuse_ -= bytes;
+}
+
+PooledMemory::~PooledMemory() {
+  pooled_memory_active.Decrement();
+
+  pooled_memory_total_chunks.Increment(chunks_.size());
+  pooled_memory_total_mallocs.Increment(mallocs_);
+  pooled_memory_total_pools.Increment();
+  pooled_memory_total_bytes.Increment(inuse_);
+  pooled_memory_total_max_inuse.Increment(max_inuse_);
+  while (!chunks_.empty()) {
+    auto chunk = chunks_.back();
+    allocated_ -= chunk->size_;
+    chunks_.pop_back();
+    delete[] reinterpret_cast<char*>(chunk);
+  }
+  CHECK(allocated_ == 0);
+}
+
+}  // namespace vmsdk

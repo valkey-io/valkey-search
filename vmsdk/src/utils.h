@@ -173,6 +173,18 @@ struct SocketAddress {
   auto operator<=>(const SocketAddress &) const = default;
 };
 
+struct Backtrace {
+  enum { kMaxBacktraceDepth = 128 };
+  absl::InlinedVector<void *, kMaxBacktraceDepth> stack_;
+
+  void Capture();
+
+  std::vector<std::string> Symbolize() const;
+
+  bool operator==(const Backtrace &other) const {
+    return stack_ == other.stack_;
+  }
+};
 }  // namespace vmsdk
 
 // Hash specialization for SocketAddress
@@ -185,6 +197,18 @@ struct hash<vmsdk::SocketAddress> {
     return h1 ^ (h2 << 1);
   }
 };
+
+template <>
+struct hash<vmsdk::Backtrace> {
+  size_t operator()(const vmsdk::Backtrace &backtrace) const {
+    size_t hash = 0;
+    for (const auto &ptr : backtrace.stack_) {
+      hash ^= std::hash<void *>{}(ptr) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+    }
+    return hash;
+  }
+};
+
 }  // namespace std
 
 #endif  // VMSDK_SRC_UTILS_H_

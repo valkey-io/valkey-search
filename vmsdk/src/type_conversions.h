@@ -54,6 +54,11 @@ inline absl::StatusOr<std::string> To(absl::string_view str) {
   return std::string(str);
 }
 
+template <>
+inline absl::StatusOr<std::pmr::string> To(absl::string_view str) {
+  return std::pmr::string(str);
+}
+
 static inline bool IsNumeric(absl::string_view str) {
   return std::all_of(str.begin(), str.end(), [](char c) {
     return c == '-' || std::isdigit(static_cast<unsigned char>(c)) != 0;

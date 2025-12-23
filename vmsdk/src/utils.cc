@@ -7,6 +7,8 @@
 
 #include "vmsdk/src/utils.h"
 
+#include <execinfo.h>
+
 #include <iomanip>
 #include <string>
 #include <utility>
@@ -348,6 +350,26 @@ std::string StringToHex(std::string_view s) {
     result += hex_chars[(c >> 4) & 0xF];
     result += hex_chars[c & 0xF];
   }
+  return result;
+}
+
+void Backtrace::Capture() {
+  stack_.resize(kMaxBacktraceDepth);
+  int size = backtrace(stack_.data(), stack_.size());
+  stack_.resize(size);
+}
+
+std::vector<std::string> Backtrace::Symbolize() const {
+  std::vector<std::string> result;
+  result.reserve(stack_.size());
+  char **symbols = backtrace_symbols(stack_.data(), stack_.size());
+  if (!symbols) {
+    return {{"backtrace_symbols failed"}};
+  }
+  for (size_t i = 1; i < stack_.size(); ++i) {
+    result.push_back(symbols[i]);
+  }
+  free(symbols);
   return result;
 }
 

@@ -81,7 +81,6 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
 
         print(f"Generated {query_count} unique queries from {attempts} attempts")
 
-
     # ========================================================================
     # Base term types
     # ========================================================================

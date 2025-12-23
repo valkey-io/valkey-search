@@ -1165,7 +1165,10 @@ void ValkeySearch::OnUnload(ValkeyModuleCtx *ctx) {
 
 std::shared_ptr<vmsdk::cluster_map::ClusterMap>
 ValkeySearch::GetOrRefreshClusterMap(ValkeyModuleCtx *ctx) {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
   auto current_map = std::atomic_load(&cluster_map_);
+#pragma GCC diagnostic pop
   // Check if we need to refresh
   bool needs_refresh =
       !current_map || !current_map->IsConsistent() ||
@@ -1173,7 +1176,10 @@ ValkeySearch::GetOrRefreshClusterMap(ValkeyModuleCtx *ctx) {
   if (needs_refresh) {
     VMSDK_LOG_EVERY_N_SEC(DEBUG, nullptr, 1) << "Creating a new cluster map";
     auto new_map = vmsdk::cluster_map::ClusterMap::CreateNewClusterMap(ctx);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     std::atomic_store(&cluster_map_, new_map);
+#pragma GCC diagnostic pop
     return new_map;
   }
   return current_map;

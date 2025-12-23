@@ -131,7 +131,10 @@ class ValkeySearch {
 
   // Get current cluster map without refresh (thread-safe)
   std::shared_ptr<vmsdk::cluster_map::ClusterMap> GetClusterMap() const {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     return std::atomic_load(&cluster_map_);
+#pragma GCC diagnostic pop
   }
 
  protected:

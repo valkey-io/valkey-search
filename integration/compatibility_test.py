@@ -350,6 +350,15 @@ def do_answer(client, expected, data_set):
         client.execute_command("FLUSHALL SYNC")
         load_data(client, expected['data_set_name'], expected['key_type'])
         data_set = (expected['data_set_name'], expected['key_type'])
+
+    # Set Valkey-specific config for inorder tests
+    if 'inorder' or 'slop' in expected['testname']:
+        try:
+            client.execute_command("CONFIG", "SET", "search.proximity-inorder-compat-mode", "yes")
+            print(f"✓ Set Valkey compat mode for test: {expected['testname']}")
+        except:
+            pass
+    
     result = {}
     try:
         print(f">>>>>> Starting Test {expected['testname']} So Far: Correct:{correct_answers} Wrong:{wrong_answers} <<<<<<<<<")

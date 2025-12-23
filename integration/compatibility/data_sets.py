@@ -35,8 +35,8 @@ TEXT_DATASETS = {
                 'quick', 'bright', 'silent', 'heavy', 'smooth', 'sharp'
             ],
             'body': [
-                # fruits
-                'apple', 'banana', 'orange', 'grape', 'cherry', 'mango',
+                # veggies
+                'potato', 'tomato', 'lettuce', 'onion', 'carrot', 'brocoli',
                 # animals
                 'dog', 'cat', 'horse', 'tiger', 'eagle', 'shark',
                 # places
@@ -496,6 +496,12 @@ def load_data(client, data_set, key_type, data_source=None):
 
     # client.wait_for_indexing_done(f"{key_type}_idx1")
     print(f"setup_data completed {data_set} {key_type}")
+
+    # Print loaded data for debugging
+    print(f"Loaded {len(load_list)} items")
+    for s in range(min(10, len(load_list))):  # Print first 10 items
+        print(f"{s}:{load_list[s][0]}: {load_list[s][1]}")
+
     if key_type != "hash":
         for s in range(0, len(load_list)):
             k = client.execute_command(*["JSON.GET", load_list[s][0], "$"])

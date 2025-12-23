@@ -1,38 +1,56 @@
 from dataclasses import dataclass
-from typing import List, Union
+from typing import List, Union, Literal
 import random
 
+
+# ============================================================================
+# Term Types
+# ============================================================================
+
 class BaseTerm:
+    """Base class for all query term types."""
     pass
+
 
 @dataclass(frozen=True)
 class WordTerm(BaseTerm):
+    """Represents a single word in a query."""
     value: str
 
 
 @dataclass(frozen=True)
 class PrefixTerm(BaseTerm):
-    value: str   # e.g. "app*"
+    """Represents a prefix wildcard term (e.g., 'app*')."""
+    value: str
 
 
 @dataclass(frozen=True)
 class SuffixTerm(BaseTerm):
-    value: str   # e.g. "*ple"
+    """Represents a suffix wildcard term (e.g., '*ple')."""
+    value: str
 
 
 @dataclass(frozen=True)
 class ExactPhraseTerm(BaseTerm):
-    words: List[str]   # ["apple", "banana"]
+    """Represents an exact phrase match with multiple words."""
+    words: List[str]
 
-# renders
+
+# ============================================================================
+# Term Renderer
+# ============================================================================
 
 class TermRenderer:
+    """Converts term objects into query strings."""
+    
     def render(self, term: Union[BaseTerm, List[BaseTerm]]) -> str:
+        """Render a single term or list of terms into a query string."""
         if isinstance(term, list):
             return " ".join(self._render_single(t) for t in term)
         return self._render_single(term)
     
     def _render_single(self, term: BaseTerm) -> str:
+        """Render a single term based on its type."""
         if isinstance(term, WordTerm):
             return term.value
         if isinstance(term, PrefixTerm):
@@ -43,128 +61,136 @@ class TermRenderer:
             return '"' + " ".join(term.words) + '"'
         raise TypeError(f"Unknown term type: {type(term)}")
 
-renderer = TermRenderer()
 
-def AND(*parts: Union[BaseTerm, str]) -> str:
-    terms = [p for p in parts if isinstance(p, BaseTerm)]
-    return renderer.render(terms)
+# ============================================================================
+# Shape Rendering (for complex queries)
+# ============================================================================
 
-def OR(left: str, right: str) -> str:
-    return f"{left} | {right}"
-
-def GROUP(expr: str) -> str:
-    return f"({expr})"
-
-def render_shape(shape, vocab, rng) -> str:
+def render_shape(
+    shape, 
+    vocab: List[str], 
+    rng: random.Random, 
+) -> str:
+    """Recursively render a query shape into a query string."""
     if shape == "A":
-        return renderer.render(gen_atom(vocab, rng))
-
+        return TermRenderer().render(gen_atom(vocab, rng))
     if isinstance(shape, tuple):
         op = shape[0]
-
-        if op == "G":
-            inner = render_shape(shape[1], vocab, rng)
-            return f"({inner})"
-
-        if op == "AND":
-            left = render_shape(shape[1], vocab, rng)
-            right = render_shape(shape[2], vocab, rng)
-            return f"({left} {right})"   # 👈 ADD PARENS
-
-        if op == "OR":
-            left = render_shape(shape[1], vocab, rng)
-            right = render_shape(shape[2], vocab, rng)
-            return f"({left} | {right})" # 👈 ADD PARENS
-
+        match op:
+            case "G":
+                inner = render_shape(shape[1], vocab, rng)
+                return f"({inner})"
+            case "AND":
+                left = render_shape(shape[1], vocab, rng)
+                right = render_shape(shape[2], vocab, rng)
+                return f"({left} {right})"
+            case "OR":
+                left = render_shape(shape[1], vocab, rng)
+                right = render_shape(shape[2], vocab, rng)
+                return f"({left} | {right})"
+            case _:
+                raise ValueError(f"Unknown shape operator: {op}")
     raise ValueError(f"Unknown shape: {shape}")
 
-def sample_shape_upto(depth: int, rng: random.Random):
-    """Generate a shape with depth <= given depth."""
+
+# ============================================================================
+# Shape Generators
+# ============================================================================
+Mode = Literal["exact", "upto"]
+
+OPS_BINARY = ["AND", "OR"]
+OPS_UNARY = ["G"]
+
+def sample_shape(depth: int, rng: random.Random):
+    """Generate a valid query shape with exact depth."""
     if depth == 0:
         return "A"
-
-    # Optionally stop early
-    if rng.random() < 0.3:
-        return "A"
-
-    op = rng.choice(["G", "AND", "OR"])
-
-    if op == "G":
-        return ("G", sample_shape_upto(depth - 1, rng))
-
-    return (
-        op,
-        sample_shape_upto(depth - 1, rng),
-        sample_shape_upto(depth - 1, rng),
-    )
-
-def sample_shape_exact(depth: int, rng: random.Random):
-    if depth == 0:
-        return "A"
-
+    
+    # At depth=1, grouping is meaningless, so only use binary operators
     if depth == 1:
-        op = rng.choice(["AND", "OR"])
+        op = rng.choice(OPS_BINARY)
     else:
-        op = rng.choice(["G", "AND", "OR"])
-
+        op = rng.choice(OPS_BINARY + OPS_UNARY)
+    
     if op == "G":
-        return ("G", sample_shape_exact(depth - 1, rng))
-
+        # Unary group does NOT reduce structural diversity
+        return ("G", sample_shape(depth - 1, rng))
+    
+    # Binary operators: randomly choose which side reaches full depth
     if rng.random() < 0.5:
-        left = sample_shape_exact(depth - 1, rng)
-        right = sample_shape_upto(depth - 1, rng)
+        left = sample_shape(depth - 1, rng)
+        right = sample_shape(rng.randint(0, depth - 1), rng)
     else:
-        left = sample_shape_upto(depth - 1, rng)
-        right = sample_shape_exact(depth - 1, rng)
-
+        left = sample_shape(rng.randint(0, depth - 1), rng)
+        right = sample_shape(depth - 1, rng)
+    
     return (op, left, right)
 
-# generators
+
+# ============================================================================
+# Term Generators
+# ============================================================================
 
 def gen_atom(vocab: List[str], rng: random.Random) -> WordTerm:
+    """Generate a single word term (used internally by shape rendering)."""
     return WordTerm(rng.choice(vocab))
 
-def gen_word(vocab: List[str]) -> WordTerm:
-    count = random.randint(1, 3)
-    return [WordTerm(random.choice(vocab)) for _ in range(count)]
 
-def gen_prefix(vocab: List[str]) -> PrefixTerm:
-    count = random.randint(1, 2)
+def gen_word(vocab: List[str], rng: random.Random) -> List[WordTerm]:
+    """Generate 1-3 word terms."""
+    count = rng.randint(1, 3)
+    return [WordTerm(rng.choice(vocab)) for _ in range(count)]
+
+
+def gen_prefix(vocab: List[str], rng: random.Random) -> List[PrefixTerm]:
+    """Generate 1-2 prefix terms."""
+    count = rng.randint(1, 2)
     result = []
     for _ in range(count):
-        w = random.choice(vocab)
-        n = min(len(w), 3)
-        result.append(PrefixTerm(w[:n] + "*"))
+        word = rng.choice(vocab)
+        prefix_len = min(len(word), 3)
+        result.append(PrefixTerm(word[:prefix_len] + "*"))
     return result
 
-def gen_suffix(vocab: List[str]) -> SuffixTerm:
+
+def gen_suffix(vocab: List[str], rng: random.Random) -> List[SuffixTerm]:
     """Generate 1-2 suffix terms."""
-    count = random.randint(1, 2)
+    count = rng.randint(1, 2)
     result = []
     for _ in range(count):
-        w = random.choice(vocab)
-        n = min(len(w), 3)
-        result.append(SuffixTerm("*" + w[-n:]))
+        word = rng.choice(vocab)
+        suffix_len = min(len(word), 3)
+        result.append(SuffixTerm("*" + word[-suffix_len:]))
     return result
 
-def gen_exact_phrase(vocab: List[str], length: int = 2) -> ExactPhraseTerm:
+
+def gen_exact_phrase(vocab: List[str], rng: random.Random) -> ExactPhraseTerm:
     """Generate one exact phrase with 2-3 words."""
-    length = random.randint(2, 3)
+    length = rng.randint(2, 3)
     if length <= len(vocab):
-        words = random.sample(vocab, length)
+        words = rng.sample(vocab, length)
     else:
-        words = [random.choice(vocab) for _ in range(length)]
+        words = [rng.choice(vocab) for _ in range(length)]
     return ExactPhraseTerm(words)
 
-def gen_group_query(vocab, rng: random.Random, depth: int) -> str:
-    shape = sample_shape_exact(depth, rng)
+
+# ============================================================================
+# Complex Query Generators
+# ============================================================================
+
+def gen_depth1(vocab: List[str], rng: random.Random) -> str:
+    """Generate a depth-1 grouped query."""
+    shape = sample_shape(1, rng)
     return render_shape(shape, vocab, rng)
 
-def gen_depth1(vocab, rng):
-    return gen_group_query(vocab, rng, depth=1)
 
-def gen_depth2(vocab, rng):
-    return gen_group_query(vocab, rng, depth=2)
+def gen_depth2(vocab: List[str], rng: random.Random) -> str:
+    """Generate a depth-2 grouped query."""
+    shape = sample_shape(2, rng)
+    return render_shape(shape, vocab, rng)
 
-def gen_depth3(vocab, rng):
-    return gen_group_query(vocab, rng, depth=3)
+
+def gen_depth3(vocab: List[str], rng: random.Random) -> str:
+    """Generate a depth-3 grouped query."""
+    shape = sample_shape(3, rng)
+    return render_shape(shape, vocab, rng)

@@ -59,6 +59,9 @@ int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
 
 void Free([[maybe_unused]] ValkeyModuleCtx *ctx, void *privdata) {
   auto *result = static_cast<Result *>(privdata);
+  // Some things in the Result can only be cleaned up on the main thread.
+  // We need to do this here.
+  result->parameters->index_schema = nullptr;
   ValkeySearch::Instance().ScheduleSearchResultCleanup(
       [result]() { delete result; });
 }

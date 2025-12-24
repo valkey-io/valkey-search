@@ -18,6 +18,7 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
+#include "src/indexes/text/fuzzy.h"
 #include "src/indexes/text/orproximity.h"
 #include "src/indexes/text/proximity.h"
 #include "src/indexes/text/text_index.h"
@@ -214,9 +215,29 @@ EvaluationResult FuzzyPredicate::Evaluate(Evaluator& evaluator) const {
 EvaluationResult FuzzyPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
     const InternedStringPtr& target_key, bool require_positions) const {
-  // TODO: Implement fuzzy evaluation
-  CHECK(false) << "Fuzzy Search - Not implemented";
-  return EvaluationResult(false);
+  uint64_t field_mask = field_mask_;
+  // Get all KeyIterators for words within edit distance
+  auto key_iters = indexes::text::FuzzySearch::Search(text_index.GetPrefix(),
+                                                      term_, distance_);
+
+  // Filter to only include KeyIterators that match target_key and field_mask
+  absl::InlinedVector<indexes::text::Postings::KeyIterator,
+                      indexes::text::kWordExpansionInlineCapacity>
+      filtered_key_iterators;
+  for (auto& key_iter : key_iters) {
+    if (key_iter.SkipForwardKey(target_key) &&
+        key_iter.ContainsFields(field_mask)) {
+      filtered_key_iterators.emplace_back(std::move(key_iter));
+    }
+  }
+  if (filtered_key_iterators.empty()) {
+    return EvaluationResult(false);
+  }
+
+  auto iterator = std::make_unique<indexes::text::TermIterator>(
+      std::move(filtered_key_iterators), field_mask, nullptr,
+      require_positions);
+  return BuildTextEvaluationResult(std::move(iterator), require_positions);
 }
 
 NumericPredicate::NumericPredicate(const indexes::Numeric* index,

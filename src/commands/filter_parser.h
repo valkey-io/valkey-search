@@ -121,6 +121,8 @@ vmsdk::config::Number& GetQueryStringDepth();
 /// Return the value of the Query String Terms Count configuration
 vmsdk::config::Number& GetQueryStringTermsCount();
 
+/// Return the value of the Fuzzy Max Distance configuration
+vmsdk::config::Number& GetFuzzyMaxDistance();
 }  // namespace options
 
 }  // namespace valkey_search

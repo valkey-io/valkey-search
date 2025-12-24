@@ -321,7 +321,7 @@ struct RadixTree {
     bool IsWord() const;
 
     // Advance to the next character at this level of the RadixTree
-    void Next();
+    void NextChild();
 
     // Seek to the char that's greater than or equal
     // returns true if target char is present, false otherwise
@@ -334,8 +334,11 @@ struct RadixTree {
     // position asserts if !CanDescend()
     PathIterator DescendNew() const;
 
-    // get current Path. If IsWord is true, then there's a word here....
-    absl::string_view GetPath();
+    // Get current Path. If IsWord is true, then there's a word here....
+    absl::string_view GetPath() const;
+
+    // Get the edge label for the current child being iterated
+    absl::string_view GetChildEdge();
 
     // Get the target for this word, will assert if !IsWord()
     const Target& GetTarget() const;
@@ -343,6 +346,18 @@ struct RadixTree {
     // Defrag the current Node and then defrag the Postings if this points to
     // one.
     void Defrag();
+
+   private:
+    friend struct RadixTree;  // Allows RadixTree to call private constructor
+    PathIterator(const Node* node, std::string path);
+
+    const Node* node_;
+    std::string path_;
+    using MapIterator =
+        typename std::map<Byte, std::unique_ptr<Node>>::const_iterator;
+    std::variant<std::monostate, MapIterator> iter_;
+    std::variant<std::monostate, MapIterator> end_;
+    bool exhausted_ = false;
   };
 };
 
@@ -731,52 +746,180 @@ const Target& RadixTree<Target>::WordIterator::GetTarget() const {
 }
 
 /*** PathIterator ***/
+template <typename Target>
+typename RadixTree<Target>::PathIterator RadixTree<Target>::GetPathIterator(
+    absl::string_view prefix) const {
+  const Node* n = &root_;
+  absl::string_view remaining = prefix;
+  std::string actual_prefix;
+
+  while (!remaining.empty()) {
+    bool found = false;
+    std::visit(
+        overloaded{
+            // Leaf case
+            [&](const std::monostate&) {},
+            // Branch case
+            [&](const std::map<Byte, std::unique_ptr<Node>>& children) {
+              auto it = children.find(remaining[0]);
+              if (it != children.end()) {
+                actual_prefix += remaining[0];
+                n = it->second.get();
+                remaining.remove_prefix(1);
+                found = true;
+              }
+            },
+            // Compressed case
+            [&](const std::pair<BytePath, std::unique_ptr<Node>>& child) {
+              if (remaining.starts_with(child.first)) {
+                actual_prefix += child.first;
+                n = child.second.get();
+                remaining.remove_prefix(child.first.length());
+                found = true;
+              } else if (child.first.starts_with(remaining)) {
+                actual_prefix += child.first;
+                n = child.second.get();
+                remaining.remove_prefix(remaining.length());
+                found = true;
+              }
+            }},
+        n->children);
+    if (!found) {
+      n = nullptr;
+      break;
+    }
+  }
+  return PathIterator(n, actual_prefix);
+}
+
+template <typename Target>
+RadixTree<Target>::PathIterator::PathIterator(const Node* node,
+                                              std::string path)
+    : node_(node), path_(std::move(path)) {
+  if (!node_) return;
+  std::visit(
+      overloaded{// Leaf case
+                 [&](const std::monostate&) {},
+                 // Branch case
+                 [&](const std::map<Byte, std::unique_ptr<Node>>& children) {
+                   iter_ = children.begin();
+                   end_ = children.end();
+                 },
+                 // Compressed case
+                 [&](const std::pair<BytePath, std::unique_ptr<Node>>&) {
+                   iter_ = std::monostate{};
+                 }},
+      node_->children);
+}
 
 template <typename Target>
 bool RadixTree<Target>::PathIterator::Done() const {
-  throw std::logic_error("TODO");
+  if (!node_) return true;
+  return std::visit(
+      overloaded{[&](const std::monostate&) { return exhausted_; },
+                 [&](const MapIterator& it) {
+                   return it == std::get<MapIterator>(end_);
+                 }},
+      iter_);
 }
 
 template <typename Target>
 bool RadixTree<Target>::PathIterator::IsWord() const {
-  throw std::logic_error("TODO");
+  return node_ && static_cast<bool>(node_->target);
 }
 
 template <typename Target>
-void RadixTree<Target>::PathIterator::Next() {
-  throw std::logic_error("TODO");
+void RadixTree<Target>::PathIterator::NextChild() {
+  std::visit(
+      overloaded{[&](std::monostate&) { exhausted_ = true; },
+                 [](std::map<Byte, std::unique_ptr<Node>>::const_iterator& it) {
+                   ++it;
+                 }},
+      iter_);
 }
 
 template <typename Target>
 bool RadixTree<Target>::PathIterator::SeekForward(char target) {
-  throw std::logic_error("TODO");
+  return std::visit(
+      overloaded{
+          [](const std::monostate&) { return false; },
+          [&](std::map<Byte, std::unique_ptr<Node>>::const_iterator& it) {
+            auto& end_it =
+                std::get<std::map<Byte, std::unique_ptr<Node>>::const_iterator>(
+                    end_);
+            it =
+                std::get<std::map<Byte, std::unique_ptr<Node>>>(node_->children)
+                    .lower_bound(static_cast<Byte>(target));
+            return it != end_it && it->first == static_cast<Byte>(target);
+          }},
+      iter_);
 }
 
 template <typename Target>
 bool RadixTree<Target>::PathIterator::CanDescend() const {
-  throw std::logic_error("TODO");
+  if (!node_) return false;
+  return !std::holds_alternative<std::monostate>(node_->children);
 }
 
 template <typename Target>
 typename RadixTree<Target>::PathIterator
 RadixTree<Target>::PathIterator::DescendNew() const {
-  throw std::logic_error("TODO");
+  CHECK(CanDescend());
+  // For branch nodes, descend through current iterator position
+  if (std::holds_alternative<MapIterator>(iter_)) {
+    auto& it = std::get<MapIterator>(iter_);
+    return PathIterator(it->second.get(), path_ + static_cast<char>(it->first));
+  }
+  // For compressed nodes, descend through the single child
+  if (std::holds_alternative<std::pair<BytePath, std::unique_ptr<Node>>>(
+          node_->children)) {
+    auto& child =
+        std::get<std::pair<BytePath, std::unique_ptr<Node>>>(node_->children);
+    return PathIterator(child.second.get(), path_ + child.first);
+  }
+
+  CHECK(false) << "Cannot descend from leaf";
+  return PathIterator(nullptr, "");
 }
 
 template <typename Target>
-absl::string_view RadixTree<Target>::PathIterator::GetPath() {
-  throw std::logic_error("TODO");
+absl::string_view RadixTree<Target>::PathIterator::GetChildEdge() {
+  // For branch nodes, iter_ contains the map iterator
+  if (std::holds_alternative<MapIterator>(iter_)) {
+    auto& it = std::get<MapIterator>(iter_);
+    static thread_local std::string s;
+    s = std::string(1, static_cast<char>(it->first));
+    return absl::string_view(s);
+  }
+  // For compressed nodes, return the compressed path
+  if (node_ &&
+      std::holds_alternative<std::pair<BytePath, std::unique_ptr<Node>>>(
+          node_->children)) {
+    auto& child =
+        std::get<std::pair<BytePath, std::unique_ptr<Node>>>(node_->children);
+    return child.first;
+  }
+  // For leaf nodes, return empty
+  return "";
+}
+
+template <typename Target>
+absl::string_view RadixTree<Target>::PathIterator::GetPath() const {
+  return path_;
 }
 
 template <typename Target>
 const Target& RadixTree<Target>::PathIterator::GetTarget() const {
-  throw std::logic_error("TODO");
+  CHECK(IsWord());
+  return node_->target;
 }
 
 template <typename Target>
 void RadixTree<Target>::PathIterator::Defrag() {
   throw std::logic_error("TODO");
 }
+
+/*** Debug ***/
 
 template <typename Target>
 std::vector<std::string> RadixTree<Target>::DebugGetTreeString(

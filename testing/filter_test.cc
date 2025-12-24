@@ -840,20 +840,30 @@ INSTANTIATE_TEST_SUITE_P(
             .create_success = false,
             .create_expected_error_message = "Unsupported query operation",
         },
-        {.test_name = "exact_fuzzy1",
-         .filter = "@text_field1:%word%",
-         .create_success = false,
-         .create_expected_error_message = "Unsupported query operation"},
+        {
+            .test_name = "exact_fuzzy1",
+            .filter = "@text_field1:%word%",
+            .create_success = true,
+            .evaluate_success = true,
+            .expected_tree_structure =
+                "TEXT-FUZZY(\"word\", distance=1, field_mask=1)\n",
+        },
         {
             .test_name = "exact_fuzzy2",
             .filter = "@text_field1:%%word%%",
-            .create_success = false,
-            .create_expected_error_message = "Unsupported query operation",
+            .create_success = true,
+            .evaluate_success = true,
+            .expected_tree_structure =
+                "TEXT-FUZZY(\"word\", distance=2, field_mask=1)\n",
         },
-        {.test_name = "exact_fuzzy3",
-         .filter = "@text_field1:%%%word%%%",
-         .create_success = false,
-         .create_expected_error_message = "Unsupported query operation"},
+        {
+            .test_name = "exact_fuzzy3",
+            .filter = "@text_field1:%%%word%%%",
+            .create_success = true,
+            .evaluate_success = true,
+            .expected_tree_structure =
+                "TEXT-FUZZY(\"word\", distance=3, field_mask=1)\n",
+        },
         {
             .test_name = "proximity1",
             .filter = "@text_field1:\"hello my name is\"",
@@ -1044,15 +1054,50 @@ INSTANTIATE_TEST_SUITE_P(
             .create_expected_error_message = "Unsupported query operation",
         },
         {
-            .test_name = "proximity3",
+            .test_name = "mixed_fulltext",
             .filter =
                 "@text_field1:\"Advanced Neural Networking in plants\" | "
                 "@text_field1:Advanced @text_field2:neu* @text_field1:network"
                 "@num_field_2.0:[10 100] @text_field1:hello | "
                 "@tag_field_1:{books} @text_field2:Neural | "
                 "@text_field1:%%%word%%% @text_field2:network",
-            .create_success = false,
-            .create_expected_error_message = "Unsupported query operation",
+            .create_success = true,
+            .expected_tree_structure =
+                "OR{\n"
+                "  AND(slop=0, inorder=true){\n"
+                "    TEXT-TERM(\"advanced\", field_mask=1)\n"
+                "    TEXT-TERM(\"neural\", field_mask=1)\n"
+                "    TEXT-TERM(\"networking\", field_mask=1)\n"
+                "    TEXT-TERM(\"in\", field_mask=1)\n"
+                "    TEXT-TERM(\"plants\", field_mask=1)\n"
+                "  }\n"
+                "  AND{\n"
+                "    TEXT-TERM(\"advanc\", field_mask=1)\n"
+                "    TEXT-PREFIX(\"neu\", field_mask=2)\n"
+                "    TEXT-TERM(\"network\", field_mask=1)\n"
+                "    NUMERIC(num_field_2.0)\n"
+                "    TEXT-TERM(\"hello\", field_mask=1)\n"
+                "  }\n"
+                "  AND{\n"
+                "    TAG(tag_field_1)\n"
+                "    TEXT-TERM(\"neural\", field_mask=2)\n"
+                "  }\n"
+                "  AND{\n"
+                "    TEXT-FUZZY(\"word\", distance=3, field_mask=1)\n"
+                "    TEXT-TERM(\"network\", field_mask=2)\n"
+                "  }\n"
+                "}\n",
+        },
+        {
+            .test_name = "fuzzy_ignored_in_exact_phrase",
+            .filter = "@text_field1:\" Advanced Neural %%%word%%%\"",
+            .create_success = true,
+            .expected_tree_structure =
+                "AND(slop=0, inorder=true){\n"
+                "  TEXT-TERM(\"advanced\", field_mask=1)\n"
+                "  TEXT-TERM(\"neural\", field_mask=1)\n"
+                "  TEXT-TERM(\"word\", field_mask=1)\n"
+                "}\n",
         },
         {
             .test_name = "invalid_fuzzy1",
@@ -1064,7 +1109,7 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "invalid_fuzzy2",
             .filter = "Hello, how are %you%% doing",
             .create_success = false,
-            .create_expected_error_message = "Unsupported query operation",
+            .create_expected_error_message = "Invalid fuzzy '%' markers",
         },
         {
             .test_name = "invalid_fuzzy3",
@@ -1076,7 +1121,19 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "invalid_fuzzy4",
             .filter = "Hello, how are %%%you%%%doing%%%",
             .create_success = false,
-            .create_expected_error_message = "Unsupported query operation",
+            .create_expected_error_message = "Invalid fuzzy '%' markers",
+        },
+        {
+            .test_name = "invalid_fuzzy5",
+            .filter = "Hello, how are %%%  %%%",
+            .create_success = false,
+            .create_expected_error_message = "Invalid fuzzy '%' markers",
+        },
+        {
+            .test_name = "invalid_fuzzy6",
+            .filter = "Hello, how are %%%*%%%",
+            .create_success = false,
+            .create_expected_error_message = "Invalid fuzzy '%' markers",
         },
         {
             .test_name = "invalid_escape1",

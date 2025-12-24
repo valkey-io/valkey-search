@@ -221,7 +221,9 @@ EvaluationResult FuzzyPredicate::Evaluate(
                                                       term_, distance_);
 
   // Filter to only include KeyIterators that match target_key and field_mask
-  std::vector<indexes::text::Postings::KeyIterator> filtered_key_iterators;
+  absl::InlinedVector<indexes::text::Postings::KeyIterator,
+                      indexes::text::kWordExpansionInlineCapacity>
+      filtered_key_iterators;
   for (auto& key_iter : key_iters) {
     if (key_iter.SkipForwardKey(target_key) &&
         key_iter.ContainsFields(field_mask)) {

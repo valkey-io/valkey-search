@@ -16,16 +16,20 @@
 #include "invasive_ptr.h"
 #include "posting.h"
 #include "radix_tree.h"
+#include "text.h"
 
 namespace valkey_search::indexes::text {
 
 // Fuzzy search using Damerau-Levenshtein distance on RadixTree
 struct FuzzySearch {
   // Returns KeyIterators for all words within edit distance <= max_distance
-  static std::vector<Postings::KeyIterator> Search(
-      const RadixTree<InvasivePtr<Postings>>& tree, absl::string_view pattern,
-      size_t max_distance) {
-    std::vector<indexes::text::Postings::KeyIterator> key_iterators;
+  static absl::InlinedVector<Postings::KeyIterator,
+                             kWordExpansionInlineCapacity>
+  Search(const RadixTree<InvasivePtr<Postings>>& tree,
+         absl::string_view pattern, size_t max_distance) {
+    absl::InlinedVector<indexes::text::Postings::KeyIterator,
+                        kWordExpansionInlineCapacity>
+        key_iterators;
 
     // Dynamic Programming matrix rows for Damerau-Levenshtein algorithm
     // Row i-2 (for transposition)
@@ -60,7 +64,8 @@ struct FuzzySearch {
           prev,  // Row i-1 of DP matrix (previous row)
       absl::InlinedVector<size_t, 32>&
           curr,  // Row i of DP matrix (current row being computed)
-      std::vector<indexes::text::Postings::KeyIterator>& key_iterators) {
+      absl::InlinedVector<indexes::text::Postings::KeyIterator,
+                          kWordExpansionInlineCapacity>& key_iterators) {
     // Iterate over children at current tree level
     while (!iter.Done()) {
       absl::string_view edge = iter.GetChildEdge();

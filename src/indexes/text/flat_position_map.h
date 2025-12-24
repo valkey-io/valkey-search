@@ -84,9 +84,7 @@ class FlatPositionMap {
   size_t CountTermFrequency() const;
 
   // Access to raw data pointer (stored immediately after this object)
-  inline char* data() {
-    return reinterpret_cast<char*>(this + 1);
-  }
+  inline char* data() { return reinterpret_cast<char*>(this + 1); }
 
   inline const char* data() const {
     return reinterpret_cast<const char*>(this + 1);

@@ -25,13 +25,13 @@ class FlatPositionMapPtr {
       const std::map<Position, std::unique_ptr<FieldMask>>& position_map,
       size_t num_text_fields)
       : ptr_(FlatPositionMap::Create(position_map, num_text_fields)) {}
-  
+
   ~FlatPositionMapPtr() { FlatPositionMap::Destroy(ptr_); }
-  
+
   // Non-copyable
   FlatPositionMapPtr(const FlatPositionMapPtr&) = delete;
   FlatPositionMapPtr& operator=(const FlatPositionMapPtr&) = delete;
-  
+
   // Movable
   FlatPositionMapPtr(FlatPositionMapPtr&& other) noexcept : ptr_(other.ptr_) {
     other.ptr_ = nullptr;
@@ -44,14 +44,14 @@ class FlatPositionMapPtr {
     }
     return *this;
   }
-  
+
   FlatPositionMap& operator*() { return *ptr_; }
   const FlatPositionMap& operator*() const { return *ptr_; }
   FlatPositionMap* operator->() { return ptr_; }
   const FlatPositionMap* operator->() const { return ptr_; }
   FlatPositionMap* get() { return ptr_; }
   const FlatPositionMap* get() const { return ptr_; }
-  
+
  private:
   FlatPositionMap* ptr_;
 };

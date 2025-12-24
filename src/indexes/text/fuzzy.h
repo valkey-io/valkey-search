@@ -13,17 +13,17 @@
 
 #include "absl/container/inlined_vector.h"
 #include "absl/strings/string_view.h"
+#include "invasive_ptr.h"
 #include "posting.h"
 #include "radix_tree.h"
 
 namespace valkey_search::indexes::text {
 
 // Fuzzy search using Damerau-Levenshtein distance on RadixTree
-template <typename Target>
 struct FuzzySearch {
   // Returns KeyIterators for all words within edit distance <= max_distance
   static std::vector<Postings::KeyIterator> Search(
-      const RadixTree<Target>& tree, absl::string_view pattern,
+      const RadixTree<InvasivePtr<Postings>>& tree, absl::string_view pattern,
       size_t max_distance) {
     std::vector<indexes::text::Postings::KeyIterator> key_iterators;
 
@@ -50,8 +50,8 @@ struct FuzzySearch {
 
  private:
   static void SearchRecursive(
-      typename RadixTree<Target>::PathIterator iter, absl::string_view pattern,
-      size_t max_distance,
+      RadixTree<InvasivePtr<Postings>>::PathIterator iter,
+      absl::string_view pattern, size_t max_distance,
       std::string word,   // Current word being built
       char prev_tree_ch,  // Previous character (for transposition detection)
       absl::InlinedVector<size_t, 32>&
@@ -61,7 +61,7 @@ struct FuzzySearch {
       absl::InlinedVector<size_t, 32>&
           curr,  // Row i of DP matrix (current row being computed)
       std::vector<indexes::text::Postings::KeyIterator>& key_iterators) {
-    // Iterate over siblings at current tree level
+    // Iterate over children at current tree level
     while (!iter.Done()) {
       absl::string_view edge = iter.GetChildEdge();
       std::string new_word = word;
@@ -69,7 +69,7 @@ struct FuzzySearch {
       // Used for pruning: if min_dist > max_distance, skip entire subtree.
       size_t min_dist;
 
-      // SAVE STATE: Each sibling must start with same parent state
+      // SAVE STATE: Each child must start with same parent state
       auto saved_prev_prev = prev_prev;
       auto saved_prev = prev;
       char saved_prev_tree_ch = prev_tree_ch;
@@ -127,12 +127,12 @@ struct FuzzySearch {
       // too far, no word in this subtree can match.
       bool should_prune = (min_dist > max_distance);
       if (should_prune) {
-        // Restore state for next sibling (each sibling starts from same parent
+        // Restore state for next child (each child starts from same parent
         // state)
         prev_prev = saved_prev_prev;
         prev = saved_prev;
         prev_tree_ch = saved_prev_tree_ch;
-        iter.NextSibling();
+        iter.NextChild();
         continue;
       }
 
@@ -153,13 +153,13 @@ struct FuzzySearch {
         }
       }
 
-      // Restore state for next sibling (each sibling starts from same parent
+      // Restore state for next child (each child starts from same parent
       // state)
       prev_prev = saved_prev_prev;
       prev = saved_prev;
       prev_tree_ch = saved_prev_tree_ch;
 
-      iter.NextSibling();
+      iter.NextChild();
     }
   }
 };

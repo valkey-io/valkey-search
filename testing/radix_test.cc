@@ -637,15 +637,15 @@ TEST_F(RadixTreeTest, PathIteratorAPIs) {
   EXPECT_TRUE(can_iter.IsWord());
   EXPECT_EQ(can_iter.GetTarget().value, 3);
 
-  // Iterate through ca_iter's children (siblings: "can", "car", "cat")
+  // Iterate through ca_iter's children ("can", "car", "cat")
   EXPECT_EQ(ca_iter.GetChildEdge(), "n");
-  ca_iter.NextSibling();
+  ca_iter.NextChild();
   EXPECT_FALSE(ca_iter.Done());
   EXPECT_EQ(ca_iter.GetChildEdge(), "r");
-  ca_iter.NextSibling();
+  ca_iter.NextChild();
   EXPECT_FALSE(ca_iter.Done());
   EXPECT_EQ(ca_iter.GetChildEdge(), "t");
-  ca_iter.NextSibling();
+  ca_iter.NextChild();
   EXPECT_TRUE(ca_iter.Done());
 }
 }  // namespace

@@ -1416,28 +1416,35 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
                     "content", "TEXT")
         client.execute_command("FT.CREATE", "idx3", "ON", "HASH", "SCHEMA",
                     "content", "TEXT", "NOSTEM", "content2", "TEXT", "NOSTEM")
+        # Wait for index backfill to complete
+        for index in ["idx1", "idx2", "idx3"]:
+            IndexingTestHelper.wait_for_backfill_complete_on_node(client, index)
+        # Add test data
         client.execute_command("HSET", "doc:1", "content", "I am going to a race")
         client.execute_command("HSET", "doc:2", "content", "Carrie needs to take care")
         client.execute_command("HSET", "doc:3", "content", "who is driving?")
         client.execute_command("HSET", "doc:4", "content", "Driver drove the car!")
-        # Wait for index backfill to complete
-        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx1")
+        client.execute_command("HSET", "doc:5", "content", "abdc")
+        client.execute_command("HSET", "doc:6", "content", "abcdefghij")
+        client.execute_command("HSET", "doc:7", "content", "internationalization")
+        client.execute_command("HSET", "doc:8", "content", "ice")
+        client.execute_command("HSET", "doc:9", "content", "in") # This is a stop word and won't be indexed.
+        client.execute_command("HSET", "doc:10", "content", "internet")
+        client.execute_command("HSET", "doc:11", "content", "Carl Weathers drove the huge boxcar")
+        # TESTS
         # Simple Edit distance (ED) = 1
         result = client.execute_command("FT.SEARCH", "idx1", '%car%')
-        assert (result[0], set(result[1::2])) == (2, {b"doc:2", b"doc:4"})
+        assert (result[0], set(result[1::2])) == (3, {b"doc:2", b"doc:4", b"doc:11"})
         # Should be case insensitive
         result = client.execute_command("FT.SEARCH", "idx1", '%CAR%')
-        assert (result[0], set(result[1::2])) == (2, {b"doc:2", b"doc:4"})
+        assert (result[0], set(result[1::2])) == (3, {b"doc:2", b"doc:4", b"doc:11"})
         # Transposition (Damerau-Levenshtein) ED = 1
         result = client.execute_command("FT.SEARCH", "idx1", '%crA%')
         assert (result[0], set(result[1::2])) == (1, {b"doc:4"})
-        client.execute_command("HSET", "doc:5", "content", "abdc")
         result = client.execute_command("FT.SEARCH", "idx1", '%%bacd%%')
-        # race from doc:1 (ED = 2) and abcd from doc:4 (ED = 2, transposition)
+        # Matches 'race' from doc:1 (ED = 2) and 'abdc' from doc:5 (ED = 2, transposition)
         assert (result[0], set(result[1::2])) == (2, {b'doc:1', b'doc:5'})
         # In Composed AND
-        client.execute_command("HSET", "doc:11", "content", "Carl Weathers drove the big tramcar")
-        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx1")
         result = client.execute_command("FT.SEARCH", "idx1", 'Driver drove the %Kar%')
         assert (result[0], set(result[1::2])) == (1, {b"doc:4"})
         result = client.execute_command("FT.SEARCH", "idx1", 'drove the %car%')
@@ -1445,32 +1452,31 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # Test with slop
         result = client.execute_command("FT.SEARCH", "idx1", 'drove the %car%', "SLOP", "0")
         assert (result[0], set(result[1::2])) == (1, {b"doc:4"})
+        result = client.execute_command("FT.SEARCH", "idx1", 'drove the %car%', "SLOP", "1")
+        # SLOP=1 allows doc:11: "Carl(ED=1) [Weathers] drove the"
+        assert (result[0], set(result[1::2])) == (2, {b"doc:4", b"doc:11"})
         # Test with Inorder
         result = client.execute_command("FT.SEARCH", "idx1", 'drove the %car%', "INORDER")
         assert (result[0], set(result[1::2])) == (1, {b"doc:4"})
-        client.execute_command("DEL", "doc:11")
+        result = client.execute_command("FT.SEARCH", "idx1", 'drove the %%%car%%%', "INORDER")
+        # INORDER with ED = 3 allows doc:11: "... drove the huge boxcar(ED=3)"
+        assert (result[0], set(result[1::2])) == (2, {b"doc:4", b"doc:11"})
         # Stemming test
-        # NOSTEM index (idx1) should give only one match
+        # NOSTEM index (idx1) should not give doc:3 (driving)
         result = client.execute_command("FT.SEARCH", "idx1", '%%drive%%')
-        assert (result[0], set(result[1::2])) == (1, {b"doc:4"})
+        assert (result[0], set(result[1::2])) == (2, {b"doc:4", b"doc:11"})
         # stemming enabled should give doc:3 (with word 'driving')
-        # TODO: fails as ? is not ignored. enable after fix
+        # TODO: fails as '?' is not ignored. Enable after fix
         # result = client.execute_command("FT.SEARCH", "idx2", '%%drive%%')
         # assert (result[0], set(result[1::2])) == (2, {b"doc:3", b"doc:4"}) 
         # Higher edit distance test (ED=10)
         # Add a document with a word that requires high edit distance
-        client.execute_command("HSET", "doc:6", "content", "abcdefghij")
-        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx1")
         # Increase max edit distance config
         client.execute_command("CONFIG", "SET", "search.fuzzy-max-distance", "10")
         result = client.execute_command("FT.SEARCH", "idx1", '%%%%%%%%%%z%%%%%%%%%%')
-        assert (result[0], set(result[1::2])) == (6, {b"doc:1", b"doc:2", b"doc:3", b"doc:4", b"doc:5", b"doc:6"})
-        # Long word test - add some prefix words for branching
-        client.execute_command("HSET", "doc:7", "content", "internationalization")
-        client.execute_command("HSET", "doc:8", "content", "ice")
-        client.execute_command("HSET", "doc:9", "content", "in")
-        client.execute_command("HSET", "doc:10", "content", "internet")
-        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx1")
+        # Expected non-matches are doc:7 (exceeds the ED) and doc:9 (stop word)
+        assert (result[0], set(result[1::2])) == (9, {b"doc:1", b"doc:2", b"doc:3", b"doc:4", b"doc:5", b"doc:6", b"doc:8", b"doc:10", b"doc:11"})
+        # Long word test
         result = client.execute_command("FT.SEARCH", "idx1", '%internationalizaton%')
         assert (result[0], set(result[1::2])) == (1, {b"doc:7"})
         result = client.execute_command("FT.SEARCH", "idx1", '%%%interntionliztion%%%')
@@ -1480,10 +1486,9 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert result[0] >= 1 and b"doc:7" in result[1::2]
         # Multiple fields
         # Known crash with Return clause. TODO: Enable after fix
-        # client.execute_command("HSET", "doc:5", "content", "I am going to a race", "content2", "Driver drove the car?")
-        # result = client.execute_command("FT.SEARCH", "idx1", '%%drive%%', "return", "1", "content2")
-        # print(result)
-        # assert (result[0], set(result[1::2])) == (1, {b"doc:4"})
+        # client.execute_command("HSET", "doc:12", "content", "I am going to a race", "content2", "Driver drove the car?")
+        # result = client.execute_command("FT.SEARCH", "idx3", '%%drive%%', "return", "1", "content2")
+        # assert (result[0], set(result[1::2])) == (3, {b"doc:4", b"doc:11", b"doc:12"})
 
 class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
     """

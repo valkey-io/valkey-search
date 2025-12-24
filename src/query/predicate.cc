@@ -210,9 +210,8 @@ EvaluationResult FuzzyPredicate::Evaluate(
     const InternedStringPtr& target_key, bool require_positions) const {
   uint64_t field_mask = field_mask_;
   // Get all KeyIterators for words within edit distance
-  auto key_iters = indexes::text::
-      FuzzySearch<indexes::text::InvasivePtr<indexes::text::Postings>>::Search(
-          text_index.GetPrefix(), term_, distance_);
+  auto key_iters = indexes::text::FuzzySearch::Search(text_index.GetPrefix(),
+                                                      term_, distance_);
 
   // Filter to only include KeyIterators that match target_key and field_mask
   std::vector<indexes::text::Postings::KeyIterator> filtered_key_iterators;

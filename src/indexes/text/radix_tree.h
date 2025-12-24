@@ -321,7 +321,7 @@ struct RadixTree {
     bool IsWord() const;
 
     // Advance to the next character at this level of the RadixTree
-    void NextSibling();
+    void NextChild();
 
     // Seek to the char that's greater than or equal
     // returns true if target char is present, false otherwise
@@ -829,7 +829,7 @@ bool RadixTree<Target>::PathIterator::IsWord() const {
 }
 
 template <typename Target>
-void RadixTree<Target>::PathIterator::NextSibling() {
+void RadixTree<Target>::PathIterator::NextChild() {
   std::visit(
       overloaded{[&](std::monostate&) { exhausted_ = true; },
                  [](std::map<Byte, std::unique_ptr<Node>>::const_iterator& it) {

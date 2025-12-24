@@ -214,9 +214,8 @@ std::unique_ptr<indexes::text::TextIterator> FuzzyPredicate::BuildTextIterator(
     const void* fetcher_ptr) const {
   const auto* fetcher =
       static_cast<const indexes::Text::EntriesFetcher*>(fetcher_ptr);
-  auto key_iterators = indexes::text::
-      FuzzySearch<indexes::text::InvasivePtr<indexes::text::Postings>>::Search(
-          fetcher->text_index_->GetPrefix(), GetTextString(), GetDistance());
+  auto key_iterators = indexes::text::FuzzySearch::Search(
+      fetcher->text_index_->GetPrefix(), GetTextString(), GetDistance());
   // We do not perform positional checks on the initial background search.
   bool require_positions = false;
   return std::make_unique<indexes::text::TermIterator>(

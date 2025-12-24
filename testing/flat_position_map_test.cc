@@ -18,6 +18,44 @@
 
 namespace valkey_search::indexes::text {
 
+// RAII wrapper for FlatPositionMap pointer
+class FlatPositionMapPtr {
+ public:
+  FlatPositionMapPtr(
+      const std::map<Position, std::unique_ptr<FieldMask>>& position_map,
+      size_t num_text_fields)
+      : ptr_(FlatPositionMap::Create(position_map, num_text_fields)) {}
+  
+  ~FlatPositionMapPtr() { FlatPositionMap::Destroy(ptr_); }
+  
+  // Non-copyable
+  FlatPositionMapPtr(const FlatPositionMapPtr&) = delete;
+  FlatPositionMapPtr& operator=(const FlatPositionMapPtr&) = delete;
+  
+  // Movable
+  FlatPositionMapPtr(FlatPositionMapPtr&& other) noexcept : ptr_(other.ptr_) {
+    other.ptr_ = nullptr;
+  }
+  FlatPositionMapPtr& operator=(FlatPositionMapPtr&& other) noexcept {
+    if (this != &other) {
+      FlatPositionMap::Destroy(ptr_);
+      ptr_ = other.ptr_;
+      other.ptr_ = nullptr;
+    }
+    return *this;
+  }
+  
+  FlatPositionMap& operator*() { return *ptr_; }
+  const FlatPositionMap& operator*() const { return *ptr_; }
+  FlatPositionMap* operator->() { return ptr_; }
+  const FlatPositionMap* operator->() const { return ptr_; }
+  FlatPositionMap* get() { return ptr_; }
+  const FlatPositionMap* get() const { return ptr_; }
+  
+ private:
+  FlatPositionMap* ptr_;
+};
+
 class FlatPositionMapTest : public ::testing::Test {
  protected:
   std::map<Position, std::unique_ptr<FieldMask>> CreatePositionMap(
@@ -61,15 +99,15 @@ class FlatPositionMapTest : public ::testing::Test {
 
 TEST_F(FlatPositionMapTest, EmptyMap) {
   std::map<Position, std::unique_ptr<FieldMask>> empty_map;
-  EXPECT_DEATH(FlatPositionMap flat_map(empty_map, 1),
+  EXPECT_DEATH(FlatPositionMap::Create(empty_map, 1),
                "Cannot create FlatPositionMap from empty position_map");
 }
 
 TEST_F(FlatPositionMapTest, SinglePositionSingleField) {
   auto position_map = CreatePositionMap({{100, 1}}, 1);
-  FlatPositionMap flat_map(position_map, 1);
+  FlatPositionMapPtr flat_map(position_map, 1);
 
-  PositionIterator iter(flat_map);
+  PositionIterator iter(*flat_map);
   EXPECT_TRUE(iter.IsValid());
   EXPECT_EQ(iter.GetPosition(), 100);
   EXPECT_EQ(iter.GetFieldMask(), 1ULL);
@@ -77,16 +115,16 @@ TEST_F(FlatPositionMapTest, SinglePositionSingleField) {
   iter.NextPosition();
   EXPECT_FALSE(iter.IsValid());
 
-  EXPECT_EQ(flat_map.CountPositions(), 1);
-  EXPECT_EQ(flat_map.CountTermFrequency(), 1);
+  EXPECT_EQ(flat_map->CountPositions(), 1);
+  EXPECT_EQ(flat_map->CountTermFrequency(), 1);
 }
 
 TEST_F(FlatPositionMapTest, MultiplePositionsIteration) {
   auto position_map =
       CreatePositionMap({{10, 1}, {25, 1}, {50, 1}, {75, 1}}, 1);
-  FlatPositionMap flat_map(position_map, 1);
+  FlatPositionMapPtr flat_map(position_map, 1);
 
-  PositionIterator iter(flat_map);
+  PositionIterator iter(*flat_map);
   EXPECT_EQ(iter.GetPosition(), 10);
   iter.NextPosition();
   EXPECT_EQ(iter.GetPosition(), 25);
@@ -100,9 +138,9 @@ TEST_F(FlatPositionMapTest, MultiplePositionsIteration) {
 
 TEST_F(FlatPositionMapTest, LargeDeltaEncoding) {
   auto position_map = CreatePositionMap({{1, 1}, {1000, 1}, {100000, 1}}, 1);
-  FlatPositionMap flat_map(position_map, 1);
+  FlatPositionMapPtr flat_map(position_map, 1);
 
-  PositionIterator iter(flat_map);
+  PositionIterator iter(*flat_map);
   EXPECT_EQ(iter.GetPosition(), 1);
   iter.NextPosition();
   EXPECT_EQ(iter.GetPosition(), 1000);
@@ -117,9 +155,9 @@ TEST_F(FlatPositionMapTest, LargeDeltaEncoding) {
 TEST_F(FlatPositionMapTest, MultipleFields) {
   auto position_map =
       CreatePositionMap({{10, 0b001}, {20, 0b010}, {30, 0b100}}, 3);
-  FlatPositionMap flat_map(position_map, 3);
+  FlatPositionMapPtr flat_map(position_map, 3);
 
-  PositionIterator iter(flat_map);
+  PositionIterator iter(*flat_map);
   EXPECT_EQ(iter.GetPosition(), 10);
   EXPECT_EQ(iter.GetFieldMask(), 0b001ULL);
   iter.NextPosition();
@@ -135,9 +173,9 @@ TEST_F(FlatPositionMapTest, MultipleFields) {
 TEST_F(FlatPositionMapTest, SingleFieldOptimization) {
   // Single field maps don't store field masks
   auto position_map = CreatePositionMap({{10, 1}, {20, 1}, {30, 1}}, 1);
-  FlatPositionMap flat_map(position_map, 1);
+  FlatPositionMapPtr flat_map(position_map, 1);
 
-  PositionIterator iter(flat_map);
+  PositionIterator iter(*flat_map);
   while (iter.IsValid()) {
     EXPECT_EQ(iter.GetFieldMask(), 1ULL);
     iter.NextPosition();
@@ -147,9 +185,9 @@ TEST_F(FlatPositionMapTest, SingleFieldOptimization) {
 TEST_F(FlatPositionMapTest, AllFieldsSet) {
   uint64_t all_fields = ~0ULL;
   auto position_map = CreatePositionMap({{100, all_fields}}, 64);
-  FlatPositionMap flat_map(position_map, 64);
+  FlatPositionMapPtr flat_map(position_map, 64);
 
-  PositionIterator iter(flat_map);
+  PositionIterator iter(*flat_map);
   EXPECT_EQ(iter.GetFieldMask(), all_fields);
 }
 
@@ -157,9 +195,9 @@ TEST_F(FlatPositionMapTest, TermFrequencyCalculation) {
   // Position 10: 1 field, Position 20: 2 fields, Position 30: 3 fields
   auto position_map =
       CreatePositionMap({{10, 0b001}, {20, 0b011}, {30, 0b111}}, 3);
-  FlatPositionMap flat_map(position_map, 3);
+  FlatPositionMapPtr flat_map(position_map, 3);
 
-  EXPECT_EQ(flat_map.CountTermFrequency(), 6);  // 1+2+3
+  EXPECT_EQ(flat_map->CountTermFrequency(), 6);  // 1+2+3
 }
 
 //=============================================================================
@@ -169,9 +207,9 @@ TEST_F(FlatPositionMapTest, TermFrequencyCalculation) {
 TEST_F(FlatPositionMapTest, SkipToExistingPosition) {
   auto position_map =
       CreatePositionMap({{10, 1}, {20, 2}, {30, 4}, {40, 8}}, 4);
-  FlatPositionMap flat_map(position_map, 4);
+  FlatPositionMapPtr flat_map(position_map, 4);
 
-  PositionIterator iter(flat_map);
+  PositionIterator iter(*flat_map);
   EXPECT_TRUE(iter.SkipForwardPosition(30));
   EXPECT_EQ(iter.GetPosition(), 30);
   EXPECT_EQ(iter.GetFieldMask(), 4ULL);
@@ -179,18 +217,18 @@ TEST_F(FlatPositionMapTest, SkipToExistingPosition) {
 
 TEST_F(FlatPositionMapTest, SkipToNonExistingPosition) {
   auto position_map = CreatePositionMap({{10, 1}, {30, 2}, {50, 4}}, 3);
-  FlatPositionMap flat_map(position_map, 3);
+  FlatPositionMapPtr flat_map(position_map, 3);
 
-  PositionIterator iter(flat_map);
+  PositionIterator iter(*flat_map);
   EXPECT_FALSE(iter.SkipForwardPosition(20));
   EXPECT_EQ(iter.GetPosition(), 30);  // Next position >= target
 }
 
 TEST_F(FlatPositionMapTest, SkipBeyondEnd) {
   auto position_map = CreatePositionMap({{10, 1}, {20, 2}}, 2);
-  FlatPositionMap flat_map(position_map, 2);
+  FlatPositionMapPtr flat_map(position_map, 2);
 
-  PositionIterator iter(flat_map);
+  PositionIterator iter(*flat_map);
   EXPECT_FALSE(iter.SkipForwardPosition(100));
   EXPECT_FALSE(iter.IsValid());
 }
@@ -205,12 +243,12 @@ TEST_F(FlatPositionMapTest, LargeMapWithPartitions) {
     positions.push_back({i * 10, 1ULL << (i % 4)});
   }
   auto position_map = CreatePositionMap(positions, 4);
-  FlatPositionMap flat_map(position_map, 4);
+  FlatPositionMapPtr flat_map(position_map, 4);
 
-  EXPECT_EQ(flat_map.CountPositions(), 200);
+  EXPECT_EQ(flat_map->CountPositions(), 200);
 
   // Verify iteration
-  PositionIterator iter(flat_map);
+  PositionIterator iter(*flat_map);
   for (int i = 0; i < 200; ++i) {
     EXPECT_TRUE(iter.IsValid());
     EXPECT_EQ(iter.GetPosition(), i * 10);
@@ -225,9 +263,9 @@ TEST_F(FlatPositionMapTest, SkipForwardWithPartitions) {
     positions.push_back({i * 5, 1ULL});
   }
   auto position_map = CreatePositionMap(positions, 1);
-  FlatPositionMap flat_map(position_map, 1);
+  FlatPositionMapPtr flat_map(position_map, 1);
 
-  PositionIterator iter(flat_map);
+  PositionIterator iter(*flat_map);
   EXPECT_TRUE(iter.SkipForwardPosition(750));
   EXPECT_EQ(iter.GetPosition(), 750);
 }
@@ -238,29 +276,29 @@ TEST_F(FlatPositionMapTest, SkipForwardWithPartitions) {
 
 TEST_F(FlatPositionMapTest, MoveConstructor) {
   auto position_map = CreatePositionMap({{10, 1}, {20, 2}}, 2);
-  FlatPositionMap map1(position_map, 2);
-  const char* data = map1.data();
+  FlatPositionMapPtr map1(position_map, 2);
+  const char* data = map1->data();
 
-  FlatPositionMap map2(std::move(map1));
+  FlatPositionMapPtr map2(std::move(map1));
 
-  EXPECT_EQ(map2.data(), data);
-  EXPECT_EQ(map1.data(), nullptr);
-  EXPECT_EQ(map2.CountPositions(), 2);
+  EXPECT_EQ(map2->data(), data);
+  EXPECT_EQ(map1.get(), nullptr);
+  EXPECT_EQ(map2->CountPositions(), 2);
 }
 
 TEST_F(FlatPositionMapTest, MoveAssignment) {
   auto position_map1 = CreatePositionMap({{10, 1}}, 1);
   auto position_map2 = CreatePositionMap({{20, 2}}, 1);
 
-  FlatPositionMap map1(position_map1, 1);
-  FlatPositionMap map2(position_map2, 1);
-  const char* data2 = map2.data();
+  FlatPositionMapPtr map1(position_map1, 1);
+  FlatPositionMapPtr map2(position_map2, 1);
+  const char* data2 = map2->data();
 
   map1 = std::move(map2);
 
-  EXPECT_EQ(map1.data(), data2);
-  EXPECT_EQ(map2.data(), nullptr);
-  EXPECT_EQ(map1.CountPositions(), 1);
+  EXPECT_EQ(map1->data(), data2);
+  EXPECT_EQ(map2.get(), nullptr);
+  EXPECT_EQ(map1->CountPositions(), 1);
 }
 
 //=============================================================================
@@ -276,11 +314,11 @@ TEST_F(FlatPositionMapTest, StressTest) {
   }
 
   auto position_map = CreatePositionMap(positions, 8);
-  FlatPositionMap flat_map(position_map, 8);
+  FlatPositionMapPtr flat_map(position_map, 8);
 
-  EXPECT_EQ(flat_map.CountPositions(), 1000);
+  EXPECT_EQ(flat_map->CountPositions(), 1000);
 
-  PositionIterator iter(flat_map);
+  PositionIterator iter(*flat_map);
   for (size_t i = 0; i < positions.size(); ++i) {
     ASSERT_TRUE(iter.IsValid()) << "Failed at index " << i;
     EXPECT_EQ(iter.GetPosition(), positions[i].first);
@@ -448,14 +486,14 @@ TEST_F(FlatPositionMapTest, RandomMapGeneration_1000Tests) {
     auto position_map = CreatePositionMap(positions, num_fields);
 
     // Create flat map
-    FlatPositionMap flat_map(position_map, num_fields);
+    FlatPositionMapPtr flat_map(position_map, num_fields);
 
     // Verify basic properties
-    ASSERT_EQ(flat_map.CountPositions(), num_elements)
+    ASSERT_EQ(flat_map->CountPositions(), num_elements)
         << "Test " << test_num << " failed: position count mismatch";
 
     // Verify complete iteration
-    VerifyIteration(flat_map, positions);
+    VerifyIteration(*flat_map, positions);
 
     // Test random skip forwards - create new iterator for each target
     size_t num_skip_tests = std::min(size_t{20}, num_elements);
@@ -465,7 +503,7 @@ TEST_F(FlatPositionMapTest, RandomMapGeneration_1000Tests) {
       // Skip targets that are before the first position (iterator starts there)
       if (target < positions[0].first) continue;
 
-      PositionIterator iter(flat_map);  // Fresh iterator for each target
+      PositionIterator iter(*flat_map);  // Fresh iterator for each target
       bool exact_match = iter.SkipForwardPosition(target);
 
       if (iter.IsValid()) {
@@ -511,9 +549,9 @@ TEST_F(FlatPositionMapTest, EdgeCase_ZeroPartitions) {
     }
 
     auto position_map = CreatePositionMap(positions, num_fields);
-    FlatPositionMap flat_map(position_map, num_fields);
+    FlatPositionMapPtr flat_map(position_map, num_fields);
 
-    VerifyIteration(flat_map, positions);
+    VerifyIteration(*flat_map, positions);
   }
 }
 
@@ -534,13 +572,13 @@ TEST_F(FlatPositionMapTest, EdgeCase_OnePartition) {
     }
 
     auto position_map = CreatePositionMap(positions, num_fields);
-    FlatPositionMap flat_map(position_map, num_fields);
+    FlatPositionMapPtr flat_map(position_map, num_fields);
 
-    VerifyIteration(flat_map, positions);
+    VerifyIteration(*flat_map, positions);
 
     // Test skip forward across partition
     if (positions.size() > 1) {
-      PositionIterator iter(flat_map);
+      PositionIterator iter(*flat_map);
       Position target = positions[positions.size() / 2].first;
       iter.SkipForwardPosition(target);
       EXPECT_GE(iter.GetPosition(), target);
@@ -564,9 +602,9 @@ TEST_F(FlatPositionMapTest, EdgeCase_TwoPartitions) {
     }
 
     auto position_map = CreatePositionMap(positions, num_fields);
-    FlatPositionMap flat_map(position_map, num_fields);
+    FlatPositionMapPtr flat_map(position_map, num_fields);
 
-    VerifyIteration(flat_map, positions);
+    VerifyIteration(*flat_map, positions);
   }
 }
 
@@ -593,12 +631,12 @@ TEST_F(FlatPositionMapTest, EdgeCase_LastPartitionSingleEntry) {
     positions.push_back({pos, 1});
 
     auto position_map = CreatePositionMap(positions, num_fields);
-    FlatPositionMap flat_map(position_map, num_fields);
+    FlatPositionMapPtr flat_map(position_map, num_fields);
 
-    VerifyIteration(flat_map, positions);
+    VerifyIteration(*flat_map, positions);
 
     // Verify we can skip to the last position
-    PositionIterator iter(flat_map);
+    PositionIterator iter(*flat_map);
     EXPECT_TRUE(iter.SkipForwardPosition(pos));
     EXPECT_EQ(iter.GetPosition(), pos);
   }
@@ -633,9 +671,9 @@ TEST_F(FlatPositionMapTest, EdgeCase_MixedFieldMaskChanges) {
     }
 
     auto position_map = CreatePositionMap(positions, num_fields);
-    FlatPositionMap flat_map(position_map, num_fields);
+    FlatPositionMapPtr flat_map(position_map, num_fields);
 
-    VerifyIteration(flat_map, positions);
+    VerifyIteration(*flat_map, positions);
   }
 }
 
@@ -650,7 +688,7 @@ TEST_F(FlatPositionMapTest, RandomSkipForwardPatterns) {
 
     auto positions = gen.GeneratePositionMap(num_elements, num_fields);
     auto position_map = CreatePositionMap(positions, num_fields);
-    FlatPositionMap flat_map(position_map, num_fields);
+    FlatPositionMapPtr flat_map(position_map, num_fields);
 
     // Test skip forwards to various positions with fresh iterators
     size_t num_skips = std::min(size_t{10}, num_elements);
@@ -662,7 +700,7 @@ TEST_F(FlatPositionMapTest, RandomSkipForwardPatterns) {
       Position target = positions[target_idx].first;
 
       // Use fresh iterator for each skip
-      PositionIterator iter(flat_map);
+      PositionIterator iter(*flat_map);
       bool exact = iter.SkipForwardPosition(target);
 
       ASSERT_TRUE(iter.IsValid())
@@ -688,7 +726,7 @@ TEST_F(FlatPositionMapTest, RandomMapWithTermFrequencyVerification) {
 
     auto positions = gen.GeneratePositionMap(num_elements, num_fields);
     auto position_map = CreatePositionMap(positions, num_fields);
-    FlatPositionMap flat_map(position_map, num_fields);
+    FlatPositionMapPtr flat_map(position_map, num_fields);
 
     // Calculate expected term frequency
     size_t expected_freq = 0;
@@ -696,7 +734,7 @@ TEST_F(FlatPositionMapTest, RandomMapWithTermFrequencyVerification) {
       expected_freq += __builtin_popcountll(mask);
     }
 
-    EXPECT_EQ(flat_map.CountTermFrequency(), expected_freq)
+    EXPECT_EQ(flat_map->CountTermFrequency(), expected_freq)
         << "Test " << test << " failed: term frequency mismatch";
   }
 }
@@ -721,23 +759,23 @@ TEST_F(FlatPositionMapTest, VeryLargeMapScenarios) {
       }
 
       auto position_map = CreatePositionMap(positions, 1);
-      FlatPositionMap flat_map(position_map, 1);
+      FlatPositionMapPtr flat_map(position_map, 1);
 
-      ASSERT_EQ(flat_map.CountPositions(), target_size);
-      EXPECT_EQ(flat_map.CountTermFrequency(), target_size);
+      ASSERT_EQ(flat_map->CountPositions(), target_size);
+      EXPECT_EQ(flat_map->CountTermFrequency(), target_size);
 
       // Test skip to various positions
-      PositionIterator iter1(flat_map);
+      PositionIterator iter1(*flat_map);
       iter1.SkipForwardPosition(positions[target_size / 4].first);
       EXPECT_TRUE(iter1.IsValid());
       EXPECT_GE(iter1.GetPosition(), positions[target_size / 4].first);
 
-      PositionIterator iter2(flat_map);
+      PositionIterator iter2(*flat_map);
       iter2.SkipForwardPosition(positions[target_size / 2].first);
       EXPECT_TRUE(iter2.IsValid());
       EXPECT_GE(iter2.GetPosition(), positions[target_size / 2].first);
 
-      PositionIterator iter3(flat_map);
+      PositionIterator iter3(*flat_map);
       iter3.SkipForwardPosition(positions[target_size * 3 / 4].first);
       EXPECT_TRUE(iter3.IsValid());
       EXPECT_GE(iter3.GetPosition(), positions[target_size * 3 / 4].first);
@@ -754,12 +792,12 @@ TEST_F(FlatPositionMapTest, VeryLargeMapScenarios) {
       }
 
       auto position_map = CreatePositionMap(positions, 8);
-      FlatPositionMap flat_map(position_map, 8);
+      FlatPositionMapPtr flat_map(position_map, 8);
 
-      ASSERT_EQ(flat_map.CountPositions(), target_size);
+      ASSERT_EQ(flat_map->CountPositions(), target_size);
 
       // Verify first position and skip to end
-      PositionIterator iter(flat_map);
+      PositionIterator iter(*flat_map);
       EXPECT_EQ(iter.GetPosition(), positions[0].first);
       EXPECT_EQ(iter.GetFieldMask(), positions[0].second);
 
@@ -778,15 +816,15 @@ TEST_F(FlatPositionMapTest, VeryLargeMapScenarios) {
       }
 
       auto position_map = CreatePositionMap(positions, 1);
-      FlatPositionMap flat_map(position_map, 1);
+      FlatPositionMapPtr flat_map(position_map, 1);
 
-      ASSERT_EQ(flat_map.CountPositions(), target_size);
+      ASSERT_EQ(flat_map->CountPositions(), target_size);
 
       // Test partition-crossing skips
       for (size_t skip_test = 0; skip_test < 10; ++skip_test) {
         size_t target_idx =
             std::uniform_int_distribution<size_t>(0, target_size - 1)(rng);
-        PositionIterator iter(flat_map);
+        PositionIterator iter(*flat_map);
         iter.SkipForwardPosition(positions[target_idx].first);
         EXPECT_TRUE(iter.IsValid());
         EXPECT_GE(iter.GetPosition(), positions[target_idx].first);

@@ -14,7 +14,6 @@
 #include "absl/container/inlined_vector.h"
 #include "absl/log/check.h"
 #include "src/indexes/text/posting.h"
-#include "vmsdk/src/memory_allocation_overrides.h"
 
 namespace valkey_search::indexes::text {
 

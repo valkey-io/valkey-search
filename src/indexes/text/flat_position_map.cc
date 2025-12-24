@@ -221,7 +221,6 @@ uint32_t PositionIterator::ReadVarUint(const char* ptr, uint8_t num_bytes) {
   return value;
 }
 
-
 //=============================================================================
 // Iterator Implementation
 //=============================================================================

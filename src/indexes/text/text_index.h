@@ -167,6 +167,12 @@ class TextIndexSchema {
     std::lock_guard<std::mutex> guard(per_key_text_indexes_mutex_);
     return func(per_key_text_indexes_);
   }
+
+  // Direct accessor for per-key text indexes.
+  // Assumes that lock is already acquired earlier.
+  const absl::node_hash_map<Key, TextIndex>& GetPerKeyTextIndexes() const {
+    return per_key_text_indexes_;
+  }
 };
 
 }  // namespace valkey_search::indexes::text

@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "absl/container/flat_hash_set.h"
+#include "absl/container/inlined_vector.h"
 #include "absl/strings/string_view.h"
 #include "src/indexes/text/text_iterator.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -317,37 +318,6 @@ class FuzzyPredicate : public TextPredicate {
   FieldMaskPredicate field_mask_;
   std::string term_;
   uint32_t distance_;
-};
-
-class ProximityPredicate : public TextPredicate {
- public:
-  ProximityPredicate(std::vector<std::unique_ptr<TextPredicate>> terms,
-                     uint32_t slop = 0, bool inorder = true);
-  uint32_t Slop() const { return slop_; }
-  bool InOrder() const { return inorder_; }
-  EvaluationResult Evaluate(Evaluator& evaluator) const override;
-  // Evaluate against per-key TextIndex
-  EvaluationResult Evaluate(
-      const valkey_search::indexes::text::TextIndex& text_index,
-      const InternedStringPtr& target_key,
-      bool require_positions) const override;
-  std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
-      const void* fetcher) const override;
-  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
-    return terms_[0]->GetTextIndexSchema();
-  }
-  const FieldMaskPredicate GetFieldMask() const override {
-    return terms_[0]->GetFieldMask();
-  }
-  const std::vector<std::unique_ptr<TextPredicate>>& Terms() const {
-    return terms_;
-  }
-  size_t EstimateSize() const override;
-
- private:
-  std::vector<std::unique_ptr<TextPredicate>> terms_;
-  bool inorder_;
-  uint32_t slop_;
 };
 
 enum class LogicalOperator { kAnd, kOr };

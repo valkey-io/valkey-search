@@ -10,6 +10,8 @@
 
 #include <vector>
 
+#include "absl/container/inlined_vector.h"
+#include "src/indexes/text.h"
 #include "src/indexes/text/text_iterator.h"
 
 namespace valkey_search::indexes::text {
@@ -30,7 +32,7 @@ Relies on the TextIterator contract of NextKey API being in lexical order.
 constraints). Relies on the TextIterator contract of NextPosition API being in
 asc order.
 
-Note: The construction of ProximityPredicate (and therefore ProximityIterator)
+Note: The construction of ProximityIterator
 happens only when all terms in the query are on the same field and also only
 when the query involves some positional constraint (inorder or slop). Also, the
 ProximityIterator can contain nested ProximityIterators and this happens when
@@ -46,7 +48,8 @@ of (slop=2, in_order=true):
 */
 class ProximityIterator : public TextIterator {
  public:
-  ProximityIterator(std::vector<std::unique_ptr<TextIterator>>&& iters,
+  ProximityIterator(absl::InlinedVector<std::unique_ptr<TextIterator>,
+                                        kProximityTermsInlineCapacity>&& iters,
                     const std::optional<uint32_t> slop, const bool in_order,
                     const FieldMaskPredicate query_field_mask,
                     const InternedStringSet* untracked_keys = nullptr);
@@ -71,7 +74,9 @@ class ProximityIterator : public TextIterator {
 
  private:
   // List of all the Text Predicates contained in the Proximity AND.
-  std::vector<std::unique_ptr<TextIterator>> iters_;
+  absl::InlinedVector<std::unique_ptr<TextIterator>,
+                      kProximityTermsInlineCapacity>
+      iters_;
   std::optional<uint32_t> slop_;
   bool in_order_;
   FieldMaskPredicate query_field_mask_;
@@ -80,8 +85,10 @@ class ProximityIterator : public TextIterator {
   std::optional<PositionRange> current_position_;
   FieldMaskPredicate current_field_mask_;
   // Vectors used for positional checks
-  std::vector<PositionRange> positions_;
-  std::vector<std::pair<Position, size_t>> pos_with_idx_;
+  absl::InlinedVector<PositionRange, kProximityTermsInlineCapacity> positions_;
+  absl::InlinedVector<std::pair<Position, size_t>,
+                      kProximityTermsInlineCapacity>
+      pos_with_idx_;
   // Used for Negate
   const InternedStringSet* untracked_keys_;
 

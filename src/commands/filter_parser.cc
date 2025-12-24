@@ -15,6 +15,7 @@
 #include <utility>
 
 #include "absl/container/flat_hash_set.h"
+#include "absl/container/inlined_vector.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/ascii.h"
@@ -166,18 +167,7 @@ std::string PrintPredicateTree(const query::Predicate* predicate, int indent) {
       std::string field_mask_str = std::to_string(text->GetFieldMask());
 
       // Determine specific text predicate type
-      if (auto proximity =
-              dynamic_cast<const query::ProximityPredicate*>(predicate)) {
-        result += indent_str + "TEXT-PROXIMITY(field_mask=" + field_mask_str +
-                  ", slop=" + std::to_string(proximity->Slop()) +
-                  ", inorder=" + (proximity->InOrder() ? "true" : "false") +
-                  "){\n";
-        for (const auto& term : proximity->Terms()) {
-          result += PrintPredicateTree(term.get(), indent + 1);
-        }
-        result += indent_str + "}\n";
-      } else if (auto term =
-                     dynamic_cast<const query::TermPredicate*>(predicate)) {
+      if (auto term = dynamic_cast<const query::TermPredicate*>(predicate)) {
         result += indent_str + "TEXT-TERM(\"" +
                   std::string(term->GetTextString()) +
                   "\", field_mask=" + field_mask_str + ")\n";
@@ -485,12 +475,13 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
       not_rightmost_bracket &&
       new_predicate->GetType() == query::PredicateType::kComposedOr) {
     std::vector<std::unique_ptr<query::Predicate>> new_children;
-    if (prev_predicate) {
-      new_children.push_back(std::move(prev_predicate));
-    }
     auto* new_composed =
         dynamic_cast<query::ComposedPredicate*>(new_predicate.get());
     auto children = new_composed->ReleaseChildren();
+    new_children.reserve(1 + children.size());
+    if (prev_predicate) {
+      new_children.push_back(std::move(prev_predicate));
+    }
     for (auto& child : children) {
       new_children.push_back(std::move(child));
     }
@@ -759,9 +750,10 @@ absl::Status FilterParser::SetupTextFieldConfiguration(
       }
       return absl::InvalidArgumentError("Index does not have any text field");
     }
-    for (const auto& identifier : text_identifiers) {
-      filter_identifiers_.insert(identifier);
-    }
+    filter_identifiers_.reserve(filter_identifiers_.size() +
+                                text_identifiers.size());
+    filter_identifiers_.insert(text_identifiers.begin(),
+                               text_identifiers.end());
     // When no field was specified, we use the min stem across all text fields
     // in the index schema. This helps ensure the root of the text token can be
     // searched for.
@@ -773,19 +765,20 @@ absl::Status FilterParser::SetupTextFieldConfiguration(
 // This function is called when the characters detected are potentially those of
 // a text predicate.
 // Text Parsing Syntax:
-//   Quoted: "word1 word2" -> ProximityPredicate(exact, slop=0, inorder=true)
+//   Quoted: "word1 word2" -> ComposedAND(exact, slop=0, inorder=true)
 //   Unquoted: word1 word2 -> TermPredicate(word1) - stops at first token
 // Token boundaries for unquoted text: <punctuation> ( ) | @ " - { } [ ] : ; $
 // Quoted phrases (Exact Phrase) parse all tokens within quotes, unquoted
 // parsing stops after first token.
-// TODO: Update ProximityPredicate to ComposedAND.
 absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
     const std::optional<std::string>& field_or_default) {
   auto text_index_schema = index_schema_.GetTextIndexSchema();
   if (!text_index_schema) {
     return absl::InvalidArgumentError("Index does not have any text field");
   }
-  std::vector<std::unique_ptr<query::TextPredicate>> terms;
+  absl::InlinedVector<std::unique_ptr<query::TextPredicate>,
+                      indexes::text::kProximityTermsInlineCapacity>
+      terms;
   bool in_quotes = false;
   bool exact_phrase = false;
   while (!IsEnd()) {

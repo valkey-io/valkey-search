@@ -79,6 +79,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
     }
     case Predicate::kAnd: {
       std::vector<std::unique_ptr<query::Predicate>> children;
+      children.reserve(predicate.and_().children_size());
       for (const auto& child_predicate : predicate.and_().children()) {
         VMSDK_ASSIGN_OR_RETURN(
             auto child, GRPCPredicateToPredicate(child_predicate, index_schema,
@@ -98,6 +99,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
     }
     case Predicate::kOr: {
       std::vector<std::unique_ptr<query::Predicate>> children;
+      children.reserve(predicate.or_().children_size());
       for (const auto& child_predicate : predicate.or_().children()) {
         VMSDK_ASSIGN_OR_RETURN(
             auto child, GRPCPredicateToPredicate(child_predicate, index_schema,
@@ -173,31 +175,6 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
       return std::make_unique<query::FuzzyPredicate>(
           text_index_schema, predicate.fuzzy().field_mask(),
           predicate.fuzzy().content(), predicate.fuzzy().distance());
-    }
-    case Predicate::kProximity: {
-      auto text_index_schema = index_schema->GetTextIndexSchema();
-      if (!text_index_schema) {
-        return absl::InvalidArgumentError("Index does not have any text field");
-      }
-      auto identifiers = index_schema->GetTextIdentifiersByFieldMask(
-          predicate.term().field_mask());
-      attribute_identifiers.insert(identifiers.begin(), identifiers.end());
-      std::vector<std::unique_ptr<query::TextPredicate>> nodes;
-      for (const auto& node : predicate.proximity().nodes()) {
-        VMSDK_ASSIGN_OR_RETURN(auto predicate_node,
-                               GRPCPredicateToPredicate(node, index_schema,
-                                                        attribute_identifiers));
-        auto text_predicate =
-            dynamic_cast<query::TextPredicate*>(predicate_node.release());
-        if (!text_predicate) {
-          return absl::InvalidArgumentError(
-              "Proximity predicate must contain text predicates");
-        }
-        nodes.emplace_back(text_predicate);
-      }
-      return std::make_unique<query::ProximityPredicate>(
-          std::move(nodes), predicate.proximity().slop(),
-          predicate.proximity().inorder());
     }
     case Predicate::PREDICATE_NOT_SET:
       return absl::InvalidArgumentError("Predicate not set");
@@ -351,18 +328,6 @@ std::unique_ptr<Predicate> PredicateToGRPCPredicate(
         proto->mutable_fuzzy()->set_content(
             std::string(fuzzy->GetTextString()));
         proto->mutable_fuzzy()->set_distance(fuzzy->GetDistance());
-        return proto;
-      } else if (auto proximity =
-                     dynamic_cast<const query::ProximityPredicate*>(
-                         &predicate)) {
-        auto proto = std::make_unique<Predicate>();
-        for (const auto& node : proximity->Terms()) {
-          auto node_proto = PredicateToGRPCPredicate(*node);
-          proto->mutable_proximity()->mutable_nodes()->AddAllocated(
-              node_proto.release());
-        }
-        proto->mutable_proximity()->set_slop(proximity->Slop());
-        proto->mutable_proximity()->set_inorder(proximity->InOrder());
         return proto;
       }
       return nullptr;

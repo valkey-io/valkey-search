@@ -71,6 +71,9 @@ using PositionMap = std::map<Position, std::unique_ptr<FieldMask>>;
 struct Postings {
   struct KeyIterator;
 
+  // Destructor: clean up all FlatPositionMaps
+  ~Postings();
+
   // Are there any postings in this object?
   bool IsEmpty() const;
 
@@ -122,13 +125,13 @@ struct Postings {
     friend struct Postings;
 
     // Iterator state - pointer to key_to_positions map
-    const absl::btree_map<Key, FlatPositionMap>* key_map_;
-    absl::btree_map<Key, FlatPositionMap>::const_iterator current_;
-    absl::btree_map<Key, FlatPositionMap>::const_iterator end_;
+    const absl::btree_map<Key, FlatPositionMap*>* key_map_;
+    absl::btree_map<Key, FlatPositionMap*>::const_iterator current_;
+    absl::btree_map<Key, FlatPositionMap*>::const_iterator end_;
   };
 
  private:
-  absl::btree_map<Key, FlatPositionMap> key_to_positions_;
+  absl::btree_map<Key, FlatPositionMap*> key_to_positions_;
 };
 
 }  // namespace valkey_search::indexes::text

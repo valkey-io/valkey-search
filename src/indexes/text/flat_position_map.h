@@ -69,19 +69,13 @@ class FieldMask;
 // Layout: [Bitfield Header][Optional Partition Map][Position/Field Data]
 class FlatPositionMap {
  public:
-  // Constructor from PositionMap: serializes position map
-  FlatPositionMap(
+  // Factory: allocates single block [FlatPositionMap | data...]
+  static FlatPositionMap* Create(
       const std::map<Position, std::unique_ptr<FieldMask>>& position_map,
       size_t num_text_fields);
 
   // Destructor: frees the allocated memory
-  ~FlatPositionMap();
-
-  // Move constructor: transfers ownership, nullifies source
-  FlatPositionMap(FlatPositionMap&& other) noexcept;
-
-  // Move assignment: frees current, transfers ownership, nullifies source
-  FlatPositionMap& operator=(FlatPositionMap&& other) noexcept;
+  static void Destroy(FlatPositionMap* map);
 
   // Get position count
   uint32_t CountPositions() const;
@@ -89,8 +83,14 @@ class FlatPositionMap {
   // Get total term frequency
   size_t CountTermFrequency() const;
 
-  // Access to raw data pointer
-  const char* data() const { return data_; }
+  // Access to raw data pointer (stored immediately after this object)
+  inline char* data() {
+    return reinterpret_cast<char*>(this + 1);
+  }
+
+  inline const char* data() const {
+    return reinterpret_cast<const char*>(this + 1);
+  }
 
  private:
   friend class PositionIterator;  // Allow iterator to access bitfield members
@@ -108,8 +108,11 @@ class FlatPositionMap {
   uint8_t part_bytes_ : 2;       // Bits 5-6: Partition bytes count (0 to 3)
   uint8_t unused_ : 1;           // Bit 7: Reserved
 
-  char* data_;  // Points to: [num_positions][num_partitions][Partition
-                // Map][Position/Field Data]
+  // Data is stored immediately after this object in memory
+  // Layout: [num_positions][num_partitions][Partition Map][Position/Field Data]
+
+  // Private constructor for factory
+  FlatPositionMap() = default;
 };
 
 // Iterator for FlatPositionMap

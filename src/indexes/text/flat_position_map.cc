@@ -39,76 +39,6 @@ inline __uint128_t U128(T v) {
 }
 inline char C(uint8_t v) { return static_cast<char>(v); }
 
-FlatPositionMap::~FlatPositionMap() {
-  if (data_ != nullptr) {
-    delete[] data_;
-  }
-}
-
-FlatPositionMap::FlatPositionMap(FlatPositionMap&& other) noexcept
-    : header_scheme_(other.header_scheme_),
-      encoding_scheme_(other.encoding_scheme_),
-      pos_bytes_(other.pos_bytes_),
-      part_bytes_(other.part_bytes_),
-      unused_(other.unused_),
-      data_(other.data_) {
-  other.data_ = nullptr;
-}
-
-FlatPositionMap& FlatPositionMap::operator=(FlatPositionMap&& other) noexcept {
-  if (this != &other) {
-    if (data_ != nullptr) {
-      delete[] data_;
-    }
-    header_scheme_ = other.header_scheme_;
-    encoding_scheme_ = other.encoding_scheme_;
-    pos_bytes_ = other.pos_bytes_;
-    part_bytes_ = other.part_bytes_;
-    unused_ = other.unused_;
-    data_ = other.data_;
-    other.data_ = nullptr;
-  }
-  return *this;
-}
-
-//=============================================================================
-// Helper Functions
-//=============================================================================
-
-uint8_t FlatPositionMap::BytesNeeded(uint32_t value) {
-  if (value <= 0xFF) return 1;
-  if (value <= 0xFFFF) return 2;
-  if (value <= 0xFFFFFF) return 3;
-  return 4;
-}
-
-std::pair<uint32_t, uint32_t> FlatPositionMap::ReadCounts(
-    const char*& p) const {
-  uint32_t num_positions = 0, num_partitions = 0;
-  std::memcpy(&num_positions, p, pos_bytes_ + 1);
-  p += pos_bytes_ + 1;
-  std::memcpy(&num_partitions, p, part_bytes_ + 1);
-  p += part_bytes_ + 1;
-  return {num_positions, num_partitions};
-}
-
-void FlatPositionMap::WriteCounts(char*& p, uint32_t num_positions,
-                                  uint32_t num_partitions) const {
-  std::memcpy(p, &num_positions, pos_bytes_ + 1);
-  p += pos_bytes_ + 1;
-  std::memcpy(p, &num_partitions, part_bytes_ + 1);
-  p += part_bytes_ + 1;
-}
-
-// Read fixed-length unsigned int from partition map (little-endian)
-uint32_t PositionIterator::ReadVarUint(const char* ptr, uint8_t num_bytes) {
-  uint32_t value = 0;
-  for (uint8_t i = 0; i < num_bytes; ++i) {
-    value |= (U32(U8(ptr[i])) << (i * 8));
-  }
-  return value;
-}
-
 //=============================================================================
 // Encoding and Decoding Functions
 //=============================================================================
@@ -153,19 +83,14 @@ static inline T DecodeValue(const char*& ptr, bool& out_is_position) {
 // Serialization
 //=============================================================================
 
-// Constructor: Serialize position map to compact byte array format
-// Layout: [Header][Partition Map][Position/Field Mask Data][Terminator]
-FlatPositionMap::FlatPositionMap(
+// Static factory and destroyer
+FlatPositionMap* FlatPositionMap::Create(
     const std::map<Position, std::unique_ptr<FieldMask>>& position_map,
-    size_t num_text_fields)
-    : header_scheme_(0),
-      encoding_scheme_(0),
-      pos_bytes_(0),
-      part_bytes_(0),
-      unused_(0) {
+    size_t num_text_fields) {
   CHECK(!position_map.empty())
       << "Cannot create FlatPositionMap from empty position_map";
 
+  // First pass: compute data size (same logic as old constructor)
   uint32_t num_positions = position_map.size();
 
   absl::InlinedVector<char, kPartitionSize> position_data;
@@ -213,21 +138,30 @@ FlatPositionMap::FlatPositionMap(
   // Terminator: Field mask with value 0: composite = 0, encoded as 0x00
   position_data.push_back(C(kTerminatorByte));
 
-  // Set header
-  pos_bytes_ = BytesNeeded(num_positions) - 1;
-  part_bytes_ = BytesNeeded(num_partitions) - 1;
-
-  // Partition map: N entries (byte offset and cumulative delta)
+  // Calculate sizes
+  uint8_t pos_bytes = BytesNeeded(num_positions) - 1;
+  uint8_t part_bytes = BytesNeeded(num_partitions) - 1;
   size_t partition_map_size = num_partitions * kPartitionDeltaBytes * 2;
-  size_t counts_size = (pos_bytes_ + 1) + (part_bytes_ + 1);
-  size_t total_size = counts_size + partition_map_size + position_data.size();
+  size_t counts_size = (pos_bytes + 1) + (part_bytes + 1);
+  size_t data_size = counts_size + partition_map_size + position_data.size();
+  size_t total_size = sizeof(FlatPositionMap) + data_size;
 
-  // Allocate and write
-  data_ = new char[total_size];
-  char* p = data_;
+  // Allocate single block: [FlatPositionMap | data...]
+  void* mem = operator new(total_size);
+  auto* map = new (mem) FlatPositionMap();
+
+  // Initialize header fields
+  map->header_scheme_ = 0;
+  map->encoding_scheme_ = 0;
+  map->pos_bytes_ = pos_bytes;
+  map->part_bytes_ = part_bytes;
+  map->unused_ = 0;
+
+  // Write data immediately after struct
+  char* p = map->data();
 
   // Write counts
-  WriteCounts(p, num_positions, num_partitions);
+  map->WriteCounts(p, num_positions, num_partitions);
 
   // Write partition map
   for (size_t i = 0; i < num_partitions; ++i) {
@@ -239,7 +173,54 @@ FlatPositionMap::FlatPositionMap(
 
   // Write position data
   std::memcpy(p, position_data.data(), position_data.size());
+
+  return map;
 }
+
+void FlatPositionMap::Destroy(FlatPositionMap* map) {
+  if (!map) return;
+  map->~FlatPositionMap();
+  operator delete(map);
+}
+
+//=============================================================================
+// Helper Functions
+//=============================================================================
+
+uint8_t FlatPositionMap::BytesNeeded(uint32_t value) {
+  if (value <= 0xFF) return 1;
+  if (value <= 0xFFFF) return 2;
+  if (value <= 0xFFFFFF) return 3;
+  return 4;
+}
+
+std::pair<uint32_t, uint32_t> FlatPositionMap::ReadCounts(
+    const char*& p) const {
+  uint32_t num_positions = 0, num_partitions = 0;
+  std::memcpy(&num_positions, p, pos_bytes_ + 1);
+  p += pos_bytes_ + 1;
+  std::memcpy(&num_partitions, p, part_bytes_ + 1);
+  p += part_bytes_ + 1;
+  return {num_positions, num_partitions};
+}
+
+void FlatPositionMap::WriteCounts(char*& p, uint32_t num_positions,
+                                  uint32_t num_partitions) const {
+  std::memcpy(p, &num_positions, pos_bytes_ + 1);
+  p += pos_bytes_ + 1;
+  std::memcpy(p, &num_partitions, part_bytes_ + 1);
+  p += part_bytes_ + 1;
+}
+
+// Read fixed-length unsigned int from partition map (little-endian)
+uint32_t PositionIterator::ReadVarUint(const char* ptr, uint8_t num_bytes) {
+  uint32_t value = 0;
+  for (uint8_t i = 0; i < num_bytes; ++i) {
+    value |= (U32(U8(ptr[i])) << (i * 8));
+  }
+  return value;
+}
+
 
 //=============================================================================
 // Iterator Implementation
@@ -388,14 +369,12 @@ uint64_t PositionIterator::GetFieldMask() const { return current_field_mask_; }
 //=============================================================================
 
 uint32_t FlatPositionMap::CountPositions() const {
-  CHECK(data_);
-  const char* p = data_;
+  const char* p = data();
   auto [num_positions, _] = ReadCounts(p);
   return num_positions;
 }
 
 size_t FlatPositionMap::CountTermFrequency() const {
-  CHECK(data_);
   size_t total_frequency = 0;
   for (PositionIterator iter(*this); iter.IsValid(); iter.NextPosition()) {
     total_frequency += __builtin_popcountll(iter.GetFieldMask());

@@ -47,18 +47,20 @@ template <typename T>
 static inline void EncodeValue(
     absl::InlinedVector<char, kPartitionSize>& buffer, T value,
     bool is_position) {
-  __uint128_t composite = (U128(value) << 1) | __uint128_t(is_position);
+  __uint128_t v = (U128(value) << 1) | __uint128_t(is_position);
 
-  auto emit = [&](auto&& self, __uint128_t v) -> void {
-    if (v >> kBitsPerByte) {
-      self(self, v >> kBitsPerByte);
-      buffer.push_back(C((v & kSevenBitMask) | kContinueBit));
-    } else {
-      buffer.push_back(C(v & kSevenBitMask));  // first byte, bit 7=0
-    }
-  };
+  // Count how many 7-bit groups are needed
+  int n = 1;
+  for (__uint128_t t = v >> 7; t; t >>= 7) {
+    ++n;
+  }
 
-  emit(emit, composite);
+  // Emit big-endian varint
+  for (int i = n - 1; i >= 0; --i) {
+    uint8_t byte = (v >> (i * 7)) & kSevenBitMask;
+    if (i != n - 1) byte |= kContinueBit;  // continuation bit
+    buffer.push_back(C(byte));
+  }
 }
 
 // Decode: big-endian, first byte bit 7=0, continuation bytes bit 7=1

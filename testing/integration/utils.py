@@ -155,7 +155,8 @@ def start_valkey_cluster(
 
     for port in ports:
         stdout_path = os.path.join(stdout_directory, f"{port}_stdout.txt")
-        stdout_file = open(stdout_path, "w")
+        # Open file without buffering to avoid ResourceWarnings
+        stdout_file = open(stdout_path, "w", buffering=1)
         node_dir = os.path.join(directory, f"nodes{port}")
         cluster_args["cluster-enabled"] = "yes"
         cluster_args["cluster-config-file"] = os.path.join(
@@ -174,29 +175,30 @@ def start_valkey_cluster(
         ))
 
     cli_stdout_path = os.path.join(stdout_directory, "valkey_cli_stdout.txt")
-    cli_stdout_file = open(cli_stdout_path, "w")
-    valkey_cli_args = [valkey_cli_path, "--cluster-yes", "--cluster", "create"]
-    for port in ports:
-        valkey_cli_args.append(f"127.0.0.1:{port}")
-    valkey_cli_args.extend(["--cluster-replicas", str(replica_count)])
-    if password:
-        valkey_cli_args.extend(["-a", password])
+    # Close file after subprocess completes
+    with open(cli_stdout_path, "w") as cli_stdout_file:
+        valkey_cli_args = [valkey_cli_path, "--cluster-yes", "--cluster", "create"]
+        for port in ports:
+            valkey_cli_args.append(f"127.0.0.1:{port}")
+        valkey_cli_args.extend(["--cluster-replicas", str(replica_count)])
+        if password:
+            valkey_cli_args.extend(["-a", password])
 
-    logging.info("Creating valkey cluster with command: %s", valkey_cli_args)
+        logging.info("Creating valkey cluster with command: %s", valkey_cli_args)
 
-    timeout = 60
-    now = time.time()
-    while time.time() - now < timeout:
-        try:
-            subprocess.run(
-                valkey_cli_args,
-                check=True,
-                stdout=cli_stdout_file,
-                stderr=cli_stdout_file,
-            )
-            break
-        except subprocess.CalledProcessError:
-            time.sleep(1)
+        timeout = 60
+        now = time.time()
+        while time.time() - now < timeout:
+            try:
+                subprocess.run(
+                    valkey_cli_args,
+                    check=True,
+                    stdout=cli_stdout_file,
+                    stderr=cli_stdout_file,
+                )
+                break
+            except subprocess.CalledProcessError:
+                time.sleep(1)
 
     # This is also ugly, but we need to wait for the cluster to be ready. There
     # doesn't seem to be a way to do that with the valkey-server, since it seems to
@@ -301,6 +303,27 @@ class NumericDefinition(AttributeDefinition):
         if self.alias:
             args += ["AS", self.alias]
         args += ["NUMERIC"]
+        return args
+
+
+class TextDefinition(AttributeDefinition):
+    def __init__(self, nostem=False, with_suffix_trie=False, min_stem_size=None, alias=None):
+        self.nostem = nostem
+        self.with_suffix_trie = with_suffix_trie
+        self.min_stem_size = min_stem_size
+        self.alias = alias
+
+    def to_arguments(self) -> List[Any]:
+        args = []
+        if self.alias:
+            args += ["AS", self.alias]
+        args += ["TEXT"]
+        if self.nostem:
+            args += ["NOSTEM"]
+        if self.with_suffix_trie:
+            args += ["WITHSUFFIXTRIE"]
+        if self.min_stem_size is not None:
+            args += ["MINSTEMSIZE", str(self.min_stem_size)]
         return args
 
 
@@ -845,6 +868,9 @@ class MemtierProcess:
             self.trailing_ops_sec.insert(0, line.ops_sec)
             if len(self.trailing_ops_sec) > self.trailing_secs:
                 self.trailing_ops_sec.pop()
+            # Only update total_ops and avg_ops_sec for non-error lines
+            self.total_ops = line.ops
+            self.avg_ops_sec = line.avg_ops_sec
         if self.trailing_ops_sec:
             trailing_ops_sec = sum(self.trailing_ops_sec) / len(
                 self.trailing_ops_sec
@@ -854,8 +880,6 @@ class MemtierProcess:
                 and len(self.trailing_ops_sec) == self.trailing_secs
             ):
                 self.halted = True
-        self.total_ops = line.ops
-        self.avg_ops_sec = line.avg_ops_sec
 
     def print_status(self):
         if self.process.poll() is not None and not self.done:
@@ -923,9 +947,10 @@ class MemtierProcess:
 
 
 def parse_memtier_error_line(line: str):
+    # Actual memtier format: [RUN #1 1%,   0 secs] 10 threads 10 conns:        4408 ops,    8807 (avg:    8807) ops/sec, 4.24MB/sec (avg: 4.24MB/sec), 30.95 (avg: 30.95) msec latency
     progress_pattern = (
         r"\[RUN #(\d+)"
-        r" ([\d\.]+)%?,\s+([\d\.]+)\s+secs\]\s+([\d\.]+)\s+threads:\s+(\d+)\s+ops,\s+([\d\.]+)\s+\(avg:\s+([\d\.]+)\)\s+ops\/sec,\s+([\d\.]+[KMG]B\/sec)\s+\(avg:\s+(\d+\.\d+[KMG]?B\/sec)\),\s+(-nan|[\d\.]+)\s+\(avg:\s+(\d+\.\d+)\)\s+msec\s+latency"
+        r"\s+([\d\.]+)%?,\s+([\d\.]+)\s+secs\]\s+(\d+)\s+threads\s+\d+\s+conns:\s+(\d+)\s+ops,\s+([\d\.]+)\s+\(avg:\s+([\d\.]+)\)\s+ops\/sec,\s+([\d\.]+[KMG]?B\/sec)\s+\(avg:\s+([\d\.]+[KMG]?B\/sec)\),\s+(-nan|[\d\.]+)\s+\(avg:\s+([\d\.]+)\)\s+msec\s+latency"
     )
     match = re.search(progress_pattern, line)
 
@@ -939,7 +964,11 @@ def parse_memtier_error_line(line: str):
         avg_ops_sec = float(match.group(7))
         b_sec = match.group(8)
         avg_b_sec = match.group(9)
-        latency = float(match.group(10))
+        latency = match.group(10)
+        if latency == '-nan':
+            latency = 0.0
+        else:
+            latency = float(latency)
         avg_latency = float(match.group(11))
         return MemtierErrorLineInfo(
             run_number=run_number,

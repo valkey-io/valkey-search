@@ -319,16 +319,14 @@ class StabilityRunner:
             utils.MemtierProcess(
                 command=search_command,
                 name="FT.SEARCH",
-                error_predicate=lambda err: err
-                != f"-Index with name '{self.config.index_name}' not found",
+                error_predicate=lambda err: f"-Index with name '{self.config.index_name}' not found" not in err,
             )
         )
         processes.append(
             utils.MemtierProcess(
                 command=ft_info_command,
                 name="FT.INFO",
-                error_predicate=lambda err: err
-                != f"-Index with name '{self.config.index_name}' not found",
+                error_predicate=lambda err: f"-Index with name '{self.config.index_name}' not found" not in err,
             )
         )
         processes.append(

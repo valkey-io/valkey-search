@@ -50,9 +50,8 @@ static inline void EncodeValue(
   __uint128_t v = (U128(value) << 1) | __uint128_t(is_position);
 
   // Count how many 7-bit groups are needed
-  int n = (v >> 64)
-          ? ((127 - __builtin_clzll((uint64_t)(v >> 64))) / 7 + 1)
-          : ((63  - __builtin_clzll((uint64_t)v)) / 7 + 1);
+  int n = (v >> 64) ? ((127 - __builtin_clzll((uint64_t)(v >> 64))) / 7 + 1)
+                    : ((63 - __builtin_clzll((uint64_t)v)) / 7 + 1);
 
   // Emit big-endian varint
   for (int i = n - 1; i >= 0; --i) {

@@ -38,9 +38,14 @@ Key.
 #include <string>
 #include <vector>
 
+#include "absl/container/btree_map.h"
+#include "src/indexes/text/flat_position_map.h"
 #include "src/utils/string_interning.h"
 
 namespace valkey_search::indexes::text {
+
+// Forward declaration
+struct TextIndexMetadata;
 
 using Key = InternedStringPtr;
 using Position = uint32_t;
@@ -65,16 +70,19 @@ using PositionMap = std::map<Position, std::unique_ptr<FieldMask>>;
 
 struct Postings {
   struct KeyIterator;
-  struct PositionIterator;
+
+  // Destructor: clean up all FlatPositionMaps
+  ~Postings();
 
   // Are there any postings in this object?
   bool IsEmpty() const;
 
   // Insert the key with its position map
-  void InsertKey(const Key& key, PositionMap&& pos_map);
+  void InsertKey(const Key& key, PositionMap&& pos_map,
+                 TextIndexMetadata* metadata, size_t num_text_fields);
 
   // Remove a key and all positions for it
-  void RemoveKey(const Key& key);
+  void RemoveKey(const Key& key, TextIndexMetadata* metadata);
 
   // Total number of keys
   size_t GetKeyCount() const;
@@ -117,42 +125,13 @@ struct Postings {
     friend struct Postings;
 
     // Iterator state - pointer to key_to_positions map
-    using PositionMap = std::map<Position, std::unique_ptr<class FieldMask>>;
-    const std::map<Key, PositionMap>* key_map_;
-    std::map<Key, PositionMap>::const_iterator current_;
-    std::map<Key, PositionMap>::const_iterator end_;
-  };
-
-  // The Position Iterator
-  struct PositionIterator {
-    // Is valid?
-    bool IsValid() const;
-
-    // Advance to next position
-    void NextPosition();
-
-    // Skip forward to next position that is equal to or greater than.
-    // return true if it lands on an equal position, false otherwise.
-    bool SkipForwardPosition(const Position& position);
-
-    // Get Current Position
-    const Position& GetPosition() const;
-
-    // Get field mask for current position
-    uint64_t GetFieldMask() const;
-
-   private:
-    friend struct KeyIterator;
-
-    // Iterator state - pointer to positions map
-    using PositionMap = std::map<Position, std::unique_ptr<class FieldMask>>;
-    const PositionMap* position_map_;
-    PositionMap::const_iterator current_;
-    PositionMap::const_iterator end_;
+    const absl::btree_map<Key, FlatPositionMap*>* key_map_;
+    absl::btree_map<Key, FlatPositionMap*>::const_iterator current_;
+    absl::btree_map<Key, FlatPositionMap*>::const_iterator end_;
   };
 
  private:
-  std::map<Key, PositionMap> key_to_positions_;
+  absl::btree_map<Key, FlatPositionMap*> key_to_positions_;
 };
 
 }  // namespace valkey_search::indexes::text

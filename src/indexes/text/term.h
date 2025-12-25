@@ -12,6 +12,7 @@
 
 #include "absl/container/inlined_vector.h"
 #include "src/indexes/text.h"
+#include "src/indexes/text/flat_position_map.h"
 #include "src/indexes/text/text_iterator.h"
 
 namespace valkey_search::indexes::text {
@@ -75,7 +76,7 @@ class TermIterator : public TextIterator {
   const FieldMaskPredicate query_field_mask_;
   absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>
       key_iterators_;
-  absl::InlinedVector<Postings::PositionIterator, kWordExpansionInlineCapacity>
+  absl::InlinedVector<PositionIterator, kWordExpansionInlineCapacity>
       pos_iterators_;
   Key current_key_;
   std::optional<PositionRange> current_position_;

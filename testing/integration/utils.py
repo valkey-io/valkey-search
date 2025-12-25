@@ -204,7 +204,7 @@ def start_valkey_cluster(
     # doesn't seem to be a way to do that with the valkey-server, since it seems to
     # be ready immediately, but returns an CLUSTERDOWN error when we try to search
     # too early, even after checking with ping.
-    time.sleep(10)
+    time.sleep(15)
 
     return ValkeyClusterUnderTest(processes)
 
@@ -761,6 +761,8 @@ def periodic_flushdb_task(
         logging.info("<FLUSHDB> Invoking flush DB")
         try:
             client.flushdb()
+            # Wait for cluster to stabilize after FLUSHDB
+            time.sleep(2)
             if not use_coordinator:
                 index_state.ft_created = False
         except (

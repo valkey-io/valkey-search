@@ -108,27 +108,43 @@ class StabilityRunner:
                 background_task_results=[],
             )
 
+        # Drop existing index
         try:
             utils.drop_index(client=client, index_name=self.config.index_name)
         except valkey.exceptions.ValkeyError:
             pass
 
-        attributes = {
-            "tag": utils.TagDefinition(),
-            "numeric": utils.NumericDefinition(),
-        }
+        # Create index attributes based on index type
         if self.config.index_type == "HNSW":
-            attributes.update({
+            attributes = {
+                "tag": utils.TagDefinition(),
+                "numeric": utils.NumericDefinition(),
+                "title": utils.TextDefinition(nostem=True),
+                "description": utils.TextDefinition(),
                 "embedding": utils.HNSWVectorDefinition(
                     vector_dimensions=self.config.vector_dimensions
                 )
-            })
-        else:
-            attributes.update({
+            }
+        elif self.config.index_type == "FLAT":
+            attributes = {
+                "tag": utils.TagDefinition(),
+                "numeric": utils.NumericDefinition(),
+                "title": utils.TextDefinition(nostem=True),
+                "description": utils.TextDefinition(),
                 "embedding": utils.FlatVectorDefinition(
                     vector_dimensions=self.config.vector_dimensions
                 ),
-            })
+            }
+        elif self.config.index_type == "TEXT":
+            attributes = {
+                "tag": utils.TagDefinition(),
+                "numeric": utils.NumericDefinition(),
+                "content": utils.TextDefinition(),
+                "category": utils.TextDefinition(nostem=True),
+            }
+        else:
+            raise ValueError(f"Unknown index type: {self.config.index_type}")
+        
         utils.create_index(
             client=client,
             index_name=self.config.index_name,
@@ -185,51 +201,117 @@ class StabilityRunner:
 
         memtier_output_dir = os.environ["TEST_UNDECLARED_OUTPUTS_DIR"]
 
-        insert_command = (
-            f"{self.config.memtier_path}"
-            " --cluster-mode"
-            " -s localhost"
-            f" -p {self.config.ports[0]}"
-            f" -t {self.config.num_memtier_threads}"
-            f" -c {self.config.num_memtier_clients}"
-            " --random-data"
-            " -"
-            " --command='HSET __key__ embedding __data__ tag my_tag numeric 10'"
-            " --command-key-pattern=P"
-            f" -d {self.config.vector_dimensions*4}"
-            " --json-out-file"
-            f" {memtier_output_dir}/{self.config.index_name}_memtier_insert.json"
-        )
-        delete_command = (
-            f"{self.config.memtier_path}"
-            " --cluster-mode"
-            " -s localhost"
-            f" -p {self.config.ports[0]}"
-            f" -t {self.config.num_memtier_threads}"
-            f" -c {self.config.num_memtier_clients}"
-            " --random-data"
-            " -"
-            " --command='DEL __key__'"
-            " --command-key-pattern=P"
-            f" -d {self.config.vector_dimensions*4}"
-            " --json-out-file"
-            f" {memtier_output_dir}/{self.config.index_name}_memtier_del.json"
-        )
-        expire_command = (
-            f"{self.config.memtier_path}"
-            " --cluster-mode"
-            " -s localhost"
-            f" -p {self.config.ports[0]}"
-            f" -t {self.config.num_memtier_threads}"
-            f" -c {self.config.num_memtier_clients}"
-            " --random-data"
-            " -"
-            " --command='EXPIRE __key__ 1'"
-            " --command-key-pattern=P"
-            f" -d {self.config.vector_dimensions*4}"
-            " --json-out-file"
-            f" {memtier_output_dir}/{self.config.index_name}_memtier_expire.json"
-        )
+        # Build HSET command based on index type
+        if self.config.index_type in ["HNSW", "FLAT"]:
+            # Vector-based index: include embedding field with text fields
+            hset_fields = "embedding __data__ tag my_tag numeric 10 title __data__ description __data__"
+        else:  # TEXT
+            # Text-only index: use simple text without spaces to avoid quote escaping issues
+            hset_fields = 'tag my_tag numeric 10 content sample_search_document_with_electronics category electronics'
+        
+        if self.config.index_type == "TEXT":
+            insert_command = (
+                f"{self.config.memtier_path}"
+                " --cluster-mode"
+                " -s localhost"
+                f" -p {self.config.ports[0]}"
+                f" -t {self.config.num_memtier_threads}"
+                f" -c {self.config.num_memtier_clients}"
+                " --reconnect-on-error"
+                " --max-reconnect-attempts=3"
+                " -"
+                " --command='HSET __key__ tag my_tag numeric 10 "
+                "content sample_search_document category electronics'"
+                " --command-key-pattern=P"
+                " --json-out-file "
+                f"{memtier_output_dir}/{self.config.index_name}_memtier_insert.json"
+            )
+        else:
+            insert_command = (
+                f"{self.config.memtier_path}"
+                " --cluster-mode"
+                " -s localhost"
+                f" -p {self.config.ports[0]}"
+                f" -t {self.config.num_memtier_threads}"
+                f" -c {self.config.num_memtier_clients}"
+                " --random-data"
+                " --reconnect-on-error"
+                " --max-reconnect-attempts=3"
+                " -"
+                f" --command='HSET __key__ {hset_fields}'"
+                " --command-key-pattern=P"
+                f" -d {self.config.vector_dimensions*4}"
+                " --json-out-file"
+                f" {memtier_output_dir}/{self.config.index_name}_memtier_insert.json"
+            )
+        if self.config.index_type == "TEXT":
+            delete_command = (
+                f"{self.config.memtier_path}"
+                " --cluster-mode"
+                " -s localhost"
+                f" -p {self.config.ports[0]}"
+                f" -t {self.config.num_memtier_threads}"
+                f" -c {self.config.num_memtier_clients}"
+                " --reconnect-on-error"
+                " --max-reconnect-attempts=3"
+                " -"
+                " --command='DEL __key__'"
+                " --command-key-pattern=P"
+                " --json-out-file"
+                f" {memtier_output_dir}/{self.config.index_name}_memtier_del.json"
+            )
+        else:
+            delete_command = (
+                f"{self.config.memtier_path}"
+                " --cluster-mode"
+                " -s localhost"
+                f" -p {self.config.ports[0]}"
+                f" -t {self.config.num_memtier_threads}"
+                f" -c {self.config.num_memtier_clients}"
+                " --random-data"
+                " --reconnect-on-error"
+                " --max-reconnect-attempts=3"
+                " -"
+                " --command='DEL __key__'"
+                " --command-key-pattern=P"
+                f" -d {self.config.vector_dimensions*4}"
+                " --json-out-file"
+                f" {memtier_output_dir}/{self.config.index_name}_memtier_del.json"
+            )
+        if self.config.index_type == "TEXT":
+            expire_command = (
+                f"{self.config.memtier_path}"
+                " --cluster-mode"
+                " -s localhost"
+                f" -p {self.config.ports[0]}"
+                f" -t {self.config.num_memtier_threads}"
+                f" -c {self.config.num_memtier_clients}"
+                " --reconnect-on-error"
+                " --max-reconnect-attempts=3"
+                " -"
+                " --command='EXPIRE __key__ 1'"
+                " --command-key-pattern=P"
+                " --json-out-file"
+                f" {memtier_output_dir}/{self.config.index_name}_memtier_expire.json"
+            )
+        else:
+            expire_command = (
+                f"{self.config.memtier_path}"
+                " --cluster-mode"
+                " -s localhost"
+                f" -p {self.config.ports[0]}"
+                f" -t {self.config.num_memtier_threads}"
+                f" -c {self.config.num_memtier_clients}"
+                " --random-data"
+                " --reconnect-on-error"
+                " --max-reconnect-attempts=3"
+                " -"
+                " --command='EXPIRE __key__ 1'"
+                " --command-key-pattern=P"
+                f" -d {self.config.vector_dimensions*4}"
+                " --json-out-file"
+                f" {memtier_output_dir}/{self.config.index_name}_memtier_expire.json"
+            )
 
         if self.config.insertion_mode == "request_count":
             keys_per_client = int(
@@ -250,6 +332,14 @@ class StabilityRunner:
                 f"Unknown insertion mode: {self.config.insertion_mode}"
             )
 
+        # Build search query based on index type
+        if self.config.index_type in ["HNSW", "FLAT"]:
+            # Vector KNN search
+            search_query = '"(@tag:{my_tag} @numeric:[0 100])=>[KNN 3 @embedding $query_vector]" NOCONTENT PARAMS 2 "query_vector" __data__ DIALECT 2'
+        else:  # TEXT
+            # Text search - updated to match the new content format without spaces
+            search_query = '"(@tag:{my_tag} @numeric:[0 100] @content:sample_search_document_with_electronics | @category:electronics)"'
+        
         search_command = (
             f"{self.config.memtier_path}"
             " --cluster-mode"
@@ -258,10 +348,7 @@ class StabilityRunner:
             f" -t {self.config.num_memtier_threads}"
             f" -c {self.config.num_search_clients}"
             " -"
-            " --command='FT.SEARCH"
-            f" {self.config.index_name} "
-            '"(@tag:{my_tag} @numeric:[0 100])=>[KNN 3 @embedding $query_vector]"'
-            ' NOCONTENT PARAMS 2 "query_vector" __data__ DIALECT 2\' '
+            f" --command='FT.SEARCH {self.config.index_name} {search_query}'"
             f" --test-time={self.config.test_time_sec}"
             f" -d {self.config.vector_dimensions*4}"
             " --json-out-file"

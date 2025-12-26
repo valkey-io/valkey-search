@@ -118,13 +118,12 @@ void SerializeNeighbors(SearchIndexPartitionResponse* response,
 namespace {
 
 // Context for timer-based retry when waiting for in-flight keys on remote shard
-struct RemoteInFlightRetryContext {
+struct RemoteInFlightRetryContext : public query::InFlightRetryContextBase {
   SearchIndexPartitionResponse* response;
   grpc::ServerUnaryReactor* reactor;
   std::unique_ptr<vmsdk::StopWatch> latency_sample;
   std::deque<indexes::Neighbor> neighbors;
   std::unique_ptr<query::SearchParameters> parameters;
-  std::vector<InternedStringPtr> neighbor_keys;
 
   RemoteInFlightRetryContext(SearchIndexPartitionResponse* resp,
                              grpc::ServerUnaryReactor* react,
@@ -132,57 +131,55 @@ struct RemoteInFlightRetryContext {
                              std::deque<indexes::Neighbor> nbrs,
                              std::unique_ptr<query::SearchParameters> params,
                              std::vector<InternedStringPtr> keys)
-      : response(resp),
+      : InFlightRetryContextBase(std::move(keys)),
+        response(resp),
         reactor(react),
         latency_sample(std::move(sample)),
         neighbors(std::move(nbrs)),
-        parameters(std::move(params)),
-        neighbor_keys(std::move(keys)) {}
-};
+        parameters(std::move(params)) {}
 
-void FinishRemoteSearchResponse(ValkeyModuleCtx* ctx,
-                                RemoteInFlightRetryContext* retry_ctx) {
-  const auto& attribute_data_type =
-      retry_ctx->parameters->index_schema->GetAttributeDataType();
-  if (retry_ctx->parameters->attribute_alias.empty()) {
-    query::ProcessNonVectorNeighborsForReply(
-        ctx, attribute_data_type, retry_ctx->neighbors, *retry_ctx->parameters);
-  } else {
-    auto vector_identifier =
-        retry_ctx->parameters->index_schema
-            ->GetIdentifier(retry_ctx->parameters->attribute_alias)
-            .value();
-    query::ProcessNeighborsForReply(ctx, attribute_data_type,
-                                    retry_ctx->neighbors,
-                                    *retry_ctx->parameters, vector_identifier);
+  bool IsCancelled() const override {
+    return parameters->cancellation_token->IsCancelled();
   }
-  SerializeNeighbors(retry_ctx->response, retry_ctx->neighbors);
-  retry_ctx->reactor->Finish(grpc::Status::OK);
-  RecordSearchMetrics(false, std::move(retry_ctx->latency_sample));
-  delete retry_ctx;
-}
+
+  const std::shared_ptr<IndexSchema>& GetIndexSchema() const override {
+    return parameters->index_schema;
+  }
+
+  void OnComplete() override {
+    auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
+    const auto& attribute_data_type =
+        parameters->index_schema->GetAttributeDataType();
+    if (parameters->attribute_alias.empty()) {
+      query::ProcessNonVectorNeighborsForReply(ctx.get(), attribute_data_type,
+                                               neighbors, *parameters);
+    } else {
+      auto vector_identifier =
+          parameters->index_schema->GetIdentifier(parameters->attribute_alias)
+              .value();
+      query::ProcessNeighborsForReply(ctx.get(), attribute_data_type, neighbors,
+                                      *parameters, vector_identifier);
+    }
+    SerializeNeighbors(response, neighbors);
+    reactor->Finish(grpc::Status::OK);
+    RecordSearchMetrics(false, std::move(latency_sample));
+  }
+
+  void OnCancelled() override {
+    if (!parameters->enable_partial_results) {
+      reactor->Finish({grpc::StatusCode::DEADLINE_EXCEEDED,
+                       "Search operation cancelled due to timeout"});
+      RecordSearchMetrics(true, std::move(latency_sample));
+    } else {
+      OnComplete();  // Return partial results
+    }
+  }
+};
 
 void RemoteInFlightRetryCallback(ValkeyModuleCtx* ctx, void* data) {
   auto* retry_ctx = static_cast<RemoteInFlightRetryContext*>(data);
-  if (retry_ctx->parameters->cancellation_token->IsCancelled()) {
-    if (!retry_ctx->parameters->enable_partial_results) {
-      retry_ctx->reactor->Finish({grpc::StatusCode::DEADLINE_EXCEEDED,
-                                  "Search operation cancelled due to timeout"});
-      RecordSearchMetrics(true, std::move(retry_ctx->latency_sample));
-      delete retry_ctx;
-      return;
-    }
-    FinishRemoteSearchResponse(ctx, retry_ctx);
-    return;
-  }
-
-  if (query::CheckInFlightAndScheduleRetry(
-          ctx, retry_ctx, retry_ctx->neighbor_keys,
-          retry_ctx->parameters->index_schema, RemoteInFlightRetryCallback,
-          "Remote full-text query")) {
-    return;
-  }
-  FinishRemoteSearchResponse(ctx, retry_ctx);
+  query::ProcessRetry(ctx, retry_ctx, RemoteInFlightRetryCallback,
+                      "Remote full-text query");
 }
 
 }  // namespace

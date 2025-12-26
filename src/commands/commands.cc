@@ -40,38 +40,37 @@ struct Result {
 };
 
 // Context for timer-based retry when waiting for in-flight keys
-struct InFlightRetryContext {
+struct InFlightRetryContext : public query::InFlightRetryContextBase {
   vmsdk::BlockedClient blocked_client;
   std::unique_ptr<Result> result;
-  std::vector<InternedStringPtr>
-      neighbor_keys;  // Cached to avoid O(n) copy on each retry
 
   InFlightRetryContext(vmsdk::BlockedClient bc, std::unique_ptr<Result> res,
                        std::vector<InternedStringPtr> keys)
-      : blocked_client(std::move(bc)),
-        result(std::move(res)),
-        neighbor_keys(std::move(keys)) {}
+      : InFlightRetryContextBase(std::move(keys)),
+        blocked_client(std::move(bc)),
+        result(std::move(res)) {}
+
+  bool IsCancelled() const override {
+    return result->parameters->cancellation_token->IsCancelled();
+  }
+
+  const std::shared_ptr<IndexSchema>& GetIndexSchema() const override {
+    return result->parameters->index_schema;
+  }
+
+  void OnComplete() override {
+    blocked_client.SetReplyPrivateData(result.release());
+  }
+
+  void OnCancelled() override {
+    // Let Reply callback handle the cancellation
+    blocked_client.SetReplyPrivateData(result.release());
+  }
 };
 
 void InFlightRetryCallback(ValkeyModuleCtx *ctx, void *data) {
   auto *retry_ctx = static_cast<InFlightRetryContext *>(data);
-  auto &result = retry_ctx->result;
-
-  if (result->parameters->cancellation_token->IsCancelled()) {
-    retry_ctx->blocked_client.SetReplyPrivateData(result.release());
-    delete retry_ctx;
-    return;
-  }
-
-  if (query::CheckInFlightAndScheduleRetry(
-          ctx, retry_ctx, retry_ctx->neighbor_keys,
-          result->parameters->index_schema, InFlightRetryCallback,
-          "Full-text query")) {
-    return;
-  }
-
-  retry_ctx->blocked_client.SetReplyPrivateData(result.release());
-  delete retry_ctx;
+  query::ProcessRetry(ctx, retry_ctx, InFlightRetryCallback, "Full-text query");
 }
 
 int Timeout(ValkeyModuleCtx *ctx, [[maybe_unused]] ValkeyModuleString **argv,

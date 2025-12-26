@@ -169,43 +169,43 @@ struct SearchPartitionResultsTracker {
   }
 };
 
-struct LocalInFlightRetryContext {
+struct LocalInFlightRetryContext : public query::InFlightRetryContextBase {
   std::deque<indexes::Neighbor> neighbors;
   std::unique_ptr<SearchParameters> parameters;
-  std::vector<InternedStringPtr> neighbor_keys;
   std::shared_ptr<SearchPartitionResultsTracker> tracker;
 
   LocalInFlightRetryContext(std::deque<indexes::Neighbor> nbrs,
                             std::unique_ptr<SearchParameters> params,
                             std::vector<InternedStringPtr> keys,
                             std::shared_ptr<SearchPartitionResultsTracker> trk)
-      : neighbors(std::move(nbrs)),
+      : InFlightRetryContextBase(std::move(keys)),
+        neighbors(std::move(nbrs)),
         parameters(std::move(params)),
-        neighbor_keys(std::move(keys)),
         tracker(std::move(trk)) {}
+
+  bool IsCancelled() const override {
+    return parameters->cancellation_token->IsCancelled();
+  }
+
+  const std::shared_ptr<IndexSchema>& GetIndexSchema() const override {
+    return parameters->index_schema;
+  }
+
+  void OnComplete() override {
+    tracker->AddResults(neighbors);
+  }
+
+  void OnCancelled() override {
+    if (parameters->enable_partial_results) {
+      tracker->AddResults(neighbors);
+    }
+  }
 };
 
 void LocalInFlightRetryCallback(ValkeyModuleCtx *ctx, void *data) {
   auto *retry_ctx = static_cast<LocalInFlightRetryContext *>(data);
-  if (retry_ctx->parameters->cancellation_token->IsCancelled()) {
-    if (!retry_ctx->parameters->enable_partial_results) {
-      delete retry_ctx;
-      return;
-    }
-    retry_ctx->tracker->AddResults(retry_ctx->neighbors);
-    delete retry_ctx;
-    return;
-  }
-
-  if (query::CheckInFlightAndScheduleRetry(
-          ctx, retry_ctx, retry_ctx->neighbor_keys,
-          retry_ctx->parameters->index_schema, LocalInFlightRetryCallback,
-          "Local fanout full-text query")) {
-    return;
-  }
-
-  retry_ctx->tracker->AddResults(retry_ctx->neighbors);
-  delete retry_ctx;
+  query::ProcessRetry(ctx, retry_ctx, LocalInFlightRetryCallback,
+                      "Local fanout full-text query");
 }
 
 void PerformRemoteSearchRequest(

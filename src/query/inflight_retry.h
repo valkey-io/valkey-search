@@ -21,8 +21,9 @@
 
 namespace valkey_search::query {
 
-// Helper to check for in-flight conflicts and schedule retry if needed.
-// Returns true if retry was scheduled, false if no conflicts found.
+// Check for in-flight conflicts and schedule retry timer if conflicts exist.
+// Returns true if retry was scheduled (conflicts found), false otherwise.
+// Must be called on main thread.
 template <typename RetryContext>
 bool CheckInFlightAndScheduleRetry(
     ValkeyModuleCtx* ctx, RetryContext* retry_ctx,
@@ -40,16 +41,31 @@ bool CheckInFlightAndScheduleRetry(
   return false;
 }
 
-// Helper to schedule initial retry on main thread
+// Schedule the retry context to be processed on the main thread.
+// - If has_conflicts is true: schedules with delay (background saw conflicts)
+// - If has_conflicts is false: schedules immediately (background saw no
+//   conflicts, but main thread must still verify before completing)
+//
+// The timer_callback will be invoked on the main thread and should call
+// CheckInFlightAndScheduleRetry to verify conflicts before completing.
 template <typename RetryContext>
-void ScheduleInFlightRetryOnMain(RetryContext* retry_ctx,
-                                 void (*timer_callback)(ValkeyModuleCtx*,
-                                                        void*)) {
+void ScheduleOnMainThread(RetryContext* retry_ctx,
+                          void (*timer_callback)(ValkeyModuleCtx*, void*),
+                          bool has_conflicts) {
+  if (has_conflicts) {
+    ++Metrics::GetStats().fulltext_query_blocked_cnt;
+  }
   vmsdk::RunByMain(
-      [retry_ctx, timer_callback]() {
+      [retry_ctx, timer_callback, has_conflicts]() {
         auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
-        ValkeyModule_CreateTimer(ctx.get(), kInFlightRetryIntervalMs,
-                                 timer_callback, retry_ctx);
+        if (has_conflicts) {
+          // Delay before first check since we know there are conflicts
+          ValkeyModule_CreateTimer(ctx.get(), kInFlightRetryIntervalMs,
+                                   timer_callback, retry_ctx);
+        } else {
+          // Execute callback immediately - it will do the main thread check
+          timer_callback(ctx.get(), retry_ctx);
+        }
       },
       true);
 }

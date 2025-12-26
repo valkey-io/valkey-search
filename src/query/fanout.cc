@@ -185,10 +185,8 @@ struct LocalInFlightRetryContext {
         tracker(std::move(trk)) {}
 };
 
-void LocalInFlightRetryTimerCallback(ValkeyModuleCtx *ctx, void *data);
-
-void CheckAndHandleLocalInFlightConflicts(
-    ValkeyModuleCtx *ctx, LocalInFlightRetryContext *retry_ctx) {
+void LocalInFlightRetryCallback(ValkeyModuleCtx *ctx, void *data) {
+  auto *retry_ctx = static_cast<LocalInFlightRetryContext *>(data);
   if (retry_ctx->parameters->cancellation_token->IsCancelled()) {
     if (!retry_ctx->parameters->enable_partial_results) {
       delete retry_ctx;
@@ -201,18 +199,13 @@ void CheckAndHandleLocalInFlightConflicts(
 
   if (query::CheckInFlightAndScheduleRetry(
           ctx, retry_ctx, retry_ctx->neighbor_keys,
-          retry_ctx->parameters->index_schema, LocalInFlightRetryTimerCallback,
+          retry_ctx->parameters->index_schema, LocalInFlightRetryCallback,
           "Local fanout full-text query")) {
     return;
   }
 
   retry_ctx->tracker->AddResults(retry_ctx->neighbors);
   delete retry_ctx;
-}
-
-void LocalInFlightRetryTimerCallback(ValkeyModuleCtx *ctx, void *data) {
-  auto *retry_ctx = static_cast<LocalInFlightRetryContext *>(data);
-  CheckAndHandleLocalInFlightConflicts(ctx, retry_ctx);
 }
 
 void PerformRemoteSearchRequest(
@@ -305,23 +298,24 @@ absl::Status PerformSearchFanoutAsync(
         [tracker](absl::StatusOr<std::vector<indexes::Neighbor>> &neighbors,
                   std::unique_ptr<SearchParameters> parameters) {
           if (neighbors.ok()) {
-            // For queries with text predicates, check for in-flight key
-            // conflicts before adding results.
+            // For queries with text predicates, always verify on main thread.
+            // Background check is an optimization: if conflicts exist, schedule
+            // delayed retry. If no conflicts, still verify on main thread since
+            // mutations could arrive between background check and main thread.
             if (!parameters->no_content &&
                 query::QueryHasTextPredicate(*parameters)) {
               auto neighbor_keys =
                   query::CollectNeighborKeys(neighbors.value());
-              if (parameters->index_schema->HasAnyConflictingInFlightKeys(
-                      neighbor_keys)) {
-                ++Metrics::GetStats().fulltext_query_blocked_cnt;
-                // Schedule blocking/retry on main thread
-                auto *retry_ctx = new LocalInFlightRetryContext(
-                    std::move(neighbors.value()), std::move(parameters),
-                    std::move(neighbor_keys), tracker);
-                query::ScheduleInFlightRetryOnMain(
-                    retry_ctx, LocalInFlightRetryTimerCallback);
-                return;
-              }
+              bool has_conflicts =
+                  parameters->index_schema->HasAnyConflictingInFlightKeys(
+                      neighbor_keys);
+              auto *retry_ctx = new LocalInFlightRetryContext(
+                  std::move(neighbors.value()), std::move(parameters),
+                  std::move(neighbor_keys), tracker);
+
+              query::ScheduleOnMainThread(retry_ctx, LocalInFlightRetryCallback,
+                                           has_conflicts);
+              return;
             }
             tracker->AddResults(*neighbors);
           } else {

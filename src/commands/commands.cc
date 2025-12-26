@@ -53,10 +53,8 @@ struct InFlightRetryContext {
         neighbor_keys(std::move(keys)) {}
 };
 
-void InFlightRetryTimerCallback(ValkeyModuleCtx *ctx, void *data);
-
-void CheckAndHandleInFlightConflicts(ValkeyModuleCtx *ctx,
-                                     InFlightRetryContext *retry_ctx) {
+void InFlightRetryCallback(ValkeyModuleCtx *ctx, void *data) {
+  auto *retry_ctx = static_cast<InFlightRetryContext *>(data);
   auto &result = retry_ctx->result;
 
   if (result->parameters->cancellation_token->IsCancelled()) {
@@ -67,18 +65,13 @@ void CheckAndHandleInFlightConflicts(ValkeyModuleCtx *ctx,
 
   if (query::CheckInFlightAndScheduleRetry(
           ctx, retry_ctx, retry_ctx->neighbor_keys,
-          result->parameters->index_schema, InFlightRetryTimerCallback,
+          result->parameters->index_schema, InFlightRetryCallback,
           "Full-text query")) {
     return;
   }
 
   retry_ctx->blocked_client.SetReplyPrivateData(result.release());
   delete retry_ctx;
-}
-
-void InFlightRetryTimerCallback(ValkeyModuleCtx *ctx, void *data) {
-  auto *retry_ctx = static_cast<InFlightRetryContext *>(data);
-  CheckAndHandleInFlightConflicts(ctx, retry_ctx);
 }
 
 int Timeout(ValkeyModuleCtx *ctx, [[maybe_unused]] ValkeyModuleString **argv,
@@ -181,24 +174,24 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
           .parameters = std::move(upcast_parameters),
       });
 
-      // For queries with text predicates, check for in-flight key conflicts.
-      // Skip if no_content since we only return key names without
-      // fetching/evaluating data.
+      // For queries with text predicates, always verify on main thread.
+      // Background check is an optimization: if conflicts exist, schedule
+      // delayed retry. If no conflicts, still verify on main thread since
+      // mutations could arrive between background check and main thread.
       if (!result->parameters->no_content &&
           query::QueryHasTextPredicate(*result->parameters)) {
         auto neighbor_keys =
             query::CollectNeighborKeys(result->neighbors.value());
-        if (result->parameters->index_schema->HasAnyConflictingInFlightKeys(
-                neighbor_keys)) {
-          ++Metrics::GetStats().fulltext_query_blocked_cnt;
-          auto *retry_ctx = new async::InFlightRetryContext(
-              std::move(blocked_client), std::move(result),
-              std::move(neighbor_keys));
+        bool has_conflicts =
+            result->parameters->index_schema->HasAnyConflictingInFlightKeys(
+                neighbor_keys);
+        auto *retry_ctx = new async::InFlightRetryContext(
+            std::move(blocked_client), std::move(result),
+            std::move(neighbor_keys));
 
-          query::ScheduleInFlightRetryOnMain(retry_ctx,
-                                             async::InFlightRetryTimerCallback);
-          return;
-        }
+        query::ScheduleOnMainThread(retry_ctx, async::InFlightRetryCallback,
+                                     has_conflicts);
+        return;
       }
 
       blocked_client.SetReplyPrivateData(result.release());

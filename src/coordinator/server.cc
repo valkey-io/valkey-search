@@ -140,8 +140,6 @@ struct RemoteInFlightRetryContext {
         neighbor_keys(std::move(keys)) {}
 };
 
-void RemoteInFlightRetryTimerCallback(ValkeyModuleCtx* ctx, void* data);
-
 void FinishRemoteSearchResponse(ValkeyModuleCtx* ctx,
                                 RemoteInFlightRetryContext* retry_ctx) {
   const auto& attribute_data_type =
@@ -164,8 +162,8 @@ void FinishRemoteSearchResponse(ValkeyModuleCtx* ctx,
   delete retry_ctx;
 }
 
-void CheckAndHandleRemoteInFlightConflicts(
-    ValkeyModuleCtx* ctx, RemoteInFlightRetryContext* retry_ctx) {
+void RemoteInFlightRetryCallback(ValkeyModuleCtx* ctx, void* data) {
+  auto* retry_ctx = static_cast<RemoteInFlightRetryContext*>(data);
   if (retry_ctx->parameters->cancellation_token->IsCancelled()) {
     if (!retry_ctx->parameters->enable_partial_results) {
       retry_ctx->reactor->Finish({grpc::StatusCode::DEADLINE_EXCEEDED,
@@ -180,16 +178,11 @@ void CheckAndHandleRemoteInFlightConflicts(
 
   if (query::CheckInFlightAndScheduleRetry(
           ctx, retry_ctx, retry_ctx->neighbor_keys,
-          retry_ctx->parameters->index_schema, RemoteInFlightRetryTimerCallback,
+          retry_ctx->parameters->index_schema, RemoteInFlightRetryCallback,
           "Remote full-text query")) {
     return;
   }
   FinishRemoteSearchResponse(ctx, retry_ctx);
-}
-
-void RemoteInFlightRetryTimerCallback(ValkeyModuleCtx* ctx, void* data) {
-  auto* retry_ctx = static_cast<RemoteInFlightRetryContext*>(data);
-  CheckAndHandleRemoteInFlightConflicts(ctx, retry_ctx);
 }
 
 }  // namespace
@@ -239,24 +232,23 @@ query::SearchResponseCallback Service::MakeSearchCallback(
       RecordSearchMetrics(true, std::move(latency_sample));
       return;
     }
-    // For queries with text predicates, check for in-flight key conflicts.
-    // Skip if no_content since we only return key names without
-    // fetching/evaluating data.
+    // For queries with text predicates, always verify on main thread.
+    // Background check is an optimization: if conflicts exist, schedule
+    // delayed retry. If no conflicts, still verify on main thread since
+    // mutations could arrive between background check and main thread.
     if (!parameters->no_content && query::QueryHasTextPredicate(*parameters)) {
       auto neighbor_keys = query::CollectNeighborKeys(neighbors.value());
-      if (parameters->index_schema->HasAnyConflictingInFlightKeys(
-              neighbor_keys)) {
-        // Has conflicts - need to wait for in-flight mutations
-        ++Metrics::GetStats().fulltext_query_blocked_cnt;
-        auto* retry_ctx = new RemoteInFlightRetryContext(
-            response, reactor, std::move(latency_sample),
-            std::move(neighbors.value()), std::move(parameters),
-            std::move(neighbor_keys));
+      bool has_conflicts =
+          parameters->index_schema->HasAnyConflictingInFlightKeys(
+              neighbor_keys);
+      auto* retry_ctx = new RemoteInFlightRetryContext(
+          response, reactor, std::move(latency_sample),
+          std::move(neighbors.value()), std::move(parameters),
+          std::move(neighbor_keys));
 
-        query::ScheduleInFlightRetryOnMain(retry_ctx,
-                                           RemoteInFlightRetryTimerCallback);
-        return;
-      }
+      query::ScheduleOnMainThread(retry_ctx, RemoteInFlightRetryCallback,
+                                  has_conflicts);
+      return;
     }
 
     if (parameters->no_content) {

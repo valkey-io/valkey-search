@@ -298,10 +298,8 @@ absl::Status PerformSearchFanoutAsync(
         [tracker](absl::StatusOr<std::vector<indexes::Neighbor>> &neighbors,
                   std::unique_ptr<SearchParameters> parameters) {
           if (neighbors.ok()) {
-            // For queries with text predicates, always verify on main thread.
-            // Background check is an optimization: if conflicts exist, schedule
-            // delayed retry. If no conflicts, still verify on main thread since
-            // mutations could arrive between background check and main thread.
+            // Text predicate evaluation requires main thread to ensure text indexes
+            // reflect current keyspace. Block if result keys have in-flight mutations.
             if (!parameters->no_content &&
                 query::QueryHasTextPredicate(*parameters)) {
               auto neighbor_keys =

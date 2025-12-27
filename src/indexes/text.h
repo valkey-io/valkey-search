@@ -69,7 +69,9 @@ class Text : public IndexBase {
       absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
       const override {
     absl::MutexLock lock(&index_mutex_);
-    // TODO: Implement proper key tracking
+    for (const auto& key : tracked_keys_) {
+      VMSDK_RETURN_IF_ERROR(fn(key));
+    }
     return absl::OkStatus();
   }
 
@@ -87,7 +89,9 @@ class Text : public IndexBase {
       absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
       const override {
     absl::MutexLock lock(&index_mutex_);
-    // TODO
+    for (const auto& key : untracked_keys_) {
+      VMSDK_RETURN_IF_ERROR(fn(key));
+    }
     return absl::OkStatus();
   }
 
@@ -98,32 +102,59 @@ class Text : public IndexBase {
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
  public:
-  // Common EntriesFetcher impl for all Text operations.
   class EntriesFetcher : public EntriesFetcherBase {
    public:
     EntriesFetcher(size_t size,
                    const std::shared_ptr<text::TextIndex>& text_index,
+                   const InternedStringSet* tracked_keys,
                    const InternedStringSet* untracked_keys,
-                   text::FieldMaskPredicate field_mask)
+                   text::FieldMaskPredicate field_mask, bool negate)
         : size_(size),
           text_index_(text_index),
+          tracked_keys_(tracked_keys),
           untracked_keys_(untracked_keys),
-          field_mask_(field_mask) {}
+          field_mask_(field_mask),
+          negate_(negate) {}
+
+    EntriesFetcher(size_t size,
+                   const std::shared_ptr<text::TextIndex>& text_index,
+                   const InternedStringSet* tracked_keys,
+                   const InternedStringSet* untracked_keys,
+                   text::FieldMaskPredicate field_mask,
+                   std::vector<std::unique_ptr<EntriesFetcherBase>> children,
+                   std::optional<uint32_t> slop, bool inorder)
+        : size_(size),
+          text_index_(text_index),
+          tracked_keys_(tracked_keys),
+          untracked_keys_(untracked_keys),
+          field_mask_(field_mask),
+          negate_(true),
+          is_negated_phrase_(true),
+          phrase_children_(std::move(children)),
+          phrase_slop_(slop),
+          phrase_inorder_(inorder) {}
 
     size_t Size() const override;
 
     std::unique_ptr<text::TextIterator> BuildTextIterator(
-        const query::TextPredicate* predicate);
+        const query::TextPredicate* predicate, bool require_positions = false);
 
-    // Factory method that creates the appropriate text iterator
-    // based on the text predicate's operation type.
     std::unique_ptr<EntriesFetcherIteratorBase> Begin() override;
 
     size_t size_;
+    const InternedStringSet* tracked_keys_;
     const InternedStringSet* untracked_keys_;
     std::shared_ptr<text::TextIndex> text_index_;
     const query::TextPredicate* predicate_;
     text::FieldMaskPredicate field_mask_;
+    bool negate_;
+    std::unique_ptr<InternedStringSet> owned_tracked_keys_;
+    std::unique_ptr<InternedStringSet> owned_untracked_keys_;
+
+    bool is_negated_phrase_{false};
+    std::vector<std::unique_ptr<EntriesFetcherBase>> phrase_children_;
+    std::optional<uint32_t> phrase_slop_;
+    bool phrase_inorder_{true};
   };
 
   // Calculate size based on the predicate.
@@ -139,7 +170,8 @@ class Text : public IndexBase {
   // Reference to the shared text index schema
   std::shared_ptr<text::TextIndexSchema> text_index_schema_;
 
-  InternedStringSet untracked_keys_;
+  InternedStringSet tracked_keys_ ABSL_GUARDED_BY(index_mutex_);
+  InternedStringSet untracked_keys_ ABSL_GUARDED_BY(index_mutex_);
 
   bool with_suffix_trie_;
   bool no_stem_;

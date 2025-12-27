@@ -88,6 +88,9 @@ class IndexSchema : public KeyspaceEventSubscription,
     // Single interface to get all stats data
     InfoIndexPartitionData GetStats() const;
   };
+
+  enum class KeySetType { kTracked, kUntracked };
+
   std::shared_ptr<IndexSchema> GetSharedPtr() { return shared_from_this(); }
   std::weak_ptr<IndexSchema> GetWeakPtr() { return weak_from_this(); }
 
@@ -107,6 +110,12 @@ class IndexSchema : public KeyspaceEventSubscription,
                                     indexes::IndexBase *index);
   absl::flat_hash_set<std::string> GetTextIdentifiersByFieldMask(
       FieldMaskPredicate field_mask) const;
+
+  // Aggregate keys (tracked or untracked) across text fields matching
+  // field_mask
+  InternedStringSet GetKeysByFieldMask(FieldMaskPredicate field_mask,
+                                       KeySetType type) const;
+
   virtual absl::StatusOr<std::string> GetIdentifier(
       absl::string_view attribute_alias) const;
   absl::StatusOr<std::string> GetAlias(absl::string_view identifier) const;

@@ -15,6 +15,7 @@
 #include "absl/container/inlined_vector.h"
 #include "absl/strings/match.h"
 #include "absl/strings/string_view.h"
+#include "src/index_schema.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
@@ -309,6 +310,47 @@ ComposedPredicate::ComposedPredicate(
 
 void ComposedPredicate::AddChild(std::unique_ptr<Predicate> child) {
   children_.push_back(std::move(child));
+}
+
+std::unique_ptr<valkey_search::indexes::EntriesFetcherBase>
+ComposedPredicate::EvaluateAsPhrase(
+    bool negate, const valkey_search::IndexSchema* schema) const {
+  CHECK(IsPhrase() && negate) << "Only for negated phrases";
+
+  std::vector<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
+  child_fetchers.reserve(children_.size());
+
+  for (const auto& child : children_) {
+    CHECK(child->GetType() == PredicateType::kText)
+        << "Phrase children must be text";
+    auto* text_child = dynamic_cast<const TextPredicate*>(child.get());
+    auto* fetcher = static_cast<indexes::EntriesFetcherBase*>(
+        text_child->Search(false, schema));
+    child_fetchers.push_back(
+        std::unique_ptr<indexes::EntriesFetcherBase>(fetcher));
+  }
+
+  auto* first_text = dynamic_cast<const TextPredicate*>(children_[0].get());
+  auto field_mask = first_text->GetFieldMask();
+
+  auto tracked_keys =
+      std::make_unique<InternedStringSet>(schema->GetKeysByFieldMask(
+          field_mask, IndexSchema::KeySetType::kTracked));
+  auto untracked_keys =
+      std::make_unique<InternedStringSet>(schema->GetKeysByFieldMask(
+          field_mask, IndexSchema::KeySetType::kUntracked));
+
+  size_t size = tracked_keys->size() + untracked_keys->size();
+
+  auto fetcher = std::make_unique<indexes::Text::EntriesFetcher>(
+      size, first_text->GetTextIndexSchema()->GetTextIndex(),
+      tracked_keys.get(), untracked_keys.get(), field_mask,
+      std::move(child_fetchers), slop_, inorder_);
+
+  fetcher->owned_tracked_keys_ = std::move(tracked_keys);
+  fetcher->owned_untracked_keys_ = std::move(untracked_keys);
+
+  return fetcher;
 }
 // Helper to evaluate text predicates with conditional position requirements
 EvaluationResult EvaluatePredicate(const Predicate* predicate,

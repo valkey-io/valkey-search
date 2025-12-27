@@ -44,9 +44,6 @@ enum class SearchMode {
 
 constexpr int64_t kTimeoutMS{50000};
 constexpr size_t kMaxTimeoutMs{60000};
-
-// Retry interval for checking in-flight keys (in milliseconds)
-constexpr mstime_t kInFlightRetryIntervalMs = 3;
 constexpr absl::string_view kOOMMsg{
     "OOM command not allowed when used memory > 'maxmemory'"};
 constexpr absl::string_view kFailedPreconditionMsg{

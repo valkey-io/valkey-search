@@ -77,5 +77,8 @@ config::Number& GetLocalFanoutQueueWaitThreshold();
 /// Return the sample queue size for thread pool wait time tracking
 config::Number& GetThreadPoolWaitTimeSamples();
 
+/// Return the retry interval for checking in-flight keys
+config::Number& GetInFlightRetryIntervalMs();
+
 }  // namespace options
 }  // namespace valkey_search

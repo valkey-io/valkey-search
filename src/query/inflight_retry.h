@@ -13,8 +13,8 @@
 
 #include "src/index_schema.h"
 #include "src/metrics.h"
-#include "src/query/search.h"
 #include "src/utils/string_interning.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/utils.h"
@@ -72,8 +72,9 @@ bool CheckInFlightAndScheduleRetry(
     ++Metrics::GetStats().fulltext_query_retry_cnt;
     VMSDK_LOG(DEBUG, ctx)
         << log_prefix << " has conflicting in-flight keys, scheduling retry";
-    ValkeyModule_CreateTimer(ctx, kInFlightRetryIntervalMs, timer_callback,
-                             retry_ctx);
+    ValkeyModule_CreateTimer(
+        ctx, options::GetInFlightRetryIntervalMs().GetValue(), timer_callback,
+        retry_ctx);
     return true;
   }
   return false;
@@ -119,8 +120,9 @@ void ScheduleOnMainThread(RetryContext* retry_ctx,
         auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
         if (has_conflicts) {
           // Delay before first check since we know there are conflicts
-          ValkeyModule_CreateTimer(ctx.get(), kInFlightRetryIntervalMs,
-                                   timer_callback, retry_ctx);
+          ValkeyModule_CreateTimer(
+              ctx.get(), options::GetInFlightRetryIntervalMs().GetValue(),
+              timer_callback, retry_ctx);
         } else {
           // Execute callback immediately - it will do the main thread check
           timer_callback(ctx.get(), retry_ctx);

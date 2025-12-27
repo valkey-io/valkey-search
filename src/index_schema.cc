@@ -394,6 +394,35 @@ absl::flat_hash_set<std::string> IndexSchema::GetTextIdentifiersByFieldMask(
   return matches;
 }
 
+InternedStringSet IndexSchema::GetKeysByFieldMask(FieldMaskPredicate field_mask,
+                                                  KeySetType type) const {
+  InternedStringSet aggregated_keys;
+  auto matching_identifiers = GetTextIdentifiersByFieldMask(field_mask);
+
+  for (const auto &identifier : matching_identifiers) {
+    auto index_result = GetIndex(identifier);
+    if (index_result.ok()) {
+      auto *text_index =
+          dynamic_cast<const indexes::Text *>(index_result.value().get());
+
+      if (type == KeySetType::kTracked) {
+        (void)text_index->ForEachTrackedKey(
+            [&aggregated_keys](const InternedStringPtr &key) {
+              aggregated_keys.insert(key);
+              return absl::OkStatus();
+            });
+      } else {
+        (void)text_index->ForEachUnTrackedKey(
+            [&aggregated_keys](const InternedStringPtr &key) {
+              aggregated_keys.insert(key);
+              return absl::OkStatus();
+            });
+      }
+    }
+  }
+  return aggregated_keys;
+}
+
 absl::StatusOr<std::string> IndexSchema::GetIdentifier(
     absl::string_view attribute_alias) const {
   auto itr = attributes_.find(std::string{attribute_alias});
@@ -526,13 +555,21 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
     vmsdk::UniqueValkeyString record = VectorExternalizer::Instance().GetRecord(
         ctx, attribute_data_type_.get(), key_obj.get(), key_cstr,
         attribute.GetIdentifier(), is_module_owned);
-    // Early return on record not found just if the record not tracked.
-    // Otherwise, it will be processed as a delete
+
+    // Skip untracked fields that aren't in mutation queue
+    // Exception: Text indexes need to track untracked_keys for negation
     if (!record && !attribute.GetIndex()->IsTracked(interned_key) &&
         !InTrackedMutationRecords(interned_key, attribute.GetIdentifier())) {
-      continue;
+      // For text indexes: let RemoveRecord update untracked_keys via normal
+      // path For other indexes: skip processing entirely (optimization)
+      if (attribute.GetIndex()->GetIndexerType() !=
+          indexes::IndexerType::kText) {
+        continue;
+      }
+      // For text: fall through to AddAttributeData/ProcessMutation
     }
-    if (!is_module_owned) {
+
+    if (!is_module_owned && record) {
       // A record which are owned by the module were not modified and are
       // already tracked in the vector registry.
       VectorExternalizer(interned_key, attribute.GetIdentifier(), record);

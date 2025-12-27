@@ -152,7 +152,7 @@ class Predicate;
 size_t EvaluateFilterAsPrimary(
     const Predicate* predicate,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>& entries_fetchers,
-    bool negate);
+    bool negate, const valkey_search::IndexSchema* index_schema);
 
 // Defined in the header to support testing
 absl::StatusOr<std::deque<indexes::Neighbor>> PerformVectorSearch(

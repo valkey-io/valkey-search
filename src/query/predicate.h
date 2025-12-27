@@ -20,10 +20,15 @@
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/type_conversions.h"
 
+namespace valkey_search {
+class IndexSchema;
+}  // namespace valkey_search
+
 namespace valkey_search::indexes {
 class Text;
 class Numeric;
 class Tag;
+class EntriesFetcherBase;
 }  // namespace valkey_search::indexes
 
 namespace valkey_search::indexes::text {
@@ -180,9 +185,10 @@ class TextPredicate : public Predicate {
   virtual std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema()
       const = 0;
   virtual const FieldMaskPredicate GetFieldMask() const = 0;
-  virtual void* Search(bool negate) const;
+  virtual void* Search(bool negate,
+                       const valkey_search::IndexSchema* index_schema) const;
   virtual std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
-      const void* fetcher) const = 0;
+      const void* fetcher, bool require_positions = false) const = 0;
   virtual size_t EstimateSize() const = 0;
 };
 
@@ -202,7 +208,7 @@ class TermPredicate : public TextPredicate {
       const InternedStringPtr& target_key,
       bool require_positions) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
-      const void* fetcher) const override;
+      const void* fetcher, bool require_positions = false) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   bool IsExact() const { return exact_; }
   size_t EstimateSize() const override;
@@ -230,7 +236,7 @@ class PrefixPredicate : public TextPredicate {
       const InternedStringPtr& target_key,
       bool require_positions) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
-      const void* fetcher) const override;
+      const void* fetcher, bool require_positions = false) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   size_t EstimateSize() const override;
 
@@ -256,7 +262,7 @@ class SuffixPredicate : public TextPredicate {
       const InternedStringPtr& target_key,
       bool require_positions) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
-      const void* fetcher) const override;
+      const void* fetcher, bool require_positions = false) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   size_t EstimateSize() const override;
 
@@ -282,7 +288,7 @@ class InfixPredicate : public TextPredicate {
       const InternedStringPtr& target_key,
       bool require_positions) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
-      const void* fetcher) const override;
+      const void* fetcher, bool require_positions = false) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   size_t EstimateSize() const override;
 
@@ -309,7 +315,7 @@ class FuzzyPredicate : public TextPredicate {
       const InternedStringPtr& target_key,
       bool require_positions) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
-      const void* fetcher) const override;
+      const void* fetcher, bool require_positions = false) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   size_t EstimateSize() const override;
 
@@ -345,6 +351,14 @@ class ComposedPredicate : public Predicate {
   std::vector<std::unique_ptr<Predicate>> ReleaseChildren() {
     return std::move(children_);
   }
+
+  bool IsPhrase() const {
+    return (slop_.has_value() || inorder_) &&
+           GetType() == PredicateType::kComposedAnd;
+  }
+
+  std::unique_ptr<valkey_search::indexes::EntriesFetcherBase> EvaluateAsPhrase(
+      bool negate, const valkey_search::IndexSchema* schema) const;
 
  private:
   std::vector<std::unique_ptr<Predicate>> children_;

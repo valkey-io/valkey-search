@@ -125,11 +125,19 @@ inline PredicateType EvaluateAsComposedPredicate(
 size_t EvaluateFilterAsPrimary(
     const Predicate *predicate,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
-    bool negate) {
+    bool negate, const valkey_search::IndexSchema *index_schema) {
   if (predicate->GetType() == PredicateType::kComposedAnd ||
       predicate->GetType() == PredicateType::kComposedOr) {
     auto composed_predicate =
         dynamic_cast<const ComposedPredicate *>(predicate);
+
+    if (negate && composed_predicate->IsPhrase()) {
+      auto fetcher = composed_predicate->EvaluateAsPhrase(negate, index_schema);
+      size_t size = fetcher->Size();
+      entries_fetchers.push(std::move(fetcher));
+      return size;
+    }
+
     auto predicate_type =
         EvaluateAsComposedPredicate(composed_predicate, negate);
     if (predicate_type == PredicateType::kComposedAnd) {
@@ -137,8 +145,8 @@ size_t EvaluateFilterAsPrimary(
       std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> best_fetchers;
       for (const auto &child : composed_predicate->GetChildren()) {
         std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
-        size_t child_size =
-            EvaluateFilterAsPrimary(child.get(), child_fetchers, negate);
+        size_t child_size = EvaluateFilterAsPrimary(child.get(), child_fetchers,
+                                                    negate, index_schema);
         if (child_size < min_size) {
           min_size = child_size;
           best_fetchers = std::move(child_fetchers);
@@ -150,8 +158,8 @@ size_t EvaluateFilterAsPrimary(
       size_t total_size = 0;
       for (const auto &child : composed_predicate->GetChildren()) {
         std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
-        size_t child_size =
-            EvaluateFilterAsPrimary(child.get(), child_fetchers, negate);
+        size_t child_size = EvaluateFilterAsPrimary(child.get(), child_fetchers,
+                                                    negate, index_schema);
         AppendQueue(entries_fetchers, child_fetchers);
         total_size += child_size;
       }
@@ -177,15 +185,16 @@ size_t EvaluateFilterAsPrimary(
     auto text_predicate = dynamic_cast<const TextPredicate *>(predicate);
     auto fetcher = std::unique_ptr<indexes::EntriesFetcherBase>(
         static_cast<indexes::EntriesFetcherBase *>(
-            text_predicate->Search(negate)));
+            text_predicate->Search(negate, index_schema)));
     size_t size = fetcher->Size();
     entries_fetchers.push(std::move(fetcher));
     return size;
   }
   if (predicate->GetType() == PredicateType::kNegate) {
     auto negate_predicate = dynamic_cast<const NegatePredicate *>(predicate);
-    size_t result = EvaluateFilterAsPrimary(negate_predicate->GetPredicate(),
-                                            entries_fetchers, !negate);
+    size_t result =
+        EvaluateFilterAsPrimary(negate_predicate->GetPredicate(),
+                                entries_fetchers, !negate, index_schema);
     return result;
   }
   CHECK(false);
@@ -374,7 +383,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> SearchNonVectorQuery(
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
   size_t qualified_entries = EvaluateFilterAsPrimary(
       parameters.filter_parse_results.root_predicate.get(), entries_fetchers,
-      false);
+      false, parameters.index_schema.get());
   std::deque<indexes::Neighbor> neighbors;
   auto results_appender =
       [&neighbors, &parameters](
@@ -424,7 +433,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> DoSearch(
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
   size_t qualified_entries = EvaluateFilterAsPrimary(
       parameters.filter_parse_results.root_predicate.get(), entries_fetchers,
-      false);
+      false, parameters.index_schema.get());
 
   // Query planner makes the decision for pre-filtering vs inline-filtering.
   if (UsePreFiltering(qualified_entries, vector_index)) {

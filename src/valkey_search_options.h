@@ -77,9 +77,14 @@ config::Number& GetLocalFanoutQueueWaitThreshold();
 /// Return the sample queue size for thread pool wait time tracking
 config::Number& GetThreadPoolWaitTimeSamples();
 
+<<<<<<< HEAD
 /// Return the maximum number of words to search in text operations (prefix,
 /// suffix, fuzzy)
 config::Number& GetMaxTermExpansions();
+=======
+/// Return the retry interval for checking in-flight keys
+config::Number& GetInFlightRetryIntervalMs();
+>>>>>>> e1a8005 (Make the config configurable)
 
 }  // namespace options
 }  // namespace valkey_search

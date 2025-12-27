@@ -295,6 +295,21 @@ static auto max_term_expansions =
                           kMaximumMaxTermExpansions)  // max limit (100k)
         .Build();
 
+/// Register the "--inflight-retry-interval-ms" flag. Controls the retry
+/// interval for checking in-flight keys during full-text search (milliseconds)
+constexpr absl::string_view kInFlightRetryIntervalMsConfig{
+    "inflight-retry-interval-ms"};
+constexpr uint32_t kDefaultInFlightRetryIntervalMs{3};
+constexpr uint32_t kMinimumInFlightRetryIntervalMs{1};
+constexpr uint32_t kMaximumInFlightRetryIntervalMs{5000};
+static auto inflight_retry_interval_ms =
+    vmsdk::config::NumberBuilder(
+        kInFlightRetryIntervalMsConfig,   // name
+        kDefaultInFlightRetryIntervalMs,  // default (3ms)
+        kMinimumInFlightRetryIntervalMs,  // min (1ms)
+        kMaximumInFlightRetryIntervalMs)  // max (5 seconds)
+        .Build();
+
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 
 vmsdk::config::Number& GetHNSWBlockSize() {
@@ -371,6 +386,10 @@ vmsdk::config::Boolean& GetEnableProximityPrefilterEval() {
 
 vmsdk::config::Number& GetMaxTermExpansions() {
   return dynamic_cast<vmsdk::config::Number&>(*max_term_expansions);
+}
+
+vmsdk::config::Number& GetInFlightRetryIntervalMs() {
+  return dynamic_cast<vmsdk::config::Number&>(*inflight_retry_interval_ms);
 }
 
 }  // namespace options

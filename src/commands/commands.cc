@@ -173,10 +173,8 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
           .parameters = std::move(upcast_parameters),
       });
 
-      // For queries with text predicates, always verify on main thread.
-      // Background check is an optimization: if conflicts exist, schedule
-      // delayed retry. If no conflicts, still verify on main thread since
-      // mutations could arrive between background check and main thread.
+      // Text predicate evaluation requires main thread to ensure text indexes
+      // reflect current keyspace. Block if result keys have in-flight mutations.
       if (!result->parameters->no_content &&
           query::QueryHasTextPredicate(*result->parameters)) {
         auto neighbor_keys =

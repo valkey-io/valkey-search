@@ -229,10 +229,8 @@ query::SearchResponseCallback Service::MakeSearchCallback(
       RecordSearchMetrics(true, std::move(latency_sample));
       return;
     }
-    // For queries with text predicates, always verify on main thread.
-    // Background check is an optimization: if conflicts exist, schedule
-    // delayed retry. If no conflicts, still verify on main thread since
-    // mutations could arrive between background check and main thread.
+    // Text predicate evaluation requires main thread to ensure text indexes
+    // reflect current keyspace. Block if result keys have in-flight mutations.
     if (!parameters->no_content && query::QueryHasTextPredicate(*parameters)) {
       auto neighbor_keys = query::CollectNeighborKeys(neighbors.value());
       bool has_conflicts =

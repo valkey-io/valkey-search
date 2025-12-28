@@ -123,6 +123,8 @@ class StabilityTests(parameterized.TestCase):
                 use_coordinator=True,
                 replica_count=1,
                 repl_diskless_load="swapdb",
+                failover_interval_sec=45,
+                test_failover_recovery=True,
             ),
         ),
         dict(
@@ -147,6 +149,8 @@ class StabilityTests(parameterized.TestCase):
                 use_coordinator=False,
                 replica_count=1,
                 repl_diskless_load="swapdb",
+                failover_interval_sec=45,
+                test_failover_recovery=True,
             ),
         ),
         dict(
@@ -171,6 +175,8 @@ class StabilityTests(parameterized.TestCase):
                 use_coordinator=True,
                 replica_count=1,
                 repl_diskless_load="disabled",
+                failover_interval_sec=45,
+                test_failover_recovery=True,
             ),
         ),
         dict(
@@ -197,6 +203,8 @@ class StabilityTests(parameterized.TestCase):
                 use_coordinator=False,
                 replica_count=1,
                 repl_diskless_load="disabled",
+                failover_interval_sec=45,
+                test_failover_recovery=True,
             ),
         ),
     )
@@ -254,9 +262,23 @@ class StabilityTests(parameterized.TestCase):
         if results is None:
             self.fail("Failed to run stability test")
 
+        # Check for unexpectedly terminated servers
+        # During failover testing, only allow servers that were intentionally shut down
         terminated = self.valkey_cluster_under_test.get_terminated_servers()
-        if (terminated):
-            self.fail(f"Valkey servers died during test, ports: {terminated}")
+        if terminated:
+            unexpected_terminations = [
+                port for port in terminated 
+                if port not in results.intentionally_failed_ports
+            ]
+            if unexpected_terminations:
+                self.fail(
+                    f"Valkey servers died unexpectedly during test, ports: {unexpected_terminations}. "
+                    f"Intentionally failed ports: {results.intentionally_failed_ports}"
+                )
+            else:
+                logging.info(
+                    f"Nodes intentionally shut down during failover testing: {terminated}"
+                )
 
         self.assertTrue(
             results.successful_run,
@@ -289,6 +311,24 @@ class StabilityTests(parameterized.TestCase):
             # BGSAVE will fail if another is ongoing.
             if result.name == "BGSAVE":
                 pass
+            # During failover testing, some background tasks may fail transiently
+            # This is expected behavior as nodes are being shut down and promoted
+            elif result.name == "FAILOVER":
+                # FAILOVER task itself is tracked but failures are acceptable
+                # (some failovers may not complete if timing is unlucky)
+                pass
+            elif config.failover_interval_sec > 0 and result.name in ["FT.CREATE", "FLUSHDB", "FT.DROPINDEX"]:
+                # During failover, these operations may fail transiently:
+                # - FT.CREATE: coordinator/target node may be failing over
+                # - FLUSHDB: cluster may be in transition state
+                # - FT.DROPINDEX: index may be temporarily unavailable
+                # Allow up to 3 failures per background task during failover testing
+                # (1-2 failovers * ~1-2 operations during failover window)
+                self.assertLessEqual(
+                    result.failures,
+                    3,
+                    f"Expected at most 3 transient failures for background task {result.name} during failover, got {result.failures}",
+                )
             else:
                 self.assertEqual(
                     result.failures,

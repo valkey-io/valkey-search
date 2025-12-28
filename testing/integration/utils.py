@@ -103,12 +103,19 @@ def start_valkey_process(
 
 
 class ValkeyClusterUnderTest:
-    def __init__(self, servers: List[ValkeyServerUnderTest]):
+    def __init__(self, servers: List[ValkeyServerUnderTest], stdout_files: List[TextIO] = None):
         self.servers = servers
+        self.stdout_files = stdout_files or []
 
     def terminate(self):
         for server in self.servers:
             server.terminate()
+        # Close all stdout files
+        for stdout_file in self.stdout_files:
+            try:
+                stdout_file.close()
+            except Exception as e:
+                logging.warning("Failed to close stdout file: %s", e)
 
     def get_terminated_servers(self) -> List[int]:
         result = []
@@ -152,10 +159,13 @@ def start_valkey_cluster(
     """
     cluster_args = dict(args)
     processes = []
+    stdout_files = []
 
     for port in ports:
         stdout_path = os.path.join(stdout_directory, f"{port}_stdout.txt")
-        stdout_file = open(stdout_path, "w")
+        # Open file without buffering - will be closed when cluster terminates
+        stdout_file = open(stdout_path, "w", buffering=1)
+        stdout_files.append(stdout_file)
         node_dir = os.path.join(directory, f"nodes{port}")
         cluster_args["cluster-enabled"] = "yes"
         cluster_args["cluster-config-file"] = os.path.join(
@@ -174,29 +184,30 @@ def start_valkey_cluster(
         ))
 
     cli_stdout_path = os.path.join(stdout_directory, "valkey_cli_stdout.txt")
-    cli_stdout_file = open(cli_stdout_path, "w")
-    valkey_cli_args = [valkey_cli_path, "--cluster-yes", "--cluster", "create"]
-    for port in ports:
-        valkey_cli_args.append(f"127.0.0.1:{port}")
-    valkey_cli_args.extend(["--cluster-replicas", str(replica_count)])
-    if password:
-        valkey_cli_args.extend(["-a", password])
+    # Close file after subprocess completes
+    with open(cli_stdout_path, "w") as cli_stdout_file:
+        valkey_cli_args = [valkey_cli_path, "--cluster-yes", "--cluster", "create"]
+        for port in ports:
+            valkey_cli_args.append(f"127.0.0.1:{port}")
+        valkey_cli_args.extend(["--cluster-replicas", str(replica_count)])
+        if password:
+            valkey_cli_args.extend(["-a", password])
 
-    logging.info("Creating valkey cluster with command: %s", valkey_cli_args)
+        logging.info("Creating valkey cluster with command: %s", valkey_cli_args)
 
-    timeout = 60
-    now = time.time()
-    while time.time() - now < timeout:
-        try:
-            subprocess.run(
-                valkey_cli_args,
-                check=True,
-                stdout=cli_stdout_file,
-                stderr=cli_stdout_file,
-            )
-            break
-        except subprocess.CalledProcessError:
-            time.sleep(1)
+        timeout = 60
+        now = time.time()
+        while time.time() - now < timeout:
+            try:
+                subprocess.run(
+                    valkey_cli_args,
+                    check=True,
+                    stdout=cli_stdout_file,
+                    stderr=cli_stdout_file,
+                )
+                break
+            except subprocess.CalledProcessError:
+                time.sleep(1)
 
     # This is also ugly, but we need to wait for the cluster to be ready. There
     # doesn't seem to be a way to do that with the valkey-server, since it seems to
@@ -204,7 +215,7 @@ def start_valkey_cluster(
     # too early, even after checking with ping.
     time.sleep(10)
 
-    return ValkeyClusterUnderTest(processes)
+    return ValkeyClusterUnderTest(processes, stdout_files)
 
 
 class AttributeDefinition:
@@ -301,6 +312,27 @@ class NumericDefinition(AttributeDefinition):
         if self.alias:
             args += ["AS", self.alias]
         args += ["NUMERIC"]
+        return args
+
+
+class TextDefinition(AttributeDefinition):
+    def __init__(self, nostem=False, with_suffix_trie=False, min_stem_size=None, alias=None):
+        self.nostem = nostem
+        self.with_suffix_trie = with_suffix_trie
+        self.min_stem_size = min_stem_size
+        self.alias = alias
+
+    def to_arguments(self) -> List[Any]:
+        args = []
+        if self.alias:
+            args += ["AS", self.alias]
+        args += ["TEXT"]
+        if self.nostem:
+            args += ["NOSTEM"]
+        if self.with_suffix_trie:
+            args += ["WITHSUFFIXTRIE"]
+        if self.min_stem_size is not None:
+            args += ["MINSTEMSIZE", str(self.min_stem_size)]
         return args
 
 
@@ -562,6 +594,7 @@ class RandomIntervalTask:
       failures:
       name:
       thread:
+      failed_ports: Set of ports that were intentionally shut down (for failover tasks)
     """
 
     def __init__(
@@ -580,6 +613,7 @@ class RandomIntervalTask:
         self.ops = 0
         self.failures = 0
         self.name = name
+        self.failed_ports = set()  # Track intentionally failed ports (for failover)
 
     def stop(self):
         if not self.thread:
@@ -825,13 +859,14 @@ class MemtierProcess:
 
     def process_logs(self):
         for line in self._process_memtier_subprocess_output():
-            if (
-                line.error is not None
-                and self.error_predicate is not None
-                and not self.error_predicate(line.error)
-            ):
-                continue
             if line.error is not None:
+                # If error_predicate is provided and returns True, this is an acceptable error - skip it
+                if self.error_predicate is not None and self.error_predicate(line.error):
+                    logging.debug(
+                        "<%s> encountered expected error (ignored): %s", self.name, line.error
+                    )
+                    continue
+                # This is an unexpected error - log it
                 logging.error(
                     "<%s> encountered error: %s", self.name, line.error
                 )
@@ -845,6 +880,9 @@ class MemtierProcess:
             self.trailing_ops_sec.insert(0, line.ops_sec)
             if len(self.trailing_ops_sec) > self.trailing_secs:
                 self.trailing_ops_sec.pop()
+            # Only update total_ops and avg_ops_sec for non-error lines
+            self.total_ops = line.ops
+            self.avg_ops_sec = line.avg_ops_sec
         if self.trailing_ops_sec:
             trailing_ops_sec = sum(self.trailing_ops_sec) / len(
                 self.trailing_ops_sec
@@ -854,8 +892,6 @@ class MemtierProcess:
                 and len(self.trailing_ops_sec) == self.trailing_secs
             ):
                 self.halted = True
-        self.total_ops = line.ops
-        self.avg_ops_sec = line.avg_ops_sec
 
     def print_status(self):
         if self.process.poll() is not None and not self.done:
@@ -923,9 +959,10 @@ class MemtierProcess:
 
 
 def parse_memtier_error_line(line: str):
+    # Actual memtier format: [RUN #1 1%,   0 secs] 10 threads 10 conns:        4408 ops,    8807 (avg:    8807) ops/sec, 4.24MB/sec (avg: 4.24MB/sec), 30.95 (avg: 30.95) msec latency
     progress_pattern = (
         r"\[RUN #(\d+)"
-        r" ([\d\.]+)%?,\s+([\d\.]+)\s+secs\]\s+([\d\.]+)\s+threads:\s+(\d+)\s+ops,\s+([\d\.]+)\s+\(avg:\s+([\d\.]+)\)\s+ops\/sec,\s+([\d\.]+[KMG]B\/sec)\s+\(avg:\s+(\d+\.\d+[KMG]?B\/sec)\),\s+(-nan|[\d\.]+)\s+\(avg:\s+(\d+\.\d+)\)\s+msec\s+latency"
+        r"\s+([\d\.]+)%?,\s+([\d\.]+)\s+secs\]\s+(\d+)\s+threads\s+\d+\s+conns:\s+(\d+)\s+ops,\s+([\d\.]+)\s+\(avg:\s+([\d\.]+)\)\s+ops\/sec,\s+([\d\.]+[KMG]?B\/sec)\s+\(avg:\s+([\d\.]+[KMG]?B\/sec)\),\s+(-nan|[\d\.]+)\s+\(avg:\s+([\d\.]+)\)\s+msec\s+latency"
     )
     match = re.search(progress_pattern, line)
 
@@ -939,7 +976,11 @@ def parse_memtier_error_line(line: str):
         avg_ops_sec = float(match.group(7))
         b_sec = match.group(8)
         avg_b_sec = match.group(9)
-        latency = float(match.group(10))
+        latency = match.group(10)
+        if latency == '-nan':
+            latency = 0.0
+        else:
+            latency = float(latency)
         avg_latency = float(match.group(11))
         return MemtierErrorLineInfo(
             run_number=run_number,
@@ -1017,3 +1058,429 @@ def connect_to_valkey_cluster(
             time.sleep(1)
 
     assert False
+
+# Cluster Failover Functions
+class ClusterNode(NamedTuple):
+    """Represents a node in the cluster topology."""
+    node_id: str
+    addr: str  # host:port
+    is_master: bool
+    master_id: str | None  # For replicas, the ID of their master
+
+
+def get_cluster_nodes(client: valkey.ValkeyCluster) -> tuple[List[ClusterNode], List[ClusterNode]]:
+    """Discover cluster topology by parsing CLUSTER NODES output.
+    
+    This function queries the cluster to get the current topology, separating
+    master and replica nodes. It ignores nodes that are in a failed state.
+    
+    Returns:
+        Tuple of (masters, replicas) where each is a list of ClusterNode objects
+        
+    """
+    try:
+        nodes_output = client.execute_command("CLUSTER", "NODES").decode().splitlines()
+    except (valkey.exceptions.ConnectionError, valkey.exceptions.ResponseError) as e:
+        logging.error("Failed to get cluster nodes: %s", e)
+        return [], []
+    
+    masters = []
+    replicas = []
+    
+    for line in nodes_output:
+        if not line.strip():
+            continue
+            
+        parts = line.split()
+        if len(parts) < 8:
+            continue
+            
+        node_id = parts[0]
+        addr = parts[1].split("@")[0]  # Remove cluster bus port
+        flags = parts[2]
+        master_id = parts[3] if len(parts) > 3 else "-"
+        
+        # Check if this is a master node (and not failed)
+        if "master" in flags and "fail" not in flags:
+            masters.append(ClusterNode(
+                node_id=node_id,
+                addr=addr,
+                is_master=True,
+                master_id=None
+            ))
+        # Check if this is a replica node
+        elif "slave" in flags and "fail" not in flags:
+            replicas.append(ClusterNode(
+                node_id=node_id,
+                addr=addr,
+                is_master=False,
+                master_id=master_id
+            ))
+    
+    return masters, replicas
+
+
+def pick_master_to_fail(masters: List[ClusterNode], replicas: List[ClusterNode]) -> ClusterNode | None:
+    """Randomly select a master node to fail, ensuring it has replicas.
+    
+    This function implements a random selection strategy to increase test coverage
+    and avoid bias. It only selects masters that have at least one replica to
+    ensure the cluster can perform automatic failover.
+    
+    Returns:
+        Selected ClusterNode to fail, or None if no suitable master found
+    """
+    if not masters:
+        logging.warning("No master nodes available to fail")
+        return None
+    
+    # Find masters that have at least one replica
+    masters_with_replicas = []
+    for master in masters:
+        has_replica = any(r.master_id == master.node_id for r in replicas)
+        if has_replica:
+            masters_with_replicas.append(master)
+    
+    if not masters_with_replicas:
+        logging.warning("No masters with replicas found - cannot safely perform failover")
+        return None
+    
+    # Randomly select one master to fail
+    selected = random.choice(masters_with_replicas)
+    logging.info(
+        "Selected master to fail: node_id=%s, addr=%s (out of %d masters with replicas)",
+        selected.node_id,
+        selected.addr,
+        len(masters_with_replicas)
+    )
+    return selected
+
+
+def shutdown_node(addr: str, password: str | None = None) -> bool:
+    """Shut down a specific cluster node using SHUTDOWN NOSAVE.
+    
+    This simulates a real crash/failure scenario:
+    - SHUTDOWN NOSAVE immediately terminates the process without saving to disk
+    - Mimics network partition, process crash, or power failure
+    - Triggers automatic replica promotion by the cluster
+    - No persistence side effects that could interfere with the test
+        
+    Returns:
+        True if shutdown command was sent successfully, False otherwise
+    """
+    try:
+        host, port = addr.split(":")
+        node_client = valkey.Valkey(
+            host=host,
+            port=int(port),
+            password=password,
+            socket_timeout=2,
+        )
+        logging.info("Sending SHUTDOWN NOSAVE to node %s", addr)
+        node_client.execute_command("SHUTDOWN", "NOSAVE")
+    except Exception as e:
+        # Connection drop is EXPECTED and means shutdown succeeded
+        logging.info("Node %s connection dropped (expected after SHUTDOWN): %s", addr, e)
+        return True
+    
+    # If we reach here without exception, something unexpected happened
+    logging.warning("SHUTDOWN command completed without connection drop - unexpected")
+    return True
+
+
+def wait_for_new_master(
+    client: valkey.ValkeyCluster,
+    old_master_id: str,
+    timeout: int = 30
+) -> bool:
+    """Wait for a replica to be promoted to master after the old master fails.
+    
+    This function polls the cluster topology until it detects that:
+    1. The old master node ID is no longer present as a master
+    2. A new master has taken over its slots
+    
+    Returns:
+        True if new master detected within timeout, False otherwise
+    """
+    start = time.time()
+    logging.info("Waiting for replica promotion (old master: %s)", old_master_id)
+    
+    while time.time() - start < timeout:
+        masters, _ = get_cluster_nodes(client)
+        
+        # Check if old master is gone from master list
+        old_master_still_present = any(m.node_id == old_master_id for m in masters)
+        
+        if not old_master_still_present and masters:
+            logging.info(
+                "Replica promotion detected - old master %s no longer in master list after %.1fs",
+                old_master_id,
+                time.time() - start
+            )
+            return True
+        
+        time.sleep(1)
+    
+    logging.error(
+        "Timeout waiting for replica promotion after %d seconds (old master: %s)",
+        timeout,
+        old_master_id
+    )
+    return False
+
+
+def wait_for_cluster_ok(client: valkey.ValkeyCluster, timeout: int = 30) -> bool:
+    """Wait for the cluster to reach a healthy state with full slot coverage.
+    
+    After failover, this function ensures:
+    1. All 16384 hash slots are assigned to available masters
+    2. No slots are in "migrating" or "importing" state
+    3. Cluster state is reported as "ok"
+    
+    Returns:
+        True if cluster reaches OK state within timeout, False otherwise
+    """
+    start = time.time()
+    logging.info("Waiting for cluster to reach OK state")
+    
+    while time.time() - start < timeout:
+        try:
+            info = client.execute_command("CLUSTER", "INFO").decode()
+            if "cluster_state:ok" in info:
+                logging.info("Cluster reached OK state after %.1fs", time.time() - start)
+                return True
+            else:
+                # Log the current state for debugging
+                for line in info.split("\r\n"):
+                    if "cluster_state" in line:
+                        logging.debug("Current cluster state: %s", line)
+        except (valkey.exceptions.ConnectionError, valkey.exceptions.ResponseError) as e:
+            logging.debug("Error checking cluster state (will retry): %s", e)
+        
+        time.sleep(1)
+    
+    logging.error("Timeout waiting for cluster OK state after %d seconds", timeout)
+    return False
+
+
+def restart_node(
+    valkey_server_path: str,
+    port: int,
+    config_dir: str,
+    stdout_dir: str,
+    password: str | None = None
+) -> ValkeyServerUnderTest | None:
+    """Restart a previously failed node to test recovery and rejoin behavior.
+    
+    This function starts the Valkey server process with its existing configuration,
+    allowing it to rejoin the cluster as a replica. This tests:
+    - Node recovery after failure
+    - Replica catch-up with replication
+    - FT index consistency after rejoin
+        
+    Returns:
+        ValkeyServerUnderTest object if restart succeeds, None otherwise
+    """
+    try:
+        node_dir = os.path.join(config_dir, f"nodes{port}")
+        stdout_path = os.path.join(stdout_dir, f"{port}_restart_stdout.txt")
+        
+        if not os.path.exists(node_dir):
+            logging.error("Node directory %s does not exist", node_dir)
+            return None
+        
+        logging.info("Restarting node on port %d", port)
+        
+        # Open stdout file for logging
+        stdout_file = open(stdout_path, "w")
+        
+        # Build the command to restart the node
+        command = f"{valkey_server_path} --port {port} --dir {node_dir}"
+        command += f" --cluster-enabled yes"
+        command += f" --cluster-config-file {os.path.join(node_dir, 'nodes.conf')}"
+        command += f" --cluster-node-timeout 45000"
+        
+        if password:
+            command += f" --requirepass {password}"
+        
+        # Load modules from environment (same as original startup)
+        if "VALKEY_SEARCH_PATH" in os.environ:
+            valkey_search_path = os.environ["VALKEY_SEARCH_PATH"]
+            command += f' --loadmodule {valkey_search_path} --reader-threads 2 --writer-threads 5'
+        
+        if "VALKEY_JSON_PATH" in os.environ:
+            command += f' --loadmodule {os.environ["VALKEY_JSON_PATH"]}'
+        
+        command = "ulimit -c unlimited && " + command
+        logging.info("Restart command: %s", command)
+        
+        process = subprocess.Popen(
+            command, shell=True, stdout=stdout_file, stderr=stdout_file
+        )
+        
+        # Wait for node to be connectable
+        connected = False
+        for i in range(10):
+            try:
+                test_client = valkey.Valkey(
+                    host="localhost",
+                    port=port,
+                    password=password,
+                    socket_timeout=2,
+                )
+                test_client.ping()
+                connected = True
+                logging.info("Node on port %d successfully restarted", port)
+                break
+            except (
+                valkey.exceptions.ConnectionError,
+                valkey.exceptions.ResponseError,
+            ):
+                time.sleep(1)
+        
+        if not connected:
+            logging.error("Failed to connect to restarted node on port %d", port)
+            process.terminate()
+            return None
+        
+        return ValkeyServerUnderTest(process, port)
+        
+    except Exception as e:
+        logging.error("Error restarting node on port %d: %s", port, e)
+        return None
+
+
+def periodic_failover_task(
+    client: valkey.ValkeyCluster,
+    valkey_server_path: str,
+    config_dir: str,
+    stdout_dir: str,
+    test_recovery: bool,
+    password: str | None = None,
+    failed_ports_tracker: set | None = None,
+) -> bool:
+    """Execute a single cluster failover operation.
+    
+    This performs the complete failover sequence:
+    1. Discover current cluster topology
+    2. Select a master node to fail (one with replicas)
+    3. Shut down the selected master
+    4. Wait for replica promotion
+    5. Wait for cluster to reach OK state
+    6. Optionally restart the failed node to test recovery
+    
+    Returns:
+        True if failover sequence completed successfully, False otherwise
+    """
+    logging.info("<FAILOVER> Starting cluster failover sequence")
+    
+    # Step 1: Get cluster topology
+    masters, replicas = get_cluster_nodes(client)
+    if not masters:
+        logging.error("<FAILOVER> No masters found in cluster")
+        return False
+    
+    logging.info("<FAILOVER> Found %d masters and %d replicas", len(masters), len(replicas))
+    
+    # Step 2: Pick a master to fail
+    victim = pick_master_to_fail(masters, replicas)
+    if not victim:
+        logging.error("<FAILOVER> No suitable master found to fail")
+        return False
+    
+    logging.info("<FAILOVER> Selected victim: %s (node_id: %s)", victim.addr, victim.node_id)
+    
+    # Extract and track the port that we're shutting down
+    try:
+        victim_port = int(victim.addr.split(":")[1])
+        if failed_ports_tracker is not None:
+            failed_ports_tracker.add(victim_port)
+            logging.info("<FAILOVER> Tracking failed port: %d", victim_port)
+    except Exception as e:
+        logging.warning("<FAILOVER> Could not extract port from address %s: %s", victim.addr, e)
+    
+    # Step 3: Shut down the master
+    if not shutdown_node(victim.addr, password):
+        logging.error("<FAILOVER> Failed to shutdown node %s", victim.addr)
+        return False
+    
+    # Give the node a moment to fully shut down
+    time.sleep(2)
+    
+    # Step 4: Wait for replica promotion
+    if not wait_for_new_master(client, victim.node_id, timeout=30):
+        logging.error("<FAILOVER> Replica promotion did not complete in time")
+        return False
+    
+    # Step 5: Wait for cluster OK state
+    if not wait_for_cluster_ok(client, timeout=30):
+        logging.error("<FAILOVER> Cluster did not reach OK state in time")
+        return False
+    
+    logging.info("<FAILOVER> Failover completed successfully")
+    
+    # Step 6 (Optional): Restart the node for recovery testing
+    if test_recovery:
+        logging.info("<FAILOVER> Testing recovery - restarting failed node")
+        # Extract port from address
+        try:
+            port = int(victim.addr.split(":")[1])
+            restarted_node = restart_node(
+                valkey_server_path=valkey_server_path,
+                port=port,
+                config_dir=config_dir,
+                stdout_dir=stdout_dir,
+                password=password
+            )
+            if restarted_node:
+                logging.info("<FAILOVER> Node successfully rejoined cluster")
+                # Give it some time to sync
+                time.sleep(5)
+            else:
+                logging.warning("<FAILOVER> Failed to restart node, but failover was successful")
+        except Exception as e:
+            logging.warning("<FAILOVER> Error during recovery testing: %s", e)
+    
+    return True
+
+
+def periodic_failover(
+    client: valkey.ValkeyCluster,
+    interval_sec: int,
+    randomize: bool,
+    valkey_server_path: str,
+    config_dir: str,
+    stdout_dir: str,
+    test_recovery: bool = True,
+    password: str | None = None,
+) -> RandomIntervalTask:
+    """Create a background task that periodically triggers cluster failovers.
+    
+    This creates a RandomIntervalTask that runs failover operations at the
+    specified interval, with optional randomization to make timing less predictable.
+        
+    Returns:
+        RandomIntervalTask that can be started and stopped
+    """
+    # Create the thread first so we can pass it to the work function
+    # to allow tracking of failed ports
+    thread = RandomIntervalTask(
+        "FAILOVER",
+        interval_sec,
+        randomize,
+        lambda: False,  # Temporary placeholder
+    )
+    
+    # Now set the actual work function that has access to the thread
+    thread.task = lambda: periodic_failover_task(
+        client=client,
+        valkey_server_path=valkey_server_path,
+        config_dir=config_dir,
+        stdout_dir=stdout_dir,
+        test_recovery=test_recovery,
+        password=password,
+        failed_ports_tracker=thread.failed_ports,
+    )
+    
+    thread.run()
+    return thread

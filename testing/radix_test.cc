@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "gtest/gtest.h"
+#include "src/indexes/text/fuzzy.h"
 #include "src/indexes/text/radix_tree.h"
 #include "vmsdk/src/testing_infra/utils.h"
 
@@ -615,5 +616,37 @@ TEST_F(RadixTreeTest, WordIteratorPrefixPartialMatch) {
   VerifyIterator("ca", {{"can", 2}, {"cat", 1}});
 }
 
+// Tests for PathIterator APIs
+TEST_F(RadixTreeTest, PathIteratorAPIs) {
+  AddWords({{"cat", 1}, {"car", 2}, {"can", 3}});
+
+  auto root_iter = prefix_tree_.GetPathIterator("");
+  EXPECT_FALSE(root_iter.Done());
+  EXPECT_TRUE(root_iter.CanDescend());
+
+  // Descend to "ca" node (first child of root)
+  auto ca_iter = root_iter.DescendNew();
+  EXPECT_EQ(ca_iter.GetPath(), "ca");
+  EXPECT_EQ(ca_iter.GetChildEdge(), "n");
+  EXPECT_FALSE(ca_iter.IsWord());
+
+  // Descend to first child "can"
+  auto can_iter = ca_iter.DescendNew();
+  EXPECT_EQ(can_iter.GetPath(), "can");
+  EXPECT_EQ(can_iter.GetChildEdge(), "");
+  EXPECT_TRUE(can_iter.IsWord());
+  EXPECT_EQ(can_iter.GetTarget().value, 3);
+
+  // Iterate through ca_iter's children ("can", "car", "cat")
+  EXPECT_EQ(ca_iter.GetChildEdge(), "n");
+  ca_iter.NextChild();
+  EXPECT_FALSE(ca_iter.Done());
+  EXPECT_EQ(ca_iter.GetChildEdge(), "r");
+  ca_iter.NextChild();
+  EXPECT_FALSE(ca_iter.Done());
+  EXPECT_EQ(ca_iter.GetChildEdge(), "t");
+  ca_iter.NextChild();
+  EXPECT_TRUE(ca_iter.Done());
+}
 }  // namespace
 }  // namespace valkey_search::indexes::text

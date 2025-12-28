@@ -859,22 +859,26 @@ class MemtierProcess:
 
     def process_logs(self):
         for line in self._process_memtier_subprocess_output():
+            is_acceptable_error = False
             if line.error is not None:
-                # If error_predicate is provided and returns True, this is an acceptable error - skip it
+                # If error_predicate is provided and returns True, this is an acceptable error
                 if self.error_predicate is not None and self.error_predicate(line.error):
                     logging.debug(
                         "<%s> encountered expected error (ignored): %s", self.name, line.error
                     )
-                    continue
-                # This is an unexpected error - log it
-                logging.error(
-                    "<%s> encountered error: %s", self.name, line.error
-                )
-            self._add_line_to_stats(line)
+                    is_acceptable_error = True
+                else:
+                    # This is an unexpected error - log it
+                    logging.error(
+                        "<%s> encountered error: %s", self.name, line.error
+                    )
+            self._add_line_to_stats(line, is_acceptable_error=is_acceptable_error)
 
-    def _add_line_to_stats(self, line: MemtierErrorLineInfo):
+    def _add_line_to_stats(self, line: MemtierErrorLineInfo, is_acceptable_error: bool = False):
         if line.error is not None:
-            self.failures += 1
+            # Only count as failure if this is not an acceptable error
+            if not is_acceptable_error:
+                self.failures += 1
         else:
             self.runtime = line.runtime
             self.trailing_ops_sec.insert(0, line.ops_sec)
@@ -1126,7 +1130,6 @@ def pick_master_to_fail(masters: List[ClusterNode], replicas: List[ClusterNode])
     This function implements a random selection strategy to increase test coverage
     and avoid bias. It only selects masters that have at least one replica to
     ensure the cluster can perform automatic failover.
-    
     Returns:
         Selected ClusterNode to fail, or None if no suitable master found
     """
@@ -1163,8 +1166,7 @@ def shutdown_node(addr: str, password: str | None = None) -> bool:
     - SHUTDOWN NOSAVE immediately terminates the process without saving to disk
     - Mimics network partition, process crash, or power failure
     - Triggers automatic replica promotion by the cluster
-    - No persistence side effects that could interfere with the test
-        
+    - No persistence side effects that could interfere with the test     
     Returns:
         True if shutdown command was sent successfully, False otherwise
     """
@@ -1198,7 +1200,6 @@ def wait_for_new_master(
     This function polls the cluster topology until it detects that:
     1. The old master node ID is no longer present as a master
     2. A new master has taken over its slots
-    
     Returns:
         True if new master detected within timeout, False otherwise
     """
@@ -1236,7 +1237,6 @@ def wait_for_cluster_ok(client: valkey.ValkeyCluster, timeout: int = 30) -> bool
     1. All 16384 hash slots are assigned to available masters
     2. No slots are in "migrating" or "importing" state
     3. Cluster state is reported as "ok"
-    
     Returns:
         True if cluster reaches OK state within timeout, False otherwise
     """
@@ -1277,7 +1277,6 @@ def restart_node(
     - Node recovery after failure
     - Replica catch-up with replication
     - FT index consistency after rejoin
-        
     Returns:
         ValkeyServerUnderTest object if restart succeeds, None otherwise
     """
@@ -1368,7 +1367,6 @@ def periodic_failover_task(
     4. Wait for replica promotion
     5. Wait for cluster to reach OK state
     6. Optionally restart the failed node to test recovery
-    
     Returns:
         True if failover sequence completed successfully, False otherwise
     """
@@ -1419,7 +1417,7 @@ def periodic_failover_task(
     
     logging.info("<FAILOVER> Failover completed successfully")
     
-    # Step 6 (Optional): Restart the node for recovery testing
+    # Step 6: Restart the node for recovery testing
     if test_recovery:
         logging.info("<FAILOVER> Testing recovery - restarting failed node")
         # Extract port from address

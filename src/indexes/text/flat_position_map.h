@@ -40,8 +40,10 @@ Encoding scheme:
 - Partitions created every 128 bytes (PARTITION_SIZE) of serialized data
 - Each partition stores only the cumulative sum of deltas (offset implicit from
 byte count)
-- Varint encoding: bit 7=1 (continuation, more bytes follow), bit 7=0 (end/last byte)
-- Position/field mask distinction: LSB of decoded composite value (1=position, 0=field mask)
+- Varint encoding: bit 7=1 (continuation, more bytes follow), bit 7=0 (end/last
+byte)
+- Position/field mask distinction: LSB of decoded composite value (1=position,
+0=field mask)
 - Field masks optimized: if num_fields=1, no field mask bytes stored
 - Field masks only stored when they change or at partition start (when
 num_fields > 1)

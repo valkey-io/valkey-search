@@ -67,7 +67,7 @@ template <typename T>
 static inline T DecodeValue(const char*& ptr, bool& out_is_position) {
   // Read first byte (should not be terminator)
   CHECK(U8(*ptr) != kTerminatorByte) << "Attempted to decode terminator byte";
-  
+
   // Read first byte and check continuation bit
   uint8_t byte = U8(*ptr++);
   T composite = byte & kSevenBitMask;

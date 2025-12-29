@@ -339,7 +339,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         {
             .test_name = "tag_case_sensitive_3",
-            .filter = "@tag_field_case_insensitive:{Tag0@Tag1}",
+            .filter = "@tag_field_case_insensitive:{Tag0|Tag1}",
             .create_success = true,
             .evaluate_success = true,
         },
@@ -358,13 +358,13 @@ INSTANTIATE_TEST_SUITE_P(
         },
         {
             .test_name = "tag_happy_path_2",
-            .filter = "@tag_field_1:{tag1 , tag2}",
+            .filter = "@tag_field_1:{tag1|tag2}",
             .create_success = true,
             .evaluate_success = true,
         },
         {
             .test_name = "tag_happy_path_4",
-            .filter = "@tag_field_with_space:{tag 1 , tag4}",
+            .filter = "@tag_field_with_space:{tag 1|tag4}",
             .create_success = true,
             .evaluate_success = true,
         },
@@ -376,7 +376,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         {
             .test_name = "tag_not_found_2",
-            .filter = "-@tag_field_with_space:{tag1 , tag 2}",
+            .filter = "-@tag_field_with_space:{tag1|tag 2}",
             .create_success = true,
             .evaluate_success = false,
         },

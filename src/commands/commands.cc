@@ -54,7 +54,7 @@ struct InFlightRetryContext : public query::InFlightRetryContextBase {
     return result->parameters->cancellation_token->IsCancelled();
   }
 
-  const std::shared_ptr<IndexSchema>& GetIndexSchema() const override {
+  const std::shared_ptr<IndexSchema> &GetIndexSchema() const override {
     return result->parameters->index_schema;
   }
 
@@ -174,7 +174,8 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
       });
 
       // Text predicate evaluation requires main thread to ensure text indexes
-      // reflect current keyspace. Block if result keys have in-flight mutations.
+      // reflect current keyspace. Block if result keys have in-flight
+      // mutations.
       if (!result->parameters->no_content &&
           query::QueryHasTextPredicate(*result->parameters)) {
         auto neighbor_keys =
@@ -187,7 +188,7 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
             std::move(neighbor_keys));
 
         query::ScheduleOnMainThread(retry_ctx, async::InFlightRetryCallback,
-                                     has_conflicts);
+                                    has_conflicts);
         return;
       }
 

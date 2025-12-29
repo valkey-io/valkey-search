@@ -187,13 +187,11 @@ struct LocalInFlightRetryContext : public query::InFlightRetryContextBase {
     return parameters->cancellation_token->IsCancelled();
   }
 
-  const std::shared_ptr<IndexSchema>& GetIndexSchema() const override {
+  const std::shared_ptr<IndexSchema> &GetIndexSchema() const override {
     return parameters->index_schema;
   }
 
-  void OnComplete() override {
-    tracker->AddResults(neighbors);
-  }
+  void OnComplete() override { tracker->AddResults(neighbors); }
 
   void OnCancelled() override {
     if (parameters->enable_partial_results) {
@@ -298,8 +296,9 @@ absl::Status PerformSearchFanoutAsync(
         [tracker](absl::StatusOr<std::vector<indexes::Neighbor>> &neighbors,
                   std::unique_ptr<SearchParameters> parameters) {
           if (neighbors.ok()) {
-            // Text predicate evaluation requires main thread to ensure text indexes
-            // reflect current keyspace. Block if result keys have in-flight mutations.
+            // Text predicate evaluation requires main thread to ensure text
+            // indexes reflect current keyspace. Block if result keys have
+            // in-flight mutations.
             if (!parameters->no_content &&
                 query::QueryHasTextPredicate(*parameters)) {
               auto neighbor_keys =
@@ -312,7 +311,7 @@ absl::Status PerformSearchFanoutAsync(
                   std::move(neighbor_keys), tracker);
 
               query::ScheduleOnMainThread(retry_ctx, LocalInFlightRetryCallback,
-                                           has_conflicts);
+                                          has_conflicts);
               return;
             }
             tracker->AddResults(*neighbors);

@@ -43,6 +43,7 @@ inline char C(uint8_t v) { return static_cast<char>(v); }
 //=============================================================================
 
 // Encode: composite = (value << 1) | type_bit, big-endian, 7 bits/byte
+// Encoding scheme: bit 7 = 1 (continue), bit 7 = 0 (end/last byte)
 template <typename T>
 static inline void EncodeValue(
     absl::InlinedVector<char, kPartitionSize>& buffer, T value,
@@ -56,21 +57,25 @@ static inline void EncodeValue(
   // Emit big-endian varint
   for (int i = n - 1; i >= 0; --i) {
     uint8_t byte = (v >> (i * 7)) & kSevenBitMask;
-    if (i != n - 1) byte |= kContinueBit;  // continuation bit
+    if (i != 0) byte |= kContinueBit;  // continuation bit on all but last
     buffer.push_back(C(byte));
   }
 }
 
-// Decode: big-endian, first byte bit 7=0, continuation bytes bit 7=1
+// Decode: big-endian, continuation bytes bit 7=1, last byte bit 7=0
 template <typename T>
 static inline T DecodeValue(const char*& ptr, bool& out_is_position) {
   // Read first byte (should not be terminator)
   CHECK(U8(*ptr) != kTerminatorByte) << "Attempted to decode terminator byte";
-  T composite = U8(*ptr++) & kSevenBitMask;
+  
+  // Read first byte and check continuation bit
+  uint8_t byte = U8(*ptr++);
+  T composite = byte & kSevenBitMask;
 
   // Read continuation bytes and assemble big-endian
-  while (U8(*ptr) & kContinueBit) {
-    composite = (composite << kBitsPerByte) | (U8(*ptr++) & kSevenBitMask);
+  while (byte & kContinueBit) {
+    byte = U8(*ptr++);
+    composite = (composite << kBitsPerByte) | (byte & kSevenBitMask);
   }
 
   // Extract type from LSB and value from remaining bits
@@ -101,7 +106,7 @@ FlatPositionMap* FlatPositionMap::Create(
   uint64_t prev_field_mask = 0;
   bool is_partition_start = true;
 
-  // Encode: [position][field_mask (if changed)]...
+  // Encode: [field_mask (if changed)][position]...
   for (const auto& [pos, field_mask] : position_map) {
     // Check for new partition boundary
     if (position_data.size() >=
@@ -116,9 +121,6 @@ FlatPositionMap* FlatPositionMap::Create(
     Position delta = pos - prev_pos;
     cumulative_delta += delta;
 
-    // Encode position delta
-    EncodeValue(position_data, delta, true);  // true = position
-
     // Encode field mask if multi-field and changed
     if (num_text_fields > 1) {
       uint64_t current_mask = field_mask->AsUint64();
@@ -127,6 +129,9 @@ FlatPositionMap* FlatPositionMap::Create(
         prev_field_mask = current_mask;
       }
     }
+
+    // Encode position delta after field mask
+    EncodeValue(position_data, delta, true);  // true = position
 
     prev_pos = pos;
     is_partition_start = false;
@@ -266,27 +271,19 @@ void PositionIterator::NextPosition() {
   current_start_ptr_ = current_end_ptr_;
   const char* ptr = current_start_ptr_;
 
-  // Decode position (always comes first)
+  // Decode next value - could be field mask or position
   bool is_position;
-  Position delta = DecodeValue<Position>(ptr, is_position);
-  CHECK(is_position) << "Expected position, got field mask";
+  __uint128_t value = DecodeValue<__uint128_t>(ptr, is_position);
 
-  cumulative_position_ += delta;
-
-  // Check if next value is a field mask (not terminator, not continuation byte)
-  if (U8(*ptr) != kTerminatorByte && (U8(*ptr) & kContinueBit) == 0) {
-    // Decode next value to check its type (use __uint128_t for large field
-    // masks)
-    const char* peek_ptr = ptr;
-    bool next_is_position;
-    __uint128_t next_value =
-        DecodeValue<__uint128_t>(peek_ptr, next_is_position);
-
-    if (!next_is_position) {
-      // It's a field mask, consume it
-      current_field_mask_ = U64(next_value);
-      ptr = peek_ptr;
-    }
+  if (!is_position) {
+    // It's a field mask - update it and read the position that MUST follow
+    current_field_mask_ = U64(value);
+    Position delta = DecodeValue<Position>(ptr, is_position);
+    CHECK(is_position) << "Expected position after field mask";
+    cumulative_position_ += delta;
+  } else {
+    // It's a position directly (field mask unchanged)
+    cumulative_position_ += U64(value);
   }
 
   current_end_ptr_ = ptr;

@@ -151,12 +151,27 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
     ValkeyModule_ReplyWithString(
         ctx, vmsdk::MakeUniqueValkeyString(*neighbors[i].external_id).get());
     const auto &contents = neighbors[i].attribute_contents.value();
-    // Fields and values as a flat array
-    ValkeyModule_ReplyWithArray(ctx, 2 * contents.size());
-    for (const auto &attribute_content : contents) {
-      ValkeyModule_ReplyWithString(ctx,
-                                   attribute_content.second.GetIdentifier());
-      ValkeyModule_ReplyWithString(ctx, attribute_content.second.value.get());
+
+    if (parameters.return_attributes.empty()) {
+      ValkeyModule_ReplyWithArray(ctx, 2 * contents.size());
+      for (const auto &attribute_content : contents) {
+        ValkeyModule_ReplyWithString(ctx,
+                                     attribute_content.second.GetIdentifier());
+        ValkeyModule_ReplyWithString(ctx, attribute_content.second.value.get());
+      }
+    } else {
+      ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_LEN);
+      size_t cnt = 0;
+      for (const auto &return_attribute : parameters.return_attributes) {
+        auto it = contents.find(
+            vmsdk::ToStringView(return_attribute.identifier.get()));
+        if (it != contents.end()) {
+          ValkeyModule_ReplyWithString(ctx, return_attribute.alias.get());
+          ValkeyModule_ReplyWithString(ctx, it->second.value.get());
+          ++cnt;
+        }
+      }
+      ValkeyModule_ReplySetArrayLength(ctx, 2 * cnt);
     }
   }
 }

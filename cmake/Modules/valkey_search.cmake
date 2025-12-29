@@ -13,10 +13,12 @@ if(CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "x86_64")
   message(STATUS "Current platform is x86_64")
   set(VALKEY_SEARCH_IS_ARM 0)
   set(VALKEY_SEARCH_IS_X86 1)
+  set(VALKEY_SEARCH_IS_GRAV 0)
 else()
   message(STATUS "Current platform is aarch64")
   set(VALKEY_SEARCH_IS_ARM 1)
   set(VALKEY_SEARCH_IS_X86 0)
+  set(VALKEY_SEARCH_IS_GRAV 0)
 endif()
 
 # Check for compiler compatibility
@@ -110,6 +112,41 @@ function(valkey_search_target_update_compile_flags TARGET)
     target_compile_options(${TARGET} PRIVATE -maes)
     target_compile_options(${TARGET} PRIVATE -mfma)
     target_compile_options(${TARGET} PRIVATE -mprfchw)
+  elseif(VALKEY_SEARCH_IS_GRAV)
+    # Graviton-optimized compilation flags
+    # Reference: https://aws.github.io/graviton/perfrunbook/optimization_recommendation.html
+ 
+    # Base architecture flags for Graviton2+ (armv8.2-a with key extensions)
+    # - crypto: AES/SHA acceleration
+    # - fp16: Half-precision floating point (critical for ML workloads)+
+    # - rcpc: Release Consistent Processor Consistent (better atomics)
+    # - dotprod: Dot product instructions (critical for vector operations)
+    target_compile_options(${TARGET} PRIVATE
+      -march=armv8.2-a+crypto+fp16+rcpc+dotprod
+    )
+    target_compile_options(${TARGET} PRIVATE -mtune=neoverse-n1)
+    # target_compile_options(${TARGET} PRIVATE
+    #   -falign-functions=32    # Function entry alignment
+    #   -falign-loops=16        # Loop alignment
+    #   -falign-jumps=16        # Branch target alignment
+    # )
+    # target_compile_options(${TARGET} PRIVATE -fprefetch-loop-arrays)
+        # Try to detect SVE support for Graviton3+ optimization
+    # SVE provides 30-50% improvement on vector operations on Graviton3
+    execute_process(
+      COMMAND ${CMAKE_CXX_COMPILER} -march=armv8.2-a+sve -E -x c /dev/null
+      RESULT_VARIABLE SVE_TEST_RESULT
+      OUTPUT_QUIET
+      ERROR_QUIET
+    )
+    
+    if(SVE_TEST_RESULT EQUAL 0)
+      message(STATUS "Compiler supports SVE - enabling for ${TARGET}")
+      # Note: SIMSIMD will handle runtime dispatch, we just enable compilation
+      target_compile_definitions(${TARGET} PRIVATE VALKEY_SEARCH_SVE_AVAILABLE=1)
+    else()
+      message(STATUS "Compiler doesn't support SVE for ${TARGET}")
+  endif()    
   endif()
   target_compile_options(${TARGET} PRIVATE -mtune=generic)
   target_compile_options(${TARGET} PRIVATE -gdwarf-5)

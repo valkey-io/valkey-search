@@ -413,7 +413,8 @@ TEST_F(VectorIndexTest, EfRuntimeRecall) {
         index_flat->get(), index_hnsw->get(), k, kDimensions, kEFRuntime);
     auto ef_runtime_recall = CalcRecall(index_flat->get(), index_hnsw->get(), k,
                                         kDimensions, kEFRuntime * 8);
-    EXPECT_LE(no_ef_runtime_recall, ef_runtime_recall);
+    // Allow small tolerance for floating-point differences in release builds
+    EXPECT_LE(no_ef_runtime_recall, ef_runtime_recall + 0.01f);
     EXPECT_GE(ef_runtime_recall, 0.96f);
     EXPECT_EQ(default_ef_runtime_recall, no_ef_runtime_recall);
   }

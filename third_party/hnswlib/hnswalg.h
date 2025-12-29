@@ -4,6 +4,7 @@
 #include <stdlib.h>
 
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <deque>
@@ -39,6 +40,19 @@
 namespace hnswlib {
 typedef unsigned int tableint;
 typedef unsigned int linklistsizeint;
+
+// Helper function to safely compare distances even with --fast-math.
+// With --fast-math, NaN comparisons can behave unpredictably, causing
+// infinite loops in convergence checks. This function ensures correct
+// NaN handling by disabling fast-math optimizations only for this comparison.
+template <typename dist_t>
+#if defined(__GNUC__) && !defined(__clang__)
+__attribute__((optimize("no-fast-math", "no-unsafe-math-optimizations")))
+#endif
+inline bool
+is_closer_distance(dist_t new_dist, dist_t current_dist) {
+  return std::isless(new_dist, current_dist);
+}
 
 template <typename dist_t>
 class HierarchicalNSW : public AlgorithmInterface<dist_t> {
@@ -390,16 +404,16 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       if (bare_bone_search) {
         flag_stop_search = candidate_dist > lowerBound;
       } else {
-        if (isCancelled && isCancelled->isCancelled()) { // VALKEYSEARCH
-          flag_stop_search = true; // VALKEYSEARCH
-        } else // VALKEYSEARCH
-        if (stop_condition) {
-          flag_stop_search =
-              stop_condition->should_stop_search(candidate_dist, lowerBound);
-        } else {
-          flag_stop_search =
-              candidate_dist > lowerBound && top_candidates.size() == ef;
-        }
+        if (isCancelled && isCancelled->isCancelled()) {  // VALKEYSEARCH
+          flag_stop_search = true;                        // VALKEYSEARCH
+        } else                                            // VALKEYSEARCH
+          if (stop_condition) {
+            flag_stop_search =
+                stop_condition->should_stop_search(candidate_dist, lowerBound);
+          } else {
+            flag_stop_search =
+                candidate_dist > lowerBound && top_candidates.size() == ef;
+          }
       }
       if (flag_stop_search) {
         break;
@@ -1210,7 +1224,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
             tableint cand = datal[i];
             dist_t d = fstdistfunc_(dataPoint, getDataByInternalId(cand),
                                     dist_func_param_);
-            if (d < curdist) {
+            if (is_closer_distance(d, curdist)) {
               curdist = d;
               currObj = cand;
               changed = true;
@@ -1358,7 +1372,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                 throw std::runtime_error("cand error");
               dist_t d = fstdistfunc_(data_point, getDataByInternalId(cand),
                                       dist_func_param_);
-              if (d < curdist) {
+              if (is_closer_distance(d, curdist)) {
                 curdist = d;
                 currObj = cand;
                 changed = true;
@@ -1403,16 +1417,16 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
   std::priority_queue<std::pair<dist_t, labeltype>> searchKnn(
       const void *query_data, size_t k,
       BaseFilterFunctor *isIdAllowed = nullptr,
-      BaseCancellationFunctor *isCancelled = nullptr // VALKEYSEARCH
-    ) const {
+      BaseCancellationFunctor *isCancelled = nullptr  // VALKEYSEARCH
+  ) const {
     return searchKnn(query_data, k, std::nullopt, isIdAllowed, isCancelled);
   }
 
   std::priority_queue<std::pair<dist_t, labeltype>> searchKnn(
       const void *query_data, size_t k, std::optional<size_t> ef_runtime,
       BaseFilterFunctor *isIdAllowed = nullptr,
-      BaseCancellationFunctor *isCancelled = nullptr // VALKEYSEARCH
-    ) const {
+      BaseCancellationFunctor *isCancelled = nullptr  // VALKEYSEARCH
+  ) const {
     std::priority_queue<std::pair<dist_t, labeltype>> result;
     if (cur_element_count_ == 0) return result;
 
@@ -1439,7 +1453,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
           dist_t d = fstdistfunc_(query_data, getDataByInternalId(cand),
                                   dist_func_param_);
 
-          if (d < curdist) {
+          if (is_closer_distance(d, curdist)) {
             curdist = d;
             currObj = cand;
             changed = true;
@@ -1452,7 +1466,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                         std::vector<std::pair<dist_t, tableint>>,
                         CompareByFirst>
         top_candidates;
-    bool bare_bone_search = !num_deleted_ && !isIdAllowed && !isCancelled; // VALKEYSEARCH
+    bool bare_bone_search =
+        !num_deleted_ && !isIdAllowed && !isCancelled;  // VALKEYSEARCH
     if (bare_bone_search) {
       top_candidates = searchBaseLayerST<true>(
           currObj, query_data, std::max(ef_runtime.value_or(ef_), k),
@@ -1504,7 +1519,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
           dist_t d = fstdistfunc_(query_data, getDataByInternalId(cand),
                                   dist_func_param_);
 
-          if (d < curdist) {
+          if (is_closer_distance(d, curdist)) {
             curdist = d;
             currObj = cand;
             changed = true;
@@ -1517,8 +1532,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                         std::vector<std::pair<dist_t, tableint>>,
                         CompareByFirst>
         top_candidates;
-    top_candidates = searchBaseLayerST<false>(currObj, query_data, 0,
-                                              isIdAllowed, nullptr, &stop_condition);
+    top_candidates = searchBaseLayerST<false>(
+        currObj, query_data, 0, isIdAllowed, nullptr, &stop_condition);
 
     size_t sz = top_candidates.size();
     result.resize(sz);

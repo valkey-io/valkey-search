@@ -24,7 +24,8 @@ bool GetProximityInorderCompatMode() {
 namespace valkey_search::indexes::text {
 
 ProximityIterator::ProximityIterator(
-    std::vector<std::unique_ptr<TextIterator>>&& iters,
+    absl::InlinedVector<std::unique_ptr<TextIterator>,
+                        kProximityTermsInlineCapacity>&& iters,
     std::optional<uint32_t> slop, bool in_order,
     FieldMaskPredicate query_field_mask,
     const InternedStringSet* untracked_keys)

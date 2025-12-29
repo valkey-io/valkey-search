@@ -9,10 +9,11 @@
 
 namespace valkey_search::indexes::text {
 
-TermIterator::TermIterator(std::vector<Postings::KeyIterator>&& key_iterators,
-                           const FieldMaskPredicate query_field_mask,
-                           const InternedStringSet* untracked_keys,
-                           const bool require_positions)
+TermIterator::TermIterator(
+    absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>&&
+        key_iterators,
+    const FieldMaskPredicate query_field_mask,
+    const InternedStringSet* untracked_keys, const bool require_positions)
     : query_field_mask_(query_field_mask),
       key_iterators_(std::move(key_iterators)),
       current_position_(std::nullopt),

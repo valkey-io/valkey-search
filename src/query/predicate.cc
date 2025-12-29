@@ -12,11 +12,13 @@
 #include <utility>
 
 #include "absl/container/flat_hash_set.h"
+#include "absl/container/inlined_vector.h"
 #include "absl/strings/match.h"
 #include "absl/strings/string_view.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
+#include "src/indexes/text/fuzzy.h"
 #include "src/indexes/text/orproximity.h"
 #include "src/indexes/text/proximity.h"
 #include "src/indexes/text/text_index.h"
@@ -77,7 +79,9 @@ EvaluationResult TermPredicate::Evaluate(
       !key_iter.ContainsFields(field_mask)) {
     return EvaluationResult(false);
   }
-  std::vector<indexes::text::Postings::KeyIterator> key_iterators;
+  absl::InlinedVector<indexes::text::Postings::KeyIterator,
+                      indexes::text::kWordExpansionInlineCapacity>
+      key_iterators;
   key_iterators.emplace_back(std::move(key_iter));
   auto iterator = std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), field_mask, nullptr, require_positions);
@@ -102,7 +106,9 @@ EvaluationResult PrefixPredicate::Evaluate(
     const InternedStringPtr& target_key, bool require_positions) const {
   uint64_t field_mask = field_mask_;
   auto word_iter = text_index.GetPrefix().GetWordIterator(term_);
-  std::vector<indexes::text::Postings::KeyIterator> key_iterators;
+  absl::InlinedVector<indexes::text::Postings::KeyIterator,
+                      indexes::text::kWordExpansionInlineCapacity>
+      key_iterators;
   while (!word_iter.Done()) {
     std::string_view word = word_iter.GetWord();
     if (!word.starts_with(term_)) break;
@@ -148,7 +154,9 @@ EvaluationResult SuffixPredicate::Evaluate(
   }
   std::string reversed_term(term_.rbegin(), term_.rend());
   auto word_iter = suffix_opt.value().get().GetWordIterator(reversed_term);
-  std::vector<indexes::text::Postings::KeyIterator> key_iterators;
+  absl::InlinedVector<indexes::text::Postings::KeyIterator,
+                      indexes::text::kWordExpansionInlineCapacity>
+      key_iterators;
   while (!word_iter.Done()) {
     std::string_view word = word_iter.GetWord();
     if (!word.starts_with(reversed_term)) break;
@@ -207,29 +215,29 @@ EvaluationResult FuzzyPredicate::Evaluate(Evaluator& evaluator) const {
 EvaluationResult FuzzyPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
     const InternedStringPtr& target_key, bool require_positions) const {
-  // TODO: Implement fuzzy evaluation
-  CHECK(false) << "Fuzzy Search - Not implemented";
-  return EvaluationResult(false);
-}
+  uint64_t field_mask = field_mask_;
+  // Get all KeyIterators for words within edit distance
+  auto key_iters = indexes::text::FuzzySearch::Search(text_index.GetPrefix(),
+                                                      term_, distance_);
 
-// TODO: Remove proximity evaluator
-ProximityPredicate::ProximityPredicate(
-    std::vector<std::unique_ptr<TextPredicate>> terms, uint32_t slop,
-    bool inorder)
-    : TextPredicate(),
-      terms_(std::move(terms)),
-      inorder_(inorder),
-      slop_(slop) {}
+  // Filter to only include KeyIterators that match target_key and field_mask
+  absl::InlinedVector<indexes::text::Postings::KeyIterator,
+                      indexes::text::kWordExpansionInlineCapacity>
+      filtered_key_iterators;
+  for (auto& key_iter : key_iters) {
+    if (key_iter.SkipForwardKey(target_key) &&
+        key_iter.ContainsFields(field_mask)) {
+      filtered_key_iterators.emplace_back(std::move(key_iter));
+    }
+  }
+  if (filtered_key_iterators.empty()) {
+    return EvaluationResult(false);
+  }
 
-EvaluationResult ProximityPredicate::Evaluate(Evaluator& evaluator) const {
-  return evaluator.EvaluateText(*this, false);
-}
-
-EvaluationResult ProximityPredicate::Evaluate(
-    const valkey_search::indexes::text::TextIndex& text_index,
-    const InternedStringPtr& target_key, bool require_positions) const {
-  CHECK(false) << "Proximity Predicate - To be deleted";
-  return EvaluationResult(false);
+  auto iterator = std::make_unique<indexes::text::TermIterator>(
+      std::move(filtered_key_iterators), field_mask, nullptr,
+      require_positions);
+  return BuildTextEvaluationResult(std::move(iterator), require_positions);
 }
 
 NumericPredicate::NumericPredicate(const indexes::Numeric* index,
@@ -352,7 +360,9 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
     // Short-circuit on first false
     uint32_t childrenWithPositions = 0;
     uint64_t query_field_mask = ~0ULL;
-    std::vector<std::unique_ptr<indexes::text::TextIterator>> iterators;
+    absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
+                        indexes::text::kProximityTermsInlineCapacity>
+        iterators;
     for (const auto& child : children_) {
       EvaluationResult result =
           EvaluatePredicate(child.get(), evaluator, require_positions);
@@ -400,7 +410,8 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
   }
   // Handle OR logic
   auto filter_iterators =
-      std::vector<std::unique_ptr<indexes::text::TextIterator>>();
+      absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
+                          indexes::text::kProximityTermsInlineCapacity>();
   for (const auto& child : children_) {
     EvaluationResult result =
         EvaluatePredicate(child.get(), evaluator, require_positions);

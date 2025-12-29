@@ -15,6 +15,7 @@
 #include <utility>
 
 #include "absl/container/flat_hash_set.h"
+#include "absl/container/inlined_vector.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/ascii.h"
@@ -72,6 +73,23 @@ vmsdk::config::Number& GetQueryStringTermsCount() {
   return dynamic_cast<vmsdk::config::Number&>(*query_terms_count);
 }
 
+/// Register the "fuzzy-max-distance" flag. Controls the maximum edit distance
+/// for fuzzy search queries.
+constexpr absl::string_view kFuzzyMaxDistanceConfig{"fuzzy-max-distance"};
+constexpr uint32_t kDefaultFuzzyMaxDistance{3};
+constexpr uint32_t kMinimumFuzzyMaxDistance{1};
+constexpr uint32_t kMaximumFuzzyMaxDistance{50};
+static auto fuzzy_max_distance =
+    config::NumberBuilder(kFuzzyMaxDistanceConfig, kDefaultFuzzyMaxDistance,
+                          kMinimumFuzzyMaxDistance, kMaximumFuzzyMaxDistance)
+        .WithValidationCallback(CHECK_RANGE(kMinimumFuzzyMaxDistance,
+                                            kMaximumFuzzyMaxDistance,
+                                            kFuzzyMaxDistanceConfig))
+        .Build();
+
+vmsdk::config::Number& GetFuzzyMaxDistance() {
+  return dynamic_cast<vmsdk::config::Number&>(*fuzzy_max_distance);
+}
 }  // namespace options
 
 namespace {
@@ -149,18 +167,7 @@ std::string PrintPredicateTree(const query::Predicate* predicate, int indent) {
       std::string field_mask_str = std::to_string(text->GetFieldMask());
 
       // Determine specific text predicate type
-      if (auto proximity =
-              dynamic_cast<const query::ProximityPredicate*>(predicate)) {
-        result += indent_str + "TEXT-PROXIMITY(field_mask=" + field_mask_str +
-                  ", slop=" + std::to_string(proximity->Slop()) +
-                  ", inorder=" + (proximity->InOrder() ? "true" : "false") +
-                  "){\n";
-        for (const auto& term : proximity->Terms()) {
-          result += PrintPredicateTree(term.get(), indent + 1);
-        }
-        result += indent_str + "}\n";
-      } else if (auto term =
-                     dynamic_cast<const query::TermPredicate*>(predicate)) {
+      if (auto term = dynamic_cast<const query::TermPredicate*>(predicate)) {
         result += indent_str + "TEXT-TERM(\"" +
                   std::string(term->GetTextString()) +
                   "\", field_mask=" + field_mask_str + ")\n";
@@ -491,8 +498,6 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
       logical_operator, std::move(children), options_.slop, options_.inorder);
 };
 
-static const uint32_t FUZZY_MAX_DISTANCE = 3;
-
 // Handles backslash escaping for both quoted and unquoted text
 // Escape Syntax:
 // \\ -> \
@@ -619,7 +624,8 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
         // Leading percent
         while (Match('%', false)) {
           leading_percent_count++;
-          if (leading_percent_count > FUZZY_MAX_DISTANCE) break;
+          if (leading_percent_count > options::GetFuzzyMaxDistance().GetValue())
+            break;
         }
         continue;
       } else {
@@ -656,7 +662,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
   // Build predicate directly based on detected pattern
   if (leading_percent_count > 0) {
     if (trailing_percent_count == leading_percent_count &&
-        leading_percent_count <= FUZZY_MAX_DISTANCE) {
+        leading_percent_count <= options::GetFuzzyMaxDistance().GetValue()) {
       if (token.empty()) return absl::InvalidArgumentError("Empty fuzzy token");
       VMSDK_RETURN_IF_ERROR(SetupTextFieldConfiguration(
           field_mask, min_stem_size, field_or_default, false));
@@ -665,7 +671,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
                                                   std::move(token),
                                                   leading_percent_count),
           break_on_query_syntax};
-      return absl::InvalidArgumentError("Unsupported query operation");
+      return fuzzy;
     } else {
       return absl::InvalidArgumentError("Invalid fuzzy '%' markers");
     }
@@ -759,19 +765,20 @@ absl::Status FilterParser::SetupTextFieldConfiguration(
 // This function is called when the characters detected are potentially those of
 // a text predicate.
 // Text Parsing Syntax:
-//   Quoted: "word1 word2" -> ProximityPredicate(exact, slop=0, inorder=true)
+//   Quoted: "word1 word2" -> ComposedAND(exact, slop=0, inorder=true)
 //   Unquoted: word1 word2 -> TermPredicate(word1) - stops at first token
 // Token boundaries for unquoted text: <punctuation> ( ) | @ " - { } [ ] : ; $
 // Quoted phrases (Exact Phrase) parse all tokens within quotes, unquoted
 // parsing stops after first token.
-// TODO: Update ProximityPredicate to ComposedAND.
 absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
     const std::optional<std::string>& field_or_default) {
   auto text_index_schema = index_schema_.GetTextIndexSchema();
   if (!text_index_schema) {
     return absl::InvalidArgumentError("Index does not have any text field");
   }
-  std::vector<std::unique_ptr<query::TextPredicate>> terms;
+  absl::InlinedVector<std::unique_ptr<query::TextPredicate>,
+                      indexes::text::kProximityTermsInlineCapacity>
+      terms;
   bool in_quotes = false;
   bool exact_phrase = false;
   while (!IsEnd()) {

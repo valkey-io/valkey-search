@@ -5,8 +5,8 @@
  *
  */
 
-#ifndef _VALKEY_SEARCH_INDEXES_TEXT_RADIX_TREE_H
-#define _VALKEY_SEARCH_INDEXES_TEXT_RADIX_TREE_H
+#ifndef _VALKEY_SEARCH_INDEXES_TEXT_RAX_WRAPPER_H
+#define _VALKEY_SEARCH_INDEXES_TEXT_RAX_WRAPPER_H
 
 /*
 
@@ -223,6 +223,19 @@ public:
   // a subtree can be interrogated.
   //
   class PathIterator {
+   public:
+    // Constructor - navigates to prefix
+    PathIterator(rax* rax, absl::string_view prefix);
+
+    // Destructor
+    ~PathIterator();
+
+    // Disable copy, enable move
+    PathIterator(const PathIterator&) = delete;
+    PathIterator& operator=(const PathIterator&) = delete;
+    PathIterator(PathIterator&& other) noexcept;
+    PathIterator& operator=(PathIterator&& other) noexcept;
+
     // Is the iterator itself pointing to a valid node?
     bool Done() const;
 
@@ -230,7 +243,7 @@ public:
     bool IsWord() const;
 
     // Advance to the next character at this level of the RadixTree
-    void Next();
+    void NextChild();
 
     // Seek to the char that's greater than or equal
     // returns true if target char is present, false otherwise
@@ -243,15 +256,34 @@ public:
     // position asserts if !CanDescend()
     PathIterator DescendNew() const;
 
-    // get current Path. If IsWord is true, then there's a word here....
-    absl::string_view GetPath();
+    // Get current Path. If IsWord is true, then there's a word here....
+    absl::string_view GetPath() const;
+
+    // Get the edge label for the current child being iterated
+    absl::string_view GetChildEdge();
 
     // Get the target for this word, will assert if !IsWord()
-    const void* GetTarget() const;
+    void* GetTarget() const;
+
+    // Postings-specific accessor. Caller is responsible for tracking the type.
+    InvasivePtr<Postings> GetPostingsTarget() const;
 
     // Defrag the current Node and then defrag the Postings if this points to
     // one.
     void Defrag();
+
+   private:
+    friend class Rax;
+
+    // Private constructor for DescendNew - directly positions at a node
+    PathIterator(rax* rax, raxNode* node, std::string path);
+
+    rax* rax_;                 // Reference to the rax tree
+    raxNode* node_;            // Current node we're at
+    std::string path_;         // Path to current node
+    size_t child_index_;       // Current child index (for branching nodes)
+    bool exhausted_;           // True when all children visited
+    std::string child_edge_;   // Cached edge for GetChildEdge()
   };
 };
 

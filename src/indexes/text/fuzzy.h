@@ -15,7 +15,7 @@
 #include "absl/strings/string_view.h"
 #include "invasive_ptr.h"
 #include "posting.h"
-#include "radix_tree.h"
+#include "rax_wrapper.h"
 #include "text.h"
 
 namespace valkey_search::indexes::text {
@@ -25,7 +25,7 @@ struct FuzzySearch {
   // Returns KeyIterators for all words within edit distance <= max_distance
   static absl::InlinedVector<Postings::KeyIterator,
                              kWordExpansionInlineCapacity>
-  Search(const RadixTree<InvasivePtr<Postings>>& tree,
+  Search(const Rax& tree,
          absl::string_view pattern, size_t max_distance, uint32_t max_words) {
     absl::InlinedVector<indexes::text::Postings::KeyIterator,
                         kWordExpansionInlineCapacity>
@@ -55,7 +55,7 @@ struct FuzzySearch {
 
  private:
   static void SearchRecursive(
-      RadixTree<InvasivePtr<Postings>>::PathIterator iter,
+      Rax::PathIterator iter,
       absl::string_view pattern, size_t max_distance,
       std::string word,   // Current word being built
       char prev_tree_ch,  // Previous character (for transposition detection)
@@ -150,7 +150,7 @@ struct FuzzySearch {
         // The edit distance is in prev row now as we did the row swap
         // in loop above
         if (child_iter.IsWord() && prev[pattern.length()] <= max_distance) {
-          key_iterators.emplace_back(child_iter.GetTarget()->GetKeyIterator());
+          key_iterators.emplace_back(child_iter.GetPostingsTarget()->GetKeyIterator());
           ++word_count;
           if (word_count >= max_words) {
             return;

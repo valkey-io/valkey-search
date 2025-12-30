@@ -220,30 +220,244 @@ InvasivePtr<Postings> Rax::WordIterator::GetPostingsTarget() const {
 
 /*** PathIterator ***/
 
-bool Rax::PathIterator::Done() const { throw std::logic_error("TODO"); }
+namespace {
 
-bool Rax::PathIterator::IsWord() const { throw std::logic_error("TODO"); }
+// Helper to compute padding for rax node
+inline size_t RaxPadding(size_t nodesize) {
+  return (sizeof(void*) - ((nodesize + 4) % sizeof(void*))) & (sizeof(void*) - 1);
+}
 
-void Rax::PathIterator::Next() { throw std::logic_error("TODO"); }
+// Helper to get pointer to first child in a rax node
+inline raxNode** RaxNodeFirstChildPtr(raxNode* n) {
+  return reinterpret_cast<raxNode**>(n->data + n->size + RaxPadding(n->size));
+}
+
+// Helper to get data stored in a rax node
+inline void* RaxNodeGetData(raxNode* n) {
+  if (!n->iskey || n->isnull) return nullptr;
+  size_t node_len = sizeof(raxNode) + n->size + RaxPadding(n->size) +
+                    (n->iscompr ? sizeof(raxNode*) : sizeof(raxNode*) * n->size) +
+                    sizeof(void*);
+  return *reinterpret_cast<void**>(reinterpret_cast<char*>(n) + node_len - sizeof(void*));
+}
+
+// Helper to check if node is a leaf (no children)
+inline bool RaxNodeIsLeaf(raxNode* n) {
+  return n->size == 0 && !n->iscompr;
+}
+
+}  // namespace
+
+Rax::PathIterator Rax::GetPathIterator(absl::string_view prefix) const {
+  return PathIterator(rax_, prefix);
+}
+
+Rax::PathIterator::PathIterator(rax* rax, absl::string_view prefix)
+    : rax_(rax), node_(nullptr), child_index_(0), exhausted_(false) {
+  if (!rax_ || !rax_->head) {
+    exhausted_ = true;
+    return;
+  }
+
+  // Navigate to the prefix, similar to raxLowWalk
+  raxNode* h = rax_->head;
+  size_t i = 0;
+
+  while (i < prefix.size()) {
+    if (h->iscompr) {
+      // Compressed node: check how much of the path matches
+      size_t match = 0;
+      size_t max_match = std::min(static_cast<size_t>(h->size), prefix.size() - i);
+      while (match < max_match && h->data[match] == static_cast<unsigned char>(prefix[i + match])) {
+        match++;
+      }
+      
+      if (match < h->size) {
+        // Partial match or no match - prefix not fully in tree
+        if (match < prefix.size() - i) {
+          // Prefix extends beyond what we matched, no valid node
+          exhausted_ = true;
+          return;
+        }
+        // Prefix ends in the middle of compressed path - position here
+        break;
+      }
+      i += h->size;
+      // Descend to child
+      h = *reinterpret_cast<raxNode**>(h->data + h->size + RaxPadding(h->size));
+    } else {
+      // Branching node: find child with matching byte
+      unsigned char c = static_cast<unsigned char>(prefix[i]);
+      size_t pos;
+      for (pos = 0; pos < h->size; pos++) {
+        if (h->data[pos] >= c) break;
+      }
+      if (pos >= h->size || h->data[pos] != c) {
+        // Character not found
+        exhausted_ = true;
+        return;
+      }
+      i++;
+      // Descend to child
+      raxNode** children = RaxNodeFirstChildPtr(h);
+      h = children[pos];
+    }
+  }
+
+  node_ = h;
+  path_ = std::string(prefix);
+}
+
+Rax::PathIterator::~PathIterator() = default;
+
+// Private constructor for DescendNew - directly positions at a node
+Rax::PathIterator::PathIterator(rax* rax, raxNode* node, std::string path)
+    : rax_(rax), node_(node), path_(std::move(path)), child_index_(0), exhausted_(false) {}
+
+Rax::PathIterator::PathIterator(PathIterator&& other) noexcept
+    : rax_(other.rax_),
+      node_(other.node_),
+      path_(std::move(other.path_)),
+      child_index_(other.child_index_),
+      exhausted_(other.exhausted_),
+      child_edge_(std::move(other.child_edge_)) {
+  other.node_ = nullptr;
+  other.exhausted_ = true;
+}
+
+Rax::PathIterator& Rax::PathIterator::operator=(PathIterator&& other) noexcept {
+  if (this != &other) {
+    rax_ = other.rax_;
+    node_ = other.node_;
+    path_ = std::move(other.path_);
+    child_index_ = other.child_index_;
+    exhausted_ = other.exhausted_;
+    child_edge_ = std::move(other.child_edge_);
+    other.node_ = nullptr;
+    other.exhausted_ = true;
+  }
+  return *this;
+}
+
+bool Rax::PathIterator::Done() const {
+  if (!node_ || exhausted_) return true;
+  // Leaf nodes have no children to iterate
+  if (RaxNodeIsLeaf(node_)) return true;
+  // Branching nodes: done when past all children
+  if (!node_->iscompr) return child_index_ >= node_->size;
+  // Compressed nodes have exactly one child edge
+  return false;
+}
+
+bool Rax::PathIterator::IsWord() const {
+  return node_ && node_->iskey;
+}
+
+void Rax::PathIterator::NextChild() {
+  if (!node_ || exhausted_) return;
+  
+  if (node_->iscompr || RaxNodeIsLeaf(node_)) {
+    // Compressed or leaf: only one "child", mark as exhausted after first
+    exhausted_ = true;
+  } else {
+    // Branching node: move to next child
+    child_index_++;
+  }
+}
 
 bool Rax::PathIterator::SeekForward(char target) {
-  throw std::logic_error("TODO");
+  if (!node_ || exhausted_) return false;
+  
+  if (node_->iscompr) {
+    // Compressed node: check if first char of compressed path matches
+    if (node_->size > 0 && node_->data[0] == static_cast<unsigned char>(target)) {
+      return true;
+    }
+    exhausted_ = true;
+    return false;
+  }
+  
+  if (RaxNodeIsLeaf(node_)) {
+    exhausted_ = true;
+    return false;
+  }
+  
+  // Branching node: binary-like search for target (children are sorted)
+  unsigned char t = static_cast<unsigned char>(target);
+  for (size_t i = child_index_; i < node_->size; i++) {
+    if (node_->data[i] == t) {
+      child_index_ = i;
+      return true;
+    }
+    if (node_->data[i] > t) {
+      child_index_ = i;
+      return false;
+    }
+  }
+  child_index_ = node_->size;  // Past end
+  return false;
 }
 
-bool Rax::PathIterator::CanDescend() const { throw std::logic_error("TODO"); }
-
-typename Rax::PathIterator Rax::PathIterator::DescendNew() const {
-  throw std::logic_error("TODO");
+bool Rax::PathIterator::CanDescend() const {
+  if (!node_ || exhausted_) return false;
+  if (RaxNodeIsLeaf(node_)) return false;
+  if (node_->iscompr) return true;  // Compressed always has one child
+  return child_index_ < node_->size;
 }
 
-absl::string_view Rax::PathIterator::GetPath() {
-  throw std::logic_error("TODO");
+Rax::PathIterator Rax::PathIterator::DescendNew() const {
+  CHECK(CanDescend()) << "Cannot descend from leaf or exhausted iterator";
+  
+  if (node_->iscompr) {
+    // Compressed: descend through the compressed path to child
+    std::string new_path = path_;
+    new_path.append(reinterpret_cast<const char*>(node_->data), node_->size);
+    raxNode* child = *reinterpret_cast<raxNode**>(
+        node_->data + node_->size + RaxPadding(node_->size));
+    return PathIterator(rax_, child, std::move(new_path));
+  }
+  
+  // Branching: descend through current child
+  std::string new_path = path_;
+  new_path += static_cast<char>(node_->data[child_index_]);
+  raxNode** children = RaxNodeFirstChildPtr(node_);
+  return PathIterator(rax_, children[child_index_], std::move(new_path));
 }
 
-const void* Rax::PathIterator::GetTarget() const {
-  throw std::logic_error("TODO");
+absl::string_view Rax::PathIterator::GetPath() const {
+  return path_;
 }
 
-void Rax::PathIterator::Defrag() { throw std::logic_error("TODO"); }
+absl::string_view Rax::PathIterator::GetChildEdge() {
+  if (!node_ || exhausted_) {
+    child_edge_.clear();
+    return child_edge_;
+  }
+  
+  if (node_->iscompr) {
+    // Compressed: edge is the entire compressed path
+    child_edge_.assign(reinterpret_cast<const char*>(node_->data), node_->size);
+  } else if (!RaxNodeIsLeaf(node_) && child_index_ < node_->size) {
+    // Branching: edge is single character
+    child_edge_.assign(1, static_cast<char>(node_->data[child_index_]));
+  } else {
+    child_edge_.clear();
+  }
+  return child_edge_;
+}
+
+void* Rax::PathIterator::GetTarget() const {
+  CHECK(IsWord()) << "Cannot get target from non-word node";
+  return RaxNodeGetData(node_);
+}
+
+InvasivePtr<Postings> Rax::PathIterator::GetPostingsTarget() const {
+  return InvasivePtr<Postings>::CopyRaw(
+      static_cast<InvasivePtrRaw<Postings>>(GetTarget()));
+}
+
+void Rax::PathIterator::Defrag() {
+  // TODO: Implement defragmentation if needed
+}
 
 }  // namespace valkey_search::indexes::text

@@ -146,6 +146,8 @@ struct RemoteInFlightRetryContext : public query::InFlightRetryContextBase {
     return parameters->index_schema;
   }
 
+  const char* GetDesc() const override { return "Remote full-text query"; }
+
   void OnComplete() override {
     auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
     const auto& attribute_data_type =
@@ -175,12 +177,6 @@ struct RemoteInFlightRetryContext : public query::InFlightRetryContextBase {
     }
   }
 };
-
-void RemoteInFlightRetryCallback(ValkeyModuleCtx* ctx, void* data) {
-  auto* retry_ctx = static_cast<RemoteInFlightRetryContext*>(data);
-  query::ProcessRetry(ctx, retry_ctx, RemoteInFlightRetryCallback,
-                      "Remote full-text query");
-}
 
 }  // namespace
 
@@ -241,8 +237,7 @@ query::SearchResponseCallback Service::MakeSearchCallback(
           std::move(neighbors.value()), std::move(parameters),
           std::move(neighbor_keys));
 
-      query::ScheduleOnMainThread(retry_ctx, RemoteInFlightRetryCallback,
-                                  has_conflicts);
+      query::ScheduleOnMainThread(retry_ctx, has_conflicts);
       return;
     }
 

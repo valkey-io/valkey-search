@@ -191,6 +191,10 @@ struct LocalInFlightRetryContext : public query::InFlightRetryContextBase {
     return parameters->index_schema;
   }
 
+  const char* GetDesc() const override {
+    return "Local fanout full-text query";
+  }
+
   void OnComplete() override { tracker->AddResults(neighbors); }
 
   void OnCancelled() override {
@@ -199,12 +203,6 @@ struct LocalInFlightRetryContext : public query::InFlightRetryContextBase {
     }
   }
 };
-
-void LocalInFlightRetryCallback(ValkeyModuleCtx *ctx, void *data) {
-  auto *retry_ctx = static_cast<LocalInFlightRetryContext *>(data);
-  query::ProcessRetry(ctx, retry_ctx, LocalInFlightRetryCallback,
-                      "Local fanout full-text query");
-}
 
 void PerformRemoteSearchRequest(
     std::unique_ptr<coordinator::SearchIndexPartitionRequest> request,
@@ -310,8 +308,7 @@ absl::Status PerformSearchFanoutAsync(
                   std::move(neighbors.value()), std::move(parameters),
                   std::move(neighbor_keys), tracker);
 
-              query::ScheduleOnMainThread(retry_ctx, LocalInFlightRetryCallback,
-                                          has_conflicts);
+              query::ScheduleOnMainThread(retry_ctx, has_conflicts);
               return;
             }
             tracker->AddResults(*neighbors);

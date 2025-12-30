@@ -58,6 +58,8 @@ struct InFlightRetryContext : public query::InFlightRetryContextBase {
     return result->parameters->index_schema;
   }
 
+  const char* GetDesc() const override { return "Full-text query"; }
+
   void OnComplete() override {
     blocked_client.SetReplyPrivateData(result.release());
   }
@@ -67,11 +69,6 @@ struct InFlightRetryContext : public query::InFlightRetryContextBase {
     blocked_client.SetReplyPrivateData(result.release());
   }
 };
-
-void InFlightRetryCallback(ValkeyModuleCtx *ctx, void *data) {
-  auto *retry_ctx = static_cast<InFlightRetryContext *>(data);
-  query::ProcessRetry(ctx, retry_ctx, InFlightRetryCallback, "Full-text query");
-}
 
 int Timeout(ValkeyModuleCtx *ctx, [[maybe_unused]] ValkeyModuleString **argv,
             [[maybe_unused]] int argc) {
@@ -187,8 +184,7 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
             std::move(blocked_client), std::move(result),
             std::move(neighbor_keys));
 
-        query::ScheduleOnMainThread(retry_ctx, async::InFlightRetryCallback,
-                                    has_conflicts);
+        query::ScheduleOnMainThread(retry_ctx, has_conflicts);
         return;
       }
 

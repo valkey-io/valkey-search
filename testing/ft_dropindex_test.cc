@@ -19,6 +19,7 @@
 #include "src/index_schema.h"
 #include "src/keyspace_event_manager.h"
 #include "src/schema_manager.h"
+#include "src/valkey_search_options.h"
 #include "testing/common.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/thread_pool.h"
@@ -245,6 +246,105 @@ INSTANTIATE_TEST_SUITE_P(
     [](const TestParamInfo<MultiFtDropIndexTestCase>& info) {
       return info.param.test_name;
     });
+
+// Test replication behavior based on coordinator setting
+TEST_F(FTDropIndexTest, ReplicationBehaviorCoordinatorEnabled) {
+  VMSDK_EXPECT_OK(
+      const_cast<vmsdk::config::Boolean&>(options::GetUseCoordinator())
+          .SetValue(true));
+
+  data_model::IndexSchema index_schema_proto;
+  ASSERT_TRUE(
+      google::protobuf::TextFormat::ParseFromString(R"(
+    name: "test_idx"
+    db_num: 0
+    subscribed_key_prefixes: "prefix_1"
+    attribute_data_type: ATTRIBUTE_DATA_TYPE_HASH
+    attributes: {
+      alias: "test_attribute_1"
+      identifier: "test_identifier_1"
+      index: {
+        vector_index: {
+          dimension_count: 10
+          normalize: true
+          distance_metric: DISTANCE_METRIC_COSINE
+          vector_data_type: VECTOR_DATA_TYPE_FLOAT32
+          initial_cap: 100
+          hnsw_algorithm {
+            m: 240
+            ef_construction: 400
+            ef_runtime: 30
+          }
+        }
+      }
+    }
+  )",
+                                                    &index_schema_proto));
+
+  VMSDK_EXPECT_OK(SchemaManager::Instance().CreateIndexSchema(
+      &fake_ctx_, index_schema_proto));
+
+  EXPECT_CALL(*kMockValkeyModule, ReplicateVerbatim(&fake_ctx_))
+      .Times(0);  // Should NOT replicate when coordinator enabled
+
+  ValkeyModuleString* argv[2];
+  argv[0] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.DROPINDEX");
+  argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_idx");
+
+  auto status = FTDropIndexCmd(&fake_ctx_, argv, 2);
+
+  TestValkeyModule_FreeString(&fake_ctx_, argv[0]);
+  TestValkeyModule_FreeString(&fake_ctx_, argv[1]);
+}
+
+TEST_F(FTDropIndexTest, ReplicationBehaviorCoordinatorDisabled) {
+  VMSDK_EXPECT_OK(
+      const_cast<vmsdk::config::Boolean&>(options::GetUseCoordinator())
+          .SetValue(false));
+
+  data_model::IndexSchema index_schema_proto;
+  ASSERT_TRUE(
+      google::protobuf::TextFormat::ParseFromString(R"(
+    name: "test_idx"
+    db_num: 0
+    subscribed_key_prefixes: "prefix_1"
+    attribute_data_type: ATTRIBUTE_DATA_TYPE_HASH
+    attributes: {
+      alias: "test_attribute_1"
+      identifier: "test_identifier_1"
+      index: {
+        vector_index: {
+          dimension_count: 10
+          normalize: true
+          distance_metric: DISTANCE_METRIC_COSINE
+          vector_data_type: VECTOR_DATA_TYPE_FLOAT32
+          initial_cap: 100
+          hnsw_algorithm {
+            m: 240
+            ef_construction: 400
+            ef_runtime: 30
+          }
+        }
+      }
+    }
+  )",
+                                                    &index_schema_proto));
+
+  VMSDK_EXPECT_OK(SchemaManager::Instance().CreateIndexSchema(
+      &fake_ctx_, index_schema_proto));
+
+  EXPECT_CALL(*kMockValkeyModule, ReplicateVerbatim(&fake_ctx_))
+      .Times(1);  // Should replicate when coordinator disabled
+
+  ValkeyModuleString* argv[2];
+  argv[0] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.DROPINDEX");
+  argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_idx");
+
+  auto status = FTDropIndexCmd(&fake_ctx_, argv, 2);
+
+  TestValkeyModule_FreeString(&fake_ctx_, argv[0]);
+  TestValkeyModule_FreeString(&fake_ctx_, argv[1]);
+}
 
 }  // namespace
 

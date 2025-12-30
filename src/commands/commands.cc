@@ -58,7 +58,7 @@ struct InFlightRetryContext : public query::InFlightRetryContextBase {
     return result->parameters->index_schema;
   }
 
-  const char* GetDesc() const override { return "Full-text query"; }
+  const char *GetDesc() const override { return "Full-text query"; }
 
   void OnComplete() override {
     blocked_client.SetReplyPrivateData(result.release());

@@ -191,7 +191,7 @@ struct LocalInFlightRetryContext : public query::InFlightRetryContextBase {
     return parameters->index_schema;
   }
 
-  const char* GetDesc() const override {
+  const char *GetDesc() const override {
     return "Local fanout full-text query";
   }
 

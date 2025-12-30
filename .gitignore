@@ -17,3 +17,7 @@ dump.rdb
 test-data*
 integration/test-data/
 .kiro/
+venv/
+.venv/
+env/
+.env/

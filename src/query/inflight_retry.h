@@ -41,6 +41,7 @@ class InFlightRetryContextBase {
   virtual void OnCancelled() = 0;
   virtual bool IsCancelled() const = 0;
   virtual const std::shared_ptr<IndexSchema>& GetIndexSchema() const = 0;
+  virtual const char* GetDesc() const = 0;
   const std::vector<InternedStringPtr>& GetNeighborKeys() const {
     return neighbor_keys_;
   }
@@ -49,57 +50,19 @@ class InFlightRetryContextBase {
   std::vector<InternedStringPtr> neighbor_keys_;
 };
 
+// Timer callback for retry scheduling
+void InFlightRetryCallback(ValkeyModuleCtx* ctx, void* data);
+
 // Process a retry attempt. Handles cancellation, conflict checking, and
 // completion. This is the main entry point called by timer callbacks.
-template <typename RetryContext>
-void ProcessRetry(ValkeyModuleCtx* ctx, RetryContext* retry_ctx,
-                  void (*timer_callback)(ValkeyModuleCtx*, void*),
-                  const char* log_prefix) {
-  if (retry_ctx->IsCancelled()) {
-    retry_ctx->OnCancelled();
-    delete retry_ctx;
-    return;
-  }
-
-  if (retry_ctx->GetIndexSchema()->HasAnyConflictingInFlightKeys(
-          retry_ctx->GetNeighborKeys())) {
-    ++Metrics::GetStats().fulltext_query_retry_cnt;
-    VMSDK_LOG(DEBUG, ctx)
-        << log_prefix << " has conflicting in-flight keys, scheduling retry";
-    ValkeyModule_CreateTimer(ctx,
-                             options::GetInFlightRetryIntervalMs().GetValue(),
-                             timer_callback, retry_ctx);
-    return;
-  }
-
-  retry_ctx->OnComplete();
-  delete retry_ctx;
-}
+void ProcessRetry(ValkeyModuleCtx* ctx, InFlightRetryContextBase* retry_ctx);
 
 // Schedule the retry context to be processed on the main thread.
 // - If `has_conflicts` is true: schedules with delay (background saw conflicts)
 // - If `has_conflicts` is false: schedules immediately (background saw no
 //   conflicts, but main thread must still verify before completing)
-template <typename RetryContext>
-void ScheduleOnMainThread(RetryContext* retry_ctx,
-                          void (*timer_callback)(ValkeyModuleCtx*, void*),
-                          bool has_conflicts) {
-  if (has_conflicts) {
-    ++Metrics::GetStats().fulltext_query_blocked_cnt;
-  }
-  vmsdk::RunByMain(
-      [retry_ctx, timer_callback, has_conflicts]() {
-        auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
-        if (has_conflicts) {
-          ValkeyModule_CreateTimer(
-              ctx.get(), options::GetInFlightRetryIntervalMs().GetValue(),
-              timer_callback, retry_ctx);
-        } else {
-          timer_callback(ctx.get(), retry_ctx);
-        }
-      },
-      true);
-}
+void ScheduleOnMainThread(InFlightRetryContextBase* retry_ctx,
+                          bool has_conflicts);
 
 }  // namespace valkey_search::query
 

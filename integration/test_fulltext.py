@@ -1490,6 +1490,56 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # result = client.execute_command("FT.SEARCH", "idx3", '%%drive%%', "return", "1", "content2")
         # assert (result[0], set(result[1::2])) == (3, {b"doc:4", b"doc:11", b"doc:12"})
 
+    def test_return_clause(self):
+        client: Valkey = self.server.get_new_client()
+        client.execute_command("FT.CREATE", "idx1", "ON", "HASH", "SCHEMA",
+            "content", "TEXT", "NOSTEM",
+            "content2", "TEXT", "NOSTEM",
+            "price", "NUMERIC",
+            "category", "TAG")
+        # Insert test documents
+        client.execute_command("HSET", "doc:1", "content", "I am going to a race", "content2", "Driver drove the car", "price", "100", "category", "sports")
+        client.execute_command("HSET", "doc:2", "content", "I am going to a concert", "content2", "Singer sang the song", "price", "200", "category", "music")
+        client.execute_command("HSET", "doc:3", "content", "I am going to a movie")
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx1")
+        # (1) Without Return clause
+        result = client.execute_command("FT.SEARCH", "idx1", 'I am going to a race')
+        assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+        # Validate full document content
+        doc_fields = dict(zip(result[2][::2], result[2][1::2]))
+        expected_content = {
+            b'content': b"I am going to a race",
+            b'content2': b"Driver drove the car",
+            b'price': b"100",
+            b'category': b"sports"
+        }
+        assert doc_fields == expected_content
+        # (2) With Return clause
+        result = client.execute_command("FT.SEARCH", "idx1", 'I am going to a race', "RETURN", "1", "content")
+        assert (result[0], set(result[1::2]), result[2]) == (1, {b"doc:1"}, [b"content", b"I am going to a race"])
+        # (3) With Multiple Return fields
+        result = client.execute_command("FT.SEARCH", "idx1", 'I am going to a race', "RETURN", "3", "content", "content2", "price")
+        assert (result[0], set(result[1::2]), set(result[2])) == (1, {b"doc:1"}, {b"content", b"I am going to a race", b"price", b"100", b"content2", b"Driver drove the car"})
+        # (4) With Return clause of non-existent field
+        result = client.execute_command("FT.SEARCH", "idx1", 'I am going to a movie', "RETURN", "2", "content2", "price")
+        assert (result[0], set(result[1::2]), result[2]) == (1, {b"doc:3"}, [])
+        # (5) With Return clause + LIMIT
+        result = client.execute_command("FT.SEARCH", "idx1", 'I am going', "RETURN", "1", "content", "LIMIT", "0", "2")
+        assert result[0] == 3 and len(result) == 5
+        expected_docs = {b"doc:1", b"doc:2", b"doc:3"}
+        expected_contents = {b"I am going to a race", b"I am going to a concert", b"I am going to a movie"}
+        # Validate both returned documents
+        for i in [1, 3]:
+            assert result[i] in expected_docs
+            assert result[i+1] == [b"content", result[i+1][1]] and result[i+1][1] in expected_contents
+        # (6) With Return clause + NOCONTENT. Return has no effect.
+        result = client.execute_command("FT.SEARCH", "idx1", 'I am going', "RETURN", "1", "content2", "NOCONTENT")
+        assert (result[0], set(result[1:])) == (3, {b"doc:1", b"doc:2", b"doc:3"})
+        # (7) With Return clause + Field Aliasing
+        result = client.execute_command("FT.SEARCH", "idx1", 'race', "RETURN", "6", "content", "AS", "text_content", "price", "AS", "numeric_content")
+        assert result == [1, b"doc:1", [b"text_content", b"I am going to a race", b"numeric_content", b"100"]]
+
 class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
     """
     Tests that require debug mode enabled for memory statistics validation.

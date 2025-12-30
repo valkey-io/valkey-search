@@ -342,6 +342,11 @@ absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
           }
           break;
         }
+        case indexes::IndexerType::kText: {
+          // Text indexes don't store retrievable raw values
+          any_value_missing = true;
+          break;
+        }
         default:
           CHECK(false) << "Unsupported indexer type: "
                        << (int)attribute_info.index->GetIndexerType();

@@ -91,19 +91,37 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
   std::vector<std::string> tokens;
   size_t pos = 0;
   while (pos < text.size()) {
+    // Skip punctuation, but handle backslash escape sequences
     while (pos < text.size() && IsPunctuation(text[pos])) {
+      // Check for backslash escape sequence
+      if (text[pos] == '\\' && pos + 1 < text.size()) {
+        // Backslash followed by another character - not punctuation, start of
+        // word
+        break;
+      }
       pos++;
     }
 
     size_t word_start = pos;
-    while (pos < text.size() && !IsPunctuation(text[pos])) {
-      pos++;
+    std::string word_buffer;
+
+    // Build word, handling backslash escape sequences
+    while (pos < text.size()) {
+      if (text[pos] == '\\' && pos + 1 < text.size()) {
+        // Escape sequence - include both backslash and next character
+        word_buffer.push_back(text[pos++]);
+        word_buffer.push_back(text[pos++]);
+      } else if (IsPunctuation(text[pos])) {
+        // Regular punctuation - end of word
+        break;
+      } else {
+        // Regular character
+        word_buffer.push_back(text[pos++]);
+      }
     }
 
-    if (pos > word_start) {
-      absl::string_view word_view(text.data() + word_start, pos - word_start);
-
-      std::string word = UnicodeNormalizer::CaseFold(word_view);
+    if (!word_buffer.empty()) {
+      std::string word = UnicodeNormalizer::CaseFold(word_buffer);
 
       if (IsStopWord(word)) {
         continue;  // Skip stop words

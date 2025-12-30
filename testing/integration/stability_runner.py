@@ -35,6 +35,7 @@ class StabilityRunResult(NamedTuple):
     successful_run: bool
     memtier_results: list[MemtierProcessRunResult]
     background_task_results: list[BackgroundTaskRunResult]
+    intentionally_failed_ports: set  # Ports that were intentionally shut down during failover
 
 
 class StabilityTestConfig(NamedTuple):
@@ -60,6 +61,8 @@ class StabilityTestConfig(NamedTuple):
     replica_count: int
     repl_diskless_load: str
     memtier_path: str = ""
+    failover_interval_sec: int = 0  # 0 means no failover testing
+    test_failover_recovery: bool = True  # Whether to test node recovery after failover
 
 
 class StabilityRunner:
@@ -106,6 +109,7 @@ class StabilityRunner:
                 successful_run=False,
                 memtier_results=[],
                 background_task_results=[],
+                intentionally_failed_ports=set(),
             )
 
         try:
@@ -181,6 +185,34 @@ class StabilityRunner:
                     index_state,
                     self.config.use_coordinator,
                 )
+            )
+
+        # Start failover testing if configured and replicas exist
+        if self.config.failover_interval_sec != 0 and self.config.replica_count > 0:
+            valkey_server_path = os.environ["VALKEY_SERVER_PATH"]
+            config_dir = os.environ["TEST_TMPDIR"]
+            stdout_dir = os.environ["TEST_UNDECLARED_OUTPUTS_DIR"]
+            
+            logging.info(
+                "Failover testing enabled: interval=%ds, recovery=%s",
+                self.config.failover_interval_sec,
+                self.config.test_failover_recovery
+            )
+            
+            threads.append(
+                utils.periodic_failover(
+                    client=client,
+                    interval_sec=self.config.failover_interval_sec,
+                    randomize=self.config.randomize_bg_job_intervals,
+                    valkey_server_path=valkey_server_path,
+                    config_dir=config_dir,
+                    stdout_dir=stdout_dir,
+                    test_recovery=self.config.test_failover_recovery,
+                )
+            )
+        elif self.config.failover_interval_sec != 0 and self.config.replica_count == 0:
+            logging.warning(
+                "Failover testing requested but replica_count=0 - skipping failover"
             )
 
         memtier_output_dir = os.environ["TEST_UNDECLARED_OUTPUTS_DIR"]
@@ -351,9 +383,17 @@ class StabilityRunner:
                 process.process.kill()
             logging.error("Processes killed")
 
+        # Collect intentionally failed ports from failover task BEFORE stopping threads
+        intentionally_failed_ports = set()
+        for thread in threads:
+            if thread.name == "FAILOVER":
+                intentionally_failed_ports = thread.failed_ports.copy()
+                logging.info("Collected intentionally failed ports: %s", intentionally_failed_ports)
+                break
+        
         for thread in threads:
             thread.stop()
-
+        
         return StabilityRunResult(
             successful_run=True,
             memtier_results=[
@@ -374,4 +414,5 @@ class StabilityRunner:
                 )
                 for thread in threads
             ],
+            intentionally_failed_ports=intentionally_failed_ports,
         )

@@ -63,7 +63,10 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
         search_thread.join()
 
         assert hset_err[0] is None
-        assert search_err[0] is None and search_res[0] is not None
+        assert search_err[0] is None
+        # After mutation completes, "hello" is no longer in the document
+        result = search_res[0]
+        assert result[0] == 0
 
     def test_hybrid_query_with_text_predicate(self):
         """Test that hybrid queries (vector + text) DO block on in-flight mutations."""
@@ -113,7 +116,10 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
         hset_thread.join()
         search_thread.join()
 
-        assert search_err[0] is None and search_res[0] is not None
+        assert search_err[0] is None
+        # After mutation completes, "hello" is no longer in the document
+        result = search_res[0]
+        assert result[0] == 0
 
     def test_non_text_query_does_not_block(self):
         """Test that non-text queries on index with text field do NOT block."""
@@ -226,7 +232,10 @@ class TestFullTextInFlightBlockingCME(ValkeySearchClusterTestCaseDebugMode):
             t.join()
         search_thread.join()
 
-        assert search_err[0] is None and search_res[0] is not None
+        assert search_err[0] is None
+        # After mutations complete, "hello" is no longer in any document
+        result = search_res[0]
+        assert result[0] == 0
 
     def test_blocking_only_on_remote_nodes(self):
         """Test when coordinator is not blocked but remote nodes are blocked."""
@@ -282,7 +291,11 @@ class TestFullTextInFlightBlockingCME(ValkeySearchClusterTestCaseDebugMode):
             t.join()
         search_thread.join()
 
-        assert search_err[0] is None and search_res[0] is not None
+        assert search_err[0] is None
+        # Coordinator doc still has "hello", remote docs updated to "updated"
+        result = search_res[0]
+        assert result[0] == 1
+        assert result[1] == coordinator_key.encode()
 
     def test_blocking_only_on_coordinator(self):
         """Test when coordinator is blocked but remote nodes are not blocked."""
@@ -331,4 +344,8 @@ class TestFullTextInFlightBlockingCME(ValkeySearchClusterTestCaseDebugMode):
         hset_thread.join()
         search_thread.join()
 
-        assert search_err[0] is None and search_res[0] is not None
+        assert search_err[0] is None
+        # Coordinator doc updated to "updated", remote docs still have "hello"
+        result = search_res[0]
+        assert result[0] == len(remote_keys)
+        assert set(result[1::2]) == {k.encode() for k in remote_keys}

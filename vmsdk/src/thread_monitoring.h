@@ -19,6 +19,8 @@ class ThreadMonitor {
 
   absl::StatusOr<double> GetThreadCPUPercentage();
 
+  static uint64_t GetNegativeCpuCount();
+
   // Returns the thread spent time (user + system)
   absl::StatusOr<uint64_t> GetCPUTime() const;
 

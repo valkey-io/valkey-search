@@ -21,6 +21,8 @@
 
 namespace vmsdk {
 
+static std::atomic_uint64_t thread_monitoring_cpu_error_cnt{0};
+
 #ifdef __APPLE__
 namespace {
 thread_inspect_t ConvertToMachThread(pthread_t tid) {
@@ -31,6 +33,10 @@ thread_inspect_t ConvertToMachThread(pthread_t tid) {
 #endif
 
 ThreadMonitor::ThreadMonitor(pthread_t thread_id) { thread_id_ = thread_id; }
+
+uint64_t ThreadMonitor::GetNegativeCpuCount() {
+  return thread_monitoring_cpu_error_cnt.load(std::memory_order_relaxed);
+}
 
 absl::StatusOr<double> ThreadMonitor::GetThreadCPUPercentage() {
   // First call, initializing values
@@ -46,9 +52,6 @@ absl::StatusOr<double> ThreadMonitor::GetThreadCPUPercentage() {
 
   // Calculate elapsed times
   int64_t cpu_time_elapsed_us = current_cpu_time - last_cpu_time_.value();
-  if (current_wall_time_micro < last_wall_time_micro_) {
-    return absl::InternalError("Internal error in CPU calculation");
-  }
   int64_t wall_time_elapsed =
       current_wall_time_micro - last_wall_time_micro_.value();
 
@@ -56,13 +59,23 @@ absl::StatusOr<double> ThreadMonitor::GetThreadCPUPercentage() {
   last_cpu_time_ = current_cpu_time;
   last_wall_time_micro_ = current_wall_time_micro;
 
-  // Calculate percentage (CPU time / wall time * 100)
-  if (wall_time_elapsed > 0) {
-    return (static_cast<double>(cpu_time_elapsed_us) / wall_time_elapsed) *
-           100.0;
+  if (wall_time_elapsed == 0) {
+    return 0.0;
   }
 
-  return 0.0;
+  if (cpu_time_elapsed_us < 0) {
+    // Increment the monitoring counter for negative values
+    thread_monitoring_cpu_error_cnt.fetch_add(1, std::memory_order_relaxed);
+    return absl::InternalError(
+        "Internal error in CPU calculation: negative cpu time");
+  }
+
+  if (wall_time_elapsed < 0) {
+    return absl::InternalError(
+        "Internal error in CPU calculation: negative wall time");
+  }
+
+  return (static_cast<double>(cpu_time_elapsed_us) / wall_time_elapsed) * 100.0;
 }
 
 absl::StatusOr<uint64_t> ThreadMonitor::GetCPUTime() const {

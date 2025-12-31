@@ -390,6 +390,22 @@ TEST_F(ThreadPoolTest, TestCPUUsage) {
   thread_pool.JoinWorkers();
 }
 
+TEST_F(ThreadPoolTest, ThreadMonitorErrorMetricTest) {
+  ThreadMonitor monitor(pthread_self());
+
+  // First call to initialize
+  auto result1 = monitor.GetThreadCPUPercentage();
+  ASSERT_TRUE(result1.ok());
+  EXPECT_EQ(result1.value(), 0.0);
+
+  // Manually set last_cpu_time_ to a high value to simulate negative elapsed
+  monitor.last_cpu_time_ = 999999999;
+
+  // Second call should handle negative CPU elapsed gracefully
+  auto result2 = monitor.GetThreadCPUPercentage();
+  EXPECT_EQ(ThreadMonitor::GetNegativeCpuCount(), 1);
+}
+
 // ============================================================================
 // THREAD POOL FAIRNESS TESTS
 // ============================================================================

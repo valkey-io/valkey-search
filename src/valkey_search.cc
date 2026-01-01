@@ -126,14 +126,32 @@ static vmsdk::info_field::Float used_read_cpu(
     "thread-pool", "used_read_cpu",
     vmsdk::info_field::FloatBuilder().App().Computed([]() -> double {
       auto reader_thread_pool = ValkeySearch::Instance().GetReaderThreadPool();
-      return reader_thread_pool->GetAvgCPUPercentage().value_or(-1);
+      auto result = reader_thread_pool->GetAvgCPUPercentage();
+      if (!result.ok()) {
+        VMSDK_LOG(WARNING, nullptr) << "Failed to get read CPU percentage: "
+                                    << result.status().message();
+        return 0.0;
+      }
+      return result.value();
     }));
 
 static vmsdk::info_field::Float used_write_cpu(
     "thread-pool", "used_write_cpu",
     vmsdk::info_field::FloatBuilder().App().Computed([]() -> double {
       auto writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
-      return writer_thread_pool->GetAvgCPUPercentage().value_or(-1);
+      auto result = writer_thread_pool->GetAvgCPUPercentage();
+      if (!result.ok()) {
+        VMSDK_LOG(WARNING, nullptr) << "Failed to get write CPU percentage: "
+                                    << result.status().message();
+        return 0.0;
+      }
+      return result.value();
+    }));
+
+static vmsdk::info_field::Integer thread_monitoring_cpu_error_cnt(
+    "thread-pool", "thread_monitoring_cpu_error_cnt",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> uint64_t {
+      return vmsdk::ThreadMonitor::GetNegativeCpuCount();
     }));
 
 static vmsdk::info_field::Integer ingest_hash_keys(

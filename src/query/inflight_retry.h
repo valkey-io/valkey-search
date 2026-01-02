@@ -33,7 +33,7 @@ namespace valkey_search::query {
 //    - No conflicts -> `OnComplete()`
 class InFlightRetryContextBase {
  public:
-  explicit InFlightRetryContextBase(std::vector<InternedStringPtr> keys)
+  explicit InFlightRetryContextBase(std::vector<InternedStringPtr>&& keys)
       : neighbor_keys_(std::move(keys)) {}
 
   virtual ~InFlightRetryContextBase() = default;
@@ -42,27 +42,29 @@ class InFlightRetryContextBase {
   virtual bool IsCancelled() const = 0;
   virtual const std::shared_ptr<IndexSchema>& GetIndexSchema() const = 0;
   virtual const char* GetDesc() const = 0;
+
+  // Process a retry attempt. Handles cancellation, conflict checking, and
+  // completion.
+  void ProcessRetry(ValkeyModuleCtx* ctx);
+
+  // Schedule this context to be processed on the main thread.
+  // - If `has_conflicts` is true: schedules with delay
+  // - If `has_conflicts` is false: schedules immediately for verification
+  void ScheduleOnMainThread(bool has_conflicts);
+
+ protected:
   const std::vector<InternedStringPtr>& GetNeighborKeys() const {
     return neighbor_keys_;
   }
 
  private:
+  // Pre-extracted keys from neighbors to avoid re-iterating on each conflict
+  // check
   std::vector<InternedStringPtr> neighbor_keys_;
 };
 
 // Timer callback for retry scheduling
 void InFlightRetryCallback(ValkeyModuleCtx* ctx, void* data);
-
-// Process a retry attempt. Handles cancellation, conflict checking, and
-// completion. This is the main entry point called by timer callbacks.
-void ProcessRetry(ValkeyModuleCtx* ctx, InFlightRetryContextBase* retry_ctx);
-
-// Schedule the retry context to be processed on the main thread.
-// - If `has_conflicts` is true: schedules with delay (background saw conflicts)
-// - If `has_conflicts` is false: schedules immediately (background saw no
-//   conflicts, but main thread must still verify before completing)
-void ScheduleOnMainThread(InFlightRetryContextBase* retry_ctx,
-                          bool has_conflicts);
 
 }  // namespace valkey_search::query
 

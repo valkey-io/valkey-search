@@ -10,46 +10,44 @@
 namespace valkey_search::query {
 
 void InFlightRetryCallback(ValkeyModuleCtx* ctx, void* data) {
-  ProcessRetry(ctx, static_cast<InFlightRetryContextBase*>(data));
+  static_cast<InFlightRetryContextBase*>(data)->ProcessRetry(ctx);
 }
 
-void ProcessRetry(ValkeyModuleCtx* ctx, InFlightRetryContextBase* retry_ctx) {
-  if (retry_ctx->IsCancelled()) {
-    retry_ctx->OnCancelled();
-    delete retry_ctx;
+void InFlightRetryContextBase::ProcessRetry(ValkeyModuleCtx* ctx) {
+  if (IsCancelled()) {
+    OnCancelled();
+    delete this;
     return;
   }
 
-  if (retry_ctx->GetIndexSchema()->HasAnyConflictingInFlightKeys(
-          retry_ctx->GetNeighborKeys())) {
+  if (GetIndexSchema()->HasAnyConflictingInFlightKeys(GetNeighborKeys())) {
     ++Metrics::GetStats().fulltext_query_retry_cnt;
     VMSDK_LOG(DEBUG, ctx)
-        << retry_ctx->GetDesc()
-        << " has conflicting in-flight keys, scheduling retry";
+        << GetDesc() << " has conflicting in-flight keys, scheduling retry";
     ValkeyModule_CreateTimer(ctx,
                              options::GetInFlightRetryIntervalMs().GetValue(),
-                             InFlightRetryCallback, retry_ctx);
+                             InFlightRetryCallback, this);
     return;
   }
 
-  retry_ctx->OnComplete();
-  delete retry_ctx;
+  OnComplete();
+  delete this;
 }
 
-void ScheduleOnMainThread(InFlightRetryContextBase* retry_ctx,
-                          bool has_conflicts) {
+void InFlightRetryContextBase::ScheduleOnMainThread(bool has_conflicts) {
   if (has_conflicts) {
     ++Metrics::GetStats().fulltext_query_blocked_cnt;
   }
+  auto* self = this;
   vmsdk::RunByMain(
-      [retry_ctx, has_conflicts]() {
+      [self, has_conflicts]() {
         auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
         if (has_conflicts) {
           ValkeyModule_CreateTimer(
               ctx.get(), options::GetInFlightRetryIntervalMs().GetValue(),
-              InFlightRetryCallback, retry_ctx);
+              InFlightRetryCallback, self);
         } else {
-          InFlightRetryCallback(ctx.get(), retry_ctx);
+          self->ProcessRetry(ctx.get());
         }
       },
       true);

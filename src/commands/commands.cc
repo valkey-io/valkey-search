@@ -44,8 +44,8 @@ struct InFlightRetryContext : public query::InFlightRetryContextBase {
   vmsdk::BlockedClient blocked_client;
   std::unique_ptr<Result> result;
 
-  InFlightRetryContext(vmsdk::BlockedClient bc, std::unique_ptr<Result> res,
-                       std::vector<InternedStringPtr> keys)
+  InFlightRetryContext(vmsdk::BlockedClient&& bc, std::unique_ptr<Result>&& res,
+                       std::vector<InternedStringPtr>&& keys)
       : InFlightRetryContextBase(std::move(keys)),
         blocked_client(std::move(bc)),
         result(std::move(res)) {}
@@ -184,7 +184,7 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
             std::move(blocked_client), std::move(result),
             std::move(neighbor_keys));
 
-        query::ScheduleOnMainThread(retry_ctx, has_conflicts);
+        retry_ctx->ScheduleOnMainThread(has_conflicts);
         return;
       }
 

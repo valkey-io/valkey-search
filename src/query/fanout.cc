@@ -174,9 +174,9 @@ struct LocalInFlightRetryContext : public query::InFlightRetryContextBase {
   std::unique_ptr<SearchParameters> parameters;
   std::shared_ptr<SearchPartitionResultsTracker> tracker;
 
-  LocalInFlightRetryContext(std::deque<indexes::Neighbor> nbrs,
-                            std::unique_ptr<SearchParameters> params,
-                            std::vector<InternedStringPtr> keys,
+  LocalInFlightRetryContext(std::deque<indexes::Neighbor>&& nbrs,
+                            std::unique_ptr<SearchParameters>&& params,
+                            std::vector<InternedStringPtr>&& keys,
                             std::shared_ptr<SearchPartitionResultsTracker> trk)
       : InFlightRetryContextBase(std::move(keys)),
         neighbors(std::move(nbrs)),
@@ -308,7 +308,7 @@ absl::Status PerformSearchFanoutAsync(
                   std::move(neighbors.value()), std::move(parameters),
                   std::move(neighbor_keys), tracker);
 
-              query::ScheduleOnMainThread(retry_ctx, has_conflicts);
+              retry_ctx->ScheduleOnMainThread(has_conflicts);
               return;
             }
             tracker->AddResults(*neighbors);

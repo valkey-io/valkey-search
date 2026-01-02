@@ -128,9 +128,9 @@ struct RemoteInFlightRetryContext : public query::InFlightRetryContextBase {
   RemoteInFlightRetryContext(SearchIndexPartitionResponse* resp,
                              grpc::ServerUnaryReactor* react,
                              std::unique_ptr<vmsdk::StopWatch> sample,
-                             std::deque<indexes::Neighbor> nbrs,
-                             std::unique_ptr<query::SearchParameters> params,
-                             std::vector<InternedStringPtr> keys)
+                             std::deque<indexes::Neighbor>&& nbrs,
+                             std::unique_ptr<query::SearchParameters>&& params,
+                             std::vector<InternedStringPtr>&& keys)
       : InFlightRetryContextBase(std::move(keys)),
         response(resp),
         reactor(react),
@@ -237,7 +237,7 @@ query::SearchResponseCallback Service::MakeSearchCallback(
           std::move(neighbors.value()), std::move(parameters),
           std::move(neighbor_keys));
 
-      query::ScheduleOnMainThread(retry_ctx, has_conflicts);
+      retry_ctx->ScheduleOnMainThread(has_conflicts);
       return;
     }
 

@@ -35,8 +35,8 @@
 #include <stdio.h>
 #include <errno.h>
 #include <math.h>
+#include <assert.h>
 #include "rax.h"
-#include "serverassert.h"
 
 #ifndef RAX_MALLOC_INCLUDE
 #define RAX_MALLOC_INCLUDE "rax_malloc.h"
@@ -915,6 +915,51 @@ int raxFind(rax *rax, unsigned char *s, size_t len, void **value) {
     if (i != len || (h->iscompr && splitpos != 0) || !h->iskey) return 0;
     if (value != NULL) *value = raxGetData(h);
     return 1;
+}
+
+/* Atomically mutates the value at the given key by calling the provided
+ * callback function. The callback receives the current value (NULL if the
+ * key doesn't exist) and caller context, and returns the new value (NULL
+ * to delete the key).
+ * 
+ * OWNERSHIP: The callback takes ownership of the old value. If returning a
+ * new value, the callback MUST clean up the old value.
+ * 
+ * Returns 1 on success, 0 on error (errno will be set to ENOMEM
+ * on out of memory). */
+// TODO(Brennan): implement a lower-level version that doesn't traverse the
+// tree twice.
+int raxMutate(rax *rax, unsigned char *s, size_t len, raxMutateCallback callback, void *caller_context) {
+    void *current_value = NULL;
+
+    /* Find the current value */
+    int found = raxFind(rax, s, len, &current_value);
+
+    /* Call the callback to get the new value */
+    void *new_value = callback(current_value, caller_context);
+
+    /* Handle the result */
+    if (new_value == NULL) {
+        /* Delete the key if it exists */
+        if (found) {
+            return raxRemove(rax, s, len, NULL);
+        }
+        /* Key doesn't exist and callback returned NULL - nothing to do */
+        return 1;
+    } else {
+        /* If the callback returned the same pointer, no update needed */
+        if (new_value == current_value) {
+            return 1;
+        }
+        /* Insert or update the key. */
+        int res = raxInsert(rax, s, len, new_value, NULL);
+        if (res == 0 && errno != 0) {
+            /* Actual failure (OOM) */
+            return 0;
+        }
+        /* Success: either new insert (res=1) or update (res=0, errno=0) */
+        return 1;
+    }
 }
 
 /* Return the memory address where the 'parent' node stores the specified

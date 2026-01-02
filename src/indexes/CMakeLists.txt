@@ -107,7 +107,9 @@ set(SRCS_TEXT ${CMAKE_CURRENT_LIST_DIR}/text/text_index.h
               ${CMAKE_CURRENT_LIST_DIR}/text/unicode_normalizer.h
               ${CMAKE_CURRENT_LIST_DIR}/text/fuzzy.h
               ${CMAKE_CURRENT_LIST_DIR}/text/flat_position_map.cc
-              ${CMAKE_CURRENT_LIST_DIR}/text/flat_position_map.h)
+              ${CMAKE_CURRENT_LIST_DIR}/text/flat_position_map.h
+              ${CMAKE_CURRENT_LIST_DIR}/text/rax_wrapper.cc
+              ${CMAKE_CURRENT_LIST_DIR}/text/rax/rax.c)
 
 valkey_search_add_static_library(text "${SRCS_TEXT}")
 target_include_directories(text PUBLIC ${CMAKE_CURRENT_LIST_DIR})

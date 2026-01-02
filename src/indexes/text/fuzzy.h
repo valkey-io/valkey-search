@@ -15,7 +15,7 @@
 #include "absl/strings/string_view.h"
 #include "invasive_ptr.h"
 #include "posting.h"
-#include "radix_tree.h"
+#include "rax_wrapper.h"
 #include "text.h"
 
 namespace valkey_search::indexes::text {
@@ -25,8 +25,7 @@ struct FuzzySearch {
   // Returns KeyIterators for all words within edit distance <= max_distance
   static absl::InlinedVector<Postings::KeyIterator,
                              kWordExpansionInlineCapacity>
-  Search(const RadixTree<InvasivePtr<Postings>>& tree,
-         absl::string_view pattern, size_t max_distance) {
+  Search(const Rax& tree, absl::string_view pattern, size_t max_distance) {
     absl::InlinedVector<indexes::text::Postings::KeyIterator,
                         kWordExpansionInlineCapacity>
         key_iterators;
@@ -47,14 +46,14 @@ struct FuzzySearch {
 
     // Start traversal from root to explore all words in the tree
     auto iter = tree.GetPathIterator("");
-    SearchRecursive(iter, pattern, max_distance, "", '\0', prev_prev, prev,
-                    curr, key_iterators);
+    SearchRecursive(std::move(iter), pattern, max_distance, "", '\0', prev_prev,
+                    prev, curr, key_iterators);
     return key_iterators;
   }
 
  private:
   static void SearchRecursive(
-      RadixTree<InvasivePtr<Postings>>::PathIterator iter,
+      Rax::PathIterator iter,
       absl::string_view pattern, size_t max_distance,
       std::string word,   // Current word being built
       char prev_tree_ch,  // Previous character (for transposition detection)
@@ -148,13 +147,15 @@ struct FuzzySearch {
         // The edit distance is in prev row now as we did the row swap
         // in loop above
         if (child_iter.IsWord() && prev[pattern.length()] <= max_distance) {
-          key_iterators.emplace_back(child_iter.GetTarget()->GetKeyIterator());
+          key_iterators.emplace_back(
+              child_iter.GetPostingsTarget()->GetKeyIterator());
         }
 
         // Recurse into child's subtree
         if (child_iter.CanDescend()) {
-          SearchRecursive(child_iter, pattern, max_distance, new_word,
-                          prev_tree_ch, prev_prev, prev, curr, key_iterators);
+          SearchRecursive(std::move(child_iter), pattern, max_distance,
+                          new_word, prev_tree_ch, prev_prev, prev, curr,
+                          key_iterators);
         }
       }
 

@@ -198,6 +198,23 @@ def validate_fulltext_search(client: Valkey):
 
 class TestFullText(ValkeySearchTestCaseDebugMode):
 
+    def test_escape_sequences(self):
+        """Escape sequences preserved literally during indexing, matching Redis."""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA", "content", "TEXT", "NOSTEM")
+        
+        client.execute_command("HSET", "doc:1", "content", r"line1\nline2")
+        client.execute_command("HSET", "doc:2", "content", r"tab\there")
+        
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+        
+        # Escape sequences create unified tokens
+        assert client.execute_command("FT.SEARCH", "idx", "@content:line1")[0] == 0
+        assert client.execute_command("FT.SEARCH", "idx", "@content:tab")[0] == 0
+
+        assert client.execute_command("FT.SEARCH", "idx", r'@content:line1\\nline2')[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx", r'@content:tab\\there')[0] == 1
+
     @pytest.mark.parametrize("prefilter_eval_enabled", [pytest.param(False, id="Prefilter_eval=False"), pytest.param(True, id="Prefilter_eval=True")])
     def test_text_search(self, prefilter_eval_enabled):
         """

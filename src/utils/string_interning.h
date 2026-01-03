@@ -11,6 +11,7 @@
 #include <absl/container/btree_map.h>
 
 #include <cstddef>
+#include <thread>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
@@ -27,6 +28,20 @@ namespace valkey_search {
 
 class InternedStringImpl;
 class InternedStringPtr;
+
+extern absl::Mutex cout_mutex_;
+#define SYNCOUT(x)                                                         \
+  if (0) {                                                                 \
+    std::ostringstream oss;                                                \
+    auto now = std::chrono::steady_clock::now();                           \
+    auto ms = std::chrono::duration_cast<std::chrono::microseconds>(       \
+                  now.time_since_epoch())                                  \
+                  .count();                                                \
+    oss << std::dec << std::this_thread::get_id() << " : " << (ms % 10000) \
+        << " : " << x;                                                     \
+    absl::MutexLock lock(&cout_mutex_);                                    \
+    std::cout << oss.str() << std::endl;                                   \
+  }  // namespace valkey_search
 
 //
 // An interned string. This is a reference-counted object of variable size.
@@ -53,13 +68,11 @@ class InternedString {
   static InternedString *Constructor(absl::string_view str,
                                      Allocator *allocator);
   void Destructor();
-  void IncrementRefCount() {
-    auto old_value = ref_count_.fetch_add(1, std::memory_order_seq_cst);
-  }
-  void DecrementRefCount() {
-    if (ref_count_.fetch_sub(1, std::memory_order_seq_cst) == 1) {
-      Destructor();
-    }
+  void IncrementRefCount();
+  void DecrementRefCount();
+
+  uint32_t RefCount() const {
+    return ref_count_.load(std::memory_order_seq_cst);
   }
 
   //
@@ -158,9 +171,7 @@ class InternedStringPtr {
     impl_ = nullptr;
   }
 
-  size_t RefCount() const {
-    return impl_ ? impl_->ref_count_.load(std::memory_order_seq_cst) : 0;
-  }
+  size_t RefCount() const { return impl_ ? impl_->RefCount() : 0; }
 
  private:
   InternedStringPtr(InternedString *impl) : impl_(impl) {}

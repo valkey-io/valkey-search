@@ -108,9 +108,9 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
     // Build word, handling backslash escape sequences
     while (pos < text.size()) {
       if (text[pos] == '\\' && pos + 1 < text.size()) {
-        // Escape sequence - include both backslash and next character
-        word_buffer.push_back(text[pos++]);
-        word_buffer.push_back(text[pos++]);
+        // Escape sequence - strip backslash, keep only next character
+        pos++;                               // Skip the backslash
+        word_buffer.push_back(text[pos++]);  // Keep the escaped character
       } else if (IsPunctuation(text[pos])) {
         // Regular punctuation - end of word
         break;

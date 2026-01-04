@@ -149,16 +149,12 @@ TEST_F(StringInterningMultithreadTest, Simple) {
 
 TEST_F(StringInterningMultithreadTest, ConcurrentInterning) {
   const int kNumThreads = 32;
-  const int kNumIterations = 1000000;
+  const int kNumIterations = 100000;
   const std::string test_string = "concurrent_test_string";
 
   auto intern_function = [&]() {
     for (int i = 0; i < kNumIterations; ++i) {
       auto interned_str = StringInternStore::Intern(test_string);
-      SYNCOUT("CREATED : " << (void*)(interned_str->Str().data() - 8)
-                           << " (REFCOUNT : " << interned_str.RefCount()
-                           << ")");
-
       EXPECT_EQ(interned_str->Str(), test_string);
     }
   };

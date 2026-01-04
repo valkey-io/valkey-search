@@ -27,6 +27,8 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
+#include "src/indexes/text/negation_entries_fetcher.h"
+#include "src/indexes/text/negation_iterator.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
@@ -130,6 +132,42 @@ size_t EvaluateFilterAsPrimary(
       predicate->GetType() == PredicateType::kComposedOr) {
     auto composed_predicate =
         dynamic_cast<const ComposedPredicate *>(predicate);
+
+    // Special case: phrase negation (ComposedPredicate with slop/inorder +
+    // negate) Phrases must be evaluated as a unit, not distributed via
+    // DeMorgan's law Solution: Return ALL schema keys as candidates, let
+    // prefilter evaluation filter based on phrase constraints
+    bool is_phrase = composed_predicate->GetSlop().has_value() ||
+                     composed_predicate->GetInorder();
+
+    if (negate && is_phrase) {
+      for (const auto &child : composed_predicate->GetChildren()) {
+        if (child->GetType() == PredicateType::kText) {
+          auto text_child = dynamic_cast<const TextPredicate *>(child.get());
+          auto text_index_schema = text_child->GetTextIndexSchema();
+
+          auto negation_iter =
+              std::make_unique<indexes::text::NegationTextIterator>(
+                  nullptr, text_index_schema->GetSchemaTrackedKeys(),
+                  text_index_schema->GetSchemaUntrackedKeys(),
+                  text_child->GetFieldMask());
+
+          size_t total_keys =
+              text_index_schema->GetSchemaTrackedKeys().size() +
+              text_index_schema->GetSchemaUntrackedKeys().size();
+
+          auto fetcher = std::unique_ptr<indexes::EntriesFetcherBase>(
+              new indexes::text::NegationEntriesFetcher(
+                  std::move(negation_iter), total_keys,
+                  text_index_schema->GetTextIndex(),
+                  text_child->GetFieldMask()));
+
+          entries_fetchers.push(std::move(fetcher));
+          return total_keys;
+        }
+      }
+    }
+
     auto predicate_type =
         EvaluateAsComposedPredicate(composed_predicate, negate);
     if (predicate_type == PredicateType::kComposedAnd) {

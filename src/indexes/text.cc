@@ -15,6 +15,8 @@
 #include "src/index_schema.pb.h"
 #include "src/indexes/text/fuzzy.h"
 #include "src/indexes/text/lexer.h"
+#include "src/indexes/text/negation_entries_fetcher.h"
+#include "src/indexes/text/negation_iterator.h"
 
 namespace valkey_search::indexes {
 
@@ -125,11 +127,30 @@ namespace valkey_search::query {
 
 void* TextPredicate::Search(bool negate) const {
   size_t estimated_size = EstimateSize();
-  auto fetcher = std::make_unique<indexes::Text::EntriesFetcher>(
-      estimated_size, GetTextIndexSchema()->GetTextIndex(), nullptr,
-      GetFieldMask());
-  fetcher->predicate_ = this;
-  return fetcher.release();
+
+  if (!negate) {
+    auto fetcher = std::make_unique<indexes::Text::EntriesFetcher>(
+        estimated_size, GetTextIndexSchema()->GetTextIndex(), nullptr,
+        GetFieldMask());
+    fetcher->predicate_ = this;
+    return fetcher.release();
+  }
+
+  auto positive_iterator = BuildTextIterator(
+      std::make_unique<indexes::Text::EntriesFetcher>(
+          estimated_size, GetTextIndexSchema()->GetTextIndex(), nullptr,
+          GetFieldMask())
+          .get());
+
+  auto negation_iterator =
+      std::make_unique<indexes::text::NegationTextIterator>(
+          std::move(positive_iterator),
+          GetTextIndexSchema()->GetSchemaTrackedKeys(),
+          GetTextIndexSchema()->GetSchemaUntrackedKeys(), GetFieldMask());
+
+  return new indexes::text::NegationEntriesFetcher(
+      std::move(negation_iterator), estimated_size,
+      GetTextIndexSchema()->GetTextIndex(), GetFieldMask());
 }
 
 std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(

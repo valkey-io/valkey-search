@@ -195,6 +195,11 @@ def validate_fulltext_search(client: Valkey):
     assert (result[0], set(result[1::2])) == (1, {b"product:4"})
     result = client.execute_command("FT.SEARCH", "products", '@desc:%%greet%%')
     assert (result[0], set(result[1::2])) == (3, {b"product:1", b"product:5", b"product:6"})
+    
+    # Basic term negation
+    result = client.execute_command("FT.SEARCH", "products", '-@desc:"wonder"')
+    assert result[0] == 5  # All except product:4
+    assert b"product:4" not in result
 
 class TestFullText(ValkeySearchTestCaseDebugMode):
 
@@ -772,6 +777,49 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         result = self.client.execute_command("FT.SEARCH", "idx", "*unning")
         assert result[0] == 1  # Only doc:1 is matched for "running"
         assert result[1] == b'doc:1'
+        
+        # Test suffix negation
+        result = self.client.execute_command("FT.SEARCH", "idx", '-@content:*ning')
+        assert result[0] == 3  # Excludes doc:1 (has "running")
+        assert b'doc:1' not in result
+
+    def test_text_negation(self):
+        """Test edge cases for text negation"""
+        client = self.server.get_new_client()
+        
+        # Setup: Two-field index
+        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA", "title", "TEXT", "NOSTEM", "body", "TEXT", "NOSTEM")
+        
+        # Doc with both fields
+        client.execute_command("HSET", "doc:1", "title", "error report", "body", "system failure")
+        # Doc with only body (no title)
+        client.execute_command("HSET", "doc:2", "body", "all working")
+        # Doc with only title (no body)
+        client.execute_command("HSET", "doc:3", "title", "success story")
+        
+        client.execute_command("HSET", "doc:4", "price", "100")
+        
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+        
+        # Test: Keys without field included in negation
+        result = client.execute_command("FT.SEARCH", "idx", '-@title:error')
+        assert result[0] == 3  # doc:2, doc:3, doc:4
+        
+        # Test: Multiple field negations
+        result = client.execute_command("FT.SEARCH", "idx", '-@title:error -@body:all')
+        assert result[0] == 2  # doc:3, doc:4
+
+        # Test: Prefix wildcard negation
+        result = client.execute_command("FT.SEARCH", "idx", '-@title:err*')
+        assert result[0] == 3  # doc:2, doc:3, doc:4
+        
+        # Test: Schema-wide negation
+        result = client.execute_command("FT.SEARCH", "idx", '-error')
+        assert result[0] == 3  # doc:2, doc:3, doc:4
+        
+        # Test: Negation of non-existent term (all keys match)
+        result = client.execute_command("FT.SEARCH", "idx", '-nonexistent')
+        assert result[0] == 4  # All docs
 
     @pytest.mark.parametrize("prefilter_eval_enabled", [pytest.param(False, id="Prefilter_eval=False"), pytest.param(True, id="Prefilter_eval=True")])
     def test_mixed_predicates(self, prefilter_eval_enabled):
@@ -829,8 +877,8 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert (result[0], result[1]) == (1, b"doc:1")
 
         # Test 8: Negation with mixed types
-        # result = client.execute_command("FT.SEARCH", "idx", '-@content:"manager" @skills:{python}')
-        # assert (result[0], result[1]) == (1, b"doc:1")
+        result = client.execute_command("FT.SEARCH", "idx", '-@content:"manager" @skills:{python}')
+        assert (result[0], result[1]) == (1, b"doc:1")
 
     def test_nooffsets_option(self):
         """
@@ -1042,6 +1090,38 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # content / default field.
         result = client.execute_command("FT.SEARCH", "idx", 'word10 @content:word11 word12', "INORDER")
         assert (result[0], result[1]) == (1, b"doc:7")
+        
+        # Test phrase negation
+        # NOTE: Phrase negation with SLOP/INORDER requires prefilter evaluation for
+        # correctness validation. Skipping prefilter_eval=False mode as the current
+        # architecture relies on PrefilterEvaluator for proximity constraint validation
+        # in positive queries.
+        if not prefilter_eval_enabled:
+            return
+        
+        # Exact phrase negation
+        result = client.execute_command("FT.SEARCH", "idx", '-@content:"alpha beta"', "NOCONTENT")
+        assert result[0] == 10 and b"doc:1" not in result
+
+        # Double negation
+        result = client.execute_command("FT.SEARCH", "idx", '-(-@content:"alpha beta")', "NOCONTENT")
+        assert result[0] == 1 and b"doc:1" in result
+        
+        # Phrase negation with INORDER
+        result = client.execute_command("FT.SEARCH", "idx", '-alpha -beta', "INORDER")
+        assert b"doc:1" not in result and b"doc:2" not in result and b"doc:5" not in result
+        
+        # Phrase negation without INORDER
+        result = client.execute_command("FT.SEARCH", "idx", '-alpha -beta')
+        expected_excluded = {b"doc:1", b"doc:2", b"doc:3", b"doc:5", b"doc:8"}
+        assert len(expected_excluded & set(result[1::2])) == 0
+        
+        # Phrase negation with SLOP
+        result = client.execute_command("FT.SEARCH", "idx", '-alpha -beta', "SLOP", "0")
+        assert b"doc:1" not in result and b"doc:3" not in result  # Adjacent pairs excluded
+        
+        result = client.execute_command("FT.SEARCH", "idx", '-alpha -beta', "SLOP", "1")
+        assert b"doc:1" not in result and b"doc:2" not in result and b"doc:3" not in result
 
     def test_proximity_slop_violation_advancement(self):
         """
@@ -1489,6 +1569,11 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # client.execute_command("HSET", "doc:12", "content", "I am going to a race", "content2", "Driver drove the car?")
         # result = client.execute_command("FT.SEARCH", "idx3", '%%drive%%', "return", "1", "content2")
         # assert (result[0], set(result[1::2])) == (3, {b"doc:4", b"doc:11", b"doc:12"})
+        
+        # Test fuzzy negation
+        result = client.execute_command("FT.SEARCH", "idx1", '-%car%')
+        assert result[0] == 8  # 11 docs - 3 fuzzy matches (doc:2, doc:4, doc:11)
+        assert b"doc:2" not in result and b"doc:4" not in result and b"doc:11" not in result
 
     def test_return_clause(self):
         client: Valkey = self.server.get_new_client()

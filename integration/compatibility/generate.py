@@ -4,6 +4,7 @@ import pickle
 import gzip
 from . import data_sets
 from .data_sets import *
+from valkey.exceptions import ConnectionError
 '''
 Capture answer from Redisearch
 '''
@@ -44,12 +45,12 @@ class TestAggregateCompatibility:
             sys.exit(1)
         print("Started Generate-search server")
         cls.answers = []
+        cls.client = ClientRSystem()
         while True:
             try:
-                cls.client = ClientRSystem()
                 cls.client.execute_command("PING")
                 break
-            except redis.ConnectionError:
+            except ConnectionError:
                 print("Waiting for R system to be ready...")
                 time.sleep(.25)
         print("Done initializing")
@@ -80,18 +81,18 @@ class TestAggregateCompatibility:
                   "testname": os.environ.get('PYTEST_CURRENT_TEST').split(':')[-1].split(' ')[0],
                   "traceback": "".join(traceback.format_stack())}
         try:
-            # print("Cmd:", *cmd)
+            print("Cmd:", *cmd)
             answer["result"] = self.client.execute_command(*cmd)
             answer["exception"] = False
             exception = None
-            # print(f"replied: {answer['result']}")
+            print(f"replied: {answer['result']}")
         except Exception as exc:
             print(f"Got exception for Error: '{exc}', Cmd:{cmd}")
             answer["result"] = {}
             answer["exception"] = True
         self.answers.append(answer)
 
-    def checkvec(self, dialect, *orig_cmd, knn=10000, score_as=""):
+    def checkvec(self, dialect, *orig_cmd, knn=10000, score_as="", query_vector=[0] * VECTOR_DIM):
         '''Temporary change until query parser is redone.'''
         cmd = orig_cmd[0].split() if len(orig_cmd) == 1 else [*orig_cmd]
         new_cmd = []
@@ -107,12 +108,24 @@ class TestAggregateCompatibility:
             "PARAMS",
             "2",
             "BLOB",
-            struct.pack(f"<{VECTOR_DIM}f", *([0] * VECTOR_DIM)),
+            struct.pack(f"<{VECTOR_DIM}f", *query_vector),
             "DIALECT",
             str(dialect),
         ]
         self.execute_command(new_cmd)
+    def check(self, *orig_cmd):
+        '''Non-vector command. Doesn't have support for '*' yet. '''
+        cmd = orig_cmd[0].split() if len(orig_cmd) == 1 else [*orig_cmd]
+        self.execute_command(cmd)
+
     '''        
+    def test_bad_numeric_data(self, key_type, dialect):
+        self.setup_data("bad numbers", key_type)
+        self.check(f"ft.search {key_type}_idx1",  "@n1:[-inf inf]")
+        self.check(f"ft.search {key_type}_idx1", "-@n1:[-inf inf]")
+        self.check(f"ft.search {key_type}_idx1",  "@n2:[-inf inf]")
+        self.check(f"ft.search {key_type}_idx1", "-@n2:[-inf inf]")
+
     def test_search_reverse(self, key_type, dialect):
         self.setup_data("reverse vector numbers", key_type)
         self.checkvec(dialect, f"ft.search {key_type}_idx1 *")
@@ -123,6 +136,17 @@ class TestAggregateCompatibility:
         self.checkvec(dialect, f"ft.search {key_type}_idx1 *")
         self.checkvec(dialect, f"ft.search {key_type}_idx1 * limit 0 5")
     '''
+    @pytest.mark.parametrize("algo", ["flat", "hnsw"])
+    @pytest.mark.parametrize("metric", ["l2", "ip", "cosine"])
+    def test_vector_distance(self, key_type, dialect, algo, metric):
+        self.setup_data(f"vector data {metric} {algo}", key_type)
+        vector_points = [-.75, .75]
+        for x in vector_points:
+            for y in vector_points:
+                for z in vector_points:
+                    self.checkvec(dialect, f"ft.aggregate {key_type}_idx1 * load 1 __key", query_vector=[x, y, z])
+                    self.checkvec(dialect, f"ft.aggregate {key_type}_idx1 * load 2 __v1_score __key", query_vector=[x, y, z])
+                    self.checkvec(dialect, f"ft.search {key_type}_idx1 *", query_vector=[x, y, z])
     def test_aggregate_sortby(self, key_type, dialect):
         self.setup_data("sortable numbers", key_type)
         self.checkvec(dialect, f"ft.aggregate {key_type}_idx1 * load 2 @__key @n2 sortby 1 @n2")

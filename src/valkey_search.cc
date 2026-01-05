@@ -951,6 +951,10 @@ void ValkeySearch::OnServerCronCallback(ValkeyModuleCtx *ctx,
           absl::Seconds(options::GetMaxWorkerSuspensionSecs().GetValue())) {
     ResumeWriterThreadPool(ctx, /*is_expired=*/true);
   }
+  // refresh cluster map in cluster mode
+  if (IsCluster() && UsingCoordinator()) {
+    GetOrRefreshClusterMap(ctx);
+  }
 }
 
 void ValkeySearch::OnForkChildCallback(ValkeyModuleCtx *ctx,

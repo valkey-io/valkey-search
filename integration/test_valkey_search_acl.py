@@ -177,7 +177,7 @@ class TestCommandsACLs(ValkeySearchTestCaseBase):
         search_vector = struct.pack("<3f", *[1.0, 2.0, 3.0])
         with pytest.raises(
             ResponseError,
-            match="The user doesn't have a permission to execute a command",
+            match="The user does not have permission to access the key prefix",
         ):
             client.execute_command(
                 "FT.SEARCH",

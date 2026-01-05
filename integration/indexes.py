@@ -10,18 +10,19 @@ from ft_info_parser import FTInfoParser
 import logging, json
 import struct
 from enum import Enum
+from util import waiters
 
 class KeyDataType(Enum):
     HASH = 1
     JSON = 2
-
-
 
 def float_to_bytes(flt: list[float]) -> bytes:
     return struct.pack(f"<{len(flt)}f", *flt)
 
 
 class Field:
+    name: str
+    alias: Union[str, None]
     def __init__(self, name: str, alias: Union[str, None]):
         self.name = name
         self.alias = alias if alias else name
@@ -142,7 +143,7 @@ class Index:
         self.prefixes = prefixes
         self.type = type
 
-    def create(self, client: valkey.client):
+    def create(self, client: valkey.client, wait_for_backfill = False):
         cmd = (
             [
                 "FT.CREATE",
@@ -159,22 +160,30 @@ class Index:
             cmd += f.create(self.type)
         print(f"Creating Index: {cmd}")
         client.execute_command(*cmd)
+        if wait_for_backfill:
+            self.wait_for_backfill_complete(client)
+
+    def drop(self, client: valkey.client):
+        cmd = ["FT.DROPINDEX", self.name]
+        print("Executing: ", cmd)
+        client.execute_command(*cmd)
 
     def load_data(self, client: valkey.client, rows: int, start_index: int = 0):
-        print("Loading data to ", client)
         for i in range(start_index, rows):
             data = self.make_data(i)
-            if self.type == KeyDataType.HASH:
-                client.hset(self.keyname(i), mapping=data)
-            else:
-                client.execute_command("JSON.SET", self.keyname(i), "$", json.dumps(data))
+            self.write_data(client, i, data)
+
+    def write_data(self, client: valkey.client, i:int, data: dict[str, str | bytes]):
+        if self.type == KeyDataType.HASH:
+            client.hset(self.keyname(i), mapping=data)
+        else:
+            client.execute_command("JSON.SET", self.keyname(i), "$", json.dumps(data))
 
     def load_data_with_ttl(self, client: valkey.client, rows: int, ttl_ms: int, start_index: int = 0):
         for i in range(start_index, rows):
             data = self.make_data(i)
-            key = self.keyname(i)
-            client.hset(key, mapping=data)
-            client.pexpire(key, ttl_ms)
+            self.write_data(client, i, data)
+            client.pexpire(self.keyname(i), ttl_ms)
 
     def keyname(self, row: int) -> str:
         prefix = self.prefixes[row % len(self.prefixes)] if self.prefixes else ""
@@ -193,4 +202,88 @@ class Index:
     
     def backfill_complete(self, client: valkey.client) -> bool:
         res = self.info(client)
+<<<<<<< HEAD
         return res.backfill_in_progress == 0
+=======
+        return res.backfill_in_progress == 0
+    
+    def query(self, client:valkey.client, query_string: str, *args) -> dict[bytes, dict[bytes, bytes]]:
+        assert self.type == KeyDataType.HASH, "JSON not supported yet"
+        query = ["ft.search", self.name, query_string] + list(args)
+        print("Execute Query Command: ", query)
+        result = client.execute_command(*query)
+        print("Result is ", result)
+        count = result[0]
+        dict_result = {}
+        for row in range(1, len(result)-1, 2):
+            key = result[row]
+            fields = result[row+1][0::2]
+            values = result[row+1][1::2]
+            print("Key", key, "Fields:", fields, " Values:", values)
+            dict_result[key] = {fields[i]:values[i] for i in range(len(fields))}
+        print("Final result", dict_result)
+        return dict_result
+
+    def has_field(self, name: str) -> bool:
+        return any(f.name == name for f in self.fields)
+
+    def wait_for_backfill_complete(self, client: valkey.client):
+        waiters.wait_for_true(
+            lambda: not self.info(client).backfill_in_progress
+            )
+
+class ClusterTestUtils:
+    def execute_primaries(self, command: Union[str, list[str]]) -> list:
+        """Execute a command on all primary nodes in the cluster"""
+        return [
+            self.client_for_primary(i).execute_command(*command)
+            for i in range(len(self.replication_groups))
+        ]
+
+    def config_set(self, config: str, value: str):
+        """Set a config value on all primary nodes"""
+        assert self.execute_primaries(["config set", config, value]) == [True] * len(
+            self.replication_groups
+        )
+
+    def control_set(self, key: str, value: str):
+        """Set a controlled variable on all nodes using ft._debug"""
+        assert all(
+            [node.client.execute_command(*["ft._debug", "CONTROLLED_VARIABLE", "set", key, value]) == b"OK" for node in self.nodes]
+        )
+
+    def check_info(self, name: str, value: Union[str, int]):
+        """Check that a specific INFO SEARCH field has the expected value on all primaries"""
+        results = self.execute_primaries(["INFO", "SEARCH"])
+        failed = False
+        for ix, r in enumerate(results):
+            if r[name] != value:
+                print(
+                    name,
+                    " Expected:",
+                    value,
+                    " Received:",
+                    r[name],
+                    " on server:",
+                    ix,
+                )
+                failed = True
+        assert not failed
+
+    def _check_info_sum(self, name: str) -> int:
+        """Sum the values of a given info field across all servers"""
+        results = self.execute_primaries(["INFO", "SEARCH"])
+        return sum([int(r[name]) for r in results if name in r])
+
+    def check_info_sum(self, name: str, sum_value: int):
+        """Wait for the sum of a given info field across all servers to reach expected value"""
+        waiters.wait_for_equal(
+            lambda: self._check_info_sum(name), 
+            sum_value, 
+            timeout=5
+        )
+
+    def sum_docs(self, index: Index) -> int:
+        """Sum the document count for an index across all primary nodes"""
+        return sum([index.info(self.client_for_primary(i)).num_docs for i in range(len(self.replication_groups))])
+>>>>>>> 31d37d9

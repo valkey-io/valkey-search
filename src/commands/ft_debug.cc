@@ -8,13 +8,19 @@
 #include <absl/base/no_destructor.h>
 #include <absl/strings/ascii.h>
 
+<<<<<<< HEAD
 #include "module_config.h"
 #include "src/index_schema.h"
 #include "src/utils/string_interning.h"
+=======
+#include "src/coordinator/metadata_manager.h"
+#include "src/schema_manager.h"
+>>>>>>> 31d37d9
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
+#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 
 extern vmsdk::module::Options options;  // Declared in module_loader.cc
@@ -262,8 +268,14 @@ absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
        "list all controlled variables and their values"},
       {"FT._DEBUG PAUSEPOINT [ SET | RESET | TEST | LIST] <pausepoint>",
        "control pause points"},
+<<<<<<< HEAD
       {"FT._DEBUG TEXTINFO <index> ...", "show info about schema-level text"},
       {"FT._DEBUG STRINGPOOLSTATS", "Show InternStringPool Stats"},
+=======
+      {"FT_DEBUG SHOW_METADATA",
+       "list internal metadata manager table namespace"},
+      {"FT_DEBUG SHOW_INDEXSCHEMAS", "list internal index schema tables"},
+>>>>>>> 31d37d9
   };
   ValkeyModule_ReplySetArrayLength(ctx, 2 * help_text.size());
   for (auto &pair : help_text) {
@@ -305,10 +317,18 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     return PausePointControlCmd(ctx, itr);
   } else if (keyword == "CONTROLLED_VARIABLE") {
     return ControlledCmd(ctx, itr);
+<<<<<<< HEAD
   } else if (keyword == "STRINGPOOLSTATS") {
     return StringPoolStats(ctx, itr);
   } else if (keyword == "TEXTINFO") {
     return IndexSchema::TextInfoCmd(ctx, itr);
+=======
+  } else if (keyword == "SHOW_METADATA") {
+    return valkey_search::coordinator::MetadataManager::Instance().ShowMetadata(
+        ctx, itr);
+  } else if (keyword == "SHOW_INDEXSCHEMAS") {
+    return valkey_search::SchemaManager::Instance().ShowIndexSchemas(ctx, itr);
+>>>>>>> 31d37d9
   } else if (keyword == "HELP") {
     return HelpCmd(ctx, itr);
   } else {

@@ -143,6 +143,7 @@ mkdir -p ${LOGS_DIR}
 
 function run_pytest() {
   zap valkey-server
+<<<<<<< HEAD
   
   # Check if PYTEST_CAPTURE_DISABLED is set
   CAPTURE_ARG="--capture=sys"
@@ -153,6 +154,10 @@ function run_pytest() {
   
   LOG_INFO "Running: ${PYTHON_PATH} -m pytest ${FILTER_ARGS} ${CAPTURE_ARG} --cache-clear -v ${ROOT_DIR}/integration/"
   ${PYTHON_PATH} -m pytest ${FILTER_ARGS} --full-trace ${CAPTURE_ARG} --cache-clear -v ${ROOT_DIR}/integration/
+=======
+  LOG_INFO "Running: ${PYTHON_PATH} -m pytest ${FILTER_ARGS} --capture=sys --cache-clear -v ${ROOT_DIR}/integration/"
+  ${PYTHON_PATH} -m pytest ${FILTER_ARGS} --capture=sys --cache-clear -v ${ROOT_DIR}/integration/
+>>>>>>> 31d37d9
   RUN_SUCCESS=$?
 }
 

@@ -9,6 +9,11 @@
 namespace valkey_search {
 namespace acl {
 
+enum class KeyAccess : unsigned int {
+  kRead = VALKEYMODULE_CMD_KEY_ACCESS,
+  kWrite = VALKEYMODULE_CMD_KEY_INSERT,
+};
+
 struct ValkeyAclGetUserReplyView {
   absl::string_view cmds;
   absl::string_view keys;
@@ -28,15 +33,14 @@ Check if
 `module_prefixes`,
     * according to the ACL rules defined in the server.
 */
-absl::Status AclPrefixCheck(
-    ValkeyModuleCtx *ctx,
-    const absl::flat_hash_set<absl::string_view> &module_allowed_cmds,
-    const std::vector<std::string> &module_prefixes);
+absl::Status AclPrefixCheck(ValkeyModuleCtx *ctx, absl::string_view access,
+                            const std::vector<std::string> &module_prefixes);
 
-absl::Status AclPrefixCheck(
-    ValkeyModuleCtx *ctx,
-    const absl::flat_hash_set<absl::string_view> &module_allowed_cmds,
-    const data_model::IndexSchema &index_schema_proto);
+absl::Status AclPrefixCheck(ValkeyModuleCtx *ctx, acl::KeyAccess access,
+                            const data_model::IndexSchema &index_schema_proto);
+
+absl::Status AclPrefixCheck(ValkeyModuleCtx *ctx, acl::KeyAccess access,
+                            const std::vector<std::string> &module_prefixes);
 
 }  // namespace valkey_search
 #endif  // VALKEYSEARCH_SRC_COMMANDS_ACL_H_

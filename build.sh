@@ -164,6 +164,7 @@ export SAN_BUILD
 export ROOT_DIR
 . "${ROOT_DIR}/scripts/common.rc"
 
+<<<<<<< HEAD
 if [[ "${CMAKE_GENERATOR}" == "Ninja" ]]; then
   BUILD_TOOL="ninja"
 else
@@ -242,6 +243,8 @@ function build_icu_if_needed() {
 }
 
 
+=======
+>>>>>>> 31d37d9
 function configure() {
     printf "${BOLD_PINK}Running cmake...${RESET}\n"
     printf "Generating ${GREEN}${CMAKE_GENERATOR}${RESET} build files\n"
@@ -326,46 +329,56 @@ function check_tool() {
     printf "${GREEN}ok${RESET}\n"
 }
 
+function determine_ninja() {
+    local os_name=$(uname -s)
+    if [[ "${os_name}" == "Darwin" ]]; then
+        # ninja is can be installed via "brew"
+        echo "ninja"
+    else
+        # Check for ninja. On RedHat based Linux, it is called ninja-build, while on Debian based Linux, it is simply ninja
+        # Ubuntu / Mint et al will report "ID_LIKE=debian"
+        local debian_output=$(cat /etc/*-release | grep -i debian | wc -l)
+        if [ ${debian_output} -gt 0 ]; then
+            echo "ninja"
+        else
+            echo "ninja-build"
+        fi
+    fi
+}
+
 function check_tools() {
     local tools="cmake g++ gcc"
     for tool in $tools; do
         check_tool ${tool}
     done
 
-    os_name=$(uname -s)
-    if [[ "${BUILD_TOOL}" == "make" ]]; then
-        NINJA_TOOL="make"
-    elif [[ "${os_name}" == "Darwin" ]]; then
-        # ninja is can be installed via "brew"
-        NINJA_TOOL="ninja"
-    else
-        # Check for ninja. On RedHat based Linux, it is called ninja-build, while on Debian based Linux, it is simply ninja
-        # Ubuntu / Mint et al will report "ID_LIKE=debian"
-        local debian_output=$(cat /etc/*-release | grep -i debian | wc -l)
-        if [ ${debian_output} -gt 0 ]; then
-            NINJA_TOOL="ninja"
-        else
-            NINJA_TOOL="ninja-build"
-        fi
+    local build_tool=$(determine_ninja)
+    if [[ "${BUILD_TOOL}" =~ make ]]; then
+        build_tool="make"
     fi
-    check_tool ${NINJA_TOOL}
+    check_tool ${build_tool}
 }
 
 # If any of the CMake files is newer than our "build.ninja" file, force "cmake" before building
 function is_configure_required() {
-    local ninja_build_file=${BUILD_DIR}/build.ninja
+    if [[ "${BUILD_TOOL}" =~ ninja ]]; then
+      local top_level_build_file=${BUILD_DIR}/build.ninja
+    else
+      local top_level_build_file=${BUILD_DIR}/Makefile
+    fi
+
     if [[ "${RUN_CMAKE}" == "yes" ]]; then
         # User asked for configure
         echo "yes"
         return
     fi
 
-    if [ ! -f "${ninja_build_file}" ] || [ ! -f "${BUILD_DIR}/CMakeCache.txt" ]; then
-        # No ninja build file
+    if [ ! -f "${top_level_build_file}" ] || [ ! -f "${BUILD_DIR}/CMakeCache.txt" ]; then
         echo "yes"
         return
     fi
-    local build_file_lastmodified=$(get_file_last_modified "${ninja_build_file}")
+
+    local build_file_lastmodified=$(get_file_last_modified "${top_level_build_file}")
     local IFS=$'\n'
     local cmake_files=$(find "${ROOT_DIR}" -name "CMakeLists.txt" -o -name "*.cmake" | grep -v ".build-release" | grep -v ".build-debug")
     for cmake_file in $cmake_files; do
@@ -381,6 +394,14 @@ function is_configure_required() {
 cleanup() {
     cd "${ROOT_DIR}"
 }
+
+if [[ "${CMAKE_GENERATOR}" == "Ninja" ]]; then
+  # Using Ninja (the default)
+  BUILD_TOOL=$(determine_ninja)
+else
+  # Using Makefile
+  BUILD_TOOL="make -j$(num_proc)"
+fi
 
 # Ensure cleanup runs on exit
 trap cleanup EXIT
@@ -405,15 +426,10 @@ TESTS_DIR=${BUILD_DIR}/tests
 TEST_OUTPUT_FILE=${BUILD_DIR}/tests.out
 
 printf "Checking if configure is required..."
+
 FORCE_CMAKE=$(is_configure_required)
 printf "${GREEN}${FORCE_CMAKE}${RESET}\n"
 check_tools
-
-if [[ "${CMAKE_GENERATOR}" == "Ninja" ]]; then
-  BUILD_TOOL="${NINJA_TOOL}"
-else
-  BUILD_TOOL="make -j$(num_proc)"
-fi
 
 START_TIME=$(date +%s)
 

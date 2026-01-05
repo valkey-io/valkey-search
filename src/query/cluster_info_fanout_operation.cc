@@ -9,21 +9,32 @@
 
 #include "src/coordinator/metadata_manager.h"
 #include "src/schema_manager.h"
+#include "vmsdk/src/debug.h"
 
 namespace valkey_search::query::cluster_info_fanout {
 
 ClusterInfoFanoutOperation::ClusterInfoFanoutOperation(
-    uint32_t db_num, const std::string& index_name, unsigned timeout_ms)
+    uint32_t db_num, const std::string& index_name, unsigned timeout_ms,
+    bool enable_partial_results, bool require_consistency)
     : fanout::FanoutOperationBase<coordinator::InfoIndexPartitionRequest,
                                   coordinator::InfoIndexPartitionResponse,
-                                  vmsdk::cluster_map::FanoutTargetMode::kAll>(),
+                                  vmsdk::cluster_map::FanoutTargetMode::kAll>(
+          enable_partial_results, require_consistency),
       db_num_(db_num),
       index_name_(index_name),
       timeout_ms_(timeout_ms),
       exists_(false),
       backfill_complete_percent_max_(0.0f),
       backfill_complete_percent_min_(0.0f),
-      backfill_in_progress_(false) {}
+      backfill_in_progress_(false) {
+  // Get expected fingerprint/version from IndexSchema
+  auto status_or_schema =
+      SchemaManager::Instance().GetIndexSchema(db_num_, index_name_);
+  CHECK(status_or_schema.ok());
+  auto schema = status_or_schema.value();
+  expected_fingerprint_version_.set_fingerprint(schema->GetFingerprint());
+  expected_fingerprint_version_.set_version(schema->GetVersion());
+}
 
 std::vector<vmsdk::cluster_map::NodeInfo>
 ClusterInfoFanoutOperation::GetTargets() const {
@@ -37,10 +48,17 @@ unsigned ClusterInfoFanoutOperation::GetTimeoutMs() const {
 
 coordinator::InfoIndexPartitionRequest
 ClusterInfoFanoutOperation::GenerateRequest(
-    const vmsdk::cluster_map::NodeInfo&) {
+    const vmsdk::cluster_map::NodeInfo& node) {
   coordinator::InfoIndexPartitionRequest req;
   req.set_db_num(db_num_);
   req.set_index_name(index_name_);
+  *req.mutable_index_fingerprint_version() = expected_fingerprint_version_;
+
+  if (require_consistency_) {
+    req.set_require_consistency(true);
+    req.set_slot_fingerprint(node.shard->slots_fingerprint);
+  }
+
   return req;
 }
 
@@ -60,40 +78,7 @@ void ClusterInfoFanoutOperation::OnResponse(
     return;
   }
 
-  // Determine if we need to call OnError, do it outside the lock
-  // prevent double locking issue in OnError
-  bool should_call_error = false;
-  grpc::Status error_status(grpc::StatusCode::OK, "");
-  coordinator::FanoutErrorType error_type;
-  // check index fingerprint and version consistency
-  {
-    absl::MutexLock lock(&mutex_);
-    const auto& resp_ifv = resp.index_fingerprint_version();
-    if (!index_fingerprint_version_.has_value()) {
-      index_fingerprint_version_ = resp.index_fingerprint_version();
-    } else if (index_fingerprint_version_->fingerprint() !=
-                   resp_ifv.fingerprint() ||
-               index_fingerprint_version_->version() != resp_ifv.version()) {
-      should_call_error = true;
-      error_status =
-          grpc::Status(grpc::StatusCode::INTERNAL,
-                       "Cluster not in a consistent state, please retry.");
-      error_type = coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR;
-    }
-    if (resp.index_name() != index_name_) {
-      should_call_error = true;
-      error_status =
-          grpc::Status(grpc::StatusCode::INTERNAL,
-                       "Cluster not in a consistent state, please retry.");
-      error_type = coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR;
-    }
-  }
-
-  if (should_call_error) {
-    OnError(error_status, error_type, target);
-    return;
-  }
-
+  absl::MutexLock lock(&mutex_);
   exists_ = true;
   float node_percent = resp.backfill_complete_percent();
   if (backfill_complete_percent_max_ < node_percent) {
@@ -137,7 +122,8 @@ void ClusterInfoFanoutOperation::InvokeRemoteRpc(
 int ClusterInfoFanoutOperation::GenerateReply(ValkeyModuleCtx* ctx,
                                               ValkeyModuleString** argv,
                                               int argc) {
-  if (!index_name_error_nodes.empty() || !communication_error_nodes.empty() ||
+  if (!index_name_error_nodes.empty() ||
+      (!enable_partial_results_ && !communication_error_nodes.empty()) ||
       !inconsistent_state_error_nodes.empty()) {
     return FanoutOperationBase::GenerateErrorReply(ctx);
   }
@@ -161,7 +147,6 @@ int ClusterInfoFanoutOperation::GenerateReply(ValkeyModuleCtx* ctx,
 
 void ClusterInfoFanoutOperation::ResetForRetry() {
   exists_ = false;
-  index_fingerprint_version_.reset();
   backfill_complete_percent_max_ = 0.0f;
   backfill_complete_percent_min_ = 0.0f;
   backfill_in_progress_ = false;

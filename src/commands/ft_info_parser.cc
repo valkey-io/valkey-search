@@ -10,7 +10,6 @@
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
 #include "src/acl.h"
-#include "src/commands/commands.h"
 #include "src/query/cluster_info_fanout_operation.h"
 #include "src/query/primary_info_fanout_operation.h"
 #include "src/schema_manager.h"
@@ -56,6 +55,18 @@ vmsdk::KeyValueParser<InfoCommand> CreateInfoParser() {
             cmd.scope = InfoScope::kCluster;
             return absl::OkStatus();
           }));
+
+  parser.AddParamParser("ALLSHARDS", GENERATE_NEGATED_FLAG_PARSER(
+                                         InfoCommand, enable_partial_results));
+
+  parser.AddParamParser(
+      "SOMESHARDS", GENERATE_FLAG_PARSER(InfoCommand, enable_partial_results));
+
+  parser.AddParamParser("CONSISTENT",
+                        GENERATE_FLAG_PARSER(InfoCommand, require_consistency));
+
+  parser.AddParamParser("INCONSISTENT", GENERATE_NEGATED_FLAG_PARSER(
+                                            InfoCommand, require_consistency));
 
   return parser;
 }
@@ -110,10 +121,8 @@ absl::Status InfoCommand::ParseCommand(ValkeyModuleCtx *ctx,
 
 absl::Status InfoCommand::Execute(ValkeyModuleCtx *ctx) {
   // ACL check
-  static const auto permissions =
-      PrefixACLPermissions(kInfoCmdPermissions, kInfoCommand);
-  VMSDK_RETURN_IF_ERROR(
-      AclPrefixCheck(ctx, permissions, index_schema->GetKeyPrefixes()));
+  VMSDK_RETURN_IF_ERROR(AclPrefixCheck(ctx, acl::KeyAccess::kRead,
+                                       index_schema->GetKeyPrefixes()));
 
   const bool is_loading =
       ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_LOADING;
@@ -129,7 +138,8 @@ absl::Status InfoCommand::Execute(ValkeyModuleCtx *ctx) {
         index_schema->RespondWithInfo(ctx);
       } else {
         auto op = new query::primary_info_fanout::PrimaryInfoFanoutOperation(
-            ValkeyModule_GetSelectedDb(ctx), index_schema_name, timeout_ms);
+            ValkeyModule_GetSelectedDb(ctx), index_schema_name, timeout_ms,
+            enable_partial_results, require_consistency);
         op->StartOperation(ctx);
       }
       break;
@@ -142,7 +152,8 @@ absl::Status InfoCommand::Execute(ValkeyModuleCtx *ctx) {
         index_schema->RespondWithInfo(ctx);
       } else {
         auto op = new query::cluster_info_fanout::ClusterInfoFanoutOperation(
-            ValkeyModule_GetSelectedDb(ctx), index_schema_name, timeout_ms);
+            ValkeyModule_GetSelectedDb(ctx), index_schema_name, timeout_ms,
+            enable_partial_results, require_consistency);
         op->StartOperation(ctx);
       }
       break;

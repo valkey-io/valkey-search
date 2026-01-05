@@ -1427,13 +1427,16 @@ TEST_F(IndexSchemaRDBTest, LoadEndedDeletesOrphanedKeys) {
     absl::flat_hash_map<std::string, uint64_t> keys_in_index = {
         {"key1", 1}, {"key2", 2}, {"key3", 3}};
     EXPECT_CALL(*mock_index, ForEachTrackedKey(testing::_))
-        .WillOnce([&keys_in_index](
-                      absl::AnyInvocable<void(const InternedStringPtr &)> fn) {
-          for (const auto &[key, internal_id] : keys_in_index) {
-            InternedStringPtr interned_key = StringInternStore::Intern(key);
-            fn(interned_key);
-          }
-        });
+        .WillOnce(
+            [&keys_in_index](
+                absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn)
+                -> absl::Status {
+              for (const auto &[key, internal_id] : keys_in_index) {
+                InternedStringPtr interned_key = StringInternStore::Intern(key);
+                VMSDK_RETURN_IF_ERROR(fn(interned_key));
+              }
+              return absl::OkStatus();
+            });
 
     std::vector<absl::string_view> key_prefixes = {"prefix1", "prefix2"};
     std::string index_schema_name_str("index_schema_name");
@@ -1823,7 +1826,7 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
                                              indexes::DeletionType::kNone);
     }
 
-    EXPECT_EQ(hnsw_index->GetRecordCount(), num_vectors);
+    EXPECT_EQ(hnsw_index->GetTrackedKeyCount(), num_vectors);
     VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream_step1));
     LOG(INFO) << "✓ Step 1 completed - saved " << num_vectors
               << " vectors to RDB";
@@ -1858,7 +1861,7 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     EXPECT_EQ(normal_schema->GetStats().document_cnt, num_vectors);
     auto vec_index = normal_schema->GetIndex("embedding");
     VMSDK_EXPECT_OK_STATUSOR(vec_index);
-    EXPECT_EQ(vec_index.value()->GetRecordCount(), num_vectors);
+    EXPECT_EQ(vec_index.value()->GetTrackedKeyCount(), num_vectors);
     LOG(INFO) << "✓ Normal load verified - " << num_vectors
               << " vectors loaded";
   }
@@ -1922,7 +1925,7 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     EXPECT_EQ(skip_schema->GetStats().document_cnt, num_vectors);
     auto vec_index = skip_schema->GetIndex("embedding");
     VMSDK_EXPECT_OK_STATUSOR(vec_index);
-    EXPECT_EQ(vec_index.value()->GetRecordCount(), 0);
+    EXPECT_EQ(vec_index.value()->GetTrackedKeyCount(), 0);
     EXPECT_TRUE(skip_schema->IsBackfillInProgress());
     LOG(INFO) << "✓ Skip load verified - index empty, backfill ready";
   }
@@ -2025,7 +2028,7 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
                                              indexes::DeletionType::kNone);
     }
 
-    EXPECT_EQ(hnsw_index->GetRecordCount(), num_vectors);
+    EXPECT_EQ(hnsw_index->GetTrackedKeyCount(), num_vectors);
     VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream_step4));
     LOG(INFO) << "✓ Step 4 completed - saved mixed index with " << num_vectors
               << " records";
@@ -2069,7 +2072,7 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     VMSDK_EXPECT_OK_STATUSOR(tag_index);
     VMSDK_EXPECT_OK_STATUSOR(text_index);
 
-    EXPECT_EQ(vec_index.value()->GetRecordCount(), num_vectors);
+    EXPECT_EQ(vec_index.value()->GetTrackedKeyCount(), num_vectors);
     LOG(INFO) << "✓ Mixed index normal load verified";
   }
 
@@ -2142,7 +2145,7 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     VMSDK_EXPECT_OK_STATUSOR(tag_index);
     VMSDK_EXPECT_OK_STATUSOR(text_index);
 
-    EXPECT_EQ(vec_index.value()->GetRecordCount(), 0);
+    EXPECT_EQ(vec_index.value()->GetTrackedKeyCount(), 0);
     EXPECT_TRUE(mixed_skip_schema->IsBackfillInProgress());
     LOG(INFO) << "✓ Mixed index skip load verified";
   }
@@ -2238,9 +2241,9 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
                                              indexes::DeletionType::kNone);
     }
 
-    EXPECT_EQ(hnsw_index1->GetRecordCount(), additional_index_vectors);
-    EXPECT_EQ(hnsw_index2->GetRecordCount(), additional_index_vectors);
-    EXPECT_EQ(flat_index->GetRecordCount(), additional_index_vectors);
+    EXPECT_EQ(hnsw_index1->GetTrackedKeyCount(), additional_index_vectors);
+    EXPECT_EQ(hnsw_index2->GetTrackedKeyCount(), additional_index_vectors);
+    EXPECT_EQ(flat_index->GetTrackedKeyCount(), additional_index_vectors);
 
     VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream_multi));
     LOG(INFO) << "✓ Steps 6-7 completed - saved 3 indexes with "

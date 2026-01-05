@@ -116,7 +116,13 @@ message ReturnParameter {
   string alias = 2;
 }
 
+message IndexFingerprintVersion {
+  uint64 fingerprint = 1;
+  uint32 version = 2;
+}
+
 message SearchIndexPartitionRequest {
+  uint32 db_num = 1;
   string index_schema_name = 2;
   string attribute_alias = 3;
   optional string score_as = 4;
@@ -129,6 +135,10 @@ message SearchIndexPartitionRequest {
   bool no_content = 11;
   optional Predicate root_filter_predicate = 12;
   repeated ReturnParameter return_parameters = 13;
+  bool enable_partial_results = 14;
+  bool enable_consistency = 15;
+  IndexFingerprintVersion index_fingerprint_version = 16;
+  uint64 slot_fingerprint = 17;
 }
 
 message NeighborEntry {
@@ -149,6 +159,7 @@ message AttributeContentEntry {
 message GlobalMetadataVersionHeader {
   uint64 top_level_fingerprint = 1;
   uint32 top_level_version = 2;
+  uint32 top_level_min_version = 3;
 }
 
 message GlobalMetadata {
@@ -167,6 +178,7 @@ message GlobalMetadataEntry {
   uint64 fingerprint = 2;
   uint32 encoding_version = 3;
   optional google.protobuf.Any content = 4;
+  uint32 min_version = 5;
 }
 
 message GetGlobalMetadataRequest {}
@@ -177,6 +189,9 @@ message GetGlobalMetadataResponse {
 message InfoIndexPartitionRequest {
   uint32 db_num = 1;
   string index_name = 2;
+  bool require_consistency = 3;
+  IndexFingerprintVersion index_fingerprint_version = 4;
+  uint64 slot_fingerprint = 5;
 }
 
 enum FanoutErrorType {
@@ -184,11 +199,6 @@ enum FanoutErrorType {
   INDEX_NAME_ERROR = 1;
   INCONSISTENT_STATE_ERROR = 2;
   COMMUNICATION_ERROR = 3;
-}
-
-message IndexFingerprintVersion {
-  uint64 fingerprint = 1;
-  uint32 version = 2;
 }
 
 message InfoIndexPartitionResponse {
@@ -206,6 +216,12 @@ message InfoIndexPartitionResponse {
   uint64 recent_mutations_queue_delay = 12;
   string state = 13;
   string error = 14;
+<<<<<<< HEAD
   optional IndexFingerprintVersion index_fingerprint_version = 15;
   FanoutErrorType error_type = 16;
 }
+=======
+  FanoutErrorType error_type = 15;
+  uint32 db_num = 16;
+}
+>>>>>>> 31d37d9

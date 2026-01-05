@@ -811,7 +811,22 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
       terms.push_back(std::move(result.predicate));
       // For unquoted text, stop after first token. For exact phrases, continue
       // parsing all tokens.
-      if (!exact_phrase) break;
+      if (!exact_phrase) {
+        // Consume all consecutive trailing punctuation (not query syntax)
+        while (!IsEnd()) {
+          const auto& lexer = text_index_schema->GetLexer();
+          char ch = Peek();
+          if (lexer.IsPunctuation(ch) && ch != ')' && ch != '|' && ch != '(' &&
+              ch != '@' && ch != '{' && ch != '}' && ch != '[' && ch != ']' &&
+              ch != ':' && ch != ';' && ch != '$' && ch != '"' && ch != '-' &&
+              ch != '\\' && ch != '%' && ch != '*') {
+            ++pos_;
+          } else {
+            break;
+          }
+        }
+        break;
+      }
     }
     if (result.break_on_query_syntax) {
       break;

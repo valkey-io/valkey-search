@@ -94,8 +94,10 @@ void InternedString::Destructor() {
     if (!is_inline_) {
       auto ptr = reinterpret_cast<const OutOfLineInternedString*>(this);
       Allocator::Free(const_cast<char*>(ptr->out_of_line_data_));
+      delete ptr;
+    } else {
+      delete[] reinterpret_cast<char*>(this);
     }
-    delete[] reinterpret_cast<char*>(this);
   }
 }
 

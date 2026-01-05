@@ -2047,7 +2047,7 @@ TEST_F(MetadataManagerTimestampTest, TestTimestampPersistsAcrossLoadMetadata) {
             0);
 }
 
-TEST(IndexNameTest, IndexName) {
+TEST_F(MetadataManagerTest, IndexName) {
   for (std::string prefix : {"", "a", "abc", "{", "}"}) {
     for (std::string hash_tag : {"", "{a}", "{b}", "{}"}) {
       for (std::string suffix : {"", "x", "xy", "{", "}", "{}"}) {

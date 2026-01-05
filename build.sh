@@ -164,7 +164,6 @@ export SAN_BUILD
 export ROOT_DIR
 . "${ROOT_DIR}/scripts/common.rc"
 
-<<<<<<< HEAD
 if [[ "${CMAKE_GENERATOR}" == "Ninja" ]]; then
   BUILD_TOOL="ninja"
 else
@@ -243,8 +242,6 @@ function build_icu_if_needed() {
 }
 
 
-=======
->>>>>>> 31d37d9
 function configure() {
     printf "${BOLD_PINK}Running cmake...${RESET}\n"
     printf "Generating ${GREEN}${CMAKE_GENERATOR}${RESET} build files\n"

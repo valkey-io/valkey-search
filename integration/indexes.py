@@ -202,9 +202,6 @@ class Index:
     
     def backfill_complete(self, client: valkey.client) -> bool:
         res = self.info(client)
-<<<<<<< HEAD
-        return res.backfill_in_progress == 0
-=======
         return res.backfill_in_progress == 0
     
     def query(self, client:valkey.client, query_string: str, *args) -> dict[bytes, dict[bytes, bytes]]:
@@ -286,4 +283,3 @@ class ClusterTestUtils:
     def sum_docs(self, index: Index) -> int:
         """Sum the document count for an index across all primary nodes"""
         return sum([index.info(self.client_for_primary(i)).num_docs for i in range(len(self.replication_groups))])
->>>>>>> 31d37d9

@@ -90,14 +90,11 @@ struct SearchParameters {
   bool no_content{false};
   FilterParseResults filter_parse_results;
   std::vector<ReturnAttribute> return_attributes;
-<<<<<<< HEAD
   bool inorder{false};
   std::optional<uint32_t> slop;
   bool verbatim{false};
-=======
   coordinator::IndexFingerprintVersion index_fingerprint_version;
   uint64_t slot_fingerprint;
->>>>>>> 31d37d9
   struct ParseTimeVariables {
     // Members of this struct are only valid during the parsing of
     // VectorSearchParameters on the mainthread. They get cleared

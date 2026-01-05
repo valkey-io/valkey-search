@@ -1407,7 +1407,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
     // TODO: Text index key tracking is not yet implemented
     // Validate that GetRecordCount returns 0 (expected for unimplemented key
     // tracking)
-    EXPECT_EQ(text_index->GetRecordCount(), 0);
+    EXPECT_EQ(text_index->GetTrackedKeyCount(), 0);
 
     // TODO: Document count will be 0 until proper key tracking is implemented
     // This test verifies RDB save/load works without crashing, not document

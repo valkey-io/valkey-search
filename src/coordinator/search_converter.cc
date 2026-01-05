@@ -230,12 +230,8 @@ GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request,
   parameters->limit = query::LimitParameter{request.limit().first_index(),
                                             request.limit().number()};
   parameters->no_content = request.no_content();
-<<<<<<< HEAD
-
-=======
   parameters->enable_partial_results = request.enable_partial_results();
   parameters->enable_consistency = request.enable_consistency();
->>>>>>> 31d37d9
   if (request.has_root_filter_predicate()) {
     VMSDK_ASSIGN_OR_RETURN(
         parameters->filter_parse_results.root_predicate,

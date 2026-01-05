@@ -666,13 +666,8 @@ TEST_P(FetchFilteredKeysTest, ParseParams) {
   auto vector_index = dynamic_cast<indexes::VectorBase *>(
       index_schema->GetIndex(kVectorAttributeAlias)->get());
   const FetchFilteredKeysTestCase &test_case = GetParam();
-<<<<<<< HEAD
-  query::SearchParameters params(100000, nullptr);
-  FilterParser parser(*index_schema, test_case.filter, {});
-=======
   query::SearchParameters params(100000, nullptr, 0);
-  FilterParser parser(*index_schema, test_case.filter);
->>>>>>> 31d37d9
+  FilterParser parser(*index_schema, test_case.filter, {});
   params.filter_parse_results = std::move(parser.Parse().value());
   params.k = 100;
   auto vectors = DeterministicallyGenerateVectors(1, kVectorDimensions, 10.0);

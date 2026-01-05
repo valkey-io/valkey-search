@@ -19,13 +19,10 @@ std::vector<ValkeyModuleString *> ToValkeyStringVector(
     absl::string_view params_str, absl::string_view exclude) {
   std::vector<absl::string_view> params =
       absl::StrSplit(params_str, ' ', absl::SkipEmpty());
-<<<<<<< HEAD
-  std::vector<ValkeyModuleString*> ret;
-  for (size_t i = 0; i < params.size(); ++i) {
-=======
   std::vector<ValkeyModuleString *> ret;
-  for (size_t i = 0; i < params.size(); i += 2) {
->>>>>>> 31d37d9
+  for (size_t i = 0; i < params.size(); ++i) {
+    // std::vector<ValkeyModuleString *> ret;
+    // for (size_t i = 0; i < params.size(); i += 2) {
     if (exclude == params[i]) {
       continue;
     }

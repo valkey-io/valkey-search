@@ -25,7 +25,6 @@
 #include "absl/synchronization/blocking_counter.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/time/time.h"
-#include "command_parser.h"
 #include "gtest/gtest_prod.h"
 #include "src/attribute.h"
 #include "src/attribute_data_type.h"
@@ -38,6 +37,7 @@
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/blocked_client.h"
+#include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/time_sliced_mrmw_mutex.h"
@@ -129,7 +129,6 @@ class IndexSchema : public KeyspaceEventSubscription,
   inline const std::string &GetName() const { return name_; }
   inline std::uint32_t GetDBNum() const { return db_num_; }
 
-<<<<<<< HEAD
   void CreateTextIndexSchema() {
     text_index_schema_ = std::make_shared<indexes::text::TextIndexSchema>(
         language_, punctuation_, with_offsets_, stop_words_);
@@ -137,7 +136,6 @@ class IndexSchema : public KeyspaceEventSubscription,
   std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
     return text_index_schema_;
   }
-=======
   inline uint64_t GetFingerprint() const { return fingerprint_; }
   inline uint32_t GetVersion() const { return version_; }
 
@@ -145,7 +143,6 @@ class IndexSchema : public KeyspaceEventSubscription,
     fingerprint_ = fingerprint;
   }
   inline void SetVersion(uint32_t version) { version_ = version; }
->>>>>>> 31d37d9
 
   void OnKeyspaceNotification(ValkeyModuleCtx *ctx, int type, const char *event,
                               ValkeyModuleString *key) override;
@@ -230,7 +227,6 @@ class IndexSchema : public KeyspaceEventSubscription,
   std::unique_ptr<AttributeDataType> attribute_data_type_;
   std::string name_;
   uint32_t db_num_{0};
-<<<<<<< HEAD
   data_model::Language language_{data_model::LANGUAGE_ENGLISH};
   std::string punctuation_;
   bool with_offsets_{true};
@@ -243,11 +239,9 @@ class IndexSchema : public KeyspaceEventSubscription,
   std::optional<uint32_t> suffix_fields_min_stem_size_{std::nullopt};
   absl::flat_hash_set<std::string> all_text_identifiers_;
   absl::flat_hash_set<std::string> suffix_text_identifiers_;
-=======
   bool loaded_v2_{false};
   uint64_t fingerprint_{0};
   uint32_t version_{0};
->>>>>>> 31d37d9
 
   vmsdk::ThreadPool *mutations_thread_pool_{nullptr};
   InternedStringHashMap<DocumentMutation> tracked_mutated_records_

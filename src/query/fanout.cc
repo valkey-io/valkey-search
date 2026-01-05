@@ -33,6 +33,9 @@
 #include "src/coordinator/search_converter.h"
 #include "src/coordinator/util.h"
 #include "src/indexes/vector_base.h"
+#include "src/metrics.h"
+#include "src/query/inflight_retry.h"
+#include "src/query/response_generator.h"
 #include "src/query/search.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
@@ -166,6 +169,41 @@ struct SearchPartitionResultsTracker {
   }
 };
 
+struct LocalInFlightRetryContext : public query::InFlightRetryContextBase {
+  std::deque<indexes::Neighbor> neighbors;
+  std::unique_ptr<SearchParameters> parameters;
+  std::shared_ptr<SearchPartitionResultsTracker> tracker;
+
+  LocalInFlightRetryContext(std::deque<indexes::Neighbor> nbrs,
+                            std::unique_ptr<SearchParameters> params,
+                            std::vector<InternedStringPtr> keys,
+                            std::shared_ptr<SearchPartitionResultsTracker> trk)
+      : InFlightRetryContextBase(std::move(keys)),
+        neighbors(std::move(nbrs)),
+        parameters(std::move(params)),
+        tracker(std::move(trk)) {}
+
+  bool IsCancelled() const override {
+    return parameters->cancellation_token->IsCancelled();
+  }
+
+  const std::shared_ptr<IndexSchema> &GetIndexSchema() const override {
+    return parameters->index_schema;
+  }
+
+  const char *GetDesc() const override {
+    return "Local fanout full-text query";
+  }
+
+  void OnComplete() override { tracker->AddResults(neighbors); }
+
+  void OnCancelled() override {
+    if (parameters->enable_partial_results) {
+      tracker->AddResults(neighbors);
+    }
+  }
+};
+
 void PerformRemoteSearchRequest(
     std::unique_ptr<coordinator::SearchIndexPartitionRequest> request,
     const std::string &address,
@@ -256,6 +294,23 @@ absl::Status PerformSearchFanoutAsync(
         [tracker](absl::StatusOr<std::deque<indexes::Neighbor>> &neighbors,
                   std::unique_ptr<SearchParameters> parameters) {
           if (neighbors.ok()) {
+            // Text predicate evaluation requires main thread to ensure text
+            // indexes reflect current keyspace. Block if result keys have
+            // in-flight mutations.
+            if (!parameters->no_content &&
+                query::QueryHasTextPredicate(*parameters)) {
+              auto neighbor_keys =
+                  query::CollectNeighborKeys(neighbors.value());
+              bool has_conflicts =
+                  parameters->index_schema->HasAnyConflictingInFlightKeys(
+                      neighbor_keys);
+              auto *retry_ctx = new LocalInFlightRetryContext(
+                  std::move(neighbors.value()), std::move(parameters),
+                  std::move(neighbor_keys), tracker);
+
+              query::ScheduleOnMainThread(retry_ctx, has_conflicts);
+              return;
+            }
             tracker->AddResults(*neighbors);
           } else {
             if (absl::IsResourceExhausted(neighbors.status())) {

@@ -414,6 +414,7 @@ absl::StatusOr<FilterParseResults> FilterParser::Parse() {
     return results;
   }
   filter_identifiers_.clear();
+  has_text_predicate_ = false;
   pos_ = 0;
   VMSDK_ASSIGN_OR_RETURN(auto parse_result, ParseExpression(0));
   if (!IsEnd()) {
@@ -421,6 +422,7 @@ absl::StatusOr<FilterParseResults> FilterParser::Parse() {
   }
   results.root_predicate = std::move(parse_result.prev_predicate);
   results.filter_identifiers.swap(filter_identifiers_);
+  results.has_text_predicate = has_text_predicate_;
   // Only generate query syntax tree output if debug logging is enabled.
   if (valkey_search::options::GetLogLevel().GetValue() ==
       static_cast<int>(LogLevel::kDebug)) {
@@ -838,6 +840,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
     pred = std::move(terms[0]);
     node_count_++;
   }
+  has_text_predicate_ = true;  // Flag that we parsed a text predicate
   return pred;
 }
 

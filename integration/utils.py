@@ -2,11 +2,24 @@
 Utility functions and helper classes for Valkey Search integration tests.
 """
 
+import threading
 from typing import Dict, Any, Optional
 from valkey.client import Valkey
 from valkey import ResponseError
 from ft_info_parser import FTInfoParser
 from valkeytestframework.util import waiters
+
+def run_in_thread(func):
+    """Run func in thread, return (thread, result, error) for later inspection."""
+    result, error = [None], [None]
+    def wrapper():
+        try:
+            result[0] = func()
+        except Exception as e:
+            error[0] = e
+    t = threading.Thread(target=wrapper)
+    t.start()
+    return t, result, error
 
 class IndexingTestHelper:
     """

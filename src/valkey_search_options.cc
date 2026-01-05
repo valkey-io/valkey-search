@@ -288,6 +288,21 @@ constexpr absl::string_view kEnableProximityPrefilterEval{
 static auto enable_proximity_prefilter_eval =
     config::BooleanBuilder(kEnableProximityPrefilterEval, true).Build();
 
+/// Register the "--inflight-retry-interval-ms" flag. Controls the retry
+/// interval for checking in-flight keys during full-text search (milliseconds)
+constexpr absl::string_view kInFlightRetryIntervalMsConfig{
+    "inflight-retry-interval-ms"};
+constexpr uint32_t kDefaultInFlightRetryIntervalMs{3};
+constexpr uint32_t kMinimumInFlightRetryIntervalMs{1};
+constexpr uint32_t kMaximumInFlightRetryIntervalMs{5000};
+static auto inflight_retry_interval_ms =
+    vmsdk::config::NumberBuilder(
+        kInFlightRetryIntervalMsConfig,   // name
+        kDefaultInFlightRetryIntervalMs,  // default (3ms)
+        kMinimumInFlightRetryIntervalMs,  // min (1ms)
+        kMaximumInFlightRetryIntervalMs)  // max (5 seconds)
+        .Build();
+
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 
 vmsdk::config::Number& GetHNSWBlockSize() {
@@ -364,6 +379,10 @@ vmsdk::config::Boolean& GetEnablePrefilterEval() {
 vmsdk::config::Boolean& GetEnableProximityPrefilterEval() {
   return dynamic_cast<vmsdk::config::Boolean&>(
       *enable_proximity_prefilter_eval);
+}
+
+vmsdk::config::Number& GetInFlightRetryIntervalMs() {
+  return dynamic_cast<vmsdk::config::Number&>(*inflight_retry_interval_ms);
 }
 
 }  // namespace options

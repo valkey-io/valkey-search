@@ -164,5 +164,7 @@ CalcBestMatchingPrefilteredKeys(
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>& entries_fetchers,
     indexes::VectorBase* vector_index);
 
+bool QueryHasTextPredicate(const SearchParameters& parameters);
+
 }  // namespace valkey_search::query
 #endif  // VALKEYSEARCH_SRC_QUERY_SEARCH_H_

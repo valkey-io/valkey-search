@@ -30,6 +30,8 @@ thread_inspect_t ConvertToMachThread(pthread_t tid) {
   return thread_id;
 }
 }  // namespace
+
+ThreadMonitor::ThreadInfoFunc ThreadMonitor::thread_info_func = thread_info;
 #endif
 
 ThreadMonitor::ThreadMonitor(pthread_t thread_id) { thread_id_ = thread_id; }
@@ -66,13 +68,16 @@ absl::StatusOr<double> ThreadMonitor::GetThreadCPUPercentage() {
   if (cpu_time_elapsed_us < 0) {
     // Increment the monitoring counter for negative values
     thread_monitoring_cpu_error_cnt.fetch_add(1, std::memory_order_relaxed);
-    return absl::InternalError(
-        "Internal error in CPU calculation: negative cpu time");
+    return absl::InternalError(absl::StrFormat(
+        "Internal error in CPU calculation: negative cpu time for thread ID %u",
+        static_cast<unsigned int>(thread_id_)));
   }
 
   if (wall_time_elapsed < 0) {
     return absl::InternalError(
-        "Internal error in CPU calculation: negative wall time");
+        absl::StrFormat("Internal error in CPU calculation: negative wall time "
+                        "for thread ID %u",
+                        static_cast<unsigned int>(thread_id_)));
   }
 
   return (static_cast<double>(cpu_time_elapsed_us) / wall_time_elapsed) * 100.0;
@@ -84,8 +89,8 @@ absl::StatusOr<uint64_t> ThreadMonitor::GetCPUTime() const {
   mach_msg_type_number_t count = THREAD_BASIC_INFO_COUNT;
   thread_inspect_t target = ConvertToMachThread(thread_id_);
 
-  if (thread_info(target, THREAD_BASIC_INFO, (thread_info_t)&info, &count) !=
-      KERN_SUCCESS) {
+  if (thread_info_func(target, THREAD_BASIC_INFO, (thread_info_t)&info,
+                       &count) != KERN_SUCCESS) {
     return absl::InternalError(
         absl::StrFormat("Failed to get thread info for thread %p", thread_id_));
   }

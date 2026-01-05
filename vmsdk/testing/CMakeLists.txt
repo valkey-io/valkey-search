@@ -95,5 +95,7 @@ set(SRCS_THREAD_MONITORING_TEST ${CMAKE_CURRENT_LIST_DIR}/thread_monitoring_test
 add_executable(thread_monitoring_test ${SRCS_THREAD_MONITORING_TEST})
 target_include_directories(thread_monitoring_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(thread_monitoring_test PUBLIC vmsdklib)
-target_link_options(thread_monitoring_test PRIVATE "-Wl,--wrap=clock_gettime")
+if(NOT APPLE)
+  target_link_options(thread_monitoring_test PRIVATE "-Wl,--wrap=clock_gettime")
+endif()
 finalize_test_flags(thread_monitoring_test)

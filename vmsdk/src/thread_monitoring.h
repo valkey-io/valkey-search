@@ -10,10 +10,19 @@
 
 #include "absl/status/statusor.h"
 
+#ifdef __APPLE__
+#include <mach/mach.h>
+#endif
+
 namespace vmsdk {
 
 class ThreadMonitor {
  public:
+#ifdef __APPLE__
+  using ThreadInfoFunc = kern_return_t(*)(thread_inspect_t, thread_flavor_t, thread_info_t, mach_msg_type_number_t*);
+  static ThreadInfoFunc thread_info_func;
+#endif
+
   ThreadMonitor(pthread_t thread_id);
   ~ThreadMonitor() = default;
 

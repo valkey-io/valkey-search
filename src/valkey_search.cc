@@ -128,8 +128,9 @@ static vmsdk::info_field::Float used_read_cpu(
       auto reader_thread_pool = ValkeySearch::Instance().GetReaderThreadPool();
       auto result = reader_thread_pool->GetAvgCPUPercentage();
       if (!result.ok()) {
-        VMSDK_LOG(WARNING, nullptr) << "Failed to get read CPU percentage: "
-                                    << result.status().message();
+        VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 10)
+            << "Failed to get read CPU percentage: "
+            << result.status().message();
         return 0.0;
       }
       return result.value();
@@ -141,8 +142,9 @@ static vmsdk::info_field::Float used_write_cpu(
       auto writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
       auto result = writer_thread_pool->GetAvgCPUPercentage();
       if (!result.ok()) {
-        VMSDK_LOG(WARNING, nullptr) << "Failed to get write CPU percentage: "
-                                    << result.status().message();
+        VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 10)
+            << "Failed to get write CPU percentage: "
+            << result.status().message();
         return 0.0;
       }
       return result.value();

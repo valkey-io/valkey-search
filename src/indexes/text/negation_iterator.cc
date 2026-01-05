@@ -19,7 +19,6 @@ NegationTextIterator::NegationTextIterator(
     : schema_tracked_keys_(schema_tracked_keys),
       schema_untracked_keys_(schema_untracked_keys),
       query_field_mask_(query_field_mask),
-      phase_(TRACKED),
       tracked_iter_(schema_tracked_keys.begin()),
       untracked_iter_(schema_untracked_keys.begin()) {
   if (positive_iterator) {
@@ -29,78 +28,58 @@ NegationTextIterator::NegationTextIterator(
       positive_iterator->NextKey();
     }
   }
-
-  while (tracked_iter_ != schema_tracked_keys_.end() &&
-         matched_keys_.contains(*tracked_iter_)) {
-    ++tracked_iter_;
-  }
-
-  if (tracked_iter_ == schema_tracked_keys_.end()) {
-    phase_ =
-        (untracked_iter_ != schema_untracked_keys_.end()) ? UNTRACKED : DONE;
-  }
 }
 
 FieldMaskPredicate NegationTextIterator::QueryFieldMask() const {
   return query_field_mask_;
 }
 
-bool NegationTextIterator::DoneKeys() const { return phase_ == DONE; }
+bool NegationTextIterator::DoneKeys() const {
+  return !IsTrackedPhase() && !IsUntrackedPhase();
+}
 
 const Key& NegationTextIterator::CurrentKey() const {
-  CHECK(phase_ != DONE);
-  return (phase_ == TRACKED) ? *tracked_iter_ : *untracked_iter_;
+  CHECK(!DoneKeys());
+  return IsTrackedPhase() ? *tracked_iter_ : *untracked_iter_;
 }
 
 bool NegationTextIterator::NextKey() {
   positions_exhausted_ = false;
 
-  if (phase_ == TRACKED) {
-    do {
+  if (!initialized_) {
+    initialized_ = true;
+    // First call: skip matched without advancing
+    while (IsTrackedPhase() && matched_keys_.contains(*tracked_iter_)) {
       ++tracked_iter_;
-      if (tracked_iter_ == schema_tracked_keys_.end()) {
-        phase_ = (untracked_iter_ != schema_untracked_keys_.end()) ? UNTRACKED
-                                                                   : DONE;
-        return (phase_ == UNTRACKED);
-      }
-    } while (matched_keys_.contains(*tracked_iter_));
-    return true;
-  }
-
-  if (phase_ == UNTRACKED) {
-    ++untracked_iter_;
-    if (untracked_iter_ == schema_untracked_keys_.end()) {
-      phase_ = DONE;
-      return false;
     }
-    return true;
+    return !DoneKeys();
   }
 
-  return false;
+  // Subsequent calls: advance then skip
+  if (IsTrackedPhase()) {
+    ++tracked_iter_;
+  } else if (IsUntrackedPhase()) {
+    ++untracked_iter_;
+  } else {
+    return false;
+  }
+
+  // Skip matched keys in tracked phase
+  while (IsTrackedPhase() && matched_keys_.contains(*tracked_iter_)) {
+    ++tracked_iter_;
+  }
+
+  return !DoneKeys();
 }
 
 bool NegationTextIterator::SeekForwardKey(const Key& target_key) {
   positions_exhausted_ = false;
 
-  while (phase_ != DONE && CurrentKey() < target_key) {
-    if (phase_ == TRACKED) {
-      do {
-        ++tracked_iter_;
-        if (tracked_iter_ == schema_tracked_keys_.end()) {
-          phase_ = (untracked_iter_ != schema_untracked_keys_.end()) ? UNTRACKED
-                                                                     : DONE;
-          break;
-        }
-      } while (matched_keys_.contains(*tracked_iter_));
-    } else {
-      ++untracked_iter_;
-      if (untracked_iter_ == schema_untracked_keys_.end()) {
-        phase_ = DONE;
-      }
-    }
+  while (!DoneKeys() && CurrentKey() < target_key) {
+    NextKey();
   }
 
-  return (phase_ != DONE);
+  return !DoneKeys();
 }
 
 bool NegationTextIterator::DonePositions() const {
@@ -122,6 +101,6 @@ FieldMaskPredicate NegationTextIterator::CurrentFieldMask() const {
   return query_field_mask_;
 }
 
-bool NegationTextIterator::IsIteratorValid() const { return (phase_ != DONE); }
+bool NegationTextIterator::IsIteratorValid() const { return !DoneKeys(); }
 
 }  // namespace valkey_search::indexes::text

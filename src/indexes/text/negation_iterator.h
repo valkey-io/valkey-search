@@ -40,15 +40,21 @@ class NegationTextIterator : public TextIterator {
   bool IsIteratorValid() const override;
 
  private:
-  enum Phase { TRACKED, UNTRACKED, DONE };
+  bool IsTrackedPhase() const {
+    return tracked_iter_ != schema_tracked_keys_.end();
+  }
+
+  bool IsUntrackedPhase() const {
+    return !IsTrackedPhase() && untracked_iter_ != schema_untracked_keys_.end();
+  }
 
   const InternedStringSet& schema_tracked_keys_;
   const InternedStringSet& schema_untracked_keys_;
   InternedStringSet matched_keys_;
-  Phase phase_;
   InternedStringSet::const_iterator tracked_iter_;
   InternedStringSet::const_iterator untracked_iter_;
   FieldMaskPredicate query_field_mask_;
+  bool initialized_ = false;
   PositionRange dummy_position_{0, 0};
   bool positions_exhausted_ = false;
 };

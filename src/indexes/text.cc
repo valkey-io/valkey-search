@@ -128,20 +128,16 @@ namespace valkey_search::query {
 void* TextPredicate::Search(bool negate) const {
   size_t estimated_size = EstimateSize();
 
+  auto fetcher = std::make_unique<indexes::Text::EntriesFetcher>(
+      estimated_size, GetTextIndexSchema()->GetTextIndex(), nullptr,
+      GetFieldMask());
+  fetcher->predicate_ = this;
+
   if (!negate) {
-    auto fetcher = std::make_unique<indexes::Text::EntriesFetcher>(
-        estimated_size, GetTextIndexSchema()->GetTextIndex(), nullptr,
-        GetFieldMask());
-    fetcher->predicate_ = this;
     return fetcher.release();
   }
 
-  auto positive_iterator = BuildTextIterator(
-      std::make_unique<indexes::Text::EntriesFetcher>(
-          estimated_size, GetTextIndexSchema()->GetTextIndex(), nullptr,
-          GetFieldMask())
-          .get());
-
+  auto positive_iterator = BuildTextIterator(fetcher.get());
   auto negation_iterator =
       std::make_unique<indexes::text::NegationTextIterator>(
           std::move(positive_iterator),

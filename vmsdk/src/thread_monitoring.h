@@ -19,7 +19,9 @@ namespace vmsdk {
 class ThreadMonitor {
  public:
 #ifdef __APPLE__
-  using ThreadInfoFunc = kern_return_t(*)(thread_inspect_t, thread_flavor_t, thread_info_t, mach_msg_type_number_t*);
+  using ThreadInfoFunc = kern_return_t (*)(thread_inspect_t, thread_flavor_t,
+                                           thread_info_t,
+                                           mach_msg_type_number_t *);
   static ThreadInfoFunc thread_info_func;
 #endif
 
@@ -27,8 +29,6 @@ class ThreadMonitor {
   ~ThreadMonitor() = default;
 
   absl::StatusOr<double> GetThreadCPUPercentage();
-
-  static uint64_t GetNegativeCpuCount();
 
   // Returns the thread spent time (user + system)
   absl::StatusOr<uint64_t> GetCPUTime() const;

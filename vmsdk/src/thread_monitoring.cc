@@ -36,10 +36,6 @@ ThreadMonitor::ThreadInfoFunc ThreadMonitor::thread_info_func = thread_info;
 
 ThreadMonitor::ThreadMonitor(pthread_t thread_id) { thread_id_ = thread_id; }
 
-uint64_t ThreadMonitor::GetNegativeCpuCount() {
-  return thread_monitoring_cpu_error_cnt.load(std::memory_order_relaxed);
-}
-
 absl::StatusOr<double> ThreadMonitor::GetThreadCPUPercentage() {
   // First call, initializing values
   if (!last_cpu_time_.has_value() || !last_wall_time_micro_.has_value()) {
@@ -67,8 +63,7 @@ absl::StatusOr<double> ThreadMonitor::GetThreadCPUPercentage() {
 
   if (cpu_time_elapsed_us < 0) {
     // Increment the monitoring counter for negative values
-    thread_monitoring_cpu_error_cnt.fetch_add(1, std::memory_order_relaxed);
-    return absl::InternalError(absl::StrFormat(
+    return absl::FailedPreconditionError(absl::StrFormat(
         "Internal error in CPU calculation: negative cpu time for thread ID %u",
         static_cast<unsigned int>(thread_id_)));
   }

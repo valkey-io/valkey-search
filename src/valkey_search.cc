@@ -153,7 +153,7 @@ static vmsdk::info_field::Float used_write_cpu(
 static vmsdk::info_field::Integer thread_monitoring_cpu_error_cnt(
     "thread-pool", "thread_monitoring_cpu_error_cnt",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> uint64_t {
-      return vmsdk::ThreadMonitor::GetNegativeCpuCount();
+      return vmsdk::ThreadPool::GetNegativeCpuCount();
     }));
 
 static vmsdk::info_field::Integer ingest_hash_keys(

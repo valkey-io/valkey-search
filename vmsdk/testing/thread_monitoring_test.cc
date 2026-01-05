@@ -74,7 +74,7 @@ TEST(ThreadMonitorTest, MockedSystemCallsNegativeCPU) {
   // Second call - lower CPU time (negative elapsed)
   auto result2 = monitor.GetThreadCPUPercentage();
   ASSERT_FALSE(result2.ok());
-  EXPECT_EQ(ThreadMonitor::GetNegativeCpuCount(), 1);
+  ASSERT_EQ(result2.status().code(), absl::StatusCode::kFailedPrecondition);
   use_wrap_thread_functions.store(false, std::memory_order_relaxed);
 #ifdef __APPLE__
   ThreadMonitor::thread_info_func = thread_info;

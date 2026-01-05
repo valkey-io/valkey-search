@@ -32,6 +32,11 @@
 #define RAX_H
 
 #include <stdint.h>
+#include <stddef.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /* Representation of a radix tree as implemented in this file, that contains
  * the strings "foo", "foobar" and "footer" after the insertion of each
@@ -186,12 +191,17 @@ typedef struct raxIterator {
     raxNodeCallback node_cb; /* Optional node callback. Normally set to NULL. */
 } raxIterator;
 
+/* Callback type for raxMutate. Receives current value (NULL if key doesn't exist)
+ * and the passed through caller context. Returns new value (NULL to delete the key). */
+typedef void *(*raxMutateCallback)(void *current_value, void *caller_context);
+
 /* Exported API. */
 rax *raxNew(void);
 int raxInsert(rax *rax, unsigned char *s, size_t len, void *data, void **old);
 int raxTryInsert(rax *rax, unsigned char *s, size_t len, void *data, void **old);
 int raxRemove(rax *rax, unsigned char *s, size_t len, void **old);
 int raxFind(rax *rax, unsigned char *s, size_t len, void **value);
+int raxMutate(rax *rax, unsigned char *s, size_t len, raxMutateCallback callback, void *caller_context);
 void raxFree(rax *rax);
 void raxFreeWithCallback(rax *rax, void (*free_callback)(void *));
 void raxStart(raxIterator *it, rax *rt);
@@ -211,5 +221,9 @@ void raxSetDebugMsg(int onoff);
 /* Internal API. May be used by the node callback in order to access rax nodes
  * in a low level way, so this function is exported as well. */
 void raxSetData(raxNode *n, void *data);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

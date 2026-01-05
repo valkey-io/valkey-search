@@ -526,10 +526,13 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
     vmsdk::UniqueValkeyString record = VectorExternalizer::Instance().GetRecord(
         ctx, attribute_data_type_.get(), key_obj.get(), key_cstr,
         attribute.GetIdentifier(), is_module_owned);
-    // Early return on record not found just if the record not tracked.
-    // Otherwise, it will be processed as a delete
-    if (!record && !attribute.GetIndex()->IsTracked(interned_key) &&
-        !InTrackedMutationRecords(interned_key, attribute.GetIdentifier())) {
+    // For text indexes: always process to track ALL prefix keys (even with no
+    // text) For other indexes: skip if record not found and not already tracked
+    bool skip_processing =
+        !record && !attribute.GetIndex()->IsTracked(interned_key) &&
+        !InTrackedMutationRecords(interned_key, attribute.GetIdentifier());
+    if (skip_processing &&
+        attribute.GetIndex()->GetIndexerType() != indexes::IndexerType::kText) {
       continue;
     }
     if (!is_module_owned) {

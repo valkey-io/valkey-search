@@ -131,11 +131,27 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr& key) {
   {
     std::lock_guard<std::mutex> guard(in_progress_key_updates_mutex_);
     auto node = in_progress_key_updates_.extract(key);
-    // Exit early if the key contains no new text updates
-    if (node.empty()) {
-      return;
+    if (!node.empty()) {
+      token_positions = std::move(node.mapped());
     }
-    token_positions = std::move(node.mapped());
+  }
+
+  // Track key at schema level: ALL prefix keys must be tracked
+  bool has_any_text_content = !token_positions.empty();
+  {
+    std::lock_guard<std::mutex> guard(schema_keys_mutex_);
+    if (has_any_text_content) {
+      schema_tracked_keys_.insert(key);
+      schema_untracked_keys_.erase(key);
+    } else {
+      schema_untracked_keys_.insert(key);
+      schema_tracked_keys_.erase(key);
+    }
+  }
+
+  // If no text content, nothing more to do
+  if (!has_any_text_content) {
+    return;
   }
 
   TextIndex key_index{with_suffix_trie_};
@@ -191,6 +207,13 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr& key) {
 
 void TextIndexSchema::DeleteKeyData(const InternedStringPtr& key) {
   NestedMemoryScope scope{metadata_.text_index_memory_pool_};
+
+  // Remove key from schema-level tracking
+  {
+    std::lock_guard<std::mutex> guard(schema_keys_mutex_);
+    schema_tracked_keys_.erase(key);
+    schema_untracked_keys_.erase(key);
+  }
 
   // Extract the per-key index
   absl::node_hash_map<Key, TextIndex>::node_type node;

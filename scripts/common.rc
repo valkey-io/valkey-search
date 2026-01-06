@@ -306,12 +306,4 @@ function run_with_timeout() {
     wait "$timer_pid" 2>/dev/null
     
     return $exit_code
-<<<<<<< HEAD
-<<<<<<< HEAD
 }
-=======
-}
->>>>>>> fddfe7c (Merge from main into fulltext 12/08/2025 (#526))
-=======
-}
->>>>>>> 4135598 (Merge 12-10 (#535))

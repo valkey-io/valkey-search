@@ -256,7 +256,7 @@ absl::StatusOr<RecordsMap> GetContent(
 // This function is meant to be used for non-vector queries.
 void ProcessNonVectorNeighborsForReply(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
-    std::deque<indexes::Neighbor> &neighbors,
+    std::vector<indexes::Neighbor> &neighbors,
     const query::SearchParameters &parameters) {
   ProcessNeighborsForReply(ctx, attribute_data_type, neighbors, parameters, "");
 }
@@ -267,7 +267,7 @@ void ProcessNonVectorNeighborsForReply(
 // Any data not found locally will be skipped.
 void ProcessNeighborsForReply(ValkeyModuleCtx *ctx,
                               const AttributeDataType &attribute_data_type,
-                              std::deque<indexes::Neighbor> &neighbors,
+                              std::vector<indexes::Neighbor> &neighbors,
                               const query::SearchParameters &parameters,
                               const std::string &identifier) {
   const auto max_content_size =

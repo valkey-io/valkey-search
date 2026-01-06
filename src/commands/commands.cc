@@ -25,7 +25,7 @@ namespace async {
 
 struct Result {
   cancel::Token cancellation_token;
-  absl::StatusOr<std::deque<indexes::Neighbor>> neighbors;
+  absl::StatusOr<std::vector<indexes::Neighbor>> neighbors;
   std::unique_ptr<QueryCommand> parameters;
 };
 

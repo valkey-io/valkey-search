@@ -36,7 +36,7 @@ namespace {
 // FT.SEARCH idx "*=>[KNN 10 @vec $BLOB AS score]" PARAMS 2 BLOB
 // "\x12\xa9\xf5\x6c" DIALECT 2
 void ReplyAvailNeighbors(ValkeyModuleCtx *ctx,
-                         const std::deque<indexes::Neighbor> &neighbors,
+                         const std::vector<indexes::Neighbor> &neighbors,
                          const query::SearchParameters &parameters) {
   if (parameters.IsNonVectorQuery()) {
     ValkeyModule_ReplyWithLongLong(ctx, neighbors.size());
@@ -46,7 +46,7 @@ void ReplyAvailNeighbors(ValkeyModuleCtx *ctx,
   }
 }
 
-size_t CalcEndIndex(const std::deque<indexes::Neighbor> &neighbors,
+size_t CalcEndIndex(const std::vector<indexes::Neighbor> &neighbors,
                     const query::SearchParameters &parameters) {
   if (parameters.IsNonVectorQuery()) {
     return std::min(static_cast<size_t>(parameters.limit.number),
@@ -58,7 +58,7 @@ size_t CalcEndIndex(const std::deque<indexes::Neighbor> &neighbors,
       std::min(static_cast<size_t>(parameters.limit.number), neighbors.size()));
 }
 
-size_t CalcStartIndex(const std::deque<indexes::Neighbor> &neighbors,
+size_t CalcStartIndex(const std::vector<indexes::Neighbor> &neighbors,
                       const query::SearchParameters &parameters) {
   if (!parameters.IsNonVectorQuery()) {
     CHECK_GT(parameters.k, parameters.limit.first_index);
@@ -70,7 +70,7 @@ size_t CalcStartIndex(const std::deque<indexes::Neighbor> &neighbors,
 }
 
 void SendReplyNoContent(ValkeyModuleCtx *ctx,
-                        const std::deque<indexes::Neighbor> &neighbors,
+                        const std::vector<indexes::Neighbor> &neighbors,
                         const query::SearchParameters &parameters) {
   const size_t start_index = CalcStartIndex(neighbors, parameters);
   const size_t end_index = std::min(
@@ -92,7 +92,7 @@ void ReplyScore(ValkeyModuleCtx *ctx, ValkeyModuleString &score_as,
 }
 
 void SerializeNeighbors(ValkeyModuleCtx *ctx,
-                        const std::deque<indexes::Neighbor> &neighbors,
+                        const std::vector<indexes::Neighbor> &neighbors,
                         const query::SearchParameters &parameters) {
   CHECK_GT(static_cast<size_t>(parameters.k), parameters.limit.first_index);
   const size_t start_index = CalcStartIndex(neighbors, parameters);
@@ -138,9 +138,9 @@ void SerializeNeighbors(ValkeyModuleCtx *ctx,
 
 // Handle non-vector queries by processing the neighbors and replying with the
 // attribute contents.
-void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
-                                 const std::deque<indexes::Neighbor> &neighbors,
-                                 const query::SearchParameters &parameters) {
+void SerializeNonVectorNeighbors(
+    ValkeyModuleCtx *ctx, const std::vector<indexes::Neighbor> &neighbors,
+    const query::SearchParameters &parameters) {
   const size_t start_index = CalcStartIndex(neighbors, parameters);
   const size_t end_index = std::min(
       start_index + CalcEndIndex(neighbors, parameters), neighbors.size());
@@ -188,7 +188,7 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
 //      4. The vector value
 // SendReply respects the Limit, see https://valkey.io/commands/ft.search/
 void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
-                              std::deque<indexes::Neighbor> &neighbors) {
+                              std::vector<indexes::Neighbor> &neighbors) {
   // Increment success counter.
   ++Metrics::GetStats().query_successful_requests_cnt;
   // This handles two cases:

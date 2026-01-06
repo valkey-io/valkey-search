@@ -132,10 +132,10 @@ struct SearchParameters {
 
 // Callback to be called when the search is done.
 using SearchResponseCallback =
-    absl::AnyInvocable<void(absl::StatusOr<std::deque<indexes::Neighbor>>&,
+    absl::AnyInvocable<void(absl::StatusOr<std::vector<indexes::Neighbor>>&,
                             std::unique_ptr<SearchParameters>)>;
 
-absl::StatusOr<std::deque<indexes::Neighbor>> Search(
+absl::StatusOr<std::vector<indexes::Neighbor>> Search(
     const SearchParameters& parameters, SearchMode search_mode);
 
 absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
@@ -143,8 +143,8 @@ absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
                          SearchResponseCallback callback,
                          SearchMode search_mode);
 
-absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
-    absl::StatusOr<std::deque<indexes::Neighbor>> results,
+absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
+    absl::StatusOr<std::vector<indexes::Neighbor>> results,
     const SearchParameters& parameters);
 
 class Predicate;
@@ -155,7 +155,7 @@ size_t EvaluateFilterAsPrimary(
     bool negate);
 
 // Defined in the header to support testing
-absl::StatusOr<std::deque<indexes::Neighbor>> PerformVectorSearch(
+absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
     indexes::VectorBase* vector_index, const SearchParameters& parameters);
 
 std::priority_queue<std::pair<float, hnswlib::labeltype>>

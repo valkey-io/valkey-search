@@ -323,7 +323,7 @@ class CancelCondition : public hnswlib::BaseCancellationFunctor {
 };
 
 template <typename T>
-absl::StatusOr<std::deque<Neighbor>> VectorHNSW<T>::Search(
+absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
     absl::string_view query, uint64_t count, cancel::Token &cancellation_token,
     std::unique_ptr<hnswlib::BaseFilterFunctor> filter,
     std::optional<size_t> ef_runtime, bool enable_partial_results) {

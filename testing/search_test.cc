@@ -945,8 +945,8 @@ struct IndexedContentTestCase {
   bool no_content;
   std::vector<TestReturnAttribute> return_attributes;
   std::vector<TestIndex> indexes;
-  absl::StatusOr<std::deque<TestNeighbor>> input;
-  absl::StatusOr<std::deque<TestNeighbor>> expected_output;
+  absl::StatusOr<std::vector<TestNeighbor>> input;
+  absl::StatusOr<std::vector<TestNeighbor>> expected_output;
 };
 
 class IndexedContentTest
@@ -1025,10 +1025,10 @@ TEST_P(IndexedContentTest, MaybeAddIndexedContentTest) {
   }
   parameters.no_content = test_case.no_content;
 
-  absl::StatusOr<std::deque<indexes::Neighbor>> got;
+  absl::StatusOr<std::vector<indexes::Neighbor>> got;
   if (test_case.input.ok()) {
-    absl::StatusOr<std::deque<indexes::Neighbor>> neighbors =
-        std::deque<indexes::Neighbor>();
+    absl::StatusOr<std::vector<indexes::Neighbor>> neighbors =
+        std::vector<indexes::Neighbor>();
     for (auto &neighbor : test_case.input.value()) {
       neighbors->push_back(neighbor.ToIndexesNeighbor());
     }

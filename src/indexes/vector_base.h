@@ -155,7 +155,7 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   vmsdk::UniqueValkeyString NormalizeStringRecord(
       vmsdk::UniqueValkeyString record) const override;
   template <typename T>
-  absl::StatusOr<std::deque<Neighbor>> CreateReply(
+  absl::StatusOr<std::vector<Neighbor>> CreateReply(
       std::priority_queue<std::pair<T, hnswlib::labeltype>>& knn_res);
   absl::StatusOr<std::vector<char>> GetValue(const InternedStringPtr& key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;

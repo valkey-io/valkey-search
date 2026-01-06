@@ -40,7 +40,7 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   AggregateParameters(int db_num) : QueryCommand(db_num){};
   absl::Status ParseCommand(vmsdk::ArgsIterator& itr) override;
   void SendReply(ValkeyModuleCtx* ctx,
-                 std::deque<indexes::Neighbor>& neighbors) override;
+                 std::vector<indexes::Neighbor>& neighbors) override;
   bool loadall_{false};
   std::vector<std::string> loads_;
   bool load_key{false};

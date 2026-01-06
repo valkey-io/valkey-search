@@ -30,6 +30,8 @@ class ThreadMonitor {
 
   absl::StatusOr<double> GetThreadCPUPercentage();
 
+  std::string ThreadIdToString() const;
+
   // Returns the thread spent time (user + system)
   absl::StatusOr<uint64_t> GetCPUTime() const;
 

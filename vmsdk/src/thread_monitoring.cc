@@ -21,8 +21,6 @@
 
 namespace vmsdk {
 
-static std::atomic_uint64_t thread_monitoring_cpu_error_cnt{0};
-
 #ifdef __APPLE__
 namespace {
 thread_inspect_t ConvertToMachThread(pthread_t tid) {
@@ -35,6 +33,14 @@ ThreadMonitor::ThreadInfoFunc ThreadMonitor::thread_info_func = thread_info;
 #endif
 
 ThreadMonitor::ThreadMonitor(pthread_t thread_id) { thread_id_ = thread_id; }
+
+std::string ThreadMonitor::ThreadIdToString() const {
+#ifdef __APPLE__
+  return absl::StrFormat("%p", thread_id_);
+#else
+  return absl::StrFormat("%u", static_cast<unsigned int>(thread_id_));
+#endif
+}
 
 absl::StatusOr<double> ThreadMonitor::GetThreadCPUPercentage() {
   // First call, initializing values
@@ -62,17 +68,17 @@ absl::StatusOr<double> ThreadMonitor::GetThreadCPUPercentage() {
   }
 
   if (cpu_time_elapsed_us < 0) {
-    // Increment the monitoring counter for negative values
-    return absl::FailedPreconditionError(absl::StrFormat(
-        "Internal error in CPU calculation: negative cpu time for thread ID %u",
-        static_cast<unsigned int>(thread_id_)));
+    return absl::FailedPreconditionError(
+        absl::StrFormat("Internal error in CPU calculation: negative cpu time "
+                        "for thread ID %s",
+                        ThreadIdToString()));
   }
 
   if (wall_time_elapsed < 0) {
     return absl::InternalError(
         absl::StrFormat("Internal error in CPU calculation: negative wall time "
-                        "for thread ID %u",
-                        static_cast<unsigned int>(thread_id_)));
+                        "for thread ID %s",
+                        ThreadIdToString()));
   }
 
   return (static_cast<double>(cpu_time_elapsed_us) / wall_time_elapsed) * 100.0;

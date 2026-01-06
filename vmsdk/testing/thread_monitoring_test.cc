@@ -7,6 +7,9 @@
 
 #include "vmsdk/src/thread_monitoring.h"
 
+#include <chrono>
+#include <thread>
+
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
@@ -70,6 +73,9 @@ TEST(ThreadMonitorTest, MockedSystemCallsNegativeCPU) {
   auto result1 = monitor.GetThreadCPUPercentage();
   ASSERT_TRUE(result1.ok());
   EXPECT_EQ(result1.value(), 0.0);
+
+  // Ensure wall time progresses
+  std::this_thread::sleep_for(std::chrono::microseconds(1));
 
   // Second call - lower CPU time (negative elapsed)
   auto result2 = monitor.GetThreadCPUPercentage();

@@ -33,6 +33,7 @@
 #include "src/metrics.h"
 #include "src/query/planner.h"
 #include "src/query/predicate.h"
+#include "src/query/response_generator.h"
 #include "src/valkey_search_options.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/latency_sampler.h"
@@ -48,9 +49,13 @@ namespace valkey_search::query {
 
 class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
  public:
-  InlineVectorFilter(query::Predicate *filter_predicate,
-                     indexes::VectorBase *vector_index)
-      : filter_predicate_(filter_predicate), vector_index_(vector_index) {}
+  InlineVectorFilter(
+      query::Predicate *filter_predicate, indexes::VectorBase *vector_index,
+      const InternedStringNodeHashMap<valkey_search::indexes::text::TextIndex>
+          *per_key_indexes)
+      : filter_predicate_(filter_predicate),
+        vector_index_(vector_index),
+        per_key_indexes_(per_key_indexes) {}
   ~InlineVectorFilter() override = default;
 
   bool operator()(hnswlib::labeltype id) override {
@@ -58,20 +63,35 @@ class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
     if (!key.ok()) {
       return false;
     }
-    indexes::PrefilterEvaluator evaluator;
+    const valkey_search::indexes::text::TextIndex *text_index = nullptr;
+    if (per_key_indexes_) {
+      text_index =
+          valkey_search::indexes::text::TextIndexSchema::LookupTextIndex(
+              *per_key_indexes_, *key);
+    }
+    indexes::PrefilterEvaluator evaluator(text_index);
     return evaluator.Evaluate(*filter_predicate_, *key);
   }
 
  private:
   query::Predicate *filter_predicate_;
   indexes::VectorBase *vector_index_;
+  const InternedStringNodeHashMap<valkey_search::indexes::text::TextIndex>
+      *per_key_indexes_;
 };
 absl::StatusOr<std::deque<indexes::Neighbor>> PerformVectorSearch(
     indexes::VectorBase *vector_index, const SearchParameters &parameters) {
   std::unique_ptr<InlineVectorFilter> inline_filter;
   if (parameters.filter_parse_results.root_predicate != nullptr) {
+    const InternedStringNodeHashMap<valkey_search::indexes::text::TextIndex>
+        *per_key_indexes = nullptr;
+    if (parameters.index_schema->GetTextIndexSchema()) {
+      per_key_indexes = &parameters.index_schema->GetTextIndexSchema()
+                             ->GetPerKeyTextIndexes();
+    }
     inline_filter = std::make_unique<InlineVectorFilter>(
-        parameters.filter_parse_results.root_predicate.get(), vector_index);
+        parameters.filter_parse_results.root_predicate.get(), vector_index,
+        per_key_indexes);
     VMSDK_LOG(DEBUG, nullptr) << "Performing vector search with inline filter";
   }
   if (vector_index->GetIndexerType() == indexes::IndexerType::kHNSW) {
@@ -201,27 +221,50 @@ void EvaluatePrefilteredKeys(
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     absl::AnyInvocable<bool(const InternedStringPtr &,
                             absl::flat_hash_set<const char *> &)>
-        appender) {
+        appender,
+    size_t max_keys) {
+  // If there was a union operation, we need to handle deduplication.
+  // This implementation skips deduplication (flat_hash_set usage) if not needed
+  // for performance.
+  bool needs_dedup = parameters.filter_parse_results.query_operations &
+                     QueryOperations::kContainsOr;
   absl::flat_hash_set<const char *> result_keys;
-  auto predicate = parameters.filter_parse_results.root_predicate.get();
-  indexes::PrefilterEvaluator evaluator;
-  bool enable_prefilter_evaluation =
-      options::GetEnablePrefilterEval().GetValue();
+  if (needs_dedup) {
+    result_keys.reserve(max_keys);
+  }
+  // Get per-key text indexes directly since we have reader lock
+  const InternedStringNodeHashMap<valkey_search::indexes::text::TextIndex>
+      *per_key_indexes = nullptr;
+  if (parameters.index_schema &&
+      parameters.index_schema->GetTextIndexSchema()) {
+    per_key_indexes =
+        &parameters.index_schema->GetTextIndexSchema()->GetPerKeyTextIndexes();
+  }
   while (!entries_fetchers.empty()) {
     auto fetcher = std::move(entries_fetchers.front());
     entries_fetchers.pop();
     auto iterator = fetcher->Begin();
     while (!iterator->Done()) {
       const auto &key = **iterator;
-      // TODO: add a bloom filter to ensure distinct keys are evaluated
-      // only once.
-      bool eval_result = enable_prefilter_evaluation
-                             ? evaluator.Evaluate(*predicate, key)
-                             : true;
-      if (!result_keys.contains(key->Str().data()) && eval_result) {
-        if (appender(key, result_keys)) {
+      // 1. Skip if already processed (only if dedup is needed)
+      if (needs_dedup && result_keys.contains(key->Str().data())) {
+        iterator->Next();
+        continue;
+      }
+      const valkey_search::indexes::text::TextIndex *text_index = nullptr;
+      if (per_key_indexes) {
+        text_index =
+            valkey_search::indexes::text::TextIndexSchema::LookupTextIndex(
+                *per_key_indexes, key);
+      }
+      indexes::PrefilterEvaluator key_evaluator(text_index);
+      // 3. Evaluate predicate
+      if (key_evaluator.Evaluate(
+              *parameters.filter_parse_results.root_predicate, key)) {
+        if (needs_dedup) {
           result_keys.insert(key->Str().data());
         }
+        appender(key, result_keys);
       }
       iterator->Next();
       if (parameters.cancellation_token->IsCancelled()) {
@@ -235,7 +278,7 @@ std::priority_queue<std::pair<float, hnswlib::labeltype>>
 CalcBestMatchingPrefilteredKeys(
     const SearchParameters &parameters,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
-    indexes::VectorBase *vector_index) {
+    indexes::VectorBase *vector_index, size_t qualified_entries) {
   std::priority_queue<std::pair<float, hnswlib::labeltype>> results;
   auto results_appender =
       [&results, &parameters, vector_index](
@@ -245,7 +288,7 @@ CalcBestMatchingPrefilteredKeys(
                                            results, top_keys);
   };
   EvaluatePrefilteredKeys(parameters, entries_fetchers,
-                          std::move(results_appender));
+                          std::move(results_appender), qualified_entries);
   return results;
 }
 
@@ -385,13 +428,35 @@ absl::StatusOr<std::deque<indexes::Neighbor>> SearchNonVectorQuery(
       [&neighbors, &parameters](
           const InternedStringPtr &key,
           absl::flat_hash_set<const char *> &top_keys) -> bool {
-    neighbors.push_back(indexes::Neighbor{key, 0.0f});
+    neighbors.emplace_back(indexes::Neighbor{key, 0.0f});
     return true;
   };
-
+  // If AND or OR predicate, we cannot skip evaluation.
+  // The initial search done by EvaluateFilterAsPrimary does not handle
+  // union or intersection of results.
+  bool skip_evaluation = true;
+  if (parameters.filter_parse_results.query_operations &
+      (QueryOperations::kContainsOr | QueryOperations::kContainsAnd)) {
+    skip_evaluation = false;
+  }
+  if (skip_evaluation) {
+    while (!entries_fetchers.empty()) {
+      auto fetcher = std::move(entries_fetchers.front());
+      entries_fetchers.pop();
+      auto iterator = fetcher->Begin();
+      while (!iterator->Done()) {
+        const auto &key = **iterator;
+        neighbors.emplace_back(indexes::Neighbor{key, 0.0f});
+        iterator->Next();
+        if (parameters.cancellation_token->IsCancelled()) {
+          return neighbors;
+        }
+      }
+    }
+    return neighbors;
+  }
   EvaluatePrefilteredKeys(parameters, entries_fetchers,
-                          std::move(results_appender));
-
+                          std::move(results_appender), qualified_entries);
   return neighbors;
 }
 
@@ -440,7 +505,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> DoSearch(
     ++Metrics::GetStats().query_prefiltering_requests_cnt;
     std::priority_queue<std::pair<float, hnswlib::labeltype>> results =
         CalcBestMatchingPrefilteredKeys(parameters, entries_fetchers,
-                                        vector_index);
+                                        vector_index, qualified_entries);
 
     return vector_index->CreateReply(results);
   }

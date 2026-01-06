@@ -77,5 +77,9 @@ config::Number& GetLocalFanoutQueueWaitThreshold();
 /// Return the sample queue size for thread pool wait time tracking
 config::Number& GetThreadPoolWaitTimeSamples();
 
+/// Return the maximum number of words to search in text operations (prefix,
+/// suffix, fuzzy)
+config::Number& GetMaxTermExpansions();
+
 }  // namespace options
 }  // namespace valkey_search

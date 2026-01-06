@@ -26,7 +26,7 @@ struct FuzzySearch {
   static absl::InlinedVector<Postings::KeyIterator,
                              kWordExpansionInlineCapacity>
   Search(const RadixTree<InvasivePtr<Postings>>& tree,
-         absl::string_view pattern, size_t max_distance) {
+         absl::string_view pattern, size_t max_distance, uint32_t max_words) {
     absl::InlinedVector<indexes::text::Postings::KeyIterator,
                         kWordExpansionInlineCapacity>
         key_iterators;
@@ -47,8 +47,9 @@ struct FuzzySearch {
 
     // Start traversal from root to explore all words in the tree
     auto iter = tree.GetPathIterator("");
+    uint32_t word_count = 0;
     SearchRecursive(iter, pattern, max_distance, "", '\0', prev_prev, prev,
-                    curr, key_iterators);
+                    curr, key_iterators, max_words, word_count);
     return key_iterators;
   }
 
@@ -65,9 +66,10 @@ struct FuzzySearch {
       absl::InlinedVector<size_t, 32>&
           curr,  // Row i of DP matrix (current row being computed)
       absl::InlinedVector<indexes::text::Postings::KeyIterator,
-                          kWordExpansionInlineCapacity>& key_iterators) {
+                          kWordExpansionInlineCapacity>& key_iterators,
+      uint32_t max_words, uint32_t& word_count) {
     // Iterate over children at current tree level
-    while (!iter.Done()) {
+    while (!iter.Done() && word_count < max_words) {
       absl::string_view edge = iter.GetChildEdge();
       std::string new_word = word;
       // Minimum edit distance in the current DP row after processing the edge.
@@ -149,12 +151,17 @@ struct FuzzySearch {
         // in loop above
         if (child_iter.IsWord() && prev[pattern.length()] <= max_distance) {
           key_iterators.emplace_back(child_iter.GetTarget()->GetKeyIterator());
+          ++word_count;
+          if (word_count >= max_words) {
+            return;
+          }
         }
 
         // Recurse into child's subtree
         if (child_iter.CanDescend()) {
           SearchRecursive(child_iter, pattern, max_distance, new_word,
-                          prev_tree_ch, prev_prev, prev, curr, key_iterators);
+                          prev_tree_ch, prev_prev, prev, curr, key_iterators,
+                          max_words, word_count);
         }
       }
 

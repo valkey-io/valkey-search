@@ -109,7 +109,10 @@ EvaluationResult PrefixPredicate::Evaluate(
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
-  while (!word_iter.Done()) {
+  // Limit the number of term word expansions
+  uint32_t max_words = options::GetMaxTermExpansions().GetValue();
+  uint32_t word_count = 0;
+  while (!word_iter.Done() && word_count < max_words) {
     std::string_view word = word_iter.GetWord();
     if (!word.starts_with(term_)) break;
     auto postings = word_iter.GetTarget();
@@ -122,6 +125,7 @@ EvaluationResult PrefixPredicate::Evaluate(
       }
     }
     word_iter.Next();
+    ++word_count;
   }
   if (key_iterators.empty()) {
     return EvaluationResult(false);
@@ -157,7 +161,10 @@ EvaluationResult SuffixPredicate::Evaluate(
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
-  while (!word_iter.Done()) {
+  // Limit the number of term word expansions
+  uint32_t max_words = options::GetMaxTermExpansions().GetValue();
+  uint32_t word_count = 0;
+  while (!word_iter.Done() && word_count < max_words) {
     std::string_view word = word_iter.GetWord();
     if (!word.starts_with(reversed_term)) break;
     auto postings = word_iter.GetTarget();
@@ -170,6 +177,7 @@ EvaluationResult SuffixPredicate::Evaluate(
       }
     }
     word_iter.Next();
+    ++word_count;
   }
   if (key_iterators.empty()) {
     return EvaluationResult(false);
@@ -216,10 +224,11 @@ EvaluationResult FuzzyPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
     const InternedStringPtr& target_key, bool require_positions) const {
   uint64_t field_mask = field_mask_;
+  // Limit the number of term word expansions
+  uint32_t max_words = options::GetMaxTermExpansions().GetValue();
   // Get all KeyIterators for words within edit distance
-  auto key_iters = indexes::text::FuzzySearch::Search(text_index.GetPrefix(),
-                                                      term_, distance_);
-
+  auto key_iters = indexes::text::FuzzySearch::Search(
+      text_index.GetPrefix(), term_, distance_, max_words);
   // Filter to only include KeyIterators that match target_key and field_mask
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
@@ -426,7 +435,7 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
     }
   }
   // No matches found.
-  if (!require_positions) {
+  if (!require_positions || filter_iterators.empty()) {
     return EvaluationResult(false);
   }
   // In case positional awareness is required, use a OrProximityIterator.

@@ -8,7 +8,6 @@
 #ifndef VALKEYSEARCH_SRC_QUERY_RESPONSE_GENERATOR_H_
 #define VALKEYSEARCH_SRC_QUERY_RESPONSE_GENERATOR_H_
 
-#include <deque>
 #include <string>
 #include <vector>
 
@@ -51,7 +50,7 @@ void ProcessNonVectorNeighborsForReply(
 
 // Collect keys from neighbors for in-flight conflict checking
 std::vector<InternedStringPtr> CollectNeighborKeys(
-    const std::deque<indexes::Neighbor> &neighbors);
+    const std::vector<indexes::Neighbor> &neighbors);
 
 }  // namespace valkey_search::query
 

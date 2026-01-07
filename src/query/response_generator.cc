@@ -329,7 +329,7 @@ void ProcessNeighborsForReply(ValkeyModuleCtx *ctx,
 }
 
 std::vector<InternedStringPtr> CollectNeighborKeys(
-    const std::deque<indexes::Neighbor> &neighbors) {
+    const std::vector<indexes::Neighbor> &neighbors) {
   std::vector<InternedStringPtr> keys;
   keys.reserve(neighbors.size());
   for (const auto &neighbor : neighbors) {

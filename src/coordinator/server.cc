@@ -8,7 +8,6 @@
 #include "src/coordinator/server.h"
 
 #include <cstdint>
-#include <deque>
 #include <memory>
 #include <string>
 #include <thread>
@@ -122,13 +121,13 @@ struct RemoteInFlightRetryContext : public query::InFlightRetryContextBase {
   SearchIndexPartitionResponse* response;
   grpc::ServerUnaryReactor* reactor;
   std::unique_ptr<vmsdk::StopWatch> latency_sample;
-  std::deque<indexes::Neighbor> neighbors;
+  std::vector<indexes::Neighbor> neighbors;
   std::unique_ptr<query::SearchParameters> parameters;
 
   RemoteInFlightRetryContext(SearchIndexPartitionResponse* resp,
                              grpc::ServerUnaryReactor* react,
                              std::unique_ptr<vmsdk::StopWatch> sample,
-                             std::deque<indexes::Neighbor>&& nbrs,
+                             std::vector<indexes::Neighbor>&& nbrs,
                              std::unique_ptr<query::SearchParameters>&& params,
                              std::vector<InternedStringPtr>&& keys)
       : InFlightRetryContextBase(std::move(keys)),

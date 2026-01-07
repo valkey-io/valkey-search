@@ -11,7 +11,6 @@
 
 #include <cstddef>
 #include <cstring>
-#include <deque>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -170,11 +169,11 @@ struct SearchPartitionResultsTracker {
 };
 
 struct LocalInFlightRetryContext : public query::InFlightRetryContextBase {
-  std::deque<indexes::Neighbor> neighbors;
+  std::vector<indexes::Neighbor> neighbors;
   std::unique_ptr<SearchParameters> parameters;
   std::shared_ptr<SearchPartitionResultsTracker> tracker;
 
-  LocalInFlightRetryContext(std::deque<indexes::Neighbor>&& nbrs,
+  LocalInFlightRetryContext(std::vector<indexes::Neighbor>&& nbrs,
                             std::unique_ptr<SearchParameters>&& params,
                             std::vector<InternedStringPtr>&& keys,
                             std::shared_ptr<SearchPartitionResultsTracker> trk)

@@ -285,6 +285,7 @@ class IndexSchema : public KeyspaceEventSubscription,
                         vmsdk::ThreadPool::Priority priority,
                         absl::BlockingCounter *blocking_counter);
   void EnqueueMultiMutation(const InternedStringPtr &key);
+  void DrainMutationQueue(ValkeyModuleCtx *ctx) const;
 
   bool IsTrackedByAnyIndex(const InternedStringPtr &key) const;
   void SyncProcessMutation(ValkeyModuleCtx *ctx,

@@ -15,6 +15,7 @@
 #include "src/index_schema.pb.h"
 #include "src/indexes/text/fuzzy.h"
 #include "src/indexes/text/lexer.h"
+#include "src/valkey_search_options.h"
 
 namespace valkey_search::indexes {
 
@@ -163,9 +164,13 @@ std::unique_ptr<indexes::text::TextIterator> PrefixPredicate::BuildTextIterator(
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
-  while (!word_iter.Done()) {
+  // Limit the number of term word expansions
+  uint32_t max_words = options::GetMaxTermExpansions().GetValue();
+  uint32_t word_count = 0;
+  while (!word_iter.Done() && word_count < max_words) {
     key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
     word_iter.Next();
+    ++word_count;
   }
   // We do not perform positional checks on the initial background search.
   bool require_positions = false;
@@ -187,9 +192,13 @@ std::unique_ptr<indexes::text::TextIterator> SuffixPredicate::BuildTextIterator(
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
-  while (!word_iter.Done()) {
+  // Limit the number of term word expansions
+  uint32_t max_words = options::GetMaxTermExpansions().GetValue();
+  uint32_t word_count = 0;
+  while (!word_iter.Done() && word_count < max_words) {
     key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
     word_iter.Next();
+    ++word_count;
   }
   // We do not perform positional checks on the initial background search.
   bool require_positions = false;
@@ -207,8 +216,11 @@ std::unique_ptr<indexes::text::TextIterator> FuzzyPredicate::BuildTextIterator(
     const void* fetcher_ptr) const {
   const auto* fetcher =
       static_cast<const indexes::Text::EntriesFetcher*>(fetcher_ptr);
+  // Limit the number of term word expansions
+  uint32_t max_words = options::GetMaxTermExpansions().GetValue();
   auto key_iterators = indexes::text::FuzzySearch::Search(
-      fetcher->text_index_->GetPrefix(), GetTextString(), GetDistance());
+      fetcher->text_index_->GetPrefix(), GetTextString(), GetDistance(),
+      max_words);
   // We do not perform positional checks on the initial background search.
   bool require_positions = false;
   return std::make_unique<indexes::text::TermIterator>(

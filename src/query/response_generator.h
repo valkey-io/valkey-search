@@ -38,13 +38,13 @@ namespace valkey_search::query {
 // Neighbor not comply to the pre-filter expression.
 void ProcessNeighborsForReply(ValkeyModuleCtx *ctx,
                               const AttributeDataType &attribute_data_type,
-                              std::deque<indexes::Neighbor> &neighbors,
+                              std::vector<indexes::Neighbor> &neighbors,
                               const query::SearchParameters &parameters,
                               const std::string &identifier);
 
 void ProcessNonVectorNeighborsForReply(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
-    std::deque<indexes::Neighbor> &neighbors,
+    std::vector<indexes::Neighbor> &neighbors,
     const query::SearchParameters &parameters);
 
 }  // namespace valkey_search::query

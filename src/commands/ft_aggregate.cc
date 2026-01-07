@@ -165,7 +165,7 @@ bool ReplyWithValue(ValkeyModuleCtx *ctx,
 }
 
 absl::Status SendReplyInner(ValkeyModuleCtx *ctx,
-                            std::deque<indexes::Neighbor> &neighbors,
+                            std::vector<indexes::Neighbor> &neighbors,
                             AggregateParameters &parameters) {
   auto identifier =
       parameters.index_schema->GetIdentifier(parameters.attribute_alias);
@@ -305,7 +305,7 @@ absl::Status SendReplyInner(ValkeyModuleCtx *ctx,
 }
 
 void AggregateParameters::SendReply(ValkeyModuleCtx *ctx,
-                                    std::deque<indexes::Neighbor> &neighbors) {
+                                    std::vector<indexes::Neighbor> &neighbors) {
   auto identifier = index_schema->GetIdentifier(attribute_alias);
   auto result = SendReplyInner(ctx, neighbors, *this);
   if (!result.ok()) {

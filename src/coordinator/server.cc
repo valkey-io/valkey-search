@@ -96,7 +96,7 @@ void RecordSearchMetrics(bool failure,
 }
 
 void SerializeNeighbors(SearchIndexPartitionResponse* response,
-                        const std::deque<indexes::Neighbor>& neighbors) {
+                        const std::vector<indexes::Neighbor>& neighbors) {
   for (const auto& neighbor : neighbors) {
     auto* neighbor_proto = response->add_neighbors();
     neighbor_proto->set_key(std::move(*neighbor.external_id));
@@ -143,7 +143,7 @@ query::SearchResponseCallback Service::MakeSearchCallback(
     SearchIndexPartitionResponse* response, grpc::ServerUnaryReactor* reactor,
     std::unique_ptr<vmsdk::StopWatch> latency_sample) {
   return [response, reactor, latency_sample = std::move(latency_sample)](
-             absl::StatusOr<std::deque<indexes::Neighbor>>& neighbors,
+             absl::StatusOr<std::vector<indexes::Neighbor>>& neighbors,
              std::unique_ptr<query::SearchParameters> parameters) mutable {
     if (!neighbors.ok()) {
       reactor->Finish(ToGrpcStatus(neighbors.status()));

@@ -125,7 +125,7 @@ struct SearchPartitionResultsTracker {
     }
   }
 
-  void AddResults(std::deque<indexes::Neighbor> &neighbors) {
+  void AddResults(std::vector<indexes::Neighbor> &neighbors) {
     absl::MutexLock lock(&mutex);
     for (auto &neighbor : neighbors) {
       AddResult(neighbor);
@@ -149,8 +149,8 @@ struct SearchPartitionResultsTracker {
 
   ~SearchPartitionResultsTracker() {
     absl::MutexLock lock(&mutex);
-    absl::StatusOr<std::deque<indexes::Neighbor>> result =
-        std::deque<indexes::Neighbor>();
+    absl::StatusOr<std::vector<indexes::Neighbor>> result =
+        std::vector<indexes::Neighbor>();
     if (consistency_failed) {
       result = absl::FailedPreconditionError(kFailedPreconditionMsg);
     } else if (reached_oom) {
@@ -253,7 +253,7 @@ absl::Status PerformSearchFanoutAsync(
         coordinator::GRPCSearchRequestToParameters(*request, nullptr));
     VMSDK_RETURN_IF_ERROR(query::SearchAsync(
         std::move(local_parameters), thread_pool,
-        [tracker](absl::StatusOr<std::deque<indexes::Neighbor>> &neighbors,
+        [tracker](absl::StatusOr<std::vector<indexes::Neighbor>> &neighbors,
                   std::unique_ptr<SearchParameters> parameters) {
           if (neighbors.ok()) {
             tracker->AddResults(*neighbors);

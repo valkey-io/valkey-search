@@ -96,7 +96,7 @@ struct QueryCommand : public query::SearchParameters {
   // Executed on Main Thread after merge
   //
   virtual void SendReply(ValkeyModuleCtx *ctx,
-                         std::deque<indexes::Neighbor> &neighbors) = 0;
+                         std::vector<indexes::Neighbor> &neighbors) = 0;
 };
 
 namespace async {

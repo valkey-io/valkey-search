@@ -77,7 +77,7 @@ TEST_P(ResponseGeneratorTest, ProcessNeighborsForReply) {
   auto &params = GetParam();
   ValkeyModuleCtx fake_ctx;
 
-  std::deque<indexes::Neighbor> expected_neighbors;
+  std::vector<indexes::Neighbor> expected_neighbors;
   for (const auto &external_id : params.external_id_neighbors) {
     auto string_interned_external_id = StringInternStore::Intern(external_id);
     expected_neighbors.push_back(
@@ -166,7 +166,7 @@ TEST_F(ResponseGeneratorTest, ProcessNeighborsForReplyContentLimits) {
       options::GetMaxSearchResultFieldsCount().SetValue(test_fields_limit));
 
   // Create neighbors with different content sizes and field counts
-  std::deque<indexes::Neighbor> neighbors;
+  std::vector<indexes::Neighbor> neighbors;
   auto small_external_id = StringInternStore::Intern("small_content_id");
   auto large_external_id = StringInternStore::Intern("large_content_id");
   auto many_fields_id = StringInternStore::Intern("many_fields_id");

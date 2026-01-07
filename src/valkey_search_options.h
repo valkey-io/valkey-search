@@ -91,5 +91,11 @@ config::Number& GetMaxTermExpansions();
 /// Return the search result buffer multiplier value
 double GetSearchResultBufferMultiplier();
 
+/// Return the configuration entry for draining mutation queue on save
+const config::Boolean& GetDrainMutationQueueOnSave();
+
+/// Return the configuration entry for draining mutation queue on load
+const config::Boolean& GetDrainMutationQueueOnLoad();
+
 }  // namespace options
 }  // namespace valkey_search

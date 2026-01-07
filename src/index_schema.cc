@@ -76,8 +76,6 @@ static auto config_rdb_read_v2 =
     vmsdk::config::BooleanBuilder("rdb-read-v2", false).Dev().Build();
 static auto config_rdb_validate_on_write =
     vmsdk::config::BooleanBuilder("rdb-validate-on-write", false).Dev().Build();
-static auto config_drain_mutation_queue =
-    vmsdk::config::BooleanBuilder("drain-mutation-queue", true).Dev().Build();
 
 static bool RDBReadV2() {
   return dynamic_cast<vmsdk::config::Boolean &>(*config_rdb_read_v2).GetValue();
@@ -90,11 +88,6 @@ static bool RDBWriteV2() {
 
 static bool RDBValidateOnWrite() {
   return dynamic_cast<vmsdk::config::Boolean &>(*config_rdb_validate_on_write)
-      .GetValue();
-}
-
-static bool DrainMutationQueue() {
-  return dynamic_cast<vmsdk::config::Boolean &>(*config_drain_mutation_queue)
       .GetValue();
 }
 
@@ -1084,6 +1077,13 @@ static absl::Status SaveSupplementalSection(
 }
 
 absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
+  // Drain mutation queue before save if configured
+  if (options::GetDrainMutationQueueOnSave().GetValue()) {
+    VMSDK_LOG(NOTICE, nullptr)
+        << "Draining mutation queue before RDB save for index " << name_;
+    DrainMutationQueue(detached_ctx_.get());
+  }
+
   auto index_schema_proto = ToProto();
   auto rdb_section = std::make_unique<data_model::RDBSection>();
   rdb_section->set_type(data_model::RDB_SECTION_INDEX_SCHEMA);
@@ -1482,6 +1482,20 @@ void IndexSchema::OnSwapDB(ValkeyModuleSwapDbInfo *swap_db_info) {
   }
 }
 
+void IndexSchema::DrainMutationQueue(ValkeyModuleCtx *ctx) const {
+  static const auto max_sleep = std::chrono::milliseconds(100);
+  auto sleep_duration = std::chrono::milliseconds(1);
+
+  while (!tracked_mutated_records_.empty()) {
+    VMSDK_LOG_EVERY_N_SEC(NOTICE, ctx, 10)
+        << "Draining Mutation Queue for index " << name_
+        << ", entries remaining: " << tracked_mutated_records_.size();
+    std::this_thread::sleep_for(sleep_duration);
+    sleep_duration =
+        std::min(sleep_duration * 2, max_sleep);  // Exponential backoff
+  }
+}
+
 void IndexSchema::OnLoadingEnded(ValkeyModuleCtx *ctx) {
   if (loaded_v2_) {
     loaded_v2_ = false;
@@ -1491,11 +1505,8 @@ void IndexSchema::OnLoadingEnded(ValkeyModuleCtx *ctx) {
                            << (backfill_job_.Get().has_value()
                                    ? " Backfill still required."
                                    : " Backfill not needed.");
-    while (DrainMutationQueue() && !tracked_mutated_records_.empty()) {
-      VMSDK_LOG_EVERY_N_SEC(NOTICE, ctx, 1)
-          << "Draining Mutation Queue for index " << name_
-          << ", entries remaining: " << tracked_mutated_records_.size();
-      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    if (options::GetDrainMutationQueueOnLoad().GetValue()) {
+      DrainMutationQueue(ctx);
     }
     return;
   }

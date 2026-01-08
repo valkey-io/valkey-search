@@ -44,10 +44,8 @@ struct InFlightRetryContext : public query::InFlightRetryContextBase {
   vmsdk::BlockedClient blocked_client;
   std::unique_ptr<Result> result;
 
-  InFlightRetryContext(vmsdk::BlockedClient&& bc, std::unique_ptr<Result>&& res,
-                       std::vector<InternedStringPtr>&& keys)
-      : InFlightRetryContextBase(std::move(keys)),
-        blocked_client(std::move(bc)),
+  InFlightRetryContext(vmsdk::BlockedClient&& bc, std::unique_ptr<Result>&& res)
+      : blocked_client(std::move(bc)),
         result(std::move(res)) {}
 
   bool IsCancelled() const override {
@@ -59,6 +57,10 @@ struct InFlightRetryContext : public query::InFlightRetryContextBase {
   }
 
   const char *GetDesc() const override { return "Full-text query"; }
+
+  const std::vector<indexes::Neighbor>& GetNeighbors() const override {
+    return result->neighbors.value();
+  }
 
   void OnComplete() override {
     blocked_client.SetReplyPrivateData(result.release());
@@ -175,11 +177,8 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
       // mutations.
       if (!result->parameters->no_content &&
           query::QueryHasTextPredicate(*result->parameters)) {
-        auto neighbor_keys =
-            query::CollectNeighborKeys(result->neighbors.value());
         auto retry_ctx = std::make_shared<async::InFlightRetryContext>(
-            std::move(blocked_client), std::move(result),
-            std::move(neighbor_keys));
+            std::move(blocked_client), std::move(result));
 
         retry_ctx->ScheduleOnMainThread();
         return;

@@ -48,9 +48,6 @@ void ProcessNonVectorNeighborsForReply(
     std::vector<indexes::Neighbor> &neighbors,
     const query::SearchParameters &parameters);
 
-// Collect keys from neighbors for in-flight conflict checking
-std::vector<InternedStringPtr> CollectNeighborKeys(
-    const std::vector<indexes::Neighbor> &neighbors);
 
 }  // namespace valkey_search::query
 

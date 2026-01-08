@@ -13,10 +13,7 @@
 
 #include "src/index_schema.h"
 #include "src/metrics.h"
-#include "src/utils/string_interning.h"
-#include "vmsdk/src/log.h"
 #include "vmsdk/src/utils.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::query {
 
@@ -32,8 +29,7 @@ namespace valkey_search::query {
 class InFlightRetryContextBase
     : public std::enable_shared_from_this<InFlightRetryContextBase> {
  public:
-  explicit InFlightRetryContextBase(std::vector<InternedStringPtr>&& keys)
-      : neighbor_keys_(std::move(keys)) {}
+  InFlightRetryContextBase() = default;
 
   virtual ~InFlightRetryContextBase() = default;
   virtual void OnComplete() = 0;
@@ -51,12 +47,9 @@ class InFlightRetryContextBase
   // Called by IndexSchema when a conflicting mutation completes
   void OnMutationComplete();
 
-  const std::vector<InternedStringPtr>& GetNeighborKeys() const {
-    return neighbor_keys_;
-  }
+  virtual const std::vector<indexes::Neighbor>& GetNeighbors() const = 0;
 
  private:
-  std::vector<InternedStringPtr> neighbor_keys_;
   bool blocked_{false};
 };
 

@@ -128,10 +128,8 @@ struct RemoteInFlightRetryContext : public query::InFlightRetryContextBase {
                              grpc::ServerUnaryReactor* react,
                              std::unique_ptr<vmsdk::StopWatch> sample,
                              std::vector<indexes::Neighbor>&& nbrs,
-                             std::unique_ptr<query::SearchParameters>&& params,
-                             std::vector<InternedStringPtr>&& keys)
-      : InFlightRetryContextBase(std::move(keys)),
-        response(resp),
+                             std::unique_ptr<query::SearchParameters>&& params)
+      : response(resp),
         reactor(react),
         latency_sample(std::move(sample)),
         neighbors(std::move(nbrs)),
@@ -146,6 +144,10 @@ struct RemoteInFlightRetryContext : public query::InFlightRetryContextBase {
   }
 
   const char* GetDesc() const override { return "Remote full-text query"; }
+
+  const std::vector<indexes::Neighbor>& GetNeighbors() const override {
+    return neighbors;
+  }
 
   void OnComplete() override {
     auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
@@ -227,11 +229,9 @@ query::SearchResponseCallback Service::MakeSearchCallback(
     // Text predicate evaluation requires main thread to ensure text indexes
     // reflect current keyspace. Block if result keys have in-flight mutations.
     if (!parameters->no_content && query::QueryHasTextPredicate(*parameters)) {
-      auto neighbor_keys = query::CollectNeighborKeys(neighbors.value());
       auto retry_ctx = std::make_shared<RemoteInFlightRetryContext>(
           response, reactor, std::move(latency_sample),
-          std::move(neighbors.value()), std::move(parameters),
-          std::move(neighbor_keys));
+          std::move(neighbors.value()), std::move(parameters));
 
       retry_ctx->ScheduleOnMainThread();
       return;

@@ -1558,11 +1558,11 @@ bool IndexSchema::IsKeyInFlight(const InternedStringPtr &key) const {
 }
 
 bool IndexSchema::RegisterWaitingQuery(
-    const std::vector<InternedStringPtr> &keys,
+    const std::vector<indexes::Neighbor> &neighbors,
     std::shared_ptr<query::InFlightRetryContextBase> query_ctx) {
   absl::MutexLock lock(&mutated_records_mutex_);
-  for (const auto &key : keys) {
-    auto itr = tracked_mutated_records_.find(key);
+  for (const auto &neighbor : neighbors) {
+    auto itr = tracked_mutated_records_.find(neighbor.external_id);
     if (itr != tracked_mutated_records_.end()) {
       itr->second.waiting_queries.insert(std::move(query_ctx));
       return true;

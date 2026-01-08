@@ -219,7 +219,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   // Register a waiting query on the first conflicting in-flight key.
   // Returns true if registered (conflict found), false otherwise.
   bool RegisterWaitingQuery(
-      const std::vector<InternedStringPtr> &keys,
+      const std::vector<indexes::Neighbor> &neighbors,
       std::shared_ptr<query::InFlightRetryContextBase> query_ctx)
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
 

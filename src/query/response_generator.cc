@@ -328,14 +328,5 @@ void ProcessNeighborsForReply(ValkeyModuleCtx *ctx,
       neighbors.end());
 }
 
-std::vector<InternedStringPtr> CollectNeighborKeys(
-    const std::vector<indexes::Neighbor> &neighbors) {
-  std::vector<InternedStringPtr> keys;
-  keys.reserve(neighbors.size());
-  for (const auto &neighbor : neighbors) {
-    keys.push_back(neighbor.external_id);
-  }
-  return keys;
-}
 
 }  // namespace valkey_search::query

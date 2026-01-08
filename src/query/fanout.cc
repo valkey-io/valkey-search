@@ -175,10 +175,8 @@ struct LocalInFlightRetryContext : public query::InFlightRetryContextBase {
 
   LocalInFlightRetryContext(std::vector<indexes::Neighbor>&& nbrs,
                             std::unique_ptr<SearchParameters>&& params,
-                            std::vector<InternedStringPtr>&& keys,
                             std::shared_ptr<SearchPartitionResultsTracker> trk)
-      : InFlightRetryContextBase(std::move(keys)),
-        neighbors(std::move(nbrs)),
+      : neighbors(std::move(nbrs)),
         parameters(std::move(params)),
         tracker(std::move(trk)) {}
 
@@ -192,6 +190,10 @@ struct LocalInFlightRetryContext : public query::InFlightRetryContextBase {
 
   const char *GetDesc() const override {
     return "Local fanout full-text query";
+  }
+
+  const std::vector<indexes::Neighbor>& GetNeighbors() const override {
+    return neighbors;
   }
 
   void OnComplete() override { tracker->AddResults(neighbors); }
@@ -298,11 +300,9 @@ absl::Status PerformSearchFanoutAsync(
             // in-flight mutations.
             if (!parameters->no_content &&
                 query::QueryHasTextPredicate(*parameters)) {
-              auto neighbor_keys =
-                  query::CollectNeighborKeys(neighbors.value());
               auto retry_ctx = std::make_shared<LocalInFlightRetryContext>(
                   std::move(neighbors.value()), std::move(parameters),
-                  std::move(neighbor_keys), tracker);
+                  tracker);
 
               retry_ctx->ScheduleOnMainThread();
               return;

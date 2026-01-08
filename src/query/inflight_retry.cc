@@ -16,7 +16,7 @@ void InFlightRetryContextBase::ProcessRetry() {
   }
 
   // Try to register with a conflicting mutation entry
-  if (GetIndexSchema()->RegisterWaitingQuery(GetNeighborKeys(),
+  if (GetIndexSchema()->RegisterWaitingQuery(GetNeighbors(),
                                              shared_from_this())) {
     if (!blocked_) {
       blocked_ = true;
@@ -30,9 +30,7 @@ void InFlightRetryContextBase::ProcessRetry() {
   OnComplete();
 }
 
-void InFlightRetryContextBase::OnMutationComplete() {
-  ScheduleOnMainThread();
-}
+void InFlightRetryContextBase::OnMutationComplete() { ScheduleOnMainThread(); }
 
 void InFlightRetryContextBase::ScheduleOnMainThread() {
   auto self = shared_from_this();

@@ -43,6 +43,7 @@
 #include "src/indexes/vector_hnsw.h"
 #include "src/keyspace_event_manager.h"
 #include "src/metrics.h"
+#include "src/query/inflight_retry.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
@@ -1556,11 +1557,14 @@ bool IndexSchema::IsKeyInFlight(const InternedStringPtr &key) const {
   return tracked_mutated_records_.contains(key);
 }
 
-bool IndexSchema::HasAnyConflictingInFlightKeys(
-    const std::vector<InternedStringPtr> &keys) const {
+bool IndexSchema::RegisterWaitingQuery(
+    const std::vector<InternedStringPtr> &keys,
+    std::shared_ptr<query::InFlightRetryContextBase> query_ctx) {
   absl::MutexLock lock(&mutated_records_mutex_);
   for (const auto &key : keys) {
-    if (tracked_mutated_records_.contains(key)) {
+    auto itr = tracked_mutated_records_.find(key);
+    if (itr != tracked_mutated_records_.end()) {
+      itr->second.waiting_queries.insert(std::move(query_ctx));
       return true;
     }
   }
@@ -1647,24 +1651,35 @@ void IndexSchema::MarkAsDestructing() {
 std::optional<IndexSchema::MutatedAttributes>
 IndexSchema::ConsumeTrackedMutatedAttribute(const InternedStringPtr &key,
                                             bool first_time) {
-  absl::MutexLock lock(&mutated_records_mutex_);
-  auto itr = tracked_mutated_records_.find(key);
-  if (ABSL_PREDICT_FALSE(itr == tracked_mutated_records_.end())) {
-    return std::nullopt;
+  absl::flat_hash_set<std::shared_ptr<query::InFlightRetryContextBase>>
+      queries_to_notify;
+  {
+    absl::MutexLock lock(&mutated_records_mutex_);
+    auto itr = tracked_mutated_records_.find(key);
+    if (ABSL_PREDICT_FALSE(itr == tracked_mutated_records_.end())) {
+      return std::nullopt;
+    }
+    if (ABSL_PREDICT_FALSE(first_time && itr->second.consume_in_progress)) {
+      return std::nullopt;
+    }
+    itr->second.consume_in_progress = true;
+    // Delete this tracked document if no additional mutations were tracked
+    if (!itr->second.attributes.has_value()) {
+      queries_to_notify = std::move(itr->second.waiting_queries);
+      tracked_mutated_records_.erase(itr);
+      // Will notify after releasing lock
+    } else {
+      // Track entry is now first consumed
+      auto mutated_attributes = std::move(itr->second.attributes.value());
+      itr->second.attributes = std::nullopt;
+      return mutated_attributes;
+    }
   }
-  if (ABSL_PREDICT_FALSE(first_time && itr->second.consume_in_progress)) {
-    return std::nullopt;
+  // Notify waiting queries outside the lock
+  for (const auto &query_ctx : queries_to_notify) {
+    query_ctx->OnMutationComplete();
   }
-  itr->second.consume_in_progress = true;
-  // Delete this tracked document if no additional mutations were tracked
-  if (!itr->second.attributes.has_value()) {
-    tracked_mutated_records_.erase(itr);
-    return std::nullopt;
-  }
-  // Track entry is now first consumed
-  auto mutated_attributes = std::move(itr->second.attributes.value());
-  itr->second.attributes = std::nullopt;
-  return mutated_attributes;
+  return std::nullopt;
 }
 
 size_t IndexSchema::GetMutatedRecordsSize() const {

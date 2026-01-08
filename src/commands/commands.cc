@@ -177,14 +177,11 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
           query::QueryHasTextPredicate(*result->parameters)) {
         auto neighbor_keys =
             query::CollectNeighborKeys(result->neighbors.value());
-        bool has_conflicts =
-            result->parameters->index_schema->HasAnyConflictingInFlightKeys(
-                neighbor_keys);
-        auto *retry_ctx = new async::InFlightRetryContext(
+        auto retry_ctx = std::make_shared<async::InFlightRetryContext>(
             std::move(blocked_client), std::move(result),
             std::move(neighbor_keys));
 
-        retry_ctx->ScheduleOnMainThread(has_conflicts);
+        retry_ctx->ScheduleOnMainThread();
         return;
       }
 

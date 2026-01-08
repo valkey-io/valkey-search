@@ -81,8 +81,5 @@ config::Number& GetThreadPoolWaitTimeSamples();
 /// suffix, fuzzy)
 config::Number& GetMaxTermExpansions();
 
-/// Return the retry interval for checking in-flight keys
-config::Number& GetInFlightRetryIntervalMs();
-
 }  // namespace options
 }  // namespace valkey_search

@@ -9,48 +9,34 @@
 
 namespace valkey_search::query {
 
-void InFlightRetryCallback(ValkeyModuleCtx* ctx, void* data) {
-  static_cast<InFlightRetryContextBase*>(data)->ProcessRetry(ctx);
-}
-
-void InFlightRetryContextBase::ProcessRetry(ValkeyModuleCtx* ctx) {
+void InFlightRetryContextBase::ProcessRetry() {
   if (IsCancelled()) {
     OnCancelled();
-    delete this;
     return;
   }
 
-  if (GetIndexSchema()->HasAnyConflictingInFlightKeys(GetNeighborKeys())) {
+  // Try to register with a conflicting mutation entry
+  if (GetIndexSchema()->RegisterWaitingQuery(GetNeighborKeys(),
+                                             shared_from_this())) {
+    if (!blocked_) {
+      blocked_ = true;
+      ++Metrics::GetStats().fulltext_query_blocked_cnt;
+    }
     ++Metrics::GetStats().fulltext_query_retry_cnt;
-    VMSDK_LOG(DEBUG, ctx)
-        << GetDesc() << " has conflicting in-flight keys, scheduling retry";
-    ValkeyModule_CreateTimer(ctx,
-                             options::GetInFlightRetryIntervalMs().GetValue(),
-                             InFlightRetryCallback, this);
-    return;
+    return;  // Will be called back via OnMutationComplete()
   }
 
+  // No conflicts - complete the query
   OnComplete();
-  delete this;
 }
 
-void InFlightRetryContextBase::ScheduleOnMainThread(bool has_conflicts) {
-  if (has_conflicts) {
-    ++Metrics::GetStats().fulltext_query_blocked_cnt;
-  }
-  auto* self = this;
-  vmsdk::RunByMain(
-      [self, has_conflicts]() {
-        auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
-        if (has_conflicts) {
-          ValkeyModule_CreateTimer(
-              ctx.get(), options::GetInFlightRetryIntervalMs().GetValue(),
-              InFlightRetryCallback, self);
-        } else {
-          self->ProcessRetry(ctx.get());
-        }
-      },
-      true);
+void InFlightRetryContextBase::OnMutationComplete() {
+  ScheduleOnMainThread();
+}
+
+void InFlightRetryContextBase::ScheduleOnMainThread() {
+  auto self = shared_from_this();
+  vmsdk::RunByMain([self]() { self->ProcessRetry(); }, true);
 }
 
 }  // namespace valkey_search::query

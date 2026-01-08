@@ -300,14 +300,11 @@ absl::Status PerformSearchFanoutAsync(
                 query::QueryHasTextPredicate(*parameters)) {
               auto neighbor_keys =
                   query::CollectNeighborKeys(neighbors.value());
-              bool has_conflicts =
-                  parameters->index_schema->HasAnyConflictingInFlightKeys(
-                      neighbor_keys);
-              auto *retry_ctx = new LocalInFlightRetryContext(
+              auto retry_ctx = std::make_shared<LocalInFlightRetryContext>(
                   std::move(neighbors.value()), std::move(parameters),
                   std::move(neighbor_keys), tracker);
 
-              retry_ctx->ScheduleOnMainThread(has_conflicts);
+              retry_ctx->ScheduleOnMainThread();
               return;
             }
             tracker->AddResults(*neighbors);

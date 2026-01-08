@@ -228,15 +228,12 @@ query::SearchResponseCallback Service::MakeSearchCallback(
     // reflect current keyspace. Block if result keys have in-flight mutations.
     if (!parameters->no_content && query::QueryHasTextPredicate(*parameters)) {
       auto neighbor_keys = query::CollectNeighborKeys(neighbors.value());
-      bool has_conflicts =
-          parameters->index_schema->HasAnyConflictingInFlightKeys(
-              neighbor_keys);
-      auto* retry_ctx = new RemoteInFlightRetryContext(
+      auto retry_ctx = std::make_shared<RemoteInFlightRetryContext>(
           response, reactor, std::move(latency_sample),
           std::move(neighbors.value()), std::move(parameters),
           std::move(neighbor_keys));
 
-      retry_ctx->ScheduleOnMainThread(has_conflicts);
+      retry_ctx->ScheduleOnMainThread();
       return;
     }
 

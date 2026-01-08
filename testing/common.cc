@@ -53,7 +53,8 @@ std::vector<std::vector<float>> DeterministicallyGenerateVectors(
 }
 
 void TestableValkeySearch::InitThreadPools(std::optional<size_t> readers,
-                                           std::optional<size_t> writers) {
+                                           std::optional<size_t> writers,
+                                           std::optional<size_t> utility) {
   if (readers) {
     reader_thread_pool_ =
         std::make_unique<vmsdk::ThreadPool>("reader-pool", *readers);
@@ -63,6 +64,11 @@ void TestableValkeySearch::InitThreadPools(std::optional<size_t> readers,
     writer_thread_pool_ =
         std::make_unique<vmsdk::ThreadPool>("writer-pool", *writers);
     writer_thread_pool_->StartWorkers();
+  }
+  if (utility) {
+    utility_thread_pool_ =
+        std::make_unique<vmsdk::ThreadPool>("utility-pool", *utility);
+    utility_thread_pool_->StartWorkers();
   }
 }
 

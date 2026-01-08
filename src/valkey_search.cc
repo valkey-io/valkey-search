@@ -896,7 +896,8 @@ void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
 void ValkeySearch::AtForkPrepare() {
   // Sanity: fork can occur (by example: calling to "popen") before the thread
   // pool is initialized
-  if (writer_thread_pool_ == nullptr || reader_thread_pool_ == nullptr) {
+  if (writer_thread_pool_ == nullptr || reader_thread_pool_ == nullptr ||
+      utility_thread_pool_ == nullptr) {
     return;
   }
   Metrics::GetStats().worker_thread_pool_suspend_cnt++;
@@ -906,6 +907,10 @@ void ValkeySearch::AtForkPrepare() {
                               << status.message();
   status = reader_thread_pool_->SuspendWorkers();
   VMSDK_LOG(WARNING, nullptr) << "At prepare fork callback, suspend reader "
+                                 "worker thread pool returned message: "
+                              << status.message();
+  status = utility_thread_pool_->SuspendWorkers();
+  VMSDK_LOG(WARNING, nullptr) << "At prepare fork callback, suspend utility "
                                  "worker thread pool returned message: "
                               << status.message();
   status = coordinator::GRPCSuspender::Instance().Suspend();
@@ -925,6 +930,10 @@ void ValkeySearch::AfterForkParent() {
   VMSDK_LOG(WARNING, nullptr) << "After fork parent callback, resume reader "
                                  "worker thread pool returned message: "
                               << status.message();
+  status = utility_thread_pool_->ResumeWorkers();
+  VMSDK_LOG(WARNING, nullptr) << "After fork parent callback, resume utility "
+                                 "worker thread pool returned message: "
+                              << status.message();
   writer_thread_pool_suspend_watch_ = vmsdk::StopWatch();
   status = coordinator::GRPCSuspender::Instance().Resume();
   VMSDK_LOG(WARNING, nullptr) << "After fork parent callback, resume gRPC "
@@ -942,6 +951,9 @@ void ValkeySearch::OnServerCronCallback(ValkeyModuleCtx *ctx,
   }
   if (reader_thread_pool_) {
     reader_thread_pool_->JoinTerminatedWorkers();
+  }
+  if (utility_thread_pool_) {
+    utility_thread_pool_->JoinTerminatedWorkers();
   }
   // Resume worker thread pool if suspension time exceeds the max allowed
   // duration
@@ -1029,6 +1041,10 @@ absl::Status ValkeySearch::Startup(ValkeyModuleCtx *ctx) {
       "write-worker-", options::GetWriterThreadCount().GetValue(),
       options::GetThreadPoolWaitTimeSamples().GetValue());
   writer_thread_pool_->StartWorkers();
+  utility_thread_pool_ = std::make_unique<vmsdk::ThreadPool>(
+      "utility-worker-", options::GetUtilityThreadCount().GetValue(),
+      options::GetThreadPoolWaitTimeSamples().GetValue());
+  utility_thread_pool_->StartWorkers();
 
   VMSDK_LOG(NOTICE, ctx) << "use_coordinator: "
                          << options::GetUseCoordinator().GetValue()
@@ -1038,6 +1054,8 @@ absl::Status ValkeySearch::Startup(ValkeyModuleCtx *ctx) {
                          << reader_thread_pool_->Size();
   VMSDK_LOG(NOTICE, ctx) << "Writer workers count: "
                          << writer_thread_pool_->Size();
+  VMSDK_LOG(NOTICE, ctx) << "Utility workers count: "
+                         << utility_thread_pool_->Size();
 
   if (options::GetUseCoordinator().GetValue() && IsCluster()) {
     client_pool_ = std::make_unique<coordinator::ClientPool>(
@@ -1147,7 +1165,10 @@ void ValkeySearch::OnUnload(ValkeyModuleCtx *ctx) {
 
 std::shared_ptr<vmsdk::cluster_map::ClusterMap>
 ValkeySearch::GetOrRefreshClusterMap(ValkeyModuleCtx *ctx) {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
   auto current_map = std::atomic_load(&cluster_map_);
+#pragma GCC diagnostic pop
   // Check if we need to refresh
   bool needs_refresh =
       !current_map || !current_map->IsConsistent() ||
@@ -1155,7 +1176,10 @@ ValkeySearch::GetOrRefreshClusterMap(ValkeyModuleCtx *ctx) {
   if (needs_refresh) {
     VMSDK_LOG_EVERY_N_SEC(DEBUG, nullptr, 1) << "Creating a new cluster map";
     auto new_map = vmsdk::cluster_map::ClusterMap::CreateNewClusterMap(ctx);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     std::atomic_store(&cluster_map_, new_map);
+#pragma GCC diagnostic pop
     return new_map;
   }
   return current_map;

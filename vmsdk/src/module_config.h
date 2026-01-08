@@ -180,6 +180,8 @@ class ConfigBase : public Registerable {
 
   T GetValue() const { return GetValueImpl(); }
 
+  T GetDefaultValue() const { return GetDefaultValueImpl(); }
+
   void NotifyChanged() {
     if (modify_callback_) {
       modify_callback_(GetValue());
@@ -207,6 +209,7 @@ class ConfigBase : public Registerable {
   /// store/fetch for the value
   virtual void SetValueImpl(T value) = 0;
   virtual T GetValueImpl() const = 0;
+  virtual T GetDefaultValueImpl() const = 0;
 
   OnModifyCB modify_callback_;
   ValidateCB validate_callback_;
@@ -227,6 +230,8 @@ class Number : public ConfigBase<long long> {
   long long GetValueImpl() const override {
     return current_value_.load(std::memory_order_relaxed);
   }
+
+  long long GetDefaultValueImpl() const override { return default_value_; }
 
   void SetValueImpl(long long val) override {
     current_value_.store(val, std::memory_order_relaxed);
@@ -255,6 +260,8 @@ class Enum : public ConfigBase<int> {
     return current_value_.load(std::memory_order_relaxed);
   }
 
+  int GetDefaultValueImpl() const override { return default_value_; }
+
   void SetValueImpl(int val) override {
     current_value_.store(val, std::memory_order_relaxed);
   }
@@ -278,6 +285,8 @@ class Boolean : public ConfigBase<bool> {
   bool GetValueImpl() const override {
     return current_value_.load(std::memory_order_relaxed);
   }
+
+  bool GetDefaultValueImpl() const override { return default_value_; }
 
   void SetValueImpl(bool val) override {
     current_value_.store(val, std::memory_order_relaxed);
@@ -317,8 +326,11 @@ class String : public ConfigBase<std::string> {
     cached_string_.reset();
   }
 
+  std::string GetDefaultValueImpl() const override { return default_; }
+
   mutable absl::Mutex mutex_;
   std::string value_;
+  std::string default_;
   mutable UniqueValkeyString cached_string_;
   FRIEND_TEST(Builder, ConfigBuilder);
 };
@@ -404,7 +416,7 @@ ConfigBuilder<ValkeyT> Builder(Args &&...args) {
     // Boolean
     return ConfigBuilder<bool>(new Boolean(std::forward<Args>(args)...));
   } else if constexpr (std::is_same<ValkeyT, int>()) {
-    // Boolean
+    // Enum
     return ConfigBuilder<int>(new Enum(std::forward<Args>(args)...));
   } else if constexpr (std::is_same<ValkeyT, std::string>()) {
     // String

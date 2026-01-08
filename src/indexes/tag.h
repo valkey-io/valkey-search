@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_set.h"
@@ -123,6 +124,8 @@ class Tag : public IndexBase {
       absl::string_view data, char separator);
   static absl::flat_hash_set<absl::string_view> ParseRecordTags(
       absl::string_view data, char separator);
+  // Unescape a tag string (e.g. escaped pipe becomes literal pipe)
+  static std::string UnescapeTag(absl::string_view tag);
 
  private:
   mutable absl::Mutex index_mutex_;

@@ -25,38 +25,36 @@
 #include "vmsdk/src/memory_allocation_overrides.h"
 
 namespace vmsdk {
-  // RawSystemAllocator implements an allocator that will not go through
-  // the SystemAllocTracker, for use by the SystemAllocTracker to prevent
-  // infinite recursion when tracking pointers.
-  template <typename T>
-  struct RawSystemAllocator {
-    // NOLINTNEXTLINE
-    typedef T value_type;
+// RawSystemAllocator implements an allocator that will not go through
+// the SystemAllocTracker, for use by the SystemAllocTracker to prevent
+// infinite recursion when tracking pointers.
+template <typename T>
+struct RawSystemAllocator {
+  // NOLINTNEXTLINE
+  typedef T value_type;
 
-    RawSystemAllocator() = default;
-    template <typename U>
-    constexpr RawSystemAllocator(const RawSystemAllocator<U>&) noexcept {}
-    // NOLINTNEXTLINE
-    T* allocate(std::size_t n) {
-      ReportAllocMemorySize(n * sizeof(T));
-      return static_cast<T*>(__real_malloc(n * sizeof(T)));
-    }
-    // NOLINTNEXTLINE
-    void deallocate(T* p, std::size_t) {
-      ReportFreeMemorySize(sizeof(T));
-      __real_free(p);
-    }
-  };
-  thread_local static bool is_snapshot_captured = false;
-  // `tracked_ptrs_snapshot_` provides a lock-free fast path to check if an address is tracked. 
-  // It is a thread-local variable, lazily initialized during the first deallocation after 
-  // module startup. Once the one-time snapshot is captured, it remains read-only. 
-  // Note: This structure may return false positives. Any positive hit must be verified
-  // against the global address tracker. Given that snapshots typically track ~1K 
-  // addresses, the memory overhead of maintaining per-thread copies is negligible.
-    thread_local static absl::flat_hash_set<void*, absl::Hash<void*>, std::equal_to<void*>,
-                      RawSystemAllocator<void*>>
-      tracked_ptrs_snapshot_;
+  RawSystemAllocator() = default;
+  template <typename U>
+  constexpr RawSystemAllocator(const RawSystemAllocator<U>&) noexcept {}
+  // NOLINTNEXTLINE
+  T* allocate(std::size_t n) {
+    ReportAllocMemorySize(n * sizeof(T));
+    return static_cast<T*>(__real_malloc(n * sizeof(T)));
+  }
+  // NOLINTNEXTLINE
+  void deallocate(T* p, std::size_t) {
+    ReportFreeMemorySize(sizeof(T));
+    __real_free(p);
+  }
+};
+// `tracked_ptrs_snapshot_` provides a lock-free fast path to check if an address is tracked. 
+// It is a thread-local variable, lazily initialized during the first deallocation after 
+// module startup. Once the one-time snapshot is captured, it remains read-only. 
+// Note: This structure may return false positives. Any positive hit must be verified
+// against the global address tracker. Given that snapshots typically track ~1K 
+// addresses, the memory overhead of maintaining per-thread copies is negligible.
+thread_local static std::optional<absl::flat_hash_set<void*, absl::Hash<void*>, std::equal_to<void*>,
+                    RawSystemAllocator<void*>>> tracked_ptrs_snapshot_;
 // SystemAllocTracker tracks memory allocations to the system allocator, so that
 // subsequent free calls can be redirected to the appropriate allocator.
 class SystemAllocTracker {
@@ -79,8 +77,8 @@ class SystemAllocTracker {
   }
 
   bool IsTracked(void* ptr) const {
-    if (IsUsingValkeyAlloc() && is_snapshot_captured 
-        && !tracked_ptrs_snapshot_.contains(ptr)) {
+    if (IsUsingValkeyAlloc() && tracked_ptrs_snapshot_.has_value() 
+        && !tracked_ptrs_snapshot_.value().contains(ptr)) {
         return false;
     }
     absl::MutexLock lock(&mutex_);
@@ -88,13 +86,11 @@ class SystemAllocTracker {
   }
 
   bool UntrackPointer(void* ptr) {
-    if (IsUsingValkeyAlloc() && !is_snapshot_captured) {
-      is_snapshot_captured = true;
-      CHECK(tracked_ptrs_snapshot_.empty());
+    if (IsUsingValkeyAlloc() && tracked_ptrs_snapshot_->empty()) {
       absl::MutexLock lock(&mutex_);
-      tracked_ptrs_snapshot_ = tracked_ptrs_;
+      *tracked_ptrs_snapshot_ = tracked_ptrs_;
     }
-    if (!tracked_ptrs_snapshot_.contains(ptr)) {
+    if (tracked_ptrs_snapshot_.has_value() && !tracked_ptrs_snapshot_.value().contains(ptr)) {
         return false;
     }
     absl::MutexLock lock(&mutex_);

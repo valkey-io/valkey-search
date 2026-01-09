@@ -668,6 +668,30 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     processed_content.push_back(ch);
     ++pos_;
   }
+  // Remove trailing punctuations if any which is not part of query syntax
+  if (!processed_content.empty()) {
+    while (!IsEnd()) {
+      char ch = Peek();
+      if (lexer.IsPunctuation(ch)) {
+        // Reject reserved characters in unquoted text
+        if (ch == '{' || ch == '}' || ch == '[' || ch == ']' || ch == ':' ||
+            ch == ';' || ch == '$') {
+          return absl::InvalidArgumentError(
+              absl::StrCat("Unexpected character at position ", pos_ + 1, ": `",
+                           expression_.substr(pos_, 1), "`"));
+        }
+        // Break on query syntax punctuation
+        if (ch == ')' || ch == '|' || ch == '(' || ch == '@' || ch == '"' ||
+            ch == '-' || ch == '\\' || ch == '%' || ch == '*') {
+          break;
+        }
+        // Consume all other punctuation (!, ?, +, etc.)
+        ++pos_;
+      } else {
+        break;
+      }
+    }
+  }
   std::string token = absl::AsciiStrToLower(processed_content);
   FieldMaskPredicate field_mask;
   std::optional<uint32_t> min_stem_size = std::nullopt;

@@ -1448,10 +1448,9 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # NOSTEM index (idx1) should not give doc:3 (driving)
         result = client.execute_command("FT.SEARCH", "idx1", '%%drive%%')
         assert (result[0], set(result[1::2])) == (2, {b"doc:4", b"doc:11"})
-        # stemming enabled should give doc:3 (with word 'driving')
-        # TODO: fails as '?' is not ignored. Enable after fix
-        # result = client.execute_command("FT.SEARCH", "idx2", '%%drive%%')
-        # assert (result[0], set(result[1::2])) == (2, {b"doc:3", b"doc:4"}) 
+        # stemming enabled: should give doc:3 (with word 'driving')
+        result = client.execute_command("FT.SEARCH", "idx2", '%%drive%%')
+        assert (result[0], set(result[1::2])) == (3, {b"doc:3", b"doc:4", b"doc:11"}) 
         # Higher edit distance test (ED=10)
         # Add a document with a word that requires high edit distance
         # Increase max edit distance config
@@ -1468,10 +1467,9 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         result = client.execute_command("FT.SEARCH", "idx1", '%%%%%%%%%%xyzbcdefghnalization%%%%%%%%%%')
         assert result[0] >= 1 and b"doc:7" in result[1::2]
         # Multiple fields
-        # Known crash with Return clause. TODO: Enable after fix
-        # client.execute_command("HSET", "doc:12", "content", "I am going to a race", "content2", "Driver drove the car?")
-        # result = client.execute_command("FT.SEARCH", "idx3", '%%drive%%', "return", "1", "content2")
-        # assert (result[0], set(result[1::2])) == (3, {b"doc:4", b"doc:11", b"doc:12"})
+        client.execute_command("HSET", "doc:12", "content", "I am going to a race", "content2", "Driver drove the car?")
+        result = client.execute_command("FT.SEARCH", "idx3", '%%drive%%', "return", "1", "content2")
+        assert (result[0], set(result[1::2])) == (3, {b"doc:4", b"doc:11", b"doc:12"})
 
     def test_return_clause(self):
         client: Valkey = self.server.get_new_client()

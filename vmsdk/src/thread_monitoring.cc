@@ -28,9 +28,19 @@ thread_inspect_t ConvertToMachThread(pthread_t tid) {
   return thread_id;
 }
 }  // namespace
+
+ThreadMonitor::ThreadInfoFunc ThreadMonitor::thread_info_func = thread_info;
 #endif
 
 ThreadMonitor::ThreadMonitor(pthread_t thread_id) { thread_id_ = thread_id; }
+
+std::string ThreadMonitor::ThreadIdToString() const {
+#ifdef __APPLE__
+  return absl::StrFormat("%p", thread_id_);
+#else
+  return absl::StrFormat("%u", static_cast<unsigned int>(thread_id_));
+#endif
+}
 
 absl::StatusOr<double> ThreadMonitor::GetThreadCPUPercentage() {
   // First call, initializing values
@@ -46,9 +56,6 @@ absl::StatusOr<double> ThreadMonitor::GetThreadCPUPercentage() {
 
   // Calculate elapsed times
   int64_t cpu_time_elapsed_us = current_cpu_time - last_cpu_time_.value();
-  if (current_wall_time_micro < last_wall_time_micro_) {
-    return absl::InternalError("Internal error in CPU calculation");
-  }
   int64_t wall_time_elapsed =
       current_wall_time_micro - last_wall_time_micro_.value();
 
@@ -56,13 +63,25 @@ absl::StatusOr<double> ThreadMonitor::GetThreadCPUPercentage() {
   last_cpu_time_ = current_cpu_time;
   last_wall_time_micro_ = current_wall_time_micro;
 
-  // Calculate percentage (CPU time / wall time * 100)
-  if (wall_time_elapsed > 0) {
-    return (static_cast<double>(cpu_time_elapsed_us) / wall_time_elapsed) *
-           100.0;
+  if (wall_time_elapsed == 0) {
+    return 0.0;
   }
 
-  return 0.0;
+  if (cpu_time_elapsed_us < 0) {
+    return absl::FailedPreconditionError(
+        absl::StrFormat("Internal error in CPU calculation: negative cpu time "
+                        "for thread ID %s",
+                        ThreadIdToString()));
+  }
+
+  if (wall_time_elapsed < 0) {
+    return absl::InternalError(
+        absl::StrFormat("Internal error in CPU calculation: negative wall time "
+                        "for thread ID %s",
+                        ThreadIdToString()));
+  }
+
+  return (static_cast<double>(cpu_time_elapsed_us) / wall_time_elapsed) * 100.0;
 }
 
 absl::StatusOr<uint64_t> ThreadMonitor::GetCPUTime() const {
@@ -71,8 +90,8 @@ absl::StatusOr<uint64_t> ThreadMonitor::GetCPUTime() const {
   mach_msg_type_number_t count = THREAD_BASIC_INFO_COUNT;
   thread_inspect_t target = ConvertToMachThread(thread_id_);
 
-  if (thread_info(target, THREAD_BASIC_INFO, (thread_info_t)&info, &count) !=
-      KERN_SUCCESS) {
+  if (thread_info_func(target, THREAD_BASIC_INFO, (thread_info_t)&info,
+                       &count) != KERN_SUCCESS) {
     return absl::InternalError(
         absl::StrFormat("Failed to get thread info for thread %p", thread_id_));
   }

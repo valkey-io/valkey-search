@@ -52,6 +52,12 @@ void *RunWorkerThread(void *arg) {
 
 namespace vmsdk {
 
+static std::atomic_uint64_t thread_monitoring_cpu_error_cnt{0};
+
+uint64_t ThreadPool::GetNegativeCpuCount() {
+  return thread_monitoring_cpu_error_cnt.load(std::memory_order_relaxed);
+}
+
 ThreadPool::ThreadPool(const std::string &name_prefix, size_t num_threads,
                        size_t sample_queue_size)
     : initial_thread_count_(num_threads),
@@ -75,6 +81,9 @@ absl::StatusOr<double> ThreadPool::GetAvgCPUPercentage() {
     }
     auto status = thread->thread_monitor_->GetThreadCPUPercentage();
     if (!status.ok()) {
+      if (status.status().code() == absl::StatusCode::kFailedPrecondition) {
+        thread_monitoring_cpu_error_cnt.fetch_add(1, std::memory_order_relaxed);
+      }
       err = status.status();
       return;
     }

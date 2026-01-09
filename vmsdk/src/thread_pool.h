@@ -110,6 +110,8 @@ class ThreadPool {
 
   absl::StatusOr<double> GetAvgCPUPercentage();
 
+  static uint64_t GetNegativeCpuCount();
+
   // Get recent average queue wait time in milliseconds (last N samples)
   absl::StatusOr<double> GetRecentQueueWaitTime();
 

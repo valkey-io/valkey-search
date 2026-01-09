@@ -47,7 +47,7 @@ namespace vmsdk {
       __real_free(p);
     }
   };
-  thread_local static bool thread_initialize_tracker_snapshot = false;
+  thread_local static bool is_snapshot_captured = false;
   // `tracked_ptrs_snapshot_` provides a lock-free fast path to check if an address is tracked. 
   // It is a thread-local variable, lazily initialized during the first deallocation after 
   // module startup. Once the one-time snapshot is captured, it remains read-only. 
@@ -79,7 +79,7 @@ class SystemAllocTracker {
   }
 
   bool IsTracked(void* ptr) const {
-    if (IsUsingValkeyAlloc() && thread_initialize_tracker_snapshot 
+    if (IsUsingValkeyAlloc() && is_snapshot_captured 
         && !tracked_ptrs_snapshot_.contains(ptr)) {
         return false;
     }
@@ -88,8 +88,8 @@ class SystemAllocTracker {
   }
 
   bool UntrackPointer(void* ptr) {
-    if (IsUsingValkeyAlloc() && !thread_initialize_tracker_snapshot) {
-      thread_initialize_tracker_snapshot = true;
+    if (IsUsingValkeyAlloc() && !is_snapshot_captured) {
+      is_snapshot_captured = true;
       CHECK(tracked_ptrs_snapshot_.empty());
       absl::MutexLock lock(&mutex_);
       tracked_ptrs_snapshot_ = tracked_ptrs_;

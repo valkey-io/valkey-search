@@ -135,15 +135,6 @@ struct SearchParameters {
         db_num_(db_num) {}
 };
 
-<<<<<<< HEAD
-// Callback to be called when the search is done.
-using SearchResponseCallback =
-    absl::AnyInvocable<void(absl::StatusOr<std::vector<indexes::Neighbor>>&,
-                            std::unique_ptr<SearchParameters>)>;
-
-absl::StatusOr<std::vector<indexes::Neighbor>> Search(
-    const SearchParameters& parameters, SearchMode search_mode);
-=======
 // Indicates the range of neighbors to serialize in a search response.
 struct SerializationRange {
   size_t start_index;
@@ -154,14 +145,14 @@ struct SerializationRange {
 // Wrapper for search results that trims the neighbor deque based on query type
 struct SearchResult {
   size_t total_count;
-  std::deque<indexes::Neighbor> neighbors;
+  std::vector<indexes::Neighbor> neighbors;
   // True if neighbors were limited using LIMIT count with a buffer multiplier.
   bool is_limited_with_buffer;
   // True if neighbors were offset using LIMIT first_index.
   bool is_offsetted;
 
   // Constructor with automatic trimming based on query requirements
-  SearchResult(size_t total_count, std::deque<indexes::Neighbor> neighbors,
+  SearchResult(size_t total_count, std::vector<indexes::Neighbor> neighbors,
                const SearchParameters& parameters);
   // Get the range of neighbors to serialize in response.
   SerializationRange GetSerializationRange(
@@ -169,7 +160,7 @@ struct SearchResult {
 
  private:
   bool RetainAllNeighbors(const SearchParameters& parameters);
-  void TrimResults(std::deque<indexes::Neighbor>& neighbors,
+  void TrimResults(std::vector<indexes::Neighbor>& neighbors,
                    const SearchParameters& parameters);
 };
 
@@ -179,7 +170,6 @@ using SearchResponseCallback = absl::AnyInvocable<void(
 
 absl::StatusOr<SearchResult> Search(const SearchParameters& parameters,
                                     SearchMode search_mode);
->>>>>>> upstream/main
 
 absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
                          vmsdk::ThreadPool* thread_pool,

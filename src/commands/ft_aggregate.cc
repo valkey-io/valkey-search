@@ -328,16 +328,9 @@ bool AggregateParameters::RequiresCompleteResults() const {
 }
 
 void AggregateParameters::SendReply(ValkeyModuleCtx *ctx,
-<<<<<<< HEAD
-                                    std::vector<indexes::Neighbor> &neighbors) {
-  auto identifier = index_schema->GetIdentifier(attribute_alias);
-  auto result = SendReplyInner(ctx, neighbors, *this);
-  if (!result.ok()) {
-=======
                                     query::SearchResult &result) {
   auto status = SendReplyInner(ctx, result.neighbors, *this);
   if (!status.ok()) {
->>>>>>> upstream/main
     ++Metrics::GetStats().query_failed_requests_cnt;
     ValkeyModule_ReplyWithError(ctx, status.message().data());
   }

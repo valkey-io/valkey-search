@@ -143,11 +143,7 @@ query::SearchResponseCallback Service::MakeSearchCallback(
     SearchIndexPartitionResponse* response, grpc::ServerUnaryReactor* reactor,
     std::unique_ptr<vmsdk::StopWatch> latency_sample) {
   return [response, reactor, latency_sample = std::move(latency_sample)](
-<<<<<<< HEAD
-             absl::StatusOr<std::vector<indexes::Neighbor>>& neighbors,
-=======
              absl::StatusOr<query::SearchResult>& result,
->>>>>>> upstream/main
              std::unique_ptr<query::SearchParameters> parameters) mutable {
     if (!result.ok()) {
       reactor->Finish(ToGrpcStatus(result.status()));

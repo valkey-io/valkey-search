@@ -37,11 +37,7 @@ namespace {
 // "\x12\xa9\xf5\x6c" DIALECT 2
 
 void ReplyAvailNeighbors(ValkeyModuleCtx *ctx,
-<<<<<<< HEAD
-                         const std::vector<indexes::Neighbor> &neighbors,
-=======
                          const query::SearchResult &search_result,
->>>>>>> upstream/main
                          const query::SearchParameters &parameters) {
   if (parameters.IsNonVectorQuery()) {
     ValkeyModule_ReplyWithLongLong(ctx, search_result.total_count);
@@ -52,36 +48,8 @@ void ReplyAvailNeighbors(ValkeyModuleCtx *ctx,
   }
 }
 
-<<<<<<< HEAD
-size_t CalcEndIndex(const std::vector<indexes::Neighbor> &neighbors,
-                    const query::SearchParameters &parameters) {
-  if (parameters.IsNonVectorQuery()) {
-    return std::min(static_cast<size_t>(parameters.limit.number),
-                    neighbors.size());
-  }
-  // Vector query
-  return std::min(
-      static_cast<size_t>(parameters.k),
-      std::min(static_cast<size_t>(parameters.limit.number), neighbors.size()));
-}
-
-size_t CalcStartIndex(const std::vector<indexes::Neighbor> &neighbors,
-                      const query::SearchParameters &parameters) {
-  if (!parameters.IsNonVectorQuery()) {
-    CHECK_GT(parameters.k, parameters.limit.first_index);
-  }
-  if (neighbors.size() <= parameters.limit.first_index) {
-    return neighbors.size();
-  }
-  return parameters.limit.first_index;
-}
-
-void SendReplyNoContent(ValkeyModuleCtx *ctx,
-                        const std::vector<indexes::Neighbor> &neighbors,
-=======
 void SendReplyNoContent(ValkeyModuleCtx *ctx,
                         const query::SearchResult &search_result,
->>>>>>> upstream/main
                         const query::SearchParameters &parameters) {
   const auto &neighbors = search_result.neighbors;
   auto range = search_result.GetSerializationRange(parameters);
@@ -103,11 +71,7 @@ void ReplyScore(ValkeyModuleCtx *ctx, ValkeyModuleString &score_as,
 }
 
 void SerializeNeighbors(ValkeyModuleCtx *ctx,
-<<<<<<< HEAD
-                        const std::vector<indexes::Neighbor> &neighbors,
-=======
                         const query::SearchResult &search_result,
->>>>>>> upstream/main
                         const query::SearchParameters &parameters) {
   const auto &neighbors = search_result.neighbors;
   CHECK_GT(static_cast<size_t>(parameters.k), parameters.limit.first_index);
@@ -151,19 +115,8 @@ void SerializeNeighbors(ValkeyModuleCtx *ctx,
   }
 }
 
-<<<<<<< HEAD
 // Handle non-vector queries by processing the neighbors and replying with the
 // attribute contents.
-void SerializeNonVectorNeighbors(
-    ValkeyModuleCtx *ctx, const std::vector<indexes::Neighbor> &neighbors,
-    const query::SearchParameters &parameters) {
-  const size_t start_index = CalcStartIndex(neighbors, parameters);
-  const size_t end_index = std::min(
-      start_index + CalcEndIndex(neighbors, parameters), neighbors.size());
-  ValkeyModule_ReplyWithArray(ctx, 2 * (end_index - start_index) + 1);
-  ReplyAvailNeighbors(ctx, neighbors, parameters);
-  for (size_t i = start_index; i < end_index; ++i) {
-=======
 void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
                                  const query::SearchResult &search_result,
                                  const query::SearchParameters &parameters) {
@@ -173,7 +126,6 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
   ValkeyModule_ReplyWithArray(ctx, 2 * range.count() + 1);
   ReplyAvailNeighbors(ctx, search_result, parameters);
   for (size_t i = range.start_index; i < range.end_index; ++i) {
->>>>>>> upstream/main
     // Document ID
     ValkeyModule_ReplyWithString(
         ctx, vmsdk::MakeUniqueValkeyString(*neighbors[i].external_id).get());
@@ -215,11 +167,7 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
 //      4. The vector value
 // SendReply respects the Limit, see https://valkey.io/commands/ft.search/
 void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
-<<<<<<< HEAD
-                              std::vector<indexes::Neighbor> &neighbors) {
-=======
                               query::SearchResult &search_result) {
->>>>>>> upstream/main
   // Increment success counter.
   ++Metrics::GetStats().query_successful_requests_cnt;
   auto &neighbors = search_result.neighbors;

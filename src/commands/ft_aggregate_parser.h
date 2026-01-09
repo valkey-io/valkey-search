@@ -44,12 +44,7 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   ~AggregateParameters() override = default;
   AggregateParameters(int db_num) : QueryCommand(db_num){};
   absl::Status ParseCommand(vmsdk::ArgsIterator& itr) override;
-<<<<<<< HEAD
-  void SendReply(ValkeyModuleCtx* ctx,
-                 std::vector<indexes::Neighbor>& neighbors) override;
-=======
   void SendReply(ValkeyModuleCtx* ctx, query::SearchResult& result) override;
->>>>>>> upstream/main
   bool loadall_{false};
   std::vector<std::string> loads_;
   bool load_key{false};

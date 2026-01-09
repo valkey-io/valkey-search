@@ -1259,7 +1259,6 @@ INSTANTIATE_TEST_SUITE_P(
             .create_success = false,
             .create_expected_error_message = "Missing closing TAG bracket, '}'",
         },
-<<<<<<< HEAD
         {
             .test_name = "bad_filter_13",
             .filter = "hello{world",
@@ -1327,7 +1326,7 @@ INSTANTIATE_TEST_SUITE_P(
         {
             .test_name = "nested_brackets_and_2",
             .filter = "(@num_field_1.5:[1.0 2.0] (@num_field_2.0:[1.0 3.0] "
-                      "(@tag_field_1:{tag1} (@tag_field_1_2:{tag1,tag2} "
+                      "(@tag_field_1:{tag1} (@tag_field_1_2:{tag1|tag2} "
                       "(@num_field_1.5:[1.0 2.0] @num_field_2.0:[1.0 3.0]) "
                       "@tag_field_1:{tag1}))))",
             .create_success = true,
@@ -1353,7 +1352,7 @@ INSTANTIATE_TEST_SUITE_P(
         {
             .test_name = "nested_brackets_and_3",
             .filter = "@num_field_1.5:[1.0 2.0] (@num_field_2.0:[1.0 3.0] "
-                      "(@tag_field_1:{tag1} (@tag_field_1_2:{tag1,tag2} "
+                      "(@tag_field_1:{tag1} (@tag_field_1_2:{tag1|tag2} "
                       "(@num_field_1.5:[1.0 2.0] @num_field_2.0:[1.0 3.0]))))",
             .create_success = true,
             .evaluate_success = true,
@@ -1602,7 +1601,7 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = "@num_field_1.5:[1.0 2.0] ( | )",
             .create_success = false,
             .create_expected_error_message = "Missing OR term",
-=======
+        },
         // =================================================================
         // Tests for escaped pipe separator in tag values
         // =================================================================
@@ -1678,7 +1677,6 @@ INSTANTIATE_TEST_SUITE_P(
             .create_success = true,
             .evaluate_success = true,  // "a|b" should match, numeric doesn't
             .key = "key_pipe",
->>>>>>> upstream/main
         },
     }),
     [](const TestParamInfo<FilterTestCase> &info) {

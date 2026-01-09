@@ -298,7 +298,6 @@ static auto thread_pool_wait_time_samples =
         })
         .Build();
 
-<<<<<<< HEAD
 /// Enable proximity evaluation in prefilter evaluation stage
 /// When disabled, proximity evaluation is skipped in background threads and is
 /// performed only on main thread
@@ -321,7 +320,6 @@ static auto max_term_expansions =
                           kMaximumMaxTermExpansions)  // max limit (100k)
         .Build();
 
-=======
 /// Register the "search-result-buffer-multiplier" flag
 constexpr absl::string_view kSearchResultBufferMultiplierConfig{
     "search-result-buffer-multiplier"};
@@ -358,7 +356,6 @@ double GetSearchResultBufferMultiplier() {
   return search_result_buffer_multiplier;
 }
 
->>>>>>> upstream/main
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 
 vmsdk::config::Number& GetHNSWBlockSize() {

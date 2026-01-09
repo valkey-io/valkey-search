@@ -33,11 +33,7 @@
 #include "src/metrics.h"
 #include "src/query/planner.h"
 #include "src/query/predicate.h"
-<<<<<<< HEAD
-#include "src/query/response_generator.h"
-=======
 #include "src/valkey_search.h"
->>>>>>> upstream/main
 #include "src/valkey_search_options.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/latency_sampler.h"
@@ -230,8 +226,9 @@ void EvaluatePrefilteredKeys(
   // If there was a union operation, we need to handle deduplication.
   // This implementation skips deduplication (flat_hash_set usage) if not needed
   // for performance.
-  bool needs_dedup = parameters.filter_parse_results.query_operations &
-                     QueryOperations::kContainsOr;
+  bool needs_dedup = (parameters.filter_parse_results.query_operations &
+                      QueryOperations::kContainsOr) ||
+                     ValkeySearch::Instance().IsCluster();
   absl::flat_hash_set<const char *> result_keys;
   if (needs_dedup) {
     result_keys.reserve(max_keys);
@@ -443,8 +440,9 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
   // The initial search done by EvaluateFilterAsPrimary does not handle
   // union or intersection of results.
   bool skip_evaluation = true;
-  if (parameters.filter_parse_results.query_operations &
-      (QueryOperations::kContainsOr | QueryOperations::kContainsAnd)) {
+  if ((parameters.filter_parse_results.query_operations &
+       (QueryOperations::kContainsOr | QueryOperations::kContainsAnd)) ||
+      ValkeySearch::Instance().IsCluster()) {
     skip_evaluation = false;
   }
   if (skip_evaluation) {
@@ -522,11 +520,6 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearch(
   return PerformVectorSearch(vector_index, parameters);
 }
 
-<<<<<<< HEAD
-absl::StatusOr<std::vector<indexes::Neighbor>> Search(
-    const SearchParameters &parameters, SearchMode search_mode) {
-  return MaybeAddIndexedContent(DoSearch(parameters, search_mode), parameters);
-=======
 // Check if no results should be returned based on query parameters.
 // This handles two cases:
 // 1. Any query with limit number == 0
@@ -539,7 +532,7 @@ bool ShouldReturnNoResults(const SearchParameters &parameters) {
 }
 
 SearchResult::SearchResult(size_t total_count,
-                           std::deque<indexes::Neighbor> neighbors,
+                           std::vector<indexes::Neighbor> neighbors,
                            const SearchParameters &parameters)
     : total_count(total_count),
       is_limited_with_buffer(false),
@@ -557,7 +550,7 @@ SearchResult::SearchResult(size_t total_count,
 }
 
 // Apply limiting in background thread if possible.
-void SearchResult::TrimResults(std::deque<indexes::Neighbor> &neighbors,
+void SearchResult::TrimResults(std::vector<indexes::Neighbor> &neighbors,
                                const SearchParameters &parameters) {
   // Calculate max_needed for consistent vector/non-vector handling
   SerializationRange range = GetSerializationRange(parameters);
@@ -631,7 +624,6 @@ absl::StatusOr<SearchResult> Search(const SearchParameters &parameters,
   }
   size_t total_count = result.value().size();
   return SearchResult(total_count, std::move(result.value()), parameters);
->>>>>>> upstream/main
 }
 
 absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,

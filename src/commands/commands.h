@@ -96,11 +96,7 @@ struct QueryCommand : public query::SearchParameters {
   // Executed on Main Thread after merge
   //
   virtual void SendReply(ValkeyModuleCtx *ctx,
-<<<<<<< HEAD
-                         std::vector<indexes::Neighbor> &neighbors) = 0;
-=======
                          query::SearchResult &search_result) = 0;
->>>>>>> upstream/main
 };
 
 namespace async {

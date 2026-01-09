@@ -60,7 +60,7 @@ struct NeighborComparator {
     // Primarily used in non vector queries without scores (distance = 0).
     // The full string compare is required because for external keys there is no
     // guarantee of the stability of the InternedStringPtr across invocations.
-    return a.external_id.get()->Str() > b.external_id.get()->Str();
+    return a.external_id->Str() > b.external_id->Str();
   }
 };
 
@@ -164,18 +164,13 @@ struct SearchPartitionResultsTracker {
 
   ~SearchPartitionResultsTracker() {
     absl::MutexLock lock(&mutex);
-<<<<<<< HEAD
-    absl::StatusOr<std::vector<indexes::Neighbor>> result =
-        std::vector<indexes::Neighbor>();
-=======
     absl::StatusOr<SearchResult> result;
->>>>>>> upstream/main
     if (consistency_failed) {
       result = absl::FailedPreconditionError(kFailedPreconditionMsg);
     } else if (reached_oom) {
       result = absl::ResourceExhaustedError(kOOMMsg);
     } else {
-      std::deque<indexes::Neighbor> neighbors;
+      std::vector<indexes::Neighbor> neighbors;
       while (!results.empty()) {
         neighbors.push_back(
             std::move(const_cast<indexes::Neighbor &>(results.top())));
@@ -287,11 +282,7 @@ absl::Status PerformSearchFanoutAsync(
         coordinator::GRPCSearchRequestToParameters(*request, nullptr));
     VMSDK_RETURN_IF_ERROR(query::SearchAsync(
         std::move(local_parameters), thread_pool,
-<<<<<<< HEAD
-        [tracker](absl::StatusOr<std::vector<indexes::Neighbor>> &neighbors,
-=======
         [tracker](absl::StatusOr<SearchResult> &result,
->>>>>>> upstream/main
                   std::unique_ptr<SearchParameters> parameters) {
           if (result.ok()) {
             tracker->AddResults(result->neighbors);

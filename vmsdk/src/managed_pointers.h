@@ -23,8 +23,15 @@ struct ValkeyStringDeleter {
   }
 };
 
+struct ValkeyModuleUserDeleter {
+  void operator()(ValkeyModuleUser *user) { ValkeyModule_FreeModuleUser(user); }
+};
+
 using UniqueValkeyString =
     std::unique_ptr<ValkeyModuleString, ValkeyStringDeleter>;
+
+using UniqueValkeyModuleUser =
+    std::unique_ptr<ValkeyModuleUser, ValkeyModuleUserDeleter>;
 
 inline UniqueValkeyString UniquePtrValkeyString(
     ValkeyModuleString *valkey_str) {
@@ -45,6 +52,7 @@ inline UniqueValkeyString MakeUniqueValkeyString(const char *str) {
 
 inline UniqueValkeyString RetainUniqueValkeyString(
     ValkeyModuleString *valkey_str) {
+  VerifyMainThread();
   ValkeyModule_RetainString(nullptr, valkey_str);
   return UniquePtrValkeyString(valkey_str);
 }

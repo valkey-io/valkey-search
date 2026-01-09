@@ -57,6 +57,24 @@ class ArgsIterator {
     itr_ += steps;
     return *this;
   }
+
+  absl::StatusOr<ValkeyModuleString *> PopNext(int steps = 1) {
+    VMSDK_ASSIGN_OR_RETURN(auto current, Get());
+    Next(steps);
+    return current;
+  }
+
+  bool PopIfNextIgnoreCase(absl::string_view word) {
+    auto next = Get();
+    if (!next.ok() ||
+        !absl::EqualsIgnoreCase(vmsdk::ToStringView(next.value()), word)) {
+      return false;
+    } else {
+      itr_++;
+      return true;
+    }
+  }
+
   int DistanceEnd() { return argc_ > itr_ ? argc_ - itr_ : 0; }
   int DistanceStart() { return argc_ - DistanceEnd(); }
   bool HasNext() { return DistanceEnd() > 0; }
@@ -187,6 +205,13 @@ absl::Status ParseEnumParam(
   std::make_unique<::vmsdk::ParamParser<type>>(                     \
       [](type &value, ::vmsdk::ArgsIterator &itr) -> absl::Status { \
         value.field_name = true;                                    \
+        return absl::OkStatus();                                    \
+      })
+
+#define GENERATE_NEGATED_FLAG_PARSER(type, field_name)              \
+  std::make_unique<::vmsdk::ParamParser<type>>(                     \
+      [](type &value, ::vmsdk::ArgsIterator &itr) -> absl::Status { \
+        value.field_name = false;                                   \
         return absl::OkStatus();                                    \
       })
 

@@ -355,6 +355,15 @@ void DoSections(ValkeyModuleInfoCtx* ctx, int for_crash_report);
 absl::Status ShowInfo(ValkeyModuleCtx* ctx, vmsdk::ArgsIterator& itr,
                       const vmsdk::module::Options& options);
 
+//
+// Some often used declarations
+//
+#define DEV_INTEGER_COUNTER(section, name) \
+  static vmsdk::info_field::Integer name(  \
+      #section, #name, vmsdk::info_field::IntegerBuilder().Dev())
+
+bool GetShowDeveloper();
+
 }  // namespace info_field
 }  // namespace vmsdk
 

@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_set.h"
@@ -42,20 +43,25 @@ class Tag : public IndexBase {
   absl::StatusOr<bool> ModifyRecord(const InternedStringPtr& key,
                                     absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
-  int RespondWithInfo(ValkeyModuleCtx* ctx) const override;
-  bool IsTracked(const InternedStringPtr& key) const override;
+  int RespondWithInfo(ValkeyModuleCtx* ctx) const override
+      ABSL_LOCKS_EXCLUDED(index_mutex_);
   absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const override {
     return absl::OkStatus();
   }
 
-  inline void ForEachTrackedKey(
-      absl::AnyInvocable<void(const InternedStringPtr&)> fn) const override {
-    absl::MutexLock lock(&index_mutex_);
-    for (const auto& [key, _] : tracked_tags_by_keys_) {
-      fn(key);
-    }
-  }
-  uint64_t GetRecordCount() const override;
+  size_t GetTrackedKeyCount() const override ABSL_LOCKS_EXCLUDED(index_mutex_);
+  size_t GetUnTrackedKeyCount() const override
+      ABSL_LOCKS_EXCLUDED(index_mutex_);
+  bool IsTracked(const InternedStringPtr& key) const override
+      ABSL_LOCKS_EXCLUDED(index_mutex_);
+  bool IsUnTracked(const InternedStringPtr& key) const override
+      ABSL_LOCKS_EXCLUDED(index_mutex_);
+  absl::Status ForEachTrackedKey(
+      absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
+      const override ABSL_LOCKS_EXCLUDED(index_mutex_);
+  absl::Status ForEachUnTrackedKey(
+      absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
+      const override ABSL_LOCKS_EXCLUDED(index_mutex_);
   std::unique_ptr<data_model::Index> ToProto() const override;
 
   InternedStringPtr GetRawValue(const InternedStringPtr& key) const
@@ -122,6 +128,8 @@ class Tag : public IndexBase {
       absl::string_view data, char separator);
   static absl::flat_hash_set<absl::string_view> ParseRecordTags(
       absl::string_view data, char separator);
+  // Unescape a tag string (e.g. escaped pipe becomes literal pipe)
+  static std::string UnescapeTag(absl::string_view tag);
 
  private:
   mutable absl::Mutex index_mutex_;

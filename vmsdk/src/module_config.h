@@ -15,6 +15,7 @@
 #include "absl/status/status.h"
 #include "absl/synchronization/mutex.h"
 #include "gtest/gtest_prod.h"
+#include "managed_pointers.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -179,6 +180,8 @@ class ConfigBase : public Registerable {
 
   T GetValue() const { return GetValueImpl(); }
 
+  T GetDefaultValue() const { return GetDefaultValueImpl(); }
+
   void NotifyChanged() {
     if (modify_callback_) {
       modify_callback_(GetValue());
@@ -206,6 +209,7 @@ class ConfigBase : public Registerable {
   /// store/fetch for the value
   virtual void SetValueImpl(T value) = 0;
   virtual T GetValueImpl() const = 0;
+  virtual T GetDefaultValueImpl() const = 0;
 
   OnModifyCB modify_callback_;
   ValidateCB validate_callback_;
@@ -226,6 +230,8 @@ class Number : public ConfigBase<long long> {
   long long GetValueImpl() const override {
     return current_value_.load(std::memory_order_relaxed);
   }
+
+  long long GetDefaultValueImpl() const override { return default_value_; }
 
   void SetValueImpl(long long val) override {
     current_value_.store(val, std::memory_order_relaxed);
@@ -254,6 +260,8 @@ class Enum : public ConfigBase<int> {
     return current_value_.load(std::memory_order_relaxed);
   }
 
+  int GetDefaultValueImpl() const override { return default_value_; }
+
   void SetValueImpl(int val) override {
     current_value_.store(val, std::memory_order_relaxed);
   }
@@ -278,6 +286,8 @@ class Boolean : public ConfigBase<bool> {
     return current_value_.load(std::memory_order_relaxed);
   }
 
+  bool GetDefaultValueImpl() const override { return default_value_; }
+
   void SetValueImpl(bool val) override {
     current_value_.store(val, std::memory_order_relaxed);
   }
@@ -294,6 +304,12 @@ class String : public ConfigBase<std::string> {
   ~String() override = default;
   absl::Status FromString(std::string_view value) override;
   const std::string &GetString() const { return value_; }
+  ValkeyModuleString *GetCachedValkeyString() const {
+    if (!cached_string_) {
+      cached_string_ = vmsdk::MakeUniqueValkeyString(value_);
+    }
+    return cached_string_.get();
+  }
 
  protected:
   // Implementation specific
@@ -307,10 +323,15 @@ class String : public ConfigBase<std::string> {
   void SetValueImpl(std::string val) override ABSL_LOCKS_EXCLUDED(mutex_) {
     absl::MutexLock lock{&mutex_};
     value_ = val;
+    cached_string_.reset();
   }
+
+  std::string GetDefaultValueImpl() const override { return default_; }
 
   mutable absl::Mutex mutex_;
   std::string value_;
+  std::string default_;
+  mutable UniqueValkeyString cached_string_;
   FRIEND_TEST(Builder, ConfigBuilder);
 };
 
@@ -395,7 +416,7 @@ ConfigBuilder<ValkeyT> Builder(Args &&...args) {
     // Boolean
     return ConfigBuilder<bool>(new Boolean(std::forward<Args>(args)...));
   } else if constexpr (std::is_same<ValkeyT, int>()) {
-    // Boolean
+    // Enum
     return ConfigBuilder<int>(new Enum(std::forward<Args>(args)...));
   } else if constexpr (std::is_same<ValkeyT, std::string>()) {
     // String

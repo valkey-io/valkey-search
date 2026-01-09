@@ -8,12 +8,13 @@
 #include <absl/base/no_destructor.h>
 #include <absl/strings/ascii.h>
 
-#include "module_config.h"
-#include "src/commands/commands.h"
+#include "src/coordinator/metadata_manager.h"
+#include "src/schema_manager.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
+#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 
 extern vmsdk::module::Options options;  // Declared in module_loader.cc
@@ -144,6 +145,9 @@ absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
        "list all controlled variables and their values"},
       {"FT._DEBUG PAUSEPOINT [ SET | RESET | TEST | LIST] <pausepoint>",
        "control pause points"},
+      {"FT_DEBUG SHOW_METADATA",
+       "list internal metadata manager table namespace"},
+      {"FT_DEBUG SHOW_INDEXSCHEMAS", "list internal index schema tables"},
   };
   ValkeyModule_ReplySetArrayLength(ctx, 2 * help_text.size());
   for (auto &pair : help_text) {
@@ -155,23 +159,25 @@ absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
 
 absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                         int argc) {
+  std::string msg;
   if (!vmsdk::config::IsDebugModeEnabled()) {
     // Pretend like we don't exist
-    std::ostringstream msg;
-    msg << "ERR unknown command '" << vmsdk::ToStringView(argv[0])
-        << "', with args beginning with:";
+    msg = "ERR unknown command '";
+    msg += vmsdk::ToStringView(argv[0]);
+    msg += "', with args beginning with:";
     for (int i = 1; i < argc; ++i) {
-      msg << " '" << vmsdk::ToStringView(argv[i]) << "'";
+      msg += " '";
+      msg += vmsdk::ToStringView(argv[i]);
+      msg += "'";
     }
-    ValkeyModule_ReplyWithError(ctx, msg.str().data());
+    ValkeyModule_ReplyWithError(ctx, msg.data());
     return absl::OkStatus();
   }
-  std::string msg;
   for (int i = 1; i < argc; ++i) {
     msg += " ";
-    msg += std::string(vmsdk::ToStringView(argv[i]));
+    msg += vmsdk::ToStringView(argv[i]);
   }
-  VMSDK_LOG(WARNING, ctx) << "FT._DEBUG" << msg;
+  VMSDK_LOG(WARNING, ctx) << "FT._DEBUG: " << msg;
   vmsdk::ArgsIterator itr{argv, argc};
   itr.Next();  // Skip the command name
   std::string keyword;
@@ -183,6 +189,11 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     return PausePointControlCmd(ctx, itr);
   } else if (keyword == "CONTROLLED_VARIABLE") {
     return ControlledCmd(ctx, itr);
+  } else if (keyword == "SHOW_METADATA") {
+    return valkey_search::coordinator::MetadataManager::Instance().ShowMetadata(
+        ctx, itr);
+  } else if (keyword == "SHOW_INDEXSCHEMAS") {
+    return valkey_search::SchemaManager::Instance().ShowIndexSchemas(ctx, itr);
   } else if (keyword == "HELP") {
     return HelpCmd(ctx, itr);
   } else {

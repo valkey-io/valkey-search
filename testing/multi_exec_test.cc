@@ -36,7 +36,7 @@ class MultiExecTest : public ValkeySearchTest {
  public:
   void SetUp() override {
     ValkeySearchTest::SetUp();
-    InitThreadPools(2, 2);
+    InitThreadPools(2, 2, 1);
     mutations_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
 
     std::vector<absl::string_view> key_prefixes;

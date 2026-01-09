@@ -21,12 +21,7 @@ target_link_libraries(server PUBLIC metrics)
 target_link_libraries(server PUBLIC vector_base)
 target_link_libraries(server PUBLIC response_generator)
 target_link_libraries(server PUBLIC search)
-target_link_libraries(server PUBLIC latency_sampler)
-target_link_libraries(server PUBLIC log)
-target_link_libraries(server PUBLIC managed_pointers)
-target_link_libraries(server PUBLIC thread_pool)
-target_link_libraries(server PUBLIC type_conversions)
-target_link_libraries(server PUBLIC utils)
+target_link_libraries(server PUBLIC vmsdklib)
 target_link_libraries(server PUBLIC valkey_module)
 target_link_libraries(server PUBLIC coordinator_grpc_proto)
 if(APPLE)
@@ -44,8 +39,7 @@ target_include_directories(client PRIVATE ${CMAKE_BINARY_DIR})
 target_link_libraries(client PUBLIC coordinator_cc_proto)
 target_link_libraries(client PUBLIC grpc_suspender)
 target_link_libraries(client PUBLIC metrics)
-target_link_libraries(client PUBLIC latency_sampler)
-target_link_libraries(client PUBLIC managed_pointers)
+target_link_libraries(client PUBLIC vmsdklib)
 target_link_libraries(client PUBLIC coordinator_grpc_proto)
 if(APPLE)
   target_link_libraries(client PUBLIC gRPC::grpc gRPC::grpc++)
@@ -58,7 +52,7 @@ set(SRCS_CLIENT_POOL ${CMAKE_CURRENT_LIST_DIR}/client_pool.h)
 add_library(client_pool INTERFACE ${SRCS_CLIENT_POOL})
 target_include_directories(client_pool INTERFACE ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(client_pool INTERFACE client)
-target_link_libraries(client_pool INTERFACE managed_pointers)
+target_link_libraries(client_pool INTERFACE vmsdklib)
 
 set(SRCS_UTIL ${CMAKE_CURRENT_LIST_DIR}/util.h)
 
@@ -74,18 +68,15 @@ target_link_libraries(metadata_manager PUBLIC client_pool)
 target_link_libraries(metadata_manager PUBLIC coordinator_cc_proto)
 target_link_libraries(metadata_manager PUBLIC util)
 target_link_libraries(metadata_manager PUBLIC rdb_serialization)
-target_link_libraries(metadata_manager PUBLIC log)
-target_link_libraries(metadata_manager PUBLIC managed_pointers)
-target_link_libraries(metadata_manager PUBLIC type_conversions)
-target_link_libraries(metadata_manager PUBLIC utils)
-target_link_libraries(metadata_manager PUBLIC status_macros)
+target_link_libraries(metadata_manager PUBLIC vmsdklib)
 target_link_libraries(metadata_manager PUBLIC valkey_module)
 target_link_libraries(metadata_manager PUBLIC highwayhash)
 
-set(SRCS_SEARCH_CONVERTER ${CMAKE_CURRENT_LIST_DIR}/search_converter.cc
-                          ${CMAKE_CURRENT_LIST_DIR}/search_converter.h
-                          ${CMAKE_CURRENT_LIST_DIR}/info_converter.cc
-                          ${CMAKE_CURRENT_LIST_DIR}/info_converter.h)
+set(SRCS_SEARCH_CONVERTER
+    ${CMAKE_CURRENT_LIST_DIR}/search_converter.cc
+    ${CMAKE_CURRENT_LIST_DIR}/search_converter.h
+    ${CMAKE_CURRENT_LIST_DIR}/info_converter.cc
+    ${CMAKE_CURRENT_LIST_DIR}/info_converter.h)
 
 valkey_search_add_static_library(search_converter "${SRCS_SEARCH_CONVERTER}")
 target_include_directories(search_converter PUBLIC ${CMAKE_CURRENT_LIST_DIR})
@@ -97,9 +88,7 @@ target_link_libraries(search_converter PUBLIC numeric)
 target_link_libraries(search_converter PUBLIC tag)
 target_link_libraries(search_converter PUBLIC predicate_header)
 target_link_libraries(search_converter PUBLIC search)
-target_link_libraries(search_converter PUBLIC managed_pointers)
-target_link_libraries(search_converter PUBLIC type_conversions)
-target_link_libraries(search_converter PUBLIC status_macros)
+target_link_libraries(search_converter PUBLIC vmsdklib)
 
 set(SRCS_GRPC_SUSPENDER ${CMAKE_CURRENT_LIST_DIR}/grpc_suspender.cc
                         ${CMAKE_CURRENT_LIST_DIR}/grpc_suspender.h)

@@ -31,15 +31,16 @@ struct TextFieldIndex : public indexes::IndexBase {
       const InternedStringPtr& key, DeletionType deletion_type) override;
   virtual absl::StatusOr<bool> ModifyRecord(const InternedStringPtr& key,
                                             absl::string_view data) override;
-  virtual int RespondWithInfo(RedisModuleCtx* ctx) const override;
+  virtual int RespondWithInfo(ValkeyModuleCtx* ctx) const override;
   virtual bool IsTracked(const InternedStringPtr& key) const override;
   virtual absl::Status SaveIndex(RDBOutputStream& rdb_stream) const override;
 
   virtual std::unique_ptr<data_model::Index> ToProto() const override;
-  virtual void ForEachTrackedKey(
-      absl::AnyInvocable<void(const InternedStringPtr&)> fn) const override;
+  virtual absl::Status ForEachTrackedKey(
+      absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
+      const override;
 
-  virtual uint64_t GetRecordCount() const override;
+  virtual uint64_t GetTrackedKeyCount() const override;
 
  private:
   // Each text field is assigned a unique number within the containing index,

@@ -59,8 +59,7 @@ static ValkeyModuleString *OnGetStringConfig(const char *config_name,
                                              void *priv_data) {
   auto entry = static_cast<String *>(priv_data);
   CHECK(entry) << "null private data";
-  return ValkeyModule_CreateString(nullptr, entry->GetString().c_str(),
-                                   entry->GetString().size());
+  return entry->GetCachedValkeyString();
 }
 
 static int OnSetStringConfig(const char *config_name, ValkeyModuleString *value,
@@ -325,7 +324,11 @@ absl::Status String::Register(ValkeyModuleCtx *ctx) {
 }
 
 absl::Status String::FromString(std::string_view value) {
-  SetValueOrLog(value.data(), WARNING);
+  if (value.data() == nullptr) {
+    return absl::InvalidArgumentError("Invalid string value: null");
+  }
+  default_ = value.data();
+  SetValueOrLog(default_, WARNING);
   return absl::OkStatus();
 }
 

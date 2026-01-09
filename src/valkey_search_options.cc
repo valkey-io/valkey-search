@@ -6,6 +6,7 @@
  */
 #include "valkey_search_options.h"
 
+#include "absl/strings/numbers.h"
 #include "valkey_search.h"
 #include "vmsdk/src/concurrency.h"
 #include "vmsdk/src/module_config.h"
@@ -16,6 +17,12 @@ namespace options {
 
 constexpr uint32_t kHNSWDefaultBlockSize{10240};
 constexpr uint32_t kHNSWMinimumBlockSize{0};
+constexpr uint32_t kDefaultFTInfoTimeoutMs{5000};
+constexpr uint32_t kMinimumFTInfoTimeoutMs{100};
+constexpr uint32_t kMaximumFTInfoTimeoutMs{300000};
+constexpr uint32_t kDefaultFTInfoRpcTimeoutMs{2500};
+constexpr uint32_t kMinimumFTInfoRpcTimeoutMs{100};
+constexpr uint32_t kMaximumFTInfoRpcTimeoutMs{300000};
 
 namespace {
 
@@ -104,6 +111,20 @@ static auto writer_threads_count =
             })
         .Build();
 
+/// Register the "--utility-threads" flag. Controls the utility thread pool
+constexpr absl::string_view kUtilityThreadsConfig{"utility-threads"};
+static auto utility_threads_count =
+    config::NumberBuilder(kUtilityThreadsConfig,  // name
+                          1,                      // default size (1 thread)
+                          1,                      // min size
+                          kMaxThreadsCount)       // max size
+        .WithModifyCallback(                      // set an "On-Modify" callback
+            [](auto new_value) {
+              UpdateThreadPoolCount(
+                  ValkeySearch::Instance().GetUtilityThreadPool(), new_value);
+            })
+        .Build();
+
 /// Register the "--max-worker-suspension-secs" flag.
 /// Controls the resumption of the worker thread pool:
 ///   - If max-worker-suspension-secs > 0, resume the workers either when the
@@ -167,9 +188,151 @@ static auto log_level =
         .WithValidationCallback(ValidateLogLevel)
         .Build();
 
-/// Should timeouts return partial results OR generate a TIMEOUT error?
-constexpr absl::string_view kEnablePartialResults{"enable-partial-results"};
-static config::Boolean enable_partial_results(kEnablePartialResults, true);
+/// Prefer partial results by default of not
+/// If set to true, search will use SOMESHARDS if user does not explicitly
+/// provide an option in the command
+constexpr absl::string_view kPreferPartialResults{"prefer-partial-results"};
+static config::Boolean prefer_partial_results(kPreferPartialResults, true);
+
+/// Prefer consistenct results by default of not
+/// If set to true, search will use CONSISTENT if user does not explicitly
+/// provide an option in the command
+constexpr absl::string_view kPreferConsistentResults{
+    "prefer-consistent-results"};
+static config::Boolean prefer_consistent_results(kPreferConsistentResults,
+                                                 false);
+
+/// Enable search result background cleanup
+/// If set to true, search result cleanup will be scheduled on background thread
+constexpr absl::string_view kSearchResultBackgroundCleanup{
+    "search-result-background-cleanup"};
+static config::Boolean search_result_background_cleanup(
+    kSearchResultBackgroundCleanup, true);
+
+/// Configure the weight for high priority tasks in thread pools (0-100)
+/// Low priority weight = 100 - high_priority_weight
+constexpr absl::string_view kHighPriorityWeight{"high-priority-weight"};
+static auto high_priority_weight =
+    config::NumberBuilder(kHighPriorityWeight, 100, 0,
+                          100)  // Default 100%, range 0-100
+        .WithModifyCallback([](auto new_value) {
+          // Update reader and writer thread pools only
+          auto reader_pool = ValkeySearch::Instance().GetReaderThreadPool();
+          auto writer_pool = ValkeySearch::Instance().GetWriterThreadPool();
+          if (reader_pool) {
+            reader_pool->SetHighPriorityWeight(new_value);
+          }
+          if (writer_pool) {
+            writer_pool->SetHighPriorityWeight(new_value);
+          }
+        })
+        .Build();
+
+/// Register the "--ft-info-timeout-ms" flag. Controls the timeout for FT.INFO
+/// operations
+constexpr absl::string_view kFTInfoTimeoutMsConfig{"ft-info-timeout-ms"};
+static auto ft_info_timeout_ms =
+    vmsdk::config::NumberBuilder(
+        kFTInfoTimeoutMsConfig,   // name
+        kDefaultFTInfoTimeoutMs,  // default timeout (5 seconds)
+        kMinimumFTInfoTimeoutMs,  // min timeout (100ms)
+        kMaximumFTInfoTimeoutMs)  // max timeout (5 minutes)
+        .Build();
+
+/// Register the "--ft-info-rpc-timeout-ms" flag. Controls the timeout for
+/// FT.INFO operations
+constexpr absl::string_view kFTInfoRpcTimeoutMsConfig{"ft-info-rpc-timeout-ms"};
+static auto ft_info_rpc_timeout_ms =
+    vmsdk::config::NumberBuilder(
+        kFTInfoRpcTimeoutMsConfig,   // name
+        kDefaultFTInfoRpcTimeoutMs,  // default timeout (2.5 seconds)
+        kMinimumFTInfoRpcTimeoutMs,  // min timeout (100ms)
+        kMaximumFTInfoRpcTimeoutMs)  // max timeout (5 minutes)
+        .Build();
+
+/// Register the "--local-fanout-queue-wait-threshold" flag. Controls the queue
+/// wait time threshold (in milliseconds) below which local node is preferred in
+/// fanout operations
+constexpr absl::string_view kLocalFanoutQueueWaitThresholdConfig{
+    "local-fanout-queue-wait-threshold"};
+constexpr uint32_t kDefaultLocalFanoutQueueWaitThreshold{
+    50};  // 50ms queue wait time
+constexpr uint32_t kMinimumLocalFanoutQueueWaitThreshold{
+    0};  // 0ms queue wait time
+constexpr uint32_t kMaximumLocalFanoutQueueWaitThreshold{
+    10000};  // 10 seconds queue wait time
+static auto local_fanout_queue_wait_threshold =
+    vmsdk::config::NumberBuilder(
+        kLocalFanoutQueueWaitThresholdConfig,   // name
+        kDefaultLocalFanoutQueueWaitThreshold,  // default threshold (50ms)
+        kMinimumLocalFanoutQueueWaitThreshold,  // min threshold (0ms)
+        kMaximumLocalFanoutQueueWaitThreshold)  // max threshold (10s)
+        .Build();
+
+/// Register the "--thread-pool-wait-time-samples" flag. Controls the size of
+/// the circular buffer for tracking queue wait times in thread pools
+constexpr absl::string_view kThreadPoolWaitTimeSamplesConfig{
+    "thread-pool-wait-time-samples"};
+constexpr uint32_t kDefaultThreadPoolWaitTimeSamples{100};  // 100 samples
+constexpr uint32_t kMinimumThreadPoolWaitTimeSamples{10};  // 10 samples minimum
+constexpr uint32_t kMaximumThreadPoolWaitTimeSamples{
+    10000};  // 10k samples maximum
+static auto thread_pool_wait_time_samples =
+    vmsdk::config::NumberBuilder(
+        kThreadPoolWaitTimeSamplesConfig,   // name
+        kDefaultThreadPoolWaitTimeSamples,  // default size (100)
+        kMinimumThreadPoolWaitTimeSamples,  // min size (10)
+        kMaximumThreadPoolWaitTimeSamples)  // max size (10k)
+        .WithModifyCallback([](uint32_t new_size) {
+          // Update thread pools when sample queue size changes
+          auto& instance = ValkeySearch::Instance();
+          if (auto reader_pool = instance.GetReaderThreadPool()) {
+            reader_pool->ResizeSampleQueue(new_size);
+          }
+          if (auto writer_pool = instance.GetWriterThreadPool()) {
+            writer_pool->ResizeSampleQueue(new_size);
+          }
+          if (auto utility_pool = instance.GetUtilityThreadPool()) {
+            utility_pool->ResizeSampleQueue(new_size);
+          }
+        })
+        .Build();
+
+/// Register the "search-result-buffer-multiplier" flag
+constexpr absl::string_view kSearchResultBufferMultiplierConfig{
+    "search-result-buffer-multiplier"};
+constexpr absl::string_view kDefaultSearchResultBufferMultiplier{"1.5"};
+constexpr double kMinimumSearchResultBufferMultiplier{1.0};
+constexpr double kMaximumSearchResultBufferMultiplier{1000.0};
+static double search_result_buffer_multiplier{1.5};
+static auto search_result_buffer_multiplier_config =
+    config::StringBuilder(kSearchResultBufferMultiplierConfig,
+                          kDefaultSearchResultBufferMultiplier)
+        .WithValidationCallback([](const std::string& value) -> absl::Status {
+          double parsed_value;
+          if (!absl::SimpleAtod(value, &parsed_value)) {
+            return absl::InvalidArgumentError(
+                "Buffer multiplier must be a valid number");
+          }
+          if (parsed_value < kMinimumSearchResultBufferMultiplier ||
+              parsed_value > kMaximumSearchResultBufferMultiplier) {
+            return absl::InvalidArgumentError(absl::StrFormat(
+                "Buffer multiplier must be between %.1f and %.1f",
+                kMinimumSearchResultBufferMultiplier,
+                kMaximumSearchResultBufferMultiplier));
+          }
+          return absl::OkStatus();
+        })
+        .WithModifyCallback([](const std::string& value) {
+          double parsed_value;
+          CHECK(absl::SimpleAtod(value, &parsed_value));
+          search_result_buffer_multiplier = parsed_value;
+        })
+        .Build();
+
+double GetSearchResultBufferMultiplier() {
+  return search_result_buffer_multiplier;
+}
 
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 
@@ -183,6 +346,10 @@ vmsdk::config::Number& GetReaderThreadCount() {
 
 vmsdk::config::Number& GetWriterThreadCount() {
   return dynamic_cast<vmsdk::config::Number&>(*writer_threads_count);
+}
+
+vmsdk::config::Number& GetUtilityThreadCount() {
+  return dynamic_cast<vmsdk::config::Number&>(*utility_threads_count);
 }
 
 vmsdk::config::Number& GetMaxWorkerSuspensionSecs() {
@@ -211,8 +378,37 @@ absl::Status Reset() {
   return absl::OkStatus();
 }
 
-const vmsdk::config::Boolean& GetEnablePartialResults() {
-  return static_cast<vmsdk::config::Boolean&>(enable_partial_results);
+const vmsdk::config::Boolean& GetPreferPartialResults() {
+  return static_cast<vmsdk::config::Boolean&>(prefer_partial_results);
+}
+
+const vmsdk::config::Boolean& GetPreferConsistentResults() {
+  return static_cast<vmsdk::config::Boolean&>(prefer_consistent_results);
+}
+
+const vmsdk::config::Boolean& GetSearchResultBackgroundCleanup() {
+  return static_cast<vmsdk::config::Boolean&>(search_result_background_cleanup);
+}
+
+vmsdk::config::Number& GetHighPriorityWeight() {
+  return dynamic_cast<vmsdk::config::Number&>(*high_priority_weight);
+}
+
+vmsdk::config::Number& GetFTInfoTimeoutMs() {
+  return dynamic_cast<vmsdk::config::Number&>(*ft_info_timeout_ms);
+}
+
+vmsdk::config::Number& GetFTInfoRpcTimeoutMs() {
+  return dynamic_cast<vmsdk::config::Number&>(*ft_info_rpc_timeout_ms);
+}
+
+vmsdk::config::Number& GetLocalFanoutQueueWaitThreshold() {
+  return dynamic_cast<vmsdk::config::Number&>(
+      *local_fanout_queue_wait_threshold);
+}
+
+vmsdk::config::Number& GetThreadPoolWaitTimeSamples() {
+  return dynamic_cast<vmsdk::config::Number&>(*thread_pool_wait_time_samples);
 }
 
 }  // namespace options

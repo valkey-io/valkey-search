@@ -27,6 +27,8 @@
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/grpc_suspender.h"
 #include "src/metrics.h"
+#include "src/valkey_search_options.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module_config.h"
@@ -37,7 +39,7 @@ namespace valkey_search::coordinator {
 constexpr absl::string_view kRetryPolicy =
     "{\"methodConfig\" : [{"
     "   \"name\" : [{\"service\": \"valkey_search.coordinator.Coordinator\"}],"
-    "   \"waitForReady\": false,"
+    "   \"waitForReady\": true,"
     "   \"retryPolicy\": {"
     "     \"maxAttempts\": 5,"
     "     \"initialBackoff\": \"0.100s\","
@@ -48,7 +50,8 @@ constexpr absl::string_view kRetryPolicy =
     "       \"UNKNOWN\","
     "       \"RESOURCE_EXHAUSTED\","
     "       \"INTERNAL\","
-    "       \"DATA_LOSS\""
+    "       \"DATA_LOSS\","
+    "       \"NOT_FOUND\""
     "     ]"
     "    }"
     "}]}";
@@ -189,8 +192,9 @@ void ClientImpl::InfoIndexPartition(
     std::unique_ptr<vmsdk::StopWatch> latency_sample;
   };
   auto args = std::make_unique<InfoIndexPartitionArgs>();
-  args->context.set_deadline(
-      absl::ToChronoTime(absl::Now() + absl::Milliseconds(timeout_ms)));
+  args->context.set_deadline(absl::ToChronoTime(
+      absl::Now() +
+      absl::Milliseconds(options::GetFTInfoRpcTimeoutMs().GetValue())));
   args->callback = std::move(done);
   args->request = std::move(request);
   args->latency_sample = SAMPLE_EVERY_N(100);
@@ -201,6 +205,9 @@ void ClientImpl::InfoIndexPartition(
       &args_raw->context, args_raw->request.get(), &args_raw->response,
       // std::function is not move-only
       [args_raw](grpc::Status s) mutable {
+        if (!vmsdk::IsMainThread()) {
+          PAUSEPOINT("fanout_remote_pausepoint");
+        }
         GRPCSuspensionGuard guard(GRPCSuspender::Instance());
         auto args = std::unique_ptr<InfoIndexPartitionArgs>(args_raw);
         args->callback(s, args->response);

@@ -32,6 +32,8 @@
 #include "src/metrics.h"
 #include "src/query/planner.h"
 #include "src/query/predicate.h"
+#include "src/valkey_search.h"
+#include "src/valkey_search_options.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
@@ -56,7 +58,7 @@ class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
     if (!key.ok()) {
       return false;
     }
-    indexes::InlineVectorEvaluator evaluator;
+    indexes::PrefilterEvaluator evaluator;
     return evaluator.Evaluate(*filter_predicate_, *key);
   }
 
@@ -65,8 +67,7 @@ class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
   indexes::VectorBase *vector_index_;
 };
 absl::StatusOr<std::deque<indexes::Neighbor>> PerformVectorSearch(
-    indexes::VectorBase *vector_index,
-    const VectorSearchParameters &parameters) {
+    indexes::VectorBase *vector_index, const SearchParameters &parameters) {
   std::unique_ptr<InlineVectorFilter> inline_filter;
   if (parameters.filter_parse_results.root_predicate != nullptr) {
     inline_filter = std::make_unique<InlineVectorFilter>(
@@ -79,7 +80,8 @@ absl::StatusOr<std::deque<indexes::Neighbor>> PerformVectorSearch(
     auto latency_sample = SAMPLE_EVERY_N(100);
     auto res = vector_hnsw->Search(parameters.query, parameters.k,
                                    parameters.cancellation_token,
-                                   std::move(inline_filter), parameters.ef);
+                                   std::move(inline_filter), parameters.ef,
+                                   parameters.enable_partial_results);
     Metrics::GetStats().hnsw_vector_index_search_latency.SubmitSample(
         std::move(latency_sample));
     return res;
@@ -180,33 +182,52 @@ struct PrefilteredKey {
   float distance;
 };
 
-std::priority_queue<std::pair<float, hnswlib::labeltype>>
-CalcBestMatchingPrefilteredKeys(
-    const VectorSearchParameters &parameters,
+void EvaluatePrefilteredKeys(
+    const SearchParameters &parameters,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
-    indexes::VectorBase *vector_index) {
-  std::priority_queue<std::pair<float, hnswlib::labeltype>> results;
-  absl::flat_hash_set<hnswlib::labeltype> top_keys;
+    absl::AnyInvocable<bool(const InternedStringPtr &,
+                            absl::flat_hash_set<const char *> &)>
+        appender) {
+  absl::flat_hash_set<const char *> result_keys;
   auto predicate = parameters.filter_parse_results.root_predicate.get();
-  indexes::InlineVectorEvaluator evaluator;
+  indexes::PrefilterEvaluator evaluator;
   while (!entries_fetchers.empty()) {
     auto fetcher = std::move(entries_fetchers.front());
     entries_fetchers.pop();
     auto iterator = fetcher->Begin();
     while (!iterator->Done()) {
-      const auto &key = *iterator;
-      // TODO: yairg - add bloom filter to ensure distinct keys are processed
-      // just once.
-      if (evaluator.Evaluate(*predicate, *key)) {
-        vector_index->AddPrefilteredKey(parameters.query, parameters.k, *key,
-                                        results, top_keys);
+      const auto &key = **iterator;
+      // TODO: add a bloom filter to ensure distinct keys are evaluated
+      // only once.
+      if (!result_keys.contains(key->Str().data()) &&
+          evaluator.Evaluate(*predicate, key)) {
+        if (appender(key, result_keys)) {
+          result_keys.insert(key->Str().data());
+        }
       }
       iterator->Next();
       if (parameters.cancellation_token->IsCancelled()) {
-        return results;
+        return;
       }
     }
   }
+}
+
+std::priority_queue<std::pair<float, hnswlib::labeltype>>
+CalcBestMatchingPrefilteredKeys(
+    const SearchParameters &parameters,
+    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
+    indexes::VectorBase *vector_index) {
+  std::priority_queue<std::pair<float, hnswlib::labeltype>> results;
+  auto results_appender =
+      [&results, &parameters, vector_index](
+          const InternedStringPtr &key,
+          absl::flat_hash_set<const char *> &top_keys) -> bool {
+    return vector_index->AddPrefilteredKey(parameters.query, parameters.k, key,
+                                           results, top_keys);
+  };
+  EvaluatePrefilteredKeys(parameters, entries_fetchers,
+                          std::move(results_appender));
   return results;
 }
 
@@ -227,7 +248,7 @@ std::string StringFormatVector(std::vector<char> vector) {
 
 absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
     absl::StatusOr<std::deque<indexes::Neighbor>> results,
-    const VectorSearchParameters &parameters) {
+    const SearchParameters &parameters) {
   if (!results.ok()) {
     return results;
   }
@@ -330,8 +351,29 @@ absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
   return results;
 }
 
-absl::StatusOr<std::deque<indexes::Neighbor>> Search(
-    const VectorSearchParameters &parameters, SearchMode search_mode) {
+absl::StatusOr<std::deque<indexes::Neighbor>> SearchNonVectorQuery(
+    const SearchParameters &parameters) {
+  std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
+  size_t qualified_entries = EvaluateFilterAsPrimary(
+      parameters.filter_parse_results.root_predicate.get(), entries_fetchers,
+      false);
+  std::deque<indexes::Neighbor> neighbors;
+  auto results_appender =
+      [&neighbors, &parameters](
+          const InternedStringPtr &key,
+          absl::flat_hash_set<const char *> &top_keys) -> bool {
+    neighbors.push_back(indexes::Neighbor{key, 0.0f});
+    return true;
+  };
+
+  EvaluatePrefilteredKeys(parameters, entries_fetchers,
+                          std::move(results_appender));
+
+  return neighbors;
+}
+
+absl::StatusOr<std::deque<indexes::Neighbor>> DoSearch(
+    const SearchParameters &parameters, SearchMode search_mode) {
   // Handle OOM for search requests, defends against request
   // coming from the coordinator
   if (search_mode == SearchMode::kRemote) {
@@ -341,42 +383,25 @@ absl::StatusOr<std::deque<indexes::Neighbor>> Search(
       return absl::ResourceExhaustedError(kOOMMsg);
     }
   }
+
+  auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
+  vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
+  ++Metrics::GetStats().time_slice_queries;
   // Handle non vector queries first where attribute_alias is empty.
   if (parameters.IsNonVectorQuery()) {
-    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
-    size_t qualified_entries = EvaluateFilterAsPrimary(
-        parameters.filter_parse_results.root_predicate.get(), entries_fetchers,
-        false);
-    // Collect matching keys
-    std::deque<indexes::Neighbor> neighbors;
-    indexes::InlineVectorEvaluator evaluator;
-    while (!entries_fetchers.empty()) {
-      auto fetcher = std::move(entries_fetchers.front());
-      entries_fetchers.pop();
-      auto iterator = fetcher->Begin();
-      while (!iterator->Done()) {
-        const InternedStringPtr &label = **iterator;
-        neighbors.push_back(indexes::Neighbor{label, 0.0f});
-        iterator->Next();
-      }
-    }
-    return neighbors;
+    return SearchNonVectorQuery(parameters);
   }
   VMSDK_ASSIGN_OR_RETURN(auto index, parameters.index_schema->GetIndex(
                                          parameters.attribute_alias));
+  auto vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
   if (index->GetIndexerType() != indexes::IndexerType::kHNSW &&
       index->GetIndexerType() != indexes::IndexerType::kFlat) {
     return absl::InvalidArgumentError(
         absl::StrCat(parameters.attribute_alias, " is not a Vector index "));
   }
-  auto vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
-  auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
-  vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
-  ++Metrics::GetStats().time_slice_queries;
 
   if (!parameters.filter_parse_results.root_predicate) {
-    return MaybeAddIndexedContent(PerformVectorSearch(vector_index, parameters),
-                                  parameters);
+    return PerformVectorSearch(vector_index, parameters);
   }
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
   size_t qualified_entries = EvaluateFilterAsPrimary(
@@ -390,18 +415,124 @@ absl::StatusOr<std::deque<indexes::Neighbor>> Search(
         << qualified_entries;
     // Do an exact nearest neighbour search on the reduced search space.
     ++Metrics::GetStats().query_prefiltering_requests_cnt;
-    auto results = CalcBestMatchingPrefilteredKeys(parameters, entries_fetchers,
-                                                   vector_index);
+    std::priority_queue<std::pair<float, hnswlib::labeltype>> results =
+        CalcBestMatchingPrefilteredKeys(parameters, entries_fetchers,
+                                        vector_index);
 
     return vector_index->CreateReply(results);
   }
   ++Metrics::GetStats().query_inline_filtering_requests_cnt;
   lock.SetMayProlong();
-  return MaybeAddIndexedContent(PerformVectorSearch(vector_index, parameters),
-                                parameters);
+  return PerformVectorSearch(vector_index, parameters);
 }
 
-absl::Status SearchAsync(std::unique_ptr<VectorSearchParameters> parameters,
+// Check if no results should be returned based on query parameters.
+// This handles two cases:
+// 1. Any query with limit number == 0
+// 2. Vector queries with limit first_index >= k
+bool ShouldReturnNoResults(const SearchParameters &parameters) {
+  return (parameters.IsVectorQuery() &&
+          parameters.limit.first_index >=
+              static_cast<uint64_t>(parameters.k)) ||
+         parameters.limit.number == 0;
+}
+
+SearchResult::SearchResult(size_t total_count,
+                           std::deque<indexes::Neighbor> neighbors,
+                           const SearchParameters &parameters)
+    : total_count(total_count),
+      is_limited_with_buffer(false),
+      is_offsetted(false) {
+  // Clear neighbors if no results should be returned
+  if (ShouldReturnNoResults(parameters)) {
+    this->neighbors.clear();
+    return;
+  }
+  this->neighbors = std::move(neighbors);
+  // Check if the command needs all results (e.g. for sorting). Trim otherwise.
+  if (!parameters.RequiresCompleteResults()) {
+    TrimResults(this->neighbors, parameters);
+  }
+}
+
+// Apply limiting in background thread if possible.
+void SearchResult::TrimResults(std::deque<indexes::Neighbor> &neighbors,
+                               const SearchParameters &parameters) {
+  // Calculate max_needed for consistent vector/non-vector handling
+  SerializationRange range = GetSerializationRange(parameters);
+  size_t max_needed = static_cast<size_t>(
+      range.end_index * options::GetSearchResultBufferMultiplier());
+  // In standalone mode, we can optimize by trimming from front first.
+  // Note: We cannot trim from the front in a Cluster Mode setting because
+  // each shard produces X results and we need to trim the OFFSET on the
+  // aggregated results. Thus, we can only trim from the end in searches for
+  // individual nodes. In cluster mode, the offset based trimming is applied
+  // after merging all results from shards at the coordinator level.
+  if (!ValkeySearch::Instance().IsCluster()) {
+    this->is_offsetted = true;
+    // Trim from front (apply offset)
+    if (range.start_index > 0 && range.start_index < neighbors.size()) {
+      neighbors.erase(neighbors.begin(), neighbors.begin() + range.start_index);
+      // After trimming from the front, we no longer have an offset.
+      // We only need (end_index - start_index) items.
+      size_t actual_count = range.end_index - range.start_index;
+      max_needed = static_cast<size_t>(
+          actual_count * options::GetSearchResultBufferMultiplier());
+    } else if (range.start_index >= neighbors.size()) {
+      neighbors.clear();
+      return;
+    }
+  }
+  // If we don't need to limit, return early.
+  if (neighbors.size() <= max_needed) {
+    return;
+  }
+  // Apply limiting with buffer
+  this->is_limited_with_buffer = true;
+  neighbors.erase(neighbors.begin() + max_needed, neighbors.end());
+  return;
+}
+
+// Determine the range of neighbors to serialize in the response.
+SerializationRange SearchResult::GetSerializationRange(
+    const SearchParameters &parameters) const {
+  CHECK(!ShouldReturnNoResults(parameters));
+  // Determine start_index
+  size_t start_index = 0;
+  // If we have already offsetted, start_index is 0.
+  if (!is_offsetted) {
+    if (parameters.IsVectorQuery()) {
+      CHECK_GT(parameters.k, parameters.limit.first_index);
+    }
+    start_index = std::min(neighbors.size(),
+                           static_cast<size_t>(parameters.limit.first_index));
+  }
+  // Determine end_index logic
+  size_t limit_count = static_cast<size_t>(parameters.limit.number);
+  size_t count;
+  if (parameters.IsNonVectorQuery()) {
+    count = std::min(limit_count, neighbors.size());
+  } else {
+    count = std::min(
+        {static_cast<size_t>(parameters.k), limit_count, neighbors.size()});
+  }
+  size_t end_index = std::min(start_index + count, neighbors.size());
+  // Return the range
+  return {start_index, end_index};
+}
+
+absl::StatusOr<SearchResult> Search(const SearchParameters &parameters,
+                                    SearchMode search_mode) {
+  auto result =
+      MaybeAddIndexedContent(DoSearch(parameters, search_mode), parameters);
+  if (!result.ok()) {
+    return result.status();
+  }
+  size_t total_count = result.value().size();
+  return SearchResult(total_count, std::move(result.value()), parameters);
+}
+
+absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
                          vmsdk::ThreadPool *thread_pool,
                          SearchResponseCallback callback,
                          SearchMode search_mode) {

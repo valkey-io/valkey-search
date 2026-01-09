@@ -1,0 +1,5 @@
+To generate the compatibility suite, cd to this directory and enter:
+
+pytest generate.py
+
+The current handling of the docker instance is flaky, sometimes it needs to be manually killed.

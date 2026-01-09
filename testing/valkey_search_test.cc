@@ -19,14 +19,14 @@
 #include "absl/time/time.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
-#include "src/attribute_data_type.h"
 #include "src/coordinator/metadata_manager.h"
 #include "src/index_schema.h"
 #include "src/metrics.h"
-#include "src/schema_manager.h"
 #include "src/utils/string_interning.h"
+#include "src/version.h"
 #include "testing/common.h"
 #include "testing/coordinator/common.h"
+#include "valkey_search_options.h"
 #include "vmsdk/src/memory_allocation.h"
 #include "vmsdk/src/module.h"
 #include "vmsdk/src/testing_infra/module.h"
@@ -241,6 +241,41 @@ TEST_P(LoadTest, load) {
         .Times(1);
   }
   if (test_case.use_coordinator) {
+    // Mock GetMyClusterID for all coordinator tests
+    ON_CALL(*kMockValkeyModule, GetMyClusterID())
+        .WillByDefault(
+            testing::Return("a415b9df6ce0c3c757ad4270242ae432147cacbb"));
+
+    // Create an empty CLUSTER SLOTS response
+    auto empty_slots_reply = std::make_unique<ValkeyModuleCallReply>();
+    empty_slots_reply->type = VALKEYMODULE_REPLY_ARRAY;
+    empty_slots_reply->val = CallReplyArray{};
+
+    ValkeyModuleCallReply* empty_slots_reply_ptr = empty_slots_reply.get();
+
+    EXPECT_CALL(*kMockValkeyModule,
+                Call(testing::_, testing::StrEq("CLUSTER"), testing::StrEq("c"),
+                     testing::StrEq("SLOTS")))
+        .WillRepeatedly(testing::Return(empty_slots_reply_ptr));
+
+    EXPECT_CALL(*kMockValkeyModule, CallReplyType(empty_slots_reply_ptr))
+        .WillRepeatedly(testing::Return(VALKEYMODULE_REPLY_ARRAY));
+
+    EXPECT_CALL(*kMockValkeyModule, CallReplyLength(empty_slots_reply_ptr))
+        .WillRepeatedly(testing::Return(0));
+
+    // Allow FreeCallReply to be called on any pointer, but only delete our
+    // heap-allocated one
+    EXPECT_CALL(*kMockValkeyModule, FreeCallReply(testing::_))
+        .WillRepeatedly([empty_slots_reply_ptr,
+                         &empty_slots_reply](ValkeyModuleCallReply* r) {
+          if (r == empty_slots_reply_ptr) {
+            empty_slots_reply.release();
+            delete r;
+          }
+          // Do nothing for other pointers (they're managed elsewhere)
+        });
+
     if (test_case.use_valkey_port) {
       ValkeyModuleCallReply tls_array_reply;
       ValkeyModuleCallReply tls_string_reply;
@@ -300,7 +335,10 @@ TEST_P(LoadTest, load) {
     EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))
         .WillRepeatedly(testing::Return(0));
   }
-  vmsdk::module::Options options;
+  vmsdk::module::Options options = {
+      .version = kModuleVersion,
+      .minimum_valkey_server_version = kMinimumServerVersion,
+  };
   auto load_res = vmsdk::module::OnLoadDone(
       ValkeySearch::Instance().OnLoad(&fake_ctx_, args.data(), args.size()),
       &fake_ctx_, options);
@@ -333,7 +371,7 @@ TEST_P(LoadTest, load) {
 
 TEST_F(ValkeySearchTest, FullSyncFork) {
   VMSDK_EXPECT_OK(options::GetMaxWorkerSuspensionSecs().SetValue(1));
-  InitThreadPools(2, 2);
+  InitThreadPools(2, 2, 1);
   auto writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
   auto reader_thread_pool = ValkeySearch::Instance().GetReaderThreadPool();
   ValkeySearch::Instance().AtForkPrepare();
@@ -359,7 +397,7 @@ TEST_F(ValkeySearchTest, FullSyncFork) {
 }
 
 TEST_F(ValkeySearchTest, Info) {
-  InitThreadPools(10, 5);
+  InitThreadPools(10, 5, 1);
   auto writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
   auto reader_thread_pool = ValkeySearch::Instance().GetReaderThreadPool();
   VMSDK_EXPECT_OK(writer_thread_pool->SuspendWorkers());
@@ -503,7 +541,7 @@ TEST_F(ValkeySearchTest, Info) {
 }
 
 TEST_F(ValkeySearchTest, OnForkChildDiedCallback) {
-  InitThreadPools(std::nullopt, 5);
+  InitThreadPools(std::nullopt, 5, 1);
   auto writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
   VMSDK_EXPECT_OK(writer_thread_pool->SuspendWorkers());
   ValkeyModuleEvent eid;
@@ -521,7 +559,7 @@ TEST_F(ValkeySearchTest, OnForkChildDiedCallback) {
 
 TEST_F(ValkeySearchTest, OnForkChildBornCallback) {
   VMSDK_EXPECT_OK(options::GetMaxWorkerSuspensionSecs().SetValue(0));
-  InitThreadPools(std::nullopt, 5);
+  InitThreadPools(std::nullopt, 5, 1);
   auto writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
   VMSDK_EXPECT_OK(writer_thread_pool->SuspendWorkers());
   ValkeyModuleEvent eid;

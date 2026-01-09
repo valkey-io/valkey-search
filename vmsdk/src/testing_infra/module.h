@@ -255,6 +255,7 @@ class MockValkeyModule {
   MOCK_METHOD(void, FreeClusterNodesList, (char **ids));
   MOCK_METHOD(int, CallReplyType, (ValkeyModuleCallReply * reply));
   MOCK_METHOD(size_t, CallReplyLength, (ValkeyModuleCallReply * reply));
+  MOCK_METHOD(long long, CallReplyInteger, (ValkeyModuleCallReply * reply));
   MOCK_METHOD(ValkeyModuleString *, CreateStringFromCallReply,
               (ValkeyModuleCallReply * reply));
   MOCK_METHOD(int, WrongArity, (ValkeyModuleCtx * ctx));
@@ -336,6 +337,7 @@ class ReplyCapture {
     std::optional<long long> long_long_value;  // NOLINT
     std::optional<std::string> simple_string_value;
     std::optional<std::string> string_value;
+    std::optional<std::string> err_string_value;
     std::optional<ReplyArray> array_value;
     std::optional<double> double_value;
   };
@@ -373,7 +375,11 @@ class ReplyCapture {
   }
   void ReplyWithError(const char *str) {
     auto result = AllocateElement();
-    result->string_value = std::string(str);
+    result->err_string_value = std::string(str);
+  }
+  void ReplyWithError(ValkeyModuleString *str) {
+    auto result = AllocateElement();
+    result->err_string_value = vmsdk::ToStringView(str);
   }
   void ReplyWithDouble(double val) {
     auto result = AllocateElement();
@@ -395,6 +401,8 @@ class ReplyCapture {
     } else if (element.string_value.has_value()) {
       return absl::StrFormat("$%d\r\n%s\r\n", element.string_value->size(),
                              *element.string_value);
+    } else if (element.err_string_value.has_value()) {
+      return absl::StrFormat("-%s\r\n", *element.err_string_value);
     } else if (element.array_value.has_value()) {
       std::string result =
           absl::StrFormat("*%d\r\n", element.array_value->target_length);
@@ -1413,6 +1421,20 @@ inline int TestValkeyModule_CallReplyTypeImpl(ValkeyModuleCallReply *reply) {
   return reply->type;
 }
 
+inline long long TestValkeyModule_CallReplyInteger(
+    ValkeyModuleCallReply *reply) {
+  return kMockValkeyModule->CallReplyInteger(reply);
+}
+
+inline long long TestValkeyModule_CallReplyIntegerImpl(
+    ValkeyModuleCallReply *reply) {
+  if (reply == nullptr || reply->type != VALKEYMODULE_REPLY_INTEGER) {
+    return 0;
+  }
+  CHECK(std::holds_alternative<CallReplyInteger>(reply->val));
+  return std::get<CallReplyInteger>(reply->val);
+}
+
 inline ValkeyModuleString *TestValkeyModule_CreateStringFromCallReply(
     ValkeyModuleCallReply *reply) {
   return kMockValkeyModule->CreateStringFromCallReply(reply);
@@ -1562,6 +1584,7 @@ inline void TestValkeyModule_Init() {
   ValkeyModule_FreeClusterNodesList = &TestValkeyModule_FreeClusterNodesList;
   ValkeyModule_CallReplyType = &TestValkeyModule_CallReplyType;
   ValkeyModule_CallReplyLength = &TestValkeyModule_CallReplyLength;
+  ValkeyModule_CallReplyInteger = &TestValkeyModule_CallReplyInteger;
   ValkeyModule_CreateStringFromCallReply =
       &TestValkeyModule_CreateStringFromCallReply;
   ValkeyModule_WrongArity = &TestValkeyModule_WrongArity;
@@ -1616,6 +1639,8 @@ inline void TestValkeyModule_Init() {
   ON_CALL(*kMockValkeyModule,
           CallReplyMapElement(testing::_, testing::_, testing::_, testing::_))
       .WillByDefault(TestValkeyModule_CallReplyMapElementImpl);
+  ON_CALL(*kMockValkeyModule, CallReplyInteger(testing::_))
+      .WillByDefault(TestValkeyModule_CallReplyIntegerImpl);
   ON_CALL(*kMockValkeyModule, Milliseconds()).WillByDefault([]() -> long long {
     static long long fake_time = 0;
     return ++fake_time;

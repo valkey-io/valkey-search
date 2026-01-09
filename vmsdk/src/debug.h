@@ -85,7 +85,7 @@ struct ControlledBase {
 
 template <typename T>
 struct Controlled : private ControlledBase {
-  bool GetValue() const { return value_; }
+  T GetValue() const { return value_.load(std::memory_order_relaxed); }
   std::string DisplayValue() const override {
     std::ostringstream os;
     os << value_.load(std::memory_order_relaxed);
@@ -94,6 +94,11 @@ struct Controlled : private ControlledBase {
   absl::Status SetValue(absl::string_view value) override {
     VMSDK_ASSIGN_OR_RETURN(value_, vmsdk::To<T>(value));
     return absl::OkStatus();
+  }
+  template <typename U = T>
+  typename std::enable_if<std::is_arithmetic<U>::value, void>::type Decrement(
+      U amount = 1) {
+    value_.fetch_sub(amount, std::memory_order_relaxed);
   }
   Controlled(absl::string_view name, T default_value)
       : ControlledBase(name), value_(default_value) {}
@@ -106,12 +111,12 @@ struct Controlled : private ControlledBase {
 // Override default template for boolean
 //
 template <>
-std::string Controlled<bool>::DisplayValue() const {
+inline std::string Controlled<bool>::DisplayValue() const {
   return value_ ? "on" : "off";
-};
+}
 
 template <>
-absl::Status Controlled<bool>::SetValue(absl::string_view value) {
+inline absl::Status Controlled<bool>::SetValue(absl::string_view value) {
   std::string lc_value = absl::AsciiStrToLower(value);
   if (lc_value == "on" || lc_value == "yes" || value == "1") {
     value_ = true;

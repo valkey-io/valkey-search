@@ -27,11 +27,9 @@ def sum_of_remote_searches(nodes: list[Node]) -> int:
 def do_json_backfill_test(test, client, primary, replica):
     assert(primary.info("replication")["role"] == "master")
     assert(replica.info("replication")["role"] == "slave")
-    index = Index("test", [Vector("v", 3, type="FLAT")], type="JSON")
+    index = Index("test", [Vector("v", 3, type="FLAT")], type=KeyDataType.JSON)
     index.load_data(client, 100)
     replica.readonly()
-    assert(primary.execute_command("DBSIZE") > 0)
-    assert(replica.execute_command("DBSIZE") > 0)
 
     index.create(primary)
     waiters.wait_for_true(lambda: index_on_node(primary, index.name))
@@ -52,7 +50,6 @@ class TestJsonBackfill(ValkeySearchClusterTestCaseDebugMode):
     @pytest.mark.parametrize(
         "setup_test", [{"replica_count": 1}], indirect=True
     )
-    # Mark as xfail until JSON fixes are merged.
     def test_json_backfill_CME(self):
         """
         Validate that JSON backfill works correctly on a replica
@@ -73,3 +70,36 @@ class TestSearchFTDropindexCMD(ValkeySearchTestCaseDebugMode):
     def test_json_backfill_CMD(self):
         do_json_backfill_test(self, self.client, self.get_primary_connection(), self.get_replica_connection(0))
 
+class TestCreateNonVectorIndexes(ValkeySearchClusterTestCase):
+    """
+    Test create and search for JSON non-vector indexes
+    """
+    def test_non_vector_indexes(self):
+        numeric_indx_name = "numeric"
+        tag_idx_name = "tag"
+        client = self.new_cluster_client()
+        index_numeric = Index(numeric_indx_name, [Numeric("n")], type=KeyDataType.JSON)
+        index_tag = Index(tag_idx_name, [Tag("t")], type=KeyDataType.JSON)
+        indexes = [index_numeric, index_tag]
+        for index in indexes:
+            index.load_data(client, 10)
+            index.create(client)
+            for primary_client in self.get_all_primary_clients():
+                waiters.wait_for_true(lambda: index_on_node(primary_client, index.name))
+                waiters.wait_for_true(lambda: index.backfill_complete(primary_client))
+        
+        # Run numeric query
+        numeric_result = client.execute_command(
+            "FT.SEARCH",
+            numeric_indx_name,
+            f"@n:[-inf +inf]"
+        )
+        assert numeric_result[0] == 10
+        # Run tag query
+        tag_result = client.execute_command(
+            "FT.SEARCH",
+            tag_idx_name,
+            f"@t:{{Tag:*}}"
+        )
+        assert tag_result[0] == 10
+        

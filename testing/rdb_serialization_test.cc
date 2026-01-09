@@ -13,8 +13,8 @@
 #include "absl/status/status.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include "src/version.h"
 #include "testing/common.h"
-#include "third_party/hnswlib/iostream.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -298,16 +298,14 @@ TEST_F(RDBSerializationTest, RegisterModuleTypeHappyPath) {
       *kMockValkeyModule,
       CreateDataType(&fake_ctx_, testing::StrEq(kValkeySearchModuleTypeName),
                      kCurrentEncVer, testing::_))
-      .WillOnce(testing::Invoke(
-          [](ValkeyModuleCtx* ctx, const char* name, int encver,
-             ValkeyModuleTypeMethods* type_methods) -> ValkeyModuleType* {
-            EXPECT_EQ(type_methods->aux_load, AuxLoadCallback);
-            EXPECT_EQ(type_methods->aux_save2, AuxSaveCallback);
-            EXPECT_EQ(type_methods->aux_save, nullptr);
-            EXPECT_EQ(type_methods->aux_save_triggers,
-                      VALKEYMODULE_AUX_AFTER_RDB);
-            return (ValkeyModuleType*)0xBAADF00D;
-          }));
+      .WillOnce([](ValkeyModuleCtx* ctx, const char* name, int encver,
+                   ValkeyModuleTypeMethods* type_methods) -> ValkeyModuleType* {
+        EXPECT_EQ(type_methods->aux_load, AuxLoadCallback);
+        EXPECT_EQ(type_methods->aux_save2, AuxSaveCallback);
+        EXPECT_EQ(type_methods->aux_save, nullptr);
+        EXPECT_EQ(type_methods->aux_save_triggers, VALKEYMODULE_AUX_AFTER_RDB);
+        return (ValkeyModuleType*)0xBAADF00D;
+      });
   VMSDK_EXPECT_OK(RegisterModuleType(&fake_ctx_));
 }
 
@@ -316,11 +314,10 @@ TEST_F(RDBSerializationTest, RegisterModuleTypeReturnNullptr) {
       *kMockValkeyModule,
       CreateDataType(&fake_ctx_, testing::StrEq(kValkeySearchModuleTypeName),
                      kCurrentEncVer, testing::_))
-      .WillOnce(testing::Invoke(
-          [](ValkeyModuleCtx* ctx, const char* name, int encver,
-             ValkeyModuleTypeMethods* type_methods) -> ValkeyModuleType* {
-            return nullptr;
-          }));
+      .WillOnce([](ValkeyModuleCtx* ctx, const char* name, int encver,
+                   ValkeyModuleTypeMethods* type_methods) -> ValkeyModuleType* {
+        return nullptr;
+      });
   EXPECT_EQ(RegisterModuleType(&fake_ctx_).code(), absl::StatusCode::kInternal);
 }
 
@@ -357,12 +354,12 @@ TEST_F(RDBSerializationTest, PerformRDBSaveOneRDBSection) {
   EXPECT_CALL(*test_cb.mock_callbacks, load(testing::_, testing::_, testing::_))
       .Times(0);
   EXPECT_CALL(*test_cb.mock_callbacks, save(testing::_, testing::_, testing::_))
-      .WillOnce(testing::Invoke(
+      .WillOnce(
           [](ValkeyModuleCtx* ctx, SafeRDB* rdb, int when) -> absl::Status {
             EXPECT_EQ(when, VALKEYMODULE_AUX_BEFORE_RDB);
             VMSDK_EXPECT_OK(rdb->SaveStringBuffer("test-string"));
             return absl::OkStatus();
-          }));
+          });
   EXPECT_CALL(*test_cb.mock_callbacks,
               section_count(&fake_ctx_, VALKEYMODULE_AUX_BEFORE_RDB))
       .WillOnce(testing::Return(1));
@@ -394,13 +391,13 @@ TEST_F(RDBSerializationTest, PerformRDBSaveTwoRDBSection) {
         .Times(0);
     EXPECT_CALL(*test_cb.mock_callbacks,
                 save(testing::_, testing::_, testing::_))
-        .WillOnce(testing::Invoke(
+        .WillOnce(
             [i](ValkeyModuleCtx* ctx, SafeRDB* rdb, int when) -> absl::Status {
               EXPECT_EQ(when, VALKEYMODULE_AUX_BEFORE_RDB);
               std::string save_value = absl::StrCat("test-string-", i);
               VMSDK_EXPECT_OK(rdb->SaveStringBuffer(save_value));
               return absl::OkStatus();
-            }));
+            });
     EXPECT_CALL(*test_cb.mock_callbacks,
                 section_count(&fake_ctx_, VALKEYMODULE_AUX_BEFORE_RDB))
         .WillOnce(testing::Return(1));
@@ -442,10 +439,10 @@ TEST_F(RDBSerializationTest, PerformRDBSaveSectionSaveFail) {
   EXPECT_CALL(*test_cb.mock_callbacks, load(testing::_, testing::_, testing::_))
       .Times(0);
   EXPECT_CALL(*test_cb.mock_callbacks, save(testing::_, testing::_, testing::_))
-      .WillOnce(testing::Invoke(
+      .WillOnce(
           [](ValkeyModuleCtx* ctx, SafeRDB* rdb, int when) -> absl::Status {
             return absl::InternalError("test error");
-          }));
+          });
   EXPECT_CALL(*test_cb.mock_callbacks,
               section_count(&fake_ctx_, VALKEYMODULE_AUX_BEFORE_RDB))
       .WillOnce(testing::Return(1));
@@ -471,13 +468,13 @@ TEST_F(RDBSerializationTest, PerformRDBSaveTwoRDBSectionOneEmpty) {
     if (i == 0) {
       EXPECT_CALL(*test_cb.mock_callbacks,
                   save(testing::_, testing::_, testing::_))
-          .WillOnce(testing::Invoke([i](ValkeyModuleCtx* ctx, SafeRDB* rdb,
-                                        int when) -> absl::Status {
+          .WillOnce([i](ValkeyModuleCtx* ctx, SafeRDB* rdb,
+                        int when) -> absl::Status {
             EXPECT_EQ(when, VALKEYMODULE_AUX_BEFORE_RDB);
             std::string save_value = absl::StrCat("test-string-", i);
             VMSDK_EXPECT_OK(rdb->SaveStringBuffer(save_value));
             return absl::OkStatus();
-          }));
+          });
       EXPECT_CALL(*test_cb.mock_callbacks,
                   minimum_semantic_version(testing::_, testing::_))
           .WillOnce(testing::Return(0x0100ff));
@@ -519,21 +516,21 @@ TEST_F(RDBSerializationTest, PerformRDBLoadInvalidEncVer) {
 
 TEST_F(RDBSerializationTest, PerformRDBLoadNewerSemVer) {
   FakeSafeRDB fake_rdb;
-  VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(kCurrentSemanticVersion + 0x010000));
+  VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(kModuleVersion + 0x010000));
   EXPECT_EQ(PerformRDBLoad(&fake_ctx_, &fake_rdb, kCurrentEncVer).code(),
             absl::StatusCode::kInternal);
 }
 
 TEST_F(RDBSerializationTest, PerformRDBLoadNoRDBSections) {
   FakeSafeRDB fake_rdb;
-  VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(kCurrentSemanticVersion));
+  VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(kModuleVersion));
   VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(0));
   VMSDK_EXPECT_OK(PerformRDBLoad(&fake_ctx_, &fake_rdb, kCurrentEncVer));
 }
 
 TEST_F(RDBSerializationTest, PerformRDBLoadRDBSectionNotRegistered) {
   FakeSafeRDB fake_rdb;
-  VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(kCurrentSemanticVersion));
+  VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(kModuleVersion));
   VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(1));
   data_model::RDBSection section;
   section.set_type(data_model::RDB_SECTION_INDEX_SCHEMA);
@@ -562,7 +559,7 @@ TEST_F(RDBSerializationTest, PerformRDBLoadRDBSectionNotRegistered) {
 
 TEST_F(RDBSerializationTest, PerformRDBLoadRDBSectionRegistered) {
   FakeSafeRDB fake_rdb;
-  VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(kCurrentSemanticVersion));
+  VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(kModuleVersion));
   VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(1));
   data_model::RDBSection section;
   section.set_type(data_model::RDB_SECTION_INDEX_SCHEMA);
@@ -571,17 +568,15 @@ TEST_F(RDBSerializationTest, PerformRDBLoadRDBSectionRegistered) {
 
   auto test_cb = GenerateRDBSectionCallbacks();
   EXPECT_CALL(*test_cb.mock_callbacks, load(testing::_, testing::_, testing::_))
-      .WillOnce(
-          testing::Invoke([](ValkeyModuleCtx* ctx,
-                             std::unique_ptr<data_model::RDBSection> section,
-                             SupplementalContentIter&& iter) {
-            EXPECT_EQ(section->type(), data_model::RDB_SECTION_INDEX_SCHEMA);
-            EXPECT_EQ(
-                section->index_schema_contents().subscribed_key_prefixes_size(),
-                1);
-            EXPECT_FALSE(iter.HasNext());
-            return absl::OkStatus();
-          }));
+      .WillOnce([](ValkeyModuleCtx* ctx,
+                   std::unique_ptr<data_model::RDBSection> section,
+                   SupplementalContentIter&& iter) {
+        EXPECT_EQ(section->type(), data_model::RDB_SECTION_INDEX_SCHEMA);
+        EXPECT_EQ(
+            section->index_schema_contents().subscribed_key_prefixes_size(), 1);
+        EXPECT_FALSE(iter.HasNext());
+        return absl::OkStatus();
+      });
   EXPECT_CALL(*test_cb.mock_callbacks, save(testing::_, testing::_, testing::_))
       .Times(0);
   EXPECT_CALL(*test_cb.mock_callbacks,
@@ -599,7 +594,7 @@ TEST_F(RDBSerializationTest, PerformRDBLoadRDBSectionRegistered) {
 
 TEST_F(RDBSerializationTest, PerformRDBLoadRDBSectionCallbackFailure) {
   FakeSafeRDB fake_rdb;
-  VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(kCurrentSemanticVersion));
+  VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(kModuleVersion));
   VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(1));
   data_model::RDBSection section;
   section.set_type(data_model::RDB_SECTION_INDEX_SCHEMA);
@@ -608,12 +603,11 @@ TEST_F(RDBSerializationTest, PerformRDBLoadRDBSectionCallbackFailure) {
 
   auto test_cb = GenerateRDBSectionCallbacks();
   EXPECT_CALL(*test_cb.mock_callbacks, load(testing::_, testing::_, testing::_))
-      .WillOnce(
-          testing::Invoke([](ValkeyModuleCtx* ctx,
-                             std::unique_ptr<data_model::RDBSection> section,
-                             SupplementalContentIter&& iter) {
-            return absl::InternalError("test");
-          }));
+      .WillOnce([](ValkeyModuleCtx* ctx,
+                   std::unique_ptr<data_model::RDBSection> section,
+                   SupplementalContentIter&& iter) {
+        return absl::InternalError("test");
+      });
   EXPECT_CALL(*test_cb.mock_callbacks, save(testing::_, testing::_, testing::_))
       .Times(0);
   EXPECT_CALL(*test_cb.mock_callbacks,

@@ -69,7 +69,7 @@ void PausePoint(absl::string_view point, std::source_location location) {
       }
     }
     if (absl::Now() > message_time) {
-      VMSDK_IO_LOG_EVERY_N_SEC(WARNING, nullptr, 10)
+      VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 10)
           << "Waiting > 10 seconds at pause point " << point
           << " Location:" << ToString(location);
     }
@@ -100,9 +100,10 @@ absl::StatusOr<size_t> PausePointWaiters(absl::string_view point) {
   absl::MutexLock lock(&pause_point_lock);
   auto it = pause_point_waiters.find(point);
   if (it == pause_point_waiters.end()) {
+    VMSDK_LOG(DEBUG, nullptr) << "PAUSEPOINT: " << point << " not found";
     return absl::NotFoundError("Pause Point not found");
   } else {
-    VMSDK_LOG(WARNING, nullptr)
+    VMSDK_LOG(DEBUG, nullptr)
         << "PAUSEPOINT: " << it->second.size() << " Waiters";
     return it->second.size();
   }

@@ -28,7 +28,6 @@
 #include "src/coordinator/metadata_manager.h"
 #include "src/coordinator/server.h"
 #include "src/coordinator/util.h"
-#include "src/index_schema.h"
 #include "src/metrics.h"
 #include "src/rdb_serialization.h"
 #include "src/schema_manager.h"
@@ -143,6 +142,12 @@ static vmsdk::info_field::Integer ingest_hash_keys(
       return Metrics::GetStats().ingest_hash_keys;
     }));
 
+static vmsdk::info_field::Integer backfill_hash_keys(
+    "global_ingestion", "backfill_hash_keys",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().backfill_hash_keys;
+    }));
+
 static vmsdk::info_field::Integer ingest_hash_blocked(
     "global_ingestion", "ingest_hash_blocked",
     vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
@@ -154,6 +159,12 @@ static vmsdk::info_field::Integer ingest_json_keys(
     "global_ingestion", "ingest_json_keys",
     vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().ingest_json_keys;
+    }));
+
+static vmsdk::info_field::Integer backfill_json_keys(
+    "global_ingestion", "backfill_json_keys",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().backfill_json_keys;
     }));
 
 static vmsdk::info_field::Integer ingest_json_blocked(
@@ -570,6 +581,23 @@ static vmsdk::info_field::Integer coordinator_last_time_since_healthy_metadata(
           return ValkeySearch::Instance().UsingCoordinator();
         }));
 
+static vmsdk::info_field::Integer
+    coordinator_metadata_reconciliation_completed_count(
+        "coordinator", "coordinator_metadata_reconciliation_completed_count",
+        vmsdk::info_field::IntegerBuilder()
+            .App()
+            .Computed([]() -> int64_t {
+              // prevent failure in unit tests
+              if (!coordinator::MetadataManager::IsInitialized()) {
+                return 0;
+              }
+              return coordinator::MetadataManager::Instance()
+                  .GetMetadataReconciliationCompletedCount();
+            })
+            .VisibleIf([]() -> bool {
+              return ValkeySearch::Instance().UsingCoordinator();
+            }));
+
 static vmsdk::info_field::String
     coordinator_client_get_global_metadata_success_latency_usec(
         "coordinator",
@@ -748,6 +776,24 @@ static vmsdk::info_field::String flat_vector_index_search_latency_usec(
               .flat_vector_index_search_latency.HasSamples();
         }));
 
+static vmsdk::info_field::Integer info_fanout_retry_count(
+    "fanout", "info_fanout_retry_count",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return Metrics::GetStats().info_fanout_retry_cnt;
+    }));
+
+static vmsdk::info_field::Integer info_fanout_fail_count(
+    "fanout", "info_fanout_fail_count",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return Metrics::GetStats().info_fanout_fail_cnt;
+    }));
+
+static vmsdk::info_field::Integer pause_handle_cluster_message_round_cnt(
+    "fanout", "pause_handle_cluster_message_round_count",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return Metrics::GetStats().pause_handle_cluster_message_round_cnt;
+    }));
+
 #ifdef DEBUG_INFO
 // Helper function to create subscription info fields with maximum deduplication
 template <typename StatsSelector>
@@ -850,7 +896,8 @@ void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
 void ValkeySearch::AtForkPrepare() {
   // Sanity: fork can occur (by example: calling to "popen") before the thread
   // pool is initialized
-  if (writer_thread_pool_ == nullptr || reader_thread_pool_ == nullptr) {
+  if (writer_thread_pool_ == nullptr || reader_thread_pool_ == nullptr ||
+      utility_thread_pool_ == nullptr) {
     return;
   }
   Metrics::GetStats().worker_thread_pool_suspend_cnt++;
@@ -860,6 +907,10 @@ void ValkeySearch::AtForkPrepare() {
                               << status.message();
   status = reader_thread_pool_->SuspendWorkers();
   VMSDK_LOG(WARNING, nullptr) << "At prepare fork callback, suspend reader "
+                                 "worker thread pool returned message: "
+                              << status.message();
+  status = utility_thread_pool_->SuspendWorkers();
+  VMSDK_LOG(WARNING, nullptr) << "At prepare fork callback, suspend utility "
                                  "worker thread pool returned message: "
                               << status.message();
   status = coordinator::GRPCSuspender::Instance().Suspend();
@@ -877,6 +928,10 @@ void ValkeySearch::AfterForkParent() {
   auto status = reader_thread_pool_->ResumeWorkers();
   Metrics::GetStats().reader_worker_thread_pool_resumed_cnt++;
   VMSDK_LOG(WARNING, nullptr) << "After fork parent callback, resume reader "
+                                 "worker thread pool returned message: "
+                              << status.message();
+  status = utility_thread_pool_->ResumeWorkers();
+  VMSDK_LOG(WARNING, nullptr) << "After fork parent callback, resume utility "
                                  "worker thread pool returned message: "
                               << status.message();
   writer_thread_pool_suspend_watch_ = vmsdk::StopWatch();
@@ -897,6 +952,9 @@ void ValkeySearch::OnServerCronCallback(ValkeyModuleCtx *ctx,
   if (reader_thread_pool_) {
     reader_thread_pool_->JoinTerminatedWorkers();
   }
+  if (utility_thread_pool_) {
+    utility_thread_pool_->JoinTerminatedWorkers();
+  }
   // Resume worker thread pool if suspension time exceeds the max allowed
   // duration
   if (writer_thread_pool_suspend_watch_.has_value() &&
@@ -904,6 +962,10 @@ void ValkeySearch::OnServerCronCallback(ValkeyModuleCtx *ctx,
       writer_thread_pool_suspend_watch_.value().Duration() >
           absl::Seconds(options::GetMaxWorkerSuspensionSecs().GetValue())) {
     ResumeWriterThreadPool(ctx, /*is_expired=*/true);
+  }
+  // refresh cluster map in cluster mode
+  if (IsCluster() && UsingCoordinator()) {
+    GetOrRefreshClusterMap(ctx);
   }
 }
 
@@ -972,11 +1034,17 @@ absl::StatusOr<int> GetValkeyLocalPort(ValkeyModuleCtx *ctx) {
 
 absl::Status ValkeySearch::Startup(ValkeyModuleCtx *ctx) {
   reader_thread_pool_ = std::make_unique<vmsdk::ThreadPool>(
-      "read-worker-", options::GetReaderThreadCount().GetValue());
+      "read-worker-", options::GetReaderThreadCount().GetValue(),
+      options::GetThreadPoolWaitTimeSamples().GetValue());
   reader_thread_pool_->StartWorkers();
   writer_thread_pool_ = std::make_unique<vmsdk::ThreadPool>(
-      "write-worker-", options::GetWriterThreadCount().GetValue());
+      "write-worker-", options::GetWriterThreadCount().GetValue(),
+      options::GetThreadPoolWaitTimeSamples().GetValue());
   writer_thread_pool_->StartWorkers();
+  utility_thread_pool_ = std::make_unique<vmsdk::ThreadPool>(
+      "utility-worker-", options::GetUtilityThreadCount().GetValue(),
+      options::GetThreadPoolWaitTimeSamples().GetValue());
+  utility_thread_pool_->StartWorkers();
 
   VMSDK_LOG(NOTICE, ctx) << "use_coordinator: "
                          << options::GetUseCoordinator().GetValue()
@@ -986,6 +1054,8 @@ absl::Status ValkeySearch::Startup(ValkeyModuleCtx *ctx) {
                          << reader_thread_pool_->Size();
   VMSDK_LOG(NOTICE, ctx) << "Writer workers count: "
                          << writer_thread_pool_->Size();
+  VMSDK_LOG(NOTICE, ctx) << "Utility workers count: "
+                         << utility_thread_pool_->Size();
 
   if (options::GetUseCoordinator().GetValue() && IsCluster()) {
     client_pool_ = std::make_unique<coordinator::ClientPool>(
@@ -1091,6 +1161,28 @@ bool ValkeySearch::IsChildProcess() {
 void ValkeySearch::OnUnload(ValkeyModuleCtx *ctx) {
   ValkeyModule_FreeThreadSafeContext(ctx_);
   reader_thread_pool_ = nullptr;
+}
+
+std::shared_ptr<vmsdk::cluster_map::ClusterMap>
+ValkeySearch::GetOrRefreshClusterMap(ValkeyModuleCtx *ctx) {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+  auto current_map = std::atomic_load(&cluster_map_);
+#pragma GCC diagnostic pop
+  // Check if we need to refresh
+  bool needs_refresh =
+      !current_map || !current_map->IsConsistent() ||
+      std::chrono::steady_clock::now() > current_map->GetExpirationTime();
+  if (needs_refresh) {
+    VMSDK_LOG_EVERY_N_SEC(DEBUG, nullptr, 1) << "Creating a new cluster map";
+    auto new_map = vmsdk::cluster_map::ClusterMap::CreateNewClusterMap(ctx);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+    std::atomic_store(&cluster_map_, new_map);
+#pragma GCC diagnostic pop
+    return new_map;
+  }
+  return current_map;
 }
 
 }  // namespace valkey_search

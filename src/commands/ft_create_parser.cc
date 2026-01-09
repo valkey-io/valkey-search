@@ -544,6 +544,18 @@ absl::StatusOr<data_model::Attribute *> ParseAttributeArgs(
       CHECK(false);
       break;
   }
+
+  // Check for SORTABLE option and ignore it
+  if (itr.DistanceEnd() > 0) {
+    auto next_arg = itr.Get();
+    if (next_arg.ok()) {
+      absl::string_view order_str = vmsdk::ToStringView(next_arg.value());
+      if (absl::EqualsIgnoreCase(order_str, "SORTABLE")) {
+        itr.Next();
+      }
+    }
+  }
+
   attribute_proto->set_allocated_index(index_proto.release());
   return attribute_proto;
 }

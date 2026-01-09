@@ -167,26 +167,37 @@ bool ReplyWithValue(ValkeyModuleCtx *ctx,
 absl::Status SendReplyInner(ValkeyModuleCtx *ctx,
                             std::vector<indexes::Neighbor> &neighbors,
                             AggregateParameters &parameters) {
-  auto identifier =
-      parameters.index_schema->GetIdentifier(parameters.attribute_alias);
-  if (!identifier.ok()) {
-    ++Metrics::GetStats().query_failed_requests_cnt;
-    return identifier.status();
-  }
-
-  query::ProcessNeighborsForReply(
-      ctx, parameters.index_schema->GetAttributeDataType(), neighbors,
-      parameters, identifier.value());
-
   size_t key_index = 0, scores_index = 0;
-  if (parameters.load_key) {
-    key_index = parameters.AddRecordAttribute("__key", "__key",
-                                              indexes::IndexerType::kNone);
-  }
   if (parameters.IsVectorQuery()) {
-    auto score_sv = vmsdk::ToStringView(parameters.score_as.get());
-    scores_index = parameters.AddRecordAttribute(score_sv, score_sv,
-                                                 indexes::IndexerType::kNone);
+    auto identifier =
+        parameters.index_schema->GetIdentifier(parameters.attribute_alias);
+    if (!identifier.ok()) {
+      ++Metrics::GetStats().query_failed_requests_cnt;
+      return identifier.status();
+    }
+
+    query::ProcessNeighborsForReply(
+        ctx, parameters.index_schema->GetAttributeDataType(), neighbors,
+        parameters, identifier.value());
+
+    if (parameters.load_key) {
+      key_index = parameters.AddRecordAttribute("__key", "__key",
+                                                indexes::IndexerType::kNone);
+    }
+    if (parameters.IsVectorQuery()) {
+      auto score_sv = vmsdk::ToStringView(parameters.score_as.get());
+      scores_index = parameters.AddRecordAttribute(score_sv, score_sv,
+                                                   indexes::IndexerType::kNone);
+    }
+  } else {
+    query::ProcessNonVectorNeighborsForReply(
+        ctx, parameters.index_schema->GetAttributeDataType(), neighbors,
+        parameters);
+
+    if (parameters.load_key) {
+      key_index = parameters.AddRecordAttribute("__key", "__key",
+                                                indexes::IndexerType::kNone);
+    }
   }
 
   //
@@ -304,13 +315,24 @@ absl::Status SendReplyInner(ValkeyModuleCtx *ctx,
   return absl::OkStatus();
 }
 
+// TODO: Implement the correct logic to detect if the FT.AGGREGATE query has a
+// clause (e.g. sorting) that requires all neighbors to be returned for the
+// correct search result.
+bool AggregateParameters::RequiresCompleteResults() const {
+  for (const auto &stage : stages_) {
+    if (dynamic_cast<const SortBy *>(stage.get()) != nullptr) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void AggregateParameters::SendReply(ValkeyModuleCtx *ctx,
-                                    std::vector<indexes::Neighbor> &neighbors) {
-  auto identifier = index_schema->GetIdentifier(attribute_alias);
-  auto result = SendReplyInner(ctx, neighbors, *this);
-  if (!result.ok()) {
+                                    query::SearchResult &result) {
+  auto status = SendReplyInner(ctx, result.neighbors, *this);
+  if (!status.ok()) {
     ++Metrics::GetStats().query_failed_requests_cnt;
-    ValkeyModule_ReplyWithError(ctx, result.message().data());
+    ValkeyModule_ReplyWithError(ctx, status.message().data());
   }
 }
 

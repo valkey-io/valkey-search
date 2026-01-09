@@ -28,13 +28,14 @@ class Field:
         self.alias = alias if alias else name
 
     def create(self, data_type: KeyDataType) -> list[str]:
+        name = self.name
         if data_type == KeyDataType.JSON:
             if not self.name.startswith("$."):
-                self.name = "$." + self.name
+                name = "$." + self.name
         if self.alias:
-            return [self.name, "AS", self.alias]
+            return [name, "AS", self.alias]
         else:
-            return [self.name]
+            return [name]
 
     # @abstractmethod
     def make_value(self, row: int, column: int, type: KeyDataType) -> Union[str, bytes, float, list[float]]:
@@ -205,21 +206,48 @@ class Index:
         return res.backfill_in_progress == 0
     
     def query(self, client:valkey.client, query_string: str, *args) -> dict[bytes, dict[bytes, bytes]]:
-        assert self.type == KeyDataType.HASH, "JSON not supported yet"
         query = ["ft.search", self.name, query_string] + list(args)
         print("Execute Query Command: ", query)
         result = client.execute_command(*query)
         print("Result is ", result)
         count = result[0]
         dict_result = {}
-        for row in range(1, len(result)-1, 2):
-            key = result[row]
-            fields = result[row+1][0::2]
-            values = result[row+1][1::2]
-            print("Key", key, "Fields:", fields, " Values:", values)
-            dict_result[key] = {fields[i]:values[i] for i in range(len(fields))}
+        if self.type == KeyDataType.HASH:
+            for row in range(1, len(result)-1, 2):
+                key = result[row]
+                fields = result[row+1][0::2]
+                values = result[row+1][1::2]
+                print("Key", key, "Fields:", fields, " Values:", values)
+                dict_result[key] = {fields[i]:values[i] for i in range(len(fields))}
+        else:
+            for row in range(1, len(result)-1, 2):
+                key = result[row]
+                assert result[row+1][0] == b"$"
+                value = json.loads(result[row+1][1])
+                dict_result[key] = value
         print("Final result", dict_result)
         return dict_result
+
+    def aggregate(self, client:valkey.client, query_string: str, *args) -> dict[bytes, dict[bytes, bytes]]:
+        query = ["ft.aggregate", self.name, query_string] + list(args)
+        print("Execute Query Command: ", query)
+        result = client.execute_command(*query)
+        print("Result is ", result)
+        count = result[0]
+        array_result = []
+        if self.type == KeyDataType.HASH:
+            for row in result[1:]:
+                print("Doing row:", row)
+                d = {row[i].decode():row[i+1] for i in range(0, len(row), 2)}
+                array_result += [d]
+        else:
+            for row in range(1, len(result)-1, 2):
+                key = result[row]
+                assert result[row+1][0] == b"$"
+                value = json.loads(result[row+1][1])
+                array_result += value
+        print("Final result", array_result)
+        return array_result
 
     def has_field(self, name: str) -> bool:
         return any(f.name == name for f in self.fields)

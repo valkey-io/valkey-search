@@ -665,6 +665,30 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     processed_content.push_back(ch);
     ++pos_;
   }
+  // Remove trailing punctuations if any which is not part of query syntax
+  if (!processed_content.empty()) {
+    while (!IsEnd()) {
+      char ch = Peek();
+      if (lexer.IsPunctuation(ch)) {
+        // Reject reserved characters in unquoted text
+        if (ch == '{' || ch == '}' || ch == '[' || ch == ']' || ch == ':' ||
+            ch == ';' || ch == '$') {
+          return absl::InvalidArgumentError(
+              absl::StrCat("Unexpected character at position ", pos_ + 1, ": `",
+                           expression_.substr(pos_, 1), "`"));
+        }
+        // Break on query syntax punctuation
+        if (ch == ')' || ch == '|' || ch == '(' || ch == '@' || ch == '"' ||
+            ch == '-' || ch == '\\' || ch == '%' || ch == '*') {
+          break;
+        }
+        // Consume all other punctuation (!, ?, +, etc.)
+        ++pos_;
+      } else {
+        break;
+      }
+    }
+  }
   std::string token = absl::AsciiStrToLower(processed_content);
   FieldMaskPredicate field_mask;
   std::optional<uint32_t> min_stem_size = std::nullopt;
@@ -811,22 +835,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
       terms.push_back(std::move(result.predicate));
       // For unquoted text, stop after first token. For exact phrases, continue
       // parsing all tokens.
-      if (!exact_phrase) {
-        // Consume all consecutive trailing punctuation (not query syntax)
-        while (!IsEnd()) {
-          const auto& lexer = text_index_schema->GetLexer();
-          char ch = Peek();
-          if (lexer.IsPunctuation(ch) && ch != ')' && ch != '|' && ch != '(' &&
-              ch != '@' && ch != '{' && ch != '}' && ch != '[' && ch != ']' &&
-              ch != ':' && ch != ';' && ch != '$' && ch != '"' && ch != '-' &&
-              ch != '\\' && ch != '%' && ch != '*') {
-            ++pos_;
-          } else {
-            break;
-          }
-        }
-        break;
-      }
+      if (!exact_phrase) break;
     }
     if (result.break_on_query_syntax) {
       break;

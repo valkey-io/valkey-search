@@ -14,6 +14,7 @@
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/hash/hash.h"
+#include "absl/log/check.h"
 #include "absl/synchronization/mutex.h"
 #include "vmsdk/src/memory_allocation.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -24,36 +25,6 @@
 #include "vmsdk/src/memory_allocation_overrides.h"
 
 namespace vmsdk {
-
-// SystemAllocTracker tracks memory allocations to the system allocator, so that
-// subsequent free calls can be redirected to the appropriate allocator.
-class SystemAllocTracker {
- public:
-  static SystemAllocTracker& GetInstance() {
-    static absl::NoDestructor<SystemAllocTracker> instance;
-    return *instance;
-  }
-  SystemAllocTracker() = default;
-  SystemAllocTracker(const SystemAllocTracker&) = delete;
-  SystemAllocTracker& operator=(const SystemAllocTracker&) = delete;
-  ~SystemAllocTracker() = default;
-  void TrackPointer(void* ptr) {
-    if (ptr == nullptr) {
-      return;
-    }
-    absl::MutexLock lock(&mutex_);
-    tracked_ptrs_.insert(ptr);
-  }
-  bool IsTracked(void* ptr) {
-    absl::MutexLock lock(&mutex_);
-    return tracked_ptrs_.contains(ptr);
-  }
-  bool UntrackPointer(void* ptr) {
-    absl::MutexLock lock(&mutex_);
-    return tracked_ptrs_.erase(ptr);
-  }
-
- private:
   // RawSystemAllocator implements an allocator that will not go through
   // the SystemAllocTracker, for use by the SystemAllocTracker to prevent
   // infinite recursion when tracking pointers.
@@ -76,8 +47,67 @@ class SystemAllocTracker {
       __real_free(p);
     }
   };
+  thread_local static bool thread_initialize_tracker_snapshot = false;
+  // `tracked_ptrs_snapshot_` provides a lock-free fast path to check if an address is tracked. 
+  // It is a thread-local variable, lazily initialized during the first deallocation after 
+  // module startup. Once the one-time snapshot is captured, it remains read-only. 
+  // Note: This structure may return false positives. Any positive hit must be verified
+  // against the global address tracker. Given that snapshots typically track ~1K 
+  // addresses, the memory overhead of maintaining per-thread copies is negligible.
+    thread_local static absl::flat_hash_set<void*, absl::Hash<void*>, std::equal_to<void*>,
+                      RawSystemAllocator<void*>>
+      tracked_ptrs_snapshot_;
+// SystemAllocTracker tracks memory allocations to the system allocator, so that
+// subsequent free calls can be redirected to the appropriate allocator.
+class SystemAllocTracker {
+ public:
+  static SystemAllocTracker& GetInstance() {
+    static absl::NoDestructor<SystemAllocTracker> instance;
+    return *instance;
+  }
+  SystemAllocTracker() = default;
+  SystemAllocTracker(const SystemAllocTracker&) = delete;
+  SystemAllocTracker& operator=(const SystemAllocTracker&) = delete;
+  ~SystemAllocTracker() = default;
 
-  absl::Mutex mutex_;
+  void TrackPointer(void* ptr) {
+    if (ptr == nullptr) {
+      return;
+    }
+    absl::MutexLock lock(&mutex_);
+    tracked_ptrs_.insert(ptr);
+  }
+
+  bool IsTracked(void* ptr) const {
+    if (IsUsingValkeyAlloc() && thread_initialize_tracker_snapshot 
+        && !tracked_ptrs_snapshot_.contains(ptr)) {
+        return false;
+    }
+    absl::MutexLock lock(&mutex_);
+    return tracked_ptrs_.contains(ptr);
+  }
+
+  bool UntrackPointer(void* ptr) {
+    if (IsUsingValkeyAlloc() && !thread_initialize_tracker_snapshot) {
+      thread_initialize_tracker_snapshot = true;
+      CHECK(tracked_ptrs_snapshot_.empty());
+      absl::MutexLock lock(&mutex_);
+      tracked_ptrs_snapshot_ = tracked_ptrs_;
+    }
+    if (!tracked_ptrs_snapshot_.contains(ptr)) {
+        return false;
+    }
+    absl::MutexLock lock(&mutex_);
+    return tracked_ptrs_.erase(ptr);
+  }
+
+  size_t GetTrackedPointersCnt() const {
+    absl::MutexLock lock(&mutex_);
+    return tracked_ptrs_.size();
+  }
+
+ private:
+  mutable absl::Mutex mutex_;
   absl::flat_hash_set<void*, absl::Hash<void*>, std::equal_to<void*>,
                       RawSystemAllocator<void*>>
       tracked_ptrs_ ABSL_GUARDED_BY(mutex_);

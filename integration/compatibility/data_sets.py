@@ -76,6 +76,40 @@ TEXT_DATASETS = {
             'color': ['red', 'yellow', 'green', 'purple', 'blue'],
             'price': (0, 10)
         }
+    },
+    'numeric text': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                'version',
+                '404',
+                '+5',
+                '-3',
+                '3.14',
+                '-0.5',
+                '10',
+                '-2',
+                '+1.5',
+                'beta'
+            ],
+            'body': [
+                'counter',
+                '42',
+                '+8',
+                '-1',
+                '0.75',
+                '-2.25',
+                'temp',
+                '-0.1',
+                'gain',
+                'loss'
+            ],
+            'color': [
+                'red', 'yellow', 'green', 'purple', 'blue',
+                'black', 'white', 'orange', 'pink', 'brown'
+            ],
+            'price': (0, 50)
+        }
     }
 }
 

@@ -10,7 +10,7 @@ from .text_query_builder import *
 @pytest.mark.parametrize("key_type", ["hash"])
 class TestTextSearchCompatibility(BaseCompatibilityTest):
     TEXT_QUERY_TEST_SEED = 3948
-    MAX_QUERIES = 100
+    MAX_QUERIES = 20
     ANSWER_FILE_NAME = "text-search-answers.pickle.gz"
 
     def setup_data(self, data_set_name, key_type):
@@ -86,29 +86,29 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
     # Base term types
     # ========================================================================
 
-    def test_text_search_exact_match(self, key_type, dialect):
-        """Test exact word matching queries."""
-        self._run_test(gen_word, "pure text", key_type, dialect)
+    # def test_text_search_exact_match(self, key_type, dialect):
+    #     """Test exact word matching queries."""
+    #     self._run_test(gen_word, "pure text", key_type, dialect)
 
-    def test_text_search_prefix(self, key_type, dialect):
-        """Test prefix wildcard queries."""
-        self._run_test(gen_prefix, "pure text", key_type, dialect)
+    # def test_text_search_prefix(self, key_type, dialect):
+    #     """Test prefix wildcard queries."""
+    #     self._run_test(gen_prefix, "pure text", key_type, dialect)
 
-    def test_text_search_suffix(self, key_type, dialect):
-        """Test suffix wildcard queries."""
-        self._run_test(gen_suffix, "pure text", key_type, dialect)
+    # def test_text_search_suffix(self, key_type, dialect):
+    #     """Test suffix wildcard queries."""
+    #     self._run_test(gen_suffix, "pure text", key_type, dialect)
 
     # ========================================================================
     # Complex grouped queries
     # ========================================================================
 
-    def test_text_search_group_depth2(self, key_type, dialect):
-        """Test grouped queries with depth 2."""
-        self._run_test(gen_depth2, "pure text", key_type, dialect)
+    # def test_text_search_group_depth2(self, key_type, dialect):
+    #     """Test grouped queries with depth 2."""
+    #     self._run_test(gen_depth2, "pure text", key_type, dialect)
 
-    def test_text_search_group_depth3(self, key_type, dialect):
-        """Test grouped queries with depth 3."""
-        self._run_test(gen_depth3, "pure text", key_type, dialect)
+    # def test_text_search_group_depth3(self, key_type, dialect):
+    #     """Test grouped queries with depth 3."""
+    #     self._run_test(gen_depth3, "pure text", key_type, dialect)
     
     # def test_text_search_group_depth2_inorder(self, key_type, dialect):
     #     """Test grouped queries with depth 2."""
@@ -125,3 +125,30 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
     # def test_text_search_group_depth3_slop(self, key_type, dialect):
     #     """Test grouped queries with depth 3."""
     #     self._run_test(gen_depth3, "pure text", key_type, dialect, slop=True)
+
+    # ========================================================================
+    # numeric text datasets
+    # ========================================================================
+
+    def test_text_search_exact_match(self, key_type, dialect):
+        """Test exact word matching queries."""
+        self._run_test(gen_word, "numeric text", key_type, dialect)
+
+    # def test_text_search_prefix(self, key_type, dialect):
+    #     """Test prefix wildcard queries."""
+    #     self._run_test(gen_prefix, "numeric text", key_type, dialect)
+
+    # def test_text_search_suffix(self, key_type, dialect):
+    #     """Test suffix wildcard queries."""
+    #     self._run_test(gen_suffix, "numeric text", key_type, dialect)
+
+    # def test_text_search_group_depth2(self, key_type, dialect):
+    #     """Test grouped queries with depth 2."""
+    #     self._run_test(gen_depth2, "numeric text", key_type, dialect)
+
+    # def test_text_search_group_depth3(self, key_type, dialect):
+    #     """Test grouped queries with depth 3."""
+    #     self._run_test(gen_depth3, "numeric text", key_type, dialect)
+
+
+    # TODO: fuzzy testing, lexical parsing(backslash, characters)

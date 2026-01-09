@@ -123,6 +123,11 @@ struct SearchParameters {
   } parse_vars;
   bool IsNonVectorQuery() const { return attribute_alias.empty(); }
   bool IsVectorQuery() const { return !IsNonVectorQuery(); }
+  // Indicates whether the search requires complete results (neighbors/keys) to
+  // be able to return correct results. An example of this is when sorting on a
+  // particular is needed on the results. This should be overridden in derived
+  // classes if needed. The default implementation returns false.
+  virtual bool RequiresCompleteResults() const { return false; }
   SearchParameters(uint64_t timeout, grpc::CallbackServerContext* context,
                    uint32_t db_num)
       : timeout_ms(timeout),
@@ -130,6 +135,7 @@ struct SearchParameters {
         db_num_(db_num) {}
 };
 
+<<<<<<< HEAD
 // Callback to be called when the search is done.
 using SearchResponseCallback =
     absl::AnyInvocable<void(absl::StatusOr<std::vector<indexes::Neighbor>>&,
@@ -137,6 +143,43 @@ using SearchResponseCallback =
 
 absl::StatusOr<std::vector<indexes::Neighbor>> Search(
     const SearchParameters& parameters, SearchMode search_mode);
+=======
+// Indicates the range of neighbors to serialize in a search response.
+struct SerializationRange {
+  size_t start_index;
+  size_t end_index;
+  size_t count() const { return end_index - start_index; }
+};
+
+// Wrapper for search results that trims the neighbor deque based on query type
+struct SearchResult {
+  size_t total_count;
+  std::deque<indexes::Neighbor> neighbors;
+  // True if neighbors were limited using LIMIT count with a buffer multiplier.
+  bool is_limited_with_buffer;
+  // True if neighbors were offset using LIMIT first_index.
+  bool is_offsetted;
+
+  // Constructor with automatic trimming based on query requirements
+  SearchResult(size_t total_count, std::deque<indexes::Neighbor> neighbors,
+               const SearchParameters& parameters);
+  // Get the range of neighbors to serialize in response.
+  SerializationRange GetSerializationRange(
+      const SearchParameters& parameters) const;
+
+ private:
+  bool RetainAllNeighbors(const SearchParameters& parameters);
+  void TrimResults(std::deque<indexes::Neighbor>& neighbors,
+                   const SearchParameters& parameters);
+};
+
+// Callback to be called when the search is done.
+using SearchResponseCallback = absl::AnyInvocable<void(
+    absl::StatusOr<SearchResult>&, std::unique_ptr<SearchParameters>)>;
+
+absl::StatusOr<SearchResult> Search(const SearchParameters& parameters,
+                                    SearchMode search_mode);
+>>>>>>> upstream/main
 
 absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
                          vmsdk::ThreadPool* thread_pool,
@@ -163,6 +206,9 @@ CalcBestMatchingPrefilteredKeys(
     const SearchParameters& parameters,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>& entries_fetchers,
     indexes::VectorBase* vector_index, size_t qualified_entries);
+
+// Check if no results should be returned based on limit parameters
+bool ShouldReturnNoResults(const SearchParameters& parameters);
 
 }  // namespace valkey_search::query
 #endif  // VALKEYSEARCH_SRC_QUERY_SEARCH_H_

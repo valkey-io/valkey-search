@@ -33,7 +33,11 @@
 #include "src/metrics.h"
 #include "src/query/planner.h"
 #include "src/query/predicate.h"
+<<<<<<< HEAD
 #include "src/query/response_generator.h"
+=======
+#include "src/valkey_search.h"
+>>>>>>> upstream/main
 #include "src/valkey_search_options.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/latency_sampler.h"
@@ -518,9 +522,116 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearch(
   return PerformVectorSearch(vector_index, parameters);
 }
 
+<<<<<<< HEAD
 absl::StatusOr<std::vector<indexes::Neighbor>> Search(
     const SearchParameters &parameters, SearchMode search_mode) {
   return MaybeAddIndexedContent(DoSearch(parameters, search_mode), parameters);
+=======
+// Check if no results should be returned based on query parameters.
+// This handles two cases:
+// 1. Any query with limit number == 0
+// 2. Vector queries with limit first_index >= k
+bool ShouldReturnNoResults(const SearchParameters &parameters) {
+  return (parameters.IsVectorQuery() &&
+          parameters.limit.first_index >=
+              static_cast<uint64_t>(parameters.k)) ||
+         parameters.limit.number == 0;
+}
+
+SearchResult::SearchResult(size_t total_count,
+                           std::deque<indexes::Neighbor> neighbors,
+                           const SearchParameters &parameters)
+    : total_count(total_count),
+      is_limited_with_buffer(false),
+      is_offsetted(false) {
+  // Clear neighbors if no results should be returned
+  if (ShouldReturnNoResults(parameters)) {
+    this->neighbors.clear();
+    return;
+  }
+  this->neighbors = std::move(neighbors);
+  // Check if the command needs all results (e.g. for sorting). Trim otherwise.
+  if (!parameters.RequiresCompleteResults()) {
+    TrimResults(this->neighbors, parameters);
+  }
+}
+
+// Apply limiting in background thread if possible.
+void SearchResult::TrimResults(std::deque<indexes::Neighbor> &neighbors,
+                               const SearchParameters &parameters) {
+  // Calculate max_needed for consistent vector/non-vector handling
+  SerializationRange range = GetSerializationRange(parameters);
+  size_t max_needed = static_cast<size_t>(
+      range.end_index * options::GetSearchResultBufferMultiplier());
+  // In standalone mode, we can optimize by trimming from front first.
+  // Note: We cannot trim from the front in a Cluster Mode setting because
+  // each shard produces X results and we need to trim the OFFSET on the
+  // aggregated results. Thus, we can only trim from the end in searches for
+  // individual nodes. In cluster mode, the offset based trimming is applied
+  // after merging all results from shards at the coordinator level.
+  if (!ValkeySearch::Instance().IsCluster()) {
+    this->is_offsetted = true;
+    // Trim from front (apply offset)
+    if (range.start_index > 0 && range.start_index < neighbors.size()) {
+      neighbors.erase(neighbors.begin(), neighbors.begin() + range.start_index);
+      // After trimming from the front, we no longer have an offset.
+      // We only need (end_index - start_index) items.
+      size_t actual_count = range.end_index - range.start_index;
+      max_needed = static_cast<size_t>(
+          actual_count * options::GetSearchResultBufferMultiplier());
+    } else if (range.start_index >= neighbors.size()) {
+      neighbors.clear();
+      return;
+    }
+  }
+  // If we don't need to limit, return early.
+  if (neighbors.size() <= max_needed) {
+    return;
+  }
+  // Apply limiting with buffer
+  this->is_limited_with_buffer = true;
+  neighbors.erase(neighbors.begin() + max_needed, neighbors.end());
+  return;
+}
+
+// Determine the range of neighbors to serialize in the response.
+SerializationRange SearchResult::GetSerializationRange(
+    const SearchParameters &parameters) const {
+  CHECK(!ShouldReturnNoResults(parameters));
+  // Determine start_index
+  size_t start_index = 0;
+  // If we have already offsetted, start_index is 0.
+  if (!is_offsetted) {
+    if (parameters.IsVectorQuery()) {
+      CHECK_GT(parameters.k, parameters.limit.first_index);
+    }
+    start_index = std::min(neighbors.size(),
+                           static_cast<size_t>(parameters.limit.first_index));
+  }
+  // Determine end_index logic
+  size_t limit_count = static_cast<size_t>(parameters.limit.number);
+  size_t count;
+  if (parameters.IsNonVectorQuery()) {
+    count = std::min(limit_count, neighbors.size());
+  } else {
+    count = std::min(
+        {static_cast<size_t>(parameters.k), limit_count, neighbors.size()});
+  }
+  size_t end_index = std::min(start_index + count, neighbors.size());
+  // Return the range
+  return {start_index, end_index};
+}
+
+absl::StatusOr<SearchResult> Search(const SearchParameters &parameters,
+                                    SearchMode search_mode) {
+  auto result =
+      MaybeAddIndexedContent(DoSearch(parameters, search_mode), parameters);
+  if (!result.ok()) {
+    return result.status();
+  }
+  size_t total_count = result.value().size();
+  return SearchResult(total_count, std::move(result.value()), parameters);
+>>>>>>> upstream/main
 }
 
 absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,

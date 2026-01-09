@@ -25,7 +25,8 @@ FT.CREATE <index-name>
             <field-identifier> [AS <field-alias>] 
                   NUMERIC 
                 | TAG [SEPARATOR <sep>] [CASESENSITIVE] 
-                | VECTOR [HNSW | FLAT] <attr_count> [<attribute_name> <attribute_value>]+)
+                | VECTOR [HNSW | FLAT] <attr_count> [<attribute_name> <attribute_value>]+
+            [SORTABLE]
         )+
 ```
 
@@ -60,6 +61,10 @@ FT.CREATE <index-name>
   - **M \<number\>** (optional): Number of maximum allowed outgoing edges for each node in the graph in each layer. on layer zero the maximal number of outgoing edges will be 2\*M. Default is 16, the maximum is 512\.  
   - **EF\_CONSTRUCTION \<number\>** (optional): controls the number of vectors examined during index construction. Higher values for this parameter will improve recall ratio at the expense of longer index creation times. The default value is 200\. Maximum value is 4096\.  
   - **EF\_RUNTIME \<number\>** (optional):  controls  the number of vectors to be examined during a query operation. The default is 10, and the max is 4096\. You can set this parameter value for each query you run. Higher values increase query times, but improve query recall.
+
+### Field options
+
+**SORTABLE**: This parameter is currently ignored as all field types are considered to be sortable
 
 **RESPONSE** OK or error.
 

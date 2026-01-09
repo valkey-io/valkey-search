@@ -15,6 +15,118 @@
         "key_spec_index": 1,
         "name": "query",
         "type": "string"
+      },
+      {
+        "name": "NOCONTENT",
+        "type": "pure-token",
+        "optional": true,
+        "token": "NOCONTENT",
+        "description": "When present, only matching key names are returned (no fields)."
+      },
+      {
+        "name": "TIMEOUT",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "TIMEOUT",
+            "type": "pure-token",
+            "token": "TIMEOUT"
+          },
+          {
+            "name": "timeout_ms",
+            "type": "integer"
+          }
+        ]
+      },
+      {
+        "name": "PARAMS",
+        "type": "block",
+        "optional": true,
+        "description": "Parameter substitution map used by $-placeholders in the query string.",
+        "arguments": [
+          {
+            "name": "PARAMS",
+            "type": "pure-token",
+            "token": "PARAMS"
+          },
+          {
+            "name": "count",
+            "type": "integer"
+          },
+          {
+            "name": "pairs",
+            "type": "string",
+            "multiple": true,
+            "description": "name/value pairs (count must be even)"
+          }
+        ]
+      },
+      {
+        "name": "RETURN",
+        "type": "block",
+        "optional": true,
+        "description": "Specify which fields to return and optional aliases. If count is 0 behaves like NOCONTENT.",
+        "arguments": [
+          {
+            "name": "RETURN",
+            "type": "pure-token",
+            "token": "RETURN"
+          },
+          {
+            "name": "count",
+            "type": "integer"
+          },
+          {
+            "name": "fields",
+            "type": "string",
+            "multiple": true
+          }
+        ]
+      },
+      {
+        "name": "LIMIT",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "LIMIT",
+            "type": "pure-token",
+            "token": "LIMIT"
+          },
+          {
+            "name": "offset",
+            "type": "integer"
+          },
+          {
+            "name": "count",
+            "type": "integer"
+          }
+        ]
+      },
+      {
+        "name": "DIALECT",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "DIALECT",
+            "type": "pure-token",
+            "token": "DIALECT"
+          },
+          {
+            "name": "dialect",
+            "type": "integer"
+          }
+        ],
+        "description": "Specifies the query dialect (supported values validated by server)."
+      },
+      {
+        "name": "LOCALONLY",
+        "type": "pure-token",
+        "optional": true,
+        "token": "LOCALONLY",
+        "description": "If present, restricts search to local index data only."
       }
     ],
     "arity": -3,

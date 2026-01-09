@@ -63,6 +63,13 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
       std::make_shared<IndexTeser<indexes::Tag, data_model::TagIndex>>(
           tag_index_proto);
   VMSDK_EXPECT_OK(tag_index_1->AddRecord("key1", "tag1"));
+  // Add records with literal special characters for escape testing
+  // key_pipe has tag "a|b" (literal pipe in the stored value)
+  VMSDK_EXPECT_OK(tag_index_1->AddRecord("key_pipe", "a|b"));
+  // key_backslash_pipe has tag "a\|b" (backslash + pipe)
+  VMSDK_EXPECT_OK(tag_index_1->AddRecord("key_backslash_pipe", R"(a\|b)"));
+  // key_backslash has tag "a\" (trailing backslash)
+  VMSDK_EXPECT_OK(tag_index_1->AddRecord("key_backslash", R"(a\)"));
   VMSDK_EXPECT_OK(
       index_schema->AddIndex("tag_field_1", "tag_field_1", tag_index_1));
   auto tag_index_1_2 =
@@ -593,7 +600,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         {
             .test_name = "tag_case_sensitive_3",
-            .filter = "@tag_field_case_insensitive:{Tag0@Tag1}",
+            .filter = "@tag_field_case_insensitive:{Tag0|Tag1}",
             .create_success = true,
             .evaluate_success = true,
             .expected_tree_structure = "TAG(tag_field_case_insensitive)\n",
@@ -615,14 +622,14 @@ INSTANTIATE_TEST_SUITE_P(
         },
         {
             .test_name = "tag_happy_path_2",
-            .filter = "@tag_field_1:{tag1 , tag2}",
+            .filter = "@tag_field_1:{tag1|tag2}",
             .create_success = true,
             .evaluate_success = true,
             .expected_tree_structure = "TAG(tag_field_1)\n",
         },
         {
             .test_name = "tag_happy_path_4",
-            .filter = "@tag_field_with_space:{tag 1 , tag4}",
+            .filter = "@tag_field_with_space:{tag 1|tag4}",
             .create_success = true,
             .evaluate_success = true,
             .expected_tree_structure = "TAG(tag_field_with_space)\n",
@@ -636,7 +643,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         {
             .test_name = "tag_not_found_2",
-            .filter = "-@tag_field_with_space:{tag1 , tag 2}",
+            .filter = "-@tag_field_with_space:{tag1|tag 2}",
             .create_success = true,
             .evaluate_success = false,
             .expected_tree_structure = "NOT{\n"
@@ -1252,6 +1259,7 @@ INSTANTIATE_TEST_SUITE_P(
             .create_success = false,
             .create_expected_error_message = "Missing closing TAG bracket, '}'",
         },
+<<<<<<< HEAD
         {
             .test_name = "bad_filter_13",
             .filter = "hello{world",
@@ -1594,6 +1602,83 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = "@num_field_1.5:[1.0 2.0] ( | )",
             .create_success = false,
             .create_expected_error_message = "Missing OR term",
+=======
+        // =================================================================
+        // Tests for escaped pipe separator in tag values
+        // =================================================================
+        //
+        // Test data setup:
+        //   key1 has tag "tag1"
+        //   key_pipe has tag "a|b" (literal pipe)
+        //   key_backslash_pipe has tag "a\|b" (backslash + pipe)
+        //   key_backslash has tag "a\" (trailing backslash)
+        //
+        {
+            .test_name = "tag_escaped_pipe_matches_literal_pipe",
+            .filter = R"(@tag_field_1:{a\|b})",
+            .create_success = true,
+            .evaluate_success = true,
+            .key = "key_pipe",  // has tag "a|b"
+        },
+        {
+            .test_name = "tag_escaped_backslash_matches_literal_backslash",
+            .filter = R"(@tag_field_1:{a\\})",
+            .create_success = true,
+            .evaluate_success = true,
+            .key = "key_backslash",  // has tag "a\"
+        },
+        {
+            .test_name = "tag_escaped_backslash_pipe_matches_literal",
+            .filter = R"(@tag_field_1:{a\\\|b})",
+            .create_success = true,
+            .evaluate_success = true,
+            .key = "key_backslash_pipe",  // has tag "a\|b"
+        },
+        {
+            .test_name = "tag_escaped_pipe_or_unescaped_first_matches",
+            .filter = R"(@tag_field_1:{a\|b|tag1})",
+            .create_success = true,
+            .evaluate_success = true,
+            .key = "key_pipe",  // has tag "a|b"
+        },
+        {
+            .test_name = "tag_escaped_pipe_or_unescaped_second_matches",
+            .filter = R"(@tag_field_1:{a\|b|tag1})",
+            .create_success = true,
+            .evaluate_success = true,  // "tag1" matches via naive split too
+            .key = "key1",
+        },
+        {
+            .test_name = "tag_escaped_backslash_or_literal",
+            .filter = R"(@tag_field_1:{a\\|b})",
+            .create_success = true,
+            .evaluate_success = true,
+            .key = "key_backslash",  // has tag "a\"
+        },
+        {
+            .test_name = "tag_escaped_pipe_no_match",
+            .filter = R"(@tag_field_1:{x\|y})",
+            .create_success = true,
+            .evaluate_success = false,
+            .key = "key1",
+        },
+        // =================================================================
+        // Hierarchical tests: ensure escaping works with AND/OR operators
+        // =================================================================
+        {
+            .test_name = "tag_escaped_with_and_numeric",
+            .filter = R"(@tag_field_1:{a\|b|tag1} @num_field_1.5:[1.0 2.0])",
+            .create_success = true,
+            .evaluate_success = true,
+            .key = "key1",
+        },
+        {
+            .test_name = "tag_only_escaped_matches_with_or_numeric",
+            .filter = R"(@tag_field_1:{a\|b} | @num_field_1.5:[100 200])",
+            .create_success = true,
+            .evaluate_success = true,  // "a|b" should match, numeric doesn't
+            .key = "key_pipe",
+>>>>>>> upstream/main
         },
     }),
     [](const TestParamInfo<FilterTestCase> &info) {

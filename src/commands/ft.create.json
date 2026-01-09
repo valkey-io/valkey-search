@@ -5,7 +5,301 @@
       "WRITE",
       "SEARCH"
     ],
-    "arguments": [],
+    "arguments": [
+      {
+        "key_spec_index": 0,
+        "name": "index-name",
+        "type": "string"
+      },
+      {
+        "name": "on",
+        "type": "block",
+        "optional": true,
+        "description": "Index source type",
+        "arguments": [
+          {
+            "name": "on_token",
+            "type": "pure-token",
+            "token": "ON"
+          },
+          {
+            "name": "type",
+            "type": "oneof",
+            "arguments": [
+              {
+                "name": "hash",
+                "type": "pure-token",
+                "token": "HASH"
+              },
+              {
+                "name": "json",
+                "type": "pure-token",
+                "token": "JSON"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "prefix",
+        "type": "block",
+        "optional": true,
+        "description": "Optional PREFIX clause to restrict indexed keys",
+        "arguments": [
+          {
+            "name": "PREFIX",
+            "type": "pure-token",
+            "token": "PREFIX"
+          },
+          {
+            "name": "count",
+            "type": "integer"
+          },
+          {
+            "name": "prefix",
+            "type": "string",
+            "multiple": true
+          }
+        ]
+      },
+      {
+        "name": "schema",
+        "type": "block",
+        "description": "Schema definition: one or more field definitions",
+        "arguments": [
+          {
+            "name": "schema_token",
+            "type": "pure-token",
+            "token": "SCHEMA"
+          },
+          {
+            "name": "fields",
+            "type": "block",
+            "multiple": true,
+            "arguments": [
+              {
+                "name": "field-identifier",
+                "type": "string"
+              },
+              {
+                "name": "alias",
+                "optional": true,
+                "type": "block",
+                "arguments": [
+                  {
+                    "name": "AS",
+                    "type": "pure-token",
+                    "token": "AS"
+                  },
+                  {
+                    "name": "field-identifier",
+                    "type": "string"
+                  }
+                ]
+              },
+              {
+                "name": "field-type",
+                "type": "oneof",
+                "arguments": [
+                  {
+                    "name": "NUMERIC",
+                    "type": "pure-token",
+                    "token": "NUMERIC"
+                  },
+                  {
+                    "name": "TEXT",
+                    "type": "pure-token",
+                    "token": "TEXT"
+                  },
+                  {
+                    "name": "TAG",
+                    "type": "block",
+                    "arguments": [
+                      {
+                        "name": "tag_token",
+                        "type": "pure-token",
+                        "token": "TAG"
+                      },
+                      {
+                        "name": "separator",
+                        "optional": true,
+                        "type": "block",
+                        "arguments": [
+                          {
+                            "name": "separator_token",
+                            "type": "pure-token",
+                            "token": "SEPARATOR"
+                          },
+                          {
+                            "name": "sep",
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      {
+                        "name": "casesensitive",
+                        "optional": true,
+                        "type": "pure-token",
+                        "token": "CASESENSITIVE"
+                      }
+                    ]
+                  },
+                  {
+                    "name": "vector",
+                    "type": "block",
+                    "arguments": [
+                      {
+                        "name": "vector",
+                        "type": "pure-token",
+                        "token": "VECTOR"
+                      },
+                      {
+                        "name": "algorithm",
+                        "type": "oneof",
+                        "arguments": [
+                          {
+                            "name": "HNSW",
+                            "type": "pure-token",
+                            "token": "HNSW"
+                          },
+                          {
+                            "name": "FLAT",
+                            "type": "pure-token",
+                            "token": "FLAT"
+                          }
+                        ]
+                      },
+                      {
+                        "name": "attr_count",
+                        "type": "integer"
+                      },
+                      {
+                        "name": "vector-params",
+                        "type": "block",
+                        "description": "Vector algorithm parameters (DIM, TYPE, DISTANCE_METRIC, INITIAL_CAP, M, EF_CONSTRUCTION, EF_RUNTIME, BLOCK_SIZE)",
+                        "arguments": [
+                          {
+                            "name": "type",
+                            "type": "block",
+                            "arguments": [
+                              {
+                                "name": "type_token",
+                                "type": "pure-token",
+                                "token": "TYPE"
+                              },
+                              {
+                                "name": "format",
+                                "type": "pure-token",
+                                "token": "FLOAT32"
+                              }
+                            ]
+                          },
+                          {
+                            "name": "dim",
+                            "type": "block",
+                            "arguments": [
+                              {
+                                "name": "dim_token",
+                                "type": "pure-token",
+                                "token": "DIM"
+                              },
+                              {
+                                "name": "value",
+                                "type": "integer"
+                              }
+                            ]
+                          },
+                          {
+                            "name": "distance_metric",
+                            "type": "block",
+                            "arguments": [
+                              {
+                                "name": "dm_token",
+                                "type": "pure-token",
+                                "token": "DISTANCE_METRIC"
+                              },
+                              {
+                                "name": "metric",
+                                "type": "oneof",
+                                "arguments": [
+                                  {
+                                    "name": "l2",
+                                    "type": "pure-token",
+                                    "token": "L2" 
+                                  },
+                                  {
+                                    "name": "ip",
+                                    "type": "pure-token", 
+                                    "token": "IP" 
+                                  },
+                                  { 
+                                    "name": "cosine", 
+                                    "type": "pure-token", 
+                                    "token": "COSINE" 
+                                  }
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "name": "m",
+                            "type": "block",
+                            "optional": true,
+                            "arguments": [
+                              {
+                                "name": "m_token",
+                                "type": "pure-token",
+                                "token": "M"
+                              },
+                              {
+                                "name": "value",
+                                "type": "integer"
+                              }
+                            ]
+                          },
+                          {
+                            "name": "ef_construction",
+                            "type": "block",
+                            "optional": true,
+                            "arguments": [
+                              {
+                                "name": "efc_token",
+                                "type": "pure-token",
+                                "token": "EF_CONSTRUCTION"
+                              },
+                              {
+                                "name": "value",
+                                "type": "integer"
+                              }
+                            ]
+                          },
+                          {
+                            "name": "block_size",
+                            "type": "block",
+                            "optional": true,
+                            "arguments": [
+                              {
+                                "name": "bs_token",
+                                "type": "pure-token",
+                                "token": "BLOCK_SIZE"
+                              },
+                              {
+                                "name": "value",
+                                "type": "integer"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
     "complexity": "Construction time O(N log N), where N is the number of indexed items",
     "group": "search",
     "module_since": "1.0.0",

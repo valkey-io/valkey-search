@@ -142,6 +142,7 @@ message NeighborEntry {
 
 message SearchIndexPartitionResponse {
   repeated NeighborEntry neighbors = 1;
+  uint64 total_count = 2;
 }
 
 message AttributeContentEntry {

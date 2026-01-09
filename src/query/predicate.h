@@ -144,9 +144,16 @@ class TagPredicate : public Predicate {
   TagPredicate(const indexes::Tag* index, absl::string_view alias,
                absl::string_view identifier, absl::string_view raw_tag_string,
                const absl::flat_hash_set<absl::string_view>& tags);
+<<<<<<< HEAD
   EvaluationResult Evaluate(Evaluator& evaluator) const override;
   EvaluationResult Evaluate(const absl::flat_hash_set<absl::string_view>* tags,
                             bool case_sensitive) const;
+=======
+  bool Evaluate(Evaluator& evaluator) const override;
+  // Evaluate against tags (string_view set from indexed data or parsed query)
+  bool Evaluate(const absl::flat_hash_set<absl::string_view>* tags,
+                bool case_sensitive) const;
+>>>>>>> upstream/main
   const indexes::Tag* GetIndex() const { return index_; }
   absl::string_view GetAlias() const { return alias_; }
   absl::string_view GetIdentifier() const {

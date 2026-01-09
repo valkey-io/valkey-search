@@ -30,6 +30,13 @@ config::Number& GetReaderThreadCount();
 /// number of writer threads
 config::Number& GetWriterThreadCount();
 
+/// Return the configuration entry that allows the caller to control the
+/// number of utility threads
+config::Number& GetUtilityThreadCount();
+
+/// Return the configuration entry for search result background cleanup
+const config::Boolean& GetSearchResultBackgroundCleanup();
+
 /// Return the max time in seconds that the worker thread pool is
 /// suspended after fork started
 config::Number& GetMaxWorkerSuspensionSecs();
@@ -77,9 +84,14 @@ config::Number& GetLocalFanoutQueueWaitThreshold();
 /// Return the sample queue size for thread pool wait time tracking
 config::Number& GetThreadPoolWaitTimeSamples();
 
+<<<<<<< HEAD
 /// Return the maximum number of words to search in text operations (prefix,
 /// suffix, fuzzy)
 config::Number& GetMaxTermExpansions();
+=======
+/// Return the search result buffer multiplier value
+double GetSearchResultBufferMultiplier();
+>>>>>>> upstream/main
 
 }  // namespace options
 }  // namespace valkey_search

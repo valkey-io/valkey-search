@@ -18,6 +18,12 @@ test-data*
 integration/test-data/
 .kiro/
 venv/
+<<<<<<< HEAD
 .venv/
 env/
 .env/
+=======
+env/
+.venv/
+.env/
+>>>>>>> upstream/main

@@ -36,7 +36,7 @@ TEXT_DATASETS = {
             ],
             'body': [
                 # veggies
-                'potato', 'tomato', 'lettuce', 'onion', 'carrot', 'brocoli',
+                'potato', 'tomato', 'lettuce', 'onion', 'carrot', 'broccoli',
                 # animals
                 'dog', 'cat', 'horse', 'tiger', 'eagle', 'shark',
                 # places

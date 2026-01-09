@@ -14,7 +14,6 @@
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/hash/hash.h"
-#include "absl/log/check.h"
 #include "absl/synchronization/mutex.h"
 #include "vmsdk/src/memory_allocation.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"

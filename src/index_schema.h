@@ -28,13 +28,16 @@
 #include "gtest/gtest_prod.h"
 #include "src/attribute.h"
 #include "src/attribute_data_type.h"
+#include "src/commands/ft_create_parser.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/text/text_index.h"
 #include "src/indexes/vector_base.h"
 #include "src/keyspace_event_manager.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/blocked_client.h"
+#include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/time_sliced_mrmw_mutex.h"
@@ -47,6 +50,7 @@ bool ShouldBlockClient(ValkeyModuleCtx *ctx, bool inside_multi_exec,
 
 using RDBLoadFunc = void *(*)(ValkeyModuleIO *, int);
 using FreeFunc = void (*)(void *);
+using FieldMaskPredicate = uint64_t;
 
 class IndexSchema : public KeyspaceEventSubscription,
                     public std::enable_shared_from_this<IndexSchema> {
@@ -94,6 +98,15 @@ class IndexSchema : public KeyspaceEventSubscription,
   ~IndexSchema() override;
   absl::StatusOr<std::shared_ptr<indexes::IndexBase>> GetIndex(
       absl::string_view attribute_alias) const;
+  inline bool HasTextOffsets() const { return with_offsets_; }
+  const absl::flat_hash_set<std::string> &GetAllTextIdentifiers(
+      bool with_suffix) const;
+  FieldMaskPredicate GetAllTextFieldMask(bool with_suffix) const;
+  std::optional<uint32_t> MinStemSizeAcrossTextIndexes(bool with_suffix) const;
+  void UpdateTextFieldMasksForIndex(const std::string &identifier,
+                                    indexes::IndexBase *index);
+  absl::flat_hash_set<std::string> GetTextIdentifiersByFieldMask(
+      FieldMaskPredicate field_mask) const;
   virtual absl::StatusOr<std::string> GetIdentifier(
       absl::string_view attribute_alias) const;
   absl::StatusOr<std::string> GetAlias(absl::string_view identifier) const;
@@ -116,6 +129,13 @@ class IndexSchema : public KeyspaceEventSubscription,
   inline const std::string &GetName() const { return name_; }
   inline std::uint32_t GetDBNum() const { return db_num_; }
 
+  void CreateTextIndexSchema() {
+    text_index_schema_ = std::make_shared<indexes::text::TextIndexSchema>(
+        language_, punctuation_, with_offsets_, stop_words_);
+  }
+  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
+    return text_index_schema_;
+  }
   inline uint64_t GetFingerprint() const { return fingerprint_; }
   inline uint32_t GetVersion() const { return version_; }
 
@@ -188,6 +208,9 @@ class IndexSchema : public KeyspaceEventSubscription,
   uint64_t GetBackfillDbSize() const;
   InfoIndexPartitionData GetInfoIndexPartitionData() const;
 
+  static absl::Status TextInfoCmd(ValkeyModuleCtx *ctx,
+                                  vmsdk::ArgsIterator &itr);
+
  protected:
   IndexSchema(ValkeyModuleCtx *ctx,
               const data_model::IndexSchema &index_schema_proto,
@@ -204,12 +227,24 @@ class IndexSchema : public KeyspaceEventSubscription,
   std::unique_ptr<AttributeDataType> attribute_data_type_;
   std::string name_;
   uint32_t db_num_{0};
+  data_model::Language language_{data_model::LANGUAGE_ENGLISH};
+  std::string punctuation_;
+  bool with_offsets_{true};
+  std::vector<std::string> stop_words_;
+  std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
+  // Precomputed text field information for searches
+  uint64_t all_text_field_mask_{0ULL};
+  uint64_t suffix_text_field_mask_{0ULL};
+  std::optional<uint32_t> all_fields_min_stem_size_{std::nullopt};
+  std::optional<uint32_t> suffix_fields_min_stem_size_{std::nullopt};
+  absl::flat_hash_set<std::string> all_text_identifiers_;
+  absl::flat_hash_set<std::string> suffix_text_identifiers_;
   bool loaded_v2_{false};
   uint64_t fingerprint_{0};
   uint32_t version_{0};
 
   vmsdk::ThreadPool *mutations_thread_pool_{nullptr};
-  InternedStringMap<DocumentMutation> tracked_mutated_records_
+  InternedStringHashMap<DocumentMutation> tracked_mutated_records_
       ABSL_GUARDED_BY(mutated_records_mutex_);
   bool is_destructing_ ABSL_GUARDED_BY(mutated_records_mutex_){false};
   mutable absl::Mutex mutated_records_mutex_;
@@ -272,6 +307,8 @@ class IndexSchema : public KeyspaceEventSubscription,
                           MutatedAttributes &&mutated_attributes,
                           bool from_backfill, bool block_client,
                           bool from_multi)
+      ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
+  bool IsKeyInFlight(const InternedStringPtr &key) const
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
   std::optional<MutatedAttributes> ConsumeTrackedMutatedAttribute(
       const InternedStringPtr &key, bool first_time)

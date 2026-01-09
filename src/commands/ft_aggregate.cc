@@ -165,7 +165,7 @@ bool ReplyWithValue(ValkeyModuleCtx *ctx,
 }
 
 absl::Status SendReplyInner(ValkeyModuleCtx *ctx,
-                            std::deque<indexes::Neighbor> &neighbors,
+                            std::vector<indexes::Neighbor> &neighbors,
                             AggregateParameters &parameters) {
   size_t key_index = 0, scores_index = 0;
   if (parameters.IsVectorQuery()) {
@@ -209,7 +209,7 @@ absl::Status SendReplyInner(ValkeyModuleCtx *ctx,
     auto rec =
         std::make_unique<Record>(parameters.record_indexes_by_alias_.size());
     if (parameters.load_key) {
-      rec->fields_.at(key_index) = expr::Value(n.external_id.get()->Str());
+      rec->fields_.at(key_index) = expr::Value(n.external_id->Str());
     }
     if (parameters.IsVectorQuery()) {
       rec->fields_.at(scores_index) = expr::Value(n.distance);

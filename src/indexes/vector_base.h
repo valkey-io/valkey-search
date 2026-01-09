@@ -155,14 +155,14 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   vmsdk::UniqueValkeyString NormalizeStringRecord(
       vmsdk::UniqueValkeyString record) const override;
   template <typename T>
-  absl::StatusOr<std::deque<Neighbor>> CreateReply(
+  absl::StatusOr<std::vector<Neighbor>> CreateReply(
       std::priority_queue<std::pair<T, hnswlib::labeltype>>& knn_res);
   absl::StatusOr<std::vector<char>> GetValue(const InternedStringPtr& key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
   int GetVectorDataSize() const { return GetDataTypeSize() * dimensions_; }
   char* TrackVector(uint64_t internal_id, char* vector, size_t len) override;
-  std::shared_ptr<InternedString> InternVector(absl::string_view record,
-                                               std::optional<float>& magnitude);
+  InternedStringPtr InternVector(absl::string_view record,
+                                 std::optional<float>& magnitude);
 
  protected:
   VectorBase(IndexerType indexer_type, int dimensions,
@@ -248,7 +248,7 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
     float magnitude;
   };
 
-  InternedStringMap<TrackedKeyMetadata> tracked_metadata_by_key_
+  InternedStringHashMap<TrackedKeyMetadata> tracked_metadata_by_key_
       ABSL_GUARDED_BY(key_to_metadata_mutex_);
   uint64_t inc_id_ ABSL_GUARDED_BY(key_to_metadata_mutex_){0};
   mutable absl::Mutex key_to_metadata_mutex_;
@@ -260,12 +260,25 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
 
 class PrefilterEvaluator : public query::Evaluator {
  public:
+  explicit PrefilterEvaluator(
+      const valkey_search::indexes::text::TextIndex* text_index = nullptr)
+      : text_index_(text_index) {}
   bool Evaluate(const query::Predicate& predicate,
                 const InternedStringPtr& key);
+  const InternedStringPtr& GetTargetKey() const override {
+    CHECK(key_);
+    return *key_;
+  }
+  bool IsPrefilterEvaluator() const override { return true; }
 
  private:
-  bool EvaluateTags(const query::TagPredicate& predicate) override;
-  bool EvaluateNumeric(const query::NumericPredicate& predicate) override;
+  query::EvaluationResult EvaluateTags(
+      const query::TagPredicate& predicate) override;
+  query::EvaluationResult EvaluateNumeric(
+      const query::NumericPredicate& predicate) override;
+  query::EvaluationResult EvaluateText(const query::TextPredicate& predicate,
+                                       bool require_positions) override;
+  const valkey_search::indexes::text::TextIndex* text_index_;
   const InternedStringPtr* key_{nullptr};
 };
 

@@ -16,6 +16,7 @@
 #include "absl/strings/string_view.h"
 #include "src/index_schema.h"
 #include "src/indexes/tag.h"
+#include "src/indexes/text/lexer.h"
 #include "src/query/predicate.h"
 #include "vmsdk/src/module_config.h"
 
@@ -23,30 +24,90 @@ namespace valkey_search {
 namespace indexes {
 class Tag;
 }  // namespace indexes
+using FieldMaskPredicate = uint64_t;
+struct TextParsingOptions {
+  bool verbatim = false;
+  bool inorder = false;
+  std::optional<uint32_t> slop = std::nullopt;
+};
+enum class QueryOperations : uint8_t {
+  kNone = 0,
+  kContainsOr = 1 << 0,
+  kContainsAnd = 1 << 1,
+  // Other operations can be tracked here
+};
+
+inline QueryOperations operator|(QueryOperations a, QueryOperations b) {
+  return static_cast<QueryOperations>(static_cast<uint8_t>(a) |
+                                      static_cast<uint8_t>(b));
+}
+
+inline QueryOperations& operator|=(QueryOperations& a, QueryOperations b) {
+  return a = a | b;
+}
+
+inline bool operator&(QueryOperations a, QueryOperations b) {
+  return static_cast<uint8_t>(a) & static_cast<uint8_t>(b);
+}
+
 struct FilterParseResults {
   std::unique_ptr<query::Predicate> root_predicate;
   absl::flat_hash_set<std::string> filter_identifiers;
+  QueryOperations query_operations = QueryOperations::kNone;
 };
 class FilterParser {
  public:
-  FilterParser(const IndexSchema& index_schema, absl::string_view expression);
+  FilterParser(const IndexSchema& index_schema, absl::string_view expression,
+               const TextParsingOptions& options);
 
   absl::StatusOr<FilterParseResults> Parse();
 
  private:
+  const TextParsingOptions& options_;
   const IndexSchema& index_schema_;
   absl::string_view expression_;
   size_t pos_{0};
   size_t node_count_{0};
   absl::flat_hash_set<std::string> filter_identifiers_;
+  QueryOperations query_operations_{QueryOperations::kNone};
 
+  absl::StatusOr<bool> HandleBackslashEscape(const indexes::text::Lexer& lexer,
+                                             std::string& processed_content);
+  struct TokenResult {
+    std::unique_ptr<query::TextPredicate> predicate;
+    bool break_on_query_syntax;
+  };
+  absl::StatusOr<TokenResult> ParseQuotedTextToken(
+      std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
+      const std::optional<std::string>& field_or_default);
+
+  absl::StatusOr<TokenResult> ParseUnquotedTextToken(
+      std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
+      const std::optional<std::string>& field_or_default);
+  absl::Status SetupTextFieldConfiguration(
+      FieldMaskPredicate& field_mask, std::optional<uint32_t>& min_stem_size,
+      const std::optional<std::string>& field_name, bool with_suffix);
+  absl::StatusOr<std::unique_ptr<query::Predicate>> ParseTextTokens(
+      const std::optional<std::string>& field_for_default);
   absl::StatusOr<bool> IsMatchAllExpression();
-  absl::StatusOr<std::unique_ptr<query::Predicate>> ParseExpression(
-      uint32_t level);
+
+  // Struct to hold parsing state including predicate, bracket counter, and
+  // first joined flag
+  struct ParseResult {
+    std::unique_ptr<query::Predicate> prev_predicate;
+    bool not_rightmost_bracket;
+    ParseResult() : not_rightmost_bracket(false) {}
+    ParseResult(std::unique_ptr<query::Predicate> pred, bool joined)
+        : prev_predicate(std::move(pred)), not_rightmost_bracket(joined) {}
+  };
+
+  absl::StatusOr<ParseResult> ParseExpression(uint32_t level);
   absl::StatusOr<std::unique_ptr<query::NumericPredicate>>
   ParseNumericPredicate(const std::string& attribute_alias);
   absl::StatusOr<std::unique_ptr<query::TagPredicate>> ParseTagPredicate(
       const std::string& attribute_alias);
+  absl::StatusOr<std::unique_ptr<query::TextPredicate>> ParseTextPredicate(
+      const std::string& field_name);
   void SkipWhitespace();
 
   char Peek() const { return expression_[pos_]; }
@@ -62,7 +123,17 @@ class FilterParser {
 
   absl::StatusOr<absl::flat_hash_set<absl::string_view>> ParseTags(
       absl::string_view tag_string, indexes::Tag* tag_index) const;
+
+  absl::StatusOr<std::unique_ptr<query::Predicate>> WrapPredicate(
+      std::unique_ptr<query::Predicate> prev_predicate,
+      std::unique_ptr<query::Predicate> predicate, bool& negate,
+      query::LogicalOperator logical_operator, bool no_prev_grp,
+      bool not_rightmost_bracket);
 };
+
+// Helper function to print predicate tree structure using DFS
+std::string PrintPredicateTree(const query::Predicate* predicate,
+                               int indent = 0);
 
 namespace options {
 
@@ -72,6 +143,8 @@ vmsdk::config::Number& GetQueryStringDepth();
 /// Return the value of the Query String Terms Count configuration
 vmsdk::config::Number& GetQueryStringTermsCount();
 
+/// Return the value of the Fuzzy Max Distance configuration
+vmsdk::config::Number& GetFuzzyMaxDistance();
 }  // namespace options
 
 }  // namespace valkey_search

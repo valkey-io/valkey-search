@@ -74,6 +74,9 @@ constexpr absl::string_view KSomeShards{"SOMESHARDS"};
 constexpr absl::string_view kConsistent{"CONSISTENT"};
 constexpr absl::string_view kInconsistent{"INCONSISTENT"};
 constexpr absl::string_view kVectorFilterDelimiter = "=>";
+constexpr absl::string_view kSlop{"SLOP"};
+constexpr absl::string_view kInorder{"INORDER"};
+constexpr absl::string_view kVerbatim{"VERBATIM"};
 
 absl::StatusOr<absl::string_view> SubstituteParam(
     query::SearchParameters &parameters, absl::string_view source) {
@@ -176,8 +179,12 @@ absl::StatusOr<size_t> FindCloseSquareBracket(absl::string_view input) {
 }
 
 absl::StatusOr<FilterParseResults> ParsePreFilter(
-    const IndexSchema &index_schema, absl::string_view pre_filter) {
-  FilterParser parser(index_schema, pre_filter);
+    const IndexSchema &index_schema, absl::string_view pre_filter,
+    const query::SearchParameters &search_params) {
+  TextParsingOptions options{.verbatim = search_params.verbatim,
+                             .inorder = search_params.inorder,
+                             .slop = search_params.slop};
+  FilterParser parser(index_schema, pre_filter, options);
   return parser.Parse();
 }
 
@@ -287,8 +294,8 @@ vmsdk::KeyValueParser<query::SearchParameters> CreateSearchParser() {
   parser.AddParamParser(
       kLocalOnly, GENERATE_FLAG_PARSER(query::SearchParameters, local_only));
   parser.AddParamParser(kAllShards,
-                        GENERATE_NEGATED_FLAG_PARSER(query::SearchParameters,
-                                                     enable_partial_results));
+                        GENERATE_NEGATIVE_FLAG_PARSER(query::SearchParameters,
+                                                      enable_partial_results));
   parser.AddParamParser(
       KSomeShards,
       GENERATE_FLAG_PARSER(query::SearchParameters, enable_partial_results));
@@ -296,8 +303,8 @@ vmsdk::KeyValueParser<query::SearchParameters> CreateSearchParser() {
       kConsistent,
       GENERATE_FLAG_PARSER(query::SearchParameters, enable_consistency));
   parser.AddParamParser(kInconsistent,
-                        GENERATE_NEGATED_FLAG_PARSER(query::SearchParameters,
-                                                     enable_consistency));
+                        GENERATE_NEGATIVE_FLAG_PARSER(query::SearchParameters,
+                                                      enable_consistency));
   parser.AddParamParser(
       kTimeoutParam,
       GENERATE_VALUE_PARSER(query::SearchParameters, timeout_ms));
@@ -307,6 +314,12 @@ vmsdk::KeyValueParser<query::SearchParameters> CreateSearchParser() {
       GENERATE_FLAG_PARSER(query::SearchParameters, no_content));
   parser.AddParamParser(kReturnParam, ConstructReturnParser());
   parser.AddParamParser(kParamsParam, ConstructParamsParser());
+  parser.AddParamParser(kInorder,
+                        GENERATE_FLAG_PARSER(query::SearchParameters, inorder));
+  parser.AddParamParser(
+      kVerbatim, GENERATE_FLAG_PARSER(query::SearchParameters, verbatim));
+  parser.AddParamParser(kSlop,
+                        GENERATE_VALUE_PARSER(query::SearchParameters, slop));
   return parser;
 }
 
@@ -343,9 +356,15 @@ absl::Status PreParseQueryString(query::SearchParameters &parameters) {
     vector_filter = absl::StripAsciiWhitespace(
         filter_expression.substr(pos + kVectorFilterDelimiter.size()));
   }
+  // If INORDER OR SLOP, but the index schema does not support offsets, we
+  // reject the query.
+  if ((parameters.inorder || parameters.slop.has_value()) &&
+      !parameters.index_schema->HasTextOffsets()) {
+    return absl::InvalidArgumentError("Index does not support offsets");
+  }
   VMSDK_ASSIGN_OR_RETURN(
       parameters.filter_parse_results,
-      ParsePreFilter(*parameters.index_schema, pre_filter),
+      ParsePreFilter(*parameters.index_schema, pre_filter, parameters),
       _.SetPrepend() << "Invalid filter expression: `" << pre_filter << "`. ");
   if (!parameters.filter_parse_results.root_predicate &&
       vector_filter.empty()) {
@@ -378,6 +397,7 @@ absl::Status PreParseQueryString(query::SearchParameters &parameters) {
           vmsdk::MakeUniqueValkeyString(parameters.parse_vars.score_as_string);
     }
   }
+  // TODO: Return Temp Error for unsupported predicates.
   return absl::OkStatus();
 }
 

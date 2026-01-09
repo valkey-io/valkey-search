@@ -41,16 +41,19 @@ class SystemAllocTracker {
     if (ptr == nullptr) {
       return;
     }
-    absl::MutexLock lock(&mutex_);
-    tracked_ptrs_.insert(ptr);
+    auto& shard = GetShardForPtr(ptr);
+    absl::MutexLock lock(&shard.mutex_);
+    shard.tracked_ptrs_.insert(ptr);
   }
   bool IsTracked(void* ptr) {
-    absl::MutexLock lock(&mutex_);
-    return tracked_ptrs_.contains(ptr);
+    auto& shard = GetShardForPtr(ptr);
+    absl::MutexLock lock(&shard.mutex_);
+    return shard.tracked_ptrs_.contains(ptr);
   }
   bool UntrackPointer(void* ptr) {
-    absl::MutexLock lock(&mutex_);
-    return tracked_ptrs_.erase(ptr);
+    auto& shard = GetShardForPtr(ptr);
+    absl::MutexLock lock(&shard.mutex_);
+    return shard.tracked_ptrs_.erase(ptr);
   }
 
  private:
@@ -77,10 +80,21 @@ class SystemAllocTracker {
     }
   };
 
-  absl::Mutex mutex_;
-  absl::flat_hash_set<void*, absl::Hash<void*>, std::equal_to<void*>,
+  struct Shard {
+    absl::Mutex mutex_;
+    absl::flat_hash_set<void*, absl::Hash<void*>, std::equal_to<void*>,
                       RawSystemAllocator<void*>>
       tracked_ptrs_ ABSL_GUARDED_BY(mutex_);
+  };
+  static const size_t kShardBits = 7; // 128 Shards
+  static const size_t kShardCount = 1 << kShardBits;
+  static const size_t kShardMask = (kShardCount - 1) << 4; // Since all allocations are 16 byte aligned
+
+  Shard& GetShardForPtr(void* ptr) {
+    return shards_[(reinterpret_cast<size_t>(ptr) & kShardMask) >> 4];
+  }
+
+  Shard shards_[kShardCount];
 };
 
 void* PerformAndTrackMalloc(size_t size, void* (*malloc_fn)(size_t),

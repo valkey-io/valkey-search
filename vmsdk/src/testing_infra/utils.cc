@@ -6,6 +6,7 @@
  */
 
 #include <cstddef>
+#include <string>
 #include <vector>
 
 #include "absl/strings/str_split.h"
@@ -19,17 +20,27 @@ std::vector<ValkeyModuleString *> ToValkeyStringVector(
   std::vector<absl::string_view> params =
       absl::StrSplit(params_str, ' ', absl::SkipEmpty());
   std::vector<ValkeyModuleString *> ret;
-  for (size_t i = 0; i < params.size(); i += 2) {
+  for (size_t i = 0; i < params.size(); ++i) {
+    // std::vector<ValkeyModuleString *> ret;
+    // for (size_t i = 0; i < params.size(); i += 2) {
     if (exclude == params[i]) {
       continue;
     }
-    ret.push_back(
-        ValkeyModule_CreateString(nullptr, params[i].data(), params[i].size()));
-    if (i + 1 == params.size()) {
-      break;
+
+    // Handle quote stripping (mimics CLI behavior)
+    absl::string_view param = params[i];
+    std::string processed_param;
+
+    if (param.length() >= 2 &&
+        ((param.front() == '"' && param.back() == '"') ||
+         (param.front() == '\'' && param.back() == '\''))) {
+      processed_param = std::string(param.substr(1, param.length() - 2));
+      ret.push_back(ValkeyModule_CreateString(nullptr, processed_param.data(),
+                                              processed_param.size()));
+    } else {
+      ret.push_back(
+          ValkeyModule_CreateString(nullptr, param.data(), param.size()));
     }
-    ret.push_back(ValkeyModule_CreateString(nullptr, params[i + 1].data(),
-                                            params[i + 1].size()));
   }
   return ret;
 }

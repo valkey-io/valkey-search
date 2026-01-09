@@ -32,6 +32,8 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
+#include "src/indexes/text.h"
+#include "src/indexes/text/text_index.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
 #include "src/keyspace_event_manager.h"
@@ -43,9 +45,6 @@
 #include "third_party/hnswlib/hnswlib.h"  // IWYU pragma: keep
 #include "third_party/hnswlib/space_ip.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/memory_allocation.h"
-#include "vmsdk/src/memory_allocation_overrides.h"
-#include "vmsdk/src/memory_tracker.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
 #include "vmsdk/src/thread_pool.h"
@@ -927,11 +926,13 @@ TEST_P(IndexSchemaBackfillTest, PerformBackfillTest) {
                 return VALKEYMODULE_OK;
               });
           EXPECT_CALL(*mock_index,
-                      IsTracked(testing::Pointee(testing::StrEq(key_str))))
+                      IsTracked(testing::Property(&InternedStringPtr::operator*,
+                                                  testing::StrEq(key_str))))
               .WillRepeatedly(testing::Return(false));
-          EXPECT_CALL(
-              *mock_index,
-              AddRecord(testing::Pointee(testing::StrEq(key_str)), testing::_))
+          EXPECT_CALL(*mock_index,
+                      AddRecord(testing::Property(&InternedStringPtr::operator*,
+                                                  testing::StrEq(key_str)),
+                                testing::_))
               .WillOnce(testing::Return(true));
           if (use_thread_pool) {
             EXPECT_CALL(thread_pool,
@@ -1222,6 +1223,18 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
     VMSDK_EXPECT_OK(index_schema->AddIndex("flat_attribute", "flat_identifier",
                                            flat_index));
 
+    // Add numeric index
+    auto numeric_index =
+        std::make_shared<indexes::Numeric>(CreateNumericIndexProto());
+    VMSDK_EXPECT_OK(index_schema->AddIndex(
+        "numeric_attribute", "numeric_identifier", numeric_index));
+
+    // Add tag index
+    auto tag_index =
+        std::make_shared<indexes::Tag>(CreateTagIndexProto(",", false));
+    VMSDK_EXPECT_OK(
+        index_schema->AddIndex("tag_attribute", "tag_identifier", tag_index));
+
     VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream));
   }
 
@@ -1246,6 +1259,7 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
               testing::UnorderedElementsAre("prefix1", "prefix2"));
   EXPECT_TRUE(dynamic_cast<const HashAttributeDataType *>(
       &index_schema->GetAttributeDataType()));
+
   VMSDK_EXPECT_OK(index_schema->GetIndex("hnsw_attribute"));
   auto hnsw_index = dynamic_cast<indexes::VectorHNSW<float> *>(
       index_schema->GetIndex("hnsw_attribute").value().get());
@@ -1268,9 +1282,141 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   EXPECT_EQ(flat_index->GetCapacity(), initial_cap);
   EXPECT_EQ(flat_index->GetBlockSize(), block_size);
 
+  VMSDK_EXPECT_OK(index_schema->GetIndex("numeric_attribute"));
+  auto num_index = dynamic_cast<indexes::Numeric *>(
+      index_schema->GetIndex("numeric_attribute").value().get());
+  EXPECT_TRUE(num_index != nullptr);
+
+  VMSDK_EXPECT_OK(index_schema->GetIndex("tag_attribute"));
+  auto tag_index = dynamic_cast<indexes::Tag *>(
+      index_schema->GetIndex("tag_attribute").value().get());
+  EXPECT_TRUE(tag_index != nullptr);
+  EXPECT_EQ(tag_index->GetSeparator(), ',');
+  EXPECT_EQ(tag_index->IsCaseSensitive(), false);
+
   EXPECT_TRUE(index_schema->IsBackfillInProgress());
   EXPECT_EQ(index_schema->GetStats().document_cnt, 10);
   EXPECT_EQ(index_schema->CountRecords(), 10);
+}
+
+TEST_F(IndexSchemaRDBTest, SaveAndLoadTextIndex)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  std::vector<absl::string_view> key_prefixes = {"doc:"};
+  std::string index_schema_name_str("text_index_schema");
+  bool with_suffix_trie = false;
+  bool no_stem = false;
+  uint32_t min_stem_size = 3;
+
+  FakeSafeRDB rdb_stream;
+
+  // Construct and save index schema with text index
+  {
+    // Set index schema text properties to values different than the IndexSchema
+    // defaults
+    data_model::Language language =
+        data_model::LANGUAGE_ENGLISH;  // Only one supported language right now
+    std::string punctuation = ".";
+    bool with_offsets = false;
+    std::vector<std::string> stop_words = {"stop"};
+
+    auto index_schema = MockIndexSchema::Create(
+                            &fake_ctx_, index_schema_name_str, key_prefixes,
+                            std::make_unique<HashAttributeDataType>(), nullptr,
+                            language, punctuation, with_offsets, stop_words)
+                            .value();
+
+    // Create text index with both proto and schema
+    auto text_index_schema = std::make_shared<indexes::text::TextIndexSchema>(
+        language, punctuation, with_offsets, stop_words);
+    auto text_index = std::make_shared<indexes::Text>(
+        CreateTextIndexProto(with_suffix_trie, no_stem, min_stem_size),
+        text_index_schema);
+    VMSDK_EXPECT_OK(
+        index_schema->AddIndex("description", "desc_id", text_index));
+
+    // Add various text documents to exercise text index functionality
+    std::vector<std::string> texts = {
+        "hello world search engine", "running runs runner stemming test",
+        "Hello World Test Case with punctuation!",
+        "document with multiple words and symbols@#$"};
+
+    for (size_t i = 0; i < texts.size(); ++i) {
+      auto interned_key = StringInternStore::Intern("doc:" + std::to_string(i));
+      vmsdk::UniqueValkeyString data = vmsdk::MakeUniqueValkeyString(texts[i]);
+
+      // Add record and handle return value properly
+      auto result =
+          text_index->AddRecord(interned_key, vmsdk::ToStringView(data.get()));
+      VMSDK_EXPECT_OK(result);
+      EXPECT_TRUE(result.value());
+    }
+
+    VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream));
+  }
+
+  // Load the saved index schema and validate text index restoration
+  {
+    ValkeyModuleCtx parent_ctx;
+    ValkeyModuleCtx scan_ctx;
+    EXPECT_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(&parent_ctx))
+        .WillRepeatedly(Return(&scan_ctx));
+
+    RDBSectionIter iter(&rdb_stream, 1);
+    auto section = iter.Next();
+    VMSDK_EXPECT_OK_STATUSOR(section);
+
+    auto index_schema_or =
+        IndexSchema::LoadFromRDB(&parent_ctx, nullptr,
+                                 std::make_unique<data_model::IndexSchema>(
+                                     (*section)->index_schema_contents()),
+                                 iter.IterateSupplementalContent());
+
+    VMSDK_EXPECT_OK_STATUSOR(index_schema_or);
+    auto index_schema = std::move(index_schema_or.value());
+
+    // Validate basic schema properties
+    EXPECT_THAT(index_schema->GetKeyPrefixes(),
+                testing::UnorderedElementsAre("doc:"));
+    EXPECT_TRUE(dynamic_cast<const HashAttributeDataType *>(
+        &index_schema->GetAttributeDataType()));
+
+    // Validate text schema properties
+    auto schema_proto = index_schema->ToProto();
+    EXPECT_EQ(schema_proto->language(), data_model::LANGUAGE_ENGLISH);
+    EXPECT_EQ(schema_proto->punctuation(), ".");
+    EXPECT_EQ(schema_proto->with_offsets(), false);
+    EXPECT_THAT(schema_proto->stop_words(),
+                testing::UnorderedElementsAre("stop"));
+
+    // Validate text index schema was recreated
+    EXPECT_THAT(index_schema->GetTextIndexSchema(), testing::NotNull());
+
+    // Validate text index was restored correctly
+    VMSDK_EXPECT_OK(index_schema->GetIndex("description"));
+    auto text_index = dynamic_cast<indexes::Text *>(
+        index_schema->GetIndex("description").value().get());
+    EXPECT_TRUE(text_index != nullptr);
+
+    // Validate text index configuration was preserved
+    auto text_proto = text_index->ToProto();
+    EXPECT_TRUE(text_proto->has_text_index());
+    EXPECT_EQ(text_proto->text_index().with_suffix_trie(), with_suffix_trie);
+    EXPECT_EQ(text_proto->text_index().no_stem(), no_stem);
+    EXPECT_EQ(text_proto->text_index().min_stem_size(), min_stem_size);
+
+    // TODO: Text index key tracking is not yet implemented
+    // Validate that GetRecordCount returns 0 (expected for unimplemented key
+    // tracking)
+    EXPECT_EQ(text_index->GetTrackedKeyCount(), 0);
+
+    // TODO: Document count will be 0 until proper key tracking is implemented
+    // This test verifies RDB save/load works without crashing, not document
+    // counting
+    EXPECT_EQ(index_schema->GetStats().document_cnt, 0);
+
+    // Validate backfill is properly set up for restored schema
+    EXPECT_TRUE(index_schema->IsBackfillInProgress());
+  }
 }
 
 TEST_F(IndexSchemaRDBTest, LoadEndedDeletesOrphanedKeys) {
@@ -1318,15 +1464,18 @@ TEST_F(IndexSchemaRDBTest, LoadEndedDeletesOrphanedKeys) {
         .WillRepeatedly(Return(1));
 
     EXPECT_CALL(*mock_index,
-                RemoveRecord(testing::Pointee(testing::StrEq("key1")),
+                RemoveRecord(testing::Property(&InternedStringPtr::operator*,
+                                               testing::StrEq("key1")),
                              indexes::DeletionType::kRecord))
         .WillOnce(Return(true));
     EXPECT_CALL(*mock_index,
-                RemoveRecord(testing::Pointee(testing::StrEq("key2")),
+                RemoveRecord(testing::Property(&InternedStringPtr::operator*,
+                                               testing::StrEq("key2")),
                              indexes::DeletionType::kRecord))
         .WillOnce(Return(true));
     EXPECT_CALL(*mock_index,
-                RemoveRecord(testing::Pointee(testing::StrEq("key3")),
+                RemoveRecord(testing::Property(&InternedStringPtr::operator*,
+                                               testing::StrEq("key3")),
                              indexes::DeletionType::kRecord))
         .Times(0);
     index_schema->OnLoadingEnded(&fake_ctx_);
@@ -1781,13 +1930,13 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     LOG(INFO) << "✓ Skip load verified - index empty, backfill ready";
   }
 
-  // STEP 3: Drop the index (implicitly done when schema goes out of scope)
+  // STEP 3: Drop the schema (implicitly done when schema goes out of scope)
   LOG(INFO) << "STEP 3: Index dropped (implicit)";
 
-  // STEP 4: Create vector index + numeric field + tag field + add 1000 vectors
-  // + save to RDB
-  LOG(INFO)
-      << "STEP 4: Creating mixed index with vector + numeric + tag fields";
+  // STEP 4: Create vector index + numeric index + tag index + text index + add
+  // 1000 vectors + save to RDB
+  LOG(INFO) << "STEP 4: Creating mixed schema with vector + numeric + tag + "
+               "text indexes";
   FakeSafeRDB rdb_stream_step4;
 
   {
@@ -1816,16 +1965,28 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
         std::make_shared<indexes::Tag>(CreateTagIndexProto(",", false));
     VMSDK_EXPECT_OK(index_schema->AddIndex("category", "cat_id", tag_index));
 
+    // Add text index
+    auto text_index = std::make_shared<indexes::Text>(
+        CreateTextIndexProto(true, false, 6),
+        std::make_shared<indexes::text::TextIndexSchema>(
+            data_model::LANGUAGE_ENGLISH,
+            " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", true,
+            std::vector<std::string>{}));
+    VMSDK_EXPECT_OK(
+        index_schema->AddIndex("description", "desc_id", text_index));
+
     // Add test data for all indexes
     auto vectors =
         DeterministicallyGenerateVectors(num_vectors, dimensions, 1.0);
     auto vec_itr = index_schema->attributes_.find("embedding");
     auto num_itr = index_schema->attributes_.find("price");
     auto tag_itr = index_schema->attributes_.find("category");
+    auto text_itr = index_schema->attributes_.find("description");
 
     EXPECT_FALSE(vec_itr == index_schema->attributes_.end());
     EXPECT_FALSE(num_itr == index_schema->attributes_.end());
     EXPECT_FALSE(tag_itr == index_schema->attributes_.end());
+    EXPECT_FALSE(text_itr == index_schema->attributes_.end());
 
     for (size_t i = 0; i < vectors.size(); ++i) {
       auto interned_key =
@@ -1856,6 +2017,14 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
           vmsdk::MakeUniqueValkeyString(category);
       index_schema->ProcessAttributeMutation(&fake_ctx_, tag_itr->second,
                                              interned_key, std::move(tag_data),
+                                             indexes::DeletionType::kNone);
+
+      // Add text data (description)
+      std::string description = "description" + std::to_string(i);
+      vmsdk::UniqueValkeyString text_data =
+          vmsdk::MakeUniqueValkeyString(description);
+      index_schema->ProcessAttributeMutation(&fake_ctx_, text_itr->second,
+                                             interned_key, std::move(text_data),
                                              indexes::DeletionType::kNone);
     }
 
@@ -1896,10 +2065,12 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     auto vec_index = mixed_schema->GetIndex("embedding");
     auto num_index = mixed_schema->GetIndex("price");
     auto tag_index = mixed_schema->GetIndex("category");
+    auto text_index = mixed_schema->GetIndex("description");
 
     VMSDK_EXPECT_OK_STATUSOR(vec_index);
     VMSDK_EXPECT_OK_STATUSOR(num_index);
     VMSDK_EXPECT_OK_STATUSOR(tag_index);
+    VMSDK_EXPECT_OK_STATUSOR(text_index);
 
     EXPECT_EQ(vec_index.value()->GetTrackedKeyCount(), num_vectors);
     LOG(INFO) << "✓ Mixed index normal load verified";
@@ -1967,10 +2138,12 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     auto vec_index = mixed_skip_schema->GetIndex("embedding");
     auto num_index = mixed_skip_schema->GetIndex("price");
     auto tag_index = mixed_skip_schema->GetIndex("category");
+    auto text_index = mixed_skip_schema->GetIndex("description");
 
     VMSDK_EXPECT_OK_STATUSOR(vec_index);
     VMSDK_EXPECT_OK_STATUSOR(num_index);
     VMSDK_EXPECT_OK_STATUSOR(tag_index);
+    VMSDK_EXPECT_OK_STATUSOR(text_index);
 
     EXPECT_EQ(vec_index.value()->GetTrackedKeyCount(), 0);
     EXPECT_TRUE(mixed_skip_schema->IsBackfillInProgress());

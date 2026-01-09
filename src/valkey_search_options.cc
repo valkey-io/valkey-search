@@ -298,6 +298,28 @@ static auto thread_pool_wait_time_samples =
         })
         .Build();
 
+/// Enable proximity evaluation in prefilter evaluation stage
+/// When disabled, proximity evaluation is skipped in background threads and is
+/// performed only on main thread
+constexpr absl::string_view kEnableProximityPrefilterEval{
+    "enable-proximity-prefilter-eval"};
+static auto enable_proximity_prefilter_eval =
+    config::BooleanBuilder(kEnableProximityPrefilterEval, true).Build();
+
+/// Register the "--max-term-expansions" flag. Controls the maximum number of
+/// words to search in text operations (prefix, suffix, fuzzy) to limit memory
+/// usage
+constexpr absl::string_view kMaxTermExpansionsConfig{"max-term-expansions"};
+constexpr uint32_t kDefaultMaxTermExpansions{200};     // Default 200 words
+constexpr uint32_t kMinimumMaxTermExpansions{1};       // At least 1 word
+constexpr uint32_t kMaximumMaxTermExpansions{100000};  // Max 100k words
+static auto max_term_expansions =
+    config::NumberBuilder(kMaxTermExpansionsConfig,   // name
+                          kDefaultMaxTermExpansions,  // default limit (200)
+                          kMinimumMaxTermExpansions,  // min limit (1)
+                          kMaximumMaxTermExpansions)  // max limit (100k)
+        .Build();
+
 /// Register the "search-result-buffer-multiplier" flag
 constexpr absl::string_view kSearchResultBufferMultiplierConfig{
     "search-result-buffer-multiplier"};
@@ -409,6 +431,15 @@ vmsdk::config::Number& GetLocalFanoutQueueWaitThreshold() {
 
 vmsdk::config::Number& GetThreadPoolWaitTimeSamples() {
   return dynamic_cast<vmsdk::config::Number&>(*thread_pool_wait_time_samples);
+}
+
+vmsdk::config::Boolean& GetEnableProximityPrefilterEval() {
+  return dynamic_cast<vmsdk::config::Boolean&>(
+      *enable_proximity_prefilter_eval);
+}
+
+vmsdk::config::Number& GetMaxTermExpansions() {
+  return dynamic_cast<vmsdk::config::Number&>(*max_term_expansions);
 }
 
 }  // namespace options

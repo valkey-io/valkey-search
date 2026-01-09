@@ -78,30 +78,36 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
       return numeric_predicate;
     }
     case Predicate::kAnd: {
-      VMSDK_ASSIGN_OR_RETURN(
-          auto lhs_predicate,
-          GRPCPredicateToPredicate(predicate.and_().lhs(), index_schema,
-                                   attribute_identifiers));
-      VMSDK_ASSIGN_OR_RETURN(
-          auto rhs_predicate,
-          GRPCPredicateToPredicate(predicate.and_().rhs(), index_schema,
-                                   attribute_identifiers));
+      std::vector<std::unique_ptr<query::Predicate>> children;
+      children.reserve(predicate.and_().children_size());
+      for (const auto& child_predicate : predicate.and_().children()) {
+        VMSDK_ASSIGN_OR_RETURN(
+            auto child, GRPCPredicateToPredicate(child_predicate, index_schema,
+                                                 attribute_identifiers));
+        children.push_back(std::move(child));
+      }
+      // Extract slop and inorder if present
+      std::optional<uint32_t> slop = std::nullopt;
+      bool inorder = false;
+      if (predicate.and_().has_slop()) {
+        slop = predicate.and_().slop();
+      }
+      inorder = predicate.and_().inorder();
+
       return std::make_unique<query::ComposedPredicate>(
-          std::move(lhs_predicate), std::move(rhs_predicate),
-          query::LogicalOperator::kAnd);
+          query::LogicalOperator::kAnd, std::move(children), slop, inorder);
     }
     case Predicate::kOr: {
-      VMSDK_ASSIGN_OR_RETURN(
-          auto lhs_predicate,
-          GRPCPredicateToPredicate(predicate.or_().lhs(), index_schema,
-                                   attribute_identifiers));
-      VMSDK_ASSIGN_OR_RETURN(
-          auto rhs_predicate,
-          GRPCPredicateToPredicate(predicate.or_().rhs(), index_schema,
-                                   attribute_identifiers));
+      std::vector<std::unique_ptr<query::Predicate>> children;
+      children.reserve(predicate.or_().children_size());
+      for (const auto& child_predicate : predicate.or_().children()) {
+        VMSDK_ASSIGN_OR_RETURN(
+            auto child, GRPCPredicateToPredicate(child_predicate, index_schema,
+                                                 attribute_identifiers));
+        children.push_back(std::move(child));
+      }
       return std::make_unique<query::ComposedPredicate>(
-          std::move(lhs_predicate), std::move(rhs_predicate),
-          query::LogicalOperator::kOr);
+          query::LogicalOperator::kOr, std::move(children));
     }
     case Predicate::kNegate: {
       VMSDK_ASSIGN_OR_RETURN(
@@ -109,6 +115,66 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
           GRPCPredicateToPredicate(predicate.negate().predicate(), index_schema,
                                    attribute_identifiers));
       return std::make_unique<query::NegatePredicate>(std::move(predicate));
+    }
+    case Predicate::kTerm: {
+      auto text_index_schema = index_schema->GetTextIndexSchema();
+      if (!text_index_schema) {
+        return absl::InvalidArgumentError("Index does not have any text field");
+      }
+      auto identifiers = index_schema->GetTextIdentifiersByFieldMask(
+          predicate.term().field_mask());
+      attribute_identifiers.insert(identifiers.begin(), identifiers.end());
+      return std::make_unique<query::TermPredicate>(
+          text_index_schema, predicate.term().field_mask(),
+          predicate.term().content(), predicate.term().exact());
+    }
+    case Predicate::kPrefix: {
+      auto text_index_schema = index_schema->GetTextIndexSchema();
+      if (!text_index_schema) {
+        return absl::InvalidArgumentError("Index does not have any text field");
+      }
+      auto identifiers = index_schema->GetTextIdentifiersByFieldMask(
+          predicate.term().field_mask());
+      attribute_identifiers.insert(identifiers.begin(), identifiers.end());
+      return std::make_unique<query::PrefixPredicate>(
+          text_index_schema, predicate.prefix().field_mask(),
+          predicate.prefix().content());
+    }
+    case Predicate::kSuffix: {
+      auto text_index_schema = index_schema->GetTextIndexSchema();
+      if (!text_index_schema) {
+        return absl::InvalidArgumentError("Index does not have any text field");
+      }
+      auto identifiers = index_schema->GetTextIdentifiersByFieldMask(
+          predicate.term().field_mask());
+      attribute_identifiers.insert(identifiers.begin(), identifiers.end());
+      return std::make_unique<query::SuffixPredicate>(
+          text_index_schema, predicate.suffix().field_mask(),
+          predicate.suffix().content());
+    }
+    case Predicate::kInfix: {
+      auto text_index_schema = index_schema->GetTextIndexSchema();
+      if (!text_index_schema) {
+        return absl::InvalidArgumentError("Index does not have any text field");
+      }
+      auto identifiers = index_schema->GetTextIdentifiersByFieldMask(
+          predicate.term().field_mask());
+      attribute_identifiers.insert(identifiers.begin(), identifiers.end());
+      return std::make_unique<query::InfixPredicate>(
+          text_index_schema, predicate.infix().field_mask(),
+          predicate.infix().content());
+    }
+    case Predicate::kFuzzy: {
+      auto text_index_schema = index_schema->GetTextIndexSchema();
+      if (!text_index_schema) {
+        return absl::InvalidArgumentError("Index does not have any text field");
+      }
+      auto identifiers = index_schema->GetTextIdentifiersByFieldMask(
+          predicate.term().field_mask());
+      attribute_identifiers.insert(identifiers.begin(), identifiers.end());
+      return std::make_unique<query::FuzzyPredicate>(
+          text_index_schema, predicate.fuzzy().field_mask(),
+          predicate.fuzzy().content(), predicate.fuzzy().distance());
     }
     case Predicate::PREDICATE_NOT_SET:
       return absl::InvalidArgumentError("Predicate not set");
@@ -163,6 +229,7 @@ GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request,
 std::unique_ptr<Predicate> PredicateToGRPCPredicate(
     const query::Predicate& predicate) {
   switch (predicate.GetType()) {
+    // TODO: Support CME Fanouts of TextPredicate
     case query::PredicateType::kTag: {
       auto tag_predicate = dynamic_cast<const query::TagPredicate*>(&predicate);
       auto tag_predicate_proto = std::make_unique<Predicate>();
@@ -192,24 +259,29 @@ std::unique_ptr<Predicate> PredicateToGRPCPredicate(
       auto and_predicate_proto = std::make_unique<Predicate>();
       auto composed_and_predicate =
           dynamic_cast<const query::ComposedPredicate*>(&predicate);
-      and_predicate_proto->mutable_and_()->set_allocated_lhs(
-          PredicateToGRPCPredicate(*composed_and_predicate->GetLhsPredicate())
-              .release());
-      and_predicate_proto->mutable_and_()->set_allocated_rhs(
-          PredicateToGRPCPredicate(*composed_and_predicate->GetRhsPredicate())
-              .release());
+      for (const auto& child : composed_and_predicate->GetChildren()) {
+        auto child_proto = PredicateToGRPCPredicate(*child);
+        and_predicate_proto->mutable_and_()->mutable_children()->AddAllocated(
+            child_proto.release());
+      }
+      // Add slop and inorder if present
+      if (composed_and_predicate->GetSlop().has_value()) {
+        and_predicate_proto->mutable_and_()->set_slop(
+            composed_and_predicate->GetSlop().value());
+      }
+      and_predicate_proto->mutable_and_()->set_inorder(
+          composed_and_predicate->GetInorder());
       return and_predicate_proto;
     }
     case query::PredicateType::kComposedOr: {
       auto or_predicate_proto = std::make_unique<Predicate>();
       auto composed_or_predicate =
           dynamic_cast<const query::ComposedPredicate*>(&predicate);
-      or_predicate_proto->mutable_or_()->set_allocated_lhs(
-          PredicateToGRPCPredicate(*composed_or_predicate->GetLhsPredicate())
-              .release());
-      or_predicate_proto->mutable_or_()->set_allocated_rhs(
-          PredicateToGRPCPredicate(*composed_or_predicate->GetRhsPredicate())
-              .release());
+      for (const auto& child : composed_or_predicate->GetChildren()) {
+        auto child_proto = PredicateToGRPCPredicate(*child);
+        or_predicate_proto->mutable_or_()->mutable_children()->AddAllocated(
+            child_proto.release());
+      }
       return or_predicate_proto;
     }
     case query::PredicateType::kNegate: {
@@ -220,6 +292,45 @@ std::unique_ptr<Predicate> PredicateToGRPCPredicate(
           PredicateToGRPCPredicate(*negate_predicate->GetPredicate())
               .release());
       return negate_predicate_proto;
+    }
+    case query::PredicateType::kText: {
+      if (auto term = dynamic_cast<const query::TermPredicate*>(&predicate)) {
+        auto proto = std::make_unique<Predicate>();
+        proto->mutable_term()->set_field_mask(term->GetFieldMask());
+        proto->mutable_term()->set_content(std::string(term->GetTextString()));
+        proto->mutable_term()->set_exact(term->IsExact());
+        return proto;
+      } else if (auto prefix =
+                     dynamic_cast<const query::PrefixPredicate*>(&predicate)) {
+        auto proto = std::make_unique<Predicate>();
+        proto->mutable_prefix()->set_field_mask(prefix->GetFieldMask());
+        proto->mutable_prefix()->set_content(
+            std::string(prefix->GetTextString()));
+        return proto;
+      } else if (auto suffix =
+                     dynamic_cast<const query::SuffixPredicate*>(&predicate)) {
+        auto proto = std::make_unique<Predicate>();
+        proto->mutable_suffix()->set_field_mask(suffix->GetFieldMask());
+        proto->mutable_suffix()->set_content(
+            std::string(suffix->GetTextString()));
+        return proto;
+      } else if (auto infix =
+                     dynamic_cast<const query::InfixPredicate*>(&predicate)) {
+        auto proto = std::make_unique<Predicate>();
+        proto->mutable_infix()->set_field_mask(infix->GetFieldMask());
+        proto->mutable_infix()->set_content(
+            std::string(infix->GetTextString()));
+        return proto;
+      } else if (auto fuzzy =
+                     dynamic_cast<const query::FuzzyPredicate*>(&predicate)) {
+        auto proto = std::make_unique<Predicate>();
+        proto->mutable_fuzzy()->set_field_mask(fuzzy->GetFieldMask());
+        proto->mutable_fuzzy()->set_content(
+            std::string(fuzzy->GetTextString()));
+        proto->mutable_fuzzy()->set_distance(fuzzy->GetDistance());
+        return proto;
+      }
+      return nullptr;
     }
     case query::PredicateType::kNone: {
       return nullptr;

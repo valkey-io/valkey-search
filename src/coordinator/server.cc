@@ -96,7 +96,7 @@ void RecordSearchMetrics(bool failure,
 }
 
 void SerializeNeighbors(SearchIndexPartitionResponse* response,
-                        const std::deque<indexes::Neighbor>& neighbors) {
+                        const std::vector<indexes::Neighbor>& neighbors) {
   for (const auto& neighbor : neighbors) {
     auto* neighbor_proto = response->add_neighbors();
     neighbor_proto->set_key(std::move(*neighbor.external_id));

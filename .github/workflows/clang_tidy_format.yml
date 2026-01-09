@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - fulltext
     paths:
       - 'src/**'
       - 'testing/**'
@@ -66,7 +67,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "Finding modified or added .cc and .h files..."
-          MODIFIED_FILES=$(git diff --name-only --diff-filter=AM $BASE_BRANCH | grep -E '\.(cc|h)$' || echo "")
+          MODIFIED_FILES=$(git diff --name-only --diff-filter=AM $BASE_BRANCH | grep -E '\.(cc|h)$' | grep -v '^third_party/' | grep -v '^src/indexes/text/rax/' || echo "")
 
           if [[ -z "$MODIFIED_FILES" ]]; then
             echo "No .cc or .h files modified."

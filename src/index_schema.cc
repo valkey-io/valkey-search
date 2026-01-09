@@ -37,6 +37,8 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
+#include "src/indexes/text.h"
+#include "src/indexes/text/text_index.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
@@ -53,6 +55,7 @@
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/time_sliced_mrmw_mutex.h"
@@ -129,6 +132,14 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
     }
     case data_model::Index::IndexTypeCase::kNumericIndex: {
       return std::make_shared<indexes::Numeric>(index.numeric_index());
+    }
+    case data_model::Index::IndexTypeCase::kTextIndex: {
+      // Create the TextIndexSchema if this is the first Text index we're seeing
+      if (!index_schema->GetTextIndexSchema()) {
+        index_schema->CreateTextIndexSchema();
+      }
+      return std::make_shared<indexes::Text>(
+          index.text_index(), index_schema->GetTextIndexSchema());
     }
     case data_model::Index::IndexTypeCase::kVectorIndex: {
       switch (index.vector_index().algorithm_case()) {
@@ -245,6 +256,11 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
       attribute_data_type_(std::move(attribute_data_type)),
       name_(std::string(index_schema_proto.name())),
       db_num_(index_schema_proto.db_num()),
+      language_(index_schema_proto.language()),
+      punctuation_(index_schema_proto.punctuation()),
+      with_offsets_(index_schema_proto.with_offsets()),
+      stop_words_(index_schema_proto.stop_words().begin(),
+                  index_schema_proto.stop_words().end()),
       mutations_thread_pool_(mutations_thread_pool),
       time_sliced_mutex_(CreateMrmwMutexOptions()) {
   ValkeyModule_SelectDb(detached_ctx_.get(), db_num_);
@@ -262,6 +278,7 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
       }
     }
   }
+
   // The protobuf has volatile fields that get save/restores in the RDB. here we
   // reconcile the source of the index_schema_proto (reload or not) and restore
   // those fields
@@ -296,6 +313,85 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexSchema::GetIndex(
         absl::StrCat("Index field `", attribute_alias, "` does not exist"));
   }
   return itr->second.GetIndex();
+}
+
+// Helper function called on Text index creation to precompute various text
+// schema level information that will be used for default field searches where
+// there is no field specifier.
+void IndexSchema::UpdateTextFieldMasksForIndex(const std::string &identifier,
+                                               indexes::IndexBase *index) {
+  if (index->GetIndexerType() == indexes::IndexerType::kText) {
+    auto *text_index = dynamic_cast<const indexes::Text *>(index);
+    uint64_t field_bit = 1ULL << text_index->GetTextFieldNumber();
+    // Update field masks and identifiers
+    all_text_field_mask_ |= field_bit;
+    all_text_identifiers_.insert(identifier);
+    if (text_index->WithSuffixTrie()) {
+      suffix_text_field_mask_ |= field_bit;
+      suffix_text_identifiers_.insert(identifier);
+    }
+    // Update min stem sizes
+    if (text_index->IsStemmingEnabled()) {
+      uint32_t stem_size = text_index->GetMinStemSize();
+      all_fields_min_stem_size_ =
+          all_fields_min_stem_size_.has_value()
+              ? std::min(*all_fields_min_stem_size_, stem_size)
+              : stem_size;
+      if (text_index->WithSuffixTrie()) {
+        suffix_fields_min_stem_size_ =
+            suffix_fields_min_stem_size_.has_value()
+                ? std::min(*suffix_fields_min_stem_size_, stem_size)
+                : stem_size;
+      }
+    }
+  }
+}
+
+// Returns a vector of all the text (field) identifiers within the text
+// index schema. This is intended to be used by queries where there
+// is no field specification, and we want to include results from all
+// text fields.
+// If `with_suffix` is true, we only include the fields that have suffix tree
+// enabled.
+const absl::flat_hash_set<std::string> &IndexSchema::GetAllTextIdentifiers(
+    bool with_suffix) const {
+  return with_suffix ? suffix_text_identifiers_ : all_text_identifiers_;
+}
+
+// Find the min stem size across all text fields in the text index schema.
+// If stemming is disabled across all text field indexes, return `nullopt`.
+// If `with_suffix` is true, we only check the fields that have suffix tree
+// enabled.
+std::optional<uint32_t> IndexSchema::MinStemSizeAcrossTextIndexes(
+    bool with_suffix) const {
+  return with_suffix ? suffix_fields_min_stem_size_ : all_fields_min_stem_size_;
+}
+
+// Returns the field mask including all the text fields.
+// If `with_suffix` is true, we only include fields that have suffix tree
+// enabled.
+FieldMaskPredicate IndexSchema::GetAllTextFieldMask(bool with_suffix) const {
+  return with_suffix ? suffix_text_field_mask_ : all_text_field_mask_;
+}
+
+// Helper function to return the text identifiers based on the
+// FieldMaskPredicate.
+absl::flat_hash_set<std::string> IndexSchema::GetTextIdentifiersByFieldMask(
+    FieldMaskPredicate field_mask) const {
+  absl::flat_hash_set<std::string> matches;
+  for (const auto &identifier : all_text_identifiers_) {
+    auto index_result = GetIndex(identifier);
+    if (index_result.ok() &&
+        index_result.value()->GetIndexerType() == indexes::IndexerType::kText) {
+      auto *text_index =
+          dynamic_cast<const indexes::Text *>(index_result.value().get());
+      FieldMaskPredicate field_bit = 1ULL << text_index->GetTextFieldNumber();
+      if (field_mask & field_bit) {
+        matches.insert(identifier);
+      }
+    }
+  }
+  return matches;
 }
 
 absl::StatusOr<std::string> IndexSchema::GetIdentifier(
@@ -340,6 +436,9 @@ absl::Status IndexSchema::AddIndex(absl::string_view attribute_alias,
   }
   identifier_to_alias_.insert(
       {std::string(identifier), std::string(attribute_alias)});
+  // Update schema level Text information for default field searches
+  // without any field specifier.
+  UpdateTextFieldMasksForIndex(std::string(identifier), index.get());
   return absl::OkStatus();
 }
 
@@ -477,6 +576,11 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
                                       MutatedAttributes &mutated_attributes,
                                       const InternedStringPtr &key) {
   vmsdk::WriterMutexLock lock(&time_sliced_mutex_);
+  if (text_index_schema_) {
+    // Always clean up indexed words from all text attributes of the key up
+    // front
+    text_index_schema_->DeleteKeyData(key);
+  }
   for (auto &attribute_data_itr : mutated_attributes) {
     const auto itr = attributes_.find(attribute_data_itr.first);
     if (itr == attributes_.end()) {
@@ -485,6 +589,11 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
     ProcessAttributeMutation(ctx, itr->second, key,
                              std::move(attribute_data_itr.second.data),
                              attribute_data_itr.second.deletion_type);
+  }
+  if (text_index_schema_) {
+    // Text index structures operate at the schmema-level so we commit the
+    // updates to all Text attributes in one operation for efficiency
+    text_index_schema_->CommitKeyData(key);
   }
 }
 
@@ -528,6 +637,9 @@ void IndexSchema::ProcessAttributeMutation(
           break;
         case indexes::IndexerType::kTag:
           Metrics::GetStats().ingest_field_tag++;
+          break;
+        case indexes::IndexerType::kText:
+          Metrics::GetStats().ingest_field_text++;
           break;
         default:
           // Shouldn't happen
@@ -800,7 +912,16 @@ uint64_t IndexSchema::CountRecords() const {
 }
 
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
-  ValkeyModule_ReplyWithArray(ctx, 22);
+  int arrSize = 30;
+  // Debug Text index Memory info fields
+  if (vmsdk::config::IsDebugModeEnabled()) {
+    arrSize += 8;
+  }
+  // Text-attribute info fields
+  if (text_index_schema_) {
+    arrSize += 6;
+  }
+  ValkeyModule_ReplyWithArray(ctx, arrSize);
   ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
   ValkeyModule_ReplyWithSimpleString(ctx, name_.data());
 
@@ -831,6 +952,39 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithLongLong(ctx, stats_.document_cnt);
   ValkeyModule_ReplyWithSimpleString(ctx, "num_records");
   ValkeyModule_ReplyWithLongLong(ctx, CountRecords());
+  // Text Index info fields
+  ValkeyModule_ReplyWithSimpleString(ctx, "num_total_terms");
+  ValkeyModule_ReplyWithLongLong(
+      ctx,
+      text_index_schema_ ? text_index_schema_->GetTotalTermFrequency() : 0);
+  ValkeyModule_ReplyWithSimpleString(ctx, "num_unique_terms");
+  ValkeyModule_ReplyWithLongLong(
+      ctx, text_index_schema_ ? text_index_schema_->GetNumUniqueTerms() : 0);
+  ValkeyModule_ReplyWithSimpleString(ctx, "total_postings");
+  ValkeyModule_ReplyWithLongLong(
+      ctx, text_index_schema_ ? text_index_schema_->GetNumUniqueTerms() : 0);
+
+  // Memory statistics are only shown when debug mode is enabled
+  if (vmsdk::config::IsDebugModeEnabled()) {
+    ValkeyModule_ReplyWithSimpleString(ctx, "posting_sz_bytes");
+    ValkeyModule_ReplyWithLongLong(
+        ctx,
+        text_index_schema_ ? text_index_schema_->GetPostingsMemoryUsage() : 0);
+    ValkeyModule_ReplyWithSimpleString(ctx, "position_sz_bytes");
+    ValkeyModule_ReplyWithLongLong(
+        ctx,
+        text_index_schema_ ? text_index_schema_->GetPositionMemoryUsage() : 0);
+    ValkeyModule_ReplyWithSimpleString(ctx, "radix_sz_bytes");
+    ValkeyModule_ReplyWithLongLong(
+        ctx,
+        text_index_schema_ ? text_index_schema_->GetRadixTreeMemoryUsage() : 0);
+    ValkeyModule_ReplyWithSimpleString(ctx, "total_text_index_sz_bytes");
+    ValkeyModule_ReplyWithLongLong(
+        ctx, text_index_schema_
+                 ? text_index_schema_->GetTotalTextIndexMemoryUsage()
+                 : 0);
+  }
+  // Text Index info fields end
   ValkeyModule_ReplyWithSimpleString(ctx, "hash_indexing_failures");
   ValkeyModule_ReplyWithCString(
       ctx, absl::StrFormat("%lu", stats_.subscription_add.skipped_cnt).c_str());
@@ -855,6 +1009,31 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
                .c_str());
   ValkeyModule_ReplyWithSimpleString(ctx, "state");
   ValkeyModule_ReplyWithSimpleString(ctx, GetStateForInfo().data());
+
+  // Add text-related schema fields
+  if (text_index_schema_) {
+    ValkeyModule_ReplyWithSimpleString(ctx, "punctuation");
+    ValkeyModule_ReplyWithSimpleString(ctx, punctuation_.c_str());
+
+    ValkeyModule_ReplyWithSimpleString(ctx, "stop_words");
+    ValkeyModule_ReplyWithArray(ctx, stop_words_.size());
+    for (const auto &stop_word : stop_words_) {
+      ValkeyModule_ReplyWithSimpleString(ctx, stop_word.c_str());
+    }
+
+    ValkeyModule_ReplyWithSimpleString(ctx, "with_offsets");
+    ValkeyModule_ReplyWithSimpleString(ctx, with_offsets_ ? "1" : "0");
+  }
+
+  ValkeyModule_ReplyWithSimpleString(ctx, "language");
+  switch (language_) {
+    case data_model::LANGUAGE_ENGLISH:
+      ValkeyModule_ReplyWithSimpleString(ctx, "english");
+      break;
+    default:
+      ValkeyModule_ReplyWithSimpleString(ctx, "english");
+      break;
+  }
 }
 
 bool IsVectorIndex(std::shared_ptr<indexes::IndexBase> index) {
@@ -870,6 +1049,14 @@ std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
   index_schema_proto->mutable_subscribed_key_prefixes()->Add(
       subscribed_key_prefixes_.begin(), subscribed_key_prefixes_.end());
   index_schema_proto->set_attribute_data_type(attribute_data_type_->ToProto());
+
+  // Always serialize text configurations from stored members
+  index_schema_proto->set_language(language_);
+  index_schema_proto->set_punctuation(punctuation_);
+  index_schema_proto->set_with_offsets(with_offsets_);
+  index_schema_proto->mutable_stop_words()->Assign(stop_words_.begin(),
+                                                   stop_words_.end());
+
   auto stats = index_schema_proto->mutable_stats();
   stats->set_documents_count(stats_.document_cnt);
   std::transform(
@@ -877,6 +1064,7 @@ std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
       google::protobuf::RepeatedPtrFieldBackInserter(
           index_schema_proto->mutable_attributes()),
       [](const auto &attribute) { return *attribute.second.ToProto(); });
+
   return index_schema_proto;
 }
 
@@ -1343,7 +1531,7 @@ void IndexSchema::OnLoadingEnded(ValkeyModuleCtx *ctx) {
                          << " stale entries for {Index: " << name_ << "}";
 
   for (auto &[key, attributes] : deletion_attributes) {
-    auto interned_key = std::make_shared<InternedString>(key);
+    auto interned_key = StringInternStore::Intern(key);
     ProcessMutation(ctx, attributes, interned_key, true);
   }
   VMSDK_LOG(NOTICE, ctx) << "Scanned index schema " << name_
@@ -1361,6 +1549,11 @@ vmsdk::BlockedClientCategory IndexSchema::GetBlockedCategoryFromProto() const {
     default:
       return vmsdk::BlockedClientCategory::kOther;
   }
+}
+
+bool IndexSchema::IsKeyInFlight(const InternedStringPtr &key) const {
+  absl::MutexLock lock(&mutated_records_mutex_);
+  return tracked_mutated_records_.contains(key);
 }
 
 bool IndexSchema::InTrackedMutationRecords(

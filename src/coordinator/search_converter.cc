@@ -223,6 +223,8 @@ GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request,
   }
   parameters->index_fingerprint_version = request.index_fingerprint_version();
   parameters->slot_fingerprint = request.slot_fingerprint();
+  parameters->filter_parse_results.query_operations =
+      static_cast<QueryOperations>(request.query_operations());
   return parameters;
 }
 
@@ -377,6 +379,8 @@ std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
   *request->mutable_index_fingerprint_version() =
       parameters.index_fingerprint_version;
   request->set_slot_fingerprint(parameters.slot_fingerprint);
+  request->set_query_operations(
+      static_cast<uint64_t>(parameters.filter_parse_results.query_operations));
   return request;
 }
 

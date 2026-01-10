@@ -226,9 +226,8 @@ void EvaluatePrefilteredKeys(
   // If there was a union operation, we need to handle deduplication.
   // This implementation skips deduplication (flat_hash_set usage) if not needed
   // for performance.
-  bool needs_dedup = (parameters.filter_parse_results.query_operations &
-                      QueryOperations::kContainsOr) ||
-                     ValkeySearch::Instance().IsCluster();
+  bool needs_dedup = parameters.filter_parse_results.query_operations &
+                     QueryOperations::kContainsOr;
   absl::flat_hash_set<const char *> result_keys;
   if (needs_dedup) {
     result_keys.reserve(max_keys);
@@ -440,9 +439,9 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
   // The initial search done by EvaluateFilterAsPrimary does not handle
   // union or intersection of results.
   bool skip_evaluation = true;
-  if ((parameters.filter_parse_results.query_operations &
-       (QueryOperations::kContainsOr | QueryOperations::kContainsAnd)) ||
-      ValkeySearch::Instance().IsCluster()) {
+  if (parameters.filter_parse_results.query_operations &
+      (QueryOperations::kContainsOr | QueryOperations::kContainsAnd |
+       QueryOperations::kContainsExactPhrase)) {
     skip_evaluation = false;
   }
   if (skip_evaluation) {

@@ -8,11 +8,13 @@
 #include "src/index_schema.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
 #include <memory>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -1772,6 +1774,84 @@ TEST_F(IndexSchemaTest, ShouldBlockClient) {
   EXPECT_FALSE(ShouldBlockClient(&fake_ctx, true, false));
   EXPECT_FALSE(ShouldBlockClient(&fake_ctx, false, true));
   EXPECT_FALSE(ShouldBlockClient(&fake_ctx, true, true));
+}
+
+TEST_F(IndexSchemaRDBTest, DrainMutationQueueOnSaveEnabled) {
+  // Enable drain-mutation-queue-on-save configuration
+  auto &drain_config = const_cast<vmsdk::config::Boolean &>(
+      options::GetDrainMutationQueueOnSave());
+  auto drain_config_old_value = drain_config.GetValue();
+  VMSDK_EXPECT_OK(drain_config.SetValue(true));
+
+  vmsdk::ThreadPool mutations_thread_pool("test-mutations-", 1);
+  mutations_thread_pool.StartWorkers();
+
+  std::vector<absl::string_view> key_prefixes = {"test:"};
+  std::string index_schema_name_str("drain_test_index");
+  auto index_schema =
+      MockIndexSchema::Create(&fake_ctx_, index_schema_name_str, key_prefixes,
+                              std::make_unique<HashAttributeDataType>(),
+                              &mutations_thread_pool)
+          .value();
+
+  auto mock_index = std::make_shared<MockIndex>();
+  VMSDK_EXPECT_OK(
+      index_schema->AddIndex("test_attribute", "test_identifier", mock_index));
+
+  // Set up mock expectations for creating a queued mutation
+  EXPECT_CALL(*mock_index, IsTracked(testing::_)).WillRepeatedly(Return(false));
+  EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
+      .WillRepeatedly(Return(VALKEYMODULE_KEYTYPE_HASH));
+
+  ValkeyModuleString *test_data =
+      TestValkeyModule_CreateStringPrintf(nullptr, "test_data");
+  EXPECT_CALL(*kMockValkeyModule, HashGet(testing::_, VALKEYMODULE_HASH_CFIELDS,
+                                          testing::StrEq("test_identifier"),
+                                          testing::An<ValkeyModuleString **>(),
+                                          testing::TypedEq<void *>(nullptr)))
+      .WillOnce([test_data](ValkeyModuleKey *, int, const char *,
+                            ValkeyModuleString **value_out, void *) {
+        *value_out = test_data;
+        return VALKEYMODULE_OK;
+      });
+
+  // Temporarily suspend workers to create queued mutations
+  VMSDK_EXPECT_OK(mutations_thread_pool.SuspendWorkers());
+
+  // Trigger keyspace notification to create a queued mutation
+  auto key_str = vmsdk::MakeUniqueValkeyString("test:key1");
+  index_schema->OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
+                                       "event", key_str.get());
+
+  // Verify mutation is queued
+  EXPECT_GT(mutations_thread_pool.QueueSize(), 0);
+
+  // Save RDB
+  FakeSafeRDB rdb_stream;
+  std::atomic<bool> rdb_save_started{false};
+  std::atomic<bool> rdb_save_completed{false};
+  std::thread rdb_saver_thread(
+      [index_schema, &rdb_stream, &rdb_save_started, &rdb_save_completed]() {
+        rdb_save_started.store(true);
+        auto save_result = index_schema->RDBSave(&rdb_stream);
+        rdb_save_completed.store(save_result.ok());
+      });
+
+  // Save is expected to be blocked
+  while (!rdb_save_started.load()) {
+    std::this_thread::yield();
+  }
+  std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  EXPECT_FALSE(rdb_save_completed.load());
+
+  // Resume mutations_thread_pool workers to unblock save
+  VMSDK_EXPECT_OK(mutations_thread_pool.ResumeWorkers());
+  rdb_saver_thread.join();
+  EXPECT_TRUE(rdb_save_completed.load());
+  EXPECT_EQ(mutations_thread_pool.QueueSize(), 0);
+
+  // Reset configuration
+  VMSDK_EXPECT_OK(drain_config.SetValue(drain_config_old_value));
 }
 
 TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {

@@ -917,6 +917,7 @@ int raxFind(rax *rax, unsigned char *s, size_t len, void **value) {
     return 1;
 }
 
+/* BEGIN SEARCH */
 /* Atomically mutates the value at the given key by calling the provided
  * callback function. The callback receives the current value (NULL if the
  * key doesn't exist) and caller context, and returns the new value (NULL
@@ -961,6 +962,7 @@ int raxMutate(rax *rax, unsigned char *s, size_t len, raxMutateCallback callback
         return 1;
     }
 }
+/* END SEARCH */
 
 /* Return the memory address where the 'parent' node stores the specified
  * 'child' pointer, so that the caller can update the pointer with another

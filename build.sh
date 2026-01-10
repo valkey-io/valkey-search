@@ -281,7 +281,7 @@ function build() {
 function format() {
     cd "${ROOT_DIR}"
     printf "Formatting...\n"
-    find src testing vmsdk/src vmsdk/testing -name "*.h" -o -name "*.cc" | xargs clang-format -i
+    find src testing vmsdk/src vmsdk/testing -name "*.h" -o -name "*.cc" | grep -v '^src/indexes/text/rax/' | xargs clang-format -i
     printf "Applied clang-format\n"
 }
 

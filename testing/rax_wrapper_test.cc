@@ -301,64 +301,20 @@ TEST_F(RaxTest, DeleteLeafNodeWordComplexScenarios) {
   VerifyWordCount(2);
 }
 
-// Test WordIterator functionality
 TEST_F(RaxTest, WordIteratorBasic) {
-  // Create tree: cat/car/card/dog, test "ca" prefix iteration (lexical order:
-  // car, card, cat)
+  // Iterate over empty tree
+  VerifyIterator("test", {});
+  VerifyIterator("", {});
+
+  // Add words and verify prefix iteration (lexical order)
   AddWords({{"cat", 1}, {"car", 2}, {"card", 3}, {"dog", 4}});
-  VerifyIterator("ca", {{"car", 2}, {"card", 3}, {"cat", 1}});
-}
-
-TEST_F(RaxTest, WordIteratorEmpty) {
-  // Test iterator on empty tree
-  auto iter = rax_.GetWordIterator("test");
-  EXPECT_TRUE(iter.Done());
-}
-
-TEST_F(RaxTest, WordIteratorNoMatch) {
-  rax_.MutateTarget("hello", [](void* old) {
-    if (old) delete static_cast<TestTarget*>(old);
-    return static_cast<void*>(new TestTarget(1));
-  });
-
-  // Test iterator with non-matching prefix
-  auto iter = rax_.GetWordIterator("world");
-  EXPECT_TRUE(iter.Done());
-}
-
-TEST_F(RaxTest, WordIteratorSingleWord) {
-  rax_.MutateTarget("test", [](void* old) {
-    if (old) delete static_cast<TestTarget*>(old);
-    return static_cast<void*>(new TestTarget(42));
-  });
-
-  auto iter = rax_.GetWordIterator("test");
-  EXPECT_FALSE(iter.Done());
-  EXPECT_EQ(iter.GetWord(), "test");
-  EXPECT_EQ(static_cast<TestTarget*>(iter.GetTarget())->value, 42);
-
-  iter.Next();
-  EXPECT_TRUE(iter.Done());
-}
-
-TEST_F(RaxTest, WordIteratorCompressedPaths) {
-  // Test with compressed paths: testing/test/tester with "test" prefix
-  AddWords({{"testing", 1}, {"test", 2}, {"tester", 3}});
-  VerifyIterator("test", {{"test", 2}, {"tester", 3}, {"testing", 1}});
-}
-
-TEST_F(RaxTest, WordIteratorRootPrefix) {
-  // Test iterator with empty prefix (should get all words in lexical order)
-  AddWords({{"a", 1}, {"b", 2}, {"c", 3}});
-  VerifyIterator("", {{"a", 1}, {"b", 2}, {"c", 3}});
-}
-
-TEST_F(RaxTest, WordIteratorComplexTree) {
-  // Build complex tree: app/application/apple/apply/a, test "app" prefix
-  AddWords(
-      {{"app", 1}, {"application", 2}, {"apple", 3}, {"apply", 4}, {"a", 5}});
-  VerifyIterator("app",
-                 {{"app", 1}, {"apple", 3}, {"application", 2}, {"apply", 4}});
+  VerifyIterator("c", {{"car", 2}, {"card", 3}, {"cat", 1}}); // partial match in compressed edge
+  VerifyIterator("ca", {{"car", 2}, {"card", 3}, {"cat", 1}}); // full match compressed edge
+  VerifyIterator("xyz", {});  // no match
+  VerifyIterator("cardinality", {}); // no match
+  AddWords({{"a", 5}, {"app", 6}, {"apple", 7}, {"b", 8}});
+  VerifyIterator("a", {{"a", 5}, {"app", 6}, {"apple", 7}}); // full match branching edge
+  VerifyIterator("", {{"a", 5}, {"app", 6}, {"apple", 7}, {"b", 8}, {"car", 2}, {"card", 3}, {"cat", 1}, {"dog", 4}});
 }
 
 TEST_F(RaxTest, WordIteratorLargeScale) {

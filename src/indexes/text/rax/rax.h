@@ -178,6 +178,7 @@ typedef int (*raxNodeCallback)(raxNode **noderef);
 #define RAX_ITER_EOF (1 << 1)         /* End of iteration reached. */
 #define RAX_ITER_SAFE (1 << 2)        /* Safe iterator, allows operations while \
                                          iterating. But it is slower. */
+#define RAX_ITER_SUB_TREE (1 << 3) /* SEARCH - restrict iteration to sub-tree. */
 typedef struct raxIterator {
     int flags;
     rax *rt;            /* Radix tree we are iterating. */
@@ -189,6 +190,7 @@ typedef struct raxIterator {
     raxNode *node;           /* Current node. Only for unsafe iteration. */
     raxStack stack;          /* Stack used for unsafe iteration. */
     raxNodeCallback node_cb; /* Optional node callback. Normally set to NULL. */
+    raxNode *head; /* SEARCH - Used to limit iteration to a subtree */
 } raxIterator;
 
 /* Callback type for raxMutate. Receives current value (NULL if key doesn't exist)
@@ -205,6 +207,7 @@ int raxMutate(rax *rax, unsigned char *s, size_t len, raxMutateCallback callback
 void raxFree(rax *rax);
 void raxFreeWithCallback(rax *rax, void (*free_callback)(void *));
 void raxStart(raxIterator *it, rax *rt);
+int raxSeekSubTree(raxIterator *it, unsigned char *ele, size_t len); // SEARCH
 int raxSeek(raxIterator *it, const char *op, unsigned char *ele, size_t len);
 int raxNext(raxIterator *it);
 int raxPrev(raxIterator *it);

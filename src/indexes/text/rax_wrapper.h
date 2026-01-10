@@ -12,14 +12,15 @@
 
 Wrapper for Rax, a memory-efficient radix tree.
 
-In addition to normal insert/delete operations, the WordIterator supports iteration across multiple word entries that share a common prefix.
-Iteration is always done in lexical order.
+In addition to normal insert/delete operations, the WordIterator supports
+iteration across multiple word entries that share a common prefix. Iteration is
+always done in lexical order.
 
 A PathIterator API is also provided to enable fuzzy searching.
 
-TODO: Another feature of a RadixTree is the ability to provide a count of the entries
-that have a common prefix in O(len(prefix)) time. This is useful in query
-planning.
+TODO: Another feature of a RadixTree is the ability to provide a count of the
+entries that have a common prefix in O(len(prefix)) time. This is useful in
+query planning.
 
 */
 
@@ -48,8 +49,7 @@ namespace valkey_search::indexes::text {
 class Postings;
 
 class Rax {
-
-public:
+ public:
   class WordIterator;
   class PathIterator;
 
@@ -57,11 +57,11 @@ public:
   // If provided, callback will be invoked for each target during destruction.
   explicit Rax(void (*free_callback)(void*) = nullptr);
   ~Rax();
-  
+
   // Move constructor and assignment
   Rax(Rax&& other) noexcept;
   Rax& operator=(Rax&& other) noexcept;
-  
+
   // Delete copy constructor and assignment (Rax owns its internal state)
   Rax(const Rax&) = delete;
   Rax& operator=(const Rax&) = delete;
@@ -182,11 +182,11 @@ public:
     // Destructor - cleans up iterator
     ~WordIterator();
 
-    // Disable copy, enable move
+    // Simply disabling copy and move until needed
     WordIterator(const WordIterator&) = delete;
     WordIterator& operator=(const WordIterator&) = delete;
-    WordIterator(WordIterator&& other) noexcept;
-    WordIterator& operator=(WordIterator&& other) noexcept;
+    WordIterator(WordIterator&& other) noexcept = delete;
+    WordIterator& operator=(WordIterator&& other) noexcept = delete;
 
     // Is iterator valid?
     bool Done() const;
@@ -199,6 +199,7 @@ public:
     // this iterator, then it immediately becomes invalid. The return boolean
     // indicates if the landing spot is equal to the specified word (true) or
     // greater (false).
+    // TODO(Brennan): do we need this?
     bool SeekForward(absl::string_view word);
 
     // Access the current location, asserts if !Done()
@@ -213,7 +214,7 @@ public:
 
     raxIterator iter_;
     std::string prefix_;
-    bool valid_ = false;
+    bool done_ = false;
   };
 
   //
@@ -278,12 +279,12 @@ public:
     // Private constructor for DescendNew - directly positions at a node
     PathIterator(rax* rax, raxNode* node, std::string path);
 
-    rax* rax_;                 // Reference to the rax tree
-    raxNode* node_;            // Current node we're at
-    std::string path_;         // Path to current node
-    size_t child_index_;       // Current child index (for branching nodes)
-    bool exhausted_;           // True when all children visited
-    std::string child_edge_;   // Cached edge for GetChildEdge()
+    rax* rax_;                // Reference to the rax tree
+    raxNode* node_;           // Current node we're at
+    std::string path_;        // Path to current node
+    size_t child_index_;      // Current child index (for branching nodes)
+    bool exhausted_;          // True when all children visited
+    std::string child_edge_;  // Cached edge for GetChildEdge()
   };
 };
 

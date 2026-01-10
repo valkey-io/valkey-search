@@ -10,6 +10,8 @@
 #include <cerrno>
 #include <cstring>
 
+#include "absl/log/check.h"
+
 #include "src/indexes/text/posting.h"
 
 namespace valkey_search::indexes::text {
@@ -99,107 +101,56 @@ Rax::WordIterator::WordIterator(rax* rax, absl::string_view prefix)
     : prefix_(prefix) {
   raxStart(&iter_, rax);
 
-  // Seek to prefix with ">=" operator (works for empty prefix too)
-  int seek_result = raxSeek(&iter_, ">=",
+  // Seek to first node matching the prefix
+  CHECK(raxSeekSubTree(&iter_,
                             const_cast<unsigned char*>(
                                 reinterpret_cast<const unsigned char*>(prefix.data())),
-                            prefix.size());
-  
-  // After raxSeek, we need to call raxNext to actually position at the first data node
-  // raxSeek positions the iterator in the tree but doesn't guarantee we're at a data node
-  valid_ = seek_result && raxNext(&iter_);
-
-  // Check if we're still in the prefix range
-  if (valid_ && !raxEOF(&iter_)) {
-    absl::string_view current_key(reinterpret_cast<const char*>(iter_.key),
-                                  iter_.key_len);
-    if (!current_key.starts_with(prefix)) {
-      valid_ = false;
-    }
-  } else {
-    valid_ = false;
+                            prefix.size()));
+  raxNext(&iter_);
+  if (raxEOF(&iter_)) {
+    done_ = true;
   }
 }
 
 Rax::WordIterator::~WordIterator() { raxStop(&iter_); }
 
-Rax::WordIterator::WordIterator(WordIterator&& other) noexcept
-    : iter_(other.iter_),
-      prefix_(std::move(other.prefix_)),
-      valid_(other.valid_) {
-  // Invalidate the source iterator
-  other.valid_ = false;
-}
-
-typename Rax::WordIterator& Rax::WordIterator::operator=(
-    WordIterator&& other) noexcept {
-  if (this != &other) {
-    raxStop(&iter_);
-    iter_ = other.iter_;
-    prefix_ = std::move(other.prefix_);
-    valid_ = other.valid_;
-    other.valid_ = false;
-  }
-  return *this;
-}
-
 bool Rax::WordIterator::Done() const { 
-  return !valid_ || raxEOF(const_cast<raxIterator*>(&iter_)); 
+  return done_; 
 }
 
 void Rax::WordIterator::Next() {
-  if (Done()) return;
+  CHECK(!Done()) << "Out of range";
 
-  if (!raxNext(&iter_)) {
-    valid_ = false;
+  raxNext(&iter_);
+  if (raxEOF(&iter_)) {
+    done_ = true;
     return;
-  }
-
-  // Check if still within prefix
-  if (!raxEOF(&iter_)) {
-    absl::string_view current_key(reinterpret_cast<const char*>(iter_.key),
-                                  iter_.key_len);
-    if (!current_key.starts_with(prefix_)) {
-      valid_ = false;
-    }
-  } else {
-    valid_ = false;
   }
 }
 
+// TODO: currently unused and untested
 bool Rax::WordIterator::SeekForward(absl::string_view word) {
-  if (Done()) return false;
+  CHECK(!Done()) << "Out of range";
 
   // Check if word matches prefix
   if (!word.starts_with(prefix_)) {
-    valid_ = false;
+    done_ = true;
     return false;
   }
 
   // Seek to the word
-  if (!raxSeek(&iter_, ">=",
+  CHECK(!raxSeekSubTree(&iter_,
                const_cast<unsigned char*>(
                    reinterpret_cast<const unsigned char*>(word.data())),
-               word.size())) {
-    valid_ = false;
-    return false;
-  }
-
+               word.size()));
+  raxNext(&iter_);
   if (raxEOF(&iter_)) {
-    valid_ = false;
-    return false;
-  }
-
-  // Check if we're still in prefix range
-  absl::string_view current_key(reinterpret_cast<const char*>(iter_.key),
-                                iter_.key_len);
-  if (!current_key.starts_with(prefix_)) {
-    valid_ = false;
+    done_ = true;
     return false;
   }
 
   // Return true if exact match, false if greater
-  return current_key == word;
+  return GetWord() == word;
 }
 
 absl::string_view Rax::WordIterator::GetWord() const {

@@ -34,14 +34,13 @@ static absl::Status DumpKey(ValkeyModuleCtx* ctx, auto& ki,
 
 static absl::Status DumpWord(ValkeyModuleCtx* ctx, auto& wi, bool with_keys,
                              bool with_positions) {
-    auto word = wi.GetWord();
+  auto word = wi.GetWord();
   if (with_keys) {
     auto postings = wi.GetPostingsTarget();
     auto ki = postings->GetKeyIterator();
     auto key_count = postings->GetKeyCount();
     ValkeyModule_ReplyWithArray(ctx, 1 + key_count);
-    ValkeyModule_ReplyWithStringBuffer(ctx, word.data(),
-                                       word.size());
+    ValkeyModule_ReplyWithStringBuffer(ctx, word.data(), word.size());
     size_t count = 0;
     while (ki.IsValid()) {
       VMSDK_RETURN_IF_ERROR(DumpKey(ctx, ki, with_positions));
@@ -54,8 +53,7 @@ static absl::Status DumpWord(ValkeyModuleCtx* ctx, auto& wi, bool with_keys,
           " Expected: ", postings->GetKeyCount()));
     }
   } else {
-    ValkeyModule_ReplyWithStringBuffer(ctx, word.data(),
-                                       word.size());
+    ValkeyModule_ReplyWithStringBuffer(ctx, word.data(), word.size());
   }
   return absl::OkStatus();
 }

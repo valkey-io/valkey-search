@@ -15,16 +15,16 @@
 namespace valkey_search::indexes::text {
 
 namespace detail {
-  template <typename T>
-  struct InvasivePtrStorage {
-    template <typename... Args>
-    explicit InvasivePtrStorage(Args&&... args)
-        : data_(std::forward<Args>(args)...) {}
+template <typename T>
+struct InvasivePtrStorage {
+  template <typename... Args>
+  explicit InvasivePtrStorage(Args&&... args)
+      : data_(std::forward<Args>(args)...) {}
 
-    std::atomic<uint32_t> refcount_ = 1;
-    T data_;
-  };
-}
+  std::atomic<uint32_t> refcount_ = 1;
+  T data_;
+};
+}  // namespace detail
 
 // Raw invasive pointer opaque alias
 template <typename T>
@@ -59,7 +59,8 @@ class InvasivePtr {
   template <typename... Args>
   static InvasivePtr Make(Args&&... args) {
     InvasivePtr result;
-    result.ptr_ = new detail::InvasivePtrStorage<T>(std::forward<Args>(args)...);
+    result.ptr_ =
+        new detail::InvasivePtrStorage<T>(std::forward<Args>(args)...);
     return result;
   }
 
@@ -108,8 +109,8 @@ class InvasivePtr {
     return result;
   }
 
-  // Every ReleaseRaw() should be paired with a corresponding AdoptRaw() later to
-  // restore safe memory management.
+  // Every ReleaseRaw() should be paired with a corresponding AdoptRaw() later
+  // to restore safe memory management.
   static InvasivePtr AdoptRaw(InvasivePtrRaw<T> raw_ptr) {
     return InvasivePtr(raw_ptr);
   }

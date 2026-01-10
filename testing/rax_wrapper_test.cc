@@ -6,6 +6,8 @@
 
 // NOTE: This is based off the original RadixTree tests
 
+#include "src/indexes/text/rax_wrapper.h"
+
 #include <algorithm>
 #include <ctime>
 #include <map>
@@ -15,7 +17,6 @@
 #include <vector>
 
 #include "gtest/gtest.h"
-#include "src/indexes/text/rax_wrapper.h"
 #include "vmsdk/src/testing_infra/utils.h"
 
 namespace valkey_search::indexes::text {
@@ -27,9 +28,7 @@ struct TestTarget {
   explicit TestTarget(int v) : value(v) {}
 };
 
-static void FreeTestTarget(void* ptr) {
-  delete static_cast<TestTarget*>(ptr);
-}
+static void FreeTestTarget(void* ptr) { delete static_cast<TestTarget*>(ptr); }
 
 class RaxTest : public vmsdk::ValkeyTest {
  protected:
@@ -308,13 +307,25 @@ TEST_F(RaxTest, WordIteratorBasic) {
 
   // Add words and verify prefix iteration (lexical order)
   AddWords({{"cat", 1}, {"car", 2}, {"card", 3}, {"dog", 4}});
-  VerifyIterator("c", {{"car", 2}, {"card", 3}, {"cat", 1}}); // partial match in compressed edge
-  VerifyIterator("ca", {{"car", 2}, {"card", 3}, {"cat", 1}}); // full match compressed edge
-  VerifyIterator("xyz", {});  // no match
-  VerifyIterator("cardinality", {}); // no match
+  VerifyIterator("c", {{"car", 2},
+                       {"card", 3},
+                       {"cat", 1}});  // partial match in compressed edge
+  VerifyIterator(
+      "ca",
+      {{"car", 2}, {"card", 3}, {"cat", 1}});  // full match compressed edge
+  VerifyIterator("xyz", {});                   // no match
+  VerifyIterator("cardinality", {});           // no match
   AddWords({{"a", 5}, {"app", 6}, {"apple", 7}, {"b", 8}});
-  VerifyIterator("a", {{"a", 5}, {"app", 6}, {"apple", 7}}); // full match branching edge
-  VerifyIterator("", {{"a", 5}, {"app", 6}, {"apple", 7}, {"b", 8}, {"car", 2}, {"card", 3}, {"cat", 1}, {"dog", 4}});
+  VerifyIterator(
+      "a", {{"a", 5}, {"app", 6}, {"apple", 7}});  // full match branching edge
+  VerifyIterator("", {{"a", 5},
+                      {"app", 6},
+                      {"apple", 7},
+                      {"b", 8},
+                      {"car", 2},
+                      {"card", 3},
+                      {"cat", 1},
+                      {"dog", 4}});
 }
 
 TEST_F(RaxTest, WordIteratorLargeScale) {

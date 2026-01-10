@@ -11,7 +11,6 @@
 #include <cstring>
 
 #include "absl/log/check.h"
-
 #include "src/indexes/text/posting.h"
 
 namespace valkey_search::indexes::text {
@@ -28,9 +27,8 @@ extern "C" void* MutateCallbackWrapper(void* current, void* caller_context) {
 
 }  // namespace
 
-
 // Constructor
-Rax::Rax(void (*free_callback)(void*)) 
+Rax::Rax(void (*free_callback)(void*))
     : rax_(raxNew()), free_callback_(free_callback) {
   CHECK(rax_ != nullptr) << "Failed to create rax tree";
 }
@@ -44,7 +42,7 @@ Rax::~Rax() {
 }
 
 // Move constructor
-Rax::Rax(Rax&& other) noexcept 
+Rax::Rax(Rax&& other) noexcept
     : rax_(other.rax_), free_callback_(other.free_callback_) {
   other.rax_ = nullptr;
   other.free_callback_ = nullptr;
@@ -71,8 +69,10 @@ void Rax::MutateTarget(absl::string_view word,
   unsigned char* c_word = const_cast<unsigned char*>(
       reinterpret_cast<const unsigned char*>(word.data()));
   void* opaque_callback = reinterpret_cast<void*>(&mutate);
-  int res = raxMutate(rax_, c_word, word.size(), MutateCallbackWrapper, opaque_callback);
-  CHECK(res) << "Rax mutation failed for word: " << word << ", errno: " << errno << " (" << strerror(errno) << ")";
+  int res = raxMutate(rax_, c_word, word.size(), MutateCallbackWrapper,
+                      opaque_callback);
+  CHECK(res) << "Rax mutation failed for word: " << word << ", errno: " << errno
+             << " (" << strerror(errno) << ")";
 }
 
 size_t Rax::GetTotalWordCount() const { return raxSize(rax_); }
@@ -87,9 +87,7 @@ size_t Rax::GetLongestWord() const {
   return 0;
 }
 
-bool Rax::IsValid() const { 
-  return rax_ != nullptr && raxSize(rax_) > 0; 
-}
+bool Rax::IsValid() const { return rax_ != nullptr && raxSize(rax_) > 0; }
 
 Rax::WordIterator Rax::GetWordIterator(absl::string_view prefix) const {
   return WordIterator(rax_, prefix);
@@ -102,10 +100,11 @@ Rax::WordIterator::WordIterator(rax* rax, absl::string_view prefix)
   raxStart(&iter_, rax);
 
   // Seek to first node matching the prefix
-  CHECK(raxSeekSubTree(&iter_,
-                            const_cast<unsigned char*>(
-                                reinterpret_cast<const unsigned char*>(prefix.data())),
-                            prefix.size()));
+  CHECK(
+      raxSeekSubTree(&iter_,
+                     const_cast<unsigned char*>(
+                         reinterpret_cast<const unsigned char*>(prefix.data())),
+                     prefix.size()));
   raxNext(&iter_);
   if (raxEOF(&iter_)) {
     done_ = true;
@@ -114,9 +113,7 @@ Rax::WordIterator::WordIterator(rax* rax, absl::string_view prefix)
 
 Rax::WordIterator::~WordIterator() { raxStop(&iter_); }
 
-bool Rax::WordIterator::Done() const { 
-  return done_; 
-}
+bool Rax::WordIterator::Done() const { return done_; }
 
 void Rax::WordIterator::Next() {
   CHECK(!Done()) << "Out of range";
@@ -139,10 +136,11 @@ bool Rax::WordIterator::SeekForward(absl::string_view word) {
   }
 
   // Seek to the word
-  CHECK(!raxSeekSubTree(&iter_,
-               const_cast<unsigned char*>(
-                   reinterpret_cast<const unsigned char*>(word.data())),
-               word.size()));
+  CHECK(
+      !raxSeekSubTree(&iter_,
+                      const_cast<unsigned char*>(
+                          reinterpret_cast<const unsigned char*>(word.data())),
+                      word.size()));
   raxNext(&iter_);
   if (raxEOF(&iter_)) {
     done_ = true;
@@ -175,7 +173,8 @@ namespace {
 
 // Helper to compute padding for rax node
 inline size_t RaxPadding(size_t nodesize) {
-  return (sizeof(void*) - ((nodesize + 4) % sizeof(void*))) & (sizeof(void*) - 1);
+  return (sizeof(void*) - ((nodesize + 4) % sizeof(void*))) &
+         (sizeof(void*) - 1);
 }
 
 // Helper to get pointer to first child in a rax node
@@ -186,16 +185,16 @@ inline raxNode** RaxNodeFirstChildPtr(raxNode* n) {
 // Helper to get data stored in a rax node
 inline void* RaxNodeGetData(raxNode* n) {
   if (!n->iskey || n->isnull) return nullptr;
-  size_t node_len = sizeof(raxNode) + n->size + RaxPadding(n->size) +
-                    (n->iscompr ? sizeof(raxNode*) : sizeof(raxNode*) * n->size) +
-                    sizeof(void*);
-  return *reinterpret_cast<void**>(reinterpret_cast<char*>(n) + node_len - sizeof(void*));
+  size_t node_len =
+      sizeof(raxNode) + n->size + RaxPadding(n->size) +
+      (n->iscompr ? sizeof(raxNode*) : sizeof(raxNode*) * n->size) +
+      sizeof(void*);
+  return *reinterpret_cast<void**>(reinterpret_cast<char*>(n) + node_len -
+                                   sizeof(void*));
 }
 
 // Helper to check if node is a leaf (no children)
-inline bool RaxNodeIsLeaf(raxNode* n) {
-  return n->size == 0 && !n->iscompr;
-}
+inline bool RaxNodeIsLeaf(raxNode* n) { return n->size == 0 && !n->iscompr; }
 
 }  // namespace
 
@@ -218,11 +217,13 @@ Rax::PathIterator::PathIterator(rax* rax, absl::string_view prefix)
     if (h->iscompr) {
       // Compressed node: check how much of the path matches
       size_t match = 0;
-      size_t max_match = std::min(static_cast<size_t>(h->size), prefix.size() - i);
-      while (match < max_match && h->data[match] == static_cast<unsigned char>(prefix[i + match])) {
+      size_t max_match =
+          std::min(static_cast<size_t>(h->size), prefix.size() - i);
+      while (match < max_match &&
+             h->data[match] == static_cast<unsigned char>(prefix[i + match])) {
         match++;
       }
-      
+
       if (match < h->size) {
         // Partial match or no match - prefix not fully in tree
         if (match < prefix.size() - i) {
@@ -263,32 +264,11 @@ Rax::PathIterator::~PathIterator() = default;
 
 // Private constructor for DescendNew - directly positions at a node
 Rax::PathIterator::PathIterator(rax* rax, raxNode* node, std::string path)
-    : rax_(rax), node_(node), path_(std::move(path)), child_index_(0), exhausted_(false) {}
-
-Rax::PathIterator::PathIterator(PathIterator&& other) noexcept
-    : rax_(other.rax_),
-      node_(other.node_),
-      path_(std::move(other.path_)),
-      child_index_(other.child_index_),
-      exhausted_(other.exhausted_),
-      child_edge_(std::move(other.child_edge_)) {
-  other.node_ = nullptr;
-  other.exhausted_ = true;
-}
-
-Rax::PathIterator& Rax::PathIterator::operator=(PathIterator&& other) noexcept {
-  if (this != &other) {
-    rax_ = other.rax_;
-    node_ = other.node_;
-    path_ = std::move(other.path_);
-    child_index_ = other.child_index_;
-    exhausted_ = other.exhausted_;
-    child_edge_ = std::move(other.child_edge_);
-    other.node_ = nullptr;
-    other.exhausted_ = true;
-  }
-  return *this;
-}
+    : rax_(rax),
+      node_(node),
+      path_(std::move(path)),
+      child_index_(0),
+      exhausted_(false) {}
 
 bool Rax::PathIterator::Done() const {
   if (!node_ || exhausted_) return true;
@@ -300,13 +280,11 @@ bool Rax::PathIterator::Done() const {
   return false;
 }
 
-bool Rax::PathIterator::IsWord() const {
-  return node_ && node_->iskey;
-}
+bool Rax::PathIterator::IsWord() const { return node_ && node_->iskey; }
 
 void Rax::PathIterator::NextChild() {
   if (!node_ || exhausted_) return;
-  
+
   if (node_->iscompr || RaxNodeIsLeaf(node_)) {
     // Compressed or leaf: only one "child", mark as exhausted after first
     exhausted_ = true;
@@ -318,21 +296,22 @@ void Rax::PathIterator::NextChild() {
 
 bool Rax::PathIterator::SeekForward(char target) {
   if (!node_ || exhausted_) return false;
-  
+
   if (node_->iscompr) {
     // Compressed node: check if first char of compressed path matches
-    if (node_->size > 0 && node_->data[0] == static_cast<unsigned char>(target)) {
+    if (node_->size > 0 &&
+        node_->data[0] == static_cast<unsigned char>(target)) {
       return true;
     }
     exhausted_ = true;
     return false;
   }
-  
+
   if (RaxNodeIsLeaf(node_)) {
     exhausted_ = true;
     return false;
   }
-  
+
   // Branching node: binary-like search for target (children are sorted)
   unsigned char t = static_cast<unsigned char>(target);
   for (size_t i = child_index_; i < node_->size; i++) {
@@ -358,16 +337,16 @@ bool Rax::PathIterator::CanDescend() const {
 
 Rax::PathIterator Rax::PathIterator::DescendNew() const {
   CHECK(CanDescend()) << "Cannot descend from leaf or exhausted iterator";
-  
+
   if (node_->iscompr) {
     // Compressed: descend through the compressed path to child
     std::string new_path = path_;
     new_path.append(reinterpret_cast<const char*>(node_->data), node_->size);
-    raxNode* child = *reinterpret_cast<raxNode**>(
-        node_->data + node_->size + RaxPadding(node_->size));
+    raxNode* child = *reinterpret_cast<raxNode**>(node_->data + node_->size +
+                                                  RaxPadding(node_->size));
     return PathIterator(rax_, child, std::move(new_path));
   }
-  
+
   // Branching: descend through current child
   std::string new_path = path_;
   new_path += static_cast<char>(node_->data[child_index_]);
@@ -375,16 +354,14 @@ Rax::PathIterator Rax::PathIterator::DescendNew() const {
   return PathIterator(rax_, children[child_index_], std::move(new_path));
 }
 
-absl::string_view Rax::PathIterator::GetPath() const {
-  return path_;
-}
+absl::string_view Rax::PathIterator::GetPath() const { return path_; }
 
 absl::string_view Rax::PathIterator::GetChildEdge() {
   if (!node_ || exhausted_) {
     child_edge_.clear();
     return child_edge_;
   }
-  
+
   if (node_->iscompr) {
     // Compressed: edge is the entire compressed path
     child_edge_.assign(reinterpret_cast<const char*>(node_->data), node_->size);

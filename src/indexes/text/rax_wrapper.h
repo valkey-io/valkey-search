@@ -182,7 +182,7 @@ class Rax {
     // Destructor - cleans up iterator
     ~WordIterator();
 
-    // Simply disabling copy and move until needed
+    // Disabling copy and move semantics until we need them
     WordIterator(const WordIterator&) = delete;
     WordIterator& operator=(const WordIterator&) = delete;
     WordIterator(WordIterator&& other) noexcept = delete;
@@ -231,11 +231,11 @@ class Rax {
     // Destructor
     ~PathIterator();
 
-    // Disable copy, enable move
-    PathIterator(const PathIterator&) = delete;
-    PathIterator& operator=(const PathIterator&) = delete;
-    PathIterator(PathIterator&& other) noexcept;
-    PathIterator& operator=(PathIterator&& other) noexcept;
+    // Default copy and move semantics
+    PathIterator(const PathIterator&) = default;
+    PathIterator& operator=(const PathIterator&) = default;
+    PathIterator(PathIterator&& other) noexcept = default;
+    PathIterator& operator=(PathIterator&& other) noexcept = default;
 
     // Is the iterator itself pointing to a valid node?
     bool Done() const;

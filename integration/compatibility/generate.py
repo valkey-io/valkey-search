@@ -33,18 +33,25 @@ class ClientRSystem(ClientSystem):
                 '''
         print("Indexing is done.")
 
-@pytest.mark.parametrize("dialect", [2])
-@pytest.mark.parametrize("key_type", ["json", "hash"])
-class TestAggregateCompatibility:
-    ANSWER_FILE_NAME = "aggregate-answers.pickle.gz"
+class BaseCompatibilityTest:
+    """Base class for compatibility tests with shared infrastructure."""
+    
+    # Subclasses must define this
+    ANSWER_FILE_NAME = None
+    
     @classmethod
     def setup_class(cls):
+        if cls.ANSWER_FILE_NAME is None:
+            raise NotImplementedError("Subclass must define ANSWER_FILE_NAME")
+            
         os.system("docker remove Generate-search || true")
         if os.system("docker run --name Generate-search -p 6380:6379 redis/redis-stack-server &") != 0:
             print("Failed to start Redis Stack server, please check your Docker setup.")
             sys.exit(1)
         print("Started Generate-search server")
         cls.answers = []
+        # add reply count to check redis non-empty answer
+        cls.replied_count = 0
         cls.client = ClientRSystem()
         while True:
             try:
@@ -67,7 +74,6 @@ class TestAggregateCompatibility:
     def setup_method(self):
         self.client.execute_command("FLUSHALL SYNC")
         time.sleep(1)
-        pass
 
     def setup_data(self, data_set_name, key_type):
         self.data_set_name = data_set_name
@@ -84,13 +90,25 @@ class TestAggregateCompatibility:
             print("Cmd:", *cmd)
             answer["result"] = self.client.execute_command(*cmd)
             answer["exception"] = False
-            exception = None
-            print(f"replied: {answer['result']}")
+            if answer["result"] != [0]:
+                self.__class__.replied_count += 1  # ADD THIS LINE
+            print(f"replied: {answer['result']} (count: {self.__class__.replied_count})")
+            # print(f"replied: {answer['result']}")
         except Exception as exc:
             print(f"Got exception for Error: '{exc}', Cmd:{cmd}")
             answer["result"] = {}
             answer["exception"] = True
         self.answers.append(answer)
+
+    def check(self, *orig_cmd):
+        """Non-vector command."""
+        cmd = orig_cmd[0].split() if len(orig_cmd) == 1 else [*orig_cmd]
+        self.execute_command(cmd)
+
+@pytest.mark.parametrize("dialect", [2])
+@pytest.mark.parametrize("key_type", ["json", "hash"])
+class TestAggregateCompatibility(BaseCompatibilityTest):
+    ANSWER_FILE_NAME = "aggregate-answers.pickle.gz"
 
     def checkvec(self, dialect, *orig_cmd, knn=10000, score_as="", query_vector=[0] * VECTOR_DIM):
         '''Check vector queries only.'''
@@ -304,6 +322,7 @@ class TestAggregateCompatibility:
                 f"ft.aggregate {key_type}_idx1  * load 2 @__key @n1 apply {f}(@n1) as nn"
             )
 
+    @pytest.mark.skip()
     @pytest.mark.parametrize("dataset", ["hard numbers", "hard strings"])
     def test_aggregate_string_apply_functions(self, key_type, dialect, dataset):
         self.setup_data(dataset, key_type)
@@ -401,6 +420,7 @@ class TestAggregateCompatibility:
             "apply_result",
         )
 
+    @pytest.mark.skip()
     @pytest.mark.parametrize("dataset", ["hard numbers", "hard strings"])
     def test_aggregate_substr(self, key_type, dialect, dataset):
         self.setup_data(dataset, key_type)

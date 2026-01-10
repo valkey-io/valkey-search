@@ -30,16 +30,20 @@ struct TextParsingOptions {
   bool inorder = false;
   std::optional<uint32_t> slop = std::nullopt;
 };
-enum class QueryOperations : uint8_t {
+enum class QueryOperations : uint64_t {
   kNone = 0,
   kContainsOr = 1 << 0,
   kContainsAnd = 1 << 1,
-  // Other operations can be tracked here
+  kContainsNumeric = 1 << 2,
+  kContainsTag = 1 << 3,
+  kContainsNegate = 1 << 4,
+  kContainsText = 1 << 5,
+  kContainsExactPhrase = 1 << 6,
 };
 
 inline QueryOperations operator|(QueryOperations a, QueryOperations b) {
-  return static_cast<QueryOperations>(static_cast<uint8_t>(a) |
-                                      static_cast<uint8_t>(b));
+  return static_cast<QueryOperations>(static_cast<uint64_t>(a) |
+                                      static_cast<uint64_t>(b));
 }
 
 inline QueryOperations& operator|=(QueryOperations& a, QueryOperations b) {
@@ -47,7 +51,7 @@ inline QueryOperations& operator|=(QueryOperations& a, QueryOperations b) {
 }
 
 inline bool operator&(QueryOperations a, QueryOperations b) {
-  return static_cast<uint8_t>(a) & static_cast<uint8_t>(b);
+  return static_cast<uint64_t>(a) & static_cast<uint64_t>(b);
 }
 
 struct FilterParseResults {

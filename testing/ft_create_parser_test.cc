@@ -996,15 +996,43 @@ INSTANTIATE_TEST_SUITE_P(
              .expected_error_message = "Missing argument",
          },
          {
-             .test_name = "invalid_index_name",
+             .test_name = "missing_prefix_for_hash_tagged_index",
              .success = false,
              .command_str = "idx{a}",
-             .expected_error_message = "Index name must not contain a hash tag",
+             .expected_error_message = "PREFIX parameter is required for hash-tagged indexes",
          },
          {
              .test_name = "invalid_index_prefix",
              .success = false,
              .command_str = "idx on hash prefix 1 a{b}",
+             .expected_error_message =
+                 "PREFIX argument(s) must not contain a hash tag",
+         },
+         {
+             .test_name = "inconsistent_index_prefix_1",
+             .success = false,
+             .command_str = "idx on hash prefix 1 a{b} prefix 1 b",
+             .expected_error_message =
+                 "PREFIX argument(s) must not contain a hash tag",
+         },
+         {
+             .test_name = "inconsistent_index_prefix_2",
+             .success = false,
+             .command_str = "idx on hash prefix 1 a{b} prefix 1 b{c}",
+             .expected_error_message =
+                 "PREFIX argument(s) must not contain a hash tag",
+         },
+         {
+             .test_name = "inconsistent_index_prefix_3",
+             .success = false,
+             .command_str = "idx on hash prefix 1 a{b} prefix 2 b{c} c",
+             .expected_error_message =
+                 "PREFIX argument(s) must not contain a hash tag",
+         },
+         {
+             .test_name = "inconsistent_index_prefix_4",
+             .success = false,
+             .command_str = "idx on hash prefix 1 a{b} prefix 2 b{c} c{d}",
              .expected_error_message =
                  "PREFIX argument(s) must not contain a hash tag",
          },

@@ -226,6 +226,9 @@ absl::Status ParsePrefixes(vmsdk::ArgsIterator &itr,
       vmsdk::VerifyRange(prefixes_cnt, std::nullopt, max_prefixes))
       << "Number of prefixes (" << prefixes_cnt
       << ") exceeds the maximum allowed (" << max_prefixes << ")";
+  //
+  // Parse prefixes and ensure they match the index hash tag constraints
+  //
   for (uint32_t i = 0; i < prefixes_cnt; ++i) {
     VMSDK_ASSIGN_OR_RETURN(auto itr_arg, itr.Get());
     auto this_tag = vmsdk::ParseHashTag(vmsdk::ToStringView(itr_arg));

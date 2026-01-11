@@ -100,6 +100,11 @@ class ClusterMap {
   std::vector<NodeInfo> GetTargets(FanoutTargetMode mode,
                                    bool prefer_local = false) const;
 
+  // For per-slot index, return a vector with one element of nodes to target
+  std::vector<NodeInfo> GetTargetsForSlot(FanoutTargetMode mode,
+                                          bool prefer_local,
+                                          uint16_t slot) const;
+
   std::chrono::steady_clock::time_point GetExpirationTime() const {
     return expiration_tp_;
   }

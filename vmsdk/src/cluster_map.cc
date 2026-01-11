@@ -139,6 +139,47 @@ std::vector<NodeInfo> ClusterMap::GetTargets(FanoutTargetMode mode,
   }
 }
 
+std::vector<NodeInfo> ClusterMap::GetTargetsForSlot(FanoutTargetMode mode,
+                                                    bool prefer_local,
+                                                    uint16_t slot) const {
+  if (slot_to_shard_map_.empty()) {
+    return {};
+  }
+  auto iter = slot_to_shard_map_.lower_bound(slot);
+  if (iter == slot_to_shard_map_.end()) {
+    iter--;
+  }
+  const ShardInfo* shard = iter->second.second;
+  CHECK(shard);
+  if (slot < iter->first || slot >= iter->second.first) {
+    return {};  // Slot not in range means no shard has this slot.
+  }
+
+  //
+  // We have the right shard, pick from it.
+  //
+  switch (mode) {
+    case FanoutTargetMode::kAll:
+      CHECK(false);
+    case FanoutTargetMode::kPrimary:
+      if (shard->primary.has_value()) {
+        return {shard->primary.value()};
+      } else {
+        return {};
+      }
+    case FanoutTargetMode::kReplicas:
+      if (!shard->replicas.empty()) {
+        return {shard->replicas[0]};
+      } else {
+        return {};
+      }
+    case FanoutTargetMode::kRandom:
+      return {GetRandomNodeFromShard(*shard, false, prefer_local)};
+    default:
+      CHECK(false);
+  }
+}
+
 // For shard fingerprint - hash the slot ranges
 uint64_t ClusterMap::ComputeShardFingerprint(
     const absl::btree_map<uint16_t, uint16_t>& slot_ranges) {

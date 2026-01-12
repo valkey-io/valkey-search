@@ -206,7 +206,6 @@ class Index:
         return res.backfill_in_progress == 0
     
     def query(self, client:valkey.client, query_string: str, *args) -> dict[bytes, dict[bytes, bytes]]:
-        assert self.type == KeyDataType.HASH, "JSON not supported yet"
         query = ["ft.search", self.name, query_string] + list(args)
         print("Execute Query Command: ", query)
         result = client.execute_command(*query)

@@ -161,45 +161,45 @@ extern "C" {
 
 #define RAX_NODE_MAX_SIZE ((1 << 29) - 1)
 typedef struct raxNode {
-  uint32_t iskey : 1;   /* Does this node contain a key? */
-  uint32_t isnull : 1;  /* Associated value is NULL (don't store it). */
-  uint32_t iscompr : 1; /* Node is compressed. */
-  uint32_t size : 29;   /* Number of children, or compressed string len. */
-  /* Data layout is as follows:
-   *
-   * If node is not compressed we have 'size' bytes, one for each children
-   * character, and 'size' raxNode pointers, point to each child node.
-   * Note how the character is not stored in the children but in the
-   * edge of the parents:
-   *
-   * [header iscompr=0][abc][a-ptr][b-ptr][c-ptr](value-ptr?)
-   *
-   * if node is compressed (iscompr bit is 1) the node has 1 children.
-   * In that case the 'size' bytes of the string stored immediately at
-   * the start of the data section, represent a sequence of successive
-   * nodes linked one after the other, for which only the last one in
-   * the sequence is actually represented as a node, and pointed to by
-   * the current compressed node.
-   *
-   * [header iscompr=1][xyz][z-ptr](value-ptr?)
-   *
-   * Both compressed and not compressed nodes can represent a key
-   * with associated data in the radix tree at any level (not just terminal
-   * nodes).
-   *
-   * If the node has an associated key (iskey=1) and is not NULL
-   * (isnull=0), then after the raxNode pointers pointing to the
-   * children, an additional value pointer is present (as you can see
-   * in the representation above as "value-ptr" field).
-   */
-  unsigned char data[];
+    uint32_t iskey : 1;   /* Does this node contain a key? */
+    uint32_t isnull : 1;  /* Associated value is NULL (don't store it). */
+    uint32_t iscompr : 1; /* Node is compressed. */
+    uint32_t size : 29;   /* Number of children, or compressed string len. */
+    /* Data layout is as follows:
+     *
+     * If node is not compressed we have 'size' bytes, one for each children
+     * character, and 'size' raxNode pointers, point to each child node.
+     * Note how the character is not stored in the children but in the
+     * edge of the parents:
+     *
+     * [header iscompr=0][abc][a-ptr][b-ptr][c-ptr](value-ptr?)
+     *
+     * if node is compressed (iscompr bit is 1) the node has 1 children.
+     * In that case the 'size' bytes of the string stored immediately at
+     * the start of the data section, represent a sequence of successive
+     * nodes linked one after the other, for which only the last one in
+     * the sequence is actually represented as a node, and pointed to by
+     * the current compressed node.
+     *
+     * [header iscompr=1][xyz][z-ptr](value-ptr?)
+     *
+     * Both compressed and not compressed nodes can represent a key
+     * with associated data in the radix tree at any level (not just terminal
+     * nodes).
+     *
+     * If the node has an associated key (iskey=1) and is not NULL
+     * (isnull=0), then after the raxNode pointers pointing to the
+     * children, an additional value pointer is present (as you can see
+     * in the representation above as "value-ptr" field).
+     */
+    unsigned char data[];
 } raxNode;
 
 typedef struct rax {
-  raxNode *head;     /* Pointer to root node of tree */
-  uint64_t numele;   /* Number of keys in the tree */
-  uint64_t numnodes; /* Number of rax nodes in the tree */
-  size_t alloc_size; /* Total allocation size of the tree in bytes */
+    raxNode *head;     /* Pointer to root node of tree */
+    uint64_t numele;   /* Number of keys in the tree */
+    uint64_t numnodes; /* Number of rax nodes in the tree */
+    size_t alloc_size; /* Total allocation size of the tree in bytes */
 } rax;
 
 /* Stack data structure used by raxLowWalk() in order to, optionally, return
@@ -207,12 +207,12 @@ typedef struct rax {
  * field for space concerns, so we use the auxiliary stack when needed. */
 #define RAX_STACK_STATIC_ITEMS 32
 typedef struct raxStack {
-  void **stack; /* Points to static_items or an heap allocated array. */
-  size_t items, maxitems; /* Number of items contained and total space. */
-  /* Up to RAXSTACK_STACK_ITEMS items we avoid to allocate on the heap
-   * and use this static array of pointers instead. */
-  void *static_items[RAX_STACK_STATIC_ITEMS];
-  int oom; /* True if pushing into this stack failed for OOM at some point. */
+    void **stack;           /* Points to static_items or an heap allocated array. */
+    size_t items, maxitems; /* Number of items contained and total space. */
+    /* Up to RAXSTACK_STACK_ITEMS items we avoid to allocate on the heap
+     * and use this static array of pointers instead. */
+    void *static_items[RAX_STACK_STATIC_ITEMS];
+    int oom; /* True if pushing into this stack failed for OOM at some point. */
 } raxStack;
 
 /* Optional callback used for iterators and be notified on each rax node,
@@ -262,8 +262,7 @@ typedef void *(*raxMutateCallback)(void *current_value, void *caller_context);
 /* Exported API. */
 rax *raxNew(void);
 int raxInsert(rax *rax, unsigned char *s, size_t len, void *data, void **old);
-int raxTryInsert(rax *rax, unsigned char *s, size_t len, void *data,
-                 void **old);
+int raxTryInsert(rax *rax, unsigned char *s, size_t len, void *data, void **old);
 int raxRemove(rax *rax, unsigned char *s, size_t len, void **old);
 int raxFind(rax *rax, unsigned char *s, size_t len, void **value);
 int raxMutate(rax *rax, unsigned char *s, size_t len, raxMutateCallback callback, void *caller_context); // SEARCH
@@ -275,8 +274,7 @@ int raxSeek(raxIterator *it, const char *op, unsigned char *ele, size_t len);
 int raxNext(raxIterator *it);
 int raxPrev(raxIterator *it);
 int raxRandomWalk(raxIterator *it, size_t steps);
-int raxCompare(raxIterator *iter, const char *op, unsigned char *key,
-               size_t key_len);
+int raxCompare(raxIterator *iter, const char *op, unsigned char *key, size_t key_len);
 void raxStop(raxIterator *it);
 int raxEOF(raxIterator *it);
 void raxShow(rax *rax);

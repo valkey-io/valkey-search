@@ -12,12 +12,14 @@
 #include <atomic>
 #include <cstdint>
 
+#include "vmsdk/src/memory_allocation_overrides.h"
+
 namespace vmsdk {
 
 // Use the standard system allocator by default. Note that this is required
-// since any allocation done before Redis module initialization (namely global
+// since any allocation done before Valkey module initialization (namely global
 // static constructors that do heap allocation, which are run on dl_open) cannot
-// invoke Redis modules api since the associated C function pointers are only
+// invoke Valkey modules api since the associated C function pointers are only
 // initialized as part of the module initialization process. Refer
 // https://redis.com/blog/using-the-redis-allocator-in-rust for more details.
 //
@@ -40,6 +42,7 @@ bool IsUsingValkeyAlloc() {
   return thread_using_valkey_module_alloc;
 }
 void UseValkeyAlloc() {
+  CreateTrackedSnapshot();
   use_valkey_module_alloc_switch.store(true, std::memory_order_relaxed);
 }
 std::atomic<uint64_t> used_memory_bytes{0};

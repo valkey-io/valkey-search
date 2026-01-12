@@ -108,4 +108,9 @@ void operator delete[](void* p, std::align_val_t alignment,
 void operator delete[](void* p, size_t size,
                        std::align_val_t alignment) noexcept;
 #endif  // !SAN_BUILD
+
+namespace vmsdk {
+void CreateTrackedSnapshot();
+}  // namespace vmsdk
+
 #endif  // VMSDK_SRC_MEMORY_ALLOCATION_OVERRIDES_H_

@@ -24,36 +24,6 @@
 #include "vmsdk/src/memory_allocation_overrides.h"
 
 namespace vmsdk {
-// RawSystemAllocator implements an allocator that will not go through
-// the SystemAllocTracker, for use by the SystemAllocTracker to prevent
-// infinite recursion when tracking pointers.
-template <typename T>
-struct RawSystemAllocator {
-  // NOLINTNEXTLINE
-  typedef T value_type;
-
-  RawSystemAllocator() = default;
-  template <typename U>
-  constexpr RawSystemAllocator(const RawSystemAllocator<U>&) noexcept {}
-  // NOLINTNEXTLINE
-  T* allocate(std::size_t n) {
-    ReportAllocMemorySize(n * sizeof(T));
-    return static_cast<T*>(__real_malloc(n * sizeof(T)));
-  }
-  // NOLINTNEXTLINE
-  void deallocate(T* p, std::size_t) {
-    ReportFreeMemorySize(sizeof(T));
-    __real_free(p);
-  }
-};
-// `tracked_ptrs_snapshot_` provides a lock-free fast path to check if an address is tracked. 
-// It is a thread-local variable, lazily initialized during the first deallocation after 
-// module startup. Once the one-time snapshot is captured, it remains read-only. 
-// Note: This structure may return false positives. Any positive hit must be verified
-// against the global address tracker. Given that snapshots typically track ~1K 
-// addresses, the memory overhead of maintaining per-thread copies is negligible.
-thread_local static std::optional<absl::flat_hash_set<void*, absl::Hash<void*>, std::equal_to<void*>,
-                    RawSystemAllocator<void*>>> tracked_ptrs_snapshot_;
 // SystemAllocTracker tracks memory allocations to the system allocator, so that
 // subsequent free calls can be redirected to the appropriate allocator.
 class SystemAllocTracker {
@@ -76,8 +46,7 @@ class SystemAllocTracker {
   }
 
   bool IsTracked(void* ptr) const {
-    if (IsUsingValkeyAlloc() && tracked_ptrs_snapshot_.has_value() 
-        && !tracked_ptrs_snapshot_.value().contains(ptr)) {
+    if (IsUsingValkeyAlloc() && !tracked_ptrs_snapshot_.contains(ptr)) {
         return false;
     }
     absl::MutexLock lock(&mutex_);
@@ -85,11 +54,7 @@ class SystemAllocTracker {
   }
 
   bool UntrackPointer(void* ptr) {
-    if (IsUsingValkeyAlloc() && tracked_ptrs_snapshot_->empty()) {
-      absl::MutexLock lock(&mutex_);
-      *tracked_ptrs_snapshot_ = tracked_ptrs_;
-    }
-    if (tracked_ptrs_snapshot_.has_value() && !tracked_ptrs_snapshot_.value().contains(ptr)) {
+    if (!tracked_ptrs_snapshot_.contains(ptr)) {
         return false;
     }
     absl::MutexLock lock(&mutex_);
@@ -101,11 +66,48 @@ class SystemAllocTracker {
     return tracked_ptrs_.size();
   }
 
+  void CreateTrackedSnapshot() {
+    tracked_ptrs_snapshot_ = tracked_ptrs_;
+  }
+
  private:
+  // RawSystemAllocator implements an allocator that will not go through
+  // the SystemAllocTracker, for use by the SystemAllocTracker to prevent
+  // infinite recursion when tracking pointers.
+  template <typename T>
+  struct RawSystemAllocator {
+    // NOLINTNEXTLINE
+    typedef T value_type;
+
+    RawSystemAllocator() = default;
+    template <typename U>
+    constexpr RawSystemAllocator(const RawSystemAllocator<U>&) noexcept {}
+    // NOLINTNEXTLINE
+    T* allocate(std::size_t n) {
+      ReportAllocMemorySize(n * sizeof(T));
+      return static_cast<T*>(__real_malloc(n * sizeof(T)));
+    }
+    // NOLINTNEXTLINE
+    void deallocate(T* p, std::size_t) {
+      ReportFreeMemorySize(sizeof(T));
+      __real_free(p);
+    }
+  };
   mutable absl::Mutex mutex_;
   absl::flat_hash_set<void*, absl::Hash<void*>, std::equal_to<void*>,
                       RawSystemAllocator<void*>>
       tracked_ptrs_ ABSL_GUARDED_BY(mutex_);
+  // `tracked_ptrs_snapshot_` provides a lock-free fast path to check if an address is tracked.
+  // It is initialized as a read-only snapshot of `tracked_ptrs_` when switching to the 
+  // Valkey allocator.
+  //
+  // Notes:
+  // 1. False positives are possible. Any positive match MUST be verified against the 
+  //    `tracked_ptrs_` address tracker.
+  // 2. Tests indicate this snapshot typically tracks ~1K addresses.
+  absl::flat_hash_set<void*, absl::Hash<void*>, std::equal_to<void*>,
+                      RawSystemAllocator<void*>>
+      tracked_ptrs_snapshot_;
 };
 
 void* PerformAndTrackMalloc(size_t size, void* (*malloc_fn)(size_t),
@@ -155,6 +157,12 @@ void* PerformAndTrackAlignedAlloc(size_t align, size_t size,
   }
   return ptr;
 }
+
+void CreateTrackedSnapshot() {
+  SystemAllocTracker::GetInstance().CreateTrackedSnapshot();
+}
+
+
 }  // namespace vmsdk
 
 extern "C" {

@@ -248,12 +248,18 @@ void* __wrap_realloc(void* ptr, size_t size) noexcept {
     if (new_ptr == nullptr) {
       // Valkey allocation failed, keep system buffer and restore tracking
       vmsdk::SystemAllocTracker::GetInstance().TrackPointer(ptr);
+      return nullptr; 
     }
-    else {
-      // Step 2: Copy data and free system buffer
-      memcpy(new_ptr, ptr, size);
-      vmsdk::PerformAndTrackFree(ptr, __real_free, empty_usable_size);
+    // Bootstrap path: still using system allocator
+    auto tmp_ptr = vmsdk::PerformAndTrackRealloc(ptr, size, __real_realloc, empty_usable_size);
+    if (tmp_ptr == nullptr) { 
+      // Valkey allocation failed, keep system buffer and restore tracking
+      vmsdk::SystemAllocTracker::GetInstance().TrackPointer(ptr);
+      vmsdk::PerformAndTrackFree(new_ptr, ValkeyModule_Free, ValkeyModule_MallocUsableSize);
+      return nullptr; 
     }
+    memcpy(new_ptr, tmp_ptr, size);
+    vmsdk::PerformAndTrackFree(tmp_ptr, __real_free, empty_usable_size);
     return new_ptr;
   }
 

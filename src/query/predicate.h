@@ -192,7 +192,8 @@ class TermPredicate : public TextPredicate {
   TermPredicate(
       std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
       FieldMaskPredicate field_mask, std::string term, bool exact);
-  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
+  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema()
+      const override {
     return text_index_schema_;
   }
   absl::string_view GetTextString() const { return term_; }
@@ -220,7 +221,8 @@ class PrefixPredicate : public TextPredicate {
   PrefixPredicate(
       std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
       FieldMaskPredicate field_mask, std::string term);
-  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
+  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema()
+      const override {
     return text_index_schema_;
   }
   absl::string_view GetTextString() const { return term_; }
@@ -246,7 +248,8 @@ class SuffixPredicate : public TextPredicate {
   SuffixPredicate(
       std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
       FieldMaskPredicate field_mask, std::string term);
-  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
+  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema()
+      const override {
     return text_index_schema_;
   }
   absl::string_view GetTextString() const { return term_; }
@@ -272,7 +275,8 @@ class InfixPredicate : public TextPredicate {
   InfixPredicate(
       std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
       FieldMaskPredicate field_mask, std::string term);
-  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
+  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema()
+      const override {
     return text_index_schema_;
   }
   absl::string_view GetTextString() const { return term_; }
@@ -298,7 +302,8 @@ class FuzzyPredicate : public TextPredicate {
   FuzzyPredicate(
       std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
       FieldMaskPredicate field_mask, std::string term, uint32_t distance);
-  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
+  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema()
+      const override {
     return text_index_schema_;
   }
   absl::string_view GetTextString() const { return term_; }

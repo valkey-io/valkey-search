@@ -1486,10 +1486,18 @@ void IndexSchema::DrainMutationQueue(ValkeyModuleCtx *ctx) const {
   static const auto max_sleep = std::chrono::milliseconds(100);
   auto sleep_duration = std::chrono::milliseconds(1);
 
-  while (!tracked_mutated_records_.empty()) {
+  while (true) {
+    size_t queue_size;
+    {
+      absl::MutexLock lock(&mutated_records_mutex_);
+      queue_size = tracked_mutated_records_.size();
+      if (queue_size == 0) {
+        break;
+      }
+    }
     VMSDK_LOG_EVERY_N_SEC(NOTICE, ctx, 10)
         << "Draining Mutation Queue for index " << name_
-        << ", entries remaining: " << tracked_mutated_records_.size();
+        << ", entries remaining: " << queue_size;
     std::this_thread::sleep_for(sleep_duration);
     sleep_duration =
         std::min(sleep_duration * 2, max_sleep);  // Exponential backoff

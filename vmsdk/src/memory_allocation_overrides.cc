@@ -54,7 +54,7 @@ class SystemAllocTracker {
   }
 
   bool UntrackPointer(void* ptr) {
-    if (!tracked_ptrs_snapshot_.contains(ptr)) {
+    if (IsUsingValkeyAlloc() && !tracked_ptrs_snapshot_.contains(ptr)) {
         return false;
     }
     absl::MutexLock lock(&mutex_);

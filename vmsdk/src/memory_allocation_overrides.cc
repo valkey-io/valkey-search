@@ -67,6 +67,7 @@ class SystemAllocTracker {
   }
 
   void CreateTrackedSnapshot() {
+    absl::MutexLock lock(&mutex_);
     tracked_ptrs_snapshot_ = tracked_ptrs_;
   }
 

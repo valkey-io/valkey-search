@@ -225,22 +225,44 @@ void* __wrap_calloc(size_t __nmemb, size_t size) noexcept {
 }
 
 void* __wrap_realloc(void* ptr, size_t size) noexcept {
-  bool was_tracked = false;
-  if (ptr != nullptr) {
-    was_tracked = vmsdk::SystemAllocTracker::GetInstance().UntrackPointer(ptr);
+  if (ptr == nullptr) {
+    return __wrap_malloc(size);
   }
+
+  bool was_tracked =
+      vmsdk::SystemAllocTracker::GetInstance().UntrackPointer(ptr);
+
+  // Fast path: using Valkey allocator and pointer already in Valkey allocator
   if (vmsdk::IsUsingValkeyAlloc() && !was_tracked) {
-    // Forcing 16-byte alignment in Valkey, which may otherwise return 8-byte
-    // aligned memory.
     return vmsdk::PerformAndTrackRealloc(ptr, AlignSize(size),
                                          ValkeyModule_Realloc,
                                          ValkeyModule_MallocUsableSize);
-  } else {
-    auto new_ptr = vmsdk::PerformAndTrackRealloc(ptr, size, __real_realloc,
-                                                 empty_usable_size);
-    vmsdk::SystemAllocTracker::GetInstance().TrackPointer(new_ptr);
+  }
+
+  // Migration path: system allocator → Valkey allocator (when was_tracked=true)
+  if (vmsdk::IsUsingValkeyAlloc()) {
+
+    // Step 1: Allocate from Valkey allocator
+    void* new_ptr = vmsdk::PerformAndTrackMalloc(AlignSize(size),
+                                                 ValkeyModule_Alloc,
+                                                 ValkeyModule_MallocUsableSize);
+    if (new_ptr == nullptr) {
+      // Valkey allocation failed, keep system buffer and restore tracking
+      vmsdk::SystemAllocTracker::GetInstance().TrackPointer(ptr);
+    }
+    else {
+      // Step 2: Copy data and free system buffer
+      memcpy(new_ptr, ptr, size);
+      vmsdk::PerformAndTrackFree(ptr, __real_free, empty_usable_size);
+    }
     return new_ptr;
   }
+
+  // Bootstrap path: still using system allocator
+  auto new_ptr = vmsdk::PerformAndTrackRealloc(ptr, size, __real_realloc,
+                                               empty_usable_size);
+  vmsdk::SystemAllocTracker::GetInstance().TrackPointer(new_ptr);
+  return new_ptr;
 }
 // NOLINTNEXTLINE
 void* __wrap_aligned_alloc(size_t __alignment, size_t __size) noexcept {

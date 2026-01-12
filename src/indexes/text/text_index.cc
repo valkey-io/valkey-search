@@ -18,9 +18,9 @@ namespace valkey_search::indexes::text {
 namespace {
 
 InvasivePtr<Postings> AddKeyToPostings(InvasivePtr<Postings> existing_postings,
-                                       const InternedStringPtr& key,
-                                       PositionMap&& pos_map,
-                                       TextIndexMetadata* metadata,
+                                       const InternedStringPtr &key,
+                                       PositionMap &&pos_map,
+                                       TextIndexMetadata *metadata,
                                        size_t num_text_fields) {
   InvasivePtr<Postings> postings;
   if (existing_postings) {
@@ -35,8 +35,8 @@ InvasivePtr<Postings> AddKeyToPostings(InvasivePtr<Postings> existing_postings,
 }
 
 InvasivePtr<Postings> RemoveKeyFromPostings(
-    InvasivePtr<Postings> existing_postings, const InternedStringPtr& key,
-    TextIndexMetadata* metadata) {
+    InvasivePtr<Postings> existing_postings, const InternedStringPtr &key,
+    TextIndexMetadata *metadata) {
   CHECK(existing_postings) << "Per-key tree became unaligned";
 
   existing_postings->RemoveKey(key, metadata);
@@ -56,11 +56,11 @@ TextIndex::TextIndex(bool suffix)
     : suffix_tree_(suffix ? std::make_unique<RadixTree<InvasivePtr<Postings>>>()
                           : nullptr) {}
 
-RadixTree<InvasivePtr<Postings>>& TextIndex::GetPrefix() {
+RadixTree<InvasivePtr<Postings>> &TextIndex::GetPrefix() {
   return prefix_tree_;
 }
 
-const RadixTree<InvasivePtr<Postings>>& TextIndex::GetPrefix() const {
+const RadixTree<InvasivePtr<Postings>> &TextIndex::GetPrefix() const {
   return prefix_tree_;
 }
 
@@ -83,13 +83,13 @@ TextIndex::GetSuffix() const {
 /*** TextIndexSchema ***/
 
 TextIndexSchema::TextIndexSchema(data_model::Language language,
-                                 const std::string& punctuation,
+                                 const std::string &punctuation,
                                  bool with_offsets,
-                                 const std::vector<std::string>& stop_words)
+                                 const std::vector<std::string> &stop_words)
     : with_offsets_(with_offsets), lexer_(language, punctuation, stop_words) {}
 
 absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
-    const InternedStringPtr& key, absl::string_view data,
+    const InternedStringPtr &key, absl::string_view data,
     size_t text_field_number, bool stem, size_t min_stem_size, bool suffix) {
   NestedMemoryScope scope{metadata_.text_index_memory_pool_};
 
@@ -103,17 +103,17 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
   }
 
   // Map tokens -> positions -> field-masks
-  TokenPositions* token_positions;
+  TokenPositions *token_positions;
   {
     std::lock_guard<std::mutex> guard(in_progress_key_updates_mutex_);
     token_positions = &in_progress_key_updates_[key];
   }
   for (uint32_t i = 0; i < tokens->size(); ++i) {
-    const auto& token = tokens.value()[i];
+    const auto &token = tokens.value()[i];
     uint32_t position =
         with_offsets_ ? i
                       : 0;  // If positional info is disabled we default to 0
-    auto& [positions, suffix_eligible] = (*token_positions)[token];
+    auto &[positions, suffix_eligible] = (*token_positions)[token];
     if (suffix) suffix_eligible = true;
     auto [pos_it, _] =
         positions.try_emplace(position, FieldMask::Create(num_text_fields_));
@@ -123,7 +123,7 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
   return true;
 }
 
-void TextIndexSchema::CommitKeyData(const InternedStringPtr& key) {
+void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
   NestedMemoryScope scope{metadata_.text_index_memory_pool_};
 
   // Retrieve the key's staged data
@@ -141,9 +141,9 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr& key) {
   TextIndex key_index{with_suffix_trie_};
 
   // Index the key's tokens
-  for (auto& entry : token_positions) {
-    const std::string& token = entry.first;
-    auto& [pos_map, suffix] = entry.second;
+  for (auto &entry : token_positions) {
+    const std::string &token = entry.first;
+    auto &[pos_map, suffix] = entry.second;
 
     const std::optional<std::string> reverse_token =
         suffix ? std::optional<std::string>(
@@ -189,7 +189,7 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr& key) {
   }
 }
 
-void TextIndexSchema::DeleteKeyData(const InternedStringPtr& key) {
+void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
   NestedMemoryScope scope{metadata_.text_index_memory_pool_};
 
   // Extract the per-key index
@@ -202,7 +202,7 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr& key) {
     }
   }
 
-  TextIndex& key_index = node.mapped();
+  TextIndex &key_index = node.mapped();
 
   auto iter = key_index.GetPrefix().GetWordIterator("");
 

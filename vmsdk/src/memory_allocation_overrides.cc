@@ -233,14 +233,13 @@ void* __wrap_realloc(void* ptr, size_t size) noexcept {
       vmsdk::SystemAllocTracker::GetInstance().UntrackPointer(ptr);
 
   // Fast path: using Valkey allocator and pointer already in Valkey allocator
-  if (vmsdk::IsUsingValkeyAlloc() && !was_tracked) {
-    return vmsdk::PerformAndTrackRealloc(ptr, AlignSize(size),
-                                         ValkeyModule_Realloc,
-                                         ValkeyModule_MallocUsableSize);
-  }
-
-  // Migration path: system allocator → Valkey allocator (when was_tracked=true)
   if (vmsdk::IsUsingValkeyAlloc()) {
+    if (!was_tracked) {
+      return vmsdk::PerformAndTrackRealloc(ptr, AlignSize(size),
+                                          ValkeyModule_Realloc,
+                                          ValkeyModule_MallocUsableSize);
+    }
+    // Migration path: system allocator → Valkey allocator (when was_tracked=true)
 
     // Step 1: Allocate from Valkey allocator
     void* new_ptr = vmsdk::PerformAndTrackMalloc(AlignSize(size),

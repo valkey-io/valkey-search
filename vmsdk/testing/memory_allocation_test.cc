@@ -5,8 +5,6 @@
  *
  */
 
-#include "vmsdk/src/memory_allocation.h"
-
 #include <atomic>
 #include <cstddef>
 #include <cstdlib>

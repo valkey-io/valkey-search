@@ -110,7 +110,13 @@ void operator delete[](void* p, size_t size,
 #endif  // !SAN_BUILD
 
 namespace vmsdk {
-void CreateTrackedSnapshot();
+// Updates the custom allocator to perform any future allocations using the
+// Valkey allocator.
+void UseValkeyAlloc();
+
+// Switch back to the default allocator. No guarantees around atomicity. Only
+// safe in single-threaded or testing environments.
+void ResetValkeyAlloc();
 }  // namespace vmsdk
 
 #endif  // VMSDK_SRC_MEMORY_ALLOCATION_OVERRIDES_H_

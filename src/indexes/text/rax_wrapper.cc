@@ -168,6 +168,7 @@ InvasivePtr<Postings> Rax::WordIterator::GetPostingsTarget() const {
 }
 
 /*** PathIterator ***/
+// WARNING: The PathIterator is not productionized and needs to be cleaned up.
 
 namespace {
 

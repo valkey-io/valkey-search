@@ -164,8 +164,8 @@ class Rax {
    *
    */
 
-  rax* rax_;  // TODO(BRENNAN): Embed directly at the end after getting it
-              // working
+  rax* rax_;  // Note: We can embed it directly to save the pointer memory if
+              // the per-key text index overhead is still an issue
   void (*free_callback_)(void*);  // Optional callback for freeing targets
 
  public:
@@ -199,7 +199,6 @@ class Rax {
     // this iterator, then it immediately becomes invalid. The return boolean
     // indicates if the landing spot is equal to the specified word (true) or
     // greater (false).
-    // TODO(Brennan): do we need this?
     bool SeekForward(absl::string_view word);
 
     // Access the current location, asserts if !Done()

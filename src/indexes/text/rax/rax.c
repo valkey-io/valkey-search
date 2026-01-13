@@ -928,8 +928,7 @@ int raxFind(rax *rax, unsigned char *s, size_t len, void **value) {
  * 
  * Returns 1 on success, 0 on error (errno will be set to ENOMEM
  * on out of memory). */
-// TODO(Brennan): implement a lower-level version that doesn't traverse the
-// tree twice.
+// TODO: implement a lower-level version that doesn't traverse the tree twice.
 int raxMutate(rax *rax, unsigned char *s, size_t len, raxMutateCallback callback, void *caller_context) {
     void *current_value = NULL;
 

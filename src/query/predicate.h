@@ -24,6 +24,7 @@ namespace valkey_search::indexes {
 class Text;
 class Numeric;
 class Tag;
+class EntriesFetcherBase;
 }  // namespace valkey_search::indexes
 
 namespace valkey_search::indexes::text {
@@ -357,6 +358,10 @@ class ComposedPredicate : public Predicate {
   std::optional<uint32_t> slop_;
   bool inorder_;
 };
+
+// Factory function for creating exact phrase fetcher - defined in text.cc
+std::unique_ptr<indexes::EntriesFetcherBase> BuildExactPhraseFetcher(
+    const ComposedPredicate* composed_predicate);
 
 }  // namespace valkey_search::query
 

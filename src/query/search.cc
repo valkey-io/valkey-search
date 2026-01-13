@@ -50,22 +50,6 @@
 
 namespace valkey_search::query {
 
-// Fetcher for proximity iterators used in exact phrase optimization
-class ProximityFetcher : public indexes::EntriesFetcherBase {
- public:
-  ProximityFetcher(std::unique_ptr<indexes::text::TextIterator> iter,
-                   size_t size)
-      : iter_(std::move(iter)), size_(size) {}
-  size_t Size() const override { return size_; }
-  std::unique_ptr<indexes::EntriesFetcherIteratorBase> Begin() override {
-    return std::make_unique<indexes::text::TextFetcher>(std::move(iter_));
-  }
-
- private:
-  std::unique_ptr<indexes::text::TextIterator> iter_;
-  size_t size_;
-};
-
 class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
  public:
   InlineVectorFilter(
@@ -172,35 +156,17 @@ size_t EvaluateFilterAsPrimary(
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     bool negate, QueryOperations query_operations) {
   // Faster path for pure exact phrase queries.
-  // This is an optimization to avoid building multiple term iterators and a proximity
-  // iterator for every key's evaluation in the filtering stage (using the PrefilterEvaluator).
+  // This is an optimization to avoid building multiple term iterators and a
+  // proximity iterator for every key's evaluation in the filtering stage (using
+  // the PrefilterEvaluator).
   if (IsExactPhraseOnly(query_operations) && !negate) {
     CHECK(predicate->GetType() == PredicateType::kComposedAnd);
     auto composed_predicate =
         dynamic_cast<const ComposedPredicate *>(predicate);
-    // Build proximity iterator from term iterators and calculate min size
-    absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
-                        indexes::text::kProximityTermsInlineCapacity>
-        iters;
-    FieldMaskPredicate field_mask = ~0ULL;
-    size_t min_size = SIZE_MAX;
-    for (const auto &child : composed_predicate->GetChildren()) {
-      CHECK(child->GetType() == PredicateType::kText);
-      auto text_pred = dynamic_cast<const TextPredicate *>(child.get());
-      auto fetcher = std::make_unique<indexes::Text::EntriesFetcher>(
-          0, text_pred->GetTextIndexSchema()->GetTextIndex(), nullptr,
-          text_pred->GetFieldMask(), true);
-      fetcher->predicate_ = text_pred;
-      min_size = std::min(min_size, fetcher->Size());
-      iters.push_back(text_pred->BuildTextIterator(fetcher.get()));
-      field_mask &= text_pred->GetFieldMask();
-    }
-    auto proximity_iter = std::make_unique<indexes::text::ProximityIterator>(
-        std::move(iters), composed_predicate->GetSlop(),
-        composed_predicate->GetInorder(), field_mask);
-    entries_fetchers.push(std::make_unique<ProximityFetcher>(
-        std::move(proximity_iter), min_size));
-    return min_size;
+    auto fetcher = BuildExactPhraseFetcher(composed_predicate);
+    size_t size = fetcher->Size();
+    entries_fetchers.push(std::move(fetcher));
+    return size;
   }
 
   if (predicate->GetType() == PredicateType::kComposedAnd ||

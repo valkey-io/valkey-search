@@ -27,7 +27,7 @@
 #include "testing/common.h"
 #include "testing/coordinator/common.h"
 #include "valkey_search_options.h"
-#include "vmsdk/src/memory_allocation.h"
+#include "vmsdk/src/memory_allocation_overrides.h"
 #include "vmsdk/src/module.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
@@ -371,7 +371,7 @@ TEST_P(LoadTest, load) {
 
 TEST_F(ValkeySearchTest, FullSyncFork) {
   VMSDK_EXPECT_OK(options::GetMaxWorkerSuspensionSecs().SetValue(1));
-  InitThreadPools(2, 2);
+  InitThreadPools(2, 2, 1);
   auto writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
   auto reader_thread_pool = ValkeySearch::Instance().GetReaderThreadPool();
   ValkeySearch::Instance().AtForkPrepare();
@@ -397,7 +397,7 @@ TEST_F(ValkeySearchTest, FullSyncFork) {
 }
 
 TEST_F(ValkeySearchTest, Info) {
-  InitThreadPools(10, 5);
+  InitThreadPools(10, 5, 1);
   auto writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
   auto reader_thread_pool = ValkeySearch::Instance().GetReaderThreadPool();
   VMSDK_EXPECT_OK(writer_thread_pool->SuspendWorkers());
@@ -541,7 +541,7 @@ TEST_F(ValkeySearchTest, Info) {
 }
 
 TEST_F(ValkeySearchTest, OnForkChildDiedCallback) {
-  InitThreadPools(std::nullopt, 5);
+  InitThreadPools(std::nullopt, 5, 1);
   auto writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
   VMSDK_EXPECT_OK(writer_thread_pool->SuspendWorkers());
   ValkeyModuleEvent eid;
@@ -559,7 +559,7 @@ TEST_F(ValkeySearchTest, OnForkChildDiedCallback) {
 
 TEST_F(ValkeySearchTest, OnForkChildBornCallback) {
   VMSDK_EXPECT_OK(options::GetMaxWorkerSuspensionSecs().SetValue(0));
-  InitThreadPools(std::nullopt, 5);
+  InitThreadPools(std::nullopt, 5, 1);
   auto writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
   VMSDK_EXPECT_OK(writer_thread_pool->SuspendWorkers());
   ValkeyModuleEvent eid;

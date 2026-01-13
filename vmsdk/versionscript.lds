@@ -1,3 +1,11 @@
 {
-  global: *; # Expose all symbols so that crash dumps have them.
+global:
+  *;
+local:
+  __wrap_*;
+  __real_*;
+  _Znwm*;
+  _Znam*;
+  _ZdlPv*;
+  _ZdaPv*;
 };

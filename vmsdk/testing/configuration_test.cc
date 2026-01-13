@@ -316,5 +316,45 @@ TEST_F(ConfigTest, CheckDebugConfiguration) {
   }
 }
 
+TEST_F(ConfigTest, defaultValue) {
+  // Define some configuration entries that will register themselves with the
+  // configuration manager
+  auto enumerator =
+      config::Builder<int>("my-enum", 2, kEnumNames, kEnumValues).Build();
+  auto number_config =
+      config::Builder<long long>("my-number", 42, 0, 1024).Build();
+  auto boolean = config::Builder<bool>("my-bool", true).Build();
+
+  // check defaults
+  EXPECT_EQ(enumerator->GetDefaultValue(), 2);
+  EXPECT_EQ(number_config->GetDefaultValue(), 42);
+  EXPECT_EQ(boolean->GetDefaultValue(), true);
+
+  // Add command-line arguments
+  auto args =
+      vmsdk::ToValkeyStringVector("--my-bool no --my-number 10 --my-enum 4");
+  auto res = ModuleConfigManager::Instance().Init(&fake_ctx);
+  EXPECT_TRUE(res.ok());
+  res = ModuleConfigManager::Instance().ParseAndLoadArgv(&fake_ctx, args.data(),
+                                                         args.size());
+  EXPECT_TRUE(res.ok());
+  // Check that the default is updated
+  EXPECT_FALSE(boolean->GetDefaultValue());
+  EXPECT_EQ(enumerator->GetDefaultValue(), 4);
+  EXPECT_EQ(number_config->GetDefaultValue(), 10);
+
+  // Edit the configs
+  EXPECT_TRUE(enumerator->SetValue(1).ok());
+  EXPECT_TRUE(boolean->SetValue(true).ok());
+  EXPECT_TRUE(number_config->SetValue(55).ok());
+
+  // Make sure default is still the same
+  EXPECT_FALSE(boolean->GetDefaultValue());
+  EXPECT_EQ(enumerator->GetDefaultValue(), 4);
+  EXPECT_EQ(number_config->GetDefaultValue(), 10);
+
+  FreeValkeyArgs(args);
+}
+
 }  // namespace
 }  // namespace vmsdk

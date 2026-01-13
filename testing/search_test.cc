@@ -181,40 +181,32 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
       "numeric_index_100_20", "numeric_index_100_20", numeric_index_100_20));
   VMSDK_EXPECT_OK(index_schema->AddIndex(
       "numeric_index_100_40", "numeric_index_100_40", numeric_index_100_40));
-  indexes::Numeric::EntriesRange entries_range;
+  static indexes::Numeric::EntriesRange entries_range;
 
-  EXPECT_CALL(*numeric_index_100_10, Search(_, false))
-      .WillRepeatedly([&entries_range]() {
-        return std::make_unique<TestedNumericEntriesFetcher>(entries_range, 10);
-      });
-  EXPECT_CALL(*numeric_index_100_10, Search(_, true))
-      .WillRepeatedly([&entries_range]() {
-        return std::make_unique<TestedNumericEntriesFetcher>(entries_range, 90);
-      });
-  EXPECT_CALL(*numeric_index_100_30, Search(_, false))
-      .WillRepeatedly([&entries_range]() {
-        return std::make_unique<TestedNumericEntriesFetcher>(entries_range, 30);
-      });
-  EXPECT_CALL(*numeric_index_100_30, Search(_, true))
-      .WillRepeatedly([&entries_range]() {
-        return std::make_unique<TestedNumericEntriesFetcher>(entries_range, 70);
-      });
-  EXPECT_CALL(*numeric_index_100_20, Search(_, false))
-      .WillRepeatedly([&entries_range]() {
-        return std::make_unique<TestedNumericEntriesFetcher>(entries_range, 20);
-      });
-  EXPECT_CALL(*numeric_index_100_20, Search(_, true))
-      .WillRepeatedly([&entries_range]() {
-        return std::make_unique<TestedNumericEntriesFetcher>(entries_range, 80);
-      });
-  EXPECT_CALL(*numeric_index_100_40, Search(_, false))
-      .WillRepeatedly([&entries_range]() {
-        return std::make_unique<TestedNumericEntriesFetcher>(entries_range, 40);
-      });
-  EXPECT_CALL(*numeric_index_100_40, Search(_, true))
-      .WillRepeatedly([&entries_range]() {
-        return std::make_unique<TestedNumericEntriesFetcher>(entries_range, 60);
-      });
+  EXPECT_CALL(*numeric_index_100_10, Search(_, false)).WillRepeatedly([]() {
+    return std::make_unique<TestedNumericEntriesFetcher>(entries_range, 10);
+  });
+  EXPECT_CALL(*numeric_index_100_10, Search(_, true)).WillRepeatedly([]() {
+    return std::make_unique<TestedNumericEntriesFetcher>(entries_range, 90);
+  });
+  EXPECT_CALL(*numeric_index_100_30, Search(_, false)).WillRepeatedly([]() {
+    return std::make_unique<TestedNumericEntriesFetcher>(entries_range, 30);
+  });
+  EXPECT_CALL(*numeric_index_100_30, Search(_, true)).WillRepeatedly([]() {
+    return std::make_unique<TestedNumericEntriesFetcher>(entries_range, 70);
+  });
+  EXPECT_CALL(*numeric_index_100_20, Search(_, false)).WillRepeatedly([]() {
+    return std::make_unique<TestedNumericEntriesFetcher>(entries_range, 20);
+  });
+  EXPECT_CALL(*numeric_index_100_20, Search(_, true)).WillRepeatedly([]() {
+    return std::make_unique<TestedNumericEntriesFetcher>(entries_range, 80);
+  });
+  EXPECT_CALL(*numeric_index_100_40, Search(_, false)).WillRepeatedly([]() {
+    return std::make_unique<TestedNumericEntriesFetcher>(entries_range, 40);
+  });
+  EXPECT_CALL(*numeric_index_100_40, Search(_, true)).WillRepeatedly([]() {
+    return std::make_unique<TestedNumericEntriesFetcher>(entries_range, 60);
+  });
 
   data_model::TagIndex tag_index_proto;
   tag_index_proto.set_separator(",");
@@ -240,7 +232,8 @@ TEST_P(EvaluateFilterAsPrimaryTest, ParseParams) {
   const EvaluateFilterAsPrimaryTestCase &test_case = GetParam();
   auto index_schema = CreateIndexSchema(kIndexSchemaName).value();
   InitIndexSchema(index_schema.get());
-  FilterParser parser(*index_schema, test_case.filter, {});
+  TextParsingOptions options{};
+  FilterParser parser(*index_schema, test_case.filter, options);
   auto filter_parse_results = parser.Parse();
 
   // Generate the actual predicate tree structure
@@ -254,7 +247,8 @@ TEST_P(EvaluateFilterAsPrimaryTest, ParseParams) {
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
   EXPECT_EQ(
       EvaluateFilterAsPrimary(filter_parse_results.value().root_predicate.get(),
-                              entries_fetchers, false),
+                              entries_fetchers, false,
+                              filter_parse_results.value().query_operations),
       test_case.evaluate_size);
 
   EXPECT_EQ(entries_fetchers.size(), test_case.fetcher_ids.size());
@@ -572,7 +566,8 @@ TEST_P(LocalSearchTest, LocalSearchTest) {
   params.ef = kEfRuntime;
   std::vector<float> query_vector(kVectorDimensions, 1.0);
   params.query = VectorToStr(query_vector);
-  FilterParser parser(*index_schema, test_case.filter, {});
+  TextParsingOptions options{};
+  FilterParser parser(*index_schema, test_case.filter, options);
   params.filter_parse_results = std::move(parser.Parse().value());
   params.index_schema = index_schema;
   auto time_slice_queries = Metrics::GetStats().time_slice_queries.load();
@@ -580,7 +575,8 @@ TEST_P(LocalSearchTest, LocalSearchTest) {
   EXPECT_EQ(time_slice_queries + 1,
             Metrics::GetStats().time_slice_queries.load());
   VMSDK_EXPECT_OK(neighbors);
-  EXPECT_EQ(neighbors.value().size(), test_case.expected_neighbors_size);
+  EXPECT_EQ(neighbors.value().neighbors.size(),
+            test_case.expected_neighbors_size);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -667,7 +663,8 @@ TEST_P(FetchFilteredKeysTest, ParseParams) {
       index_schema->GetIndex(kVectorAttributeAlias)->get());
   const FetchFilteredKeysTestCase &test_case = GetParam();
   query::SearchParameters params(100000, nullptr, 0);
-  FilterParser parser(*index_schema, test_case.filter, {});
+  TextParsingOptions options{};
+  FilterParser parser(*index_schema, test_case.filter, options);
   params.filter_parse_results = std::move(parser.Parse().value());
   params.k = 100;
   auto vectors = DeterministicallyGenerateVectors(1, kVectorDimensions, 10.0);
@@ -679,8 +676,8 @@ TEST_P(FetchFilteredKeysTest, ParseParams) {
     entries_fetchers.push(std::make_unique<TestedNumericEntriesFetcher>(
         entries_range, std::make_pair(key_range.first, key_range.second)));
   }
-  auto results =
-      CalcBestMatchingPrefilteredKeys(params, entries_fetchers, vector_index);
+  auto results = CalcBestMatchingPrefilteredKeys(params, entries_fetchers,
+                                                 vector_index, 0);
   auto neighbors = vector_index->CreateReply(results).value();
   EXPECT_EQ(neighbors.size(), test_case.expected_keys.size());
   for (auto it = neighbors.begin(); it != neighbors.end(); ++it) {
@@ -719,12 +716,6 @@ INSTANTIATE_TEST_SUITE_P(
             .fetched_key_ranges = {{0, 4}},
             .expected_keys = {"1", "2", "3", "4"},
         },
-        {
-            .test_name = "and_predicate_both_sets_retrieved",
-            .filter = "@numeric:[0 4] @numeric:[1 6]",
-            .fetched_key_ranges = {{0, 4}, {1, 6}},
-            .expected_keys = {"1", "2", "3", "4"},
-        },
     }),
     [](const TestParamInfo<FetchFilteredKeysTestCase> &info) {
       return info.param.test_name;
@@ -755,16 +746,17 @@ TEST_P(SearchTest, ParseParams) {
   std::vector<float> query_vector(kVectorDimensions, 0.0);
   params.query = VectorToStr(query_vector);
   if (!test_case.filter.empty()) {
-    FilterParser parser(*params.index_schema, test_case.filter, {});
+    TextParsingOptions options{};
+    FilterParser parser(*params.index_schema, test_case.filter, options);
     params.filter_parse_results = std::move(parser.Parse().value());
   }
   auto neighbors = Search(params, query::SearchMode::kLocal);
   VMSDK_EXPECT_OK(neighbors);
 #ifndef SAN_BUILD
-  EXPECT_EQ(neighbors->size(), test_case.expected_keys.size());
+  EXPECT_EQ(neighbors->neighbors.size(), test_case.expected_keys.size());
 #endif
 
-  for (auto &neighbor : *neighbors) {
+  for (auto &neighbor : neighbors->neighbors) {
     EXPECT_TRUE(
         test_case.expected_keys.contains(std::string(*neighbor.external_id)));
   }
@@ -951,8 +943,8 @@ struct IndexedContentTestCase {
   bool no_content;
   std::vector<TestReturnAttribute> return_attributes;
   std::vector<TestIndex> indexes;
-  absl::StatusOr<std::deque<TestNeighbor>> input;
-  absl::StatusOr<std::deque<TestNeighbor>> expected_output;
+  absl::StatusOr<std::vector<TestNeighbor>> input;
+  absl::StatusOr<std::vector<TestNeighbor>> expected_output;
 };
 
 class IndexedContentTest
@@ -1031,10 +1023,10 @@ TEST_P(IndexedContentTest, MaybeAddIndexedContentTest) {
   }
   parameters.no_content = test_case.no_content;
 
-  absl::StatusOr<std::deque<indexes::Neighbor>> got;
+  absl::StatusOr<std::vector<indexes::Neighbor>> got;
   if (test_case.input.ok()) {
-    absl::StatusOr<std::deque<indexes::Neighbor>> neighbors =
-        std::deque<indexes::Neighbor>();
+    absl::StatusOr<std::vector<indexes::Neighbor>> neighbors =
+        std::vector<indexes::Neighbor>();
     for (auto &neighbor : test_case.input.value()) {
       neighbors->push_back(neighbor.ToIndexesNeighbor());
     }

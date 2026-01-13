@@ -10,6 +10,9 @@
 
 #include <vector>
 
+#include "absl/container/inlined_vector.h"
+#include "src/indexes/text.h"
+#include "src/indexes/text/flat_position_map.h"
 #include "src/indexes/text/text_iterator.h"
 
 namespace valkey_search::indexes::text {
@@ -38,10 +41,11 @@ from all the posting iterators that are on the current key and field mask.
 */
 class TermIterator : public TextIterator {
  public:
-  TermIterator(std::vector<Postings::KeyIterator>&& key_iterators,
-               const FieldMaskPredicate field_mask,
-               const InternedStringSet* untracked_keys,
-               const bool require_positions);
+  TermIterator(
+      absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>&&
+          key_iterators,
+      const FieldMaskPredicate field_mask,
+      const InternedStringSet* untracked_keys, const bool require_positions);
   /* Implementation of TextIterator APIs */
   FieldMaskPredicate QueryFieldMask() const override;
   // Key-level iteration
@@ -70,8 +74,10 @@ class TermIterator : public TextIterator {
 
  private:
   const FieldMaskPredicate query_field_mask_;
-  std::vector<Postings::KeyIterator> key_iterators_;
-  std::vector<Postings::PositionIterator> pos_iterators_;
+  absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>
+      key_iterators_;
+  absl::InlinedVector<PositionIterator, kWordExpansionInlineCapacity>
+      pos_iterators_;
   Key current_key_;
   std::optional<PositionRange> current_position_;
   FieldMaskPredicate current_field_mask_;

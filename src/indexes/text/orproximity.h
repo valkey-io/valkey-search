@@ -11,6 +11,8 @@
 #include <set>
 #include <vector>
 
+#include "absl/container/inlined_vector.h"
+#include "src/indexes/text.h"
 #include "src/indexes/text/text_iterator.h"
 
 namespace valkey_search::indexes::text {
@@ -28,8 +30,10 @@ Key differences from ProximityIterator:
 */
 class OrProximityIterator : public TextIterator {
  public:
-  OrProximityIterator(std::vector<std::unique_ptr<TextIterator>>&& iters,
-                      const InternedStringSet* untracked_keys = nullptr);
+  OrProximityIterator(
+      absl::InlinedVector<std::unique_ptr<TextIterator>,
+                          kProximityTermsInlineCapacity>&& iters,
+      const InternedStringSet* untracked_keys = nullptr);
 
   /* Implementation of TextIterator APIs */
   FieldMaskPredicate QueryFieldMask() const override;
@@ -46,7 +50,9 @@ class OrProximityIterator : public TextIterator {
   bool IsIteratorValid() const override;
 
  private:
-  std::vector<std::unique_ptr<TextIterator>> iters_;
+  absl::InlinedVector<std::unique_ptr<TextIterator>,
+                      kProximityTermsInlineCapacity>
+      iters_;
   Key current_key_;
   std::optional<PositionRange> current_position_;
   FieldMaskPredicate current_field_mask_;
@@ -55,10 +61,12 @@ class OrProximityIterator : public TextIterator {
   // Multiset for efficient key management
   std::multiset<std::pair<Key, size_t>> key_set_;
   // Current iterators on same key
-  std::vector<size_t> current_key_indices_;
+  absl::InlinedVector<size_t, kProximityTermsInlineCapacity>
+      current_key_indices_;
   // Multiset for position optimization (supports future SeekForwardPosition)
   std::multiset<std::pair<Position, size_t>> pos_set_;
-  std::vector<size_t> current_pos_indices_;
+  absl::InlinedVector<size_t, kProximityTermsInlineCapacity>
+      current_pos_indices_;
 
   void InsertValidKeyIterator(size_t idx);
   bool FindMinimumKey();

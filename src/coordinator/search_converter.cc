@@ -16,6 +16,7 @@
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
+#include "src/commands/filter_parser.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
@@ -48,10 +49,13 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
           index_schema->GetIdentifier(predicate.tag().attribute_alias()));
       attribute_identifiers.insert(identifier);
       auto tag_index = dynamic_cast<indexes::Tag*>(index.get());
+
+      // Parsing QUERY STRING: raw_tag_string originates from user query.
+      // Use FilterParser::ParseQueryTags to ensure consistent parsing with '|'
+      // separator (query language OR syntax).
       VMSDK_ASSIGN_OR_RETURN(
           auto parsed_tags,
-          tag_index->ParseSearchTags(predicate.tag().raw_tag_string(),
-                                     tag_index->GetSeparator()));
+          FilterParser::ParseQueryTags(predicate.tag().raw_tag_string()));
       auto tag_predicate = std::make_unique<query::TagPredicate>(
           tag_index, predicate.tag().attribute_alias(), identifier,
           predicate.tag().raw_tag_string(), parsed_tags);
@@ -79,6 +83,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
     }
     case Predicate::kAnd: {
       std::vector<std::unique_ptr<query::Predicate>> children;
+      children.reserve(predicate.and_().children_size());
       for (const auto& child_predicate : predicate.and_().children()) {
         VMSDK_ASSIGN_OR_RETURN(
             auto child, GRPCPredicateToPredicate(child_predicate, index_schema,
@@ -98,6 +103,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
     }
     case Predicate::kOr: {
       std::vector<std::unique_ptr<query::Predicate>> children;
+      children.reserve(predicate.or_().children_size());
       for (const auto& child_predicate : predicate.or_().children()) {
         VMSDK_ASSIGN_OR_RETURN(
             auto child, GRPCPredicateToPredicate(child_predicate, index_schema,
@@ -174,31 +180,6 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
           text_index_schema, predicate.fuzzy().field_mask(),
           predicate.fuzzy().content(), predicate.fuzzy().distance());
     }
-    case Predicate::kProximity: {
-      auto text_index_schema = index_schema->GetTextIndexSchema();
-      if (!text_index_schema) {
-        return absl::InvalidArgumentError("Index does not have any text field");
-      }
-      auto identifiers = index_schema->GetTextIdentifiersByFieldMask(
-          predicate.term().field_mask());
-      attribute_identifiers.insert(identifiers.begin(), identifiers.end());
-      std::vector<std::unique_ptr<query::TextPredicate>> nodes;
-      for (const auto& node : predicate.proximity().nodes()) {
-        VMSDK_ASSIGN_OR_RETURN(auto predicate_node,
-                               GRPCPredicateToPredicate(node, index_schema,
-                                                        attribute_identifiers));
-        auto text_predicate =
-            dynamic_cast<query::TextPredicate*>(predicate_node.release());
-        if (!text_predicate) {
-          return absl::InvalidArgumentError(
-              "Proximity predicate must contain text predicates");
-        }
-        nodes.emplace_back(text_predicate);
-      }
-      return std::make_unique<query::ProximityPredicate>(
-          std::move(nodes), predicate.proximity().slop(),
-          predicate.proximity().inorder());
-    }
     case Predicate::PREDICATE_NOT_SET:
       return absl::InvalidArgumentError("Predicate not set");
   }
@@ -246,6 +227,8 @@ GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request,
   }
   parameters->index_fingerprint_version = request.index_fingerprint_version();
   parameters->slot_fingerprint = request.slot_fingerprint();
+  parameters->filter_parse_results.query_operations =
+      static_cast<QueryOperations>(request.query_operations());
   return parameters;
 }
 
@@ -352,18 +335,6 @@ std::unique_ptr<Predicate> PredicateToGRPCPredicate(
             std::string(fuzzy->GetTextString()));
         proto->mutable_fuzzy()->set_distance(fuzzy->GetDistance());
         return proto;
-      } else if (auto proximity =
-                     dynamic_cast<const query::ProximityPredicate*>(
-                         &predicate)) {
-        auto proto = std::make_unique<Predicate>();
-        for (const auto& node : proximity->Terms()) {
-          auto node_proto = PredicateToGRPCPredicate(*node);
-          proto->mutable_proximity()->mutable_nodes()->AddAllocated(
-              node_proto.release());
-        }
-        proto->mutable_proximity()->set_slop(proximity->Slop());
-        proto->mutable_proximity()->set_inorder(proximity->InOrder());
-        return proto;
       }
       return nullptr;
     }
@@ -412,6 +383,8 @@ std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
   *request->mutable_index_fingerprint_version() =
       parameters.index_fingerprint_version;
   request->set_slot_fingerprint(parameters.slot_fingerprint);
+  request->set_query_operations(
+      static_cast<uint64_t>(parameters.filter_parse_results.query_operations));
   return request;
 }
 

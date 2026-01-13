@@ -63,6 +63,13 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
       std::make_shared<IndexTeser<indexes::Tag, data_model::TagIndex>>(
           tag_index_proto);
   VMSDK_EXPECT_OK(tag_index_1->AddRecord("key1", "tag1"));
+  // Add records with literal special characters for escape testing
+  // key_pipe has tag "a|b" (literal pipe in the stored value)
+  VMSDK_EXPECT_OK(tag_index_1->AddRecord("key_pipe", "a|b"));
+  // key_backslash_pipe has tag "a\|b" (backslash + pipe)
+  VMSDK_EXPECT_OK(tag_index_1->AddRecord("key_backslash_pipe", R"(a\|b)"));
+  // key_backslash has tag "a\" (trailing backslash)
+  VMSDK_EXPECT_OK(tag_index_1->AddRecord("key_backslash", R"(a\)"));
   VMSDK_EXPECT_OK(
       index_schema->AddIndex("tag_field_1", "tag_field_1", tag_index_1));
   auto tag_index_1_2 =
@@ -120,7 +127,8 @@ TEST_P(FilterTest, ParseParams) {
   InitIndexSchema(index_schema.get());
   EXPECT_CALL(*index_schema, GetIdentifier(::testing::_))
       .Times(::testing::AnyNumber());
-  FilterParser parser(*index_schema, test_case.filter, {});
+  TextParsingOptions options{};
+  FilterParser parser(*index_schema, test_case.filter, options);
   auto parse_results = parser.Parse();
   EXPECT_EQ(test_case.create_success, parse_results.ok());
   if (!test_case.create_success) {
@@ -141,9 +149,23 @@ TEST_P(FilterTest, ParseParams) {
   // Now evaluate all predicates, including text predicates
   if (test_case.evaluate_success.has_value()) {
     auto interned_key = StringInternStore::Intern(test_case.key);
-    EXPECT_EQ(test_case.evaluate_success.value(),
-              evaluator_.Evaluate(*parse_results.value().root_predicate,
-                                  interned_key));
+
+    // Set up text index for text predicate evaluation
+    if (index_schema->GetTextIndexSchema()) {
+      auto &per_key_indexes =
+          index_schema->GetTextIndexSchema()->GetPerKeyTextIndexes();
+      auto text_index =
+          valkey_search::indexes::text::TextIndexSchema::LookupTextIndex(
+              per_key_indexes, interned_key);
+      indexes::PrefilterEvaluator evaluator(text_index);
+      EXPECT_EQ(test_case.evaluate_success.value(),
+                evaluator.Evaluate(*parse_results.value().root_predicate,
+                                   interned_key));
+    } else {
+      EXPECT_EQ(test_case.evaluate_success.value(),
+                evaluator_.Evaluate(*parse_results.value().root_predicate,
+                                    interned_key));
+    }
   }
 }
 
@@ -578,7 +600,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         {
             .test_name = "tag_case_sensitive_3",
-            .filter = "@tag_field_case_insensitive:{Tag0@Tag1}",
+            .filter = "@tag_field_case_insensitive:{Tag0|Tag1}",
             .create_success = true,
             .evaluate_success = true,
             .expected_tree_structure = "TAG(tag_field_case_insensitive)\n",
@@ -600,14 +622,14 @@ INSTANTIATE_TEST_SUITE_P(
         },
         {
             .test_name = "tag_happy_path_2",
-            .filter = "@tag_field_1:{tag1 , tag2}",
+            .filter = "@tag_field_1:{tag1|tag2}",
             .create_success = true,
             .evaluate_success = true,
             .expected_tree_structure = "TAG(tag_field_1)\n",
         },
         {
             .test_name = "tag_happy_path_4",
-            .filter = "@tag_field_with_space:{tag 1 , tag4}",
+            .filter = "@tag_field_with_space:{tag 1|tag4}",
             .create_success = true,
             .evaluate_success = true,
             .expected_tree_structure = "TAG(tag_field_with_space)\n",
@@ -621,7 +643,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         {
             .test_name = "tag_not_found_2",
-            .filter = "-@tag_field_with_space:{tag1 , tag 2}",
+            .filter = "-@tag_field_with_space:{tag1|tag 2}",
             .create_success = true,
             .evaluate_success = false,
             .expected_tree_structure = "NOT{\n"
@@ -840,20 +862,30 @@ INSTANTIATE_TEST_SUITE_P(
             .create_success = false,
             .create_expected_error_message = "Unsupported query operation",
         },
-        {.test_name = "exact_fuzzy1",
-         .filter = "@text_field1:%word%",
-         .create_success = false,
-         .create_expected_error_message = "Unsupported query operation"},
+        {
+            .test_name = "exact_fuzzy1",
+            .filter = "@text_field1:%word%",
+            .create_success = true,
+            .evaluate_success = true,
+            .expected_tree_structure =
+                "TEXT-FUZZY(\"word\", distance=1, field_mask=1)\n",
+        },
         {
             .test_name = "exact_fuzzy2",
             .filter = "@text_field1:%%word%%",
-            .create_success = false,
-            .create_expected_error_message = "Unsupported query operation",
+            .create_success = true,
+            .evaluate_success = true,
+            .expected_tree_structure =
+                "TEXT-FUZZY(\"word\", distance=2, field_mask=1)\n",
         },
-        {.test_name = "exact_fuzzy3",
-         .filter = "@text_field1:%%%word%%%",
-         .create_success = false,
-         .create_expected_error_message = "Unsupported query operation"},
+        {
+            .test_name = "exact_fuzzy3",
+            .filter = "@text_field1:%%%word%%%",
+            .create_success = true,
+            .evaluate_success = true,
+            .expected_tree_structure =
+                "TEXT-FUZZY(\"word\", distance=3, field_mask=1)\n",
+        },
         {
             .test_name = "proximity1",
             .filter = "@text_field1:\"hello my name is\"",
@@ -1044,15 +1076,50 @@ INSTANTIATE_TEST_SUITE_P(
             .create_expected_error_message = "Unsupported query operation",
         },
         {
-            .test_name = "proximity3",
+            .test_name = "mixed_fulltext",
             .filter =
                 "@text_field1:\"Advanced Neural Networking in plants\" | "
                 "@text_field1:Advanced @text_field2:neu* @text_field1:network"
                 "@num_field_2.0:[10 100] @text_field1:hello | "
                 "@tag_field_1:{books} @text_field2:Neural | "
                 "@text_field1:%%%word%%% @text_field2:network",
-            .create_success = false,
-            .create_expected_error_message = "Unsupported query operation",
+            .create_success = true,
+            .expected_tree_structure =
+                "OR{\n"
+                "  AND(slop=0, inorder=true){\n"
+                "    TEXT-TERM(\"advanced\", field_mask=1)\n"
+                "    TEXT-TERM(\"neural\", field_mask=1)\n"
+                "    TEXT-TERM(\"networking\", field_mask=1)\n"
+                "    TEXT-TERM(\"in\", field_mask=1)\n"
+                "    TEXT-TERM(\"plants\", field_mask=1)\n"
+                "  }\n"
+                "  AND{\n"
+                "    TEXT-TERM(\"advanc\", field_mask=1)\n"
+                "    TEXT-PREFIX(\"neu\", field_mask=2)\n"
+                "    TEXT-TERM(\"network\", field_mask=1)\n"
+                "    NUMERIC(num_field_2.0)\n"
+                "    TEXT-TERM(\"hello\", field_mask=1)\n"
+                "  }\n"
+                "  AND{\n"
+                "    TAG(tag_field_1)\n"
+                "    TEXT-TERM(\"neural\", field_mask=2)\n"
+                "  }\n"
+                "  AND{\n"
+                "    TEXT-FUZZY(\"word\", distance=3, field_mask=1)\n"
+                "    TEXT-TERM(\"network\", field_mask=2)\n"
+                "  }\n"
+                "}\n",
+        },
+        {
+            .test_name = "fuzzy_ignored_in_exact_phrase",
+            .filter = "@text_field1:\" Advanced Neural %%%word%%%\"",
+            .create_success = true,
+            .expected_tree_structure =
+                "AND(slop=0, inorder=true){\n"
+                "  TEXT-TERM(\"advanced\", field_mask=1)\n"
+                "  TEXT-TERM(\"neural\", field_mask=1)\n"
+                "  TEXT-TERM(\"word\", field_mask=1)\n"
+                "}\n",
         },
         {
             .test_name = "invalid_fuzzy1",
@@ -1064,7 +1131,7 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "invalid_fuzzy2",
             .filter = "Hello, how are %you%% doing",
             .create_success = false,
-            .create_expected_error_message = "Unsupported query operation",
+            .create_expected_error_message = "Invalid fuzzy '%' markers",
         },
         {
             .test_name = "invalid_fuzzy3",
@@ -1076,7 +1143,19 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "invalid_fuzzy4",
             .filter = "Hello, how are %%%you%%%doing%%%",
             .create_success = false,
-            .create_expected_error_message = "Unsupported query operation",
+            .create_expected_error_message = "Invalid fuzzy '%' markers",
+        },
+        {
+            .test_name = "invalid_fuzzy5",
+            .filter = "Hello, how are %%%  %%%",
+            .create_success = false,
+            .create_expected_error_message = "Invalid fuzzy '%' markers",
+        },
+        {
+            .test_name = "invalid_fuzzy6",
+            .filter = "Hello, how are %%%*%%%",
+            .create_success = false,
+            .create_expected_error_message = "Invalid fuzzy '%' markers",
         },
         {
             .test_name = "invalid_escape1",
@@ -1247,7 +1326,7 @@ INSTANTIATE_TEST_SUITE_P(
         {
             .test_name = "nested_brackets_and_2",
             .filter = "(@num_field_1.5:[1.0 2.0] (@num_field_2.0:[1.0 3.0] "
-                      "(@tag_field_1:{tag1} (@tag_field_1_2:{tag1,tag2} "
+                      "(@tag_field_1:{tag1} (@tag_field_1_2:{tag1|tag2} "
                       "(@num_field_1.5:[1.0 2.0] @num_field_2.0:[1.0 3.0]) "
                       "@tag_field_1:{tag1}))))",
             .create_success = true,
@@ -1273,7 +1352,7 @@ INSTANTIATE_TEST_SUITE_P(
         {
             .test_name = "nested_brackets_and_3",
             .filter = "@num_field_1.5:[1.0 2.0] (@num_field_2.0:[1.0 3.0] "
-                      "(@tag_field_1:{tag1} (@tag_field_1_2:{tag1,tag2} "
+                      "(@tag_field_1:{tag1} (@tag_field_1_2:{tag1|tag2} "
                       "(@num_field_1.5:[1.0 2.0] @num_field_2.0:[1.0 3.0]))))",
             .create_success = true,
             .evaluate_success = true,
@@ -1522,6 +1601,82 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = "@num_field_1.5:[1.0 2.0] ( | )",
             .create_success = false,
             .create_expected_error_message = "Missing OR term",
+        },
+        // =================================================================
+        // Tests for escaped pipe separator in tag values
+        // =================================================================
+        //
+        // Test data setup:
+        //   key1 has tag "tag1"
+        //   key_pipe has tag "a|b" (literal pipe)
+        //   key_backslash_pipe has tag "a\|b" (backslash + pipe)
+        //   key_backslash has tag "a\" (trailing backslash)
+        //
+        {
+            .test_name = "tag_escaped_pipe_matches_literal_pipe",
+            .filter = R"(@tag_field_1:{a\|b})",
+            .create_success = true,
+            .evaluate_success = true,
+            .key = "key_pipe",  // has tag "a|b"
+        },
+        {
+            .test_name = "tag_escaped_backslash_matches_literal_backslash",
+            .filter = R"(@tag_field_1:{a\\})",
+            .create_success = true,
+            .evaluate_success = true,
+            .key = "key_backslash",  // has tag "a\"
+        },
+        {
+            .test_name = "tag_escaped_backslash_pipe_matches_literal",
+            .filter = R"(@tag_field_1:{a\\\|b})",
+            .create_success = true,
+            .evaluate_success = true,
+            .key = "key_backslash_pipe",  // has tag "a\|b"
+        },
+        {
+            .test_name = "tag_escaped_pipe_or_unescaped_first_matches",
+            .filter = R"(@tag_field_1:{a\|b|tag1})",
+            .create_success = true,
+            .evaluate_success = true,
+            .key = "key_pipe",  // has tag "a|b"
+        },
+        {
+            .test_name = "tag_escaped_pipe_or_unescaped_second_matches",
+            .filter = R"(@tag_field_1:{a\|b|tag1})",
+            .create_success = true,
+            .evaluate_success = true,  // "tag1" matches via naive split too
+            .key = "key1",
+        },
+        {
+            .test_name = "tag_escaped_backslash_or_literal",
+            .filter = R"(@tag_field_1:{a\\|b})",
+            .create_success = true,
+            .evaluate_success = true,
+            .key = "key_backslash",  // has tag "a\"
+        },
+        {
+            .test_name = "tag_escaped_pipe_no_match",
+            .filter = R"(@tag_field_1:{x\|y})",
+            .create_success = true,
+            .evaluate_success = false,
+            .key = "key1",
+        },
+        // =================================================================
+        // Hierarchical tests: ensure escaping works with AND/OR operators
+        // =================================================================
+        {
+            .test_name = "tag_escaped_with_and_numeric",
+            .filter = R"(@tag_field_1:{a\|b|tag1} @num_field_1.5:[1.0 2.0])",
+            .create_success = true,
+            .evaluate_success = true,
+            .key = "key1",
+        },
+        {
+            .test_name = "tag_only_escaped_matches_with_or_numeric",
+            .filter = R"(@tag_field_1:{a\|b} | @num_field_1.5:[100 200])",
+            .create_success = true,
+            .evaluate_success = true,  // "a|b" should match, numeric doesn't
+            .key = "key_pipe",
         },
     }),
     [](const TestParamInfo<FilterTestCase> &info) {

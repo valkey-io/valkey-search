@@ -21,6 +21,7 @@
 #include "src/attribute_data_type.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
+#include "src/indexes/text/text_index.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
 #include "src/query/predicate.h"
@@ -80,16 +81,12 @@ namespace valkey_search::query {
 class PredicateEvaluator : public query::Evaluator {
  public:
   explicit PredicateEvaluator(const RecordsMap &records)
-      : records_(records), per_key_indexes_(nullptr) {}
+      : records_(records), text_index_(nullptr) {}
 
-  PredicateEvaluator(
-      const RecordsMap &records,
-      const InternedStringNodeHashMap<valkey_search::indexes::text::TextIndex>
-          *per_key_indexes,
-      InternedStringPtr target_key)
-      : records_(records),
-        per_key_indexes_(per_key_indexes),
-        target_key_(target_key) {}
+  PredicateEvaluator(const RecordsMap &records,
+                     const valkey_search::indexes::text::TextIndex *text_index,
+                     InternedStringPtr target_key)
+      : records_(records), text_index_(text_index), target_key_(target_key) {}
 
   const InternedStringPtr &GetTargetKey() const override { return target_key_; }
 
@@ -101,6 +98,9 @@ class PredicateEvaluator : public query::Evaluator {
       ;
     }
     auto index = predicate.GetIndex();
+    // Parsing RECORD DATA: Field value from database key for post-query
+    // verification. Uses schema-defined separator since this is record data,
+    // not query syntax.
     auto tags = indexes::Tag::ParseSearchTags(
         vmsdk::ToStringView(it->second.value.get()), index->GetSeparator());
     if (!tags.ok()) {
@@ -127,19 +127,16 @@ class PredicateEvaluator : public query::Evaluator {
 
   EvaluationResult EvaluateText(const query::TextPredicate &predicate,
                                 bool require_positions) override {
-    auto it = per_key_indexes_->find(target_key_);
-    if (it == per_key_indexes_->end()) {
-      VMSDK_LOG(WARNING, nullptr)
-          << "Target key not found in index for predicate evaluation";
+    CHECK(target_key_);
+    if (!text_index_) {
       return EvaluationResult(false);
     }
-    return predicate.Evaluate(it->second, target_key_, require_positions);
+    return predicate.Evaluate(*text_index_, target_key_, require_positions);
   }
 
  private:
   const RecordsMap &records_;
-  const InternedStringNodeHashMap<valkey_search::indexes::text::TextIndex>
-      *per_key_indexes_;
+  const valkey_search::indexes::text::TextIndex *text_index_ = nullptr;
   InternedStringPtr target_key_;
 };
 
@@ -155,8 +152,12 @@ bool VerifyFilter(const query::Predicate *predicate, const RecordsMap &records,
     // TODO: Wait for any in-flight indexing operations to complete before
     // acquiring the lock, ensuring we evaluate against the latest index state.
     return parameters.index_schema->GetTextIndexSchema()->WithPerKeyTextIndexes(
-        [&](auto &per_key_indexes) {
-          PredicateEvaluator evaluator(records, &per_key_indexes, target_key);
+        [&](const auto &per_key_indexes) {
+          PredicateEvaluator evaluator(
+              records,
+              valkey_search::indexes::text::TextIndexSchema::LookupTextIndex(
+                  per_key_indexes, target_key),
+              target_key);
           EvaluationResult result = predicate->Evaluate(evaluator);
           return result.matches;
         });
@@ -258,7 +259,7 @@ absl::StatusOr<RecordsMap> GetContent(
 // This function is meant to be used for non-vector queries.
 void ProcessNonVectorNeighborsForReply(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
-    std::deque<indexes::Neighbor> &neighbors,
+    std::vector<indexes::Neighbor> &neighbors,
     const query::SearchParameters &parameters) {
   ProcessNeighborsForReply(ctx, attribute_data_type, neighbors, parameters, "");
 }
@@ -269,7 +270,7 @@ void ProcessNonVectorNeighborsForReply(
 // Any data not found locally will be skipped.
 void ProcessNeighborsForReply(ValkeyModuleCtx *ctx,
                               const AttributeDataType &attribute_data_type,
-                              std::deque<indexes::Neighbor> &neighbors,
+                              std::vector<indexes::Neighbor> &neighbors,
                               const query::SearchParameters &parameters,
                               const std::string &identifier) {
   const auto max_content_size =

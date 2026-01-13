@@ -33,6 +33,11 @@ class FilterParser {
 
   absl::StatusOr<FilterParseResults> Parse();
 
+  // Parses query string tags using '|' as separator (query language OR syntax).
+  // This is the single entry point for parsing tag strings from user queries.
+  static absl::StatusOr<absl::flat_hash_set<absl::string_view>> ParseQueryTags(
+      absl::string_view tag_string);
+
  private:
   const IndexSchema& index_schema_;
   absl::string_view expression_;
@@ -59,9 +64,6 @@ class FilterParser {
   absl::StatusOr<double> ParseNumber();
 
   absl::StatusOr<absl::string_view> ParseTagString();
-
-  absl::StatusOr<absl::flat_hash_set<absl::string_view>> ParseTags(
-      absl::string_view tag_string, indexes::Tag* tag_index) const;
 };
 
 namespace options {

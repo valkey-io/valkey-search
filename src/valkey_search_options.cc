@@ -6,6 +6,7 @@
  */
 #include "valkey_search_options.h"
 
+#include "absl/strings/numbers.h"
 #include "valkey_search.h"
 #include "vmsdk/src/concurrency.h"
 #include "vmsdk/src/module_config.h"
@@ -110,6 +111,20 @@ static auto writer_threads_count =
             })
         .Build();
 
+/// Register the "--utility-threads" flag. Controls the utility thread pool
+constexpr absl::string_view kUtilityThreadsConfig{"utility-threads"};
+static auto utility_threads_count =
+    config::NumberBuilder(kUtilityThreadsConfig,  // name
+                          1,                      // default size (1 thread)
+                          1,                      // min size
+                          kMaxThreadsCount)       // max size
+        .WithModifyCallback(                      // set an "On-Modify" callback
+            [](auto new_value) {
+              UpdateThreadPoolCount(
+                  ValkeySearch::Instance().GetUtilityThreadPool(), new_value);
+            })
+        .Build();
+
 /// Register the "--max-worker-suspension-secs" flag.
 /// Controls the resumption of the worker thread pool:
 ///   - If max-worker-suspension-secs > 0, resume the workers either when the
@@ -187,6 +202,13 @@ constexpr absl::string_view kPreferConsistentResults{
 static config::Boolean prefer_consistent_results(kPreferConsistentResults,
                                                  false);
 
+/// Enable search result background cleanup
+/// If set to true, search result cleanup will be scheduled on background thread
+constexpr absl::string_view kSearchResultBackgroundCleanup{
+    "search-result-background-cleanup"};
+static config::Boolean search_result_background_cleanup(
+    kSearchResultBackgroundCleanup, true);
+
 /// Configure the weight for high priority tasks in thread pools (0-100)
 /// Low priority weight = 100 - high_priority_weight
 constexpr absl::string_view kHighPriorityWeight{"high-priority-weight"};
@@ -194,7 +216,7 @@ static auto high_priority_weight =
     config::NumberBuilder(kHighPriorityWeight, 100, 0,
                           100)  // Default 100%, range 0-100
         .WithModifyCallback([](auto new_value) {
-          // Update both reader and writer thread pools
+          // Update reader and writer thread pools only
           auto reader_pool = ValkeySearch::Instance().GetReaderThreadPool();
           auto writer_pool = ValkeySearch::Instance().GetWriterThreadPool();
           if (reader_pool) {
@@ -270,15 +292,11 @@ static auto thread_pool_wait_time_samples =
           if (auto writer_pool = instance.GetWriterThreadPool()) {
             writer_pool->ResizeSampleQueue(new_size);
           }
+          if (auto utility_pool = instance.GetUtilityThreadPool()) {
+            utility_pool->ResizeSampleQueue(new_size);
+          }
         })
         .Build();
-
-/// Enable prefilter evaluation
-/// When disabled, prefilter evaluation is skipped and effectively becomes a
-/// pass-through with only deduplication of keys.
-constexpr absl::string_view kEnablePrefilterEval{"enable-prefilter-eval"};
-static auto enable_prefilter_eval =
-    config::BooleanBuilder(kEnablePrefilterEval, true).Build();
 
 /// Enable proximity evaluation in prefilter evaluation stage
 /// When disabled, proximity evaluation is skipped in background threads and is
@@ -287,6 +305,56 @@ constexpr absl::string_view kEnableProximityPrefilterEval{
     "enable-proximity-prefilter-eval"};
 static auto enable_proximity_prefilter_eval =
     config::BooleanBuilder(kEnableProximityPrefilterEval, true).Build();
+
+/// Register the "--max-term-expansions" flag. Controls the maximum number of
+/// words to search in text operations (prefix, suffix, fuzzy) to limit memory
+/// usage
+constexpr absl::string_view kMaxTermExpansionsConfig{"max-term-expansions"};
+constexpr uint32_t kDefaultMaxTermExpansions{200};     // Default 200 words
+constexpr uint32_t kMinimumMaxTermExpansions{1};       // At least 1 word
+constexpr uint32_t kMaximumMaxTermExpansions{100000};  // Max 100k words
+static auto max_term_expansions =
+    config::NumberBuilder(kMaxTermExpansionsConfig,   // name
+                          kDefaultMaxTermExpansions,  // default limit (200)
+                          kMinimumMaxTermExpansions,  // min limit (1)
+                          kMaximumMaxTermExpansions)  // max limit (100k)
+        .Build();
+
+/// Register the "search-result-buffer-multiplier" flag
+constexpr absl::string_view kSearchResultBufferMultiplierConfig{
+    "search-result-buffer-multiplier"};
+constexpr absl::string_view kDefaultSearchResultBufferMultiplier{"1.5"};
+constexpr double kMinimumSearchResultBufferMultiplier{1.0};
+constexpr double kMaximumSearchResultBufferMultiplier{1000.0};
+static double search_result_buffer_multiplier{1.5};
+static auto search_result_buffer_multiplier_config =
+    config::StringBuilder(kSearchResultBufferMultiplierConfig,
+                          kDefaultSearchResultBufferMultiplier)
+        .WithValidationCallback([](const std::string& value) -> absl::Status {
+          double parsed_value;
+          if (!absl::SimpleAtod(value, &parsed_value)) {
+            return absl::InvalidArgumentError(
+                "Buffer multiplier must be a valid number");
+          }
+          if (parsed_value < kMinimumSearchResultBufferMultiplier ||
+              parsed_value > kMaximumSearchResultBufferMultiplier) {
+            return absl::InvalidArgumentError(absl::StrFormat(
+                "Buffer multiplier must be between %.1f and %.1f",
+                kMinimumSearchResultBufferMultiplier,
+                kMaximumSearchResultBufferMultiplier));
+          }
+          return absl::OkStatus();
+        })
+        .WithModifyCallback([](const std::string& value) {
+          double parsed_value;
+          CHECK(absl::SimpleAtod(value, &parsed_value));
+          search_result_buffer_multiplier = parsed_value;
+        })
+        .Build();
+
+double GetSearchResultBufferMultiplier() {
+  return search_result_buffer_multiplier;
+}
 
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 
@@ -300,6 +368,10 @@ vmsdk::config::Number& GetReaderThreadCount() {
 
 vmsdk::config::Number& GetWriterThreadCount() {
   return dynamic_cast<vmsdk::config::Number&>(*writer_threads_count);
+}
+
+vmsdk::config::Number& GetUtilityThreadCount() {
+  return dynamic_cast<vmsdk::config::Number&>(*utility_threads_count);
 }
 
 vmsdk::config::Number& GetMaxWorkerSuspensionSecs() {
@@ -336,6 +408,10 @@ const vmsdk::config::Boolean& GetPreferConsistentResults() {
   return static_cast<vmsdk::config::Boolean&>(prefer_consistent_results);
 }
 
+const vmsdk::config::Boolean& GetSearchResultBackgroundCleanup() {
+  return static_cast<vmsdk::config::Boolean&>(search_result_background_cleanup);
+}
+
 vmsdk::config::Number& GetHighPriorityWeight() {
   return dynamic_cast<vmsdk::config::Number&>(*high_priority_weight);
 }
@@ -357,13 +433,13 @@ vmsdk::config::Number& GetThreadPoolWaitTimeSamples() {
   return dynamic_cast<vmsdk::config::Number&>(*thread_pool_wait_time_samples);
 }
 
-vmsdk::config::Boolean& GetEnablePrefilterEval() {
-  return dynamic_cast<vmsdk::config::Boolean&>(*enable_prefilter_eval);
-}
-
 vmsdk::config::Boolean& GetEnableProximityPrefilterEval() {
   return dynamic_cast<vmsdk::config::Boolean&>(
       *enable_proximity_prefilter_eval);
+}
+
+vmsdk::config::Number& GetMaxTermExpansions() {
+  return dynamic_cast<vmsdk::config::Number&>(*max_term_expansions);
 }
 
 }  // namespace options

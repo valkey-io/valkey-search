@@ -75,12 +75,6 @@ message FuzzyPredicate {
   uint32 distance = 3;
 }
 
-message ProximityPredicate {
-  repeated Predicate nodes = 1;
-  uint32 slop = 2;
-  bool inorder = 3;
-}
-
 message AndPredicate {
   repeated Predicate children = 1;
   optional uint32 slop = 2;
@@ -107,7 +101,6 @@ message Predicate {
     SuffixPredicate suffix = 8;
     InfixPredicate infix = 9;
     FuzzyPredicate fuzzy = 10;
-    ProximityPredicate proximity = 11;
   }
 }
 
@@ -139,6 +132,7 @@ message SearchIndexPartitionRequest {
   bool enable_consistency = 15;
   IndexFingerprintVersion index_fingerprint_version = 16;
   uint64 slot_fingerprint = 17;
+  uint64 query_operations = 18;
 }
 
 message NeighborEntry {
@@ -149,6 +143,7 @@ message NeighborEntry {
 
 message SearchIndexPartitionResponse {
   repeated NeighborEntry neighbors = 1;
+  uint64 total_count = 2;
 }
 
 message AttributeContentEntry {

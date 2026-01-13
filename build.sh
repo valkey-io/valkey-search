@@ -452,12 +452,12 @@ fi
 
 if [[ "${RUN_TEST}" == "all" ]]; then
     rm -f "${TEST_OUTPUT_FILE}"
-    find "${TESTS_DIR}" -name "*_test" -type f | while read -r test; do
+    while read -r test; do
         echo "==> Running executable: ${test}" >> "${TEST_OUTPUT_FILE}"
         echo "" >> "${TEST_OUTPUT_FILE}"
         print_test_prefix "${test}"
         ("${test}" >> "${TEST_OUTPUT_FILE}" 2>&1 && print_test_ok) || print_test_error_and_exit
-    done
+    done < <(find "${TESTS_DIR}" -name "*_test" -type f)
     print_test_summary
 elif [ ! -z "${RUN_TEST}" ]; then
     rm -f "${TEST_OUTPUT_FILE}"

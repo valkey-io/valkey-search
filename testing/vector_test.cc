@@ -508,7 +508,7 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
     auto vectors = DeterministicallyGenerateVectors(1000, kDimensions, 2.2);
     auto search_vectors =
         DeterministicallyGenerateVectors(50, kDimensions, 1.5);
-    std::vector<std::deque<Neighbor>> expected_results;
+    std::vector<std::vector<Neighbor>> expected_results;
 
     data_model::VectorIndex flat_proto = CreateFlatVectorIndexProto(
         kDimensions, distance_metric, initial_cap, kBlockSize);

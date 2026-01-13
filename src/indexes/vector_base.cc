@@ -105,16 +105,10 @@ query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(
 query::EvaluationResult PrefilterEvaluator::EvaluateText(
     const query::TextPredicate &predicate, bool require_positions) {
   CHECK(key_);
-  // Evaluate using per-key text index
-  auto text_index_schema = predicate.GetTextIndexSchema();
-  auto &per_key_indexes = text_index_schema->GetPerKeyTextIndexes();
-  auto it = per_key_indexes.find(*key_);
-  if (it == per_key_indexes.end()) {
-    VMSDK_LOG(WARNING, nullptr)
-        << "Target key not found in index for pre-filter evaluation";
+  if (!text_index_) {
     return query::EvaluationResult(false);
   }
-  return predicate.Evaluate(it->second, *key_, require_positions);
+  return predicate.Evaluate(*text_index_, *key_, require_positions);
 }
 
 template <typename T>
@@ -258,9 +252,10 @@ absl::StatusOr<bool> VectorBase::ModifyRecord(const InternedStringPtr &key,
 }
 
 template <typename T>
-absl::StatusOr<std::deque<Neighbor>> VectorBase::CreateReply(
+absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply(
     std::priority_queue<std::pair<T, hnswlib::labeltype>> &knn_res) {
-  std::deque<Neighbor> ret;
+  std::vector<Neighbor> ret;
+  ret.reserve(knn_res.size());
   while (!knn_res.empty()) {
     auto &ele = knn_res.top();
     auto vector_key = GetKeyDuringSearch(ele.second);
@@ -268,10 +263,12 @@ absl::StatusOr<std::deque<Neighbor>> VectorBase::CreateReply(
       knn_res.pop();
       continue;
     }
-    // Sorting in asc order.
-    ret.emplace_front(Neighbor{vector_key.value(), ele.first});
+    // Insert in desc order.
+    ret.emplace_back(Neighbor{vector_key.value(), ele.first});
     knn_res.pop();
   }
+  // Reverse to obtain asc order of closest neighbors first.
+  std::reverse(ret.begin(), ret.end());
   return ret;
 }
 
@@ -571,7 +568,7 @@ template void VectorBase::Init<float>(
     int dimensions, data_model::DistanceMetric distance_metric,
     std::unique_ptr<hnswlib::SpaceInterface<float>> &space);
 
-template absl::StatusOr<std::deque<Neighbor>> VectorBase::CreateReply<float>(
+template absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply<float>(
     std::priority_queue<std::pair<float, hnswlib::labeltype>> &knn_res);
 }  // namespace indexes
 

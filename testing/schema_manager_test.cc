@@ -382,7 +382,7 @@ TEST_F(SchemaManagerTest, TestLoadIndexExistingData) {
 }
 
 TEST_F(SchemaManagerTest, OnServerCronCallback) {
-  InitThreadPools(10, 5);
+  InitThreadPools(10, 5, 1);
   auto test_index_schema_or = CreateVectorHNSWSchema(
       "index_schema_key", &fake_ctx_, nullptr, {}, db_num_);
   ValkeyModuleEvent eid;

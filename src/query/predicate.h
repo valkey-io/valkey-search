@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "absl/container/flat_hash_set.h"
+#include "absl/container/inlined_vector.h"
 #include "absl/strings/string_view.h"
 #include "src/indexes/text/text_iterator.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -23,6 +24,7 @@ namespace valkey_search::indexes {
 class Text;
 class Numeric;
 class Tag;
+class EntriesFetcherBase;
 }  // namespace valkey_search::indexes
 
 namespace valkey_search::indexes::text {
@@ -144,6 +146,7 @@ class TagPredicate : public Predicate {
                absl::string_view identifier, absl::string_view raw_tag_string,
                const absl::flat_hash_set<absl::string_view>& tags);
   EvaluationResult Evaluate(Evaluator& evaluator) const override;
+  // Evaluate against tags (string_view set from indexed data or parsed query)
   EvaluationResult Evaluate(const absl::flat_hash_set<absl::string_view>* tags,
                             bool case_sensitive) const;
   const indexes::Tag* GetIndex() const { return index_; }
@@ -190,7 +193,8 @@ class TermPredicate : public TextPredicate {
   TermPredicate(
       std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
       FieldMaskPredicate field_mask, std::string term, bool exact);
-  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
+  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema()
+      const override {
     return text_index_schema_;
   }
   absl::string_view GetTextString() const { return term_; }
@@ -218,7 +222,8 @@ class PrefixPredicate : public TextPredicate {
   PrefixPredicate(
       std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
       FieldMaskPredicate field_mask, std::string term);
-  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
+  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema()
+      const override {
     return text_index_schema_;
   }
   absl::string_view GetTextString() const { return term_; }
@@ -244,7 +249,8 @@ class SuffixPredicate : public TextPredicate {
   SuffixPredicate(
       std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
       FieldMaskPredicate field_mask, std::string term);
-  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
+  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema()
+      const override {
     return text_index_schema_;
   }
   absl::string_view GetTextString() const { return term_; }
@@ -270,7 +276,8 @@ class InfixPredicate : public TextPredicate {
   InfixPredicate(
       std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
       FieldMaskPredicate field_mask, std::string term);
-  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
+  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema()
+      const override {
     return text_index_schema_;
   }
   absl::string_view GetTextString() const { return term_; }
@@ -296,7 +303,8 @@ class FuzzyPredicate : public TextPredicate {
   FuzzyPredicate(
       std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
       FieldMaskPredicate field_mask, std::string term, uint32_t distance);
-  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
+  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema()
+      const override {
     return text_index_schema_;
   }
   absl::string_view GetTextString() const { return term_; }
@@ -317,37 +325,6 @@ class FuzzyPredicate : public TextPredicate {
   FieldMaskPredicate field_mask_;
   std::string term_;
   uint32_t distance_;
-};
-
-class ProximityPredicate : public TextPredicate {
- public:
-  ProximityPredicate(std::vector<std::unique_ptr<TextPredicate>> terms,
-                     uint32_t slop = 0, bool inorder = true);
-  uint32_t Slop() const { return slop_; }
-  bool InOrder() const { return inorder_; }
-  EvaluationResult Evaluate(Evaluator& evaluator) const override;
-  // Evaluate against per-key TextIndex
-  EvaluationResult Evaluate(
-      const valkey_search::indexes::text::TextIndex& text_index,
-      const InternedStringPtr& target_key,
-      bool require_positions) const override;
-  std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
-      const void* fetcher) const override;
-  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
-    return terms_[0]->GetTextIndexSchema();
-  }
-  const FieldMaskPredicate GetFieldMask() const override {
-    return terms_[0]->GetFieldMask();
-  }
-  const std::vector<std::unique_ptr<TextPredicate>>& Terms() const {
-    return terms_;
-  }
-  size_t EstimateSize() const override;
-
- private:
-  std::vector<std::unique_ptr<TextPredicate>> terms_;
-  bool inorder_;
-  uint32_t slop_;
 };
 
 enum class LogicalOperator { kAnd, kOr };
@@ -381,6 +358,11 @@ class ComposedPredicate : public Predicate {
   std::optional<uint32_t> slop_;
   bool inorder_;
 };
+
+// Factory function for creating the exact phrase fetcher defined in text.cc
+// Used in ComposedPredicate evaluation for the exact phrase case optimization
+std::unique_ptr<indexes::EntriesFetcherBase> BuildExactPhraseFetcher(
+    const ComposedPredicate* composed_predicate);
 
 }  // namespace valkey_search::query
 

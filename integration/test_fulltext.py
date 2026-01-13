@@ -175,7 +175,7 @@ def validate_fulltext_search(client: Valkey):
     result = client.execute_command("FT.SEARCH", "products", '@desc:"inspector\'s palm"')
     assert result[0] == 1
     assert result[1] == b"product:5"
-    # Validate the nuanced behavaior of exact phrase search where:
+    # Validate the nuanced behavior of exact phrase search where:
     # 1. Stopwords are not removed. (`these are not` - in this example)
     # 2. Stemming is not done on words. (`words` is not stemmed and the ingestion is not)
     # 3. Punctuation is applied (removal of `,` in this example).
@@ -190,6 +190,11 @@ def validate_fulltext_search(client: Valkey):
     result = client.execute_command("FT.SEARCH", "products", 'artificial intelligence research')
     assert result[0] == 1
     assert result[1] == b"product:6"
+    # Test fuzzy search
+    result = client.execute_command("FT.SEARCH", "products", '@desc:%wander%')
+    assert (result[0], set(result[1::2])) == (1, {b"product:4"})
+    result = client.execute_command("FT.SEARCH", "products", '@desc:%%greet%%')
+    assert (result[0], set(result[1::2])) == (3, {b"product:1", b"product:5", b"product:6"})
 
 class TestFullText(ValkeySearchTestCaseDebugMode):
 
@@ -775,10 +780,6 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         Tests there is no regression with predicate evaluator changes for text.
         """
         client: Valkey = self.server.get_new_client()
-        if not prefilter_eval_enabled:
-            client.execute_command(
-                "CONFIG", "SET", "search.enable-prefilter-eval", "no"
-            )
         # Index with text, numeric, and tag fields
         client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA", "content", "TEXT", "NOSTEM","title", "TEXT", "NOSTEM", "Addr", "TEXT", "NOSTEM",
                             "salary", "NUMERIC", 
@@ -1401,6 +1402,139 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
             # `ten` is NOT <= `one`. Invalid. 
             result = client.execute_command("FT.SEARCH", "idx", 'apple (yellow green orange one | yellow green orange one) purple (ten | ten) one', "INORDER")
             assert result[0] == 0
+
+    def test_fuzzy_search(self):
+        client: Valkey = self.server.get_new_client()
+        # Create index with text fields
+        client.execute_command("FT.CREATE", "idx1", "ON", "HASH", "SCHEMA",
+                            "content", "TEXT", "NOSTEM")
+        client.execute_command("FT.CREATE", "idx2", "ON", "HASH", "SCHEMA",
+                    "content", "TEXT")
+        client.execute_command("FT.CREATE", "idx3", "ON", "HASH", "SCHEMA",
+                    "content", "TEXT", "NOSTEM", "content2", "TEXT", "NOSTEM")
+        # Wait for index backfill to complete
+        for index in ["idx1", "idx2", "idx3"]:
+            IndexingTestHelper.wait_for_backfill_complete_on_node(client, index)
+        # Add test data
+        client.execute_command("HSET", "doc:1", "content", "I am going to a race")
+        client.execute_command("HSET", "doc:2", "content", "Carrie needs to take care")
+        client.execute_command("HSET", "doc:3", "content", "who is driving?")
+        client.execute_command("HSET", "doc:4", "content", "Driver drove the car!")
+        client.execute_command("HSET", "doc:5", "content", "abdc")
+        client.execute_command("HSET", "doc:6", "content", "abcdefghij")
+        client.execute_command("HSET", "doc:7", "content", "internationalization")
+        client.execute_command("HSET", "doc:8", "content", "ice")
+        client.execute_command("HSET", "doc:9", "content", "in") # This is a stop word and won't be indexed.
+        client.execute_command("HSET", "doc:10", "content", "internet")
+        client.execute_command("HSET", "doc:11", "content", "Carl Weathers drove the huge boxcar")
+        # TESTS
+        # Simple Edit distance (ED) = 1
+        result = client.execute_command("FT.SEARCH", "idx1", '%car%')
+        assert (result[0], set(result[1::2])) == (3, {b"doc:2", b"doc:4", b"doc:11"})
+        # Should be case insensitive
+        result = client.execute_command("FT.SEARCH", "idx1", '%CAR%')
+        assert (result[0], set(result[1::2])) == (3, {b"doc:2", b"doc:4", b"doc:11"})
+        # Transposition (Damerau-Levenshtein) ED = 1
+        result = client.execute_command("FT.SEARCH", "idx1", '%crA%')
+        assert (result[0], set(result[1::2])) == (1, {b"doc:4"})
+        result = client.execute_command("FT.SEARCH", "idx1", '%%bacd%%')
+        # Matches 'race' from doc:1 (ED = 2) and 'abdc' from doc:5 (ED = 2, transposition)
+        assert (result[0], set(result[1::2])) == (2, {b'doc:1', b'doc:5'})
+        # In Composed AND
+        result = client.execute_command("FT.SEARCH", "idx1", 'Driver drove the %Kar%')
+        assert (result[0], set(result[1::2])) == (1, {b"doc:4"})
+        result = client.execute_command("FT.SEARCH", "idx1", 'drove the %car%')
+        assert (result[0], set(result[1::2])) == (2, {b"doc:4", b"doc:11"})
+        # Test with slop
+        result = client.execute_command("FT.SEARCH", "idx1", 'drove the %car%', "SLOP", "0")
+        assert (result[0], set(result[1::2])) == (1, {b"doc:4"})
+        result = client.execute_command("FT.SEARCH", "idx1", 'drove the %car%', "SLOP", "1")
+        # SLOP=1 allows doc:11: "Carl(ED=1) [Weathers] drove the"
+        assert (result[0], set(result[1::2])) == (2, {b"doc:4", b"doc:11"})
+        # Test with Inorder
+        result = client.execute_command("FT.SEARCH", "idx1", 'drove the %car%', "INORDER")
+        assert (result[0], set(result[1::2])) == (1, {b"doc:4"})
+        result = client.execute_command("FT.SEARCH", "idx1", 'drove the %%%car%%%', "INORDER")
+        # INORDER with ED = 3 allows doc:11: "... drove the huge boxcar(ED=3)"
+        assert (result[0], set(result[1::2])) == (2, {b"doc:4", b"doc:11"})
+        # Stemming test
+        # NOSTEM index (idx1) should not give doc:3 (driving)
+        result = client.execute_command("FT.SEARCH", "idx1", '%%drive%%')
+        assert (result[0], set(result[1::2])) == (2, {b"doc:4", b"doc:11"})
+        # stemming enabled should give doc:3 (with word 'driving')
+        # TODO: fails as '?' is not ignored. Enable after fix
+        # result = client.execute_command("FT.SEARCH", "idx2", '%%drive%%')
+        # assert (result[0], set(result[1::2])) == (2, {b"doc:3", b"doc:4"}) 
+        # Higher edit distance test (ED=10)
+        # Add a document with a word that requires high edit distance
+        # Increase max edit distance config
+        client.execute_command("CONFIG", "SET", "search.fuzzy-max-distance", "10")
+        result = client.execute_command("FT.SEARCH", "idx1", '%%%%%%%%%%z%%%%%%%%%%')
+        # Expected non-matches are doc:7 (exceeds the ED) and doc:9 (stop word)
+        assert (result[0], set(result[1::2])) == (9, {b"doc:1", b"doc:2", b"doc:3", b"doc:4", b"doc:5", b"doc:6", b"doc:8", b"doc:10", b"doc:11"})
+        # Long word test
+        result = client.execute_command("FT.SEARCH", "idx1", '%internationalizaton%')
+        assert (result[0], set(result[1::2])) == (1, {b"doc:7"})
+        result = client.execute_command("FT.SEARCH", "idx1", '%%%interntionliztion%%%')
+        assert (result[0], set(result[1::2])) == (1, {b"doc:7"})
+        # long word with ED=10
+        result = client.execute_command("FT.SEARCH", "idx1", '%%%%%%%%%%xyzbcdefghnalization%%%%%%%%%%')
+        assert result[0] >= 1 and b"doc:7" in result[1::2]
+        # Multiple fields
+        # Known crash with Return clause. TODO: Enable after fix
+        # client.execute_command("HSET", "doc:12", "content", "I am going to a race", "content2", "Driver drove the car?")
+        # result = client.execute_command("FT.SEARCH", "idx3", '%%drive%%', "return", "1", "content2")
+        # assert (result[0], set(result[1::2])) == (3, {b"doc:4", b"doc:11", b"doc:12"})
+
+    def test_return_clause(self):
+        client: Valkey = self.server.get_new_client()
+        client.execute_command("FT.CREATE", "idx1", "ON", "HASH", "SCHEMA",
+            "content", "TEXT", "NOSTEM",
+            "content2", "TEXT", "NOSTEM",
+            "price", "NUMERIC",
+            "category", "TAG")
+        # Insert test documents
+        client.execute_command("HSET", "doc:1", "content", "I am going to a race", "content2", "Driver drove the car", "price", "100", "category", "sports")
+        client.execute_command("HSET", "doc:2", "content", "I am going to a concert", "content2", "Singer sang the song", "price", "200", "category", "music")
+        client.execute_command("HSET", "doc:3", "content", "I am going to a movie")
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx1")
+        # (1) Without Return clause
+        result = client.execute_command("FT.SEARCH", "idx1", 'I am going to a race')
+        assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+        # Validate full document content
+        doc_fields = dict(zip(result[2][::2], result[2][1::2]))
+        expected_content = {
+            b'content': b"I am going to a race",
+            b'content2': b"Driver drove the car",
+            b'price': b"100",
+            b'category': b"sports"
+        }
+        assert doc_fields == expected_content
+        # (2) With Return clause
+        result = client.execute_command("FT.SEARCH", "idx1", 'I am going to a race', "RETURN", "1", "content")
+        assert (result[0], set(result[1::2]), result[2]) == (1, {b"doc:1"}, [b"content", b"I am going to a race"])
+        # (3) With Multiple Return fields
+        result = client.execute_command("FT.SEARCH", "idx1", 'I am going to a race', "RETURN", "3", "content", "content2", "price")
+        assert (result[0], set(result[1::2]), set(result[2])) == (1, {b"doc:1"}, {b"content", b"I am going to a race", b"price", b"100", b"content2", b"Driver drove the car"})
+        # (4) With Return clause of non-existent field
+        result = client.execute_command("FT.SEARCH", "idx1", 'I am going to a movie', "RETURN", "2", "content2", "price")
+        assert (result[0], set(result[1::2]), result[2]) == (1, {b"doc:3"}, [])
+        # (5) With Return clause + LIMIT
+        result = client.execute_command("FT.SEARCH", "idx1", 'I am going', "RETURN", "1", "content", "LIMIT", "0", "2")
+        assert result[0] == 3 and len(result) == 5
+        expected_docs = {b"doc:1", b"doc:2", b"doc:3"}
+        expected_contents = {b"I am going to a race", b"I am going to a concert", b"I am going to a movie"}
+        # Validate both returned documents
+        for i in [1, 3]:
+            assert result[i] in expected_docs
+            assert result[i+1] == [b"content", result[i+1][1]] and result[i+1][1] in expected_contents
+        # (6) With Return clause + NOCONTENT. Return has no effect.
+        result = client.execute_command("FT.SEARCH", "idx1", 'I am going', "RETURN", "1", "content2", "NOCONTENT")
+        assert (result[0], set(result[1:])) == (3, {b"doc:1", b"doc:2", b"doc:3"})
+        # (7) With Return clause + Field Aliasing
+        result = client.execute_command("FT.SEARCH", "idx1", 'race', "RETURN", "6", "content", "AS", "text_content", "price", "AS", "numeric_content")
+        assert result == [1, b"doc:1", [b"text_content", b"I am going to a race", b"numeric_content", b"100"]]
 
 class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
     """

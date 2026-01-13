@@ -30,9 +30,34 @@ struct TextParsingOptions {
   bool inorder = false;
   std::optional<uint32_t> slop = std::nullopt;
 };
+enum class QueryOperations : uint64_t {
+  kNone = 0,
+  kContainsOr = 1 << 0,
+  kContainsAnd = 1 << 1,
+  kContainsNumeric = 1 << 2,
+  kContainsTag = 1 << 3,
+  kContainsNegate = 1 << 4,
+  kContainsText = 1 << 5,
+  kContainsExactPhrase = 1 << 6,
+};
+
+inline QueryOperations operator|(QueryOperations a, QueryOperations b) {
+  return static_cast<QueryOperations>(static_cast<uint64_t>(a) |
+                                      static_cast<uint64_t>(b));
+}
+
+inline QueryOperations& operator|=(QueryOperations& a, QueryOperations b) {
+  return a = a | b;
+}
+
+inline bool operator&(QueryOperations a, QueryOperations b) {
+  return static_cast<uint64_t>(a) & static_cast<uint64_t>(b);
+}
+
 struct FilterParseResults {
   std::unique_ptr<query::Predicate> root_predicate;
   absl::flat_hash_set<std::string> filter_identifiers;
+  QueryOperations query_operations = QueryOperations::kNone;
 };
 class FilterParser {
  public:
@@ -41,6 +66,11 @@ class FilterParser {
 
   absl::StatusOr<FilterParseResults> Parse();
 
+  // Parses query string tags using '|' as separator (query language OR syntax).
+  // This is the single entry point for parsing tag strings from user queries.
+  static absl::StatusOr<absl::flat_hash_set<absl::string_view>> ParseQueryTags(
+      absl::string_view tag_string);
+
  private:
   const TextParsingOptions& options_;
   const IndexSchema& index_schema_;
@@ -48,6 +78,7 @@ class FilterParser {
   size_t pos_{0};
   size_t node_count_{0};
   absl::flat_hash_set<std::string> filter_identifiers_;
+  QueryOperations query_operations_{QueryOperations::kNone};
 
   absl::StatusOr<bool> HandleBackslashEscape(const indexes::text::Lexer& lexer,
                                              std::string& processed_content);
@@ -99,9 +130,6 @@ class FilterParser {
 
   absl::StatusOr<absl::string_view> ParseTagString();
 
-  absl::StatusOr<absl::flat_hash_set<absl::string_view>> ParseTags(
-      absl::string_view tag_string, indexes::Tag* tag_index) const;
-
   absl::StatusOr<std::unique_ptr<query::Predicate>> WrapPredicate(
       std::unique_ptr<query::Predicate> prev_predicate,
       std::unique_ptr<query::Predicate> predicate, bool& negate,
@@ -121,6 +149,8 @@ vmsdk::config::Number& GetQueryStringDepth();
 /// Return the value of the Query String Terms Count configuration
 vmsdk::config::Number& GetQueryStringTermsCount();
 
+/// Return the value of the Fuzzy Max Distance configuration
+vmsdk::config::Number& GetFuzzyMaxDistance();
 }  // namespace options
 
 }  // namespace valkey_search

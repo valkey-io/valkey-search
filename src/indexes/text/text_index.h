@@ -35,9 +35,6 @@ using TokenPositions =
 
 class TextIndexSchema;
 
-// Function to get current TextIndexSchema for accessing metadata
-TextIndexSchema* GetTextIndexSchema();
-
 // FT.INFO counters for text info fields and memory pools
 struct TextIndexMetadata {
   std::atomic<uint64_t> total_positions{0};
@@ -65,8 +62,8 @@ class TextIndex {
 
  public:
   explicit TextIndex(bool suffix);
-  RadixTree<InvasivePtr<Postings>>& GetPrefix();
-  const RadixTree<InvasivePtr<Postings>>& GetPrefix() const;
+  RadixTree<InvasivePtr<Postings>> &GetPrefix();
+  const RadixTree<InvasivePtr<Postings>> &GetPrefix() const;
   std::optional<std::reference_wrapper<RadixTree<InvasivePtr<Postings>>>>
   GetSuffix();
   std::optional<std::reference_wrapper<const RadixTree<InvasivePtr<Postings>>>>
@@ -79,16 +76,16 @@ class TextIndex {
 
 class TextIndexSchema {
  public:
-  TextIndexSchema(data_model::Language language, const std::string& punctuation,
+  TextIndexSchema(data_model::Language language, const std::string &punctuation,
                   bool with_offsets,
-                  const std::vector<std::string>& stop_words);
+                  const std::vector<std::string> &stop_words);
 
-  absl::StatusOr<bool> StageAttributeData(const InternedStringPtr& key,
+  absl::StatusOr<bool> StageAttributeData(const InternedStringPtr &key,
                                           absl::string_view data,
                                           size_t text_field_number, bool stem,
                                           size_t min_stem_size, bool suffix);
-  void CommitKeyData(const InternedStringPtr& key);
-  void DeleteKeyData(const InternedStringPtr& key);
+  void CommitKeyData(const InternedStringPtr &key);
+  void DeleteKeyData(const InternedStringPtr &key);
 
   uint8_t AllocateTextFieldNumber() { return num_text_fields_++; }
   bool HasTextOffsets() const { return with_offsets_; }
@@ -97,7 +94,7 @@ class TextIndexSchema {
   Lexer GetLexer() const { return lexer_; }
 
   // Access to metadata for memory pool usage
-  TextIndexMetadata& GetMetadata() { return metadata_; }
+  TextIndexMetadata &GetMetadata() { return metadata_; }
 
   // Enable suffix trie.
   void EnableSuffix() {
@@ -162,7 +159,7 @@ class TextIndexSchema {
   // Thread-safe accessor for per-key text indexes. Executes the provided
   // function while holding the mutex lock, ensuring safe concurrent access.
   template <typename Func>
-  auto WithPerKeyTextIndexes(Func&& func)
+  auto WithPerKeyTextIndexes(Func &&func)
       -> decltype(func(per_key_text_indexes_)) {
     std::lock_guard<std::mutex> guard(per_key_text_indexes_mutex_);
     return func(per_key_text_indexes_);
@@ -170,8 +167,23 @@ class TextIndexSchema {
 
   // Direct accessor for per-key text indexes.
   // Assumes that lock is already acquired earlier.
-  const absl::node_hash_map<Key, TextIndex>& GetPerKeyTextIndexes() const {
+  const absl::node_hash_map<Key, TextIndex> &GetPerKeyTextIndexes() const {
     return per_key_text_indexes_;
+  }
+
+  // Helper function to lookup text index for a key
+  static const TextIndex *LookupTextIndex(
+      const absl::node_hash_map<Key, TextIndex> &per_key_indexes,
+      const Key &key) {
+    if (!key) {
+      CHECK(false) << "Invalid null key passed to LookupTextIndex";
+      return nullptr;
+    }
+    if (auto it = per_key_indexes.find(key); it != per_key_indexes.end()) {
+      return &it->second;
+    }
+    // Key not found in text indexes - this is normal for keys without text data
+    return nullptr;
   }
 };
 

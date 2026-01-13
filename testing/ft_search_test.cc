@@ -188,8 +188,10 @@ void SendReplyTest::DoSendReplyTest(
     parameters->return_attributes.push_back(
         ToReturnAttribute(return_attribute));
   }
-  parameters->SendReply(&fake_ctx, neighbors);
-
+  auto neighbor_count = neighbors.size();
+  query::SearchResult wrapper(neighbor_count, std::move(neighbors),
+                              *parameters);
+  parameters->SendReply(&fake_ctx, wrapper);
   EXPECT_EQ(ParseRespReply(fake_ctx.reply_capture.GetReply()), expected_output);
 }
 
@@ -469,7 +471,7 @@ TEST_P(FTSearchTest, FTSearchTests) {
   auto &params = GetParam();
   bool use_thread_pool = std::get<1>(params);
   if (use_thread_pool) {
-    InitThreadPools(5, std::nullopt);
+    InitThreadPools(5, std::nullopt, 1);
   }
   bool use_fanout = std::get<0>(params);
   if (use_fanout) {

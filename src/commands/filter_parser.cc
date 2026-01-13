@@ -339,7 +339,10 @@ absl::StatusOr<absl::string_view> FilterParser::ParseTagString() {
 
 absl::StatusOr<absl::flat_hash_set<absl::string_view>> FilterParser::ParseTags(
     absl::string_view tag_string, indexes::Tag* tag_index) const {
-  return indexes::Tag::ParseSearchTags(tag_string, tag_index->GetSeparator());
+  // In search queries, the tag separator is always '|' regardless of the
+  // separator used when the index was created. This allows users to specify
+  // multiple tags using the syntax: @field:{tag1|tag2|tag3}
+  return indexes::Tag::ParseSearchTags(tag_string, '|');
 }
 
 absl::StatusOr<std::unique_ptr<query::TagPredicate>>

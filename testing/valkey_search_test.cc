@@ -27,7 +27,7 @@
 #include "testing/common.h"
 #include "testing/coordinator/common.h"
 #include "valkey_search_options.h"
-#include "vmsdk/src/memory_allocation.h"
+#include "vmsdk/src/memory_allocation_overrides.h"
 #include "vmsdk/src/module.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"

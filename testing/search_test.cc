@@ -247,7 +247,8 @@ TEST_P(EvaluateFilterAsPrimaryTest, ParseParams) {
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
   EXPECT_EQ(
       EvaluateFilterAsPrimary(filter_parse_results.value().root_predicate.get(),
-                              entries_fetchers, false),
+                              entries_fetchers, false,
+                              filter_parse_results.value().query_operations),
       test_case.evaluate_size);
 
   EXPECT_EQ(entries_fetchers.size(), test_case.fetcher_ids.size());

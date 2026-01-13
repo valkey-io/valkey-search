@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "absl/container/flat_hash_set.h"
+#include "absl/container/inlined_vector.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -27,6 +28,8 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
+#include "src/indexes/text/proximity.h"
+#include "src/indexes/text/text_fetcher.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
@@ -46,6 +49,22 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::query {
+
+// Fetcher for proximity iterators used in exact phrase optimization
+class ProximityFetcher : public indexes::EntriesFetcherBase {
+ public:
+  ProximityFetcher(std::unique_ptr<indexes::text::TextIterator> iter,
+                   size_t size)
+      : iter_(std::move(iter)), size_(size) {}
+  size_t Size() const override { return size_; }
+  std::unique_ptr<indexes::EntriesFetcherIteratorBase> Begin() override {
+    return std::make_unique<indexes::text::TextFetcher>(std::move(iter_));
+  }
+
+ private:
+  std::unique_ptr<indexes::text::TextIterator> iter_;
+  size_t size_;
+};
 
 class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
  public:
@@ -142,10 +161,48 @@ inline PredicateType EvaluateAsComposedPredicate(
   return PredicateType::kComposedAnd;
 }
 
+inline bool IsExactPhraseOnly(QueryOperations query_operations) {
+  return (query_operations & QueryOperations::kContainsExactPhrase) &&
+         !(query_operations &
+           (QueryOperations::kContainsAnd | QueryOperations::kContainsOr));
+}
+
 size_t EvaluateFilterAsPrimary(
     const Predicate *predicate,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
-    bool negate) {
+    bool negate, QueryOperations query_operations) {
+  // Faster path for pure exact phrase queries.
+  // This is an optimization to avoid building multiple term iterators and a proximity
+  // iterator for every key's evaluation in the filtering stage (using the PrefilterEvaluator).
+  if (IsExactPhraseOnly(query_operations) && !negate) {
+    CHECK(predicate->GetType() == PredicateType::kComposedAnd);
+    auto composed_predicate =
+        dynamic_cast<const ComposedPredicate *>(predicate);
+    // Build proximity iterator from term iterators and calculate min size
+    absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
+                        indexes::text::kProximityTermsInlineCapacity>
+        iters;
+    FieldMaskPredicate field_mask = ~0ULL;
+    size_t min_size = SIZE_MAX;
+    for (const auto &child : composed_predicate->GetChildren()) {
+      CHECK(child->GetType() == PredicateType::kText);
+      auto text_pred = dynamic_cast<const TextPredicate *>(child.get());
+      auto fetcher = std::make_unique<indexes::Text::EntriesFetcher>(
+          0, text_pred->GetTextIndexSchema()->GetTextIndex(), nullptr,
+          text_pred->GetFieldMask(), true);
+      fetcher->predicate_ = text_pred;
+      min_size = std::min(min_size, fetcher->Size());
+      iters.push_back(text_pred->BuildTextIterator(fetcher.get()));
+      field_mask &= text_pred->GetFieldMask();
+    }
+    auto proximity_iter = std::make_unique<indexes::text::ProximityIterator>(
+        std::move(iters), composed_predicate->GetSlop(),
+        composed_predicate->GetInorder(), field_mask);
+    entries_fetchers.push(std::make_unique<ProximityFetcher>(
+        std::move(proximity_iter), min_size));
+    return min_size;
+  }
+
   if (predicate->GetType() == PredicateType::kComposedAnd ||
       predicate->GetType() == PredicateType::kComposedOr) {
     auto composed_predicate =
@@ -157,8 +214,8 @@ size_t EvaluateFilterAsPrimary(
       std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> best_fetchers;
       for (const auto &child : composed_predicate->GetChildren()) {
         std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
-        size_t child_size =
-            EvaluateFilterAsPrimary(child.get(), child_fetchers, negate);
+        size_t child_size = EvaluateFilterAsPrimary(child.get(), child_fetchers,
+                                                    negate, query_operations);
         if (child_size < min_size) {
           min_size = child_size;
           best_fetchers = std::move(child_fetchers);
@@ -170,8 +227,8 @@ size_t EvaluateFilterAsPrimary(
       size_t total_size = 0;
       for (const auto &child : composed_predicate->GetChildren()) {
         std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
-        size_t child_size =
-            EvaluateFilterAsPrimary(child.get(), child_fetchers, negate);
+        size_t child_size = EvaluateFilterAsPrimary(child.get(), child_fetchers,
+                                                    negate, query_operations);
         AppendQueue(entries_fetchers, child_fetchers);
         total_size += child_size;
       }
@@ -204,8 +261,9 @@ size_t EvaluateFilterAsPrimary(
   }
   if (predicate->GetType() == PredicateType::kNegate) {
     auto negate_predicate = dynamic_cast<const NegatePredicate *>(predicate);
-    size_t result = EvaluateFilterAsPrimary(negate_predicate->GetPredicate(),
-                                            entries_fetchers, !negate);
+    size_t result =
+        EvaluateFilterAsPrimary(negate_predicate->GetPredicate(),
+                                entries_fetchers, !negate, query_operations);
     return result;
   }
   CHECK(false);
@@ -422,7 +480,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
   size_t qualified_entries = EvaluateFilterAsPrimary(
       parameters.filter_parse_results.root_predicate.get(), entries_fetchers,
-      false);
+      false, parameters.filter_parse_results.query_operations);
   std::vector<indexes::Neighbor> neighbors;
   // TODO: For now, we just reserve a fixed size because text search operators
   // return a size of 0 currently.
@@ -438,12 +496,10 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
   // If AND or OR predicate, we cannot skip evaluation.
   // The initial search done by EvaluateFilterAsPrimary does not handle
   // union or intersection of results.
-  bool skip_evaluation = true;
-  if (parameters.filter_parse_results.query_operations &
-      (QueryOperations::kContainsOr | QueryOperations::kContainsAnd |
-       QueryOperations::kContainsExactPhrase)) {
-    skip_evaluation = false;
-  }
+  // For exact phrases (no AND/OR), we already built a proximity iterator.
+  bool skip_evaluation =
+      !(parameters.filter_parse_results.query_operations &
+        (QueryOperations::kContainsOr | QueryOperations::kContainsAnd));
   if (skip_evaluation) {
     while (!entries_fetchers.empty()) {
       auto fetcher = std::move(entries_fetchers.front());
@@ -499,7 +555,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearch(
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
   size_t qualified_entries = EvaluateFilterAsPrimary(
       parameters.filter_parse_results.root_predicate.get(), entries_fetchers,
-      false);
+      false, parameters.filter_parse_results.query_operations);
 
   // Query planner makes the decision for pre-filtering vs inline-filtering.
   if (UsePreFiltering(qualified_entries, vector_index)) {

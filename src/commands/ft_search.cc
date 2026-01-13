@@ -192,13 +192,6 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
     SerializeNonVectorNeighbors(ctx, search_result, *this);
     return;
   }
-  // Support non-vector queries
-  if (IsNonVectorQuery()) {
-    query::ProcessNonVectorNeighborsForReply(
-        ctx, index_schema->GetAttributeDataType(), neighbors, *this);
-    SerializeNonVectorNeighbors(ctx, neighbors, *this);
-    return;
-  }
   auto identifier = index_schema->GetIdentifier(attribute_alias);
   if (!identifier.ok()) {
     ++Metrics::GetStats().query_failed_requests_cnt;

@@ -60,9 +60,8 @@ class SystemAllocTracker {
     if (ABSL_PREDICT_FALSE(ptr == nullptr)) {
       return;
     }
-    auto& shard = GetShardForPtr(ptr);
-    absl::MutexLock lock(&shard.mutex_);
-    shard.tracked_ptrs_.insert(ptr);
+    absl::MutexLock lock(&mutex_);
+    tracked_ptrs_.insert(ptr);
   }
 
   bool IsTracked(void* ptr) const {

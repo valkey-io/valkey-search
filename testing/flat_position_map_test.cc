@@ -501,19 +501,18 @@ TEST_F(FlatPositionMapTest, RandomMapGeneration_1000Tests) {
 
     for (const auto& target : skip_targets) {
       PositionIterator iter(*flat_map);  // Fresh iterator for each target
-      
+
       // Skip targets that are before the first position - should still work
       if (target < positions[0].first) {
         bool exact_match = iter.SkipForwardPosition(target);
-        EXPECT_TRUE(iter.IsValid())
-            << "Test " << test_num
-            << " failed: skip to target before first position should land on first position";
+        EXPECT_TRUE(iter.IsValid()) << "Test " << test_num
+                                    << " failed: skip to target before first "
+                                       "position should land on first position";
         EXPECT_EQ(iter.GetPosition(), positions[0].first)
-            << "Test " << test_num
-            << " failed: should be at first position";
-        EXPECT_FALSE(exact_match)
-            << "Test " << test_num
-            << " failed: should not be exact match for target before first position";
+            << "Test " << test_num << " failed: should be at first position";
+        EXPECT_FALSE(exact_match) << "Test " << test_num
+                                  << " failed: should not be exact match for "
+                                     "target before first position";
         continue;
       }
 
@@ -662,7 +661,7 @@ TEST_F(FlatPositionMapTest, EdgeCase_LastPartitionSingleEntry) {
       FlatPositionMapPtr flat_map(position_map, num_fields);
 
       uint32_t num_partitions_after = flat_map->GetNumPartitions();
-      
+
       // Verify we have more partitions now
       EXPECT_GE(num_partitions_after, num_partitions_before)
           << "Test " << test << " with " << positions.size() << " positions";

@@ -129,15 +129,15 @@ class PositionIterator {
   uint64_t GetFieldMask() const;
 
  private:
-  const char* flat_map_;           // Pointer to start of serialized data
-  const char* current_ptr_;        // Pointer to next byte to be read
+  const char* flat_map_;     // Pointer to start of serialized data
+  const char* current_ptr_;  // Pointer to next byte to be read
   const char*
       data_start_;  // Start of position/field data (after header+partition map)
-  Position cumulative_position_;  // Absolute position (sum of all deltas)
-  uint32_t num_partitions_;       // Number of partition boundaries
-  uint32_t current_partition_idx_; // Index of next partition boundary
-  size_t header_size_;            // Size of variable-length header
-  uint64_t current_field_mask_;   // Bit mask of fields at current position
+  Position cumulative_position_;    // Absolute position (sum of all deltas)
+  uint32_t num_partitions_;         // Number of partition boundaries
+  uint32_t current_partition_idx_;  // Index of next partition boundary
+  size_t header_size_;              // Size of variable-length header
+  uint64_t current_field_mask_;     // Bit mask of fields at current position
 
   // Private static helper functions for decoding and navigation
   static uint32_t ReadVarUint(const char* ptr, uint8_t num_bytes);

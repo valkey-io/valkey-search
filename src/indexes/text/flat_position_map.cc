@@ -326,10 +326,10 @@ bool PositionIterator::SkipForwardPosition(Position target) {
   // Scan within current partition until we reach target or partition end
   while (IsValid()) {
     if (cumulative_position_ >= target) return cumulative_position_ == target;
-    
+
     uint32_t prev_partition_idx = current_partition_idx_;
     NextPosition();
-    
+
     // If we crossed into next partition, use partition table to jump
     if (IsValid() && current_partition_idx_ > prev_partition_idx) break;
   }

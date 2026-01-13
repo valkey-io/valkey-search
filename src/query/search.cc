@@ -462,7 +462,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
   // If AND or OR predicate, we cannot skip evaluation.
   // The initial search done by EvaluateFilterAsPrimary does not handle
   // union or intersection of results.
-  // For exact phrases (no AND/OR), we already built a proximity iterator.
+  // However, individual predicate searches as well as exact phrases (not nested
+  // Composed AND/OR) are both handled in the initial entries fetcher search.
   bool skip_evaluation =
       !(parameters.filter_parse_results.query_operations &
         (QueryOperations::kContainsOr | QueryOperations::kContainsAnd));

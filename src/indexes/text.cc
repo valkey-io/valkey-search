@@ -119,7 +119,7 @@ std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
 
 namespace valkey_search::query {
 
-// Fetcher for proximity iterators used in exact phrase optimization
+// EntriesFetcher for proximity iterators used in the exact phrase optimization
 class ProximityFetcher : public indexes::EntriesFetcherBase {
  public:
   ProximityFetcher(std::unique_ptr<indexes::text::TextIterator> iter,
@@ -162,8 +162,11 @@ std::unique_ptr<indexes::EntriesFetcherBase> BuildExactPhraseFetcher(
 
 void* TextPredicate::Search(bool negate) const {
   size_t estimated_size = EstimateSize();
-  // We do not perform positional checks on the initial background search
-  // call currently.
+  // We do not perform positional checks on the initial term/prefix/suffix/fuzzy
+  // predicate fetchers from the entries fetcher search.
+  // This is yet another optimization that can be done in the future to complete
+  // the text search during the initial entries fetcher search itself for
+  // proximity queries.
   bool require_positions = false;
   auto fetcher = std::make_unique<indexes::Text::EntriesFetcher>(
       estimated_size, GetTextIndexSchema()->GetTextIndex(), nullptr,

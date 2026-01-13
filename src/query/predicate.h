@@ -359,7 +359,8 @@ class ComposedPredicate : public Predicate {
   bool inorder_;
 };
 
-// Factory function for creating exact phrase fetcher - defined in text.cc
+// Factory function for creating the exact phrase fetcher defined in text.cc
+// Used in ComposedPredicate evaluation for the exact phrase case optimization
 std::unique_ptr<indexes::EntriesFetcherBase> BuildExactPhraseFetcher(
     const ComposedPredicate* composed_predicate);
 

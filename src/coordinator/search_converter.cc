@@ -16,6 +16,7 @@
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
+#include "src/commands/filter_parser.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
@@ -48,10 +49,13 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
           index_schema->GetIdentifier(predicate.tag().attribute_alias()));
       attribute_identifiers.insert(identifier);
       auto tag_index = dynamic_cast<indexes::Tag*>(index.get());
+
+      // Parsing QUERY STRING: raw_tag_string originates from user query.
+      // Use FilterParser::ParseQueryTags to ensure consistent parsing with '|'
+      // separator (query language OR syntax).
       VMSDK_ASSIGN_OR_RETURN(
           auto parsed_tags,
-          tag_index->ParseSearchTags(predicate.tag().raw_tag_string(),
-                                     tag_index->GetSeparator()));
+          FilterParser::ParseQueryTags(predicate.tag().raw_tag_string()));
       auto tag_predicate = std::make_unique<query::TagPredicate>(
           tag_index, predicate.tag().attribute_alias(), identifier,
           predicate.tag().raw_tag_string(), parsed_tags);

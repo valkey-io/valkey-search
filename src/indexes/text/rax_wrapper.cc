@@ -106,8 +106,7 @@ Rax::WordIterator::WordIterator(rax* rax, absl::string_view prefix)
   CHECK(raxSeekSubTree(&iter_, raw_prefix, prefix.size()));
   raxNext(&iter_);
   // Check that we're at a node within the prefix's path
-  if (raxEOF(&iter_) || iter_.key_len < prefix.length() ||
-      memcmp(raw_prefix, iter_.key, prefix.length()) != 0) {
+  if (raxEOF(&iter_)) {
     done_ = true;
   }
 }

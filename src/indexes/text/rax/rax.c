@@ -1603,7 +1603,17 @@ int raxSeek(raxIterator *it, const char *op, unsigned char *ele, size_t len) {
      * we already use for iteration. */
     int splitpos = 0;
     size_t i = raxLowWalk(it->rt, ele, len, &it->node, NULL, &splitpos, &it->stack);
-    if (it->flags & RAX_ITER_SUB_TREE) it->head = it->node; // SEARCH
+    /* BEGIN SEARCH */
+    if (it->flags & RAX_ITER_SUB_TREE) {
+        // Check if we found a node with a matching prefix.
+        // If so, we set it as the head node.
+        if (i < len) {
+            it->flags |= RAX_ITER_EOF;
+        } else {
+            it->head = it->node;
+        }
+    }
+    /* END SEARCH */
 
     /* Return OOM on incomplete stack info. */
     if (it->stack.oom) return 0;

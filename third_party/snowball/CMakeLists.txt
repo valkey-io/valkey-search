@@ -22,6 +22,9 @@ add_library(snowball STATIC ${LIBSTEMMER_SOURCES} ${STEMMER_SOURCES})
 # Set include directories
 target_include_directories(snowball PUBLIC
   ${SNOWBALL_SOURCE_DIR}/include
+)
+
+target_include_directories(snowball PRIVATE
   ${SNOWBALL_SOURCE_DIR}
 )
 

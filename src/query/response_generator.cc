@@ -98,6 +98,9 @@ class PredicateEvaluator : public query::Evaluator {
       ;
     }
     auto index = predicate.GetIndex();
+    // Parsing RECORD DATA: Field value from database key for post-query
+    // verification. Uses schema-defined separator since this is record data,
+    // not query syntax.
     auto tags = indexes::Tag::ParseSearchTags(
         vmsdk::ToStringView(it->second.value.get()), index->GetSeparator());
     if (!tags.ok()) {

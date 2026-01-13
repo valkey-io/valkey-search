@@ -97,9 +97,6 @@ class SystemAllocTracker {
   }
 
  private:
-  inline bool ValkeyAllocQuickCheck(void* ptr) const {
-    return IsUsingValkeyAlloc() && !tracked_ptrs_snapshot_.contains(ptr);
-  }
   // RawSystemAllocator implements an allocator that will not go through
   // the SystemAllocTracker, for use by the SystemAllocTracker to prevent
   // infinite recursion when tracking pointers.

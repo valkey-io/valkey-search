@@ -34,6 +34,7 @@
 #include "absl/status/status.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include "src/commands/filter_parser.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/tag.h"
 #include "src/query/predicate.h"
@@ -76,6 +77,7 @@ TEST_F(TagIndexTest, AddRecordAndSearchTest) {
   EXPECT_EQ(index->AddRecord("key2", "tag2").status().code(),
             absl::StatusCode::kAlreadyExists);
 
+<<<<<<< HEAD
   std::string identifier = "attribute_name";
   std::string raw_tag_string = "tag1";
   auto parsed_tags =
@@ -83,6 +85,14 @@ TEST_F(TagIndexTest, AddRecordAndSearchTest) {
           .value();
   query::TagPredicate predicate(index.get(), identifier, raw_tag_string,
                                 parsed_tags);
+=======
+  // Parsing filter string from query: uses '|' separator (query language OR
+  // syntax)
+  std::string filter_tag_string = "tag1";
+  auto parsed_tags = FilterParser::ParseQueryTags(filter_tag_string).value();
+  query::TagPredicate predicate(index.get(), alias, identifier,
+                                filter_tag_string, parsed_tags);
+>>>>>>> 4b6878b (fixing tag query parsing (#602))
   auto entries_fetcher = index->Search(predicate, false);
   EXPECT_EQ(entries_fetcher->Size(), 1);
   EXPECT_THAT(Fetch(*entries_fetcher), testing::UnorderedElementsAre("key1"));
@@ -93,6 +103,7 @@ TEST_F(TagIndexTest, RemoveRecordAndSearchTest) {
   EXPECT_TRUE(index->AddRecord("key2", "tag2").value());
   EXPECT_TRUE(index->RemoveRecord("key1").value());
 
+<<<<<<< HEAD
   std::string identifier = "attribute_name";
   std::string raw_tag_string = "tag1";
   auto parsed_tags =
@@ -100,6 +111,14 @@ TEST_F(TagIndexTest, RemoveRecordAndSearchTest) {
           .value();
   query::TagPredicate predicate(index.get(), identifier, raw_tag_string,
                                 parsed_tags);
+=======
+  // Parsing filter string from query: uses '|' separator (query language OR
+  // syntax)
+  std::string filter_tag_string = "tag1";
+  auto parsed_tags = FilterParser::ParseQueryTags(filter_tag_string).value();
+  query::TagPredicate predicate(index.get(), alias, identifier,
+                                filter_tag_string, parsed_tags);
+>>>>>>> 4b6878b (fixing tag query parsing (#602))
   auto entries_fetcher = index->Search(predicate, false);
 
   EXPECT_EQ(entries_fetcher->Size(), 0);
@@ -109,6 +128,7 @@ TEST_F(TagIndexTest, ModifyRecordAndSearchTest) {
   EXPECT_TRUE(index->AddRecord("key1", "tag2").value());
   EXPECT_TRUE(index->ModifyRecord("key1", "tag2.1,tag2.2").value());
 
+<<<<<<< HEAD
   std::string identifier = "attribute_name";
   std::string raw_tag_string = "tag2.1";
   auto parsed_tags =
@@ -116,6 +136,14 @@ TEST_F(TagIndexTest, ModifyRecordAndSearchTest) {
           .value();
   query::TagPredicate predicate(index.get(), identifier, raw_tag_string,
                                 parsed_tags);
+=======
+  // Parsing filter string from query: uses '|' separator (query language OR
+  // syntax)
+  std::string filter_tag_string = "tag2.1";
+  auto parsed_tags = FilterParser::ParseQueryTags(filter_tag_string).value();
+  query::TagPredicate predicate(index.get(), alias, identifier,
+                                filter_tag_string, parsed_tags);
+>>>>>>> 4b6878b (fixing tag query parsing (#602))
   auto entries_fetcher = index->Search(predicate, false);
 
   EXPECT_EQ(entries_fetcher->Size(), 1);
@@ -128,6 +156,7 @@ TEST_F(TagIndexTest, ModifyRecordWithEmptyString) {
   EXPECT_TRUE(index->AddRecord("key1", "tag2").value());
   EXPECT_FALSE(index->ModifyRecord("key1", "").value());
 
+<<<<<<< HEAD
   std::string identifier = "attribute_name";
   std::string raw_tag_string = "tag2";
   auto parsed_tags =
@@ -135,6 +164,14 @@ TEST_F(TagIndexTest, ModifyRecordWithEmptyString) {
           .value();
   query::TagPredicate predicate(index.get(), identifier, raw_tag_string,
                                 parsed_tags);
+=======
+  // Parsing filter string from query: uses '|' separator (query language OR
+  // syntax)
+  std::string filter_tag_string = "tag2";
+  auto parsed_tags = FilterParser::ParseQueryTags(filter_tag_string).value();
+  query::TagPredicate predicate(index.get(), alias, identifier,
+                                filter_tag_string, parsed_tags);
+>>>>>>> 4b6878b (fixing tag query parsing (#602))
   auto entries_fetcher = index->Search(predicate, false);
 
   EXPECT_EQ(entries_fetcher->Size(), 0);
@@ -164,6 +201,7 @@ TEST_F(TagIndexTest, PrefixSearchHappyTest) {
   EXPECT_TRUE(index->AddRecord("doc4", "disadvantage").value());
   EXPECT_TRUE(index->AddRecord("doc5", "preschool").value());
 
+<<<<<<< HEAD
   std::string raw_tag_string = "dis*";
   std::string identifier = "attribute_name";
   auto parsed_tags =
@@ -173,6 +211,17 @@ TEST_F(TagIndexTest, PrefixSearchHappyTest) {
   auto entries_fetcher = index->Search(
       query::TagPredicate(index.get(), identifier, raw_tag_string, parsed_tags),
       false);
+=======
+  // Parsing filter string from query: uses '|' separator (query language OR
+  // syntax)
+  std::string filter_tag_string = "dis*";
+  auto parsed_tags = FilterParser::ParseQueryTags(filter_tag_string).value();
+  EXPECT_THAT(parsed_tags, testing::UnorderedElementsAre("dis*"));
+  auto entries_fetcher =
+      index->Search(query::TagPredicate(index.get(), alias, identifier,
+                                        filter_tag_string, parsed_tags),
+                    false);
+>>>>>>> 4b6878b (fixing tag query parsing (#602))
   EXPECT_THAT(Fetch(*entries_fetcher),
               testing::UnorderedElementsAre("doc1", "doc2", "doc3", "doc4"));
 }
@@ -184,6 +233,7 @@ TEST_F(TagIndexTest, PrefixSearchCaseInsensitiveTest) {
   EXPECT_TRUE(index->AddRecord("doc4", "disadvantage").value());
   EXPECT_TRUE(index->AddRecord("doc5", "preschool").value());
 
+<<<<<<< HEAD
   std::string raw_tag_string = "dIs*";
   std::string identifier = "attribute_name";
   auto parsed_tags =
@@ -193,6 +243,17 @@ TEST_F(TagIndexTest, PrefixSearchCaseInsensitiveTest) {
   auto entries_fetcher = index->Search(
       query::TagPredicate(index.get(), identifier, raw_tag_string, parsed_tags),
       false);
+=======
+  // Parsing filter string from query: uses '|' separator (query language OR
+  // syntax)
+  std::string filter_tag_string = "dIs*";
+  auto parsed_tags = FilterParser::ParseQueryTags(filter_tag_string).value();
+  EXPECT_THAT(parsed_tags, testing::UnorderedElementsAre("dIs*"));
+  auto entries_fetcher =
+      index->Search(query::TagPredicate(index.get(), alias, identifier,
+                                        filter_tag_string, parsed_tags),
+                    false);
+>>>>>>> 4b6878b (fixing tag query parsing (#602))
   EXPECT_THAT(Fetch(*entries_fetcher),
               testing::UnorderedElementsAre("doc1", "doc2", "doc3", "doc4"));
 }
@@ -207,6 +268,7 @@ TEST_F(TagIndexTest, PrefixSearchMinLengthNotSatisfiedTest) {
   EXPECT_TRUE(index->AddRecord("doc2", "disappear").value());
 
   // No results because the prefix length is less than 2.
+<<<<<<< HEAD
   std::string identifier = "attribute_name";
   std::string raw_tag_string = "d*";
   auto parsed_tags =
@@ -217,6 +279,19 @@ TEST_F(TagIndexTest, PrefixSearchMinLengthNotSatisfiedTest) {
   auto entries_fetcher = index->Search(
       query::TagPredicate(index.get(), identifier, raw_tag_string, parsed_tags),
       false);
+=======
+
+  // Parsing filter string from query: uses '|' separator (query language OR
+  // syntax)
+  std::string filter_tag_string = "d*";
+  auto parsed_tags = FilterParser::ParseQueryTags(filter_tag_string).value();
+  EXPECT_TRUE(parsed_tags.empty());
+
+  auto entries_fetcher =
+      index->Search(query::TagPredicate(index.get(), alias, identifier,
+                                        filter_tag_string, parsed_tags),
+                    false);
+>>>>>>> 4b6878b (fixing tag query parsing (#602))
   EXPECT_EQ(entries_fetcher->Size(), 0);
 }
 
@@ -226,6 +301,7 @@ TEST_F(TagIndexTest, PrefixSearchMinLengthSatisfiedTest) {
 
   // Results are returned because the prefix length is greater than 2.
 
+<<<<<<< HEAD
   std::string identifier = "attribute_name";
   std::string raw_tag_string = "dis*";
   auto parsed_tags =
@@ -236,6 +312,18 @@ TEST_F(TagIndexTest, PrefixSearchMinLengthSatisfiedTest) {
   auto entries_fetcher = index->Search(
       query::TagPredicate(index.get(), identifier, raw_tag_string, parsed_tags),
       false);
+=======
+  // Parsing filter string from query: uses '|' separator (query language OR
+  // syntax)
+  std::string filter_tag_string = "dis*";
+  auto parsed_tags = FilterParser::ParseQueryTags(filter_tag_string).value();
+  EXPECT_EQ(parsed_tags.size(), 1);
+
+  auto entries_fetcher =
+      index->Search(query::TagPredicate(index.get(), alias, identifier,
+                                        filter_tag_string, parsed_tags),
+                    false);
+>>>>>>> 4b6878b (fixing tag query parsing (#602))
   EXPECT_EQ(entries_fetcher->Size(), 2);
 }
 
@@ -252,6 +340,7 @@ TEST_F(TagIndexTest, NegativeSearchTest) {
   EXPECT_TRUE(
       index->AddRecord("doc6", "demand2").value());  // removed then added
 
+<<<<<<< HEAD
   std::string identifier = "attribute_name";
   std::string raw_tag_string = "dis*";
   auto parsed_tags =
@@ -262,6 +351,18 @@ TEST_F(TagIndexTest, NegativeSearchTest) {
   auto entries_fetcher = index->Search(
       query::TagPredicate(index.get(), identifier, raw_tag_string, parsed_tags),
       true);
+=======
+  // Parsing filter string from query: uses '|' separator (query language OR
+  // syntax)
+  std::string filter_tag_string = "dis*";
+  auto parsed_tags = FilterParser::ParseQueryTags(filter_tag_string).value();
+  EXPECT_EQ(parsed_tags.size(), 1);
+
+  auto entries_fetcher =
+      index->Search(query::TagPredicate(index.get(), alias, identifier,
+                                        filter_tag_string, parsed_tags),
+                    true);
+>>>>>>> 4b6878b (fixing tag query parsing (#602))
   EXPECT_THAT(
       Fetch(*entries_fetcher),
       testing::UnorderedElementsAre("doc1", "doc2", "doc3", "doc5", "doc6"));
@@ -274,6 +375,7 @@ TEST_F(TagIndexTest, DeletedKeysNegativeSearchTest) {
   EXPECT_TRUE(index->AddRecord("doc1", "demand").value());
   EXPECT_TRUE(index->RemoveRecord("doc1", DeletionType::kNone)
                   .value());  // remove a field
+<<<<<<< HEAD
 
   std::string identifier = "attribute_name";
   std::string raw_tag_string = "dis*";
@@ -282,6 +384,15 @@ TEST_F(TagIndexTest, DeletedKeysNegativeSearchTest) {
           index.get(), identifier, raw_tag_string,
           indexes::Tag::ParseSearchTags(raw_tag_string, index->GetSeparator())
               .value()),
+=======
+  // Parsing filter string from query: uses '|' separator (query language OR
+  // syntax)
+  std::string filter_tag_string = "dis*";
+  auto entries_fetcher = index->Search(
+      query::TagPredicate(
+          index.get(), alias, identifier, filter_tag_string,
+          FilterParser::ParseQueryTags(filter_tag_string).value()),
+>>>>>>> 4b6878b (fixing tag query parsing (#602))
       true);
   EXPECT_THAT(Fetch(*entries_fetcher),
               testing::UnorderedElementsAre("doc0", "doc1"));
@@ -291,9 +402,14 @@ TEST_F(TagIndexTest, DeletedKeysNegativeSearchTest) {
                    .value());  // delete key
   entries_fetcher = index->Search(
       query::TagPredicate(
+<<<<<<< HEAD
           index.get(), identifier, raw_tag_string,
           indexes::Tag::ParseSearchTags(raw_tag_string, index->GetSeparator())
               .value()),
+=======
+          index.get(), alias, identifier, filter_tag_string,
+          FilterParser::ParseQueryTags(filter_tag_string).value()),
+>>>>>>> 4b6878b (fixing tag query parsing (#602))
       true);
   EXPECT_THAT(Fetch(*entries_fetcher), testing::UnorderedElementsAre("doc0"));
 }

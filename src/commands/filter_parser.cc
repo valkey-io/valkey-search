@@ -183,8 +183,9 @@ absl::StatusOr<absl::string_view> FilterParser::ParseTagString() {
   return expression_.substr(pos, stop_pos);
 }
 
-absl::StatusOr<absl::flat_hash_set<absl::string_view>> FilterParser::ParseTags(
-    absl::string_view tag_string, indexes::Tag* tag_index) const {
+absl::StatusOr<absl::flat_hash_set<absl::string_view>>
+FilterParser::ParseQueryTags(absl::string_view tag_string) {
+  // Parsing QUERY STRING: User-provided filter expression from FT.SEARCH.
   // In search queries, the tag separator is always '|' regardless of the
   // separator used when the index was created. This allows users to specify
   // multiple tags using the syntax: @field:{tag1|tag2|tag3}
@@ -204,9 +205,16 @@ FilterParser::ParseTagPredicate(const std::string& attribute_alias) {
 
   auto tag_index = dynamic_cast<indexes::Tag*>(index.value().get());
   VMSDK_ASSIGN_OR_RETURN(auto tag_string, ParseTagString());
+<<<<<<< HEAD
   VMSDK_ASSIGN_OR_RETURN(auto parsed_tags, ParseTags(tag_string, tag_index));
   return std::make_unique<query::TagPredicate>(tag_index, identifier,
                                                tag_string, parsed_tags);
+=======
+  VMSDK_ASSIGN_OR_RETURN(auto parsed_tags, ParseQueryTags(tag_string));
+  query_operations_ |= QueryOperations::kContainsTag;
+  return std::make_unique<query::TagPredicate>(
+      tag_index, attribute_alias, identifier, tag_string, parsed_tags);
+>>>>>>> 4b6878b (fixing tag query parsing (#602))
 }
 
 absl::Status UnexpectedChar(absl::string_view expression, size_t pos) {

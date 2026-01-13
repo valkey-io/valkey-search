@@ -99,14 +99,15 @@ Rax::WordIterator::WordIterator(rax* rax, absl::string_view prefix)
     : prefix_(prefix) {
   raxStart(&iter_, rax);
 
+  auto raw_prefix = const_cast<unsigned char*>(
+      reinterpret_cast<const unsigned char*>(prefix.data()));
+
   // Seek to first node matching the prefix
-  CHECK(
-      raxSeekSubTree(&iter_,
-                     const_cast<unsigned char*>(
-                         reinterpret_cast<const unsigned char*>(prefix.data())),
-                     prefix.size()));
+  CHECK(raxSeekSubTree(&iter_, raw_prefix, prefix.size()));
   raxNext(&iter_);
-  if (raxEOF(&iter_)) {
+  // Check that we're at a node within the prefix's path
+  if (raxEOF(&iter_) || iter_.key_len < prefix.length() ||
+      memcmp(raw_prefix, iter_.key, prefix.length()) != 0) {
     done_ = true;
   }
 }

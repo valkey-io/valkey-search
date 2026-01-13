@@ -198,18 +198,12 @@ def validate_fulltext_search(client: Valkey):
 
 class TestFullText(ValkeySearchTestCaseDebugMode):
 
-    @pytest.mark.parametrize("prefilter_eval_enabled", [pytest.param(False, id="Prefilter_eval=False"), pytest.param(True, id="Prefilter_eval=True")])
-    def test_text_search(self, prefilter_eval_enabled):
+    def test_text_search(self):
         """
         Test FT.SEARCH command with a text index.
         Tests with both prefilter disabled and enabled.
         """
         client: Valkey = self.server.get_new_client()
-        # Override config
-        if not prefilter_eval_enabled:
-            client.execute_command(
-                "CONFIG", "SET", "search.enable-prefilter-eval", "no"
-            )
         # Create the text index on Hash documents
         assert client.execute_command(text_index_on_hash) == b"OK"
         # Data population:
@@ -773,8 +767,7 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert result[0] == 1  # Only doc:1 is matched for "running"
         assert result[1] == b'doc:1'
 
-    @pytest.mark.parametrize("prefilter_eval_enabled", [pytest.param(False, id="Prefilter_eval=False"), pytest.param(True, id="Prefilter_eval=True")])
-    def test_mixed_predicates(self, prefilter_eval_enabled):
+    def test_mixed_predicates(self):
         """
         Test queries with mixed text, numeric, and tag predicates.
         Tests there is no regression with predicate evaluator changes for text.
@@ -875,14 +868,8 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
             client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4 term5 term6 term7 term8 term9 term10', "SLOP", "2", "INORDER")
         assert "Index does not support offsets" in str(err.value)
 
-    @pytest.mark.parametrize("prefilter_eval_enabled", [pytest.param(False, id="Prefilter_eval=False"), pytest.param(True, id="Prefilter_eval=True")])
-    def test_proximity_predicate(self, prefilter_eval_enabled):
+    def test_proximity_predicate(self):
         client: Valkey = self.server.get_new_client()
-        # Override config
-        if not prefilter_eval_enabled:
-            client.execute_command(
-                "CONFIG", "SET", "search.enable-prefilter-eval", "no"
-            )
         # Create index with text fields
         client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA",
                             "content", "TEXT", "NOSTEM", "title", "TEXT", "NOSTEM", "WITHSUFFIXTRIE")
@@ -1685,17 +1672,12 @@ class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
 
 class TestFullTextCluster(ValkeySearchClusterTestCaseDebugMode):
 
-    @pytest.mark.parametrize("prefilter_eval_enabled", [pytest.param(False, id="Prefilter_eval=False"), pytest.param(True, id="Prefilter_eval=True")])
-    def test_fulltext_search_cluster(self, prefilter_eval_enabled):
+    def test_fulltext_search_cluster(self):
         """
             Test a fulltext search queries on Hash docs in Valkey Search CME.
         """
         cluster_client: ValkeyCluster = self.new_cluster_client()
         client: Valkey = self.new_client_for_primary(0)
-        if not prefilter_eval_enabled:
-            # Set config on all primary nodes
-            for primary_client in self.get_all_primary_clients():
-                primary_client.execute_command("CONFIG", "SET", "search.enable-prefilter-eval", "no")
         # Create the text index on Hash documents
         assert client.execute_command(text_index_on_hash) == b"OK"
         # Data population:

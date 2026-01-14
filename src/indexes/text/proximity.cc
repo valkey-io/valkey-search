@@ -258,62 +258,66 @@ std::optional<size_t> ProximityIterator::FindViolatingIterator() {
 bool ProximityIterator::NextPosition() {
   const size_t n = iters_.size();
   bool should_advance = current_position_.has_value();
+
   while (!DonePositions()) {
+    // 1. Synchronize physical positions cache
     for (size_t i = 0; i < n; ++i) {
       positions_[i] = iters_[i]->CurrentPosition();
     }
+
     auto violating_iter = FindViolatingIterator();
+
     if (should_advance) {
       should_advance = false;
       if (violating_iter) {
         size_t idx = *violating_iter;
-        // iters_[*violating_iter]->NextPosition();
-        // SAFE WARP: If this is an in-order violation where a later term (idx)
-        // is behind a previous term (idx-1).
-        if (in_order_ && idx > 0 && HasOrderingViolation(idx - 1, idx)) {
-          // Identify the safe target based on Compatibility Mode.
-          // If w1 is at 10 and w2 is at 2, we seek w2 to 10.
-          Position target = valkey_search::options::GetProximityInorderCompatMode()
-                                ? positions_[idx - 1].start
-                                : positions_[idx - 1].end;
-          VMSDK_LOG(
-              WARNING, nullptr) << "ProximityIterator: Inorder violation detected. "
-                                 "Advancing iterator " << idx
-                                 << " from position "
-                                 << positions_[idx].start << " to target "
-                                 << target << ".";
-          // 2. Fetch the REAL current position from the child right now.
-          // This ensures we aren't using a stale value from the positions_ array.
-          Position current_child_start = iters_[idx]->CurrentPosition().start;
+        Position target = 0;
+        bool can_warp = false;
 
-          // 3. THE CRASH PREVENTER:
-          // PositionIterator's internal cumulative_position_ is at least 
-          // current_child_start. We ONLY seek if the target is strictly ahead.
-          if (target > current_child_start) {
-            iters_[idx]->SeekForwardPosition(target);
-          } else {
-            // If target is already reached or behind, we MUST NOT seek.
-            // NextPosition() is the only safe move to progress.
-            iters_[idx]->NextPosition();
+        // Determine warping target based on ordering mode
+        if (in_order_) {
+          if (idx > 0 && HasOrderingViolation(idx - 1, idx)) {
+            target = valkey_search::options::GetProximityInorderCompatMode()
+                         ? positions_[idx - 1].start
+                         : positions_[idx - 1].end;
+            can_warp = true;
           }
         } else {
-          // Fallback to standard increment for slop or field mask violations
+          // For unordered, find the iterator that physically precedes 'idx'
+          for (size_t i = 1; i < n; ++i) {
+            if (pos_with_idx_[i].second == idx) {
+              size_t prev_iter_idx = pos_with_idx_[i - 1].second;
+              if (HasOrderingViolation(prev_iter_idx, idx)) {
+                target = valkey_search::options::GetProximityInorderCompatMode()
+                             ? positions_[prev_iter_idx].start
+                             : positions_[prev_iter_idx].end;
+                can_warp = true;
+              }
+              break;
+            }
+          }
+        }
+
+        // 2. THE CRASH PREVENTER: Fetch fresh position and verify target
+        Position current_child_start = iters_[idx]->CurrentPosition().start;
+        if (can_warp && target > current_child_start) {
+          iters_[idx]->SeekForwardPosition(target);
+        } else {
+          // Fallback if target is behind or for slop/field-mask violations
           iters_[idx]->NextPosition();
         }
       } else {
-        // No violations, advance first non-done iterator
-        for (size_t i = 0; i < n; ++i) {
-          if (!iters_[i]->DonePositions()) {
-            iters_[i]->NextPosition();
-            break;
-          }
+        // No violations: advance the term appearing first physically
+        size_t first_idx = in_order_ ? 0 : pos_with_idx_[0].second;
+        if (!iters_[first_idx]->DonePositions()) {
+          iters_[first_idx]->NextPosition();
         }
       }
       continue;
     }
-    // No violations - so this positional combination is valid.
+
+    // 3. Validation: If no violations found, this combination is a match
     if (!violating_iter.has_value()) {
-      // Set the current field based on field mask intersection.
       current_field_mask_ = iters_[0]->CurrentFieldMask();
       for (size_t i = 1; i < n; ++i) {
         current_field_mask_ &= iters_[i]->CurrentFieldMask();

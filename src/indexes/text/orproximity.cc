@@ -165,36 +165,60 @@ bool OrProximityIterator::NextPosition() {
   return true;
 }
 
+// bool OrProximityIterator::SeekForwardPosition(Position target_position) {
+//   if (current_position_.has_value() &&
+//       current_position_.value().start >= target_position) {
+//     return true;
+//   }
+//   pos_set_.clear();
+//   for (size_t idx : current_key_indices_) {
+//     if (!iters_[idx]->DonePositions()) {
+//       iters_[idx]->SeekForwardPosition(target_position);
+//       InsertValidPositionIterator(idx);
+//     }
+//   }
+//   current_position_ = std::nullopt;
+//   if (pos_set_.empty()) {
+//     current_field_mask_ = 0ULL;
+//     return false;
+//   }
+//   Position min_pos = pos_set_.begin()->first;
+//   current_pos_indices_.clear();
+//   for (auto it = pos_set_.begin();
+//        it != pos_set_.end() && it->first == min_pos;) {
+//     current_pos_indices_.push_back(it->second);
+//     it = pos_set_.erase(it);
+//   }
+//   current_position_ = iters_[current_pos_indices_[0]]->CurrentPosition();
+//   current_field_mask_ = 0ULL;
+//   for (size_t idx : current_pos_indices_) {
+//     current_field_mask_ |= iters_[idx]->CurrentFieldMask();
+//   }
+//   return true;
+// }
 bool OrProximityIterator::SeekForwardPosition(Position target_position) {
   if (current_position_.has_value() &&
       current_position_.value().start >= target_position) {
     return true;
   }
+
   pos_set_.clear();
   for (size_t idx : current_key_indices_) {
     if (!iters_[idx]->DonePositions()) {
-      iters_[idx]->SeekForwardPosition(target_position);
+      // CRITICAL CRASH GUARD:
+      // Only call SeekForward if the target is actually ahead.
+      if (target_position > iters_[idx]->CurrentPosition().start) {
+        iters_[idx]->SeekForwardPosition(target_position);
+      }
+      // Re-insert into the tracking set regardless of whether we sought or not
       InsertValidPositionIterator(idx);
     }
   }
+
+  // Reset state and delegate the calculation of the new min_pos 
+  // and field masks to the existing NextPosition() logic.
   current_position_ = std::nullopt;
-  if (pos_set_.empty()) {
-    current_field_mask_ = 0ULL;
-    return false;
-  }
-  Position min_pos = pos_set_.begin()->first;
-  current_pos_indices_.clear();
-  for (auto it = pos_set_.begin();
-       it != pos_set_.end() && it->first == min_pos;) {
-    current_pos_indices_.push_back(it->second);
-    it = pos_set_.erase(it);
-  }
-  current_position_ = iters_[current_pos_indices_[0]]->CurrentPosition();
-  current_field_mask_ = 0ULL;
-  for (size_t idx : current_pos_indices_) {
-    current_field_mask_ |= iters_[idx]->CurrentFieldMask();
-  }
-  return true;
+  return NextPosition();
 }
 
 FieldMaskPredicate OrProximityIterator::CurrentFieldMask() const {

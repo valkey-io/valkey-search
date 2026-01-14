@@ -645,7 +645,15 @@ absl::StatusOr<SearchResult> Search(const SearchParameters &parameters,
     return result.status();
   }
   size_t total_count = result.value().size();
-  return SearchResult(total_count, std::move(result.value()), parameters);
+  // return SearchResult(total_count, std::move(result.value()), parameters);
+  auto search_result =
+      SearchResult(total_count, std::move(result.value()), parameters);
+  for (auto &n : search_result.neighbors) {
+    n.sequence_number =
+        parameters.index_schema->GetIndexMutationSequenceNumber(
+            n.external_id);
+  }
+  return search_result;
 }
 
 absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,

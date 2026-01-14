@@ -64,6 +64,7 @@ class ProximityIterator : public TextIterator {
   bool DonePositions() const override;
   const PositionRange& CurrentPosition() const override;
   bool NextPosition() override;
+  bool SeekForwardPosition(Position target_position) override;
   FieldMaskPredicate CurrentFieldMask() const override;
   // Returns true if iterator is at a valid state with current key, position,
   // and field.
@@ -94,6 +95,11 @@ class ProximityIterator : public TextIterator {
 
   bool FindCommonKey();
   bool HasOrderingViolation(size_t first_idx, size_t second_idx) const;
+  // struct ViolationInfo {
+  //   size_t iter_idx;
+  //   bool is_ordering_violation;
+  // };
+  // std::optional<ViolationInfo> FindViolatingIterator();
   std::optional<size_t> FindViolatingIterator();
 };
 }  // namespace valkey_search::indexes::text

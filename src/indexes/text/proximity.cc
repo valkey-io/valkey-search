@@ -266,7 +266,40 @@ bool ProximityIterator::NextPosition() {
     if (should_advance) {
       should_advance = false;
       if (violating_iter) {
-        iters_[*violating_iter]->NextPosition();
+        size_t idx = *violating_iter;
+        // iters_[*violating_iter]->NextPosition();
+        // SAFE WARP: If this is an in-order violation where a later term (idx)
+        // is behind a previous term (idx-1).
+        if (in_order_ && idx > 0 && HasOrderingViolation(idx - 1, idx)) {
+          // Identify the safe target based on Compatibility Mode.
+          // If w1 is at 10 and w2 is at 2, we seek w2 to 10.
+          Position target = valkey_search::options::GetProximityInorderCompatMode()
+                                ? positions_[idx - 1].start
+                                : positions_[idx - 1].end;
+          VMSDK_LOG(
+              WARNING, nullptr) << "ProximityIterator: Inorder violation detected. "
+                                 "Advancing iterator " << idx
+                                 << " from position "
+                                 << positions_[idx].start << " to target "
+                                 << target << ".";
+          // 2. Fetch the REAL current position from the child right now.
+          // This ensures we aren't using a stale value from the positions_ array.
+          Position current_child_start = iters_[idx]->CurrentPosition().start;
+
+          // 3. THE CRASH PREVENTER:
+          // PositionIterator's internal cumulative_position_ is at least 
+          // current_child_start. We ONLY seek if the target is strictly ahead.
+          if (target > current_child_start) {
+            iters_[idx]->SeekForwardPosition(target);
+          } else {
+            // If target is already reached or behind, we MUST NOT seek.
+            // NextPosition() is the only safe move to progress.
+            iters_[idx]->NextPosition();
+          }
+        } else {
+          // Fallback to standard increment for slop or field mask violations
+          iters_[idx]->NextPosition();
+        }
       } else {
         // No violations, advance first non-done iterator
         for (size_t i = 0; i < n; ++i) {
@@ -302,6 +335,25 @@ bool ProximityIterator::NextPosition() {
   current_position_ = std::nullopt;
   current_field_mask_ = 0ULL;
   return false;
+}
+
+bool ProximityIterator::SeekForwardPosition(Position target_position) {
+  // Already at or past target
+  if (current_position_.has_value() &&
+      current_position_.value().start >= target_position) {
+    return true;
+  }
+  // Seek all child iterators to target position
+  for (auto& iter : iters_) {
+    if (!iter->DonePositions() &&
+        iter->CurrentPosition().start < target_position) {
+      iter->SeekForwardPosition(target_position);
+    }
+  }
+  // Reset state and find next valid proximity match
+  current_position_ = std::nullopt;
+  current_field_mask_ = 0ULL;
+  return NextPosition();
 }
 
 FieldMaskPredicate ProximityIterator::CurrentFieldMask() const {

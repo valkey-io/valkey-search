@@ -115,7 +115,7 @@ INSTANTIATE_TEST_SUITE_P(
                       "",
                       "Tabs and newlines"},
         LexerTestCase{"running jumping",
-                      {"run", "jump"},
+                      {"running", "jumping"},
                       true,
                       3,
                       "",
@@ -172,14 +172,71 @@ TEST_F(LexerTest, EmptyStopWordsHandling) {
   // Create Lexer with no stop words
   lexer_ = CreateLexer(default_punctuation_, {});
 
-  // Test tokenization with empty stop words - all words preserved
+  // Test tokenization with empty stop words - all words preserved (original,
+  // not stemmed)
   auto result = lexer_->Tokenize(
       "Hello, world! TESTING 123 with-dashes and/or symbols", true, 3);
 
   ASSERT_TRUE(result.ok());
-  EXPECT_EQ(*result,
-            std::vector<std::string>({"hello", "world", "test", "123", "with",
-                                      "dash", "and", "or", "symbol"}));
+  EXPECT_EQ(*result, std::vector<std::string>({"hello", "world", "testing",
+                                               "123", "with", "dashes", "and",
+                                               "or", "symbols"}));
+}
+
+// Stem tree tests - verify stem mappings are populated correctly
+TEST_F(LexerTest, StemMappingsBasic) {
+  absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>
+      stem_mappings;
+
+  auto result =
+      lexer_->Tokenize("running jumps happily", true, 3, &stem_mappings);
+
+  ASSERT_TRUE(result.ok());
+  // Original words (case-folded, not stemmed)
+  EXPECT_EQ(*result, std::vector<std::string>({"running", "jumps", "happily"}));
+
+  // Verify stem mappings: stemmed form -> original words
+  EXPECT_EQ(stem_mappings.size(),
+            3);  // All three words stem to different forms
+  EXPECT_TRUE(stem_mappings.contains("run"));
+  EXPECT_TRUE(stem_mappings["run"].contains("running"));
+  EXPECT_TRUE(stem_mappings.contains("jump"));
+  EXPECT_TRUE(stem_mappings["jump"].contains("jumps"));
+  EXPECT_TRUE(stem_mappings.contains("happili"));
+  EXPECT_TRUE(stem_mappings["happili"].contains("happily"));
+}
+
+TEST_F(LexerTest, StemMappingsMultipleWordsToSameStem) {
+  absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>
+      stem_mappings;
+
+  auto result = lexer_->Tokenize("running runs", true, 3, &stem_mappings);
+
+  ASSERT_TRUE(result.ok());
+  // Original words (case-folded, not stemmed)
+  EXPECT_EQ(*result, std::vector<std::string>({"running", "runs"}));
+
+  // Both words should map to the same stem "run"
+  EXPECT_EQ(stem_mappings.size(), 1);
+  EXPECT_TRUE(stem_mappings.contains("run"));
+  EXPECT_EQ(stem_mappings["run"].size(), 2);  // Both words map to "run"
+  EXPECT_TRUE(stem_mappings["run"].contains("running"));
+  EXPECT_TRUE(stem_mappings["run"].contains("runs"));
+}
+
+TEST_F(LexerTest, StemMappingsNoStemmingWhenDisabled) {
+  absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>
+      stem_mappings;
+
+  auto result =
+      lexer_->Tokenize("running jumps happily", false, 3, &stem_mappings);
+
+  ASSERT_TRUE(result.ok());
+  // Original words (not stemmed)
+  EXPECT_EQ(*result, std::vector<std::string>({"running", "jumps", "happily"}));
+
+  // No stem mappings when stemming is disabled
+  EXPECT_TRUE(stem_mappings.empty());
 }
 
 }  // namespace valkey_search::indexes::text

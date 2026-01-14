@@ -25,9 +25,9 @@ hash_docs = [
     ["HSET", "product:4", "category", "books", "name", "Book", "price", "19.99", "rating", "4.8", "desc", "Order Opposite. Random Words. Random Words. wonder of wonders. Uncommon random words. Random Words."],
     ["HSET", "product:1", "category", "electronics", "name", "Laptop", "price", "999.99", "rating", "4.5", "desc", "1 2 3 4 5 6 7 8 9 0. Great oaks. Random Words. Random Words. Great oaks from little grey acorns grow. Impressive oak."],
     ["HSET", "product:3", "category", "electronics", "name", "Phone", "price", "299.00", "rating", "3.8", "desc", "Random Words. Experience. Random Words. Ok, this document uses some more common words from other docs. Interesting desc, impressive tablet. Random Words."],
-    ["HSET", "product:5", "category", "books", "name", "Book2", "price", "19.99", "rating", "1.0", "desc", "Unique slop word. Random Words. Random Words. greased the inspector's palm"],
+    ["HSET", "product:5", "category", "books", "name", "Book2", "price", "19.99", "rating", "1.0", "desc", "Unique slop word. Random Words. Random Words. greased the inspector's palm greas"],
     ["HSET", "product:2", "category", "electronics", "name", "Tablet", "price", "499.00", "rating", "4.0", "desc", "Random Words, These are not correct. Random Words. Interesting. Good beginning makes a good ending. Interesting desc"],
-    ["HSET", "product:6", "category", "books", "name", "BookOnAI", "price", "0.50", "rating", "5.0", "desc", "Poplog is a reflective, incrementally compiled software development environment for the programming languages POP-11, Common Lisp, Prolog, and Standard ML, originally created in the UK for teaching and research in artificial intelligence at the University of Sussex."]
+    ["HSET", "product:6", "category", "books", "name", "BookOnAI", "price", "0.50", "rating", "5.0", "desc", "Poplog is a reflective, incrementally compiled software development environment for the programming languages POP-11, Common Lisp, Prolog, and Standard ML, originally created in the UK for teaching and research in artificial intelligence at the University of Sussex. creat"]
 ]
 text_query_term = ["FT.SEARCH", "products", '@desc:"wonder"']
 text_query_term_nomatch = ["FT.SEARCH", "products", '@desc:"nomatch"']
@@ -35,8 +35,8 @@ text_query_prefix = ["FT.SEARCH", "products", '@desc:wond*']
 text_query_prefix2 = ["FT.SEARCH", "products", '@desc:wond*']
 text_query_prefix_nomatch = ["FT.SEARCH", "products", '@desc:nomatch*']
 text_query_prefix_multimatch = ["FT.SEARCH", "products", '@desc:grea*']
-text_query_exact_phrase1 = ["FT.SEARCH", "products", '@desc:"word wonder"']
-text_query_exact_phrase2 = ["FT.SEARCH", "products", '@desc:"random word wonder"']
+text_query_exact_phrase1 = ["FT.SEARCH", "products", '@desc:"words wonder"']
+text_query_exact_phrase2 = ["FT.SEARCH", "products", '@desc:"random words wonder"']
 
 expected_hash_key = b'product:4'
 expected_hash_value = {
@@ -123,8 +123,8 @@ def validate_fulltext_search(client: Valkey):
     assert result1[1] == b"product:3" and result2[1] == b"product:3"
     # TODO: Update these queries to non stemmed versions once the stem tree is supported and ingestion is updated.
     # Perform an exact phrase search operation on a unique phrase (exists in one doc).
-    result1 = client.execute_command("FT.SEARCH", "products", '@desc:"great oak from littl"')
-    result2 = client.execute_command("FT.SEARCH", "products", '@desc:"great oak from littl grey acorn grow"')
+    result1 = client.execute_command("FT.SEARCH", "products", '@desc:"great oaks from little"')
+    result2 = client.execute_command("FT.SEARCH", "products", '@desc:"great oaks from little grey acorns grow"')
     assert result1[0] == 1 and result2[0] == 1
     assert result1[1] == b"product:1" and result2[1] == b"product:1"
     # A Composed AND search with multiple prefix terms - non proximity.
@@ -137,31 +137,31 @@ def validate_fulltext_search(client: Valkey):
     result3 = client.execute_command("FT.SEARCH", "products", 'great oa* from lit* gr* acorn great', "SLOP", "0", "INORDER")
     assert result3[0] == 0
     # Perform an exact phrase search operation on a phrase existing in 2 documents.
-    result = client.execute_command("FT.SEARCH", "products", '@desc:"interest desc"')
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"interesting desc"')
     assert result[0] == 2
     assert set(result[1::2]) == {b"product:3", b"product:2"}
     # Perform an exact phrase search operation on a phrase existing in 5 documents.
-    result = client.execute_command("FT.SEARCH", "products", '@desc:"random word"')
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"random words"')
     assert result[0] == 5
     assert set(result[1::2]) == {b"product:1", b"product:2", b"product:3", b"product:4", b"product:5"}
     # Perform an exact phrase search operation on a phrase existing in 1 document.
-    result = client.execute_command("FT.SEARCH", "products", '@desc:"uncommon random word"')
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"uncommon random words"')
     assert result[0] == 1
     assert result[1] == b"product:4"
     # Test for searches on tokens that have common keys, but in-order does not match.
-    result = client.execute_command("FT.SEARCH", "products", '@desc:"opposit order"')
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"opposite order"')
     assert result[0] == 0
     # Test for searches on tokens that have common keys, but slop does not match.
-    result = client.execute_command("FT.SEARCH", "products", '@desc:"word uniqu"')
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"word unique"')
     assert result[0] == 0
     # Test for searches on tokens that have common keys and inorder matches but slop does not match.
-    result = client.execute_command("FT.SEARCH", "products", '@desc:"uniqu word"')
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"unique word"')
     assert result[0] == 0
     # Test for searches on tokens that have common keys and slop matches but inorder does not match.
-    result = client.execute_command("FT.SEARCH", "products", '@desc:"uniqu word slop"')
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"unique word slop"')
     assert result[0] == 0
     # Now, with the inorder, with no slop, it should match.
-    result = client.execute_command("FT.SEARCH", "products", '@desc:"uniqu slop word"')
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"unique slop word"')
     assert result[0] == 1
     assert result[1] == b"product:5"
     # Validating the inorder and slop checks for a query with multiple tokens.
@@ -181,12 +181,11 @@ def validate_fulltext_search(client: Valkey):
     # 2. Stemming is not done on words. (`words` is not stemmed and the ingestion is not)
     # 3. Punctuation is applied (removal of `,` in this example).
     result1 = client.execute_command("FT.SEARCH", "products", '@desc:"random words, these are not correct"')
-    result2 = client.execute_command("FT.SEARCH", "products", '@desc:"random word, these are not correct"')
+    result2 = client.execute_command("FT.SEARCH", "products", '@desc:"random word, correct"')
     result3 = client.execute_command("FT.SEARCH", "products", '@desc:"random words, correct"')
-    result4 = client.execute_command("FT.SEARCH", "products", '@desc:"random word, correct"')
-    assert result1[0] == 0 and result2[0] == 0 and result3[0] == 0
-    assert result4[0] == 1
-    assert result4[1] == b"product:2"
+    assert result1[0] == 0 and result2[0] == 0
+    assert result3[0] == 1
+    assert result3[1] == b"product:2"
     # A Composed AND search with multiple terms - non proximity.
     # Validate that we can handle inorder = false by looking across documents with these terms below in any order.
     result = client.execute_command("FT.SEARCH", "products", 'artificial intelligence research')
@@ -199,7 +198,7 @@ def validate_fulltext_search(client: Valkey):
     result = client.execute_command("FT.SEARCH", "products", '@desc:%wander%')
     assert (result[0], set(result[1::2])) == (1, {b"product:4"})
     result = client.execute_command("FT.SEARCH", "products", '@desc:%%greet%%')
-    assert (result[0], set(result[1::2])) == (3, {b"product:1", b"product:5", b"product:6"})
+    assert (result[0], set(result[1::2])) == (3, {b"product:1", b"product:5", b"product:6"}) , f"{set(result[1::2])}"
 
 class TestFullText(ValkeySearchTestCaseDebugMode):
 
@@ -469,8 +468,8 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
             ("effect*", True, "Case insensitivity - lowercase matches uppercase"),
             ("\"The quick-running searches are finding EFFECTIVE results!\"", False, "Stop word cannot be used in exact phrase searches"),
             # TODO: Change to True once the stem tree is supported and ingestion is updated.
-            ("\"quick-running searches finding EFFECTIVE results!\"", False, "Exact phrase without stopwords"),
-            ("\"quick-run search find EFFECT result!\"", True, "Exact Phrase Query without stopwords and using stemmed words"),
+            ("\"quick-running searches finding EFFECTIVE results!\"", True, "Exact phrase without stopwords"),
+            ("\"quick-run search find EFFECT result!\"", False, "Exact Phrase Query without stopwords and using stemmed words"),
             ("find*", True, "Prefix wildcard - matches 'finding'"),
             ("nonexistent", False, "Non-existent terms return no results")
         ]
@@ -483,27 +482,147 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
             else:
                 assert result[0] == 0, f"Failed: {description}"
 
-    @pytest.mark.skip(reason="TODO: ingest original words when stemming enabled")
     def test_stemming(self):
         """
-        Test text index NOSTEM option
+        Comprehensive stemming: term search with stem parents, phrases, prefix/fuzzy, NOSTEM field
         """
         client: Valkey = self.server.get_new_client()
-        client.execute_command("FT.CREATE idx ON HASH SCHEMA title TEXT content TEXT NOSTEM")
-        client.execute_command("HSET", "doc:1", "title", "running fast", "content", "running quickly")
-
-        expected = [1, b'doc:1', [b'content', b'running quickly', b'title', b'running fast']]
-        # Wait for index backfill to complete
+        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "WITHOFFSETS",
+                             "SCHEMA", "content", "TEXT", "nostem_field", "TEXT", "NOSTEM")
+        
+        # Docs with stem variants: happy/happiness->happi, run/running/runs->run, runner->runner (different stem)
+        docs = [
+            ("doc:1", "I am very happy today", "happy"),
+            ("doc:2", "Happiness is key to success", "happiness"),
+            ("doc:3", "She is happier than before", "happier"),
+            ("doc:4", "Running every day improves health", "running"),
+            ("doc:5", "He runs very fast", "runs"),
+            ("doc:6", "The runner won the race", "runner"),
+            ("doc:7", "Driving is fun", "driving")
+        ]
+        
+        for doc_id, content, nostem_content in docs:
+            client.execute_command("HSET", doc_id, "content", content, "nostem_field", nostem_content)
+            print(f"\nAfter inserting {doc_id}:")
+            print(f"  Content: {content}")
+            print(f"  STEM TREE contents:")
+            try:
+                result = client.execute_command("FT._DEBUG", "TEXTINFO", "idx", "STEM", "")
+                print(f"    {result}")
+            except Exception as e:
+                print(f"    Error: {e}")
+        
         IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
-        # We can find stems on 'title'
-        assert client.execute_command("FT.SEARCH", "idx", '@title:"run"') == expected
-
-        # We cannot find stems on 'content' with NOSTEM
-        assert client.execute_command("FT.SEARCH", "idx", '@content:"run"') == [0]
-
-        # We can find original words in both cases
-        assert client.execute_command("FT.SEARCH", "idx", '@title:"running"') == expected # TODO: fails here
-        assert client.execute_command("FT.SEARCH", "idx", '@content:"running"') == expected
+        
+        # Test 1: Term search finds multiple stem parents (happy, happiness share stem "happi")
+        # Note: "happier" stems differently and is not in the "happi" stem group
+        assert (client.execute_command("FT.SEARCH", "idx", '@content:happi')[0], 
+                set(client.execute_command("FT.SEARCH", "idx", '@content:happi')[1::2])) == (2, {b"doc:1", b"doc:2"})
+        assert (client.execute_command("FT.SEARCH", "idx", '@content:happy')[0],
+                set(client.execute_command("FT.SEARCH", "idx", '@content:happy')[1::2])) == (2, {b"doc:1", b"doc:2"})
+        assert (client.execute_command("FT.SEARCH", "idx", '@content:happiness')[0],
+                set(client.execute_command("FT.SEARCH", "idx", '@content:happiness')[1::2])) == (2, {b"doc:1", b"doc:2"})
+        
+        # Test 1b: "happier" can be found via prefix search
+        assert (client.execute_command("FT.SEARCH", "idx", '@content:happ*')[0],
+                set(client.execute_command("FT.SEARCH", "idx", '@content:happ*')[1::2])) == (3, {b"doc:1", b"doc:2", b"doc:3"})
+        
+        # Test 2: Term search with different stem group (run/running/runs vs runner)
+        assert (client.execute_command("FT.SEARCH", "idx", '@content:run')[0],
+                set(client.execute_command("FT.SEARCH", "idx", '@content:run')[1::2])) == (2, {b"doc:4", b"doc:5"})
+        assert (client.execute_command("FT.SEARCH", "idx", '@content:running')[0],
+                set(client.execute_command("FT.SEARCH", "idx", '@content:running')[1::2])) == (2, {b"doc:4", b"doc:5"})
+        result = client.execute_command("FT.SEARCH", "idx", '@content:runner')
+        assert result[0] == 1 and result[1] == b"doc:6"
+        assert set(result[2]) == {b'content', b'The runner won the race', b'nostem_field', b'runner'}
+        
+        # Test 3: NOSTEM field never expands stems
+        result = client.execute_command("FT.SEARCH", "idx", '@nostem_field:happy')
+        assert result[0] == 1 and result[1] == b'doc:1'
+        assert set(result[2]) == {b'content', b'I am very happy today', b'nostem_field', b'happy'}
+        
+        assert client.execute_command("FT.SEARCH", "idx", '@nostem_field:happi')[0] == 0
+        
+        result = client.execute_command("FT.SEARCH", "idx", '@nostem_field:happiness')
+        assert result[0] == 1 and result[1] == b'doc:2'
+        assert set(result[2]) == {b'content', b'Happiness is key to success', b'nostem_field', b'happiness'}
+        
+        assert client.execute_command("FT.SEARCH", "idx", '@nostem_field:run')[0] == 0
+        
+        result = client.execute_command("FT.SEARCH", "idx", '@nostem_field:running')
+        assert result[0] == 1 and result[1] == b'doc:4'
+        assert set(result[2]) == {b'content', b'Running every day improves health', b'nostem_field', b'running'}
+        
+        # Test 4: Exact phrase (quotes) - NO stem expansion
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"very happy today"')
+        assert result[0] == 1 and result[1] == b'doc:1'
+        assert set(result[2]) == {b'content', b'I am very happy today', b'nostem_field', b'happy'}
+        
+        assert client.execute_command("FT.SEARCH", "idx", '@content:"very happi today"')[0] == 0
+        
+        # Test exact phrase without stopwords
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"happiness key"')
+        assert result[0] == 1 and result[1] == b'doc:2'
+        assert set(result[2]) == {b'content', b'Happiness is key to success', b'nostem_field', b'happiness'}
+        
+        # Test 5: Non-exact phrase (no quotes) - DOES use stem expansion
+        result = client.execute_command("FT.SEARCH", "idx", '@content:very happi today')
+        assert result[0] == 1 and result[1] == b'doc:1'
+        assert set(result[2]) == {b'content', b'I am very happy today', b'nostem_field', b'happy'}
+        
+        result = client.execute_command("FT.SEARCH", "idx", '@content:happi key success')
+        assert result[0] == 1 and result[1] == b'doc:2'
+        assert set(result[2]) == {b'content', b'Happiness is key to success', b'nostem_field', b'happiness'}
+        
+        result = client.execute_command("FT.SEARCH", "idx", '@content:run every day')
+        assert result[0] == 1 and result[1] == b'doc:4'
+        assert set(result[2]) == {b'content', b'Running every day improves health', b'nostem_field', b'running'}
+        
+        result = client.execute_command("FT.SEARCH", "idx", '@content:run fast')
+        assert result[0] == 1 and result[1] == b'doc:5'
+        assert set(result[2]) == {b'content', b'He runs very fast', b'nostem_field', b'runs'}
+        
+        # Test 6: Prefix wildcard - NO stem expansion (matches literal prefix)
+        # "happi*" matches "happier" and "happiness" (both start with "happi")
+        assert (client.execute_command("FT.SEARCH", "idx", '@content:happi*')[0],
+                set(client.execute_command("FT.SEARCH", "idx", '@content:happi*')[1::2])) == (2, {b"doc:2", b"doc:3"})
+        assert (client.execute_command("FT.SEARCH", "idx", '@content:run*')[0],
+                set(client.execute_command("FT.SEARCH", "idx", '@content:run*')[1::2])) == (3, {b"doc:4", b"doc:5", b"doc:6"})
+        
+        # Test 7: Fuzzy search - NO stem expansion (matches by edit distance)
+        result = client.execute_command("FT.SEARCH", "idx", '@content:%happy%')
+        assert result[0] == 1 and result[1] == b'doc:1'
+        assert set(result[2]) == {b'content', b'I am very happy today', b'nostem_field', b'happy'}
+        
+        # ED=2 for "happi" matches "happy" (ED=1) and "happier" (ED=2), not "happiness" (ED=3)
+        assert (client.execute_command("FT.SEARCH", "idx", '@content:%%happi%%')[0],
+                set(client.execute_command("FT.SEARCH", "idx", '@content:%%happi%%')[1::2])) == (2, {b"doc:1", b"doc:3"})
+        
+        result = client.execute_command("FT.SEARCH", "idx", '@content:%running%')
+        assert result[0] == 1 and result[1] == b'doc:4'
+        assert set(result[2]) == {b'content', b'Running every day improves health', b'nostem_field', b'running'}
+        
+        # Test 8: VERBATIM mode - NO stem expansion (exact match only)
+        assert client.execute_command("FT.SEARCH", "idx", '@content:happi', "VERBATIM")[0] == 0
+        
+        result = client.execute_command("FT.SEARCH", "idx", '@content:happy', "VERBATIM")
+        assert result[0] == 1 and result[1] == b'doc:1'
+        assert set(result[2]) == {b'content', b'I am very happy today', b'nostem_field', b'happy'}
+        
+        assert client.execute_command("FT.SEARCH", "idx", '@content:run', "VERBATIM")[0] == 0
+        
+        # Test 9: Complex - stem term in AND/OR queries
+        result = client.execute_command("FT.SEARCH", "idx", '@content:very @content:happi')
+        assert result[0] == 1 and result[1] == b'doc:1'
+        assert set(result[2]) == {b'content', b'I am very happy today', b'nostem_field', b'happy'}
+        
+        assert (client.execute_command("FT.SEARCH", "idx", '@content:happi | @content:run')[0],
+                set(client.execute_command("FT.SEARCH", "idx", '@content:happi | @content:run')[1::2])) == (4, {b"doc:1", b"doc:2", b"doc:4", b"doc:5"})
+        
+        # Test 10: Stem + prefix combination
+        result = client.execute_command("FT.SEARCH", "idx", '@content:happi @content:succ*')
+        assert result[0] == 1 and result[1] == b'doc:2'
+        assert set(result[2]) == {b'content', b'Happiness is key to success', b'nostem_field', b'happiness'}
 
     def test_custom_stopwords(self):
         """

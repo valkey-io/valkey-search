@@ -96,7 +96,16 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
     size_t text_field_number, bool stem, bool suffix) {
   NestedMemoryScope scope{metadata_.text_index_memory_pool_};
 
-  auto tokens = lexer_.Tokenize(data, stem, min_stem_size_);
+  // Get or create stem mappings for this key if stemming is enabled
+  absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>
+      *stem_mappings_ptr = nullptr;
+  if (stem) {
+    std::lock_guard<std::mutex> stem_guard(in_progress_stem_mappings_mutex_);
+    stem_mappings_ptr = &in_progress_stem_mappings_[key];
+  }
+
+  // Tokenize and collect stem mappings
+  auto tokens = lexer_.Tokenize(data, stem, min_stem_size, stem_mappings_ptr);
 
   if (!tokens.ok()) {
     if (tokens.status().code() == absl::StatusCode::kInvalidArgument) {
@@ -139,6 +148,17 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
       return;
     }
     token_positions = std::move(node.mapped());
+  }
+
+  // Retrieve the key's stem mappings
+  absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>
+      stem_mappings;
+  {
+    std::lock_guard<std::mutex> stem_guard(in_progress_stem_mappings_mutex_);
+    auto stem_node = in_progress_stem_mappings_.extract(key);
+    if (!stem_node.empty()) {
+      stem_mappings = std::move(stem_node.mapped());
+    }
   }
 
   TextIndex key_index{with_suffix_trie_};
@@ -185,6 +205,20 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
     }
   }
 
+  // Populate stem tree with mappings
+  {
+    std::lock_guard<std::mutex> schema_guard(text_index_mutex_);
+    for (const auto &[stemmed, originals] : stem_mappings) {
+      stem_tree_.MutateTarget(stemmed, [&](StemParents existing) {
+        if (!existing) {
+          existing = absl::flat_hash_set<std::string>();
+        }
+        existing->insert(originals.begin(), originals.end());
+        return existing;
+      });
+    }
+  }
+
   // Map the key to the newly created per-key index
   {
     std::lock_guard<std::mutex> per_key_guard(per_key_text_indexes_mutex_);
@@ -209,7 +243,7 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
 
   auto iter = key_index.GetPrefix().GetWordIterator("");
 
-  // Cleanup schema-level text index
+  // Cleanup schema-level text index and stem tree
   std::lock_guard<std::mutex> schema_guard(text_index_mutex_);
   while (!iter.Done()) {
     std::string_view word = iter.GetWord();
@@ -223,6 +257,26 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
       std::string reverse_word(word.rbegin(), word.rend());
       suffix_opt.value().get().SetTarget(reverse_word, new_target);
     }
+
+    // If the postings are now empty, remove from stem tree if it was a parent
+    if (!new_target) {
+      // Check if this word has a stem mapping
+      std::string stemmed =
+          lexer_.StemWord(std::string(word), true, 4, lexer_.GetStemmer());
+      if (stemmed != word) {
+        // This word was a stem parent, remove it from stem tree
+        stem_tree_.MutateTarget(stemmed, [&](StemParents existing) {
+          if (existing && !existing->empty()) {
+            existing->erase(std::string(word));
+            if (existing->empty()) {
+              return StemParents{};  // Return nullopt to remove from tree
+            }
+          }
+          return existing;
+        });
+      }
+    }
+
     iter.Next();
   }
 }
@@ -259,6 +313,34 @@ uint64_t TextIndexSchema::GetPositionMemoryUsage() const {
 
 uint64_t TextIndexSchema::GetTotalTextIndexMemoryUsage() const {
   return metadata_.text_index_memory_pool_.GetUsage();
+}
+
+void TextIndexSchema::GetAllStemVariants(
+    const std::string &search_term,
+    std::vector<std::string> &words_to_search) const {
+  // Stem the search term
+  std::string stemmed =
+      lexer_.StemWord(search_term, true, 4, lexer_.GetStemmer());
+
+  // If stemmed form is different, add it to search list
+  if (stemmed != search_term) {
+    words_to_search.push_back(stemmed);
+  }
+
+  // Look up parent words in stem tree
+  auto stem_iter = stem_tree_.GetWordIterator(stemmed);
+  while (!stem_iter.Done()) {
+    if (stem_iter.GetWord() == stemmed) {
+      const auto &parents_opt = stem_iter.GetTarget();
+      if (parents_opt.has_value()) {
+        const auto &parents = parents_opt.value();
+        words_to_search.insert(words_to_search.end(), parents.begin(),
+                               parents.end());
+      }
+      break;
+    }
+    stem_iter.Next();
+  }
 }
 
 }  // namespace valkey_search::indexes::text

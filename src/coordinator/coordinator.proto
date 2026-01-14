@@ -52,6 +52,7 @@ message TermPredicate {
   uint64 field_mask = 1;
   string content = 2;
   bool exact = 3;
+  bool isstem = 4;
 }
 
 message PrefixPredicate {

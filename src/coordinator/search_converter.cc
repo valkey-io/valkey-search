@@ -130,7 +130,8 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
       attribute_identifiers.insert(identifiers.begin(), identifiers.end());
       return std::make_unique<query::TermPredicate>(
           text_index_schema, predicate.term().field_mask(),
-          predicate.term().content(), predicate.term().exact());
+          predicate.term().content(), predicate.term().exact(),
+          predicate.term().isstem());
     }
     case Predicate::kPrefix: {
       auto text_index_schema = index_schema->GetTextIndexSchema();
@@ -305,6 +306,7 @@ std::unique_ptr<Predicate> PredicateToGRPCPredicate(
         proto->mutable_term()->set_field_mask(term->GetFieldMask());
         proto->mutable_term()->set_content(std::string(term->GetTextString()));
         proto->mutable_term()->set_exact(term->IsExact());
+        proto->mutable_term()->set_isstem(term->IsStem());
         return proto;
       } else if (auto prefix =
                      dynamic_cast<const query::PrefixPredicate*>(&predicate)) {

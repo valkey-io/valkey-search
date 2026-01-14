@@ -6,6 +6,8 @@
 
 #include "src/indexes/text/lexer.h"
 
+#include <memory>
+
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
@@ -80,8 +82,9 @@ Lexer::Lexer(data_model::Language language, const std::string& punctuation,
       stop_words_set_(BuildStopWordsSet(stop_words)) {}
 
 absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
-    absl::string_view text, bool stemming_enabled,
-    uint32_t min_stem_size) const {
+    absl::string_view text, bool stemming_enabled, uint32_t min_stem_size,
+    absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>*
+        stem_mappings) const {
   if (!IsValidUtf8(text)) {
     return absl::InvalidArgumentError("Invalid UTF-8");
   }
@@ -140,8 +143,12 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
         continue;  // Skip stop words
       }
 
-      word = StemWord(word, stemming_enabled, min_stem_size, stemmer);
+      std::string stemmed_word =
+          StemWord(word, stemming_enabled, min_stem_size, stemmer);
 
+      if (stem_mappings && word != stemmed_word) {
+        (*stem_mappings)[stemmed_word].insert(word);
+      }
       tokens.push_back(std::move(word));
     }
   }
@@ -168,14 +175,14 @@ std::string Lexer::StemWord(const std::string& word, bool stemming_enabled,
     return word;
   }
 
-  DCHECK(stemmer) << "Stemmer is null";
+  CHECK(stemmer) << "Stemmer is not initialized";
 
   const sb_symbol* stemmed = sb_stemmer_stem(
       stemmer, reinterpret_cast<const sb_symbol*>(word.c_str()), word.length());
 
-  DCHECK(stemmed) << "Stemming failed for word: " + word;
-
   int stemmed_length = sb_stemmer_length(stemmer);
+  CHECK(stemmed_length < min_stem_size || stemmed) << "Stemming failed";
+
   return std::string(reinterpret_cast<const char*>(stemmed), stemmed_length);
 }
 

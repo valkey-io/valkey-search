@@ -187,13 +187,28 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
     const void* fetcher_ptr) const {
   const auto* fetcher =
       static_cast<const indexes::Text::EntriesFetcher*>(fetcher_ptr);
-  auto word_iter =
-      fetcher->text_index_->GetPrefix().GetWordIterator(GetTextString());
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
-  if (!word_iter.Done() && word_iter.GetWord() == GetTextString()) {
-    key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
+
+  // Collect all words to search
+  std::vector<std::string> words_to_search;
+  words_to_search.push_back(std::string(GetTextString()));
+
+  if (!IsExact() && IsStem()) {
+    GetTextIndexSchema()->GetAllStemVariants(std::string(GetTextString()),
+                                             words_to_search);
+  }
+
+  // Search for all words using the same pattern
+  for (const auto& word : words_to_search) {
+    auto word_iter = fetcher->text_index_->GetPrefix().GetWordIterator(word);
+    while (!word_iter.Done()) {
+      if (word_iter.GetWord() == word) {
+        key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
+      }
+      word_iter.Next();
+    }
   }
   return std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), fetcher->field_mask_, fetcher->untracked_keys_,

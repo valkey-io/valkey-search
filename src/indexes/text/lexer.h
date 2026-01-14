@@ -43,8 +43,9 @@ struct Lexer {
   ~Lexer() = default;
 
   absl::StatusOr<std::vector<std::string>> Tokenize(
-      absl::string_view text, bool stemming_enabled,
-      uint32_t min_stem_size) const;
+      absl::string_view text, bool stemming_enabled, uint32_t min_stem_size,
+      absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>*
+          stem_mappings = nullptr) const;
 
   std::string StemWord(const std::string& word, bool stemming_enabled,
                        uint32_t min_stem_size, sb_stemmer* stemmer) const;

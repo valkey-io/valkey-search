@@ -650,8 +650,7 @@ absl::StatusOr<SearchResult> Search(const SearchParameters &parameters,
       SearchResult(total_count, std::move(result.value()), parameters);
   for (auto &n : search_result.neighbors) {
     n.sequence_number =
-        parameters.index_schema->GetIndexMutationSequenceNumber(
-            n.external_id);
+        parameters.index_schema->GetIndexMutationSequenceNumber(n.external_id);
   }
   return search_result;
 }

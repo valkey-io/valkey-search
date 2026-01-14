@@ -55,15 +55,14 @@ const ShardInfo* ClusterMap::GetShardBySlot(uint16_t slot) const {
   return nullptr;
 }
 
-std::optional<NodeInfo> ClusterMap::GetLocalNodeFromShard(
-    const ShardInfo& shard, bool replica_only) const {
+std::optional<NodeInfo> ShardInfo::GetLocalNode(bool replica_only) const {
   // Try to find a local node first
-  if (!replica_only && shard.primary.has_value() && shard.primary->is_local) {
-    return shard.primary.value();
+  if (!replica_only && primary.has_value() && primary->is_local) {
+    return primary.value();
   }
 
   // Look for local replicas
-  for (const auto& replica : shard.replicas) {
+  for (const auto& replica : replicas) {
     if (replica.is_local) {
       return replica;
     }
@@ -73,11 +72,9 @@ std::optional<NodeInfo> ClusterMap::GetLocalNodeFromShard(
   return std::nullopt;
 }
 
-NodeInfo ClusterMap::GetRandomNodeFromShard(const ShardInfo& shard,
-                                            bool replica_only,
-                                            bool prefer_local) const {
+NodeInfo ShardInfo::GetRandomNode(bool replica_only, bool prefer_local) const {
   if (prefer_local) {
-    auto local_node = GetLocalNodeFromShard(shard, replica_only);
+    auto local_node = GetLocalNode(replica_only);
     if (local_node.has_value()) {
       return local_node.value();
     }
@@ -87,21 +84,21 @@ NodeInfo ClusterMap::GetRandomNodeFromShard(const ShardInfo& shard,
   absl::BitGen gen;
 
   if (replica_only) {
-    size_t replica_index = absl::Uniform(gen, 0u, shard.replicas.size());
-    return shard.replicas[replica_index];
+    size_t replica_index = absl::Uniform(gen, 0u, replicas.size());
+    return replicas[replica_index];
   }
 
-  size_t node_count = shard.replicas.size();
-  if (shard.primary.has_value()) {
+  size_t node_count = replicas.size();
+  if (primary.has_value()) {
     node_count++;
   }
   CHECK(node_count > 0);
   size_t index = absl::Uniform(gen, 0u, node_count);
-  if (index == 0 && shard.primary.has_value()) {
-    return shard.primary.value();
+  if (index == 0 && primary.has_value()) {
+    return primary.value();
   }
-  size_t replica_index = shard.primary.has_value() ? index - 1 : index;
-  return shard.replicas[replica_index];
+  size_t replica_index = primary.has_value() ? index - 1 : index;
+  return replicas[replica_index];
 }
 
 std::vector<NodeInfo> ClusterMap::GetTargets(FanoutTargetMode mode,
@@ -120,8 +117,7 @@ std::vector<NodeInfo> ClusterMap::GetTargets(FanoutTargetMode mode,
         if (shard_info.replicas.empty()) {
           continue;
         }
-        random_replicas.push_back(
-            GetRandomNodeFromShard(shard_info, true, prefer_local));
+        random_replicas.push_back(shard_info.GetRandomNode(true, prefer_local));
       }
       return random_replicas;
     }
@@ -129,8 +125,7 @@ std::vector<NodeInfo> ClusterMap::GetTargets(FanoutTargetMode mode,
       std::vector<NodeInfo> random_targets;
       random_targets.reserve(shards_.size());
       for (const auto& [shard_id, shard_info] : shards_) {
-        random_targets.push_back(
-            GetRandomNodeFromShard(shard_info, false, prefer_local));
+        random_targets.push_back(shard_info.GetRandomNode(false, prefer_local));
       }
       return random_targets;
     }
@@ -174,7 +169,7 @@ std::vector<NodeInfo> ClusterMap::GetTargetsForSlot(FanoutTargetMode mode,
         return {};
       }
     case FanoutTargetMode::kRandom:
-      return {GetRandomNodeFromShard(*shard, false, prefer_local)};
+      return {shard->GetRandomNode(false, prefer_local)};
     default:
       CHECK(false);
   }

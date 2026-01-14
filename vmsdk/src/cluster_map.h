@@ -81,6 +81,8 @@ struct ShardInfo {
   absl::btree_map<uint16_t, uint16_t> owned_slots;
   // Hash of owned_slots
   uint64_t slots_fingerprint;
+  NodeInfo GetRandomNode(bool replica_only, bool prefer_local) const;
+  std::optional<NodeInfo> GetLocalNode(bool replica_only) const;
 };
 
 struct SlotRangeInfo {

@@ -166,15 +166,15 @@ bool HandleEarlyReplyScenarios(ValkeyModuleCtx *ctx,
   if (query::ShouldReturnNoResults(command)) {
     ValkeyModule_ReplyWithArray(ctx, 1);
     ValkeyModule_ReplyWithLongLong(ctx, search_result.total_count);
-    return true; // Early reply sent, stop processing
+    return true;  // Early reply sent, stop processing
   }
-  
+
   if (command.no_content) {
     SendReplyNoContent(ctx, search_result, command);
-    return true; // Early reply sent, stop processing
+    return true;  // Early reply sent, stop processing
   }
-  
-  return false; // No early reply needed, continue processing
+
+  return false;  // No early reply needed, continue processing
 }
 
 // Process neighbors for both vector and non-vector queries
@@ -183,7 +183,7 @@ absl::Status ProcessNeighborsForQuery(ValkeyModuleCtx *ctx,
                                       SearchCommand &command) {
   auto &neighbors = search_result.neighbors;
   size_t original_size = neighbors.size();
-  
+
   if (command.IsNonVectorQuery()) {
     query::ProcessNonVectorNeighborsForReply(
         ctx, command.index_schema->GetAttributeDataType(), neighbors, command);
@@ -192,19 +192,21 @@ absl::Status ProcessNeighborsForQuery(ValkeyModuleCtx *ctx,
     search_result.total_count -= (original_size - neighbors.size());
     return absl::OkStatus();
   }
-  
+
   // Handle vector queries
-  auto identifier = command.index_schema->GetIdentifier(command.attribute_alias);
+  auto identifier =
+      command.index_schema->GetIdentifier(command.attribute_alias);
   if (!identifier.ok()) {
     return identifier.status();
   }
-  
-  query::ProcessNeighborsForReply(ctx, command.index_schema->GetAttributeDataType(),
+
+  query::ProcessNeighborsForReply(ctx,
+                                  command.index_schema->GetAttributeDataType(),
                                   neighbors, command, identifier.value());
   // Adjust total count based on neighbors removed during processing
   // due to filtering or missing attributes.
   search_result.total_count -= (original_size - neighbors.size());
-  
+
   return absl::OkStatus();
 }
 
@@ -222,12 +224,12 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
                               query::SearchResult &search_result) {
   // Increment success counter.
   ++Metrics::GetStats().query_successful_requests_cnt;
-  
+
   // 1. Handle early reply scenarios
   if (HandleEarlyReplyScenarios(ctx, search_result, *this)) {
     return;
   }
-  
+
   // 2. Process neighbors for the query
   auto status = ProcessNeighborsForQuery(ctx, search_result, *this);
   if (!status.ok()) {
@@ -235,7 +237,7 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
     ValkeyModule_ReplyWithError(ctx, status.message().data());
     return;
   }
-  
+
   // 3. Serialize neighbors based on query type
   if (IsNonVectorQuery()) {
     SerializeNonVectorNeighbors(ctx, search_result, *this);

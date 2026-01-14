@@ -169,7 +169,7 @@ absl::StatusOr<std::pair<size_t, size_t>> ProcessNeighborsForProcessing(
     ValkeyModuleCtx *ctx, std::vector<indexes::Neighbor> &neighbors,
     AggregateParameters &parameters) {
   size_t key_index = 0, scores_index = 0;
-  
+
   if (parameters.IsVectorQuery()) {
     auto identifier =
         parameters.index_schema->GetIdentifier(parameters.attribute_alias);
@@ -201,7 +201,7 @@ absl::StatusOr<std::pair<size_t, size_t>> ProcessNeighborsForProcessing(
                                                 indexes::IndexerType::kNone);
     }
   }
-  
+
   return std::make_pair(key_index, scores_index);
 }
 
@@ -220,7 +220,8 @@ absl::StatusOr<expr::Value> ProcessFieldValue(
       }
     }
     default:
-      if (data_type == data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH) {
+      if (data_type ==
+          data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH) {
         return expr::Value(value);
       } else {
         auto v = vmsdk::JsonUnquote(value);
@@ -235,33 +236,32 @@ absl::StatusOr<expr::Value> ProcessFieldValue(
 
 // Create records from neighbors and populate their fields
 absl::Status CreateRecordsFromNeighbors(
-    std::vector<indexes::Neighbor> &neighbors,
-    AggregateParameters &parameters, size_t key_index, size_t scores_index,
-    RecordSet &records) {
+    std::vector<indexes::Neighbor> &neighbors, AggregateParameters &parameters,
+    size_t key_index, size_t scores_index, RecordSet &records) {
   auto data_type = parameters.index_schema->GetAttributeDataType().ToProto();
-  
+
   for (auto &n : neighbors) {
     auto rec =
         std::make_unique<Record>(parameters.record_indexes_by_alias_.size());
-        
+
     // Set key field if requested
     if (parameters.load_key) {
       rec->fields_.at(key_index) = expr::Value(n.external_id->Str());
     }
-    
+
     // Set score field for vector queries
     if (parameters.IsVectorQuery()) {
       rec->fields_.at(scores_index) = expr::Value(n.distance);
     }
-    
+
     // Process attribute contents
     if (n.attribute_contents.has_value() && !parameters.no_content) {
       bool should_drop_record = false;
-      
+
       for (auto &[name, records_map_value] : *n.attribute_contents) {
         auto value = vmsdk::ToStringView(records_map_value.value.get());
         std::optional<size_t> record_index;
-        
+
         // Find the record index by alias or identifier
         if (auto by_alias = parameters.record_indexes_by_alias_.find(name);
             by_alias != parameters.record_indexes_by_alias_.end()) {
@@ -274,13 +274,14 @@ absl::Status CreateRecordsFromNeighbors(
           record_index = by_identifier->second;
           assert(record_index < rec->fields_.size());
         }
-        
+
         if (record_index) {
           // Process the field value based on its type
           indexes::IndexerType indexer_type =
               parameters.record_info_by_index_[*record_index].data_type_;
-          auto processed_value = ProcessFieldValue(value, indexer_type, data_type);
-          
+          auto processed_value =
+              ProcessFieldValue(value, indexer_type, data_type);
+
           if (processed_value.ok()) {
             rec->fields_[*record_index] = std::move(*processed_value);
           } else {
@@ -297,15 +298,15 @@ absl::Status CreateRecordsFromNeighbors(
               std::make_pair(std::string(name), expr::Value(value)));
         }
       }
-      
+
       if (should_drop_record) {
-        continue; // Skip adding this record to the set
+        continue;  // Skip adding this record to the set
       }
     }
-    
+
     records.push_back(std::move(rec));
   }
-  
+
   return absl::OkStatus();
 }
 
@@ -325,13 +326,13 @@ absl::Status GenerateResponse(ValkeyModuleCtx *ctx,
                               RecordSet &records) {
   ValkeyModule_ReplyWithArray(ctx, 1 + records.size());
   ValkeyModule_ReplyWithLongLong(ctx, static_cast<long long>(records.size()));
-  
+
   while (!records.empty()) {
     auto rec = records.pop_front();
     ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
-    
+
     size_t array_count = 0;
-    
+
     // Process referenced fields
     CHECK(rec->fields_.size() <= parameters.record_info_by_index_.size());
     for (size_t i = 0; i < rec->fields_.size(); ++i) {
@@ -343,7 +344,7 @@ absl::Status GenerateResponse(ValkeyModuleCtx *ctx,
         array_count += 2;
       }
     }
-    
+
     // Process unreferenced (extra) fields
     for (const auto &[name, value] : rec->extra_fields_) {
       if (ReplyWithValue(
@@ -352,10 +353,10 @@ absl::Status GenerateResponse(ValkeyModuleCtx *ctx,
         array_count += 2;
       }
     }
-    
+
     ValkeyModule_ReplySetArrayLength(ctx, array_count);
   }
-  
+
   return absl::OkStatus();
 }
 
@@ -363,8 +364,8 @@ absl::Status SendReplyInner(ValkeyModuleCtx *ctx,
                             std::vector<indexes::Neighbor> &neighbors,
                             AggregateParameters &parameters) {
   // 1. Process query setup and get key/score indices
-  VMSDK_ASSIGN_OR_RETURN(auto indices, 
-                         ProcessNeighborsForProcessing(ctx, neighbors, parameters));
+  VMSDK_ASSIGN_OR_RETURN(
+      auto indices, ProcessNeighborsForProcessing(ctx, neighbors, parameters));
   auto [key_index, scores_index] = indices;
 
   // 2. Create records from neighbors

@@ -50,9 +50,9 @@ def do_search(client: Valkey.client, index: Index, query: str, extra: list[str] 
     print("Result is ", result)
     return result
 
-def make_data():
+def make_data(num_vectors=NUM_VECTORS):
     records = []
-    for i in range(0, NUM_VECTORS):
+    for i in range(0, num_vectors):
         records += [index.make_data(i)]
 
     data = index.make_data(len(records))
@@ -68,7 +68,7 @@ def make_data():
     records += [data]
     return records
 
-KEY_COUNT = len(make_data())   
+KEY_COUNT = len(make_data())
 
 def load_data(client: Valkey.client):
     records = make_data()
@@ -372,3 +372,41 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
         self.client.execute_command("ft._debug PAUSEPOINT RESET block_mutation_queue")
 
         waiters.wait_for_true(lambda: self.mutation_queue_size() == 0)
+
+    def test_mutation_queue_drain_on_save(self):
+        self.client.execute_command("CONFIG SET search.drain-mutation-queue-on-save yes")
+        self.client.execute_command("CONFIG SET search.writer-threads 1")
+        self.client.execute_command("CONFIG SET search.info-developer-visible yes")
+        self.client.execute_command("ft._debug PAUSEPOINT SET block_mutation_queue")
+        index.create(self.client, True)
+        records = make_data(num_vectors=100)
+
+        #
+        # Now, load the data.... But since the mutation queue is blocked it will be stopped....
+        #
+        client_threads = []
+        for i in range(len(records)):
+            new_client = self.server.get_new_client()
+            t = threading.Thread(target = index.write_data, args=(new_client, i, records[i]) )
+            t.start()
+            client_threads += [t]
+
+        #
+        # Now, wait for the mutation queue to get fully loaded
+        #
+        print("Mutation queue", self.mutation_queue_size())
+        waiters.wait_for_true(lambda: self.mutation_queue_size() == len(records))
+        print("MUTATION QUEUE LOADED")
+
+        #
+        # Unblock mutation queue and then save. Unblockig must be done first or save would block PAUSEPOINT command.
+        #
+        self.client.execute_command("ft._debug PAUSEPOINT RESET block_mutation_queue")
+        self.client.execute_command("save")
+        for t in client_threads:
+            t.join()
+
+        # RDB save is expected to have 0 mutation entries
+        i = self.client.info("search")
+        save_mutation_entries = i["search_rdb_save_mutation_entries"]
+        assert save_mutation_entries == 0

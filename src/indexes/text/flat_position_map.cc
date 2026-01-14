@@ -238,6 +238,7 @@ PositionIterator::PositionIterator(const FlatPositionMap& flat_map)
       cumulative_position_(0),
       num_partitions_(0),
       current_partition_idx_(0),
+      next_partition_offset_(UINT32_MAX),
       header_size_(0),
       current_field_mask_(1) {
   CHECK(flat_map_)
@@ -270,14 +271,22 @@ void PositionIterator::NextPosition() {
     return;
   }
 
-  // Update partition index if we've crossed into next partition
-  if (current_partition_idx_ < num_partitions_) {
-    const char* partition_map = flat_map_ + header_size_;
-    uint32_t next_offset = ReadVarUint(
-        partition_map + (current_partition_idx_ * kPartitionDeltaBytes * 2),
-        kPartitionDeltaBytes);
-    if (current_ptr_ == data_start_ + next_offset) {
+  // Check if we need to load/update next partition offset
+  if (next_partition_offset_ == UINT32_MAX ||
+      current_ptr_ == data_start_ + next_partition_offset_) {
+    // If we crossed a partition (not initial load), increment index
+    if (next_partition_offset_ != UINT32_MAX) {
       current_partition_idx_++;
+    }
+
+    // Load next partition offset (or UINT32_MAX if no more partitions)
+    if (current_partition_idx_ < num_partitions_) {
+      const char* partition_map = flat_map_ + header_size_;
+      next_partition_offset_ = ReadVarUint(
+          partition_map + (current_partition_idx_ * kPartitionDeltaBytes * 2),
+          kPartitionDeltaBytes);
+    } else {
+      next_partition_offset_ = UINT32_MAX;
     }
   }
 
@@ -327,11 +336,10 @@ bool PositionIterator::SkipForwardPosition(Position target) {
   while (IsValid()) {
     if (cumulative_position_ >= target) return cumulative_position_ == target;
 
-    uint32_t prev_partition_idx = current_partition_idx_;
-    NextPosition();
+    // Check if we're at partition boundary before advancing
+    if (current_ptr_ == data_start_ + next_partition_offset_) break;
 
-    // If we crossed into next partition, use partition table to jump
-    if (IsValid() && current_partition_idx_ > prev_partition_idx) break;
+    NextPosition();
   }
 
   // Jump to partition if beneficial
@@ -353,6 +361,8 @@ bool PositionIterator::SkipForwardPosition(Position target) {
       cumulative_position_ = partition_delta;
       current_ptr_ = data_start_ + byte_offset;
       current_partition_idx_ = partition_idx;
+      next_partition_offset_ =
+          UINT32_MAX;  // Reset to force reload in NextPosition
       current_field_mask_ = 1;
       NextPosition();
     }

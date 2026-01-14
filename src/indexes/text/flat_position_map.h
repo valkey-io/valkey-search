@@ -136,6 +136,7 @@ class PositionIterator {
   Position cumulative_position_;    // Absolute position (sum of all deltas)
   uint32_t num_partitions_;         // Number of partition boundaries
   uint32_t current_partition_idx_;  // Index of next partition boundary
+  uint32_t next_partition_offset_;  // Cached byte offset of next partition
   size_t header_size_;              // Size of variable-length header
   uint64_t current_field_mask_;     // Bit mask of fields at current position
 

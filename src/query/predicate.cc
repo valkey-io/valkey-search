@@ -45,12 +45,13 @@ EvaluationResult BuildTextEvaluationResult(
 
 TermPredicate::TermPredicate(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-    FieldMaskPredicate field_mask, std::string term, bool exact_)
+    FieldMaskPredicate field_mask, std::string term, bool exact_, bool isstem_)
     : TextPredicate(),
       text_index_schema_(text_index_schema),
       field_mask_(field_mask),
       term_(term),
-      exact_(exact_) {}
+      exact_(exact_),
+      isstem_(isstem_) {}
 
 EvaluationResult TermPredicate::Evaluate(Evaluator& evaluator) const {
   return evaluator.EvaluateText(*this, false);
@@ -61,27 +62,47 @@ EvaluationResult TermPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
     const InternedStringPtr& target_key, bool require_positions) const {
   uint64_t field_mask = field_mask_;
-  auto word_iter = text_index.GetPrefix().GetWordIterator(term_);
-  if (word_iter.Done()) {
-    return EvaluationResult(false);
+
+  // Collect all words to search (original term + stem variants if applicable)
+  std::vector<std::string> words_to_check;
+  words_to_check.push_back(term_);
+
+  // Add stem variants if stemming is enabled
+  if (!exact_ && isstem_) {
+    text_index_schema_->GetAllStemVariants(term_, words_to_check);
   }
-  auto postings = word_iter.GetTarget();
-  if (!postings) {
-    return EvaluationResult(false);
-  }
-  auto key_iter = postings->GetKeyIterator();
-  // Skip to target key and verify it contains the required fields
-  if (!key_iter.SkipForwardKey(target_key) ||
-      !key_iter.ContainsFields(field_mask)) {
-    return EvaluationResult(false);
-  }
-  if (!require_positions) {
-    return EvaluationResult(true);
-  }
+
+  // Try to find any of the words in the per-key text index
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
-  key_iterators.emplace_back(std::move(key_iter));
+
+  for (const auto& word : words_to_check) {
+    auto word_iter = text_index.GetPrefix().GetWordIterator(word);
+    while (!word_iter.Done()) {
+      if (word_iter.GetWord() == word) {
+        auto postings = word_iter.GetTarget();
+        if (postings) {
+          auto key_iter = postings->GetKeyIterator();
+          // Skip to target key and verify it contains the required fields
+          if (key_iter.SkipForwardKey(target_key) &&
+              key_iter.ContainsFields(field_mask)) {
+            if (!require_positions) {
+              return EvaluationResult(true);
+            }
+            key_iterators.emplace_back(std::move(key_iter));
+          }
+        }
+        break;
+      }
+      word_iter.Next();
+    }
+  }
+
+  if (key_iterators.empty()) {
+    return EvaluationResult(false);
+  }
+
   auto iterator = std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), field_mask, nullptr, require_positions);
   return BuildTextEvaluationResult(std::move(iterator));

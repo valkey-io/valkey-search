@@ -33,6 +33,11 @@ namespace valkey_search::indexes::text {
 using TokenPositions =
     absl::flat_hash_map<std::string, std::pair<PositionMap, bool>>;
 
+// Stem tree target: maps stem root to set of parent words that stem to it
+// Example: "happi" → {"happy", "happiness", "happily"}
+// Using optional so RadixTree can check emptiness via boolean conversion
+using StemParents = std::optional<absl::flat_hash_set<std::string>>;
+
 class TextIndexSchema;
 
 // FT.INFO counters for text info fields and memory pools
@@ -96,6 +101,14 @@ class TextIndexSchema {
   // Access to metadata for memory pool usage
   TextIndexMetadata &GetMetadata() { return metadata_; }
 
+  // Access stem tree for word expansion during search
+  const RadixTree<StemParents> &GetStemTree() const { return stem_tree_; }
+
+  // Get all stem variants for a search term (including parent words from stem
+  // tree)
+  void GetAllStemVariants(const std::string &search_term,
+                          std::vector<std::string> &words_to_search) const;
+
   // Enable suffix trie.
   void EnableSuffix() {
     with_suffix_trie_ = true;
@@ -116,6 +129,12 @@ class TextIndexSchema {
   // Prevent concurrent mutations to schema-level text index
   // TODO: develop a finer-grained TextIndex locking scheme
   std::mutex text_index_mutex_;
+
+  //
+  // Stem tree: maps stem roots to their parent words
+  // Example: "happi" → {"happy", "happiness", "happily"}
+  //
+  RadixTree<StemParents> stem_tree_;
 
   //
   // To support the Delete record and the post-filtering case, there is a
@@ -139,6 +158,15 @@ class TextIndexSchema {
 
   // Prevent concurrent mutations to in-progress key updates map
   std::mutex in_progress_key_updates_mutex_;
+
+  // Temporary storage for stem mappings during indexing
+  // Maps key -> (stemmed_word -> set of original words that stem to it)
+  absl::node_hash_map<
+      Key, absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>>
+      in_progress_stem_mappings_;
+
+  // Prevent concurrent mutations to in-progress stem mappings map
+  std::mutex in_progress_stem_mappings_mutex_;
 
   // Whether to store position offsets for phrase queries
   bool with_offsets_ = false;

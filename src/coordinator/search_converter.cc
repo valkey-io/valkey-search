@@ -16,6 +16,7 @@
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
+#include "src/commands/filter_parser.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
@@ -48,10 +49,13 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
           index_schema->GetIdentifier(predicate.tag().attribute_alias()));
       attribute_identifiers.insert(identifier);
       auto tag_index = dynamic_cast<indexes::Tag*>(index.get());
+
+      // Parsing QUERY STRING: raw_tag_string originates from user query.
+      // Use FilterParser::ParseQueryTags to ensure consistent parsing with '|'
+      // separator (query language OR syntax).
       VMSDK_ASSIGN_OR_RETURN(
           auto parsed_tags,
-          tag_index->ParseSearchTags(predicate.tag().raw_tag_string(),
-                                     tag_index->GetSeparator()));
+          FilterParser::ParseQueryTags(predicate.tag().raw_tag_string()));
       auto tag_predicate = std::make_unique<query::TagPredicate>(
           tag_index, predicate.tag().attribute_alias(), identifier,
           predicate.tag().raw_tag_string(), parsed_tags);
@@ -223,6 +227,8 @@ GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request,
   }
   parameters->index_fingerprint_version = request.index_fingerprint_version();
   parameters->slot_fingerprint = request.slot_fingerprint();
+  parameters->filter_parse_results.query_operations =
+      static_cast<QueryOperations>(request.query_operations());
   return parameters;
 }
 
@@ -377,6 +383,8 @@ std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
   *request->mutable_index_fingerprint_version() =
       parameters.index_fingerprint_version;
   request->set_slot_fingerprint(parameters.slot_fingerprint);
+  request->set_query_operations(
+      static_cast<uint64_t>(parameters.filter_parse_results.query_operations));
   return request;
 }
 

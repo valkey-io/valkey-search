@@ -531,16 +531,22 @@ absl::StatusOr<bool> FilterParser::HandleBackslashEscape(
   if (!IsEnd()) {
     char next_ch = Peek();
     if (next_ch == '\\' || lexer.IsPunctuation(next_ch)) {
-      // If Double backslash, retain the double backslash
-      // If Single backslash with punct on right, retain the char on right
+      // Backslash escapes backslash or punctuation
       processed_content.push_back(next_ch);
       ++pos_;
       // Continue parsing the same token.
       return true;
     } else {
-      // Single backslash with non-punct on right, consume the backslash and
-      // break into a new token.
-      return false;
+      // Backslash before non-punctuation
+      if (lexer.IsPunctuation('\\')) {
+        // Backslash is punctuation → break to new token
+        return false;
+      } else {
+        // Backslash not punctuation → keep letter, continue
+        processed_content.push_back(next_ch);
+        ++pos_;
+        return true;
+      }
     }
   } else {
     // Unescaped backslash at end of input is invalid.

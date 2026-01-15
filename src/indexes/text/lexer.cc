@@ -91,19 +91,48 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
   std::vector<std::string> tokens;
   size_t pos = 0;
   while (pos < text.size()) {
+    // Skip leading punctuation, but check for backslash escape sequences
     while (pos < text.size() && IsPunctuation(text[pos])) {
+      if (text[pos] == '\\' && pos + 1 < text.size()) {
+        // Backslash at start - let word building handle escape
+        break;
+      }
       pos++;
     }
 
     size_t word_start = pos;
-    while (pos < text.size() && !IsPunctuation(text[pos])) {
-      pos++;
+    std::string word_buffer;
+
+    // Build word, handling backslash escape sequences
+    while (pos < text.size()) {
+      if (text[pos] == '\\' && pos + 1 < text.size()) {
+        char next_ch = text[pos + 1];
+        if (next_ch == '\\' || IsPunctuation(next_ch)) {
+          // Backslash escapes backslash or punctuation
+          pos++;                               // Skip the backslash
+          word_buffer.push_back(text[pos++]);  // Keep the escaped character
+        } else {
+          // Backslash before non-punctuation
+          pos++;  // Skip the backslash
+          if (IsPunctuation('\\')) {
+            // Backslash is punctuation → end token
+            break;
+          } else {
+            // Backslash not punctuation → keep letter
+            word_buffer.push_back(text[pos++]);
+          }
+        }
+      } else if (IsPunctuation(text[pos])) {
+        // Regular punctuation - end of word
+        break;
+      } else {
+        // Regular character
+        word_buffer.push_back(text[pos++]);
+      }
     }
 
-    if (pos > word_start) {
-      absl::string_view word_view(text.data() + word_start, pos - word_start);
-
-      std::string word = UnicodeNormalizer::CaseFold(word_view);
+    if (!word_buffer.empty()) {
+      std::string word = UnicodeNormalizer::CaseFold(word_buffer);
 
       if (IsStopWord(word)) {
         continue;  // Skip stop words

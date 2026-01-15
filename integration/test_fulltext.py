@@ -198,6 +198,44 @@ def validate_fulltext_search(client: Valkey):
 
 class TestFullText(ValkeySearchTestCaseDebugMode):
 
+    def test_escape_sequences(self):
+        """Test backslash escape handling with default and custom punctuation."""
+        client: Valkey = self.server.get_new_client()
+        
+        # Index 1: Default punctuation (includes backslash)
+        client.execute_command("FT.CREATE", "idx_default", "ON", "HASH", 
+                              "SCHEMA", "content", "TEXT", "NOSTEM")
+        
+        # Index 2: Custom punctuation (excludes backslash)
+        client.execute_command("FT.CREATE", "idx_no_bs", "ON", "HASH",
+                              "PUNCTUATION", ".,!",
+                              "SCHEMA", "content", "TEXT", "NOSTEM")
+        
+        # Test data
+        client.execute_command("HSET", "doc:1", "content", r"test\,value")
+        client.execute_command("HSET", "doc:2", "content", r"test\nvalue")
+        client.execute_command("HSET", "doc:3", "content", r"test\\value")
+        
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx_default")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx_no_bs")
+        
+        # Test idx_default: backslash IS punctuation
+        # Escaped comma: single token
+        assert client.execute_command("FT.SEARCH", "idx_default", r"@content:test\,value")[0] == 1
+        # Backslash + letter: splits tokens
+        assert client.execute_command("FT.SEARCH", "idx_default", "@content:test")[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx_default", "@content:nvalue")[0] == 1
+        # Double backslash: backslash in token, then splits
+        assert client.execute_command("FT.SEARCH", "idx_default", r"@content:test\\value")[0] == 1
+        
+        # Test idx_no_bs: backslash NOT punctuation
+        # Escaped comma: single token
+        assert client.execute_command("FT.SEARCH", "idx_no_bs", r"@content:test\,value")[0] == 1
+        # Backslash + letter: single token
+        assert client.execute_command("FT.SEARCH", "idx_no_bs", "@content:testnvalue")[0] == 1
+        # Double backslash: single token with backslash
+        assert client.execute_command("FT.SEARCH", "idx_no_bs", r"@content:test\\value")[0] == 1
+
     def test_text_search(self):
         """
         Test FT.SEARCH command with a text index.

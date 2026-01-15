@@ -155,12 +155,6 @@ bool TermIterator::SeekForwardPosition(Position target_position) {
       current_position_.value().start >= target_position) {
     return true;
   }
-  // for (auto& pos_iter : pos_iterators_) {
-  //   if (pos_iter.IsValid()) {
-  //     pos_iter.SkipForwardPosition(target_position);
-  //   }
-  // }
-  // 2. Individual child guard
   for (auto& pos_iter : pos_iterators_) {
     if (pos_iter.IsValid()) {
       // TRACKING CHECK: Only skip if the target is actually ahead of 

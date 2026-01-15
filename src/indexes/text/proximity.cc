@@ -165,7 +165,7 @@ const PositionRange& ProximityIterator::CurrentPosition() const {
 // Check if there is an INORDER violation between two iterators.
 bool ProximityIterator::HasOrderingViolation(size_t first_idx,
                                              size_t second_idx) const {
-  if (valkey_search::options::GetProximityInorderCompatMode()) {
+  if (valkey_search::options::GetProximityInorderCompatMode() && in_order_) {
     // Compatibility mode: relaxed check for order using only start positions
     // only. There is no overlap check in compatibility mode.
     return positions_[first_idx].start > positions_[second_idx].start;
@@ -318,6 +318,7 @@ bool ProximityIterator::NextPosition() {
 
     // 3. Validation: If no violations found, this combination is a match
     if (!violating_iter.has_value()) {
+      // Set the current field based on field mask intersection.
       current_field_mask_ = iters_[0]->CurrentFieldMask();
       for (size_t i = 1; i < n; ++i) {
         current_field_mask_ &= iters_[i]->CurrentFieldMask();

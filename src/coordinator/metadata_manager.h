@@ -25,6 +25,7 @@
 #include "src/coordinator/coordinator.pb.h"
 #include "src/rdb_serialization.h"
 #include "version.h"
+#include "vmsdk/src/cluster_map.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/utils.h"
@@ -89,6 +90,15 @@ class MetadataManager {
 
   absl::Status DeleteEntry(absl::string_view type_name,
                            const ObjName &obj_name);
+
+  absl::Status CreateEntryOnReplica(
+      ValkeyModuleCtx *ctx, absl::string_view type_name, absl::string_view id,
+      const coordinator::GlobalMetadataEntry *metadata_entry,
+      const coordinator::GlobalMetadataVersionHeader *global_version_header);
+
+  absl::Status CallFTInternalUpdateForReconciliation(
+      const std::string &id,
+      const coordinator::GlobalMetadataEntry &proposed_entry);
 
   std::unique_ptr<GlobalMetadata> GetGlobalMetadata();
 
@@ -167,6 +177,11 @@ class MetadataManager {
   int GetSectionsCount() const;
   absl::StatusOr<const GlobalMetadataEntry *> GetEntry(
       absl::string_view type_name, const ObjName &obj_name) const;
+
+  void CallFTInternalUpdate(
+      const coordinator::GlobalMetadataEntry &entry,
+      const coordinator::GlobalMetadataVersionHeader &header,
+      absl::string_view encoded_id, absl::string_view operation_name);
   vmsdk::MainThreadAccessGuard<GlobalMetadata> metadata_;
   vmsdk::MainThreadAccessGuard<GlobalMetadata> staged_metadata_;
   vmsdk::MainThreadAccessGuard<bool> staging_metadata_due_to_repl_load_ = false;

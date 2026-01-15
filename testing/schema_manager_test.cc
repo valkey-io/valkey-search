@@ -64,6 +64,24 @@ class SchemaManagerTest : public ValkeySearchTest {
         .WillByDefault(testing::Return());
     ON_CALL(*kMockValkeyModule, SelectDb(testing::_, db_num_))
         .WillByDefault(testing::Return(VALKEYMODULE_OK));
+
+    // Mock cluster operations to prevent abort in MetadataManager
+    ON_CALL(*kMockValkeyModule,
+            Call(testing::_, testing::StrEq("CLUSTER"), testing::StrEq("c"),
+                 testing::StrEq("SLOTS")))
+        .WillByDefault(testing::Return(
+            reinterpret_cast<ValkeyModuleCallReply *>(0xDEADBEEF)));
+    ON_CALL(
+        *kMockValkeyModule,
+        CallReplyType(reinterpret_cast<ValkeyModuleCallReply *>(0xDEADBEEF)))
+        .WillByDefault(testing::Return(VALKEYMODULE_REPLY_ARRAY));
+    ON_CALL(
+        *kMockValkeyModule,
+        CallReplyLength(reinterpret_cast<ValkeyModuleCallReply *>(0xDEADBEEF)))
+        .WillByDefault(testing::Return(0));
+    ON_CALL(*kMockValkeyModule, GetMyClusterID())
+        .WillByDefault(testing::Return("fake_node_id"));
+
     test_metadata_manager_ = std::make_unique<coordinator::MetadataManager>(
         &fake_ctx_, *mock_client_pool_);
   }

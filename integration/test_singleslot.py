@@ -12,10 +12,10 @@ from typing import Any, Union
 from valkeytestframework.util import waiters
 from ft_info_parser import FTInfoParser
 
-class TestPerSlot(ValkeySearchClusterTestCaseDebugMode):
+class TestSingleSlot(ValkeySearchClusterTestCaseDebugMode):
     """A dummy test to enable debug mode for the cluster."""
 
-    def test_per_slot_index_creation(self):
+    def test_single_slot_index_creation(self):
         client0 = self.new_client_for_primary(0)
         with pytest.raises(ResponseError) as e:
              client0.execute_command("FT.CREATE", "idx", "PREFIX", "1", "agg:{shard0}", "SCHEMA", "value", "NUMERIC")
@@ -48,7 +48,7 @@ class TestPerSlot(ValkeySearchClusterTestCaseDebugMode):
             client0.execute_command("SELECT", str(database))
             client0.execute_command("FT.DROPINDEX", "idx{shard0}")
 
-    def test_per_slot_search_query(self):
+    def test_single_slot_search_query(self):
         """Test that queries on hash-tagged indexes only hit the owning node."""
         cluster: ValkeyCluster = self.new_cluster_client()
         nodes = self.get_all_primary_clients()
@@ -83,6 +83,7 @@ class TestPerSlot(ValkeySearchClusterTestCaseDebugMode):
             (2, [1, 1, 0], [0, 0, 2])   # request to node 2, handled locally
         ]:
             result = nodes[i].execute_command("FT.SEARCH", "idx{shard0}", "@price:[0 100]")
+            assert 1 == int(nodes[i].info("SEARCH")["search_single_slot_queries"])
             print("Doing case ", i)
             assert(requests() == expected_requests)
             assert(rpcs() == expected_rpcs)

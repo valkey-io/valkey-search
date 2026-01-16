@@ -17,6 +17,7 @@
 #include "src/valkey_search.h"
 #include "vmsdk/src/cluster_map.h"
 #include "vmsdk/src/debug.h"
+#include "vmsdk/src/info.h"
 
 namespace valkey_search {
 namespace async {
@@ -67,6 +68,7 @@ void Free([[maybe_unused]] ValkeyModuleCtx *ctx, void *privdata) {
 }  // namespace async
 
 CONTROLLED_BOOLEAN(ForceReplicasOnly, false);
+DEV_INTEGER_COUNTER(stats, single_slot_queries);
 
 std::vector<vmsdk::cluster_map::NodeInfo> ComputeSearchTargets(
     ValkeyModuleCtx *ctx, const QueryCommand &parameters) {
@@ -81,6 +83,7 @@ std::vector<vmsdk::cluster_map::NodeInfo> ComputeSearchTargets(
   if (vmsdk::ParseHashTag(parameters.index_schema_name).has_value()) {
     auto key = vmsdk::MakeUniqueValkeyString(parameters.index_schema_name);
     auto this_slot = ValkeyModule_ClusterKeySlot(key.get());
+    single_slot_queries.Increment();
     return cluster_map->GetTargetsForSlot(
         mode, query::fanout::IsSystemUnderLowUtilization(), this_slot);
   } else {

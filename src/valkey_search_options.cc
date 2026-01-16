@@ -356,6 +356,22 @@ double GetSearchResultBufferMultiplier() {
   return search_result_buffer_multiplier;
 }
 
+/// Register the "drain-mutation-queue-on-load" flag
+/// Drain the mutation queue after RDB load
+constexpr absl::string_view kDrainMutationQueueOnLoadConfig{
+    "drain-mutation-queue-on-load"};
+static auto drain_mutation_queue_on_load =
+    config::BooleanBuilder(kDrainMutationQueueOnLoadConfig, true)
+        .Dev()  // can only be set in debug mode
+        .Build();
+
+/// Register the "drain-mutation-queue-on-save" flag
+/// Drain the mutation queue before RDB save
+constexpr absl::string_view kDrainMutationQueueOnSaveConfig{
+    "drain-mutation-queue-on-save"};
+static auto drain_mutation_queue_on_save =
+    config::BooleanBuilder(kDrainMutationQueueOnSaveConfig, false).Build();
+
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 
 vmsdk::config::Number& GetHNSWBlockSize() {
@@ -440,6 +456,16 @@ vmsdk::config::Boolean& GetEnableProximityPrefilterEval() {
 
 vmsdk::config::Number& GetMaxTermExpansions() {
   return dynamic_cast<vmsdk::config::Number&>(*max_term_expansions);
+}
+
+const vmsdk::config::Boolean& GetDrainMutationQueueOnSave() {
+  return dynamic_cast<const vmsdk::config::Boolean&>(
+      *drain_mutation_queue_on_save);
+}
+
+const vmsdk::config::Boolean& GetDrainMutationQueueOnLoad() {
+  return dynamic_cast<const vmsdk::config::Boolean&>(
+      *drain_mutation_queue_on_load);
 }
 
 }  // namespace options

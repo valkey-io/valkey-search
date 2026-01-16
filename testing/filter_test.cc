@@ -1027,26 +1027,28 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "default_field_with_escape6",
             .filter = "Hello, how are you\\\\\\\\\\% doing",
             .create_success = true,
-            .expected_tree_structure = "AND{\n"
-                                       "  TEXT-TERM(\"hello\", field_mask=3)\n"
-                                       "  TEXT-TERM(\"how\", field_mask=3)\n"
-                                       "  TEXT-TERM(\"are\", field_mask=3)\n"
-                                       "  TEXT-TERM(\"you\\\\%\", field_mask=3)\n"
-                                       "  TEXT-TERM(\"do\", field_mask=3)\n"
-                                       "}\n",
+            .expected_tree_structure =
+                "AND{\n"
+                "  TEXT-TERM(\"hello\", field_mask=3)\n"
+                "  TEXT-TERM(\"how\", field_mask=3)\n"
+                "  TEXT-TERM(\"are\", field_mask=3)\n"
+                "  TEXT-TERM(\"you\\\\%\", field_mask=3)\n"
+                "  TEXT-TERM(\"do\", field_mask=3)\n"
+                "}\n",
         },
         {
             .test_name = "default_field_with_escape_query_syntax",
             .filter =
                 "Hello, how are you\\]\\[\\$\\}\\{\\;\\:\\)\\(\\| \\-doing",
             .create_success = true,
-            .expected_tree_structure = "AND{\n"
-                                       "  TEXT-TERM(\"hello\", field_mask=3)\n"
-                                       "  TEXT-TERM(\"how\", field_mask=3)\n"
-                                       "  TEXT-TERM(\"are\", field_mask=3)\n"
-                                       "  TEXT-TERM(\"you][$}{;:)(|\", field_mask=3)\n"
-                                       "  TEXT-TERM(\"-do\", field_mask=3)\n"
-                                       "}\n",
+            .expected_tree_structure =
+                "AND{\n"
+                "  TEXT-TERM(\"hello\", field_mask=3)\n"
+                "  TEXT-TERM(\"how\", field_mask=3)\n"
+                "  TEXT-TERM(\"are\", field_mask=3)\n"
+                "  TEXT-TERM(\"you][$}{;:)(|\", field_mask=3)\n"
+                "  TEXT-TERM(\"-do\", field_mask=3)\n"
+                "}\n",
         },
         {
             .test_name = "default_field_with_all_operations",

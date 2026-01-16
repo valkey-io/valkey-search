@@ -531,7 +531,8 @@ absl::StatusOr<bool> FilterParser::HandleBackslashEscape(
   if (!IsEnd()) {
     char next_ch = Peek();
     if (next_ch == '\\' || lexer.IsPunctuation(next_ch)) {
-      // Backslash escapes backslash or punctuation
+      // If Double backslash, retain the double backslash
+      // If Single backslash with punct on right, retain the char on right
       processed_content.push_back(next_ch);
       ++pos_;
       // Continue parsing the same token.
@@ -539,7 +540,8 @@ absl::StatusOr<bool> FilterParser::HandleBackslashEscape(
     } else {
       // Backslash before non-punctuation
       if (lexer.IsPunctuation('\\')) {
-        // Backslash is punctuation → break to new token
+        // Backslash is punctuation → break to new token (standard unicode
+        // segmentation)
         return false;
       } else {
         // Backslash not punctuation → keep letter, continue

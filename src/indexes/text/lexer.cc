@@ -115,7 +115,8 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
           // Backslash before non-punctuation
           pos++;  // Skip the backslash
           if (IsPunctuation('\\')) {
-            // Backslash is punctuation → end token
+            // Backslash is punctuation → end token (Standard Unicode
+            // segmentation)
             break;
           } else {
             // Backslash not punctuation → keep letter

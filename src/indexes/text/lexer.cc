@@ -105,15 +105,15 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
 
     // Build word, handling backslash escape sequences
     while (pos < text.size()) {
-      if (text[pos] == '\\' && pos + 1 < text.size()) {
+      char ch = text[pos];
+      if (ch == '\\' && pos + 1 < text.size()) {
         char next_ch = text[pos + 1];
+        pos++;  // Consume the backslash
         if (next_ch == '\\' || IsPunctuation(next_ch)) {
           // Backslash escapes backslash or punctuation
-          pos++;                               // Skip the backslash
           word_buffer.push_back(text[pos++]);  // Keep the escaped character
         } else {
           // Backslash before non-punctuation
-          pos++;  // Skip the backslash
           if (IsPunctuation('\\')) {
             // Backslash is punctuation → end token (Standard Unicode
             // segmentation)
@@ -123,12 +123,13 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
             word_buffer.push_back(text[pos++]);
           }
         }
-      } else if (IsPunctuation(text[pos])) {
+      } else if (IsPunctuation(ch)) {
         // Regular punctuation - end of word
         break;
       } else {
         // Regular character
-        word_buffer.push_back(text[pos++]);
+        word_buffer.push_back(ch);
+        pos++;
       }
     }
 

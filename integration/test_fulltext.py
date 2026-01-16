@@ -215,6 +215,8 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         client.execute_command("HSET", "doc:1", "content", r'test\,value')
         client.execute_command("HSET", "doc:2", "content", r'test2\nvalue2')
         client.execute_command("HSET", "doc:3", "content", r'test3\\value3')
+        client.execute_command("HSET", "doc:4", "content", r'test4\\\word4')
+        client.execute_command("HSET", "doc:5", "content", r'test5\\\\word5')
         
         IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx_default")
         IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx_no_bs")
@@ -230,6 +232,10 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
 
         # double backslashes: backslash in token, it won't split and acts as escape character
         assert client.execute_command("FT.SEARCH", "idx_default", r'@content:test3\\value3')[0] == 1
+
+        # Test three or more backslashes to match the ingested document
+        assert client.execute_command("FT.SEARCH", "idx_default", r'test4\\\word4')[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx_default", r'@content:test5\\\\word5')[0] == 1
         
         # Test idx_no_bs: backslash NOT punctuation
         # Escaped comma: single token
@@ -238,6 +244,9 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert client.execute_command("FT.SEARCH", "idx_no_bs", r'@content:test2')[0] == 0
         assert client.execute_command("FT.SEARCH", "idx_no_bs", r'@content:nvalue2')[0] == 0
         assert client.execute_command("FT.SEARCH", "idx_no_bs", r'@content:test2\nvalue2')[0] == 1
+
+        assert client.execute_command("FT.SEARCH", "idx_no_bs", r'test4\\\word4')[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx_no_bs", r'@content:test5\\\\word5')[0] == 1
 
     def test_text_search(self):
         """

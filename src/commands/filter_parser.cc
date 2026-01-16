@@ -577,6 +577,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
     // Break to complete an exact phrase or start a new exact phrase.
     char ch = Peek();
     if (ch == '"') break;
+    if (ch == '\\') continue;  // Don't break on backslash
     if (lexer.IsPunctuation(ch)) break;
     processed_content.push_back(ch);
     ++pos_;
@@ -676,6 +677,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
         break;
       }
     }
+    if (ch == '\\') continue;  // Don't break on backslash
     // Break on all punctuation characters.
     if (lexer.IsPunctuation(ch)) break;
     // Regular character

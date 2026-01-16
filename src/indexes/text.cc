@@ -108,10 +108,6 @@ std::unique_ptr<data_model::Index> Text::ToProto() const {
 // Size is needed for Inline queries (for approximation of qualified entries)
 // and for multi sub query operations (with AND/OR). This should be implemented
 // as part of either Inline support OR multi sub query search.
-size_t Text::CalculateSize(const query::TextPredicate& predicate) const {
-  return 0;
-}
-
 size_t Text::EntriesFetcher::Size() const { return size_; }
 
 std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
@@ -121,14 +117,60 @@ std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
 
 }  // namespace valkey_search::indexes
 
-// Implement the TextPredicate BuildTextIterator virtual method
 namespace valkey_search::query {
+
+// EntriesFetcher for proximity iterators used in the exact phrase optimization
+class ProximityFetcher : public indexes::EntriesFetcherBase {
+ public:
+  ProximityFetcher(std::unique_ptr<indexes::text::TextIterator> iter,
+                   size_t size)
+      : iter_(std::move(iter)), size_(size) {}
+  size_t Size() const override { return size_; }
+  std::unique_ptr<indexes::EntriesFetcherIteratorBase> Begin() override {
+    return std::make_unique<indexes::text::TextFetcher>(std::move(iter_));
+  }
+
+ private:
+  std::unique_ptr<indexes::text::TextIterator> iter_;
+  size_t size_;
+};
+
+std::unique_ptr<indexes::EntriesFetcherBase> BuildExactPhraseFetcher(
+    const ComposedPredicate* composed_predicate) {
+  absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
+                      indexes::text::kProximityTermsInlineCapacity>
+      iters;
+  FieldMaskPredicate field_mask = ~0ULL;
+  size_t min_size = SIZE_MAX;
+  for (const auto& child : composed_predicate->GetChildren()) {
+    CHECK(child->GetType() == PredicateType::kText);
+    auto text_pred = dynamic_cast<const TextPredicate*>(child.get());
+    auto fetcher = std::make_unique<indexes::Text::EntriesFetcher>(
+        0, text_pred->GetTextIndexSchema()->GetTextIndex(), nullptr,
+        text_pred->GetFieldMask(), true);
+    fetcher->predicate_ = text_pred;
+    min_size = std::min(min_size, fetcher->Size());
+    iters.push_back(text_pred->BuildTextIterator(fetcher.get()));
+    field_mask &= text_pred->GetFieldMask();
+  }
+  auto proximity_iter = std::make_unique<indexes::text::ProximityIterator>(
+      std::move(iters), composed_predicate->GetSlop(),
+      composed_predicate->GetInorder(), field_mask);
+  return std::make_unique<ProximityFetcher>(std::move(proximity_iter),
+                                            min_size);
+}
 
 void* TextPredicate::Search(bool negate) const {
   size_t estimated_size = EstimateSize();
+  // We do not perform positional checks on the initial term/prefix/suffix/fuzzy
+  // predicate fetchers from the entries fetcher search.
+  // This is yet another optimization that can be done in the future to complete
+  // the text search during the initial entries fetcher search itself for
+  // proximity queries.
+  bool require_positions = false;
   auto fetcher = std::make_unique<indexes::Text::EntriesFetcher>(
       estimated_size, GetTextIndexSchema()->GetTextIndex(), nullptr,
-      GetFieldMask());
+      GetFieldMask(), require_positions);
   fetcher->predicate_ = this;
   return fetcher.release();
 }
@@ -148,11 +190,9 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
     }
     word_iter.Next();
   }
-  // We do not perform positional checks on the initial background search.
-  bool require_positions = false;
   return std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), fetcher->field_mask_, fetcher->untracked_keys_,
-      require_positions);
+      fetcher->require_positions_);
 }
 
 std::unique_ptr<indexes::text::TextIterator> PrefixPredicate::BuildTextIterator(
@@ -172,11 +212,9 @@ std::unique_ptr<indexes::text::TextIterator> PrefixPredicate::BuildTextIterator(
     word_iter.Next();
     ++word_count;
   }
-  // We do not perform positional checks on the initial background search.
-  bool require_positions = false;
   return std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), fetcher->field_mask_, fetcher->untracked_keys_,
-      require_positions);
+      fetcher->require_positions_);
 }
 
 std::unique_ptr<indexes::text::TextIterator> SuffixPredicate::BuildTextIterator(
@@ -200,11 +238,9 @@ std::unique_ptr<indexes::text::TextIterator> SuffixPredicate::BuildTextIterator(
     word_iter.Next();
     ++word_count;
   }
-  // We do not perform positional checks on the initial background search.
-  bool require_positions = false;
   return std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), fetcher->field_mask_, fetcher->untracked_keys_,
-      require_positions);
+      fetcher->require_positions_);
 }
 
 std::unique_ptr<indexes::text::TextIterator> InfixPredicate::BuildTextIterator(
@@ -221,11 +257,9 @@ std::unique_ptr<indexes::text::TextIterator> FuzzyPredicate::BuildTextIterator(
   auto key_iterators = indexes::text::FuzzySearch::Search(
       fetcher->text_index_->GetPrefix(), GetTextString(), GetDistance(),
       max_words);
-  // We do not perform positional checks on the initial background search.
-  bool require_positions = false;
   return std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), fetcher->field_mask_, fetcher->untracked_keys_,
-      require_positions);
+      fetcher->require_positions_);
 }
 
 // Size apis for estimation

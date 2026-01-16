@@ -321,6 +321,7 @@ FilterParser::ParseNumericPredicate(const std::string& attribute_alias) {
   }
   auto numeric_index =
       dynamic_cast<const indexes::Numeric*>(index.value().get());
+  query_operations_ |= QueryOperations::kContainsNumeric;
   return std::make_unique<query::NumericPredicate>(
       numeric_index, attribute_alias, identifier, start, is_inclusive_start,
       end, is_inclusive_end);
@@ -337,8 +338,9 @@ absl::StatusOr<absl::string_view> FilterParser::ParseTagString() {
   return expression_.substr(pos, stop_pos);
 }
 
-absl::StatusOr<absl::flat_hash_set<absl::string_view>> FilterParser::ParseTags(
-    absl::string_view tag_string, indexes::Tag* tag_index) const {
+absl::StatusOr<absl::flat_hash_set<absl::string_view>>
+FilterParser::ParseQueryTags(absl::string_view tag_string) {
+  // Parsing QUERY STRING: User-provided filter expression from FT.SEARCH.
   // In search queries, the tag separator is always '|' regardless of the
   // separator used when the index was created. This allows users to specify
   // multiple tags using the syntax: @field:{tag1|tag2|tag3}
@@ -358,7 +360,8 @@ FilterParser::ParseTagPredicate(const std::string& attribute_alias) {
 
   auto tag_index = dynamic_cast<indexes::Tag*>(index.value().get());
   VMSDK_ASSIGN_OR_RETURN(auto tag_string, ParseTagString());
-  VMSDK_ASSIGN_OR_RETURN(auto parsed_tags, ParseTags(tag_string, tag_index));
+  VMSDK_ASSIGN_OR_RETURN(auto parsed_tags, ParseQueryTags(tag_string));
+  query_operations_ |= QueryOperations::kContainsTag;
   return std::make_unique<query::TagPredicate>(
       tag_index, attribute_alias, identifier, tag_string, parsed_tags);
 }
@@ -442,9 +445,11 @@ absl::StatusOr<FilterParseResults> FilterParser::Parse() {
 }
 
 inline std::unique_ptr<query::Predicate> MayNegatePredicate(
-    std::unique_ptr<query::Predicate> predicate, bool& negate) {
+    std::unique_ptr<query::Predicate> predicate, bool& negate,
+    QueryOperations& query_operations) {
   if (negate) {
     negate = false;
+    query_operations |= QueryOperations::kContainsNegate;
     return std::make_unique<query::NegatePredicate>(std::move(predicate));
   }
   return predicate;
@@ -455,7 +460,8 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
     std::unique_ptr<query::Predicate> predicate, bool& negate,
     query::LogicalOperator logical_operator, bool no_prev_grp,
     bool not_rightmost_bracket) {
-  auto new_predicate = MayNegatePredicate(std::move(predicate), negate);
+  auto new_predicate =
+      MayNegatePredicate(std::move(predicate), negate, query_operations_);
   if (!prev_predicate) {
     return new_predicate;
   }
@@ -840,7 +846,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
     for (auto& term : terms) {
       children.push_back(std::move(term));
     }
-    query_operations_ |= QueryOperations::kContainsAnd;
+    query_operations_ |= QueryOperations::kContainsExactPhrase;
     pred = std::make_unique<query::ComposedPredicate>(
         query::LogicalOperator::kAnd, std::move(children), slop, inorder);
     node_count_ += terms.size() + 1;
@@ -848,6 +854,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
     if (terms.empty()) {
       return absl::InvalidArgumentError("Invalid Query Syntax");
     }
+    query_operations_ |= QueryOperations::kContainsText;
     pred = std::move(terms[0]);
     node_count_++;
   }

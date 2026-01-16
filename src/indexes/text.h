@@ -104,11 +104,12 @@ class Text : public IndexBase {
     EntriesFetcher(size_t size,
                    const std::shared_ptr<text::TextIndex>& text_index,
                    const InternedStringSet* untracked_keys,
-                   text::FieldMaskPredicate field_mask)
+                   text::FieldMaskPredicate field_mask, bool require_positions)
         : size_(size),
           text_index_(text_index),
           untracked_keys_(untracked_keys),
-          field_mask_(field_mask) {}
+          field_mask_(field_mask),
+          require_positions_(require_positions) {}
 
     size_t Size() const override;
 
@@ -124,10 +125,8 @@ class Text : public IndexBase {
     std::shared_ptr<text::TextIndex> text_index_;
     const query::TextPredicate* predicate_;
     text::FieldMaskPredicate field_mask_;
+    bool require_positions_;
   };
-
-  // Calculate size based on the predicate.
-  size_t CalculateSize(const query::TextPredicate& predicate) const;
 
   size_t GetTextFieldNumber() const { return text_field_number_; }
 

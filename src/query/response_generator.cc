@@ -26,6 +26,7 @@
 #include "src/metrics.h"
 #include "src/query/predicate.h"
 #include "src/query/search.h"
+#include "vmsdk/src/info.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -140,12 +141,20 @@ class PredicateEvaluator : public query::Evaluator {
   InternedStringPtr target_key_;
 };
 
-bool VerifyFilter(const query::Predicate *predicate, const RecordsMap &records,
-                  const query::SearchParameters &parameters,
-                  InternedStringPtr target_key) {
+DEV_INTEGER_COUNTER(query, predicate_revalidation);
+
+bool VerifyFilter(const query::SearchParameters &parameters,
+                  const RecordsMap &records, const indexes::Neighbor &n) {
+  auto predicate = parameters.filter_parse_results.root_predicate.get();
   if (predicate == nullptr) {
     return true;
   }
+  auto db_seq =
+      parameters.index_schema->GetDbMutationSequenceNumber(n.external_id);
+  if (db_seq == n.sequence_number) {
+    return true;
+  }
+  predicate_revalidation.Increment();
   // For text predicates, evaluate using the text index instead of raw data.
   if (parameters.index_schema &&
       parameters.index_schema->GetTextIndexSchema()) {
@@ -156,8 +165,8 @@ bool VerifyFilter(const query::Predicate *predicate, const RecordsMap &records,
           PredicateEvaluator evaluator(
               records,
               valkey_search::indexes::text::TextIndexSchema::LookupTextIndex(
-                  per_key_indexes, target_key),
-              target_key);
+                  per_key_indexes, n.external_id),
+              n.external_id);
           EvaluationResult result = predicate->Evaluate(evaluator);
           return result.matches;
         });
@@ -169,15 +178,15 @@ bool VerifyFilter(const query::Predicate *predicate, const RecordsMap &records,
 
 absl::StatusOr<RecordsMap> GetContentNoReturnJson(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
-    const query::SearchParameters &parameters, InternedStringPtr key_ptr,
-    const std::string &vector_identifier) {
+    const query::SearchParameters &parameters,
+    const indexes::Neighbor &neighbor, const std::string &vector_identifier) {
+  auto key = neighbor.external_id->Str();
   absl::flat_hash_set<absl::string_view> identifiers;
   identifiers.insert(kJsonRootElementQuery);
   for (const auto &filter_identifier :
        parameters.filter_parse_results.filter_identifiers) {
     identifiers.insert(filter_identifier);
   }
-  auto key = key_ptr->Str();
   auto key_str = vmsdk::MakeUniqueValkeyString(key);
   auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
       ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
@@ -187,8 +196,7 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
   if (parameters.filter_parse_results.filter_identifiers.empty()) {
     return content;
   }
-  if (!VerifyFilter(parameters.filter_parse_results.root_predicate.get(),
-                    content, parameters, key_ptr)) {
+  if (!VerifyFilter(parameters, content, neighbor)) {
     return absl::NotFoundError("Verify filter failed");
   }
   RecordsMap return_content;
@@ -204,13 +212,14 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
 
 absl::StatusOr<RecordsMap> GetContent(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
-    const query::SearchParameters &parameters, InternedStringPtr key_ptr,
-    const std::string &vector_identifier) {
+    const query::SearchParameters &parameters,
+    const indexes::Neighbor &neighbor, const std::string &vector_identifier) {
+  auto key = neighbor.external_id->Str();
   if (attribute_data_type.ToProto() ==
           data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON &&
       parameters.return_attributes.empty()) {
-    return GetContentNoReturnJson(ctx, attribute_data_type, parameters, key_ptr,
-                                  vector_identifier);
+    return GetContentNoReturnJson(ctx, attribute_data_type, parameters,
+                                  neighbor, vector_identifier);
   }
   absl::flat_hash_set<absl::string_view> identifiers;
   for (const auto &return_attribute : parameters.return_attributes) {
@@ -222,18 +231,17 @@ absl::StatusOr<RecordsMap> GetContent(
       identifiers.insert(filter_identifier);
     }
   }
-  auto key = key_ptr->Str();
   auto key_str = vmsdk::MakeUniqueValkeyString(key);
   auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
       ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
-  VMSDK_ASSIGN_OR_RETURN(auto content, attribute_data_type.FetchAllRecords(
-                                           ctx, vector_identifier,
-                                           key_obj.get(), key, identifiers));
+  VMSDK_ASSIGN_OR_RETURN(auto content,
+                         attribute_data_type.FetchAllRecords(
+                             ctx, vector_identifier, key_obj.get(),
+                             neighbor.external_id->Str(), identifiers));
   if (parameters.filter_parse_results.filter_identifiers.empty()) {
     return content;
   }
-  if (!VerifyFilter(parameters.filter_parse_results.root_predicate.get(),
-                    content, parameters, key_ptr)) {
+  if (!VerifyFilter(parameters, content, neighbor)) {
     return absl::NotFoundError("Verify filter failed");
   }
   if (parameters.return_attributes.empty()) {
@@ -283,8 +291,8 @@ void ProcessNeighborsForReply(ValkeyModuleCtx *ctx,
     if (neighbor.attribute_contents.has_value()) {
       continue;
     }
-    auto content = GetContent(ctx, attribute_data_type, parameters,
-                              neighbor.external_id, identifier);
+    auto content =
+        GetContent(ctx, attribute_data_type, parameters, neighbor, identifier);
     if (!content.ok()) {
       continue;
     }

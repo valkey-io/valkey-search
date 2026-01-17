@@ -93,9 +93,9 @@ class TextIterator {
   virtual bool NextPosition() = 0;
   // Seeks forward to the first position >= target_position that matches all
   // constraints. Returns true if such a position is found, false if no more
-  // matching positions exist. If current position is already >= target_position,
-  // returns true without changing state.
-  // ASSERT: !DonePositions()
+  // matching positions exist. If current position is already >=
+  // target_position, returns true without changing state. ASSERT:
+  // !DonePositions()
   virtual bool SeekForwardPosition(Position target_position) = 0;
   // Returns the field mask for the current position.
   // ASSERT: !DonePositions()

@@ -95,6 +95,7 @@ class ProximityIterator : public TextIterator {
 
   bool FindCommonKey();
   bool HasOrderingViolation(size_t first_idx, size_t second_idx) const;
+  bool IsCompatModeInorder() const;
   // struct ViolationInfo {
   //   size_t iter_idx;
   //   bool is_ordering_violation;

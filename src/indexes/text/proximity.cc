@@ -165,7 +165,7 @@ const PositionRange& ProximityIterator::CurrentPosition() const {
 // Check if there is an INORDER violation between two iterators.
 bool ProximityIterator::HasOrderingViolation(size_t first_idx,
                                              size_t second_idx) const {
-  if (valkey_search::options::GetProximityInorderCompatMode() && in_order_) {
+  if (IsCompatModeInorder()) {
     // Compatibility mode: relaxed check for order using only start positions
     // only. There is no overlap check in compatibility mode.
     return positions_[first_idx].start > positions_[second_idx].start;
@@ -173,6 +173,10 @@ bool ProximityIterator::HasOrderingViolation(size_t first_idx,
     // Default mode: stricter check using range for order AND overlap check
     return positions_[first_idx].end >= positions_[second_idx].start;
   }
+}
+
+bool ProximityIterator::IsCompatModeInorder() const {
+  return valkey_search::options::GetProximityInorderCompatMode() && in_order_;
 }
 
 // In case of violations, the returned iterator is the one that should be
@@ -258,28 +262,23 @@ std::optional<size_t> ProximityIterator::FindViolatingIterator() {
 bool ProximityIterator::NextPosition() {
   const size_t n = iters_.size();
   bool should_advance = current_position_.has_value();
-
   while (!DonePositions()) {
     // 1. Synchronize physical positions cache
     for (size_t i = 0; i < n; ++i) {
       positions_[i] = iters_[i]->CurrentPosition();
     }
-
     auto violating_iter = FindViolatingIterator();
-
     if (should_advance) {
       should_advance = false;
       if (violating_iter) {
         size_t idx = *violating_iter;
         Position target = 0;
         bool can_warp = false;
-
         // Determine warping target based on ordering mode
         if (in_order_) {
           if (idx > 0 && HasOrderingViolation(idx - 1, idx)) {
-            target = valkey_search::options::GetProximityInorderCompatMode()
-                         ? positions_[idx - 1].start
-                         : positions_[idx - 1].end;
+            target = IsCompatModeInorder() ? positions_[idx - 1].start
+                                           : positions_[idx - 1].end;
             can_warp = true;
           }
         } else {
@@ -288,16 +287,13 @@ bool ProximityIterator::NextPosition() {
             if (pos_with_idx_[i].second == idx) {
               size_t prev_iter_idx = pos_with_idx_[i - 1].second;
               if (HasOrderingViolation(prev_iter_idx, idx)) {
-                target = valkey_search::options::GetProximityInorderCompatMode()
-                             ? positions_[prev_iter_idx].start
-                             : positions_[prev_iter_idx].end;
+                target = positions_[prev_iter_idx].end;
                 can_warp = true;
               }
               break;
             }
           }
         }
-
         // 2. THE CRASH PREVENTER: Fetch fresh position and verify target
         Position current_child_start = iters_[idx]->CurrentPosition().start;
         if (can_warp && target > current_child_start) {
@@ -312,10 +308,16 @@ bool ProximityIterator::NextPosition() {
         if (!iters_[first_idx]->DonePositions()) {
           iters_[first_idx]->NextPosition();
         }
+        // // No violations, advance first non-done iterator
+        // for (size_t i = 0; i < n; ++i) {
+        //   if (!iters_[i]->DonePositions()) {
+        //     iters_[i]->NextPosition();
+        //     break;
+        //   }
+        // }
       }
       continue;
     }
-
     // 3. Validation: If no violations found, this combination is a match
     if (!violating_iter.has_value()) {
       // Set the current field based on field mask intersection.

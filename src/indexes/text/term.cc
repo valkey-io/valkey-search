@@ -157,16 +157,17 @@ bool TermIterator::SeekForwardPosition(Position target_position) {
   }
   for (auto& pos_iter : pos_iterators_) {
     if (pos_iter.IsValid()) {
-      // TRACKING CHECK: Only skip if the target is actually ahead of 
+      // TRACKING CHECK: Only skip if the target is actually ahead of
       // this specific child's current internal cumulative position.
       if (target_position > pos_iter.GetPosition()) {
         pos_iter.SkipForwardPosition(target_position);
       }
-      // If target_position <= GetPosition(), we do nothing. This is safe 
+      // If target_position <= GetPosition(), we do nothing. This is safe
       // because that child is already at or past the target.
     }
   }
   current_position_ = std::nullopt;
+  current_field_mask_ = 0ULL;
   return NextPosition();
 }
 

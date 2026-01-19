@@ -16,9 +16,13 @@
 #include "src/indexes/index_base.h"
 #include "src/metrics.h"
 #include "src/query/response_generator.h"
+#include "vmsdk/src/info.h"
 
 namespace valkey_search {
 namespace aggregate {
+
+DEV_INTEGER_COUNTER(agg_stats, agg_input_records);
+DEV_INTEGER_COUNTER(agg_stats, agg_output_records);
 
 struct RealIndexInterface : public IndexInterface {
   std::shared_ptr<IndexSchema> schema_;
@@ -313,10 +317,13 @@ absl::Status CreateRecordsFromNeighbors(
 // Execute all aggregation stages on the record set
 absl::Status ExecuteAggregationStages(AggregateParameters &parameters,
                                       RecordSet &records) {
+
+  agg_input_records.Increment(records.size());
   for (auto &stage : parameters.stages_) {
     // Todo Check for timeout
     VMSDK_RETURN_IF_ERROR(stage->Execute(records));
   }
+  agg_output_records.Increment(records.size());
   return absl::OkStatus();
 }
 

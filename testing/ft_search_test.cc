@@ -454,7 +454,9 @@ class FTSearchTest : public ValkeySearchTestWithParam<
       std::string vector = std::string((char *)vectors[i].data(),
                                        vectors[i].size() * sizeof(float));
       auto interned_key = StringInternStore::Intern(key);
-
+      std::cerr << "Inserting Key: " << interned_key->Str() << std::endl;
+      index_schema.value()->SetDbMutationSequenceNumber(interned_key, i);
+      index_schema.value()->SetIndexMutationSequenceNumber(interned_key, i);
       VMSDK_EXPECT_OK(index.value()->AddRecord(interned_key, vector));
     }
   }

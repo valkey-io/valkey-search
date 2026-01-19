@@ -317,7 +317,6 @@ absl::Status CreateRecordsFromNeighbors(
 // Execute all aggregation stages on the record set
 absl::Status ExecuteAggregationStages(AggregateParameters &parameters,
                                       RecordSet &records) {
-
   agg_input_records.Increment(records.size());
   for (auto &stage : parameters.stages_) {
     // Todo Check for timeout

@@ -179,31 +179,29 @@ bool ProximityIterator::IsCompatModeInorder() const {
   return valkey_search::options::GetProximityInorderCompatMode() && in_order_;
 }
 
-// In case of violations, the returned iterator is the one that should be
-// advanced to try and find a valid sequence.
-// In case of no violations, std::nullopt is returned and we have found a valid
-// position combination.
-std::optional<size_t> ProximityIterator::FindViolatingIterator() {
+// In case of violations, returns the iterator that should be advanced
+// and optionally a target position to seek to.
+// In case of no violations, std::nullopt is returned.
+std::optional<ProximityIterator::ViolationInfo>
+ProximityIterator::FindViolatingIterator() {
   const size_t n = positions_.size();
   uint32_t current_slop = 0;
   if (in_order_) {
     // Check ordering / overlap violations.
     for (size_t i = 0; i < n - 1; ++i) {
       if (HasOrderingViolation(i, i + 1)) {
-        return i + 1;
+        Position seek_target =
+            IsCompatModeInorder() ? positions_[i].start : positions_[i].end;
+        return ViolationInfo{i + 1, seek_target};
       }
     }
     // Check slop violations.
-    // The ordering / overlap check above gives us a text group with start and
-    // end. Slop violations are by summing distances between adjacent terms, so
-    // we advance the first iterator to try and reduce slop in the next text
-    // sequence tested.
     for (size_t i = 0; i < n - 1; ++i) {
       int32_t distance = (positions_[i + 1].start - positions_[i].start) - 1;
       current_slop += std::max(0, distance);
     }
     if (slop_.has_value() && current_slop > *slop_) {
-      return 0;
+      return ViolationInfo{0, std::nullopt};
     }
     // Check for field mask intersection (terms exist in the same field)
     FieldMaskPredicate field_mask = query_field_mask_;
@@ -212,7 +210,7 @@ std::optional<size_t> ProximityIterator::FindViolatingIterator() {
       // No common fields, advance this iterator which is lagging behind the
       // previous one.
       if (field_mask == 0) {
-        return i;
+        return ViolationInfo{i, std::nullopt};
       }
     }
     return std::nullopt;
@@ -227,7 +225,8 @@ std::optional<size_t> ProximityIterator::FindViolatingIterator() {
     size_t next_idx = pos_with_idx_[i + 1].second;
     // Check ordering / overlap violations.
     if (HasOrderingViolation(curr_idx, next_idx)) {
-      return next_idx;
+      Position target = positions_[curr_idx].end;
+      return ViolationInfo{next_idx, target};
     }
   }
   // Check slop violations.
@@ -243,7 +242,7 @@ std::optional<size_t> ProximityIterator::FindViolatingIterator() {
       current_slop += std::max(0, distance);
     }
     if (current_slop > *slop_) {
-      return pos_with_idx_[0].second;
+      return ViolationInfo{pos_with_idx_[0].second, std::nullopt};
     }
   }
   // Check for field mask intersection (terms exist in the same field)
@@ -253,7 +252,7 @@ std::optional<size_t> ProximityIterator::FindViolatingIterator() {
     // No common fields, advance this iterator which is lagging behind the
     // previous one.
     if (field_mask == 0) {
-      return i;
+      return ViolationInfo{i, std::nullopt};
     }
   }
   return std::nullopt;
@@ -267,39 +266,21 @@ bool ProximityIterator::NextPosition() {
     for (size_t i = 0; i < n; ++i) {
       positions_[i] = iters_[i]->CurrentPosition();
     }
-    auto violating_iter = FindViolatingIterator();
+    auto violation = FindViolatingIterator();
     if (should_advance) {
       should_advance = false;
-      if (violating_iter) {
-        size_t idx = *violating_iter;
-        Position target = 0;
-        bool can_warp = false;
-        // Determine warping target based on ordering mode
-        if (in_order_) {
-          if (idx > 0 && HasOrderingViolation(idx - 1, idx)) {
-            target = IsCompatModeInorder() ? positions_[idx - 1].start
-                                           : positions_[idx - 1].end;
-            can_warp = true;
-          }
+      if (violation) {
+        size_t idx = violation->iter_idx;
+        if (violation->seek_target.has_value()) {
+          // Position target = *violation->seek_target;
+          // Position current_start = iters_[idx]->CurrentPosition().start;
+          // if (target > current_start) {
+          //   iters_[idx]->SeekForwardPosition(target);
+          // } else {
+          //   iters_[idx]->NextPosition();
+          // }
+          iters_[idx]->SeekForwardPosition(*violation->seek_target);
         } else {
-          // For unordered, find the iterator that physically precedes 'idx'
-          for (size_t i = 1; i < n; ++i) {
-            if (pos_with_idx_[i].second == idx) {
-              size_t prev_iter_idx = pos_with_idx_[i - 1].second;
-              if (HasOrderingViolation(prev_iter_idx, idx)) {
-                target = positions_[prev_iter_idx].end;
-                can_warp = true;
-              }
-              break;
-            }
-          }
-        }
-        // 2. THE CRASH PREVENTER: Fetch fresh position and verify target
-        Position current_child_start = iters_[idx]->CurrentPosition().start;
-        if (can_warp && target > current_child_start) {
-          iters_[idx]->SeekForwardPosition(target);
-        } else {
-          // Fallback if target is behind or for slop/field-mask violations
           iters_[idx]->NextPosition();
         }
       } else {
@@ -308,18 +289,11 @@ bool ProximityIterator::NextPosition() {
         if (!iters_[first_idx]->DonePositions()) {
           iters_[first_idx]->NextPosition();
         }
-        // // No violations, advance first non-done iterator
-        // for (size_t i = 0; i < n; ++i) {
-        //   if (!iters_[i]->DonePositions()) {
-        //     iters_[i]->NextPosition();
-        //     break;
-        //   }
-        // }
       }
       continue;
     }
     // 3. Validation: If no violations found, this combination is a match
-    if (!violating_iter.has_value()) {
+    if (!violation.has_value()) {
       // Set the current field based on field mask intersection.
       current_field_mask_ = iters_[0]->CurrentFieldMask();
       for (size_t i = 1; i < n; ++i) {

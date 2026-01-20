@@ -93,15 +93,17 @@ class ProximityIterator : public TextIterator {
   // Used for Negate
   const InternedStringSet* untracked_keys_;
 
+  struct ViolationInfo {
+    // Iterator index to advance
+    size_t iter_idx;
+    // Optional target position if seeking is needed
+    std::optional<Position> seek_target;
+  };
+
   bool FindCommonKey();
   bool HasOrderingViolation(size_t first_idx, size_t second_idx) const;
   bool IsCompatModeInorder() const;
-  // struct ViolationInfo {
-  //   size_t iter_idx;
-  //   bool is_ordering_violation;
-  // };
-  // std::optional<ViolationInfo> FindViolatingIterator();
-  std::optional<size_t> FindViolatingIterator();
+  std::optional<ViolationInfo> FindViolatingIterator();
 };
 }  // namespace valkey_search::indexes::text
 

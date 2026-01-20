@@ -196,6 +196,10 @@ ProximityIterator::FindViolatingIterator() {
       }
     }
     // Check slop violations.
+    // The ordering / overlap check above gives us a text group with start and
+    // end. Slop violations are by summing distances between adjacent terms, so
+    // we advance the first iterator to try and reduce slop in the next text
+    // sequence tested.
     for (size_t i = 0; i < n - 1; ++i) {
       int32_t distance = (positions_[i + 1].start - positions_[i].start) - 1;
       current_slop += std::max(0, distance);

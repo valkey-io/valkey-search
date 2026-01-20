@@ -16,9 +16,13 @@
 #include "src/indexes/index_base.h"
 #include "src/metrics.h"
 #include "src/query/response_generator.h"
+#include "vmsdk/src/info.h"
 
 namespace valkey_search {
 namespace aggregate {
+
+DEV_INTEGER_COUNTER(agg_stats, agg_input_records);
+DEV_INTEGER_COUNTER(agg_stats, agg_output_records);
 
 struct RealIndexInterface : public IndexInterface {
   std::shared_ptr<IndexSchema> schema_;
@@ -273,10 +277,12 @@ absl::Status SendReplyInner(ValkeyModuleCtx *ctx,
   //
   //  2. Perform the aggregation stages
   //
+  agg_input_records.Increment(records.size());
   for (auto &stage : parameters.stages_) {
     // Todo Check for timeout
     VMSDK_RETURN_IF_ERROR(stage->Execute(records));
   }
+  agg_output_records.Increment(records.size());
 
   //
   //  3. Generate the result

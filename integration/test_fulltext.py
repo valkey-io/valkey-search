@@ -198,6 +198,56 @@ def validate_fulltext_search(client: Valkey):
 
 class TestFullText(ValkeySearchTestCaseDebugMode):
 
+    def test_escape_sequences(self):
+        """Test backslash escape handling with default and custom punctuation."""
+        client: Valkey = self.server.get_new_client()
+        
+        # Index 1: Default punctuation (includes backslash)
+        client.execute_command("FT.CREATE", "idx_default", "ON", "HASH", 
+                              "SCHEMA", "content", "TEXT", "NOSTEM")
+        
+        # Index 2: Custom punctuation (excludes backslash)
+        client.execute_command("FT.CREATE", "idx_no_bs", "ON", "HASH",
+                              "PUNCTUATION", ".,!",
+                              "SCHEMA", "content", "TEXT", "NOSTEM")
+        
+        # Test data
+        client.execute_command("HSET", "doc:1", "content", r'test\,value')
+        client.execute_command("HSET", "doc:2", "content", r'test2\nvalue2')
+        client.execute_command("HSET", "doc:3", "content", r'test3\\value3')
+        client.execute_command("HSET", "doc:4", "content", r'test4\\\word4')
+        client.execute_command("HSET", "doc:5", "content", r'test5\\\\word5')
+        
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx_default")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx_no_bs")
+        
+        # Test idx_default: backslash IS punctuation
+        # Escaped comma: single token
+        assert client.execute_command("FT.SEARCH", "idx_default", r'@content:test\,value')[0] == 1
+        # Backslash + letter: splits tokens during ingestion
+        assert client.execute_command("FT.SEARCH", "idx_default", r'@content:test2')[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx_default", r'@content:nvalue2')[0] == 1
+        # Test query side processing of backslash when it is a punctuation
+        assert client.execute_command("FT.SEARCH", "idx_default", r'test2\nvalue2')[0] == 1
+
+        # double backslashes: backslash in token, it won't split and acts as escape character
+        assert client.execute_command("FT.SEARCH", "idx_default", r'@content:test3\\value3')[0] == 1
+
+        # Test three or more backslashes to match the ingested document
+        assert client.execute_command("FT.SEARCH", "idx_default", r'test4\\\word4')[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx_default", r'@content:test5\\\\word5')[0] == 1
+        
+        # Test idx_no_bs: backslash NOT punctuation
+        # Escaped comma: single token
+        assert client.execute_command("FT.SEARCH", "idx_no_bs", r'@content:test\,value')[0] == 1
+        # Backslash + letter: single token
+        assert client.execute_command("FT.SEARCH", "idx_no_bs", r'@content:test2')[0] == 0
+        assert client.execute_command("FT.SEARCH", "idx_no_bs", r'@content:nvalue2')[0] == 0
+        assert client.execute_command("FT.SEARCH", "idx_no_bs", r'@content:test2\nvalue2')[0] == 1
+
+        assert client.execute_command("FT.SEARCH", "idx_no_bs", r'test4\\\word4')[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx_no_bs", r'@content:test5\\\\word5')[0] == 1
+
     def test_text_search(self):
         """
         Test FT.SEARCH command with a text index.

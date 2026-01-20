@@ -538,9 +538,17 @@ absl::StatusOr<bool> FilterParser::HandleBackslashEscape(
       // Continue parsing the same token.
       return true;
     } else {
-      // Single backslash with non-punct on right, consume the backslash and
-      // break into a new token.
-      return false;
+      // Backslash before non-punctuation
+      if (lexer.IsPunctuation('\\')) {
+        // Backslash is punctuation → break to new token (standard unicode
+        // segmentation)
+        return false;
+      } else {
+        // Backslash not punctuation → keep letter, continue
+        processed_content.push_back(next_ch);
+        ++pos_;
+        return true;
+      }
     }
   } else {
     // Unescaped backslash at end of input is invalid.
@@ -569,6 +577,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
     // Break to complete an exact phrase or start a new exact phrase.
     char ch = Peek();
     if (ch == '"') break;
+    if (ch == '\\') continue;  // Don't break on backslash
     if (lexer.IsPunctuation(ch)) break;
     processed_content.push_back(ch);
     ++pos_;
@@ -668,6 +677,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
         break;
       }
     }
+    if (ch == '\\') continue;  // Don't break on backslash
     // Break on all punctuation characters.
     if (lexer.IsPunctuation(ch)) break;
     // Regular character

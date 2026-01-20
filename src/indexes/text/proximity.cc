@@ -292,9 +292,7 @@ bool ProximityIterator::NextPosition() {
       } else {
         // No violations: advance the term appearing first physically
         size_t first_idx = in_order_ ? 0 : pos_with_idx_[0].second;
-        if (!iters_[first_idx]->DonePositions()) {
-          iters_[first_idx]->NextPosition();
-        }
+        iters_[first_idx]->NextPosition();
       }
       continue;
     }

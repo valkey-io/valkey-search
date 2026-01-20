@@ -225,8 +225,8 @@ ProximityIterator::FindViolatingIterator() {
     size_t next_idx = pos_with_idx_[i + 1].second;
     // Check ordering / overlap violations.
     if (HasOrderingViolation(curr_idx, next_idx)) {
-      Position target = positions_[curr_idx].end;
-      return ViolationInfo{next_idx, target};
+      Position seek_target = positions_[curr_idx].end;
+      return ViolationInfo{next_idx, seek_target};
     }
   }
   // Check slop violations.
@@ -272,13 +272,6 @@ bool ProximityIterator::NextPosition() {
       if (violation) {
         size_t idx = violation->iter_idx;
         if (violation->seek_target.has_value()) {
-          // Position target = *violation->seek_target;
-          // Position current_start = iters_[idx]->CurrentPosition().start;
-          // if (target > current_start) {
-          //   iters_[idx]->SeekForwardPosition(target);
-          // } else {
-          //   iters_[idx]->NextPosition();
-          // }
           iters_[idx]->SeekForwardPosition(*violation->seek_target);
         } else {
           iters_[idx]->NextPosition();
@@ -327,7 +320,7 @@ bool ProximityIterator::SeekForwardPosition(Position target_position) {
   // Seek all child iterators to target position
   for (auto& iter : iters_) {
     if (!iter->DonePositions() &&
-        iter->CurrentPosition().start < target_position) {
+        target_position > iter->CurrentPosition().start) {
       iter->SeekForwardPosition(target_position);
     }
   }

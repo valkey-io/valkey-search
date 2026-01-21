@@ -98,6 +98,7 @@ set(ABSL_ALL_TARGETS
 message(STATUS "Collecting absl libs. CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}")
 
 find_package(absl REQUIRED CONFIG)
+find_package(benchmark REQUIRED)
 add_library(absl::all INTERFACE IMPORTED GLOBAL)
 get_target_property(__ASBL_INCLUDE_PATH absl::base
                     INTERFACE_INCLUDE_DIRECTORIES)

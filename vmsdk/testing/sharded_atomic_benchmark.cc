@@ -9,8 +9,6 @@
 #include <thread>
 
 #include "benchmark/benchmark.h"
-
-// Include your header file
 #include "vmsdk/src/sharded_atomic.h"
 
 namespace vmsdk {

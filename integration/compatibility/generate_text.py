@@ -246,7 +246,7 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
         words = [word for word in cleaned.split() if word]
         
         return words
-    
+
     def _run_test(self, builder_fn, data_set_name, key_type, dialect, inorder=False, slop=False, check_parsing=False, skip_duplicate=False, field=None):
         """Helper to run a test with given term builder function.
         
@@ -358,45 +358,45 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
     # Base term types
     # ========================================================================
 
-    # def test_text_search_exact_match(self, key_type, dialect):
-    #     """Test exact word matching queries."""
-    #     self._run_test(gen_word, "pure text", key_type, dialect)
+    def test_text_search_exact_match(self, key_type, dialect):
+        """Test exact word matching queries."""
+        self._run_test(gen_word, "pure text", key_type, dialect)
 
-    # def test_text_search_prefix(self, key_type, dialect):
-    #     """Test prefix wildcard queries."""
-    #     self._run_test(gen_prefix, "pure text", key_type, dialect)
+    def test_text_search_prefix(self, key_type, dialect):
+        """Test prefix wildcard queries."""
+        self._run_test(gen_prefix, "pure text", key_type, dialect)
 
-    # def test_text_search_suffix(self, key_type, dialect):
-    #     """Test suffix wildcard queries."""
-    #     self._run_test(gen_suffix, "pure text", key_type, dialect)
+    def test_text_search_suffix(self, key_type, dialect):
+        """Test suffix wildcard queries."""
+        self._run_test(gen_suffix, "pure text", key_type, dialect)
 
     # ========================================================================
     # Complex grouped queries
     # ========================================================================
 
-    # def test_text_search_group_depth2(self, key_type, dialect):
-    #     """Test grouped queries with depth 2."""
-    #     self._run_test(gen_depth2, "pure text", key_type, dialect)
+    def test_text_search_group_depth2(self, key_type, dialect):
+        """Test grouped queries with depth 2."""
+        self._run_test(gen_depth2, "pure text", key_type, dialect)
 
-    # def test_text_search_group_depth3(self, key_type, dialect):
-    #     """Test grouped queries with depth 3."""
-    #     self._run_test(gen_depth3, "pure text", key_type, dialect)
+    def test_text_search_group_depth3(self, key_type, dialect):
+        """Test grouped queries with depth 3."""
+        self._run_test(gen_depth3, "pure text", key_type, dialect)
     
     # def test_text_search_group_depth2_inorder(self, key_type, dialect):
     #     """Test grouped queries with depth 2."""
-    #     self._run_test(gen_depth2, "pure text", key_type, dialect, inorder=True, check_parsing=True)
+    #     self._run_test(gen_depth2, "pure text", key_type, dialect, inorder=True, check_parsing=True, skip_duplicate=True)
 
     # def test_text_search_group_depth3_inorder(self, key_type, dialect):
     #     """Test grouped queries with depth 3."""
-    #     self._run_test(gen_depth3, "pure text", key_type, dialect, inorder=True, check_parsing=True)
+    #     self._run_test(gen_depth3, "pure text", key_type, dialect, inorder=True, check_parsing=True, skip_duplicate=True)
     
     # def test_text_search_group_depth2_slop(self, key_type, dialect):
     #     """Test grouped queries with depth 2."""
-    #     self._run_test(gen_depth2, "pure text", key_type, dialect, slop=True, check_parsing=True)
+    #     self._run_test(gen_depth2, "pure text", key_type, dialect, slop=True, check_parsing=True, skip_duplicate=True)
 
     # def test_text_search_group_depth3_slop(self, key_type, dialect):
     #     """Test grouped queries with depth 3."""
-    #     self._run_test(gen_depth3, "pure text", key_type, dialect, slop=True, check_parsing=True)
+    #     self._run_test(gen_depth3, "pure text", key_type, dialect, slop=True, check_parsing=True, skip_duplicate=True)
 
     # def test_text_search_group_depth2_inorder_slop(self, key_type, dialect):
     #     self._run_test(gen_depth2, "pure text", key_type, dialect, inorder=True, slop=True, check_parsing=True, skip_duplicate=True)

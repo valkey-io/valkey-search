@@ -327,3 +327,21 @@ def load_data(client, data_set, key_type):
             k = client.execute_command(*["JSON.GET", load_list[s][0], "$"])
             print(f"{s}:{load_list[s][0]}:  ", k)
     return len(load_list)
+
+def load_data_cluster(cluster_client, test_case, data_set, key_type):
+    data = compute_data_sets()
+
+    primary0 = test_case.new_client_for_primary(0)
+    for create_cmd in data[data_set][CREATES_KEY(key_type)]:
+        primary0.execute_command(create_cmd)
+
+    for key, fields in data[data_set][SETS_KEY(key_type)]:
+        if key_type == "hash":
+            cluster_client.hset(key, mapping=fields)
+        else:
+            cluster_client.execute_command(
+                "JSON.SET", key, "$", json.dumps(fields)
+            )
+
+    print(f"cluster load completed {data_set} {key_type}")
+

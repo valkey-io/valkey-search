@@ -123,17 +123,20 @@ struct RemoteInFlightRetryContext : public query::InFlightRetryContextBase {
   std::unique_ptr<vmsdk::StopWatch> latency_sample;
   std::vector<indexes::Neighbor> neighbors;
   std::unique_ptr<query::SearchParameters> parameters;
+  size_t total_count;
 
   RemoteInFlightRetryContext(SearchIndexPartitionResponse* resp,
                              grpc::ServerUnaryReactor* react,
                              std::unique_ptr<vmsdk::StopWatch> sample,
                              std::vector<indexes::Neighbor>&& nbrs,
-                             std::unique_ptr<query::SearchParameters>&& params)
+                             std::unique_ptr<query::SearchParameters>&& params,
+                             size_t count)
       : response(resp),
         reactor(react),
         latency_sample(std::move(sample)),
         neighbors(std::move(nbrs)),
-        parameters(std::move(params)) {}
+        parameters(std::move(params)),
+        total_count(count) {}
 
   bool IsCancelled() const override {
     return parameters->cancellation_token->IsCancelled();
@@ -153,6 +156,7 @@ struct RemoteInFlightRetryContext : public query::InFlightRetryContextBase {
     auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
     const auto& attribute_data_type =
         parameters->index_schema->GetAttributeDataType();
+    size_t original_size = neighbors.size();
     if (parameters->attribute_alias.empty()) {
       query::ProcessNonVectorNeighborsForReply(ctx.get(), attribute_data_type,
                                                neighbors, *parameters);
@@ -163,7 +167,12 @@ struct RemoteInFlightRetryContext : public query::InFlightRetryContextBase {
       query::ProcessNeighborsForReply(ctx.get(), attribute_data_type, neighbors,
                                       *parameters, vector_identifier);
     }
+    // Adjust total_count based on modified neighbours
+    size_t removed = original_size - neighbors.size();
+    size_t adjusted_total_count =
+        (total_count > removed) ? (total_count - removed) : 0;
     SerializeNeighbors(response, neighbors);
+    response->set_total_count(adjusted_total_count);
     reactor->Finish(grpc::Status::OK);
     RecordSearchMetrics(false, std::move(latency_sample));
   }
@@ -212,10 +221,10 @@ query::SearchResponseCallback Service::MakeSearchCallback(
     SearchIndexPartitionResponse* response, grpc::ServerUnaryReactor* reactor,
     std::unique_ptr<vmsdk::StopWatch> latency_sample) {
   return [response, reactor, latency_sample = std::move(latency_sample)](
-             absl::StatusOr<std::vector<indexes::Neighbor>>& neighbors,
+             absl::StatusOr<query::SearchResult>& result,
              std::unique_ptr<query::SearchParameters> parameters) mutable {
-    if (!neighbors.ok()) {
-      reactor->Finish(ToGrpcStatus(neighbors.status()));
+    if (!result.ok()) {
+      reactor->Finish(ToGrpcStatus(result.status()));
       RecordSearchMetrics(true, std::move(latency_sample));
       return;
     }
@@ -231,24 +240,27 @@ query::SearchResponseCallback Service::MakeSearchCallback(
     if (!parameters->no_content && query::QueryHasTextPredicate(*parameters)) {
       auto retry_ctx = std::make_shared<RemoteInFlightRetryContext>(
           response, reactor, std::move(latency_sample),
-          std::move(neighbors.value()), std::move(parameters));
+          std::move(result->neighbors), std::move(parameters),
+          result->total_count);
 
       retry_ctx->ScheduleOnMainThread();
       return;
     }
 
     if (parameters->no_content) {
-      SerializeNeighbors(response, neighbors.value());
+      SerializeNeighbors(response, result->neighbors);
+      response->set_total_count(result->total_count);
       reactor->Finish(grpc::Status::OK);
       RecordSearchMetrics(false, std::move(latency_sample));
     } else {
       vmsdk::RunByMain([parameters = std::move(parameters), response, reactor,
                         latency_sample = std::move(latency_sample),
-                        neighbors = std::move(neighbors.value())]() mutable {
+                        neighbors = std::move(result->neighbors),
+                        total_count = result->total_count]() mutable {
         const auto& attribute_data_type =
             parameters->index_schema->GetAttributeDataType();
         auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
-        if (parameters->attribute_alias.empty()) {
+        if (parameters->IsNonVectorQuery()) {
           query::ProcessNonVectorNeighborsForReply(
               ctx.get(), attribute_data_type, neighbors, *parameters);
         } else {
@@ -261,6 +273,7 @@ query::SearchResponseCallback Service::MakeSearchCallback(
                                           vector_identifier);
         }
         SerializeNeighbors(response, neighbors);
+        response->set_total_count(total_count);
         reactor->Finish(grpc::Status::OK);
         RecordSearchMetrics(false, std::move(latency_sample));
       });

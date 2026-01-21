@@ -52,6 +52,7 @@ inline UniqueValkeyString MakeUniqueValkeyString(const char *str) {
 
 inline UniqueValkeyString RetainUniqueValkeyString(
     ValkeyModuleString *valkey_str) {
+  VerifyMainThread();
   ValkeyModule_RetainString(nullptr, valkey_str);
   return UniquePtrValkeyString(valkey_str);
 }

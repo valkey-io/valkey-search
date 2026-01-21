@@ -53,8 +53,16 @@ CONTROLLED_BOOLEAN(ForceInvalidSlotFingerprint, false);
 
 struct NeighborComparator {
   bool operator()(indexes::Neighbor &a, indexes::Neighbor &b) const {
+    // Primary sort: by distance
     // We use a max heap, to pop off the furthest vector during aggregation.
-    return a.distance < b.distance;
+    if (a.distance != b.distance) {
+      return a.distance < b.distance;
+    }
+    // Secondary sort: by key for consistent ordering when distances are equal.
+    // Primarily used in non vector queries without scores (distance = 0).
+    // The full string compare is required because for external keys there is no
+    // guarantee of the stability of the InternedStringPtr across invocations.
+    return a.external_id->Str() > b.external_id->Str();
   }
 };
 
@@ -71,6 +79,7 @@ struct SearchPartitionResultsTracker {
   std::unique_ptr<SearchParameters> parameters ABSL_GUARDED_BY(mutex);
   std::atomic_bool reached_oom{false};
   std::atomic_bool consistency_failed{false};
+  std::atomic<size_t> accumulated_total_count{0};
 
   SearchPartitionResultsTracker(int outstanding_requests, int k,
                                 query::SearchResponseCallback callback,
@@ -106,6 +115,8 @@ struct SearchPartitionResultsTracker {
     }
 
     absl::MutexLock lock(&mutex);
+    accumulated_total_count.fetch_add(response.total_count(),
+                                      std::memory_order_relaxed);
     while (response.neighbors_size() > 0) {
       auto neighbor_entry = std::unique_ptr<coordinator::NeighborEntry>(
           response.mutable_neighbors()->ReleaseLast());
@@ -134,10 +145,14 @@ struct SearchPartitionResultsTracker {
     }
   }
 
+  void AddTotalCount(size_t count) {
+    accumulated_total_count.fetch_add(count, std::memory_order_relaxed);
+  }
+
   void AddResult(indexes::Neighbor &neighbor)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex) {
     // For non-vector queries, we can add the result directly.
-    if (parameters->attribute_alias.empty()) {
+    if (parameters->IsNonVectorQuery()) {
       results.emplace(std::move(neighbor));
       return;
     }
@@ -151,18 +166,23 @@ struct SearchPartitionResultsTracker {
 
   ~SearchPartitionResultsTracker() {
     absl::MutexLock lock(&mutex);
-    absl::StatusOr<std::vector<indexes::Neighbor>> result =
-        std::vector<indexes::Neighbor>();
+    absl::StatusOr<SearchResult> result;
     if (consistency_failed) {
       result = absl::FailedPreconditionError(kFailedPreconditionMsg);
     } else if (reached_oom) {
       result = absl::ResourceExhaustedError(kOOMMsg);
     } else {
+      std::vector<indexes::Neighbor> neighbors;
       while (!results.empty()) {
-        result->push_back(
+        neighbors.push_back(
             std::move(const_cast<indexes::Neighbor &>(results.top())));
         results.pop();
       }
+      // SearchResult construction automatically applies trimming based on LIMIT
+      // offset count IF the command allows it (ie - it does not require
+      // complete results).
+      result = SearchResult(accumulated_total_count, std::move(neighbors),
+                            *parameters);
     }
     callback(result, std::move(parameters));
   }
@@ -172,13 +192,16 @@ struct LocalInFlightRetryContext : public query::InFlightRetryContextBase {
   std::vector<indexes::Neighbor> neighbors;
   std::unique_ptr<SearchParameters> parameters;
   std::shared_ptr<SearchPartitionResultsTracker> tracker;
+  size_t total_count;
 
   LocalInFlightRetryContext(std::vector<indexes::Neighbor>&& nbrs,
                             std::unique_ptr<SearchParameters>&& params,
-                            std::shared_ptr<SearchPartitionResultsTracker> trk)
+                            std::shared_ptr<SearchPartitionResultsTracker> trk,
+                            size_t count)
       : neighbors(std::move(nbrs)),
         parameters(std::move(params)),
-        tracker(std::move(trk)) {}
+        tracker(std::move(trk)),
+        total_count(count) {}
 
   bool IsCancelled() const override {
     return parameters->cancellation_token->IsCancelled();
@@ -196,11 +219,14 @@ struct LocalInFlightRetryContext : public query::InFlightRetryContextBase {
     return neighbors;
   }
 
-  void OnComplete() override { tracker->AddResults(neighbors); }
+  void OnComplete() override {
+    tracker->AddResults(neighbors);
+    tracker->AddTotalCount(total_count);
+  }
 
   void OnCancelled() override {
     if (parameters->enable_partial_results) {
-      tracker->AddResults(neighbors);
+      OnComplete();
     }
   }
 };
@@ -243,10 +269,19 @@ absl::Status PerformSearchFanoutAsync(
     std::unique_ptr<SearchParameters> parameters,
     vmsdk::ThreadPool *thread_pool, query::SearchResponseCallback callback) {
   auto request = coordinator::ParametersToGRPCSearchRequest(*parameters);
-  // There should be no limit for the fanout search, so put some safe values,
-  // so that the default values are not used during the local search.
-  request->mutable_limit()->set_first_index(0);
-  request->mutable_limit()->set_number(parameters->k);
+  if (parameters->IsNonVectorQuery()) {
+    // For non vector, use the LIMIT based range. Ensure we fetch enough
+    // results to cover offset + number.
+    request->mutable_limit()->set_first_index(0);
+    request->mutable_limit()->set_number(parameters->limit.first_index +
+                                         parameters->limit.number);
+  } else {
+    // Vector searches: Use k as the limit to find top k results. In worst case,
+    // all top k results are from a single shard, so no need to fetch more than
+    // k.
+    request->mutable_limit()->set_first_index(0);
+    request->mutable_limit()->set_number(parameters->k);
+  }
   auto tracker = std::make_shared<SearchPartitionResultsTracker>(
       search_targets.size(), parameters->k, std::move(callback),
       std::move(parameters));
@@ -292,29 +327,29 @@ absl::Status PerformSearchFanoutAsync(
         coordinator::GRPCSearchRequestToParameters(*request, nullptr));
     VMSDK_RETURN_IF_ERROR(query::SearchAsync(
         std::move(local_parameters), thread_pool,
-        [tracker](absl::StatusOr<std::vector<indexes::Neighbor>> &neighbors,
+        [tracker](absl::StatusOr<SearchResult> &result,
                   std::unique_ptr<SearchParameters> parameters) {
-          if (neighbors.ok()) {
+          if (result.ok()) {
             // Text predicate evaluation requires main thread to ensure text
             // indexes reflect current keyspace. Block if result keys have
             // in-flight mutations.
             if (!parameters->no_content &&
                 query::QueryHasTextPredicate(*parameters)) {
               auto retry_ctx = std::make_shared<LocalInFlightRetryContext>(
-                  std::move(neighbors.value()), std::move(parameters),
-                  tracker);
-
+                  std::move(result->neighbors), std::move(parameters),
+                  tracker, result->total_count);
               retry_ctx->ScheduleOnMainThread();
               return;
             }
-            tracker->AddResults(*neighbors);
+            tracker->AddResults(result->neighbors);
+            tracker->AddTotalCount(result->total_count);
           } else {
-            if (absl::IsResourceExhausted(neighbors.status())) {
+            if (absl::IsResourceExhausted(result.status())) {
               tracker->reached_oom.store(true);
             }
             VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
                 << "Error during local handling of FT.SEARCH: "
-                << neighbors.status().message();
+                << result.status().message();
           }
         },
         SearchMode::kLocal))

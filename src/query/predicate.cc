@@ -36,15 +36,11 @@ EvaluationResult NegatePredicate::Evaluate(Evaluator& evaluator) const {
 
 // Helper function to build EvaluationResult for text predicates.
 EvaluationResult BuildTextEvaluationResult(
-    std::unique_ptr<indexes::text::TextIterator> iterator,
-    bool require_positions) {
+    std::unique_ptr<indexes::text::TextIterator> iterator) {
   if (!iterator->IsIteratorValid()) {
     return EvaluationResult(false);
   }
-  if (require_positions) {
-    return EvaluationResult(true, std::move(iterator));
-  }
-  return EvaluationResult(true);
+  return EvaluationResult(true, std::move(iterator));
 }
 
 TermPredicate::TermPredicate(
@@ -79,13 +75,16 @@ EvaluationResult TermPredicate::Evaluate(
       !key_iter.ContainsFields(field_mask)) {
     return EvaluationResult(false);
   }
+  if (!require_positions) {
+    return EvaluationResult(true);
+  }
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
   key_iterators.emplace_back(std::move(key_iter));
   auto iterator = std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), field_mask, nullptr, require_positions);
-  return BuildTextEvaluationResult(std::move(iterator), require_positions);
+  return BuildTextEvaluationResult(std::move(iterator));
 }
 
 PrefixPredicate::PrefixPredicate(
@@ -130,9 +129,12 @@ EvaluationResult PrefixPredicate::Evaluate(
   if (key_iterators.empty()) {
     return EvaluationResult(false);
   }
+  if (!require_positions) {
+    return EvaluationResult(true);
+  }
   auto iterator = std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), field_mask, nullptr, require_positions);
-  return BuildTextEvaluationResult(std::move(iterator), require_positions);
+  return BuildTextEvaluationResult(std::move(iterator));
 }
 
 SuffixPredicate::SuffixPredicate(
@@ -182,9 +184,12 @@ EvaluationResult SuffixPredicate::Evaluate(
   if (key_iterators.empty()) {
     return EvaluationResult(false);
   }
+  if (!require_positions) {
+    return EvaluationResult(true);
+  }
   auto iterator = std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), field_mask, nullptr, require_positions);
-  return BuildTextEvaluationResult(std::move(iterator), require_positions);
+  return BuildTextEvaluationResult(std::move(iterator));
 }
 
 InfixPredicate::InfixPredicate(
@@ -242,11 +247,13 @@ EvaluationResult FuzzyPredicate::Evaluate(
   if (filtered_key_iterators.empty()) {
     return EvaluationResult(false);
   }
-
+  if (!require_positions) {
+    return EvaluationResult(true);
+  }
   auto iterator = std::make_unique<indexes::text::TermIterator>(
       std::move(filtered_key_iterators), field_mask, nullptr,
       require_positions);
-  return BuildTextEvaluationResult(std::move(iterator), require_positions);
+  return BuildTextEvaluationResult(std::move(iterator));
 }
 
 NumericPredicate::NumericPredicate(const indexes::Numeric* index,
@@ -286,8 +293,12 @@ TagPredicate::TagPredicate(const indexes::Tag* index, absl::string_view alias,
       index_(index),
       alias_(alias),
       identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
-      raw_tag_string_(raw_tag_string),
-      tags_(tags.begin(), tags.end()) {}
+      raw_tag_string_(raw_tag_string) {
+  // Unescape each tag (e.g., \| -> |, \\ -> \)
+  for (const auto& tag : tags) {
+    tags_.insert(indexes::Tag::UnescapeTag(tag));
+  }
+}
 
 EvaluationResult TagPredicate::Evaluate(Evaluator& evaluator) const {
   return evaluator.EvaluateTags(*this);

@@ -41,11 +41,11 @@ class TestDBNum(ValkeySearchClusterTestCaseDebugMode):
             for i in range(3):
                 l(self.clients[i][dbnum])
 
-        show("Before create index1")
+        #show("Before create index1")
         index1.create(self.client11)
-        show("After create index1")
+        #show("After create index1")
         index0.create(self.client10)
-        show("After create index0")
+        #show("After create index0")
         assert(self.client00.execute_command("FT._LIST") == [b'index0'])
         assert(self.client10.execute_command("FT._LIST") == [b'index0'])
         assert(self.client20.execute_command("FT._LIST") == [b'index0'])
@@ -74,9 +74,15 @@ class TestDBNum(ValkeySearchClusterTestCaseDebugMode):
         self.client21.hset("0", mapping={"t":"tag1"})
         answer0 = index0.query(self.client20,"@t:{tag*}")
         assert answer0 == {b"0": {b"t":b"tag0"}}
+        answer0 = index0.aggregate(self.client20, "@t:{tag*}", "load", "*")
+        print("Answer0", answer0)
+        assert answer0 == [{"t":b"tag0"}]
         self.client21.execute_command("DEBUG LOG", "Doing query 1")
         answer1 = index1.query(self.client21,"@t:{tag*}")
         assert answer1 == {b"0": {b"t":b"tag1"}}
+        answer1 = index1.aggregate(self.client21, "@t:{tag*}", "load", "*")
+        print("Answer1", answer1)
+        assert answer1 == [{"t":b"tag1"}]
 
         index0.drop(self.client00)
         show("After drop index0")

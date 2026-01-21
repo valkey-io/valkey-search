@@ -16,22 +16,15 @@
 namespace vmsdk {
 
 namespace {
-// ----------------------------------------------------------------------------
-// BASELINE: Standard std::atomic
-// This represents the "old" way (Global contention)
-// ----------------------------------------------------------------------------
+
 struct StandardAtomicWrapper {
   std::atomic<int64_t> val{0};
 
-  inline void Add(int64_t n) {
-    // Typical fetch_add used in global counters
-    val.fetch_add(n, std::memory_order_relaxed);
-  }
+  inline void Add(int64_t n) { val.fetch_add(n, std::memory_order_relaxed); }
 
   int64_t GetTotal() const { return val.load(std::memory_order_relaxed); }
 };
 
-// Global instance for the benchmark
 static StandardAtomicWrapper global_std_atomic;
 
 static void BM_StandardAtomic_Add(benchmark::State& state) {
@@ -47,11 +40,6 @@ static void BM_StandardAtomic_GetTotal(benchmark::State& state) {
   }
 }
 
-// ----------------------------------------------------------------------------
-// TARGET: vmsdk::ShardedAtomic
-// This represents the "new" way (Thread-local, no contention)
-// ----------------------------------------------------------------------------
-// Global instance for the benchmark
 static vmsdk::ShardedAtomic<int64_t> global_sharded_atomic;
 
 static void BM_ShardedAtomic_Add(benchmark::State& state) {
@@ -62,14 +50,7 @@ static void BM_ShardedAtomic_Add(benchmark::State& state) {
   }
 }
 
-// ----------------------------------------------------------------------------
-// READ BENCHMARK (Optional)
-// Tests the cost of "GetTotal" while other threads are writing
-// ----------------------------------------------------------------------------
 static void BM_ShardedAtomic_GetTotal(benchmark::State& state) {
-  // Only the main thread does the reading in this specific test setup,
-  // or all threads read (depending on what you want to test).
-  // Here we test the cost of summation.
   for (auto _ : state) {
     benchmark::DoNotOptimize(global_sharded_atomic.GetTotal());
   }

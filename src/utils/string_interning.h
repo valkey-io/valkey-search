@@ -54,7 +54,7 @@ class InternedString {
                                      Allocator *allocator);
   void Destructor();
   void IncrementRefCount() {
-    auto old_value = ref_count_.fetch_add(1, std::memory_order_seq_cst);
+    ref_count_.fetch_add(1, std::memory_order_seq_cst);
   }
   void DecrementRefCount() {
     if (ref_count_.fetch_sub(1, std::memory_order_seq_cst) == 1) {

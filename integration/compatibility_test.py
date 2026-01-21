@@ -388,7 +388,7 @@ def do_answer(client, expected, data_set):
         data_set = (expected['data_set_name'], expected['key_type'])
 
     # Set Valkey-specific config for inorder tests
-    if 'inorder' in expected['testname'] or 'slop' in expected['testname']:
+    if 'inorder' in expected['testname']:
         try:
             client.execute_command("CONFIG", "SET", "search.proximity-inorder-compat-mode", "yes")
             print(f"✓ Set Valkey compat mode for test: {expected['testname']}")

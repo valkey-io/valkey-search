@@ -110,6 +110,72 @@ TEXT_DATASETS = {
             ],
             'price': (0, 50)
         }
+    },
+    # ,.<>{}[]"':;!@#$%^&*()-+=~
+    'punctuation': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # Unescaped only - these split into multiple tokens
+                "comma,period",
+                'run.jump',
+                'book<paper',
+                'physics>maths',
+                'cat{dog',
+                'fish}rabbit',
+                'old[new',
+                'tall]short',
+                'many"few',
+                "great'wall",
+                'inside:out',
+                'swim;pass',
+                'shout!out',
+                'email@password',
+                'office#home',
+                'dollar$sign',
+                'ten%percent',
+                'top^down',
+                'left&right',
+                'star*moon',
+                'include(exclude',
+                'key)board',
+                'minus-subtract',
+                'city+village',
+                'equal=lity',
+                'random~sum',
+            ],
+            'body': [
+                # Escaped only
+                'freedom\\,justice',
+                'begin\\.end',
+                'ask\\<question',
+                'get\\>answer',
+                'round\\{about',
+                'ever\\}green',
+                'square\\[feet',
+                'circle\\]triangle',
+                'chat\\"gpt',
+                "redis\\'valkey",
+                'sick\\:hungry',
+                'phone\\;laptop',
+                'soccer\\!tennis',
+                'address\\@field',
+                'hash\\#tag',
+                'money\\$rich',
+                'degree\\%cold',
+                'sharp\\^knife',
+                'friend\\&enemy',
+                'mountain\\*view',
+                'extra\\(time',
+                'sooner\\)later',
+                'deal\\-coupon',
+                'abundant\\+plant',
+                'blue\\=planet',
+                'milky\\~way',
+            ],
+            'color': ['red', 'blue', 'green'],
+            'price': (0, 10)
+        }
     }
 }
 

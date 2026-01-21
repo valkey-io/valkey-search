@@ -48,7 +48,6 @@ void ProcessNonVectorNeighborsForReply(
     std::vector<indexes::Neighbor> &neighbors,
     const query::SearchParameters &parameters);
 
-
 }  // namespace valkey_search::query
 
 #endif  // VALKEYSEARCH_SRC_QUERY_RESPONSE_GENERATOR_H_

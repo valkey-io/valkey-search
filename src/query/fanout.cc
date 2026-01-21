@@ -194,8 +194,8 @@ struct LocalInFlightRetryContext : public query::InFlightRetryContextBase {
   std::shared_ptr<SearchPartitionResultsTracker> tracker;
   size_t total_count;
 
-  LocalInFlightRetryContext(std::vector<indexes::Neighbor>&& nbrs,
-                            std::unique_ptr<SearchParameters>&& params,
+  LocalInFlightRetryContext(std::vector<indexes::Neighbor> &&nbrs,
+                            std::unique_ptr<SearchParameters> &&params,
                             std::shared_ptr<SearchPartitionResultsTracker> trk,
                             size_t count)
       : neighbors(std::move(nbrs)),
@@ -215,7 +215,7 @@ struct LocalInFlightRetryContext : public query::InFlightRetryContextBase {
     return "Local fanout full-text query";
   }
 
-  const std::vector<indexes::Neighbor>& GetNeighbors() const override {
+  const std::vector<indexes::Neighbor> &GetNeighbors() const override {
     return neighbors;
   }
 
@@ -336,8 +336,8 @@ absl::Status PerformSearchFanoutAsync(
             if (!parameters->no_content &&
                 query::QueryHasTextPredicate(*parameters)) {
               auto retry_ctx = std::make_shared<LocalInFlightRetryContext>(
-                  std::move(result->neighbors), std::move(parameters),
-                  tracker, result->total_count);
+                  std::move(result->neighbors), std::move(parameters), tracker,
+                  result->total_count);
               retry_ctx->ScheduleOnMainThread();
               return;
             }

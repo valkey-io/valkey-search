@@ -44,9 +44,8 @@ struct InFlightRetryContext : public query::InFlightRetryContextBase {
   vmsdk::BlockedClient blocked_client;
   std::unique_ptr<Result> result;
 
-  InFlightRetryContext(vmsdk::BlockedClient&& bc, std::unique_ptr<Result>&& res)
-      : blocked_client(std::move(bc)),
-        result(std::move(res)) {}
+  InFlightRetryContext(vmsdk::BlockedClient &&bc, std::unique_ptr<Result> &&res)
+      : blocked_client(std::move(bc)), result(std::move(res)) {}
 
   bool IsCancelled() const override {
     return result->parameters->cancellation_token->IsCancelled();
@@ -58,7 +57,7 @@ struct InFlightRetryContext : public query::InFlightRetryContextBase {
 
   const char *GetDesc() const override { return "Full-text query"; }
 
-  const std::vector<indexes::Neighbor>& GetNeighbors() const override {
+  const std::vector<indexes::Neighbor> &GetNeighbors() const override {
     return result->search_result->neighbors;
   }
 

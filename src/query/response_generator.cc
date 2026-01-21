@@ -328,5 +328,4 @@ void ProcessNeighborsForReply(ValkeyModuleCtx *ctx,
       neighbors.end());
 }
 
-
 }  // namespace valkey_search::query

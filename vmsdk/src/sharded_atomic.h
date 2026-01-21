@@ -59,10 +59,6 @@ class ShardedAtomic {
   void Reset() const { return CounterRegistry::Instance().Reset(); }
 
  private:
-  // ------------------------------------------------------------------------
-  // Private Implementation Details
-  // ------------------------------------------------------------------------
-
   // Forward declaration
   struct ThreadLocalNode;
 
@@ -90,7 +86,8 @@ class ShardedAtomic {
 
     T GetTotal(std::memory_order order) const {
       T total = 0;
-      // Block if a thread is currently registering/unregistering.
+      // We lock purely to ensure the vector doesn't change size (iterators
+      // validity)
       absl::ReaderMutexLock lock(&mutex_);
 
       for (const auto* node : nodes_) {
@@ -105,9 +102,7 @@ class ShardedAtomic {
       absl::ReaderMutexLock lock(&mutex_);
       for (auto* node : nodes_) {
         // Forcibly set value to 0.
-        // We use relaxed because exact ordering across threads usually
-        // doesn't matter for a "hard reset" in tests.
-        node->value.store(0, std::memory_order_relaxed);
+        node->value.store(0, std::memory_order_seq_cst);
       }
     }
 
@@ -119,7 +114,7 @@ class ShardedAtomic {
         nodes_ ABSL_GUARDED_BY(mutex_);
   };
 
-  // Private Node: The Thread-Local storage container
+  // ThreadLocalNode is the TLS container
   struct alignas(64) ThreadLocalNode {
     std::atomic<T> value{0};
 

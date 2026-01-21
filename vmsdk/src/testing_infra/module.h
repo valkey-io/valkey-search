@@ -145,6 +145,8 @@ class MockValkeyModule {
               (ValkeyModuleCtx * ctx, ValkeyModuleScanCursor *cursor,
                ValkeyModuleScanCB fn, void *privdata));
   MOCK_METHOD(int, ReplicateVerbatim, (ValkeyModuleCtx * ctx));
+  MOCK_METHOD(int, Replicate,
+              (ValkeyModuleCtx * ctx, const char *cmdname, const char *fmt));
   MOCK_METHOD(ValkeyModuleType *, ModuleTypeGetType, (ValkeyModuleKey * key));
   MOCK_METHOD(ValkeyModuleCtx *, GetDetachedThreadSafeContext,
               (ValkeyModuleCtx * ctx));
@@ -904,6 +906,11 @@ inline int TestValkeyModule_ReplicateVerbatim(ValkeyModuleCtx *ctx) {
   return kMockValkeyModule->ReplicateVerbatim(ctx);
 }
 
+inline int TestValkeyModule_Replicate(ValkeyModuleCtx *ctx, const char *cmdname,
+                                      const char *fmt, ...) {
+  return kMockValkeyModule->Replicate(ctx, cmdname, fmt);
+}
+
 inline ValkeyModuleType *TestValkeyModule_ModuleTypeGetTypeDefaultImpl(
     ValkeyModuleKey *key) {
   if (key->ctx->registered_keys.contains(key->key)) {
@@ -1531,6 +1538,7 @@ inline void TestValkeyModule_Init() {
       &TestValkeyModule_SubscribeToServerEvent;
   ValkeyModule_Scan = &TestValkeyModule_Scan;
   ValkeyModule_ReplicateVerbatim = &TestValkeyModule_ReplicateVerbatim;
+  ValkeyModule_Replicate = &TestValkeyModule_Replicate;
   ValkeyModule_ModuleTypeGetType = &TestValkeyModule_ModuleTypeGetType;
   ValkeyModule_GetDetachedThreadSafeContext =
       &TestValkeyModule_GetDetachedThreadSafeContext;

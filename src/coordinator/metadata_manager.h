@@ -178,10 +178,10 @@ class MetadataManager {
   absl::StatusOr<const GlobalMetadataEntry *> GetEntry(
       absl::string_view type_name, const ObjName &obj_name) const;
 
-  void CallFTInternalUpdate(
+  void ReplicateFTInternalUpdate(
       const coordinator::GlobalMetadataEntry &entry,
       const coordinator::GlobalMetadataVersionHeader &header,
-      absl::string_view encoded_id, absl::string_view operation_name);
+      absl::string_view id);
   vmsdk::MainThreadAccessGuard<GlobalMetadata> metadata_;
   vmsdk::MainThreadAccessGuard<GlobalMetadata> staged_metadata_;
   vmsdk::MainThreadAccessGuard<bool> staging_metadata_due_to_repl_load_ = false;

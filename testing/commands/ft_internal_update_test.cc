@@ -40,7 +40,7 @@ TEST_F(FTInternalUpdateTest, ParseErrorMetadata) {
   auto status = FTInternalUpdateCmd(&fake_ctx_, argv, 4);
   EXPECT_FALSE(status.ok());
   EXPECT_THAT(status.message(),
-              testing::HasSubstr("ERR GlobalMetadataEntry parse failed"));
+              testing::HasSubstr("Failed to parse GlobalMetadataEntry"));
 
   for (int i = 0; i < 4; i++) {
     TestValkeyModule_FreeString(&fake_ctx_, argv[i]);

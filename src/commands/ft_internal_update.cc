@@ -18,19 +18,18 @@ constexpr int kFTInternalUpdateArgCount = 4;
 
 // Helper function to handle parse failures with poison pill recovery
 absl::Status HandleInternalUpdateFailure(
-    ValkeyModuleCtx *ctx, bool success, const std::string &operation_type,
+    ValkeyModuleCtx *ctx, const std::string &operation_type,
     const std::string &id,
     const absl::Status &error_status = absl::OkStatus()) {
-  if (success) {
+  if (error_status.ok()) {
     return absl::OkStatus();
   }
 
   VMSDK_LOG(WARNING, ctx) << "CRITICAL: " << operation_type
                           << " failed in FT.INTERNAL_UPDATE. "
                           << "Index ID: " << id;
-  if (!error_status.ok()) {
-    VMSDK_LOG(WARNING, ctx) << "Error: " << error_status.message();
-  }
+
+  VMSDK_LOG(WARNING, ctx) << "Error: " << error_status.message();
 
   if (operation_type.find("parse") != std::string::npos) {
     Metrics::GetStats().ft_internal_update_parse_failures_cnt++;
@@ -66,25 +65,29 @@ absl::Status FTInternalUpdateCmd(ValkeyModuleCtx *ctx,
 
   auto metadata_view = vmsdk::ToStringView(argv[2]);
   coordinator::GlobalMetadataEntry metadata_entry;
-  VMSDK_RETURN_IF_ERROR(HandleInternalUpdateFailure(
-      ctx,
-      metadata_entry.ParseFromArray(metadata_view.data(), metadata_view.size()),
-      "GlobalMetadataEntry parse", id));
+  if (!metadata_entry.ParseFromArray(metadata_view.data(),
+                                     metadata_view.size())) {
+    VMSDK_RETURN_IF_ERROR(HandleInternalUpdateFailure(
+        ctx, "GlobalMetadataEntry parse", id,
+        absl::InvalidArgumentError("Failed to parse GlobalMetadataEntry")));
+  }
 
   auto header_view = vmsdk::ToStringView(argv[3]);
   coordinator::GlobalMetadataVersionHeader version_header;
-  VMSDK_RETURN_IF_ERROR(HandleInternalUpdateFailure(
-      ctx,
-      version_header.ParseFromArray(header_view.data(), header_view.size()),
-      "GlobalMetadataVersionHeader parse", id));
+  if (!version_header.ParseFromArray(header_view.data(), header_view.size())) {
+    VMSDK_RETURN_IF_ERROR(HandleInternalUpdateFailure(
+        ctx, "GlobalMetadataVersionHeader parse", id,
+        absl::InvalidArgumentError(
+            "Failed to parse GlobalMetadataVersionHeader")));
+  }
   int flags = ValkeyModule_GetContextFlags(ctx);
   if ((flags & VALKEYMODULE_CTX_FLAGS_SLAVE) ||
       (flags & VALKEYMODULE_CTX_FLAGS_LOADING)) {
     auto status = coordinator::MetadataManager::Instance().CreateEntryOnReplica(
         ctx, kSchemaManagerMetadataTypeName, id, &metadata_entry,
         &version_header);
-    VMSDK_RETURN_IF_ERROR(HandleInternalUpdateFailure(
-        ctx, status.ok(), "CreateEntryOnReplica", id, status));
+    VMSDK_RETURN_IF_ERROR(
+        HandleInternalUpdateFailure(ctx, "CreateEntryOnReplica", id, status));
   }
 
   ValkeyModule_ReplicateVerbatim(ctx);

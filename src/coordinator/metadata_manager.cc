@@ -250,8 +250,7 @@ absl::StatusOr<IndexFingerprintVersion> MetadataManager::CreateEntry(
       top_level_min_version);
 
   // Call FT.INTERNAL_UPDATE for coordinator to ensure unified AOF replication
-  CallFTInternalUpdate(new_entry, metadata.version_header(), encoded_id,
-                       "UpsertEntry");
+  ReplicateFTInternalUpdate(new_entry, metadata.version_header(), encoded_id);
 
   BroadcastMetadata(detached_ctx_.get(), metadata.version_header());
   IndexFingerprintVersion index_fingerprint_version;
@@ -298,8 +297,7 @@ absl::Status MetadataManager::DeleteEntry(absl::string_view type_name,
 
   // Call FT.INTERNAL_UPDATE for coordinator to ensure unified AOF replication
   // for DROP
-  CallFTInternalUpdate(new_entry, metadata.version_header(), encoded_id,
-                       "DeleteEntry");
+  ReplicateFTInternalUpdate(new_entry, metadata.version_header(), encoded_id);
 
   BroadcastMetadata(detached_ctx_.get(), metadata.version_header());
   return absl::OkStatus();
@@ -920,13 +918,7 @@ absl::Status MetadataManager::CreateEntryOnReplica(
   auto obj_name = ObjName::Decode(id);
   auto callback_result = TriggerCallbacks(type_name, obj_name, *metadata_entry);
   if (!callback_result.ok()) {
-    VMSDK_LOG(WARNING, ctx)
-        << "Failed during CreateEntryOnReplica callback for type " << type_name
-        << ", id " << id << " from " << "CreateEntryOnReplica";
-    Metrics::GetStats().process_internal_update_callback_failures_cnt++;
-    CHECK(false) << "CreateEntryOnReplica callback failed for type "
-                 << type_name << ", id " << id << ": "
-                 << callback_result.message();
+    return callback_result;
   }
 
   auto result = metadata_.Get();
@@ -982,25 +974,19 @@ absl::Status MetadataManager::CallFTInternalUpdateForReconciliation(
   return absl::OkStatus();
 }
 
-void MetadataManager::CallFTInternalUpdate(
+void MetadataManager::ReplicateFTInternalUpdate(
     const coordinator::GlobalMetadataEntry &entry,
     const coordinator::GlobalMetadataVersionHeader &header,
-    absl::string_view encoded_id, absl::string_view operation_name) {
+    absl::string_view encoded_id) {
   std::string metadata_binary, header_binary;
   entry.SerializeToString(&metadata_binary);
   header.SerializeToString(&header_binary);
 
-  ValkeyModuleCallReply *reply = ValkeyModule_Call(
-      detached_ctx_.get(), "FT.INTERNAL_UPDATE", "!Kcbb",
-      std::string(encoded_id).c_str(), metadata_binary.data(),
-      metadata_binary.size(), header_binary.data(), header_binary.size());
-  if (reply != nullptr &&
-      ValkeyModule_CallReplyType(reply) != VALKEYMODULE_REPLY_ERROR) {
-    ValkeyModule_FreeCallReply(reply);
-  } else {
-    CHECK(false) << "FT.INTERNAL_UPDATE failed during " << operation_name
-                 << " for index " << encoded_id;
-  }
+  // Replicate FT.INTERNAL_UPDATE to replicas for AOF consistency
+  ValkeyModule_Replicate(detached_ctx_.get(), "FT.INTERNAL_UPDATE", "cbb",
+                         std::string(encoded_id).c_str(),
+                         metadata_binary.data(), metadata_binary.size(),
+                         header_binary.data(), header_binary.size());
 }
 
 }  // namespace valkey_search::coordinator

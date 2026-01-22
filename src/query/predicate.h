@@ -192,7 +192,7 @@ class TermPredicate : public TextPredicate {
  public:
   TermPredicate(
       std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-      FieldMaskPredicate field_mask, std::string term, bool exact, bool isstem);
+      FieldMaskPredicate field_mask, std::string term, bool exact);
   std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema()
       const override {
     return text_index_schema_;
@@ -208,7 +208,6 @@ class TermPredicate : public TextPredicate {
       const void* fetcher) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   bool IsExact() const { return exact_; }
-  bool IsStem() const { return isstem_; }
   size_t EstimateSize() const override;
 
  private:
@@ -216,7 +215,6 @@ class TermPredicate : public TextPredicate {
   FieldMaskPredicate field_mask_;
   std::string term_;
   bool exact_;
-  bool isstem_;
 };
 
 class PrefixPredicate : public TextPredicate {

@@ -107,7 +107,10 @@ class TextIndexSchema {
   // Get all stem variants for a search term (including parent words from stem
   // tree)
   void GetAllStemVariants(const std::string &search_term,
-                          std::vector<std::string> &words_to_search) const;
+                          std::vector<std::string> &words_to_search);
+
+  // Get the mask of fields that have stemming enabled
+  uint64_t GetStemmingFieldMask() const { return stemming_enabled_fields_; }
 
   // Enable suffix trie.
   void EnableSuffix() {
@@ -135,6 +138,9 @@ class TextIndexSchema {
   // Example: "happi" → {"happy", "happiness", "happily"}
   //
   RadixTree<StemParents> stem_tree_;
+
+  // Prevent concurrent mutations to stem tree
+  std::mutex stem_tree_mutex_;
 
   //
   // To support the Delete record and the post-filtering case, there is a
@@ -173,6 +179,9 @@ class TextIndexSchema {
 
   // True if any text attributes of the schema have suffix search enabled.
   bool with_suffix_trie_ = false;
+
+  // Tracks which field numbers have stemming enabled (bit mask)
+  uint64_t stemming_enabled_fields_ = 0;
 
  public:
   // FT.INFO memory stats for text index

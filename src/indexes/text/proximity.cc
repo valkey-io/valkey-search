@@ -165,7 +165,7 @@ const PositionRange& ProximityIterator::CurrentPosition() const {
 // Check if there is an INORDER violation between two iterators.
 bool ProximityIterator::HasOrderingViolation(size_t first_idx,
                                              size_t second_idx) const {
-  if (valkey_search::options::GetProximityInorderCompatMode()) {
+  if (IsCompatModeInorder()) {
     // Compatibility mode: relaxed check for order using only start positions
     // only. There is no overlap check in compatibility mode.
     return positions_[first_idx].start > positions_[second_idx].start;
@@ -175,18 +175,28 @@ bool ProximityIterator::HasOrderingViolation(size_t first_idx,
   }
 }
 
-// In case of violations, the returned iterator is the one that should be
-// advanced to try and find a valid sequence.
-// In case of no violations, std::nullopt is returned and we have found a valid
-// position combination.
-std::optional<size_t> ProximityIterator::FindViolatingIterator() {
+bool ProximityIterator::IsCompatModeInorder() const {
+  return valkey_search::options::GetProximityInorderCompatMode() && in_order_;
+}
+
+// In case of violations, returns the iterator that should be advanced
+// and optionally a target position to seek to.
+// In case of no violations, std::nullopt is returned.
+std::optional<ProximityIterator::ViolationInfo>
+ProximityIterator::FindViolatingIterator() {
   const size_t n = positions_.size();
   uint32_t current_slop = 0;
   if (in_order_) {
     // Check ordering / overlap violations.
     for (size_t i = 0; i < n - 1; ++i) {
       if (HasOrderingViolation(i, i + 1)) {
-        return i + 1;
+        Position seek_target =
+            IsCompatModeInorder() ? positions_[i].start : positions_[i].end;
+        std::optional<Position> target_opt =
+            seek_target > positions_[i + 1].start
+                ? std::optional<Position>(seek_target)
+                : std::nullopt;
+        return ViolationInfo{i + 1, target_opt};
       }
     }
     // Check slop violations.
@@ -199,7 +209,7 @@ std::optional<size_t> ProximityIterator::FindViolatingIterator() {
       current_slop += std::max(0, distance);
     }
     if (slop_.has_value() && current_slop > *slop_) {
-      return 0;
+      return ViolationInfo{0, std::nullopt};
     }
     // Check for field mask intersection (terms exist in the same field)
     FieldMaskPredicate field_mask = query_field_mask_;
@@ -208,7 +218,7 @@ std::optional<size_t> ProximityIterator::FindViolatingIterator() {
       // No common fields, advance this iterator which is lagging behind the
       // previous one.
       if (field_mask == 0) {
-        return i;
+        return ViolationInfo{i, std::nullopt};
       }
     }
     return std::nullopt;
@@ -223,7 +233,12 @@ std::optional<size_t> ProximityIterator::FindViolatingIterator() {
     size_t next_idx = pos_with_idx_[i + 1].second;
     // Check ordering / overlap violations.
     if (HasOrderingViolation(curr_idx, next_idx)) {
-      return next_idx;
+      Position seek_target = positions_[curr_idx].end;
+      std::optional<Position> target_opt =
+          seek_target > positions_[next_idx].start
+              ? std::make_optional(seek_target)
+              : std::nullopt;
+      return ViolationInfo{next_idx, seek_target};
     }
   }
   // Check slop violations.
@@ -239,7 +254,7 @@ std::optional<size_t> ProximityIterator::FindViolatingIterator() {
       current_slop += std::max(0, distance);
     }
     if (current_slop > *slop_) {
-      return pos_with_idx_[0].second;
+      return ViolationInfo{pos_with_idx_[0].second, std::nullopt};
     }
   }
   // Check for field mask intersection (terms exist in the same field)
@@ -249,7 +264,7 @@ std::optional<size_t> ProximityIterator::FindViolatingIterator() {
     // No common fields, advance this iterator which is lagging behind the
     // previous one.
     if (field_mask == 0) {
-      return i;
+      return ViolationInfo{i, std::nullopt};
     }
   }
   return std::nullopt;
@@ -259,27 +274,30 @@ bool ProximityIterator::NextPosition() {
   const size_t n = iters_.size();
   bool should_advance = current_position_.has_value();
   while (!DonePositions()) {
+    // 1. Synchronize physical positions cache
     for (size_t i = 0; i < n; ++i) {
       positions_[i] = iters_[i]->CurrentPosition();
     }
-    auto violating_iter = FindViolatingIterator();
+    auto violation = FindViolatingIterator();
     if (should_advance) {
       should_advance = false;
-      if (violating_iter) {
-        iters_[*violating_iter]->NextPosition();
-      } else {
-        // No violations, advance first non-done iterator
-        for (size_t i = 0; i < n; ++i) {
-          if (!iters_[i]->DonePositions()) {
-            iters_[i]->NextPosition();
-            break;
-          }
+      if (violation) {
+        size_t idx = violation->iter_idx;
+        Position current_start = iters_[idx]->CurrentPosition().start;
+        if (violation->seek_target.has_value()) {
+          iters_[idx]->SeekForwardPosition(*violation->seek_target);
+        } else {
+          iters_[idx]->NextPosition();
         }
+      } else {
+        // No violations: advance the term appearing first physically
+        size_t first_idx = in_order_ ? 0 : pos_with_idx_[0].second;
+        iters_[first_idx]->NextPosition();
       }
       continue;
     }
-    // No violations - so this positional combination is valid.
-    if (!violating_iter.has_value()) {
+    // 3. Validation: If no violations found, this combination is a match
+    if (!violation.has_value()) {
       // Set the current field based on field mask intersection.
       current_field_mask_ = iters_[0]->CurrentFieldMask();
       for (size_t i = 1; i < n; ++i) {
@@ -302,6 +320,25 @@ bool ProximityIterator::NextPosition() {
   current_position_ = std::nullopt;
   current_field_mask_ = 0ULL;
   return false;
+}
+
+bool ProximityIterator::SeekForwardPosition(Position target_position) {
+  // Already at or past target
+  if (current_position_.has_value() &&
+      current_position_.value().start >= target_position) {
+    return true;
+  }
+  // Seek all child iterators to target position
+  for (auto& iter : iters_) {
+    if (!iter->DonePositions() &&
+        target_position > iter->CurrentPosition().start) {
+      iter->SeekForwardPosition(target_position);
+    }
+  }
+  // Reset state and find next valid proximity match
+  current_position_ = std::nullopt;
+  current_field_mask_ = 0ULL;
+  return NextPosition();
 }
 
 FieldMaskPredicate ProximityIterator::CurrentFieldMask() const {

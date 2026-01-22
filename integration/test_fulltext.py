@@ -491,14 +491,17 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
                              "SCHEMA", "content", "TEXT", "nostem_field", "TEXT", "NOSTEM")
         
         # Docs with stem variants: happy/happiness->happi, run/running/runs->run, runner->runner (different stem)
+        # doc:0 and doc:9 test the NOSTEM fix: same word "swimming" appears in different field types
         docs = [
+            ("doc:0", "I love swimming in the ocean", "swimming"),  # "swimming" in BOTH fields
             ("doc:1", "I am very happy today", "happy"),
             ("doc:2", "Happiness is key to success", "happiness"),
             ("doc:3", "She is happier than before", "happier"),
             ("doc:4", "Running every day improves health", "running"),
             ("doc:5", "He runs very fast", "runs"),
             ("doc:6", "The runner won the race", "runner"),
-            ("doc:7", "Driving is fun", "driving")
+            ("doc:7", "Driving is fun", "driving"),
+            ("doc:9", "unrelated xyz content", "swimming")  # "swimming" ONLY in NOSTEM field
         ]
         
         for doc_id, content, nostem_content in docs:
@@ -623,6 +626,16 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         result = client.execute_command("FT.SEARCH", "idx", '@content:happi @content:succ*')
         assert result[0] == 1 and result[1] == b'doc:2'
         assert set(result[2]) == {b'content', b'Happiness is key to success', b'nostem_field', b'happiness'}
+        
+        # Test 11: Validate fix for stem variants NOT matching in NOSTEM fields
+        # Both doc:0 and doc:9 have "swimming" but in different field types
+        # Search for stem root "swim" (swimming→swim) should:
+        # - Match doc:0 (has "swimming" in stemmable content field - stem expansion works)
+        # - NOT match doc:9 (has "swimming" ONLY in NOSTEM field - stem expansion blocked)
+        result = client.execute_command("FT.SEARCH", "idx", "swim")
+        assert result[0] == 1, f"Expected 1 result for 'swim', got {result[0]}"
+        assert result[1] == b"doc:0", f"Expected doc:0, got {result[1]}"
+        assert b"doc:9" not in set(result[1::2]), "doc:9 should NOT match (has 'swimming' only in NOSTEM field)"
 
     def test_custom_stopwords(self):
         """

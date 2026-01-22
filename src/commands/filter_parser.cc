@@ -609,8 +609,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
       SetupTextFieldConfiguration(field_mask, field_or_default, false));
   return FilterParser::TokenResult{
       std::make_unique<query::TermPredicate>(text_index_schema, field_mask,
-                                             std::move(token), true,
-                                             min_stem_size.has_value()),
+                                             std::move(token), true),
       false};
 }
 
@@ -763,8 +762,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     }
     return FilterParser::TokenResult{
         std::make_unique<query::TermPredicate>(text_index_schema, field_mask,
-                                               std::move(token), exact,
-                                               min_stem_size.has_value()),
+                                               std::move(token), exact),
         break_on_query_syntax};
   }
 }
@@ -1027,4 +1025,5 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
   }
   return result;
 }
+
 }  // namespace valkey_search

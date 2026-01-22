@@ -96,6 +96,11 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
     size_t text_field_number, bool stem, bool suffix) {
   NestedMemoryScope scope{metadata_.text_index_memory_pool_};
 
+  // Track which fields have stemming enabled
+  if (stem) {
+    stemming_enabled_fields_ |= (1ULL << text_field_number);
+  }
+
   // Get or create stem mappings for this key if stemming is enabled
   absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>
       *stem_mappings_ptr = nullptr;
@@ -207,7 +212,7 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
 
   // Populate stem tree with mappings
   {
-    std::lock_guard<std::mutex> schema_guard(text_index_mutex_);
+    std::lock_guard<std::mutex> stem_guard(stem_tree_mutex_);
     for (const auto &[stemmed, originals] : stem_mappings) {
       stem_tree_.MutateTarget(stemmed, [&](StemParents existing) {
         if (!existing) {
@@ -265,6 +270,7 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
           lexer_.StemWord(std::string(word), true, 4, lexer_.GetStemmer());
       if (stemmed != word) {
         // This word was a stem parent, remove it from stem tree
+        std::lock_guard<std::mutex> stem_guard(stem_tree_mutex_);
         stem_tree_.MutateTarget(stemmed, [&](StemParents existing) {
           if (existing && !existing->empty()) {
             existing->erase(std::string(word));
@@ -316,8 +322,7 @@ uint64_t TextIndexSchema::GetTotalTextIndexMemoryUsage() const {
 }
 
 void TextIndexSchema::GetAllStemVariants(
-    const std::string &search_term,
-    std::vector<std::string> &words_to_search) const {
+    const std::string &search_term, std::vector<std::string> &words_to_search) {
   // Stem the search term
   std::string stemmed =
       lexer_.StemWord(search_term, true, 4, lexer_.GetStemmer());
@@ -328,6 +333,8 @@ void TextIndexSchema::GetAllStemVariants(
   }
 
   // Look up parent words in stem tree
+  // Lock to prevent concurrent updates during read
+  std::lock_guard<std::mutex> stem_guard(stem_tree_mutex_);
   auto stem_iter = stem_tree_.GetWordIterator(stemmed);
   while (!stem_iter.Done()) {
     if (stem_iter.GetWord() == stemmed) {

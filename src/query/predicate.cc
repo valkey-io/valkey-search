@@ -45,13 +45,12 @@ EvaluationResult BuildTextEvaluationResult(
 
 TermPredicate::TermPredicate(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-    FieldMaskPredicate field_mask, std::string term, bool exact_, bool isstem_)
+    FieldMaskPredicate field_mask, std::string term, bool exact_)
     : TextPredicate(),
       text_index_schema_(text_index_schema),
       field_mask_(field_mask),
       term_(term),
-      exact_(exact_),
-      isstem_(isstem_) {}
+      exact_(exact_) {}
 
 EvaluationResult TermPredicate::Evaluate(Evaluator& evaluator) const {
   return evaluator.EvaluateText(*this, false);
@@ -67,8 +66,13 @@ EvaluationResult TermPredicate::Evaluate(
   std::vector<std::string> words_to_check;
   words_to_check.push_back(term_);
 
-  // Add stem variants if stemming is enabled
-  if (!exact_ && isstem_) {
+  // Pre-calculate field mask for stem variants (only fields with stemming
+  // enabled)
+  uint64_t stem_variant_field_mask =
+      field_mask & text_index_schema_->GetStemmingFieldMask();
+
+  // Add stem variants only if stemming is enabled for at least one field
+  if (!exact_ && stem_variant_field_mask != 0) {
     text_index_schema_->GetAllStemVariants(term_, words_to_check);
   }
 
@@ -84,9 +88,12 @@ EvaluationResult TermPredicate::Evaluate(
         auto postings = word_iter.GetTarget();
         if (postings) {
           auto key_iter = postings->GetKeyIterator();
-          // Skip to target key and verify it contains the required fields
+          // Skip to target key and verify it contains the appropriate fields
+          // Original term uses all fields, stem variants only use stemmable
+          // fields
           if (key_iter.SkipForwardKey(target_key) &&
-              key_iter.ContainsFields(field_mask)) {
+              key_iter.ContainsFields(
+                  word == term_ ? field_mask : stem_variant_field_mask)) {
             if (!require_positions) {
               return EvaluationResult(true);
             }

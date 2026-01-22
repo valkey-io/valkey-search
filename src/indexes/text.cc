@@ -195,7 +195,12 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
   std::vector<std::string> words_to_search;
   words_to_search.push_back(std::string(GetTextString()));
 
-  if (!IsExact() && IsStem()) {
+  // Determine if we should add stem variants by checking if any fields have
+  // stemming enabled
+  uint64_t stem_variant_field_mask =
+      fetcher->field_mask_ & GetTextIndexSchema()->GetStemmingFieldMask();
+
+  if (!IsExact() && stem_variant_field_mask != 0) {
     GetTextIndexSchema()->GetAllStemVariants(std::string(GetTextString()),
                                              words_to_search);
   }

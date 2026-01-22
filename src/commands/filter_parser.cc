@@ -471,8 +471,6 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
       !index_schema_.HasTextOffsets()) {
     return absl::InvalidArgumentError("Index does not support offsets");
   }
-  // TODO: For safety, might just add the nested check here to catch every case.
-
   // Check if we can extend existing ComposedPredicate of the same type
   // Only extend AND nodes when we're adding with AND operator
   if (prev_predicate->GetType() == query::PredicateType::kComposedAnd &&
@@ -481,9 +479,6 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
         (QueryOperations::kContainsAnd | QueryOperations::kContainsOr)) {
       query_operations_ |= QueryOperations::kContainsNestedComposed;
     }
-    if (options_.inorder || options_.slop.has_value()) {
-      query_operations_ |= QueryOperations::kContainsProximity;
-    }
     auto* composed =
         dynamic_cast<query::ComposedPredicate*>(prev_predicate.get());
     composed->AddChild(std::move(new_predicate));
@@ -491,7 +486,8 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
     return prev_predicate;
   }
   // Flatten OR nodes when not_rightmost_bracket is true at the same bracket
-  // level
+  // level. In this case, we are not creating a nested OR node since we are
+  // extending the existing one.
   if (logical_operator == query::LogicalOperator::kOr &&
       not_rightmost_bracket &&
       new_predicate->GetType() == query::PredicateType::kComposedOr) {

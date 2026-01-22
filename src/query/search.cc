@@ -151,7 +151,7 @@ inline bool IsTextComposedAndOnly(QueryOperations query_operations) {
          !(query_operations & QueryOperations::kContainsNestedComposed);
 }
 
-inline bool IsTextProximityOnly(QueryOperations query_operations) {
+inline bool IsTextProximityNonNested(QueryOperations query_operations) {
   return (IsTextComposedAndOnly(query_operations) &&
           (query_operations & QueryOperations::kContainsProximity));
 }
@@ -180,7 +180,8 @@ size_t EvaluateFilterAsPrimary(
   // This is an optimization to avoid building multiple term iterators and a
   // proximity iterator for every key's evaluation in the filtering stage (using
   // the PrefilterEvaluator).
-  if (IsTextProximityOnly(parameters.filter_parse_results.query_operations) &&
+  if (IsTextProximityNonNested(
+          parameters.filter_parse_results.query_operations) &&
       !negate) {
     CHECK(predicate->GetType() == PredicateType::kComposedAnd);
     auto composed_predicate =
@@ -190,12 +191,6 @@ size_t EvaluateFilterAsPrimary(
     entries_fetchers.push(std::move(fetcher));
     return size;
   }
-  // if (IsTextComposedAndOnly(parameters.filter_parse_results.query_operations)
-  // &&
-  //     !negate) {
-  //   CHECK(predicate->GetType() == PredicateType::kComposedAnd);
-  // // TODO
-  // }
 
   if (predicate->GetType() == PredicateType::kComposedAnd ||
       predicate->GetType() == PredicateType::kComposedOr) {

@@ -1720,6 +1720,39 @@ class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
         print("\nCleanup verification passed!")
         # Deletion pending of per_key_index, On deletion only prefix tree cleared
 
+    def test_nested_composed_or_with_slop(self):
+        """Test nested composed OR queries with SLOP parameter"""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "hash:", "SCHEMA",
+                             "title", "TEXT", "NOSTEM", "WITHSUFFIXTRIE",
+                             "body", "TEXT", "NOSTEM", "WITHSUFFIXTRIE",
+                             "color", "TAG",
+                             "price", "NUMERIC")
+        # Insert test data
+        client.execute_command("HSET", "hash:00", "title", "plum", "body", "cat slow loud shark ocean eagle tomato", "color", "green", "price", "21")
+        client.execute_command("HSET", "hash:01", "title", "kiwi peach apple chair orange door orange melon chair", "body", "lettuce", "color", "green", "price", "8")
+        client.execute_command("HSET", "hash:02", "title", "plum", "body", "river cat slow build eagle fast dog", "color", "brown", "price", "40")
+        client.execute_command("HSET", "hash:03", "title", "window smooth apple silent movie chair window puzzle door", "body", "desert city desert slow jump drive lettuce forest", "color", "blue", "price", "10")
+        client.execute_command("HSET", "hash:04", "title", "kiwi lemon orange chair door kiwi", "body", "river fast eagle loud", "color", "purple", "price", "25")
+        client.execute_command("HSET", "hash:05", "title", "lamp quick banana plum desk game story window sharp", "body", "cold village fly", "color", "red", "price", "0")
+        client.execute_command("HSET", "hash:06", "title", "chair apple puzzle", "body", "warm jump potato run desert", "color", "yellow", "price", "5")
+        client.execute_command("HSET", "hash:07", "title", "silent puzzle lemon window movie apple melon", "body", "potato ocean city potato jump carrot warm tomato", "color", "green", "price", "23")
+        client.execute_command("HSET", "hash:08", "title", "game quick music game", "body", "ocean carrot jump quiet build shark onion", "color", "black", "price", "33")
+        client.execute_command("HSET", "hash:09", "title", "music quick", "body", "city fly village potato village fly drive", "color", "orange", "price", "19")
+        client.execute_command("HSET", "hash:10", "title", "music quick", "body", "word2 word2 word2 word2 word 3 word3 word3 word1 word2 word3", "color", "orange", "price", "19")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+        # Test query: '(((door | sharp)) (sharp | desk))' SLOP 2
+        result = client.execute_command("FT.SEARCH", "idx", "(((door | sharp)) (sharp | desk))", "SLOP", "2", "DIALECT", "2")
+        assert result[0] == 0
+        # Test query: '(((shark build)))' SLOP 1
+        result = client.execute_command("FT.SEARCH", "idx", "(((shark build)))", "SLOP", "1", "DIALECT", "2")
+        assert result[0] == 1
+        assert result[1] == b"hash:08"
+        # Testing SeekForwardPosition Capability:
+        result = client.execute_command("FT.SEARCH", "idx", "word1 word2 word3", "INORDER", "DIALECT", "2")
+        assert result[0] == 1
+        assert result[1] == b"hash:10"
+
 class TestFullTextCluster(ValkeySearchClusterTestCaseDebugMode):
 
     def test_fulltext_search_cluster(self):

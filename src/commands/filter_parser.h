@@ -39,6 +39,7 @@ enum class QueryOperations : uint64_t {
   kContainsNegate = 1 << 4,
   kContainsText = 1 << 5,
   kContainsExactPhrase = 1 << 6,
+  kContainsNestedComposed = 1 << 7,
 };
 
 inline QueryOperations operator|(QueryOperations a, QueryOperations b) {

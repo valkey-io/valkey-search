@@ -471,10 +471,15 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
       !index_schema_.HasTextOffsets()) {
     return absl::InvalidArgumentError("Index does not support offsets");
   }
+  // For safety, might just add the nested check here to catch every case.
   // Check if we can extend existing ComposedPredicate of the same type
   // Only extend AND nodes when we're adding with AND operator
   if (prev_predicate->GetType() == query::PredicateType::kComposedAnd &&
       logical_operator == query::LogicalOperator::kAnd && !no_prev_grp) {
+    if (query_operations_ &
+        (QueryOperations::kContainsAnd | QueryOperations::kContainsOr)) {
+      query_operations_ |= QueryOperations::kContainsNestedComposed;
+    }
     auto* composed =
         dynamic_cast<query::ComposedPredicate*>(prev_predicate.get());
     composed->AddChild(std::move(new_predicate));
@@ -507,6 +512,12 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
   std::vector<std::unique_ptr<query::Predicate>> children;
   children.push_back(std::move(prev_predicate));
   children.push_back(std::move(new_predicate));
+  // Check if creating a nested composed predicate: if we've already created
+  // an AND or OR, and we're creating another one, it's nested
+  if (query_operations_ &
+      (QueryOperations::kContainsAnd | QueryOperations::kContainsOr)) {
+    query_operations_ |= QueryOperations::kContainsNestedComposed;
+  }
   if (logical_operator == query::LogicalOperator::kAnd) {
     query_operations_ |= QueryOperations::kContainsAnd;
   } else {
@@ -857,6 +868,8 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
       children.push_back(std::move(term));
     }
     query_operations_ |= QueryOperations::kContainsExactPhrase;
+    query_operations_ |= QueryOperations::kContainsAnd;
+    query_operations_ |= QueryOperations::kContainsText;
     pred = std::make_unique<query::ComposedPredicate>(
         query::LogicalOperator::kAnd, std::move(children), slop, inorder);
     node_count_ += terms.size() + 1;

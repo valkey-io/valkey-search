@@ -245,11 +245,12 @@ TEST_P(EvaluateFilterAsPrimaryTest, ParseParams) {
       << "Tree structure mismatch for filter: " << test_case.filter;
 
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
-  EXPECT_EQ(
-      EvaluateFilterAsPrimary(filter_parse_results.value().root_predicate.get(),
-                              entries_fetchers, false,
-                              filter_parse_results.value().query_operations),
-      test_case.evaluate_size);
+  query::SearchParameters dummy_params(100000, nullptr, 0);
+  dummy_params.filter_parse_results = std::move(filter_parse_results.value());
+  EXPECT_EQ(EvaluateFilterAsPrimary(
+                dummy_params.filter_parse_results.root_predicate.get(),
+                entries_fetchers, false, dummy_params),
+            test_case.evaluate_size);
 
   EXPECT_EQ(entries_fetchers.size(), test_case.fetcher_ids.size());
   std::vector<size_t> actual_fetcher_ids;

@@ -145,21 +145,44 @@ inline PredicateType EvaluateAsComposedPredicate(
   return PredicateType::kComposedAnd;
 }
 
-inline bool IsExactPhraseOnly(QueryOperations query_operations) {
-  return (query_operations & QueryOperations::kContainsExactPhrase) &&
-         !(query_operations &
-           (QueryOperations::kContainsAnd | QueryOperations::kContainsOr));
+inline bool IsTextComposedAndOnly(QueryOperations query_operations) {
+  return (query_operations & QueryOperations::kContainsText) &&
+         !(query_operations & QueryOperations::kContainsNestedComposed) &&
+         (query_operations & QueryOperations::kContainsAnd);
+}
+
+inline bool IsTextProximityOnly(QueryOperations query_operations,
+                                const SearchParameters &parameters) {
+  return (IsTextComposedAndOnly(query_operations) &&
+          (parameters.inorder || parameters.slop.has_value()));
+}
+
+// Contains more than one type of index type operation.
+inline bool IsHybridANDQuery(QueryOperations query_operations) {
+  int count = 0;
+  if (query_operations & QueryOperations::kContainsText) {
+    count++;
+  }
+  if (query_operations & QueryOperations::kContainsNumeric) {
+    count++;
+  }
+  if (query_operations & QueryOperations::kContainsTag) {
+    count++;
+  }
+  return count > 1 && (query_operations & QueryOperations::kContainsAnd);
 }
 
 size_t EvaluateFilterAsPrimary(
     const Predicate *predicate,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
-    bool negate, QueryOperations query_operations) {
+    bool negate, const SearchParameters &parameters) {
   // Faster path for pure exact phrase queries.
   // This is an optimization to avoid building multiple term iterators and a
   // proximity iterator for every key's evaluation in the filtering stage (using
   // the PrefilterEvaluator).
-  if (IsExactPhraseOnly(query_operations) && !negate) {
+  if (IsTextProximityOnly(parameters.filter_parse_results.query_operations,
+                          parameters) &&
+      !negate) {
     CHECK(predicate->GetType() == PredicateType::kComposedAnd);
     auto composed_predicate =
         dynamic_cast<const ComposedPredicate *>(predicate);
@@ -168,6 +191,20 @@ size_t EvaluateFilterAsPrimary(
     entries_fetchers.push(std::move(fetcher));
     return size;
   }
+  // if (IsTextComposedAndOnly(parameters.filter_parse_results.query_operations)
+  // &&
+  //     !negate) {
+  //   CHECK(predicate->GetType() == PredicateType::kComposedAnd);
+  //   // TODO: See if we can build a AND logic to check that all terms exist in
+  //   the
+  //   // key without proximity checks.
+  //   // We know we can create all the term iterators/fetchers here without
+  //   // positional requirements, but we need to check how to perform the
+  //   // AND intersection correctly and efficiently.
+  //   // NOTE: If this is not possible, we need to remove this optimization
+  //   path here
+  //   // and in the caller site to enter the general filtering logic.
+  // }
 
   if (predicate->GetType() == PredicateType::kComposedAnd ||
       predicate->GetType() == PredicateType::kComposedOr) {
@@ -181,7 +218,7 @@ size_t EvaluateFilterAsPrimary(
       for (const auto &child : composed_predicate->GetChildren()) {
         std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
         size_t child_size = EvaluateFilterAsPrimary(child.get(), child_fetchers,
-                                                    negate, query_operations);
+                                                    negate, parameters);
         if (child_size < min_size) {
           min_size = child_size;
           best_fetchers = std::move(child_fetchers);
@@ -194,7 +231,7 @@ size_t EvaluateFilterAsPrimary(
       for (const auto &child : composed_predicate->GetChildren()) {
         std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
         size_t child_size = EvaluateFilterAsPrimary(child.get(), child_fetchers,
-                                                    negate, query_operations);
+                                                    negate, parameters);
         AppendQueue(entries_fetchers, child_fetchers);
         total_size += child_size;
       }
@@ -229,7 +266,7 @@ size_t EvaluateFilterAsPrimary(
     auto negate_predicate = dynamic_cast<const NegatePredicate *>(predicate);
     size_t result =
         EvaluateFilterAsPrimary(negate_predicate->GetPredicate(),
-                                entries_fetchers, !negate, query_operations);
+                                entries_fetchers, !negate, parameters);
     return result;
   }
   CHECK(false);
@@ -446,7 +483,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
   size_t qualified_entries = EvaluateFilterAsPrimary(
       parameters.filter_parse_results.root_predicate.get(), entries_fetchers,
-      false, parameters.filter_parse_results.query_operations);
+      false, parameters);
   std::vector<indexes::Neighbor> neighbors;
   // TODO: For now, we just reserve a fixed size because text search operators
   // return a size of 0 currently.
@@ -459,21 +496,38 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
     neighbors.emplace_back(indexes::Neighbor{key, 0.0f});
     return true;
   };
-  // If AND or OR predicate, we cannot skip evaluation.
-  // The initial search done by EvaluateFilterAsPrimary does not handle
-  // union or intersection of results.
-  // However, individual predicate searches as well as exact phrases (not nested
-  // Composed AND/OR) are both handled in the initial entries fetcher search.
-  bool skip_evaluation =
-      !(parameters.filter_parse_results.query_operations &
-        (QueryOperations::kContainsOr | QueryOperations::kContainsAnd));
-  if (skip_evaluation) {
+  // Cannot skip evaluation if:
+  // 1. Contains nested composed operations
+  // 2. Is a hybrid AND query (more than one of Text/Numeric/Tag)
+  // 3. Is a Text AND, but not proximity. (Reason: We have to evaluate the non
+  // proximity AND separately currently)
+  bool requires_prefilter_evaluation =
+      (parameters.filter_parse_results.query_operations &
+       QueryOperations::kContainsNestedComposed) ||
+      IsHybridANDQuery(parameters.filter_parse_results.query_operations) ||
+      (IsTextComposedAndOnly(
+           parameters.filter_parse_results.query_operations) &&
+       !(parameters.inorder || parameters.slop.has_value()));
+  if (!requires_prefilter_evaluation) {
+    bool needs_dedup = parameters.filter_parse_results.query_operations &
+                       QueryOperations::kContainsOr;
+    absl::flat_hash_set<const char *> seen_keys;
+    if (needs_dedup) {
+      seen_keys.reserve(5000);
+    }
     while (!entries_fetchers.empty()) {
       auto fetcher = std::move(entries_fetchers.front());
       entries_fetchers.pop();
       auto iterator = fetcher->Begin();
       while (!iterator->Done()) {
         const auto &key = **iterator;
+        if (needs_dedup) {
+          if (seen_keys.contains(key->Str().data())) {
+            iterator->Next();
+            continue;
+          }
+          seen_keys.insert(key->Str().data());
+        }
         neighbors.emplace_back(indexes::Neighbor{key, 0.0f});
         iterator->Next();
         if (parameters.cancellation_token->IsCancelled()) {
@@ -522,7 +576,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearch(
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
   size_t qualified_entries = EvaluateFilterAsPrimary(
       parameters.filter_parse_results.root_predicate.get(), entries_fetchers,
-      false, parameters.filter_parse_results.query_operations);
+      false, parameters);
 
   // Query planner makes the decision for pre-filtering vs inline-filtering.
   if (UsePreFiltering(qualified_entries, vector_index)) {

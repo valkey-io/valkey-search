@@ -1031,5 +1031,4 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
   }
   return result;
 }
-
 }  // namespace valkey_search

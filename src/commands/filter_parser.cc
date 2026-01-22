@@ -471,7 +471,8 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
       !index_schema_.HasTextOffsets()) {
     return absl::InvalidArgumentError("Index does not support offsets");
   }
-  // For safety, might just add the nested check here to catch every case.
+  // TODO: For safety, might just add the nested check here to catch every case.
+
   // Check if we can extend existing ComposedPredicate of the same type
   // Only extend AND nodes when we're adding with AND operator
   if (prev_predicate->GetType() == query::PredicateType::kComposedAnd &&
@@ -479,6 +480,9 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
     if (query_operations_ &
         (QueryOperations::kContainsAnd | QueryOperations::kContainsOr)) {
       query_operations_ |= QueryOperations::kContainsNestedComposed;
+    }
+    if (options_.inorder || options_.slop.has_value()) {
+      query_operations_ |= QueryOperations::kContainsProximity;
     }
     auto* composed =
         dynamic_cast<query::ComposedPredicate*>(prev_predicate.get());
@@ -520,6 +524,9 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
   }
   if (logical_operator == query::LogicalOperator::kAnd) {
     query_operations_ |= QueryOperations::kContainsAnd;
+    if (options_.inorder || options_.slop.has_value()) {
+      query_operations_ |= QueryOperations::kContainsProximity;
+    }
   } else {
     query_operations_ |= QueryOperations::kContainsOr;
   }
@@ -867,7 +874,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
     for (auto& term : terms) {
       children.push_back(std::move(term));
     }
-    query_operations_ |= QueryOperations::kContainsExactPhrase;
+    query_operations_ |= QueryOperations::kContainsProximity;
     query_operations_ |= QueryOperations::kContainsAnd;
     query_operations_ |= QueryOperations::kContainsText;
     pred = std::make_unique<query::ComposedPredicate>(

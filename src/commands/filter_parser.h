@@ -38,7 +38,7 @@ enum class QueryOperations : uint64_t {
   kContainsTag = 1 << 3,
   kContainsNegate = 1 << 4,
   kContainsText = 1 << 5,
-  kContainsExactPhrase = 1 << 6,
+  kContainsProximity = 1 << 6,
   kContainsNestedComposed = 1 << 7,
 };
 

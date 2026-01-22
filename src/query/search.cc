@@ -147,29 +147,29 @@ inline PredicateType EvaluateAsComposedPredicate(
 
 inline bool IsTextComposedAndOnly(QueryOperations query_operations) {
   return (query_operations & QueryOperations::kContainsText) &&
-         !(query_operations & QueryOperations::kContainsNestedComposed) &&
-         (query_operations & QueryOperations::kContainsAnd);
+         (query_operations & QueryOperations::kContainsAnd) &&
+         !(query_operations & QueryOperations::kContainsNestedComposed);
 }
 
-inline bool IsTextProximityOnly(QueryOperations query_operations,
-                                const SearchParameters &parameters) {
+inline bool IsTextProximityOnly(QueryOperations query_operations) {
   return (IsTextComposedAndOnly(query_operations) &&
-          (parameters.inorder || parameters.slop.has_value()));
+          (query_operations & QueryOperations::kContainsProximity));
 }
 
-// Contains more than one type of index type operation.
-inline bool IsHybridANDQuery(QueryOperations query_operations) {
-  int count = 0;
-  if (query_operations & QueryOperations::kContainsText) {
-    count++;
+inline bool IsUnsolvedComposedAND(QueryOperations query_operations) {
+  if (query_operations & QueryOperations::kContainsNestedComposed) {
+    return true;
   }
-  if (query_operations & QueryOperations::kContainsNumeric) {
-    count++;
+  if (IsTextComposedAndOnly(query_operations) &&
+      !(query_operations & QueryOperations::kContainsProximity)) {
+    return true;
   }
-  if (query_operations & QueryOperations::kContainsTag) {
-    count++;
+  if ((query_operations &
+       (QueryOperations::kContainsNumeric | QueryOperations::kContainsTag)) &&
+      query_operations & QueryOperations::kContainsAnd) {
+    return true;
   }
-  return count > 1 && (query_operations & QueryOperations::kContainsAnd);
+  return false;
 }
 
 size_t EvaluateFilterAsPrimary(
@@ -180,8 +180,7 @@ size_t EvaluateFilterAsPrimary(
   // This is an optimization to avoid building multiple term iterators and a
   // proximity iterator for every key's evaluation in the filtering stage (using
   // the PrefilterEvaluator).
-  if (IsTextProximityOnly(parameters.filter_parse_results.query_operations,
-                          parameters) &&
+  if (IsTextProximityOnly(parameters.filter_parse_results.query_operations) &&
       !negate) {
     CHECK(predicate->GetType() == PredicateType::kComposedAnd);
     auto composed_predicate =
@@ -195,15 +194,7 @@ size_t EvaluateFilterAsPrimary(
   // &&
   //     !negate) {
   //   CHECK(predicate->GetType() == PredicateType::kComposedAnd);
-  //   // TODO: See if we can build a AND logic to check that all terms exist in
-  //   the
-  //   // key without proximity checks.
-  //   // We know we can create all the term iterators/fetchers here without
-  //   // positional requirements, but we need to check how to perform the
-  //   // AND intersection correctly and efficiently.
-  //   // NOTE: If this is not possible, we need to remove this optimization
-  //   path here
-  //   // and in the caller site to enter the general filtering logic.
+  // // TODO
   // }
 
   if (predicate->GetType() == PredicateType::kComposedAnd ||
@@ -496,18 +487,9 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
     neighbors.emplace_back(indexes::Neighbor{key, 0.0f});
     return true;
   };
-  // Cannot skip evaluation if:
-  // 1. Contains nested composed operations
-  // 2. Is a hybrid AND query (more than one of Text/Numeric/Tag)
-  // 3. Is a Text AND, but not proximity. (Reason: We have to evaluate the non
-  // proximity AND separately currently)
+  // Cannot skip evaluation if the query contains a nested composed operations
   bool requires_prefilter_evaluation =
-      (parameters.filter_parse_results.query_operations &
-       QueryOperations::kContainsNestedComposed) ||
-      IsHybridANDQuery(parameters.filter_parse_results.query_operations) ||
-      (IsTextComposedAndOnly(
-           parameters.filter_parse_results.query_operations) &&
-       !(parameters.inorder || parameters.slop.has_value()));
+      IsUnsolvedComposedAND(parameters.filter_parse_results.query_operations);
   if (!requires_prefilter_evaluation) {
     bool needs_dedup = parameters.filter_parse_results.query_operations &
                        QueryOperations::kContainsOr;

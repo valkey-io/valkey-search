@@ -136,6 +136,8 @@ class FilterParser {
       std::unique_ptr<query::Predicate> predicate, bool& negate,
       query::LogicalOperator logical_operator, bool no_prev_grp,
       bool not_rightmost_bracket);
+  void FlagNestedComposedPredicate(
+      std::unique_ptr<query::Predicate>& predicate);
 };
 
 // Helper function to print predicate tree structure using DFS

@@ -414,6 +414,19 @@ absl::StatusOr<bool> FilterParser::IsMatchAllExpression() {
   return false;
 }
 
+void FilterParser::FlagNestedComposedPredicate(
+    std::unique_ptr<query::Predicate>& predicate) {
+  auto* composed = dynamic_cast<query::ComposedPredicate*>(predicate.get());
+  if (!composed) return;
+  for (const auto& child : composed->GetChildren()) {
+    if (child->GetType() == query::PredicateType::kComposedAnd ||
+        child->GetType() == query::PredicateType::kComposedOr) {
+      query_operations_ |= QueryOperations::kContainsNestedComposed;
+      return;
+    }
+  }
+}
+
 absl::StatusOr<FilterParseResults> FilterParser::Parse() {
   VMSDK_ASSIGN_OR_RETURN(auto is_match_all_expression, IsMatchAllExpression());
   FilterParseResults results;
@@ -427,6 +440,7 @@ absl::StatusOr<FilterParseResults> FilterParser::Parse() {
     return UnexpectedChar(expression_, pos_);
   }
   results.root_predicate = std::move(parse_result.prev_predicate);
+  FlagNestedComposedPredicate(results.root_predicate);
   results.filter_identifiers.swap(filter_identifiers_);
   results.query_operations = query_operations_;
   // Only generate query syntax tree output if debug logging is enabled.
@@ -475,10 +489,12 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
   // Only extend AND nodes when we're adding with AND operator
   if (prev_predicate->GetType() == query::PredicateType::kComposedAnd &&
       logical_operator == query::LogicalOperator::kAnd && !no_prev_grp) {
-    if (query_operations_ &
-        (QueryOperations::kContainsAnd | QueryOperations::kContainsOr)) {
-      query_operations_ |= QueryOperations::kContainsNestedComposed;
-    }
+    // if (query_operations_ &
+    //     (QueryOperations::kContainsAnd | QueryOperations::kContainsOr)
+    //     && (new_predicate->GetType() == query::PredicateType::kComposedAnd ||
+    //         new_predicate->GetType() == query::PredicateType::kComposedOr)) {
+    //   query_operations_ |= QueryOperations::kContainsNestedComposed;
+    // }
     auto* composed =
         dynamic_cast<query::ComposedPredicate*>(prev_predicate.get());
     composed->AddChild(std::move(new_predicate));
@@ -514,10 +530,10 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
   children.push_back(std::move(new_predicate));
   // Check if creating a nested composed predicate: if we've already created
   // an AND or OR, and we're creating another one, it's nested
-  if (query_operations_ &
-      (QueryOperations::kContainsAnd | QueryOperations::kContainsOr)) {
-    query_operations_ |= QueryOperations::kContainsNestedComposed;
-  }
+  // if (query_operations_ &
+  //     (QueryOperations::kContainsAnd | QueryOperations::kContainsOr)) {
+  //   query_operations_ |= QueryOperations::kContainsNestedComposed;
+  // }
   if (logical_operator == query::LogicalOperator::kAnd) {
     query_operations_ |= QueryOperations::kContainsAnd;
     if (options_.inorder || options_.slop.has_value()) {

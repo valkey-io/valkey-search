@@ -145,25 +145,32 @@ inline PredicateType EvaluateAsComposedPredicate(
   return PredicateType::kComposedAnd;
 }
 
-inline bool IsTextComposedAndOnly(QueryOperations query_operations) {
+inline bool IsTextOnlyComposedAndNonNested(QueryOperations query_operations) {
   return (query_operations & QueryOperations::kContainsText) &&
          (query_operations & QueryOperations::kContainsAnd) &&
-         !(query_operations & QueryOperations::kContainsNestedComposed);
+         !(query_operations & QueryOperations::kContainsNestedComposed) &&
+         !(query_operations &
+           (QueryOperations::kContainsNumeric | QueryOperations::kContainsTag));
 }
 
-inline bool IsTextProximityNonNested(QueryOperations query_operations) {
-  return (IsTextComposedAndOnly(query_operations) &&
+inline bool IsTextProximityOnlyNonNested(QueryOperations query_operations) {
+  return (IsTextOnlyComposedAndNonNested(query_operations) &&
           (query_operations & QueryOperations::kContainsProximity));
 }
 
-inline bool IsUnsolvedComposedAND(QueryOperations query_operations) {
+inline bool IsUnsolvedComposedAnd(QueryOperations query_operations) {
+  // If there are nested composed predicates, we cannot optimize currently.
   if (query_operations & QueryOperations::kContainsNestedComposed) {
     return true;
   }
-  if (IsTextComposedAndOnly(query_operations) &&
+  // If there are only text predicates without proximity, we cannot optimize
+  // currently. We only have a positional (proximity) iterator.
+  if (IsTextOnlyComposedAndNonNested(query_operations) &&
       !(query_operations & QueryOperations::kContainsProximity)) {
     return true;
   }
+  // If there are numeric or tag predicates in an AND, we cannot optimize
+  // currently.
   if ((query_operations &
        (QueryOperations::kContainsNumeric | QueryOperations::kContainsTag)) &&
       query_operations & QueryOperations::kContainsAnd) {
@@ -180,7 +187,7 @@ size_t EvaluateFilterAsPrimary(
   // This is an optimization to avoid building multiple term iterators and a
   // proximity iterator for every key's evaluation in the filtering stage (using
   // the PrefilterEvaluator).
-  if (IsTextProximityNonNested(
+  if (IsTextProximityOnlyNonNested(
           parameters.filter_parse_results.query_operations) &&
       !negate) {
     CHECK(predicate->GetType() == PredicateType::kComposedAnd);
@@ -473,7 +480,6 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
   std::vector<indexes::Neighbor> neighbors;
   // TODO: For now, we just reserve a fixed size because text search operators
   // return a size of 0 currently.
-  // neighbors.reserve(qualified_entries);
   neighbors.reserve(5000);
   auto results_appender =
       [&neighbors, &parameters](
@@ -482,14 +488,16 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
     neighbors.emplace_back(indexes::Neighbor{key, 0.0f});
     return true;
   };
-  // Cannot skip evaluation if the query contains a nested composed operations
+  // Cannot skip evaluation if the query contains unsolved composed operations.
   bool requires_prefilter_evaluation =
-      IsUnsolvedComposedAND(parameters.filter_parse_results.query_operations);
+      IsUnsolvedComposedAnd(parameters.filter_parse_results.query_operations);
   if (!requires_prefilter_evaluation) {
     bool needs_dedup = parameters.filter_parse_results.query_operations &
                        QueryOperations::kContainsOr;
     absl::flat_hash_set<const char *> seen_keys;
     if (needs_dedup) {
+      // TODO: Use the qualified_entries size when text indexes return correct
+      // size.
       seen_keys.reserve(5000);
     }
     while (!entries_fetchers.empty()) {

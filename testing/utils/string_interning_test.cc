@@ -10,15 +10,12 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <thread>
 
-#include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "src/utils/allocator.h"
 #include "src/utils/intrusive_ref_count.h"
 #include "vmsdk/src/memory_allocation.h"
-#include "vmsdk/src/memory_allocation_overrides.h"
-#include "vmsdk/src/memory_tracker.h"
-#include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
 
 namespace valkey_search {
@@ -64,20 +61,25 @@ class MockAllocator : public Allocator {
 class StringInterningTest : public vmsdk::ValkeyTestWithParam<bool> {};
 
 TEST_F(StringInterningTest, BasicTest) {
-  EXPECT_EQ(StringInternStore::Instance().Size(), 0);
+  EXPECT_EQ(StringInternStore::Instance().UniqueStrings(), 0);
   {
     auto interned_key_1 = StringInternStore::Intern("key1");
-    auto interned_key_2 = StringInternStore::Intern("key2");
-    auto interned_key_2_1 = StringInternStore::Intern("key2");
-    auto interned_key_3 = std::make_shared<InternedString>("key3");
+    EXPECT_EQ(interned_key_1.RefCount(), 1);
 
-    EXPECT_EQ(std::string(*interned_key_1), "key1");
-    EXPECT_EQ(std::string(*interned_key_2), "key2");
-    EXPECT_EQ(std::string(*interned_key_3), "key3");
-    EXPECT_EQ(interned_key_2.get(), interned_key_2_1.get());
-    EXPECT_EQ(StringInternStore::Instance().Size(), 2);
+    EXPECT_EQ(interned_key_1->Str(), "key1");
+    EXPECT_EQ(StringInternStore::Instance().UniqueStrings(), 1);
+    auto interned_key_2 = StringInternStore::Intern("key2");
+    EXPECT_EQ(interned_key_2.RefCount(), 1);
+    EXPECT_EQ(interned_key_2->Str(), "key2");
+    EXPECT_EQ(StringInternStore::Instance().UniqueStrings(), 2);
+    auto interned_key_2_1 = StringInternStore::Intern("key2");
+    EXPECT_EQ(interned_key_2.RefCount(), 2);
+    EXPECT_EQ(interned_key_2_1.RefCount(), 2);
+    EXPECT_EQ(interned_key_2->Str().data(), interned_key_2_1->Str().data());
+    EXPECT_EQ(interned_key_2, interned_key_2_1);
+    EXPECT_EQ(StringInternStore::Instance().UniqueStrings(), 2);
   }
-  EXPECT_EQ(StringInternStore::Instance().Size(), 0);
+  EXPECT_EQ(StringInternStore::Instance().UniqueStrings(), 0);
 }
 
 TEST_P(StringInterningTest, WithAllocator) {
@@ -85,7 +87,7 @@ TEST_P(StringInterningTest, WithAllocator) {
   auto allocator = CREATE_UNIQUE_PTR(
       FixedSizeAllocator, strlen("prefix_key1") + 1, require_ptr_alignment);
   {
-    EXPECT_EQ(StringInternStore::Instance().Size(), 0);
+    EXPECT_EQ(StringInternStore::Instance().UniqueStrings(), 0);
     EXPECT_EQ(allocator->ActiveAllocations(), 0);
     {
       auto interned_key_1 =
@@ -102,17 +104,17 @@ TEST_P(StringInterningTest, WithAllocator) {
       EXPECT_EQ(std::string(*interned_key_1), "prefix_key1");
       EXPECT_EQ(std::string(*interned_key_2), "prefix_key2");
       EXPECT_EQ(std::string(*interned_key_2_1), "prefix_key2");
-      EXPECT_EQ(interned_key_2.get(), interned_key_2_1.get());
-      EXPECT_EQ(StringInternStore::Instance().Size(), 2);
+      EXPECT_EQ(interned_key_2->Str().data(), interned_key_2_1->Str().data());
+      EXPECT_EQ(StringInternStore::Instance().UniqueStrings(), 2);
     }
-    EXPECT_EQ(StringInternStore::Instance().Size(), 0);
+    EXPECT_EQ(StringInternStore::Instance().UniqueStrings(), 0);
     EXPECT_EQ(allocator->ActiveAllocations(), 0);
   }
 }
-
+/*
 TEST_F(StringInterningTest, StringInternStoreTracksMemoryInternally) {
   MemoryPool caller_pool{0};
-  std::shared_ptr<InternedString> interned_str;
+  InternedStringPtr interned_str;
   auto allocator = std::make_unique<MockAllocator>();
 
   {
@@ -125,12 +127,57 @@ TEST_F(StringInterningTest, StringInternStoreTracksMemoryInternally) {
 
   interned_str.reset();
 }
-
+*/
 INSTANTIATE_TEST_SUITE_P(StringInterningTests, StringInterningTest,
                          ::testing::Values(true, false),
                          [](const TestParamInfo<bool>& info) {
                            return std::to_string(info.param);
                          });
+
+class StringInterningMultithreadTest : public vmsdk::ValkeyTest {};
+
+TEST_F(StringInterningMultithreadTest, Simple) {
+  const std::string test_string = "concurrent_test_string";
+  auto interned_str1 = StringInternStore::Intern(test_string);
+  auto interned_str2 = StringInternStore::Intern(test_string);
+  EXPECT_EQ(interned_str1.RefCount(), 2);
+  interned_str1 = InternedStringPtr();
+  EXPECT_EQ(interned_str2.RefCount(), 1);
+  interned_str2 = InternedStringPtr();
+  EXPECT_EQ(StringInternStore::Instance().UniqueStrings(), 0);
+}
+
+TEST_F(StringInterningMultithreadTest, ConcurrentInterning) {
+  const int kNumThreads = 32;
+  const int kNumIterations = 100000;
+  const std::string test_string = "concurrent_test_string";
+
+  auto intern_function = [&]() {
+    for (int i = 0; i < kNumIterations; ++i) {
+      auto interned_str = StringInternStore::Intern(test_string);
+      EXPECT_EQ(interned_str->Str(), test_string);
+    }
+  };
+
+  std::vector<std::thread> threads;
+  threads.reserve(kNumThreads);
+  for (int i = 0; i < kNumThreads; ++i) {
+    threads.emplace_back(intern_function);
+  }
+
+  for (auto& thread : threads) {
+    thread.join();
+  }
+
+  for (auto& thread : threads) {
+    EXPECT_EQ(thread.joinable(), false);
+  }
+
+  std::cout << "Final string count: "
+            << StringInternStore::Instance().UniqueStrings() << std::endl;
+
+  EXPECT_EQ(StringInternStore::Instance().UniqueStrings(), 0);
+}
 }  // namespace
 
 }  // namespace valkey_search

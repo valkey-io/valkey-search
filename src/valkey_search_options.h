@@ -50,6 +50,12 @@ const config::Boolean& GetSkipIndexLoad();
 /// Return a mutable reference for testing
 config::Boolean& GetSkipIndexLoadMutable();
 
+/// Returns the prefilter evaluation configuration
+config::Boolean& GetEnablePrefilterEval();
+
+/// Returns the prefilter proximity evaluation configuration
+config::Boolean& GetEnableProximityPrefilterEval();
+
 /// Return the log level
 config::Enum& GetLogLevel();
 
@@ -78,8 +84,18 @@ config::Number& GetLocalFanoutQueueWaitThreshold();
 /// Return the sample queue size for thread pool wait time tracking
 config::Number& GetThreadPoolWaitTimeSamples();
 
+/// Return the maximum number of words to search in text operations (prefix,
+/// suffix, fuzzy)
+config::Number& GetMaxTermExpansions();
+
 /// Return the search result buffer multiplier value
 double GetSearchResultBufferMultiplier();
+
+/// Return the configuration entry for draining mutation queue on save
+const config::Boolean& GetDrainMutationQueueOnSave();
+
+/// Return the configuration entry for draining mutation queue on load
+const config::Boolean& GetDrainMutationQueueOnLoad();
 
 }  // namespace options
 }  // namespace valkey_search

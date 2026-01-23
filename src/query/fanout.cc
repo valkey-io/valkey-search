@@ -60,7 +60,7 @@ struct NeighborComparator {
     // Primarily used in non vector queries without scores (distance = 0).
     // The full string compare is required because for external keys there is no
     // guarantee of the stability of the InternedStringPtr across invocations.
-    return a.external_id.get()->Str() > b.external_id.get()->Str();
+    return a.external_id->Str() > b.external_id->Str();
   }
 };
 
@@ -130,13 +130,13 @@ struct SearchPartitionResultsTracker {
                                                  attribute_content.content())));
       }
       indexes::Neighbor neighbor{
-          std::make_shared<InternedString>(neighbor_entry->key()),
+          StringInternStore::Intern(neighbor_entry->key()),
           neighbor_entry->score(), std::move(attribute_contents)};
       AddResult(neighbor);
     }
   }
 
-  void AddResults(std::deque<indexes::Neighbor> &neighbors) {
+  void AddResults(std::vector<indexes::Neighbor> &neighbors) {
     absl::MutexLock lock(&mutex);
     for (auto &neighbor : neighbors) {
       AddResult(neighbor);
@@ -170,7 +170,7 @@ struct SearchPartitionResultsTracker {
     } else if (reached_oom) {
       result = absl::ResourceExhaustedError(kOOMMsg);
     } else {
-      std::deque<indexes::Neighbor> neighbors;
+      std::vector<indexes::Neighbor> neighbors;
       while (!results.empty()) {
         neighbors.push_back(
             std::move(const_cast<indexes::Neighbor &>(results.top())));

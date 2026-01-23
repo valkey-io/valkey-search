@@ -15,6 +15,7 @@ Usage: run.sh [options...]
     --debug                 Run integration tests in debug mode.
     --asan                  When passed, the integration will load the module under .build-release-asan/ | .build-debug-asan/
     --tsan                  When passed, the integration will load the module under .build-release-tsan/ | .build-debug-tsan/
+    --capture               Disable pytest output capture (shows print statements in real-time).
     --help | -h             Print this help message and exit.
 
 EOF
@@ -46,6 +47,11 @@ while [ $# -gt 0 ]; do
     shift || true
     SAN_SUFFIX="-tsan"
     LOG_INFO "Assuming TSan build"
+    ;;
+  --capture)
+    shift || true
+    export PYTEST_CAPTURE_DISABLED=1
+    LOG_INFO "pytest capture mode will be disabled"
     ;;
   --help | -h)
     print_usage
@@ -143,8 +149,16 @@ mkdir -p ${LOGS_DIR}
 
 function run_pytest() {
   zap valkey-server
-  LOG_INFO "Running: ${PYTHON_PATH} -m pytest ${FILTER_ARGS} --capture=sys --cache-clear -v ${ROOT_DIR}/integration/"
-  ${PYTHON_PATH} -m pytest ${FILTER_ARGS} --capture=sys --cache-clear -v ${ROOT_DIR}/integration/
+  
+  # Check if PYTEST_CAPTURE_DISABLED is set
+  CAPTURE_ARG="--capture=sys"
+  if [[ "${PYTEST_CAPTURE_DISABLED}" ]]; then
+    CAPTURE_ARG="--capture=no"
+    LOG_INFO "pytest capture mode is disabled"
+  fi
+  
+  LOG_INFO "Running: ${PYTHON_PATH} -m pytest ${FILTER_ARGS} ${CAPTURE_ARG} --cache-clear -v ${ROOT_DIR}/integration/"
+  ${PYTHON_PATH} -m pytest ${FILTER_ARGS} ${CAPTURE_ARG} --cache-clear -v ${ROOT_DIR}/integration/
   RUN_SUCCESS=$?
 }
 

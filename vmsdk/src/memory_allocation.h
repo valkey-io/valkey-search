@@ -11,16 +11,7 @@
 #include <cstdint>
 
 namespace vmsdk {
-
-// Updates the custom allocator to perform any future allocations using the
-// Valkey allocator.
-void UseValkeyAlloc();
-bool IsUsingValkeyAlloc();
-
-// Switch back to the default allocator. No guarantees around atomicity. Only
-// safe in single-threaded or testing environments.
-void ResetValkeyAlloc();
-
+void ResetValkeyAllocStats();
 // Report used memory counter.
 uint64_t GetUsedMemoryCnt();
 

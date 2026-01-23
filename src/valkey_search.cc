@@ -388,7 +388,7 @@ static vmsdk::info_field::Integer hnsw_create_exceptions_count(
 static vmsdk::info_field::Integer string_interning_store_size(
     "string_interning", "string_interning_store_size",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
-      return StringInternStore::Instance().Size();
+      return StringInternStore::Instance().UniqueStrings();
     }));
 
 static vmsdk::info_field::Integer vector_externing_entry_count(

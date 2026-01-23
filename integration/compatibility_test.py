@@ -350,6 +350,15 @@ def do_answer(client, expected, data_set):
         client.execute_command("FLUSHALL SYNC")
         load_data(client, expected['data_set_name'], expected['key_type'])
         data_set = (expected['data_set_name'], expected['key_type'])
+
+    # Set Valkey-specific config for inorder tests
+    if 'inorder' in expected['testname'] or 'slop' in expected['testname']:
+        try:
+            client.execute_command("CONFIG", "SET", "search.proximity-inorder-compat-mode", "yes")
+            print(f"✓ Set Valkey compat mode for test: {expected['testname']}")
+        except Exception as e:
+            print(f"⚠ Failed to set Valkey compat mode for test: {expected['testname']}, error: {e}")
+    
     result = {}
     try:
         print(f">>>>>> Starting Test {expected['testname']} So Far: Correct:{correct_answers} Wrong:{wrong_answers} <<<<<<<<<")
@@ -369,11 +378,80 @@ def do_answer(client, expected, data_set):
             mark_as_failed(expected['testname'])
     return data_set
 
+def drop_index_cluster(test_case, key_type):
+    index_name = "json_idx1" if key_type == "json" else "hash_idx1"
+    primary0 = test_case.new_client_for_primary(0)
+    try:
+        primary0.execute_command("FT.DROPINDEX", index_name)
+        print(f"Dropped index {index_name}")
+    except valkey.ResponseError:
+        pass  # index may not exist yet
+
+def do_answer_cluster(cluster_client, expected, data_set, test_case):
+    global correct_answers, failed_tests, passed_tests
+
+    next_data_set = (expected["data_set_name"], expected["key_type"])
+
+    if data_set != next_data_set:
+        print(
+            "Loading CLUSTER data set:",
+            expected["data_set_name"],
+            "key type:",
+            expected["key_type"],
+        )
+
+        drop_index_cluster(test_case, expected["key_type"])
+
+        cluster_client.execute_command("FLUSHALL")
+
+        load_data_cluster(
+            cluster_client,
+            test_case,
+            expected["data_set_name"],
+            expected["key_type"],
+        )
+
+        data_set = next_data_set
+
+    result = {}
+    try:
+        print(
+            f">>>>>> Starting CLUSTER Test {expected['testname']} "
+            f"So Far: Correct:{correct_answers} Wrong:{wrong_answers} <<<<<<<<<"
+        )
+
+        result["cmd"] = expected["cmd"]
+        result["result"] = cluster_client.execute_command(*expected["cmd"])
+        result["exception"] = False
+
+        if compare_results(expected, result):
+            mark_as_passed(expected["testname"])
+        else:
+            mark_as_failed(expected["testname"])
+
+    except valkey.ResponseError as e:
+        print(f"Got ResponseError: {e} for command {expected['cmd']}")
+        result["exception"] = True
+
+        if compare_results(expected, result):
+            mark_as_passed(expected["testname"])
+        else:
+            mark_as_failed(expected["testname"])
+
+    return data_set
+
 class TestAnswersCMD(ValkeySearchTestCaseBase):
-    @pytest.mark.parametrize("answers", ["aggregate-answers.pickle.gz"])
+    @pytest.mark.parametrize("answers", ["aggregate-answers.pickle.gz", "text-search-answers.pickle.gz"])
     def test_answers(self, answers):
         global client, data_set
         global correct_answers, failed_tests, passed_tests
+
+        # RESET GLOBAL COUNTERS AT START OF EACH TEST
+        correct_answers = 0
+        wrong_answers = 0
+        failed_tests = {}
+        passed_tests = {}
+
         print("Running test_answers with answers file:", answers)
         with gzip.open(os.getenv("ROOT_DIR") + "/integration/compatibility/" + answers, "rb") as answer_file:
             answers = pickle.load(answer_file)
@@ -418,3 +496,42 @@ class TestAnswersCMD(ValkeySearchTestCaseBase):
         for k, v in passed_tests.items():
             print(f"Passed test {k:60}: {v} times")
     '''
+
+# TODO: fix cluster mode test failures
+@pytest.mark.skip()
+class TestAnswersCME(ValkeySearchClusterTestCase):
+    @pytest.mark.parametrize("answers", ["aggregate-answers.pickle.gz"])
+    def test_answers(self, answers):
+        global correct_answers, wrong_answers, failed_tests, passed_tests
+
+        correct_answers = 0
+        wrong_answers = 0
+        failed_tests = {}
+        passed_tests = {}
+
+        print("Running CLUSTER test_answers with answers file:", answers)
+
+        with gzip.open(
+            os.getenv("ROOT_DIR") + "/integration/compatibility/" + answers,
+            "rb",
+        ) as answer_file:
+            answers = pickle.load(answer_file)
+
+        data_set = None
+        cluster_client = self.new_cluster_client()
+
+        for expected in answers:
+            data_set = do_answer_cluster(
+                cluster_client=cluster_client,
+                expected=expected,
+                data_set=data_set,
+                test_case=self,
+            )
+
+        if correct_answers != len(answers):
+            print(f"Correct answers: {correct_answers} out of {len(answers)}")
+            if failed_tests:
+                print(">>>>>>>>> Failed Tests <<<<<<<<<")
+                for k, v in failed_tests.items():
+                    print(f"Failed test {k:60}: {v} times")
+            assert False

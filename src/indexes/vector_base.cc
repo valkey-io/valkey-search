@@ -40,9 +40,11 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
+#include "src/indexes/text.h"
 #include "src/query/predicate.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
+#include "src/valkey_search_options.h"
 #include "src/vector_externalizer.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "third_party/hnswlib/space_ip.h"
@@ -83,20 +85,30 @@ bool PrefilterEvaluator::Evaluate(const query::Predicate &predicate,
   key_ = &key;
   auto res = predicate.Evaluate(*this);
   key_ = nullptr;
-  return res;
+  return res.matches;
 }
 
-bool PrefilterEvaluator::EvaluateTags(const query::TagPredicate &predicate) {
+query::EvaluationResult PrefilterEvaluator::EvaluateTags(
+    const query::TagPredicate &predicate) {
   bool case_sensitive = true;
   auto tags = predicate.GetIndex()->GetValue(*key_, case_sensitive);
   return predicate.Evaluate(tags, case_sensitive);
 }
 
-bool PrefilterEvaluator::EvaluateNumeric(
+query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(
     const query::NumericPredicate &predicate) {
   CHECK(key_);
   auto value = predicate.GetIndex()->GetValue(*key_);
   return predicate.Evaluate(value);
+}
+
+query::EvaluationResult PrefilterEvaluator::EvaluateText(
+    const query::TextPredicate &predicate, bool require_positions) {
+  CHECK(key_);
+  if (!text_index_) {
+    return query::EvaluationResult(false);
+  }
+  return predicate.Evaluate(*text_index_, *key_, require_positions);
 }
 
 template <typename T>
@@ -139,10 +151,10 @@ void VectorBase::Init(int dimensions,
   }
 }
 
-std::shared_ptr<InternedString> VectorBase::InternVector(
-    absl::string_view record, std::optional<float> &magnitude) {
+InternedStringPtr VectorBase::InternVector(absl::string_view record,
+                                           std::optional<float> &magnitude) {
   if (!IsValidSizeVector(record)) {
-    return nullptr;
+    return {};
   }
   if (normalize_) {
     magnitude = kDefaultMagnitude;
@@ -240,9 +252,10 @@ absl::StatusOr<bool> VectorBase::ModifyRecord(const InternedStringPtr &key,
 }
 
 template <typename T>
-absl::StatusOr<std::deque<Neighbor>> VectorBase::CreateReply(
+absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply(
     std::priority_queue<std::pair<T, hnswlib::labeltype>> &knn_res) {
-  std::deque<Neighbor> ret;
+  std::vector<Neighbor> ret;
+  ret.reserve(knn_res.size());
   while (!knn_res.empty()) {
     auto &ele = knn_res.top();
     auto vector_key = GetKeyDuringSearch(ele.second);
@@ -250,10 +263,12 @@ absl::StatusOr<std::deque<Neighbor>> VectorBase::CreateReply(
       knn_res.pop();
       continue;
     }
-    // Sorting in asc order.
-    ret.emplace_front(Neighbor{vector_key.value(), ele.first});
+    // Insert in desc order.
+    ret.emplace_back(Neighbor{vector_key.value(), ele.first});
     knn_res.pop();
   }
+  // Reverse to obtain asc order of closest neighbors first.
+  std::reverse(ret.begin(), ret.end());
   return ret;
 }
 
@@ -553,7 +568,7 @@ template void VectorBase::Init<float>(
     int dimensions, data_model::DistanceMetric distance_metric,
     std::unique_ptr<hnswlib::SpaceInterface<float>> &space);
 
-template absl::StatusOr<std::deque<Neighbor>> VectorBase::CreateReply<float>(
+template absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply<float>(
     std::priority_queue<std::pair<float, hnswlib::labeltype>> &knn_res);
 }  // namespace indexes
 

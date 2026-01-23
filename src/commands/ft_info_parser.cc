@@ -56,7 +56,7 @@ vmsdk::KeyValueParser<InfoCommand> CreateInfoParser() {
             return absl::OkStatus();
           }));
 
-  parser.AddParamParser("ALLSHARDS", GENERATE_NEGATED_FLAG_PARSER(
+  parser.AddParamParser("ALLSHARDS", GENERATE_NEGATIVE_FLAG_PARSER(
                                          InfoCommand, enable_partial_results));
 
   parser.AddParamParser(
@@ -65,7 +65,7 @@ vmsdk::KeyValueParser<InfoCommand> CreateInfoParser() {
   parser.AddParamParser("CONSISTENT",
                         GENERATE_FLAG_PARSER(InfoCommand, require_consistency));
 
-  parser.AddParamParser("INCONSISTENT", GENERATE_NEGATED_FLAG_PARSER(
+  parser.AddParamParser("INCONSISTENT", GENERATE_NEGATIVE_FLAG_PARSER(
                                             InfoCommand, require_consistency));
 
   return parser;

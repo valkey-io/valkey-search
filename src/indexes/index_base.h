@@ -25,7 +25,7 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
-enum class IndexerType { kHNSW, kFlat, kNumeric, kTag, kVector, kNone };
+enum class IndexerType { kHNSW, kFlat, kNumeric, kTag, kVector, kNone, kText };
 
 enum class DeletionType {
   kRecord,      // The record was deleted from the index.
@@ -36,7 +36,8 @@ enum class DeletionType {
 const absl::NoDestructor<absl::flat_hash_map<absl::string_view, IndexerType>>
     kIndexerTypeByStr({{"VECTOR", IndexerType::kVector},
                        {"TAG", IndexerType::kTag},
-                       {"NUMERIC", IndexerType::kNumeric}});
+                       {"NUMERIC", IndexerType::kNumeric},
+                       {"TEXT", IndexerType::kText}});
 
 class IndexBase {
  public:

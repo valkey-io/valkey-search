@@ -68,29 +68,65 @@ absl::StatusOr<bool> Tag::AddRecord(const InternedStringPtr& key,
   return true;
 }
 
+std::string Tag::UnescapeTag(absl::string_view tag) {
+  std::string result;
+  result.reserve(tag.size());
+  for (size_t i = 0; i < tag.size(); ++i) {
+    if (tag[i] == '\\' && i + 1 < tag.size()) {
+      // Escape sequence: consume next character literally
+      result += tag[++i];
+    } else {
+      result += tag[i];
+    }
+  }
+  return result;
+}
+
 absl::StatusOr<absl::flat_hash_set<absl::string_view>> Tag::ParseSearchTags(
     absl::string_view data, char separator) {
   absl::flat_hash_set<absl::string_view> parsed_tags;
-  std::vector<absl::string_view> parts = absl::StrSplit(data, separator);
-  for (const auto& part : parts) {
-    auto tag = absl::StripAsciiWhitespace(part);
-    if (tag.empty()) {
-      continue;
-    }
 
-    // Prefix tag is identified by a trailing '*'.
+  // Helper: validate and insert a single tag (handles prefix wildcards)
+  auto InsertTag = [&](absl::string_view raw) -> absl::Status {
+    auto tag = absl::StripAsciiWhitespace(raw);
+    if (tag.empty()) {
+      return absl::OkStatus();  // Empty tags are silently ignored
+    }
     if (tag.back() == '*') {
       if (!IsValidPrefix(tag)) {
         return absl::InvalidArgumentError(
             absl::StrCat("Tag string `", tag, "` ends with multiple *."));
       }
-      // Prefix tags that are shorter than min length are ignored.
-      if (tag.length() <= kDefaultMinPrefixLength) {
-        continue;
+      // Prefix tags shorter than min length are ignored
+      if (tag.length() > kDefaultMinPrefixLength) {
+        parsed_tags.insert(tag);
       }
+    } else {
+      parsed_tags.insert(tag);
     }
-    parsed_tags.insert(tag);
+    return absl::OkStatus();
+  };
+
+  // Parse respecting escape sequences:
+  // - \<separator> is NOT a real separator
+  // - \\ is an escaped backslash (not an escape prefix)
+  // - Unescaped separator splits tags
+  // Returns string_view positions; unescaping happens later at TagPredicate.
+  size_t tag_start = 0;
+  for (size_t i = 0; i < data.size(); ++i) {
+    if (data[i] == '\\' && i + 1 < data.size()) {
+      // Skip escaped character
+      ++i;
+    } else if (data[i] == separator) {
+      // Unescaped separator: extract tag
+      VMSDK_RETURN_IF_ERROR(InsertTag(data.substr(tag_start, i - tag_start)));
+      tag_start = i + 1;
+    }
   }
+
+  // Handle the last tag (after final separator or if no separator)
+  VMSDK_RETURN_IF_ERROR(InsertTag(data.substr(tag_start)));
+
   return parsed_tags;
 }
 
@@ -198,7 +234,7 @@ InternedStringPtr Tag::GetRawValue(const InternedStringPtr& key) const {
       it != tracked_tags_by_keys_.end()) {
     return it->second.raw_tag_string;
   }
-  return nullptr;
+  return {};
 }
 
 const absl::flat_hash_set<absl::string_view>* Tag::GetValue(

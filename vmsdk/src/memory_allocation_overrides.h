@@ -108,4 +108,15 @@ void operator delete[](void* p, std::align_val_t alignment,
 void operator delete[](void* p, size_t size,
                        std::align_val_t alignment) noexcept;
 #endif  // !SAN_BUILD
+
+namespace vmsdk {
+// Updates the custom allocator to perform any future allocations using the
+// Valkey allocator.
+void UseValkeyAlloc();
+
+// Switch back to the default allocator. No guarantees around atomicity. Only
+// safe in single-threaded or testing environments.
+void ResetValkeyAlloc();
+}  // namespace vmsdk
+
 #endif  // VMSDK_SRC_MEMORY_ALLOCATION_OVERRIDES_H_

@@ -172,7 +172,7 @@ void SendReplyTest::DoSendReplyTest(
                                .value();
   EXPECT_CALL(*test_index_schema, GetIdentifier(input.attribute_alias))
       .WillRepeatedly(testing::Return(attribute_id));
-  std::deque<indexes::Neighbor> neighbors;
+  std::vector<indexes::Neighbor> neighbors;
   for (const auto &neighbor : input.neighbors) {
     neighbors.push_back(ToIndexesNeighbor(neighbor));
   }
@@ -454,7 +454,9 @@ class FTSearchTest : public ValkeySearchTestWithParam<
       std::string vector = std::string((char *)vectors[i].data(),
                                        vectors[i].size() * sizeof(float));
       auto interned_key = StringInternStore::Intern(key);
-
+      std::cerr << "Inserting Key: " << interned_key->Str() << std::endl;
+      index_schema.value()->SetDbMutationSequenceNumber(interned_key, i);
+      index_schema.value()->SetIndexMutationSequenceNumber(interned_key, i);
       VMSDK_EXPECT_OK(index.value()->AddRecord(interned_key, vector));
     }
   }

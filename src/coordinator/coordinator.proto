@@ -48,14 +48,41 @@ message NumericPredicate {
   bool is_inclusive_end = 5;
 }
 
+message TermPredicate {
+  uint64 field_mask = 1;
+  string content = 2;
+  bool exact = 3;
+}
+
+message PrefixPredicate {
+  uint64 field_mask = 1;
+  string content = 2;
+}
+
+message SuffixPredicate {
+  uint64 field_mask = 1;
+  string content = 2;
+}
+
+message InfixPredicate {
+  uint64 field_mask = 1;
+  string content = 2;
+}
+
+message FuzzyPredicate {
+  uint64 field_mask = 1;
+  string content = 2;
+  uint32 distance = 3;
+}
+
 message AndPredicate {
-  Predicate lhs = 1;
-  Predicate rhs = 2;
+  repeated Predicate children = 1;
+  optional uint32 slop = 2;
+  bool inorder = 3;
 }
 
 message OrPredicate {
-  Predicate lhs = 1;
-  Predicate rhs = 2;
+  repeated Predicate children = 1;
 }
 
 message NegatePredicate {
@@ -69,6 +96,11 @@ message Predicate {
     AndPredicate and = 3;
     OrPredicate or = 4;
     NegatePredicate negate = 5;
+    TermPredicate term = 6;
+    PrefixPredicate prefix = 7;
+    SuffixPredicate suffix = 8;
+    InfixPredicate infix = 9;
+    FuzzyPredicate fuzzy = 10;
   }
 }
 
@@ -100,6 +132,7 @@ message SearchIndexPartitionRequest {
   bool enable_consistency = 15;
   IndexFingerprintVersion index_fingerprint_version = 16;
   uint64 slot_fingerprint = 17;
+  uint64 query_operations = 18;
 }
 
 message NeighborEntry {
@@ -178,6 +211,7 @@ message InfoIndexPartitionResponse {
   uint64 recent_mutations_queue_delay = 12;
   string state = 13;
   string error = 14;
-  FanoutErrorType error_type = 15;
-  uint32 db_num = 16;
+  optional IndexFingerprintVersion index_fingerprint_version = 15;
+  FanoutErrorType error_type = 16;
+  uint32 db_num = 17;
 }

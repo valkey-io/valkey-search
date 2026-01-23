@@ -13,7 +13,6 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
-#include <queue>
 #include <string>
 #include <vector>
 
@@ -28,13 +27,16 @@
 #include "gtest/gtest_prod.h"
 #include "src/attribute.h"
 #include "src/attribute_data_type.h"
+#include "src/commands/ft_create_parser.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/text/text_index.h"
 #include "src/indexes/vector_base.h"
 #include "src/keyspace_event_manager.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/blocked_client.h"
+#include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/time_sliced_mrmw_mutex.h"
@@ -45,8 +47,11 @@ namespace valkey_search {
 bool ShouldBlockClient(ValkeyModuleCtx *ctx, bool inside_multi_exec,
                        bool from_backfill);
 
+using Key = InternedStringPtr;
+using MutationSequenceNumber = uint64_t;
 using RDBLoadFunc = void *(*)(ValkeyModuleIO *, int);
 using FreeFunc = void (*)(void *);
+using FieldMaskPredicate = uint64_t;
 
 class IndexSchema : public KeyspaceEventSubscription,
                     public std::enable_shared_from_this<IndexSchema> {
@@ -94,6 +99,15 @@ class IndexSchema : public KeyspaceEventSubscription,
   ~IndexSchema() override;
   absl::StatusOr<std::shared_ptr<indexes::IndexBase>> GetIndex(
       absl::string_view attribute_alias) const;
+  inline bool HasTextOffsets() const { return with_offsets_; }
+  const absl::flat_hash_set<std::string> &GetAllTextIdentifiers(
+      bool with_suffix) const;
+  FieldMaskPredicate GetAllTextFieldMask(bool with_suffix) const;
+  std::optional<uint32_t> MinStemSizeAcrossTextIndexes(bool with_suffix) const;
+  void UpdateTextFieldMasksForIndex(const std::string &identifier,
+                                    indexes::IndexBase *index);
+  absl::flat_hash_set<std::string> GetTextIdentifiersByFieldMask(
+      FieldMaskPredicate field_mask) const;
   virtual absl::StatusOr<std::string> GetIdentifier(
       absl::string_view attribute_alias) const;
   absl::StatusOr<std::string> GetAlias(absl::string_view identifier) const;
@@ -116,6 +130,13 @@ class IndexSchema : public KeyspaceEventSubscription,
   inline const std::string &GetName() const { return name_; }
   inline std::uint32_t GetDBNum() const { return db_num_; }
 
+  void CreateTextIndexSchema() {
+    text_index_schema_ = std::make_shared<indexes::text::TextIndexSchema>(
+        language_, punctuation_, with_offsets_, stop_words_);
+  }
+  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
+    return text_index_schema_;
+  }
   inline uint64_t GetFingerprint() const { return fingerprint_; }
   inline uint32_t GetVersion() const { return version_; }
 
@@ -161,7 +182,7 @@ class IndexSchema : public KeyspaceEventSubscription,
 
   inline const Stats &GetStats() const { return stats_; }
   void ProcessSingleMutationAsync(ValkeyModuleCtx *ctx, bool from_backfill,
-                                  const InternedStringPtr &key,
+                                  const Key &key,
                                   vmsdk::StopWatch *delay_capturer);
   std::unique_ptr<data_model::IndexSchema> ToProto() const;
   struct DocumentMutation {
@@ -171,6 +192,7 @@ class IndexSchema : public KeyspaceEventSubscription,
     };
     std::optional<absl::flat_hash_map<std::string, AttributeData>> attributes;
     std::vector<vmsdk::BlockedClient> blocked_clients;
+    MutationSequenceNumber sequence_number{0};
     bool consume_in_progress{false};
     bool from_backfill{false};
     bool from_multi{false};
@@ -188,6 +210,41 @@ class IndexSchema : public KeyspaceEventSubscription,
   uint64_t GetBackfillDbSize() const;
   InfoIndexPartitionData GetInfoIndexPartitionData() const;
 
+  static absl::Status TextInfoCmd(ValkeyModuleCtx *ctx,
+                                  vmsdk::ArgsIterator &itr);
+  struct DbKeyInfo {
+    MutationSequenceNumber mutation_sequence_number_{0};
+  };
+
+  struct IndexKeyInfo {
+    MutationSequenceNumber mutation_sequence_number_{0};
+  };
+
+  MutationSequenceNumber GetIndexMutationSequenceNumber(const Key &key) const {
+    auto itr = index_key_info_.find(key);
+    CHECK(itr != index_key_info_.end()) << "Key not found: " << key->Str();
+    return itr->second.mutation_sequence_number_;
+  }
+
+  MutationSequenceNumber GetDbMutationSequenceNumber(const Key &key) const {
+    vmsdk::VerifyMainThread();
+    auto itr = db_key_info_.Get().find(key);
+    CHECK(itr != db_key_info_.Get().end()) << "Key not found: " << key->Str();
+    return itr->second.mutation_sequence_number_;
+  }
+
+  // Unit test only
+  void SetDbMutationSequenceNumber(const Key &key,
+                                   MutationSequenceNumber sequence_number) {
+    db_key_info_.Get()[key].mutation_sequence_number_ = sequence_number;
+  }
+  // Unit test only
+  void SetIndexMutationSequenceNumber(const Key &key,
+                                      MutationSequenceNumber sequence_number) {
+    absl::MutexLock lock(&mutated_records_mutex_);
+    index_key_info_[key].mutation_sequence_number_ = sequence_number;
+  }
+
  protected:
   IndexSchema(ValkeyModuleCtx *ctx,
               const data_model::IndexSchema &index_schema_proto,
@@ -204,15 +261,33 @@ class IndexSchema : public KeyspaceEventSubscription,
   std::unique_ptr<AttributeDataType> attribute_data_type_;
   std::string name_;
   uint32_t db_num_{0};
+  data_model::Language language_{data_model::LANGUAGE_ENGLISH};
+  std::string punctuation_;
+  bool with_offsets_{true};
+  std::vector<std::string> stop_words_;
+  std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
+  // Precomputed text field information for searches
+  uint64_t all_text_field_mask_{0ULL};
+  uint64_t suffix_text_field_mask_{0ULL};
+  std::optional<uint32_t> all_fields_min_stem_size_{std::nullopt};
+  std::optional<uint32_t> suffix_fields_min_stem_size_{std::nullopt};
+  absl::flat_hash_set<std::string> all_text_identifiers_;
+  absl::flat_hash_set<std::string> suffix_text_identifiers_;
   bool loaded_v2_{false};
   uint64_t fingerprint_{0};
   uint32_t version_{0};
 
   vmsdk::ThreadPool *mutations_thread_pool_{nullptr};
-  InternedStringMap<DocumentMutation> tracked_mutated_records_
+  InternedStringHashMap<DocumentMutation> tracked_mutated_records_
       ABSL_GUARDED_BY(mutated_records_mutex_);
   bool is_destructing_ ABSL_GUARDED_BY(mutated_records_mutex_){false};
   mutable absl::Mutex mutated_records_mutex_;
+
+  MutationSequenceNumber schema_mutation_sequence_number_{0};
+  vmsdk::MainThreadAccessGuard<absl::flat_hash_map<Key, DbKeyInfo>>
+      db_key_info_;  // Mainthread.
+  absl::flat_hash_map<Key, IndexKeyInfo> index_key_info_ ABSL_GUARDED_BY(
+      mutated_records_mutex_);  // updates are guarded by mutated_records_mutex_
 
   struct BackfillJob {
     BackfillJob() = delete;
@@ -233,7 +308,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   vmsdk::MainThreadAccessGuard<std::optional<BackfillJob>> backfill_job_;
   absl::flat_hash_map<std::string, indexes::VectorBase *>
       vector_externalizer_subscriptions_;
-  void VectorExternalizer(const InternedStringPtr &key,
+  void VectorExternalizer(const Key &key,
                           absl::string_view attribute_identifier,
                           vmsdk::UniqueValkeyString &record);
 
@@ -244,20 +319,21 @@ class IndexSchema : public KeyspaceEventSubscription,
 
   void ProcessMutation(ValkeyModuleCtx *ctx,
                        MutatedAttributes &mutated_attributes,
-                       const InternedStringPtr &interned_key,
-                       bool from_backfill);
-  void ScheduleMutation(bool from_backfill, const InternedStringPtr &key,
+                       const Key &interned_key, bool from_backfill,
+                       bool is_delete);
+  void ScheduleMutation(bool from_backfill, const Key &key,
                         vmsdk::ThreadPool::Priority priority,
                         absl::BlockingCounter *blocking_counter);
-  void EnqueueMultiMutation(const InternedStringPtr &key);
+  void EnqueueMultiMutation(const Key &key);
+  void DrainMutationQueue(ValkeyModuleCtx *ctx) const
+      ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
 
-  bool IsTrackedByAnyIndex(const InternedStringPtr &key) const;
+  bool IsTrackedByAnyIndex(const Key &key) const;
   void SyncProcessMutation(ValkeyModuleCtx *ctx,
                            MutatedAttributes &mutated_attributes,
-                           const InternedStringPtr &key);
+                           const Key &key);
   void ProcessAttributeMutation(ValkeyModuleCtx *ctx,
-                                const Attribute &attribute,
-                                const InternedStringPtr &key,
+                                const Attribute &attribute, const Key &key,
                                 vmsdk::UniqueValkeyString data,
                                 indexes::DeletionType deletion_type);
   static void BackfillScanCallback(ValkeyModuleCtx *ctx,
@@ -266,15 +342,18 @@ class IndexSchema : public KeyspaceEventSubscription,
   bool DeleteIfNotInValkeyDict(ValkeyModuleCtx *ctx, ValkeyModuleString *key,
                                const Attribute &attribute);
   vmsdk::BlockedClientCategory GetBlockedCategoryFromProto() const;
-  bool InTrackedMutationRecords(const InternedStringPtr &key,
+  bool InTrackedMutationRecords(const Key &key,
                                 const std::string &identifier) const;
-  bool TrackMutatedRecord(ValkeyModuleCtx *ctx, const InternedStringPtr &key,
+  bool TrackMutatedRecord(ValkeyModuleCtx *ctx, const Key &key,
                           MutatedAttributes &&mutated_attributes,
+                          MutationSequenceNumber sequence_number,
                           bool from_backfill, bool block_client,
                           bool from_multi)
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
+  bool IsKeyInFlight(const InternedStringPtr &key) const
+      ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
   std::optional<MutatedAttributes> ConsumeTrackedMutatedAttribute(
-      const InternedStringPtr &key, bool first_time)
+      const Key &key, bool first_time)
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
   size_t GetMutatedRecordsSize() const
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
@@ -282,7 +361,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   mutable vmsdk::TimeSlicedMRMWMutex time_sliced_mutex_;
   struct MultiMutations {
     std::unique_ptr<absl::BlockingCounter> blocking_counter;
-    std::deque<InternedStringPtr> keys;
+    std::deque<Key> keys;
   };
   vmsdk::MainThreadAccessGuard<MultiMutations> multi_mutations_;
   vmsdk::MainThreadAccessGuard<bool> schedule_multi_exec_processing_{false};

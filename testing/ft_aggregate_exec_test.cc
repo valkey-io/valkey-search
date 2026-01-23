@@ -91,6 +91,11 @@ struct AggregateExecTest : public vmsdk::ValkeyTest {
 
     auto result = parser.Parse(*params, itr);
     EXPECT_TRUE(result.ok()) << " Status is: " << result << "\n";
+
+    // Free the allocated ValkeyModuleStrings to avoid memory leaks
+    for (auto* str : argv) {
+      ValkeyModule_FreeString(nullptr, str);
+    }
     return params;
   }
 };

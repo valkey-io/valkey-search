@@ -41,7 +41,7 @@ using testing::ValuesIn;
 class MockPredicate : public query::Predicate {
  public:
   explicit MockPredicate(query::PredicateType type) : query::Predicate(type) {}
-  MOCK_METHOD(bool, Evaluate, (query::Evaluator & evaluator),
+  MOCK_METHOD(query::EvaluationResult, Evaluate, (query::Evaluator & evaluator),
               (override, const));
 };
 
@@ -77,11 +77,12 @@ TEST_P(ResponseGeneratorTest, ProcessNeighborsForReply) {
   auto &params = GetParam();
   ValkeyModuleCtx fake_ctx;
 
-  std::deque<indexes::Neighbor> expected_neighbors;
+  std::vector<indexes::Neighbor> expected_neighbors;
   for (const auto &external_id : params.external_id_neighbors) {
     auto string_interned_external_id = StringInternStore::Intern(external_id);
     expected_neighbors.push_back(
         indexes::Neighbor(string_interned_external_id, 0));
+    expected_neighbors.back().sequence_number = 0;
   }
   std::vector<RecordsMap> expected_contents;
   expected_contents.reserve(params.expected_contents.size());
@@ -89,6 +90,15 @@ TEST_P(ResponseGeneratorTest, ProcessNeighborsForReply) {
     expected_contents.push_back(ToRecordsMap(expected_content));
   }
   query::SearchParameters parameters(100000, nullptr, 0);
+  parameters.index_schema = CreateIndexSchema("index").value();
+  for (const auto &n : expected_neighbors) {
+    parameters.index_schema->SetIndexMutationSequenceNumber(n.external_id,
+                                                            n.sequence_number);
+    parameters.index_schema->SetDbMutationSequenceNumber(
+        n.external_id,
+        n.sequence_number + 1);  // + 1 forces call to filter.
+  }
+
   for (const auto &return_attribute : params.return_attributes) {
     parameters.return_attributes.push_back(
         {.identifier =
@@ -104,10 +114,11 @@ TEST_P(ResponseGeneratorTest, ProcessNeighborsForReply) {
       .WillRepeatedly([&params, &filter_evaluate_cnt](
                           [[maybe_unused]] query::Evaluator &evaluator) {
         if (params.filter_evaluate_not_match_index == -1) {
-          return true;
+          return query::EvaluationResult(true);
         }
         ++filter_evaluate_cnt;
-        return (filter_evaluate_cnt != params.filter_evaluate_not_match_index);
+        return query::EvaluationResult(filter_evaluate_cnt !=
+                                       params.filter_evaluate_not_match_index);
       });
 
   parameters.filter_parse_results.root_predicate = std::move(predicate);
@@ -165,7 +176,7 @@ TEST_F(ResponseGeneratorTest, ProcessNeighborsForReplyContentLimits) {
       options::GetMaxSearchResultFieldsCount().SetValue(test_fields_limit));
 
   // Create neighbors with different content sizes and field counts
-  std::deque<indexes::Neighbor> neighbors;
+  std::vector<indexes::Neighbor> neighbors;
   auto small_external_id = StringInternStore::Intern("small_content_id");
   auto large_external_id = StringInternStore::Intern("large_content_id");
   auto many_fields_id = StringInternStore::Intern("many_fields_id");

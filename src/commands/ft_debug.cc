@@ -8,8 +8,11 @@
 #include <absl/base/no_destructor.h>
 #include <absl/strings/ascii.h>
 
+#include "module_config.h"
 #include "src/coordinator/metadata_manager.h"
+#include "src/index_schema.h"
 #include "src/schema_manager.h"
+#include "src/utils/string_interning.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/info.h"
@@ -133,6 +136,123 @@ absl::Status ControlledCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
   return absl::OkStatus();
 }
 
+/*
+FT._DEBUG STRINGPOOLSTATS
+
+Output is an array with elements:
+[0] is one bucket of stats for all Inline Strings (essentially non-vectors)
+[1] is one bucket of status for Out-of-Line Strings (essentially vectors)
+[2] is a Histogram of all Strings by reference count.
+[3] is a Histogram of all Strings by size.
+
+A histogram is an array of entries. Each entry is an array of 2 elements.
+The first element is the bucket-designator, the second element is a bucket of
+strings that satisfy the bucket-designator.
+
+The bucket-designator is a signed number. If the number is negative then this
+bucket is for out-of-line strings. If the number is positive then this bucket is
+for inline strings. The magnitude of the number is either the reference count or
+string size.
+
+A bucket is an array of key/value pairs:
+
+Count: Number of strings in this bucket
+Bytes: Total number of "Active" bytes (excludes allocated, but unused space)
+AvgSize: Bytes / Count
+Allocated: Total number of bytes allocated (including unused space)
+AvgAllocated: Allocated / Count
+Utilization: AvgSize / AvgAllocated
+
+*/
+void DumpBucket(ValkeyModuleCtx *ctx,
+                const StringInternStore::Stats::BucketStats &bucket) {
+  ValkeyModule_ReplyWithArray(ctx, 12);
+  ValkeyModule_ReplyWithCString(ctx, "Count");
+  ValkeyModule_ReplyWithLongLong(ctx, bucket.count_);
+  ValkeyModule_ReplyWithCString(ctx, "Bytes");
+  ValkeyModule_ReplyWithLongLong(ctx, bucket.bytes_);
+  ValkeyModule_ReplyWithCString(ctx, "AvgSize");
+  auto avg_size =
+      bucket.count_ == 0 ? 0 : bucket.bytes_ / double(bucket.count_);
+  ValkeyModule_ReplyWithDouble(ctx, avg_size);
+  ValkeyModule_ReplyWithCString(ctx, "Allocated");
+  ValkeyModule_ReplyWithLongLong(ctx, bucket.allocated_);
+  ValkeyModule_ReplyWithCString(ctx, "AvgAllocated");
+  auto avg_allocated =
+      bucket.count_ == 0 ? 0 : bucket.allocated_ / double(bucket.count_);
+  ValkeyModule_ReplyWithDouble(ctx, avg_allocated);
+  auto utilization =
+      (avg_size == 0 || avg_allocated == 0) ? 0 : avg_size / avg_allocated;
+  ValkeyModule_ReplyWithCString(ctx, "Utilization");
+  ValkeyModule_ReplyWithLongLong(ctx, int(100.0 * utilization));
+}
+
+std::ostream &operator<<(std::ostream &os,
+                         const StringInternStore::Stats::BucketStats &bucket) {
+  auto avg_size =
+      bucket.count_ == 0 ? 0 : bucket.bytes_ / double(bucket.count_);
+  auto avg_allocated =
+      bucket.count_ == 0 ? 0 : bucket.allocated_ / double(bucket.count_);
+  auto utilization =
+      (avg_size == 0 || avg_allocated == 0) ? 0 : avg_size / avg_allocated;
+  return os << "Count: " << bucket.count_ << " Bytes: " << bucket.bytes_
+            << " AvgSize: " << avg_size << " Allocated: " << bucket.allocated_
+            << " AvgAllocated: " << avg_allocated
+            << " Utilization: " << int(100.0 * utilization) << '%';
+}
+
+absl::Status StringPoolStats(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
+  VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
+  auto stats = StringInternStore::Instance().GetStats();
+  ValkeyModule_ReplyWithArray(ctx, 4);
+  // Reply[0] -> GlobalStats
+  DumpBucket(ctx, stats.inline_total_stats_);
+  DumpBucket(ctx, stats.out_of_line_total_stats_);
+  // Reply[1] -> ByRefcount
+  ValkeyModule_ReplyWithArray(ctx, stats.by_ref_stats_.size());
+  for (auto &hist : stats.by_ref_stats_) {
+    ValkeyModule_ReplyWithArray(ctx, 2);
+    ValkeyModule_ReplyWithLongLong(ctx, hist.first);
+    DumpBucket(ctx, hist.second);
+  }
+  ValkeyModule_ReplyWithArray(ctx, stats.by_size_stats_.size());
+  for (auto &hist : stats.by_size_stats_) {
+    ValkeyModule_ReplyWithArray(ctx, 2);
+    ValkeyModule_ReplyWithLongLong(ctx, hist.first);
+    DumpBucket(ctx, hist.second);
+  }
+  //
+  // Put the stats into the log
+  //
+  VMSDK_LOG(NOTICE, ctx) << "<<<< Start InternStringPool Stats >>>>>";
+  VMSDK_LOG(NOTICE, ctx) << "Inline Total: " << stats.inline_total_stats_;
+  VMSDK_LOG(NOTICE, ctx) << "OutOfLine Total: "
+                         << stats.out_of_line_total_stats_;
+  VMSDK_LOG(NOTICE, ctx) << "ByRefCount Buckets: "
+                         << stats.by_ref_stats_.size();
+  for (auto &hist : stats.by_ref_stats_) {
+    if (hist.first > 0) {
+      VMSDK_LOG(NOTICE, ctx)
+          << "InlineRef: " << hist.first << " " << hist.second;
+    } else {
+      VMSDK_LOG(NOTICE, ctx)
+          << "OutOfLineRef: " << -hist.first << " " << hist.second;
+    }
+  }
+  VMSDK_LOG(NOTICE, ctx) << "BySize Buckets: " << stats.by_size_stats_.size();
+  for (auto &hist : stats.by_size_stats_) {
+    if (hist.first > 0) {
+      VMSDK_LOG(NOTICE, ctx)
+          << "InlineSize: " << hist.first << " " << hist.second;
+    } else {
+      VMSDK_LOG(NOTICE, ctx)
+          << "OutOfLineSize: " << -hist.first << " " << hist.second;
+    }
+  }
+  VMSDK_LOG(NOTICE, ctx) << "<<<< End InternStringPool Stats >>>>>";
+  return absl::OkStatus();
+}
+
 absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
   VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
   static std::vector<std::pair<std::string, std::string>> help_text{
@@ -145,6 +265,8 @@ absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
        "list all controlled variables and their values"},
       {"FT._DEBUG PAUSEPOINT [ SET | RESET | TEST | LIST] <pausepoint>",
        "control pause points"},
+      {"FT._DEBUG TEXTINFO <index> ...", "show info about schema-level text"},
+      {"FT._DEBUG STRINGPOOLSTATS", "Show InternStringPool Stats"},
       {"FT_DEBUG SHOW_METADATA",
        "list internal metadata manager table namespace"},
       {"FT_DEBUG SHOW_INDEXSCHEMAS", "list internal index schema tables"},
@@ -184,11 +306,15 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, keyword));
   keyword = absl::AsciiStrToUpper(keyword);
   if (keyword == "SHOW_INFO") {
-    return vmsdk::info_field::ShowInfo(ctx, itr, options);
+    return vmsdk::info_field::ShowInfo(ctx, itr, ::options);
   } else if (keyword == "PAUSEPOINT") {
     return PausePointControlCmd(ctx, itr);
   } else if (keyword == "CONTROLLED_VARIABLE") {
     return ControlledCmd(ctx, itr);
+  } else if (keyword == "STRINGPOOLSTATS") {
+    return StringPoolStats(ctx, itr);
+  } else if (keyword == "TEXTINFO") {
+    return IndexSchema::TextInfoCmd(ctx, itr);
   } else if (keyword == "SHOW_METADATA") {
     return valkey_search::coordinator::MetadataManager::Instance().ShowMetadata(
         ctx, itr);

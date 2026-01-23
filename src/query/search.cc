@@ -145,28 +145,26 @@ inline PredicateType EvaluateAsComposedPredicate(
   return PredicateType::kComposedAnd;
 }
 
-inline bool IsTextOnlyComposedAndNonNested(QueryOperations query_operations) {
-  return (query_operations & QueryOperations::kContainsText) &&
-         (query_operations & QueryOperations::kContainsAnd) &&
-         !(query_operations & QueryOperations::kContainsNestedComposed) &&
-         !(query_operations &
-           (QueryOperations::kContainsNumeric | QueryOperations::kContainsTag));
-}
-
+// Helper fn to identify pure text proximity composed AND predicates without
+// nesting as this can be optimized with a faster path.
 inline bool IsTextProximityOnlyNonNested(QueryOperations query_operations) {
-  return (IsTextOnlyComposedAndNonNested(query_operations) &&
-          (query_operations & QueryOperations::kContainsProximity));
+  // 1. Must contain all three: Text, And, and Proximity
+  bool has_required = (query_operations & QueryOperations::kContainsText) &&
+                      (query_operations & QueryOperations::kContainsAnd) &&
+                      (query_operations & QueryOperations::kContainsProximity);
+  // 2. Must NOT contain any of: Nested, Numeric, or Tag
+  bool has_forbidden =
+      query_operations &
+      (QueryOperations::kContainsNestedComposed |
+       QueryOperations::kContainsNumeric | QueryOperations::kContainsTag);
+  return has_required && !has_forbidden;
 }
 
+// Helper fn to identify composed AND predicates that we cannot optimize
+// currently.
 inline bool IsUnsolvedComposedAnd(QueryOperations query_operations) {
   // If there are nested composed predicates, we cannot optimize currently.
   if (query_operations & QueryOperations::kContainsNestedComposed) {
-    return true;
-  }
-  // If there are only text predicates without proximity, we cannot optimize
-  // currently. We only have a positional (proximity) iterator.
-  if (IsTextOnlyComposedAndNonNested(query_operations) &&
-      !(query_operations & QueryOperations::kContainsProximity)) {
     return true;
   }
   // If there are numeric or tag predicates in an AND, we cannot optimize
@@ -174,6 +172,13 @@ inline bool IsUnsolvedComposedAnd(QueryOperations query_operations) {
   if ((query_operations &
        (QueryOperations::kContainsNumeric | QueryOperations::kContainsTag)) &&
       query_operations & QueryOperations::kContainsAnd) {
+    return true;
+  }
+  // If there are only text predicates without proximity, we cannot optimize
+  // currently. We only have a positional (proximity) iterator.
+  if ((query_operations & QueryOperations::kContainsText) &&
+      (query_operations & QueryOperations::kContainsAnd) &&
+      !(query_operations & QueryOperations::kContainsProximity)) {
     return true;
   }
   return false;

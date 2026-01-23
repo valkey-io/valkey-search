@@ -182,14 +182,12 @@ inline bool IsUnsolvedComposedAnd(QueryOperations query_operations) {
 size_t EvaluateFilterAsPrimary(
     const Predicate *predicate,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
-    bool negate, const SearchParameters &parameters) {
+    bool negate, QueryOperations query_operations) {
   // Faster path for pure exact phrase queries.
   // This is an optimization to avoid building multiple term iterators and a
   // proximity iterator for every key's evaluation in the filtering stage (using
   // the PrefilterEvaluator).
-  if (IsTextProximityOnlyNonNested(
-          parameters.filter_parse_results.query_operations) &&
-      !negate) {
+  if (IsTextProximityOnlyNonNested(query_operations) && !negate) {
     CHECK(predicate->GetType() == PredicateType::kComposedAnd);
     auto composed_predicate =
         dynamic_cast<const ComposedPredicate *>(predicate);
@@ -211,7 +209,7 @@ size_t EvaluateFilterAsPrimary(
       for (const auto &child : composed_predicate->GetChildren()) {
         std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
         size_t child_size = EvaluateFilterAsPrimary(child.get(), child_fetchers,
-                                                    negate, parameters);
+                                                    negate, query_operations);
         if (child_size < min_size) {
           min_size = child_size;
           best_fetchers = std::move(child_fetchers);
@@ -224,7 +222,7 @@ size_t EvaluateFilterAsPrimary(
       for (const auto &child : composed_predicate->GetChildren()) {
         std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
         size_t child_size = EvaluateFilterAsPrimary(child.get(), child_fetchers,
-                                                    negate, parameters);
+                                                    negate, query_operations);
         AppendQueue(entries_fetchers, child_fetchers);
         total_size += child_size;
       }
@@ -259,7 +257,7 @@ size_t EvaluateFilterAsPrimary(
     auto negate_predicate = dynamic_cast<const NegatePredicate *>(predicate);
     size_t result =
         EvaluateFilterAsPrimary(negate_predicate->GetPredicate(),
-                                entries_fetchers, !negate, parameters);
+                                entries_fetchers, !negate, query_operations);
     return result;
   }
   CHECK(false);
@@ -476,7 +474,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
   size_t qualified_entries = EvaluateFilterAsPrimary(
       parameters.filter_parse_results.root_predicate.get(), entries_fetchers,
-      false, parameters);
+      false, parameters.filter_parse_results.query_operations);
   std::vector<indexes::Neighbor> neighbors;
   // TODO: For now, we just reserve a fixed size because text search operators
   // return a size of 0 currently.
@@ -561,7 +559,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearch(
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
   size_t qualified_entries = EvaluateFilterAsPrimary(
       parameters.filter_parse_results.root_predicate.get(), entries_fetchers,
-      false, parameters);
+      false, parameters.filter_parse_results.query_operations);
 
   // Query planner makes the decision for pre-filtering vs inline-filtering.
   if (UsePreFiltering(qualified_entries, vector_index)) {

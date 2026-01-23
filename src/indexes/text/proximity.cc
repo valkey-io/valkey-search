@@ -238,7 +238,7 @@ ProximityIterator::FindViolatingIterator() {
           seek_target > positions_[next_idx].start
               ? std::make_optional(seek_target)
               : std::nullopt;
-      return ViolationInfo{next_idx, seek_target};
+      return ViolationInfo{next_idx, target_opt};
     }
   }
   // Check slop violations.

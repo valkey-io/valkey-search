@@ -8,11 +8,44 @@
 #include "src/utils/string_interning.h"
 
 #include <cstring>
+#include <utility>
 
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "src/utils/allocator.h"
 #include "vmsdk/src/memory_tracker.h"
+
+/*
+
+String interning works by storing a single copy of each distinct string value,
+which must be immutable. Interned strings are reference-counted, and when the
+last reference to an interned string is released, the string is removed from
+the intern pool and its memory is freed.
+
+The property of distinctness allows for fast comparisons and hashing by using
+the memory address of the interned string object. Rather than comparing string
+contents.
+
+Like std::shared_ptr, each unique instance of the string contains an atomic
+reference count that is incremented and decremented as references are created
+and destroyed. This allows the references to strings to be moved, duplicated and
+destroyed without additional synchronization. Global synchronization is only
+needed when obtaining a pointer to a string (which might involve creating a new
+interned string if string is unknown) or when the last reference to a string is
+released.
+
+In addition to the ref-counted strings themselves is a global map that serves to
+ensure that each distinct string is only stored once. This map is protected by a
+mutex to ensure thread safety. The map invariant is that an entry exists iff
+the associated reference count is greater than zero. Thus incrementing the
+reference count of an entry never requires modifying the map and thus doesn't
+need to lock the global mutex. However, when decrementing the reference count
+for an entry, the 1->0 transition requires removing the entry from the map
+atomically in order to maintain the invariant. Here atomically means that the
+1->0 transition can only be done reliably when holding the global mutex.
+Substantial care in the decrement code is required to ensure this.
+
+*/
 
 namespace valkey_search {
 
@@ -24,7 +57,7 @@ struct InlineInternedString : public InternedString {
   InlineInternedString(size_t length) {
     is_inline_ = 1;
     length_ = length;
-    ref_count_.store(1, std::memory_order_relaxed);
+    ref_count_.store(1, std::memory_order_seq_cst);
   }
 };
 struct OutOfLineInternedString : public InternedString {
@@ -33,7 +66,7 @@ struct OutOfLineInternedString : public InternedString {
     is_inline_ = 0;
     out_of_line_data_ = data;
     length_ = length;
-    ref_count_.store(1, std::memory_order_relaxed);
+    ref_count_.store(1, std::memory_order_seq_cst);
   }
 };
 
@@ -47,6 +80,32 @@ static_assert(offsetof(OutOfLineInternedString, out_of_line_data_) ==
 static_assert(sizeof(OutOfLineInternedString) ==
                   sizeof(InternedString) + sizeof(char*),
               "OutOfLineInternedString size must match InternedString size");
+
+void InternedString::DecrementRefCount() {
+  bool completed;
+  // This is the hard case, because we need to ensure that the 1->0
+  // transition is done while holding the global mutex.
+  uint32_t current_value = ref_count_.load(std::memory_order_seq_cst);
+  do {
+    if (current_value == 0) {
+      // This case happens when erasing the entry in the map, which doesn't have
+      // an associated reference count, so we just return.
+      return;
+    }
+    if (current_value == 1) {
+      //
+      // This is the case we care about. Need to remove from map while holding
+      // the lock, Destructor will lock the mutex and then attempt the decrement
+      // again.
+      //
+      Destructor();
+      return;
+    }
+    // Do the real decrement, but if somebody else beat us, try again.
+    completed =
+        ref_count_.compare_exchange_strong(current_value, current_value - 1);
+  } while (!completed);
+}
 
 InternedString* InternedString::Constructor(absl::string_view str,
                                             Allocator* allocator) {
@@ -64,7 +123,8 @@ InternedString* InternedString::Constructor(absl::string_view str,
     ptr = new OutOfLineInternedString(data, str.size());
   } else {
     //
-    // Allocate the InternedString structure and the string data in one block.
+    // Allocate the InternedString structure and the string data in one
+    // block.
     //
     size_t total_size = sizeof(InternedString) + str.size() + 1;
     ptr = new (new char[total_size]) InlineInternedString(str.size());
@@ -91,12 +151,12 @@ void InternedString::Destructor() {
   // NOTE: isolate memory tracking for deallocation.
   IsolatedMemoryScope scope{StringInternStore::memory_pool_};
   if (StringInternStore::Instance().Release(this)) {
-    if (!is_inline_) {
+    if (is_inline_) {
+      delete[] reinterpret_cast<char*>(this);
+    } else {
       auto ptr = reinterpret_cast<const OutOfLineInternedString*>(this);
       Allocator::Free(const_cast<char*>(ptr->out_of_line_data_));
       delete ptr;
-    } else {
-      delete[] reinterpret_cast<char*>(this);
     }
   }
 }
@@ -108,25 +168,35 @@ InternedStringPtr* MakeShadowInternPtrPtr(InternedString* str, void*& storage) {
 }
 
 bool StringInternStore::Release(InternedString* str) {
-  absl::MutexLock lock(&mutex_);
-  if (str->ref_count_.load(std::memory_order_seq_cst) > 0) {
-    //
-    // It's possible that between the time we checked the ref count and now,
-    // another thread has incremented it. In that case, we don't remove it
-    // from the map.
-    return false;
-  }
   //
   // Need to make an InternStringPtr to look it up in the map.
-  // But we don't want to have the refcounts changed, so we create a temporary
-  // InternedStringPtr that doesn't modify the refcounts.
+  // But we don't want to have the refcounts changed, so we create a
+  // temporary InternedStringPtr that doesn't modify the refcounts.
   //
   OutOfLineInternedString fake(str->Str().data(), str->Str().size());
   void* storage;
   InternedStringPtr* ptr_ptr = MakeShadowInternPtrPtr(&fake, storage);
+  absl::MutexLock lock(&mutex_);
+  //
+  // Now that we have the lock, try our decrement to see if we really
+  // want to destroy this entry.
+  //
+  auto old_value = str->ref_count_.fetch_sub(1, std::memory_order_seq_cst);
+  if (old_value > 1) {
+    //
+    // Still referenced.
+    //
+    return false;
+  }
+  //
+  // This is the true 1->0 transition. Remove from map.
+  //
   auto it = str_to_interned_.find(*ptr_ptr);
-  CHECK(it != str_to_interned_.end());
-  str_to_interned_.erase(it);
+  CHECK(it != str_to_interned_.end()) << "Bad Map State";
+  CHECK(str->RefCount() == 0);
+  str_to_interned_.erase(
+      it);  // Note this will also call the DecrementRefCount, but
+            // since refcount is already zero, it will be a no-op.
   return true;
 }
 
@@ -159,10 +229,10 @@ InternedStringPtr StringInternStore::InternImpl(absl::string_view str,
   absl::MutexLock lock(&mutex_);
   auto it = str_to_interned_.find(*ptr_ptr);
   if (it != str_to_interned_.end()) {
-    return *it;  // Should bump the refcount automatically.
+    return *it;  // will bump the refcount automatically.
   }
   //
-  // Not found, create a new interned string. Without bumping the refcount....
+  // Create a new interned string. Without bumping the refcount....
   //
   InternedString* new_ptr = InternedString::Constructor(str, allocator);
   str_to_interned_.insert(std::move(InternedStringPtr(new_ptr)));

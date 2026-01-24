@@ -70,10 +70,18 @@ class StabilityRunner:
 
     Attributes:
       config: The configuration for the test.
+      failover_state: Shared state for coordinating process pausing during failover
     """
 
     def __init__(self, config: StabilityTestConfig):
         self.config = config
+        # Shared state for failover coordination
+        self.failover_state = {
+            'in_progress': False,
+            'failed_ports': set(),  # Ports that are currently down due to failover
+            'new_master_connected': False,  # Whether the new master is fully operational
+            'lock': threading.Lock(),
+        }
         logging.basicConfig(
             handlers=[
                 logging.StreamHandler(stream=sys.stdout),
@@ -144,48 +152,52 @@ class StabilityRunner:
         index_state = utils.IndexState(
             index_lock=threading.Lock(), ft_created=True
         )
+        # Pass failover_state to background tasks so they pause during failover
         if self.config.bgsave_interval_sec != 0:
-            threads.append(
-                utils.periodic_bgsave(
-                    client,
-                    self.config.bgsave_interval_sec,
-                    self.config.randomize_bg_job_intervals,
-                )
+            task = utils.RandomIntervalTask(
+                "BGSAVE",
+                self.config.bgsave_interval_sec,
+                self.config.randomize_bg_job_intervals,
+                lambda: utils.periodic_bgsave_task(client),
+                failover_state=self.failover_state,
             )
+            task.run()
+            threads.append(task)
 
         if self.config.ftcreate_interval_sec != 0:
-            threads.append(
-                utils.periodic_ftcreate(
-                    client,
-                    self.config.ftcreate_interval_sec,
-                    self.config.randomize_bg_job_intervals,
-                    self.config.index_name,
-                    attributes,
-                    index_state,
-                )
+            task = utils.RandomIntervalTask(
+                "FT.CREATE",
+                self.config.ftcreate_interval_sec,
+                self.config.randomize_bg_job_intervals,
+                lambda: utils.periodic_ftcreate_task(
+                    client, self.config.index_name, attributes, index_state, self.failover_state
+                ),
+                failover_state=self.failover_state,
             )
+            task.run()
+            threads.append(task)
 
         if self.config.ftdropindex_interval_sec != 0:
-            threads.append(
-                utils.periodic_ftdrop(
-                    client,
-                    self.config.ftdropindex_interval_sec,
-                    self.config.randomize_bg_job_intervals,
-                    self.config.index_name,
-                    index_state,
-                )
+            task = utils.RandomIntervalTask(
+                "FT.DROPINDEX",
+                self.config.ftdropindex_interval_sec,
+                self.config.randomize_bg_job_intervals,
+                lambda: utils.periodic_ftdrop_task(client, self.config.index_name, index_state, self.failover_state),
+                failover_state=self.failover_state,
             )
+            task.run()
+            threads.append(task)
 
         if self.config.flushdb_interval_sec != 0:
-            threads.append(
-                utils.periodic_flushdb(
-                    client,
-                    self.config.flushdb_interval_sec,
-                    self.config.randomize_bg_job_intervals,
-                    index_state,
-                    self.config.use_coordinator,
-                )
+            task = utils.RandomIntervalTask(
+                "FLUSHDB",
+                self.config.flushdb_interval_sec,
+                self.config.randomize_bg_job_intervals,
+                lambda: utils.periodic_flushdb_task(client, index_state, self.config.use_coordinator),
+                failover_state=self.failover_state,
             )
+            task.run()
+            threads.append(task)
 
         # Start failover testing if configured and replicas exist
         if self.config.failover_interval_sec != 0 and self.config.replica_count > 0:
@@ -208,6 +220,8 @@ class StabilityRunner:
                     config_dir=config_dir,
                     stdout_dir=stdout_dir,
                     test_recovery=self.config.test_failover_recovery,
+                    failover_state=self.failover_state,
+                    entry_point_port=self.config.ports[0],  # Protect entry point from failover
                 )
             )
         elif self.config.failover_interval_sec != 0 and self.config.replica_count == 0:
@@ -216,6 +230,9 @@ class StabilityRunner:
             )
 
         memtier_output_dir = os.environ["TEST_UNDECLARED_OUTPUTS_DIR"]
+
+        # For failover testing: we kill all memtier processes during failover
+        # and restart them after recovery completes, rather than having them retry connections
 
         insert_command = (
             f"{self.config.memtier_path}"
@@ -367,11 +384,88 @@ class StabilityRunner:
             utils.MemtierProcess(command=ft_list_command, name="FT._LIST")
         )
 
+        process_commands = {
+            "HSET": insert_command,
+            "DEL": delete_command,
+            "EXPIRE": expire_command,
+            "FT.SEARCH": search_command,
+            "FT.INFO": ft_info_command,
+            "FT._LIST": ft_list_command,
+        }
+        
+        test_start_time = time.time()
         timeout_start = time.time()
+        processes_killed_for_failover = False
+        time_when_killed = 0
+        
         while time.time() - timeout_start < self.config.test_timeout:
+            elapsed = time.time() - test_start_time
+            
+            # Check if failover is in progress
+            with self.failover_state['lock']:
+                failover_in_progress = self.failover_state['in_progress']
+            
+            # If failover started and processes are still running, kill them
+            if failover_in_progress and not processes_killed_for_failover:
+                logging.info("Failover in progress - stopping all memtier processes")
+                for process in processes:
+                    if not process.done:
+                        process.process.kill()
+                        logging.info("<%s> killed for failover", process.name)
+                processes_killed_for_failover = True
+                time_when_killed = elapsed
+            
+            # If failover completed and processes were killed, restart them with remaining time
+            if not failover_in_progress and processes_killed_for_failover:
+                logging.info("Failover completed - restarting all memtier processes")
+                # Calculate remaining time based on when processes were killed, not current elapsed time
+                # This accounts for the time spent during failover (cluster recovery + 20s delay)
+                remaining_time = self.config.test_time_sec - time_when_killed
+                
+                if remaining_time > 5:  # Only restart if there's meaningful time left
+                    # Rebuild commands with remaining time
+                    new_processes = []
+                    
+                    for process in processes:
+                        base_command = process_commands[process.name]
+                        # Replace --test-time value with remaining time
+                        import re
+                        new_command = re.sub(
+                            r'--test-time\s+\d+',
+                            f'--test-time {int(remaining_time)}',
+                            base_command
+                        )
+                        
+                        error_predicate = None
+                        if process.name in ["FT.SEARCH", "FT.INFO"]:
+                            error_predicate = lambda err: err != f"-Index with name '{self.config.index_name}' not found"
+                        
+                        new_process = utils.MemtierProcess(
+                            command=new_command,
+                            name=process.name,
+                            error_predicate=error_predicate
+                        )
+                        new_processes.append(new_process)
+                        logging.info("<%s> restarted with %ds remaining", process.name, int(remaining_time))
+                    
+                    processes = new_processes
+                else:
+                    logging.warning(
+                        "Not restarting processes - only %.1fs remaining (less than 5s minimum)",
+                        remaining_time
+                    )
+                
+                processes_killed_for_failover = False
+            
+            # Normal process status checking
             if all(p.done for p in processes):
-                logging.info("---===All processes finished===---")
-                break
+                if failover_in_progress or processes_killed_for_failover:
+                    # During or right after failover, wait for restart
+                    logging.debug("All processes done, but waiting for failover to complete before restart")
+                else:
+                    # Normal completion - all processes finished naturally
+                    logging.info("---===All processes finished===---")
+                    break
             for process in processes:
                 process.process_logs()
                 process.print_status()
@@ -380,7 +474,8 @@ class StabilityRunner:
             logging.error("Timed out waiting for processes to finish")
             logging.info("killing processes...")
             for process in processes:
-                process.process.kill()
+                if not process.done:
+                    process.process.kill()
             logging.error("Processes killed")
 
         # Collect intentionally failed ports from failover task BEFORE stopping threads

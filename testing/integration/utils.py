@@ -595,6 +595,7 @@ class RandomIntervalTask:
       name:
       thread:
       failed_ports: Set of ports that were intentionally shut down (for failover tasks)
+      failover_state: Optional shared state to pause during failovers
     """
 
     def __init__(
@@ -603,6 +604,7 @@ class RandomIntervalTask:
         interval: int,
         randomize: bool,
         work_func: Callable[[], bool],
+        failover_state: dict | None = None,
     ):
         stop_condition = threading.Condition()
         self.stopped = False
@@ -614,6 +616,7 @@ class RandomIntervalTask:
         self.failures = 0
         self.name = name
         self.failed_ports = set()  # Track intentionally failed ports (for failover)
+        self.failover_state = failover_state
 
     def stop(self):
         if not self.thread:
@@ -629,7 +632,7 @@ class RandomIntervalTask:
         self.thread.start()
 
     def loop(self):
-        """ """
+        """Main loop that executes the task at intervals, pausing during failovers."""
         with self.stop_condition:
             while True:
                 modifier = 1
@@ -640,6 +643,17 @@ class RandomIntervalTask:
                 )
                 if self.stopped:
                     return
+                
+                # Check if failover is in progress - skip execution if so
+                if self.failover_state is not None:
+                    with self.failover_state['lock']:
+                        failover_in_progress = self.failover_state['in_progress']
+                    
+                    if failover_in_progress:
+                        logging.debug("<%s> Skipping execution - failover in progress", self.name)
+                        continue  # Skip this iteration, wait for next interval
+                
+                # Execute the task
                 if not self.task():
                     self.failures += 1
                 self.ops += 1
@@ -679,10 +693,46 @@ class IndexState:
         self.ft_created = ft_created
 
 
+def get_available_nodes_excluding_failed(
+    client: valkey.ValkeyCluster,
+    failed_ports: set
+) -> list:
+    """Build a list of cluster node objects excluding failed ports.
+    
+    Returns:
+        List of ClusterNode objects that are not in the failed_ports set
+    """
+    if not failed_ports:
+        # No failed ports, return all nodes
+        return client.ALL_NODES
+    
+    available_nodes = []
+    try:
+        # Get all nodes from the cluster
+        nodes = client.get_nodes()
+        for node in nodes:
+            # Extract port from the node
+            node_port = node.port
+            if node_port not in failed_ports:
+                available_nodes.append(node)
+        
+        if not available_nodes:
+            logging.warning("No available nodes found after excluding failed ports: %s", failed_ports)
+            # Fallback to ALL_NODES if somehow no nodes are available
+            return client.ALL_NODES
+        
+        logging.debug("Available nodes (excluding failed ports %s): %d nodes", failed_ports, len(available_nodes))
+        return available_nodes
+    except Exception as e:
+        logging.warning("Error building available nodes list: %s, falling back to ALL_NODES", e)
+        return client.ALL_NODES
+
+
 def periodic_ftdrop_task(
     client: valkey.ValkeyCluster,
     index_name: str,
     index_state: IndexState,
+    failover_state: dict | None = None,
 ) -> bool:
     with index_state.index_lock:
         logging.info("<FT.DROPINDEX> Invoking index drop")
@@ -693,8 +743,24 @@ def periodic_ftdrop_task(
             valkey.exceptions.ConnectionError,
             valkey.exceptions.ResponseError,
         ) as e:
-            if not index_state.ft_created and "not found" in str(e):
+            error_str = str(e)
+            if not index_state.ft_created and "not found" in error_str:
                 logging.debug("<FT.DROPINDEX> got expected error: %s", e)
+            elif "Unable to contact all cluster members" in error_str:
+                # Check if this is expected due to failover
+                is_expected = False
+                if failover_state is not None:
+                    with failover_state['lock']:
+                        # Expected if we have failed ports and new master hasn't fully connected
+                        has_failed_ports = len(failover_state['failed_ports']) > 0
+                        new_master_not_ready = not failover_state['new_master_connected']
+                        is_expected = has_failed_ports and new_master_not_ready
+                
+                if is_expected:
+                    logging.debug("<FT.DROPINDEX> got expected error (failover in progress): %s", e)
+                else:
+                    logging.error("<FT.DROPINDEX> got unexpected error: %s", e)
+                    return False
             else:
                 logging.error("<FT.DROPINDEX> got unexpected error: %s", e)
                 return False
@@ -723,12 +789,28 @@ def periodic_ftcreate_task(
     index_name: str,
     attributes: Dict[str, AttributeDefinition],
     index_state: IndexState,
+    failover_state: dict | None = None,
 ) -> bool:
     with index_state.index_lock:
         try:
             logging.info("<FT.CREATE> Invoking index creation")
+            
+            # Get available nodes excluding failed ports
+            target_nodes = client.DEFAULT_NODE
+            if failover_state is not None:
+                with failover_state['lock']:
+                    failed_ports = failover_state['failed_ports'].copy()
+                
+                if failed_ports:
+                    target_nodes = get_available_nodes_excluding_failed(client, failed_ports)
+                    logging.debug("<FT.CREATE> Using filtered nodes (excluding failed ports: %s)", failed_ports)
+            
             create_index(
-                client=client, store_data_type=StoreDataType.HASH.name, index_name=index_name, attributes=attributes
+                client=client, 
+                store_data_type=StoreDataType.HASH.name, 
+                index_name=index_name, 
+                attributes=attributes,
+                target_nodes=target_nodes
             )
             index_state.ft_created = True
         except (
@@ -842,7 +924,8 @@ class MemtierProcess:
         self,
         command: str,
         name: str,
-        trailing_secs: int = 10,
+        # Increased from 10 to 15 to give buffer for failover resets then create and the search
+        trailing_secs: int = 15,
         error_predicate: Callable[[str], bool] | None = None,
     ):
         self.name = name
@@ -1124,12 +1207,18 @@ def get_cluster_nodes(client: valkey.ValkeyCluster) -> tuple[List[ClusterNode], 
     return masters, replicas
 
 
-def pick_master_to_fail(masters: List[ClusterNode], replicas: List[ClusterNode]) -> ClusterNode | None:
+def pick_master_to_fail(masters: List[ClusterNode], replicas: List[ClusterNode], exclude_port: int | None = None) -> ClusterNode | None:
     """Randomly select a master node to fail, ensuring it has replicas.
     
     This function implements a random selection strategy to increase test coverage
     and avoid bias. It only selects masters that have at least one replica to
     ensure the cluster can perform automatic failover.
+    
+    Args:
+        masters: List of master nodes in the cluster
+        replicas: List of replica nodes in the cluster
+        exclude_port: Port number to exclude from selection (typically the entry point)
+        
     Returns:
         Selected ClusterNode to fail, or None if no suitable master found
     """
@@ -1137,21 +1226,34 @@ def pick_master_to_fail(masters: List[ClusterNode], replicas: List[ClusterNode])
         logging.warning("No master nodes available to fail")
         return None
     
-    # Find masters that have at least one replica
+    # Find masters that have at least one replica AND are not the excluded port
     masters_with_replicas = []
     for master in masters:
         has_replica = any(r.master_id == master.node_id for r in replicas)
         if has_replica:
+            # Check if this master is the excluded port
+            if exclude_port is not None:
+                try:
+                    master_port = int(master.addr.split(":")[1])
+                    if master_port == exclude_port:
+                        logging.info(
+                            "Skipping master at port %d (entry point - excluded from failover)",
+                            master_port
+                        )
+                        continue
+                except Exception as e:
+                    logging.warning("Could not parse port from address %s: %s", master.addr, e)
+            
             masters_with_replicas.append(master)
     
     if not masters_with_replicas:
-        logging.warning("No masters with replicas found - cannot safely perform failover")
+        logging.warning("No suitable masters found (all either lack replicas or are excluded)")
         return None
     
     # Randomly select one master to fail
     selected = random.choice(masters_with_replicas)
     logging.info(
-        "Selected master to fail: node_id=%s, addr=%s (out of %d masters with replicas)",
+        "Selected master to fail: node_id=%s, addr=%s (out of %d candidates)",
         selected.node_id,
         selected.addr,
         len(masters_with_replicas)
@@ -1193,32 +1295,62 @@ def shutdown_node(addr: str, password: str | None = None) -> bool:
 def wait_for_new_master(
     client: valkey.ValkeyCluster,
     old_master_id: str,
+    old_master_addr: str,
     timeout: int = 30
-) -> bool:
+) -> tuple[bool, str | None]:
     """Wait for a replica to be promoted to master after the old master fails.
     
     This function polls the cluster topology until it detects that:
     1. The old master node ID is no longer present as a master
     2. A new master has taken over its slots
     Returns:
-        True if new master detected within timeout, False otherwise
+        Tuple of (success: bool, new_master_addr: str | None)
+        - success: True if new master detected within timeout
+        - new_master_addr: Address of the newly promoted master, or None if failed
     """
     start = time.time()
-    logging.info("Waiting for replica promotion (old master: %s)", old_master_id)
+    logging.info("Waiting for replica promotion (old master: %s at %s)", old_master_id, old_master_addr)
+    
+    # Track which replicas were under the old master
+    initial_masters, initial_replicas = get_cluster_nodes(client)
+    old_master_replicas = [r for r in initial_replicas if r.master_id == old_master_id]
+    
+    if old_master_replicas:
+        logging.info(
+            "Old master had %d replica(s): %s",
+            len(old_master_replicas),
+            [r.addr for r in old_master_replicas]
+        )
     
     while time.time() - start < timeout:
-        masters, _ = get_cluster_nodes(client)
+        masters, replicas = get_cluster_nodes(client)
         
         # Check if old master is gone from master list
         old_master_still_present = any(m.node_id == old_master_id for m in masters)
         
         if not old_master_still_present and masters:
-            logging.info(
-                "Replica promotion detected - old master %s no longer in master list after %.1fs",
-                old_master_id,
-                time.time() - start
-            )
-            return True
+            # Find which of the old replicas became the new master
+            new_master_addr = None
+            for old_replica in old_master_replicas:
+                # Check if this replica is now a master
+                if any(m.node_id == old_replica.node_id for m in masters):
+                    new_master_addr = old_replica.addr
+                    logging.info(
+                        "✓ REPLICA PROMOTED: %s (node_id: %s) promoted to master after %.1fs",
+                        new_master_addr,
+                        old_replica.node_id,
+                        time.time() - start
+                    )
+                    break
+            
+            if not new_master_addr:
+                # Couldn't identify which replica was promoted, but promotion happened
+                logging.warning(
+                    "Replica promotion detected but couldn't identify which replica (old master: %s)",
+                    old_master_id
+                )
+            
+            return True, new_master_addr
         
         time.sleep(1)
     
@@ -1227,7 +1359,7 @@ def wait_for_new_master(
         timeout,
         old_master_id
     )
-    return False
+    return False, None
 
 
 def wait_for_cluster_ok(client: valkey.ValkeyCluster, timeout: int = 30) -> bool:
@@ -1302,11 +1434,18 @@ def restart_node(
         if password:
             command += f" --requirepass {password}"
         
-        # Load modules from environment (same as original startup)
+        # Load modules from environment using the same pattern as start_valkey_process
+        # This ensures proper quoting of module arguments
+        modules = {}
         if "VALKEY_SEARCH_PATH" in os.environ:
-            valkey_search_path = os.environ["VALKEY_SEARCH_PATH"]
-            command += f' --loadmodule {valkey_search_path} --reader-threads 2 --writer-threads 5'
+            modules[os.environ["VALKEY_SEARCH_PATH"]] = "--reader-threads 2 --writer-threads 5"
         
+        # Build quoted module load strings (same as original startup)
+        modules_args = [f'"--loadmodule {k} {v}"' for k, v in modules.items()]
+        if modules_args:
+            command += " " + " ".join(modules_args)
+        
+        # Load JSON module separately (no args needed)
         if "VALKEY_JSON_PATH" in os.environ:
             command += f' --loadmodule {os.environ["VALKEY_JSON_PATH"]}'
         
@@ -1357,6 +1496,8 @@ def periodic_failover_task(
     test_recovery: bool,
     password: str | None = None,
     failed_ports_tracker: set | None = None,
+    failover_state: dict | None = None,
+    entry_point_port: int | None = None,
 ) -> bool:
     """Execute a single cluster failover operation.
     
@@ -1372,6 +1513,12 @@ def periodic_failover_task(
     """
     logging.info("<FAILOVER> Starting cluster failover sequence")
     
+    # Signal that failover is starting - this must happen BEFORE shutdown
+    if failover_state is not None:
+        with failover_state['lock']:
+            failover_state['in_progress'] = True
+        logging.info("<FAILOVER> Set failover_state['in_progress'] = True")
+    
     # Step 1: Get cluster topology
     masters, replicas = get_cluster_nodes(client)
     if not masters:
@@ -1380,8 +1527,8 @@ def periodic_failover_task(
     
     logging.info("<FAILOVER> Found %d masters and %d replicas", len(masters), len(replicas))
     
-    # Step 2: Pick a master to fail
-    victim = pick_master_to_fail(masters, replicas)
+    # Step 2: Pick a master to fail (excluding entry point)
+    victim = pick_master_to_fail(masters, replicas, exclude_port=entry_point_port)
     if not victim:
         logging.error("<FAILOVER> No suitable master found to fail")
         return False
@@ -1393,7 +1540,14 @@ def periodic_failover_task(
         victim_port = int(victim.addr.split(":")[1])
         if failed_ports_tracker is not None:
             failed_ports_tracker.add(victim_port)
-            logging.info("<FAILOVER> Tracking failed port: %d", victim_port)
+            logging.info("<FAILOVER> Tracking failed port in thread: %d", victim_port)
+        
+        # Also add to shared failover_state for FT.CREATE/FT.DROPINDEX to see
+        if failover_state is not None:
+            with failover_state['lock']:
+                failover_state['failed_ports'].add(victim_port)
+                failover_state['new_master_connected'] = False
+            logging.info("<FAILOVER> Added port %d to shared failover_state", victim_port)
     except Exception as e:
         logging.warning("<FAILOVER> Could not extract port from address %s: %s", victim.addr, e)
     
@@ -1406,8 +1560,11 @@ def periodic_failover_task(
     time.sleep(2)
     
     # Step 4: Wait for replica promotion
-    if not wait_for_new_master(client, victim.node_id, timeout=30):
-        logging.error("<FAILOVER> Replica promotion did not complete in time")
+    promotion_success, new_master_addr = wait_for_new_master(
+        client, victim.node_id, victim.addr, timeout=30
+    )
+    if not promotion_success:
+        logging.error("<FAILOVER> Replica promotion did not complete in time Replica not promoted")
         return False
     
     # Step 5: Wait for cluster OK state
@@ -1415,12 +1572,29 @@ def periodic_failover_task(
         logging.error("<FAILOVER> Cluster did not reach OK state in time")
         return False
     
-    logging.info("<FAILOVER> Failover completed successfully")
+    logging.info("<FAILOVER> Failover completed successfully - new master: %s", new_master_addr or "unknown")
     
-    # Step 6: Restart the node for recovery testing
+    # Signal that failover has completed - cluster is stable again
+    # This allows memtier processes to restart and redirect traffic to the new master
+    if failover_state is not None:
+        with failover_state['lock']:
+            failover_state['in_progress'] = False
+            if new_master_addr:
+                failover_state['new_master_addr'] = new_master_addr
+        logging.info("<FAILOVER> Set failover_state['in_progress'] = False - memtier processes can restart now")
+    
+    # Step 6: Wait for traffic redirection before bringing old master back
     if test_recovery:
-        logging.info("<FAILOVER> Testing recovery - restarting failed node")
-        # Extract port from address
+        recovery_delay_sec = 20
+        logging.info(
+            "<FAILOVER> Waiting %d seconds for traffic to redirect to new master (%s) before reconnecting old master...",
+            recovery_delay_sec,
+            new_master_addr or "unknown"
+        )
+        time.sleep(recovery_delay_sec)
+        
+        # Step 7: Restart the old master as a replica
+        logging.info("<FAILOVER> Now reconnecting old master %s as replica", victim.addr)
         try:
             port = int(victim.addr.split(":")[1])
             restarted_node = restart_node(
@@ -1431,11 +1605,54 @@ def periodic_failover_task(
                 password=password
             )
             if restarted_node:
-                logging.info("<FAILOVER> Node successfully rejoined cluster")
-                # Give it some time to sync
+                logging.info("<FAILOVER> Old master successfully reconnected to cluster")
+                
+                # Remove port from failed_ports immediately after successful restart
+                # This allows FT.CREATE/FT.DROPINDEX to proceed without "Unable to contact" errors
+                if failover_state is not None:
+                    with failover_state['lock']:
+                        if port in failover_state['failed_ports']:
+                            failover_state['failed_ports'].remove(port)
+                            logging.info("<FAILOVER> Removed port %d from failed_ports (node reconnected)", port)
+                        # Mark new master as connected
+                        failover_state['new_master_connected'] = True
+                        logging.info("<FAILOVER> Set new_master_connected = True")
+                
+                # Give it some time to sync and verify it's now a replica
                 time.sleep(5)
+                
+                # Verify the node is now a replica
+                try:
+                    node_client = valkey.Valkey(
+                        host="localhost",
+                        port=port,
+                        password=password,
+                        socket_timeout=2,
+                    )
+                    role_info = node_client.execute_command("ROLE")
+                    if role_info[0].decode() == "slave":
+                        master_host = role_info[1].decode()
+                        master_port = int(role_info[2])
+                        logging.info(
+                            "<FAILOVER> OLD MASTER NOW REPLICA: Port %d is now replicating from %s:%d",
+                            port,
+                            master_host,
+                            master_port
+                        )
+                    else:
+                        logging.warning(
+                            "Old master at port %d has role: %s (expected: slave)",
+                            port,
+                            role_info[0].decode()
+                        )
+                except Exception as e:
+                    logging.warning(
+                        "Could not verify replica role for port %d: %s",
+                        port,
+                        e
+                    )
             else:
-                logging.warning("<FAILOVER> Failed to restart node, but failover was successful")
+                logging.warning("<FAILOVER> Failed to restart old master, but failover was successful")
         except Exception as e:
             logging.warning("<FAILOVER> Error during recovery testing: %s", e)
     
@@ -1451,6 +1668,8 @@ def periodic_failover(
     stdout_dir: str,
     test_recovery: bool = True,
     password: str | None = None,
+    failover_state: dict | None = None,
+    entry_point_port: int | None = None,
 ) -> RandomIntervalTask:
     """Create a background task that periodically triggers cluster failovers.
     
@@ -1478,6 +1697,8 @@ def periodic_failover(
         test_recovery=test_recovery,
         password=password,
         failed_ports_tracker=thread.failed_ports,
+        failover_state=failover_state,
+        entry_point_port=entry_point_port,
     )
     
     thread.run()

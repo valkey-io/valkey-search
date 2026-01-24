@@ -628,14 +628,39 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert set(result[2]) == {b'content', b'Happiness is key to success', b'nostem_field', b'happiness'}
         
         # Test 11: Validate fix for stem variants NOT matching in NOSTEM fields
-        # Both doc:0 and doc:9 have "swimming" but in different field types
-        # Search for stem root "swim" (swimming→swim) should:
-        # - Match doc:0 (has "swimming" in stemmable content field - stem expansion works)
-        # - NOT match doc:9 (has "swimming" ONLY in NOSTEM field - stem expansion blocked)
         result = client.execute_command("FT.SEARCH", "idx", "swim")
         assert result[0] == 1, f"Expected 1 result for 'swim', got {result[0]}"
         assert result[1] == b"doc:0", f"Expected doc:0, got {result[1]}"
         assert b"doc:9" not in set(result[1::2]), "doc:9 should NOT match (has 'swimming' only in NOSTEM field)"
+        
+        # Test 12: Mixed stemming behavior with TEXT and TEXT NOSTEM fields
+        client.execute_command("FT.CREATE", "testindex", "ON", "HASH", "PREFIX", "1", "product:", "SCHEMA", "title", "TEXT", "NOSTEM", "desc", "TEXT")
+        
+        client.execute_command("HSET", "product:3", "title", "run", "desc", "abc")
+        client.execute_command("HSET", "product:4", "title", "abc", "desc", "run")
+        client.execute_command("HSET", "product:5", "title", "abc", "desc", "running")
+        
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "testindex")
+        
+        result = client.execute_command("FT.SEARCH", "testindex", "run", "DIALECT", "2")
+        assert result[0] == 3, f"Expected 3 results for 'run', got {result[0]}"
+        assert set(result[1::2]) == {b"product:3", b"product:4", b"product:5"}
+        
+        result = client.execute_command("FT.SEARCH", "testindex", "running", "DIALECT", "2")
+        assert result[0] == 3, f"Expected 3 results for 'running', got {result[0]}"
+        assert set(result[1::2]) == {b"product:3", b"product:4", b"product:5"}
+        
+        # Update product:3 to have "running" in NOSTEM title field
+        client.execute_command("HSET", "product:3", "title", "running", "desc", "abc")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "testindex")
+        
+        result = client.execute_command("FT.SEARCH", "testindex", "run", "DIALECT", "2")
+        assert result[0] == 2, f"Expected 2 results for 'run' after update, got {result[0]}"
+        assert set(result[1::2]) == {b"product:4", b"product:5"}
+        
+        result = client.execute_command("FT.SEARCH", "testindex", "running", "DIALECT", "2")
+        assert result[0] == 3, f"Expected 3 results for 'running' after update, got {result[0]}"
+        assert set(result[1::2]) == {b"product:3", b"product:4", b"product:5"}
 
     def test_custom_stopwords(self):
         """

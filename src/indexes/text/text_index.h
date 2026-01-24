@@ -106,7 +106,7 @@ class TextIndexSchema {
 
   // Get all stem variants for a search term (including parent words from stem
   // tree)
-  void GetAllStemVariants(const std::string &search_term,
+  std::string GetAllStemVariants(const std::string &search_term,
                           std::vector<std::string> &words_to_search);
 
   // Get the mask of fields that have stemming enabled

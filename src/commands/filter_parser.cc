@@ -756,9 +756,6 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     }
     VMSDK_RETURN_IF_ERROR(SetupTextFieldConfiguration(field_mask, min_stem_size,
                                                       field_or_default, false));
-    if (!exact && min_stem_size.has_value()) {
-      token = lexer.StemWord(token, true, *min_stem_size, lexer.GetStemmer());
-    }
     return FilterParser::TokenResult{
         std::make_unique<query::TermPredicate>(text_index_schema, field_mask,
                                                std::move(token), exact),

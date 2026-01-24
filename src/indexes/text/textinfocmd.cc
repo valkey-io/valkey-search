@@ -114,15 +114,35 @@ absl::Status IndexSchema::TextInfoCmd(ValkeyModuleCtx* ctx,
   } else if (subcommand == "STEM") {
     std::string word;
     VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, word));
+    
+    // Access stem tree directly with proper thread safety
+    // GetStemTree() returns a const reference, so we need to lock access
+    const auto& stem_tree = index_schema->GetTextIndexSchema()->GetStemTree();
+    auto stem_wi = stem_tree.GetWordIterator(word);
 
-    // Use GetAllStemVariants which provides thread-safe access to stem tree
-    std::vector<std::string> stem_variants;
-    index_schema->GetTextIndexSchema()->GetAllStemVariants(word, stem_variants);
+    ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
+    size_t count = 0;
+    while (!stem_wi.Done()) {
+      count++;
+      // Reply with stem word and its parent words
+      ValkeyModule_ReplyWithArray(ctx, 2);
+      ValkeyModule_ReplyWithStringBuffer(ctx, stem_wi.GetWord().data(),
+                                         stem_wi.GetWord().size());
 
-    ValkeyModule_ReplyWithArray(ctx, stem_variants.size());
-    for (const auto& variant : stem_variants) {
-      ValkeyModule_ReplyWithStringBuffer(ctx, variant.data(), variant.size());
+      // Reply with parent words set
+      const auto& stem_parents_optional = stem_wi.GetTarget();
+      if (stem_parents_optional.has_value()) {
+        const auto& parents = stem_parents_optional.value();
+        ValkeyModule_ReplyWithArray(ctx, parents.size());
+        for (const auto& parent : parents) {
+          ValkeyModule_ReplyWithStringBuffer(ctx, parent.data(), parent.size());
+        }
+      } else {
+        ValkeyModule_ReplyWithArray(ctx, 0);
+      }
+      stem_wi.Next();
     }
+    ValkeyModule_ReplySetArrayLength(ctx, count);
   } else if (subcommand == "LEXER") {
     std::string text;
     VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, text));

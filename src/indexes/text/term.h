@@ -44,8 +44,11 @@ class TermIterator : public TextIterator {
   TermIterator(
       absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>&&
           key_iterators,
-      const FieldMaskPredicate field_mask,
-      const InternedStringSet* untracked_keys, const bool require_positions);
+      const FieldMaskPredicate query_field_mask,
+      const InternedStringSet* untracked_keys,
+      const bool require_positions,
+      absl::InlinedVector<FieldMaskPredicate, kWordExpansionInlineCapacity>&&
+          field_masks = {});
   /* Implementation of TextIterator APIs */
   FieldMaskPredicate QueryFieldMask() const override;
   // Key-level iteration
@@ -77,6 +80,8 @@ class TermIterator : public TextIterator {
   const FieldMaskPredicate query_field_mask_;
   absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>
       key_iterators_;
+  absl::InlinedVector<FieldMaskPredicate, kWordExpansionInlineCapacity>
+      field_masks_;
   absl::InlinedVector<PositionIterator, kWordExpansionInlineCapacity>
       pos_iterators_;
   Key current_key_;

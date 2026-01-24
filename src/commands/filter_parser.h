@@ -30,16 +30,21 @@ struct TextParsingOptions {
   bool inorder = false;
   std::optional<uint32_t> slop = std::nullopt;
 };
-enum class QueryOperations : uint8_t {
+enum class QueryOperations : uint64_t {
   kNone = 0,
   kContainsOr = 1 << 0,
   kContainsAnd = 1 << 1,
-  // Other operations can be tracked here
+  kContainsNumeric = 1 << 2,
+  kContainsTag = 1 << 3,
+  kContainsNegate = 1 << 4,
+  kContainsText = 1 << 5,
+  kContainsProximity = 1 << 6,
+  kContainsNestedComposed = 1 << 7,
 };
 
 inline QueryOperations operator|(QueryOperations a, QueryOperations b) {
-  return static_cast<QueryOperations>(static_cast<uint8_t>(a) |
-                                      static_cast<uint8_t>(b));
+  return static_cast<QueryOperations>(static_cast<uint64_t>(a) |
+                                      static_cast<uint64_t>(b));
 }
 
 inline QueryOperations& operator|=(QueryOperations& a, QueryOperations b) {
@@ -47,7 +52,7 @@ inline QueryOperations& operator|=(QueryOperations& a, QueryOperations b) {
 }
 
 inline bool operator&(QueryOperations a, QueryOperations b) {
-  return static_cast<uint8_t>(a) & static_cast<uint8_t>(b);
+  return static_cast<uint64_t>(a) & static_cast<uint64_t>(b);
 }
 
 struct FilterParseResults {
@@ -62,6 +67,11 @@ class FilterParser {
                const TextParsingOptions& options);
 
   absl::StatusOr<FilterParseResults> Parse();
+
+  // Parses query string tags using '|' as separator (query language OR syntax).
+  // This is the single entry point for parsing tag strings from user queries.
+  static absl::StatusOr<absl::flat_hash_set<absl::string_view>> ParseQueryTags(
+      absl::string_view tag_string);
 
  private:
   const TextParsingOptions& options_;
@@ -123,14 +133,13 @@ class FilterParser {
 
   absl::StatusOr<absl::string_view> ParseTagString();
 
-  absl::StatusOr<absl::flat_hash_set<absl::string_view>> ParseTags(
-      absl::string_view tag_string, indexes::Tag* tag_index) const;
-
   absl::StatusOr<std::unique_ptr<query::Predicate>> WrapPredicate(
       std::unique_ptr<query::Predicate> prev_predicate,
       std::unique_ptr<query::Predicate> predicate, bool& negate,
       query::LogicalOperator logical_operator, bool no_prev_grp,
       bool not_rightmost_bracket);
+  void FlagNestedComposedPredicate(
+      std::unique_ptr<query::Predicate>& predicate);
 };
 
 // Helper function to print predicate tree structure using DFS

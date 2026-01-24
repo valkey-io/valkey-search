@@ -321,6 +321,7 @@ FilterParser::ParseNumericPredicate(const std::string& attribute_alias) {
   }
   auto numeric_index =
       dynamic_cast<const indexes::Numeric*>(index.value().get());
+  query_operations_ |= QueryOperations::kContainsNumeric;
   return std::make_unique<query::NumericPredicate>(
       numeric_index, attribute_alias, identifier, start, is_inclusive_start,
       end, is_inclusive_end);
@@ -337,8 +338,9 @@ absl::StatusOr<absl::string_view> FilterParser::ParseTagString() {
   return expression_.substr(pos, stop_pos);
 }
 
-absl::StatusOr<absl::flat_hash_set<absl::string_view>> FilterParser::ParseTags(
-    absl::string_view tag_string, indexes::Tag* tag_index) const {
+absl::StatusOr<absl::flat_hash_set<absl::string_view>>
+FilterParser::ParseQueryTags(absl::string_view tag_string) {
+  // Parsing QUERY STRING: User-provided filter expression from FT.SEARCH.
   // In search queries, the tag separator is always '|' regardless of the
   // separator used when the index was created. This allows users to specify
   // multiple tags using the syntax: @field:{tag1|tag2|tag3}
@@ -358,7 +360,8 @@ FilterParser::ParseTagPredicate(const std::string& attribute_alias) {
 
   auto tag_index = dynamic_cast<indexes::Tag*>(index.value().get());
   VMSDK_ASSIGN_OR_RETURN(auto tag_string, ParseTagString());
-  VMSDK_ASSIGN_OR_RETURN(auto parsed_tags, ParseTags(tag_string, tag_index));
+  VMSDK_ASSIGN_OR_RETURN(auto parsed_tags, ParseQueryTags(tag_string));
+  query_operations_ |= QueryOperations::kContainsTag;
   return std::make_unique<query::TagPredicate>(
       tag_index, attribute_alias, identifier, tag_string, parsed_tags);
 }
@@ -411,6 +414,19 @@ absl::StatusOr<bool> FilterParser::IsMatchAllExpression() {
   return false;
 }
 
+void FilterParser::FlagNestedComposedPredicate(
+    std::unique_ptr<query::Predicate>& predicate) {
+  auto* composed = dynamic_cast<query::ComposedPredicate*>(predicate.get());
+  if (!composed) return;
+  for (const auto& child : composed->GetChildren()) {
+    if (child->GetType() == query::PredicateType::kComposedAnd ||
+        child->GetType() == query::PredicateType::kComposedOr) {
+      query_operations_ |= QueryOperations::kContainsNestedComposed;
+      return;
+    }
+  }
+}
+
 absl::StatusOr<FilterParseResults> FilterParser::Parse() {
   VMSDK_ASSIGN_OR_RETURN(auto is_match_all_expression, IsMatchAllExpression());
   FilterParseResults results;
@@ -425,6 +441,7 @@ absl::StatusOr<FilterParseResults> FilterParser::Parse() {
     return UnexpectedChar(expression_, pos_);
   }
   results.root_predicate = std::move(parse_result.prev_predicate);
+  FlagNestedComposedPredicate(results.root_predicate);
   results.filter_identifiers.swap(filter_identifiers_);
   results.query_operations = query_operations_;
   results.has_text_predicate = has_text_predicate_;
@@ -444,9 +461,11 @@ absl::StatusOr<FilterParseResults> FilterParser::Parse() {
 }
 
 inline std::unique_ptr<query::Predicate> MayNegatePredicate(
-    std::unique_ptr<query::Predicate> predicate, bool& negate) {
+    std::unique_ptr<query::Predicate> predicate, bool& negate,
+    QueryOperations& query_operations) {
   if (negate) {
     negate = false;
+    query_operations |= QueryOperations::kContainsNegate;
     return std::make_unique<query::NegatePredicate>(std::move(predicate));
   }
   return predicate;
@@ -457,7 +476,8 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
     std::unique_ptr<query::Predicate> predicate, bool& negate,
     query::LogicalOperator logical_operator, bool no_prev_grp,
     bool not_rightmost_bracket) {
-  auto new_predicate = MayNegatePredicate(std::move(predicate), negate);
+  auto new_predicate =
+      MayNegatePredicate(std::move(predicate), negate, query_operations_);
   if (!prev_predicate) {
     return new_predicate;
   }
@@ -478,7 +498,8 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
     return prev_predicate;
   }
   // Flatten OR nodes when not_rightmost_bracket is true at the same bracket
-  // level
+  // level. In this case, we are not creating a nested OR node since we are
+  // extending the existing one.
   if (logical_operator == query::LogicalOperator::kOr &&
       not_rightmost_bracket &&
       new_predicate->GetType() == query::PredicateType::kComposedOr) {
@@ -505,6 +526,9 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
   children.push_back(std::move(new_predicate));
   if (logical_operator == query::LogicalOperator::kAnd) {
     query_operations_ |= QueryOperations::kContainsAnd;
+    if (options_.inorder || options_.slop.has_value()) {
+      query_operations_ |= QueryOperations::kContainsProximity;
+    }
   } else {
     query_operations_ |= QueryOperations::kContainsOr;
   }
@@ -534,9 +558,17 @@ absl::StatusOr<bool> FilterParser::HandleBackslashEscape(
       // Continue parsing the same token.
       return true;
     } else {
-      // Single backslash with non-punct on right, consume the backslash and
-      // break into a new token.
-      return false;
+      // Backslash before non-punctuation
+      if (lexer.IsPunctuation('\\')) {
+        // Backslash is punctuation → break to new token (standard unicode
+        // segmentation)
+        return false;
+      } else {
+        // Backslash not punctuation → keep letter, continue
+        processed_content.push_back(next_ch);
+        ++pos_;
+        return true;
+      }
     }
   } else {
     // Unescaped backslash at end of input is invalid.
@@ -565,6 +597,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
     // Break to complete an exact phrase or start a new exact phrase.
     char ch = Peek();
     if (ch == '"') break;
+    if (ch == '\\') continue;  // Don't break on backslash
     if (lexer.IsPunctuation(ch)) break;
     processed_content.push_back(ch);
     ++pos_;
@@ -664,6 +697,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
         break;
       }
     }
+    if (ch == '\\') continue;  // Don't break on backslash
     // Break on all punctuation characters.
     if (lexer.IsPunctuation(ch)) break;
     // Regular character
@@ -842,7 +876,9 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
     for (auto& term : terms) {
       children.push_back(std::move(term));
     }
+    query_operations_ |= QueryOperations::kContainsProximity;
     query_operations_ |= QueryOperations::kContainsAnd;
+    query_operations_ |= QueryOperations::kContainsText;
     pred = std::make_unique<query::ComposedPredicate>(
         query::LogicalOperator::kAnd, std::move(children), slop, inorder);
     node_count_ += terms.size() + 1;
@@ -850,6 +886,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
     if (terms.empty()) {
       return absl::InvalidArgumentError("Invalid Query Syntax");
     }
+    query_operations_ |= QueryOperations::kContainsText;
     pred = std::move(terms[0]);
     node_count_++;
   }

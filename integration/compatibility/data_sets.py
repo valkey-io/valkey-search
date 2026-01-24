@@ -1,4 +1,4 @@
-import itertools, valkey, json, struct
+import itertools, valkey, json, struct, random
 
 ### Reusable Data ###
 #
@@ -10,6 +10,108 @@ VECTOR_DIM = 3
 
 SETS_KEY = lambda key_type: f"{key_type} sets"
 CREATES_KEY = lambda key_type: f"{key_type} creates"
+
+# Text data configuration
+TEXT_SCHEMA = {
+    'text': ['title', 'body'],
+    'tag': ['color'],
+    'numeric': ['price']
+}
+
+TEXT_DATASETS = {
+    'pure text': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # fruits
+                'apple', 'banana', 'orange', 'grape', 'cherry', 'mango',
+                # other foods
+                'pear', 'peach', 'plum', 'melon', 'kiwi', 'lemon',
+                # objects
+                'table', 'chair', 'desk', 'lamp', 'window', 'door',
+                # abstract / misc
+                'music', 'movie', 'book', 'story', 'game', 'puzzle',
+                # adjectives
+                'quick', 'bright', 'silent', 'heavy', 'smooth', 'sharp'
+            ],
+            'body': [
+                # veggies
+                'potato', 'tomato', 'lettuce', 'onion', 'carrot', 'broccoli',
+                # animals
+                'dog', 'cat', 'horse', 'tiger', 'eagle', 'shark',
+                # places
+                'city', 'village', 'forest', 'desert', 'ocean', 'river',
+                # actions
+                'run', 'jump', 'swim', 'drive', 'fly', 'build',
+                # descriptors
+                'fast', 'slow', 'loud', 'quiet', 'warm', 'cold'
+            ],
+
+            'color': [
+                'red',
+                'yellow',
+                'green',
+                'purple',
+                'blue',
+                'black',
+                'white',
+                'orange',
+                'pink',
+                'brown'
+            ],
+            'price': (0, 50)
+        }
+    },
+    'pure text small': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                'apple', 'banana', 'orange', 'grape', 'cherry',
+                'dog', 'cat', 'horse', 'city', 'forest'
+            ],
+            'body': [
+                'apple', 'banana', 'orange', 'grape', 'cherry',
+                'dog', 'cat', 'horse', 'city', 'forest'
+            ],
+            'color': ['red', 'yellow', 'green', 'purple', 'blue'],
+            'price': (0, 10)
+        }
+    },
+    'numeric text': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                'version',
+                '404',
+                '+5',
+                '-3',
+                '3.14',
+                '-0.5',
+                '10',
+                '-2',
+                '+1.5',
+                'beta'
+            ],
+            'body': [
+                'counter',
+                '42',
+                '+8',
+                '-1',
+                '0.75',
+                '-2.25',
+                'temp',
+                '-0.1',
+                'gain',
+                'loss'
+            ],
+            'color': [
+                'red', 'yellow', 'green', 'purple', 'blue',
+                'black', 'white', 'orange', 'pink', 'brown'
+            ],
+            'price': (0, 50)
+        }
+    }
+}
 
 def unbytes(b):
     if isinstance(b, bytes):
@@ -302,9 +404,115 @@ def compute_data_sets():
                 ]
     return data
 
+# TODO: stopwords, punctuation, numbers in text field (with periods, float, +/-)
+# TODO: special case with lexers (random lexical chars, prove lexical analyzer work correct) (isolation)
+def compute_text_data_sets(dataset_name, seed=123):
+    """Generate random documents for a specific dataset.
+    
+    Args:
+        dataset_name: Name of dataset (e.g., "pure text", "pure text small")
+        seed: Random seed for reproducibility
+    
+    Returns:
+        dict with structure: {dataset_name: {"hash creates": [...], "hash sets": [...], ...}}
+    """
+    if dataset_name not in TEXT_DATASETS:
+        raise ValueError(f"Unknown dataset: {dataset_name}. Available: {list(TEXT_DATASETS.keys())}")
+    
+    config = TEXT_DATASETS[dataset_name]
+    field_values = config['field_values']
+    schema = config['schema']
+    
+    random.seed(seed)
+    
+    data = {}
+    data[dataset_name] = {}
+    
+    text_fields = schema.get('text', [])
+    tag_fields = schema.get('tag', [])
+    numeric_fields = schema.get('numeric', [])
+    
+    # Build create commands for both hash and json
+    create_cmds = {
+        "hash": "FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: SCHEMA {}",
+        "json": "FT.CREATE json_idx1 ON JSON PREFIX 1 json: SCHEMA {}",
+    }
+    
+    # Build schema strings
+    hash_schema_parts = []
+    json_schema_parts = []
+    
+    for field in text_fields:
+        hash_schema_parts.append(f"{field} TEXT WITHSUFFIXTRIE NOSTEM")
+        json_schema_parts.append(f"$.{field} AS {field} TEXT WITHSUFFIXTRIE NOSTEM")
+    
+    for field in tag_fields:
+        hash_schema_parts.append(f"{field} TAG")
+        json_schema_parts.append(f"$.{field} AS {field} TAG")
+    
+    for field in numeric_fields:
+        hash_schema_parts.append(f"{field} NUMERIC")
+        json_schema_parts.append(f"$.{field} AS {field} NUMERIC")
+    
+    hash_schema = " ".join(hash_schema_parts)
+    json_schema = " ".join(json_schema_parts)
+    
+    # Get vocab for text fields
+    vocab = {}
+    for field in text_fields:
+        if field in field_values:
+            vocab[field] = field_values[field]
+
+    # Helper to generate a document
+    def generate_doc(doc_id):
+        fields = {}
+        # Text fields - generate random length 1-5 for title and body
+        for field in text_fields:
+            if field in vocab:
+                num_words = random.randint(1, 10)
+                words = random.choices(vocab[field], k=num_words)
+                fields[field] = " ".join(words)
+        # Tag fields
+        for field in tag_fields:
+            if field in field_values:
+                fields[field] = random.choice(field_values[field])
+        # Numeric fields
+        for field in numeric_fields:
+            if field in field_values:
+                min_val, max_val = field_values[field]
+                fields[field] = random.randint(min_val, max_val)
+        return fields
+    
+    for key_type in ["hash", "json"]:
+        # Set create commands
+        if key_type == "hash":
+            data[dataset_name][CREATES_KEY(key_type)] = [create_cmds[key_type].format(hash_schema)]
+        else:
+            data[dataset_name][CREATES_KEY(key_type)] = [create_cmds[key_type].format(json_schema)]
+        
+        # Generate documents
+        docs = []
+        for i in range(NUM_KEYS):
+            fields = generate_doc(i)
+            docs.append((f"{key_type}:{i:02d}", fields))
+        
+        data[dataset_name][SETS_KEY(key_type)] = docs
+    
+    return data
+
 ### Helper Functions ###
-def load_data(client, data_set, key_type):
-    data = compute_data_sets()
+def load_data(client, data_set, key_type, data_source=None):
+    # Auto-detect data source based on data_set name
+    if data_source is None:
+        data_source = "text" if data_set in TEXT_DATASETS else "vector"
+
+    match data_source:
+        case "vector":
+            data = compute_data_sets()
+        case "text":
+            data = compute_text_data_sets(data_set)
+        case _:
+            raise ValueError(f"Unknown data source: {data_source}")
     load_list = data[data_set][SETS_KEY(key_type)]
     for create_index_cmd in data[data_set][CREATES_KEY(key_type)]:
         client.execute_command(create_index_cmd)
@@ -322,6 +530,12 @@ def load_data(client, data_set, key_type):
 
     # client.wait_for_indexing_done(f"{key_type}_idx1")
     print(f"setup_data completed {data_set} {key_type}")
+
+    # Print loaded data for debugging
+    print(f"Loaded {len(load_list)} items")
+    for s in range(min(10, len(load_list))):  # Print first 10 items
+        print(f"{s}:{load_list[s][0]}: {load_list[s][1]}")
+
     if key_type != "hash":
         for s in range(0, len(load_list)):
             k = client.execute_command(*["JSON.GET", load_list[s][0], "$"])
@@ -345,3 +559,63 @@ def load_data_cluster(cluster_client, test_case, data_set, key_type):
 
     print(f"cluster load completed {data_set} {key_type}")
 
+def extract_vocab_from_text_data(dataset_name, key_type):
+    """Extract unique words from TEXT fields in a text data set."""
+    data = compute_text_data_sets(dataset_name)
+    
+    vocab = set()
+    for _, fields in data[dataset_name][SETS_KEY(key_type)]:
+        for field in TEXT_SCHEMA['text']:
+            if field in fields:
+                words = fields[field].split()
+                vocab.update(words)
+    return sorted(list(vocab))
+
+def extract_tag_values_from_text_data(dataset_name, key_type):
+    """Extract unique tag values from TAG fields in a text data set."""
+    data = compute_text_data_sets(dataset_name)
+    
+    tag_values = {}
+    for _, fields in data[dataset_name][SETS_KEY(key_type)]:
+        for field in TEXT_SCHEMA['tag']:
+            if field in fields:
+                if field not in tag_values:
+                    tag_values[field] = set()
+                tag_values[field].add(fields[field])
+    return {k: sorted(list(v)) for k, v in tag_values.items()}
+
+def extract_numeric_ranges_from_text_data(dataset_name, key_type):
+    """Extract min/max ranges from NUMERIC fields in a text data set."""
+    data = compute_text_data_sets(dataset_name)
+    
+    numeric_ranges = {}
+    for _, fields in data[dataset_name][SETS_KEY(key_type)]:
+        for field in TEXT_SCHEMA['numeric']:
+            if field in fields:
+                value = int(fields[field])
+                if field not in numeric_ranges:
+                    numeric_ranges[field] = [value, value]
+                else:
+                    numeric_ranges[field][0] = min(numeric_ranges[field][0], value)
+                    numeric_ranges[field][1] = max(numeric_ranges[field][1], value)
+    return {k: tuple(v) for k, v in numeric_ranges.items()}
+
+def extract_vocab_by_field_from_text_data(dataset_name, key_type):
+    """Extract vocabularies per field from TEXT fields in a text data set.
+    
+    Returns:
+        dict of {field_name: [unique_words]}
+    """
+    if dataset_name not in TEXT_DATASETS:
+        raise ValueError(f"Unknown dataset: {dataset_name}")
+    
+    config = TEXT_DATASETS[dataset_name]
+    field_values = config['field_values']
+    schema = config['schema']
+    
+    vocab_by_field = {}
+    for field in schema.get('text', []):
+        if field in field_values:
+            vocab_by_field[field] = field_values[field]
+    
+    return vocab_by_field

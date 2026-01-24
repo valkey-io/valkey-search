@@ -132,6 +132,7 @@ message SearchIndexPartitionRequest {
   bool enable_consistency = 15;
   IndexFingerprintVersion index_fingerprint_version = 16;
   uint64 slot_fingerprint = 17;
+  uint64 query_operations = 18;
 }
 
 message NeighborEntry {

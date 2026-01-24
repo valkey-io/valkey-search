@@ -990,7 +990,7 @@ INSTANTIATE_TEST_SUITE_P(
                 "AND{\n"
                 "  TEXT-TERM(\"hel(lo\", field_mask=3)\n"
                 "  TEXT-TERM(\"ho$w\", field_mask=3)\n"
-                "  TEXT-TERM(\"a*r\", field_mask=3)\n"
+                "  TEXT-TERM(\"a*re\", field_mask=3)\n"
                 "  TEXT-TERM(\"yo{u\", field_mask=3)\n"
                 "  TEXT-TERM(\"do|ing?\", field_mask=3)\n"
                 "}\n",
@@ -1018,7 +1018,7 @@ INSTANTIATE_TEST_SUITE_P(
                                        "  TEXT-TERM(\"how\", field_mask=3)\n"
                                        "  TEXT-TERM(\"are\", field_mask=3)\n"
                                        "  TEXT-TERM(\"you%\", field_mask=3)\n"
-                                       "  TEXT-TERM(\"do\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"doing\", field_mask=3)\n"
                                        "}\n",
         },
         {
@@ -1031,7 +1031,7 @@ INSTANTIATE_TEST_SUITE_P(
                 "  TEXT-TERM(\"how\", field_mask=3)\n"
                 "  TEXT-TERM(\"are\", field_mask=3)\n"
                 "  TEXT-TERM(\"you\\\\%\", field_mask=3)\n"
-                "  TEXT-TERM(\"do\", field_mask=3)\n"
+                "  TEXT-TERM(\"doing\", field_mask=3)\n"
                 "}\n",
         },
         {
@@ -1045,7 +1045,7 @@ INSTANTIATE_TEST_SUITE_P(
                 "  TEXT-TERM(\"how\", field_mask=3)\n"
                 "  TEXT-TERM(\"are\", field_mask=3)\n"
                 "  TEXT-TERM(\"you][$}{;:)(|\", field_mask=3)\n"
-                "  TEXT-TERM(\"-do\", field_mask=3)\n"
+                "  TEXT-TERM(\"-doing\", field_mask=3)\n"
                 "}\n",
         },
         {
@@ -1073,7 +1073,7 @@ INSTANTIATE_TEST_SUITE_P(
                 "    TEXT-TERM(\"plants\", field_mask=1)\n"
                 "  }\n"
                 "  AND{\n"
-                "    TEXT-TERM(\"advanc\", field_mask=1)\n"
+                "    TEXT-TERM(\"advanced\", field_mask=1)\n"
                 "    TEXT-PREFIX(\"neu\", field_mask=2)\n"
                 "    TEXT-TERM(\"network\", field_mask=1)\n"
                 "    NUMERIC(num_field_2.0)\n"

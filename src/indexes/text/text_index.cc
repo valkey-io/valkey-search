@@ -321,7 +321,7 @@ uint64_t TextIndexSchema::GetTotalTextIndexMemoryUsage() const {
   return metadata_.text_index_memory_pool_.GetUsage();
 }
 
-void TextIndexSchema::GetAllStemVariants(
+std::string TextIndexSchema::GetAllStemVariants(
     const std::string &search_term, std::vector<std::string> &words_to_search) {
   // Stem the search term
   std::string stemmed =
@@ -348,6 +348,7 @@ void TextIndexSchema::GetAllStemVariants(
     }
     stem_iter.Next();
   }
+  return stemmed;
 }
 
 }  // namespace valkey_search::indexes::text

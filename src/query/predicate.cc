@@ -71,9 +71,10 @@ EvaluationResult TermPredicate::Evaluate(
   uint64_t stem_variant_field_mask =
       field_mask & text_index_schema_->GetStemmingFieldMask();
 
-  // Add stem variants only if stemming is enabled for at least one field
+  std::string stem_root;
+      // Add stem variants only if stemming is enabled for at least one field
   if (!exact_ && stem_variant_field_mask != 0) {
-    text_index_schema_->GetAllStemVariants(term_, words_to_check);
+    stem_root = text_index_schema_->GetAllStemVariants(term_, words_to_check);
   }
 
   // Try to find any of the words in the per-key text index
@@ -93,7 +94,7 @@ EvaluationResult TermPredicate::Evaluate(
           // fields
           if (key_iter.SkipForwardKey(target_key) &&
               key_iter.ContainsFields(
-                  word == term_ ? field_mask : stem_variant_field_mask)) {
+                  (word == term_ || word == stem_root) ? field_mask : stem_variant_field_mask)) {
             if (!require_positions) {
               return EvaluationResult(true);
             }

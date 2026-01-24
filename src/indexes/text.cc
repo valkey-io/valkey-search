@@ -190,6 +190,9 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
+  absl::InlinedVector<FieldMaskPredicate,
+                      indexes::text::kWordExpansionInlineCapacity>
+      field_masks;
 
   // Collect all words to search
   std::vector<std::string> words_to_search;
@@ -200,24 +203,31 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
   uint64_t stem_variant_field_mask =
       fetcher->field_mask_ & GetTextIndexSchema()->GetStemmingFieldMask();
 
-  if (!IsExact() && stem_variant_field_mask != 0) {
-    GetTextIndexSchema()->GetAllStemVariants(std::string(GetTextString()),
+  std::string stem_root;
+      if (!IsExact() && stem_variant_field_mask != 0) {
+    stem_root = GetTextIndexSchema()->GetAllStemVariants(std::string(GetTextString()),
                                              words_to_search);
   }
 
-  // Search for all words using the same pattern
+  // Search for all words and track which field mask to use for each
   for (const auto& word : words_to_search) {
     auto word_iter = fetcher->text_index_->GetPrefix().GetWordIterator(word);
     while (!word_iter.Done()) {
       if (word_iter.GetWord() == word) {
         key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
+        // For original term and stem root, use full query field mask
+        // For stem variants, use only fields with stemming enabled
+        field_masks.emplace_back((word == std::string(GetTextString()) || word == stem_root) 
+                                     ? fetcher->field_mask_ 
+                                     : stem_variant_field_mask);
       }
       word_iter.Next();
     }
   }
   return std::make_unique<indexes::text::TermIterator>(
-      std::move(key_iterators), fetcher->field_mask_, fetcher->untracked_keys_,
-      fetcher->require_positions_);
+      std::move(key_iterators), fetcher->field_mask_,
+      fetcher->untracked_keys_, fetcher->require_positions_,
+      std::move(field_masks));
 }
 
 std::unique_ptr<indexes::text::TextIterator> PrefixPredicate::BuildTextIterator(

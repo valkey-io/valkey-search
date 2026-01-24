@@ -45,8 +45,7 @@ class TermIterator : public TextIterator {
       absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>&&
           key_iterators,
       const FieldMaskPredicate query_field_mask,
-      const InternedStringSet* untracked_keys,
-      const bool require_positions,
+      const InternedStringSet* untracked_keys, const bool require_positions,
       absl::InlinedVector<FieldMaskPredicate, kWordExpansionInlineCapacity>&&
           field_masks = {});
   /* Implementation of TextIterator APIs */

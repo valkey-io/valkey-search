@@ -114,7 +114,7 @@ absl::Status IndexSchema::TextInfoCmd(ValkeyModuleCtx* ctx,
   } else if (subcommand == "STEM") {
     std::string word;
     VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, word));
-    
+
     // Access stem tree directly with proper thread safety
     // GetStemTree() returns a const reference, so we need to lock access
     const auto& stem_tree = index_schema->GetTextIndexSchema()->GetStemTree();

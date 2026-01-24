@@ -13,8 +13,7 @@ TermIterator::TermIterator(
     absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>&&
         key_iterators,
     const FieldMaskPredicate query_field_mask,
-    const InternedStringSet* untracked_keys,
-    const bool require_positions,
+    const InternedStringSet* untracked_keys, const bool require_positions,
     absl::InlinedVector<FieldMaskPredicate, kWordExpansionInlineCapacity>&&
         field_masks)
     : query_field_mask_(query_field_mask),
@@ -58,8 +57,9 @@ bool TermIterator::FindMinimumValidKey() {
   size_t idx = 0;
   for (auto& key_iter : key_iterators_) {
     // Use per-iterator field mask if provided, otherwise use query_field_mask
-    const auto& field_mask = field_masks_.empty() ? query_field_mask_ : field_masks_[idx];
-    
+    const auto& field_mask =
+        field_masks_.empty() ? query_field_mask_ : field_masks_[idx];
+
     while (key_iter.IsValid() && !key_iter.ContainsFields(field_mask)) {
       key_iter.NextKey();
     }

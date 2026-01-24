@@ -204,9 +204,9 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
       fetcher->field_mask_ & GetTextIndexSchema()->GetStemmingFieldMask();
 
   std::string stem_root;
-      if (!IsExact() && stem_variant_field_mask != 0) {
-    stem_root = GetTextIndexSchema()->GetAllStemVariants(std::string(GetTextString()),
-                                             words_to_search);
+  if (!IsExact() && stem_variant_field_mask != 0) {
+    stem_root = GetTextIndexSchema()->GetAllStemVariants(
+        std::string(GetTextString()), words_to_search);
   }
 
   // Search for all words and track which field mask to use for each
@@ -217,17 +217,17 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
         key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
         // For original term and stem root, use full query field mask
         // For stem variants, use only fields with stemming enabled
-        field_masks.emplace_back((word == std::string(GetTextString()) || word == stem_root) 
-                                     ? fetcher->field_mask_ 
-                                     : stem_variant_field_mask);
+        field_masks.emplace_back(
+            (word == std::string(GetTextString()) || word == stem_root)
+                ? fetcher->field_mask_
+                : stem_variant_field_mask);
       }
       word_iter.Next();
     }
   }
   return std::make_unique<indexes::text::TermIterator>(
-      std::move(key_iterators), fetcher->field_mask_,
-      fetcher->untracked_keys_, fetcher->require_positions_,
-      std::move(field_masks));
+      std::move(key_iterators), fetcher->field_mask_, fetcher->untracked_keys_,
+      fetcher->require_positions_, std::move(field_masks));
 }
 
 std::unique_ptr<indexes::text::TextIterator> PrefixPredicate::BuildTextIterator(

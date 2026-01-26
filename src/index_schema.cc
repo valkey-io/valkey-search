@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "absl/base/optimization.h"
+#include "absl/cleanup/cleanup.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
@@ -38,7 +39,6 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
-#include "src/indexes/text/text_index.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
@@ -735,6 +735,11 @@ void IndexSchema::ScheduleMutation(bool from_backfill, const Key &key,
       [from_backfill, weak_index_schema = GetWeakPtr(),
        ctx = detached_ctx_.get(), delay_capturer = CreateQueueDelayCapturer(),
        key_str = std::move(key), blocking_counter]() mutable {
+        auto cleaner = absl::MakeCleanup([blocking_counter] {
+          if (ABSL_PREDICT_FALSE(blocking_counter)) {
+            blocking_counter->DecrementCount();
+          }
+        });
         PAUSEPOINT("block_mutation_queue");
         auto index_schema = weak_index_schema.lock();
         if (ABSL_PREDICT_FALSE(!index_schema)) {
@@ -742,9 +747,6 @@ void IndexSchema::ScheduleMutation(bool from_backfill, const Key &key,
         }
         index_schema->ProcessSingleMutationAsync(ctx, from_backfill, key_str,
                                                  delay_capturer.get());
-        if (ABSL_PREDICT_FALSE(blocking_counter)) {
-          blocking_counter->DecrementCount();
-        }
       },
       priority);
 }

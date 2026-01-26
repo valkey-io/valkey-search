@@ -206,6 +206,56 @@ def validate_fulltext_search(client: Valkey):
 
 class TestFullText(ValkeySearchTestCaseDebugMode):
 
+    def test_escape_sequences(self):
+        """Test backslash escape handling with default and custom punctuation."""
+        client: Valkey = self.server.get_new_client()
+        
+        # Index 1: Default punctuation (includes backslash)
+        client.execute_command("FT.CREATE", "idx_default", "ON", "HASH", 
+                              "SCHEMA", "content", "TEXT", "NOSTEM")
+        
+        # Index 2: Custom punctuation (excludes backslash)
+        client.execute_command("FT.CREATE", "idx_no_bs", "ON", "HASH",
+                              "PUNCTUATION", ".,!",
+                              "SCHEMA", "content", "TEXT", "NOSTEM")
+        
+        # Test data
+        client.execute_command("HSET", "doc:1", "content", r'test\,value')
+        client.execute_command("HSET", "doc:2", "content", r'test2\nvalue2')
+        client.execute_command("HSET", "doc:3", "content", r'test3\\value3')
+        client.execute_command("HSET", "doc:4", "content", r'test4\\\word4')
+        client.execute_command("HSET", "doc:5", "content", r'test5\\\\word5')
+        
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx_default")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx_no_bs")
+        
+        # Test idx_default: backslash IS punctuation
+        # Escaped comma: single token
+        assert client.execute_command("FT.SEARCH", "idx_default", r'@content:test\,value')[0] == 1
+        # Backslash + letter: splits tokens during ingestion
+        assert client.execute_command("FT.SEARCH", "idx_default", r'@content:test2')[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx_default", r'@content:nvalue2')[0] == 1
+        # Test query side processing of backslash when it is a punctuation
+        assert client.execute_command("FT.SEARCH", "idx_default", r'test2\nvalue2')[0] == 1
+
+        # double backslashes: backslash in token, it won't split and acts as escape character
+        assert client.execute_command("FT.SEARCH", "idx_default", r'@content:test3\\value3')[0] == 1
+
+        # Test three or more backslashes to match the ingested document
+        assert client.execute_command("FT.SEARCH", "idx_default", r'test4\\\word4')[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx_default", r'@content:test5\\\\word5')[0] == 1
+        
+        # Test idx_no_bs: backslash NOT punctuation
+        # Escaped comma: single token
+        assert client.execute_command("FT.SEARCH", "idx_no_bs", r'@content:test\,value')[0] == 1
+        # Backslash + letter: single token
+        assert client.execute_command("FT.SEARCH", "idx_no_bs", r'@content:test2')[0] == 0
+        assert client.execute_command("FT.SEARCH", "idx_no_bs", r'@content:nvalue2')[0] == 0
+        assert client.execute_command("FT.SEARCH", "idx_no_bs", r'@content:test2\nvalue2')[0] == 1
+
+        assert client.execute_command("FT.SEARCH", "idx_no_bs", r'test4\\\word4')[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx_no_bs", r'@content:test5\\\\word5')[0] == 1
+
     def test_text_search(self):
         """
         Test FT.SEARCH command with a text index.
@@ -1530,6 +1580,64 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # (7) With Return clause + Field Aliasing
         result = client.execute_command("FT.SEARCH", "idx1", 'race', "RETURN", "6", "content", "AS", "text_content", "price", "AS", "numeric_content")
         assert result == [1, b"doc:1", [b"text_content", b"I am going to a race", b"numeric_content", b"100"]]
+
+    def test_nested_composed_or_with_slop(self):
+        """Test nested composed OR queries with SLOP parameter"""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "hash:", "SCHEMA",
+                             "title", "TEXT", "NOSTEM", "WITHSUFFIXTRIE",
+                             "body", "TEXT", "NOSTEM", "WITHSUFFIXTRIE",
+                             "color", "TAG",
+                             "price", "NUMERIC")
+        # Insert test data
+        client.execute_command("HSET", "hash:00", "title", "plum", "body", "cat slow loud shark ocean eagle tomato", "color", "green", "price", "21")
+        client.execute_command("HSET", "hash:01", "title", "kiwi peach apple chair orange door orange melon chair", "body", "lettuce", "color", "green", "price", "8")
+        client.execute_command("HSET", "hash:02", "title", "plum", "body", "river cat slow build eagle fast dog", "color", "brown", "price", "40")
+        client.execute_command("HSET", "hash:03", "title", "window smooth apple silent movie chair window puzzle door", "body", "desert city desert slow jump drive lettuce forest", "color", "blue", "price", "10")
+        client.execute_command("HSET", "hash:04", "title", "kiwi lemon orange chair door kiwi", "body", "river fast eagle loud", "color", "purple", "price", "25")
+        client.execute_command("HSET", "hash:05", "title", "lamp quick banana plum desk game story window sharp", "body", "cold village fly", "color", "red", "price", "0")
+        client.execute_command("HSET", "hash:06", "title", "chair apple puzzle", "body", "warm jump potato run desert", "color", "yellow", "price", "5")
+        client.execute_command("HSET", "hash:07", "title", "silent puzzle lemon window movie apple melon", "body", "potato ocean city potato jump carrot warm tomato", "color", "green", "price", "23")
+        client.execute_command("HSET", "hash:08", "title", "game quick music game", "body", "ocean carrot jump quiet build shark onion", "color", "black", "price", "33")
+        client.execute_command("HSET", "hash:09", "title", "music quick", "body", "city fly village potato village fly drive", "color", "orange", "price", "19")
+        client.execute_command("HSET", "hash:10", "title", "music quick", "body", "word2 word2 word2 word2 word 3 word3 word3 word1 word2 word3", "color", "orange", "price", "19")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+        # Test query: '(((door | sharp)) (sharp | desk))' SLOP 2
+        result = client.execute_command("FT.SEARCH", "idx", "(((door | sharp)) (sharp | desk))", "SLOP", "2", "DIALECT", "2")
+        assert result[0] == 0
+        # Test query: '(((shark build)))' SLOP 1
+        result = client.execute_command("FT.SEARCH", "idx", "(((shark build)))", "SLOP", "1", "DIALECT", "2")
+        assert result[0] == 1
+        assert result[1] == b"hash:08"
+        # Testing SeekForwardPosition Capability:
+        result = client.execute_command("FT.SEARCH", "idx", "word1 word2 word3", "INORDER", "DIALECT", "2")
+        assert result[0] == 1
+        assert result[1] == b"hash:10"
+
+    def test_hybrid_non_vector_query(self):
+        """Test hybrid non-vector queries"""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "hash:", "SCHEMA",
+                             "title", "TEXT", "NOSTEM",
+                             "body", "TEXT", "NOSTEM",
+                             "color", "TAG",
+                             "price", "NUMERIC")
+        # Insert test data
+        client.execute_command("HSET", "hash:00", "title", "plum", "body", "cat slow loud shark ocean eagle tomato", "color", "green", "price", "21")
+        client.execute_command("HSET", "hash:01", "title", "kiwi peach apple chair orange door orange melon chair", "body", "lettuce", "color", "green", "price", "8")
+        client.execute_command("HSET", "hash:02", "title", "plum", "body", "river cat slow build eagle fast dog", "color", "brown", "price", "40")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+        # Test hybrid non-vector query
+        result = client.execute_command("FT.SEARCH", "idx", "@color:{green} cat slow loud @price:[10 30] shark", "DIALECT", "2")
+        assert result[0] == 1
+        assert result[1] == b"hash:00"
+        result = client.execute_command("FT.SEARCH", "idx", "cat @color:{green} slow loud @price:[10 30] shark", "DIALECT", "2", "INORDER")
+        assert result[0] == 1
+        assert result[1] == b"hash:00"
+        result = client.execute_command("FT.SEARCH", "idx", "slow @color:{green} cat loud @price:[10 30] shark", "DIALECT", "2", "INORDER")
+        assert result[0] == 0
+        result = client.execute_command("FT.SEARCH", "idx", "@color:{green} cat slow @price:[10 30] soft", "DIALECT", "2")
+        assert result[0] == 0
 
     def test_info_search_fulltext_metrics(self):
         """Test info search for fulltext metrics"""

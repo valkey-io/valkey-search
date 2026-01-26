@@ -98,12 +98,20 @@ def validate_fulltext_search(client: Valkey):
         document = result[2]
         doc_fields = dict(zip(document[::2], document[1::2]))
         assert doc_fields == expected_hash_value
+    assert (
+        client.execute_command(
+            "CONFIG SET search.info-developer-visible yes"
+        )
+        == b"OK"
+    )
+    assert int(client.info("search").get("search_nonvector_requests_count", 0)) == 5
+    assert int(client.info("search").get("search_text_requests_count", 0)) == 5
     # Perform the text search query with term and prefix operations that return no match.
     nomatch = [text_query_term_nomatch, text_query_prefix_nomatch]
     for query in nomatch:
         result = client.execute_command(*query)
         assert len(result) == 1
-        assert result[0] == 0  # Number of documents found
+        assert result[0] == 0  # Number of documents found  
     # Perform a wild card prefix operation with multiple matches
     print(client.execute_command("FT._DEBUG textinfo products prefix ", "grea", "withkeys"))
     result = client.execute_command(*text_query_prefix_multimatch)
@@ -1522,6 +1530,129 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # (7) With Return clause + Field Aliasing
         result = client.execute_command("FT.SEARCH", "idx1", 'race', "RETURN", "6", "content", "AS", "text_content", "price", "AS", "numeric_content")
         assert result == [1, b"doc:1", [b"text_content", b"I am going to a race", b"numeric_content", b"100"]]
+
+    def test_info_search_fulltext_metrics(self):
+        """Test info search for fulltext metrics"""
+        import struct
+        client: Valkey = self.server.get_new_client()
+        # Enable config to view dev metrics as well
+        assert (
+            client.execute_command(
+                "CONFIG SET search.info-developer-visible yes"
+            )
+            == b"OK"
+        )
+        # Create index with all field types
+        client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "SCHEMA",
+            "content", "TEXT",
+            "price", "NUMERIC",
+            "tags", "TAG",
+            "vector", "VECTOR", "HNSW", "6", "TYPE", "FLOAT32", "DIM", "3", "DISTANCE_METRIC", "COSINE"
+        )
+        # Create second index with suffixtrie enabled for text
+        client.execute_command(
+            "FT.CREATE", "idx2", "ON", "HASH", "SCHEMA",
+            "content", "TEXT", "WITHSUFFIXTRIE",
+            "price", "NUMERIC",
+            "tags", "TAG",
+            "vector", "VECTOR", "HNSW", "6", "TYPE", "FLOAT32", "DIM", "3", "DISTANCE_METRIC", "COSINE"
+        )
+        # Wait for backfill
+        for index in ["idx", "idx2"]:
+            IndexingTestHelper.wait_for_backfill_complete_on_node(client, index)
+        # Validate intial fulltext memory metrics
+        assert int(client.info("search").get("search_used_text_memory_bytes", 0)) == 0
+        assert client.info("search").get("search_used_text_memory_human", 0) == 0
+        # Insert 10 documents such that even numbered ones are pure text and others are non-text
+        for i in range(10):
+            vec = struct.pack("<3f", float(i), float(i+1), float(i+2))
+            if i % 2 == 0:
+                client.execute_command(
+                    "HSET", f"doc:{i}",
+                    "content", f"document number {i}",
+                )
+            else:
+                client.execute_command(
+                    "HSET", f"doc:{i}",
+                    "price", str(100 + i * 10),
+                    "tags", f"tag{i}|category{i % 3}",
+                    "vector", vec
+                )
+        info_search = client.info("search")
+        # Validate memory metrics
+        ft_memory_fulldata = int(info_search.get("search_used_text_memory_bytes", 0))
+        assert ft_memory_fulldata > 0
+        assert info_search.get("search_used_text_memory_human", 0) != 0
+        # Validate attribute count metrics
+        assert int(info_search.get("search_number_of_attributes", 0)) == 8
+        assert int(info_search.get("search_number_of_text_attributes", 0)) == 2  # 2 indexes with 1 text field each
+        assert int(info_search.get("search_number_of_tag_attributes", 0)) == 2   # 2 indexes with 1 tag field each
+        assert int(info_search.get("search_number_of_numeric_attributes", 0)) == 2  # 2 indexes with 1 numeric field each
+        assert int(info_search.get("search_number_of_vector_attributes", 0)) == 2  # 2 indexes with 1 vector field each
+        # Validate ingest counter
+        assert int(info_search.get("search_ingest_field_text", 0)) == 10
+        # Validate current text items - should be 10 for 10 text docs
+        assert int(info_search.get("search_corpus_num_text_items", 0)) == 10
+
+        # Validate metrics after deletion of a record
+        client.execute_command("DEL", "doc:8")
+        # Call info search again
+        info_search = client.info("search")
+        # Validate memory metric
+        assert 0 < int(info_search.get("search_used_text_memory_bytes", 0)) < ft_memory_fulldata
+        # Ingest counter remains same but text items is updated
+        assert int(info_search.get("search_ingest_field_text", 0)) == 10
+        assert int(info_search.get("search_corpus_num_text_items", 0)) == 8
+        # Query metrics
+        # initial metrics
+        assert int(info_search.get("search_nonvector_requests_count", 0)) == 0
+        assert int(info_search.get("search_text_requests_count", 0)) == 0
+        # Query1 Pure text query (non-vector with text)
+        client.execute_command("FT.SEARCH", "idx", 'document number', "RETURN", "1", "content")
+        # Query2 Pure tag query (non-vector without text)
+        client.execute_command("FT.SEARCH", "idx", "@tags:{tag1}")
+        # Query3 Pure numeric query (non-vector without text)
+        client.execute_command("FT.SEARCH", "idx", "@price:[100 200]")
+        # Query4 Another text query but returns vector - no effect
+        client.execute_command("FT.SEARCH", "idx", 'number', "RETURN", "1", "vector")
+        # Query5 Pure vector query
+        vec_query = struct.pack("<3f", 1.0, 2.0, 3.0)
+        client.execute_command("FT.SEARCH", "idx", "*=>[KNN 5 @vector $BLOB]", "PARAMS", "2", "BLOB", vec_query, "DIALECT", "2")
+        # Query6 Hybrid query with all 4 aspects: vector + numeric + tag + text
+        # won't be counted in search_nonvector_requests_count
+        client.execute_command("FT.SEARCH", "idx", "(@tags:{tag1}) (@price:[100 200]) (document)=>[KNN 5 @vector $BLOB]", "PARAMS", "2", "BLOB", vec_query, "DIALECT", "2")
+        # Query7 Non-vector query with tag + numeric + text (should count as both non-vector AND text)
+        client.execute_command("FT.SEARCH", "idx", "(@tags:{tag1}) (@price:[100 200]) (document)", "DIALECT", "2")
+        # Refresh info search
+        info_search = client.info("search")
+        # existing metric
+        assert int(info_search.get("search_hybrid_requests_count", 0)) == 1 # Query 6
+        # new metrics
+        assert int(info_search.get("search_nonvector_requests_count", 0)) == 5 # Query 1,2,3,4,7 (query 6 is ignored)
+        assert int(info_search.get("search_text_requests_count", 0)) == 4  # Query 1,4,6,7
+        assert int(info_search.get("search_query_numeric_count", 0)) == 3  # Queries 3,6,7
+        assert int(info_search.get("search_query_tag_count", 0)) == 3  # Queries 2,6,7
+
+        # Query8: Text with prefix
+        client.execute_command("FT.SEARCH", "idx2", 'document*')
+        # Query9: Text with fuzzy
+        client.execute_command("FT.SEARCH", "idx2", '%documnt%')
+        # Query10: Text with exact phrase
+        client.execute_command("FT.SEARCH", "idx2", '"document number"')
+        # Query11: Text with suffix
+        client.execute_command("FT.SEARCH", "idx2", '*umber')
+        # Refresh info search
+        info_search = client.info("search")
+        # Verify request counters
+        assert int(info_search.get("search_nonvector_requests_count", 0)) == 9
+        assert int(info_search.get("search_text_requests_count", 0)) == 8  # Queries 1,4,6,7,8,9,10,11 contain text predicates
+        # Verify query operation type counters
+        assert int(info_search.get("search_query_text_term_count", 0)) == 7  # Query1: 2 terms, Query4: 1 term, Query6: 1 term, Query7: 1 term, Query10: 2 terms (in exact phrase)
+        assert int(info_search.get("search_query_text_prefix_count", 0)) == 1  # Query8: prefix "document*"
+        assert int(info_search.get("search_query_text_suffix_count", 0)) == 1  # Query11: suffix "*umber"
+        assert int(info_search.get("search_query_text_fuzzy_count", 0)) == 1  # Query9: fuzzy "%documnt%"
+        assert int(info_search.get("search_query_text_proximity_count", 0)) == 1  # Query10: exact phrase "document number" (also counted 2 terms above)
 
 class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
     """

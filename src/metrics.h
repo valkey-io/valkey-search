@@ -32,6 +32,8 @@ class Metrics {
     uint64_t query_failed_requests_cnt{0};
     uint64_t query_result_record_dropped_cnt{0};
     uint64_t query_hybrid_requests_cnt{0};
+    std::atomic<uint64_t> query_nonvector_requests_cnt{0};
+    std::atomic<uint64_t> query_text_requests_cnt{0};
     std::atomic<uint64_t> query_inline_filtering_requests_cnt{0};
     std::atomic<uint64_t> query_prefiltering_requests_cnt{0};
     std::atomic<uint64_t> hnsw_add_exceptions_cnt{0};

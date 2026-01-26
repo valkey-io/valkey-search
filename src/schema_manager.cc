@@ -405,6 +405,62 @@ uint64_t SchemaManager::GetNumberOfAttributes() const {
   }
   return num_attributes;
 }
+
+uint64_t SchemaManager::GetNumberOfTextAttributes() const {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  uint64_t count = 0;
+  for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
+    for (const auto &[name, schema] : schema_map) {
+      count += schema->GetTextAttributeCount();
+    }
+  }
+  return count;
+}
+
+uint64_t SchemaManager::GetNumberOfTagAttributes() const {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  uint64_t count = 0;
+  for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
+    for (const auto &[name, schema] : schema_map) {
+      count += schema->GetTagAttributeCount();
+    }
+  }
+  return count;
+}
+
+uint64_t SchemaManager::GetNumberOfNumericAttributes() const {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  uint64_t count = 0;
+  for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
+    for (const auto &[name, schema] : schema_map) {
+      count += schema->GetNumericAttributeCount();
+    }
+  }
+  return count;
+}
+
+uint64_t SchemaManager::GetNumberOfVectorAttributes() const {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  uint64_t count = 0;
+  for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
+    for (const auto &[name, schema] : schema_map) {
+      count += schema->GetVectorAttributeCount();
+    }
+  }
+  return count;
+}
+
+uint64_t SchemaManager::GetCorpusNumTextItems() const {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  uint64_t count = 0;
+  for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
+    for (const auto &[name, schema] : schema_map) {
+      count += schema->GetTextItemCount();
+    }
+  }
+  return count;
+}
+
 uint64_t SchemaManager::GetTotalIndexedDocuments() const {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   auto num_hash_keys = 0;
@@ -414,6 +470,18 @@ uint64_t SchemaManager::GetTotalIndexedDocuments() const {
     }
   }
   return num_hash_keys;
+}
+uint64_t SchemaManager::GetTotalTextMemoryUsage() const {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  uint64_t total = 0;
+  for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
+    for (const auto &[name, schema] : schema_map) {
+      if (schema->GetTextIndexSchema()) {
+        total += schema->GetTextIndexSchema()->GetTotalTextIndexMemoryUsage();
+      }
+    }
+  }
+  return total;
 }
 bool SchemaManager::IsIndexingInProgress() const {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
@@ -748,6 +816,32 @@ static vmsdk::info_field::Integer number_of_attributes(
     vmsdk::info_field::IntegerBuilder().App().Computed([] {
       return SchemaManager::Instance().GetNumberOfAttributes();
     }));
+static vmsdk::info_field::Integer number_of_text_attributes(
+    "index_stats", "number_of_text_attributes",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([] {
+      return SchemaManager::Instance().GetNumberOfTextAttributes();
+    }));
+static vmsdk::info_field::Integer number_of_tag_attributes(
+    "index_stats", "number_of_tag_attributes",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([] {
+      return SchemaManager::Instance().GetNumberOfTagAttributes();
+    }));
+static vmsdk::info_field::Integer number_of_numeric_attributes(
+    "index_stats", "number_of_numeric_attributes",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([] {
+      return SchemaManager::Instance().GetNumberOfNumericAttributes();
+    }));
+static vmsdk::info_field::Integer number_of_vector_attributes(
+    "index_stats", "number_of_vector_attributes",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([] {
+      return SchemaManager::Instance().GetNumberOfVectorAttributes();
+    }));
+static vmsdk::info_field::Integer corpus_num_text_items(
+    "index_stats", "corpus_num_text_items",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([] {
+      return SchemaManager::Instance().GetCorpusNumTextItems();
+    }));
+
 static vmsdk::info_field::Integer total_indexed_documents(
     "index_stats", "total_indexed_documents",
     vmsdk::info_field::IntegerBuilder().App().Computed([] {

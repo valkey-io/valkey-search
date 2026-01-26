@@ -503,8 +503,15 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearch(
   auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
   vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
   ++Metrics::GetStats().time_slice_queries;
+  if (parameters.filter_parse_results.query_operations &
+      QueryOperations::kContainsText) {
+    ++Metrics::GetStats().query_text_requests_cnt;
+  }
   // Handle non vector queries first where attribute_alias is empty.
   if (parameters.IsNonVectorQuery()) {
+    if (search_mode == SearchMode::kLocal) {
+      ++Metrics::GetStats().query_nonvector_requests_cnt;
+    }
     return SearchNonVectorQuery(parameters);
   }
   VMSDK_ASSIGN_OR_RETURN(auto index, parameters.index_schema->GetIndex(

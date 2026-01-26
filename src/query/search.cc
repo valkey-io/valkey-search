@@ -505,15 +505,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearch(
   ++Metrics::GetStats().time_slice_queries;
   // Handle non vector queries first where attribute_alias is empty.
   if (parameters.IsNonVectorQuery()) {
-    auto results = SearchNonVectorQuery(parameters);
-    if (results.ok()) {
-      // Capture sequence numbers while still holding reader lock to avoid TOCTOU race
-      for (auto &neighbor : *results) {
-        neighbor.sequence_number =
-            parameters.index_schema->GetIndexMutationSequenceNumber(neighbor.external_id);
-      }
-    }
-    return results;
+    return SearchNonVectorQuery(parameters);
   }
   VMSDK_ASSIGN_OR_RETURN(auto index, parameters.index_schema->GetIndex(
                                          parameters.attribute_alias));
@@ -524,42 +516,30 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearch(
         absl::StrCat(parameters.attribute_alias, " is not a Vector index "));
   }
 
-  absl::StatusOr<std::vector<indexes::Neighbor>> results;
   if (!parameters.filter_parse_results.root_predicate) {
-    results = PerformVectorSearch(vector_index, parameters);
-  } else {
-    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
-    size_t qualified_entries = EvaluateFilterAsPrimary(
-        parameters.filter_parse_results.root_predicate.get(), entries_fetchers,
-        false, parameters.filter_parse_results.query_operations);
-
-    // Query planner makes the decision for pre-filtering vs inline-filtering.
-    if (UsePreFiltering(qualified_entries, vector_index)) {
-      VMSDK_LOG(DEBUG, nullptr)
-          << "Using pre-filter query execution, qualified entries="
-          << qualified_entries;
-      // Do an exact nearest neighbour search on the reduced search space.
-      ++Metrics::GetStats().query_prefiltering_requests_cnt;
-      std::priority_queue<std::pair<float, hnswlib::labeltype>> pq_results =
-          CalcBestMatchingPrefilteredKeys(parameters, entries_fetchers,
-                                          vector_index, qualified_entries);
-
-      results = vector_index->CreateReply(pq_results);
-    } else {
-      ++Metrics::GetStats().query_inline_filtering_requests_cnt;
-      lock.SetMayProlong();
-      results = PerformVectorSearch(vector_index, parameters);
-    }
+    return PerformVectorSearch(vector_index, parameters);
   }
+  std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
+  size_t qualified_entries = EvaluateFilterAsPrimary(
+      parameters.filter_parse_results.root_predicate.get(), entries_fetchers,
+      false, parameters.filter_parse_results.query_operations);
 
-  // Capture sequence numbers while still holding reader lock to avoid TOCTOU race
-  if (results.ok()) {
-    for (auto &neighbor : *results) {
-      neighbor.sequence_number =
-          parameters.index_schema->GetIndexMutationSequenceNumber(neighbor.external_id);
-    }
+  // Query planner makes the decision for pre-filtering vs inline-filtering.
+  if (UsePreFiltering(qualified_entries, vector_index)) {
+    VMSDK_LOG(DEBUG, nullptr)
+        << "Using pre-filter query execution, qualified entries="
+        << qualified_entries;
+    // Do an exact nearest neighbour search on the reduced search space.
+    ++Metrics::GetStats().query_prefiltering_requests_cnt;
+    std::priority_queue<std::pair<float, hnswlib::labeltype>> results =
+        CalcBestMatchingPrefilteredKeys(parameters, entries_fetchers,
+                                        vector_index, qualified_entries);
+
+    return vector_index->CreateReply(results);
   }
-  return results;
+  ++Metrics::GetStats().query_inline_filtering_requests_cnt;
+  lock.SetMayProlong();
+  return PerformVectorSearch(vector_index, parameters);
 }
 
 // Check if no results should be returned based on query parameters.
@@ -665,9 +645,14 @@ absl::StatusOr<SearchResult> Search(const SearchParameters &parameters,
     return result.status();
   }
   size_t total_count = result.value().size();
-  // Sequence numbers are now captured in DoSearch() while holding the reader lock
-  // to avoid TOCTOU race conditions. No need to set them again here.
-  return SearchResult(total_count, std::move(result.value()), parameters);
+  // return SearchResult(total_count, std::move(result.value()), parameters);
+  auto search_result =
+      SearchResult(total_count, std::move(result.value()), parameters);
+  for (auto &n : search_result.neighbors) {
+    n.sequence_number =
+        parameters.index_schema->GetIndexMutationSequenceNumber(n.external_id);
+  }
+  return search_result;
 }
 
 absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,

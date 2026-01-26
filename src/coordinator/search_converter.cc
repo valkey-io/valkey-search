@@ -33,7 +33,8 @@ namespace valkey_search::coordinator {
 
 absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
     const Predicate& predicate, std::shared_ptr<IndexSchema> index_schema,
-    absl::flat_hash_set<std::string>& attribute_identifiers) {
+    absl::flat_hash_set<std::string>& attribute_identifiers,
+    bool& has_text_predicate) {
   switch (predicate.predicate_case()) {
     case Predicate::kTag: {
       VMSDK_ASSIGN_OR_RETURN(
@@ -87,7 +88,8 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
       for (const auto& child_predicate : predicate.and_().children()) {
         VMSDK_ASSIGN_OR_RETURN(
             auto child, GRPCPredicateToPredicate(child_predicate, index_schema,
-                                                 attribute_identifiers));
+                                                 attribute_identifiers,
+                                                 has_text_predicate));
         children.push_back(std::move(child));
       }
       // Extract slop and inorder if present
@@ -107,7 +109,8 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
       for (const auto& child_predicate : predicate.or_().children()) {
         VMSDK_ASSIGN_OR_RETURN(
             auto child, GRPCPredicateToPredicate(child_predicate, index_schema,
-                                                 attribute_identifiers));
+                                                 attribute_identifiers,
+                                                 has_text_predicate));
         children.push_back(std::move(child));
       }
       return std::make_unique<query::ComposedPredicate>(
@@ -117,10 +120,11 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
       VMSDK_ASSIGN_OR_RETURN(
           auto predicate,
           GRPCPredicateToPredicate(predicate.negate().predicate(), index_schema,
-                                   attribute_identifiers));
+                                   attribute_identifiers, has_text_predicate));
       return std::make_unique<query::NegatePredicate>(std::move(predicate));
     }
     case Predicate::kTerm: {
+      has_text_predicate = true;
       auto text_index_schema = index_schema->GetTextIndexSchema();
       if (!text_index_schema) {
         return absl::InvalidArgumentError("Index does not have any text field");
@@ -133,6 +137,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
           predicate.term().content(), predicate.term().exact());
     }
     case Predicate::kPrefix: {
+      has_text_predicate = true;
       auto text_index_schema = index_schema->GetTextIndexSchema();
       if (!text_index_schema) {
         return absl::InvalidArgumentError("Index does not have any text field");
@@ -145,6 +150,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
           predicate.prefix().content());
     }
     case Predicate::kSuffix: {
+      has_text_predicate = true;
       auto text_index_schema = index_schema->GetTextIndexSchema();
       if (!text_index_schema) {
         return absl::InvalidArgumentError("Index does not have any text field");
@@ -157,6 +163,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
           predicate.suffix().content());
     }
     case Predicate::kInfix: {
+      has_text_predicate = true;
       auto text_index_schema = index_schema->GetTextIndexSchema();
       if (!text_index_schema) {
         return absl::InvalidArgumentError("Index does not have any text field");
@@ -169,6 +176,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
           predicate.infix().content());
     }
     case Predicate::kFuzzy: {
+      has_text_predicate = true;
       auto text_index_schema = index_schema->GetTextIndexSchema();
       if (!text_index_schema) {
         return absl::InvalidArgumentError("Index does not have any text field");
@@ -218,7 +226,8 @@ GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request,
         parameters->filter_parse_results.root_predicate,
         GRPCPredicateToPredicate(
             request.root_filter_predicate(), parameters->index_schema,
-            parameters->filter_parse_results.filter_identifiers));
+            parameters->filter_parse_results.filter_identifiers,
+            parameters->filter_parse_results.has_text_predicate));
   }
   for (auto& return_parameter : request.return_parameters()) {
     parameters->return_attributes.emplace_back(query::ReturnAttribute(

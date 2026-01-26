@@ -7,18 +7,28 @@
 
 #include "src/commands/commands.h"
 
+#include <memory>
+#include <vector>
+
 #include "fanout.h"
 #include "ft_create_parser.h"
 #include "src/acl.h"
 #include "src/commands/ft_search.h"
 #include "src/coordinator/metadata_manager.h"
+#include "src/metrics.h"
 #include "src/query/fanout.h"
+#include "src/query/inflight_retry.h"
+#include "src/query/response_generator.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
 #include "valkey_search_options.h"
+#include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/cluster_map.h"
 #include "vmsdk/src/debug.h"
+#include "vmsdk/src/log.h"
+#include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/utils.h"
 
 namespace valkey_search {
 namespace async {
@@ -27,6 +37,38 @@ struct Result {
   cancel::Token cancellation_token;
   absl::StatusOr<query::SearchResult> search_result;
   std::unique_ptr<QueryCommand> parameters;
+};
+
+// Context for timer-based retry when waiting for in-flight keys
+struct InFlightRetryContext : public query::InFlightRetryContextBase {
+  vmsdk::BlockedClient blocked_client;
+  std::unique_ptr<Result> result;
+
+  InFlightRetryContext(vmsdk::BlockedClient &&bc, std::unique_ptr<Result> &&res)
+      : blocked_client(std::move(bc)), result(std::move(res)) {}
+
+  bool IsCancelled() const override {
+    return result->parameters->cancellation_token->IsCancelled();
+  }
+
+  const std::shared_ptr<IndexSchema> &GetIndexSchema() const override {
+    return result->parameters->index_schema;
+  }
+
+  const char *GetDesc() const override { return "Full-text query"; }
+
+  const std::vector<indexes::Neighbor> &GetNeighbors() const override {
+    return result->search_result->neighbors;
+  }
+
+  void OnComplete() override {
+    blocked_client.SetReplyPrivateData(result.release());
+  }
+
+  void OnCancelled() override {
+    // Let Reply callback handle the cancellation
+    blocked_client.SetReplyPrivateData(result.release());
+  }
 };
 
 int Timeout(ValkeyModuleCtx *ctx, [[maybe_unused]] ValkeyModuleString **argv,
@@ -135,6 +177,19 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
           .search_result = std::move(neighbors),
           .parameters = std::move(upcast_parameters),
       });
+
+      // Text predicate evaluation requires main thread to ensure text indexes
+      // reflect current keyspace. Block if result keys have in-flight
+      // mutations.
+      if (!result->parameters->no_content &&
+          query::QueryHasTextPredicate(*result->parameters)) {
+        auto retry_ctx = std::make_shared<async::InFlightRetryContext>(
+            std::move(blocked_client), std::move(result));
+
+        retry_ctx->ScheduleOnMainThread();
+        return;
+      }
+
       blocked_client.SetReplyPrivateData(result.release());
     };
 

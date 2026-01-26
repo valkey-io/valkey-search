@@ -8,10 +8,11 @@
 #include "src/coordinator/server.h"
 
 #include <cstdint>
-#include <deque>
 #include <memory>
 #include <string>
+#include <thread>
 #include <utility>
+#include <vector>
 
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
@@ -32,10 +33,11 @@
 #include "src/index_schema.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
-#include "src/query/fanout_operation_base.h"
+#include "src/query/inflight_retry.h"
 #include "src/query/response_generator.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
+#include "src/valkey_search.h"
 #include "valkey_search_options.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/latency_sampler.h"
@@ -112,6 +114,82 @@ void SerializeNeighbors(SearchIndexPartitionResponse* response,
   }
 }
 
+namespace {
+
+// Context for timer-based retry when waiting for in-flight keys on remote shard
+struct RemoteInFlightRetryContext : public query::InFlightRetryContextBase {
+  SearchIndexPartitionResponse* response;
+  grpc::ServerUnaryReactor* reactor;
+  std::unique_ptr<vmsdk::StopWatch> latency_sample;
+  std::vector<indexes::Neighbor> neighbors;
+  std::unique_ptr<query::SearchParameters> parameters;
+  size_t total_count;
+
+  RemoteInFlightRetryContext(SearchIndexPartitionResponse* resp,
+                             grpc::ServerUnaryReactor* react,
+                             std::unique_ptr<vmsdk::StopWatch> sample,
+                             std::vector<indexes::Neighbor>&& nbrs,
+                             std::unique_ptr<query::SearchParameters>&& params,
+                             size_t count)
+      : response(resp),
+        reactor(react),
+        latency_sample(std::move(sample)),
+        neighbors(std::move(nbrs)),
+        parameters(std::move(params)),
+        total_count(count) {}
+
+  bool IsCancelled() const override {
+    return parameters->cancellation_token->IsCancelled();
+  }
+
+  const std::shared_ptr<IndexSchema>& GetIndexSchema() const override {
+    return parameters->index_schema;
+  }
+
+  const char* GetDesc() const override { return "Remote full-text query"; }
+
+  const std::vector<indexes::Neighbor>& GetNeighbors() const override {
+    return neighbors;
+  }
+
+  void OnComplete() override {
+    auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
+    const auto& attribute_data_type =
+        parameters->index_schema->GetAttributeDataType();
+    size_t original_size = neighbors.size();
+    if (parameters->attribute_alias.empty()) {
+      query::ProcessNonVectorNeighborsForReply(ctx.get(), attribute_data_type,
+                                               neighbors, *parameters);
+    } else {
+      auto vector_identifier =
+          parameters->index_schema->GetIdentifier(parameters->attribute_alias)
+              .value();
+      query::ProcessNeighborsForReply(ctx.get(), attribute_data_type, neighbors,
+                                      *parameters, vector_identifier);
+    }
+    // Adjust total_count based on modified neighbours
+    size_t removed = original_size - neighbors.size();
+    size_t adjusted_total_count =
+        (total_count > removed) ? (total_count - removed) : 0;
+    SerializeNeighbors(response, neighbors);
+    response->set_total_count(adjusted_total_count);
+    reactor->Finish(grpc::Status::OK);
+    RecordSearchMetrics(false, std::move(latency_sample));
+  }
+
+  void OnCancelled() override {
+    if (!parameters->enable_partial_results) {
+      reactor->Finish({grpc::StatusCode::DEADLINE_EXCEEDED,
+                       "Search operation cancelled due to timeout"});
+      RecordSearchMetrics(true, std::move(latency_sample));
+    } else {
+      OnComplete();  // Return partial results
+    }
+  }
+};
+
+}  // namespace
+
 grpc::Status Service::PerformSlotConsistencyCheck(
     uint64_t expected_slot_fingerprint) {
   // compare slot fingerprint
@@ -157,6 +235,18 @@ query::SearchResponseCallback Service::MakeSearchCallback(
       RecordSearchMetrics(true, std::move(latency_sample));
       return;
     }
+    // Text predicate evaluation requires main thread to ensure text indexes
+    // reflect current keyspace. Block if result keys have in-flight mutations.
+    if (!parameters->no_content && query::QueryHasTextPredicate(*parameters)) {
+      auto retry_ctx = std::make_shared<RemoteInFlightRetryContext>(
+          response, reactor, std::move(latency_sample),
+          std::move(result->neighbors), std::move(parameters),
+          result->total_count);
+
+      retry_ctx->ScheduleOnMainThread();
+      return;
+    }
+
     if (parameters->no_content) {
       SerializeNeighbors(response, result->neighbors);
       response->set_total_count(result->total_count);

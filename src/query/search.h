@@ -197,6 +197,8 @@ CalcBestMatchingPrefilteredKeys(
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>& entries_fetchers,
     indexes::VectorBase* vector_index, size_t qualified_entries);
 
+bool QueryHasTextPredicate(const SearchParameters& parameters);
+
 // Check if no results should be returned based on limit parameters
 bool ShouldReturnNoResults(const SearchParameters& parameters);
 

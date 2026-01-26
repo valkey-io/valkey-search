@@ -43,6 +43,10 @@
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
+namespace valkey_search::query {
+class InFlightRetryContextBase;
+}  // namespace valkey_search::query
+
 namespace valkey_search {
 bool ShouldBlockClient(ValkeyModuleCtx *ctx, bool inside_multi_exec,
                        bool from_backfill);
@@ -192,6 +196,9 @@ class IndexSchema : public KeyspaceEventSubscription,
     };
     std::optional<absl::flat_hash_map<std::string, AttributeData>> attributes;
     std::vector<vmsdk::BlockedClient> blocked_clients;
+    // Queries waiting for this mutation to complete
+    absl::flat_hash_set<std::shared_ptr<query::InFlightRetryContextBase>>
+        waiting_queries;
     MutationSequenceNumber sequence_number{0};
     bool consume_in_progress{false};
     bool from_backfill{false};
@@ -209,6 +216,14 @@ class IndexSchema : public KeyspaceEventSubscription,
   uint64_t GetBackfillScannedKeyCount() const;
   uint64_t GetBackfillDbSize() const;
   InfoIndexPartitionData GetInfoIndexPartitionData() const;
+  bool IsKeyInFlight(const InternedStringPtr &key) const
+      ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
+  // Register a waiting query on the first conflicting in-flight key.
+  // Returns true if registered (conflict found), false otherwise.
+  bool RegisterWaitingQuery(
+      const std::vector<indexes::Neighbor> &neighbors,
+      std::shared_ptr<query::InFlightRetryContextBase> query_ctx)
+      ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
 
   static absl::Status TextInfoCmd(ValkeyModuleCtx *ctx,
                                   vmsdk::ArgsIterator &itr);
@@ -349,8 +364,6 @@ class IndexSchema : public KeyspaceEventSubscription,
                           MutationSequenceNumber sequence_number,
                           bool from_backfill, bool block_client,
                           bool from_multi)
-      ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
-  bool IsKeyInFlight(const InternedStringPtr &key) const
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
   std::optional<MutatedAttributes> ConsumeTrackedMutatedAttribute(
       const Key &key, bool first_time)

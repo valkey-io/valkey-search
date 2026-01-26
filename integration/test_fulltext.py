@@ -1669,7 +1669,7 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # Wait for backfill
         for index in ["idx", "idx2"]:
             IndexingTestHelper.wait_for_backfill_complete_on_node(client, index)
-        # Validate intial fulltext memory metrics
+        # Validate initial fulltext memory metrics
         assert int(client.info("search").get("search_used_text_memory_bytes", 0)) == 0
         assert client.info("search").get("search_used_text_memory_human", 0) == 0
         # Insert 10 documents such that even numbered ones are pure text and others are non-text

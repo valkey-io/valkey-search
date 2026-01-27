@@ -1,0 +1,233 @@
+name: Endurance and Stability Tests
+
+# ============================================================================
+# WORKFLOW PURPOSE
+# ============================================================================
+# Production-grade endurance testing workflow using memtier_benchmark with TLS
+# support for long-running performance and stability testing.
+#
+# Key capabilities:
+# - TLS-enabled Redis/Valkey testing
+# - Self-hosted runner optimized
+# - Long-running job support (hours to days)
+# - Machine-readable results (JSON/CSV)
+# - Extensible for failover and chaos testing
+# - Uses devcontainer for consistent environment
+# ============================================================================
+
+on:
+  # Manual trigger with comprehensive configuration options
+  workflow_dispatch:
+    inputs:
+      server_type:
+        description: "Server type to test"
+        required: true
+        type: choice
+        options:
+          - valkey
+          - redis
+        default: "valkey"
+      
+      branch_version:
+        description: "Branch/version to test (e.g., unstable, main, v8.0.1)"
+        required: false
+        default: "unstable"
+        type: string
+      
+      enable_tls:
+        description: "Enable TLS/SSL encryption"
+        required: true
+        type: boolean
+        default: true
+      
+      test_duration:
+        description: "Test duration in seconds (0 = use request count)"
+        required: false
+        default: "3600"
+        type: string
+      
+      request_count:
+        description: "Total requests (0 = use duration, ignored if duration > 0)"
+        required: false
+        default: "0"
+        type: string
+      
+      threads:
+        description: "Number of threads"
+        required: false
+        default: "4"
+        type: string
+      
+      clients:
+        description: "Number of clients per thread"
+        required: false
+        default: "50"
+        type: string
+      
+      pipeline_depth:
+        description: "Pipeline depth"
+        required: false
+        default: "1"
+        type: string
+      
+      data_size:
+        description: "Data size in bytes"
+        required: false
+        default: "1024"
+        type: string
+      
+      workload_type:
+        description: "Workload type"
+        required: true
+        type: choice
+        options:
+          - mixed
+          - read_only
+          - write_only
+        default: "mixed"
+      
+      keyspace_size:
+        description: "Keyspace size (number of keys)"
+        required: false
+        default: "1000000"
+        type: string
+  
+  # Automated triggers
+  push:
+    branches:
+      - main
+      - unstable
+    paths:
+      - '.github/workflows/endurance_tests.yml'
+      - 'scripts/benchmark/**'
+  
+  schedule:
+    # Daily endurance tests at 2 AM UTC
+    - cron: "0 2 * * *"
+
+# ============================================================================
+# CONCURRENCY CONTROL
+# ============================================================================
+# Critical: Only one endurance test can run at a time on self-hosted runners
+# to ensure resource isolation and result accuracy
+# ============================================================================
+concurrency:
+  group: endurance-tests-${{ inputs.server_type || 'valkey' }}
+  cancel-in-progress: false  # Never cancel running tests
+
+# ============================================================================
+# DEFAULT SHELL CONFIGURATION
+# ============================================================================
+defaults:
+  run:
+    shell: "bash -Eeuo pipefail -x {0}"
+
+# Minimal permissions for security
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  endurance_test:
+    name: "Endurance Test: ${{ inputs.server_type || 'valkey' }} (TLS: ${{ inputs.enable_tls || true }})"
+    runs-on: [self-hosted, endurance-tests]
+    
+    # Support long-running tests (up to 5 days)
+    timeout-minutes: 7200
+    
+    steps:
+      # ======================================================================
+      # STEP 1: CHECKOUT CODE
+      # ======================================================================
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch_version || 'unstable' }}
+          fetch-depth: 0
+          persist-credentials: false
+      
+      # ======================================================================
+      # STEP 2: SET UP DOCKER BUILDX
+      # ======================================================================
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      
+      # ======================================================================
+      # STEP 3: BUILD DOCKER IMAGE FROM DEVCONTAINER
+      # ======================================================================
+      # Use devcontainer which has memtier-benchmark pre-installed
+      # ======================================================================
+      - name: Build Docker Image from Devcontainer
+        run: |
+          echo "Building Docker image with pre-installed tools..."
+          docker build -t endurance-test-image -f .devcontainer/Dockerfile .
+          
+          echo "Verifying memtier-benchmark..."
+          docker run --rm endurance-test-image memtier_benchmark --version
+          
+          echo "Checking TLS support..."
+          docker run --rm endurance-test-image bash -c \
+            "memtier_benchmark --help | grep -q '\-\-tls' && echo 'TLS support confirmed' || echo 'WARNING: No TLS support'"
+      
+      # ======================================================================
+      # STEP 4: CREATE RESULTS DIRECTORY
+      # ======================================================================
+      - name: Create results directory
+        run: |
+          mkdir -p endurance-results
+          chmod 777 endurance-results
+          echo "Results directory created"
+      
+      # ======================================================================
+      # STEP 5: RUN ENDURANCE TEST IN CONTAINER
+      # ======================================================================
+      # Run complete endurance test workflow inside container
+      # Includes: server setup, TLS generation, testing, and cleanup
+      # ======================================================================
+      - name: Run endurance test in container
+        id: test-run
+        continue-on-error: true
+        timeout-minutes: 7200
+        run: |
+          docker run --privileged --rm \
+            --mount type=bind,source="$(pwd)/endurance-results",target=/workspace/results \
+            -v "$(pwd):/workspace" \
+            -e SERVER_TYPE="${{ inputs.server_type || 'valkey' }}" \
+            -e BRANCH_VERSION="${{ inputs.branch_version || 'unstable' }}" \
+            -e ENABLE_TLS="${{ inputs.enable_tls != false }}" \
+            -e TEST_DURATION="${{ inputs.test_duration || '3600' }}" \
+            -e REQUEST_COUNT="${{ inputs.request_count || '0' }}" \
+            -e THREADS="${{ inputs.threads || '4' }}" \
+            -e CLIENTS="${{ inputs.clients || '50' }}" \
+            -e PIPELINE_DEPTH="${{ inputs.pipeline_depth || '1' }}" \
+            -e DATA_SIZE="${{ inputs.data_size || '1024' }}" \
+            -e WORKLOAD_TYPE="${{ inputs.workload_type || 'mixed' }}" \
+            -e KEYSPACE_SIZE="${{ inputs.keyspace_size || '1000000' }}" \
+            --user "ubuntu:ubuntu" \
+            endurance-test-image \
+            bash /workspace/scripts/benchmark/run_endurance_test.sh
+      
+      # ======================================================================
+      # STEP 6: UPDATE PERMISSIONS
+      # ======================================================================
+      - name: Update results permissions
+        if: always()
+        run: sudo chmod -R 755 endurance-results
+      
+      # ======================================================================
+      # STEP 7: UPLOAD RESULTS
+      # ======================================================================
+      - name: Upload endurance test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: endurance-results-${{ inputs.server_type || 'valkey' }}-${{ github.run_number }}
+          path: endurance-results
+          retention-days: 90
+      
+      # ======================================================================
+      # STEP 8: CHECK RESULTS
+      # ======================================================================
+      - name: Check test results
+        if: steps.test-run.outcome == 'failure'
+        run: exit 1

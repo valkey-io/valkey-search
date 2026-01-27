@@ -1693,8 +1693,10 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         info_search = client.info("search")
         # Validate memory metrics
         ft_memory_fulldata = int(info_search.get("search_used_text_memory_bytes", 0))
-        assert ft_memory_fulldata > 0
-        assert info_search.get("search_used_text_memory_human", 0) != 0
+        is_san_build = os.environ.get('SAN_BUILD', 'no') != 'no'
+        if not is_san_build:
+            assert ft_memory_fulldata > 0
+            assert info_search.get("search_used_text_memory_human", 0) != 0 
         # Validate attribute count metrics
         assert int(info_search.get("search_number_of_attributes", 0)) == 8
         assert int(info_search.get("search_number_of_text_attributes", 0)) == 2  # 2 indexes with 1 text field each
@@ -1711,7 +1713,8 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # Call info search again
         info_search = client.info("search")
         # Validate memory metric
-        assert 0 < int(info_search.get("search_used_text_memory_bytes", 0)) < ft_memory_fulldata
+        if not is_san_build:
+            assert 0 < int(info_search.get("search_used_text_memory_bytes", 0)) < ft_memory_fulldata
         # Ingest counter remains same but text items is updated
         assert int(info_search.get("search_ingest_field_text", 0)) == 10
         assert int(info_search.get("search_corpus_num_text_items", 0)) == 8

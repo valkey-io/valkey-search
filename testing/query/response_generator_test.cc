@@ -82,6 +82,7 @@ TEST_P(ResponseGeneratorTest, ProcessNeighborsForReply) {
     auto string_interned_external_id = StringInternStore::Intern(external_id);
     expected_neighbors.push_back(
         indexes::Neighbor(string_interned_external_id, 0));
+    expected_neighbors.back().sequence_number = 0;
   }
   std::vector<RecordsMap> expected_contents;
   expected_contents.reserve(params.expected_contents.size());
@@ -89,6 +90,15 @@ TEST_P(ResponseGeneratorTest, ProcessNeighborsForReply) {
     expected_contents.push_back(ToRecordsMap(expected_content));
   }
   query::SearchParameters parameters(100000, nullptr, 0);
+  parameters.index_schema = CreateIndexSchema("index").value();
+  for (const auto &n : expected_neighbors) {
+    parameters.index_schema->SetIndexMutationSequenceNumber(n.external_id,
+                                                            n.sequence_number);
+    parameters.index_schema->SetDbMutationSequenceNumber(
+        n.external_id,
+        n.sequence_number + 1);  // + 1 forces call to filter.
+  }
+
   for (const auto &return_attribute : params.return_attributes) {
     parameters.return_attributes.push_back(
         {.identifier =

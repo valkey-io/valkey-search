@@ -350,8 +350,6 @@ class IndexSchema : public KeyspaceEventSubscription,
                           bool from_backfill, bool block_client,
                           bool from_multi)
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
-  bool IsKeyInFlight(const InternedStringPtr &key) const
-      ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
   std::optional<MutatedAttributes> ConsumeTrackedMutatedAttribute(
       const Key &key, bool first_time)
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
@@ -359,11 +357,7 @@ class IndexSchema : public KeyspaceEventSubscription,
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
 
   mutable vmsdk::TimeSlicedMRMWMutex time_sliced_mutex_;
-  struct MultiMutations {
-    std::unique_ptr<absl::BlockingCounter> blocking_counter;
-    std::deque<Key> keys;
-  };
-  vmsdk::MainThreadAccessGuard<MultiMutations> multi_mutations_;
+  vmsdk::MainThreadAccessGuard<std::deque<Key>> multi_mutations_keys_;
   vmsdk::MainThreadAccessGuard<bool> schedule_multi_exec_processing_{false};
 
   FRIEND_TEST(IndexSchemaRDBTest, SaveAndLoad);

@@ -20,7 +20,6 @@
 #include <vector>
 
 #include "absl/base/optimization.h"
-#include "absl/cleanup/cleanup.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
@@ -679,34 +678,32 @@ std::unique_ptr<vmsdk::StopWatch> CreateQueueDelayCapturer() {
 // command.
 void IndexSchema::ProcessMultiQueue() {
   schedule_multi_exec_processing_ = false;
-  auto &multi_mutations = multi_mutations_.Get();
-  if (ABSL_PREDICT_TRUE(multi_mutations.keys.empty())) {
+  auto &multi_mutations_keys = multi_mutations_keys_.Get();
+  if (ABSL_PREDICT_TRUE(multi_mutations_keys.empty())) {
     return;
   }
 
   // Track batch metrics
-  Metrics::GetStats().ingest_last_batch_size = multi_mutations.keys.size();
+  Metrics::GetStats().ingest_last_batch_size = multi_mutations_keys.size();
   Metrics::GetStats().ingest_total_batches++;
 
-  multi_mutations.blocking_counter =
-      std::make_unique<absl::BlockingCounter>(multi_mutations.keys.size());
-  vmsdk::WriterMutexLock lock(&time_sliced_mutex_);
-  while (!multi_mutations.keys.empty()) {
-    auto key = multi_mutations.keys.front();
-    multi_mutations.keys.pop_front();
+  absl::BlockingCounter blocking_counter(multi_mutations_keys.size());
+  vmsdk::WriterMutexLock lock(&time_sliced_mutex_, true);
+  while (!multi_mutations_keys.empty()) {
+    auto key = multi_mutations_keys.front();
+    multi_mutations_keys.pop_front();
     ScheduleMutation(false, key, vmsdk::ThreadPool::Priority::kMax,
-                     multi_mutations.blocking_counter.get());
+                     &blocking_counter);
   }
-  multi_mutations.blocking_counter->Wait();
-  multi_mutations.blocking_counter.reset();
+  blocking_counter.Wait();
 }
 
 void IndexSchema::EnqueueMultiMutation(const Key &key) {
-  auto &multi_mutations = multi_mutations_.Get();
-  multi_mutations.keys.push_back(key);
+  auto &multi_mutations_keys = multi_mutations_keys_.Get();
+  multi_mutations_keys.push_back(key);
   VMSDK_LOG(DEBUG, nullptr) << "Enqueueing multi mutation for key: " << key
-                            << " Size is now " << multi_mutations.keys.size();
-  if (multi_mutations.keys.size() >= mutations_thread_pool_->Size() &&
+                            << " Size is now " << multi_mutations_keys.size();
+  if (multi_mutations_keys.size() >= mutations_thread_pool_->Size() &&
       !schedule_multi_exec_processing_.Get()) {
     schedule_multi_exec_processing_.Get() = true;
     vmsdk::RunByMain(
@@ -731,15 +728,10 @@ void IndexSchema::ScheduleMutation(bool from_backfill, const Key &key,
       ++stats_.backfill_inqueue_tasks;
     }
   }
-  mutations_thread_pool_->Schedule(
+  auto scheduled = mutations_thread_pool_->Schedule(
       [from_backfill, weak_index_schema = GetWeakPtr(),
        ctx = detached_ctx_.get(), delay_capturer = CreateQueueDelayCapturer(),
        key_str = std::move(key), blocking_counter]() mutable {
-        auto cleaner = absl::MakeCleanup([blocking_counter] {
-          if (ABSL_PREDICT_FALSE(blocking_counter)) {
-            blocking_counter->DecrementCount();
-          }
-        });
         PAUSEPOINT("block_mutation_queue");
         auto index_schema = weak_index_schema.lock();
         if (ABSL_PREDICT_FALSE(!index_schema)) {
@@ -747,8 +739,14 @@ void IndexSchema::ScheduleMutation(bool from_backfill, const Key &key,
         }
         index_schema->ProcessSingleMutationAsync(ctx, from_backfill, key_str,
                                                  delay_capturer.get());
+        if (ABSL_PREDICT_FALSE(blocking_counter)) {
+          blocking_counter->DecrementCount();
+        }
       },
       priority);
+  if (ABSL_PREDICT_FALSE(!scheduled && blocking_counter)) {
+    blocking_counter->DecrementCount();
+  }
 }
 
 bool ShouldBlockClient(ValkeyModuleCtx *ctx, bool inside_multi_exec,
@@ -1318,11 +1316,11 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
   // Write out the multi/exec queued keys
   //
   VMSDK_RETURN_IF_ERROR(
-      out.SaveObject<size_t>(multi_mutations_.Get().keys.size()));
-  rdb_save_multi_exec_entries.Increment(multi_mutations_.Get().keys.size());
+      out.SaveObject<size_t>(multi_mutations_keys_.Get().size()));
+  rdb_save_multi_exec_entries.Increment(multi_mutations_keys_.Get().size());
   VMSDK_LOG(NOTICE, nullptr) << "Writing Multi/Exec Queue, records = "
-                             << multi_mutations_.Get().keys.size();
-  for (const auto &key : multi_mutations_.Get().keys) {
+                             << multi_mutations_keys_.Get().size();
+  for (const auto &key : multi_mutations_keys_.Get()) {
     CHECK(tracked_mutated_records_.find(key) != tracked_mutated_records_.end());
     VMSDK_RETURN_IF_ERROR(out.SaveString(key->Str()));
   }
@@ -1589,11 +1587,6 @@ vmsdk::BlockedClientCategory IndexSchema::GetBlockedCategoryFromProto() const {
     default:
       return vmsdk::BlockedClientCategory::kOther;
   }
-}
-
-bool IndexSchema::IsKeyInFlight(const InternedStringPtr &key) const {
-  absl::MutexLock lock(&mutated_records_mutex_);
-  return tracked_mutated_records_.contains(key);
 }
 
 bool IndexSchema::InTrackedMutationRecords(

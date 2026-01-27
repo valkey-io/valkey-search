@@ -565,6 +565,7 @@ absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
               << "Failed during reconciliation callback: %s"
               << result.message().data() << " for type " << type_name << ", id "
               << id << " from " << source;
+          return result;
         }
         auto status = CallFTInternalUpdateForReconciliation(id, proposed_entry);
         if (!status.ok()) {

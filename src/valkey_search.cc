@@ -376,7 +376,7 @@ static vmsdk::info_field::Integer query_prefiltering_requests_cnt(
 
 static vmsdk::info_field::Integer nonvector_requests_count(
     "query", "nonvector_requests_count",
-    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
       return Metrics::GetStats().query_nonvector_requests_cnt;
     }));
 

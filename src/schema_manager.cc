@@ -818,22 +818,22 @@ static vmsdk::info_field::Integer number_of_attributes(
     }));
 static vmsdk::info_field::Integer number_of_text_attributes(
     "index_stats", "number_of_text_attributes",
-    vmsdk::info_field::IntegerBuilder().Dev().Computed([] {
+    vmsdk::info_field::IntegerBuilder().App().Computed([] {
       return SchemaManager::Instance().GetNumberOfTextAttributes();
     }));
 static vmsdk::info_field::Integer number_of_tag_attributes(
     "index_stats", "number_of_tag_attributes",
-    vmsdk::info_field::IntegerBuilder().Dev().Computed([] {
+    vmsdk::info_field::IntegerBuilder().App().Computed([] {
       return SchemaManager::Instance().GetNumberOfTagAttributes();
     }));
 static vmsdk::info_field::Integer number_of_numeric_attributes(
     "index_stats", "number_of_numeric_attributes",
-    vmsdk::info_field::IntegerBuilder().Dev().Computed([] {
+    vmsdk::info_field::IntegerBuilder().App().Computed([] {
       return SchemaManager::Instance().GetNumberOfNumericAttributes();
     }));
 static vmsdk::info_field::Integer number_of_vector_attributes(
     "index_stats", "number_of_vector_attributes",
-    vmsdk::info_field::IntegerBuilder().Dev().Computed([] {
+    vmsdk::info_field::IntegerBuilder().App().Computed([] {
       return SchemaManager::Instance().GetNumberOfVectorAttributes();
     }));
 static vmsdk::info_field::Integer corpus_num_text_items(

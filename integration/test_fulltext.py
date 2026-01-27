@@ -1687,6 +1687,9 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
                     "tags", f"tag{i}|category{i % 3}",
                     "vector", vec
                 )
+        # Wait for indexing to complete
+        for index in ["idx", "idx2"]:
+            IndexingTestHelper.wait_for_indexing_complete_on_all_nodes([client], index)
         info_search = client.info("search")
         # Validate memory metrics
         ft_memory_fulldata = int(info_search.get("search_used_text_memory_bytes", 0))

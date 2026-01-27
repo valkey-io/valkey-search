@@ -172,7 +172,7 @@ struct SearchPartitionResultsTracker {
     } else {
       std::deque<indexes::Neighbor> neighbors;
       while (!results.empty()) {
-        neighbors.push_back(
+        neighbors.push_front(
             std::move(const_cast<indexes::Neighbor &>(results.top())));
         results.pop();
       }

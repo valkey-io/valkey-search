@@ -156,6 +156,60 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
 }
 
 }  // namespace
+
+// Check for scenarios that require sending an early reply.
+// Returns true if an early reply was sent and processing should stop.
+bool HandleEarlyReplyScenarios(ValkeyModuleCtx *ctx,
+                               query::SearchResult &search_result,
+                               const SearchCommand &command) {
+  // Check if no results should be returned based on query parameters.
+  if (query::ShouldReturnNoResults(command)) {
+    ValkeyModule_ReplyWithArray(ctx, 1);
+    ValkeyModule_ReplyWithLongLong(ctx, search_result.total_count);
+    return true;  // Early reply sent, stop processing
+  }
+
+  if (command.no_content) {
+    SendReplyNoContent(ctx, search_result, command);
+    return true;  // Early reply sent, stop processing
+  }
+
+  return false;  // No early reply needed, continue processing
+}
+
+// Process neighbors for both vector and non-vector queries
+absl::Status ProcessNeighborsForQuery(ValkeyModuleCtx *ctx,
+                                      query::SearchResult &search_result,
+                                      SearchCommand &command) {
+  auto &neighbors = search_result.neighbors;
+  size_t original_size = neighbors.size();
+
+  if (command.IsNonVectorQuery()) {
+    query::ProcessNonVectorNeighborsForReply(
+        ctx, command.index_schema->GetAttributeDataType(), neighbors, command);
+    // Adjust total count based on neighbors removed during processing
+    // due to filtering or missing attributes.
+    search_result.total_count -= (original_size - neighbors.size());
+    return absl::OkStatus();
+  }
+
+  // Handle vector queries
+  auto identifier =
+      command.index_schema->GetIdentifier(command.attribute_alias);
+  if (!identifier.ok()) {
+    return identifier.status();
+  }
+
+  query::ProcessNeighborsForReply(ctx,
+                                  command.index_schema->GetAttributeDataType(),
+                                  neighbors, command, identifier.value());
+  // Adjust total count based on neighbors removed during processing
+  // due to filtering or missing attributes.
+  search_result.total_count -= (original_size - neighbors.size());
+
+  return absl::OkStatus();
+}
+
 // The reply structure is an array which consists of:
 // 1. The amount of response elements
 // 2. Per response entry:
@@ -170,40 +224,26 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
                               query::SearchResult &search_result) {
   // Increment success counter.
   ++Metrics::GetStats().query_successful_requests_cnt;
-  auto &neighbors = search_result.neighbors;
-  // Check if no results should be returned based on query parameters.
-  if (query::ShouldReturnNoResults(*this)) {
-    ValkeyModule_ReplyWithArray(ctx, 1);
-    ValkeyModule_ReplyWithLongLong(ctx, search_result.total_count);
+
+  // 1. Handle early reply scenarios
+  if (HandleEarlyReplyScenarios(ctx, search_result, *this)) {
     return;
   }
-  if (no_content) {
-    SendReplyNoContent(ctx, search_result, *this);
-    return;
-  }
-  size_t original_size = neighbors.size();
-  // Support non-vector queries
-  if (IsNonVectorQuery()) {
-    query::ProcessNonVectorNeighborsForReply(
-        ctx, index_schema->GetAttributeDataType(), neighbors, *this);
-    // Adjust total count based on neighbors removed during processing
-    // due to filtering or missing attributes.
-    search_result.total_count -= (original_size - neighbors.size());
-    SerializeNonVectorNeighbors(ctx, search_result, *this);
-    return;
-  }
-  auto identifier = index_schema->GetIdentifier(attribute_alias);
-  if (!identifier.ok()) {
+
+  // 2. Process neighbors for the query
+  auto status = ProcessNeighborsForQuery(ctx, search_result, *this);
+  if (!status.ok()) {
     ++Metrics::GetStats().query_failed_requests_cnt;
-    ValkeyModule_ReplyWithError(ctx, identifier.status().message().data());
+    ValkeyModule_ReplyWithError(ctx, status.message().data());
     return;
   }
-  query::ProcessNeighborsForReply(ctx, index_schema->GetAttributeDataType(),
-                                  neighbors, *this, identifier.value());
-  // Adjust total count based on neighbors removed during processing
-  // due to filtering or missing attributes.
-  search_result.total_count -= (original_size - neighbors.size());
-  SerializeNeighbors(ctx, search_result, *this);
+
+  // 3. Serialize neighbors based on query type
+  if (IsNonVectorQuery()) {
+    SerializeNonVectorNeighbors(ctx, search_result, *this);
+  } else {
+    SerializeNeighbors(ctx, search_result, *this);
+  }
 }
 
 absl::Status FTSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,

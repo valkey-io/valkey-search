@@ -58,6 +58,10 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
+<<<<<<< HEAD
+=======
+#include "src/indexes/text.h"
+>>>>>>> 016e983 (Avoid deadlock while processing  MULTI/EXEC mutations (#629))
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
@@ -462,27 +466,48 @@ std::unique_ptr<vmsdk::StopWatch> CreateQueueDelayCapturer() {
 // command.
 void IndexSchema::ProcessMultiQueue() {
   schedule_multi_exec_processing_ = false;
-  auto &multi_mutations = multi_mutations_.Get();
-  if (ABSL_PREDICT_TRUE(multi_mutations.keys.empty())) {
+  auto &multi_mutations_keys = multi_mutations_keys_.Get();
+  if (ABSL_PREDICT_TRUE(multi_mutations_keys.empty())) {
     return;
   }
+<<<<<<< HEAD
   multi_mutations.blocking_counter =
       std::make_unique<absl::BlockingCounter>(multi_mutations.keys.size());
   vmsdk::WriterMutexLock lock(&time_sliced_mutex_);
   while (!multi_mutations.keys.empty()) {
     auto key = multi_mutations.keys.front();
     multi_mutations.keys.pop();
+=======
+
+  // Track batch metrics
+  Metrics::GetStats().ingest_last_batch_size = multi_mutations_keys.size();
+  Metrics::GetStats().ingest_total_batches++;
+
+  absl::BlockingCounter blocking_counter(multi_mutations_keys.size());
+  vmsdk::WriterMutexLock lock(&time_sliced_mutex_, false, true);
+  while (!multi_mutations_keys.empty()) {
+    auto key = multi_mutations_keys.front();
+    multi_mutations_keys.pop_front();
+>>>>>>> 016e983 (Avoid deadlock while processing  MULTI/EXEC mutations (#629))
     ScheduleMutation(false, key, vmsdk::ThreadPool::Priority::kMax,
-                     multi_mutations.blocking_counter.get());
+                     &blocking_counter);
   }
-  multi_mutations.blocking_counter->Wait();
-  multi_mutations.blocking_counter.reset();
+  blocking_counter.Wait();
 }
 
+<<<<<<< HEAD
 void IndexSchema::EnqueueMultiMutation(const InternedStringPtr &key) {
   auto &multi_mutations = multi_mutations_.Get();
   multi_mutations.keys.push(key);
   if (multi_mutations.keys.size() >= mutations_thread_pool_->Size() &&
+=======
+void IndexSchema::EnqueueMultiMutation(const Key &key) {
+  auto &multi_mutations_keys = multi_mutations_keys_.Get();
+  multi_mutations_keys.push_back(key);
+  VMSDK_LOG(DEBUG, nullptr) << "Enqueueing multi mutation for key: " << key
+                            << " Size is now " << multi_mutations_keys.size();
+  if (multi_mutations_keys.size() >= mutations_thread_pool_->Size() &&
+>>>>>>> 016e983 (Avoid deadlock while processing  MULTI/EXEC mutations (#629))
       !schedule_multi_exec_processing_.Get()) {
     schedule_multi_exec_processing_.Get() = true;
     vmsdk::RunByMain(
@@ -497,8 +522,12 @@ void IndexSchema::EnqueueMultiMutation(const InternedStringPtr &key) {
   }
 }
 
+<<<<<<< HEAD
 void IndexSchema::ScheduleMutation(bool from_backfill,
                                    const InternedStringPtr &key,
+=======
+bool IndexSchema::ScheduleMutation(bool from_backfill, const Key &key,
+>>>>>>> 016e983 (Avoid deadlock while processing  MULTI/EXEC mutations (#629))
                                    vmsdk::ThreadPool::Priority priority,
                                    absl::BlockingCounter *blocking_counter) {
   {
@@ -508,21 +537,32 @@ void IndexSchema::ScheduleMutation(bool from_backfill,
       ++stats_.backfill_inqueue_tasks;
     }
   }
-  mutations_thread_pool_->Schedule(
+  auto scheduled = mutations_thread_pool_->Schedule(
       [from_backfill, weak_index_schema = GetWeakPtr(),
        ctx = detached_ctx_.get(), delay_capturer = CreateQueueDelayCapturer(),
        key_str = std::move(key), blocking_counter]() mutable {
         auto index_schema = weak_index_schema.lock();
+        // index_schema will be nullptr if the index schema has already been
+        // destructed
         if (ABSL_PREDICT_FALSE(!index_schema)) {
+          CHECK(!blocking_counter);
           return;
         }
         index_schema->ProcessSingleMutationAsync(ctx, from_backfill, key_str,
                                                  delay_capturer.get());
+        // The blocking_counter is stack-allocated by a caller that
+        // holds a strong reference to the index schema object. Consequently, if
+        // index_schema is non-null, the blocking_counter is guaranteed to be
+        // valid.
         if (ABSL_PREDICT_FALSE(blocking_counter)) {
           blocking_counter->DecrementCount();
         }
       },
       priority);
+  if (ABSL_PREDICT_FALSE(!scheduled && blocking_counter)) {
+    blocking_counter->DecrementCount();
+  }
+  return scheduled;
 }
 
 bool ShouldBlockClient(RedisModuleCtx *ctx, bool inside_multi_exec,
@@ -834,6 +874,235 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
           << this->name_ << ", attribute: " << attribute.first << ") to RDB";
     }
   }
+<<<<<<< HEAD
+=======
+
+  if (RDBWriteV2()) {
+    VMSDK_RETURN_IF_ERROR(SaveSupplementalSection(
+        rdb, data_model::SUPPLEMENTAL_CONTENT_INDEX_EXTENSION,
+        [&](auto &header) {
+          rdb_save_backfilling_indexes.Increment(int(IsBackfillInProgress()));
+          header.mutable_mutation_queue_header()->set_backfilling(
+              IsBackfillInProgress());
+          VMSDK_LOG(NOTICE, nullptr)
+              << "RDB: Saving Index Extension Backfill = "
+              << header.mutation_queue_header().backfilling();
+        },
+        std::bind_front(&IndexSchema::SaveIndexExtension, this)));
+  }
+
+  return absl::OkStatus();
+}
+
+absl::Status IndexSchema::ValidateIndex() const {
+  absl::Status status = absl::OkStatus();
+  //
+  // Find a non-vector index as the oracle
+  // If all indexes are vector indexes, no validation is needed
+  //
+  std::shared_ptr<indexes::IndexBase> oracle_index;
+  std::string oracle_name;
+
+  for (const auto &attribute : attributes_) {
+    if (!IsVectorIndex(attribute.second.GetIndex())) {
+      oracle_index = attribute.second.GetIndex();
+      oracle_name = attribute.first;
+      break;
+    }
+  }
+
+  // If no non-vector index found, all indexes are vectors - no validation
+  // needed
+  if (oracle_index == nullptr) {
+    return absl::OkStatus();
+  }
+  size_t oracle_key_count =
+      oracle_index->GetTrackedKeyCount() + oracle_index->GetUnTrackedKeyCount();
+  //
+  // Now, make sure all the other indexes have the same key count, except for
+  // vector indexes which may have less keys
+  //
+  for (const auto &[name, attr] : attributes_) {
+    auto idx = attr.GetIndex();
+    size_t cnt = idx->GetTrackedKeyCount() + idx->GetUnTrackedKeyCount();
+    if (IsVectorIndex(idx) ? cnt <= oracle_key_count
+                           : cnt == oracle_key_count) {
+      continue;
+    }
+    VMSDK_LOG(WARNING, nullptr)
+        << "Index validation failed for index " << name
+        << " expected key count " << oracle_key_count << " got " << cnt;
+    //
+    // Ok, do a detailed comparison
+    //
+    auto larger_index = (cnt > oracle_key_count) ? idx : oracle_index;
+    auto larger_name = (cnt > oracle_key_count) ? name : oracle_name;
+    auto smaller_index = (cnt > oracle_key_count) ? oracle_index : idx;
+    auto smaller_name = (cnt > oracle_key_count) ? oracle_name : name;
+    auto key_check = [&](const Key &key) {
+      if (!smaller_index->IsTracked(key) && !smaller_index->IsUnTracked(key)) {
+        VMSDK_LOG(WARNING, nullptr)
+            << "Key found in " << larger_name << " not found in "
+            << smaller_name << ": " << key->Str();
+        status = absl::InternalError(
+            absl::StrCat("Key found in ", larger_name, " not found in ",
+                         smaller_name, ": ", key->Str()));
+      }
+      return absl::OkStatus();
+    };
+    auto status1 = larger_index->ForEachTrackedKey(key_check);
+    if (!status1.ok()) {
+      status = status1;
+    }
+    auto status2 = larger_index->ForEachUnTrackedKey(key_check);
+    if (!status2.ok()) {
+      status = status2;
+    }
+  }
+  return status;
+}
+
+absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
+  if (RDBValidateOnWrite()) {
+    VMSDK_RETURN_IF_ERROR(ValidateIndex());
+  }
+  //
+  // To reconstruct an index-schema, we want to ingest all of the keys that are
+  // currently within the index. If there is a non-vector index, we can use the
+  // tracked and untracked key lists from that index. If there is ONLY vector
+  // indexes, then this key list is not needed as there aren't any non-vector
+  // indexes to ingest.
+  //
+  // The V1 format doesn't have this list and substitutes a backfill to rebuild.
+  // In the absence of support for SKIPINITIALSCAN the backfill is sufficient to
+  // determine which keys are in the index. However, once we support this option
+  // it's no longer possible to determine which keys are in the index without
+  // storing them explicitly. Thus the V2 format includes this key list
+  // explicitly which will trivially enable the SKIPINITIALSCAN option.
+  //
+  std::shared_ptr<indexes::IndexBase> index;
+  for (const auto &attribute : attributes_) {
+    if (!IsVectorIndex(attribute.second.GetIndex())) {
+      index = attribute.second.GetIndex();
+      break;
+    }
+  }
+  if (!index) {
+    VMSDK_RETURN_IF_ERROR(out.SaveObject<size_t>(0));  // zero keys
+  } else {
+    size_t key_count =
+        index->GetTrackedKeyCount() + index->GetUnTrackedKeyCount();
+    VMSDK_RETURN_IF_ERROR(out.SaveObject(key_count));
+    rdb_save_keys.Increment(key_count);
+    VMSDK_LOG(NOTICE, nullptr)
+        << "Writing Index Extension, keys = " << key_count;
+
+    auto write_a_key = [&](const Key &key) {
+      key_count--;
+      return out.SaveString(key->Str());
+    };
+    VMSDK_RETURN_IF_ERROR(index->ForEachTrackedKey(write_a_key));
+    VMSDK_RETURN_IF_ERROR(index->ForEachUnTrackedKey(write_a_key));
+    CHECK(key_count == 0) << "Key count mismatch for index " << GetName();
+  }
+  //
+  // Write out the mutation queue entries. As an optimization we only write out
+  // non-backfill entries. But this requires that the index itself be marked as
+  // not backfilling, in other words if the index thinks it's done then we need
+  // to save restore even the entries marked as backfilling.
+  //
+  auto count = !IsBackfillInProgress()
+                   ? tracked_mutated_records_.size()
+                   : std::ranges::count_if(tracked_mutated_records_,
+                                           [](const auto &entry) {
+                                             return !entry.second.from_backfill;
+                                           });
+  VMSDK_LOG(NOTICE, nullptr)
+      << "Writing mutation queue records = " << count
+      << " Total queue:" << tracked_mutated_records_.size();
+  VMSDK_RETURN_IF_ERROR(out.SaveObject(count));
+  rdb_save_mutation_entries.Increment(count);
+  for (const auto &[key, value] : tracked_mutated_records_) {
+    if (IsBackfillInProgress() && value.from_backfill) {
+      continue;
+    }
+    VMSDK_RETURN_IF_ERROR(out.SaveString(key->Str()));
+    VMSDK_RETURN_IF_ERROR(out.SaveObject(value.from_backfill));
+    VMSDK_RETURN_IF_ERROR(out.SaveObject(value.from_multi));
+    count--;
+  }
+  CHECK(count == 0);
+  //
+  // Write out the multi/exec queued keys
+  //
+  VMSDK_RETURN_IF_ERROR(
+      out.SaveObject<size_t>(multi_mutations_keys_.Get().size()));
+  rdb_save_multi_exec_entries.Increment(multi_mutations_keys_.Get().size());
+  VMSDK_LOG(NOTICE, nullptr) << "Writing Multi/Exec Queue, records = "
+                             << multi_mutations_keys_.Get().size();
+  for (const auto &key : multi_mutations_keys_.Get()) {
+    CHECK(tracked_mutated_records_.find(key) != tracked_mutated_records_.end());
+    VMSDK_RETURN_IF_ERROR(out.SaveString(key->Str()));
+  }
+  return absl::OkStatus();
+}
+
+absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
+                                             RDBChunkInputStream input) {
+  CHECK(RDBReadV2());
+  VMSDK_ASSIGN_OR_RETURN(size_t key_count, input.LoadObject<size_t>());
+  rdb_load_keys.Increment(key_count);
+  VMSDK_LOG(NOTICE, ctx) << "Loading Index Extension, keys = " << key_count;
+  for (size_t i = 0; i < key_count; ++i) {
+    VMSDK_ASSIGN_OR_RETURN(auto keyname_str, input.LoadString());
+    auto keyname = vmsdk::MakeUniqueValkeyString(keyname_str);
+    ProcessKeyspaceNotification(ctx, keyname.get(), false);
+  }
+  // Need to suspend workers so that MultiMutation and Regular Mutation queues
+  // are synced
+  VMSDK_RETURN_IF_ERROR(
+      ValkeySearch::Instance().GetWriterThreadPool()->SuspendWorkers());
+  auto reload_queues = [&]() -> absl::Status {
+    VMSDK_ASSIGN_OR_RETURN(size_t count, input.LoadObject<size_t>());
+    VMSDK_LOG(NOTICE, ctx) << "Loading Mutation Entries, entries = " << count;
+    rdb_load_mutation_entries.Increment(count);
+    for (size_t i = 0; i < count; ++i) {
+      VMSDK_ASSIGN_OR_RETURN(auto keyname_str, input.LoadString());
+      VMSDK_ASSIGN_OR_RETURN(auto from_backfill, input.LoadObject<bool>());
+      VMSDK_ASSIGN_OR_RETURN(auto from_multi, input.LoadObject<bool>());
+
+      auto keyname = vmsdk::MakeUniqueValkeyString(keyname_str);
+      ProcessKeyspaceNotification(ctx, keyname.get(), from_backfill);
+    }
+    VMSDK_ASSIGN_OR_RETURN(size_t multi_count, input.LoadObject<size_t>());
+    rdb_load_multi_exec_entries.Increment(multi_count);
+    VMSDK_LOG(NOTICE, ctx) << "Loading Multi/Exec Entries, entries = "
+                           << multi_count;
+    for (size_t i = 0; i < multi_count; ++i) {
+      VMSDK_ASSIGN_OR_RETURN(auto keyname_str, input.LoadString());
+      auto keyname = StringInternStore::Intern(keyname_str);
+      EnqueueMultiMutation(keyname);
+    }
+    loaded_v2_ = true;
+    return absl::OkStatus();
+  };
+  auto status = reload_queues();
+  VMSDK_RETURN_IF_ERROR(
+      ValkeySearch::Instance().GetWriterThreadPool()->ResumeWorkers());
+  return status;
+}
+
+// We need to iterate over the chunks to consume them
+static absl::Status SkipSupplementalContent(
+    SupplementalContentIter &supplemental_iter, std::string_view reason) {
+  rdb_load_sections_skipped.Increment();
+  VMSDK_LOG(NOTICE, nullptr)
+      << "Skipping supplemental content section (" << reason << ")";
+  auto chunk_it = supplemental_iter.IterateChunks();
+  while (chunk_it.HasNext()) {
+    VMSDK_ASSIGN_OR_RETURN([[maybe_unused]] auto chunk_result, chunk_it.Next());
+  }
+>>>>>>> 016e983 (Avoid deadlock while processing  MULTI/EXEC mutations (#629))
   return absl::OkStatus();
 }
 
@@ -948,6 +1217,34 @@ void IndexSchema::OnLoadingEnded(RedisModuleCtx *ctx) {
                          << absl::FormatDuration(stop_watch.Duration());
 }
 
+<<<<<<< HEAD
+=======
+vmsdk::BlockedClientCategory IndexSchema::GetBlockedCategoryFromProto() const {
+  // Determine category based on data type
+  switch (attribute_data_type_->ToProto()) {
+    case data_model::ATTRIBUTE_DATA_TYPE_HASH:
+      return vmsdk::BlockedClientCategory::kHash;
+    case data_model::ATTRIBUTE_DATA_TYPE_JSON:
+      return vmsdk::BlockedClientCategory::kJson;
+    default:
+      return vmsdk::BlockedClientCategory::kOther;
+  }
+}
+
+bool IndexSchema::InTrackedMutationRecords(
+    const Key &key, const std::string &identifier) const {
+  absl::MutexLock lock(&mutated_records_mutex_);
+  auto itr = tracked_mutated_records_.find(key);
+  if (ABSL_PREDICT_FALSE(itr == tracked_mutated_records_.end())) {
+    return false;
+  }
+  if (itr->second.attributes->find(identifier) ==
+      itr->second.attributes->end()) {
+    return false;
+  }
+  return true;
+}
+>>>>>>> 016e983 (Avoid deadlock while processing  MULTI/EXEC mutations (#629))
 // Returns true if the inserted key not exists otherwise false
 bool IndexSchema::TrackMutatedRecord(RedisModuleCtx *ctx,
                                      const InternedStringPtr &key,

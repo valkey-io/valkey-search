@@ -72,6 +72,18 @@ int StopTimerFromBackgroundThread(
   });
 }
 
+<<<<<<< HEAD
+=======
+bool verifyLoadedOnlyOnce() {
+  static bool prev_loaded = false;
+  if (prev_loaded) {
+    return false;
+  }
+  prev_loaded = true;
+  return true;
+}
+
+>>>>>>> 016e983 (Avoid deadlock while processing  MULTI/EXEC mutations (#629))
 void TrackCurrentAsMainThread() {
   CHECK(!set_main_thread);
   is_main_thread = true;

@@ -225,9 +225,15 @@ class IndexSchema : public KeyspaceEventSubscription,
 
   void ProcessMutation(RedisModuleCtx *ctx,
                        MutatedAttributes &mutated_attributes,
+<<<<<<< HEAD
                        const InternedStringPtr &interned_key,
                        bool from_backfill);
   void ScheduleMutation(bool from_backfill, const InternedStringPtr &key,
+=======
+                       const Key &interned_key, bool from_backfill,
+                       bool is_delete);
+  bool ScheduleMutation(bool from_backfill, const Key &key,
+>>>>>>> 016e983 (Avoid deadlock while processing  MULTI/EXEC mutations (#629))
                         vmsdk::ThreadPool::Priority priority,
                         absl::BlockingCounter *blocking_counter);
   void EnqueueMultiMutation(const InternedStringPtr &key);
@@ -248,7 +254,13 @@ class IndexSchema : public KeyspaceEventSubscription,
 
   bool TrackMutatedRecord(RedisModuleCtx *ctx, const InternedStringPtr &key,
                           MutatedAttributes &&mutated_attributes,
+<<<<<<< HEAD
                           bool from_backfill, bool block_client)
+=======
+                          MutationSequenceNumber sequence_number,
+                          bool from_backfill, bool block_client,
+                          bool from_multi)
+>>>>>>> 016e983 (Avoid deadlock while processing  MULTI/EXEC mutations (#629))
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
   std::optional<MutatedAttributes> ConsumeTrackedMutatedAttribute(
       const InternedStringPtr &key, bool first_time)
@@ -257,11 +269,15 @@ class IndexSchema : public KeyspaceEventSubscription,
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
 
   mutable vmsdk::TimeSlicedMRMWMutex time_sliced_mutex_;
+<<<<<<< HEAD
   struct MultiMutations {
     std::unique_ptr<absl::BlockingCounter> blocking_counter;
     std::queue<InternedStringPtr> keys;
   };
   vmsdk::MainThreadAccessGuard<MultiMutations> multi_mutations_;
+=======
+  vmsdk::MainThreadAccessGuard<std::deque<Key>> multi_mutations_keys_;
+>>>>>>> 016e983 (Avoid deadlock while processing  MULTI/EXEC mutations (#629))
   vmsdk::MainThreadAccessGuard<bool> schedule_multi_exec_processing_{false};
 
   FRIEND_TEST(IndexSchemaRDBTest, SaveAndLoad);

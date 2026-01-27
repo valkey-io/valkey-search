@@ -172,6 +172,15 @@ inline bool IsUnsolvedComposedAnd(QueryOperations query_operations) {
   return false;
 }
 
+// Helper fn to identify if deduplication is needed.
+// (1) OR operations need deduplication.
+// (2) Any TAG operations need deduplication.
+inline bool NeedsDeduplication(QueryOperations query_operations) {
+  bool has_or = query_operations & QueryOperations::kContainsOr;
+  bool has_tag = query_operations & QueryOperations::kContainsTag;
+  return has_or || has_tag;
+}
+
 size_t EvaluateFilterAsPrimary(
     const Predicate *predicate,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
@@ -271,8 +280,8 @@ void EvaluatePrefilteredKeys(
   // If there was a union operation, we need to handle deduplication.
   // This implementation skips deduplication (flat_hash_set usage) if not needed
   // for performance.
-  bool needs_dedup = parameters.filter_parse_results.query_operations &
-                     QueryOperations::kContainsOr;
+  bool needs_dedup =
+      NeedsDeduplication(parameters.filter_parse_results.query_operations);
   absl::flat_hash_set<const char *> result_keys;
   if (needs_dedup) {
     result_keys.reserve(max_keys);
@@ -483,8 +492,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
   bool requires_prefilter_evaluation =
       IsUnsolvedComposedAnd(parameters.filter_parse_results.query_operations);
   if (!requires_prefilter_evaluation) {
-    bool needs_dedup = parameters.filter_parse_results.query_operations &
-                       QueryOperations::kContainsOr;
+    bool needs_dedup =
+        NeedsDeduplication(parameters.filter_parse_results.query_operations);
     absl::flat_hash_set<const char *> seen_keys;
     if (needs_dedup) {
       // TODO: Use the qualified_entries size when text indexes return correct

@@ -46,6 +46,11 @@ TimeSlicedMRMWMutex::TimeSlicedMRMWMutex(const MRMWMutexOptions& options)
   CHECK(write_quota_duration_ > write_switch_grace_period_);
 }
 
+void TimeSlicedMRMWMutex::SetIgnoreTimeQuota() {
+  absl::MutexLock lock(&mutex_);
+  ignore_time_quota_ = true;
+}
+
 void TimeSlicedMRMWMutex::IncMayProlongCount() {
   absl::MutexLock lock(&mutex_);
   ++may_prolong_count_;
@@ -82,6 +87,7 @@ void TimeSlicedMRMWMutex::Unlock(bool may_prolong) {
   absl::MutexLock lock(&mutex_);
   CHECK_GT(active_lock_count_, 0L);
   --active_lock_count_;
+  ignore_time_quota_ = false;
   if (ABSL_PREDICT_FALSE(may_prolong)) {
     CHECK_GT(may_prolong_count_, 0L);
     --may_prolong_count_;

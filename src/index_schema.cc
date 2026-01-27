@@ -688,7 +688,8 @@ void IndexSchema::ProcessMultiQueue() {
   Metrics::GetStats().ingest_total_batches++;
 
   absl::BlockingCounter blocking_counter(multi_mutations_keys.size());
-  vmsdk::WriterMutexLock lock(&time_sliced_mutex_, true);
+  vmsdk::WriterMutexLock lock(&time_sliced_mutex_);
+  time_sliced_mutex_.SetIgnoreTimeQuota();
   while (!multi_mutations_keys.empty()) {
     auto key = multi_mutations_keys.front();
     multi_mutations_keys.pop_front();

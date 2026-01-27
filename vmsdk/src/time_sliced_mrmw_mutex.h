@@ -65,7 +65,7 @@ class ABSL_LOCKABLE TimeSlicedMRMWMutex {
       ABSL_LOCKS_EXCLUDED(mutex_);
 
   void Unlock(bool may_prolong) ABSL_UNLOCK_FUNCTION();
-
+  void SetIgnoreTimeQuota() ABSL_LOCKS_EXCLUDED(mutex_);
   void IncMayProlongCount() ABSL_LOCKS_EXCLUDED(mutex_);
 
  private:
@@ -105,7 +105,7 @@ class ABSL_LOCKABLE TimeSlicedMRMWMutex {
   void InitSwitch() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
   inline bool HasTimeQuotaExceeded() const
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_) {
-    return !switch_wait_mode_.has_value() &&
+    return !ignore_time_quota_ && !switch_wait_mode_.has_value() &&
            stop_watch_.Duration() > GetTimeQuota(current_mode_);
   }
   void SwitchWithWait(Mode target_mode) ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
@@ -132,6 +132,7 @@ class ABSL_LOCKABLE TimeSlicedMRMWMutex {
   vmsdk::StopWatch stop_watch_ ABSL_GUARDED_BY(mutex_);
   int switches_ ABSL_GUARDED_BY(mutex_){0};
   uint32_t may_prolong_count_ ABSL_GUARDED_BY(mutex_){0};
+  bool ignore_time_quota_ ABSL_GUARDED_BY(mutex_){false};
 };
 
 class ABSL_SCOPED_LOCKABLE ReaderMutexLock {

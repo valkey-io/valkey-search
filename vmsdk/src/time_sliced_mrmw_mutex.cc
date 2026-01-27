@@ -87,7 +87,7 @@ void TimeSlicedMRMWMutex::Unlock(bool may_prolong) {
   absl::MutexLock lock(&mutex_);
   CHECK_GT(active_lock_count_, 0L);
   --active_lock_count_;
-  if (ABSL_PREDICT_FALSE(active_lock_count_ == 0)) {
+  if (ABSL_PREDICT_FALSE(active_lock_count_ == 0 && ignore_time_quota_)) {
     ignore_time_quota_ = false;
   }
   if (ABSL_PREDICT_FALSE(may_prolong)) {

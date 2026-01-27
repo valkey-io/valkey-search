@@ -636,7 +636,6 @@ void SearchResult::TrimResults(std::vector<indexes::Neighbor> &neighbors,
   // Apply limiting with buffer
   this->is_limited_with_buffer = true;
   neighbors.erase(neighbors.begin() + max_needed, neighbors.end());
-  return;
 }
 
 // Determine the range of neighbors to serialize in the response.

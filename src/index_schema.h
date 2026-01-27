@@ -246,7 +246,7 @@ class IndexSchema : public KeyspaceEventSubscription,
                        MutatedAttributes &mutated_attributes,
                        const InternedStringPtr &interned_key,
                        bool from_backfill);
-  void ScheduleMutation(bool from_backfill, const InternedStringPtr &key,
+  bool ScheduleMutation(bool from_backfill, const InternedStringPtr &key,
                         vmsdk::ThreadPool::Priority priority,
                         absl::BlockingCounter *blocking_counter);
   void EnqueueMultiMutation(const InternedStringPtr &key);
@@ -280,11 +280,8 @@ class IndexSchema : public KeyspaceEventSubscription,
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
 
   mutable vmsdk::TimeSlicedMRMWMutex time_sliced_mutex_;
-  struct MultiMutations {
-    std::unique_ptr<absl::BlockingCounter> blocking_counter;
-    std::deque<InternedStringPtr> keys;
-  };
-  vmsdk::MainThreadAccessGuard<MultiMutations> multi_mutations_;
+  vmsdk::MainThreadAccessGuard<std::deque<InternedStringPtr>>
+      multi_mutations_keys_;
   vmsdk::MainThreadAccessGuard<bool> schedule_multi_exec_processing_{false};
 
   FRIEND_TEST(IndexSchemaRDBTest, SaveAndLoad);

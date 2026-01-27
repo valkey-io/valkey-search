@@ -189,14 +189,6 @@ std::optional<NodeInfo> ClusterMap::ParseNodeInfo(
   const char* node_primary_endpoint_char = ValkeyModule_CallReplyStringPtr(
       primary_endpoint_reply, &node_primary_endpoint_len);
 
-  // Check for invalid endpoint (nullptr, empty, or "?")
-  if (!node_primary_endpoint_char || node_primary_endpoint_len == 0 ||
-      (node_primary_endpoint_len == 1 &&
-       node_primary_endpoint_char[0] == '?')) {
-    VMSDK_LOG(WARNING, nullptr) << "Invalid node primary endpoint";
-    return std::nullopt;
-  }
-
   // Get port
   long long node_port = ValkeyModule_CallReplyInteger(
       ValkeyModule_CallReplyArrayElement(node_arr, 1));
@@ -211,6 +203,15 @@ std::optional<NodeInfo> ClusterMap::ParseNodeInfo(
   bool is_local_node =
       (node_id_len == VALKEYMODULE_NODE_ID_LEN &&
        memcmp(node_id_char, my_node_id, VALKEYMODULE_NODE_ID_LEN) == 0);
+
+  // Check for invalid endpoint (nullptr, empty, or "?")
+  if (!is_local_node &&
+      (!node_primary_endpoint_char || node_primary_endpoint_len == 0 ||
+       (node_primary_endpoint_len == 1 &&
+        node_primary_endpoint_char[0] == '?'))) {
+    VMSDK_LOG(WARNING, nullptr) << "Invalid node primary endpoint";
+    return std::nullopt;
+  }
 
   // Get additional network metadata
   // Depending on the client RESP protocol version, the additional network
@@ -264,8 +265,8 @@ std::optional<NodeInfo> ClusterMap::ParseNodeInfo(
                      .port = static_cast<uint16_t>(node_port)};
 
   // Check for duplicate socket addresses across different nodes
-  auto it = socket_addr_to_node_map.find(addr);
-  if (it != socket_addr_to_node_map.end()) {
+  auto it = socket_addr_to_node_map_.find(addr);
+  if (it != socket_addr_to_node_map_.end()) {
     // socket address already seen - check if it's the same node
     if (it->second != node_id_str) {
       VMSDK_LOG(WARNING, nullptr)
@@ -275,7 +276,7 @@ std::optional<NodeInfo> ClusterMap::ParseNodeInfo(
       this->is_consistent_ = false;
     }
   } else {
-    socket_addr_to_node_map[addr] = node_id_str;
+    socket_addr_to_node_map_[addr] = node_id_str;
   }
 
   return NodeInfo{.node_id = node_id_str,

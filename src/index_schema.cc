@@ -738,6 +738,7 @@ bool IndexSchema::ScheduleMutation(bool from_backfill, const Key &key,
         // index_schema will be nullptr if the index schema has already been
         // destructed
         if (ABSL_PREDICT_FALSE(!index_schema)) {
+          CHECK(!blocking_counter);
           return;
         }
         index_schema->ProcessSingleMutationAsync(ctx, from_backfill, key_str,

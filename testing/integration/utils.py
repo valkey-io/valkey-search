@@ -155,8 +155,7 @@ def start_valkey_cluster(
 
     for port in ports:
         stdout_path = os.path.join(stdout_directory, f"{port}_stdout.txt")
-        # Open file without buffering to avoid ResourceWarnings
-        stdout_file = open(stdout_path, "w", buffering=1)
+        stdout_file = open(stdout_path, "w")
         node_dir = os.path.join(directory, f"nodes{port}")
         cluster_args["cluster-enabled"] = "yes"
         cluster_args["cluster-config-file"] = os.path.join(

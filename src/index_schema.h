@@ -321,7 +321,7 @@ class IndexSchema : public KeyspaceEventSubscription,
                        MutatedAttributes &mutated_attributes,
                        const Key &interned_key, bool from_backfill,
                        bool is_delete);
-  void ScheduleMutation(bool from_backfill, const Key &key,
+  bool ScheduleMutation(bool from_backfill, const Key &key,
                         vmsdk::ThreadPool::Priority priority,
                         absl::BlockingCounter *blocking_counter);
   void EnqueueMultiMutation(const Key &key);

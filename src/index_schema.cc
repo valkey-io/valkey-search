@@ -719,7 +719,7 @@ void IndexSchema::EnqueueMultiMutation(const Key &key) {
   }
 }
 
-void IndexSchema::ScheduleMutation(bool from_backfill, const Key &key,
+bool IndexSchema::ScheduleMutation(bool from_backfill, const Key &key,
                                    vmsdk::ThreadPool::Priority priority,
                                    absl::BlockingCounter *blocking_counter) {
   {
@@ -735,11 +735,17 @@ void IndexSchema::ScheduleMutation(bool from_backfill, const Key &key,
        key_str = std::move(key), blocking_counter]() mutable {
         PAUSEPOINT("block_mutation_queue");
         auto index_schema = weak_index_schema.lock();
+        // index_schema will be nullptr if the index schema has already been
+        // destructed
         if (ABSL_PREDICT_FALSE(!index_schema)) {
           return;
         }
         index_schema->ProcessSingleMutationAsync(ctx, from_backfill, key_str,
                                                  delay_capturer.get());
+        // The blocking_counter is stack-allocated by a caller that
+        // holds a strong reference to the index schema object. Consequently, if
+        // index_schema is non-null, the blocking_counter is guaranteed to be
+        // valid.
         if (ABSL_PREDICT_FALSE(blocking_counter)) {
           blocking_counter->DecrementCount();
         }
@@ -748,6 +754,7 @@ void IndexSchema::ScheduleMutation(bool from_backfill, const Key &key,
   if (ABSL_PREDICT_FALSE(!scheduled && blocking_counter)) {
     blocking_counter->DecrementCount();
   }
+  return scheduled;
 }
 
 bool ShouldBlockClient(ValkeyModuleCtx *ctx, bool inside_multi_exec,

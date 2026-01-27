@@ -66,9 +66,10 @@ void TimeSlicedMRMWMutex::Lock(Mode target_mode, bool& may_prolong,
   absl::MutexLock lock(&mutex_);
   const Mode inverse_mode = GetInverseMode(target_mode);
   if (current_mode_ == target_mode) {
-    if (ABSL_PREDICT_FALSE(!ignore_time_quota && HasTimeQuotaExceeded() &&
-                           GetWaiters(inverse_mode) > 0 &&
-                           (may_prolong || may_prolong_count_ == 0))) {
+    if (ABSL_PREDICT_FALSE(
+            !ignore_time_quota && ignore_time_quota_count_ == 0 &&
+            HasTimeQuotaExceeded() && GetWaiters(inverse_mode) > 0 &&
+            (may_prolong || may_prolong_count_ == 0))) {
       SwitchWithWait(target_mode);
     }
   } else {

@@ -105,7 +105,7 @@ class ABSL_LOCKABLE TimeSlicedMRMWMutex {
   void InitSwitch() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
   inline bool HasTimeQuotaExceeded() const
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_) {
-    return ignore_time_quota_count_ == 0 && !switch_wait_mode_.has_value() &&
+    return !switch_wait_mode_.has_value() &&
            stop_watch_.Duration() > GetTimeQuota(current_mode_);
   }
   void SwitchWithWait(Mode target_mode) ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);

@@ -41,24 +41,24 @@ class BTreeNumeric {
   using ConstIterator =
       typename absl::btree_map<double, SetType>::const_iterator;
 
-  void Add(const T& value, double key) {
+  void Add(const T &value, double key) {
     btree_[key].insert(value);
     segment_tree_.Add(key);
   }
 
-  void Modify(const T& value, double old_key, double new_key) {
+  void Modify(const T &value, double old_key, double new_key) {
     Remove(value, old_key);
     Add(value, new_key);
   }
 
-  void Remove(const T& value, double key) {
+  void Remove(const T &value, double key) {
     btree_[key].erase(value);
     if (btree_[key].empty()) {
       btree_.erase(key);
     }
     segment_tree_.Remove(key);
   }
-  const absl::btree_map<double, SetType>& GetBtree() const { return btree_; }
+  const absl::btree_map<double, SetType> &GetBtree() const { return btree_; }
 
   size_t GetCount(double start, double end, bool start_inclusive,
                   bool end_inclusive) {
@@ -81,18 +81,18 @@ class BTreeNumeric {
 
 class Numeric : public IndexBase {
  public:
-  explicit Numeric(const data_model::NumericIndex& numeric_index_proto);
-  absl::StatusOr<bool> AddRecord(const InternedStringPtr& key,
-                                 absl::string_view data) override
+  explicit Numeric(const data_model::NumericIndex &numeric_index_proto);
+  absl::StatusOr<bool> AddRecordImpl(const InternedStringPtr &key,
+                                     absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
-  absl::StatusOr<bool> RemoveRecord(
-      const InternedStringPtr& key,
+  absl::StatusOr<bool> RemoveRecordImpl(
+      const InternedStringPtr &key,
       DeletionType deletion_type = DeletionType::kNone) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
-  absl::StatusOr<bool> ModifyRecord(const InternedStringPtr& key,
-                                    absl::string_view data) override
+  absl::StatusOr<bool> ModifyRecordImpl(const InternedStringPtr &key,
+                                        absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
-  int RespondWithInfo(ValkeyModuleCtx* ctx) const override
+  int RespondWithInfo(ValkeyModuleCtx *ctx) const override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
   absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const override {
     return absl::OkStatus();
@@ -101,20 +101,20 @@ class Numeric : public IndexBase {
   size_t GetTrackedKeyCount() const override ABSL_LOCKS_EXCLUDED(index_mutex_);
   size_t GetUnTrackedKeyCount() const override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
-  bool IsTracked(const InternedStringPtr& key) const override
+  bool IsTracked(const InternedStringPtr &key) const override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
-  bool IsUnTracked(const InternedStringPtr& key) const override
+  bool IsUnTracked(const InternedStringPtr &key) const override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
   absl::Status ForEachTrackedKey(
-      absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
+      absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn)
       const override ABSL_LOCKS_EXCLUDED(index_mutex_);
   absl::Status ForEachUnTrackedKey(
-      absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
+      absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn)
       const override ABSL_LOCKS_EXCLUDED(index_mutex_);
 
   std::unique_ptr<data_model::Index> ToProto() const override;
 
-  const double* GetValue(const InternedStringPtr& key) const
+  const double *GetValue(const InternedStringPtr &key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
   using BTreeNumericIndex = BTreeNumeric<InternedStringPtr>;
   using EntriesRange = std::pair<BTreeNumericIndex::ConstIterator,
@@ -122,35 +122,35 @@ class Numeric : public IndexBase {
   class EntriesFetcherIterator : public EntriesFetcherIteratorBase {
    public:
     EntriesFetcherIterator(
-        const EntriesRange& entries_range,
-        const std::optional<EntriesRange>& additional_entries_range,
-        const InternedStringSet* untracked_keys);
+        const EntriesRange &entries_range,
+        const std::optional<EntriesRange> &additional_entries_range,
+        const InternedStringSet *untracked_keys);
     bool Done() const override;
     void Next() override;
-    const InternedStringPtr& operator*() const override;
+    const InternedStringPtr &operator*() const override;
 
    private:
     static bool NextKeys(
-        const Numeric::EntriesRange& range,
-        BTreeNumericIndex::ConstIterator& iter,
-        std::optional<InternedStringSet::const_iterator>& keys_iter);
-    const EntriesRange& entries_range_;
+        const Numeric::EntriesRange &range,
+        BTreeNumericIndex::ConstIterator &iter,
+        std::optional<InternedStringSet::const_iterator> &keys_iter);
+    const EntriesRange &entries_range_;
     BTreeNumericIndex::ConstIterator entries_iter_;
     std::optional<InternedStringSet::const_iterator> entry_keys_iter_;
-    const std::optional<EntriesRange>& additional_entries_range_;
+    const std::optional<EntriesRange> &additional_entries_range_;
     BTreeNumericIndex::ConstIterator additional_entries_iter_;
     std::optional<InternedStringSet::const_iterator>
         additional_entry_keys_iter_;
-    const InternedStringSet* untracked_keys_;
+    const InternedStringSet *untracked_keys_;
     std::optional<InternedStringSet::const_iterator> untracked_keys_iter_;
   };
 
   class EntriesFetcher : public EntriesFetcherBase {
    public:
     EntriesFetcher(
-        const EntriesRange& entries_range, size_t size,
+        const EntriesRange &entries_range, size_t size,
         std::optional<EntriesRange> additional_entries_range = std::nullopt,
-        const InternedStringSet* untracked_keys = nullptr)
+        const InternedStringSet *untracked_keys = nullptr)
         : entries_range_(entries_range),
           size_(size),
           additional_entries_range_(additional_entries_range),
@@ -162,11 +162,11 @@ class Numeric : public IndexBase {
     EntriesRange entries_range_;
     size_t size_{0};
     std::optional<EntriesRange> additional_entries_range_;
-    const InternedStringSet* untracked_keys_;
+    const InternedStringSet *untracked_keys_;
   };
 
   virtual std::unique_ptr<EntriesFetcher> Search(
-      const query::NumericPredicate& predicate,
+      const query::NumericPredicate &predicate,
       bool negate) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
  private:

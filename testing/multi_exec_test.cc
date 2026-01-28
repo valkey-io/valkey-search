@@ -71,7 +71,7 @@ class MultiExecTest : public ValkeySearchTest {
           *value_out = value_valkey_str;
           return VALKEYMODULE_OK;
         });
-    EXPECT_CALL(*mock_index, AddRecord(testing::_, testing::_))
+    EXPECT_CALL(*mock_index, AddRecordImpl(testing::_, testing::_))
         .WillRepeatedly(
             [this](const InternedStringPtr &key, absl::string_view record) {
               absl::MutexLock lock(&mutex);

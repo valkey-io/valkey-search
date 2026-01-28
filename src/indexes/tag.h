@@ -32,18 +32,18 @@ namespace valkey_search::indexes {
 
 class Tag : public IndexBase {
  public:
-  explicit Tag(const data_model::TagIndex& tag_index_proto);
-  absl::StatusOr<bool> AddRecord(const InternedStringPtr& key,
-                                 absl::string_view data) override
+  explicit Tag(const data_model::TagIndex &tag_index_proto);
+  absl::StatusOr<bool> AddRecordImpl(const InternedStringPtr &key,
+                                     absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
-  absl::StatusOr<bool> RemoveRecord(
-      const InternedStringPtr& key,
+  absl::StatusOr<bool> RemoveRecordImpl(
+      const InternedStringPtr &key,
       DeletionType deletion_type = DeletionType::kNone) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
-  absl::StatusOr<bool> ModifyRecord(const InternedStringPtr& key,
-                                    absl::string_view data) override
+  absl::StatusOr<bool> ModifyRecordImpl(const InternedStringPtr &key,
+                                        absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
-  int RespondWithInfo(ValkeyModuleCtx* ctx) const override
+  int RespondWithInfo(ValkeyModuleCtx *ctx) const override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
   absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const override {
     return absl::OkStatus();
@@ -52,43 +52,43 @@ class Tag : public IndexBase {
   size_t GetTrackedKeyCount() const override ABSL_LOCKS_EXCLUDED(index_mutex_);
   size_t GetUnTrackedKeyCount() const override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
-  bool IsTracked(const InternedStringPtr& key) const override
+  bool IsTracked(const InternedStringPtr &key) const override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
-  bool IsUnTracked(const InternedStringPtr& key) const override
+  bool IsUnTracked(const InternedStringPtr &key) const override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
   absl::Status ForEachTrackedKey(
-      absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
+      absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn)
       const override ABSL_LOCKS_EXCLUDED(index_mutex_);
   absl::Status ForEachUnTrackedKey(
-      absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
+      absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn)
       const override ABSL_LOCKS_EXCLUDED(index_mutex_);
   std::unique_ptr<data_model::Index> ToProto() const override;
 
-  InternedStringPtr GetRawValue(const InternedStringPtr& key) const
+  InternedStringPtr GetRawValue(const InternedStringPtr &key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
-  const absl::flat_hash_set<absl::string_view>* GetValue(
-      const InternedStringPtr& key,
-      bool& case_sensitive) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  const absl::flat_hash_set<absl::string_view> *GetValue(
+      const InternedStringPtr &key,
+      bool &case_sensitive) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
   using PatriciaTreeIndex = PatriciaTree<InternedStringPtr>;
   using PatriciaNodeIndex = PatriciaNode<InternedStringPtr>;
 
   class EntriesFetcherIterator : public EntriesFetcherIteratorBase {
    public:
-    EntriesFetcherIterator(const PatriciaTreeIndex& tree,
-                           absl::flat_hash_set<PatriciaNodeIndex*>& entries,
-                           const InternedStringSet& untracked_keys,
+    EntriesFetcherIterator(const PatriciaTreeIndex &tree,
+                           absl::flat_hash_set<PatriciaNodeIndex *> &entries,
+                           const InternedStringSet &untracked_keys,
                            bool negate);
     bool Done() const override;
     void Next() override;
-    const InternedStringPtr& operator*() const override;
+    const InternedStringPtr &operator*() const override;
 
    private:
     PatriciaTreeIndex::PrefixSubTreeIterator tree_iter_;
-    absl::flat_hash_set<PatriciaNodeIndex*>& entries_;
-    PatriciaNodeIndex* next_node_{nullptr};
+    absl::flat_hash_set<PatriciaNodeIndex *> &entries_;
+    PatriciaNodeIndex *next_node_{nullptr};
     InternedStringSet::const_iterator next_iter_;
-    const InternedStringSet& untracked_keys_;
+    const InternedStringSet &untracked_keys_;
     bool negate_;
     std::optional<InternedStringSet::const_iterator> untracked_keys_iter_;
     void NextNegate();
@@ -96,9 +96,10 @@ class Tag : public IndexBase {
 
   class EntriesFetcher : public EntriesFetcherBase {
    public:
-    EntriesFetcher(const PatriciaTreeIndex& tree,
-                   absl::flat_hash_set<PatriciaNodeIndex*> entries, size_t size,
-                   bool negate, const InternedStringSet& untracked_keys)
+    EntriesFetcher(const PatriciaTreeIndex &tree,
+                   absl::flat_hash_set<PatriciaNodeIndex *> entries,
+                   size_t size, bool negate,
+                   const InternedStringSet &untracked_keys)
         : tree_(tree),
           size_(size),
           entries_(entries),
@@ -108,15 +109,15 @@ class Tag : public IndexBase {
     std::unique_ptr<EntriesFetcherIteratorBase> Begin() override;
 
    private:
-    const PatriciaTreeIndex& tree_;
+    const PatriciaTreeIndex &tree_;
     size_t size_{0};
-    absl::flat_hash_set<PatriciaNodeIndex*> entries_;
+    absl::flat_hash_set<PatriciaNodeIndex *> entries_;
     bool negate_;
-    const InternedStringSet& untracked_keys_;
+    const InternedStringSet &untracked_keys_;
   };
 
   virtual std::unique_ptr<EntriesFetcher> Search(
-      const query::TagPredicate& predicate,
+      const query::TagPredicate &predicate,
       bool negate) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
   char GetSeparator() const { return separator_; }
   bool IsCaseSensitive() const { return case_sensitive_; }

@@ -45,15 +45,35 @@ class IndexBase {
   virtual ~IndexBase() = default;
 
   // Add/Remove/Modify will return true if the operation was successful, false
-  // if it was skipped.  Returns an error status if there is an unexpected
+  // if it was skipped. Returns an error status if there is an unexpected
   // failure.
-  virtual absl::StatusOr<bool> AddRecord(const InternedStringPtr& key,
-                                         absl::string_view data) = 0;
-  virtual absl::StatusOr<bool> RemoveRecord(const InternedStringPtr& key,
-                                            DeletionType deletion_type) = 0;
-  virtual absl::StatusOr<bool> ModifyRecord(const InternedStringPtr& key,
-                                            absl::string_view data) = 0;
-  virtual int RespondWithInfo(ValkeyModuleCtx* ctx) const = 0;
+  absl::StatusOr<bool> AddRecord(const InternedStringPtr &key,
+                                 absl::string_view data) {
+    PreAddRecord(key, data);
+    return AddRecordImpl(key, data);
+  }
+
+  absl::StatusOr<bool> RemoveRecord(const InternedStringPtr &key,
+                                    DeletionType deletion_type) {
+    PreRemoveRecord(key, deletion_type);
+    return RemoveRecordImpl(key, deletion_type);
+  }
+
+  absl::StatusOr<bool> ModifyRecord(const InternedStringPtr &key,
+                                    absl::string_view data) {
+    PreModifyRecord(key, data);
+    return ModifyRecordImpl(key, data);
+  }
+
+  virtual absl::StatusOr<bool> AddRecordImpl(const InternedStringPtr &key,
+                                             absl::string_view data) = 0;
+
+  virtual absl::StatusOr<bool> RemoveRecordImpl(const InternedStringPtr &key,
+                                                DeletionType deletion_type) = 0;
+  virtual absl::StatusOr<bool> ModifyRecordImpl(const InternedStringPtr &key,
+                                                absl::string_view data) = 0;
+
+  virtual int RespondWithInfo(ValkeyModuleCtx *ctx) const = 0;
   IndexerType GetIndexerType() const { return indexer_type_; }
   virtual absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const = 0;
 
@@ -61,17 +81,25 @@ class IndexBase {
 
   virtual size_t GetTrackedKeyCount() const = 0;
   virtual size_t GetUnTrackedKeyCount() const = 0;
-  virtual bool IsTracked(const InternedStringPtr& key) const = 0;
-  virtual bool IsUnTracked(const InternedStringPtr& key) const = 0;
+  virtual bool IsTracked(const InternedStringPtr &key) const = 0;
+  virtual bool IsUnTracked(const InternedStringPtr &key) const = 0;
   virtual absl::Status ForEachTrackedKey(
-      absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn) const = 0;
+      absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const = 0;
   virtual absl::Status ForEachUnTrackedKey(
-      absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn) const = 0;
+      absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const = 0;
 
   virtual vmsdk::UniqueValkeyString NormalizeStringRecord(
       vmsdk::UniqueValkeyString input) const {
     return input;
   }
+
+ protected:
+  void PreAddRecord([[maybe_unused]] const InternedStringPtr &key,
+                    [[maybe_unused]] absl::string_view data) {}
+  void PreRemoveRecord([[maybe_unused]] const InternedStringPtr &key,
+                       [[maybe_unused]] DeletionType deletion_type) {}
+  void PreModifyRecord([[maybe_unused]] const InternedStringPtr &key,
+                       [[maybe_unused]] absl::string_view data) {}
 
  private:
   IndexerType indexer_type_{IndexerType::kNone};
@@ -81,7 +109,7 @@ class EntriesFetcherIteratorBase {
  public:
   virtual bool Done() const = 0;
   virtual void Next() = 0;
-  virtual const InternedStringPtr& operator*() const = 0;
+  virtual const InternedStringPtr &operator*() const = 0;
   virtual ~EntriesFetcherIteratorBase() = default;
 };
 

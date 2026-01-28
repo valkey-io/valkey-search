@@ -8,7 +8,7 @@
 #ifndef VALKEYSEARCH_SRC_COMMANDS_FT_SEARCH_PARSER_H_
 #define VALKEYSEARCH_SRC_COMMANDS_FT_SEARCH_PARSER_H_
 
-#include <cstdint>
+#include <optional>
 
 #include "src/commands/commands.h"
 #include "src/query/search.h"
@@ -19,14 +19,14 @@ namespace options {
 vmsdk::config::Number &GetMaxKnn();
 }  // namespace options
 
-struct LimitParameter {
-  uint64_t first_index{0};
-  uint64_t number{10};
-};
-
-absl::Status PreParseQueryString(query::SearchParameters &parameters);
-absl::Status PostParseQueryString(query::SearchParameters &parameters);
 absl::Status VerifyQueryString(query::SearchParameters &parameters);
+
+enum class SortOrder { kAscending, kDescending };
+
+struct SortByParameter {
+  std::string field;
+  SortOrder order{SortOrder::kAscending};
+};
 
 //
 // Data Unique to the FT.SEARCH command
@@ -36,11 +36,14 @@ struct SearchCommand : public QueryCommand {
   absl::Status ParseCommand(vmsdk::ArgsIterator &itr) override;
   void SendReply(ValkeyModuleCtx *ctx,
                  query::SearchResult &search_result) override;
+  absl::Status PostParseQueryString() override;
   // By default, FT.SEARCH does not require complete results and can optimized
   // with LIMIT based trimming.
   // TODO: When SORTBY or similar clauses are supported, implement the correct
   // logic here to return true when those clauses are present.
   bool RequiresCompleteResults() const override { return false; }
+
+  std::optional<SortByParameter> sortby;
 };
 
 }  // namespace valkey_search

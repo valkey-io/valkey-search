@@ -36,7 +36,6 @@
 #include "src/rdb_serialization.h"
 #include "src/valkey_search.h"
 #include "src/vector_externalizer.h"
-#include "src/version.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -48,7 +47,8 @@
 namespace valkey_search {
 
 constexpr absl::string_view kMaxIndexesConfig{"max-indexes"};
-constexpr uint32_t kMaxIndexes{10};
+constexpr uint32_t kMaxIndexes{10000000};
+constexpr uint32_t kMaxIndexesDefault{1000};
 
 constexpr absl::string_view kIndexSchemaBackfillBatchSizeConfig(
     "backfill-batch-size");
@@ -59,10 +59,10 @@ namespace options {
 /// Register the "--max-indexes" flag. Controls the max number of indexes we can
 /// have.
 static auto max_indexes =
-    vmsdk::config::NumberBuilder(kMaxIndexesConfig,  // name
-                                 kMaxIndexes,        // default size
-                                 1,                  // min size
-                                 kMaxIndexes)        // max size
+    vmsdk::config::NumberBuilder(kMaxIndexesConfig,   // name
+                                 kMaxIndexesDefault,  // default size
+                                 1,                   // min size
+                                 kMaxIndexes)         // max size
         .WithValidationCallback(CHECK_RANGE(1, kMaxIndexes, kMaxIndexesConfig))
         .Build();
 

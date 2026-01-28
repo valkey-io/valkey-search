@@ -40,7 +40,7 @@ namespace valkey_search::indexes {
  */
 class Text : public IndexBase {
  public:
-  explicit Text(const data_model::TextIndex& text_index_proto,
+  explicit Text(const data_model::TextIndex &text_index_proto,
                 std::shared_ptr<text::TextIndexSchema> text_index_schema);
 
   std::shared_ptr<text::TextIndexSchema> GetTextIndexSchema() const {
@@ -49,24 +49,24 @@ class Text : public IndexBase {
   uint32_t GetMinStemSize() const { return min_stem_size_; }
   bool IsStemmingEnabled() const { return !no_stem_; }
   bool WithSuffixTrie() const { return with_suffix_trie_; }
-  absl::StatusOr<bool> AddRecord(const InternedStringPtr& key,
-                                 absl::string_view data) override
+  absl::StatusOr<bool> AddRecordImpl(const InternedStringPtr &key,
+                                     absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
-  absl::StatusOr<bool> RemoveRecord(
-      const InternedStringPtr& key,
+  absl::StatusOr<bool> RemoveRecordImpl(
+      const InternedStringPtr &key,
       DeletionType deletion_type = DeletionType::kNone) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
-  absl::StatusOr<bool> ModifyRecord(const InternedStringPtr& key,
-                                    absl::string_view data) override
+  absl::StatusOr<bool> ModifyRecordImpl(const InternedStringPtr &key,
+                                        absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
-  int RespondWithInfo(ValkeyModuleCtx* ctx) const override;
-  bool IsTracked(const InternedStringPtr& key) const override;
+  int RespondWithInfo(ValkeyModuleCtx *ctx) const override;
+  bool IsTracked(const InternedStringPtr &key) const override;
   absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const override {
     return absl::OkStatus();
   }
 
   inline absl::Status ForEachTrackedKey(
-      absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
+      absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn)
       const override {
     absl::MutexLock lock(&index_mutex_);
     // TODO: Implement proper key tracking
@@ -78,13 +78,13 @@ class Text : public IndexBase {
     return untracked_keys_.size();
   }
 
-  bool IsUnTracked(const InternedStringPtr& key) const override {
+  bool IsUnTracked(const InternedStringPtr &key) const override {
     absl::MutexLock lock(&index_mutex_);
     return untracked_keys_.contains(key);
   }
 
   absl::Status ForEachUnTrackedKey(
-      absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
+      absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn)
       const override {
     absl::MutexLock lock(&index_mutex_);
     // TODO
@@ -94,7 +94,7 @@ class Text : public IndexBase {
   size_t GetTrackedKeyCount() const override;
   std::unique_ptr<data_model::Index> ToProto() const override;
 
-  InternedStringPtr GetRawValue(const InternedStringPtr& key) const
+  InternedStringPtr GetRawValue(const InternedStringPtr &key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
  public:
@@ -102,8 +102,8 @@ class Text : public IndexBase {
   class EntriesFetcher : public EntriesFetcherBase {
    public:
     EntriesFetcher(size_t size,
-                   const std::shared_ptr<text::TextIndex>& text_index,
-                   const InternedStringSet* untracked_keys,
+                   const std::shared_ptr<text::TextIndex> &text_index,
+                   const InternedStringSet *untracked_keys,
                    text::FieldMaskPredicate field_mask, bool require_positions)
         : size_(size),
           text_index_(text_index),
@@ -114,16 +114,16 @@ class Text : public IndexBase {
     size_t Size() const override;
 
     std::unique_ptr<text::TextIterator> BuildTextIterator(
-        const query::TextPredicate* predicate);
+        const query::TextPredicate *predicate);
 
     // Factory method that creates the appropriate text iterator
     // based on the text predicate's operation type.
     std::unique_ptr<EntriesFetcherIteratorBase> Begin() override;
 
     size_t size_;
-    const InternedStringSet* untracked_keys_;
+    const InternedStringSet *untracked_keys_;
     std::shared_ptr<text::TextIndex> text_index_;
-    const query::TextPredicate* predicate_;
+    const query::TextPredicate *predicate_;
     text::FieldMaskPredicate field_mask_;
     bool require_positions_;
   };

@@ -39,14 +39,14 @@ static bool IsValidPrefix(absl::string_view str) {
          str[str.length() - 2] != '*';
 }
 
-Tag::Tag(const data_model::TagIndex& tag_index_proto)
+Tag::Tag(const data_model::TagIndex &tag_index_proto)
     : IndexBase(IndexerType::kTag),
       separator_(tag_index_proto.separator()[0]),
       case_sensitive_(tag_index_proto.case_sensitive()),
       tree_(case_sensitive_) {}
 
-absl::StatusOr<bool> Tag::AddRecord(const InternedStringPtr& key,
-                                    absl::string_view data) {
+absl::StatusOr<bool> Tag::AddRecordImpl(const InternedStringPtr &key,
+                                        absl::string_view data) {
   auto interned_data = StringInternStore::Intern(data);
   auto parsed_tags = ParseRecordTags(*interned_data, separator_);
   absl::MutexLock lock(&index_mutex_);
@@ -62,7 +62,7 @@ absl::StatusOr<bool> Tag::AddRecord(const InternedStringPtr& key,
         absl::StrCat("Key `", key->Str(), "` already exists"));
   }
   untracked_keys_.erase(key);
-  for (const auto& tag : parsed_tags) {
+  for (const auto &tag : parsed_tags) {
     tree_.AddKeyValue(tag, key);
   }
   return true;
@@ -133,7 +133,7 @@ absl::StatusOr<absl::flat_hash_set<absl::string_view>> Tag::ParseSearchTags(
 absl::flat_hash_set<absl::string_view> Tag::ParseRecordTags(
     absl::string_view data, char separator) {
   absl::flat_hash_set<absl::string_view> parsed_tags;
-  for (const auto& part : absl::StrSplit(data, separator)) {
+  for (const auto &part : absl::StrSplit(data, separator)) {
     auto tag = absl::StripAsciiWhitespace(part);
     if (!tag.empty()) {
       parsed_tags.insert(tag);
@@ -142,14 +142,14 @@ absl::flat_hash_set<absl::string_view> Tag::ParseRecordTags(
   return parsed_tags;
 }
 
-absl::StatusOr<bool> Tag::ModifyRecord(const InternedStringPtr& key,
-                                       absl::string_view data) {
+absl::StatusOr<bool> Tag::ModifyRecordImpl(const InternedStringPtr &key,
+                                           absl::string_view data) {
   // TODO: implement operator [] in patricia_tree.
   auto interned_data = StringInternStore::Intern(data);
   auto new_parsed_tags = ParseRecordTags(*interned_data, separator_);
   if (new_parsed_tags.empty()) {
     [[maybe_unused]] auto res =
-        RemoveRecord(key, indexes::DeletionType::kIdentifier);
+        RemoveRecordImpl(key, indexes::DeletionType::kIdentifier);
     return false;
   }
   absl::MutexLock lock(&index_mutex_);
@@ -159,17 +159,17 @@ absl::StatusOr<bool> Tag::ModifyRecord(const InternedStringPtr& key,
     return absl::NotFoundError(
         absl::StrCat("Key `", key->Str(), "` not found"));
   }
-  auto& tag_info = it->second;
+  auto &tag_info = it->second;
 
   // insert new tags that are not present in the old tags.
-  for (const auto& tag : new_parsed_tags) {
+  for (const auto &tag : new_parsed_tags) {
     if (!tag_info.tags.contains(tag)) {
       tree_.AddKeyValue(tag, key);
     }
   }
 
   // remove old tags that are not present in the new tags.
-  for (const auto& tag : tag_info.tags) {
+  for (const auto &tag : tag_info.tags) {
     if (!new_parsed_tags.contains(tag)) {
       tree_.Remove(tag, key);
     }
@@ -180,8 +180,8 @@ absl::StatusOr<bool> Tag::ModifyRecord(const InternedStringPtr& key,
   return true;
 }
 
-absl::StatusOr<bool> Tag::RemoveRecord(const InternedStringPtr& key,
-                                       DeletionType deletion_type) {
+absl::StatusOr<bool> Tag::RemoveRecordImpl(const InternedStringPtr &key,
+                                           DeletionType deletion_type) {
   absl::MutexLock lock(&index_mutex_);
   if (deletion_type == DeletionType::kRecord) {
     // If key is DELETED, remove it from untracked_keys_.
@@ -194,15 +194,15 @@ absl::StatusOr<bool> Tag::RemoveRecord(const InternedStringPtr& key,
   if (it == tracked_tags_by_keys_.end()) {
     return false;
   }
-  auto& tag_info = it->second;
-  for (const auto& tag : tag_info.tags) {
+  auto &tag_info = it->second;
+  for (const auto &tag : tag_info.tags) {
     tree_.Remove(tag, key);
   }
   tracked_tags_by_keys_.erase(it);
   return true;
 }
 
-int Tag::RespondWithInfo(ValkeyModuleCtx* ctx) const {
+int Tag::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   auto num_replies = 8;
   ValkeyModule_ReplyWithSimpleString(ctx, "type");
   ValkeyModule_ReplyWithSimpleString(ctx, "TAG");
@@ -227,7 +227,7 @@ std::unique_ptr<data_model::Index> Tag::ToProto() const {
   return index_proto;
 }
 
-InternedStringPtr Tag::GetRawValue(const InternedStringPtr& key) const {
+InternedStringPtr Tag::GetRawValue(const InternedStringPtr &key) const {
   // Note that the Tag index is not mutated while the time sliced mutex is
   // in a read mode and therefor it is safe to skip lock acquiring.
   if (auto it = tracked_tags_by_keys_.find(key);
@@ -237,8 +237,8 @@ InternedStringPtr Tag::GetRawValue(const InternedStringPtr& key) const {
   return {};
 }
 
-const absl::flat_hash_set<absl::string_view>* Tag::GetValue(
-    const InternedStringPtr& key, bool& case_sensitive) const {
+const absl::flat_hash_set<absl::string_view> *Tag::GetValue(
+    const InternedStringPtr &key, bool &case_sensitive) const {
   // Note that the Tag index is not mutated while the time sliced mutex is
   // in a read mode and therefor it is safe to skip lock acquiring.
   if (auto it = tracked_tags_by_keys_.find(key);
@@ -250,9 +250,9 @@ const absl::flat_hash_set<absl::string_view>* Tag::GetValue(
 }
 
 Tag::EntriesFetcherIterator::EntriesFetcherIterator(
-    const PatriciaTreeIndex& tree,
-    absl::flat_hash_set<PatriciaNodeIndex*>& entries,
-    const InternedStringSet& untracked_keys, bool negate)
+    const PatriciaTreeIndex &tree,
+    absl::flat_hash_set<PatriciaNodeIndex *> &entries,
+    const InternedStringSet &untracked_keys, bool negate)
     : tree_iter_(tree.RootIterator()),
       entries_(entries),
       untracked_keys_(untracked_keys),
@@ -316,7 +316,7 @@ void Tag::EntriesFetcherIterator::Next() {
   next_node_ = nullptr;
 }
 
-const InternedStringPtr& Tag::EntriesFetcherIterator::operator*() const {
+const InternedStringPtr &Tag::EntriesFetcherIterator::operator*() const {
   if (negate_ && tree_iter_.Done()) {
     return *untracked_keys_iter_.value();
   }
@@ -325,15 +325,15 @@ const InternedStringPtr& Tag::EntriesFetcherIterator::operator*() const {
 
 // TODO: b/357027854 - Support Suffix/Infix Search
 std::unique_ptr<Tag::EntriesFetcher> Tag::Search(
-    const query::TagPredicate& predicate, bool negate) const {
-  absl::flat_hash_set<PatriciaNodeIndex*> entries;
+    const query::TagPredicate &predicate, bool negate) const {
+  absl::flat_hash_set<PatriciaNodeIndex *> entries;
   size_t size = 0;
 
-  for (const auto& tag : predicate.GetTags()) {
+  for (const auto &tag : predicate.GetTags()) {
     if (tag.back() == '*') {
       auto prefix_tag = tag.substr(0, tag.length() - 1);
       for (auto it = tree_.PrefixMatcher(prefix_tag); !it.Done(); it.Next()) {
-        PatriciaNodeIndex* node = it.Value();
+        PatriciaNodeIndex *node = it.Value();
         if (node != nullptr) {
           auto res = entries.insert(node);
           if (res.second && node->value.has_value()) {
@@ -343,7 +343,7 @@ std::unique_ptr<Tag::EntriesFetcher> Tag::Search(
       }
     } else {
       // exact search
-      PatriciaNodeIndex* node = tree_.ExactMatcher(tag);
+      PatriciaNodeIndex *node = tree_.ExactMatcher(tag);
       if (node != nullptr) {
         auto res = entries.insert(node);
         if (res.second && node->value.has_value()) {
@@ -381,29 +381,29 @@ size_t Tag::GetUnTrackedKeyCount() const {
   return untracked_keys_.size();
 }
 
-bool Tag::IsTracked(const InternedStringPtr& key) const {
+bool Tag::IsTracked(const InternedStringPtr &key) const {
   absl::MutexLock lock(&index_mutex_);
   return tracked_tags_by_keys_.contains(key);
 }
 
-bool Tag::IsUnTracked(const InternedStringPtr& key) const {
+bool Tag::IsUnTracked(const InternedStringPtr &key) const {
   absl::MutexLock lock(&index_mutex_);
   return untracked_keys_.contains(key);
 }
 
 absl::Status Tag::ForEachTrackedKey(
-    absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn) const {
+    absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const {
   absl::MutexLock lock(&index_mutex_);
-  for (const auto& [key, _] : tracked_tags_by_keys_) {
+  for (const auto &[key, _] : tracked_tags_by_keys_) {
     VMSDK_RETURN_IF_ERROR(fn(key));
   }
   return absl::OkStatus();
 }
 
 absl::Status Tag::ForEachUnTrackedKey(
-    absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn) const {
+    absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const {
   absl::MutexLock lock(&index_mutex_);
-  for (const auto& key : untracked_keys_) {
+  for (const auto &key : untracked_keys_) {
     VMSDK_RETURN_IF_ERROR(fn(key));
   }
   return absl::OkStatus();

@@ -135,20 +135,20 @@ TEST_P(IndexSchemaSubscriptionTest, OnKeyspaceNotificationTest) {
     EXPECT_CALL(*mock_index, IsTracked(key))
         .WillRepeatedly(Return(test_case.is_tracked));
     if (test_case.expect_index_add_w_result.has_value()) {
-      EXPECT_CALL(
-          *mock_index,
-          AddRecord(key, absl::string_view(test_case.expected_vector_buffer)))
+      EXPECT_CALL(*mock_index,
+                  AddRecordImpl(
+                      key, absl::string_view(test_case.expected_vector_buffer)))
           .WillOnce(Return(test_case.expect_index_add_w_result.value()));
     } else if (test_case.expect_index_modify_w_result.has_value()) {
       EXPECT_CALL(*mock_index,
-                  ModifyRecord(
+                  ModifyRecordImpl(
                       key, absl::string_view(test_case.expected_vector_buffer)))
           .WillOnce(Return(test_case.expect_index_modify_w_result.value()));
     } else if (test_case.expect_index_remove_w_result.has_value()) {
       if (test_case.expect_index_remove_w_result.value().ok() &&
           test_case.expect_index_remove_w_result.value().value() == true) {
         EXPECT_CALL(*mock_index,
-                    RemoveRecord(key, test_case.expected_deletion_type))
+                    RemoveRecordImpl(key, test_case.expected_deletion_type))
             .WillOnce(Return(test_case.expect_index_remove_w_result.value()));
       }
     }
@@ -622,7 +622,7 @@ TEST_P(IndexSchemaSubscriptionSimpleTest, DropIndexPrematurely) {
     auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key->Str().data());
     EXPECT_CALL(*mock_index, IsTracked(key)).WillRepeatedly(Return(false));
 
-    EXPECT_CALL(*mock_index, AddRecord(key, testing::_)).Times(0);
+    EXPECT_CALL(*mock_index, AddRecordImpl(key, testing::_)).Times(0);
 
     EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
         .WillRepeatedly(TestValkeyModule_KeyTypeDefaultImpl);
@@ -735,7 +735,7 @@ TEST_P(IndexSchemaSubscriptionSimpleTest, IndexSchemaInDifferentDBTest) {
   VMSDK_EXPECT_OK(
       index_schema->AddIndex("attribute_name", "test_identifier", mock_index));
 
-  EXPECT_CALL(*mock_index, AddRecord(testing::_, testing::_)).Times(0);
+  EXPECT_CALL(*mock_index, AddRecordImpl(testing::_, testing::_)).Times(0);
   std::string key = "key";
   auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key.c_str());
   ValkeyModuleCtx different_db_ctx;
@@ -763,7 +763,7 @@ TEST_P(IndexSchemaSubscriptionSimpleTest,
   VMSDK_EXPECT_OK(
       index_schema->AddIndex("attribute_name", "test_identifier", mock_index));
 
-  EXPECT_CALL(*mock_index, AddRecord(testing::_, testing::_)).Times(0);
+  EXPECT_CALL(*mock_index, AddRecordImpl(testing::_, testing::_)).Times(0);
   std::string key = "key";
   auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key.c_str());
   ValkeyModuleCtx different_db_ctx;
@@ -931,10 +931,11 @@ TEST_P(IndexSchemaBackfillTest, PerformBackfillTest) {
                       IsTracked(testing::Property(&InternedStringPtr::operator*,
                                                   testing::StrEq(key_str))))
               .WillRepeatedly(testing::Return(false));
-          EXPECT_CALL(*mock_index,
-                      AddRecord(testing::Property(&InternedStringPtr::operator*,
-                                                  testing::StrEq(key_str)),
-                                testing::_))
+          EXPECT_CALL(
+              *mock_index,
+              AddRecordImpl(testing::Property(&InternedStringPtr::operator*,
+                                              testing::StrEq(key_str)),
+                            testing::_))
               .WillOnce(testing::Return(true));
           if (use_thread_pool) {
             EXPECT_CALL(thread_pool,
@@ -1465,20 +1466,20 @@ TEST_F(IndexSchemaRDBTest, LoadEndedDeletesOrphanedKeys) {
                 KeyExists(&fake_ctx_, vmsdk::ValkeyModuleStringValueEq("key3")))
         .WillRepeatedly(Return(1));
 
-    EXPECT_CALL(*mock_index,
-                RemoveRecord(testing::Property(&InternedStringPtr::operator*,
-                                               testing::StrEq("key1")),
-                             indexes::DeletionType::kRecord))
+    EXPECT_CALL(*mock_index, RemoveRecordImpl(testing::Property(
+                                                  &InternedStringPtr::operator*,
+                                                  testing::StrEq("key1")),
+                                              indexes::DeletionType::kRecord))
         .WillOnce(Return(true));
-    EXPECT_CALL(*mock_index,
-                RemoveRecord(testing::Property(&InternedStringPtr::operator*,
-                                               testing::StrEq("key2")),
-                             indexes::DeletionType::kRecord))
+    EXPECT_CALL(*mock_index, RemoveRecordImpl(testing::Property(
+                                                  &InternedStringPtr::operator*,
+                                                  testing::StrEq("key2")),
+                                              indexes::DeletionType::kRecord))
         .WillOnce(Return(true));
-    EXPECT_CALL(*mock_index,
-                RemoveRecord(testing::Property(&InternedStringPtr::operator*,
-                                               testing::StrEq("key3")),
-                             indexes::DeletionType::kRecord))
+    EXPECT_CALL(*mock_index, RemoveRecordImpl(testing::Property(
+                                                  &InternedStringPtr::operator*,
+                                                  testing::StrEq("key3")),
+                                              indexes::DeletionType::kRecord))
         .Times(0);
     index_schema->OnLoadingEnded(&fake_ctx_);
     if (use_thread_pool) {

@@ -167,8 +167,8 @@ InternedStringPtr VectorBase::InternVector(absl::string_view record,
   return StringInternStore::Intern(record, vector_allocator_.get());
 }
 
-absl::StatusOr<bool> VectorBase::AddRecord(const InternedStringPtr &key,
-                                           absl::string_view record) {
+absl::StatusOr<bool> VectorBase::AddRecordImpl(const InternedStringPtr &key,
+                                               absl::string_view record) {
   std::optional<float> magnitude;
   auto interned_vector = InternVector(record, magnitude);
   if (!interned_vector) {
@@ -182,7 +182,7 @@ absl::StatusOr<bool> VectorBase::AddRecord(const InternedStringPtr &key,
     auto untrack_result = UnTrackKey(key);
     if (!untrack_result.ok()) {
       VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
-          << "While processing error for AddRecord, encountered error in "
+          << "While processing error for AddRecordImpl, encountered error in "
              "UntrackKey: "
           << untrack_result.status().message();
     }
@@ -219,15 +219,15 @@ absl::StatusOr<InternedStringPtr> VectorBase::GetKeyDuringSearch(
   return it->second;
 }
 
-absl::StatusOr<bool> VectorBase::ModifyRecord(const InternedStringPtr &key,
-                                              absl::string_view record) {
+absl::StatusOr<bool> VectorBase::ModifyRecordImpl(const InternedStringPtr &key,
+                                                  absl::string_view record) {
   // VectorExternalizer tracks added entries. We need to untrack mutations which
   // are processed as modified records.
   std::optional<float> magnitude;
   auto interned_vector = InternVector(record, magnitude);
   if (!interned_vector) {
     [[maybe_unused]] auto res =
-        RemoveRecord(key, indexes::DeletionType::kRecord);
+        RemoveRecordImpl(key, indexes::DeletionType::kRecord);
     return false;
   }
   VMSDK_ASSIGN_OR_RETURN(auto internal_id, GetInternalId(key));
@@ -243,7 +243,7 @@ absl::StatusOr<bool> VectorBase::ModifyRecord(const InternedStringPtr &key,
     auto untrack_result = UnTrackKey(key);
     if (!untrack_result.ok()) {
       VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
-          << "While processing error for ModifyRecord, encountered error "
+          << "While processing error for ModifyRecordImpl, encountered error "
              "in UntrackKey: "
           << untrack_result.status().message();
     }
@@ -292,7 +292,7 @@ absl::StatusOr<std::vector<char>> VectorBase::GetValue(
   return result;
 }
 
-absl::StatusOr<bool> VectorBase::RemoveRecord(
+absl::StatusOr<bool> VectorBase::RemoveRecordImpl(
     const InternedStringPtr &key,
     [[maybe_unused]] indexes::DeletionType deletion_type) {
   VMSDK_ASSIGN_OR_RETURN(auto res, UnTrackKey(key));

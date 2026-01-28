@@ -38,13 +38,13 @@ std::optional<double> ParseNumber(absl::string_view data) {
 }
 }  // namespace
 
-Numeric::Numeric(const data_model::NumericIndex& numeric_index_proto)
+Numeric::Numeric(const data_model::NumericIndex &numeric_index_proto)
     : IndexBase(IndexerType::kNumeric) {
   index_ = std::make_unique<BTreeNumericIndex>();
 }
 
-absl::StatusOr<bool> Numeric::AddRecord(const InternedStringPtr& key,
-                                        absl::string_view data) {
+absl::StatusOr<bool> Numeric::AddRecordImpl(const InternedStringPtr &key,
+                                            absl::string_view data) {
   auto value = ParseNumber(data);
   absl::MutexLock lock(&index_mutex_);
   if (!value.has_value()) {
@@ -61,8 +61,8 @@ absl::StatusOr<bool> Numeric::AddRecord(const InternedStringPtr& key,
   return true;
 }
 
-absl::StatusOr<bool> Numeric::ModifyRecord(const InternedStringPtr& key,
-                                           absl::string_view data) {
+absl::StatusOr<bool> Numeric::ModifyRecordImpl(const InternedStringPtr &key,
+                                               absl::string_view data) {
   auto value = ParseNumber(data);
   if (!value.has_value()) {
     [[maybe_unused]] auto res =
@@ -81,8 +81,8 @@ absl::StatusOr<bool> Numeric::ModifyRecord(const InternedStringPtr& key,
   return true;
 }
 
-absl::StatusOr<bool> Numeric::RemoveRecord(const InternedStringPtr& key,
-                                           DeletionType deletion_type) {
+absl::StatusOr<bool> Numeric::RemoveRecordImpl(const InternedStringPtr &key,
+                                               DeletionType deletion_type) {
   absl::MutexLock lock(&index_mutex_);
   if (deletion_type == DeletionType::kRecord) {
     // If key is DELETED, remove it from untracked_keys_.
@@ -101,7 +101,7 @@ absl::StatusOr<bool> Numeric::RemoveRecord(const InternedStringPtr& key,
   return true;
 }
 
-int Numeric::RespondWithInfo(ValkeyModuleCtx* ctx) const {
+int Numeric::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "type");
   ValkeyModule_ReplyWithSimpleString(ctx, "NUMERIC");
   ValkeyModule_ReplyWithSimpleString(ctx, "size");
@@ -118,7 +118,7 @@ std::unique_ptr<data_model::Index> Numeric::ToProto() const {
   return index_proto;
 }
 
-const double* Numeric::GetValue(const InternedStringPtr& key) const {
+const double *Numeric::GetValue(const InternedStringPtr &key) const {
   // Note that the Numeric index is not mutated while the time sliced mutex is
   // in a read mode and therefor it is safe to skip lock acquiring.
   if (auto it = tracked_keys_.find(key); it != tracked_keys_.end()) {
@@ -128,9 +128,9 @@ const double* Numeric::GetValue(const InternedStringPtr& key) const {
 }
 
 std::unique_ptr<Numeric::EntriesFetcher> Numeric::Search(
-    const query::NumericPredicate& predicate, bool negate) const {
+    const query::NumericPredicate &predicate, bool negate) const {
   EntriesRange entries_range;
-  const auto& btree = index_->GetBtree();
+  const auto &btree = index_->GetBtree();
   if (negate) {
     auto size =
         index_->GetCount(std::numeric_limits<double>::lowest(),
@@ -166,8 +166,8 @@ std::unique_ptr<Numeric::EntriesFetcher> Numeric::Search(
 }
 
 bool Numeric::EntriesFetcherIterator::NextKeys(
-    const Numeric::EntriesRange& range, BTreeNumericIndex::ConstIterator& iter,
-    std::optional<InternedStringSet::const_iterator>& keys_iter) {
+    const Numeric::EntriesRange &range, BTreeNumericIndex::ConstIterator &iter,
+    std::optional<InternedStringSet::const_iterator> &keys_iter) {
   while (iter != range.second) {
     if (!keys_iter.has_value()) {
       keys_iter = iter->second.begin();
@@ -184,9 +184,9 @@ bool Numeric::EntriesFetcherIterator::NextKeys(
 }
 
 Numeric::EntriesFetcherIterator::EntriesFetcherIterator(
-    const EntriesRange& entries_range,
-    const std::optional<EntriesRange>& additional_entries_range,
-    const InternedStringSet* untracked_keys)
+    const EntriesRange &entries_range,
+    const std::optional<EntriesRange> &additional_entries_range,
+    const InternedStringSet *untracked_keys)
     : entries_range_(entries_range),
       entries_iter_(entries_range_.first),
       additional_entries_range_(additional_entries_range),
@@ -224,7 +224,7 @@ void Numeric::EntriesFetcherIterator::Next() {
   }
 }
 
-const InternedStringPtr& Numeric::EntriesFetcherIterator::operator*() const {
+const InternedStringPtr &Numeric::EntriesFetcherIterator::operator*() const {
   if (entries_iter_ != entries_range_.second) {
     DCHECK(entry_keys_iter_ != entries_iter_->second.end());
     return *entry_keys_iter_.value();
@@ -259,29 +259,29 @@ size_t Numeric::GetUnTrackedKeyCount() const {
   return untracked_keys_.size();
 }
 
-bool Numeric::IsTracked(const InternedStringPtr& key) const {
+bool Numeric::IsTracked(const InternedStringPtr &key) const {
   absl::MutexLock lock(&index_mutex_);
   return tracked_keys_.contains(key);
 }
 
-bool Numeric::IsUnTracked(const InternedStringPtr& key) const {
+bool Numeric::IsUnTracked(const InternedStringPtr &key) const {
   absl::MutexLock lock(&index_mutex_);
   return untracked_keys_.contains(key);
 }
 
 absl::Status Numeric::ForEachTrackedKey(
-    absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn) const {
+    absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const {
   absl::MutexLock lock(&index_mutex_);
-  for (const auto& [key, _] : tracked_keys_) {
+  for (const auto &[key, _] : tracked_keys_) {
     VMSDK_RETURN_IF_ERROR(fn(key));
   }
   return absl::OkStatus();
 }
 
 absl::Status Numeric::ForEachUnTrackedKey(
-    absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn) const {
+    absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const {
   absl::MutexLock lock(&index_mutex_);
-  for (const auto& key : untracked_keys_) {
+  for (const auto &key : untracked_keys_) {
     VMSDK_RETURN_IF_ERROR(fn(key));
   }
   return absl::OkStatus();

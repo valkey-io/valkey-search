@@ -186,7 +186,8 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
       key_iterators;
   while (!word_iter.Done()) {
     if (word_iter.GetWord() == GetTextString()) {
-      key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
+      key_iterators.emplace_back(
+          word_iter.GetPostingsTarget()->GetKeyIterator());
     }
     word_iter.Next();
   }
@@ -208,7 +209,7 @@ std::unique_ptr<indexes::text::TextIterator> PrefixPredicate::BuildTextIterator(
   uint32_t max_words = options::GetMaxTermExpansions().GetValue();
   uint32_t word_count = 0;
   while (!word_iter.Done() && word_count < max_words) {
-    key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
+    key_iterators.emplace_back(word_iter.GetPostingsTarget()->GetKeyIterator());
     word_iter.Next();
     ++word_count;
   }
@@ -234,7 +235,7 @@ std::unique_ptr<indexes::text::TextIterator> SuffixPredicate::BuildTextIterator(
   uint32_t max_words = options::GetMaxTermExpansions().GetValue();
   uint32_t word_count = 0;
   while (!word_iter.Done() && word_count < max_words) {
-    key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
+    key_iterators.emplace_back(word_iter.GetPostingsTarget()->GetKeyIterator());
     word_iter.Next();
     ++word_count;
   }

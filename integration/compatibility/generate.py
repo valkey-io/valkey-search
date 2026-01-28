@@ -155,7 +155,6 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.checkvec(self, dialect, orig_cmd, kwargs)
         self.check(self, dialect, orig_cmd)
 
-    '''        
     def test_bad_numeric_data(self, key_type, dialect):
         self.setup_data("bad numbers", key_type)
         self.check(dialect, f"ft.search {key_type}_idx1",  "@n1:[-inf inf]")
@@ -163,6 +162,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.check(dialect, f"ft.search {key_type}_idx1",  "@n2:[-inf inf]")
         self.check(dialect, f"ft.search {key_type}_idx1", "-@n2:[-inf inf]")
 
+    '''
     def test_search_reverse(self, key_type, dialect):
         self.setup_data("reverse vector numbers", key_type)
         self.checkall(dialect, f"ft.search {key_type}_idx1 *")
@@ -460,3 +460,25 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                         "as",
                         "nn",
                 )
+
+    def test_search_sortby(self, key_type, dialect):
+        self.setup_data("sortable numbers", key_type)
+
+        # Basic numeric sortby - ascending
+        self.check(dialect, f"ft.search {key_type}_idx1 * sortby @n1 asc")
+        self.check(dialect, f"ft.search {key_type}_idx1 * sortby @n2 asc")
+
+        # Basic numeric sortby - descending
+        self.check(dialect, f"ft.search {key_type}_idx1 * sortby @n1 desc")
+        self.check(dialect, f"ft.search {key_type}_idx1 * sortby @n2 desc")
+
+        # Sortby with LIMIT
+        self.check(dialect, f"ft.search {key_type}_idx1 * sortby @n1 asc limit 0 5")
+        self.check(dialect, f"ft.search {key_type}_idx1 * sortby @n2 desc limit 2 3")
+
+        # Sortby with query filter
+        self.check(dialect, f"ft.search {key_type}_idx1 @n1:[0 inf] sortby @n1 asc")
+        self.check(dialect, f"ft.search {key_type}_idx1 @n1:[-inf 0] sortby @n2 desc")
+
+        # Sortby with RETURN fields
+        self.check(dialect, f"ft.search {key_type}_idx1 * return 3 @n1 @n1 @t1 sortby 2 @n1 asc")

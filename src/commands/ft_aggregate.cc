@@ -91,7 +91,7 @@ absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator &itr) {
   RealIndexInterface real_index_interface(index_schema);
   parse_vars_.index_interface_ = &real_index_interface;
 
-  VMSDK_RETURN_IF_ERROR(PreParseQueryString(*this));
+  VMSDK_RETURN_IF_ERROR(PreParseQueryString());
   // Ensure that key is first value if it gets included...
   CHECK(AddRecordAttribute("__key", "__key", indexes::IndexerType::kNone) == 0);
   auto score_sv = vmsdk::ToStringView(score_as.get());
@@ -112,7 +112,7 @@ absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator &itr) {
   limit.number = std::numeric_limits<uint64_t>::max();  // Override default of
                                                         // 10 from search
 
-  VMSDK_RETURN_IF_ERROR(PostParseQueryString(*this));
+  VMSDK_RETURN_IF_ERROR(PostParseQueryString());
   VMSDK_RETURN_IF_ERROR(VerifyQueryString(*this));
   VMSDK_RETURN_IF_ERROR(ManipulateReturnsClause(*this));
 

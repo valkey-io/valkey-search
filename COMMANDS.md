@@ -135,6 +135,7 @@ FT.SEARCH <index> <query>
   [TIMEOUT <timeout>]
   [PARAMS nargs <name> <value> [ <name> <value> ...]]
   [LIMIT <offset> <num>]
+  [SORTBY <field> [ASC|DESC]]
   [DIALECT <dialect>]
 ```
 
@@ -147,6 +148,7 @@ Performs a search of the specified index. The keys which match the query express
 - **PARAMS \<count\> \<name1\> \<value1\> \<name2\> \<value2\> ...** (optional): `count` is of the number of arguments, i.e., twice the number of value name pairs. See the query string for usage details.
 - **RETURN \<count\> \<field1\> \<field2\> ...** (options): `count` is the number of fields to return. Specifies the fields you want to retrieve from your documents, along with any aliases for the returned values. By default, all fields are returned unless the NOCONTENT option is set, in which case no fields are returned. If num is set to 0, it behaves the same as NOCONTENT.
 - **LIMIT \<offset\> \<count\>** (optional): Lets you choose a portion of the result. The first `<offset>` keys are skipped and only a maximum of `<count>` keys are included. The default is LIMIT 0 10, which returns at most 10 keys.  
+- **SORTBY \<field\> [ASC|DESC]** (optional): Sorts the results by the specified indexed field. The field must be a numeric or tag field that is indexed. ASC sorts in ascending order (default), DESC sorts in descending order. Documents with missing values for the sort field are placed at the end of the results.
 - **DIALECT \<dialect\>** (optional): Specifies your dialect. The only supported dialect is 2\.
 
 **RESPONSE**

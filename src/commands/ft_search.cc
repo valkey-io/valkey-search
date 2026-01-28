@@ -9,8 +9,6 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <cstdint>
-#include <deque>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -22,10 +20,12 @@
 #include "absl/strings/string_view.h"
 #include "src/commands/commands.h"
 #include "src/commands/ft_search_parser.h"
+#include "src/indexes/index_base.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
 #include "src/query/response_generator.h"
 #include "src/query/search.h"
+#include "value.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -156,6 +156,70 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
 }
 
 }  // namespace
+// Apply sorting to neighbors based on attribute values in attribute_contents
+void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
+                  const SearchCommand &parameters) {
+  if (!parameters.sortby.has_value() || neighbors.empty()) {
+    return;
+  }
+
+  auto sortby = parameters.sortby.value();
+  // Resolve sortby field to actual identifier (handle aliases)
+  auto schema_identifier = parameters.index_schema->GetIdentifier(sortby.field);
+  std::string sortby_identifier =
+      schema_identifier.ok() ? *schema_identifier : sortby.field;
+
+  // Check if field is a declared numeric attribute
+  auto index_result = parameters.index_schema->GetIndex(sortby.field);
+  bool is_numeric =
+      index_result.ok() &&
+      index_result.value()->GetIndexerType() == indexes::IndexerType::kNumeric;
+  auto compare = [&](const indexes::Neighbor &a,
+                     const indexes::Neighbor &b) -> bool {
+    if (!a.attribute_contents.has_value() ||
+        !b.attribute_contents.has_value()) {
+      return false;
+    }
+
+    auto it_a = a.attribute_contents->find(sortby_identifier);
+    auto it_b = b.attribute_contents->find(sortby_identifier);
+
+    if (it_a == a.attribute_contents->end()) {
+      return false;
+    }
+    if (it_b == b.attribute_contents->end()) {
+      return true;
+    }
+
+    auto str_a = vmsdk::ToStringView(it_a->second.value.get());
+    auto str_b = vmsdk::ToStringView(it_b->second.value.get());
+
+    expr::Value val_a, val_b;
+    if (is_numeric) {
+      auto num_a = vmsdk::ToNumeric<double>(str_a).value_or(0.0);
+      auto num_b = vmsdk::ToNumeric<double>(str_a).value_or(0.0);
+      val_a = expr::Value(num_a);
+      val_b = expr::Value(num_b);
+    } else {
+      val_a = expr::Value(str_a);
+      val_b = expr::Value(str_b);
+    }
+
+    auto cmp = expr::Compare(val_a, val_b);
+    if (cmp == expr::Ordering::kLESS) {
+      return sortby.order == SortOrder::kAscending;
+    }
+    return sortby.order == SortOrder::kDescending;
+  };
+
+  auto amountToKeep = parameters.limit.first_index + parameters.limit.number;
+  if (amountToKeep >= neighbors.size()) {
+    std::stable_sort(neighbors.begin(), neighbors.end(), compare);
+  } else {
+    std::partial_sort(neighbors.begin(), neighbors.begin() + amountToKeep,
+                      neighbors.end(), compare);
+  }
+}
 
 // Check for scenarios that require sending an early reply.
 // Returns true if an early reply was sent and processing should stop.
@@ -237,6 +301,8 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
     ValkeyModule_ReplyWithError(ctx, status.message().data());
     return;
   }
+
+  ApplySorting(search_result.neighbors, *this);
 
   // 3. Serialize neighbors based on query type
   if (IsNonVectorQuery()) {

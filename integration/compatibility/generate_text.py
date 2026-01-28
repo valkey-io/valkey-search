@@ -5,7 +5,9 @@ from .data_sets import load_data
 from .generate import BaseCompatibilityTest
 from .text_query_builder import *
 
-
+# uncomment when stemming is finished
+# @pytest.mark.parametrize("schema_type", ["default", "nostem"])
+@pytest.mark.parametrize("schema_type", ["nostem"])
 @pytest.mark.parametrize("dialect", [2])
 @pytest.mark.parametrize("key_type", ["hash"])
 class TestTextSearchCompatibility(BaseCompatibilityTest):
@@ -13,11 +15,35 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
     MAX_QUERIES = 1000
     ANSWER_FILE_NAME = "text-search-answers.pickle.gz"
 
-    def setup_data(self, data_set_name, key_type):
-        """Override to specify text data source."""
+    def setup_data(self, data_set_name, key_type, schema_type):
+        """Override to specify text data source."""        
         self.data_set_name = data_set_name
         self.key_type = key_type
-        load_data(self.client, data_set_name, key_type, data_source='text')
+        self.schema_type = schema_type
+        self.client.execute_command("FLUSHALL SYNC")
+        load_data(self.client, data_set_name, key_type, data_source='text', schema_type=schema_type)
+    
+    def execute_command(self, cmd):
+        """Override to include schema_type in answer."""
+        import os, traceback
+        answer = {"cmd": cmd,
+                "key_type": self.key_type,
+                "data_set_name": self.data_set_name,
+                "schema_type": self.schema_type,
+                "testname": os.environ.get('PYTEST_CURRENT_TEST').split(':')[-1].split(' ')[0],
+                "traceback": "".join(traceback.format_stack())}
+        try:
+            print("Cmd:", *cmd)
+            answer["result"] = self.client.execute_command(*cmd)
+            answer["exception"] = False
+            if answer["result"] != [0]:
+                self.__class__.replied_count += 1
+            print(f"replied: {answer['result']} (count: {self.__class__.replied_count})")
+        except Exception as exc:
+            print(f"Got exception for Error: '{exc}', Cmd:{cmd}")
+            answer["result"] = {}
+            answer["exception"] = True
+        self.answers.append(answer)
 
     # helper function to parse the result of Redis FT.EXPLAINCLI
     # use it to detect parsing differences
@@ -247,7 +273,7 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
         
         return words
 
-    def _run_test(self, builder_fn, data_set_name, key_type, dialect, inorder=False, slop=False, check_parsing=False, skip_duplicate=False, field=None):
+    def _run_test(self, builder_fn, data_set_name, key_type, dialect, schema_type, inorder=False, slop=False, check_parsing=False, field=None, query_str=None):
         """Helper to run a test with given term builder function.
         
         Args:
@@ -267,7 +293,7 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
         
         matched_count = 0
         mismatched_count = 0
-        self.setup_data(data_set_name, key_type)
+        self.setup_data(data_set_name, key_type, schema_type)
         rng = random.Random(self.TEXT_QUERY_TEST_SEED)
         renderer = TermRenderer()
 
@@ -278,8 +304,9 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
         seen = set()
         query_count = 0
         attempts = 0
+        max_queries = 1 if query_str else self.MAX_QUERIES
         max_attempts = self.MAX_QUERIES * 20
-        while query_count < self.MAX_QUERIES and attempts < max_attempts:
+        while query_count < max_queries and attempts < max_attempts:
             attempts += 1
 
             if field is not None:
@@ -289,27 +316,21 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
             vocab = vocab_by_field[selected_field]
 
             try:
-                # Generate term(s) or query string using the builder function
-                result = builder_fn(vocab, rng)
-                
-                # Convert to query string if needed
-                query_str = result if isinstance(result, str) else renderer.render(result)
+                if query_str:
+                    current_query = query_str
+                else:
+                    result = builder_fn(vocab, rng)
+                    current_query = result if isinstance(result, str) else renderer.render(result)
 
-                # Only test unique queries
-                if query_str not in seen:
-                    seen.add(query_str)
+                if current_query not in seen:
+                    seen.add(current_query)
 
                     # check if Redis parsing is correct by calling FT.EXPLAINCLI, 
                     # and compare the words order with the query string
                     if is_redis and check_parsing:
-                        # words_from_explaincli = self.extract_words_from_explaincli(f"{key_type}_idx1", query_str, dialect)
-                        # words_from_query = self.extract_words_from_query(query_str)
-                        # if words_from_explaincli != words_from_query:
-                        #     print(f"Redis parsing is inconsistent for query {query_str}, skipping this query")
-                        #     continue
                         reconstructed_query, is_valid = self.parse_explaincli_to_query(
                             f"{key_type}_idx1", 
-                            query_str, 
+                            current_query, 
                             dialect
                         )
                         if is_valid:
@@ -317,23 +338,15 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
                         else:
                             mismatched_count += 1
                             print(f"Redis parsing is inconsistent for query:")
-                            print(f"  Original:      {query_str}")
+                            print(f"  Original:      {current_query}")
                             print(f"  Reconstructed: {reconstructed_query}")
                             continue
                         print(f"Matched: {matched_count}, Mismatched: {mismatched_count}")     
-                    
-                    # skip query with duplicate words
-                    if skip_duplicate:
-                        words_from_query = self.extract_words_from_query(query_str)
-                        words_to_set = set(words_from_query)
-                        if len(words_to_set) != len(words_from_query):
-                            print(f"skipping query with duplicate words {query_str}")
-                            continue
 
                     args = [
                         "FT.SEARCH",
                         f"{key_type}_idx1",
-                        query_str,
+                        current_query,
                     ]
                     if inorder:
                         args.append("INORDER")
@@ -358,76 +371,68 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
     # Base term types
     # ========================================================================
 
-    def test_text_search_exact_match(self, key_type, dialect):
+    def test_text_search_exact_match(self, key_type, dialect, schema_type):
         """Test exact word matching queries."""
-        self._run_test(gen_word, "pure text", key_type, dialect)
+        self._run_test(gen_word, "pure text", key_type, dialect, schema_type)
 
-    def test_text_search_prefix(self, key_type, dialect):
+    def test_text_search_prefix(self, key_type, dialect, schema_type):
         """Test prefix wildcard queries."""
-        self._run_test(gen_prefix, "pure text", key_type, dialect)
+        self._run_test(gen_prefix, "pure text", key_type, dialect, schema_type)
 
-    def test_text_search_suffix(self, key_type, dialect):
+    def test_text_search_suffix(self, key_type, dialect, schema_type):
         """Test suffix wildcard queries."""
-        self._run_test(gen_suffix, "pure text", key_type, dialect)
+        self._run_test(gen_suffix, "pure text", key_type, dialect, schema_type)
 
     # ========================================================================
     # Complex grouped queries
     # ========================================================================
 
-    def test_text_search_group_depth2(self, key_type, dialect):
+    def test_text_search_group_depth2(self, key_type, dialect, schema_type):
         """Test grouped queries with depth 2."""
-        self._run_test(gen_depth2, "pure text", key_type, dialect)
+        self._run_test(gen_depth2, "pure text", key_type, dialect, schema_type)
 
-    def test_text_search_group_depth3(self, key_type, dialect):
+    def test_text_search_group_depth3(self, key_type, dialect, schema_type):
         """Test grouped queries with depth 3."""
-        self._run_test(gen_depth3, "pure text", key_type, dialect)
+        self._run_test(gen_depth3, "pure text", key_type, dialect, schema_type)
     
-    # def test_text_search_group_depth2_inorder(self, key_type, dialect):
+    # def test_text_search_group_depth2_inorder(self, key_type, dialect, schema_type):
     #     """Test grouped queries with depth 2."""
-    #     self._run_test(gen_depth2, "pure text", key_type, dialect, inorder=True, check_parsing=True, skip_duplicate=True)
+    #     self._run_test(gen_depth2, "pure text", key_type, dialect, schema_type, inorder=True, check_parsing=True)
 
-    # def test_text_search_group_depth3_inorder(self, key_type, dialect):
+    # def test_text_search_group_depth3_inorder(self, key_type, dialect, schema_type):
     #     """Test grouped queries with depth 3."""
-    #     self._run_test(gen_depth3, "pure text", key_type, dialect, inorder=True, check_parsing=True, skip_duplicate=True)
+    #     self._run_test(gen_depth3, "pure text", key_type, dialect, schema_type, inorder=True, check_parsing=True)
     
-    # def test_text_search_group_depth2_slop(self, key_type, dialect):
+    # def test_text_search_group_depth2_slop(self, key_type, dialect, schema_type):
     #     """Test grouped queries with depth 2."""
-    #     self._run_test(gen_depth2, "pure text", key_type, dialect, slop=True, check_parsing=True, skip_duplicate=True)
+    #     self._run_test(gen_depth2, "pure text", key_type, dialect, schema_type, slop=True, check_parsing=True)
 
-    # def test_text_search_group_depth3_slop(self, key_type, dialect):
+    # def test_text_search_group_depth3_slop(self, key_type, dialect, schema_type):
     #     """Test grouped queries with depth 3."""
-    #     self._run_test(gen_depth3, "pure text", key_type, dialect, slop=True, check_parsing=True, skip_duplicate=True)
+    #     self._run_test(gen_depth3, "pure text", key_type, dialect, schema_type, slop=True, check_parsing=True)
 
-    # def test_text_search_group_depth2_inorder_slop(self, key_type, dialect):
-    #     self._run_test(gen_depth2, "pure text", key_type, dialect, inorder=True, slop=True, check_parsing=True, skip_duplicate=True)
+    # def test_text_search_group_depth2_inorder_slop(self, key_type, dialect, schema_type):
+    #     self._run_test(gen_depth2, "pure text", key_type, dialect, schema_type, inorder=True, slop=True, check_parsing=True)
 
-    # def test_text_search_group_depth3_inorder_slop(self, key_type, dialect):
-    #     self._run_test(gen_depth3, "pure text", key_type, dialect, inorder=True, slop=True, check_parsing=True, skip_duplicate=True)
+    # def test_text_search_group_depth3_inorder_slop(self, key_type, dialect, schema_type):
+    #     self._run_test(gen_depth3, "pure text", key_type, dialect, schema_type, inorder=True, slop=True, check_parsing=True)
 
     # ========================================================================
     # text with special characters
     # ========================================================================
 
-    def test_text_search_unescaped(self, key_type, dialect):
+    def test_text_search_unescaped(self, key_type, dialect, schema_type):
         """Test unescaped special characters in title field."""
-        self._run_test(gen_unescaped_word, "punctuation", key_type, dialect, field='title')
+        self._run_test(gen_unescaped_word, "punctuation", key_type, dialect, schema_type, field='title')
 
-    def test_text_search_escaped(self, key_type, dialect):
+    def test_text_search_escaped(self, key_type, dialect, schema_type):
         """Test escaped special characters in body field."""
-        self._run_test(gen_escaped_word, "punctuation", key_type, dialect, field='body')
+        self._run_test(gen_escaped_word, "punctuation", key_type, dialect, schema_type, field='body')
 
 
     # ========================================================================
     # fuzzy search
     # ========================================================================
-    # def test_text_search_fuzzy_ld1(self, key_type, dialect):
-    #     """Test fuzzy search with Levenshtein distance 1."""
-    #     self._run_test(gen_fuzzy_ld1, "pure text", key_type, dialect)
-
-    # def test_text_search_fuzzy_ld2(self, key_type, dialect):
-    #     """Test fuzzy search with Levenshtein distance 2."""
-    #     self._run_test(gen_fuzzy_ld2, "pure text", key_type, dialect)
-
-    # def test_text_search_fuzzy_ld3(self, key_type, dialect):
-    #     """Test fuzzy search with Levenshtein distance 3."""
-    #     self._run_test(gen_fuzzy_ld3, "pure text", key_type, dialect)
+    def test_text_search_fuzzy(self, key_type, dialect, schema_type):
+        """Test fuzzy search with Levenshtein distance 1."""
+        self._run_test(gen_fuzzy_1, "pure text", key_type, dialect, schema_type)

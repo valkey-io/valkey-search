@@ -12,6 +12,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <new>
+#include <type_traits>
+
+#include "vmsdk/src/memory_allocation.h"
 
 #if defined(__clang__)
 #define WEAK_SYMBOL __attribute__((weak))
@@ -117,6 +120,36 @@ void UseValkeyAlloc();
 // Switch back to the default allocator. No guarantees around atomicity. Only
 // safe in single-threaded or testing environments.
 void ResetValkeyAlloc();
+
+struct DisableRawSystemAllocatorReporting {
+};  // Pass this (or void) to DISABLE reporting
+// RawSystemAllocator implements an allocator that will not go through
+// the SystemAllocTracker, for use by the SystemAllocTracker to prevent
+// infinite recursion when tracking pointers.
+template <typename T, typename Tag = void>
+struct RawSystemAllocator {
+  // NOLINTNEXTLINE
+  typedef T value_type;
+
+  RawSystemAllocator() = default;
+  template <typename U>
+  constexpr RawSystemAllocator(const RawSystemAllocator<U>&) noexcept {}
+  // NOLINTNEXTLINE
+  T* allocate(std::size_t n) {
+    if constexpr (!std::is_same_v<Tag, DisableRawSystemAllocatorReporting>) {
+      ReportAllocMemorySize(n * sizeof(T));
+    }
+    return static_cast<T*>(__real_malloc(n * sizeof(T)));
+  }
+  // NOLINTNEXTLINE
+  void deallocate(T* p, std::size_t) {
+    if constexpr (!std::is_same_v<Tag, DisableRawSystemAllocatorReporting>) {
+      ReportFreeMemorySize(sizeof(T));
+    }
+    __real_free(p);
+  }
+};
+
 }  // namespace vmsdk
 
 #endif  // VMSDK_SRC_MEMORY_ALLOCATION_OVERRIDES_H_

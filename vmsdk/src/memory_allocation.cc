@@ -9,8 +9,9 @@
 
 #include <unistd.h>
 
-#include <atomic>
 #include <cstdint>
+
+#include "vmsdk/src/sharded_atomic.h"
 
 namespace vmsdk {
 
@@ -23,28 +24,23 @@ namespace vmsdk {
 
 thread_local static int64_t memory_delta = 0;
 
-std::atomic<uint64_t> used_memory_bytes{0};
+ShardedAtomic<uint64_t> used_memory_bytes;
 
 void ResetValkeyAllocStats() {
-  used_memory_bytes.store(0, std::memory_order_relaxed);
+  used_memory_bytes.Reset();
   memory_delta = 0;
 }
 
-uint64_t GetUsedMemoryCnt() { return used_memory_bytes; }
+uint64_t GetUsedMemoryCnt() { return used_memory_bytes.GetTotal(); }
 
 void ReportAllocMemorySize(uint64_t size) {
-  vmsdk::used_memory_bytes.fetch_add(size, std::memory_order_relaxed);
+  used_memory_bytes.Add(size);
 
   memory_delta += static_cast<int64_t>(size);
 }
 
 void ReportFreeMemorySize(uint64_t size) {
-  if (size > used_memory_bytes) {
-    vmsdk::used_memory_bytes.store(0, std::memory_order_relaxed);
-  } else {
-    vmsdk::used_memory_bytes.fetch_sub(size, std::memory_order_relaxed);
-  }
-
+  used_memory_bytes.Subtract(size);
   memory_delta -= static_cast<int64_t>(size);
 }
 

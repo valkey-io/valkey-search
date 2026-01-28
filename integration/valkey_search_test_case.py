@@ -159,9 +159,6 @@ class ValkeySearchTestCaseCommon(ValkeyTestCase):
         See ValkeySearchTestCaseBase.get_config_file_lines & ValkeySearchClusterTestCase.get_config_file_lines
         for example usage."""
         raise NotImplementedError
-    
-    def append_startup_args(self, args: dict[str, str]) -> dict[str, str]:
-        return args
 
     def start_server(
         self,
@@ -192,7 +189,7 @@ class ValkeySearchTestCaseCommon(ValkeyTestCase):
         server, client = self.create_server(
             testdir=testdir,
             server_path=server_path,
-            args=self.append_startup_args({"logfile": logfile}),
+            args={"logfile": logfile},
             port=port,
             conf_file=conf_file,
         )
@@ -290,10 +287,10 @@ class ValkeySearchTestCaseBase(ValkeySearchTestCaseCommon):
     def start_new_server(self, is_primary=True) -> Node:
         """Create a new Valkey server instance"""
         server, client, logfile = self.start_server(
-            self.get_bind_port(),
-            self.test_name,
-            False,
-            is_primary,
+            port=self.get_bind_port(),
+            test_name=self.test_name,
+            cluster_enabled=False,
+            is_primary=is_primary,
         )
         return Node(client=client, server=server, logfile=logfile)
 

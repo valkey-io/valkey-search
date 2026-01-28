@@ -206,11 +206,8 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
-  while (!word_iter.Done()) {
-    if (word_iter.GetWord() == GetTextString()) {
-      key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
-    }
-    word_iter.Next();
+  if (!word_iter.Done() && word_iter.GetWord() == GetTextString()) {
+    key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
   }
   return std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), fetcher->field_mask_, fetcher->untracked_keys_,

@@ -175,7 +175,6 @@ def gen_suffix(vocab: List[str], rng: random.Random) -> List[SuffixTerm]:
         result.append(SuffixTerm("*" + word[-suffix_len:]))
     return result
 
-    op = rng.choice(["G", "AND", "OR"])
 
 def gen_exact_phrase(vocab: List[str], rng: random.Random) -> ExactPhraseTerm:
     """Generate one exact phrase with 2-3 words."""
@@ -221,3 +220,67 @@ def gen_unescaped_word(vocab: List[str], rng: random.Random) -> List[str]:
 def gen_escaped_word(vocab: List[str], rng: random.Random) -> List[str]:
     count = rng.randint(1, 3)
     return [EscapedTerm(rng.choice(vocab)) for _ in range(count)]
+
+
+def effective_levenshtein_distance(term: str, requested: int) -> int:
+    n = len(term)
+    if n <= 2:
+        return 0
+    if n == 3:
+        return min(requested, 1)
+    return min(requested, n // 2)
+
+
+def apply_levenshtein_transform(
+    word: str,
+    distance: int,
+    rng: random.Random,
+) -> str:
+    chars = list(word)
+    alphabet = list('abcdefghijklmnopqrstuvwxyz')
+    for _ in range(distance):
+        # If empty, only insertion is possible
+        if not chars:
+            chars.append(rng.choice(alphabet))
+            continue
+
+        op = rng.choice(("substitute", "insert", "delete"))
+
+        if op == "substitute":
+            i = rng.randrange(len(chars))
+            original = chars[i]
+            chars[i] = rng.choice([c for c in alphabet if c != original])
+
+        elif op == "insert":
+            i = rng.randrange(len(chars) + 1)
+            chars.insert(i, rng.choice(alphabet))
+
+        else:  # delete
+            i = rng.randrange(len(chars))
+            chars.pop(i)
+
+    return "".join(chars)
+
+
+def gen_fuzzy_1(vocab: List[str], rng: random.Random) -> str:
+    """Generate a fuzzy term with Levenshtein distance 1: %word%"""
+    word = rng.choice(vocab)
+    eff_dist = effective_levenshtein_distance(word, 1)
+    transformed = apply_levenshtein_transform(word, eff_dist, rng)
+    return f"%{transformed}%"
+
+
+def gen_fuzzy_2(vocab: List[str], rng: random.Random) -> str:
+    """Generate a fuzzy term with Levenshtein distance 2: %%word%%"""
+    word = rng.choice(vocab)
+    eff_dist = effective_levenshtein_distance(word, 2)
+    transformed = apply_levenshtein_transform(word, eff_dist, rng)
+    return f"%%{transformed}%%"
+
+
+def gen_fuzzy_3(vocab: List[str], rng: random.Random) -> str:
+    """Generate a fuzzy term with Levenshtein distance 3: %%%word%%%"""
+    word = rng.choice(vocab)
+    eff_dist = effective_levenshtein_distance(word, 3)
+    transformed = apply_levenshtein_transform(word, eff_dist, rng)
+    return f"%%%{transformed}%%%"

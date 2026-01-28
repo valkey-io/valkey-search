@@ -381,11 +381,15 @@ def mark_as_failed(testname):
 
 def do_answer(client, expected, data_set):
     global correct_answers, failed_tests, passed_tests
-    if (expected['data_set_name'], expected['key_type']) != data_set:
+    if (expected['data_set_name'], expected['key_type'], expected.get('schema_type')) != data_set:
         print("Loading data set:", expected['data_set_name'], "key type:", expected['key_type'])
         client.execute_command("FLUSHALL SYNC")
-        load_data(client, expected['data_set_name'], expected['key_type'])
-        data_set = (expected['data_set_name'], expected['key_type'])
+        schema_type = expected.get('schema_type')
+        if schema_type:
+            load_data(client, expected['data_set_name'], expected['key_type'], schema_type=schema_type)
+        else:
+            load_data(client, expected['data_set_name'], expected['key_type'])
+        data_set = (expected['data_set_name'], expected['key_type'], expected.get("schema_type"))
 
     # Set Valkey-specific config for inorder tests
     if 'inorder' in expected['testname']:

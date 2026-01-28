@@ -51,21 +51,25 @@ void TimeSlicedMRMWMutex::IncMayProlongCount() {
   ++may_prolong_count_;
 }
 
-void TimeSlicedMRMWMutex::ReaderLock(bool& may_prolong) {
-  Lock(Mode::kLockRead, may_prolong);
+void TimeSlicedMRMWMutex::ReaderLock(bool& may_prolong,
+                                     bool ignore_time_quota) {
+  Lock(Mode::kLockRead, may_prolong, ignore_time_quota);
 }
 
-void TimeSlicedMRMWMutex::WriterLock(bool& may_prolong) {
-  Lock(Mode::kLockWrite, may_prolong);
+void TimeSlicedMRMWMutex::WriterLock(bool& may_prolong,
+                                     bool ignore_time_quota) {
+  Lock(Mode::kLockWrite, may_prolong, ignore_time_quota);
 }
 
-void TimeSlicedMRMWMutex::Lock(Mode target_mode, bool& may_prolong) {
+void TimeSlicedMRMWMutex::Lock(Mode target_mode, bool& may_prolong,
+                               bool ignore_time_quota) {
   absl::MutexLock lock(&mutex_);
   const Mode inverse_mode = GetInverseMode(target_mode);
   if (current_mode_ == target_mode) {
-    if (ABSL_PREDICT_FALSE(HasTimeQuotaExceeded() &&
-                           GetWaiters(inverse_mode) > 0 &&
-                           (may_prolong || may_prolong_count_ == 0))) {
+    if (ABSL_PREDICT_FALSE(
+            !ignore_time_quota && ignore_time_quota_count_ == 0 &&
+            HasTimeQuotaExceeded() && GetWaiters(inverse_mode) > 0 &&
+            (may_prolong || may_prolong_count_ == 0))) {
       SwitchWithWait(target_mode);
     }
   } else {
@@ -74,18 +78,28 @@ void TimeSlicedMRMWMutex::Lock(Mode target_mode, bool& may_prolong) {
   if (ABSL_PREDICT_FALSE(may_prolong)) {
     ++may_prolong_count_;
   }
+  if (ABSL_PREDICT_FALSE(ignore_time_quota)) {
+    ++ignore_time_quota_count_;
+  }
   last_lock_acquired_.Reset();
   ++active_lock_count_;
 }
 
-void TimeSlicedMRMWMutex::Unlock(bool may_prolong) {
+void TimeSlicedMRMWMutex::Unlock(bool may_prolong, bool ignore_time_quota) {
   absl::MutexLock lock(&mutex_);
   CHECK_GT(active_lock_count_, 0L);
   --active_lock_count_;
+
   if (ABSL_PREDICT_FALSE(may_prolong)) {
     CHECK_GT(may_prolong_count_, 0L);
     --may_prolong_count_;
   }
+  if (ABSL_PREDICT_FALSE(ignore_time_quota)) {
+    CHECK_GT(ignore_time_quota_count_, 0L);
+    --ignore_time_quota_count_;
+  }
+  CHECK(active_lock_count_ > 0 ||
+        (may_prolong_count_ == 0 && ignore_time_quota_count_ == 0));
   if (ShouldSwitch() && GetWaiters(GetInverseMode(current_mode_)) > 0) {
     InitSwitch();
   }

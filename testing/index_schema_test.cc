@@ -1544,23 +1544,23 @@ TEST_F(IndexSchemaFriendTest, MutatedAttributesSanity) {
   auto mutated_attributes_1 =
       CreateMutatedAttributes(attribute_identifier, data_ptr);
   EXPECT_TRUE(index_schema->TrackMutatedRecord(
-      nullptr, key, std::move(mutated_attributes_1), true, false, false));
+      nullptr, key, std::move(mutated_attributes_1), 0, true, false, false));
   // Verify that adding a track attribute with backfill off after on return true
   auto mutated_attributes_2 =
       CreateMutatedAttributes(attribute_identifier, data_ptr);
   EXPECT_TRUE(index_schema->TrackMutatedRecord(
-      nullptr, key, std::move(mutated_attributes_2), false, false, false));
+      nullptr, key, std::move(mutated_attributes_2), 0, false, false, false));
   auto mutated_attributes_3 =
       CreateMutatedAttributes(attribute_identifier, data_ptr);
   EXPECT_FALSE(index_schema->TrackMutatedRecord(
-      nullptr, key, std::move(mutated_attributes_3), false, false, false));
+      nullptr, key, std::move(mutated_attributes_3), 0, false, false, false));
   EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 1);
   auto consumed_data = index_schema->ConsumeTrackedMutatedAttribute(key, true);
   EXPECT_TRUE(consumed_data.has_value());
   auto mutated_attributes_4 =
       CreateMutatedAttributes(attribute_identifier, data_ptr);
   EXPECT_FALSE(index_schema->TrackMutatedRecord(
-      nullptr, key, std::move(mutated_attributes_4), false, false, false));
+      nullptr, key, std::move(mutated_attributes_4), 0, false, false, false));
   consumed_data = index_schema->ConsumeTrackedMutatedAttribute(key, true);
   EXPECT_FALSE(consumed_data.has_value());
   EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 1);
@@ -1582,7 +1582,7 @@ TEST_F(IndexSchemaFriendTest, MutatedAttributes) {
           CreateMutatedAttributes(attribute_identifier, data_ptr);
       EXPECT_EQ(index_schema->attributes_.size(), 1);
       EXPECT_TRUE(index_schema->TrackMutatedRecord(
-          nullptr, key, std::move(mutated_attributes), false, false, false));
+          nullptr, key, std::move(mutated_attributes), 0, false, false, false));
     }
     if (!track_before_consumption_data_ptr.empty()) {
       VLOG(1) << "track_before_consumption_data_ptr is not empty";
@@ -1590,7 +1590,7 @@ TEST_F(IndexSchemaFriendTest, MutatedAttributes) {
       auto mutated_attributes = CreateMutatedAttributes(
           attribute_identifier, track_before_consumption_data_ptr);
       EXPECT_FALSE(index_schema->TrackMutatedRecord(
-          nullptr, key, std::move(mutated_attributes), false, false, false));
+          nullptr, key, std::move(mutated_attributes), 0, false, false, false));
       data_ptr = track_before_consumption_data_ptr;
     }
     EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 1);
@@ -1620,8 +1620,8 @@ TEST_F(IndexSchemaFriendTest, MutatedAttributes) {
         auto mutated_attributes = CreateMutatedAttributes(
             attribute_identifier, track_after_consumption_data_ptr);
         EXPECT_EQ(index_schema->TrackMutatedRecord(
-                      nullptr, key, std::move(mutated_attributes), false, false,
-                      false),
+                      nullptr, key, std::move(mutated_attributes), 0, false,
+                      false, false),
                   !track_before_consumption_data_ptr.empty());
       }
       auto consumed_data =
@@ -1673,7 +1673,7 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
     mutated_attributes[itr->second.GetIdentifier()].data = std::move(data);
     auto key_interned = StringInternStore::Intern(std::string(*key) + "0");
     index_schema->ProcessMutation(&fake_ctx, mutated_attributes, key_interned,
-                                  false);
+                                  false, false);
     EXPECT_EQ(mutations_thread_pool.QueueSize(), 1);
     VMSDK_EXPECT_OK(mutations_thread_pool.ResumeWorkers());
   }
@@ -1690,7 +1690,7 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
       auto key_interned =
           StringInternStore::Intern(std::string(*key) + std::to_string(i));
       index_schema->ProcessMutation(&fake_ctx, mutated_attributes, key_interned,
-                                    false);
+                                    false, false);
     }
   }
   for (size_t i = 0; i < vectors.size(); ++i) {
@@ -1700,7 +1700,7 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
     auto key_interned =
         StringInternStore::Intern(std::string(*key) + std::to_string(i));
     index_schema->ProcessMutation(&fake_ctx, mutated_attributes, key_interned,
-                                  false);
+                                  false, true);
   }
 
   WaitWorkerTasksAreCompleted(mutations_thread_pool);
@@ -1727,7 +1727,7 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
       auto key_interned =
           StringInternStore::Intern(std::string(*key) + std::to_string(i));
       index_schema->ProcessMutation(&fake_ctx, mutated_attributes, key_interned,
-                                    false);
+                                    false, false);
     }
   }
   for (size_t i = 0; i < vectors.size(); ++i) {
@@ -1738,7 +1738,7 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
     auto key_interned =
         StringInternStore::Intern(std::string(*key) + std::to_string(i));
     index_schema->ProcessMutation(&fake_ctx, mutated_attributes, key_interned,
-                                  false);
+                                  false, true);
   }
   WaitWorkerTasksAreCompleted(mutations_thread_pool);
   EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 0);

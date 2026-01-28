@@ -12,9 +12,25 @@
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
 #include "src/commands/ft_aggregate_parser.h"
+#include "vmsdk/src/info.h"
 
 // #define DBG std::cerr
 #define DBG 0 && std::cerr
+
+DEV_INTEGER_COUNTER(agg_stats, agg_limit_stages);
+DEV_INTEGER_COUNTER(agg_stats, agg_group_by_stages);
+DEV_INTEGER_COUNTER(agg_stats, agg_apply_stages);
+DEV_INTEGER_COUNTER(agg_stats, agg_reducer_stages);
+DEV_INTEGER_COUNTER(agg_stats, agg_sort_by_stages);
+DEV_INTEGER_COUNTER(agg_stats, agg_filter_stages);
+DEV_INTEGER_COUNTER(agg_stats, agg_filter_input_records);
+DEV_INTEGER_COUNTER(agg_stats, agg_filter_output_records);
+DEV_INTEGER_COUNTER(agg_stats, agg_limit_input_records);
+DEV_INTEGER_COUNTER(agg_stats, agg_limit_output_records);
+DEV_INTEGER_COUNTER(agg_stats, agg_group_by_input_records);
+DEV_INTEGER_COUNTER(agg_stats, agg_group_by_output_records);
+DEV_INTEGER_COUNTER(agg_stats, agg_apply_records);
+DEV_INTEGER_COUNTER(agg_stats, agg_sort_by_records);
 
 namespace valkey_search {
 namespace aggregate {
@@ -64,12 +80,15 @@ void Record::Dump(std::ostream& os,
 absl::Status Limit::Execute(RecordSet& records) const {
   DBG << "Executing LIMIT with offset: " << offset_ << " and limit: " << limit_
       << "\n";
+  agg_limit_stages.Increment();
+  agg_limit_input_records.Increment(records.size());
   for (auto i = 0; i < offset_ && !records.empty(); ++i) {
     records.pop_front();
   }
   while (records.size() > limit_) {
     records.pop_back();
   }
+  agg_limit_output_records.Increment(records.size());
   return absl::OkStatus();
 }
 
@@ -82,6 +101,8 @@ void SetField(Record& record, Attribute& dest, expr::Value value) {
 
 absl::Status Apply::Execute(RecordSet& records) const {
   DBG << "Executing APPLY with expr: " << *expr_ << "\n";
+  agg_apply_stages.Increment();
+  agg_apply_records.Increment(records.size());
   for (auto& r : records) {
     SetField(*r, *name_, expr_->Evaluate(ctx, *r));
   }
@@ -90,6 +111,8 @@ absl::Status Apply::Execute(RecordSet& records) const {
 
 absl::Status Filter::Execute(RecordSet& records) const {
   DBG << "Executing FILTER with expr: " << *expr_ << "\n";
+  agg_filter_stages.Increment();
+  agg_filter_input_records.Increment(records.size());
   RecordSet filtered(records.agg_params_);
   while (!records.empty()) {
     auto r = records.pop_front();
@@ -99,6 +122,7 @@ absl::Status Filter::Execute(RecordSet& records) const {
     }
   }
   records.swap(filtered);
+  agg_filter_output_records.Increment(records.size());
   return absl::OkStatus();
 }
 
@@ -126,6 +150,8 @@ struct SortFunctor {
 
 absl::Status SortBy::Execute(RecordSet& records) const {
   DBG << "Executing SORTBY with sortkeys: " << sortkeys_.size() << "\n";
+  agg_sort_by_stages.Increment();
+  agg_sort_by_records.Increment(records.size());
   if (records.size() > max_) {
     // Sadly std::priority_queue can't operate on unique_ptr's. so we need an
     // extra copy
@@ -158,6 +184,8 @@ absl::Status GroupBy::Execute(RecordSet& records) const {
                       absl::InlinedVector<std::unique_ptr<ReducerInstance>, 4>>
       groups;
   size_t record_field_count = 0;
+  agg_group_by_stages.Increment();
+  agg_group_by_input_records.Increment(records.size());
   while (!records.empty()) {
     auto record = records.pop_front();
     if (record_field_count == 0) {
@@ -195,12 +223,14 @@ absl::Status GroupBy::Execute(RecordSet& records) const {
       SetField(*record, *groups_[i], group.first.keys_[i]);
     }
     CHECK(reducers_.size() == group.second.size());
+    agg_reducer_stages.Increment(reducers_.size());
     for (auto i = 0; i < reducers_.size(); ++i) {
       SetField(*record, *reducers_[i].output_, group.second[i]->GetResult());
     }
     DBG << "Record (" << records.size() << ") is : " << *record << "\n";
     records.push_back(std::move(record));
   }
+  agg_group_by_output_records.Increment(records.size());
   return absl::OkStatus();
 }
 

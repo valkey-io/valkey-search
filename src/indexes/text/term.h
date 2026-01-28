@@ -57,6 +57,7 @@ class TermIterator : public TextIterator {
   bool DonePositions() const override;
   const PositionRange& CurrentPosition() const override;
   bool NextPosition() override;
+  bool SeekForwardPosition(Position target_position) override;
   FieldMaskPredicate CurrentFieldMask() const override;
   // Returns true if iterator is at a valid state with current key, position,
   // and field.

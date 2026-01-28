@@ -56,6 +56,9 @@ config::Boolean& GetEnablePrefilterEval();
 /// Returns the prefilter proximity evaluation configuration
 config::Boolean& GetEnableProximityPrefilterEval();
 
+/// Return the configuration entry for skipping corrupted AOF entries
+const config::Boolean& GetSkipCorruptedInternalUpdateEntries();
+
 /// Return the log level
 config::Enum& GetLogLevel();
 

@@ -34,7 +34,9 @@
 #include "src/metrics.h"
 #include "src/rdb_serialization.h"
 #include "src/schema_manager.h"
+#include "src/valkey_search.h"
 #include "version.h"
+#include "vmsdk/src/cluster_map.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -246,6 +248,10 @@ absl::StatusOr<IndexFingerprintVersion> MetadataManager::CreateEntry(
   VMSDK_ASSIGN_OR_RETURN(auto top_level_min_version, ComputeMinVersion());
   metadata.mutable_version_header()->set_top_level_min_version(
       top_level_min_version);
+
+  // Call FT.INTERNAL_UPDATE for coordinator to ensure unified AOF replication
+  ReplicateFTInternalUpdate(new_entry, metadata.version_header(), encoded_id);
+
   BroadcastMetadata(detached_ctx_.get(), metadata.version_header());
   IndexFingerprintVersion index_fingerprint_version;
   index_fingerprint_version.set_fingerprint(fingerprint);
@@ -288,6 +294,11 @@ absl::Status MetadataManager::DeleteEntry(absl::string_view type_name,
       metadata.version_header().top_level_version() + 1);
   metadata.mutable_version_header()->set_top_level_fingerprint(
       ComputeTopLevelFingerprint(metadata.type_namespace_map()));
+
+  // Call FT.INTERNAL_UPDATE for coordinator to ensure unified AOF replication
+  // for DROP
+  ReplicateFTInternalUpdate(new_entry, metadata.version_header(), encoded_id);
+
   BroadcastMetadata(detached_ctx_.get(), metadata.version_header());
   return absl::OkStatus();
 }
@@ -328,7 +339,8 @@ void MetadataManager::BroadcastMetadata(
   }
   std::string payload;
   version_header.SerializeToString(&payload);
-  // Nullptr for target means broadcast to all.
+  // Broadcast to all nodes, let each node decide whether to accept based on
+  // primary status
   ValkeyModule_SendClusterMessage(ctx, /* target= */ nullptr,
                                   kMetadataBroadcastClusterMessageReceiverId,
                                   payload.c_str(), payload.size());
@@ -379,6 +391,13 @@ void MetadataManager::HandleBroadcastedMetadata(
         << "Ignoring incoming metadata message due to loading...";
     return;
   }
+
+  // Only accept metadata broadcasts if we are a primary
+  int flags = ValkeyModule_GetContextFlags(ctx);
+  if (flags & VALKEYMODULE_CTX_FLAGS_SLAVE) {
+    return;  // This is a replica, ignore the broadcast
+  }
+
   if (header->top_level_min_version() > kModuleVersion.ToInt()) {
     VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 10)
         << "Ignoring incoming metadata message from "
@@ -547,6 +566,10 @@ absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
               << result.message().data() << " for type " << type_name << ", id "
               << id << " from " << source;
           return result;
+        }
+        auto status = CallFTInternalUpdateForReconciliation(id, proposed_entry);
+        if (!status.ok()) {
+          return status;
         }
       }
     }
@@ -881,6 +904,90 @@ std::string ObjName::Encode() const {
   }
   // 9/1.1 encoding.
   return absl::StrCat("{", db_num_, "}", name_);
+}
+
+absl::Status MetadataManager::CreateEntryOnReplica(
+    ValkeyModuleCtx *ctx, absl::string_view type_name, absl::string_view id,
+    const coordinator::GlobalMetadataEntry *metadata_entry,
+    const coordinator::GlobalMetadataVersionHeader *global_version_header) {
+  // Verify this is only called on replica nodes or during loading
+  CHECK((ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_SLAVE) ||
+        (ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_LOADING))
+      << "CreateEntryOnReplica should only be called on replica nodes or "
+         "during loading";
+
+  auto obj_name = ObjName::Decode(id);
+  auto callback_result = TriggerCallbacks(type_name, obj_name, *metadata_entry);
+  if (!callback_result.ok()) {
+    return callback_result;
+  }
+
+  auto result = metadata_.Get();
+
+  auto insert_result = result.mutable_type_namespace_map()->insert(
+      {std::string(type_name), coordinator::GlobalMetadataEntryMap()});
+  auto &existing_inner_map = insert_result.first->second;
+  auto mutable_entries = existing_inner_map.mutable_entries();
+  (*mutable_entries)[id] = *metadata_entry;
+
+  // Update global version header
+  const auto new_version = global_version_header->top_level_version();
+  const auto new_fingerprint =
+      ComputeTopLevelFingerprint(result.type_namespace_map());
+
+  result.mutable_version_header()->set_top_level_version(new_version);
+  result.mutable_version_header()->set_top_level_fingerprint(new_fingerprint);
+
+  metadata_ = result;
+
+  return absl::OkStatus();
+}
+
+absl::Status MetadataManager::CallFTInternalUpdateForReconciliation(
+    const std::string &id,
+    const coordinator::GlobalMetadataEntry &proposed_entry) {
+  coordinator::GlobalMetadataVersionHeader version_header;
+  version_header.set_top_level_version(
+      metadata_.Get().version_header().top_level_version());
+  version_header.set_top_level_fingerprint(
+      metadata_.Get().version_header().top_level_fingerprint());
+
+  std::string metadata_binary, header_binary;
+  proposed_entry.SerializeToString(&metadata_binary);
+  version_header.SerializeToString(&header_binary);
+
+  ValkeyModuleCallReply *reply;
+  ValkeyModuleCtx *safe_context = detached_ctx_.get();
+  vmsdk::UniqueValkeyDetachedThreadSafeContext thread_safe_ctx;
+
+  reply =
+      ValkeyModule_Call(safe_context, "FT.INTERNAL_UPDATE", "!Kcbb", id.c_str(),
+                        metadata_binary.data(), metadata_binary.size(),
+                        header_binary.data(), header_binary.size());
+
+  if (reply == nullptr ||
+      ValkeyModule_CallReplyType(reply) == VALKEYMODULE_REPLY_ERROR) {
+    if (reply) ValkeyModule_FreeCallReply(reply);
+    CHECK(false) << "FT.INTERNAL_UPDATE failed for id: " << id;
+  }
+
+  ValkeyModule_FreeCallReply(reply);
+  return absl::OkStatus();
+}
+
+void MetadataManager::ReplicateFTInternalUpdate(
+    const coordinator::GlobalMetadataEntry &entry,
+    const coordinator::GlobalMetadataVersionHeader &header,
+    absl::string_view encoded_id) {
+  std::string metadata_binary, header_binary;
+  entry.SerializeToString(&metadata_binary);
+  header.SerializeToString(&header_binary);
+
+  // Replicate FT.INTERNAL_UPDATE to replicas for AOF consistency
+  ValkeyModule_Replicate(detached_ctx_.get(), "FT.INTERNAL_UPDATE", "cbb",
+                         std::string(encoded_id).c_str(),
+                         metadata_binary.data(), metadata_binary.size(),
+                         header_binary.data(), header_binary.size());
 }
 
 }  // namespace valkey_search::coordinator

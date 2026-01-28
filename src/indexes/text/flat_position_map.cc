@@ -63,8 +63,9 @@ static inline void EncodeValue(
 }
 
 // Decode: big-endian, continuation bytes bit 7=1, last byte bit 7=0
+// Returns pair of (decoded_value, is_position)
 template <typename T>
-static inline T DecodeValue(const char*& ptr, bool& out_is_position) {
+static inline std::pair<T, bool> DecodeValue(const char*& ptr) {
   // Read first byte (should not be terminator)
   CHECK(U8(*ptr) != kTerminatorByte) << "Attempted to decode terminator byte";
 
@@ -79,8 +80,9 @@ static inline T DecodeValue(const char*& ptr, bool& out_is_position) {
   }
 
   // Extract type from LSB and value from remaining bits
-  out_is_position = composite & 1;
-  return composite >> 1;
+  bool is_position = composite & 1;
+  T value = composite >> 1;
+  return {value, is_position};
 }
 
 //=============================================================================
@@ -231,11 +233,12 @@ uint32_t PositionIterator::ReadVarUint(const char* ptr, uint8_t num_bytes) {
 
 PositionIterator::PositionIterator(const FlatPositionMap& flat_map)
     : flat_map_(flat_map.data()),
-      current_start_ptr_(nullptr),
-      current_end_ptr_(nullptr),
+      current_ptr_(nullptr),
       data_start_(nullptr),
       cumulative_position_(0),
       num_partitions_(0),
+      current_partition_idx_(0),
+      next_partition_offset_(UINT32_MAX),
       header_size_(0),
       current_field_mask_(1) {
   CHECK(flat_map_)
@@ -251,42 +254,55 @@ PositionIterator::PositionIterator(const FlatPositionMap& flat_map)
 
   size_t partition_map_size = num_partitions_ * kPartitionDeltaBytes * 2;
   data_start_ = flat_map_ + header_size_ + partition_map_size;
-  current_start_ptr_ = current_end_ptr_ = data_start_;
+  current_ptr_ = data_start_;
 
   NextPosition();
 }
 
-bool PositionIterator::IsValid() const { return current_start_ptr_ != nullptr; }
+bool PositionIterator::IsValid() const { return current_ptr_ != nullptr; }
 
 // Advance to next position, updating current_position_ and current_field_mask_
 void PositionIterator::NextPosition() {
   if (!IsValid()) return;
 
   // Check end conditions
-  if (U8(*current_end_ptr_) == kTerminatorByte) {
-    current_start_ptr_ = current_end_ptr_ = nullptr;
+  if (U8(*current_ptr_) == kTerminatorByte) {
+    current_ptr_ = nullptr;
     return;
   }
 
-  current_start_ptr_ = current_end_ptr_;
-  const char* ptr = current_start_ptr_;
+  // Check if we need to load/update next partition offset
+  if (next_partition_offset_ == UINT32_MAX ||
+      current_ptr_ == data_start_ + next_partition_offset_) {
+    // If we crossed a partition (not initial load), increment index
+    if (next_partition_offset_ != UINT32_MAX) {
+      current_partition_idx_++;
+    }
+
+    // Load next partition offset (or UINT32_MAX if no more partitions)
+    if (current_partition_idx_ < num_partitions_) {
+      const char* partition_map = flat_map_ + header_size_;
+      next_partition_offset_ = ReadVarUint(
+          partition_map + (current_partition_idx_ * kPartitionDeltaBytes * 2),
+          kPartitionDeltaBytes);
+    } else {
+      next_partition_offset_ = UINT32_MAX;
+    }
+  }
 
   // Decode next value - could be field mask or position
-  bool is_position;
-  __uint128_t value = DecodeValue<__uint128_t>(ptr, is_position);
+  auto [value, is_position] = DecodeValue<__uint128_t>(current_ptr_);
 
   if (!is_position) {
     // It's a field mask - update it and read the position that MUST follow
     current_field_mask_ = U64(value);
-    Position delta = DecodeValue<Position>(ptr, is_position);
-    CHECK(is_position) << "Expected position after field mask";
+    auto [delta, delta_is_position] = DecodeValue<Position>(current_ptr_);
+    CHECK(delta_is_position) << "Expected position after field mask";
     cumulative_position_ += delta;
   } else {
     // It's a position directly (field mask unchanged)
     cumulative_position_ += U64(value);
   }
-
-  current_end_ptr_ = ptr;
 }
 
 // Binary search to find partition index before target position
@@ -316,11 +332,13 @@ bool PositionIterator::SkipForwardPosition(Position target) {
   CHECK(target >= cumulative_position_)
       << "SkipForwardPosition called with target < current position";
 
-  // Linear search for one partition
-  const char* partition_start = current_start_ptr_;
-
-  while (IsValid() && (current_start_ptr_ - partition_start) < kPartitionSize) {
+  // Scan within current partition until we reach target or partition end
+  while (IsValid()) {
     if (cumulative_position_ >= target) return cumulative_position_ == target;
+
+    // Check if we're at partition boundary before advancing
+    if (current_ptr_ == data_start_ + next_partition_offset_) break;
+
     NextPosition();
   }
 
@@ -341,7 +359,10 @@ bool PositionIterator::SkipForwardPosition(Position target) {
     if (partition_delta < target && partition_delta > cumulative_position_) {
       // Jump to partition
       cumulative_position_ = partition_delta;
-      current_start_ptr_ = current_end_ptr_ = data_start_ + byte_offset;
+      current_ptr_ = data_start_ + byte_offset;
+      current_partition_idx_ = partition_idx;
+      next_partition_offset_ =
+          UINT32_MAX;  // Reset to force reload in NextPosition
       current_field_mask_ = 1;
       NextPosition();
     }
@@ -367,6 +388,12 @@ uint32_t FlatPositionMap::CountPositions() const {
   const char* p = data();
   auto [num_positions, _] = ReadCounts(p);
   return num_positions;
+}
+
+uint32_t FlatPositionMap::GetNumPartitions() const {
+  const char* p = data();
+  auto [_, num_partitions] = ReadCounts(p);
+  return num_partitions;
 }
 
 size_t FlatPositionMap::CountTermFrequency() const {

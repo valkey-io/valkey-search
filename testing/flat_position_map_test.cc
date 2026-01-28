@@ -500,10 +500,22 @@ TEST_F(FlatPositionMapTest, RandomMapGeneration_1000Tests) {
     auto skip_targets = gen.GenerateSkipTargets(positions, num_skip_tests);
 
     for (const auto& target : skip_targets) {
-      // Skip targets that are before the first position (iterator starts there)
-      if (target < positions[0].first) continue;
-
       PositionIterator iter(*flat_map);  // Fresh iterator for each target
+
+      // Skip targets that are before the first position - should still work
+      if (target < positions[0].first) {
+        bool exact_match = iter.SkipForwardPosition(target);
+        EXPECT_TRUE(iter.IsValid()) << "Test " << test_num
+                                    << " failed: skip to target before first "
+                                       "position should land on first position";
+        EXPECT_EQ(iter.GetPosition(), positions[0].first)
+            << "Test " << test_num << " failed: should be at first position";
+        EXPECT_FALSE(exact_match) << "Test " << test_num
+                                  << " failed: should not be exact match for "
+                                     "target before first position";
+        continue;
+      }
+
       bool exact_match = iter.SkipForwardPosition(target);
 
       if (iter.IsValid()) {
@@ -516,6 +528,11 @@ TEST_F(FlatPositionMapTest, RandomMapGeneration_1000Tests) {
           EXPECT_EQ(iter.GetPosition(), target)
               << "Test " << test_num
               << " failed: exact match claimed but position differs";
+        } else {
+          // If not exact match, position should differ from target
+          EXPECT_NE(iter.GetPosition(), target)
+              << "Test " << test_num
+              << " failed: no exact match claimed but position equals target";
         }
 
         // Verify we can still iterate from here
@@ -614,9 +631,8 @@ TEST_F(FlatPositionMapTest, EdgeCase_LastPartitionSingleEntry) {
 
   for (int test = 0; test < 50; ++test) {
     // Create enough entries to fill N partitions, then add exactly 1 more
-    size_t base_elements = std::uniform_int_distribution<size_t>(40, 80)(rng);
+    size_t base_elements = std::uniform_int_distribution<size_t>(64, 100)(rng);
     size_t num_fields = 1;
-
     std::vector<std::pair<Position, uint64_t>> positions;
     Position pos = 0;
 
@@ -626,19 +642,37 @@ TEST_F(FlatPositionMapTest, EdgeCase_LastPartitionSingleEntry) {
       positions.push_back({pos, 1});
     }
 
-    // Add one more position with large delta to force new partition
-    pos += std::uniform_int_distribution<Position>(10000, 100000)(rng);
-    positions.push_back({pos, 1});
+    // Create a flat map with just base elements to get partition count
+    auto base_position_map = CreatePositionMap(positions, num_fields);
+    FlatPositionMapPtr base_flat_map(base_position_map, num_fields);
+    uint32_t num_partitions_before = base_flat_map->GetNumPartitions();
 
-    auto position_map = CreatePositionMap(positions, num_fields);
-    FlatPositionMapPtr flat_map(position_map, num_fields);
+    // If we have at least one partition, add one more position
+    // Otherwise skip this test iteration
+    if (num_partitions_before > 0) {
+      // Add more positions to cross the next 128-byte boundary
+      // Keep adding until we're sure we've crossed into a new partition
+      for (size_t i = 0; i < 70; ++i) {
+        pos += std::uniform_int_distribution<Position>(1, 5)(rng);
+        positions.push_back({pos, 1});
+      }
 
-    VerifyIteration(*flat_map, positions);
+      auto position_map = CreatePositionMap(positions, num_fields);
+      FlatPositionMapPtr flat_map(position_map, num_fields);
 
-    // Verify we can skip to the last position
-    PositionIterator iter(*flat_map);
-    EXPECT_TRUE(iter.SkipForwardPosition(pos));
-    EXPECT_EQ(iter.GetPosition(), pos);
+      uint32_t num_partitions_after = flat_map->GetNumPartitions();
+
+      // Verify we have more partitions now
+      EXPECT_GE(num_partitions_after, num_partitions_before)
+          << "Test " << test << " with " << positions.size() << " positions";
+
+      VerifyIteration(*flat_map, positions);
+
+      // Verify we can skip to the last position
+      PositionIterator iter(*flat_map);
+      EXPECT_TRUE(iter.SkipForwardPosition(pos));
+      EXPECT_EQ(iter.GetPosition(), pos);
+    }
   }
 }
 

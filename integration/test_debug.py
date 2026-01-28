@@ -76,6 +76,6 @@ class TestFtDebugCommand(ValkeySearchTestCaseDebugMode):
         assert inline == {'Count': 10, 'Bytes': 140, 'AvgSize': b'14', 'Allocated': 320, 'AvgAllocated': b'32', 'Utilization': 43}
         assert outofline == {'Count': 10, 'Bytes': 120, 'AvgSize': b'12', 'Allocated': 280, 'AvgAllocated': b'28', 'Utilization': 42}
         assert byref[-1] == {'Count': 10, 'Bytes': 120, 'AvgSize': b'12', 'Allocated': 280, 'AvgAllocated': b'28', 'Utilization': 42}
-        assert byref[4] == {'Count': 10, 'Bytes': 140, 'AvgSize': b'14', 'Allocated': 320, 'AvgAllocated': b'32', 'Utilization': 43}
+        assert byref[6] == {'Count': 10, 'Bytes': 140, 'AvgSize': b'14', 'Allocated': 320, 'AvgAllocated': b'32', 'Utilization': 43}
         assert bysize[-12] == {'Count': 10, 'Bytes': 120, 'AvgSize': b'12', 'Allocated': 280, 'AvgAllocated': b'28', 'Utilization': 42}
         assert bysize[14] == {'Count': 10, 'Bytes': 140, 'AvgSize': b'14', 'Allocated': 320, 'AvgAllocated': b'32', 'Utilization': 43}

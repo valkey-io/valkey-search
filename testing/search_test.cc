@@ -520,6 +520,7 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
     std::string vector = std::string((char *)vectors[i].data(),
                                      vectors[i].size() * sizeof(float));
     auto interned_key = StringInternStore::Intern(key);
+    index_schema->SetIndexMutationSequenceNumber(interned_key, i);
 
     VMSDK_EXPECT_OK(vector_index->AddRecord(interned_key, vector));
 

@@ -11,12 +11,10 @@
 #include "ft_create_parser.h"
 #include "src/acl.h"
 #include "src/commands/ft_search.h"
-#include "src/coordinator/metadata_manager.h"
 #include "src/query/fanout.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
-#include "valkey_search_options.h"
 #include "vmsdk/src/cluster_map.h"
 #include "vmsdk/src/debug.h"
 

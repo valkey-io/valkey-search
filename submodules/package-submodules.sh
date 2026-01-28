@@ -93,7 +93,7 @@ if [ ! -f "${INSTALL_DIR}/include/highwayhash/highwayhash.h" ]; then
     cp -fr ${SRC_DIR}/highwayhash/highwayhash ${INSTALL_DIR}/include
 fi
 
-if [ ! -f "${INSTALL_DIR}/include/benchmark/benchmark.h" ]; then
+if [[ "${SAN_BUILD}" != "no" && ! -f "${INSTALL_DIR}/include/benchmark/benchmark.h" ]]; then
     echo "Building Google Benchmark..."
     clone_repo "https://github.com/google/benchmark" "v1.8.3"
     # Flags: Disable tests (faster build), Disable deps download

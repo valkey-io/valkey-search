@@ -19,7 +19,12 @@ file(MAKE_DIRECTORY "${MODULES_DIR}")
 set(MODULE_HIGHWAYHASH "highwayhash")
 set(MODULE_GRPC "grpc")
 set(MODULE_GOOGLE_TEST "googletest")
-set(MODULE_BENCHMARK "benchmark")
+
+string(TOLOWER "$ENV{SAN_BUILD}" SAN_BUILD_LOWER)
+if("${SAN_BUILD_LOWER}" STREQUAL "no")
+  set(MODULE_BENCHMARK "benchmark")
+endif()
+
 set(MODULES_INSTALL_PREFIX "${MODULES_DIR}/install")
 
 find_program(_GIT_EXE git REQUIRED)
@@ -164,8 +169,12 @@ if(WITH_SUBMODULES_SYSTEM)
       PARENT_SCOPE)
   message(STATUS "libhighwayhash.a found: ${LIBHIGHWAYHASH}")
   message(STATUS "highwayhash include path: ${LIBHIGHWAYHASH_INCLUDE}")
-  find_package(benchmark REQUIRED)
-  message(STATUS "Found system google benchmark")
+
+  if("${SAN_BUILD_LOWER}" STREQUAL "no")
+    find_package(benchmark REQUIRED)
+    message(STATUS "Found system google benchmark")
+  endif()
+  
 else()
   # Pull submodules with a given branch / tag and build them
   checkout_submodule_branch(${MODULE_GRPC} "https://github.com/grpc/grpc"
@@ -191,17 +200,20 @@ else()
     ${MODULE_GOOGLE_TEST} "https://github.com/google/googletest.git" "main"
     "${MODULES_DIR}/googletest/build-release")
 
-  checkout_submodule_branch(
-    ${MODULE_BENCHMARK} "https://github.com/google/benchmark.git" "v1.8.3"
-    "${MODULES_DIR}/benchmark")
+  if("${SAN_BUILD_LOWER}" STREQUAL "no")
+  
+    checkout_submodule_branch(
+      ${MODULE_BENCHMARK} "https://github.com/google/benchmark.git" "v1.8.3"
+      "${MODULES_DIR}/benchmark")
 
-  set(BENCHMARK_CMAKE_ARGS
-      ${MODULES_COMMON_CMAKE_ARGS}
-      -DBENCHMARK_ENABLE_TESTING=OFF
-      -DCMAKE_INSTALL_PREFIX=${MODULES_INSTALL_PREFIX}
-      -DBENCHMARK_ENABLE_INSTALL=ON
-      -DBENCHMARK_DOWNLOAD_DEPENDENCIES=OFF
-  )
+    set(BENCHMARK_CMAKE_ARGS
+        ${MODULES_COMMON_CMAKE_ARGS}
+        -DBENCHMARK_ENABLE_TESTING=OFF
+        -DCMAKE_INSTALL_PREFIX=${MODULES_INSTALL_PREFIX}
+        -DBENCHMARK_ENABLE_INSTALL=ON
+        -DBENCHMARK_DOWNLOAD_DEPENDENCIES=OFF
+    )
+   endif()
 
   set(MODULES_COMMON_CMAKE_ARGS
       -DCMAKE_BUILD_TYPE=Release
@@ -223,8 +235,11 @@ else()
                   "${MODULES_INSTALL_PREFIX}/include/gtest/gtest.h")
   build_submodule(${MODULE_GRPC} "${GRPC_CMAKE_ARGS}"
                   "${MODULES_INSTALL_PREFIX}/include/absl/base/options.h")
-  build_submodule(${MODULE_BENCHMARK} "${BENCHMARK_CMAKE_ARGS}"
+  
+  if("${SAN_BUILD_LOWER}" STREQUAL "no")
+    build_submodule(${MODULE_BENCHMARK} "${BENCHMARK_CMAKE_ARGS}"
                   "${MODULES_INSTALL_PREFIX}/lib/cmake/benchmark/benchmarkConfig.cmake")
+  endif()
 
   set(HIGHWAY_HASH_INCLUDE_PATH
       "${MODULES_DIR}/highwayhash"
@@ -244,7 +259,11 @@ else()
   update_cmake_prefix("grpc" __CMAKE_PREFIX_PATH)
   update_cmake_prefix("protobuf" __CMAKE_PREFIX_PATH)
   update_cmake_prefix("utf8_range" __CMAKE_PREFIX_PATH)
-  update_cmake_prefix("benchmark" __CMAKE_PREFIX_PATH)
+  
+  if("${SAN_BUILD_LOWER}" STREQUAL "no")
+    update_cmake_prefix("benchmark" __CMAKE_PREFIX_PATH)
+  endif()
+  
   set(ENV{CMAKE_PREFIX_PATH} "${__CMAKE_PREFIX_PATH}")
   message(STATUS "CMAKE_PREFIX_PATH=${__CMAKE_PREFIX_PATH}")
 endif()

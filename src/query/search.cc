@@ -145,46 +145,59 @@ inline PredicateType EvaluateAsComposedPredicate(
   return PredicateType::kComposedAnd;
 }
 
-// Helper fn to identify pure text proximity composed AND predicates without
-// nesting as this can be optimized with a faster path.
-inline bool IsTextProximityOnlyNonNested(QueryOperations query_operations) {
-  // 1. Must contain all three: Text, And, and Proximity
-  bool has_required = (query_operations & QueryOperations::kContainsText) &&
-                      (query_operations & QueryOperations::kContainsAnd) &&
-                      (query_operations & QueryOperations::kContainsProximity);
-  // 2. Must NOT contain any of: Nested, Numeric, or Tag
-  bool has_forbidden =
-      query_operations &
-      (QueryOperations::kContainsNestedComposed |
-       QueryOperations::kContainsNumeric | QueryOperations::kContainsTag);
-  return has_required && !has_forbidden;
+enum class QueryOptimizationPath {
+  kNone,
+  kExactPhrase,       // Text + And + Proximity (Non-nested)
+  kSimpleComposedAnd  // Text + And (Non-nested, No Proximity)
+};
+
+// Helper fn to determine optimization path based on query operations
+inline QueryOptimizationPath GetOptimizationPath(QueryOperations ops) {
+  // Common "Forbidden" check for both paths
+  const QueryOperations kForbidden = QueryOperations::kContainsNestedComposed |
+                                     QueryOperations::kContainsNumeric |
+                                     QueryOperations::kContainsTag;
+  if (ops & kForbidden) return QueryOptimizationPath::kNone;
+  // Check shared requirements
+  bool is_text_and = (ops & QueryOperations::kContainsText) &&
+                     (ops & QueryOperations::kContainsAnd);
+  if (!is_text_and) return QueryOptimizationPath::kNone;
+  // Differentiate based on Proximity
+  if (ops & QueryOperations::kContainsProximity) {
+    return QueryOptimizationPath::kExactPhrase;
+  }
+  return QueryOptimizationPath::kSimpleComposedAnd;
 }
 
 // Helper fn to identify composed AND predicates that we cannot optimize
 // currently.
 inline bool IsUnsolvedComposedAnd(QueryOperations query_operations) {
-  // AND composed predicates are only unsolved if they are not pure text
-  // proximity predicates without nesting.
-  if (query_operations & QueryOperations::kContainsAnd) {
-    return !IsTextProximityOnlyNonNested(query_operations);
-  }
-  // Non AND composed predicates are solved in the entries fetcher.
-  return false;
+  if (!(query_operations & QueryOperations::kContainsAnd)) return false;
+  // It's unsolved only if the optimizer returns kNone
+  return GetOptimizationPath(query_operations) == QueryOptimizationPath::kNone;
 }
 
 size_t EvaluateFilterAsPrimary(
     const Predicate *predicate,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     bool negate, QueryOperations query_operations) {
-  // Faster path for pure exact phrase queries.
+  QueryOptimizationPath path = GetOptimizationPath(query_operations);
+  // Faster path for non nested pure text composed AND predicates.
   // This is an optimization to avoid building multiple term iterators and a
   // proximity iterator for every key's evaluation in the filtering stage (using
   // the PrefilterEvaluator).
-  if (IsTextProximityOnlyNonNested(query_operations) && !negate) {
+  if ((path == QueryOptimizationPath::kExactPhrase ||
+       path == QueryOptimizationPath::kSimpleComposedAnd) &&
+      !negate) {
     CHECK(predicate->GetType() == PredicateType::kComposedAnd);
     auto composed_predicate =
         dynamic_cast<const ComposedPredicate *>(predicate);
-    auto fetcher = BuildExactPhraseFetcher(composed_predicate);
+    std::unique_ptr<indexes::EntriesFetcherBase> fetcher;
+    if (path == QueryOptimizationPath::kExactPhrase) {
+      fetcher = BuildExactPhraseFetcher(composed_predicate);
+    } else {
+      fetcher = BuildComposedAndFetcher(composed_predicate);
+    }
     size_t size = fetcher->Size();
     entries_fetchers.push(std::move(fetcher));
     return size;

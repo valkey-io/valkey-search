@@ -61,27 +61,67 @@ EvaluationResult TermPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
     const InternedStringPtr& target_key, bool require_positions) const {
   uint64_t field_mask = field_mask_;
-  auto word_iter = text_index.GetPrefix().GetWordIterator(term_);
-  if (word_iter.Done()) {
-    return EvaluationResult(false);
+
+  // stemmed word storage
+  std::string stemmed;
+
+  // Collect all words to search
+  std::vector<absl::string_view> words_to_check;
+  words_to_check.push_back(term_);
+
+  absl::string_view stem_root;
+  // Add stem variants only if stemming is enabled for at least one field
+  if (!exact_) {
+    uint64_t stem_enabled_mask =
+        field_mask & text_index_schema_->GetStemmingEnabledFields();
+
+    stemmed = text_index_schema_->GetAllStemVariants(
+        term_, words_to_check, text_index_schema_->GetMinStemSize(),
+        stem_enabled_mask, true);
+    if (!stemmed.empty() && stemmed != term_) {
+      stem_root = stemmed;
+      words_to_check.push_back(stem_root);
+    }
   }
-  auto postings = word_iter.GetTarget();
-  if (!postings) {
-    return EvaluationResult(false);
-  }
-  auto key_iter = postings->GetKeyIterator();
-  // Skip to target key and verify it contains the required fields
-  if (!key_iter.SkipForwardKey(target_key) ||
-      !key_iter.ContainsFields(field_mask)) {
-    return EvaluationResult(false);
-  }
-  if (!require_positions) {
-    return EvaluationResult(true);
-  }
+
+  // Try to find any of the words in the per-key text index
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
-  key_iterators.emplace_back(std::move(key_iter));
+
+  for (const auto& word : words_to_check) {
+    auto word_iter = text_index.GetPrefix().GetWordIterator(word);
+    // GetWordIterator positions at exact match or first word with prefix
+    if (!word_iter.Done() && word_iter.GetWord() == word) {
+      auto postings = word_iter.GetTarget();
+      if (postings) {
+        auto key_iter = postings->GetKeyIterator();
+        // Skip to target key and verify it contains the appropriate fields
+        // Original term uses all fields, stem variants use field mask based on
+        // word length
+        uint64_t effective_mask;
+        if (word == term_ || word == stem_root) {
+          effective_mask = field_mask;
+        } else {
+          effective_mask =
+              field_mask &
+              text_index_schema_->GetStemVariantFieldMask(word.length());
+        }
+        if (key_iter.SkipForwardKey(target_key) &&
+            key_iter.ContainsFields(effective_mask)) {
+          if (!require_positions) {
+            return EvaluationResult(true);
+          }
+          key_iterators.emplace_back(std::move(key_iter));
+        }
+      }
+    }
+  }
+
+  if (key_iterators.empty()) {
+    return EvaluationResult(false);
+  }
+
   auto iterator = std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), field_mask, nullptr, require_positions);
   return BuildTextEvaluationResult(std::move(iterator));

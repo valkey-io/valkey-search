@@ -15,6 +15,7 @@
 #include <mutex>
 #include <optional>
 
+#include "absl/container/btree_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/container/node_hash_map.h"
 #include "absl/functional/function_ref.h"
@@ -32,6 +33,10 @@ namespace valkey_search::indexes::text {
 // token -> (PositionMap, suffix support)
 using TokenPositions =
     absl::flat_hash_map<std::string, std::pair<PositionMap, bool>>;
+
+// Stem tree target: maps stem root to set of parent words that stem to it
+// Example: "happi" → {"happy", "happiness", "happily"}
+using StemParents = InvasivePtr<absl::flat_hash_set<std::string>>;
 
 class TextIndexSchema;
 
@@ -96,6 +101,29 @@ class TextIndexSchema {
   // Access to metadata for memory pool usage
   TextIndexMetadata &GetMetadata() { return metadata_; }
 
+  // Access stem tree for word expansion during search
+  const RadixTree<StemParents> &GetStemTree() const { return stem_tree_; }
+
+  // Get all stem variants for a search term (including parent words from stem
+  // tree). Returns stemmed word (caller owns it). Adds parent word views to
+  // words_to_search. Limits parent words to max_expansions config. Only
+  // performs stem tree lookup if stem_enabled_mask is non-zero and lock_needed
+  // is true.
+  std::string GetAllStemVariants(
+      absl::string_view search_term,
+      std::vector<absl::string_view> &words_to_search, uint32_t min_stem_size,
+      uint64_t stem_enabled_mask, bool lock_needed);
+
+  // Get the mask of fields that have stemming enabled for a given stem variant
+  // length. Only fields where word_length >= min_stem_size are included.
+  uint64_t GetStemVariantFieldMask(size_t word_length) const;
+
+  // Get the bitmask of fields with stemming enabled
+  uint64_t GetStemmingEnabledFields() const { return stemming_enabled_fields_; }
+
+  // Get the minimum stem size across all fields
+  uint32_t GetMinStemSize() const { return min_stem_size_; }
+
   // Enable suffix trie.
   void EnableSuffix() {
     with_suffix_trie_ = true;
@@ -116,6 +144,15 @@ class TextIndexSchema {
   // Prevent concurrent mutations to schema-level text index
   // TODO: develop a finer-grained TextIndex locking scheme
   std::mutex text_index_mutex_;
+
+  //
+  // Stem tree: maps stem roots to their parent words
+  // Example: "happi" → {"happy", "happiness", "happily"}
+  //
+  RadixTree<StemParents> stem_tree_;
+
+  // Prevent concurrent mutations to stem tree
+  std::mutex stem_tree_mutex_;
 
   //
   // To support the Delete record and the post-filtering case, there is a
@@ -140,11 +177,27 @@ class TextIndexSchema {
   // Prevent concurrent mutations to in-progress key updates map
   std::mutex in_progress_key_updates_mutex_;
 
+  // Temporary storage for stem mappings during indexing
+  // Maps key -> (stemmed_word -> set of original words that stem to it)
+  absl::node_hash_map<
+      Key, absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>>
+      in_progress_stem_mappings_;
+
+  // Prevent concurrent mutations to in-progress stem mappings map
+  std::mutex in_progress_stem_mappings_mutex_;
+
   // Whether to store position offsets for phrase queries
   bool with_offsets_ = false;
 
   // True if any text attributes of the schema have suffix search enabled.
   bool with_suffix_trie_ = false;
+
+  // Tracks which field numbers have stemming enabled (bit mask)
+  uint64_t stemming_enabled_fields_ = 0;
+  // Min stem size for each field (indexed by field number)
+  std::vector<uint32_t> per_field_min_stem_sizes_;
+  // Cached minimum stem size across all stemming-enabled fields
+  uint32_t min_stem_size_;
 
  public:
   // FT.INFO memory stats for text index

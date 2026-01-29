@@ -201,17 +201,58 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
     const void* fetcher_ptr) const {
   const auto* fetcher =
       static_cast<const indexes::Text::EntriesFetcher*>(fetcher_ptr);
-  auto word_iter =
-      fetcher->text_index_->GetPrefix().GetWordIterator(GetTextString());
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
-  if (!word_iter.Done() && word_iter.GetWord() == GetTextString()) {
-    key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
+  absl::InlinedVector<FieldMaskPredicate,
+                      indexes::text::kWordExpansionInlineCapacity>
+      field_masks;
+
+  // stemmed word
+  std::string stemmed;
+
+  // Collect all words to search
+  std::vector<absl::string_view> words_to_search;
+  words_to_search.push_back(GetTextString());
+
+  // Get stem variants - GetAllStemVariants returns owned string, adds parent
+  // views
+  absl::string_view stem_root;
+  if (!IsExact()) {
+    uint64_t stem_enabled_mask =
+        fetcher->field_mask_ & GetTextIndexSchema()->GetStemmingEnabledFields();
+
+    stemmed = GetTextIndexSchema()->GetAllStemVariants(
+        GetTextString(), words_to_search,
+        GetTextIndexSchema()->GetMinStemSize(), stem_enabled_mask, false);
+    if (!stemmed.empty() && stemmed != std::string(GetTextString())) {
+      stem_root = stemmed;
+      words_to_search.push_back(stem_root);
+    }
+  }
+
+  // Search for all words and track which field mask to use for each
+  for (const auto& word : words_to_search) {
+    auto word_iter = fetcher->text_index_->GetPrefix().GetWordIterator(word);
+    // GetWordIterator positions at exact match or first word with prefix
+    if (!word_iter.Done() && word_iter.GetWord() == word) {
+      key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
+      // For original term and stem root, use full query field mask
+      // For stem variants, use field mask based on word length vs min_stem_size
+      FieldMaskPredicate effective_mask;
+      if (word == GetTextString() || word == stem_root) {
+        effective_mask = fetcher->field_mask_;
+      } else {
+        effective_mask =
+            fetcher->field_mask_ &
+            GetTextIndexSchema()->GetStemVariantFieldMask(word.length());
+      }
+      field_masks.emplace_back(effective_mask);
+    }
   }
   return std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), fetcher->field_mask_, fetcher->untracked_keys_,
-      fetcher->require_positions_);
+      fetcher->require_positions_, std::move(field_masks));
 }
 
 std::unique_ptr<indexes::text::TextIterator> PrefixPredicate::BuildTextIterator(

@@ -21,7 +21,7 @@ echo "Data Size: ${DATA_SIZE} bytes"
 echo "Workload: ${WORKLOAD_TYPE}"
 echo "Keyspace: ${KEYSPACE_SIZE} keys"
 echo ""
-
+ 
 # Setup paths
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 RUN_RESULTS_DIR="/workspace/results/${SERVER_TYPE}/${TIMESTAMP}"

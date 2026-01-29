@@ -29,16 +29,8 @@
 #include "src/indexes/text.h"
 #include "src/query/predicate.h"
 #include "src/valkey_search_options.h"
-#include "vmsdk/src/info.h"
 #include "vmsdk/src/status/status_macros.h"
 
-DEV_INTEGER_COUNTER(query_stats, query_text_term_count);
-DEV_INTEGER_COUNTER(query_stats, query_text_prefix_count);
-DEV_INTEGER_COUNTER(query_stats, query_text_suffix_count);
-DEV_INTEGER_COUNTER(query_stats, query_text_fuzzy_count);
-DEV_INTEGER_COUNTER(query_stats, query_text_proximity_count);
-DEV_INTEGER_COUNTER(query_stats, query_numeric_count);
-DEV_INTEGER_COUNTER(query_stats, query_tag_count);
 namespace valkey_search {
 
 namespace options {
@@ -330,7 +322,6 @@ FilterParser::ParseNumericPredicate(const std::string& attribute_alias) {
   auto numeric_index =
       dynamic_cast<const indexes::Numeric*>(index.value().get());
   query_operations_ |= QueryOperations::kContainsNumeric;
-  query_numeric_count.Increment();
   return std::make_unique<query::NumericPredicate>(
       numeric_index, attribute_alias, identifier, start, is_inclusive_start,
       end, is_inclusive_end);
@@ -371,7 +362,6 @@ FilterParser::ParseTagPredicate(const std::string& attribute_alias) {
   VMSDK_ASSIGN_OR_RETURN(auto tag_string, ParseTagString());
   VMSDK_ASSIGN_OR_RETURN(auto parsed_tags, ParseQueryTags(tag_string));
   query_operations_ |= QueryOperations::kContainsTag;
-  query_tag_count.Increment();
   return std::make_unique<query::TagPredicate>(
       tag_index, attribute_alias, identifier, tag_string, parsed_tags);
 }
@@ -618,7 +608,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
   std::optional<uint32_t> min_stem_size = std::nullopt;
   VMSDK_RETURN_IF_ERROR(SetupTextFieldConfiguration(field_mask, min_stem_size,
                                                     field_or_default, false));
-  query_text_term_count.Increment();
+  query_operations_ |= QueryOperations::kContainsTextTerm;
   return FilterParser::TokenResult{
       std::make_unique<query::TermPredicate>(text_index_schema, field_mask,
                                              std::move(token), true),
@@ -728,7 +718,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
                                                   std::move(token),
                                                   leading_percent_count),
           break_on_query_syntax};
-      query_text_fuzzy_count.Increment();
+      query_operations_ |= QueryOperations::kContainsTextFuzzy;
       return fuzzy;
     } else {
       return absl::InvalidArgumentError("Invalid fuzzy '%' markers");
@@ -745,7 +735,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
           break_on_query_syntax};
       return absl::InvalidArgumentError("Unsupported query operation");
     } else {
-      query_text_suffix_count.Increment();
+      query_operations_ |= QueryOperations::kContainsTextSuffix;
       return FilterParser::TokenResult{
           std::make_unique<query::SuffixPredicate>(
               text_index_schema, field_mask, std::move(token)),
@@ -756,7 +746,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
       return absl::InvalidArgumentError("Invalid wildcard '*' markers");
     VMSDK_RETURN_IF_ERROR(SetupTextFieldConfiguration(field_mask, min_stem_size,
                                                       field_or_default, false));
-    query_text_prefix_count.Increment();
+    query_operations_ |= QueryOperations::kContainsTextPrefix;
     return FilterParser::TokenResult{
         std::make_unique<query::PrefixPredicate>(text_index_schema, field_mask,
                                                  std::move(token)),
@@ -773,7 +763,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     if (!exact && min_stem_size.has_value()) {
       token = lexer.StemWord(token, true, *min_stem_size, lexer.GetStemmer());
     }
-    query_text_term_count.Increment();
+    query_operations_ |= QueryOperations::kContainsTextTerm;
     return FilterParser::TokenResult{
         std::make_unique<query::TermPredicate>(text_index_schema, field_mask,
                                                std::move(token), exact),
@@ -892,7 +882,6 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
     query_operations_ |= QueryOperations::kContainsProximity;
     query_operations_ |= QueryOperations::kContainsAnd;
     query_operations_ |= QueryOperations::kContainsText;
-    query_text_proximity_count.Increment();
     pred = std::make_unique<query::ComposedPredicate>(
         query::LogicalOperator::kAnd, std::move(children), slop, inorder);
     node_count_ += terms.size() + 1;

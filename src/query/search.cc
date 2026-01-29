@@ -47,6 +47,15 @@
 #include "vmsdk/src/time_sliced_mrmw_mutex.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
+#include "vmsdk/src/info.h"
+// Query operation counters 
+DEV_INTEGER_COUNTER(query_stats, query_text_term_count);
+DEV_INTEGER_COUNTER(query_stats, query_text_prefix_count);
+DEV_INTEGER_COUNTER(query_stats, query_text_suffix_count);
+DEV_INTEGER_COUNTER(query_stats, query_text_fuzzy_count);
+DEV_INTEGER_COUNTER(query_stats, query_text_proximity_count);
+DEV_INTEGER_COUNTER(query_stats, query_numeric_count);
+DEV_INTEGER_COUNTER(query_stats, query_tag_count);
 
 namespace valkey_search::query {
 
@@ -518,6 +527,41 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
   return neighbors;
 }
 
+// Increment query operation metrics based on query operations flags.
+// Doesn't count fanned out requests
+void IncrementQueryOperationMetrics(QueryOperations query_operations, 
+                                    SearchMode search_mode) {
+  if (search_mode != SearchMode::kLocal) {
+    return;
+  }
+  // High-level query type metrics
+  if (query_operations & QueryOperations::kContainsText) {
+    ++Metrics::GetStats().query_text_requests_cnt;
+  }
+  if (query_operations & QueryOperations::kContainsNumeric) {
+    query_numeric_count.Increment();
+  }
+  if (query_operations & QueryOperations::kContainsTag) {
+    query_tag_count.Increment();
+  }
+  // Text operation type metrics
+  if (query_operations & QueryOperations::kContainsTextTerm) {
+    query_text_term_count.Increment();
+  }
+  if (query_operations & QueryOperations::kContainsTextPrefix) {
+    query_text_prefix_count.Increment();
+  }
+  if (query_operations & QueryOperations::kContainsTextSuffix) {
+    query_text_suffix_count.Increment();
+  }
+  if (query_operations & QueryOperations::kContainsTextFuzzy) {
+    query_text_fuzzy_count.Increment();
+  }
+  if (query_operations & QueryOperations::kContainsProximity) {
+    query_text_proximity_count.Increment();
+  }
+}
+
 absl::StatusOr<std::vector<indexes::Neighbor>> DoSearch(
     const SearchParameters &parameters, SearchMode search_mode) {
   // Handle OOM for search requests, defends against request
@@ -533,10 +577,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearch(
   auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
   vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
   ++Metrics::GetStats().time_slice_queries;
-  if (parameters.filter_parse_results.query_operations &
-      QueryOperations::kContainsText) {
-    ++Metrics::GetStats().query_text_requests_cnt;
-  }
+  IncrementQueryOperationMetrics(parameters.filter_parse_results.query_operations, search_mode);
   // Handle non vector queries first where attribute_alias is empty.
   if (parameters.IsNonVectorQuery()) {
     if (search_mode == SearchMode::kLocal) {

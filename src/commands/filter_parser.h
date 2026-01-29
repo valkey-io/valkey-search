@@ -40,6 +40,10 @@ enum class QueryOperations : uint64_t {
   kContainsText = 1 << 5,
   kContainsProximity = 1 << 6,
   kContainsNestedComposed = 1 << 7,
+  kContainsTextTerm = 1 << 8,
+  kContainsTextPrefix = 1 << 9,
+  kContainsTextSuffix = 1 << 10,
+  kContainsTextFuzzy = 1 << 11,
 };
 
 inline QueryOperations operator|(QueryOperations a, QueryOperations b) {

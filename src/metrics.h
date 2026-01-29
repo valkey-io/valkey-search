@@ -52,6 +52,13 @@ class Metrics {
     uint64_t rdb_load_failure_cnt{0};
     uint64_t rdb_save_success_cnt{0};
     uint64_t rdb_save_failure_cnt{0};
+
+    // FT.INTERNAL_UPDATE error handling metrics
+    std::atomic<uint64_t> ft_internal_update_parse_failures_cnt{0};
+    std::atomic<uint64_t> ft_internal_update_process_failures_cnt{0};
+    std::atomic<uint64_t> ft_internal_update_call_failures_cnt{0};
+    std::atomic<uint64_t> process_internal_update_callback_failures_cnt{0};
+    std::atomic<uint64_t> ft_internal_update_skipped_entries_cnt{0};
     vmsdk::LatencySampler hnsw_vector_index_search_latency{
         absl::ToInt64Nanoseconds(absl::Nanoseconds(1)),
         absl::ToInt64Nanoseconds(absl::Seconds(1)), LATENCY_PRECISION};

@@ -364,6 +364,11 @@ class ComposedPredicate : public Predicate {
 std::unique_ptr<indexes::EntriesFetcherBase> BuildExactPhraseFetcher(
     const ComposedPredicate* composed_predicate);
 
+// Factory function for creating the composed AND fetcher defined in text.cc
+// Used for composed AND queries without proximity constraints
+std::unique_ptr<indexes::EntriesFetcherBase> BuildComposedAndFetcher(
+    const ComposedPredicate* composed_predicate);
+
 }  // namespace valkey_search::query
 
 #endif  // VALKEYSEARCH_SRC_QUERY_PREDICATE_H_

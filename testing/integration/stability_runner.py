@@ -79,7 +79,7 @@ class StabilityRunner:
         self.failover_state = {
             'in_progress': False,
             'failed_ports': set(),  # Ports that are currently down due to failover
-            'new_master_connected': False,  # Whether the new master is fully operational
+            'new_primary_connected': False,  # Whether the new primary is fully operational
             'lock': threading.Lock(),
         }
         logging.basicConfig(

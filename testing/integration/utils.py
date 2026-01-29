@@ -1163,18 +1163,18 @@ class ClusterNode(NamedTuple):
     """Represents a node in the cluster topology."""
     node_id: str
     addr: str  # host:port
-    is_master: bool
-    master_id: str | None  # For replicas, the ID of their master
+    is_primary: bool
+    primary_id: str | None  # For replicas, the ID of their primary
 
 
 def get_cluster_nodes(client: valkey.ValkeyCluster) -> tuple[List[ClusterNode], List[ClusterNode]]:
     """Discover cluster topology by parsing CLUSTER NODES output.
     
     This function queries the cluster to get the current topology, separating
-    master and replica nodes. It ignores nodes that are in a failed state.
+    primary and replica nodes. It ignores nodes that are in a failed state.
     
     Returns:
-        Tuple of (masters, replicas) where each is a list of ClusterNode objects
+        Tuple of (primarys, replicas) where each is a list of ClusterNode objects
         
     """
     try:
@@ -1183,7 +1183,7 @@ def get_cluster_nodes(client: valkey.ValkeyCluster) -> tuple[List[ClusterNode], 
         logging.error("Failed to get cluster nodes: %s", e)
         return [], []
     
-    masters = []
+    primarys = []
     replicas = []
     
     for line in nodes_output:
@@ -1197,78 +1197,78 @@ def get_cluster_nodes(client: valkey.ValkeyCluster) -> tuple[List[ClusterNode], 
         node_id = parts[0]
         addr = parts[1].split("@")[0]  # Remove cluster bus port
         flags = parts[2]
-        master_id = parts[3] if len(parts) > 3 else "-"
+        primary_id = parts[3] if len(parts) > 3 else "-"
         
-        # Check if this is a master node (and not failed)
+        # Check if this is a primary node (and not failed)
         if "master" in flags and "fail" not in flags:
-            masters.append(ClusterNode(
+            primarys.append(ClusterNode(
                 node_id=node_id,
                 addr=addr,
-                is_master=True,
-                master_id=None
+                is_primary=True,
+                primary_id=None
             ))
         # Check if this is a replica node
         elif "slave" in flags and "fail" not in flags:
             replicas.append(ClusterNode(
                 node_id=node_id,
                 addr=addr,
-                is_master=False,
-                master_id=master_id
+                is_primary=False,
+                primary_id=primary_id
             ))
     
-    return masters, replicas
+    return primarys, replicas
 
 
-def pick_master_to_fail(masters: List[ClusterNode], replicas: List[ClusterNode], exclude_port: int | None = None) -> ClusterNode | None:
-    """Randomly select a master node to fail, ensuring it has replicas.
+def pick_primary_to_fail(primarys: List[ClusterNode], replicas: List[ClusterNode], exclude_port: int | None = None) -> ClusterNode | None:
+    """Randomly select a primary node to fail, ensuring it has replicas.
     
     This function implements a random selection strategy to increase test coverage
-    and avoid bias. It only selects masters that have at least one replica to
+    and avoid bias. It only selects primarys that have at least one replica to
     ensure the cluster can perform automatic failover.
     
     Args:
-        masters: List of master nodes in the cluster
+        primarys: List of primary nodes in the cluster
         replicas: List of replica nodes in the cluster
         exclude_port: Port number to exclude from selection (typically the entry point)
         
     Returns:
-        Selected ClusterNode to fail, or None if no suitable master found
+        Selected ClusterNode to fail, or None if no suitable primary found
     """
-    if not masters:
-        logging.warning("No master nodes available to fail")
+    if not primarys:
+        logging.warning("No primary nodes available to fail")
         return None
     
-    # Find masters that have at least one replica AND are not the excluded port
-    masters_with_replicas = []
-    for master in masters:
-        has_replica = any(r.master_id == master.node_id for r in replicas)
+    # Find primarys that have at least one replica AND are not the excluded port
+    primarys_with_replicas = []
+    for primary in primarys:
+        has_replica = any(r.primary_id == primary.node_id for r in replicas)
         if has_replica:
-            # Check if this master is the excluded port
+            # Check if this primary is the excluded port
             if exclude_port is not None:
                 try:
-                    master_port = int(master.addr.split(":")[1])
-                    if master_port == exclude_port:
+                    primary_port = int(primary.addr.split(":")[1])
+                    if primary_port == exclude_port:
                         logging.info(
-                            "Skipping master at port %d (entry point - excluded from failover)",
-                            master_port
+                            "Skipping primary at port %d (entry point - excluded from failover)",
+                            primary_port
                         )
                         continue
                 except Exception as e:
-                    logging.warning("Could not parse port from address %s: %s", master.addr, e)
+                    logging.warning("Could not parse port from address %s: %s", primary.addr, e)
             
-            masters_with_replicas.append(master)
+            primarys_with_replicas.append(primary)
     
-    if not masters_with_replicas:
-        logging.warning("No suitable masters found (all either lack replicas or are excluded)")
+    if not primarys_with_replicas:
+        logging.warning("No suitable primarys found (all either lack replicas or are excluded)")
         return None
     
-    # Randomly select one master to fail
-    selected = random.choice(masters_with_replicas)
+    # Randomly select one primary to fail
+    selected = random.choice(primarys_with_replicas)
     logging.info(
-        "Selected master to fail: node_id=%s, addr=%s (out of %d candidates)",
+        "Selected primary to fail: node_id=%s, addr=%s (out of %d candidates)",
         selected.node_id,
         selected.addr,
-        len(masters_with_replicas)
+        len(primarys_with_replicas)
     )
     return selected
 
@@ -1304,72 +1304,72 @@ def shutdown_node(addr: str, password: str | None = None) -> bool:
     return True
 
 
-def wait_for_new_master(
+def wait_for_new_primary(
     client: valkey.ValkeyCluster,
-    old_master_id: str,
-    old_master_addr: str,
+    old_primary_id: str,
+    old_primary_addr: str,
     timeout: int = 30
 ) -> tuple[bool, str | None]:
-    """Wait for a replica to be promoted to master after the old master fails.
+    """Wait for a replica to be promoted to primary after the old primary fails.
     
     This function polls the cluster topology until it detects that:
-    1. The old master node ID is no longer present as a master
-    2. A new master has taken over its slots
+    1. The old primary node ID is no longer present as a primary
+    2. A new primary has taken over its slots
     Returns:
-        Tuple of (success: bool, new_master_addr: str | None)
-        - success: True if new master detected within timeout
-        - new_master_addr: Address of the newly promoted master, or None if failed
+        Tuple of (success: bool, new_primary_addr: str | None)
+        - success: True if new primary detected within timeout
+        - new_primary_addr: Address of the newly promoted primary, or None if failed
     """
     start = time.time()
-    logging.info("Waiting for replica promotion (old master: %s at %s)", old_master_id, old_master_addr)
+    logging.info("Waiting for replica promotion (old primary: %s at %s)", old_primary_id, old_primary_addr)
     
-    # Track which replicas were under the old master
-    initial_masters, initial_replicas = get_cluster_nodes(client)
-    old_master_replicas = [r for r in initial_replicas if r.master_id == old_master_id]
+    # Track which replicas were under the old primary
+    initial_primarys, initial_replicas = get_cluster_nodes(client)
+    old_primary_replicas = [r for r in initial_replicas if r.primary_id == old_primary_id]
     
-    if old_master_replicas:
+    if old_primary_replicas:
         logging.info(
-            "Old master had %d replica(s): %s",
-            len(old_master_replicas),
-            [r.addr for r in old_master_replicas]
+            "Old primary had %d replica(s): %s",
+            len(old_primary_replicas),
+            [r.addr for r in old_primary_replicas]
         )
     
     while time.time() - start < timeout:
-        masters, replicas = get_cluster_nodes(client)
+        primarys, replicas = get_cluster_nodes(client)
         
-        # Check if old master is gone from master list
-        old_master_still_present = any(m.node_id == old_master_id for m in masters)
+        # Check if old primary is gone from primary list
+        old_primary_still_present = any(m.node_id == old_primary_id for m in primarys)
         
-        if not old_master_still_present and masters:
-            # Find which of the old replicas became the new master
-            new_master_addr = None
-            for old_replica in old_master_replicas:
-                # Check if this replica is now a master
-                if any(m.node_id == old_replica.node_id for m in masters):
-                    new_master_addr = old_replica.addr
+        if not old_primary_still_present and primarys:
+            # Find which of the old replicas became the new primary
+            new_primary_addr = None
+            for old_replica in old_primary_replicas:
+                # Check if this replica is now a primary
+                if any(m.node_id == old_replica.node_id for m in primarys):
+                    new_primary_addr = old_replica.addr
                     logging.info(
-                        "✓ REPLICA PROMOTED: %s (node_id: %s) promoted to master after %.1fs",
-                        new_master_addr,
+                        "REPLICA PROMOTED: %s (node_id: %s) promoted to primary after %.1fs",
+                        new_primary_addr,
                         old_replica.node_id,
                         time.time() - start
                     )
                     break
             
-            if not new_master_addr:
+            if not new_primary_addr:
                 # Couldn't identify which replica was promoted, but promotion happened
                 logging.warning(
-                    "Replica promotion detected but couldn't identify which replica (old master: %s)",
-                    old_master_id
+                    "Replica promotion detected but couldn't identify which replica (old primary: %s)",
+                    old_primary_id
                 )
             
-            return True, new_master_addr
+            return True, new_primary_addr
         
         time.sleep(1)
     
     logging.error(
-        "Timeout waiting for replica promotion after %d seconds (old master: %s)",
+        "Timeout waiting for replica promotion after %d seconds (old primary: %s)",
         timeout,
-        old_master_id
+        old_primary_id
     )
     return False, None
 
@@ -1378,7 +1378,7 @@ def wait_for_cluster_ok(client: valkey.ValkeyCluster, timeout: int = 30) -> bool
     """Wait for the cluster to reach a healthy state with full slot coverage.
     
     After failover, this function ensures:
-    1. All 16384 hash slots are assigned to available masters
+    1. All 16384 hash slots are assigned to available primarys
     2. No slots are in "migrating" or "importing" state
     3. Cluster state is reported as "ok"
     Returns:
@@ -1586,8 +1586,8 @@ def periodic_failover_task(
     
     This performs the complete failover sequence:
     1. Discover current cluster topology
-    2. Select a master node to fail (one with replicas)
-    3. Shut down the selected master
+    2. Select a primary node to fail (one with replicas)
+    3. Shut down the selected primary
     4. Wait for replica promotion
     5. Wait for cluster to reach OK state
     6. Optionally restart the failed node to test recovery
@@ -1603,17 +1603,17 @@ def periodic_failover_task(
         logging.info("<FAILOVER> Set failover_state['in_progress'] = True")
     
     # Step 1: Get cluster topology
-    masters, replicas = get_cluster_nodes(client)
-    if not masters:
-        logging.error("<FAILOVER> No masters found in cluster")
+    primarys, replicas = get_cluster_nodes(client)
+    if not primarys:
+        logging.error("<FAILOVER> No primarys found in cluster")
         return False
     
-    logging.info("<FAILOVER> Found %d masters and %d replicas", len(masters), len(replicas))
+    logging.info("<FAILOVER> Found %d primarys and %d replicas", len(primarys), len(replicas))
     
-    # Step 2: Pick a master to fail (excluding entry point)
-    victim = pick_master_to_fail(masters, replicas, exclude_port=entry_point_port)
+    # Step 2: Pick a primary to fail (excluding entry point)
+    victim = pick_primary_to_fail(primarys, replicas, exclude_port=entry_point_port)
     if not victim:
-        logging.error("<FAILOVER> No suitable master found to fail")
+        logging.error("<FAILOVER> No suitable primary found to fail")
         return False
     
     logging.info("<FAILOVER> Selected victim: %s (node_id: %s)", victim.addr, victim.node_id)
@@ -1629,12 +1629,12 @@ def periodic_failover_task(
         if failover_state is not None:
             with failover_state['lock']:
                 failover_state['failed_ports'].add(victim_port)
-                failover_state['new_master_connected'] = False
+                failover_state['new_primary_connected'] = False
             logging.info("<FAILOVER> Added port %d to shared failover_state", victim_port)
     except Exception as e:
         logging.warning("<FAILOVER> Could not extract port from address %s: %s", victim.addr, e)
     
-    # Step 3: Shut down the master
+    # Step 3: Shut down the primary
     if not shutdown_node(victim.addr, password):
         logging.error("<FAILOVER> Failed to shutdown node %s", victim.addr)
         return False
@@ -1643,7 +1643,7 @@ def periodic_failover_task(
     time.sleep(2)
     
     # Step 4: Wait for replica promotion
-    promotion_success, new_master_addr = wait_for_new_master(
+    promotion_success, new_primary_addr = wait_for_new_primary(
         client, victim.node_id, victim.addr, timeout=30
     )
     if not promotion_success:
@@ -1655,29 +1655,29 @@ def periodic_failover_task(
         logging.error("<FAILOVER> Cluster did not reach OK state in time")
         return False
     
-    logging.info("<FAILOVER> Failover completed successfully - new master: %s", new_master_addr or "unknown")
+    logging.info("<FAILOVER> Failover completed successfully - new primary: %s", new_primary_addr or "unknown")
     
     # Signal that failover has completed - cluster is stable again
-    # This allows memtier processes to restart and redirect traffic to the new master
+    # This allows memtier processes to restart and redirect traffic to the new primary
     if failover_state is not None:
         with failover_state['lock']:
             failover_state['in_progress'] = False
-            if new_master_addr:
-                failover_state['new_master_addr'] = new_master_addr
+            if new_primary_addr:
+                failover_state['new_primary_addr'] = new_primary_addr
         logging.info("<FAILOVER> Set failover_state['in_progress'] = False - memtier processes can restart now")
     
-    # Step 6: Wait for traffic redirection before bringing old master back
+    # Step 6: Wait for traffic redirection before bringing old primary back
     if test_recovery:
         recovery_delay_sec = 20
         logging.info(
-            "<FAILOVER> Waiting %d seconds for traffic to redirect to new master (%s) before reconnecting old master...",
+            "<FAILOVER> Waiting %d seconds for traffic to redirect to new primary (%s) before reconnecting old primary...",
             recovery_delay_sec,
-            new_master_addr or "unknown"
+            new_primary_addr or "unknown"
         )
         time.sleep(recovery_delay_sec)
         
-        # Step 7: Restart the old master as a replica
-        logging.info("<FAILOVER> Now reconnecting old master %s as replica", victim.addr)
+        # Step 7: Restart the old primary as a replica
+        logging.info("<FAILOVER> Now reconnecting old primary %s as replica", victim.addr)
         try:
             port = int(victim.addr.split(":")[1])
             restarted_node = restart_node(
@@ -1689,7 +1689,7 @@ def periodic_failover_task(
                 password=password
             )
             if restarted_node:
-                logging.info("<FAILOVER> Old master successfully reconnected to cluster")
+                logging.info("<FAILOVER> Old primary successfully reconnected to cluster")
                 
                 # Wait for cluster topology to converge before removing from failed_ports
                 # This ensures all nodes recognize the rejoined node, preventing
@@ -1713,9 +1713,9 @@ def periodic_failover_task(
                         if port in failover_state['failed_ports']:
                             failover_state['failed_ports'].remove(port)
                             logging.info("<FAILOVER> Removed port %d from failed_ports (topology converged)", port)
-                        # Mark new master as connected
-                        failover_state['new_master_connected'] = True
-                        logging.info("<FAILOVER> Set new_master_connected = True")
+                        # Mark new primary as connected
+                        failover_state['new_primary_connected'] = True
+                        logging.info("<FAILOVER> Set new_primary_connected = True")
                 
                 # Force client to refresh its topology to see the rejoined node
                 try:
@@ -1740,17 +1740,17 @@ def periodic_failover_task(
                     )
                     role_info = node_client.execute_command("ROLE")
                     if role_info[0].decode() == "slave":
-                        master_host = role_info[1].decode()
-                        master_port = int(role_info[2])
+                        primary_host = role_info[1].decode()
+                        primary_port = int(role_info[2])
                         logging.info(
-                            "<FAILOVER> OLD MASTER NOW REPLICA: Port %d is now replicating from %s:%d",
+                            "<FAILOVER> OLD primary NOW REPLICA: Port %d is now replicating from %s:%d",
                             port,
-                            master_host,
-                            master_port
+                            primary_host,
+                            primary_port
                         )
                     else:
                         logging.warning(
-                            "Old master at port %d has role: %s (expected: slave)",
+                            "Old primary at port %d has role: %s (expected: slave)",
                             port,
                             role_info[0].decode()
                         )
@@ -1761,7 +1761,7 @@ def periodic_failover_task(
                         e
                     )
             else:
-                logging.warning("<FAILOVER> Failed to restart old master, but failover was successful")
+                logging.warning("<FAILOVER> Failed to restart old primary, but failover was successful")
         except Exception as e:
             logging.warning("<FAILOVER> Error during recovery testing: %s", e)
     

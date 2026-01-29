@@ -170,7 +170,8 @@ class StabilityRunner:
                 self.config.ftcreate_interval_sec,
                 self.config.randomize_bg_job_intervals,
                 lambda: utils.periodic_ftcreate_task(
-                    client, self.config.index_name, attributes, index_state, self.failover_state
+                    client, self.config.index_name, attributes, index_state, self.failover_state, 
+                    entry_point_port=self.config.ports[0]
                 ),
                 failover_state=self.failover_state,
             )
@@ -182,7 +183,10 @@ class StabilityRunner:
                 "FT.DROPINDEX",
                 self.config.ftdropindex_interval_sec,
                 self.config.randomize_bg_job_intervals,
-                lambda: utils.periodic_ftdrop_task(client, self.config.index_name, index_state, self.failover_state),
+                lambda: utils.periodic_ftdrop_task(
+                    client, self.config.index_name, index_state, self.failover_state,
+                    entry_point_port=self.config.ports[0]
+                ),
                 failover_state=self.failover_state,
             )
             task.run()
@@ -205,6 +209,14 @@ class StabilityRunner:
             config_dir = os.environ["TEST_TMPDIR"]
             stdout_dir = os.environ["TEST_UNDECLARED_OUTPUTS_DIR"]
             
+            # Build modules dict matching the initial cluster startup
+            modules = {}
+            if "VALKEY_SEARCH_PATH" in os.environ:
+                modules[os.environ["VALKEY_SEARCH_PATH"]] = (
+                    "--reader-threads 2 --writer-threads 5 --log-level notice --cluster-map-expiration-ms 0"
+                    + (" --use-coordinator" if self.config.use_coordinator else "")
+                )
+            
             logging.info(
                 "Failover testing enabled: interval=%ds, recovery=%s",
                 self.config.failover_interval_sec,
@@ -219,6 +231,7 @@ class StabilityRunner:
                     valkey_server_path=valkey_server_path,
                     config_dir=config_dir,
                     stdout_dir=stdout_dir,
+                    modules=modules,
                     test_recovery=self.config.test_failover_recovery,
                     failover_state=self.failover_state,
                     entry_point_port=self.config.ports[0],  # Protect entry point from failover

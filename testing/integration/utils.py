@@ -733,11 +733,28 @@ def periodic_ftdrop_task(
     index_name: str,
     index_state: IndexState,
     failover_state: dict | None = None,
+    entry_point_port: int | None = None,
 ) -> bool:
+    
+    client.nodes_manager.initialize()
     with index_state.index_lock:
         logging.info("<FT.DROPINDEX> Invoking index drop")
         try:
-            drop_index(client, index_name)
+            # Always use the entry point node if specified (protected from failover)
+            if entry_point_port is not None:
+                entry_point_node = client.get_node(host="localhost", port=entry_point_port)
+                if entry_point_node is not None:
+                    # Execute FT.DROPINDEX on the entry point node
+                    args = ["FT.DROPINDEX", index_name]
+                    client.execute_command(*args, target_nodes=[entry_point_node])
+                    logging.info("<FT.DROPINDEX> Successfully dropped index")
+                else:
+                    logging.warning("<FT.DROPINDEX> Entry point node at port %d not found, using default", entry_point_port)
+                    drop_index(client, index_name)
+            else:
+                # Fallback to original logic if entry_point_port not provided
+                drop_index(client, index_name)
+                logging.info("<FT.DROPINDEX> Successfully dropped index")
             index_state.ft_created = False
         except (
             valkey.exceptions.ConnectionError,
@@ -746,21 +763,6 @@ def periodic_ftdrop_task(
             error_str = str(e)
             if not index_state.ft_created and "not found" in error_str:
                 logging.debug("<FT.DROPINDEX> got expected error: %s", e)
-            elif "Unable to contact all cluster members" in error_str:
-                # Check if this is expected due to failover
-                is_expected = False
-                if failover_state is not None:
-                    with failover_state['lock']:
-                        # Expected if we have failed ports and new master hasn't fully connected
-                        has_failed_ports = len(failover_state['failed_ports']) > 0
-                        new_master_not_ready = not failover_state['new_master_connected']
-                        is_expected = has_failed_ports and new_master_not_ready
-                
-                if is_expected:
-                    logging.debug("<FT.DROPINDEX> got expected error (failover in progress): %s", e)
-                else:
-                    logging.error("<FT.DROPINDEX> got unexpected error: %s", e)
-                    return False
             else:
                 logging.error("<FT.DROPINDEX> got unexpected error: %s", e)
                 return False
@@ -783,28 +785,38 @@ def periodic_ftdrop(
     thread.run()
     return thread
 
-
 def periodic_ftcreate_task(
     client: valkey.ValkeyCluster,
     index_name: str,
     attributes: Dict[str, AttributeDefinition],
     index_state: IndexState,
     failover_state: dict | None = None,
+    entry_point_port: int | None = None,
 ) -> bool:
     with index_state.index_lock:
         try:
             logging.info("<FT.CREATE> Invoking index creation")
             
-            # Get available nodes excluding failed ports
-            target_nodes = client.DEFAULT_NODE
-            if failover_state is not None:
-                with failover_state['lock']:
-                    failed_ports = failover_state['failed_ports'].copy()
+            # Always use the entry point node if specified (protected from failover)
+            if entry_point_port is not None:
+                entry_point_node = client.get_node(host="localhost", port=entry_point_port)
+                if entry_point_node is not None:
+                    target_nodes = [entry_point_node]
+                    logging.info("<FT.CREATE> Using entry point node at port %d (always available)", entry_point_port)
+                else:
+                    logging.warning("<FT.CREATE> Entry point node at port %d not found, falling back to DEFAULT_NODE", entry_point_port)
+                    target_nodes = client.DEFAULT_NODE
+            else:
+                # Fallback to original logic if entry_point_port not provided
+                target_nodes = client.DEFAULT_NODE
+                if failover_state is not None:
+                    with failover_state['lock']:
+                        failed_ports = failover_state['failed_ports'].copy()
+                    
+                    if failed_ports:
+                        target_nodes = get_available_nodes_excluding_failed(client, failed_ports)
+                        logging.debug("<FT.CREATE> Using filtered nodes (excluding failed ports: %s)", failed_ports)
                 
-                if failed_ports:
-                    target_nodes = get_available_nodes_excluding_failed(client, failed_ports)
-                    logging.debug("<FT.CREATE> Using filtered nodes (excluding failed ports: %s)", failed_ports)
-            
             create_index(
                 client=client, 
                 store_data_type=StoreDataType.HASH.name, 
@@ -812,6 +824,7 @@ def periodic_ftcreate_task(
                 attributes=attributes,
                 target_nodes=target_nodes
             )
+            logging.info("<FT.CREATE> Successfully created index")
             index_state.ft_created = True
         except (
             valkey.exceptions.ConnectionError,
@@ -924,8 +937,7 @@ class MemtierProcess:
         self,
         command: str,
         name: str,
-        # Increased from 10 to 15 to give buffer for failover resets then create and the search
-        trailing_secs: int = 15,
+        trailing_secs: int = 10,
         error_predicate: Callable[[str], bool] | None = None,
     ):
         self.name = name
@@ -1395,20 +1407,130 @@ def wait_for_cluster_ok(client: valkey.ValkeyCluster, timeout: int = 30) -> bool
     return False
 
 
+def wait_for_node_topology_convergence(
+    client: valkey.ValkeyCluster,
+    rejoined_node_id: str,
+    timeout: int = 30
+) -> bool:
+    """Wait for all cluster nodes to recognize a rejoined node in their topology.
+    
+    Returns:
+        True if all nodes recognize the rejoined node within timeout, False otherwise
+    """
+    start = time.time()
+    logging.info(
+        "Waiting for cluster topology to converge (checking for node %s)...",
+        rejoined_node_id
+    )
+    
+    while time.time() - start < timeout:
+        try:
+            # Get CLUSTER NODES from all active nodes
+            all_nodes = client.get_nodes()
+            convergence_achieved = True
+            nodes_checked = 0
+            nodes_see_rejoined = 0
+            
+            for node in all_nodes:
+                try:
+                    nodes_checked += 1
+                    # Get this node's view of the cluster
+                    node_client = valkey.Valkey(
+                        host=node.host,
+                        port=node.port,
+                        socket_timeout=2,
+                    )
+                    nodes_output = node_client.execute_command("CLUSTER", "NODES").decode()
+                    
+                    # Check if this node sees the rejoined node
+                    rejoined_node_found = False
+                    for line in nodes_output.splitlines():
+                        if not line.strip():
+                            continue
+                        
+                        parts = line.split()
+                        if len(parts) < 3:
+                            continue
+                        
+                        node_id = parts[0]
+                        flags = parts[2]
+                        
+                        if node_id == rejoined_node_id:
+                            rejoined_node_found = True
+                            
+                            # Check if the rejoined node is in a bad state
+                            if "handshake" in flags or "noaddr" in flags or "fail" in flags:
+                                logging.debug(
+                                    "Node %s:%d sees rejoined node %s but it's in state: %s",
+                                    node.host, node.port, rejoined_node_id, flags
+                                )
+                                convergence_achieved = False
+                                break
+                            else:
+                                nodes_see_rejoined += 1
+                                logging.debug(
+                                    "Node %s:%d has converged view of rejoined node %s (flags: %s)",
+                                    node.host, node.port, rejoined_node_id, flags
+                                )
+                            break
+                    
+                    if not rejoined_node_found:
+                        logging.debug(
+                            "Node %s:%d does not see rejoined node %s yet",
+                            node.host, node.port, rejoined_node_id
+                        )
+                        convergence_achieved = False
+                        
+                except Exception as e:
+                    logging.debug("Error checking node %s:%d: %s", node.host, node.port, e)
+                    convergence_achieved = False
+            
+            if convergence_achieved and nodes_checked > 0 and nodes_see_rejoined == nodes_checked:
+                logging.info(
+                    "Cluster topology converged after %.1fs - all %d nodes recognize rejoined node %s",
+                    time.time() - start,
+                    nodes_checked,
+                    rejoined_node_id
+                )
+                return True
+            else:
+                logging.debug(
+                    "Topology convergence in progress: %d/%d nodes see rejoined node",
+                    nodes_see_rejoined,
+                    nodes_checked
+                )
+                
+        except Exception as e:
+            logging.debug("Error checking cluster topology convergence: %s", e)
+        
+        time.sleep(1)
+    
+    logging.error(
+        "Timeout waiting for topology convergence after %d seconds (rejoined node: %s)",
+        timeout,
+        rejoined_node_id
+    )
+    return False
+
+
 def restart_node(
     valkey_server_path: str,
     port: int,
     config_dir: str,
     stdout_dir: str,
+    modules: Dict[str, str],
     password: str | None = None
 ) -> ValkeyServerUnderTest | None:
     """Restart a previously failed node to test recovery and rejoin behavior.
     
-    This function starts the Valkey server process with its existing configuration,
-    allowing it to rejoin the cluster as a replica. This tests:
-    - Node recovery after failure
-    - Replica catch-up with replication
-    - FT index consistency after rejoin
+    Args:
+        valkey_server_path: Path to valkey-server binary
+        port: Port number of the node to restart
+        config_dir: Directory containing node configurations  
+        stdout_dir: Directory for stdout logs
+        modules: Dictionary of module paths to their arguments (must match initial startup)
+        password: Optional password for authentication
+        
     Returns:
         ValkeyServerUnderTest object if restart succeeds, None otherwise
     """
@@ -1420,68 +1542,28 @@ def restart_node(
             logging.error("Node directory %s does not exist", node_dir)
             return None
         
-        logging.info("Restarting node on port %d", port)
+        logging.info("Restarting node on port %d using start_valkey_process", port)
         
-        # Open stdout file for logging
-        stdout_file = open(stdout_path, "w")
+        stdout_file = open(stdout_path, "w", buffering=1)
         
-        # Build the command to restart the node
-        command = f"{valkey_server_path} --port {port} --dir {node_dir}"
-        command += f" --cluster-enabled yes"
-        command += f" --cluster-config-file {os.path.join(node_dir, 'nodes.conf')}"
-        command += f" --cluster-node-timeout 45000"
+        # Build cluster args exactly as in start_valkey_cluster
+        cluster_args = {
+            "cluster-enabled": "yes",
+            "cluster-config-file": os.path.join(node_dir, "nodes.conf"),
+            "cluster-node-timeout": "10000"  # Use same timeout as initial startup (not 45000)
+        }
         
-        if password:
-            command += f" --requirepass {password}"
-        
-        # Load modules from environment using the same pattern as start_valkey_process
-        # This ensures proper quoting of module arguments
-        modules = {}
-        if "VALKEY_SEARCH_PATH" in os.environ:
-            modules[os.environ["VALKEY_SEARCH_PATH"]] = "--reader-threads 2 --writer-threads 5"
-        
-        # Build quoted module load strings (same as original startup)
-        modules_args = [f'"--loadmodule {k} {v}"' for k, v in modules.items()]
-        if modules_args:
-            command += " " + " ".join(modules_args)
-        
-        # Load JSON module separately (no args needed)
-        if "VALKEY_JSON_PATH" in os.environ:
-            command += f' --loadmodule {os.environ["VALKEY_JSON_PATH"]}'
-        
-        command = "ulimit -c unlimited && " + command
-        logging.info("Restart command: %s", command)
-        
-        process = subprocess.Popen(
-            command, shell=True, stdout=stdout_file, stderr=stdout_file
+        # Reuse start_valkey_process to ensure identical configuration
+        # This guarantees same module loading order, argument parsing, etc.
+        return start_valkey_process(
+            valkey_server_path=valkey_server_path,
+            port=port,
+            directory=node_dir,
+            stdout_file=stdout_file,
+            args=cluster_args,
+            modules=modules,
+            password=password
         )
-        
-        # Wait for node to be connectable
-        connected = False
-        for i in range(10):
-            try:
-                test_client = valkey.Valkey(
-                    host="localhost",
-                    port=port,
-                    password=password,
-                    socket_timeout=2,
-                )
-                test_client.ping()
-                connected = True
-                logging.info("Node on port %d successfully restarted", port)
-                break
-            except (
-                valkey.exceptions.ConnectionError,
-                valkey.exceptions.ResponseError,
-            ):
-                time.sleep(1)
-        
-        if not connected:
-            logging.error("Failed to connect to restarted node on port %d", port)
-            process.terminate()
-            return None
-        
-        return ValkeyServerUnderTest(process, port)
         
     except Exception as e:
         logging.error("Error restarting node on port %d: %s", port, e)
@@ -1493,6 +1575,7 @@ def periodic_failover_task(
     valkey_server_path: str,
     config_dir: str,
     stdout_dir: str,
+    modules: Dict[str, str],
     test_recovery: bool,
     password: str | None = None,
     failed_ports_tracker: set | None = None,
@@ -1602,23 +1685,49 @@ def periodic_failover_task(
                 port=port,
                 config_dir=config_dir,
                 stdout_dir=stdout_dir,
+                modules=modules,
                 password=password
             )
             if restarted_node:
                 logging.info("<FAILOVER> Old master successfully reconnected to cluster")
                 
-                # Remove port from failed_ports immediately after successful restart
-                # This allows FT.CREATE/FT.DROPINDEX to proceed without "Unable to contact" errors
+                # Wait for cluster topology to converge before removing from failed_ports
+                # This ensures all nodes recognize the rejoined node, preventing
+                # "Unable to contact all cluster members" errors
+                topology_converged = wait_for_node_topology_convergence(
+                    client=client,
+                    rejoined_node_id=victim.node_id,
+                    timeout=30
+                )
+                
+                if not topology_converged:
+                    logging.warning(
+                        "<FAILOVER> Topology convergence timeout for node %d (id: %s) - proceeding anyway",
+                        port,
+                        victim.node_id
+                    )
+                
+                # NOW it's safe to remove from failed_ports - all nodes see the rejoined node
                 if failover_state is not None:
                     with failover_state['lock']:
                         if port in failover_state['failed_ports']:
                             failover_state['failed_ports'].remove(port)
-                            logging.info("<FAILOVER> Removed port %d from failed_ports (node reconnected)", port)
+                            logging.info("<FAILOVER> Removed port %d from failed_ports (topology converged)", port)
                         # Mark new master as connected
                         failover_state['new_master_connected'] = True
                         logging.info("<FAILOVER> Set new_master_connected = True")
                 
-                # Give it some time to sync and verify it's now a replica
+                # Force client to refresh its topology to see the rejoined node
+                try:
+                    logging.info("<FAILOVER> Forcing client topology refresh...")
+                    
+                    # Log the raw CLUSTER NODES output to understand cluster state
+                    cluster_nodes_output = client.execute_command("CLUSTER", "NODES")
+                    cluster_nodes_str = cluster_nodes_output.decode() if isinstance(cluster_nodes_output, bytes) else str(cluster_nodes_output)
+                    logging.info("<FAILOVER> CLUSTER NODES output: %s", cluster_nodes_str)
+                    
+                except Exception as e:
+                    logging.warning("<FAILOVER> Error refreshing client topology: %s", e)
                 time.sleep(5)
                 
                 # Verify the node is now a replica
@@ -1666,6 +1775,7 @@ def periodic_failover(
     valkey_server_path: str,
     config_dir: str,
     stdout_dir: str,
+    modules: Dict[str, str],
     test_recovery: bool = True,
     password: str | None = None,
     failover_state: dict | None = None,
@@ -1694,6 +1804,7 @@ def periodic_failover(
         valkey_server_path=valkey_server_path,
         config_dir=config_dir,
         stdout_dir=stdout_dir,
+        modules=modules,
         test_recovery=test_recovery,
         password=password,
         failed_ports_tracker=thread.failed_ports,

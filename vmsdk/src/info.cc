@@ -404,7 +404,6 @@ absl::Status ListMetrics(ValkeyModuleCtx* ctx, bool show_app, bool show_dev,
       }
     }
   }
-
   if (names_only) {
     // Return as array: [name1, name2, name3, ...]
     ValkeyModule_ReplyWithArray(ctx, filtered_metrics.size());

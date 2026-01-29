@@ -103,7 +103,7 @@ def validate_fulltext_search(client: Valkey):
     for query in nomatch:
         result = client.execute_command(*query)
         assert len(result) == 1
-        assert result[0] == 0  # Number of documents found  
+        assert result[0] == 0  # Number of documents found
     # Perform a wild card prefix operation with multiple matches
     print(client.execute_command("FT._DEBUG textinfo products prefix ", "grea", "withkeys"))
     result = client.execute_command(*text_query_prefix_multimatch)
@@ -1952,3 +1952,4 @@ class TestFullTextCluster(ValkeySearchClusterTestCaseDebugMode):
                     f"Shard {i}: Both metrics must increment together by 1, got text={text_delta}, nonvector={nonvector_delta}"
                 shards_incremented += 1
         assert shards_incremented == 1, f"Expected exactly 1 shard to increment, got {shards_incremented}"
+        

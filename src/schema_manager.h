@@ -71,7 +71,6 @@ class SchemaManager {
   uint64_t GetNumberOfNumericAttributes() const;
   uint64_t GetNumberOfVectorAttributes() const;
   uint64_t GetAttributeCountByType(AttributeType type) const;
-
   uint64_t GetCorpusNumTextItems() const;
 
   uint64_t GetTotalIndexedDocuments() const;

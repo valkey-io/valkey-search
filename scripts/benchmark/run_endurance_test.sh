@@ -26,7 +26,8 @@ echo ""
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 RUN_RESULTS_DIR="/workspace/results/${SERVER_TYPE}/${TIMESTAMP}"
 TLS_DIR="/workspace/tls"
-mkdir -p "${RUN_RESULTS_DIR}" "${TLS_DIR}"
+mkdir -p "${RUN_RESULTS_DIR}"
+# TLS_DIR is pre-created and mounted by the workflow
 
 # ============================================================================
 # FUNCTION: Generate TLS Certificates
@@ -289,8 +290,10 @@ cleanup() {
     pkill -f "$(basename "${SERVER_BIN}")" 2>/dev/null || true
   fi
   
-  # Remove TLS materials
-  rm -rf "${TLS_DIR}" 2>/dev/null || true
+  # Clean up TLS files (but not the mounted directory itself)
+  if [[ "${ENABLE_TLS}" == "true" && -d "${TLS_DIR}" ]]; then
+    rm -f "${TLS_DIR}"/*.pem "${TLS_DIR}"/*.csr "${TLS_DIR}"/*.srl 2>/dev/null || true
+  fi
   
   echo "Cleanup completed"
 }

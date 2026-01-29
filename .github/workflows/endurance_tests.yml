@@ -112,7 +112,9 @@ jobs:
     - name: Create Results Directory
       run: |
         mkdir -p endurance-results
+        mkdir -p tls
         chmod 777 endurance-results
+        chmod 777 tls
 
     - name: Run Endurance Tests
       id: test-run
@@ -121,6 +123,7 @@ jobs:
       run: |
         docker run --privileged --rm \
           --mount type=bind,source="$(pwd)/endurance-results",target=/workspace/results \
+          --mount type=bind,source="$(pwd)/tls",target=/workspace/tls \
           -v "$(pwd):/workspace" \
           -e SERVER_TYPE="${{ inputs.server_type || 'valkey' }}" \
           -e BRANCH_VERSION="${{ inputs.branch_version || 'unstable' }}" \

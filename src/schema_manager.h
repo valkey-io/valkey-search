@@ -64,7 +64,16 @@ class SchemaManager {
   // generation.
   uint64_t GetNumberOfIndexSchemas() const;
   uint64_t GetNumberOfAttributes() const;
+  uint64_t GetNumberOfTextAttributes() const;
+  uint64_t GetNumberOfTagAttributes() const;
+  uint64_t GetNumberOfNumericAttributes() const;
+  uint64_t GetNumberOfVectorAttributes() const;
+
+  uint64_t GetCorpusNumTextItems() const;
+
   uint64_t GetTotalIndexedDocuments() const;
+  uint64_t GetTotalTextMemoryUsage() const;
+
   bool IsIndexingInProgress() const;
   IndexSchema::Stats::ResultCnt<uint64_t> AccumulateIndexSchemaResults(
       absl::AnyInvocable<const IndexSchema::Stats::ResultCnt<

@@ -38,13 +38,7 @@ class ObjName;
 
 constexpr absl::string_view kSchemaManagerMetadataTypeName{"vs_index_schema"};
 // Enum for attribute metrics
-enum class AttributeType {
-  ALL,
-  TEXT,
-  TAG,
-  NUMERIC,
-  VECTOR
-};
+enum class AttributeType { ALL, TEXT, TAG, NUMERIC, VECTOR };
 
 class SchemaManager {
  public:

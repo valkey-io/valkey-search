@@ -39,6 +39,7 @@
 #include "src/valkey_search.h"
 #include "src/valkey_search_options.h"
 #include "third_party/hnswlib/hnswlib.h"
+#include "vmsdk/src/info.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -47,8 +48,7 @@
 #include "vmsdk/src/time_sliced_mrmw_mutex.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
-#include "vmsdk/src/info.h"
-// Query operation counters 
+// Query operation counters
 DEV_INTEGER_COUNTER(query_stats, query_text_term_count);
 DEV_INTEGER_COUNTER(query_stats, query_text_prefix_count);
 DEV_INTEGER_COUNTER(query_stats, query_text_suffix_count);
@@ -529,7 +529,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
 
 // Increment query operation metrics based on query operations flags.
 // Doesn't count fanned out requests
-void IncrementQueryOperationMetrics(QueryOperations query_operations, 
+void IncrementQueryOperationMetrics(QueryOperations query_operations,
                                     SearchMode search_mode) {
   if (search_mode != SearchMode::kLocal) {
     return;
@@ -577,7 +577,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearch(
   auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
   vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
   ++Metrics::GetStats().time_slice_queries;
-  IncrementQueryOperationMetrics(parameters.filter_parse_results.query_operations, search_mode);
+  IncrementQueryOperationMetrics(
+      parameters.filter_parse_results.query_operations, search_mode);
   // Handle non vector queries first where attribute_alias is empty.
   if (parameters.IsNonVectorQuery()) {
     if (search_mode == SearchMode::kLocal) {

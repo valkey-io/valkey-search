@@ -11,6 +11,7 @@
 #include "absl/status/status.h"
 #include "absl/strings/ascii.h"
 #include "libstemmer.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/memory_allocation.h"
 
 namespace valkey_search::indexes::text {
@@ -96,9 +97,18 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
     size_t text_field_number, bool stem, bool suffix) {
   NestedMemoryScope scope{metadata_.text_index_memory_pool_};
 
-  // Track which fields have stemming enabled
+  // Track which fields have stemming enabled and their min stem size
   if (stem) {
     stemming_enabled_fields_ |= (1ULL << text_field_number);
+    if (per_field_min_stem_sizes_.size() <= text_field_number) {
+      per_field_min_stem_sizes_.resize(text_field_number + 1);
+    }
+    uint32_t size = static_cast<uint32_t>(min_stem_size);
+    per_field_min_stem_sizes_[text_field_number] = size;
+    if (stemming_enabled_fields_ == (1ULL << text_field_number) ||
+        size < min_stem_size_) {
+      min_stem_size_ = size;
+    }
   }
 
   // Get or create stem mappings for this key if stemming is enabled
@@ -216,7 +226,7 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
     for (const auto &[stemmed, originals] : stem_mappings) {
       stem_tree_.MutateTarget(stemmed, [&](StemParents existing) {
         if (!existing) {
-          existing = absl::flat_hash_set<std::string>();
+          existing = InvasivePtr<absl::flat_hash_set<std::string>>::Make();
         }
         existing->insert(originals.begin(), originals.end());
         return existing;
@@ -264,18 +274,19 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
     }
 
     // If the postings are now empty, remove from stem tree if it was a parent
-    if (!new_target) {
-      // Check if this word has a stem mapping
-      std::string stemmed =
-          lexer_.StemWord(std::string(word), true, 4, lexer_.GetStemmer());
+    if (!new_target && stemming_enabled_fields_) {
+      // Check if this word has a stem mapping using cached minimum
+      std::string stemmed = lexer_.StemWord(
+          std::string(word), true, min_stem_size_, lexer_.GetStemmer());
       if (stemmed != word) {
         // This word was a stem parent, remove it from stem tree
         std::lock_guard<std::mutex> stem_guard(stem_tree_mutex_);
         stem_tree_.MutateTarget(stemmed, [&](StemParents existing) {
-          if (existing && !existing->empty()) {
+          if (existing) {
+            CHECK(!existing->empty()) << "Stem tree entry should not be empty";
             existing->erase(std::string(word));
             if (existing->empty()) {
-              return StemParents{};  // Return nullopt to remove from tree
+              existing.Clear();  // Clear to remove from tree
             }
           }
           return existing;
@@ -322,33 +333,51 @@ uint64_t TextIndexSchema::GetTotalTextIndexMemoryUsage() const {
 }
 
 std::string TextIndexSchema::GetAllStemVariants(
-    const std::string &search_term, std::vector<std::string> &words_to_search) {
-  // Stem the search term
-  std::string stemmed =
-      lexer_.StemWord(search_term, true, 4, lexer_.GetStemmer());
+    absl::string_view search_term,
+    std::vector<absl::string_view> &words_to_search, uint32_t min_stem_size,
+    uint64_t stem_enabled_mask, bool lock_needed) {
+  // Stem the search term with the provided min_stem_size
+  std::string stemmed = lexer_.StemWord(std::string(search_term), true,
+                                        min_stem_size, lexer_.GetStemmer());
 
-  // If stemmed form is different, add it to search list
-  if (stemmed != search_term) {
-    words_to_search.push_back(stemmed);
-  }
-
-  // Look up parent words in stem tree
-  // Lock to prevent concurrent updates during read
-  std::lock_guard<std::mutex> stem_guard(stem_tree_mutex_);
-  auto stem_iter = stem_tree_.GetWordIterator(stemmed);
-  while (!stem_iter.Done()) {
-    if (stem_iter.GetWord() == stemmed) {
-      const auto &parents_opt = stem_iter.GetTarget();
-      if (parents_opt.has_value()) {
-        const auto &parents = parents_opt.value();
-        words_to_search.insert(words_to_search.end(), parents.begin(),
-                               parents.end());
-      }
-      break;
+  // Only look up parent words in stem tree if stemming is enabled for at least
+  // one field
+  if (stem_enabled_mask) {
+    // Conditionally acquire lock - use unique_lock with defer_lock for
+    // conditional locking
+    std::unique_lock<std::mutex> stem_guard(stem_tree_mutex_, std::defer_lock);
+    if (lock_needed) {
+      stem_guard.lock();
     }
-    stem_iter.Next();
+
+    auto stem_iter = stem_tree_.GetWordIterator(stemmed);
+    // GetWordIterator positions at the first word with this prefix, check if
+    // exact match
+    if (!stem_iter.Done() && stem_iter.GetWord() == stemmed) {
+      const auto &parents_ptr = stem_iter.GetTarget();
+      if (parents_ptr) {
+        const auto &parents = *parents_ptr;
+        uint32_t max_expansions = options::GetMaxStemExpansions().GetValue();
+        uint32_t count = 0;
+        for (const auto &parent : parents) {
+          if (++count > max_expansions) break;  // Limit parent words added
+          words_to_search.push_back(parent);    // Views to tree-owned strings
+        }
+      }
+    }
   }
-  return stemmed;
+
+  return stemmed;  // Caller owns this and will add view to words_to_search
+}
+
+uint64_t TextIndexSchema::GetStemVariantFieldMask(size_t word_length) const {
+  uint64_t field_mask = 0;
+  for (size_t i = 0; i < per_field_min_stem_sizes_.size(); ++i) {
+    if (word_length >= per_field_min_stem_sizes_[i]) {
+      field_mask |= (1ULL << i);
+    }
+  }
+  return field_mask & stemming_enabled_fields_;
 }
 
 }  // namespace valkey_search::indexes::text

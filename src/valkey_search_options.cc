@@ -326,6 +326,19 @@ static auto max_term_expansions =
                           kMaximumMaxTermExpansions)  // max limit (100k)
         .Build();
 
+/// Register the "--max-stem-expansions" flag. Controls the maximum number of
+/// stem parent words to expand in term search
+constexpr absl::string_view kMaxStemExpansionsConfig{"max-stem-expansions"};
+constexpr uint32_t kDefaultMaxStemExpansions{10};  // Default 10 parents
+constexpr uint32_t kMinimumMaxStemExpansions{5};   // At least 5 parent
+constexpr uint32_t kMaximumMaxStemExpansions{50};  // Max 50 parents
+static auto max_stem_expansions =
+    config::NumberBuilder(kMaxStemExpansionsConfig,   // name
+                          kDefaultMaxStemExpansions,  // default limit (10)
+                          kMinimumMaxStemExpansions,  // min limit (5)
+                          kMaximumMaxStemExpansions)  // max limit (50)
+        .Build();
+
 /// Register the "search-result-buffer-multiplier" flag
 constexpr absl::string_view kSearchResultBufferMultiplierConfig{
     "search-result-buffer-multiplier"};
@@ -467,6 +480,10 @@ vmsdk::config::Boolean& GetEnableProximityPrefilterEval() {
 
 vmsdk::config::Number& GetMaxTermExpansions() {
   return dynamic_cast<vmsdk::config::Number&>(*max_term_expansions);
+}
+
+vmsdk::config::Number& GetMaxStemExpansions() {
+  return dynamic_cast<vmsdk::config::Number&>(*max_stem_expansions);
 }
 
 const vmsdk::config::Boolean& GetDrainMutationQueueOnSave() {

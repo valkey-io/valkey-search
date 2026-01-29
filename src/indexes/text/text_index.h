@@ -15,6 +15,7 @@
 #include <mutex>
 #include <optional>
 
+#include "absl/container/btree_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/container/node_hash_map.h"
 #include "absl/functional/function_ref.h"
@@ -35,8 +36,7 @@ using TokenPositions =
 
 // Stem tree target: maps stem root to set of parent words that stem to it
 // Example: "happi" → {"happy", "happiness", "happily"}
-// Using optional so RadixTree can check emptiness via boolean conversion
-using StemParents = std::optional<absl::flat_hash_set<std::string>>;
+using StemParents = InvasivePtr<absl::flat_hash_set<std::string>>;
 
 class TextIndexSchema;
 
@@ -105,12 +105,24 @@ class TextIndexSchema {
   const RadixTree<StemParents> &GetStemTree() const { return stem_tree_; }
 
   // Get all stem variants for a search term (including parent words from stem
-  // tree)
-  std::string GetAllStemVariants(const std::string &search_term,
-                                 std::vector<std::string> &words_to_search);
+  // tree). Returns stemmed word (caller owns it). Adds parent word views to
+  // words_to_search. Limits parent words to max_expansions config. Only
+  // performs stem tree lookup if stem_enabled_mask is non-zero and lock_needed
+  // is true.
+  std::string GetAllStemVariants(
+      absl::string_view search_term,
+      std::vector<absl::string_view> &words_to_search, uint32_t min_stem_size,
+      uint64_t stem_enabled_mask, bool lock_needed);
 
-  // Get the mask of fields that have stemming enabled
-  uint64_t GetStemmingFieldMask() const { return stemming_enabled_fields_; }
+  // Get the mask of fields that have stemming enabled for a given stem variant
+  // length. Only fields where word_length >= min_stem_size are included.
+  uint64_t GetStemVariantFieldMask(size_t word_length) const;
+
+  // Get the bitmask of fields with stemming enabled
+  uint64_t GetStemmingEnabledFields() const { return stemming_enabled_fields_; }
+
+  // Get the minimum stem size across all fields
+  uint32_t GetMinStemSize() const { return min_stem_size_; }
 
   // Enable suffix trie.
   void EnableSuffix() {
@@ -185,6 +197,10 @@ class TextIndexSchema {
 
   // Tracks which field numbers have stemming enabled (bit mask)
   uint64_t stemming_enabled_fields_ = 0;
+  // Min stem size for each field (indexed by field number)
+  std::vector<uint32_t> per_field_min_stem_sizes_;
+  // Cached minimum stem size across all stemming-enabled fields
+  uint32_t min_stem_size_;
 
  public:
   // FT.INFO memory stats for text index

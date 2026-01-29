@@ -97,6 +97,7 @@ on:
     branches:
       - main
       - unstable
+      - enduranceGitHubRun  # Temporary: for testing before merge
     paths:
       - '.github/workflows/endurance_tests.yml'
       - 'scripts/benchmark/**'

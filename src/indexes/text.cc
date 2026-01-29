@@ -155,7 +155,29 @@ std::unique_ptr<indexes::EntriesFetcherBase> BuildExactPhraseFetcher(
   }
   auto proximity_iter = std::make_unique<indexes::text::ProximityIterator>(
       std::move(iters), composed_predicate->GetSlop(),
-      composed_predicate->GetInorder(), field_mask);
+      composed_predicate->GetInorder(), field_mask, nullptr, false);
+  return std::make_unique<ProximityFetcher>(std::move(proximity_iter),
+                                            min_size);
+}
+
+std::unique_ptr<indexes::EntriesFetcherBase> BuildComposedAndFetcher(
+    const ComposedPredicate* composed_predicate) {
+  absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
+                      indexes::text::kProximityTermsInlineCapacity>
+      iters;
+  size_t min_size = SIZE_MAX;
+  for (const auto& child : composed_predicate->GetChildren()) {
+    CHECK(child->GetType() == PredicateType::kText);
+    auto text_pred = dynamic_cast<const TextPredicate*>(child.get());
+    auto fetcher = std::make_unique<indexes::Text::EntriesFetcher>(
+        0, text_pred->GetTextIndexSchema()->GetTextIndex(), nullptr,
+        text_pred->GetFieldMask(), false);
+    fetcher->predicate_ = text_pred;
+    min_size = std::min(min_size, fetcher->Size());
+    iters.push_back(text_pred->BuildTextIterator(fetcher.get()));
+  }
+  auto proximity_iter = std::make_unique<indexes::text::ProximityIterator>(
+      std::move(iters), std::nullopt, false, ~0ULL, nullptr, true);
   return std::make_unique<ProximityFetcher>(std::move(proximity_iter),
                                             min_size);
 }
@@ -184,11 +206,8 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
-  while (!word_iter.Done()) {
-    if (word_iter.GetWord() == GetTextString()) {
-      key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
-    }
-    word_iter.Next();
+  if (!word_iter.Done() && word_iter.GetWord() == GetTextString()) {
+    key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
   }
   return std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), fetcher->field_mask_, fetcher->untracked_keys_,

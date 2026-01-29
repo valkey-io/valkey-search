@@ -127,6 +127,7 @@ def validate_fulltext_search(client: Valkey):
     result2 = client.execute_command("FT.SEARCH", "products", '@desc:"great oak from littl grey acorn grow"')
     assert result1[0] == 1 and result2[0] == 1
     assert result1[1] == b"product:1" and result2[1] == b"product:1"
+    # A Composed AND search with multiple prefix terms - non proximity.
     result3 = client.execute_command("FT.SEARCH", "products", 'great oa* from lit* gr* acorn gr*')
     assert result3[0] == 1
     assert result3[1] == b"product:1"
@@ -186,8 +187,12 @@ def validate_fulltext_search(client: Valkey):
     assert result1[0] == 0 and result2[0] == 0 and result3[0] == 0
     assert result4[0] == 1
     assert result4[1] == b"product:2"
+    # A Composed AND search with multiple terms - non proximity.
     # Validate that we can handle inorder = false by looking across documents with these terms below in any order.
     result = client.execute_command("FT.SEARCH", "products", 'artificial intelligence research')
+    assert result[0] == 1
+    assert result[1] == b"product:6"
+    result = client.execute_command("FT.SEARCH", "products", '@desc:artificial @desc:intelligence @desc:research')
     assert result[0] == 1
     assert result[1] == b"product:6"
     # Test fuzzy search
@@ -443,6 +448,10 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert result[0] == 0
         result = client.execute_command("FT.SEARCH", "products2", '@desc2:"1 2 3 4 5 6 7 8 9 10"')
         assert result[0] == 0
+        # Composed AND search (non proximity) across both fields should return results.
+        result = client.execute_command("FT.SEARCH", "products2", '@desc:great @desc2:wonder')
+        assert result[0] == 1
+        assert result[1] == b"product:1"
 
     def test_default_tokenization(self):
         """

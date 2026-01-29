@@ -50,6 +50,7 @@ struct Neighbor {
   float distance;
   uint64_t sequence_number;
   std::optional<RecordsMap> attribute_contents;
+  Neighbor() : distance(0.0f), sequence_number(0) {}
   Neighbor(const InternedStringPtr& external_id, float distance)
       : external_id(external_id), distance(distance), sequence_number(0) {}
   Neighbor(const InternedStringPtr& external_id, float distance,

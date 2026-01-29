@@ -128,7 +128,7 @@ class ClusterMap {
   std::chrono::steady_clock::time_point expiration_tp_;
 
   // a map used for check duplicate socket addresses, SocketAddress -> node_id
-  absl::flat_hash_map<SocketAddress, std::string> socket_addr_to_node_map;
+  absl::flat_hash_map<SocketAddress, std::string> socket_addr_to_node_map_;
 
   // 1: slot is owned by this cluster, 0: slot is not owned by this cluster
   std::bitset<kNumSlots> owned_slots_;

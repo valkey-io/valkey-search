@@ -1854,16 +1854,9 @@ class TestFullTextCluster(ValkeySearchClusterTestCaseDebugMode):
         # Validate attribute count metrics on ALL shards (schema should be replicated)
         for i, c in enumerate(all_clients):
             info = c.info("search")
-            assert int(info.get("search_number_of_attributes", 0)) == 8, \
-                f"Shard {i}: Expected 8 attributes, got {info.get('search_number_of_attributes', 0)}"
-            assert int(info.get("search_number_of_text_attributes", 0)) == 2, \
-                f"Shard {i}: Expected 2 text attributes, got {info.get('search_number_of_text_attributes', 0)}"
-            assert int(info.get("search_number_of_tag_attributes", 0)) == 2, \
-                f"Shard {i}: Expected 2 tag attributes, got {info.get('search_number_of_tag_attributes', 0)}"
-            assert int(info.get("search_number_of_numeric_attributes", 0)) == 2, \
-                f"Shard {i}: Expected 2 numeric attributes, got {info.get('search_number_of_numeric_attributes', 0)}"
-            assert int(info.get("search_number_of_vector_attributes", 0)) == 2, \
-                f"Shard {i}: Expected 2 vector attributes, got {info.get('search_number_of_vector_attributes', 0)}"
+            total, text, tag, numeric, vector = [int(info.get(f"search_number_of_{t}attributes", 0)) for t in ["", "text_", "tag_", "numeric_", "vector_"]]
+            assert total == text + tag + numeric + vector == 8 and text == tag == numeric == vector == 2, \
+                f"Shard {i}: Attribute counts mismatch"
 
         # Validate metrics after deletion of a record
         client.execute_command("DEL", "doc:8")

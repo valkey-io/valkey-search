@@ -396,58 +396,50 @@ uint64_t SchemaManager::GetNumberOfIndexSchemas() const {
 }
 
 uint64_t SchemaManager::GetNumberOfAttributes() const {
+  return GetAttributeCountByType(AttributeType::ALL);
+}
+
+uint64_t SchemaManager::GetAttributeCountByType(AttributeType type) const {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  auto num_attributes = 0;
+  uint64_t count = 0;
   for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
     for (const auto &[name, schema] : schema_map) {
-      num_attributes += schema->GetAttributeCount();
+      switch (type) {
+        case AttributeType::ALL:
+          count += schema->GetAttributeCount();
+          break;
+        case AttributeType::TEXT:
+          count += schema->GetTextAttributeCount();
+          break;
+        case AttributeType::TAG:
+          count += schema->GetTagAttributeCount();
+          break;
+        case AttributeType::NUMERIC:
+          count += schema->GetNumericAttributeCount();
+          break;
+        case AttributeType::VECTOR:
+          count += schema->GetVectorAttributeCount();
+          break;
+      }
     }
   }
-  return num_attributes;
+  return count;
 }
 
 uint64_t SchemaManager::GetNumberOfTextAttributes() const {
-  absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  uint64_t count = 0;
-  for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
-    for (const auto &[name, schema] : schema_map) {
-      count += schema->GetTextAttributeCount();
-    }
-  }
-  return count;
+  return GetAttributeCountByType(AttributeType::TEXT);
 }
 
 uint64_t SchemaManager::GetNumberOfTagAttributes() const {
-  absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  uint64_t count = 0;
-  for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
-    for (const auto &[name, schema] : schema_map) {
-      count += schema->GetTagAttributeCount();
-    }
-  }
-  return count;
+  return GetAttributeCountByType(AttributeType::TAG);
 }
 
 uint64_t SchemaManager::GetNumberOfNumericAttributes() const {
-  absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  uint64_t count = 0;
-  for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
-    for (const auto &[name, schema] : schema_map) {
-      count += schema->GetNumericAttributeCount();
-    }
-  }
-  return count;
+  return GetAttributeCountByType(AttributeType::NUMERIC);
 }
 
 uint64_t SchemaManager::GetNumberOfVectorAttributes() const {
-  absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  uint64_t count = 0;
-  for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
-    for (const auto &[name, schema] : schema_map) {
-      count += schema->GetVectorAttributeCount();
-    }
-  }
-  return count;
+  return GetAttributeCountByType(AttributeType::VECTOR);
 }
 
 uint64_t SchemaManager::GetCorpusNumTextItems() const {

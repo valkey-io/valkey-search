@@ -171,11 +171,15 @@ struct SearchPartitionResultsTracker {
       result = absl::ResourceExhaustedError(kOOMMsg);
     } else {
       std::vector<indexes::Neighbor> neighbors;
+      neighbors.resize(results.size());
+      size_t i = neighbors.size();
       while (!results.empty()) {
-        neighbors.push_back(
-            std::move(const_cast<indexes::Neighbor &>(results.top())));
+        CHECK(i != 0);
+        neighbors[--i] =
+            std::move(const_cast<indexes::Neighbor &>(results.top()));
         results.pop();
       }
+      CHECK(i == 0);
       // SearchResult construction automatically applies trimming based on LIMIT
       // offset count IF the command allows it (ie - it does not require
       // complete results).

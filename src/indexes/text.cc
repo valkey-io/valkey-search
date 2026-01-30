@@ -68,17 +68,9 @@ int Text::RespondWithInfo(ValkeyModuleCtx* ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "TEXT");
   ValkeyModule_ReplyWithSimpleString(ctx, "WITH_SUFFIX_TRIE");
   ValkeyModule_ReplyWithSimpleString(ctx, with_suffix_trie_ ? "1" : "0");
-
-  // Show NO_STEM if specified
-  if (no_stem_) {
-    ValkeyModule_ReplyWithSimpleString(ctx, "NO_STEM");
-    ValkeyModule_ReplyWithSimpleString(ctx, "1");
-    return 6;
-  }
-
-  // Text fields do not include a size field right now (unlike
-  // numeric/tag/vector fields)
-  return 4;
+  ValkeyModule_ReplyWithSimpleString(ctx, "NO_STEM");
+  ValkeyModule_ReplyWithSimpleString(ctx, no_stem_ ? "1" : "0");
+  return 6;
 }
 
 bool Text::IsTracked(const InternedStringPtr& key) const {

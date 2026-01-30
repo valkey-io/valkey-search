@@ -98,10 +98,8 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
 
   index_schema->CreateTextIndexSchema();
   auto text_index_schema = index_schema->GetTextIndexSchema();
-  data_model::TextIndex text_index_proto1 =
-      CreateTextIndexProto(true, false, 4);
-  data_model::TextIndex text_index_proto2 =
-      CreateTextIndexProto(false, true, 0);
+  data_model::TextIndex text_index_proto1 = CreateTextIndexProto(true, false);
+  data_model::TextIndex text_index_proto2 = CreateTextIndexProto(false, true);
   auto text_index_1 =
       std::make_shared<indexes::Text>(text_index_proto1, text_index_schema);
   auto text_index_2 =

@@ -413,11 +413,11 @@ INSTANTIATE_TEST_SUITE_P(
                          "*44\r\n+index_name\r\n+test_name\r\n+index_"
                          "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
                          "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
-                         "1\r\n1\r\n+attributes\r\n*1\r\n*10\r\n+"
+                         "1\r\n1\r\n+attributes\r\n*1\r\n*8\r\n+"
                          "identifier\r\n+"
                          "test_identifier_1\r\n+attribute\r\n+test_attribute_"
                          "1\r\n+type\r\n+TEXT\r\n+WITH_SUFFIX_TRIE\r\n+0\r\n+"
-                         "MIN_STEM_SIZE\r\n:0\r\n+num_docs\r\n:0\r\n+num_"
+                         "num_docs\r\n:0\r\n+num_"
                          "records\r\n:0\r\n+num_"
                          "total_terms\r\n:0\r\n+num_"
                          "unique_terms\r\n:0\r\n+"
@@ -451,6 +451,7 @@ INSTANTIATE_TEST_SUITE_P(
                           stop_words: "the"
                           stop_words: "and"
                           stop_words: "or"
+                          min_stem_size: 3
                           attributes: {
                             alias: "test_attribute_1"
                             identifier: "test_identifier_1"
@@ -458,7 +459,6 @@ INSTANTIATE_TEST_SUITE_P(
                               text_index: {
                                 with_suffix_trie: true
                                 no_stem: true
-                                min_stem_size: 3
                               }
                             }
                           }

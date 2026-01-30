@@ -89,6 +89,15 @@ vmsdk::module::Options options = {
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTDebugCmd>,
             },
             {
+                .cmd_name = valkey_search::kInternalUpdateCommand,
+                .permissions = ACLPermissionFormatter(
+                    valkey_search::kInternalUpdateCmdPermissions),
+                .flags = {vmsdk::module::kWriteFlag, vmsdk::module::kAdminFlag,
+                          vmsdk::module::kFastFlag},
+                .cmd_func =
+                    &vmsdk::CreateCommand<valkey_search::FTInternalUpdateCmd>,
+            },
+            {
                 .cmd_name = valkey_search::kAggregateCommand,
                 .permissions = ACLPermissionFormatter(
                     valkey_search::kSearchCmdPermissions),

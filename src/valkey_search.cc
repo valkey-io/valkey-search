@@ -319,6 +319,36 @@ static vmsdk::info_field::Integer rdb_save_failure_cnt(
       return Metrics::GetStats().rdb_save_failure_cnt;
     }));
 
+static vmsdk::info_field::Integer ft_internal_update_parse_failures_cnt(
+    "coordinator", "ft_internal_update_parse_failures_cnt",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().ft_internal_update_parse_failures_cnt;
+    }));
+
+static vmsdk::info_field::Integer ft_internal_update_call_failures_cnt(
+    "coordinator", "ft_internal_update_call_failures_cnt",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().ft_internal_update_call_failures_cnt;
+    }));
+
+static vmsdk::info_field::Integer ft_internal_update_process_failures_cnt(
+    "coordinator", "ft_internal_update_process_failures_cnt",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().ft_internal_update_process_failures_cnt;
+    }));
+
+static vmsdk::info_field::Integer process_internal_update_callback_failures_cnt(
+    "coordinator", "process_internal_update_callback_failures_cnt",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().process_internal_update_callback_failures_cnt;
+    }));
+
+static vmsdk::info_field::Integer ft_internal_update_skipped_entries_cnt(
+    "coordinator", "ft_internal_update_skipped_entries_cnt",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().ft_internal_update_skipped_entries_cnt;
+    }));
+
 static vmsdk::info_field::Integer successful_requests_count(
     "query", "successful_requests_count",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {

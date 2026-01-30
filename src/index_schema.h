@@ -27,7 +27,6 @@
 #include "gtest/gtest_prod.h"
 #include "src/attribute.h"
 #include "src/attribute_data_type.h"
-#include "src/commands/ft_create_parser.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/text/text_index.h"
@@ -336,7 +335,7 @@ class IndexSchema : public KeyspaceEventSubscription,
                        MutatedAttributes &mutated_attributes,
                        const Key &interned_key, bool from_backfill,
                        bool is_delete);
-  void ScheduleMutation(bool from_backfill, const Key &key,
+  bool ScheduleMutation(bool from_backfill, const Key &key,
                         vmsdk::ThreadPool::Priority priority,
                         absl::BlockingCounter *blocking_counter);
   void EnqueueMultiMutation(const Key &key);
@@ -372,11 +371,7 @@ class IndexSchema : public KeyspaceEventSubscription,
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
 
   mutable vmsdk::TimeSlicedMRMWMutex time_sliced_mutex_;
-  struct MultiMutations {
-    std::unique_ptr<absl::BlockingCounter> blocking_counter;
-    std::deque<Key> keys;
-  };
-  vmsdk::MainThreadAccessGuard<MultiMutations> multi_mutations_;
+  vmsdk::MainThreadAccessGuard<std::deque<Key>> multi_mutations_keys_;
   vmsdk::MainThreadAccessGuard<bool> schedule_multi_exec_processing_{false};
 
   FRIEND_TEST(IndexSchemaRDBTest, SaveAndLoad);

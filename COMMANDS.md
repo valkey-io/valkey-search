@@ -131,8 +131,8 @@ CLUSTER: An array of key value pairs
 - **mode**	(string) The FT.INFO mode, should be CLUSTER
 - **index\_name**	(string) The index name
 - **backfill\_in\_progress**	(string) 0 or 1. Is backfill in progress
-- **backfill\_complete\_percent\_max**	(string) FLOAT32. Maximum backfill complete precent in all nodes
-- **backfill\_complete\_percent\_min**	(string) FLOAT32. Minimum backfill complete precent in all nodes  
+- **backfill\_complete\_percent\_max**	(string) FLOAT32. Maximum backfill complete percent in all nodes
+- **backfill\_complete\_percent\_min**	(string) FLOAT32. Minimum backfill complete percent in all nodes  
 - **state**	(string) The current state of the index. ready, backfill_in_progress or backfill_paused_by_oom 
 
 ## FT._LIST

@@ -924,7 +924,8 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   }
   // Text-attribute info fields
   if (text_index_schema_) {
-    arrSize += 8;  // punctuation, stop_words, with_offsets, min_stem_size (4 key-value pairs = 8 items)
+    arrSize += 8;  // punctuation, stop_words, with_offsets, min_stem_size (4
+                   // key-value pairs = 8 items)
   }
   ValkeyModule_ReplyWithArray(ctx, arrSize);
   ValkeyModule_ReplyWithSimpleString(ctx, "index_name");

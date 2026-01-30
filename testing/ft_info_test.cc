@@ -432,7 +432,8 @@ INSTANTIATE_TEST_SUITE_P(
                          "mutation_queue_size\r\n$1\r\n0\r\n+recent_"
                          "mutations_queue_delay\r\n$5\r\n0 sec\r\n+state\r\n+"
                          "ready\r\n+punctuation\r\n+\r\n+stop_words\r\n*0\r\n+"
-                         "with_offsets\r\n+0\r\n+min_stem_size\r\n:4\r\n+language\r\n+english\r\n"},
+                         "with_offsets\r\n+0\r\n+min_stem_size\r\n:4\r\n+"
+                         "language\r\n+english\r\n"},
                 },
         },
         {
@@ -488,7 +489,8 @@ INSTANTIATE_TEST_SUITE_P(
                          "mutations_queue_delay\r\n$5\r\n0 sec\r\n+state\r\n+"
                          "ready\r\n+punctuation\r\n+.,!?\r\n+stop_words\r\n*"
                          "3\r\n+the\r\n+and\r\n+or\r\n+with_offsets\r\n+"
-                         "1\r\n+min_stem_size\r\n:3\r\n+language\r\n+english\r\n"},
+                         "1\r\n+min_stem_size\r\n:3\r\n+language\r\n+"
+                         "english\r\n"},
                 },
         },
         {

@@ -756,7 +756,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
         SetupTextFieldConfiguration(field_mask, field_or_default, false));
     // Apply stemming if not exact match - use schema-level min_stem_size
     // directly
-    if (!exact && index_schema_.GetStemTextFieldMask() != 0) {
+    if (!exact && (index_schema_.GetStemTextFieldMask() & field_mask) != 0) {
       token = lexer.StemWord(token, true, index_schema_.GetMinStemSize(),
                              lexer.GetStemmer());
     }

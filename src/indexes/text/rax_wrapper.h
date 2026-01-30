@@ -55,16 +55,16 @@ class Rax {
 
   // Constructor with optional deletion callback for targets.
   // If provided, callback will be invoked for each target during destruction.
-  explicit Rax(void (*free_callback)(void*) = nullptr);
+  explicit Rax(void (*free_callback)(void *) = nullptr);
   ~Rax();
 
   // Move constructor and assignment
-  Rax(Rax&& other) noexcept;
-  Rax& operator=(Rax&& other) noexcept;
+  Rax(Rax &&other) noexcept;
+  Rax &operator=(Rax &&other) noexcept;
 
   // Delete copy constructor and assignment (Rax owns its internal state)
-  Rax(const Rax&) = delete;
-  Rax& operator=(const Rax&) = delete;
+  Rax(const Rax &) = delete;
+  Rax &operator=(const Rax &) = delete;
 
   //
   // Applies the mutation function to the current target of the word to generate
@@ -87,11 +87,11 @@ class Rax {
   // itself.
   //
   void MutateTarget(absl::string_view word,
-                    absl::FunctionRef<void*(void*)> mutate);
+                    absl::FunctionRef<void *(void *)> mutate);
 
-  // TODO: Replace with GetWordCount("") once it's implemented
-  // Get the total number of words in the RadixTree.
-  size_t GetTotalWordCount() const;
+  // Get the total number of unique words in the RadixTree (i.e. total number of
+  // entries).
+  size_t GetTotalUniqueWordCount() const;
 
   // Get the number of words that have the specified prefix in O(len(prefix))
   // time.
@@ -100,6 +100,9 @@ class Rax {
   // Get the length of the longest word in the RadixTree, this can be used to
   // pre-size arrays and strings that are used when iterating on this RadixTree.
   size_t GetLongestWord() const;
+
+  // Get the allocation size tracked by rax internally.
+  size_t GetAllocSize() const;
 
   // Check if the Rax tree is valid (not moved-from or null)
   bool IsValid() const;
@@ -116,57 +119,12 @@ class Rax {
   std::vector<std::string> DebugGetTreeStrings() const;
 
   // Prints tree structure
-  void DebugPrintTree(const std::string& label = "") const;
+  void DebugPrintTree(const std::string &label = "") const;
 
  private:
-  /*
-   * This is the first iteration of a RadixTree. It will be optimized in the
-   * future, likely with multiple different representations.
-   *
-   * Right now there are three types of nodes:
-   *    1) Leaf node that has a target and no children.
-   *    2) Branching node that has between 2 and 256 children and may or may not
-   *       have a target.
-   *    3) Compressed node that has a single child of one or more bytes and may
-   *       or may not have a target.
-   *
-   * Differentiating nodes that have multiple children vs a single child takes
-   * inspiration from Rax in the Valkey core. An alternative would be to merge
-   * compressed and branching nodes into one:
-   *
-   * using NodeChildren = std::variant<
-   *     std::monostate,                            // Leaf node
-   *     std::map<BytePath, std::unique_ptr<Node>>  // Internal node
-   * >;
-   *
-   * For example,
-   *
-   *                  [compressed]
-   *                  "te" |
-   *                   [branching]
-   *                "s" /     \ "a"
-   *          [compressed]   [compressed]
-   *          "ting" /           \ "m"
-   *   Target <- [leaf]           [leaf] -> Target
-   *
-   *  would become...
-   *
-   *                     [node]
-   *                  "te" |
-   *                     [node]
-   *             "sting" /     \ "am"
-   *       Target <- [leaf]    [leaf] -> Target
-   *
-   * There is one less level to the graph, but the complexity at the internal
-   * nodes has increased and will be tricky to compress into a performant,
-   * compact format given the varying sized outgoing edges. We'll consider the
-   * implementations carefully when we return to optimize.
-   *
-   */
-
-  rax* rax_;  // Note: We can embed it directly to save the pointer memory if
+  rax *rax_;  // Note: We can embed it directly to save the pointer memory if
               // the per-key text index overhead is still an issue
-  void (*free_callback_)(void*);  // Optional callback for freeing targets
+  void (*free_callback_)(void *);  // Optional callback for freeing targets
 
  public:
   //
@@ -177,16 +135,16 @@ class Rax {
   class WordIterator {
    public:
     // Constructor - seeks to prefix
-    explicit WordIterator(rax* rax, absl::string_view prefix);
+    explicit WordIterator(rax *rax, absl::string_view prefix);
 
     // Destructor - cleans up iterator
     ~WordIterator();
 
     // Disabling copy and move semantics until we need them
-    WordIterator(const WordIterator&) = delete;
-    WordIterator& operator=(const WordIterator&) = delete;
-    WordIterator(WordIterator&& other) noexcept = delete;
-    WordIterator& operator=(WordIterator&& other) noexcept = delete;
+    WordIterator(const WordIterator &) = delete;
+    WordIterator &operator=(const WordIterator &) = delete;
+    WordIterator(WordIterator &&other) noexcept = delete;
+    WordIterator &operator=(WordIterator &&other) noexcept = delete;
 
     // Is iterator valid?
     bool Done() const;
@@ -203,7 +161,7 @@ class Rax {
 
     // Access the current location, asserts if !Done()
     absl::string_view GetWord() const;
-    void* GetTarget() const;
+    void *GetTarget() const;
 
     // Postings-specific accessor. Caller is responsible for tracking the type.
     InvasivePtr<Postings> GetPostingsTarget() const;
@@ -225,16 +183,16 @@ class Rax {
   class PathIterator {
    public:
     // Constructor - navigates to prefix
-    PathIterator(rax* rax, absl::string_view prefix);
+    PathIterator(rax *rax, absl::string_view prefix);
 
     // Destructor
     ~PathIterator();
 
     // Default copy and move semantics
-    PathIterator(const PathIterator&) = default;
-    PathIterator& operator=(const PathIterator&) = default;
-    PathIterator(PathIterator&& other) noexcept = default;
-    PathIterator& operator=(PathIterator&& other) noexcept = default;
+    PathIterator(const PathIterator &) = default;
+    PathIterator &operator=(const PathIterator &) = default;
+    PathIterator(PathIterator &&other) noexcept = default;
+    PathIterator &operator=(PathIterator &&other) noexcept = default;
 
     // Is the iterator itself pointing to a valid node?
     bool Done() const;
@@ -263,7 +221,7 @@ class Rax {
     absl::string_view GetChildEdge();
 
     // Get the target for this word, will assert if !IsWord()
-    void* GetTarget() const;
+    void *GetTarget() const;
 
     // Postings-specific accessor. Caller is responsible for tracking the type.
     InvasivePtr<Postings> GetPostingsTarget() const;
@@ -276,10 +234,10 @@ class Rax {
     friend class Rax;
 
     // Private constructor for DescendNew - directly positions at a node
-    PathIterator(rax* rax, raxNode* node, std::string path);
+    PathIterator(rax *rax, raxNode *node, std::string path);
 
-    rax* rax_;                // Reference to the rax tree
-    raxNode* node_;           // Current node we're at
+    rax *rax_;                // Reference to the rax tree
+    raxNode *node_;           // Current node we're at
     std::string path_;        // Path to current node
     size_t child_index_;      // Current child index (for branching nodes)
     bool exhausted_;          // True when all children visited

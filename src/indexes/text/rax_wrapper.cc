@@ -20,15 +20,15 @@ namespace {
 // C-compatible callback wrapper
 // We can't pass the mutation callback closure directly to C APIs, so we wrap it
 // in a C-style function and pass the closure as opaque caller context.
-extern "C" void* MutateCallbackWrapper(void* current, void* caller_context) {
-  auto* fn = static_cast<absl::FunctionRef<void*(void*)>*>(caller_context);
+extern "C" void *MutateCallbackWrapper(void *current, void *caller_context) {
+  auto *fn = static_cast<absl::FunctionRef<void *(void *)> *>(caller_context);
   return (*fn)(current);
 }
 
 }  // namespace
 
 // Constructor
-Rax::Rax(void (*free_callback)(void*))
+Rax::Rax(void (*free_callback)(void *))
     : rax_(raxNew()), free_callback_(free_callback) {
   CHECK(rax_ != nullptr) << "Failed to create rax tree";
 }
@@ -42,14 +42,14 @@ Rax::~Rax() {
 }
 
 // Move constructor
-Rax::Rax(Rax&& other) noexcept
+Rax::Rax(Rax &&other) noexcept
     : rax_(other.rax_), free_callback_(other.free_callback_) {
   other.rax_ = nullptr;
   other.free_callback_ = nullptr;
 }
 
 // Move assignment
-Rax& Rax::operator=(Rax&& other) noexcept {
+Rax &Rax::operator=(Rax &&other) noexcept {
   if (this != &other) {
     if (rax_) {
       raxFreeWithCallback(rax_, free_callback_);
@@ -63,22 +63,22 @@ Rax& Rax::operator=(Rax&& other) noexcept {
 }
 
 void Rax::MutateTarget(absl::string_view word,
-                       absl::FunctionRef<void*(void*)> mutate) {
+                       absl::FunctionRef<void *(void *)> mutate) {
   CHECK(!word.empty()) << "Can't mutate the target for an empty word";
 
-  unsigned char* c_word = const_cast<unsigned char*>(
-      reinterpret_cast<const unsigned char*>(word.data()));
-  void* opaque_callback = reinterpret_cast<void*>(&mutate);
+  unsigned char *c_word = const_cast<unsigned char *>(
+      reinterpret_cast<const unsigned char *>(word.data()));
+  void *opaque_callback = reinterpret_cast<void *>(&mutate);
   int res = raxMutate(rax_, c_word, word.size(), MutateCallbackWrapper,
                       opaque_callback);
   CHECK(res) << "Rax mutation failed for word: " << word << ", errno: " << errno
              << " (" << strerror(errno) << ")";
 }
 
-size_t Rax::GetTotalWordCount() const { return raxSize(rax_); }
+size_t Rax::GetTotalUniqueWordCount() const { return raxSize(rax_); }
 
 size_t Rax::GetWordCount(absl::string_view prefix) const {
-  // TODO: Implement word counting
+  // TODO: Implement size estimation(?)
   return 0;
 }
 
@@ -86,6 +86,8 @@ size_t Rax::GetLongestWord() const {
   // TODO: Implement longest word calculation
   return 0;
 }
+
+size_t Rax::GetAllocSize() const { return raxAllocSize(rax_); }
 
 bool Rax::IsValid() const { return rax_ != nullptr && raxSize(rax_) > 0; }
 
@@ -95,12 +97,12 @@ Rax::WordIterator Rax::GetWordIterator(absl::string_view prefix) const {
 
 /*** WordIterator ***/
 
-Rax::WordIterator::WordIterator(rax* rax, absl::string_view prefix)
+Rax::WordIterator::WordIterator(rax *rax, absl::string_view prefix)
     : prefix_(prefix) {
   raxStart(&iter_, rax);
 
-  auto raw_prefix = const_cast<unsigned char*>(
-      reinterpret_cast<const unsigned char*>(prefix.data()));
+  auto raw_prefix = const_cast<unsigned char *>(
+      reinterpret_cast<const unsigned char *>(prefix.data()));
 
   // Seek to first node matching the prefix
   CHECK(raxSeekSubTree(&iter_, raw_prefix, prefix.size()));
@@ -138,8 +140,8 @@ bool Rax::WordIterator::SeekForward(absl::string_view word) {
   // Seek to the word
   CHECK(
       !raxSeekSubTree(&iter_,
-                      const_cast<unsigned char*>(
-                          reinterpret_cast<const unsigned char*>(word.data())),
+                      const_cast<unsigned char *>(
+                          reinterpret_cast<const unsigned char *>(word.data())),
                       word.size()));
   raxNext(&iter_);
   if (raxEOF(&iter_)) {
@@ -153,11 +155,11 @@ bool Rax::WordIterator::SeekForward(absl::string_view word) {
 
 absl::string_view Rax::WordIterator::GetWord() const {
   CHECK(!Done()) << "Cannot get word from invalid iterator";
-  return absl::string_view(reinterpret_cast<const char*>(iter_.key),
+  return absl::string_view(reinterpret_cast<const char *>(iter_.key),
                            iter_.key_len);
 }
 
-void* Rax::WordIterator::GetTarget() const {
+void *Rax::WordIterator::GetTarget() const {
   CHECK(!Done()) << "Cannot get target from invalid iterator";
   return iter_.data;
 }
@@ -174,28 +176,28 @@ namespace {
 
 // Helper to compute padding for rax node
 inline size_t RaxPadding(size_t nodesize) {
-  return (sizeof(void*) - ((nodesize + 4) % sizeof(void*))) &
-         (sizeof(void*) - 1);
+  return (sizeof(void *) - ((nodesize + 4) % sizeof(void *))) &
+         (sizeof(void *) - 1);
 }
 
 // Helper to get pointer to first child in a rax node
-inline raxNode** RaxNodeFirstChildPtr(raxNode* n) {
-  return reinterpret_cast<raxNode**>(n->data + n->size + RaxPadding(n->size));
+inline raxNode **RaxNodeFirstChildPtr(raxNode *n) {
+  return reinterpret_cast<raxNode **>(n->data + n->size + RaxPadding(n->size));
 }
 
 // Helper to get data stored in a rax node
-inline void* RaxNodeGetData(raxNode* n) {
+inline void *RaxNodeGetData(raxNode *n) {
   if (!n->iskey || n->isnull) return nullptr;
   size_t node_len =
       sizeof(raxNode) + n->size + RaxPadding(n->size) +
-      (n->iscompr ? sizeof(raxNode*) : sizeof(raxNode*) * n->size) +
-      sizeof(void*);
-  return *reinterpret_cast<void**>(reinterpret_cast<char*>(n) + node_len -
-                                   sizeof(void*));
+      (n->iscompr ? sizeof(raxNode *) : sizeof(raxNode *) * n->size) +
+      sizeof(void *);
+  return *reinterpret_cast<void **>(reinterpret_cast<char *>(n) + node_len -
+                                    sizeof(void *));
 }
 
 // Helper to check if node is a leaf (no children)
-inline bool RaxNodeIsLeaf(raxNode* n) { return n->size == 0 && !n->iscompr; }
+inline bool RaxNodeIsLeaf(raxNode *n) { return n->size == 0 && !n->iscompr; }
 
 }  // namespace
 
@@ -203,7 +205,7 @@ Rax::PathIterator Rax::GetPathIterator(absl::string_view prefix) const {
   return PathIterator(rax_, prefix);
 }
 
-Rax::PathIterator::PathIterator(rax* rax, absl::string_view prefix)
+Rax::PathIterator::PathIterator(rax *rax, absl::string_view prefix)
     : rax_(rax), node_(nullptr), child_index_(0), exhausted_(false) {
   if (!rax_ || !rax_->head) {
     exhausted_ = true;
@@ -211,7 +213,7 @@ Rax::PathIterator::PathIterator(rax* rax, absl::string_view prefix)
   }
 
   // Navigate to the prefix, similar to raxLowWalk
-  raxNode* h = rax_->head;
+  raxNode *h = rax_->head;
   size_t i = 0;
 
   while (i < prefix.size()) {
@@ -237,7 +239,8 @@ Rax::PathIterator::PathIterator(rax* rax, absl::string_view prefix)
       }
       i += h->size;
       // Descend to child
-      h = *reinterpret_cast<raxNode**>(h->data + h->size + RaxPadding(h->size));
+      h = *reinterpret_cast<raxNode **>(h->data + h->size +
+                                        RaxPadding(h->size));
     } else {
       // Branching node: find child with matching byte
       unsigned char c = static_cast<unsigned char>(prefix[i]);
@@ -252,7 +255,7 @@ Rax::PathIterator::PathIterator(rax* rax, absl::string_view prefix)
       }
       i++;
       // Descend to child
-      raxNode** children = RaxNodeFirstChildPtr(h);
+      raxNode **children = RaxNodeFirstChildPtr(h);
       h = children[pos];
     }
   }
@@ -264,7 +267,7 @@ Rax::PathIterator::PathIterator(rax* rax, absl::string_view prefix)
 Rax::PathIterator::~PathIterator() = default;
 
 // Private constructor for DescendNew - directly positions at a node
-Rax::PathIterator::PathIterator(rax* rax, raxNode* node, std::string path)
+Rax::PathIterator::PathIterator(rax *rax, raxNode *node, std::string path)
     : rax_(rax),
       node_(node),
       path_(std::move(path)),
@@ -342,16 +345,16 @@ Rax::PathIterator Rax::PathIterator::DescendNew() const {
   if (node_->iscompr) {
     // Compressed: descend through the compressed path to child
     std::string new_path = path_;
-    new_path.append(reinterpret_cast<const char*>(node_->data), node_->size);
-    raxNode* child = *reinterpret_cast<raxNode**>(node_->data + node_->size +
-                                                  RaxPadding(node_->size));
+    new_path.append(reinterpret_cast<const char *>(node_->data), node_->size);
+    raxNode *child = *reinterpret_cast<raxNode **>(node_->data + node_->size +
+                                                   RaxPadding(node_->size));
     return PathIterator(rax_, child, std::move(new_path));
   }
 
   // Branching: descend through current child
   std::string new_path = path_;
   new_path += static_cast<char>(node_->data[child_index_]);
-  raxNode** children = RaxNodeFirstChildPtr(node_);
+  raxNode **children = RaxNodeFirstChildPtr(node_);
   return PathIterator(rax_, children[child_index_], std::move(new_path));
 }
 
@@ -365,7 +368,8 @@ absl::string_view Rax::PathIterator::GetChildEdge() {
 
   if (node_->iscompr) {
     // Compressed: edge is the entire compressed path
-    child_edge_.assign(reinterpret_cast<const char*>(node_->data), node_->size);
+    child_edge_.assign(reinterpret_cast<const char *>(node_->data),
+                       node_->size);
   } else if (!RaxNodeIsLeaf(node_) && child_index_ < node_->size) {
     // Branching: edge is single character
     child_edge_.assign(1, static_cast<char>(node_->data[child_index_]));
@@ -375,7 +379,7 @@ absl::string_view Rax::PathIterator::GetChildEdge() {
   return child_edge_;
 }
 
-void* Rax::PathIterator::GetTarget() const {
+void *Rax::PathIterator::GetTarget() const {
   CHECK(IsWord()) << "Cannot get target from non-word node";
   return RaxNodeGetData(node_);
 }

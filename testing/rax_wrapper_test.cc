@@ -8,6 +8,8 @@
 
 #include "src/indexes/text/rax_wrapper.h"
 
+#include <malloc.h>
+
 #include <algorithm>
 #include <ctime>
 #include <map>
@@ -17,7 +19,15 @@
 #include <vector>
 
 #include "gtest/gtest.h"
+#include "vmsdk/src/memory_allocation.h"
 #include "vmsdk/src/testing_infra/utils.h"
+
+// Override the weak symbol empty_usable_size (defined in
+// memory_allocation_overrides.cc) with actual memory tracking for
+// RaxMallocMemoryTracking.
+extern "C" size_t empty_usable_size(void *ptr) noexcept {
+  return malloc_usable_size(ptr);
+}
 
 namespace valkey_search::indexes::text {
 namespace {
@@ -28,7 +38,7 @@ struct TestTarget {
   explicit TestTarget(int v) : value(v) {}
 };
 
-static void FreeTestTarget(void* ptr) { delete static_cast<TestTarget*>(ptr); }
+static void FreeTestTarget(void *ptr) { delete static_cast<TestTarget *>(ptr); }
 
 class RaxTest : public vmsdk::ValkeyTest {
  protected:
@@ -37,30 +47,30 @@ class RaxTest : public vmsdk::ValkeyTest {
     rax_ = Rax{FreeTestTarget};
   }
 
-  void AddWords(const std::vector<std::pair<std::string, int>>& words) {
-    for (const auto& [word, value] : words) {
-      rax_.MutateTarget(word, [value](void* old) {
-        if (old) delete static_cast<TestTarget*>(old);
-        return static_cast<void*>(new TestTarget(value));
+  void AddWords(const std::vector<std::pair<std::string, int>> &words) {
+    for (const auto &[word, value] : words) {
+      rax_.MutateTarget(word, [value](void *old) {
+        if (old) delete static_cast<TestTarget *>(old);
+        return static_cast<void *>(new TestTarget(value));
       });
     }
   }
 
-  void DeleteWords(const std::vector<std::string>& words) {
-    for (const auto& word : words) {
-      rax_.MutateTarget(word, [](void* old) {
-        if (old) delete static_cast<TestTarget*>(old);
-        return static_cast<void*>(nullptr);
+  void DeleteWords(const std::vector<std::string> &words) {
+    for (const auto &word : words) {
+      rax_.MutateTarget(word, [](void *old) {
+        if (old) delete static_cast<TestTarget *>(old);
+        return static_cast<void *>(nullptr);
       });
     }
   }
 
-  void VerifyWords(const std::vector<std::pair<std::string, int>>& expected) {
-    for (const auto& [word, value] : expected) {
-      rax_.MutateTarget(word, [value, &word](void* existing) {
+  void VerifyWords(const std::vector<std::pair<std::string, int>> &expected) {
+    for (const auto &[word, value] : expected) {
+      rax_.MutateTarget(word, [value, &word](void *existing) {
         EXPECT_NE(existing, nullptr) << "Word '" << word << "' should exist";
         if (existing) {
-          EXPECT_EQ(static_cast<TestTarget*>(existing)->value, value)
+          EXPECT_EQ(static_cast<TestTarget *>(existing)->value, value)
               << "Word '" << word << "' has wrong value";
         }
         return existing;
@@ -68,9 +78,9 @@ class RaxTest : public vmsdk::ValkeyTest {
     }
   }
 
-  void VerifyWordsDeleted(const std::vector<std::string>& words) {
-    for (const auto& word : words) {
-      rax_.MutateTarget(word, [&word](void* existing) {
+  void VerifyWordsDeleted(const std::vector<std::string> &words) {
+    for (const auto &word : words) {
+      rax_.MutateTarget(word, [&word](void *existing) {
         EXPECT_EQ(existing, nullptr)
             << "Word '" << word << "' should be deleted";
         return existing;
@@ -79,12 +89,12 @@ class RaxTest : public vmsdk::ValkeyTest {
   }
 
   void VerifyIterator(
-      const std::string& prefix,
-      const std::vector<std::pair<std::string, int>>& expected) {
+      const std::string &prefix,
+      const std::vector<std::pair<std::string, int>> &expected) {
     auto iter = rax_.GetWordIterator(prefix);
     std::vector<std::pair<std::string, int>> actual;
     while (!iter.Done()) {
-      auto* target = static_cast<TestTarget*>(iter.GetTarget());
+      auto *target = static_cast<TestTarget *>(iter.GetTarget());
       actual.emplace_back(std::string(iter.GetWord()), target->value);
       iter.Next();
     }
@@ -93,7 +103,7 @@ class RaxTest : public vmsdk::ValkeyTest {
   }
 
   void VerifyWordCount(size_t expected_count) {
-    size_t actual_count = rax_.GetTotalWordCount();
+    size_t actual_count = rax_.GetTotalUniqueWordCount();
     EXPECT_EQ(actual_count, expected_count) << "Word count mismatch";
   }
 
@@ -411,15 +421,15 @@ TEST_F(RaxTest, WordIteratorLargeScale) {
 
   // Count word frequencies and add words incrementally to tree
   std::map<std::string, int> word_counts;
-  for (const auto& w : words) {
+  for (const auto &w : words) {
     word_counts[w]++;
     // Add word to tree, incrementing count each time
-    rax_.MutateTarget(w, [](void* existing) {
+    rax_.MutateTarget(w, [](void *existing) {
       if (existing) {
-        static_cast<TestTarget*>(existing)->value++;
+        static_cast<TestTarget *>(existing)->value++;
         return existing;
       } else {
-        return static_cast<void*>(new TestTarget(1));
+        return static_cast<void *>(new TestTarget(1));
       }
     });
   }
@@ -437,10 +447,10 @@ TEST_F(RaxTest, WordIteratorLargeScale) {
       words.begin(), words.end(),
       std::default_random_engine{static_cast<unsigned>(std::time(nullptr))});
   std::set<std::string> words_to_delete(words.begin(), words.begin() + 100);
-  for (const auto& w : words_to_delete) {
-    rax_.MutateTarget(w, [](void* old) {
-      if (old) delete static_cast<TestTarget*>(old);
-      return static_cast<void*>(nullptr);
+  for (const auto &w : words_to_delete) {
+    rax_.MutateTarget(w, [](void *old) {
+      if (old) delete static_cast<TestTarget *>(old);
+      return static_cast<void *>(nullptr);
     });
     word_counts.erase(w);
   }
@@ -449,10 +459,10 @@ TEST_F(RaxTest, WordIteratorLargeScale) {
   VerifyIterator("", word_pairs);
 
   // Delete all words
-  for (const auto& w : words) {
-    rax_.MutateTarget(w, [](void* old) {
-      if (old) delete static_cast<TestTarget*>(old);
-      return static_cast<void*>(nullptr);
+  for (const auto &w : words) {
+    rax_.MutateTarget(w, [](void *old) {
+      if (old) delete static_cast<TestTarget *>(old);
+      return static_cast<void *>(nullptr);
     });
   }
   VerifyWordCount(0);
@@ -467,6 +477,60 @@ TEST_F(RaxTest, WordIteratorPrefixPartialMatch) {
 
   // Test "ca" prefix - should only match can/cat
   VerifyIterator("ca", {{"can", 2}, {"cat", 1}});
+}
+
+TEST_F(RaxTest, PathIteratorAPIs) {
+  AddWords({{"cat", 1}, {"car", 2}, {"can", 3}});
+
+  auto root_iter = rax_.GetPathIterator("");
+  EXPECT_FALSE(root_iter.Done());
+  EXPECT_TRUE(root_iter.CanDescend());
+
+  // Descend to "ca" node (first child of root)
+  auto ca_iter = root_iter.DescendNew();
+  EXPECT_EQ(ca_iter.GetPath(), "ca");
+  EXPECT_EQ(ca_iter.GetChildEdge(), "n");
+  EXPECT_FALSE(ca_iter.IsWord());
+
+  // Descend to first child "can"
+  auto can_iter = ca_iter.DescendNew();
+  EXPECT_EQ(can_iter.GetPath(), "can");
+  EXPECT_EQ(can_iter.GetChildEdge(), "");
+  EXPECT_TRUE(can_iter.IsWord());
+  EXPECT_EQ(static_cast<TestTarget *>(can_iter.GetTarget())->value, 3);
+
+  // Iterate through ca_iter's children ("can", "car", "cat")
+  EXPECT_EQ(ca_iter.GetChildEdge(), "n");
+  ca_iter.NextChild();
+  EXPECT_FALSE(ca_iter.Done());
+  EXPECT_EQ(ca_iter.GetChildEdge(), "r");
+  ca_iter.NextChild();
+  EXPECT_FALSE(ca_iter.Done());
+  EXPECT_EQ(ca_iter.GetChildEdge(), "t");
+  ca_iter.NextChild();
+  EXPECT_TRUE(ca_iter.Done());
+}
+
+TEST_F(RaxTest, RaxMallocMemoryTracking) {
+  // Validates that rax_malloc.h correctly routes allocations through
+  // the VMSDK memory tracking system.
+
+  uint64_t initial_memory = vmsdk::GetUsedMemoryCnt();
+  {
+    // Create empty Rax. The only heap allocations are from raxNew().
+    Rax empty_rax{nullptr};
+    uint64_t after_create_memory = vmsdk::GetUsedMemoryCnt();
+    std::cout << "Memory increased by "
+              << (after_create_memory - initial_memory) << " bytes"
+              << std::endl;
+    EXPECT_GT(after_create_memory, initial_memory)
+        << "Creating Rax should increase the tracked allocated memory";
+    EXPECT_EQ(empty_rax.GetAllocSize(), after_create_memory - initial_memory);
+  }
+  uint64_t final_memory = vmsdk::GetUsedMemoryCnt();
+  // The memory should return to zero after falling out of scope.
+  EXPECT_EQ(initial_memory, vmsdk::GetUsedMemoryCnt())
+      << "Destroying Rax should free all rax allocations";
 }
 
 }  // namespace

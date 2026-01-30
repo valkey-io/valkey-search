@@ -1244,6 +1244,18 @@ INSTANTIATE_TEST_SUITE_P(
              .expected_error_message = "Error parsing value for the parameter `MINSTEMSIZE` - MINSTEMSIZE must be positive",
          },
          {
+             .test_name = "invalid_text_per_field_minstemsize",
+             .success = false,
+             .command_str = "idx1 on HASH SCHEMA text_field TEXT MINSTEMSIZE 2",
+             .too_many_attributes = false,
+             .hnsw_parameters = {},
+             .flat_parameters = {},
+             .tag_parameters = {},
+             .text_parameters = {},
+             .expected = {},
+             .expected_error_message = "Invalid field type for field `MINSTEMSIZE`: Unknown argument `2`",
+         },
+         {
              .test_name = "invalid_per_index_stopwords_before_schema",
              .success = false,
              .command_str = "idx1 on HASH STOPWORDS -1 SCHEMA text_field TEXT",

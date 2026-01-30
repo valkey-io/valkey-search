@@ -924,7 +924,7 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   }
   // Text-attribute info fields
   if (text_index_schema_) {
-    arrSize += 6;
+    arrSize += 8;  // punctuation, stop_words, with_offsets, min_stem_size (4 key-value pairs = 8 items)
   }
   ValkeyModule_ReplyWithArray(ctx, arrSize);
   ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
@@ -1028,6 +1028,9 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
 
     ValkeyModule_ReplyWithSimpleString(ctx, "with_offsets");
     ValkeyModule_ReplyWithSimpleString(ctx, with_offsets_ ? "1" : "0");
+
+    ValkeyModule_ReplyWithSimpleString(ctx, "min_stem_size");
+    ValkeyModule_ReplyWithLongLong(ctx, min_stem_size_);
   }
 
   ValkeyModule_ReplyWithSimpleString(ctx, "language");

@@ -410,7 +410,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                      .expect_return_failure = false,
                      .expected_output =
-                         "*44\r\n+index_name\r\n+test_name\r\n+index_"
+                         "*46\r\n+index_name\r\n+test_name\r\n+index_"
                          "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
                          "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
                          "1\r\n1\r\n+attributes\r\n*1\r\n*8\r\n+"
@@ -432,7 +432,7 @@ INSTANTIATE_TEST_SUITE_P(
                          "mutation_queue_size\r\n$1\r\n0\r\n+recent_"
                          "mutations_queue_delay\r\n$5\r\n0 sec\r\n+state\r\n+"
                          "ready\r\n+punctuation\r\n+\r\n+stop_words\r\n*0\r\n+"
-                         "with_offsets\r\n+0\r\n+language\r\n+english\r\n"},
+                         "with_offsets\r\n+0\r\n+min_stem_size\r\n:4\r\n+language\r\n+english\r\n"},
                 },
         },
         {
@@ -465,7 +465,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                      .expect_return_failure = false,
                      .expected_output =
-                         "*44\r\n+index_name\r\n+test_name\r\n+index_"
+                         "*46\r\n+index_name\r\n+test_name\r\n+index_"
                          "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
                          "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
                          "1\r\n1\r\n+attributes\r\n*1\r\n*10\r\n+"
@@ -488,7 +488,7 @@ INSTANTIATE_TEST_SUITE_P(
                          "mutations_queue_delay\r\n$5\r\n0 sec\r\n+state\r\n+"
                          "ready\r\n+punctuation\r\n+.,!?\r\n+stop_words\r\n*"
                          "3\r\n+the\r\n+and\r\n+or\r\n+with_offsets\r\n+"
-                         "1\r\n+language\r\n+english\r\n"},
+                         "1\r\n+min_stem_size\r\n:3\r\n+language\r\n+english\r\n"},
                 },
         },
         {

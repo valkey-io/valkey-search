@@ -275,6 +275,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   bool loaded_v2_{false};
   uint64_t fingerprint_{0};
   uint32_t version_{0};
+  bool skip_initial_scan_{false};
 
   vmsdk::ThreadPool *mutations_thread_pool_{nullptr};
   InternedStringHashMap<DocumentMutation> tracked_mutated_records_

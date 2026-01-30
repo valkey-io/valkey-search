@@ -4,7 +4,17 @@ import time
 from valkeytestframework.conftest import resource_port_tracker
 from valkeytestframework.util import waiters
 from utils import IndexingTestHelper
+from ft_info_parser import FTInfoParser
 
+def is_backfill_complete(node, index_name):
+    raw = node.execute_command("FT.INFO", index_name, "CLUSTER")
+    parser = FTInfoParser([])
+    info = parser._parse_key_value_list(raw)
+    if not info:
+        return False
+    backfill_in_progress = int(info["backfill_in_progress"])
+    state = info["state"]
+    return backfill_in_progress == 0 and state == "ready"
 class TestSkipInitialScanCMD(ValkeySearchTestCaseBase):
     """Test suite for FT.CREATE SKIPINITIALSCAN option"""
 
@@ -27,11 +37,25 @@ class TestSkipInitialScanCMD(ValkeySearchTestCaseBase):
             "FT.CREATE", "idx_skip", "ON", "HASH", "SKIPINITIALSCAN",
             "SCHEMA", "title", "TEXT", "tag", "TAG"
         )
+
+
         waiters.wait_for_true(lambda: IndexingTestHelper.is_backfill_complete_on_node(client, "idx_normal"))        
         
         for index, count in [["idx_normal", 2], ["idx_skip", 0]]:
             results = client.execute_command("FT.SEARCH", index, "@tag:{red | blue}")
             assert results[0] == count
+
+        #
+        # Save/restore test
+        # 
+        client.execute_command("SAVE")
+        self.server.restart(remove_rdb=False)
+
+        for index, count in [["idx_normal", 2], ["idx_skip", 0]]:
+            results = client.execute_command("FT.SEARCH", index, "@tag:{red | blue}")
+            assert results[0] == count
+
+                   
 
 class TestSkipInitialScanCME(ValkeySearchClusterTestCase):
     """Test suite for FT.CREATE SKIPINITIALSCAN option"""
@@ -56,8 +80,10 @@ class TestSkipInitialScanCME(ValkeySearchClusterTestCase):
             "FT.CREATE", "idx_skip", "ON", "HASH", "SKIPINITIALSCAN",
             "SCHEMA", "title", "TEXT", "tag", "TAG"
         )
-        waiters.wait_for_true(lambda: IndexingTestHelper.is_backfill_complete_on_node(client, "idx_normal"))        
-        
+        waiters.wait_for_true(lambda: is_backfill_complete(client, "idx_normal"))        
+
         for index, count in [["idx_normal", 100], ["idx_skip", 0]]:
-            results = client0.execute_command("FT.SEARCH", index, "@tag:{red | blue}")
-            assert results[0] == count
+            for node in self.get_nodes():
+                results = node.client.execute_command("FT.SEARCH", index, "@tag:{red | blue}")
+                assert results[0] == count
+

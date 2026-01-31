@@ -605,9 +605,8 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
   }
   std::string token = absl::AsciiStrToLower(processed_content);
   FieldMaskPredicate field_mask;
-  std::optional<uint32_t> min_stem_size = std::nullopt;
-  VMSDK_RETURN_IF_ERROR(SetupTextFieldConfiguration(field_mask, min_stem_size,
-                                                    field_or_default, false));
+  VMSDK_RETURN_IF_ERROR(
+      SetupTextFieldConfiguration(field_mask, field_or_default, false));
   return FilterParser::TokenResult{
       std::make_unique<query::TermPredicate>(text_index_schema, field_mask,
                                              std::move(token), true),
@@ -704,14 +703,13 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
   }
   std::string token = absl::AsciiStrToLower(processed_content);
   FieldMaskPredicate field_mask;
-  std::optional<uint32_t> min_stem_size = std::nullopt;
   // Build predicate directly based on detected pattern
   if (leading_percent_count > 0) {
     if (trailing_percent_count == leading_percent_count &&
         leading_percent_count <= options::GetFuzzyMaxDistance().GetValue()) {
       if (token.empty()) return absl::InvalidArgumentError("Empty fuzzy token");
-      VMSDK_RETURN_IF_ERROR(SetupTextFieldConfiguration(
-          field_mask, min_stem_size, field_or_default, false));
+      VMSDK_RETURN_IF_ERROR(
+          SetupTextFieldConfiguration(field_mask, field_or_default, false));
       auto fuzzy = FilterParser::TokenResult{
           std::make_unique<query::FuzzyPredicate>(text_index_schema, field_mask,
                                                   std::move(token),
@@ -724,8 +722,8 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
   } else if (starts_with_star) {
     if (token.empty())
       return absl::InvalidArgumentError("Invalid wildcard '*' markers");
-    VMSDK_RETURN_IF_ERROR(SetupTextFieldConfiguration(field_mask, min_stem_size,
-                                                      field_or_default, true));
+    VMSDK_RETURN_IF_ERROR(
+        SetupTextFieldConfiguration(field_mask, field_or_default, true));
     if (ends_with_star) {
       auto infix = FilterParser::TokenResult{
           std::make_unique<query::InfixPredicate>(text_index_schema, field_mask,
@@ -741,8 +739,8 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
   } else if (ends_with_star) {
     if (token.empty())
       return absl::InvalidArgumentError("Invalid wildcard '*' markers");
-    VMSDK_RETURN_IF_ERROR(SetupTextFieldConfiguration(field_mask, min_stem_size,
-                                                      field_or_default, false));
+    VMSDK_RETURN_IF_ERROR(
+        SetupTextFieldConfiguration(field_mask, field_or_default, false));
     return FilterParser::TokenResult{
         std::make_unique<query::PrefixPredicate>(text_index_schema, field_mask,
                                                  std::move(token)),
@@ -754,10 +752,13 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
       // Skip stop words and empty words.
       return FilterParser::TokenResult{nullptr, break_on_query_syntax};
     }
-    VMSDK_RETURN_IF_ERROR(SetupTextFieldConfiguration(field_mask, min_stem_size,
-                                                      field_or_default, false));
-    if (!exact && min_stem_size.has_value()) {
-      token = lexer.StemWord(token, true, *min_stem_size, lexer.GetStemmer());
+    VMSDK_RETURN_IF_ERROR(
+        SetupTextFieldConfiguration(field_mask, field_or_default, false));
+    // Apply stemming if not exact match - use schema-level min_stem_size
+    // directly
+    if (!exact && (index_schema_.GetStemTextFieldMask() & field_mask) != 0) {
+      token = lexer.StemWord(token, true, index_schema_.GetMinStemSize(),
+                             lexer.GetStemmer());
     }
     return FilterParser::TokenResult{
         std::make_unique<query::TermPredicate>(text_index_schema, field_mask,
@@ -767,7 +768,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
 }
 
 absl::Status FilterParser::SetupTextFieldConfiguration(
-    FieldMaskPredicate& field_mask, std::optional<uint32_t>& min_stem_size,
+    FieldMaskPredicate& field_mask,
     const std::optional<std::string>& field_name, bool with_suffix) {
   if (field_name.has_value()) {
     auto index = index_schema_.GetIndex(*field_name);
@@ -782,9 +783,6 @@ absl::Status FilterParser::SetupTextFieldConfiguration(
     auto identifier = index_schema_.GetIdentifier(*field_name).value();
     filter_identifiers_.insert(identifier);
     field_mask = 1ULL << text_index->GetTextFieldNumber();
-    if (text_index->IsStemmingEnabled()) {
-      min_stem_size = text_index->GetMinStemSize();
-    }
   } else {
     // Set identifiers to include all text fields in the index schema.
     auto text_identifiers = index_schema_.GetAllTextIdentifiers(with_suffix);
@@ -800,10 +798,6 @@ absl::Status FilterParser::SetupTextFieldConfiguration(
                                 text_identifiers.size());
     filter_identifiers_.insert(text_identifiers.begin(),
                                text_identifiers.end());
-    // When no field was specified, we use the min stem across all text fields
-    // in the index schema. This helps ensure the root of the text token can be
-    // searched for.
-    min_stem_size = index_schema_.MinStemSizeAcrossTextIndexes(with_suffix);
   }
   return absl::OkStatus();
 }

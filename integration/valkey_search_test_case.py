@@ -161,6 +161,9 @@ class ValkeySearchTestCaseCommon(ValkeyTestCase):
         for example usage."""
         raise NotImplementedError
 
+    def append_startup_args(self, args: dict[str, str]) -> dict[str, str]:
+        return args
+
     def start_server(
         self,
         port: int,
@@ -190,7 +193,7 @@ class ValkeySearchTestCaseCommon(ValkeyTestCase):
         server, client = self.create_server(
             testdir=testdir,
             server_path=server_path,
-            args={"logfile": logfile},
+            args=self.append_startup_args({"logfile": logfile}),
             port=port,
             conf_file=conf_file,
         )
@@ -519,4 +522,3 @@ class ValkeySearchClusterTestCaseDebugMode(ValkeySearchClusterTestCase):
     '''
     def get_config_file_lines(self, testdir, port) -> List[str]:
         return EnableDebugMode(super(ValkeySearchClusterTestCaseDebugMode, self).get_config_file_lines(testdir, port))
-

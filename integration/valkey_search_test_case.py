@@ -134,14 +134,15 @@ class ReplicationGroup:
             return
 
         if rg.primary:
-            os.kill(rg.primary.server.pid(), 9)
+            if rg.primary.server is not None:
+                rg.primary.server.exit()
 
         if not rg.replicas:
             return
 
         for replica in rg.replicas:
             if replica.server:
-                os.kill(replica.server.pid(), 9)
+                replica.server.exit()
 
 
 class ValkeySearchTestCaseCommon(ValkeyTestCase):

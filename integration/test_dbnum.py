@@ -9,17 +9,17 @@ from indexes import *
 
 class TestDBNum(ValkeySearchClusterTestCaseDebugMode):
     def setup_connections(self):
-        self.client00 = self.get_primary(0).get_new_client()
+        self.client00 = self.get_primary(0).connect();
         self.client00.select(0)
-        self.client10 = self.get_primary(1).get_new_client()
+        self.client10 = self.get_primary(1).connect();
         self.client10.select(0)
-        self.client20 = self.get_primary(2).get_new_client()
+        self.client20 = self.get_primary(2).connect();
         self.client20.select(0)
-        self.client01 = self.get_primary(0).get_new_client()
+        self.client01 = self.get_primary(0).connect();
         self.client01.select(1)
-        self.client11 = self.get_primary(1).get_new_client()
+        self.client11 = self.get_primary(1).connect();
         self.client11.select(1)
-        self.client21 = self.get_primary(2).get_new_client()
+        self.client21 = self.get_primary(2).connect();
         self.client21.select(1)
         self.clients = [[self.client00, self.client01], [self.client10, self.client11], [self.client20, self.client21]]
 
@@ -56,15 +56,6 @@ class TestDBNum(ValkeySearchClusterTestCaseDebugMode):
             self.client00.execute_command("debug restart")
         except:
             pass
-        # Wait for server to be ready
-        def is_primary_ready():
-            try:
-                client = self.new_client_for_primary(0)
-                client.ping()
-                return True
-            except (ConnectionError, Exception):
-                return False
-        waiters.wait_for_true(is_primary_ready, timeout=10)
         self.setup_connections()
         assert(self.client00.execute_command("FT._LIST") == [b'index0'])
         assert(self.client10.execute_command("FT._LIST") == [b'index0'])

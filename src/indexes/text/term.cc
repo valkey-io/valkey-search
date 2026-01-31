@@ -14,20 +14,15 @@ TermIterator::TermIterator(
         key_iterators,
     const FieldMaskPredicate query_field_mask,
     const InternedStringSet* untracked_keys, const bool require_positions,
-    absl::InlinedVector<FieldMaskPredicate, kWordExpansionInlineCapacity>&&
-        field_masks)
+    const FieldMaskPredicate stem_field_mask, bool has_original)
     : query_field_mask_(query_field_mask),
+      stem_field_mask_(stem_field_mask),
       key_iterators_(std::move(key_iterators)),
-      field_masks_(std::move(field_masks)),
       current_position_(std::nullopt),
       current_field_mask_(0ULL),
       untracked_keys_(untracked_keys),
-      require_positions_(require_positions) {
-  // If field_masks provided, verify size matches key_iterators
-  if (!field_masks_.empty()) {
-    CHECK(key_iterators_.size() == field_masks_.size())
-        << "key_iterators and field_masks must have the same size";
-  }
+      require_positions_(require_positions),
+      has_original_(has_original) {
   // Prime the first key and position if they exist.
   if (!key_iterators_.empty()) {
     TermIterator::NextKey();
@@ -54,11 +49,12 @@ bool TermIterator::FindMinimumValidKey() {
   current_key_ = nullptr;
   current_position_ = std::nullopt;
   current_field_mask_ = 0ULL;
-  size_t idx = 0;
   for (auto& key_iter : key_iterators_) {
-    // Use per-iterator field mask if provided, otherwise use query_field_mask
-    const auto& field_mask =
-        field_masks_.empty() ? query_field_mask_ : field_masks_[idx];
+    // Use query_field_mask if first iterator AND original word exists
+    // Otherwise use stem field mask intersection
+    const auto field_mask = (has_original_ || stem_field_mask_ == 0)
+                                ? query_field_mask_
+                                : (stem_field_mask_);
 
     while (key_iter.IsValid() && !key_iter.ContainsFields(field_mask)) {
       key_iter.NextKey();
@@ -80,7 +76,7 @@ bool TermIterator::FindMinimumValidKey() {
         current_key_ = key;
       }
     }
-    ++idx;
+    has_original_ = false;
   }
   if (!current_key_) {
     return false;

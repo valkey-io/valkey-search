@@ -754,7 +754,6 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     }
     VMSDK_RETURN_IF_ERROR(
         SetupTextFieldConfiguration(field_mask, field_or_default, false));
-    }
     return FilterParser::TokenResult{
         std::make_unique<query::TermPredicate>(text_index_schema, field_mask,
                                                std::move(token), exact),

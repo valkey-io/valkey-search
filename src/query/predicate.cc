@@ -62,25 +62,20 @@ EvaluationResult TermPredicate::Evaluate(
     const InternedStringPtr& target_key, bool require_positions) const {
   uint64_t field_mask = field_mask_;
 
-  // stemmed word storage
-  std::string stemmed;
-
-  // Collect all words to search
-  std::vector<absl::string_view> words_to_check;
+  // Collect all words to search: original word first
+  absl::InlinedVector<absl::string_view, indexes::text::kWordExpansionInlineCapacity>
+      words_to_check;
   words_to_check.push_back(term_);
 
-  absl::string_view stem_root;
-  // Add stem variants only if stemming is enabled for at least one field
-  if (!exact_) {
-    uint64_t stem_enabled_mask =
-        field_mask & text_index_schema_->GetStemmingEnabledFields();
-
+  // Get stem variants if not exact match
+  std::string stemmed;
+  uint64_t stem_field_mask = field_mask & text_index_schema_->GetStemTextFieldMask();
+  if (!exact_ && stem_field_mask != 0) {
     stemmed = text_index_schema_->GetAllStemVariants(
         term_, words_to_check, text_index_schema_->GetMinStemSize(),
-        stem_enabled_mask, true);
-    if (!stemmed.empty() && stemmed != term_) {
-      stem_root = stemmed;
-      words_to_check.push_back(stem_root);
+        stem_field_mask, true);
+    if (stemmed != term_) {
+      words_to_check.push_back(stemmed);
     }
   }
 
@@ -88,24 +83,22 @@ EvaluationResult TermPredicate::Evaluate(
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
+  bool found_original = false;
 
   for (const auto& word : words_to_check) {
     auto word_iter = text_index.GetPrefix().GetWordIterator(word);
-    // GetWordIterator positions at exact match or first word with prefix
     if (!word_iter.Done() && word_iter.GetWord() == word) {
       auto postings = word_iter.GetTarget();
       if (postings) {
         auto key_iter = postings->GetKeyIterator();
         // Skip to target key and verify it contains the appropriate fields
-        // Original term uses all fields, stem variants use field mask based on
-        // word length
+        // Original term uses all fields, stem variants use stem field mask
         uint64_t effective_mask;
-        if (word == term_ || word == stem_root) {
+        if (word == term_) {
           effective_mask = field_mask;
+          found_original = true;
         } else {
-          effective_mask =
-              field_mask &
-              text_index_schema_->GetStemVariantFieldMask(word.length());
+          effective_mask = stem_field_mask;
         }
         if (key_iter.SkipForwardKey(target_key) &&
             key_iter.ContainsFields(effective_mask)) {
@@ -123,7 +116,8 @@ EvaluationResult TermPredicate::Evaluate(
   }
 
   auto iterator = std::make_unique<indexes::text::TermIterator>(
-      std::move(key_iterators), field_mask, nullptr, require_positions);
+      std::move(key_iterators), field_mask, nullptr, require_positions,
+      stem_field_mask, found_original);
   return BuildTextEvaluationResult(std::move(iterator));
 }
 

@@ -30,6 +30,11 @@ struct sb_stemmer;
 
 namespace valkey_search::indexes::text {
 
+// Inline capacity for word expansion key iterators
+constexpr size_t kWordExpansionInlineCapacity = 200;
+// Inline capacity for proximity terms
+constexpr size_t kProximityTermsInlineCapacity = 64;
+
 // token -> (PositionMap, suffix support)
 using TokenPositions =
     absl::flat_hash_map<std::string, std::pair<PositionMap, bool>>;
@@ -111,18 +116,15 @@ class TextIndexSchema {
   // is true.
   std::string GetAllStemVariants(
       absl::string_view search_term,
-      std::vector<absl::string_view> &words_to_search, uint32_t min_stem_size,
-      uint64_t stem_enabled_mask, bool lock_needed);
-
-  // Get the mask of fields that have stemming enabled for a given stem variant
-  // length. Only fields where word_length >= min_stem_size are included.
-  uint64_t GetStemVariantFieldMask(size_t word_length) const;
-
-  // Get the bitmask of fields with stemming enabled
-  uint64_t GetStemmingEnabledFields() const { return stemming_enabled_fields_; }
+      absl::InlinedVector<absl::string_view, kWordExpansionInlineCapacity> &words_to_search,
+      uint32_t min_stem_size, uint64_t stem_enabled_mask, bool lock_needed);
 
   // Get the minimum stem size across all fields
   uint32_t GetMinStemSize() const { return min_stem_size_; }
+
+  // Schema-level stem field mask (mirrored from IndexSchema::stem_text_field_mask_)
+  void SetStemTextFieldMask(uint64_t mask) { stem_text_field_mask_ = mask; }
+  uint64_t GetStemTextFieldMask() const { return stem_text_field_mask_; }
 
   // Enable suffix trie.
   void EnableSuffix() {
@@ -195,12 +197,8 @@ class TextIndexSchema {
   // Minimum word length for stemming (schema-level configuration)
   uint32_t min_stem_size_;
 
-  // Tracks which field numbers have stemming enabled (bit mask)
-  uint64_t stemming_enabled_fields_ = 0;
-  // Min stem size for each field (indexed by field number)
-  std::vector<uint32_t> per_field_min_stem_sizes_;
-  // Cached minimum stem size across all stemming-enabled fields
-  uint32_t min_stem_size_;
+  // Schema-level stem field mask (mirrored from IndexSchema::stem_text_field_mask_)
+  uint64_t stem_text_field_mask_ = 0;
 
  public:
   // FT.INFO memory stats for text index

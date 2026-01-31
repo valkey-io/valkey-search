@@ -647,8 +647,8 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert set(result[1::2]) == {b"product:3", b"product:4", b"product:5"}
         
         result = client.execute_command("FT.SEARCH", "testindex", "running", "DIALECT", "2")
-        assert result[0] == 3, f"Expected 3 results for 'running', got {result[0]}"
-        assert set(result[1::2]) == {b"product:3", b"product:4", b"product:5"}
+        assert result[0] == 2, f"Expected 2 results for 'running', got {result[0]}"
+        assert set(result[1::2]) == {b"product:4", b"product:5"}
         
         # Update product:3 to have "running" in NOSTEM title field
         client.execute_command("HSET", "product:3", "title", "running", "desc", "abc")
@@ -662,32 +662,28 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert result[0] == 3, f"Expected 3 results for 'running' after update, got {result[0]}"
         assert set(result[1::2]) == {b"product:3", b"product:4", b"product:5"}
         
-        # Test 13: Per-field MINSTEMSIZE - different min_stem_size values per field
+        # Test 13: Schema-level MINSTEMSIZE - stemming applies to all fields
         client.execute_command("FT.CREATE", "testindex2", "ON", "HASH", "PREFIX", "1", "product:", 
-                             "SCHEMA", "title", "TEXT", "MINSTEMSIZE", "6", "desc", "TEXT")
+                             "MINSTEMSIZE", "6",
+                             "SCHEMA", "title", "TEXT", "desc", "TEXT")
         
         client.execute_command("HSET", "product:3", "title", "happiness", "desc", "abc")
         client.execute_command("HSET", "product:4", "title", "happy", "desc", "run")
-        
-        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "testindex2")
-        
-        # First search - only product:3 matches (happiness length 9 >= MINSTEMSIZE 6, gets stemmed)
-        result = client.execute_command("FT.SEARCH", "testindex2", "happi", "DIALECT", "2")
-        assert result[0] == 1, f"Expected 1 result for 'happi', got {result[0]}"
-        assert set(result[1::2]) == {b"product:3"}, f"Expected {{product:3}}, got {set(result[1::2])}"
-        
-        # Add product:5 with "happy" in desc field (default MINSTEMSIZE 4)
         client.execute_command("HSET", "product:5", "title", "abc", "desc", "happy")
         
         IndexingTestHelper.wait_for_backfill_complete_on_node(client, "testindex2")
         
-        # Second search - product:3 and product:5 match
-        # product:3: "happiness" in title (length 9 >= 6, stemmed to "happi")
-        # product:4: "happy" in title (length 5 < 6, NOT stemmed) - should NOT match
-        # product:5: "happy" in desc (length 5 >= 4, stemmed to "happi") - should match
+        # Schema-level MINSTEMSIZE=6: only words with length >= 6 get stemmed
+        # "happiness" (length 9) gets stemmed to "happi"
+        # "happy" (length 5) does NOT get stemmed (< 6)
         result = client.execute_command("FT.SEARCH", "testindex2", "happi", "DIALECT", "2")
-        assert result[0] == 2, f"Expected 2 results for 'happi', got {result[0]}"
-        assert set(result[1::2]) == {b"product:3", b"product:5"}, f"Expected {{product:3, product:5}}, got {set(result[1::2])}"
+        assert result[0] == 1, f"Expected 1 result for 'happi', got {result[0]}"
+        assert set(result[1::2]) == {b"product:3"}, f"Expected {{product:3}}, got {set(result[1::2])}"
+        
+        # Searching for "happy" should match both product:4 and product:5 (exact match)
+        result = client.execute_command("FT.SEARCH", "testindex2", "happy", "DIALECT", "2")
+        assert result[0] == 2, f"Expected 2 results for 'happy', got {result[0]}"
+        assert set(result[1::2]) == {b"product:4", b"product:5"}, f"Expected {{product:4, product:5}}, got {set(result[1::2])}"
         
         # Test 14: NOSTEM fields with stem expansion from other fields
         client.execute_command("FT.CREATE", "testindex_nostem", "ON", "HASH", "PREFIX", "1", "product:", "SCHEMA", "title", "TEXT", "NOSTEM", "desc", "TEXT", "NOSTEM")
@@ -700,11 +696,9 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         
         # When searching for "happiness", should match:
         # - product:3 (exact match "happiness")
-        # - product:5 (stem form "happi")
-        # But NOT product:4 (different word "happy")
         result = client.execute_command("FT.SEARCH", "testindex_nostem", "happiness", "DIALECT", "2")
-        assert result[0] == 2, f"Expected 2 results for 'happiness', got {result[0]}"
-        assert set(result[1::2]) == {b"product:3", b"product:5"}, f"Expected {{product:3, product:5}}, got {set(result[1::2])}"
+        assert result[0] == 1, f"Expected 1 results for 'happiness', got {result[0]}"
+        assert set(result[1::2]) == {b"product:3"}, f"Expected {{product:3}}, got {set(result[1::2])}"
 
     def test_custom_stopwords(self):
         """

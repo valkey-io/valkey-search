@@ -56,6 +56,15 @@ class TestDBNum(ValkeySearchClusterTestCaseDebugMode):
             self.client00.execute_command("debug restart")
         except:
             pass
+        # Wait for server to be ready
+        def is_primary_ready():
+            try:
+                client = self.new_client_for_primary(0)
+                client.ping()
+                return True
+            except (ConnectionError, Exception):
+                return False
+        waiters.wait_for_true(is_primary_ready, timeout=10)
         self.setup_connections()
         assert(self.client00.execute_command("FT._LIST") == [b'index0'])
         assert(self.client10.execute_command("FT._LIST") == [b'index0'])

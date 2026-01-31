@@ -67,7 +67,6 @@ struct PerIndexTextParams {
 struct PerFieldTextParams {
   bool with_suffix_trie{false};
   bool no_stem{false};  // Can be overridden per field
-  int min_stem_size{4};
 };
 
 constexpr int kDefaultBlockSize{1024};

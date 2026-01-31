@@ -38,7 +38,8 @@ enum class QueryOperations : uint64_t {
   kContainsTag = 1 << 3,
   kContainsNegate = 1 << 4,
   kContainsText = 1 << 5,
-  kContainsExactPhrase = 1 << 6,
+  kContainsProximity = 1 << 6,
+  kContainsNestedComposed = 1 << 7,
 };
 
 inline QueryOperations operator|(QueryOperations a, QueryOperations b) {
@@ -94,7 +95,7 @@ class FilterParser {
       std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
       const std::optional<std::string>& field_or_default);
   absl::Status SetupTextFieldConfiguration(
-      FieldMaskPredicate& field_mask, std::optional<uint32_t>& min_stem_size,
+      FieldMaskPredicate& field_mask,
       const std::optional<std::string>& field_name, bool with_suffix);
   absl::StatusOr<std::unique_ptr<query::Predicate>> ParseTextTokens(
       const std::optional<std::string>& field_for_default);
@@ -135,6 +136,8 @@ class FilterParser {
       std::unique_ptr<query::Predicate> predicate, bool& negate,
       query::LogicalOperator logical_operator, bool no_prev_grp,
       bool not_rightmost_bracket);
+  void FlagNestedComposedPredicate(
+      std::unique_ptr<query::Predicate>& predicate);
 };
 
 // Helper function to print predicate tree structure using DFS

@@ -25,7 +25,8 @@ class TextIndexSchemaTest : public vmsdk::ValkeyTest {
     std::vector<std::string> empty_stop_words;
     return std::make_shared<TextIndexSchema>(
         data_model::LANGUAGE_ENGLISH,
-        " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", false, empty_stop_words);
+        " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", false, empty_stop_words,
+        4);
   }
 };
 

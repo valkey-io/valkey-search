@@ -25,8 +25,7 @@ Text::Text(const data_model::TextIndex& text_index_proto,
       text_index_schema_(text_index_schema),
       text_field_number_(text_index_schema->AllocateTextFieldNumber()),
       with_suffix_trie_(text_index_proto.with_suffix_trie()),
-      no_stem_(text_index_proto.no_stem()),
-      min_stem_size_(text_index_proto.min_stem_size()) {
+      no_stem_(text_index_proto.no_stem()) {
   // The schema level wants to know if suffix search is enabled for at least one
   // attribute to determine how it initializes its data structures.
   if (with_suffix_trie_) {
@@ -39,8 +38,7 @@ absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,
   // TODO: Key Tracking
 
   return text_index_schema_->StageAttributeData(key, data, text_field_number_,
-                                                !no_stem_, min_stem_size_,
-                                                with_suffix_trie_);
+                                                !no_stem_, with_suffix_trie_);
 }
 
 absl::StatusOr<bool> Text::RemoveRecord(const InternedStringPtr& key,
@@ -62,8 +60,7 @@ absl::StatusOr<bool> Text::ModifyRecord(const InternedStringPtr& key,
   // TextIndexSchema::DeleteKey() at this point, so we simply add the new key
   // data
   return text_index_schema_->StageAttributeData(key, data, text_field_number_,
-                                                !no_stem_, min_stem_size_,
-                                                with_suffix_trie_);
+                                                !no_stem_, with_suffix_trie_);
 }
 
 int Text::RespondWithInfo(ValkeyModuleCtx* ctx) const {
@@ -71,18 +68,8 @@ int Text::RespondWithInfo(ValkeyModuleCtx* ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "TEXT");
   ValkeyModule_ReplyWithSimpleString(ctx, "WITH_SUFFIX_TRIE");
   ValkeyModule_ReplyWithSimpleString(ctx, with_suffix_trie_ ? "1" : "0");
-
-  // Show only one: if no_stem is specified, show no_stem, otherwise show
-  // min_stem_size
-  if (no_stem_) {
-    ValkeyModule_ReplyWithSimpleString(ctx, "NO_STEM");
-    ValkeyModule_ReplyWithSimpleString(ctx, "1");
-  } else {
-    ValkeyModule_ReplyWithSimpleString(ctx, "MIN_STEM_SIZE");
-    ValkeyModule_ReplyWithLongLong(ctx, min_stem_size_);
-  }
-  // Text fields do not include a size field right now (unlike
-  // numeric/tag/vector fields)
+  ValkeyModule_ReplyWithSimpleString(ctx, "NO_STEM");
+  ValkeyModule_ReplyWithSimpleString(ctx, no_stem_ ? "1" : "0");
   return 6;
 }
 
@@ -101,7 +88,6 @@ std::unique_ptr<data_model::Index> Text::ToProto() const {
   auto* text_index = index_proto->mutable_text_index();
   text_index->set_with_suffix_trie(with_suffix_trie_);
   text_index->set_no_stem(no_stem_);
-  text_index->set_min_stem_size(min_stem_size_);
   return index_proto;
 }
 
@@ -155,7 +141,29 @@ std::unique_ptr<indexes::EntriesFetcherBase> BuildExactPhraseFetcher(
   }
   auto proximity_iter = std::make_unique<indexes::text::ProximityIterator>(
       std::move(iters), composed_predicate->GetSlop(),
-      composed_predicate->GetInorder(), field_mask);
+      composed_predicate->GetInorder(), field_mask, nullptr, false);
+  return std::make_unique<ProximityFetcher>(std::move(proximity_iter),
+                                            min_size);
+}
+
+std::unique_ptr<indexes::EntriesFetcherBase> BuildComposedAndFetcher(
+    const ComposedPredicate* composed_predicate) {
+  absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
+                      indexes::text::kProximityTermsInlineCapacity>
+      iters;
+  size_t min_size = SIZE_MAX;
+  for (const auto& child : composed_predicate->GetChildren()) {
+    CHECK(child->GetType() == PredicateType::kText);
+    auto text_pred = dynamic_cast<const TextPredicate*>(child.get());
+    auto fetcher = std::make_unique<indexes::Text::EntriesFetcher>(
+        0, text_pred->GetTextIndexSchema()->GetTextIndex(), nullptr,
+        text_pred->GetFieldMask(), false);
+    fetcher->predicate_ = text_pred;
+    min_size = std::min(min_size, fetcher->Size());
+    iters.push_back(text_pred->BuildTextIterator(fetcher.get()));
+  }
+  auto proximity_iter = std::make_unique<indexes::text::ProximityIterator>(
+      std::move(iters), std::nullopt, false, ~0ULL, nullptr, true);
   return std::make_unique<ProximityFetcher>(std::move(proximity_iter),
                                             min_size);
 }
@@ -184,11 +192,8 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
-  while (!word_iter.Done()) {
-    if (word_iter.GetWord() == GetTextString()) {
-      key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
-    }
-    word_iter.Next();
+  if (!word_iter.Done() && word_iter.GetWord() == GetTextString()) {
+    key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
   }
   return std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), fetcher->field_mask_, fetcher->untracked_keys_,

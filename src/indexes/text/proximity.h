@@ -52,7 +52,8 @@ class ProximityIterator : public TextIterator {
                                         kProximityTermsInlineCapacity>&& iters,
                     const std::optional<uint32_t> slop, const bool in_order,
                     const FieldMaskPredicate query_field_mask,
-                    const InternedStringSet* untracked_keys = nullptr);
+                    const InternedStringSet* untracked_keys,
+                    bool skip_positional_checks);
   /* Implementation of TextIterator APIs */
   FieldMaskPredicate QueryFieldMask() const override;
   // Key-level iteration
@@ -64,10 +65,14 @@ class ProximityIterator : public TextIterator {
   bool DonePositions() const override;
   const PositionRange& CurrentPosition() const override;
   bool NextPosition() override;
+  bool SeekForwardPosition(Position target_position) override;
   FieldMaskPredicate CurrentFieldMask() const override;
   // Returns true if iterator is at a valid state with current key, position,
   // and field.
   bool IsIteratorValid() const override {
+    if (skip_positional_checks_) {
+      return current_key_;
+    }
     return current_key_ && current_position_.has_value() &&
            current_field_mask_ != 0ULL;
   }
@@ -91,10 +96,19 @@ class ProximityIterator : public TextIterator {
       pos_with_idx_;
   // Used for Negate
   const InternedStringSet* untracked_keys_;
+  bool skip_positional_checks_;
+
+  struct ViolationInfo {
+    // Iterator index to advance
+    size_t iter_idx;
+    // Optional target position if seeking is needed
+    std::optional<Position> seek_target;
+  };
 
   bool FindCommonKey();
   bool HasOrderingViolation(size_t first_idx, size_t second_idx) const;
-  std::optional<size_t> FindViolatingIterator();
+  bool IsCompatModeInorder() const;
+  std::optional<ViolationInfo> FindViolatingIterator();
 };
 }  // namespace valkey_search::indexes::text
 

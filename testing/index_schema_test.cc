@@ -1307,7 +1307,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   std::string index_schema_name_str("text_index_schema");
   bool with_suffix_trie = false;
   bool no_stem = false;
-  uint32_t min_stem_size = 3;
+  uint32_t min_stem_size = 4;  // MockIndexSchema::Create uses default value
 
   FakeSafeRDB rdb_stream;
 
@@ -1329,10 +1329,9 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
 
     // Create text index with both proto and schema
     auto text_index_schema = std::make_shared<indexes::text::TextIndexSchema>(
-        language, punctuation, with_offsets, stop_words);
+        language, punctuation, with_offsets, stop_words, min_stem_size);
     auto text_index = std::make_shared<indexes::Text>(
-        CreateTextIndexProto(with_suffix_trie, no_stem, min_stem_size),
-        text_index_schema);
+        CreateTextIndexProto(with_suffix_trie, no_stem), text_index_schema);
     VMSDK_EXPECT_OK(
         index_schema->AddIndex("description", "desc_id", text_index));
 
@@ -1404,7 +1403,9 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
     EXPECT_TRUE(text_proto->has_text_index());
     EXPECT_EQ(text_proto->text_index().with_suffix_trie(), with_suffix_trie);
     EXPECT_EQ(text_proto->text_index().no_stem(), no_stem);
-    EXPECT_EQ(text_proto->text_index().min_stem_size(), min_stem_size);
+
+    // Validate schema-level min_stem_size
+    EXPECT_EQ(index_schema->GetMinStemSize(), min_stem_size);
 
     // TODO: Text index key tracking is not yet implemented
     // Validate that GetRecordCount returns 0 (expected for unimplemented key
@@ -1544,23 +1545,23 @@ TEST_F(IndexSchemaFriendTest, MutatedAttributesSanity) {
   auto mutated_attributes_1 =
       CreateMutatedAttributes(attribute_identifier, data_ptr);
   EXPECT_TRUE(index_schema->TrackMutatedRecord(
-      nullptr, key, std::move(mutated_attributes_1), true, false, false));
+      nullptr, key, std::move(mutated_attributes_1), 0, true, false, false));
   // Verify that adding a track attribute with backfill off after on return true
   auto mutated_attributes_2 =
       CreateMutatedAttributes(attribute_identifier, data_ptr);
   EXPECT_TRUE(index_schema->TrackMutatedRecord(
-      nullptr, key, std::move(mutated_attributes_2), false, false, false));
+      nullptr, key, std::move(mutated_attributes_2), 0, false, false, false));
   auto mutated_attributes_3 =
       CreateMutatedAttributes(attribute_identifier, data_ptr);
   EXPECT_FALSE(index_schema->TrackMutatedRecord(
-      nullptr, key, std::move(mutated_attributes_3), false, false, false));
+      nullptr, key, std::move(mutated_attributes_3), 0, false, false, false));
   EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 1);
   auto consumed_data = index_schema->ConsumeTrackedMutatedAttribute(key, true);
   EXPECT_TRUE(consumed_data.has_value());
   auto mutated_attributes_4 =
       CreateMutatedAttributes(attribute_identifier, data_ptr);
   EXPECT_FALSE(index_schema->TrackMutatedRecord(
-      nullptr, key, std::move(mutated_attributes_4), false, false, false));
+      nullptr, key, std::move(mutated_attributes_4), 0, false, false, false));
   consumed_data = index_schema->ConsumeTrackedMutatedAttribute(key, true);
   EXPECT_FALSE(consumed_data.has_value());
   EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 1);
@@ -1582,7 +1583,7 @@ TEST_F(IndexSchemaFriendTest, MutatedAttributes) {
           CreateMutatedAttributes(attribute_identifier, data_ptr);
       EXPECT_EQ(index_schema->attributes_.size(), 1);
       EXPECT_TRUE(index_schema->TrackMutatedRecord(
-          nullptr, key, std::move(mutated_attributes), false, false, false));
+          nullptr, key, std::move(mutated_attributes), 0, false, false, false));
     }
     if (!track_before_consumption_data_ptr.empty()) {
       VLOG(1) << "track_before_consumption_data_ptr is not empty";
@@ -1590,7 +1591,7 @@ TEST_F(IndexSchemaFriendTest, MutatedAttributes) {
       auto mutated_attributes = CreateMutatedAttributes(
           attribute_identifier, track_before_consumption_data_ptr);
       EXPECT_FALSE(index_schema->TrackMutatedRecord(
-          nullptr, key, std::move(mutated_attributes), false, false, false));
+          nullptr, key, std::move(mutated_attributes), 0, false, false, false));
       data_ptr = track_before_consumption_data_ptr;
     }
     EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 1);
@@ -1620,8 +1621,8 @@ TEST_F(IndexSchemaFriendTest, MutatedAttributes) {
         auto mutated_attributes = CreateMutatedAttributes(
             attribute_identifier, track_after_consumption_data_ptr);
         EXPECT_EQ(index_schema->TrackMutatedRecord(
-                      nullptr, key, std::move(mutated_attributes), false, false,
-                      false),
+                      nullptr, key, std::move(mutated_attributes), 0, false,
+                      false, false),
                   !track_before_consumption_data_ptr.empty());
       }
       auto consumed_data =
@@ -1673,7 +1674,7 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
     mutated_attributes[itr->second.GetIdentifier()].data = std::move(data);
     auto key_interned = StringInternStore::Intern(std::string(*key) + "0");
     index_schema->ProcessMutation(&fake_ctx, mutated_attributes, key_interned,
-                                  false);
+                                  false, false);
     EXPECT_EQ(mutations_thread_pool.QueueSize(), 1);
     VMSDK_EXPECT_OK(mutations_thread_pool.ResumeWorkers());
   }
@@ -1690,7 +1691,7 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
       auto key_interned =
           StringInternStore::Intern(std::string(*key) + std::to_string(i));
       index_schema->ProcessMutation(&fake_ctx, mutated_attributes, key_interned,
-                                    false);
+                                    false, false);
     }
   }
   for (size_t i = 0; i < vectors.size(); ++i) {
@@ -1700,7 +1701,7 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
     auto key_interned =
         StringInternStore::Intern(std::string(*key) + std::to_string(i));
     index_schema->ProcessMutation(&fake_ctx, mutated_attributes, key_interned,
-                                  false);
+                                  false, true);
   }
 
   WaitWorkerTasksAreCompleted(mutations_thread_pool);
@@ -1727,7 +1728,7 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
       auto key_interned =
           StringInternStore::Intern(std::string(*key) + std::to_string(i));
       index_schema->ProcessMutation(&fake_ctx, mutated_attributes, key_interned,
-                                    false);
+                                    false, false);
     }
   }
   for (size_t i = 0; i < vectors.size(); ++i) {
@@ -1738,7 +1739,7 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
     auto key_interned =
         StringInternStore::Intern(std::string(*key) + std::to_string(i));
     index_schema->ProcessMutation(&fake_ctx, mutated_attributes, key_interned,
-                                  false);
+                                  false, true);
   }
   WaitWorkerTasksAreCompleted(mutations_thread_pool);
   EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 0);
@@ -2047,11 +2048,11 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
 
     // Add text index
     auto text_index = std::make_shared<indexes::Text>(
-        CreateTextIndexProto(true, false, 6),
+        CreateTextIndexProto(true, false),
         std::make_shared<indexes::text::TextIndexSchema>(
             data_model::LANGUAGE_ENGLISH,
             " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", true,
-            std::vector<std::string>{}));
+            std::vector<std::string>{}, 6));
     VMSDK_EXPECT_OK(
         index_schema->AddIndex("description", "desc_id", text_index));
 

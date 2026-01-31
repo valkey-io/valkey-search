@@ -142,7 +142,13 @@ absl::Status FTDropIndexCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     }
     ValkeyModule_ReplyWithSimpleString(ctx, "OK");
   }
-  ValkeyModule_ReplicateVerbatim(ctx);
+
+  // Replicate FT.DROPINDEX only for CMD clusters (no coordinator),
+  // CME clusters (with coordinator) use FT.INTERNAL_UPDATE for replication with
+  // metadata versioning
+  if (!options::GetUseCoordinator().GetValue()) {
+    ValkeyModule_ReplicateVerbatim(ctx);
+  }
   return absl::OkStatus();
 }
 }  // namespace valkey_search

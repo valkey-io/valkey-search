@@ -145,25 +145,68 @@ inline PredicateType EvaluateAsComposedPredicate(
   return PredicateType::kComposedAnd;
 }
 
-inline bool IsExactPhraseOnly(QueryOperations query_operations) {
-  return (query_operations & QueryOperations::kContainsExactPhrase) &&
-         !(query_operations &
-           (QueryOperations::kContainsAnd | QueryOperations::kContainsOr));
+enum class QueryOptimizationPath {
+  kNone,
+  kExactPhrase,       // Text + And + Proximity (Non-nested)
+  kSimpleComposedAnd  // Text + And (Non-nested, No Proximity)
+};
+
+// Helper fn to determine optimization path based on query operations
+inline QueryOptimizationPath GetOptimizationPath(QueryOperations ops) {
+  // Common "Forbidden" check for both paths
+  const QueryOperations kForbidden = QueryOperations::kContainsNestedComposed |
+                                     QueryOperations::kContainsNumeric |
+                                     QueryOperations::kContainsTag;
+  if (ops & kForbidden) return QueryOptimizationPath::kNone;
+  // Check shared requirements
+  bool is_text_and = (ops & QueryOperations::kContainsText) &&
+                     (ops & QueryOperations::kContainsAnd);
+  if (!is_text_and) return QueryOptimizationPath::kNone;
+  // Differentiate based on Proximity
+  if (ops & QueryOperations::kContainsProximity) {
+    return QueryOptimizationPath::kExactPhrase;
+  }
+  return QueryOptimizationPath::kSimpleComposedAnd;
+}
+
+// Helper fn to identify composed AND predicates that we cannot optimize
+// currently.
+inline bool IsUnsolvedComposedAnd(QueryOperations query_operations) {
+  if (!(query_operations & QueryOperations::kContainsAnd)) return false;
+  // It's unsolved only if the optimizer returns kNone
+  return GetOptimizationPath(query_operations) == QueryOptimizationPath::kNone;
+}
+
+// Helper fn to identify if deduplication is needed.
+// (1) OR operations need deduplication.
+// (2) Any TAG operations need deduplication.
+inline bool NeedsDeduplication(QueryOperations query_operations) {
+  bool has_or = query_operations & QueryOperations::kContainsOr;
+  bool has_tag = query_operations & QueryOperations::kContainsTag;
+  return has_or || has_tag;
 }
 
 size_t EvaluateFilterAsPrimary(
     const Predicate *predicate,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     bool negate, QueryOperations query_operations) {
-  // Faster path for pure exact phrase queries.
+  QueryOptimizationPath path = GetOptimizationPath(query_operations);
+  // Faster path for non nested pure text composed AND predicates.
   // This is an optimization to avoid building multiple term iterators and a
   // proximity iterator for every key's evaluation in the filtering stage (using
   // the PrefilterEvaluator).
-  if (IsExactPhraseOnly(query_operations) && !negate) {
+  if ((path == QueryOptimizationPath::kExactPhrase ||
+       path == QueryOptimizationPath::kSimpleComposedAnd) &&
+      !negate) {
     CHECK(predicate->GetType() == PredicateType::kComposedAnd);
     auto composed_predicate =
         dynamic_cast<const ComposedPredicate *>(predicate);
-    auto fetcher = BuildExactPhraseFetcher(composed_predicate);
+    std::unique_ptr<indexes::EntriesFetcherBase> fetcher;
+    if (path == QueryOptimizationPath::kExactPhrase) {
+      fetcher = BuildExactPhraseFetcher(composed_predicate);
+    } else {
+      fetcher = BuildComposedAndFetcher(composed_predicate);
+    }
     size_t size = fetcher->Size();
     entries_fetchers.push(std::move(fetcher));
     return size;
@@ -250,8 +293,8 @@ void EvaluatePrefilteredKeys(
   // If there was a union operation, we need to handle deduplication.
   // This implementation skips deduplication (flat_hash_set usage) if not needed
   // for performance.
-  bool needs_dedup = parameters.filter_parse_results.query_operations &
-                     QueryOperations::kContainsOr;
+  bool needs_dedup =
+      NeedsDeduplication(parameters.filter_parse_results.query_operations);
   absl::flat_hash_set<const char *> result_keys;
   if (needs_dedup) {
     result_keys.reserve(max_keys);
@@ -450,7 +493,6 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
   std::vector<indexes::Neighbor> neighbors;
   // TODO: For now, we just reserve a fixed size because text search operators
   // return a size of 0 currently.
-  // neighbors.reserve(qualified_entries);
   neighbors.reserve(5000);
   auto results_appender =
       [&neighbors, &parameters](
@@ -459,21 +501,31 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
     neighbors.emplace_back(indexes::Neighbor{key, 0.0f});
     return true;
   };
-  // If AND or OR predicate, we cannot skip evaluation.
-  // The initial search done by EvaluateFilterAsPrimary does not handle
-  // union or intersection of results.
-  // However, individual predicate searches as well as exact phrases (not nested
-  // Composed AND/OR) are both handled in the initial entries fetcher search.
-  bool skip_evaluation =
-      !(parameters.filter_parse_results.query_operations &
-        (QueryOperations::kContainsOr | QueryOperations::kContainsAnd));
-  if (skip_evaluation) {
+  // Cannot skip evaluation if the query contains unsolved composed operations.
+  bool requires_prefilter_evaluation =
+      IsUnsolvedComposedAnd(parameters.filter_parse_results.query_operations);
+  if (!requires_prefilter_evaluation) {
+    bool needs_dedup =
+        NeedsDeduplication(parameters.filter_parse_results.query_operations);
+    absl::flat_hash_set<const char *> seen_keys;
+    if (needs_dedup) {
+      // TODO: Use the qualified_entries size when text indexes return correct
+      // size.
+      seen_keys.reserve(5000);
+    }
     while (!entries_fetchers.empty()) {
       auto fetcher = std::move(entries_fetchers.front());
       entries_fetchers.pop();
       auto iterator = fetcher->Begin();
       while (!iterator->Done()) {
         const auto &key = **iterator;
+        if (needs_dedup) {
+          if (seen_keys.contains(key->Str().data())) {
+            iterator->Next();
+            continue;
+          }
+          seen_keys.insert(key->Str().data());
+        }
         neighbors.emplace_back(indexes::Neighbor{key, 0.0f});
         iterator->Next();
         if (parameters.cancellation_token->IsCancelled()) {
@@ -606,7 +658,6 @@ void SearchResult::TrimResults(std::vector<indexes::Neighbor> &neighbors,
   // Apply limiting with buffer
   this->is_limited_with_buffer = true;
   neighbors.erase(neighbors.begin() + max_needed, neighbors.end());
-  return;
 }
 
 // Determine the range of neighbors to serialize in the response.
@@ -645,7 +696,14 @@ absl::StatusOr<SearchResult> Search(const SearchParameters &parameters,
     return result.status();
   }
   size_t total_count = result.value().size();
-  return SearchResult(total_count, std::move(result.value()), parameters);
+  // return SearchResult(total_count, std::move(result.value()), parameters);
+  auto search_result =
+      SearchResult(total_count, std::move(result.value()), parameters);
+  for (auto &n : search_result.neighbors) {
+    n.sequence_number =
+        parameters.index_schema->GetIndexMutationSequenceNumber(n.external_id);
+  }
+  return search_result;
 }
 
 absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,

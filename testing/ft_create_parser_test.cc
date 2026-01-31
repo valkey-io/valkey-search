@@ -47,6 +47,7 @@ struct ExpectedPerIndexTextParameters {
   std::vector<std::string> stop_words = {kDefStopWords};  // Default stop words
   data_model::Language language = data_model::Language::LANGUAGE_ENGLISH;
   bool with_offsets = true;
+  uint32_t min_stem_size = 4;  // Schema-level min_stem_size
 };
 
 struct FTCreateParameters {
@@ -140,6 +141,10 @@ TEST_P(FTCreateParserTest, ParseParams) {
       EXPECT_EQ(index_schema_proto->with_offsets(),
                 test_case.expected.per_index_text_params.with_offsets);
 
+      // Verify min_stem_size (schema-level)
+      EXPECT_EQ(index_schema_proto->min_stem_size(),
+                test_case.expected.per_index_text_params.min_stem_size);
+
       // Verify stop words
       std::vector<std::string> actual_stop_words;
       for (const auto &word : index_schema_proto->stop_words()) {
@@ -216,7 +221,6 @@ TEST_P(FTCreateParserTest, ParseParams) {
           EXPECT_EQ(text_proto.with_suffix_trie(),
                     expected_text.with_suffix_trie);
           EXPECT_EQ(text_proto.no_stem(), expected_text.no_stem);
-          EXPECT_EQ(text_proto.min_stem_size(), expected_text.min_stem_size);
         }
         ++text_index;
       } else {
@@ -1020,7 +1024,6 @@ INSTANTIATE_TEST_SUITE_P(
              .text_parameters = {{
                  .with_suffix_trie = false,
                  .no_stem = false,
-                 .min_stem_size = 4,
              }},
              .expected = {
                  .index_schema_name = "idx1",
@@ -1029,14 +1032,17 @@ INSTANTIATE_TEST_SUITE_P(
                      .identifier = "text_field",
                      .attribute_alias = "text_field",
                      .indexer_type = indexes::IndexerType::kText,
-                 }}
+                 }},
+                 .per_index_text_params = {
+                     .min_stem_size = 4,  // Default value
+                 }
              },
              .expected_error_message = "",
          },
          {
              .test_name = "happy_path_text_with_field_parameters",
              .success = true,
-             .command_str = "idx1 on HASH SCHEMA text_field TEXT WITHSUFFIXTRIE MINSTEMSIZE 2",
+             .command_str = "idx1 on HASH SCHEMA text_field TEXT WITHSUFFIXTRIE",
              .too_many_attributes = false,
              .hnsw_parameters = {},
              .flat_parameters = {},
@@ -1044,7 +1050,6 @@ INSTANTIATE_TEST_SUITE_P(
              .text_parameters = {{
                  .with_suffix_trie = true,
                  .no_stem = false,
-                 .min_stem_size = 2,
              }},
              .expected = {
                  .index_schema_name = "idx1",
@@ -1068,7 +1073,6 @@ INSTANTIATE_TEST_SUITE_P(
              .text_parameters = {{
                  .with_suffix_trie = false,
                  .no_stem = true,
-                 .min_stem_size = 4,
              }},
              .expected = {
                  .index_schema_name = "idx1",
@@ -1083,6 +1087,7 @@ INSTANTIATE_TEST_SUITE_P(
                      .stop_words = {"the", "and", "or"},
                      .language = data_model::Language::LANGUAGE_ENGLISH,
                      .with_offsets = true,
+                     .min_stem_size = 4,  // Default value
                  }
              },
              .expected_error_message = "",
@@ -1098,7 +1103,6 @@ INSTANTIATE_TEST_SUITE_P(
              .text_parameters = {{
                  .with_suffix_trie = false,
                  .no_stem = false,
-                 .min_stem_size = 4,
              }},
              .expected = {
                  .index_schema_name = "idx1",
@@ -1113,6 +1117,7 @@ INSTANTIATE_TEST_SUITE_P(
                      .stop_words = {},  // Empty due to NOSTOPWORDS
                      .language = data_model::Language::LANGUAGE_ENGLISH,
                      .with_offsets = true,
+                     .min_stem_size = 4,  // Default value
                  }
              },
              .expected_error_message = "",
@@ -1128,7 +1133,6 @@ INSTANTIATE_TEST_SUITE_P(
              .text_parameters = {{
                  .with_suffix_trie = false,
                  .no_stem = false,
-                 .min_stem_size = 4,
              }},
              .expected = {
                  .index_schema_name = "idx1",
@@ -1143,6 +1147,7 @@ INSTANTIATE_TEST_SUITE_P(
                      .stop_words = {},  // Empty due to STOPWORDS 0
                      .language = data_model::Language::LANGUAGE_ENGLISH,
                      .with_offsets = true,
+                     .min_stem_size = 4,  // Default value
                  }
              },
              .expected_error_message = "",
@@ -1168,7 +1173,6 @@ INSTANTIATE_TEST_SUITE_P(
              .text_parameters = {{
                  .with_suffix_trie = false,
                  .no_stem = false,
-                 .min_stem_size = 4,
              }},
              .expected = {
                  .index_schema_name = "idx1",
@@ -1184,6 +1188,9 @@ INSTANTIATE_TEST_SUITE_P(
                          .attribute_alias = "vector_field",
                          .indexer_type = indexes::IndexerType::kHNSW,
                      }
+                 },
+                 .per_index_text_params = {
+                     .min_stem_size = 4,  // Default value
                  }
              },
              .expected_error_message = "",
@@ -1215,26 +1222,38 @@ INSTANTIATE_TEST_SUITE_P(
          {
              .test_name = "invalid_text_negative_minstemsize",
              .success = false,
-             .command_str = "idx1 on HASH SCHEMA text_field TEXT MINSTEMSIZE -1",
+             .command_str = "idx1 on HASH MINSTEMSIZE -1 SCHEMA text_field TEXT",
              .too_many_attributes = false,
              .hnsw_parameters = {},
              .flat_parameters = {},
              .tag_parameters = {},
              .text_parameters = {},
              .expected = {},
-             .expected_error_message = "Invalid field type for field `text_field`: Error parsing value for the parameter `MINSTEMSIZE` - MINSTEMSIZE must be positive",
+             .expected_error_message = "Error parsing value for the parameter `MINSTEMSIZE` - MINSTEMSIZE must be positive",
          },
          {
              .test_name = "invalid_text_zero_minstemsize",
              .success = false,
-             .command_str = "idx1 on HASH SCHEMA text_field TEXT MINSTEMSIZE 0",
+             .command_str = "idx1 on HASH MINSTEMSIZE 0 SCHEMA text_field TEXT",
              .too_many_attributes = false,
              .hnsw_parameters = {},
              .flat_parameters = {},
              .tag_parameters = {},
              .text_parameters = {},
              .expected = {},
-             .expected_error_message = "Invalid field type for field `text_field`: Error parsing value for the parameter `MINSTEMSIZE` - MINSTEMSIZE must be positive",
+             .expected_error_message = "Error parsing value for the parameter `MINSTEMSIZE` - MINSTEMSIZE must be positive",
+         },
+         {
+             .test_name = "invalid_text_per_field_minstemsize",
+             .success = false,
+             .command_str = "idx1 on HASH SCHEMA text_field TEXT MINSTEMSIZE 2",
+             .too_many_attributes = false,
+             .hnsw_parameters = {},
+             .flat_parameters = {},
+             .tag_parameters = {},
+             .text_parameters = {},
+             .expected = {},
+             .expected_error_message = "Invalid field type for field `MINSTEMSIZE`: Unknown argument `2`",
          },
          {
              .test_name = "invalid_per_index_stopwords_before_schema",
@@ -1288,7 +1307,6 @@ INSTANTIATE_TEST_SUITE_P(
             .text_parameters = {{
                 .with_suffix_trie = false,
                 .no_stem = false,
-                .min_stem_size = 4,
             }},
             .expected = {
                 .index_schema_name = "idx1",
@@ -1303,6 +1321,7 @@ INSTANTIATE_TEST_SUITE_P(
                     .stop_words = {kDefStopWords},
                     .language = data_model::Language::LANGUAGE_ENGLISH,
                     .with_offsets = false,  // NOOFFSETS should set this to false
+                    .min_stem_size = 4,  // Default value
                 }
             },
         },
@@ -1313,7 +1332,6 @@ INSTANTIATE_TEST_SUITE_P(
              .text_parameters = {{
                  .with_suffix_trie = true,
                  .no_stem = false,
-                 .min_stem_size = 4,
              }},
              .expected = {
                  .index_schema_name = "idx1",
@@ -1322,7 +1340,10 @@ INSTANTIATE_TEST_SUITE_P(
                      .identifier = "text_field",
                      .attribute_alias = "text_field",
                      .indexer_type = indexes::IndexerType::kText,
-                 }}
+                 }},
+                 .per_index_text_params = {
+                     .min_stem_size = 4,  // Default value
+                 }
              },
          },
          {
@@ -1332,7 +1353,6 @@ INSTANTIATE_TEST_SUITE_P(
              .text_parameters = {{
                  .with_suffix_trie = false,
                  .no_stem = false,
-                 .min_stem_size = 4,
              }},
              .expected = {
                  .index_schema_name = "idx1",
@@ -1341,17 +1361,19 @@ INSTANTIATE_TEST_SUITE_P(
                      .identifier = "text_field",
                      .attribute_alias = "text_field",
                      .indexer_type = indexes::IndexerType::kText,
-                 }}
+                 }},
+                 .per_index_text_params = {
+                     .min_stem_size = 4,  // Default value
+                 }
              },
          },
          {
              .test_name = "text_combined_per_index_and_field_flags",
              .success = true,
-             .command_str = "idx1 on HASH NOOFFSETS NOSTEM LANGUAGE ENGLISH SCHEMA text_field TEXT WITHSUFFIXTRIE MINSTEMSIZE 2",
+             .command_str = "idx1 on HASH NOOFFSETS NOSTEM LANGUAGE ENGLISH MINSTEMSIZE 2 SCHEMA text_field TEXT WITHSUFFIXTRIE",
              .text_parameters = {{
                  .with_suffix_trie = true,
                  .no_stem = true,
-                 .min_stem_size = 2,
              }},
              .expected = {
                  .index_schema_name = "idx1",
@@ -1366,6 +1388,7 @@ INSTANTIATE_TEST_SUITE_P(
                      .stop_words = {kDefStopWords},
                      .language = data_model::Language::LANGUAGE_ENGLISH,
                      .with_offsets = false,
+                     .min_stem_size = 2,
                  }
              }
          },
@@ -1384,7 +1407,6 @@ INSTANTIATE_TEST_SUITE_P(
             .text_parameters = {{
                 .with_suffix_trie = false,
                 .no_stem = false,
-                .min_stem_size = 4,
             }},
             .expected = {
                 .index_schema_name = "idx1",
@@ -1405,11 +1427,10 @@ INSTANTIATE_TEST_SUITE_P(
          {
              .test_name = "text_max_minstemsize",
              .success = true,
-             .command_str = "idx1 on HASH SCHEMA text_field TEXT MINSTEMSIZE 100",
+             .command_str = "idx1 on HASH MINSTEMSIZE 100 SCHEMA text_field TEXT",
              .text_parameters = {{
                  .with_suffix_trie = false,
                  .no_stem = false,
-                 .min_stem_size = 100,
              }},
              .expected = {
                  .index_schema_name = "idx1",
@@ -1418,7 +1439,10 @@ INSTANTIATE_TEST_SUITE_P(
                      .identifier = "text_field",
                      .attribute_alias = "text_field",
                      .indexer_type = indexes::IndexerType::kText,
-                 }}
+                 }},
+                 .per_index_text_params = {
+                     .min_stem_size = 100,
+                 }
              },
          },
          {
@@ -1436,7 +1460,6 @@ INSTANTIATE_TEST_SUITE_P(
             .text_parameters = {{
                 .with_suffix_trie = false,
                 .no_stem = false,
-                .min_stem_size = 4,
             }},
             .expected = {
                 .index_schema_name = "idx1",
@@ -1457,17 +1480,15 @@ INSTANTIATE_TEST_SUITE_P(
          {
              .test_name = "text_multiple_fields_different_configs",
              .success = true,
-             .command_str = "idx1 on HASH NOSTOPWORDS PUNCTUATION '.,;' SCHEMA text1 TEXT text2 TEXT MINSTEMSIZE 2",
+             .command_str = "idx1 on HASH NOSTOPWORDS PUNCTUATION '.,;' MINSTEMSIZE 2 SCHEMA text1 TEXT text2 TEXT NOSTEM",
              .text_parameters = {
                  {
                      .with_suffix_trie = false,
                      .no_stem = false,
-                     .min_stem_size = 4,
                  },
                  {
                      .with_suffix_trie = false,
-                     .no_stem = false,
-                     .min_stem_size = 2,
+                     .no_stem = true,
                  }
              },
              .expected = {
@@ -1490,6 +1511,7 @@ INSTANTIATE_TEST_SUITE_P(
                      .stop_words = {},  // Empty due to NOSTOPWORDS
                      .language = data_model::Language::LANGUAGE_ENGLISH,
                      .with_offsets = true,
+                     .min_stem_size = 2,
                  }
              },
          },
@@ -1527,11 +1549,10 @@ INSTANTIATE_TEST_SUITE_P(
          {
              .test_name = "valid_text_minstemsize_too_large",
              .success = true,  // Should succeed as there's no upper limit defined
-             .command_str = "idx1 on HASH SCHEMA text_field TEXT MINSTEMSIZE 999999",
+             .command_str = "idx1 on HASH MINSTEMSIZE 999999 SCHEMA text_field TEXT",
              .text_parameters = {{
                  .with_suffix_trie = false,
                  .no_stem = false,
-                 .min_stem_size = 999999,
              }},
              .expected = {
                  .index_schema_name = "idx1",
@@ -1540,7 +1561,10 @@ INSTANTIATE_TEST_SUITE_P(
                      .identifier = "text_field",
                      .attribute_alias = "text_field",
                      .indexer_type = indexes::IndexerType::kText,
-                 }}
+                 }},
+                 .per_index_text_params = {
+                     .min_stem_size = 999999,
+                 }
              },
          },
          {
@@ -1556,7 +1580,6 @@ INSTANTIATE_TEST_SUITE_P(
              .text_parameters = {{
                  .with_suffix_trie = false,
                  .no_stem = true,
-                 .min_stem_size = 4,
              }},
              .expected = {
                  .index_schema_name = "idx1",
@@ -1581,7 +1604,6 @@ INSTANTIATE_TEST_SUITE_P(
              .text_parameters = {{
                  .with_suffix_trie = true,
                  .no_stem = false,
-                 .min_stem_size = 4,
              }},
              .expected = {
                  .index_schema_name = "idx1",
@@ -1596,6 +1618,7 @@ INSTANTIATE_TEST_SUITE_P(
                      .stop_words = {kDefStopWords},
                      .language = data_model::Language::LANGUAGE_ENGLISH,
                      .with_offsets = true,
+                     .min_stem_size = 4,  // Default value
                  }
              },
          }}),

@@ -150,6 +150,27 @@ bool TermIterator::NextPosition() {
   return true;
 }
 
+bool TermIterator::SeekForwardPosition(Position target_position) {
+  if (current_position_.has_value() &&
+      current_position_.value().start >= target_position) {
+    return true;
+  }
+  for (auto& pos_iter : pos_iterators_) {
+    if (pos_iter.IsValid()) {
+      // TRACKING CHECK: Only skip if the target is actually ahead of
+      // this specific child's current internal cumulative position.
+      if (target_position > pos_iter.GetPosition()) {
+        pos_iter.SkipForwardPosition(target_position);
+      }
+      // If target_position <= GetPosition(), we do nothing. This is safe
+      // because that child is already at or past the target.
+    }
+  }
+  current_position_ = std::nullopt;
+  current_field_mask_ = 0ULL;
+  return NextPosition();
+}
+
 FieldMaskPredicate TermIterator::CurrentFieldMask() const {
   CHECK(current_field_mask_ != 0ULL);
   return current_field_mask_;

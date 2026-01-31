@@ -16,6 +16,7 @@
 #include "src/commands/ft_create_parser.h"
 #include "src/indexes/index_base.h"
 #include "src/schema_manager.h"
+#include "src/valkey_search_options.h"
 #include "testing/common.h"
 #include "vmsdk/src/module.h"
 #include "vmsdk/src/testing_infra/module.h"
@@ -456,6 +457,35 @@ INSTANTIATE_TEST_SUITE_P(
     [](const TestParamInfo<MaxLimitTestCase>& info) {
       return info.param.test_name;
     });
+
+// Test replication behavior based on coordinator setting
+TEST_F(FTCreateTest, ReplicationBehaviorCoordinatorEnabled) {
+  VMSDK_EXPECT_OK(
+      const_cast<vmsdk::config::Boolean&>(options::GetUseCoordinator())
+          .SetValue(true));
+
+  EXPECT_CALL(*kMockValkeyModule, ReplicateVerbatim(&fake_ctx_))
+      .Times(0);  // Should NOT replicate when coordinator enabled
+
+  std::vector<std::string> argv = {
+      "FT.CREATE", "test_idx", "schema", "vec", "vector",          "FLAT", "6",
+      "TYPE",      "FLOAT32",  "DIM",    "3",   "DISTANCE_METRIC", "IP"};
+  ExecuteFTCreateCommand(&fake_ctx_, argv);
+}
+
+TEST_F(FTCreateTest, ReplicationBehaviorCoordinatorDisabled) {
+  VMSDK_EXPECT_OK(
+      const_cast<vmsdk::config::Boolean&>(options::GetUseCoordinator())
+          .SetValue(false));
+
+  EXPECT_CALL(*kMockValkeyModule, ReplicateVerbatim(&fake_ctx_))
+      .Times(1);  // Should replicate when coordinator disabled
+
+  std::vector<std::string> argv = {
+      "FT.CREATE", "test_idx", "schema", "vec", "vector",          "FLAT", "6",
+      "TYPE",      "FLOAT32",  "DIM",    "3",   "DISTANCE_METRIC", "IP"};
+  ExecuteFTCreateCommand(&fake_ctx_, argv);
+}
 
 }  // namespace
 

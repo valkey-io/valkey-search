@@ -56,10 +56,10 @@ class InternedString {
   void IncrementRefCount() {
     ref_count_.fetch_add(1, std::memory_order_seq_cst);
   }
-  void DecrementRefCount() {
-    if (ref_count_.fetch_sub(1, std::memory_order_seq_cst) == 1) {
-      Destructor();
-    }
+  void DecrementRefCount();
+
+  uint32_t RefCount() const {
+    return ref_count_.load(std::memory_order_seq_cst);
   }
 
   //
@@ -158,9 +158,7 @@ class InternedStringPtr {
     impl_ = nullptr;
   }
 
-  size_t RefCount() const {
-    return impl_ ? impl_->ref_count_.load(std::memory_order_seq_cst) : 0;
-  }
+  size_t RefCount() const { return impl_ ? impl_->RefCount() : 0; }
 
  private:
   InternedStringPtr(InternedString *impl) : impl_(impl) {}

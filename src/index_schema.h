@@ -43,7 +43,7 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::query {
-class InFlightRetryContextBase;
+class InFlightRetryContext;
 }  // namespace valkey_search::query
 
 namespace valkey_search {
@@ -196,7 +196,7 @@ class IndexSchema : public KeyspaceEventSubscription,
     std::optional<absl::flat_hash_map<std::string, AttributeData>> attributes;
     std::vector<vmsdk::BlockedClient> blocked_clients;
     // Queries waiting for this mutation to complete
-    absl::flat_hash_set<std::shared_ptr<query::InFlightRetryContextBase>>
+    absl::flat_hash_set<std::shared_ptr<query::InFlightRetryContext>>
         waiting_queries;
     MutationSequenceNumber sequence_number{0};
     bool consume_in_progress{false};
@@ -215,13 +215,11 @@ class IndexSchema : public KeyspaceEventSubscription,
   uint64_t GetBackfillScannedKeyCount() const;
   uint64_t GetBackfillDbSize() const;
   InfoIndexPartitionData GetInfoIndexPartitionData() const;
-  bool IsKeyInFlight(const InternedStringPtr &key) const
-      ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
   // Register a waiting query on the first conflicting in-flight key.
   // Returns true if registered (conflict found), false otherwise.
   bool RegisterWaitingQuery(
       const std::vector<indexes::Neighbor> &neighbors,
-      std::shared_ptr<query::InFlightRetryContextBase> query_ctx)
+      std::shared_ptr<query::InFlightRetryContext> query_ctx)
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
 
   static absl::Status TextInfoCmd(ValkeyModuleCtx *ctx,

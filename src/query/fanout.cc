@@ -192,45 +192,38 @@ struct SearchPartitionResultsTracker {
   }
 };
 
-struct LocalInFlightRetryContext : public query::InFlightRetryContextBase {
-  std::vector<indexes::Neighbor> neighbors;
-  std::unique_ptr<SearchParameters> parameters;
+// SearchParameters subclass for local responder (local shard in fanout).
+// Handles in-flight retry completion by adding results to the tracker.
+class LocalResponderSearch : public query::SearchParameters {
+ public:
   std::shared_ptr<SearchPartitionResultsTracker> tracker;
+  std::unique_ptr<SearchParameters> parameters;
+  std::vector<indexes::Neighbor> neighbors;
   size_t total_count;
 
-  LocalInFlightRetryContext(std::vector<indexes::Neighbor> &&nbrs,
-                            std::unique_ptr<SearchParameters> &&params,
-                            std::shared_ptr<SearchPartitionResultsTracker> trk,
-                            size_t count)
-      : neighbors(std::move(nbrs)),
-        parameters(std::move(params)),
+  LocalResponderSearch(std::shared_ptr<SearchPartitionResultsTracker> trk,
+                       std::unique_ptr<SearchParameters>&& params,
+                       std::vector<indexes::Neighbor>&& nbrs, size_t count)
+      : query::SearchParameters(0, nullptr, params->db_num),
         tracker(std::move(trk)),
+        parameters(std::move(params)),
+        neighbors(std::move(nbrs)),
         total_count(count) {}
 
-  bool IsCancelled() const override {
-    return parameters->cancellation_token->IsCancelled();
-  }
+  const char *GetDesc() const override { return "local-responder"; }
 
-  const std::shared_ptr<IndexSchema> &GetIndexSchema() const override {
-    return parameters->index_schema;
-  }
+  SearchParameters &GetParameters() override { return *parameters; }
 
-  const char *GetDesc() const override {
-    return "Local fanout full-text query";
-  }
+  std::vector<indexes::Neighbor> &GetNeighbors() override { return neighbors; }
 
-  const std::vector<indexes::Neighbor> &GetNeighbors() const override {
-    return neighbors;
-  }
-
-  void OnComplete() override {
+  void OnComplete(std::vector<indexes::Neighbor> &neighbors) override {
     tracker->AddResults(neighbors);
     tracker->AddTotalCount(total_count);
   }
 
   void OnCancelled() override {
     if (parameters->enable_partial_results) {
-      OnComplete();
+      OnComplete(neighbors);
     }
   }
 };
@@ -339,9 +332,11 @@ absl::Status PerformSearchFanoutAsync(
             // in-flight mutations.
             if (!parameters->no_content &&
                 query::QueryHasTextPredicate(*parameters)) {
-              auto retry_ctx = std::make_shared<LocalInFlightRetryContext>(
-                  std::move(result->neighbors), std::move(parameters), tracker,
+              auto local_responder = std::make_unique<LocalResponderSearch>(
+                  tracker, std::move(parameters), std::move(result->neighbors),
                   result->total_count);
+              auto retry_ctx = std::make_shared<query::InFlightRetryContext>(
+                  std::move(local_responder));
               retry_ctx->ScheduleOnMainThread();
               return;
             }

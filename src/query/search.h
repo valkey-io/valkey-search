@@ -128,6 +128,21 @@ struct SearchParameters {
   // particular is needed on the results. This should be overridden in derived
   // classes if needed. The default implementation returns false.
   virtual bool RequiresCompleteResults() const { return false; }
+
+  // In-flight retry completion callbacks. Override in derived classes to
+  // handle completion of searches that were blocked waiting for in-flight
+  // mutations. Default implementations do nothing (for basic SearchParameters
+  // used in retry contexts).
+  virtual void OnComplete(std::vector<indexes::Neighbor>& neighbors) {}
+  virtual void OnCancelled() {}
+  virtual std::vector<indexes::Neighbor>& GetNeighbors() {
+    static std::vector<indexes::Neighbor> empty;
+    return empty;
+  }
+  // Description for debugging in-flight retry code paths.
+  virtual const char* GetDesc() const { return "base"; }
+  virtual SearchParameters& GetParameters() { return *this; }
+
   SearchParameters(uint64_t timeout, grpc::CallbackServerContext* context,
                    uint32_t db_num)
       : timeout_ms(timeout),

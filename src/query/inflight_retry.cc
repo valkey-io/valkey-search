@@ -7,32 +7,54 @@
 
 #include "src/query/inflight_retry.h"
 
+#include "src/index_schema.h"
+#include "src/query/search.h"
+#include "vmsdk/src/log.h"
+
 namespace valkey_search::query {
 
-void InFlightRetryContextBase::ProcessRetry() {
-  if (IsCancelled()) {
-    OnCancelled();
+InFlightRetryContext::InFlightRetryContext(
+    std::unique_ptr<SearchParameters> params)
+    : parameters_(std::move(params)) {}
+
+void InFlightRetryContext::ProcessRetry() {
+  auto& params = parameters_->GetParameters();
+  if (params.cancellation_token->IsCancelled()) {
+    VMSDK_LOG(DEBUG, nullptr)
+        << "In-flight retry cancelled for " << parameters_->GetDesc();
+    parameters_->OnCancelled();
     return;
   }
 
+  auto& neighbors = parameters_->GetNeighbors();
+
   // Try to register with a conflicting mutation entry
-  if (GetIndexSchema()->RegisterWaitingQuery(GetNeighbors(),
-                                             shared_from_this())) {
+  if (params.index_schema->RegisterWaitingQuery(neighbors,
+                                                shared_from_this())) {
     if (!blocked_) {
       blocked_ = true;
       ++Metrics::GetStats().fulltext_query_blocked_cnt;
+      VMSDK_LOG(DEBUG, nullptr)
+          << "In-flight retry blocked for " << parameters_->GetDesc();
     }
     ++Metrics::GetStats().fulltext_query_retry_cnt;
     return;  // Will be called back via OnMutationComplete()
   }
 
   // No conflicts - complete the query
-  OnComplete();
+  VMSDK_LOG(DEBUG, nullptr)
+      << "In-flight retry complete for " << parameters_->GetDesc();
+  parameters_->OnComplete(neighbors);
 }
 
-void InFlightRetryContextBase::OnMutationComplete() { ScheduleOnMainThread(); }
+void InFlightRetryContext::OnMutationComplete() { ScheduleOnMainThread(); }
 
-void InFlightRetryContextBase::ScheduleOnMainThread() {
+const std::vector<indexes::Neighbor>& InFlightRetryContext::GetNeighbors()
+    const {
+  return parameters_->GetNeighbors();
+}
+
+void InFlightRetryContext::ScheduleOnMainThread() {
   auto self = shared_from_this();
   vmsdk::RunByMain([self]() { self->ProcessRetry(); }, true);
 }

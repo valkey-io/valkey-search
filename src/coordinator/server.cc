@@ -116,8 +116,11 @@ void SerializeNeighbors(SearchIndexPartitionResponse* response,
 
 namespace {
 
-// Context for timer-based retry when waiting for in-flight keys on remote shard
-struct RemoteInFlightRetryContext : public query::InFlightRetryContextBase {
+// SearchParameters subclass for remote responder (remote shard in fanout).
+// Handles in-flight retry completion by processing neighbors and sending gRPC
+// response.
+class RemoteResponderSearch : public query::SearchParameters {
+ public:
   SearchIndexPartitionResponse* response;
   grpc::ServerUnaryReactor* reactor;
   std::unique_ptr<vmsdk::StopWatch> latency_sample;
@@ -125,34 +128,27 @@ struct RemoteInFlightRetryContext : public query::InFlightRetryContextBase {
   std::unique_ptr<query::SearchParameters> parameters;
   size_t total_count;
 
-  RemoteInFlightRetryContext(SearchIndexPartitionResponse* resp,
-                             grpc::ServerUnaryReactor* react,
-                             std::unique_ptr<vmsdk::StopWatch> sample,
-                             std::vector<indexes::Neighbor>&& nbrs,
-                             std::unique_ptr<query::SearchParameters>&& params,
-                             size_t count)
-      : response(resp),
+  RemoteResponderSearch(SearchIndexPartitionResponse* resp,
+                        grpc::ServerUnaryReactor* react,
+                        std::unique_ptr<vmsdk::StopWatch>&& sample,
+                        std::vector<indexes::Neighbor>&& nbrs,
+                        std::unique_ptr<query::SearchParameters>&& params,
+                        size_t count)
+      : query::SearchParameters(0, nullptr, params->db_num),
+        response(resp),
         reactor(react),
         latency_sample(std::move(sample)),
         neighbors(std::move(nbrs)),
         parameters(std::move(params)),
         total_count(count) {}
 
-  bool IsCancelled() const override {
-    return parameters->cancellation_token->IsCancelled();
-  }
+  const char* GetDesc() const override { return "remote-responder"; }
 
-  const std::shared_ptr<IndexSchema>& GetIndexSchema() const override {
-    return parameters->index_schema;
-  }
+  query::SearchParameters& GetParameters() override { return *parameters; }
 
-  const char* GetDesc() const override { return "Remote full-text query"; }
+  std::vector<indexes::Neighbor>& GetNeighbors() override { return neighbors; }
 
-  const std::vector<indexes::Neighbor>& GetNeighbors() const override {
-    return neighbors;
-  }
-
-  void OnComplete() override {
+  void OnComplete(std::vector<indexes::Neighbor>& neighbors) override {
     auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
     const auto& attribute_data_type =
         parameters->index_schema->GetAttributeDataType();
@@ -183,7 +179,7 @@ struct RemoteInFlightRetryContext : public query::InFlightRetryContextBase {
                        "Search operation cancelled due to timeout"});
       RecordSearchMetrics(true, std::move(latency_sample));
     } else {
-      OnComplete();  // Return partial results
+      OnComplete(neighbors);
     }
   }
 };
@@ -238,11 +234,12 @@ query::SearchResponseCallback Service::MakeSearchCallback(
     // Text predicate evaluation requires main thread to ensure text indexes
     // reflect current keyspace. Block if result keys have in-flight mutations.
     if (!parameters->no_content && query::QueryHasTextPredicate(*parameters)) {
-      auto retry_ctx = std::make_shared<RemoteInFlightRetryContext>(
+      auto remote_responder = std::make_unique<RemoteResponderSearch>(
           response, reactor, std::move(latency_sample),
           std::move(result->neighbors), std::move(parameters),
           result->total_count);
-
+      auto retry_ctx = std::make_shared<query::InFlightRetryContext>(
+          std::move(remote_responder));
       retry_ctx->ScheduleOnMainThread();
       return;
     }

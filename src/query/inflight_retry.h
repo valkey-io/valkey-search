@@ -11,32 +11,38 @@
 #include <memory>
 #include <vector>
 
-#include "src/index_schema.h"
+#include "src/indexes/vector_base.h"
 #include "src/metrics.h"
 #include "vmsdk/src/utils.h"
 
+namespace valkey_search {
+class IndexSchema;
+}
+
 namespace valkey_search::query {
 
-// Base class for in-flight retry contexts using event-driven notification.
+struct SearchParameters;
+
+// Context for in-flight retry using event-driven notification.
 // Uses shared_ptr and enable_shared_from_this for safe async callbacks.
 //
+// The completion behavior is determined by the SearchParameters subclass:
+// - InitiatorSearch (initiator): unblocks client
+// - LocalResponderSearch (local fanout): adds results to tracker
+// - RemoteResponderSearch (remote responder): sends gRPC response
+//
 // Usage pattern:
-// 1. Create derived context via make_shared
+// 1. Create context via make_shared with parameters (which owns neighbors)
 // 2. Call ScheduleOnMainThread() to start processing
 // 3. If conflicts exist, registers with mutation entry for callback
 // 4. When mutation completes, OnMutationComplete() triggers retry
-// 5. On no conflicts -> OnComplete()
-class InFlightRetryContextBase
-    : public std::enable_shared_from_this<InFlightRetryContextBase> {
+// 5. On no conflicts -> parameters->OnComplete()
+class InFlightRetryContext
+    : public std::enable_shared_from_this<InFlightRetryContext> {
  public:
-  InFlightRetryContextBase() = default;
+  explicit InFlightRetryContext(std::unique_ptr<SearchParameters> params);
 
-  virtual ~InFlightRetryContextBase() = default;
-  virtual void OnComplete() = 0;
-  virtual void OnCancelled() = 0;
-  virtual bool IsCancelled() const = 0;
-  virtual const std::shared_ptr<IndexSchema>& GetIndexSchema() const = 0;
-  virtual const char* GetDesc() const = 0;
+  ~InFlightRetryContext() = default;
 
   // Process a retry attempt on main thread
   void ProcessRetry();
@@ -47,9 +53,10 @@ class InFlightRetryContextBase
   // Called by IndexSchema when a conflicting mutation completes
   void OnMutationComplete();
 
-  virtual const std::vector<indexes::Neighbor>& GetNeighbors() const = 0;
+  const std::vector<indexes::Neighbor>& GetNeighbors() const;
 
  private:
+  std::unique_ptr<SearchParameters> parameters_;
   bool blocked_{false};
 };
 

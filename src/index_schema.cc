@@ -1599,14 +1599,9 @@ vmsdk::BlockedClientCategory IndexSchema::GetBlockedCategoryFromProto() const {
   }
 }
 
-bool IndexSchema::IsKeyInFlight(const InternedStringPtr &key) const {
-  absl::MutexLock lock(&mutated_records_mutex_);
-  return tracked_mutated_records_.contains(key);
-}
-
 bool IndexSchema::RegisterWaitingQuery(
     const std::vector<indexes::Neighbor> &neighbors,
-    std::shared_ptr<query::InFlightRetryContextBase> query_ctx) {
+    std::shared_ptr<query::InFlightRetryContext> query_ctx) {
   absl::MutexLock lock(&mutated_records_mutex_);
   for (const auto &neighbor : neighbors) {
     auto itr = tracked_mutated_records_.find(neighbor.external_id);
@@ -1700,7 +1695,7 @@ void IndexSchema::MarkAsDestructing() {
 
 std::optional<IndexSchema::MutatedAttributes>
 IndexSchema::ConsumeTrackedMutatedAttribute(const Key &key, bool first_time) {
-  absl::flat_hash_set<std::shared_ptr<query::InFlightRetryContextBase>>
+  absl::flat_hash_set<std::shared_ptr<query::InFlightRetryContext>>
       queries_to_notify;
   {
     absl::MutexLock lock(&mutated_records_mutex_);

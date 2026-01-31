@@ -39,29 +39,29 @@ struct Result {
   std::unique_ptr<QueryCommand> parameters;
 };
 
-// Context for timer-based retry when waiting for in-flight keys
-struct InFlightRetryContext : public query::InFlightRetryContextBase {
+// SearchParameters subclass for initiator (client command) searches.
+// Handles in-flight retry completion by releasing the result to the blocked
+// client.
+class InitiatorSearch : public query::SearchParameters {
+ public:
   vmsdk::BlockedClient blocked_client;
   std::unique_ptr<Result> result;
+  InitiatorSearch(vmsdk::BlockedClient &&bc, std::unique_ptr<Result> &&res)
+      : query::SearchParameters(0, nullptr, res->parameters->db_num),
+        blocked_client(std::move(bc)),
+        result(std::move(res)) {}
 
-  InFlightRetryContext(vmsdk::BlockedClient &&bc, std::unique_ptr<Result> &&res)
-      : blocked_client(std::move(bc)), result(std::move(res)) {}
+  const char *GetDesc() const override { return "initiator"; }
 
-  bool IsCancelled() const override {
-    return result->parameters->cancellation_token->IsCancelled();
+  query::SearchParameters &GetParameters() override {
+    return *result->parameters;
   }
 
-  const std::shared_ptr<IndexSchema> &GetIndexSchema() const override {
-    return result->parameters->index_schema;
-  }
-
-  const char *GetDesc() const override { return "Full-text query"; }
-
-  const std::vector<indexes::Neighbor> &GetNeighbors() const override {
+  std::vector<indexes::Neighbor> &GetNeighbors() override {
     return result->search_result->neighbors;
   }
 
-  void OnComplete() override {
+  void OnComplete(std::vector<indexes::Neighbor> &neighbors) override {
     blocked_client.SetReplyPrivateData(result.release());
   }
 
@@ -183,9 +183,10 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
       // mutations.
       if (!result->parameters->no_content &&
           query::QueryHasTextPredicate(*result->parameters)) {
-        auto retry_ctx = std::make_shared<async::InFlightRetryContext>(
+        auto initiator_search = std::make_unique<async::InitiatorSearch>(
             std::move(blocked_client), std::move(result));
-
+        auto retry_ctx = std::make_shared<query::InFlightRetryContext>(
+            std::move(initiator_search));
         retry_ctx->ScheduleOnMainThread();
         return;
       }

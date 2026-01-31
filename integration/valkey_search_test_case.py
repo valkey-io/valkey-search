@@ -217,6 +217,19 @@ class ValkeySearchTestCaseCommon(ValkeyTestCase):
     def get_replicas(self) -> List[Node]:
         return self.replicas
 
+    def verify_modules_loaded(self, client: Valkey) -> None:
+        """Verify that the required search and json modules are loaded."""
+        module_list_data = client.execute_command("MODULE LIST")
+        search_loaded = False
+        json_loaded = False
+        for module in module_list_data:
+            if module[b"name"] == b"search":
+                search_loaded = True
+            elif module[b"name"] == b"json":
+                json_loaded = True
+        assert search_loaded, "search module not loaded"
+        assert json_loaded, "json module not loaded"
+
 
 class ValkeySearchTestCaseBase(ValkeySearchTestCaseCommon):
 

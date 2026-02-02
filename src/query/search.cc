@@ -523,6 +523,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
       parameters.filter_parse_results.root_predicate.get(), entries_fetchers,
       false, parameters.filter_parse_results.query_operations);
   std::vector<indexes::Neighbor> neighbors;
+  // TODO: For now, we just reserve a fixed size because text search operators
+  // return a size of 0 currently.
   neighbors.reserve(5000);
   auto results_appender =
       [&neighbors, &parameters](
@@ -538,6 +540,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
         NeedsDeduplication(parameters.filter_parse_results.query_operations);
     absl::flat_hash_set<const char *> seen_keys;
     if (needs_dedup) {
+      // TODO: Use the qualified_entries size when text indexes return correct
+      // size.
       seen_keys.reserve(5000);
     }
     while (!entries_fetchers.empty()) {

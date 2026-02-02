@@ -135,53 +135,6 @@ class ProximityFetcher : public indexes::EntriesFetcherBase {
   size_t size_;
 };
 
-std::unique_ptr<indexes::EntriesFetcherBase> BuildExactPhraseFetcher(
-    const ComposedPredicate* composed_predicate) {
-  absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
-                      indexes::text::kProximityTermsInlineCapacity>
-      iters;
-  FieldMaskPredicate field_mask = ~0ULL;
-  size_t min_size = SIZE_MAX;
-  for (const auto& child : composed_predicate->GetChildren()) {
-    CHECK(child->GetType() == PredicateType::kText);
-    auto text_pred = dynamic_cast<const TextPredicate*>(child.get());
-    auto fetcher = std::make_unique<indexes::Text::EntriesFetcher>(
-        0, text_pred->GetTextIndexSchema()->GetTextIndex(), nullptr,
-        text_pred->GetFieldMask(), true);
-    fetcher->predicate_ = text_pred;
-    min_size = std::min(min_size, fetcher->Size());
-    iters.push_back(text_pred->BuildTextIterator(fetcher.get()));
-    field_mask &= text_pred->GetFieldMask();
-  }
-  auto proximity_iter = std::make_unique<indexes::text::ProximityIterator>(
-      std::move(iters), composed_predicate->GetSlop(),
-      composed_predicate->GetInorder(), field_mask, nullptr, false);
-  return std::make_unique<ProximityFetcher>(std::move(proximity_iter),
-                                            min_size);
-}
-
-std::unique_ptr<indexes::EntriesFetcherBase> BuildComposedAndFetcher(
-    const ComposedPredicate* composed_predicate) {
-  absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
-                      indexes::text::kProximityTermsInlineCapacity>
-      iters;
-  size_t min_size = SIZE_MAX;
-  for (const auto& child : composed_predicate->GetChildren()) {
-    CHECK(child->GetType() == PredicateType::kText);
-    auto text_pred = dynamic_cast<const TextPredicate*>(child.get());
-    auto fetcher = std::make_unique<indexes::Text::EntriesFetcher>(
-        0, text_pred->GetTextIndexSchema()->GetTextIndex(), nullptr,
-        text_pred->GetFieldMask(), false);
-    fetcher->predicate_ = text_pred;
-    min_size = std::min(min_size, fetcher->Size());
-    iters.push_back(text_pred->BuildTextIterator(fetcher.get()));
-  }
-  auto proximity_iter = std::make_unique<indexes::text::ProximityIterator>(
-      std::move(iters), std::nullopt, false, ~0ULL, nullptr, true);
-  return std::make_unique<ProximityFetcher>(std::move(proximity_iter),
-                                            min_size);
-}
-
 void* TextPredicate::Search(bool negate) const {
   size_t estimated_size = EstimateSize();
   // We do not perform positional checks on the initial term/prefix/suffix/fuzzy

@@ -189,55 +189,52 @@ inline bool NeedsDeduplication(QueryOperations query_operations) {
 
 class TextIteratorFetcher : public indexes::EntriesFetcherBase {
  public:
-  explicit TextIteratorFetcher(std::unique_ptr<indexes::text::TextIterator> iter)
+  explicit TextIteratorFetcher(
+      std::unique_ptr<indexes::text::TextIterator> iter)
       : iter_(std::move(iter)) {}
   size_t Size() const override { return 0; }
   std::unique_ptr<indexes::EntriesFetcherIteratorBase> Begin() override {
     return std::make_unique<indexes::text::TextFetcher>(std::move(iter_));
   }
+
  private:
   std::unique_ptr<indexes::text::TextIterator> iter_;
 };
 
 std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
-    const Predicate *predicate, bool negate, std::optional<uint32_t> slop,
-    bool inorder) {
+    const Predicate *predicate, bool negate, bool require_positions) {
   if (predicate->GetType() == PredicateType::kComposedAnd ||
       predicate->GetType() == PredicateType::kComposedOr) {
     auto composed_predicate =
         dynamic_cast<const ComposedPredicate *>(predicate);
     auto predicate_type =
         EvaluateAsComposedPredicate(composed_predicate, negate);
+    auto slop = composed_predicate->GetSlop();
+    bool inorder = composed_predicate->GetInorder();
+    bool require_positions = slop.has_value() || inorder || require_positions;
     if (predicate_type == PredicateType::kComposedAnd) {
       absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
                           indexes::text::kProximityTermsInlineCapacity>
           iterators;
       uint64_t query_field_mask = ~0ULL;
-      auto child_slop = composed_predicate->GetSlop().has_value()
-                            ? composed_predicate->GetSlop()
-                            : slop;
-      bool child_inorder = composed_predicate->GetInorder()
-                               ? composed_predicate->GetInorder()
-                               : inorder;
       for (const auto &child : composed_predicate->GetChildren()) {
-        auto iter = BuildTextIterator(child.get(), negate, child_slop,
-                                      child_inorder);
+        auto iter = BuildTextIterator(child.get(), negate, require_positions);
         if (iter) {
           query_field_mask &= iter->QueryFieldMask();
           iterators.push_back(std::move(iter));
         }
       }
       if (iterators.empty()) return nullptr;
-      bool skip_positional = !child_slop.has_value() && !child_inorder;
+      bool skip_positional = !require_positions;
       return std::make_unique<indexes::text::ProximityIterator>(
-          std::move(iterators), child_slop, child_inorder, query_field_mask,
-          nullptr, skip_positional);
+          std::move(iterators), slop, inorder, query_field_mask, nullptr,
+          skip_positional);
     } else {
       absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
                           indexes::text::kProximityTermsInlineCapacity>
           iterators;
       for (const auto &child : composed_predicate->GetChildren()) {
-        auto iter = BuildTextIterator(child.get(), negate, slop, inorder);
+        auto iter = BuildTextIterator(child.get(), negate, require_positions);
         if (iter) {
           iterators.push_back(std::move(iter));
         }
@@ -249,16 +246,15 @@ std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
   }
   if (predicate->GetType() == PredicateType::kText) {
     auto text_predicate = dynamic_cast<const TextPredicate *>(predicate);
-    bool require_positions = slop.has_value() || inorder;
     auto fetcher_ptr = text_predicate->Search(negate);
-    auto fetcher = static_cast<indexes::Text::EntriesFetcher*>(fetcher_ptr);
+    auto fetcher = static_cast<indexes::Text::EntriesFetcher *>(fetcher_ptr);
     fetcher->require_positions_ = require_positions;
     return text_predicate->BuildTextIterator(fetcher);
   }
   if (predicate->GetType() == PredicateType::kNegate) {
     auto negate_predicate = dynamic_cast<const NegatePredicate *>(predicate);
-    return BuildTextIterator(negate_predicate->GetPredicate(), !negate, slop,
-                             inorder);
+    return BuildTextIterator(negate_predicate->GetPredicate(), !negate,
+                             require_positions);
   }
   return nullptr;
 }
@@ -274,9 +270,10 @@ size_t EvaluateFilterAsPrimary(
     auto predicate_type =
         EvaluateAsComposedPredicate(composed_predicate, negate);
     if (predicate_type == PredicateType::kComposedAnd) {
-      auto text_iter = BuildTextIterator(composed_predicate, negate, std::nullopt, false);
+      auto text_iter = BuildTextIterator(composed_predicate, negate, false);
       if (text_iter) {
-        entries_fetchers.push(std::make_unique<TextIteratorFetcher>(std::move(text_iter)));
+        entries_fetchers.push(
+            std::make_unique<TextIteratorFetcher>(std::move(text_iter)));
         return 0;
       }
       size_t min_size = SIZE_MAX;

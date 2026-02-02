@@ -146,36 +146,11 @@ inline PredicateType EvaluateAsComposedPredicate(
   return PredicateType::kComposedAnd;
 }
 
-enum class QueryOptimizationPath {
-  kNone,
-  kExactPhrase,       // Text + And + Proximity (Non-nested)
-  kSimpleComposedAnd  // Text + And (Non-nested, No Proximity)
-};
-
-// Helper fn to determine optimization path based on query operations
-inline QueryOptimizationPath GetOptimizationPath(QueryOperations ops) {
-  // Common "Forbidden" check for both paths
-  const QueryOperations kForbidden = QueryOperations::kContainsNestedComposed |
-                                     QueryOperations::kContainsNumeric |
-                                     QueryOperations::kContainsTag;
-  if (ops & kForbidden) return QueryOptimizationPath::kNone;
-  // Check shared requirements
-  bool is_text_and = (ops & QueryOperations::kContainsText) &&
-                     (ops & QueryOperations::kContainsAnd);
-  if (!is_text_and) return QueryOptimizationPath::kNone;
-  // Differentiate based on Proximity
-  if (ops & QueryOperations::kContainsProximity) {
-    return QueryOptimizationPath::kExactPhrase;
-  }
-  return QueryOptimizationPath::kSimpleComposedAnd;
-}
-
-// Helper fn to identify composed AND predicates that we cannot optimize
-// currently.
-inline bool IsUnsolvedComposedAnd(QueryOperations query_operations) {
-  if (!(query_operations & QueryOperations::kContainsAnd)) return false;
-  // It's unsolved only if the optimizer returns kNone
-  return GetOptimizationPath(query_operations) == QueryOptimizationPath::kNone;
+// Helper fn to identify if query requires prefilter evaluation.
+// Prefilter is needed when query contains numeric or tag predicates.
+inline bool IsUnsolvedQuery(QueryOperations query_operations) {
+  return query_operations &
+         (QueryOperations::kContainsNumeric | QueryOperations::kContainsTag);
 }
 
 // Helper fn to identify if deduplication is needed.
@@ -557,9 +532,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
     return true;
   };
   bool requires_prefilter_evaluation =
-      IsUnsolvedComposedAnd(parameters.filter_parse_results.query_operations) ||
-      (parameters.filter_parse_results.query_operations &
-       (QueryOperations::kContainsNumeric | QueryOperations::kContainsTag));
+      IsUnsolvedQuery(parameters.filter_parse_results.query_operations);
   if (!requires_prefilter_evaluation) {
     bool needs_dedup =
         NeedsDeduplication(parameters.filter_parse_results.query_operations);

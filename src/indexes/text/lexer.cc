@@ -146,7 +146,7 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
       std::string stemmed_word =
           StemWord(word, stemming_enabled, min_stem_size, stemmer);
 
-      if (word != stemmed_word && stemming_enabled) {
+      if (word != stemmed_word) {
         CHECK(stem_mappings) << "stem_mappings must not be null";
         (*stem_mappings)[stemmed_word].insert(word);
       }

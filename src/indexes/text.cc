@@ -192,13 +192,15 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
       key_iterators;
 
   // Collect all words to search: original word first
-  absl::InlinedVector<absl::string_view, indexes::text::kWordExpansionInlineCapacity>
+  absl::InlinedVector<absl::string_view,
+                      indexes::text::kWordExpansionInlineCapacity>
       words_to_search;
   words_to_search.push_back(GetTextString());
 
   // Get stem variants if not exact match
   std::string stemmed;
-  uint64_t stem_field_mask = fetcher->field_mask_ & GetTextIndexSchema()->GetStemTextFieldMask();
+  uint64_t stem_field_mask =
+      fetcher->field_mask_ & GetTextIndexSchema()->GetStemTextFieldMask();
   if (!IsExact() && stem_field_mask != 0) {
     stemmed = GetTextIndexSchema()->GetAllStemVariants(
         GetTextString(), words_to_search,
@@ -219,9 +221,10 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
       }
     }
   }
-  
+
   // TermIterator will use query_field_mask when has_original is true,
-  // and stem_field_mask for stem variants (has_original becomes false after first pass)
+  // and stem_field_mask for stem variants (has_original becomes false after
+  // first pass)
   return std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), fetcher->field_mask_, fetcher->untracked_keys_,
       fetcher->require_positions_, stem_field_mask, found_original);

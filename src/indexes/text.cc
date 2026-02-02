@@ -205,7 +205,7 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
     stemmed = GetTextIndexSchema()->GetAllStemVariants(
         GetTextString(), words_to_search,
         GetTextIndexSchema()->GetMinStemSize(), stem_field_mask, false);
-    if (stemmed != std::string(GetTextString())) {
+    if (stemmed != GetTextString()) {
       words_to_search.push_back(stemmed);
     }
   }

@@ -728,31 +728,18 @@ bool ShouldBlockClient(ValkeyModuleCtx *ctx, bool inside_multi_exec,
   return !inside_multi_exec && !from_backfill && vmsdk::IsRealUserClient(ctx);
 }
 
-MutationSequenceNumber IndexSchema::UpdateDbKeyInfoOnMutation(
-    const Key &interned_key, bool is_delete) {
-  MutationSequenceNumber this_mutation = ++schema_mutation_sequence_number_;
-  auto &dbkeyinfo = db_key_info_.Get();
-  auto itr = dbkeyinfo.find(interned_key);
-  if (is_delete) {
-    if (itr != dbkeyinfo.end()) {
-      stats_.document_cnt--;
-      dbkeyinfo.erase(interned_key);
-    }
-  } else {
-    auto [itr, inserted] =
-        dbkeyinfo.insert({interned_key, DbKeyInfo{this_mutation}});
-    if (inserted) {
-      stats_.document_cnt++;
-    }
-  }
-  return this_mutation;
-}
-
 void IndexSchema::ProcessMutation(ValkeyModuleCtx *ctx,
                                   MutatedAttributes &mutated_attributes,
                                   const Key &interned_key, bool from_backfill,
                                   bool is_delete) {
-  auto this_mutation = UpdateDbKeyInfoOnMutation(interned_key, is_delete);
+  MutationSequenceNumber this_mutation = ++schema_mutation_sequence_number_;
+  auto &dbkeyinfo = db_key_info_.Get();
+  if (is_delete) {
+    dbkeyinfo.erase(interned_key);
+  } else {
+    dbkeyinfo[interned_key].mutation_sequence_number_ = this_mutation;
+  }
+  stats_.document_cnt = dbkeyinfo.size();
   if (ABSL_PREDICT_FALSE(!mutations_thread_pool_ ||
                          mutations_thread_pool_->Size() == 0)) {
     SyncProcessMutation(ctx, mutated_attributes, interned_key);

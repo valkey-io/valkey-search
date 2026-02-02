@@ -290,8 +290,6 @@ class IndexSchema : public KeyspaceEventSubscription,
       db_key_info_;  // Mainthread.
   absl::flat_hash_map<Key, IndexKeyInfo> index_key_info_ ABSL_GUARDED_BY(
       mutated_records_mutex_);  // updates are guarded by mutated_records_mutex_
-  MutationSequenceNumber UpdateDbKeyInfoOnMutation(const Key &interned_key,
-                                                   bool is_delete);
   struct BackfillJob {
     BackfillJob() = delete;
     BackfillJob(ValkeyModuleCtx *ctx, absl::string_view name, int db_num);

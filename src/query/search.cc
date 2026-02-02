@@ -533,6 +533,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
     neighbors.emplace_back(indexes::Neighbor{key, 0.0f});
     return true;
   };
+  // Cannot skip evaluation if the query contains unsolved composed operations.
   bool requires_prefilter_evaluation =
       IsUnsolvedQuery(parameters.filter_parse_results.query_operations);
   if (!requires_prefilter_evaluation) {

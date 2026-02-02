@@ -545,15 +545,31 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
   size_t qualified_entries;
   if (parameters.filter_parse_results.query_operations &
       QueryOperations::kContainsText) {
-    auto text_iter = BuildTextIterator(
-        parameters.filter_parse_results.root_predicate.get(), false,
-        std::nullopt, false);
-    if (text_iter) {
-      entries_fetchers.push(
-          std::make_unique<TextIteratorFetcher>(std::move(text_iter)));
+    auto root = parameters.filter_parse_results.root_predicate.get();
+    bool is_mixed_or = root->GetType() == PredicateType::kComposedOr &&
+                       (parameters.filter_parse_results.query_operations &
+                        (QueryOperations::kContainsNumeric | QueryOperations::kContainsTag));
+    if (is_mixed_or) {
+      auto composed = dynamic_cast<const ComposedPredicate *>(root);
+      for (const auto &child : composed->GetChildren()) {
+        auto text_iter = BuildTextIterator(child.get(), false, std::nullopt, false);
+        if (text_iter) {
+          entries_fetchers.push(std::make_unique<TextIteratorFetcher>(std::move(text_iter)));
+        } else {
+          EvaluateFilterAsPrimary(child.get(), entries_fetchers, false,
+                                 parameters.filter_parse_results.query_operations);
+        }
+      }
       qualified_entries = 0;
     } else {
-      qualified_entries = 0;
+      auto text_iter = BuildTextIterator(root, false, std::nullopt, false);
+      if (text_iter) {
+        entries_fetchers.push(
+            std::make_unique<TextIteratorFetcher>(std::move(text_iter)));
+        qualified_entries = 0;
+      } else {
+        qualified_entries = 0;
+      }
     }
   } else {
     qualified_entries = EvaluateFilterAsPrimary(

@@ -116,13 +116,15 @@ class TextIndexSchema {
   // is true.
   std::string GetAllStemVariants(
       absl::string_view search_term,
-      absl::InlinedVector<absl::string_view, kWordExpansionInlineCapacity> &words_to_search,
+      absl::InlinedVector<absl::string_view, kWordExpansionInlineCapacity>
+          &words_to_search,
       uint32_t min_stem_size, uint64_t stem_enabled_mask, bool lock_needed);
 
   // Get the minimum stem size across all fields
   uint32_t GetMinStemSize() const { return min_stem_size_; }
 
-  // Schema-level stem field mask (mirrored from IndexSchema::stem_text_field_mask_)
+  // Schema-level stem field mask (mirrored from
+  // IndexSchema::stem_text_field_mask_)
   void SetStemTextFieldMask(uint64_t mask) { stem_text_field_mask_ = mask; }
   uint64_t GetStemTextFieldMask() const { return stem_text_field_mask_; }
 
@@ -197,7 +199,8 @@ class TextIndexSchema {
   // Minimum word length for stemming (schema-level configuration)
   uint32_t min_stem_size_;
 
-  // Schema-level stem field mask (mirrored from IndexSchema::stem_text_field_mask_)
+  // Schema-level stem field mask (mirrored from
+  // IndexSchema::stem_text_field_mask_)
   uint64_t stem_text_field_mask_ = 0;
 
  public:

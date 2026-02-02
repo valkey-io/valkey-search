@@ -63,13 +63,15 @@ EvaluationResult TermPredicate::Evaluate(
   uint64_t field_mask = field_mask_;
 
   // Collect all words to search: original word first
-  absl::InlinedVector<absl::string_view, indexes::text::kWordExpansionInlineCapacity>
+  absl::InlinedVector<absl::string_view,
+                      indexes::text::kWordExpansionInlineCapacity>
       words_to_check;
   words_to_check.push_back(term_);
 
   // Get stem variants if not exact match
   std::string stemmed;
-  uint64_t stem_field_mask = field_mask & text_index_schema_->GetStemTextFieldMask();
+  uint64_t stem_field_mask =
+      field_mask & text_index_schema_->GetStemTextFieldMask();
   if (!exact_ && stem_field_mask != 0) {
     stemmed = text_index_schema_->GetAllStemVariants(
         term_, words_to_check, text_index_schema_->GetMinStemSize(),

@@ -10,6 +10,10 @@
 
 #include <memory>
 
+// need to import text index before other files but clang reorders it
+// clang-format off
+#include "src/indexes/text/text_index.h"
+// clang-format on
 #include "absl/base/thread_annotations.h"
 #include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
@@ -17,7 +21,6 @@
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "src/indexes/index_base.h"
-#include "src/indexes/text/text_index.h"
 #include "src/indexes/text/posting.h"
 #include "src/indexes/text/proximity.h"
 #include "src/indexes/text/term.h"

@@ -394,9 +394,9 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
         for i in range(0, len(ports), replica_count + 1):
             primary_port = ports[i]
             server, client, logfile = self.start_server(
-                primary_port,
-                test_name,
-                True,
+                port=primary_port,
+                test_name=test_name,
+                cluster_enabled=True,
                 is_primary=True,
             )
 
@@ -407,8 +407,8 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
                 replica_port = ports[i]
                 replica_server, replica_client, replica_logfile = (
                     self.start_server(
-                        replica_port,
-                        test_name,
+                        port=replica_port,
+                        test_name=test_name,
                         cluster_enabled=True,
                         is_primary=False,
                     )

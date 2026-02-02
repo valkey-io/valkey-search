@@ -154,7 +154,7 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
   // Retrieve the key's stem mappings
   absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>
       stem_mappings;
-  {
+  if (stem_text_field_mask_) {
     std::lock_guard<std::mutex> stem_guard(in_progress_stem_mappings_mutex_);
     auto stem_node = in_progress_stem_mappings_.extract(key);
     if (!stem_node.empty()) {
@@ -207,7 +207,7 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
   }
 
   // Populate stem tree with mappings
-  {
+  if (stem_text_field_mask_) {
     std::lock_guard<std::mutex> stem_guard(stem_tree_mutex_);
     for (const auto &[stemmed, originals] : stem_mappings) {
       stem_tree_.MutateTarget(stemmed, [&](StemParents existing) {
@@ -320,7 +320,8 @@ uint64_t TextIndexSchema::GetTotalTextIndexMemoryUsage() const {
 
 std::string TextIndexSchema::GetAllStemVariants(
     absl::string_view search_term,
-    absl::InlinedVector<absl::string_view, kWordExpansionInlineCapacity> &words_to_search,
+    absl::InlinedVector<absl::string_view, kWordExpansionInlineCapacity>
+        &words_to_search,
     uint32_t min_stem_size, uint64_t stem_enabled_mask, bool lock_needed) {
   // Stem the search term with the provided min_stem_size
   std::string stemmed = lexer_.StemWord(std::string(search_term), true,
@@ -351,6 +352,5 @@ std::string TextIndexSchema::GetAllStemVariants(
 
   return stemmed;  // Caller owns this and will add view to words_to_search
 }
-
 
 }  // namespace valkey_search::indexes::text

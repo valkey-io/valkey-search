@@ -754,6 +754,8 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     }
     VMSDK_RETURN_IF_ERROR(
         SetupTextFieldConfiguration(field_mask, field_or_default, false));
+    // TODO: Implement Composite query between original and its stem variants
+    // for Non Exact Term search after Composite query execution is optimized
     return FilterParser::TokenResult{
         std::make_unique<query::TermPredicate>(text_index_schema, field_mask,
                                                std::move(token), exact),

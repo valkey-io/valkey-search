@@ -326,7 +326,6 @@ static auto max_term_expansions =
                           kMaximumMaxTermExpansions)  // max limit (100k)
         .Build();
 
-
 /// Register the "search-result-buffer-multiplier" flag
 constexpr absl::string_view kSearchResultBufferMultiplierConfig{
     "search-result-buffer-multiplier"};
@@ -469,7 +468,6 @@ vmsdk::config::Boolean& GetEnableProximityPrefilterEval() {
 vmsdk::config::Number& GetMaxTermExpansions() {
   return dynamic_cast<vmsdk::config::Number&>(*max_term_expansions);
 }
-
 
 const vmsdk::config::Boolean& GetDrainMutationQueueOnSave() {
   return dynamic_cast<const vmsdk::config::Boolean&>(

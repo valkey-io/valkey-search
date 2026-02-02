@@ -88,7 +88,7 @@ config::Number& GetLocalFanoutQueueWaitThreshold();
 config::Number& GetThreadPoolWaitTimeSamples();
 
 /// Return the maximum number of words to search in text operations (prefix,
-/// suffix, fuzzy, and stem expansions)
+/// suffix, fuzzy)
 config::Number& GetMaxTermExpansions();
 
 /// Return the search result buffer multiplier value

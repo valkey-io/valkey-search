@@ -542,13 +542,6 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
   }
 }
 
-bool IndexSchema::IsTrackedByAnyIndex(const Key &key) const {
-  return std::any_of(attributes_.begin(), attributes_.end(),
-                     [&key](const auto &attribute) {
-                       return attribute.second.GetIndex()->IsTracked(key);
-                     });
-}
-
 void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
                                       MutatedAttributes &mutated_attributes,
                                       const Key &key) {
@@ -579,7 +572,7 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
     index_key_info_.erase(key);
   }
   if (text_index_schema_) {
-    // Text index structures operate at the schmema-level so we commit the
+    // Text index structures operate at the schmea-level so we commit the
     // updates to all Text attributes in one operation for efficiency
     text_index_schema_->CommitKeyData(key);
   }
@@ -600,18 +593,11 @@ void IndexSchema::ProcessAttributeMutation(
       }
       return;
     }
-    bool was_tracked = IsTrackedByAnyIndex(key);
     auto res = index->AddRecord(key, data_view);
     TrackResults(ctx, res, "Add", stats_.subscription_add);
 
     if (res.ok() && res.value()) {
       ++Metrics::GetStats().time_slice_upserts;
-      // Increment the hash key count if it wasn't tracked and we successfully
-      // added it to the index.
-      if (!was_tracked) {
-        ++stats_.document_cnt;
-      }
-
       // Track field type counters
       switch (index->GetIndexerType()) {
         case indexes::IndexerType::kVector:
@@ -640,10 +626,6 @@ void IndexSchema::ProcessAttributeMutation(
   TrackResults(ctx, res, "Remove", stats_.subscription_remove);
   if (res.ok() && res.value()) {
     ++Metrics::GetStats().time_slice_deletes;
-    // Reduce the hash key count if nothing is tracking the key anymore.
-    if (!IsTrackedByAnyIndex(key)) {
-      --stats_.document_cnt;
-    }
   }
 }
 
@@ -746,21 +728,31 @@ bool ShouldBlockClient(ValkeyModuleCtx *ctx, bool inside_multi_exec,
   return !inside_multi_exec && !from_backfill && vmsdk::IsRealUserClient(ctx);
 }
 
+MutationSequenceNumber IndexSchema::UpdateDbKeyInfoOnMutation(
+    const Key &interned_key, bool is_delete) {
+  MutationSequenceNumber this_mutation = ++schema_mutation_sequence_number_;
+  auto &dbkeyinfo = db_key_info_.Get();
+  auto itr = dbkeyinfo.find(interned_key);
+  if (is_delete) {
+    if (itr != dbkeyinfo.end()) {
+      stats_.document_cnt--;
+      dbkeyinfo.erase(interned_key);
+    }
+  } else {
+    auto [itr, inserted] =
+        dbkeyinfo.insert({interned_key, DbKeyInfo{this_mutation}});
+    if (inserted) {
+      stats_.document_cnt++;
+    }
+  }
+  return this_mutation;
+}
+
 void IndexSchema::ProcessMutation(ValkeyModuleCtx *ctx,
                                   MutatedAttributes &mutated_attributes,
                                   const Key &interned_key, bool from_backfill,
                                   bool is_delete) {
-  //
-  // Update DbKeyInfo
-  //
-  MutationSequenceNumber this_mutation = ++schema_mutation_sequence_number_;
-  auto &dbkeyinfo = db_key_info_.Get();
-  if (is_delete) {
-    dbkeyinfo.erase(interned_key);
-  } else {
-    dbkeyinfo[interned_key].mutation_sequence_number_ = this_mutation;
-  }
-
+  auto this_mutation = UpdateDbKeyInfoOnMutation(interned_key, is_delete);
   if (ABSL_PREDICT_FALSE(!mutations_thread_pool_ ||
                          mutations_thread_pool_->Size() == 0)) {
     SyncProcessMutation(ctx, mutated_attributes, interned_key);

@@ -579,7 +579,7 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
     index_key_info_.erase(key);
   }
   if (text_index_schema_) {
-    // Text index structures operate at the schmema-level so we commit the
+    // Text index structures operate at the schema-level so we commit the
     // updates to all Text attributes in one operation for efficiency
     text_index_schema_->CommitKeyData(key);
   }

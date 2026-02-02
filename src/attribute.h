@@ -20,11 +20,12 @@
 
 namespace valkey_search {
 
+class IndexSchema;
 class Attribute {
  public:
   Attribute(absl::string_view alias, absl::string_view identifier,
-            std::shared_ptr<indexes::IndexBase> index)
-      : alias_(alias), identifier_(identifier), index_(index) {}
+            std::shared_ptr<indexes::IndexBase> index, uint16_t pos)
+      : alias_(alias), identifier_(identifier), index_(index), position_(pos) {}
   inline const std::string& GetAlias() const { return alias_; }
   inline const std::string& GetIdentifier() const { return identifier_; }
   std::shared_ptr<indexes::IndexBase> GetIndex() const { return index_; }
@@ -35,16 +36,9 @@ class Attribute {
     attribute_proto->set_allocated_index(index_->ToProto().release());
     return attribute_proto;
   }
-  inline int RespondWithInfo(ValkeyModuleCtx* ctx) const {
-    ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_LEN);
-    ValkeyModule_ReplyWithSimpleString(ctx, "identifier");
-    ValkeyModule_ReplyWithSimpleString(ctx, GetIdentifier().c_str());
-    ValkeyModule_ReplyWithSimpleString(ctx, "attribute");
-    ValkeyModule_ReplyWithSimpleString(ctx, GetAlias().c_str());
-    int added_fields = index_->RespondWithInfo(ctx);
-    ValkeyModule_ReplySetArrayLength(ctx, added_fields + 4);
-    return 1;
-  }
+
+  int RespondWithInfo(ValkeyModuleCtx* ctx,
+                      const IndexSchema* index_schema) const;
 
   // Creates a new score-as string for each call.
   // We intentionally avoid caching because ValkeyModule_RetainString uses
@@ -54,10 +48,14 @@ class Attribute {
     return vmsdk::MakeUniqueValkeyString(absl::StrCat("__", alias_, "_score"));
   }
 
+  // Return the attribute position during creation of the index.
+  inline uint16_t GetPosition() const { return position_; }
+
  private:
   std::string alias_;
   std::string identifier_;
   std::shared_ptr<indexes::IndexBase> index_;
+  uint16_t position_{UINT16_MAX};  // The attribute position during creation.
 };
 
 }  // namespace valkey_search

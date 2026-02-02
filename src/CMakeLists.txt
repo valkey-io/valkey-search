@@ -51,6 +51,7 @@ if(UNIX AND NOT APPLE)
 endif()
 
 set(SRCS_VALKEY_SEARCH
+    ${CMAKE_CURRENT_LIST_DIR}/attribute.cc
     ${CMAKE_CURRENT_LIST_DIR}/valkey_search.cc
     ${CMAKE_CURRENT_LIST_DIR}/valkey_search.h
     ${CMAKE_CURRENT_LIST_DIR}/valkey_search_options.cc

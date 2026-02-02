@@ -274,6 +274,11 @@ size_t EvaluateFilterAsPrimary(
     auto predicate_type =
         EvaluateAsComposedPredicate(composed_predicate, negate);
     if (predicate_type == PredicateType::kComposedAnd) {
+      auto text_iter = BuildTextIterator(composed_predicate, negate, std::nullopt, false);
+      if (text_iter) {
+        entries_fetchers.push(std::make_unique<TextIteratorFetcher>(std::move(text_iter)));
+        return 0;
+      }
       size_t min_size = SIZE_MAX;
       std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> best_fetchers;
       for (const auto &child : composed_predicate->GetChildren()) {
@@ -542,40 +547,9 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
 absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
     const SearchParameters &parameters) {
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
-  size_t qualified_entries;
-  if (parameters.filter_parse_results.query_operations &
-      QueryOperations::kContainsText) {
-    auto root = parameters.filter_parse_results.root_predicate.get();
-    bool is_mixed_or = root->GetType() == PredicateType::kComposedOr &&
-                       (parameters.filter_parse_results.query_operations &
-                        (QueryOperations::kContainsNumeric | QueryOperations::kContainsTag));
-    if (is_mixed_or) {
-      auto composed = dynamic_cast<const ComposedPredicate *>(root);
-      for (const auto &child : composed->GetChildren()) {
-        auto text_iter = BuildTextIterator(child.get(), false, std::nullopt, false);
-        if (text_iter) {
-          entries_fetchers.push(std::make_unique<TextIteratorFetcher>(std::move(text_iter)));
-        } else {
-          EvaluateFilterAsPrimary(child.get(), entries_fetchers, false,
-                                 parameters.filter_parse_results.query_operations);
-        }
-      }
-      qualified_entries = 0;
-    } else {
-      auto text_iter = BuildTextIterator(root, false, std::nullopt, false);
-      if (text_iter) {
-        entries_fetchers.push(
-            std::make_unique<TextIteratorFetcher>(std::move(text_iter)));
-        qualified_entries = 0;
-      } else {
-        qualified_entries = 0;
-      }
-    }
-  } else {
-    qualified_entries = EvaluateFilterAsPrimary(
-        parameters.filter_parse_results.root_predicate.get(), entries_fetchers,
-        false, parameters.filter_parse_results.query_operations);
-  }
+  size_t qualified_entries = EvaluateFilterAsPrimary(
+      parameters.filter_parse_results.root_predicate.get(), entries_fetchers,
+      false, parameters.filter_parse_results.query_operations);
   std::vector<indexes::Neighbor> neighbors;
   neighbors.reserve(5000);
   auto results_appender =

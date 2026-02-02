@@ -86,7 +86,7 @@ class TermIterator : public TextIterator {
   FieldMaskPredicate current_field_mask_;
   const InternedStringSet* untracked_keys_;
   const bool require_positions_;
-  bool has_original_;  // True if first iterator is for original word
+  const bool has_original_;  // True if first iterator is for original word
   bool FindMinimumValidKey();
 };
 

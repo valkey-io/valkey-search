@@ -516,13 +516,17 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         
         # Test 1: Term search finds multiple stem parents (happy, happiness share stem "happi")
         # Note: "happier" stems differently and is not in the "happi" stem group
-        assert (client.execute_command("FT.SEARCH", "idx", '@content:happi')[0], 
+        assert (client.execute_command("FT.SEARCH", "idx", '@content:happi')[0],
                 set(client.execute_command("FT.SEARCH", "idx", '@content:happi')[1::2])) == (2, {b"doc:1", b"doc:2"})
         assert (client.execute_command("FT.SEARCH", "idx", '@content:happy')[0],
                 set(client.execute_command("FT.SEARCH", "idx", '@content:happy')[1::2])) == (2, {b"doc:1", b"doc:2"})
         assert (client.execute_command("FT.SEARCH", "idx", '@content:happiness')[0],
                 set(client.execute_command("FT.SEARCH", "idx", '@content:happiness')[1::2])) == (2, {b"doc:1", b"doc:2"})
         
+        # Verify "happier" stems differently - should only match doc:3, not doc:1 or doc:2
+        result = client.execute_command("FT.SEARCH", "idx", '@content:happier')
+        assert result[0] == 1 and result[1] == b'doc:3'
+
         # Test 1b: "happier" can be found via prefix search
         assert (client.execute_command("FT.SEARCH", "idx", '@content:happ*')[0],
                 set(client.execute_command("FT.SEARCH", "idx", '@content:happ*')[1::2])) == (3, {b"doc:1", b"doc:2", b"doc:3"})
@@ -567,6 +571,11 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         
         # Test 5: Non-exact phrase (no quotes) - DOES use stem expansion
         result = client.execute_command("FT.SEARCH", "idx", '@content:very happi today')
+        assert result[0] == 1 and result[1] == b'doc:1'
+        assert set(result[2]) == {b'content', b'I am very happy today', b'nostem_field', b'happy'}
+        
+        # Test different term with same stem - "happiness" also stems to "happi"
+        result = client.execute_command("FT.SEARCH", "idx", '@content:very happiness today')
         assert result[0] == 1 and result[1] == b'doc:1'
         assert set(result[2]) == {b'content', b'I am very happy today', b'nostem_field', b'happy'}
         
@@ -631,6 +640,7 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert b"doc:9" not in set(result[1::2]), "doc:9 should NOT match (has 'swimming' only in NOSTEM field)"
         
         # Test 12: Mixed stemming behavior with TEXT and TEXT NOSTEM fields
+        # This test validates default field search (no field specifier) when schema has mixed field types
         client.execute_command("FT.CREATE", "testindex", "ON", "HASH", "PREFIX", "1", "product:", "SCHEMA", "title", "TEXT", "NOSTEM", "desc", "TEXT")
         
         client.execute_command("HSET", "product:3", "title", "run", "desc", "abc")

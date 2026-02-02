@@ -49,10 +49,11 @@ bool TermIterator::FindMinimumValidKey() {
   current_key_ = nullptr;
   current_position_ = std::nullopt;
   current_field_mask_ = 0ULL;
-  for (auto& key_iter : key_iterators_) {
+  for (size_t i = 0; i < key_iterators_.size(); ++i) {
+    auto& key_iter = key_iterators_[i];
     // Use query_field_mask if first iterator AND original word exists
     // Otherwise use stem field mask intersection
-    const auto field_mask = (has_original_ || stem_field_mask_ == 0)
+    const auto field_mask = ((i == 0 && has_original_) || stem_field_mask_ == 0)
                                 ? query_field_mask_
                                 : (stem_field_mask_);
 
@@ -76,7 +77,6 @@ bool TermIterator::FindMinimumValidKey() {
         current_key_ = key;
       }
     }
-    has_original_ = false;
   }
   if (!current_key_) {
     return false;

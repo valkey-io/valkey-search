@@ -28,6 +28,7 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
+#include "src/indexes/text/orproximity.h"
 #include "src/indexes/text/proximity.h"
 #include "src/indexes/text/text_fetcher.h"
 #include "src/indexes/vector_base.h"
@@ -186,32 +187,86 @@ inline bool NeedsDeduplication(QueryOperations query_operations) {
   return has_or || has_tag;
 }
 
+class TextIteratorFetcher : public indexes::EntriesFetcherBase {
+ public:
+  explicit TextIteratorFetcher(std::unique_ptr<indexes::text::TextIterator> iter)
+      : iter_(std::move(iter)) {}
+  size_t Size() const override { return 0; }
+  std::unique_ptr<indexes::EntriesFetcherIteratorBase> Begin() override {
+    return std::make_unique<indexes::text::TextFetcher>(std::move(iter_));
+  }
+ private:
+  std::unique_ptr<indexes::text::TextIterator> iter_;
+};
+
+std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
+    const Predicate *predicate, bool negate, std::optional<uint32_t> slop,
+    bool inorder) {
+  if (predicate->GetType() == PredicateType::kComposedAnd ||
+      predicate->GetType() == PredicateType::kComposedOr) {
+    auto composed_predicate =
+        dynamic_cast<const ComposedPredicate *>(predicate);
+    auto predicate_type =
+        EvaluateAsComposedPredicate(composed_predicate, negate);
+    if (predicate_type == PredicateType::kComposedAnd) {
+      absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
+                          indexes::text::kProximityTermsInlineCapacity>
+          iterators;
+      uint64_t query_field_mask = ~0ULL;
+      auto child_slop = composed_predicate->GetSlop().has_value()
+                            ? composed_predicate->GetSlop()
+                            : slop;
+      bool child_inorder = composed_predicate->GetInorder()
+                               ? composed_predicate->GetInorder()
+                               : inorder;
+      for (const auto &child : composed_predicate->GetChildren()) {
+        auto iter = BuildTextIterator(child.get(), negate, child_slop,
+                                      child_inorder);
+        if (iter) {
+          query_field_mask &= iter->QueryFieldMask();
+          iterators.push_back(std::move(iter));
+        }
+      }
+      if (iterators.empty()) return nullptr;
+      bool skip_positional = !child_slop.has_value() && !child_inorder;
+      return std::make_unique<indexes::text::ProximityIterator>(
+          std::move(iterators), child_slop, child_inorder, query_field_mask,
+          nullptr, skip_positional);
+    } else {
+      absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
+                          indexes::text::kProximityTermsInlineCapacity>
+          iterators;
+      for (const auto &child : composed_predicate->GetChildren()) {
+        auto iter = BuildTextIterator(child.get(), negate, slop, inorder);
+        if (iter) {
+          iterators.push_back(std::move(iter));
+        }
+      }
+      if (iterators.empty()) return nullptr;
+      return std::make_unique<indexes::text::OrProximityIterator>(
+          std::move(iterators), nullptr);
+    }
+  }
+  if (predicate->GetType() == PredicateType::kText) {
+    auto text_predicate = dynamic_cast<const TextPredicate *>(predicate);
+    bool require_positions = slop.has_value() || inorder;
+    auto fetcher_ptr = text_predicate->Search(negate);
+    auto fetcher = static_cast<indexes::Text::EntriesFetcher*>(fetcher_ptr);
+    fetcher->require_positions_ = require_positions;
+    return text_predicate->BuildTextIterator(fetcher);
+  }
+  if (predicate->GetType() == PredicateType::kNegate) {
+    auto negate_predicate = dynamic_cast<const NegatePredicate *>(predicate);
+    return BuildTextIterator(negate_predicate->GetPredicate(), !negate, slop,
+                             inorder);
+  }
+  return nullptr;
+}
+
 size_t EvaluateFilterAsPrimary(
     const Predicate *predicate,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     bool negate, QueryOperations query_operations) {
-  QueryOptimizationPath path = GetOptimizationPath(query_operations);
-  // Faster path for non nested pure text composed AND predicates.
-  // This is an optimization to avoid building multiple term iterators and a
-  // proximity iterator for every key's evaluation in the filtering stage (using
-  // the PrefilterEvaluator).
-  if ((path == QueryOptimizationPath::kExactPhrase ||
-       path == QueryOptimizationPath::kSimpleComposedAnd) &&
-      !negate) {
-    CHECK(predicate->GetType() == PredicateType::kComposedAnd);
-    auto composed_predicate =
-        dynamic_cast<const ComposedPredicate *>(predicate);
-    std::unique_ptr<indexes::EntriesFetcherBase> fetcher;
-    if (path == QueryOptimizationPath::kExactPhrase) {
-      fetcher = BuildExactPhraseFetcher(composed_predicate);
-    } else {
-      fetcher = BuildComposedAndFetcher(composed_predicate);
-    }
-    size_t size = fetcher->Size();
-    entries_fetchers.push(std::move(fetcher));
-    return size;
-  }
-
   if (predicate->GetType() == PredicateType::kComposedAnd ||
       predicate->GetType() == PredicateType::kComposedOr) {
     auto composed_predicate =
@@ -487,12 +542,25 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
 absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
     const SearchParameters &parameters) {
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
-  size_t qualified_entries = EvaluateFilterAsPrimary(
-      parameters.filter_parse_results.root_predicate.get(), entries_fetchers,
-      false, parameters.filter_parse_results.query_operations);
+  size_t qualified_entries;
+  if (parameters.filter_parse_results.query_operations &
+      QueryOperations::kContainsText) {
+    auto text_iter = BuildTextIterator(
+        parameters.filter_parse_results.root_predicate.get(), false,
+        std::nullopt, false);
+    if (text_iter) {
+      entries_fetchers.push(
+          std::make_unique<TextIteratorFetcher>(std::move(text_iter)));
+      qualified_entries = 0;
+    } else {
+      qualified_entries = 0;
+    }
+  } else {
+    qualified_entries = EvaluateFilterAsPrimary(
+        parameters.filter_parse_results.root_predicate.get(), entries_fetchers,
+        false, parameters.filter_parse_results.query_operations);
+  }
   std::vector<indexes::Neighbor> neighbors;
-  // TODO: For now, we just reserve a fixed size because text search operators
-  // return a size of 0 currently.
   neighbors.reserve(5000);
   auto results_appender =
       [&neighbors, &parameters](
@@ -501,16 +569,15 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
     neighbors.emplace_back(indexes::Neighbor{key, 0.0f});
     return true;
   };
-  // Cannot skip evaluation if the query contains unsolved composed operations.
   bool requires_prefilter_evaluation =
-      IsUnsolvedComposedAnd(parameters.filter_parse_results.query_operations);
+      IsUnsolvedComposedAnd(parameters.filter_parse_results.query_operations) ||
+      (parameters.filter_parse_results.query_operations &
+       (QueryOperations::kContainsNumeric | QueryOperations::kContainsTag));
   if (!requires_prefilter_evaluation) {
     bool needs_dedup =
         NeedsDeduplication(parameters.filter_parse_results.query_operations);
     absl::flat_hash_set<const char *> seen_keys;
     if (needs_dedup) {
-      // TODO: Use the qualified_entries size when text indexes return correct
-      // size.
       seen_keys.reserve(5000);
     }
     while (!entries_fetchers.empty()) {

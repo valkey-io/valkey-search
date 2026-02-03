@@ -497,8 +497,9 @@ class TestAnswersCMD(ValkeySearchTestCaseBase):
             answers = pickle.load(answer_file)
 
         data_set = None
+        client = self.server.get_new_client()
         for i in range(len(answers)):
-            data_set = do_answer(self.server.get_new_client(), answers[i], data_set)
+            data_set = do_answer(client, answers[i], data_set)
 
         if correct_answers != len(answers):
             print(f"Correct answers: {correct_answers} out of {len(answers)}")

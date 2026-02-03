@@ -18,6 +18,7 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
+#include "src/indexes/vector_base.h"
 #include "src/indexes/text/fuzzy.h"
 #include "src/indexes/text/orproximity.h"
 #include "src/indexes/text/proximity.h"
@@ -53,9 +54,6 @@ TermPredicate::TermPredicate(
       exact_(exact_) {}
 
 EvaluationResult TermPredicate::Evaluate(Evaluator& evaluator) const {
-  if (evaluator.IsPrefilterEvaluator()) {
-    return EvaluationResult(true);
-  }
   return evaluator.EvaluateText(*this, false);
 }
 
@@ -99,9 +97,6 @@ PrefixPredicate::PrefixPredicate(
       term_(term) {}
 
 EvaluationResult PrefixPredicate::Evaluate(Evaluator& evaluator) const {
-  if (evaluator.IsPrefilterEvaluator()) {
-    return EvaluationResult(true);
-  }
   return evaluator.EvaluateText(*this, false);
 }
 
@@ -152,9 +147,6 @@ SuffixPredicate::SuffixPredicate(
       term_(term) {}
 
 EvaluationResult SuffixPredicate::Evaluate(Evaluator& evaluator) const {
-  if (evaluator.IsPrefilterEvaluator()) {
-    return EvaluationResult(true);
-  }
   return evaluator.EvaluateText(*this, false);
 }
 
@@ -210,9 +202,6 @@ InfixPredicate::InfixPredicate(
       term_(term) {}
 
 EvaluationResult InfixPredicate::Evaluate(Evaluator& evaluator) const {
-  if (evaluator.IsPrefilterEvaluator()) {
-    return EvaluationResult(true);
-  }
   return evaluator.EvaluateText(*this, false);
 }
 
@@ -234,9 +223,6 @@ FuzzyPredicate::FuzzyPredicate(
       distance_(distance) {}
 
 EvaluationResult FuzzyPredicate::Evaluate(Evaluator& evaluator) const {
-  if (evaluator.IsPrefilterEvaluator()) {
-    return EvaluationResult(true);
-  }
   return evaluator.EvaluateText(*this, false);
 }
 
@@ -382,17 +368,10 @@ EvaluationResult EvaluatePredicate(const Predicate* predicate,
 // ProximityIterator to validate term positions meet distance and order
 // requirements.
 EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
-  // Determine if children need to return positions for proximity checks.
-  // Proximity check in Prefilter also depends on the configuration.
-  bool has_proximity_constraint = slop_.has_value() || inorder_;
-  bool require_positions =
-      evaluator.IsPrefilterEvaluator()
-          ? has_proximity_constraint &&
-                options::GetEnableProximityPrefilterEval().GetValue()
-          : has_proximity_constraint;
+  bool skip_text = evaluator.IsPrefilterEvaluator();
+  bool require_positions = slop_.has_value() || inorder_;
   // Handle AND logic
   if (GetType() == PredicateType::kComposedAnd) {
-    // Short-circuit on first false
     uint32_t childrenWithPositions = 0;
     uint64_t query_field_mask = ~0ULL;
     absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
@@ -447,7 +426,12 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
   auto filter_iterators =
       absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
                           indexes::text::kProximityTermsInlineCapacity>();
+  bool evaluated_any = false;
   for (const auto& child : children_) {
+    if (skip_text && child->GetType() == PredicateType::kText) {
+      continue;
+    }
+    evaluated_any = true;
     EvaluationResult result =
         EvaluatePredicate(child.get(), evaluator, require_positions);
     // Short-circuit if any matches and positions not required.
@@ -459,6 +443,10 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
       }
       filter_iterators.push_back(std::move(result.filter_iterator));
     }
+  }
+  // If skipped all children (all text), return true (text resolved in entries fetcher)
+  if (!evaluated_any) {
+    return EvaluationResult(true);
   }
   // No matches found.
   if (!require_positions || filter_iterators.empty()) {

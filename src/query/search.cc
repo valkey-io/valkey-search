@@ -149,8 +149,9 @@ inline PredicateType EvaluateAsComposedPredicate(
 // Helper fn to identify if query requires prefilter evaluation.
 // Prefilter is needed when query contains numeric or tag predicates.
 inline bool IsUnsolvedQuery(QueryOperations query_operations) {
-  return query_operations &
-         (QueryOperations::kContainsNumeric | QueryOperations::kContainsTag);
+  return query_operations & (QueryOperations::kContainsNumeric |
+                             QueryOperations::kContainsTag) &&
+         query_operations & QueryOperations::kContainsAnd;
 }
 
 // Helper fn to identify if deduplication is needed.
@@ -186,18 +187,15 @@ std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
         EvaluateAsComposedPredicate(composed_predicate, negate);
     auto slop = composed_predicate->GetSlop();
     bool inorder = composed_predicate->GetInorder();
-    bool child_require_positions =
-        slop.has_value() || inorder || require_positions;
+    bool child_require_positions = slop.has_value() || inorder;
     if (predicate_type == PredicateType::kComposedAnd) {
       absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
                           indexes::text::kProximityTermsInlineCapacity>
           iterators;
-      uint64_t query_field_mask = ~0ULL;
       for (const auto &child : composed_predicate->GetChildren()) {
         auto iter =
             BuildTextIterator(child.get(), negate, child_require_positions);
         if (iter) {
-          query_field_mask &= iter->QueryFieldMask();
           iterators.push_back(std::move(iter));
         }
       }
@@ -233,6 +231,7 @@ std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
     return BuildTextIterator(negate_predicate->GetPredicate(), !negate,
                              require_positions);
   }
+  // Numeric/Tag
   return nullptr;
 }
 

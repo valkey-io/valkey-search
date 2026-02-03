@@ -105,11 +105,7 @@ query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(
 query::EvaluationResult PrefilterEvaluator::EvaluateText(
     const query::TextPredicate &predicate, bool require_positions) {
   CHECK(key_);
-  // TODO: Need to check why we cannot skip this by returning true directly.
-  if (!text_index_) {
-    return query::EvaluationResult(false);
-  }
-  return predicate.Evaluate(*text_index_, *key_, require_positions);
+  return query::EvaluationResult(true);
 }
 
 template <typename T>

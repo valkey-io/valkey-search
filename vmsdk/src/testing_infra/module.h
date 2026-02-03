@@ -87,9 +87,11 @@ class MockValkeyModule {
   MOCK_METHOD(int, KeyExists, (ValkeyModuleCtx * ctx, ValkeyModuleString *key));
   MOCK_METHOD(ValkeyModuleKey *, OpenKey,
               (ValkeyModuleCtx * ctx, ValkeyModuleString *key, int flags));
-  MOCK_METHOD(int, HashExternalize,
+  MOCK_METHOD(int, HashHasStringRef,
+              (ValkeyModuleKey * key, ValkeyModuleString *field));
+  MOCK_METHOD(int, HashSetStringRef,
               (ValkeyModuleKey * key, ValkeyModuleString *field,
-               ValkeyModuleHashExternCB fn, void *privdata));
+               const char *buf, size_t len));
   MOCK_METHOD(int, GetApi, (const char *name, void *func));
   MOCK_METHOD(int, HashGet,
               (ValkeyModuleKey * key, int flags, const char *field,
@@ -648,9 +650,14 @@ inline int TestValkeyModule_KeyExistsDefaultImpl(ValkeyModuleCtx *ctx,
   return 0;
 }
 
-inline int TestValkeyModule_HashExternalizeDefaultImpl(
-    ValkeyModuleKey *key, ValkeyModuleString *field,
-    ValkeyModuleHashExternCB fn, void *privdata) {
+inline int TestValkeyModule_HashSetStringRefDefaultImpl(
+    ValkeyModuleKey *key, ValkeyModuleString *field, const char *buf,
+    size_t len) {
+  return VALKEYMODULE_OK;
+}
+
+inline int TestValkeyModule_HashHasStringRefDefaultImpl(
+    ValkeyModuleKey *key, ValkeyModuleString *field) {
   return VALKEYMODULE_OK;
 }
 
@@ -674,11 +681,15 @@ inline ValkeyModuleKey *TestValkeyModule_OpenKey(ValkeyModuleCtx *ctx,
   return kMockValkeyModule->OpenKey(ctx, key, flags);
 }
 
-inline int TestValkeyModule_HashExternalize(ValkeyModuleKey *key,
-                                            ValkeyModuleString *field,
-                                            ValkeyModuleHashExternCB fn,
-                                            void *privdata) {
-  return kMockValkeyModule->HashExternalize(key, field, fn, privdata);
+inline int TestValkeyModule_HashHasStringRef(ValkeyModuleKey *key,
+                                             ValkeyModuleString *field) {
+  return kMockValkeyModule->HashHasStringRef(key, field);
+}
+
+inline int TestValkeyModule_HashSetStringRef(ValkeyModuleKey *key,
+                                             ValkeyModuleString *field,
+                                             const char *buf, size_t len) {
+  return kMockValkeyModule->HashSetStringRef(key, field, buf, len);
 }
 
 inline int TestValkeyModule_GetApi(const char *name, void *func) {
@@ -1490,7 +1501,8 @@ inline void TestValkeyModule_Init() {
       &TestValkeyModule_SubscribeToKeyspaceEvents;
   ValkeyModule_KeyExists = &TestValkeyModule_KeyExists;
   ValkeyModule_OpenKey = &TestValkeyModule_OpenKey;
-  ValkeyModule_HashExternalize = &TestValkeyModule_HashExternalize;
+  ValkeyModule_HashSetStringRef = &TestValkeyModule_HashSetStringRef;
+  ValkeyModule_HashHasStringRef = &TestValkeyModule_HashHasStringRef;
   ValkeyModule_GetApi = &TestValkeyModule_GetApi;
   ValkeyModule_HashGet = &TestValkeyModule_HashGet;
   ValkeyModule_HashSet = &TestValkeyModule_HashSet;
@@ -1622,8 +1634,9 @@ inline void TestValkeyModule_Init() {
   ON_CALL(*kMockValkeyModule, KeyExists(testing::_, testing::_))
       .WillByDefault(TestValkeyModule_KeyExistsDefaultImpl);
   ON_CALL(*kMockValkeyModule,
-          HashExternalize(testing::_, testing::_, testing::_, testing::_))
-      .WillByDefault(TestValkeyModule_HashExternalizeDefaultImpl);
+          HashSetStringRef(testing::_, testing::_, testing::_, testing::_));
+  ON_CALL(*kMockValkeyModule, HashHasStringRef(testing::_, testing::_))
+      .WillByDefault(TestValkeyModule_HashHasStringRefDefaultImpl);
   ON_CALL(*kMockValkeyModule, GetApi(testing::_, testing::_))
       .WillByDefault(TestValkeyModule_GetApiDefaultImpl);
 

@@ -35,8 +35,6 @@
 #include "src/rdb_section.pb.h"
 #include "src/rdb_serialization.h"
 #include "src/valkey_search.h"
-#include "src/vector_externalizer.h"
-#include "src/version.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -544,7 +542,6 @@ void SchemaManager::OnLoadingEnded(ValkeyModuleCtx *ctx) {
       schema->OnLoadingEnded(ctx);
     }
   }
-  VectorExternalizer::Instance().ProcessEngineUpdateQueue();
 }
 
 void SchemaManager::PerformBackfill(ValkeyModuleCtx *ctx, uint32_t batch_size) {

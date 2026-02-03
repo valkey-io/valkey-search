@@ -8,7 +8,6 @@
 #include "src/query/search.h"
 
 #include <cstddef>
-#include <deque>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -17,7 +16,6 @@
 #include <vector>
 
 #include "absl/container/flat_hash_set.h"
-#include "absl/container/inlined_vector.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -606,7 +604,6 @@ void SearchResult::TrimResults(std::vector<indexes::Neighbor> &neighbors,
   // Apply limiting with buffer
   this->is_limited_with_buffer = true;
   neighbors.erase(neighbors.begin() + max_needed, neighbors.end());
-  return;
 }
 
 // Determine the range of neighbors to serialize in the response.

@@ -10,7 +10,6 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <exception>
 #include <memory>
 #include <mutex>  // NOLINT(build/c++11)
@@ -36,7 +35,6 @@
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
-#include "valkey_search_options.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/utils.h"
@@ -108,33 +106,19 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::Create(
 }
 
 template <typename T>
-void VectorHNSW<T>::TrackVector(uint64_t internal_id,
-                                const InternedStringPtr &vector) {
-  absl::MutexLock lock(&tracked_vectors_mutex_);
-  tracked_vectors_.push_back(vector);
-}
-
-template <typename T>
 bool VectorHNSW<T>::IsVectorMatch(uint64_t internal_id,
                                   const InternedStringPtr &vector) {
   absl::ReaderMutexLock lock(&resize_mutex_);
-  {
-    std::unique_lock<std::mutex> lock_label(
-        algo_->getLabelOpMutex(internal_id));
-    auto id = hnswlib_helpers::GetInternalId(algo_.get(), internal_id);
-    if (!id.has_value()) {
-      return false;
-    }
-    char *data_ptrv = algo_->getDataByInternalId(*id);
-    size_t dim = *((size_t *)algo_->dist_func_param_);
-    absl::string_view record(data_ptrv, dim * sizeof(T));
-    return vector->Str() == record;
+  std::unique_lock<std::mutex> lock_label(algo_->getLabelOpMutex(internal_id));
+  auto id = hnswlib_helpers::GetInternalId(algo_.get(), internal_id);
+  if (!id.has_value()) {
+    return false;
   }
+  char *data_ptrv = algo_->getDataByInternalId(*id);
+  size_t dim = *((size_t *)algo_->dist_func_param_);
+  absl::string_view record(data_ptrv, dim * sizeof(T));
+  return vector->Str() == record;
 }
-// UnTrackVector does not delete the vector in VectorHNSW, as vectors are never
-// physically removed from the graph—only marked as deleted.
-template <typename T>
-void VectorHNSW<T>::UnTrackVector(uint64_t internal_id) {}
 
 template <typename T>
 absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(

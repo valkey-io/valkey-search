@@ -14,7 +14,6 @@
 #include <vector>
 
 #include "absl/container/flat_hash_set.h"
-#include "absl/container/inlined_vector.h"
 #include "absl/strings/string_view.h"
 #include "src/indexes/text/text_iterator.h"
 #include "vmsdk/src/managed_pointers.h"

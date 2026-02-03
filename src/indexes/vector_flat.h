@@ -10,12 +10,10 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <memory>
 #include <utility>
 
 #include "absl/base/thread_annotations.h"
-#include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
@@ -82,14 +80,8 @@ class VectorFlat : public VectorBase {
       ABSL_NO_THREAD_SAFETY_ANALYSIS {
     return algo_->getPoint(internal_id);
   }
-  void TrackVector(uint64_t internal_id,
-                   const InternedStringPtr& vector) override
-      ABSL_LOCKS_EXCLUDED(tracked_vectors_mutex_);
   bool IsVectorMatch(uint64_t internal_id,
-                     const InternedStringPtr& vector) override
-      ABSL_LOCKS_EXCLUDED(tracked_vectors_mutex_);
-  void UnTrackVector(uint64_t internal_id) override
-      ABSL_LOCKS_EXCLUDED(tracked_vectors_mutex_);
+                     const InternedStringPtr& vector) override;
 
  private:
   VectorFlat(int dimensions, data_model::DistanceMetric distance_metric,
@@ -100,9 +92,6 @@ class VectorFlat : public VectorBase {
   std::unique_ptr<hnswlib::SpaceInterface<T>> space_;
   uint32_t block_size_;
   mutable absl::Mutex resize_mutex_;
-  mutable absl::Mutex tracked_vectors_mutex_;
-  absl::flat_hash_map<uint64_t, InternedStringPtr> tracked_vectors_
-      ABSL_GUARDED_BY(tracked_vectors_mutex_);
 };
 }  // namespace valkey_search::indexes
 

@@ -27,7 +27,6 @@
 #include "gtest/gtest_prod.h"
 #include "src/attribute.h"
 #include "src/attribute_data_type.h"
-#include "src/commands/ft_create_parser.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/text/text_index.h"
@@ -205,7 +204,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   void MarkAsDestructing();
   void ProcessMultiQueue();
   void SubscribeToVectorExternalizer(absl::string_view attribute_identifier,
-                                     indexes::VectorBase *vector_index);
+                                     const indexes::VectorBase *vector_index);
   uint64_t GetBackfillScannedKeyCount() const;
   uint64_t GetBackfillDbSize() const;
   InfoIndexPartitionData GetInfoIndexPartitionData() const;
@@ -306,7 +305,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   };
 
   vmsdk::MainThreadAccessGuard<std::optional<BackfillJob>> backfill_job_;
-  absl::flat_hash_map<std::string, indexes::VectorBase *>
+  absl::flat_hash_map<std::string, std::vector<const indexes::VectorBase *>>
       vector_externalizer_subscriptions_;
   void VectorExternalizer(const Key &key,
                           absl::string_view attribute_identifier,

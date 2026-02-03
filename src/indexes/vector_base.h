@@ -11,7 +11,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <deque>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -166,8 +165,13 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
   int GetVectorDataSize() const { return GetDataTypeSize() * dimensions_; }
   char* TrackVector(uint64_t internal_id, char* vector, size_t len) override;
-  InternedStringPtr InternVector(absl::string_view record,
-                                 std::optional<float>& magnitude);
+  void SetMagnitude(absl::string_view record) const;
+  InternedStringPtr InternVector(absl::string_view record) const;
+  bool IsValidSizeVector(absl::string_view record) const {
+    const auto data_type_size = GetDataTypeSize();
+    int32_t dim = record.size() / GetDataTypeSize();
+    return dim == dimensions_ && (record.size() % data_type_size == 0);
+  }
 
  protected:
   VectorBase(IndexerType indexer_type, int dimensions,
@@ -185,11 +189,6 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   {
   }
 
-  bool IsValidSizeVector(absl::string_view record) {
-    const auto data_type_size = GetDataTypeSize();
-    int32_t dim = record.size() / GetDataTypeSize();
-    return dim == dimensions_ && (record.size() % data_type_size == 0);
-  }
   int RespondWithInfo(ValkeyModuleCtx* ctx) const override;
   template <typename T>
   void Init(int dimensions, data_model::DistanceMetric distance_metric,
@@ -221,21 +220,16 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   virtual absl::StatusOr<std::pair<float, hnswlib::labeltype>>
   ComputeDistanceFromRecordImpl(uint64_t internal_id,
                                 absl::string_view query) const = 0;
-  virtual void TrackVector(uint64_t internal_id,
-                           const InternedStringPtr& vector) = 0;
   virtual bool IsVectorMatch(uint64_t internal_id,
                              const InternedStringPtr& vector) = 0;
-  virtual void UnTrackVector(uint64_t internal_id) = 0;
 
  private:
   absl::StatusOr<uint64_t> TrackKey(const InternedStringPtr& key,
-                                    float magnitude,
                                     const InternedStringPtr& vector)
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::StatusOr<std::optional<uint64_t>> UnTrackKey(
       const InternedStringPtr& key) ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::StatusOr<bool> UpdateMetadata(const InternedStringPtr& key,
-                                      float magnitude,
                                       const InternedStringPtr& vector)
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::StatusOr<uint64_t> GetInternalId(const InternedStringPtr& key) const
@@ -246,11 +240,6 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
       ABSL_GUARDED_BY(key_to_metadata_mutex_);
   struct TrackedKeyMetadata {
     uint64_t internal_id;
-    // If normalize_ is false, this will be -1.0f. Otherwise, it will be the
-    // magnitude of the vector. If the magnitude is not initialized, it will be
-    // -inf (this is an intermediate state during backfill when transitioning
-    // from the old RDB format that didn't include magnitudes).
-    float magnitude;
   };
 
   InternedStringHashMap<TrackedKeyMetadata> tracked_metadata_by_key_

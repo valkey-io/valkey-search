@@ -328,6 +328,10 @@ void IndexSchema::UpdateTextFieldMasksForIndex(const std::string &identifier,
     // Track fields with stemming enabled (note: stemming not run for suffix)
     if (text_index->IsStemmingEnabled()) {
       stem_text_field_mask_ |= field_bit;
+      // Sync to TextIndexSchema so query code can access it
+      if (text_index_schema_) {
+        text_index_schema_->SetStemTextFieldMask(stem_text_field_mask_);
+      }
     }
   }
 }

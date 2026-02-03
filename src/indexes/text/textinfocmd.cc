@@ -74,6 +74,7 @@ static absl::Status DumpWordIterator(ValkeyModuleCtx* ctx, auto& wi,
 /*
 FT._DEBUG TEXTINFO <index_name> PREFIX <word> [WITHKEYS [WITHPOSITIONS]]
 FT._DEBUG TEXTINFO <index_name> SUFFIX <word> [WITHKEYS [WITHPOSITIONS]]
+FT._DEBUG TEXTINFO <index_name> STEM <word>
 FT._DEBUG TEXTINFO <index_name> LEXER <string> [<stemsize>]
 
 */
@@ -110,6 +111,38 @@ absl::Status IndexSchema::TextInfoCmd(ValkeyModuleCtx* ctx,
     bool with_keys = itr.PopIfNextIgnoreCase("WITHKEYS");
     bool with_positions = itr.PopIfNextIgnoreCase("WITHPOSITIONS");
     return DumpWordIterator(ctx, wi, with_keys, with_positions);
+  } else if (subcommand == "STEM") {
+    std::string word;
+    VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, word));
+
+    // Access stem tree directly with proper thread safety
+    // GetStemTree() returns a const reference, so we need to lock access
+    const auto& stem_tree = index_schema->GetTextIndexSchema()->GetStemTree();
+    auto stem_wi = stem_tree.GetWordIterator(word);
+
+    ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
+    size_t count = 0;
+    while (!stem_wi.Done()) {
+      count++;
+      // Reply with stem word and its parent words
+      ValkeyModule_ReplyWithArray(ctx, 2);
+      ValkeyModule_ReplyWithStringBuffer(ctx, stem_wi.GetWord().data(),
+                                         stem_wi.GetWord().size());
+
+      // Reply with parent words set
+      const auto& stem_parents_ptr = stem_wi.GetTarget();
+      if (stem_parents_ptr) {
+        const auto& parents = *stem_parents_ptr;
+        ValkeyModule_ReplyWithArray(ctx, parents.size());
+        for (const auto& parent : parents) {
+          ValkeyModule_ReplyWithStringBuffer(ctx, parent.data(), parent.size());
+        }
+      } else {
+        ValkeyModule_ReplyWithArray(ctx, 0);
+      }
+      stem_wi.Next();
+    }
+    ValkeyModule_ReplySetArrayLength(ctx, count);
   } else if (subcommand == "LEXER") {
     std::string text;
     VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, text));

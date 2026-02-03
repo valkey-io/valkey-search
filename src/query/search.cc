@@ -186,30 +186,34 @@ std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
         EvaluateAsComposedPredicate(composed_predicate, negate);
     auto slop = composed_predicate->GetSlop();
     bool inorder = composed_predicate->GetInorder();
-    bool require_positions = slop.has_value() || inorder || require_positions;
+    bool child_require_positions =
+        slop.has_value() || inorder || require_positions;
     if (predicate_type == PredicateType::kComposedAnd) {
       absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
                           indexes::text::kProximityTermsInlineCapacity>
           iterators;
       uint64_t query_field_mask = ~0ULL;
       for (const auto &child : composed_predicate->GetChildren()) {
-        auto iter = BuildTextIterator(child.get(), negate, require_positions);
+        auto iter =
+            BuildTextIterator(child.get(), negate, child_require_positions);
         if (iter) {
           query_field_mask &= iter->QueryFieldMask();
           iterators.push_back(std::move(iter));
         }
       }
-      if (iterators.empty()) return nullptr;
-      bool skip_positional = !require_positions;
+      // Short circuit if no valid iterators or no common fields across all
+      // children.
+      if (iterators.empty() || query_field_mask == 0) return nullptr;
+      bool skip_positional = !child_require_positions;
       return std::make_unique<indexes::text::ProximityIterator>(
-          std::move(iterators), slop, inorder, query_field_mask, nullptr,
-          skip_positional);
+          std::move(iterators), slop, inorder, nullptr, skip_positional);
     } else {
       absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
                           indexes::text::kProximityTermsInlineCapacity>
           iterators;
       for (const auto &child : composed_predicate->GetChildren()) {
-        auto iter = BuildTextIterator(child.get(), negate, require_positions);
+        auto iter =
+            BuildTextIterator(child.get(), negate, child_require_positions);
         if (iter) {
           iterators.push_back(std::move(iter));
         }

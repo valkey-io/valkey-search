@@ -51,7 +51,6 @@ class ProximityIterator : public TextIterator {
   ProximityIterator(absl::InlinedVector<std::unique_ptr<TextIterator>,
                                         kProximityTermsInlineCapacity>&& iters,
                     const std::optional<uint32_t> slop, const bool in_order,
-                    const FieldMaskPredicate query_field_mask,
                     const InternedStringSet* untracked_keys,
                     bool skip_positional_checks);
   /* Implementation of TextIterator APIs */

@@ -57,6 +57,7 @@ class OrProximityIterator : public TextIterator {
   Key current_key_;
   std::optional<PositionRange> current_position_;
   FieldMaskPredicate current_field_mask_;
+  FieldMaskPredicate query_field_mask_;
   const InternedStringSet* untracked_keys_;
 
   // Multiset for efficient key management

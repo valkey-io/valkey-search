@@ -416,15 +416,14 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
     // iterators. This ensures we only check proximity for text predicates,
     // not numeric/tag.
     if (require_positions && (childrenWithPositions >= 2)) {
-      // Get field_mask from lhs and rhs iterators
+      // Short circuit if no common fields across all children.
       if (query_field_mask == 0) {
         return EvaluationResult(false);
       }
       // Create ProximityIterator to check proximity
       auto proximity_iterator =
           std::make_unique<indexes::text::ProximityIterator>(
-              std::move(iterators), slop_, inorder_, query_field_mask, nullptr,
-              false);
+              std::move(iterators), slop_, inorder_, nullptr, false);
       // Check if any valid proximity matches exist
       if (!proximity_iterator->IsIteratorValid()) {
         return EvaluationResult(false);

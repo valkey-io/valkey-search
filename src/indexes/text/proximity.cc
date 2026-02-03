@@ -27,7 +27,6 @@ ProximityIterator::ProximityIterator(
     absl::InlinedVector<std::unique_ptr<TextIterator>,
                         kProximityTermsInlineCapacity>&& iters,
     std::optional<uint32_t> slop, bool in_order,
-    FieldMaskPredicate query_field_mask,
     const InternedStringSet* untracked_keys, bool skip_positional_checks)
     : iters_(std::move(iters)),
       slop_(slop),
@@ -35,9 +34,13 @@ ProximityIterator::ProximityIterator(
       untracked_keys_(untracked_keys),
       current_position_(std::nullopt),
       current_field_mask_(0ULL),
-      query_field_mask_(query_field_mask),
       skip_positional_checks_(skip_positional_checks) {
   CHECK(!iters_.empty()) << "must have at least one text iterator";
+  query_field_mask_ = ~0ULL;
+  for (const auto& iter : iters_) {
+    query_field_mask_ &= iter->QueryFieldMask();
+  }
+  CHECK(query_field_mask_ != 0) << "no common fields across iterators";
   if (!skip_positional_checks_) {
     CHECK(slop_.has_value() || in_order_)
         << "ProximityIterator requires either slop or inorder=true";

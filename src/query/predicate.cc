@@ -18,7 +18,6 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
-#include "src/indexes/vector_base.h"
 #include "src/indexes/text/fuzzy.h"
 #include "src/indexes/text/orproximity.h"
 #include "src/indexes/text/proximity.h"
@@ -370,6 +369,11 @@ EvaluationResult EvaluatePredicate(const Predicate* predicate,
 EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
   bool skip_text = evaluator.IsPrefilterEvaluator();
   bool require_positions = slop_.has_value() || inorder_;
+  VMSDK_LOG(WARNING, nullptr)
+      << "ComposedPredicate type="
+      << (GetType() == PredicateType::kComposedAnd ? "AND" : "OR")
+      << " skip_text=" << skip_text
+      << " require_positions=" << require_positions;
   // Handle AND logic
   if (GetType() == PredicateType::kComposedAnd) {
     uint32_t childrenWithPositions = 0;
@@ -378,6 +382,10 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
                         indexes::text::kProximityTermsInlineCapacity>
         iterators;
     for (const auto& child : children_) {
+      // In AND: skip text children when in prefilter (resolved in fetcher)
+      if (skip_text && child->GetType() == PredicateType::kText) {
+        continue;
+      }
       EvaluationResult result =
           EvaluatePredicate(child.get(), evaluator, require_positions);
       if (!result.matches) {
@@ -426,14 +434,10 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
   auto filter_iterators =
       absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
                           indexes::text::kProximityTermsInlineCapacity>();
-  bool evaluated_any = false;
   for (const auto& child : children_) {
-    if (skip_text && child->GetType() == PredicateType::kText) {
-      continue;
-    }
-    evaluated_any = true;
     EvaluationResult result =
         EvaluatePredicate(child.get(), evaluator, require_positions);
+    VMSDK_LOG(WARNING, nullptr) << "OR child matches: " << result.matches;
     // Short-circuit if any matches and positions not required.
     if (result.matches && !require_positions) {
       return EvaluationResult(true);
@@ -443,10 +447,6 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
       }
       filter_iterators.push_back(std::move(result.filter_iterator));
     }
-  }
-  // If skipped all children (all text), return true (text resolved in entries fetcher)
-  if (!evaluated_any) {
-    return EvaluationResult(true);
   }
   // No matches found.
   if (!require_positions || filter_iterators.empty()) {

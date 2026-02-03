@@ -105,7 +105,10 @@ query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(
 query::EvaluationResult PrefilterEvaluator::EvaluateText(
     const query::TextPredicate &predicate, bool require_positions) {
   CHECK(key_);
-  return query::EvaluationResult(true);
+  if (!text_index_) {
+    return query::EvaluationResult(false);
+  }
+  return predicate.Evaluate(*text_index_, *key_, require_positions);
 }
 
 template <typename T>

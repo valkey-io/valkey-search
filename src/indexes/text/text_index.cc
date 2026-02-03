@@ -63,7 +63,8 @@ InvasivePtr<Postings> RemoveKeyFromPostings(
   return existing_postings;
 }
 
-// Factory for target mutate callback with memory tracking and target copying
+// Factory for target mutate callback with memory tracking and new target
+// copying to the outer scope
 template <typename Target, typename MutateFn>
 std::function<void *(void *)> CreateTargetMutateFn(
     MemoryPool &memory_pool, MutateFn mutate_fn,
@@ -106,7 +107,7 @@ std::function<void *(void *)> CreateTargetSetFn(
   };
 }
 
-// Factory for simple target mutation (no memory tracking, no target copying)
+// Factory for simple target mutation
 template <typename Target, typename MutateFn>
 std::function<void *(void *)> CreateSimpleTargetMutateFn(MutateFn mutate_fn) {
   return [mutate_fn = std::move(mutate_fn)](void *old_val) -> void * {

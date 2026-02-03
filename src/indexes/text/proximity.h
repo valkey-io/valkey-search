@@ -73,7 +73,7 @@ class ProximityIterator : public TextIterator {
       return current_key_;
     }
     return current_key_ && current_position_.has_value() &&
-           current_field_mask_ != 0ULL;
+           current_field_mask_ != 0ULL && query_field_mask_ != 0ULL;
   }
 
  private:

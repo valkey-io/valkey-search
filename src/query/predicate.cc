@@ -53,9 +53,6 @@ TermPredicate::TermPredicate(
       exact_(exact_) {}
 
 EvaluationResult TermPredicate::Evaluate(Evaluator& evaluator) const {
-  if (evaluator.IsPrefilterEvaluator()) {
-    return EvaluationResult(true);
-  }
   return evaluator.EvaluateText(*this, false);
 }
 
@@ -99,9 +96,6 @@ PrefixPredicate::PrefixPredicate(
       term_(term) {}
 
 EvaluationResult PrefixPredicate::Evaluate(Evaluator& evaluator) const {
-  if (evaluator.IsPrefilterEvaluator()) {
-    return EvaluationResult(true);
-  }
   return evaluator.EvaluateText(*this, false);
 }
 
@@ -152,9 +146,6 @@ SuffixPredicate::SuffixPredicate(
       term_(term) {}
 
 EvaluationResult SuffixPredicate::Evaluate(Evaluator& evaluator) const {
-  if (evaluator.IsPrefilterEvaluator()) {
-    return EvaluationResult(true);
-  }
   return evaluator.EvaluateText(*this, false);
 }
 
@@ -210,9 +201,6 @@ InfixPredicate::InfixPredicate(
       term_(term) {}
 
 EvaluationResult InfixPredicate::Evaluate(Evaluator& evaluator) const {
-  if (evaluator.IsPrefilterEvaluator()) {
-    return EvaluationResult(true);
-  }
   return evaluator.EvaluateText(*this, false);
 }
 
@@ -234,9 +222,6 @@ FuzzyPredicate::FuzzyPredicate(
       distance_(distance) {}
 
 EvaluationResult FuzzyPredicate::Evaluate(Evaluator& evaluator) const {
-  if (evaluator.IsPrefilterEvaluator()) {
-    return EvaluationResult(true);
-  }
   return evaluator.EvaluateText(*this, false);
 }
 

@@ -201,9 +201,7 @@ std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
           iterators.push_back(std::move(iter));
         }
       }
-      // Short circuit if no valid iterators or no common fields across all
-      // children.
-      if (iterators.empty() || query_field_mask == 0) return nullptr;
+      if (iterators.empty()) return nullptr;
       bool skip_positional = !child_require_positions;
       return std::make_unique<indexes::text::ProximityIterator>(
           std::move(iterators), slop, inorder, nullptr, skip_positional);

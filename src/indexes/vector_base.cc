@@ -104,16 +104,12 @@ query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(
 
 query::EvaluationResult PrefilterEvaluator::EvaluateText(
     const query::TextPredicate &predicate, bool require_positions) {
-  // // If text was resolved in entries fetcher phase, return true
-  // if (text_resolved_in_fetcher_) {
-  //   return query::EvaluationResult(true);
-  // }
-  // // Otherwise, evaluate it here
-  // if (!text_index_) {
-  //   return query::EvaluationResult(false);
-  // }
-  // return predicate.Evaluate(*text_index_, require_positions);
-  return query::EvaluationResult(true);
+  CHECK(key_);
+  // TODO: Need to check why we cannot skip this by returning true directly.
+  if (!text_index_) {
+    return query::EvaluationResult(false);
+  }
+  return predicate.Evaluate(*text_index_, *key_, require_positions);
 }
 
 template <typename T>

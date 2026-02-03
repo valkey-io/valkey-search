@@ -1307,7 +1307,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   std::string index_schema_name_str("text_index_schema");
   bool with_suffix_trie = false;
   bool no_stem = false;
-  uint32_t min_stem_size = 3;
+  uint32_t min_stem_size = 4;  // MockIndexSchema::Create uses default value
 
   FakeSafeRDB rdb_stream;
 
@@ -1329,10 +1329,9 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
 
     // Create text index with both proto and schema
     auto text_index_schema = std::make_shared<indexes::text::TextIndexSchema>(
-        language, punctuation, with_offsets, stop_words);
+        language, punctuation, with_offsets, stop_words, min_stem_size);
     auto text_index = std::make_shared<indexes::Text>(
-        CreateTextIndexProto(with_suffix_trie, no_stem, min_stem_size),
-        text_index_schema);
+        CreateTextIndexProto(with_suffix_trie, no_stem), text_index_schema);
     VMSDK_EXPECT_OK(
         index_schema->AddIndex("description", "desc_id", text_index));
 
@@ -1404,7 +1403,9 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
     EXPECT_TRUE(text_proto->has_text_index());
     EXPECT_EQ(text_proto->text_index().with_suffix_trie(), with_suffix_trie);
     EXPECT_EQ(text_proto->text_index().no_stem(), no_stem);
-    EXPECT_EQ(text_proto->text_index().min_stem_size(), min_stem_size);
+
+    // Validate schema-level min_stem_size
+    EXPECT_EQ(index_schema->GetMinStemSize(), min_stem_size);
 
     // TODO: Text index key tracking is not yet implemented
     // Validate that GetRecordCount returns 0 (expected for unimplemented key
@@ -2047,11 +2048,11 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
 
     // Add text index
     auto text_index = std::make_shared<indexes::Text>(
-        CreateTextIndexProto(true, false, 6),
+        CreateTextIndexProto(true, false),
         std::make_shared<indexes::text::TextIndexSchema>(
             data_model::LANGUAGE_ENGLISH,
             " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", true,
-            std::vector<std::string>{}));
+            std::vector<std::string>{}, 6));
     VMSDK_EXPECT_OK(
         index_schema->AddIndex("description", "desc_id", text_index));
 

@@ -253,6 +253,9 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
       with_offsets_(index_schema_proto.with_offsets()),
       stop_words_(index_schema_proto.stop_words().begin(),
                   index_schema_proto.stop_words().end()),
+      min_stem_size_(index_schema_proto.min_stem_size() > 0
+                         ? index_schema_proto.min_stem_size()
+                         : 4),
       mutations_thread_pool_(mutations_thread_pool),
       time_sliced_mutex_(CreateMrmwMutexOptions()) {
   ValkeyModule_SelectDb(detached_ctx_.get(), db_num_);
@@ -322,18 +325,12 @@ void IndexSchema::UpdateTextFieldMasksForIndex(const std::string &identifier,
       suffix_text_field_mask_ |= field_bit;
       suffix_text_identifiers_.insert(identifier);
     }
-    // Update min stem sizes
+    // Track fields with stemming enabled (note: stemming not run for suffix)
     if (text_index->IsStemmingEnabled()) {
-      uint32_t stem_size = text_index->GetMinStemSize();
-      all_fields_min_stem_size_ =
-          all_fields_min_stem_size_.has_value()
-              ? std::min(*all_fields_min_stem_size_, stem_size)
-              : stem_size;
-      if (text_index->WithSuffixTrie()) {
-        suffix_fields_min_stem_size_ =
-            suffix_fields_min_stem_size_.has_value()
-                ? std::min(*suffix_fields_min_stem_size_, stem_size)
-                : stem_size;
+      stem_text_field_mask_ |= field_bit;
+      // Sync to TextIndexSchema so query code can access it
+      if (text_index_schema_) {
+        text_index_schema_->SetStemTextFieldMask(stem_text_field_mask_);
       }
     }
   }
@@ -348,15 +345,6 @@ void IndexSchema::UpdateTextFieldMasksForIndex(const std::string &identifier,
 const absl::flat_hash_set<std::string> &IndexSchema::GetAllTextIdentifiers(
     bool with_suffix) const {
   return with_suffix ? suffix_text_identifiers_ : all_text_identifiers_;
-}
-
-// Find the min stem size across all text fields in the text index schema.
-// If stemming is disabled across all text field indexes, return `nullopt`.
-// If `with_suffix` is true, we only check the fields that have suffix tree
-// enabled.
-std::optional<uint32_t> IndexSchema::MinStemSizeAcrossTextIndexes(
-    bool with_suffix) const {
-  return with_suffix ? suffix_fields_min_stem_size_ : all_fields_min_stem_size_;
 }
 
 // Returns the field mask including all the text fields.
@@ -983,7 +971,8 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   }
   // Text-attribute info fields
   if (text_index_schema_) {
-    arrSize += 6;
+    arrSize += 8;  // punctuation, stop_words, with_offsets, min_stem_size (4
+                   // key-value pairs = 8 items)
   }
   ValkeyModule_ReplyWithArray(ctx, arrSize);
   ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
@@ -1087,6 +1076,9 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
 
     ValkeyModule_ReplyWithSimpleString(ctx, "with_offsets");
     ValkeyModule_ReplyWithSimpleString(ctx, with_offsets_ ? "1" : "0");
+
+    ValkeyModule_ReplyWithSimpleString(ctx, "min_stem_size");
+    ValkeyModule_ReplyWithLongLong(ctx, min_stem_size_);
   }
 
   ValkeyModule_ReplyWithSimpleString(ctx, "language");
@@ -1118,6 +1110,7 @@ std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
   index_schema_proto->set_language(language_);
   index_schema_proto->set_punctuation(punctuation_);
   index_schema_proto->set_with_offsets(with_offsets_);
+  index_schema_proto->set_min_stem_size(min_stem_size_);
   index_schema_proto->mutable_stop_words()->Assign(stop_words_.begin(),
                                                    stop_words_.end());
 

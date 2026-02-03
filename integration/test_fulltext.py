@@ -196,7 +196,7 @@ def validate_fulltext_search(client: Valkey):
     result = client.execute_command("FT.SEARCH", "products", '@desc:%wander%')
     assert (result[0], set(result[1::2])) == (1, {b"product:4"})
     result = client.execute_command("FT.SEARCH", "products", '@desc:%%greet%%')
-    assert (result[0], set(result[1::2])) == (3, {b"product:1", b"product:5", b"product:6"}) , f"{set(result[1::2])}"
+    assert (result[0], set(result[1::2])) == (3, {b"product:1", b"product:5", b"product:6"})
 
 class TestFullText(ValkeySearchTestCaseDebugMode):
 

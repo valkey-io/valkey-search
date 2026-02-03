@@ -209,13 +209,10 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
-
   absl::string_view text_string = GetTextString();
-
   // Search for the original word - may or may not exist in corpus
   bool found_original = TryAddWordKeyIterator(fetcher->text_index_.get(),
                                               text_string, key_iterators);
-
   // Get stem variants if not exact term search
   uint64_t stem_field_mask =
       fetcher->field_mask_ & GetTextIndexSchema()->GetStemTextFieldMask();
@@ -227,12 +224,10 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
     std::string stemmed = GetTextIndexSchema()->GetAllStemVariants(
         text_string, stem_variants, GetTextIndexSchema()->GetMinStemSize(),
         stem_field_mask, false);
-
     // Search for the stemmed word itself - may or may not exist in corpus
     if (stemmed != text_string) {
       TryAddWordKeyIterator(fetcher->text_index_.get(), stemmed, key_iterators);
     }
-
     // Search for stem variants - these should all exist from ingestion
     for (const auto& variant : stem_variants) {
       bool found = TryAddWordKeyIterator(fetcher->text_index_.get(), variant,
@@ -240,7 +235,6 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
       CHECK(found) << "Word in stem tree not found in index - ingestion issue";
     }
   }
-
   // TermIterator will use query_field_mask when has_original is true,
   // and stem_field_mask for stem variants (has_original becomes false after
   // first pass)

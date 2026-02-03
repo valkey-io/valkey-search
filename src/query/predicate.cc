@@ -93,11 +93,9 @@ EvaluationResult TermPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
     const InternedStringPtr& target_key, bool require_positions) const {
   uint64_t field_mask = field_mask_;
-
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
-
   // Search for the original word - may or may not exist in corpus
   bool found_original = TryAddWordKeyIteratorForPrefilter(
       text_index, term_, target_key, field_mask, require_positions,
@@ -105,7 +103,6 @@ EvaluationResult TermPredicate::Evaluate(
   if (found_original && !require_positions) {
     return EvaluationResult(true);
   }
-
   // Get stem variants if not exact term search
   uint64_t stem_field_mask =
       field_mask & text_index_schema_->GetStemTextFieldMask();
@@ -117,7 +114,6 @@ EvaluationResult TermPredicate::Evaluate(
     std::string stemmed = text_index_schema_->GetAllStemVariants(
         term_, stem_variants, text_index_schema_->GetMinStemSize(),
         stem_field_mask, true);
-
     // Search for the stemmed word itself - may or may not exist in corpus
     if (stemmed != term_) {
       if (TryAddWordKeyIteratorForPrefilter(text_index, stemmed, target_key,
@@ -128,7 +124,6 @@ EvaluationResult TermPredicate::Evaluate(
         }
       }
     }
-
     // Search for stem variants - these should all exist from ingestion
     for (const auto& variant : stem_variants) {
       bool found = TryAddWordKeyIteratorForPrefilter(
@@ -137,11 +132,9 @@ EvaluationResult TermPredicate::Evaluate(
       CHECK(found) << "Word in stem tree not found in index - ingestion issue";
     }
   }
-
   if (key_iterators.empty()) {
     return EvaluationResult(false);
   }
-
   auto iterator = std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), field_mask, nullptr, require_positions,
       stem_field_mask, found_original);

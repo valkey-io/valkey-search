@@ -435,51 +435,51 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
     # Base term types
     # ========================================================================
 
-    # def test_text_search_exact_match(self, key_type, dialect, schema_type):
-    #     """Test exact word matching queries."""
-    #     self._run_test(gen_word, "pure text", key_type, dialect, schema_type)
+    def test_text_search_exact_match(self, key_type, dialect, schema_type):
+        """Test exact word matching queries."""
+        self._run_test(gen_word, "pure text", key_type, dialect, schema_type)
 
-    # def test_text_search_prefix(self, key_type, dialect, schema_type):
-    #     """Test prefix wildcard queries."""
-    #     self._run_test(gen_prefix, "pure text", key_type, dialect, schema_type)
+    def test_text_search_prefix(self, key_type, dialect, schema_type):
+        """Test prefix wildcard queries."""
+        self._run_test(gen_prefix, "pure text", key_type, dialect, schema_type)
 
-    # def test_text_search_suffix(self, key_type, dialect, schema_type):
-    #     """Test suffix wildcard queries."""
-    #     self._run_test(gen_suffix, "pure text", key_type, dialect, schema_type)
+    def test_text_search_suffix(self, key_type, dialect, schema_type):
+        """Test suffix wildcard queries."""
+        self._run_test(gen_suffix, "pure text", key_type, dialect, schema_type)
 
     # ========================================================================
     # Complex grouped queries
     # ========================================================================
 
-    # def test_text_search_group_depth2(self, key_type, dialect, schema_type):
-    #     """Test grouped queries with depth 2."""
-    #     self._run_test(gen_depth2, "pure text", key_type, dialect, schema_type)
+    def test_text_search_group_depth2(self, key_type, dialect, schema_type):
+        """Test grouped queries with depth 2."""
+        self._run_test(gen_depth2, "pure text", key_type, dialect, schema_type)
 
-    # def test_text_search_group_depth3(self, key_type, dialect, schema_type):
-    #     """Test grouped queries with depth 3."""
-    #     self._run_test(gen_depth3, "pure text", key_type, dialect, schema_type)
+    def test_text_search_group_depth3(self, key_type, dialect, schema_type):
+        """Test grouped queries with depth 3."""
+        self._run_test(gen_depth3, "pure text", key_type, dialect, schema_type)
     
-    # def test_text_search_group_depth2_inorder(self, key_type, dialect, schema_type):
-    #     """Test grouped queries with depth 2."""
-    #     self._run_test(gen_depth2, "pure text", key_type, dialect, schema_type, inorder=True, check_parsing=True)
+    def test_text_search_group_depth2_inorder(self, key_type, dialect, schema_type):
+        """Test grouped queries with depth 2."""
+        self._run_test(gen_depth2, "pure text", key_type, dialect, schema_type, inorder=True, check_parsing=True)
 
-    # def test_text_search_group_depth3_inorder(self, key_type, dialect, schema_type):
-    #     """Test grouped queries with depth 3."""
-    #     self._run_test(gen_depth3, "pure text", key_type, dialect, schema_type, inorder=True, check_parsing=True)
+    def test_text_search_group_depth3_inorder(self, key_type, dialect, schema_type):
+        """Test grouped queries with depth 3."""
+        self._run_test(gen_depth3, "pure text", key_type, dialect, schema_type, inorder=True, check_parsing=True)
     
-    # def test_text_search_group_depth2_slop(self, key_type, dialect, schema_type):
-    #     """Test grouped queries with depth 2."""
-    #     self._run_test(gen_depth2, "pure text", key_type, dialect, schema_type, slop=True, check_parsing=True)
+    def test_text_search_group_depth2_slop(self, key_type, dialect, schema_type):
+        """Test grouped queries with depth 2."""
+        self._run_test(gen_depth2, "pure text", key_type, dialect, schema_type, slop=True, check_parsing=True)
 
-    # def test_text_search_group_depth3_slop(self, key_type, dialect, schema_type):
-    #     """Test grouped queries with depth 3."""
-    #     self._run_test(gen_depth3, "pure text", key_type, dialect, schema_type, slop=True, check_parsing=True)
+    def test_text_search_group_depth3_slop(self, key_type, dialect, schema_type):
+        """Test grouped queries with depth 3."""
+        self._run_test(gen_depth3, "pure text", key_type, dialect, schema_type, slop=True, check_parsing=True)
 
-    # def test_text_search_group_depth2_inorder_slop(self, key_type, dialect, schema_type):
-    #     self._run_test(gen_depth2, "pure text", key_type, dialect, schema_type, inorder=True, slop=True, check_parsing=True)
+    def test_text_search_group_depth2_inorder_slop(self, key_type, dialect, schema_type):
+        self._run_test(gen_depth2, "pure text", key_type, dialect, schema_type, inorder=True, slop=True, check_parsing=True)
 
-    # def test_text_search_group_depth3_inorder_slop(self, key_type, dialect, schema_type):
-    #     self._run_test(gen_depth3, "pure text", key_type, dialect, schema_type, inorder=True, slop=True, check_parsing=True)
+    def test_text_search_group_depth3_inorder_slop(self, key_type, dialect, schema_type):
+        self._run_test(gen_depth3, "pure text", key_type, dialect, schema_type, inorder=True, slop=True, check_parsing=True)
 
     # ========================================================================
     # text with special characters

@@ -10,10 +10,13 @@
 
 #include <memory>
 
-// need to import text index before other files but clang reorders it
-// clang-format off
-#include "src/indexes/text/text_index.h"
-// clang-format on
+namespace valkey_search::indexes::text {
+// Inline capacity for word expansion key iterators
+constexpr size_t kWordExpansionInlineCapacity = 200;
+// Inline capacity for proximity terms
+constexpr size_t kProximityTermsInlineCapacity = 64;
+}  // namespace valkey_search::indexes::text
+
 #include "absl/base/thread_annotations.h"
 #include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
@@ -25,6 +28,7 @@
 #include "src/indexes/text/proximity.h"
 #include "src/indexes/text/term.h"
 #include "src/indexes/text/text_fetcher.h"
+#include "src/indexes/text/text_index.h"
 #include "src/query/predicate.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"

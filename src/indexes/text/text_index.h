@@ -30,10 +30,8 @@ struct sb_stemmer;
 
 namespace valkey_search::indexes::text {
 
-// Inline capacity for word expansion key iterators
-constexpr size_t kWordExpansionInlineCapacity = 200;
-// Inline capacity for proximity terms
-constexpr size_t kProximityTermsInlineCapacity = 64;
+// Inline capacity for stem variants extracted from stem tree
+constexpr size_t kStemVariantsInlineCapacity = 20;
 
 // token -> (PositionMap, suffix support)
 using TokenPositions =
@@ -109,14 +107,10 @@ class TextIndexSchema {
   // Access stem tree for word expansion during search
   const RadixTree<StemParents> &GetStemTree() const { return stem_tree_; }
 
-  // Get all stem variants for a search term (including parent words from stem
-  // tree). Returns stemmed word (caller owns it). Adds parent word views to
-  // words_to_search. Limits parent words to max_expansions config. Only
-  // performs stem tree lookup if stem_enabled_mask is non-zero and lock_needed
-  // is true.
+  // Get stem root and all stem parents for a search term
   std::string GetAllStemVariants(
       absl::string_view search_term,
-      absl::InlinedVector<absl::string_view, kWordExpansionInlineCapacity>
+      absl::InlinedVector<absl::string_view, kStemVariantsInlineCapacity>
           &words_to_search,
       uint32_t min_stem_size, uint64_t stem_enabled_mask, bool lock_needed);
 

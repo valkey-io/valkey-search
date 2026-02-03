@@ -143,12 +143,12 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
         continue;  // Skip stop words
       }
 
-      std::string stemmed_word =
-          StemWord(word, stemming_enabled, min_stem_size, stemmer);
-
-      if (word != stemmed_word) {
-        CHECK(stem_mappings) << "stem_mappings must not be null";
-        (*stem_mappings)[stemmed_word].insert(word);
+      if (stemming_enabled) {
+        std::string stemmed_word = StemWord(word, min_stem_size, stemmer);
+        if (word != stemmed_word) {
+          CHECK(stem_mappings) << "stem_mappings must not be null";
+          (*stem_mappings)[stemmed_word].insert(word);
+        }
       }
       tokens.push_back(std::move(word));
     }
@@ -170,9 +170,9 @@ sb_stemmer* Lexer::GetStemmer() const {
   return it->second.get();
 }
 
-std::string Lexer::StemWord(const std::string& word, bool stemming_enabled,
-                            uint32_t min_stem_size, sb_stemmer* stemmer) const {
-  if (word.empty() || !stemming_enabled || word.length() < min_stem_size) {
+std::string Lexer::StemWord(const std::string& word, uint32_t min_stem_size,
+                            sb_stemmer* stemmer) const {
+  if (word.empty() || word.length() < min_stem_size) {
     return word;
   }
 

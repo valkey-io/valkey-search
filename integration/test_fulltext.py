@@ -583,6 +583,37 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert result[0] == 1 and result[1] == b'doc:2'
         assert set(result[2]) == {b'content', b'Happiness is key to success', b'nostem_field', b'happiness'}
         
+        # Test 5a: Stem expansion with INORDER - verifies stem variants maintain position ordering
+        # Query uses stemmed form "run" which expands to "running", "runs" - should match in order
+        result = client.execute_command("FT.SEARCH", "idx", '@content:run every day', "INORDER")
+        assert result[0] == 1 and result[1] == b'doc:4'
+        assert set(result[2]) == {b'content', b'Running every day improves health', b'nostem_field', b'running'}
+        
+        # Test 5b: Stem expansion with SLOP - verifies stem variants can match with gaps
+        # "run" with "health" in doc:4: "Running [every day improves] health" has gap of 3 words
+        result = client.execute_command("FT.SEARCH", "idx", '@content:run health', "SLOP", "2")
+        assert result[0] == 0  # Gap too large for SLOP=2
+        result = client.execute_command("FT.SEARCH", "idx", '@content:run health', "SLOP", "3")
+        assert result[0] == 1 and result[1] == b'doc:4'
+        assert set(result[2]) == {b'content', b'Running every day improves health', b'nostem_field', b'running'}
+        
+        # Test 5c: Stem expansion with both INORDER and SLOP - most restrictive case
+        # "run" with "improves" in doc:4: "Running [every day] improves" has gap of 2 words in correct order
+        result = client.execute_command("FT.SEARCH", "idx", '@content:run improv', "SLOP", "1", "INORDER")
+        assert result[0] == 0  # Gap too large for SLOP=1
+        result = client.execute_command("FT.SEARCH", "idx", '@content:run improv', "SLOP", "2", "INORDER")
+        assert result[0] == 1 and result[1] == b'doc:4'
+        assert set(result[2]) == {b'content', b'Running every day improves health', b'nostem_field', b'running'}
+        
+        # Test 5d: Multiple stem variants with INORDER and SLOP
+        # "running" and "runs" both stem to "run", testing cross-variant proximity
+        # doc:5: "He runs [very] fast" has gap of 1 word in correct order
+        result = client.execute_command("FT.SEARCH", "idx", '@content:run fast', "SLOP", "0", "INORDER")
+        assert result[0] == 0  # Gap too large for SLOP=0
+        result = client.execute_command("FT.SEARCH", "idx", '@content:run fast', "SLOP", "1", "INORDER")
+        assert result[0] == 1 and result[1] == b'doc:5'
+        assert set(result[2]) == {b'content', b'He runs very fast', b'nostem_field', b'runs'}
+        
         result = client.execute_command("FT.SEARCH", "idx", '@content:run every day')
         assert result[0] == 1 and result[1] == b'doc:4'
         assert set(result[2]) == {b'content', b'Running every day improves health', b'nostem_field', b'running'}

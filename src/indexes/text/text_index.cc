@@ -182,10 +182,8 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
 
       // Take ownership of the existing postings object reference if there is
       // one. It will be deconstructed at the end of this scope.
-      auto existing_postings =
-          old_val ? InvasivePtr<Postings>::AdoptRaw(
-                        static_cast<InvasivePtrRaw<Postings>>(old_val))
-                  : nullptr;
+      auto existing_postings = InvasivePtr<Postings>::AdoptRaw(
+          static_cast<InvasivePtrRaw<Postings>>(old_val));
 
       // Mutate the postings
       InvasivePtr<Postings> new_postings =
@@ -247,9 +245,6 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
   InvasivePtr<Postings> updated_target;
 
   auto target_remove_fn = [&](void *old_val) {
-    CHECK(old_val)
-        << "We are trying to remove from a nonexistent posting object";
-
     NestedMemoryScope scope{metadata_.posting_memory_pool_};
 
     // Take ownership of the existing postings object reference.

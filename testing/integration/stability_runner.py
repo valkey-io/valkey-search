@@ -140,6 +140,7 @@ class StabilityRunner:
                 "tag": utils.TagDefinition(),
                 "numeric": utils.NumericDefinition(),
                 "content": utils.TextDefinition(),
+                "title": utils.TextDefinition(nostem=True, with_suffix_trie=True),
                 "category": utils.TextDefinition(nostem=True),
             }
         elif self.config.index_type == "TAG":
@@ -220,8 +221,17 @@ class StabilityRunner:
             # Vector-based index: include embedding field with text fields
             hset_fields = "embedding __data__ tag my_tag numeric 10 title __data__ description __data__"
         elif self.config.index_type == "TEXT":
-            # Text-only index: use simple text without spaces to avoid quote escaping issues
-            hset_fields = 'tag my_tag numeric 10 content sample_search_document_with_electronics category electronics'
+            # Text-only index: Multiple document types with extensive content for diverse search results
+            # Document 1: Multiple prefix words, fuzzy terms, comprehensive content
+            hset_fields_1 = 'tag my_tag numeric 10 content "The quick brown fox jumps over fuzzy lazy dogs in a fuzzy meadow. Fuzzy search algorithms help find fuzzy matches in text. Understanding fuzzy logic requires fuzzy thinking and fuzzy concepts." title "prefix_smartwatch wearable prefix_device prefix_tracker" category electronics'
+            # Document 2: Multiple device endings, fuzzy terms, rich content
+            hset_fields_2 = 'tag my_tag numeric 15 content "Amazing fuzzy search capabilities enable fuzzy matching. Modern fuzzy systems use fuzzy logic for fuzzy results. Implementing fuzzy algorithms creates fuzzy patterns for better fuzzy detection." title "electronic device medical device smart device mobile device" category gadgets'
+            # Document 3: Exact smartwatch matches, fuzzy variations, detailed text
+            hset_fields_3 = 'tag my_tag numeric 20 content "Fuzziness detection in text using fuzzy methods. Fuzzy matching improves fuzzy search results. Advanced fuzzy techniques enhance fuzzy precision and fuzzy recall in fuzzy systems." title "smartwatch fitness smartwatch luxury smartwatch" category wearables'
+            # Document 4: Multiple prefix terms, fuzzy content, extensive documentation
+            hset_fields_4 = 'tag my_tag numeric 25 content "Search through fuzzy matching algorithms with fuzzy scoring. Fuzzy search implementations use fuzzy distance metrics. Understanding fuzzy boundaries helps optimize fuzzy performance in fuzzy applications." title "prefix_electronics guide prefix_computing manual prefix_technology documentation" category documentation'
+            # Document 5: Random data using __data__ for content and title fields
+            hset_fields_5 = 'tag my_tag numeric 30 content __data__ title __data__ category random'
         elif self.config.index_type == "TAG":
             # Tag-only index: multiple tag fields with different separators
             hset_fields = 'category electronics,gadgets,wearables product_type smartwatch|fitness brand apple,premium features waterproof;heartrate;gps'
@@ -229,7 +239,44 @@ class StabilityRunner:
             # Numeric-only index: multiple numeric fields with positive integer values
             hset_fields = 'price 299 quantity 50 rating 45 timestamp 1640000000'
         
-        if self.config.index_type in ["TEXT", "TAG", "NUMERIC"]:
+        if self.config.index_type == "TEXT":
+            # Multiple HSET commands for TEXT indexes with different documents
+            insert_command = (
+                f"{self.config.memtier_path}"
+                " --cluster-mode"
+                " -s localhost"
+                f" -p {self.config.ports[0]}"
+                f" -t {self.config.num_memtier_threads}"
+                f" -c {self.config.num_memtier_clients}"
+                " --reconnect-on-error"
+                " --max-reconnect-attempts=3"
+                " --random-data"
+                " -d 100"
+                " --command='HSET __key__ "
+                f"{hset_fields_1}'"
+                " --command-ratio=1"
+                " --command-key-pattern=P"
+                " --command='HSET __key__ "
+                f"{hset_fields_2}'"
+                " --command-ratio=1"
+                " --command-key-pattern=P"
+                " --command='HSET __key__ "
+                f"{hset_fields_3}'"
+                " --command-ratio=1"
+                " --command-key-pattern=P"
+                " --command='HSET __key__ "
+                f"{hset_fields_4}'"
+                " --command-ratio=1"
+                " --command-key-pattern=P"
+                " --command='HSET __key__ "
+                f"{hset_fields_5}'"
+                " --command-ratio=4"
+                " --command-key-pattern=P"
+                " --pipeline=1"
+                " --json-out-file "
+                f"{memtier_output_dir}/{self.config.index_name}_memtier_insert.json"
+            )
+        elif self.config.index_type in ["TAG", "NUMERIC"]:
             insert_command = (
                 f"{self.config.memtier_path}"
                 " --cluster-mode"
@@ -355,30 +402,109 @@ class StabilityRunner:
         if self.config.index_type in ["HNSW", "FLAT"]:
             # Vector KNN search
             search_query = '"(@tag:{my_tag} @numeric:[0 100])=>[KNN 3 @embedding $query_vector]" NOCONTENT PARAMS 2 "query_vector" __data__ DIALECT 2'
+            search_command = (
+                f"{self.config.memtier_path}"
+                " --cluster-mode"
+                " -s localhost"
+                f" -p {self.config.ports[0]}"
+                f" -t {self.config.num_memtier_threads}"
+                f" -c {self.config.num_search_clients}"
+                " -"
+                f" --command='FT.SEARCH {self.config.index_name} {search_query}'"
+                f" --test-time={self.config.test_time_sec}"
+                f" -d {self.config.vector_dimensions*4}"
+                " --json-out-file"
+                f" {memtier_output_dir}/{self.config.index_name}_memtier_search.json"
+            )
         elif self.config.index_type == "TEXT":
-            # Text search - updated to match the new content format without spaces
-            search_query = '"(@tag:{my_tag} @numeric:[0 100] @content:sample_search_document_with_electronics | @category:electronics)"'
+            # Text search - Multiple search types
+            # 1. Prefix wildcard: matches words starting with "prefix"
+            # 2. Fuzzy search: matches words similar to "fuzzy" (using % for edit distance)
+            # 3. Suffix wildcard: matches words ending with "device"
+            # 4. Exact match: matches exact word "smartwatch"
+            # 5. Phrase search with SLOP 0 INORDER: exact ordered phrase match
+            search_command = (
+                f"{self.config.memtier_path}"
+                " --cluster-mode"
+                " -s localhost"
+                f" -p {self.config.ports[0]}"
+                f" -t {self.config.num_memtier_threads}"
+                f" -c {self.config.num_search_clients}"
+                f" --command='FT.SEARCH {self.config.index_name} \"@title:prefix*\"'"
+                " --command-ratio=1"
+                f" --command='FT.SEARCH {self.config.index_name} \"@content:%fuzzy%\"'"
+                " --command-ratio=1"
+                f" --command='FT.SEARCH {self.config.index_name} \"@title:*device\"'"
+                " --command-ratio=1"
+                f" --command='FT.SEARCH {self.config.index_name} \"@title:smartwatch\"'"
+                " --command-ratio=1"
+                f" --command='FT.SEARCH {self.config.index_name} \"@title:\\\"fitness smartwatch\\\"\" SLOP 0 INORDER'"
+                " --command-ratio=1"
+                " --pipeline=1"
+                f" --test-time={self.config.test_time_sec}"
+                " --json-out-file"
+                f" {memtier_output_dir}/{self.config.index_name}_memtier_search.json"
+            )
+            
+            # Second search process for random data - short query patterns
+            # These target the random binary data inserted with __data__
+            # Using simple short patterns that might match random content
+            search_random_command = (
+                f"{self.config.memtier_path}"
+                " --cluster-mode"
+                " -s localhost"
+                f" -p {self.config.ports[0]}"
+                f" -t {self.config.num_memtier_threads}"
+                f" -c {self.config.num_search_clients}"
+                f" --command='FT.SEARCH {self.config.index_name} \"@content:a*\"'"
+                " --command-ratio=1"
+                f" --command='FT.SEARCH {self.config.index_name} \"@title:*a\"'"
+                " --command-ratio=1"
+                f" --command='FT.SEARCH {self.config.index_name} \"@content:%x%\"'"
+                " --command-ratio=1"
+                f" --command='FT.SEARCH {self.config.index_name} \"@content:ab\"'"
+                " --command-ratio=1"
+                f" --command='FT.SEARCH {self.config.index_name} \"@title:\\\"ab cd\\\"\" SLOP 0 INORDER'"
+                " --command-ratio=1"
+                " --pipeline=1"
+                f" --test-time={self.config.test_time_sec}"
+                " --json-out-file"
+                f" {memtier_output_dir}/{self.config.index_name}_memtier_search_random.json"
+            )
         elif self.config.index_type == "TAG":
             # Tag search - exact match on multiple tag fields
             search_query = '"(@category:{electronics} @product_type:{smartwatch})"'
+            search_command = (
+                f"{self.config.memtier_path}"
+                " --cluster-mode"
+                " -s localhost"
+                f" -p {self.config.ports[0]}"
+                f" -t {self.config.num_memtier_threads}"
+                f" -c {self.config.num_search_clients}"
+                " -"
+                f" --command='FT.SEARCH {self.config.index_name} {search_query}'"
+                f" --test-time={self.config.test_time_sec}"
+                f" -d {self.config.vector_dimensions*4}"
+                " --json-out-file"
+                f" {memtier_output_dir}/{self.config.index_name}_memtier_search.json"
+            )
         elif self.config.index_type == "NUMERIC":
             # Numeric range search - multiple numeric range filters
             search_query = '"(@price:[100 500] @quantity:[10 100] @rating:[40 50])"'
-        
-        search_command = (
-            f"{self.config.memtier_path}"
-            " --cluster-mode"
-            " -s localhost"
-            f" -p {self.config.ports[0]}"
-            f" -t {self.config.num_memtier_threads}"
-            f" -c {self.config.num_search_clients}"
-            " -"
-            f" --command='FT.SEARCH {self.config.index_name} {search_query}'"
-            f" --test-time={self.config.test_time_sec}"
-            f" -d {self.config.vector_dimensions*4}"
-            " --json-out-file"
-            f" {memtier_output_dir}/{self.config.index_name}_memtier_search.json"
-        )
+            search_command = (
+                f"{self.config.memtier_path}"
+                " --cluster-mode"
+                " -s localhost"
+                f" -p {self.config.ports[0]}"
+                f" -t {self.config.num_memtier_threads}"
+                f" -c {self.config.num_search_clients}"
+                " -"
+                f" --command='FT.SEARCH {self.config.index_name} {search_query}'"
+                f" --test-time={self.config.test_time_sec}"
+                f" -d {self.config.vector_dimensions*4}"
+                " --json-out-file"
+                f" {memtier_output_dir}/{self.config.index_name}_memtier_search.json"
+            )
 
         ft_info_command = (
             f"{self.config.memtier_path}"
@@ -414,6 +540,8 @@ class StabilityRunner:
         logging.debug("delete_command: %s", delete_command)
         logging.debug("expire_command: %s", expire_command)
         logging.debug("search_command: %s", search_command)
+        if self.config.index_type == "TEXT":
+            logging.debug("search_random_command: %s", search_random_command)
         logging.debug("ft_info_command: %s", ft_info_command)
         logging.debug("ft_list_command: %s", ft_list_command)
 
@@ -434,6 +562,15 @@ class StabilityRunner:
                 error_predicate=lambda err: f"-Index with name '{self.config.index_name}' not found" not in err,
             )
         )
+        # Add second search process for TEXT indexes targeting random data
+        if self.config.index_type == "TEXT":
+            processes.append(
+                utils.MemtierProcess(
+                    command=search_random_command,
+                    name="FT.SEARCH_RANDOM",
+                    error_predicate=lambda err: f"-Index with name '{self.config.index_name}' not found" not in err,
+                )
+            )
         processes.append(
             utils.MemtierProcess(
                 command=ft_info_command,

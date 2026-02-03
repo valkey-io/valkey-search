@@ -61,54 +61,19 @@ static inline bool IsNumeric(absl::string_view str) {
   });
 }
 
-// SFINAE to detect if std::from_chars is available for type T
-template <typename T>
-using from_chars_t = decltype(std::from_chars(std::declval<const char *>(),
-                                              std::declval<const char *>(),
-                                              std::declval<T &>()));
-
-template <typename T>
-inline constexpr bool has_from_chars =
-    absl::type_traits_internal::is_detected<from_chars_t, T>::value;
-
 template <typename T>
 static inline absl::StatusOr<T> ToNumeric(absl::string_view str) {
   T result;
-
-  if constexpr (has_from_chars<T>) {
-    auto [p, ec] = std::from_chars(str.data(), str.data() + str.size(), result);
-    if (ec == std::errc()) {
-      return result;
-    }
-    if (IsNumeric(str)) {
-      return absl::InvalidArgumentError(
-          absl::StrCat("`", str, "` is outside acceptable bounds"));
-    }
-    return absl::InvalidArgumentError(
-        absl::StrCat("`", str, "` is not a valid numeric value"));
-  } else {
-    // Fallback for systems without std::from_chars<double> support
-    char *end;
-    errno = 0;
-    if constexpr (std::is_same_v<T, float>) {
-      result = std::strtof(std::string(str).c_str(), &end);
-    } else if constexpr (std::is_same_v<T, double>) {
-      result = std::strtod(std::string(str).c_str(), &end);
-    } else if constexpr (std::is_same_v<T, long double>) {
-      result = std::strtold(std::string(str).c_str(), &end);
-    } else {
-      return absl::InvalidArgumentError("Unsupported numeric type");
-    }
-    if (errno == ERANGE) {
-      return absl::InvalidArgumentError(
-          absl::StrCat("`", str, "` is outside acceptable bounds"));
-    }
-    if (end == std::string(str).c_str() || *end != '\0') {
-      return absl::InvalidArgumentError(
-          absl::StrCat("`", str, "` is not a valid numeric value"));
-    }
+  auto [p, ec] = std::from_chars(str.data(), str.data() + str.size(), result);
+  if (ec == std::errc()) {
     return result;
   }
+  if (IsNumeric(str)) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("`", str, "` is outside acceptable bounds"));
+  }
+  return absl::InvalidArgumentError(
+      absl::StrCat("`", str, "` is not a valid numeric value"));
 }
 
 // Evaluate if the implementation could rely on ToNumeric

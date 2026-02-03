@@ -1,8 +1,10 @@
+import struct
 import time
 from valkeytestframework.util.waiters import *
 from valkey import ResponseError
 from valkey.client import Valkey
-from valkey_search_test_case import ValkeySearchTestCaseBase
+from valkey_search_test_case import ValkeySearchClusterTestCase, ValkeySearchTestCaseBase
+from indexes import *
 from valkeytestframework.conftest import resource_port_tracker
 import pytest
 import os
@@ -89,3 +91,34 @@ class TestVSSBasic(ValkeySearchTestCaseBase):
             bytes_value = info_data[field]
             assert (isinstance(bytes_value, str) and bytes_value.endswith("iB")) or  \
                    (((os.environ.get('SAN_BUILD'), 'no') != 'no') and bytes_value == 0)
+
+class TestClusterInfo(ValkeySearchClusterTestCase):
+    
+    def test_coordinator_cpu_metric(self):
+        client = self.new_cluster_client()
+        info_data = client.info("SEARCH")
+        assert "search_coordinator_threads_cpu_time_sec" in info_data
+        # Sanity check - no activity yet
+        assert float(info_data["search_coordinator_threads_cpu_time_sec"]) == 0.0
+
+        # Create index with data
+        index = Index("hnsw", [Vector("v", 3, type="HNSW", m=2, efc=1)])
+        index.create(client)
+        index.load_data(client, 10000)
+
+        # Run search queries until metric increases
+        i = 0
+        max_batches = 1000
+        for batch in range(max_batches):
+            for _ in range(1000):
+                query_vector = struct.pack('<3f', i, i+1, i+2)
+                client.execute_command(
+                    "FT.SEARCH", "hnsw", "*=>[KNN 5 @v $query_vector]", "PARAMS", "2", "query_vector", query_vector
+                )
+                i += 1
+            
+            info_data = client.info("SEARCH")
+            if float(info_data["search_coordinator_threads_cpu_time_sec"]) > 0.0:
+                break
+        else:
+            pytest.fail(f"CPU metric remained 0 after {max_batches * 1000} queries")

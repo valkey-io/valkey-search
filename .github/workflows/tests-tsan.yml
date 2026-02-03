@@ -59,6 +59,7 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         name: build-tsan
+        path: .build-release-tsan
 
     - name: Set up Docker
       uses: docker/setup-buildx-action@v2

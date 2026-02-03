@@ -16,7 +16,6 @@
 #include <optional>
 
 #include "absl/container/btree_map.h"
-#include "absl/container/flat_hash_set.h"
 #include "absl/container/node_hash_map.h"
 #include "absl/functional/function_ref.h"
 #include "absl/strings/string_view.h"
@@ -37,10 +36,6 @@ constexpr size_t kStemVariantsInlineCapacity = 20;
 // token -> (PositionMap, suffix support)
 using TokenPositions =
     absl::flat_hash_map<std::string, std::pair<PositionMap, bool>>;
-
-// Stem tree target: maps stem root to set of parent words that stem to it
-// Example: "happi" → {"happy", "happiness", "happily"}
-using StemParents = InvasivePtr<absl::flat_hash_set<std::string>>;
 
 class TextIndexSchema;
 
@@ -104,7 +99,7 @@ class TextIndexSchema {
   TextIndexMetadata &GetMetadata() { return metadata_; }
 
   // Access stem tree for word expansion during search
-  const RadixTree<StemParents> &GetStemTree() const { return stem_tree_; }
+  const Rax &GetStemTree() const { return stem_tree_; }
 
   // Get stem root and all stem parents for a search term
   std::string GetAllStemVariants(
@@ -146,7 +141,7 @@ class TextIndexSchema {
   // Stem tree: maps stem roots to their parent words
   // Example: "happi" → {"happy", "happiness", "happily"}
   //
-  RadixTree<StemParents> stem_tree_;
+  Rax stem_tree_;
 
   // Prevent concurrent mutations to stem tree
   std::mutex stem_tree_mutex_;

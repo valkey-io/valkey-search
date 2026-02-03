@@ -37,16 +37,19 @@ query planning.
 #include <type_traits>
 #include <variant>
 
+#include "absl/container/flat_hash_set.h"
 #include "absl/functional/function_ref.h"
 #include "absl/log/check.h"
 #include "absl/strings/string_view.h"
 #include "rax/rax.h"
 #include "src/indexes/text/invasive_ptr.h"
+#include "posting.h"
 
 namespace valkey_search::indexes::text {
 
-// Forward declarations
-class Postings;
+// Stem tree target: maps stem root to set of parent words that stem to it
+// Example: "happi" → {"happy", "happiness", "happily"}
+using StemParents = absl::flat_hash_set<std::string>;
 
 class Rax {
  public:
@@ -165,6 +168,9 @@ class Rax {
 
     // Postings-specific accessor. Caller is responsible for tracking the type.
     InvasivePtr<Postings> GetPostingsTarget() const;
+
+    // StemParents-specific accessor. Caller is responsible for tracking the type.
+    InvasivePtr<StemParents> GetStemParentsTarget() const;
 
    private:
     friend class Rax;

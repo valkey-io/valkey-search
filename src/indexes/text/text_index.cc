@@ -15,6 +15,8 @@
 #include "vmsdk/src/memory_allocation.h"
 namespace valkey_search::indexes::text {
 
+namespace {
+
 // InvasivePtrRaw<Postings> deletion
 static void FreePostingsCallback(void *target) {
   if (target) {
@@ -23,7 +25,12 @@ static void FreePostingsCallback(void *target) {
   }
 }
 
-namespace {
+static void FreeStemParentsCallback(void *target) {
+  if (target) {
+    auto raw = static_cast<InvasivePtrRaw<StemParents>>(target);
+    InvasivePtr<StemParents>::AdoptRaw(raw);
+  }
+}
 
 InvasivePtr<Postings> AddKeyToPostings(InvasivePtr<Postings> existing_postings,
                                        const InternedStringPtr &key,
@@ -56,46 +63,62 @@ InvasivePtr<Postings> RemoveKeyFromPostings(
   return existing_postings;
 }
 
-// Factory for postings object mutate callback
-template <typename MutateFn>
+// Factory for target mutate callback with memory tracking and target copying
+template <typename Target, typename MutateFn>
 std::function<void *(void *)> CreateTargetMutateFn(
     MemoryPool &memory_pool, MutateFn mutate_fn,
-    InvasivePtr<Postings> &updated_target) {
+    InvasivePtr<Target> &updated_target) {
   return [&updated_target, &memory_pool,
           mutate_fn = std::move(mutate_fn)](void *old_val) -> void * {
     NestedMemoryScope scope{memory_pool};
 
-    // Take ownership of the existing postings object reference. Nullptr is
+    // Take ownership of the existing target reference. Nullptr is
     // handled gracefully as a no-op.
-    auto existing_postings = InvasivePtr<Postings>::AdoptRaw(
-        static_cast<InvasivePtrRaw<Postings>>(old_val));
+    auto existing = InvasivePtr<Target>::AdoptRaw(
+        static_cast<InvasivePtrRaw<Target>>(old_val));
 
-    // Mutate the postings
-    InvasivePtr<Postings> new_postings =
-        mutate_fn(std::move(existing_postings));
+    // Mutate the target
+    InvasivePtr<Target> new_target = mutate_fn(std::move(existing));
 
-    // Copy the new postings reference to the outer scope
-    updated_target = new_postings;
+    // Copy the new target reference to the outer scope
+    updated_target = new_target;
 
-    // Pass ownership of the new postings reference to the tree
-    return static_cast<void *>(std::move(new_postings).ReleaseRaw());
+    // Pass ownership of the new target reference to the tree
+    return static_cast<void *>(std::move(new_target).ReleaseRaw());
   };
 }
 
-// Factory for posting object set callback
+// Factory for target set callback
+template <typename Target>
 std::function<void *(void *)> CreateTargetSetFn(
-    InvasivePtr<Postings> &updated_target) {
+    InvasivePtr<Target> &updated_target) {
   return [&updated_target](void *old_val) -> void * {
-    // Take ownership of the existing postings object reference if there is one.
+    // Take ownership of the existing target reference if there is one.
     // It will be deconstructed as it falls out of scope.
     if (old_val) {
-      InvasivePtr<Postings>::AdoptRaw(
-          static_cast<InvasivePtrRaw<Postings>>(old_val));
+      InvasivePtr<Target>::AdoptRaw(
+          static_cast<InvasivePtrRaw<Target>>(old_val));
     }
-    // Grab a new reference to the new shared postings object and pass ownership
+    // Grab a new reference to the new shared target and pass ownership
     // of it to the tree.
-    InvasivePtr<Postings> copy = updated_target;
+    InvasivePtr<Target> copy = updated_target;
     return static_cast<void *>(std::move(copy).ReleaseRaw());
+  };
+}
+
+// Factory for simple target mutation (no memory tracking, no target copying)
+template <typename Target, typename MutateFn>
+std::function<void *(void *)> CreateSimpleTargetMutateFn(MutateFn mutate_fn) {
+  return [mutate_fn = std::move(mutate_fn)](void *old_val) -> void * {
+    // Take ownership of any existing target
+    auto existing = InvasivePtr<Target>::AdoptRaw(
+        static_cast<InvasivePtrRaw<Target>>(old_val));
+
+    // Mutate the target
+    InvasivePtr<Target> new_target = mutate_fn(std::move(existing));
+
+    // Pass ownership of the new target to the tree
+    return static_cast<void *>(std::move(new_target).ReleaseRaw());
   };
 }
 
@@ -135,6 +158,7 @@ TextIndexSchema::TextIndexSchema(data_model::Language language,
                                  uint32_t min_stem_size)
     : with_offsets_(with_offsets),
       lexer_(language, punctuation, stop_words),
+      stem_tree_(FreeStemParentsCallback),
       min_stem_size_(min_stem_size) {}
 
 absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
@@ -261,13 +285,15 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
   if (stem_text_field_mask_) {
     std::lock_guard<std::mutex> stem_guard(stem_tree_mutex_);
     for (const auto &[stemmed, originals] : stem_mappings) {
-      stem_tree_.MutateTarget(stemmed, [&](StemParents existing) {
-        if (!existing) {
-          existing = InvasivePtr<absl::flat_hash_set<std::string>>::Make();
-        }
-        existing->insert(originals.begin(), originals.end());
-        return existing;
-      });
+      auto stem_mutate_fn = CreateSimpleTargetMutateFn<StemParents>(
+          [&originals](InvasivePtr<StemParents> existing) {
+            if (!existing) {
+              existing = InvasivePtr<StemParents>::Make();
+            }
+            existing->insert(originals.begin(), originals.end());
+            return existing;
+          });
+      stem_tree_.MutateTarget(stemmed, stem_mutate_fn);
     }
   }
 
@@ -325,16 +351,21 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
       if (stemmed != word) {
         // This word was a stem parent, remove it from stem tree
         std::lock_guard<std::mutex> stem_guard(stem_tree_mutex_);
-        stem_tree_.MutateTarget(stemmed, [&](StemParents existing) {
-          if (existing) {
-            CHECK(!existing->empty()) << "Stem tree entry should not be empty";
-            existing->erase(std::string(word));
-            if (existing->empty()) {
-              existing.Clear();  // Clear to remove from tree
-            }
-          }
-          return existing;
-        });
+        auto stem_remove_fn = CreateSimpleTargetMutateFn<StemParents>(
+            [&word](InvasivePtr<StemParents> existing) {
+              // The term may not exist in the stem tree if it was only present
+              // in NOSTEM fields.
+              if (existing) {
+                CHECK(!existing->empty())
+                    << "Stem tree entry should not be empty";
+                existing->erase(std::string(word));
+                if (existing->empty()) {
+                  existing.Clear();
+                }
+              }
+              return existing;
+            });
+        stem_tree_.MutateTarget(stemmed, stem_remove_fn);
       }
     }
 
@@ -396,7 +427,7 @@ std::string TextIndexSchema::GetAllStemVariants(
   // GetWordIterator positions at the first word with this prefix, check if
   // exact match
   if (!stem_iter.Done() && stem_iter.GetWord() == stemmed) {
-    const auto &parents_ptr = stem_iter.GetTarget();
+    const auto &parents_ptr = stem_iter.GetStemParentsTarget();
     if (parents_ptr) {
       const auto &parents = *parents_ptr;
       uint32_t max_expansions = options::GetMaxTermExpansions().GetValue();

@@ -11,7 +11,6 @@
 #include <cstring>
 
 #include "absl/log/check.h"
-#include "src/indexes/text/posting.h"
 
 namespace valkey_search::indexes::text {
 
@@ -167,6 +166,11 @@ void *Rax::WordIterator::GetTarget() const {
 InvasivePtr<Postings> Rax::WordIterator::GetPostingsTarget() const {
   return InvasivePtr<Postings>::CopyRaw(
       static_cast<InvasivePtrRaw<Postings>>(GetTarget()));
+}
+
+InvasivePtr<StemParents> Rax::WordIterator::GetStemParentsTarget() const {
+  return InvasivePtr<StemParents>::CopyRaw(
+      static_cast<InvasivePtrRaw<StemParents>>(GetTarget()));
 }
 
 /*** PathIterator ***/

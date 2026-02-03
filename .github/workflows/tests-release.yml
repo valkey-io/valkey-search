@@ -1,4 +1,4 @@
-name: Build
+name: Tests (Release)
 
 on:
   pull_request:
@@ -12,11 +12,11 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: build-${{ github.head_ref || github.ref }}
+  group: tests-release-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build-release:
+  build:
     runs-on: ubuntu-latest
     
     steps:
@@ -29,7 +29,7 @@ jobs:
     - name: Build Docker Image
       run: docker build -t presubmit-image -f .devcontainer/Dockerfile .
 
-    - name: Build Project (Release)
+    - name: Build Project
       run: |
         docker run --privileged --rm \
           -v "$(pwd):/workspace" \
@@ -40,19 +40,25 @@ jobs:
     - name: Upload Build Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: build-release
+        name: build-release-${{ github.run_id }}
         path: |
           .build-release/
           !.build-release/CMakeFiles
           !.build-release/**/*.o
         retention-days: 1
 
-  build-asan:
+  unit-tests:
+    needs: build
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout Code
       uses: actions/checkout@v3
+
+    - name: Download Build Artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: build-release-${{ github.run_id }}
 
     - name: Set up Docker
       uses: docker/setup-buildx-action@v2
@@ -60,30 +66,45 @@ jobs:
     - name: Build Docker Image
       run: docker build -t presubmit-image -f .devcontainer/Dockerfile .
 
-    - name: Build Project (ASAN)
+    - name: Run Unit Tests
+      id: test-run
+      continue-on-error: true
       run: |
+        mkdir test-results
         docker run --privileged --rm \
+          --mount type=bind,source="$(pwd)/test-results",target=/workspace/test-results \
           -v "$(pwd):/workspace" \
           --user "ubuntu:ubuntu" \
           presubmit-image \
-          sudo ci/build_ubuntu.sh --asan
+          sudo ci/build_ubuntu.sh --no-build --run-tests --unittest-output=/workspace/test-results
 
-    - name: Upload Build Artifacts
+    - name: Update Test Results Permissions
+      if: always()
+      run: sudo chmod -R 755 test-results
+
+    - name: Upload Test Results
       uses: actions/upload-artifact@v4
+      if: always()
       with:
-        name: build-asan
-        path: |
-          .build-release-asan/
-          !.build-release-asan/CMakeFiles
-          !.build-release-asan/**/*.o
-        retention-days: 1
+        name: unittest-results
+        path: test-results
 
-  build-tsan:
+    - name: Check Test Results
+      if: steps.test-run.outcome == 'failure'
+      run: exit 1
+
+  integration-tests:
+    needs: build
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout Code
       uses: actions/checkout@v3
+
+    - name: Download Build Artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: build-release-${{ github.run_id }}
 
     - name: Set up Docker
       uses: docker/setup-buildx-action@v2
@@ -91,20 +112,30 @@ jobs:
     - name: Build Docker Image
       run: docker build -t presubmit-image -f .devcontainer/Dockerfile .
 
-    - name: Build Project (TSAN)
+    - name: Run Integration Tests
+      id: test-run
+      timeout-minutes: 140
+      continue-on-error: true
       run: |
+        mkdir test-results
         docker run --privileged --rm \
+          --mount type=bind,source="$(pwd)/test-results",target=/workspace/test-results \
           -v "$(pwd):/workspace" \
           --user "ubuntu:ubuntu" \
           presubmit-image \
-          sudo ci/build_ubuntu.sh --tsan
+          sudo ci/build_ubuntu.sh --no-build --run-integration-tests --integration-output=/workspace/test-results
 
-    - name: Upload Build Artifacts
+    - name: Update Test Results Permissions
+      if: always()
+      run: sudo chmod -R 755 test-results
+
+    - name: Upload Test Results
       uses: actions/upload-artifact@v4
+      if: always()
       with:
-        name: build-tsan
-        path: |
-          .build-release-tsan/
-          !.build-release-tsan/CMakeFiles
-          !.build-release-tsan/**/*.o
-        retention-days: 1
+        name: integration-test-results
+        path: test-results
+
+    - name: Check Test Results
+      if: steps.test-run.outcome == 'failure'
+      run: exit 1

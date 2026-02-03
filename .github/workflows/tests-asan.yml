@@ -1,0 +1,141 @@
+name: Tests (ASAN)
+
+on:
+  pull_request:
+    branches:
+      - main
+      - fulltext
+  push:
+    branches:
+      - main
+      - fulltext
+  workflow_dispatch:
+
+concurrency:
+  group: tests-asan-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v3
+
+    - name: Set up Docker
+      uses: docker/setup-buildx-action@v2
+
+    - name: Build Docker Image
+      run: docker build -t presubmit-image -f .devcontainer/Dockerfile .
+
+    - name: Build Project (ASAN)
+      run: |
+        docker run --privileged --rm \
+          -v "$(pwd):/workspace" \
+          --user "ubuntu:ubuntu" \
+          presubmit-image \
+          sudo ci/build_ubuntu.sh --asan
+
+    - name: Upload Build Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-asan-${{ github.run_id }}
+        path: |
+          .build-release-asan/
+          !.build-release-asan/CMakeFiles
+          !.build-release-asan/**/*.o
+        retention-days: 1
+
+  unit-tests:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v3
+
+    - name: Download Build Artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: build-asan-${{ github.run_id }}
+
+    - name: Set up Docker
+      uses: docker/setup-buildx-action@v2
+
+    - name: Build Docker Image
+      run: docker build -t presubmit-image -f .devcontainer/Dockerfile .
+
+    - name: Run Unit Tests (ASAN)
+      id: test-run
+      continue-on-error: true
+      run: |
+        mkdir test-results
+        docker run --privileged --rm \
+          --mount type=bind,source="$(pwd)/test-results",target=/workspace/test-results \
+          -v "$(pwd):/workspace" \
+          --user "ubuntu:ubuntu" \
+          presubmit-image \
+          sudo ci/build_ubuntu.sh --no-build --asan --run-tests --unittest-output=/workspace/test-results
+
+    - name: Update Test Results Permissions
+      if: always()
+      run: sudo chmod -R 755 test-results
+
+    - name: Upload Test Results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: unittest-asan-results
+        path: test-results
+
+    - name: Check Test Results
+      if: steps.test-run.outcome == 'failure'
+      run: exit 1
+
+  integration-tests:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v3
+
+    - name: Download Build Artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: build-asan-${{ github.run_id }}
+
+    - name: Set up Docker
+      uses: docker/setup-buildx-action@v2
+
+    - name: Build Docker Image
+      run: docker build -t presubmit-image -f .devcontainer/Dockerfile .
+
+    - name: Run Integration Tests (ASAN)
+      id: test-run
+      timeout-minutes: 140
+      continue-on-error: true
+      run: |
+        mkdir test-results
+        docker run --privileged --rm \
+          --mount type=bind,source="$(pwd)/test-results",target=/workspace/test-results \
+          -v "$(pwd):/workspace" \
+          --user "ubuntu:ubuntu" \
+          presubmit-image \
+          sudo ci/build_ubuntu.sh --no-build --asan --run-integration-tests --integration-output=/workspace/test-results
+
+    - name: Update Test Results Permissions
+      if: always()
+      run: sudo chmod -R 755 test-results
+
+    - name: Upload Test Results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: integration-test-asan-results
+        path: test-results
+
+    - name: Check Test Results
+      if: steps.test-run.outcome == 'failure'
+      run: exit 1

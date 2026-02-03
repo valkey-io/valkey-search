@@ -41,9 +41,9 @@ query planning.
 #include "absl/functional/function_ref.h"
 #include "absl/log/check.h"
 #include "absl/strings/string_view.h"
+#include "posting.h"
 #include "rax/rax.h"
 #include "src/indexes/text/invasive_ptr.h"
-#include "posting.h"
 
 namespace valkey_search::indexes::text {
 
@@ -169,7 +169,8 @@ class Rax {
     // Postings-specific accessor. Caller is responsible for tracking the type.
     InvasivePtr<Postings> GetPostingsTarget() const;
 
-    // StemParents-specific accessor. Caller is responsible for tracking the type.
+    // StemParents-specific accessor. Caller is responsible for tracking the
+    // type.
     InvasivePtr<StemParents> GetStemParentsTarget() const;
 
    private:

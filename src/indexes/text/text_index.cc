@@ -262,8 +262,8 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
     // If the postings are now empty, remove from stem tree if it was a parent
     if (!new_target && stem_text_field_mask_) {
       // Check if this word has a stem mapping using schema-level minimum
-      std::string stemmed = lexer_.StemWord(
-          std::string(word), min_stem_size_, lexer_.GetStemmer());
+      std::string stemmed = lexer_.StemWord(std::string(word), min_stem_size_,
+                                            lexer_.GetStemmer());
       if (stemmed != word) {
         // This word was a stem parent, remove it from stem tree
         std::lock_guard<std::mutex> stem_guard(stem_tree_mutex_);
@@ -324,8 +324,8 @@ std::string TextIndexSchema::GetAllStemVariants(
         &words_to_search,
     uint32_t min_stem_size, uint64_t stem_enabled_mask, bool lock_needed) {
   // Stem the search term with the provided min_stem_size
-  std::string stemmed = lexer_.StemWord(std::string(search_term),
-                                        min_stem_size, lexer_.GetStemmer());
+  std::string stemmed = lexer_.StemWord(std::string(search_term), min_stem_size,
+                                        lexer_.GetStemmer());
 
   // Conditionally acquire lock - use unique_lock with defer_lock for
   // conditional locking

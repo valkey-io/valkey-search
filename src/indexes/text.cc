@@ -188,10 +188,10 @@ namespace {
 // Helper to search for a word in the text index and add its key iterator
 // Returns true if the word was found and added
 bool TryAddWordKeyIterator(
-    const indexes::text::TextIndex* text_index,
-    absl::string_view word,
+    const indexes::text::TextIndex* text_index, absl::string_view word,
     absl::InlinedVector<indexes::text::Postings::KeyIterator,
-                        indexes::text::kWordExpansionInlineCapacity>& key_iterators) {
+                        indexes::text::kWordExpansionInlineCapacity>&
+        key_iterators) {
   auto word_iter = text_index->GetPrefix().GetWordIterator(word);
   if (!word_iter.Done() && word_iter.GetWord() == word) {
     key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
@@ -213,8 +213,8 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
   absl::string_view text_string = GetTextString();
 
   // Search for the original word - may or may not exist in corpus
-  bool found_original = TryAddWordKeyIterator(
-      fetcher->text_index_.get(), text_string, key_iterators);
+  bool found_original = TryAddWordKeyIterator(fetcher->text_index_.get(),
+                                              text_string, key_iterators);
 
   // Get stem variants if not exact term search
   uint64_t stem_field_mask =
@@ -225,9 +225,9 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
                         indexes::text::kStemVariantsInlineCapacity>
         stem_variants;
     std::string stemmed = GetTextIndexSchema()->GetAllStemVariants(
-        text_string, stem_variants,
-        GetTextIndexSchema()->GetMinStemSize(), stem_field_mask, false);
-    
+        text_string, stem_variants, GetTextIndexSchema()->GetMinStemSize(),
+        stem_field_mask, false);
+
     // Search for the stemmed word itself - may or may not exist in corpus
     if (stemmed != text_string) {
       TryAddWordKeyIterator(fetcher->text_index_.get(), stemmed, key_iterators);
@@ -235,8 +235,8 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
 
     // Search for stem variants - these should all exist from ingestion
     for (const auto& variant : stem_variants) {
-      bool found = TryAddWordKeyIterator(
-          fetcher->text_index_.get(), variant, key_iterators);
+      bool found = TryAddWordKeyIterator(fetcher->text_index_.get(), variant,
+                                         key_iterators);
       CHECK(found) << "Word in stem tree not found in index - ingestion issue";
     }
   }

@@ -754,12 +754,8 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     }
     VMSDK_RETURN_IF_ERROR(
         SetupTextFieldConfiguration(field_mask, field_or_default, false));
-    // Apply stemming if not exact match - use schema-level min_stem_size
-    // directly
-    if (!exact && (index_schema_.GetStemTextFieldMask() & field_mask) != 0) {
-      token = lexer.StemWord(token, true, index_schema_.GetMinStemSize(),
-                             lexer.GetStemmer());
-    }
+    // TODO: Implement Composite query between original and its stem variants
+    // for Non Exact Term search after Composite query execution is optimized
     return FilterParser::TokenResult{
         std::make_unique<query::TermPredicate>(text_index_schema, field_mask,
                                                std::move(token), exact),

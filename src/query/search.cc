@@ -618,6 +618,9 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearch(
   }
 
   if (!parameters.filter_parse_results.root_predicate) {
+    if (search_mode == SearchMode::kLocal) {
+      ++Metrics::GetStats().query_vector_requests_cnt;
+    }
     return PerformVectorSearch(vector_index, parameters);
   }
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;

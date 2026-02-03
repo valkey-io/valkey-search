@@ -2073,6 +2073,7 @@ class TestFullTextCluster(ValkeySearchClusterTestCaseDebugMode):
         assert int(info_search.get("search_hybrid_requests_count", 0)) == 1  # Query 6
         # new metrics
         assert int(info_search.get("search_nonvector_requests_count", 0)) == 5  # Query 1,2,3,4,7
+        assert int(info_search.get("search_vector_requests_count", 0)) == 1  # Query 5
         assert int(info_search.get("search_text_requests_count", 0)) == 4  # Query 1,4,6,7
         assert int(info_search.get("search_query_numeric_count", 0)) == 3  # Queries 3,6,7
         assert int(info_search.get("search_query_tag_count", 0)) == 3  # Queries 2,6,7

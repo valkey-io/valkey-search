@@ -410,6 +410,12 @@ static vmsdk::info_field::Integer nonvector_requests_count(
       return Metrics::GetStats().query_nonvector_requests_cnt;
     }));
 
+static vmsdk::info_field::Integer vector_requests_count(
+    "query", "vector_requests_count",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return Metrics::GetStats().query_vector_requests_cnt;
+    }));
+
 static vmsdk::info_field::Integer text_requests_count(
     "query", "text_requests_count",
     vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {

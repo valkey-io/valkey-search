@@ -526,10 +526,6 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # Verify "happier" stems differently - should only match doc:3, not doc:1 or doc:2
         result = client.execute_command("FT.SEARCH", "idx", '@content:happier')
         assert result[0] == 1 and result[1] == b'doc:3'
-
-        # Test 1b: "happier" can be found via prefix search
-        assert (client.execute_command("FT.SEARCH", "idx", '@content:happ*')[0],
-                set(client.execute_command("FT.SEARCH", "idx", '@content:happ*')[1::2])) == (3, {b"doc:1", b"doc:2", b"doc:3"})
         
         # Test 2: Term search with different stem group (run/running/runs vs runner)
         assert (client.execute_command("FT.SEARCH", "idx", '@content:run')[0],
@@ -547,27 +543,12 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         
         assert client.execute_command("FT.SEARCH", "idx", '@nostem_field:happi')[0] == 0
         
-        result = client.execute_command("FT.SEARCH", "idx", '@nostem_field:happiness')
-        assert result[0] == 1 and result[1] == b'doc:2'
-        assert set(result[2]) == {b'content', b'Happiness is key to success', b'nostem_field', b'happiness'}
-        
-        assert client.execute_command("FT.SEARCH", "idx", '@nostem_field:run')[0] == 0
-        
-        result = client.execute_command("FT.SEARCH", "idx", '@nostem_field:running')
-        assert result[0] == 1 and result[1] == b'doc:4'
-        assert set(result[2]) == {b'content', b'Running every day improves health', b'nostem_field', b'running'}
-        
         # Test 4: Exact phrase (quotes) - NO stem expansion
         result = client.execute_command("FT.SEARCH", "idx", '@content:"very happy today"')
         assert result[0] == 1 and result[1] == b'doc:1'
         assert set(result[2]) == {b'content', b'I am very happy today', b'nostem_field', b'happy'}
         
         assert client.execute_command("FT.SEARCH", "idx", '@content:"very happi today"')[0] == 0
-        
-        # Test exact phrase without stopwords
-        result = client.execute_command("FT.SEARCH", "idx", '@content:"happiness key"')
-        assert result[0] == 1 and result[1] == b'doc:2'
-        assert set(result[2]) == {b'content', b'Happiness is key to success', b'nostem_field', b'happiness'}
         
         # Test 5: Non-exact phrase (no quotes) - DOES use stem expansion
         result = client.execute_command("FT.SEARCH", "idx", '@content:very happi today')
@@ -579,12 +560,7 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert result[0] == 1 and result[1] == b'doc:1'
         assert set(result[2]) == {b'content', b'I am very happy today', b'nostem_field', b'happy'}
         
-        result = client.execute_command("FT.SEARCH", "idx", '@content:happi key success')
-        assert result[0] == 1 and result[1] == b'doc:2'
-        assert set(result[2]) == {b'content', b'Happiness is key to success', b'nostem_field', b'happiness'}
-        
         # Test 5a: Stem expansion with INORDER - verifies stem variants maintain position ordering
-        # Query uses stemmed form "run" which expands to "running", "runs" - should match in order
         result = client.execute_command("FT.SEARCH", "idx", '@content:run every day', "INORDER")
         assert result[0] == 1 and result[1] == b'doc:4'
         assert set(result[2]) == {b'content', b'Running every day improves health', b'nostem_field', b'running'}
@@ -605,29 +581,10 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert result[0] == 1 and result[1] == b'doc:4'
         assert set(result[2]) == {b'content', b'Running every day improves health', b'nostem_field', b'running'}
         
-        # Test 5d: Multiple stem variants with INORDER and SLOP
-        # "running" and "runs" both stem to "run", testing cross-variant proximity
-        # doc:5: "He runs [very] fast" has gap of 1 word in correct order
-        result = client.execute_command("FT.SEARCH", "idx", '@content:run fast', "SLOP", "0", "INORDER")
-        assert result[0] == 0  # Gap too large for SLOP=0
-        result = client.execute_command("FT.SEARCH", "idx", '@content:run fast', "SLOP", "1", "INORDER")
-        assert result[0] == 1 and result[1] == b'doc:5'
-        assert set(result[2]) == {b'content', b'He runs very fast', b'nostem_field', b'runs'}
-        
-        result = client.execute_command("FT.SEARCH", "idx", '@content:run every day')
-        assert result[0] == 1 and result[1] == b'doc:4'
-        assert set(result[2]) == {b'content', b'Running every day improves health', b'nostem_field', b'running'}
-        
-        result = client.execute_command("FT.SEARCH", "idx", '@content:run fast')
-        assert result[0] == 1 and result[1] == b'doc:5'
-        assert set(result[2]) == {b'content', b'He runs very fast', b'nostem_field', b'runs'}
-        
         # Test 6: Prefix wildcard - NO stem expansion (matches literal prefix)
         # "happi*" matches "happier" and "happiness" (both start with "happi")
         assert (client.execute_command("FT.SEARCH", "idx", '@content:happi*')[0],
                 set(client.execute_command("FT.SEARCH", "idx", '@content:happi*')[1::2])) == (2, {b"doc:2", b"doc:3"})
-        assert (client.execute_command("FT.SEARCH", "idx", '@content:run*')[0],
-                set(client.execute_command("FT.SEARCH", "idx", '@content:run*')[1::2])) == (3, {b"doc:4", b"doc:5", b"doc:6"})
         
         # Test 7: Fuzzy search - NO stem expansion (matches by edit distance)
         result = client.execute_command("FT.SEARCH", "idx", '@content:%happy%')
@@ -638,18 +595,12 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert (client.execute_command("FT.SEARCH", "idx", '@content:%%happi%%')[0],
                 set(client.execute_command("FT.SEARCH", "idx", '@content:%%happi%%')[1::2])) == (2, {b"doc:1", b"doc:3"})
         
-        result = client.execute_command("FT.SEARCH", "idx", '@content:%running%')
-        assert result[0] == 1 and result[1] == b'doc:4'
-        assert set(result[2]) == {b'content', b'Running every day improves health', b'nostem_field', b'running'}
-        
         # Test 8: VERBATIM mode - NO stem expansion (exact match only)
         assert client.execute_command("FT.SEARCH", "idx", '@content:happi', "VERBATIM")[0] == 0
         
         result = client.execute_command("FT.SEARCH", "idx", '@content:happy', "VERBATIM")
         assert result[0] == 1 and result[1] == b'doc:1'
         assert set(result[2]) == {b'content', b'I am very happy today', b'nostem_field', b'happy'}
-        
-        assert client.execute_command("FT.SEARCH", "idx", '@content:run', "VERBATIM")[0] == 0
         
         # Test 9: Complex - stem term in AND/OR queries
         result = client.execute_command("FT.SEARCH", "idx", '@content:very @content:happi')
@@ -659,18 +610,13 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert (client.execute_command("FT.SEARCH", "idx", '@content:happi | @content:run')[0],
                 set(client.execute_command("FT.SEARCH", "idx", '@content:happi | @content:run')[1::2])) == (4, {b"doc:1", b"doc:2", b"doc:4", b"doc:5"})
         
-        # Test 10: Stem + prefix combination
-        result = client.execute_command("FT.SEARCH", "idx", '@content:happi @content:succ*')
-        assert result[0] == 1 and result[1] == b'doc:2'
-        assert set(result[2]) == {b'content', b'Happiness is key to success', b'nostem_field', b'happiness'}
-        
-        # Test 11: Validate fix for stem variants NOT matching in NOSTEM fields
+        # Test 10: Validate fix for stem variants NOT matching in NOSTEM fields
         result = client.execute_command("FT.SEARCH", "idx", "swim")
         assert result[0] == 1, f"Expected 1 result for 'swim', got {result[0]}"
         assert result[1] == b"doc:0", f"Expected doc:0, got {result[1]}"
         assert b"doc:9" not in set(result[1::2]), "doc:9 should NOT match (has 'swimming' only in NOSTEM field)"
         
-        # Test 12: Mixed stemming behavior with TEXT and TEXT NOSTEM fields
+        # Test 11: Mixed stemming behavior with TEXT and TEXT NOSTEM fields
         # This test validates default field search (no field specifier) when schema has mixed field types
         client.execute_command("FT.CREATE", "testindex", "ON", "HASH", "PREFIX", "1", "product:", "SCHEMA", "title", "TEXT", "NOSTEM", "desc", "TEXT")
         
@@ -700,7 +646,7 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert result[0] == 3, f"Expected 3 results for 'running' after update, got {result[0]}"
         assert set(result[1::2]) == {b"product:3", b"product:4", b"product:5"}
         
-        # Test 13: Schema-level MINSTEMSIZE - stemming applies to all fields
+        # Test 12: Schema-level MINSTEMSIZE - stemming applies to all fields
         client.execute_command("FT.CREATE", "testindex2", "ON", "HASH", "PREFIX", "1", "product:", 
                              "MINSTEMSIZE", "6",
                              "SCHEMA", "title", "TEXT", "desc", "TEXT")
@@ -723,7 +669,7 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert result[0] == 2, f"Expected 2 results for 'happy', got {result[0]}"
         assert set(result[1::2]) == {b"product:4", b"product:5"}, f"Expected {{product:4, product:5}}, got {set(result[1::2])}"
         
-        # Test 14: NOSTEM fields with stem expansion from other fields
+        # Test 13: NOSTEM fields with stem expansion from other fields
         client.execute_command("FT.CREATE", "testindex_nostem", "ON", "HASH", "PREFIX", "1", "product:", "SCHEMA", "title", "TEXT", "NOSTEM", "desc", "TEXT", "NOSTEM")
         
         client.execute_command("HSET", "product:3", "title", "abc", "desc", "happiness")

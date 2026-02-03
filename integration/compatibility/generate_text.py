@@ -5,6 +5,65 @@ from .data_sets import load_data
 from .generate import BaseCompatibilityTest
 from .text_query_builder import *
 
+# exclude some edge cases with known Redis bugs
+excluded_queries = set([
+    # HASH
+    # test_text_search_group_depth2_inorder[hash-2-nostem]
+    "((dog | eagle) eagle)",
+    "((drive | potato) (jump | fly))",
+
+    # test_text_search_group_depth3_inorder[hash-2-nostem]
+    "(slow ((quiet eagle) | (cat build)))",
+    "(((slow | fast) (city | lettuce)))",
+
+    # test_text_search_group_depth2_slop[hash-2-nostem]
+    "((loud | fly) (loud | ocean))",
+
+    # test_text_search_group_depth3_slop[hash-2-nostem]
+    "(((city | tomato) warm))",
+    "(((sharp | silent) (movie | silent)))",
+    "(((melon | window) (puzzle | bright)))",
+
+    # test_text_search_group_depth2_inorder_slop[hash-2-nostem]
+    "((kiwi | game) (banana | window))",
+    "((dog | eagle) eagle)",
+    "(((sharp | silent) (movie | silent)))",
+
+    # JSON
+    # test_text_search_group_depth2_inorder[json-2-nostem]
+    "((lemon | peach) (bright | banana))",
+    "((dog | eagle) eagle)",
+    "((shark | cold) (cold | river))",
+
+    # test_text_search_group_depth3_inorder[json-2-nostem]
+    "(((shark | cold) (river | cold)))",
+    
+    # test_text_search_group_depth2_slop[json-2-nostem]
+    "((swim | river) (tiger | swim))",
+    "((shark | tiger) (slow | tiger))",
+    "(quick (quick | silent))",
+
+    # test_text_search_group_depth3_slop[json-2-nostem]
+    "(((tiger | slow) (tiger | swim)))",
+    "((shark | tiger) (slow | tiger))",
+    "(((shark | cold) (river | cold)))",
+    "(((tomato | tiger) (river | tomato)))",
+    "(((desert warm) | (village onion)) (warm | fly))",
+    "(((onion | drive) (drive | dog)))",
+    "(((book | apple) (book | lemon)))",
+    "((game | apple) ((banana | movie)))",
+    "(bright ((silent silent) | (peach mango)))",
+
+    # test_text_search_group_depth2_inorder_slop[json-2-nostem]
+    "((shark | tiger) (slow | tiger))",
+    "((dog | eagle) eagle)",
+    
+    # test_text_search_group_depth3_inorder_slop[json-2-nostem]
+    "((shark | tiger) ((slow | tiger)))",
+    "(((shark | cold) (river | cold)))",
+    "((plum | heavy) ((music | desk)))",
+])
+
 # uncomment when stemming is finished
 # @pytest.mark.parametrize("schema_type", ["default", "nostem"])
 @pytest.mark.parametrize("schema_type", ["nostem"])
@@ -341,7 +400,12 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
                             print(f"  Original:      {current_query}")
                             print(f"  Reconstructed: {reconstructed_query}")
                             continue
-                        print(f"Matched: {matched_count}, Mismatched: {mismatched_count}")     
+                        print(f"Matched: {matched_count}, Mismatched: {mismatched_count}")  
+
+                    # exclude queries with known bugs in Redis
+                    if current_query in excluded_queries:
+                        print(f"Query excluded with known Redis bug: {current_query}")
+                        continue  
 
                     args = [
                         "FT.SEARCH",
@@ -395,27 +459,27 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
         """Test grouped queries with depth 3."""
         self._run_test(gen_depth3, "pure text", key_type, dialect, schema_type)
     
-    # def test_text_search_group_depth2_inorder(self, key_type, dialect, schema_type):
-    #     """Test grouped queries with depth 2."""
-    #     self._run_test(gen_depth2, "pure text", key_type, dialect, schema_type, inorder=True, check_parsing=True)
+    def test_text_search_group_depth2_inorder(self, key_type, dialect, schema_type):
+        """Test grouped queries with depth 2."""
+        self._run_test(gen_depth2, "pure text", key_type, dialect, schema_type, inorder=True, check_parsing=True)
 
-    # def test_text_search_group_depth3_inorder(self, key_type, dialect, schema_type):
-    #     """Test grouped queries with depth 3."""
-    #     self._run_test(gen_depth3, "pure text", key_type, dialect, schema_type, inorder=True, check_parsing=True)
+    def test_text_search_group_depth3_inorder(self, key_type, dialect, schema_type):
+        """Test grouped queries with depth 3."""
+        self._run_test(gen_depth3, "pure text", key_type, dialect, schema_type, inorder=True, check_parsing=True)
     
-    # def test_text_search_group_depth2_slop(self, key_type, dialect, schema_type):
-    #     """Test grouped queries with depth 2."""
-    #     self._run_test(gen_depth2, "pure text", key_type, dialect, schema_type, slop=True, check_parsing=True)
+    def test_text_search_group_depth2_slop(self, key_type, dialect, schema_type):
+        """Test grouped queries with depth 2."""
+        self._run_test(gen_depth2, "pure text", key_type, dialect, schema_type, slop=True, check_parsing=True)
 
-    # def test_text_search_group_depth3_slop(self, key_type, dialect, schema_type):
-    #     """Test grouped queries with depth 3."""
-    #     self._run_test(gen_depth3, "pure text", key_type, dialect, schema_type, slop=True, check_parsing=True)
+    def test_text_search_group_depth3_slop(self, key_type, dialect, schema_type):
+        """Test grouped queries with depth 3."""
+        self._run_test(gen_depth3, "pure text", key_type, dialect, schema_type, slop=True, check_parsing=True)
 
-    # def test_text_search_group_depth2_inorder_slop(self, key_type, dialect, schema_type):
-    #     self._run_test(gen_depth2, "pure text", key_type, dialect, schema_type, inorder=True, slop=True, check_parsing=True)
+    def test_text_search_group_depth2_inorder_slop(self, key_type, dialect, schema_type):
+        self._run_test(gen_depth2, "pure text", key_type, dialect, schema_type, inorder=True, slop=True, check_parsing=True)
 
-    # def test_text_search_group_depth3_inorder_slop(self, key_type, dialect, schema_type):
-    #     self._run_test(gen_depth3, "pure text", key_type, dialect, schema_type, inorder=True, slop=True, check_parsing=True)
+    def test_text_search_group_depth3_inorder_slop(self, key_type, dialect, schema_type):
+        self._run_test(gen_depth3, "pure text", key_type, dialect, schema_type, inorder=True, slop=True, check_parsing=True)
 
     # ========================================================================
     # text with special characters
@@ -428,8 +492,6 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
     def test_text_search_escaped(self, key_type, dialect, schema_type):
         """Test escaped special characters in body field."""
         self._run_test(gen_escaped_word, "punctuation", key_type, dialect, schema_type, field='body')
-
-
     # ========================================================================
     # fuzzy search
     # ========================================================================

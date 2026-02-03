@@ -7,9 +7,14 @@
 
 #include "vmsdk/src/utils.h"
 
+#include <dirent.h>
+
+#include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "absl/functional/any_invocable.h"
 #include "absl/log/check.h"
@@ -352,5 +357,81 @@ std::string StringToHex(std::string_view s) {
   }
   return result;
 }
+
+#ifdef __APPLE__
+absl::StatusOr<std::vector<thread_act_t>> GetThreadsByName(
+    absl::string_view thread_name_pattern) {
+  if (thread_name_pattern.empty()) {
+    return std::vector<thread_act_t>();
+  }
+
+  thread_act_array_t all_threads;
+  mach_msg_type_number_t thread_count;
+
+  if (task_threads(mach_task_self(), &all_threads, &thread_count) !=
+      KERN_SUCCESS) {
+    return absl::InternalError("Failed to enumerate threads");
+  }
+
+  std::vector<thread_act_t> matching_threads;
+
+  for (mach_msg_type_number_t i = 0; i < thread_count; i++) {
+    char thread_name[256];
+    pthread_t pthread = pthread_from_mach_thread_np(all_threads[i]);
+    if (!pthread ||
+        pthread_getname_np(pthread, thread_name, sizeof(thread_name)) != 0) {
+      continue;
+    }
+
+    if (std::string_view(thread_name).find(thread_name_pattern) ==
+        std::string_view::npos) {
+      continue;
+    }
+
+    matching_threads.push_back(all_threads[i]);
+  }
+
+  vm_deallocate(mach_task_self(), (vm_address_t)all_threads,
+                thread_count * sizeof(thread_act_t));
+  return matching_threads;
+}
+
+#elif __linux__
+absl::StatusOr<std::vector<std::string>> GetThreadsByName(
+    absl::string_view thread_name_pattern) {
+  namespace fs = std::filesystem;
+  if (thread_name_pattern.empty()) {
+    return std::vector<std::string>();
+  }
+  std::vector<std::string> result;
+  DIR *dir = opendir("/proc/self/task");
+  if (!dir) {
+    return absl::InternalError("Failed to open /proc/self/task");
+  }
+  while (auto *entry = readdir(dir)) {
+    if (entry->d_name[0] == '.') {
+      continue;
+    }
+    std::string comm_path =
+        absl::StrFormat("/proc/self/task/%s/comm", entry->d_name);
+    std::ifstream comm_file(comm_path);
+    std::string thread_name;
+    if (!std::getline(comm_file, thread_name)) {
+      continue;
+    }
+
+    VMSDK_LOG(NOTICE, nullptr) << "thread name " << thread_name;
+
+    if (thread_name.find(thread_name_pattern) == std::string_view::npos) {
+      continue;
+    }
+    std::string stat_path =
+        absl::StrFormat("/proc/self/task/%s/stat", entry->d_name);
+    result.push_back(stat_path);
+  }
+  closedir(dir);
+  return result;
+}
+#endif
 
 }  // namespace vmsdk

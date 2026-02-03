@@ -21,6 +21,8 @@ set(VMSDKLIB_SRCS
     ${CMAKE_CURRENT_LIST_DIR}/thread_pool.h
     ${CMAKE_CURRENT_LIST_DIR}/thread_monitoring.h
     ${CMAKE_CURRENT_LIST_DIR}/thread_monitoring.cc
+    ${CMAKE_CURRENT_LIST_DIR}/thread_group_cpu_monitor.h
+    ${CMAKE_CURRENT_LIST_DIR}/thread_group_cpu_monitor.cc
     ${CMAKE_CURRENT_LIST_DIR}/time_sliced_mrmw_mutex.cc
     ${CMAKE_CURRENT_LIST_DIR}/time_sliced_mrmw_mutex.h
     ${CMAKE_CURRENT_LIST_DIR}/command_parser.h

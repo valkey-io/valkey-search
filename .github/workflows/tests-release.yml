@@ -40,7 +40,7 @@ jobs:
     - name: Upload Build Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: build-release-${{ github.run_id }}
+        name: build-release
         path: |
           .build-release/
           !.build-release/CMakeFiles
@@ -58,7 +58,7 @@ jobs:
     - name: Download Build Artifacts
       uses: actions/download-artifact@v4
       with:
-        name: build-release-${{ github.run_id }}
+        name: build-release
 
     - name: Set up Docker
       uses: docker/setup-buildx-action@v2
@@ -104,7 +104,7 @@ jobs:
     - name: Download Build Artifacts
       uses: actions/download-artifact@v4
       with:
-        name: build-release-${{ github.run_id }}
+        name: build-release
 
     - name: Set up Docker
       uses: docker/setup-buildx-action@v2

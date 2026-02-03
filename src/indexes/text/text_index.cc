@@ -185,14 +185,14 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
       auto existing_postings =
           old_val ? InvasivePtr<Postings>::AdoptRaw(
                         static_cast<InvasivePtrRaw<Postings>>(old_val))
-                  : InvasivePtr<Postings>{};
+                  : nullptr;
 
       // Mutate the postings
       InvasivePtr<Postings> new_postings =
           AddKeyToPostings(existing_postings, key, std::move(pos_map),
                            &metadata_, num_text_fields_);
 
-      // Copy the new postings to the outer scope
+      // Copy the new postings reference to the outer scope
       updated_target = new_postings;
 
       // Pass ownership of the new postings object reference to the tree
@@ -247,20 +247,21 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
   InvasivePtr<Postings> updated_target;
 
   auto target_remove_fn = [&](void *old_val) {
+    CHECK(old_val)
+        << "We are trying to remove from a nonexistent posting object";
+
     NestedMemoryScope scope{metadata_.posting_memory_pool_};
 
-    // Take ownership of the existing postings object reference if there is one.
-    // It will be deconstructed at the end of this scope.
-    auto existing_postings =
-        old_val ? InvasivePtr<Postings>::AdoptRaw(
-                      static_cast<InvasivePtrRaw<Postings>>(old_val))
-                : InvasivePtr<Postings>{};
+    // Take ownership of the existing postings object reference.
+    auto existing_postings = InvasivePtr<Postings>::AdoptRaw(
+        static_cast<InvasivePtrRaw<Postings>>(old_val));
 
     // Mutate the postings
     InvasivePtr<Postings> new_postings =
         RemoveKeyFromPostings(existing_postings, key, &metadata_);
 
-    // Copy the new postings to the outer scope
+    // Copy the new postings reference to the outer scope
+    // (may be nullptr)
     updated_target = new_postings;
 
     // Pass ownership of the new postings object reference to the tree

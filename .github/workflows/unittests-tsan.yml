@@ -32,17 +32,31 @@ jobs:
     - name: Build Docker Image
       run: docker build -t presubmit-image -f .devcontainer/Dockerfile .
 
+    - name: Download Build Artifacts
+      uses: dawidd6/action-download-artifact@v3
+      continue-on-error: true
+      with:
+        workflow: build.yml
+        name: build-tsan
+        path: .
+        search_artifacts: true
+
     - name: Run Tests TSAN
       id: test-run
       continue-on-error: true
       run: |
         mkdir test-results
+        # Check if build artifacts exist, if so skip rebuild
+        NO_BUILD_FLAG=""
+        if [ -d ".build-release-tsan" ]; then
+          NO_BUILD_FLAG="--no-build"
+        fi
         docker run --privileged --rm \
           --mount type=bind,source="$(pwd)/test-results",target=/workspace/test-results \
           -v "$(pwd):/workspace" \
           --user "ubuntu:ubuntu" \
           presubmit-image \
-          sudo ci/build_ubuntu.sh --run-tests --tsan --unittest-output=/workspace/test-results
+          sudo ci/build_ubuntu.sh ${NO_BUILD_FLAG} --tsan --run-tests --unittest-output=/workspace/test-results
 
     - name: Update Test Results Permissions
       if: always()

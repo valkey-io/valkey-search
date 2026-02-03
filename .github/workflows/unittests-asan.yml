@@ -1,13 +1,12 @@
 name: unittests-asan
 
 on:
-  pull_request: # This triggers the workflow for pull requests
+  workflow_run:
+    workflows: ["Build"]
+    types:
+      - completed
     branches:
-      - main    # Run tests for pull requests targeting the "main" branch
-      - fulltext
-  push:
-    branches:
-      - main    # Optional: Run tests for direct pushes to "main"
+      - main
       - fulltext
   workflow_dispatch: # allow manual triggering
 

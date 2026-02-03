@@ -896,6 +896,7 @@ absl::Status query::SearchParameters::PreParseQueryString() {
       score_as = vmsdk::MakeUniqueValkeyString(parse_vars.score_as_string);
     }
   }
+  // TODO: Return Temp Error for unsupported predicates.
   return absl::OkStatus();
 }
 

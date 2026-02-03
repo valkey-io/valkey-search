@@ -369,7 +369,7 @@ absl::Status PreParseQueryString(query::SearchParameters &parameters) {
   if (!parameters.filter_parse_results.root_predicate &&
       vector_filter.empty()) {
     // Return an error if no valid pre-filter and no vector filter is provided.
-    return absl::InvalidArgumentError("Vector query clause is missing");
+    return absl::InvalidArgumentError("Invalid query string syntax");
   }
   // Optionally parse the vector filter if it exists.
   if (!vector_filter.empty()) {

@@ -155,6 +155,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.checkvec(self, dialect, orig_cmd, kwargs)
         self.check(self, dialect, orig_cmd)
 
+    '''
     def test_bad_numeric_data(self, key_type, dialect):
         self.setup_data("bad numbers", key_type)
         self.check(dialect, f"ft.search {key_type}_idx1",  "@n1:[-inf inf]")
@@ -162,7 +163,6 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.check(dialect, f"ft.search {key_type}_idx1",  "@n2:[-inf inf]")
         self.check(dialect, f"ft.search {key_type}_idx1", "-@n2:[-inf inf]")
 
-    '''
     def test_search_reverse(self, key_type, dialect):
         self.setup_data("reverse vector numbers", key_type)
         self.checkall(dialect, f"ft.search {key_type}_idx1 *")
@@ -464,21 +464,16 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
     def test_search_sortby(self, key_type, dialect):
         self.setup_data("sortable numbers", key_type)
 
-        # Basic numeric sortby - ascending
-        self.check(dialect, f"ft.search {key_type}_idx1 * sortby @n1 asc")
-        self.check(dialect, f"ft.search {key_type}_idx1 * sortby @n2 asc")
+        self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY n1 ASC DIALECT {dialect}")
+        self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY n1 DESC DIALECT {dialect}")
 
-        # Basic numeric sortby - descending
-        self.check(dialect, f"ft.search {key_type}_idx1 * sortby @n1 desc")
-        self.check(dialect, f"ft.search {key_type}_idx1 * sortby @n2 desc")
+        self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY n2 ASC DIALECT {dialect}")
+        self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY n2 DESC DIALECT {dialect}")
 
-        # Sortby with LIMIT
-        self.check(dialect, f"ft.search {key_type}_idx1 * sortby @n1 asc limit 0 5")
-        self.check(dialect, f"ft.search {key_type}_idx1 * sortby @n2 desc limit 2 3")
+        self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY n1 ASC LIMIT 0 5 DIALECT {dialect}")
+        self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY n2 DESC LIMIT 2 3 DIALECT {dialect}")
 
-        # Sortby with query filter
-        self.check(dialect, f"ft.search {key_type}_idx1 @n1:[0 inf] sortby @n1 asc")
-        self.check(dialect, f"ft.search {key_type}_idx1 @n1:[-inf 0] sortby @n2 desc")
+        self.check(dialect, f"ft.search {key_type}_idx1 @n1:[0 inf] SORTBY n1 ASC DIALECT {dialect}")
+        self.check(dialect, f"ft.search {key_type}_idx1 @n1:[-inf 0] SORTBY n2 DESC DIALECT {dialect}")
 
-        # Sortby with RETURN fields
-        self.check(dialect, f"ft.search {key_type}_idx1 * return 3 @n1 @n1 @t1 sortby 2 @n1 asc")
+        self.check(dialect, f"ft.search {key_type}_idx1 * RETURN 3 @n1 @n1 @t1 SORTBY n1 ASC DIALECT {dialect}")

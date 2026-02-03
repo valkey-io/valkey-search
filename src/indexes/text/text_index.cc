@@ -130,15 +130,18 @@ std::optional<std::reference_wrapper<const Rax>> TextIndex::GetSuffix() const {
 TextIndexSchema::TextIndexSchema(data_model::Language language,
                                  const std::string &punctuation,
                                  bool with_offsets,
-                                 const std::vector<std::string> &stop_words)
-    : with_offsets_(with_offsets), lexer_(language, punctuation, stop_words) {}
+                                 const std::vector<std::string> &stop_words,
+                                 uint32_t min_stem_size)
+    : with_offsets_(with_offsets),
+      lexer_(language, punctuation, stop_words),
+      min_stem_size_(min_stem_size) {}
 
 absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
     const InternedStringPtr &key, absl::string_view data,
-    size_t text_field_number, bool stem, size_t min_stem_size, bool suffix) {
+    size_t text_field_number, bool stem, bool suffix) {
   NestedMemoryScope scope{metadata_.text_index_memory_pool_};
 
-  auto tokens = lexer_.Tokenize(data, stem, min_stem_size);
+  auto tokens = lexer_.Tokenize(data, stem, min_stem_size_);
 
   if (!tokens.ok()) {
     if (tokens.status().code() == absl::StatusCode::kInvalidArgument) {

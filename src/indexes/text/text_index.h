@@ -75,13 +75,13 @@ class TextIndex {
 class TextIndexSchema {
  public:
   TextIndexSchema(data_model::Language language, const std::string &punctuation,
-                  bool with_offsets,
-                  const std::vector<std::string> &stop_words);
+                  bool with_offsets, const std::vector<std::string> &stop_words,
+                  uint32_t min_stem_size);
 
   absl::StatusOr<bool> StageAttributeData(const InternedStringPtr &key,
                                           absl::string_view data,
                                           size_t text_field_number, bool stem,
-                                          size_t min_stem_size, bool suffix);
+                                          bool suffix);
   void CommitKeyData(const InternedStringPtr &key);
   void DeleteKeyData(const InternedStringPtr &key);
 
@@ -143,6 +143,9 @@ class TextIndexSchema {
 
   // True if any text attributes of the schema have suffix search enabled.
   bool with_suffix_trie_ = false;
+
+  // Minimum word length for stemming (schema-level configuration)
+  uint32_t min_stem_size_;
 
  public:
   // FT.INFO memory stats for text index

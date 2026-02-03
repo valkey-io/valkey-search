@@ -408,7 +408,8 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
       // Create ProximityIterator to check proximity
       auto proximity_iterator =
           std::make_unique<indexes::text::ProximityIterator>(
-              std::move(iterators), slop_, inorder_, query_field_mask, nullptr);
+              std::move(iterators), slop_, inorder_, query_field_mask, nullptr,
+              false);
       // Check if any valid proximity matches exist
       if (!proximity_iterator->IsIteratorValid()) {
         return EvaluationResult(false);

@@ -34,13 +34,13 @@ message IndexSchema {
   string punctuation = 9;
   bool with_offsets = 10;
   repeated string stop_words = 11;
+  uint32 min_stem_size = 12;
 }
 
 
 message TextIndex {
   bool with_suffix_trie = 1;
   bool no_stem = 2;
-  uint32 min_stem_size = 3;
 }
 
 

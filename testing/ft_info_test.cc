@@ -138,20 +138,15 @@ INSTANTIATE_TEST_SUITE_P(
                             "definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
-                            "24\r\n+"
-                            "identifier\r\n+test_identifier_1\r\n+"
-                            "attribute\r\n+test_attribute_1\r\n+"
-                            "type\r\n+VECTOR\r\n+"
-                            "algorithm\r\n+HNSW\r\n+"
-                            "data_type\r\n+FLOAT32\r\n+"
-                            "dim\r\n:10\r\n+"
-                            "distance_metric\r\n+COSINE\r\n+"
-                            "M\r\n:240\r\n+"
-                            "ef_construction\r\n:400\r\n+"
-                            "ef_runtime\r\n:30\r\n+"
-                            "capacity\r\n:100\r\n+"
-                            "size\r\n$1\r\n0\r\n+"
-                            "num_docs\r\n:0\r\n+num_records\r\n:0\r\n+num_"
+                            "8\r\n+identifier\r\n+test_identifier_1\r\n+"
+                            "attribute\r\n+test_attribute_1\r\n+type\r\n+"
+                            "VECTOR\r\n+index\r\n*12\r\n+capacity\r\n:100\r\n+"
+                            "dimensions\r\n:10\r\n+distance_metric\r\n+"
+                            "COSINE\r\n+size\r\n$1\r\n0\r\n+data_type\r\n+"
+                            "FLOAT32\r\n+algorithm\r\n*8\r\n+name\r\n+HNSW\r\n+"
+                            "m\r\n:240\r\n+ef_construction\r\n:400\r\n+ef_"
+                            "runtime\r\n:30\r\n+num_docs\r\n:0\r\n"
+                            "+num_records\r\n:0\r\n+num_"
                             "total_terms\r\n:0\r\n+num_unique_terms\r\n:0\r\n+"
                             "total_postings\r\n:0\r\n+"
                             "posting_sz_bytes\r\n:0\r\n+"
@@ -202,18 +197,14 @@ INSTANTIATE_TEST_SUITE_P(
                             "definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
-                            "20\r\n+"
-                            "identifier\r\n+test_identifier_1\r\n+"
-                            "attribute\r\n+test_attribute_1\r\n+"
-                            "type\r\n+VECTOR\r\n+"
-                            "algorithm\r\n+FLAT\r\n+"
-                            "data_type\r\n+FLOAT32\r\n+"
-                            "dim\r\n:10\r\n+"
-                            "distance_metric\r\n+COSINE\r\n+"
-                            "block_size\r\n:1024\r\n+"
-                            "capacity\r\n:100\r\n+"
-                            "size\r\n$1\r\n0\r\n+"
-                            "num_docs\r\n:0\r\n+num_records\r\n:0\r\n+num_"
+                            "8\r\n+identifier\r\n+test_identifier_1\r\n+"
+                            "attribute\r\n+test_attribute_1\r\n+type\r\n+"
+                            "VECTOR\r\n+index\r\n*12\r\n+capacity\r\n:100\r\n+"
+                            "dimensions\r\n:10\r\n+distance_metric\r\n+"
+                            "COSINE\r\n+size\r\n$1\r\n0\r\n+data_type\r\n+"
+                            "FLOAT32\r\n+algorithm\r\n*4\r\n+name\r\n+FLAT\r\n+"
+                            "block_size\r\n:1024\r\n+num_docs\r\n:0\r\n"
+                            "+num_records\r\n:0\r\n+num_"
                             "total_terms\r\n:0\r\n+num_unique_terms\r\n:0\r\n+"
                             "total_postings\r\n:0\r\n+"
                             "posting_sz_bytes\r\n:0\r\n+"
@@ -419,14 +410,14 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                      .expect_return_failure = false,
                      .expected_output =
-                         "*44\r\n+index_name\r\n+test_name\r\n+index_"
+                         "*46\r\n+index_name\r\n+test_name\r\n+index_"
                          "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
                          "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
                          "1\r\n1\r\n+attributes\r\n*1\r\n*10\r\n+"
                          "identifier\r\n+"
                          "test_identifier_1\r\n+attribute\r\n+test_attribute_"
                          "1\r\n+type\r\n+TEXT\r\n+WITH_SUFFIX_TRIE\r\n+0\r\n+"
-                         "MIN_STEM_SIZE\r\n:0\r\n+num_docs\r\n:0\r\n+num_"
+                         "NO_STEM\r\n+0\r\n+num_docs\r\n:0\r\n+num_"
                          "records\r\n:0\r\n+num_"
                          "total_terms\r\n:0\r\n+num_"
                          "unique_terms\r\n:0\r\n+"
@@ -441,7 +432,8 @@ INSTANTIATE_TEST_SUITE_P(
                          "mutation_queue_size\r\n$1\r\n0\r\n+recent_"
                          "mutations_queue_delay\r\n$5\r\n0 sec\r\n+state\r\n+"
                          "ready\r\n+punctuation\r\n+\r\n+stop_words\r\n*0\r\n+"
-                         "with_offsets\r\n+0\r\n+language\r\n+english\r\n"},
+                         "with_offsets\r\n+0\r\n+min_stem_size\r\n:4\r\n+"
+                         "language\r\n+english\r\n"},
                 },
         },
         {
@@ -460,6 +452,7 @@ INSTANTIATE_TEST_SUITE_P(
                           stop_words: "the"
                           stop_words: "and"
                           stop_words: "or"
+                          min_stem_size: 3
                           attributes: {
                             alias: "test_attribute_1"
                             identifier: "test_identifier_1"
@@ -467,14 +460,13 @@ INSTANTIATE_TEST_SUITE_P(
                               text_index: {
                                 with_suffix_trie: true
                                 no_stem: true
-                                min_stem_size: 3
                               }
                             }
                           }
                         )",
                      .expect_return_failure = false,
                      .expected_output =
-                         "*44\r\n+index_name\r\n+test_name\r\n+index_"
+                         "*46\r\n+index_name\r\n+test_name\r\n+index_"
                          "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
                          "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
                          "1\r\n1\r\n+attributes\r\n*1\r\n*10\r\n+"
@@ -497,7 +489,8 @@ INSTANTIATE_TEST_SUITE_P(
                          "mutations_queue_delay\r\n$5\r\n0 sec\r\n+state\r\n+"
                          "ready\r\n+punctuation\r\n+.,!?\r\n+stop_words\r\n*"
                          "3\r\n+the\r\n+and\r\n+or\r\n+with_offsets\r\n+"
-                         "1\r\n+language\r\n+english\r\n"},
+                         "1\r\n+min_stem_size\r\n:3\r\n+language\r\n+"
+                         "english\r\n"},
                 },
         },
         {

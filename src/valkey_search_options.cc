@@ -162,6 +162,12 @@ constexpr absl::string_view kReIndexVectorRDBLoad{"skip-rdb-load"};
 static auto rdb_load_skip_index =
     config::BooleanBuilder(kReIndexVectorRDBLoad, false).Build();
 
+/// Should this instance skip corrupted internal update?
+constexpr absl::string_view kSkipCorruptedAOFEntries{
+    "skip-corrupted-internal-update-entries"};
+static auto skip_corrupted_internal_update_entries =
+    config::BooleanBuilder(kSkipCorruptedAOFEntries, false).Build();
+
 /// Control the modules log level verbosity
 constexpr absl::string_view kLogLevel{"log-level"};
 static auto log_level =
@@ -404,6 +410,11 @@ const vmsdk::config::Boolean& GetSkipIndexLoad() {
 
 vmsdk::config::Boolean& GetSkipIndexLoadMutable() {
   return dynamic_cast<vmsdk::config::Boolean&>(*rdb_load_skip_index);
+}
+
+const vmsdk::config::Boolean& GetSkipCorruptedInternalUpdateEntries() {
+  return dynamic_cast<const vmsdk::config::Boolean&>(
+      *skip_corrupted_internal_update_entries);
 }
 
 vmsdk::config::Enum& GetLogLevel() {

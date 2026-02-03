@@ -27,7 +27,6 @@
 #include "gtest/gtest_prod.h"
 #include "src/attribute.h"
 #include "src/attribute_data_type.h"
-#include "src/commands/ft_create_parser.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/text/text_index.h"
@@ -100,10 +99,13 @@ class IndexSchema : public KeyspaceEventSubscription,
   absl::StatusOr<std::shared_ptr<indexes::IndexBase>> GetIndex(
       absl::string_view attribute_alias) const;
   inline bool HasTextOffsets() const { return with_offsets_; }
+  inline uint32_t GetMinStemSize() const { return min_stem_size_; }
+  inline FieldMaskPredicate GetStemTextFieldMask() const {
+    return stem_text_field_mask_;
+  }
   const absl::flat_hash_set<std::string> &GetAllTextIdentifiers(
       bool with_suffix) const;
   FieldMaskPredicate GetAllTextFieldMask(bool with_suffix) const;
-  std::optional<uint32_t> MinStemSizeAcrossTextIndexes(bool with_suffix) const;
   void UpdateTextFieldMasksForIndex(const std::string &identifier,
                                     indexes::IndexBase *index);
   absl::flat_hash_set<std::string> GetTextIdentifiersByFieldMask(
@@ -132,7 +134,7 @@ class IndexSchema : public KeyspaceEventSubscription,
 
   void CreateTextIndexSchema() {
     text_index_schema_ = std::make_shared<indexes::text::TextIndexSchema>(
-        language_, punctuation_, with_offsets_, stop_words_);
+        language_, punctuation_, with_offsets_, stop_words_, min_stem_size_);
   }
   std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
     return text_index_schema_;
@@ -265,12 +267,12 @@ class IndexSchema : public KeyspaceEventSubscription,
   std::string punctuation_;
   bool with_offsets_{true};
   std::vector<std::string> stop_words_;
+  uint32_t min_stem_size_{4};
   std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
   // Precomputed text field information for searches
   uint64_t all_text_field_mask_{0ULL};
   uint64_t suffix_text_field_mask_{0ULL};
-  std::optional<uint32_t> all_fields_min_stem_size_{std::nullopt};
-  std::optional<uint32_t> suffix_fields_min_stem_size_{std::nullopt};
+  uint64_t stem_text_field_mask_{0ULL};  // Tracks fields with stemming enabled
   absl::flat_hash_set<std::string> all_text_identifiers_;
   absl::flat_hash_set<std::string> suffix_text_identifiers_;
   bool loaded_v2_{false};
@@ -321,7 +323,7 @@ class IndexSchema : public KeyspaceEventSubscription,
                        MutatedAttributes &mutated_attributes,
                        const Key &interned_key, bool from_backfill,
                        bool is_delete);
-  void ScheduleMutation(bool from_backfill, const Key &key,
+  bool ScheduleMutation(bool from_backfill, const Key &key,
                         vmsdk::ThreadPool::Priority priority,
                         absl::BlockingCounter *blocking_counter);
   void EnqueueMultiMutation(const Key &key);
@@ -350,8 +352,6 @@ class IndexSchema : public KeyspaceEventSubscription,
                           bool from_backfill, bool block_client,
                           bool from_multi)
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
-  bool IsKeyInFlight(const InternedStringPtr &key) const
-      ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
   std::optional<MutatedAttributes> ConsumeTrackedMutatedAttribute(
       const Key &key, bool first_time)
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
@@ -359,11 +359,7 @@ class IndexSchema : public KeyspaceEventSubscription,
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
 
   mutable vmsdk::TimeSlicedMRMWMutex time_sliced_mutex_;
-  struct MultiMutations {
-    std::unique_ptr<absl::BlockingCounter> blocking_counter;
-    std::deque<Key> keys;
-  };
-  vmsdk::MainThreadAccessGuard<MultiMutations> multi_mutations_;
+  vmsdk::MainThreadAccessGuard<std::deque<Key>> multi_mutations_keys_;
   vmsdk::MainThreadAccessGuard<bool> schedule_multi_exec_processing_{false};
 
   FRIEND_TEST(IndexSchemaRDBTest, SaveAndLoad);

@@ -38,7 +38,6 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
-#include "src/indexes/text/text_index.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
@@ -254,6 +253,9 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
       with_offsets_(index_schema_proto.with_offsets()),
       stop_words_(index_schema_proto.stop_words().begin(),
                   index_schema_proto.stop_words().end()),
+      min_stem_size_(index_schema_proto.min_stem_size() > 0
+                         ? index_schema_proto.min_stem_size()
+                         : 4),
       mutations_thread_pool_(mutations_thread_pool),
       time_sliced_mutex_(CreateMrmwMutexOptions()) {
   ValkeyModule_SelectDb(detached_ctx_.get(), db_num_);
@@ -323,19 +325,9 @@ void IndexSchema::UpdateTextFieldMasksForIndex(const std::string &identifier,
       suffix_text_field_mask_ |= field_bit;
       suffix_text_identifiers_.insert(identifier);
     }
-    // Update min stem sizes
+    // Track fields with stemming enabled (note: stemming not run for suffix)
     if (text_index->IsStemmingEnabled()) {
-      uint32_t stem_size = text_index->GetMinStemSize();
-      all_fields_min_stem_size_ =
-          all_fields_min_stem_size_.has_value()
-              ? std::min(*all_fields_min_stem_size_, stem_size)
-              : stem_size;
-      if (text_index->WithSuffixTrie()) {
-        suffix_fields_min_stem_size_ =
-            suffix_fields_min_stem_size_.has_value()
-                ? std::min(*suffix_fields_min_stem_size_, stem_size)
-                : stem_size;
-      }
+      stem_text_field_mask_ |= field_bit;
     }
   }
 }
@@ -349,15 +341,6 @@ void IndexSchema::UpdateTextFieldMasksForIndex(const std::string &identifier,
 const absl::flat_hash_set<std::string> &IndexSchema::GetAllTextIdentifiers(
     bool with_suffix) const {
   return with_suffix ? suffix_text_identifiers_ : all_text_identifiers_;
-}
-
-// Find the min stem size across all text fields in the text index schema.
-// If stemming is disabled across all text field indexes, return `nullopt`.
-// If `with_suffix` is true, we only check the fields that have suffix tree
-// enabled.
-std::optional<uint32_t> IndexSchema::MinStemSizeAcrossTextIndexes(
-    bool with_suffix) const {
-  return with_suffix ? suffix_fields_min_stem_size_ : all_fields_min_stem_size_;
 }
 
 // Returns the field mask including all the text fields.
@@ -679,34 +662,32 @@ std::unique_ptr<vmsdk::StopWatch> CreateQueueDelayCapturer() {
 // command.
 void IndexSchema::ProcessMultiQueue() {
   schedule_multi_exec_processing_ = false;
-  auto &multi_mutations = multi_mutations_.Get();
-  if (ABSL_PREDICT_TRUE(multi_mutations.keys.empty())) {
+  auto &multi_mutations_keys = multi_mutations_keys_.Get();
+  if (ABSL_PREDICT_TRUE(multi_mutations_keys.empty())) {
     return;
   }
 
   // Track batch metrics
-  Metrics::GetStats().ingest_last_batch_size = multi_mutations.keys.size();
+  Metrics::GetStats().ingest_last_batch_size = multi_mutations_keys.size();
   Metrics::GetStats().ingest_total_batches++;
 
-  multi_mutations.blocking_counter =
-      std::make_unique<absl::BlockingCounter>(multi_mutations.keys.size());
-  vmsdk::WriterMutexLock lock(&time_sliced_mutex_);
-  while (!multi_mutations.keys.empty()) {
-    auto key = multi_mutations.keys.front();
-    multi_mutations.keys.pop_front();
+  absl::BlockingCounter blocking_counter(multi_mutations_keys.size());
+  vmsdk::WriterMutexLock lock(&time_sliced_mutex_, false, true);
+  while (!multi_mutations_keys.empty()) {
+    auto key = multi_mutations_keys.front();
+    multi_mutations_keys.pop_front();
     ScheduleMutation(false, key, vmsdk::ThreadPool::Priority::kMax,
-                     multi_mutations.blocking_counter.get());
+                     &blocking_counter);
   }
-  multi_mutations.blocking_counter->Wait();
-  multi_mutations.blocking_counter.reset();
+  blocking_counter.Wait();
 }
 
 void IndexSchema::EnqueueMultiMutation(const Key &key) {
-  auto &multi_mutations = multi_mutations_.Get();
-  multi_mutations.keys.push_back(key);
+  auto &multi_mutations_keys = multi_mutations_keys_.Get();
+  multi_mutations_keys.push_back(key);
   VMSDK_LOG(DEBUG, nullptr) << "Enqueueing multi mutation for key: " << key
-                            << " Size is now " << multi_mutations.keys.size();
-  if (multi_mutations.keys.size() >= mutations_thread_pool_->Size() &&
+                            << " Size is now " << multi_mutations_keys.size();
+  if (multi_mutations_keys.size() >= mutations_thread_pool_->Size() &&
       !schedule_multi_exec_processing_.Get()) {
     schedule_multi_exec_processing_.Get() = true;
     vmsdk::RunByMain(
@@ -721,7 +702,7 @@ void IndexSchema::EnqueueMultiMutation(const Key &key) {
   }
 }
 
-void IndexSchema::ScheduleMutation(bool from_backfill, const Key &key,
+bool IndexSchema::ScheduleMutation(bool from_backfill, const Key &key,
                                    vmsdk::ThreadPool::Priority priority,
                                    absl::BlockingCounter *blocking_counter) {
   {
@@ -731,22 +712,33 @@ void IndexSchema::ScheduleMutation(bool from_backfill, const Key &key,
       ++stats_.backfill_inqueue_tasks;
     }
   }
-  mutations_thread_pool_->Schedule(
+  auto scheduled = mutations_thread_pool_->Schedule(
       [from_backfill, weak_index_schema = GetWeakPtr(),
        ctx = detached_ctx_.get(), delay_capturer = CreateQueueDelayCapturer(),
        key_str = std::move(key), blocking_counter]() mutable {
         PAUSEPOINT("block_mutation_queue");
         auto index_schema = weak_index_schema.lock();
+        // index_schema will be nullptr if the index schema has already been
+        // destructed
         if (ABSL_PREDICT_FALSE(!index_schema)) {
+          CHECK(!blocking_counter);
           return;
         }
         index_schema->ProcessSingleMutationAsync(ctx, from_backfill, key_str,
                                                  delay_capturer.get());
+        // The blocking_counter is stack-allocated by a caller that
+        // holds a strong reference to the index schema object. Consequently, if
+        // index_schema is non-null, the blocking_counter is guaranteed to be
+        // valid.
         if (ABSL_PREDICT_FALSE(blocking_counter)) {
           blocking_counter->DecrementCount();
         }
       },
       priority);
+  if (ABSL_PREDICT_FALSE(!scheduled && blocking_counter)) {
+    blocking_counter->DecrementCount();
+  }
+  return scheduled;
 }
 
 bool ShouldBlockClient(ValkeyModuleCtx *ctx, bool inside_multi_exec,
@@ -932,7 +924,8 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   }
   // Text-attribute info fields
   if (text_index_schema_) {
-    arrSize += 6;
+    arrSize += 8;  // punctuation, stop_words, with_offsets, min_stem_size (4
+                   // key-value pairs = 8 items)
   }
   ValkeyModule_ReplyWithArray(ctx, arrSize);
   ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
@@ -1036,6 +1029,9 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
 
     ValkeyModule_ReplyWithSimpleString(ctx, "with_offsets");
     ValkeyModule_ReplyWithSimpleString(ctx, with_offsets_ ? "1" : "0");
+
+    ValkeyModule_ReplyWithSimpleString(ctx, "min_stem_size");
+    ValkeyModule_ReplyWithLongLong(ctx, min_stem_size_);
   }
 
   ValkeyModule_ReplyWithSimpleString(ctx, "language");
@@ -1067,6 +1063,7 @@ std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
   index_schema_proto->set_language(language_);
   index_schema_proto->set_punctuation(punctuation_);
   index_schema_proto->set_with_offsets(with_offsets_);
+  index_schema_proto->set_min_stem_size(min_stem_size_);
   index_schema_proto->mutable_stop_words()->Assign(stop_words_.begin(),
                                                    stop_words_.end());
 
@@ -1316,11 +1313,11 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
   // Write out the multi/exec queued keys
   //
   VMSDK_RETURN_IF_ERROR(
-      out.SaveObject<size_t>(multi_mutations_.Get().keys.size()));
-  rdb_save_multi_exec_entries.Increment(multi_mutations_.Get().keys.size());
+      out.SaveObject<size_t>(multi_mutations_keys_.Get().size()));
+  rdb_save_multi_exec_entries.Increment(multi_mutations_keys_.Get().size());
   VMSDK_LOG(NOTICE, nullptr) << "Writing Multi/Exec Queue, records = "
-                             << multi_mutations_.Get().keys.size();
-  for (const auto &key : multi_mutations_.Get().keys) {
+                             << multi_mutations_keys_.Get().size();
+  for (const auto &key : multi_mutations_keys_.Get()) {
     CHECK(tracked_mutated_records_.find(key) != tracked_mutated_records_.end());
     VMSDK_RETURN_IF_ERROR(out.SaveString(key->Str()));
   }
@@ -1587,11 +1584,6 @@ vmsdk::BlockedClientCategory IndexSchema::GetBlockedCategoryFromProto() const {
     default:
       return vmsdk::BlockedClientCategory::kOther;
   }
-}
-
-bool IndexSchema::IsKeyInFlight(const InternedStringPtr &key) const {
-  absl::MutexLock lock(&mutated_records_mutex_);
-  return tracked_mutated_records_.contains(key);
 }
 
 bool IndexSchema::InTrackedMutationRecords(

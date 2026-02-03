@@ -31,7 +31,7 @@ jobs:
 
     - name: Build Project (Release)
       run: |
-        docker run --rm \
+        docker run --privileged --rm \
           -v "$(pwd):/workspace" \
           --user "ubuntu:ubuntu" \
           presubmit-image \
@@ -62,7 +62,7 @@ jobs:
 
     - name: Build Project (ASAN)
       run: |
-        docker run --rm \
+        docker run --privileged --rm \
           -v "$(pwd):/workspace" \
           --user "ubuntu:ubuntu" \
           presubmit-image \
@@ -93,7 +93,7 @@ jobs:
 
     - name: Build Project (TSAN)
       run: |
-        docker run --rm \
+        docker run --privileged --rm \
           -v "$(pwd):/workspace" \
           --user "ubuntu:ubuntu" \
           presubmit-image \

@@ -16,7 +16,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
+  tests:
     runs-on: ubuntu-latest
     
     steps:
@@ -29,46 +29,8 @@ jobs:
     - name: Build Docker Image
       run: docker build -t presubmit-image -f .devcontainer/Dockerfile .
 
-    - name: Build Project
-      run: |
-        docker run --privileged --rm \
-          -v "$(pwd):/workspace" \
-          --user "ubuntu:ubuntu" \
-          presubmit-image \
-          sudo ci/build_ubuntu.sh
-
-    - name: Upload Build Artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: build-release
-        path: |
-          .build-release/
-          !.build-release/CMakeFiles
-          !.build-release/**/*.o
-        retention-days: 1
-
-  unit-tests:
-    needs: build
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Checkout Code
-      uses: actions/checkout@v3
-
-    - name: Download Build Artifacts
-      uses: actions/download-artifact@v4
-      with:
-        name: build-release
-        path: .build-release
-
-    - name: Set up Docker
-      uses: docker/setup-buildx-action@v2
-
-    - name: Build Docker Image
-      run: docker build -t presubmit-image -f .devcontainer/Dockerfile .
-
-    - name: Run Unit Tests
-      id: test-run
+    - name: Build and Run Unit Tests
+      id: unit-test-run
       continue-on-error: true
       run: |
         mkdir test-results
@@ -77,67 +39,43 @@ jobs:
           -v "$(pwd):/workspace" \
           --user "ubuntu:ubuntu" \
           presubmit-image \
-          sudo ci/build_ubuntu.sh --no-build --run-tests --unittest-output=/workspace/test-results
+          sudo ci/build_ubuntu.sh --run-tests --unittest-output=/workspace/test-results
 
     - name: Update Test Results Permissions
       if: always()
       run: sudo chmod -R 755 test-results
 
-    - name: Upload Test Results
+    - name: Upload Unit Test Results
       uses: actions/upload-artifact@v4
       if: always()
       with:
         name: unittest-results
         path: test-results
 
-    - name: Check Test Results
-      if: steps.test-run.outcome == 'failure'
-      run: exit 1
-
-  integration-tests:
-    needs: build
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Checkout Code
-      uses: actions/checkout@v3
-
-    - name: Download Build Artifacts
-      uses: actions/download-artifact@v4
-      with:
-        name: build-release
-        path: .build-release
-
-    - name: Set up Docker
-      uses: docker/setup-buildx-action@v2
-
-    - name: Build Docker Image
-      run: docker build -t presubmit-image -f .devcontainer/Dockerfile .
-
     - name: Run Integration Tests
-      id: test-run
+      id: integration-test-run
       timeout-minutes: 140
       continue-on-error: true
       run: |
-        mkdir test-results
+        mkdir integration-results
         docker run --privileged --rm \
-          --mount type=bind,source="$(pwd)/test-results",target=/workspace/test-results \
+          --mount type=bind,source="$(pwd)/integration-results",target=/workspace/integration-results \
           -v "$(pwd):/workspace" \
           --user "ubuntu:ubuntu" \
           presubmit-image \
-          sudo ci/build_ubuntu.sh --no-build --run-integration-tests --integration-output=/workspace/test-results
+          sudo ci/build_ubuntu.sh --no-build --run-integration-tests --integration-output=/workspace/integration-results
 
-    - name: Update Test Results Permissions
+    - name: Update Integration Results Permissions
       if: always()
-      run: sudo chmod -R 755 test-results
+      run: sudo chmod -R 755 integration-results
 
-    - name: Upload Test Results
+    - name: Upload Integration Test Results
       uses: actions/upload-artifact@v4
       if: always()
       with:
         name: integration-test-results
-        path: test-results
+        path: integration-results
 
     - name: Check Test Results
-      if: steps.test-run.outcome == 'failure'
+      if: steps.unit-test-run.outcome == 'failure' || steps.integration-test-run.outcome == 'failure'
       run: exit 1

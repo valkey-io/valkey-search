@@ -16,7 +16,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
+  tests:
     runs-on: ubuntu-latest
     
     steps:
@@ -29,46 +29,8 @@ jobs:
     - name: Build Docker Image
       run: docker build -t presubmit-image -f .devcontainer/Dockerfile .
 
-    - name: Build Project (TSAN)
-      run: |
-        docker run --privileged --rm \
-          -v "$(pwd):/workspace" \
-          --user "ubuntu:ubuntu" \
-          presubmit-image \
-          sudo ci/build_ubuntu.sh --tsan
-
-    - name: Upload Build Artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: build-tsan
-        path: |
-          .build-release-tsan/
-          !.build-release-tsan/CMakeFiles
-          !.build-release-tsan/**/*.o
-        retention-days: 1
-
-  unit-tests:
-    needs: build
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Checkout Code
-      uses: actions/checkout@v3
-
-    - name: Download Build Artifacts
-      uses: actions/download-artifact@v4
-      with:
-        name: build-tsan
-        path: .build-release-tsan
-
-    - name: Set up Docker
-      uses: docker/setup-buildx-action@v2
-
-    - name: Build Docker Image
-      run: docker build -t presubmit-image -f .devcontainer/Dockerfile .
-
-    - name: Run Unit Tests (TSAN)
-      id: test-run
+    - name: Build and Run Unit Tests (TSAN)
+      id: unit-test-run
       continue-on-error: true
       run: |
         mkdir test-results
@@ -77,7 +39,7 @@ jobs:
           -v "$(pwd):/workspace" \
           --user "ubuntu:ubuntu" \
           presubmit-image \
-          sudo ci/build_ubuntu.sh --no-build --tsan --run-tests --unittest-output=/workspace/test-results
+          sudo ci/build_ubuntu.sh --tsan --run-tests --unittest-output=/workspace/test-results
 
     - name: Update Test Results Permissions
       if: always()
@@ -91,5 +53,5 @@ jobs:
         path: test-results
 
     - name: Check Test Results
-      if: steps.test-run.outcome == 'failure'
+      if: steps.unit-test-run.outcome == 'failure'
       run: exit 1

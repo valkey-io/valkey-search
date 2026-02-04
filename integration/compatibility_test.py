@@ -12,6 +12,8 @@ from valkey_search_test_case import (
     ValkeySearchTestCaseBase,
 )
 from valkeytestframework.conftest import resource_port_tracker
+from utils import IndexingTestHelper
+from valkeytestframework.util import waiters
 
 encoder = lambda x: x.encode() if not isinstance(x, bytes) else x
 
@@ -389,6 +391,7 @@ def do_answer(client, expected, data_set):
             load_data(client, expected['data_set_name'], expected['key_type'], schema_type=schema_type)
         else:
             load_data(client, expected['data_set_name'], expected['key_type'])
+        waiters.wait_for_true(lambda: IndexingTestHelper.is_indexing_complete_on_node(client, f"{expected['key_type']}_idx1"))
         data_set = (expected['data_set_name'], expected['key_type'], expected.get("schema_type"))
 
     # Set Valkey-specific config for inorder tests

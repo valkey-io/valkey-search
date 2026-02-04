@@ -50,6 +50,25 @@ constexpr absl::string_view kFailedPreconditionMsg{
     "Index or slot consistency check failed"};
 constexpr uint32_t kDialect{2};
 
+// Parser keywords
+constexpr absl::string_view kParamsParam{"PARAMS"};
+constexpr absl::string_view kDialectParam{"DIALECT"};
+constexpr absl::string_view kLimitParam{"LIMIT"};
+constexpr absl::string_view kNoContentParam{"NOCONTENT"};
+constexpr absl::string_view kReturnParam{"RETURN"};
+constexpr absl::string_view kSortByParam{"SORTBY"};
+constexpr absl::string_view kTimeoutParam{"TIMEOUT"};
+constexpr absl::string_view kAsParam{"AS"};
+constexpr absl::string_view kLocalOnly{"LOCALONLY"};
+constexpr absl::string_view kAllShards{"ALLSHARDS"};
+constexpr absl::string_view kSomeShards{"SOMESHARDS"};
+constexpr absl::string_view kConsistent{"CONSISTENT"};
+constexpr absl::string_view kInconsistent{"INCONSISTENT"};
+constexpr absl::string_view kVectorFilterDelimiter{"=>"};
+constexpr absl::string_view kSlop{"SLOP"};
+constexpr absl::string_view kInorder{"INORDER"};
+constexpr absl::string_view kVerbatim{"VERBATIM"};
+
 struct LimitParameter {
   uint64_t first_index{0};
   uint64_t number{10};
@@ -128,6 +147,10 @@ struct SearchParameters {
   // particular is needed on the results. This should be overridden in derived
   // classes if needed. The default implementation returns false.
   virtual bool RequiresCompleteResults() const { return false; }
+
+  virtual absl::Status PreParseQueryString();
+  virtual absl::Status PostParseQueryString();
+
   SearchParameters(uint64_t timeout, grpc::CallbackServerContext* context,
                    uint32_t db_num)
       : timeout_ms(timeout),

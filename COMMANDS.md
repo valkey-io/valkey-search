@@ -1,74 +1,150 @@
 # Command List
-- [`FT.CREATE`](#ftcreate) 
+
+- [`FT.AGGREGATE`](#ftaggregate)
+- [`FT.CREATE`](#ftcreate)
 - [`FT.DROPINDEX`](#ftdropindex)
 - [`FT.INFO`](#ftinfo)
 - [`FT._LIST`](#ft_list)
 - [`FT.SEARCH`](#ftsearch)
+
 #
+
+## FT.AGGREGATE
+
+The `FT.AGGREGATE` command extends the query capabilities of the `FT.SEARCH` command with substantial server-side data processing capabilities. Just as with the `FT.SEARCH` command, the query string is used to locate a set of Valkey keys. Fields from those keys are loaded and processed according to a list of stages specified on the command. Each stage is processed sequentially in the order found on the command with the output of each stage becoming the input to the next stage. Once all of the stages have been processed the resulting data set is returned as the result of the command.
+
+```
+FT.AGGREGATE <index-name> <query>
+      TIMEOUT <timeout>
+    | PARAMS <count> <name> <value> [ <name1> <value1> ...]
+    | DIALECT <dialect>
+    | LOAD [* | <count> <field1> <field2> ...]
+    (
+      | APPLY <expression> AS <field>
+      | FILTER <expression>
+      | LIMIT <offset> <count>
+      | SORTBY <count> <field1> [ASC | DESC] <field2 [ASC | DESC] ... [MAX <num>]
+      | GROUPBY <count> <field1> <field2> ... [REDUCE <reducer> <count> <arg1> <arg2> ...]*
+    )+
+```
+
+- **\<index\>** (required): This index name you want to query.
+- **\<query\>** (required): The query string, see below for details.
+- **TIMEOUT \<timeout\>** (optional): Lets you set a timeout value for the search command. This must be an integer in milliseconds.
+- **PARAMS \<count\> \<name1\> \<value1\> \<name2\> \<value2\> ...** (optional): `count` is of the number of arguments, i.e., twice the number of value name pairs. See the query string for usage details.
+- **DIALECT \<dialect\>** (optional): Specifies your dialect. The only supported dialect is 2.
+- **LOAD [* | \<count\> \<field1\> \<field2\> ...]** (optional): The fields of the located keys to be loaded into the aggregation pipeline. The star (\*) indicates that all of the fields of the keys are loaded.
+- **APPLY \<expression\> as \<field\>** (optional): For each key of input, the expression is computed and stored into the named field. See <?> for details on the expression syntax.
+- **FILTER \<expression\>** (optional): The expression is evaluated for each key of input. Only those keys for which the expression evaluates to true are included in the output. See <?> for details on the expression syntax.
+- **LIMIT \<offset\> \<count\>** (optional): The first \<offset\> number of records are discarded. Up to \<count\> records are saved and then the remainder of the records are discarded.
+- **SORTBY \<count\> \<field1\> [ASC | DESC] \<field2 [ASC | DESC] ... [MAX \<num\>]** (optional): The input records are sorted according to the specified fields and directions. If the MAX option is specified, only the first \<num\> records after sorting are included in the output.
+- **GROUPBY \<count\> \<field1\> \<field2\> ... [REDUCE \<reducer\> \<count\> \<arg1\> \<arg2\> ...]\*** (optional): The input records are grouped according to the specified fields. For each group, the specified reducers are computed and included in the output records. Multiple reducers can be specified and are efficiently computed. See <?> for a list of reducer functions.
 
 ## FT.CREATE
 
-The `FT.CREATE` command creates an empty index and initiates the backfill process. Each index consists of a number of field definitions. Each field definition specifies a field name, a field type and a path within each indexed key to locate a value of the declared type. Some field type definitions have additional sub-type specifiers.
+The `FT.CREATE` command creates an empty index and may initiate a backfill process. Each index consists of a number of field definitions. Each field definition specifies a field name, a field type and a path within each indexed key to locate a value of the declared type. Some field type definitions have additional sub-type specifiers.
 
-For indexes on HASH keys, the path is the same as the hash member name. The optional `AS` clause can be used to rename the field if desired. 
-Renaming of fields is especially useful when the member name contains special characters.
+For indexes on HASH keys, the path is the hash member name. The optional `AS` clause provides an explicit field name which will be the same as the path if omitted. Renaming of fields is required when the member name contains special characters.
 
-For indexes on JSON keys, the path is a JSON path to the data of the declared type. Because the JSON path always contains special characters, the `AS` clause is required.
+For indexes on `JSON` keys, the path is a `JSON` path to the data of the declared type. The `AS` clause is required in order to provide a field name without the special characters of a `JSON` path.
 
+An index may contain any number of fields. Each field has a type and set of associated query operations that are specific to that type.
+
+### Field Types
+
+- **TAG**: A tag field is a string that contains one or more tag values. Query operations can be match against one or more tags. Tag matching may be prefix-based, i.e., searching for tags that have a fixed starting sequence of characters with
+
+- **TEXT**: A text field is a string that contains a sequence of words. Text fields offer a rich set of matching operators that operate on one or more words. See <text fields> for more detail on the processing of text fields.
+
+- **NUMERIC**: A numeric field contains a number. For HASH indexes, the number is stored as a string in "C" language format for a floating point number without a trailing size label like "f" or "d". For JSON indexes, this field can be either a string or a number.
+
+- **VECTOR**: A vector field contains a vector. Two vector indexing algorithms are currently supported: HNSW (Hierarchical Navigable Small World) and FLAT (brute force). Each algorithm has a set of additional attributes, some required and others optional.
+
+### Index Creation
+
+Valkey Search requires that an index definition be distributed to all nodes. Within a shard, this is handled by the normal Valkey replication machinery, i.e., index definitions are subject to replication delay.
 
 ```bash
 FT.CREATE <index-name>
     ON HASH
-    [PREFIX <count> <prefix> [<prefix>...]]
-    SCHEMA 
+    [PREFIX <count> <prefix> <prefix>...]
+    [LANGUAGE <language>]
+    [SKIPINITIALSCAN]
+    [MINSTEMSIZE <min_stem_size>]
+    SCHEMA
         (
-            <field-identifier> [AS <field-alias>] 
-                  NUMERIC 
-                | TAG [SEPARATOR <sep>] [CASESENSITIVE] 
+            <field-path> [AS <field-name>]
+                  NUMERIC
+                | TAG [SEPARATOR <sep>] [CASESENSITIVE]
+                | TEXT [PUNCTUATION <punctuation>] [WITHOFFSETS | NOOFFSETS] [NOSTEM] [NOSTOPWORDS | STOPWORDS <word_count> [<word>]+ ] [WITHSUFFIXTRIE | NOSUFFIXTRIE]
                 | VECTOR [HNSW | FLAT] <attr_count> [<attribute_name> <attribute_value>]+
             [SORTABLE]
         )+
 ```
 
+- **\<index-name\>** (required): This is the name you give to your index. If an index with the same name exists already, an error is returned.
 
-- **\<index-name\>** (required): This is the name you give to your index. If an index with the same name exists already, an error is returned.  
-    
-- **ON HASH | JSON** (optional): Only keys that match the specified type are included into this index. If omitted, HASH is assumed.  
-    
-- **PREFIX \<prefix-count\> \<prefix\>** (optional): If this clause is specified, then only keys that begin with the same bytes as one or more of the specified prefixes will be included into this index. If this clause is omitted, all keys of the correct type will be included. A zero-length prefix would also match all keys of the correct type.
-    
-### Field types
-    
-**TAG**: A tag field is a string that contains one or more tag values.  
-      
-- **SEPARATOR \<sep\>** (optional): One of these characters `,.<>{}[]"':;!@#$%^&*()-+=~` used to delimit individual tags. If omitted the default value is `,`.  
+- **ON HASH | JSON** (optional): Only keys that match the specified type are included into this index. If omitted, HASH is assumed.
+
+- **PREFIX \<prefix-count\> \<prefix\>** (optional): If this clause is specified, then only keys that begin with the same bytes as one or more of the specified prefixes will be included into this index. If this clause is omitted, all keys of the correct type will be included. A zero-length prefix would also match all keys of the correct type and is the default value.
+
+- **LANGUAGE <language>** (optional): For text fields, the language used to control lexical parsing and stemming. Currently only the value `ENGLISH` is supported.
+
+- **MINSTEMSIZE \<min_stem_size\>** (optional): For text fields with stemming enabled. This controls the minimum length of a word before it is subjected to stemming. The default value is <?>.
+
+- **SKIPINITIALSCAN** (optional): If specific, this option skips the normal backfill operation for an index. If this option is specified, pre-existing keys which match the `PREFIX` clause will not be loaded into the index during a backfill operation. This clause has no effect on processing of key mutations _after_ an index is created, i.e., keys which are mutated after an index is created and satisfy the data type and `PREFIX` clause will be inserted into that index.
+
+## Fields
+
+The `SCHEMA` keyword identifies the start of the field declarations. Each field has a path, a name and a data type. Some data types allow additional information to be supplied to further refine the definition of the index for that field.
+
+- **\<field-path\>** (required): This specifies the location of the data for the field with the key. For `HASH` indexes, the location is just the member name. For `JSON` indexes, it is the full JSON Path to the data. See <??? TBD> for a description of the allowed subset of JSON path.
+
+- **\<field-name\>** (optional for `HASH` indexes, required for `JSON` indexes): This specifies the name used to refer to this field within the search module, e.g., it is used in the query and aggregation expression context to refer to this field of a key. For `JSON` indexes, this must be supplied. Field names are syntactically restricted <??? TBD>.
+
+- **\<field-type\>** (Required): This contains one of `NUMERIC`, `TAG`, `TEXT`, or `VECTOR`. Type-specific declarations may follow this field. Some types require additional declarations, others do not, see below for type-specific declarators.
+
+- **SORTABLE** (optional): This parameter is currently ignored as all field types are considered to be sortable
+
+### Tag Field Specific Declarators
+
+- **SEPARATOR \<sep\>** (optional): One of these characters `,.<>{}[]"':;!@#$%^&*()-+=~` used to delimit individual tags. If omitted the default value is `,`.
 - **CASESENSITIVE** (optional): If present, tag comparisons will be case-sensitive. The default is that tag comparisons are NOT case-sensitive
 
-**NUMERIC**: A numeric field contains a number.  
-      
-**VECTOR**: A vector field contains a vector. Two vector indexing algorithms are currently supported: HNSW (Hierarchical Navigable Small World) and FLAT (brute force). Each algorithm has a set of additional attributes, some required and other optional.  
-      
-- **FLAT:** The Flat algorithm provides exact answers, but has runtime proportional to the number of indexed vectors and thus may not be appropriate for large data sets.  
-  - **DIM \<number\>** (required): Specifies the number of dimensions in a vector.  
-  - **TYPE FLOAT32** (required): Data type, currently only FLOAT32 is supported.  
-  - **DISTANCE\_METRIC \[L2 | IP | COSINE\]** (required): Specifies the distance algorithm  
-  - **INITIAL\_CAP \<size\>** (optional): Initial index size.  
-- **HNSW:** The HNSW algorithm provides approximate answers, but operates substantially faster than FLAT.  
-  - **DIM \<number\>** (required): Specifies the number of dimensions in a vector.  
-  - **TYPE FLOAT32** (required): Data type, currently only FLOAT32 is supported.  
-  - **DISTANCE\_METRIC \[L2 | IP | COSINE\]** (required): Specifies the distance algorithm  
-  - **INITIAL\_CAP \<size\>** (optional): Initial index size.  
-  - **M \<number\>** (optional): Number of maximum allowed outgoing edges for each node in the graph in each layer. on layer zero the maximal number of outgoing edges will be 2\*M. Default is 16, the maximum is 512\.  
-  - **EF\_CONSTRUCTION \<number\>** (optional): controls the number of vectors examined during index construction. Higher values for this parameter will improve recall ratio at the expense of longer index creation times. The default value is 200\. Maximum value is 4096\.  
-  - **EF\_RUNTIME \<number\>** (optional):  controls  the number of vectors to be examined during a query operation. The default is 10, and the max is 4096\. You can set this parameter value for each query you run. Higher values increase query times, but improve query recall.
+### Text Field Specific Declarators
 
-### Field options
+- **PUNCTUATION \<punctuation\>** (optional): A string of characters that are used to define words in the text field.Punctuation characters are restricted to the characters: <?>. The default value is "<????>".
+- **WITHOFFSETS | NOOFFSETS** (optional): Enables/Disables the retention of per-word offsets within a text field. Offsets are required to perform exact phrase matching and slop-based proximity matching. Thus if offsets are disabled, those query operations will be rejected with an error. The default is `WITHOFFSETS`.
+- **NOSTOPWORDS | STOPWORDS \<count\> \<word1\> \<word2\>...** (optional): Stop words are not words which are not put into the indexes. The default value of `STOPWORDS` is language dependent. For `LANGUAGE ENGLISH` the default is: <?>.
+- **NOSTEM** (optional): If specified, stemming of words on ingestion is disabled.
+- **WITHSUFFIXTRIE | NOSUFFIXTRIE** (optional): Enables/Disables the use of a suffix trie to implement suffix-based wildcard queries. If `NOSUFFIXTRIE` is specified, query strings which specify suffix-based wildcard matching will be rejected with an error. The default is `WITHSUFFIXTRIE`.
 
-**SORTABLE**: This parameter is currently ignored as all field types are considered to be sortable
+### Vector Field Specific Declarators
 
-**RESPONSE** OK or error.
+- **FLAT:** The Flat algorithm provides exact answers, but has runtime proportional to the number of indexed vectors and thus may not be appropriate for large data sets.
+  - **DIM \<number\>** (required): Specifies the number of dimensions in a vector.
+  - **TYPE FLOAT32** (required): Data type, currently only FLOAT32 is supported.
+  - **DISTANCE_METRIC \[L2 | IP | COSINE\]** (required): Specifies the distance algorithm
+  - **INITIAL_CAP \<size\>** (optional): Initial index size.
+- **HNSW:** The HNSW algorithm provides approximate answers, but operates substantially faster than FLAT.
+  - **DIM \<number\>** (required): Specifies the number of dimensions in a vector.
+  - **TYPE FLOAT32** (required): Data type, currently only FLOAT32 is supported.
+  - **DISTANCE_METRIC \[L2 | IP | COSINE\]** (required): Specifies the distance algorithm
+  - **INITIAL_CAP \<size\>** (optional): Initial index size.
+  - **M \<number\>** (optional): Number of maximum allowed outgoing edges for each node in the graph in each layer. on layer zero the maximal number of outgoing edges will be 2\*M. Default is 16, the maximum is 512\.
+  - **EF_CONSTRUCTION \<number\>** (optional): controls the number of vectors examined during index construction. Higher values for this parameter will improve recall ratio at the expense of longer index creation times. The default value is 200\. Maximum value is 4096\.
+  - **EF_RUNTIME \<number\>** (optional): controls the number of vectors to be examined during a query operation. The default is 10, and the max is 4096\. You can set this parameter value for each query you run. Higher values increase query times, but improve query recall.
+
+**RESPONSE** OK or Error.
+
+An OK response indicates that the index has been successfully created in an empty state and is immediately available for operations. If SKIPINITIALSCAN was not specified, then a backfill operation is started.
+
+A first class of errors is directly associated with the command itself, for example a syntax error or an attempt to create an index with a name which already exists.
+
+In CME a second class of errors is related to a failure to properly distribute the command across all of the nodes of the cluster.
 
 ## FT.DROPINDEX
+
 ```
 FT.DROPINDEX <index-name>
 ```
@@ -80,62 +156,94 @@ The specified index is deleted. It is an error if that index doesn't exist.
 **RESPONSE** OK or error.
 
 ## FT.INFO
-```
-FT.INFO <index-name> <info-scope> <partition-control> <consistency-control>
-```
 
-Detailed information about the specified index is returned.
+### CMD Mode
+
+When cluster mode is disable, information about the specified index is returned from the executing node:
+
+```
+FT.INFO <index-name>
+```
 
 - **\<index-name\>** (required): The name of the index to return information about.
-- **\<info-scope\>** (optional): LOCAL, PRIMARY or CLUSTER. The scope to return the information about. LOCAL returns information only from local node. PRIMARY returns information from all primary nodes. CLUSTER returns information from all primary and replica nodes. Default is LOCAL.
-- **\<partition-control\>** (optional): ALLSHARDS or SOMESHARDS. Returns information only if all shards respond in ALLSHARDS mode. Returns information regardless of how many shards respond in SOMESHARDS mode. Default to ALLSHARDS.
-- **\<consistency-control\>** (optional): CONSISTENT or INCONSISTENT. Returns information only if the cluster is consistent in CONSISTENT mode. Returns information regardless of consistency in INCONSISTENT mode. Default to CONSISTENT.
+
+### CME Mode
+
+When cluster mode is enabled, additional options are available to direct the executing node to contact other nodes in the cluster to generate aggregated index information. Operations which require responses from other nodes create additional complexity. Two situations additional situations are handled.
+
+First, if a response from a designed node is not received within a fixed time window the `FT.INFO` operation still completes. Typically this is due to either a network partition or a node failure. Options are provided to control whether this is considered an error or whether a best-effort result should be returned (no error).
+
+Second, because index metadata is eventually consistent (see [? metadata consistency protocol] for more information) it's possible that a contacted node generates a response but from a different version of the index. This situation is detected and the query is repeated until either a consistent response is obtained or a time window has expired. Options are provided to control whether this command is complete with an error or a result generated only from the consistent responses should be returned (no error).
+
+```
+FT.INFO <index-name>
+  (
+      [LOCAL | PRIMARY | CLUSTER]
+    | [ALLSHARDS | SOMESHARDS]
+    | [CONSISTENT INCONSISTENT]
+  )+
+```
+
+- **LOCAL** (optional): Only the executing (local) node contributes index information. No other nodes in the cluster are contacted to generate index information. This is the default.
+- **PRIMARY** (optional): The primary nodes of every shard in the cluster are queried to generate index information.
+- **CLUSTER** (optional): All nodes, primary or replica, are queried to generate index information.
+
+- **ALLSHARDS** (optional): If specified, a response is required from every shard in the system. If all responses are not received within a time window the command is terminated with an error. This is the default.
+- **SOMESHARDS** (optional): If specified, a response is NOT required from every shard in the system. If all responses are not received within the time window, only the received responses are returned and no error is generated.
+
+- **CONSISTENT** (optional): If specified, the command is terminated with an error if any received response isn't from a consistent version of the index. This is the default.
+- **INCONSISTENT** (optional): If specified, a command result is generated using only the responses from nodes with a consistent version of the index.
 
 **RESPONSE**
 
 LOCAL: An array of key value pairs.
 
-- **index\_name**	(string)	The index name  
-- **num\_docs**	(integer)	Total keys in the index  
-- **num\_records**	(integer)	Total records in the index  
-- **hash\_indexing\_failures**	(integer)	Count of unsuccessful indexing attempts  
-- **indexing**	(integer)	Binary value. Shows if background indexing is running or not  
-- **percent\_indexed**	(integer)	Progress of background indexing. Percentage is expressed as a value from 0 to 1  
-- **index\_definition**	(array)	An array of values defining the index  
-  - **key\_type**	(string)	HASH. This is the only available key type.  
-  - **prefixes**	(array of strings)	Prefixes for keys  
-  - **default\_score**	(integer) This is the default scoring value for the vector search scoring function, which is used for sorting.  
-  - **attributes**	(array)	One array of entries for each field defined in the index.  
-    - **identifier**	(string)	field name  
-    - **attribute**	(string)	An index field. This is correlated to a specific index HASH field.  
-    - **type**	(string)	VECTOR. This is the only available type.  
-    - **index**	(array)	Extended information about this internal index for this field.  
-      - **capacity**	(integer)	The current capacity for the total number of vectors that the index can store.  
-      - **dimensions**	(integer)	Dimension count  
-      - **distance\_metric**	(string)	Possible values are L2, IP or Cosine  
-      - **data\_type**	(string)	FLOAT32. This is the only available data type  
-      - **algorithm**	(array)	Information about the algorithm for this field.  
-        - **name**	(string)	HNSW or FLAT  
-        - **m**	(integer)	The count of maximum permitted outgoing edges for each node in the graph in each layer. The maximum number of outgoing edges is 2\*M for layer 0\. The Default is 16\. The maximum is 512\.  
-        - **ef\_construction**	(integer)	The count of vectors in the index. The default is 200, and the max is 4096\. Higher values increase the time needed to create indexes, but improve the recall ratio.  
-        - **ef\_runtime**	(integer)	The count of vectors to be examined during a query operation. The default is 10, and the max is 4096\.
+- **index_name** (string) The index name
+- **num_docs** (integer) Total keys in the index
+- **num_records** (integer) Total records in the index
+- **hash_indexing_failures** (integer) Count of unsuccessful indexing attempts
+- **indexing** (integer) Shows if background indexing is running(1) or not(0).
+- **percent_indexed** (integer) Progress of background indexing. Percentage is expressed as a value from 0 to 1
+- [?] LANGUAGE, MINSTEMSIZE, SKIPINITIALSCAN ??? [?]
+- **index_definition** (array) An array of key/value pairs defining the index
+  - **key_type** (string) `HASH` or `JSON`.
+  - **prefixes** (array of strings) Prefixes for keys. If no prefixes were specified this will be a 0-length array.
+  - **default_score** (integer) This is the default scoring value.
+  - **attributes** (array of key/value pairs) Each declared field occupies one element of the array. The key/value pairs of the array define that field.
+    - **identifier** (string). The location with the key for this field. For HASH indexes this is the member name. For JSON indexes this is the JSON path.
+    - **attribute** (string) The name used to refer to this index in query and aggregation expressions. When the `AS` keyword is provided this is the
+    - **type** (string) VECTOR. This is the only available type. [???????]
+    - **index** (array of key/value pairs) Extended information about this
+
+    - **capacity** (integer) The current capacity for the total number of vectors that the index can store.
+    - **dimensions** (integer) Dimension count
+    - **distance_metric** (string) Possible values are L2, IP or Cosine
+    - **data_type** (string) FLOAT32. This is the only available data type
+    - **algorithm** (array) Information about the algorithm for this field.
+      - **name** (string) `HNSW` or `FLAT`
+      - **m** (integer) The count of maximum permitted outgoing edges for each node in the graph in each layer. The maximum number of outgoing edges is 2\*M for layer 0\. The Default is 16\. The maximum is 512\.
+      - **ef_construction** (integer) The count of vectors in the index. The default is 200, and the max is 4096\. Higher values increase the time needed to create indexes, but improve the recall ratio.
+      - **ef_runtime** (integer) The count of vectors to be examined during a query operation. The default is 10, and the max is 4096\.
 
 PRIMARY: An array of key value pairs
-- **mode**	(string) The FT.INFO mode, should be PRIMARY
-- **index\_name**	(string)	The index name
-- **num\_docs**	(string)	INTEGER. Total keys in the index
-- **num\_records**	(string) INTEGER.	Total records in the index  
-- **hash\_indexing\_failures**	(string) INTEGER. Count of unsuccessful indexing attempts  
+
+- **mode** (string) The FT.INFO mode, should be PRIMARY
+- **index_name** (string) The index name
+- **num_docs** (string) INTEGER. Total keys in the index
+- **num_records** (string) INTEGER. Total records in the index
+- **hash_indexing_failures** (string) INTEGER. Count of unsuccessful indexing attempts
 
 CLUSTER: An array of key value pairs
-- **mode**	(string) The FT.INFO mode, should be CLUSTER
-- **index\_name**	(string) The index name
-- **backfill\_in\_progress**	(string) 0 or 1. Is backfill in progress
-- **backfill\_complete\_percent\_max**	(string) FLOAT32. Maximum backfill complete percent in all nodes
-- **backfill\_complete\_percent\_min**	(string) FLOAT32. Minimum backfill complete percent in all nodes  
-- **state**	(string) The current state of the index. ready, backfill_in_progress or backfill_paused_by_oom 
 
-## FT._LIST
+- **mode** (string) The FT.INFO mode, should be CLUSTER
+- **index_name** (string) The index name
+- **backfill_in_progress** (string) 0 or 1. Is backfill in progress
+- **backfill_complete_percent_max** (string) FLOAT32. Maximum backfill complete percent in all nodes
+- **backfill_complete_percent_min** (string) FLOAT32. Minimum backfill complete percent in all nodes
+- **state** (string) The current state of the index. ready, backfill_in_progress or backfill_paused_by_oom
+
+## FT.\_LIST
+
 ```
 FT._LIST
 ```
@@ -147,32 +255,33 @@ Lists the currently defined indexes.
 An array of strings which are the currently defined index names.
 
 ## FT.SEARCH
+
 ```
 FT.SEARCH <index> <query>
   [NOCONTENT]
   [TIMEOUT <timeout>]
-  [PARAMS nargs <name> <value> [ <name> <value> ...]]
+  [PARAMS <count> <name> <value> [ <name> <value> ...]]
   [LIMIT <offset> <num>]
   [DIALECT <dialect>]
 ```
 
 Performs a search of the specified index. The keys which match the query expression are returned.
 
-- **\<index\>** (required): This index name you want to query.  
-- **\<query\>** (required): The query string, see below for details.  
-- **NOCONTENT** (optional): When present, only the resulting key names are returned, no key values are included.  
-- **TIMEOUT \<timeout\>** (optional): Lets you set a timeout value for the search command. This must be an integer in milliseconds.  
+- **\<index\>** (required): This index name you want to query.
+- **\<query\>** (required): The query string, see below for details.
+- **NOCONTENT** (optional): When present, only the resulting key names are returned, no key values are included.
+- **TIMEOUT \<timeout\>** (optional): Lets you set a timeout value for the search command. This must be an integer in milliseconds.
 - **PARAMS \<count\> \<name1\> \<value1\> \<name2\> \<value2\> ...** (optional): `count` is of the number of arguments, i.e., twice the number of value name pairs. See the query string for usage details.
 - **RETURN \<count\> \<field1\> \<field2\> ...** (options): `count` is the number of fields to return. Specifies the fields you want to retrieve from your documents, along with any aliases for the returned values. By default, all fields are returned unless the NOCONTENT option is set, in which case no fields are returned. If num is set to 0, it behaves the same as NOCONTENT.
-- **LIMIT \<offset\> \<count\>** (optional): Lets you choose a portion of the result. The first `<offset>` keys are skipped and only a maximum of `<count>` keys are included. The default is LIMIT 0 10, which returns at most 10 keys.  
+- **LIMIT \<offset\> \<count\>** (optional): Lets you choose a portion of the result. The first `<offset>` keys are skipped and only a maximum of `<count>` keys are included. The default is LIMIT 0 10, which returns at most 10 keys.
 - **DIALECT \<dialect\>** (optional): Specifies your dialect. The only supported dialect is 2\.
 
 **RESPONSE**
 
 The command returns either an array if successful or an error.
 
-On success, the first entry in the response array represents the count of matching keys, followed by one array entry for each matching key. 
-Note that if  the `LIMIT` option is specified it will only control the number of returned keys and will not affect the value of the first entry.
+On success, the first entry in the response array represents the count of matching keys, followed by one array entry for each matching key.
+Note that if the `LIMIT` option is specified it will only control the number of returned keys and will not affect the value of the first entry.
 
 When `NOCONTENT` is specified, each entry in the response contains only the matching keyname. Otherwise, each entry includes the matching keyname, followed by an array of the returned fields.
 
@@ -187,9 +296,9 @@ The query string conforms to this syntax:
 Where:
 
 - **\<filtering\>** Is either a `*` or a filter expression. A `*` indicates no filtering and thus all vectors within the index are searched. A filter expression can be provided to designate a subset of the vectors to be searched.
-- **\<vector\_field\_name\>** The name of a vector field within the specified index.  
-- **\<K\>** The number of nearest neighbor vectors to return.  
-- **\<vector\_parameter\_name\>** A PARAM name whose corresponding value provides the query vector for the KNN algorithm. Note that this parameter must be encoded as a 32-bit IEEE 754 binary floating point in little-endian format.  
+- **\<vector_field_name\>** The name of a vector field within the specified index.
+- **\<K\>** The number of nearest neighbor vectors to return.
+- **\<vector_parameter_name\>** A PARAM name whose corresponding value provides the query vector for the KNN algorithm. Note that this parameter must be encoded as a 32-bit IEEE 754 binary floating point in little-endian format.
 - **\<query-modifiers\>** (Optional) A list of keyword/value pairs that modify this particular KNN search. Currently two keywords are supported:
   - **EF_RUNTIME** This keyword is accompanied by an integer value which overrides the default value of **EF_RUNTIME** specified when the index was created.
   - **AS** This keyword is accompanied by a string value which becomes the name of the score field in the result, overriding the default score field name generation algorithm.

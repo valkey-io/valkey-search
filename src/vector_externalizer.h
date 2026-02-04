@@ -69,13 +69,6 @@ class VectorExternalizer {
   vmsdk::MainThreadAccessGuard<Stats> stats_;
 };
 
-template <typename T>
-void CopyAndDenormalizeEmbedding(T* dst, T* src, size_t size, float magnitude) {
-  for (size_t i = 0; i < size; i++) {
-    dst[i] = src[i] * magnitude;
-  }
-}
-
 };  // namespace valkey_search
 
 #endif  // VALKEYSEARCH_SRC_VECTOR_EXTERNALIZER_H_

@@ -53,7 +53,8 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
-constexpr float kDefaultMagnitude = -1.0f;
+constexpr float kDefaultMagnitude = -2.0f;
+constexpr float kOldDefaultMagnitude = -1.0f;
 
 namespace {
 
@@ -141,7 +142,7 @@ void VectorBase::SetMagnitude(absl::string_view record) const {
   }
   CHECK(GetVectorDataSize() == record.size() - sizeof(float) - 1);
   float *magnitude = GetMagnitudePtr(record);
-  if (*magnitude != kDefaultMagnitude) {
+  if (*magnitude != kDefaultMagnitude && *magnitude != kOldDefaultMagnitude) {
     return;
   }
   *magnitude =
@@ -393,11 +394,7 @@ absl::Status VectorBase::SaveTrackedKeys(
     metadata_pb.set_key(key->Str());
     metadata_pb.set_internal_id(metadata.internal_id);
 
-    auto it = tracked_metadata_by_key_.find(key);
-    CHECK(it != tracked_metadata_by_key_.end());
-    char *value = *GetValueImpl(it->second.internal_id);
-    float *magnitude_ptr = (float *)(value + GetVectorDataSize());
-    metadata_pb.set_magnitude(*magnitude_ptr);
+    metadata_pb.set_magnitude(kDefaultMagnitude);
 
     auto metadata_pb_str = metadata_pb.SerializeAsString();
     VMSDK_RETURN_IF_ERROR(
@@ -424,10 +421,23 @@ InternedStringPtr VectorBase::LoadRecordAsVector(
   return InternVector(vmsdk::ToStringView(record.value().get()));
 }
 
+std::vector<char> DenormalizeVector(absl::string_view record, float magnitude) {
+  std::vector<char> ret(record.size());
+
+  float *src = (float *)record.data();
+  float *dst = (float *)ret.data();
+  size_t size = record.size() / sizeof(float);
+  for (size_t i = 0; i < size; i++) {
+    dst[i] = src[i] * magnitude;
+  }
+  return ret;
+}
+
 absl::Status VectorBase::LoadTrackedKeys(
     ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
     SupplementalContentChunkIter &&iter) {
   absl::WriterMutexLock lock(&key_to_metadata_mutex_);
+  CHECK(GetDataTypeSize() == sizeof(float));
   while (iter.HasNext()) {
     VMSDK_ASSIGN_OR_RETURN(auto metadata_str, iter.Next(),
                            _ << "Error loading metadata");
@@ -442,10 +452,17 @@ absl::Status VectorBase::LoadTrackedKeys(
         {tracked_key_metadata.internal_id(), interned_key});
     inc_id_ = std::max(
         inc_id_, static_cast<uint64_t>(tracked_key_metadata.internal_id()));
-    if (normalize_ && tracked_key_metadata.magnitude() != kDefaultMagnitude) {
-      auto vec =
+    if (normalize_ && tracked_key_metadata.magnitude() != kDefaultMagnitude &&
+        tracked_key_metadata.magnitude() != kOldDefaultMagnitude) {
+      auto load_vec =
           LoadRecordAsVector(ctx, attribute_data_type,
                              tracked_key_metadata.key(), attribute_identifier_);
+      auto vec_denormalized = DenormalizeVector(
+          absl::string_view(load_vec->Str().data(),
+                            load_vec->Str().size() - GetDataTypeSize() - 1),
+          tracked_key_metadata.magnitude());
+      auto vec = InternVector(
+          absl::string_view(vec_denormalized.data(), vec_denormalized.size()));
       CHECK(vec);
       TrackVector(tracked_key_metadata.internal_id(), vec);
       VectorExternalizer::Instance().Externalize(

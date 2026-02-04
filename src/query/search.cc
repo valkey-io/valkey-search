@@ -203,15 +203,18 @@ BuildTextIterator(const Predicate *predicate, bool negate,
                           indexes::text::kProximityTermsInlineCapacity>
           iterators;
       size_t total_size = 0;
+      bool has_non_text = false;
       for (const auto &child : composed_predicate->GetChildren()) {
         auto [iter, size] =
             BuildTextIterator(child.get(), negate, child_require_positions);
         if (iter) {
           iterators.push_back(std::move(iter));
           total_size += size;
+        } else {
+          has_non_text = true;
         }
       }
-      if (iterators.empty()) return {nullptr, 0};
+      if (iterators.empty() || has_non_text) return {nullptr, 0};
       return {std::make_unique<indexes::text::OrProximityIterator>(
                   std::move(iterators), nullptr),
               total_size};

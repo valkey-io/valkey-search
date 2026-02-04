@@ -105,7 +105,7 @@ std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
 
 namespace valkey_search::query {
 
-void* TextPredicate::Search(bool negate) const {
+void *TextPredicate::Search(bool negate) const {
   size_t estimated_size = EstimateSize();
   // We do not perform positional checks on the initial term/prefix/suffix/fuzzy
   // predicate fetchers from the entries fetcher search.

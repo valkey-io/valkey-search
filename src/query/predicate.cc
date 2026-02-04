@@ -420,7 +420,7 @@ EvaluationResult EvaluatePredicate(const Predicate *predicate,
 // For text predicates with proximity constraints (slop/inorder), creates
 // ProximityIterator to validate term positions meet distance and order
 // requirements.
-EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
+EvaluationResult ComposedPredicate::Evaluate(Evaluator &evaluator) const {
   // Determine if children need to return positions for proximity checks.
   bool require_positions = slop_.has_value() || inorder_;
   // Handle AND logic
@@ -430,7 +430,7 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
     absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
                         indexes::text::kProximityTermsInlineCapacity>
         iterators;
-    for (const auto& child : children_) {
+    for (const auto &child : children_) {
       // In AND: skip text children when in prefilter evaluation because text in
       // AND is fully (recursively) resolved in the entries fetcher layer
       // already.

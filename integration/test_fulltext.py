@@ -1894,7 +1894,22 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         result = client.execute_command("FT.SEARCH", "idx", "((cat slow) | (quick brown) | @price:[1000 2000])", "DIALECT", "2")
         assert result[0] == 3
         assert set(result[1::2]) == {b"hash:00", b"hash:03", b"hash:02"}
-
+        # This is an important case where the text on its own would fail, but the query matches a document when the
+        # OR uses the numeric predicate for evaluation
+        result = client.execute_command("FT.SEARCH", "idx", "cat (dog | @price:[10 30]) shark", "DIALECT", "2", "INORDER")
+        assert result[0] == 1
+        assert result[1] == b"hash:00"
+        # Verification of failure: Change price range so Numeric1 fails too
+        result = client.execute_command("FT.SEARCH", "idx", "cat (dog | @price:[100 200]) shark", "DIALECT", "2")
+        assert result[0] == 0
+        result = client.execute_command("FT.SEARCH", "idx", "cat (dog | (slow @price:[10 30])) shark", "DIALECT", "2", "INORDER")
+        assert result[0] == 1
+        assert result[1] == b"hash:00"
+        query = "@price:[500 600] | (@price:[0 100] (@price:[99 100] | (@price:[10 40] (cat slow shark @price:[20 25]))))"
+        result = client.execute_command("FT.SEARCH", "idx", query, "DIALECT", "2", "INORDER")
+        # Matches hash:00 because the deep text-numeric leaf is true and bubbles up through the OR/AND gates
+        assert result[0] == 1
+        assert result[1] == b"hash:00"
 
 class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
     """

@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: unittests-${{ github.head_ref || github.ref }}
+  group: unittests-macos-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 jobs:

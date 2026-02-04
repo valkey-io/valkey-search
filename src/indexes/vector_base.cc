@@ -454,7 +454,6 @@ absl::Status VectorBase::LoadTrackedKeys(
       char **value = GetValueImpl(tracked_key_metadata.internal_id());
       *value = (char *)vec->Str().data();
     }
-    // TODO: handle normalized vectors
   }
   ++inc_id_;
   return absl::OkStatus();

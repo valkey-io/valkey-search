@@ -451,7 +451,7 @@ absl::Status PreParseQueryString(query::SearchParameters &parameters) {
   // Increment operation-type metrics
   IncrementQueryOperationMetrics(
       parameters.filter_parse_results.query_operations);
-  
+
   return absl::OkStatus();
 }
 

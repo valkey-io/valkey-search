@@ -121,19 +121,28 @@ The `SCHEMA` keyword identifies the start of the field declarations. Each field 
 
 ### Vector Field Specific Declarators
 
-- **FLAT:** The Flat algorithm provides exact answers, but has runtime proportional to the number of indexed vectors and thus may not be appropriate for large data sets.
-  - **DIM \<number\>** (required): Specifies the number of dimensions in a vector.
-  - **TYPE FLOAT32** (required): Data type, currently only FLOAT32 is supported.
-  - **DISTANCE_METRIC \[L2 | IP | COSINE\]** (required): Specifies the distance algorithm
-  - **INITIAL_CAP \<size\>** (optional): Initial index size.
-- **HNSW:** The HNSW algorithm provides approximate answers, but operates substantially faster than FLAT.
-  - **DIM \<number\>** (required): Specifies the number of dimensions in a vector.
-  - **TYPE FLOAT32** (required): Data type, currently only FLOAT32 is supported.
-  - **DISTANCE_METRIC \[L2 | IP | COSINE\]** (required): Specifies the distance algorithm
-  - **INITIAL_CAP \<size\>** (optional): Initial index size.
-  - **M \<number\>** (optional): Number of maximum allowed outgoing edges for each node in the graph in each layer. on layer zero the maximal number of outgoing edges will be 2\*M. Default is 16, the maximum is 512\.
-  - **EF_CONSTRUCTION \<number\>** (optional): controls the number of vectors examined during index construction. Higher values for this parameter will improve recall ratio at the expense of longer index creation times. The default value is 200\. Maximum value is 4096\.
-  - **EF_RUNTIME \<number\>** (optional): controls the number of vectors to be examined during a query operation. The default is 10, and the max is 4096\. You can set this parameter value for each query you run. Higher values increase query times, but improve query recall.
+The `VECTOR` field type must be followed by a vector index algorithm name. Two algorithms are currently supported: `FLAT` and `HNSW`. They have different declarators as below.
+
+#### Flat Vector Field Declarators
+
+The Flat algorithm provides exact answers, but has runtime proportional to the number of indexed vectors and thus may not be appropriate for large data sets.
+
+- **DIM \<number\>** (required): Specifies the number of dimensions in a vector.
+- **TYPE FLOAT32** (required): Data type, currently only FLOAT32 is supported.
+- **DISTANCE_METRIC \[L2 | IP | COSINE\]** (required): Specifies the distance algorithm
+- **INITIAL_CAP \<size\>** (optional): Initial index size.
+
+#### HNSW Vector Field Declarators
+
+The HNSW algorithm provides approximate answers, but operates substantially faster than FLAT and is appropriate for large data sets.
+
+- **DIM \<number\>** (required): Specifies the number of dimensions in a vector.
+- **TYPE FLOAT32** (required): Data type, currently only FLOAT32 is supported.
+- **DISTANCE_METRIC \[L2 | IP | COSINE\]** (required): Specifies the distance algorithm
+- **INITIAL_CAP \<size\>** (optional): Initial index size.
+- **M \<number\>** (optional): Number of maximum allowed outgoing edges for each node in the graph in each layer. on layer zero the maximal number of outgoing edges will be 2\*M. Default is 16, the maximum is 512\.
+- **EF_CONSTRUCTION \<number\>** (optional): controls the number of vectors examined during index construction. Higher values for this parameter will improve recall ratio at the expense of longer index creation times. The default value is 200\. Maximum value is 4096\.
+- **EF_RUNTIME \<number\>** (optional): controls the number of vectors to be examined during a query operation. The default is 10, and the max is 4096\. You can set this parameter value for each query you run. Higher values increase query times, but improve query recall.
 
 **RESPONSE** OK or Error.
 
@@ -145,7 +154,7 @@ In CME a second class of errors is related to a failure to properly distribute t
 
 ## FT.DROPINDEX
 
-```
+```bash
 FT.DROPINDEX <index-name>
 ```
 
@@ -153,7 +162,13 @@ The specified index is deleted. It is an error if that index doesn't exist.
 
 - **\<index-name\>** (required): The name of the index to delete.
 
-**RESPONSE** OK or error.
+**RESPONSE** OK or Error.
+
+An OK response indicates that the index has been successfully deleted.
+
+A first class of errors is directly associated with the command itself, for example a syntax error or an attempt to delete a non-existant index.
+
+In CME a second class of errors is related to a failure to properly distribute the deletion across all of the nodes of the cluster.
 
 ## FT.INFO
 
@@ -161,7 +176,7 @@ The specified index is deleted. It is an error if that index doesn't exist.
 
 When cluster mode is disable, information about the specified index is returned from the executing node:
 
-```
+```bash
 FT.INFO <index-name>
 ```
 
@@ -169,13 +184,18 @@ FT.INFO <index-name>
 
 ### CME Mode
 
-When cluster mode is enabled, additional options are available to direct the executing node to contact other nodes in the cluster to generate aggregated index information. Operations which require responses from other nodes create additional complexity. Two situations additional situations are handled.
+When cluster mode is enabled, additional options are available to direct the executing node to contact other nodes in the cluster to generate aggregated index information.
+Operations which require responses from other nodes create additional complexity. Two specific additional situations are handled.
 
-First, if a response from a designed node is not received within a fixed time window the `FT.INFO` operation still completes. Typically this is due to either a network partition or a node failure. Options are provided to control whether this is considered an error or whether a best-effort result should be returned (no error).
+First, if a response from a designated node is not received within a fixed time window the `FT.INFO` operation still completes.
+Typically this is due to either a network partition or a node failure.
+Options are provided to control whether this is considered an error or whether a best-effort result should be returned (no error).
 
-Second, because index metadata is eventually consistent (see [? metadata consistency protocol] for more information) it's possible that a contacted node generates a response but from a different version of the index. This situation is detected and the query is repeated until either a consistent response is obtained or a time window has expired. Options are provided to control whether this command is complete with an error or a result generated only from the consistent responses should be returned (no error).
+Second, because index metadata is eventually consistent (see [? metadata consistency protocol] for more information) it's possible that a contacted node generates a response but from a different version of the index.
+This situation is detected and the query is repeated until either a consistent response is obtained or a time window has expired.
+Options are provided to control whether this command is complete with an error or a result generated only from the consistent responses should be returned (no error).
 
-```
+```bash
 FT.INFO <index-name>
   (
       [LOCAL | PRIMARY | CLUSTER]
@@ -212,18 +232,39 @@ LOCAL: An array of key value pairs.
   - **attributes** (array of key/value pairs) Each declared field occupies one element of the array. The key/value pairs of the array define that field.
     - **identifier** (string). The location with the key for this field. For HASH indexes this is the member name. For JSON indexes this is the JSON path.
     - **attribute** (string) The name used to refer to this index in query and aggregation expressions. When the `AS` keyword is provided this is the
-    - **type** (string) VECTOR. This is the only available type. [???????]
-    - **index** (array of key/value pairs) Extended information about this
+    - **type** (string) Identifies the type of this field. One of `NUMERIC`, `TAG`, `TEXT` or `VECTOR`.
+    - **index** (array of key/value pairs) Extended information about this type of field.
 
-    - **capacity** (integer) The current capacity for the total number of vectors that the index can store.
-    - **dimensions** (integer) Dimension count
-    - **distance_metric** (string) Possible values are L2, IP or Cosine
-    - **data_type** (string) FLOAT32. This is the only available data type
-    - **algorithm** (array) Information about the algorithm for this field.
-      - **name** (string) `HNSW` or `FLAT`
-      - **m** (integer) The count of maximum permitted outgoing edges for each node in the graph in each layer. The maximum number of outgoing edges is 2\*M for layer 0\. The Default is 16\. The maximum is 512\.
-      - **ef_construction** (integer) The count of vectors in the index. The default is 200, and the max is 4096\. Higher values increase the time needed to create indexes, but improve the recall ratio.
-      - **ef_runtime** (integer) The count of vectors to be examined during a query operation. The default is 10, and the max is 4096\.
+### NUMERIC Field Type Extension
+
+[?]
+
+### TAG Field Type Extension
+
+[?]
+
+### TEXT Field Type Extension
+
+[?]
+
+### VECTOR Field Type Extension
+
+- **capacity** (integer) The current capacity for the total number of vectors that the index can store.
+- **dimensions** (integer) Dimension count
+- **distance_metric** (string) Possible values are `L2`, `IP` or `COSINE`
+- **data_type** (string) `FLOAT32`. This is the only available data type
+- **algorithm** (array of key/value pairs) Information about the algorithm for this field.
+
+#### FLAT VECTOR Field Type Extension.
+
+- **name** (string) `FLAT`.
+
+#### HNSW VECTOR Field Type Extension.
+
+- **name** (string) `HNSW`.
+- **m** (integer) The count of maximum permitted outgoing edges for each node in the graph in each layer. The maximum number of outgoing edges is 2\*M for layer 0\. The Default is 16\. The maximum is 512\.
+- **ef_construction** (integer) The count of vectors in the index. The default is 200, and the max is 4096\. Higher values increase the time needed to create indexes, but improve the recall ratio.
+- **ef_runtime** (integer) The count of vectors to be examined during a query operation. The default is 10, and the max is 4096\.
 
 PRIMARY: An array of key value pairs
 
@@ -240,11 +281,11 @@ CLUSTER: An array of key value pairs
 - **backfill_in_progress** (string) 0 or 1. Is backfill in progress
 - **backfill_complete_percent_max** (string) FLOAT32. Maximum backfill complete percent in all nodes
 - **backfill_complete_percent_min** (string) FLOAT32. Minimum backfill complete percent in all nodes
-- **state** (string) The current state of the index. ready, backfill_in_progress or backfill_paused_by_oom
+- **state** (string) The current state of the index, one of: `ready`, `backfill_in_progress` or `backfill_paused_by_oom`
 
 ## FT.\_LIST
 
-```
+```bash
 FT._LIST
 ```
 
@@ -256,13 +297,19 @@ An array of strings which are the currently defined index names.
 
 ## FT.SEARCH
 
-```
+```bash
 FT.SEARCH <index> <query>
   [NOCONTENT]
   [TIMEOUT <timeout>]
   [PARAMS <count> <name> <value> [ <name> <value> ...]]
   [LIMIT <offset> <num>]
+  [INORDER]
+  [SLOP <slop>]
   [DIALECT <dialect>]
+  [RETURN <count> <field1> [AS <property1>] <field2> [AS <property2>]...]
+  [SORTBY <field-name> [ ASC | DESC]]
+  [ALLSHARDS | SOMESHARDS]
+  [CONSISTENT | INCONSISTENT]
 ```
 
 Performs a search of the specified index. The keys which match the query expression are returned.
@@ -272,9 +319,14 @@ Performs a search of the specified index. The keys which match the query express
 - **NOCONTENT** (optional): When present, only the resulting key names are returned, no key values are included.
 - **TIMEOUT \<timeout\>** (optional): Lets you set a timeout value for the search command. This must be an integer in milliseconds.
 - **PARAMS \<count\> \<name1\> \<value1\> \<name2\> \<value2\> ...** (optional): `count` is of the number of arguments, i.e., twice the number of value name pairs. See the query string for usage details.
-- **RETURN \<count\> \<field1\> \<field2\> ...** (options): `count` is the number of fields to return. Specifies the fields you want to retrieve from your documents, along with any aliases for the returned values. By default, all fields are returned unless the NOCONTENT option is set, in which case no fields are returned. If num is set to 0, it behaves the same as NOCONTENT.
+- **RETURN \<count\> \<field1\> [AS \<name\>] \<field2\> [AS <name2>] ...** (options): `count` is the number of fields to return. Specifies the fields you want to retrieve from your documents, along with any aliases for the returned values. By default, all fields are returned unless the NOCONTENT option is set, in which case no fields are returned. If num is set to 0, it behaves the same as NOCONTENT.
 - **LIMIT \<offset\> \<count\>** (optional): Lets you choose a portion of the result. The first `<offset>` keys are skipped and only a maximum of `<count>` keys are included. The default is LIMIT 0 10, which returns at most 10 keys.
-- **DIALECT \<dialect\>** (optional): Specifies your dialect. The only supported dialect is 2\.
+- **DIALECT \<dialect\>** (optional): Specifies your dialect. The only supported dialect is 2.
+- **INORDER** (optional): Indicates that proximity matching of terms must be inorder.
+- **SLOP \<slop\>** (Optional): Specifies a slop value for proximity matching of terms.
+- **SORTBY \<field-name\> [ASC | DESC]** (Optional): If present, results are sorted according the value of the specified field and the optional sort-direction instruction. By default, vector results are sorted in distance order and non-vector results are not sorted in any particular order. Sorting is applied before the `LIMIT` clause is applied.
+- **ALLSHARDS** (Optional): If specified, the command is terminated with a timeout error if a valid response from all shards is not received within the timeout interval. This is the default.
+- **SOMESHARDS** (Optional): If specified, the command will generate a best-effort reply if all shards have not responded within the timeout interval. -**CONSISTENT** (Optional): If specified, the command is terminated with an error if the cluster is in an inconsistent state. This is the default. -**INCONSISTENT** (Optional): If specified, the command will generate a best-effort reply if the cluster remains inconsistent within the timeout interval.
 
 **RESPONSE**
 
@@ -286,121 +338,3 @@ Note that if the `LIMIT` option is specified it will only control the number of 
 When `NOCONTENT` is specified, each entry in the response contains only the matching keyname. Otherwise, each entry includes the matching keyname, followed by an array of the returned fields.
 
 The result fields for a key consists of a set of name/value pairs. The first name/value pair is for the distance computed. The name of this pair is constructed from the vector field name prepended with "\_\_" and appended with "\_score" and the value is the computed distance. The remaining name/value pairs are the members and values of the key as controlled by the `RETURN` clause.
-
-The query string conforms to this syntax:
-
-```
-<filtering>=>[ KNN <K> @<vector_field_name> $<vector_parameter_name> <query-modifiers> ]
-```
-
-Where:
-
-- **\<filtering\>** Is either a `*` or a filter expression. A `*` indicates no filtering and thus all vectors within the index are searched. A filter expression can be provided to designate a subset of the vectors to be searched.
-- **\<vector_field_name\>** The name of a vector field within the specified index.
-- **\<K\>** The number of nearest neighbor vectors to return.
-- **\<vector_parameter_name\>** A PARAM name whose corresponding value provides the query vector for the KNN algorithm. Note that this parameter must be encoded as a 32-bit IEEE 754 binary floating point in little-endian format.
-- **\<query-modifiers\>** (Optional) A list of keyword/value pairs that modify this particular KNN search. Currently two keywords are supported:
-  - **EF_RUNTIME** This keyword is accompanied by an integer value which overrides the default value of **EF_RUNTIME** specified when the index was created.
-  - **AS** This keyword is accompanied by a string value which becomes the name of the score field in the result, overriding the default score field name generation algorithm.
-
-**Filter Expression**
-
-A filter expression is constructed as a logical combination of Tag and Numeric search operators contained within parenthesis.
-
-**Tag**
-
-The tag search operator is specified with one or more strings separated by the `|` character. A key will satisfy the Tag search operator if the indicated field contains any one of the specified strings.
-
-```
-@<field_name>:{<tag>}
-or
-@<field_name>:{<tag1> | <tag2>}
-or
-@<field_name>:{<tag1> | <tag2> | ...}
-```
-
-For example, the following query will return documents with blue OR black OR green color.
-
-`@color:{blue | black | green}`
-
-As another example, the following query will return documents containing "hello world" or "hello universe"
-
-`@color:{hello world | hello universe}`
-
-**Numeric Range**
-
-Numeric range operator allows for filtering queries to only return values that are in between a given start and end value. Both inclusive and exclusive range queries are supported. For simple relational comparisons, \+inf, \-inf can be used with a range query.
-
-The syntax for a range search operator is:
-
-```
-@<field_name>:[ [(] <bound> [(] <bound>]
-```
-
-where \<bound\> is either a number or \+inf or \-inf
-
-Bounds without a leading open paren are inclusive, whereas bounds with the leading open paren are exclusive.
-
-Use the following table as a guide for mapping mathematical expressions to filtering queries:
-
-```
-min <= field <= max         @field:[min max]
-min < field <= max          @field:[(min max]
-min <= field < max	        @field:[min (max]
-min < field < max	        @field:[(min (max]
-field >= min	            @field:[min +inf]
-field > min	                @field:[(min +inf]
-field <= max	            @field:[-inf max]
-field < max	                @field:[-inf (max]
-field == val	            @field:[val val]
-```
-
-**Logical Operators**
-
-Multiple tags and numeric search operators can be used to construct complex queries using logical operators.
-
-**Logical AND**
-
-To set a logical AND, use a space between the predicates. For example:
-
-```
-query1 query2 query3
-```
-
-**Logical OR**
-
-To set a logical OR, use the `|` character between the predicates. For example:
-
-```
-query1 | query2 | query3
-```
-
-**Logical Negation**
-
-Any query can be negated by prepending the `-` character before each query. Negative queries return all entries that don't match the query. This also includes keys that don't have the field.
-
-For example, a negative query on @genre:{comedy} will return all books that are not comedy AND all books that don't have a genre field.
-
-The following query will return all books with "comedy" genre that are not published between 2015 and 2024, or that have no year field:
-
-@genre:\[comedy\] \-@year:\[2015 2024\]
-
-**Operator Precedence**
-
-Typical operator precedence rules apply, i.e., Logical negate is the highest priority, followed by Logical and then Logical Or with the lowest priority. Parenthesis can be used to override the default precedence rules.
-
-**Examples of Combining Logical Operators**
-
-Logical operators can be combined to form complex filter expressions.
-
-The following query will return all books with "comedy" or "horror" genre (AND) published between 2015 and 2024:
-
-`@genre:[comedy|horror] @year:[2015 2024]`
-
-The following query will return all books with "comedy" or "horror" genre (OR) published between 2015 and 2024:
-
-`@genre:[comedy|horror] | @year:[2015 2024]`
-
-The following query will return all books that either don't have a genre field, or have a genre field not equal to "comedy", that are published between 2015 and 2024:
-
-`-@genre:[comedy] @year:[2015 2024]`

@@ -2095,3 +2095,155 @@ class TestFullTextCluster(ValkeySearchClusterTestCaseDebugMode):
         # Validation of search queries:
         time.sleep(1)
         validate_fulltext_search(client)
+
+    def test_info_search_fulltext_metrics(self):
+        """Test info search for fulltext metrics in cluster mode"""
+        import struct
+        cluster_client: ValkeyCluster = self.new_cluster_client()
+        # Get all primary clients and enable dev metrics on all
+        all_clients = []
+        for i in range(self.CLUSTER_SIZE):
+            client = self.new_client_for_primary(i)
+            assert client.execute_command("CONFIG SET search.info-developer-visible yes") == b"OK"
+            all_clients.append(client)
+        # Use first primary for main assertions
+        client = all_clients[0]  
+        # Create index with all field types
+        client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "SCHEMA",
+            "content", "TEXT",
+            "price", "NUMERIC",
+            "tags", "TAG",
+            "vector", "VECTOR", "HNSW", "6", "TYPE", "FLOAT32", "DIM", "3", "DISTANCE_METRIC", "COSINE"
+        )
+        # Create second index with suffixtrie enabled for text
+        client.execute_command(
+            "FT.CREATE", "idx2", "ON", "HASH", "SCHEMA",
+            "content", "TEXT", "WITHSUFFIXTRIE",
+            "price", "NUMERIC",
+            "tags", "TAG",
+            "vector", "VECTOR", "HNSW", "6", "TYPE", "FLOAT32", "DIM", "3", "DISTANCE_METRIC", "COSINE"
+        )
+        # Wait for backfill on all shards
+        for index in ["idx", "idx2"]:
+            for c in all_clients:
+                IndexingTestHelper.wait_for_backfill_complete_on_node(c, index)
+        
+        # Validate initial fulltext memory metrics
+        assert int(client.info("search").get("search_used_text_memory_bytes", 0)) == 0
+        assert client.info("search").get("search_used_text_memory_human", 0) == 0
+        
+        # Insert 10 documents such that even numbered ones are pure text and others are non-text
+        for i in range(10):
+            vec = struct.pack("<3f", float(i), float(i+1), float(i+2))
+            if i % 2 == 0:
+                cluster_client.execute_command("HSET", f"doc:{i}", "content", f"document number {i}")
+            else:
+                cluster_client.execute_command(
+                    "HSET", f"doc:{i}",
+                    "price", str(100 + i * 10),
+                    "tags", f"tag{i}|category{i % 3}",
+                    "vector", vec
+                )
+        info_search = client.info("search")
+        # Validate memory metrics
+        ft_memory_fulldata = int(info_search.get("search_used_text_memory_bytes", 0))
+        is_san_build = os.environ.get('SAN_BUILD', 'no') != 'no'
+        if not is_san_build:
+            assert ft_memory_fulldata > 0
+            assert info_search.get("search_used_text_memory_human", 0) != 0
+        
+        # Validate attribute count metrics on ALL shards (schema should be replicated)
+        for i, c in enumerate(all_clients):
+            info = c.info("search")
+            total, text, tag, numeric, vector = [int(info.get(f"search_number_of_{t}attributes", 0)) for t in ["", "text_", "tag_", "numeric_", "vector_"]]
+            assert total == text + tag + numeric + vector == 8 and text == tag == numeric == vector == 2, \
+                f"Shard {i}: Attribute counts mismatch"
+
+        # Validate metrics after deletion of a record
+        client.execute_command("DEL", "doc:8")
+        info_search = client.info("search")
+        if not is_san_build:
+            assert 0 < int(info_search.get("search_used_text_memory_bytes", 0)) < ft_memory_fulldata
+        # QUERY METRICS
+        # Query1 Pure text query (non-vector with text)
+        client.execute_command("FT.SEARCH", "idx", 'document number', "RETURN", "1", "content")
+        # Query2 Pure tag query (non-vector without text)
+        client.execute_command("FT.SEARCH", "idx", "@tags:{tag1}")
+        # Query3 Pure numeric query with 2 numeric predicates (validates no overcounting - should count as 1 numeric query)
+        client.execute_command("FT.SEARCH", "idx", "(@price:[100 150]) (@price:[120 200])", "DIALECT", "2")
+        # Query4 Another text query but returns vector - no effect
+        client.execute_command("FT.SEARCH", "idx", 'number', "RETURN", "1", "vector")
+        # Query5 Pure vector query
+        vec_query = struct.pack("<3f", 1.0, 2.0, 3.0)
+        client.execute_command("FT.SEARCH", "idx", "*=>[KNN 5 @vector $BLOB]", "PARAMS", "2", "BLOB", vec_query, "DIALECT", "2")
+        # Query6 Hybrid query with all 4 aspects: vector + numeric + tag + text
+        client.execute_command("FT.SEARCH", "idx", "(@tags:{tag1}) (@price:[100 200]) (document)=>[KNN 5 @vector $BLOB]", "PARAMS", "2", "BLOB", vec_query, "DIALECT", "2")
+        # Query7 Non-vector query with tag + numeric + text (should count as both non-vector AND text)
+        client.execute_command("FT.SEARCH", "idx", "(@tags:{tag1}) (@price:[100 200]) (document)", "DIALECT", "2")
+        # Refresh info search on primary shard
+        info_search = client.info("search")
+        # existing metric
+        assert int(info_search.get("search_hybrid_requests_count", 0)) == 1  # Query 6
+        # new metrics
+        assert int(info_search.get("search_nonvector_requests_count", 0)) == 5  # Query 1,2,3,4,7
+        assert int(info_search.get("search_vector_requests_count", 0)) == 1  # Query 5
+        assert int(info_search.get("search_text_requests_count", 0)) == 4  # Query 1,4,6,7
+        assert int(info_search.get("search_query_numeric_count", 0)) == 3  # Queries 3,6,7
+        assert int(info_search.get("search_query_tag_count", 0)) == 3  # Queries 2,6,7
+        
+        # Query8: Text with prefix
+        client.execute_command("FT.SEARCH", "idx2", 'document*')
+        # Query9: Text with fuzzy
+        client.execute_command("FT.SEARCH", "idx2", '%documnt%')
+        # Query10: Text with exact phrase
+        client.execute_command("FT.SEARCH", "idx2", '"document number"')
+        # Query11: Text with suffix
+        client.execute_command("FT.SEARCH", "idx2", '*umber')
+        
+        # Refresh info search
+        info_search = client.info("search")
+        # Verify request counters
+        assert int(info_search.get("search_nonvector_requests_count", 0)) == 9
+        assert int(info_search.get("search_text_requests_count", 0)) == 8
+        # Verify query operation type counters
+        # Note: Query10 (exact phrase "document number") contains 2 terms but counts as 1 query.
+        # Metrics track "number of queries using each operation" not "number of predicates".
+        assert int(info_search.get("search_query_text_term_count", 0)) == 5
+        assert int(info_search.get("search_query_text_prefix_count", 0)) == 1
+        assert int(info_search.get("search_query_text_suffix_count", 0)) == 1
+        assert int(info_search.get("search_query_text_fuzzy_count", 0)) == 1
+        assert int(info_search.get("search_query_text_proximity_count", 0)) == 1
+        # Validate that query metrics in other shards of the cluster have not been incremented
+        for c in all_clients[1::]:
+            info_new = c.info("search")
+            # Verify request counters
+            assert int(info_new.get("search_nonvector_requests_count", 0)) == 0 
+            assert int(info_new.get("search_text_requests_count", 0)) == 0  
+            assert int(info_new.get("search_query_numeric_count", 0)) == 0 
+            assert int(info_new.get("search_query_tag_count", 0)) == 0 
+            # Verify query operation type counters
+            assert int(info_new.get("search_query_text_term_count", 0)) == 0
+            assert int(info_new.get("search_query_text_prefix_count", 0)) == 0
+            assert int(info_new.get("search_query_text_suffix_count", 0)) == 0
+            assert int(info_new.get("search_query_text_fuzzy_count", 0)) == 0
+            assert int(info_new.get("search_query_text_proximity_count", 0)) == 0
+
+        # Test coordinator fan-out: validate consistent metric increments across shards
+        initial_metrics = [{'text': int(c.info("search").get("search_text_requests_count", 0)),
+                           'nonvector': int(c.info("search").get("search_nonvector_requests_count", 0))}
+                          for c in all_clients]
+        # Use cluster_client to trigger coordinator fan-out
+        cluster_client.execute_command("FT.SEARCH", "idx", 'number 2', "RETURN", "1", "content")
+        # Validate: exactly one shard increments both metrics consistently (whichever owns the data)
+        shards_incremented = 0
+        for i, c in enumerate(all_clients):
+            info = c.info("search")
+            text_delta = int(info.get("search_text_requests_count", 0)) - initial_metrics[i]['text']
+            nonvector_delta = int(info.get("search_nonvector_requests_count", 0)) - initial_metrics[i]['nonvector']
+            if text_delta > 0 or nonvector_delta > 0:
+                assert text_delta == nonvector_delta == 1, \
+                    f"Shard {i}: Both metrics must increment together by 1, got text={text_delta}, nonvector={nonvector_delta}"
+                shards_incremented += 1
+        assert shards_incremented == 1, f"Expected exactly 1 shard to increment, got {shards_incremented}"
+        

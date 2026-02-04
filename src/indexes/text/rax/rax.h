@@ -31,12 +31,7 @@
 #ifndef RAX_H
 #define RAX_H
 
-#include <stddef.h>
 #include <stdint.h>
-
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 /* Representation of a radix tree as implemented in this file, that contains
  * the strings "foo", "foobar" and "footer" after the insertion of each
@@ -178,8 +173,6 @@ typedef int (*raxNodeCallback)(raxNode **noderef);
 #define RAX_ITER_EOF (1 << 1)         /* End of iteration reached. */
 #define RAX_ITER_SAFE (1 << 2)        /* Safe iterator, allows operations while \
                                          iterating. But it is slower. */
-#define RAX_ITER_SUB_TREE (1 << 3)    /* SEARCH - restrict iteration to sub-tree. */
-
 typedef struct raxIterator {
     int flags;
     rax *rt;            /* Radix tree we are iterating. */
@@ -191,13 +184,7 @@ typedef struct raxIterator {
     raxNode *node;           /* Current node. Only for unsafe iteration. */
     raxStack stack;          /* Stack used for unsafe iteration. */
     raxNodeCallback node_cb; /* Optional node callback. Normally set to NULL. */
-    raxNode *head;           /* SEARCH - Used to limit iteration to a subtree */
 } raxIterator;
-
-/* Callback type for raxMutate. Receives current value (NULL if key doesn't
- * exist) and the passed through caller context. Returns new value (NULL to
- * delete the key). */
-typedef void *(*raxMutateCallback)(void *current_value, void *caller_context);
 
 /* Exported API. */
 rax *raxNew(void);
@@ -205,11 +192,9 @@ int raxInsert(rax *rax, unsigned char *s, size_t len, void *data, void **old);
 int raxTryInsert(rax *rax, unsigned char *s, size_t len, void *data, void **old);
 int raxRemove(rax *rax, unsigned char *s, size_t len, void **old);
 int raxFind(rax *rax, unsigned char *s, size_t len, void **value);
-int raxMutate(rax *rax, unsigned char *s, size_t len, raxMutateCallback callback, void *caller_context); // SEARCH
 void raxFree(rax *rax);
 void raxFreeWithCallback(rax *rax, void (*free_callback)(void *));
 void raxStart(raxIterator *it, rax *rt);
-int raxSeekSubTree(raxIterator *it, unsigned char *ele, size_t len);  // SEARCH
 int raxSeek(raxIterator *it, const char *op, unsigned char *ele, size_t len);
 int raxNext(raxIterator *it);
 int raxPrev(raxIterator *it);
@@ -226,9 +211,5 @@ void raxSetDebugMsg(int onoff);
 /* Internal API. May be used by the node callback in order to access rax nodes
  * in a low level way, so this function is exported as well. */
 void raxSetData(raxNode *n, void *data);
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif

@@ -19,7 +19,7 @@
 
 namespace valkey_search::indexes {
 
-Text::Text(const data_model::TextIndex &text_index_proto,
+Text::Text(const data_model::TextIndex& text_index_proto,
            std::shared_ptr<text::TextIndexSchema> text_index_schema)
     : IndexBase(IndexerType::kText),
       text_index_schema_(text_index_schema),
@@ -33,7 +33,7 @@ Text::Text(const data_model::TextIndex &text_index_proto,
   }
 }
 
-absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr &key,
+absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,
                                      absl::string_view data) {
   // TODO: Key Tracking
 
@@ -41,7 +41,7 @@ absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr &key,
                                                 !no_stem_, with_suffix_trie_);
 }
 
-absl::StatusOr<bool> Text::RemoveRecord(const InternedStringPtr &key,
+absl::StatusOr<bool> Text::RemoveRecord(const InternedStringPtr& key,
                                         DeletionType deletion_type) {
   // The old key value has already been removed from the index by a call to
   // TextIndexSchema::DeleteKey(), so there is no need to touch the index
@@ -52,7 +52,7 @@ absl::StatusOr<bool> Text::RemoveRecord(const InternedStringPtr &key,
   return true;
 }
 
-absl::StatusOr<bool> Text::ModifyRecord(const InternedStringPtr &key,
+absl::StatusOr<bool> Text::ModifyRecord(const InternedStringPtr& key,
                                         absl::string_view data) {
   // TODO: key tracking
 
@@ -63,7 +63,7 @@ absl::StatusOr<bool> Text::ModifyRecord(const InternedStringPtr &key,
                                                 !no_stem_, with_suffix_trie_);
 }
 
-int Text::RespondWithInfo(ValkeyModuleCtx *ctx) const {
+int Text::RespondWithInfo(ValkeyModuleCtx* ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "type");
   ValkeyModule_ReplyWithSimpleString(ctx, "TEXT");
   ValkeyModule_ReplyWithSimpleString(ctx, "WITH_SUFFIX_TRIE");
@@ -73,7 +73,7 @@ int Text::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   return 6;
 }
 
-bool Text::IsTracked(const InternedStringPtr &key) const {
+bool Text::IsTracked(const InternedStringPtr& key) const {
   // TODO
   return false;
 }
@@ -85,7 +85,7 @@ size_t Text::GetTrackedKeyCount() const {
 
 std::unique_ptr<data_model::Index> Text::ToProto() const {
   auto index_proto = std::make_unique<data_model::Index>();
-  auto *text_index = index_proto->mutable_text_index();
+  auto* text_index = index_proto->mutable_text_index();
   text_index->set_with_suffix_trie(with_suffix_trie_);
   text_index->set_no_stem(no_stem_);
   return index_proto;
@@ -125,13 +125,13 @@ namespace {
 // Helper to search for a word in the text index and add its key iterator
 // Returns true if the word was found and added
 bool TryAddWordKeyIterator(
-    const indexes::text::TextIndex *text_index, absl::string_view word,
+    const indexes::text::TextIndex* text_index, absl::string_view word,
     absl::InlinedVector<indexes::text::Postings::KeyIterator,
-                        indexes::text::kWordExpansionInlineCapacity>
-        &key_iterators) {
+                        indexes::text::kWordExpansionInlineCapacity>&
+        key_iterators) {
   auto word_iter = text_index->GetPrefix().GetWordIterator(word);
   if (!word_iter.Done() && word_iter.GetWord() == word) {
-    key_iterators.emplace_back(word_iter.GetPostingsTarget()->GetKeyIterator());
+    key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
     return true;
   }
   return false;
@@ -140,9 +140,9 @@ bool TryAddWordKeyIterator(
 }  // namespace
 
 std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
-    const void *fetcher_ptr) const {
-  const auto *fetcher =
-      static_cast<const indexes::Text::EntriesFetcher *>(fetcher_ptr);
+    const void* fetcher_ptr) const {
+  const auto* fetcher =
+      static_cast<const indexes::Text::EntriesFetcher*>(fetcher_ptr);
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
@@ -166,7 +166,7 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
       TryAddWordKeyIterator(fetcher->text_index_.get(), stemmed, key_iterators);
     }
     // Search for stem variants - these should all exist from ingestion
-    for (const auto &variant : stem_variants) {
+    for (const auto& variant : stem_variants) {
       bool found = TryAddWordKeyIterator(fetcher->text_index_.get(), variant,
                                          key_iterators);
       CHECK(found) << "Word in stem tree not found in index - ingestion issue";
@@ -181,9 +181,9 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
 }
 
 std::unique_ptr<indexes::text::TextIterator> PrefixPredicate::BuildTextIterator(
-    const void *fetcher_ptr) const {
-  const auto *fetcher =
-      static_cast<const indexes::Text::EntriesFetcher *>(fetcher_ptr);
+    const void* fetcher_ptr) const {
+  const auto* fetcher =
+      static_cast<const indexes::Text::EntriesFetcher*>(fetcher_ptr);
   auto word_iter =
       fetcher->text_index_->GetPrefix().GetWordIterator(GetTextString());
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
@@ -193,7 +193,7 @@ std::unique_ptr<indexes::text::TextIterator> PrefixPredicate::BuildTextIterator(
   uint32_t max_words = options::GetMaxTermExpansions().GetValue();
   uint32_t word_count = 0;
   while (!word_iter.Done() && word_count < max_words) {
-    key_iterators.emplace_back(word_iter.GetPostingsTarget()->GetKeyIterator());
+    key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
     word_iter.Next();
     ++word_count;
   }
@@ -203,9 +203,9 @@ std::unique_ptr<indexes::text::TextIterator> PrefixPredicate::BuildTextIterator(
 }
 
 std::unique_ptr<indexes::text::TextIterator> SuffixPredicate::BuildTextIterator(
-    const void *fetcher_ptr) const {
-  const auto *fetcher =
-      static_cast<const indexes::Text::EntriesFetcher *>(fetcher_ptr);
+    const void* fetcher_ptr) const {
+  const auto* fetcher =
+      static_cast<const indexes::Text::EntriesFetcher*>(fetcher_ptr);
   CHECK(fetcher->text_index_->GetSuffix().has_value())
       << "Text index does not have suffix trie enabled.";
   std::string reversed_word(GetTextString().rbegin(), GetTextString().rend());
@@ -219,7 +219,7 @@ std::unique_ptr<indexes::text::TextIterator> SuffixPredicate::BuildTextIterator(
   uint32_t max_words = options::GetMaxTermExpansions().GetValue();
   uint32_t word_count = 0;
   while (!word_iter.Done() && word_count < max_words) {
-    key_iterators.emplace_back(word_iter.GetPostingsTarget()->GetKeyIterator());
+    key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
     word_iter.Next();
     ++word_count;
   }
@@ -229,14 +229,14 @@ std::unique_ptr<indexes::text::TextIterator> SuffixPredicate::BuildTextIterator(
 }
 
 std::unique_ptr<indexes::text::TextIterator> InfixPredicate::BuildTextIterator(
-    const void *fetcher_ptr) const {
+    const void* fetcher_ptr) const {
   CHECK(false) << "Unsupported TextPredicate type";
 }
 
 std::unique_ptr<indexes::text::TextIterator> FuzzyPredicate::BuildTextIterator(
-    const void *fetcher_ptr) const {
-  const auto *fetcher =
-      static_cast<const indexes::Text::EntriesFetcher *>(fetcher_ptr);
+    const void* fetcher_ptr) const {
+  const auto* fetcher =
+      static_cast<const indexes::Text::EntriesFetcher*>(fetcher_ptr);
   // Limit the number of term word expansions
   uint32_t max_words = options::GetMaxTermExpansions().GetValue();
   auto key_iterators = indexes::text::FuzzySearch::Search(

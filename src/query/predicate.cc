@@ -167,7 +167,6 @@ EvaluationResult PrefixPredicate::Evaluate(
   uint32_t word_count = 0;
   while (!word_iter.Done() && word_count < max_words) {
     std::string_view word = word_iter.GetWord();
-    if (!word.starts_with(term_)) break;
     auto postings = word_iter.GetPostingsTarget();
     if (postings) {
       auto key_iter = postings->GetKeyIterator();

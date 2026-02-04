@@ -8,4 +8,5 @@ local:
   _Znam*;
   _ZdlPv*;
   _ZdaPv*;
+  rax*;
 };

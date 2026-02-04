@@ -164,23 +164,8 @@ inline bool NeedsDeduplication(QueryOperations query_operations) {
   return has_or || has_tag;
 }
 
-class TextIteratorFetcher : public indexes::EntriesFetcherBase {
- public:
-  explicit TextIteratorFetcher(
-      std::unique_ptr<indexes::text::TextIterator> iter)
-      : iter_(std::move(iter)) {}
-  size_t Size() const override { return 0; }
-  std::unique_ptr<indexes::EntriesFetcherIteratorBase> Begin() override {
-    return std::make_unique<indexes::text::TextFetcher>(std::move(iter_));
-  }
-
- private:
-  std::unique_ptr<indexes::text::TextIterator> iter_;
-};
-
-// Builds TextIterator for the given predicate by recursively processing
-// ComposedPredicates and TextPredicates to include all text terms.
-// Returns pair of iterator and estimated size.
+// Builds TextIterator for text predicates. Returns pair of iterator and
+// estimated size.
 std::pair<std::unique_ptr<indexes::text::TextIterator>, size_t>
 BuildTextIterator(const Predicate *predicate, bool negate,
                   bool require_positions) {
@@ -208,10 +193,11 @@ BuildTextIterator(const Predicate *predicate, bool negate,
       }
       if (iterators.empty()) return {nullptr, 0};
       bool skip_positional = !child_require_positions;
+      size_t total_size = min_size == SIZE_MAX ? 0 : min_size;
       return {
           std::make_unique<indexes::text::ProximityIterator>(
               std::move(iterators), slop, inorder, nullptr, skip_positional),
-          min_size == SIZE_MAX ? 0 : min_size};
+          total_size};
     } else {
       absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
                           indexes::text::kProximityTermsInlineCapacity>
@@ -263,7 +249,8 @@ size_t EvaluateFilterAsPrimary(
           BuildTextIterator(composed_predicate, negate, false);
       if (text_iter) {
         entries_fetchers.push(
-            std::make_unique<TextIteratorFetcher>(std::move(text_iter)));
+            std::make_unique<indexes::text::TextIteratorFetcher>(
+                std::move(text_iter), size));
         return size;
       }
       size_t min_size = SIZE_MAX;

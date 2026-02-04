@@ -46,7 +46,6 @@ class Text : public IndexBase {
   std::shared_ptr<text::TextIndexSchema> GetTextIndexSchema() const {
     return text_index_schema_;
   }
-  uint32_t GetMinStemSize() const { return min_stem_size_; }
   bool IsStemmingEnabled() const { return !no_stem_; }
   bool WithSuffixTrie() const { return with_suffix_trie_; }
   absl::StatusOr<bool> AddRecord(const InternedStringPtr& key,
@@ -142,7 +141,6 @@ class Text : public IndexBase {
 
   bool with_suffix_trie_;
   bool no_stem_;
-  uint32_t min_stem_size_;
 
   // TODO: Map to track which keys are indexed and their raw data
 

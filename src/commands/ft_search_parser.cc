@@ -443,7 +443,6 @@ absl::Status PreParseQueryString(query::SearchParameters &parameters) {
           vmsdk::MakeUniqueValkeyString(parameters.parse_vars.score_as_string);
     }
   }
-  // TODO: Return Temp Error for unsupported predicates.
   // Pure non-vector query (no vector filter)
   if (vector_filter.empty() && parameters.filter_parse_results.root_predicate) {
     ++Metrics::GetStats().query_nonvector_requests_cnt;

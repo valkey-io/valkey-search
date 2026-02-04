@@ -10,12 +10,10 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <memory>
 #include <utility>
 
 #include "absl/base/thread_annotations.h"
-#include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
@@ -78,10 +76,11 @@ class VectorFlat : public VectorBase {
   absl::StatusOr<std::pair<float, hnswlib::labeltype>>
   ComputeDistanceFromRecordImpl(uint64_t internal_id,
                                 absl::string_view query) const override;
-  char* GetValueImpl(uint64_t internal_id) const override
+  char** GetValueImpl(uint64_t internal_id) const override
       ABSL_NO_THREAD_SAFETY_ANALYSIS {
-    return algo_->getPoint(internal_id);
+    return algo_->getPointPtr(internal_id);
   }
+
   void TrackVector(uint64_t internal_id,
                    const InternedStringPtr& vector) override
       ABSL_LOCKS_EXCLUDED(tracked_vectors_mutex_);

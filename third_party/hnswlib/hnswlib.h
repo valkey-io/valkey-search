@@ -147,7 +147,7 @@ class BaseFilterFunctor {
 // When true, early cancellation is requested
 //
 class BaseCancellationFunctor {
-  public:
+ public:
   virtual bool isCancelled() { return false; }
   virtual ~BaseCancellationFunctor(){};
 };
@@ -195,16 +195,59 @@ template <typename MTYPE>
 using DISTFUNC = MTYPE (*)(const void *, const void *, const void *);
 
 template <typename MTYPE>
+class DistFuncWrapper {
+ public:
+  DistFuncWrapper() : func_(nullptr) {}
+
+  // Support assignment from a raw function pointer
+  DistFuncWrapper &operator=(DISTFUNC<MTYPE> f) {
+    assert(f != nullptr && "Assigned distance function cannot be null.");
+    func_ = f;
+    return *this;
+  }
+  void SetShouldNormalize(bool should_normalize) {
+    should_normalize_ = should_normalize;
+  }
+
+  inline MTYPE operator()(const void *pVect1v, const void *pVect2v,
+                          const void *qty_ptr) const {
+    size_t qty = *((size_t *)qty_ptr);
+    MTYPE mag1 = should_normalize_
+                     ? *((MTYPE *)((char *)pVect1v + qty * sizeof(MTYPE)))
+                     : 1;
+    MTYPE mag2 = should_normalize_
+                     ? *((MTYPE *)((char *)pVect2v + qty * sizeof(MTYPE)))
+                     : 1;
+    return func_(pVect1v, pVect2v, qty_ptr) / (mag1 * mag2);
+  }
+
+ private:
+  DISTFUNC<MTYPE> func_;
+  bool should_normalize_;
+};
+
+template <typename MTYPE>
 class SpaceInterface {
  public:
+  SpaceInterface(bool should_normalize) : should_normalize_(should_normalize) {}
   // virtual void search(void *);
   virtual size_t get_data_size() = 0;
 
-  virtual DISTFUNC<MTYPE> get_dist_func() = 0;
+  DistFuncWrapper<MTYPE> get_dist_func() {
+    auto dist_func = inner_get_dist_func();
+    dist_func.SetShouldNormalize(should_normalize_);
+    return dist_func;
+  }
 
   virtual void *get_dist_func_param() = 0;
 
   virtual ~SpaceInterface() {}
+
+ protected:
+  virtual DistFuncWrapper<MTYPE> inner_get_dist_func() = 0;
+
+ private:
+  bool should_normalize_;
 };
 
 template <typename dist_t>
@@ -215,15 +258,15 @@ class AlgorithmInterface {
 
   virtual std::priority_queue<std::pair<dist_t, labeltype>> searchKnn(
       const void *, size_t, BaseFilterFunctor *isIdAllowed = nullptr,
-      BaseCancellationFunctor *isCancelled = nullptr // VALKEYSEARCH
-    ) const = 0;
+      BaseCancellationFunctor *isCancelled = nullptr  // VALKEYSEARCH
+  ) const = 0;
 
   // Return k nearest neighbor in the order of closer fist
   virtual std::vector<std::pair<dist_t, labeltype>> searchKnnCloserFirst(
       const void *query_data, size_t k,
       BaseFilterFunctor *isIdAllowed = nullptr,
-      BaseCancellationFunctor *isCancelled = nullptr // VALKEYSEARCH
-    ) const;
+      BaseCancellationFunctor *isCancelled = nullptr  // VALKEYSEARCH
+  ) const;
 
   virtual absl::Status SaveIndex(OutputStream &output) = 0;
   virtual ~AlgorithmInterface() {}
@@ -233,12 +276,13 @@ template <typename dist_t>
 std::vector<std::pair<dist_t, labeltype>>
 AlgorithmInterface<dist_t>::searchKnnCloserFirst(
     const void *query_data, size_t k, BaseFilterFunctor *isIdAllowed,
-    BaseCancellationFunctor *isCancelled // VALKEYSEARCH
-  ) const {
+    BaseCancellationFunctor *isCancelled  // VALKEYSEARCH
+) const {
   std::vector<std::pair<dist_t, labeltype>> result;
 
   // here searchKnn returns the result in the order of further first
-  auto ret = searchKnn(query_data, k, isIdAllowed, isCancelled); // VALKEYSEARCH
+  auto ret =
+      searchKnn(query_data, k, isIdAllowed, isCancelled);  // VALKEYSEARCH
   {
     size_t sz = ret.size();
     result.resize(sz);

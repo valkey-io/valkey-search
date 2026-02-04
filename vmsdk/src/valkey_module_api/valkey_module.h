@@ -986,7 +986,6 @@ typedef int (*ValkeyModuleAuthCallback)(ValkeyModuleCtx *ctx,
                                         ValkeyModuleString *username,
                                         ValkeyModuleString *password,
                                         ValkeyModuleString **err);
-typedef char *(*ValkeyModuleHashExternCB)(void *privdata, size_t *len);
 
 typedef struct ValkeyModuleTypeMethods {
   uint64_t version;
@@ -1283,6 +1282,11 @@ VALKEYMODULE_API int (*ValkeyModule_HashSet)(ValkeyModuleKey *key, int flags,
                                              ...) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_HashGet)(ValkeyModuleKey *key, int flags,
                                              ...) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_HashSetStringRef)(
+    ValkeyModuleKey *key, ValkeyModuleString *field, const char *buf,
+    size_t len) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_HashHasStringRef)(
+    ValkeyModuleKey *key, ValkeyModuleString *field) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_StreamAdd)(
     ValkeyModuleKey *key, int flags, ValkeyModuleStreamID *id,
     ValkeyModuleString **argv, int64_t numfields) VALKEYMODULE_ATTR;
@@ -1849,9 +1853,6 @@ VALKEYMODULE_API int (*ValkeyModule_ReplicationUnsetMasterCrossCluster)(
     ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_ReplicationSetSecondaryCluster)(
     ValkeyModuleCtx *ctx, bool is_secondary_cluster) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*ValkeyModule_HashExternalize)(
-    ValkeyModuleKey *key, ValkeyModuleString *field,
-    ValkeyModuleHashExternCB fn, void *privdata) VALKEYMODULE_ATTR;
 
 VALKEYMODULE_API int (*ValkeyModule_ACLCheckKeyPrefixPermissions)(
     ValkeyModuleUser *user, const char *key, size_t len,
@@ -1984,6 +1985,8 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver,
   VALKEYMODULE_GET_API(ZsetRangeEndReached);
   VALKEYMODULE_GET_API(HashSet);
   VALKEYMODULE_GET_API(HashGet);
+  VALKEYMODULE_GET_API(HashSetStringRef);
+  VALKEYMODULE_GET_API(HashHasStringRef);
   VALKEYMODULE_GET_API(StreamAdd);
   VALKEYMODULE_GET_API(StreamDelete);
   VALKEYMODULE_GET_API(StreamIteratorStart);
@@ -2222,7 +2225,6 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver,
   VALKEYMODULE_GET_API(ReplicationSetMasterCrossCluster);
   VALKEYMODULE_GET_API(ReplicationUnsetMasterCrossCluster);
   VALKEYMODULE_GET_API(ReplicationSetSecondaryCluster);
-  VALKEYMODULE_GET_API(HashExternalize);
   VALKEYMODULE_GET_API(ACLCheckKeyPrefixPermissions);
 
   if (ValkeyModule_IsModuleNameBusy && ValkeyModule_IsModuleNameBusy(name))

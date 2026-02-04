@@ -89,9 +89,9 @@ class VectorHNSW : public VectorBase {
   absl::StatusOr<std::pair<float, hnswlib::labeltype>>
   ComputeDistanceFromRecordImpl(uint64_t internal_id, absl::string_view query)
       const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
-  char* GetValueImpl(uint64_t internal_id) const override
+  char** GetValueImpl(uint64_t internal_id) const override
       ABSL_NO_THREAD_SAFETY_ANALYSIS {
-    return algo_->getPoint(internal_id);
+    return algo_->getPointPtr(internal_id);
   }
   bool IsVectorMatch(uint64_t internal_id,
                      const InternedStringPtr& vector) override
@@ -110,7 +110,7 @@ class VectorHNSW : public VectorBase {
   std::unique_ptr<hnswlib::SpaceInterface<T>> space_;
   mutable absl::Mutex resize_mutex_;
   mutable absl::Mutex tracked_vectors_mutex_;
-  std::deque<InternedStringPtr> tracked_vectors_
+  absl::flat_hash_map<uint64_t, InternedStringPtr> tracked_vectors_
       ABSL_GUARDED_BY(tracked_vectors_mutex_);
 };
 

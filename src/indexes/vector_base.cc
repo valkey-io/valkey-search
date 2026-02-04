@@ -15,7 +15,6 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <deque>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -40,11 +39,9 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
-#include "src/indexes/text.h"
 #include "src/query/predicate.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
-#include "src/valkey_search_options.h"
 #include "src/vector_externalizer.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "third_party/hnswlib/space_ip.h"
@@ -56,25 +53,28 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
-constexpr float kDefaultMagnitude = -1.0f;
+constexpr float kDefaultMagnitude = -2.0f;
+constexpr float kOldDefaultMagnitude = -1.0f;
 
 namespace {
 
 template <typename T>
 std::unique_ptr<hnswlib::SpaceInterface<T>> CreateSpace(
-    int dimensions, valkey_search::data_model::DistanceMetric distance_metric) {
+    int dimensions, valkey_search::data_model::DistanceMetric distance_metric,
+    bool normalize) {
   if constexpr (std::is_same_v<T, float>) {
     if (distance_metric ==
             valkey_search::data_model::DistanceMetric::DISTANCE_METRIC_COSINE ||
         distance_metric ==
             valkey_search::data_model::DistanceMetric::DISTANCE_METRIC_IP) {
-      return std::make_unique<hnswlib::InnerProductSpace>(dimensions);
+      return std::make_unique<hnswlib::InnerProductSpace>(dimensions,
+                                                          normalize);
     } else {
-      return std::make_unique<hnswlib::L2Space>(dimensions);
+      return std::make_unique<hnswlib::L2Space>(dimensions, normalize);
     }
   }
   DCHECK(false) << "no matching spacer";
-  return std::make_unique<hnswlib::L2Space>(dimensions);
+  return std::make_unique<hnswlib::L2Space>(dimensions, normalize);
 }
 
 }  // namespace
@@ -112,71 +112,66 @@ query::EvaluationResult PrefilterEvaluator::EvaluateText(
 }
 
 template <typename T>
-T CopyAndNormalizeEmbedding(T *dst, T *src, size_t size) {
-  T magnitude = 0.0f;
+T CalcMagnitude(T *src, size_t size) {
+  float magnitude = 0.0f;
   for (size_t i = 0; i < size; i++) {
     magnitude += src[i] * src[i];
   }
-  magnitude = std::sqrt(magnitude);
-  T norm = (magnitude == 0.0f) ? 1.0f : (1.0f / magnitude);
-  for (size_t i = 0; i < size; i++) {
-    dst[i] = norm * src[i];
-  }
-  return magnitude;
-}
-
-std::vector<char> NormalizeEmbedding(absl::string_view record, size_t type_size,
-                                     float *magnitude) {
-  std::vector<char> ret(record.size());
-  if (type_size == sizeof(float)) {
-    float result = CopyAndNormalizeEmbedding(
-        (float *)&ret[0], (float *)record.data(), ret.size() / sizeof(float));
-    if (magnitude) {
-      *magnitude = result;
-    }
-    return ret;
-  }
-  CHECK(false) << "unsupported type size";
+  return std::sqrt(magnitude);
 }
 
 template <typename T>
 void VectorBase::Init(int dimensions,
                       valkey_search::data_model::DistanceMetric distance_metric,
                       std::unique_ptr<hnswlib::SpaceInterface<T>> &space) {
-  space = CreateSpace<T>(dimensions, distance_metric);
   distance_metric_ = distance_metric;
   if (distance_metric ==
       valkey_search::data_model::DistanceMetric::DISTANCE_METRIC_COSINE) {
     normalize_ = true;
   }
+  space = CreateSpace<T>(dimensions, distance_metric, normalize_);
 }
 
-InternedStringPtr VectorBase::InternVector(absl::string_view record,
-                                           std::optional<float> &magnitude) {
+float *GetMagnitudePtr(absl::string_view record) {
+  return (float *)(record.data() + record.size() - sizeof(float) - 1);
+}
+
+void VectorBase::SetMagnitude(absl::string_view record) const {
+  if (!normalize_) {
+    return;
+  }
+  CHECK(GetVectorDataSize() == record.size() - sizeof(float) - 1);
+  float *magnitude = GetMagnitudePtr(record);
+  if (*magnitude != kDefaultMagnitude && *magnitude != kOldDefaultMagnitude) {
+    return;
+  }
+  *magnitude =
+      CalcMagnitude((float *)record.data(), record.size() - sizeof(float) - 1);
+}
+
+InternedStringPtr VectorBase::InternVector(absl::string_view record) const {
   if (!IsValidSizeVector(record)) {
     return {};
   }
-  if (normalize_) {
-    magnitude = kDefaultMagnitude;
-    auto norm_record =
-        NormalizeEmbedding(record, GetDataTypeSize(), &magnitude.value());
-    return StringInternStore::Intern(
-        absl::string_view((const char *)norm_record.data(), norm_record.size()),
-        vector_allocator_.get());
-  }
-  return StringInternStore::Intern(record, vector_allocator_.get());
+  // For simplicity, we always store normalized vectors
+  float magnitude = CalcMagnitude(record.data(), GetDataTypeSize());
+  std::string record_magnitude = absl::StrCat(record, magnitude);
+  return StringInternStore::Intern(
+      absl::string_view((const char *)record_magnitude.data(),
+                        record_magnitude.size()),
+      vector_allocator_.get());
 }
 
 absl::StatusOr<bool> VectorBase::AddRecord(const InternedStringPtr &key,
                                            absl::string_view record) {
-  std::optional<float> magnitude;
-  auto interned_vector = InternVector(record, magnitude);
+  if (!IsValidSizeVector(record)) {
+    return false;
+  }
+  auto interned_vector = InternVector(record);
   if (!interned_vector) {
     return false;
   }
-  VMSDK_ASSIGN_OR_RETURN(
-      auto internal_id,
-      TrackKey(key, magnitude.value_or(kDefaultMagnitude), interned_vector));
+  VMSDK_ASSIGN_OR_RETURN(auto internal_id, TrackKey(key, interned_vector));
   absl::Status add_result = AddRecordImpl(internal_id, interned_vector->Str());
   if (!add_result.ok()) {
     auto untrack_result = UnTrackKey(key);
@@ -221,19 +216,19 @@ absl::StatusOr<InternedStringPtr> VectorBase::GetKeyDuringSearch(
 
 absl::StatusOr<bool> VectorBase::ModifyRecord(const InternedStringPtr &key,
                                               absl::string_view record) {
+  if (!IsValidSizeVector(record)) {
+    return false;
+  }
   // VectorExternalizer tracks added entries. We need to untrack mutations which
   // are processed as modified records.
-  std::optional<float> magnitude;
-  auto interned_vector = InternVector(record, magnitude);
+  auto interned_vector = InternVector(record);
   if (!interned_vector) {
     [[maybe_unused]] auto res =
         RemoveRecord(key, indexes::DeletionType::kRecord);
     return false;
   }
   VMSDK_ASSIGN_OR_RETURN(auto internal_id, GetInternalId(key));
-  VMSDK_ASSIGN_OR_RETURN(
-      bool res, UpdateMetadata(key, magnitude.value_or(kDefaultMagnitude),
-                               interned_vector));
+  VMSDK_ASSIGN_OR_RETURN(bool res, UpdateMetadata(key, interned_vector));
   if (!res) {
     return false;
   }
@@ -279,16 +274,9 @@ absl::StatusOr<std::vector<char>> VectorBase::GetValue(
     return absl::NotFoundError("Record was not found");
   }
   std::vector<char> result;
-  char *value = GetValueImpl(it->second.internal_id);
-  if (normalize_) {
-    if (it->second.magnitude < 0) {
-      return absl::InternalError("Magnitude is not initialized");
-    }
-    result = DenormalizeVector(absl::string_view(value, GetVectorDataSize()),
-                               GetDataTypeSize(), it->second.magnitude);
-  } else {
-    result.assign(value, value + GetVectorDataSize());
-  }
+  char *value = *GetValueImpl(it->second.internal_id);
+
+  result.assign(value, value + GetVectorDataSize());
   return result;
 }
 
@@ -327,22 +315,22 @@ absl::StatusOr<std::optional<uint64_t>> VectorBase::UnTrackKey(
 }
 
 char *VectorBase::TrackVector(uint64_t internal_id, char *vector, size_t len) {
-  auto interned_vector = StringInternStore::Intern(
-      absl::string_view(vector, len), vector_allocator_.get());
+  auto vector_str = absl::string_view(vector, len);
+  CHECK(IsValidSizeVector(vector_str));
+  auto interned_vector = InternVector(vector_str);
   TrackVector(internal_id, interned_vector);
+  // TODO externalize instead of returning raw pointer
   return (char *)interned_vector->Str().data();
 }
 
 absl::StatusOr<uint64_t> VectorBase::TrackKey(const InternedStringPtr &key,
-                                              float magnitude,
                                               const InternedStringPtr &vector) {
   if (key->Str().empty()) {
     return absl::InvalidArgumentError("key can't be empty");
   }
   absl::WriterMutexLock lock(&key_to_metadata_mutex_);
   auto id = inc_id_++;
-  auto [_, succ] = tracked_metadata_by_key_.insert(
-      {key, {.internal_id = id, .magnitude = magnitude}});
+  auto [_, succ] = tracked_metadata_by_key_.insert({key, {.internal_id = id}});
 
   if (!succ) {
     return absl::InvalidArgumentError(
@@ -356,8 +344,7 @@ absl::StatusOr<uint64_t> VectorBase::TrackKey(const InternedStringPtr &key,
 // Return false if the tracked vector matches the input vector.
 // Otherwise, track the new vector and return true.
 absl::StatusOr<bool> VectorBase::UpdateMetadata(
-    const InternedStringPtr &key, float magnitude,
-    const InternedStringPtr &vector) {
+    const InternedStringPtr &key, const InternedStringPtr &vector) {
   if (key->Str().empty()) {
     return absl::InvalidArgumentError("key can't be empty");
   }
@@ -369,7 +356,6 @@ absl::StatusOr<bool> VectorBase::UpdateMetadata(
       return absl::InvalidArgumentError(
           absl::StrCat("Embedding id not found: ", key->Str()));
     }
-    it->second.magnitude = magnitude;
     internal_id = it->second.internal_id;
   }
   if (IsVectorMatch(internal_id, vector)) {
@@ -417,7 +403,9 @@ absl::Status VectorBase::SaveTrackedKeys(
     data_model::TrackedKeyMetadata metadata_pb;
     metadata_pb.set_key(key->Str());
     metadata_pb.set_internal_id(metadata.internal_id);
-    metadata_pb.set_magnitude(metadata.magnitude);
+
+    metadata_pb.set_magnitude(kDefaultMagnitude);
+
     auto metadata_pb_str = metadata_pb.SerializeAsString();
     VMSDK_RETURN_IF_ERROR(
         chunked_out.SaveChunk(metadata_pb_str.data(), metadata_pb_str.size()))
@@ -426,36 +414,40 @@ absl::Status VectorBase::SaveTrackedKeys(
   return absl::OkStatus();
 }
 
-void VectorBase::ExternalizeVector(ValkeyModuleCtx *ctx,
-                                   const AttributeDataType *attribute_data_type,
-                                   absl::string_view key_cstr,
-                                   absl::string_view attribute_identifier) {
+InternedStringPtr VectorBase::LoadRecordAsVector(
+    ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
+    absl::string_view key_cstr, absl::string_view attribute_identifier) {
   auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
       ctx, vmsdk::MakeUniqueValkeyString(key_cstr).get(),
       VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
   if (!key_obj || !attribute_data_type->IsProperType(key_obj.get())) {
-    return;
+    return {};
   }
-  bool is_module_owned;
-  vmsdk::UniqueValkeyString record = VectorExternalizer::Instance().GetRecord(
-      ctx, attribute_data_type, key_obj.get(), key_cstr, attribute_identifier,
-      is_module_owned);
-  CHECK(!is_module_owned);
-  std::optional<float> magnitude;
-  auto interned_key = StringInternStore::Intern(key_cstr);
-  auto interned_vector =
-      InternVector(vmsdk::ToStringView(record.get()), magnitude);
-  if (interned_vector) {
-    VectorExternalizer::Instance().Externalize(
-        interned_key, attribute_identifier, attribute_data_type->ToProto(),
-        interned_vector, magnitude);
+  auto record = attribute_data_type->GetRecord(ctx, key_obj.get(), key_cstr,
+                                               attribute_identifier);
+  if (!record.ok()) {
+    return {};
   }
+  return InternVector(vmsdk::ToStringView(record.value().get()));
+}
+
+std::vector<char> DenormalizeVector(absl::string_view record, float magnitude) {
+  std::vector<char> ret(record.size());
+
+  float *src = (float *)record.data();
+  float *dst = (float *)ret.data();
+  size_t size = record.size() / sizeof(float);
+  for (size_t i = 0; i < size; i++) {
+    dst[i] = src[i] * magnitude;
+  }
+  return ret;
 }
 
 absl::Status VectorBase::LoadTrackedKeys(
     ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
     SupplementalContentChunkIter &&iter) {
   absl::WriterMutexLock lock(&key_to_metadata_mutex_);
+  CHECK(GetDataTypeSize() == sizeof(float));
   while (iter.HasNext()) {
     VMSDK_ASSIGN_OR_RETURN(auto metadata_str, iter.Next(),
                            _ << "Error loading metadata");
@@ -465,15 +457,30 @@ absl::Status VectorBase::LoadTrackedKeys(
     }
     auto interned_key = StringInternStore::Intern(tracked_key_metadata.key());
     tracked_metadata_by_key_.insert(
-        {interned_key,
-         {.internal_id = tracked_key_metadata.internal_id(),
-          .magnitude = tracked_key_metadata.magnitude()}});
+        {interned_key, {.internal_id = tracked_key_metadata.internal_id()}});
     key_by_internal_id_.insert(
         {tracked_key_metadata.internal_id(), interned_key});
     inc_id_ = std::max(
         inc_id_, static_cast<uint64_t>(tracked_key_metadata.internal_id()));
-    ExternalizeVector(ctx, attribute_data_type, tracked_key_metadata.key(),
-                      attribute_identifier_);
+    if (normalize_ && tracked_key_metadata.magnitude() != kDefaultMagnitude &&
+        tracked_key_metadata.magnitude() != kOldDefaultMagnitude) {
+      auto load_vec =
+          LoadRecordAsVector(ctx, attribute_data_type,
+                             tracked_key_metadata.key(), attribute_identifier_);
+      auto vec_denormalized = DenormalizeVector(
+          absl::string_view(load_vec->Str().data(),
+                            load_vec->Str().size() - GetDataTypeSize() - 1),
+          tracked_key_metadata.magnitude());
+      auto vec = InternVector(
+          absl::string_view(vec_denormalized.data(), vec_denormalized.size()));
+      CHECK(vec);
+      TrackVector(tracked_key_metadata.internal_id(), vec);
+      VectorExternalizer::Instance().Externalize(
+          interned_key, attribute_identifier_, attribute_data_type->ToProto(),
+          vec);
+      char **value = GetValueImpl(tracked_key_metadata.internal_id());
+      *value = (char *)vec->Str().data();
+    }
   }
   ++inc_id_;
   return absl::OkStatus();

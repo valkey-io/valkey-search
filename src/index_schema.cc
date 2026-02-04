@@ -502,23 +502,25 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
           nullptr, indexes::DeletionType::kRecord};
       continue;
     }
-    bool is_module_owned;
-    vmsdk::UniqueValkeyString record = VectorExternalizer::Instance().GetRecord(
-        ctx, attribute_data_type_.get(), key_obj.get(), key_cstr,
-        attribute.GetIdentifier(), is_module_owned);
-    // Early return on record not found just if the record not tracked.
-    // Otherwise, it will be processed as a delete
-    if (!record && !attribute.GetIndex()->IsTracked(interned_key) &&
+    vmsdk::UniqueValkeyString record_ptr;
+    {
+      auto record = attribute_data_type_->GetRecord(
+          ctx, key_obj.get(), key_cstr, attribute.GetIdentifier());
+      if (record.ok()) {
+        record_ptr = std::move(record.value());
+      }
+    }
+    // Early return on record not found just if the record not tracked or has
+    // a pending mutation. Otherwise, it will be processed as a delete
+    if (!record_ptr && !attribute.GetIndex()->IsTracked(interned_key) &&
         !InTrackedMutationRecords(interned_key, attribute.GetIdentifier())) {
       continue;
     }
-    if (!is_module_owned) {
-      // A record which are owned by the module were not modified and are
-      // already tracked in the vector registry.
-      VectorExternalizer(interned_key, attribute.GetIdentifier(), record);
+    if (record_ptr) {
+      VectorExternalizer(interned_key, attribute.GetIdentifier(), record_ptr);
     }
     if (AddAttributeData(mutated_attributes, attribute, *attribute_data_type_,
-                         std::move(record))) {
+                         std::move(record_ptr))) {
       added = true;
     }
   }
@@ -1699,8 +1701,10 @@ size_t IndexSchema::GetMutatedRecordsSize() const {
 }
 
 void IndexSchema::SubscribeToVectorExternalizer(
-    absl::string_view attribute_identifier, indexes::VectorBase *vector_index) {
-  vector_externalizer_subscriptions_[attribute_identifier] = vector_index;
+    absl::string_view attribute_identifier,
+    const indexes::VectorBase *vector_index) {
+  vector_externalizer_subscriptions_[attribute_identifier].push_back(
+      vector_index);
 }
 
 void IndexSchema::VectorExternalizer(const Key &key,
@@ -1710,19 +1714,19 @@ void IndexSchema::VectorExternalizer(const Key &key,
   if (it == vector_externalizer_subscriptions_.end()) {
     return;
   }
-  if (record) {
-    std::optional<float> magnitude;
-    auto vector_str = vmsdk::ToStringView(record.get());
-    Key interned_vector = it->second->InternVector(vector_str, magnitude);
-    if (interned_vector) {
-      VectorExternalizer::Instance().Externalize(
-          key, attribute_identifier, attribute_data_type_->ToProto(),
-          interned_vector, magnitude);
-    }
+  if (!record) {
+    VectorExternalizer::Instance().UnTrack(key, attribute_identifier,
+                                           attribute_data_type_->ToProto());
     return;
   }
-  VectorExternalizer::Instance().Remove(key, attribute_identifier,
-                                        attribute_data_type_->ToProto());
+  for (auto vec_index : it->second) {
+    auto vector = vec_index->InternVector(vmsdk::ToStringView(record.get()));
+    if (vector) {
+      VectorExternalizer::Instance().Externalize(
+          key, attribute_identifier, attribute_data_type_->ToProto(), vector);
+      break;
+    }
+  }
 }
 
 IndexSchema::InfoIndexPartitionData IndexSchema::Stats::GetStats() const {

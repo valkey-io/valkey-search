@@ -433,30 +433,6 @@ static vmsdk::info_field::Integer vector_externing_hash_extern_errors(
       return VectorExternalizer::Instance().GetStats().hash_extern_errors;
     }));
 
-static vmsdk::info_field::Integer vector_externing_generated_value_cnt(
-    "vector_externing", "vector_externing_generated_value_cnt",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
-      return VectorExternalizer::Instance().GetStats().generated_value_cnt;
-    }));
-
-static vmsdk::info_field::Integer vector_externing_num_lru_entries(
-    "vector_externing", "vector_externing_num_lru_entries",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
-      return VectorExternalizer::Instance().GetStats().num_lru_entries;
-    }));
-
-static vmsdk::info_field::Integer vector_externing_lru_promote_cnt(
-    "vector_externing", "vector_externing_lru_promote_cnt",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
-      return VectorExternalizer::Instance().GetStats().lru_promote_cnt;
-    }));
-
-static vmsdk::info_field::Integer vector_externing_deferred_entry_cnt(
-    "vector_externing", "vector_externing_deferred_entry_cnt",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
-      return VectorExternalizer::Instance().GetStats().deferred_entry_cnt;
-    }));
-
 static vmsdk::info_field::Integer coordinator_server_listening_port(
     "coordinator", "coordinator_server_listening_port",
     vmsdk::info_field::IntegerBuilder()

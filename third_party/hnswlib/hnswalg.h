@@ -83,7 +83,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 
   size_t vector_size_{0};
 
-  DISTFUNC<dist_t> fstdistfunc_;
+  DistFuncWrapper<dist_t> fstdistfunc_;
   void *dist_func_param_{nullptr};
 
   mutable std::mutex label_lookup_lock;  // lock for label_lookup_
@@ -390,16 +390,16 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       if (bare_bone_search) {
         flag_stop_search = candidate_dist > lowerBound;
       } else {
-        if (isCancelled && isCancelled->isCancelled()) { // VALKEYSEARCH
-          flag_stop_search = true; // VALKEYSEARCH
-        } else // VALKEYSEARCH
-        if (stop_condition) {
-          flag_stop_search =
-              stop_condition->should_stop_search(candidate_dist, lowerBound);
-        } else {
-          flag_stop_search =
-              candidate_dist > lowerBound && top_candidates.size() == ef;
-        }
+        if (isCancelled && isCancelled->isCancelled()) {  // VALKEYSEARCH
+          flag_stop_search = true;                        // VALKEYSEARCH
+        } else                                            // VALKEYSEARCH
+          if (stop_condition) {
+            flag_stop_search =
+                stop_condition->should_stop_search(candidate_dist, lowerBound);
+          } else {
+            flag_stop_search =
+                candidate_dist > lowerBound && top_candidates.size() == ef;
+          }
       }
       if (flag_stop_search) {
         break;
@@ -913,12 +913,12 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     return absl::OkStatus();
   }
 
-  char *getPoint(labeltype label) const {
+  char **getPointPtr(labeltype label) const {
     auto search = label_lookup_.find(label);
     if (search == label_lookup_.end() || isMarkedDeleted(search->second)) {
       return nullptr;
     }
-    return getDataByInternalId(search->second);
+    return (char **)getDataPtrByInternalId(search->second);
   }
 
   template <typename data_t>
@@ -1403,16 +1403,16 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
   std::priority_queue<std::pair<dist_t, labeltype>> searchKnn(
       const void *query_data, size_t k,
       BaseFilterFunctor *isIdAllowed = nullptr,
-      BaseCancellationFunctor *isCancelled = nullptr // VALKEYSEARCH
-    ) const {
+      BaseCancellationFunctor *isCancelled = nullptr  // VALKEYSEARCH
+  ) const {
     return searchKnn(query_data, k, std::nullopt, isIdAllowed, isCancelled);
   }
 
   std::priority_queue<std::pair<dist_t, labeltype>> searchKnn(
       const void *query_data, size_t k, std::optional<size_t> ef_runtime,
       BaseFilterFunctor *isIdAllowed = nullptr,
-      BaseCancellationFunctor *isCancelled = nullptr // VALKEYSEARCH
-    ) const {
+      BaseCancellationFunctor *isCancelled = nullptr  // VALKEYSEARCH
+  ) const {
     std::priority_queue<std::pair<dist_t, labeltype>> result;
     if (cur_element_count_ == 0) return result;
 
@@ -1452,7 +1452,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                         std::vector<std::pair<dist_t, tableint>>,
                         CompareByFirst>
         top_candidates;
-    bool bare_bone_search = !num_deleted_ && !isIdAllowed && !isCancelled; // VALKEYSEARCH
+    bool bare_bone_search =
+        !num_deleted_ && !isIdAllowed && !isCancelled;  // VALKEYSEARCH
     if (bare_bone_search) {
       top_candidates = searchBaseLayerST<true>(
           currObj, query_data, std::max(ef_runtime.value_or(ef_), k),
@@ -1517,8 +1518,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                         std::vector<std::pair<dist_t, tableint>>,
                         CompareByFirst>
         top_candidates;
-    top_candidates = searchBaseLayerST<false>(currObj, query_data, 0,
-                                              isIdAllowed, nullptr, &stop_condition);
+    top_candidates = searchBaseLayerST<false>(
+        currObj, query_data, 0, isIdAllowed, nullptr, &stop_condition);
 
     size_t sz = top_candidates.size();
     result.resize(sz);

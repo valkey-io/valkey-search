@@ -484,14 +484,14 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
     # ========================================================================
     # text with special characters
     # ========================================================================
-
-    # def test_text_search_unescaped(self, key_type, dialect, schema_type):
-    #     """Test unescaped special characters in title field."""
-    #     self._run_test(gen_unescaped_word, "punctuation", key_type, dialect, schema_type, field='title')
+    def test_text_search_unescaped(self, key_type, dialect, schema_type):
+        """Test unescaped special characters in title field."""
+        self._run_test(gen_unescaped_word, "punctuation", key_type, dialect, schema_type, field='title')
 
     def test_text_search_escaped(self, key_type, dialect, schema_type):
         """Test escaped special characters in body field."""
         self._run_test(gen_escaped_word, "punctuation", key_type, dialect, schema_type, field='body')
+
     # ========================================================================
     # fuzzy search
     # ========================================================================

@@ -196,10 +196,10 @@ void Postings::InsertKey(const Key& key, PositionMap&& pos_map,
 
 // Remove a document key and all its positions
 void Postings::RemoveKey(const Key& key, TextIndexMetadata* metadata) {
-  auto it = key_to_positions_.find(key);
-  if (it == key_to_positions_.end()) return;
+  auto node = key_to_positions_.extract(key);
+  if (node.empty()) return;
 
-  FlatPositionMap* flat_map = it->second;
+  FlatPositionMap* flat_map = node.mapped();
 
   // Use member functions to get counts
   size_t position_count = flat_map->CountPositions();
@@ -210,7 +210,6 @@ void Postings::RemoveKey(const Key& key, TextIndexMetadata* metadata) {
 
   // Destroy and remove from map
   FlatPositionMap::Destroy(flat_map);
-  key_to_positions_.erase(it);
 }
 
 // Get total number of document keys

@@ -55,7 +55,7 @@ InternedStringPtr VectorExternalizer::Externalize(
   if (!hash_registration_supported_ ||
       attribute_data_type !=
           data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH) {
-    return {};
+    return interned_vector;
   }
 
   auto key_str = vmsdk::MakeUniqueValkeyString(key->Str());
@@ -66,7 +66,7 @@ InternedStringPtr VectorExternalizer::Externalize(
           key_obj.get(),
           vmsdk::MakeUniqueValkeyString(attribute_identifier).get()) !=
       VALKEYMODULE_OK) {
-    return {};
+    return interned_vector;
   }
   if (ValkeyModule_HashSetStringRef(
           key_obj.get(),
@@ -74,7 +74,6 @@ InternedStringPtr VectorExternalizer::Externalize(
           interned_vector->Str().data(),
           interned_vector->Str().size()) != VALKEYMODULE_OK) {
     ++stats_.Get().hash_extern_errors;
-    return {};
   }
   return interned_vector;
 }

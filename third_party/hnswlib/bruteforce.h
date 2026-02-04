@@ -75,13 +75,17 @@ class BruteforceSearch : public AlgorithmInterface<dist_t> {
     memcpy((*data_)[idx] + data_ptr_size_, &label, sizeof(labeltype));
     *(char **)((*data_)[idx]) = (char *)datapoint;
   }
-
-  char *getPoint(labeltype cur_external) {
+  char **getPointPtr(labeltype cur_external) {
     auto found = dict_external_to_internal.find(cur_external);
     if (found == dict_external_to_internal.end()) {
       return nullptr;
     }
-    return *(char **)(*data_)[found->second];
+    return (char **)(*data_)[found->second];
+  }
+
+  char **getPointPtrSafe(labeltype cur_external) {
+    std::unique_lock<std::mutex> lock(index_lock);
+    return getPointPtr(cur_external);
   }
 
   void removePoint(labeltype cur_external) {

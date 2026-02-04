@@ -295,7 +295,7 @@ absl::StatusOr<std::vector<char>> VectorBase::GetValue(
     return absl::NotFoundError("Record was not found");
   }
   std::vector<char> result;
-  char *value = GetValueImpl(it->second.internal_id);
+  char *value = *GetValueImpl(it->second.internal_id);
 
   result.assign(value, value + GetVectorDataSize());
   return result;
@@ -335,8 +335,14 @@ absl::StatusOr<std::optional<uint64_t>> VectorBase::UnTrackKey(
 }
 
 char *VectorBase::TrackVector(uint64_t internal_id, char *vector, size_t len) {
+  auto vec = vmsdk::MakeUniqueValkeyString(absl::string_view(vector, len));
+  auto key_by_internal_id_it = key_by_internal_id_.find(internal_id);
+  if (key_by_internal_id_it == key_by_internal_id_.end()) {
+    return nullptr;
+  }
   return (char *)VectorExternalizer::Instance()
-      .Intern(this, absl::string_view(vector, len))
+      .Externalize(this, key_by_internal_id_it->second, attribute_identifier_,
+                   attribute_data_type_, vec.get())
       ->Str()
       .data();
 }
@@ -412,7 +418,7 @@ absl::Status VectorBase::SaveTrackedKeys(
 
     auto it = tracked_metadata_by_key_.find(key);
     CHECK(it != tracked_metadata_by_key_.end());
-    char *value = GetValueImpl(it->second.internal_id);
+    char *value = *GetValueImpl(it->second.internal_id);
     float *magnitude_ptr = (float *)(value + GetVectorDataSize());
     metadata_pb.set_magnitude(*magnitude_ptr);
 
@@ -424,28 +430,24 @@ absl::Status VectorBase::SaveTrackedKeys(
   return absl::OkStatus();
 }
 
-void VectorBase::ExternalizeVector(ValkeyModuleCtx *ctx,
-                                   const AttributeDataType *attribute_data_type,
-                                   absl::string_view key_cstr,
-                                   absl::string_view attribute_identifier) {
+InternedStringPtr VectorBase::ExternalizeVector(
+    ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
+    absl::string_view key_cstr, absl::string_view attribute_identifier) {
   auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
       ctx, vmsdk::MakeUniqueValkeyString(key_cstr).get(),
       VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
   if (!key_obj || !attribute_data_type->IsProperType(key_obj.get())) {
-    return;
+    return {};
   }
   auto record = attribute_data_type->GetRecord(ctx, key_obj.get(), key_cstr,
                                                attribute_identifier);
   if (!record.ok()) {
-    return;
+    return {};
   }
   auto interned_key = StringInternStore::Intern(key_cstr);
-  auto interned_vec = VectorExternalizer::Instance().Externalize(
+  return VectorExternalizer::Instance().Externalize(
       this, interned_key, attribute_identifier, attribute_data_type->ToProto(),
       record.value().get());
-  if (!interned_vec) {
-    return;
-  }
 }
 
 absl::Status VectorBase::LoadTrackedKeys(
@@ -466,8 +468,12 @@ absl::Status VectorBase::LoadTrackedKeys(
         {tracked_key_metadata.internal_id(), interned_key});
     inc_id_ = std::max(
         inc_id_, static_cast<uint64_t>(tracked_key_metadata.internal_id()));
-    ExternalizeVector(ctx, attribute_data_type, tracked_key_metadata.key(),
-                      attribute_identifier_);
+    auto vec =
+        ExternalizeVector(ctx, attribute_data_type, tracked_key_metadata.key(),
+                          attribute_identifier_);
+    CHECK(vec);
+    char **value = GetValueImpl(tracked_key_metadata.internal_id());
+    *value = (char *)vec->Str().data();
   }
   ++inc_id_;
   return absl::OkStatus();

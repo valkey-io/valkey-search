@@ -74,25 +74,9 @@ template <typename T>
 bool VectorFlat<T>::IsVectorMatch(uint64_t internal_id,
                                   const InternedStringPtr &vector) {
   absl::ReaderMutexLock lock(&resize_mutex_);
-  std::unique_lock<std::mutex> lock_label(algo_->getLabelOpMutex(internal_id));
-  auto id = hnswlib_helpers::GetInternalId(algo_.get(), internal_id);
-  if (!id.has_value()) {
-    return false;
-  }
-  char *data_ptrv = algo_->getDataByInternalId(*id);
-  size_t dim = *((size_t *)algo_->dist_func_param_);
-  absl::string_view record(data_ptrv, dim * sizeof(T));
-  return vector->Str() == record;
-  /*
-
-absl::MutexLock lock(&tracked_vectors_mutex_);
-auto it = tracked_vectors_.find(internal_id);
-if (it == tracked_vectors_.end()) {
-return false;
-}
-return it->second->Str() == vector->Str();
-*/
-  // return true;
+  const char *store_vec_str = *algo_->getPointPtrSafe(internal_id);
+  absl::string_view store_vec(store_vec_str, GetVectorDataSize());
+  return vector->Str() == store_vec;
 }
 
 template <typename T>

@@ -913,12 +913,12 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     return absl::OkStatus();
   }
 
-  char *getPoint(labeltype label) const {
+  char **getPointPtr(labeltype label) const {
     auto search = label_lookup_.find(label);
     if (search == label_lookup_.end() || isMarkedDeleted(search->second)) {
       return nullptr;
     }
-    return getDataByInternalId(search->second);
+    return (char **)getDataPtrByInternalId(search->second);
   }
 
   template <typename data_t>

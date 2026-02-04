@@ -206,11 +206,10 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
       data_model::VectorIndex* vector_index_proto) const = 0;
   virtual absl::Status SaveIndexImpl(
       RDBChunkOutputStream chunked_out) const = 0;
-  void ExternalizeVector(ValkeyModuleCtx* ctx,
-                         const AttributeDataType* attribute_data_type,
-                         absl::string_view key_cstr,
-                         absl::string_view attribute_identifier);
-  virtual char* GetValueImpl(uint64_t internal_id) const = 0;
+  InternedStringPtr ExternalizeVector(
+      ValkeyModuleCtx* ctx, const AttributeDataType* attribute_data_type,
+      absl::string_view key_cstr, absl::string_view attribute_identifier);
+  virtual char** GetValueImpl(uint64_t internal_id) const = 0;
 
   int dimensions_;
   std::string attribute_identifier_;

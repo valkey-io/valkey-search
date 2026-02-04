@@ -12,7 +12,7 @@ on:
   workflow_dispatch: # allow manual triggering
 
 concurrency:
-  group: integration-tests-${{ github.head_ref || github.ref }}
+  group: integration-tests-asan-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 jobs:

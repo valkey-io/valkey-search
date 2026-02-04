@@ -148,6 +148,8 @@ struct SearchParameters {
       : timeout_ms(timeout),
         cancellation_token(cancel::Make(timeout, context)),
         db_num_(db_num) {}
+
+  SearchParameters(SearchParameters&&) = default;
 };
 
 // Indicates the range of neighbors to serialize in a search response.

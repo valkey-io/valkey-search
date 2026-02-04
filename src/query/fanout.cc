@@ -197,23 +197,18 @@ struct SearchPartitionResultsTracker {
 class LocalResponderSearch : public query::SearchParameters {
  public:
   std::shared_ptr<SearchPartitionResultsTracker> tracker;
-  std::unique_ptr<SearchParameters> parameters;
   std::vector<indexes::Neighbor> neighbors;
   size_t total_count;
 
   LocalResponderSearch(std::shared_ptr<SearchPartitionResultsTracker> trk,
                        std::unique_ptr<SearchParameters>&& params,
                        std::vector<indexes::Neighbor>&& nbrs, size_t count)
-      : query::SearchParameters(0, nullptr, params->db_num),
+      : query::SearchParameters(std::move(*params)),
         tracker(std::move(trk)),
-        parameters(std::move(params)),
         neighbors(std::move(nbrs)),
         total_count(count) {}
 
   const char *GetDesc() const override { return "local-responder"; }
-
-  SearchParameters &GetParameters() override { return *parameters; }
-
   std::vector<indexes::Neighbor> &GetNeighbors() override { return neighbors; }
 
   void OnComplete(std::vector<indexes::Neighbor> &neighbors) override {
@@ -222,7 +217,7 @@ class LocalResponderSearch : public query::SearchParameters {
   }
 
   void OnCancelled() override {
-    if (parameters->enable_partial_results) {
+    if (enable_partial_results) {
       OnComplete(neighbors);
     }
   }

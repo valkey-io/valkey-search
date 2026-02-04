@@ -125,7 +125,6 @@ class RemoteResponderSearch : public query::SearchParameters {
   grpc::ServerUnaryReactor* reactor;
   std::unique_ptr<vmsdk::StopWatch> latency_sample;
   std::vector<indexes::Neighbor> neighbors;
-  std::unique_ptr<query::SearchParameters> parameters;
   size_t total_count;
 
   RemoteResponderSearch(SearchIndexPartitionResponse* resp,
@@ -134,34 +133,28 @@ class RemoteResponderSearch : public query::SearchParameters {
                         std::vector<indexes::Neighbor>&& nbrs,
                         std::unique_ptr<query::SearchParameters>&& params,
                         size_t count)
-      : query::SearchParameters(0, nullptr, params->db_num),
+      : query::SearchParameters(std::move(*params)),
         response(resp),
         reactor(react),
         latency_sample(std::move(sample)),
         neighbors(std::move(nbrs)),
-        parameters(std::move(params)),
         total_count(count) {}
 
   const char* GetDesc() const override { return "remote-responder"; }
-
-  query::SearchParameters& GetParameters() override { return *parameters; }
-
   std::vector<indexes::Neighbor>& GetNeighbors() override { return neighbors; }
 
   void OnComplete(std::vector<indexes::Neighbor>& neighbors) override {
     auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
-    const auto& attribute_data_type =
-        parameters->index_schema->GetAttributeDataType();
+    const auto& attribute_data_type = index_schema->GetAttributeDataType();
     size_t original_size = neighbors.size();
-    if (parameters->attribute_alias.empty()) {
+    if (attribute_alias.empty()) {
       query::ProcessNonVectorNeighborsForReply(ctx.get(), attribute_data_type,
-                                               neighbors, *parameters);
+                                               neighbors, *this);
     } else {
       auto vector_identifier =
-          parameters->index_schema->GetIdentifier(parameters->attribute_alias)
-              .value();
+          index_schema->GetIdentifier(attribute_alias).value();
       query::ProcessNeighborsForReply(ctx.get(), attribute_data_type, neighbors,
-                                      *parameters, vector_identifier);
+                                      *this, vector_identifier);
     }
     // Adjust total_count based on modified neighbours
     size_t removed = original_size - neighbors.size();
@@ -174,7 +167,7 @@ class RemoteResponderSearch : public query::SearchParameters {
   }
 
   void OnCancelled() override {
-    if (!parameters->enable_partial_results) {
+    if (!enable_partial_results) {
       reactor->Finish({grpc::StatusCode::DEADLINE_EXCEEDED,
                        "Search operation cancelled due to timeout"});
       RecordSearchMetrics(true, std::move(latency_sample));

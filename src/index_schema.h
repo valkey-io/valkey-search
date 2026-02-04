@@ -163,6 +163,11 @@ class IndexSchema : public KeyspaceEventSubscription,
   uint64_t CountRecords() const;
 
   int GetAttributeCount() const { return attributes_.size(); }
+  int GetTagAttributeCount() const;
+  int GetNumericAttributeCount() const;
+  int GetVectorAttributeCount() const;
+  int GetTextAttributeCount() const;
+  int GetTextItemCount() const;
 
   virtual absl::Status RDBSave(SafeRDB *rdb) const;
   absl::Status SaveIndexExtension(RDBChunkOutputStream output) const;

@@ -28,19 +28,18 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+/* Allocator selection.
+ *
+ * This file is used in order to change the Rax allocator at compile time.
+ * Just define the following defines to what you want to use. Also add
+ * the include of your alternate allocator if needed (not needed in order
+ * to use the default libc allocator). */
+
 #ifndef RAX_ALLOC_H
 #define RAX_ALLOC_H
-#include <stddef.h>
-
-/* Override with the wrappers provided by VMSDK. */
-extern void* __wrap_malloc(size_t size);
-extern void __wrap_free(void* ptr);
-extern void* __wrap_realloc(void* ptr, size_t size);
-extern int __wrap_malloc_usable_size(void* ptr);
-
-#define rax_malloc __wrap_malloc
-#define rax_realloc __wrap_realloc
-#define rax_free __wrap_free
-#define rax_ptr_alloc_size(ptr) ((size_t)__wrap_malloc_usable_size(ptr))
-
+#include "zmalloc.h"
+#define rax_malloc zmalloc
+#define rax_realloc zrealloc
+#define rax_free zfree
+#define rax_ptr_alloc_size zmalloc_size
 #endif

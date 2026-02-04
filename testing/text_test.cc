@@ -94,7 +94,7 @@ class TextTest : public ::testing::Test {
     if (iter.Done()) {
       return nullptr;
     }
-    return iter.GetPostingsTarget();
+    return iter.GetTarget();
   }
 
   // Stages a single Text attribute update from the key and then commits the key

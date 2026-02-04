@@ -201,8 +201,8 @@ class LocalResponderSearch : public query::SearchParameters {
   size_t total_count;
 
   LocalResponderSearch(std::shared_ptr<SearchPartitionResultsTracker> trk,
-                       std::unique_ptr<SearchParameters>&& params,
-                       std::vector<indexes::Neighbor>&& nbrs, size_t count)
+                       std::unique_ptr<SearchParameters> &&params,
+                       std::vector<indexes::Neighbor> &&nbrs, size_t count)
       : query::SearchParameters(std::move(*params)),
         tracker(std::move(trk)),
         neighbors(std::move(nbrs)),

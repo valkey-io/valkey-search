@@ -73,7 +73,7 @@ std::unique_ptr<hnswlib::SpaceInterface<T>> CreateSpace(
     }
   }
   DCHECK(false) << "no matching spacer";
-  return std::make_unique<hnswlib::L2Space>(dimensions);
+  return std::make_unique<hnswlib::L2Space>(dimensions, normalize);
 }
 
 }  // namespace
@@ -442,6 +442,18 @@ absl::Status VectorBase::LoadTrackedKeys(
         {tracked_key_metadata.internal_id(), interned_key});
     inc_id_ = std::max(
         inc_id_, static_cast<uint64_t>(tracked_key_metadata.internal_id()));
+    if (normalize_ && tracked_key_metadata.magnitude() != kDefaultMagnitude) {
+      auto vec =
+          LoadRecordAsVector(ctx, attribute_data_type,
+                             tracked_key_metadata.key(), attribute_identifier_);
+      CHECK(vec);
+      TrackVector(tracked_key_metadata.internal_id(), vec);
+      VectorExternalizer::Instance().Externalize(
+          interned_key, attribute_identifier_, attribute_data_type->ToProto(),
+          vec);
+      char **value = GetValueImpl(tracked_key_metadata.internal_id());
+      *value = (char *)vec->Str().data();
+    }
     // TODO: handle normalized vectors
   }
   ++inc_id_;

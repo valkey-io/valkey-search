@@ -409,11 +409,12 @@ class InnerProductSpace : public SpaceInterface<float> {
 
   size_t get_data_size() { return data_size_; }
 
-  DistFuncWrapper<float> get_dist_func() override { return fstdistfunc_; }
-
   void *get_dist_func_param() { return &dim_; }
 
   ~InnerProductSpace() {}
+
+ protected:
+  DistFuncWrapper<float> inner_get_dist_func() override { return fstdistfunc_; }
 };
 
 }  // namespace hnswlib

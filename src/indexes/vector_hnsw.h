@@ -110,7 +110,7 @@ class VectorHNSW : public VectorBase {
   std::unique_ptr<hnswlib::SpaceInterface<T>> space_;
   mutable absl::Mutex resize_mutex_;
   mutable absl::Mutex tracked_vectors_mutex_;
-  std::deque<InternedStringPtr> tracked_vectors_
+  absl::flat_hash_map<uint64_t, InternedStringPtr> tracked_vectors_
       ABSL_GUARDED_BY(tracked_vectors_mutex_);
 };
 

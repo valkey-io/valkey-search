@@ -7,8 +7,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <deque>
-#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -21,7 +19,6 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
-#include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"
@@ -46,11 +43,13 @@ constexpr static uint32_t kBlockSize = 250;
 constexpr static int kM = 16;
 constexpr static int kEFConstruction = 20;
 constexpr static int kEFRuntime = 20;
-const hnswlib::InnerProductSpace kInnerProductSpace{kDimensions};
-const hnswlib::L2Space kL2Space{kDimensions};
+const hnswlib::InnerProductSpace kInnerProductSpace{kDimensions, false};
+const hnswlib::InnerProductSpace kInnerProductSpaceCosine{kDimensions, true};
+const hnswlib::L2Space kL2Space{kDimensions, false};
 const absl::flat_hash_map<data_model::DistanceMetric, std::string>
     kExpectedSpaces = {
-        {data_model::DISTANCE_METRIC_COSINE, typeid(kInnerProductSpace).name()},
+        {data_model::DISTANCE_METRIC_COSINE,
+         typeid(kInnerProductSpaceCosine).name()},
         {data_model::DISTANCE_METRIC_IP, typeid(kInnerProductSpace).name()},
         {data_model::DISTANCE_METRIC_L2, typeid(kL2Space).name()},
 };

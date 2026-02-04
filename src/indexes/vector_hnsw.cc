@@ -108,7 +108,7 @@ template <typename T>
 void VectorHNSW<T>::TrackVector(uint64_t internal_id,
                                 const InternedStringPtr &vector) {
   absl::MutexLock lock(&tracked_vectors_mutex_);
-  tracked_vectors_.push_back(vector);
+  tracked_vectors_[internal_id] = vector;
 }
 
 template <typename T>

@@ -212,13 +212,13 @@ class DistFuncWrapper {
   inline MTYPE operator()(const void *pVect1v, const void *pVect2v,
                           const void *qty_ptr) const {
     size_t qty = *((size_t *)qty_ptr);
-    MTYPE *mag1 = should_normalize_
-                      ? (MTYPE *)((char *)pVect1v + qty * sizeof(MTYPE))
-                      : 1;
-    MTYPE *mag2 = should_normalize_
-                      ? (MTYPE *)((char *)pVect2v + qty * sizeof(MTYPE))
-                      : 1;
-    return func_(pVect1v, pVect2v, qty_ptr) / (*mag1 * *mag2);
+    MTYPE mag1 = should_normalize_
+                     ? *((MTYPE *)((char *)pVect1v + qty * sizeof(MTYPE)))
+                     : 1;
+    MTYPE mag2 = should_normalize_
+                     ? *((MTYPE *)((char *)pVect2v + qty * sizeof(MTYPE)))
+                     : 1;
+    return func_(pVect1v, pVect2v, qty_ptr) / (mag1 * mag2);
   }
 
  private:

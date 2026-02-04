@@ -262,7 +262,8 @@ class L2Space : public SpaceInterface<float> {
  protected:
   DistFuncWrapper<float> inner_get_dist_func() override {
     return fstdistfunc_;
-  };
+  }
+};
 
   static int L2SqrI4x(const void *__restrict pVect1,
                       const void *__restrict pVect2,
@@ -332,7 +333,7 @@ class L2Space : public SpaceInterface<float> {
    protected:
     DistFuncWrapper<int> inner_get_dist_func() override {
       return fstdistfunc_;
-    };
+    }
   };
 }  // namespace hnswlib
 #pragma GCC diagnostic pop

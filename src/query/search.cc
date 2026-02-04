@@ -354,7 +354,6 @@ void EvaluatePrefilteredKeys(
     auto iterator = fetcher->Begin();
     while (!iterator->Done()) {
       const auto &key = **iterator;
-      VMSDK_LOG(WARNING, nullptr) << "Fetched key: " << key->Str();
       // 1. Skip if already processed (only if dedup is needed)
       if (needs_dedup && result_keys.contains(key->Str().data())) {
         iterator->Next();
@@ -368,11 +367,8 @@ void EvaluatePrefilteredKeys(
       }
       indexes::PrefilterEvaluator key_evaluator(text_index);
       // 3. Evaluate predicate
-      bool matches = key_evaluator.Evaluate(
-          *parameters.filter_parse_results.root_predicate, key);
-      VMSDK_LOG(WARNING, nullptr)
-          << "Key " << key->Str() << " matches: " << matches;
-      if (matches) {
+      if (key_evaluator.Evaluate(
+              *parameters.filter_parse_results.root_predicate, key)) {
         if (needs_dedup) {
           result_keys.insert(key->Str().data());
         }

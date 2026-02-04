@@ -256,7 +256,6 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
     def test_text_search(self):
         """
         Test FT.SEARCH command with a text index.
-        Tests with both prefilter disabled and enabled.
         """
         client: Valkey = self.server.get_new_client()
         # Create the text index on Hash documents

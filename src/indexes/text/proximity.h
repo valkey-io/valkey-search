@@ -95,6 +95,8 @@ class ProximityIterator : public TextIterator {
       pos_with_idx_;
   // Used for Negate
   const InternedStringSet* untracked_keys_;
+  // Flag used to skip positional checks. This is used when performing
+  // an AND on text predicates without any positional constraints.
   bool skip_positional_checks_;
 
   struct ViolationInfo {

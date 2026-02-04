@@ -367,13 +367,7 @@ EvaluationResult EvaluatePredicate(const Predicate* predicate,
 // ProximityIterator to validate term positions meet distance and order
 // requirements.
 EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
-  bool skip_text = evaluator.IsPrefilterEvaluator();
   bool require_positions = slop_.has_value() || inorder_;
-  VMSDK_LOG(WARNING, nullptr)
-      << "ComposedPredicate type="
-      << (GetType() == PredicateType::kComposedAnd ? "AND" : "OR")
-      << " skip_text=" << skip_text
-      << " require_positions=" << require_positions;
   // Handle AND logic
   if (GetType() == PredicateType::kComposedAnd) {
     uint32_t childrenWithPositions = 0;
@@ -382,12 +376,16 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
                         indexes::text::kProximityTermsInlineCapacity>
         iterators;
     for (const auto& child : children_) {
-      // In AND: skip text children when in prefilter (resolved in fetcher)
-      if (skip_text && child->GetType() == PredicateType::kText) {
+      // In AND: skip text children when in prefilter evaluation because text in
+      // AND is fully (recursively) resolved in the entries fetcher layer
+      // already.
+      if (evaluator.IsPrefilterEvaluator() &&
+          child->GetType() == PredicateType::kText) {
         continue;
       }
       EvaluationResult result =
           EvaluatePredicate(child.get(), evaluator, require_positions);
+      // Short-circuit on first false
       if (!result.matches) {
         return EvaluationResult(false);
       }
@@ -437,7 +435,6 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
   for (const auto& child : children_) {
     EvaluationResult result =
         EvaluatePredicate(child.get(), evaluator, require_positions);
-    VMSDK_LOG(WARNING, nullptr) << "OR child matches: " << result.matches;
     // Short-circuit if any matches and positions not required.
     if (result.matches && !require_positions) {
       return EvaluationResult(true);

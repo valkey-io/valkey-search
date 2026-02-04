@@ -1692,6 +1692,31 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         result = client.execute_command("FT.SEARCH", "idx", "(((((cat | shark) | lettuce) | fox) | dog) @color:{green|red|brown|blue})", "DIALECT", "2")
         assert result[0] == 5
         assert set(result[1::2]) == {b"hash:00", b"hash:01", b"hash:02", b"hash:03", b"hash:04"}
+        # Multiple pure text ORs in AND: (text1 | text2) (text3 | text4) numeric
+        result = client.execute_command("FT.SEARCH", "idx", "(cat | shark) (slow | loud) @price:[10 30]", "DIALECT", "2")
+        assert result[0] == 1
+        assert result[1] == b"hash:00"
+        # OR with all AND children: ((text1 numeric) | (text2 tag))
+        result = client.execute_command("FT.SEARCH", "idx", "((cat @price:[10 30]) | (lettuce @color:{green}))", "DIALECT", "2")
+        assert result[0] == 2
+        assert set(result[1::2]) == {b"hash:00", b"hash:01"}
+        # Hybrid with INORDER on nested AND: ((text1 text2 INORDER) | (text3 text4)) tag numeric
+        result = client.execute_command("FT.SEARCH", "idx", "((cat slow) | (quick brown)) @color:{green|red}", "INORDER", "DIALECT", "2")
+        assert result[0] == 2
+        assert set(result[1::2]) == {b"hash:00", b"hash:03"}
+        # INORDER violation in nested AND: slow comes before cat in doc, but query has cat slow
+        result = client.execute_command("FT.SEARCH", "idx", "((slow cat) | (brown quick)) @color:{green|red}", "INORDER", "DIALECT", "2")
+        assert result[0] == 0
+        # Hybrid INORDER with numeric and tag: (text1 text2 numeric INORDER) | (text3 tag)
+        result = client.execute_command("FT.SEARCH", "idx", "((cat slow @price:[10 30]) | (lettuce @color:{green}))", "INORDER", "DIALECT", "2")
+        assert result[0] == 2
+        assert set(result[1::2]) == {b"hash:00", b"hash:01"}
+        # OR with AND text branches and non-matching numeric: ((text1 text2) | (text3 text4) | numeric)
+        # Tests that AND branches skip text in prefilter, OR evaluates numeric, finds no match
+        result = client.execute_command("FT.SEARCH", "idx", "((cat slow) | (quick brown) | @price:[1000 2000])", "DIALECT", "2")
+        assert result[0] == 3
+        assert set(result[1::2]) == {b"hash:00", b"hash:03", b"hash:02"}
+
 
 class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
     """

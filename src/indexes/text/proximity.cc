@@ -43,8 +43,9 @@ ProximityIterator::ProximityIterator(
   if (!skip_positional_checks_) {
     CHECK(slop_.has_value() || in_order_)
         << "ProximityIterator requires either slop or inorder=true";
-    // If no common fields and we need positions, clear iterators to mark as
-    // done
+    // If no common fields and there is a positional requirement, we can
+    // short-circuit and to mark the iterator as done by setting iters_ to
+    // empty.
     if (query_field_mask_ == 0) {
       iters_.clear();
       return;

@@ -1910,6 +1910,27 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # Matches hash:00 because the deep text-numeric leaf is true and bubbles up through the OR/AND gates
         assert result[0] == 1
         assert result[1] == b"hash:00"
+        # Edge case tests for BuildTextIterator with mixed predicates
+        # Test 1: Nested OR with mixed predicates at different levels: OR(AND(Text1, OR(Text2, Numeric)), Text3)
+        result = client.execute_command("FT.SEARCH", "idx", "(cat (quick | @price:[10 30])) | lettuce", "DIALECT", "2")
+        assert result[0] == 2
+        assert set(result[1::2]) == {b"hash:00", b"hash:01"}
+        # Test 2: Triple-nested mixed OR: OR(OR(Text1, Numeric1), OR(Text2, Numeric2))
+        result = client.execute_command("FT.SEARCH", "idx", "((cat | @price:[10 30]) | (fox | @color:{red}))", "DIALECT", "2")
+        assert result[0] == 4
+        assert set(result[1::2]) == {b"hash:00", b"hash:02", b"hash:03", b"hash:04"}
+        # Test 3: AND with all children being mixed ORs: AND(OR(Text1, Numeric1), OR(Text2, Tag1))
+        result = client.execute_command("FT.SEARCH", "idx", "(cat | @price:[10 30]) (fox | @color:{red})", "DIALECT", "2")
+        assert result[0] == 1
+        assert result[1] == b"hash:03"
+        # Test 4: Pure text OR nested in AND with mixed OR: AND(OR(Text1, Text2), OR(Text3, Numeric1))
+        result = client.execute_command("FT.SEARCH", "idx", "(cat | shark) (fox | @price:[10 30])", "DIALECT", "2")
+        assert result[0] == 1
+        assert result[1] == b"hash:00"
+        # Test 5: Multiple levels of mixed ORs: OR(OR(Text1, OR(Text2, Numeric)), Tag)
+        result = client.execute_command("FT.SEARCH", "idx", "((cat | (quick | @price:[10 30])) | @color:{green})", "DIALECT", "2")
+        assert result[0] == 5
+        assert set(result[1::2]) == {b"hash:00", b"hash:01", b"hash:02", b"hash:03", b"hash:04"}
 
 class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
     """

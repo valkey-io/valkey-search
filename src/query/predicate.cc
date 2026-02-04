@@ -430,7 +430,7 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
     absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
                         indexes::text::kProximityTermsInlineCapacity>
         iterators;
-    for (const auto &child : children_) {
+    for (const auto& child : children_) {
       // In AND: skip text children when in prefilter evaluation because text in
       // AND is fully (recursively) resolved in the entries fetcher layer
       // already.

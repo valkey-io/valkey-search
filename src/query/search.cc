@@ -191,6 +191,8 @@ BuildTextIterator(const Predicate *predicate, bool negate,
           min_size = std::min(min_size, size);
         }
       }
+      // The Composed AND only has non text predicates, return null
+      // to have the caller handle it.
       if (iterators.empty()) return {nullptr, 0};
       bool skip_positional = !child_require_positions;
       size_t total_size = min_size == SIZE_MAX ? 0 : min_size;
@@ -214,6 +216,8 @@ BuildTextIterator(const Predicate *predicate, bool negate,
           has_non_text = true;
         }
       }
+      // If the Composed OR has any non text predicate, we cannot
+      // build a text iterator.
       if (iterators.empty() || has_non_text) return {nullptr, 0};
       return {std::make_unique<indexes::text::OrProximityIterator>(
                   std::move(iterators), nullptr),

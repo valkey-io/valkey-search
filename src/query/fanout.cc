@@ -75,7 +75,6 @@ struct SearchPartitionResultsTracker {
   int outstanding_requests ABSL_GUARDED_BY(mutex);
   query::SearchResponseCallback callback;
   std::unique_ptr<SearchParameters> parameters ABSL_GUARDED_BY(mutex);
-  std::atomic_bool reached_oom{false};
   std::atomic_bool consistency_failed{false};
   std::atomic<size_t> accumulated_total_count{0};
 
@@ -93,17 +92,12 @@ struct SearchPartitionResultsTracker {
           status.error_code() == grpc::FAILED_PRECONDITION) {
         consistency_failed.store(true);
       }
-      bool should_cancel = status.error_code() == grpc::RESOURCE_EXHAUSTED ||
-                           !parameters->enable_partial_results ||
+      bool should_cancel = status.error_code() == !parameters->enable_partial_results ||
                            consistency_failed.load();
-      if (status.error_code() == grpc::RESOURCE_EXHAUSTED) {
-        reached_oom.store(true);
-      }
       if (should_cancel) {
         parameters->cancellation_token->Cancel();
       }
       if (status.error_code() != grpc::DEADLINE_EXCEEDED ||
-          status.error_code() != grpc::RESOURCE_EXHAUSTED ||
           status.error_code() != grpc::FAILED_PRECONDITION) {
         VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
             << "Error during handling of FT.SEARCH on node " << address << ": "
@@ -167,8 +161,6 @@ struct SearchPartitionResultsTracker {
     absl::StatusOr<SearchResult> result;
     if (consistency_failed) {
       result = absl::FailedPreconditionError(kFailedPreconditionMsg);
-    } else if (reached_oom) {
-      result = absl::ResourceExhaustedError(kOOMMsg);
     } else {
       std::vector<indexes::Neighbor> neighbors;
       neighbors.resize(results.size());
@@ -292,9 +284,6 @@ absl::Status PerformSearchFanoutAsync(
             tracker->AddResults(result->neighbors);
             tracker->AddTotalCount(result->total_count);
           } else {
-            if (absl::IsResourceExhausted(result.status())) {
-              tracker->reached_oom.store(true);
-            }
             VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
                 << "Error during local handling of FT.SEARCH: "
                 << result.status().message();

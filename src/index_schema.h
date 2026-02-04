@@ -130,9 +130,9 @@ class IndexSchema : public KeyspaceEventSubscription,
       FieldMaskPredicate field_mask) const;
   virtual absl::StatusOr<std::string> GetIdentifier(
       absl::string_view attribute_alias) const;
-  absl::StatusOr<uint16_t> GetAttributePositionByAlias(
+  absl::StatusOr<AttributePosition> GetAttributePositionByAlias(
       absl::string_view attribute_alias) const;
-  absl::StatusOr<uint16_t> GetAttributePositionByIdentifier(
+  absl::StatusOr<AttributePosition> GetAttributePositionByIdentifier(
       absl::string_view identifier) const;
   absl::StatusOr<std::string> GetAlias(absl::string_view identifier) const;
   absl::StatusOr<vmsdk::UniqueValkeyString> DefaultReplyScoreAs(
@@ -240,7 +240,7 @@ class IndexSchema : public KeyspaceEventSubscription,
     MutationSequenceNumber mutation_sequence_number_{0};
     std::vector<AttributeInfo> attr_info_vec_;
 
-    inline std::vector<AttributeInfo> &GetAttributeInfoVecMut() {
+    inline std::vector<AttributeInfo> &GetAttributeInfoVec() {
       return attr_info_vec_;
     }
   };
@@ -282,14 +282,14 @@ class IndexSchema : public KeyspaceEventSubscription,
                               indexer_type_filter = std::nullopt) const {
     if (!indexer_type_filter.has_value()) {
       // No filter
-      return std::accumulate(attributes_size_vec_.begin(),
-                             attributes_size_vec_.end(), 0);
+      return std::accumulate(attributes_indexed_data_size_.begin(),
+                             attributes_indexed_data_size_.end(), 0);
     }
 
     uint64_t total_size{0};
     for (const auto &[_, attr] : attributes_) {
       if (attr.GetIndex()->GetIndexerType() == indexer_type_filter.value()) {
-        total_size += attributes_size_vec_[attr.GetPosition()];
+        total_size += attributes_indexed_data_size_[attr.GetPosition()];
       }
     }
     return total_size;
@@ -311,7 +311,7 @@ class IndexSchema : public KeyspaceEventSubscription,
 
     for (const auto &[_, attr] : attributes_) {
       if (attr.GetAlias() == attribute_alias_filter) {
-        return attributes_size_vec_[attr.GetPosition()];
+        return attributes_indexed_data_size_[attr.GetPosition()];
       }
     }
     return 0;
@@ -350,7 +350,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   uint32_t version_{0};
 
   vmsdk::ThreadPool *mutations_thread_pool_{nullptr};
-  std::vector<uint64_t> attributes_size_vec_;
+  std::vector<uint64_t> attributes_indexed_data_size_;
 
   InternedStringHashMap<DocumentMutation> tracked_mutated_records_
       ABSL_GUARDED_BY(mutated_records_mutex_);

@@ -20,6 +20,7 @@
 
 namespace valkey_search {
 
+using AttributePosition = uint16_t;
 class IndexSchema;
 class Attribute {
  public:
@@ -49,13 +50,14 @@ class Attribute {
   }
 
   // Return the attribute position during creation of the index.
-  inline uint16_t GetPosition() const { return position_; }
+  inline AttributePosition GetPosition() const { return position_; }
 
  private:
   std::string alias_;
   std::string identifier_;
   std::shared_ptr<indexes::IndexBase> index_;
-  uint16_t position_{UINT16_MAX};  // The attribute position during creation.
+  AttributePosition position_{
+      UINT16_MAX};  // The attribute position during creation.
 };
 
 }  // namespace valkey_search

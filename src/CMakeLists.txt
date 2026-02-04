@@ -52,6 +52,7 @@ endif()
 
 set(SRCS_VALKEY_SEARCH
     ${CMAKE_CURRENT_LIST_DIR}/attribute.cc
+    ${CMAKE_CURRENT_LIST_DIR}/attribute.h
     ${CMAKE_CURRENT_LIST_DIR}/valkey_search.cc
     ${CMAKE_CURRENT_LIST_DIR}/valkey_search.h
     ${CMAKE_CURRENT_LIST_DIR}/valkey_search_options.cc

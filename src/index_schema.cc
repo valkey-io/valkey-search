@@ -384,7 +384,7 @@ absl::StatusOr<std::string> IndexSchema::GetIdentifier(
   return itr->second.GetIdentifier();
 }
 
-absl::StatusOr<uint16_t> IndexSchema::GetAttributePositionByAlias(
+absl::StatusOr<AttributePosition> IndexSchema::GetAttributePositionByAlias(
     absl::string_view attribute_alias) const {
   auto itr = attributes_.find(std::string{attribute_alias});
   if (itr == attributes_.end()) {
@@ -394,7 +394,7 @@ absl::StatusOr<uint16_t> IndexSchema::GetAttributePositionByAlias(
   return itr->second.GetPosition();
 }
 
-absl::StatusOr<uint16_t> IndexSchema::GetAttributePositionByIdentifier(
+absl::StatusOr<AttributePosition> IndexSchema::GetAttributePositionByIdentifier(
     absl::string_view identifier) const {
   VMSDK_ASSIGN_OR_RETURN(std::string attribute_alias, GetAlias(identifier));
   return GetAttributePositionByAlias(attribute_alias);
@@ -426,13 +426,14 @@ absl::Status IndexSchema::AddIndex(absl::string_view attribute_alias,
   auto [_, res] = attributes_.insert(
       {std::string(attribute_alias),
        Attribute{attribute_alias, identifier, index,
-                 static_cast<uint16_t>(attributes_size_vec_.size())}});
+                 static_cast<AttributePosition>(
+                     attributes_indexed_data_size_.size())}});
   if (!res) {
     return absl::AlreadyExistsError(
         absl::StrCat("Index field `", attribute_alias, "` already exists"));
   }
 
-  attributes_size_vec_.emplace_back(0);
+  attributes_indexed_data_size_.emplace_back(0);
   identifier_to_alias_.insert(
       {std::string(identifier), std::string(attribute_alias)});
   // Update schema level Text information for default field searches
@@ -776,15 +777,19 @@ MutationSequenceNumber IndexSchema::UpdateDbInfoKey(
   vmsdk::VerifyMainThread();
   MutationSequenceNumber this_mutation = ++schema_mutation_sequence_number_;
   auto &dbkeyinfo_map = db_key_info_.Get();
-  if (is_delete) {
-    auto iter = dbkeyinfo_map.find(interned_key);
-    if (iter != dbkeyinfo_map.end()) {
-      // Remove this key size(s) from the index tracked size array.
-      for (const auto &attr_info : iter->second.GetAttributeInfoVecMut()) {
-        CHECK(attr_info.GetPosition() < attributes_size_vec_.size());
-        attributes_size_vec_[attr_info.GetPosition()] -= attr_info.GetSize();
-      }
+
+  // When mutating (does not matter
+  auto iter = dbkeyinfo_map.find(interned_key);
+  if (iter != dbkeyinfo_map.end()) {
+    // Remove this key size(s) from the index tracked size array.
+    for (const auto &attr_info : iter->second.GetAttributeInfoVec()) {
+      CHECK(attr_info.GetPosition() < attributes_indexed_data_size_.size());
+      attributes_indexed_data_size_[attr_info.GetPosition()] -=
+          attr_info.GetSize();
     }
+  }
+
+  if (is_delete) {
     dbkeyinfo_map.erase(interned_key);
     return this_mutation;
   }
@@ -792,29 +797,23 @@ MutationSequenceNumber IndexSchema::UpdateDbInfoKey(
   auto &dbkeyinfo = dbkeyinfo_map[interned_key];
   dbkeyinfo.mutation_sequence_number_ = this_mutation;
 
-  // Step 1: decrement the size per field from the index global size array.
-  auto &attr_info_vec = dbkeyinfo.GetAttributeInfoVecMut();
-  for (const auto &attr_info : attr_info_vec) {
-    CHECK(attr_info.GetPosition() < attributes_size_vec_.size());
-    attributes_size_vec_[attr_info.GetPosition()] -= attr_info.GetSize();
-  }
-
+  auto &attr_info_vec = dbkeyinfo.GetAttributeInfoVec();
   // Clear the array, we will re-use it.
   attr_info_vec.clear();
 
-  // Step 2: go over the mutated attributes and increment the global size
+  // Go over the mutated attributes and increment the global size
   // array
   for (const auto &mutated_attr : mutated_attributes) {
     // We should accept here the alias
     auto res = GetAttributePositionByAlias(mutated_attr.first);
     if (!res.ok()) {
-      // No such alias? try to see if we go an identifier instead
+      // No such alias? try to see if we got an identifier instead
       res = GetAttributePositionByIdentifier(mutated_attr.first);
     }
     CHECK(res.ok()) << "Index: [" << GetName()
                     << "]: could not find attribute position for alias: "
                     << mutated_attr.first;
-    CHECK(res.value() < attributes_size_vec_.size())
+    CHECK(res.value() < attributes_indexed_data_size_.size())
         << "Invalid attribute position found";
 
     const auto &attr_pos = res.value();
@@ -823,12 +822,14 @@ MutationSequenceNumber IndexSchema::UpdateDbInfoKey(
       // If data is present, the operation is either INSERT or UPDATE.
       // Otherwise, the field has been deleted and is treated as having size
       // 0.
-      ValkeyModule_StringPtrLen(mutated_attr.second.data.get(), &data_len);
+      data_len = vmsdk::ToStringView(mutated_attr.second.data.get()).length();
       attr_info_vec.emplace_back(attr_pos, data_len);
     }
     // update the global tracking array
-    attributes_size_vec_[attr_pos] += data_len;
+    attributes_indexed_data_size_[attr_pos] += data_len;
   }
+
+  attr_info_vec.shrink_to_fit();
   return this_mutation;
 }
 

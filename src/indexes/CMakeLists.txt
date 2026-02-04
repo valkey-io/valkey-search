@@ -103,8 +103,6 @@ set(SRCS_TEXT ${CMAKE_CURRENT_LIST_DIR}/text/text_index.h
               ${CMAKE_CURRENT_LIST_DIR}/text/term.h
               ${CMAKE_CURRENT_LIST_DIR}/text/lexer.cc
               ${CMAKE_CURRENT_LIST_DIR}/text/lexer.h
-              ${CMAKE_CURRENT_LIST_DIR}/text/unicode_normalizer.cc
-              ${CMAKE_CURRENT_LIST_DIR}/text/unicode_normalizer.h
               ${CMAKE_CURRENT_LIST_DIR}/text/fuzzy.h
               ${CMAKE_CURRENT_LIST_DIR}/text/flat_position_map.cc
               ${CMAKE_CURRENT_LIST_DIR}/text/flat_position_map.h)
@@ -118,4 +116,3 @@ target_link_libraries(text PUBLIC string_interning)
 target_link_libraries(text PUBLIC valkey_module)
 target_link_libraries(text PUBLIC snowball)
 target_link_libraries(text PUBLIC scanner)
-target_link_libraries(text PUBLIC icu) 

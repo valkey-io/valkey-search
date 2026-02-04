@@ -1713,17 +1713,22 @@ void IndexSchema::SubscribeToVectorExternalizer(
 void IndexSchema::VectorExternalizer(const Key &key,
                                      absl::string_view attribute_identifier,
                                      vmsdk::UniqueValkeyString &record) {
-  if (!record) {
-    return;
-  }
   auto it = vector_externalizer_subscriptions_.find(attribute_identifier);
   if (it == vector_externalizer_subscriptions_.end()) {
     return;
   }
+  if (!record) {
+    VectorExternalizer::Instance().UnTrack(key, attribute_identifier,
+                                           attribute_data_type_->ToProto());
+    return;
+  }
   for (auto vec_index : it->second) {
-    VectorExternalizer::Instance().Externalize(
-        vec_index, key, attribute_identifier, attribute_data_type_->ToProto(),
-        record.get());
+    auto vector = vec_index->InternVector(vmsdk::ToStringView(record.get()));
+    if (vector) {
+      VectorExternalizer::Instance().Externalize(
+          key, attribute_identifier, attribute_data_type_->ToProto(), vector);
+      break;
+    }
   }
 }
 

@@ -21,9 +21,6 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
-namespace indexes {
-class VectorBase;
-};  // namespace indexes
 
 class VectorExternalizer {
  public:
@@ -31,13 +28,15 @@ class VectorExternalizer {
     static VectorExternalizer* instance = new VectorExternalizer();
     return *instance;
   }
-  InternedStringPtr Intern(const indexes::VectorBase* vec_index,
-                           absl::string_view vector_str);
-  InternedStringPtr Externalize(
-      const indexes::VectorBase* vec_index, const InternedStringPtr& key,
-      absl::string_view attribute_identifier,
-      data_model::AttributeDataType attribute_data_type,
-      const ValkeyModuleString* vector);
+
+  void Externalize(const InternedStringPtr& key,
+                   absl::string_view attribute_identifier,
+                   data_model::AttributeDataType attribute_data_type,
+                   InternedStringPtr vector);
+
+  void UnTrack(const InternedStringPtr& key,
+               absl::string_view attribute_identifier,
+               data_model::AttributeDataType attribute_data_type);
 
   struct Stats {
     size_t hash_extern_errors{0};
@@ -59,11 +58,13 @@ class VectorExternalizer {
 
   vmsdk::MainThreadAccessGuard<vmsdk::UniqueValkeyDetachedThreadSafeContext>
       ctx_;
-  mutable absl::Mutex mutex_;
-  absl::flat_hash_map<absl::string_view, InternedStringPtr> tracked_vectors_
-      ABSL_GUARDED_BY(mutex_);
-  size_t EntriesCnt() const;
-  size_t PendingEntriesCnt() const;
+  vmsdk::MainThreadAccessGuard<InternedStringHashMap<
+      absl::flat_hash_map<std::string, InternedStringPtr>>>
+      tracked_vectors_;
+  ABSL_GUARDED_BY(mutex_);
+  void Track(const InternedStringPtr& key,
+             absl::string_view attribute_identifier,
+             InternedStringPtr interned_vector);
   bool hash_registration_supported_ = false;
   vmsdk::MainThreadAccessGuard<Stats> stats_;
 };

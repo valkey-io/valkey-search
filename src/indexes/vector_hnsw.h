@@ -9,6 +9,7 @@
 #define VALKEYSEARCH_SRC_INDEXES_VECTOR_HNSW_H_
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -93,7 +94,13 @@ class VectorHNSW : public VectorBase {
     return algo_->getPointPtr(internal_id);
   }
   bool IsVectorMatch(uint64_t internal_id,
-                     const InternedStringPtr& vector) override;
+                     const InternedStringPtr& vector) override
+      ABSL_LOCKS_EXCLUDED(tracked_vectors_mutex_);
+  void TrackVector(uint64_t internal_id,
+                   const InternedStringPtr& vector) override
+      ABSL_LOCKS_EXCLUDED(tracked_vectors_mutex_);
+  void UnTrackVector(uint64_t internal_id) override
+      ABSL_LOCKS_EXCLUDED(tracked_vectors_mutex_);
 
  private:
   VectorHNSW(int dimensions, absl::string_view attribute_identifier,
@@ -102,6 +109,9 @@ class VectorHNSW : public VectorBase {
       ABSL_GUARDED_BY(resize_mutex_);
   std::unique_ptr<hnswlib::SpaceInterface<T>> space_;
   mutable absl::Mutex resize_mutex_;
+  mutable absl::Mutex tracked_vectors_mutex_;
+  std::deque<InternedStringPtr> tracked_vectors_
+      ABSL_GUARDED_BY(tracked_vectors_mutex_);
 };
 
 }  // namespace valkey_search::indexes

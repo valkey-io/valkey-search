@@ -19,6 +19,8 @@ namespace hnswlib {
 template <typename DOCIDTYPE>
 class BaseMultiVectorSpace : public SpaceInterface<float> {
  public:
+  BaseMultiVectorSpace(bool should_normalize)
+      : SpaceInterface<float>(should_normalize) {}
   virtual DOCIDTYPE get_doc_id(const void *datapoint) = 0;
 
   virtual void set_doc_id(void *datapoint, DOCIDTYPE doc_id) = 0;
@@ -32,7 +34,8 @@ class MultiVectorL2Space : public BaseMultiVectorSpace<DOCIDTYPE> {
   size_t dim_;
 
  public:
-  MultiVectorL2Space(size_t dim) {
+  MultiVectorL2Space(size_t dim, bool should_normalize)
+      : BaseMultiVectorSpace<DOCIDTYPE>(should_normalize) {
 #if defined(USE_SIMSIMD)
     fstdistfunc_ = L2SqrSimsimd;
 #else
@@ -64,8 +67,6 @@ class MultiVectorL2Space : public BaseMultiVectorSpace<DOCIDTYPE> {
 
   size_t get_data_size() override { return data_size_; }
 
-  DistFuncWrapper<float> get_dist_func() override { return fstdistfunc_; }
-
   void *get_dist_func_param() override { return &dim_; }
 
   DOCIDTYPE get_doc_id(const void *datapoint) override {
@@ -77,6 +78,11 @@ class MultiVectorL2Space : public BaseMultiVectorSpace<DOCIDTYPE> {
   }
 
   ~MultiVectorL2Space() {}
+
+ protected:
+  DistFuncWrapper<float> inner_get_dist_func() override {
+    return fstdistfunc_;
+  };
 };
 
 template <typename DOCIDTYPE>
@@ -87,7 +93,8 @@ class MultiVectorInnerProductSpace : public BaseMultiVectorSpace<DOCIDTYPE> {
   size_t dim_;
 
  public:
-  MultiVectorInnerProductSpace(size_t dim) {
+  MultiVectorInnerProductSpace(size_t dim, bool should_normalize)
+      : BaseMultiVectorSpace<DOCIDTYPE>(should_normalize) {
 #if defined(USE_SIMSIMD)
     fstdistfunc_ = InnerProductDistanceSimsimd;
 #else

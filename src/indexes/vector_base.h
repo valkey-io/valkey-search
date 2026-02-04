@@ -41,9 +41,6 @@
 
 namespace valkey_search::indexes {
 
-std::vector<char> NormalizeEmbedding(absl::string_view record, size_t type_size,
-                                     float* magnitude = nullptr);
-
 struct Neighbor {
   InternedStringPtr external_id;
   float distance;
@@ -206,7 +203,7 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
       data_model::VectorIndex* vector_index_proto) const = 0;
   virtual absl::Status SaveIndexImpl(
       RDBChunkOutputStream chunked_out) const = 0;
-  InternedStringPtr ExternalizeVector(
+  InternedStringPtr LoadRecordAsVector(
       ValkeyModuleCtx* ctx, const AttributeDataType* attribute_data_type,
       absl::string_view key_cstr, absl::string_view attribute_identifier);
   virtual char** GetValueImpl(uint64_t internal_id) const = 0;
@@ -219,8 +216,11 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   virtual absl::StatusOr<std::pair<float, hnswlib::labeltype>>
   ComputeDistanceFromRecordImpl(uint64_t internal_id,
                                 absl::string_view query) const = 0;
+  virtual void TrackVector(uint64_t internal_id,
+                           const InternedStringPtr& vector) = 0;
   virtual bool IsVectorMatch(uint64_t internal_id,
                              const InternedStringPtr& vector) = 0;
+  virtual void UnTrackVector(uint64_t internal_id) = 0;
 
  private:
   absl::StatusOr<uint64_t> TrackKey(const InternedStringPtr& key,

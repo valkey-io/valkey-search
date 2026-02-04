@@ -104,21 +104,34 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::Create(
         absl::StrCat("HNSWLib error while creating a record: ", e.what()));
   }
 }
+template <typename T>
+void VectorHNSW<T>::TrackVector(uint64_t internal_id,
+                                const InternedStringPtr &vector) {
+  absl::MutexLock lock(&tracked_vectors_mutex_);
+  tracked_vectors_.push_back(vector);
+}
 
 template <typename T>
 bool VectorHNSW<T>::IsVectorMatch(uint64_t internal_id,
                                   const InternedStringPtr &vector) {
   absl::ReaderMutexLock lock(&resize_mutex_);
-  std::unique_lock<std::mutex> lock_label(algo_->getLabelOpMutex(internal_id));
-  auto id = hnswlib_helpers::GetInternalId(algo_.get(), internal_id);
-  if (!id.has_value()) {
-    return false;
+  {
+    std::unique_lock<std::mutex> lock_label(
+        algo_->getLabelOpMutex(internal_id));
+    auto id = hnswlib_helpers::GetInternalId(algo_.get(), internal_id);
+    if (!id.has_value()) {
+      return false;
+    }
+    char *data_ptrv = algo_->getDataByInternalId(*id);
+    size_t dim = *((size_t *)algo_->dist_func_param_);
+    absl::string_view record(data_ptrv, dim * sizeof(T));
+    return vector->Str() == record;
   }
-  char *data_ptrv = algo_->getDataByInternalId(*id);
-  size_t dim = *((size_t *)algo_->dist_func_param_);
-  absl::string_view record(data_ptrv, dim * sizeof(T));
-  return vector->Str() == record;
 }
+// UnTrackVector does not delete the vector in VectorHNSW, as vectors are never
+// physically removed from the graph—only marked as deleted.
+template <typename T>
+void VectorHNSW<T>::UnTrackVector(uint64_t internal_id) {}
 
 template <typename T>
 absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
@@ -317,35 +330,22 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
         query.size(), ") does not match index's expected size (",
         dimensions_ * GetDataTypeSize(), ")."));
   }
-  auto perform_search = [this, count, &filter, enable_partial_results,
-                         &ef_runtime,
-                         &cancellation_token](absl::string_view query)
-                            ABSL_NO_THREAD_SAFETY_ANALYSIS
-      -> absl::StatusOr<std::priority_queue<std::pair<T, hnswlib::labeltype>>> {
+  std::priority_queue<std::pair<T, hnswlib::labeltype>> search_result;
+  {
     try {
       CancelCondition cancel_condition(cancellation_token);
-      auto res = algo_->searchKnn((T *)query.data(), count, ef_runtime,
-                                  filter.get(), &cancel_condition);
+      search_result = algo_->searchKnn((T *)query.data(), count, ef_runtime,
+                                       filter.get(), &cancel_condition);
       if (!enable_partial_results && cancellation_token->IsCancelled()) {
         return absl::CancelledError(
             "Search operation cancelled due to timeout");
       }
-      return res;
     } catch (const std::exception &e) {
       Metrics::GetStats().hnsw_search_exceptions_cnt.fetch_add(
           1, std::memory_order_relaxed);
       return absl::InternalError(e.what());
     }
-  };
-  if (normalize_) {
-    auto norm_record = NormalizeEmbedding(query, GetDataTypeSize());
-    VMSDK_ASSIGN_OR_RETURN(
-        auto search_result,
-        perform_search(absl::string_view((const char *)norm_record.data(),
-                                         norm_record.size())));
-    return CreateReply(search_result);
   }
-  VMSDK_ASSIGN_OR_RETURN(auto search_result, perform_search(query));
   return CreateReply(search_result);
 }
 

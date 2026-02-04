@@ -12,7 +12,6 @@
 
 #include "absl/log/check.h"
 #include "absl/strings/string_view.h"
-#include "src/indexes/vector_base.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/utils.h"
@@ -28,34 +27,32 @@ void VectorExternalizer::Init(ValkeyModuleCtx* ctx) {
   ctx_ = vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx);
 }
 
-InternedStringPtr VectorExternalizer::Intern(
-    const indexes::VectorBase* vec_index, absl::string_view vector_str) {
-  absl::MutexLock lock(&mutex_);
-  auto it = tracked_vectors_.find(vector_str);
-  if (it != tracked_vectors_.end()) {
-    vec_index->SetMagnitude(it->second->Str());
-    return it->second;
-  }
-  InternedStringPtr interned_vector = vec_index->InternVector(vector_str);
-  tracked_vectors_[vector_str] = interned_vector;
-  return interned_vector;
+void VectorExternalizer::Track(const InternedStringPtr& key,
+                               absl::string_view attribute_identifier,
+                               InternedStringPtr interned_vector) {
+  auto& tracked_vectors = tracked_vectors_.Get();
+  tracked_vectors[key][attribute_identifier] = interned_vector;
 }
 
-InternedStringPtr VectorExternalizer::Externalize(
-    const indexes::VectorBase* vec_index, const InternedStringPtr& key,
-    absl::string_view attribute_identifier,
-    data_model::AttributeDataType attribute_data_type,
-    const ValkeyModuleString* vector) {
-  vmsdk::VerifyMainThread();
-  auto vector_str = vmsdk::ToStringView(vector);
-  if (!vec_index->IsValidSizeVector(vector_str)) {
-    return {};
+void VectorExternalizer::UnTrack(
+    const InternedStringPtr& key, absl::string_view attribute_identifier,
+    data_model::AttributeDataType attribute_data_type) {
+  auto& tracked_vectors = tracked_vectors_.Get();
+  auto it = tracked_vectors.find(key);
+  if (it == tracked_vectors.end()) {
+    return;
   }
-  InternedStringPtr interned_vector = Intern(vec_index, vector_str);
+  it->second.erase(attribute_identifier);
+}
+
+void VectorExternalizer::Externalize(
+    const InternedStringPtr& key, absl::string_view attribute_identifier,
+    data_model::AttributeDataType attribute_data_type,
+    InternedStringPtr interned_vector) {
   if (!hash_registration_supported_ ||
       attribute_data_type !=
           data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH) {
-    return interned_vector;
+    return;
   }
 
   auto key_str = vmsdk::MakeUniqueValkeyString(key->Str());
@@ -66,22 +63,22 @@ InternedStringPtr VectorExternalizer::Externalize(
           key_obj.get(),
           vmsdk::MakeUniqueValkeyString(attribute_identifier).get()) !=
       VALKEYMODULE_OK) {
-    return interned_vector;
+    return;
   }
+  Track(key, attribute_identifier, interned_vector);
   if (ValkeyModule_HashSetStringRef(
           key_obj.get(),
           vmsdk::MakeUniqueValkeyString(attribute_identifier).get(),
           interned_vector->Str().data(),
           interned_vector->Str().size()) != VALKEYMODULE_OK) {
     ++stats_.Get().hash_extern_errors;
+    UnTrack(key, attribute_identifier, attribute_data_type);
   }
-  return interned_vector;
 }
 
 VectorExternalizer::Stats VectorExternalizer::GetStats() const {
   Stats ret = stats_.Get();
-  absl::MutexLock lock(&mutex_);
-  ret.entry_cnt = tracked_vectors_.size();
+  ret.entry_cnt = tracked_vectors_.Get().size();
   return ret;
 }
 

@@ -365,7 +365,8 @@ class InnerProductSpace : public SpaceInterface<float> {
   size_t dim_;
 
  public:
-  InnerProductSpace(size_t dim) {
+  InnerProductSpace(size_t dim, bool should_normalize)
+      : SpaceInterface<float>(should_normalize) {
 #if defined(USE_SIMSIMD)
     fstdistfunc_ = InnerProductDistanceSimsimd;
 #else
@@ -408,7 +409,7 @@ class InnerProductSpace : public SpaceInterface<float> {
 
   size_t get_data_size() { return data_size_; }
 
-  DistFuncWrapper<float> get_dist_func() { return fstdistfunc_; }
+  DistFuncWrapper<float> get_dist_func() override { return fstdistfunc_; }
 
   void *get_dist_func_param() { return &dim_; }
 

@@ -71,12 +71,27 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::Create(
 }
 
 template <typename T>
+void VectorFlat<T>::TrackVector(uint64_t internal_id,
+                                const InternedStringPtr &vector) {
+  absl::MutexLock lock(&tracked_vectors_mutex_);
+  tracked_vectors_[internal_id] = vector;
+}
+
+template <typename T>
 bool VectorFlat<T>::IsVectorMatch(uint64_t internal_id,
                                   const InternedStringPtr &vector) {
-  absl::ReaderMutexLock lock(&resize_mutex_);
-  const char *store_vec_str = *algo_->getPointPtrSafe(internal_id);
-  absl::string_view store_vec(store_vec_str, GetVectorDataSize());
-  return vector->Str() == store_vec;
+  absl::MutexLock lock(&tracked_vectors_mutex_);
+  auto it = tracked_vectors_.find(internal_id);
+  if (it == tracked_vectors_.end()) {
+    return false;
+  }
+  return it->second->Str() == vector->Str();
+}
+
+template <typename T>
+void VectorFlat<T>::UnTrackVector(uint64_t internal_id) {
+  absl::MutexLock lock(&tracked_vectors_mutex_);
+  tracked_vectors_.erase(internal_id);
 }
 
 template <typename T>
@@ -211,13 +226,12 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
         query.size(), ") does not match index's expected size (",
         dimensions_ * GetDataTypeSize(), ")."));
   }
-  auto perform_search = [this, count, &filter,
-                         &cancellation_token](absl::string_view query)
-      -> absl::StatusOr<std::priority_queue<std::pair<T, hnswlib::labeltype>>> {
+  std::priority_queue<std::pair<T, hnswlib::labeltype>> search_result;
+  {
     absl::ReaderMutexLock lock(&resize_mutex_);
     try {
       CancelCondition canceler(cancellation_token);
-      return algo_->searchKnn(
+      search_result = algo_->searchKnn(
           (T *)query.data(),
           std::min(count, static_cast<uint64_t>(algo_->cur_element_count_)),
           filter.get(), &canceler);
@@ -226,16 +240,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
           1, std::memory_order_relaxed);
       return absl::InternalError(e.what());
     }
-  };
-  if (normalize_) {
-    auto norm_record = NormalizeEmbedding(query, GetDataTypeSize());
-    VMSDK_ASSIGN_OR_RETURN(
-        auto search_result,
-        perform_search(absl::string_view((const char *)norm_record.data(),
-                                         norm_record.size())));
-    return CreateReply(search_result);
   }
-  VMSDK_ASSIGN_OR_RETURN(auto search_result, perform_search(query));
   return CreateReply(search_result);
 }
 

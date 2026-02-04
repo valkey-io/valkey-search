@@ -34,13 +34,12 @@ static absl::Status DumpKey(ValkeyModuleCtx* ctx, auto& ki,
 
 static absl::Status DumpWord(ValkeyModuleCtx* ctx, auto& wi, bool with_keys,
                              bool with_positions) {
-  auto word = wi.GetWord();
   if (with_keys) {
-    auto postings = wi.GetPostingsTarget();
-    auto ki = postings->GetKeyIterator();
-    auto key_count = postings->GetKeyCount();
+    auto ki = wi.GetTarget()->GetKeyIterator();
+    auto key_count = wi.GetTarget()->GetKeyCount();
     ValkeyModule_ReplyWithArray(ctx, 1 + key_count);
-    ValkeyModule_ReplyWithStringBuffer(ctx, word.data(), word.size());
+    ValkeyModule_ReplyWithStringBuffer(ctx, wi.GetWord().data(),
+                                       wi.GetWord().size());
     size_t count = 0;
     while (ki.IsValid()) {
       VMSDK_RETURN_IF_ERROR(DumpKey(ctx, ki, with_positions));
@@ -49,11 +48,12 @@ static absl::Status DumpWord(ValkeyModuleCtx* ctx, auto& wi, bool with_keys,
     }
     if (count != key_count) {
       return absl::InvalidArgumentError(absl::StrCat(
-          "Key count mismatch for word: ", word, " Counted:", count,
-          " Expected: ", postings->GetKeyCount()));
+          "Key count mismatch for word: ", wi.GetWord(), " Counted:", count,
+          " Expected: ", wi.GetTarget()->GetKeyCount()));
     }
   } else {
-    ValkeyModule_ReplyWithStringBuffer(ctx, word.data(), word.size());
+    ValkeyModule_ReplyWithStringBuffer(ctx, wi.GetWord().data(),
+                                       wi.GetWord().size());
   }
   return absl::OkStatus();
 }
@@ -130,7 +130,7 @@ absl::Status IndexSchema::TextInfoCmd(ValkeyModuleCtx* ctx,
                                          stem_wi.GetWord().size());
 
       // Reply with parent words set
-      const auto& stem_parents_ptr = stem_wi.GetStemParentsTarget();
+      const auto& stem_parents_ptr = stem_wi.GetTarget();
       if (stem_parents_ptr) {
         const auto& parents = *stem_parents_ptr;
         ValkeyModule_ReplyWithArray(ctx, parents.size());

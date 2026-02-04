@@ -8,6 +8,7 @@ from indexes import *
 from valkeytestframework.conftest import resource_port_tracker
 import pytest
 import os
+import platform
 
 
 class TestVSSBasic(ValkeySearchTestCaseBase):
@@ -94,6 +95,7 @@ class TestVSSBasic(ValkeySearchTestCaseBase):
 
 class TestClusterInfo(ValkeySearchClusterTestCase):
     
+    @pytest.mark.skipif(platform.system() == "Darwin", reason="Skip on macOS")
     def test_coordinator_cpu_metric(self):
         client = self.new_cluster_client()
         info_data = client.info("SEARCH")

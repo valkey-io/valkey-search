@@ -285,7 +285,6 @@ class FlatVectorDefinition(AttributeDefinition):
             self.distance_metric,
         ]
 
-
 class TagDefinition(AttributeDefinition):
     def __init__(self, separator=",", alias=None):
         self.separator = separator
@@ -302,7 +301,6 @@ class TagDefinition(AttributeDefinition):
         ]
         return args
 
-
 class NumericDefinition(AttributeDefinition):
      def __init__(self, alias=None):
         self.alias = alias
@@ -313,8 +311,7 @@ class NumericDefinition(AttributeDefinition):
             args += ["AS", self.alias]
         args += ["NUMERIC"]
         return args
-
-
+     
 class TextDefinition(AttributeDefinition):
     def __init__(self, nostem=False, with_suffix_trie=False, min_stem_size=None, alias=None):
         self.nostem = nostem
@@ -334,7 +331,6 @@ class TextDefinition(AttributeDefinition):
         if self.min_stem_size is not None:
             args += ["MINSTEMSIZE", str(self.min_stem_size)]
         return args
-
 
 def create_index(
     client: valkey.ValkeyCluster,

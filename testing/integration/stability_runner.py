@@ -130,17 +130,49 @@ class StabilityRunner:
             "numeric": utils.NumericDefinition(),
         }
         if self.config.index_type == "HNSW":
-            attributes.update({
+            attributes = {
+                "tag": utils.TagDefinition(),
+                "numeric": utils.NumericDefinition(),
+                "title": utils.TextDefinition(nostem=True),
+                "description": utils.TextDefinition(),
                 "embedding": utils.HNSWVectorDefinition(
                     vector_dimensions=self.config.vector_dimensions
                 )
-            })
-        else:
-            attributes.update({
+            }
+        elif self.config.index_type == "FLAT":
+            attributes = {
+                "tag": utils.TagDefinition(),
+                "numeric": utils.NumericDefinition(),
+                "title": utils.TextDefinition(nostem=True),
+                "description": utils.TextDefinition(),
                 "embedding": utils.FlatVectorDefinition(
                     vector_dimensions=self.config.vector_dimensions
                 ),
-            })
+            }
+        elif self.config.index_type == "TEXT":
+            attributes = {
+                "tag": utils.TagDefinition(),
+                "numeric": utils.NumericDefinition(),
+                "content": utils.TextDefinition(),
+                "category": utils.TextDefinition(nostem=True),
+            }
+        elif self.config.index_type == "TAG":
+            attributes = {
+                "category": utils.TagDefinition(separator=","),
+                "product_type": utils.TagDefinition(separator="|"),
+                "brand": utils.TagDefinition(separator=","),
+                "features": utils.TagDefinition(separator=";"),
+            }
+        elif self.config.index_type == "NUMERIC":
+            attributes = {
+                "price": utils.NumericDefinition(),
+                "quantity": utils.NumericDefinition(),
+                "rating": utils.NumericDefinition(),
+                "timestamp": utils.NumericDefinition(),
+            }
+        else:
+            raise ValueError(f"Unknown index type: {self.config.index_type}")
+        
         utils.create_index(
             client=client,
             index_name=self.config.index_name,
@@ -247,51 +279,110 @@ class StabilityRunner:
         # For failover testing: we kill all memtier processes during failover
         # and restart them after recovery completes, rather than having them retry connections
 
-        insert_command = (
-            f"{self.config.memtier_path}"
-            " --cluster-mode"
-            " -s localhost"
-            f" -p {self.config.ports[0]}"
-            f" -t {self.config.num_memtier_threads}"
-            f" -c {self.config.num_memtier_clients}"
-            " --random-data"
-            " -"
-            " --command='HSET __key__ embedding __data__ tag my_tag numeric 10'"
-            " --command-key-pattern=P"
-            f" -d {self.config.vector_dimensions*4}"
-            " --json-out-file"
-            f" {memtier_output_dir}/{self.config.index_name}_memtier_insert.json"
-        )
-        delete_command = (
-            f"{self.config.memtier_path}"
-            " --cluster-mode"
-            " -s localhost"
-            f" -p {self.config.ports[0]}"
-            f" -t {self.config.num_memtier_threads}"
-            f" -c {self.config.num_memtier_clients}"
-            " --random-data"
-            " -"
-            " --command='DEL __key__'"
-            " --command-key-pattern=P"
-            f" -d {self.config.vector_dimensions*4}"
-            " --json-out-file"
-            f" {memtier_output_dir}/{self.config.index_name}_memtier_del.json"
-        )
-        expire_command = (
-            f"{self.config.memtier_path}"
-            " --cluster-mode"
-            " -s localhost"
-            f" -p {self.config.ports[0]}"
-            f" -t {self.config.num_memtier_threads}"
-            f" -c {self.config.num_memtier_clients}"
-            " --random-data"
-            " -"
-            " --command='EXPIRE __key__ 1'"
-            " --command-key-pattern=P"
-            f" -d {self.config.vector_dimensions*4}"
-            " --json-out-file"
-            f" {memtier_output_dir}/{self.config.index_name}_memtier_expire.json"
-        )
+        # Build HSET command based on index type
+        if self.config.index_type in ["HNSW", "FLAT"]:
+            # Vector-based index: include embedding field with text fields
+            hset_fields = "embedding __data__ tag my_tag numeric 10 title __data__ description __data__"
+        elif self.config.index_type == "TEXT":
+            # Text-only index: use simple text without spaces to avoid quote escaping issues
+            hset_fields = 'tag my_tag numeric 10 content sample_search_document_with_electronics category electronics'
+        elif self.config.index_type == "TAG":
+            # Tag-only index: multiple tag fields with different separators
+            hset_fields = 'category electronics,gadgets,wearables product_type smartwatch|fitness brand apple,premium features waterproof;heartrate;gps'
+        elif self.config.index_type == "NUMERIC":
+            # Numeric-only index: multiple numeric fields with positive integer values
+            hset_fields = 'price 299 quantity 50 rating 45 timestamp 1640000000'
+        
+        if self.config.index_type in ["TEXT", "TAG", "NUMERIC"]:
+            insert_command = (
+                f"{self.config.memtier_path}"
+                " --cluster-mode"
+                " -s localhost"
+                f" -p {self.config.ports[0]}"
+                f" -t {self.config.num_memtier_threads}"
+                f" -c {self.config.num_memtier_clients}"
+                " --command='HSET __key__ "
+                f"{hset_fields}'"
+                " --command-key-pattern=P"
+                " --json-out-file "
+                f"{memtier_output_dir}/{self.config.index_name}_memtier_insert.json"
+            )
+        else:
+            insert_command = (
+                f"{self.config.memtier_path}"
+                " --cluster-mode"
+                " -s localhost"
+                f" -p {self.config.ports[0]}"
+                f" -t {self.config.num_memtier_threads}"
+                f" -c {self.config.num_memtier_clients}"
+                " --random-data"
+                " -"
+                f" --command='HSET __key__ {hset_fields}'"
+                " --command-key-pattern=P"
+                f" -d {self.config.vector_dimensions*4}"
+                " --json-out-file"
+                f" {memtier_output_dir}/{self.config.index_name}_memtier_insert.json"
+            )
+        if self.config.index_type in ["TEXT", "TAG", "NUMERIC"]:
+            delete_command = (
+                f"{self.config.memtier_path}"
+                " --cluster-mode"
+                " -s localhost"
+                f" -p {self.config.ports[0]}"
+                f" -t {self.config.num_memtier_threads}"
+                f" -c {self.config.num_memtier_clients}"
+                " -"
+                " --command='DEL __key__'"
+                " --command-key-pattern=P"
+                " --json-out-file"
+                f" {memtier_output_dir}/{self.config.index_name}_memtier_del.json"
+            )
+        else:
+            delete_command = (
+                f"{self.config.memtier_path}"
+                " --cluster-mode"
+                " -s localhost"
+                f" -p {self.config.ports[0]}"
+                f" -t {self.config.num_memtier_threads}"
+                f" -c {self.config.num_memtier_clients}"
+                " --random-data"
+                " -"
+                " --command='DEL __key__'"
+                " --command-key-pattern=P"
+                f" -d {self.config.vector_dimensions*4}"
+                " --json-out-file"
+                f" {memtier_output_dir}/{self.config.index_name}_memtier_del.json"
+            )
+        if self.config.index_type in ["TEXT", "TAG", "NUMERIC"]:
+            expire_command = (
+                f"{self.config.memtier_path}"
+                " --cluster-mode"
+                " -s localhost"
+                f" -p {self.config.ports[0]}"
+                f" -t {self.config.num_memtier_threads}"
+                f" -c {self.config.num_memtier_clients}"
+                " -"
+                " --command='EXPIRE __key__ 1'"
+                " --command-key-pattern=P"
+                " --json-out-file"
+                f" {memtier_output_dir}/{self.config.index_name}_memtier_expire.json"
+            )
+        else:
+            expire_command = (
+                f"{self.config.memtier_path}"
+                " --cluster-mode"
+                " -s localhost"
+                f" -p {self.config.ports[0]}"
+                f" -t {self.config.num_memtier_threads}"
+                f" -c {self.config.num_memtier_clients}"
+                " --random-data"
+                " -"
+                " --command='EXPIRE __key__ 1'"
+                " --command-key-pattern=P"
+                f" -d {self.config.vector_dimensions*4}"
+                " --json-out-file"
+                f" {memtier_output_dir}/{self.config.index_name}_memtier_expire.json"
+            )
 
         if self.config.insertion_mode == "request_count":
             keys_per_client = int(
@@ -311,7 +402,20 @@ class StabilityRunner:
             raise ValueError(
                 f"Unknown insertion mode: {self.config.insertion_mode}"
             )
-
+        
+        # Build search query based on index type
+        if self.config.index_type in ["HNSW", "FLAT"]:
+            # Vector KNN search
+            search_query = '"(@tag:{my_tag} @numeric:[0 100])=>[KNN 3 @embedding $query_vector]" NOCONTENT PARAMS 2 "query_vector" __data__ DIALECT 2'
+        elif self.config.index_type == "TEXT":
+            # Text search - updated to match the new content format without spaces
+            search_query = '"(@tag:{my_tag} @numeric:[0 100] @content:sample_search_document_with_electronics | @category:electronics)"'
+        elif self.config.index_type == "TAG":
+            # Tag search - exact match on multiple tag fields
+            search_query = '"(@category:{electronics} @product_type:{smartwatch})"'
+        elif self.config.index_type == "NUMERIC":
+            # Numeric range search - multiple numeric range filters
+            search_query = '"(@price:[100 500] @quantity:[10 100] @rating:[40 50])"'
         search_command = (
             f"{self.config.memtier_path}"
             " --cluster-mode"
@@ -320,10 +424,7 @@ class StabilityRunner:
             f" -t {self.config.num_memtier_threads}"
             f" -c {self.config.num_search_clients}"
             " -"
-            " --command='FT.SEARCH"
-            f" {self.config.index_name} "
-            '"(@tag:{my_tag} @numeric:[0 100])=>[KNN 3 @embedding $query_vector]"'
-            ' NOCONTENT PARAMS 2 "query_vector" __data__ DIALECT 2\' '
+            f" --command='FT.SEARCH {self.config.index_name} {search_query}'"
             f" --test-time={self.config.test_time_sec}"
             f" -d {self.config.vector_dimensions*4}"
             " --json-out-file"

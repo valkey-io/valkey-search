@@ -758,6 +758,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     }
     VMSDK_RETURN_IF_ERROR(
         SetupTextFieldConfiguration(field_mask, field_or_default, false));
+    query_operations_ |= QueryOperations::kContainsTextTerm;
     
     // For non-exact searches, create composite OR query between exact and non-exact
     if (!exact) {
@@ -771,6 +772,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
       if (stem_field_mask != 0) {
         // Create OR composite: exact search of original OR non-exact of original
         std::vector<std::unique_ptr<query::Predicate>> children;
+        children.reserve(2);
         
         // 1. Exact search with original field_mask (copy token for first use)
         children.push_back(std::make_unique<query::TermPredicate>(

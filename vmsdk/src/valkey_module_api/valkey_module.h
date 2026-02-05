@@ -1857,6 +1857,9 @@ VALKEYMODULE_API int (*ValkeyModule_ACLCheckKeyPrefixPermissions)(
     ValkeyModuleUser *user, const char *key, size_t len,
     unsigned int flags) VALKEYMODULE_ATTR;
 
+VALKEYMODULE_API unsigned int (*ValkeyModule_ClusterKeySlot)(
+    ValkeyModuleString *key) VALKEYMODULE_ATTR;
+
 #define ValkeyModule_IsAOFClient(id) ((id) == UINT64_MAX)
 
 /* This is included inline inside each Valkey module. */
@@ -2224,6 +2227,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver,
   VALKEYMODULE_GET_API(ReplicationSetSecondaryCluster);
   VALKEYMODULE_GET_API(HashExternalize);
   VALKEYMODULE_GET_API(ACLCheckKeyPrefixPermissions);
+  VALKEYMODULE_GET_API(ClusterKeySlot);
 
   if (ValkeyModule_IsModuleNameBusy && ValkeyModule_IsModuleNameBusy(name))
     return VALKEYMODULE_ERR;

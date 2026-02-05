@@ -27,21 +27,33 @@ ProximityIterator::ProximityIterator(
     absl::InlinedVector<std::unique_ptr<TextIterator>,
                         kProximityTermsInlineCapacity>&& iters,
     std::optional<uint32_t> slop, bool in_order,
-    FieldMaskPredicate query_field_mask,
-    const InternedStringSet* untracked_keys)
+    const InternedStringSet* untracked_keys, bool skip_positional_checks)
     : iters_(std::move(iters)),
       slop_(slop),
       in_order_(in_order),
       untracked_keys_(untracked_keys),
       current_position_(std::nullopt),
       current_field_mask_(0ULL),
-      query_field_mask_(query_field_mask) {
+      skip_positional_checks_(skip_positional_checks) {
   CHECK(!iters_.empty()) << "must have at least one text iterator";
-  CHECK(slop_.has_value() || in_order_)
-      << "ProximityIterator requires either slop or inorder=true";
-  // Pre-allocate vectors used for positional checks to avoid reallocation
-  positions_.resize(iters_.size());
-  pos_with_idx_.resize(iters_.size());
+  query_field_mask_ = ~0ULL;
+  for (const auto& iter : iters_) {
+    query_field_mask_ &= iter->QueryFieldMask();
+  }
+  if (!skip_positional_checks_) {
+    CHECK(slop_.has_value() || in_order_)
+        << "ProximityIterator requires either slop or inorder=true";
+    // If no common fields and there is a positional requirement, we can
+    // short-circuit and to mark the iterator as done by setting iters_ to
+    // empty.
+    if (query_field_mask_ == 0) {
+      iters_.clear();
+      return;
+    }
+    // Pre-allocate vectors used for positional checks to avoid reallocation
+    positions_.resize(iters_.size());
+    pos_with_idx_.resize(iters_.size());
+  }
   // Prime iterators to the first common key and valid position combo
   NextKey();
 }
@@ -51,6 +63,7 @@ FieldMaskPredicate ProximityIterator::QueryFieldMask() const {
 }
 
 bool ProximityIterator::DoneKeys() const {
+  if (iters_.empty()) return true;
   for (auto& iter : iters_) {
     if (iter->DoneKeys()) {
       return true;
@@ -82,10 +95,13 @@ bool ProximityIterator::NextKey() {
     if (FindCommonKey()) {
       current_position_ = std::nullopt;
       current_field_mask_ = 0ULL;
-      // 2) Move to the next valid position combination across all text
+      // 2) Skip positional checks if requested. Otherwise,
+      // move to the next valid position combination across all text
       // iterators.
       // Exit, if no key with a valid position combination is found.
-      if (NextPosition()) {
+      if (skip_positional_checks_) {
+        return true;
+      } else if (NextPosition()) {
         return true;
       }
     }
@@ -133,7 +149,9 @@ bool ProximityIterator::SeekForwardKey(const Key& target_key) {
     if (FindCommonKey()) {
       current_position_ = std::nullopt;
       current_field_mask_ = 0ULL;
-      if (NextPosition()) {
+      if (skip_positional_checks_) {
+        return true;
+      } else if (NextPosition()) {
         return true;
       }
     }
@@ -149,6 +167,7 @@ bool ProximityIterator::SeekForwardKey(const Key& target_key) {
 }
 
 bool ProximityIterator::DonePositions() const {
+  if (iters_.empty()) return true;
   for (auto& iter : iters_) {
     if (iter->DonePositions()) {
       return true;

@@ -358,12 +358,6 @@ class ComposedPredicate : public Predicate {
   std::optional<uint32_t> slop_;
   bool inorder_;
 };
-
-// Factory function for creating the exact phrase fetcher defined in text.cc
-// Used in ComposedPredicate evaluation for the exact phrase case optimization
-std::unique_ptr<indexes::EntriesFetcherBase> BuildExactPhraseFetcher(
-    const ComposedPredicate* composed_predicate);
-
-}  // namespace valkey_search::query
+};  // namespace valkey_search::query
 
 #endif  // VALKEYSEARCH_SRC_QUERY_PREDICATE_H_

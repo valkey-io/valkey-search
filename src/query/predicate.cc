@@ -56,34 +56,88 @@ EvaluationResult TermPredicate::Evaluate(Evaluator& evaluator) const {
   return evaluator.EvaluateText(*this, false);
 }
 
+namespace {
+
+// Helper to search for a word in the text index and add matching key iterator
+// for prefilter Returns true if the word was found and a valid key iterator was
+// added
+bool TryAddWordKeyIteratorForPrefilter(
+    const valkey_search::indexes::text::TextIndex& text_index,
+    absl::string_view word, const InternedStringPtr& target_key,
+    uint64_t field_mask, bool require_positions,
+    absl::InlinedVector<
+        valkey_search::indexes::text::Postings::KeyIterator,
+        valkey_search::indexes::text::kWordExpansionInlineCapacity>&
+        key_iterators) {
+  auto word_iter = text_index.GetPrefix().GetWordIterator(word);
+  if (!word_iter.Done() && word_iter.GetWord() == word) {
+    auto postings = word_iter.GetTarget();
+    if (postings) {
+      auto key_iter = postings->GetKeyIterator();
+      if (key_iter.SkipForwardKey(target_key) &&
+          key_iter.ContainsFields(field_mask)) {
+        if (require_positions) {
+          key_iterators.emplace_back(std::move(key_iter));
+        }
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+}  // namespace
+
 // TermPredicate: Exact term match in the text index.
 EvaluationResult TermPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
     const InternedStringPtr& target_key, bool require_positions) const {
   uint64_t field_mask = field_mask_;
-  auto word_iter = text_index.GetPrefix().GetWordIterator(term_);
-  if (word_iter.Done()) {
-    return EvaluationResult(false);
-  }
-  auto postings = word_iter.GetTarget();
-  if (!postings) {
-    return EvaluationResult(false);
-  }
-  auto key_iter = postings->GetKeyIterator();
-  // Skip to target key and verify it contains the required fields
-  if (!key_iter.SkipForwardKey(target_key) ||
-      !key_iter.ContainsFields(field_mask)) {
-    return EvaluationResult(false);
-  }
-  if (!require_positions) {
-    return EvaluationResult(true);
-  }
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
-  key_iterators.emplace_back(std::move(key_iter));
+  // Search for the original word - may or may not exist in corpus
+  bool found_original = TryAddWordKeyIteratorForPrefilter(
+      text_index, term_, target_key, field_mask, require_positions,
+      key_iterators);
+  if (found_original && !require_positions) {
+    return EvaluationResult(true);
+  }
+  // Get stem variants if not exact term search
+  uint64_t stem_field_mask =
+      field_mask & text_index_schema_->GetStemTextFieldMask();
+  if (!exact_ && stem_field_mask != 0) {
+    // Collect stem variant words (words that also stem to the same form)
+    absl::InlinedVector<absl::string_view,
+                        indexes::text::kStemVariantsInlineCapacity>
+        stem_variants;
+    std::string stemmed = text_index_schema_->GetAllStemVariants(
+        term_, stem_variants, text_index_schema_->GetMinStemSize(),
+        stem_field_mask, true);
+    // Search for the stemmed word itself - may or may not exist in corpus
+    if (stemmed != term_) {
+      if (TryAddWordKeyIteratorForPrefilter(text_index, stemmed, target_key,
+                                            stem_field_mask, require_positions,
+                                            key_iterators)) {
+        if (!require_positions) {
+          return EvaluationResult(true);
+        }
+      }
+    }
+    // Search for stem variants - these should all exist from ingestion
+    for (const auto& variant : stem_variants) {
+      bool found = TryAddWordKeyIteratorForPrefilter(
+          text_index, variant, target_key, stem_field_mask, require_positions,
+          key_iterators);
+      CHECK(found) << "Word in stem tree not found in index - ingestion issue";
+    }
+  }
+  if (key_iterators.empty()) {
+    return EvaluationResult(false);
+  }
   auto iterator = std::make_unique<indexes::text::TermIterator>(
-      std::move(key_iterators), field_mask, nullptr, require_positions);
+      std::move(key_iterators), field_mask, nullptr, require_positions,
+      stem_field_mask, found_original);
   return BuildTextEvaluationResult(std::move(iterator));
 }
 
@@ -368,24 +422,25 @@ EvaluationResult EvaluatePredicate(const Predicate* predicate,
 // requirements.
 EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
   // Determine if children need to return positions for proximity checks.
-  // Proximity check in Prefilter also depends on the configuration.
-  bool has_proximity_constraint = slop_.has_value() || inorder_;
-  bool require_positions =
-      evaluator.IsPrefilterEvaluator()
-          ? has_proximity_constraint &&
-                options::GetEnableProximityPrefilterEval().GetValue()
-          : has_proximity_constraint;
+  bool require_positions = slop_.has_value() || inorder_;
   // Handle AND logic
   if (GetType() == PredicateType::kComposedAnd) {
-    // Short-circuit on first false
     uint32_t childrenWithPositions = 0;
     uint64_t query_field_mask = ~0ULL;
     absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
                         indexes::text::kProximityTermsInlineCapacity>
         iterators;
     for (const auto& child : children_) {
+      // In AND: skip text children when in prefilter evaluation because text in
+      // AND is fully (recursively) resolved in the entries fetcher layer
+      // already.
+      if (evaluator.IsPrefilterEvaluator() &&
+          child->GetType() == PredicateType::kText) {
+        continue;
+      }
       EvaluationResult result =
           EvaluatePredicate(child.get(), evaluator, require_positions);
+      // Short-circuit on first false
       if (!result.matches) {
         return EvaluationResult(false);
       }
@@ -401,14 +456,14 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
     // iterators. This ensures we only check proximity for text predicates,
     // not numeric/tag.
     if (require_positions && (childrenWithPositions >= 2)) {
-      // Get field_mask from lhs and rhs iterators
+      // Short circuit if no common fields across all children.
       if (query_field_mask == 0) {
         return EvaluationResult(false);
       }
       // Create ProximityIterator to check proximity
       auto proximity_iterator =
           std::make_unique<indexes::text::ProximityIterator>(
-              std::move(iterators), slop_, inorder_, query_field_mask, nullptr);
+              std::move(iterators), slop_, inorder_, nullptr, false);
       // Check if any valid proximity matches exist
       if (!proximity_iterator->IsIteratorValid()) {
         return EvaluationResult(false);

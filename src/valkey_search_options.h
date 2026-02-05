@@ -50,12 +50,6 @@ const config::Boolean& GetSkipIndexLoad();
 /// Return a mutable reference for testing
 config::Boolean& GetSkipIndexLoadMutable();
 
-/// Returns the prefilter evaluation configuration
-config::Boolean& GetEnablePrefilterEval();
-
-/// Returns the prefilter proximity evaluation configuration
-config::Boolean& GetEnableProximityPrefilterEval();
-
 /// Return the configuration entry for skipping corrupted AOF entries
 const config::Boolean& GetSkipCorruptedInternalUpdateEntries();
 

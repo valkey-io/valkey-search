@@ -181,7 +181,7 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
       // Text predicate evaluation requires main thread to ensure text indexes
       // reflect current keyspace. Block if result keys have in-flight
       // mutations.
-      if (!result->parameters->no_content &&
+      if (result->search_result.ok() && !result->parameters->no_content &&
           query::QueryHasTextPredicate(*result->parameters)) {
         auto initiator_search = std::make_unique<async::InitiatorSearch>(
             std::move(blocked_client), std::move(result));

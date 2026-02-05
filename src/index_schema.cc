@@ -328,6 +328,10 @@ void IndexSchema::UpdateTextFieldMasksForIndex(const std::string &identifier,
     // Track fields with stemming enabled (note: stemming not run for suffix)
     if (text_index->IsStemmingEnabled()) {
       stem_text_field_mask_ |= field_bit;
+      // Sync to TextIndexSchema so query code can access it
+      if (text_index_schema_) {
+        text_index_schema_->SetStemTextFieldMask(stem_text_field_mask_);
+      }
     }
   }
 }
@@ -579,7 +583,7 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
     index_key_info_.erase(key);
   }
   if (text_index_schema_) {
-    // Text index structures operate at the schmema-level so we commit the
+    // Text index structures operate at the schema-level so we commit the
     // updates to all Text attributes in one operation for efficiency
     text_index_schema_->CommitKeyData(key);
   }
@@ -914,6 +918,49 @@ uint64_t IndexSchema::CountRecords() const {
     record_cnt += attribute.second.GetIndex()->GetTrackedKeyCount();
   }
   return record_cnt;
+}
+
+int IndexSchema::GetTagAttributeCount() const {
+  return std::count_if(attributes_.begin(), attributes_.end(),
+                       [](const auto &attr) {
+                         return attr.second.GetIndex()->GetIndexerType() ==
+                                indexes::IndexerType::kTag;
+                       });
+}
+
+int IndexSchema::GetNumericAttributeCount() const {
+  return std::count_if(attributes_.begin(), attributes_.end(),
+                       [](const auto &attr) {
+                         return attr.second.GetIndex()->GetIndexerType() ==
+                                indexes::IndexerType::kNumeric;
+                       });
+}
+
+int IndexSchema::GetVectorAttributeCount() const {
+  return std::count_if(attributes_.begin(), attributes_.end(),
+                       [](const auto &attr) {
+                         auto type = attr.second.GetIndex()->GetIndexerType();
+                         return type == indexes::IndexerType::kVector ||
+                                type == indexes::IndexerType::kHNSW ||
+                                type == indexes::IndexerType::kFlat;
+                       });
+}
+
+int IndexSchema::GetTextAttributeCount() const {
+  return std::count_if(attributes_.begin(), attributes_.end(),
+                       [](const auto &attr) {
+                         return attr.second.GetIndex()->GetIndexerType() ==
+                                indexes::IndexerType::kText;
+                       });
+}
+
+int IndexSchema::GetTextItemCount() const {
+  auto text_index_schema = GetTextIndexSchema();
+  if (!text_index_schema) {
+    return 0;
+  }
+  // Count documents that actually have text content indexed
+  return text_index_schema->GetPerKeyTextIndexes().size();
 }
 
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {

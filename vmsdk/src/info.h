@@ -354,6 +354,9 @@ void DoSection(ValkeyModuleInfoCtx* ctx, absl::string_view section,
 void DoSections(ValkeyModuleInfoCtx* ctx, int for_crash_report);
 absl::Status ShowInfo(ValkeyModuleCtx* ctx, vmsdk::ArgsIterator& itr,
                       const vmsdk::module::Options& options);
+// Get all fields filtered by APP or DEV
+absl::Status ListMetrics(ValkeyModuleCtx* ctx, bool show_app, bool show_dev,
+                         bool names_only = false);
 
 //
 // Some often used declarations

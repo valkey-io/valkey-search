@@ -70,15 +70,15 @@ on:
   push:
     branches:
       - main
-      - fulltext
       - enduranceGitHubRun
+      - enduranceMemory
     paths:
       - 'src/**'
       - 'testing/**'
       - 'vmsdk/src/**'
       - 'vmsdk/testing/**'
   schedule:
-    - cron: "0 2 * * *" # Daily endurance tests at 2 AM UTC
+    - cron: "0 9 * * *" # Daily endurance tests at 2 AM UTC
 
 concurrency:
   group: endurance-tests-${{ github.head_ref || github.ref }}

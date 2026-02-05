@@ -229,12 +229,14 @@ class MockIndexSchema : public IndexSchema {
       vmsdk::ThreadPool* mutations_thread_pool,
       data_model::Language language = data_model::Language::LANGUAGE_ENGLISH,
       std::string punctuation = ".", bool with_offsets = true,
-      const std::vector<std::string>& stop_words = {}) {
+      const std::vector<std::string>& stop_words = {},
+      bool raw_formatted_vectors = true) {
     data_model::IndexSchema index_schema_proto;
     index_schema_proto.set_name(std::string(key));
     index_schema_proto.mutable_subscribed_key_prefixes()->Add(
         subscribed_key_prefixes.begin(), subscribed_key_prefixes.end());
     index_schema_proto.set_language(language);
+    index_schema_proto.set_raw_formatted_vectors(raw_formatted_vectors);
     index_schema_proto.set_punctuation(punctuation);
     index_schema_proto.set_with_offsets(with_offsets);
     index_schema_proto.mutable_stop_words()->Add(stop_words.begin(),

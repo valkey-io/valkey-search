@@ -131,7 +131,8 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::Status LoadTrackedKeys(ValkeyModuleCtx* ctx,
                                const AttributeDataType* attribute_data_type,
-                               SupplementalContentChunkIter&& iter);
+                               SupplementalContentChunkIter&& iter,
+                               bool raw_formatted_vectors);
 
   size_t GetTrackedKeyCount() const override
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);

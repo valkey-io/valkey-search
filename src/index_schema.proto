@@ -34,6 +34,9 @@ message IndexSchema {
   string punctuation = 9;
   bool with_offsets = 10;
   repeated string stop_words = 11;
+  // Specifies if vectors are stored normalized or in raw format for cosine distance
+  // Maintained for backward compatibility.
+  bool raw_formatted_vectors = 12;
 }
 
 

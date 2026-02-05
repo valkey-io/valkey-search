@@ -464,7 +464,7 @@ TEST_F(VectorIndexTest, SaveAndLoadHnsw) {
       VMSDK_EXPECT_OK(
           (*loaded_index_hnsw)
               ->LoadTrackedKeys(&fake_ctx_, &hash_attribute_data_type_,
-                                SupplementalContentChunkIter(&rdb)));
+                                SupplementalContentChunkIter(&rdb), true));
       for (size_t i = 0; i < vectors.size(); ++i) {
         VerifyAdd(loaded_index_hnsw->get(), vectors, i,
                   ExpectedResults::kSuccess);
@@ -489,7 +489,7 @@ TEST_F(VectorIndexTest, SaveAndLoadHnsw) {
       VMSDK_EXPECT_OK(
           (*loaded_index_hnsw)
               ->LoadTrackedKeys(&fake_ctx_, &hash_attribute_data_type_,
-                                SupplementalContentChunkIter(&rdb)));
+                                SupplementalContentChunkIter(&rdb), true));
       auto default_ef_runtime_recall =
           CalcRecall(index_flat->get(), loaded_index_hnsw->get(), k,
                      kDimensions, kEFRuntime);
@@ -533,7 +533,7 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
       auto index = std::move(index_pr.value());
       VMSDK_EXPECT_OK(
           index->LoadTrackedKeys(&fake_ctx_, &hash_attribute_data_type_,
-                                 SupplementalContentChunkIter(&rdb)));
+                                 SupplementalContentChunkIter(&rdb), true));
       for (size_t i = 0; i < vectors.size(); ++i) {
         VerifyAdd(index.get(), vectors, i, ExpectedResults::kSuccess);
       }
@@ -557,7 +557,7 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
       auto index = std::move(index_pr.value());
       VMSDK_EXPECT_OK(
           index->LoadTrackedKeys(&fake_ctx_, &hash_attribute_data_type_,
-                                 SupplementalContentChunkIter(&rdb)));
+                                 SupplementalContentChunkIter(&rdb), true));
       for (size_t i = 0; i < search_vectors.size(); ++i) {
         absl::string_view vector = VectorToStr(search_vectors[i]);
         auto res = index->Search(vector, k, CancelNever());

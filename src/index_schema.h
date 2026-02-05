@@ -128,6 +128,7 @@ class IndexSchema : public KeyspaceEventSubscription,
 
   inline const std::string &GetName() const { return name_; }
   inline std::uint32_t GetDBNum() const { return db_num_; }
+  inline bool GetRawFormattedVectors() const { return raw_formatted_vectors_; }
 
   void CreateTextIndexSchema() {
     text_index_schema_ = std::make_shared<indexes::text::TextIndexSchema>(
@@ -261,6 +262,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   std::string name_;
   uint32_t db_num_{0};
   data_model::Language language_{data_model::LANGUAGE_ENGLISH};
+  bool raw_formatted_vectors_{true};
   std::string punctuation_;
   bool with_offsets_{true};
   std::vector<std::string> stop_words_;

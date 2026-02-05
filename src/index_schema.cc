@@ -249,6 +249,7 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
       name_(std::string(index_schema_proto.name())),
       db_num_(index_schema_proto.db_num()),
       language_(index_schema_proto.language()),
+      raw_formatted_vectors_(index_schema_proto.raw_formatted_vectors()),
       punctuation_(index_schema_proto.punctuation()),
       with_offsets_(index_schema_proto.with_offsets()),
       stop_words_(index_schema_proto.stop_words().begin(),
@@ -1066,6 +1067,7 @@ std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
 
   // Always serialize text configurations from stored members
   index_schema_proto->set_language(language_);
+  index_schema_proto->set_raw_formatted_vectors(raw_formatted_vectors_);
   index_schema_proto->set_punctuation(punctuation_);
   index_schema_proto->set_with_offsets(with_offsets_);
   index_schema_proto->mutable_stop_words()->Assign(stop_words_.begin(),
@@ -1442,7 +1444,8 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
           auto vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
           VMSDK_RETURN_IF_ERROR(vector_index->LoadTrackedKeys(
               ctx, &index_schema->GetAttributeDataType(),
-              supplemental_iter.IterateChunks()));
+              supplemental_iter.IterateChunks(),
+              index_schema->GetRawFormattedVectors()));
           break;
         }
         case data_model::SupplementalContentType::

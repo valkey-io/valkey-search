@@ -580,6 +580,7 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
   data_model::IndexSchema index_schema_proto;
   // Set default language
   index_schema_proto.set_language(data_model::LANGUAGE_ENGLISH);
+  index_schema_proto.set_raw_formatted_vectors(true);
 
   vmsdk::ArgsIterator itr{argv, argc};
   VMSDK_RETURN_IF_ERROR(

@@ -53,8 +53,7 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
-constexpr float kDefaultMagnitude = -2.0f;
-constexpr float kOldDefaultMagnitude = -1.0f;
+constexpr float kDefaultMagnitude = -1.0f;
 
 namespace {
 
@@ -132,30 +131,28 @@ void VectorBase::Init(int dimensions,
   space = CreateSpace<T>(dimensions, distance_metric, normalize_);
 }
 
-float *GetMagnitudePtr(absl::string_view record) {
-  return (float *)(record.data() + record.size() - sizeof(float) - 1);
+float *GetMagnitudePtr(absl::string_view vector) {
+  return (float *)(vector.data() + vector.size() - sizeof(float) - 1);
 }
 
-void VectorBase::SetMagnitude(absl::string_view record) const {
+void VectorBase::SetMagnitude(absl::string_view vector) const {
+  CHECK(GetVectorDataSize() == vector.size() - sizeof(float) - 1);
+  float *magnitude = GetMagnitudePtr(vector);
   if (!normalize_) {
-    return;
-  }
-  CHECK(GetVectorDataSize() == record.size() - sizeof(float) - 1);
-  float *magnitude = GetMagnitudePtr(record);
-  if (*magnitude != kDefaultMagnitude && *magnitude != kOldDefaultMagnitude) {
+    *magnitude = kDefaultMagnitude;
     return;
   }
   *magnitude =
-      CalcMagnitude((float *)record.data(), record.size() - sizeof(float) - 1);
+      CalcMagnitude((float *)vector.data(), vector.size() - sizeof(float) - 1);
 }
 
-InternedStringPtr VectorBase::InternVector(absl::string_view record) const {
-  if (!IsValidSizeVector(record)) {
+InternedStringPtr VectorBase::InternVector(absl::string_view vector) const {
+  if (!IsValidSizeVector(vector)) {
     return {};
   }
-  // For simplicity, we always store normalized vectors
-  float magnitude = CalcMagnitude(record.data(), GetDataTypeSize());
-  std::string record_magnitude = absl::StrCat(record, magnitude);
+  // For simplicity, we always calculate and set the normalized value
+  float magnitude = CalcMagnitude(vector.data(), GetDataTypeSize());
+  std::string record_magnitude = absl::StrCat(vector, magnitude);
   return StringInternStore::Intern(
       absl::string_view((const char *)record_magnitude.data(),
                         record_magnitude.size()),
@@ -393,8 +390,9 @@ absl::Status VectorBase::SaveTrackedKeys(
     data_model::TrackedKeyMetadata metadata_pb;
     metadata_pb.set_key(key->Str());
     metadata_pb.set_internal_id(metadata.internal_id);
-
-    metadata_pb.set_magnitude(kDefaultMagnitude);
+    char **vector_ptr = GetValueImpl(metadata.internal_id);
+    float *magnitude_ptr = (float *)(*vector_ptr + GetVectorDataSize());
+    metadata_pb.set_magnitude(*magnitude_ptr);
 
     auto metadata_pb_str = metadata_pb.SerializeAsString();
     VMSDK_RETURN_IF_ERROR(
@@ -435,7 +433,7 @@ std::vector<char> DenormalizeVector(absl::string_view record, float magnitude) {
 
 absl::Status VectorBase::LoadTrackedKeys(
     ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
-    SupplementalContentChunkIter &&iter) {
+    SupplementalContentChunkIter &&iter, bool raw_formatted_vectors) {
   absl::WriterMutexLock lock(&key_to_metadata_mutex_);
   CHECK(GetDataTypeSize() == sizeof(float));
   while (iter.HasNext()) {
@@ -452,8 +450,7 @@ absl::Status VectorBase::LoadTrackedKeys(
         {tracked_key_metadata.internal_id(), interned_key});
     inc_id_ = std::max(
         inc_id_, static_cast<uint64_t>(tracked_key_metadata.internal_id()));
-    if (normalize_ && tracked_key_metadata.magnitude() != kDefaultMagnitude &&
-        tracked_key_metadata.magnitude() != kOldDefaultMagnitude) {
+    if (normalize_ && !raw_formatted_vectors) {
       auto load_vec =
           LoadRecordAsVector(ctx, attribute_data_type,
                              tracked_key_metadata.key(), attribute_identifier_);

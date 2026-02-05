@@ -920,6 +920,49 @@ uint64_t IndexSchema::CountRecords() const {
   return record_cnt;
 }
 
+int IndexSchema::GetTagAttributeCount() const {
+  return std::count_if(attributes_.begin(), attributes_.end(),
+                       [](const auto &attr) {
+                         return attr.second.GetIndex()->GetIndexerType() ==
+                                indexes::IndexerType::kTag;
+                       });
+}
+
+int IndexSchema::GetNumericAttributeCount() const {
+  return std::count_if(attributes_.begin(), attributes_.end(),
+                       [](const auto &attr) {
+                         return attr.second.GetIndex()->GetIndexerType() ==
+                                indexes::IndexerType::kNumeric;
+                       });
+}
+
+int IndexSchema::GetVectorAttributeCount() const {
+  return std::count_if(attributes_.begin(), attributes_.end(),
+                       [](const auto &attr) {
+                         auto type = attr.second.GetIndex()->GetIndexerType();
+                         return type == indexes::IndexerType::kVector ||
+                                type == indexes::IndexerType::kHNSW ||
+                                type == indexes::IndexerType::kFlat;
+                       });
+}
+
+int IndexSchema::GetTextAttributeCount() const {
+  return std::count_if(attributes_.begin(), attributes_.end(),
+                       [](const auto &attr) {
+                         return attr.second.GetIndex()->GetIndexerType() ==
+                                indexes::IndexerType::kText;
+                       });
+}
+
+int IndexSchema::GetTextItemCount() const {
+  auto text_index_schema = GetTextIndexSchema();
+  if (!text_index_schema) {
+    return 0;
+  }
+  // Count documents that actually have text content indexed
+  return text_index_schema->GetPerKeyTextIndexes().size();
+}
+
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   int arrSize = 30;
   // Debug Text index Memory info fields

@@ -8,7 +8,12 @@
 
 #include "src/indexes/text/rax_wrapper.h"
 
+#ifdef __APPLE__
+#include <malloc/malloc.h>
+#define malloc_usable_size malloc_size
+#else
 #include <malloc.h>
+#endif
 
 #include <algorithm>
 #include <ctime>

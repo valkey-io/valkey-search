@@ -34,6 +34,66 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* BEGIN SEARCH */
+/* Rename symbols to avoid collision with core Valkey's Rax implementation. */
+#define rax vs_rax
+#define raxNode vs_raxNode
+#define raxStack vs_raxStack
+#define raxIterator vs_raxIterator
+#define raxNodeCallback vs_raxNodeCallback
+#define raxMutateCallback vs_raxMutateCallback
+
+/* Public API */
+#define raxNew vs_raxNew
+#define raxInsert vs_raxInsert
+#define raxTryInsert vs_raxTryInsert
+#define raxRemove vs_raxRemove
+#define raxFind vs_raxFind
+#define raxMutate vs_raxMutate
+#define raxFree vs_raxFree
+#define raxFreeWithCallback vs_raxFreeWithCallback
+#define raxStart vs_raxStart
+#define raxSeek vs_raxSeek
+#define raxSeekSubTree vs_raxSeekSubTree
+#define raxNext vs_raxNext
+#define raxPrev vs_raxPrev
+#define raxRandomWalk vs_raxRandomWalk
+#define raxCompare vs_raxCompare
+#define raxStop vs_raxStop
+#define raxEOF vs_raxEOF
+#define raxShow vs_raxShow
+#define raxSize vs_raxSize
+#define raxAllocSize vs_raxAllocSize
+#define raxTouch vs_raxTouch
+#define raxSetDebugMsg vs_raxSetDebugMsg
+#define raxSetData vs_raxSetData
+
+/* Internal API */
+#define raxAddChild vs_raxAddChild
+#define raxCompressNode vs_raxCompressNode
+#define raxDebugMsg vs_raxDebugMsg
+#define raxDebugShowNode vs_raxDebugShowNode
+#define raxFindParentLink vs_raxFindParentLink
+#define raxGenericInsert vs_raxGenericInsert
+#define raxGetData vs_raxGetData
+#define raxIteratorAddChars vs_raxIteratorAddChars
+#define raxIteratorDelChars vs_raxIteratorDelChars
+#define raxIteratorNextStep vs_raxIteratorNextStep
+#define raxIteratorPrevStep vs_raxIteratorPrevStep
+#define raxLowWalk vs_raxLowWalk
+#define raxNewNode vs_raxNewNode
+#define raxReallocForData vs_raxReallocForData
+#define raxRecursiveFree vs_raxRecursiveFree
+#define raxRecursiveShow vs_raxRecursiveShow
+#define raxRemoveChild vs_raxRemoveChild
+#define raxSeekGreatest vs_raxSeekGreatest
+#define raxStackInit vs_raxStackInit
+#define raxStackPush vs_raxStackPush
+#define raxStackPop vs_raxStackPop
+#define raxStackPeek vs_raxStackPeek
+#define raxStackFree vs_raxStackFree
+/* END SEARCH */
+
 #ifdef __cplusplus
 extern "C" {
 #endif

@@ -154,7 +154,7 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
   // Retrieve the key's stem mappings
   absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>
       stem_mappings;
-  if (stem_text_field_mask_) {
+  {
     std::lock_guard<std::mutex> stem_guard(in_progress_stem_mappings_mutex_);
     auto stem_node = in_progress_stem_mappings_.extract(key);
     if (!stem_node.empty()) {
@@ -207,7 +207,7 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
   }
 
   // Populate stem tree with mappings
-  if (stem_text_field_mask_) {
+  if (!stem_mappings.empty()) {
     std::lock_guard<std::mutex> stem_guard(stem_tree_mutex_);
     for (const auto &[stemmed, originals] : stem_mappings) {
       stem_tree_.MutateTarget(stemmed, [&](StemParents existing) {
@@ -260,7 +260,7 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
     }
 
     // If the postings are now empty, remove from stem tree if it was a parent
-    if (!new_target && stem_text_field_mask_) {
+    if (!new_target) {
       // Check if this word has a stem mapping using schema-level minimum
       std::string stemmed = lexer_.StemWord(std::string(word), min_stem_size_,
                                             lexer_.GetStemmer());

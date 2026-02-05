@@ -445,12 +445,12 @@ absl::StatusOr<FilterParseResults> FilterParser::Parse() {
   results.query_operations = query_operations_;
   // Only generate query syntax tree output if debug logging is enabled.
   if (valkey_search::options::GetLogLevel().GetValue() ==
-      static_cast<int>(LogLevel::kDebug)) {
+      static_cast<int>(LogLevel::kNotice)) {
     std::string tree_output =
         PrintPredicateTree(results.root_predicate.get(), 0);
     size_t chunk_size = 500;
     for (size_t i = 0; i < tree_output.length(); i += chunk_size) {
-      VMSDK_LOG(DEBUG, nullptr)
+      VMSDK_LOG(WARNING, nullptr)
           << "Parsed QuerySyntaxTree (Part " << (i / chunk_size + 1) << "):\n"
           << tree_output.substr(i, chunk_size);
     }
@@ -758,12 +758,42 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     }
     VMSDK_RETURN_IF_ERROR(
         SetupTextFieldConfiguration(field_mask, field_or_default, false));
-    query_operations_ |= QueryOperations::kContainsTextTerm;
-    // TODO: Implement Composite query between original and its stem variants
-    // for Non Exact Term search after Composite query execution is optimized
+    
+    // For non-exact searches, create composite OR query between exact and non-exact
+    if (!exact) {
+      FieldMaskPredicate stem_field_mask = 
+          field_mask & index_schema_.GetStemTextFieldMask();
+      
+      VMSDK_LOG(WARNING, nullptr) << "ParseUnquotedTextToken: token=" << token 
+                                  << ", field_mask=" << field_mask 
+                                  << ", stem_field_mask=" << stem_field_mask;
+      
+      if (stem_field_mask != 0) {
+        // Create OR composite: exact search of original OR non-exact of original
+        std::vector<std::unique_ptr<query::Predicate>> children;
+        
+        // 1. Exact search with original field_mask (copy token for first use)
+        children.push_back(std::make_unique<query::TermPredicate>(
+            text_index_schema, field_mask, std::string(token), true));
+        
+        // 2. Non-exact search with stem_field_mask (move token for final use)
+        children.push_back(std::make_unique<query::TermPredicate>(
+            text_index_schema, stem_field_mask, std::move(token), false));
+        
+        VMSDK_LOG(WARNING, nullptr) << "Created composite OR for token with exact and non-exact";
+        
+        query_operations_ |= QueryOperations::kContainsOr;
+        return FilterParser::TokenResult{
+            std::make_unique<query::ComposedPredicate>(
+                query::LogicalOperator::kOr, std::move(children)),
+            break_on_query_syntax};
+      }
+    }
+    
+    // For exact searches or when no stem fields, use simple TermPredicate
     return FilterParser::TokenResult{
         std::make_unique<query::TermPredicate>(text_index_schema, field_mask,
-                                               std::move(token), exact),
+                                               std::move(token), true),
         break_on_query_syntax};
   }
 }
@@ -817,7 +847,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
   if (!text_index_schema) {
     return absl::InvalidArgumentError("Index does not have any text field");
   }
-  absl::InlinedVector<std::unique_ptr<query::TextPredicate>,
+  absl::InlinedVector<std::unique_ptr<query::Predicate>,
                       indexes::text::kProximityTermsInlineCapacity>
       terms;
   bool in_quotes = false;

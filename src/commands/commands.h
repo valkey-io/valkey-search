@@ -40,11 +40,14 @@ constexpr absl::string_view kListCommand{"FT._LIST"};
 constexpr absl::string_view kSearchCommand{"FT.SEARCH"};
 constexpr absl::string_view kDebugCommand{"FT._DEBUG"};
 constexpr absl::string_view kAggregateCommand{"FT.AGGREGATE"};
+constexpr absl::string_view kInternalUpdateCommand{"FT.INTERNAL_UPDATE"};
 
 const absl::flat_hash_set<absl::string_view> kCreateCmdPermissions{
     kSearchCategory, kWriteCategory, kFastCategory};
 const absl::flat_hash_set<absl::string_view> kDropIndexCmdPermissions{
     kSearchCategory, kWriteCategory, kFastCategory};
+const absl::flat_hash_set<absl::string_view> kInternalUpdateCmdPermissions{
+    kAdminCategory, kSearchCategory, kWriteCategory, kFastCategory};
 const absl::flat_hash_set<absl::string_view> kSearchCmdPermissions{
     kSearchCategory, kReadCategory, kSlowCategory};
 const absl::flat_hash_set<absl::string_view> kInfoCmdPermissions{
@@ -76,6 +79,8 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                         int argc);
 absl::Status FTAggregateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                             int argc);
+absl::Status FTInternalUpdateCmd(ValkeyModuleCtx *ctx,
+                                 ValkeyModuleString **argv, int argc);
 
 //
 // Common stuff for FT.SEARCH and FT.AGGREGATE command

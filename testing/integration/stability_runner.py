@@ -120,15 +120,13 @@ class StabilityRunner:
                 intentionally_failed_ports=set(),
             )
 
+        # Drop existing index
         try:
             utils.drop_index(client=client, index_name=self.config.index_name)
         except valkey.exceptions.ValkeyError:
             pass
 
-        attributes = {
-            "tag": utils.TagDefinition(),
-            "numeric": utils.NumericDefinition(),
-        }
+        # Create index attributes based on index type
         if self.config.index_type == "HNSW":
             attributes = {
                 "tag": utils.TagDefinition(),
@@ -278,7 +276,6 @@ class StabilityRunner:
 
         # For failover testing: we kill all memtier processes during failover
         # and restart them after recovery completes, rather than having them retry connections
-
         # Build HSET command based on index type
         if self.config.index_type in ["HNSW", "FLAT"]:
             # Vector-based index: include embedding field with text fields

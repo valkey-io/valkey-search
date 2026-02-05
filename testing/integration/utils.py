@@ -313,10 +313,9 @@ class NumericDefinition(AttributeDefinition):
         return args
      
 class TextDefinition(AttributeDefinition):
-    def __init__(self, nostem=False, with_suffix_trie=False, min_stem_size=None, alias=None):
+    def __init__(self, nostem=False, with_suffix_trie=False, alias=None):
         self.nostem = nostem
         self.with_suffix_trie = with_suffix_trie
-        self.min_stem_size = min_stem_size
         self.alias = alias
 
     def to_arguments(self) -> List[Any]:
@@ -328,8 +327,6 @@ class TextDefinition(AttributeDefinition):
             args += ["NOSTEM"]
         if self.with_suffix_trie:
             args += ["WITHSUFFIXTRIE"]
-        if self.min_stem_size is not None:
-            args += ["MINSTEMSIZE", str(self.min_stem_size)]
         return args
 
 def create_index(

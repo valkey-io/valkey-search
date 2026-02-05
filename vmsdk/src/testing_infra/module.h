@@ -283,7 +283,7 @@ class MockValkeyModule {
 // NOLINTBEGIN(readability-identifier-naming)
 // Global kMockValkeyModule is a fake Valkey module used for static wrappers
 // around MockValkeyModule methods.
-MockValkeyModule *kMockValkeyModule VALKEYMODULE_ATTR;
+inline MockValkeyModule *kMockValkeyModule VALKEYMODULE_ATTR;
 
 inline void TestValkeyModule_Log(ValkeyModuleCtx *ctx [[maybe_unused]],
                                  const char *levelstr [[maybe_unused]],
@@ -1251,7 +1251,7 @@ struct ValkeyModuleCallReply {
   CallReplyVariant val;
   std::string msg;
 };
-std::unique_ptr<ValkeyModuleCallReply> default_reply VALKEYMODULE_ATTR;
+inline std::unique_ptr<ValkeyModuleCallReply> default_reply VALKEYMODULE_ATTR;
 
 inline std::unique_ptr<ValkeyModuleCallReply> CreateValkeyModuleCallReply(
     CallReplyVariant value) {

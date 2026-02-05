@@ -13,16 +13,13 @@ TermIterator::TermIterator(
     absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>&&
         key_iterators,
     const FieldMaskPredicate query_field_mask,
-    const InternedStringSet* untracked_keys, const bool require_positions,
-    const FieldMaskPredicate stem_field_mask, bool has_original)
+    const InternedStringSet* untracked_keys, const bool require_positions)
     : query_field_mask_(query_field_mask),
-      stem_field_mask_(stem_field_mask),
       key_iterators_(std::move(key_iterators)),
       current_position_(std::nullopt),
       current_field_mask_(0ULL),
       untracked_keys_(untracked_keys),
-      require_positions_(require_positions),
-      has_original_(has_original) {
+      require_positions_(require_positions) {
   // Prime the first key and position if they exist.
   if (!key_iterators_.empty()) {
     TermIterator::NextKey();
@@ -49,15 +46,8 @@ bool TermIterator::FindMinimumValidKey() {
   current_key_ = nullptr;
   current_position_ = std::nullopt;
   current_field_mask_ = 0ULL;
-  for (size_t i = 0; i < key_iterators_.size(); ++i) {
-    auto& key_iter = key_iterators_[i];
-    // Use query_field_mask if first iterator AND original word exists
-    // Otherwise use stem field mask intersection
-    const auto field_mask = ((i == 0 && has_original_) || stem_field_mask_ == 0)
-                                ? query_field_mask_
-                                : (stem_field_mask_);
-
-    while (key_iter.IsValid() && !key_iter.ContainsFields(field_mask)) {
+  for (auto& key_iter : key_iterators_) {
+    while (key_iter.IsValid() && !key_iter.ContainsFields(query_field_mask_)) {
       key_iter.NextKey();
     }
     if (key_iter.IsValid()) {

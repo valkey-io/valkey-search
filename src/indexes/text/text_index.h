@@ -117,11 +117,6 @@ class TextIndexSchema {
   // Get the minimum stem size across all fields
   uint32_t GetMinStemSize() const { return min_stem_size_; }
 
-  // Schema-level stem field mask (mirrored from
-  // IndexSchema::stem_text_field_mask_)
-  void SetStemTextFieldMask(uint64_t mask) { stem_text_field_mask_ = mask; }
-  uint64_t GetStemTextFieldMask() const { return stem_text_field_mask_; }
-
   // Enable suffix trie.
   void EnableSuffix() {
     with_suffix_trie_ = true;
@@ -192,10 +187,6 @@ class TextIndexSchema {
 
   // Minimum word length for stemming (schema-level configuration)
   uint32_t min_stem_size_;
-
-  // Schema-level stem field mask (mirrored from
-  // IndexSchema::stem_text_field_mask_)
-  uint64_t stem_text_field_mask_ = 0;
 
  public:
   // FT.INFO memory stats for text index

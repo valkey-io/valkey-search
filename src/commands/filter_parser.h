@@ -88,7 +88,7 @@ class FilterParser {
   absl::StatusOr<bool> HandleBackslashEscape(const indexes::text::Lexer& lexer,
                                              std::string& processed_content);
   struct TokenResult {
-    std::unique_ptr<query::TextPredicate> predicate;
+    std::unique_ptr<query::Predicate> predicate;
     bool break_on_query_syntax;
   };
   absl::StatusOr<TokenResult> ParseQuotedTextToken(

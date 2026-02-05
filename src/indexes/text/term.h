@@ -45,8 +45,7 @@ class TermIterator : public TextIterator {
       absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>&&
           key_iterators,
       const FieldMaskPredicate query_field_mask,
-      const InternedStringSet* untracked_keys, const bool require_positions,
-      const FieldMaskPredicate stem_field_mask = 0, bool has_original = false);
+      const InternedStringSet* untracked_keys, const bool require_positions);
   /* Implementation of TextIterator APIs */
   FieldMaskPredicate QueryFieldMask() const override;
   // Key-level iteration
@@ -76,7 +75,6 @@ class TermIterator : public TextIterator {
 
  private:
   const FieldMaskPredicate query_field_mask_;
-  const FieldMaskPredicate stem_field_mask_;
   absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>
       key_iterators_;
   absl::InlinedVector<PositionIterator, kWordExpansionInlineCapacity>
@@ -86,7 +84,6 @@ class TermIterator : public TextIterator {
   FieldMaskPredicate current_field_mask_;
   const InternedStringSet* untracked_keys_;
   const bool require_positions_;
-  const bool has_original_;  // True if first iterator is for original word
   bool FindMinimumValidKey();
 };
 

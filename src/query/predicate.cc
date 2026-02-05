@@ -112,8 +112,7 @@ EvaluationResult TermPredicate::Evaluate(
                         indexes::text::kStemVariantsInlineCapacity>
         stem_variants;
     std::string stemmed = text_index_schema_->GetAllStemVariants(
-        term_, stem_variants, text_index_schema_->GetMinStemSize(),
-        stem_field_mask, true);
+        term_, stem_variants, stem_field_mask, true);
     // Search for the stemmed word itself - may or may not exist in corpus
     if (stemmed != term_) {
       if (TryAddWordKeyIteratorForPrefilter(text_index, stemmed, target_key,

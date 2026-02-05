@@ -422,24 +422,25 @@ EvaluationResult EvaluatePredicate(const Predicate* predicate,
 // requirements.
 EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
   // Determine if children need to return positions for proximity checks.
-  // Proximity check in Prefilter also depends on the configuration.
-  bool has_proximity_constraint = slop_.has_value() || inorder_;
-  bool require_positions =
-      evaluator.IsPrefilterEvaluator()
-          ? has_proximity_constraint &&
-                options::GetEnableProximityPrefilterEval().GetValue()
-          : has_proximity_constraint;
+  bool require_positions = slop_.has_value() || inorder_;
   // Handle AND logic
   if (GetType() == PredicateType::kComposedAnd) {
-    // Short-circuit on first false
     uint32_t childrenWithPositions = 0;
     uint64_t query_field_mask = ~0ULL;
     absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
                         indexes::text::kProximityTermsInlineCapacity>
         iterators;
     for (const auto& child : children_) {
+      // In AND: skip text children when in prefilter evaluation because text in
+      // AND is fully (recursively) resolved in the entries fetcher layer
+      // already.
+      if (evaluator.IsPrefilterEvaluator() &&
+          child->GetType() == PredicateType::kText) {
+        continue;
+      }
       EvaluationResult result =
           EvaluatePredicate(child.get(), evaluator, require_positions);
+      // Short-circuit on first false
       if (!result.matches) {
         return EvaluationResult(false);
       }
@@ -455,15 +456,14 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
     // iterators. This ensures we only check proximity for text predicates,
     // not numeric/tag.
     if (require_positions && (childrenWithPositions >= 2)) {
-      // Get field_mask from lhs and rhs iterators
+      // Short circuit if no common fields across all children.
       if (query_field_mask == 0) {
         return EvaluationResult(false);
       }
       // Create ProximityIterator to check proximity
       auto proximity_iterator =
           std::make_unique<indexes::text::ProximityIterator>(
-              std::move(iterators), slop_, inorder_, query_field_mask, nullptr,
-              false);
+              std::move(iterators), slop_, inorder_, nullptr, false);
       // Check if any valid proximity matches exist
       if (!proximity_iterator->IsIteratorValid()) {
         return EvaluationResult(false);

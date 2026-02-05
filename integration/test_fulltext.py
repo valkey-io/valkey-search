@@ -253,7 +253,6 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
     def test_text_search(self):
         """
         Test FT.SEARCH command with a text index.
-        Tests with both prefilter disabled and enabled.
         """
         client: Valkey = self.server.get_new_client()
         # Create the text index on Hash documents
@@ -1795,7 +1794,7 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert result[1] == b"hash:10"
 
     def test_hybrid_non_vector_query(self):
-        """Test hybrid non-vector queries"""
+        """Test hybrid non-vector queries with deeply nested combinations"""
         client: Valkey = self.server.get_new_client()
         client.execute_command("FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "hash:", "SCHEMA",
                              "title", "TEXT", "NOSTEM",
@@ -1806,18 +1805,132 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         client.execute_command("HSET", "hash:00", "title", "plum", "body", "cat slow loud shark ocean eagle tomato", "color", "green", "price", "21")
         client.execute_command("HSET", "hash:01", "title", "kiwi peach apple chair orange door orange melon chair", "body", "lettuce", "color", "green", "price", "8")
         client.execute_command("HSET", "hash:02", "title", "plum", "body", "river cat slow build eagle fast dog", "color", "brown", "price", "40")
+        client.execute_command("HSET", "hash:03", "title", "banana", "body", "quick brown fox jumps", "color", "red", "price", "15")
+        client.execute_command("HSET", "hash:04", "title", "grape", "body", "lazy dog sleeps", "color", "blue", "price", "25")
         IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
-        # Test hybrid non-vector query
+        # Basic hybrid: text + tag + numeric
         result = client.execute_command("FT.SEARCH", "idx", "@color:{green} cat slow loud @price:[10 30] shark", "DIALECT", "2")
         assert result[0] == 1
         assert result[1] == b"hash:00"
+        # With INORDER
         result = client.execute_command("FT.SEARCH", "idx", "cat @color:{green} slow loud @price:[10 30] shark", "DIALECT", "2", "INORDER")
         assert result[0] == 1
         assert result[1] == b"hash:00"
+        # INORDER violation
         result = client.execute_command("FT.SEARCH", "idx", "slow @color:{green} cat loud @price:[10 30] shark", "DIALECT", "2", "INORDER")
         assert result[0] == 0
+        # Text term not found
         result = client.execute_command("FT.SEARCH", "idx", "@color:{green} cat slow @price:[10 30] soft", "DIALECT", "2")
         assert result[0] == 0
+        # Nested AND with OR: (text1 | text2) numeric tag
+        result = client.execute_command("FT.SEARCH", "idx", "(cat | dog) @price:[10 30] @color:{green}", "DIALECT", "2")
+        assert result[0] == 1
+        assert result[1] == b"hash:00"
+        # Nested OR with AND: ((text1 text2) | (text3 text4)) tag
+        result = client.execute_command("FT.SEARCH", "idx", "((cat slow) | (quick brown)) @color:{green|red}", "DIALECT", "2")
+        assert result[0] == 2
+        assert set(result[1::2]) == {b"hash:00", b"hash:03"}
+        # Deep nesting: (((text1 text2) numeric) | (text3 tag))
+        result = client.execute_command("FT.SEARCH", "idx", "(((cat slow) @price:[10 30]) | (lettuce @color:{green}))", "DIALECT", "2")
+        assert result[0] == 2
+        assert set(result[1::2]) == {b"hash:00", b"hash:01"}
+        # Multiple levels: ((text1 | text2) (text3 | text4)) numeric tag
+        result = client.execute_command("FT.SEARCH", "idx", "((cat | river) (slow | fast)) @price:[30 50] @color:{brown}", "DIALECT", "2")
+        assert result[0] == 1
+        assert result[1] == b"hash:02"
+        # Complex nested OR with multiple AND branches
+        result = client.execute_command("FT.SEARCH", "idx", "((cat slow @color:{green}) | (dog fast @color:{brown}) | (fox jumps @color:{red}))", "DIALECT", "2")
+        assert result[0] == 3
+        assert set(result[1::2]) == {b"hash:00", b"hash:02", b"hash:03"}
+        # Deeply nested with SLOP
+        result = client.execute_command("FT.SEARCH", "idx", "((cat shark) | (quick fox)) @color:{green|red}", "SLOP", "3", "DIALECT", "2")
+        assert result[0] == 2
+        assert set(result[1::2]) == {b"hash:00", b"hash:03"}
+        # Triple nesting: (((text1 | text2) text3) | ((text4 text5) tag))
+        result = client.execute_command("FT.SEARCH", "idx", "(((cat | river) slow) | ((quick brown) @color:{red}))", "DIALECT", "2")
+        assert result[0] == 3
+        assert set(result[1::2]) == {b"hash:00", b"hash:03", b"hash:02"}
+        # ORs in ORs: (((text1 | text2) | (text3 | text4)) numeric)
+        result = client.execute_command("FT.SEARCH", "idx", "(((cat | shark) | (quick | fox)) @price:[10 30])", "DIALECT", "2")
+        assert result[0] == 2
+        assert set(result[1::2]) == {b"hash:00", b"hash:03"}
+        # Deep OR nesting: ((((text1 | text2) | text3) | text4) tag)
+        result = client.execute_command("FT.SEARCH", "idx", "((((cat | shark) | lettuce) | fox) @color:{green|red})", "DIALECT", "2")
+        assert result[0] == 3
+        assert set(result[1::2]) == {b"hash:00", b"hash:01", b"hash:03"}
+        # OR with nested AND branches: (((text1 text2) | (text3 text4)) | ((text5 text6) | (text7 text8)))
+        result = client.execute_command("FT.SEARCH", "idx", "(((cat slow) | (quick brown)) | ((lazy dog) | (river fast)))", "DIALECT", "2")
+        assert result[0] == 4
+        assert set(result[1::2]) == {b"hash:00", b"hash:02", b"hash:03", b"hash:04"}
+        # Complex: ((((text1 | text2) numeric) | ((text3 | text4) tag)) | text5)
+        result = client.execute_command("FT.SEARCH", "idx", "((((cat | shark) @price:[10 30]) | ((quick | fox) @color:{red})) | lettuce)", "DIALECT", "2")
+        assert result[0] == 3
+        assert set(result[1::2]) == {b"hash:00", b"hash:01", b"hash:03"}
+        # Maximum depth OR nesting: (((((text1 | text2) | text3) | text4) | text5) tag)
+        result = client.execute_command("FT.SEARCH", "idx", "(((((cat | shark) | lettuce) | fox) | dog) @color:{green|red|brown|blue})", "DIALECT", "2")
+        assert result[0] == 5
+        assert set(result[1::2]) == {b"hash:00", b"hash:01", b"hash:02", b"hash:03", b"hash:04"}
+        # Multiple pure text ORs in AND: (text1 | text2) (text3 | text4) numeric
+        result = client.execute_command("FT.SEARCH", "idx", "(cat | shark) (slow | loud) @price:[10 30]", "DIALECT", "2")
+        assert result[0] == 1
+        assert result[1] == b"hash:00"
+        # OR with all AND children: ((text1 numeric) | (text2 tag))
+        result = client.execute_command("FT.SEARCH", "idx", "((cat @price:[10 30]) | (lettuce @color:{green}))", "DIALECT", "2")
+        assert result[0] == 2
+        assert set(result[1::2]) == {b"hash:00", b"hash:01"}
+        # Hybrid with INORDER on nested AND: ((text1 text2 INORDER) | (text3 text4)) tag numeric
+        result = client.execute_command("FT.SEARCH", "idx", "((cat slow) | (quick brown)) @color:{green|red}", "INORDER", "DIALECT", "2")
+        assert result[0] == 2
+        assert set(result[1::2]) == {b"hash:00", b"hash:03"}
+        # INORDER violation in nested AND: slow comes before cat in doc, but query has cat slow
+        result = client.execute_command("FT.SEARCH", "idx", "((slow cat) | (brown quick)) @color:{green|red}", "INORDER", "DIALECT", "2")
+        assert result[0] == 0
+        # Hybrid INORDER with numeric and tag: (text1 text2 numeric INORDER) | (text3 tag)
+        result = client.execute_command("FT.SEARCH", "idx", "((cat slow @price:[10 30]) | (lettuce @color:{green}))", "INORDER", "DIALECT", "2")
+        assert result[0] == 2
+        assert set(result[1::2]) == {b"hash:00", b"hash:01"}
+        # OR with AND text branches and non-matching numeric: ((text1 text2) | (text3 text4) | numeric)
+        # Tests that AND branches skip text in prefilter, OR evaluates numeric, finds no match
+        result = client.execute_command("FT.SEARCH", "idx", "((cat slow) | (quick brown) | @price:[1000 2000])", "DIALECT", "2")
+        assert result[0] == 3
+        assert set(result[1::2]) == {b"hash:00", b"hash:03", b"hash:02"}
+        # This is an important case where the text on its own would fail, but the query matches a document when the
+        # OR uses the numeric predicate for evaluation
+        result = client.execute_command("FT.SEARCH", "idx", "cat (dog | @price:[10 30]) shark", "DIALECT", "2", "INORDER")
+        assert result[0] == 1
+        assert result[1] == b"hash:00"
+        # Verification of failure: Change price range so Numeric1 fails too
+        result = client.execute_command("FT.SEARCH", "idx", "cat (dog | @price:[100 200]) shark", "DIALECT", "2")
+        assert result[0] == 0
+        result = client.execute_command("FT.SEARCH", "idx", "cat (dog | (slow @price:[10 30])) shark", "DIALECT", "2", "INORDER")
+        assert result[0] == 1
+        assert result[1] == b"hash:00"
+        query = "@price:[500 600] | (@price:[0 100] (@price:[99 100] | (@price:[10 40] (cat slow shark @price:[20 25]))))"
+        result = client.execute_command("FT.SEARCH", "idx", query, "DIALECT", "2", "INORDER")
+        # Matches hash:00 because the deep text-numeric leaf is true and bubbles up through the OR/AND gates
+        assert result[0] == 1
+        assert result[1] == b"hash:00"
+        # Edge case tests for BuildTextIterator with mixed predicates
+        # Test 1: Nested OR with mixed predicates at different levels: OR(AND(Text1, OR(Text2, Numeric)), Text3)
+        result = client.execute_command("FT.SEARCH", "idx", "(cat (quick | @price:[10 30])) | lettuce", "DIALECT", "2")
+        assert result[0] == 2
+        assert set(result[1::2]) == {b"hash:00", b"hash:01"}
+        # Test 2: Triple-nested mixed OR: OR(OR(Text1, Numeric1), OR(Text2, Numeric2))
+        result = client.execute_command("FT.SEARCH", "idx", "((cat | @price:[10 30]) | (fox | @color:{red}))", "DIALECT", "2")
+        assert result[0] == 4
+        assert set(result[1::2]) == {b"hash:00", b"hash:02", b"hash:03", b"hash:04"}
+        # Test 3: AND with all children being mixed ORs: AND(OR(Text1, Numeric1), OR(Text2, Tag1))
+        result = client.execute_command("FT.SEARCH", "idx", "(cat | @price:[10 30]) (fox | @color:{red})", "DIALECT", "2")
+        assert result[0] == 1
+        assert result[1] == b"hash:03"
+        # Test 4: Pure text OR nested in AND with mixed OR: AND(OR(Text1, Text2), OR(Text3, Numeric1))
+        result = client.execute_command("FT.SEARCH", "idx", "(cat | shark) (fox | @price:[10 30])", "DIALECT", "2")
+        assert result[0] == 1
+        assert result[1] == b"hash:00"
+        # Test 5: Multiple levels of mixed ORs: OR(OR(Text1, OR(Text2, Numeric)), Tag)
+        result = client.execute_command("FT.SEARCH", "idx", "((cat | (quick | @price:[10 30])) | @color:{green})", "DIALECT", "2")
+        assert result[0] == 5
+        assert set(result[1::2]) == {b"hash:00", b"hash:01", b"hash:02", b"hash:03", b"hash:04"}
 
 class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
     """
@@ -1982,3 +2095,155 @@ class TestFullTextCluster(ValkeySearchClusterTestCaseDebugMode):
         # Validation of search queries:
         time.sleep(1)
         validate_fulltext_search(client)
+
+    def test_info_search_fulltext_metrics(self):
+        """Test info search for fulltext metrics in cluster mode"""
+        import struct
+        cluster_client: ValkeyCluster = self.new_cluster_client()
+        # Get all primary clients and enable dev metrics on all
+        all_clients = []
+        for i in range(self.CLUSTER_SIZE):
+            client = self.new_client_for_primary(i)
+            assert client.execute_command("CONFIG SET search.info-developer-visible yes") == b"OK"
+            all_clients.append(client)
+        # Use first primary for main assertions
+        client = all_clients[0]  
+        # Create index with all field types
+        client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "SCHEMA",
+            "content", "TEXT",
+            "price", "NUMERIC",
+            "tags", "TAG",
+            "vector", "VECTOR", "HNSW", "6", "TYPE", "FLOAT32", "DIM", "3", "DISTANCE_METRIC", "COSINE"
+        )
+        # Create second index with suffixtrie enabled for text
+        client.execute_command(
+            "FT.CREATE", "idx2", "ON", "HASH", "SCHEMA",
+            "content", "TEXT", "WITHSUFFIXTRIE",
+            "price", "NUMERIC",
+            "tags", "TAG",
+            "vector", "VECTOR", "HNSW", "6", "TYPE", "FLOAT32", "DIM", "3", "DISTANCE_METRIC", "COSINE"
+        )
+        # Wait for backfill on all shards
+        for index in ["idx", "idx2"]:
+            for c in all_clients:
+                IndexingTestHelper.wait_for_backfill_complete_on_node(c, index)
+        
+        # Validate initial fulltext memory metrics
+        assert int(client.info("search").get("search_used_text_memory_bytes", 0)) == 0
+        assert client.info("search").get("search_used_text_memory_human", 0) == 0
+        
+        # Insert 10 documents such that even numbered ones are pure text and others are non-text
+        for i in range(10):
+            vec = struct.pack("<3f", float(i), float(i+1), float(i+2))
+            if i % 2 == 0:
+                cluster_client.execute_command("HSET", f"doc:{i}", "content", f"document number {i}")
+            else:
+                cluster_client.execute_command(
+                    "HSET", f"doc:{i}",
+                    "price", str(100 + i * 10),
+                    "tags", f"tag{i}|category{i % 3}",
+                    "vector", vec
+                )
+        info_search = client.info("search")
+        # Validate memory metrics
+        ft_memory_fulldata = int(info_search.get("search_used_text_memory_bytes", 0))
+        is_san_build = os.environ.get('SAN_BUILD', 'no') != 'no'
+        if not is_san_build:
+            assert ft_memory_fulldata > 0
+            assert info_search.get("search_used_text_memory_human", 0) != 0
+        
+        # Validate attribute count metrics on ALL shards (schema should be replicated)
+        for i, c in enumerate(all_clients):
+            info = c.info("search")
+            total, text, tag, numeric, vector = [int(info.get(f"search_number_of_{t}attributes", 0)) for t in ["", "text_", "tag_", "numeric_", "vector_"]]
+            assert total == text + tag + numeric + vector == 8 and text == tag == numeric == vector == 2, \
+                f"Shard {i}: Attribute counts mismatch"
+
+        # Validate metrics after deletion of a record
+        client.execute_command("DEL", "doc:8")
+        info_search = client.info("search")
+        if not is_san_build:
+            assert 0 < int(info_search.get("search_used_text_memory_bytes", 0)) < ft_memory_fulldata
+        # QUERY METRICS
+        # Query1 Pure text query (non-vector with text)
+        client.execute_command("FT.SEARCH", "idx", 'document number', "RETURN", "1", "content")
+        # Query2 Pure tag query (non-vector without text)
+        client.execute_command("FT.SEARCH", "idx", "@tags:{tag1}")
+        # Query3 Pure numeric query with 2 numeric predicates (validates no overcounting - should count as 1 numeric query)
+        client.execute_command("FT.SEARCH", "idx", "(@price:[100 150]) (@price:[120 200])", "DIALECT", "2")
+        # Query4 Another text query but returns vector - no effect
+        client.execute_command("FT.SEARCH", "idx", 'number', "RETURN", "1", "vector")
+        # Query5 Pure vector query
+        vec_query = struct.pack("<3f", 1.0, 2.0, 3.0)
+        client.execute_command("FT.SEARCH", "idx", "*=>[KNN 5 @vector $BLOB]", "PARAMS", "2", "BLOB", vec_query, "DIALECT", "2")
+        # Query6 Hybrid query with all 4 aspects: vector + numeric + tag + text
+        client.execute_command("FT.SEARCH", "idx", "(@tags:{tag1}) (@price:[100 200]) (document)=>[KNN 5 @vector $BLOB]", "PARAMS", "2", "BLOB", vec_query, "DIALECT", "2")
+        # Query7 Non-vector query with tag + numeric + text (should count as both non-vector AND text)
+        client.execute_command("FT.SEARCH", "idx", "(@tags:{tag1}) (@price:[100 200]) (document)", "DIALECT", "2")
+        # Refresh info search on primary shard
+        info_search = client.info("search")
+        # existing metric
+        assert int(info_search.get("search_hybrid_requests_count", 0)) == 1  # Query 6
+        # new metrics
+        assert int(info_search.get("search_nonvector_requests_count", 0)) == 5  # Query 1,2,3,4,7
+        assert int(info_search.get("search_vector_requests_count", 0)) == 1  # Query 5
+        assert int(info_search.get("search_text_requests_count", 0)) == 4  # Query 1,4,6,7
+        assert int(info_search.get("search_query_numeric_count", 0)) == 3  # Queries 3,6,7
+        assert int(info_search.get("search_query_tag_count", 0)) == 3  # Queries 2,6,7
+        
+        # Query8: Text with prefix
+        client.execute_command("FT.SEARCH", "idx2", 'document*')
+        # Query9: Text with fuzzy
+        client.execute_command("FT.SEARCH", "idx2", '%documnt%')
+        # Query10: Text with exact phrase
+        client.execute_command("FT.SEARCH", "idx2", '"document number"')
+        # Query11: Text with suffix
+        client.execute_command("FT.SEARCH", "idx2", '*umber')
+        
+        # Refresh info search
+        info_search = client.info("search")
+        # Verify request counters
+        assert int(info_search.get("search_nonvector_requests_count", 0)) == 9
+        assert int(info_search.get("search_text_requests_count", 0)) == 8
+        # Verify query operation type counters
+        # Note: Query10 (exact phrase "document number") contains 2 terms but counts as 1 query.
+        # Metrics track "number of queries using each operation" not "number of predicates".
+        assert int(info_search.get("search_query_text_term_count", 0)) == 5
+        assert int(info_search.get("search_query_text_prefix_count", 0)) == 1
+        assert int(info_search.get("search_query_text_suffix_count", 0)) == 1
+        assert int(info_search.get("search_query_text_fuzzy_count", 0)) == 1
+        assert int(info_search.get("search_query_text_proximity_count", 0)) == 1
+        # Validate that query metrics in other shards of the cluster have not been incremented
+        for c in all_clients[1::]:
+            info_new = c.info("search")
+            # Verify request counters
+            assert int(info_new.get("search_nonvector_requests_count", 0)) == 0 
+            assert int(info_new.get("search_text_requests_count", 0)) == 0  
+            assert int(info_new.get("search_query_numeric_count", 0)) == 0 
+            assert int(info_new.get("search_query_tag_count", 0)) == 0 
+            # Verify query operation type counters
+            assert int(info_new.get("search_query_text_term_count", 0)) == 0
+            assert int(info_new.get("search_query_text_prefix_count", 0)) == 0
+            assert int(info_new.get("search_query_text_suffix_count", 0)) == 0
+            assert int(info_new.get("search_query_text_fuzzy_count", 0)) == 0
+            assert int(info_new.get("search_query_text_proximity_count", 0)) == 0
+
+        # Test coordinator fan-out: validate consistent metric increments across shards
+        initial_metrics = [{'text': int(c.info("search").get("search_text_requests_count", 0)),
+                           'nonvector': int(c.info("search").get("search_nonvector_requests_count", 0))}
+                          for c in all_clients]
+        # Use cluster_client to trigger coordinator fan-out
+        cluster_client.execute_command("FT.SEARCH", "idx", 'number 2', "RETURN", "1", "content")
+        # Validate: exactly one shard increments both metrics consistently (whichever owns the data)
+        shards_incremented = 0
+        for i, c in enumerate(all_clients):
+            info = c.info("search")
+            text_delta = int(info.get("search_text_requests_count", 0)) - initial_metrics[i]['text']
+            nonvector_delta = int(info.get("search_nonvector_requests_count", 0)) - initial_metrics[i]['nonvector']
+            if text_delta > 0 or nonvector_delta > 0:
+                assert text_delta == nonvector_delta == 1, \
+                    f"Shard {i}: Both metrics must increment together by 1, got text={text_delta}, nonvector={nonvector_delta}"
+                shards_incremented += 1
+        assert shards_incremented == 1, f"Expected exactly 1 shard to increment, got {shards_incremented}"
+        

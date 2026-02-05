@@ -63,6 +63,8 @@ class StabilityTestConfig(NamedTuple):
     memtier_path: str = ""
     failover_interval_sec: int = 0  # 0 means no failover testing
     test_failover_recovery: bool = True  # Whether to test node recovery after failover
+    maxmemory: str = ""  # Optional memory limit (e.g., "2gb", "512mb"). Empty string means unlimited.
+    maxmemory_policy: str = "noeviction"  # Policy when maxmemory is reached
 
 
 class StabilityRunner:

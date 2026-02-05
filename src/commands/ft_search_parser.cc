@@ -248,7 +248,10 @@ absl::Status SearchCommand::PostParseQueryString() {
     // Validate sortby field exists in the index schema
     VMSDK_RETURN_IF_ERROR(index_schema->GetIdentifier(sortby->field).status());
     // Ensure sortby field is in return_attributes if sorting is enabled
-    if (!no_content && !return_attributes.empty()) {
+    // This is needed to:
+    // 1. Fetch the sortby field value for sorting
+    // 2. Include the sortby field in the response (matching Redis behavior)
+    if (!no_content) {
       bool found = false;
       for (const auto &attr : return_attributes) {
         if (vmsdk::ToStringView(attr.identifier.get()) == sortby->field ||

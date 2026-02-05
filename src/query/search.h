@@ -148,6 +148,12 @@ struct SearchParameters {
   // classes if needed. The default implementation returns false.
   virtual bool RequiresCompleteResults() const { return false; }
 
+  // Returns additional identifiers that need to be fetched for sorting.
+  // Override in derived classes to provide sortby field identifier.
+  virtual std::optional<std::string> GetSortByIdentifier() const {
+    return std::nullopt;
+  }
+
   virtual absl::Status PreParseQueryString();
   virtual absl::Status PostParseQueryString();
 

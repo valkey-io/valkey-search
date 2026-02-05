@@ -187,13 +187,19 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
        parameters.filter_parse_results.filter_identifiers) {
     identifiers.insert(filter_identifier);
   }
+  // Also fetch sortby field if sorting is enabled
+  auto sortby_identifier = parameters.GetSortByIdentifier();
+  if (sortby_identifier.has_value()) {
+    identifiers.insert(sortby_identifier.value());
+  }
   auto key_str = vmsdk::MakeUniqueValkeyString(key);
   auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
       ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
   VMSDK_ASSIGN_OR_RETURN(auto content, attribute_data_type.FetchAllRecords(
                                            ctx, vector_identifier,
                                            key_obj.get(), key, identifiers));
-  if (parameters.filter_parse_results.filter_identifiers.empty()) {
+  if (parameters.filter_parse_results.filter_identifiers.empty() &&
+      !sortby_identifier.has_value()) {
     return content;
   }
   if (!VerifyFilter(parameters, content, neighbor)) {
@@ -207,6 +213,16 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
       RecordsMapValue(
           kJsonRootElementQueryPtr.get(),
           std::move(content.find(kJsonRootElementQuery)->second.value)));
+  // Include sortby field in return content if it was fetched
+  if (sortby_identifier.has_value()) {
+    auto sortby_it = content.find(sortby_identifier.value());
+    if (sortby_it != content.end()) {
+      return_content.emplace(
+          sortby_identifier.value(),
+          RecordsMapValue(sortby_it->second.GetIdentifier(),
+                          std::move(sortby_it->second.value)));
+    }
+  }
   return return_content;
 }
 

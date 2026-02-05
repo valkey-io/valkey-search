@@ -464,16 +464,16 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
     def test_search_sortby(self, key_type, dialect):
         self.setup_data("sortable numbers", key_type)
 
-        self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY n1 ASC DIALECT {dialect}")
-        self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY n1 DESC DIALECT {dialect}")
+        self.check(dialect, f"ft.search {key_type}_idx1 * sortby n1 ASC")
+        self.check(dialect, f"ft.search {key_type}_idx1 * sortby n1 DESC")
 
-        self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY n2 ASC DIALECT {dialect}")
-        self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY n2 DESC DIALECT {dialect}")
+        self.check(dialect, f"ft.search {key_type}_idx1 * sortby n2 ASC")
+        self.check(dialect, f"ft.search {key_type}_idx1 * sortby n2 DESC")
 
-        self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY n1 ASC LIMIT 0 5 DIALECT {dialect}")
-        self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY n2 DESC LIMIT 2 3 DIALECT {dialect}")
+        self.check(dialect, f"ft.search {key_type}_idx1 * sortby n1 ASC LIMIT 0 5")
+        self.check(dialect, f"ft.search {key_type}_idx1 * sortby n2 DESC LIMIT 2 3")
 
-        self.check(dialect, f"ft.search {key_type}_idx1 @n1:[0 inf] SORTBY n1 ASC DIALECT {dialect}")
-        self.check(dialect, f"ft.search {key_type}_idx1 @n1:[-inf 0] SORTBY n2 DESC DIALECT {dialect}")
+        self.check(dialect, f"ft.search {key_type}_idx1 @n1:[0 inf] sortby n1 ASC")
+        self.check(dialect, f"ft.search {key_type}_idx1 @n1:[-inf 0] sortby n2 DESC")
 
-        self.check(dialect, f"ft.search {key_type}_idx1 * RETURN 3 @n1 @n1 @t1 SORTBY n1 ASC DIALECT {dialect}")
+        self.check(dialect, f"ft.search {key_type}_idx1 * RETURN 3 @n1 @n2 @t1 sortby n1 ASC")

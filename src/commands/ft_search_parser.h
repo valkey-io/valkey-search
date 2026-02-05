@@ -42,6 +42,15 @@ struct SearchCommand : public QueryCommand {
   // return true when those clauses are present.
   bool RequiresCompleteResults() const override { return sortby.has_value(); }
 
+  // Returns the sortby field identifier if sorting is enabled.
+  std::optional<std::string> GetSortByIdentifier() const override {
+    if (sortby.has_value()) {
+      auto schema_identifier = index_schema->GetIdentifier(sortby->field);
+      return schema_identifier.ok() ? *schema_identifier : sortby->field;
+    }
+    return std::nullopt;
+  }
+
   std::optional<SortByParameter> sortby;
 };
 

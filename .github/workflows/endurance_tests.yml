@@ -126,17 +126,17 @@ jobs:
           --mount type=bind,source="$(pwd)/endurance-results",target=/workspace/results \
           --mount type=bind,source="$(pwd)/tls",target=/workspace/tls \
           -v "$(pwd):/workspace" \
-          -e SERVER_TYPE="${{ inputs.server_type || 'valkey' }}" \
-          -e BRANCH_VERSION="${{ inputs.branch_version || 'unstable' }}" \
-          -e ENABLE_TLS="${{ inputs.enable_tls != false }}" \
-          -e TEST_DURATION="${{ inputs.test_duration || '3600' }}" \
+          -e SERVER_TYPE="${{ github.event.inputs.server_type || 'valkey' }}" \
+          -e BRANCH_VERSION="${{ github.event.inputs.branch_version || 'unstable' }}" \
+          -e ENABLE_TLS="${{ github.event.inputs.enable_tls != 'false' && 'true' || 'false' }}" \
+          -e TEST_DURATION="${{ github.event.inputs.test_duration || '3600' }}" \
           -e REQUEST_COUNT="0" \
-          -e THREADS="${{ inputs.threads || '10' }}" \
-          -e CLIENTS="${{ inputs.clients || '10' }}" \
-          -e PIPELINE_DEPTH="${{ inputs.pipeline_depth || '1' }}" \
-          -e DATA_SIZE="${{ inputs.data_size || '1024' }}" \
-          -e WORKLOAD_TYPE="${{ inputs.workload_type || 'mixed' }}" \
-          -e KEYSPACE_SIZE="${{ inputs.keyspace_size || '1000000' }}" \
+          -e THREADS="${{ github.event.inputs.threads || '10' }}" \
+          -e CLIENTS="${{ github.event.inputs.clients || '10' }}" \
+          -e PIPELINE_DEPTH="${{ github.event.inputs.pipeline_depth || '1' }}" \
+          -e DATA_SIZE="${{ github.event.inputs.data_size || '1024' }}" \
+          -e WORKLOAD_TYPE="${{ github.event.inputs.workload_type || 'mixed' }}" \
+          -e KEYSPACE_SIZE="${{ github.event.inputs.keyspace_size || '1000000' }}" \
           --user "ubuntu:ubuntu" \
           endurance-test-image \
           sudo /workspace/scripts/benchmark/run_endurance_test.sh

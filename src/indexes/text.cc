@@ -164,8 +164,7 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
                         indexes::text::kStemVariantsInlineCapacity>
         stem_variants;
     std::string stemmed = GetTextIndexSchema()->GetAllStemVariants(
-        text_string, stem_variants, GetTextIndexSchema()->GetMinStemSize(),
-        stem_field_mask, false);
+        text_string, stem_variants, stem_field_mask, false);
     // Search for the stemmed word itself - may or may not exist in corpus
     if (stemmed != text_string) {
       TryAddWordKeyIterator(fetcher->text_index_.get(), stemmed, key_iterators);

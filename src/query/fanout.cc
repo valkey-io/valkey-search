@@ -92,9 +92,9 @@ struct SearchPartitionResultsTracker {
           status.error_code() == grpc::FAILED_PRECONDITION) {
         consistency_failed.store(true);
       }
-      bool should_cancel =
-          status.error_code() == !parameters->enable_partial_results ||
-          consistency_failed.load();
+      bool should_cancel = status.error_code() == grpc::RESOURCE_EXHAUSTED ||
+                           !parameters->enable_partial_results ||
+                           consistency_failed.load();
       if (should_cancel) {
         parameters->cancellation_token->Cancel();
       }

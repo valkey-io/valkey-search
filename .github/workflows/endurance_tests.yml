@@ -138,7 +138,7 @@ jobs:
           -e KEYSPACE_SIZE="${{ inputs.keyspace_size || '1000000' }}" \
           --user "ubuntu:ubuntu" \
           endurance-test-image \
-          bash /workspace/scripts/benchmark/run_endurance_test.sh
+          sudo /workspace/scripts/benchmark/run_endurance_test.sh
 
     - name: Update Results Permissions
       if: always()

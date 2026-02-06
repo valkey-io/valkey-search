@@ -112,7 +112,6 @@ jobs:
     - name: Run Endurance Tests
       id: test-run
       timeout-minutes: 7200
-      continue-on-error: true
       env:
         SERVER_TYPE: 'valkey'
         BRANCH_VERSION: ${{ github.event.inputs.branch_version || 'unstable' }}
@@ -148,23 +147,29 @@ jobs:
       if: always()
       run: sudo chmod -R 755 endurance-results
 
-    # Display logs on failure for debugging
-    - name: Display Error Logs
+    # Display logs and results on failure for debugging
+    - name: Display Error Logs and Results
       if: failure()
       run: |
-        echo "=== Displaying Error Logs ==="
+        echo "=== Displaying Error Logs and Test Results ==="
         echo ""
-        echo "=== Server Logs ==="
-        find endurance-results -name "server.log" -type f -exec echo "File: {}" \; -exec cat {} \; -exec echo "" \; || echo "No server logs found"
+        echo "=== Results Directory Structure ==="
+        ls -laR endurance-results/ || echo "Results directory is empty or inaccessible"
+        echo ""
+        echo "=== CSV Summary Results ==="
+        find endurance-results -name "summary.csv" -type f -exec echo "File: {}" \; -exec cat {} \; -exec echo "" \; || echo "No CSV summary found"
+        echo ""
+        echo "=== JSON Results (First 100 lines) ==="
+        find endurance-results -name "results.json" -type f -exec echo "File: {}" \; -exec head -100 {} \; -exec echo "" \; || echo "No JSON results found"
         echo ""
         echo "=== Test Output Files ==="
         find endurance-results -name "*.txt" -type f -exec echo "File: {}" \; -exec cat {} \; -exec echo "" \; || echo "No test output files found"
         echo ""
+        echo "=== Server Logs ==="
+        find endurance-results -name "server.log" -type f -exec echo "File: {}" \; -exec cat {} \; -exec echo "" \; || echo "No server logs found"
+        echo ""
         echo "=== Metadata ==="
         find endurance-results -name "metadata.json" -type f -exec echo "File: {}" \; -exec cat {} \; -exec echo "" \; || echo "No metadata files found"
-        echo ""
-        echo "=== Results Directory Structure ==="
-        ls -laR endurance-results/ || echo "Results directory is empty or inaccessible"
 
     # Upload test results as artifacts
     - name: Upload Test Results
@@ -174,8 +179,3 @@ jobs:
         name: endurance-test-results-${{ github.run_number }}
         path: endurance-results
         retention-days: 90
-
-    # Fail the job if tests failed
-    - name: Check Test Results
-      if: steps.test-run.outcome == 'failure'
-      run: exit 1

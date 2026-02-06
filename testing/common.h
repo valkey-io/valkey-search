@@ -217,8 +217,7 @@ data_model::NumericIndex CreateNumericIndexProto();
 data_model::TagIndex CreateTagIndexProto(const std::string& separator = ",",
                                          bool case_sensitive = false);
 
-data_model::TextIndex CreateTextIndexProto(bool with_suffix_trie, bool no_stem,
-                                           uint32_t min_stem_size);
+data_model::TextIndex CreateTextIndexProto(bool with_suffix_trie, bool no_stem);
 
 class MockIndexSchema : public IndexSchema {
  public:

@@ -35,7 +35,8 @@ RUN apt update && apt-get install -y \
     clang-format \
     clangd \
     sudo \
-    wget
+    wget \
+    jq
 
 RUN apt install -y lsb-release curl gpg
 RUN curl -fsSL https://packages.redis.io/gpg | sudo gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg

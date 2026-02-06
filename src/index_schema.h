@@ -99,10 +99,13 @@ class IndexSchema : public KeyspaceEventSubscription,
   absl::StatusOr<std::shared_ptr<indexes::IndexBase>> GetIndex(
       absl::string_view attribute_alias) const;
   inline bool HasTextOffsets() const { return with_offsets_; }
+  inline uint32_t GetMinStemSize() const { return min_stem_size_; }
+  inline FieldMaskPredicate GetStemTextFieldMask() const {
+    return stem_text_field_mask_;
+  }
   const absl::flat_hash_set<std::string> &GetAllTextIdentifiers(
       bool with_suffix) const;
   FieldMaskPredicate GetAllTextFieldMask(bool with_suffix) const;
-  std::optional<uint32_t> MinStemSizeAcrossTextIndexes(bool with_suffix) const;
   void UpdateTextFieldMasksForIndex(const std::string &identifier,
                                     indexes::IndexBase *index);
   absl::flat_hash_set<std::string> GetTextIdentifiersByFieldMask(
@@ -131,7 +134,7 @@ class IndexSchema : public KeyspaceEventSubscription,
 
   void CreateTextIndexSchema() {
     text_index_schema_ = std::make_shared<indexes::text::TextIndexSchema>(
-        language_, punctuation_, with_offsets_, stop_words_);
+        language_, punctuation_, with_offsets_, stop_words_, min_stem_size_);
   }
   std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
     return text_index_schema_;
@@ -160,6 +163,11 @@ class IndexSchema : public KeyspaceEventSubscription,
   uint64_t CountRecords() const;
 
   int GetAttributeCount() const { return attributes_.size(); }
+  int GetTagAttributeCount() const;
+  int GetNumericAttributeCount() const;
+  int GetVectorAttributeCount() const;
+  int GetTextAttributeCount() const;
+  int GetTextItemCount() const;
 
   virtual absl::Status RDBSave(SafeRDB *rdb) const;
   absl::Status SaveIndexExtension(RDBChunkOutputStream output) const;
@@ -264,12 +272,12 @@ class IndexSchema : public KeyspaceEventSubscription,
   std::string punctuation_;
   bool with_offsets_{true};
   std::vector<std::string> stop_words_;
+  uint32_t min_stem_size_{4};
   std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
   // Precomputed text field information for searches
   uint64_t all_text_field_mask_{0ULL};
   uint64_t suffix_text_field_mask_{0ULL};
-  std::optional<uint32_t> all_fields_min_stem_size_{std::nullopt};
-  std::optional<uint32_t> suffix_fields_min_stem_size_{std::nullopt};
+  uint64_t stem_text_field_mask_{0ULL};  // Tracks fields with stemming enabled
   absl::flat_hash_set<std::string> all_text_identifiers_;
   absl::flat_hash_set<std::string> suffix_text_identifiers_;
   bool loaded_v2_{false};

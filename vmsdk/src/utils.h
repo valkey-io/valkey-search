@@ -173,11 +173,11 @@ struct SocketAddress {
   auto operator<=>(const SocketAddress &) const = default;
 };
 
-// ValkeySelectDbGaurd allows for selecting into the specified DB number while
+// ValkeySelectDbGuard allows for selecting into the specified DB number while
 // ensuring the DB is selected back to the previous DB afterwards.
 class ValkeySelectDbGuard {
  public:
-  ValkeySelectDbGuard(ValkeyModuleCtx* ctx, int db_index) : ctx_(ctx) {
+  ValkeySelectDbGuard(ValkeyModuleCtx *ctx, int db_index) : ctx_(ctx) {
     old_db_ = ValkeyModule_GetSelectedDb(ctx_);
     if (old_db_ != db_index) {
       if (ValkeyModule_SelectDb(ctx_, db_index) == VALKEYMODULE_OK) {
@@ -192,15 +192,14 @@ class ValkeySelectDbGuard {
     }
   }
 
-  ValkeySelectDbGuard(const ValkeySelectDbGuard&) = delete;
-  ValkeySelectDbGuard& operator=(const ValkeySelectDbGuard&) = delete;
+  ValkeySelectDbGuard(const ValkeySelectDbGuard &) = delete;
+  ValkeySelectDbGuard &operator=(const ValkeySelectDbGuard &) = delete;
 
  private:
-  ValkeyModuleCtx* ctx_;
+  ValkeyModuleCtx *ctx_;
   int old_db_;
   bool switched_ = false;
 };
-
 
 }  // namespace vmsdk
 

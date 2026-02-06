@@ -574,8 +574,7 @@ TEST_P(ResponseGeneratorDbParamTest, ProcessNeighborsForReplySelectsCorrectDB) {
   neighbors.push_back(indexes::Neighbor(external_id, 0));
 
   MockAttributeDataType data_type;
-  EXPECT_CALL(data_type, ToProto())
-      .WillRepeatedly(testing::Return(type));
+  EXPECT_CALL(data_type, ToProto()).WillRepeatedly(testing::Return(type));
 
   {
     // Expect DB selection sequence
@@ -586,10 +585,10 @@ TEST_P(ResponseGeneratorDbParamTest, ProcessNeighborsForReplySelectsCorrectDB) {
         .WillOnce(testing::Return(VALKEYMODULE_OK));
 
     // Expect fetch
-    EXPECT_CALL(data_type,
-                FetchAllRecords(&fake_ctx, parameters.attribute_alias,
-                                testing::_, absl::string_view("key"),
-                                testing::_))
+    EXPECT_CALL(
+        data_type,
+        FetchAllRecords(&fake_ctx, parameters.attribute_alias, testing::_,
+                        absl::string_view("key"), testing::_))
         .WillOnce(testing::Return(RecordsMap{}));
 
     // Expect restore DB
@@ -631,10 +630,10 @@ TEST_P(ResponseGeneratorDbParamTest, ProcessNeighborsForReplyNoContent) {
     EXPECT_CALL(*kMockValkeyModule, SelectDb(&fake_ctx, target_db))
         .WillOnce(testing::Return(VALKEYMODULE_OK));
 
-    EXPECT_CALL(data_type,
-                FetchAllRecords(&fake_ctx, parameters.attribute_alias,
-                                testing::_, absl::string_view("key"),
-                                expected_identifiers))
+    EXPECT_CALL(
+        data_type,
+        FetchAllRecords(&fake_ctx, parameters.attribute_alias, testing::_,
+                        absl::string_view("key"), expected_identifiers))
         .WillOnce(testing::Return(RecordsMap{}));
 
     EXPECT_CALL(*kMockValkeyModule, SelectDb(&fake_ctx, original_db))
@@ -650,13 +649,13 @@ INSTANTIATE_TEST_SUITE_P(
     ResponseGeneratorDbTests, ResponseGeneratorDbParamTest,
     testing::Values(data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH,
                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON),
-    [](const testing::TestParamInfo<data_model::AttributeDataType>& info) {
+    [](const testing::TestParamInfo<data_model::AttributeDataType> &info) {
       return info.param ==
                      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH
                  ? "Hash"
                  : "Json";
     });
-    
+
 }  // namespace
 
 }  // namespace valkey_search

@@ -248,25 +248,21 @@ absl::Status ProcessNeighborsForQuery(ValkeyModuleCtx *ctx,
   auto &neighbors = search_result.neighbors;
   size_t original_size = neighbors.size();
 
-  if (command.IsNonVectorQuery()) {
-    query::ProcessNonVectorNeighborsForReply(
-        ctx, command.index_schema->GetAttributeDataType(), neighbors, command);
-    // Adjust total count based on neighbors removed during processing
-    // due to filtering or missing attributes.
-    search_result.total_count -= (original_size - neighbors.size());
-    return absl::OkStatus();
-  }
+  std::optional<std::string> vector_identifier = std::nullopt;
 
-  // Handle vector queries
-  auto identifier =
-      command.index_schema->GetIdentifier(command.attribute_alias);
-  if (!identifier.ok()) {
-    return identifier.status();
+  if (command.IsVectorQuery()) {
+    auto identifier =
+        command.index_schema->GetIdentifier(command.attribute_alias);
+    if (!identifier.ok()) {
+      return identifier.status();
+    }
+    vector_identifier = std::make_optional(identifier.value());
   }
+  // Handle vector queries
 
   query::ProcessNeighborsForReply(ctx,
                                   command.index_schema->GetAttributeDataType(),
-                                  neighbors, command, identifier.value());
+                                  neighbors, command, vector_identifier);
   // Adjust total count based on neighbors removed during processing
   // due to filtering or missing attributes.
   search_result.total_count -= (original_size - neighbors.size());

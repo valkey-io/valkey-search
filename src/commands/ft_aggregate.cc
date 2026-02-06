@@ -175,16 +175,16 @@ absl::StatusOr<std::pair<size_t, size_t>> ProcessNeighborsForProcessing(
   size_t key_index = 0, scores_index = 0;
 
   if (parameters.IsVectorQuery()) {
-    auto identifier =
+    auto vector_identifier =
         parameters.index_schema->GetIdentifier(parameters.attribute_alias);
-    if (!identifier.ok()) {
+    if (!vector_identifier.ok()) {
       ++Metrics::GetStats().query_failed_requests_cnt;
-      return identifier.status();
+      return vector_identifier.status();
     }
 
     query::ProcessNeighborsForReply(
         ctx, parameters.index_schema->GetAttributeDataType(), neighbors,
-        parameters, identifier.value());
+        parameters, vector_identifier.value());
 
     if (parameters.load_key) {
       key_index = parameters.AddRecordAttribute("__key", "__key",
@@ -196,9 +196,9 @@ absl::StatusOr<std::pair<size_t, size_t>> ProcessNeighborsForProcessing(
                                                    indexes::IndexerType::kNone);
     }
   } else {
-    query::ProcessNonVectorNeighborsForReply(
+    query::ProcessNeighborsForReply(
         ctx, parameters.index_schema->GetAttributeDataType(), neighbors,
-        parameters);
+        parameters, std::nullopt);
 
     if (parameters.load_key) {
       key_index = parameters.AddRecordAttribute("__key", "__key",

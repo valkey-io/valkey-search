@@ -179,7 +179,8 @@ bool VerifyFilter(const query::SearchParameters &parameters,
 absl::StatusOr<RecordsMap> GetContentNoReturnJson(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
     const query::SearchParameters &parameters,
-    const indexes::Neighbor &neighbor, const std::string &vector_identifier) {
+    const indexes::Neighbor &neighbor,
+    const std::optional<std::string> &vector_identifier) {
   auto key = neighbor.external_id->Str();
   absl::flat_hash_set<absl::string_view> identifiers;
   identifiers.insert(kJsonRootElementQuery);
@@ -213,7 +214,8 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
 absl::StatusOr<RecordsMap> GetContent(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
     const query::SearchParameters &parameters,
-    const indexes::Neighbor &neighbor, const std::string &vector_identifier) {
+    const indexes::Neighbor &neighbor,
+    const std::optional<std::string> &vector_identifier) {
   auto key = neighbor.external_id->Str();
   if (attribute_data_type.ToProto() ==
           data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON &&
@@ -264,23 +266,14 @@ absl::StatusOr<RecordsMap> GetContent(
 }
 
 // Adds all local content for neighbors to the list of neighbors.
-// This function is meant to be used for non-vector queries.
-void ProcessNonVectorNeighborsForReply(
-    ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
-    std::vector<indexes::Neighbor> &neighbors,
-    const query::SearchParameters &parameters) {
-  ProcessNeighborsForReply(ctx, attribute_data_type, neighbors, parameters, "");
-}
-
-// Adds all local content for neighbors to the list of neighbors.
 //
 // Any neighbors already contained in the attribute content map will be skipped.
 // Any data not found locally will be skipped.
-void ProcessNeighborsForReply(ValkeyModuleCtx *ctx,
-                              const AttributeDataType &attribute_data_type,
-                              std::vector<indexes::Neighbor> &neighbors,
-                              const query::SearchParameters &parameters,
-                              const std::string &identifier) {
+void ProcessNeighborsForReply(
+    ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
+    std::vector<indexes::Neighbor> &neighbors,
+    const query::SearchParameters &parameters,
+    const std::optional<std::string> &vector_identifier) {
   const auto max_content_size =
       options::GetMaxSearchResultRecordSize().GetValue();
   const auto max_content_fields =
@@ -291,8 +284,8 @@ void ProcessNeighborsForReply(ValkeyModuleCtx *ctx,
     if (neighbor.attribute_contents.has_value()) {
       continue;
     }
-    auto content =
-        GetContent(ctx, attribute_data_type, parameters, neighbor, identifier);
+    auto content = GetContent(ctx, attribute_data_type, parameters, neighbor,
+                              vector_identifier);
     if (!content.ok()) {
       continue;
     }

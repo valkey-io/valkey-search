@@ -170,18 +170,19 @@ query::SearchResponseCallback Service::MakeSearchCallback(
         const auto& attribute_data_type =
             parameters->index_schema->GetAttributeDataType();
         auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
-        if (parameters->IsNonVectorQuery()) {
-          query::ProcessNonVectorNeighborsForReply(
-              ctx.get(), attribute_data_type, neighbors, *parameters);
-        } else {
-          auto vector_identifier =
+
+        std::optional<std::string> vector_identifier = std::nullopt;
+        if (parameters->IsVectorQuery()) {
+          vector_identifier = std::make_optional(
               parameters->index_schema
                   ->GetIdentifier(parameters->attribute_alias)
-                  .value();
-          query::ProcessNeighborsForReply(ctx.get(), attribute_data_type,
-                                          neighbors, *parameters,
-                                          vector_identifier);
+                  .value());
         }
+
+        query::ProcessNeighborsForReply(ctx.get(), attribute_data_type,
+                                        neighbors, *parameters,
+                                        vector_identifier);
+
         SerializeNeighbors(response, neighbors);
         response->set_total_count(total_count);
         reactor->Finish(grpc::Status::OK);

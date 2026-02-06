@@ -52,6 +52,24 @@ using RDBLoadFunc = void *(*)(ValkeyModuleIO *, int);
 using FreeFunc = void (*)(void *);
 using FieldMaskPredicate = uint64_t;
 
+struct AttributeInfo {
+  explicit AttributeInfo(uint16_t pos, uint64_t size)
+      : position_(pos), size_(size) {}
+  ~AttributeInfo() = default;
+
+  inline uint16_t GetPosition() const {
+    return static_cast<uint16_t>(position_);
+  }
+  inline void SetPosition(uint16_t pos) { position_ = pos; }
+  inline uint64_t GetSize() const { return size_; }
+  inline void SetSize(uint64_t size) { size_ = size; }
+
+ private:
+  // Attribute position within the IndexSchema::attribute_size_vec_ property.
+  uint64_t position_ : 16;
+  uint64_t size_ : 48;
+};
+
 class IndexSchema : public KeyspaceEventSubscription,
                     public std::enable_shared_from_this<IndexSchema> {
  public:
@@ -112,6 +130,10 @@ class IndexSchema : public KeyspaceEventSubscription,
       FieldMaskPredicate field_mask) const;
   virtual absl::StatusOr<std::string> GetIdentifier(
       absl::string_view attribute_alias) const;
+  absl::StatusOr<AttributePosition> GetAttributePositionByAlias(
+      absl::string_view attribute_alias) const;
+  absl::StatusOr<AttributePosition> GetAttributePositionByIdentifier(
+      absl::string_view identifier) const;
   absl::StatusOr<std::string> GetAlias(absl::string_view identifier) const;
   absl::StatusOr<vmsdk::UniqueValkeyString> DefaultReplyScoreAs(
       absl::string_view attribute_alias) const;
@@ -163,6 +185,11 @@ class IndexSchema : public KeyspaceEventSubscription,
   uint64_t CountRecords() const;
 
   int GetAttributeCount() const { return attributes_.size(); }
+  int GetTagAttributeCount() const;
+  int GetNumericAttributeCount() const;
+  int GetVectorAttributeCount() const;
+  int GetTextAttributeCount() const;
+  int GetTextItemCount() const;
 
   virtual absl::Status RDBSave(SafeRDB *rdb) const;
   absl::Status SaveIndexExtension(RDBChunkOutputStream output) const;
@@ -216,6 +243,11 @@ class IndexSchema : public KeyspaceEventSubscription,
                                   vmsdk::ArgsIterator &itr);
   struct DbKeyInfo {
     MutationSequenceNumber mutation_sequence_number_{0};
+    std::vector<AttributeInfo> attr_info_vec_;
+
+    inline std::vector<AttributeInfo> &GetAttributeInfoVec() {
+      return attr_info_vec_;
+    }
   };
 
   struct IndexKeyInfo {
@@ -245,6 +277,49 @@ class IndexSchema : public KeyspaceEventSubscription,
                                       MutationSequenceNumber sequence_number) {
     absl::MutexLock lock(&mutated_records_mutex_);
     index_key_info_[key].mutation_sequence_number_ = sequence_number;
+  }
+
+  /**
+   * @brief Computes the total size of attributes, optionally filtered by
+   * indexer type.
+   */
+  inline uint64_t GetSize(std::optional<indexes::IndexerType>
+                              indexer_type_filter = std::nullopt) const {
+    if (!indexer_type_filter.has_value()) {
+      // No filter
+      return std::accumulate(attributes_indexed_data_size_.begin(),
+                             attributes_indexed_data_size_.end(), 0);
+    }
+
+    uint64_t total_size{0};
+    for (const auto &[_, attr] : attributes_) {
+      if (attr.GetIndex()->GetIndexerType() == indexer_type_filter.value()) {
+        total_size += attributes_indexed_data_size_[attr.GetPosition()];
+      }
+    }
+    return total_size;
+  }
+  /**
+   * @brief Returns the total size of attributes matching the specified filter.
+   *
+   * Return the size of the first attribute that satisfies the given
+   * filter criteria. If the filter is empty, returns the total size of all
+   * attributes.
+   *
+   * @return The total size of matching attributes, or 0 if no attributes match
+   *         the filter.
+   */
+  inline uint64_t GetSize(absl::string_view attribute_alias_filter = "") const {
+    if (attribute_alias_filter.empty()) {
+      return GetSize(std::nullopt);
+    }
+
+    for (const auto &[_, attr] : attributes_) {
+      if (attr.GetAlias() == attribute_alias_filter) {
+        return attributes_indexed_data_size_[attr.GetPosition()];
+      }
+    }
+    return 0;
   }
 
  protected:
@@ -280,6 +355,8 @@ class IndexSchema : public KeyspaceEventSubscription,
   uint32_t version_{0};
 
   vmsdk::ThreadPool *mutations_thread_pool_{nullptr};
+  std::vector<uint64_t> attributes_indexed_data_size_;
+
   InternedStringHashMap<DocumentMutation> tracked_mutated_records_
       ABSL_GUARDED_BY(mutated_records_mutex_);
   bool is_destructing_ ABSL_GUARDED_BY(mutated_records_mutex_){false};
@@ -355,7 +432,33 @@ class IndexSchema : public KeyspaceEventSubscription,
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
   size_t GetMutatedRecordsSize() const
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
-
+  /**
+   * @brief Updates the database key information entry for a given key.
+   *
+   * This method updates or removes an entry in the internal database key
+   * information map, tracking attribute sizes and maintaining the global index
+   * size. It increments the schema mutation sequence number for versioning and
+   * ensures thread safety by verifying execution on the main thread.
+   *
+   * @param ctx Pointer to the ValkeyModuleCtx (Valkey module context) for
+   * accessing module operations.
+   * @param mutated_attributes A collection of attributes that have been
+   * modified, where each attribute consists of a name and associated data.
+   * @param interned_key The interned key object representing the database key
+   * being updated.
+   * @param from_backfill Boolean flag indicating whether this update originates
+   * from a backfill operation (currently unused in the implementation but may
+   * affect future behavior).
+   * @param is_delete Boolean flag indicating whether this is a delete
+   * operation; if true, the key entry is removed from the map.
+   *
+   * @return MutationSequenceNumber The sequence number assigned to this
+   * mutation, representing the order in which this update occurred within the
+   * schema.
+   */
+  MutationSequenceNumber UpdateDbInfoKey(
+      ValkeyModuleCtx *ctx, const MutatedAttributes &mutated_attributes,
+      const Key &interned_key, bool from_backfill, bool is_delete);
   mutable vmsdk::TimeSlicedMRMWMutex time_sliced_mutex_;
   vmsdk::MainThreadAccessGuard<std::deque<Key>> multi_mutations_keys_;
   vmsdk::MainThreadAccessGuard<bool> schedule_multi_exec_processing_{false};

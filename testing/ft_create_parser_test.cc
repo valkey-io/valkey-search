@@ -48,6 +48,7 @@ struct ExpectedPerIndexTextParameters {
   data_model::Language language = data_model::Language::LANGUAGE_ENGLISH;
   bool with_offsets = true;
   uint32_t min_stem_size = 4;  // Schema-level min_stem_size
+  double weight = 1.0;
 };
 
 struct FTCreateParameters {
@@ -221,6 +222,7 @@ TEST_P(FTCreateParserTest, ParseParams) {
           EXPECT_EQ(text_proto.with_suffix_trie(),
                     expected_text.with_suffix_trie);
           EXPECT_EQ(text_proto.no_stem(), expected_text.no_stem);
+          EXPECT_EQ(text_proto.weight(), expected_text.weight);
         }
         ++text_index;
       } else {
@@ -1596,6 +1598,32 @@ INSTANTIATE_TEST_SUITE_P(
                      .with_offsets = true,
                  }
              },
+         },
+         {
+             .test_name = "text_case_happy_path_weight",
+             .success = true,
+             .command_str = "idx1 on HASH SCHEMA text_field text weight 1.0",
+             .text_parameters = {{
+                 .weight = 1.0,
+             }},
+             .expected = {
+                 .index_schema_name = "idx1",
+                 .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                 .attributes = {{
+                     .identifier = "text_field",
+                     .attribute_alias = "text_field",
+                     .indexer_type = indexes::IndexerType::kText,
+                 }},
+                 .per_index_text_params = {
+                    .weight = 1.0,
+                 }
+             },
+         },
+         {
+             .test_name = "invalid_text_weight",
+             .success = false,
+             .command_str = "idx1 on HASH SCHEMA text_field TEXT weight 1.01",
+             .expected_error_message = "Invalid field type for field `text_field`: The `WEIGHT` clause with a value other than `1.0` is not supported.",
          },
          {
              .test_name = "text_per_index_and_field_parameters_mixed",

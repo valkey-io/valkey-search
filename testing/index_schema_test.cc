@@ -1328,7 +1328,8 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
     auto text_index_schema = std::make_shared<indexes::text::TextIndexSchema>(
         language, punctuation, with_offsets, stop_words, min_stem_size);
     auto text_index = std::make_shared<indexes::Text>(
-        CreateTextIndexProto(with_suffix_trie, no_stem), text_index_schema);
+        CreateTextIndexProto(with_suffix_trie, no_stem, 1.0),
+        text_index_schema);
     VMSDK_EXPECT_OK(
         index_schema->AddIndex("description", "desc_id", text_index));
 
@@ -2048,7 +2049,7 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
 
     // Add text index
     auto text_index = std::make_shared<indexes::Text>(
-        CreateTextIndexProto(true, false),
+        CreateTextIndexProto(true, false, 1.0),
         std::make_shared<indexes::text::TextIndexSchema>(
             data_model::LANGUAGE_ENGLISH,
             " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", true,

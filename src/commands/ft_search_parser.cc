@@ -31,12 +31,55 @@
 #include "src/query/search.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/command_parser.h"
+#include "vmsdk/src/info.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
 
+// Query operation counters
+DEV_INTEGER_COUNTER(query_stats, query_text_term_count);
+DEV_INTEGER_COUNTER(query_stats, query_text_prefix_count);
+DEV_INTEGER_COUNTER(query_stats, query_text_suffix_count);
+DEV_INTEGER_COUNTER(query_stats, query_text_fuzzy_count);
+DEV_INTEGER_COUNTER(query_stats, query_text_proximity_count);
+DEV_INTEGER_COUNTER(query_stats, query_numeric_count);
+DEV_INTEGER_COUNTER(query_stats, query_tag_count);
+
 namespace valkey_search {
+
+namespace {
+// Increment query operation metrics based on query operations flags.
+// File-internal helper function.
+void IncrementQueryOperationMetrics(QueryOperations query_operations) {
+  // High-level query type metrics
+  if (query_operations & QueryOperations::kContainsText) {
+    ++Metrics::GetStats().query_text_requests_cnt;
+  }
+  if (query_operations & QueryOperations::kContainsNumeric) {
+    query_numeric_count.Increment();
+  }
+  if (query_operations & QueryOperations::kContainsTag) {
+    query_tag_count.Increment();
+  }
+  // Text operation type metrics
+  if (query_operations & QueryOperations::kContainsTextTerm) {
+    query_text_term_count.Increment();
+  }
+  if (query_operations & QueryOperations::kContainsTextPrefix) {
+    query_text_prefix_count.Increment();
+  }
+  if (query_operations & QueryOperations::kContainsTextSuffix) {
+    query_text_suffix_count.Increment();
+  }
+  if (query_operations & QueryOperations::kContainsTextFuzzy) {
+    query_text_fuzzy_count.Increment();
+  }
+  if (query_operations & QueryOperations::kContainsProximity) {
+    query_text_proximity_count.Increment();
+  }
+}
+}  // namespace
 
 constexpr absl::string_view kMaxKnnConfig{"max-vector-knn"};
 constexpr int kDefaultKnnLimit{10000};
@@ -369,12 +412,15 @@ absl::Status PreParseQueryString(query::SearchParameters &parameters) {
   if (!parameters.filter_parse_results.root_predicate &&
       vector_filter.empty()) {
     // Return an error if no valid pre-filter and no vector filter is provided.
-    return absl::InvalidArgumentError("Vector query clause is missing");
+    return absl::InvalidArgumentError("Invalid query string syntax");
   }
   // Optionally parse the vector filter if it exists.
   if (!vector_filter.empty()) {
     if (parameters.filter_parse_results.root_predicate) {
       ++Metrics::GetStats().query_hybrid_requests_cnt;
+    } else {
+      // Pure vector query
+      ++Metrics::GetStats().query_vector_requests_cnt;
     }
     VMSDK_RETURN_IF_ERROR(ParseKNN(parameters, vector_filter)).SetPrepend()
         << "Error parsing vector similarity parameters: `" << vector_filter
@@ -397,7 +443,14 @@ absl::Status PreParseQueryString(query::SearchParameters &parameters) {
           vmsdk::MakeUniqueValkeyString(parameters.parse_vars.score_as_string);
     }
   }
-  // TODO: Return Temp Error for unsupported predicates.
+  // Pure non-vector query (no vector filter)
+  if (vector_filter.empty() && parameters.filter_parse_results.root_predicate) {
+    ++Metrics::GetStats().query_nonvector_requests_cnt;
+  }
+  // Increment operation-type metrics
+  IncrementQueryOperationMetrics(
+      parameters.filter_parse_results.query_operations);
+
   return absl::OkStatus();
 }
 

@@ -48,6 +48,7 @@ class Text : public IndexBase {
   }
   bool IsStemmingEnabled() const { return !no_stem_; }
   bool WithSuffixTrie() const { return with_suffix_trie_; }
+  double Weight() const { return weight_; }
   absl::StatusOr<bool> AddRecord(const InternedStringPtr& key,
                                  absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
@@ -141,11 +142,32 @@ class Text : public IndexBase {
 
   bool with_suffix_trie_;
   bool no_stem_;
+  double weight_;
 
   // TODO: Map to track which keys are indexed and their raw data
 
   mutable absl::Mutex index_mutex_;
 };
+
+namespace text {
+// Fetcher to handle ComposedAND by wrapping on the built TextIterator which can
+// be nested across multiple levels of AND/OR. Note: Standalone text predicates
+// use Text::EntriesFetcher directly.
+class TextIteratorFetcher : public EntriesFetcherBase {
+ public:
+  TextIteratorFetcher(std::unique_ptr<TextIterator> iter, size_t size)
+      : iter_(std::move(iter)), size_(size) {}
+  size_t Size() const override { return size_; }
+  std::unique_ptr<EntriesFetcherIteratorBase> Begin() override {
+    return std::make_unique<TextFetcher>(std::move(iter_));
+  }
+
+ private:
+  std::unique_ptr<TextIterator> iter_;
+  size_t size_;
+};
+}  // namespace text
+
 }  // namespace valkey_search::indexes
 
 #endif  // VALKEYSEARCH_SRC_INDEXES_TEXT_H_

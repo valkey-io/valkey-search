@@ -253,6 +253,7 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
       with_offsets_(index_schema_proto.with_offsets()),
       stop_words_(index_schema_proto.stop_words().begin(),
                   index_schema_proto.stop_words().end()),
+      skip_initial_scan_(index_schema_proto.skip_initial_scan()),
       min_stem_size_(index_schema_proto.min_stem_size() > 0
                          ? index_schema_proto.min_stem_size()
                          : 4),
@@ -284,7 +285,9 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
 
 absl::Status IndexSchema::Init(ValkeyModuleCtx *ctx) {
   VMSDK_RETURN_IF_ERROR(keyspace_event_manager_->InsertSubscription(ctx, this));
-  backfill_job_ = std::make_optional<BackfillJob>(ctx, name_, db_num_);
+  if (!skip_initial_scan_) {
+    backfill_job_ = std::make_optional<BackfillJob>(ctx, name_, db_num_);
+  }
   return absl::OkStatus();
 }
 
@@ -1188,6 +1191,7 @@ std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
   index_schema_proto->set_min_stem_size(min_stem_size_);
   index_schema_proto->mutable_stop_words()->Assign(stop_words_.begin(),
                                                    stop_words_.end());
+  index_schema_proto->set_skip_initial_scan(skip_initial_scan_);
 
   auto stats = index_schema_proto->mutable_stats();
   stats->set_documents_count(stats_.document_cnt);

@@ -66,12 +66,13 @@ FT.CREATE <index-name>
     [WITHOFFSETS | NOOFFSETS]
     [NOSTOPWORDS | STOPWORDS <count> <word> word ...]
     [PUNCTUATION <punctuation>]
+    [SCORE <score>]
     SCHEMA
         (
             <identifier> [AS <attribute>]
                   NUMERIC
                 | TAG [SEPARATOR <sep>] [CASESENSITIVE]
-                | TEXT [NOSTEM] [WITHSUFFIXTRIE | NOSUFFIXTRIE]
+                | TEXT [NOSTEM] [WITHSUFFIXTRIE | NOSUFFIXTRIE] [WEIGHT <weight>]
                 | VECTOR [HNSW | FLAT] <count> [<alg_parameter_name> <alg_parameter_value> ...]
             [SORTABLE]
         )+
@@ -86,13 +87,15 @@ FT.CREATE <index-name>
 
 - **LANGUAGE <language>** (optional): For text attributes, the language used to control lexical parsing and stemming. Currently only the value `ENGLISH` is supported.
 
-- **MINSTEMSIZE \<min_stem_size\>** (optional): For text attributes with stemming enabled. This controls the minimum length of a word before it is subjected to stemming. The default value is <?>.
+- **MINSTEMSIZE \<min_stem_size\>** (optional): For text attributes with stemming enabled. This controls the minimum length of a word before it is subjected to stemming. The default value is 4.
 
 - **WITHOFFSETS | NOOFFSETS** (optional): Enables/Disables the retention of per-word offsets within a text attribute. Offsets are required to perform exact phrase matching and slop-based proximity matching. Thus if offsets are disabled, those query operations will be rejected with an error. The default is `WITHOFFSETS`.
 
 - **NOSTOPWORDS | STOPWORDS \<count\> \<word1\> \<word2\>...** (optional): Stop words are not words which are not put into the indexes. The default value of `STOPWORDS` is language dependent. For `LANGUAGE ENGLISH` the default is: <?>.
 
 - **PUNCTUATION \<punctuation\>** (optional): A string of characters that are used to define words in the text attribute. The default value is `,.<>{}[]"':;!@#$%^&\*()-+=~/\|`.
+
+- **SCORE \<score\>** (optional): A value of 1.0 is accepted and has no operational effect. Any other value is rejected with an error.
 
 - **SKIPINITIALSCAN** (optional): If specific, this option skips the normal backfill operation for an index. If this option is specified, pre-existing keys which match the `PREFIX` clause will not be loaded into the index during a backfill operation. This clause has no effect on processing of key mutations _after_ an index is created, i.e., keys which are mutated after an index is created and satisfy the data type and `PREFIX` clause will be inserted into that index.
 
@@ -117,6 +120,7 @@ The `SCHEMA` keyword identifies the start of the attribute declarations. Each at
 
 - **NOSTEM** (optional): If specified, stemming of words on ingestion is disabled.
 - **WITHSUFFIXTRIE | NOSUFFIXTRIE** (optional): Enables/Disables the use of a suffix trie to implement suffix-based wildcard queries. If `NOSUFFIXTRIE` is specified, query strings which specify suffix-based wildcard matching will be rejected with an error. The default is `WITHSUFFIXTRIE`.
+- **WEIGHT \<weight\>** (optional): A value of 1.0 is accepted and has no operational effect. Any other value is rejected with an error.
 
 ### Vector Attribute Specific Declarators
 
@@ -171,9 +175,9 @@ In CME a second class of errors is related to a failure to properly distribute t
 
 ## FT.INFO
 
-### Cluster Mode Diabled
+### Cluster Mode Disabled
 
-When cluster mode is disable, information about the specified index is returned from the executing node:
+When cluster mode is disabled, information about the specified index is returned from the executing node:
 
 ```bash
 FT.INFO <index-name>
@@ -279,7 +283,7 @@ An array of key value pairs.
 
 PRIMARY: An array of key value pairs
 
-- **mode** (string) The FT.INFO mode, should be PRIMARY
+- **mode** (string) Will have the value `PRIMARY`.
 - **index_name** (string) The index name
 - **num_docs** (string) INTEGER. Total keys in the index
 - **num_records** (string) INTEGER. Total records in the index
@@ -287,7 +291,7 @@ PRIMARY: An array of key value pairs
 
 CLUSTER: An array of key value pairs
 
-- **mode** (string) The FT.INFO mode, should be CLUSTER
+- **mode** (string) Will have the value `CLUSTER`.
 - **index_name** (string) The index name
 - **backfill_in_progress** (string) 0 or 1. Is backfill in progress
 - **backfill_complete_percent_max** (string) FLOAT32. Maximum backfill complete percent in all nodes

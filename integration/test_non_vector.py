@@ -11,7 +11,7 @@ import time
 This file contains tests for non vector (numeric and tag) queries on Hash/JSON documents in Valkey Search - in CME / CMD.
 """
 # Constants for numeric and tag queries on Hash/JSON documents.
-numeric_index_on_hash = "FT.CREATE products ON HASH PREFIX 1 product: SCHEMA price NUMERIC rating NUMERIC"
+numeric_tag_index_on_hash = "FT.CREATE products ON HASH PREFIX 1 product: SCHEMA price NUMERIC rating NUMERIC category TAG"
 hash_docs = [
     ["HSET", "product:1", "category", "electronics", "name", "Laptop", "price", "999.99", "rating", "4.5", "desc", "Great"],
     ["HSET", "product:2", "category", "electronics", "name", "Tablet", "price", "499.00", "rating", "4.0", "desc", "Good"],
@@ -68,7 +68,7 @@ def create_indexes(client: Valkey):
     """
         Create the necessary indexes for numeric and tag queries on Hash/JSON documents.
     """
-    assert client.execute_command(numeric_index_on_hash) == b"OK"
+    assert client.execute_command(numeric_tag_index_on_hash) == b"OK"
     assert client.execute_command(numeric_tag_index_on_json) == b"OK"
 
 def validate_non_vector_queries(client: Valkey):
@@ -225,6 +225,24 @@ def validate_bulk_limit_queries(client: Valkey):
     assert actual_results <= 3  # Should return at most 3 results
     assert actual_results == min(3, max(0, total_count - 2))  # Respect offset of 2
 
+def validate_aggregate_queries(client: Valkey):
+    """
+        Test FT.AGGREGATE with numeric and tag queries.
+    """
+    # Tag filter
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@category:{electronics}",
+        "LOAD", "1", "price",
+        "APPLY", "@price*2", "AS", "double_price"
+    )
+    assert result[0] == 3
+    # Numeric filter
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[100 500]",
+        "LOAD", "1", "category"
+    )
+    assert result[0] == 2
+
 class TestNonVector(ValkeySearchTestCaseBase):
 
     def test_basic(self):
@@ -243,6 +261,8 @@ class TestNonVector(ValkeySearchTestCaseBase):
         validate_non_vector_queries(client)
         # Test LIMIT functionality
         validate_limit_queries(client)
+        # Test AGGREGATE functionality
+        validate_aggregate_queries(client)
 
     def test_uningested_multi_field(self):
         """

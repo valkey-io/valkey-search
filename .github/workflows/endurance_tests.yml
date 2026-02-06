@@ -142,7 +142,7 @@ jobs:
           -e KEYSPACE_SIZE="${KEYSPACE_SIZE}" \
           --user "ubuntu:ubuntu" \
           endurance-test-image \
-          sudo /workspace/scripts/benchmark/run_endurance_test.sh
+          sudo -E /workspace/scripts/benchmark/run_endurance_test.sh
 
     - name: Update Results Permissions
       if: always()

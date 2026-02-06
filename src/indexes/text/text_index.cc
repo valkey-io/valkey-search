@@ -13,10 +13,24 @@
 #include "libstemmer.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/memory_allocation.h"
-
 namespace valkey_search::indexes::text {
 
 namespace {
+
+// InvasivePtrRaw<Postings> deletion
+static void FreePostingsCallback(void *target) {
+  if (target) {
+    auto raw = static_cast<InvasivePtrRaw<Postings>>(target);
+    InvasivePtr<Postings>::AdoptRaw(raw);
+  }
+}
+
+static void FreeStemParentsCallback(void *target) {
+  if (target) {
+    auto raw = static_cast<InvasivePtrRaw<StemParents>>(target);
+    InvasivePtr<StemParents>::AdoptRaw(raw);
+  }
+}
 
 InvasivePtr<Postings> AddKeyToPostings(InvasivePtr<Postings> existing_postings,
                                        const InternedStringPtr &key,
@@ -49,32 +63,87 @@ InvasivePtr<Postings> RemoveKeyFromPostings(
   return existing_postings;
 }
 
+// Factory for target mutate callback with memory tracking and new target
+// copying to the outer scope
+template <typename Target, typename MutateFn>
+std::function<void *(void *)> CreateTargetMutateFn(
+    MemoryPool &memory_pool, MutateFn mutate_fn,
+    InvasivePtr<Target> &updated_target) {
+  return [&updated_target, &memory_pool,
+          mutate_fn = std::move(mutate_fn)](void *old_val) -> void * {
+    NestedMemoryScope scope{memory_pool};
+
+    // Take ownership of the existing target reference. Nullptr is
+    // handled gracefully as a no-op.
+    auto existing = InvasivePtr<Target>::AdoptRaw(
+        static_cast<InvasivePtrRaw<Target>>(old_val));
+
+    // Mutate the target
+    InvasivePtr<Target> new_target = mutate_fn(std::move(existing));
+
+    // Copy the new target reference to the outer scope
+    updated_target = new_target;
+
+    // Pass ownership of the new target reference to the tree
+    return static_cast<void *>(std::move(new_target).ReleaseRaw());
+  };
+}
+
+// Factory for target set callback
+template <typename Target>
+std::function<void *(void *)> CreateTargetSetFn(
+    InvasivePtr<Target> &updated_target) {
+  return [&updated_target](void *old_val) -> void * {
+    // Take ownership of the existing target reference if there is one.
+    // It will be deconstructed as it falls out of scope.
+    if (old_val) {
+      InvasivePtr<Target>::AdoptRaw(
+          static_cast<InvasivePtrRaw<Target>>(old_val));
+    }
+    // Grab a new reference to the new shared target and pass ownership
+    // of it to the tree.
+    InvasivePtr<Target> copy = updated_target;
+    return static_cast<void *>(std::move(copy).ReleaseRaw());
+  };
+}
+
+// Factory for simple target mutation
+template <typename Target, typename MutateFn>
+std::function<void *(void *)> CreateSimpleTargetMutateFn(MutateFn mutate_fn) {
+  return [mutate_fn = std::move(mutate_fn)](void *old_val) -> void * {
+    // Take ownership of any existing target
+    auto existing = InvasivePtr<Target>::AdoptRaw(
+        static_cast<InvasivePtrRaw<Target>>(old_val));
+
+    // Mutate the target
+    InvasivePtr<Target> new_target = mutate_fn(std::move(existing));
+
+    // Pass ownership of the new target to the tree
+    return static_cast<void *>(std::move(new_target).ReleaseRaw());
+  };
+}
+
 }  // namespace
 
 /*** TextIndex ***/
 
 TextIndex::TextIndex(bool suffix)
-    : suffix_tree_(suffix ? std::make_unique<RadixTree<InvasivePtr<Postings>>>()
+    : prefix_tree_(FreePostingsCallback),
+      suffix_tree_(suffix ? std::make_unique<Rax>(FreePostingsCallback)
                           : nullptr) {}
 
-RadixTree<InvasivePtr<Postings>> &TextIndex::GetPrefix() {
-  return prefix_tree_;
-}
+Rax &TextIndex::GetPrefix() { return prefix_tree_; }
 
-const RadixTree<InvasivePtr<Postings>> &TextIndex::GetPrefix() const {
-  return prefix_tree_;
-}
+const Rax &TextIndex::GetPrefix() const { return prefix_tree_; }
 
-std::optional<std::reference_wrapper<RadixTree<InvasivePtr<Postings>>>>
-TextIndex::GetSuffix() {
+std::optional<std::reference_wrapper<Rax>> TextIndex::GetSuffix() {
   if (!suffix_tree_) {
     return std::nullopt;
   }
   return std::ref(*suffix_tree_);
 }
 
-std::optional<std::reference_wrapper<const RadixTree<InvasivePtr<Postings>>>>
-TextIndex::GetSuffix() const {
+std::optional<std::reference_wrapper<const Rax>> TextIndex::GetSuffix() const {
   if (!suffix_tree_) {
     return std::nullopt;
   }
@@ -90,6 +159,7 @@ TextIndexSchema::TextIndexSchema(data_model::Language language,
                                  uint32_t min_stem_size)
     : with_offsets_(with_offsets),
       lexer_(language, punctuation, stop_words),
+      stem_tree_(FreeStemParentsCallback),
       min_stem_size_(min_stem_size) {}
 
 absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
@@ -174,35 +244,41 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
                      std::string(token.rbegin(), token.rend()))
                : std::nullopt;
 
+    // The updated target gets set in target_add_fn and later used in
+    // target_set_fn, so that all trees point to the same postings object
     InvasivePtr<Postings> updated_target;
+
+    // Note: Right now the memory tracking won't include the position map memory
+    // since it's already allocated and moved into the postings object. Once we
+    // start creating a serialized version instead then it will be tracked. At
+    // that point stop moving the pos_map and just pass a reference so that it
+    // doesn't get cleaned up in the memory scope.
+    auto target_add_fn = CreateTargetMutateFn(
+        metadata_.posting_memory_pool_,
+        [&](InvasivePtr<Postings> existing) {
+          return AddKeyToPostings(std::move(existing), key, std::move(pos_map),
+                                  &metadata_, num_text_fields_);
+        },
+        updated_target);
+    auto target_set_fn = CreateTargetSetFn(updated_target);
 
     // Update the postings object for the token in the schema-level index with
     // the key and position map
     {
       std::lock_guard<std::mutex> schema_guard(text_index_mutex_);
-      updated_target =
-          text_index_->GetPrefix().MutateTarget(token, [&](auto existing) {
-            NestedMemoryScope scope{metadata_.posting_memory_pool_};
-            // Note: Right now this won't include the position map memory since
-            // it's already allocated and moved into the postings object. Once
-            // we start creating a serialized version instead then it will be
-            // tracked. At that point stop moving the pos_map and just pass a
-            // reference so that it doesn't get cleaned up in the memory scope.
-            return AddKeyToPostings(existing, key, std::move(pos_map),
-                                    &metadata_, num_text_fields_);
-          });
+      text_index_->GetPrefix().MutateTarget(token, target_add_fn);
       if (suffix) {
-        text_index_->GetSuffix().value().get().SetTarget(*reverse_token,
-                                                         updated_target);
+        text_index_->GetSuffix().value().get().MutateTarget(*reverse_token,
+                                                            target_set_fn);
       }
     }
 
     // Put the token in the per-key index pointing to the same shared postings
     // object
-    key_index.GetPrefix().SetTarget(token, updated_target);
+    key_index.GetPrefix().MutateTarget(token, target_set_fn);
     if (suffix) {
-      key_index.GetSuffix().value().get().SetTarget(*reverse_token,
-                                                    updated_target);
+      key_index.GetSuffix().value().get().MutateTarget(*reverse_token,
+                                                       target_set_fn);
     }
   }
 
@@ -210,13 +286,15 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
   if (stem_text_field_mask_) {
     std::lock_guard<std::mutex> stem_guard(stem_tree_mutex_);
     for (const auto &[stemmed, originals] : stem_mappings) {
-      stem_tree_.MutateTarget(stemmed, [&](StemParents existing) {
-        if (!existing) {
-          existing = InvasivePtr<absl::flat_hash_set<std::string>>::Make();
-        }
-        existing->insert(originals.begin(), originals.end());
-        return existing;
-      });
+      auto stem_mutate_fn = CreateSimpleTargetMutateFn<StemParents>(
+          [&originals](InvasivePtr<StemParents> existing) {
+            if (!existing) {
+              existing = InvasivePtr<StemParents>::Make();
+            }
+            existing->insert(originals.begin(), originals.end());
+            return existing;
+          });
+      stem_tree_.MutateTarget(stemmed, stem_mutate_fn);
     }
   }
 
@@ -239,44 +317,56 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
       return;
     }
   }
-
   TextIndex &key_index = node.mapped();
 
-  auto iter = key_index.GetPrefix().GetWordIterator("");
+  // The updated target gets set in target_remove_fn and later used in
+  // target_set_fn, so that all trees point to the same postings object
+  InvasivePtr<Postings> updated_target;
+
+  auto target_remove_fn = CreateTargetMutateFn(
+      metadata_.posting_memory_pool_,
+      [&](InvasivePtr<Postings> existing) {
+        return RemoveKeyFromPostings(std::move(existing), key, &metadata_);
+      },
+      updated_target);
+  auto target_set_fn = CreateTargetSetFn(updated_target);
 
   // Cleanup schema-level text index and stem tree
+  auto suffix_opt = text_index_->GetSuffix();
+  auto iter = key_index.GetPrefix().GetWordIterator("");
   std::lock_guard<std::mutex> schema_guard(text_index_mutex_);
   while (!iter.Done()) {
+    // Remove the key from the schema-level trees
     std::string_view word = iter.GetWord();
-    InvasivePtr<Postings> new_target =
-        text_index_->GetPrefix().MutateTarget(word, [&](auto existing) {
-          NestedMemoryScope scope{metadata_.posting_memory_pool_};
-          return RemoveKeyFromPostings(existing, key, &metadata_);
-        });
-    auto suffix_opt = text_index_->GetSuffix();
+    text_index_->GetPrefix().MutateTarget(word, target_remove_fn);
     if (suffix_opt.has_value()) {
       std::string reverse_word(word.rbegin(), word.rend());
-      suffix_opt.value().get().SetTarget(reverse_word, new_target);
+      suffix_opt.value().get().MutateTarget(reverse_word, target_set_fn);
     }
 
     // If the postings are now empty, remove from stem tree if it was a parent
-    if (!new_target && stem_text_field_mask_) {
+    if (!updated_target && stem_text_field_mask_) {
       // Check if this word has a stem mapping using schema-level minimum
-      std::string stemmed = lexer_.StemWord(std::string(word), min_stem_size_,
-                                            lexer_.GetStemmer());
+      std::string stemmed = lexer_.StemWord(
+          std::string(word), lexer_.GetStemmer(), min_stem_size_);
       if (stemmed != word) {
         // This word was a stem parent, remove it from stem tree
         std::lock_guard<std::mutex> stem_guard(stem_tree_mutex_);
-        stem_tree_.MutateTarget(stemmed, [&](StemParents existing) {
-          if (existing) {
-            CHECK(!existing->empty()) << "Stem tree entry should not be empty";
-            existing->erase(std::string(word));
-            if (existing->empty()) {
-              existing.Clear();  // Clear to remove from tree
-            }
-          }
-          return existing;
-        });
+        auto stem_remove_fn = CreateSimpleTargetMutateFn<StemParents>(
+            [&word](InvasivePtr<StemParents> existing) {
+              // The term may not exist in the stem tree if it was only present
+              // in NOSTEM fields.
+              if (existing) {
+                CHECK(!existing->empty())
+                    << "Stem tree entry should not be empty";
+                existing->erase(std::string(word));
+                if (existing->empty()) {
+                  existing.Clear();
+                }
+              }
+              return existing;
+            });
+        stem_tree_.MutateTarget(stemmed, stem_remove_fn);
       }
     }
 
@@ -322,10 +412,10 @@ std::string TextIndexSchema::GetAllStemVariants(
     absl::string_view search_term,
     absl::InlinedVector<absl::string_view, kStemVariantsInlineCapacity>
         &words_to_search,
-    uint32_t min_stem_size, uint64_t stem_enabled_mask, bool lock_needed) {
-  // Stem the search term with the provided min_stem_size
-  std::string stemmed = lexer_.StemWord(std::string(search_term), min_stem_size,
-                                        lexer_.GetStemmer());
+    uint64_t stem_enabled_mask, bool lock_needed) {
+  // Stem the search term
+  std::string stemmed =
+      lexer_.StemWord(std::string(search_term), lexer_.GetStemmer());
 
   // Conditionally acquire lock - use unique_lock with defer_lock for
   // conditional locking
@@ -338,7 +428,7 @@ std::string TextIndexSchema::GetAllStemVariants(
   // GetWordIterator positions at the first word with this prefix, check if
   // exact match
   if (!stem_iter.Done() && stem_iter.GetWord() == stemmed) {
-    const auto &parents_ptr = stem_iter.GetTarget();
+    const auto &parents_ptr = stem_iter.GetStemParentsTarget();
     if (parents_ptr) {
       const auto &parents = *parents_ptr;
       uint32_t max_expansions = options::GetMaxTermExpansions().GetValue();

@@ -28,6 +28,7 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
+#include "src/indexes/text/orproximity.h"
 #include "src/indexes/text/proximity.h"
 #include "src/indexes/text/text_fetcher.h"
 #include "src/indexes/vector_base.h"
@@ -145,36 +146,13 @@ inline PredicateType EvaluateAsComposedPredicate(
   return PredicateType::kComposedAnd;
 }
 
-enum class QueryOptimizationPath {
-  kNone,
-  kExactPhrase,       // Text + And + Proximity (Non-nested)
-  kSimpleComposedAnd  // Text + And (Non-nested, No Proximity)
-};
-
-// Helper fn to determine optimization path based on query operations
-inline QueryOptimizationPath GetOptimizationPath(QueryOperations ops) {
-  // Common "Forbidden" check for both paths
-  const QueryOperations kForbidden = QueryOperations::kContainsNestedComposed |
-                                     QueryOperations::kContainsNumeric |
-                                     QueryOperations::kContainsTag;
-  if (ops & kForbidden) return QueryOptimizationPath::kNone;
-  // Check shared requirements
-  bool is_text_and = (ops & QueryOperations::kContainsText) &&
-                     (ops & QueryOperations::kContainsAnd);
-  if (!is_text_and) return QueryOptimizationPath::kNone;
-  // Differentiate based on Proximity
-  if (ops & QueryOperations::kContainsProximity) {
-    return QueryOptimizationPath::kExactPhrase;
-  }
-  return QueryOptimizationPath::kSimpleComposedAnd;
-}
-
-// Helper fn to identify composed AND predicates that we cannot optimize
-// currently.
-inline bool IsUnsolvedComposedAnd(QueryOperations query_operations) {
-  if (!(query_operations & QueryOperations::kContainsAnd)) return false;
-  // It's unsolved only if the optimizer returns kNone
-  return GetOptimizationPath(query_operations) == QueryOptimizationPath::kNone;
+// Helper fn to identify if query is not fully solved after the entries fetcher
+// search, meaning it requires prefilter evaluation Prefiltering is needed when
+// query contains an AND with numeric or tag predicates.
+inline bool IsUnsolvedQuery(QueryOperations query_operations) {
+  return query_operations & (QueryOperations::kContainsNumeric |
+                             QueryOperations::kContainsTag) &&
+         query_operations & QueryOperations::kContainsAnd;
 }
 
 // Helper fn to identify if deduplication is needed.
@@ -186,32 +164,87 @@ inline bool NeedsDeduplication(QueryOperations query_operations) {
   return has_or || has_tag;
 }
 
+// Builds TextIterator for text predicates. Returns pair of iterator and
+// estimated size.
+std::pair<std::unique_ptr<indexes::text::TextIterator>, size_t>
+BuildTextIterator(const Predicate *predicate, bool negate,
+                  bool require_positions) {
+  if (predicate->GetType() == PredicateType::kComposedAnd ||
+      predicate->GetType() == PredicateType::kComposedOr) {
+    auto composed_predicate =
+        dynamic_cast<const ComposedPredicate *>(predicate);
+    auto predicate_type =
+        EvaluateAsComposedPredicate(composed_predicate, negate);
+    auto slop = composed_predicate->GetSlop();
+    bool inorder = composed_predicate->GetInorder();
+    bool child_require_positions = slop.has_value() || inorder;
+    if (predicate_type == PredicateType::kComposedAnd) {
+      absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
+                          indexes::text::kProximityTermsInlineCapacity>
+          iterators;
+      size_t min_size = SIZE_MAX;
+      for (const auto &child : composed_predicate->GetChildren()) {
+        auto [iter, size] =
+            BuildTextIterator(child.get(), negate, child_require_positions);
+        if (iter) {
+          iterators.push_back(std::move(iter));
+          min_size = std::min(min_size, size);
+        }
+      }
+      // The Composed AND only has non text predicates, return null
+      // to have the caller handle it.
+      if (iterators.empty()) return {nullptr, 0};
+      bool skip_positional = !child_require_positions;
+      size_t total_size = min_size == SIZE_MAX ? 0 : min_size;
+      return {
+          std::make_unique<indexes::text::ProximityIterator>(
+              std::move(iterators), slop, inorder, nullptr, skip_positional),
+          total_size};
+    } else {
+      absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
+                          indexes::text::kProximityTermsInlineCapacity>
+          iterators;
+      size_t total_size = 0;
+      bool has_non_text = false;
+      for (const auto &child : composed_predicate->GetChildren()) {
+        auto [iter, size] =
+            BuildTextIterator(child.get(), negate, child_require_positions);
+        if (iter) {
+          iterators.push_back(std::move(iter));
+          total_size += size;
+        } else {
+          has_non_text = true;
+        }
+      }
+      // If the Composed OR has any non text predicate, we cannot
+      // build a text iterator.
+      if (iterators.empty() || has_non_text) return {nullptr, 0};
+      return {std::make_unique<indexes::text::OrProximityIterator>(
+                  std::move(iterators), nullptr),
+              total_size};
+    }
+  }
+  if (predicate->GetType() == PredicateType::kText) {
+    auto text_predicate = dynamic_cast<const TextPredicate *>(predicate);
+    auto fetcher_ptr = text_predicate->Search(negate);
+    auto fetcher = static_cast<indexes::Text::EntriesFetcher *>(fetcher_ptr);
+    fetcher->require_positions_ = require_positions;
+    size_t size = fetcher->Size();
+    return {text_predicate->BuildTextIterator(fetcher), size};
+  }
+  if (predicate->GetType() == PredicateType::kNegate) {
+    auto negate_predicate = dynamic_cast<const NegatePredicate *>(predicate);
+    return BuildTextIterator(negate_predicate->GetPredicate(), !negate,
+                             require_positions);
+  }
+  // Numeric/Tag
+  return {nullptr, 0};
+}
+
 size_t EvaluateFilterAsPrimary(
     const Predicate *predicate,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     bool negate, QueryOperations query_operations) {
-  QueryOptimizationPath path = GetOptimizationPath(query_operations);
-  // Faster path for non nested pure text composed AND predicates.
-  // This is an optimization to avoid building multiple term iterators and a
-  // proximity iterator for every key's evaluation in the filtering stage (using
-  // the PrefilterEvaluator).
-  if ((path == QueryOptimizationPath::kExactPhrase ||
-       path == QueryOptimizationPath::kSimpleComposedAnd) &&
-      !negate) {
-    CHECK(predicate->GetType() == PredicateType::kComposedAnd);
-    auto composed_predicate =
-        dynamic_cast<const ComposedPredicate *>(predicate);
-    std::unique_ptr<indexes::EntriesFetcherBase> fetcher;
-    if (path == QueryOptimizationPath::kExactPhrase) {
-      fetcher = BuildExactPhraseFetcher(composed_predicate);
-    } else {
-      fetcher = BuildComposedAndFetcher(composed_predicate);
-    }
-    size_t size = fetcher->Size();
-    entries_fetchers.push(std::move(fetcher));
-    return size;
-  }
-
   if (predicate->GetType() == PredicateType::kComposedAnd ||
       predicate->GetType() == PredicateType::kComposedOr) {
     auto composed_predicate =
@@ -219,6 +252,14 @@ size_t EvaluateFilterAsPrimary(
     auto predicate_type =
         EvaluateAsComposedPredicate(composed_predicate, negate);
     if (predicate_type == PredicateType::kComposedAnd) {
+      auto [text_iter, size] =
+          BuildTextIterator(composed_predicate, negate, false);
+      if (text_iter) {
+        entries_fetchers.push(
+            std::make_unique<indexes::text::TextIteratorFetcher>(
+                std::move(text_iter), size));
+        return size;
+      }
       size_t min_size = SIZE_MAX;
       std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> best_fetchers;
       for (const auto &child : composed_predicate->GetChildren()) {
@@ -503,7 +544,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
   };
   // Cannot skip evaluation if the query contains unsolved composed operations.
   bool requires_prefilter_evaluation =
-      IsUnsolvedComposedAnd(parameters.filter_parse_results.query_operations);
+      IsUnsolvedQuery(parameters.filter_parse_results.query_operations);
   if (!requires_prefilter_evaluation) {
     bool needs_dedup =
         NeedsDeduplication(parameters.filter_parse_results.query_operations);

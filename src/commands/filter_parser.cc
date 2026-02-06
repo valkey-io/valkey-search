@@ -298,7 +298,7 @@ FilterParser::ParseNumericPredicate(const std::string& attribute_alias) {
   VMSDK_ASSIGN_OR_RETURN(auto start, ParseNumber());
   if (!Match(' ', false) && !Match(',')) {
     return absl::InvalidArgumentError(
-        absl::StrCat("Expected space or `|` between start and end values of a "
+        absl::StrCat("Expected space or `,` between start and end values of a "
                      "numeric field. Position: ",
                      pos_));
   }
@@ -607,6 +607,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
   FieldMaskPredicate field_mask;
   VMSDK_RETURN_IF_ERROR(
       SetupTextFieldConfiguration(field_mask, field_or_default, false));
+  query_operations_ |= QueryOperations::kContainsTextTerm;
   return FilterParser::TokenResult{
       std::make_unique<query::TermPredicate>(text_index_schema, field_mask,
                                              std::move(token), true),
@@ -715,6 +716,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
                                                   std::move(token),
                                                   leading_percent_count),
           break_on_query_syntax};
+      query_operations_ |= QueryOperations::kContainsTextFuzzy;
       return fuzzy;
     } else {
       return absl::InvalidArgumentError("Invalid fuzzy '%' markers");
@@ -731,6 +733,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
           break_on_query_syntax};
       return absl::InvalidArgumentError("Unsupported query operation");
     } else {
+      query_operations_ |= QueryOperations::kContainsTextSuffix;
       return FilterParser::TokenResult{
           std::make_unique<query::SuffixPredicate>(
               text_index_schema, field_mask, std::move(token)),
@@ -741,6 +744,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
       return absl::InvalidArgumentError("Invalid wildcard '*' markers");
     VMSDK_RETURN_IF_ERROR(
         SetupTextFieldConfiguration(field_mask, field_or_default, false));
+    query_operations_ |= QueryOperations::kContainsTextPrefix;
     return FilterParser::TokenResult{
         std::make_unique<query::PrefixPredicate>(text_index_schema, field_mask,
                                                  std::move(token)),
@@ -754,6 +758,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     }
     VMSDK_RETURN_IF_ERROR(
         SetupTextFieldConfiguration(field_mask, field_or_default, false));
+    query_operations_ |= QueryOperations::kContainsTextTerm;
     // TODO: Implement Composite query between original and its stem variants
     // for Non Exact Term search after Composite query execution is optimized
     return FilterParser::TokenResult{

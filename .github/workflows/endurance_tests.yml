@@ -10,14 +10,6 @@ name: Endurance and Stability Tests
 on:
   workflow_dispatch:
     inputs:
-      server_type:
-        description: 'Server type to test'
-        required: false
-        default: 'valkey'
-        type: choice
-        options:
-          - valkey
-          - redis
       branch_version:
         description: 'Branch/version to test'
         required: false
@@ -122,7 +114,7 @@ jobs:
       timeout-minutes: 7200
       continue-on-error: true
       env:
-        SERVER_TYPE: ${{ github.event.inputs.server_type || 'valkey' }}
+        SERVER_TYPE: 'valkey'
         BRANCH_VERSION: ${{ github.event.inputs.branch_version || 'unstable' }}
         ENABLE_TLS: ${{ github.event.inputs.enable_tls == 'false' && 'false' || 'true' }}
         TEST_DURATION: ${{ github.event.inputs.test_duration || '3600' }}
@@ -155,6 +147,24 @@ jobs:
     - name: Update Results Permissions
       if: always()
       run: sudo chmod -R 755 endurance-results
+
+    # Display logs on failure for debugging
+    - name: Display Error Logs
+      if: failure()
+      run: |
+        echo "=== Displaying Error Logs ==="
+        echo ""
+        echo "=== Server Logs ==="
+        find endurance-results -name "server.log" -type f -exec echo "File: {}" \; -exec cat {} \; -exec echo "" \; || echo "No server logs found"
+        echo ""
+        echo "=== Test Output Files ==="
+        find endurance-results -name "*.txt" -type f -exec echo "File: {}" \; -exec cat {} \; -exec echo "" \; || echo "No test output files found"
+        echo ""
+        echo "=== Metadata ==="
+        find endurance-results -name "metadata.json" -type f -exec echo "File: {}" \; -exec cat {} \; -exec echo "" \; || echo "No metadata files found"
+        echo ""
+        echo "=== Results Directory Structure ==="
+        ls -laR endurance-results/ || echo "Results directory is empty or inaccessible"
 
     # Upload test results as artifacts
     - name: Upload Test Results

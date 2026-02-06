@@ -39,24 +39,61 @@ generate_tls_certificates() {
   cd "$tls_dir"
   
   # CA
-  openssl genrsa -out ca-key.pem 4096 2>/dev/null
-  openssl req -new -x509 -days 3650 -key ca-key.pem -out ca-cert.pem \
-    -subj "/C=US/ST=State/L=City/O=Organization/CN=Test CA" 2>/dev/null
+  echo "Generating CA key..."
+  if ! openssl genrsa -out ca-key.pem 4096; then
+    echo "ERROR: Failed to generate CA key"
+    return 1
+  fi
+  
+  echo "Generating CA certificate..."
+  if ! openssl req -new -x509 -days 3650 -key ca-key.pem -out ca-cert.pem \
+    -subj "/C=US/ST=State/L=City/O=Organization/CN=Test CA"; then
+    echo "ERROR: Failed to generate CA certificate"
+    return 1
+  fi
   
   # Server cert
-  openssl genrsa -out server-key.pem 4096 2>/dev/null
-  openssl req -new -key server-key.pem -out server.csr \
-    -subj "/C=US/ST=State/L=City/O=Organization/CN=localhost" 2>/dev/null
-  openssl x509 -req -days 3650 -in server.csr \
+  echo "Generating server key..."
+  if ! openssl genrsa -out server-key.pem 4096; then
+    echo "ERROR: Failed to generate server key"
+    return 1
+  fi
+  
+  echo "Generating server CSR..."
+  if ! openssl req -new -key server-key.pem -out server.csr \
+    -subj "/C=US/ST=State/L=City/O=Organization/CN=localhost"; then
+    echo "ERROR: Failed to generate server CSR"
+    return 1
+  fi
+  
+  echo "Signing server certificate..."
+  if ! openssl x509 -req -days 3650 -in server.csr \
     -CA ca-cert.pem -CAkey ca-key.pem -CAcreateserial -out server-cert.pem \
-    -extfile <(printf "subjectAltName=DNS:localhost,IP:127.0.0.1") 2>/dev/null
+    -extfile <(printf "subjectAltName=DNS:localhost,IP:127.0.0.1"); then
+    echo "ERROR: Failed to sign server certificate"
+    return 1
+  fi
   
   # Client cert
-  openssl genrsa -out client-key.pem 4096 2>/dev/null
-  openssl req -new -key client-key.pem -out client.csr \
-    -subj "/C=US/ST=State/L=City/O=Organization/CN=client" 2>/dev/null
-  openssl x509 -req -days 3650 -in client.csr \
-    -CA ca-cert.pem -CAkey ca-key.pem -CAcreateserial -out client-cert.pem 2>/dev/null
+  echo "Generating client key..."
+  if ! openssl genrsa -out client-key.pem 4096; then
+    echo "ERROR: Failed to generate client key"
+    return 1
+  fi
+  
+  echo "Generating client CSR..."
+  if ! openssl req -new -key client-key.pem -out client.csr \
+    -subj "/C=US/ST=State/L=City/O=Organization/CN=client"; then
+    echo "ERROR: Failed to generate client CSR"
+    return 1
+  fi
+  
+  echo "Signing client certificate..."
+  if ! openssl x509 -req -days 3650 -in client.csr \
+    -CA ca-cert.pem -CAkey ca-key.pem -CAcreateserial -out client-cert.pem; then
+    echo "ERROR: Failed to sign client certificate"
+    return 1
+  fi
   
   chmod 600 *.pem
   
@@ -71,28 +108,42 @@ build_server() {
   
   cd /workspace
   
-  if [[ "${SERVER_TYPE}" == "valkey" ]]; then
-    if [[ ! -d "valkey" ]]; then
-      git clone https://github.com/valkey-io/valkey.git
+  if [[ ! -d "valkey" ]]; then
+    echo "Cloning valkey repository..."
+    if ! git clone https://github.com/valkey-io/valkey.git; then
+      echo "ERROR: Failed to clone valkey repository"
+      return 1
     fi
-    cd valkey
-    git fetch
-    git checkout "${BRANCH_VERSION}"
-    make distclean 2>/dev/null || true
-    make BUILD_TLS=yes -j$(nproc)
-    SERVER_BIN="$(pwd)/src/valkey-server"
-    SERVER_CLI="$(pwd)/src/valkey-cli"
-  else
-    if [[ ! -d "redis" ]]; then
-      git clone https://github.com/redis/redis.git
-    fi
-    cd redis
-    git fetch
-    git checkout "${BRANCH_VERSION}"
-    make distclean 2>/dev/null || true
-    make BUILD_TLS=yes -j$(nproc)
-    SERVER_BIN="$(pwd)/src/redis-server"
-    SERVER_CLI="$(pwd)/src/redis-cli"
+  fi
+  cd valkey
+  
+  echo "Fetching latest changes..."
+  if ! git fetch; then
+    echo "ERROR: Failed to fetch valkey repository"
+    return 1
+  fi
+  
+  echo "Checking out branch: ${BRANCH_VERSION}"
+  if ! git checkout "${BRANCH_VERSION}"; then
+    echo "ERROR: Failed to checkout branch ${BRANCH_VERSION}"
+    return 1
+  fi
+  
+  echo "Cleaning previous build..."
+  make distclean 2>/dev/null || true
+  
+  echo "Building valkey with TLS support..."
+  if ! make BUILD_TLS=yes -j$(nproc); then
+    echo "ERROR: Failed to build valkey"
+    return 1
+  fi
+  
+  SERVER_BIN="$(pwd)/src/valkey-server"
+  SERVER_CLI="$(pwd)/src/valkey-cli"
+  
+  if [[ ! -f "${SERVER_BIN}" ]]; then
+    echo "ERROR: Server binary not found at ${SERVER_BIN}"
+    return 1
   fi
   
   echo "Server built: ${SERVER_BIN}"
@@ -155,7 +206,13 @@ EOF
     sleep 1
   done
   
-  echo "ERROR: Server failed to start"
+  echo "ERROR: Server failed to start within 30 seconds"
+  echo "Server log contents:"
+  if [[ -f "${server_log}" ]]; then
+    cat "${server_log}"
+  else
+    echo "Log file not found: ${server_log}"
+  fi
   return 1
 }
 
@@ -209,7 +266,10 @@ run_benchmark() {
   echo ""
   
   # Run benchmark
-  "${cmd[@]}"
+  if ! "${cmd[@]}"; then
+    echo "ERROR: Benchmark execution failed"
+    return 1
+  fi
   
   echo ""
   echo "Benchmark completed successfully"
@@ -288,6 +348,11 @@ cleanup() {
   # Stop server
   if [[ -n "${SERVER_BIN:-}" ]]; then
     pkill -f "$(basename "${SERVER_BIN}")" 2>/dev/null || true
+  fi
+  
+  # Save server logs before cleanup
+  if [[ -n "${RUN_RESULTS_DIR:-}" && -f "${RUN_RESULTS_DIR}/server.log" ]]; then
+    echo "Server log saved to: ${RUN_RESULTS_DIR}/server.log"
   fi
   
   # Clean up TLS files (but not the mounted directory itself)

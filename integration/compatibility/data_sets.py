@@ -110,6 +110,72 @@ TEXT_DATASETS = {
             ],
             'price': (0, 50)
         }
+    },
+    # ,.<>{}[]"':;!@#$%^&*()-+=~
+    'punctuation': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # Unescaped only - these split into multiple tokens
+                "comma,period",
+                'run.jump',
+                'book<paper',
+                'physics>maths',
+                'cat{dog',
+                'fish}rabbit',
+                'old[new',
+                'tall]short',
+                'many"few',
+                "great'wall",
+                'inside:out',
+                'swim;pass',
+                'shout!out',
+                'email@password',
+                'office#home',
+                'dollar$sign',
+                'ten%percent',
+                'top^down',
+                'left&right',
+                'star*moon',
+                'include(exclude',
+                'key)board',
+                'minus-subtract',
+                'city+village',
+                'equal=lity',
+                'random~sum',
+            ],
+            'body': [
+                # Escaped only
+                'freedom\\,justice',
+                'begin\\.end',
+                'ask\\<question',
+                'get\\>answer',
+                'round\\{about',
+                'ever\\}green',
+                'square\\[feet',
+                'circle\\]triangle',
+                'chat\\"gpt',
+                "redis\\'valkey",
+                'sick\\:hungry',
+                'phone\\;laptop',
+                'soccer\\!tennis',
+                'address\\@field',
+                'hash\\#tag',
+                'money\\$rich',
+                'degree\\%cold',
+                'sharp\\^knife',
+                'friend\\&enemy',
+                'mountain\\*view',
+                'extra\\(time',
+                'sooner\\)later',
+                'deal\\-coupon',
+                'abundant\\+plant',
+                'blue\\=planet',
+                'milky\\~way',
+            ],
+            'color': ['red', 'blue', 'green'],
+            'price': (0, 10)
+        }
     }
 }
 
@@ -406,7 +472,7 @@ def compute_data_sets():
 
 # TODO: stopwords, punctuation, numbers in text field (with periods, float, +/-)
 # TODO: special case with lexers (random lexical chars, prove lexical analyzer work correct) (isolation)
-def compute_text_data_sets(dataset_name, seed=123):
+def compute_text_data_sets(dataset_name, seed=123, schema_type="default"):
     """Generate random documents for a specific dataset.
     
     Args:
@@ -443,8 +509,15 @@ def compute_text_data_sets(dataset_name, seed=123):
     json_schema_parts = []
     
     for field in text_fields:
-        hash_schema_parts.append(f"{field} TEXT WITHSUFFIXTRIE NOSTEM")
-        json_schema_parts.append(f"$.{field} AS {field} TEXT WITHSUFFIXTRIE NOSTEM")
+        match schema_type:
+            case "default":
+                hash_schema_parts.append(f"{field} TEXT WITHSUFFIXTRIE")
+                json_schema_parts.append(f"$.{field} AS {field} TEXT WITHSUFFIXTRIE")
+            case "nostem":
+                hash_schema_parts.append(f"{field} TEXT WITHSUFFIXTRIE NOSTEM")
+                json_schema_parts.append(f"$.{field} AS {field} TEXT WITHSUFFIXTRIE NOSTEM")
+            case _:
+                raise ValueError(f"Unknown index schema type: {schema_type}")
     
     for field in tag_fields:
         hash_schema_parts.append(f"{field} TAG")
@@ -501,7 +574,7 @@ def compute_text_data_sets(dataset_name, seed=123):
     return data
 
 ### Helper Functions ###
-def load_data(client, data_set, key_type, data_source=None):
+def load_data(client, data_set, key_type, data_source=None, schema_type="default"):
     # Auto-detect data source based on data_set name
     if data_source is None:
         data_source = "text" if data_set in TEXT_DATASETS else "vector"
@@ -510,7 +583,7 @@ def load_data(client, data_set, key_type, data_source=None):
         case "vector":
             data = compute_data_sets()
         case "text":
-            data = compute_text_data_sets(data_set)
+            data = compute_text_data_sets(data_set, schema_type=schema_type)
         case _:
             raise ValueError(f"Unknown data source: {data_source}")
     load_list = data[data_set][SETS_KEY(key_type)]

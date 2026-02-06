@@ -121,22 +121,33 @@ jobs:
       id: test-run
       timeout-minutes: 7200
       continue-on-error: true
+      env:
+        SERVER_TYPE: ${{ github.event.inputs.server_type || 'valkey' }}
+        BRANCH_VERSION: ${{ github.event.inputs.branch_version || 'unstable' }}
+        ENABLE_TLS: ${{ github.event.inputs.enable_tls == 'false' && 'false' || 'true' }}
+        TEST_DURATION: ${{ github.event.inputs.test_duration || '3600' }}
+        THREADS: ${{ github.event.inputs.threads || '10' }}
+        CLIENTS: ${{ github.event.inputs.clients || '10' }}
+        PIPELINE_DEPTH: ${{ github.event.inputs.pipeline_depth || '1' }}
+        DATA_SIZE: ${{ github.event.inputs.data_size || '1024' }}
+        WORKLOAD_TYPE: ${{ github.event.inputs.workload_type || 'mixed' }}
+        KEYSPACE_SIZE: ${{ github.event.inputs.keyspace_size || '1000000' }}
       run: |
         docker run --privileged --rm \
           --mount type=bind,source="$(pwd)/endurance-results",target=/workspace/results \
           --mount type=bind,source="$(pwd)/tls",target=/workspace/tls \
           -v "$(pwd):/workspace" \
-          -e SERVER_TYPE="${{ github.event.inputs.server_type || 'valkey' }}" \
-          -e BRANCH_VERSION="${{ github.event.inputs.branch_version || 'unstable' }}" \
-          -e ENABLE_TLS="${{ github.event.inputs.enable_tls != 'false' && 'true' || 'false' }}" \
-          -e TEST_DURATION="${{ github.event.inputs.test_duration || '3600' }}" \
+          -e SERVER_TYPE="${SERVER_TYPE}" \
+          -e BRANCH_VERSION="${BRANCH_VERSION}" \
+          -e ENABLE_TLS="${ENABLE_TLS}" \
+          -e TEST_DURATION="${TEST_DURATION}" \
           -e REQUEST_COUNT="0" \
-          -e THREADS="${{ github.event.inputs.threads || '10' }}" \
-          -e CLIENTS="${{ github.event.inputs.clients || '10' }}" \
-          -e PIPELINE_DEPTH="${{ github.event.inputs.pipeline_depth || '1' }}" \
-          -e DATA_SIZE="${{ github.event.inputs.data_size || '1024' }}" \
-          -e WORKLOAD_TYPE="${{ github.event.inputs.workload_type || 'mixed' }}" \
-          -e KEYSPACE_SIZE="${{ github.event.inputs.keyspace_size || '1000000' }}" \
+          -e THREADS="${THREADS}" \
+          -e CLIENTS="${CLIENTS}" \
+          -e PIPELINE_DEPTH="${PIPELINE_DEPTH}" \
+          -e DATA_SIZE="${DATA_SIZE}" \
+          -e WORKLOAD_TYPE="${WORKLOAD_TYPE}" \
+          -e KEYSPACE_SIZE="${KEYSPACE_SIZE}" \
           --user "ubuntu:ubuntu" \
           endurance-test-image \
           sudo /workspace/scripts/benchmark/run_endurance_test.sh

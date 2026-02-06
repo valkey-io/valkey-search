@@ -1887,6 +1887,283 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert result[0] == 1
         assert result[1] == b"hash:10"
 
+    @pytest.mark.parametrize("vector_index_type", ["HNSW", "FLAT"])
+    def test_hybrid_vector_query(self, vector_index_type):
+        """Test hybrid vector queries with deeply nested combinations"""
+        import numpy as np
+        client: Valkey = self.server.get_new_client()
+
+        # create index with vector + text + tag + numeric fields
+        match vector_index_type:
+            case "HNSW":
+                vector_args = ["VECTOR", "HNSW", "6", "TYPE", "FLOAT32", "DIM", "4", "DISTANCE_METRIC", "COSINE"]
+            case "FLAT":
+                vector_args = ["VECTOR", "FLAT", "6", "TYPE", "FLOAT32", "DIM", "4", "DISTANCE_METRIC", "COSINE"]
+            case _:
+                assert False, f"Unknown vector index type!"
+        
+        client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "hash:",
+            "SCHEMA",
+            "embedding", *vector_args,
+            "title", "TEXT", "NOSTEM",
+            "body", "TEXT", "NOSTEM",
+            "color", "TAG",
+            "price", "NUMERIC"
+        )
+
+        def make_vector(vals):
+            return np.array(vals, dtype=np.float32).tobytes()
+        
+        # insert data
+        client.execute_command("HSET", "hash:00", "embedding", make_vector([1.0, 0.0, 0.0, 0.0]), "title", "plum", "body", "cat slow loud shark ocean eagle tomato", "color", "green", "price", "21")
+        client.execute_command("HSET", "hash:01", "embedding", make_vector([0.9, 0.4, 0.0, 0.0]), "title", "kiwi peach apple chair orange door orange melon chair", "body", "lettuce", "color", "green", "price", "8")
+        client.execute_command("HSET", "hash:02", "embedding", make_vector([0.7, 0.7, 0.0, 0.0]), "title", "plum", "body", "river cat slow build eagle fast dog", "color", "brown", "price", "40")
+        client.execute_command("HSET", "hash:03", "embedding", make_vector([0.4, 0.9, 0.0, 0.0]), "title", "banana", "body", "quick brown fox jumps", "color", "red", "price", "15")
+        client.execute_command("HSET", "hash:04", "embedding", make_vector([0.0, 1.0, 0.0, 0.0]), "title", "grape", "body", "lazy dog sleeps", "color", "blue", "price", "25")
+        
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+        
+        query_vec = make_vector([1.0, 0.0, 0.0, 0.0])
+
+        # Basic hybrid: vector + text + tag + numeric
+        result = client.execute_command("FT.SEARCH", "idx",
+            "(@color:{green} cat slow loud shark @price:[10 30])=>[KNN 3 @embedding $vec]",
+            "PARAMS", "2", "vec", query_vec, "DIALECT", "2", "NOCONTENT")
+        assert result[0] == 1
+        assert result[1] == b"hash:00"
+
+        # With INORDER
+        result = client.execute_command("FT.SEARCH", "idx",
+            "(cat @color:{green} slow loud @price:[10 30] shark)=>[KNN 3 @embedding $vec]",
+            "PARAMS", "2", "vec", query_vec, "DIALECT", "2", "INORDER", "NOCONTENT")
+        assert result[0] == 1
+        assert result[1] == b"hash:00"
+
+        # INORDER violation
+        result = client.execute_command("FT.SEARCH", "idx",
+            "(slow @color:{green} cat loud @price:[10 30] shark)=>[KNN 3 @embedding $vec]",
+            "PARAMS", "2", "vec", query_vec, "DIALECT", "2", "INORDER", "NOCONTENT")
+        assert result[0] == 0
+
+        # Text term not found
+        result = client.execute_command("FT.SEARCH", "idx",
+        "(@color:{green} cat slow @price:[10 30] soft)=>[KNN 3 @embedding $vec]",
+        "PARAMS", "2", "vec", query_vec, "DIALECT", "2", "NOCONTENT")
+        assert result[0] == 0
+
+        # Nested AND with OR: (text1 | text2) numeric tag
+        result = client.execute_command("FT.SEARCH", "idx",
+        "((cat | dog) @price:[10 30] @color:{green})=>[KNN 3 @embedding $vec]",
+        "PARAMS", "2", "vec", query_vec, "DIALECT", "2", "NOCONTENT")
+        assert result[0] == 1
+        assert result[1] == b"hash:00"
+
+        # Nested OR with AND: ((text1 text2) | (text3 text4)) tag
+        result = client.execute_command("FT.SEARCH", "idx",
+        "(((cat slow) | (quick brown)) @color:{green|red})=>[KNN 3 @embedding $vec]",
+        "PARAMS", "2", "vec", query_vec, "DIALECT", "2", "NOCONTENT")
+        assert result[0] == 2
+        assert set(result[1:]) == {b"hash:00", b"hash:03"}
+
+        # Deep nesting: (((text1 text2) numeric) | (text3 tag))
+        result = client.execute_command("FT.SEARCH", "idx",
+        "((((cat slow) @price:[10 30]) | (lettuce @color:{green})))=>[KNN 3 @embedding $vec]",
+        "PARAMS", "2", "vec", query_vec, "DIALECT", "2", "NOCONTENT")
+        assert result[0] == 2
+        assert set(result[1:]) == {b"hash:00", b"hash:01"}
+
+        # Multiple levels: ((text1 | text2) (text3 | text4)) numeric tag
+        result = client.execute_command("FT.SEARCH", "idx",
+            "(((cat | river) (slow | fast)) @price:[30 50] @color:{brown})=>[KNN 3 @embedding $vec]",
+            "PARAMS", "2", "vec", query_vec, "DIALECT", "2", "NOCONTENT")
+        assert result[0] == 1
+        assert result[1] == b"hash:02"
+        
+        # Complex nested OR with multiple AND branches
+        result = client.execute_command("FT.SEARCH", "idx",
+            "(((cat slow @color:{green}) | (dog fast @color:{brown}) | (fox jumps @color:{red})))=>[KNN 5 @embedding $vec]",
+            "PARAMS", "2", "vec", query_vec, "DIALECT", "2", "NOCONTENT")
+        assert result[0] == 3
+        assert set(result[1:]) == {b"hash:00", b"hash:02", b"hash:03"}
+        
+        # Deeply nested with SLOP
+        result = client.execute_command("FT.SEARCH", "idx",
+            "(((cat shark) | (quick fox)) @color:{green|red})=>[KNN 3 @embedding $vec]",
+            "PARAMS", "2", "vec", query_vec, "SLOP", "3", "DIALECT", "2", "NOCONTENT")
+        assert result[0] == 2
+        assert set(result[1:]) == {b"hash:00", b"hash:03"}
+        
+        # Triple nesting: (((text1 | text2) text3) | ((text4 text5) tag))
+        result = client.execute_command("FT.SEARCH", "idx",
+            "((((cat | river) slow) | ((quick brown) @color:{red})))=>[KNN 5 @embedding $vec]",
+            "PARAMS", "2", "vec", query_vec, "DIALECT", "2", "NOCONTENT")
+        assert result[0] == 3
+        assert set(result[1:]) == {b"hash:00", b"hash:02", b"hash:03"}
+        
+        # ORs in ORs: (((text1 | text2) | (text3 | text4)) numeric)
+        result = client.execute_command("FT.SEARCH", "idx",
+            "((((cat | shark) | (quick | fox)) @price:[10 30]))=>[KNN 3 @embedding $vec]",
+            "PARAMS", "2", "vec", query_vec, "DIALECT", "2", "NOCONTENT")
+        assert result[0] == 2
+        assert set(result[1:]) == {b"hash:00", b"hash:03"}
+        
+        # Deep OR nesting: ((((text1 | text2) | text3) | text4) tag)
+        result = client.execute_command("FT.SEARCH", "idx",
+            "(((((cat | shark) | lettuce) | fox) @color:{green|red}))=>[KNN 5 @embedding $vec]",
+            "PARAMS", "2", "vec", query_vec, "DIALECT", "2", "NOCONTENT")
+        assert result[0] == 3
+        assert set(result[1:]) == {b"hash:00", b"hash:01", b"hash:03"}
+        
+        # OR with nested AND branches
+        result = client.execute_command("FT.SEARCH", "idx",
+            "((((cat slow) | (quick brown)) | ((lazy dog) | (river fast))))=>[KNN 5 @embedding $vec]",
+            "PARAMS", "2", "vec", query_vec, "DIALECT", "2", "NOCONTENT")
+        assert result[0] == 4
+        assert set(result[1:]) == {b"hash:00", b"hash:02", b"hash:03", b"hash:04"}
+        
+        # Complex: ((((text1 | text2) numeric) | ((text3 | text4) tag)) | text5)
+        result = client.execute_command("FT.SEARCH", "idx",
+            "(((((cat | shark) @price:[10 30]) | ((quick | fox) @color:{red})) | lettuce))=>[KNN 5 @embedding $vec]",
+            "PARAMS", "2", "vec", query_vec, "DIALECT", "2", "NOCONTENT")
+        assert result[0] == 3
+        assert set(result[1:]) == {b"hash:00", b"hash:01", b"hash:03"}
+        
+        # Maximum depth OR nesting
+        result = client.execute_command("FT.SEARCH", "idx",
+            "((((((cat | shark) | lettuce) | fox) | dog) @color:{green|red|brown|blue}))=>[KNN 5 @embedding $vec]",
+            "PARAMS", "2", "vec", query_vec, "DIALECT", "2", "NOCONTENT")
+        assert result[0] == 5
+        assert set(result[1:]) == {b"hash:00", b"hash:01", b"hash:02", b"hash:03", b"hash:04"}
+        
+        # Multiple pure text ORs in AND
+        result = client.execute_command("FT.SEARCH", "idx",
+            "((cat | shark) (slow | loud) @price:[10 30])=>[KNN 3 @embedding $vec]",
+            "PARAMS", "2", "vec", query_vec, "DIALECT", "2", "NOCONTENT")
+        assert result[0] == 1
+        assert result[1] == b"hash:00"
+        
+        # OR with all AND children
+        result = client.execute_command("FT.SEARCH", "idx",
+            "(((cat @price:[10 30]) | (lettuce @color:{green})))=>[KNN 3 @embedding $vec]",
+            "PARAMS", "2", "vec", query_vec, "DIALECT", "2", "NOCONTENT")
+        assert result[0] == 2
+        assert set(result[1:]) == {b"hash:00", b"hash:01"}
+        
+        # Hybrid with INORDER on nested AND
+        result = client.execute_command("FT.SEARCH", "idx",
+            "(((cat slow) | (quick brown)) @color:{green|red})=>[KNN 3 @embedding $vec]",
+            "PARAMS", "2", "vec", query_vec, "INORDER", "DIALECT", "2", "NOCONTENT")
+        assert result[0] == 2
+        assert set(result[1:]) == {b"hash:00", b"hash:03"}
+        
+        # INORDER violation in nested AND
+        result = client.execute_command("FT.SEARCH", "idx",
+            "(((slow cat) | (brown quick)) @color:{green|red})=>[KNN 3 @embedding $vec]",
+            "PARAMS", "2", "vec", query_vec, "INORDER", "DIALECT", "2", "NOCONTENT")
+        assert result[0] == 0
+        
+        # Hybrid INORDER with numeric and tag
+        result = client.execute_command("FT.SEARCH", "idx",
+            "(((cat slow @price:[10 30]) | (lettuce @color:{green})))=>[KNN 3 @embedding $vec]",
+            "PARAMS", "2", "vec", query_vec, "INORDER", "DIALECT", "2", "NOCONTENT")
+        assert result[0] == 2
+        assert set(result[1:]) == {b"hash:00", b"hash:01"}
+        
+        # OR with AND text branches and non-matching numeric
+        result = client.execute_command("FT.SEARCH", "idx",
+            "(((cat slow) | (quick brown) | @price:[1000 2000]))=>[KNN 5 @embedding $vec]",
+            "PARAMS", "2", "vec", query_vec, "DIALECT", "2", "NOCONTENT")
+        assert result[0] == 3
+        assert set(result[1:]) == {b"hash:00", b"hash:02", b"hash:03"}
+        
+        # Text + OR with numeric - important case
+        result = client.execute_command("FT.SEARCH", "idx",
+            "(cat (dog | @price:[10 30]) shark)=>[KNN 3 @embedding $vec]",
+            "PARAMS", "2", "vec", query_vec, "DIALECT", "2", "INORDER", "NOCONTENT")
+        assert result[0] == 1
+        assert result[1] == b"hash:00"
+        
+        # Verification of failure - numeric range fails
+        result = client.execute_command("FT.SEARCH", "idx",
+            "(cat (dog | @price:[100 200]) shark)=>[KNN 3 @embedding $vec]",
+            "PARAMS", "2", "vec", query_vec, "DIALECT", "2", "NOCONTENT")
+        assert result[0] == 0
+        
+        # Nested OR with text and numeric
+        result = client.execute_command("FT.SEARCH", "idx",
+            "(cat (dog | (slow @price:[10 30])) shark)=>[KNN 3 @embedding $vec]",
+            "PARAMS", "2", "vec", query_vec, "DIALECT", "2", "INORDER", "NOCONTENT")
+        assert result[0] == 1
+        assert result[1] == b"hash:00"
+        
+        # Deep numeric nesting
+        result = client.execute_command("FT.SEARCH", "idx",
+            "(@price:[500 600] | (@price:[0 100] (@price:[99 100] | (@price:[10 40] (cat slow shark @price:[20 25])))))=>[KNN 3 @embedding $vec]",
+            "PARAMS", "2", "vec", query_vec, "DIALECT", "2", "INORDER", "NOCONTENT")
+        assert result[0] == 1
+        assert result[1] == b"hash:00"
+        
+        # Nested OR with mixed predicates
+        result = client.execute_command("FT.SEARCH", "idx",
+            "((cat (quick | @price:[10 30])) | lettuce)=>[KNN 3 @embedding $vec]",
+            "PARAMS", "2", "vec", query_vec, "DIALECT", "2", "NOCONTENT")
+        assert result[0] == 2
+        assert set(result[1:]) == {b"hash:00", b"hash:01"}
+        
+        # Triple-nested mixed OR
+        result = client.execute_command("FT.SEARCH", "idx",
+            "(((cat | @price:[10 30]) | (fox | @color:{red})))=>[KNN 5 @embedding $vec]",
+            "PARAMS", "2", "vec", query_vec, "DIALECT", "2", "NOCONTENT")
+        assert result[0] == 4
+        assert set(result[1:]) == {b"hash:00", b"hash:02", b"hash:03", b"hash:04"}
+        
+        # AND with all children being mixed ORs
+        result = client.execute_command("FT.SEARCH", "idx",
+            "((cat | @price:[10 30]) (fox | @color:{red}))=>[KNN 3 @embedding $vec]",
+            "PARAMS", "2", "vec", query_vec, "DIALECT", "2", "NOCONTENT")
+        assert result[0] == 1
+        assert result[1] == b"hash:03"
+        
+        # Pure text OR nested in AND with mixed OR
+        result = client.execute_command("FT.SEARCH", "idx",
+            "((cat | shark) (fox | @price:[10 30]))=>[KNN 3 @embedding $vec]",
+            "PARAMS", "2", "vec", query_vec, "DIALECT", "2", "NOCONTENT")
+        assert result[0] == 1
+        assert result[1] == b"hash:00"
+        
+        # Multiple levels of mixed ORs
+        result = client.execute_command("FT.SEARCH", "idx",
+            "(((cat | (quick | @price:[10 30])) | @color:{green}))=>[KNN 5 @embedding $vec]",
+            "PARAMS", "2", "vec", query_vec, "DIALECT", "2", "NOCONTENT")
+        assert result[0] == 5
+        assert set(result[1:]) == {b"hash:00", b"hash:01", b"hash:02", b"hash:03", b"hash:04"}
+
+        # Vector: Text matches 3 docs, but KNN 1 returns only the closest
+        # "cat" matches hash:00, hash:02, hash:04 - but KNN 1 returns only hash:00 (closest)
+        result = client.execute_command("FT.SEARCH", "idx",
+            "(cat)=>[KNN 1 @embedding $vec]",
+            "PARAMS", "2", "vec", query_vec, "DIALECT", "2", "NOCONTENT")
+        assert result[0] == 1
+        assert result[1] == b"hash:00"
+
+        # Vector: Text matches 2 docs, KNN 1 returns only closest
+        # "dog" matches hash:02, hash:04 - KNN 1 returns hash:02 (closer than hash:04)
+        result = client.execute_command("FT.SEARCH", "idx",
+            "(dog)=>[KNN 1 @embedding $vec]",
+            "PARAMS", "2", "vec", query_vec, "DIALECT", "2", "NOCONTENT")
+        assert result[0] == 1
+        assert result[1] == b"hash:02"  # hash:02 is closer than hash:04
+
+        # Vector: Verify KNN 2 returns both dog matches in distance order
+        result = client.execute_command("FT.SEARCH", "idx",
+            "(dog)=>[KNN 2 @embedding $vec]",
+            "PARAMS", "2", "vec", query_vec, "DIALECT", "2", "NOCONTENT")
+        assert result[0] == 2
+        assert result[1] == b"hash:02"
+        assert result[2] == b"hash:04"
+
+
     def test_hybrid_non_vector_query(self):
         """Test hybrid non-vector queries with deeply nested combinations"""
         client: Valkey = self.server.get_new_client()

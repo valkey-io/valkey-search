@@ -105,7 +105,7 @@ class TextIndexSchema {
       absl::string_view search_term,
       absl::InlinedVector<absl::string_view, kStemVariantsInlineCapacity>
           &words_to_search,
-      uint32_t min_stem_size, uint64_t stem_enabled_mask, bool lock_needed);
+      uint64_t stem_enabled_mask, bool lock_needed);
 
   // Get the minimum stem size across all fields
   uint32_t GetMinStemSize() const { return min_stem_size_; }

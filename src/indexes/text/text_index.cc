@@ -215,10 +215,30 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
     std::lock_guard<std::mutex> guard(in_progress_key_updates_mutex_);
     auto node = in_progress_key_updates_.extract(key);
     // Exit early if the key contains no new text updates
-    if (node.empty()) {
-      return;
+    // if (node.empty()) {
+    //   return;
+    // }
+    // token_positions = std::move(node.mapped());
+    if (!node.empty()) {
+      token_positions = std::move(node.mapped());
     }
-    token_positions = std::move(node.mapped());
+  }
+
+  // Now check if has text content
+  bool has_any_text_content = !token_positions.empty();
+  {
+    std::lock_guard<std::mutex> guard(schema_keys_mutex_);
+    if (has_any_text_content) {
+      schema_tracked_keys_.insert(key);
+      schema_untracked_keys_.erase(key);
+    } else {
+      schema_untracked_keys_.insert(key);
+      schema_tracked_keys_.erase(key);
+    }
+  }
+  // If no text content, exit
+  if (!has_any_text_content) {
+    return;
   }
 
   // Retrieve the key's stem mappings
@@ -317,6 +337,14 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
       return;
     }
   }
+
+  // Remove key from tracking sets
+  {
+    std::lock_guard<std::mutex> guard(schema_keys_mutex_);
+    schema_tracked_keys_.erase(key);
+    schema_untracked_keys_.erase(key);
+  }
+
   TextIndex &key_index = node.mapped();
 
   // The updated target gets set in target_remove_fn and later used in

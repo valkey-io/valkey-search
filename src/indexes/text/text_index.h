@@ -190,6 +190,13 @@ class TextIndexSchema {
   // IndexSchema::stem_text_field_mask_)
   uint64_t stem_text_field_mask_ = 0;
 
+  // Schema-level key tracking for negation support
+  InternedStringSet schema_tracked_keys_ ABSL_GUARDED_BY(schema_keys_mutex_);
+  InternedStringSet schema_untracked_keys_ ABSL_GUARDED_BY(schema_keys_mutex_);
+  mutable std::mutex schema_keys_mutex_;
+
+
+
  public:
   // FT.INFO memory stats for text index
   uint64_t GetTotalPositions() const;
@@ -229,6 +236,27 @@ class TextIndexSchema {
     // Key not found in text indexes - this is normal for keys without text data
     return nullptr;
   }
+
+  const InternedStringSet& GetSchemaTrackedKeys() const {
+    std::lock_guard<std::mutex> guard(schema_keys_mutex_);
+    return schema_tracked_keys_;
+  }
+
+  const InternedStringSet& GetSchemaUnTrackedKeys() const {
+    std::lock_guard<std::mutex> guard(schema_keys_mutex_);
+    return schema_untracked_keys_;
+  }
+
+  size_t GetSchemaTrackedKeyCount() const {
+    std::lock_guard<std::mutex> guard(schema_keys_mutex_);
+    return schema_tracked_keys_.size();
+  }
+
+  size_t GetSchemaUnTrackedKeyCount() const {
+    std::lock_guard<std::mutex> guard(schema_keys_mutex_);
+    return schema_untracked_keys_.size();
+  }
+
 };
 
 }  // namespace valkey_search::indexes::text

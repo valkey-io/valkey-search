@@ -86,9 +86,8 @@ class TestEviction(ValkeySearchTestCaseBase):
         final_info = index.info(client)
         assert final_info.num_docs <= initial_docs
 
-        # Verify search still works
-        with pytest.raises(OutOfMemoryError):
-            self._verify_search_operations(client, index, expected_min_results=50)
+        # Verify search still works (search commands are not flagged with denyoom)
+        self._verify_search_operations(client, index, expected_min_results=50)
 
     def _test_eviction_behavior(
         self, client: Valkey, index: Index, policy: str, initial_docs: int

@@ -308,8 +308,8 @@ void ProcessNeighborsForReply(ValkeyModuleCtx *ctx,
       ++Metrics::GetStats().query_result_record_dropped_cnt;
       VMSDK_LOG(WARNING, ctx)
           << "Content field number exceeds configured limit of "
-          << max_content_fields
-          << " for neighbor with ID: " << (*neighbor.external_id).Str();
+          << max_content_fields << " for neighbor with ID: "
+          << vmsdk::config::RedactIfNeeded((*neighbor.external_id).Str());
       continue;
     }
 
@@ -320,7 +320,8 @@ void ProcessNeighborsForReply(ValkeyModuleCtx *ctx,
         ++Metrics::GetStats().query_result_record_dropped_cnt;
         VMSDK_LOG(WARNING, ctx)
             << "Content size exceeds configured limit of " << max_content_size
-            << " bytes for neighbor with ID: " << (*neighbor.external_id).Str();
+            << " bytes for neighbor with ID: "
+            << vmsdk::config::RedactIfNeeded((*neighbor.external_id).Str());
         size_exceeded = true;
         break;
       }

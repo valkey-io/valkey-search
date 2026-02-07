@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"
 #include "grpcpp/support/status.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/query/fanout_operation_base.h"
@@ -70,6 +71,11 @@ class PrimaryInfoFanoutOperation
   uint64_t num_records_;
   uint64_t hash_indexing_failures_;
   coordinator::IndexFingerprintVersion expected_fingerprint_version_;
+  struct AttributeData {
+    std::string identifier;
+    uint64_t user_indexed_memory{0};
+  };
+  absl::flat_hash_map<std::string, AttributeData> attribute_data_;
 };
 
 }  // namespace valkey_search::query::primary_info_fanout

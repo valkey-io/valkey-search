@@ -250,6 +250,44 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert client.execute_command("FT.SEARCH", "idx_no_bs", r'test4\\\word4')[0] == 1
         assert client.execute_command("FT.SEARCH", "idx_no_bs", r'@content:test5\\\\word5')[0] == 1
 
+    def test_aggregate_with_text_search(self):
+        """Test FT.AGGREGATE with text search query."""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command(
+            "FT.CREATE", "books", "ON", "HASH", "PREFIX", "1", "book:",
+            "SCHEMA", "title", "TEXT", "author", "TEXT", "year", "NUMERIC"
+        )
+        client.execute_command("HSET", "book:1", "title", "The Great Gatsby", "author", "F. Scott Fitzgerald", "year", "1925")
+        client.execute_command("HSET", "book:2", "title", "The Catcher in the Rye", "author", "J.D. Salinger", "year", "1951")
+        client.execute_command("HSET", "book:3", "title", "The Grapes of Wrath", "author", "John Steinbeck", "year", "1939")
+        client.execute_command("HSET", "book:4", "title", "Great Expectations", "author", "Charles Dickens", "year", "1861")
+        client.execute_command("HSET", "book:5", "title", "The Great Adventure", "author", "Unknown Author", "year", "2020")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "books")
+        # Prefix: gre* matches great (books 1,4,5)
+        result = client.execute_command("FT.AGGREGATE", "books", "gre*", "LOAD", "1", "title")
+        assert result[0] == 3
+        assert {result[i][1] for i in range(1, 4)} == {b"The Great Gatsby", b"Great Expectations", b"The Great Adventure"}
+        # Fuzzy: %greet% matches great (ED=1)
+        result = client.execute_command("FT.AGGREGATE", "books", "%greet%", "LOAD", "1", "title")
+        assert result[0] == 3
+        assert {result[i][1] for i in range(1, 4)} == {b"The Great Gatsby", b"Great Expectations", b"The Great Adventure"}
+        # Exact phrase
+        result = client.execute_command("FT.AGGREGATE", "books", '"great gatsby"', "LOAD", "1", "title")
+        assert result[0] == 1
+        assert set(result[1]) == {b"title", b"The Great Gatsby"}
+        # Prefix with GROUPBY and SORTBY
+        result = client.execute_command(
+            "FT.AGGREGATE", "books", "gre*",
+            "LOAD", "1", "year",
+            "GROUPBY", "1", "@year",
+            "REDUCE", "COUNT", "0", "AS", "count",
+            "SORTBY", "2", "@year", "ASC"
+        )
+        assert result[0] == 3
+        assert set(result[1]) == {b"year", b"1861", b"count", b"1"}
+        assert set(result[2]) == {b"year", b"1925", b"count", b"1"}
+        assert set(result[3]) == {b"year", b"2020", b"count", b"1"}
+
     def test_text_search(self):
         """
         Test FT.SEARCH command with a text index.

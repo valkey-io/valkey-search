@@ -13,7 +13,6 @@
 #include "absl/status/status.h"
 #include "absl/strings/ascii.h"
 #include "libstemmer.h"
-#include "src/indexes/text/unicode_normalizer.h"
 #include "src/utils/scanner.h"
 
 namespace valkey_search::indexes::text {
@@ -137,7 +136,7 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
     }
 
     if (!word_buffer.empty()) {
-      std::string word = UnicodeNormalizer::CaseFold(word_buffer);
+      std::string word = absl::AsciiStrToLower(word_buffer);
 
       if (IsStopWord(word)) {
         continue;  // Skip stop words

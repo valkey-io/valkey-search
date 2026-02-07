@@ -542,6 +542,109 @@ INSTANTIATE_TEST_SUITE_P(
       return info.param.test_name;
     });
 
+class ResponseGeneratorDbParamTest
+    : public ValkeySearchTestWithParam<data_model::AttributeDataType> {};
+
+TEST_P(ResponseGeneratorDbParamTest, ProcessNeighborsForReplySelectsCorrectDB) {
+  ValkeyModuleCtx fake_ctx;
+  int target_db = 5;
+  int original_db = 0;
+  data_model::AttributeDataType type = GetParam();
+
+  query::SearchParameters parameters(100000, nullptr, 0);
+  parameters.db_num = target_db;
+  parameters.return_attributes.push_back(
+      {.identifier = vmsdk::MakeUniqueValkeyString("field"),
+       .alias = vmsdk::MakeUniqueValkeyString("field")});
+  parameters.attribute_alias = "attr";
+
+  std::vector<indexes::Neighbor> neighbors;
+  auto external_id = StringInternStore::Intern("key");
+  neighbors.push_back(indexes::Neighbor(external_id, 0));
+
+  MockAttributeDataType data_type;
+  EXPECT_CALL(data_type, ToProto()).WillRepeatedly(testing::Return(type));
+
+  {
+    // Expect DB selection sequence
+    testing::InSequence s;
+    EXPECT_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx))
+        .WillOnce(testing::Return(original_db));
+    EXPECT_CALL(*kMockValkeyModule, SelectDb(&fake_ctx, target_db))
+        .WillOnce(testing::Return(VALKEYMODULE_OK));
+
+    // Expect fetch
+    EXPECT_CALL(
+        data_type,
+        FetchAllRecords(&fake_ctx, parameters.attribute_alias, testing::_,
+                        absl::string_view("key"), testing::_))
+        .WillOnce(testing::Return(RecordsMap{}));
+
+    // Expect restore DB
+    EXPECT_CALL(*kMockValkeyModule, SelectDb(&fake_ctx, original_db))
+        .WillOnce(testing::Return(VALKEYMODULE_OK));
+  }
+
+  query::ProcessNeighborsForReply(&fake_ctx, data_type, neighbors, parameters,
+                                  parameters.attribute_alias);
+}
+
+TEST_P(ResponseGeneratorDbParamTest, ProcessNeighborsForReplyNoContent) {
+  ValkeyModuleCtx fake_ctx;
+  int target_db = 5;
+  int original_db = 0;
+  data_model::AttributeDataType type = GetParam();
+
+  query::SearchParameters parameters(100000, nullptr, 0);
+  parameters.db_num = target_db;
+  parameters.no_content = true;
+  parameters.attribute_alias = "attr";
+
+  std::vector<indexes::Neighbor> neighbors;
+  auto external_id = StringInternStore::Intern("key");
+  neighbors.push_back(indexes::Neighbor(external_id, 0));
+
+  MockAttributeDataType data_type;
+  EXPECT_CALL(data_type, ToProto()).WillRepeatedly(testing::Return(type));
+
+  absl::flat_hash_set<absl::string_view> expected_identifiers;
+  if (type == data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON) {
+    expected_identifiers.insert(kJsonRootElementQuery);
+  }
+
+  {
+    testing::InSequence s;
+    EXPECT_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx))
+        .WillOnce(testing::Return(original_db));
+    EXPECT_CALL(*kMockValkeyModule, SelectDb(&fake_ctx, target_db))
+        .WillOnce(testing::Return(VALKEYMODULE_OK));
+
+    EXPECT_CALL(
+        data_type,
+        FetchAllRecords(&fake_ctx, parameters.attribute_alias, testing::_,
+                        absl::string_view("key"), expected_identifiers))
+        .WillOnce(testing::Return(RecordsMap{}));
+
+    EXPECT_CALL(*kMockValkeyModule, SelectDb(&fake_ctx, original_db))
+        .WillOnce(testing::Return(VALKEYMODULE_OK));
+  }
+
+  query::ProcessNeighborsForReply(&fake_ctx, data_type, neighbors, parameters,
+                                  parameters.attribute_alias);
+  EXPECT_EQ(neighbors.size(), 1);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    ResponseGeneratorDbTests, ResponseGeneratorDbParamTest,
+    testing::Values(data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH,
+                    data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON),
+    [](const testing::TestParamInfo<data_model::AttributeDataType> &info) {
+      return info.param ==
+                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH
+                 ? "Hash"
+                 : "Json";
+    });
+
 }  // namespace
 
 }  // namespace valkey_search

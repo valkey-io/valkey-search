@@ -26,6 +26,12 @@ static auto debug_mode = BooleanBuilder(kDebugMode, true).Hidden().Build();
 
 bool IsDebugModeEnabled() { return debug_mode->GetValue(); }
 
+/// Controls the verbose logging flag
+static auto hide_user_data_config =
+    BooleanBuilder(kHideUserDataFromLog, true).Build();
+
+bool ShouldHideUserDataFromLog() { return hide_user_data_config->GetValue(); }
+
 namespace {
 
 constexpr absl::string_view kUseCoordinator = "--use-coordinator";

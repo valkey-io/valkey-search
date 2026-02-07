@@ -157,11 +157,13 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> SchemaManager::LookupInternal(
     uint32_t db_num, absl::string_view name) const {
   auto db_itr = db_to_index_schemas_.find(db_num);
   if (db_itr == db_to_index_schemas_.end()) {
-    return absl::NotFoundError(absl::StrCat("Index schema not found: ", name));
+    return absl::NotFoundError(absl::StrCat(
+        "Index schema not found: ", vmsdk::config::RedactIfNeeded(name)));
   }
   auto name_itr = db_itr->second.find(name);
   if (name_itr == db_itr->second.end()) {
-    return absl::NotFoundError(absl::StrCat("Index schema not found: ", name));
+    return absl::NotFoundError(absl::StrCat(
+        "Index schema not found: ", vmsdk::config::RedactIfNeeded(name)));
   }
   return name_itr->second;
 }
@@ -513,12 +515,14 @@ void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx) {
 
   auto to_delete = GetIndexSchemasInDBInternal(selected_db);
   for (const auto &name : to_delete) {
-    VMSDK_LOG(NOTICE, ctx) << "Deleting index schema " << name
+    VMSDK_LOG(NOTICE, ctx) << "Deleting index schema "
+                           << vmsdk::config::RedactIfNeeded(name)
                            << " on FLUSHDB of DB " << selected_db;
     auto old_schema = RemoveIndexSchemaInternal(selected_db, name);
     if (!old_schema.ok()) {
       VMSDK_LOG(WARNING, ctx)
-          << "Unable to delete index schema " << name << " on FLUSHDB of DB "
+          << "Unable to delete index schema "
+          << vmsdk::config::RedactIfNeeded(name) << " on FLUSHDB of DB "
           << selected_db << ": " << old_schema.status().message();
       continue;
     }
@@ -527,13 +531,15 @@ void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx) {
       // cluster-level construct, not a node-level construct. To delete,
       // FT.DROPINDEX must be done explicitly.
       auto to_add = old_schema.value()->ToProto();
-      VMSDK_LOG(NOTICE, ctx) << "Recreating index schema " << name
-                             << " on FLUSHDB of DB " << selected_db;
+      VMSDK_LOG(NOTICE, ctx)
+          << "Recreating index schema " << vmsdk::config::RedactIfNeeded(name)
+          << " on FLUSHDB of DB " << selected_db;
       auto add_status = CreateIndexSchemaInternal(ctx, *to_add);
       if (!add_status.ok()) {
-        VMSDK_LOG(WARNING, ctx) << "Unable to recreate index schema " << name
-                                << " on FLUSHDB of DB " << selected_db << ": "
-                                << add_status.message();
+        VMSDK_LOG(WARNING, ctx)
+            << "Unable to recreate index schema "
+            << vmsdk::config::RedactIfNeeded(name) << " on FLUSHDB of DB "
+            << selected_db << ": " << add_status.message();
         continue;
       }
     }
@@ -687,14 +693,15 @@ absl::Status SchemaManager::LoadIndex(
   if (ValkeyModule_SelectDb(ctx, db_num) != VALKEYMODULE_OK) {
     return absl::InternalError(
         absl::StrFormat("Unable to select DB %d for loading of index schema %s",
-                        db_num, name.c_str()));
+                        db_num, vmsdk::config::RedactIfNeeded(name).data()));
   }
 
   // In diskless load scenarios, we stage the index to allow serving from
   // the existing index schemas. The loading ended callback will swap these
   // atomically.
   if (staging_indices_due_to_repl_load_.Get()) {
-    VMSDK_LOG(NOTICE, ctx) << "Staging index from RDB: " << name << " (in db "
+    VMSDK_LOG(NOTICE, ctx) << "Staging index from RDB: "
+                           << vmsdk::config::RedactIfNeeded(name) << " (in db "
                            << db_num << ")";
     staged_db_to_index_schemas_.Get()[db_num][name] = std::move(index_schema);
     return absl::OkStatus();
@@ -705,18 +712,19 @@ absl::Status SchemaManager::LoadIndex(
   // happens for example when a module triggers RDB load on a running
   // server. In this case, we may have existing indices when we load the DB.
   VMSDK_LOG(NOTICE, detached_ctx_.get())
-      << "Loading index from RDB: " << name << " (in db " << db_num << ")";
+      << "Loading index from RDB: " << vmsdk::config::RedactIfNeeded(name)
+      << " (in db " << db_num << ")";
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   auto remove_existing_status = RemoveIndexSchemaInternal(db_num, name);
   if (remove_existing_status.ok()) {
     ValkeyModule_Log(detached_ctx_.get(), VALKEYMODULE_LOGLEVEL_NOTICE,
                      "Deleted existing index from RDB for: %s (in db %d)",
-                     name.c_str(), db_num);
+                     vmsdk::config::RedactIfNeeded(name).data(), db_num);
   } else if (!absl::IsNotFound(remove_existing_status.status())) {
     ValkeyModule_Log(detached_ctx_.get(), VALKEYMODULE_LOGLEVEL_WARNING,
                      "Failed to delete existing index from RDB for: %s (in db "
                      "%d): %s",
-                     name.c_str(), db_num,
+                     vmsdk::config::RedactIfNeeded(name).data(), db_num,
                      remove_existing_status.status().message().data());
   }
 
@@ -790,8 +798,9 @@ absl::Status SchemaManager::ShowIndexSchemas(ValkeyModuleCtx *ctx,
     ValkeyModule_ReplyWithArray(ctx, inner_map.size());
     for (const auto &[name, schema] : inner_map) {
       auto proto = schema->ToProto()->DebugString();
-      VMSDK_LOG(NOTICE, ctx)
-          << "Index Schema in DB " << db_num << ": " << name << " " << proto;
+      VMSDK_LOG(NOTICE, ctx) << "Index Schema in DB " << db_num << ": "
+                             << vmsdk::config::RedactIfNeeded(name) << " "
+                             << vmsdk::config::RedactIfNeeded(proto);
       ValkeyModule_ReplyWithStringBuffer(ctx, proto.data(), proto.size());
     }
   }

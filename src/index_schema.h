@@ -37,6 +37,7 @@
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/time_sliced_mrmw_mutex.h"
 #include "vmsdk/src/utils.h"
@@ -274,14 +275,16 @@ class IndexSchema : public KeyspaceEventSubscription,
   MutationSequenceNumber GetIndexMutationSequenceNumber(const Key &key) const {
     absl::MutexLock lock(&mutated_records_mutex_);
     auto itr = index_key_info_.find(key);
-    CHECK(itr != index_key_info_.end()) << "Key not found: " << key->Str();
+    CHECK(itr != index_key_info_.end())
+        << "Key not found: " << vmsdk::config::RedactIfNeeded(key->Str());
     return itr->second.mutation_sequence_number_;
   }
 
   MutationSequenceNumber GetDbMutationSequenceNumber(const Key &key) const {
     vmsdk::VerifyMainThread();
     auto itr = db_key_info_.Get().find(key);
-    CHECK(itr != db_key_info_.Get().end()) << "Key not found: " << key->Str();
+    CHECK(itr != db_key_info_.Get().end())
+        << "Key not found: " << vmsdk::config::RedactIfNeeded(key->Str());
     return itr->second.mutation_sequence_number_;
   }
 

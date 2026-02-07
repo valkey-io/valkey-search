@@ -15,7 +15,7 @@
 #include <mutex>
 #include <optional>
 
-#include "absl/container/flat_hash_set.h"
+#include "absl/container/btree_map.h"
 #include "absl/container/node_hash_map.h"
 #include "absl/functional/function_ref.h"
 #include "absl/strings/string_view.h"
@@ -23,11 +23,14 @@
 #include "src/indexes/text/invasive_ptr.h"
 #include "src/indexes/text/lexer.h"
 #include "src/indexes/text/posting.h"
-#include "src/indexes/text/radix_tree.h"
+#include "src/indexes/text/rax_wrapper.h"
 
 struct sb_stemmer;
 
 namespace valkey_search::indexes::text {
+
+// Inline capacity for stem variants extracted from stem tree
+constexpr size_t kStemVariantsInlineCapacity = 20;
 
 // token -> (PositionMap, suffix support)
 using TokenPositions =
@@ -62,28 +65,26 @@ class TextIndex {
 
  public:
   explicit TextIndex(bool suffix);
-  RadixTree<InvasivePtr<Postings>> &GetPrefix();
-  const RadixTree<InvasivePtr<Postings>> &GetPrefix() const;
-  std::optional<std::reference_wrapper<RadixTree<InvasivePtr<Postings>>>>
-  GetSuffix();
-  std::optional<std::reference_wrapper<const RadixTree<InvasivePtr<Postings>>>>
-  GetSuffix() const;
+  Rax &GetPrefix();
+  const Rax &GetPrefix() const;
+  std::optional<std::reference_wrapper<Rax>> GetSuffix();
+  std::optional<std::reference_wrapper<const Rax>> GetSuffix() const;
 
  private:
-  RadixTree<InvasivePtr<Postings>> prefix_tree_;
-  std::unique_ptr<RadixTree<InvasivePtr<Postings>>> suffix_tree_;
+  Rax prefix_tree_;
+  std::unique_ptr<Rax> suffix_tree_;
 };
 
 class TextIndexSchema {
  public:
   TextIndexSchema(data_model::Language language, const std::string &punctuation,
-                  bool with_offsets,
-                  const std::vector<std::string> &stop_words);
+                  bool with_offsets, const std::vector<std::string> &stop_words,
+                  uint32_t min_stem_size);
 
   absl::StatusOr<bool> StageAttributeData(const InternedStringPtr &key,
                                           absl::string_view data,
                                           size_t text_field_number, bool stem,
-                                          size_t min_stem_size, bool suffix);
+                                          bool suffix);
   void CommitKeyData(const InternedStringPtr &key);
   void DeleteKeyData(const InternedStringPtr &key);
 
@@ -95,6 +96,24 @@ class TextIndexSchema {
 
   // Access to metadata for memory pool usage
   TextIndexMetadata &GetMetadata() { return metadata_; }
+
+  // Access stem tree for word expansion during search
+  const Rax &GetStemTree() const { return stem_tree_; }
+
+  // Get stem root and all stem parents for a search term
+  std::string GetAllStemVariants(
+      absl::string_view search_term,
+      absl::InlinedVector<absl::string_view, kStemVariantsInlineCapacity>
+          &words_to_search,
+      uint64_t stem_enabled_mask, bool lock_needed);
+
+  // Get the minimum stem size across all fields
+  uint32_t GetMinStemSize() const { return min_stem_size_; }
+
+  // Schema-level stem field mask (mirrored from
+  // IndexSchema::stem_text_field_mask_)
+  void SetStemTextFieldMask(uint64_t mask) { stem_text_field_mask_ = mask; }
+  uint64_t GetStemTextFieldMask() const { return stem_text_field_mask_; }
 
   // Enable suffix trie.
   void EnableSuffix() {
@@ -116,6 +135,15 @@ class TextIndexSchema {
   // Prevent concurrent mutations to schema-level text index
   // TODO: develop a finer-grained TextIndex locking scheme
   std::mutex text_index_mutex_;
+
+  //
+  // Stem tree: maps stem roots to their parent words
+  // Example: "happi" → {"happy", "happiness", "happily"}
+  //
+  Rax stem_tree_;
+
+  // Prevent concurrent mutations to stem tree
+  std::mutex stem_tree_mutex_;
 
   //
   // To support the Delete record and the post-filtering case, there is a
@@ -140,11 +168,27 @@ class TextIndexSchema {
   // Prevent concurrent mutations to in-progress key updates map
   std::mutex in_progress_key_updates_mutex_;
 
+  // Temporary storage for stem mappings during indexing
+  // Maps key -> (stemmed_word -> set of original words that stem to it)
+  absl::node_hash_map<
+      Key, absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>>
+      in_progress_stem_mappings_;
+
+  // Prevent concurrent mutations to in-progress stem mappings map
+  std::mutex in_progress_stem_mappings_mutex_;
+
   // Whether to store position offsets for phrase queries
   bool with_offsets_ = false;
 
   // True if any text attributes of the schema have suffix search enabled.
   bool with_suffix_trie_ = false;
+
+  // Minimum word length for stemming (schema-level configuration)
+  uint32_t min_stem_size_;
+
+  // Schema-level stem field mask (mirrored from
+  // IndexSchema::stem_text_field_mask_)
+  uint64_t stem_text_field_mask_ = 0;
 
  public:
   // FT.INFO memory stats for text index

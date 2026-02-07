@@ -123,6 +123,8 @@ class StabilityTests(parameterized.TestCase):
                 use_coordinator=True,
                 replica_count=1,
                 repl_diskless_load="swapdb",
+                failover_interval_sec=30,
+                test_failover_recovery=True,
             ),
         ),
         dict(
@@ -147,6 +149,8 @@ class StabilityTests(parameterized.TestCase):
                 use_coordinator=False,
                 replica_count=1,
                 repl_diskless_load="swapdb",
+                failover_interval_sec=30,
+                test_failover_recovery=True,
             ),
         ),
         dict(
@@ -165,12 +169,14 @@ class StabilityTests(parameterized.TestCase):
                 num_memtier_clients=10,
                 num_search_clients=10,
                 insertion_mode="time_interval",
-                test_time_sec=60,
-                test_timeout=120,
+                test_time_sec=90,
+                test_timeout=180,
                 keyspace_size=1000000,
                 use_coordinator=True,
                 replica_count=1,
                 repl_diskless_load="disabled",
+                failover_interval_sec=50,
+                test_failover_recovery=True,
             ),
         ),
         dict(
@@ -191,12 +197,14 @@ class StabilityTests(parameterized.TestCase):
                 num_memtier_clients=10,
                 num_search_clients=10,
                 insertion_mode="time_interval",
-                test_time_sec=60,
-                test_timeout=120,
+                test_time_sec=120,
+                test_timeout=180,
                 keyspace_size=1000000,
                 use_coordinator=False,
                 replica_count=1,
                 repl_diskless_load="disabled",
+                failover_interval_sec=35,
+                test_failover_recovery=True,
             ),
         ),
         dict(
@@ -545,9 +553,23 @@ class StabilityTests(parameterized.TestCase):
         if results is None:
             self.fail("Failed to run stability test")
 
+        # Check for unexpectedly terminated servers
+        # During failover testing, only allow servers that were intentionally shut down
         terminated = self.valkey_cluster_under_test.get_terminated_servers()
-        if (terminated):
-            self.fail(f"Valkey servers died during test, ports: {terminated}")
+        if terminated:
+            unexpected_terminations = [
+                port for port in terminated 
+                if port not in results.intentionally_failed_ports
+            ]
+            if unexpected_terminations:
+                self.fail(
+                    f"Valkey servers died unexpectedly during test, ports: {unexpected_terminations}. "
+                    f"Intentionally failed ports: {results.intentionally_failed_ports}"
+                )
+            else:
+                logging.info(
+                    f"Nodes intentionally shut down during failover testing: {terminated}"
+                )
 
         self.assertTrue(
             results.successful_run,
@@ -580,6 +602,15 @@ class StabilityTests(parameterized.TestCase):
             # BGSAVE will fail if another is ongoing.
             if result.name == "BGSAVE":
                 pass
+            elif config.failover_interval_sec > 0 and result.name in ["FT.CREATE", "FLUSHDB", "FT.DROPINDEX"]:
+                # Allow up to 3 failures per background task during failover testing. These are for the situation where the
+                # cluster information is not updated fast enough and causes a race condition in the check. This is a situation
+                # that can happen and we want to avoid catching failures like those because they are not true failures (they are expected)
+                self.assertLessEqual(
+                    result.failures,
+                    3,
+                    f"Expected at most 3 transient failures for background task {result.name} during failover, got {result.failures}",
+                )
             else:
                 self.assertEqual(
                     result.failures,

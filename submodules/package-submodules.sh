@@ -93,6 +93,13 @@ if [ ! -f "${INSTALL_DIR}/include/highwayhash/highwayhash.h" ]; then
     cp -fr ${SRC_DIR}/highwayhash/highwayhash ${INSTALL_DIR}/include
 fi
 
+if [[ "${SAN_BUILD}" != "no" && ! -f "${INSTALL_DIR}/include/benchmark/benchmark.h" ]]; then
+    echo "Building Google Benchmark..."
+    clone_repo "https://github.com/google/benchmark" "v1.8.3"
+    # Flags: Disable tests (faster build), Disable deps download
+    BENCHMARK_ARGS="-DBENCHMARK_ENABLE_TESTING=OFF -DBENCHMARK_DOWNLOAD_DEPENDENCIES=OFF"
+    build_submodule "benchmark" "${BENCHMARK_ARGS}" "install"
+fi
 # Pack everything into a deb file
 
 function get_arch_spec() {

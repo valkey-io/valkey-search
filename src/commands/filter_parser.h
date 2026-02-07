@@ -63,6 +63,7 @@ struct FilterParseResults {
   std::unique_ptr<query::Predicate> root_predicate;
   absl::flat_hash_set<std::string> filter_identifiers;
   QueryOperations query_operations = QueryOperations::kNone;
+  bool has_text_predicate{false};
 };
 class FilterParser {
  public:
@@ -82,6 +83,7 @@ class FilterParser {
   absl::string_view expression_;
   size_t pos_{0};
   size_t node_count_{0};
+  bool has_text_predicate_{false};
   absl::flat_hash_set<std::string> filter_identifiers_;
   QueryOperations query_operations_{QueryOperations::kNone};
 

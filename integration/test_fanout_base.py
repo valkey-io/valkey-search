@@ -246,18 +246,6 @@ def load_fingerprint_version_from_rdb(test):
     for rg in test.replication_groups:
         rg.primary.server.restart(remove_rdb=False)
 
-    # Wait for all nodes to be ready
-    def are_all_nodes_ready():
-        try:
-            for i in range(len(test.replication_groups)):
-                client = test.new_client_for_primary(i)
-                client.ping()
-            return True
-        except (ConnectionError, Exception):
-            return False
-
-    waiters.wait_for_true(are_all_nodes_ready, timeout=10)
-
     # validate all nodes
     for rg in test.replication_groups:
         # validate primary node

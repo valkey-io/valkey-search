@@ -156,6 +156,13 @@ function install_test_framework() {
   LOG_INFO "Using valkeytestframework => ${_WORKSPACE_HOME}/integration/valkeytestframework"
   print_environment_var "PYTHONPATH" "${PYTHONPATH}"
   export PYTHONPATH=${_WORKSPACE_HOME}/integration/valkeytestframework
+
+  # Install project-specific test requirements
+  local project_requirements=${_WORKSPACE_HOME}/testing/integration/requirements.txt
+  if [ -f ${project_requirements} ]; then
+    LOG_INFO "Installing project test requirements"
+    ${PIP_PATH} install -r ${project_requirements}
+  fi
 }
 
 function setup_valkey_server() {

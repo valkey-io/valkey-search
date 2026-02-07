@@ -590,7 +590,7 @@ class StabilityTests(parameterized.TestCase):
                 result.halted,
                 msg=(
                     f"Expected memtier run {result.name} to not be halted (didn't "
-                    "make progress for >20sec)"
+                    "make progress for >10sec)"
                 ),
             )
         for result in results.background_task_results:

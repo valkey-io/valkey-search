@@ -131,7 +131,7 @@ class StabilityRunner:
             attributes = {
                 "tag": utils.TagDefinition(),
                 "numeric": utils.NumericDefinition(),
-                "title": utils.TextDefinition(nostem=True),
+                "title": utils.TextDefinition(nostem=False),
                 "description": utils.TextDefinition(),
                 "embedding": utils.HNSWVectorDefinition(
                     vector_dimensions=self.config.vector_dimensions
@@ -153,7 +153,7 @@ class StabilityRunner:
                 "numeric": utils.NumericDefinition(),
                 "content": utils.TextDefinition(),
                 "title": utils.TextDefinition(nostem=False, with_suffix_trie=True),
-                "category": utils.TextDefinition(nostem=True),
+                "category": utils.TextDefinition(nostem=False),
             }
         elif self.config.index_type == "TAG":
             attributes = {
@@ -497,26 +497,13 @@ class StabilityRunner:
                 " --json-out-file"
                 f" {memtier_output_dir}/{self.config.index_name}_memtier_search.json"
             )
-        elif self.config.index_type == "TAG":
+        elif self.config.index_type in ["TAG", "NUMERIC"]:
             # Tag search - exact match on multiple tag fields
-            search_query = '"(@category:{electronics} @product_type:{smartwatch})"'
-            search_command = (
-                f"{self.config.memtier_path}"
-                " --cluster-mode"
-                " -s localhost"
-                f" -p {self.config.ports[0]}"
-                f" -t {self.config.num_memtier_threads}"
-                f" -c {self.config.num_search_clients}"
-                " -"
-                f" --command='FT.SEARCH {self.config.index_name} {search_query}'"
-                f" --test-time={self.config.test_time_sec}"
-                f" -d {self.config.vector_dimensions*4}"
-                " --json-out-file"
-                f" {memtier_output_dir}/{self.config.index_name}_memtier_search.json"
-            )
-        elif self.config.index_type == "NUMERIC":
             # Numeric range search - multiple numeric range filters
-            search_query = '"(@price:[100 500] @quantity:[10 100] @rating:[40 50])"'
+            if self.config.index_type == "TAG":
+                search_query = '"(@category:{electronics} @product_type:{smartwatch})"'
+            else:  # NUMERIC
+                search_query = '"(@price:[100 500] @quantity:[10 100] @rating:[40 50])"'
             search_command = (
                 f"{self.config.memtier_path}"
                 " --cluster-mode"

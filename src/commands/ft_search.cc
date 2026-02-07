@@ -207,9 +207,9 @@ void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
 
     auto cmp = expr::Compare(val_a, val_b);
     if (cmp == expr::Ordering::kLESS) {
-      return sortby.order == SortOrder::kAscending;
+      return sortby.order == query::SortOrder::kAscending;
     }
-    return sortby.order == SortOrder::kDescending;
+    return sortby.order == query::SortOrder::kDescending;
   };
 
   auto amountToKeep = parameters.limit.first_index + parameters.limit.number;
@@ -260,9 +260,9 @@ absl::Status ProcessNeighborsForQuery(ValkeyModuleCtx *ctx,
   }
   // Handle vector queries
 
-  query::ProcessNeighborsForReply(ctx,
-                                  command.index_schema->GetAttributeDataType(),
-                                  neighbors, command, vector_identifier);
+  query::ProcessNeighborsForReply(
+      ctx, command.index_schema->GetAttributeDataType(), neighbors, command,
+      vector_identifier, command.sortby);
   // Adjust total count based on neighbors removed during processing
   // due to filtering or missing attributes.
   search_result.total_count -= (original_size - neighbors.size());

@@ -185,7 +185,7 @@ std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructSortByParser() {
       [](SearchCommand &parameters, vmsdk::ArgsIterator &itr) -> absl::Status {
         vmsdk::UniqueValkeyString field;
         VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, field));
-        SortByParameter sortbyparams;
+        query::SortByParameter sortbyparams;
         sortbyparams.field = vmsdk::ToStringView(field.get());
 
         // Check for optional ASC/DESC parameter
@@ -194,10 +194,10 @@ std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructSortByParser() {
           if (next_arg.ok()) {
             absl::string_view order_str = vmsdk::ToStringView(next_arg.value());
             if (absl::EqualsIgnoreCase(order_str, "ASC")) {
-              sortbyparams.order = SortOrder::kAscending;
+              sortbyparams.order = query::SortOrder::kAscending;
               itr.Next();
             } else if (absl::EqualsIgnoreCase(order_str, "DESC")) {
-              sortbyparams.order = SortOrder::kDescending;
+              sortbyparams.order = query::SortOrder::kDescending;
               itr.Next();
             }
             // If it's neither ASC nor DESC, leave it for the next parser
@@ -291,7 +291,7 @@ absl::Status SearchCommand::PostParseQueryString() {
     // Validate sortby field exists in the index schema
     VMSDK_RETURN_IF_ERROR(index_schema->GetIdentifier(sortby->field).status());
     // Ensure sortby field is in return_attributes if sorting is enabled
-    if (!no_content && !return_attributes.empty()) {
+    if (!no_content) {
       bool found = false;
       for (const auto &attr : return_attributes) {
         if (vmsdk::ToStringView(attr.identifier.get()) == sortby->field ||
@@ -310,8 +310,12 @@ absl::Status SearchCommand::PostParseQueryString() {
           attribute_alias = vmsdk::RetainUniqueValkeyString(identifier.get());
           identifier = vmsdk::MakeUniqueValkeyString(*schema_identifier);
         }
+        auto alias = vmsdk::MakeUniqueValkeyString(
+            vmsdk::ToStringView(attribute_alias.get()));
         return_attributes.emplace_back(query::ReturnAttribute{
-            std::move(identifier), std::move(attribute_alias), nullptr});
+            .identifier = std::move(identifier),
+            .attribute_alias = std::move(attribute_alias),
+            .alias = std::move(alias)});
       }
     }
   }

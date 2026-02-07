@@ -75,7 +75,7 @@ struct FTSearchParserTestCase {
   // SORTBY test fields
   std::string sortby_parameters_str;
   std::string sortby_field;
-  SortOrder sortby_order{SortOrder::kAscending};
+  query::SortOrder sortby_order{query::SortOrder::kAscending};
   bool sortby_enabled{false};
 };
 
@@ -944,7 +944,7 @@ INSTANTIATE_TEST_SUITE_P(
             .vector_query = false,
             .sortby_parameters_str = "SORTBY attribute_identifier_1 ASC",
             .sortby_field = "attribute_identifier_1",
-            .sortby_order = SortOrder::kAscending,
+            .sortby_order = query::SortOrder::kAscending,
             .sortby_enabled = true,
         },
         {
@@ -959,7 +959,7 @@ INSTANTIATE_TEST_SUITE_P(
             .vector_query = false,
             .sortby_parameters_str = "SoRTbY attribute_identifier_1 DeSC",
             .sortby_field = "attribute_identifier_1",
-            .sortby_order = SortOrder::kDescending,
+            .sortby_order = query::SortOrder::kDescending,
             .sortby_enabled = true,
         },
         {
@@ -974,7 +974,7 @@ INSTANTIATE_TEST_SUITE_P(
             .vector_query = false,
             .sortby_parameters_str = "SORTBY attribute_identifier_2",
             .sortby_field = "attribute_identifier_2",
-            .sortby_order = SortOrder::kAscending,
+            .sortby_order = query::SortOrder::kAscending,
             .sortby_enabled = true,
         },
         {
@@ -991,7 +991,7 @@ INSTANTIATE_TEST_SUITE_P(
             .vector_query = false,
             .sortby_parameters_str = "sORTBy nonexistent_field ASc",
             .sortby_field = "nonexistent_field",
-            .sortby_order = SortOrder::kAscending,
+            .sortby_order = query::SortOrder::kAscending,
             .sortby_enabled = true,
         },
     }),

@@ -85,9 +85,9 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
     uint32_t db_num = ValkeyModule_GetSelectedDb(ctx);
     parameters->db_num = db_num;
 
-    VMSDK_ASSIGN_OR_RETURN(parameters->index_schema,
-                           SchemaManager::Instance().GetIndexSchema(
-                               db_num, parameters->index_schema_name));
+    VMSDK_ASSIGN_OR_RETURN(
+        parameters->index_schema,
+        schema_manager.GetIndexSchema(db_num, parameters->index_schema_name));
     VMSDK_RETURN_IF_ERROR(
         vmsdk::ParseParamValue(itr, parameters->parse_vars.query_string));
     VMSDK_RETURN_IF_ERROR(parameters->ParseCommand(itr));

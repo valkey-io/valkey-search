@@ -24,7 +24,6 @@
 #include "absl/status/statusor.h"
 #include "src/commands/filter_parser.h"
 #include "src/index_schema.h"
-#include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/vector_base.h"
 #include "src/query/predicate.h"
@@ -40,6 +39,12 @@ enum class SearchMode {
   kLocal,  // Search executed on local node/instance
   kRemote  // Search executed as part of distributed operation (from
            // coordinator)
+};
+
+enum class SortOrder { kAscending, kDescending };
+struct SortByParameter {
+  std::string field;
+  SortOrder order{SortOrder::kAscending};
 };
 
 constexpr int64_t kTimeoutMS{50000};

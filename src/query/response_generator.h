@@ -12,7 +12,6 @@
 #include <string>
 
 #include "src/attribute_data_type.h"
-#include "src/coordinator/coordinator.pb.h"
 #include "src/indexes/vector_base.h"
 #include "src/query/search.h"
 #include "vmsdk/src/module_config.h"
@@ -40,7 +39,9 @@ void ProcessNeighborsForReply(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
     std::vector<indexes::Neighbor> &neighbors,
     const query::SearchParameters &parameters,
-    const std::optional<std::string> &vector_identifier);
+    const std::optional<std::string> &vector_identifier,
+    const std::optional<query::SortByParameter> &sortby_parameter =
+        std::nullopt);
 
 }  // namespace valkey_search::query
 

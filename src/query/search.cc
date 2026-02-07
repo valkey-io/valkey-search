@@ -944,7 +944,7 @@ absl::Status query::SearchParameters::PreParseQueryString() {
     if (index->GetIndexerType() != indexes::IndexerType::kHNSW &&
         index->GetIndexerType() != indexes::IndexerType::kFlat) {
       return absl::InvalidArgumentError(absl::StrCat(
-              "Index field `", attribute_alias, "` is not a Vector index "));
+          "Index field `", attribute_alias, "` is not a Vector index "));
     }
     if (parse_vars.score_as_string.empty()) {
       VMSDK_ASSIGN_OR_RETURN(

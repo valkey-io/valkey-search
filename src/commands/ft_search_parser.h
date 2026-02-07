@@ -21,13 +21,6 @@ vmsdk::config::Number &GetMaxKnn();
 
 absl::Status VerifyQueryString(query::SearchParameters &parameters);
 
-enum class SortOrder { kAscending, kDescending };
-
-struct SortByParameter {
-  std::string field;
-  SortOrder order{SortOrder::kAscending};
-};
-
 //
 // Data Unique to the FT.SEARCH command
 //
@@ -42,7 +35,7 @@ struct SearchCommand : public QueryCommand {
   // return true when those clauses are present.
   bool RequiresCompleteResults() const override { return sortby.has_value(); }
 
-  std::optional<SortByParameter> sortby;
+  std::optional<query::SortByParameter> sortby;
 };
 
 }  // namespace valkey_search

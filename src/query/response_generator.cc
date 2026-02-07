@@ -19,6 +19,7 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "src/attribute_data_type.h"
+#include "src/commands/ft_search_parser.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
 #include "src/indexes/text/text_index.h"
@@ -215,7 +216,8 @@ absl::StatusOr<RecordsMap> GetContent(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
     const query::SearchParameters &parameters,
     const indexes::Neighbor &neighbor,
-    const std::optional<std::string> &vector_identifier) {
+    const std::optional<std::string> &vector_identifier,
+    const std::optional<query::SortByParameter> &sortby_parameter) {
   auto key = neighbor.external_id->Str();
   if (attribute_data_type.ToProto() ==
           data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON &&
@@ -262,6 +264,18 @@ absl::StatusOr<RecordsMap> GetContent(
             return_attribute.identifier.get(),
             vmsdk::RetainUniqueValkeyString(itr->second.value.get())));
   }
+
+  if (parameters.return_attributes.empty() && sortby_parameter.has_value()) {
+    auto itr = content.find(sortby_parameter->field);
+    if (itr != content.end()) {
+      return_content.emplace(
+          sortby_parameter->field,
+          RecordsMapValue(
+              vmsdk::MakeUniqueValkeyString(sortby_parameter->field),
+              vmsdk::RetainUniqueValkeyString(itr->second.value.get())));
+    }
+  }
+
   return return_content;
 }
 
@@ -273,7 +287,8 @@ void ProcessNeighborsForReply(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
     std::vector<indexes::Neighbor> &neighbors,
     const query::SearchParameters &parameters,
-    const std::optional<std::string> &vector_identifier) {
+    const std::optional<std::string> &vector_identifier,
+    const std::optional<query::SortByParameter> &sortby_parameter) {
   const auto max_content_size =
       options::GetMaxSearchResultRecordSize().GetValue();
   const auto max_content_fields =
@@ -285,7 +300,7 @@ void ProcessNeighborsForReply(
       continue;
     }
     auto content = GetContent(ctx, attribute_data_type, parameters, neighbor,
-                              vector_identifier);
+                              vector_identifier, sortby_parameter);
     if (!content.ok()) {
       continue;
     }

@@ -140,7 +140,7 @@ class StabilityRunner:
                 "tag": utils.TagDefinition(),
                 "numeric": utils.NumericDefinition(),
                 "content": utils.TextDefinition(),
-                "title": utils.TextDefinition(nostem=True, with_suffix_trie=True),
+                "title": utils.TextDefinition(nostem=False, with_suffix_trie=True),
                 "category": utils.TextDefinition(nostem=True),
             }
         elif self.config.index_type == "TAG":
@@ -270,7 +270,7 @@ class StabilityRunner:
                 " --command-key-pattern=P"
                 " --command='HSET __key__ "
                 f"{hset_fields_5}'"
-                " --command-ratio=4"
+                " --command-ratio=1"
                 " --command-key-pattern=P"
                 " --pipeline=1"
                 " --json-out-file "
@@ -423,6 +423,7 @@ class StabilityRunner:
             # 3. Suffix wildcard: matches words ending with "device"
             # 4. Exact match: matches exact word "smartwatch"
             # 5. Phrase search with SLOP 0 INORDER: exact ordered phrase match
+            # 6. SLOP without order: matches "systems", "matching", "enable" within SLOP 3, any order
             search_command = (
                 f"{self.config.memtier_path}"
                 " --cluster-mode"
@@ -440,36 +441,12 @@ class StabilityRunner:
                 " --command-ratio=1"
                 f" --command='FT.SEARCH {self.config.index_name} \"@title:\\\"fitness smartwatch\\\"\" SLOP 0 INORDER'"
                 " --command-ratio=1"
+                f" --command='FT.SEARCH {self.config.index_name} \"@content:systems matching enable\" SLOP 3'"
+                " --command-ratio=1"
                 " --pipeline=1"
                 f" --test-time={self.config.test_time_sec}"
                 " --json-out-file"
                 f" {memtier_output_dir}/{self.config.index_name}_memtier_search.json"
-            )
-            
-            # Second search process for random data - short query patterns
-            # These target the random binary data inserted with __data__
-            # Using simple short patterns that might match random content
-            search_random_command = (
-                f"{self.config.memtier_path}"
-                " --cluster-mode"
-                " -s localhost"
-                f" -p {self.config.ports[0]}"
-                f" -t {self.config.num_memtier_threads}"
-                f" -c {self.config.num_search_clients}"
-                f" --command='FT.SEARCH {self.config.index_name} \"@content:a*\"'"
-                " --command-ratio=1"
-                f" --command='FT.SEARCH {self.config.index_name} \"@title:*a\"'"
-                " --command-ratio=1"
-                f" --command='FT.SEARCH {self.config.index_name} \"@content:%x%\"'"
-                " --command-ratio=1"
-                f" --command='FT.SEARCH {self.config.index_name} \"@content:ab\"'"
-                " --command-ratio=1"
-                f" --command='FT.SEARCH {self.config.index_name} \"@title:\\\"ab cd\\\"\" SLOP 0 INORDER'"
-                " --command-ratio=1"
-                " --pipeline=1"
-                f" --test-time={self.config.test_time_sec}"
-                " --json-out-file"
-                f" {memtier_output_dir}/{self.config.index_name}_memtier_search_random.json"
             )
         elif self.config.index_type == "TAG":
             # Tag search - exact match on multiple tag fields
@@ -540,8 +517,6 @@ class StabilityRunner:
         logging.debug("delete_command: %s", delete_command)
         logging.debug("expire_command: %s", expire_command)
         logging.debug("search_command: %s", search_command)
-        if self.config.index_type == "TEXT":
-            logging.debug("search_random_command: %s", search_random_command)
         logging.debug("ft_info_command: %s", ft_info_command)
         logging.debug("ft_list_command: %s", ft_list_command)
 
@@ -562,15 +537,6 @@ class StabilityRunner:
                 error_predicate=lambda err: f"-Index with name '{self.config.index_name}' not found" not in err,
             )
         )
-        # Add second search process for TEXT indexes targeting random data
-        if self.config.index_type == "TEXT":
-            processes.append(
-                utils.MemtierProcess(
-                    command=search_random_command,
-                    name="FT.SEARCH_RANDOM",
-                    error_predicate=lambda err: f"-Index with name '{self.config.index_name}' not found" not in err,
-                )
-            )
         processes.append(
             utils.MemtierProcess(
                 command=ft_info_command,

@@ -55,6 +55,30 @@ absl::Status ListMetricsCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
   return vmsdk::info_field::ListMetrics(ctx, show_app, show_dev, names_only);
 }
 
+absl::Status ListConfigsCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
+  // Parse optional VERBOSE, NAMES_ONLY, or WITH_MUTABILITY flag
+  bool verbose = false;
+  bool names_only = false;
+  bool with_mutability = false;
+  if (itr.HasNext()) {
+    std::string flag;
+    VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, flag));
+    auto flag_upper = absl::AsciiStrToUpper(flag);
+    if (flag_upper == "VERBOSE") {
+      verbose = true;
+    } else if (flag_upper == "NAMES_ONLY") {
+      names_only = true;
+    } else if (flag_upper == "WITH_MUTABILITY") {
+      with_mutability = true;
+    } else {
+      return absl::InvalidArgumentError("Invalid flag. Use VERBOSE, NAMES_ONLY, or WITH_MUTABILITY");
+    }
+  }
+  VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
+  return vmsdk::config::ModuleConfigManager::Instance().ListAllConfigs(
+      ctx, verbose, names_only, with_mutability);
+}
+
 //
 // FT._DEBUG PAUSEPOINT [ SET | RESET | TEST | LIST] <pausepoint>
 //
@@ -296,6 +320,8 @@ absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
       {"FT_DEBUG SHOW_INDEXSCHEMAS", "list internal index schema tables"},
       {"FT._DEBUG LIST_METRICS [APP|DEV] [NAMES_ONLY]",
        "List all APP or DEV metrics with optional names-only format"},
+      {"FT._DEBUG LIST_CONFIGS [VERBOSE|NAMES_ONLY|WITH_MUTABILITY]",
+       "List all module configurations with metadata, names only, or names with mutability status"},
   };
   ValkeyModule_ReplyWithArray(ctx, 2 * help_text.size());
   for (auto &pair : help_text) {
@@ -350,6 +376,8 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     return HelpCmd(ctx, itr);
   } else if (keyword == "LIST_METRICS") {
     return ListMetricsCmd(ctx, itr);
+  } else if (keyword == "LIST_CONFIGS") {
+    return ListConfigsCmd(ctx, itr);
   } else {
     return absl::InvalidArgumentError(absl::StrCat(
         "Unknown subcommand: ", *itr.GetStringView(), " try HELP subcommand"));

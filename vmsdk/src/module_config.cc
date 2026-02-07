@@ -332,5 +332,131 @@ absl::Status String::FromString(std::string_view value) {
   return absl::OkStatus();
 }
 
+absl::Status ModuleConfigManager::ListAllConfigs(ValkeyModuleCtx *ctx,
+                                                 bool verbose,
+                                                 bool names_only,
+                                                 bool with_mutability) const {
+  // Create a sorted vector of config entries for consistent output
+  std::vector<std::pair<std::string, Registerable *>> sorted_entries(
+      entries_.begin(), entries_.end());
+  std::sort(sorted_entries.begin(), sorted_entries.end());
+
+  // Reply with array of config entries
+  ValkeyModule_ReplyWithArray(ctx, sorted_entries.size());
+
+  // If names_only, just return config names
+  if (names_only) {
+    for (const auto &[name, entry] : sorted_entries) {
+      ValkeyModule_ReplyWithCString(ctx, name.data());
+    }
+    return absl::OkStatus();
+  }
+
+  // If with_mutability, return name and mutability status pairs
+  if (with_mutability) {
+    for (const auto &[name, entry] : sorted_entries) {
+      // Each entry is an array of [name, is_mutable]
+      ValkeyModule_ReplyWithArray(ctx, 2);
+      ValkeyModule_ReplyWithCString(ctx, name.data());
+      
+      // Determine mutability based on flags
+      bool is_mutable = !(entry->GetFlags() & VALKEYMODULE_CONFIG_IMMUTABLE);
+      
+      // Developer configs become immutable when debug-mode is disabled
+      if (entry->IsDeveloperConfig() && !IsDebugModeEnabled()) {
+        is_mutable = false;
+      }
+      
+      ValkeyModule_ReplyWithCString(ctx, is_mutable ? "true" : "false");
+    }
+    return absl::OkStatus();
+  }
+
+  for (const auto &[name, entry] : sorted_entries) {
+    // Each config entry is an array of key-value pairs
+    int fields = verbose ? 16 : 12;
+    ValkeyModule_ReplyWithArray(ctx, fields);
+
+    // Common fields
+    ValkeyModule_ReplyWithCString(ctx, "name");
+    ValkeyModule_ReplyWithCString(ctx, name.data());
+
+    // Determine type and visibility
+    std::string type = "Unknown";
+    std::string visibility = entry->IsHidden() ? "HIDDEN" 
+                           : entry->IsDeveloperConfig() ? "DEV" 
+                           : "APP";
+    
+    bool has_modify_callback = false;
+
+    if (auto *num = dynamic_cast<Number *>(entry)) {
+      type = "Number";
+      ValkeyModule_ReplyWithCString(ctx, "type");
+      ValkeyModule_ReplyWithCString(ctx, "Number");
+      ValkeyModule_ReplyWithCString(ctx, "default");
+      ValkeyModule_ReplyWithLongLong(ctx, num->GetDefaultValue());
+      ValkeyModule_ReplyWithCString(ctx, "min");
+      ValkeyModule_ReplyWithLongLong(ctx, num->GetMinValue());
+      ValkeyModule_ReplyWithCString(ctx, "max");
+      ValkeyModule_ReplyWithLongLong(ctx, num->GetMaxValue());
+      ValkeyModule_ReplyWithCString(ctx, "current_value");
+      ValkeyModule_ReplyWithLongLong(ctx, num->GetValue());
+      has_modify_callback = num->HasModifyCallback();
+    } else if (auto *boolean = dynamic_cast<Boolean *>(entry)) {
+      type = "Boolean";
+      ValkeyModule_ReplyWithCString(ctx, "type");
+      ValkeyModule_ReplyWithCString(ctx, "Boolean");
+      ValkeyModule_ReplyWithCString(ctx, "default");
+      ValkeyModule_ReplyWithCString(ctx, boolean->GetDefaultValue() ? "true" : "false");
+      ValkeyModule_ReplyWithCString(ctx, "min");
+      ValkeyModule_ReplyWithCString(ctx, "N/A");
+      ValkeyModule_ReplyWithCString(ctx, "max");
+      ValkeyModule_ReplyWithCString(ctx, "N/A");
+      ValkeyModule_ReplyWithCString(ctx, "current_value");
+      ValkeyModule_ReplyWithCString(ctx, boolean->GetValue() ? "true" : "false");
+      has_modify_callback = boolean->HasModifyCallback();
+    } else if (auto *str = dynamic_cast<String *>(entry)) {
+      type = "String";
+      ValkeyModule_ReplyWithCString(ctx, "type");
+      ValkeyModule_ReplyWithCString(ctx, "String");
+      ValkeyModule_ReplyWithCString(ctx, "default");
+      ValkeyModule_ReplyWithCString(ctx, str->GetDefaultValue().c_str());
+      ValkeyModule_ReplyWithCString(ctx, "min");
+      ValkeyModule_ReplyWithCString(ctx, "N/A");
+      ValkeyModule_ReplyWithCString(ctx, "max");
+      ValkeyModule_ReplyWithCString(ctx, "N/A");
+      ValkeyModule_ReplyWithCString(ctx, "current_value");
+      ValkeyModule_ReplyWithCString(ctx, str->GetValue().c_str());
+      has_modify_callback = str->HasModifyCallback();
+    } else if (auto *enm = dynamic_cast<Enum *>(entry)) {
+      type = "Enum";
+      ValkeyModule_ReplyWithCString(ctx, "type");
+      ValkeyModule_ReplyWithCString(ctx, "Enum");
+      ValkeyModule_ReplyWithCString(ctx, "default");
+      ValkeyModule_ReplyWithLongLong(ctx, enm->GetDefaultValue());
+      ValkeyModule_ReplyWithCString(ctx, "min");
+      ValkeyModule_ReplyWithCString(ctx, "N/A");
+      ValkeyModule_ReplyWithCString(ctx, "max");
+      ValkeyModule_ReplyWithCString(ctx, "N/A");
+      ValkeyModule_ReplyWithCString(ctx, "current_value");
+      ValkeyModule_ReplyWithLongLong(ctx, enm->GetValue());
+      has_modify_callback = enm->HasModifyCallback();
+    }
+
+    ValkeyModule_ReplyWithCString(ctx, "visibility");
+    ValkeyModule_ReplyWithCString(ctx, visibility.c_str());
+
+    // Verbose fields
+    if (verbose) {
+      ValkeyModule_ReplyWithCString(ctx, "mutable");
+      ValkeyModule_ReplyWithCString(ctx, has_modify_callback ? "true" : "false");
+      ValkeyModule_ReplyWithCString(ctx, "flags");
+      ValkeyModule_ReplyWithLongLong(ctx, entry->GetFlags());
+    }
+  }
+
+  return absl::OkStatus();
+}
+
 }  // namespace config
 }  // namespace vmsdk

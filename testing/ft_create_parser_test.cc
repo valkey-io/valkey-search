@@ -93,7 +93,7 @@ TEST_P(FTCreateParserTest, ParseParams) {
   const FTCreateParserTestCase &test_case = GetParam();
   auto command_str = std::string(test_case.command_str);
   if (test_case.too_many_attributes) {
-    for (int i = 0; i < 50; ++i) {
+    for (int i = 0; i < 10000; ++i) {
       absl::StrAppend(&command_str, " hash_field", std::to_string(i + 2),
                       " vector hnsw 6 TYPE FLOAT32 DIM 3 "
                       "DISTANCE_METRIC IP ");
@@ -817,7 +817,7 @@ INSTANTIATE_TEST_SUITE_P(
              .too_many_attributes = true,
              .expected_error_message =
                  "Invalid range: Value above maximum; The maximum number of "
-                 "attributes cannot exceed 50.",
+                 "attributes cannot exceed 1000.",
          },
          {
              .test_name = "invalid_param_num_1",

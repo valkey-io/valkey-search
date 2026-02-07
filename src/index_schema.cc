@@ -566,13 +566,6 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
   }
 }
 
-bool IndexSchema::IsTrackedByAnyIndex(const Key &key) const {
-  return std::any_of(attributes_.begin(), attributes_.end(),
-                     [&key](const auto &attribute) {
-                       return attribute.second.GetIndex()->IsTracked(key);
-                     });
-}
-
 void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
                                       MutatedAttributes &mutated_attributes,
                                       const Key &key) {
@@ -624,18 +617,11 @@ void IndexSchema::ProcessAttributeMutation(
       }
       return;
     }
-    bool was_tracked = IsTrackedByAnyIndex(key);
     auto res = index->AddRecord(key, data_view);
     TrackResults(ctx, res, "Add", stats_.subscription_add);
 
     if (res.ok() && res.value()) {
       ++Metrics::GetStats().time_slice_upserts;
-      // Increment the hash key count if it wasn't tracked and we successfully
-      // added it to the index.
-      if (!was_tracked) {
-        ++stats_.document_cnt;
-      }
-
       // Track field type counters
       switch (index->GetIndexerType()) {
         case indexes::IndexerType::kVector:
@@ -664,10 +650,6 @@ void IndexSchema::ProcessAttributeMutation(
   TrackResults(ctx, res, "Remove", stats_.subscription_remove);
   if (res.ok() && res.value()) {
     ++Metrics::GetStats().time_slice_deletes;
-    // Reduce the hash key count if nothing is tracking the key anymore.
-    if (!IsTrackedByAnyIndex(key)) {
-      --stats_.document_cnt;
-    }
   }
 }
 
@@ -791,6 +773,7 @@ MutationSequenceNumber IndexSchema::UpdateDbInfoKey(
 
   if (is_delete) {
     dbkeyinfo_map.erase(interned_key);
+    stats_.document_cnt = dbkeyinfo_map.size();
     return this_mutation;
   }
 

@@ -120,6 +120,9 @@ class Registerable {
   /// `false`] otherwise return an error status code
   virtual absl::Status FromString(std::string_view value) = 0;
   std::string_view GetName() const { return name_; }
+  // Returns true if this config was set at least once via CONFIG SET or an
+  // explicit SetValue call.
+  bool WasSet() const { return was_set_; }
 
   // bitwise OR'ed flags of `Flags`
   inline void SetFlags(size_t flags) { flags_ = flags; }
@@ -132,6 +135,7 @@ class Registerable {
  protected:
   std::string name_;
   size_t flags_{kDefault};
+  bool was_set_{false};
   bool developer_config_{false};
 };
 
@@ -158,7 +162,7 @@ class ConfigBase : public Registerable {
     if (!res.ok()) {
       return res;
     }
-
+    was_set_ = true;
     SetValueImpl(value);
     NotifyChanged();
     return absl::OkStatus();
@@ -174,6 +178,7 @@ class ConfigBase : public Registerable {
       return;
     }
 
+    was_set_ = true;
     SetValueImpl(value);
     NotifyChanged();
   }

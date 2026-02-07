@@ -196,6 +196,12 @@ enum FanoutErrorType {
   COMMUNICATION_ERROR = 3;
 }
 
+message AttributeInfo {
+  string identifier = 1;
+  string alias = 2;
+  uint64 user_indexed_memory = 3;
+}
+
 message InfoIndexPartitionResponse {
   bool exists = 1;
   string index_name = 2;
@@ -214,4 +220,5 @@ message InfoIndexPartitionResponse {
   optional IndexFingerprintVersion index_fingerprint_version = 15;
   FanoutErrorType error_type = 16;
   uint32 db_num = 17;
+  repeated AttributeInfo attributes = 18;
 }

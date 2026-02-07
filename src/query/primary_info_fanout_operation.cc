@@ -90,6 +90,11 @@ void PrimaryInfoFanoutOperation::OnResponse(
   num_docs_ += resp.num_docs();
   num_records_ += resp.num_records();
   hash_indexing_failures_ += resp.hash_indexing_failures();
+  for (const auto& attr : resp.attributes()) {
+    auto& data = attribute_data_[attr.alias()];
+    data.identifier = attr.identifier();
+    data.user_indexed_memory += attr.user_indexed_memory();
+  }
 }
 
 std::pair<grpc::Status, coordinator::InfoIndexPartitionResponse>
@@ -119,7 +124,7 @@ int PrimaryInfoFanoutOperation::GenerateReply(ValkeyModuleCtx* ctx,
       !inconsistent_state_error_nodes.empty()) {
     return FanoutOperationBase::GenerateErrorReply(ctx);
   }
-  size_t reply_size = 10;
+  size_t reply_size = 12;
   if (vmsdk::info_field::GetShowDeveloper()) {
     reply_size += 4;
   }
@@ -135,7 +140,17 @@ int PrimaryInfoFanoutOperation::GenerateReply(ValkeyModuleCtx* ctx,
   ValkeyModule_ReplyWithSimpleString(ctx, "hash_indexing_failures");
   ValkeyModule_ReplyWithCString(
       ctx, std::to_string(hash_indexing_failures_).c_str());
-
+  ValkeyModule_ReplyWithSimpleString(ctx, "attributes");
+  ValkeyModule_ReplyWithArray(ctx, attribute_data_.size());
+  for (const auto& [alias, data] : attribute_data_) {
+    ValkeyModule_ReplyWithArray(ctx, 6);
+    ValkeyModule_ReplyWithSimpleString(ctx, "identifier");
+    ValkeyModule_ReplyWithSimpleString(ctx, data.identifier.c_str());
+    ValkeyModule_ReplyWithSimpleString(ctx, "attribute");
+    ValkeyModule_ReplyWithSimpleString(ctx, alias.c_str());
+    ValkeyModule_ReplyWithSimpleString(ctx, "user_indexed_memory");
+    ValkeyModule_ReplyWithLongLong(ctx, data.user_indexed_memory);
+  }
   if (vmsdk::info_field::GetShowDeveloper()) {
     auto status_or_schema =
         SchemaManager::Instance().GetIndexSchema(db_num_, index_name_);
@@ -155,6 +170,7 @@ void PrimaryInfoFanoutOperation::ResetForRetry() {
   num_docs_ = 0;
   num_records_ = 0;
   hash_indexing_failures_ = 0;
+  attribute_data_.clear();
 }
 
 // retry condition: (1) inconsistent state (2) network error

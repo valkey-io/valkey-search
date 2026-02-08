@@ -843,6 +843,19 @@ static vmsdk::info_field::String flat_vector_index_search_latency_usec(
               .flat_vector_index_search_latency.HasSamples();
         }));
 
+static vmsdk::info_field::String worker_search_execution_latency_usec(
+    "latency", "worker_search_execution_latency_usec",
+    vmsdk::info_field::StringBuilder()
+        .App()
+        .ComputedString([]() -> std::string {
+          auto &sampler = Metrics::GetStats().worker_search_execution_latency;
+          return sampler.GetStatsString();
+        })
+        .VisibleIf([]() -> bool {
+          return Metrics::GetStats()
+              .worker_search_execution_latency.HasSamples();
+        }));
+
 static vmsdk::info_field::Integer info_fanout_retry_count(
     "fanout", "info_fanout_retry_count",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {

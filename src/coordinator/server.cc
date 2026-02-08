@@ -160,33 +160,37 @@ query::SearchResponseCallback Service::MakeSearchCallback(
     if (parameters->no_content) {
       SerializeNeighbors(response, result->neighbors);
       response->set_total_count(result->total_count);
+      response->set_search_execution_time_us(result->search_execution_time_us);
       reactor->Finish(grpc::Status::OK);
       RecordSearchMetrics(false, std::move(latency_sample));
     } else {
-      vmsdk::RunByMain([parameters = std::move(parameters), response, reactor,
-                        latency_sample = std::move(latency_sample),
-                        neighbors = std::move(result->neighbors),
-                        total_count = result->total_count]() mutable {
-        const auto& attribute_data_type =
-            parameters->index_schema->GetAttributeDataType();
-        auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
-        if (parameters->IsNonVectorQuery()) {
-          query::ProcessNonVectorNeighborsForReply(
-              ctx.get(), attribute_data_type, neighbors, *parameters);
-        } else {
-          auto vector_identifier =
-              parameters->index_schema
-                  ->GetIdentifier(parameters->attribute_alias)
-                  .value();
-          query::ProcessNeighborsForReply(ctx.get(), attribute_data_type,
-                                          neighbors, *parameters,
-                                          vector_identifier);
-        }
-        SerializeNeighbors(response, neighbors);
-        response->set_total_count(total_count);
-        reactor->Finish(grpc::Status::OK);
-        RecordSearchMetrics(false, std::move(latency_sample));
-      });
+      vmsdk::RunByMain(
+          [parameters = std::move(parameters), response, reactor,
+           latency_sample = std::move(latency_sample),
+           neighbors = std::move(result->neighbors),
+           total_count = result->total_count,
+           search_time_us = result->search_execution_time_us]() mutable {
+            const auto& attribute_data_type =
+                parameters->index_schema->GetAttributeDataType();
+            auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
+            if (parameters->IsNonVectorQuery()) {
+              query::ProcessNonVectorNeighborsForReply(
+                  ctx.get(), attribute_data_type, neighbors, *parameters);
+            } else {
+              auto vector_identifier =
+                  parameters->index_schema
+                      ->GetIdentifier(parameters->attribute_alias)
+                      .value();
+              query::ProcessNeighborsForReply(ctx.get(), attribute_data_type,
+                                              neighbors, *parameters,
+                                              vector_identifier);
+            }
+            SerializeNeighbors(response, neighbors);
+            response->set_total_count(total_count);
+            response->set_search_execution_time_us(search_time_us);
+            reactor->Finish(grpc::Status::OK);
+            RecordSearchMetrics(false, std::move(latency_sample));
+          });
     }
   };
 }

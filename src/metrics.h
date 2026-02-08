@@ -68,6 +68,9 @@ class Metrics {
     vmsdk::LatencySampler flat_vector_index_search_latency{
         absl::ToInt64Nanoseconds(absl::Nanoseconds(1)),
         absl::ToInt64Nanoseconds(absl::Seconds(1)), LATENCY_PRECISION};
+    vmsdk::LatencySampler worker_search_execution_latency{
+        absl::ToInt64Nanoseconds(absl::Microseconds(1)),
+        absl::ToInt64Nanoseconds(absl::Seconds(10)), LATENCY_PRECISION};
     std::atomic<uint64_t> coordinator_server_get_global_metadata_success_cnt{0};
     std::atomic<uint64_t> coordinator_server_get_global_metadata_failure_cnt{0};
     std::atomic<uint64_t> coordinator_server_search_index_partition_success_cnt{

@@ -721,15 +721,26 @@ SerializationRange SearchResult::GetSerializationRange(
 
 absl::StatusOr<SearchResult> Search(const SearchParameters &parameters,
                                     SearchMode search_mode) {
+  auto start_time = std::chrono::steady_clock::now();
+
   auto result =
       MaybeAddIndexedContent(DoSearch(parameters, search_mode), parameters);
+
+  auto end_time = std::chrono::steady_clock::now();
+  int64_t search_execution_time_us =
+      std::chrono::duration_cast<std::chrono::microseconds>(end_time -
+                                                            start_time)
+          .count();
+
   if (!result.ok()) {
     return result.status();
   }
+
   size_t total_count = result.value().size();
   // return SearchResult(total_count, std::move(result.value()), parameters);
   auto search_result =
       SearchResult(total_count, std::move(result.value()), parameters);
+  search_result.search_execution_time_us = search_execution_time_us;
   for (auto &n : search_result.neighbors) {
     n.sequence_number =
         parameters.index_schema->GetIndexMutationSequenceNumber(n.external_id);

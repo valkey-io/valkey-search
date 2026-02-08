@@ -337,20 +337,6 @@ class StabilityRunner:
                 " --json-out-file "
                 f"{memtier_output_dir}/{self.config.index_name}_memtier_insert.json"
             )
-        elif self.config.index_type in ["TAG", "NUMERIC"]:
-            insert_command = (
-                f"{self.config.memtier_path}"
-                " --cluster-mode"
-                " -s localhost"
-                f" -p {self.config.ports[0]}"
-                f" -t {self.config.num_memtier_threads}"
-                f" -c {self.config.num_memtier_clients}"
-                " --command='HSET __key__ "
-                f"{hset_fields}'"
-                " --command-key-pattern=P"
-                " --json-out-file "
-                f"{memtier_output_dir}/{self.config.index_name}_memtier_insert.json"
-            )
         else:
             insert_command = (
                 f"{self.config.memtier_path}"
@@ -367,66 +353,36 @@ class StabilityRunner:
                 " --json-out-file"
                 f" {memtier_output_dir}/{self.config.index_name}_memtier_insert.json"
             )
-        if self.config.index_type in ["TEXT", "TAG", "NUMERIC"]:
-            delete_command = (
-                f"{self.config.memtier_path}"
-                " --cluster-mode"
-                " -s localhost"
-                f" -p {self.config.ports[0]}"
-                f" -t {self.config.num_memtier_threads}"
-                f" -c {self.config.num_memtier_clients}"
-                " -"
-                " --command='DEL __key__'"
-                " --command-key-pattern=P"
-                " --json-out-file"
-                f" {memtier_output_dir}/{self.config.index_name}_memtier_del.json"
-            )
-        else:
-            delete_command = (
-                f"{self.config.memtier_path}"
-                " --cluster-mode"
-                " -s localhost"
-                f" -p {self.config.ports[0]}"
-                f" -t {self.config.num_memtier_threads}"
-                f" -c {self.config.num_memtier_clients}"
-                " --random-data"
-                " -"
-                " --command='DEL __key__'"
-                " --command-key-pattern=P"
-                f" -d {self.config.vector_dimensions*4}"
-                " --json-out-file"
-                f" {memtier_output_dir}/{self.config.index_name}_memtier_del.json"
-            )
-        if self.config.index_type in ["TEXT", "TAG", "NUMERIC"]:
-            expire_command = (
-                f"{self.config.memtier_path}"
-                " --cluster-mode"
-                " -s localhost"
-                f" -p {self.config.ports[0]}"
-                f" -t {self.config.num_memtier_threads}"
-                f" -c {self.config.num_memtier_clients}"
-                " -"
-                " --command='EXPIRE __key__ 1'"
-                " --command-key-pattern=P"
-                " --json-out-file"
-                f" {memtier_output_dir}/{self.config.index_name}_memtier_expire.json"
-            )
-        else:
-            expire_command = (
-                f"{self.config.memtier_path}"
-                " --cluster-mode"
-                " -s localhost"
-                f" -p {self.config.ports[0]}"
-                f" -t {self.config.num_memtier_threads}"
-                f" -c {self.config.num_memtier_clients}"
-                " --random-data"
-                " -"
-                " --command='EXPIRE __key__ 1'"
-                " --command-key-pattern=P"
-                f" -d {self.config.vector_dimensions*4}"
-                " --json-out-file"
-                f" {memtier_output_dir}/{self.config.index_name}_memtier_expire.json"
-            )
+        delete_command = (
+            f"{self.config.memtier_path}"
+            " --cluster-mode"
+            " -s localhost"
+            f" -p {self.config.ports[0]}"
+            f" -t {self.config.num_memtier_threads}"
+            f" -c {self.config.num_memtier_clients}"
+            " --random-data"
+            " -"
+            " --command='DEL __key__'"
+            " --command-key-pattern=P"
+            f" -d {self.config.vector_dimensions*4}"
+            " --json-out-file"
+            f" {memtier_output_dir}/{self.config.index_name}_memtier_del.json"
+        )
+        expire_command = (
+            f"{self.config.memtier_path}"
+            " --cluster-mode"
+            " -s localhost"
+            f" -p {self.config.ports[0]}"
+            f" -t {self.config.num_memtier_threads}"
+            f" -c {self.config.num_memtier_clients}"
+            " --random-data"
+            " -"
+            " --command='EXPIRE __key__ 1'"
+            " --command-key-pattern=P"
+            f" -d {self.config.vector_dimensions*4}"
+            " --json-out-file"
+            f" {memtier_output_dir}/{self.config.index_name}_memtier_expire.json"
+        )
 
         if self.config.insertion_mode == "request_count":
             keys_per_client = int(
@@ -448,24 +404,7 @@ class StabilityRunner:
             )
         
         # Build search query based on index type
-        if self.config.index_type in ["HNSW", "FLAT"]:
-            # Vector KNN search
-            search_query = '"(@tag:{my_tag} @numeric:[0 100])=>[KNN 3 @embedding $query_vector]" NOCONTENT PARAMS 2 "query_vector" __data__ DIALECT 2'
-            search_command = (
-                f"{self.config.memtier_path}"
-                " --cluster-mode"
-                " -s localhost"
-                f" -p {self.config.ports[0]}"
-                f" -t {self.config.num_memtier_threads}"
-                f" -c {self.config.num_search_clients}"
-                " -"
-                f" --command='FT.SEARCH {self.config.index_name} {search_query}'"
-                f" --test-time={self.config.test_time_sec}"
-                f" -d {self.config.vector_dimensions*4}"
-                " --json-out-file"
-                f" {memtier_output_dir}/{self.config.index_name}_memtier_search.json"
-            )
-        elif self.config.index_type == "TEXT":
+        if self.config.index_type == "TEXT":
             # Text search - Multiple search types
             # 1. Prefix wildcard: matches words starting with "prefix"
             # 2. Fuzzy search: matches words similar to "fuzzy" (using % for edit distance)
@@ -497,10 +436,13 @@ class StabilityRunner:
                 " --json-out-file"
                 f" {memtier_output_dir}/{self.config.index_name}_memtier_search.json"
             )
-        elif self.config.index_type in ["TAG", "NUMERIC"]:
+        else:
+            # Vector KNN search
             # Tag search - exact match on multiple tag fields
             # Numeric range search - multiple numeric range filters
-            if self.config.index_type == "TAG":
+            if self.config.index_type in ["HNSW", "FLAT"]:
+                search_query = '"(@tag:{my_tag} @numeric:[0 100])=>[KNN 3 @embedding $query_vector]" NOCONTENT PARAMS 2 "query_vector" __data__ DIALECT 2'
+            elif self.config.index_type == "TAG":
                 search_query = '"(@category:{electronics} @product_type:{smartwatch})"'
             else:  # NUMERIC
                 search_query = '"(@price:[100 500] @quantity:[10 100] @rating:[40 50])"'

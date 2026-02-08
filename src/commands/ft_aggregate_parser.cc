@@ -35,6 +35,8 @@ constexpr absl::string_view kParamsParam{"PARAMS"};
 constexpr absl::string_view kReduceParam{"REDUCE"};
 constexpr absl::string_view kSortByParam{"SORTBY"};
 constexpr absl::string_view kTimeoutParam{"TIMEOUT"};
+constexpr absl::string_view kSlopParam{"SLOP"};
+constexpr absl::string_view kInorder{"INORDER"};
 
 std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
   return std::make_unique<vmsdk::ParamParser<AggregateParameters>>(
@@ -270,6 +272,10 @@ vmsdk::KeyValueParser<AggregateParameters> CreateAggregateParser() {
                         GENERATE_VALUE_PARSER(AggregateParameters, timeout_ms));
   parser.AddParamParser(kAddScoresParam,
                         GENERATE_FLAG_PARSER(AggregateParameters, addscores_));
+  parser.AddParamParser(kSlopParam,
+                        GENERATE_VALUE_PARSER(AggregateParameters, slop));
+  parser.AddParamParser(kInorder,
+                        GENERATE_FLAG_PARSER(AggregateParameters, inorder));
   parser.AddParamParser(kLoadParam, ConstructLoadParser());
   parser.AddParamParser(kApplyParam, ConstructApplyParser());
   parser.AddParamParser(kFilterParam, ConstructFilterParser());

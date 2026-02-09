@@ -590,10 +590,10 @@ TEST_P(ResponseGeneratorDbParamTest, ProcessNeighborsForReplySelectsCorrectDB) {
         .WillOnce(testing::Return(VALKEYMODULE_OK));
 
     // Expect fetch
-    EXPECT_CALL(
-        data_type,
-        FetchAllRecords(&fake_ctx, parameters.attribute_alias, testing::_,
-                        absl::string_view("key"), testing::_))
+    EXPECT_CALL(data_type,
+                FetchAllRecords(
+                    &fake_ctx, std::make_optional(parameters.attribute_alias),
+                    testing::_, absl::string_view("key"), testing::_))
         .WillOnce(testing::Return(RecordsMap{}));
 
     // Expect restore DB
@@ -635,10 +635,10 @@ TEST_P(ResponseGeneratorDbParamTest, ProcessNeighborsForReplyNoContent) {
     EXPECT_CALL(*kMockValkeyModule, SelectDb(&fake_ctx, target_db))
         .WillOnce(testing::Return(VALKEYMODULE_OK));
 
-    EXPECT_CALL(
-        data_type,
-        FetchAllRecords(&fake_ctx, parameters.attribute_alias, testing::_,
-                        absl::string_view("key"), expected_identifiers))
+    EXPECT_CALL(data_type,
+                FetchAllRecords(
+                    &fake_ctx, std::make_optional(parameters.attribute_alias),
+                    testing::_, absl::string_view("key"), expected_identifiers))
         .WillOnce(testing::Return(RecordsMap{}));
 
     EXPECT_CALL(*kMockValkeyModule, SelectDb(&fake_ctx, original_db))

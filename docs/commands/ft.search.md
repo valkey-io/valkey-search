@@ -16,10 +16,10 @@ FT.SEARCH <index> <query>
 ```
 
 - `<index>` (required): This index name you want to query.
-- `<query>` (required): The query string, see [Search - query language](../topics/search.query.md) for details.
+- `<query>` (required): The query string, see [Search - query language](../topics/search-query.md) for details.
 - `NOCONTENT` (optional): When present, only the resulting key names are returned, no key values are included.
 - `TIMEOUT <timeout>` (optional): Lets you set a timeout value for the search command. This must be an integer in milliseconds.
-- `PARAMS <count> <name> <value> [<name> <value> ...]` (optional): `count` is of the number of arguments, i.e., twice the number of value/name pairs. [Search - query language](../topics/search.query.md) for details.
+- `PARAMS <count> <name> <value> [<name> <value> ...]` (optional): `count` is of the number of arguments, i.e., twice the number of value/name pairs. [Search - query language](../topics/search-query.md) for details.
 - `RETURN <count> <field> [AS <name>] <field> [AS <name>] ...` (options): `count` is the number of fields to return. Specifies the fields you want to retrieve from your documents, along with any renaming for the returned values. By default, all fields are returned unless the `NOCONTENT` option is set, in which case no fields are returned. If num is set to 0, it behaves the same as `NOCONTENT`.
 - `LIMIT <offset> <count>` (optional): Lets you choose a portion of the result. The first `<offset>` keys are skipped and only a maximum of `<count>` keys are included. The default is LIMIT 0 10, which returns at most 10 keys.
 - `DIALECT <dialect>` (optional): Specifies your dialect. The only supported dialect is 2.
@@ -44,7 +44,7 @@ not affect the value of the first entry.
 When `NOCONTENT` is specified, each entry in the response contains only the keyname,
 Otherwise, each entry includes the keyname, followed by an array of the returned fields.
 
-The array of returned fields for a key is a set of name/value pairs. The set of name/value pairs for a key is controlled by the `RETURN` clause. For a vector query an additional name/value pair is returned to provide the vector distance that was computed for this key. See [Search - query language](../topics/search.query.md) for details on how to control that name.
+The array of returned fields for a key is a set of name/value pairs. The set of name/value pairs for a key is controlled by the `RETURN` clause. For a vector query an additional name/value pair is returned to provide the vector distance that was computed for this key. See [Search - query language](../topics/search-query.md) for details on how to control that name.
 
 ## JSON Index Responses
 

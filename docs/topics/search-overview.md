@@ -39,12 +39,12 @@ Cross-Slot indexes are in every shard. Cross-slot indexes lack a hash-tag. This 
 
 Named with a hash-tag. Scalable reads. Data Plane forwards.
 
-See [Cluster Consistency](../topics/search.consistency.md) for more details on cluster consistency.
+See [Cluster Consistency](../topics/search-consistency.md) for more details on cluster consistency.
 
 ## Configuration Settings
 
-The Search module has a large list of configurable items. See [Search Configurations](../topics/search.configurables.md) for details.
+The Search module has a large list of configurable items. See [Search Configurations](../topics/search-configurables.md) for details.
 
 ## INFO Fields
 
-See [Search Info Fields](../topics/search.observables.md) for details.
+See [Search Info Fields](../topics/search-observables.md) for details.

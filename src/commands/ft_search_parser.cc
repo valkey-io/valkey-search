@@ -24,55 +24,12 @@
 #include "ft_search_parser.h"
 #include "src/query/search.h"
 #include "vmsdk/src/command_parser.h"
-#include "vmsdk/src/info.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
 
-// Query operation counters
-DEV_INTEGER_COUNTER(query_stats, query_text_term_count);
-DEV_INTEGER_COUNTER(query_stats, query_text_prefix_count);
-DEV_INTEGER_COUNTER(query_stats, query_text_suffix_count);
-DEV_INTEGER_COUNTER(query_stats, query_text_fuzzy_count);
-DEV_INTEGER_COUNTER(query_stats, query_text_proximity_count);
-DEV_INTEGER_COUNTER(query_stats, query_numeric_count);
-DEV_INTEGER_COUNTER(query_stats, query_tag_count);
-
 namespace valkey_search {
-
-namespace {
-// Increment query operation metrics based on query operations flags.
-// File-internal helper function.
-void IncrementQueryOperationMetrics(QueryOperations query_operations) {
-  // High-level query type metrics
-  if (query_operations & QueryOperations::kContainsText) {
-    ++Metrics::GetStats().query_text_requests_cnt;
-  }
-  if (query_operations & QueryOperations::kContainsNumeric) {
-    query_numeric_count.Increment();
-  }
-  if (query_operations & QueryOperations::kContainsTag) {
-    query_tag_count.Increment();
-  }
-  // Text operation type metrics
-  if (query_operations & QueryOperations::kContainsTextTerm) {
-    query_text_term_count.Increment();
-  }
-  if (query_operations & QueryOperations::kContainsTextPrefix) {
-    query_text_prefix_count.Increment();
-  }
-  if (query_operations & QueryOperations::kContainsTextSuffix) {
-    query_text_suffix_count.Increment();
-  }
-  if (query_operations & QueryOperations::kContainsTextFuzzy) {
-    query_text_fuzzy_count.Increment();
-  }
-  if (query_operations & QueryOperations::kContainsProximity) {
-    query_text_proximity_count.Increment();
-  }
-}
-}  // namespace
 
 constexpr absl::string_view kMaxKnnConfig{"max-vector-knn"};
 constexpr int kDefaultKnnLimit{10000};

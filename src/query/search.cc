@@ -42,6 +42,7 @@
 #include "src/valkey_search.h"
 #include "src/valkey_search_options.h"
 #include "third_party/hnswlib/hnswlib.h"
+#include "vmsdk/src/info.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -52,6 +53,15 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::query {
+
+// Query operation counters
+DEV_INTEGER_COUNTER(query_stats, query_text_term_count);
+DEV_INTEGER_COUNTER(query_stats, query_text_prefix_count);
+DEV_INTEGER_COUNTER(query_stats, query_text_suffix_count);
+DEV_INTEGER_COUNTER(query_stats, query_text_fuzzy_count);
+DEV_INTEGER_COUNTER(query_stats, query_text_proximity_count);
+DEV_INTEGER_COUNTER(query_stats, query_numeric_count);
+DEV_INTEGER_COUNTER(query_stats, query_tag_count);
 
 class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
  public:
@@ -753,6 +763,37 @@ absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
   return absl::OkStatus();
 }
 
+// Increment query operation metrics based on query operations flags.
+// File-internal helper function.
+void IncrementQueryOperationMetrics(QueryOperations query_operations) {
+  // High-level query type metrics
+  if (query_operations & QueryOperations::kContainsText) {
+    ++Metrics::GetStats().query_text_requests_cnt;
+  }
+  if (query_operations & QueryOperations::kContainsNumeric) {
+    query_numeric_count.Increment();
+  }
+  if (query_operations & QueryOperations::kContainsTag) {
+    query_tag_count.Increment();
+  }
+  // Text operation type metrics
+  if (query_operations & QueryOperations::kContainsTextTerm) {
+    query_text_term_count.Increment();
+  }
+  if (query_operations & QueryOperations::kContainsTextPrefix) {
+    query_text_prefix_count.Increment();
+  }
+  if (query_operations & QueryOperations::kContainsTextSuffix) {
+    query_text_suffix_count.Increment();
+  }
+  if (query_operations & QueryOperations::kContainsTextFuzzy) {
+    query_text_fuzzy_count.Increment();
+  }
+  if (query_operations & QueryOperations::kContainsProximity) {
+    query_text_proximity_count.Increment();
+  }
+}
+
 absl::StatusOr<absl::string_view> SubstituteParam(
     query::SearchParameters &parameters, absl::string_view source) {
   if (source.empty() || source[0] != '$') {
@@ -943,7 +984,13 @@ absl::Status query::SearchParameters::PreParseQueryString() {
       score_as = vmsdk::MakeUniqueValkeyString(parse_vars.score_as_string);
     }
   }
-  // TODO: Return Temp Error for unsupported predicates.
+
+  // Pure non-vector query (no vector filter)
+  if (vector_filter.empty() && filter_parse_results.root_predicate) {
+    ++Metrics::GetStats().query_nonvector_requests_cnt;
+  }
+  // Increment operation-type metrics
+  IncrementQueryOperationMetrics(filter_parse_results.query_operations);
   return absl::OkStatus();
 }
 

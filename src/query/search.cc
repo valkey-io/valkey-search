@@ -244,13 +244,12 @@ BuildTextIterator(const Predicate *predicate, bool negate,
           iterators;
       size_t min_size = SIZE_MAX;
       
-      // For mixed SLOP queries, only build iterators for text children
-      // Non-text children (like negations) will be handled by prefilter evaluation
-      bool is_mixed_slop = (slop.has_value() || inorder) && !is_phrase;
+      bool has_slop_or_inorder = slop.has_value() || inorder;
       
       for (const auto &child : composed_predicate->GetChildren()) {
-        // Skip non-text children in mixed SLOP queries (they can't provide positions)
-        if (is_mixed_slop && child->GetType() != PredicateType::kText) {
+        // Only skip negation children in SLOP queries - they can't provide positions
+        // Composed predicates (OR/AND) should be processed normally
+        if (has_slop_or_inorder && child->GetType() == PredicateType::kNegate) {
           continue;
         }
         

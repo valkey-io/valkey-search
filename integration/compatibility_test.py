@@ -281,7 +281,7 @@ def compare_results(expected, results):
         sortkeys = [cmd[ix+2+i][1:] for i in range(count)]
     elif 'sortby' in cmd:
         ix = cmd.index('sortby')
-        count = int(cmd[ix+1])
+        count = int(cmd[ix+1]) if cmd[0] != 'ft.search' else 1
         # Grab the fields after the count, stripping any leading '@'
         sortkeys = [cmd[ix+2+i][1 if cmd[ix+2+i].startswith("@") else 0:] for i in range(count)]
         for f in ['asc', 'desc', 'ASC', 'DESC']:

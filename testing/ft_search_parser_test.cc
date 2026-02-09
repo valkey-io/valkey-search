@@ -77,6 +77,7 @@ struct FTSearchParserTestCase {
   std::string sortby_field;
   query::SortOrder sortby_order{query::SortOrder::kAscending};
   bool sortby_enabled{false};
+  bool with_sort_keys{false};
 };
 
 class FTSearchParserTest
@@ -296,6 +297,7 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
     // Validate SORTBY parameters
     EXPECT_EQ(search_params.value()->sortby.has_value(),
               test_case.sortby_enabled);
+    EXPECT_EQ(search_params.value()->with_sort_keys, test_case.with_sort_keys);
     if (test_case.sortby_enabled) {
       EXPECT_EQ(search_params.value()->sortby->field, test_case.sortby_field);
       EXPECT_EQ(search_params.value()->sortby->order, test_case.sortby_order);
@@ -993,6 +995,23 @@ INSTANTIATE_TEST_SUITE_P(
             .sortby_field = "nonexistent_field",
             .sortby_order = query::SortOrder::kAscending,
             .sortby_enabled = true,
+        },
+        {
+            .test_name = "with_sort_keys",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_2:{electronics}",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .vector_query = false,
+            .sortby_parameters_str =
+                "SORtBY attribute_identifier_2 WITHSORTKEYS",
+            .sortby_field = "attribute_identifier_2",
+            .sortby_order = query::SortOrder::kAscending,
+            .sortby_enabled = true,
+            .with_sort_keys = true,
         },
     }),
     [](const TestParamInfo<FTSearchParserTestCase> &info) {

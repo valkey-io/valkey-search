@@ -69,6 +69,7 @@ constexpr absl::string_view kAllShards{"ALLSHARDS"};
 constexpr absl::string_view kSomeShards{"SOMESHARDS"};
 constexpr absl::string_view kConsistent{"CONSISTENT"};
 constexpr absl::string_view kInconsistent{"INCONSISTENT"};
+constexpr absl::string_view kWithSortKeysParam{"WITHSORTKEYS"};
 constexpr absl::string_view kVectorFilterDelimiter{"=>"};
 constexpr absl::string_view kSlop{"SLOP"};
 constexpr absl::string_view kInorder{"INORDER"};

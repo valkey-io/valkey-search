@@ -267,6 +267,8 @@ vmsdk::KeyValueParser<SearchCommand> CreateSearchParser() {
   parser.AddParamParser(query::kLimitParam, ConstructLimitParser());
   parser.AddParamParser(query::kNoContentParam,
                         GENERATE_FLAG_PARSER(SearchCommand, no_content));
+  parser.AddParamParser(query::kWithSortKeysParam,
+                        GENERATE_FLAG_PARSER(SearchCommand, with_sort_keys));
   parser.AddParamParser(query::kReturnParam, ConstructReturnParser());
   parser.AddParamParser(query::kSortByParam, ConstructSortByParser());
   parser.AddParamParser(query::kParamsParam, ConstructParamsParser());

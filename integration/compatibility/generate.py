@@ -464,7 +464,8 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
 
         for sort_key in ["n1", "n2"]:
             for direction in ["ASC", "DESC", ""]:
-                for return_keys in [""]:
-                    for limit in ["LIMIT 0 5", "LIMIT 2 3", ""]:
-                        self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY {sort_key} {direction} {return_keys} {limit}")
+                for return_keys in ["", "RETURN 3 @n1 @t1"]:
+                    for wsk in ["", "WITHSORTKEYS"]:
+                        for limit in ["LIMIT 0 5", "LIMIT 2 3", ""]:
+                            self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY {sort_key} {direction} {return_keys} {limit} {wsk}")
 

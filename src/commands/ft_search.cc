@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -115,23 +116,50 @@ void SerializeNeighbors(ValkeyModuleCtx *ctx,
   }
 }
 
+// Helper function to get the sort key value for a neighbor
+std::string GetSortKeyValue(const indexes::Neighbor &neighbor,
+                            const SearchCommand &command) {
+  if (!command.sortby.has_value() || !neighbor.attribute_contents.has_value()) {
+    return "";
+  }
+
+  auto it = neighbor.attribute_contents->find(command.sortby->field);
+  if (it == neighbor.attribute_contents->end()) {
+    return "";
+  }
+
+  return std::string(vmsdk::ToStringView(it->second.value.get()));
+}
+
 // Handle non-vector queries by processing the neighbors and replying with the
 // attribute contents.
 void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
                                  const query::SearchResult &search_result,
-                                 const query::SearchParameters &parameters) {
+                                 const SearchCommand &command) {
   const auto &neighbors = search_result.neighbors;
-  auto range = search_result.GetSerializationRange(parameters);
+  auto range = search_result.GetSerializationRange(command);
 
-  ValkeyModule_ReplyWithArray(ctx, 2 * range.count() + 1);
-  ReplyAvailNeighbors(ctx, search_result, parameters);
+  // When with_sort_keys is true, we add an extra element per result (the sort
+  // key)
+  size_t elements_per_result = command.with_sort_keys ? 3 : 2;
+  ValkeyModule_ReplyWithArray(ctx, elements_per_result * range.count() + 1);
+  ReplyAvailNeighbors(ctx, search_result, command);
   for (size_t i = range.start_index; i < range.end_index; ++i) {
     // Document ID
     ValkeyModule_ReplyWithString(
         ctx, vmsdk::MakeUniqueValkeyString(*neighbors[i].external_id).get());
+
+    // Sort key value (prefixed with #) when WITHSORTKEYS is specified
+    if (command.with_sort_keys) {
+      std::string sort_key_value = GetSortKeyValue(neighbors[i], command);
+      std::string prefixed_value = "#" + sort_key_value;
+      ValkeyModule_ReplyWithString(
+          ctx, vmsdk::MakeUniqueValkeyString(prefixed_value).get());
+    }
+
     const auto &contents = neighbors[i].attribute_contents.value();
 
-    if (parameters.return_attributes.empty()) {
+    if (command.return_attributes.empty()) {
       ValkeyModule_ReplyWithArray(ctx, 2 * contents.size());
       for (const auto &attribute_content : contents) {
         ValkeyModule_ReplyWithString(ctx,
@@ -141,7 +169,7 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
     } else {
       ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_LEN);
       size_t cnt = 0;
-      for (const auto &return_attribute : parameters.return_attributes) {
+      for (const auto &return_attribute : command.return_attributes) {
         auto it = contents.find(
             vmsdk::ToStringView(return_attribute.identifier.get()));
         if (it != contents.end()) {

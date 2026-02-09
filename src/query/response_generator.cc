@@ -272,6 +272,20 @@ absl::StatusOr<RecordsMap> GetContent(
       identifiers.insert(filter_identifier);
     }
   }
+  // Resolve sortby field to actual identifier. Only add to identifiers set
+  // when return_attributes is specified, because when return_attributes is
+  // empty, all fields are fetched anyway.
+  std::string sortby_identifier;
+  if (sortby_parameter.has_value()) {
+    auto schema_identifier =
+        parameters.index_schema->GetIdentifier(sortby_parameter->field);
+    sortby_identifier =
+        schema_identifier.ok() ? *schema_identifier : sortby_parameter->field;
+    // Only add sortby to identifiers when return_attributes is not empty
+    if (!parameters.return_attributes.empty()) {
+      identifiers.insert(sortby_identifier);
+    }
+  }
   auto key_str = vmsdk::MakeUniqueValkeyString(key);
   auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
       ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
@@ -302,8 +316,10 @@ absl::StatusOr<RecordsMap> GetContent(
             vmsdk::RetainUniqueValkeyString(itr->second.value.get())));
   }
 
-  if (parameters.return_attributes.empty() && sortby_parameter.has_value()) {
-    auto itr = content.find(sortby_parameter->field);
+  // Add sortby field to return_content for sorting, even when return_attributes
+  // is not empty. Use the alias (sortby_parameter->field) as the key.
+  if (sortby_parameter.has_value()) {
+    auto itr = content.find(sortby_identifier);
     if (itr != content.end()) {
       return_content.emplace(
           sortby_parameter->field,

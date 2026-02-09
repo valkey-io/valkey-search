@@ -95,16 +95,50 @@ def parse_value(x, key_type):
         raise
     return result
 
-def unpack_search_result(rs, key_type):
+def result_has_sortkeys(rs):
+    """Detect if a search result actually contains sort keys by checking the format.
+    
+    With sort keys: [count, key1, #sortkey1, [fields1], key2, #sortkey2, [fields2], ...]
+    Without sort keys: [count, key1, [fields1], key2, [fields2], ...]
+    
+    The sort key is a bytes/string that starts with '#' (or '$' in some Redis versions),
+    and fields are always a list.
+    """
+    if len(rs) < 3:
+        return False
+    # Check if element at index 2 (after count and first key) is a sort key (starts with # or $)
+    # or a fields list
+    second_elem = rs[2]
+    if isinstance(second_elem, list):
+        # It's a fields list, so no sort keys
+        return False
+    if isinstance(second_elem, (bytes, str)):
+        # Check if it starts with '#' or '$' (sort key indicator)
+        if isinstance(second_elem, bytes):
+            return second_elem.startswith(b'#') or second_elem.startswith(b'$')
+        return second_elem.startswith('#') or second_elem.startswith('$')
+    return False
+
+def unpack_search_result(rs, key_type, has_sortkeys=False):
     rows = []
-    for (key, value) in [(rs[i],rs[i+1]) for i in range(1, len(rs), 2)]:
-        #try:
-        row = {"__key": key}
-        for i in range(0, len(value), 2):
-            row[parse_field(value[i], key_type)] = parse_value(value[i+1], key_type)
-        rows += [row]
-        #except:
-        #    print("Parse failure: ", key, value)
+    if has_sortkeys:
+        # Format: [count, key1, sortkey1, [fields1], key2, sortkey2, [fields2], ...]
+        # Step by 3 elements at a time
+        for i in range(1, len(rs), 3):
+            key = rs[i]
+            # sortkey = rs[i+1]  # We skip the sort key for comparison purposes
+            value = rs[i+2]
+            row = {"__key": key}
+            for j in range(0, len(value), 2):
+                row[parse_field(value[j], key_type)] = parse_value(value[j+1], key_type)
+            rows += [row]
+    else:
+        # Format: [count, key1, [fields1], key2, [fields2], ...]
+        for (key, value) in [(rs[i],rs[i+1]) for i in range(1, len(rs), 2)]:
+            row = {"__key": key}
+            for i in range(0, len(value), 2):
+                row[parse_field(value[i], key_type)] = parse_value(value[i+1], key_type)
+            rows += [row]
     return rows
 
 def unpack_agg_result(rs, key_type):
@@ -123,7 +157,12 @@ def unpack_agg_result(rs, key_type):
 
 def unpack_result(cmd, key_type, rs, sortkeys):
     if "ft.search" in cmd[0].lower():
-        out = unpack_search_result(rs, key_type)
+        # Detect if the result actually has sort keys by checking the format,
+        # not just whether WITHSORTKEYS is in the command. This handles cases
+        # where the expected result (from pickle) may not have sort keys even
+        # if the command requested them.
+        has_sortkeys = result_has_sortkeys(rs)
+        out = unpack_search_result(rs, key_type, has_sortkeys)
     else:
         out = unpack_agg_result(rs, key_type)
     #

@@ -27,11 +27,15 @@ FT.SEARCH <index> <query>
 - `SLOP <slop>` (Optional): Specifies a slop value for proximity matching of terms.
 - `SORTBY <field> [ASC | DESC]` (Optional): If present, results are sorted according the value of the specified field and the optional sort-direction instruction. By default, vector results are sorted in distance order and non-vector results are not sorted in any particular order. Sorting is applied before the `LIMIT` clause is applied.
 - `ALLSHARDS` (Optional): If specified, the command is terminated with a timeout error if a valid response from all shards is not received within the timeout interval. This is the default.
-- `SOMESHARDS` (Optional): If specified, the command will generate a best-effort reply if all shards have not responded within the timeout interval. 
-- `CONSISTENT` (Optional): If specified, the command is terminated with an error if the cluster is in an inconsistent state. This is the default. 
+- `SOMESHARDS` (Optional): If specified, the command will generate a best-effort reply if all shards have not responded within the timeout interval.
+- `CONSISTENT` (Optional): If specified, the command is terminated with an error if the cluster is in an inconsistent state. This is the default.
 - `INCONSISTENT` (Optional): If specified, the command will generate a best-effort reply if the cluster remains inconsistent within the timeout interval.
 
 Response
+
+## Hash Index Responses
+
+When the index is declared on HASH keys.
 
 On success, the first entry in the response array represents the count of matching keys, followed by one array entry for
 each matching key. Note that if the `LIMIT` option is specified it will only control the number of returned keys and will
@@ -42,7 +46,17 @@ Otherwise, each entry includes the keyname, followed by an array of the returned
 
 The array of returned fields for a key is a set of name/value pairs. The set of name/value pairs for a key is controlled by the `RETURN` clause. For a vector query an additional name/value pair is returned to provide the vector distance that was computed for this key. See [Search - query language](../topics/search.query.md) for details on how to control that name.
 
-## Complete example: Simple vector search query
+## JSON Index Responses
+
+???? TBD ?????
+
+# Examples
+
+## Query On Hash Index
+
+?? Simple query with maybe a tag or numeric. Just enough to the functionality ??
+
+## Pure vector search query
 
 For this example, assume we're building a property searching index where customers can search properties based on some features.
 Assume we have a list of properties with the following attributes:
@@ -104,3 +118,14 @@ Returned result:
     4) \x00\x00\x80?\x00\x00\x00\x00\x00\x00\x00\x00
 ```
 
+## Query On JSON Index
+
+Simple query showing the JSON output
+
+## Simple Query with RETURN Clause
+
+Simple query showing selecting return of additional fields
+
+## Query showing NOCONTENT
+
+## Query showing SORTBY

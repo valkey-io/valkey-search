@@ -200,6 +200,7 @@ message AttributeInfo {
   string identifier = 1;
   string alias = 2;
   uint64 user_indexed_memory = 3;
+  uint64 num_records = 4;
 }
 
 message InfoIndexPartitionResponse {

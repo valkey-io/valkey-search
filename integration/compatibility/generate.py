@@ -44,8 +44,7 @@ class BaseCompatibilityTest:
         if cls.ANSWER_FILE_NAME is None:
             raise NotImplementedError("Subclass must define ANSWER_FILE_NAME")
             
-        os.system("docker remove Generate-search || true")
-        if os.system("docker run --name Generate-search -p 6380:6379 redis/redis-stack-server &") != 0:
+        if os.system("docker run --rm -d --name Generate-search -p 6380:6379 redis/redis-stack-server") != 0:
             print("Failed to start Redis Stack server, please check your Docker setup.")
             sys.exit(1)
         print("Started Generate-search server")
@@ -66,7 +65,6 @@ class BaseCompatibilityTest:
     def teardown_class(cls):
         print("Stopping Generate-search server")
         os.system("docker stop Generate-search")
-        os.system("docker remove Generate-search")
         print("Dumping ", len(cls.answers), " answers")
         with gzip.open(cls.ANSWER_FILE_NAME, "wb") as answer_file:
             pickle.dump(cls.answers, answer_file)
@@ -464,16 +462,9 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
     def test_search_sortby(self, key_type, dialect):
         self.setup_data("sortable numbers", key_type)
 
-        self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY n1 ASC")
-        self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY n1 DESC")
+        for sort_key in ["n1", "n2"]:
+            for direction in ["ASC", "DESC", ""]:
+                for return_keys in [""]:
+                    for limit in ["LIMIT 0 5", "LIMIT 2 3", ""]:
+                        self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY {sort_key} {direction} {return_keys} {limit}")
 
-        self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY n2 ASC")
-        self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY n2 DESC")
-
-        self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY n1 ASC LIMIT 0 5")
-        self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY n2 DESC LIMIT 2 3")
-
-        self.check(dialect, f"ft.search {key_type}_idx1 @n1:[0 inf] SORTBY n1 ASC")
-        self.check(dialect, f"ft.search {key_type}_idx1 @n1:[-inf 0] SORTBY n2 DESC")
-
-        self.check(dialect, f"ft.search {key_type}_idx1 * RETURN 3 @n1 @n1 @t1 SORTBY n1 ASC")

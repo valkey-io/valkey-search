@@ -9,6 +9,7 @@
 
 #include "fanout.h"
 #include "ft_create_parser.h"
+#include "ft_search_parser.h"
 #include "src/acl.h"
 #include "src/commands/ft_search.h"
 #include "src/query/fanout.h"
@@ -160,11 +161,17 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
             parameters->index_schema->GetVersion());
       }
 
+      // Extract sortby parameter if this is a SearchCommand
+      std::optional<query::SortByParameter> sortby_param = std::nullopt;
+      if (auto *search_cmd = dynamic_cast<SearchCommand *>(parameters.get())) {
+        sortby_param = search_cmd->sortby;
+      }
+
       return query::fanout::PerformSearchFanoutAsync(
           ctx, search_targets,
           ValkeySearch::Instance().GetCoordinatorClientPool(),
           std::move(parameters), ValkeySearch::Instance().GetReaderThreadPool(),
-          std::move(on_done_callback));
+          std::move(on_done_callback), sortby_param);
     }
     return query::SearchAsync(
         std::move(parameters), ValkeySearch::Instance().GetReaderThreadPool(),

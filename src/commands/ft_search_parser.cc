@@ -290,34 +290,6 @@ absl::Status SearchCommand::PostParseQueryString() {
   if (sortby.has_value()) {
     // Validate sortby field exists in the index schema
     VMSDK_RETURN_IF_ERROR(index_schema->GetIdentifier(sortby->field).status());
-    // Ensure sortby field is in return_attributes if sorting is enabled
-    if (!no_content) {
-      bool found = false;
-      for (const auto &attr : return_attributes) {
-        if (vmsdk::ToStringView(attr.identifier.get()) == sortby->field ||
-            (attr.attribute_alias &&
-             vmsdk::ToStringView(attr.attribute_alias.get()) ==
-                 sortby->field)) {
-          found = true;
-          break;
-        }
-      }
-      if (!found) {
-        auto identifier = vmsdk::MakeUniqueValkeyString(sortby->field);
-        auto schema_identifier = index_schema->GetIdentifier(sortby->field);
-        vmsdk::UniqueValkeyString attribute_alias;
-        if (schema_identifier.ok()) {
-          attribute_alias = vmsdk::RetainUniqueValkeyString(identifier.get());
-          identifier = vmsdk::MakeUniqueValkeyString(*schema_identifier);
-        }
-        auto alias = vmsdk::MakeUniqueValkeyString(
-            vmsdk::ToStringView(attribute_alias.get()));
-        return_attributes.emplace_back(query::ReturnAttribute{
-            .identifier = std::move(identifier),
-            .attribute_alias = std::move(attribute_alias),
-            .alias = std::move(alias)});
-      }
-    }
   }
 
   return absl::OkStatus();

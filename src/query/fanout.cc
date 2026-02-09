@@ -24,6 +24,7 @@
 #include "absl/random/random.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
 #include "absl/synchronization/mutex.h"
 #include "grpcpp/support/status.h"
@@ -49,12 +50,55 @@ namespace valkey_search::query::fanout {
 
 CONTROLLED_BOOLEAN(ForceInvalidSlotFingerprint, false);
 
+// Helper function to extract sortby field value from neighbor's attribute
+// contents
+std::optional<double> GetSortByValue(const indexes::Neighbor &neighbor,
+                                     const std::string &sortby_field) {
+  if (!neighbor.attribute_contents.has_value()) {
+    return std::nullopt;
+  }
+  auto it = neighbor.attribute_contents->find(sortby_field);
+  if (it == neighbor.attribute_contents->end()) {
+    return std::nullopt;
+  }
+  // Parse the value as a double
+  auto value_str = vmsdk::ToStringView(it->second.value.get());
+  auto value = vmsdk::To<double>(value_str);
+  if (value.ok()) {
+    return value.value();
+  }
+  return std::nullopt;
+}
+
 struct NeighborComparator {
-  bool operator()(indexes::Neighbor &a, indexes::Neighbor &b) const {
-    // Primary sort: by distance
-    // We use a max heap, to pop off the furthest vector during aggregation.
-    if (a.distance != b.distance) {
-      return a.distance < b.distance;
+  std::optional<query::SortByParameter> sortby;
+
+  NeighborComparator() = default;
+  NeighborComparator(std::optional<query::SortByParameter> sortby)
+      : sortby(std::move(sortby)) {}
+
+  bool operator()(const indexes::Neighbor &a,
+                  const indexes::Neighbor &b) const {
+    if (sortby.has_value()) {
+      auto a_val = GetSortByValue(a, sortby->field);
+      auto b_val = GetSortByValue(b, sortby->field);
+
+      if (a_val.has_value() && b_val.has_value()) {
+        if (*a_val != *b_val) {
+          if (sortby->order == query::SortOrder::kAscending) {
+            return *a_val < *b_val;
+          } else {
+            return *a_val > *b_val;
+          }
+        }
+      }
+      // Fall through to key comparison if values are equal or missing
+    } else {
+      // Primary sort: by distance
+      // We use a max heap, to pop off the furthest vector during aggregation.
+      if (a.distance != b.distance) {
+        return a.distance < b.distance;
+      }
     }
     // Secondary sort: by key for consistent ordering when distances are equal.
     // Primarily used in non vector queries without scores (distance = 0).
@@ -69,22 +113,28 @@ struct NeighborComparator {
 // the top k results to the callback.
 struct SearchPartitionResultsTracker {
   absl::Mutex mutex;
+  NeighborComparator comparator;
   std::priority_queue<indexes::Neighbor, std::vector<indexes::Neighbor>,
                       NeighborComparator>
       results ABSL_GUARDED_BY(mutex);
   int outstanding_requests ABSL_GUARDED_BY(mutex);
   query::SearchResponseCallback callback;
   std::unique_ptr<SearchParameters> parameters ABSL_GUARDED_BY(mutex);
+  std::optional<query::SortByParameter> sortby_parameter ABSL_GUARDED_BY(mutex);
   std::atomic_bool reached_oom{false};
   std::atomic_bool consistency_failed{false};
   std::atomic<size_t> accumulated_total_count{0};
 
-  SearchPartitionResultsTracker(int outstanding_requests, int k,
-                                query::SearchResponseCallback callback,
-                                std::unique_ptr<SearchParameters> parameters)
-      : outstanding_requests(outstanding_requests),
+  SearchPartitionResultsTracker(
+      int outstanding_requests, int k, query::SearchResponseCallback callback,
+      std::unique_ptr<SearchParameters> parameters,
+      std::optional<query::SortByParameter> sortby_param = std::nullopt)
+      : comparator(sortby_param),
+        results(comparator),
+        outstanding_requests(outstanding_requests),
         callback(std::move(callback)),
-        parameters(std::move(parameters)) {}
+        parameters(std::move(parameters)),
+        sortby_parameter(std::move(sortby_param)) {}
 
   void HandleResponse(coordinator::SearchIndexPartitionResponse &response,
                       const std::string &address, const grpc::Status &status) {
@@ -226,14 +276,29 @@ absl::Status PerformSearchFanoutAsync(
     std::vector<vmsdk::cluster_map::NodeInfo> &search_targets,
     coordinator::ClientPool *coordinator_client_pool,
     std::unique_ptr<SearchParameters> parameters,
-    vmsdk::ThreadPool *thread_pool, query::SearchResponseCallback callback) {
-  auto request = coordinator::ParametersToGRPCSearchRequest(*parameters);
+    vmsdk::ThreadPool *thread_pool, query::SearchResponseCallback callback,
+    std::optional<query::SortByParameter> sortby_parameter) {
+  auto request =
+      coordinator::ParametersToGRPCSearchRequest(*parameters, sortby_parameter);
   if (parameters->IsNonVectorQuery()) {
     // For non vector, use the LIMIT based range. Ensure we fetch enough
     // results to cover offset + number.
     request->mutable_limit()->set_first_index(0);
-    request->mutable_limit()->set_number(parameters->limit.first_index +
-                                         parameters->limit.number);
+    // For SORTBY queries, we need to fetch more results from each shard
+    // because the global top N might come from any shard. Multiply by the
+    // number of shards to ensure we get enough results.
+    uint64_t limit_number =
+        parameters->limit.first_index + parameters->limit.number;
+    if (sortby_parameter.has_value()) {
+      // Fetch enough results from each shard to cover the global top N
+      // In the worst case, all top N results could come from a single shard,
+      // so we need to fetch at least N from each shard.
+      limit_number = std::max(
+          limit_number,
+          static_cast<uint64_t>(search_targets.size()) *
+              (parameters->limit.first_index + parameters->limit.number));
+    }
+    request->mutable_limit()->set_number(limit_number);
   } else {
     // Vector searches: Use k as the limit to find top k results. In worst case,
     // all top k results are from a single shard, so no need to fetch more than
@@ -243,7 +308,7 @@ absl::Status PerformSearchFanoutAsync(
   }
   auto tracker = std::make_shared<SearchPartitionResultsTracker>(
       search_targets.size(), parameters->k, std::move(callback),
-      std::move(parameters));
+      std::move(parameters), sortby_parameter);
   bool has_local_target = false;
   for (auto &node : search_targets) {
     auto detached_ctx = vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx);

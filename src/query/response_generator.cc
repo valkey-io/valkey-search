@@ -181,13 +181,23 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
     const query::SearchParameters &parameters,
     const indexes::Neighbor &neighbor,
-    const std::optional<std::string> &vector_identifier) {
+    const std::optional<std::string> &vector_identifier,
+    const std::optional<query::SortByParameter> &sortby_parameter) {
   auto key = neighbor.external_id->Str();
   absl::flat_hash_set<absl::string_view> identifiers;
   identifiers.insert(kJsonRootElementQuery);
   for (const auto &filter_identifier :
        parameters.filter_parse_results.filter_identifiers) {
     identifiers.insert(filter_identifier);
+  }
+  // Resolve sortby field to actual identifier (e.g., "n1" -> "$.n1" for JSON)
+  std::string sortby_identifier;
+  if (sortby_parameter.has_value()) {
+    auto schema_identifier =
+        parameters.index_schema->GetIdentifier(sortby_parameter->field);
+    sortby_identifier =
+        schema_identifier.ok() ? *schema_identifier : sortby_parameter->field;
+    identifiers.insert(sortby_identifier);
   }
   auto key_str = vmsdk::MakeUniqueValkeyString(key);
   auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
@@ -196,6 +206,20 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
                                            ctx, vector_identifier,
                                            key_obj.get(), key, identifiers));
   if (parameters.filter_parse_results.filter_identifiers.empty()) {
+    // When returning early, we need to rename the sortby field from the
+    // resolved identifier (e.g., "$.n1") back to the alias (e.g., "n1")
+    if (sortby_parameter.has_value() &&
+        sortby_identifier != sortby_parameter->field) {
+      auto itr = content.find(sortby_identifier);
+      if (itr != content.end()) {
+        auto value = std::move(itr->second);
+        content.erase(itr);
+        content.emplace(sortby_parameter->field,
+                        RecordsMapValue(vmsdk::MakeUniqueValkeyString(
+                                            sortby_parameter->field),
+                                        std::move(value.value)));
+      }
+    }
     return content;
   }
   if (!VerifyFilter(parameters, content, neighbor)) {
@@ -209,6 +233,18 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
       RecordsMapValue(
           kJsonRootElementQueryPtr.get(),
           std::move(content.find(kJsonRootElementQuery)->second.value)));
+
+  if (sortby_parameter.has_value()) {
+    auto itr = content.find(sortby_identifier);
+    if (itr != content.end()) {
+      // Use the alias (sortby_parameter->field) as the key in the response,
+      // not the resolved identifier
+      return_content.emplace(sortby_parameter->field,
+                             RecordsMapValue(vmsdk::MakeUniqueValkeyString(
+                                                 sortby_parameter->field),
+                                             std::move(itr->second.value)));
+    }
+  }
   return return_content;
 }
 
@@ -223,7 +259,8 @@ absl::StatusOr<RecordsMap> GetContent(
           data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON &&
       parameters.return_attributes.empty()) {
     return GetContentNoReturnJson(ctx, attribute_data_type, parameters,
-                                  neighbor, vector_identifier);
+                                  neighbor, vector_identifier,
+                                  sortby_parameter);
   }
   absl::flat_hash_set<absl::string_view> identifiers;
   for (const auto &return_attribute : parameters.return_attributes) {

@@ -164,10 +164,6 @@ void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
   }
 
   auto sortby = parameters.sortby.value();
-  // Resolve sortby field to actual identifier (handle aliases)
-  auto schema_identifier = parameters.index_schema->GetIdentifier(sortby.field);
-  std::string sortby_identifier =
-      schema_identifier.ok() ? *schema_identifier : sortby.field;
 
   // Check if field is a declared numeric attribute
   auto index_result = parameters.index_schema->GetIndex(sortby.field);
@@ -181,8 +177,8 @@ void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
       return false;
     }
 
-    auto it_a = a.attribute_contents->find(sortby_identifier);
-    auto it_b = b.attribute_contents->find(sortby_identifier);
+    auto it_a = a.attribute_contents->find(sortby.field);
+    auto it_b = b.attribute_contents->find(sortby.field);
 
     if (it_a == a.attribute_contents->end()) {
       return false;

@@ -394,7 +394,9 @@ INSTANTIATE_TEST_SUITE_P(
                             alias: "test_attribute_1"
                             identifier: "test_identifier_1"
                             index: {
-                              text_index: {}
+                              text_index: { 
+                                weight: 1.0 
+                              }
                             }
                           }
                         )",
@@ -403,11 +405,12 @@ INSTANTIATE_TEST_SUITE_P(
                          "*46\r\n+index_name\r\n+test_name\r\n+index_"
                          "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
                          "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
-                         "1\r\n1\r\n+attributes\r\n*1\r\n*12\r\n+"
+                         "1\r\n1\r\n+attributes\r\n*1\r\n*14\r\n+"
                          "identifier\r\n+test_identifier_1\r\n+attribute\r\n+"
                          "test_attribute_1\r\n+user_indexed_memory\r\n:0\r\n+"
                          "type\r\n+TEXT\r\n+WITH_SUFFIX_TRIE\r\n+0\r\n+NO_"
-                         "STEM\r\n+0\r\n+num_docs\r\n:0\r\n+num_records\r\n:"
+                         "STEM\r\n+0\r\n+WEIGHT\r\n+1\r\n+num_docs\r\n:0\r\n+"
+                         "num_records\r\n:"
                          "0\r\n+num_total_terms\r\n:0\r\n+num_unique_terms\r\n:"
                          "0\r\n+total_postings\r\n:0\r\n+posting_sz_bytes\r\n:"
                          "0\r\n+position_sz_bytes\r\n:0\r\n+radix_sz_bytes\r\n:"
@@ -446,6 +449,7 @@ INSTANTIATE_TEST_SUITE_P(
                               text_index: {
                                 with_suffix_trie: true
                                 no_stem: true
+                                weight: 1.0
                               }
                             }
                           }
@@ -455,11 +459,12 @@ INSTANTIATE_TEST_SUITE_P(
                          "*46\r\n+index_name\r\n+test_name\r\n+index_"
                          "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
                          "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
-                         "1\r\n1\r\n+attributes\r\n*1\r\n*12\r\n+"
+                         "1\r\n1\r\n+attributes\r\n*1\r\n*14\r\n+"
                          "identifier\r\n+test_identifier_1\r\n+attribute\r\n+"
                          "test_attribute_1\r\n+user_indexed_memory\r\n:0\r\n+"
                          "type\r\n+TEXT\r\n+WITH_SUFFIX_TRIE\r\n+1\r\n+NO_"
-                         "STEM\r\n+1\r\n+num_docs\r\n:0\r\n+num_records\r\n:"
+                         "STEM\r\n+1\r\n+WEIGHT\r\n+1\r\n+num_docs\r\n:0\r\n+"
+                         "num_records\r\n:"
                          "0\r\n+num_total_terms\r\n:0\r\n+num_unique_terms\r\n:"
                          "0\r\n+total_postings\r\n:0\r\n+posting_sz_bytes\r\n:"
                          "0\r\n+position_sz_bytes\r\n:0\r\n+radix_sz_bytes\r\n:"

@@ -250,6 +250,44 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert client.execute_command("FT.SEARCH", "idx_no_bs", r'test4\\\word4')[0] == 1
         assert client.execute_command("FT.SEARCH", "idx_no_bs", r'@content:test5\\\\word5')[0] == 1
 
+    def test_aggregate_with_text_search(self):
+        """Test FT.AGGREGATE with text search query."""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command(
+            "FT.CREATE", "books", "ON", "HASH", "PREFIX", "1", "book:",
+            "SCHEMA", "title", "TEXT", "author", "TEXT", "year", "NUMERIC"
+        )
+        client.execute_command("HSET", "book:1", "title", "The Great Gatsby", "author", "F. Scott Fitzgerald", "year", "1925")
+        client.execute_command("HSET", "book:2", "title", "The Catcher in the Rye", "author", "J.D. Salinger", "year", "1951")
+        client.execute_command("HSET", "book:3", "title", "The Grapes of Wrath", "author", "John Steinbeck", "year", "1939")
+        client.execute_command("HSET", "book:4", "title", "Great Expectations", "author", "Charles Dickens", "year", "1861")
+        client.execute_command("HSET", "book:5", "title", "The Great Adventure", "author", "Unknown Author", "year", "2020")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "books")
+        # Prefix: gre* matches great (books 1,4,5)
+        result = client.execute_command("FT.AGGREGATE", "books", "gre*", "LOAD", "1", "title")
+        assert result[0] == 3
+        assert {result[i][1] for i in range(1, 4)} == {b"The Great Gatsby", b"Great Expectations", b"The Great Adventure"}
+        # Fuzzy: %greet% matches great (ED=1)
+        result = client.execute_command("FT.AGGREGATE", "books", "%greet%", "LOAD", "1", "title")
+        assert result[0] == 3
+        assert {result[i][1] for i in range(1, 4)} == {b"The Great Gatsby", b"Great Expectations", b"The Great Adventure"}
+        # Exact phrase
+        result = client.execute_command("FT.AGGREGATE", "books", '"great gatsby"', "LOAD", "1", "title")
+        assert result[0] == 1
+        assert set(result[1]) == {b"title", b"The Great Gatsby"}
+        # Prefix with GROUPBY and SORTBY
+        result = client.execute_command(
+            "FT.AGGREGATE", "books", "gre*",
+            "LOAD", "1", "year",
+            "GROUPBY", "1", "@year",
+            "REDUCE", "COUNT", "0", "AS", "count",
+            "SORTBY", "2", "@year", "ASC"
+        )
+        assert result[0] == 3
+        assert set(result[1]) == {b"year", b"1861", b"count", b"1"}
+        assert set(result[2]) == {b"year", b"1925", b"count", b"1"}
+        assert set(result[3]) == {b"year", b"2020", b"count", b"1"}
+
     def test_text_search(self):
         """
         Test FT.SEARCH command with a text index.
@@ -663,12 +701,68 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert result[0] == 1, f"Expected 1 result for 'happi', got {result[0]}"
         assert set(result[1::2]) == {b"product:3"}, f"Expected {{product:3}}, got {set(result[1::2])}"
         
-        # Searching for "happy" should match both product:4 and product:5 (exact match)
+        # Searching for "happy" matches product:3 (happiness stems to happi), product:4 and product:5 (exact match)
         result = client.execute_command("FT.SEARCH", "testindex2", "happy", "DIALECT", "2")
-        assert result[0] == 2, f"Expected 2 results for 'happy', got {result[0]}"
-        assert set(result[1::2]) == {b"product:4", b"product:5"}, f"Expected {{product:4, product:5}}, got {set(result[1::2])}"
+        assert result[0] == 3, f"Expected 3 results for 'happy', got {result[0]}"
+        assert set(result[1::2]) == {b"product:3", b"product:4", b"product:5"}, f"Expected {{product:3, product:4, product:5}}, got {set(result[1::2])}"
         
-        # Test 13: NOSTEM fields with stem expansion from other fields
+        # Test 13: Stem variants with words under min stem size (3 letters)
+        # Words like "cry", "cri", "cries" test stem behavior for short words
+        client.execute_command("FT.CREATE", "testindex3", "ON", "HASH", "PREFIX", "1", "product:", "SCHEMA", "title", "TEXT")
+        
+        client.execute_command("HSET", "product:3", "title", "cri")
+        client.execute_command("HSET", "product:4", "title", "cry")
+        
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "testindex3")
+        
+        # "cri" should only match exact "cri" (3 letters, at min stem threshold)
+        result = client.execute_command("FT.SEARCH", "testindex3", "cri", "DIALECT", "2")
+        assert result[0] == 1, f"Expected 1 result for 'cri', got {result[0]}"
+        assert set(result[1::2]) == {b"product:3"}
+        
+        # "cry" should match both "cry" and "cri" (they stem to same root)
+        result = client.execute_command("FT.SEARCH", "testindex3", "cry", "DIALECT", "2")
+        assert result[0] == 2, f"Expected 2 results for 'cry', got {result[0]}"
+        assert set(result[1::2]) == {b"product:3", b"product:4"}
+        
+        # Now add "cries"
+        client.execute_command("HSET", "product:5", "title", "cries")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "testindex3")
+        
+        # "cries" should match "cries" and "cri" (they share stem)
+        result = client.execute_command("FT.SEARCH", "testindex3", "cries", "DIALECT", "2")
+        assert result[0] == 2, f"Expected 2 results for 'cries', got {result[0]}"
+        assert set(result[1::2]) == {b"product:3", b"product:5"}
+        
+        # "cry" should now match all three: "cry", "cri", and "cries"
+        result = client.execute_command("FT.SEARCH", "testindex3", "cry", "DIALECT", "2")
+        assert result[0] == 3, f"Expected 3 results for 'cry', got {result[0]}"
+        assert set(result[1::2]) == {b"product:3", b"product:4", b"product:5"}
+        
+        # "cri" should match "cri" and "cries" (updated from single match)
+        result = client.execute_command("FT.SEARCH", "testindex3", "cri", "DIALECT", "2")
+        assert result[0] == 2, f"Expected 2 results for 'cri' after adding cries, got {result[0]}"
+        assert set(result[1::2]) == {b"product:3", b"product:5"}
+        
+        # Test 14: Two-letter words below min stem size
+        client.execute_command("FT.CREATE", "testindex4", "ON", "HASH", "PREFIX", "1", "product:", "SCHEMA", "title", "TEXT")
+        
+        client.execute_command("HSET", "product:3", "title", "ai")
+        client.execute_command("HSET", "product:4", "title", "ais")
+        
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "testindex4")
+        
+        # "ai" (2 letters, below min stem size of 3) should only match exact "ai"
+        result = client.execute_command("FT.SEARCH", "testindex4", "ai", "DIALECT", "2")
+        assert result[0] == 1, f"Expected 1 result for 'ai', got {result[0]}"
+        assert set(result[1::2]) == {b"product:3"}
+        
+        # "ais" (3 letters, at min stem size) should match both "ais" and "ai"
+        result = client.execute_command("FT.SEARCH", "testindex4", "ais", "DIALECT", "2")
+        assert result[0] == 2, f"Expected 2 results for 'ais', got {result[0]}"
+        assert set(result[1::2]) == {b"product:3", b"product:4"}
+        
+        # Test 15: NOSTEM fields with stem expansion from other fields
         client.execute_command("FT.CREATE", "testindex_nostem", "ON", "HASH", "PREFIX", "1", "product:", "SCHEMA", "title", "TEXT", "NOSTEM", "desc", "TEXT", "NOSTEM")
         
         client.execute_command("HSET", "product:3", "title", "abc", "desc", "happiness")
@@ -2246,4 +2340,3 @@ class TestFullTextCluster(ValkeySearchClusterTestCaseDebugMode):
                     f"Shard {i}: Both metrics must increment together by 1, got text={text_delta}, nonvector={nonvector_delta}"
                 shards_incremented += 1
         assert shards_incremented == 1, f"Expected exactly 1 shard to increment, got {shards_incremented}"
-        

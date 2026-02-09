@@ -146,14 +146,10 @@ struct SearchPartitionResultsTracker {
       bool should_cancel = status.error_code() == grpc::RESOURCE_EXHAUSTED ||
                            !parameters->enable_partial_results ||
                            consistency_failed.load();
-      if (status.error_code() == grpc::RESOURCE_EXHAUSTED) {
-        reached_oom.store(true);
-      }
       if (should_cancel) {
         parameters->cancellation_token->Cancel();
       }
       if (status.error_code() != grpc::DEADLINE_EXCEEDED ||
-          status.error_code() != grpc::RESOURCE_EXHAUSTED ||
           status.error_code() != grpc::FAILED_PRECONDITION) {
         VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
             << "Error during handling of FT.SEARCH on node " << address << ": "
@@ -217,8 +213,6 @@ struct SearchPartitionResultsTracker {
     absl::StatusOr<SearchResult> result;
     if (consistency_failed) {
       result = absl::FailedPreconditionError(kFailedPreconditionMsg);
-    } else if (reached_oom) {
-      result = absl::ResourceExhaustedError(kOOMMsg);
     } else {
       std::vector<indexes::Neighbor> neighbors;
       neighbors.resize(results.size());
@@ -357,9 +351,6 @@ absl::Status PerformSearchFanoutAsync(
             tracker->AddResults(result->neighbors);
             tracker->AddTotalCount(result->total_count);
           } else {
-            if (absl::IsResourceExhausted(result.status())) {
-              tracker->reached_oom.store(true);
-            }
             VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
                 << "Error during local handling of FT.SEARCH: "
                 << result.status().message();

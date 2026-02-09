@@ -1,6 +1,6 @@
 The `FILTER`, `APPLY`, `SORTBY` and `GROUPBY` stages of `FT.AGGREGATE` use expressions to compute values.
 
-The expression engine operates on scalar values. Values in the expression language are dynamically typed and can be either Nil (missing/invalid), Numeric (64-bit floating point) or String (a sequence of bytes).
+The expression engine operates on scalar input values, generating scalar output values. Values in the expression language are dynamically typed and can be either Nil (missing/invalid), Numeric (64-bit floating point) or String (a sequence of bytes).
 
 The syntax of expressions generally follows the "C" language syntax and operator precedence rules with some specialized syntax for accessing fields of records and parameters from the `FT.AGGREGATE` command.
 
@@ -58,11 +58,13 @@ Numeric constants are the usual syntax of decimal integer and floating point exp
 
 String constants are enclosed with single (`'`) or double quotes(`"`). A backslash (`\`) followed by a quote can be used to insert a quote character.
 
-A parameter reference selects a string value provided by the `PARAMS` clause of the executing `FT.AGGREGATE` command.
+A parameter-ref selects a string value provided by the `PARAMS` clause of the executing `FT.AGGREGATE` command.
 
-A field-reference is used to access values from the record currently being processed. If the field doesn't exist then the reference returns a Nil value.
+A field-ref is used to access values from the record currently being processed. If the field doesn't exist then the reference returns a Nil value.
 
 # Operators
+
+## Arithmetic Operators
 
 The following numeric operators are available. String values are converted to numeric, but become a Nil if the conversion fails. If either input to a numeric operator is Nil, then the output is Nil.
 
@@ -74,6 +76,8 @@ The following numeric operators are available. String values are converted to nu
 |   /    | Division       |
 |   %    | Modulo         |
 |   ^    | Exponentiation |
+
+## Relational Operators
 
 The following relational operators are available. Relational operators perform conversions according to the following prioritized rules:
 
@@ -93,7 +97,9 @@ The following relational operators are available. Relational operators perform c
 |   >    | Greater than             |
 |   >=   | Greater than or equal to |
 
-The logical operators `&&`, `||` and `!` generate a numeric 1 or 0 output by treating incoming numeric zeros as false and any other value as true.
+## Logical Operators
+
+The logical operators `&&`, `||` and `!` generate a numeric 0 if the input can be converted to a numeric 0, otherwise they generate a numeric 1.
 
 # Functions
 
@@ -101,33 +107,33 @@ The logical operators `&&`, `||` and `!` generate a numeric 1 or 0 output by tre
 
 Supported numeric functions are listed. Numeric functions always convert their inputs to a number. If the conversion fails then a Nil is returned.
 
-|    Syntax     | Operation                                |
-| :-----------: | :--------------------------------------- |
-|  log(number)  | natural log                              |
-|  abs(number)  | absolute value                           |
-| ceil(number)  | Round to smallest not less than number   |
-| floor(number) | Round to largest not greater than number |
-| log2(number)  | $log_2(number)$                          |
-|  exp(number)  | $e^{number}$                             |
-| sqrt(number)  | $\sqrt{number}$                          |
+|      Syntax       | Operation                                    |
+| :---------------: | :------------------------------------------- |
+|  log(expression)  | $log_e(expression)$                          |
+|  abs(expression)  | \| expression \|                             |
+| ceil(expression)  | Round to smallest not less than expression   |
+| floor(expression) | Round to largest not greater than expression |
+| log2(expression)  | $log_2(expression)$                          |
+|  exp(expression)  | $e^{expression}$                             |
+| sqrt(expression)  | $\sqrt{expression}$                          |
 
 ## String Processing Functions
 
-String processing functions.
+String processing functions. Inputs are converted to strings as appropriate.
 
 |          Syntax           | Operation                                                                                                              |
 | :-----------------------: | ---------------------------------------------------------------------------------------------------------------------- |
-|         upper(s)          | Convert to upper case                                                                                                  |
-|         lower(s)          | Convert to lower case                                                                                                  |
+|         upper(s)          | Convert to upper case (ASCII Only)                                                                                     |
+|         lower(s)          | Convert to lower case (ASCII Only)                                                                                     |
 |    startswith(s1, s2)     | 1 if s2 matches the start of s1 otherwise 0                                                                            |
 |     contains(s1, s2)      | The number of occurrences of s2 in s1                                                                                  |
 |         strlen(s)         | Number of bytes in the string                                                                                          |
 | substr(s, offset, length) | The string extracted from s starting at offset for length characters. A length of -1 means the remainder of the string |
-|    concat(s1, s2, ...)    | Concatentate up to 50 string expressions into a single string                                                          |
+|    concat(s1, s2, ...)    | Concatenate up to 50 string expressions into a single string                                                           |
 
 ## Timestamp Processing Functions
 
-Time functions extract various time fields from a numeric UTC Unix timestamp using the "gmtime" C library function.
+Time functions extract various time fields from a numeric UTC Unix timestamp using the `gmtime` C library function.
 
 Supported time functions include:
 

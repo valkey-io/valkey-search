@@ -7,7 +7,6 @@ the field if desired
 
 For indexes on `JSON` keys, the path is a `JSON` path to the data of the declared type. The `AS` clause is required in order to provide a field name without the special characters of a `JSON` path.
 
-
 ```
 FT.CREATE <index-name>
     [ON HASH | ON JSON]
@@ -31,7 +30,6 @@ FT.CREATE <index-name>
         )+
 ```
 
-
 - `<index-name>` (required): This is the name you give to your index. If an index with the same name exists already, an error is returned. Special naming rules apply to single-slot indexes, see [Search - Index Distribution](../topics/search.index.distribution.md) for more details.
 
 - `ON HASH | ON JSON` (optional): Only keys that match the specified type are included into this index. If omitted, HASH is assumed.
@@ -44,29 +42,34 @@ FT.CREATE <index-name>
 
 - `WITHOFFSETS | NOOFFSETS` (optional): Enables/Disables the retention of per-word offsets within a text field. Offsets are required to perform exact phrase matching and slop-based proximity matching. Thus if offsets are disabled, those query operations will be rejected with an error. The default is `WITHOFFSETS`.
 
-- `NOSTOPWORDS | STOPWORDS <count> <word1> <word2>...** (optional): Stop words are not words which are not put into the indexes. The default value of `STOPWORDS` is language dependent. For `LANGUAGE ENGLISH` the default is: <?>.
+- `NOSTOPWORDS | STOPWORDS <count> <word1> <word2>...** (optional): Stop words are not words which are not put into the indexes. The default value of `STOPWORDS`is language dependent. For`LANGUAGE ENGLISH` the default is: <?>.
 
 - `PUNCTUATION <punctuation>** (optional): A string of characters that are used to define words in the text field. The default value is `,.<>{}[]"':;!@#$%^&\*()-+=~/\|`.
 
 - `SKIPINITIALSCAN` (optional): If specific, this option skips the normal backfill operation for an index. If this option is specified, pre-existing keys which match the `PREFIX` clause will not be loaded into the index during a backfill operation. This clause has no effect on processing of key mutations _after_ an index is created, i.e., keys which are mutated after an index is created and satisfy the data type and `PREFIX` clause will be inserted into that index.
 
-- `SCORE` (optional): The current implementation only allows the value to be 1.0. This parameter is accepted to make valkey-search more interoperable with RediSearch. (default: 1.0) 
+- `SCORE` (optional): The current implementation only allows the value to be 1.0. This parameter is accepted to make valkey-search more interoperable with RediSearch. (default: 1.0)
 
 ## Field types
 
 `TAG`: A tag field is a string that contains one or more tag values.
 
 - `SEPARATOR <sep>` (optional): One of these characters `,.<>{}[]"':;!@#$%^&*()-+=~` used to delimit individual tags. If omitted the default value is `,`.
-- `CASESENSITIVE` (optional): If present, tag comparisons will be case sensitive. The default is that tag comparisons are NOT case sensitive
+- `CASESENSITIVE` (optional): If present, tag comparisons will be case sensitive. The default is that tag comparisons are NOT case sensitive.
+
+See [Tag Field Format](../topics/search.tag.field.md) for more details and examples.
 
 `TEXT`: A text field is a string that contains words
 
 - `NOSTEM` (optional): If specified, stemming of words on ingestion is disabled.
 - `WITHSUFFIXTRIE | NOSUFFIXTRIE` (optional): Enables/Disables the use of a suffix trie to implement suffix-based wildcard queries. If `NOSUFFIXTRIE` is specified, query strings which specify suffix-based wildcard matching will be rejected with an error. The default is `WITHSUFFIXTRIE`.
-- `WEIGHT <weight>` (optional): The current implementation only allows the value to be 1.0. This parameter is accepted to make valkey-search more interoperable with RediSearch. (default: 1.0) 
+- `WEIGHT <weight>` (optional): The current implementation only allows the value to be 1.0. This parameter is accepted to make valkey-search more interoperable with RediSearch. (default: 1.0)
 
+See [Text Field Format](../topics/search.text.field.md) for more details and examples.
 
 `NUMERIC`: A numeric field contains a number.
+
+See [Numeric Field Format](../topics/search.numeric.field.md) for details and examples.
 
 `VECTOR`: A vector field contains a vector. Two vector indexing algorithms are currently supported: HNSW (Hierarchical Navigable Small World) and FLAT (brute force). Each algorithm has a set of additional attributes, some required and other optional.
 
@@ -78,11 +81,23 @@ FT.CREATE <index-name>
 - `HNSW:` The HNSW algorithm provides approximate answers, but operates substantially faster than FLAT.
   - `DIM <number>` (required): Specifies the number of dimensions in a vector.
   - `TYPE FLOAT32` (required): Data type, currently only FLOAT32 is supported.
-  - `DISTANCE_METRIC [L2 | IP | COSINE]` (required): Specifies the distance algorithm
   - `INITIAL_CAP <size>` (optional): Initial index size.
   - `M <number>` (optional): Number of maximum allowed outgoing edges for each node in the graph in each layer. on layer zero the maximal number of outgoing edges will be 2\*M. Default is 16, the maximum is 512\.
   - `EF_CONSTRUCTION <number>` (optional): controls the number of vectors examined during index construction. Higher values for this parameter will improve recall ratio at the expense of longer index creation times. The default value is 200\. Maximum value is 4096\.
-  - `EF_RUNTIME <number>` (optional):  controls  the number of vectors to be examined during a query operation. The default is 10, and the max is 4096\. You can set this parameter value for each query you run. Higher values increase query times, but improve query recall.
+  - `EF_RUNTIME <number>` (optional): controls the number of vectors to be examined during a query operation. The default is 10, and the max is 4096\. You can set this parameter value for each query you run. Higher values increase query times, but improve query recall.
+  - `DISTANCE_METRIC [L2 | IP | COSINE]` (required): Specifies the distance algorithm.
+
+See [Vector Field Format](../topics/search.vector.field.md) for more details and examples.
+
+The KNN search algorithm operates to locate vectors that are the nearest to the query vector, i.e., looking for the smallest distance value.
+The computation of the distance metrics is adjusted from their classical definitions in order to posses this property.
+This table shows the actual computation that Search uses when computing the distance between two vectors: $X$ and $Y$.
+
+| Classical Name | Valkey Search Distance Metric Name |      Classical Distance Formula Definition      | Valkey Search Distance Formula                      |
+| :------------: | :--------------------------------: | :---------------------------------------------: | :-------------------------------------------------- |
+| Inner Product  |                 IP                 |    ${\sum\limits_{i=0}^{n}(X_i \times Y_i)}$    | $1 - {\sum\limits_{i=0}^{n}(X_i \times Y_i)}$       |
+|   Euclidean    |                 L2                 |   $\sqrt{\sum\limits_{i=0}^{n}(X_i - Y_i)^2}$   | $\sqrt{\sum\limits_{i=0}^{n}(X_i - Y_i)^2}$         |
+|     Cosine     |               COSINE               | $\frac{X \cdot Y}{\|\|X\|\| \times \|\|Y\|\|} $ | $1 - \frac{X \cdot Y}{\|\|X\|\| \times \|\|Y\|\|} $ |
 
 ### Field options
 
@@ -105,7 +120,7 @@ OK
 ### FLAT example:
 
 ```
-FT.CREATE my_index_name SCHEMA my_hash_field_key VECTOR Flat 8 TYPE FLOAT32 DIM 20 DISTANCE_METRIC COSINE INITIAL_CAP 15000
+FT.CREATE my_index_name SCHEMA my_hash_field_key VECTOR Flat TYPE FLOAT32 DIM 20 DISTANCE_METRIC COSINE INITIAL_CAP 15000
 ```
 
 Result:
@@ -140,4 +155,3 @@ Result:
 ```
 OK
 ```
-

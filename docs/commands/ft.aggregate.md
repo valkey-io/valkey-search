@@ -33,7 +33,7 @@ FT.AGGREGATE <index-name> <query>
 - `APPLY <expression> as <field>` (optional): An expression is computed and insert into the record. See [APPLY Stage](#apply-stage) below. See [Search - expressions](../topics/search.expressions.md) for details on the expression syntax.
 - `FILTER <expression>` (optional): The filter expression is applied, see [FILTER Stage](#filter-stage) for more details. See [Search - expressions](../topics/search.expressions.md) for details on the expression syntax.
 - `LIMIT <offset> <count>` (optional): The working set is trimmed, see [LIMIT Stage](#limit-stage) for details.
-- `SORTBY <count> <expression> [ASC | DESC] [<espression> [ASC | DESC] ...] [MAX <num>]` (optional): The working set is sorted. See [SORTBY Stage](#sortby-stage) for more details.
+- `SORTBY <count> <expression> [ASC | DESC] [<expression> [ASC | DESC] ...] [MAX <num>]` (optional): The working set is sorted. See [SORTBY Stage](#sortby-stage) for more details.
 - `GROUPBY <count> <field> <field> ... [REDUCE <reducer> <count> [<expression> [<expression> ...]]]` (optional): The working set is grouped into buckets according to the input fields. One summarization record is generated for each bucket including the outputs of each reducer. See [GROUPBY Stage](#groupby-stage) for details.
 
 # Result

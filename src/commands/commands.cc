@@ -57,6 +57,8 @@ int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
   Metrics::GetStats().worker_search_execution_latency.SubmitSample(
       absl::Microseconds(search_time_us));
 
+  ++Metrics::GetStats().query_successful_requests_cnt;
+
   res->parameters->SendReply(ctx, res->search_result.value());
   return VALKEYMODULE_OK;
 }
@@ -122,6 +124,8 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
 
       Metrics::GetStats().worker_search_execution_latency.SubmitSample(
           absl::Microseconds(search_result.search_execution_time_us));
+
+      ++Metrics::GetStats().query_successful_requests_cnt;
 
       parameters->SendReply(ctx, search_result);
       ValkeySearch::Instance().ScheduleSearchResultCleanup(

@@ -222,9 +222,6 @@ absl::Status ProcessNeighborsForQuery(ValkeyModuleCtx *ctx,
 // SendReply respects the Limit, see https://valkey.io/commands/ft.search/
 void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
                               query::SearchResult &search_result) {
-  // Increment success counter.
-  ++Metrics::GetStats().query_successful_requests_cnt;
-
   // 1. Handle early reply scenarios
   if (HandleEarlyReplyScenarios(ctx, search_result, *this)) {
     return;

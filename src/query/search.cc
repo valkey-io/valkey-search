@@ -47,6 +47,7 @@
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/time_sliced_mrmw_mutex.h"
 #include "vmsdk/src/type_conversions.h"
+#include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::query {
@@ -721,16 +722,14 @@ SerializationRange SearchResult::GetSerializationRange(
 
 absl::StatusOr<SearchResult> Search(const SearchParameters &parameters,
                                     SearchMode search_mode) {
-  auto start_time = std::chrono::steady_clock::now();
+  // Measure thread CPU time (excludes interrupts, context switches)
+  vmsdk::StopWatch timer(vmsdk::TimeType::kThreadCpu);
 
   auto result =
       MaybeAddIndexedContent(DoSearch(parameters, search_mode), parameters);
 
-  auto end_time = std::chrono::steady_clock::now();
-  int64_t search_execution_time_us =
-      std::chrono::duration_cast<std::chrono::microseconds>(end_time -
-                                                            start_time)
-          .count();
+  uint64_t search_execution_time_us =
+      absl::ToInt64Microseconds(timer.Duration());
 
   if (!result.ok()) {
     return result.status();

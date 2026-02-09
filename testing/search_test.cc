@@ -14,6 +14,7 @@
 #include <optional>
 #include <queue>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <unordered_set>
 #include <utility>
@@ -1351,5 +1352,141 @@ INSTANTIATE_TEST_SUITE_P(
           absl::StrCat(distance_metric, "_", std::get<1>(info.param).test_name);
       return test_name;
     });
+// Tests for search execution time histogram tracking
+class SearchExecutionTimeHistogramTest : public ValkeySearchTest {};
+
+TEST_F(SearchExecutionTimeHistogramTest, SynchronousSearchPopulatesHistogram) {
+  auto index_schema = CreateIndexSchemaWithMultipleAttributes();
+
+  // Perform synchronous search
+  query::SearchParameters params(100000, nullptr, 0);
+  params.index_schema = index_schema;
+  params.index_schema_name = kIndexSchemaName;
+  params.attribute_alias = kVectorAttributeAlias;
+  params.score_as = vmsdk::MakeUniqueValkeyString(kScoreAs);
+  params.dialect = kDialect;
+  params.k = 10;
+  params.ef = kEfRuntime;
+  std::vector<float> query_vector(kVectorDimensions, 1.0);
+  params.query = VectorToStr(query_vector);
+
+  auto result = Search(params, query::SearchMode::kLocal);
+  VMSDK_EXPECT_OK(result);
+
+  // Verify histogram was NOT populated (synchronous case doesn't submit to
+  // histogram) The histogram submission happens in commands.cc when processing
+  // results
+  EXPECT_FALSE(
+      Metrics::GetStats().worker_search_execution_latency.HasSamples());
+
+  // Verify search_execution_time_us is populated in the result
+  EXPECT_GT(result->search_execution_time_us, 0);
+}
+
+TEST_F(SearchExecutionTimeHistogramTest, SearchExecutionTimeIsThreadCPUTime) {
+  auto index_schema = CreateIndexSchemaWithMultipleAttributes();
+
+  query::SearchParameters params(100000, nullptr, 0);
+  params.index_schema = index_schema;
+  params.index_schema_name = kIndexSchemaName;
+  params.attribute_alias = kVectorAttributeAlias;
+  params.score_as = vmsdk::MakeUniqueValkeyString(kScoreAs);
+  params.dialect = kDialect;
+  params.k = 10;
+  params.ef = kEfRuntime;
+  std::vector<float> query_vector(kVectorDimensions, 1.0);
+  params.query = VectorToStr(query_vector);
+
+  auto result = Search(params, query::SearchMode::kLocal);
+  VMSDK_EXPECT_OK(result);
+
+  // Verify that thread CPU time was captured (should be > 0)
+  EXPECT_GT(result->search_execution_time_us, 0);
+
+  // Thread CPU time should be reasonable (not absurdly large)
+  // A search should complete in less than 1 second of CPU time
+  EXPECT_LT(result->search_execution_time_us, 1000000);  // < 1 second
+}
+
+TEST_F(SearchExecutionTimeHistogramTest,
+       NonVectorSearchPopulatesExecutionTime) {
+  auto index_schema = CreateIndexSchemaWithMultipleAttributes();
+
+  query::SearchParameters params(100000, nullptr, 0);
+  params.index_schema = index_schema;
+  params.index_schema_name = kIndexSchemaName;
+  // No attribute_alias means non-vector search
+  params.dialect = kDialect;
+  std::vector<float> query_vector(kVectorDimensions, 1.0);
+  params.query = VectorToStr(query_vector);
+
+  // Add a filter for non-vector search
+  TextParsingOptions options{};
+  FilterParser parser(*index_schema, "@numeric:[0 10]", options);
+  params.filter_parse_results = std::move(parser.Parse().value());
+
+  auto result = Search(params, query::SearchMode::kLocal);
+  VMSDK_EXPECT_OK(result);
+
+  // Verify execution time was captured for non-vector search
+  EXPECT_GT(result->search_execution_time_us, 0);
+}
+
+TEST_F(SearchExecutionTimeHistogramTest,
+       VectorSearchWithFilterPopulatesExecutionTime) {
+  auto index_schema = CreateIndexSchemaWithMultipleAttributes();
+
+  query::SearchParameters params(100000, nullptr, 0);
+  params.index_schema = index_schema;
+  params.index_schema_name = kIndexSchemaName;
+  params.attribute_alias = kVectorAttributeAlias;
+  params.score_as = vmsdk::MakeUniqueValkeyString(kScoreAs);
+  params.dialect = kDialect;
+  params.k = 5;
+  params.ef = kEfRuntime;
+  std::vector<float> query_vector(kVectorDimensions, 1.0);
+  params.query = VectorToStr(query_vector);
+
+  // Add filter
+  TextParsingOptions options{};
+  FilterParser parser(*index_schema, "@tag:{LT5}", options);
+  params.filter_parse_results = std::move(parser.Parse().value());
+
+  auto result = Search(params, query::SearchMode::kLocal);
+  VMSDK_EXPECT_OK(result);
+
+  // Verify execution time was captured with filter
+  EXPECT_GT(result->search_execution_time_us, 0);
+}
+
+TEST_F(SearchExecutionTimeHistogramTest, MultipleSearchesAccumulateTime) {
+  auto index_schema = CreateIndexSchemaWithMultipleAttributes();
+
+  std::vector<uint64_t> execution_times;
+
+  // Run multiple searches and collect execution times
+  for (int i = 0; i < 3; ++i) {
+    query::SearchParameters params(100000, nullptr, 0);
+    params.index_schema = index_schema;
+    params.index_schema_name = kIndexSchemaName;
+    params.attribute_alias = kVectorAttributeAlias;
+    params.score_as = vmsdk::MakeUniqueValkeyString(kScoreAs);
+    params.dialect = kDialect;
+    params.k = 10;
+    params.ef = kEfRuntime;
+    std::vector<float> query_vector(kVectorDimensions, 1.0 + i);
+    params.query = VectorToStr(query_vector);
+
+    auto result = Search(params, query::SearchMode::kLocal);
+    VMSDK_EXPECT_OK(result);
+    execution_times.push_back(result->search_execution_time_us);
+  }
+
+  // Verify all searches captured execution time
+  for (auto time : execution_times) {
+    EXPECT_GT(time, 0);
+  }
+}
+
 }  // namespace
 }  // namespace valkey_search

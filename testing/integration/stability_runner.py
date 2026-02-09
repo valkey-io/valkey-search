@@ -153,7 +153,6 @@ class StabilityRunner:
                 "numeric": utils.NumericDefinition(),
                 "content": utils.TextDefinition(),
                 "title": utils.TextDefinition(nostem=False, with_suffix_trie=True),
-                "category": utils.TextDefinition(nostem=False),
             }
         elif self.config.index_type == "TAG":
             attributes = {
@@ -284,15 +283,15 @@ class StabilityRunner:
         elif self.config.index_type == "TEXT":
             # Text-only index: Multiple document types with extensive content for diverse search results
             # Document 1: Multiple prefix words, fuzzy terms, comprehensive content
-            hset_fields_1 = 'tag my_tag numeric 10 content "The quick brown fox jumps over fuzzy lazy dogs in a fuzzy meadow. Fuzzy search algorithms help find fuzzy matches in text. Understanding fuzzy logic requires fuzzy thinking and fuzzy concepts." title "prefix_smartwatch wearable prefix_device prefix_tracker" category electronics'
+            hset_fields_1 = 'tag my_tag numeric 10 content "The quick brown fox jumps over fuzzy lazy dogs in a fuzzy meadow. Fuzzy search algorithms help find fuzzy matches in text. Understanding fuzzy logic requires fuzzy thinking and fuzzy concepts." title "prefix_smartwatch wearable prefix_device prefix_tracker"'
             # Document 2: Multiple device endings, fuzzy terms, rich content
-            hset_fields_2 = 'tag my_tag numeric 15 content "Amazing fuzzy search capabilities enable fuzzy matching. Modern fuzzy systems use fuzzy logic for fuzzy results. Implementing fuzzy algorithms creates fuzzy patterns for better fuzzy detection." title "electronic device medical device smart device mobile device" category gadgets'
+            hset_fields_2 = 'tag my_tag numeric 15 content "Amazing fuzzy search capabilities enable fuzzy matching. Modern fuzzy systems use fuzzy logic for fuzzy results. Implementing fuzzy algorithms creates fuzzy patterns for better fuzzy detection." title "electronic device medical device smart device mobile device"'
             # Document 3: Exact smartwatch matches, fuzzy variations, detailed text
-            hset_fields_3 = 'tag my_tag numeric 20 content "Fuzziness detection in text using fuzzy methods. Fuzzy matching improves fuzzy search results. Advanced fuzzy techniques enhance fuzzy precision and fuzzy recall in fuzzy systems." title "smartwatch fitness smartwatch luxury smartwatch" category wearables'
+            hset_fields_3 = 'tag my_tag numeric 20 content "Fuzziness detection in text using fuzzy methods. Fuzzy matching improves fuzzy search results. Advanced fuzzy techniques enhance fuzzy precision and fuzzy recall in fuzzy systems." title "smartwatch fitness smartwatch luxury smartwatch"'
             # Document 4: Multiple prefix terms, fuzzy content, extensive documentation
-            hset_fields_4 = 'tag my_tag numeric 25 content "Search through fuzzy matching algorithms with fuzzy scoring. Fuzzy search implementations use fuzzy distance metrics. Understanding fuzzy boundaries helps optimize fuzzy performance in fuzzy applications." title "prefix_electronics guide prefix_computing manual prefix_technology documentation" category documentation'
+            hset_fields_4 = 'tag my_tag numeric 25 content "Search through fuzzy matching algorithms with fuzzy scoring. Fuzzy search implementations use fuzzy distance metrics. Understanding fuzzy boundaries helps optimize fuzzy performance in fuzzy applications." title "prefix_electronics guide prefix_computing manual prefix_technology documentation"'
             # Document 5: Random data using __data__ for content and title fields
-            hset_fields_5 = 'tag my_tag numeric 30 content __data__ title __data__ category random'
+            hset_fields_5 = 'tag my_tag numeric 30 content __data__ title __data__'
         elif self.config.index_type == "TAG":
             # Tag-only index: multiple tag fields with different separators
             hset_fields = 'category electronics,gadgets,wearables product_type smartwatch|fitness brand apple,premium features waterproof;heartrate;gps'

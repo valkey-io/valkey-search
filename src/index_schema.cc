@@ -542,6 +542,16 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
       added = true;
     }
   }
+  // Track keys with no text fields for text negation support
+  if (key_obj && text_index_schema_ && !added) {
+    // Key exists but has no indexed attributes
+    // Create entries in db_key_info_ and index_key_info_, then track as untracked
+    MutatedAttributes empty_mutations;
+    auto seq = UpdateDbInfoKey(ctx, empty_mutations, interned_key, from_backfill, false);
+    index_key_info_[interned_key].mutation_sequence_number_ = seq;
+    text_index_schema_->TrackKeyWithNoText(interned_key);
+  }
+  
   if (added) {
     switch (attribute_data_type_->ToProto()) {
       case data_model::ATTRIBUTE_DATA_TYPE_HASH:

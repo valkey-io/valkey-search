@@ -30,7 +30,12 @@
 namespace valkey_search::query {
 
 EvaluationResult NegatePredicate::Evaluate(Evaluator &evaluator) const {
+  VMSDK_LOG(WARNING, nullptr) << "[NEGATION_DEBUG] NegatePredicate::Evaluate called, inner type=" 
+                              << (predicate_->GetType() == PredicateType::kText ? "TEXT" :
+                                  predicate_->GetType() == PredicateType::kComposedAnd ? "AND" :
+                                  predicate_->GetType() == PredicateType::kComposedOr ? "OR" : "OTHER");
   EvaluationResult result = predicate_->Evaluate(evaluator);
+  VMSDK_LOG(WARNING, nullptr) << "[NEGATION_DEBUG] NegatePredicate inner result: matches=" << result.matches;
   return EvaluationResult(!result.matches);
 }
 
@@ -419,6 +424,10 @@ EvaluationResult EvaluatePredicate(const Predicate *predicate,
 // ProximityIterator to validate term positions meet distance and order
 // requirements.
 EvaluationResult ComposedPredicate::Evaluate(Evaluator &evaluator) const {
+  VMSDK_LOG(WARNING, nullptr) << "[NEGATION_DEBUG] ComposedPredicate::Evaluate called, slop=" 
+                              << (slop_.has_value() ? std::to_string(*slop_) : "none")
+                              << ", inorder=" << inorder_
+                              << ", type=" << (GetType() == PredicateType::kComposedAnd ? "AND" : "OR");
   // Determine if children need to return positions for proximity checks.
   bool require_positions = slop_.has_value() || inorder_;
   // Handle AND logic

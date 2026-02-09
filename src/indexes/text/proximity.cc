@@ -116,17 +116,26 @@ bool ProximityIterator::FindCommonKey() {
   // 1) Validate children and compute min/max among current keys
   Key min_key;
   Key max_key;
-  for (auto& iter : iters_) {
-    auto k = iter->CurrentKey();
+  // std::string keys_str;
+  for (size_t i = 0; i < iters_.size(); ++i) {
+    auto k = iters_[i]->CurrentKey();
+    // if (i > 0) keys_str += ", ";
+    // keys_str += std::string(k->Str());
     if (!min_key || k < min_key) min_key = k;
     if (!max_key || k > max_key) max_key = k;
   }
+  // VMSDK_LOG(WARNING, nullptr) << "[PROXIMITY] FindCommonKey: keys=[" << keys_str 
+  //                             << "], min=" << std::string(min_key->Str())
+  //                             << ", max=" << std::string(max_key->Str());
+  
   // 2) If min == max, we found a common key
   if (min_key == max_key) {
     current_key_ = max_key;
+    // VMSDK_LOG(WARNING, nullptr) << "[PROXIMITY] Found common key: " << std::string(max_key->Str());
     return true;
   }
   // 3) Advance all iterators that are strictly behind the current max_key
+  // VMSDK_LOG(WARNING, nullptr) << "[PROXIMITY] No match, seeking all to max_key=" << std::string(max_key->Str());
   for (auto& iter : iters_) {
     iter->SeekForwardKey(max_key);
   }

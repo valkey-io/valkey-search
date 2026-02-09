@@ -28,6 +28,7 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
+#include "src/indexes/text/negation_iterator.h"
 #include "src/indexes/text/orproximity.h"
 #include "src/indexes/text/proximity.h"
 #include "src/indexes/text/text_fetcher.h"
@@ -146,13 +147,52 @@ inline PredicateType EvaluateAsComposedPredicate(
   return PredicateType::kComposedAnd;
 }
 
+// Helper to check if predicate tree contains ANDs with SLOP/INORDER
+// that have both text predicates AND negations (mixed queries)
+inline bool ContainsMixedSlopNegation(const Predicate *predicate) {
+  if (predicate->GetType() == PredicateType::kComposedAnd ||
+      predicate->GetType() == PredicateType::kComposedOr) {
+    auto composed = dynamic_cast<const ComposedPredicate *>(predicate);
+    bool has_slop_or_inorder = composed->GetSlop().has_value() || composed->GetInorder();
+    
+    if (has_slop_or_inorder) {
+      // Check if children are mixed (text + negation)
+      bool has_negation = false;
+      bool has_text = false;
+      
+      for (const auto &child : composed->GetChildren()) {
+        if (child->GetType() == PredicateType::kNegate) {
+          has_negation = true;
+        } else if (child->GetType() == PredicateType::kText) {
+          has_text = true;
+        }
+        if (has_negation && has_text) {
+          return true; // Mixed SLOP query needs prefilter evaluation
+        }
+      }
+    }
+    
+    // Recurse into children
+    for (const auto &child : composed->GetChildren()) {
+      if (ContainsMixedSlopNegation(child.get())) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 // Helper fn to identify if query is not fully solved after the entries fetcher
 // search, meaning it requires prefilter evaluation Prefiltering is needed when
-// query contains an AND with numeric or tag predicates.
-inline bool IsUnsolvedQuery(QueryOperations query_operations) {
-  return query_operations & (QueryOperations::kContainsNumeric |
-                             QueryOperations::kContainsTag) &&
-         query_operations & QueryOperations::kContainsAnd;
+// query contains an AND with numeric, tag predicates, or mixed SLOP/negation queries.
+inline bool IsUnsolvedQuery(QueryOperations query_operations, 
+                            const Predicate *root_predicate) {
+  bool has_numeric_or_tag = query_operations & (QueryOperations::kContainsNumeric |
+                                                 QueryOperations::kContainsTag);
+  bool has_and = query_operations & QueryOperations::kContainsAnd;
+  bool has_mixed_slop_negation = root_predicate && ContainsMixedSlopNegation(root_predicate);
+  
+  return (has_numeric_or_tag || has_mixed_slop_negation) && has_and;
 }
 
 // Helper fn to identify if deduplication is needed.
@@ -164,28 +204,59 @@ inline bool NeedsDeduplication(QueryOperations query_operations) {
   return has_or || has_tag;
 }
 
+// Helper to check if all children of a composed predicate are text predicates
+inline bool AllChildrenAreText(const ComposedPredicate *composed_predicate) {
+  for (const auto &child : composed_predicate->GetChildren()) {
+    auto type = child->GetType();
+    if (type != PredicateType::kText) {
+      // Child is not a text predicate (could be negation, numeric, tag, etc.)
+      return false;
+    }
+  }
+  return true;
+}
+
 // Builds TextIterator for text predicates. Returns pair of iterator and
 // estimated size.
 std::pair<std::unique_ptr<indexes::text::TextIterator>, size_t>
 BuildTextIterator(const Predicate *predicate, bool negate,
                   bool require_positions) {
+  VMSDK_LOG(WARNING, nullptr) << "[SEARCH.CC] BuildTextIterator called: type=" 
+                              << (int)predicate->GetType() << ", negate=" << negate 
+                              << ", require_positions=" << require_positions;
   if (predicate->GetType() == PredicateType::kComposedAnd ||
       predicate->GetType() == PredicateType::kComposedOr) {
     auto composed_predicate =
         dynamic_cast<const ComposedPredicate *>(predicate);
-    auto predicate_type =
-        EvaluateAsComposedPredicate(composed_predicate, negate);
     auto slop = composed_predicate->GetSlop();
     bool inorder = composed_predicate->GetInorder();
+    
+    // For phrase queries (slop/inorder with ALL text children), don't apply De Morgan
+    // Mixed queries (text + negation/numeric/tag) need De Morgan's law
+    bool is_phrase = (slop.has_value() || inorder) && AllChildrenAreText(composed_predicate);
+    auto predicate_type = is_phrase ? predicate->GetType() : 
+                          EvaluateAsComposedPredicate(composed_predicate, negate);
+    
     bool child_require_positions = slop.has_value() || inorder;
     if (predicate_type == PredicateType::kComposedAnd) {
       absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
                           indexes::text::kProximityTermsInlineCapacity>
           iterators;
       size_t min_size = SIZE_MAX;
+      
+      // For mixed SLOP queries, only build iterators for text children
+      // Non-text children (like negations) will be handled by prefilter evaluation
+      bool is_mixed_slop = (slop.has_value() || inorder) && !is_phrase;
+      
       for (const auto &child : composed_predicate->GetChildren()) {
+        // Skip non-text children in mixed SLOP queries (they can't provide positions)
+        if (is_mixed_slop && child->GetType() != PredicateType::kText) {
+          continue;
+        }
+        
+        // Don't propagate negate to children - wrap the composed result instead
         auto [iter, size] =
-            BuildTextIterator(child.get(), negate, child_require_positions);
+            BuildTextIterator(child.get(), false, child_require_positions);
         if (iter) {
           iterators.push_back(std::move(iter));
           min_size = std::min(min_size, size);
@@ -196,10 +267,56 @@ BuildTextIterator(const Predicate *predicate, bool negate,
       if (iterators.empty()) return {nullptr, 0};
       bool skip_positional = !child_require_positions;
       size_t total_size = min_size == SIZE_MAX ? 0 : min_size;
-      return {
-          std::make_unique<indexes::text::ProximityIterator>(
-              std::move(iterators), slop, inorder, nullptr, skip_positional),
-          total_size};
+      
+      auto proximity_iter = std::make_unique<indexes::text::ProximityIterator>(
+          std::move(iterators), slop, inorder, nullptr, skip_positional);
+      
+      // If this composed AND is negated, wrap with NegationIterator
+      VMSDK_LOG(WARNING, nullptr) << "[SEARCH.CC] After ProximityIterator creation, negate=" << negate;
+      if (negate) {
+        VMSDK_LOG(WARNING, nullptr) << "[SEARCH.CC] Attempting to wrap with NegationIterator";
+        // Get schema keys from the TextIndexSchema (same way as single-term negation)
+        const InternedStringSet* schema_tracked_keys = nullptr;
+        const InternedStringSet* schema_untracked_keys = nullptr;
+        indexes::text::FieldMaskPredicate field_mask = 0;
+        
+        // Find a text predicate to get the TextIndexSchema
+        std::function<void(const Predicate*)> find_text = [&](const Predicate* p) {
+          if (p->GetType() == PredicateType::kText && !schema_tracked_keys) {
+            auto text_pred = dynamic_cast<const query::TextPredicate*>(p);
+            // Get schema keys directly from TextIndexSchema (same as text.cc line 139-141)
+            schema_tracked_keys = &text_pred->GetTextIndexSchema()->GetSchemaTrackedKeys();
+            schema_untracked_keys = &text_pred->GetTextIndexSchema()->GetSchemaUnTrackedKeys();
+            field_mask = text_pred->GetFieldMask();
+            VMSDK_LOG(WARNING, nullptr) << "[SEARCH.CC] Found schema keys from TextIndexSchema: tracked=" 
+                                        << schema_tracked_keys->size()
+                                        << ", untracked=" << schema_untracked_keys->size()
+                                        << ", field_mask=" << field_mask;
+          } else if (p->GetType() == PredicateType::kComposedAnd || 
+                     p->GetType() == PredicateType::kComposedOr) {
+            auto comp = dynamic_cast<const ComposedPredicate*>(p);
+            for (const auto& child : comp->GetChildren()) {
+              find_text(child.get());
+              if (schema_tracked_keys) break;
+            }
+          } else if (p->GetType() == PredicateType::kNegate) {
+            auto neg = dynamic_cast<const query::NegatePredicate*>(p);
+            find_text(neg->GetPredicate());
+          }
+        };
+        find_text(composed_predicate);
+        
+        if (schema_tracked_keys) {
+          VMSDK_LOG(WARNING, nullptr) << "[SEARCH.CC] Creating NegationIterator wrapper";
+          return {std::make_unique<indexes::text::NegationIterator>(
+              std::move(proximity_iter), schema_tracked_keys, 
+              schema_untracked_keys, field_mask), total_size};
+        } else {
+          VMSDK_LOG(WARNING, nullptr) << "[SEARCH.CC] WARNING: schema_tracked_keys is nullptr, cannot wrap!";
+        }
+      }
+      
+      return {std::move(proximity_iter), total_size};
     } else {
       absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
                           indexes::text::kProximityTermsInlineCapacity>
@@ -226,6 +343,8 @@ BuildTextIterator(const Predicate *predicate, bool negate,
   }
   if (predicate->GetType() == PredicateType::kText) {
     auto text_predicate = dynamic_cast<const TextPredicate *>(predicate);
+    // Use the negate parameter passed to this function invocation
+    // (which is false when called from composed query children)
     auto fetcher_ptr = text_predicate->Search(negate);
     auto fetcher = static_cast<indexes::Text::EntriesFetcher *>(fetcher_ptr);
     fetcher->require_positions_ = require_positions;
@@ -245,27 +364,38 @@ size_t EvaluateFilterAsPrimary(
     const Predicate *predicate,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     bool negate, QueryOperations query_operations) {
+  VMSDK_LOG(WARNING, nullptr) << "[SEARCH.CC] EvaluateFilterAsPrimary called: type=" 
+                              << (int)predicate->GetType() << ", negate=" << negate;
   if (predicate->GetType() == PredicateType::kComposedAnd ||
       predicate->GetType() == PredicateType::kComposedOr) {
     auto composed_predicate =
         dynamic_cast<const ComposedPredicate *>(predicate);
-    auto predicate_type =
-        EvaluateAsComposedPredicate(composed_predicate, negate);
+    
+    // For phrase queries (slop/inorder with ALL text children), don't apply De Morgan
+    // Mixed queries (text + negation/numeric/tag) need De Morgan's law
+    bool is_phrase = (composed_predicate->GetSlop().has_value() || composed_predicate->GetInorder()) && AllChildrenAreText(composed_predicate);
+    auto predicate_type = is_phrase ? predicate->GetType() : 
+                          EvaluateAsComposedPredicate(composed_predicate, negate);
+    
     if (predicate_type == PredicateType::kComposedAnd) {
+      VMSDK_LOG(WARNING, nullptr) << "[SEARCH.CC] Calling BuildTextIterator with negate=" << negate;
       auto [text_iter, size] =
           BuildTextIterator(composed_predicate, negate, false);
       if (text_iter) {
+        VMSDK_LOG(WARNING, nullptr) << "[SEARCH.CC] BuildTextIterator succeeded, wrapping in TextIteratorFetcher";
         entries_fetchers.push(
             std::make_unique<indexes::text::TextIteratorFetcher>(
                 std::move(text_iter), size));
         return size;
       }
+      VMSDK_LOG(WARNING, nullptr) << "[SEARCH.CC] BuildTextIterator returned nullptr, using fallback";
       size_t min_size = SIZE_MAX;
       std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> best_fetchers;
       for (const auto &child : composed_predicate->GetChildren()) {
         std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
+        // Don't propagate negate to children - wrap the composed result instead
         size_t child_size = EvaluateFilterAsPrimary(child.get(), child_fetchers,
-                                                    negate, query_operations);
+                                                    false, query_operations);
         if (child_size < min_size) {
           min_size = child_size;
           best_fetchers = std::move(child_fetchers);
@@ -544,7 +674,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
   };
   // Cannot skip evaluation if the query contains unsolved composed operations.
   bool requires_prefilter_evaluation =
-      IsUnsolvedQuery(parameters.filter_parse_results.query_operations);
+      IsUnsolvedQuery(parameters.filter_parse_results.query_operations,
+                     parameters.filter_parse_results.root_predicate.get());
   if (!requires_prefilter_evaluation) {
     bool needs_dedup =
         NeedsDeduplication(parameters.filter_parse_results.query_operations);

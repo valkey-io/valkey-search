@@ -232,11 +232,13 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
       schema_tracked_keys_.insert(key);
       schema_untracked_keys_.erase(key);
     } else {
+      // Only track as untracked if we were explicitly called for this key
+      // This happens when ProcessMutation calls us, or when explicitly tracking
       schema_untracked_keys_.insert(key);
       schema_tracked_keys_.erase(key);
     }
   }
-  // If no text content, exit
+  // If no text content, exit early (but tracking already happened above)
   if (!has_any_text_content) {
     return;
   }

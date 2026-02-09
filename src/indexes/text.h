@@ -104,12 +104,18 @@ class Text : public IndexBase {
     EntriesFetcher(size_t size,
                    const std::shared_ptr<text::TextIndex>& text_index,
                    const InternedStringSet* untracked_keys,
-                   text::FieldMaskPredicate field_mask, bool require_positions)
+                   text::FieldMaskPredicate field_mask, bool require_positions,
+                   bool negate = false,
+                   const InternedStringSet* schema_tracked_keys = nullptr,
+                   const InternedStringSet* schema_untracked_keys = nullptr)
         : size_(size),
           text_index_(text_index),
           untracked_keys_(untracked_keys),
           field_mask_(field_mask),
-          require_positions_(require_positions) {}
+          require_positions_(require_positions),
+          negate_(negate),
+          schema_tracked_keys_(schema_tracked_keys),
+          schema_untracked_keys_(schema_untracked_keys) {}
 
     size_t Size() const override;
 
@@ -126,6 +132,9 @@ class Text : public IndexBase {
     const query::TextPredicate* predicate_;
     text::FieldMaskPredicate field_mask_;
     bool require_positions_;
+    bool negate_;
+    const InternedStringSet* schema_tracked_keys_;
+    const InternedStringSet* schema_untracked_keys_;
   };
 
   size_t GetTextFieldNumber() const { return text_field_number_; }

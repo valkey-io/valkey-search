@@ -257,6 +257,13 @@ class TextIndexSchema {
     return schema_untracked_keys_.size();
   }
 
+  // Track a key with no text fields directly
+  void TrackKeyWithNoText(const InternedStringPtr &key) {
+    std::lock_guard<std::mutex> guard(schema_keys_mutex_);
+    schema_untracked_keys_.insert(key);
+    schema_tracked_keys_.erase(key);
+  }
+
 };
 
 }  // namespace valkey_search::indexes::text

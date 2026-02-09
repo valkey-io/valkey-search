@@ -152,6 +152,7 @@ bool VerifyFilter(const query::SearchParameters &parameters,
   auto db_seq =
       parameters.index_schema->GetDbMutationSequenceNumber(n.external_id);
   if (db_seq == n.sequence_number) {
+    VMSDK_LOG(WARNING, nullptr) << "in resp genrator >> dbseq == n.sequence_number, return control";
     return true;
   }
   predicate_revalidation.Increment();

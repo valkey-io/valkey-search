@@ -15,6 +15,7 @@
 #include "src/index_schema.pb.h"
 #include "src/indexes/text/fuzzy.h"
 #include "src/indexes/text/lexer.h"
+#include "src/indexes/text/negation_iterator.h"
 #include "src/valkey_search_options.h"
 
 namespace valkey_search::indexes {
@@ -118,9 +119,22 @@ void *TextPredicate::Search(bool negate) const {
   // the text search during the initial entries fetcher search itself for
   // proximity queries.
   bool require_positions = false;
+  
+  const InternedStringSet* schema_tracked_keys = nullptr;
+  const InternedStringSet* schema_untracked_keys = nullptr;
+  
+  if (negate) {
+    schema_tracked_keys = &GetTextIndexSchema()->GetSchemaTrackedKeys();
+    schema_untracked_keys = &GetTextIndexSchema()->GetSchemaUnTrackedKeys();
+    // For negation, size is tracked - matched + untracked
+    // We'll calculate matched size normally, then adjust in the fetcher
+    estimated_size = schema_tracked_keys->size() + schema_untracked_keys->size();
+  }
+  
   auto fetcher = std::make_unique<indexes::Text::EntriesFetcher>(
       estimated_size, GetTextIndexSchema()->GetTextIndex(), nullptr,
-      GetFieldMask(), require_positions);
+      GetFieldMask(), require_positions, negate, schema_tracked_keys,
+      schema_untracked_keys);
   fetcher->predicate_ = this;
   return fetcher.release();
 }
@@ -179,9 +193,23 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
   // TermIterator will use query_field_mask when has_original is true,
   // and stem_field_mask for stem variants (has_original becomes false after
   // first pass)
-  return std::make_unique<indexes::text::TermIterator>(
+  auto iter = std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), fetcher->field_mask_, fetcher->untracked_keys_,
       fetcher->require_positions_, stem_field_mask, found_original);
+  
+  // Wrap with NegationIterator ONLY for leaf queries (not part of composed queries)
+  // Composed queries (AND/OR/Proximity) handle negation at the composed level
+  // require_positions indicates this is part of a composed query
+  VMSDK_LOG(WARNING, nullptr) << "[TEXT.CC] TermPredicate: negate_=" << fetcher->negate_ 
+                              << ", require_positions_=" << fetcher->require_positions_
+                              << ", will_wrap=" << (fetcher->negate_ && !fetcher->require_positions_);
+  if (fetcher->negate_ && !fetcher->require_positions_) {
+    return std::make_unique<indexes::text::NegationIterator>(
+        std::move(iter), fetcher->schema_tracked_keys_,
+        fetcher->schema_untracked_keys_, fetcher->field_mask_);
+  }
+  
+  return iter;
 }
 
 std::unique_ptr<indexes::text::TextIterator> PrefixPredicate::BuildTextIterator(
@@ -201,9 +229,19 @@ std::unique_ptr<indexes::text::TextIterator> PrefixPredicate::BuildTextIterator(
     word_iter.Next();
     ++word_count;
   }
-  return std::make_unique<indexes::text::TermIterator>(
+  auto iter = std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), fetcher->field_mask_, fetcher->untracked_keys_,
       fetcher->require_positions_);
+  
+  // Wrap with NegationIterator ONLY for leaf queries (not part of composed queries)
+  // Composed queries (AND/OR/Proximity) handle negation at composed level
+  if (fetcher->negate_ && !fetcher->require_positions_) {
+    return std::make_unique<indexes::text::NegationIterator>(
+        std::move(iter), fetcher->schema_tracked_keys_,
+        fetcher->schema_untracked_keys_, fetcher->field_mask_);
+  }
+  
+  return iter;
 }
 
 std::unique_ptr<indexes::text::TextIterator> SuffixPredicate::BuildTextIterator(
@@ -227,9 +265,19 @@ std::unique_ptr<indexes::text::TextIterator> SuffixPredicate::BuildTextIterator(
     word_iter.Next();
     ++word_count;
   }
-  return std::make_unique<indexes::text::TermIterator>(
+  auto iter = std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), fetcher->field_mask_, fetcher->untracked_keys_,
       fetcher->require_positions_);
+  
+  // Wrap with NegationIterator ONLY for leaf queries (not part of composed queries)
+  // Composed queries (AND/OR/Proximity) handle negation at composed level
+  if (fetcher->negate_ && !fetcher->require_positions_) {
+    return std::make_unique<indexes::text::NegationIterator>(
+        std::move(iter), fetcher->schema_tracked_keys_,
+        fetcher->schema_untracked_keys_, fetcher->field_mask_);
+  }
+  
+  return iter;
 }
 
 std::unique_ptr<indexes::text::TextIterator> InfixPredicate::BuildTextIterator(
@@ -246,9 +294,19 @@ std::unique_ptr<indexes::text::TextIterator> FuzzyPredicate::BuildTextIterator(
   auto key_iterators = indexes::text::FuzzySearch::Search(
       fetcher->text_index_->GetPrefix(), GetTextString(), GetDistance(),
       max_words);
-  return std::make_unique<indexes::text::TermIterator>(
+  auto iter = std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), fetcher->field_mask_, fetcher->untracked_keys_,
       fetcher->require_positions_);
+  
+  // Wrap with NegationIterator ONLY for leaf queries (not part of composed queries)
+  // Composed queries (AND/OR/Proximity) handle negation at composed level
+  if (fetcher->negate_ && !fetcher->require_positions_) {
+    return std::make_unique<indexes::text::NegationIterator>(
+        std::move(iter), fetcher->schema_tracked_keys_,
+        fetcher->schema_untracked_keys_, fetcher->field_mask_);
+  }
+  
+  return iter;
 }
 
 // Size apis for estimation

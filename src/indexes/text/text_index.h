@@ -16,7 +16,6 @@
 #include <optional>
 
 #include "absl/container/btree_map.h"
-#include "absl/container/flat_hash_set.h"
 #include "absl/container/node_hash_map.h"
 #include "absl/functional/function_ref.h"
 #include "absl/strings/string_view.h"
@@ -24,7 +23,7 @@
 #include "src/indexes/text/invasive_ptr.h"
 #include "src/indexes/text/lexer.h"
 #include "src/indexes/text/posting.h"
-#include "src/indexes/text/radix_tree.h"
+#include "src/indexes/text/rax_wrapper.h"
 
 struct sb_stemmer;
 
@@ -36,10 +35,6 @@ constexpr size_t kStemVariantsInlineCapacity = 20;
 // token -> (PositionMap, suffix support)
 using TokenPositions =
     absl::flat_hash_map<std::string, std::pair<PositionMap, bool>>;
-
-// Stem tree target: maps stem root to set of parent words that stem to it
-// Example: "happi" → {"happy", "happiness", "happily"}
-using StemParents = InvasivePtr<absl::flat_hash_set<std::string>>;
 
 class TextIndexSchema;
 
@@ -70,16 +65,14 @@ class TextIndex {
 
  public:
   explicit TextIndex(bool suffix);
-  RadixTree<InvasivePtr<Postings>> &GetPrefix();
-  const RadixTree<InvasivePtr<Postings>> &GetPrefix() const;
-  std::optional<std::reference_wrapper<RadixTree<InvasivePtr<Postings>>>>
-  GetSuffix();
-  std::optional<std::reference_wrapper<const RadixTree<InvasivePtr<Postings>>>>
-  GetSuffix() const;
+  Rax &GetPrefix();
+  const Rax &GetPrefix() const;
+  std::optional<std::reference_wrapper<Rax>> GetSuffix();
+  std::optional<std::reference_wrapper<const Rax>> GetSuffix() const;
 
  private:
-  RadixTree<InvasivePtr<Postings>> prefix_tree_;
-  std::unique_ptr<RadixTree<InvasivePtr<Postings>>> suffix_tree_;
+  Rax prefix_tree_;
+  std::unique_ptr<Rax> suffix_tree_;
 };
 
 class TextIndexSchema {
@@ -105,14 +98,14 @@ class TextIndexSchema {
   TextIndexMetadata &GetMetadata() { return metadata_; }
 
   // Access stem tree for word expansion during search
-  const RadixTree<StemParents> &GetStemTree() const { return stem_tree_; }
+  const Rax &GetStemTree() const { return stem_tree_; }
 
   // Get stem root and all stem parents for a search term
   std::string GetAllStemVariants(
       absl::string_view search_term,
       absl::InlinedVector<absl::string_view, kStemVariantsInlineCapacity>
           &words_to_search,
-      uint32_t min_stem_size, uint64_t stem_enabled_mask, bool lock_needed);
+      uint64_t stem_enabled_mask, bool lock_needed);
 
   // Get the minimum stem size across all fields
   uint32_t GetMinStemSize() const { return min_stem_size_; }
@@ -147,7 +140,7 @@ class TextIndexSchema {
   // Stem tree: maps stem roots to their parent words
   // Example: "happi" → {"happy", "happiness", "happily"}
   //
-  RadixTree<StemParents> stem_tree_;
+  Rax stem_tree_;
 
   // Prevent concurrent mutations to stem tree
   std::mutex stem_tree_mutex_;

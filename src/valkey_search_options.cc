@@ -197,15 +197,15 @@ static auto log_level =
 /// Prefer partial results by default of not
 /// If set to true, search will use SOMESHARDS if user does not explicitly
 /// provide an option in the command
-constexpr absl::string_view kPreferPartialResults{"prefer-partial-results"};
-static config::Boolean prefer_partial_results(kPreferPartialResults, true);
+constexpr absl::string_view kEnablePartialResults{"enable-partial-results"};
+static config::Boolean prefer_partial_results(kEnablePartialResults, true);
 
 /// Prefer consistenct results by default of not
 /// If set to true, search will use CONSISTENT if user does not explicitly
 /// provide an option in the command
-constexpr absl::string_view kPreferConsistentResults{
-    "prefer-consistent-results"};
-static config::Boolean prefer_consistent_results(kPreferConsistentResults,
+constexpr absl::string_view kEnableConsistentResults{
+    "enable-consistent-results"};
+static config::Boolean prefer_consistent_results(kEnableConsistentResults,
                                                  false);
 
 /// Enable search result background cleanup

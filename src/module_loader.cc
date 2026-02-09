@@ -76,8 +76,7 @@ vmsdk::module::Options options = {
                 .cmd_name = valkey_search::kSearchCommand,
                 .permissions = ACLPermissionFormatter(
                     valkey_search::kSearchCmdPermissions),
-                .flags = {vmsdk::module::kReadOnlyFlag,
-                          vmsdk::module::kDenyOOMFlag},
+                .flags = {vmsdk::module::kReadOnlyFlag},
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTSearchCmd>,
             },
             {
@@ -101,8 +100,7 @@ vmsdk::module::Options options = {
                 .cmd_name = valkey_search::kAggregateCommand,
                 .permissions = ACLPermissionFormatter(
                     valkey_search::kSearchCmdPermissions),
-                .flags = {vmsdk::module::kReadOnlyFlag,
-                          vmsdk::module::kDenyOOMFlag},
+                .flags = {vmsdk::module::kReadOnlyFlag},
                 .cmd_func =
                     &vmsdk::CreateCommand<valkey_search::FTAggregateCmd>,
             },

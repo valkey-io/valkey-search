@@ -124,10 +124,7 @@ def unpack_search_result(rs, key_type, has_sortkeys=False):
     if has_sortkeys:
         # Format: [count, key1, sortkey1, [fields1], key2, sortkey2, [fields2], ...]
         # Step by 3 elements at a time
-        for i in range(1, len(rs), 3):
-            key = rs[i]
-            # sortkey = rs[i+1]  # We skip the sort key for comparison purposes
-            value = rs[i+2]
+        for (key, sortkey, value) in [(rs[i], rs[i+1], rs[i+2]) for i in range(1, len(rs), 3)]:
             row = {"__key": key}
             for j in range(0, len(value), 2):
                 row[parse_field(value[j], key_type)] = parse_value(value[j+1], key_type)

@@ -94,6 +94,7 @@ void PrimaryInfoFanoutOperation::OnResponse(
     auto& data = attribute_data_[attr.alias()];
     data.identifier = attr.identifier();
     data.user_indexed_memory += attr.user_indexed_memory();
+    data.num_records += attr.num_records();
   }
 }
 
@@ -143,13 +144,15 @@ int PrimaryInfoFanoutOperation::GenerateReply(ValkeyModuleCtx* ctx,
   ValkeyModule_ReplyWithSimpleString(ctx, "attributes");
   ValkeyModule_ReplyWithArray(ctx, attribute_data_.size());
   for (const auto& [alias, data] : attribute_data_) {
-    ValkeyModule_ReplyWithArray(ctx, 6);
+    ValkeyModule_ReplyWithArray(ctx, 8);
     ValkeyModule_ReplyWithSimpleString(ctx, "identifier");
     ValkeyModule_ReplyWithSimpleString(ctx, data.identifier.c_str());
     ValkeyModule_ReplyWithSimpleString(ctx, "attribute");
     ValkeyModule_ReplyWithSimpleString(ctx, alias.c_str());
     ValkeyModule_ReplyWithSimpleString(ctx, "user_indexed_memory");
     ValkeyModule_ReplyWithLongLong(ctx, data.user_indexed_memory);
+    ValkeyModule_ReplyWithSimpleString(ctx, "num_records");
+    ValkeyModule_ReplyWithLongLong(ctx, data.num_records);
   }
   if (vmsdk::info_field::GetShowDeveloper()) {
     auto status_or_schema =

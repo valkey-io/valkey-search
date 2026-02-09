@@ -83,6 +83,7 @@ CONFIG_RANGES = {
     "local-fanout-queue-wait-threshold": (1, 10000),
     "thread-pool-wait-time-samples": (10, 10000),
     "max-search-result-record-size": (100, 10485760),
+    "search-result-buffer-multiplier": (1.0, 1000.0),
 }
 
 
@@ -96,6 +97,13 @@ def get_new_value(current_value, config_type, config_name=None):
         return str(random.randint(1, 10240))
     if config_type == "Enum":
         return random.choice(["WARNING", "NOTICE", "DEBUG"])
+    if config_type == "String":
+        match config_name:
+            case "search-result-buffer-multiplier":
+                low, high = CONFIG_RANGES[config_name]
+                return str(round(random.uniform(low, high), 2))
+            case _:
+                assert False, f"Unknown config name {config_name}"
     return str(random.randint(1, 100))
 
 

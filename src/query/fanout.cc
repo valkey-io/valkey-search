@@ -50,55 +50,13 @@ namespace valkey_search::query::fanout {
 
 CONTROLLED_BOOLEAN(ForceInvalidSlotFingerprint, false);
 
-// Helper function to extract sortby field value from neighbor's attribute
-// contents
-std::optional<double> GetSortByValue(const indexes::Neighbor &neighbor,
-                                     const std::string &sortby_field) {
-  if (!neighbor.attribute_contents.has_value()) {
-    return std::nullopt;
-  }
-  auto it = neighbor.attribute_contents->find(sortby_field);
-  if (it == neighbor.attribute_contents->end()) {
-    return std::nullopt;
-  }
-  // Parse the value as a double
-  auto value_str = vmsdk::ToStringView(it->second.value.get());
-  auto value = vmsdk::To<double>(value_str);
-  if (value.ok()) {
-    return value.value();
-  }
-  return std::nullopt;
-}
-
 struct NeighborComparator {
-  std::optional<query::SortByParameter> sortby;
-
-  NeighborComparator() = default;
-  NeighborComparator(std::optional<query::SortByParameter> sortby)
-      : sortby(std::move(sortby)) {}
-
   bool operator()(const indexes::Neighbor &a,
                   const indexes::Neighbor &b) const {
-    if (sortby.has_value()) {
-      auto a_val = GetSortByValue(a, sortby->field);
-      auto b_val = GetSortByValue(b, sortby->field);
-
-      if (a_val.has_value() && b_val.has_value()) {
-        if (*a_val != *b_val) {
-          if (sortby->order == query::SortOrder::kAscending) {
-            return *a_val < *b_val;
-          } else {
-            return *a_val > *b_val;
-          }
-        }
-      }
-      // Fall through to key comparison if values are equal or missing
-    } else {
-      // Primary sort: by distance
-      // We use a max heap, to pop off the furthest vector during aggregation.
-      if (a.distance != b.distance) {
-        return a.distance < b.distance;
-      }
+    // Primary sort: by distance
+    // We use a max heap, to pop off the furthest vector during aggregation.
+    if (a.distance != b.distance) {
+      return a.distance < b.distance;
     }
     // Secondary sort: by key for consistent ordering when distances are equal.
     // Primarily used in non vector queries without scores (distance = 0).
@@ -113,28 +71,22 @@ struct NeighborComparator {
 // the top k results to the callback.
 struct SearchPartitionResultsTracker {
   absl::Mutex mutex;
-  NeighborComparator comparator;
   std::priority_queue<indexes::Neighbor, std::vector<indexes::Neighbor>,
                       NeighborComparator>
       results ABSL_GUARDED_BY(mutex);
   int outstanding_requests ABSL_GUARDED_BY(mutex);
   query::SearchResponseCallback callback;
   std::unique_ptr<SearchParameters> parameters ABSL_GUARDED_BY(mutex);
-  std::optional<query::SortByParameter> sortby_parameter ABSL_GUARDED_BY(mutex);
   std::atomic_bool reached_oom{false};
   std::atomic_bool consistency_failed{false};
   std::atomic<size_t> accumulated_total_count{0};
 
-  SearchPartitionResultsTracker(
-      int outstanding_requests, int k, query::SearchResponseCallback callback,
-      std::unique_ptr<SearchParameters> parameters,
-      std::optional<query::SortByParameter> sortby_param = std::nullopt)
-      : comparator(sortby_param),
-        results(comparator),
-        outstanding_requests(outstanding_requests),
+  SearchPartitionResultsTracker(int outstanding_requests, int k,
+                                query::SearchResponseCallback callback,
+                                std::unique_ptr<SearchParameters> parameters)
+      : outstanding_requests(outstanding_requests),
         callback(std::move(callback)),
-        parameters(std::move(parameters)),
-        sortby_parameter(std::move(sortby_param)) {}
+        parameters(std::move(parameters)) {}
 
   void HandleResponse(coordinator::SearchIndexPartitionResponse &response,
                       const std::string &address, const grpc::Status &status) {
@@ -302,7 +254,7 @@ absl::Status PerformSearchFanoutAsync(
   }
   auto tracker = std::make_shared<SearchPartitionResultsTracker>(
       search_targets.size(), parameters->k, std::move(callback),
-      std::move(parameters), sortby_parameter);
+      std::move(parameters));
   bool has_local_target = false;
   for (auto &node : search_targets) {
     auto detached_ctx = vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx);

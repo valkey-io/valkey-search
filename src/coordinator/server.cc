@@ -443,6 +443,7 @@ Service::GenerateInfoResponse(
     attr_info->set_identifier(attr.GetIdentifier());
     attr_info->set_alias(alias);
     attr_info->set_user_indexed_memory(schema->GetSize(alias));
+    attr_info->set_num_records(attr.GetIndex()->GetTrackedKeyCount());
   }
   return std::make_pair(grpc::Status::OK, response);
 }

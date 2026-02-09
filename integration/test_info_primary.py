@@ -131,3 +131,43 @@ class TestFTInfoPrimary(ValkeySearchClusterTestCaseDebugMode):
         assert int(info["num_docs"]) == N
         assert int(info["num_records"]) == N
         assert int(info["hash_indexing_failures"]) == 0
+
+    def test_ft_info_primary_attribute(self):
+        cluster: ValkeyCluster = self.new_cluster_client()
+        node0: Valkey = self.new_client_for_primary(0)
+        index_name = "index1"
+
+        assert node0.execute_command(
+            "FT.CREATE", index_name,
+            "ON", "HASH",
+            "PREFIX", "1", "doc:",
+            "SCHEMA", "title", "TEXT",
+            "body", "TEXT"
+        ) == b"OK"
+
+        cluster.execute_command("HSET", "doc:1", "title", "hello", "body", "world")
+        cluster.execute_command("HSET", "doc:2", "title", "valkey")
+
+        waiters.wait_for_true(lambda: self.is_indexing_complete(node0, index_name, 2))
+
+        raw = node0.execute_command("FT.INFO", index_name, "PRIMARY")
+        parser = FTInfoParser([])
+        info = parser._parse_key_value_list(raw)
+
+        # check primary info results
+        assert info is not None
+        assert str(info.get("index_name")) == index_name
+        assert str(info.get("mode")) == "primary"
+        assert int(info["num_docs"]) == 2
+        assert int(info["hash_indexing_failures"]) == 0
+
+        # Parse attributes into a dict keyed by attribute name
+        attrs = {
+            parsed["attribute"]: parsed
+            for a in info["attributes"]
+            if isinstance(parsed := parser._parse_key_value_list(a), dict)
+        }
+        assert attrs["title"]["user_indexed_memory"] > 0
+        assert attrs["body"]["user_indexed_memory"] > 0
+        assert attrs["title"]["num_records"] == 2
+        assert attrs["body"]["num_records"] == 1

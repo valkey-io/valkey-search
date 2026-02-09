@@ -36,8 +36,7 @@ Text::Text(const data_model::TextIndex &text_index_proto,
 
 absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr &key,
                                      absl::string_view data) {
-  // TODO: Key Tracking
-
+  tracked_keys_.insert(key);
   return text_index_schema_->StageAttributeData(key, data, text_field_number_,
                                                 !no_stem_, with_suffix_trie_);
 }
@@ -48,14 +47,14 @@ absl::StatusOr<bool> Text::RemoveRecord(const InternedStringPtr &key,
   // TextIndexSchema::DeleteKey(), so there is no need to touch the index
   // structures here
 
-  // TODO: key tracking
+  tracked_keys_.erase(key);
 
   return true;
 }
 
 absl::StatusOr<bool> Text::ModifyRecord(const InternedStringPtr &key,
                                         absl::string_view data) {
-  // TODO: key tracking
+  tracked_keys_.insert(key);
 
   // The old key value has already been removed from the index by a call to
   // TextIndexSchema::DeleteKey() at this point, so we simply add the new key
@@ -78,13 +77,14 @@ int Text::RespondWithInfo(ValkeyModuleCtx *ctx) const {
 }
 
 bool Text::IsTracked(const InternedStringPtr &key) const {
-  // TODO
-  return false;
+  absl::MutexLock lock(&index_mutex_);
+  return tracked_keys_.contains(key);
 }
 
 size_t Text::GetTrackedKeyCount() const {
-  // TODO: keep track of number of keys indexed for this attribute
-  return 0;
+  // keep track of number of keys indexed for this attribute
+  absl::MutexLock lock(&index_mutex_);
+  return tracked_keys_.size();
 }
 
 std::unique_ptr<data_model::Index> Text::ToProto() const {

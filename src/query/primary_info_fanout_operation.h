@@ -74,6 +74,7 @@ class PrimaryInfoFanoutOperation
   struct AttributeData {
     std::string identifier;
     uint64_t user_indexed_memory{0};
+    uint64_t num_records{0};
   };
   absl::flat_hash_map<std::string, AttributeData> attribute_data_;
 };

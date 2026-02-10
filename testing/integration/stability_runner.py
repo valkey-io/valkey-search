@@ -75,8 +75,9 @@ class StabilityRunner:
       failover_state: Shared state for coordinating process pausing during failover
     """
 
-    def __init__(self, config: StabilityTestConfig):
+    def __init__(self, config: StabilityTestConfig, is_standalone: bool = False):
         self.config = config
+        self.is_standalone = is_standalone
         # Shared state for failover coordination
         self.failover_state = {
             'in_progress': False,
@@ -103,16 +104,25 @@ class StabilityRunner:
           ValueError:
         """
         try:
-            client = valkey.ValkeyCluster(
-                host="localhost",
-                port=self.config.ports[0],
-                startup_nodes=[
-                    valkey.cluster.ClusterNode("localhost", port)
-                    for port in self.config.ports
-                ],
-                require_full_coverage=True,
-                socket_timeout=10,
-            )
+            if self.is_standalone:
+                # Use standalone client for single node
+                client = valkey.Valkey(
+                    host="localhost",
+                    port=self.config.ports[0],
+                    socket_timeout=10,
+                )
+            else:
+                # Use cluster client for multi-node
+                client = valkey.ValkeyCluster(
+                    host="localhost",
+                    port=self.config.ports[0],
+                    startup_nodes=[
+                        valkey.cluster.ClusterNode("localhost", port)
+                        for port in self.config.ports
+                    ],
+                    require_full_coverage=True,
+                    socket_timeout=10,
+                )
         except valkey.exceptions.ConnectionError as e:
             logging.error("Unable to connect to valkey, %s", e)
             return StabilityRunResult(
@@ -292,10 +302,13 @@ class StabilityRunner:
             # Numeric-only index: multiple numeric fields with positive integer values
             hset_fields = 'price 299 quantity 50 rating 45 timestamp 1640000000'
         
+        # Cluster mode flag (only for multi-node clusters)
+        cluster_flag = "" if self.is_standalone else " --cluster-mode"
+        
         if self.config.index_type in ["TEXT", "TAG", "NUMERIC"]:
             insert_command = (
                 f"{self.config.memtier_path}"
-                " --cluster-mode"
+                f"{cluster_flag}"
                 " -s localhost"
                 f" -p {self.config.ports[0]}"
                 f" -t {self.config.num_memtier_threads}"
@@ -309,7 +322,7 @@ class StabilityRunner:
         else:
             insert_command = (
                 f"{self.config.memtier_path}"
-                " --cluster-mode"
+                f"{cluster_flag}"
                 " -s localhost"
                 f" -p {self.config.ports[0]}"
                 f" -t {self.config.num_memtier_threads}"
@@ -325,7 +338,7 @@ class StabilityRunner:
         if self.config.index_type in ["TEXT", "TAG", "NUMERIC"]:
             delete_command = (
                 f"{self.config.memtier_path}"
-                " --cluster-mode"
+                f"{cluster_flag}"
                 " -s localhost"
                 f" -p {self.config.ports[0]}"
                 f" -t {self.config.num_memtier_threads}"
@@ -339,7 +352,7 @@ class StabilityRunner:
         else:
             delete_command = (
                 f"{self.config.memtier_path}"
-                " --cluster-mode"
+                f"{cluster_flag}"
                 " -s localhost"
                 f" -p {self.config.ports[0]}"
                 f" -t {self.config.num_memtier_threads}"
@@ -355,7 +368,7 @@ class StabilityRunner:
         if self.config.index_type in ["TEXT", "TAG", "NUMERIC"]:
             expire_command = (
                 f"{self.config.memtier_path}"
-                " --cluster-mode"
+                f"{cluster_flag}"
                 " -s localhost"
                 f" -p {self.config.ports[0]}"
                 f" -t {self.config.num_memtier_threads}"
@@ -369,7 +382,7 @@ class StabilityRunner:
         else:
             expire_command = (
                 f"{self.config.memtier_path}"
-                " --cluster-mode"
+                f"{cluster_flag}"
                 " -s localhost"
                 f" -p {self.config.ports[0]}"
                 f" -t {self.config.num_memtier_threads}"
@@ -417,7 +430,7 @@ class StabilityRunner:
             search_query = '"(@price:[100 500] @quantity:[10 100] @rating:[40 50])"'
         search_command = (
             f"{self.config.memtier_path}"
-            " --cluster-mode"
+            f"{cluster_flag}"
             " -s localhost"
             f" -p {self.config.ports[0]}"
             f" -t {self.config.num_memtier_threads}"
@@ -432,7 +445,7 @@ class StabilityRunner:
 
         ft_info_command = (
             f"{self.config.memtier_path}"
-            " --cluster-mode"
+            f"{cluster_flag}"
             " -s localhost"
             f" -p {self.config.ports[0]}"
             f" -t {self.config.num_memtier_threads}"
@@ -447,7 +460,7 @@ class StabilityRunner:
 
         ft_list_command = (
             f"{self.config.memtier_path}"
-            " --cluster-mode"
+            f"{cluster_flag}"
             " -s localhost"
             f" -p {self.config.ports[0]}"
             f" -t {self.config.num_memtier_threads}"
@@ -468,15 +481,34 @@ class StabilityRunner:
         logging.debug("ft_list_command: %s", ft_list_command)
 
         processes: list[utils.MemtierProcess] = []
-        processes.append(
-            utils.MemtierProcess(command=insert_command, name="HSET")
-        )
-        processes.append(
-            utils.MemtierProcess(command=delete_command, name="DEL")
-        )
-        processes.append(
-            utils.MemtierProcess(command=expire_command, name="EXPIRE")
-        )
+        
+        # For OOM testing, HSET errors are expected when memory limit is reached
+        if self.is_standalone and self.config.maxmemory:
+            # OOM errors are expected - don't count them as failures
+            processes.append(
+                utils.MemtierProcess(
+                    command=insert_command, 
+                    name="HSET",
+                    # error_predicate=lambda err: "OOM command not allowed" in err
+                )
+            )
+        else:
+            processes.append(
+                utils.MemtierProcess(command=insert_command, name="HSET")
+            )
+        
+        # Only add DEL and EXPIRE if we have replicas (normal stability test)
+        # For OOM testing with single node, we only want HSET to maximize memory usage
+        if self.config.replica_count > 0 or self.config.maxmemory == "":
+            processes.append(
+                utils.MemtierProcess(command=delete_command, name="DEL")
+            )
+            processes.append(
+                utils.MemtierProcess(command=expire_command, name="EXPIRE")
+            )
+        else:
+            logging.info("Skipping DEL and EXPIRE processes for OOM testing (single node, maxmemory set)")
+        
         processes.append(
             utils.MemtierProcess(
                 command=search_command,
@@ -510,9 +542,40 @@ class StabilityRunner:
         timeout_start = time.time()
         processes_killed_for_failover = False
         time_when_killed = 0
+        oom_detected = False
+        oom_recovery_triggered = False
         
         while time.time() - timeout_start < self.config.test_timeout:
             elapsed = time.time() - test_start_time
+            
+            # Check for OOM in standalone mode
+            if self.is_standalone and not oom_detected:
+                for process in processes:
+                    if process.name == "HSET" and process.failures > 10:
+                        # Check if failures are OOM errors
+                        oom_detected = True
+                        logging.info("=" * 60)
+                        logging.info("OOM DETECTED - HSET process has %d failures", process.failures)
+                        logging.info("Stopping all processes to begin disconnect/reconnect sequence")
+                        logging.info("=" * 60)
+                        break
+            
+            # If OOM detected and recovery not yet triggered, stop all processes and trigger recovery
+            if oom_detected and not oom_recovery_triggered:
+                logging.info("Killing all memtier processes...")
+                for process in processes:
+                    if not process.done:
+                        process.process.kill()
+                        logging.info("<%s> killed for OOM recovery", process.name)
+                
+                # Stop background threads
+                logging.info("Stopping background threads...")
+                for thread in threads:
+                    thread.stop()
+                
+                logging.info("All processes and threads stopped")
+                oom_recovery_triggered = True
+                break  # Exit the loop to trigger recovery
             
             # Check if failover is in progress
             with self.failover_state['lock']:
@@ -599,8 +662,14 @@ class StabilityRunner:
                 logging.info("Collected intentionally failed ports: %s", intentionally_failed_ports)
                 break
         
+        # If OOM was detected but not handled yet, mark it in the results
+        if oom_detected:
+            logging.info("OOM detected - marking port for disconnect/reconnect testing")
+            intentionally_failed_ports = {self.config.ports[0]}
+        
         for thread in threads:
-            thread.stop()
+            if hasattr(thread, 'stop'):
+                thread.stop()
         
         return StabilityRunResult(
             successful_run=True,

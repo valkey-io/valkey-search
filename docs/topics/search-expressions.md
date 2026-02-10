@@ -1,3 +1,8 @@
+---
+title: "Search Aggregation Expressions"
+description: Aggregation Expression Language
+---
+
 The `FILTER`, `APPLY`, `SORTBY` and `GROUPBY` stages of `FT.AGGREGATE` use expressions to compute values.
 
 The expression engine operates on scalar input values, generating scalar output values. Values in the expression language are dynamically typed and can be either Nil (missing/invalid), Numeric (64-bit floating point) or String (a sequence of bytes).

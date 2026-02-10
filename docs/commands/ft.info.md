@@ -37,8 +37,9 @@ An array of key value pairs.
 - `attributes` (array of arrays) One entry per declared attribute of the index.
   - `identifier` (string) identifier for this attribute
   - `attribute` (string) The name used to refer to this index in query and aggregation expressions.
+  - `user_indexed_memory` (integer) Number of bytes of user data ingested into this field.
   - `type` (string) One of `NUMERIC`, `TAG`, `TEXT` or `VECTOR`
-  - per-type extension (see below)
+  - Type-specific extension (see below)
 - `num_docs` (integer) Total keys in the index
 - `num_records` (integer) Total number of fields indexed.
 - `num_total_terms` (integer) Total number of terms in all text fields in this index.
@@ -98,7 +99,7 @@ An array of key value pairs
 - `num_records` (string) INTEGER. Total records in the index
 - `hash_indexing_failures` (string) INTEGER. Count of unsuccessful indexing attempts
 
-### Response when the CLUSTER option is specified 
+### Response when the CLUSTER option is specified
 
 An array of key value pairs
 
@@ -108,4 +109,3 @@ An array of key value pairs
 - `backfill_complete_percent_max` (string) FLOAT32. Maximum backfill complete percent in all nodes
 - `backfill_complete_percent_min` (string) FLOAT32. Minimum backfill complete percent in all nodes
 - `state` (string) The current state of the index, one of: `ready`, `backfill_in_progress` or `backfill_paused_by_oom`
-

@@ -1,3 +1,8 @@
+---
+title: "Search - Overview"
+description: Search Module Overview
+---
+
 # Indexes
 
 Lots of indexes. Indexes are independent. Commands operate on one index at a time.
@@ -21,13 +26,16 @@ Query operations located a set of keys. For FT.SEARCH, the located set of key is
 
 ## Mutations while queries are outstanding
 
-The query string is processed in the background to generate the list of keys.
+The query string is processed in the background to generate the list of keys. Then the command switches back to the mainthread and validates the keys.
+Thus mutations that would exclude a key will be honored, but mutations that would include a key may or may not be honored.
 
 # Save/Restore
 
 Vector Indexes are saved/restored. Non-vector are rebuilt as data is loaded.
 
-# Cluster Mode Issues
+# Cluster Mode
+
+Two types of indexes, cross-shard and single-slot.
 
 Cross-cluster communication using gRPC (Port control#).
 
@@ -39,7 +47,29 @@ Cross-Slot indexes are in every shard. Cross-slot indexes lack a hash-tag. This 
 
 Named with a hash-tag. Scalable reads. Data Plane forwards.
 
-See [Cluster Consistency](../topics/search-consistency.md) for more details on cluster consistency.
+# Cluster Consistency
+
+## Metadata Consistency
+
+Describe how metadata consistency works. It's eventual consistency.
+
+Describe how the FT.CREATE/FT.DROPINDEX command provide a consistent response.
+
+## Query Consistency
+
+What do cross-shard queries
+
+How do query operations: FT.SearCH, FT.AGGREGATE, FT.INFO define consistency?
+
+How does a query ensure that metadata is same on every query? What happens on a mismatch?
+
+SLot migration consistency, how does that work?
+
+ALLSHARDS vs SOMESHARDS ??
+
+CONSISTENT and INCONSISTENT ??
+
+Cluster failure modes
 
 ## Configuration Settings
 

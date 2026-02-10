@@ -5,12 +5,13 @@ FT.SEARCH <index> <query>
   [NOCONTENT]
   [TIMEOUT <timeout>]
   [PARAMS <count> <name> <value> [ <name> <value> ...]]
+  [RETURN <count> <field> [AS <name>] <field> [AS <name>]...]
   [LIMIT <offset> <num>]
+  [DIALECT <dialect>]
   [INORDER]
   [SLOP <slop>]
-  [DIALECT <dialect>]
-  [RETURN <count> <field> [AS <name>] <field> [AS <name>]...]
   [SORTBY <field> [ ASC | DESC]]
+  [WITHSORTKEYS]
   [ALLSHARDS | SOMESHARDS]
   [CONSISTENT | INCONSISTENT]
 ```
@@ -26,6 +27,7 @@ FT.SEARCH <index> <query>
 - `INORDER` (optional): Indicates that proximity matching of terms must be inorder.
 - `SLOP <slop>` (Optional): Specifies a slop value for proximity matching of terms.
 - `SORTBY <field> [ASC | DESC]` (Optional): If present, results are sorted according the value of the specified field and the optional sort-direction instruction. By default, vector results are sorted in distance order and non-vector results are not sorted in any particular order. Sorting is applied before the `LIMIT` clause is applied.
+- `WITHSORTKEYS` (Optional): If `SORTBY` is specified then enabling this option augments the output with the value of the field used for sorting.
 - `ALLSHARDS` (Optional): If specified, the command is terminated with a timeout error if a valid response from all shards is not received within the timeout interval. This is the default.
 - `SOMESHARDS` (Optional): If specified, the command will generate a best-effort reply if all shards have not responded within the timeout interval.
 - `CONSISTENT` (Optional): If specified, the command is terminated with an error if the cluster is in an inconsistent state. This is the default.
@@ -33,28 +35,155 @@ FT.SEARCH <index> <query>
 
 Response
 
-## Hash Index Responses
+The shape and contents of the response depend on the options specified in the command.
+In all cases, the response is an array with the first element being a count of the number of keys which match the query.
+The value of this count is unaffected by the presence of the `LIMIT` clause.
 
-When the index is declared on HASH keys.
+The `LIMIT` clause trims the list of matched keys to generate a list of returned keys. The remainder of the response array is for the returned keys.
 
-On success, the first entry in the response array represents the count of matching keys, followed by one array entry for
-each matching key. Note that if the `LIMIT` option is specified it will only control the number of returned keys and will
-not affect the value of the first entry.
+### `NOCONTENT` or `RETURN 0` was specified.
 
-When `NOCONTENT` is specified, each entry in the response contains only the keyname,
-Otherwise, each entry includes the keyname, followed by an array of the returned fields.
+The remainder of the response array is one entry per returned key, consisting of the key name.
 
-The array of returned fields for a key is a set of name/value pairs. The set of name/value pairs for a key is controlled by the `RETURN` clause. For a vector query an additional name/value pair is returned to provide the vector distance that was computed for this key. See [Search - query language](../topics/search-query.md) for details on how to control that name.
+### `RETURN` with arguments was specified.
 
-## JSON Index Responses
+The remainder of the response array is two entries per returned key. The first entry is the key name and 
+the second entry is an array of name/value pairs. The array of name/value pairs is driven by the `RETURN` clause. 
+Each of the named fields in the `RETURN` clause is returned along with the value of that field for this particular key. If the named field isn't present in this key then it won't be included.
+In addition if this is a vector search, then one additional name/value pair will be included which is the computer vector distance for this returned key -- See [Search - query language](../topics/search-query.md) for details on how to control the name of that field.
 
-???? TBD ?????
+### Neither `NOCONTENT` nor `RETURN` was specified.
+
+If the index is on `HASH` keys, then the result is the same is a `RETURN` clause had been present last listed all of the fields of a key.
+
+If the index is on `JSON` keys, then one name/value pair is inserted with name `$` and the value being the entire JSON key as string. 
+In addition if this is a vector search, then one additional name/value pair will be included which is the computer vector distance for this returned key -- See [Search - query language](../topics/search-query.md) for details on how to control the name of that field.
 
 # Examples
 
-## Query On Hash Index
+## Non-vector Queries On Hash Index
 
-?? Simple query with maybe a tag or numeric. Just enough to the functionality ??
+For these queries the following index and data definitions were used:
+
+```
+FT.CREATE hash-index on hash SCHEMA color TAG city TAG
+hset key1 color blue city London
+hset key2 color black city Paris
+hset key3 color green city Berlin
+hset key4 color white city Tokyo
+hset key5 color blend
+```
+A simple query returning all data of matched keys
+
+```
+FT.SEARCH index @color:{bl*}
+1) (integer) 3
+2) "key1"
+3) 1) "city"
+   2) "London"
+   3) "color"
+   4) "blue"
+4) "key5"
+5) 1) "color"
+   2) "blend"
+   3) "cityextra"
+   4) "Unknown"
+6) "key2"
+7) 1) "city"
+   2) "Paris"
+   3) "color"
+   4) "black"
+```
+
+The same query with the `NOCONTENT` clause.
+
+```
+FT.SEARCH index @color:{bl*} NOCONTENT
+1) (integer) 3
+2) "key1"
+3) "key5"
+4) "key2"
+```
+
+The same query with a `RETURN` clause.
+
+```
+FT.SEARCH index @color:{bl*} RETURN 2 color city
+1) (integer) 3
+2) "key1"
+3) 1) "color"
+   2) "blue"
+   3) "city"
+   4) "London"
+4) "key5"
+5) 1) "color"
+   2) "blend"
+6) "key2"
+7) 1) "color"
+   2) "black"
+   3) "city"
+   4) "Paris"
+```
+
+## Non-vector Queries On JSON Index
+
+Repeating the queries above, except the data is JSON
+
+```
+FT.CREATE index on json SCHEMA $.color as color TAG $.city as city TAG
+json.set key1 . {"color":"blue","city":"London"}
+json.set key2 . {"color":"black","city":"Paris"}
+json.set key3 . {"color":"green","city":"Berlin"}
+json.set key4 . {"color":"white","city":"Tokyo"}
+json.set key5 . {"color":"blend","cityextra":"Unknown"}
+```
+
+A simple query returning all data of matched keys
+
+
+```
+FT.SEARCH index @color:{bl*}
+1) (integer) 3
+2) "key2"
+3) 1) "$"
+   2) "{\"color\":\"black\",\"city\":\"Paris\"}"
+4) "key5"
+5) 1) "$"
+   2) "{\"color\":\"blend\",\"cityextra\":\"Unknown\"}"
+6) "key1"
+7) 1) "$"
+   2) "{\"color\":\"blue\",\"city\":\"London\"}"
+```
+
+The same query with `NOCONTENT`
+
+```
+FT.SEARCH index @color:{bl*} NOCONTENT
+1) (integer) 3
+2) "key2"
+3) "key5"
+4) "key1"
+```
+
+The same query with a `RETURN` clause.
+
+```
+FT.SEARCH index @color:{bl*} RETURN 2 color city
+1) (integer) 3
+2) "key2"
+3) 1) "color"
+   2) "black"
+   3) "city"
+   4) "Paris"
+4) "key5"
+5) 1) "color"
+   2) "blend"
+6) "key1"
+7) 1) "color"
+   2) "blue"
+   3) "city"
+   4) "London"
+```
 
 ## Pure vector search query
 
@@ -118,7 +247,7 @@ Returned result:
     4) \x00\x00\x80?\x00\x00\x00\x00\x00\x00\x00\x00
 ```
 
-## Query On JSON Index
+## Query On JSON Index without RETURN clause
 
 Simple query showing the JSON output
 

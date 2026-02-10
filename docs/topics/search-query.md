@@ -1,3 +1,8 @@
+---
+title: "Search - Queries"
+description: Search Module Query Language Syntax, Semantics and Examples
+---
+
 The query of the `FT.SEARCH` and `FT.AGGREGATE` commands identifies a subset of the keys in the index to be processed by those commands.
 The syntax and semantics of the query string is identical for both commands.
 
@@ -96,7 +101,7 @@ This example will match black or any word that starts with ferd:
 @color:{black | ferd*}
 ```
 
-For more examples see [Tag Fields](../topics/search.tag.fields.md).
+For more examples see [Tag Fields](#example-tag-queries).
 
 ### Numeric Range Match
 
@@ -220,6 +225,77 @@ When two or more predicates of an AND operation contain text matchers if becomes
 Position matching is enabled when either the `SLOP` or `INORDER` clauses are used on the command.
 
 # Examples
+
+## Example Tag Queries
+
+For these examples, the following index declaration and data set will be used.
+
+```
+valkey-cli FT.CREATE index SCHEMA color TAG
+valkey-cli HSET key1 color blue
+valkey-cli HSET key2 color black
+valkey-cli HSET key3 color green
+valkey-cli HSET key4 color beige
+valkey-cli HSET key5 color "beige,green"
+valkey-cli HSET key6 color "hello world, green is my heart"
+```
+
+### Simple Tag Query
+
+```
+valkey-cli FT.SEARCH index @color:{blue} RETURN 1 color
+1) (integer) 1
+2) "key1"
+3) 1) "color"
+   2) "blue"
+```
+
+### Multiple Tag Query
+
+```
+valkey-cli FT.SEARCH index "@color:{blue | black}" RETURN 1 color
+1) (integer) 2
+2) "key2"
+3) 1) "color"
+   2) "black"
+4) "key1"
+5) 1) "color"
+   2) "blue"
+```
+
+### Prefix Tag Query
+
+```
+valkey-cli FT.SEARCH index @color:{b\*} RETURN 1 color
+1) (integer) 4
+2) "key2"
+3) 1) "color"
+   2) "black"
+4) "key1"
+5) 1) "color"
+   2) "blue"
+6) "key4"
+7) 1) "color"
+   2) "beige"
+8) "key5"
+9) 1) "color"
+   2) "beige,green"
+```
+
+### Complex Tag Query
+
+```
+valkey-cli FT.SEARCH index @color:{b*|green} RETURN 1 color
+1) (integer) 2
+2) "key3"
+3) 1) "color"
+   2) "green"
+4) "key5"
+5) 1) "color"
+   2) "beige,green"
+```
+
+## Example Logical Operators
 
 Logical operators can be combined to form complex filter expressions.
 

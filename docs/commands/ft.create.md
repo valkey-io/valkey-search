@@ -57,7 +57,7 @@ FT.CREATE <index-name>
 - `SEPARATOR <sep>` (optional): One of these characters `,.<>{}[]"':;!@#$%^&*()-+=~` used to delimit individual tags. If omitted the default value is `,`.
 - `CASESENSITIVE` (optional): If present, tag comparisons will be case sensitive. The default is that tag comparisons are NOT case sensitive.
 
-See [Tag Field Format](../topics/search-tag-field.md) for more details and examples.
+See [Tag Field Format](../topics/search-data-formats.md#tag-fields) for more details and examples.
 
 `TEXT`: A text field is a string that contains words
 
@@ -65,11 +65,11 @@ See [Tag Field Format](../topics/search-tag-field.md) for more details and examp
 - `WITHSUFFIXTRIE | NOSUFFIXTRIE` (optional): Enables/Disables the use of a suffix trie to implement suffix-based wildcard queries. If `NOSUFFIXTRIE` is specified, query strings which specify suffix-based wildcard matching will be rejected with an error. The default is `WITHSUFFIXTRIE`.
 - `WEIGHT <weight>` (optional): The current implementation only allows the value to be 1.0. This parameter is accepted to make valkey-search more interoperable with RediSearch. (default: 1.0)
 
-See [Text Field Format](../topics/search-text-field.md) for more details and examples.
+See [Text Field Format](../topics/search-data-formats.md#text-fields) for more details and examples.
 
 `NUMERIC`: A numeric field contains a number.
 
-See [Numeric Field Format](../topics/search-numeric-field.md) for details and examples.
+See [Numeric Field Format](../topics/search-data-formats.md#numeric-fields) for details and examples.
 
 `VECTOR`: A vector field contains a vector. Two vector indexing algorithms are currently supported: HNSW (Hierarchical Navigable Small World) and FLAT (brute force). Each algorithm has a set of additional attributes, some required and other optional.
 
@@ -87,7 +87,7 @@ See [Numeric Field Format](../topics/search-numeric-field.md) for details and ex
   - `EF_RUNTIME <number>` (optional): controls the number of vectors to be examined during a query operation. The default is 10, and the max is 4096\. You can set this parameter value for each query you run. Higher values increase query times, but improve query recall.
   - `DISTANCE_METRIC [L2 | IP | COSINE]` (required): Specifies the distance algorithm.
 
-See [Vector Field Format](../topics/search-vector-field.md) for more details and examples.
+See [Vector Field Format](../topics/search-data-formats.md#vector-fields) for more details and examples.
 
 The KNN search algorithm operates to locate vectors that are the nearest to the query vector, i.e., looking for the smallest distance value.
 The computation of the distance metrics is adjusted from their classical definitions in order to posses this property.

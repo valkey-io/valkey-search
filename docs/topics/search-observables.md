@@ -1,3 +1,8 @@
+---
+title: "Search - Info Fields"
+description: Search Module INFO Fields
+---
+
 # INFO Fields
 
 | APP Metric Name                                                |     Section      |     Unit     | APP metric Description                                                                                                                                                            |

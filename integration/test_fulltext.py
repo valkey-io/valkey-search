@@ -2090,6 +2090,180 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # print("  [DEBUG] Index [idx2] tracked=3 untracked=2 total=5")
         # print("="*70)
 
+    def test_text_negation_comprehensive(self):
+        """
+        Comprehensive test combining basic negation, proximity, fuzzy, exact phrase, suffix, prefix,
+        mixed predicates
+        """
+        client: Valkey = self.server.get_new_client()
+        
+        # Create comprehensive index with all field types
+        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA",
+                             "title", "TEXT", "NOSTEM", "WITHSUFFIXTRIE",
+                             "content", "TEXT", "NOSTEM", "WITHSUFFIXTRIE",
+                             "tags", "TAG",
+                             "price", "NUMERIC")
+        
+        # Insert realistic product dataset with varied content
+        client.execute_command("HSET", "doc:1", "title", "red running shoes", "content", "comfortable running shoes for athletes", "tags", "footwear", "price", "50")
+        client.execute_command("HSET", "doc:2", "title", "blue walking shoes", "content", "stylish walking shoes for everyday", "tags", "footwear", "price", "40")
+        client.execute_command("HSET", "doc:3", "title", "red winter jacket", "content", "warm winter jacket for cold weather", "tags", "clothing", "price", "80")
+        client.execute_command("HSET", "doc:4", "title", "blue spring jacket", "content", "lightweight jacket for spring", "tags", "clothing", "price", "60")
+        client.execute_command("HSET", "doc:5", "title", "marathon training gear", "content", "complete set for marathon training", "tags", "sports", "price", "120")
+        client.execute_command("HSET", "doc:6", "title", "hello world example", "content", "quick brown fox jumps", "tags", "demo", "price", "10")
+        client.execute_command("HSET", "doc:7", "title", "goodbye world", "content", "lazy dog running", "tags", "demo", "price", "15")
+        client.execute_command("HSET", "doc:8", "content", "clearance sale items")  # No title
+        client.execute_command("HSET", "doc:9", "tags", "accessories", "price", "5")  # No text fields
+        
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+        all_docs = {b"doc:1", b"doc:2", b"doc:3", b"doc:4", b"doc:5", b"doc:6", b"doc:7", b"doc:8", b"doc:9"}
+        
+        # === BASIC NEGATION TESTS ===
+        # Test 1: Simple field-specific negation
+        result = client.execute_command("FT.SEARCH", "idx", "-@title:shoes")
+        assert result[0] == 7
+        assert set(result[1::2]) == {b"doc:3", b"doc:4", b"doc:5", b"doc:6", b"doc:7", b"doc:8", b"doc:9"}
+        # Test 2: Schema-wide negation (any field)
+        result = client.execute_command("FT.SEARCH", "idx", "-hello")
+        assert result[0] == 8
+        assert  all_docs - set(result[1::2]) == {b"doc:6"}
+        # Test 3: Negation with positive term (AND)
+        result = client.execute_command("FT.SEARCH", "idx", "world -hello")
+        assert result[0] == 1 and result[1] == b"doc:7"
+        # Test 4: Multiple negations
+        result = client.execute_command("FT.SEARCH", "idx", "-@title:shoes -@content:running")
+        assert result[0] == 6
+        assert set(result[1::2]) == {b"doc:3", b"doc:4", b"doc:5", b"doc:6", b"doc:8", b"doc:9"}
+        
+        # === PREFIX/SUFFIX NEGATION TESTS ===
+        # Test 5: Prefix negation
+        result = client.execute_command("FT.SEARCH", "idx", "-@content:run*")
+        assert result[0] == 7
+        assert  all_docs - set(result[1::2]) == {b"doc:1", b"doc:7"}
+        # Test 6: Suffix negation
+        result = client.execute_command("FT.SEARCH", "idx", "-@content:*ing")
+        assert result[0] == 4
+        assert set(result[1::2]) == {b"doc:3", b"doc:6", b"doc:8", b"doc:9"}
+        
+        # === FUZZY NEGATION TESTS ===
+        # Test 7: Fuzzy negation (ED=1)
+        result = client.execute_command("FT.SEARCH", "idx", "-@title:%shues%")
+        assert result[0] == 7
+        assert  all_docs - set(result[1::2]) == {b"doc:1", b"doc:2"}
+        
+        # === EXACT PHRASE NEGATION TESTS ===
+        # # Test 8: Exact phrase negation
+        # result = client.execute_command("FT.SEARCH", "idx", '-@content:"running shoes"')
+        # assert result[0] == 8
+        # assert  all_docs - set(result[1::2]) == {b"doc:1"}
+        # # Test 9: Phrase with positive term
+        # result = client.execute_command("FT.SEARCH", "idx", '@content:shoes -@content:"walking shoes"')
+        # assert result[0] == 1 and result[1] == b"doc:1"
+        
+        # === PROXIMITY WITH NEGATION TESTS ===
+        # # Test 10: SLOP with negation
+        # result = client.execute_command("FT.SEARCH", "idx", '@content:comfortable @content:shoes -@content:walking', "SLOP", "2")
+        # assert result[0] == 1 and result[1] == b"doc:1"
+        # # Test 11: INORDER with negation
+        # result = client.execute_command("FT.SEARCH", "idx", '@content:lightweight @content:jacket -@content:winter', "INORDER")
+        # assert result[0] == 1 and result[1] == b"doc:4"
+        
+        # === MIXED PREDICATES WITH NEGATION ===
+        # Test 12: Negation with tag filter
+        result = client.execute_command("FT.SEARCH", "idx", '@tags:{footwear} -@title:blue')
+        assert result[0] == 1 and result[1] == b"doc:1"
+        # Test 13: Negation with numeric range
+        result = client.execute_command("FT.SEARCH", "idx", '@price:[40 80] -@title:jacket')
+        assert result[0] == 2
+        assert set(result[1::2]) == {b"doc:1", b"doc:2"}
+        # # Test 14: Complex mixed predicate
+        result = client.execute_command("FT.SEARCH", "idx", '@price:[40 80] @tags:{footwear|clothing} -@content:*ing')
+        assert result[0] == 1 and result[1] == b"doc:3"
+        
+        # === CROSS-FIELD NEGATION TESTS ===
+        # Test 15: Cross-field negation
+        result = client.execute_command("FT.SEARCH", "idx", "@title:shoes -@content:walking")
+        assert result[0] == 1 and result[1] == b"doc:1"
+        # Test 16: Multiple cross-field negations
+        result = client.execute_command("FT.SEARCH", "idx", "-@title:shoes -@content:jacket")
+        assert result[0] == 5
+        assert set(result[1::2]) == {b"doc:5", b"doc:6", b"doc:7", b"doc:8", b"doc:9"}
+        
+        # === DOUBLE/TRIPLE NEGATION TESTS ===
+        # Test 17: Double negation (NOT NOT)
+        result = client.execute_command("FT.SEARCH", "idx", '-(-@title:red)')
+        assert result[0] == 2
+        assert set(result[1::2]) == {b"doc:1", b"doc:3"}
+        # Test 18: Triple negation
+        result = client.execute_command("FT.SEARCH", "idx", '-(-(-@title:red))')
+        assert result[0] == 7
+        assert  all_docs - set(result[1::2]) == {b"doc:1", b"doc:3"} 
+        
+        # === EDGE CASES ===
+        
+        # Test 19: Negation with nonexistent term (should return all)
+        result = client.execute_command("FT.SEARCH", "idx", "-nonexistent")
+        assert result[0] == 9
+        # Test 20: Negation includes docs with missing field
+        result = client.execute_command("FT.SEARCH", "idx", "-@title:shoes")
+        assert b"doc:8" in result[1::2] and b"doc:9" in result[1::2]
+        # Test 21: Empty result from strict negations
+        result = client.execute_command("FT.SEARCH", "idx", "shoes -shoes")
+        assert result[0] == 0
+        
+        # === REALISTIC PRODUCT SCENARIOS ===
+        
+        # Test 22: Find affordable footwear NOT for running
+        result = client.execute_command("FT.SEARCH", "idx", '@tags:{footwear} @price:[0 50] -@content:running')
+        assert result[0] == 1 and result[1] == b"doc:2"
+        # Test 23: Find jackets NOT for winter
+        result = client.execute_command("FT.SEARCH", "idx", '@title:jacket -@content:winter')
+        assert result[0] == 1 and result[1] == b"doc:4"
+
+        # ==== Nested AND with negation ===== 
+        # Test 24: Negations in nested AND
+        result = client.execute_command("FT.SEARCH", "idx", '(shoes -blue) red')
+        assert result[0] == 1 and result[1] == b"doc:1"
+        # Test 25: Multiple negations in nested AND
+        result = client.execute_command("FT.SEARCH", "idx", '(-winter -spring) jacket')
+
+        # Test 26: OR with one negated branch - (shoes | -jacket)
+        result = client.execute_command("FT.SEARCH", "idx", '(shoes | -jacket)')
+        assert result[0] == 7, f"Failed: OR with negation, expected 7 got {result[0]}"
+        assert set(result[1::2]) == {b"doc:1", b"doc:2", b"doc:5", b"doc:6", b"doc:7", b"doc:8", b"doc:9"}
+
+        # Test 27: OR with both branches negated - (-winter | -spring)
+        result = client.execute_command("FT.SEARCH", "idx", '(-winter | -spring)')
+        assert result[0] == 9, f"Failed: OR with both negated, expected 9 got {result[0]}"
+
+        # Test 28: OR with negation and positive - (red | -shoes)
+        result = client.execute_command("FT.SEARCH", "idx", '(red | -shoes)')
+        assert result[0] == 8, f"Failed: OR mixed, expected 8 got {result[0]}"
+        assert set(result[1::2]) == {b"doc:1", b"doc:3", b"doc:4", b"doc:5", b"doc:6", b"doc:7", b"doc:8", b"doc:9"}
+
+        # Test 29: Nested OR groups in AND - ((shoes | -jacket) (red | -blue))
+        result = client.execute_command("FT.SEARCH", "idx", '((shoes | -jacket) (red | -blue))')
+        assert result[0] == 6, f"Failed: nested OR in AND, expected 6 got {result[0]}"
+        assert set(result[1::2]) == {b"doc:1", b"doc:5", b"doc:6", b"doc:7", b"doc:8", b"doc:9"}
+
+        # Test 30: Three-level nesting - (((shoes -blue) | jacket) red)
+        result = client.execute_command("FT.SEARCH", "idx", '(((shoes -blue) | jacket) red)')
+        assert result[0] == 2, f"Failed: three-level nesting, expected 2 got {result[0]}"
+        assert set(result[1::2]) == {b"doc:1", b"doc:3"}
+
+        # Test 34: Tag with text negation in nested OR - (@tags:{footwear} (-blue | red))
+        result = client.execute_command("FT.SEARCH", "idx", '(@tags:{footwear} (-blue | red))')
+        assert result[0] == 1 and result[1] == b"doc:1", "Failed: tag with nested text negation"
+
+        # Test 35: Complex mixed OR of ANDs - ((@tags:{footwear} -@title:blue) | (@price:[40 80] -@content:winter))
+        result = client.execute_command("FT.SEARCH", "idx", 
+            '((@tags:{footwear} -@title:blue) | (@price:[40 80] -@content:winter))')
+        assert result[0] == 3, f"Failed: complex mixed OR, expected 3 got {result[0]}"
+        assert set(result[1::2]) == {b"doc:1", b"doc:2", b"doc:4"}
+
+
+
+
 class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
     """
     Tests that require debug mode enabled for memory statistics validation.

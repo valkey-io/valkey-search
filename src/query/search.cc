@@ -48,6 +48,7 @@
 #include "vmsdk/src/time_sliced_mrmw_mutex.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
+#include "src/indexes/text/negation_iterator.h"
 
 namespace valkey_search::query {
 
@@ -169,8 +170,10 @@ inline bool NeedsDeduplication(QueryOperations query_operations) {
 std::pair<std::unique_ptr<indexes::text::TextIterator>, size_t>
 BuildTextIterator(const Predicate *predicate, bool negate,
                   bool require_positions) {
+VMSDK_LOG(WARNING, nullptr) << "Entered BuildTextIterator  negate=" << negate;
   if (predicate->GetType() == PredicateType::kComposedAnd ||
       predicate->GetType() == PredicateType::kComposedOr) {
+    VMSDK_LOG(WARNING, nullptr) << "BuildTextIterator In kComposedAnd/kComposedOr block negate=" << negate;
     auto composed_predicate =
         dynamic_cast<const ComposedPredicate *>(predicate);
     auto predicate_type =
@@ -179,6 +182,7 @@ BuildTextIterator(const Predicate *predicate, bool negate,
     bool inorder = composed_predicate->GetInorder();
     bool child_require_positions = slop.has_value() || inorder;
     if (predicate_type == PredicateType::kComposedAnd) {
+    VMSDK_LOG(WARNING, nullptr) << "BuildTextIterator In kComposedAnd block negate=" << negate;
       absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
                           indexes::text::kProximityTermsInlineCapacity>
           iterators;
@@ -201,6 +205,7 @@ BuildTextIterator(const Predicate *predicate, bool negate,
               std::move(iterators), slop, inorder, nullptr, skip_positional),
           total_size};
     } else {
+      VMSDK_LOG(WARNING, nullptr) << "BuildTextIterator In kComposedOR block negate=" << negate;
       absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
                           indexes::text::kProximityTermsInlineCapacity>
           iterators;
@@ -226,13 +231,25 @@ BuildTextIterator(const Predicate *predicate, bool negate,
   }
   if (predicate->GetType() == PredicateType::kText) {
     auto text_predicate = dynamic_cast<const TextPredicate *>(predicate);
+    VMSDK_LOG(WARNING, nullptr) << "BuildTextIterator In kText block negate=" << negate;
     auto fetcher_ptr = text_predicate->Search(negate);
     auto fetcher = static_cast<indexes::Text::EntriesFetcher *>(fetcher_ptr);
     fetcher->require_positions_ = require_positions;
     size_t size = fetcher->Size();
-    return {text_predicate->BuildTextIterator(fetcher), size};
+    // return {text_predicate->BuildTextIterator(fetcher), size};
+    auto iter = text_predicate->BuildTextIterator(fetcher);
+    if (negate && iter) {
+       VMSDK_LOG(WARNING, nullptr) << "Wrapping in NegationIterator"; 
+      iter = std::make_unique<indexes::text::NegationIterator>(
+          std::move(iter),
+          text_predicate->GetTextIndexSchema(),
+          text_predicate->GetFieldMask()
+      );
+    }
+    return {std::move(iter), size};
   }
   if (predicate->GetType() == PredicateType::kNegate) {
+    VMSDK_LOG(WARNING, nullptr) << "BuildTextIterator In kNegate block negate=" << negate;
     auto negate_predicate = dynamic_cast<const NegatePredicate *>(predicate);
     return BuildTextIterator(negate_predicate->GetPredicate(), !negate,
                              require_positions);
@@ -245,6 +262,7 @@ size_t EvaluateFilterAsPrimary(
     const Predicate *predicate,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     bool negate, QueryOperations query_operations) {
+  VMSDK_LOG(WARNING, nullptr) << "Entered EvaluateFilterAsPrimary: negate=" << negate;
   if (predicate->GetType() == PredicateType::kComposedAnd ||
       predicate->GetType() == PredicateType::kComposedOr) {
     auto composed_predicate =
@@ -252,6 +270,7 @@ size_t EvaluateFilterAsPrimary(
     auto predicate_type =
         EvaluateAsComposedPredicate(composed_predicate, negate);
     if (predicate_type == PredicateType::kComposedAnd) {
+    VMSDK_LOG(WARNING, nullptr) << "Entered EvaluateFilterAsPrimary: kComposedAnd  negate=" << negate;
       auto [text_iter, size] =
           BuildTextIterator(composed_predicate, negate, false);
       if (text_iter) {
@@ -274,6 +293,7 @@ size_t EvaluateFilterAsPrimary(
       AppendQueue(entries_fetchers, best_fetchers);
       return min_size;
     } else {
+      VMSDK_LOG(WARNING, nullptr) << "Entered EvaluateFilterAsPrimary: kComposedOr negate=" << negate;
       size_t total_size = 0;
       for (const auto &child : composed_predicate->GetChildren()) {
         std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
@@ -286,6 +306,7 @@ size_t EvaluateFilterAsPrimary(
     }
   }
   if (predicate->GetType() == PredicateType::kTag) {
+    VMSDK_LOG(WARNING, nullptr) << "EvaluateFilterAsPrimary In kTag block negate=" << negate;
     auto tag_predicate = dynamic_cast<const TagPredicate *>(predicate);
     auto fetcher = tag_predicate->GetIndex()->Search(*tag_predicate, negate);
     size_t size = fetcher->Size();
@@ -293,6 +314,7 @@ size_t EvaluateFilterAsPrimary(
     return size;
   }
   if (predicate->GetType() == PredicateType::kNumeric) {
+    VMSDK_LOG(WARNING, nullptr) << "EvaluateFilterAsPrimary In kNumeric block negate=" << negate;
     auto numeric_predicate = dynamic_cast<const NumericPredicate *>(predicate);
     auto fetcher =
         numeric_predicate->GetIndex()->Search(*numeric_predicate, negate);
@@ -301,15 +323,39 @@ size_t EvaluateFilterAsPrimary(
     return size;
   }
   if (predicate->GetType() == PredicateType::kText) {
+    VMSDK_LOG(WARNING, nullptr) << "EvaluateFilterAsPrimary In text block negate=" << negate;
     auto text_predicate = dynamic_cast<const TextPredicate *>(predicate);
-    auto fetcher = std::unique_ptr<indexes::EntriesFetcherBase>(
-        static_cast<indexes::EntriesFetcherBase *>(
-            text_predicate->Search(negate)));
+    // auto fetcher = std::unique_ptr<indexes::EntriesFetcherBase>(
+    //     static_cast<indexes::EntriesFetcherBase *>(
+    //         text_predicate->Search(negate)));
+    // size_t size = fetcher->Size();
+    // entries_fetchers.push(std::move(fetcher));
+    // return size;
+      // Search() returns void* - the raw fetcher pointer
+    auto fetcher_raw = text_predicate->Search(negate);
+    auto fetcher = static_cast<indexes::Text::EntriesFetcher *>(fetcher_raw);
     size_t size = fetcher->Size();
-    entries_fetchers.push(std::move(fetcher));
+    // If negated, build and wrap the iterator
+    if (negate) {
+      auto iter = text_predicate->BuildTextIterator(fetcher);
+      iter = std::make_unique<indexes::text::NegationIterator>(
+          std::move(iter),
+          text_predicate->GetTextIndexSchema(),
+          text_predicate->GetFieldMask()
+      );
+      entries_fetchers.push(
+          std::make_unique<indexes::text::TextIteratorFetcher>(
+              std::move(iter), size));
+    } else {
+      // Not negated - wrap in unique_ptr as before
+      entries_fetchers.push(
+          std::unique_ptr<indexes::EntriesFetcherBase>(
+              static_cast<indexes::EntriesFetcherBase *>(fetcher)));
+    }
     return size;
   }
   if (predicate->GetType() == PredicateType::kNegate) {
+    VMSDK_LOG(WARNING, nullptr) << "EvaluateFilterAsPrimary In kNegate block negate=" << negate;
     auto negate_predicate = dynamic_cast<const NegatePredicate *>(predicate);
     size_t result =
         EvaluateFilterAsPrimary(negate_predicate->GetPredicate(),
@@ -331,6 +377,7 @@ void EvaluatePrefilteredKeys(
                             absl::flat_hash_set<const char *> &)>
         appender,
     size_t max_keys) {
+  VMSDK_LOG(WARNING, nullptr) << "In  EvaluatePrefilteredKeys(eval) entries_fetchers size=" << entries_fetchers.size() << "max_keys (qualified_entries size) is" << max_keys;
   // If there was a union operation, we need to handle deduplication.
   // This implementation skips deduplication (flat_hash_set usage) if not needed
   // for performance.
@@ -367,6 +414,7 @@ void EvaluatePrefilteredKeys(
       }
       indexes::PrefilterEvaluator key_evaluator(text_index);
       // 3. Evaluate predicate
+        VMSDK_LOG(WARNING, nullptr) << "In  EvaluatePrefilteredKeys(eval) Before eval. Key is >>" << key->Str();
       if (key_evaluator.Evaluate(
               *parameters.filter_parse_results.root_predicate, key)) {
         if (needs_dedup) {
@@ -545,6 +593,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
   // Cannot skip evaluation if the query contains unsolved composed operations.
   bool requires_prefilter_evaluation =
       IsUnsolvedQuery(parameters.filter_parse_results.query_operations);
+VMSDK_LOG(WARNING, nullptr) << "In SearchNonVectorQuery requires_prefilter_evaluation is " << requires_prefilter_evaluation;
+VMSDK_LOG(WARNING, nullptr) << "In SearchNonVectorQuery entries_fetchers size is " << entries_fetchers.size() << " and qualified_entries is " << qualified_entries;;
   if (!requires_prefilter_evaluation) {
     bool needs_dedup =
         NeedsDeduplication(parameters.filter_parse_results.query_operations);

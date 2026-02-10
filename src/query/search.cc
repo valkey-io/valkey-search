@@ -153,7 +153,8 @@ inline PredicateType EvaluateAsComposedPredicate(
 inline bool IsUnsolvedQuery(QueryOperations query_operations) {
   return query_operations & (QueryOperations::kContainsNumeric |
                              QueryOperations::kContainsTag) &&
-         query_operations & QueryOperations::kContainsAnd;
+         (query_operations & QueryOperations::kContainsAnd || (query_operations & QueryOperations::kContainsOr && query_operations & QueryOperations::kContainsNegate)) ||
+          query_operations & QueryOperations::kContainsNegate && query_operations & QueryOperations::kContainsAnd && query_operations & QueryOperations::kContainsText;
 }
 
 // Helper fn to identify if deduplication is needed.
@@ -162,7 +163,8 @@ inline bool IsUnsolvedQuery(QueryOperations query_operations) {
 inline bool NeedsDeduplication(QueryOperations query_operations) {
   bool has_or = query_operations & QueryOperations::kContainsOr;
   bool has_tag = query_operations & QueryOperations::kContainsTag;
-  return has_or || has_tag;
+  bool has_negate_or = query_operations & QueryOperations::kContainsNegate && query_operations & QueryOperations::kContainsAnd;
+  return has_or || has_tag || has_negate_or;
 }
 
 // Builds TextIterator for text predicates. Returns pair of iterator and
@@ -234,10 +236,8 @@ BuildTextIterator(const Predicate *predicate, bool negate,
     return {text_predicate->BuildTextIterator(fetcher), size};
   }
   if (predicate->GetType() == PredicateType::kNegate) {
-    auto negate_predicate = dynamic_cast<const NegatePredicate *>(predicate);
-    return BuildTextIterator(negate_predicate->GetPredicate(), !negate,
-                             require_positions);
-    // Construct Negation Iterator
+    // Cannot build text iterator for negation - return null to force
+    // NegateEntriesFetcher usage in EvaluateFilterAsPrimary
     return {nullptr, 0};
   }
   // Numeric/Tag

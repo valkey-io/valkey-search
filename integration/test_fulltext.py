@@ -2006,6 +2006,7 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         
         # Negation with AND
         result = client.execute_command("FT.SEARCH", "idx", "banana -apple", "DIALECT", "2")
+        print(result)
         assert (result[0], result[1]) == (1, b"doc:3")
         
         # Negation of phrase

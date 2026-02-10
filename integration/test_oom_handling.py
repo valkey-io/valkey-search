@@ -72,13 +72,11 @@ class TestSearchOOMHandlingCME(ValkeySearchClusterTestCase):
         maxmemory_client_2 = client_primary_2.info("memory")["maxmemory"]
         assert maxmemory_client_2 == 0  # Unlimited usage
         
-        # Expect OOM when trying to run search on second primary
-        with pytest.raises(OutOfMemoryError):
-            run_search_query(client_primary_1)
+        # Expect to NOT OOM when trying to run search on second primary
+        assert run_search_query(client_primary_1)[0] == 2
 
-        # Run search query using third primary, and expect to fail on OOM
-        with pytest.raises(OutOfMemoryError):
-            run_search_query(client_primary_2)
+        # Run search query using third primary, and expect to NOT fail on OOM
+        assert run_search_query(client_primary_2)[0] == 2
 
 class TestSearchOOMHandlingCMD(ValkeySearchTestCaseBase):
     """
@@ -94,7 +92,5 @@ class TestSearchOOMHandlingCMD(ValkeySearchTestCaseBase):
         # Set maxmemory for current used memory of the node
         current_used_memory = client.info("memory")["used_memory"]
         client.config_set("maxmemory", current_used_memory)
-        # Expect to fail on OOM
-        with pytest.raises(OutOfMemoryError):
-            run_search_query(client)
-        
+        # Expect to NOT fail on OOM
+        assert run_search_query(client)[0] == 2

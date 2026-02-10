@@ -298,7 +298,7 @@ FilterParser::ParseNumericPredicate(const std::string& attribute_alias) {
   VMSDK_ASSIGN_OR_RETURN(auto start, ParseNumber());
   if (!Match(' ', false) && !Match(',')) {
     return absl::InvalidArgumentError(
-        absl::StrCat("Expected space or `|` between start and end values of a "
+        absl::StrCat("Expected space or `,` between start and end values of a "
                      "numeric field. Position: ",
                      pos_));
   }

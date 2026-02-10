@@ -988,9 +988,9 @@ INSTANTIATE_TEST_SUITE_P(
             .k = 0,
             .ef = 0,
             .score_as = "",
-            .return_attributes = {{"id2", ""}},
             .expected_error_message =
                 "Index field `nonexistent_field` does not exist",
+            .return_attributes = {{"id2", ""}},
             .vector_query = false,
             .sortby_parameters_str = "sORTBy nonexistent_field ASc",
             .sortby_field = "nonexistent_field",

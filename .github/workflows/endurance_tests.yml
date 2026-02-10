@@ -64,14 +64,8 @@ on:
       - main
       - enduranceGitHubRun
       - enduranceMemory
-    paths:
-      - 'src/**'
-      - 'testing/**'
-      - 'vmsdk/src/**'
-      - 'vmsdk/testing/**'
-      - '.github/workflows/**'
   schedule:
-    - cron: "0 9 * * *" # Daily endurance tests at 2 AM UTC
+    - cron: "0 9 * * *"
 
 concurrency:
   group: endurance-tests-${{ github.head_ref || github.ref }}
@@ -80,8 +74,6 @@ concurrency:
 jobs:
   endurance-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 7200
-    
 
     steps:
     # Checkout the code from the repository
@@ -111,7 +103,6 @@ jobs:
 
     - name: Run Endurance Tests
       id: test-run
-      timeout-minutes: 7200
       env:
         SERVER_TYPE: 'valkey'
         BRANCH_VERSION: ${{ github.event.inputs.branch_version || 'unstable' }}
@@ -141,7 +132,7 @@ jobs:
           -e KEYSPACE_SIZE="${KEYSPACE_SIZE}" \
           --user "ubuntu:ubuntu" \
           endurance-test-image \
-          sudo -E /workspace/scripts/benchmark/run_endurance_test.sh
+          sudo -E scripts/benchmark/run_endurance_test.sh
 
     - name: Update Results Permissions
       if: always()

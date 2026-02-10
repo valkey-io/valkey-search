@@ -57,6 +57,12 @@ target_link_libraries(numeric PUBLIC segment_tree)
 target_link_libraries(numeric PUBLIC string_interning)
 target_link_libraries(numeric PUBLIC valkey_module)
 
+set(SRCS_NEGATE_FETCHER ${CMAKE_CURRENT_LIST_DIR}/negate_fetcher.cc
+                        ${CMAKE_CURRENT_LIST_DIR}/negate_fetcher.h)
+
+valkey_search_add_static_library(negate_fetcher "${SRCS_NEGATE_FETCHER}")
+target_link_libraries(negate_fetcher PUBLIC index_base)
+
 set(SRCS_TAG ${CMAKE_CURRENT_LIST_DIR}/tag.cc ${CMAKE_CURRENT_LIST_DIR}/tag.h)
 
 valkey_search_add_static_library(tag "${SRCS_TAG}")

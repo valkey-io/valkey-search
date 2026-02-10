@@ -267,6 +267,16 @@ class IndexSchema : public KeyspaceEventSubscription,
     return itr->second.mutation_sequence_number_;
   }
 
+  // Accessor for global key map (for negation queries)
+  // Safe to call from reader threads - protected by mutated_records_mutex_
+  const absl::flat_hash_map<Key, IndexKeyInfo>& GetIndexKeyInfo() const {
+    return index_key_info_;
+  }
+
+  size_t GetIndexKeyInfoSize() const {
+    return index_key_info_.size();
+  }
+
   // Unit test only
   void SetDbMutationSequenceNumber(const Key &key,
                                    MutationSequenceNumber sequence_number) {

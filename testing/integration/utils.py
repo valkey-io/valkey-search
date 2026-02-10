@@ -73,7 +73,7 @@ def start_valkey_process(
     )
 
     connected = False
-    for i in range(10):
+    for i in range(15):
         logging.info(
             "Attempting to connect to Valkey @ port %d (try #%d)", port, i
         )
@@ -653,11 +653,17 @@ class RandomIntervalTask:
 
 
 def periodic_bgsave_task(
-    client: valkey.ValkeyCluster,
+    client: Union[valkey.ValkeyCluster, valkey.Valkey],
 ) -> bool:
     try:
         logging.info("<BGSAVE> Invoking background save")
-        client.bgsave(target_nodes=client.ALL_NODES)
+        # Check if this is a cluster client or standalone
+        if hasattr(client, 'ALL_NODES'):
+            # Cluster mode
+            client.bgsave(target_nodes=client.ALL_NODES)
+        else:
+            # Standalone mode
+            client.bgsave()
     except (
         valkey.exceptions.ConnectionError,
         valkey.exceptions.ResponseError,

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, valkey-search contributors
+ * Copyright (c) 2026, valkey-search contributors
  * All rights reserved.
  * SPDX-License-Identifier: BSD 3-Clause
  *
@@ -15,15 +15,20 @@ class ThreadGroupCPUMonitor {
   ThreadGroupCPUMonitor(const std::string& thread_name_pattern);
   ~ThreadGroupCPUMonitor() = default;
 
-  absl::StatusOr<double> GetTotalGrpcCPUTime() const { return total_cpu_time_; }
+  double GetTotalGrpcCPUTime() const { return total_cpu_time_; }
 
-  void UpdateTotalCPUTimeSec();
+  void UpdateTotalCPUTimeSec() const;
 
  private:
   absl::StatusOr<double> CalcCurrentCPUTimeSec() const;
+#ifdef __APPLE__
+  absl::StatusOr<std::vector<thread_act_t>> GetThreadsByNameMac() const;
+#elif __linux__
+  absl::StatusOr<std::vector<std::string>> GetThreadsByNameLinux() const;
+#endif
 
   const std::string thread_name_pattern_;
-  std::atomic<double> total_cpu_time_{0.0};
-  double prev_cpu_time_{0.0};
+  mutable double total_cpu_time_{0.0};
+  mutable double prev_cpu_time_{0.0};
 };
 }  // namespace vmsdk

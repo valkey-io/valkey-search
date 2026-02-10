@@ -225,3 +225,4 @@ class TestHiddenConfigsCluster(ConfigTestMixin, ValkeySearchClusterTestCaseDebug
 
     def test_hidden_configs_not_accessible(self):
         self.assert_config_not_accessible(HIDDEN_CONFIGS)
+

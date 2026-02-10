@@ -75,7 +75,7 @@ class StabilityTests(parameterized.TestCase):
                 use_coordinator=False,
                 replica_count=0,  # No replica - testing save/restore
                 repl_diskless_load="swapdb",
-                maxmemory="2000mb",  # 2GB memory limit
+                maxmemory="500mb",  # 2GB memory limit
                 maxmemory_policy="noeviction",  # Reject writes on OOM instead of evicting
                 failover_interval_sec=0,  # No automatic failover
                 test_failover_recovery=False,  # Manual recovery after OOM
@@ -103,7 +103,7 @@ class StabilityTests(parameterized.TestCase):
                 use_coordinator=False,
                 replica_count=0,
                 repl_diskless_load="swapdb",
-                maxmemory="2000mb",
+                maxmemory="500mb",
                 maxmemory_policy="noeviction",
                 failover_interval_sec=0,
                 test_failover_recovery=False,
@@ -131,7 +131,7 @@ class StabilityTests(parameterized.TestCase):
                 use_coordinator=False,
                 replica_count=0,
                 repl_diskless_load="swapdb",
-                maxmemory="2000mb",
+                maxmemory="500mb",
                 maxmemory_policy="noeviction",
                 failover_interval_sec=0,
                 test_failover_recovery=False,
@@ -159,7 +159,7 @@ class StabilityTests(parameterized.TestCase):
                 use_coordinator=False,
                 replica_count=0,
                 repl_diskless_load="swapdb",
-                maxmemory="2000mb",
+                maxmemory="500mb",
                 maxmemory_policy="noeviction",
                 failover_interval_sec=0,
                 test_failover_recovery=False,
@@ -788,49 +788,106 @@ class StabilityTests(parameterized.TestCase):
                             if num_docs == 0:
                                 self.fail("Index restored but contains no documents")
                             
-                            # 2. Verify searchable
-                            test_vector = np.random.rand(config.vector_dimensions).astype(np.float32).tobytes()
-                            search_result = valkey_conn.execute_command(
-                                "FT.SEARCH", config.index_name,
-                                "(@tag:{my_tag} @numeric:[0 100])=>[KNN 3 @embedding $query_vector]",
-                                "NOCONTENT",
-                                "PARAMS", "2", "query_vector", test_vector,
-                                "DIALECT", "2"
-                            )
-                            logging.info(f"✓ Index is searchable ({search_result[0]} results)")
+                            # 2. Verify searchable - use exact same queries as stability_runner.py
+                            if config.index_type in ["HNSW", "FLAT"]:
+                                test_vector = np.random.rand(config.vector_dimensions).astype(np.float32).tobytes()
+                                search_result = valkey_conn.execute_command(
+                                    "FT.SEARCH", config.index_name,
+                                    "(@tag:{my_tag} @numeric:[0 100])=>[KNN 3 @embedding $query_vector]",
+                                    "NOCONTENT",
+                                    "PARAMS", "2", "query_vector", test_vector,
+                                    "DIALECT", "2"
+                                )
+                            elif config.index_type == "TEXT":
+                                search_result = valkey_conn.execute_command(
+                                    "FT.SEARCH", config.index_name,
+                                    "(@tag:{my_tag} @numeric:[0 100] @content:sample_search_document_with_electronics | @category:electronics)"
+                                )
+                            elif config.index_type == "TAG":
+                                search_result = valkey_conn.execute_command(
+                                    "FT.SEARCH", config.index_name,
+                                    "(@category:{electronics} @product_type:{smartwatch})"
+                                )
+                            elif config.index_type == "NUMERIC":
+                                search_result = valkey_conn.execute_command(
+                                    "FT.SEARCH", config.index_name,
+                                    "(@price:[100 500] @quantity:[10 100] @rating:[40 50])"
+                                )
+                            logging.info(f"Index is searchable ({search_result[0]} results)")
                             
-                            # 3. Verify writable
+                            # 3. Verify writable and indexing - write new data and verify it can be searched
                             test_key = f"restore_test_key_{int(time.time())}"
-                            valkey_conn.execute_command(
-                                "HSET", test_key,
-                                "embedding", test_vector,
-                                "tag", "my_tag",
-                                "numeric", "42",
-                                "title", "restore_test",
-                                "description", "testing_restore"
-                            )
-                            verify = valkey_conn.execute_command("HGET", test_key, "title")
-                            if verify == b"restore_test" or verify == "restore_test":
-                                logging.info("✓ Write operations functional")
-                            else:
-                                self.fail("Failed to write after restore")
+                            if config.index_type in ["HNSW", "FLAT"]:
+                                test_vector = np.random.rand(config.vector_dimensions).astype(np.float32).tobytes()
+                                valkey_conn.execute_command(
+                                    "HSET", test_key,
+                                    "embedding", test_vector,
+                                    "tag", "my_tag",
+                                    "numeric", "10",
+                                    "title", "restore_test_unique",
+                                    "description", "testing_restore"
+                                )
+                                # Verify by searching for the unique title
+                                verify_search = valkey_conn.execute_command(
+                                    "FT.SEARCH", config.index_name,
+                                    "(@title:restore_test_unique)",
+                                    "NOCONTENT"
+                                )
+                            elif config.index_type == "TEXT":
+                                valkey_conn.execute_command(
+                                    "HSET", test_key,
+                                    "tag", "my_tag",
+                                    "numeric", "10",
+                                    "content", "restore_test_unique_content",
+                                    "category", "electronics"
+                                )
+                                # Verify by searching for the unique content
+                                verify_search = valkey_conn.execute_command(
+                                    "FT.SEARCH", config.index_name,
+                                    "(@content:restore_test_unique_content)",
+                                    "NOCONTENT"
+                                )
+                            elif config.index_type == "TAG":
+                                valkey_conn.execute_command(
+                                    "HSET", test_key,
+                                    "category", "electronics,gadgets,wearables",
+                                    "product_type", "smartwatch|fitness",
+                                    "brand", "restore_test_unique_brand",
+                                    "features", "waterproof;heartrate;gps"
+                                )
+                                # Verify by searching for the unique brand
+                                verify_search = valkey_conn.execute_command(
+                                    "FT.SEARCH", config.index_name,
+                                    "(@brand:{restore_test_unique_brand})",
+                                    "NOCONTENT"
+                                )
+                            elif config.index_type == "NUMERIC":
+                                valkey_conn.execute_command(
+                                    "HSET", test_key,
+                                    "price", "99999",
+                                    "quantity", "50",
+                                    "rating", "45",
+                                    "timestamp", "1640000000"
+                                )
+
+                                # Verify by searching for the unique price
+                                verify_search = valkey_conn.execute_command(
+                                    "FT.SEARCH", config.index_name,
+                                    "(@price:[99998 100000])",
+                                    "NOCONTENT"
+                                )
                             
-                            # 4. Verify indexing works
-                            time.sleep(2)
-                            search_result2 = valkey_conn.execute_command(
-                                "FT.SEARCH", config.index_name,
-                                "(@tag:{my_tag})",
-                                "LIMIT", "0", "1"
-                            )
-                            if search_result2[0] > 0:
-                                logging.info("✓ Indexing operational")
+                            if verify_search[0] > 0:
+                                logging.info("Write and indexing operations functional")
+                            else:
+                                self.fail("Failed to index new data after restore - wrote data but couldn't search for it")
                             
                             valkey_conn.execute_command("DEL", test_key)
                             
                             logging.info("=" * 60)
                             logging.info("SUCCESS: OOM RECOVERY VERIFIED")
-                            logging.info(f"✓ Server restarted and restored {num_docs} documents")
-                            logging.info("✓ All functionality verified")
+                            logging.info(f"Server restarted and restored {num_docs} documents")
+                            logging.info("All functionality verified")
                             logging.info("=" * 60)
                                 
                         except valkey.exceptions.ValkeyError as e:

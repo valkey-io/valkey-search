@@ -303,6 +303,8 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
     std::lock_guard<std::mutex> per_key_guard(per_key_text_indexes_mutex_);
     per_key_text_indexes_.emplace(key, std::move(key_index));
   }
+  // Remove from untracked since this key now has text content
+  RemoveFromUntracked(key);
 }
 
 void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {

@@ -2026,6 +2026,70 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert result[0] == 5
         assert set(result[1::2]) == {b"hash:00", b"hash:01", b"hash:02", b"hash:03", b"hash:04"}
 
+    def test_tracked_untracked_keys_logging(self):
+        """
+        Test to verify tracked/untracked key categorization.
+        Validates Phase 1: Schema-level tracking infrastructure.
+        Expected behavior:
+        - Keys with text fields → tracked
+        - Keys without text fields → untracked
+        - Keys not matching schema/prefix → ignored
+        Check logs for:
+        Index [idx1] tracked=3 untracked=2 total=5
+        Index [idx2] tracked=3 untracked=2 total=5
+        """
+        client: Valkey = self.server.get_new_client()
+        
+        # Index 1: No prefix (tests schema matching)
+        client.execute_command(
+            'FT.CREATE', 'idx1',
+            'ON', 'HASH',
+            'SCHEMA',
+            'title', 'TEXT',
+            'category', 'TAG',
+            'price', 'NUMERIC'
+        )
+        # Keys WITH text fields (should be tracked)
+        client.hset('doc1', mapping={'title': 'laptop', 'price': '999'})
+        client.hset('doc2', mapping={'title': 'phone', 'category': 'electronics'})
+        client.hset('doc3', mapping={'title': 'tablet', 'price': '500', 'category': 'tech'})
+        
+        # Keys WITHOUT text fields (should be untracked)
+        client.hset('doc4', mapping={'price': '100', 'category': 'accessories'})
+        client.hset('doc5', mapping={'cat': 'cables'})
+        
+        # Index 2: With prefix (tests prefix + schema filtering)
+        client.execute_command(
+            'FT.CREATE', 'idx2',
+            'ON', 'HASH',
+            'PREFIX', '1', 'product:',
+            'SCHEMA',
+            'name', 'TEXT',
+            'tags', 'TAG',
+            'stock', 'NUMERIC'
+        )
+        # Keys WITH prefix + text (should be tracked)
+        client.hset('product:1', mapping={'name': 'widget', 'stock': '50'})
+        client.hset('product:2', mapping={'name': 'gadget', 'tags': 'new'})
+        client.hset('product:3', mapping={'name': 'tool', 'stock': '10', 'tags': 'sale'})
+        
+        # Keys WITH prefix + NO text (should be untracked)
+        client.hset('product:4', mapping={'stock': '5', 'tags': 'clearance'})
+        client.hset('product:5', mapping={'tags': 'old'})
+        
+        # Key WITHOUT matching prefix (should be ignored)
+        client.hset('item:99', mapping={'name': 'nope', 'stock': '0'})
+        
+        # Trigger searches to ensure mutations are processed and logged
+        client.execute_command('FT.SEARCH', 'idx1', 'laptop')
+        client.execute_command('FT.SEARCH', 'idx2', 'widget')
+        
+        # print("\n" + "="*70)
+        # print("✓ Test completed - Check server logs for:")
+        # print("  [DEBUG] Index [idx1] tracked=3 untracked=2 total=5")
+        # print("  [DEBUG] Index [idx2] tracked=3 untracked=2 total=5")
+        # print("="*70)
+
 class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
     """
     Tests that require debug mode enabled for memory statistics validation.

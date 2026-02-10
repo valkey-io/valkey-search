@@ -542,6 +542,29 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
       added = true;
     }
   }
+  // NEW: Manage untracked keys for negation queries
+  if (text_index_schema_ && added) {
+    // Check if key has any text attributes
+    bool has_text_attributes = false;
+    for (const auto &[alias, attr_data] : mutated_attributes) {
+      auto index_result = GetIndex(alias);
+      if (index_result.ok() && 
+          index_result.value()->GetIndexerType() == indexes::IndexerType::kText) {
+        has_text_attributes = true;
+        break;
+      }
+    }
+    // Manage untracked state based on key existence and text presence
+    if (key_obj && !has_text_attributes) {
+      // Key exists but has NO text content → add to untracked
+      text_index_schema_->AddKeyAsUntracked(interned_key);
+    } else if (!key_obj) {
+      // Key deleted from Redis → remove from untracked
+      text_index_schema_->RemoveFromUntracked(interned_key);
+    }
+    // Note: If key has text content, CommitKeyData will remove it from untracked
+  }
+
   if (added) {
     switch (attribute_data_type_->ToProto()) {
       case data_model::ATTRIBUTE_DATA_TYPE_HASH:
@@ -563,6 +586,10 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
     }
     ProcessMutation(ctx, mutated_attributes, interned_key, from_backfill,
                     key_obj == nullptr);
+  }
+  if (text_index_schema_) {
+    VMSDK_LOG(WARNING, ctx) << "Index [" << name_ << "] " 
+                          << text_index_schema_->GetKeysDebugSummary();
   }
 }
 

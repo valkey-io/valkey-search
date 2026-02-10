@@ -48,6 +48,7 @@ class Text : public IndexBase {
   }
   bool IsStemmingEnabled() const { return !no_stem_; }
   bool WithSuffixTrie() const { return with_suffix_trie_; }
+  double Weight() const { return weight_; }
   absl::StatusOr<bool> AddRecord(const InternedStringPtr& key,
                                  absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
@@ -141,6 +142,7 @@ class Text : public IndexBase {
 
   bool with_suffix_trie_;
   bool no_stem_;
+  double weight_;
 
   // TODO: Map to track which keys are indexed and their raw data
 

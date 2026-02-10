@@ -47,8 +47,8 @@ struct Lexer {
       absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>*
           stem_mappings = nullptr) const;
 
-  std::string StemWord(const std::string& word, uint32_t min_stem_size,
-                       sb_stemmer* stemmer) const;
+  std::string StemWord(const std::string& word, sb_stemmer* stemmer,
+                       uint32_t min_stem_size = 0) const;
   bool IsPunctuation(char c) const {
     return punct_bitmap_[static_cast<unsigned char>(c)];
   }

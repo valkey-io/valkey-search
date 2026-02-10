@@ -1,51 +1,54 @@
 # Use Ubuntu 24.04 as the base image
 FROM ubuntu:noble
 
-# Choose different mirror for Ubuntu
-RUN sed -i 's/archive\.ubuntu/us\.archive\.ubuntu/g' /etc/apt/sources.list.d/ubuntu.sources
-
-RUN apt update && apt-get install -y ca-certificates
-
 # Set non-interactive mode for APT
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    software-properties-common
-RUN add-apt-repository ppa:ubuntu-toolchain-r/test && apt update
-
-RUN apt update && apt-get install -y \
-    libssl-dev \
-    build-essential \
-    git \
-    vim \
-    bash \
-    gdb \
-    cmake \
-    ninja-build \
-    bash-completion \
-    entr \
-    coreutils \
-    libsystemd-dev \
-    python3-pip \
-    python3.12-venv \
-    locales-all \
-    locales \
-    clang-tidy \
-    clang-format \
-    clangd \
-    sudo \
-    wget \
-    jq
-
-RUN apt install -y lsb-release curl gpg
-RUN curl -fsSL https://packages.redis.io/gpg | sudo gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg
-RUN echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/redis.list
-RUN apt update && apt-get install -y memtier-benchmark
-
-RUN update-ca-certificates
-
-RUN rm -rf /var/lib/apt/lists/*
+# Combine all apt operations into fewer layers
+RUN apt update && \
+    apt install -y --no-install-recommends \
+        ca-certificates \
+        software-properties-common \
+        lsb-release \
+        curl \
+        gpg \
+        sudo \
+        wget && \
+    # Add repositories
+    add-apt-repository ppa:ubuntu-toolchain-r/test && \
+    # Add Redis repository
+    curl -fsSL https://packages.redis.io/gpg | gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg && \
+    echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/redis.list && \
+    # Single apt update after all repos are added
+    apt update && \
+    # Install all packages in one command
+    apt install -y --no-install-recommends \
+        libssl-dev \
+        build-essential \
+        git \
+        vim \
+        bash \
+        gdb \
+        cmake \
+        ninja-build \
+        bash-completion \
+        entr \
+        coreutils \
+        libsystemd-dev \
+        python3-pip \
+        python3.12-venv \
+        locales-all \
+        locales \
+        clang-tidy \
+        clang-format \
+        clangd \
+        jq \
+        memtier-benchmark && \
+    # Update certificates
+    update-ca-certificates && \
+    # Clean up apt cache to reduce image size
+    apt clean && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 # /usr/local/bin should always come before /usr/bin in the PATH
 ENV PATH="/usr/local/bin:$PATH"
@@ -111,3 +114,4 @@ RUN touch /home/$USER_NAME/.bash_history && \
 
 # Default shell
 SHELL ["/bin/bash", "-c"]
+

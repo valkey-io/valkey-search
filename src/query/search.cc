@@ -583,16 +583,6 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
 
 absl::StatusOr<std::vector<indexes::Neighbor>> DoSearch(
     const SearchParameters &parameters, SearchMode search_mode) {
-  // Handle OOM for search requests, defends against request
-  // coming from the coordinator
-  if (search_mode == SearchMode::kRemote) {
-    auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
-    auto ctx_flags = ValkeyModule_GetContextFlags(ctx.get());
-    if (ctx_flags & VALKEYMODULE_CTX_FLAGS_OOM) {
-      return absl::ResourceExhaustedError(kOOMMsg);
-    }
-  }
-
   auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
   vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
   ++Metrics::GetStats().time_slice_queries;

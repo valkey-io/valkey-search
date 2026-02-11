@@ -40,6 +40,10 @@
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
+namespace valkey_search {
+enum class QueryOperations : uint64_t;
+}
+
 namespace valkey_search::indexes {
 
 std::vector<char> NormalizeEmbedding(absl::string_view record, size_t type_size,
@@ -267,8 +271,9 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
 class PrefilterEvaluator : public query::Evaluator {
  public:
   explicit PrefilterEvaluator(
-      const valkey_search::indexes::text::TextIndex* text_index = nullptr)
-      : text_index_(text_index) {}
+      const valkey_search::indexes::text::TextIndex* text_index = nullptr,
+      QueryOperations query_operations = QueryOperations(0))
+      : text_index_(text_index), query_operations_(query_operations) {}
   bool Evaluate(const query::Predicate& predicate,
                 const InternedStringPtr& key);
   const InternedStringPtr& GetTargetKey() const override {
@@ -276,6 +281,7 @@ class PrefilterEvaluator : public query::Evaluator {
     return *key_;
   }
   bool IsPrefilterEvaluator() const override { return true; }
+  QueryOperations GetQueryOperations() const { return query_operations_; }
 
  private:
   query::EvaluationResult EvaluateTags(
@@ -286,6 +292,7 @@ class PrefilterEvaluator : public query::Evaluator {
                                        bool require_positions) override;
   const valkey_search::indexes::text::TextIndex* text_index_;
   const InternedStringPtr* key_{nullptr};
+  QueryOperations query_operations_;
 };
 
 }  // namespace valkey_search::indexes

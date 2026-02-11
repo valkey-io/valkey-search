@@ -15,9 +15,11 @@
 #include "absl/container/inlined_vector.h"
 #include "absl/strings/match.h"
 #include "absl/strings/string_view.h"
+#include "src/commands/filter_parser.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
+#include "src/indexes/vector_base.h"
 #include "src/indexes/text/fuzzy.h"
 #include "src/indexes/text/orproximity.h"
 #include "src/indexes/text/proximity.h"
@@ -431,10 +433,14 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator &evaluator) const {
     for (const auto &child : children_) {
       // In AND: skip text children when in prefilter evaluation because text in
       // AND is fully (recursively) resolved in the entries fetcher layer
-      // already.
+      // already. UNLESS query contains negation.
       if (evaluator.IsPrefilterEvaluator() &&
           child->GetType() == PredicateType::kText) {
-        continue;
+        auto* prefilter_eval = static_cast<indexes::PrefilterEvaluator*>(&evaluator);
+        auto query_ops = prefilter_eval->GetQueryOperations();
+        if (!(static_cast<uint64_t>(query_ops) & static_cast<uint64_t>(QueryOperations::kContainsNegate))) {
+          continue;
+        }
       }
       EvaluationResult result =
           EvaluatePredicate(child.get(), evaluator, require_positions);

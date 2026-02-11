@@ -25,13 +25,13 @@
 #include "absl/strings/str_join.h"
 #include "src/attribute_data_type.h"
 #include "src/indexes/index_base.h"
-#include "src/indexes/negate_fetcher.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
 #include "src/indexes/text/orproximity.h"
 #include "src/indexes/text/proximity.h"
 #include "src/indexes/text/text_fetcher.h"
+#include "src/indexes/universal_set_fetcher.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
@@ -150,21 +150,24 @@ inline PredicateType EvaluateAsComposedPredicate(
 // Helper fn to identify if query is not fully solved after the entries fetcher
 // search, meaning it requires prefilter evaluation Prefiltering is needed when
 // query contains an AND with numeric or tag predicates.
+// It is also needed when negate is involved.
 inline bool IsUnsolvedQuery(QueryOperations query_operations) {
   return query_operations & (QueryOperations::kContainsNumeric |
                              QueryOperations::kContainsTag) &&
-         (query_operations & QueryOperations::kContainsAnd || (query_operations & QueryOperations::kContainsOr && query_operations & QueryOperations::kContainsNegate)) ||
-          query_operations & QueryOperations::kContainsNegate && query_operations & QueryOperations::kContainsAnd && query_operations & QueryOperations::kContainsText;
+         query_operations & QueryOperations::kContainsAnd || (
+             query_operations & QueryOperations::kContainsNegate);
 }
 
 // Helper fn to identify if deduplication is needed.
 // (1) OR operations need deduplication.
 // (2) Any TAG operations need deduplication.
+// (3) Non-text negation needs deduplication (uses NegateEntriesFetcher)
 inline bool NeedsDeduplication(QueryOperations query_operations) {
   bool has_or = query_operations & QueryOperations::kContainsOr;
   bool has_tag = query_operations & QueryOperations::kContainsTag;
-  bool has_negate_or = query_operations & QueryOperations::kContainsNegate && query_operations & QueryOperations::kContainsAnd;
-  return has_or || has_tag || has_negate_or;
+  bool has_nontext_negate = (query_operations & QueryOperations::kContainsNegate) &&
+                            !(query_operations & QueryOperations::kContainsText);
+  return has_or || has_tag || has_nontext_negate;
 }
 
 // Builds TextIterator for text predicates. Returns pair of iterator and
@@ -236,8 +239,7 @@ BuildTextIterator(const Predicate *predicate, bool negate,
     return {text_predicate->BuildTextIterator(fetcher), size};
   }
   if (predicate->GetType() == PredicateType::kNegate) {
-    // Cannot build text iterator for negation - return null to force
-    // NegateEntriesFetcher usage in EvaluateFilterAsPrimary
+    // Cannot build text iterator for negation - return null
     return {nullptr, 0};
   }
   // Numeric/Tag
@@ -249,11 +251,22 @@ size_t EvaluateFilterAsPrimary(
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     bool negate, QueryOperations query_operations,
     const IndexSchema* index_schema) {
+  // Always use universal set when query has text + negate
+  if ((query_operations & QueryOperations::kContainsText) &&
+      (query_operations & QueryOperations::kContainsNegate)) {
+    CHECK(index_schema != nullptr) << "IndexSchema required for text+negate";
+    auto universal_fetcher = std::make_unique<indexes::UniversalSetFetcher>(index_schema);
+    size_t size = universal_fetcher->Size();
+    entries_fetchers.push(std::move(universal_fetcher));
+    return size;
+  }
+
   if (predicate->GetType() == PredicateType::kComposedAnd ||
       predicate->GetType() == PredicateType::kComposedOr) {
     auto composed_predicate =
         dynamic_cast<const ComposedPredicate *>(predicate);
-    auto predicate_type = composed_predicate->GetType();
+    auto predicate_type =
+        EvaluateAsComposedPredicate(composed_predicate, negate);
     if (predicate_type == PredicateType::kComposedAnd) {
       auto [text_iter, size] =
           BuildTextIterator(composed_predicate, negate, false);
@@ -316,18 +329,10 @@ size_t EvaluateFilterAsPrimary(
   }
   if (predicate->GetType() == PredicateType::kNegate) {
     auto negate_predicate = dynamic_cast<const NegatePredicate *>(predicate);
-    // Always use NegateEntriesFetcher - never apply De Morgan's Law
-    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> inner_fetchers;
-    size_t inner_size = EvaluateFilterAsPrimary(
-        negate_predicate->GetPredicate(), inner_fetchers, false,
-        query_operations, index_schema);
-
-    CHECK(index_schema != nullptr) << "IndexSchema required for negation";
-    auto negate_fetcher = std::make_unique<indexes::NegateEntriesFetcher>(
-        std::move(inner_fetchers), index_schema);
-    size_t negated_size = negate_fetcher->Size();
-    entries_fetchers.push(std::move(negate_fetcher));
-    return negated_size;
+    size_t result =
+        EvaluateFilterAsPrimary(negate_predicate->GetPredicate(),
+                                entries_fetchers, !negate, query_operations, index_schema);
+    return result;
   }
   CHECK(false);
 }
@@ -378,7 +383,8 @@ void EvaluatePrefilteredKeys(
             valkey_search::indexes::text::TextIndexSchema::LookupTextIndex(
                 *per_key_indexes, key);
       }
-      indexes::PrefilterEvaluator key_evaluator(text_index);
+      indexes::PrefilterEvaluator key_evaluator(text_index,
+          parameters.filter_parse_results.query_operations);
       // 3. Evaluate predicate
       if (key_evaluator.Evaluate(
               *parameters.filter_parse_results.root_predicate, key)) {

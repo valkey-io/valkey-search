@@ -147,15 +147,12 @@ class RemoteResponderSearch : public query::SearchParameters {
     auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
     const auto& attribute_data_type = index_schema->GetAttributeDataType();
     size_t original_size = neighbors.size();
-    if (attribute_alias.empty()) {
-      query::ProcessNonVectorNeighborsForReply(ctx.get(), attribute_data_type,
-                                               neighbors, *this);
-    } else {
-      auto vector_identifier =
-          index_schema->GetIdentifier(attribute_alias).value();
-      query::ProcessNeighborsForReply(ctx.get(), attribute_data_type, neighbors,
-                                      *this, vector_identifier);
+    std::optional<std::string> vector_identifier = std::nullopt;
+    if (!attribute_alias.empty()) {
+      vector_identifier = index_schema->GetIdentifier(attribute_alias).value();
     }
+    query::ProcessNeighborsForReply(ctx.get(), attribute_data_type, neighbors,
+                                    *this, vector_identifier);
     // Adjust total_count based on modified neighbours
     size_t removed = original_size - neighbors.size();
     size_t adjusted_total_count =

@@ -19,12 +19,12 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
-#include "src/indexes/vector_base.h"
 #include "src/indexes/text/fuzzy.h"
 #include "src/indexes/text/orproximity.h"
 #include "src/indexes/text/proximity.h"
 #include "src/indexes/text/text_index.h"
 #include "src/indexes/text/text_iterator.h"
+#include "src/indexes/vector_base.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -436,9 +436,11 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator &evaluator) const {
       // already. UNLESS query contains negation.
       if (evaluator.IsPrefilterEvaluator() &&
           child->GetType() == PredicateType::kText) {
-        auto* prefilter_eval = static_cast<indexes::PrefilterEvaluator*>(&evaluator);
+        auto *prefilter_eval =
+            static_cast<indexes::PrefilterEvaluator *>(&evaluator);
         auto query_ops = prefilter_eval->GetQueryOperations();
-        if (!(static_cast<uint64_t>(query_ops) & static_cast<uint64_t>(QueryOperations::kContainsNegate))) {
+        if (!(static_cast<uint64_t>(query_ops) &
+              static_cast<uint64_t>(QueryOperations::kContainsNegate))) {
           continue;
         }
       }

@@ -154,8 +154,8 @@ inline PredicateType EvaluateAsComposedPredicate(
 inline bool IsUnsolvedQuery(QueryOperations query_operations) {
   return query_operations & (QueryOperations::kContainsNumeric |
                              QueryOperations::kContainsTag) &&
-         query_operations & QueryOperations::kContainsAnd || (
-             query_operations & QueryOperations::kContainsNegate);
+             query_operations & QueryOperations::kContainsAnd ||
+         (query_operations & QueryOperations::kContainsNegate);
 }
 
 // Helper fn to identify if deduplication is needed.
@@ -254,12 +254,13 @@ size_t EvaluateFilterAsPrimary(
     const Predicate *predicate,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     bool negate, QueryOperations query_operations,
-    const IndexSchema* index_schema) {
+    const IndexSchema *index_schema) {
   // Always use universal set when query has text + negate
   if ((query_operations & QueryOperations::kContainsText) &&
       (query_operations & QueryOperations::kContainsNegate)) {
     CHECK(index_schema != nullptr) << "IndexSchema required for text+negate";
-    auto universal_fetcher = std::make_unique<indexes::UniversalSetFetcher>(index_schema);
+    auto universal_fetcher =
+        std::make_unique<indexes::UniversalSetFetcher>(index_schema);
     size_t size = universal_fetcher->Size();
     entries_fetchers.push(std::move(universal_fetcher));
     return size;
@@ -284,9 +285,9 @@ size_t EvaluateFilterAsPrimary(
       std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> best_fetchers;
       for (const auto &child : composed_predicate->GetChildren()) {
         std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
-        size_t child_size = EvaluateFilterAsPrimary(child.get(), child_fetchers,
-                                                    negate, query_operations,
-                                                    index_schema);
+        size_t child_size =
+            EvaluateFilterAsPrimary(child.get(), child_fetchers, negate,
+                                    query_operations, index_schema);
         if (child_size < min_size) {
           min_size = child_size;
           best_fetchers = std::move(child_fetchers);
@@ -298,9 +299,9 @@ size_t EvaluateFilterAsPrimary(
       size_t total_size = 0;
       for (const auto &child : composed_predicate->GetChildren()) {
         std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
-        size_t child_size = EvaluateFilterAsPrimary(child.get(), child_fetchers,
-                                                    negate, query_operations,
-                                                    index_schema);
+        size_t child_size =
+            EvaluateFilterAsPrimary(child.get(), child_fetchers, negate,
+                                    query_operations, index_schema);
         AppendQueue(entries_fetchers, child_fetchers);
         total_size += child_size;
       }
@@ -333,9 +334,9 @@ size_t EvaluateFilterAsPrimary(
   }
   if (predicate->GetType() == PredicateType::kNegate) {
     auto negate_predicate = dynamic_cast<const NegatePredicate *>(predicate);
-    size_t result =
-        EvaluateFilterAsPrimary(negate_predicate->GetPredicate(),
-                                entries_fetchers, !negate, query_operations, index_schema);
+    size_t result = EvaluateFilterAsPrimary(negate_predicate->GetPredicate(),
+                                            entries_fetchers, !negate,
+                                            query_operations, index_schema);
     return result;
   }
   CHECK(false);
@@ -387,8 +388,8 @@ void EvaluatePrefilteredKeys(
             valkey_search::indexes::text::TextIndexSchema::LookupTextIndex(
                 *per_key_indexes, key);
       }
-      indexes::PrefilterEvaluator key_evaluator(text_index,
-          parameters.filter_parse_results.query_operations);
+      indexes::PrefilterEvaluator key_evaluator(
+          text_index, parameters.filter_parse_results.query_operations);
       // 3. Evaluate predicate
       if (key_evaluator.Evaluate(
               *parameters.filter_parse_results.root_predicate, key)) {

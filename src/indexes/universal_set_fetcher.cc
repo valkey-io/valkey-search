@@ -2,20 +2,16 @@
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  * SPDX-License-Identifier: BSD 3-Clause
- *
  */
 
 #include "src/indexes/universal_set_fetcher.h"
+
 #include "src/index_schema.h"
 
 namespace valkey_search::indexes {
 
-// --- Fetcher Implementation ---
-
 UniversalSetFetcher::UniversalSetFetcher(const IndexSchema* index_schema)
-    : index_schema_(index_schema) {
-  size_ = index_schema_->GetIndexKeyInfoSize();
-}
+    : index_schema_(index_schema), size_(index_schema->GetIndexKeyInfoSize()) {}
 
 std::unique_ptr<EntriesFetcherIteratorBase> UniversalSetFetcher::Begin() {
   return std::make_unique<Iterator>(index_schema_);

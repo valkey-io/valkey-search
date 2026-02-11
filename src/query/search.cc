@@ -763,6 +763,10 @@ absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
   return absl::OkStatus();
 }
 
+bool QueryHasTextPredicate(const SearchParameters &parameters) {
+  return parameters.filter_parse_results.has_text_predicate;
+}
+
 // Increment query operation metrics based on query operations flags.
 // File-internal helper function.
 void IncrementQueryOperationMetrics(QueryOperations query_operations) {

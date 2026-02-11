@@ -11,7 +11,6 @@
 
 #include <cstddef>
 #include <cstring>
-#include <deque>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -34,6 +33,9 @@
 #include "src/coordinator/search_converter.h"
 #include "src/coordinator/util.h"
 #include "src/indexes/vector_base.h"
+#include "src/metrics.h"
+#include "src/query/inflight_retry.h"
+#include "src/query/response_generator.h"
 #include "src/query/search.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
@@ -186,6 +188,37 @@ struct SearchPartitionResultsTracker {
   }
 };
 
+// SearchParameters subclass for local responder (local shard in fanout).
+// Handles in-flight retry completion by adding results to the tracker.
+class LocalResponderSearch : public query::SearchParameters {
+ public:
+  std::shared_ptr<SearchPartitionResultsTracker> tracker;
+  std::vector<indexes::Neighbor> neighbors;
+  size_t total_count;
+
+  LocalResponderSearch(std::shared_ptr<SearchPartitionResultsTracker> trk,
+                       std::unique_ptr<SearchParameters> &&params,
+                       std::vector<indexes::Neighbor> &&nbrs, size_t count)
+      : query::SearchParameters(std::move(*params)),
+        tracker(std::move(trk)),
+        neighbors(std::move(nbrs)),
+        total_count(count) {}
+
+  const char *GetDesc() const override { return "local-responder"; }
+  std::vector<indexes::Neighbor> &GetNeighbors() override { return neighbors; }
+
+  void OnComplete(std::vector<indexes::Neighbor> &neighbors) override {
+    tracker->AddResults(neighbors);
+    tracker->AddTotalCount(total_count);
+  }
+
+  void OnCancelled() override {
+    if (enable_partial_results) {
+      OnComplete(neighbors);
+    }
+  }
+};
+
 void PerformRemoteSearchRequest(
     std::unique_ptr<coordinator::SearchIndexPartitionRequest> request,
     const std::string &address,
@@ -300,6 +333,19 @@ absl::Status PerformSearchFanoutAsync(
         [tracker](absl::StatusOr<SearchResult> &result,
                   std::unique_ptr<SearchParameters> parameters) {
           if (result.ok()) {
+            // Text predicate evaluation requires main thread to ensure text
+            // indexes reflect current keyspace. Block if result keys have
+            // in-flight mutations.
+            if (!parameters->no_content &&
+                query::QueryHasTextPredicate(*parameters)) {
+              auto local_responder = std::make_unique<LocalResponderSearch>(
+                  tracker, std::move(parameters), std::move(result->neighbors),
+                  result->total_count);
+              auto retry_ctx = std::make_shared<query::InFlightRetryContext>(
+                  std::move(local_responder));
+              retry_ctx->ScheduleOnMainThread();
+              return;
+            }
             tracker->AddResults(result->neighbors);
             tracker->AddTotalCount(result->total_count);
           } else {

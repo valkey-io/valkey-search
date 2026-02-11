@@ -121,7 +121,6 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
                                    ValkeyModuleString **argv, int argc,
                                    std::unique_ptr<QueryCommand> parameters) {
   auto status = [&]() -> absl::Status {
-    auto &schema_manager = SchemaManager::Instance();
     vmsdk::ArgsIterator itr{argv + 1, argc - 1};
     parameters->timeout_ms = options::GetDefaultTimeoutMs().GetValue();
     VMSDK_RETURN_IF_ERROR(
@@ -170,12 +169,12 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
                                         async::Free, parameters->timeout_ms);
     blocked_client.MeasureTimeStart();
     auto on_done_callback = [blocked_client = std::move(blocked_client)](
-                                auto &neighbors, auto parameters) mutable {
+                                auto &search_result, auto parameters) mutable {
       std::unique_ptr<QueryCommand> upcast_parameters(
           dynamic_cast<QueryCommand *>(parameters.release()));
       CHECK(upcast_parameters != nullptr);
       auto result = std::make_unique<async::Result>(async::Result{
-          .search_result = std::move(neighbors),
+          .search_result = std::move(search_result),
           .parameters = std::move(upcast_parameters),
       });
 

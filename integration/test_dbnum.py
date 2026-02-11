@@ -9,17 +9,17 @@ from indexes import *
 
 class TestDBNum(ValkeySearchClusterTestCaseDebugMode):
     def setup_connections(self):
-        self.client00 = self.get_primary(0).connect();
+        self.client00 = self.get_primary(0).connect()
         self.client00.select(0)
-        self.client10 = self.get_primary(1).connect();
+        self.client10 = self.get_primary(1).connect()
         self.client10.select(0)
-        self.client20 = self.get_primary(2).connect();
+        self.client20 = self.get_primary(2).connect()
         self.client20.select(0)
-        self.client01 = self.get_primary(0).connect();
+        self.client01 = self.get_primary(0).connect()
         self.client01.select(1)
-        self.client11 = self.get_primary(1).connect();
+        self.client11 = self.get_primary(1).connect()
         self.client11.select(1)
-        self.client21 = self.get_primary(2).connect();
+        self.client21 = self.get_primary(2).connect()
         self.client21.select(1)
         self.clients = [[self.client00, self.client01], [self.client10, self.client11], [self.client20, self.client21]]
 

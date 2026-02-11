@@ -152,15 +152,17 @@ TEST_P(FilterTest, ParseParams) {
       auto text_index =
           valkey_search::indexes::text::TextIndexSchema::LookupTextIndex(
               per_key_indexes, interned_key);
-      indexes::PrefilterEvaluator evaluator(text_index, parse_results.value().query_operations);
+      indexes::PrefilterEvaluator evaluator(
+          text_index, parse_results.value().query_operations);
       EXPECT_EQ(test_case.evaluate_success.value(),
                 evaluator.Evaluate(*parse_results.value().root_predicate,
                                    interned_key));
     } else {
-      indexes::PrefilterEvaluator evaluator(nullptr, parse_results.value().query_operations);
+      indexes::PrefilterEvaluator evaluator(
+          nullptr, parse_results.value().query_operations);
       EXPECT_EQ(test_case.evaluate_success.value(),
                 evaluator.Evaluate(*parse_results.value().root_predicate,
-                                    interned_key));
+                                   interned_key));
     }
   }
 }

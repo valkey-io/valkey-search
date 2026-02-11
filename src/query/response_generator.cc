@@ -27,6 +27,7 @@
 #include "src/query/predicate.h"
 #include "src/query/search.h"
 #include "vmsdk/src/info.h"
+#include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"

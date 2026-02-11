@@ -1164,11 +1164,8 @@ absl::Status ValkeySearch::Startup(ValkeyModuleCtx *ctx) {
       ctx, server_events::SubscribeToServerEvents, writer_thread_pool_.get(),
       options::GetUseCoordinator().GetValue() && IsCluster()));
   if (options::GetUseCoordinator().GetValue()) {
-    {
-      absl::MutexLock lock(&coordinator_mutex_);
-      coordinator_thread_monitor_ =
-          std::make_unique<vmsdk::ThreadGroupCPUMonitor>(kEventEngine);
-    }
+    coordinator_thread_monitor_ =
+        std::make_unique<vmsdk::ThreadGroupCPUMonitor>(kEventEngine);
     VMSDK_ASSIGN_OR_RETURN(auto valkey_port, GetValkeyLocalPort(ctx));
     auto coordinator_port = coordinator::GetCoordinatorPort(valkey_port);
     coordinator_ = coordinator::ServerImpl::Create(

@@ -6,6 +6,7 @@
  */
 #pragma once
 
+#include "absl/base/thread_annotations.h"
 #include "absl/status/statusor.h"
 
 namespace vmsdk {
@@ -15,20 +16,19 @@ class ThreadGroupCPUMonitor {
   ThreadGroupCPUMonitor(const std::string& thread_name_pattern);
   ~ThreadGroupCPUMonitor() = default;
 
-  double GetTotalGrpcCPUTime() const { return total_cpu_time_; }
+  double GetTotalGrpcCPUTime() const ABSL_LOCKS_EXCLUDED(mutex_) {
+    absl::ReaderMutexLock lock(&mutex_);
+    return total_cpu_time_;
+  }
 
-  void UpdateTotalCPUTimeSec() const;
+  void UpdateTotalCPUTimeSec() ABSL_LOCKS_EXCLUDED(mutex_);
 
  private:
   absl::StatusOr<double> CalcCurrentCPUTimeSec() const;
-#ifdef __APPLE__
-  absl::StatusOr<std::vector<thread_act_t>> GetThreadsByNameMac() const;
-#elif __linux__
-  absl::StatusOr<std::vector<std::string>> GetThreadsByNameLinux() const;
-#endif
 
-  const std::string thread_name_pattern_;
-  mutable double total_cpu_time_{0.0};
-  mutable double prev_cpu_time_{0.0};
+  std::string thread_name_pattern_;
+  mutable absl::Mutex mutex_;
+  double total_cpu_time_{0.0};
+  double prev_cpu_time_{0.0};
 };
 }  // namespace vmsdk

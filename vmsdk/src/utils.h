@@ -203,14 +203,6 @@ class ValkeySelectDbGuard {
   int old_db_;
   bool switched_ = false;
 };
-#ifdef __APPLE__
-absl::StatusOr<std::vector<thread_act_t>> GetThreadsByName(
-    absl::string_view thread_name_pattern);
-#elif __linux__
-absl::StatusOr<std::vector<std::string>> GetThreadsByName(
-    absl::string_view thread_name_pattern);
-#endif
-
 }  // namespace vmsdk
 
 // Hash specialization for SocketAddress

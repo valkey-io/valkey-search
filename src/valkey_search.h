@@ -16,10 +16,8 @@
 #include <utility>
 
 #include "absl/base/no_destructor.h"
-#include "absl/base/thread_annotations.h"
 #include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
-#include "absl/synchronization/mutex.h"
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/server.h"
 #include "src/index_schema.h"
@@ -56,9 +54,9 @@ class ValkeySearch {
   vmsdk::ThreadPool *GetUtilityThreadPool() const {
     return utility_thread_pool_.get();
   }
-  const vmsdk::ThreadGroupCPUMonitor *GetCoordinatorThreadsMonitor() const {
-    absl::MutexLock lock(&coordinator_mutex_);
-    return coordinator_thread_monitor_.get();
+  std::shared_ptr<vmsdk::ThreadGroupCPUMonitor> GetCoordinatorThreadsMonitor()
+      const {
+    return coordinator_thread_monitor_;
   }
 
   // Generic background task scheduling
@@ -171,9 +169,8 @@ class ValkeySearch {
   std::unique_ptr<coordinator::Server> coordinator_;
   std::unique_ptr<coordinator::ClientPool> client_pool_;
   std::shared_ptr<vmsdk::cluster_map::ClusterMap> cluster_map_;
-  mutable absl::Mutex coordinator_mutex_;
-  std::unique_ptr<vmsdk::ThreadGroupCPUMonitor> coordinator_thread_monitor_
-      ABSL_GUARDED_BY(coordinator_mutex_){nullptr};
+  std::shared_ptr<vmsdk::ThreadGroupCPUMonitor> coordinator_thread_monitor_{
+      nullptr};
 };
 void ModuleInfo(ValkeyModuleInfoCtx *ctx, int for_crash_report);
 }  // namespace valkey_search

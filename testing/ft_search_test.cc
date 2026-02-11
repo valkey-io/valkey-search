@@ -659,6 +659,25 @@ INSTANTIATE_TEST_SUITE_P(
                                  },
                              .expected_run_return = VALKEYMODULE_OK,
                          },
+                         {
+                             .test_name = "sortby_test",
+                             .argv =
+                                 {
+                                     "FT.SEARCH",
+                                     "$index_name",
+                                     "*=>[KNN 5 @vector $embedding AS score]",
+                                     "PARAMS",
+                                     "2",
+                                     "embedding",
+                                     "$embedding",
+                                     "SORTBY",
+                                     "vector",
+                                     "DESC",
+                                     "DIALECT",
+                                     "2",
+                                 },
+                             .expected_run_return = VALKEYMODULE_OK,
+                         },
                      })),
     [](const TestParamInfo<::testing::tuple<bool, bool, FTSearchTestCase>>
            &info) {

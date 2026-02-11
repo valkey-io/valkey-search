@@ -7,6 +7,8 @@
 
 #include "src/query/search.h"
 
+#include <absl/strings/str_split.h>
+
 #include <cstddef>
 #include <deque>
 #include <memory>
@@ -40,6 +42,7 @@
 #include "src/valkey_search.h"
 #include "src/valkey_search_options.h"
 #include "third_party/hnswlib/hnswlib.h"
+#include "vmsdk/src/info.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -50,6 +53,15 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::query {
+
+// Query operation counters
+DEV_INTEGER_COUNTER(query_stats, query_text_term_count);
+DEV_INTEGER_COUNTER(query_stats, query_text_prefix_count);
+DEV_INTEGER_COUNTER(query_stats, query_text_suffix_count);
+DEV_INTEGER_COUNTER(query_stats, query_text_fuzzy_count);
+DEV_INTEGER_COUNTER(query_stats, query_text_proximity_count);
+DEV_INTEGER_COUNTER(query_stats, query_numeric_count);
+DEV_INTEGER_COUNTER(query_stats, query_tag_count);
 
 class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
  public:
@@ -753,6 +765,271 @@ absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
 
 bool QueryHasTextPredicate(const SearchParameters &parameters) {
   return parameters.filter_parse_results.has_text_predicate;
+}
+
+// Increment query operation metrics based on query operations flags.
+// File-internal helper function.
+void IncrementQueryOperationMetrics(QueryOperations query_operations) {
+  // High-level query type metrics
+  if (query_operations & QueryOperations::kContainsText) {
+    ++Metrics::GetStats().query_text_requests_cnt;
+  }
+  if (query_operations & QueryOperations::kContainsNumeric) {
+    query_numeric_count.Increment();
+  }
+  if (query_operations & QueryOperations::kContainsTag) {
+    query_tag_count.Increment();
+  }
+  // Text operation type metrics
+  if (query_operations & QueryOperations::kContainsTextTerm) {
+    query_text_term_count.Increment();
+  }
+  if (query_operations & QueryOperations::kContainsTextPrefix) {
+    query_text_prefix_count.Increment();
+  }
+  if (query_operations & QueryOperations::kContainsTextSuffix) {
+    query_text_suffix_count.Increment();
+  }
+  if (query_operations & QueryOperations::kContainsTextFuzzy) {
+    query_text_fuzzy_count.Increment();
+  }
+  if (query_operations & QueryOperations::kContainsProximity) {
+    query_text_proximity_count.Increment();
+  }
+}
+
+absl::StatusOr<absl::string_view> SubstituteParam(
+    query::SearchParameters &parameters, absl::string_view source) {
+  if (source.empty() || source[0] != '$') {
+    return source;
+  } else {
+    source.remove_prefix(1);
+    auto itr = parameters.parse_vars.params.find(source);
+    if (itr == parameters.parse_vars.params.end()) {
+      return absl::NotFoundError(
+          absl::StrCat("Parameter ", source, " not found."));
+    } else {
+      itr->second.first++;
+      return itr->second.second;
+    }
+  }
+}
+
+absl::Status ParseKnnInner(query::SearchParameters &parameters,
+                           std::string_view filter) {
+  absl::InlinedVector<absl::string_view, 8> params =
+      absl::StrSplit(filter, ' ', absl::SkipEmpty());
+  if (params.empty()) {
+    return absl::InvalidArgumentError("Missing parameters");
+  }
+  // TODO - need some investment to consolidate this with the common parsing
+  // functionality
+  if (!absl::EqualsIgnoreCase(params[0], "KNN")) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("`", params[0], "`. Expecting `KNN`"));
+  }
+  if (params.size() == 1) {
+    return absl::InvalidArgumentError("KNN argument is missing");
+  }
+  parameters.parse_vars.k_string = params[1];
+  if (params.size() == 2) {
+    return absl::InvalidArgumentError("Vector field argument is missing");
+  }
+  if (params[2].data()[0] != '@' || params[2].size() == 1) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Unexpected argument `", params[2],
+                     "`. Expecting a vector field name, starting with '@'"));
+  }
+  parameters.attribute_alias =
+      absl::string_view(params[2].data() + 1, params[2].size() - 1);
+  if (params.size() == 3) {
+    return absl::InvalidArgumentError("Blob attribute argument is missing");
+  }
+  parameters.parse_vars.query_vector_string = params[3];
+
+  size_t i = 4;
+  while (i < params.size()) {
+    if (absl::EqualsIgnoreCase(params[i], "EF_RUNTIME")) {
+      i++;
+      if (i == params.size()) {
+        return absl::InvalidArgumentError("EF_RUNTIME argument is missing");
+      }
+      parameters.parse_vars.ef_string = params[i++];
+    } else if (absl::EqualsIgnoreCase(params[i], kAsParam)) {
+      i++;
+      if (i == params.size()) {
+        return absl::InvalidArgumentError("AS argument is missing");
+      }
+      parameters.parse_vars.score_as_string = params[i++];
+    } else {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Unexpected argument `", params[i], "`"));
+    }
+  }
+  return absl::OkStatus();
+}
+
+absl::StatusOr<size_t> FindOpenSquareBracket(absl::string_view input) {
+  for (size_t position = 0; position < input.size(); ++position) {
+    if (input[position] == '[') {
+      return position;
+    }
+    if (!std::isspace(input[position])) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Expecting '[' got '", input.substr(position, 1), "'"));
+    }
+  }
+  return absl::InvalidArgumentError("Missing opening bracket");
+}
+
+absl::StatusOr<size_t> FindCloseSquareBracket(absl::string_view input) {
+  for (auto position = input.size(); position > 0; --position) {
+    if (input[position - 1] == ']') {
+      return position - 1;
+    }
+    if (!std::isspace(input[position - 1])) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Expecting ']' got '", input.substr(position - 1, 1), "'"));
+    }
+  }
+  if (input[0] == ']') {
+    return 0;
+  }
+  return absl::InvalidArgumentError("Missing closing bracket");
+}
+
+absl::StatusOr<FilterParseResults> ParsePreFilter(
+    const IndexSchema &index_schema, absl::string_view pre_filter,
+    const query::SearchParameters &search_params) {
+  TextParsingOptions options{.verbatim = search_params.verbatim,
+                             .inorder = search_params.inorder,
+                             .slop = search_params.slop};
+  FilterParser parser(index_schema, pre_filter, options);
+  return parser.Parse();
+}
+
+absl::Status ParseKNN(query::SearchParameters &parameters,
+                      absl::string_view filter_str) {
+  if (filter_str.empty()) {
+    return absl::InvalidArgumentError("Vector query clause is missing");
+  }
+  VMSDK_ASSIGN_OR_RETURN(auto close_position,
+                         FindCloseSquareBracket(filter_str));
+  size_t position = 0;
+  VMSDK_ASSIGN_OR_RETURN(
+      auto open_position,
+      FindOpenSquareBracket(absl::string_view(filter_str.data() + position,
+                                              close_position - position)));
+  position += open_position;
+  return ParseKnnInner(parameters,
+                       absl::string_view(filter_str.data() + position + 1,
+                                         close_position - position - 1));
+}
+
+//
+// We don't have values for the $ substitution yet. so we break the parsing into
+// two pieces
+//
+absl::Status query::SearchParameters::PreParseQueryString() {
+  // Validate the query string's length.
+  if (parse_vars.query_string.length() > options::GetQueryStringBytes()) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Query string is too long, max length is ",
+                     options::GetQueryStringBytes(), " bytes."));
+  }
+  auto filter_expression = absl::string_view(parse_vars.query_string);
+  VMSDK_LOG(DEBUG, nullptr) << "Query: '" << parse_vars.query_string << "'";
+  auto pos = filter_expression.find(kVectorFilterDelimiter);
+  absl::string_view pre_filter;
+  absl::string_view vector_filter;
+  // If the delimiter is not found (ie - non vector query), treat the whole
+  // string as pre-filter.
+  if (pos == absl::string_view::npos) {
+    pre_filter = absl::StripAsciiWhitespace(filter_expression);
+  } else {
+    pre_filter = absl::StripAsciiWhitespace(filter_expression.substr(0, pos));
+    vector_filter = absl::StripAsciiWhitespace(
+        filter_expression.substr(pos + kVectorFilterDelimiter.size()));
+  }
+  // If INORDER OR SLOP, but the index schema does not support offsets, we
+  // reject the query.
+  if ((inorder || slop.has_value()) && !index_schema->HasTextOffsets()) {
+    return absl::InvalidArgumentError("Index does not support offsets");
+  }
+  VMSDK_ASSIGN_OR_RETURN(
+      filter_parse_results, ParsePreFilter(*index_schema, pre_filter, *this),
+      _.SetPrepend() << "Invalid filter expression: `" << pre_filter << "`. ");
+  if (!filter_parse_results.root_predicate && vector_filter.empty()) {
+    // Return an error if no valid pre-filter and no vector filter is provided.
+    return absl::InvalidArgumentError("Invalid query string syntax");
+  }
+  // Optionally parse the vector filter if it exists.
+  if (!vector_filter.empty()) {
+    if (filter_parse_results.root_predicate) {
+      ++Metrics::GetStats().query_hybrid_requests_cnt;
+    } else {
+      // Pure vector query
+      ++Metrics::GetStats().query_vector_requests_cnt;
+    }
+    VMSDK_RETURN_IF_ERROR(ParseKNN(*this, vector_filter)).SetPrepend()
+        << "Error parsing vector similarity parameters: `" << vector_filter
+        << "`. ";
+    // Validate the index exists and is a vector index.
+    VMSDK_ASSIGN_OR_RETURN(auto index, index_schema->GetIndex(attribute_alias));
+    if (index->GetIndexerType() != indexes::IndexerType::kHNSW &&
+        index->GetIndexerType() != indexes::IndexerType::kFlat) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Index field `", attribute_alias, "` is not a Vector index "));
+    }
+    if (parse_vars.score_as_string.empty()) {
+      VMSDK_ASSIGN_OR_RETURN(
+          score_as, index_schema->DefaultReplyScoreAs(attribute_alias));
+    } else {
+      score_as = vmsdk::MakeUniqueValkeyString(parse_vars.score_as_string);
+    }
+  }
+
+  // Pure non-vector query (no vector filter)
+  if (vector_filter.empty() && filter_parse_results.root_predicate) {
+    ++Metrics::GetStats().query_nonvector_requests_cnt;
+  }
+  // Increment operation-type metrics
+  IncrementQueryOperationMetrics(filter_parse_results.query_operations);
+  return absl::OkStatus();
+}
+
+absl::Status PostParseVectorParameters(query::SearchParameters &parameters) {
+  VMSDK_ASSIGN_OR_RETURN(
+      auto k_string,
+      SubstituteParam(parameters, parameters.parse_vars.k_string));
+  VMSDK_ASSIGN_OR_RETURN(parameters.k, vmsdk::To<unsigned>(k_string));
+
+  VMSDK_ASSIGN_OR_RETURN(
+      parameters.query,
+      SubstituteParam(parameters, parameters.parse_vars.query_vector_string));
+
+  if (!parameters.parse_vars.ef_string.empty()) {
+    VMSDK_ASSIGN_OR_RETURN(
+        auto ef_string,
+        SubstituteParam(parameters, parameters.parse_vars.ef_string));
+    VMSDK_ASSIGN_OR_RETURN(parameters.ef, vmsdk::To<unsigned>(ef_string));
+  }
+
+  if (!parameters.parse_vars.score_as_string.empty()) {
+    VMSDK_ASSIGN_OR_RETURN(
+        parameters.parse_vars.score_as_string,
+        SubstituteParam(parameters, parameters.parse_vars.score_as_string));
+  }
+  return absl::OkStatus();
+}
+
+absl::Status query::SearchParameters::PostParseQueryString() {
+  if (IsVectorQuery()) {
+    VMSDK_RETURN_IF_ERROR(PostParseVectorParameters(*this)).SetPrepend()
+        << "Error parsing vector similarity parameters: ";
+  }
+
+  return absl::OkStatus();
 }
 
 }  // namespace valkey_search::query

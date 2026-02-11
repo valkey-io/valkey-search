@@ -47,17 +47,17 @@ The remainder of the response array is one entry per returned key, consisting of
 
 ### `RETURN` with arguments was specified.
 
-The remainder of the response array is two entries per returned key. The first entry is the key name and 
-the second entry is an array of name/value pairs. The array of name/value pairs is driven by the `RETURN` clause. 
+The remainder of the response array is two entries per returned key. The first entry is the key name and
+the second entry is an array of name/value pairs. The array of name/value pairs is driven by the `RETURN` clause.
 Each of the named fields in the `RETURN` clause is returned along with the value of that field for this particular key. If the named field isn't present in this key then it won't be included.
-In addition if this is a vector search, then one additional name/value pair will be included which is the computer vector distance for this returned key -- See [Search - query language](../topics/search-query.md) for details on how to control the name of that field.
+In addition, if this is a vector search, then one additional name/value pair will be included which is the computed vector distance for this returned key -- see [Search - query language](../topics/search-query.md) for details on how to control the name of that field.
 
 ### Neither `NOCONTENT` nor `RETURN` was specified.
 
-If the index is on `HASH` keys, then the result is the same is a `RETURN` clause had been present last listed all of the fields of a key.
+If the index is on `HASH` keys, then the result is the same as if a `RETURN` clause had been present that listed all of the fields of a key.
 
-If the index is on `JSON` keys, then one name/value pair is inserted with name `$` and the value being the entire JSON key as string. 
-In addition if this is a vector search, then one additional name/value pair will be included which is the computer vector distance for this returned key -- See [Search - query language](../topics/search-query.md) for details on how to control the name of that field.
+If the index is on `JSON` keys, then one name/value pair is inserted with name `$` and the value being the entire JSON key as a string.
+In addition, if this is a vector search, then one additional name/value pair will be included which is the computed vector distance for this returned key -- see [Search - query language](../topics/search-query.md) for details on how to control the name of that field.
 
 # Examples
 
@@ -66,13 +66,14 @@ In addition if this is a vector search, then one additional name/value pair will
 For these queries the following index and data definitions were used:
 
 ```
-FT.CREATE hash-index on hash SCHEMA color TAG city TAG
+FT.CREATE index on hash SCHEMA color TAG city TAG
 hset key1 color blue city London
 hset key2 color black city Paris
 hset key3 color green city Berlin
 hset key4 color white city Tokyo
 hset key5 color blend
 ```
+
 A simple query returning all data of matched keys
 
 ```
@@ -139,7 +140,6 @@ json.set key5 . {"color":"blend","cityextra":"Unknown"}
 ```
 
 A simple query returning all data of matched keys
-
 
 ```
 FT.SEARCH index @color:{bl*}

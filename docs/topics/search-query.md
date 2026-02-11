@@ -197,7 +197,7 @@ The following query will return all books with "comedy" genre that are not publi
 no year field:
 
 ```
-@genre: [comedy] \-@year:[2015 2024]
+@genre: {comedy} \-@year:[2015 2024]
 ```
 
 ### Logical `OR`
@@ -301,9 +301,9 @@ Logical operators can be combined to form complex filter expressions.
 
 The following query will return all books with "comedy" or "horror" genre (AND) published between 2015 and 2024:
 
-````
+```
 
-@genre:[comedy|horror] @year:[2015 2024]
+@genre:{comedy|horror} @year:[2015 2024]
 
 ```
 
@@ -311,7 +311,7 @@ The following query will return all books with "comedy" or "horror" genre (OR) p
 
 ```
 
-@genre:[comedy|horror] | @year:[2015 2024]
+@genre:{comedy|horror} | @year:[2015 2024]
 
 ```
 
@@ -319,18 +319,6 @@ The following query will return all books that either don't have a genre field, 
 that are published between 2015 and 2024:
 
 ```
-
--@genre:[comedy] @year:[2015 2024]
-
-```
+-@genre:{comedy} @year:[2015 2024]
 
 ```
-
-```
-
-```
-
-```
-
-```
-````

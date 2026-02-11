@@ -26,7 +26,7 @@ The syntax of expressions generally follows the "C" language syntax and operator
 <multiplicative>::= <additive>
                   | <multiplicative> <mul-op> <additive>
 
-<mul-op>        ::= "*" | "/" | "^"
+<mul-op>        ::= "*" | "/" | "^" | "%"
 
 <additive>      ::= <unary>
                   | <additive> <add-op> <unary>
@@ -158,8 +158,8 @@ Supported time functions include:
 
 ## Exists Function
 
-The exists function returns 1 if the input argument is Nil else 0. This can be used to test if a field is present in the current record.
+The exists function returns 0 if the input argument is Nil else 1. This can be used to test if a field is present in the current record.
 
 |    Syntax     | Operation                      |
 | :-----------: | :----------------------------- |
-| exists(value) | 1 if the value is Nil, else 0. |
+| exists(value) | 0 if the value is Nil, else 1. |

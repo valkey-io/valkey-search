@@ -10,10 +10,10 @@ Once all stages have been executed, the working set of records output from the l
 
 ```
 FT.AGGREGATE <index-name> <query>
-      TIMEOUT <timeout>
-    | PARAMS <count> <name> <value> [ <name> <value> ...]
-    | DIALECT <dialect>
-    | LOAD [* | <count> <field> [<field> ...]]
+    TIMEOUT <timeout>
+    PARAMS <count> <name> <value> [ <name> <value> ...]
+    DIALECT <dialect>
+    LOAD [* | <count> <field> [<field> ...]]
     (
       | APPLY <expression> AS <field>
       | FILTER <expression>

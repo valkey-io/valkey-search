@@ -15,7 +15,7 @@ Any number of fields can be defined.
 
 # Data Ingestion
 
-Index updates are side effects of data mutation, based on prefix matching. Keyspace notification is used to capture a copy of the data associated with the key mutation and the client is blocked. If this key belongs to multiple indexes, then a The captured data goes into a mutation queue. If a previous update for the same key is already in the mutation queue then these are combined.
+Index updates are side effects of data mutation, based on prefix matching. Keyspace notification is used to capture a copy of the data associated with the key mutation and the client is blocked. If this key belongs to multiple indexes, then the captured data goes into the mutation queue for each index independently. If a previous update for the same key is already in the mutation queue then these are combined.
 
 Index update is atomic at the key level and/or the multi/exec level.
 There is no synchronization of updates across clients.

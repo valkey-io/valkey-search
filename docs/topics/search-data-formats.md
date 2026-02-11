@@ -1,6 +1,6 @@
 ---
 title: "Search - Data Formats"
-description: Search Module Query Language Syntax, Semantics and Examples
+description: Search Module Formats for Input Field Data
 ---
 
 # Tag Fields
@@ -22,7 +22,7 @@ Formal definition of acceptable numbers.
 
 # Vector Fields
 
-Definition of HASH vector fields (IEEE binary, etc). FIxed length, etc.
+Definition of HASH vector fields (IEEE binary, etc). Fixed length, etc.
 
 Definition of JSON vector fields
 

@@ -2,11 +2,9 @@ The `FT.INFO` command provides information about an index. Variants of the comma
 
 ```
 FT.INFO <index-name>
-  (
-      [LOCAL | PRIMARY | CLUSTER]
-    | [ALLSHARDS | SOMESHARDS]
-    | [CONSISTENT INCONSISTENT]
-  )+
+  [LOCAL | PRIMARY | CLUSTER]
+  [ALLSHARDS | SOMESHARDS]
+  [CONSISTENT | INCONSISTENT]
 ```
 
 - `<index-name>` (required): The name of the index to return information about.

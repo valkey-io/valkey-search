@@ -12,7 +12,6 @@ FT.CREATE <index-name>
     [ON HASH | ON JSON]
     [PREFIX <count> <prefix> [<prefix>...]]
     [SCORE default_value]
-    [SKIPINITIALSCAN]
     [LANGUAGE <language>]
     [SKIPINITIALSCAN]
     [MINSTEMSIZE <min_stem_size>]
@@ -30,7 +29,7 @@ FT.CREATE <index-name>
         )+
 ```
 
-- `<index-name>` (required): This is the name you give to your index. If an index with the same name exists already, an error is returned. Special naming rules apply to single-slot indexes, see [Search - Index Distribution](../topics/search-index.distribution.md) for more details.
+- `<index-name>` (required): This is the name you give to your index. If an index with the same name exists already, an error is returned.
 
 - `ON HASH | ON JSON` (optional): Only keys that match the specified type are included into this index. If omitted, HASH is assumed.
 
@@ -42,11 +41,11 @@ FT.CREATE <index-name>
 
 - `WITHOFFSETS | NOOFFSETS` (optional): Enables/Disables the retention of per-word offsets within a text field. Offsets are required to perform exact phrase matching and slop-based proximity matching. Thus if offsets are disabled, those query operations will be rejected with an error. The default is `WITHOFFSETS`.
 
-- `NOSTOPWORDS | STOPWORDS <count> <word1> <word2>...** (optional): Stop words are not words which are not put into the indexes. The default value of `STOPWORDS`is language dependent. For`LANGUAGE ENGLISH` the default is: <?>.
+- `NOSTOPWORDS | STOPWORDS <count> <word1> <word2>...` (optional): Stop words are words which are not put into the indexes. The default value of `STOPWORDS`is language dependent. For`LANGUAGE ENGLISH` the default is: <?>.
 
-- `PUNCTUATION <punctuation>** (optional): A string of characters that are used to define words in the text field. The default value is `,.<>{}[]"':;!@#$%^&\*()-+=~/\|`.
+- `PUNCTUATION <punctuation>` (optional): A string of characters that are used to define words in the text field. The default value is `,.<>{}[]"':;!@#$%^&\*()-+=~/\|`.
 
-- `SKIPINITIALSCAN` (optional): If specific, this option skips the normal backfill operation for an index. If this option is specified, pre-existing keys which match the `PREFIX` clause will not be loaded into the index during a backfill operation. This clause has no effect on processing of key mutations _after_ an index is created, i.e., keys which are mutated after an index is created and satisfy the data type and `PREFIX` clause will be inserted into that index.
+- `SKIPINITIALSCAN` (optional): If specified, this option skips the normal backfill operation for an index. If this option is specified, pre-existing keys which match the `PREFIX` clause will not be loaded into the index during a backfill operation. This clause has no effect on processing of key mutations _after_ an index is created, i.e., keys which are mutated after an index is created and satisfy the data type and `PREFIX` clause will be inserted into that index.
 
 - `SCORE` (optional): The current implementation only allows the value to be 1.0. This parameter is accepted to make valkey-search more interoperable with RediSearch. (default: 1.0)
 
@@ -73,12 +72,12 @@ See [Numeric Field Format](../topics/search-data-formats.md#numeric-fields) for 
 
 `VECTOR`: A vector field contains a vector. Two vector indexing algorithms are currently supported: HNSW (Hierarchical Navigable Small World) and FLAT (brute force). Each algorithm has a set of additional attributes, some required and other optional.
 
-- `FLAT:` The Flat algorithm provides exact answers, but has runtime proportional to the number of indexed vectors and thus may not be appropriate for large data sets.
+- `FLAT:` This algorithm provides exact answers, but has runtime proportional to the number of indexed vectors and thus may not be appropriate for large data sets.
   - `DIM <number>` (required): Specifies the number of dimensions in a vector.
   - `TYPE FLOAT32` (required): Data type, currently only FLOAT32 is supported.
   - `DISTANCE_METRIC [L2 | IP | COSINE]` (required): Specifies the distance algorithm
   - `INITIAL_CAP <size>` (optional): Initial index size.
-- `HNSW:` The HNSW algorithm provides approximate answers, but operates substantially faster than FLAT.
+- `HNSW:` The HNSW algorithm provides approximate answers, but operates substantially faster than `FLAT`.
   - `DIM <number>` (required): Specifies the number of dimensions in a vector.
   - `TYPE FLOAT32` (required): Data type, currently only FLOAT32 is supported.
   - `INITIAL_CAP <size>` (optional): Initial index size.

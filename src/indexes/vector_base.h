@@ -11,7 +11,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <deque>
 #include <memory>
 #include <optional>
 #include <queue>

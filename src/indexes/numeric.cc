@@ -8,7 +8,6 @@
 #include "src/indexes/numeric.h"
 
 #include <cstddef>
-#include <cstdint>
 #include <limits>
 #include <memory>
 #include <optional>

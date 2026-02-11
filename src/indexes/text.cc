@@ -7,14 +7,12 @@
 
 #include "src/indexes/text.h"
 
-#include <stdexcept>
-
 #include "absl/container/inlined_vector.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/text/fuzzy.h"
-#include "src/indexes/text/lexer.h"
+#include "src/indexes/text/term.h"
 #include "src/valkey_search_options.h"
 
 namespace valkey_search::indexes {

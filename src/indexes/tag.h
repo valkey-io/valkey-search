@@ -8,7 +8,6 @@
 #ifndef VALKEYSEARCH_SRC_INDEXES_TAG_H_
 #define VALKEYSEARCH_SRC_INDEXES_TAG_H_
 #include <cstddef>
-#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>

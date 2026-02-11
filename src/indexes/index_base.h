@@ -9,7 +9,6 @@
 #define VALKEYSEARCH_SRC_INDEXES_INDEX_BASE_H
 
 #include <cstddef>
-#include <cstdint>
 #include <memory>
 
 #include "absl/base/no_destructor.h"

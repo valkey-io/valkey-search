@@ -8,7 +8,6 @@
 #ifndef VALKEYSEARCH_SRC_INDEXES_NUMERIC_H_
 #define VALKEYSEARCH_SRC_INDEXES_NUMERIC_H_
 #include <cstddef>
-#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>

@@ -21,6 +21,7 @@
 #include "src/indexes/text/fuzzy.h"
 #include "src/indexes/text/orproximity.h"
 #include "src/indexes/text/proximity.h"
+#include "src/indexes/text/term.h"
 #include "src/indexes/text/text_index.h"
 #include "src/indexes/text/text_iterator.h"
 #include "src/valkey_search_options.h"
@@ -45,12 +46,11 @@ EvaluationResult BuildTextEvaluationResult(
 
 TermPredicate::TermPredicate(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-    FieldMaskPredicate field_mask, std::string term, bool exact_)
-    : TextPredicate(),
-      text_index_schema_(text_index_schema),
+    FieldMaskPredicate field_mask, std::string term, bool exact)
+    : text_index_schema_(text_index_schema),
       field_mask_(field_mask),
       term_(term),
-      exact_(exact_) {}
+      exact_(exact) {}
 
 EvaluationResult TermPredicate::Evaluate(Evaluator &evaluator) const {
   return evaluator.EvaluateText(*this, false);
@@ -143,8 +143,7 @@ EvaluationResult TermPredicate::Evaluate(
 PrefixPredicate::PrefixPredicate(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
     FieldMaskPredicate field_mask, std::string term)
-    : TextPredicate(),
-      text_index_schema_(text_index_schema),
+    : text_index_schema_(text_index_schema),
       field_mask_(field_mask),
       term_(term) {}
 

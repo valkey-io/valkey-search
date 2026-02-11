@@ -25,8 +25,6 @@ constexpr size_t kProximityTermsInlineCapacity = 64;
 #include "absl/synchronization/mutex.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/text/posting.h"
-#include "src/indexes/text/proximity.h"
-#include "src/indexes/text/term.h"
 #include "src/indexes/text/text_fetcher.h"
 #include "src/indexes/text/text_index.h"
 #include "src/query/predicate.h"

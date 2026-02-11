@@ -134,14 +134,15 @@ class ReplicationGroup:
             return
 
         if rg.primary:
-            os.kill(rg.primary.server.pid(), 9)
+            if rg.primary.server is not None:
+                rg.primary.server.exit()
 
         if not rg.replicas:
             return
 
         for replica in rg.replicas:
             if replica.server:
-                os.kill(replica.server.pid(), 9)
+                replica.server.exit()
 
 
 class ValkeySearchTestCaseCommon(ValkeyTestCase):
@@ -159,7 +160,7 @@ class ValkeySearchTestCaseCommon(ValkeyTestCase):
         See ValkeySearchTestCaseBase.get_config_file_lines & ValkeySearchClusterTestCase.get_config_file_lines
         for example usage."""
         raise NotImplementedError
-    
+
     def append_startup_args(self, args: dict[str, str]) -> dict[str, str]:
         return args
 
@@ -215,6 +216,19 @@ class ValkeySearchTestCaseCommon(ValkeyTestCase):
 
     def get_replicas(self) -> List[Node]:
         return self.replicas
+
+    def verify_modules_loaded(self, client: Valkey) -> None:
+        """Verify that the required search and json modules are loaded."""
+        module_list_data = client.execute_command("MODULE LIST")
+        search_loaded = False
+        json_loaded = False
+        for module in module_list_data:
+            if module[b"name"] == b"search":
+                search_loaded = True
+            elif module[b"name"] == b"json":
+                json_loaded = True
+        assert search_loaded, "search module not loaded"
+        assert json_loaded, "json module not loaded"
 
 
 class ValkeySearchTestCaseBase(ValkeySearchTestCaseCommon):
@@ -290,10 +304,10 @@ class ValkeySearchTestCaseBase(ValkeySearchTestCaseCommon):
     def start_new_server(self, is_primary=True) -> Node:
         """Create a new Valkey server instance"""
         server, client, logfile = self.start_server(
-            self.get_bind_port(),
-            self.test_name,
-            False,
-            is_primary,
+            port=self.get_bind_port(),
+            test_name=self.test_name,
+            cluster_enabled=False,
+            is_primary=is_primary,
         )
         return Node(client=client, server=server, logfile=logfile)
 
@@ -380,9 +394,9 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
         for i in range(0, len(ports), replica_count + 1):
             primary_port = ports[i]
             server, client, logfile = self.start_server(
-                primary_port,
-                test_name,
-                True,
+                port=primary_port,
+                test_name=test_name,
+                cluster_enabled=True,
                 is_primary=True,
             )
 
@@ -393,8 +407,8 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
                 replica_port = ports[i]
                 replica_server, replica_client, replica_logfile = (
                     self.start_server(
-                        replica_port,
-                        test_name,
+                        port=replica_port,
+                        test_name=test_name,
                         cluster_enabled=True,
                         is_primary=False,
                     )
@@ -521,4 +535,3 @@ class ValkeySearchClusterTestCaseDebugMode(ValkeySearchClusterTestCase):
     '''
     def get_config_file_lines(self, testdir, port) -> List[str]:
         return EnableDebugMode(super(ValkeySearchClusterTestCaseDebugMode, self).get_config_file_lines(testdir, port))
-

@@ -77,7 +77,7 @@ bool HashHasRecord(ValkeyModuleKey *key, absl::string_view identifier) {
 }
 
 absl::StatusOr<RecordsMap> HashAttributeDataType::FetchAllRecords(
-    ValkeyModuleCtx *ctx, const std::string &vector_identifier,
+    ValkeyModuleCtx *ctx, const std::optional<std::string> &vector_identifier,
     [[maybe_unused]] ValkeyModuleKey *open_key, absl::string_view key,
     const absl::flat_hash_set<absl::string_view> &identifiers) const {
   vmsdk::VerifyMainThread();
@@ -85,14 +85,15 @@ absl::StatusOr<RecordsMap> HashAttributeDataType::FetchAllRecords(
   auto key_obj =
       vmsdk::MakeUniqueValkeyOpenKey(ctx, key_str.get(), VALKEYMODULE_READ);
   if (!key_obj) {
-    return absl::NotFoundError(
-        absl::StrCat("No such record with key: `", vector_identifier, "`"));
+    return absl::NotFoundError(absl::StrCat(
+        "No such record with key: `", vector_identifier.value_or(""), "`"));
   }
   // Only check for vector_identifier if it's not empty (vector queries)
-  if (!vector_identifier.empty() &&
-      !HashHasRecord(key_obj.get(), vector_identifier)) {
+  if (vector_identifier.has_value() &&
+      !HashHasRecord(key_obj.get(), vector_identifier.value())) {
     return absl::NotFoundError(absl::StrCat("No such record with identifier: `",
-                                            vector_identifier, "`"));
+                                            vector_identifier.value_or(""),
+                                            "`"));
   }
   vmsdk::UniqueValkeyScanCursor cursor = vmsdk::MakeUniqueValkeyScanCursor();
   HashScanCallbackData callback_data{identifiers};
@@ -177,13 +178,13 @@ absl::StatusOr<vmsdk::UniqueValkeyString> JsonAttributeDataType::GetRecord(
 }
 
 absl::StatusOr<RecordsMap> JsonAttributeDataType::FetchAllRecords(
-    ValkeyModuleCtx *ctx, const std::string &vector_identifier,
+    ValkeyModuleCtx *ctx, const std::optional<std::string> &vector_identifier,
     ValkeyModuleKey *open_key, absl::string_view key,
     const absl::flat_hash_set<absl::string_view> &identifiers) const {
   // First, validate that a JSON object exists for the given key using the
   // vector identifier.
-  VMSDK_RETURN_IF_ERROR(
-      GetJsonRecord(ctx, open_key, key, vector_identifier, nullptr));
+  VMSDK_RETURN_IF_ERROR(GetJsonRecord(ctx, open_key, key,
+                                      vector_identifier.value_or(""), nullptr));
   RecordsMap key_value_content;
   for (const auto &identifier : identifiers) {
     auto str = GetRecord(ctx, open_key, key, identifier);

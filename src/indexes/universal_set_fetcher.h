@@ -11,16 +11,11 @@
 #include <memory>
 
 #include "src/indexes/index_base.h"
+#include "src/index_schema.h"
 #include "src/utils/string_interning.h"
-
-namespace valkey_search {
-class IndexSchema;
-}
 
 namespace valkey_search::indexes {
 
-// UniversalSetFetcher returns all keys from IndexSchema
-// Used for negation with text queries: U (all keys)
 class UniversalSetFetcher : public EntriesFetcherBase {
  public:
   explicit UniversalSetFetcher(const IndexSchema* index_schema);
@@ -32,16 +27,14 @@ class UniversalSetFetcher : public EntriesFetcherBase {
   class Iterator : public EntriesFetcherIteratorBase {
    public:
     explicit Iterator(const IndexSchema* index_schema);
-    ~Iterator() override;
-
     bool Done() const override;
     void Next() override;
     const InternedStringPtr& operator*() const override;
 
    private:
-    const IndexSchema* index_schema_;
-    void* db_key_iter_;  // Type-erased iterator
-    bool done_;
+    using SchemaIter = decltype(std::declval<IndexSchema>().GetIndexKeyInfo().begin());
+    SchemaIter current_it_;
+    SchemaIter end_it_;
   };
 
   const IndexSchema* index_schema_;

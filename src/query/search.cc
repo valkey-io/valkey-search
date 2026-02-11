@@ -165,9 +165,13 @@ inline bool IsUnsolvedQuery(QueryOperations query_operations) {
 inline bool NeedsDeduplication(QueryOperations query_operations) {
   bool has_or = query_operations & QueryOperations::kContainsOr;
   bool has_tag = query_operations & QueryOperations::kContainsTag;
-  bool has_nontext_negate = (query_operations & QueryOperations::kContainsNegate) &&
-                            !(query_operations & QueryOperations::kContainsText);
-  return has_or || has_tag || has_nontext_negate;
+  bool has_negate = query_operations & QueryOperations::kContainsNegate;
+  bool has_text = query_operations & QueryOperations::kContainsText;
+  // Text + negate doesn't need dedup (handled by prefilter evaluation)
+  if (has_text && has_negate) {
+    return false;
+  }
+  return has_or || has_tag || has_negate;
 }
 
 // Builds TextIterator for text predicates. Returns pair of iterator and

@@ -153,7 +153,6 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.checkvec(self, dialect, orig_cmd, kwargs)
         self.check(self, dialect, orig_cmd)
 
-    
     def test_bad_numeric_data(self, key_type, dialect):
         self.setup_data("bad numbers", key_type)
         self.check(dialect, f"ft.search {key_type}_idx1",  "@n1:[-inf inf]")

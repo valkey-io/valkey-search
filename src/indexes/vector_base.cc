@@ -560,7 +560,7 @@ bool VectorBase::IsUnTracked(const InternedStringPtr &key) const {
   return false;
 }
 
-void Tag::UnTrack(const InternedStringPtr &key) {}
+void VectorBase::UnTrack(const InternedStringPtr &key) {}
 
 absl::Status VectorBase::ForEachTrackedKey(
     absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const {

@@ -1986,15 +1986,14 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
             query_vec = make_vector([1.0, 0.0, 0.0, 0.0])
 
             for query, (_, _, extra_args, knn_count, knn_docs) in HYBRID_QUERY_EXPECTED_RESULTS.items():
-                for use_knn in [False, True]:
-                    full_query = f"({query})=>[KNN 2 @embedding $vec]"
-                    expected_count, expected_docs = knn_count, knn_docs
-                    cmd = ["FT.SEARCH", "idx", full_query, "PARAMS", "2", "vec", query_vec, "DIALECT", "2"] + list(extra_args) + ["NOCONTENT"]
-                    result = client.execute_command(*cmd)
-                    result_docs = set(result[1:]) if expected_count > 0 else set()
-                    assert result[0] == expected_count, f"[{vector_index_type}] Query '{full_query}' (KNN={use_knn}) expected count {expected_count}, got {result[0]}"
-                    if expected_count > 0:
-                        assert result_docs == expected_docs, f"[{vector_index_type}] Query '{full_query}' (KNN={use_knn}) expected docs {expected_docs}, got {result_docs}"
+                full_query = f"({query})=>[KNN 2 @embedding $vec]"
+                expected_count, expected_docs = knn_count, knn_docs
+                cmd = ["FT.SEARCH", "idx", full_query, "PARAMS", "2", "vec", query_vec, "DIALECT", "2"] + list(extra_args) + ["NOCONTENT"]
+                result = client.execute_command(*cmd)
+                result_docs = set(result[1:]) if expected_count > 0 else set()
+                assert result[0] == expected_count, f"[{vector_index_type}] Query '{full_query}' (KNN={use_knn}) expected count {expected_count}, got {result[0]}"
+                if expected_count > 0:
+                    assert result_docs == expected_docs, f"[{vector_index_type}] Query '{full_query}' (KNN={use_knn}) expected docs {expected_docs}, got {result_docs}"
             client.execute_command("FT.DROPINDEX", "idx")
             for i in range(5):
                 client.execute_command("DEL", f"hash:0{i}")

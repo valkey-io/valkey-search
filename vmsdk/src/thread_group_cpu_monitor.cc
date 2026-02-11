@@ -35,9 +35,13 @@ absl::StatusOr<std::vector<thread_act_t>> GetThreadsByNameMac(
   thread_act_array_t all_threads;
   mach_msg_type_number_t thread_count;
 
-  if (task_threads(mach_task_self(), &all_threads, &thread_count) !=
-      KERN_SUCCESS) {
-    return absl::InternalError("Failed to enumerate threads");
+  auto status_code =
+      task_threads(mach_task_self(), &all_threads, &thread_count);
+  if (status_code != KERN_SUCCESS) {
+    // Get the human-readable error string
+    const char* error_reason = mach_error_string(status_code);
+    return absl::InternalError(absl::StrFormat(
+        "Failed to enumerate threads. Reason: %s", error_reason));
   }
 
   // Custom deleter for automatic cleanup of Mach-allocated thread array
@@ -141,10 +145,13 @@ absl::StatusOr<double> ThreadGroupCPUMonitor::CalcCurrentCPUTimeSec() const {
     thread_basic_info_data_t info;
     mach_msg_type_number_t count = THREAD_BASIC_INFO_COUNT;
 
-    if (thread_info(thread, THREAD_BASIC_INFO, (thread_info_t)&info, &count) !=
-        KERN_SUCCESS) {
-      return absl::InternalError(
-          absl::StrFormat("Failed to get thread info for thread: %u", thread));
+    auto status_code =
+        thread_info(thread, THREAD_BASIC_INFO, (thread_info_t)&info, &count);
+    if (status_code != KERN_SUCCESS) {
+      const char* error_reason = mach_error_string(status_code);
+      return absl::InternalError(absl::StrFormat(
+          "Failed to get thread info for thread: %u. Reason: %s", thread,
+          error_reason));
     }
     total_cpu_time +=
         (info.user_time.seconds + info.user_time.microseconds / kMicroToSec) +
@@ -162,9 +169,10 @@ absl::StatusOr<double> ThreadGroupCPUMonitor::CalcCurrentCPUTimeSec() const {
   for (auto& path : result) {
     std::ifstream stat_file(path);
     if (!stat_file.is_open()) {
-      return absl::Status{
-          absl::ErrnoToStatusCode(errno),
-          absl::StrFormat("Failed to open file in path: %s", path)};
+      return absl::Status{absl::ErrnoToStatusCode(errno),
+                          absl::StrFormat("Failed to open thread stats file in "
+                                          "path: %s. Error: %s (errno: %d)",
+                                          path, strerror(errno), errno)};
     }
     std::string line{std::istreambuf_iterator<char>(stat_file),
                      std::istreambuf_iterator<char>()};

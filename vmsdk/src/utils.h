@@ -19,9 +19,7 @@
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
-#ifdef __APPLE__
-#include <mach/mach.h>
-#endif
+
 namespace vmsdk {
 
 class StopWatch {

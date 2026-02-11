@@ -109,7 +109,7 @@ return absl::UnimplementedError(
 #endif
 }  // namespace
 
-inline constexpr double kMicroToSec = 1000000.0;
+constexpr double kMicroToSec = 1000000.0;
 
 ThreadGroupCPUMonitor::ThreadGroupCPUMonitor(
     const std::string& thread_name_pattern)
@@ -122,14 +122,13 @@ void ThreadGroupCPUMonitor::UpdateTotalCPUTimeSec() {
     return;
   }
 
-  if (total_cpu_time_ == 0.0) {
-    // First calculation, add all of the current time
+  if (!total_cpu_time_.has_value()) {
     total_cpu_time_ = curr_cpu_time.value();
-    prev_cpu_time_ = total_cpu_time_;
+    prev_cpu_time_ = total_cpu_time_.value();
     return;
   }
   uint64_t diff = curr_cpu_time.value() - prev_cpu_time_;
-  total_cpu_time_ += diff;
+  *total_cpu_time_ += diff;
   prev_cpu_time_ = curr_cpu_time.value();
 }
 

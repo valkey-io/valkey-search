@@ -30,7 +30,7 @@
 
 namespace valkey_search {
 
-inline constexpr char kEventEngine[] = "event_engine";
+constexpr char kEventEngine[] = "event_engine";
 
 namespace server_events {
 extern void SubscribeToServerEvents();

@@ -6,6 +6,8 @@
  */
 #pragma once
 
+#include <optional>
+
 #include "absl/base/thread_annotations.h"
 #include "absl/status/statusor.h"
 
@@ -18,7 +20,7 @@ class ThreadGroupCPUMonitor {
 
   double GetTotalGrpcCPUTime() const ABSL_LOCKS_EXCLUDED(mutex_) {
     absl::ReaderMutexLock lock(&mutex_);
-    return total_cpu_time_;
+    return total_cpu_time_.value_or(0.0);
   }
 
   void UpdateTotalCPUTimeSec() ABSL_LOCKS_EXCLUDED(mutex_);
@@ -28,7 +30,7 @@ class ThreadGroupCPUMonitor {
 
   std::string thread_name_pattern_;
   mutable absl::Mutex mutex_;
-  double total_cpu_time_{0.0};
+  std::optional<double> total_cpu_time_{std::nullopt};
   double prev_cpu_time_{0.0};
 };
 }  // namespace vmsdk

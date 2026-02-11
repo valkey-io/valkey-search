@@ -7,8 +7,6 @@
 
 #include "vmsdk/src/utils.h"
 
-#include <absl/strings/match.h>
-
 #include <iomanip>
 #include <string>
 #include <utility>

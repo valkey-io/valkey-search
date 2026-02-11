@@ -35,8 +35,8 @@
 #include <stdio.h>
 #include <errno.h>
 #include <math.h>
+#include <assert.h>
 #include "rax.h"
-#include "serverassert.h"
 
 #ifndef RAX_MALLOC_INCLUDE
 #define RAX_MALLOC_INCLUDE "rax_malloc.h"
@@ -917,6 +917,52 @@ int raxFind(rax *rax, unsigned char *s, size_t len, void **value) {
     return 1;
 }
 
+/* BEGIN SEARCH */
+/* Atomically mutates the value at the given key by calling the provided
+ * callback function. The callback receives the current value (NULL if the
+ * key doesn't exist) and caller context, and returns the new value (NULL
+ * to delete the key).
+ * 
+ * OWNERSHIP: The callback takes ownership of the old value. If returning a
+ * new value, the callback MUST clean up the old value.
+ * 
+ * Returns 1 on success, 0 on error (errno will be set to ENOMEM
+ * on out of memory). */
+// TODO: implement a lower-level version that doesn't traverse the tree twice.
+int raxMutate(rax *rax, unsigned char *s, size_t len, raxMutateCallback callback, void *caller_context) {
+    void *current_value = NULL;
+
+    /* Find the current value */
+    int found = raxFind(rax, s, len, &current_value);
+
+    /* Call the callback to get the new value */
+    void *new_value = callback(current_value, caller_context);
+
+    /* Handle the result */
+    if (new_value == NULL) {
+        /* Delete the key if it exists */
+        if (found) {
+            return raxRemove(rax, s, len, NULL);
+        }
+        /* Key doesn't exist and callback returned NULL - nothing to do */
+        return 1;
+    } else {
+        /* If the callback returned the same pointer, no update needed */
+        if (new_value == current_value) {
+            return 1;
+        }
+        /* Insert or update the key. */
+        int res = raxInsert(rax, s, len, new_value, NULL);
+        if (res == 0 && errno != 0) {
+            /* Actual failure (OOM) */
+            return 0;
+        }
+        /* Success: either new insert (res=1) or update (res=0, errno=0) */
+        return 1;
+    }
+}
+/* END SEARCH */
+
 /* Return the memory address where the 'parent' node stores the specified
  * 'child' pointer, so that the caller can update the pointer with another
  * one if needed. The function assumes it will find a match, otherwise the
@@ -1346,7 +1392,7 @@ int raxIteratorNextStep(raxIterator *it, int noup) {
                 int old_noup = noup;
 
                 /* Already on head? Can't go up, iteration finished. */
-                if (!noup && it->node == it->rt->head) {
+                if (!noup && it->node == it->head) { // SEARCH
                     it->flags |= RAX_ITER_EOF;
                     it->stack.items = orig_stack_items;
                     it->key_len = orig_key_len;
@@ -1435,7 +1481,7 @@ int raxIteratorPrevStep(raxIterator *it, int noup) {
         int old_noup = noup;
 
         /* Already on head? Can't go up, iteration finished. */
-        if (!noup && it->node == it->rt->head) {
+        if (!noup && it->node == it->head) { // SEARCH
             it->flags |= RAX_ITER_EOF;
             it->stack.items = orig_stack_items;
             it->key_len = orig_key_len;
@@ -1490,6 +1536,13 @@ int raxIteratorPrevStep(raxIterator *it, int noup) {
     }
 }
 
+/* BEGIN SEARCH */
+int raxSeekSubTree(raxIterator *it, unsigned char *ele, size_t len) {
+    it->flags |= RAX_ITER_SUB_TREE;
+    return raxSeek(it, ">=", ele, len);
+}
+/* END SEARCH */
+
 /* Seek an iterator at the specified element.
  * Return 0 if the seek failed for syntax error or out of memory. Otherwise
  * 1 is returned. When 0 is returned for out of memory, errno is set to
@@ -1502,6 +1555,7 @@ int raxSeek(raxIterator *it, const char *op, unsigned char *ele, size_t len) {
     it->flags &= ~RAX_ITER_EOF;
     it->key_len = 0;
     it->node = NULL;
+    it->head = it->rt->head; // SEARCH
 
     /* Set flags according to the operator used to perform the seek. */
     if (op[0] == '>') {
@@ -1549,6 +1603,17 @@ int raxSeek(raxIterator *it, const char *op, unsigned char *ele, size_t len) {
      * we already use for iteration. */
     int splitpos = 0;
     size_t i = raxLowWalk(it->rt, ele, len, &it->node, NULL, &splitpos, &it->stack);
+    /* BEGIN SEARCH */
+    if (it->flags & RAX_ITER_SUB_TREE) {
+        // Check if we found a node with a matching prefix.
+        // If so, we set it as the head node.
+        if (i < len) {
+            it->flags |= RAX_ITER_EOF;
+        } else {
+            it->head = it->node;
+        }
+    }
+    /* END SEARCH */
 
     /* Return OOM on incomplete stack info. */
     if (it->stack.oom) return 0;
@@ -1704,7 +1769,7 @@ int raxRandomWalk(raxIterator *it, size_t steps) {
     raxNode *n = it->node;
     while (steps > 0 || !n->iskey) {
         int numchildren = n->iscompr ? 1 : n->size;
-        int r = rand() % (numchildren + (n != it->rt->head));
+        int r = rand() % (numchildren + (n != it->head)); // SEARCH
 
         if (r == numchildren) {
             /* Go up to parent. */

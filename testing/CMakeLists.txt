@@ -57,6 +57,7 @@ set(COMMANDS_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/ft_list_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_info_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_create_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/commands/ft_internal_update_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/filter_test.cc)
 
 add_executable(commands_test ${COMMANDS_TEST_SOURCES})
@@ -170,6 +171,7 @@ finalize_test_flags(valkey_utils_test)
 add_executable(text_index_test 
     ${CMAKE_CURRENT_LIST_DIR}/flat_position_map_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/radix_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/rax_wrapper_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/text_index_schema_test.cc)
 target_include_directories(text_index_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(text_index_test PRIVATE testing_common_base)

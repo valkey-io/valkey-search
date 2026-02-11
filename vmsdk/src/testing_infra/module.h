@@ -145,6 +145,8 @@ class MockValkeyModule {
               (ValkeyModuleCtx * ctx, ValkeyModuleScanCursor *cursor,
                ValkeyModuleScanCB fn, void *privdata));
   MOCK_METHOD(int, ReplicateVerbatim, (ValkeyModuleCtx * ctx));
+  MOCK_METHOD(int, Replicate,
+              (ValkeyModuleCtx * ctx, const char *cmdname, const char *fmt));
   MOCK_METHOD(ValkeyModuleType *, ModuleTypeGetType, (ValkeyModuleKey * key));
   MOCK_METHOD(ValkeyModuleCtx *, GetDetachedThreadSafeContext,
               (ValkeyModuleCtx * ctx));
@@ -230,6 +232,10 @@ class MockValkeyModule {
   MOCK_METHOD(ValkeyModuleCallReply *, Call,
               (ValkeyModuleCtx * ctx, const char *cmd, const char *fmt,
                const char *arg1, const char *arg2));
+  MOCK_METHOD(ValkeyModuleCallReply *, Call,
+              (ValkeyModuleCtx * ctx, const char *cmd, const char *fmt,
+               const char *arg1, const char *arg2, size_t arg2_len,
+               const char *arg3, size_t arg3_len));
   MOCK_METHOD(void *, GetSharedAPI, (ValkeyModuleCtx * ctx, const char *arg1));
   MOCK_METHOD(ValkeyModuleCallReply *, Call,
               (ValkeyModuleCtx * ctx, const char *cmd, const char *fmt,
@@ -277,7 +283,7 @@ class MockValkeyModule {
 // NOLINTBEGIN(readability-identifier-naming)
 // Global kMockValkeyModule is a fake Valkey module used for static wrappers
 // around MockValkeyModule methods.
-MockValkeyModule *kMockValkeyModule VALKEYMODULE_ATTR;
+inline MockValkeyModule *kMockValkeyModule VALKEYMODULE_ATTR;
 
 inline void TestValkeyModule_Log(ValkeyModuleCtx *ctx [[maybe_unused]],
                                  const char *levelstr [[maybe_unused]],
@@ -900,6 +906,11 @@ inline int TestValkeyModule_ReplicateVerbatim(ValkeyModuleCtx *ctx) {
   return kMockValkeyModule->ReplicateVerbatim(ctx);
 }
 
+inline int TestValkeyModule_Replicate(ValkeyModuleCtx *ctx, const char *cmdname,
+                                      const char *fmt, ...) {
+  return kMockValkeyModule->Replicate(ctx, cmdname, fmt);
+}
+
 inline ValkeyModuleType *TestValkeyModule_ModuleTypeGetTypeDefaultImpl(
     ValkeyModuleKey *key) {
   if (key->ctx->registered_keys.contains(key->key)) {
@@ -1240,7 +1251,7 @@ struct ValkeyModuleCallReply {
   CallReplyVariant val;
   std::string msg;
 };
-std::unique_ptr<ValkeyModuleCallReply> default_reply VALKEYMODULE_ATTR;
+inline std::unique_ptr<ValkeyModuleCallReply> default_reply VALKEYMODULE_ATTR;
 
 inline std::unique_ptr<ValkeyModuleCallReply> CreateValkeyModuleCallReply(
     CallReplyVariant value) {
@@ -1310,6 +1321,16 @@ inline ValkeyModuleCallReply *TestValkeyModule_Call(ValkeyModuleCtx *ctx,
     }
     auto ret =
         kMockValkeyModule->Call(ctx, cmdname, fmt, arg1, arg2->data.c_str());
+    return ret;
+  }
+  if (format == "!Kcbb") {
+    const char *arg1 = va_arg(args, const char *);
+    const char *arg2 = va_arg(args, const char *);
+    size_t arg2_len = va_arg(args, size_t);
+    const char *arg3 = va_arg(args, const char *);
+    size_t arg3_len = va_arg(args, size_t);
+    auto ret = kMockValkeyModule->Call(ctx, cmdname, fmt, arg1, arg2, arg2_len,
+                                       arg3, arg3_len);
     return ret;
   }
   CHECK(false && "Unsupported format specifier");
@@ -1517,6 +1538,7 @@ inline void TestValkeyModule_Init() {
       &TestValkeyModule_SubscribeToServerEvent;
   ValkeyModule_Scan = &TestValkeyModule_Scan;
   ValkeyModule_ReplicateVerbatim = &TestValkeyModule_ReplicateVerbatim;
+  ValkeyModule_Replicate = &TestValkeyModule_Replicate;
   ValkeyModule_ModuleTypeGetType = &TestValkeyModule_ModuleTypeGetType;
   ValkeyModule_GetDetachedThreadSafeContext =
       &TestValkeyModule_GetDetachedThreadSafeContext;
@@ -1641,6 +1663,16 @@ inline void TestValkeyModule_Init() {
       .WillByDefault(TestValkeyModule_CallReplyMapElementImpl);
   ON_CALL(*kMockValkeyModule, CallReplyInteger(testing::_))
       .WillByDefault(TestValkeyModule_CallReplyIntegerImpl);
+  ON_CALL(*kMockValkeyModule,
+          Call(testing::_, testing::_, testing::_, testing::_, testing::_,
+               testing::_, testing::_, testing::_))
+      .WillByDefault([](ValkeyModuleCtx *ctx, const char *cmd, const char *fmt,
+                        const char *arg1, const char *arg2, size_t arg2_len,
+                        const char *arg3,
+                        size_t arg3_len) -> ValkeyModuleCallReply * {
+        static auto ok_reply = CreateValkeyModuleCallReply(std::string("OK"));
+        return ok_reply.get();
+      });
   ON_CALL(*kMockValkeyModule, Milliseconds()).WillByDefault([]() -> long long {
     static long long fake_time = 0;
     return ++fake_time;

@@ -51,8 +51,8 @@ class ProximityIterator : public TextIterator {
   ProximityIterator(absl::InlinedVector<std::unique_ptr<TextIterator>,
                                         kProximityTermsInlineCapacity>&& iters,
                     const std::optional<uint32_t> slop, const bool in_order,
-                    const FieldMaskPredicate query_field_mask,
-                    const InternedStringSet* untracked_keys = nullptr);
+                    const InternedStringSet* untracked_keys,
+                    bool skip_positional_checks);
   /* Implementation of TextIterator APIs */
   FieldMaskPredicate QueryFieldMask() const override;
   // Key-level iteration
@@ -69,8 +69,11 @@ class ProximityIterator : public TextIterator {
   // Returns true if iterator is at a valid state with current key, position,
   // and field.
   bool IsIteratorValid() const override {
+    if (skip_positional_checks_) {
+      return current_key_;
+    }
     return current_key_ && current_position_.has_value() &&
-           current_field_mask_ != 0ULL;
+           current_field_mask_ != 0ULL && query_field_mask_ != 0ULL;
   }
 
  private:
@@ -92,6 +95,9 @@ class ProximityIterator : public TextIterator {
       pos_with_idx_;
   // Used for Negate
   const InternedStringSet* untracked_keys_;
+  // Flag used to skip positional checks. This is used when performing
+  // an AND on text predicates without any positional constraints.
+  bool skip_positional_checks_;
 
   struct ViolationInfo {
     // Iterator index to advance

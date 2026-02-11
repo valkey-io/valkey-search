@@ -16,20 +16,15 @@ OrProximityIterator::OrProximityIterator(
       pos_set_(),
       current_pos_indices_() {
   CHECK(!iters_.empty()) << "must have at least one text iterator";
+  query_field_mask_ = 0ULL;
+  for (const auto& iter : iters_) {
+    query_field_mask_ |= iter->QueryFieldMask();
+  }
   NextKey();
 }
 
-// Returns the field mask based on the current active text iterators.
-// When we are at a certain position, multiple iterators may be on that
-// position. We combine their field masks using bitwise OR to get the overall
-// field mask.
 FieldMaskPredicate OrProximityIterator::QueryFieldMask() const {
-  CHECK(!current_pos_indices_.empty());
-  FieldMaskPredicate mask = 0ULL;
-  for (size_t idx : current_pos_indices_) {
-    mask |= iters_[idx]->QueryFieldMask();
-  }
-  return mask;
+  return query_field_mask_;
 }
 
 bool OrProximityIterator::DoneKeys() const {

@@ -97,28 +97,7 @@ class SystemAllocTracker {
   }
 
  private:
-  // RawSystemAllocator implements an allocator that will not go through
-  // the SystemAllocTracker, for use by the SystemAllocTracker to prevent
-  // infinite recursion when tracking pointers.
-  template <typename T>
-  struct RawSystemAllocator {
-    // NOLINTNEXTLINE
-    typedef T value_type;
-
-    RawSystemAllocator() = default;
-    template <typename U>
-    constexpr RawSystemAllocator(const RawSystemAllocator<U>&) noexcept {}
-    // NOLINTNEXTLINE
-    T* allocate(std::size_t n) {
-      ReportAllocMemorySize(n * sizeof(T));
-      return static_cast<T*>(__real_malloc(n * sizeof(T)));
-    }
-    // NOLINTNEXTLINE
-    void deallocate(T* p, std::size_t) {
-      ReportFreeMemorySize(sizeof(T));
-      __real_free(p);
-    }
-  };
+ 
   mutable absl::Mutex mutex_;
   absl::flat_hash_set<void*, absl::Hash<void*>, std::equal_to<void*>,
                       RawSystemAllocator<void*>>

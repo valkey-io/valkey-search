@@ -97,6 +97,7 @@ constexpr absl::string_view kNoStopWordsParam{"NOSTOPWORDS"};
 constexpr absl::string_view kStopWordsParam{"STOPWORDS"};
 constexpr absl::string_view kNoStemParam{"NOSTEM"};
 constexpr absl::string_view kMinStemSizeParam{"MINSTEMSIZE"};
+constexpr absl::string_view kWeight("WEIGHT");
 
 /// Register the "--max-prefixes" flag. Controls the max number of prefixes per
 /// index.
@@ -398,8 +399,7 @@ absl::Status ParseTag(vmsdk::ArgsIterator &itr, data_model::Index &index_proto,
 
 vmsdk::KeyValueParser<PerFieldTextParams> CreateTextFieldParser() {
   vmsdk::KeyValueParser<PerFieldTextParams> parser;
-  // Field-level parameters only: WITHSUFFIXTRIE, NOSUFFIXTRIE, NOSTEM,
-  // MINSTEMSIZE
+  // Field-level parameters only: WITHSUFFIXTRIE, NOSUFFIXTRIE, NOSTEM, WEIGHT
   parser.AddParamParser(
       kWithSuffixTrieParam,
       GENERATE_FLAG_PARSER(PerFieldTextParams, with_suffix_trie));
@@ -408,19 +408,8 @@ vmsdk::KeyValueParser<PerFieldTextParams> CreateTextFieldParser() {
       GENERATE_NEGATIVE_FLAG_PARSER(PerFieldTextParams, with_suffix_trie));
   parser.AddParamParser(kNoStemParam,
                         GENERATE_FLAG_PARSER(PerFieldTextParams, no_stem));
-  parser.AddParamParser(
-      kMinStemSizeParam,
-      std::make_unique<vmsdk::ParamParser<PerFieldTextParams>>(
-          [](PerFieldTextParams &params,
-             vmsdk::ArgsIterator &itr) -> absl::Status {
-            int value;
-            VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, value));
-            if (value <= 0) {
-              return absl::InvalidArgumentError("MINSTEMSIZE must be positive");
-            }
-            params.min_stem_size = value;
-            return absl::OkStatus();
-          }));
+  parser.AddParamParser(kWeight,
+                        GENERATE_VALUE_PARSER(PerFieldTextParams, weight));
   return parser;
 }
 
@@ -498,11 +487,8 @@ absl::Status ParseText(vmsdk::ArgsIterator &itr, data_model::Index &index_proto,
   PerFieldTextParams field_params;
   field_params.with_suffix_trie = false;
   field_params.no_stem = schema_text_defaults.no_stem;  // Can be overridden
-  field_params.min_stem_size =
-      schema_text_defaults.min_stem_size;  // Can be overridden
 
-  // Parse field-level parameters (WITHSUFFIXTRIE, NOSUFFIXTRIE, NOSTEM,
-  // MINSTEMSIZE)
+  // Parse field-level parameters (WITHSUFFIXTRIE, NOSUFFIXTRIE, NOSTEM, WEIGHT)
   static auto field_parser = CreateTextFieldParser();
   VMSDK_RETURN_IF_ERROR(field_parser.Parse(field_params, itr, false));
 
@@ -510,10 +496,15 @@ absl::Status ParseText(vmsdk::ArgsIterator &itr, data_model::Index &index_proto,
   auto text_index_proto = std::make_unique<data_model::TextIndex>();
   text_index_proto->set_with_suffix_trie(field_params.with_suffix_trie);
   text_index_proto->set_no_stem(field_params.no_stem);
-  text_index_proto->set_min_stem_size(field_params.min_stem_size);
+  text_index_proto->set_weight(field_params.weight);
 
   // Set the text_index in the index_proto
   index_proto.set_allocated_text_index(text_index_proto.release());
+
+  if (field_params.weight != 1.0) {
+    return absl::InvalidArgumentError(
+        "The `WEIGHT` clause with a value other than `1.0` is not supported.");
+  }
 
   return absl::OkStatus();
 }
@@ -676,6 +667,7 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
   // Apply global text defaults to the schema
   index_schema_proto.set_punctuation(schema_text_defaults.punctuation);
   index_schema_proto.set_with_offsets(schema_text_defaults.with_offsets);
+  index_schema_proto.set_min_stem_size(schema_text_defaults.min_stem_size);
 
   // Add stop words to the schema
   for (const auto &word : schema_text_defaults.stop_words) {

@@ -76,8 +76,7 @@ vmsdk::module::Options options = {
                 .cmd_name = valkey_search::kSearchCommand,
                 .permissions = ACLPermissionFormatter(
                     valkey_search::kSearchCmdPermissions),
-                .flags = {vmsdk::module::kReadOnlyFlag,
-                          vmsdk::module::kDenyOOMFlag},
+                .flags = {vmsdk::module::kReadOnlyFlag},
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTSearchCmd>,
             },
             {
@@ -89,11 +88,19 @@ vmsdk::module::Options options = {
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTDebugCmd>,
             },
             {
+                .cmd_name = valkey_search::kInternalUpdateCommand,
+                .permissions = ACLPermissionFormatter(
+                    valkey_search::kInternalUpdateCmdPermissions),
+                .flags = {vmsdk::module::kWriteFlag, vmsdk::module::kAdminFlag,
+                          vmsdk::module::kFastFlag},
+                .cmd_func =
+                    &vmsdk::CreateCommand<valkey_search::FTInternalUpdateCmd>,
+            },
+            {
                 .cmd_name = valkey_search::kAggregateCommand,
                 .permissions = ACLPermissionFormatter(
                     valkey_search::kSearchCmdPermissions),
-                .flags = {vmsdk::module::kReadOnlyFlag,
-                          vmsdk::module::kDenyOOMFlag},
+                .flags = {vmsdk::module::kReadOnlyFlag},
                 .cmd_func =
                     &vmsdk::CreateCommand<valkey_search::FTAggregateCmd>,
             },

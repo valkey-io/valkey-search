@@ -104,6 +104,19 @@ static vmsdk::info_field::Integer used_memory(
         .Computed(vmsdk::GetUsedMemoryCnt)
         .CrashSafe());
 
+static vmsdk::info_field::Integer used_text_memory_bytes(
+    "memory", "used_text_memory_bytes",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> uint64_t {
+      return SchemaManager::Instance().GetTotalTextMemoryUsage();
+    }));
+
+static vmsdk::info_field::Integer used_text_memory_human(
+    "memory", "used_text_memory_human",
+    vmsdk::info_field::IntegerBuilder().SIBytes().Dev().Computed(
+        []() -> uint64_t {
+          return SchemaManager::Instance().GetTotalTextMemoryUsage();
+        }));
+
 static vmsdk::info_field::Integer reclaimable_memory(
     "memory", "index_reclaimable_memory",
     vmsdk::info_field::IntegerBuilder()
@@ -190,6 +203,12 @@ static vmsdk::info_field::Integer ingest_field_tag(
     "global_ingestion", "ingest_field_tag",
     vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().ingest_field_tag;
+    }));
+
+static vmsdk::info_field::Integer ingest_field_text(
+    "global_ingestion", "ingest_field_text",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().ingest_field_text;
     }));
 
 static vmsdk::info_field::Integer ingest_last_batch_size(
@@ -319,6 +338,36 @@ static vmsdk::info_field::Integer rdb_save_failure_cnt(
       return Metrics::GetStats().rdb_save_failure_cnt;
     }));
 
+static vmsdk::info_field::Integer ft_internal_update_parse_failures_cnt(
+    "coordinator", "ft_internal_update_parse_failures_cnt",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().ft_internal_update_parse_failures_cnt;
+    }));
+
+static vmsdk::info_field::Integer ft_internal_update_call_failures_cnt(
+    "coordinator", "ft_internal_update_call_failures_cnt",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().ft_internal_update_call_failures_cnt;
+    }));
+
+static vmsdk::info_field::Integer ft_internal_update_process_failures_cnt(
+    "coordinator", "ft_internal_update_process_failures_cnt",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().ft_internal_update_process_failures_cnt;
+    }));
+
+static vmsdk::info_field::Integer process_internal_update_callback_failures_cnt(
+    "coordinator", "process_internal_update_callback_failures_cnt",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().process_internal_update_callback_failures_cnt;
+    }));
+
+static vmsdk::info_field::Integer ft_internal_update_skipped_entries_cnt(
+    "coordinator", "ft_internal_update_skipped_entries_cnt",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().ft_internal_update_skipped_entries_cnt;
+    }));
+
 static vmsdk::info_field::Integer successful_requests_count(
     "query", "successful_requests_count",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
@@ -353,6 +402,24 @@ static vmsdk::info_field::Integer query_prefiltering_requests_cnt(
     "query", "query_prefiltering_requests_cnt",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
       return Metrics::GetStats().query_prefiltering_requests_cnt;
+    }));
+
+static vmsdk::info_field::Integer nonvector_requests_count(
+    "query", "nonvector_requests_count",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return Metrics::GetStats().query_nonvector_requests_cnt;
+    }));
+
+static vmsdk::info_field::Integer vector_requests_count(
+    "query", "vector_requests_count",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return Metrics::GetStats().query_vector_requests_cnt;
+    }));
+
+static vmsdk::info_field::Integer text_requests_count(
+    "query", "text_requests_count",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().query_text_requests_cnt;
     }));
 
 static vmsdk::info_field::Integer hnsw_add_exceptions_count(
@@ -792,6 +859,18 @@ static vmsdk::info_field::Integer pause_handle_cluster_message_round_cnt(
     "fanout", "pause_handle_cluster_message_round_count",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
       return Metrics::GetStats().pause_handle_cluster_message_round_cnt;
+    }));
+
+static vmsdk::info_field::Integer fulltext_query_blocked_count(
+    "query", "fulltext_query_blocked_count",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return Metrics::GetStats().fulltext_query_blocked_cnt;
+    }));
+
+static vmsdk::info_field::Integer fulltext_query_retry_count(
+    "query", "fulltext_query_retry_count",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return Metrics::GetStats().fulltext_query_retry_cnt;
     }));
 
 #ifdef DEBUG_INFO

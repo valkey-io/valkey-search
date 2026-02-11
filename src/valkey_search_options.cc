@@ -162,6 +162,12 @@ constexpr absl::string_view kReIndexVectorRDBLoad{"skip-rdb-load"};
 static auto rdb_load_skip_index =
     config::BooleanBuilder(kReIndexVectorRDBLoad, false).Build();
 
+/// Should this instance skip corrupted internal update?
+constexpr absl::string_view kSkipCorruptedAOFEntries{
+    "skip-corrupted-internal-update-entries"};
+static auto skip_corrupted_internal_update_entries =
+    config::BooleanBuilder(kSkipCorruptedAOFEntries, false).Build();
+
 /// Control the modules log level verbosity
 constexpr absl::string_view kLogLevel{"log-level"};
 static auto log_level =
@@ -191,15 +197,15 @@ static auto log_level =
 /// Prefer partial results by default of not
 /// If set to true, search will use SOMESHARDS if user does not explicitly
 /// provide an option in the command
-constexpr absl::string_view kPreferPartialResults{"prefer-partial-results"};
-static config::Boolean prefer_partial_results(kPreferPartialResults, true);
+constexpr absl::string_view kEnablePartialResults{"enable-partial-results"};
+static config::Boolean prefer_partial_results(kEnablePartialResults, true);
 
 /// Prefer consistenct results by default of not
 /// If set to true, search will use CONSISTENT if user does not explicitly
 /// provide an option in the command
-constexpr absl::string_view kPreferConsistentResults{
-    "prefer-consistent-results"};
-static config::Boolean prefer_consistent_results(kPreferConsistentResults,
+constexpr absl::string_view kEnableConsistentResults{
+    "enable-consistent-results"};
+static config::Boolean prefer_consistent_results(kEnableConsistentResults,
                                                  false);
 
 /// Enable search result background cleanup
@@ -297,14 +303,6 @@ static auto thread_pool_wait_time_samples =
           }
         })
         .Build();
-
-/// Enable proximity evaluation in prefilter evaluation stage
-/// When disabled, proximity evaluation is skipped in background threads and is
-/// performed only on main thread
-constexpr absl::string_view kEnableProximityPrefilterEval{
-    "enable-proximity-prefilter-eval"};
-static auto enable_proximity_prefilter_eval =
-    config::BooleanBuilder(kEnableProximityPrefilterEval, true).Build();
 
 /// Register the "--max-term-expansions" flag. Controls the maximum number of
 /// words to search in text operations (prefix, suffix, fuzzy) to limit memory
@@ -406,6 +404,11 @@ vmsdk::config::Boolean& GetSkipIndexLoadMutable() {
   return dynamic_cast<vmsdk::config::Boolean&>(*rdb_load_skip_index);
 }
 
+const vmsdk::config::Boolean& GetSkipCorruptedInternalUpdateEntries() {
+  return dynamic_cast<const vmsdk::config::Boolean&>(
+      *skip_corrupted_internal_update_entries);
+}
+
 vmsdk::config::Enum& GetLogLevel() {
   return dynamic_cast<vmsdk::config::Enum&>(*log_level);
 }
@@ -447,11 +450,6 @@ vmsdk::config::Number& GetLocalFanoutQueueWaitThreshold() {
 
 vmsdk::config::Number& GetThreadPoolWaitTimeSamples() {
   return dynamic_cast<vmsdk::config::Number&>(*thread_pool_wait_time_samples);
-}
-
-vmsdk::config::Boolean& GetEnableProximityPrefilterEval() {
-  return dynamic_cast<vmsdk::config::Boolean&>(
-      *enable_proximity_prefilter_eval);
 }
 
 vmsdk::config::Number& GetMaxTermExpansions() {

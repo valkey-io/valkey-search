@@ -123,6 +123,8 @@ class StabilityTests(parameterized.TestCase):
                 use_coordinator=True,
                 replica_count=1,
                 repl_diskless_load="swapdb",
+                failover_interval_sec=30,
+                test_failover_recovery=True,
             ),
         ),
         dict(
@@ -147,6 +149,8 @@ class StabilityTests(parameterized.TestCase):
                 use_coordinator=False,
                 replica_count=1,
                 repl_diskless_load="swapdb",
+                failover_interval_sec=30,
+                test_failover_recovery=True,
             ),
         ),
         dict(
@@ -165,12 +169,14 @@ class StabilityTests(parameterized.TestCase):
                 num_memtier_clients=10,
                 num_search_clients=10,
                 insertion_mode="time_interval",
-                test_time_sec=60,
-                test_timeout=120,
+                test_time_sec=90,
+                test_timeout=180,
                 keyspace_size=1000000,
                 use_coordinator=True,
                 replica_count=1,
                 repl_diskless_load="disabled",
+                failover_interval_sec=50,
+                test_failover_recovery=True,
             ),
         ),
         dict(
@@ -191,14 +197,307 @@ class StabilityTests(parameterized.TestCase):
                 num_memtier_clients=10,
                 num_search_clients=10,
                 insertion_mode="time_interval",
-                test_time_sec=60,
-                test_timeout=120,
+                test_time_sec=120,
+                test_timeout=180,
                 keyspace_size=1000000,
                 use_coordinator=False,
                 replica_count=1,
                 repl_diskless_load="disabled",
+                failover_interval_sec=35,
+                test_failover_recovery=True,
             ),
         ),
+        dict(
+            testcase_name="text_with_backfill_coordinator",
+            config=stability_runner.StabilityTestConfig(
+                index_name="text_with_backfill",
+                ports=(7042, 7043, 7044),
+                index_type="TEXT",
+                vector_dimensions=10,  # Dummy value for TEXT index
+                bgsave_interval_sec=15,
+                ftcreate_interval_sec=10,
+                ftdropindex_interval_sec=10,
+                flushdb_interval_sec=20,
+                randomize_bg_job_intervals=True,
+                num_memtier_threads=10,
+                num_memtier_clients=10,
+                num_search_clients=10,
+                insertion_mode="time_interval",
+                test_time_sec=60,
+                test_timeout=120,
+                keyspace_size=1000000,
+                use_coordinator=True,
+                replica_count=0,
+                repl_diskless_load="swapdb",
+            ),
+        ),
+        dict(
+            testcase_name="text_with_backfill_no_coordinator",
+            config=stability_runner.StabilityTestConfig(
+                index_name="text_with_backfill",
+                ports=(7045, 7046, 7047),
+                index_type="TEXT",
+                vector_dimensions=10,  # Dummy value for TEXT index
+                bgsave_interval_sec=15,
+                ftcreate_interval_sec=10,
+                ftdropindex_interval_sec=10,
+                flushdb_interval_sec=20,
+                randomize_bg_job_intervals=True,
+                num_memtier_threads=10,
+                num_memtier_clients=10,
+                num_search_clients=10,
+                insertion_mode="time_interval",
+                test_time_sec=60,
+                test_timeout=120,
+                keyspace_size=1000000,
+                use_coordinator=False,
+                replica_count=0,
+                repl_diskless_load="swapdb",
+            ),
+        ),
+        dict(
+            testcase_name="text_no_backfill_no_coordinator",
+            config=stability_runner.StabilityTestConfig(
+                index_name="text_no_backfill",
+                ports=(7048, 7049, 7050),
+                index_type="TEXT",
+                vector_dimensions=10,  # Dummy value for TEXT index
+                bgsave_interval_sec=15,
+                ftcreate_interval_sec=0,
+                ftdropindex_interval_sec=0,
+                flushdb_interval_sec=0,
+                randomize_bg_job_intervals=True,
+                num_memtier_threads=10,
+                num_memtier_clients=10,
+                num_search_clients=10,
+                insertion_mode="time_interval",
+                test_time_sec=60,
+                test_timeout=120,
+                keyspace_size=1000000,
+                use_coordinator=False,
+                replica_count=0,
+                repl_diskless_load="swapdb",
+            ),
+        ),
+        # THIS TEST FAILS BECAUSE OF A KNOWN CRASH
+        # dict(
+        #     testcase_name="text_with_backfill_coordinator_replica",
+        #     config=stability_runner.StabilityTestConfig(
+        #         index_name="text_with_backfill",
+        #         ports=(7051, 7052, 7053, 7054, 7055, 7056),
+        #         index_type="TEXT",
+        #         vector_dimensions=10,  # Dummy value for TEXT index
+        #         bgsave_interval_sec=15,
+        #         ftcreate_interval_sec=10,
+        #         ftdropindex_interval_sec=10,
+        #         flushdb_interval_sec=20,
+        #         randomize_bg_job_intervals=True,
+        #         num_memtier_threads=10,
+        #         num_memtier_clients=10,
+        #         num_search_clients=10,
+        #         insertion_mode="time_interval",
+        #         test_time_sec=60,
+        #         test_timeout=120,
+        #         keyspace_size=1000000,
+        #         use_coordinator=True,
+        #         replica_count=1,
+        #         repl_diskless_load="swapdb",
+        #     ),
+        # ),
+        dict(
+            testcase_name="tag_with_backfill_coordinator",
+            config=stability_runner.StabilityTestConfig(
+                index_name="tag_with_backfill",
+                ports=(7057, 7058, 7059),
+                index_type="TAG",
+                vector_dimensions=10,  # Dummy value for TAG index
+                bgsave_interval_sec=15,
+                ftcreate_interval_sec=10,
+                ftdropindex_interval_sec=10,
+                flushdb_interval_sec=20,
+                randomize_bg_job_intervals=True,
+                num_memtier_threads=10,
+                num_memtier_clients=10,
+                num_search_clients=10,
+                insertion_mode="time_interval",
+                test_time_sec=60,
+                test_timeout=120,
+                keyspace_size=1000000,
+                use_coordinator=True,
+                replica_count=0,
+                repl_diskless_load="swapdb",
+            ),
+        ),
+        dict(
+            testcase_name="tag_with_backfill_no_coordinator",
+            config=stability_runner.StabilityTestConfig(
+                index_name="tag_with_backfill",
+                ports=(7060, 7061, 7062),
+                index_type="TAG",
+                vector_dimensions=10,  # Dummy value for TAG index
+                bgsave_interval_sec=15,
+                ftcreate_interval_sec=10,
+                ftdropindex_interval_sec=10,
+                flushdb_interval_sec=20,
+                randomize_bg_job_intervals=True,
+                num_memtier_threads=10,
+                num_memtier_clients=10,
+                num_search_clients=10,
+                insertion_mode="time_interval",
+                test_time_sec=60,
+                test_timeout=120,
+                keyspace_size=1000000,
+                use_coordinator=False,
+                replica_count=0,
+                repl_diskless_load="swapdb",
+            ),
+        ),
+        dict(
+            testcase_name="tag_no_backfill_no_coordinator",
+            config=stability_runner.StabilityTestConfig(
+                index_name="tag_no_backfill",
+                ports=(7063, 7064, 7065),
+                index_type="TAG",
+                vector_dimensions=10,  # Dummy value for TAG index
+                bgsave_interval_sec=15,
+                ftcreate_interval_sec=0,
+                ftdropindex_interval_sec=0,
+                flushdb_interval_sec=0,
+                randomize_bg_job_intervals=True,
+                num_memtier_threads=10,
+                num_memtier_clients=10,
+                num_search_clients=10,
+                insertion_mode="time_interval",
+                test_time_sec=60,
+                test_timeout=120,
+                keyspace_size=1000000,
+                use_coordinator=False,
+                replica_count=0,
+                repl_diskless_load="swapdb",
+            ),
+        ),
+        # THIS TEST FAILS BECAUSE OF A KNOWN CRASH
+        # dict(
+        #     testcase_name="tag_with_backfill_coordinator_replica",
+        #     config=stability_runner.StabilityTestConfig(
+        #         index_name="tag_with_backfill",
+        #         ports=(7066, 7067, 7068, 7069, 7070, 7071),
+        #         index_type="TAG",
+        #         vector_dimensions=10,  # Dummy value for TAG index
+        #         bgsave_interval_sec=15,
+        #         ftcreate_interval_sec=10,
+        #         ftdropindex_interval_sec=10,
+        #         flushdb_interval_sec=20,
+        #         randomize_bg_job_intervals=True,
+        #         num_memtier_threads=10,
+        #         num_memtier_clients=10,
+        #         num_search_clients=10,
+        #         insertion_mode="time_interval",
+        #         test_time_sec=60,
+        #         test_timeout=120,
+        #         keyspace_size=1000000,
+        #         use_coordinator=True,
+        #         replica_count=1,
+        #         repl_diskless_load="swapdb",
+        #     ),
+        # ),
+        dict(
+            testcase_name="numeric_with_backfill_coordinator",
+            config=stability_runner.StabilityTestConfig(
+                index_name="numeric_with_backfill",
+                ports=(7072, 7073, 7074),
+                index_type="NUMERIC",
+                vector_dimensions=10,  # Dummy value for NUMERIC index
+                bgsave_interval_sec=15,
+                ftcreate_interval_sec=10,
+                ftdropindex_interval_sec=10,
+                flushdb_interval_sec=20,
+                randomize_bg_job_intervals=True,
+                num_memtier_threads=10,
+                num_memtier_clients=10,
+                num_search_clients=10,
+                insertion_mode="time_interval",
+                test_time_sec=60,
+                test_timeout=120,
+                keyspace_size=1000000,
+                use_coordinator=True,
+                replica_count=0,
+                repl_diskless_load="swapdb",
+            ),
+        ),
+        dict(
+            testcase_name="numeric_with_backfill_no_coordinator",
+            config=stability_runner.StabilityTestConfig(
+                index_name="numeric_with_backfill",
+                ports=(7075, 7076, 7077),
+                index_type="NUMERIC",
+                vector_dimensions=10,  # Dummy value for NUMERIC index
+                bgsave_interval_sec=15,
+                ftcreate_interval_sec=10,
+                ftdropindex_interval_sec=10,
+                flushdb_interval_sec=20,
+                randomize_bg_job_intervals=True,
+                num_memtier_threads=10,
+                num_memtier_clients=10,
+                num_search_clients=10,
+                insertion_mode="time_interval",
+                test_time_sec=60,
+                test_timeout=120,
+                keyspace_size=1000000,
+                use_coordinator=False,
+                replica_count=0,
+                repl_diskless_load="swapdb",
+            ),
+        ),
+        dict(
+            testcase_name="numeric_no_backfill_no_coordinator",
+            config=stability_runner.StabilityTestConfig(
+                index_name="numeric_no_backfill",
+                ports=(7078, 7079, 7080),
+                index_type="NUMERIC",
+                vector_dimensions=10,  # Dummy value for NUMERIC index
+                bgsave_interval_sec=15,
+                ftcreate_interval_sec=0,
+                ftdropindex_interval_sec=0,
+                flushdb_interval_sec=0,
+                randomize_bg_job_intervals=True,
+                num_memtier_threads=10,
+                num_memtier_clients=10,
+                num_search_clients=10,
+                insertion_mode="time_interval",
+                test_time_sec=60,
+                test_timeout=120,
+                keyspace_size=1000000,
+                use_coordinator=False,
+                replica_count=0,
+                repl_diskless_load="swapdb",
+            ),
+        ),
+        # THIS TEST FAILS BECAUSE OF A KNOWN CRASH
+        # dict(
+        #     testcase_name="numeric_with_backfill_coordinator_replica",
+        #     config=stability_runner.StabilityTestConfig(
+        #         index_name="numeric_with_backfill",
+        #         ports=(7081, 7082, 7083, 7084, 7085, 7086),
+        #         index_type="NUMERIC",
+        #         vector_dimensions=10,  # Dummy value for NUMERIC index
+        #         bgsave_interval_sec=15,
+        #         ftcreate_interval_sec=10,
+        #         ftdropindex_interval_sec=10,
+        #         flushdb_interval_sec=20,
+        #         randomize_bg_job_intervals=True,
+        #         num_memtier_threads=10,
+        #         num_memtier_clients=10,
+        #         num_search_clients=10,
+        #         insertion_mode="time_interval",
+        #         test_time_sec=60,
+        #         test_timeout=120,
+        #         keyspace_size=1000000,
+        #         use_coordinator=True,
+        #         replica_count=1,
+        #         repl_diskless_load="swapdb",
+        #     ),
+        # ),
     )
     def test_valkeyquery_stability(self, config):
         valkey_server_stdout_dir = os.environ["TEST_UNDECLARED_OUTPUTS_DIR"]
@@ -254,9 +553,23 @@ class StabilityTests(parameterized.TestCase):
         if results is None:
             self.fail("Failed to run stability test")
 
+        # Check for unexpectedly terminated servers
+        # During failover testing, only allow servers that were intentionally shut down
         terminated = self.valkey_cluster_under_test.get_terminated_servers()
-        if (terminated):
-            self.fail(f"Valkey servers died during test, ports: {terminated}")
+        if terminated:
+            unexpected_terminations = [
+                port for port in terminated 
+                if port not in results.intentionally_failed_ports
+            ]
+            if unexpected_terminations:
+                self.fail(
+                    f"Valkey servers died unexpectedly during test, ports: {unexpected_terminations}. "
+                    f"Intentionally failed ports: {results.intentionally_failed_ports}"
+                )
+            else:
+                logging.info(
+                    f"Nodes intentionally shut down during failover testing: {terminated}"
+                )
 
         self.assertTrue(
             results.successful_run,
@@ -289,6 +602,15 @@ class StabilityTests(parameterized.TestCase):
             # BGSAVE will fail if another is ongoing.
             if result.name == "BGSAVE":
                 pass
+            elif config.failover_interval_sec > 0 and result.name in ["FT.CREATE", "FLUSHDB", "FT.DROPINDEX"]:
+                # Allow up to 3 failures per background task during failover testing. These are for the situation where the
+                # cluster information is not updated fast enough and causes a race condition in the check. This is a situation
+                # that can happen and we want to avoid catching failures like those because they are not true failures (they are expected)
+                self.assertLessEqual(
+                    result.failures,
+                    3,
+                    f"Expected at most 3 transient failures for background task {result.name} during failover, got {result.failures}",
+                )
             else:
                 self.assertEqual(
                     result.failures,

@@ -63,7 +63,9 @@ FieldMaskPredicate ProximityIterator::QueryFieldMask() const {
 }
 
 bool ProximityIterator::DoneKeys() const {
-  if (iters_.empty()) return true;
+  if (iters_.empty()) {
+    return true;
+  }
   for (auto& iter : iters_) {
     if (iter->DoneKeys()) {
       return true;
@@ -118,8 +120,12 @@ bool ProximityIterator::FindCommonKey() {
   Key max_key;
   for (auto& iter : iters_) {
     auto k = iter->CurrentKey();
-    if (!min_key || k < min_key) min_key = k;
-    if (!max_key || k > max_key) max_key = k;
+    if (!min_key || k < min_key) {
+      min_key = k;
+    }
+    if (!max_key || k > max_key) {
+      max_key = k;
+    }
   }
   // 2) If min == max, we found a common key
   if (min_key == max_key) {
@@ -167,7 +173,9 @@ bool ProximityIterator::SeekForwardKey(const Key& target_key) {
 }
 
 bool ProximityIterator::DonePositions() const {
-  if (iters_.empty()) return true;
+  if (iters_.empty()) {
+    return true;
+  }
   for (auto& iter : iters_) {
     if (iter->DonePositions()) {
       return true;

@@ -22,7 +22,15 @@ GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request,
                               grpc::CallbackServerContext* context);
 
 std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
-    const query::SearchParameters& parameters);
+    const query::SearchParameters& parameters,
+    const std::optional<query::SortByParameter>& sortby_parameter =
+        std::nullopt);
+
+std::optional<query::SortByParameter> SortByFromGRPC(
+    const SearchIndexPartitionRequest& request);
+
+void SortByToGRPC(const std::optional<query::SortByParameter>& sortby,
+                  SearchIndexPartitionRequest* request);
 
 }  // namespace valkey_search::coordinator
 

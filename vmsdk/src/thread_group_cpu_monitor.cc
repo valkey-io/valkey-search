@@ -138,14 +138,14 @@ absl::StatusOr<double> ThreadGroupCPUMonitor::CalcCurrentCPUTimeSec() const {
   double total_cpu_time = 0.0;
   VMSDK_ASSIGN_OR_RETURN(auto result,
                          GetThreadsByNameMac(thread_name_pattern_));
-  for (const auto& thr : result) {
+  for (const auto& thread : result) {
     thread_basic_info_data_t info;
     mach_msg_type_number_t count = THREAD_BASIC_INFO_COUNT;
 
-    if (thread_info(thr, THREAD_BASIC_INFO, (thread_info_t)&info, &count) !=
+    if (thread_info(thread, THREAD_BASIC_INFO, (thread_info_t)&info, &count) !=
         KERN_SUCCESS) {
       return absl::InternalError(
-          absl::StrFormat("Failed to get thread info for thread: %u", thr));
+          absl::StrFormat("Failed to get thread info for thread: %u", thread));
     }
     total_cpu_time +=
         (info.user_time.seconds + info.user_time.microseconds / kMicroToSec) +

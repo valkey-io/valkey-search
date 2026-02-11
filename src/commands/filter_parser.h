@@ -40,6 +40,10 @@ enum class QueryOperations : uint64_t {
   kContainsText = 1 << 5,
   kContainsProximity = 1 << 6,
   kContainsNestedComposed = 1 << 7,
+  kContainsTextTerm = 1 << 8,
+  kContainsTextPrefix = 1 << 9,
+  kContainsTextSuffix = 1 << 10,
+  kContainsTextFuzzy = 1 << 11,
 };
 
 inline QueryOperations operator|(QueryOperations a, QueryOperations b) {
@@ -59,6 +63,7 @@ struct FilterParseResults {
   std::unique_ptr<query::Predicate> root_predicate;
   absl::flat_hash_set<std::string> filter_identifiers;
   QueryOperations query_operations = QueryOperations::kNone;
+  bool has_text_predicate{false};
 };
 class FilterParser {
  public:
@@ -78,6 +83,7 @@ class FilterParser {
   absl::string_view expression_;
   size_t pos_{0};
   size_t node_count_{0};
+  bool has_text_predicate_{false};
   absl::flat_hash_set<std::string> filter_identifiers_;
   QueryOperations query_operations_{QueryOperations::kNone};
 

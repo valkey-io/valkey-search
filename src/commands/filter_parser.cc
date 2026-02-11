@@ -298,7 +298,7 @@ FilterParser::ParseNumericPredicate(const std::string& attribute_alias) {
   VMSDK_ASSIGN_OR_RETURN(auto start, ParseNumber());
   if (!Match(' ', false) && !Match(',')) {
     return absl::InvalidArgumentError(
-        absl::StrCat("Expected space or `|` between start and end values of a "
+        absl::StrCat("Expected space or `,` between start and end values of a "
                      "numeric field. Position: ",
                      pos_));
   }
@@ -434,6 +434,7 @@ absl::StatusOr<FilterParseResults> FilterParser::Parse() {
     return results;
   }
   filter_identifiers_.clear();
+  has_text_predicate_ = false;
   pos_ = 0;
   VMSDK_ASSIGN_OR_RETURN(auto parse_result, ParseExpression(0));
   if (!IsEnd()) {
@@ -443,6 +444,7 @@ absl::StatusOr<FilterParseResults> FilterParser::Parse() {
   FlagNestedComposedPredicate(results.root_predicate);
   results.filter_identifiers.swap(filter_identifiers_);
   results.query_operations = query_operations_;
+  results.has_text_predicate = has_text_predicate_;
   // Only generate query syntax tree output if debug logging is enabled.
   if (valkey_search::options::GetLogLevel().GetValue() ==
       static_cast<int>(LogLevel::kDebug)) {
@@ -607,6 +609,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
   FieldMaskPredicate field_mask;
   VMSDK_RETURN_IF_ERROR(
       SetupTextFieldConfiguration(field_mask, field_or_default, false));
+  query_operations_ |= QueryOperations::kContainsTextTerm;
   return FilterParser::TokenResult{
       std::make_unique<query::TermPredicate>(text_index_schema, field_mask,
                                              std::move(token), true),
@@ -715,6 +718,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
                                                   std::move(token),
                                                   leading_percent_count),
           break_on_query_syntax};
+      query_operations_ |= QueryOperations::kContainsTextFuzzy;
       return fuzzy;
     } else {
       return absl::InvalidArgumentError("Invalid fuzzy '%' markers");
@@ -731,6 +735,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
           break_on_query_syntax};
       return absl::InvalidArgumentError("Unsupported query operation");
     } else {
+      query_operations_ |= QueryOperations::kContainsTextSuffix;
       return FilterParser::TokenResult{
           std::make_unique<query::SuffixPredicate>(
               text_index_schema, field_mask, std::move(token)),
@@ -741,6 +746,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
       return absl::InvalidArgumentError("Invalid wildcard '*' markers");
     VMSDK_RETURN_IF_ERROR(
         SetupTextFieldConfiguration(field_mask, field_or_default, false));
+    query_operations_ |= QueryOperations::kContainsTextPrefix;
     return FilterParser::TokenResult{
         std::make_unique<query::PrefixPredicate>(text_index_schema, field_mask,
                                                  std::move(token)),
@@ -754,12 +760,9 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     }
     VMSDK_RETURN_IF_ERROR(
         SetupTextFieldConfiguration(field_mask, field_or_default, false));
-    // Apply stemming if not exact match - use schema-level min_stem_size
-    // directly
-    if (!exact && (index_schema_.GetStemTextFieldMask() & field_mask) != 0) {
-      token = lexer.StemWord(token, true, index_schema_.GetMinStemSize(),
-                             lexer.GetStemmer());
-    }
+    query_operations_ |= QueryOperations::kContainsTextTerm;
+    // TODO: Implement Composite query between original and its stem variants
+    // for Non Exact Term search after Composite query execution is optimized
     return FilterParser::TokenResult{
         std::make_unique<query::TermPredicate>(text_index_schema, field_mask,
                                                std::move(token), exact),
@@ -882,6 +885,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
     pred = std::move(terms[0]);
     node_count_++;
   }
+  has_text_predicate_ = true;  // Flag that we parsed a text predicate
   return pred;
 }
 

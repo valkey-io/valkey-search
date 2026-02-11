@@ -163,11 +163,12 @@ data_model::TagIndex CreateTagIndexProto(const std::string &separator,
   return tag_index_proto;
 }
 
-data_model::TextIndex CreateTextIndexProto(bool with_suffix_trie,
-                                           bool no_stem) {
+data_model::TextIndex CreateTextIndexProto(bool with_suffix_trie, bool no_stem,
+                                           double weight) {
   data_model::TextIndex text_index_proto;
   text_index_proto.set_with_suffix_trie(with_suffix_trie);
   text_index_proto.set_no_stem(no_stem);
+  text_index_proto.set_weight(weight);
   return text_index_proto;
 }
 

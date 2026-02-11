@@ -43,6 +43,7 @@
 #include "src/indexes/vector_hnsw.h"
 #include "src/keyspace_event_manager.h"
 #include "src/metrics.h"
+#include "src/query/inflight_retry.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
@@ -328,6 +329,10 @@ void IndexSchema::UpdateTextFieldMasksForIndex(const std::string &identifier,
     // Track fields with stemming enabled (note: stemming not run for suffix)
     if (text_index->IsStemmingEnabled()) {
       stem_text_field_mask_ |= field_bit;
+      // Sync to TextIndexSchema so query code can access it
+      if (text_index_schema_) {
+        text_index_schema_->SetStemTextFieldMask(stem_text_field_mask_);
+      }
     }
   }
 }
@@ -380,6 +385,22 @@ absl::StatusOr<std::string> IndexSchema::GetIdentifier(
   return itr->second.GetIdentifier();
 }
 
+absl::StatusOr<AttributePosition> IndexSchema::GetAttributePositionByAlias(
+    absl::string_view attribute_alias) const {
+  auto itr = attributes_.find(std::string{attribute_alias});
+  if (itr == attributes_.end()) {
+    return absl::NotFoundError(
+        absl::StrCat("Index field `", attribute_alias, "` does not exist"));
+  }
+  return itr->second.GetPosition();
+}
+
+absl::StatusOr<AttributePosition> IndexSchema::GetAttributePositionByIdentifier(
+    absl::string_view identifier) const {
+  VMSDK_ASSIGN_OR_RETURN(std::string attribute_alias, GetAlias(identifier));
+  return GetAttributePositionByAlias(attribute_alias);
+}
+
 absl::StatusOr<std::string> IndexSchema::GetAlias(
     absl::string_view identifier) const {
   auto itr = identifier_to_alias_.find(std::string{identifier});
@@ -403,13 +424,17 @@ absl::StatusOr<vmsdk::UniqueValkeyString> IndexSchema::DefaultReplyScoreAs(
 absl::Status IndexSchema::AddIndex(absl::string_view attribute_alias,
                                    absl::string_view identifier,
                                    std::shared_ptr<indexes::IndexBase> index) {
-  auto [_, res] =
-      attributes_.insert({std::string(attribute_alias),
-                          Attribute{attribute_alias, identifier, index}});
+  auto [_, res] = attributes_.insert(
+      {std::string(attribute_alias),
+       Attribute{attribute_alias, identifier, index,
+                 static_cast<AttributePosition>(
+                     attributes_indexed_data_size_.size())}});
   if (!res) {
     return absl::AlreadyExistsError(
         absl::StrCat("Index field `", attribute_alias, "` already exists"));
   }
+
+  attributes_indexed_data_size_.emplace_back(0);
   identifier_to_alias_.insert(
       {std::string(identifier), std::string(attribute_alias)});
   // Update schema level Text information for default field searches
@@ -579,7 +604,7 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
     index_key_info_.erase(key);
   }
   if (text_index_schema_) {
-    // Text index structures operate at the schmema-level so we commit the
+    // Text index structures operate at the schema-level so we commit the
     // updates to all Text attributes in one operation for efficiency
     text_index_schema_->CommitKeyData(key);
   }
@@ -727,9 +752,9 @@ bool IndexSchema::ScheduleMutation(bool from_backfill, const Key &key,
         index_schema->ProcessSingleMutationAsync(ctx, from_backfill, key_str,
                                                  delay_capturer.get());
         // The blocking_counter is stack-allocated by a caller that
-        // holds a strong reference to the index schema object. Consequently, if
-        // index_schema is non-null, the blocking_counter is guaranteed to be
-        // valid.
+        // holds a strong reference to the index schema object. Consequently,
+        // if index_schema is non-null, the blocking_counter is guaranteed to
+        // be valid.
         if (ABSL_PREDICT_FALSE(blocking_counter)) {
           blocking_counter->DecrementCount();
         }
@@ -746,20 +771,75 @@ bool ShouldBlockClient(ValkeyModuleCtx *ctx, bool inside_multi_exec,
   return !inside_multi_exec && !from_backfill && vmsdk::IsRealUserClient(ctx);
 }
 
+MutationSequenceNumber IndexSchema::UpdateDbInfoKey(
+    ValkeyModuleCtx *ctx, const MutatedAttributes &mutated_attributes,
+    const Key &interned_key, [[maybe_unused]] bool from_backfill,
+    bool is_delete) {
+  vmsdk::VerifyMainThread();
+  MutationSequenceNumber this_mutation = ++schema_mutation_sequence_number_;
+  auto &dbkeyinfo_map = db_key_info_.Get();
+
+  // When mutating (does not matter
+  auto iter = dbkeyinfo_map.find(interned_key);
+  if (iter != dbkeyinfo_map.end()) {
+    // Remove this key size(s) from the index tracked size array.
+    for (const auto &attr_info : iter->second.GetAttributeInfoVec()) {
+      CHECK(attr_info.GetPosition() < attributes_indexed_data_size_.size());
+      attributes_indexed_data_size_[attr_info.GetPosition()] -=
+          attr_info.GetSize();
+    }
+  }
+
+  if (is_delete) {
+    dbkeyinfo_map.erase(interned_key);
+    return this_mutation;
+  }
+
+  auto &dbkeyinfo = dbkeyinfo_map[interned_key];
+  dbkeyinfo.mutation_sequence_number_ = this_mutation;
+
+  auto &attr_info_vec = dbkeyinfo.GetAttributeInfoVec();
+  // Clear the array, we will re-use it.
+  attr_info_vec.clear();
+
+  // Go over the mutated attributes and increment the global size
+  // array
+  for (const auto &mutated_attr : mutated_attributes) {
+    // We should accept here the alias
+    auto res = GetAttributePositionByAlias(mutated_attr.first);
+    if (!res.ok()) {
+      // No such alias? try to see if we got an identifier instead
+      res = GetAttributePositionByIdentifier(mutated_attr.first);
+    }
+    CHECK(res.ok()) << "Index: [" << GetName()
+                    << "]: could not find attribute position for alias: "
+                    << mutated_attr.first;
+    CHECK(res.value() < attributes_indexed_data_size_.size())
+        << "Invalid attribute position found";
+
+    const auto &attr_pos = res.value();
+    size_t data_len{0};
+    if (mutated_attr.second.data) {
+      // If data is present, the operation is either INSERT or UPDATE.
+      // Otherwise, the field has been deleted and is treated as having size
+      // 0.
+      data_len = vmsdk::ToStringView(mutated_attr.second.data.get()).length();
+      attr_info_vec.emplace_back(attr_pos, data_len);
+    }
+    // update the global tracking array
+    attributes_indexed_data_size_[attr_pos] += data_len;
+  }
+
+  attr_info_vec.shrink_to_fit();
+  return this_mutation;
+}
+
 void IndexSchema::ProcessMutation(ValkeyModuleCtx *ctx,
                                   MutatedAttributes &mutated_attributes,
                                   const Key &interned_key, bool from_backfill,
                                   bool is_delete) {
-  //
-  // Update DbKeyInfo
-  //
-  MutationSequenceNumber this_mutation = ++schema_mutation_sequence_number_;
-  auto &dbkeyinfo = db_key_info_.Get();
-  if (is_delete) {
-    dbkeyinfo.erase(interned_key);
-  } else {
-    dbkeyinfo[interned_key].mutation_sequence_number_ = this_mutation;
-  }
+  auto this_mutation = UpdateDbInfoKey(ctx, mutated_attributes, interned_key,
+                                       from_backfill, is_delete);
 
   if (ABSL_PREDICT_FALSE(!mutations_thread_pool_ ||
                          mutations_thread_pool_->Size() == 0)) {
@@ -790,6 +870,7 @@ void IndexSchema::ProcessMutation(ValkeyModuleCtx *ctx,
 void IndexSchema::ProcessSingleMutationAsync(ValkeyModuleCtx *ctx,
                                              bool from_backfill, const Key &key,
                                              vmsdk::StopWatch *delay_capturer) {
+  PAUSEPOINT("mutation_processing");
   bool first_time = true;
   do {
     auto mutation_record = ConsumeTrackedMutatedAttribute(key, first_time);
@@ -916,6 +997,49 @@ uint64_t IndexSchema::CountRecords() const {
   return record_cnt;
 }
 
+int IndexSchema::GetTagAttributeCount() const {
+  return std::count_if(attributes_.begin(), attributes_.end(),
+                       [](const auto &attr) {
+                         return attr.second.GetIndex()->GetIndexerType() ==
+                                indexes::IndexerType::kTag;
+                       });
+}
+
+int IndexSchema::GetNumericAttributeCount() const {
+  return std::count_if(attributes_.begin(), attributes_.end(),
+                       [](const auto &attr) {
+                         return attr.second.GetIndex()->GetIndexerType() ==
+                                indexes::IndexerType::kNumeric;
+                       });
+}
+
+int IndexSchema::GetVectorAttributeCount() const {
+  return std::count_if(attributes_.begin(), attributes_.end(),
+                       [](const auto &attr) {
+                         auto type = attr.second.GetIndex()->GetIndexerType();
+                         return type == indexes::IndexerType::kVector ||
+                                type == indexes::IndexerType::kHNSW ||
+                                type == indexes::IndexerType::kFlat;
+                       });
+}
+
+int IndexSchema::GetTextAttributeCount() const {
+  return std::count_if(attributes_.begin(), attributes_.end(),
+                       [](const auto &attr) {
+                         return attr.second.GetIndex()->GetIndexerType() ==
+                                indexes::IndexerType::kText;
+                       });
+}
+
+int IndexSchema::GetTextItemCount() const {
+  auto text_index_schema = GetTextIndexSchema();
+  if (!text_index_schema) {
+    return 0;
+  }
+  // Count documents that actually have text content indexed
+  return text_index_schema->GetPerKeyTextIndexes().size();
+}
+
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   int arrSize = 30;
   // Debug Text index Memory info fields
@@ -950,7 +1074,7 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
   int attribute_array_len = 0;
   for (const auto &attribute : attributes_) {
-    attribute_array_len += attribute.second.RespondWithInfo(ctx);
+    attribute_array_len += attribute.second.RespondWithInfo(ctx, this);
   }
   ValkeyModule_ReplySetArrayLength(ctx, attribute_array_len);
 
@@ -1244,18 +1368,19 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
     VMSDK_RETURN_IF_ERROR(ValidateIndex());
   }
   //
-  // To reconstruct an index-schema, we want to ingest all of the keys that are
-  // currently within the index. If there is a non-vector index, we can use the
-  // tracked and untracked key lists from that index. If there is ONLY vector
-  // indexes, then this key list is not needed as there aren't any non-vector
-  // indexes to ingest.
+  // To reconstruct an index-schema, we want to ingest all of the keys that
+  // are currently within the index. If there is a non-vector index, we can
+  // use the tracked and untracked key lists from that index. If there is ONLY
+  // vector indexes, then this key list is not needed as there aren't any
+  // non-vector indexes to ingest.
   //
-  // The V1 format doesn't have this list and substitutes a backfill to rebuild.
-  // In the absence of support for SKIPINITIALSCAN the backfill is sufficient to
-  // determine which keys are in the index. However, once we support this option
-  // it's no longer possible to determine which keys are in the index without
-  // storing them explicitly. Thus the V2 format includes this key list
-  // explicitly which will trivially enable the SKIPINITIALSCAN option.
+  // The V1 format doesn't have this list and substitutes a backfill to
+  // rebuild. In the absence of support for SKIPINITIALSCAN the backfill is
+  // sufficient to determine which keys are in the index. However, once we
+  // support this option it's no longer possible to determine which keys are
+  // in the index without storing them explicitly. Thus the V2 format includes
+  // this key list explicitly which will trivially enable the SKIPINITIALSCAN
+  // option.
   //
   std::shared_ptr<indexes::IndexBase> index;
   for (const auto &attribute : attributes_) {
@@ -1283,10 +1408,10 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
     CHECK(key_count == 0) << "Key count mismatch for index " << GetName();
   }
   //
-  // Write out the mutation queue entries. As an optimization we only write out
-  // non-backfill entries. But this requires that the index itself be marked as
-  // not backfilling, in other words if the index thinks it's done then we need
-  // to save restore even the entries marked as backfilling.
+  // Write out the mutation queue entries. As an optimization we only write
+  // out non-backfill entries. But this requires that the index itself be
+  // marked as not backfilling, in other words if the index thinks it's done
+  // then we need to save restore even the entries marked as backfilling.
   //
   auto count = !IsBackfillInProgress()
                    ? tracked_mutated_records_.size()
@@ -1586,6 +1711,20 @@ vmsdk::BlockedClientCategory IndexSchema::GetBlockedCategoryFromProto() const {
   }
 }
 
+bool IndexSchema::RegisterWaitingQuery(
+    const std::vector<indexes::Neighbor> &neighbors,
+    std::shared_ptr<query::InFlightRetryContext> query_ctx) {
+  absl::MutexLock lock(&mutated_records_mutex_);
+  for (const auto &neighbor : neighbors) {
+    auto itr = tracked_mutated_records_.find(neighbor.external_id);
+    if (itr != tracked_mutated_records_.end()) {
+      itr->second.waiting_queries.insert(std::move(query_ctx));
+      return true;
+    }
+  }
+  return false;
+}
+
 bool IndexSchema::InTrackedMutationRecords(
     const Key &key, const std::string &identifier) const {
   absl::MutexLock lock(&mutated_records_mutex_);
@@ -1668,25 +1807,37 @@ void IndexSchema::MarkAsDestructing() {
 
 std::optional<IndexSchema::MutatedAttributes>
 IndexSchema::ConsumeTrackedMutatedAttribute(const Key &key, bool first_time) {
-  absl::MutexLock lock(&mutated_records_mutex_);
-  auto itr = tracked_mutated_records_.find(key);
-  if (ABSL_PREDICT_FALSE(itr == tracked_mutated_records_.end())) {
-    return std::nullopt;
+  absl::flat_hash_set<std::shared_ptr<query::InFlightRetryContext>>
+      queries_to_notify;
+  {
+    absl::MutexLock lock(&mutated_records_mutex_);
+    auto itr = tracked_mutated_records_.find(key);
+    if (ABSL_PREDICT_FALSE(itr == tracked_mutated_records_.end())) {
+      return std::nullopt;
+    }
+    if (ABSL_PREDICT_FALSE(first_time && itr->second.consume_in_progress)) {
+      return std::nullopt;
+    }
+    itr->second.consume_in_progress = true;
+    // Delete this tracked document if no additional mutations were tracked
+    if (!itr->second.attributes.has_value()) {
+      queries_to_notify = std::move(itr->second.waiting_queries);
+      tracked_mutated_records_.erase(itr);
+      // Will notify after releasing lock
+    } else {
+      index_key_info_[key].mutation_sequence_number_ =
+          itr->second.sequence_number;
+      // Track entry is now first consumed
+      auto mutated_attributes = std::move(itr->second.attributes.value());
+      itr->second.attributes = std::nullopt;
+      return mutated_attributes;
+    }
   }
-  if (ABSL_PREDICT_FALSE(first_time && itr->second.consume_in_progress)) {
-    return std::nullopt;
+  // Notify waiting queries outside the lock
+  for (const auto &query_ctx : queries_to_notify) {
+    query_ctx->OnMutationComplete();
   }
-  itr->second.consume_in_progress = true;
-  // Delete this tracked document if no additional mutations were tracked
-  if (!itr->second.attributes.has_value()) {
-    tracked_mutated_records_.erase(itr);
-    return std::nullopt;
-  }
-  index_key_info_[key].mutation_sequence_number_ = itr->second.sequence_number;
-  // Track entry is now first consumed
-  auto mutated_attributes = std::move(itr->second.attributes.value());
-  itr->second.attributes = std::nullopt;
-  return mutated_attributes;
+  return std::nullopt;
 }
 
 size_t IndexSchema::GetMutatedRecordsSize() const {

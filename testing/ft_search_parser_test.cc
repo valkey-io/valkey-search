@@ -738,6 +738,15 @@ INSTANTIATE_TEST_SUITE_P(
                 "]`. Blob attribute "
                 "argument is missing",
         },
+        {
+            .test_name = "bad_message_query",
+            .success = false,
+            .params_str = "",
+            .filter_str = "*",
+            .attribute_alias = "",
+            .expected_error_message = "Invalid query string syntax",
+            .vector_query = false,
+        },
         // VERBATIM parameter tests
         {
             .test_name = "verbatim_vector_query",

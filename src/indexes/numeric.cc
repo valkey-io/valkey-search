@@ -269,6 +269,12 @@ bool Numeric::IsUnTracked(const InternedStringPtr& key) const {
   return untracked_keys_.contains(key);
 }
 
+void Numeric::UnTrack(const InternedStringPtr& key) {
+  absl::MutexLock lock(&index_mutex_);
+  CHECK(!tracked_keys_.contains(key));
+  untracked_keys_.insert(key);
+}
+
 absl::Status Numeric::ForEachTrackedKey(
     absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn) const {
   absl::MutexLock lock(&index_mutex_);

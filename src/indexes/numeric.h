@@ -105,6 +105,9 @@ class Numeric : public IndexBase {
       ABSL_LOCKS_EXCLUDED(index_mutex_);
   bool IsUnTracked(const InternedStringPtr& key) const override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
+  void UnTrack(const InternedStringPtr& key) override
+      ABSL_LOCKS_EXCLUDED(index_mutex_);
+
   absl::Status ForEachTrackedKey(
       absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
       const override ABSL_LOCKS_EXCLUDED(index_mutex_);

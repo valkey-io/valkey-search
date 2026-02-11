@@ -83,6 +83,13 @@ class Text : public IndexBase {
     return untracked_keys_.contains(key);
   }
 
+  void UnTrack(const InternedStringPtr& key) override
+      ABSL_LOCKS_EXCLUDED(index_mutex_) {
+    CHECK(!IsTracked(key));
+    absl::MutexLock lock(&index_mutex_);
+    untracked_keys_.insert(key);
+  }
+
   absl::Status ForEachUnTrackedKey(
       absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
       const override {

@@ -391,6 +391,12 @@ bool Tag::IsUnTracked(const InternedStringPtr& key) const {
   return untracked_keys_.contains(key);
 }
 
+void Tag::UnTrack(const InternedStringPtr& key) {
+  absl::MutexLock lock(&index_mutex_);
+  CHECK(!tracked_tags_by_keys_.contains(key));
+  untracked_keys_.insert(key);
+}
+
 absl::Status Tag::ForEachTrackedKey(
     absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn) const {
   absl::MutexLock lock(&index_mutex_);

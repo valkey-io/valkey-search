@@ -560,6 +560,8 @@ bool VectorBase::IsUnTracked(const InternedStringPtr &key) const {
   return false;
 }
 
+void Tag::UnTrack(const InternedStringPtr &key) {}
+
 absl::Status VectorBase::ForEachTrackedKey(
     absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const {
   absl::MutexLock lock(&key_to_metadata_mutex_);

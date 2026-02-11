@@ -145,6 +145,7 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   bool IsTracked(const InternedStringPtr& key) const override
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   bool IsUnTracked(const InternedStringPtr& key) const override;
+  void UnTrack(const InternedStringPtr& key) override;
   absl::Status ForEachTrackedKey(
       absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
       const override ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);

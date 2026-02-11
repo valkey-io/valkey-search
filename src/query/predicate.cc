@@ -435,14 +435,10 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator &evaluator) const {
       // AND is fully (recursively) resolved in the entries fetcher layer
       // already. UNLESS query contains negation.
       if (evaluator.IsPrefilterEvaluator() &&
-          child->GetType() == PredicateType::kText) {
-        auto *prefilter_eval =
-            static_cast<indexes::PrefilterEvaluator *>(&evaluator);
-        auto query_ops = prefilter_eval->GetQueryOperations();
-        if (!(static_cast<uint64_t>(query_ops) &
-              static_cast<uint64_t>(QueryOperations::kContainsNegate))) {
-          continue;
-        }
+          child->GetType() == PredicateType::kText &&
+          !(evaluator.GetQueryOperations() &
+            QueryOperations::kContainsNegate)) {
+        continue;
       }
       EvaluationResult result =
           EvaluatePredicate(child.get(), evaluator, require_positions);

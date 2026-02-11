@@ -57,10 +57,12 @@ class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
   InlineVectorFilter(
       query::Predicate *filter_predicate, indexes::VectorBase *vector_index,
       const InternedStringNodeHashMap<valkey_search::indexes::text::TextIndex>
-          *per_key_indexes)
+          *per_key_indexes,
+      QueryOperations query_operations)
       : filter_predicate_(filter_predicate),
         vector_index_(vector_index),
-        per_key_indexes_(per_key_indexes) {}
+        per_key_indexes_(per_key_indexes),
+        query_operations_(query_operations) {}
   ~InlineVectorFilter() override = default;
 
   bool operator()(hnswlib::labeltype id) override {
@@ -74,7 +76,7 @@ class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
           valkey_search::indexes::text::TextIndexSchema::LookupTextIndex(
               *per_key_indexes_, *key);
     }
-    indexes::PrefilterEvaluator evaluator(text_index);
+    indexes::PrefilterEvaluator evaluator(text_index, query_operations_);
     return evaluator.Evaluate(*filter_predicate_, *key);
   }
 
@@ -83,6 +85,7 @@ class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
   indexes::VectorBase *vector_index_;
   const InternedStringNodeHashMap<valkey_search::indexes::text::TextIndex>
       *per_key_indexes_;
+  QueryOperations query_operations_;
 };
 absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
     indexes::VectorBase *vector_index, const SearchParameters &parameters) {
@@ -96,7 +99,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
     }
     inline_filter = std::make_unique<InlineVectorFilter>(
         parameters.filter_parse_results.root_predicate.get(), vector_index,
-        per_key_indexes);
+        per_key_indexes, parameters.filter_parse_results.query_operations);
     VMSDK_LOG(DEBUG, nullptr) << "Performing vector search with inline filter";
   }
   if (vector_index->GetIndexerType() == indexes::IndexerType::kHNSW) {

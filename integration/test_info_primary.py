@@ -159,6 +159,7 @@ class TestFTInfoPrimary(ValkeySearchClusterTestCaseDebugMode):
         assert str(info.get("index_name")) == index_name
         assert str(info.get("mode")) == "primary"
         assert int(info["num_docs"]) == 2
+        assert int(info["num_records"] == 3)
         assert int(info["hash_indexing_failures"]) == 0
 
         # Parse attributes into a dict keyed by attribute name

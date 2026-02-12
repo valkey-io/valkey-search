@@ -1,8 +1,5 @@
-"""
-Test file for validating all search module configs.
-Tests CONFIG GET and CONFIG SET for each config parameter.
-"""
 import random
+import pytest
 from valkey_search_test_case import (
     ValkeySearchTestCaseBase, ValkeySearchClusterTestCase,
     ValkeySearchTestCaseDebugMode, ValkeySearchClusterTestCaseDebugMode
@@ -11,63 +8,8 @@ from valkey.exceptions import ResponseError
 from valkeytestframework.conftest import resource_port_tracker
 
 
-# All configs: (name, type, visibility)
-ALL_CONFIGS = [
-    # APP configs
-    ("backfill-batch-size", "Number", "APP"),
-    ("cluster-map-expiration-ms", "Number", "APP"),
-    ("coordinator-query-timeout-secs", "Number", "APP"),
-    ("default-timeout-ms", "Number", "APP"),
-    ("drain-mutation-queue-on-save", "Boolean", "APP"),
-    ("ft-info-rpc-timeout-ms", "Number", "APP"),
-    ("ft-info-timeout-ms", "Number", "APP"),
-    ("fuzzy-max-distance", "Number", "APP"),
-    ("high-priority-weight", "Number", "APP"),
-    ("hnsw-block-size", "Number", "APP"),
-    ("info-developer-visible", "Boolean", "APP"),
-    ("local-fanout-queue-wait-threshold", "Number", "APP"),
-    ("log-level", "Enum", "APP"),
-    ("max-indexes", "Number", "APP"),
-    ("max-numeric-field-length", "Number", "APP"),
-    ("max-prefixes", "Number", "APP"),
-    ("max-search-result-fields-count", "Number", "APP"),
-    ("max-search-result-record-size", "Number", "APP"),
-    ("max-tag-field-length", "Number", "APP"),
-    ("max-term-expansions", "Number", "APP"),
-    ("max-vector-attributes", "Number", "APP"),
-    ("max-vector-dimensions", "Number", "APP"),
-    ("max-vector-ef-construction", "Number", "APP"),
-    ("max-vector-ef-runtime", "Number", "APP"),
-    ("max-vector-knn", "Number", "APP"),
-    ("max-vector-m", "Number", "APP"),
-    ("max-worker-suspension-secs", "Number", "APP"),
-    ("enable-consistent-results", "Boolean", "APP"),
-    ("enable-partial-results", "Boolean", "APP"),
-    ("proximity-inorder-compat-mode", "Boolean", "APP"),
-    ("query-string-bytes", "Number", "APP"),
-    ("query-string-depth", "Number", "APP"),
-    ("query-string-terms-count", "Number", "APP"),
-    ("reader-threads", "Number", "APP"),
-    ("search-result-background-cleanup", "Boolean", "APP"),
-    ("search-result-buffer-multiplier", "String", "APP"),
-    ("skip-corrupted-internal-update-entries", "Boolean", "APP"),
-    ("skip-rdb-load", "Boolean", "APP"),
-    ("thread-pool-wait-time-samples", "Number", "APP"),
-    ("utility-threads", "Number", "APP"),
-    ("writer-threads", "Number", "APP"),
-    # DEV configs
-    ("drain-mutation-queue-on-load", "Boolean", "DEV"),
-    ("rdb-read-v2", "Boolean", "DEV"),
-    ("rdb-validate-on-write", "Boolean", "DEV"),
-    ("rdb-write-v2", "Boolean", "DEV"),
-    # HIDDEN configs
-    ("use-coordinator", "Boolean", "HIDDEN"),
-    ("debug-mode", "Boolean", "HIDDEN"),
-]
-
-APP_CONFIGS = [(n, t) for n, t, v in ALL_CONFIGS if v == "APP"]
-DEV_CONFIGS = [(n, t) for n, t, v in ALL_CONFIGS if v == "DEV"]
-HIDDEN_CONFIGS = [(n, t) for n, t, v in ALL_CONFIGS if v == "HIDDEN"]
+# Module-level cache, populated by TestDiscoverConfigs.
+_discovered_configs = {}
 
 CONFIG_RANGES = {
     "high-priority-weight": (0, 100),
@@ -91,6 +33,23 @@ CONFIG_RANGES = {
 }
 
 
+def parse_verbose_configs(response):
+    """Parse the VERBOSE response from FT._DEBUG LIST_CONFIGS into [(name, type)] tuples."""
+    configs = []
+    for entry in response:
+        it = iter(entry)
+        fields = {}
+        for key in it:
+            val = next(it)
+            if isinstance(key, bytes):
+                key = key.decode()
+            if isinstance(val, bytes):
+                val = val.decode()
+            fields[key] = val
+        configs.append((fields["name"], fields["type"]))
+    return configs
+
+
 def get_new_value(current_value, config_type, config_name=None):
     """Generate a new value based on config type."""
     if config_type == "Boolean":
@@ -111,12 +70,33 @@ def get_new_value(current_value, config_type, config_name=None):
     return str(random.randint(1, 100))
 
 
+class TestDiscoverConfigs(ValkeySearchTestCaseDebugMode):
+    """Must be the first test class in this file.
+    Discovers all configs via FT._DEBUG LIST_CONFIGS and caches them at module level."""
+
+    def test_discover_configs(self):
+        global _discovered_configs
+        for visibility in ("APP", "DEV", "HIDDEN"):
+            response = self.client.execute_command(
+                "FT._DEBUG", "LIST_CONFIGS", "VERBOSE", visibility
+            )
+            _discovered_configs[visibility] = parse_verbose_configs(response)
+        assert _discovered_configs["APP"], "No APP configs discovered"
+        assert _discovered_configs["DEV"], "No DEV configs discovered"
+        assert _discovered_configs["HIDDEN"], "No HIDDEN configs discovered"
+
+
 class ConfigTestMixin:
     """Mixin providing common config test methods."""
 
     def get_client(self):
-        """Override in cluster tests to return appropriate client."""
         return self.client
+
+    def get_configs(self, visibility):
+        """Get configs from the discovered config cache."""
+        if not _discovered_configs:
+            pytest.skip("TestDiscoverConfigs must run first — run the full test file")
+        return _discovered_configs[visibility]
 
     def assert_config_get_set(self, configs):
         """Test that configs can be read and written."""
@@ -125,7 +105,6 @@ class ConfigTestMixin:
 
         for name, config_type in configs:
             full_name = f"search.{name}"
-            # Test GET
             try:
                 result = client.execute_command("CONFIG", "GET", full_name)
                 if not result or len(result) < 2:
@@ -136,7 +115,6 @@ class ConfigTestMixin:
                 get_failures.append((name, str(e)))
                 continue
 
-            # Test SET
             new_value = get_new_value(current_value, config_type, name)
             try:
                 client.execute_command("CONFIG", "SET", full_name, new_value)
@@ -151,11 +129,9 @@ class ConfigTestMixin:
         client = self.get_client()
         for name, config_type in configs:
             full_name = f"search.{name}"
-            # Should be readable
             result = client.execute_command("CONFIG", "GET", full_name)
             assert result and len(result) >= 2, f"{name} should be readable"
             current_config_value = result[1]
-            # Should not be writable - use toggled value
             if config_type == "Boolean":
                 test_value = "no" if current_config_value in (b"yes", "yes", b"true", "true", b"1", "1") else "yes"
             else:
@@ -172,10 +148,8 @@ class ConfigTestMixin:
         client = self.get_client()
         for name, config_type in configs:
             full_name = f"search.{name}"
-            # Should not be readable
             result = client.execute_command("CONFIG", "GET", full_name)
             assert result == [] or len(result) == 0, f"{name} should not be readable"
-            # Should not be writable
             set_failed = False
             try:
                 client.execute_command("CONFIG", "SET", full_name, "yes")
@@ -186,9 +160,9 @@ class ConfigTestMixin:
 
 class TestAPPConfigsStandalone(ConfigTestMixin, ValkeySearchTestCaseBase):
     def test_app_configs_get_set(self):
-        self.assert_config_get_set(APP_CONFIGS)
-        self.assert_config_readable_not_writable(DEV_CONFIGS)
-        self.assert_config_not_accessible(HIDDEN_CONFIGS)
+        self.assert_config_get_set(self.get_configs("APP"))
+        self.assert_config_readable_not_writable(self.get_configs("DEV"))
+        self.assert_config_not_accessible(self.get_configs("HIDDEN"))
 
 
 class TestAPPConfigsCluster(ConfigTestMixin, ValkeySearchClusterTestCase):
@@ -196,14 +170,14 @@ class TestAPPConfigsCluster(ConfigTestMixin, ValkeySearchClusterTestCase):
         return self.client_for_primary(0)
 
     def test_app_configs_get_set(self):
-        self.assert_config_get_set(APP_CONFIGS)
-        self.assert_config_readable_not_writable(DEV_CONFIGS)
-        self.assert_config_not_accessible(HIDDEN_CONFIGS)
+        self.assert_config_get_set(self.get_configs("APP"))
+        self.assert_config_readable_not_writable(self.get_configs("DEV"))
+        self.assert_config_not_accessible(self.get_configs("HIDDEN"))
 
 
 class TestDevConfigsStandalone(ConfigTestMixin, ValkeySearchTestCaseDebugMode):
     def test_dev_configs_get_set(self):
-        self.assert_config_get_set(DEV_CONFIGS)
+        self.assert_config_get_set(self.get_configs("DEV"))
 
 
 class TestDevConfigsCluster(ConfigTestMixin, ValkeySearchClusterTestCaseDebugMode):
@@ -211,12 +185,12 @@ class TestDevConfigsCluster(ConfigTestMixin, ValkeySearchClusterTestCaseDebugMod
         return self.client_for_primary(0)
 
     def test_dev_configs_get_set(self):
-        self.assert_config_get_set(DEV_CONFIGS)
+        self.assert_config_get_set(self.get_configs("DEV"))
 
 
 class TestHiddenConfigsStandalone(ConfigTestMixin, ValkeySearchTestCaseDebugMode):
     def test_hidden_configs_not_accessible(self):
-        self.assert_config_not_accessible(HIDDEN_CONFIGS)
+        self.assert_config_not_accessible(self.get_configs("HIDDEN"))
 
 
 class TestHiddenConfigsCluster(ConfigTestMixin, ValkeySearchClusterTestCaseDebugMode):
@@ -224,5 +198,4 @@ class TestHiddenConfigsCluster(ConfigTestMixin, ValkeySearchClusterTestCaseDebug
         return self.client_for_primary(0)
 
     def test_hidden_configs_not_accessible(self):
-        self.assert_config_not_accessible(HIDDEN_CONFIGS)
-
+        self.assert_config_not_accessible(self.get_configs("HIDDEN"))

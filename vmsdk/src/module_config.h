@@ -102,7 +102,7 @@ class ModuleConfigManager {
 
   /// List all registered configs to the provided context
   absl::Status ListAllConfigs(ValkeyModuleCtx *ctx, bool verbose,
-                              const std::string& filter = "") const;
+                              const std::string &filter = "") const;
 
  private:
   absl::Status UpdateConfigFromKeyVal(ValkeyModuleCtx *ctx,
@@ -205,7 +205,7 @@ class ConfigBase : public Registerable {
     }
     return absl::OkStatus();
   }
-  
+
   // Check if modify callback is set
   bool HasModifyCallback() const { return modify_callback_ != nullptr; }
 
@@ -232,7 +232,7 @@ class Number : public ConfigBase<long long> {
          int64_t max_value);
   ~Number() override = default;
   absl::Status FromString(std::string_view value) override;
-  
+
   // Getters for min/max values
   int64_t GetMinValue() const { return min_value_; }
   int64_t GetMaxValue() const { return max_value_; }

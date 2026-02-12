@@ -332,18 +332,18 @@ absl::Status String::FromString(std::string_view value) {
   return absl::OkStatus();
 }
 
-absl::Status ModuleConfigManager::ListAllConfigs(ValkeyModuleCtx *ctx,
-                                                 bool verbose,
-                                                 const std::string& filter) const {
+absl::Status ModuleConfigManager::ListAllConfigs(
+    ValkeyModuleCtx *ctx, bool verbose, const std::string &filter) const {
   // Create a sorted vector of config entries for consistent output
   std::vector<std::pair<std::string, Registerable *>> sorted_entries(
       entries_.begin(), entries_.end());
   std::sort(sorted_entries.begin(), sorted_entries.end());
 
   // Helper lambda to check if entry matches filter
-  auto matches_filter = [](Registerable *entry, const std::string& filter) -> bool {
+  auto matches_filter = [](Registerable *entry,
+                           const std::string &filter) -> bool {
     if (filter.empty()) return true;
-    
+
     if (filter == "APP") {
       return !entry->IsHidden() && !entry->IsDeveloperConfig();
     } else if (filter == "DEV") {
@@ -355,7 +355,7 @@ absl::Status ModuleConfigManager::ListAllConfigs(ValkeyModuleCtx *ctx,
   };
   // Filter entries
   std::vector<std::pair<std::string, Registerable *>> filtered_entries;
-  for (const auto& entry : sorted_entries) {
+  for (const auto &entry : sorted_entries) {
     if (matches_filter(entry.second, filter)) {
       filtered_entries.push_back(entry);
     }
@@ -383,9 +383,9 @@ absl::Status ModuleConfigManager::ListAllConfigs(ValkeyModuleCtx *ctx,
     field_count += 2;
 
     // Determine type and visibility
-    std::string visibility = entry->IsHidden() ? "HIDDEN" 
-                           : entry->IsDeveloperConfig() ? "DEV" 
-                           : "APP";
+    std::string visibility = entry->IsHidden()            ? "HIDDEN"
+                             : entry->IsDeveloperConfig() ? "DEV"
+                                                          : "APP";
 
     if (auto *num = dynamic_cast<Number *>(entry)) {
       ValkeyModule_ReplyWithCString(ctx, "type");
@@ -403,13 +403,15 @@ absl::Status ModuleConfigManager::ListAllConfigs(ValkeyModuleCtx *ctx,
       ValkeyModule_ReplyWithCString(ctx, "type");
       ValkeyModule_ReplyWithCString(ctx, "Boolean");
       ValkeyModule_ReplyWithCString(ctx, "default");
-      ValkeyModule_ReplyWithCString(ctx, boolean->GetDefaultValue() ? "true" : "false");
+      ValkeyModule_ReplyWithCString(
+          ctx, boolean->GetDefaultValue() ? "true" : "false");
       ValkeyModule_ReplyWithCString(ctx, "min");
       ValkeyModule_ReplyWithCString(ctx, "N/A");
       ValkeyModule_ReplyWithCString(ctx, "max");
       ValkeyModule_ReplyWithCString(ctx, "N/A");
       ValkeyModule_ReplyWithCString(ctx, "current_value");
-      ValkeyModule_ReplyWithCString(ctx, boolean->GetValue() ? "true" : "false");
+      ValkeyModule_ReplyWithCString(ctx,
+                                    boolean->GetValue() ? "true" : "false");
       field_count += 10;
     } else if (auto *str = dynamic_cast<String *>(entry)) {
       ValkeyModule_ReplyWithCString(ctx, "type");

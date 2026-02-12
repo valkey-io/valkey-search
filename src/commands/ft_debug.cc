@@ -60,12 +60,12 @@ absl::Status ListConfigsCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
   // Syntax: LIST_CONFIGS [VERBOSE] [APP|DEV|HIDDEN|MUT|IMMUT]
   bool verbose = false;
   std::string filter;
-  
+
   if (itr.HasNext()) {
     std::string first_arg;
     VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, first_arg));
     auto first_arg_upper = absl::AsciiStrToUpper(first_arg);
-    
+
     if (first_arg_upper == "VERBOSE") {
       verbose = true;
       // Check for optional filter after VERBOSE
@@ -77,7 +77,7 @@ absl::Status ListConfigsCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
               "Invalid filter. Use APP, DEV, or HIDDEN");
         }
       }
-    } else if (first_arg_upper == "APP" || first_arg_upper == "DEV" || 
+    } else if (first_arg_upper == "APP" || first_arg_upper == "DEV" ||
                first_arg_upper == "HIDDEN") {
       filter = first_arg_upper;
     } else {
@@ -85,7 +85,7 @@ absl::Status ListConfigsCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
           "Invalid argument. Use VERBOSE, APP, DEV, or HIDDEN");
     }
   }
-  
+
   VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
   return vmsdk::config::ModuleConfigManager::Instance().ListAllConfigs(
       ctx, verbose, filter);
@@ -333,7 +333,8 @@ absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
       {"FT._DEBUG LIST_METRICS [APP|DEV] [NAMES_ONLY]",
        "List all APP or DEV metrics with optional names-only format"},
       {"FT._DEBUG LIST_CONFIGS [VERBOSE] [APP|DEV|HIDDEN]",
-       "List config names (default) or VERBOSE details, optionally filtered by visibility"},
+       "List config names (default) or VERBOSE details, optionally filtered by "
+       "visibility"},
   };
   ValkeyModule_ReplyWithArray(ctx, 2 * help_text.size());
   for (auto &pair : help_text) {

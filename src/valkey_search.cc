@@ -505,6 +505,23 @@ static vmsdk::info_field::Integer coordinator_server_listening_port(
           return ValkeySearch::Instance().UsingCoordinator();
         }));
 
+static vmsdk::info_field::Float coordinator_threads_cpu_time_sec(
+    "coordinator", "coordinator_threads_cpu_time_sec",
+    vmsdk::info_field::FloatBuilder()
+        .App()
+        .Computed([]() -> double {
+          auto monitor =
+              ValkeySearch::Instance().GetCoordinatorThreadsMonitor();
+          if (!monitor) {
+            return 0.0;
+          }
+          monitor->UpdateTotalCPUTimeSec();
+          return monitor->GetTotalGrpcCPUTime();
+        })
+        .VisibleIf([]() -> bool {
+          return ValkeySearch::Instance().UsingCoordinator();
+        }));
+
 static vmsdk::info_field::Integer
     coordinator_server_get_global_metadata_success_count(
         "coordinator", "coordinator_server_get_global_metadata_success_count",
@@ -1160,6 +1177,8 @@ absl::Status ValkeySearch::Startup(ValkeyModuleCtx *ctx) {
       ctx, server_events::SubscribeToServerEvents, writer_thread_pool_.get(),
       options::GetUseCoordinator().GetValue() && IsCluster()));
   if (options::GetUseCoordinator().GetValue()) {
+    coordinator_thread_monitor_ =
+        std::make_unique<vmsdk::ThreadGroupCPUMonitor>(kEventEngine);
     VMSDK_ASSIGN_OR_RETURN(auto valkey_port, GetValkeyLocalPort(ctx));
     auto coordinator_port = coordinator::GetCoordinatorPort(valkey_port);
     coordinator_ = coordinator::ServerImpl::Create(

@@ -242,7 +242,6 @@ class ValkeySelectDbGuard {
   int old_db_;
   bool switched_ = false;
 };
-
 }  // namespace vmsdk
 
 // Hash specialization for SocketAddress

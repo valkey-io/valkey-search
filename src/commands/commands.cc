@@ -12,6 +12,7 @@
 
 #include "fanout.h"
 #include "ft_create_parser.h"
+#include "ft_search_parser.h"
 #include "src/acl.h"
 #include "src/commands/ft_search.h"
 #include "src/coordinator/metadata_manager.h"
@@ -137,9 +138,9 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
     uint32_t db_num = ValkeyModule_GetSelectedDb(ctx);
     parameters->db_num = db_num;
 
-    VMSDK_ASSIGN_OR_RETURN(parameters->index_schema,
-                           SchemaManager::Instance().GetIndexSchema(
-                               db_num, parameters->index_schema_name));
+    VMSDK_ASSIGN_OR_RETURN(
+        parameters->index_schema,
+        schema_manager.GetIndexSchema(db_num, parameters->index_schema_name));
     VMSDK_RETURN_IF_ERROR(
         vmsdk::ParseParamValue(itr, parameters->parse_vars.query_string));
     VMSDK_RETURN_IF_ERROR(parameters->ParseCommand(itr));
@@ -183,12 +184,12 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
                                         async::Free, parameters->timeout_ms);
     blocked_client.MeasureTimeStart();
     auto on_done_callback = [blocked_client = std::move(blocked_client)](
-                                auto &neighbors, auto parameters) mutable {
+                                auto &search_result, auto parameters) mutable {
       std::unique_ptr<QueryCommand> upcast_parameters(
           dynamic_cast<QueryCommand *>(parameters.release()));
       CHECK(upcast_parameters != nullptr);
       auto result = std::make_unique<async::Result>(async::Result{
-          .search_result = std::move(neighbors),
+          .search_result = std::move(search_result),
           .parameters = std::move(upcast_parameters),
       });
 
@@ -232,11 +233,17 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
             parameters->index_schema->GetVersion());
       }
 
+      // Extract sortby parameter if this is a SearchCommand
+      std::optional<query::SortByParameter> sortby_param = std::nullopt;
+      if (auto *search_cmd = dynamic_cast<SearchCommand *>(parameters.get())) {
+        sortby_param = search_cmd->sortby;
+      }
+
       return query::fanout::PerformSearchFanoutAsync(
           ctx, search_targets,
           ValkeySearch::Instance().GetCoordinatorClientPool(),
           std::move(parameters), ValkeySearch::Instance().GetReaderThreadPool(),
-          std::move(on_done_callback));
+          std::move(on_done_callback), sortby_param);
     }
     return query::SearchAsync(
         std::move(parameters), ValkeySearch::Instance().GetReaderThreadPool(),

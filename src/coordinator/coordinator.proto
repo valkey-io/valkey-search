@@ -109,6 +109,16 @@ message ReturnParameter {
   string alias = 2;
 }
 
+enum SortOrder {
+  SORT_ORDER_ASCENDING = 0;
+  SORT_ORDER_DESCENDING = 1;
+}
+
+message SortByParameter {
+  string field = 1;
+  SortOrder order = 2;
+}
+
 message IndexFingerprintVersion {
   uint64 fingerprint = 1;
   uint32 version = 2;
@@ -133,6 +143,7 @@ message SearchIndexPartitionRequest {
   IndexFingerprintVersion index_fingerprint_version = 16;
   uint64 slot_fingerprint = 17;
   uint64 query_operations = 18;
+  optional SortByParameter sortby = 19;
 }
 
 message NeighborEntry {

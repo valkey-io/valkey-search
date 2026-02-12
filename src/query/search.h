@@ -24,7 +24,6 @@
 #include "absl/status/statusor.h"
 #include "src/commands/filter_parser.h"
 #include "src/index_schema.h"
-#include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/vector_base.h"
 #include "src/query/predicate.h"
@@ -42,6 +41,12 @@ enum class SearchMode {
            // coordinator)
 };
 
+enum class SortOrder { kAscending, kDescending };
+struct SortByParameter {
+  std::string field;
+  SortOrder order{SortOrder::kAscending};
+};
+
 constexpr int64_t kTimeoutMS{50000};
 constexpr size_t kMaxTimeoutMs{60000};
 constexpr absl::string_view kOOMMsg{
@@ -49,6 +54,26 @@ constexpr absl::string_view kOOMMsg{
 constexpr absl::string_view kFailedPreconditionMsg{
     "Index or slot consistency check failed"};
 constexpr uint32_t kDialect{2};
+
+// Parser keywords
+constexpr absl::string_view kParamsParam{"PARAMS"};
+constexpr absl::string_view kDialectParam{"DIALECT"};
+constexpr absl::string_view kLimitParam{"LIMIT"};
+constexpr absl::string_view kNoContentParam{"NOCONTENT"};
+constexpr absl::string_view kReturnParam{"RETURN"};
+constexpr absl::string_view kSortByParam{"SORTBY"};
+constexpr absl::string_view kTimeoutParam{"TIMEOUT"};
+constexpr absl::string_view kAsParam{"AS"};
+constexpr absl::string_view kLocalOnly{"LOCALONLY"};
+constexpr absl::string_view kAllShards{"ALLSHARDS"};
+constexpr absl::string_view kSomeShards{"SOMESHARDS"};
+constexpr absl::string_view kConsistent{"CONSISTENT"};
+constexpr absl::string_view kInconsistent{"INCONSISTENT"};
+constexpr absl::string_view kWithSortKeysParam{"WITHSORTKEYS"};
+constexpr absl::string_view kVectorFilterDelimiter{"=>"};
+constexpr absl::string_view kSlop{"SLOP"};
+constexpr absl::string_view kInorder{"INORDER"};
+constexpr absl::string_view kVerbatim{"VERBATIM"};
 
 struct LimitParameter {
   uint64_t first_index{0};
@@ -129,6 +154,14 @@ struct SearchParameters {
   // classes if needed. The default implementation returns false.
   virtual bool RequiresCompleteResults() const { return false; }
 
+  // Returns additional identifiers that need to be fetched for sorting.
+  // Override in derived classes to provide sortby field identifier.
+  virtual std::optional<std::string> GetSortByIdentifier() const {
+    return std::nullopt;
+  }
+
+  virtual absl::Status PreParseQueryString();
+  virtual absl::Status PostParseQueryString();
   // In-flight retry completion callbacks. Override in derived classes to
   // handle completion of searches that were blocked waiting for in-flight
   // mutations. Default implementations do nothing (for basic SearchParameters
@@ -204,7 +237,8 @@ class Predicate;
 size_t EvaluateFilterAsPrimary(
     const Predicate* predicate,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>& entries_fetchers,
-    bool negate, QueryOperations query_operations);
+    bool negate, QueryOperations query_operations,
+    const IndexSchema* index_schema);
 
 // Defined in the header to support testing
 absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(

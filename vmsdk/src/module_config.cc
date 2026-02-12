@@ -334,63 +334,60 @@ absl::Status String::FromString(std::string_view value) {
 
 absl::Status ModuleConfigManager::ListAllConfigs(ValkeyModuleCtx *ctx,
                                                  bool verbose,
-                                                 bool names_only,
-                                                 bool with_mutability) const {
+                                                 const std::string& filter) const {
   // Create a sorted vector of config entries for consistent output
   std::vector<std::pair<std::string, Registerable *>> sorted_entries(
       entries_.begin(), entries_.end());
   std::sort(sorted_entries.begin(), sorted_entries.end());
 
-  // Reply with array of config entries
-  ValkeyModule_ReplyWithArray(ctx, sorted_entries.size());
+  // Helper lambda to check if entry matches filter
+  auto matches_filter = [](Registerable *entry, const std::string& filter) -> bool {
+    if (filter.empty()) return true;
+    
+    if (filter == "APP") {
+      return !entry->IsHidden() && !entry->IsDeveloperConfig();
+    } else if (filter == "DEV") {
+      return entry->IsDeveloperConfig();
+    } else if (filter == "HIDDEN") {
+      return entry->IsHidden();
+    }
+    return false;
+  };
+  // Filter entries
+  std::vector<std::pair<std::string, Registerable *>> filtered_entries;
+  for (const auto& entry : sorted_entries) {
+    if (matches_filter(entry.second, filter)) {
+      filtered_entries.push_back(entry);
+    }
+  }
 
-  // If names_only, just return config names
-  if (names_only) {
-    for (const auto &[name, entry] : sorted_entries) {
+  // Default (non-verbose) mode: return config names only
+  if (!verbose) {
+    ValkeyModule_ReplyWithArray(ctx, filtered_entries.size());
+    for (const auto &[name, entry] : filtered_entries) {
       ValkeyModule_ReplyWithCString(ctx, name.data());
     }
     return absl::OkStatus();
   }
 
-  // If with_mutability, return name and mutability status pairs
-  if (with_mutability) {
-    for (const auto &[name, entry] : sorted_entries) {
-      // Each entry is an array of [name, is_mutable]
-      ValkeyModule_ReplyWithArray(ctx, 2);
-      ValkeyModule_ReplyWithCString(ctx, name.data());
-      
-      // Determine mutability based on flags
-      bool is_mutable = !(entry->GetFlags() & VALKEYMODULE_CONFIG_IMMUTABLE);
-      
-      // Developer configs become immutable when debug-mode is disabled
-      if (entry->IsDeveloperConfig() && !IsDebugModeEnabled()) {
-        is_mutable = false;
-      }
-      
-      ValkeyModule_ReplyWithCString(ctx, is_mutable ? "true" : "false");
-    }
-    return absl::OkStatus();
-  }
-
-  for (const auto &[name, entry] : sorted_entries) {
+  // Verbose mode: return detailed config information
+  ValkeyModule_ReplyWithArray(ctx, filtered_entries.size());
+  for (const auto &[name, entry] : filtered_entries) {
     // Each config entry is an array of key-value pairs
-    int fields = verbose ? 16 : 12;
-    ValkeyModule_ReplyWithArray(ctx, fields);
+    ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_LEN);
+    long long field_count = 0;
 
     // Common fields
     ValkeyModule_ReplyWithCString(ctx, "name");
     ValkeyModule_ReplyWithCString(ctx, name.data());
+    field_count += 2;
 
     // Determine type and visibility
-    std::string type = "Unknown";
     std::string visibility = entry->IsHidden() ? "HIDDEN" 
                            : entry->IsDeveloperConfig() ? "DEV" 
                            : "APP";
-    
-    bool has_modify_callback = false;
 
     if (auto *num = dynamic_cast<Number *>(entry)) {
-      type = "Number";
       ValkeyModule_ReplyWithCString(ctx, "type");
       ValkeyModule_ReplyWithCString(ctx, "Number");
       ValkeyModule_ReplyWithCString(ctx, "default");
@@ -401,9 +398,8 @@ absl::Status ModuleConfigManager::ListAllConfigs(ValkeyModuleCtx *ctx,
       ValkeyModule_ReplyWithLongLong(ctx, num->GetMaxValue());
       ValkeyModule_ReplyWithCString(ctx, "current_value");
       ValkeyModule_ReplyWithLongLong(ctx, num->GetValue());
-      has_modify_callback = num->HasModifyCallback();
+      field_count += 10;
     } else if (auto *boolean = dynamic_cast<Boolean *>(entry)) {
-      type = "Boolean";
       ValkeyModule_ReplyWithCString(ctx, "type");
       ValkeyModule_ReplyWithCString(ctx, "Boolean");
       ValkeyModule_ReplyWithCString(ctx, "default");
@@ -414,9 +410,8 @@ absl::Status ModuleConfigManager::ListAllConfigs(ValkeyModuleCtx *ctx,
       ValkeyModule_ReplyWithCString(ctx, "N/A");
       ValkeyModule_ReplyWithCString(ctx, "current_value");
       ValkeyModule_ReplyWithCString(ctx, boolean->GetValue() ? "true" : "false");
-      has_modify_callback = boolean->HasModifyCallback();
+      field_count += 10;
     } else if (auto *str = dynamic_cast<String *>(entry)) {
-      type = "String";
       ValkeyModule_ReplyWithCString(ctx, "type");
       ValkeyModule_ReplyWithCString(ctx, "String");
       ValkeyModule_ReplyWithCString(ctx, "default");
@@ -427,9 +422,8 @@ absl::Status ModuleConfigManager::ListAllConfigs(ValkeyModuleCtx *ctx,
       ValkeyModule_ReplyWithCString(ctx, "N/A");
       ValkeyModule_ReplyWithCString(ctx, "current_value");
       ValkeyModule_ReplyWithCString(ctx, str->GetValue().c_str());
-      has_modify_callback = str->HasModifyCallback();
+      field_count += 10;
     } else if (auto *enm = dynamic_cast<Enum *>(entry)) {
-      type = "Enum";
       ValkeyModule_ReplyWithCString(ctx, "type");
       ValkeyModule_ReplyWithCString(ctx, "Enum");
       ValkeyModule_ReplyWithCString(ctx, "default");
@@ -440,19 +434,15 @@ absl::Status ModuleConfigManager::ListAllConfigs(ValkeyModuleCtx *ctx,
       ValkeyModule_ReplyWithCString(ctx, "N/A");
       ValkeyModule_ReplyWithCString(ctx, "current_value");
       ValkeyModule_ReplyWithLongLong(ctx, enm->GetValue());
-      has_modify_callback = enm->HasModifyCallback();
+      field_count += 10;
     }
 
     ValkeyModule_ReplyWithCString(ctx, "visibility");
     ValkeyModule_ReplyWithCString(ctx, visibility.c_str());
+    field_count += 2;
 
-    // Verbose fields
-    if (verbose) {
-      ValkeyModule_ReplyWithCString(ctx, "mutable");
-      ValkeyModule_ReplyWithCString(ctx, has_modify_callback ? "true" : "false");
-      ValkeyModule_ReplyWithCString(ctx, "flags");
-      ValkeyModule_ReplyWithLongLong(ctx, entry->GetFlags());
-    }
+    // Set the actual array length
+    ValkeyModule_ReplySetArrayLength(ctx, field_count);
   }
 
   return absl::OkStatus();

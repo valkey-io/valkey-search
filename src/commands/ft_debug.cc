@@ -56,27 +56,39 @@ absl::Status ListMetricsCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
 }
 
 absl::Status ListConfigsCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
-  // Parse optional VERBOSE, NAMES_ONLY, or WITH_MUTABILITY flag
+  // Parse optional VERBOSE flag and/or filter
+  // Syntax: LIST_CONFIGS [VERBOSE] [APP|DEV|HIDDEN|MUT|IMMUT]
   bool verbose = false;
-  bool names_only = false;
-  bool with_mutability = false;
+  std::string filter;
+  
   if (itr.HasNext()) {
-    std::string flag;
-    VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, flag));
-    auto flag_upper = absl::AsciiStrToUpper(flag);
-    if (flag_upper == "VERBOSE") {
+    std::string first_arg;
+    VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, first_arg));
+    auto first_arg_upper = absl::AsciiStrToUpper(first_arg);
+    
+    if (first_arg_upper == "VERBOSE") {
       verbose = true;
-    } else if (flag_upper == "NAMES_ONLY") {
-      names_only = true;
-    } else if (flag_upper == "WITH_MUTABILITY") {
-      with_mutability = true;
+      // Check for optional filter after VERBOSE
+      if (itr.HasNext()) {
+        VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, filter));
+        filter = absl::AsciiStrToUpper(filter);
+        if (filter != "APP" && filter != "DEV" && filter != "HIDDEN") {
+          return absl::InvalidArgumentError(
+              "Invalid filter. Use APP, DEV, or HIDDEN");
+        }
+      }
+    } else if (first_arg_upper == "APP" || first_arg_upper == "DEV" || 
+               first_arg_upper == "HIDDEN") {
+      filter = first_arg_upper;
     } else {
-      return absl::InvalidArgumentError("Invalid flag. Use VERBOSE, NAMES_ONLY, or WITH_MUTABILITY");
+      return absl::InvalidArgumentError(
+          "Invalid argument. Use VERBOSE, APP, DEV, or HIDDEN");
     }
   }
+  
   VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
   return vmsdk::config::ModuleConfigManager::Instance().ListAllConfigs(
-      ctx, verbose, names_only, with_mutability);
+      ctx, verbose, filter);
 }
 
 //
@@ -320,8 +332,8 @@ absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
       {"FT_DEBUG SHOW_INDEXSCHEMAS", "list internal index schema tables"},
       {"FT._DEBUG LIST_METRICS [APP|DEV] [NAMES_ONLY]",
        "List all APP or DEV metrics with optional names-only format"},
-      {"FT._DEBUG LIST_CONFIGS [VERBOSE|NAMES_ONLY|WITH_MUTABILITY]",
-       "List all module configurations with metadata, names only, or names with mutability status"},
+      {"FT._DEBUG LIST_CONFIGS [VERBOSE] [APP|DEV|HIDDEN]",
+       "List config names (default) or VERBOSE details, optionally filtered by visibility"},
   };
   ValkeyModule_ReplyWithArray(ctx, 2 * help_text.size());
   for (auto &pair : help_text) {

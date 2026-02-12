@@ -102,7 +102,7 @@ class ModuleConfigManager {
 
   /// List all registered configs to the provided context
   absl::Status ListAllConfigs(ValkeyModuleCtx *ctx, bool verbose,
-                              bool names_only, bool with_mutability) const;
+                              const std::string& filter = "") const;
 
  private:
   absl::Status UpdateConfigFromKeyVal(ValkeyModuleCtx *ctx,
@@ -132,7 +132,6 @@ class Registerable {
 
   inline void SetDeveloperConfig(bool b) { this->developer_config_ = b; }
   inline bool IsDeveloperConfig() const { return developer_config_; }
-  
   // Getter for flags
   inline size_t GetFlags() const { return flags_; }
 

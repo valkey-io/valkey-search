@@ -2026,6 +2026,31 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert result[0] == 5
         assert set(result[1::2]) == {b"hash:00", b"hash:01", b"hash:02", b"hash:03", b"hash:04"}
 
+    def test_text_negation(self):
+        """Test negation with text predicates"""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA", "content", "TEXT", "NOSTEM")
+        
+        client.execute_command("HSET", "doc:1", "content", "apple banana")
+        client.execute_command("HSET", "doc:2", "content", "apple cherry")
+        client.execute_command("HSET", "doc:3", "content", "banana cherry")
+        client.execute_command("HSET", "doc:4", "content", "grape orange")
+        
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+        
+        # Negation of single term
+        result = client.execute_command("FT.SEARCH", "idx", "-apple", "DIALECT", "2")
+        assert (result[0], set(result[1::2])) == (2, {b"doc:3", b"doc:4"})
+        
+        # Negation with AND
+        result = client.execute_command("FT.SEARCH", "idx", "banana -apple", "DIALECT", "2")
+        print(result)
+        assert (result[0], result[1]) == (1, b"doc:3")
+        
+        # Negation of phrase
+        result = client.execute_command("FT.SEARCH", "idx", '-"apple banana"', "DIALECT", "2")
+        assert (result[0], set(result[1::2])) == (3, {b"doc:2", b"doc:3", b"doc:4"})
+
 class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
     """
     Tests that require debug mode enabled for memory statistics validation.

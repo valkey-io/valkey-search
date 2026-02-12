@@ -285,7 +285,7 @@ absl::Status ProcessNeighborsForQuery(ValkeyModuleCtx *ctx,
       search_result.neighbors, command, vector_identifier, command.sortby);
   // Adjust total count based on neighbors removed during processing
   // due to filtering or missing attributes.
-  search_result.total_count -= (original_size - neighbors.size());
+  search_result.total_count -= (original_size - search_result.neighbors.size());
 
   return absl::OkStatus();
 }

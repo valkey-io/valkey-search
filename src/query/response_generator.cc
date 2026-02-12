@@ -43,7 +43,7 @@ constexpr absl::string_view kMaxSearchResultRecordSizeConfig{
 constexpr int kMaxSearchResultRecordSize{10 * 1024 * 1024};  // 10MB
 constexpr int kMinSearchResultRecordSize{100};
 constexpr absl::string_view kMaxSearchResultFieldsCountConfig{
-    "max-search-result-record-size"};
+    "max-search-result-fields-count"};
 constexpr int kMaxSearchResultFieldsCount{1000};
 
 /// Register the "--max-search-result-record-size" flag. Controls the max

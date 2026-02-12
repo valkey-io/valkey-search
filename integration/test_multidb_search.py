@@ -11,6 +11,29 @@ import pytest
 from indexes import Index, Text, Tag, Numeric, Vector, KeyDataType, float_to_bytes
 
 
+def verify_search_result_multidb(result, expected_key, db_num, search_type):
+    """
+    Verify FT.SEARCH result contains correct document with expected fields for db_num.
+    """
+    expected_fields = {
+        'name': f'product{db_num}',
+        'price': str(db_num * 100),
+        'category': f'cat{db_num}'
+    }
+    
+    assert result[0] == 1, f"DB {db_num} {search_type}: Expected 1 result, got {result[0]}"
+    assert result[1] == expected_key.encode(), \
+        f"DB {db_num} {search_type}: Expected key '{expected_key}', got {result[1]}"
+    
+    # Parse fields from result into dict
+    fields = dict(zip(result[2][::2], result[2][1::2]))
+    
+    for field_name, expected_value in expected_fields.items():
+        actual_value = fields.get(field_name.encode())
+        assert actual_value == expected_value.encode(), \
+            f"DB {db_num} {search_type}: Field '{field_name}' expected '{expected_value}', got '{actual_value}'"
+
+
 class TestMultiDBCMD(ValkeySearchTestCaseDebugMode):
     """Standalone mode tests"""
 
@@ -47,33 +70,33 @@ class TestMultiDBCMD(ValkeySearchTestCaseDebugMode):
         
         # Check text search isolation
         for db_num in range(num_dbs):
-            result = index.query(clients[db_num], f"@name:product{db_num}")
-            assert len(result) == 1, f"DB {db_num} should find its own data"
+            result = clients[db_num].execute_command('FT.SEARCH', 'idx', f'@name:product{db_num}')
+            verify_search_result_multidb(result, 'p:1', db_num, 'text search')
             
             other_db = (db_num + 1) % num_dbs
-            result = index.query(clients[db_num], f"@name:product{other_db}")
-            assert len(result) == 0, f"DB {db_num} should not see DB {other_db}"
+            other_result = clients[db_num].execute_command('FT.SEARCH', 'idx', f'@name:product{other_db}')
+            assert other_result[0] == 0, f"DB {db_num} should not see DB {other_db}"
         
         # Check numeric search isolation
         for db_num in range(num_dbs):
             price = db_num * 100
-            count = clients[db_num].execute_command('FT.SEARCH', 'idx', f'@price:[{price-1} {price+1}]')[0]
-            assert count == 1
+            result = clients[db_num].execute_command('FT.SEARCH', 'idx', f'@price:[{price-1} {price+1}]')
+            verify_search_result_multidb(result, 'p:1', db_num, 'numeric search')
         
         # Check tag search isolation
         for db_num in range(num_dbs):
-            count = clients[db_num].execute_command('FT.SEARCH', 'idx', f'@category:{{cat{db_num}}}')[0]
-            assert count == 1
+            result = clients[db_num].execute_command('FT.SEARCH', 'idx', f'@category:{{cat{db_num}}}')
+            verify_search_result_multidb(result, 'p:1', db_num, 'tag search')
             
             other_db = (db_num + 1) % num_dbs
-            count = clients[db_num].execute_command('FT.SEARCH', 'idx', f'@category:{{cat{other_db}}}')[0]
-            assert count == 0
+            other_result = clients[db_num].execute_command('FT.SEARCH', 'idx', f'@category:{{cat{other_db}}}')
+            assert other_result[0] == 0, f"DB {db_num} should not see tag from DB {other_db}"
         
         # Check vector KNN search isolation
         query_vec = float_to_bytes([1.0, 0.0, 0.0, 0.0])
         for db_num in range(num_dbs):
             result = clients[db_num].execute_command('FT.SEARCH', 'idx', '*=>[KNN 1 @vec $vec]', 'PARAMS', '2', 'vec', query_vec)
-            assert result[0] == 1
+            verify_search_result_multidb(result, 'p:1', db_num, 'vector search')
         
         # Update DB0, verify other DBs unchanged
         clients[0].hset('p:1', mapping={
@@ -137,33 +160,33 @@ class TestMultiDBCME(ValkeySearchClusterTestCaseDebugMode):
         
         # Check text search isolation
         for db_num in range(num_dbs):
-            result = index.query(clients[db_num], f"@name:product{db_num}")
-            assert len(result) == 1, f"DB {db_num} should find its own data"
+            result = clients[db_num].execute_command('FT.SEARCH', 'idx', f'@name:product{db_num}')
+            verify_search_result_multidb(result, '0', db_num, 'text search')
             
             other_db = (db_num + 1) % num_dbs
-            result = index.query(clients[db_num], f"@name:product{other_db}")
-            assert len(result) == 0, f"DB {db_num} should not see DB {other_db}"
+            other_result = clients[db_num].execute_command('FT.SEARCH', 'idx', f'@name:product{other_db}')
+            assert other_result[0] == 0, f"DB {db_num} should not see DB {other_db}"
         
         # Check numeric search isolation
         for db_num in range(num_dbs):
             price = db_num * 100
-            count = clients[db_num].execute_command('FT.SEARCH', 'idx', f'@price:[{price-1} {price+1}]')[0]
-            assert count == 1
+            result = clients[db_num].execute_command('FT.SEARCH', 'idx', f'@price:[{price-1} {price+1}]')
+            verify_search_result_multidb(result, '0', db_num, 'numeric search')
         
         # Check tag search isolation
         for db_num in range(num_dbs):
-            count = clients[db_num].execute_command('FT.SEARCH', 'idx', f'@category:{{cat{db_num}}}')[0]
-            assert count == 1
+            result = clients[db_num].execute_command('FT.SEARCH', 'idx', f'@category:{{cat{db_num}}}')
+            verify_search_result_multidb(result, '0', db_num, 'tag search')
             
             other_db = (db_num + 1) % num_dbs
-            count = clients[db_num].execute_command('FT.SEARCH', 'idx', f'@category:{{cat{other_db}}}')[0]
-            assert count == 0
+            other_result = clients[db_num].execute_command('FT.SEARCH', 'idx', f'@category:{{cat{other_db}}}')
+            assert other_result[0] == 0, f"DB {db_num} should not see tag from DB {other_db}"
         
         # Check vector KNN search isolation
         query_vec = float_to_bytes([1.0, 0.0, 0.0, 0.0])
         for db_num in range(num_dbs):
             result = clients[db_num].execute_command('FT.SEARCH', 'idx', '*=>[KNN 1 @vec $vec]', 'PARAMS', '2', 'vec', query_vec)
-            assert result[0] == 1
+            verify_search_result_multidb(result, '0', db_num, 'vector search')
         
         # Update DB0, verify other DBs unchanged
         clients[0].hset('0', mapping={

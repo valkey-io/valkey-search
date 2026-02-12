@@ -140,13 +140,16 @@ function install_test_framework() {
   if [[ "${valkey_module_installed}" == "no" ]]; then
     LOG_INFO "Installing dependencies"
     local requirements_txt=${test_framework_path}/requirements.txt
-    if [ -f ${requirements_txt} ]; then
-      LOG_INFO "Installing requirements file"
-      ${PIP_PATH} install -r ${requirements_txt}
-      ${PIP_PATH} install --upgrade pytest
-    else
-      LOG_ERROR "Missing ${requirements_txt} file. Broken installation?"
-    fi
+    local testing_requirements_txt=${_WORKSPACE_HOME}/testing/integration/requirements.txt
+    for req in ${requirements_txt} ${testing_requirements_txt}; do
+      if [ -f ${req} ]; then
+        LOG_INFO "Installing requirements file"
+        ${PIP_PATH} install -r ${req}
+      else
+        LOG_ERROR "Missing ${req} file. Broken installation?"
+      fi
+    done
+    ${PIP_PATH} install --upgrade pytest
   fi
   popd >/dev/null
 
@@ -156,13 +159,6 @@ function install_test_framework() {
   LOG_INFO "Using valkeytestframework => ${_WORKSPACE_HOME}/integration/valkeytestframework"
   print_environment_var "PYTHONPATH" "${PYTHONPATH}"
   export PYTHONPATH=${_WORKSPACE_HOME}/integration/valkeytestframework
-
-  # Install project-specific test requirements
-  local project_requirements=${_WORKSPACE_HOME}/testing/integration/requirements.txt
-  if [ -f ${project_requirements} ]; then
-    LOG_INFO "Installing project test requirements"
-    ${PIP_PATH} install -r ${project_requirements}
-  fi
 }
 
 function setup_valkey_server() {

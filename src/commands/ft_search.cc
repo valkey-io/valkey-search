@@ -269,24 +269,20 @@ bool HandleEarlyReplyScenarios(ValkeyModuleCtx *ctx,
 absl::Status ProcessNeighborsForQuery(ValkeyModuleCtx *ctx,
                                       query::SearchResult &search_result,
                                       SearchCommand &command) {
-  auto &neighbors = search_result.neighbors;
-  size_t original_size = neighbors.size();
+  size_t original_size = search_result.neighbors.size();
 
   std::optional<std::string> vector_identifier = std::nullopt;
 
   if (command.IsVectorQuery()) {
-    auto identifier =
-        command.index_schema->GetIdentifier(command.attribute_alias);
-    if (!identifier.ok()) {
-      return identifier.status();
-    }
-    vector_identifier = std::make_optional(identifier.value());
+    VMSDK_ASSIGN_OR_RETURN(
+        vector_identifier,
+        command.index_schema->GetIdentifier(command.attribute_alias));
   }
   // Handle vector queries
 
   query::ProcessNeighborsForReply(
-      ctx, command.index_schema->GetAttributeDataType(), neighbors, command,
-      vector_identifier, command.sortby);
+      ctx, command.index_schema->GetAttributeDataType(),
+      search_result.neighbors, command, vector_identifier, command.sortby);
   // Adjust total count based on neighbors removed during processing
   // due to filtering or missing attributes.
   search_result.total_count -= (original_size - neighbors.size());

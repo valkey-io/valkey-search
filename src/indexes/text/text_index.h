@@ -190,6 +190,9 @@ class TextIndexSchema {
   // IndexSchema::stem_text_field_mask_)
   uint64_t stem_text_field_mask_ = 0;
 
+  InternedStringSet schema_untracked_keys_ ABSL_GUARDED_BY(schema_keys_mutex_);
+  mutable std::mutex schema_keys_mutex_;
+
  public:
   // FT.INFO memory stats for text index
   uint64_t GetTotalPositions() const;
@@ -229,6 +232,80 @@ class TextIndexSchema {
     // Key not found in text indexes - this is normal for keys without text data
     return nullptr;
   }
+
+
+  const InternedStringSet& GetSchemaUntrackedKeys() const {
+    return schema_untracked_keys_;
+  }
+
+  void AddKeyAsUntracked(const Key& key) {
+    std::lock_guard<std::mutex> guard(schema_keys_mutex_);
+    schema_untracked_keys_.insert(key);
+  }
+
+  void RemoveFromUntracked(const Key& key) {
+    std::lock_guard<std::mutex> guard(schema_keys_mutex_);
+    schema_untracked_keys_.erase(key);
+  }
+
+  // Debug helper: Get untracked keys as string (for logging)
+  std::string GetUntrackedKeysDebugString(size_t max_keys = 100) const {
+    std::lock_guard<std::mutex> guard(schema_keys_mutex_);
+    size_t count = schema_untracked_keys_.size();
+    if (count == 0) {
+      return "untracked_keys=[]";
+    }
+    std::string result = absl::StrFormat("untracked_keys[%zu]: ", count);
+    size_t i = 0;
+    for (const auto& key : schema_untracked_keys_) {
+      if (i >= max_keys) {
+        absl::StrAppend(&result, ", ...(", count - max_keys, " more)");
+        break;
+      }
+      if (i > 0) absl::StrAppend(&result, ", ");
+      absl::StrAppend(&result, key->Str());
+      ++i;
+    }
+    return result;
+  }
+  // Debug helper: Get tracked keys as string (for logging)
+  std::string GetTrackedKeysDebugString(size_t max_keys = 100) {
+    std::string result;
+    WithPerKeyTextIndexes([&](const auto& per_key_indexes) {
+      size_t count = per_key_indexes.size();
+      if (count == 0) {
+        result = "tracked_keys=[]";
+        return;
+      }
+      result = absl::StrFormat("tracked_keys[%zu]: ", count);
+      size_t i = 0;
+      for (const auto& [key, _] : per_key_indexes) {
+        if (i >= max_keys) {
+          absl::StrAppend(&result, ", ...(", count - max_keys, " more)");
+          break;
+        }
+        if (i > 0) absl::StrAppend(&result, ", ");
+        absl::StrAppend(&result, key->Str());
+        ++i;
+      }
+    });
+    return result;
+  }
+
+  // Debug helper: Get both tracked and untracked summary
+  std::string GetKeysDebugSummary() {
+    size_t tracked = 0, untracked = 0;
+    WithPerKeyTextIndexes([&](const auto& per_key_indexes) {
+      tracked = per_key_indexes.size();
+    });
+    {
+      std::lock_guard<std::mutex> guard(schema_keys_mutex_);
+      untracked = schema_untracked_keys_.size();
+    }
+    return absl::StrFormat("tracked=%zu untracked=%zu total=%zu", 
+                           tracked, untracked, tracked + untracked);
+  }
+
 };
 
 }  // namespace valkey_search::indexes::text

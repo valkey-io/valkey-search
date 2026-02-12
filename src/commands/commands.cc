@@ -121,6 +121,7 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
                                    ValkeyModuleString **argv, int argc,
                                    std::unique_ptr<QueryCommand> parameters) {
   auto status = [&]() -> absl::Status {
+    auto &schema_manager = SchemaManager::Instance();
     vmsdk::ArgsIterator itr{argv + 1, argc - 1};
     parameters->timeout_ms = options::GetDefaultTimeoutMs().GetValue();
     VMSDK_RETURN_IF_ERROR(

@@ -36,9 +36,12 @@ Text::Text(const data_model::TextIndex &text_index_proto,
 
 absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr &key,
                                      absl::string_view data) {
-  tracked_keys_.insert(key);
-  return text_index_schema_->StageAttributeData(key, data, text_field_number_,
-                                                !no_stem_, with_suffix_trie_);
+  auto result = text_index_schema_->StageAttributeData(
+      key, data, text_field_number_, !no_stem_, with_suffix_trie_);
+  if (result.ok() && *result) {
+    tracked_keys_.insert(key);
+  }
+  return result;
 }
 
 absl::StatusOr<bool> Text::RemoveRecord(const InternedStringPtr &key,
@@ -54,13 +57,15 @@ absl::StatusOr<bool> Text::RemoveRecord(const InternedStringPtr &key,
 
 absl::StatusOr<bool> Text::ModifyRecord(const InternedStringPtr &key,
                                         absl::string_view data) {
-  tracked_keys_.insert(key);
-
   // The old key value has already been removed from the index by a call to
   // TextIndexSchema::DeleteKey() at this point, so we simply add the new key
   // data
-  return text_index_schema_->StageAttributeData(key, data, text_field_number_,
-                                                !no_stem_, with_suffix_trie_);
+  auto result = text_index_schema_->StageAttributeData(
+      key, data, text_field_number_, !no_stem_, with_suffix_trie_);
+  if (result.ok() && *result) {
+    tracked_keys_.insert(key);
+  }
+  return result;
 }
 
 int Text::RespondWithInfo(ValkeyModuleCtx *ctx) const {

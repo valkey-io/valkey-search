@@ -315,7 +315,9 @@ absl::Status PerformSearchFanoutAsync(
     std::string target_address =
         absl::StrCat(node.socket_address.primary_endpoint, ":",
                      coordinator::GetCoordinatorPort(node.socket_address.port));
-    if (search_targets.size() >= 30 && thread_pool->Size() > 1) {
+    if (search_targets.size() >=
+            valkey_search::options::GetAsyncFanoutThreshold().GetValue() &&
+        thread_pool->Size() > 1) {
       PerformRemoteSearchRequestAsync(std::move(request_copy), target_address,
                                       coordinator_client_pool, tracker,
                                       thread_pool);

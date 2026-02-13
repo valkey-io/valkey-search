@@ -374,15 +374,15 @@ static auto drain_mutation_queue_on_save =
 /// for async fanout operations (minimum number of targets to use async)
 constexpr absl::string_view kAsyncFanoutThresholdConfig{
     "async-fanout-threshold"};
-constexpr uint32_t kDefaultAsyncFanoutThreshold{30};  // 30 targets
-constexpr uint32_t kMinimumAsyncFanoutThreshold{1};   // At least 1 target
+constexpr uint32_t kDefaultAsyncFanoutThreshold{30};     // 30 targets
+constexpr uint32_t kMinimumAsyncFanoutThreshold{1};      // At least 1 target
 constexpr uint32_t kMaximumAsyncFanoutThreshold{10000};  // Max 10k targets
 static auto async_fanout_threshold =
     vmsdk::config::NumberBuilder(
-        kAsyncFanoutThresholdConfig,       // name
-        kDefaultAsyncFanoutThreshold,      // default threshold (30)
-        kMinimumAsyncFanoutThreshold,      // min threshold (1)
-        kMaximumAsyncFanoutThreshold)      // max threshold (10k)
+        kAsyncFanoutThresholdConfig,   // name
+        kDefaultAsyncFanoutThreshold,  // default threshold (30)
+        kMinimumAsyncFanoutThreshold,  // min threshold (1)
+        kMaximumAsyncFanoutThreshold)  // max threshold (10k)
         .Build();
 
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }

@@ -798,6 +798,49 @@ absl::Status SchemaManager::ShowIndexSchemas(ValkeyModuleCtx *ctx,
   return absl::OkStatus();
 }
 
+std::vector<SchemaManager::IndexDebugInfo> SchemaManager::GetIndexDebugInfo() const {
+  std::vector<IndexDebugInfo> indexes;
+  
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  
+  for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
+    for (const auto &[name, schema] : schema_map) {
+      IndexDebugInfo info;
+      info.db_num = db_num;
+      info.fingerprint = schema->GetFingerprint();
+      info.version = schema->GetVersion();
+      info.schema = schema;
+      
+      // Get datatype
+      const auto &attr_data_type = schema->GetAttributeDataType();
+      switch (attr_data_type.ToProto()) {
+        case data_model::ATTRIBUTE_DATA_TYPE_HASH:
+          info.datatype = "HASH";
+          break;
+        case data_model::ATTRIBUTE_DATA_TYPE_JSON:
+          info.datatype = "JSON";
+          break;
+        default:
+          info.datatype = "UNKNOWN";
+          break;
+      }
+      
+      // Get prefix count
+      info.prefix_count = schema->GetKeyPrefixes().size();
+      
+      // Count attributes by type
+      info.numeric_count = schema->GetNumericAttributeCount();
+      info.tag_count = schema->GetTagAttributeCount();
+      info.text_count = schema->GetTextAttributeCount();
+      info.vector_count = schema->GetVectorAttributeCount();
+      
+      indexes.push_back(info);
+    }
+  }
+  
+  return indexes;
+}
+
 static vmsdk::info_field::Integer number_of_indexes(
     "index_stats", "number_of_indexes",
     vmsdk::info_field::IntegerBuilder().App().Computed([] {

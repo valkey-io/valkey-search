@@ -88,6 +88,7 @@ vmsdk::config::Number& GetMaxNumericFieldLen();
 
 /// Return the maximum number of attributes allowed per index.
 vmsdk::config::Number& GetMaxAttributes();
+vmsdk::config::Number& GetMaxVectorAttributes();
 
 /// Return the maximum number of dimensions allowed for vector indices.
 vmsdk::config::Number& GetMaxDimensions();

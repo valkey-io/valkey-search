@@ -137,7 +137,7 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
     }
 
     if (!word_buffer.empty()) {
-      std::string word = UnicodeNormalizer::CaseFold(word_buffer);
+      std::string word = NormalizeLowerCase(word_buffer);
 
       if (IsStopWord(word)) {
         continue;  // Skip stop words
@@ -205,5 +205,11 @@ bool Lexer::IsValidUtf8(absl::string_view text) const {
   // If any invalid UTF-8 sequences were encountered, text is invalid
   return scanner.GetInvalidUtf8Count() == 0 &&
          scanner.GetPosition() == text.size();
+}
+
+std::string Lexer::NormalizeLowerCase(absl::string_view str) const {
+  return absl::c_all_of(str, absl::ascii_isascii)
+             ? absl::AsciiStrToLower(str)
+             : UnicodeNormalizer::CaseFold(str);
 }
 }  // namespace valkey_search::indexes::text

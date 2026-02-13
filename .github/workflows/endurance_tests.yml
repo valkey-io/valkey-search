@@ -59,9 +59,6 @@ on:
         required: false
         default: '1000000'
         type: string
-  push:
-    branches:
-      - main
   schedule:
     - cron: "0 9 * * *"
 

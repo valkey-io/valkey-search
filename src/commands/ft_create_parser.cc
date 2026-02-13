@@ -57,12 +57,12 @@ const absl::string_view kSeparatorParam{"SEPARATOR"};
 const absl::string_view kCaseSensitiveParam{"CASESENSITIVE"};
 const absl::string_view kScoreParam{"SCORE"};
 constexpr absl::string_view kSchemaParam{"SCHEMA"};
-constexpr size_t kDefaultAttributesCountLimit{50};
+constexpr size_t kDefaultAttributesCountLimit{1000};
 constexpr int kDefaultDimensionsCountLimit{32768};
 constexpr int kDefaultPrefixesCountLimit{8};
 constexpr int kDefaultTagFieldLenLimit{256};
 constexpr int kDefaultNumericFieldLenLimit{128};
-constexpr size_t kMaxAttributesCount{100};
+constexpr size_t kMaxAttributesCount{10000};
 constexpr int kMaxDimensionsCount{64000};
 constexpr int kMaxM{2000000};
 constexpr int kMaxEfConstruction{4096};
@@ -78,7 +78,8 @@ constexpr absl::string_view kMaxPrefixesConfig{"max-prefixes"};
 constexpr absl::string_view kMaxTagFieldLenConfig{"max-tag-field-length"};
 constexpr absl::string_view kMaxNumericFieldLenConfig{
     "max-numeric-field-length"};
-constexpr absl::string_view kMaxAttributesConfig{"max-vector-attributes"};
+constexpr absl::string_view kMaxAttributesConfig{"max-attributes"};
+constexpr absl::string_view kMaxVectorAttributesConfig{"max-vector-attributes"};
 constexpr absl::string_view kMaxDimensionsConfig{"max-vector-dimensions"};
 constexpr absl::string_view kMaxMConfig{"max-vector-m"};
 constexpr absl::string_view kMaxEfConstructionConfig{
@@ -141,6 +142,19 @@ static auto max_attributes =
                                  kMaxAttributesCount)           // max size
         .WithValidationCallback(
             CHECK_RANGE(1, kMaxAttributesCount, kMaxAttributesConfig))
+        .Build();
+
+/// Register the "--max-vector-attributes" flag. Controls the max number of
+/// attributes per index.
+/// This is a legacy incorrectly named configuration. left intact for backward
+/// compatibility. But it's deprecated.
+static auto max_vector_attributes =
+    vmsdk::config::NumberBuilder(kMaxVectorAttributesConfig,    // name
+                                 kDefaultAttributesCountLimit,  // default size
+                                 1,                             // min size
+                                 kMaxAttributesCount)           // max size
+        .WithValidationCallback(
+            CHECK_RANGE(1, kMaxAttributesCount, kMaxVectorAttributesConfig))
         .Build();
 
 /// Register the "--max-dimensions" flag. Controls the max dimensions for vector
@@ -566,7 +580,12 @@ bool HasVectorIndex(const data_model::IndexSchema &index_schema_proto) {
 absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
     ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
   // Get configuration values
-  const auto max_attributes_value = options::GetMaxAttributes().GetValue();
+  // The incorrectly named max_vector_attributes is kept for backward
+  // compatibility.
+  const auto max_attributes_value =
+      options::GetMaxVectorAttributes().WasSet()
+          ? options::GetMaxVectorAttributes().GetValue()
+          : options::GetMaxAttributes().GetValue();
 
   data_model::IndexSchema index_schema_proto;
   // Set default language
@@ -784,6 +803,10 @@ vmsdk::config::Number &GetMaxNumericFieldLen() {
 
 vmsdk::config::Number &GetMaxAttributes() {
   return dynamic_cast<vmsdk::config::Number &>(*max_attributes);
+}
+
+vmsdk::config::Number &GetMaxVectorAttributes() {
+  return dynamic_cast<vmsdk::config::Number &>(*max_vector_attributes);
 }
 
 vmsdk::config::Number &GetMaxDimensions() {

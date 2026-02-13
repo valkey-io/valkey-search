@@ -131,6 +131,31 @@ class Tag(Field):
     def make_value(self, row: int, column: int, type: KeyDataType) -> Union[str, bytes, float, list[float]]:
         return f"Tag:{row}:{column}"
 
+
+class Text(Field):
+    def __init__(
+        self,
+        name: str,
+        alias: Union[str, None] = None,
+        nostem: bool = False,
+        withsuffixtrie: bool = False,
+    ):
+        super().__init__(name, alias)
+        self.nostem = nostem
+        self.withsuffixtrie = withsuffixtrie
+
+    def create(self, data_type: KeyDataType):
+        result = super().create(data_type) + ["TEXT"]
+        if self.nostem:
+            result += ["NOSTEM"]
+        if self.withsuffixtrie:
+            result += ["WITHSUFFIXTRIE"]
+        return result
+
+    def make_value(self, row: int, column: int, type: KeyDataType) -> Union[str, bytes, float, list[float]]:
+        return f"Text content for row {row} column {column}"
+
+
 class Index:
     def __init__(
         self,

@@ -88,7 +88,7 @@ absl::StatusOr<bool> Numeric::RemoveRecord(const InternedStringPtr& key,
     // If key is DELETED, remove it from untracked_keys_.
     untracked_keys_.erase(key);
   } else {
-    // If key doesn't have TAG but exists, insert it to untracked_keys_.
+    // If key doesn't have NUMERIC but exists, insert it to untracked_keys_.
     untracked_keys_.insert(key);
   }
   auto it = tracked_keys_.find(key);

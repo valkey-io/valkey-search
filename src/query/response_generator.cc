@@ -84,13 +84,18 @@ namespace valkey_search::query {
 
 class PredicateEvaluator : public query::Evaluator {
  public:
-  explicit PredicateEvaluator(const RecordsMap &records)
-      : records_(records), text_index_(nullptr) {}
+  PredicateEvaluator(const RecordsMap &records,
+                     QueryOperations query_operations)
+      : Evaluator(query_operations), records_(records), text_index_(nullptr) {}
 
   PredicateEvaluator(const RecordsMap &records,
                      const valkey_search::indexes::text::TextIndex *text_index,
-                     InternedStringPtr target_key)
-      : records_(records), text_index_(text_index), target_key_(target_key) {}
+                     InternedStringPtr target_key,
+                     QueryOperations query_operations)
+      : Evaluator(query_operations),
+        records_(records),
+        text_index_(text_index),
+        target_key_(target_key) {}
 
   const InternedStringPtr &GetTargetKey() const override { return target_key_; }
 
@@ -169,12 +174,13 @@ bool VerifyFilter(const query::SearchParameters &parameters,
               records,
               valkey_search::indexes::text::TextIndexSchema::LookupTextIndex(
                   per_key_indexes, n.external_id),
-              n.external_id);
+              n.external_id, parameters.filter_parse_results.query_operations);
           EvaluationResult result = predicate->Evaluate(evaluator);
           return result.matches;
         });
   }
-  PredicateEvaluator evaluator(records);
+  PredicateEvaluator evaluator(
+      records, parameters.filter_parse_results.query_operations);
   EvaluationResult result = predicate->Evaluate(evaluator);
   return result.matches;
 }

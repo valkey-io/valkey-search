@@ -573,11 +573,11 @@ TEST_P(LocalSearchTest, LocalSearchTest) {
   params.filter_parse_results = std::move(parser.Parse().value());
   params.index_schema = index_schema;
   auto time_slice_queries = Metrics::GetStats().time_slice_queries.load();
-  auto neighbors = Search(params, valkey_search::query::SearchMode::kLocal);
+  auto status = Search(params, valkey_search::query::SearchMode::kLocal);
   EXPECT_EQ(time_slice_queries + 1,
             Metrics::GetStats().time_slice_queries.load());
-  VMSDK_EXPECT_OK(neighbors);
-  EXPECT_EQ(neighbors.value().neighbors.size(),
+  VMSDK_EXPECT_OK(status);
+  EXPECT_EQ(params.search_result.neighbors.size(),
             test_case.expected_neighbors_size);
 }
 
@@ -752,13 +752,14 @@ TEST_P(SearchTest, ParseParams) {
     FilterParser parser(*params.index_schema, test_case.filter, options);
     params.filter_parse_results = std::move(parser.Parse().value());
   }
-  auto neighbors = Search(params, query::SearchMode::kLocal);
-  VMSDK_EXPECT_OK(neighbors);
+  auto status = Search(params, query::SearchMode::kLocal);
+  VMSDK_EXPECT_OK(status);
 #ifndef SAN_BUILD
-  EXPECT_EQ(neighbors->neighbors.size(), test_case.expected_keys.size());
+  EXPECT_EQ(params.search_result.neighbors.size(),
+            test_case.expected_keys.size());
 #endif
 
-  for (auto &neighbor : neighbors->neighbors) {
+  for (auto &neighbor : params.search_result.neighbors) {
     EXPECT_TRUE(
         test_case.expected_keys.contains(std::string(*neighbor.external_id)));
   }

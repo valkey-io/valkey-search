@@ -94,6 +94,33 @@ inline std::ostream& operator<<(std::ostream& os, const ReturnAttribute& r) {
   return os;
 }
 
+// Wrapper for search results that trims the neighbor deque based on query type
+
+struct SearchParameters;
+struct SerializationRange;
+
+struct SearchResult {
+  size_t total_count;
+  std::vector<indexes::Neighbor> neighbors;
+  // True if neighbors were limited using LIMIT count with a buffer multiplier.
+  bool is_limited_with_buffer;
+  // True if neighbors were offset using LIMIT first_index.
+  bool is_offsetted;
+
+  // Constructor with automatic trimming based on query requirements
+  SearchResult(size_t total_count, std::vector<indexes::Neighbor> neighbors,
+               const SearchParameters& parameters);
+  // Get the range of neighbors to serialize in response.
+  SerializationRange GetSerializationRange(
+      const SearchParameters& parameters) const;
+
+  SearchResult();
+
+ private:
+  void TrimResults(std::vector<indexes::Neighbor>& neighbors,
+                   const SearchParameters& parameters);
+};
+
 struct SearchParameters {
   mutable cancel::Token cancellation_token;
   virtual ~SearchParameters() = default;
@@ -120,6 +147,7 @@ struct SearchParameters {
   bool verbatim{false};
   coordinator::IndexFingerprintVersion index_fingerprint_version;
   uint64_t slot_fingerprint;
+  SearchResult search_result;
   struct ParseTimeVariables {
     // Members of this struct are only valid during the parsing of
     // VectorSearchParameters on the mainthread. They get cleared
@@ -192,34 +220,11 @@ struct SerializationRange {
   size_t count() const { return end_index - start_index; }
 };
 
-// Wrapper for search results that trims the neighbor deque based on query type
-struct SearchResult {
-  size_t total_count;
-  std::vector<indexes::Neighbor> neighbors;
-  // True if neighbors were limited using LIMIT count with a buffer multiplier.
-  bool is_limited_with_buffer;
-  // True if neighbors were offset using LIMIT first_index.
-  bool is_offsetted;
-
-  // Constructor with automatic trimming based on query requirements
-  SearchResult(size_t total_count, std::vector<indexes::Neighbor> neighbors,
-               const SearchParameters& parameters);
-  // Get the range of neighbors to serialize in response.
-  SerializationRange GetSerializationRange(
-      const SearchParameters& parameters) const;
-
- private:
-  bool RetainAllNeighbors(const SearchParameters& parameters);
-  void TrimResults(std::vector<indexes::Neighbor>& neighbors,
-                   const SearchParameters& parameters);
-};
-
 // Callback to be called when the search is done.
-using SearchResponseCallback = absl::AnyInvocable<void(
-    absl::StatusOr<SearchResult>&, std::unique_ptr<SearchParameters>)>;
+using SearchResponseCallback =
+    absl::AnyInvocable<void(absl::Status, std::unique_ptr<SearchParameters>)>;
 
-absl::StatusOr<SearchResult> Search(const SearchParameters& parameters,
-                                    SearchMode search_mode);
+absl::Status Search(SearchParameters& parameters, SearchMode search_mode);
 
 absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
                          vmsdk::ThreadPool* thread_pool,

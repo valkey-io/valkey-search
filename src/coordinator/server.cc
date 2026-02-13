@@ -209,10 +209,10 @@ query::SearchResponseCallback Service::MakeSearchCallback(
     std::optional<query::SortByParameter> sortby_parameter) {
   return [response, reactor, latency_sample = std::move(latency_sample),
           sortby_parameter = std::move(sortby_parameter)](
-             absl::StatusOr<query::SearchResult>& result,
+             absl::Status status,
              std::unique_ptr<query::SearchParameters> parameters) mutable {
-    if (!result.ok()) {
-      reactor->Finish(ToGrpcStatus(result.status()));
+    if (!status.ok()) {
+      reactor->Finish(ToGrpcStatus(status));
       RecordSearchMetrics(true, std::move(latency_sample));
       return;
     }
@@ -228,8 +228,8 @@ query::SearchResponseCallback Service::MakeSearchCallback(
     if (!parameters->no_content && query::QueryHasTextPredicate(*parameters)) {
       auto remote_responder = std::make_unique<RemoteResponderSearch>(
           response, reactor, std::move(latency_sample),
-          std::move(result->neighbors), std::move(parameters),
-          result->total_count);
+          std::move(parameters->search_result.neighbors), std::move(parameters),
+          parameters->search_result.total_count);
       auto retry_ctx = std::make_shared<query::InFlightRetryContext>(
           std::move(remote_responder));
       retry_ctx->ScheduleOnMainThread();
@@ -237,15 +237,13 @@ query::SearchResponseCallback Service::MakeSearchCallback(
     }
 
     if (parameters->no_content) {
-      SerializeNeighbors(response, result->neighbors);
-      response->set_total_count(result->total_count);
+      SerializeNeighbors(response, parameters->search_result.neighbors);
+      response->set_total_count(parameters->search_result.total_count);
       reactor->Finish(grpc::Status::OK);
       RecordSearchMetrics(false, std::move(latency_sample));
     } else {
       vmsdk::RunByMain([parameters = std::move(parameters), response, reactor,
                         latency_sample = std::move(latency_sample),
-                        neighbors = std::move(result->neighbors),
-                        total_count = result->total_count,
                         sortby_parameter =
                             std::move(sortby_parameter)]() mutable {
         const auto& attribute_data_type =
@@ -260,12 +258,12 @@ query::SearchResponseCallback Service::MakeSearchCallback(
                   .value());
         }
 
-        query::ProcessNeighborsForReply(ctx.get(), attribute_data_type,
-                                        neighbors, *parameters,
-                                        vector_identifier, sortby_parameter);
+        query::ProcessNeighborsForReply(
+            ctx.get(), attribute_data_type, parameters->search_result.neighbors,
+            *parameters, vector_identifier, sortby_parameter);
 
-        SerializeNeighbors(response, neighbors);
-        response->set_total_count(total_count);
+        SerializeNeighbors(response, parameters->search_result.neighbors);
+        response->set_total_count(parameters->search_result.total_count);
         reactor->Finish(grpc::Status::OK);
         RecordSearchMetrics(false, std::move(latency_sample));
       });

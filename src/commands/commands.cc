@@ -36,7 +36,7 @@ namespace async {
 
 struct Result {
   cancel::Token cancellation_token;
-  absl::StatusOr<query::SearchResult> search_result;
+  absl::Status status;
   std::unique_ptr<QueryCommand> parameters;
 };
 
@@ -59,7 +59,7 @@ class InitiatorSearch : public query::SearchParameters {
   }
 
   std::vector<indexes::Neighbor> &GetNeighbors() override {
-    return result->search_result->neighbors;
+    return GetParameters().search_result.neighbors;
   }
 
   void OnComplete(std::vector<indexes::Neighbor> &neighbors) override {
@@ -91,12 +91,11 @@ int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
         ctx, "Search operation cancelled due to timeout");
   }
 
-  if (!res->search_result.ok()) {
+  if (!res->status.ok()) {
     ++Metrics::GetStats().query_failed_requests_cnt;
-    return ValkeyModule_ReplyWithError(
-        ctx, res->search_result.status().message().data());
+    return ValkeyModule_ReplyWithError(ctx, res->status.message().data());
   }
-  res->parameters->SendReply(ctx, res->search_result.value());
+  res->parameters->SendReply(ctx, res->parameters->search_result);
   return VALKEYMODULE_OK;
 }
 
@@ -148,8 +147,7 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
     const bool inside_multi_exec = vmsdk::MultiOrLua(ctx);
     if (ABSL_PREDICT_FALSE(!ValkeySearch::Instance().SupportParallelQueries() ||
                            inside_multi_exec)) {
-      VMSDK_ASSIGN_OR_RETURN(
-          auto search_result,
+      VMSDK_RETURN_IF_ERROR(
           query::Search(*parameters, query::SearchMode::kLocal));
       if (!parameters->enable_partial_results &&
           parameters->cancellation_token->IsCancelled()) {
@@ -158,9 +156,10 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
         ++Metrics::GetStats().query_failed_requests_cnt;
         return absl::OkStatus();
       }
-      parameters->SendReply(ctx, search_result);
+      parameters->SendReply(ctx, parameters->search_result);
       ValkeySearch::Instance().ScheduleSearchResultCleanup(
-          [neighbors = std::move(search_result.neighbors)]() mutable {
+          [neighbors =
+               std::move(parameters->search_result.neighbors)]() mutable {
             // neighbors destructor runs automatically when lambda completes
           });
       return absl::OkStatus();
@@ -170,19 +169,19 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
                                         async::Free, parameters->timeout_ms);
     blocked_client.MeasureTimeStart();
     auto on_done_callback = [blocked_client = std::move(blocked_client)](
-                                auto &search_result, auto parameters) mutable {
+                                auto status, auto parameters) mutable {
       std::unique_ptr<QueryCommand> upcast_parameters(
           dynamic_cast<QueryCommand *>(parameters.release()));
       CHECK(upcast_parameters != nullptr);
       auto result = std::make_unique<async::Result>(async::Result{
-          .search_result = std::move(search_result),
+          .status = status,
           .parameters = std::move(upcast_parameters),
       });
 
       // Text predicate evaluation requires main thread to ensure text indexes
       // reflect current keyspace. Block if result keys have in-flight
       // mutations.
-      if (result->search_result.ok() && !result->parameters->no_content &&
+      if (result->status.ok() && !result->parameters->no_content &&
           query::QueryHasTextPredicate(*result->parameters)) {
         auto initiator_search = std::make_unique<async::InitiatorSearch>(
             std::move(blocked_client), std::move(result));

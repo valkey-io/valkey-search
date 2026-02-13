@@ -677,6 +677,9 @@ bool ShouldReturnNoResults(const SearchParameters &parameters) {
          parameters.limit.number == 0;
 }
 
+SearchResult::SearchResult()
+    : total_count(0), is_limited_with_buffer(false), is_offsetted(false) {}
+
 SearchResult::SearchResult(size_t total_count,
                            std::vector<indexes::Neighbor> neighbors,
                            const SearchParameters &parameters)
@@ -760,22 +763,18 @@ SerializationRange SearchResult::GetSerializationRange(
   return {start_index, end_index};
 }
 
-absl::StatusOr<SearchResult> Search(const SearchParameters &parameters,
-                                    SearchMode search_mode) {
-  auto result =
-      MaybeAddIndexedContent(DoSearch(parameters, search_mode), parameters);
-  if (!result.ok()) {
-    return result.status();
-  }
-  size_t total_count = result.value().size();
-  // return SearchResult(total_count, std::move(result.value()), parameters);
-  auto search_result =
-      SearchResult(total_count, std::move(result.value()), parameters);
-  for (auto &n : search_result.neighbors) {
+absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
+  VMSDK_ASSIGN_OR_RETURN(
+      auto result,
+      MaybeAddIndexedContent(DoSearch(parameters, search_mode), parameters));
+  size_t total_count = result.size();
+  parameters.search_result =
+      SearchResult(total_count, std::move(result), parameters);
+  for (auto &n : parameters.search_result.neighbors) {
     n.sequence_number =
         parameters.index_schema->GetIndexMutationSequenceNumber(n.external_id);
   }
-  return search_result;
+  return absl::OkStatus();
 }
 
 absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,

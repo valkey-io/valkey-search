@@ -38,10 +38,15 @@ class TestSkipInitialScanCMD(ValkeySearchTestCaseBase):
             "SCHEMA", "title", "TEXT", "tag", "TAG"
         )
 
+        # Add data after index creation
+        client.hset("doc:3", mapping={"title": "Document 1", "tag": "red"})
+        client.hset("doc:4", mapping={"title": "Document 2", "tag": "blue"})
+
+
 
         waiters.wait_for_true(lambda: IndexingTestHelper.is_backfill_complete_on_node(client, "idx_normal"))        
         
-        for index, count in [["idx_normal", 2], ["idx_skip", 0]]:
+        for index, count in [["idx_normal", 4], ["idx_skip", 2]]:
             results = client.execute_command("FT.SEARCH", index, "@tag:{red | blue}")
             assert results[0] == count
 
@@ -51,7 +56,7 @@ class TestSkipInitialScanCMD(ValkeySearchTestCaseBase):
         client.execute_command("SAVE")
         self.server.restart(remove_rdb=False)
 
-        for index, count in [["idx_normal", 2], ["idx_skip", 0]]:
+        for index, count in [["idx_normal", 4], ["idx_skip", 2]]:
             results = client.execute_command("FT.SEARCH", index, "@tag:{red | blue}")
             assert results[0] == count
 

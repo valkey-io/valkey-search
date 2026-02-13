@@ -780,6 +780,7 @@ MutationSequenceNumber IndexSchema::UpdateDbInfoKey(
 
   auto &dbkeyinfo = dbkeyinfo_map[interned_key];
   dbkeyinfo.mutation_sequence_number_ = this_mutation;
+  stats_.document_cnt = dbkeyinfo_map.size();
 
   auto &attr_info_vec = dbkeyinfo.GetAttributeInfoVec();
   // Clear the array, we will re-use it.

@@ -100,10 +100,24 @@ static struct LoadsTestValue {
     {"LOAD 2 x y", std::vector<std::string>{"x", "y"}},
 };
 
+static struct InorderTestValue {
+  std::string text_;
+  bool value_;
+} InorderCases[]{{"", false}, {"INORDER", true}};
+
+static struct SlopTestValue {
+  std::string text_;
+  std::optional<size_t> value_;
+} SlopCases[]{{"", std::nullopt}, {"SLOP", std::nullopt},
+              {"SLOP 0", 0},      {"SLOP 1", 1},
+              {"SLOP 10", 10},    {"SLOP fred", std::nullopt}};
+
 static void DoPrefaceTestCase(FakeIndexInterface *fake_index, std::string test,
                               TimeoutTestValue timeout_test,
                               DialectTestValue dialect_test,
-                              LoadsTestValue loads_test) {
+                              LoadsTestValue loads_test,
+                              InorderTestValue inorder_test,
+                              SlopTestValue slop_test) {
   std::cerr << "Running test: '" << test << "'\n";
   auto argv = vmsdk::ToValkeyStringVector(test);
   vmsdk::ArgsIterator itr(argv.data(), argv.size());
@@ -115,7 +129,8 @@ static void DoPrefaceTestCase(FakeIndexInterface *fake_index, std::string test,
   auto parser = CreateAggregateParser();
 
   auto result = parser.Parse(params, itr);
-  if (timeout_test.value_ && dialect_test.value_ && loads_test.value_) {
+  if (timeout_test.value_ && dialect_test.value_ && loads_test.value_ &&
+      slop_test.value_) {
     EXPECT_TRUE(result.ok()) << " Status: " << result;
     EXPECT_EQ(params.timeout_ms, *timeout_test.value_);
     EXPECT_EQ(params.dialect, *dialect_test.value_);
@@ -130,6 +145,8 @@ static void DoPrefaceTestCase(FakeIndexInterface *fake_index, std::string test,
         EXPECT_EQ(loads_test.value_->at(i), params.loads_[i]);
       }
     }
+    EXPECT_EQ(params.inorder, inorder_test.value_);
+    EXPECT_EQ(params.slop, slop_test.value_);
   } else {
     if (!timeout_test.value_) {
       EXPECT_EQ(params.timeout_ms, query::kTimeoutMS);
@@ -148,22 +165,13 @@ TEST_F(AggregateTest, PrefaceParserTest) {
   for (const auto &timeout_test : TimeoutCases) {
     for (const auto &dialect_test : DialectCases) {
       for (const auto &loads_test : LoadCases) {
-        std::vector<std::string> choices{timeout_test.text_, dialect_test.text_,
-                                         loads_test.text_};
-        for (size_t first_choice : {0, 1, 2}) {
-          for (size_t second_choice : {0, 1}) {
-            std::vector<std::string> these_choices = choices;
-            std::string test;
-            test = these_choices[first_choice];
-            these_choices.erase(these_choices.begin() + first_choice);
-            test += " ";
-            test += these_choices[second_choice];
-            these_choices.erase(these_choices.begin() + second_choice);
-            test += " ";
-            test += these_choices[0];
-            ASSERT_EQ(these_choices.size(), 1);
+        for (const auto &inorder_test : InorderCases) {
+          for (const auto &slop_test : SlopCases) {
+            std::string test = timeout_test.text_ + " " + dialect_test.text_ +
+                               " " + loads_test.text_ + " " +
+                               inorder_test.text_ + " " + slop_test.text_;
             DoPrefaceTestCase(&fake_index, test, timeout_test, dialect_test,
-                              loads_test);
+                              loads_test, inorder_test, slop_test);
           }
         }
       }

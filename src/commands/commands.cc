@@ -7,16 +7,29 @@
 
 #include "src/commands/commands.h"
 
+#include <memory>
+#include <vector>
+
 #include "fanout.h"
 #include "ft_create_parser.h"
+#include "ft_search_parser.h"
 #include "src/acl.h"
 #include "src/commands/ft_search.h"
+#include "src/coordinator/metadata_manager.h"
+#include "src/metrics.h"
 #include "src/query/fanout.h"
+#include "src/query/inflight_retry.h"
+#include "src/query/response_generator.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
+#include "valkey_search_options.h"
+#include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/cluster_map.h"
 #include "vmsdk/src/debug.h"
+#include "vmsdk/src/log.h"
+#include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/utils.h"
 
 namespace valkey_search {
 namespace async {
@@ -25,6 +38,38 @@ struct Result {
   cancel::Token cancellation_token;
   absl::StatusOr<query::SearchResult> search_result;
   std::unique_ptr<QueryCommand> parameters;
+};
+
+// SearchParameters subclass for initiator (client command) searches.
+// Handles in-flight retry completion by releasing the result to the blocked
+// client.
+class InitiatorSearch : public query::SearchParameters {
+ public:
+  vmsdk::BlockedClient blocked_client;
+  std::unique_ptr<Result> result;
+  InitiatorSearch(vmsdk::BlockedClient &&bc, std::unique_ptr<Result> &&res)
+      : query::SearchParameters(0, nullptr, res->parameters->db_num),
+        blocked_client(std::move(bc)),
+        result(std::move(res)) {}
+
+  const char *GetDesc() const override { return "initiator"; }
+
+  query::SearchParameters &GetParameters() override {
+    return *result->parameters;
+  }
+
+  std::vector<indexes::Neighbor> &GetNeighbors() override {
+    return result->search_result->neighbors;
+  }
+
+  void OnComplete(std::vector<indexes::Neighbor> &neighbors) override {
+    blocked_client.SetReplyPrivateData(result.release());
+  }
+
+  void OnCancelled() override {
+    // Let Reply callback handle the cancellation
+    blocked_client.SetReplyPrivateData(result.release());
+  }
 };
 
 int Timeout(ValkeyModuleCtx *ctx, [[maybe_unused]] ValkeyModuleString **argv,
@@ -85,9 +130,9 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
     uint32_t db_num = ValkeyModule_GetSelectedDb(ctx);
     parameters->db_num = db_num;
 
-    VMSDK_ASSIGN_OR_RETURN(parameters->index_schema,
-                           SchemaManager::Instance().GetIndexSchema(
-                               db_num, parameters->index_schema_name));
+    VMSDK_ASSIGN_OR_RETURN(
+        parameters->index_schema,
+        schema_manager.GetIndexSchema(db_num, parameters->index_schema_name));
     VMSDK_RETURN_IF_ERROR(
         vmsdk::ParseParamValue(itr, parameters->parse_vars.query_string));
     VMSDK_RETURN_IF_ERROR(parameters->ParseCommand(itr));
@@ -125,14 +170,28 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
                                         async::Free, parameters->timeout_ms);
     blocked_client.MeasureTimeStart();
     auto on_done_callback = [blocked_client = std::move(blocked_client)](
-                                auto &neighbors, auto parameters) mutable {
+                                auto &search_result, auto parameters) mutable {
       std::unique_ptr<QueryCommand> upcast_parameters(
           dynamic_cast<QueryCommand *>(parameters.release()));
       CHECK(upcast_parameters != nullptr);
       auto result = std::make_unique<async::Result>(async::Result{
-          .search_result = std::move(neighbors),
+          .search_result = std::move(search_result),
           .parameters = std::move(upcast_parameters),
       });
+
+      // Text predicate evaluation requires main thread to ensure text indexes
+      // reflect current keyspace. Block if result keys have in-flight
+      // mutations.
+      if (result->search_result.ok() && !result->parameters->no_content &&
+          query::QueryHasTextPredicate(*result->parameters)) {
+        auto initiator_search = std::make_unique<async::InitiatorSearch>(
+            std::move(blocked_client), std::move(result));
+        auto retry_ctx = std::make_shared<query::InFlightRetryContext>(
+            std::move(initiator_search));
+        retry_ctx->ScheduleOnMainThread();
+        return;
+      }
+
       blocked_client.SetReplyPrivateData(result.release());
     };
 
@@ -160,11 +219,17 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
             parameters->index_schema->GetVersion());
       }
 
+      // Extract sortby parameter if this is a SearchCommand
+      std::optional<query::SortByParameter> sortby_param = std::nullopt;
+      if (auto *search_cmd = dynamic_cast<SearchCommand *>(parameters.get())) {
+        sortby_param = search_cmd->sortby;
+      }
+
       return query::fanout::PerformSearchFanoutAsync(
           ctx, search_targets,
           ValkeySearch::Instance().GetCoordinatorClientPool(),
           std::move(parameters), ValkeySearch::Instance().GetReaderThreadPool(),
-          std::move(on_done_callback));
+          std::move(on_done_callback), sortby_param);
     }
     return query::SearchAsync(
         std::move(parameters), ValkeySearch::Instance().GetReaderThreadPool(),

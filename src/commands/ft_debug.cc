@@ -55,6 +55,42 @@ absl::Status ListMetricsCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
   return vmsdk::info_field::ListMetrics(ctx, show_app, show_dev, names_only);
 }
 
+absl::Status ListConfigsCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
+  // Parse optional VERBOSE flag and/or filter
+  // Syntax: LIST_CONFIGS [VERBOSE] [APP|DEV|HIDDEN|MUT|IMMUT]
+  bool verbose = false;
+  std::string filter;
+
+  if (itr.HasNext()) {
+    std::string first_arg;
+    VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, first_arg));
+    auto first_arg_upper = absl::AsciiStrToUpper(first_arg);
+
+    if (first_arg_upper == "VERBOSE") {
+      verbose = true;
+      // Check for optional filter after VERBOSE
+      if (itr.HasNext()) {
+        VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, filter));
+        filter = absl::AsciiStrToUpper(filter);
+        if (filter != "APP" && filter != "DEV" && filter != "HIDDEN") {
+          return absl::InvalidArgumentError(
+              "Invalid filter. Use APP, DEV, or HIDDEN");
+        }
+      }
+    } else if (first_arg_upper == "APP" || first_arg_upper == "DEV" ||
+               first_arg_upper == "HIDDEN") {
+      filter = first_arg_upper;
+    } else {
+      return absl::InvalidArgumentError(
+          "Invalid argument. Use VERBOSE, APP, DEV, or HIDDEN");
+    }
+  }
+
+  VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
+  return vmsdk::config::ModuleConfigManager::Instance().ListAllConfigs(
+      ctx, verbose, filter);
+}
+
 //
 // FT._DEBUG PAUSEPOINT [ SET | RESET | TEST | LIST] <pausepoint>
 //
@@ -296,6 +332,9 @@ absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
       {"FT_DEBUG SHOW_INDEXSCHEMAS", "list internal index schema tables"},
       {"FT._DEBUG LIST_METRICS [APP|DEV] [NAMES_ONLY]",
        "List all APP or DEV metrics with optional names-only format"},
+      {"FT._DEBUG LIST_CONFIGS [VERBOSE] [APP|DEV|HIDDEN]",
+       "List config names (default) or VERBOSE details, optionally filtered by "
+       "visibility"},
   };
   ValkeyModule_ReplyWithArray(ctx, 2 * help_text.size());
   for (auto &pair : help_text) {
@@ -350,6 +389,8 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     return HelpCmd(ctx, itr);
   } else if (keyword == "LIST_METRICS") {
     return ListMetricsCmd(ctx, itr);
+  } else if (keyword == "LIST_CONFIGS") {
+    return ListConfigsCmd(ctx, itr);
   } else {
     return absl::InvalidArgumentError(absl::StrCat(
         "Unknown subcommand: ", *itr.GetStringView(), " try HELP subcommand"));

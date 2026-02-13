@@ -25,7 +25,8 @@ Text::Text(const data_model::TextIndex &text_index_proto,
       text_index_schema_(text_index_schema),
       text_field_number_(text_index_schema->AllocateTextFieldNumber()),
       with_suffix_trie_(text_index_proto.with_suffix_trie()),
-      no_stem_(text_index_proto.no_stem()) {
+      no_stem_(text_index_proto.no_stem()),
+      weight_(text_index_proto.weight()) {
   // The schema level wants to know if suffix search is enabled for at least one
   // attribute to determine how it initializes its data structures.
   if (with_suffix_trie_) {
@@ -70,7 +71,10 @@ int Text::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, with_suffix_trie_ ? "1" : "0");
   ValkeyModule_ReplyWithSimpleString(ctx, "NO_STEM");
   ValkeyModule_ReplyWithSimpleString(ctx, no_stem_ ? "1" : "0");
-  return 6;
+  ValkeyModule_ReplyWithSimpleString(ctx, "WEIGHT");
+  ValkeyModule_ReplyWithSimpleString(ctx,
+                                     absl::StrFormat("%g", weight_).data());
+  return 8;
 }
 
 bool Text::IsTracked(const InternedStringPtr &key) const {
@@ -88,6 +92,7 @@ std::unique_ptr<data_model::Index> Text::ToProto() const {
   auto *text_index = index_proto->mutable_text_index();
   text_index->set_with_suffix_trie(with_suffix_trie_);
   text_index->set_no_stem(no_stem_);
+  text_index->set_weight(weight_);
   return index_proto;
 }
 
@@ -159,8 +164,7 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
                         indexes::text::kStemVariantsInlineCapacity>
         stem_variants;
     std::string stemmed = GetTextIndexSchema()->GetAllStemVariants(
-        text_string, stem_variants, GetTextIndexSchema()->GetMinStemSize(),
-        stem_field_mask, false);
+        text_string, stem_variants, stem_field_mask, false);
     // Search for the stemmed word itself - may or may not exist in corpus
     if (stemmed != text_string) {
       TryAddWordKeyIterator(fetcher->text_index_.get(), stemmed, key_iterators);

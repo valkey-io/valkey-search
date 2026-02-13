@@ -34,10 +34,7 @@ struct FilterTestCase {
   std::string expected_tree_structure;
 };
 
-class FilterTest : public ValkeySearchTestWithParam<FilterTestCase> {
- public:
-  indexes::PrefilterEvaluator evaluator_;
-};
+class FilterTest : public ValkeySearchTestWithParam<FilterTestCase> {};
 
 void InitIndexSchema(MockIndexSchema *index_schema) {
   data_model::NumericIndex numeric_index_proto;
@@ -98,8 +95,10 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
 
   index_schema->CreateTextIndexSchema();
   auto text_index_schema = index_schema->GetTextIndexSchema();
-  data_model::TextIndex text_index_proto1 = CreateTextIndexProto(true, false);
-  data_model::TextIndex text_index_proto2 = CreateTextIndexProto(false, true);
+  data_model::TextIndex text_index_proto1 =
+      CreateTextIndexProto(true, false, 1.0);
+  data_model::TextIndex text_index_proto2 =
+      CreateTextIndexProto(false, true, 1.0);
   auto text_index_1 =
       std::make_shared<indexes::Text>(text_index_proto1, text_index_schema);
   auto text_index_2 =
@@ -155,14 +154,17 @@ TEST_P(FilterTest, ParseParams) {
       auto text_index =
           valkey_search::indexes::text::TextIndexSchema::LookupTextIndex(
               per_key_indexes, interned_key);
-      indexes::PrefilterEvaluator evaluator(text_index);
+      indexes::PrefilterEvaluator evaluator(
+          text_index, parse_results.value().query_operations);
       EXPECT_EQ(test_case.evaluate_success.value(),
                 evaluator.Evaluate(*parse_results.value().root_predicate,
                                    interned_key));
     } else {
+      indexes::PrefilterEvaluator evaluator(
+          nullptr, parse_results.value().query_operations);
       EXPECT_EQ(test_case.evaluate_success.value(),
-                evaluator_.Evaluate(*parse_results.value().root_predicate,
-                                    interned_key));
+                evaluator.Evaluate(*parse_results.value().root_predicate,
+                                   interned_key));
     }
   }
 }

@@ -42,6 +42,10 @@
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
+namespace valkey_search::query {
+class InFlightRetryContext;
+}  // namespace valkey_search::query
+
 namespace valkey_search {
 bool ShouldBlockClient(ValkeyModuleCtx *ctx, bool inside_multi_exec,
                        bool from_backfill);
@@ -73,6 +77,12 @@ struct AttributeInfo {
 class IndexSchema : public KeyspaceEventSubscription,
                     public std::enable_shared_from_this<IndexSchema> {
  public:
+  struct IndexKeyInfo {
+    MutationSequenceNumber mutation_sequence_number_{0};
+  };
+
+  using IndexKeyInfoMap = absl::flat_hash_map<Key, IndexKeyInfo>;
+
   struct InfoIndexPartitionData {
     uint64_t num_docs;
     uint64_t num_records;
@@ -221,6 +231,9 @@ class IndexSchema : public KeyspaceEventSubscription,
     };
     std::optional<absl::flat_hash_map<std::string, AttributeData>> attributes;
     std::vector<vmsdk::BlockedClient> blocked_clients;
+    // Queries waiting for this mutation to complete
+    absl::flat_hash_set<std::shared_ptr<query::InFlightRetryContext>>
+        waiting_queries;
     MutationSequenceNumber sequence_number{0};
     bool consume_in_progress{false};
     bool from_backfill{false};
@@ -238,6 +251,12 @@ class IndexSchema : public KeyspaceEventSubscription,
   uint64_t GetBackfillScannedKeyCount() const;
   uint64_t GetBackfillDbSize() const;
   InfoIndexPartitionData GetInfoIndexPartitionData() const;
+  // Register a waiting query on the first conflicting in-flight key.
+  // Returns true if registered (conflict found), false otherwise.
+  bool RegisterWaitingQuery(
+      const std::vector<indexes::Neighbor> &neighbors,
+      std::shared_ptr<query::InFlightRetryContext> query_ctx)
+      ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
 
   static absl::Status TextInfoCmd(ValkeyModuleCtx *ctx,
                                   vmsdk::ArgsIterator &itr);
@@ -248,10 +267,6 @@ class IndexSchema : public KeyspaceEventSubscription,
     inline std::vector<AttributeInfo> &GetAttributeInfoVec() {
       return attr_info_vec_;
     }
-  };
-
-  struct IndexKeyInfo {
-    MutationSequenceNumber mutation_sequence_number_{0};
   };
 
   MutationSequenceNumber GetIndexMutationSequenceNumber(const Key &key) const {
@@ -266,6 +281,12 @@ class IndexSchema : public KeyspaceEventSubscription,
     CHECK(itr != db_key_info_.Get().end()) << "Key not found: " << key->Str();
     return itr->second.mutation_sequence_number_;
   }
+
+  // Accessor for global key map (for negation queries)
+  // Safe to call from reader threads - protected by mutated_records_mutex_
+  const IndexKeyInfoMap &GetIndexKeyInfo() const { return index_key_info_; }
+
+  size_t GetIndexKeyInfoSize() const { return index_key_info_.size(); }
 
   // Unit test only
   void SetDbMutationSequenceNumber(const Key &key,
@@ -366,7 +387,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   MutationSequenceNumber schema_mutation_sequence_number_{0};
   vmsdk::MainThreadAccessGuard<absl::flat_hash_map<Key, DbKeyInfo>>
       db_key_info_;  // Mainthread.
-  absl::flat_hash_map<Key, IndexKeyInfo> index_key_info_ ABSL_GUARDED_BY(
+  IndexKeyInfoMap index_key_info_ ABSL_GUARDED_BY(
       mutated_records_mutex_);  // updates are guarded by mutated_records_mutex_
 
   struct BackfillJob {

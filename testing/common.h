@@ -129,7 +129,8 @@ class MockAttributeDataType : public AttributeDataType {
               (override, const));
   MOCK_METHOD(int, GetValkeyEventTypes, (), (override, const));
   MOCK_METHOD((absl::StatusOr<RecordsMap>), FetchAllRecords,
-              (ValkeyModuleCtx * ctx, const std::string& query_attribute_name,
+              (ValkeyModuleCtx * ctx,
+               const std::optional<std::string>& query_attribute_name,
                ValkeyModuleKey* open_key, absl::string_view key,
                const absl::flat_hash_set<absl::string_view>& identifiers),
               (override, const));
@@ -217,7 +218,8 @@ data_model::NumericIndex CreateNumericIndexProto();
 data_model::TagIndex CreateTagIndexProto(const std::string& separator = ",",
                                          bool case_sensitive = false);
 
-data_model::TextIndex CreateTextIndexProto(bool with_suffix_trie, bool no_stem);
+data_model::TextIndex CreateTextIndexProto(bool with_suffix_trie, bool no_stem,
+                                           double weight);
 
 class MockIndexSchema : public IndexSchema {
  public:

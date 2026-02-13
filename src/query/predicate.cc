@@ -15,6 +15,7 @@
 #include "absl/container/inlined_vector.h"
 #include "absl/strings/match.h"
 #include "absl/strings/string_view.h"
+#include "src/commands/filter_parser.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
@@ -23,6 +24,7 @@
 #include "src/indexes/text/proximity.h"
 #include "src/indexes/text/text_index.h"
 #include "src/indexes/text/text_iterator.h"
+#include "src/indexes/vector_base.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -112,8 +114,7 @@ EvaluationResult TermPredicate::Evaluate(
                         indexes::text::kStemVariantsInlineCapacity>
         stem_variants;
     std::string stemmed = text_index_schema_->GetAllStemVariants(
-        term_, stem_variants, text_index_schema_->GetMinStemSize(),
-        stem_field_mask, true);
+        term_, stem_variants, stem_field_mask, true);
     // Search for the stemmed word itself - may or may not exist in corpus
     if (stemmed != term_) {
       if (TryAddWordKeyIteratorForPrefilter(text_index, stemmed, target_key,
@@ -432,9 +433,11 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator &evaluator) const {
     for (const auto &child : children_) {
       // In AND: skip text children when in prefilter evaluation because text in
       // AND is fully (recursively) resolved in the entries fetcher layer
-      // already.
+      // already. UNLESS query contains negation.
       if (evaluator.IsPrefilterEvaluator() &&
-          child->GetType() == PredicateType::kText) {
+          child->GetType() == PredicateType::kText &&
+          !(evaluator.GetQueryOperations() &
+            QueryOperations::kContainsNegate)) {
         continue;
       }
       EvaluationResult result =

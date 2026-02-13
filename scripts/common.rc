@@ -140,9 +140,10 @@ function install_test_framework() {
   if [[ "${valkey_module_installed}" == "no" ]]; then
     LOG_INFO "Installing dependencies"
     local requirements_txt=${test_framework_path}/requirements.txt
+    local testing_requirements_txt=${_WORKSPACE_HOME}/testing/integration/requirements.txt
     if [ -f ${requirements_txt} ]; then
       LOG_INFO "Installing requirements file"
-      ${PIP_PATH} install -r ${requirements_txt}
+      ${PIP_PATH} install -r ${requirements_txt} -r ${testing_requirements_txt}
       ${PIP_PATH} install --upgrade pytest
     else
       LOG_ERROR "Missing ${requirements_txt} file. Broken installation?"

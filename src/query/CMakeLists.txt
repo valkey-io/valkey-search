@@ -25,6 +25,7 @@ target_link_libraries(search PUBLIC index_schema)
 target_link_libraries(search PUBLIC metrics)
 target_link_libraries(search PUBLIC filter_parser)
 target_link_libraries(search PUBLIC index_base)
+target_link_libraries(search PUBLIC universal_set_fetcher)
 target_link_libraries(search PUBLIC numeric)
 target_link_libraries(search PUBLIC tag)
 target_link_libraries(search PUBLIC vector_base)
@@ -46,6 +47,12 @@ target_link_libraries(search_header INTERFACE vector_base)
 target_link_libraries(search_header INTERFACE hnswlib_vmsdk)
 target_link_libraries(search_header INTERFACE vmsdklib)
 
+set(SRCS_INFLIGHT_RETRY ${CMAKE_CURRENT_LIST_DIR}/inflight_retry.cc
+                        ${CMAKE_CURRENT_LIST_DIR}/inflight_retry.h)
+
+valkey_search_add_static_library(inflight_retry "${SRCS_INFLIGHT_RETRY}")
+target_link_libraries(inflight_retry PUBLIC index_schema)
+
 set(SRCS_FANOUT ${CMAKE_CURRENT_LIST_DIR}/fanout.cc
                 ${CMAKE_CURRENT_LIST_DIR}/fanout.h
                 ${CMAKE_CURRENT_LIST_DIR}/primary_info_fanout_operation.cc
@@ -55,6 +62,7 @@ set(SRCS_FANOUT ${CMAKE_CURRENT_LIST_DIR}/fanout.cc
 
 valkey_search_add_static_library(fanout "${SRCS_FANOUT}")
 target_include_directories(fanout PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(fanout PUBLIC inflight_retry)
 target_link_libraries(fanout PUBLIC search)
 target_link_libraries(fanout PUBLIC attribute_data_type)
 target_link_libraries(fanout PUBLIC index_schema)

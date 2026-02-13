@@ -94,5 +94,8 @@ const config::Boolean& GetDrainMutationQueueOnSave();
 /// Return the configuration entry for draining mutation queue on load
 const config::Boolean& GetDrainMutationQueueOnLoad();
 
+/// Return the threshold for async fanout operations
+config::Number& GetAsyncFanoutThreshold();
+
 }  // namespace options
 }  // namespace valkey_search

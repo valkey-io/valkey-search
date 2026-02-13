@@ -27,6 +27,7 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
+#include "src/indexes/text/lexer.h"
 #include "src/query/predicate.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -603,7 +604,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
   if (processed_content.empty()) {
     return FilterParser::TokenResult{nullptr, false};
   }
-  std::string token = absl::AsciiStrToLower(processed_content);
+  std::string token = lexer.NormalizeLowerCase(processed_content);
   FieldMaskPredicate field_mask;
   VMSDK_RETURN_IF_ERROR(
       SetupTextFieldConfiguration(field_mask, field_or_default, false));
@@ -702,7 +703,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     processed_content.push_back(ch);
     ++pos_;
   }
-  std::string token = absl::AsciiStrToLower(processed_content);
+  std::string token = lexer.NormalizeLowerCase(processed_content);
   FieldMaskPredicate field_mask;
   // Build predicate directly based on detected pattern
   if (leading_percent_count > 0) {

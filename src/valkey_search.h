@@ -23,11 +23,14 @@
 #include "src/index_schema.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/cluster_map.h"
+#include "vmsdk/src/thread_group_cpu_monitor.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
+
+constexpr char kEventEngine[] = "event_engine";
 
 namespace server_events {
 extern void SubscribeToServerEvents();
@@ -50,6 +53,10 @@ class ValkeySearch {
   }
   vmsdk::ThreadPool *GetUtilityThreadPool() const {
     return utility_thread_pool_.get();
+  }
+  std::shared_ptr<vmsdk::ThreadGroupCPUMonitor> GetCoordinatorThreadsMonitor()
+      const {
+    return coordinator_thread_monitor_;
   }
 
   // Generic background task scheduling
@@ -162,6 +169,8 @@ class ValkeySearch {
   std::unique_ptr<coordinator::Server> coordinator_;
   std::unique_ptr<coordinator::ClientPool> client_pool_;
   std::shared_ptr<vmsdk::cluster_map::ClusterMap> cluster_map_;
+  std::shared_ptr<vmsdk::ThreadGroupCPUMonitor> coordinator_thread_monitor_{
+      nullptr};
 };
 void ModuleInfo(ValkeyModuleInfoCtx *ctx, int for_crash_report);
 }  // namespace valkey_search

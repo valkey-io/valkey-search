@@ -19,6 +19,7 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "src/attribute_data_type.h"
+#include "src/commands/ft_search_parser.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
 #include "src/indexes/text/text_index.h"
@@ -83,13 +84,18 @@ namespace valkey_search::query {
 
 class PredicateEvaluator : public query::Evaluator {
  public:
-  explicit PredicateEvaluator(const RecordsMap &records)
-      : records_(records), text_index_(nullptr) {}
+  PredicateEvaluator(const RecordsMap &records,
+                     QueryOperations query_operations)
+      : Evaluator(query_operations), records_(records), text_index_(nullptr) {}
 
   PredicateEvaluator(const RecordsMap &records,
                      const valkey_search::indexes::text::TextIndex *text_index,
-                     InternedStringPtr target_key)
-      : records_(records), text_index_(text_index), target_key_(target_key) {}
+                     InternedStringPtr target_key,
+                     QueryOperations query_operations)
+      : Evaluator(query_operations),
+        records_(records),
+        text_index_(text_index),
+        target_key_(target_key) {}
 
   const InternedStringPtr &GetTargetKey() const override { return target_key_; }
 
@@ -168,12 +174,13 @@ bool VerifyFilter(const query::SearchParameters &parameters,
               records,
               valkey_search::indexes::text::TextIndexSchema::LookupTextIndex(
                   per_key_indexes, n.external_id),
-              n.external_id);
+              n.external_id, parameters.filter_parse_results.query_operations);
           EvaluationResult result = predicate->Evaluate(evaluator);
           return result.matches;
         });
   }
-  PredicateEvaluator evaluator(records);
+  PredicateEvaluator evaluator(
+      records, parameters.filter_parse_results.query_operations);
   EvaluationResult result = predicate->Evaluate(evaluator);
   return result.matches;
 }
@@ -181,7 +188,9 @@ bool VerifyFilter(const query::SearchParameters &parameters,
 absl::StatusOr<RecordsMap> GetContentNoReturnJson(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
     const query::SearchParameters &parameters,
-    const indexes::Neighbor &neighbor, const std::string &vector_identifier) {
+    const indexes::Neighbor &neighbor,
+    const std::optional<std::string> &vector_identifier,
+    const std::optional<query::SortByParameter> &sortby_parameter) {
   auto key = neighbor.external_id->Str();
   absl::flat_hash_set<absl::string_view> identifiers;
   identifiers.insert(kJsonRootElementQuery);
@@ -190,6 +199,15 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
     identifiers.insert(filter_identifier);
   }
   vmsdk::ValkeySelectDbGuard select_db_guard(ctx, parameters.db_num);
+  // Resolve sortby field to actual identifier (e.g., "n1" -> "$.n1" for JSON)
+  std::string sortby_identifier;
+  if (sortby_parameter.has_value()) {
+    auto schema_identifier =
+        parameters.index_schema->GetIdentifier(sortby_parameter->field);
+    sortby_identifier =
+        schema_identifier.ok() ? *schema_identifier : sortby_parameter->field;
+    identifiers.insert(sortby_identifier);
+  }
   auto key_str = vmsdk::MakeUniqueValkeyString(key);
   auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
       ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
@@ -197,6 +215,20 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
                                            ctx, vector_identifier,
                                            key_obj.get(), key, identifiers));
   if (parameters.filter_parse_results.filter_identifiers.empty()) {
+    // When returning early, we need to rename the sortby field from the
+    // resolved identifier (e.g., "$.n1") back to the alias (e.g., "n1")
+    if (sortby_parameter.has_value() &&
+        sortby_identifier != sortby_parameter->field) {
+      auto itr = content.find(sortby_identifier);
+      if (itr != content.end()) {
+        auto value = std::move(itr->second);
+        content.erase(itr);
+        content.emplace(sortby_parameter->field,
+                        RecordsMapValue(vmsdk::MakeUniqueValkeyString(
+                                            sortby_parameter->field),
+                                        std::move(value.value)));
+      }
+    }
     return content;
   }
   if (!VerifyFilter(parameters, content, neighbor)) {
@@ -210,19 +242,34 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
       RecordsMapValue(
           kJsonRootElementQueryPtr.get(),
           std::move(content.find(kJsonRootElementQuery)->second.value)));
+
+  if (sortby_parameter.has_value()) {
+    auto itr = content.find(sortby_identifier);
+    if (itr != content.end()) {
+      // Use the alias (sortby_parameter->field) as the key in the response,
+      // not the resolved identifier
+      return_content.emplace(sortby_parameter->field,
+                             RecordsMapValue(vmsdk::MakeUniqueValkeyString(
+                                                 sortby_parameter->field),
+                                             std::move(itr->second.value)));
+    }
+  }
   return return_content;
 }
 
 absl::StatusOr<RecordsMap> GetContent(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
     const query::SearchParameters &parameters,
-    const indexes::Neighbor &neighbor, const std::string &vector_identifier) {
+    const indexes::Neighbor &neighbor,
+    const std::optional<std::string> &vector_identifier,
+    const std::optional<query::SortByParameter> &sortby_parameter) {
   auto key = neighbor.external_id->Str();
   if (attribute_data_type.ToProto() ==
           data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON &&
       parameters.return_attributes.empty()) {
     return GetContentNoReturnJson(ctx, attribute_data_type, parameters,
-                                  neighbor, vector_identifier);
+                                  neighbor, vector_identifier,
+                                  sortby_parameter);
   }
   absl::flat_hash_set<absl::string_view> identifiers;
   for (const auto &return_attribute : parameters.return_attributes) {
@@ -235,6 +282,20 @@ absl::StatusOr<RecordsMap> GetContent(
     }
   }
   vmsdk::ValkeySelectDbGuard select_db_guard(ctx, parameters.db_num);
+  // Resolve sortby field to actual identifier. Only add to identifiers set
+  // when return_attributes is specified, because when return_attributes is
+  // empty, all fields are fetched anyway.
+  std::string sortby_identifier;
+  if (sortby_parameter.has_value()) {
+    auto schema_identifier =
+        parameters.index_schema->GetIdentifier(sortby_parameter->field);
+    sortby_identifier =
+        schema_identifier.ok() ? *schema_identifier : sortby_parameter->field;
+    // Only add sortby to identifiers when return_attributes is not empty
+    if (!parameters.return_attributes.empty()) {
+      identifiers.insert(sortby_identifier);
+    }
+  }
   auto key_str = vmsdk::MakeUniqueValkeyString(key);
   auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
       ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
@@ -264,27 +325,33 @@ absl::StatusOr<RecordsMap> GetContent(
             return_attribute.identifier.get(),
             vmsdk::RetainUniqueValkeyString(itr->second.value.get())));
   }
-  return return_content;
-}
 
-// Adds all local content for neighbors to the list of neighbors.
-// This function is meant to be used for non-vector queries.
-void ProcessNonVectorNeighborsForReply(
-    ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
-    std::vector<indexes::Neighbor> &neighbors,
-    const query::SearchParameters &parameters) {
-  ProcessNeighborsForReply(ctx, attribute_data_type, neighbors, parameters, "");
+  // Add sortby field to return_content for sorting, even when return_attributes
+  // is not empty. Use the alias (sortby_parameter->field) as the key.
+  if (sortby_parameter.has_value()) {
+    auto itr = content.find(sortby_identifier);
+    if (itr != content.end()) {
+      return_content.emplace(
+          sortby_parameter->field,
+          RecordsMapValue(
+              vmsdk::MakeUniqueValkeyString(sortby_parameter->field),
+              vmsdk::RetainUniqueValkeyString(itr->second.value.get())));
+    }
+  }
+
+  return return_content;
 }
 
 // Adds all local content for neighbors to the list of neighbors.
 //
 // Any neighbors already contained in the attribute content map will be skipped.
 // Any data not found locally will be skipped.
-void ProcessNeighborsForReply(ValkeyModuleCtx *ctx,
-                              const AttributeDataType &attribute_data_type,
-                              std::vector<indexes::Neighbor> &neighbors,
-                              const query::SearchParameters &parameters,
-                              const std::string &identifier) {
+void ProcessNeighborsForReply(
+    ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
+    std::vector<indexes::Neighbor> &neighbors,
+    const query::SearchParameters &parameters,
+    const std::optional<std::string> &vector_identifier,
+    const std::optional<query::SortByParameter> &sortby_parameter) {
   const auto max_content_size =
       options::GetMaxSearchResultRecordSize().GetValue();
   const auto max_content_fields =
@@ -295,8 +362,8 @@ void ProcessNeighborsForReply(ValkeyModuleCtx *ctx,
     if (neighbor.attribute_contents.has_value()) {
       continue;
     }
-    auto content =
-        GetContent(ctx, attribute_data_type, parameters, neighbor, identifier);
+    auto content = GetContent(ctx, attribute_data_type, parameters, neighbor,
+                              vector_identifier, sortby_parameter);
     if (!content.ok()) {
       continue;
     }

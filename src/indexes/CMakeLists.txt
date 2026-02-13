@@ -57,6 +57,12 @@ target_link_libraries(numeric PUBLIC segment_tree)
 target_link_libraries(numeric PUBLIC string_interning)
 target_link_libraries(numeric PUBLIC valkey_module)
 
+set(SRCS_UNIVERSAL_SET_FETCHER ${CMAKE_CURRENT_LIST_DIR}/universal_set_fetcher.cc
+                               ${CMAKE_CURRENT_LIST_DIR}/universal_set_fetcher.h)
+
+valkey_search_add_static_library(universal_set_fetcher "${SRCS_UNIVERSAL_SET_FETCHER}")
+target_link_libraries(universal_set_fetcher PUBLIC index_base)
+
 set(SRCS_TAG ${CMAKE_CURRENT_LIST_DIR}/tag.cc ${CMAKE_CURRENT_LIST_DIR}/tag.h)
 
 valkey_search_add_static_library(tag "${SRCS_TAG}")

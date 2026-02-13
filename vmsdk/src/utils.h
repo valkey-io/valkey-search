@@ -19,6 +19,7 @@
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
+
 namespace vmsdk {
 
 class StopWatch {
@@ -200,7 +201,6 @@ class ValkeySelectDbGuard {
   int old_db_;
   bool switched_ = false;
 };
-
 }  // namespace vmsdk
 
 // Hash specialization for SocketAddress

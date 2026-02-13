@@ -69,7 +69,9 @@ class Text : public IndexBase {
       absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
       const override {
     absl::MutexLock lock(&index_mutex_);
-    // TODO: Implement proper key tracking
+    for (const auto& key : tracked_keys_) {
+      VMSDK_RETURN_IF_ERROR(fn(key));
+    }
     return absl::OkStatus();
   }
 
@@ -139,6 +141,7 @@ class Text : public IndexBase {
   std::shared_ptr<text::TextIndexSchema> text_index_schema_;
 
   InternedStringSet untracked_keys_;
+  InternedStringSet tracked_keys_;
 
   bool with_suffix_trie_;
   bool no_stem_;

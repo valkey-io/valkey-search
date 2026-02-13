@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"
 #include "grpcpp/support/status.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/query/fanout_operation_base.h"
@@ -72,6 +73,11 @@ class ClusterInfoFanoutOperation
   bool backfill_in_progress_;
   std::string state_;
   coordinator::IndexFingerprintVersion expected_fingerprint_version_;
+  struct AttributeData {
+    std::string identifier;
+    uint64_t user_indexed_memory{0};
+  };
+  absl::flat_hash_map<std::string, AttributeData> attribute_data_;
 };
 
 }  // namespace valkey_search::query::cluster_info_fanout

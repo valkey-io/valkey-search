@@ -1,49 +1,31 @@
-Valkey-search includes additional third-party open source software in its build.
-
-Package: Abseil
-License: Apache License 2.0
-License URL: https://spdx.org/licenses/Apache-2.0.html
-License File: .build-release/.deps/install/include/absl/LICENSE (fetched during build)
-Details: Built into the final installable. Provides core utility libraries for strings, containers, and algorithms.
-
-Package: gRPC
-License: Apache License 2.0
-License URL: https://spdx.org/licenses/Apache-2.0.html
-License File: .build-release/.deps/grpc/LICENSE (fetched during build)
-Details: Built into the final installable. Provides RPC framework for cluster coordination.
+Valkey-search vendors the following third-party open source software in the third_party/ directory:
 
 Package: HdrHistogram_c
 License: CC0 1.0 Universal (Public Domain) / BSD 2-Clause License
 License URL: https://creativecommons.org/publicdomain/zero/1.0/
 License File: third_party/hdrhistogram_c/LICENSE
-Details: Built into the final installable. Provides high dynamic range histogram data structure for latency tracking.
+Details: Provides high dynamic range histogram data structure for latency tracking.
 
 Package: hnswlib
 License: Apache License 2.0
 License URL: https://spdx.org/licenses/Apache-2.0.html
 License File: third_party/hnswlib/LICENSE
-Details: Built into the final installable. Provides HNSW (Hierarchical Navigable Small World) algorithm for approximate nearest neighbor search.
-
-Package: ICU (International Components for Unicode)
-License: ICU License
-License URL: https://spdx.org/licenses/ICU.html
-License File: third_party/icu/LICENSE
-Details: Built into the final installable. Provides Unicode normalization and case folding for international text processing.
-
-Package: Protocol Buffers (Protobuf)
-License: BSD 3-Clause License
-License URL: https://spdx.org/licenses/BSD-3-Clause.html
-License File: .build-release/.deps/grpc/third_party/protobuf/LICENSE (fetched during build)
-Details: Built into the final installable. Provides data serialization for cluster communication.
+Details: Provides HNSW (Hierarchical Navigable Small World) algorithm for approximate nearest neighbor search.
 
 Package: SimSIMD
 License: Apache License 2.0
 License URL: https://spdx.org/licenses/Apache-2.0.html
 License File: third_party/simsimd/LICENSE
-Details: Built into the final installable. Provides SIMD-optimized vector similarity functions for high-performance distance calculations.
+Details: Provides SIMD-optimized vector similarity functions for high-performance distance calculations.
 
 Package: Snowball
 License: BSD 3-Clause License
 License URL: https://spdx.org/licenses/BSD-3-Clause.html
 License File: third_party/snowball/COPYING
-Details: Built into the final installable. Provides stemming algorithms for full-text search across multiple languages.
+Details: Provides stemming support for full-text search across multiple languages.
+
+Package: ICU (International Components for Unicode)
+License: ICU License
+License URL: https://spdx.org/licenses/ICU.html
+License File: third_party/icu/LICENSE
+Details: Provides Unicode normalization and case folding for international text processing.

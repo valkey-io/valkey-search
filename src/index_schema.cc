@@ -1083,19 +1083,19 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "num_records");
   ValkeyModule_ReplyWithLongLong(ctx, CountRecords());
   // Text Index info fields
-  ValkeyModule_ReplyWithSimpleString(ctx, "num_total_terms");
+  ValkeyModule_ReplyWithSimpleString(ctx, "total_term_occurrences");
   ValkeyModule_ReplyWithLongLong(
       ctx,
       text_index_schema_ ? text_index_schema_->GetTotalTermFrequency() : 0);
-  ValkeyModule_ReplyWithSimpleString(ctx, "num_unique_terms");
-  ValkeyModule_ReplyWithLongLong(
-      ctx, text_index_schema_ ? text_index_schema_->GetNumUniqueTerms() : 0);
-  ValkeyModule_ReplyWithSimpleString(ctx, "total_postings");
+  ValkeyModule_ReplyWithSimpleString(ctx, "num_terms");
   ValkeyModule_ReplyWithLongLong(
       ctx, text_index_schema_ ? text_index_schema_->GetNumUniqueTerms() : 0);
 
   // Memory statistics are only shown when debug mode is enabled
   if (vmsdk::config::IsDebugModeEnabled()) {
+    ValkeyModule_ReplyWithSimpleString(ctx, "total_postings");
+    ValkeyModule_ReplyWithLongLong(
+        ctx, text_index_schema_ ? text_index_schema_->GetNumUniqueTerms() : 0);
     ValkeyModule_ReplyWithSimpleString(ctx, "posting_sz_bytes");
     ValkeyModule_ReplyWithLongLong(
         ctx,

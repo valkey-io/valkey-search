@@ -2079,8 +2079,8 @@ class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
         
         # Text index specific fields to validate
         text_index_fields = [
-            "num_unique_terms",          # Total number of unique terms in the text index
-            "num_total_terms",           # Total frequency of all terms across all documents  
+            "num_terms",          # Total number of unique terms in the text index
+            "total_term_occurrences",    # Total frequency of all terms across all documents  
             "posting_sz_bytes",          # Memory used by posting lists (inverted index data) in bytes
             "position_sz_bytes",         # Memory used by position information for phrase queries in bytes
             "total_postings",            # Total number of posting lists (equals unique terms)
@@ -2093,13 +2093,13 @@ class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
             assert field in info_data, f"Missing text index field: {field}"
             value = info_data[field]
             
-            if field == "num_unique_terms":
+            if field == "num_terms":
                 assert isinstance(value, (int, float)) and value > 0, f"{field} should be positive number, got {value}"
                 assert value >= 10, f"Expected at least 10 unique terms, got {value}"
                 
-            elif field == "num_total_terms":
+            elif field == "total_term_occurrences":
                 assert isinstance(value, (int, float)) and value > 0, f"{field} should be positive number, got {value}"
-                assert value >= info_data["num_unique_terms"], f"Total terms {value} should be >= unique terms {info_data['num_unique_terms']}"
+                assert value >= info_data["num_terms"], f"Total terms {value} should be >= unique terms {info_data['num_terms']}"
                 
             elif field in ["posting_sz_bytes", "position_sz_bytes", "radix_sz_bytes", "total_text_index_sz_bytes"]:
                 assert (isinstance(value, int) and value > 0) or \
@@ -2108,7 +2108,7 @@ class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
                     
             elif field == "total_postings":
                 assert isinstance(value, (int, float)) and value > 0, f"{field} should be positive number, got {value}"
-                assert value == info_data["num_unique_terms"], f"Total postings {value} should equal unique terms {info_data['num_unique_terms']}"
+                assert value == info_data["num_terms"], f"Total postings {value} should equal unique terms {info_data['num_terms']}"
         
         # Validate memory relationships
         total_memory = info_data["total_text_index_sz_bytes"]
@@ -2122,8 +2122,8 @@ class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
         
         print(f"Text Index Statistics Validation Passed:")
         print(f"  Documents: {info_data['num_docs']}")
-        print(f"  Unique Terms: {info_data['num_unique_terms']}")
-        print(f"  Total Terms: {info_data['num_total_terms']}")
+        print(f"  Unique Terms: {info_data['num_terms']}")
+        print(f"  Total Terms: {info_data['total_term_occurrences']}")
         print(f"  Total Postings: {info_data['total_postings']}")
         print(f"  Total Memory: {info_data['total_text_index_sz_bytes']} bytes")
         print(f"  Posting Memory: {info_data['posting_sz_bytes']} bytes")
@@ -2138,8 +2138,8 @@ class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
         initial_radix_memory = info_data['radix_sz_bytes']
         initial_position_memory = info_data['position_sz_bytes']
         initial_total_memory = info_data['total_text_index_sz_bytes']
-        initial_unique_terms = info_data['num_unique_terms']
-        initial_total_terms = info_data['num_total_terms']
+        initial_unique_terms = info_data['num_terms']
+        initial_total_terms = info_data['total_term_occurrences']
         
         # Delete all documents
         for doc in hash_docs:
@@ -2162,10 +2162,10 @@ class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
         # Posting objects across schema and key indexes, these metrics will reach zero on deletion.
         
         # Always validate term count decreases
-        assert info_after_delete['num_unique_terms'] < initial_unique_terms, \
-            f"Unique terms should decrease after deletion: {info_after_delete['num_unique_terms']} >= {initial_unique_terms}"
-        assert info_after_delete['num_total_terms'] < initial_total_terms, \
-            f"Total terms should decrease after deletion: {info_after_delete['num_total_terms']} >= {initial_total_terms}"
+        assert info_after_delete['num_terms'] < initial_unique_terms, \
+            f"Unique terms should decrease after deletion: {info_after_delete['num_terms']} >= {initial_unique_terms}"
+        assert info_after_delete['total_term_occurrences'] < initial_total_terms, \
+            f"Total terms should decrease after deletion: {info_after_delete['total_term_occurrences']} >= {initial_total_terms}"
         
         # Skip memory size checks when running with sanitizers (SAN_BUILD)
         # as memory tracking may not be accurate in sanitizer builds
@@ -2182,8 +2182,8 @@ class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
         # Note: radix_sz_bytes validation skipped - will be fixed in radix tree memory tracking cleanup task
         
         print(f"  After deletion - Documents: {info_after_delete['num_docs']}")
-        print(f"  After deletion - Unique Terms: {info_after_delete['num_unique_terms']}")
-        print(f"  After deletion - Total Terms: {info_after_delete['num_total_terms']}")
+        print(f"  After deletion - Unique Terms: {info_after_delete['num_terms']}")
+        print(f"  After deletion - Total Terms: {info_after_delete['total_term_occurrences']}")
         print(f"  After deletion - Posting Memory: {info_after_delete['posting_sz_bytes']} bytes")
         print(f"  After deletion - Radix Memory: {info_after_delete['radix_sz_bytes']} bytes")
         print(f"  After deletion - Total Memory: {info_after_delete['total_text_index_sz_bytes']} bytes")

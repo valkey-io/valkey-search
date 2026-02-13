@@ -26,7 +26,7 @@ void InFlightRetryContext::ProcessRetry() {
     return;
   }
 
-  auto& neighbors = parameters_->GetNeighbors();
+  auto& neighbors = parameters_->search_result.neighbors;
 
   // Try to register with a conflicting mutation entry
   if (params.index_schema->RegisterWaitingQuery(neighbors,
@@ -48,11 +48,6 @@ void InFlightRetryContext::ProcessRetry() {
 }
 
 void InFlightRetryContext::OnMutationComplete() { ScheduleOnMainThread(); }
-
-const std::vector<indexes::Neighbor>& InFlightRetryContext::GetNeighbors()
-    const {
-  return parameters_->GetNeighbors();
-}
 
 void InFlightRetryContext::ScheduleOnMainThread() {
   auto self = shared_from_this();

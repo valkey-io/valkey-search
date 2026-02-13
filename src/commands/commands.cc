@@ -58,10 +58,6 @@ class InitiatorSearch : public query::SearchParameters {
     return *result->parameters;
   }
 
-  std::vector<indexes::Neighbor> &GetNeighbors() override {
-    return GetParameters().search_result.neighbors;
-  }
-
   void OnComplete(std::vector<indexes::Neighbor> &neighbors) override {
     blocked_client.SetReplyPrivateData(result.release());
   }

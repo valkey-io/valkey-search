@@ -124,24 +124,20 @@ class RemoteResponderSearch : public query::SearchParameters {
   SearchIndexPartitionResponse* response;
   grpc::ServerUnaryReactor* reactor;
   std::unique_ptr<vmsdk::StopWatch> latency_sample;
-  std::vector<indexes::Neighbor> neighbors;
   size_t total_count;
 
   RemoteResponderSearch(SearchIndexPartitionResponse* resp,
                         grpc::ServerUnaryReactor* react,
                         std::unique_ptr<vmsdk::StopWatch>&& sample,
-                        std::vector<indexes::Neighbor>&& nbrs,
                         std::unique_ptr<query::SearchParameters>&& params,
                         size_t count)
       : query::SearchParameters(std::move(*params)),
         response(resp),
         reactor(react),
         latency_sample(std::move(sample)),
-        neighbors(std::move(nbrs)),
         total_count(count) {}
 
   const char* GetDesc() const override { return "remote-responder"; }
-  std::vector<indexes::Neighbor>& GetNeighbors() override { return neighbors; }
 
   void OnComplete(std::vector<indexes::Neighbor>& neighbors) override {
     auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
@@ -153,7 +149,7 @@ class RemoteResponderSearch : public query::SearchParameters {
     }
     query::ProcessNeighborsForReply(ctx.get(), attribute_data_type, neighbors,
                                     *this, vector_identifier);
-    // Adjust total_count based on modified neighbours
+    // Adjust total_count based on modified neighbors
     size_t removed = original_size - neighbors.size();
     size_t adjusted_total_count =
         (total_count > removed) ? (total_count - removed) : 0;
@@ -169,7 +165,7 @@ class RemoteResponderSearch : public query::SearchParameters {
                        "Search operation cancelled due to timeout"});
       RecordSearchMetrics(true, std::move(latency_sample));
     } else {
-      OnComplete(neighbors);
+      OnComplete(search_result.neighbors);
     }
   }
 };
@@ -227,8 +223,7 @@ query::SearchResponseCallback Service::MakeSearchCallback(
     // reflect current keyspace. Block if result keys have in-flight mutations.
     if (!parameters->no_content && query::QueryHasTextPredicate(*parameters)) {
       auto remote_responder = std::make_unique<RemoteResponderSearch>(
-          response, reactor, std::move(latency_sample),
-          std::move(parameters->search_result.neighbors), std::move(parameters),
+          response, reactor, std::move(latency_sample), std::move(parameters),
           parameters->search_result.total_count);
       auto retry_ctx = std::make_shared<query::InFlightRetryContext>(
           std::move(remote_responder));

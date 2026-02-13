@@ -196,10 +196,6 @@ struct SearchParameters {
   // used in retry contexts).
   virtual void OnComplete(std::vector<indexes::Neighbor>& neighbors) {}
   virtual void OnCancelled() {}
-  virtual std::vector<indexes::Neighbor>& GetNeighbors() {
-    static std::vector<indexes::Neighbor> empty;
-    return empty;
-  }
   // Description for debugging in-flight retry code paths.
   virtual const char* GetDesc() const { return "base"; }
   virtual SearchParameters& GetParameters() { return *this; }

@@ -194,19 +194,15 @@ struct SearchPartitionResultsTracker {
 class LocalResponderSearch : public query::SearchParameters {
  public:
   std::shared_ptr<SearchPartitionResultsTracker> tracker;
-  std::vector<indexes::Neighbor> neighbors;
   size_t total_count;
 
   LocalResponderSearch(std::shared_ptr<SearchPartitionResultsTracker> trk,
-                       std::unique_ptr<SearchParameters> &&params,
-                       std::vector<indexes::Neighbor> &&nbrs, size_t count)
+                       std::unique_ptr<SearchParameters> &&params, size_t count)
       : query::SearchParameters(std::move(*params)),
         tracker(std::move(trk)),
-        neighbors(std::move(nbrs)),
         total_count(count) {}
 
   const char *GetDesc() const override { return "local-responder"; }
-  std::vector<indexes::Neighbor> &GetNeighbors() override { return neighbors; }
 
   void OnComplete(std::vector<indexes::Neighbor> &neighbors) override {
     tracker->AddResults(neighbors);
@@ -215,7 +211,7 @@ class LocalResponderSearch : public query::SearchParameters {
 
   void OnCancelled() override {
     if (enable_partial_results) {
-      OnComplete(neighbors);
+      OnComplete(search_result.neighbors);
     }
   }
 };
@@ -341,7 +337,6 @@ absl::Status PerformSearchFanoutAsync(
                 query::QueryHasTextPredicate(*parameters)) {
               auto local_responder = std::make_unique<LocalResponderSearch>(
                   tracker, std::move(parameters),
-                  std::move(parameters->search_result.neighbors),
                   parameters->search_result.total_count);
               auto retry_ctx = std::make_shared<query::InFlightRetryContext>(
                   std::move(local_responder));

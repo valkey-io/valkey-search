@@ -53,8 +53,6 @@ class InFlightRetryContext
   // Called by IndexSchema when a conflicting mutation completes
   void OnMutationComplete();
 
-  const std::vector<indexes::Neighbor>& GetNeighbors() const;
-
  private:
   std::unique_ptr<SearchParameters> parameters_;
   bool blocked_{false};

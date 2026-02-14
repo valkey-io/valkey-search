@@ -71,9 +71,9 @@ LogLevel GetLogSeverity(bool ok) { return ok ? DEBUG : WARNING; }
 // Controls and stats for V2 RDB file
 //
 static auto config_rdb_write_v2 =
-    vmsdk::config::BooleanBuilder("rdb-write-v2", true).Dev().Build();
+    vmsdk::config::BooleanBuilder("rdb-write-v2", false).Dev().Build();
 static auto config_rdb_read_v2 =
-    vmsdk::config::BooleanBuilder("rdb-read-v2", true).Dev().Build();
+    vmsdk::config::BooleanBuilder("rdb-read-v2", false).Dev().Build();
 static auto config_rdb_validate_on_write =
     vmsdk::config::BooleanBuilder("rdb-validate-on-write", false).Dev().Build();
 
@@ -228,6 +228,15 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
           res->AddIndex(attribute.alias(), attribute.identifier(), index));
     }
   }
+
+  if (!reload && index_schema_proto.skip_initial_scan()) {
+    // Creating a new Index with SkipInitialScan. Mark the backfill as done
+    // since we are skipping it.
+    VMSDK_LOG(DEBUG, ctx) << "Index " << index_schema_proto.name()
+                          << " created with skip_initial_scan. "
+                             "Marking backfill as done.";
+    res->backfill_job_.Get()->MarkScanAsDone();
+  }
   return res;
 }
 
@@ -286,9 +295,7 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
 
 absl::Status IndexSchema::Init(ValkeyModuleCtx *ctx) {
   VMSDK_RETURN_IF_ERROR(keyspace_event_manager_->InsertSubscription(ctx, this));
-  if (!skip_initial_scan_) {
-    backfill_job_ = std::make_optional<BackfillJob>(ctx, name_, db_num_);
-  }
+  backfill_job_ = std::make_optional<BackfillJob>(ctx, name_, db_num_);
   return absl::OkStatus();
 }
 
@@ -1229,6 +1236,10 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
     DrainMutationQueue(detached_ctx_.get());
   }
 
+  VMSDK_LOG(DEBUG, nullptr)
+      << "Starting RDB save for index schema: " << name_
+      << " Saving in version " << (RDBWriteV2() ? "2" : "1") << " format";
+
   auto index_schema_proto = ToProto();
   auto rdb_section = std::make_unique<data_model::RDBSection>();
   rdb_section->set_type(data_model::RDB_SECTION_INDEX_SCHEMA);
@@ -1583,7 +1594,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
               if (!supplemental_content->mutation_queue_header()
                        .backfilling()) {
                 VMSDK_LOG(DEBUG, ctx) << "Backfill suppressed.";
-                index_schema->backfill_job_.Get() = std::nullopt;
+                index_schema->backfill_job_.Get()->MarkScanAsDone();
               } else {
                 rdb_load_backfilling_indexes.Increment();
               }
@@ -1656,7 +1667,8 @@ void IndexSchema::OnLoadingEnded(ValkeyModuleCtx *ctx) {
     VMSDK_LOG(NOTICE, ctx) << "RDB load completed, "
                            << " Mutation Queue contains "
                            << tracked_mutated_records_.size() << " entries."
-                           << (backfill_job_.Get().has_value()
+                           << (backfill_job_.Get().has_value() &&
+                                       !backfill_job_.Get()->IsScanDone()
                                    ? " Backfill still required."
                                    : " Backfill not needed.");
     if (options::GetDrainMutationQueueOnLoad().GetValue()) {

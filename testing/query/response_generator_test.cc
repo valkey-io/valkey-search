@@ -89,7 +89,7 @@ TEST_P(ResponseGeneratorTest, ProcessNeighborsForReply) {
   for (const auto &expected_content : params.expected_contents) {
     expected_contents.push_back(ToRecordsMap(expected_content));
   }
-  query::SearchParameters parameters(100000, nullptr, 0);
+  UnitTestSearchParameters parameters;
   parameters.index_schema = CreateIndexSchema("index").value();
   for (const auto &n : expected_neighbors) {
     parameters.index_schema->SetIndexMutationSequenceNumber(n.external_id,
@@ -186,7 +186,7 @@ TEST_F(ResponseGeneratorTest, ProcessNeighborsForReplyContentLimits) {
   neighbors.push_back(indexes::Neighbor(many_fields_id, 0));
 
   // Set up parameters
-  query::SearchParameters parameters(100000, nullptr, 0);
+  UnitTestSearchParameters parameters;
   parameters.return_attributes.push_back(
       {.identifier = vmsdk::MakeUniqueValkeyString("content"),
        .alias = vmsdk::MakeUniqueValkeyString("content_alias")});
@@ -566,8 +566,7 @@ TEST_P(ResponseGeneratorDbParamTest, ProcessNeighborsForReplySelectsCorrectDB) {
   int target_db = 5;
   int original_db = 0;
   data_model::AttributeDataType type = GetParam();
-
-  query::SearchParameters parameters(100000, nullptr, 0);
+  UnitTestSearchParameters parameters;
   parameters.db_num = target_db;
   parameters.return_attributes.push_back(
       {.identifier = vmsdk::MakeUniqueValkeyString("field"),
@@ -611,7 +610,7 @@ TEST_P(ResponseGeneratorDbParamTest, ProcessNeighborsForReplyNoContent) {
   int original_db = 0;
   data_model::AttributeDataType type = GetParam();
 
-  query::SearchParameters parameters(100000, nullptr, 0);
+  UnitTestSearchParameters parameters;
   parameters.db_num = target_db;
   parameters.no_content = true;
   parameters.attribute_alias = "attr";

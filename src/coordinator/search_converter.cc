@@ -211,11 +211,11 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
   CHECK(false);
 }
 
-absl::StatusOr<std::unique_ptr<query::SearchParameters>>
-GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request,
-                              grpc::CallbackServerContext* context) {
-  auto parameters = std::make_unique<query::SearchParameters>(
-      request.timeout_ms(), context, request.db_num());
+absl::Status GRPCSearchRequestToParameters(
+    const SearchIndexPartitionRequest& request,
+    grpc::CallbackServerContext* context, query::SearchParameters* parameters) {
+  parameters->timeout_ms = request.timeout_ms();
+  parameters->cancellation_token = cancel::Make(request.timeout_ms(), context);
   parameters->db_num = request.db_num();
   parameters->index_schema_name = request.index_schema_name();
   parameters->attribute_alias = request.attribute_alias();
@@ -254,7 +254,7 @@ GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request,
   parameters->slot_fingerprint = request.slot_fingerprint();
   parameters->filter_parse_results.query_operations =
       static_cast<QueryOperations>(request.query_operations());
-  return parameters;
+  return absl::OkStatus();
 }
 
 std::unique_ptr<Predicate> PredicateToGRPCPredicate(

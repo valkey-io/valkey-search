@@ -164,9 +164,9 @@ struct SearchPartitionResultsTracker {
 
   ~SearchPartitionResultsTracker() {
     absl::MutexLock lock(&mutex);
-    absl::StatusOr<SearchResult> result;
+    absl::Status status;
     if (consistency_failed) {
-      result = absl::FailedPreconditionError(kFailedPreconditionMsg);
+      status = absl::FailedPreconditionError(kFailedPreconditionMsg);
     } else {
       std::vector<indexes::Neighbor> neighbors;
       neighbors.resize(results.size());
@@ -181,10 +181,11 @@ struct SearchPartitionResultsTracker {
       // SearchResult construction automatically applies trimming based on LIMIT
       // offset count IF the command allows it (ie - it does not require
       // complete results).
-      result = SearchResult(accumulated_total_count, std::move(neighbors),
-                            *parameters);
+      parameters->search_result = SearchResult(
+          accumulated_total_count, std::move(neighbors), *parameters);
+      status = absl::OkStatus();
     }
-    callback(result, std::move(parameters));
+    callback(status, std::move(parameters));
   }
 };
 
@@ -193,19 +194,15 @@ struct SearchPartitionResultsTracker {
 class LocalResponderSearch : public query::SearchParameters {
  public:
   std::shared_ptr<SearchPartitionResultsTracker> tracker;
-  std::vector<indexes::Neighbor> neighbors;
   size_t total_count;
 
   LocalResponderSearch(std::shared_ptr<SearchPartitionResultsTracker> trk,
-                       std::unique_ptr<SearchParameters> &&params,
-                       std::vector<indexes::Neighbor> &&nbrs, size_t count)
+                       std::unique_ptr<SearchParameters> &&params, size_t count)
       : query::SearchParameters(std::move(*params)),
         tracker(std::move(trk)),
-        neighbors(std::move(nbrs)),
         total_count(count) {}
 
   const char *GetDesc() const override { return "local-responder"; }
-  std::vector<indexes::Neighbor> &GetNeighbors() override { return neighbors; }
 
   void OnComplete(std::vector<indexes::Neighbor> &neighbors) override {
     tracker->AddResults(neighbors);
@@ -214,7 +211,7 @@ class LocalResponderSearch : public query::SearchParameters {
 
   void OnCancelled() override {
     if (enable_partial_results) {
-      OnComplete(neighbors);
+      OnComplete(search_result.neighbors);
     }
   }
 };
@@ -327,33 +324,33 @@ absl::Status PerformSearchFanoutAsync(
     }
   }
   if (has_local_target) {
-    VMSDK_ASSIGN_OR_RETURN(
-        auto local_parameters,
-        coordinator::GRPCSearchRequestToParameters(*request, nullptr));
+    auto local_parameters = std::make_unique<query::SearchParameters>();
+    VMSDK_RETURN_IF_ERROR(coordinator::GRPCSearchRequestToParameters(
+        *request, nullptr, local_parameters.get()));
     VMSDK_RETURN_IF_ERROR(query::SearchAsync(
         std::move(local_parameters), thread_pool,
-        [tracker](absl::StatusOr<SearchResult> &result,
+        [tracker](absl::Status status,
                   std::unique_ptr<SearchParameters> parameters) {
-          if (result.ok()) {
+          if (status.ok()) {
             // Text predicate evaluation requires main thread to ensure text
             // indexes reflect current keyspace. Block if result keys have
             // in-flight mutations.
             if (!parameters->no_content &&
                 query::QueryHasTextPredicate(*parameters)) {
               auto local_responder = std::make_unique<LocalResponderSearch>(
-                  tracker, std::move(parameters), std::move(result->neighbors),
-                  result->total_count);
+                  tracker, std::move(parameters),
+                  parameters->search_result.total_count);
               auto retry_ctx = std::make_shared<query::InFlightRetryContext>(
                   std::move(local_responder));
               retry_ctx->ScheduleOnMainThread();
               return;
             }
-            tracker->AddResults(result->neighbors);
-            tracker->AddTotalCount(result->total_count);
+            tracker->AddResults(parameters->search_result.neighbors);
+            tracker->AddTotalCount(parameters->search_result.total_count);
           } else {
             VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
                 << "Error during local handling of FT.SEARCH: "
-                << result.status().message();
+                << status.message();
           }
         },
         SearchMode::kLocal))

@@ -42,20 +42,6 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
             timeout=5
         )
 
-        # Using another block point for doc:2 at an earlier point than mutation_processing 
-        client.execute_command("FT._DEBUG PAUSEPOINT SET block_mutation_queue")
-
-        # HSET doc:2 blocks at block_mutation_queue (not yet tracked)
-        hset2_thread, _, hset2_err = run_in_thread(
-            lambda: self.server.get_new_client().execute_command(
-                "HSET", "doc:2", "content", "updated2"
-            )
-        )
-        waiters.wait_for_true(
-            lambda: client.execute_command("FT._DEBUG PAUSEPOINT TEST block_mutation_queue") > 0,
-            timeout=5
-        )
-
         # Search blocks on doc:1
         search_thread, search_res, search_err = run_in_thread(
             lambda: self.server.get_new_client().execute_command(
@@ -67,20 +53,24 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
         )
         assert search_res[0] is None and search_thread.is_alive()
 
-        # Release doc:1 processing, search retries but doc:2 not yet in queue
+        # Using another block point for doc:2 at an earlier point than mutation_processing 
+        client.execute_command("FT._DEBUG PAUSEPOINT SET block_mutation_queue")
+
+        # HSET doc:2 blocks at block_mutation_queue (not yet tracked)
+        hset2_thread, _, hset2_err = run_in_thread(
+            lambda: self.server.get_new_client().execute_command(
+                "HSET", "doc:2", "content", "updated2 hello"
+            )
+        )
+        waiters.wait_for_true(
+            lambda: client.execute_command("FT._DEBUG PAUSEPOINT TEST block_mutation_queue") > 0,
+            timeout=5
+        )
+
+        # Release doc:1 to be indexed
         client.execute_command("FT._DEBUG PAUSEPOINT RESET mutation_processing")
         hset1_thread.join()
         assert hset1_err[0] is None
-
-        # Re-enable mutation_processing pausepoint before releasing queue
-        client.execute_command("FT._DEBUG PAUSEPOINT SET mutation_processing")
-
-        # Release queue - doc:2 enters tracked_mutated_records and blocks at processing
-        client.execute_command("FT._DEBUG PAUSEPOINT RESET block_mutation_queue")
-        waiters.wait_for_true(
-            lambda: client.execute_command("FT._DEBUG PAUSEPOINT TEST mutation_processing") > 0,
-            timeout=5
-        )
 
         # Wait for search to retry and block on doc:2
         waiters.wait_for_true(
@@ -88,16 +78,16 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
         )
         assert search_res[0] is None and search_thread.is_alive()
 
-        # Release doc:2, search completes
-        client.execute_command("FT._DEBUG PAUSEPOINT RESET mutation_processing")
+        # Release doc:2 to be processed
+        client.execute_command("FT._DEBUG PAUSEPOINT RESET block_mutation_queue")
         hset2_thread.join()
         search_thread.join()
 
         assert hset2_err[0] is None
         assert search_err[0] is None
-        # After mutation completes, "hello" is no longer in the document
-        result = search_res[0]
-        assert result[0] == 0
+        # After mutation completes, doc:1 is filtered out since it no longer
+        # has 'hello' and doc:2 is returned with the new value
+        assert search_res[0] == [1, b"doc:2", [b"content", b"updated2 hello"]]
 
     def test_hybrid_query_with_text_predicate(self):
         """Test that hybrid queries (vector + text) DO block on in-flight mutations."""

@@ -389,7 +389,6 @@ class IndexSchema : public KeyspaceEventSubscription,
       db_key_info_;  // Mainthread.
   IndexKeyInfoMap index_key_info_ ABSL_GUARDED_BY(
       mutated_records_mutex_);  // updates are guarded by mutated_records_mutex_
-
   struct BackfillJob {
     BackfillJob() = delete;
     BackfillJob(ValkeyModuleCtx *ctx, absl::string_view name, int db_num);
@@ -429,7 +428,6 @@ class IndexSchema : public KeyspaceEventSubscription,
   void DrainMutationQueue(ValkeyModuleCtx *ctx) const
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
 
-  bool IsTrackedByAnyIndex(const Key &key) const;
   void SyncProcessMutation(ValkeyModuleCtx *ctx,
                            MutatedAttributes &mutated_attributes,
                            const Key &key);

@@ -36,6 +36,12 @@ def check_skipinitialscan_cmd(self, rdb_version_2):
         "SCHEMA", "title", "TEXT", "tag", "TAG"
     )
 
+    waiters.wait_for_true(lambda: IndexingTestHelper.is_backfill_complete_on_node(client, "idx_normal"))
+
+    for index, count in [["idx_normal", 2], ["idx_skip", 0]]:
+        results = client.execute_command("FT.SEARCH", index, "@tag:{red | blue}")
+        assert results[0] == count
+
     # Add data after index creation
     client.hset("doc:3", mapping={"title": "Document 1", "tag": "red"})
     client.hset("doc:4", mapping={"title": "Document 2", "tag": "blue"})
@@ -52,10 +58,17 @@ def check_skipinitialscan_cmd(self, rdb_version_2):
     client.execute_command("SAVE")
     self.server.restart(remove_rdb=False)
 
+    client = self.get_primary_connection()
+
     #
     # With V1 format, the backfill state is not persisted, so we expect all documents to be indexed on restart. 
     # With V2, the backfill state is persisted, so we expect only the post-index-creation documents to be indexed.
     #
+
+    waiters.wait_for_true(lambda: IndexingTestHelper.is_backfill_complete_on_node(client, "idx_normal"))
+    if rdb_version_2 == "no":
+        waiters.wait_for_true(lambda: IndexingTestHelper.is_backfill_complete_on_node(client, "idx_skip"))
+
     for index, count in [["idx_normal", 4], ["idx_skip", 2 if rdb_version_2 == "yes" else 4]]:
         results = client.execute_command("FT.SEARCH", index, "@tag:{red | blue}")
         print("Index is ", index, "Results are ", results)
@@ -117,12 +130,27 @@ def check_skipinitialscan_cme(self, rdb_version_2):
         node.client.execute_command("SAVE")
         node.server.restart(remove_rdb=False)
 
+    # Perform cluster meet
+    for node_idx in range(0, self.CLUSTER_SIZE):
+        self.cluster_meet(node_idx, self.CLUSTER_SIZE)
+
+    waiters.wait_for_equal(
+        lambda: self._wait_for_meet(
+            self.CLUSTER_SIZE
+        ),
+        True,
+        timeout=10,
+    )
+
     client = self.new_cluster_client()
     waiters.wait_for_true(lambda: is_backfill_complete(client, "idx_normal"))
 
+    if rdb_version_2 == "no":
+        waiters.wait_for_true(lambda: is_backfill_complete(client, "idx_skip"))
+
     for index, count in [["idx_normal", 100], ["idx_skip", 50 if rdb_version_2 == "yes" else 100]]:
         for node in self.get_nodes():
-            results = node.client.execute_command("FT.SEARCH", index, "@tag:{red | blue}")
+            results = node.client.execute_command("FT.SEARCH", index, "@tag:{red | blue}", "consistent")
             assert results[0] == count
 
 

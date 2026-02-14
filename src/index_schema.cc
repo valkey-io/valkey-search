@@ -1368,10 +1368,7 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
   }
   //
   // To reconstruct an index-schema, we want to ingest all of the keys that
-  // are currently within the index. If there is a non-vector index, we can
-  // use the tracked and untracked key lists from that index. If there is ONLY
-  // vector indexes, then this key list is not needed as there aren't any
-  // non-vector indexes to ingest.
+  // are currently within the index.
   //
   // The V1 format doesn't have this list and substitutes a backfill to
   // rebuild. In the absence of support for SKIPINITIALSCAN the backfill is
@@ -1381,30 +1378,12 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
   // this key list explicitly which will trivially enable the SKIPINITIALSCAN
   // option.
   //
-  std::shared_ptr<indexes::IndexBase> index;
-  for (const auto &attribute : attributes_) {
-    if (!IsVectorIndex(attribute.second.GetIndex())) {
-      index = attribute.second.GetIndex();
-      break;
-    }
-  }
-  if (!index) {
-    VMSDK_RETURN_IF_ERROR(out.SaveObject<size_t>(0));  // zero keys
-  } else {
-    size_t key_count =
-        index->GetTrackedKeyCount() + index->GetUnTrackedKeyCount();
-    VMSDK_RETURN_IF_ERROR(out.SaveObject(key_count));
-    rdb_save_keys.Increment(key_count);
-    VMSDK_LOG(NOTICE, nullptr)
-        << "Writing Index Extension, keys = " << key_count;
-
-    auto write_a_key = [&](const Key &key) {
-      key_count--;
-      return out.SaveString(key->Str());
-    };
-    VMSDK_RETURN_IF_ERROR(index->ForEachTrackedKey(write_a_key));
-    VMSDK_RETURN_IF_ERROR(index->ForEachUnTrackedKey(write_a_key));
-    CHECK(key_count == 0) << "Key count mismatch for index " << GetName();
+  size_t key_count = db_key_info_.Get().size();
+  VMSDK_RETURN_IF_ERROR(out.SaveObject(key_count));
+  rdb_save_keys.Increment(key_count);
+  VMSDK_LOG(NOTICE, nullptr) << "Writing Index Extension, keys = " << key_count;
+  for (auto &[key, _] : db_key_info_.Get()) {
+    VMSDK_RETURN_IF_ERROR(out.SaveString(key->Str()));
   }
   //
   // Write out the mutation queue entries. As an optimization we only write

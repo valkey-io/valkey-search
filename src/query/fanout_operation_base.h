@@ -118,9 +118,9 @@ class FanoutOperationBase {
         this->RpcDone();
       });
     } else {
-      std::string client_address = absl::StrCat(
-          target.socket_address.primary_endpoint, ":",
-          coordinator::GetCoordinatorPort(target.socket_address.port));
+      std::string client_address = coordinator::FormatAddressWithPort(
+        target.socket_address.primary_endpoint,
+        coordinator::GetCoordinatorPort(target.socket_address.port));
       auto client = client_pool_->GetClient(client_address);
       if (!client) {
         ++Metrics::GetStats().info_fanout_fail_cnt;
@@ -233,9 +233,9 @@ class FanoutOperationBase {
         } else {
           VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
               << INDEX_NAME_ERROR_LOG_PREFIX
-              << absl::StrCat(target.socket_address.primary_endpoint, ":",
-                              coordinator::GetCoordinatorPort(
-                                  target.socket_address.port));
+              << coordinator::FormatAddressWithPort(
+                  target.socket_address.primary_endpoint,
+                  coordinator::GetCoordinatorPort(target.socket_address.port));
         }
       }
     }
@@ -250,9 +250,9 @@ class FanoutOperationBase {
         } else {
           VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
               << COMMUNICATION_ERROR_LOG_PREFIX
-              << absl::StrCat(target.socket_address.primary_endpoint, ":",
-                              coordinator::GetCoordinatorPort(
-                                  target.socket_address.port));
+              << coordinator::FormatAddressWithPort(
+                  target.socket_address.primary_endpoint,
+                  coordinator::GetCoordinatorPort(target.socket_address.port));
         }
       }
     }
@@ -267,9 +267,9 @@ class FanoutOperationBase {
         } else {
           VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
               << INCONSISTENT_STATE_ERROR_LOG_PREFIX
-              << absl::StrCat(target.socket_address.primary_endpoint, ":",
-                              coordinator::GetCoordinatorPort(
-                                  target.socket_address.port));
+              << coordinator::FormatAddressWithPort(
+                  target.socket_address.primary_endpoint,
+                  coordinator::GetCoordinatorPort(target.socket_address.port));
         }
       }
     }

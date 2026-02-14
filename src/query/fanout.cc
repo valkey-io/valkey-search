@@ -312,9 +312,9 @@ absl::Status PerformSearchFanoutAsync(
     // At 30 requests, it takes ~600 micros to enqueue all the requests.
     // Putting this into the background thread pool will save us time on
     // machines with multiple cores.
-    std::string target_address =
-        absl::StrCat(node.socket_address.primary_endpoint, ":",
-                     coordinator::GetCoordinatorPort(node.socket_address.port));
+    std::string target_address = coordinator::FormatAddressWithPort(
+      node.socket_address.primary_endpoint,
+      coordinator::GetCoordinatorPort(node.socket_address.port));
     if (search_targets.size() >=
             valkey_search::options::GetAsyncFanoutThreshold().GetValue() &&
         thread_pool->Size() > 1) {

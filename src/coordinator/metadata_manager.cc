@@ -450,7 +450,7 @@ void MetadataManager::HandleBroadcastedMetadata(
     return;
   }
   std::string address =
-      absl::StrCat(node_ip, ":", GetCoordinatorPort(node_port));
+    FormatAddressWithPort(node_ip, GetCoordinatorPort(node_port));
   auto client = client_pool_.GetClient(address);
   // Capturing "this" should be okay since SchemaManager is program-scoped.
   client->GetGlobalMetadata(

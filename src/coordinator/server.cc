@@ -83,7 +83,7 @@ grpc::ServerUnaryReactor* Service::GetGlobalMetadata(
 }
 
 void RecordSearchMetrics(bool failure,
-                         std::unique_ptr<vmsdk::StopWatch> sample) {
+                         std::unique_ptr<vmsdk::StopWatch>&& sample) {
   if (failure) {
     Metrics::GetStats().coordinator_server_search_index_partition_failure_cnt++;
     Metrics::GetStats()
@@ -120,7 +120,7 @@ void RemoteResponseCallback(
     std::vector<indexes::Neighbor>& neighbors, size_t total_count,
     const query::SearchParameters& parameters,
     SearchIndexPartitionResponse* response, grpc::ServerUnaryReactor* reactor,
-    std::unique_ptr<vmsdk::StopWatch> latency_sample,
+    std::unique_ptr<vmsdk::StopWatch>&& latency_sample,
     const std::optional<query::SortByParameter>& sortby_parameter) {
   auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
   const auto& attribute_data_type =

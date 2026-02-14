@@ -370,6 +370,21 @@ constexpr absl::string_view kDrainMutationQueueOnSaveConfig{
 static auto drain_mutation_queue_on_save =
     config::BooleanBuilder(kDrainMutationQueueOnSaveConfig, false).Build();
 
+/// Register the "--async-fanout-threshold" flag. Controls the threshold
+/// for async fanout operations (minimum number of targets to use async)
+constexpr absl::string_view kAsyncFanoutThresholdConfig{
+    "async-fanout-threshold"};
+constexpr uint32_t kDefaultAsyncFanoutThreshold{30};     // 30 targets
+constexpr uint32_t kMinimumAsyncFanoutThreshold{1};      // At least 1 target
+constexpr uint32_t kMaximumAsyncFanoutThreshold{10000};  // Max 10k targets
+static auto async_fanout_threshold =
+    vmsdk::config::NumberBuilder(
+        kAsyncFanoutThresholdConfig,   // name
+        kDefaultAsyncFanoutThreshold,  // default threshold (30)
+        kMinimumAsyncFanoutThreshold,  // min threshold (1)
+        kMaximumAsyncFanoutThreshold)  // max threshold (10k)
+        .Build();
+
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 
 vmsdk::config::Number& GetHNSWBlockSize() {
@@ -464,6 +479,10 @@ const vmsdk::config::Boolean& GetDrainMutationQueueOnSave() {
 const vmsdk::config::Boolean& GetDrainMutationQueueOnLoad() {
   return dynamic_cast<const vmsdk::config::Boolean&>(
       *drain_mutation_queue_on_load);
+}
+
+vmsdk::config::Number& GetAsyncFanoutThreshold() {
+  return dynamic_cast<vmsdk::config::Number&>(*async_fanout_threshold);
 }
 
 }  // namespace options

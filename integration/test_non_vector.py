@@ -3,6 +3,7 @@ from valkey.client import Valkey
 from valkey_search_test_case import ValkeySearchTestCaseBase
 from valkeytestframework.conftest import resource_port_tracker
 import json
+import random
 from valkey.cluster import ValkeyCluster
 from valkey_search_test_case import ValkeySearchClusterTestCase
 import time
@@ -63,6 +64,19 @@ expected_numeric_tag_json_value = {
     "rating": 4.8,
     "desc": "Excellent"
 }
+
+categories = ["electronics", "books"]
+
+aggregate_complex_hash_docs = [
+    ["HSET", f"product:{i+100}", "price", str(i + 1), "rating", str((i % 100) + 1.0), "category", categories[i % len(categories)]]
+    for i in range(1000)
+]
+
+aggregate_complex_json_docs = [
+    ["JSON.SET", f"jsonproduct:{i+100}", "$",
+     json.dumps({"price": i + 1, "rating": (i % 100) + 1.0, "category": categories[i % len(categories)]})]
+    for i in range(1000)
+]
 
 def create_indexes(client: Valkey):
     """
@@ -243,6 +257,203 @@ def validate_aggregate_queries(client: Valkey):
     )
     assert result[0] == 2
 
+def validate_aggregate_complex_queries(client: Valkey):
+    """
+        Test complex FT.AGGREGATE queries with numeric and tag.
+    """
+    # 1. SORTBY DESC with LIMIT
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[0,1000]",
+        "LOAD", "1", "price",
+        "SORTBY", "2", "@price", "DESC",
+        "LIMIT", "0", "3"
+    )
+    assert result[0] == 3
+    assert result[1][1] == b'1000'
+    assert result[2][1] == b'999'
+    assert result[3][1] == b'998'
+
+    # 2. SORTBY ASC with LIMIT
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[0 1000]",
+        "LOAD", "1", "price",
+        "SORTBY", "2", "@price", "ASC",
+        "LIMIT", "0", "3"
+    )
+    assert result[0] == 3
+    assert result[1][1] == b'1'
+    assert result[2][1] == b'2'
+    assert result[3][1] == b'3'
+
+    # 3. SORTBY with MAX
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[0 1000]",
+        "LOAD", "1", "price",
+        "SORTBY", "2", "@price", "DESC", "MAX", "5"
+    )
+    assert result[0] == 5
+    assert result[1][1] == b'1000'
+
+    # 4. APPLY with arithmetic expression
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[100 100]",
+        "LOAD", "1", "price",
+        "APPLY", "@price * 2", "AS", "double_price"
+    )
+    assert result[0] == 1
+    assert result[1][1] == b'100'
+    assert result[1][3] == b'200'
+
+    # 5. FILTER stage
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "1", "price",
+        "FILTER", "@price > 998"
+    )
+    assert result[0] == 2
+    assert {result[1][1], result[2][1]} == {b'999', b'1000'}
+
+    # 6. GROUPBY with COUNT reducer
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "1", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "COUNT", "0", "AS", "count"
+    )
+    assert result[0] == 2  # electronics and books
+    rows = {result[i][1]: result[i][3] for i in range(1, len(result))}
+    assert rows[b'electronics'] == b'500'
+    assert rows[b'books'] == b'500'
+
+    # 7. GROUPBY with SUM reducer
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 10]",
+        "LOAD", "2", "price", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "SUM", "1", "@price", "AS", "total_price"
+    )
+    assert result[0] == 2
+    rows = {result[i][1]: result[i][3] for i in range(1, len(result))}
+    # electronics: 1+3+5+7+9 = 25, books: 2+4+6+8+10 = 30
+    assert rows[b'electronics'] == b'25'
+    assert rows[b'books'] == b'30'
+
+    # 8. GROUPBY with AVG reducer
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 4]",
+        "LOAD", "2", "price", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "AVG", "1", "@price", "AS", "avg_price"
+    )
+    assert result[0] == 2
+    rows = {result[i][1]: result[i][3] for i in range(1, len(result))}
+    # electronics: avg(1,3) = 2, books: avg(2,4) = 3
+    assert rows[b'electronics'] == b'2'
+    assert rows[b'books'] == b'3'
+
+    # 9. GROUPBY with MIN and MAX reducers
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "2", "price", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "MIN", "1", "@price", "AS", "min_price",
+        "REDUCE", "MAX", "1", "@price", "AS", "max_price"
+    )
+    assert result[0] == 2
+    for i in range(1, len(result)):
+        row = dict(zip(result[i][::2], result[i][1::2]))
+        if row[b'category'] == b'electronics':
+            assert row[b'min_price'] == b'1'
+            assert row[b'max_price'] == b'999'
+        else:
+            assert row[b'min_price'] == b'2'
+            assert row[b'max_price'] == b'1000'
+
+    # 10. GROUPBY with COUNT_DISTINCT reducer
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "3", "price", "rating", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "COUNT_DISTINCT", "1", "@rating", "AS", "distinct_ratings"
+    )
+    assert result[0] == 2
+    for i in range(1, len(result)):
+        row = dict(zip(result[i][::2], result[i][1::2]))
+        assert row[b'distinct_ratings'] == b'50'
+
+    # 11. GROUPBY with STDDEV reducer
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 4]",
+        "LOAD", "2", "price", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "STDDEV", "1", "@price", "AS", "price_stddev"
+    )
+    assert result[0] == 2
+
+    # 12. GROUPBY + SORTBY + LIMIT pipeline
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "2", "price", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "SUM", "1", "@price", "AS", "total",
+        "SORTBY", "2", "@total", "DESC",
+        "LIMIT", "0", "1"
+    )
+    assert result[0] == 1
+
+    # 13. APPLY + FILTER pipeline
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "2", "price", "rating",
+        "APPLY", "@price * @rating", "AS", "score",
+        "FILTER", "@score > 90000"
+    )
+    assert result[0] > 0
+    for i in range(1, len(result)):
+        row = dict(zip(result[i][::2], result[i][1::2]))
+        assert float(row[b'score']) > 90000
+
+    # 14. APPLY + SORTBY + LIMIT pipeline
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "1", "price",
+        "APPLY", "@price + 100", "AS", "adjusted",
+        "SORTBY", "2", "@adjusted", "ASC",
+        "LIMIT", "0", "3"
+    )
+    assert result[0] == 3
+    assert result[1][3] == b'101'
+    assert result[2][3] == b'102'
+    assert result[3][3] == b'103'
+
+    # 15. FILTER + SORTBY + LIMIT pipeline
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "1", "price",
+        "FILTER", "@price >= 990",
+        "SORTBY", "2", "@price", "ASC",
+        "LIMIT", "0", "5"
+    )
+    assert result[0] == 5
+    assert result[1][1] == b'990'
+    assert result[-1][1] == b'994'
+
+    # 16. multiple LIMIT stages
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[0 1000]",
+        "LOAD", "1", "price",
+        "SORTBY", "2", "@price", "ASC", "MAX", "1000",
+        "LIMIT", "900", "10",
+        "FILTER", "@price >= 906",
+        "LIMIT", "0", "5",
+        "APPLY", "@price * 10", "AS", "scaled",
+        "LIMIT", "0", "1"
+    )
+    # [1, [b'price', b'906', b'scaled', b'9060']]
+    assert result[0] == 1
+    assert result[1][1] == b'906'
+    assert result[1][3] == b'9060'
+
 class TestNonVector(ValkeySearchTestCaseBase):
 
     def test_basic(self):
@@ -263,6 +474,15 @@ class TestNonVector(ValkeySearchTestCaseBase):
         validate_limit_queries(client)
         # Test AGGREGATE functionality
         validate_aggregate_queries(client)
+
+    def test_aggregate_complex(self):
+        client: Valkey = self.server.get_new_client()
+        create_indexes(client)
+        for doc in aggregate_complex_hash_docs:
+            assert client.execute_command(*doc) == 3
+        for doc in json_docs:
+            assert client.execute_command(*doc) == b"OK"
+        validate_aggregate_complex_queries(client)
 
     def test_uningested_multi_field(self):
         """
@@ -315,3 +535,13 @@ class TestNonVectorCluster(ValkeySearchClusterTestCase):
         validate_limit_queries(client)
         # Test bulk limit functionality
         validate_bulk_limit_queries(client)
+    
+    def test_aggregate_complex_cluster(self):
+        cluster_client: ValkeyCluster = self.new_cluster_client()
+        client: Valkey = self.new_client_for_primary(0)
+        create_indexes(client)
+        for doc in aggregate_complex_hash_docs:
+            assert cluster_client.execute_command(*doc) == 3
+        for doc in aggregate_complex_json_docs:
+            assert cluster_client.execute_command(*doc) == b"OK"
+        validate_aggregate_complex_queries(cluster_client)

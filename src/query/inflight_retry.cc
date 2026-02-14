@@ -26,7 +26,7 @@ void InFlightRetryContext::ProcessRetry() {
     return;
   }
 
-  auto& neighbors = parameters_->search_result.neighbors;
+  auto& neighbors = params.search_result.neighbors;
 
   // Try to register with a conflicting mutation entry
   if (params.index_schema->RegisterWaitingQuery(neighbors,

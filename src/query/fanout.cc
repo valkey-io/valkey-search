@@ -207,14 +207,14 @@ class LocalResponderSearch : public query::SearchParameters {
   const char *GetDesc() const override { return "local-responder"; }
   std::vector<indexes::Neighbor> &GetNeighbors() override { return neighbors; }
 
-  void OnComplete(std::vector<indexes::Neighbor> &neighbors) override {
+  void OnComplete() override {
     tracker->AddResults(neighbors);
     tracker->AddTotalCount(total_count);
   }
 
   void OnCancelled() override {
     if (enable_partial_results) {
-      OnComplete(neighbors);
+      OnComplete();
     }
   }
 };

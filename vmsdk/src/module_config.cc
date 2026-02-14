@@ -98,7 +98,9 @@ ModuleConfigManager &ModuleConfigManager::Instance() {
 }
 
 void ModuleConfigManager::RegisterConfig(Registerable *config_item) {
-  entries_.insert({std::string{config_item->GetName()}, config_item});
+  auto [it, inserted] =
+      entries_.insert({std::string{config_item->GetName()}, config_item});
+  CHECK(inserted) << "Duplicate config entry: " << config_item->GetName();
 }
 
 void ModuleConfigManager::UnregisterConfig(Registerable *config_item) {

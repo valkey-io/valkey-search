@@ -14,7 +14,6 @@
 #include <vector>
 
 #include "absl/container/flat_hash_set.h"
-#include "absl/container/inlined_vector.h"
 #include "absl/strings/string_view.h"
 #include "src/indexes/text/text_iterator.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -185,8 +184,7 @@ using FieldMaskPredicate = uint64_t;
 class TextPredicate : public Predicate {
  public:
   TextPredicate() : Predicate(PredicateType::kText) {}
-  virtual ~TextPredicate() = default;
-  virtual EvaluationResult Evaluate(Evaluator& evaluator) const = 0;
+  ~TextPredicate() override = default;
   // Evaluate against per-key TextIndex
   virtual EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,

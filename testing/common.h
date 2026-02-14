@@ -100,6 +100,7 @@ class MockIndex : public indexes::IndexBase {
               (const, override));
   MOCK_METHOD(bool, IsUnTracked, (const InternedStringPtr& key),
               (const, override));
+  MOCK_METHOD(void, UnTrack, (const InternedStringPtr& key), (override));
   MOCK_METHOD(
       (absl::Status), ForEachTrackedKey,
       (absl::AnyInvocable<absl::Status(const InternedStringPtr& key)> fn),

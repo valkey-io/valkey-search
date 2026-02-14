@@ -8,7 +8,6 @@
 #include "src/indexes/numeric.h"
 
 #include <cstddef>
-#include <cstdint>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -267,6 +266,12 @@ bool Numeric::IsTracked(const InternedStringPtr& key) const {
 bool Numeric::IsUnTracked(const InternedStringPtr& key) const {
   absl::MutexLock lock(&index_mutex_);
   return untracked_keys_.contains(key);
+}
+
+void Numeric::UnTrack(const InternedStringPtr& key) {
+  absl::MutexLock lock(&index_mutex_);
+  CHECK(!tracked_keys_.contains(key));
+  untracked_keys_.insert(key);
 }
 
 absl::Status Numeric::ForEachTrackedKey(

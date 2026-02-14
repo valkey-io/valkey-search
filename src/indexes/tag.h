@@ -8,7 +8,6 @@
 #ifndef VALKEYSEARCH_SRC_INDEXES_TAG_H_
 #define VALKEYSEARCH_SRC_INDEXES_TAG_H_
 #include <cstddef>
-#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -55,6 +54,8 @@ class Tag : public IndexBase {
   bool IsTracked(const InternedStringPtr& key) const override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
   bool IsUnTracked(const InternedStringPtr& key) const override
+      ABSL_LOCKS_EXCLUDED(index_mutex_);
+  void UnTrack(const InternedStringPtr& key) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
   absl::Status ForEachTrackedKey(
       absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)

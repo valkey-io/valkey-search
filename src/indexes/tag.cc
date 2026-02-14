@@ -12,7 +12,6 @@
 #include <memory>
 #include <string>
 #include <utility>
-#include <vector>
 
 #include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
@@ -389,6 +388,12 @@ bool Tag::IsTracked(const InternedStringPtr& key) const {
 bool Tag::IsUnTracked(const InternedStringPtr& key) const {
   absl::MutexLock lock(&index_mutex_);
   return untracked_keys_.contains(key);
+}
+
+void Tag::UnTrack(const InternedStringPtr& key) {
+  absl::MutexLock lock(&index_mutex_);
+  CHECK(!tracked_tags_by_keys_.contains(key));
+  untracked_keys_.insert(key);
 }
 
 absl::Status Tag::ForEachTrackedKey(

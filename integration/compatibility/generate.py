@@ -153,7 +153,6 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.checkvec(self, dialect, orig_cmd, kwargs)
         self.check(self, dialect, orig_cmd)
 
-    '''
     def test_bad_numeric_data(self, key_type, dialect):
         self.setup_data("bad numbers", key_type)
         self.check(dialect, f"ft.search {key_type}_idx1",  "@n1:[-inf inf]")
@@ -170,7 +169,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.setup_data("sortable numbers", key_type)
         self.checkall(dialect, f"ft.search {key_type}_idx1 *")
         self.checkall(dialect, f"ft.search {key_type}_idx1 * limit 0 5")
-    '''
+    
     @pytest.mark.parametrize("algo", ["flat", "hnsw"])
     @pytest.mark.parametrize("metric", ["l2", "ip", "cosine"])
     def test_vector_distance(self, key_type, dialect, algo, metric):

@@ -15,7 +15,6 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <deque>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -40,11 +39,9 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
-#include "src/indexes/text.h"
 #include "src/query/predicate.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
-#include "src/valkey_search_options.h"
 #include "src/vector_externalizer.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "third_party/hnswlib/space_ip.h"
@@ -559,6 +556,8 @@ bool VectorBase::IsTracked(const InternedStringPtr &key) const {
 bool VectorBase::IsUnTracked(const InternedStringPtr &key) const {
   return false;
 }
+
+void VectorBase::UnTrack(const InternedStringPtr &key) {}
 
 absl::Status VectorBase::ForEachTrackedKey(
     absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const {

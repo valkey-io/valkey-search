@@ -8,8 +8,6 @@
 #ifndef _VALKEY_SEARCH_INDEXES_TEXT_PHRASE_H_
 #define _VALKEY_SEARCH_INDEXES_TEXT_PHRASE_H_
 
-#include <vector>
-
 #include "absl/container/inlined_vector.h"
 #include "src/indexes/text.h"
 #include "src/indexes/text/text_iterator.h"

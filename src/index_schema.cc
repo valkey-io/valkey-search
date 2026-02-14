@@ -1025,7 +1025,7 @@ int IndexSchema::GetTextItemCount() const {
 }
 
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
-  int arrSize = 30;
+  int arrSize = 28;
   // Debug Text index Memory info fields
   if (vmsdk::config::IsDebugModeEnabled()) {
     arrSize += 8;
@@ -1067,14 +1067,11 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "num_records");
   ValkeyModule_ReplyWithLongLong(ctx, CountRecords());
   // Text Index info fields
-  ValkeyModule_ReplyWithSimpleString(ctx, "num_total_terms");
+  ValkeyModule_ReplyWithSimpleString(ctx, "total_term_occurrences");
   ValkeyModule_ReplyWithLongLong(
       ctx,
       text_index_schema_ ? text_index_schema_->GetTotalTermFrequency() : 0);
-  ValkeyModule_ReplyWithSimpleString(ctx, "num_unique_terms");
-  ValkeyModule_ReplyWithLongLong(
-      ctx, text_index_schema_ ? text_index_schema_->GetNumUniqueTerms() : 0);
-  ValkeyModule_ReplyWithSimpleString(ctx, "total_postings");
+  ValkeyModule_ReplyWithSimpleString(ctx, "num_terms");
   ValkeyModule_ReplyWithLongLong(
       ctx, text_index_schema_ ? text_index_schema_->GetNumUniqueTerms() : 0);
 

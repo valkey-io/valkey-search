@@ -1025,7 +1025,7 @@ int IndexSchema::GetTextItemCount() const {
 }
 
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
-  int arrSize = 30;
+  int arrSize = 28;
   // Debug Text index Memory info fields
   if (vmsdk::config::IsDebugModeEnabled()) {
     arrSize += 8;
@@ -1077,9 +1077,6 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
 
   // Memory statistics are only shown when debug mode is enabled
   if (vmsdk::config::IsDebugModeEnabled()) {
-    ValkeyModule_ReplyWithSimpleString(ctx, "total_postings");
-    ValkeyModule_ReplyWithLongLong(
-        ctx, text_index_schema_ ? text_index_schema_->GetNumUniqueTerms() : 0);
     ValkeyModule_ReplyWithSimpleString(ctx, "posting_sz_bytes");
     ValkeyModule_ReplyWithLongLong(
         ctx,

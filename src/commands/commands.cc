@@ -27,6 +27,8 @@
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/cluster_map.h"
 #include "vmsdk/src/debug.h"
+#include "vmsdk/src/log.h"
+#include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/utils.h"
 
 namespace valkey_search {

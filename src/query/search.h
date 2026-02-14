@@ -131,14 +131,14 @@ struct SearchParameters {
   vmsdk::UniqueValkeyString score_as;
   std::string query;
   uint32_t dialect{kDialect};
-  uint32_t db_num_;
+  uint32_t db_num_{0};
   bool local_only{false};
   bool enable_partial_results{options::GetPreferPartialResults().GetValue()};
   bool enable_consistency{options::GetPreferConsistentResults().GetValue()};
   int k{0};
   std::optional<unsigned> ef;
   LimitParameter limit;
-  uint64_t timeout_ms;
+  uint64_t timeout_ms{0};
   bool no_content{false};
   FilterParseResults filter_parse_results;
   std::vector<ReturnAttribute> return_attributes;
@@ -200,11 +200,9 @@ struct SearchParameters {
   virtual const char* GetDesc() const { return "base"; }
   virtual SearchParameters& GetParameters() { return *this; }
 
-  SearchParameters(uint64_t timeout, grpc::CallbackServerContext* context,
-                   uint32_t db_num)
-      : timeout_ms(timeout),
-        cancellation_token(cancel::Make(timeout, context)),
-        db_num_(db_num) {}
+  SearchParameters() = default;
+  SearchParameters(uint64_t timeout_ms, cancel::Token token, uint32_t db_num)
+      : timeout_ms(timeout_ms), cancellation_token(token), db_num_(db_num) {}
 
   SearchParameters(SearchParameters&&) = default;
 };

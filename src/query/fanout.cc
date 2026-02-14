@@ -324,9 +324,9 @@ absl::Status PerformSearchFanoutAsync(
     }
   }
   if (has_local_target) {
-    VMSDK_ASSIGN_OR_RETURN(
-        auto local_parameters,
-        coordinator::GRPCSearchRequestToParameters(*request, nullptr));
+    auto local_parameters = std::make_unique<query::SearchParameters>();
+    VMSDK_RETURN_IF_ERROR(coordinator::GRPCSearchRequestToParameters(
+        *request, nullptr, local_parameters.get()));
     VMSDK_RETURN_IF_ERROR(query::SearchAsync(
         std::move(local_parameters), thread_pool,
         [tracker](absl::Status status,

@@ -267,13 +267,13 @@ query::SearchResponseCallback Service::MakeSearchCallback(
 }
 
 void Service::EnqueueSearchRequest(
-    std::unique_ptr<query::SearchParameters> vector_search_parameters,
+    std::unique_ptr<query::SearchParameters> search_operation,
     vmsdk::ThreadPool* reader_thread_pool, ValkeyModuleCtx* detached_ctx,
     SearchIndexPartitionResponse* response, grpc::ServerUnaryReactor* reactor,
     std::unique_ptr<vmsdk::StopWatch> latency_sample,
     std::optional<query::SortByParameter> sortby_parameter) {
   auto status = query::SearchAsync(
-      std::move(vector_search_parameters), reader_thread_pool,
+      std::move(search_operation), reader_thread_pool,
       MakeSearchCallback(response, reactor, std::move(latency_sample),
                          std::move(sortby_parameter)),
       query::SearchMode::kRemote);
@@ -293,10 +293,11 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
   GRPCSuspensionGuard guard(GRPCSuspender::Instance());
   auto latency_sample = SAMPLE_EVERY_N(100);
   grpc::ServerUnaryReactor* reactor = context->DefaultReactor();
-  auto vector_search_parameters =
-      GRPCSearchRequestToParameters(*request, context);
-  if (!vector_search_parameters.ok()) {
-    reactor->Finish(ToGrpcStatus(vector_search_parameters.status()));
+  auto search_operation = std::make_unique<query::SearchParameters>();
+  auto status =
+      GRPCSearchRequestToParameters(*request, context, search_operation.get());
+  if (!status.ok()) {
+    reactor->Finish(ToGrpcStatus(status));
     RecordSearchMetrics(true, std::move(latency_sample));
     return reactor;
   }
@@ -305,11 +306,10 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
   auto sortby_parameter = SortByFromGRPC(*request);
 
   // perform index consistency check (index fingerprint/version), required
-  auto schema =
-      SchemaManager::Instance()
-          .GetIndexSchema((*vector_search_parameters)->db_num,
-                          (*vector_search_parameters)->index_schema_name)
-          .value();
+  auto schema = SchemaManager::Instance()
+                    .GetIndexSchema(search_operation->db_num,
+                                    search_operation->index_schema_name)
+                    .value();
   auto index_consistency_status = PerformIndexConsistencyCheck(
       request->index_fingerprint_version(), schema);
   if (!index_consistency_status.ok()) {
@@ -329,16 +329,16 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
       return reactor;
     }
     // Consistency checks passed, now enqueue the search
-    EnqueueSearchRequest(std::move(*vector_search_parameters),
-                         reader_thread_pool_, detached_ctx_.get(), response,
-                         reactor, std::move(latency_sample), sortby_parameter);
+    EnqueueSearchRequest(std::move(search_operation), reader_thread_pool_,
+                         detached_ctx_.get(), response, reactor,
+                         std::move(latency_sample), sortby_parameter);
     return reactor;
   }
 
   // Non-consistency mode - proceed directly
-  EnqueueSearchRequest(std::move(*vector_search_parameters),
-                       reader_thread_pool_, detached_ctx_.get(), response,
-                       reactor, std::move(latency_sample), sortby_parameter);
+  EnqueueSearchRequest(std::move(search_operation), reader_thread_pool_,
+                       detached_ctx_.get(), response, reactor,
+                       std::move(latency_sample), sortby_parameter);
 
   return reactor;
 }

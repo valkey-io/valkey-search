@@ -117,22 +117,24 @@ void SerializeNeighbors(SearchIndexPartitionResponse* response,
 namespace {
 
 void RemoteResponseCallback(
-    std::vector<indexes::Neighbor>& neighbors,
-    size_t total_count,
+    std::vector<indexes::Neighbor>& neighbors, size_t total_count,
     const query::SearchParameters& parameters,
-    SearchIndexPartitionResponse* response,
-    grpc::ServerUnaryReactor* reactor,
+    SearchIndexPartitionResponse* response, grpc::ServerUnaryReactor* reactor,
     std::unique_ptr<vmsdk::StopWatch> latency_sample,
     const std::optional<query::SortByParameter>& sortby_parameter) {
   auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
-  const auto& attribute_data_type = parameters.index_schema->GetAttributeDataType();
+  const auto& attribute_data_type =
+      parameters.index_schema->GetAttributeDataType();
   size_t original_size = neighbors.size();
   std::optional<std::string> vector_identifier = std::nullopt;
   if (parameters.IsVectorQuery()) {
-    vector_identifier = parameters.index_schema->GetIdentifier(parameters.attribute_alias).value();
+    vector_identifier =
+        parameters.index_schema->GetIdentifier(parameters.attribute_alias)
+            .value();
   }
   query::ProcessNeighborsForReply(ctx.get(), attribute_data_type, neighbors,
-                                  parameters, vector_identifier, sortby_parameter);
+                                  parameters, vector_identifier,
+                                  sortby_parameter);
   // Adjust total_count based on modified neighbours
   size_t removed = original_size - neighbors.size();
   size_t adjusted_total_count =
@@ -168,11 +170,14 @@ class RemoteResponderSearch : public query::SearchParameters {
         sortby_parameter(std::move(sortby)) {}
 
   const char* GetDesc() const override { return "remote-responder"; }
-  std::vector<indexes::Neighbor>& GetNeighbors() override { return result.neighbors; }
+  std::vector<indexes::Neighbor>& GetNeighbors() override {
+    return result.neighbors;
+  }
 
   void OnComplete() override {
-    RemoteResponseCallback(result.neighbors, result.total_count, *this, response, reactor,
-                           std::move(latency_sample), sortby_parameter);
+    RemoteResponseCallback(result.neighbors, result.total_count, *this,
+                           response, reactor, std::move(latency_sample),
+                           sortby_parameter);
   }
 
   void OnCancelled() override {
@@ -249,23 +254,21 @@ query::SearchResponseCallback Service::MakeSearchCallback(
     // reflect current keyspace. Block if result keys have in-flight mutations.
     if (query::QueryHasTextPredicate(*parameters)) {
       auto remote_responder = std::make_unique<RemoteResponderSearch>(
-          response, reactor, std::move(latency_sample),
-          std::move(*result), std::move(parameters),
-          sortby_parameter);
+          response, reactor, std::move(latency_sample), std::move(*result),
+          std::move(parameters), sortby_parameter);
       auto retry_ctx = std::make_shared<query::InFlightRetryContext>(
           std::move(remote_responder));
       retry_ctx->ScheduleOnMainThread();
     } else {
-      vmsdk::RunByMain([parameters = std::move(parameters), response, reactor,
-                        latency_sample = std::move(latency_sample),
-                        result = std::move(result),
-                        total_count = result->total_count,
-                        sortby_parameter =
-                            std::move(sortby_parameter)]() mutable {
-        RemoteResponseCallback(result->neighbors, result->total_count, *parameters, response,
-                               reactor, std::move(latency_sample),
-                               sortby_parameter);
-      });
+      vmsdk::RunByMain(
+          [parameters = std::move(parameters), response, reactor,
+           latency_sample = std::move(latency_sample),
+           result = std::move(result), total_count = result->total_count,
+           sortby_parameter = std::move(sortby_parameter)]() mutable {
+            RemoteResponseCallback(result->neighbors, result->total_count,
+                                   *parameters, response, reactor,
+                                   std::move(latency_sample), sortby_parameter);
+          });
     }
   };
 }

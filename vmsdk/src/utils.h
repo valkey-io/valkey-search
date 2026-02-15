@@ -30,33 +30,42 @@ enum class TimeType {
 
 class StopWatch {
  public:
-  // Default constructor uses wall-clock time
-  StopWatch() : StopWatch(TimeType::kWallClock) {}
-
-  // Constructor that allows specifying the time type
-  explicit StopWatch(TimeType type) : time_type_(type) { Reset(); }
+  explicit StopWatch(TimeType type = TimeType::kWallClock) : time_type_(type) {
+    Reset();
+  }
 
   ~StopWatch() = default;
 
   void Reset() {
-    if (time_type_ == TimeType::kWallClock) {
-      start_time_ = absl::Now();
-    } else {
-      start_thread_time_ns_ = GetThreadTimeNanos();
+    switch (time_type_) {
+      case TimeType::kWallClock:
+        start_time_ = absl::Now();
+        break;
+      case TimeType::kThreadCpu:
+        start_thread_time_ns_ = GetThreadTimeNanos();
+        break;
+      default:
+        CHECK(false) << "Unexpected TimeType value";
+        break;
     }
   }
 
   absl::Duration Duration() const {
-    if (time_type_ == TimeType::kWallClock) {
-      return absl::Now() - start_time_;
-    } else {
-      uint64_t current_ns = GetThreadTimeNanos();
-      return absl::Nanoseconds(current_ns - start_thread_time_ns_);
+    switch (time_type_) {
+      case TimeType::kWallClock:
+        return absl::Now() - start_time_;
+      case TimeType::kThreadCpu: {
+        uint64_t current_ns = GetThreadTimeNanos();
+        return absl::Nanoseconds(current_ns - start_thread_time_ns_);
+      }
+      default:
+        CHECK(false) << "Unexpected TimeType value";
+        return absl::ZeroDuration();
     }
   }
 
  private:
-  TimeType time_type_;
+  TimeType time_type_{TimeType::kWallClock};
   absl::Time start_time_;             // Used for wall-clock time
   uint64_t start_thread_time_ns_{0};  // Used for thread CPU time
 

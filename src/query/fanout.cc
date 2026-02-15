@@ -116,10 +116,7 @@ struct SearchPartitionResultsTracker {
     absl::MutexLock lock(&mutex);
 
     uint64_t shard_time = response.search_execution_time_us();
-    if (shard_time > max_search_time_us) {
-      max_search_time_us = shard_time;
-    }
-
+    max_search_time_us = std::max(max_search_time_us, shard_time);
     accumulated_total_count.fetch_add(response.total_count(),
                                       std::memory_order_relaxed);
     while (response.neighbors_size() > 0) {

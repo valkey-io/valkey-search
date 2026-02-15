@@ -766,20 +766,14 @@ absl::StatusOr<SearchResult> Search(const SearchParameters &parameters,
   // Measure thread CPU time (excludes interrupts, context switches)
   vmsdk::StopWatch timer(vmsdk::TimeType::kThreadCpu);
 
-  auto result =
-      MaybeAddIndexedContent(DoSearch(parameters, search_mode), parameters);
-
+  VMSDK_ASSIGN_OR_RETURN(
+      auto result,
+      MaybeAddIndexedContent(DoSearch(parameters, search_mode), parameters));
   uint64_t search_execution_time_us =
       absl::ToInt64Microseconds(timer.Duration());
 
-  if (!result.ok()) {
-    return result.status();
-  }
-
-  size_t total_count = result.value().size();
-  // return SearchResult(total_count, std::move(result.value()), parameters);
-  auto search_result =
-      SearchResult(total_count, std::move(result.value()), parameters);
+  size_t total_count = result.size();
+  auto search_result = SearchResult(total_count, std::move(result), parameters);
   search_result.search_execution_time_us = search_execution_time_us;
   for (auto &n : search_result.neighbors) {
     n.sequence_number =

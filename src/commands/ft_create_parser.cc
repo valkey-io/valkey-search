@@ -57,6 +57,7 @@ const absl::string_view kSeparatorParam{"SEPARATOR"};
 const absl::string_view kCaseSensitiveParam{"CASESENSITIVE"};
 const absl::string_view kScoreParam{"SCORE"};
 constexpr absl::string_view kSchemaParam{"SCHEMA"};
+constexpr absl::string_view kSkipInitialScan("SKIPINITIALSCAN");
 constexpr size_t kDefaultAttributesCountLimit{1000};
 constexpr int kDefaultDimensionsCountLimit{32768};
 constexpr int kDefaultPrefixesCountLimit{8};
@@ -642,6 +643,12 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
 
     // Try LANGUAGE parameter
     VMSDK_RETURN_IF_ERROR(ParseLanguage(itr, index_schema_proto));
+
+    VMSDK_ASSIGN_OR_RETURN(
+        res, vmsdk::IsParamKeyMatch(kSkipInitialScan, false, itr));
+    if (res) {
+      index_schema_proto.set_skip_initial_scan(true);
+    }
 
     // Try unsupported field parameters
     VMSDK_ASSIGN_OR_RETURN(

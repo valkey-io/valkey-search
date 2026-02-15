@@ -31,10 +31,34 @@
 
 namespace valkey_search::coordinator {
 
+void SortByToGRPC(const std::optional<query::SortByParameter>& sortby,
+                  SearchIndexPartitionRequest* request) {
+  if (!sortby.has_value()) {
+    return;
+  }
+  auto* proto = request->mutable_sortby();
+  proto->set_field(sortby->field);
+  proto->set_order(sortby->order == query::SortOrder::kAscending
+                       ? coordinator::SORT_ORDER_ASCENDING
+                       : coordinator::SORT_ORDER_DESCENDING);
+}
+
+std::optional<query::SortByParameter> SortByFromGRPC(
+    const SearchIndexPartitionRequest& request) {
+  if (!request.has_sortby()) {
+    return std::nullopt;
+  }
+  query::SortByParameter sortby;
+  sortby.field = request.sortby().field();
+  sortby.order = request.sortby().order() == coordinator::SORT_ORDER_ASCENDING
+                     ? query::SortOrder::kAscending
+                     : query::SortOrder::kDescending;
+  return sortby;
+}
+
 absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
     const Predicate& predicate, std::shared_ptr<IndexSchema> index_schema,
-    absl::flat_hash_set<std::string>& attribute_identifiers,
-    bool& has_text_predicate) {
+    absl::flat_hash_set<std::string>& attribute_identifiers) {
   switch (predicate.predicate_case()) {
     case Predicate::kTag: {
       VMSDK_ASSIGN_OR_RETURN(
@@ -88,8 +112,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
       for (const auto& child_predicate : predicate.and_().children()) {
         VMSDK_ASSIGN_OR_RETURN(
             auto child, GRPCPredicateToPredicate(child_predicate, index_schema,
-                                                 attribute_identifiers,
-                                                 has_text_predicate));
+                                                 attribute_identifiers));
         children.push_back(std::move(child));
       }
       // Extract slop and inorder if present
@@ -109,8 +132,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
       for (const auto& child_predicate : predicate.or_().children()) {
         VMSDK_ASSIGN_OR_RETURN(
             auto child, GRPCPredicateToPredicate(child_predicate, index_schema,
-                                                 attribute_identifiers,
-                                                 has_text_predicate));
+                                                 attribute_identifiers));
         children.push_back(std::move(child));
       }
       return std::make_unique<query::ComposedPredicate>(
@@ -120,11 +142,10 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
       VMSDK_ASSIGN_OR_RETURN(
           auto predicate,
           GRPCPredicateToPredicate(predicate.negate().predicate(), index_schema,
-                                   attribute_identifiers, has_text_predicate));
+                                   attribute_identifiers));
       return std::make_unique<query::NegatePredicate>(std::move(predicate));
     }
     case Predicate::kTerm: {
-      has_text_predicate = true;
       auto text_index_schema = index_schema->GetTextIndexSchema();
       if (!text_index_schema) {
         return absl::InvalidArgumentError("Index does not have any text field");
@@ -137,7 +158,6 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
           predicate.term().content(), predicate.term().exact());
     }
     case Predicate::kPrefix: {
-      has_text_predicate = true;
       auto text_index_schema = index_schema->GetTextIndexSchema();
       if (!text_index_schema) {
         return absl::InvalidArgumentError("Index does not have any text field");
@@ -150,7 +170,6 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
           predicate.prefix().content());
     }
     case Predicate::kSuffix: {
-      has_text_predicate = true;
       auto text_index_schema = index_schema->GetTextIndexSchema();
       if (!text_index_schema) {
         return absl::InvalidArgumentError("Index does not have any text field");
@@ -163,7 +182,6 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
           predicate.suffix().content());
     }
     case Predicate::kInfix: {
-      has_text_predicate = true;
       auto text_index_schema = index_schema->GetTextIndexSchema();
       if (!text_index_schema) {
         return absl::InvalidArgumentError("Index does not have any text field");
@@ -176,7 +194,6 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
           predicate.infix().content());
     }
     case Predicate::kFuzzy: {
-      has_text_predicate = true;
       auto text_index_schema = index_schema->GetTextIndexSchema();
       if (!text_index_schema) {
         return absl::InvalidArgumentError("Index does not have any text field");
@@ -226,8 +243,7 @@ GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request,
         parameters->filter_parse_results.root_predicate,
         GRPCPredicateToPredicate(
             request.root_filter_predicate(), parameters->index_schema,
-            parameters->filter_parse_results.filter_identifiers,
-            parameters->filter_parse_results.has_text_predicate));
+            parameters->filter_parse_results.filter_identifiers));
   }
   for (auto& return_parameter : request.return_parameters()) {
     parameters->return_attributes.emplace_back(query::ReturnAttribute(
@@ -355,7 +371,8 @@ std::unique_ptr<Predicate> PredicateToGRPCPredicate(
 }
 
 std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
-    const query::SearchParameters& parameters) {
+    const query::SearchParameters& parameters,
+    const std::optional<query::SortByParameter>& sortby_parameter) {
   auto request = std::make_unique<SearchIndexPartitionRequest>();
   request->set_db_num(parameters.db_num);
   request->set_index_schema_name(parameters.index_schema_name);
@@ -394,6 +411,7 @@ std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
   request->set_slot_fingerprint(parameters.slot_fingerprint);
   request->set_query_operations(
       static_cast<uint64_t>(parameters.filter_parse_results.query_operations));
+  SortByToGRPC(sortby_parameter, request.get());
   return request;
 }
 

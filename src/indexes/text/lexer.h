@@ -57,6 +57,7 @@ struct Lexer {
     return stop_words_set_.contains(lowercase_word);
   }
   sb_stemmer* GetStemmer() const;
+  std::string NormalizeLowerCase(absl::string_view str) const;
 
  private:
   data_model::Language language_;

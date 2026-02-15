@@ -69,7 +69,7 @@ class AttributeDataType {
            VALKEYMODULE_NOTIFY_EVICTED;
   };
   virtual absl::StatusOr<RecordsMap> FetchAllRecords(
-      ValkeyModuleCtx *ctx, const std::string &vector_identifier,
+      ValkeyModuleCtx *ctx, const std::optional<std::string> &vector_identifier,
       ValkeyModuleKey *open_key, absl::string_view key,
       const absl::flat_hash_set<absl::string_view> &identifiers) const = 0;
   virtual data_model::AttributeDataType ToProto() const = 0;
@@ -94,7 +94,7 @@ class HashAttributeDataType : public AttributeDataType {
   }
   inline std::string ToString() const override { return "HASH"; }
   absl::StatusOr<RecordsMap> FetchAllRecords(
-      ValkeyModuleCtx *ctx, const std::string &vector_identifier,
+      ValkeyModuleCtx *ctx, const std::optional<std::string> &vector_identifier,
       ValkeyModuleKey *open_key, absl::string_view key,
       const absl::flat_hash_set<absl::string_view> &identifiers) const override;
   bool IsProperType(ValkeyModuleKey *key) const override {
@@ -120,7 +120,7 @@ class JsonAttributeDataType : public AttributeDataType {
   }
   inline std::string ToString() const override { return "JSON"; }
   absl::StatusOr<RecordsMap> FetchAllRecords(
-      ValkeyModuleCtx *ctx, const std::string &vector_identifier,
+      ValkeyModuleCtx *ctx, const std::optional<std::string> &vector_identifier,
       ValkeyModuleKey *open_key, absl::string_view key,
       const absl::flat_hash_set<absl::string_view> &identifiers) const override;
   bool IsProperType(ValkeyModuleKey *key) const override {

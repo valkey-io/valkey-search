@@ -27,6 +27,7 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
+#include "src/indexes/text/lexer.h"
 #include "src/query/predicate.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -434,7 +435,6 @@ absl::StatusOr<FilterParseResults> FilterParser::Parse() {
     return results;
   }
   filter_identifiers_.clear();
-  has_text_predicate_ = false;
   pos_ = 0;
   VMSDK_ASSIGN_OR_RETURN(auto parse_result, ParseExpression(0));
   if (!IsEnd()) {
@@ -444,7 +444,6 @@ absl::StatusOr<FilterParseResults> FilterParser::Parse() {
   FlagNestedComposedPredicate(results.root_predicate);
   results.filter_identifiers.swap(filter_identifiers_);
   results.query_operations = query_operations_;
-  results.has_text_predicate = has_text_predicate_;
   // Only generate query syntax tree output if debug logging is enabled.
   if (valkey_search::options::GetLogLevel().GetValue() ==
       static_cast<int>(LogLevel::kDebug)) {
@@ -605,7 +604,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
   if (processed_content.empty()) {
     return FilterParser::TokenResult{nullptr, false};
   }
-  std::string token = absl::AsciiStrToLower(processed_content);
+  std::string token = lexer.NormalizeLowerCase(processed_content);
   FieldMaskPredicate field_mask;
   VMSDK_RETURN_IF_ERROR(
       SetupTextFieldConfiguration(field_mask, field_or_default, false));
@@ -704,7 +703,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     processed_content.push_back(ch);
     ++pos_;
   }
-  std::string token = absl::AsciiStrToLower(processed_content);
+  std::string token = lexer.NormalizeLowerCase(processed_content);
   FieldMaskPredicate field_mask;
   // Build predicate directly based on detected pattern
   if (leading_percent_count > 0) {
@@ -885,7 +884,6 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
     pred = std::move(terms[0]);
     node_count_++;
   }
-  has_text_predicate_ = true;  // Flag that we parsed a text predicate
   return pred;
 }
 

@@ -23,6 +23,7 @@
 #include "absl/random/random.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
 #include "absl/synchronization/mutex.h"
 #include "grpcpp/support/status.h"
@@ -52,7 +53,8 @@ namespace valkey_search::query::fanout {
 CONTROLLED_BOOLEAN(ForceInvalidSlotFingerprint, false);
 
 struct NeighborComparator {
-  bool operator()(indexes::Neighbor &a, indexes::Neighbor &b) const {
+  bool operator()(const indexes::Neighbor &a,
+                  const indexes::Neighbor &b) const {
     // Primary sort: by distance
     // We use a max heap, to pop off the furthest vector during aggregation.
     if (a.distance != b.distance) {
@@ -77,6 +79,7 @@ struct SearchPartitionResultsTracker {
   int outstanding_requests ABSL_GUARDED_BY(mutex);
   query::SearchResponseCallback callback;
   std::unique_ptr<SearchParameters> parameters ABSL_GUARDED_BY(mutex);
+  std::atomic_bool reached_oom{false};
   std::atomic_bool consistency_failed{false};
   std::atomic<size_t> accumulated_total_count{0};
 
@@ -252,14 +255,29 @@ absl::Status PerformSearchFanoutAsync(
     std::vector<vmsdk::cluster_map::NodeInfo> &search_targets,
     coordinator::ClientPool *coordinator_client_pool,
     std::unique_ptr<SearchParameters> parameters,
-    vmsdk::ThreadPool *thread_pool, query::SearchResponseCallback callback) {
-  auto request = coordinator::ParametersToGRPCSearchRequest(*parameters);
+    vmsdk::ThreadPool *thread_pool, query::SearchResponseCallback callback,
+    std::optional<query::SortByParameter> sortby_parameter) {
+  auto request =
+      coordinator::ParametersToGRPCSearchRequest(*parameters, sortby_parameter);
   if (parameters->IsNonVectorQuery()) {
     // For non vector, use the LIMIT based range. Ensure we fetch enough
     // results to cover offset + number.
     request->mutable_limit()->set_first_index(0);
-    request->mutable_limit()->set_number(parameters->limit.first_index +
-                                         parameters->limit.number);
+    // For SORTBY queries, we need to fetch more results from each shard
+    // because the global top N might come from any shard. Multiply by the
+    // number of shards to ensure we get enough results.
+    uint64_t limit_number =
+        parameters->limit.first_index + parameters->limit.number;
+    if (sortby_parameter.has_value()) {
+      // Fetch enough results from each shard to cover the global top N
+      // In the worst case, all top N results could come from a single shard,
+      // so we need to fetch at least N from each shard.
+      limit_number = std::max(
+          limit_number,
+          static_cast<uint64_t>(search_targets.size()) *
+              (parameters->limit.first_index + parameters->limit.number));
+    }
+    request->mutable_limit()->set_number(limit_number);
   } else {
     // Vector searches: Use k as the limit to find top k results. In worst case,
     // all top k results are from a single shard, so no need to fetch more than
@@ -297,7 +315,9 @@ absl::Status PerformSearchFanoutAsync(
     std::string target_address =
         absl::StrCat(node.socket_address.primary_endpoint, ":",
                      coordinator::GetCoordinatorPort(node.socket_address.port));
-    if (search_targets.size() >= 30 && thread_pool->Size() > 1) {
+    if (search_targets.size() >=
+            valkey_search::options::GetAsyncFanoutThreshold().GetValue() &&
+        thread_pool->Size() > 1) {
       PerformRemoteSearchRequestAsync(std::move(request_copy), target_address,
                                       coordinator_client_pool, tracker,
                                       thread_pool);

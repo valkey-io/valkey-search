@@ -10,7 +10,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -99,7 +98,11 @@ inline std::ostream& operator<<(std::ostream& os, const ReturnAttribute& r) {
 struct SearchParameters;
 struct SerializationRange;
 
+//
+// The output of the query pipeline
+//
 struct SearchResult {
+  absl::Status status;
   size_t total_count;
   std::vector<indexes::Neighbor> neighbors;
   // True if neighbors were limited using LIMIT count with a buffer multiplier.
@@ -119,6 +122,34 @@ struct SearchResult {
  private:
   void TrimResults(std::vector<indexes::Neighbor>& neighbors,
                    const SearchParameters& parameters);
+};
+
+//
+// Describes the Content Processing that a query requires. Each
+// of these cases has different implications for how the query is processed
+// and whether it can run exclusively in the background or needs to fetch data
+// using the mainthread.
+//
+enum ContentProcessing {
+  //
+  // These first two cases do not require any validation of mutation, nor
+  // any content be fetched from the database. Thus the entire processing
+  // can be done on the background thread and the notification of completion
+  // is called from a background thread. QueryCompleteBackground
+  //
+  kNoContent,         // No Content needed.
+  kContentAvailable,  // Content needed, but can be sourced by indexes
+                      // (reserved)
+  //
+  // These two cases require content only available to the mainthread.
+  // Completion is done from the mainthread. QueryCompletedMainThread
+  // Because a switch to the mainthread is required, the keys must be
+  // revalidated in case of a mutation. The difference between the two
+  // cases is whether that validation process could contend with mutations
+  // from a background thread.
+  //
+  kContentRequired,     // Content, but no contention check is needed
+  kContentionRequired,  // Content and contention check is required.
 };
 
 struct SearchParameters {
@@ -200,6 +231,21 @@ struct SearchParameters {
   virtual const char* GetDesc() const { return "base"; }
   virtual SearchParameters& GetParameters() { return *this; }
 
+  ContentProcessing GetContentProcessing() const;
+
+  //
+  // Called when the query is complete and results are ready to be sent back to
+  // the client.
+  //
+  // Note form the parameter, that owernship is specifically passed back to the
+  // caller. Paranoid implementations of these functions could start with
+  // the code: CHECK(this == self.get());
+  //
+  virtual void QueryCompleteBackground(
+      std::unique_ptr<SearchParameters> self) = 0;
+  virtual void QueryCompleteMainThread(
+      std::unique_ptr<SearchParameters> self) = 0;
+
   SearchParameters() = default;
   SearchParameters(uint64_t timeout_ms, cancel::Token token, uint32_t db_num)
       : timeout_ms(timeout_ms), cancellation_token(token), db_num_(db_num) {}
@@ -222,7 +268,6 @@ absl::Status Search(SearchParameters& parameters, SearchMode search_mode);
 
 absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
                          vmsdk::ThreadPool* thread_pool,
-                         SearchResponseCallback callback,
                          SearchMode search_mode);
 
 absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(

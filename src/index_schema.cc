@@ -864,6 +864,7 @@ void IndexSchema::ProcessSingleMutationAsync(ValkeyModuleCtx *ctx,
     }
     SyncProcessMutation(ctx, mutation_record.value(), key);
   } while (true);
+
   absl::MutexLock lock(&stats_.mutex_);
   --stats_.mutation_queue_size_;
   if (ABSL_PREDICT_FALSE(from_backfill)) {

@@ -470,6 +470,14 @@ class UnitTestSearchParameters : public query::SearchParameters {
     db_num = 0;
     cancellation_token = cancel::Make(timeout_ms, nullptr);
   }
+  void QueryCompleteBackground(
+      std::unique_ptr<SearchParameters> self) override {
+    CHECK(false);
+  }
+  void QueryCompleteMainThread(
+      std::unique_ptr<SearchParameters> self) override {
+    CHECK(false);
+  }
 };
 
 }  // namespace valkey_search

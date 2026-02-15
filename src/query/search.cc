@@ -779,13 +779,12 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
 
 absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
                          vmsdk::ThreadPool *thread_pool,
-                         SearchResponseCallback callback,
                          SearchMode search_mode) {
   thread_pool->Schedule(
-      [parameters = std::move(parameters), callback = std::move(callback),
-       search_mode]() mutable {
+      [parameters = std::move(parameters), search_mode]() mutable {
         auto res = Search(*parameters, search_mode);
-        callback(res, std::move(parameters));
+        parameters->search_result.status = res;
+        parameters->QueryCompleteBackground(std::move(parameters));
       },
       vmsdk::ThreadPool::Priority::kHigh);
   return absl::OkStatus();
@@ -1059,6 +1058,17 @@ absl::Status query::SearchParameters::PostParseQueryString() {
   }
 
   return absl::OkStatus();
+}
+
+ContentProcessing SearchParameters::GetContentProcessing() const {
+  if (no_content) {
+    return kNoContent;
+  }
+  // Currently, ContentAvailable isn't detected. Future use case.
+  if (query::QueryHasTextPredicate(*this)) {
+    return kContentionRequired;
+  }
+  return kContentRequired;
 }
 
 }  // namespace valkey_search::query

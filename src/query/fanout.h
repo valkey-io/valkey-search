@@ -9,14 +9,10 @@
 #define VALKEYSEARCH_SRC_QUERY_FANOUT_H_
 
 #include <memory>
-#include <ostream>
-#include <string>
 #include <vector>
 
 #include "absl/status/status.h"
 #include "src/coordinator/client_pool.h"
-#include "src/coordinator/coordinator.pb.h"
-#include "src/index_schema.h"
 #include "src/query/search.h"
 #include "vmsdk/src/cluster_map.h"
 #include "vmsdk/src/thread_pool.h"
@@ -29,7 +25,7 @@ absl::Status PerformSearchFanoutAsync(
     std::vector<vmsdk::cluster_map::NodeInfo>& search_targets,
     coordinator::ClientPool* coordinator_client_pool,
     std::unique_ptr<query::SearchParameters> parameters,
-    vmsdk::ThreadPool* thread_pool, query::SearchResponseCallback callback,
+    vmsdk::ThreadPool* thread_pool,
     std::optional<query::SortByParameter> sortby_parameter = std::nullopt);
 
 // Utility function to check if system is under low utilization

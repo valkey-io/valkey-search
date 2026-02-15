@@ -19,11 +19,8 @@
 #include <vector>
 
 #include "absl/base/thread_annotations.h"
-#include "absl/container/flat_hash_map.h"
-#include "absl/random/random.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
-#include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
 #include "absl/synchronization/mutex.h"
 #include "grpcpp/support/status.h"
@@ -33,9 +30,7 @@
 #include "src/coordinator/search_converter.h"
 #include "src/coordinator/util.h"
 #include "src/indexes/vector_base.h"
-#include "src/metrics.h"
 #include "src/query/inflight_retry.h"
-#include "src/query/response_generator.h"
 #include "src/query/search.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
@@ -77,17 +72,14 @@ struct SearchPartitionResultsTracker {
                       NeighborComparator>
       results ABSL_GUARDED_BY(mutex);
   int outstanding_requests ABSL_GUARDED_BY(mutex);
-  query::SearchResponseCallback callback;
   std::unique_ptr<SearchParameters> parameters ABSL_GUARDED_BY(mutex);
   std::atomic_bool reached_oom{false};
   std::atomic_bool consistency_failed{false};
   std::atomic<size_t> accumulated_total_count{0};
 
   SearchPartitionResultsTracker(int outstanding_requests, int k,
-                                query::SearchResponseCallback callback,
                                 std::unique_ptr<SearchParameters> parameters)
       : outstanding_requests(outstanding_requests),
-        callback(std::move(callback)),
         parameters(std::move(parameters)) {}
 
   void HandleResponse(coordinator::SearchIndexPartitionResponse &response,
@@ -185,7 +177,8 @@ struct SearchPartitionResultsTracker {
           accumulated_total_count, std::move(neighbors), *parameters);
       status = absl::OkStatus();
     }
-    callback(status, std::move(parameters));
+    parameters->search_result.status = status;
+    parameters->QueryCompleteBackground(std::move(parameters));
   }
 };
 
@@ -194,24 +187,22 @@ struct SearchPartitionResultsTracker {
 class LocalResponderSearch : public query::SearchParameters {
  public:
   std::shared_ptr<SearchPartitionResultsTracker> tracker;
-  size_t total_count;
+  size_t total_count{0};
 
-  LocalResponderSearch(std::shared_ptr<SearchPartitionResultsTracker> trk,
-                       std::unique_ptr<SearchParameters> &&params, size_t count)
-      : query::SearchParameters(std::move(*params)),
-        tracker(std::move(trk)),
-        total_count(count) {}
-
-  const char *GetDesc() const override { return "local-responder"; }
-
-  void OnComplete(std::vector<indexes::Neighbor> &neighbors) override {
-    tracker->AddResults(neighbors);
-    tracker->AddTotalCount(total_count);
+  void QueryCompleteMainThread(
+      std::unique_ptr<SearchParameters> self) override {
+    QueryCompleteBackground(std::move(self));
   }
 
-  void OnCancelled() override {
-    if (enable_partial_results) {
-      OnComplete(search_result.neighbors);
+  void QueryCompleteBackground(
+      std::unique_ptr<SearchParameters> self) override {
+    if (search_result.status.ok() || enable_partial_results) {
+      tracker->AddResults(search_result.neighbors);
+      tracker->AddTotalCount(total_count);
+    } else {
+      VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
+          << "Error during local handling of FT.SEARCH: "
+          << search_result.status.message();
     }
   }
 };
@@ -252,7 +243,7 @@ absl::Status PerformSearchFanoutAsync(
     std::vector<vmsdk::cluster_map::NodeInfo> &search_targets,
     coordinator::ClientPool *coordinator_client_pool,
     std::unique_ptr<SearchParameters> parameters,
-    vmsdk::ThreadPool *thread_pool, query::SearchResponseCallback callback,
+    vmsdk::ThreadPool *thread_pool,
     std::optional<query::SortByParameter> sortby_parameter) {
   auto request =
       coordinator::ParametersToGRPCSearchRequest(*parameters, sortby_parameter);
@@ -283,8 +274,7 @@ absl::Status PerformSearchFanoutAsync(
     request->mutable_limit()->set_number(parameters->k);
   }
   auto tracker = std::make_shared<SearchPartitionResultsTracker>(
-      search_targets.size(), parameters->k, std::move(callback),
-      std::move(parameters));
+      search_targets.size(), parameters->k, std::move(parameters));
   bool has_local_target = false;
   for (auto &node : search_targets) {
     auto detached_ctx = vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx);
@@ -324,36 +314,12 @@ absl::Status PerformSearchFanoutAsync(
     }
   }
   if (has_local_target) {
-    auto local_parameters = std::make_unique<query::SearchParameters>();
+    auto local_parameters = std::make_unique<LocalResponderSearch>();
     VMSDK_RETURN_IF_ERROR(coordinator::GRPCSearchRequestToParameters(
         *request, nullptr, local_parameters.get()));
-    VMSDK_RETURN_IF_ERROR(query::SearchAsync(
-        std::move(local_parameters), thread_pool,
-        [tracker](absl::Status status,
-                  std::unique_ptr<SearchParameters> parameters) {
-          if (status.ok()) {
-            // Text predicate evaluation requires main thread to ensure text
-            // indexes reflect current keyspace. Block if result keys have
-            // in-flight mutations.
-            if (!parameters->no_content &&
-                query::QueryHasTextPredicate(*parameters)) {
-              auto local_responder = std::make_unique<LocalResponderSearch>(
-                  tracker, std::move(parameters),
-                  parameters->search_result.total_count);
-              auto retry_ctx = std::make_shared<query::InFlightRetryContext>(
-                  std::move(local_responder));
-              retry_ctx->ScheduleOnMainThread();
-              return;
-            }
-            tracker->AddResults(parameters->search_result.neighbors);
-            tracker->AddTotalCount(parameters->search_result.total_count);
-          } else {
-            VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
-                << "Error during local handling of FT.SEARCH: "
-                << status.message();
-          }
-        },
-        SearchMode::kLocal))
+    local_parameters->tracker = tracker;
+    VMSDK_RETURN_IF_ERROR(query::SearchAsync(std::move(local_parameters),
+                                             thread_pool, SearchMode::kLocal))
         << "Failed to handle FT.SEARCH locally during fan-out";
   }
   return absl::OkStatus();

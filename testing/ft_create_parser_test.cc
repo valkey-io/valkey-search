@@ -59,6 +59,7 @@ struct FTCreateParameters {
   float score{1.0};
   absl::string_view score_field;
   absl::string_view payload_field;
+  bool skip_initial_scan{false};
   std::vector<AttributeParameters> attributes;
   ExpectedPerIndexTextParameters per_index_text_params;
 };
@@ -118,6 +119,8 @@ TEST_P(FTCreateParserTest, ParseParams) {
     EXPECT_EQ(prefixes, test_case.expected.prefixes);
     EXPECT_EQ(index_schema_proto->attributes().size(),
               test_case.expected.attributes.size());
+    EXPECT_EQ(index_schema_proto->skip_initial_scan(),
+              test_case.expected.skip_initial_scan);
 
     // Verify schema-level text parameters if we have text fields
     bool has_text_fields = false;
@@ -644,6 +647,24 @@ INSTANTIATE_TEST_SUITE_P(
              }},
              .expected = {.index_schema_name = "idx1",
                           .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                              .identifier = "hash_field1",
+                              .attribute_alias = "hash_field11",
+                              .indexer_type = indexes::IndexerType::kTag,
+                          }}},
+         },
+         {
+             .test_name = "happy_path_skip_initial_scan",
+             .success = true,
+             .command_str = "idx1 on HASH SKIPINITIALSCAN SCHEMA hash_field1 as "
+                            "hash_field11 tag ",
+             .tag_parameters = {{
+                 .separator = ",",
+                 .case_sensitive = false,
+             }},
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .skip_initial_scan = true,
                           .attributes = {{
                               .identifier = "hash_field1",
                               .attribute_alias = "hash_field11",

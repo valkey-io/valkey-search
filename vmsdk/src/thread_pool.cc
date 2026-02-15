@@ -73,6 +73,9 @@ absl::StatusOr<double> ThreadPool::GetAvgCPUPercentage() {
     if (!err.ok()) {
       return;
     }
+    if (!thread->thread_monitor_) {
+      return;
+    }
     auto status = thread->thread_monitor_->GetThreadCPUPercentage();
     if (!status.ok()) {
       err = status.status();

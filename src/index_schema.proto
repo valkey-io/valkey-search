@@ -35,6 +35,7 @@ message IndexSchema {
   bool with_offsets = 10;
   repeated string stop_words = 11;
   uint32 min_stem_size = 12;
+  bool skip_initial_scan = 13;
 }
 
 

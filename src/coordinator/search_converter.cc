@@ -254,6 +254,7 @@ absl::Status GRPCSearchRequestToParameters(
   parameters->slot_fingerprint = request.slot_fingerprint();
   parameters->filter_parse_results.query_operations =
       static_cast<QueryOperations>(request.query_operations());
+  parameters->sortby_parameter = SortByFromGRPC(request);
   return absl::OkStatus();
 }
 
@@ -371,8 +372,7 @@ std::unique_ptr<Predicate> PredicateToGRPCPredicate(
 }
 
 std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
-    const query::SearchParameters& parameters,
-    const std::optional<query::SortByParameter>& sortby_parameter) {
+    const query::SearchParameters& parameters) {
   auto request = std::make_unique<SearchIndexPartitionRequest>();
   request->set_db_num(parameters.db_num);
   request->set_index_schema_name(parameters.index_schema_name);
@@ -411,7 +411,7 @@ std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
   request->set_slot_fingerprint(parameters.slot_fingerprint);
   request->set_query_operations(
       static_cast<uint64_t>(parameters.filter_parse_results.query_operations));
-  SortByToGRPC(sortby_parameter, request.get());
+  SortByToGRPC(parameters.sortby_parameter, request.get());
   return request;
 }
 

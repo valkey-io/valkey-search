@@ -213,26 +213,13 @@ struct SearchParameters {
   // classes if needed. The default implementation returns false.
   virtual bool RequiresCompleteResults() const { return false; }
 
-  // Returns additional identifiers that need to be fetched for sorting.
-  // Override in derived classes to provide sortby field identifier.
-  virtual std::optional<std::string> GetSortByIdentifier() const {
-    return std::nullopt;
-  }
-
   virtual absl::Status PreParseQueryString();
   virtual absl::Status PostParseQueryString();
-  // In-flight retry completion callbacks. Override in derived classes to
-  // handle completion of searches that were blocked waiting for in-flight
-  // mutations. Default implementations do nothing (for basic SearchParameters
-  // used in retry contexts).
-  virtual void OnComplete(std::vector<indexes::Neighbor>& neighbors) {}
-  virtual void OnCancelled() {}
-  // Description for debugging in-flight retry code paths.
-  virtual const char* GetDesc() const { return "base"; }
-  virtual SearchParameters& GetParameters() { return *this; }
-
   ContentProcessing GetContentProcessing() const;
 
+  // The sortby parameter, populated by FT.SEARCH SORTBY clause or
+  // deserialized from gRPC requests. Available to all query operations.
+  std::optional<SortByParameter> sortby_parameter;
   //
   // Called when the query is complete and results are ready to be sent back to
   // the client.
@@ -245,6 +232,10 @@ struct SearchParameters {
       std::unique_ptr<SearchParameters> self) = 0;
   virtual void QueryCompleteMainThread(
       std::unique_ptr<SearchParameters> self) = 0;
+
+  // Tracks how many times this query has been blocked during content
+  // resolution due to contention with in-flight mutations.
+  unsigned int content_resolution_blocked_{0};
 
   SearchParameters() = default;
   SearchParameters(uint64_t timeout_ms, cancel::Token token, uint32_t db_num)

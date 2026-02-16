@@ -32,8 +32,6 @@
 #include "src/index_schema.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
-#include "src/query/inflight_retry.h"
-#include "src/query/response_generator.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
@@ -120,7 +118,6 @@ class RemoteResponderSearch : public query::SearchParameters {
   SearchIndexPartitionResponse* response;
   grpc::ServerUnaryReactor* reactor;
   std::unique_ptr<vmsdk::StopWatch> latency_sample;
-  std::optional<query::SortByParameter> sortby_parameter;
   size_t total_count;
   void QueryCompleteBackground(
       std::unique_ptr<SearchParameters> self) override {
@@ -141,25 +138,13 @@ class RemoteResponderSearch : public query::SearchParameters {
       return;
     }
     CHECK(!no_content);  // Shouldn't be here!
-    auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
-    const auto& attribute_data_type = index_schema->GetAttributeDataType();
-    size_t original_size = search_result.neighbors.size();
-    std::optional<std::string> vector_identifier = std::nullopt;
-    if (!attribute_alias.empty()) {
-      vector_identifier = index_schema->GetIdentifier(attribute_alias).value();
-    }
-    query::ProcessNeighborsForReply(ctx.get(), attribute_data_type,
-                                    search_result.neighbors, *this,
-                                    vector_identifier);
-    // Adjust total_count based on modified neighbors
-    size_t removed = original_size - search_result.neighbors.size();
-    size_t adjusted_total_count =
-        (total_count > removed) ? (total_count - removed) : 0;
+    // Content already resolved by ResolveContent — just serialize and send.
     SerializeNeighbors(response, search_result.neighbors);
-    response->set_total_count(adjusted_total_count);
+    response->set_total_count(search_result.total_count);
     reactor->Finish(grpc::Status::OK);
     RecordSearchMetrics(false, std::move(latency_sample));
   }
+
 };
 
 grpc::Status Service::PerformSlotConsistencyCheck(
@@ -189,69 +174,12 @@ grpc::Status Service::PerformIndexConsistencyCheck(
   return grpc::Status::OK;
 }
 
-query::SearchResponseCallback Service::MakeSearchCallback(
-    SearchIndexPartitionResponse* response, grpc::ServerUnaryReactor* reactor,
-    std::unique_ptr<vmsdk::StopWatch> latency_sample,
-    std::optional<query::SortByParameter> sortby_parameter) {
-  return [response, reactor, latency_sample = std::move(latency_sample),
-          sortby_parameter = std::move(sortby_parameter)](
-             absl::Status status,
-             std::unique_ptr<query::SearchParameters> parameters) mutable {
-    if (!status.ok()) {
-      reactor->Finish(ToGrpcStatus(status));
-      RecordSearchMetrics(true, std::move(latency_sample));
-      return;
-    }
-    if (parameters->cancellation_token->IsCancelled() &&
-        !parameters->enable_partial_results) {
-      reactor->Finish({grpc::StatusCode::DEADLINE_EXCEEDED,
-                       "Search operation cancelled due to timeout"});
-      RecordSearchMetrics(true, std::move(latency_sample));
-      return;
-    }
-    if (parameters->no_content) {
-      SerializeNeighbors(response, parameters->search_result.neighbors);
-      response->set_total_count(parameters->search_result.total_count);
-      reactor->Finish(grpc::Status::OK);
-      RecordSearchMetrics(false, std::move(latency_sample));
-    } else {
-      vmsdk::RunByMain([parameters = std::move(parameters), response, reactor,
-                        latency_sample = std::move(latency_sample),
-                        sortby_parameter =
-                            std::move(sortby_parameter)]() mutable {
-        const auto& attribute_data_type =
-            parameters->index_schema->GetAttributeDataType();
-        auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
-
-        std::optional<std::string> vector_identifier = std::nullopt;
-        if (parameters->IsVectorQuery()) {
-          vector_identifier = std::make_optional(
-              parameters->index_schema
-                  ->GetIdentifier(parameters->attribute_alias)
-                  .value());
-        }
-
-        query::ProcessNeighborsForReply(
-            ctx.get(), attribute_data_type, parameters->search_result.neighbors,
-            *parameters, vector_identifier, sortby_parameter);
-
-        SerializeNeighbors(response, parameters->search_result.neighbors);
-        response->set_total_count(parameters->search_result.total_count);
-        reactor->Finish(grpc::Status::OK);
-        RecordSearchMetrics(false, std::move(latency_sample));
-      });
-    }
-  };
-}
-
 void Service::EnqueueSearchRequest(
     std::unique_ptr<RemoteResponderSearch> search_operation,
     vmsdk::ThreadPool* reader_thread_pool, ValkeyModuleCtx* detached_ctx,
     SearchIndexPartitionResponse* response, grpc::ServerUnaryReactor* reactor,
-    std::unique_ptr<vmsdk::StopWatch> latency_sample,
-    std::optional<query::SortByParameter> sortby_parameter) {
+    std::unique_ptr<vmsdk::StopWatch> latency_sample) {
   search_operation->response = response;
-  search_operation->sortby_parameter = std::move(sortby_parameter);
   search_operation->latency_sample = std::move(latency_sample);
   search_operation->reactor = reactor;
 
@@ -279,9 +207,6 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
     VMSDK_RETURN_IF_ERROR(GRPCSearchRequestToParameters(
         *request, context, search_operation.get()));
 
-    // Extract sortby parameter from the request
-    auto sortby_parameter = SortByFromGRPC(*request);
-
     // perform index consistency check (index fingerprint/version), required
     auto schema = SchemaManager::Instance()
                       .GetIndexSchema(search_operation->db_num,
@@ -298,7 +223,7 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
     // Consistency checks passed, now enqueue the search
     EnqueueSearchRequest(std::move(search_operation), reader_thread_pool_,
                          detached_ctx_.get(), response, reactor,
-                         std::move(latency_sample), sortby_parameter);
+                         std::move(latency_sample));
     return absl::OkStatus();
   };
   auto status = StatusWrapper();

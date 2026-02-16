@@ -249,6 +249,7 @@ absl::Status SearchCommand::PostParseQueryString() {
   if (sortby.has_value()) {
     // Validate sortby field exists in the index schema
     VMSDK_RETURN_IF_ERROR(index_schema->GetIdentifier(sortby->field).status());
+    sortby_parameter = sortby;
   }
 
   return absl::OkStatus();

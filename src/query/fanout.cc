@@ -30,7 +30,6 @@
 #include "src/coordinator/search_converter.h"
 #include "src/coordinator/util.h"
 #include "src/indexes/vector_base.h"
-#include "src/query/inflight_retry.h"
 #include "src/query/search.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
@@ -187,7 +186,6 @@ struct SearchPartitionResultsTracker {
 class LocalResponderSearch : public query::SearchParameters {
  public:
   std::shared_ptr<SearchPartitionResultsTracker> tracker;
-  size_t total_count{0};
 
   void QueryCompleteMainThread(
       std::unique_ptr<SearchParameters> self) override {
@@ -198,7 +196,7 @@ class LocalResponderSearch : public query::SearchParameters {
       std::unique_ptr<SearchParameters> self) override {
     if (search_result.status.ok() || enable_partial_results) {
       tracker->AddResults(search_result.neighbors);
-      tracker->AddTotalCount(total_count);
+      tracker->AddTotalCount(search_result.total_count);
     } else {
       VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
           << "Error during local handling of FT.SEARCH: "
@@ -243,10 +241,9 @@ absl::Status PerformSearchFanoutAsync(
     std::vector<vmsdk::cluster_map::NodeInfo> &search_targets,
     coordinator::ClientPool *coordinator_client_pool,
     std::unique_ptr<SearchParameters> parameters,
-    vmsdk::ThreadPool *thread_pool,
-    std::optional<query::SortByParameter> sortby_parameter) {
+    vmsdk::ThreadPool *thread_pool) {
   auto request =
-      coordinator::ParametersToGRPCSearchRequest(*parameters, sortby_parameter);
+      coordinator::ParametersToGRPCSearchRequest(*parameters);
   if (parameters->IsNonVectorQuery()) {
     // For non vector, use the LIMIT based range. Ensure we fetch enough
     // results to cover offset + number.
@@ -256,7 +253,7 @@ absl::Status PerformSearchFanoutAsync(
     // number of shards to ensure we get enough results.
     uint64_t limit_number =
         parameters->limit.first_index + parameters->limit.number;
-    if (sortby_parameter.has_value()) {
+    if (parameters->sortby_parameter.has_value()) {
       // Fetch enough results from each shard to cover the global top N
       // In the worst case, all top N results could come from a single shard,
       // so we need to fetch at least N from each shard.
@@ -277,7 +274,6 @@ absl::Status PerformSearchFanoutAsync(
       search_targets.size(), parameters->k, std::move(parameters));
   bool has_local_target = false;
   for (auto &node : search_targets) {
-    auto detached_ctx = vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx);
     if (node.is_local) {
       // Defer the local target enqueue, since it will own the parameters from
       // then on.

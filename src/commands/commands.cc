@@ -17,7 +17,6 @@
 #include "src/commands/ft_search.h"
 #include "src/metrics.h"
 #include "src/query/fanout.h"
-#include "src/query/inflight_retry.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
@@ -156,17 +155,10 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
             parameters->index_schema->GetVersion());
       }
 
-      // Extract sortby parameter if this is a SearchCommand
-      std::optional<query::SortByParameter> sortby_param = std::nullopt;
-      if (auto *search_cmd = dynamic_cast<SearchCommand *>(parameters.get())) {
-        sortby_param = search_cmd->sortby;
-      }
-
       return query::fanout::PerformSearchFanoutAsync(
           ctx, search_targets,
           ValkeySearch::Instance().GetCoordinatorClientPool(),
-          std::move(parameters), ValkeySearch::Instance().GetReaderThreadPool(),
-          sortby_param);
+          std::move(parameters), ValkeySearch::Instance().GetReaderThreadPool());
     }
     return query::SearchAsync(std::move(parameters),
                               ValkeySearch::Instance().GetReaderThreadPool(),

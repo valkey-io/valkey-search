@@ -109,15 +109,6 @@ struct QueryCommand : public query::SearchParameters {
   void QueryCompleteMainThread(std::unique_ptr<SearchParameters> self) override;
 
   std::optional<vmsdk::BlockedClient> blocked_client;
-
-  void OnComplete(std::vector<indexes::Neighbor> &neighbors) override {
-    blocked_client->SetReplyPrivateData(this);
-  }
-
-  void OnCancelled() override {
-    // Let Reply callback handle the cancellation
-    blocked_client->SetReplyPrivateData(this);
-  }
 };
 
 namespace async {

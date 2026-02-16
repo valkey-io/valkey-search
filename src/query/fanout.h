@@ -25,8 +25,7 @@ absl::Status PerformSearchFanoutAsync(
     std::vector<vmsdk::cluster_map::NodeInfo>& search_targets,
     coordinator::ClientPool* coordinator_client_pool,
     std::unique_ptr<query::SearchParameters> parameters,
-    vmsdk::ThreadPool* thread_pool,
-    std::optional<query::SortByParameter> sortby_parameter = std::nullopt);
+    vmsdk::ThreadPool* thread_pool);
 
 // Utility function to check if system is under low utilization
 bool IsSystemUnderLowUtilization();

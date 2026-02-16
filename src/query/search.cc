@@ -26,6 +26,7 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "src/attribute_data_type.h"
+#include "src/query/content_resolution.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
@@ -784,7 +785,20 @@ absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
       [parameters = std::move(parameters), search_mode]() mutable {
         auto res = Search(*parameters, search_mode);
         parameters->search_result.status = res;
-        parameters->QueryCompleteBackground(std::move(parameters));
+        switch (parameters->GetContentProcessing()) {
+          case ContentProcessing::kNoContent:
+            parameters->QueryCompleteBackground(std::move(parameters));
+            break;
+          case ContentProcessing::kContentRequired:
+          case ContentProcessing::kContentionRequired:
+            vmsdk::RunByMain(
+                [parameters = std::move(parameters)]() mutable {
+                  ResolveContent(std::move(parameters));
+                });
+            break;
+          default:
+            CHECK(false) << "Unknown content processing mode";
+        }
       },
       vmsdk::ThreadPool::Priority::kHigh);
   return absl::OkStatus();

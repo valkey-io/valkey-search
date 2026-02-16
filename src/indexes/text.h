@@ -75,15 +75,21 @@ class Text : public IndexBase {
     return absl::OkStatus();
   }
 
-  size_t GetUnTrackedKeyCount() const override { return 0; }
+  size_t GetUnTrackedKeyCount() const override {
+    absl::MutexLock lock(&index_mutex_);
+    return untracked_keys_.size();
+  }
 
   bool IsUnTracked(const InternedStringPtr& key) const override {
-    return false;
+    absl::MutexLock lock(&index_mutex_);
+    return untracked_keys_.contains(key);
   }
 
   absl::Status ForEachUnTrackedKey(
       absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
       const override {
+    absl::MutexLock lock(&index_mutex_);
+    // TODO
     return absl::OkStatus();
   }
 
@@ -130,6 +136,8 @@ class Text : public IndexBase {
 
   // Reference to the shared text index schema
   std::shared_ptr<text::TextIndexSchema> text_index_schema_;
+
+  InternedStringSet untracked_keys_;
 
   // currently used for FT.INFO metrics only
   InternedStringSet tracked_keys_;

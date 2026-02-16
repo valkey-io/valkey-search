@@ -89,7 +89,9 @@ class Text : public IndexBase {
       absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
       const override {
     absl::MutexLock lock(&index_mutex_);
-    // TODO
+    for (const auto& key : untracked_keys_) {
+      VMSDK_RETURN_IF_ERROR(fn(key));
+    }
     return absl::OkStatus();
   }
 

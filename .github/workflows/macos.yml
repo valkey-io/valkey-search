@@ -10,7 +10,7 @@ on:
   workflow_dispatch: # allow manual triggering
 
 concurrency:
-  group: unittests-${{ github.head_ref || github.ref }}
+  group: unittests-macos-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 jobs:

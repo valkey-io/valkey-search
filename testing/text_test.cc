@@ -48,7 +48,8 @@ class TextTest : public ::testing::Test {
         data_model::LANGUAGE_ENGLISH,
         " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",  // Default punctuation
         false,                                        // with_offsets
-        empty_stop_words);
+        empty_stop_words,
+        4);  // min_stem_size
 
     // Create default TextIndex prototype
     text_index_proto_ = std::make_unique<data_model::TextIndex>();
@@ -71,7 +72,7 @@ class TextTest : public ::testing::Test {
                             ? " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
                             : punctuation;
     return std::make_shared<text::TextIndexSchema>(
-        data_model::LANGUAGE_ENGLISH, punct, with_offsets, stop_words);
+        data_model::LANGUAGE_ENGLISH, punct, with_offsets, stop_words, 4);
   }
 
   // Helper to check if a token exists in the prefix tree
@@ -93,7 +94,7 @@ class TextTest : public ::testing::Test {
     if (iter.Done()) {
       return nullptr;
     }
-    return iter.GetTarget();
+    return iter.GetPostingsTarget();
   }
 
   // Stages a single Text attribute update from the key and then commits the key
@@ -368,7 +369,8 @@ TEST_F(TextTest, StemmingBehavior) {
   auto stemming_schema = std::make_shared<text::TextIndexSchema>(
       data_model::LANGUAGE_ENGLISH, " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",
       false,  // with_offsets
-      empty_stop_words);
+      empty_stop_words,
+      4);  // min_stem_size
 
   data_model::TextIndex stem_proto;
   stem_proto.set_no_stem(false);  // Enable stemming

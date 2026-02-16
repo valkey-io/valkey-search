@@ -55,15 +55,14 @@ const ShardInfo* ClusterMap::GetShardBySlot(uint16_t slot) const {
   return nullptr;
 }
 
-std::optional<NodeInfo> ClusterMap::GetLocalNodeFromShard(
-    const ShardInfo& shard, bool replica_only) const {
+std::optional<NodeInfo> ShardInfo::GetLocalNode(bool replica_only) const {
   // Try to find a local node first
-  if (!replica_only && shard.primary.has_value() && shard.primary->is_local) {
-    return shard.primary.value();
+  if (!replica_only && primary.has_value() && primary->is_local) {
+    return primary.value();
   }
 
   // Look for local replicas
-  for (const auto& replica : shard.replicas) {
+  for (const auto& replica : replicas) {
     if (replica.is_local) {
       return replica;
     }
@@ -73,11 +72,9 @@ std::optional<NodeInfo> ClusterMap::GetLocalNodeFromShard(
   return std::nullopt;
 }
 
-NodeInfo ClusterMap::GetRandomNodeFromShard(const ShardInfo& shard,
-                                            bool replica_only,
-                                            bool prefer_local) const {
+NodeInfo ShardInfo::GetRandomNode(bool replica_only, bool prefer_local) const {
   if (prefer_local) {
-    auto local_node = GetLocalNodeFromShard(shard, replica_only);
+    auto local_node = GetLocalNode(replica_only);
     if (local_node.has_value()) {
       return local_node.value();
     }
@@ -87,21 +84,21 @@ NodeInfo ClusterMap::GetRandomNodeFromShard(const ShardInfo& shard,
   absl::BitGen gen;
 
   if (replica_only) {
-    size_t replica_index = absl::Uniform(gen, 0u, shard.replicas.size());
-    return shard.replicas[replica_index];
+    size_t replica_index = absl::Uniform(gen, 0u, replicas.size());
+    return replicas[replica_index];
   }
 
-  size_t node_count = shard.replicas.size();
-  if (shard.primary.has_value()) {
+  size_t node_count = replicas.size();
+  if (primary.has_value()) {
     node_count++;
   }
   CHECK(node_count > 0);
   size_t index = absl::Uniform(gen, 0u, node_count);
-  if (index == 0 && shard.primary.has_value()) {
-    return shard.primary.value();
+  if (index == 0 && primary.has_value()) {
+    return primary.value();
   }
-  size_t replica_index = shard.primary.has_value() ? index - 1 : index;
-  return shard.replicas[replica_index];
+  size_t replica_index = primary.has_value() ? index - 1 : index;
+  return replicas[replica_index];
 }
 
 std::vector<NodeInfo> ClusterMap::GetTargets(FanoutTargetMode mode,
@@ -120,8 +117,7 @@ std::vector<NodeInfo> ClusterMap::GetTargets(FanoutTargetMode mode,
         if (shard_info.replicas.empty()) {
           continue;
         }
-        random_replicas.push_back(
-            GetRandomNodeFromShard(shard_info, true, prefer_local));
+        random_replicas.push_back(shard_info.GetRandomNode(true, prefer_local));
       }
       return random_replicas;
     }
@@ -129,11 +125,51 @@ std::vector<NodeInfo> ClusterMap::GetTargets(FanoutTargetMode mode,
       std::vector<NodeInfo> random_targets;
       random_targets.reserve(shards_.size());
       for (const auto& [shard_id, shard_info] : shards_) {
-        random_targets.push_back(
-            GetRandomNodeFromShard(shard_info, false, prefer_local));
+        random_targets.push_back(shard_info.GetRandomNode(false, prefer_local));
       }
       return random_targets;
     }
+    default:
+      CHECK(false);
+  }
+}
+
+std::vector<NodeInfo> ClusterMap::GetTargetsForSlot(FanoutTargetMode mode,
+                                                    bool prefer_local,
+                                                    uint16_t slot) const {
+  if (slot_to_shard_map_.empty()) {
+    return {};
+  }
+  auto iter = slot_to_shard_map_.lower_bound(slot);
+  if (iter == slot_to_shard_map_.end()) {
+    iter--;
+  }
+  const ShardInfo* shard = iter->second.second;
+  CHECK(shard);
+  if (slot < iter->first || slot >= iter->second.first) {
+    return {};  // Slot not in range means no shard has this slot.
+  }
+
+  //
+  // We have the right shard, pick from it.
+  //
+  switch (mode) {
+    case FanoutTargetMode::kAll:
+      CHECK(false);
+    case FanoutTargetMode::kPrimary:
+      if (shard->primary.has_value()) {
+        return {shard->primary.value()};
+      } else {
+        return {};
+      }
+    case FanoutTargetMode::kReplicas:
+      if (!shard->replicas.empty()) {
+        return {shard->replicas[0]};
+      } else {
+        return {};
+      }
+    case FanoutTargetMode::kRandom:
+      return {shard->GetRandomNode(false, prefer_local)};
     default:
       CHECK(false);
   }
@@ -189,14 +225,6 @@ std::optional<NodeInfo> ClusterMap::ParseNodeInfo(
   const char* node_primary_endpoint_char = ValkeyModule_CallReplyStringPtr(
       primary_endpoint_reply, &node_primary_endpoint_len);
 
-  // Check for invalid endpoint (nullptr, empty, or "?")
-  if (!node_primary_endpoint_char || node_primary_endpoint_len == 0 ||
-      (node_primary_endpoint_len == 1 &&
-       node_primary_endpoint_char[0] == '?')) {
-    VMSDK_LOG(WARNING, nullptr) << "Invalid node primary endpoint";
-    return std::nullopt;
-  }
-
   // Get port
   long long node_port = ValkeyModule_CallReplyInteger(
       ValkeyModule_CallReplyArrayElement(node_arr, 1));
@@ -211,6 +239,15 @@ std::optional<NodeInfo> ClusterMap::ParseNodeInfo(
   bool is_local_node =
       (node_id_len == VALKEYMODULE_NODE_ID_LEN &&
        memcmp(node_id_char, my_node_id, VALKEYMODULE_NODE_ID_LEN) == 0);
+
+  // Check for invalid endpoint (nullptr, empty, or "?")
+  if (!is_local_node &&
+      (!node_primary_endpoint_char || node_primary_endpoint_len == 0 ||
+       (node_primary_endpoint_len == 1 &&
+        node_primary_endpoint_char[0] == '?'))) {
+    VMSDK_LOG(WARNING, nullptr) << "Invalid node primary endpoint";
+    return std::nullopt;
+  }
 
   // Get additional network metadata
   // Depending on the client RESP protocol version, the additional network
@@ -264,8 +301,8 @@ std::optional<NodeInfo> ClusterMap::ParseNodeInfo(
                      .port = static_cast<uint16_t>(node_port)};
 
   // Check for duplicate socket addresses across different nodes
-  auto it = socket_addr_to_node_map.find(addr);
-  if (it != socket_addr_to_node_map.end()) {
+  auto it = socket_addr_to_node_map_.find(addr);
+  if (it != socket_addr_to_node_map_.end()) {
     // socket address already seen - check if it's the same node
     if (it->second != node_id_str) {
       VMSDK_LOG(WARNING, nullptr)
@@ -275,7 +312,7 @@ std::optional<NodeInfo> ClusterMap::ParseNodeInfo(
       this->is_consistent_ = false;
     }
   } else {
-    socket_addr_to_node_map[addr] = node_id_str;
+    socket_addr_to_node_map_[addr] = node_id_str;
   }
 
   return NodeInfo{.node_id = node_id_str,

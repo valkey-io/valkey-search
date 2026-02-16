@@ -8,10 +8,11 @@
 #include "src/coordinator/server.h"
 
 #include <cstdint>
-#include <deque>
 #include <memory>
 #include <string>
+#include <thread>
 #include <utility>
+#include <vector>
 
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
@@ -32,12 +33,14 @@
 #include "src/index_schema.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
-#include "src/query/fanout_operation_base.h"
+#include "src/query/inflight_retry.h"
 #include "src/query/response_generator.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
+#include "src/valkey_search.h"
 #include "valkey_search_options.h"
 #include "vmsdk/src/debug.h"
+#include "vmsdk/src/info.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -112,6 +115,68 @@ void SerializeNeighbors(SearchIndexPartitionResponse* response,
   }
 }
 
+namespace {
+
+// SearchParameters subclass for remote responder (remote shard in fanout).
+// Handles in-flight retry completion by processing neighbors and sending gRPC
+// response.
+class RemoteResponderSearch : public query::SearchParameters {
+ public:
+  SearchIndexPartitionResponse* response;
+  grpc::ServerUnaryReactor* reactor;
+  std::unique_ptr<vmsdk::StopWatch> latency_sample;
+  std::vector<indexes::Neighbor> neighbors;
+  size_t total_count;
+
+  RemoteResponderSearch(SearchIndexPartitionResponse* resp,
+                        grpc::ServerUnaryReactor* react,
+                        std::unique_ptr<vmsdk::StopWatch>&& sample,
+                        std::vector<indexes::Neighbor>&& nbrs,
+                        std::unique_ptr<query::SearchParameters>&& params,
+                        size_t count)
+      : query::SearchParameters(std::move(*params)),
+        response(resp),
+        reactor(react),
+        latency_sample(std::move(sample)),
+        neighbors(std::move(nbrs)),
+        total_count(count) {}
+
+  const char* GetDesc() const override { return "remote-responder"; }
+  std::vector<indexes::Neighbor>& GetNeighbors() override { return neighbors; }
+
+  void OnComplete(std::vector<indexes::Neighbor>& neighbors) override {
+    auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
+    const auto& attribute_data_type = index_schema->GetAttributeDataType();
+    size_t original_size = neighbors.size();
+    std::optional<std::string> vector_identifier = std::nullopt;
+    if (!attribute_alias.empty()) {
+      vector_identifier = index_schema->GetIdentifier(attribute_alias).value();
+    }
+    query::ProcessNeighborsForReply(ctx.get(), attribute_data_type, neighbors,
+                                    *this, vector_identifier);
+    // Adjust total_count based on modified neighbours
+    size_t removed = original_size - neighbors.size();
+    size_t adjusted_total_count =
+        (total_count > removed) ? (total_count - removed) : 0;
+    SerializeNeighbors(response, neighbors);
+    response->set_total_count(adjusted_total_count);
+    reactor->Finish(grpc::Status::OK);
+    RecordSearchMetrics(false, std::move(latency_sample));
+  }
+
+  void OnCancelled() override {
+    if (!enable_partial_results) {
+      reactor->Finish({grpc::StatusCode::DEADLINE_EXCEEDED,
+                       "Search operation cancelled due to timeout"});
+      RecordSearchMetrics(true, std::move(latency_sample));
+    } else {
+      OnComplete(neighbors);
+    }
+  }
+};
+
+}  // namespace
+
 grpc::Status Service::PerformSlotConsistencyCheck(
     uint64_t expected_slot_fingerprint) {
   // compare slot fingerprint
@@ -141,8 +206,10 @@ grpc::Status Service::PerformIndexConsistencyCheck(
 
 query::SearchResponseCallback Service::MakeSearchCallback(
     SearchIndexPartitionResponse* response, grpc::ServerUnaryReactor* reactor,
-    std::unique_ptr<vmsdk::StopWatch> latency_sample) {
-  return [response, reactor, latency_sample = std::move(latency_sample)](
+    std::unique_ptr<vmsdk::StopWatch> latency_sample,
+    std::optional<query::SortByParameter> sortby_parameter) {
+  return [response, reactor, latency_sample = std::move(latency_sample),
+          sortby_parameter = std::move(sortby_parameter)](
              absl::StatusOr<query::SearchResult>& result,
              std::unique_ptr<query::SearchParameters> parameters) mutable {
     if (!result.ok()) {
@@ -157,6 +224,19 @@ query::SearchResponseCallback Service::MakeSearchCallback(
       RecordSearchMetrics(true, std::move(latency_sample));
       return;
     }
+    // Text predicate evaluation requires main thread to ensure text indexes
+    // reflect current keyspace. Block if result keys have in-flight mutations.
+    if (!parameters->no_content && query::QueryHasTextPredicate(*parameters)) {
+      auto remote_responder = std::make_unique<RemoteResponderSearch>(
+          response, reactor, std::move(latency_sample),
+          std::move(result->neighbors), std::move(parameters),
+          result->total_count);
+      auto retry_ctx = std::make_shared<query::InFlightRetryContext>(
+          std::move(remote_responder));
+      retry_ctx->ScheduleOnMainThread();
+      return;
+    }
+
     if (parameters->no_content) {
       SerializeNeighbors(response, result->neighbors);
       response->set_total_count(result->total_count);
@@ -166,22 +246,25 @@ query::SearchResponseCallback Service::MakeSearchCallback(
       vmsdk::RunByMain([parameters = std::move(parameters), response, reactor,
                         latency_sample = std::move(latency_sample),
                         neighbors = std::move(result->neighbors),
-                        total_count = result->total_count]() mutable {
+                        total_count = result->total_count,
+                        sortby_parameter =
+                            std::move(sortby_parameter)]() mutable {
         const auto& attribute_data_type =
             parameters->index_schema->GetAttributeDataType();
         auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
-        if (parameters->IsNonVectorQuery()) {
-          query::ProcessNonVectorNeighborsForReply(
-              ctx.get(), attribute_data_type, neighbors, *parameters);
-        } else {
-          auto vector_identifier =
+
+        std::optional<std::string> vector_identifier = std::nullopt;
+        if (parameters->IsVectorQuery()) {
+          vector_identifier = std::make_optional(
               parameters->index_schema
                   ->GetIdentifier(parameters->attribute_alias)
-                  .value();
-          query::ProcessNeighborsForReply(ctx.get(), attribute_data_type,
-                                          neighbors, *parameters,
-                                          vector_identifier);
+                  .value());
         }
+
+        query::ProcessNeighborsForReply(ctx.get(), attribute_data_type,
+                                        neighbors, *parameters,
+                                        vector_identifier, sortby_parameter);
+
         SerializeNeighbors(response, neighbors);
         response->set_total_count(total_count);
         reactor->Finish(grpc::Status::OK);
@@ -195,10 +278,12 @@ void Service::EnqueueSearchRequest(
     std::unique_ptr<query::SearchParameters> vector_search_parameters,
     vmsdk::ThreadPool* reader_thread_pool, ValkeyModuleCtx* detached_ctx,
     SearchIndexPartitionResponse* response, grpc::ServerUnaryReactor* reactor,
-    std::unique_ptr<vmsdk::StopWatch> latency_sample) {
+    std::unique_ptr<vmsdk::StopWatch> latency_sample,
+    std::optional<query::SortByParameter> sortby_parameter) {
   auto status = query::SearchAsync(
       std::move(vector_search_parameters), reader_thread_pool,
-      MakeSearchCallback(response, reactor, std::move(latency_sample)),
+      MakeSearchCallback(response, reactor, std::move(latency_sample),
+                         std::move(sortby_parameter)),
       query::SearchMode::kRemote);
 
   if (!status.ok()) {
@@ -209,10 +294,13 @@ void Service::EnqueueSearchRequest(
   }
 }
 
+DEV_INTEGER_COUNTER(grpc, search_index_rpc_requests);
+
 grpc::ServerUnaryReactor* Service::SearchIndexPartition(
     grpc::CallbackServerContext* context,
     const SearchIndexPartitionRequest* request,
     SearchIndexPartitionResponse* response) {
+  search_index_rpc_requests.Increment();
   GRPCSuspensionGuard guard(GRPCSuspender::Instance());
   auto latency_sample = SAMPLE_EVERY_N(100);
   grpc::ServerUnaryReactor* reactor = context->DefaultReactor();
@@ -223,6 +311,9 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
     RecordSearchMetrics(true, std::move(latency_sample));
     return reactor;
   }
+
+  // Extract sortby parameter from the request
+  auto sortby_parameter = SortByFromGRPC(*request);
 
   // perform index consistency check (index fingerprint/version), required
   auto schema =
@@ -251,14 +342,14 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
     // Consistency checks passed, now enqueue the search
     EnqueueSearchRequest(std::move(*vector_search_parameters),
                          reader_thread_pool_, detached_ctx_.get(), response,
-                         reactor, std::move(latency_sample));
+                         reactor, std::move(latency_sample), sortby_parameter);
     return reactor;
   }
 
   // Non-consistency mode - proceed directly
   EnqueueSearchRequest(std::move(*vector_search_parameters),
                        reader_thread_pool_, detached_ctx_.get(), response,
-                       reactor, std::move(latency_sample));
+                       reactor, std::move(latency_sample), sortby_parameter);
 
   return reactor;
 }

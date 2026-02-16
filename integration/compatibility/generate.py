@@ -44,8 +44,7 @@ class BaseCompatibilityTest:
         if cls.ANSWER_FILE_NAME is None:
             raise NotImplementedError("Subclass must define ANSWER_FILE_NAME")
             
-        os.system("docker remove Generate-search || true")
-        if os.system("docker run --name Generate-search -p 6380:6379 redis/redis-stack-server &") != 0:
+        if os.system("docker run --rm -d --name Generate-search -p 6380:6379 redis/redis-stack-server") != 0:
             print("Failed to start Redis Stack server, please check your Docker setup.")
             sys.exit(1)
         print("Started Generate-search server")
@@ -66,7 +65,6 @@ class BaseCompatibilityTest:
     def teardown_class(cls):
         print("Stopping Generate-search server")
         os.system("docker stop Generate-search")
-        os.system("docker remove Generate-search")
         print("Dumping ", len(cls.answers), " answers")
         with gzip.open(cls.ANSWER_FILE_NAME, "wb") as answer_file:
             pickle.dump(cls.answers, answer_file)
@@ -155,7 +153,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.checkvec(self, dialect, orig_cmd, kwargs)
         self.check(self, dialect, orig_cmd)
 
-    '''        
+    '''
     def test_bad_numeric_data(self, key_type, dialect):
         self.setup_data("bad numbers", key_type)
         self.check(dialect, f"ft.search {key_type}_idx1",  "@n1:[-inf inf]")
@@ -322,7 +320,6 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                 f"ft.aggregate {key_type}_idx1  * load 2 @__key @n1 apply {f}(@n1) as nn"
             )
 
-    @pytest.mark.skip()
     @pytest.mark.parametrize("dataset", ["hard numbers", "hard strings"])
     def test_aggregate_string_apply_functions(self, key_type, dialect, dataset):
         self.setup_data(dataset, key_type)
@@ -420,7 +417,6 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             "apply_result",
         )
 
-    @pytest.mark.skip()
     @pytest.mark.parametrize("dataset", ["hard numbers", "hard strings"])
     def test_aggregate_substr(self, key_type, dialect, dataset):
         self.setup_data(dataset, key_type)
@@ -462,3 +458,14 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                         "as",
                         "nn",
                 )
+
+    def test_search_sortby(self, key_type, dialect):
+        self.setup_data("sortable numbers", key_type)
+
+        for sort_key in ["n1", "n2"]:
+            for direction in ["ASC", "DESC", ""]:
+                for return_keys in ["", "RETURN 3 @n1 @t1"]:
+                    for wsk in ["", "WITHSORTKEYS"]:
+                        for limit in ["LIMIT 0 5", "LIMIT 2 3", ""]:
+                            self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY {sort_key} {direction} {return_keys} {limit} {wsk}")
+

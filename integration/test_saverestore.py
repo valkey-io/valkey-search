@@ -50,9 +50,9 @@ def do_search(client: Valkey.client, index: Index, query: str, extra: list[str] 
     print("Result is ", result)
     return result
 
-def make_data():
+def make_data(num_vectors=NUM_VECTORS):
     records = []
-    for i in range(0, NUM_VECTORS):
+    for i in range(0, num_vectors):
         records += [index.make_data(i)]
 
     data = index.make_data(len(records))
@@ -68,7 +68,7 @@ def make_data():
     records += [data]
     return records
 
-KEY_COUNT = len(make_data())   
+KEY_COUNT = len(make_data())
 
 def load_data(client: Valkey.client):
     records = make_data()
@@ -169,7 +169,7 @@ class TestSaveRestore_v2_v1(ValkeySearchTestCaseDebugMode):
 
     @pytest.mark.parametrize("parameters", [
         [index, [5, KEY_COUNT, 0], [5, 1, 0, 0]],
-        [vector_only_index, [3, 0, 0], [3, 1, 0, 0]],
+        [vector_only_index, [3, KEY_COUNT, 0], [3, 1, 0, 0]],
         [non_vector_index, [3, KEY_COUNT, 0], [3, 1, 0, 0]],
         ])
     def test_saverestore_v2_v1(self, parameters):
@@ -183,7 +183,7 @@ class TestSaveRestore_v2_v2(ValkeySearchTestCaseDebugMode):
 
     @pytest.mark.parametrize("parameters", [
         [index, [5, KEY_COUNT, 0], [5, 0, KEY_COUNT, 0]],
-        [vector_only_index, [3, 0, 0], [3, 0, 0, 0]],
+        [vector_only_index, [3, KEY_COUNT, 0], [3, 0, KEY_COUNT, 0]],
         [non_vector_index, [3, KEY_COUNT, 0], [3, 0, KEY_COUNT, 0]],
         ])
     def test_saverestore_v2_v2(self, parameters):
@@ -341,7 +341,7 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
         self.client.execute_command("save")
 
         i = self.client.info("search")
-        assert i["search_rdb_save_keys"] == 0
+        assert i["search_rdb_save_keys"] == len(records)
         assert i["search_rdb_save_mutation_entries"] == 0
         assert i["search_rdb_save_backfilling_indexes"] == 1
 
@@ -365,10 +365,48 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
         self.client.execute_command("save")
 
         i = self.client.info("search")
-        assert i["search_rdb_save_keys"] == 0
+        assert i["search_rdb_save_keys"] == 2 * len(records)
         assert i["search_rdb_save_mutation_entries"] == len(records)
         assert i["search_rdb_save_backfilling_indexes"] == 2
 
         self.client.execute_command("ft._debug PAUSEPOINT RESET block_mutation_queue")
 
         waiters.wait_for_true(lambda: self.mutation_queue_size() == 0)
+
+    def test_mutation_queue_drain_on_save(self):
+        self.client.execute_command("CONFIG SET search.drain-mutation-queue-on-save yes")
+        self.client.execute_command("CONFIG SET search.writer-threads 1")
+        self.client.execute_command("CONFIG SET search.info-developer-visible yes")
+        self.client.execute_command("ft._debug PAUSEPOINT SET block_mutation_queue")
+        index.create(self.client, True)
+        records = make_data(num_vectors=100)
+
+        #
+        # Now, load the data.... But since the mutation queue is blocked it will be stopped....
+        #
+        client_threads = []
+        for i in range(len(records)):
+            new_client = self.server.get_new_client()
+            t = threading.Thread(target = index.write_data, args=(new_client, i, records[i]) )
+            t.start()
+            client_threads += [t]
+
+        #
+        # Now, wait for the mutation queue to get fully loaded
+        #
+        print("Mutation queue", self.mutation_queue_size())
+        waiters.wait_for_true(lambda: self.mutation_queue_size() == len(records))
+        print("MUTATION QUEUE LOADED")
+
+        #
+        # Unblock mutation queue and then save. Unblockig must be done first or save would block PAUSEPOINT command.
+        #
+        self.client.execute_command("ft._debug PAUSEPOINT RESET block_mutation_queue")
+        self.client.execute_command("save")
+        for t in client_threads:
+            t.join()
+
+        # RDB save is expected to have 0 mutation entries
+        i = self.client.info("search")
+        save_mutation_entries = i["search_rdb_save_mutation_entries"]
+        assert save_mutation_entries == 0

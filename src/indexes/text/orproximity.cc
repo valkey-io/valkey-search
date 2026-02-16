@@ -16,20 +16,15 @@ OrProximityIterator::OrProximityIterator(
       pos_set_(),
       current_pos_indices_() {
   CHECK(!iters_.empty()) << "must have at least one text iterator";
+  query_field_mask_ = 0ULL;
+  for (const auto& iter : iters_) {
+    query_field_mask_ |= iter->QueryFieldMask();
+  }
   NextKey();
 }
 
-// Returns the field mask based on the current active text iterators.
-// When we are at a certain position, multiple iterators may be on that
-// position. We combine their field masks using bitwise OR to get the overall
-// field mask.
 FieldMaskPredicate OrProximityIterator::QueryFieldMask() const {
-  CHECK(!current_pos_indices_.empty());
-  FieldMaskPredicate mask = 0ULL;
-  for (size_t idx : current_pos_indices_) {
-    mask |= iters_[idx]->QueryFieldMask();
-  }
-  return mask;
+  return query_field_mask_;
 }
 
 bool OrProximityIterator::DoneKeys() const {
@@ -163,6 +158,30 @@ bool OrProximityIterator::NextPosition() {
     current_field_mask_ |= iters_[idx]->CurrentFieldMask();
   }
   return true;
+}
+
+bool OrProximityIterator::SeekForwardPosition(Position target_position) {
+  if (current_position_.has_value() &&
+      current_position_.value().start >= target_position) {
+    return true;
+  }
+  pos_set_.clear();
+  for (size_t idx : current_key_indices_) {
+    if (!iters_[idx]->DonePositions()) {
+      // CRITICAL CRASH GUARD:
+      // Only call SeekForward if the target is actually ahead.
+      if (target_position > iters_[idx]->CurrentPosition().start) {
+        iters_[idx]->SeekForwardPosition(target_position);
+      }
+      // Re-insert into the tracking set regardless of whether we sought or not
+      InsertValidPositionIterator(idx);
+    }
+  }
+  // Reset state and delegate the calculation of the new min_pos
+  // and field masks to the existing NextPosition() logic.
+  current_position_ = std::nullopt;
+  current_field_mask_ = 0ULL;
+  return NextPosition();
 }
 
 FieldMaskPredicate OrProximityIterator::CurrentFieldMask() const {

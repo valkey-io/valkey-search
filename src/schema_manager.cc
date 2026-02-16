@@ -36,7 +36,6 @@
 #include "src/rdb_serialization.h"
 #include "src/valkey_search.h"
 #include "src/vector_externalizer.h"
-#include "src/version.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -48,7 +47,8 @@
 namespace valkey_search {
 
 constexpr absl::string_view kMaxIndexesConfig{"max-indexes"};
-constexpr uint32_t kMaxIndexes{10};
+constexpr uint32_t kMaxIndexes{10000000};
+constexpr uint32_t kMaxIndexesDefault{1000};
 
 constexpr absl::string_view kIndexSchemaBackfillBatchSizeConfig(
     "backfill-batch-size");
@@ -59,10 +59,10 @@ namespace options {
 /// Register the "--max-indexes" flag. Controls the max number of indexes we can
 /// have.
 static auto max_indexes =
-    vmsdk::config::NumberBuilder(kMaxIndexesConfig,  // name
-                                 kMaxIndexes,        // default size
-                                 1,                  // min size
-                                 kMaxIndexes)        // max size
+    vmsdk::config::NumberBuilder(kMaxIndexesConfig,   // name
+                                 kMaxIndexesDefault,  // default size
+                                 1,                   // min size
+                                 kMaxIndexes)         // max size
         .WithValidationCallback(CHECK_RANGE(1, kMaxIndexes, kMaxIndexesConfig))
         .Build();
 
@@ -396,15 +396,63 @@ uint64_t SchemaManager::GetNumberOfIndexSchemas() const {
 }
 
 uint64_t SchemaManager::GetNumberOfAttributes() const {
+  return GetAttributeCountByType(AttributeType::ALL);
+}
+
+uint64_t SchemaManager::GetAttributeCountByType(AttributeType type) const {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  auto num_attributes = 0;
+  uint64_t count = 0;
   for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
     for (const auto &[name, schema] : schema_map) {
-      num_attributes += schema->GetAttributeCount();
+      switch (type) {
+        case AttributeType::ALL:
+          count += schema->GetAttributeCount();
+          break;
+        case AttributeType::TEXT:
+          count += schema->GetTextAttributeCount();
+          break;
+        case AttributeType::TAG:
+          count += schema->GetTagAttributeCount();
+          break;
+        case AttributeType::NUMERIC:
+          count += schema->GetNumericAttributeCount();
+          break;
+        case AttributeType::VECTOR:
+          count += schema->GetVectorAttributeCount();
+          break;
+      }
     }
   }
-  return num_attributes;
+  return count;
 }
+
+uint64_t SchemaManager::GetNumberOfTextAttributes() const {
+  return GetAttributeCountByType(AttributeType::TEXT);
+}
+
+uint64_t SchemaManager::GetNumberOfTagAttributes() const {
+  return GetAttributeCountByType(AttributeType::TAG);
+}
+
+uint64_t SchemaManager::GetNumberOfNumericAttributes() const {
+  return GetAttributeCountByType(AttributeType::NUMERIC);
+}
+
+uint64_t SchemaManager::GetNumberOfVectorAttributes() const {
+  return GetAttributeCountByType(AttributeType::VECTOR);
+}
+
+uint64_t SchemaManager::GetCorpusNumTextItems() const {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  uint64_t count = 0;
+  for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
+    for (const auto &[name, schema] : schema_map) {
+      count += schema->GetTextItemCount();
+    }
+  }
+  return count;
+}
+
 uint64_t SchemaManager::GetTotalIndexedDocuments() const {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   auto num_hash_keys = 0;
@@ -414,6 +462,18 @@ uint64_t SchemaManager::GetTotalIndexedDocuments() const {
     }
   }
   return num_hash_keys;
+}
+uint64_t SchemaManager::GetTotalTextMemoryUsage() const {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  uint64_t total = 0;
+  for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
+    for (const auto &[name, schema] : schema_map) {
+      if (schema->GetTextIndexSchema()) {
+        total += schema->GetTextIndexSchema()->GetTotalTextIndexMemoryUsage();
+      }
+    }
+  }
+  return total;
 }
 bool SchemaManager::IsIndexingInProgress() const {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
@@ -748,6 +808,32 @@ static vmsdk::info_field::Integer number_of_attributes(
     vmsdk::info_field::IntegerBuilder().App().Computed([] {
       return SchemaManager::Instance().GetNumberOfAttributes();
     }));
+static vmsdk::info_field::Integer number_of_text_attributes(
+    "index_stats", "number_of_text_attributes",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([] {
+      return SchemaManager::Instance().GetNumberOfTextAttributes();
+    }));
+static vmsdk::info_field::Integer number_of_tag_attributes(
+    "index_stats", "number_of_tag_attributes",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([] {
+      return SchemaManager::Instance().GetNumberOfTagAttributes();
+    }));
+static vmsdk::info_field::Integer number_of_numeric_attributes(
+    "index_stats", "number_of_numeric_attributes",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([] {
+      return SchemaManager::Instance().GetNumberOfNumericAttributes();
+    }));
+static vmsdk::info_field::Integer number_of_vector_attributes(
+    "index_stats", "number_of_vector_attributes",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([] {
+      return SchemaManager::Instance().GetNumberOfVectorAttributes();
+    }));
+static vmsdk::info_field::Integer corpus_num_text_items(
+    "index_stats", "corpus_num_text_items",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([] {
+      return SchemaManager::Instance().GetCorpusNumTextItems();
+    }));
+
 static vmsdk::info_field::Integer total_indexed_documents(
     "index_stats", "total_indexed_documents",
     vmsdk::info_field::IntegerBuilder().App().Computed([] {

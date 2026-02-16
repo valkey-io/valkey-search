@@ -33,6 +33,10 @@ class TextIndexSchema;
 class TextIndex;
 }  // namespace valkey_search::indexes::text
 
+namespace valkey_search {
+enum class QueryOperations : uint64_t;
+}  // namespace valkey_search
+
 namespace valkey_search::query {
 
 enum class PredicateType {
@@ -71,6 +75,8 @@ struct EvaluationResult {
 
 class Evaluator {
  public:
+  explicit Evaluator(valkey_search::QueryOperations query_operations)
+      : query_operations_(query_operations) {}
   virtual ~Evaluator() = default;
   virtual EvaluationResult EvaluateText(const TextPredicate& predicate,
                                         bool require_positions) = 0;
@@ -80,6 +86,12 @@ class Evaluator {
   // Access target key for proximity validation (only for Text)
   virtual const InternedStringPtr& GetTargetKey() const = 0;
   virtual bool IsPrefilterEvaluator() const { return false; }
+  valkey_search::QueryOperations GetQueryOperations() const {
+    return query_operations_;
+  }
+
+ protected:
+  valkey_search::QueryOperations query_operations_;
 };
 
 class Predicate;
@@ -358,12 +370,6 @@ class ComposedPredicate : public Predicate {
   std::optional<uint32_t> slop_;
   bool inorder_;
 };
-
-// Factory function for creating the exact phrase fetcher defined in text.cc
-// Used in ComposedPredicate evaluation for the exact phrase case optimization
-std::unique_ptr<indexes::EntriesFetcherBase> BuildExactPhraseFetcher(
-    const ComposedPredicate* composed_predicate);
-
-}  // namespace valkey_search::query
+};  // namespace valkey_search::query
 
 #endif  // VALKEYSEARCH_SRC_QUERY_PREDICATE_H_

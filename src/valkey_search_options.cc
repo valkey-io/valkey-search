@@ -162,6 +162,12 @@ constexpr absl::string_view kReIndexVectorRDBLoad{"skip-rdb-load"};
 static auto rdb_load_skip_index =
     config::BooleanBuilder(kReIndexVectorRDBLoad, false).Build();
 
+/// Should this instance skip corrupted internal update?
+constexpr absl::string_view kSkipCorruptedAOFEntries{
+    "skip-corrupted-internal-update-entries"};
+static auto skip_corrupted_internal_update_entries =
+    config::BooleanBuilder(kSkipCorruptedAOFEntries, false).Build();
+
 /// Control the modules log level verbosity
 constexpr absl::string_view kLogLevel{"log-level"};
 static auto log_level =
@@ -191,15 +197,15 @@ static auto log_level =
 /// Prefer partial results by default of not
 /// If set to true, search will use SOMESHARDS if user does not explicitly
 /// provide an option in the command
-constexpr absl::string_view kPreferPartialResults{"prefer-partial-results"};
-static config::Boolean prefer_partial_results(kPreferPartialResults, true);
+constexpr absl::string_view kEnablePartialResults{"enable-partial-results"};
+static config::Boolean prefer_partial_results(kEnablePartialResults, true);
 
 /// Prefer consistenct results by default of not
 /// If set to true, search will use CONSISTENT if user does not explicitly
 /// provide an option in the command
-constexpr absl::string_view kPreferConsistentResults{
-    "prefer-consistent-results"};
-static config::Boolean prefer_consistent_results(kPreferConsistentResults,
+constexpr absl::string_view kEnableConsistentResults{
+    "enable-consistent-results"};
+static config::Boolean prefer_consistent_results(kEnableConsistentResults,
                                                  false);
 
 /// Enable search result background cleanup
@@ -298,14 +304,6 @@ static auto thread_pool_wait_time_samples =
         })
         .Build();
 
-/// Enable proximity evaluation in prefilter evaluation stage
-/// When disabled, proximity evaluation is skipped in background threads and is
-/// performed only on main thread
-constexpr absl::string_view kEnableProximityPrefilterEval{
-    "enable-proximity-prefilter-eval"};
-static auto enable_proximity_prefilter_eval =
-    config::BooleanBuilder(kEnableProximityPrefilterEval, true).Build();
-
 /// Register the "--max-term-expansions" flag. Controls the maximum number of
 /// words to search in text operations (prefix, suffix, fuzzy) to limit memory
 /// usage
@@ -356,6 +354,37 @@ double GetSearchResultBufferMultiplier() {
   return search_result_buffer_multiplier;
 }
 
+/// Register the "drain-mutation-queue-on-load" flag
+/// Drain the mutation queue after RDB load
+constexpr absl::string_view kDrainMutationQueueOnLoadConfig{
+    "drain-mutation-queue-on-load"};
+static auto drain_mutation_queue_on_load =
+    config::BooleanBuilder(kDrainMutationQueueOnLoadConfig, true)
+        .Dev()  // can only be set in debug mode
+        .Build();
+
+/// Register the "drain-mutation-queue-on-save" flag
+/// Drain the mutation queue before RDB save
+constexpr absl::string_view kDrainMutationQueueOnSaveConfig{
+    "drain-mutation-queue-on-save"};
+static auto drain_mutation_queue_on_save =
+    config::BooleanBuilder(kDrainMutationQueueOnSaveConfig, false).Build();
+
+/// Register the "--async-fanout-threshold" flag. Controls the threshold
+/// for async fanout operations (minimum number of targets to use async)
+constexpr absl::string_view kAsyncFanoutThresholdConfig{
+    "async-fanout-threshold"};
+constexpr uint32_t kDefaultAsyncFanoutThreshold{30};     // 30 targets
+constexpr uint32_t kMinimumAsyncFanoutThreshold{1};      // At least 1 target
+constexpr uint32_t kMaximumAsyncFanoutThreshold{10000};  // Max 10k targets
+static auto async_fanout_threshold =
+    vmsdk::config::NumberBuilder(
+        kAsyncFanoutThresholdConfig,   // name
+        kDefaultAsyncFanoutThreshold,  // default threshold (30)
+        kMinimumAsyncFanoutThreshold,  // min threshold (1)
+        kMaximumAsyncFanoutThreshold)  // max threshold (10k)
+        .Build();
+
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 
 vmsdk::config::Number& GetHNSWBlockSize() {
@@ -388,6 +417,11 @@ const vmsdk::config::Boolean& GetSkipIndexLoad() {
 
 vmsdk::config::Boolean& GetSkipIndexLoadMutable() {
   return dynamic_cast<vmsdk::config::Boolean&>(*rdb_load_skip_index);
+}
+
+const vmsdk::config::Boolean& GetSkipCorruptedInternalUpdateEntries() {
+  return dynamic_cast<const vmsdk::config::Boolean&>(
+      *skip_corrupted_internal_update_entries);
 }
 
 vmsdk::config::Enum& GetLogLevel() {
@@ -433,13 +467,22 @@ vmsdk::config::Number& GetThreadPoolWaitTimeSamples() {
   return dynamic_cast<vmsdk::config::Number&>(*thread_pool_wait_time_samples);
 }
 
-vmsdk::config::Boolean& GetEnableProximityPrefilterEval() {
-  return dynamic_cast<vmsdk::config::Boolean&>(
-      *enable_proximity_prefilter_eval);
-}
-
 vmsdk::config::Number& GetMaxTermExpansions() {
   return dynamic_cast<vmsdk::config::Number&>(*max_term_expansions);
+}
+
+const vmsdk::config::Boolean& GetDrainMutationQueueOnSave() {
+  return dynamic_cast<const vmsdk::config::Boolean&>(
+      *drain_mutation_queue_on_save);
+}
+
+const vmsdk::config::Boolean& GetDrainMutationQueueOnLoad() {
+  return dynamic_cast<const vmsdk::config::Boolean&>(
+      *drain_mutation_queue_on_load);
+}
+
+vmsdk::config::Number& GetAsyncFanoutThreshold() {
+  return dynamic_cast<vmsdk::config::Number&>(*async_fanout_threshold);
 }
 
 }  // namespace options

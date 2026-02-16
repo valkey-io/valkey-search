@@ -8,11 +8,13 @@
 #include "src/index_schema.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
 #include <memory>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -247,8 +249,6 @@ TEST_P(IndexSchemaSubscriptionTest, OnKeyspaceNotificationTest) {
             std::get<2>(tuple)->failure_cnt);
       }
     }
-    EXPECT_EQ(index_schema->GetStats().document_cnt - document_cnt,
-              test_case.expected_document_cnt_delta);
 
     // Determine operation success/failure states using helper functions
     bool successful_add =
@@ -1295,7 +1295,6 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   EXPECT_EQ(tag_index->IsCaseSensitive(), false);
 
   EXPECT_TRUE(index_schema->IsBackfillInProgress());
-  EXPECT_EQ(index_schema->GetStats().document_cnt, 10);
   EXPECT_EQ(index_schema->CountRecords(), 10);
 }
 
@@ -1305,7 +1304,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   std::string index_schema_name_str("text_index_schema");
   bool with_suffix_trie = false;
   bool no_stem = false;
-  uint32_t min_stem_size = 3;
+  uint32_t min_stem_size = 4;  // MockIndexSchema::Create uses default value
 
   FakeSafeRDB rdb_stream;
 
@@ -1327,9 +1326,9 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
 
     // Create text index with both proto and schema
     auto text_index_schema = std::make_shared<indexes::text::TextIndexSchema>(
-        language, punctuation, with_offsets, stop_words);
+        language, punctuation, with_offsets, stop_words, min_stem_size);
     auto text_index = std::make_shared<indexes::Text>(
-        CreateTextIndexProto(with_suffix_trie, no_stem, min_stem_size),
+        CreateTextIndexProto(with_suffix_trie, no_stem, 1.0),
         text_index_schema);
     VMSDK_EXPECT_OK(
         index_schema->AddIndex("description", "desc_id", text_index));
@@ -1402,7 +1401,9 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
     EXPECT_TRUE(text_proto->has_text_index());
     EXPECT_EQ(text_proto->text_index().with_suffix_trie(), with_suffix_trie);
     EXPECT_EQ(text_proto->text_index().no_stem(), no_stem);
-    EXPECT_EQ(text_proto->text_index().min_stem_size(), min_stem_size);
+
+    // Validate schema-level min_stem_size
+    EXPECT_EQ(index_schema->GetMinStemSize(), min_stem_size);
 
     // TODO: Text index key tracking is not yet implemented
     // Validate that GetRecordCount returns 0 (expected for unimplemented key
@@ -1542,23 +1543,23 @@ TEST_F(IndexSchemaFriendTest, MutatedAttributesSanity) {
   auto mutated_attributes_1 =
       CreateMutatedAttributes(attribute_identifier, data_ptr);
   EXPECT_TRUE(index_schema->TrackMutatedRecord(
-      nullptr, key, std::move(mutated_attributes_1), true, false, false));
+      nullptr, key, std::move(mutated_attributes_1), 0, true, false, false));
   // Verify that adding a track attribute with backfill off after on return true
   auto mutated_attributes_2 =
       CreateMutatedAttributes(attribute_identifier, data_ptr);
   EXPECT_TRUE(index_schema->TrackMutatedRecord(
-      nullptr, key, std::move(mutated_attributes_2), false, false, false));
+      nullptr, key, std::move(mutated_attributes_2), 0, false, false, false));
   auto mutated_attributes_3 =
       CreateMutatedAttributes(attribute_identifier, data_ptr);
   EXPECT_FALSE(index_schema->TrackMutatedRecord(
-      nullptr, key, std::move(mutated_attributes_3), false, false, false));
+      nullptr, key, std::move(mutated_attributes_3), 0, false, false, false));
   EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 1);
   auto consumed_data = index_schema->ConsumeTrackedMutatedAttribute(key, true);
   EXPECT_TRUE(consumed_data.has_value());
   auto mutated_attributes_4 =
       CreateMutatedAttributes(attribute_identifier, data_ptr);
   EXPECT_FALSE(index_schema->TrackMutatedRecord(
-      nullptr, key, std::move(mutated_attributes_4), false, false, false));
+      nullptr, key, std::move(mutated_attributes_4), 0, false, false, false));
   consumed_data = index_schema->ConsumeTrackedMutatedAttribute(key, true);
   EXPECT_FALSE(consumed_data.has_value());
   EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 1);
@@ -1580,7 +1581,7 @@ TEST_F(IndexSchemaFriendTest, MutatedAttributes) {
           CreateMutatedAttributes(attribute_identifier, data_ptr);
       EXPECT_EQ(index_schema->attributes_.size(), 1);
       EXPECT_TRUE(index_schema->TrackMutatedRecord(
-          nullptr, key, std::move(mutated_attributes), false, false, false));
+          nullptr, key, std::move(mutated_attributes), 0, false, false, false));
     }
     if (!track_before_consumption_data_ptr.empty()) {
       VLOG(1) << "track_before_consumption_data_ptr is not empty";
@@ -1588,7 +1589,7 @@ TEST_F(IndexSchemaFriendTest, MutatedAttributes) {
       auto mutated_attributes = CreateMutatedAttributes(
           attribute_identifier, track_before_consumption_data_ptr);
       EXPECT_FALSE(index_schema->TrackMutatedRecord(
-          nullptr, key, std::move(mutated_attributes), false, false, false));
+          nullptr, key, std::move(mutated_attributes), 0, false, false, false));
       data_ptr = track_before_consumption_data_ptr;
     }
     EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 1);
@@ -1618,8 +1619,8 @@ TEST_F(IndexSchemaFriendTest, MutatedAttributes) {
         auto mutated_attributes = CreateMutatedAttributes(
             attribute_identifier, track_after_consumption_data_ptr);
         EXPECT_EQ(index_schema->TrackMutatedRecord(
-                      nullptr, key, std::move(mutated_attributes), false, false,
-                      false),
+                      nullptr, key, std::move(mutated_attributes), 0, false,
+                      false, false),
                   !track_before_consumption_data_ptr.empty());
       }
       auto consumed_data =
@@ -1671,10 +1672,11 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
     mutated_attributes[itr->second.GetIdentifier()].data = std::move(data);
     auto key_interned = StringInternStore::Intern(std::string(*key) + "0");
     index_schema->ProcessMutation(&fake_ctx, mutated_attributes, key_interned,
-                                  false);
+                                  false, false);
     EXPECT_EQ(mutations_thread_pool.QueueSize(), 1);
     VMSDK_EXPECT_OK(mutations_thread_pool.ResumeWorkers());
   }
+  EXPECT_EQ(index_schema->stats_.document_cnt, 1);
   const auto &stats = index_schema->GetStats();
   const size_t iterations = 100;
   // Test delete consistency
@@ -1688,9 +1690,10 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
       auto key_interned =
           StringInternStore::Intern(std::string(*key) + std::to_string(i));
       index_schema->ProcessMutation(&fake_ctx, mutated_attributes, key_interned,
-                                    false);
+                                    false, false);
     }
   }
+  EXPECT_EQ(index_schema->stats_.document_cnt, vectors.size());
   for (size_t i = 0; i < vectors.size(); ++i) {
     vmsdk::UniqueValkeyString data;
     IndexSchema::MutatedAttributes mutated_attributes;
@@ -1698,8 +1701,9 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
     auto key_interned =
         StringInternStore::Intern(std::string(*key) + std::to_string(i));
     index_schema->ProcessMutation(&fake_ctx, mutated_attributes, key_interned,
-                                  false);
+                                  false, true);
   }
+  EXPECT_EQ(index_schema->stats_.document_cnt, 0);
 
   WaitWorkerTasksAreCompleted(mutations_thread_pool);
   EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 0);
@@ -1725,9 +1729,10 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
       auto key_interned =
           StringInternStore::Intern(std::string(*key) + std::to_string(i));
       index_schema->ProcessMutation(&fake_ctx, mutated_attributes, key_interned,
-                                    false);
+                                    false, false);
     }
   }
+  EXPECT_EQ(index_schema->stats_.document_cnt, vectors.size());
   for (size_t i = 0; i < vectors.size(); ++i) {
     vmsdk::UniqueValkeyString data = vmsdk::MakeUniqueValkeyString(
         absl::string_view((char *)&vectors[i][0], dimensions * sizeof(float)));
@@ -1736,8 +1741,9 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
     auto key_interned =
         StringInternStore::Intern(std::string(*key) + std::to_string(i));
     index_schema->ProcessMutation(&fake_ctx, mutated_attributes, key_interned,
-                                  false);
+                                  false, true);
   }
+  EXPECT_EQ(index_schema->stats_.document_cnt, 0);
   WaitWorkerTasksAreCompleted(mutations_thread_pool);
   EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 0);
   EXPECT_EQ(stats.subscription_remove.success_cnt + vectors.size(),
@@ -1772,6 +1778,84 @@ TEST_F(IndexSchemaTest, ShouldBlockClient) {
   EXPECT_FALSE(ShouldBlockClient(&fake_ctx, true, false));
   EXPECT_FALSE(ShouldBlockClient(&fake_ctx, false, true));
   EXPECT_FALSE(ShouldBlockClient(&fake_ctx, true, true));
+}
+
+TEST_F(IndexSchemaRDBTest, DrainMutationQueueOnSaveEnabled) {
+  // Enable drain-mutation-queue-on-save configuration
+  auto &drain_config = const_cast<vmsdk::config::Boolean &>(
+      options::GetDrainMutationQueueOnSave());
+  auto drain_config_old_value = drain_config.GetValue();
+  VMSDK_EXPECT_OK(drain_config.SetValue(true));
+
+  vmsdk::ThreadPool mutations_thread_pool("test-mutations-", 1);
+  mutations_thread_pool.StartWorkers();
+
+  std::vector<absl::string_view> key_prefixes = {"test:"};
+  std::string index_schema_name_str("drain_test_index");
+  auto index_schema =
+      MockIndexSchema::Create(&fake_ctx_, index_schema_name_str, key_prefixes,
+                              std::make_unique<HashAttributeDataType>(),
+                              &mutations_thread_pool)
+          .value();
+
+  auto mock_index = std::make_shared<MockIndex>();
+  VMSDK_EXPECT_OK(
+      index_schema->AddIndex("test_attribute", "test_identifier", mock_index));
+
+  // Set up mock expectations for creating a queued mutation
+  EXPECT_CALL(*mock_index, IsTracked(testing::_)).WillRepeatedly(Return(false));
+  EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
+      .WillRepeatedly(Return(VALKEYMODULE_KEYTYPE_HASH));
+
+  ValkeyModuleString *test_data =
+      TestValkeyModule_CreateStringPrintf(nullptr, "test_data");
+  EXPECT_CALL(*kMockValkeyModule, HashGet(testing::_, VALKEYMODULE_HASH_CFIELDS,
+                                          testing::StrEq("test_identifier"),
+                                          testing::An<ValkeyModuleString **>(),
+                                          testing::TypedEq<void *>(nullptr)))
+      .WillOnce([test_data](ValkeyModuleKey *, int, const char *,
+                            ValkeyModuleString **value_out, void *) {
+        *value_out = test_data;
+        return VALKEYMODULE_OK;
+      });
+
+  // Temporarily suspend workers to create queued mutations
+  VMSDK_EXPECT_OK(mutations_thread_pool.SuspendWorkers());
+
+  // Trigger keyspace notification to create a queued mutation
+  auto key_str = vmsdk::MakeUniqueValkeyString("test:key1");
+  index_schema->OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
+                                       "event", key_str.get());
+
+  // Verify mutation is queued
+  EXPECT_GT(mutations_thread_pool.QueueSize(), 0);
+
+  // Save RDB
+  FakeSafeRDB rdb_stream;
+  std::atomic<bool> rdb_save_started{false};
+  std::atomic<bool> rdb_save_completed{false};
+  std::thread rdb_saver_thread(
+      [index_schema, &rdb_stream, &rdb_save_started, &rdb_save_completed]() {
+        rdb_save_started.store(true);
+        auto save_result = index_schema->RDBSave(&rdb_stream);
+        rdb_save_completed.store(save_result.ok());
+      });
+
+  // Save is expected to be blocked
+  while (!rdb_save_started.load()) {
+    std::this_thread::yield();
+  }
+  std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  EXPECT_FALSE(rdb_save_completed.load());
+
+  // Resume mutations_thread_pool workers to unblock save
+  VMSDK_EXPECT_OK(mutations_thread_pool.ResumeWorkers());
+  rdb_saver_thread.join();
+  EXPECT_TRUE(rdb_save_completed.load());
+  EXPECT_EQ(mutations_thread_pool.QueueSize(), 0);
+
+  // Reset configuration
+  VMSDK_EXPECT_OK(drain_config.SetValue(drain_config_old_value));
 }
 
 TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
@@ -1858,7 +1942,6 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     VMSDK_EXPECT_OK_STATUSOR(schema_or);
     auto normal_schema = std::move(schema_or.value());
 
-    EXPECT_EQ(normal_schema->GetStats().document_cnt, num_vectors);
     auto vec_index = normal_schema->GetIndex("embedding");
     VMSDK_EXPECT_OK_STATUSOR(vec_index);
     EXPECT_EQ(vec_index.value()->GetTrackedKeyCount(), num_vectors);
@@ -1922,7 +2005,6 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     VMSDK_EXPECT_OK_STATUSOR(schema_or);
     auto skip_schema = std::move(schema_or.value());
 
-    EXPECT_EQ(skip_schema->GetStats().document_cnt, num_vectors);
     auto vec_index = skip_schema->GetIndex("embedding");
     VMSDK_EXPECT_OK_STATUSOR(vec_index);
     EXPECT_EQ(vec_index.value()->GetTrackedKeyCount(), 0);
@@ -1967,11 +2049,11 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
 
     // Add text index
     auto text_index = std::make_shared<indexes::Text>(
-        CreateTextIndexProto(true, false, 6),
+        CreateTextIndexProto(true, false, 1.0),
         std::make_shared<indexes::text::TextIndexSchema>(
             data_model::LANGUAGE_ENGLISH,
             " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", true,
-            std::vector<std::string>{}));
+            std::vector<std::string>{}, 6));
     VMSDK_EXPECT_OK(
         index_schema->AddIndex("description", "desc_id", text_index));
 
@@ -2059,8 +2141,6 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     VMSDK_EXPECT_OK_STATUSOR(schema_or);
     auto mixed_schema = std::move(schema_or.value());
 
-    EXPECT_EQ(mixed_schema->GetStats().document_cnt, num_vectors);
-
     // Verify all index types are loaded
     auto vec_index = mixed_schema->GetIndex("embedding");
     auto num_index = mixed_schema->GetIndex("price");
@@ -2131,8 +2211,6 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
 
     VMSDK_EXPECT_OK_STATUSOR(schema_or);
     auto mixed_skip_schema = std::move(schema_or.value());
-
-    EXPECT_EQ(mixed_skip_schema->GetStats().document_cnt, num_vectors);
 
     // All indexes should be empty initially
     auto vec_index = mixed_skip_schema->GetIndex("embedding");

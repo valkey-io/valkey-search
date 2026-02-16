@@ -34,10 +34,7 @@ struct FilterTestCase {
   std::string expected_tree_structure;
 };
 
-class FilterTest : public ValkeySearchTestWithParam<FilterTestCase> {
- public:
-  indexes::PrefilterEvaluator evaluator_;
-};
+class FilterTest : public ValkeySearchTestWithParam<FilterTestCase> {};
 
 void InitIndexSchema(MockIndexSchema *index_schema) {
   data_model::NumericIndex numeric_index_proto;
@@ -99,9 +96,9 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
   index_schema->CreateTextIndexSchema();
   auto text_index_schema = index_schema->GetTextIndexSchema();
   data_model::TextIndex text_index_proto1 =
-      CreateTextIndexProto(true, false, 4);
+      CreateTextIndexProto(true, false, 1.0);
   data_model::TextIndex text_index_proto2 =
-      CreateTextIndexProto(false, true, 0);
+      CreateTextIndexProto(false, true, 1.0);
   auto text_index_1 =
       std::make_shared<indexes::Text>(text_index_proto1, text_index_schema);
   auto text_index_2 =
@@ -157,14 +154,17 @@ TEST_P(FilterTest, ParseParams) {
       auto text_index =
           valkey_search::indexes::text::TextIndexSchema::LookupTextIndex(
               per_key_indexes, interned_key);
-      indexes::PrefilterEvaluator evaluator(text_index);
+      indexes::PrefilterEvaluator evaluator(
+          text_index, parse_results.value().query_operations);
       EXPECT_EQ(test_case.evaluate_success.value(),
                 evaluator.Evaluate(*parse_results.value().root_predicate,
                                    interned_key));
     } else {
+      indexes::PrefilterEvaluator evaluator(
+          nullptr, parse_results.value().query_operations);
       EXPECT_EQ(test_case.evaluate_success.value(),
-                evaluator_.Evaluate(*parse_results.value().root_predicate,
-                                    interned_key));
+                evaluator.Evaluate(*parse_results.value().root_predicate,
+                                   interned_key));
     }
   }
 }
@@ -960,15 +960,13 @@ INSTANTIATE_TEST_SUITE_P(
             .create_success = true,
             .expected_tree_structure =
                 "AND(slop=0, inorder=true){\n"
-                "  TEXT-TERM(\"\\\", field_mask=3)\n"
-                "  TEXT-TERM(\"\\\", field_mask=3)\n"
+                "  TEXT-TERM(\"\\\\\", field_mask=3)\n"
                 "  TEXT-TERM(\"hello\", field_mask=3)\n"
                 "  TEXT-TERM(\"how\", field_mask=3)\n"
                 "  TEXT-TERM(\"\\are\", field_mask=3)\n"
                 "  TEXT-TERM(\"\\\", field_mask=3)\n"
                 "  TEXT-TERM(\"you\", field_mask=3)\n"
-                "  TEXT-TERM(\"\\\", field_mask=3)\n"
-                "  TEXT-TERM(\"\\doing?\", field_mask=3)\n"
+                "  TEXT-TERM(\"\\\\doing?\", field_mask=3)\n"
                 "}\n",
         },
         {
@@ -977,15 +975,13 @@ INSTANTIATE_TEST_SUITE_P(
             .create_success = true,
             .expected_tree_structure =
                 "AND{\n"
-                "  TEXT-TERM(\"\\\", field_mask=3)\n"
-                "  TEXT-TERM(\"\\\", field_mask=3)\n"
+                "  TEXT-TERM(\"\\\\\", field_mask=3)\n"
                 "  TEXT-TERM(\"hello\", field_mask=3)\n"
                 "  TEXT-TERM(\"how\", field_mask=3)\n"
                 "  TEXT-TERM(\"\\are\", field_mask=3)\n"
                 "  TEXT-TERM(\"\\\", field_mask=3)\n"
                 "  TEXT-TERM(\"you\", field_mask=3)\n"
-                "  TEXT-TERM(\"\\\", field_mask=3)\n"
-                "  TEXT-TERM(\"\\doing?\", field_mask=3)\n"
+                "  TEXT-TERM(\"\\\\doing?\", field_mask=3)\n"
                 "}\n",
         },
         {
@@ -996,7 +992,7 @@ INSTANTIATE_TEST_SUITE_P(
                 "AND{\n"
                 "  TEXT-TERM(\"hel(lo\", field_mask=3)\n"
                 "  TEXT-TERM(\"ho$w\", field_mask=3)\n"
-                "  TEXT-TERM(\"a*r\", field_mask=3)\n"
+                "  TEXT-TERM(\"a*re\", field_mask=3)\n"
                 "  TEXT-TERM(\"yo{u\", field_mask=3)\n"
                 "  TEXT-TERM(\"do|ing?\", field_mask=3)\n"
                 "}\n",
@@ -1008,17 +1004,11 @@ INSTANTIATE_TEST_SUITE_P(
             .create_success = true,
             .expected_tree_structure =
                 "AND{\n"
-                "  TEXT-TERM(\"\\\", field_mask=3)\n"
-                "  TEXT-TERM(\"\\\", field_mask=3)\n"
-                "  TEXT-TERM(\"(hello\", field_mask=3)\n"
+                "  TEXT-TERM(\"\\\\(hello\", field_mask=3)\n"
                 "  TEXT-TERM(\"$how\", field_mask=3)\n"
-                "  TEXT-TERM(\"\\\", field_mask=3)\n"
-                "  TEXT-TERM(\"*are\", field_mask=3)\n"
-                "  TEXT-TERM(\"\\\", field_mask=3)\n"
-                "  TEXT-TERM(\"-you\", field_mask=3)\n"
-                "  TEXT-TERM(\"\\\", field_mask=3)\n"
-                "  TEXT-TERM(\"\\\", field_mask=3)\n"
-                "  TEXT-TERM(\"%doing?\", field_mask=3)\n"
+                "  TEXT-TERM(\"\\*are\", field_mask=3)\n"
+                "  TEXT-TERM(\"\\-you\", field_mask=3)\n"
+                "  TEXT-TERM(\"\\\\%doing?\", field_mask=3)\n"
                 "}\n",
         },
         {
@@ -1030,44 +1020,35 @@ INSTANTIATE_TEST_SUITE_P(
                                        "  TEXT-TERM(\"how\", field_mask=3)\n"
                                        "  TEXT-TERM(\"are\", field_mask=3)\n"
                                        "  TEXT-TERM(\"you%\", field_mask=3)\n"
-                                       "  TEXT-TERM(\"do\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"doing\", field_mask=3)\n"
                                        "}\n",
         },
         {
             .test_name = "default_field_with_escape6",
             .filter = "Hello, how are you\\\\\\\\\\% doing",
             .create_success = true,
-            .expected_tree_structure = "AND{\n"
-                                       "  TEXT-TERM(\"hello\", field_mask=3)\n"
-                                       "  TEXT-TERM(\"how\", field_mask=3)\n"
-                                       "  TEXT-TERM(\"are\", field_mask=3)\n"
-                                       "  TEXT-TERM(\"you\\\", field_mask=3)\n"
-                                       "  TEXT-TERM(\"\\\", field_mask=3)\n"
-                                       "  TEXT-TERM(\"%\", field_mask=3)\n"
-                                       "  TEXT-TERM(\"do\", field_mask=3)\n"
-                                       "}\n",
+            .expected_tree_structure =
+                "AND{\n"
+                "  TEXT-TERM(\"hello\", field_mask=3)\n"
+                "  TEXT-TERM(\"how\", field_mask=3)\n"
+                "  TEXT-TERM(\"are\", field_mask=3)\n"
+                "  TEXT-TERM(\"you\\\\%\", field_mask=3)\n"
+                "  TEXT-TERM(\"doing\", field_mask=3)\n"
+                "}\n",
         },
         {
             .test_name = "default_field_with_escape_query_syntax",
             .filter =
                 "Hello, how are you\\]\\[\\$\\}\\{\\;\\:\\)\\(\\| \\-doing",
             .create_success = true,
-            .expected_tree_structure = "AND{\n"
-                                       "  TEXT-TERM(\"hello\", field_mask=3)\n"
-                                       "  TEXT-TERM(\"how\", field_mask=3)\n"
-                                       "  TEXT-TERM(\"are\", field_mask=3)\n"
-                                       "  TEXT-TERM(\"you]\", field_mask=3)\n"
-                                       "  TEXT-TERM(\"[\", field_mask=3)\n"
-                                       "  TEXT-TERM(\"$\", field_mask=3)\n"
-                                       "  TEXT-TERM(\"}\", field_mask=3)\n"
-                                       "  TEXT-TERM(\"{\", field_mask=3)\n"
-                                       "  TEXT-TERM(\";\", field_mask=3)\n"
-                                       "  TEXT-TERM(\":\", field_mask=3)\n"
-                                       "  TEXT-TERM(\")\", field_mask=3)\n"
-                                       "  TEXT-TERM(\"(\", field_mask=3)\n"
-                                       "  TEXT-TERM(\"|\", field_mask=3)\n"
-                                       "  TEXT-TERM(\"-do\", field_mask=3)\n"
-                                       "}\n",
+            .expected_tree_structure =
+                "AND{\n"
+                "  TEXT-TERM(\"hello\", field_mask=3)\n"
+                "  TEXT-TERM(\"how\", field_mask=3)\n"
+                "  TEXT-TERM(\"are\", field_mask=3)\n"
+                "  TEXT-TERM(\"you][$}{;:)(|\", field_mask=3)\n"
+                "  TEXT-TERM(\"-doing\", field_mask=3)\n"
+                "}\n",
         },
         {
             .test_name = "default_field_with_all_operations",
@@ -1094,7 +1075,7 @@ INSTANTIATE_TEST_SUITE_P(
                 "    TEXT-TERM(\"plants\", field_mask=1)\n"
                 "  }\n"
                 "  AND{\n"
-                "    TEXT-TERM(\"advanc\", field_mask=1)\n"
+                "    TEXT-TERM(\"advanced\", field_mask=1)\n"
                 "    TEXT-PREFIX(\"neu\", field_mask=2)\n"
                 "    TEXT-TERM(\"network\", field_mask=1)\n"
                 "    NUMERIC(num_field_2.0)\n"

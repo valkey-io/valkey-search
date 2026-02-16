@@ -8,13 +8,13 @@
 #ifndef VALKEYSEARCH_SRC_QUERY_RESPONSE_GENERATOR_H_
 #define VALKEYSEARCH_SRC_QUERY_RESPONSE_GENERATOR_H_
 
-#include <deque>
 #include <string>
+#include <vector>
 
 #include "src/attribute_data_type.h"
-#include "src/coordinator/coordinator.pb.h"
 #include "src/indexes/vector_base.h"
 #include "src/query/search.h"
+#include "src/utils/string_interning.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -36,16 +36,13 @@ namespace valkey_search::query {
 // Neighbor already contained in the attribute content map.
 // Neighbor without any attribute content.
 // Neighbor not comply to the pre-filter expression.
-void ProcessNeighborsForReply(ValkeyModuleCtx *ctx,
-                              const AttributeDataType &attribute_data_type,
-                              std::vector<indexes::Neighbor> &neighbors,
-                              const query::SearchParameters &parameters,
-                              const std::string &identifier);
-
-void ProcessNonVectorNeighborsForReply(
+void ProcessNeighborsForReply(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
     std::vector<indexes::Neighbor> &neighbors,
-    const query::SearchParameters &parameters);
+    const query::SearchParameters &parameters,
+    const std::optional<std::string> &vector_identifier,
+    const std::optional<query::SortByParameter> &sortby_parameter =
+        std::nullopt);
 
 }  // namespace valkey_search::query
 

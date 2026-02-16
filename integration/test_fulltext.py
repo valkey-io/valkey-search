@@ -17,7 +17,6 @@ This file contains tests for full text search.
 
 # NOTE: Test data uses lowercase/non-stemmed terms to avoid unpredictable stemming behavior.
 # Previous version used "Wonderful" which could stem to "wonder", making tests unreliable.
-# TODO: Add exact term match support for words that can be stemmed to allow testing both behaviors.
 
 # Constants for text queries on Hash documents.
 text_index_on_hash = "FT.CREATE products ON HASH PREFIX 1 product: SCHEMA desc TEXT"
@@ -25,9 +24,9 @@ hash_docs = [
     ["HSET", "product:4", "category", "books", "name", "Book", "price", "19.99", "rating", "4.8", "desc", "Order Opposite. Random Words. Random Words. wonder of wonders. Uncommon random words. Random Words."],
     ["HSET", "product:1", "category", "electronics", "name", "Laptop", "price", "999.99", "rating", "4.5", "desc", "1 2 3 4 5 6 7 8 9 0. Great oaks. Random Words. Random Words. Great oaks from little grey acorns grow. Impressive oak."],
     ["HSET", "product:3", "category", "electronics", "name", "Phone", "price", "299.00", "rating", "3.8", "desc", "Random Words. Experience. Random Words. Ok, this document uses some more common words from other docs. Interesting desc, impressive tablet. Random Words."],
-    ["HSET", "product:5", "category", "books", "name", "Book2", "price", "19.99", "rating", "1.0", "desc", "Unique slop word. Random Words. Random Words. greased the inspector's palm"],
+    ["HSET", "product:5", "category", "books", "name", "Book2", "price", "19.99", "rating", "1.0", "desc", "Unique slop word. Random Words. Random Words. greased the inspector's palm greas"],
     ["HSET", "product:2", "category", "electronics", "name", "Tablet", "price", "499.00", "rating", "4.0", "desc", "Random Words, These are not correct. Random Words. Interesting. Good beginning makes a good ending. Interesting desc"],
-    ["HSET", "product:6", "category", "books", "name", "BookOnAI", "price", "0.50", "rating", "5.0", "desc", "Poplog is a reflective, incrementally compiled software development environment for the programming languages POP-11, Common Lisp, Prolog, and Standard ML, originally created in the UK for teaching and research in artificial intelligence at the University of Sussex."]
+    ["HSET", "product:6", "category", "books", "name", "BookOnAI", "price", "0.50", "rating", "5.0", "desc", "Poplog is a reflective, incrementally compiled software development environment for the programming languages POP-11, Common Lisp, Prolog, and Standard ML, originally created in the UK for teaching and research in artificial intelligence at the University of Sussex. creat"]
 ]
 text_query_term = ["FT.SEARCH", "products", '@desc:"wonder"']
 text_query_term_nomatch = ["FT.SEARCH", "products", '@desc:"nomatch"']
@@ -35,8 +34,8 @@ text_query_prefix = ["FT.SEARCH", "products", '@desc:wond*']
 text_query_prefix2 = ["FT.SEARCH", "products", '@desc:wond*']
 text_query_prefix_nomatch = ["FT.SEARCH", "products", '@desc:nomatch*']
 text_query_prefix_multimatch = ["FT.SEARCH", "products", '@desc:grea*']
-text_query_exact_phrase1 = ["FT.SEARCH", "products", '@desc:"word wonder"']
-text_query_exact_phrase2 = ["FT.SEARCH", "products", '@desc:"random word wonder"']
+text_query_exact_phrase1 = ["FT.SEARCH", "products", '@desc:"words wonder"']
+text_query_exact_phrase2 = ["FT.SEARCH", "products", '@desc:"random words wonder"']
 
 expected_hash_key = b'product:4'
 expected_hash_value = {
@@ -84,6 +83,70 @@ expected_desc2_hash_value = {
     b'category': b"electronics"
 }
 
+# query: (non_knn_count, non_knn_docs, extra_args, knn2_count, knn2_docs)
+HYBRID_QUERY_EXPECTED_RESULTS = {
+    # Basic hybrid: text + tag + numeric
+    "@color:{green} cat slow loud @price:[10 30] shark": (1, {b"hash:00"}, (), 1, {b"hash:00"}),
+    # With INORDER
+    "cat @color:{green} slow loud @price:[10 30] shark": (1, {b"hash:00"}, ("INORDER",), 1, {b"hash:00"}),
+    # INORDER violation
+    "slow @color:{green} cat loud @price:[10 30] shark": (0, set(), ("INORDER",), 0, set()),
+    # Text term not found
+    "@color:{green} cat slow @price:[10 30] soft": (0, set(), (), 0, set()),
+    # Nested AND with OR: (text1 | text2) numeric tag
+    "(cat | dog) @price:[10 30] @color:{green}": (1, {b"hash:00"}, (), 1, {b"hash:00"}),
+    # Nested OR with AND: ((text1 text2) | (text3 text4)) tag - matches 00,03, KNN2 returns both
+    "((cat slow) | (quick brown)) @color:{green|red}": (2, {b"hash:00", b"hash:03"}, (), 2, {b"hash:00", b"hash:03"}),
+    # Deep nesting: (((text1 text2) numeric) | (text3 tag)) - matches 00,01, KNN2 returns both
+    "(((cat slow) @price:[10 30]) | (lettuce @color:{green}))": (2, {b"hash:00", b"hash:01"}, (), 2, {b"hash:00", b"hash:01"}),
+    # Multiple levels: ((text1 | text2) (text3 | text4)) numeric tag - matches 02 only
+    "((cat | river) (slow | fast)) @price:[30 50] @color:{brown}": (1, {b"hash:02"}, (), 1, {b"hash:02"}),
+    # Complex nested OR with multiple AND branches - matches 00,02,03, KNN2 returns 00,02
+    "((cat slow @color:{green}) | (dog fast @color:{brown}) | (fox jumps @color:{red}))": (3, {b"hash:00", b"hash:02", b"hash:03"}, (), 2, {b"hash:00", b"hash:02"}),
+    # Deeply nested with SLOP - matches 00,03, KNN2 returns both
+    "((cat shark) | (quick fox)) @color:{green|red}": (2, {b"hash:00", b"hash:03"}, ("SLOP", "3"), 2, {b"hash:00", b"hash:03"}),
+    # Triple nesting: (((text1 | text2) text3) | ((text4 text5) tag)) - matches 00,02,03, KNN2 returns 00,02
+    "(((cat | river) slow) | ((quick brown) @color:{red}))": (3, {b"hash:00", b"hash:02", b"hash:03"}, (), 2, {b"hash:00", b"hash:02"}),
+    # ORs in ORs: (((text1 | text2) | (text3 | text4)) numeric) - matches 00,03, KNN2 returns both
+    "(((cat | shark) | (quick | fox)) @price:[10 30])": (2, {b"hash:00", b"hash:03"}, (), 2, {b"hash:00", b"hash:03"}),
+    # Deep OR nesting: ((((text1 | text2) | text3) | text4) tag) - matches 00,01,03, KNN2 returns 00,01
+    "((((cat | shark) | lettuce) | fox) @color:{green|red})": (3, {b"hash:00", b"hash:01", b"hash:03"}, (), 2, {b"hash:00", b"hash:01"}),
+    # OR with nested AND branches - matches 00,02,03,04, KNN2 returns 00,02
+    "(((cat slow) | (quick brown)) | ((lazy dog) | (river fast)))": (4, {b"hash:00", b"hash:02", b"hash:03", b"hash:04"}, (), 2, {b"hash:00", b"hash:02"}),
+    # Complex: ((((text1 | text2) numeric) | ((text3 | text4) tag)) | text5) - matches 00,01,03, KNN2 returns 00,01
+    "((((cat | shark) @price:[10 30]) | ((quick | fox) @color:{red})) | lettuce)": (3, {b"hash:00", b"hash:01", b"hash:03"}, (), 2, {b"hash:00", b"hash:01"}),
+    # Maximum depth OR nesting - matches all 5, KNN2 returns 00,01
+    "(((((cat | shark) | lettuce) | fox) | dog) @color:{green|red|brown|blue})": (5, {b"hash:00", b"hash:01", b"hash:02", b"hash:03", b"hash:04"}, (), 2, {b"hash:00", b"hash:01"}),
+    # Multiple pure text ORs in AND - matches 00 only
+    "(cat | shark) (slow | loud) @price:[10 30]": (1, {b"hash:00"}, (), 1, {b"hash:00"}),
+    # OR with all AND children: ((text1 numeric) | (text2 tag)) - matches 00,01, KNN2 returns both
+    "((cat @price:[10 30]) | (lettuce @color:{green}))": (2, {b"hash:00", b"hash:01"}, (), 2, {b"hash:00", b"hash:01"}),
+    # INORDER violation in nested AND
+    "((slow cat) | (brown quick)) @color:{green|red}": (0, set(), ("INORDER",), 0, set()),
+    # Hybrid INORDER with numeric and tag - matches 00,01, KNN2 returns both
+    "((cat slow @price:[10 30]) | (lettuce @color:{green}))": (2, {b"hash:00", b"hash:01"}, ("INORDER",), 2, {b"hash:00", b"hash:01"}),
+    # OR with AND text branches and non-matching numeric - matches 00,02,03, KNN2 returns 00,02
+    "((cat slow) | (quick brown) | @price:[1000 2000])": (3, {b"hash:00", b"hash:02", b"hash:03"}, (), 2, {b"hash:00", b"hash:02"}),
+    # Text on its own would fail, but query matches when OR uses numeric predicate - matches 00 only
+    "cat (dog | @price:[10 30]) shark": (1, {b"hash:00"}, ("INORDER",), 1, {b"hash:00"}),
+    # Verification of failure: Change price range so Numeric1 fails too
+    "cat (dog | @price:[100 200]) shark": (0, set(), (), 0, set()),
+    # Nested OR with numeric inside AND - matches 00 only
+    "cat (dog | (slow @price:[10 30])) shark": (1, {b"hash:00"}, ("INORDER",), 1, {b"hash:00"}),
+    # Deep text-numeric leaf bubbles up through OR/AND gates - matches 00 only
+    "@price:[500 600] | (@price:[0 100] (@price:[99 100] | (@price:[10 40] (cat slow shark @price:[20 25]))))": (1, {b"hash:00"}, ("INORDER",), 1, {b"hash:00"}),
+    # Test 1: Nested OR with mixed predicates - matches 00,01, KNN2 returns both
+    "(cat (quick | @price:[10 30])) | lettuce": (2, {b"hash:00", b"hash:01"}, (), 2, {b"hash:00", b"hash:01"}),
+    # Test 2: Triple-nested mixed OR - matches 00,02,03,04, KNN2 returns 00,02
+    "((cat | @price:[10 30]) | (fox | @color:{red}))": (4, {b"hash:00", b"hash:02", b"hash:03", b"hash:04"}, (), 2, {b"hash:00", b"hash:02"}),
+    # Test 3: AND with all children being mixed ORs - matches 03 only
+    "(cat | @price:[10 30]) (fox | @color:{red})": (1, {b"hash:03"}, (), 1, {b"hash:03"}),
+    # Test 4: Pure text OR nested in AND with mixed OR - matches 00 only
+    "(cat | shark) (fox | @price:[10 30])": (1, {b"hash:00"}, (), 1, {b"hash:00"}),
+    # Test 5: Multiple levels of mixed ORs - matches all 5, KNN2 returns 00,01
+    "((cat | (quick | @price:[10 30])) | @color:{green})": (5, {b"hash:00", b"hash:01", b"hash:02", b"hash:03", b"hash:04"}, (), 2, {b"hash:00", b"hash:01"}),
+}
+
 def validate_fulltext_search(client: Valkey):
     # Wait for index backfill to complete
     IndexingTestHelper.wait_for_backfill_complete_on_node(client, "products")
@@ -121,12 +184,12 @@ def validate_fulltext_search(client: Valkey):
     result3 = client.execute_command("FT.SEARCH", "products", '@desc:xpe*')
     assert result1[0] == 1 and result2[0] == 1 and result3[0] == 0
     assert result1[1] == b"product:3" and result2[1] == b"product:3"
-    # TODO: Update these queries to non stemmed versions once the stem tree is supported and ingestion is updated.
     # Perform an exact phrase search operation on a unique phrase (exists in one doc).
-    result1 = client.execute_command("FT.SEARCH", "products", '@desc:"great oak from littl"')
-    result2 = client.execute_command("FT.SEARCH", "products", '@desc:"great oak from littl grey acorn grow"')
+    result1 = client.execute_command("FT.SEARCH", "products", '@desc:"great oaks from little"')
+    result2 = client.execute_command("FT.SEARCH", "products", '@desc:"great oaks from little grey acorns grow"')
     assert result1[0] == 1 and result2[0] == 1
     assert result1[1] == b"product:1" and result2[1] == b"product:1"
+    # A Composed AND search with multiple prefix terms - non proximity.
     result3 = client.execute_command("FT.SEARCH", "products", 'great oa* from lit* gr* acorn gr*')
     assert result3[0] == 1
     assert result3[1] == b"product:1"
@@ -136,31 +199,31 @@ def validate_fulltext_search(client: Valkey):
     result3 = client.execute_command("FT.SEARCH", "products", 'great oa* from lit* gr* acorn great', "SLOP", "0", "INORDER")
     assert result3[0] == 0
     # Perform an exact phrase search operation on a phrase existing in 2 documents.
-    result = client.execute_command("FT.SEARCH", "products", '@desc:"interest desc"')
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"interesting desc"')
     assert result[0] == 2
     assert set(result[1::2]) == {b"product:3", b"product:2"}
     # Perform an exact phrase search operation on a phrase existing in 5 documents.
-    result = client.execute_command("FT.SEARCH", "products", '@desc:"random word"')
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"random words"')
     assert result[0] == 5
     assert set(result[1::2]) == {b"product:1", b"product:2", b"product:3", b"product:4", b"product:5"}
     # Perform an exact phrase search operation on a phrase existing in 1 document.
-    result = client.execute_command("FT.SEARCH", "products", '@desc:"uncommon random word"')
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"uncommon random words"')
     assert result[0] == 1
     assert result[1] == b"product:4"
     # Test for searches on tokens that have common keys, but in-order does not match.
-    result = client.execute_command("FT.SEARCH", "products", '@desc:"opposit order"')
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"opposite order"')
     assert result[0] == 0
     # Test for searches on tokens that have common keys, but slop does not match.
-    result = client.execute_command("FT.SEARCH", "products", '@desc:"word uniqu"')
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"word unique"')
     assert result[0] == 0
     # Test for searches on tokens that have common keys and inorder matches but slop does not match.
-    result = client.execute_command("FT.SEARCH", "products", '@desc:"uniqu word"')
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"unique word"')
     assert result[0] == 0
     # Test for searches on tokens that have common keys and slop matches but inorder does not match.
-    result = client.execute_command("FT.SEARCH", "products", '@desc:"uniqu word slop"')
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"unique word slop"')
     assert result[0] == 0
     # Now, with the inorder, with no slop, it should match.
-    result = client.execute_command("FT.SEARCH", "products", '@desc:"uniqu slop word"')
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"unique slop word"')
     assert result[0] == 1
     assert result[1] == b"product:5"
     # Validating the inorder and slop checks for a query with multiple tokens.
@@ -180,14 +243,17 @@ def validate_fulltext_search(client: Valkey):
     # 2. Stemming is not done on words. (`words` is not stemmed and the ingestion is not)
     # 3. Punctuation is applied (removal of `,` in this example).
     result1 = client.execute_command("FT.SEARCH", "products", '@desc:"random words, these are not correct"')
-    result2 = client.execute_command("FT.SEARCH", "products", '@desc:"random word, these are not correct"')
+    result2 = client.execute_command("FT.SEARCH", "products", '@desc:"random word, correct"')
     result3 = client.execute_command("FT.SEARCH", "products", '@desc:"random words, correct"')
-    result4 = client.execute_command("FT.SEARCH", "products", '@desc:"random word, correct"')
-    assert result1[0] == 0 and result2[0] == 0 and result3[0] == 0
-    assert result4[0] == 1
-    assert result4[1] == b"product:2"
+    assert result1[0] == 0 and result2[0] == 0
+    assert result3[0] == 1
+    assert result3[1] == b"product:2"
+    # A Composed AND search with multiple terms - non proximity.
     # Validate that we can handle inorder = false by looking across documents with these terms below in any order.
     result = client.execute_command("FT.SEARCH", "products", 'artificial intelligence research')
+    assert result[0] == 1
+    assert result[1] == b"product:6"
+    result = client.execute_command("FT.SEARCH", "products", '@desc:artificial @desc:intelligence @desc:research')
     assert result[0] == 1
     assert result[1] == b"product:6"
     # Test fuzzy search
@@ -198,10 +264,127 @@ def validate_fulltext_search(client: Valkey):
 
 class TestFullText(ValkeySearchTestCaseDebugMode):
 
+    def test_escape_sequences(self):
+        """Test backslash escape handling with default and custom punctuation."""
+        client: Valkey = self.server.get_new_client()
+        
+        # Index 1: Default punctuation (includes backslash)
+        client.execute_command("FT.CREATE", "idx_default", "ON", "HASH", 
+                              "SCHEMA", "content", "TEXT", "NOSTEM")
+        
+        # Index 2: Custom punctuation (excludes backslash)
+        client.execute_command("FT.CREATE", "idx_no_bs", "ON", "HASH",
+                              "PUNCTUATION", ".,!",
+                              "SCHEMA", "content", "TEXT", "NOSTEM")
+        
+        # Test data
+        client.execute_command("HSET", "doc:1", "content", r'test\,value')
+        client.execute_command("HSET", "doc:2", "content", r'test2\nvalue2')
+        client.execute_command("HSET", "doc:3", "content", r'test3\\value3')
+        client.execute_command("HSET", "doc:4", "content", r'test4\\\word4')
+        client.execute_command("HSET", "doc:5", "content", r'test5\\\\word5')
+        
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx_default")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx_no_bs")
+        
+        # Test idx_default: backslash IS punctuation
+        # Escaped comma: single token
+        assert client.execute_command("FT.SEARCH", "idx_default", r'@content:test\,value')[0] == 1
+        # Backslash + letter: splits tokens during ingestion
+        assert client.execute_command("FT.SEARCH", "idx_default", r'@content:test2')[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx_default", r'@content:nvalue2')[0] == 1
+        # Test query side processing of backslash when it is a punctuation
+        assert client.execute_command("FT.SEARCH", "idx_default", r'test2\nvalue2')[0] == 1
+
+        # double backslashes: backslash in token, it won't split and acts as escape character
+        assert client.execute_command("FT.SEARCH", "idx_default", r'@content:test3\\value3')[0] == 1
+
+        # Test three or more backslashes to match the ingested document
+        assert client.execute_command("FT.SEARCH", "idx_default", r'test4\\\word4')[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx_default", r'@content:test5\\\\word5')[0] == 1
+        
+        # Test idx_no_bs: backslash NOT punctuation
+        # Escaped comma: single token
+        assert client.execute_command("FT.SEARCH", "idx_no_bs", r'@content:test\,value')[0] == 1
+        # Backslash + letter: single token
+        assert client.execute_command("FT.SEARCH", "idx_no_bs", r'@content:test2')[0] == 0
+        assert client.execute_command("FT.SEARCH", "idx_no_bs", r'@content:nvalue2')[0] == 0
+        assert client.execute_command("FT.SEARCH", "idx_no_bs", r'@content:test2\nvalue2')[0] == 1
+
+        assert client.execute_command("FT.SEARCH", "idx_no_bs", r'test4\\\word4')[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx_no_bs", r'@content:test5\\\\word5')[0] == 1
+
+    def test_casefolding(self):
+        """Test casefolding normalization - search using upper/lower case should find both."""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA", "content", "TEXT")
+        client.execute_command("HSET", "doc:1", "content", "café")
+        client.execute_command("HSET", "doc:2", "content", "CAFÉ")
+        client.execute_command("HSET", "doc:3", "content", "naïve")
+        client.execute_command("HSET", "doc:4", "content", "NAÏVE")
+        client.execute_command("HSET", "doc:5", "content", "hello")
+        client.execute_command("HSET", "doc:6", "content", "HeLLO")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+        # Search lowercase, should find both café docs
+        result = client.execute_command("FT.SEARCH", "idx", "café")
+        assert result[0] == 2 and set(result[1::2]) == {b"doc:1", b"doc:2"}
+        # Search uppercase, should find both café docs
+        result = client.execute_command("FT.SEARCH", "idx", "CAFÉ")
+        assert result[0] == 2 and set(result[1::2]) == {b"doc:1", b"doc:2"}
+        # Search lowercase, should find both naïve docs
+        result = client.execute_command("FT.SEARCH", "idx", "naïve")
+        assert result[0] == 2 and set(result[1::2]) == {b"doc:3", b"doc:4"}
+        # Search uppercase, should find both naïve docs
+        result = client.execute_command("FT.SEARCH", "idx", "NAÏVE")
+        assert result[0] == 2 and set(result[1::2]) == {b"doc:3", b"doc:4"}
+        # Search lowercase, should find both hello docs
+        result = client.execute_command("FT.SEARCH", "idx", "hello")
+        assert result[0] == 2 and set(result[1::2]) == {b"doc:5", b"doc:6"}
+        # Search uppercase, should find both hello docs
+        result = client.execute_command("FT.SEARCH", "idx", "HELLO")
+        assert result[0] == 2 and set(result[1::2]) == {b"doc:5", b"doc:6"}
+
+    def test_aggregate_with_text_search(self):
+        """Test FT.AGGREGATE with text search query."""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command(
+            "FT.CREATE", "books", "ON", "HASH", "PREFIX", "1", "book:",
+            "SCHEMA", "title", "TEXT", "author", "TEXT", "year", "NUMERIC"
+        )
+        client.execute_command("HSET", "book:1", "title", "The Great Gatsby", "author", "F. Scott Fitzgerald", "year", "1925")
+        client.execute_command("HSET", "book:2", "title", "The Catcher in the Rye", "author", "J.D. Salinger", "year", "1951")
+        client.execute_command("HSET", "book:3", "title", "The Grapes of Wrath", "author", "John Steinbeck", "year", "1939")
+        client.execute_command("HSET", "book:4", "title", "Great Expectations", "author", "Charles Dickens", "year", "1861")
+        client.execute_command("HSET", "book:5", "title", "The Great Adventure", "author", "Unknown Author", "year", "2020")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "books")
+        # Prefix: gre* matches great (books 1,4,5)
+        result = client.execute_command("FT.AGGREGATE", "books", "gre*", "LOAD", "1", "title")
+        assert result[0] == 3
+        assert {result[i][1] for i in range(1, 4)} == {b"The Great Gatsby", b"Great Expectations", b"The Great Adventure"}
+        # Fuzzy: %greet% matches great (ED=1)
+        result = client.execute_command("FT.AGGREGATE", "books", "%greet%", "LOAD", "1", "title")
+        assert result[0] == 3
+        assert {result[i][1] for i in range(1, 4)} == {b"The Great Gatsby", b"Great Expectations", b"The Great Adventure"}
+        # Exact phrase
+        result = client.execute_command("FT.AGGREGATE", "books", '"great gatsby"', "LOAD", "1", "title")
+        assert result[0] == 1
+        assert set(result[1]) == {b"title", b"The Great Gatsby"}
+        # Prefix with GROUPBY and SORTBY
+        result = client.execute_command(
+            "FT.AGGREGATE", "books", "gre*",
+            "LOAD", "1", "year",
+            "GROUPBY", "1", "@year",
+            "REDUCE", "COUNT", "0", "AS", "count",
+            "SORTBY", "2", "@year", "ASC"
+        )
+        assert result[0] == 3
+        assert set(result[1]) == {b"year", b"1861", b"count", b"1"}
+        assert set(result[2]) == {b"year", b"1925", b"count", b"1"}
+        assert set(result[3]) == {b"year", b"2020", b"count", b"1"}
+
     def test_text_search(self):
         """
         Test FT.SEARCH command with a text index.
-        Tests with both prefilter disabled and enabled.
         """
         client: Valkey = self.server.get_new_client()
         # Create the text index on Hash documents
@@ -393,6 +576,10 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert result[0] == 0
         result = client.execute_command("FT.SEARCH", "products2", '@desc2:"1 2 3 4 5 6 7 8 9 10"')
         assert result[0] == 0
+        # Composed AND search (non proximity) across both fields should return results.
+        result = client.execute_command("FT.SEARCH", "products2", '@desc:great @desc2:wonder')
+        assert result[0] == 1
+        assert result[1] == b"product:1"
 
     def test_default_tokenization(self):
         """
@@ -409,9 +596,8 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
             ("quick*", True, "Punctuation tokenization - hyphen creates word boundaries"),
             ("effect*", True, "Case insensitivity - lowercase matches uppercase"),
             ("\"The quick-running searches are finding EFFECTIVE results!\"", False, "Stop word cannot be used in exact phrase searches"),
-            # TODO: Change to True once the stem tree is supported and ingestion is updated.
-            ("\"quick-running searches finding EFFECTIVE results!\"", False, "Exact phrase without stopwords"),
-            ("\"quick-run search find EFFECT result!\"", True, "Exact Phrase Query without stopwords and using stemmed words"),
+            ("\"quick-running searches finding EFFECTIVE results!\"", True, "Exact phrase without stopwords"),
+            ("\"quick-run search find EFFECT result!\"", False, "Exact Phrase Query without stopwords and using stemmed words"),
             ("find*", True, "Prefix wildcard - matches 'finding'"),
             ("nonexistent", False, "Non-existent terms return no results")
         ]
@@ -424,27 +610,266 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
             else:
                 assert result[0] == 0, f"Failed: {description}"
 
-    @pytest.mark.skip(reason="TODO: ingest original words when stemming enabled")
     def test_stemming(self):
         """
-        Test text index NOSTEM option
+        Comprehensive stemming: term search with stem parents, phrases, prefix/fuzzy, NOSTEM field
         """
         client: Valkey = self.server.get_new_client()
-        client.execute_command("FT.CREATE idx ON HASH SCHEMA title TEXT content TEXT NOSTEM")
-        client.execute_command("HSET", "doc:1", "title", "running fast", "content", "running quickly")
-
-        expected = [1, b'doc:1', [b'content', b'running quickly', b'title', b'running fast']]
-        # Wait for index backfill to complete
+        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "WITHOFFSETS",
+                             "SCHEMA", "content", "TEXT", "nostem_field", "TEXT", "NOSTEM")
+        
+        # Docs with stem variants: happy/happiness->happi, run/running/runs->run, runner->runner (different stem)
+        # doc:0 and doc:9 test the NOSTEM fix: same word "swimming" appears in different field types
+        docs = [
+            ("doc:0", "I love swimming in the ocean", "swimming"),  # "swimming" in BOTH fields
+            ("doc:1", "I am very happy today", "happy"),
+            ("doc:2", "Happiness is key to success", "happiness"),
+            ("doc:3", "She is happier than before", "happier"),
+            ("doc:4", "Running every day improves health", "running"),
+            ("doc:5", "He runs very fast", "runs"),
+            ("doc:6", "The runner won the race", "runner"),
+            ("doc:7", "Driving is fun", "driving"),
+            ("doc:9", "unrelated xyz content", "swimming")  # "swimming" ONLY in NOSTEM field
+        ]
+        
+        for doc_id, content, nostem_content in docs:
+            client.execute_command("HSET", doc_id, "content", content, "nostem_field", nostem_content)
+            print(f"\nAfter inserting {doc_id}:")
+            print(f"  Content: {content}")
+            print(f"  STEM TREE contents:")
+            try:
+                result = client.execute_command("FT._DEBUG", "TEXTINFO", "idx", "STEM", "")
+                print(f"    {result}")
+            except Exception as e:
+                print(f"    Error: {e}")
+        
         IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
-        # We can find stems on 'title'
-        assert client.execute_command("FT.SEARCH", "idx", '@title:"run"') == expected
-
-        # We cannot find stems on 'content' with NOSTEM
-        assert client.execute_command("FT.SEARCH", "idx", '@content:"run"') == [0]
-
-        # We can find original words in both cases
-        assert client.execute_command("FT.SEARCH", "idx", '@title:"running"') == expected # TODO: fails here
-        assert client.execute_command("FT.SEARCH", "idx", '@content:"running"') == expected
+        
+        # Test 1: Term search finds multiple stem parents (happy, happiness share stem "happi")
+        # Note: "happier" stems differently and is not in the "happi" stem group
+        assert (client.execute_command("FT.SEARCH", "idx", '@content:happi')[0],
+                set(client.execute_command("FT.SEARCH", "idx", '@content:happi')[1::2])) == (2, {b"doc:1", b"doc:2"})
+        assert (client.execute_command("FT.SEARCH", "idx", '@content:happy')[0],
+                set(client.execute_command("FT.SEARCH", "idx", '@content:happy')[1::2])) == (2, {b"doc:1", b"doc:2"})
+        assert (client.execute_command("FT.SEARCH", "idx", '@content:happiness')[0],
+                set(client.execute_command("FT.SEARCH", "idx", '@content:happiness')[1::2])) == (2, {b"doc:1", b"doc:2"})
+        
+        # Verify "happier" stems differently - should only match doc:3, not doc:1 or doc:2
+        result = client.execute_command("FT.SEARCH", "idx", '@content:happier')
+        assert result[0] == 1 and result[1] == b'doc:3'
+        
+        # Test 2: Term search with different stem group (run/running/runs vs runner)
+        assert (client.execute_command("FT.SEARCH", "idx", '@content:run')[0],
+                set(client.execute_command("FT.SEARCH", "idx", '@content:run')[1::2])) == (2, {b"doc:4", b"doc:5"})
+        assert (client.execute_command("FT.SEARCH", "idx", '@content:running')[0],
+                set(client.execute_command("FT.SEARCH", "idx", '@content:running')[1::2])) == (2, {b"doc:4", b"doc:5"})
+        result = client.execute_command("FT.SEARCH", "idx", '@content:runner')
+        assert result[0] == 1 and result[1] == b"doc:6"
+        assert set(result[2]) == {b'content', b'The runner won the race', b'nostem_field', b'runner'}
+        
+        # Test 3: NOSTEM field never expands stems
+        result = client.execute_command("FT.SEARCH", "idx", '@nostem_field:happy')
+        assert result[0] == 1 and result[1] == b'doc:1'
+        assert set(result[2]) == {b'content', b'I am very happy today', b'nostem_field', b'happy'}
+        
+        assert client.execute_command("FT.SEARCH", "idx", '@nostem_field:happi')[0] == 0
+        
+        # Test 4: Exact phrase (quotes) - NO stem expansion
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"very happy today"')
+        assert result[0] == 1 and result[1] == b'doc:1'
+        assert set(result[2]) == {b'content', b'I am very happy today', b'nostem_field', b'happy'}
+        
+        assert client.execute_command("FT.SEARCH", "idx", '@content:"very happi today"')[0] == 0
+        
+        # Test 5: Non-exact phrase (no quotes) - DOES use stem expansion
+        result = client.execute_command("FT.SEARCH", "idx", '@content:very happi today')
+        assert result[0] == 1 and result[1] == b'doc:1'
+        assert set(result[2]) == {b'content', b'I am very happy today', b'nostem_field', b'happy'}
+        
+        # Test different term with same stem - "happiness" also stems to "happi"
+        result = client.execute_command("FT.SEARCH", "idx", '@content:very happiness today')
+        assert result[0] == 1 and result[1] == b'doc:1'
+        assert set(result[2]) == {b'content', b'I am very happy today', b'nostem_field', b'happy'}
+        
+        # Test 5a: Stem expansion with INORDER - verifies stem variants maintain position ordering
+        result = client.execute_command("FT.SEARCH", "idx", '@content:run every day', "INORDER")
+        assert result[0] == 1 and result[1] == b'doc:4'
+        assert set(result[2]) == {b'content', b'Running every day improves health', b'nostem_field', b'running'}
+        
+        # Test 5b: Stem expansion with SLOP - verifies stem variants can match with gaps
+        # "run" with "health" in doc:4: "Running [every day improves] health" has gap of 3 words
+        result = client.execute_command("FT.SEARCH", "idx", '@content:run health', "SLOP", "2")
+        assert result[0] == 0  # Gap too large for SLOP=2
+        result = client.execute_command("FT.SEARCH", "idx", '@content:run health', "SLOP", "3")
+        assert result[0] == 1 and result[1] == b'doc:4'
+        assert set(result[2]) == {b'content', b'Running every day improves health', b'nostem_field', b'running'}
+        
+        # Test 5c: Stem expansion with both INORDER and SLOP - most restrictive case
+        # "run" with "improves" in doc:4: "Running [every day] improves" has gap of 2 words in correct order
+        result = client.execute_command("FT.SEARCH", "idx", '@content:run improv', "SLOP", "1", "INORDER")
+        assert result[0] == 0  # Gap too large for SLOP=1
+        result = client.execute_command("FT.SEARCH", "idx", '@content:run improv', "SLOP", "2", "INORDER")
+        assert result[0] == 1 and result[1] == b'doc:4'
+        assert set(result[2]) == {b'content', b'Running every day improves health', b'nostem_field', b'running'}
+        
+        # Test 6: Prefix wildcard - NO stem expansion (matches literal prefix)
+        # "happi*" matches "happier" and "happiness" (both start with "happi")
+        assert (client.execute_command("FT.SEARCH", "idx", '@content:happi*')[0],
+                set(client.execute_command("FT.SEARCH", "idx", '@content:happi*')[1::2])) == (2, {b"doc:2", b"doc:3"})
+        
+        # Test 7: Fuzzy search - NO stem expansion (matches by edit distance)
+        result = client.execute_command("FT.SEARCH", "idx", '@content:%happy%')
+        assert result[0] == 1 and result[1] == b'doc:1'
+        assert set(result[2]) == {b'content', b'I am very happy today', b'nostem_field', b'happy'}
+        
+        # ED=2 for "happi" matches "happy" (ED=1) and "happier" (ED=2), not "happiness" (ED=3)
+        assert (client.execute_command("FT.SEARCH", "idx", '@content:%%happi%%')[0],
+                set(client.execute_command("FT.SEARCH", "idx", '@content:%%happi%%')[1::2])) == (2, {b"doc:1", b"doc:3"})
+        
+        # Test 8: VERBATIM mode - NO stem expansion (exact match only)
+        assert client.execute_command("FT.SEARCH", "idx", '@content:happi', "VERBATIM")[0] == 0
+        
+        result = client.execute_command("FT.SEARCH", "idx", '@content:happy', "VERBATIM")
+        assert result[0] == 1 and result[1] == b'doc:1'
+        assert set(result[2]) == {b'content', b'I am very happy today', b'nostem_field', b'happy'}
+        
+        # Test 9: Complex - stem term in AND/OR queries
+        result = client.execute_command("FT.SEARCH", "idx", '@content:very @content:happi')
+        assert result[0] == 1 and result[1] == b'doc:1'
+        assert set(result[2]) == {b'content', b'I am very happy today', b'nostem_field', b'happy'}
+        
+        assert (client.execute_command("FT.SEARCH", "idx", '@content:happi | @content:run')[0],
+                set(client.execute_command("FT.SEARCH", "idx", '@content:happi | @content:run')[1::2])) == (4, {b"doc:1", b"doc:2", b"doc:4", b"doc:5"})
+        
+        # Test 10: Validate fix for stem variants NOT matching in NOSTEM fields
+        result = client.execute_command("FT.SEARCH", "idx", "swim")
+        assert result[0] == 1, f"Expected 1 result for 'swim', got {result[0]}"
+        assert result[1] == b"doc:0", f"Expected doc:0, got {result[1]}"
+        assert b"doc:9" not in set(result[1::2]), "doc:9 should NOT match (has 'swimming' only in NOSTEM field)"
+        
+        # Test 11: Mixed stemming behavior with TEXT and TEXT NOSTEM fields
+        # This test validates default field search (no field specifier) when schema has mixed field types
+        client.execute_command("FT.CREATE", "testindex", "ON", "HASH", "PREFIX", "1", "product:", "SCHEMA", "title", "TEXT", "NOSTEM", "desc", "TEXT")
+        
+        client.execute_command("HSET", "product:3", "title", "run", "desc", "abc")
+        client.execute_command("HSET", "product:4", "title", "abc", "desc", "run")
+        client.execute_command("HSET", "product:5", "title", "abc", "desc", "running")
+        
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "testindex")
+        
+        result = client.execute_command("FT.SEARCH", "testindex", "run", "DIALECT", "2")
+        assert result[0] == 3, f"Expected 3 results for 'run', got {result[0]}"
+        assert set(result[1::2]) == {b"product:3", b"product:4", b"product:5"}
+        
+        result = client.execute_command("FT.SEARCH", "testindex", "running", "DIALECT", "2")
+        assert result[0] == 2, f"Expected 2 results for 'running', got {result[0]}"
+        assert set(result[1::2]) == {b"product:4", b"product:5"}
+        
+        # Update product:3 to have "running" in NOSTEM title field
+        client.execute_command("HSET", "product:3", "title", "running", "desc", "abc")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "testindex")
+        
+        result = client.execute_command("FT.SEARCH", "testindex", "run", "DIALECT", "2")
+        assert result[0] == 2, f"Expected 2 results for 'run' after update, got {result[0]}"
+        assert set(result[1::2]) == {b"product:4", b"product:5"}
+        
+        result = client.execute_command("FT.SEARCH", "testindex", "running", "DIALECT", "2")
+        assert result[0] == 3, f"Expected 3 results for 'running' after update, got {result[0]}"
+        assert set(result[1::2]) == {b"product:3", b"product:4", b"product:5"}
+        
+        # Test 12: Schema-level MINSTEMSIZE - stemming applies to all fields
+        client.execute_command("FT.CREATE", "testindex2", "ON", "HASH", "PREFIX", "1", "product:", 
+                             "MINSTEMSIZE", "6",
+                             "SCHEMA", "title", "TEXT", "desc", "TEXT")
+        
+        client.execute_command("HSET", "product:3", "title", "happiness", "desc", "abc")
+        client.execute_command("HSET", "product:4", "title", "happy", "desc", "run")
+        client.execute_command("HSET", "product:5", "title", "abc", "desc", "happy")
+        
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "testindex2")
+        
+        # Schema-level MINSTEMSIZE=6: only words with length >= 6 get stemmed
+        # "happiness" (length 9) gets stemmed to "happi"
+        # "happy" (length 5) does NOT get stemmed (< 6)
+        result = client.execute_command("FT.SEARCH", "testindex2", "happi", "DIALECT", "2")
+        assert result[0] == 1, f"Expected 1 result for 'happi', got {result[0]}"
+        assert set(result[1::2]) == {b"product:3"}, f"Expected {{product:3}}, got {set(result[1::2])}"
+        
+        # Searching for "happy" matches product:3 (happiness stems to happi), product:4 and product:5 (exact match)
+        result = client.execute_command("FT.SEARCH", "testindex2", "happy", "DIALECT", "2")
+        assert result[0] == 3, f"Expected 3 results for 'happy', got {result[0]}"
+        assert set(result[1::2]) == {b"product:3", b"product:4", b"product:5"}, f"Expected {{product:3, product:4, product:5}}, got {set(result[1::2])}"
+        
+        # Test 13: Stem variants with words under min stem size (3 letters)
+        # Words like "cry", "cri", "cries" test stem behavior for short words
+        client.execute_command("FT.CREATE", "testindex3", "ON", "HASH", "PREFIX", "1", "product:", "SCHEMA", "title", "TEXT")
+        
+        client.execute_command("HSET", "product:3", "title", "cri")
+        client.execute_command("HSET", "product:4", "title", "cry")
+        
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "testindex3")
+        
+        # "cri" should only match exact "cri" (3 letters, at min stem threshold)
+        result = client.execute_command("FT.SEARCH", "testindex3", "cri", "DIALECT", "2")
+        assert result[0] == 1, f"Expected 1 result for 'cri', got {result[0]}"
+        assert set(result[1::2]) == {b"product:3"}
+        
+        # "cry" should match both "cry" and "cri" (they stem to same root)
+        result = client.execute_command("FT.SEARCH", "testindex3", "cry", "DIALECT", "2")
+        assert result[0] == 2, f"Expected 2 results for 'cry', got {result[0]}"
+        assert set(result[1::2]) == {b"product:3", b"product:4"}
+        
+        # Now add "cries"
+        client.execute_command("HSET", "product:5", "title", "cries")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "testindex3")
+        
+        # "cries" should match "cries" and "cri" (they share stem)
+        result = client.execute_command("FT.SEARCH", "testindex3", "cries", "DIALECT", "2")
+        assert result[0] == 2, f"Expected 2 results for 'cries', got {result[0]}"
+        assert set(result[1::2]) == {b"product:3", b"product:5"}
+        
+        # "cry" should now match all three: "cry", "cri", and "cries"
+        result = client.execute_command("FT.SEARCH", "testindex3", "cry", "DIALECT", "2")
+        assert result[0] == 3, f"Expected 3 results for 'cry', got {result[0]}"
+        assert set(result[1::2]) == {b"product:3", b"product:4", b"product:5"}
+        
+        # "cri" should match "cri" and "cries" (updated from single match)
+        result = client.execute_command("FT.SEARCH", "testindex3", "cri", "DIALECT", "2")
+        assert result[0] == 2, f"Expected 2 results for 'cri' after adding cries, got {result[0]}"
+        assert set(result[1::2]) == {b"product:3", b"product:5"}
+        
+        # Test 14: Two-letter words below min stem size
+        client.execute_command("FT.CREATE", "testindex4", "ON", "HASH", "PREFIX", "1", "product:", "SCHEMA", "title", "TEXT")
+        
+        client.execute_command("HSET", "product:3", "title", "ai")
+        client.execute_command("HSET", "product:4", "title", "ais")
+        
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "testindex4")
+        
+        # "ai" (2 letters, below min stem size of 3) should only match exact "ai"
+        result = client.execute_command("FT.SEARCH", "testindex4", "ai", "DIALECT", "2")
+        assert result[0] == 1, f"Expected 1 result for 'ai', got {result[0]}"
+        assert set(result[1::2]) == {b"product:3"}
+        
+        # "ais" (3 letters, at min stem size) should match both "ais" and "ai"
+        result = client.execute_command("FT.SEARCH", "testindex4", "ais", "DIALECT", "2")
+        assert result[0] == 2, f"Expected 2 results for 'ais', got {result[0]}"
+        assert set(result[1::2]) == {b"product:3", b"product:4"}
+        
+        # Test 15: NOSTEM fields with stem expansion from other fields
+        client.execute_command("FT.CREATE", "testindex_nostem", "ON", "HASH", "PREFIX", "1", "product:", "SCHEMA", "title", "TEXT", "NOSTEM", "desc", "TEXT", "NOSTEM")
+        
+        client.execute_command("HSET", "product:3", "title", "abc", "desc", "happiness")
+        client.execute_command("HSET", "product:4", "title", "abc", "desc", "happy")
+        client.execute_command("HSET", "product:5", "title", "abc", "desc", "happi")
+        
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "testindex_nostem")
+        
+        # When searching for "happiness", should match:
+        # - product:3 (exact match "happiness")
+        result = client.execute_command("FT.SEARCH", "testindex_nostem", "happiness", "DIALECT", "2")
+        assert result[0] == 1, f"Expected 1 results for 'happiness', got {result[0]}"
+        assert set(result[1::2]) == {b"product:3"}, f"Expected {{product:3}}, got {set(result[1::2])}"
 
     def test_custom_stopwords(self):
         """
@@ -1521,6 +1946,135 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         result = client.execute_command("FT.SEARCH", "idx1", 'race', "RETURN", "6", "content", "AS", "text_content", "price", "AS", "numeric_content")
         assert result == [1, b"doc:1", [b"text_content", b"I am going to a race", b"numeric_content", b"100"]]
 
+    def test_nested_composed_or_with_slop(self):
+        """Test nested composed OR queries with SLOP parameter"""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "hash:", "SCHEMA",
+                             "title", "TEXT", "NOSTEM", "WITHSUFFIXTRIE",
+                             "body", "TEXT", "NOSTEM", "WITHSUFFIXTRIE",
+                             "color", "TAG",
+                             "price", "NUMERIC")
+        # Insert test data
+        client.execute_command("HSET", "hash:00", "title", "plum", "body", "cat slow loud shark ocean eagle tomato", "color", "green", "price", "21")
+        client.execute_command("HSET", "hash:01", "title", "kiwi peach apple chair orange door orange melon chair", "body", "lettuce", "color", "green", "price", "8")
+        client.execute_command("HSET", "hash:02", "title", "plum", "body", "river cat slow build eagle fast dog", "color", "brown", "price", "40")
+        client.execute_command("HSET", "hash:03", "title", "window smooth apple silent movie chair window puzzle door", "body", "desert city desert slow jump drive lettuce forest", "color", "blue", "price", "10")
+        client.execute_command("HSET", "hash:04", "title", "kiwi lemon orange chair door kiwi", "body", "river fast eagle loud", "color", "purple", "price", "25")
+        client.execute_command("HSET", "hash:05", "title", "lamp quick banana plum desk game story window sharp", "body", "cold village fly", "color", "red", "price", "0")
+        client.execute_command("HSET", "hash:06", "title", "chair apple puzzle", "body", "warm jump potato run desert", "color", "yellow", "price", "5")
+        client.execute_command("HSET", "hash:07", "title", "silent puzzle lemon window movie apple melon", "body", "potato ocean city potato jump carrot warm tomato", "color", "green", "price", "23")
+        client.execute_command("HSET", "hash:08", "title", "game quick music game", "body", "ocean carrot jump quiet build shark onion", "color", "black", "price", "33")
+        client.execute_command("HSET", "hash:09", "title", "music quick", "body", "city fly village potato village fly drive", "color", "orange", "price", "19")
+        client.execute_command("HSET", "hash:10", "title", "music quick", "body", "word2 word2 word2 word2 word 3 word3 word3 word1 word2 word3", "color", "orange", "price", "19")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+        # Test query: '(((door | sharp)) (sharp | desk))' SLOP 2
+        result = client.execute_command("FT.SEARCH", "idx", "(((door | sharp)) (sharp | desk))", "SLOP", "2", "DIALECT", "2")
+        assert result[0] == 0
+        # Test query: '(((shark build)))' SLOP 1
+        result = client.execute_command("FT.SEARCH", "idx", "(((shark build)))", "SLOP", "1", "DIALECT", "2")
+        assert result[0] == 1
+        assert result[1] == b"hash:08"
+        # Testing SeekForwardPosition Capability:
+        result = client.execute_command("FT.SEARCH", "idx", "word1 word2 word3", "INORDER", "DIALECT", "2")
+        assert result[0] == 1
+        assert result[1] == b"hash:10"
+
+    def test_hybrid_vector_query(self):
+        """Test hybrid vector queries with deeply nested combinations"""
+        import numpy as np
+        client: Valkey = self.server.get_new_client()
+
+        def make_vector(vals):
+            return np.array(vals, dtype=np.float32).tobytes()
+
+        for vector_index_type in ["HNSW", "FLAT"]:
+            match vector_index_type:
+                case "HNSW":
+                    vector_args = ["VECTOR", "HNSW", "6", "TYPE", "FLOAT32", "DIM", "4", "DISTANCE_METRIC", "COSINE"]
+                case "FLAT":
+                    vector_args = ["VECTOR", "FLAT", "6", "TYPE", "FLOAT32", "DIM", "4", "DISTANCE_METRIC", "COSINE"]
+
+            client.execute_command(
+                "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "hash:",
+                "SCHEMA",
+                "embedding", *vector_args,
+                "title", "TEXT", "NOSTEM",
+                "body", "TEXT", "NOSTEM",
+                "color", "TAG",
+                "price", "NUMERIC"
+            )
+
+            client.execute_command("HSET", "hash:00", "embedding", make_vector([1.0, 0.0, 0.0, 0.0]), "title", "plum", "body", "cat slow loud shark ocean eagle tomato", "color", "green", "price", "21")
+            client.execute_command("HSET", "hash:01", "embedding", make_vector([0.9, 0.4, 0.0, 0.0]), "title", "kiwi peach apple chair orange door orange melon chair", "body", "lettuce", "color", "green", "price", "8")
+            client.execute_command("HSET", "hash:02", "embedding", make_vector([0.7, 0.7, 0.0, 0.0]), "title", "plum", "body", "river cat slow build eagle fast dog", "color", "brown", "price", "40")
+            client.execute_command("HSET", "hash:03", "embedding", make_vector([0.4, 0.9, 0.0, 0.0]), "title", "banana", "body", "quick brown fox jumps", "color", "red", "price", "15")
+            client.execute_command("HSET", "hash:04", "embedding", make_vector([0.0, 1.0, 0.0, 0.0]), "title", "grape", "body", "lazy dog sleeps", "color", "blue", "price", "25")
+
+            IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+            query_vec = make_vector([1.0, 0.0, 0.0, 0.0])
+
+            for query, (_, _, extra_args, knn_count, knn_docs) in HYBRID_QUERY_EXPECTED_RESULTS.items():
+                full_query = f"({query})=>[KNN 2 @embedding $vec]"
+                expected_count, expected_docs = knn_count, knn_docs
+                cmd = ["FT.SEARCH", "idx", full_query, "PARAMS", "2", "vec", query_vec, "DIALECT", "2"] + list(extra_args) + ["NOCONTENT"]
+                result = client.execute_command(*cmd)
+                result_docs = set(result[1:]) if expected_count > 0 else set()
+                assert result[0] == expected_count, f"[{vector_index_type}] Query '{full_query}' (KNN={use_knn}) expected count {expected_count}, got {result[0]}"
+                if expected_count > 0:
+                    assert result_docs == expected_docs, f"[{vector_index_type}] Query '{full_query}' (KNN={use_knn}) expected docs {expected_docs}, got {result_docs}"
+            client.execute_command("FT.DROPINDEX", "idx")
+            for i in range(5):
+                client.execute_command("DEL", f"hash:0{i}")
+
+    def test_hybrid_non_vector_query(self):
+        """Test hybrid non-vector queries with deeply nested combinations"""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "hash:", "SCHEMA",
+                             "title", "TEXT", "NOSTEM",
+                             "body", "TEXT", "NOSTEM",
+                             "color", "TAG",
+                             "price", "NUMERIC")
+        # Insert test data
+        client.execute_command("HSET", "hash:00", "title", "plum", "body", "cat slow loud shark ocean eagle tomato", "color", "green", "price", "21")
+        client.execute_command("HSET", "hash:01", "title", "kiwi peach apple chair orange door orange melon chair", "body", "lettuce", "color", "green", "price", "8")
+        client.execute_command("HSET", "hash:02", "title", "plum", "body", "river cat slow build eagle fast dog", "color", "brown", "price", "40")
+        client.execute_command("HSET", "hash:03", "title", "banana", "body", "quick brown fox jumps", "color", "red", "price", "15")
+        client.execute_command("HSET", "hash:04", "title", "grape", "body", "lazy dog sleeps", "color", "blue", "price", "25")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+
+        for query, (count, docs, extra_args, _, _) in HYBRID_QUERY_EXPECTED_RESULTS.items():
+            cmd = ["FT.SEARCH", "idx", query, "DIALECT", "2"] + list(extra_args)
+            result = client.execute_command(*cmd)
+            assert result[0] == count, f"Query '{query}' expected count {count}, got {result[0]}"
+            if count > 0:
+                assert set(result[1::2]) == docs, f"Query '{query}' expected docs {docs}, got {set(result[1::2])}"
+
+
+    def test_text_negation(self):
+        """Test negation with text predicates"""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA", "content", "TEXT", "NOSTEM")
+        
+        client.execute_command("HSET", "doc:1", "content", "apple banana")
+        client.execute_command("HSET", "doc:2", "content", "apple cherry")
+        client.execute_command("HSET", "doc:3", "content", "banana cherry")
+        client.execute_command("HSET", "doc:4", "content", "grape orange")
+        
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+        
+        # Negation of single term
+        result = client.execute_command("FT.SEARCH", "idx", "-apple", "DIALECT", "2")
+        assert (result[0], set(result[1::2])) == (2, {b"doc:3", b"doc:4"})
+        
+        # Negation with AND
+        result = client.execute_command("FT.SEARCH", "idx", "banana -apple", "DIALECT", "2")
+        print(result)
+        assert (result[0], result[1]) == (1, b"doc:3")
+        
+        # Negation of phrase
+        result = client.execute_command("FT.SEARCH", "idx", '-"apple banana"', "DIALECT", "2")
+        assert (result[0], set(result[1::2])) == (3, {b"doc:2", b"doc:3", b"doc:4"})
+
 class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
     """
     Tests that require debug mode enabled for memory statistics validation.
@@ -1684,3 +2238,154 @@ class TestFullTextCluster(ValkeySearchClusterTestCaseDebugMode):
         # Validation of search queries:
         time.sleep(1)
         validate_fulltext_search(client)
+
+    def test_info_search_fulltext_metrics(self):
+        """Test info search for fulltext metrics in cluster mode"""
+        import struct
+        cluster_client: ValkeyCluster = self.new_cluster_client()
+        # Get all primary clients and enable dev metrics on all
+        all_clients = []
+        for i in range(self.CLUSTER_SIZE):
+            client = self.new_client_for_primary(i)
+            assert client.execute_command("CONFIG SET search.info-developer-visible yes") == b"OK"
+            all_clients.append(client)
+        # Use first primary for main assertions
+        client = all_clients[0]  
+        # Create index with all field types
+        client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "SCHEMA",
+            "content", "TEXT",
+            "price", "NUMERIC",
+            "tags", "TAG",
+            "vector", "VECTOR", "HNSW", "6", "TYPE", "FLOAT32", "DIM", "3", "DISTANCE_METRIC", "COSINE"
+        )
+        # Create second index with suffixtrie enabled for text
+        client.execute_command(
+            "FT.CREATE", "idx2", "ON", "HASH", "SCHEMA",
+            "content", "TEXT", "WITHSUFFIXTRIE",
+            "price", "NUMERIC",
+            "tags", "TAG",
+            "vector", "VECTOR", "HNSW", "6", "TYPE", "FLOAT32", "DIM", "3", "DISTANCE_METRIC", "COSINE"
+        )
+        # Wait for backfill on all shards
+        for index in ["idx", "idx2"]:
+            for c in all_clients:
+                IndexingTestHelper.wait_for_backfill_complete_on_node(c, index)
+        
+        # Validate initial fulltext memory metrics
+        assert int(client.info("search").get("search_used_text_memory_bytes", 0)) == 0
+        assert client.info("search").get("search_used_text_memory_human", 0) == 0
+        
+        # Insert 10 documents such that even numbered ones are pure text and others are non-text
+        for i in range(10):
+            vec = struct.pack("<3f", float(i), float(i+1), float(i+2))
+            if i % 2 == 0:
+                cluster_client.execute_command("HSET", f"doc:{i}", "content", f"document number {i}")
+            else:
+                cluster_client.execute_command(
+                    "HSET", f"doc:{i}",
+                    "price", str(100 + i * 10),
+                    "tags", f"tag{i}|category{i % 3}",
+                    "vector", vec
+                )
+        info_search = client.info("search")
+        # Validate memory metrics
+        ft_memory_fulldata = int(info_search.get("search_used_text_memory_bytes", 0))
+        is_san_build = os.environ.get('SAN_BUILD', 'no') != 'no'
+        if not is_san_build:
+            assert ft_memory_fulldata > 0
+            assert info_search.get("search_used_text_memory_human", 0) != 0
+        
+        # Validate attribute count metrics on ALL shards (schema should be replicated)
+        for i, c in enumerate(all_clients):
+            info = c.info("search")
+            total, text, tag, numeric, vector = [int(info.get(f"search_number_of_{t}attributes", 0)) for t in ["", "text_", "tag_", "numeric_", "vector_"]]
+            assert total == text + tag + numeric + vector == 8 and text == tag == numeric == vector == 2, \
+                f"Shard {i}: Attribute counts mismatch"
+
+        # Validate metrics after deletion of a record
+        client.execute_command("DEL", "doc:8")
+        info_search = client.info("search")
+        if not is_san_build:
+            assert 0 < int(info_search.get("search_used_text_memory_bytes", 0)) < ft_memory_fulldata
+        # QUERY METRICS
+        # Query1 Pure text query (non-vector with text)
+        client.execute_command("FT.SEARCH", "idx", 'document number', "RETURN", "1", "content")
+        # Query2 Pure tag query (non-vector without text)
+        client.execute_command("FT.SEARCH", "idx", "@tags:{tag1}")
+        # Query3 Pure numeric query with 2 numeric predicates (validates no overcounting - should count as 1 numeric query)
+        client.execute_command("FT.SEARCH", "idx", "(@price:[100 150]) (@price:[120 200])", "DIALECT", "2")
+        # Query4 Another text query but returns vector - no effect
+        client.execute_command("FT.SEARCH", "idx", 'number', "RETURN", "1", "vector")
+        # Query5 Pure vector query
+        vec_query = struct.pack("<3f", 1.0, 2.0, 3.0)
+        client.execute_command("FT.SEARCH", "idx", "*=>[KNN 5 @vector $BLOB]", "PARAMS", "2", "BLOB", vec_query, "DIALECT", "2")
+        # Query6 Hybrid query with all 4 aspects: vector + numeric + tag + text
+        client.execute_command("FT.SEARCH", "idx", "(@tags:{tag1}) (@price:[100 200]) (document)=>[KNN 5 @vector $BLOB]", "PARAMS", "2", "BLOB", vec_query, "DIALECT", "2")
+        # Query7 Non-vector query with tag + numeric + text (should count as both non-vector AND text)
+        client.execute_command("FT.SEARCH", "idx", "(@tags:{tag1}) (@price:[100 200]) (document)", "DIALECT", "2")
+        # Refresh info search on primary shard
+        info_search = client.info("search")
+        # existing metric
+        assert int(info_search.get("search_hybrid_requests_count", 0)) == 1  # Query 6
+        # new metrics
+        assert int(info_search.get("search_nonvector_requests_count", 0)) == 5  # Query 1,2,3,4,7
+        assert int(info_search.get("search_vector_requests_count", 0)) == 1  # Query 5
+        assert int(info_search.get("search_text_requests_count", 0)) == 4  # Query 1,4,6,7
+        assert int(info_search.get("search_query_numeric_count", 0)) == 3  # Queries 3,6,7
+        assert int(info_search.get("search_query_tag_count", 0)) == 3  # Queries 2,6,7
+        
+        # Query8: Text with prefix
+        client.execute_command("FT.SEARCH", "idx2", 'document*')
+        # Query9: Text with fuzzy
+        client.execute_command("FT.SEARCH", "idx2", '%documnt%')
+        # Query10: Text with exact phrase
+        client.execute_command("FT.SEARCH", "idx2", '"document number"')
+        # Query11: Text with suffix
+        client.execute_command("FT.SEARCH", "idx2", '*umber')
+        
+        # Refresh info search
+        info_search = client.info("search")
+        # Verify request counters
+        assert int(info_search.get("search_nonvector_requests_count", 0)) == 9
+        assert int(info_search.get("search_text_requests_count", 0)) == 8
+        # Verify query operation type counters
+        # Note: Query10 (exact phrase "document number") contains 2 terms but counts as 1 query.
+        # Metrics track "number of queries using each operation" not "number of predicates".
+        assert int(info_search.get("search_query_text_term_count", 0)) == 5
+        assert int(info_search.get("search_query_text_prefix_count", 0)) == 1
+        assert int(info_search.get("search_query_text_suffix_count", 0)) == 1
+        assert int(info_search.get("search_query_text_fuzzy_count", 0)) == 1
+        assert int(info_search.get("search_query_text_proximity_count", 0)) == 1
+        # Validate that query metrics in other shards of the cluster have not been incremented
+        for c in all_clients[1::]:
+            info_new = c.info("search")
+            # Verify request counters
+            assert int(info_new.get("search_nonvector_requests_count", 0)) == 0 
+            assert int(info_new.get("search_text_requests_count", 0)) == 0  
+            assert int(info_new.get("search_query_numeric_count", 0)) == 0 
+            assert int(info_new.get("search_query_tag_count", 0)) == 0 
+            # Verify query operation type counters
+            assert int(info_new.get("search_query_text_term_count", 0)) == 0
+            assert int(info_new.get("search_query_text_prefix_count", 0)) == 0
+            assert int(info_new.get("search_query_text_suffix_count", 0)) == 0
+            assert int(info_new.get("search_query_text_fuzzy_count", 0)) == 0
+            assert int(info_new.get("search_query_text_proximity_count", 0)) == 0
+
+        # Test coordinator fan-out: validate consistent metric increments across shards
+        initial_metrics = [{'text': int(c.info("search").get("search_text_requests_count", 0)),
+                           'nonvector': int(c.info("search").get("search_nonvector_requests_count", 0))}
+                          for c in all_clients]
+        # Use cluster_client to trigger coordinator fan-out
+        cluster_client.execute_command("FT.SEARCH", "idx", 'number 2', "RETURN", "1", "content")
+        # Validate: exactly one shard increments both metrics consistently (whichever owns the data)
+        shards_incremented = 0
+        for i, c in enumerate(all_clients):
+            info = c.info("search")
+            text_delta = int(info.get("search_text_requests_count", 0)) - initial_metrics[i]['text']
+            nonvector_delta = int(info.get("search_nonvector_requests_count", 0)) - initial_metrics[i]['nonvector']
+            if text_delta > 0 or nonvector_delta > 0:
+                assert text_delta == nonvector_delta == 1, \
+                    f"Shard {i}: Both metrics must increment together by 1, got text={text_delta}, nonvector={nonvector_delta}"
+                shards_incremented += 1
+        assert shards_incremented == 1, f"Expected exactly 1 shard to increment, got {shards_incremented}"

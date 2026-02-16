@@ -31,6 +31,66 @@ absl::Status CheckEndOfArgs(vmsdk::ArgsIterator &itr) {
   }
 }
 
+absl::Status ListMetricsCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
+  std::string metric_type;
+  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, metric_type));
+  // Parse optional NAMES_ONLY flag
+  bool names_only = false;
+  if (itr.HasNext()) {
+    std::string flag;
+    VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, flag));
+    if (absl::AsciiStrToUpper(flag) == "NAMES_ONLY") {
+      names_only = true;
+    } else {
+      return absl::InvalidArgumentError("Invalid flag. Use NAMES_ONLY");
+    }
+  }
+  VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
+  metric_type = absl::AsciiStrToUpper(metric_type);
+  bool show_app = (metric_type == "APP");
+  bool show_dev = (metric_type == "DEV");
+  if (!show_app && !show_dev) {
+    return absl::InvalidArgumentError("Invalid metric type. Use APP or DEV");
+  }
+  return vmsdk::info_field::ListMetrics(ctx, show_app, show_dev, names_only);
+}
+
+absl::Status ListConfigsCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
+  // Parse optional VERBOSE flag and/or filter
+  // Syntax: LIST_CONFIGS [VERBOSE] [APP|DEV|HIDDEN|MUT|IMMUT]
+  bool verbose = false;
+  std::string filter;
+
+  if (itr.HasNext()) {
+    std::string first_arg;
+    VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, first_arg));
+    auto first_arg_upper = absl::AsciiStrToUpper(first_arg);
+
+    if (first_arg_upper == "VERBOSE") {
+      verbose = true;
+      // Check for optional filter after VERBOSE
+      if (itr.HasNext()) {
+        VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, filter));
+        filter = absl::AsciiStrToUpper(filter);
+        if (filter != "APP" && filter != "DEV" && filter != "HIDDEN") {
+          return absl::InvalidArgumentError(
+              "Invalid filter. Use APP, DEV, or HIDDEN");
+        }
+      }
+    } else if (first_arg_upper == "APP" || first_arg_upper == "DEV" ||
+               first_arg_upper == "HIDDEN") {
+      filter = first_arg_upper;
+    } else {
+      return absl::InvalidArgumentError(
+          "Invalid argument. Use VERBOSE, APP, DEV, or HIDDEN");
+    }
+  }
+
+  VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
+  return vmsdk::config::ModuleConfigManager::Instance().ListAllConfigs(
+      ctx, verbose, filter);
+}
+
 //
 // FT._DEBUG PAUSEPOINT [ SET | RESET | TEST | LIST] <pausepoint>
 //
@@ -270,8 +330,13 @@ absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
       {"FT_DEBUG SHOW_METADATA",
        "list internal metadata manager table namespace"},
       {"FT_DEBUG SHOW_INDEXSCHEMAS", "list internal index schema tables"},
+      {"FT._DEBUG LIST_METRICS [APP|DEV] [NAMES_ONLY]",
+       "List all APP or DEV metrics with optional names-only format"},
+      {"FT._DEBUG LIST_CONFIGS [VERBOSE] [APP|DEV|HIDDEN]",
+       "List config names (default) or VERBOSE details, optionally filtered by "
+       "visibility"},
   };
-  ValkeyModule_ReplySetArrayLength(ctx, 2 * help_text.size());
+  ValkeyModule_ReplyWithArray(ctx, 2 * help_text.size());
   for (auto &pair : help_text) {
     ValkeyModule_ReplyWithCString(ctx, pair.first.data());
     ValkeyModule_ReplyWithCString(ctx, pair.second.data());
@@ -322,6 +387,10 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     return valkey_search::SchemaManager::Instance().ShowIndexSchemas(ctx, itr);
   } else if (keyword == "HELP") {
     return HelpCmd(ctx, itr);
+  } else if (keyword == "LIST_METRICS") {
+    return ListMetricsCmd(ctx, itr);
+  } else if (keyword == "LIST_CONFIGS") {
+    return ListConfigsCmd(ctx, itr);
   } else {
     return absl::InvalidArgumentError(absl::StrCat(
         "Unknown subcommand: ", *itr.GetStringView(), " try HELP subcommand"));

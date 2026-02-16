@@ -293,12 +293,6 @@ void VectorFlat<T>::ToProtoImpl(
 
 template <typename T>
 int VectorFlat<T>::RespondWithInfoImpl(ValkeyModuleCtx *ctx) const {
-  ValkeyModule_ReplyWithSimpleString(ctx, "algorithm");
-  ValkeyModule_ReplyWithSimpleString(
-      ctx,
-      LookupKeyByValue(*kVectorAlgoByStr,
-                       data_model::VectorIndex::AlgorithmCase::kFlatAlgorithm)
-          .data());
   ValkeyModule_ReplyWithSimpleString(ctx, "data_type");
   if constexpr (std::is_same_v<T, float>) {
     ValkeyModule_ReplyWithSimpleString(
@@ -309,16 +303,18 @@ int VectorFlat<T>::RespondWithInfoImpl(ValkeyModuleCtx *ctx) const {
   } else {
     ValkeyModule_ReplyWithSimpleString(ctx, "UNKNOWN");
   }
-  ValkeyModule_ReplyWithSimpleString(ctx, "dim");
-  ValkeyModule_ReplyWithLongLong(ctx, dimensions_);
-  ValkeyModule_ReplyWithSimpleString(ctx, "distance_metric");
+  ValkeyModule_ReplyWithSimpleString(ctx, "algorithm");
+  ValkeyModule_ReplyWithArray(ctx, 4);
+  ValkeyModule_ReplyWithSimpleString(ctx, "name");
   ValkeyModule_ReplyWithSimpleString(
-      ctx, LookupKeyByValue(*kDistanceMetricByStr, distance_metric_).data());
-
+      ctx,
+      LookupKeyByValue(*kVectorAlgoByStr,
+                       data_model::VectorIndex::AlgorithmCase::kFlatAlgorithm)
+          .data());
   ValkeyModule_ReplyWithSimpleString(ctx, "block_size");
   ValkeyModule_ReplyWithLongLong(ctx, block_size_);
 
-  return 10;
+  return 4;
 }
 
 template <typename T>

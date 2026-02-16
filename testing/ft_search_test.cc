@@ -426,6 +426,29 @@ INSTANTIATE_TEST_SUITE_P(
             .expected_output_no_content =
                 "*3\r\n:2\r\n$3\r\nabc\r\n$3\r\ndef\r\n",
         },
+        {
+            .test_name = "pagination_offset_exceeds_remaining",
+            .input =
+                {
+                    .neighbors =
+                        {{.external_id = "ext_1", .distance = 0.00999999977648},
+                         {.external_id = "ext_2", .distance = 0.019999999553},
+                         {.external_id = "ext_3", .distance = 0.0299999993294}},
+                    .attribute_alias = "attribute_alias_1",
+                    .score_as = "score_as_1",
+                    .limit = {.first_index = 1, .number = 5},
+                },
+            .expected_output =
+                "*5\r\n:3\r\n$5\r\next_2\r\n*6\r\n$10\r\nscore_as_1\r\n$"
+                "14\r\n0.019999999553\r\n$17\r\nattribute_alias_1\r\n$"
+                "28\r\nattribute_alias_1_hash_value\r\n$6\r\nfield1\r\n$"
+                "6\r\nvalue1\r\n$5\r\next_3\r\n*6\r\n$10\r\nscore_as_1\r\n$"
+                "15\r\n0.0299999993294\r\n$17\r\nattribute_alias_1\r\n$"
+                "28\r\nattribute_alias_1_hash_value\r\n$6\r\nfield1\r\n$"
+                "6\r\nvalue1\r\n",
+            .expected_output_no_content =
+                "*3\r\n:3\r\n$5\r\next_2\r\n$5\r\next_3\r\n",
+        },
     }),
     [](const TestParamInfo<SendReplyTestCase> &info) {
       return info.param.test_name;
@@ -454,7 +477,9 @@ class FTSearchTest : public ValkeySearchTestWithParam<
       std::string vector = std::string((char *)vectors[i].data(),
                                        vectors[i].size() * sizeof(float));
       auto interned_key = StringInternStore::Intern(key);
-
+      std::cerr << "Inserting Key: " << interned_key->Str() << std::endl;
+      index_schema.value()->SetDbMutationSequenceNumber(interned_key, i);
+      index_schema.value()->SetIndexMutationSequenceNumber(interned_key, i);
       VMSDK_EXPECT_OK(index.value()->AddRecord(interned_key, vector));
     }
   }
@@ -652,6 +677,25 @@ INSTANTIATE_TEST_SUITE_P(
                                      "2",
                                      "query_vector",
                                      "$embedding",
+                                     "DIALECT",
+                                     "2",
+                                 },
+                             .expected_run_return = VALKEYMODULE_OK,
+                         },
+                         {
+                             .test_name = "sortby_test",
+                             .argv =
+                                 {
+                                     "FT.SEARCH",
+                                     "$index_name",
+                                     "*=>[KNN 5 @vector $embedding AS score]",
+                                     "PARAMS",
+                                     "2",
+                                     "embedding",
+                                     "$embedding",
+                                     "SORTBY",
+                                     "vector",
+                                     "DESC",
                                      "DIALECT",
                                      "2",
                                  },

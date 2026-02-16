@@ -50,11 +50,8 @@ const config::Boolean& GetSkipIndexLoad();
 /// Return a mutable reference for testing
 config::Boolean& GetSkipIndexLoadMutable();
 
-/// Returns the prefilter evaluation configuration
-config::Boolean& GetEnablePrefilterEval();
-
-/// Returns the prefilter proximity evaluation configuration
-config::Boolean& GetEnableProximityPrefilterEval();
+/// Return the configuration entry for skipping corrupted AOF entries
+const config::Boolean& GetSkipCorruptedInternalUpdateEntries();
 
 /// Return the log level
 config::Enum& GetLogLevel();
@@ -90,6 +87,15 @@ config::Number& GetMaxTermExpansions();
 
 /// Return the search result buffer multiplier value
 double GetSearchResultBufferMultiplier();
+
+/// Return the configuration entry for draining mutation queue on save
+const config::Boolean& GetDrainMutationQueueOnSave();
+
+/// Return the configuration entry for draining mutation queue on load
+const config::Boolean& GetDrainMutationQueueOnLoad();
+
+/// Return the threshold for async fanout operations
+config::Number& GetAsyncFanoutThreshold();
 
 }  // namespace options
 }  // namespace valkey_search

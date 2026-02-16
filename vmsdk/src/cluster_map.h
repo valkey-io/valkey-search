@@ -81,6 +81,8 @@ struct ShardInfo {
   absl::btree_map<uint16_t, uint16_t> owned_slots;
   // Hash of owned_slots
   uint64_t slots_fingerprint;
+  NodeInfo GetRandomNode(bool replica_only, bool prefer_local) const;
+  std::optional<NodeInfo> GetLocalNode(bool replica_only) const;
 };
 
 struct SlotRangeInfo {
@@ -99,6 +101,11 @@ class ClusterMap {
   // get a vector of node targets based on the mode
   std::vector<NodeInfo> GetTargets(FanoutTargetMode mode,
                                    bool prefer_local = false) const;
+
+  // For per-slot index, return a vector with one element of nodes to target
+  std::vector<NodeInfo> GetTargetsForSlot(FanoutTargetMode mode,
+                                          bool prefer_local,
+                                          uint16_t slot) const;
 
   std::chrono::steady_clock::time_point GetExpirationTime() const {
     return expiration_tp_;
@@ -128,7 +135,7 @@ class ClusterMap {
   std::chrono::steady_clock::time_point expiration_tp_;
 
   // a map used for check duplicate socket addresses, SocketAddress -> node_id
-  absl::flat_hash_map<SocketAddress, std::string> socket_addr_to_node_map;
+  absl::flat_hash_map<SocketAddress, std::string> socket_addr_to_node_map_;
 
   // 1: slot is owned by this cluster, 0: slot is not owned by this cluster
   std::bitset<kNumSlots> owned_slots_;

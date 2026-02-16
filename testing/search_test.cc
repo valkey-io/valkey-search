@@ -248,7 +248,8 @@ TEST_P(EvaluateFilterAsPrimaryTest, ParseParams) {
   EXPECT_EQ(
       EvaluateFilterAsPrimary(filter_parse_results.value().root_predicate.get(),
                               entries_fetchers, false,
-                              filter_parse_results.value().query_operations),
+                              filter_parse_results.value().query_operations,
+                              index_schema.get()),
       test_case.evaluate_size);
 
   EXPECT_EQ(entries_fetchers.size(), test_case.fetcher_ids.size());
@@ -520,6 +521,7 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
     std::string vector = std::string((char *)vectors[i].data(),
                                      vectors[i].size() * sizeof(float));
     auto interned_key = StringInternStore::Intern(key);
+    index_schema->SetIndexMutationSequenceNumber(interned_key, i);
 
     VMSDK_EXPECT_OK(vector_index->AddRecord(interned_key, vector));
 

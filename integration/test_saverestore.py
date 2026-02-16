@@ -169,7 +169,7 @@ class TestSaveRestore_v2_v1(ValkeySearchTestCaseDebugMode):
 
     @pytest.mark.parametrize("parameters", [
         [index, [5, KEY_COUNT, 0], [5, 1, 0, 0]],
-        [vector_only_index, [3, 0, 0], [3, 1, 0, 0]],
+        [vector_only_index, [3, KEY_COUNT, 0], [3, 1, 0, 0]],
         [non_vector_index, [3, KEY_COUNT, 0], [3, 1, 0, 0]],
         ])
     def test_saverestore_v2_v1(self, parameters):
@@ -183,7 +183,7 @@ class TestSaveRestore_v2_v2(ValkeySearchTestCaseDebugMode):
 
     @pytest.mark.parametrize("parameters", [
         [index, [5, KEY_COUNT, 0], [5, 0, KEY_COUNT, 0]],
-        [vector_only_index, [3, 0, 0], [3, 0, 0, 0]],
+        [vector_only_index, [3, KEY_COUNT, 0], [3, 0, KEY_COUNT, 0]],
         [non_vector_index, [3, KEY_COUNT, 0], [3, 0, KEY_COUNT, 0]],
         ])
     def test_saverestore_v2_v2(self, parameters):
@@ -341,7 +341,7 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
         self.client.execute_command("save")
 
         i = self.client.info("search")
-        assert i["search_rdb_save_keys"] == 0
+        assert i["search_rdb_save_keys"] == len(records)
         assert i["search_rdb_save_mutation_entries"] == 0
         assert i["search_rdb_save_backfilling_indexes"] == 1
 
@@ -365,7 +365,7 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
         self.client.execute_command("save")
 
         i = self.client.info("search")
-        assert i["search_rdb_save_keys"] == 0
+        assert i["search_rdb_save_keys"] == 2 * len(records)
         assert i["search_rdb_save_mutation_entries"] == len(records)
         assert i["search_rdb_save_backfilling_indexes"] == 2
 

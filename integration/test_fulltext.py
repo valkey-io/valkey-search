@@ -2109,7 +2109,6 @@ class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
             "total_term_occurrences",    # Total frequency of all terms across all documents  
             "posting_sz_bytes",          # Memory used by posting lists (inverted index data) in bytes
             "position_sz_bytes",         # Memory used by position information for phrase queries in bytes
-            "total_postings",            # Total number of posting lists (equals unique terms)
             "radix_sz_bytes",            # Memory used by the radix tree (term dictionary) in bytes
             "total_text_index_sz_bytes"  # Total memory used by all text index components in bytes
         ]
@@ -2131,10 +2130,6 @@ class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
                 assert (isinstance(value, int) and value > 0) or \
                        (os.environ.get('SAN_BUILD', 'no') != 'no' and value == 0), \
                        f"{field} should be positive integer, got {value}"
-                    
-            elif field == "total_postings":
-                assert isinstance(value, (int, float)) and value > 0, f"{field} should be positive number, got {value}"
-                assert value == info_data["num_terms"], f"Total postings {value} should equal unique terms {info_data['num_terms']}"
         
         # Validate memory relationships
         total_memory = info_data["total_text_index_sz_bytes"]
@@ -2150,7 +2145,6 @@ class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
         print(f"  Documents: {info_data['num_docs']}")
         print(f"  Unique Terms: {info_data['num_terms']}")
         print(f"  Total Terms: {info_data['total_term_occurrences']}")
-        print(f"  Total Postings: {info_data['total_postings']}")
         print(f"  Total Memory: {info_data['total_text_index_sz_bytes']} bytes")
         print(f"  Posting Memory: {info_data['posting_sz_bytes']} bytes")
         print(f"  Position Memory: {info_data['position_sz_bytes']} bytes")

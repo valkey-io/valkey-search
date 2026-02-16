@@ -370,24 +370,18 @@ constexpr absl::string_view kDrainMutationQueueOnSaveConfig{
 static auto drain_mutation_queue_on_save =
     config::BooleanBuilder(kDrainMutationQueueOnSaveConfig, false).Build();
 
-/// Register the "fanout-shard-limit-multiplier" flag
-/// This config can be increased to match the number of shards in the
-/// cluster to ensure that we fetch enough results from each shard to
-/// return the top K results to the user in the case where the results
-/// are not evenly distributed across the shards.
-/// The default value is 1, which means that we will fetch K / N results
-/// from each shard where N is the number of shards. This is done expecting
-/// even data distribution.
-/// If the multiplier is set to N, we will fetch K results from each shard.
-constexpr absl::string_view kFanoutLimitMultiplierConfig{
-    "fanout-shard-limit-multiplier"};
-constexpr uint32_t kDefaultFanoutLimitMultiplier{1};
-constexpr uint32_t kMinimumFanoutLimitMultiplier{1};
-constexpr uint32_t kMaximumFanoutLimitMultiplier{16384};
-static auto fanout_limit_multiplier =
+/// Register the "fanout-data-uniformity" flag
+/// U = uniformity (0-100): 100 = uniform distribution, 0 = all data in one shard
+/// Formula: limit_per_shard = (K/N) + ((100-U) * (K - K/N) / 100)
+constexpr absl::string_view kFanoutDataUniformityConfig{
+    "fanout-data-uniformity"};
+constexpr uint32_t kDefaultFanoutDataUniformity{0};
+constexpr uint32_t kMinimumFanoutDataUniformity{0};
+constexpr uint32_t kMaximumFanoutDataUniformity{100};
+static auto fanout_data_uniformity =
     config::NumberBuilder(
-        kFanoutLimitMultiplierConfig, kDefaultFanoutLimitMultiplier,
-        kMinimumFanoutLimitMultiplier, kMaximumFanoutLimitMultiplier)
+        kFanoutDataUniformityConfig, kDefaultFanoutDataUniformity,
+        kMinimumFanoutDataUniformity, kMaximumFanoutDataUniformity)
         .Build();
 
 /// Register the "--async-fanout-threshold" flag. Controls the threshold
@@ -501,8 +495,8 @@ const vmsdk::config::Boolean& GetDrainMutationQueueOnLoad() {
       *drain_mutation_queue_on_load);
 }
 
-vmsdk::config::Number& GetFanoutShardLimitMultiplier() {
-  return dynamic_cast<vmsdk::config::Number&>(*fanout_limit_multiplier);
+vmsdk::config::Number& GetFanoutDataUniformity() {
+  return dynamic_cast<vmsdk::config::Number&>(*fanout_data_uniformity);
 }
 
 vmsdk::config::Number& GetAsyncFanoutThreshold() {

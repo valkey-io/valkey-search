@@ -259,23 +259,23 @@ absl::Status PerformSearchFanoutAsync(
     std::optional<query::SortByParameter> sortby_parameter) {
   auto request =
       coordinator::ParametersToGRPCSearchRequest(*parameters, sortby_parameter);
-  double multiplier = options::GetFanoutShardLimitMultiplier().GetValue();
-  size_t num_shards = search_targets.size();
+  uint32_t U = options::GetFanoutDataUniformity().GetValue();
+  size_t N = search_targets.size();
   if (parameters->IsNonVectorQuery()) {
     // For non vector, use the LIMIT based range. Ensure we fetch enough
     // results to cover offset + number.
-    uint64_t limit_number =
-        parameters->limit.first_index + parameters->limit.number;
+    uint64_t K = parameters->limit.first_index + parameters->limit.number;
+    uint64_t limit_per_shard = (K / N) + ((100 - U) * (K - (K / N)) / 100);
     request->mutable_limit()->set_first_index(0);
-    request->mutable_limit()->set_number(
-        static_cast<uint64_t>(limit_number * multiplier / num_shards));
+    request->mutable_limit()->set_number(limit_per_shard);
   } else {
     // Vector searches: Use k as the limit to find top k results. In worst case,
     // all top k results are from a single shard, so no need to fetch more than
     // k.
+    uint64_t K = parameters->k;
+    uint64_t limit_per_shard = (K / N) + ((100 - U) * (K - (K / N)) / 100);
     request->mutable_limit()->set_first_index(0);
-    request->mutable_limit()->set_number(
-        static_cast<uint64_t>(parameters->k * multiplier / num_shards));
+    request->mutable_limit()->set_number(limit_per_shard);
   }
   auto tracker = std::make_shared<SearchPartitionResultsTracker>(
       search_targets.size(), parameters->k, std::move(callback),

@@ -94,8 +94,8 @@ const config::Boolean& GetDrainMutationQueueOnSave();
 /// Return the configuration entry for draining mutation queue on load
 const config::Boolean& GetDrainMutationQueueOnLoad();
 
-/// Return the shard limit multiplier for fanout queries
-config::Number& GetFanoutShardLimitMultiplier();
+/// Return the fanout data uniformity configuration (0-100)
+config::Number& GetFanoutDataUniformity();
 
 /// Return the threshold for async fanout operations
 config::Number& GetAsyncFanoutThreshold();

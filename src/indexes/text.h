@@ -75,21 +75,15 @@ class Text : public IndexBase {
     return absl::OkStatus();
   }
 
-  size_t GetUnTrackedKeyCount() const override {
-    absl::MutexLock lock(&index_mutex_);
-    return untracked_keys_.size();
-  }
+  size_t GetUnTrackedKeyCount() const override { return 0; }
 
   bool IsUnTracked(const InternedStringPtr& key) const override {
-    absl::MutexLock lock(&index_mutex_);
-    return untracked_keys_.contains(key);
+    return false;
   }
 
   absl::Status ForEachUnTrackedKey(
       absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
       const override {
-    absl::MutexLock lock(&index_mutex_);
-    // TODO
     return absl::OkStatus();
   }
 
@@ -105,11 +99,9 @@ class Text : public IndexBase {
    public:
     EntriesFetcher(size_t size,
                    const std::shared_ptr<text::TextIndex>& text_index,
-                   const InternedStringSet* untracked_keys,
                    text::FieldMaskPredicate field_mask, bool require_positions)
         : size_(size),
           text_index_(text_index),
-          untracked_keys_(untracked_keys),
           field_mask_(field_mask),
           require_positions_(require_positions) {}
 
@@ -123,7 +115,6 @@ class Text : public IndexBase {
     std::unique_ptr<EntriesFetcherIteratorBase> Begin() override;
 
     size_t size_;
-    const InternedStringSet* untracked_keys_;
     std::shared_ptr<text::TextIndex> text_index_;
     const query::TextPredicate* predicate_;
     text::FieldMaskPredicate field_mask_;
@@ -140,7 +131,7 @@ class Text : public IndexBase {
   // Reference to the shared text index schema
   std::shared_ptr<text::TextIndexSchema> text_index_schema_;
 
-  InternedStringSet untracked_keys_;
+  // currently used for FT.INFO metrics only
   InternedStringSet tracked_keys_;
 
   bool with_suffix_trie_;

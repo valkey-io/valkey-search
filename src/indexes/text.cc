@@ -124,8 +124,8 @@ void *TextPredicate::Search(bool negate) const {
   // proximity queries.
   bool require_positions = false;
   auto fetcher = std::make_unique<indexes::Text::EntriesFetcher>(
-      estimated_size, GetTextIndexSchema()->GetTextIndex(), nullptr,
-      GetFieldMask(), require_positions);
+      estimated_size, GetTextIndexSchema()->GetTextIndex(), GetFieldMask(),
+      require_positions);
   fetcher->predicate_ = this;
   return fetcher.release();
 }
@@ -185,7 +185,7 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
   // and stem_field_mask for stem variants (has_original becomes false after
   // first pass)
   return std::make_unique<indexes::text::TermIterator>(
-      std::move(key_iterators), fetcher->field_mask_, fetcher->untracked_keys_,
+      std::move(key_iterators), fetcher->field_mask_,
       fetcher->require_positions_, stem_field_mask, found_original);
 }
 
@@ -207,7 +207,7 @@ std::unique_ptr<indexes::text::TextIterator> PrefixPredicate::BuildTextIterator(
     ++word_count;
   }
   return std::make_unique<indexes::text::TermIterator>(
-      std::move(key_iterators), fetcher->field_mask_, fetcher->untracked_keys_,
+      std::move(key_iterators), fetcher->field_mask_,
       fetcher->require_positions_);
 }
 
@@ -233,7 +233,7 @@ std::unique_ptr<indexes::text::TextIterator> SuffixPredicate::BuildTextIterator(
     ++word_count;
   }
   return std::make_unique<indexes::text::TermIterator>(
-      std::move(key_iterators), fetcher->field_mask_, fetcher->untracked_keys_,
+      std::move(key_iterators), fetcher->field_mask_,
       fetcher->require_positions_);
 }
 
@@ -252,7 +252,7 @@ std::unique_ptr<indexes::text::TextIterator> FuzzyPredicate::BuildTextIterator(
       fetcher->text_index_->GetPrefix(), GetTextString(), GetDistance(),
       max_words);
   return std::make_unique<indexes::text::TermIterator>(
-      std::move(key_iterators), fetcher->field_mask_, fetcher->untracked_keys_,
+      std::move(key_iterators), fetcher->field_mask_,
       fetcher->require_positions_);
 }
 

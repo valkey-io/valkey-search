@@ -57,6 +57,7 @@ const absl::string_view kSeparatorParam{"SEPARATOR"};
 const absl::string_view kCaseSensitiveParam{"CASESENSITIVE"};
 const absl::string_view kScoreParam{"SCORE"};
 constexpr absl::string_view kSchemaParam{"SCHEMA"};
+constexpr absl::string_view kSkipInitialScan("SKIPINITIALSCAN");
 constexpr size_t kDefaultAttributesCountLimit{1000};
 constexpr int kDefaultDimensionsCountLimit{32768};
 constexpr int kDefaultPrefixesCountLimit{8};
@@ -217,12 +218,18 @@ const absl::NoDestructor<
     kOnDataTypeByStr({{"HASH", data_model::ATTRIBUTE_DATA_TYPE_HASH},
                       {"JSON", data_model::ATTRIBUTE_DATA_TYPE_JSON}});
 absl::Status ParsePrefixes(vmsdk::ArgsIterator &itr,
-                           data_model::IndexSchema &index_schema_proto) {
+                           data_model::IndexSchema &index_schema_proto,
+                           std::optional<absl::string_view> index_hash_tag) {
   uint32_t prefixes_cnt{0};
   VMSDK_ASSIGN_OR_RETURN(
       auto res, vmsdk::ParseParam(kPrefixParam, false, itr, prefixes_cnt));
   if (!res) {
-    return absl::OkStatus();
+    if (index_hash_tag.has_value()) {
+      return absl::InvalidArgumentError(
+          "PREFIX parameter is required for hash-tagged indexes");
+    } else {
+      return absl::OkStatus();
+    }
   }
   if (prefixes_cnt > (uint32_t)itr.DistanceEnd()) {
     return absl::InvalidArgumentError(
@@ -235,9 +242,18 @@ absl::Status ParsePrefixes(vmsdk::ArgsIterator &itr,
       vmsdk::VerifyRange(prefixes_cnt, std::nullopt, max_prefixes))
       << "Number of prefixes (" << prefixes_cnt
       << ") exceeds the maximum allowed (" << max_prefixes << ")";
+  //
+  // Parse prefixes and ensure they match the index hash tag constraints
+  //
   for (uint32_t i = 0; i < prefixes_cnt; ++i) {
     VMSDK_ASSIGN_OR_RETURN(auto itr_arg, itr.Get());
-    if (vmsdk::ParseHashTag(vmsdk::ToStringView(itr_arg))) {
+    auto this_tag = vmsdk::ParseHashTag(vmsdk::ToStringView(itr_arg));
+    if (index_hash_tag.has_value()) {
+      if (!this_tag.has_value() || this_tag.value() != index_hash_tag.value()) {
+        return absl::InvalidArgumentError(
+            "All PREFIX arguments must contain the same hash tag as the index");
+      }
+    } else if (this_tag.has_value()) {
       return absl::InvalidArgumentError(
           "PREFIX argument(s) must not contain a hash tag");
     }
@@ -594,9 +610,6 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
   vmsdk::ArgsIterator itr{argv, argc};
   VMSDK_RETURN_IF_ERROR(
       vmsdk::ParseParamValue(itr, *index_schema_proto.mutable_name()));
-  if (vmsdk::ParseHashTag(index_schema_proto.name())) {
-    return absl::InvalidArgumentError("Index name must not contain a hash tag");
-  }
   data_model::AttributeDataType on_data_type{
       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH};
   VMSDK_ASSIGN_OR_RETURN(auto res, ParseParam(kOnParam, false, itr,
@@ -606,7 +619,9 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
     return absl::InvalidArgumentError("JSON module is not loaded.");
   }
   index_schema_proto.set_attribute_data_type(on_data_type);
-  VMSDK_RETURN_IF_ERROR(ParsePrefixes(itr, index_schema_proto));
+  VMSDK_RETURN_IF_ERROR(ParsePrefixes(
+      itr, index_schema_proto, vmsdk::ParseHashTag(index_schema_proto.name())));
+
   VMSDK_ASSIGN_OR_RETURN(res, vmsdk::IsParamKeyMatch(kFilterParam, false, itr));
   if (res) {
     return absl::InvalidArgumentError(NotSupportedParamErrorMsg(kFilterParam));
@@ -642,6 +657,12 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
 
     // Try LANGUAGE parameter
     VMSDK_RETURN_IF_ERROR(ParseLanguage(itr, index_schema_proto));
+
+    VMSDK_ASSIGN_OR_RETURN(
+        res, vmsdk::IsParamKeyMatch(kSkipInitialScan, false, itr));
+    if (res) {
+      index_schema_proto.set_skip_initial_scan(true);
+    }
 
     // Try unsupported field parameters
     VMSDK_ASSIGN_OR_RETURN(

@@ -674,30 +674,6 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     processed_content.push_back(ch);
     ++pos_;
   }
-  // Remove trailing punctuations if any which is not part of query syntax
-  if (!processed_content.empty()) {
-    while (!IsEnd()) {
-      char ch = Peek();
-      if (lexer.IsPunctuation(ch)) {
-        // Reject reserved characters in unquoted text
-        if (ch == '{' || ch == '}' || ch == '[' || ch == ']' || ch == ':' ||
-            ch == ';' || ch == '$') {
-          return absl::InvalidArgumentError(
-              absl::StrCat("Unexpected character at position ", pos_ + 1, ": `",
-                           expression_.substr(pos_, 1), "`"));
-        }
-        // Break on query syntax punctuation
-        if (ch == ')' || ch == '|' || ch == '(' || ch == '@' || ch == '"' ||
-            ch == '-' || ch == '\\' || ch == '%' || ch == '*') {
-          break;
-        }
-        // Consume all other punctuation (!, ?, +, etc.)
-        ++pos_;
-      } else {
-        break;
-      }
-    }
-  }
   std::string token = absl::AsciiStrToLower(processed_content);
   FieldMaskPredicate field_mask;
   std::optional<uint32_t> min_stem_size = std::nullopt;
@@ -812,7 +788,8 @@ absl::Status FilterParser::SetupTextFieldConfiguration(
 // Token boundaries for unquoted text: <punctuation> ( ) | @ " - { } [ ] : ; $
 // Quoted phrases (Exact Phrase) parse all tokens within quotes, unquoted
 // parsing stops after first token.
-absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
+absl::StatusOr<std::optional<std::unique_ptr<query::Predicate>>>
+FilterParser::ParseTextTokens(
     const std::optional<std::string>& field_or_default) {
   auto text_index_schema = index_schema_.GetTextIndexSchema();
   if (!text_index_schema) {
@@ -876,7 +853,12 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
     node_count_ += terms.size() + 1;
   } else {
     if (terms.empty()) {
-      return absl::InvalidArgumentError("Invalid Query Syntax");
+      if (query_operations_ == QueryOperations::kNone) {
+        return absl::InvalidArgumentError("Invalid Query Syntax");
+      }
+      // Already processed valid operations, trailing punctuation already
+      // consumed by loop. Return std::nullopt to indicate "no more terms"
+      return std::nullopt;
     }
     query_operations_ |= QueryOperations::kContainsText;
     pred = std::move(terms[0]);
@@ -1001,7 +983,12 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
         }
       }
       if (!non_text) {
-        VMSDK_ASSIGN_OR_RETURN(predicate, ParseTextTokens(field_name));
+        VMSDK_ASSIGN_OR_RETURN(auto predicate_opt, ParseTextTokens(field_name));
+        // Skip if ParseTextTokens returned std::nullopt (trailing punctuation)
+        if (!predicate_opt.has_value()) {
+          continue;
+        }
+        predicate = std::move(*predicate_opt);
       }
       if (result.prev_predicate) {
         node_count_++;

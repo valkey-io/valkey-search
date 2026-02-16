@@ -374,6 +374,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   bool loaded_v2_{false};
   uint64_t fingerprint_{0};
   uint32_t version_{0};
+  bool skip_initial_scan_{false};
 
   vmsdk::ThreadPool *mutations_thread_pool_{nullptr};
   std::vector<uint64_t> attributes_indexed_data_size_;
@@ -388,7 +389,6 @@ class IndexSchema : public KeyspaceEventSubscription,
       db_key_info_;  // Mainthread.
   IndexKeyInfoMap index_key_info_ ABSL_GUARDED_BY(
       mutated_records_mutex_);  // updates are guarded by mutated_records_mutex_
-
   struct BackfillJob {
     BackfillJob() = delete;
     BackfillJob(ValkeyModuleCtx *ctx, absl::string_view name, int db_num);
@@ -428,7 +428,6 @@ class IndexSchema : public KeyspaceEventSubscription,
   void DrainMutationQueue(ValkeyModuleCtx *ctx) const
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
 
-  bool IsTrackedByAnyIndex(const Key &key) const;
   void SyncProcessMutation(ValkeyModuleCtx *ctx,
                            MutatedAttributes &mutated_attributes,
                            const Key &key);

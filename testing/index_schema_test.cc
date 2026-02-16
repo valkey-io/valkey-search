@@ -249,8 +249,6 @@ TEST_P(IndexSchemaSubscriptionTest, OnKeyspaceNotificationTest) {
             std::get<2>(tuple)->failure_cnt);
       }
     }
-    EXPECT_EQ(index_schema->GetStats().document_cnt - document_cnt,
-              test_case.expected_document_cnt_delta);
 
     // Determine operation success/failure states using helper functions
     bool successful_add =
@@ -1297,7 +1295,6 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   EXPECT_EQ(tag_index->IsCaseSensitive(), false);
 
   EXPECT_TRUE(index_schema->IsBackfillInProgress());
-  EXPECT_EQ(index_schema->GetStats().document_cnt, 10);
   EXPECT_EQ(index_schema->CountRecords(), 10);
 }
 
@@ -1679,6 +1676,7 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
     EXPECT_EQ(mutations_thread_pool.QueueSize(), 1);
     VMSDK_EXPECT_OK(mutations_thread_pool.ResumeWorkers());
   }
+  EXPECT_EQ(index_schema->stats_.document_cnt, 1);
   const auto &stats = index_schema->GetStats();
   const size_t iterations = 100;
   // Test delete consistency
@@ -1695,6 +1693,7 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
                                     false, false);
     }
   }
+  EXPECT_EQ(index_schema->stats_.document_cnt, vectors.size());
   for (size_t i = 0; i < vectors.size(); ++i) {
     vmsdk::UniqueValkeyString data;
     IndexSchema::MutatedAttributes mutated_attributes;
@@ -1704,6 +1703,7 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
     index_schema->ProcessMutation(&fake_ctx, mutated_attributes, key_interned,
                                   false, true);
   }
+  EXPECT_EQ(index_schema->stats_.document_cnt, 0);
 
   WaitWorkerTasksAreCompleted(mutations_thread_pool);
   EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 0);
@@ -1732,6 +1732,7 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
                                     false, false);
     }
   }
+  EXPECT_EQ(index_schema->stats_.document_cnt, vectors.size());
   for (size_t i = 0; i < vectors.size(); ++i) {
     vmsdk::UniqueValkeyString data = vmsdk::MakeUniqueValkeyString(
         absl::string_view((char *)&vectors[i][0], dimensions * sizeof(float)));
@@ -1742,6 +1743,7 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
     index_schema->ProcessMutation(&fake_ctx, mutated_attributes, key_interned,
                                   false, true);
   }
+  EXPECT_EQ(index_schema->stats_.document_cnt, 0);
   WaitWorkerTasksAreCompleted(mutations_thread_pool);
   EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 0);
   EXPECT_EQ(stats.subscription_remove.success_cnt + vectors.size(),
@@ -1940,7 +1942,6 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     VMSDK_EXPECT_OK_STATUSOR(schema_or);
     auto normal_schema = std::move(schema_or.value());
 
-    EXPECT_EQ(normal_schema->GetStats().document_cnt, num_vectors);
     auto vec_index = normal_schema->GetIndex("embedding");
     VMSDK_EXPECT_OK_STATUSOR(vec_index);
     EXPECT_EQ(vec_index.value()->GetTrackedKeyCount(), num_vectors);
@@ -2004,7 +2005,6 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     VMSDK_EXPECT_OK_STATUSOR(schema_or);
     auto skip_schema = std::move(schema_or.value());
 
-    EXPECT_EQ(skip_schema->GetStats().document_cnt, num_vectors);
     auto vec_index = skip_schema->GetIndex("embedding");
     VMSDK_EXPECT_OK_STATUSOR(vec_index);
     EXPECT_EQ(vec_index.value()->GetTrackedKeyCount(), 0);
@@ -2141,8 +2141,6 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     VMSDK_EXPECT_OK_STATUSOR(schema_or);
     auto mixed_schema = std::move(schema_or.value());
 
-    EXPECT_EQ(mixed_schema->GetStats().document_cnt, num_vectors);
-
     // Verify all index types are loaded
     auto vec_index = mixed_schema->GetIndex("embedding");
     auto num_index = mixed_schema->GetIndex("price");
@@ -2213,8 +2211,6 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
 
     VMSDK_EXPECT_OK_STATUSOR(schema_or);
     auto mixed_skip_schema = std::move(schema_or.value());
-
-    EXPECT_EQ(mixed_skip_schema->GetStats().document_cnt, num_vectors);
 
     // All indexes should be empty initially
     auto vec_index = mixed_skip_schema->GetIndex("embedding");

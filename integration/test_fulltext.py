@@ -314,6 +314,36 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert client.execute_command("FT.SEARCH", "idx_no_bs", r'test4\\\word4')[0] == 1
         assert client.execute_command("FT.SEARCH", "idx_no_bs", r'@content:test5\\\\word5')[0] == 1
 
+    def test_casefolding(self):
+        """Test casefolding normalization - search using upper/lower case should find both."""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA", "content", "TEXT")
+        client.execute_command("HSET", "doc:1", "content", "café")
+        client.execute_command("HSET", "doc:2", "content", "CAFÉ")
+        client.execute_command("HSET", "doc:3", "content", "naïve")
+        client.execute_command("HSET", "doc:4", "content", "NAÏVE")
+        client.execute_command("HSET", "doc:5", "content", "hello")
+        client.execute_command("HSET", "doc:6", "content", "HeLLO")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+        # Search lowercase, should find both café docs
+        result = client.execute_command("FT.SEARCH", "idx", "café")
+        assert result[0] == 2 and set(result[1::2]) == {b"doc:1", b"doc:2"}
+        # Search uppercase, should find both café docs
+        result = client.execute_command("FT.SEARCH", "idx", "CAFÉ")
+        assert result[0] == 2 and set(result[1::2]) == {b"doc:1", b"doc:2"}
+        # Search lowercase, should find both naïve docs
+        result = client.execute_command("FT.SEARCH", "idx", "naïve")
+        assert result[0] == 2 and set(result[1::2]) == {b"doc:3", b"doc:4"}
+        # Search uppercase, should find both naïve docs
+        result = client.execute_command("FT.SEARCH", "idx", "NAÏVE")
+        assert result[0] == 2 and set(result[1::2]) == {b"doc:3", b"doc:4"}
+        # Search lowercase, should find both hello docs
+        result = client.execute_command("FT.SEARCH", "idx", "hello")
+        assert result[0] == 2 and set(result[1::2]) == {b"doc:5", b"doc:6"}
+        # Search uppercase, should find both hello docs
+        result = client.execute_command("FT.SEARCH", "idx", "HELLO")
+        assert result[0] == 2 and set(result[1::2]) == {b"doc:5", b"doc:6"}
+
     def test_aggregate_with_text_search(self):
         """Test FT.AGGREGATE with text search query."""
         client: Valkey = self.server.get_new_client()

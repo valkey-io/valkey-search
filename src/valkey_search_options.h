@@ -95,7 +95,10 @@ const config::Boolean& GetDrainMutationQueueOnSave();
 const config::Boolean& GetDrainMutationQueueOnLoad();
 
 /// Return the shard limit multiplier for fanout queries
-config::Number& GetShardLimitMultiplier();
+config::Number& GetFanoutShardLimitMultiplier();
+
+/// Return the threshold for async fanout operations
+config::Number& GetAsyncFanoutThreshold();
 
 }  // namespace options
 }  // namespace valkey_search

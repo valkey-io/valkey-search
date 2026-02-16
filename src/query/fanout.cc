@@ -259,7 +259,7 @@ absl::Status PerformSearchFanoutAsync(
     std::optional<query::SortByParameter> sortby_parameter) {
   auto request =
       coordinator::ParametersToGRPCSearchRequest(*parameters, sortby_parameter);
-  double multiplier = options::GetShardLimitMultiplier().GetValue();
+  double multiplier = options::GetFanoutShardLimitMultiplier().GetValue();
   size_t num_shards = search_targets.size();
   if (parameters->IsNonVectorQuery()) {
     // For non vector, use the LIMIT based range. Ensure we fetch enough
@@ -307,7 +307,9 @@ absl::Status PerformSearchFanoutAsync(
     std::string target_address =
         absl::StrCat(node.socket_address.primary_endpoint, ":",
                      coordinator::GetCoordinatorPort(node.socket_address.port));
-    if (search_targets.size() >= 30 && thread_pool->Size() > 1) {
+    if (search_targets.size() >=
+            valkey_search::options::GetAsyncFanoutThreshold().GetValue() &&
+        thread_pool->Size() > 1) {
       PerformRemoteSearchRequestAsync(std::move(request_copy), target_address,
                                       coordinator_client_pool, tracker,
                                       thread_pool);

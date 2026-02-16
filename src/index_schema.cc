@@ -228,6 +228,15 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
           res->AddIndex(attribute.alias(), attribute.identifier(), index));
     }
   }
+
+  if (!reload && index_schema_proto.skip_initial_scan()) {
+    // Creating a new Index with SkipInitialScan. Mark the backfill as done
+    // since we are skipping it.
+    VMSDK_LOG(DEBUG, ctx) << "Index " << index_schema_proto.name()
+                          << " created with skip_initial_scan. "
+                             "Marking backfill as done.";
+    res->backfill_job_.Get()->MarkScanAsDone();
+  }
   return res;
 }
 
@@ -254,6 +263,7 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
       with_offsets_(index_schema_proto.with_offsets()),
       stop_words_(index_schema_proto.stop_words().begin(),
                   index_schema_proto.stop_words().end()),
+      skip_initial_scan_(index_schema_proto.skip_initial_scan()),
       min_stem_size_(index_schema_proto.min_stem_size() > 0
                          ? index_schema_proto.min_stem_size()
                          : 4),
@@ -567,13 +577,6 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
   }
 }
 
-bool IndexSchema::IsTrackedByAnyIndex(const Key &key) const {
-  return std::any_of(attributes_.begin(), attributes_.end(),
-                     [&key](const auto &attribute) {
-                       return attribute.second.GetIndex()->IsTracked(key);
-                     });
-}
-
 void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
                                       MutatedAttributes &mutated_attributes,
                                       const Key &key) {
@@ -625,18 +628,11 @@ void IndexSchema::ProcessAttributeMutation(
       }
       return;
     }
-    bool was_tracked = IsTrackedByAnyIndex(key);
     auto res = index->AddRecord(key, data_view);
     TrackResults(ctx, res, "Add", stats_.subscription_add);
 
     if (res.ok() && res.value()) {
       ++Metrics::GetStats().time_slice_upserts;
-      // Increment the hash key count if it wasn't tracked and we successfully
-      // added it to the index.
-      if (!was_tracked) {
-        ++stats_.document_cnt;
-      }
-
       // Track field type counters
       switch (index->GetIndexerType()) {
         case indexes::IndexerType::kVector:
@@ -665,10 +661,6 @@ void IndexSchema::ProcessAttributeMutation(
   TrackResults(ctx, res, "Remove", stats_.subscription_remove);
   if (res.ok() && res.value()) {
     ++Metrics::GetStats().time_slice_deletes;
-    // Reduce the hash key count if nothing is tracking the key anymore.
-    if (!IsTrackedByAnyIndex(key)) {
-      --stats_.document_cnt;
-    }
   }
 }
 
@@ -792,11 +784,13 @@ MutationSequenceNumber IndexSchema::UpdateDbInfoKey(
 
   if (is_delete) {
     dbkeyinfo_map.erase(interned_key);
+    stats_.document_cnt = dbkeyinfo_map.size();
     return this_mutation;
   }
 
   auto &dbkeyinfo = dbkeyinfo_map[interned_key];
   dbkeyinfo.mutation_sequence_number_ = this_mutation;
+  stats_.document_cnt = dbkeyinfo_map.size();
 
   auto &attr_info_vec = dbkeyinfo.GetAttributeInfoVec();
   // Clear the array, we will re-use it.
@@ -1190,6 +1184,7 @@ std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
   index_schema_proto->set_min_stem_size(min_stem_size_);
   index_schema_proto->mutable_stop_words()->Assign(stop_words_.begin(),
                                                    stop_words_.end());
+  index_schema_proto->set_skip_initial_scan(skip_initial_scan_);
 
   auto stats = index_schema_proto->mutable_stats();
   stats->set_documents_count(stats_.document_cnt);
@@ -1224,6 +1219,10 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
         << "Draining mutation queue before RDB save for index " << name_;
     DrainMutationQueue(detached_ctx_.get());
   }
+
+  VMSDK_LOG(DEBUG, nullptr)
+      << "Starting RDB save for index schema: " << name_
+      << " Saving in version " << (RDBWriteV2() ? "2" : "1") << " format";
 
   auto index_schema_proto = ToProto();
   auto rdb_section = std::make_unique<data_model::RDBSection>();
@@ -1369,10 +1368,7 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
   }
   //
   // To reconstruct an index-schema, we want to ingest all of the keys that
-  // are currently within the index. If there is a non-vector index, we can
-  // use the tracked and untracked key lists from that index. If there is ONLY
-  // vector indexes, then this key list is not needed as there aren't any
-  // non-vector indexes to ingest.
+  // are currently within the index.
   //
   // The V1 format doesn't have this list and substitutes a backfill to
   // rebuild. In the absence of support for SKIPINITIALSCAN the backfill is
@@ -1382,30 +1378,12 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
   // this key list explicitly which will trivially enable the SKIPINITIALSCAN
   // option.
   //
-  std::shared_ptr<indexes::IndexBase> index;
-  for (const auto &attribute : attributes_) {
-    if (!IsVectorIndex(attribute.second.GetIndex())) {
-      index = attribute.second.GetIndex();
-      break;
-    }
-  }
-  if (!index) {
-    VMSDK_RETURN_IF_ERROR(out.SaveObject<size_t>(0));  // zero keys
-  } else {
-    size_t key_count =
-        index->GetTrackedKeyCount() + index->GetUnTrackedKeyCount();
-    VMSDK_RETURN_IF_ERROR(out.SaveObject(key_count));
-    rdb_save_keys.Increment(key_count);
-    VMSDK_LOG(NOTICE, nullptr)
-        << "Writing Index Extension, keys = " << key_count;
-
-    auto write_a_key = [&](const Key &key) {
-      key_count--;
-      return out.SaveString(key->Str());
-    };
-    VMSDK_RETURN_IF_ERROR(index->ForEachTrackedKey(write_a_key));
-    VMSDK_RETURN_IF_ERROR(index->ForEachUnTrackedKey(write_a_key));
-    CHECK(key_count == 0) << "Key count mismatch for index " << GetName();
+  size_t key_count = db_key_info_.Get().size();
+  VMSDK_RETURN_IF_ERROR(out.SaveObject(key_count));
+  rdb_save_keys.Increment(key_count);
+  VMSDK_LOG(NOTICE, nullptr) << "Writing Index Extension, keys = " << key_count;
+  for (auto &[key, _] : db_key_info_.Get()) {
+    VMSDK_RETURN_IF_ERROR(out.SaveString(key->Str()));
   }
   //
   // Write out the mutation queue entries. As an optimization we only write
@@ -1579,7 +1557,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
               if (!supplemental_content->mutation_queue_header()
                        .backfilling()) {
                 VMSDK_LOG(DEBUG, ctx) << "Backfill suppressed.";
-                index_schema->backfill_job_.Get() = std::nullopt;
+                index_schema->backfill_job_.Get()->MarkScanAsDone();
               } else {
                 rdb_load_backfilling_indexes.Increment();
               }
@@ -1652,7 +1630,8 @@ void IndexSchema::OnLoadingEnded(ValkeyModuleCtx *ctx) {
     VMSDK_LOG(NOTICE, ctx) << "RDB load completed, "
                            << " Mutation Queue contains "
                            << tracked_mutated_records_.size() << " entries."
-                           << (backfill_job_.Get().has_value()
+                           << (backfill_job_.Get().has_value() &&
+                                       !backfill_job_.Get()->IsScanDone()
                                    ? " Backfill still required."
                                    : " Backfill not needed.");
     if (options::GetDrainMutationQueueOnLoad().GetValue()) {

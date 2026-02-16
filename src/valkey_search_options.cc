@@ -370,6 +370,41 @@ constexpr absl::string_view kDrainMutationQueueOnSaveConfig{
 static auto drain_mutation_queue_on_save =
     config::BooleanBuilder(kDrainMutationQueueOnSaveConfig, false).Build();
 
+/// Register the "fanout-shard-limit-multiplier" flag
+/// This config can be increased to match the number of shards in the
+/// cluster to ensure that we fetch enough results from each shard to
+/// return the top K results to the user in the case where the results
+/// are not evenly distributed across the shards.
+/// The default value is 1, which means that we will fetch K / N results
+/// from each shard where N is the number of shards. This is done expecting
+/// even data distribution.
+/// If the multiplier is set to N, we will fetch K results from each shard.
+constexpr absl::string_view kFanoutLimitMultiplierConfig{
+    "fanout-shard-limit-multiplier"};
+constexpr uint32_t kDefaultFanoutLimitMultiplier{1};
+constexpr uint32_t kMinimumFanoutLimitMultiplier{1};
+constexpr uint32_t kMaximumFanoutLimitMultiplier{16384};
+static auto fanout_limit_multiplier =
+    config::NumberBuilder(
+        kFanoutLimitMultiplierConfig, kDefaultFanoutLimitMultiplier,
+        kMinimumFanoutLimitMultiplier, kMaximumFanoutLimitMultiplier)
+        .Build();
+
+/// Register the "--async-fanout-threshold" flag. Controls the threshold
+/// for async fanout operations (minimum number of targets to use async)
+constexpr absl::string_view kAsyncFanoutThresholdConfig{
+    "async-fanout-threshold"};
+constexpr uint32_t kDefaultAsyncFanoutThreshold{30};     // 30 targets
+constexpr uint32_t kMinimumAsyncFanoutThreshold{1};      // At least 1 target
+constexpr uint32_t kMaximumAsyncFanoutThreshold{10000};  // Max 10k targets
+static auto async_fanout_threshold =
+    vmsdk::config::NumberBuilder(
+        kAsyncFanoutThresholdConfig,   // name
+        kDefaultAsyncFanoutThreshold,  // default threshold (30)
+        kMinimumAsyncFanoutThreshold,  // min threshold (1)
+        kMaximumAsyncFanoutThreshold)  // max threshold (10k)
+        .Build();
+
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 
 vmsdk::config::Number& GetHNSWBlockSize() {
@@ -466,27 +501,12 @@ const vmsdk::config::Boolean& GetDrainMutationQueueOnLoad() {
       *drain_mutation_queue_on_load);
 }
 
-/// Register the "fanout-shard-limit-multiplier" flag
-/// This config can be increased to match the number of shards in the
-/// cluster to ensure that we fetch enough results from each shard to
-/// return the top K results to the user in the case where the results
-/// are not evenly distributed across the shards.
-/// The default value is 1, which means that we will fetch K / N results
-/// from each shard where N is the number of shards. This is done expecting
-/// even data distribution.
-/// If the multiplier is set to N, we will fetch K results from each shard.
-constexpr absl::string_view kFanoutLimitMultiplierConfig{
-    "fanout-shard-limit-multiplier"};
-constexpr uint32_t kDefaultFanoutLimitMultiplier{1};
-constexpr uint32_t kMinimumFanoutLimitMultiplier{1};
-constexpr uint32_t kMaximumFanoutLimitMultiplier{16384};
-static auto fanout_limit_multiplier =
-    config::NumberBuilder(
-        kFanoutLimitMultiplierConfig, kDefaultFanoutLimitMultiplier,
-        kMinimumFanoutLimitMultiplier, kMaximumFanoutLimitMultiplier)
-        .Build();
-vmsdk::config::Number& GetShardLimitMultiplier() {
+vmsdk::config::Number& GetFanoutShardLimitMultiplier() {
   return dynamic_cast<vmsdk::config::Number&>(*fanout_limit_multiplier);
+}
+
+vmsdk::config::Number& GetAsyncFanoutThreshold() {
+  return dynamic_cast<vmsdk::config::Number&>(*async_fanout_threshold);
 }
 
 }  // namespace options

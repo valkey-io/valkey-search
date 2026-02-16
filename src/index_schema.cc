@@ -823,9 +823,9 @@ MutationSequenceNumber IndexSchema::UpdateDbInfoKey(
       // No such alias? try to see if we got an identifier instead
       res = GetAttributePositionByIdentifier(mutated_attr.first);
     }
-    CHECK(res.ok()) << "Index: [" << GetName()
+    CHECK(res.ok()) << "Index: [" << vmsdk::config::RedactIfNeeded(GetName())
                     << "]: could not find attribute position for alias: "
-                    << mutated_attr.first;
+                    << vmsdk::config::RedactIfNeeded(mutated_attr.first);
     CHECK(res.value() < attributes_indexed_data_size_.size())
         << "Invalid attribute position found";
 
@@ -1265,10 +1265,11 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
       << vmsdk::config::RedactIfNeeded(this->name_)
       << " in DB: " << this->db_num_ << " to RDB";
 
+  VMSDK_LOG(NOTICE, nullptr) << "Starting to save attributes";
+
   for (auto &attribute : attributes_) {
-    VMSDK_LOG(NOTICE, nullptr)
-        << "Starting to save attribute: "
-        << vmsdk::config::RedactIfNeeded(attribute.second.GetAlias());
+    VMSDK_LOG(DEBUG, nullptr)
+        << "Starting to save attribute: " << attribute.second.GetAlias();
     // Note that the serialized attribute proto is also stored as part of the
     // serialized index schema proto above. We store here again to avoid any
     // dependencies on the ordering of multiple attributes.
@@ -1366,10 +1367,9 @@ absl::Status IndexSchema::ValidateIndex() const {
             << "Key found in " << vmsdk::config::RedactIfNeeded(larger_name)
             << " not found in " << vmsdk::config::RedactIfNeeded(smaller_name)
             << ": " << vmsdk::config::RedactIfNeeded(key->Str());
-        status = absl::InternalError(absl::StrCat(
-            "Key found in ", vmsdk::config::RedactIfNeeded(larger_name),
-            " not found in ", vmsdk::config::RedactIfNeeded(smaller_name), ": ",
-            vmsdk::config::RedactIfNeeded(key->Str())));
+        status = absl::InternalError(
+            absl::StrCat("Key found in ", larger_name, " not found in ",
+                         smaller_name, ": ", key->Str()));
       }
       return absl::OkStatus();
     };
@@ -1556,9 +1556,8 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
             SUPPLEMENTAL_CONTENT_INDEX_CONTENT: {
           auto &attribute =
               supplemental_content->index_content_header().attribute();
-          VMSDK_LOG(NOTICE, nullptr)
-              << "Loading Index Content for attribute: "
-              << vmsdk::config::RedactIfNeeded(attribute.alias());
+          VMSDK_LOG(DEBUG, nullptr)
+              << "Loading Index Content for attribute: " << attribute.alias();
           VMSDK_ASSIGN_OR_RETURN(
               std::shared_ptr<indexes::IndexBase> index,
               IndexFactory(ctx, index_schema.get(), attribute,
@@ -1571,9 +1570,9 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
             SUPPLEMENTAL_CONTENT_KEY_TO_ID_MAP: {
           auto &attribute =
               supplemental_content->key_to_id_map_header().attribute();
-          VMSDK_LOG(NOTICE, nullptr)
+          VMSDK_LOG(DEBUG, nullptr)
               << "Loading Key to ID Map Content for attribute: "
-              << vmsdk::config::RedactIfNeeded(attribute.alias());
+              << attribute.alias();
           VMSDK_ASSIGN_OR_RETURN(
               auto index, index_schema->GetIndex(attribute.alias()),
               _ << "Key to ID mapping found before index definition.");
@@ -1589,7 +1588,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
         }
         case data_model::SupplementalContentType::
             SUPPLEMENTAL_CONTENT_INDEX_EXTENSION: {
-          VMSDK_LOG(NOTICE, nullptr) << "Loading Mutation Queue";
+          VMSDK_LOG(DEBUG, nullptr) << "Loading Mutation Queue";
           if (!RDBReadV2()) {
             VMSDK_RETURN_IF_ERROR(
                 SkipSupplementalContent(supplemental_iter, "mutation queue"));
@@ -1620,7 +1619,8 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
       }
     }
   }
-
+  VMSDK_LOG(NOTICE, ctx) << "Loaded index schema with "
+                         << index_schema->GetAttributeCount() << " attributes";
   return index_schema;
 }
 
@@ -1671,13 +1671,12 @@ void IndexSchema::DrainMutationQueue(ValkeyModuleCtx *ctx) const {
 void IndexSchema::OnLoadingEnded(ValkeyModuleCtx *ctx) {
   if (loaded_v2_) {
     loaded_v2_ = false;
-    VMSDK_LOG(NOTICE, ctx) << "RDB load completed, "
-                           << " Mutation Queue contains "
-                           << tracked_mutated_records_.size() << " entries."
-                           << (backfill_job_.Get().has_value() &&
-                                       !backfill_job_.Get()->IsScanDone()
-                                   ? " Backfill still required."
-                                   : " Backfill not needed.");
+    VMSDK_LOG_EVERY_N_SEC(NOTICE, ctx, 1)
+        << "RDB load completed, "
+        << " Mutation Queue contains " << tracked_mutated_records_.size()
+        << " entries."
+        << (backfill_job_.Get().has_value() ? " Backfill still required."
+                                            : " Backfill not needed.");
     if (options::GetDrainMutationQueueOnLoad().GetValue()) {
       DrainMutationQueue(ctx);
     }
@@ -1705,13 +1704,10 @@ void IndexSchema::OnLoadingEnded(ValkeyModuleCtx *ctx) {
       key_size++;
       return absl::OkStatus();
     });
-    VMSDK_LOG(NOTICE, ctx) << "Deleting " << stale_entries
-                           << " stale entries of " << key_size
-                           << " total keys for {Index: "
-                           << vmsdk::config::RedactIfNeeded(name_)
-                           << ", Attribute: "
-                           << vmsdk::config::RedactIfNeeded(attribute.first)
-                           << "}";
+    VMSDK_LOG(DEBUG, ctx) << "Deleting " << stale_entries
+                          << " stale entries of " << key_size
+                          << " total keys for {Index: " << name_
+                          << ", Attribute: " << attribute.first << "}";
   }
   VMSDK_LOG(NOTICE, ctx) << "Deleting " << deletion_attributes.size()
                          << " stale entries for {Index: "

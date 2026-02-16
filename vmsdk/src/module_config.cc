@@ -339,6 +339,10 @@ absl::Status String::FromString(std::string_view value) {
   SetValueOrLog(default_, WARNING);
   return absl::OkStatus();
 }
+/// Get method to fetch the `hide_user_data_config`
+vmsdk::config::Boolean &GetHideUserDataFromLog() {
+  return dynamic_cast<vmsdk::config::Boolean &>(*hide_user_data_config);
+}
 
 absl::Status ModuleConfigManager::ListAllConfigs(
     ValkeyModuleCtx *ctx, bool verbose, const std::string &filter) const {

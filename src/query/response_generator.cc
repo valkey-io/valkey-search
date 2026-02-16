@@ -374,7 +374,7 @@ void ProcessNeighborsForReply(
     bool size_exceeded = false;
     if (content.value().size() > max_content_fields) {
       ++Metrics::GetStats().query_result_record_dropped_cnt;
-      VMSDK_LOG(WARNING, ctx)
+      VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
           << "Content field number exceeds configured limit of "
           << max_content_fields << " for neighbor with ID: "
           << vmsdk::config::RedactIfNeeded((*neighbor.external_id).Str());
@@ -386,7 +386,7 @@ void ProcessNeighborsForReply(
       total_size += vmsdk::ToStringView(item.second.value.get()).size();
       if (total_size > max_content_size) {
         ++Metrics::GetStats().query_result_record_dropped_cnt;
-        VMSDK_LOG(WARNING, ctx)
+        VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
             << "Content size exceeds configured limit of " << max_content_size
             << " bytes for neighbor with ID: "
             << vmsdk::config::RedactIfNeeded((*neighbor.external_id).Str());

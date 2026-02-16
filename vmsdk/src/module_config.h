@@ -326,6 +326,8 @@ class Boolean : public ConfigBase<bool> {
   FRIEND_TEST(Builder, ConfigBuilder);
 };
 
+Boolean &GetHideUserDataFromLog();
+
 class String : public ConfigBase<std::string> {
  public:
   String(std::string_view name, std::string_view default_value);

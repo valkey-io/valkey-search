@@ -259,31 +259,23 @@ absl::Status PerformSearchFanoutAsync(
     std::optional<query::SortByParameter> sortby_parameter) {
   auto request =
       coordinator::ParametersToGRPCSearchRequest(*parameters, sortby_parameter);
+  double multiplier = options::GetShardLimitMultiplier().GetValue();
+  size_t num_shards = search_targets.size();
   if (parameters->IsNonVectorQuery()) {
     // For non vector, use the LIMIT based range. Ensure we fetch enough
     // results to cover offset + number.
-    request->mutable_limit()->set_first_index(0);
-    // For SORTBY queries, we need to fetch more results from each shard
-    // because the global top N might come from any shard. Multiply by the
-    // number of shards to ensure we get enough results.
     uint64_t limit_number =
         parameters->limit.first_index + parameters->limit.number;
-    if (sortby_parameter.has_value()) {
-      // Fetch enough results from each shard to cover the global top N
-      // In the worst case, all top N results could come from a single shard,
-      // so we need to fetch at least N from each shard.
-      limit_number = std::max(
-          limit_number,
-          static_cast<uint64_t>(search_targets.size()) *
-              (parameters->limit.first_index + parameters->limit.number));
-    }
-    request->mutable_limit()->set_number(limit_number);
+    request->mutable_limit()->set_first_index(0);
+    request->mutable_limit()->set_number(
+        static_cast<uint64_t>(limit_number * multiplier / num_shards));
   } else {
     // Vector searches: Use k as the limit to find top k results. In worst case,
     // all top k results are from a single shard, so no need to fetch more than
     // k.
     request->mutable_limit()->set_first_index(0);
-    request->mutable_limit()->set_number(parameters->k);
+    request->mutable_limit()->set_number(
+        static_cast<uint64_t>(parameters->k * multiplier / num_shards));
   }
   auto tracker = std::make_shared<SearchPartitionResultsTracker>(
       search_targets.size(), parameters->k, std::move(callback),

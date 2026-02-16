@@ -466,5 +466,28 @@ const vmsdk::config::Boolean& GetDrainMutationQueueOnLoad() {
       *drain_mutation_queue_on_load);
 }
 
+/// Register the "fanout-shard-limit-multiplier" flag
+/// This config can be increased to match the number of shards in the
+/// cluster to ensure that we fetch enough results from each shard to
+/// return the top K results to the user in the case where the results
+/// are not evenly distributed across the shards.
+/// The default value is 1, which means that we will fetch K / N results
+/// from each shard where N is the number of shards. This is done expecting
+/// even data distribution.
+/// If the multiplier is set to N, we will fetch K results from each shard.
+constexpr absl::string_view kFanoutLimitMultiplierConfig{
+    "fanout-shard-limit-multiplier"};
+constexpr uint32_t kDefaultFanoutLimitMultiplier{1};
+constexpr uint32_t kMinimumFanoutLimitMultiplier{1};
+constexpr uint32_t kMaximumFanoutLimitMultiplier{16384};
+static auto fanout_limit_multiplier =
+    config::NumberBuilder(
+        kFanoutLimitMultiplierConfig, kDefaultFanoutLimitMultiplier,
+        kMinimumFanoutLimitMultiplier, kMaximumFanoutLimitMultiplier)
+        .Build();
+vmsdk::config::Number& GetShardLimitMultiplier() {
+  return dynamic_cast<vmsdk::config::Number&>(*fanout_limit_multiplier);
+}
+
 }  // namespace options
 }  // namespace valkey_search

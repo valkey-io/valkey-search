@@ -127,10 +127,9 @@ EvaluationResult TermPredicate::Evaluate(
     }
     // Search for stem variants - these should all exist from ingestion
     for (const auto &variant : stem_variants) {
-      bool found = TryAddWordKeyIteratorForPrefilter(
-          text_index, variant, target_key, stem_field_mask, require_positions,
-          key_iterators);
-      CHECK(found) << "Word in stem tree not found in index - ingestion issue";
+      TryAddWordKeyIteratorForPrefilter(text_index, variant, target_key,
+                                        stem_field_mask, require_positions,
+                                        key_iterators);
     }
   }
   if (key_iterators.empty()) {

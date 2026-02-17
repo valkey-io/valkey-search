@@ -7,7 +7,7 @@ description: Search Module Configurable Settings
 
 The search module uses the Valkey configuration mechanism. Thus each of the named configuration below can be set on the module load command OR via the `CONFIG SET` command.
 
-| Name                                          |  Units  | Default Value | Description                                                                                                                       |
+| Name                                          |  Type   | Default Value | Description                                                                                                                       |
 | :-------------------------------------------- | :-----: | :-----------: | :-------------------------------------------------------------------------------------------------------------------------------- |
 | search.query-string-bytes                     | Number  |               | Controls the length of the query string for FT.SEARCH command                                                                     |
 | search.hnsw-block-size                        | Number  |               | HNSW resize configuration parameter for vector index block allocation                                                             |

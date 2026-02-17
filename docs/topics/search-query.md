@@ -143,29 +143,44 @@ Examples of numeric matchers
 
 ## Text Search Operators
 
-Unlike the other search operators. The text search operators do not require that a field be specified. If a field is not specified for a text search operator, then all text fields within the index are searched.
+Unlike the other search operators. The text search operators do not require that a field be specified. If a field is not specified for a text search operator, then all text fields within the index are searched. Regardless, if multiple text search operators are combined in an expression, then only keys which have all of the text search operators will satisfy the query.
 
 ### Term Search
 
-The term search operator matches a single word. Variants of the term search allow prefix and suffix searching by using a trailing or leading `*`, respectively.
+The term search operator matches a single word. If the word matches a stop word it is removed.
+Term searches are subject to stemming unless the `VERBATIM` option is specified.
+
+Examples include:
+
+```
+hello                   matches the word hello in any text field
+@t:hello                matches the word hello but only in the t field (t must be a text field)
+```
+
+### Prefix Matching
+
+A term with a trailing `*` matches any word that starts with that term.
+
+```
+hello*                  matches words that start with hello such as hello, hello1, hello_world but not ohello
+@t:hello*               matches words that start with hello in the t field (t must be a text field)
+```
+
+### Suffix Matching
+
+A term with a leading `*` matches any word that ends with that term.
 
 Note that suffix searching will only locate words in fields that have `WITHSUFFIXTRIE` specified, i.e., fields declared with `NOSUFFIXTRIE` will not be searched.
 If a field specifier is added to a suffix term search and that particular field was declared with `NOSUFFIXTRIE` then an error will be issued.
 
-Examples:
-
 ```
-hello                   matches the word hello in any text field
-hello*                  matches words that start with hello such as hello, hello1, hello_world but not ohello
 *hello                  matches words that end with hello such as hello, ohello but not hello1
-
-@t:hello                matches the word hello but only in the t field (t must be a text field)
-@t:hello*               matches words that start with hello in the t field (t must be a text field)
+@t:*hello               matches words that end with hello in the t field (t must be a text field with WITHSUFFIXTRIE)
 ```
 
 ### Exact Phrase Search
 
-The exact phrase search operator matches an exact sequence of words in a text field. The words to be matched are enclosed in double quotes.
+The exact phrase search operator matches an exact sequence of words in a text field. The words to be matched are enclosed in double quotes. The words are not subject to stop word removal nor stemming, otherwise this is equivalent to having the same words in a query with `SLOP 0` and `INORDER` options being specified.
 
 ```
 "hello world"            matches the exact phrase "hello world" in any text field
@@ -174,7 +189,7 @@ The exact phrase search operator matches an exact sequence of words in a text fi
 
 ### Fuzzy Search
 
-The fuzzy search operator matches words within a fixed Damerau-Levenshtein distance. See [Damerau-Levenshtein edit distance](https://en.wikipedia.org/wiki/Damerau%E2%80%93Levenshtein_distance) for more information. Fuzzy matching is specified by enclosing the base word in percent symbols `%` one for each allowable edit distance.
+The fuzzy search operator matches words within a fixed Damerau-Levenshtein distance. See [Damerau-Levenshtein edit distance](https://en.wikipedia.org/wiki/Damerau%E2%80%93Levenshtein_distance) for more information. Fuzzy matching is specified by enclosing the base word in percent symbols `%` one for each allowable edit distance. The maximum allowed edit distance is control by the configuration setting `search.fuzzy-max-distance`.
 
 ```
 %hello%                 matches words that are one edit away from hello such as hello, hello1
@@ -212,17 +227,21 @@ query1 | query2 | query3
 
 ### Logical `AND`
 
-To specify the local `AND` operation use a space between the predicates. For example:
+To specify the `AND` operation use a space between the predicates. If the `INORDER` and `SLOP` options are not provided then the `AND` operation is done at the key level. This means that any key which satisfies each of the predicates will match.
+
+If either of the `INORDER` or `SLOP` options are provided, then the `AND` operation is extended beyond simple key matching to also include positional matching of the text searching operators. Positional matching requires that each predicate not only match the same key but that the text searching operators (term, prefix, suffix, exact phrase and fuzzy) must also match words that satisfy the requirements of `INORDER` and `SLOP` in the same field of the same key.
+
+For example:
 
 ```
 query1 query2 query3
 ```
 
-#### Positional Matching
+### Proximity `AND`
 
-When two or more predicates of an AND operation contain text matchers if becomes possible to also perform positional matching. Positional matching extends key-based matching to additional require that matching words meet specified distance and ordering constraints.
+When two or more predicates of an AND operation contain text matchers if becomes possible to also perform positional matching. Positional matching extends key-based matching to additionally require that matching words meet specified distance and ordering constraints. Note that it's only meaningful to apply positional matching within a single field. In other words, if
 
-Position matching is enabled when either the `SLOP` or `INORDER` clauses are used on the command.
+Position matching is enabled when either the `SLOP` or `INORDER` clauses are used on the command and applies to all multi-predicate AND operations within the current command.
 
 # Examples
 

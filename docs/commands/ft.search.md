@@ -2,36 +2,38 @@ Performs a search of the specified index. The keys which match the query express
 
 ```
 FT.SEARCH <index> <query>
-  [NOCONTENT]
-  [TIMEOUT <timeout>]
-  [PARAMS <count> <name> <value> [ <name> <value> ...]]
-  [RETURN <count> <field> [AS <name>] <field> [AS <name>]...]
-  [LIMIT <offset> <num>]
-  [DIALECT <dialect>]
-  [INORDER]
-  [SLOP <slop>]
-  [SORTBY <field> [ ASC | DESC]]
-  [WITHSORTKEYS]
   [ALLSHARDS | SOMESHARDS]
   [CONSISTENT | INCONSISTENT]
+  [DIALECT <dialect>]
+  [INORDER]
+  [LIMIT <offset> <num>]
+  [NOCONTENT]
+  [PARAMS <count> <name> <value> [ <name> <value> ...]]
+  [RETURN <count> <field> [AS <name>] <field> [AS <name>]...]
+  [SLOP <slop>]
+  [SORTBY <field> [ ASC | DESC]]
+  [TIMEOUT <timeout>]
+  [VERBATIM]
+  [WITHSORTKEYS]
 ```
 
 - `<index>` (required): This index name you want to query.
 - `<query>` (required): The query string, see [Search - query language](../topics/search-query.md) for details.
-- `NOCONTENT` (optional): When present, only the resulting key names are returned, no key values are included.
-- `TIMEOUT <timeout>` (optional): Lets you set a timeout value for the search command. This must be an integer in milliseconds.
-- `PARAMS <count> <name> <value> [<name> <value> ...]` (optional): `count` is of the number of arguments, i.e., twice the number of value/name pairs. [Search - query language](../topics/search-query.md) for details.
-- `RETURN <count> <field> [AS <name>] <field> [AS <name>] ...` (options): `count` is the number of fields to return. Specifies the fields you want to retrieve from your documents, along with any renaming for the returned values. By default, all fields are returned unless the `NOCONTENT` option is set, in which case no fields are returned. If num is set to 0, it behaves the same as `NOCONTENT`.
-- `LIMIT <offset> <count>` (optional): Lets you choose a portion of the result. The first `<offset>` keys are skipped and only a maximum of `<count>` keys are included. The default is LIMIT 0 10, which returns at most 10 keys.
+- `ALLSHARDS` (Optional): If specified, the command is terminated with a timeout error if a valid response from all shards is not received within the timeout interval. This is the default.
+- `CONSISTENT` (Optional): If specified, the command is terminated with an error if the cluster is in an inconsistent state. This is the default.
 - `DIALECT <dialect>` (optional): Specifies your dialect. The only supported dialect is 2.
 - `INORDER` (optional): Indicates that proximity matching of terms must be inorder.
-- `SLOP <slop>` (Optional): Specifies a slop value for proximity matching of terms.
-- `SORTBY <field> [ASC | DESC]` (Optional): If present, results are sorted according the value of the specified field and the optional sort-direction instruction. By default, vector results are sorted in distance order and non-vector results are not sorted in any particular order. Sorting is applied before the `LIMIT` clause is applied.
-- `WITHSORTKEYS` (Optional): If `SORTBY` is specified then enabling this option augments the output with the value of the field used for sorting.
-- `ALLSHARDS` (Optional): If specified, the command is terminated with a timeout error if a valid response from all shards is not received within the timeout interval. This is the default.
-- `SOMESHARDS` (Optional): If specified, the command will generate a best-effort reply if all shards have not responded within the timeout interval.
-- `CONSISTENT` (Optional): If specified, the command is terminated with an error if the cluster is in an inconsistent state. This is the default.
 - `INCONSISTENT` (Optional): If specified, the command will generate a best-effort reply if the cluster remains inconsistent within the timeout interval.
+- `LIMIT <offset> <count>` (optional): Lets you choose a portion of the result. The first `<offset>` keys are skipped and only a maximum of `<count>` keys are included. The default is LIMIT 0 10, which returns at most 10 keys.
+- `NOCONTENT` (optional): When present, only the resulting key names are returned, no key values are included.
+- `PARAMS <count> <name> <value> [<name> <value> ...]` (optional): `count` is of the number of arguments, i.e., twice the number of value/name pairs. [Search - query language](../topics/search-query.md) for details.
+- `RETURN <count> <field> [AS <name>] <field> [AS <name>] ...` (options): `count` is the number of fields to return. Specifies the fields you want to retrieve from your documents, along with any renaming for the returned values. By default, all fields are returned unless the `NOCONTENT` option is set, in which case no fields are returned. If num is set to 0, it behaves the same as `NOCONTENT`.
+- `SLOP <slop>` (Optional): Specifies a slop value for proximity matching of terms.
+- `SOMESHARDS` (Optional): If specified, the command will generate a best-effort reply if all shards have not responded within the timeout interval.
+- `SORTBY <field> [ASC | DESC]` (Optional): If present, results are sorted according the value of the specified field and the optional sort-direction instruction. By default, vector results are sorted in distance order and non-vector results are not sorted in any particular order. Sorting is applied before the `LIMIT` clause is applied.
+- `TIMEOUT <timeout>` (optional): Lets you set a timeout value for the search command. This must be an integer in milliseconds.
+- `VERBATIM` (Optional): If specified stemming is not applied to term searches.
+- `WITHSORTKEYS` (Optional): If `SORTBY` is specified then enabling this option augments the output with the value of the field used for sorting.
 
 Response
 

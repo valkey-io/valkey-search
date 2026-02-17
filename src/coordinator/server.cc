@@ -36,6 +36,7 @@
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
 #include "vmsdk/src/debug.h"
+#include "vmsdk/src/info.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -195,10 +196,13 @@ void Service::EnqueueSearchRequest(
   }
 }
 
+DEV_INTEGER_COUNTER(grpc, search_index_rpc_requests);
+
 grpc::ServerUnaryReactor* Service::SearchIndexPartition(
     grpc::CallbackServerContext* context,
     const SearchIndexPartitionRequest* request,
     SearchIndexPartitionResponse* response) {
+  search_index_rpc_requests.Increment();
   GRPCSuspensionGuard guard(GRPCSuspender::Instance());
   auto latency_sample = SAMPLE_EVERY_N(100);
   grpc::ServerUnaryReactor* reactor = context->DefaultReactor();

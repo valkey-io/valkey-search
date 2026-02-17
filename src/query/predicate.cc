@@ -22,6 +22,7 @@
 #include "src/indexes/text/fuzzy.h"
 #include "src/indexes/text/orproximity.h"
 #include "src/indexes/text/proximity.h"
+#include "src/indexes/text/term.h"
 #include "src/indexes/text/text_index.h"
 #include "src/indexes/text/text_iterator.h"
 #include "src/indexes/vector_base.h"
@@ -42,17 +43,16 @@ EvaluationResult BuildTextEvaluationResult(
   if (!iterator->IsIteratorValid()) {
     return EvaluationResult(false);
   }
-  return EvaluationResult(true, std::move(iterator));
+  return {true, std::move(iterator)};
 }
 
 TermPredicate::TermPredicate(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-    FieldMaskPredicate field_mask, std::string term, bool exact_)
-    : TextPredicate(),
-      text_index_schema_(text_index_schema),
+    FieldMaskPredicate field_mask, std::string term, bool exact)
+    : text_index_schema_(text_index_schema),
       field_mask_(field_mask),
       term_(term),
-      exact_(exact_) {}
+      exact_(exact) {}
 
 EvaluationResult TermPredicate::Evaluate(Evaluator &evaluator) const {
   return evaluator.EvaluateText(*this, false);
@@ -144,8 +144,7 @@ EvaluationResult TermPredicate::Evaluate(
 PrefixPredicate::PrefixPredicate(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
     FieldMaskPredicate field_mask, std::string term)
-    : TextPredicate(),
-      text_index_schema_(text_index_schema),
+    : text_index_schema_(text_index_schema),
       field_mask_(field_mask),
       term_(term) {}
 
@@ -193,8 +192,7 @@ EvaluationResult PrefixPredicate::Evaluate(
 SuffixPredicate::SuffixPredicate(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
     FieldMaskPredicate field_mask, std::string term)
-    : TextPredicate(),
-      text_index_schema_(text_index_schema),
+    : text_index_schema_(text_index_schema),
       field_mask_(field_mask),
       term_(term) {}
 
@@ -221,7 +219,9 @@ EvaluationResult SuffixPredicate::Evaluate(
   uint32_t word_count = 0;
   while (!word_iter.Done() && word_count < max_words) {
     std::string_view word = word_iter.GetWord();
-    if (!word.starts_with(reversed_term)) break;
+    if (!word.starts_with(reversed_term)) {
+      break;
+    }
     auto postings = word_iter.GetPostingsTarget();
     if (postings) {
       auto key_iter = postings->GetKeyIterator();
@@ -248,8 +248,7 @@ EvaluationResult SuffixPredicate::Evaluate(
 InfixPredicate::InfixPredicate(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
     FieldMaskPredicate field_mask, std::string term)
-    : TextPredicate(),
-      text_index_schema_(text_index_schema),
+    : text_index_schema_(text_index_schema),
       field_mask_(field_mask),
       term_(term) {}
 
@@ -268,8 +267,7 @@ EvaluationResult InfixPredicate::Evaluate(
 FuzzyPredicate::FuzzyPredicate(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
     FieldMaskPredicate field_mask, std::string term, uint32_t distance)
-    : TextPredicate(),
-      text_index_schema_(text_index_schema),
+    : text_index_schema_(text_index_schema),
       field_mask_(field_mask),
       term_(term),
       distance_(distance) {}
@@ -469,16 +467,16 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator &evaluator) const {
         return EvaluationResult(false);
       }
       // Validate against original target key from evaluator
-      auto target_key = evaluator.GetTargetKey();
+      const auto &target_key = evaluator.GetTargetKey();
       if (target_key && proximity_iterator->CurrentKey() != target_key) {
         return EvaluationResult(false);
       }
       // Return the proximity iterator for potential nested use.
-      return EvaluationResult(true, std::move(proximity_iterator));
+      return {true, std::move(proximity_iterator)};
     }
     // Propagate the filter iterator from the one child exists
     else if (childrenWithPositions == 1) {
-      return EvaluationResult(true, std::move(iterators[0]));
+      return {true, std::move(iterators[0])};
     }
     // All matched, but none have position. non-proximity case
     return EvaluationResult(true);
@@ -518,7 +516,7 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator &evaluator) const {
     return EvaluationResult(false);
   }
   // Return the OR proximity iterator for potential nested scenarios.
-  return EvaluationResult(true, std::move(or_proximity_iterator));
+  return {true, std::move(or_proximity_iterator)};
 }
 
 }  // namespace valkey_search::query

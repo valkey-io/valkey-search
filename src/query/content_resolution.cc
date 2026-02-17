@@ -34,8 +34,8 @@ void ResolveContent(std::unique_ptr<SearchParameters> params) {
       // via RunByMain when the mutation completes.
       return;
     }
-    // If PerformKeyContentionCheck returns false, params is still valid (not moved).
-    // Fall through to content fetch.
+    // If PerformKeyContentionCheck returns false, params is still valid (not
+    // moved). Fall through to content fetch.
   }
 
   // 3. Content fetch + filter via ProcessNeighborsForReply

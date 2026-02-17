@@ -242,8 +242,7 @@ absl::Status PerformSearchFanoutAsync(
     coordinator::ClientPool *coordinator_client_pool,
     std::unique_ptr<SearchParameters> parameters,
     vmsdk::ThreadPool *thread_pool) {
-  auto request =
-      coordinator::ParametersToGRPCSearchRequest(*parameters);
+  auto request = coordinator::ParametersToGRPCSearchRequest(*parameters);
   if (parameters->IsNonVectorQuery()) {
     // For non vector, use the LIMIT based range. Ensure we fetch enough
     // results to cover offset + number.

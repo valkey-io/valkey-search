@@ -145,7 +145,6 @@ class RemoteResponderSearch : public query::SearchParameters {
     reactor->Finish(grpc::Status::OK);
     RecordSearchMetrics(false, std::move(latency_sample));
   }
-
 };
 
 grpc::Status Service::PerformSlotConsistencyCheck(

@@ -91,6 +91,11 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
 
   // Get or create the thread-local stemmer for this lexer's language
   sb_stemmer* stemmer = stemming_enabled ? GetStemmer() : nullptr;
+  
+  // Local cache to track words that have already been stemmed in this document.
+  // This avoids redundant stemming calls for repeated words.
+  absl::flat_hash_set<std::string> stemmed_words;
+  
   std::vector<std::string> tokens;
   size_t pos = 0;
   while (pos < text.size()) {
@@ -143,12 +148,15 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
         continue;  // Skip stop words
       }
 
-      if (stemming_enabled) {
+      if (stemming_enabled && !stemmed_words.contains(word)) {
+        // Only stem if we haven't already stemmed this word in this document
         std::string stemmed_word = StemWord(word, stemmer, min_stem_size);
         if (word != stemmed_word) {
           CHECK(stem_mappings) << "stem_mappings must not be null";
           (*stem_mappings)[stemmed_word].insert(word);
         }
+        // Mark this word as stemmed to avoid redundant stemming calls
+        stemmed_words.insert(word);
       }
       tokens.push_back(std::move(word));
     }

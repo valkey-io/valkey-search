@@ -10,6 +10,7 @@
 
 #include <memory>
 #include <vector>
+
 #include "src/index_schema.h"
 #include "src/indexes/vector_base.h"
 #include "src/query/search.h"

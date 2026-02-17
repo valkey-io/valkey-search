@@ -1673,9 +1673,8 @@ void IndexSchema::OnLoadingEnded(ValkeyModuleCtx *ctx) {
   if (loaded_v2_) {
     loaded_v2_ = false;
     VMSDK_LOG_EVERY_N_SEC(NOTICE, ctx, 1)
-        << "RDB load completed, "
-        << " Mutation Queue contains " << tracked_mutated_records_.size()
-        << " entries."
+        << "RDB load completed, Mutation Queue contains "
+        << tracked_mutated_records_.size() << " entries."
         << (backfill_job_.Get().has_value() ? " Backfill still required."
                                             : " Backfill not needed.");
     if (options::GetDrainMutationQueueOnLoad().GetValue()) {

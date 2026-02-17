@@ -148,7 +148,7 @@ enum ContentProcessing {
   // cases is whether that validation process could contend with mutations
   // from a background thread.
   //
-  kContentRequired,     // Content, but no contention check is needed
+  kContentRequired,          // Content, but no contention check is needed
   kContentionCheckRequired,  // Content and contention check is required.
 };
 

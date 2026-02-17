@@ -1265,7 +1265,8 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
       << vmsdk::config::RedactIfNeeded(this->name_)
       << " in DB: " << this->db_num_ << " to RDB";
 
-  VMSDK_LOG(NOTICE, nullptr) << "Starting to save attributes";
+  VMSDK_LOG(NOTICE, nullptr)
+      << "Starting to save " << attributes_.size() << " attributes.";
 
   for (auto &attribute : attributes_) {
     VMSDK_LOG(DEBUG, nullptr)

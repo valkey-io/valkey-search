@@ -279,8 +279,9 @@ Service::GenerateInfoResponse(
         "Index fingerprint/version or slot fingerprint mismatch");
     response.set_error_type(
         coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR);
-    VMSDK_LOG(DEBUG, nullptr) << "DEBUG: Fingerprint, version or slot "
-                                 "fingerprint mismatch at server.cc";
+    VMSDK_LOG_EVERY_N_SEC(NOTICE, nullptr, 1)
+        << "DEBUG: Fingerprint, version or slot "
+           "fingerprint mismatch at server.cc";
     grpc::Status error_status(
         grpc::StatusCode::FAILED_PRECONDITION,
         "Cluster not in a consistent state, please retry.");

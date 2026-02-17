@@ -1172,7 +1172,7 @@ class IndexSchemaRDBTest : public ValkeySearchTest {
  protected:
   // Intercepting the setup to change RDB version to 1
   // Currently these tests only work with RDB version 1
-  // TODO: Will be fixed to work with RDB version 2 
+  // TODO: Will be fixed to work with RDB version 2
   void SetUp() override {
     ValkeySearchTest::SetUp();
     auto &write_v2 =

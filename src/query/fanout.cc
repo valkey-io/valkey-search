@@ -181,6 +181,9 @@ struct SearchPartitionResultsTracker {
       // Note: We do not sort neighbors here because we do not have the content
       // of the local shard yet. In the SendReply function, we will sort the all
       // neighbors based on the content if sorting is required.
+      // SearchResult construction automatically applies trimming based on LIMIT
+      // offset count IF the command allows it (ie - it does not require
+      // complete results / no sorting requirement).
       result = SearchResult(accumulated_total_count, std::move(neighbors),
                             *parameters);
     }

@@ -127,18 +127,17 @@ EvaluationResult TermPredicate::Evaluate(
     }
     // Search for stem variants - these should all exist from ingestion
     for (const auto &variant : stem_variants) {
-      bool found = TryAddWordKeyIteratorForPrefilter(
-          text_index, variant, target_key, stem_field_mask, require_positions,
-          key_iterators);
-      CHECK(found) << "Word in stem tree not found in index - ingestion issue";
+      TryAddWordKeyIteratorForPrefilter(text_index, variant, target_key,
+                                        stem_field_mask, require_positions,
+                                        key_iterators);
     }
   }
   if (key_iterators.empty()) {
     return EvaluationResult(false);
   }
   auto iterator = std::make_unique<indexes::text::TermIterator>(
-      std::move(key_iterators), field_mask, nullptr, require_positions,
-      stem_field_mask, found_original);
+      std::move(key_iterators), field_mask, require_positions, stem_field_mask,
+      found_original);
   return BuildTextEvaluationResult(std::move(iterator));
 }
 
@@ -187,7 +186,7 @@ EvaluationResult PrefixPredicate::Evaluate(
     return EvaluationResult(true);
   }
   auto iterator = std::make_unique<indexes::text::TermIterator>(
-      std::move(key_iterators), field_mask, nullptr, require_positions);
+      std::move(key_iterators), field_mask, require_positions);
   return BuildTextEvaluationResult(std::move(iterator));
 }
 
@@ -242,7 +241,7 @@ EvaluationResult SuffixPredicate::Evaluate(
     return EvaluationResult(true);
   }
   auto iterator = std::make_unique<indexes::text::TermIterator>(
-      std::move(key_iterators), field_mask, nullptr, require_positions);
+      std::move(key_iterators), field_mask, require_positions);
   return BuildTextEvaluationResult(std::move(iterator));
 }
 
@@ -305,8 +304,7 @@ EvaluationResult FuzzyPredicate::Evaluate(
     return EvaluationResult(true);
   }
   auto iterator = std::make_unique<indexes::text::TermIterator>(
-      std::move(filtered_key_iterators), field_mask, nullptr,
-      require_positions);
+      std::move(filtered_key_iterators), field_mask, require_positions);
   return BuildTextEvaluationResult(std::move(iterator));
 }
 
@@ -465,7 +463,7 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator &evaluator) const {
       // Create ProximityIterator to check proximity
       auto proximity_iterator =
           std::make_unique<indexes::text::ProximityIterator>(
-              std::move(iterators), slop_, inorder_, nullptr, false);
+              std::move(iterators), slop_, inorder_, false);
       // Check if any valid proximity matches exist
       if (!proximity_iterator->IsIteratorValid()) {
         return EvaluationResult(false);
@@ -509,7 +507,7 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator &evaluator) const {
   // In case positional awareness is required, use a OrProximityIterator.
   auto or_proximity_iterator =
       std::make_unique<indexes::text::OrProximityIterator>(
-          std::move(filter_iterators), nullptr);
+          std::move(filter_iterators));
   // Check if any valid matches exist
   if (!or_proximity_iterator->IsIteratorValid()) {
     return EvaluationResult(false);

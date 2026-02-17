@@ -669,7 +669,7 @@ static vmsdk::info_field::Integer
     coordinator_metadata_reconciliation_completed_count(
         "coordinator", "coordinator_metadata_reconciliation_completed_count",
         vmsdk::info_field::IntegerBuilder()
-            .App()
+            .Dev()
             .Computed([]() -> int64_t {
               // prevent failure in unit tests
               if (!coordinator::MetadataManager::IsInitialized()) {
@@ -875,19 +875,19 @@ static vmsdk::info_field::String worker_search_execution_latency_usec(
 
 static vmsdk::info_field::Integer info_fanout_retry_count(
     "fanout", "info_fanout_retry_count",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().info_fanout_retry_cnt;
     }));
 
 static vmsdk::info_field::Integer info_fanout_fail_count(
     "fanout", "info_fanout_fail_count",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().info_fanout_fail_cnt;
     }));
 
 static vmsdk::info_field::Integer pause_handle_cluster_message_round_cnt(
     "fanout", "pause_handle_cluster_message_round_count",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().pause_handle_cluster_message_round_cnt;
     }));
 
@@ -976,7 +976,7 @@ static vmsdk::info_field::Integer &remove_subscription_skipped_count =
 static vmsdk::info_field::Integer string_interning_memory_bytes(
     "string_interning", "string_interning_memory_bytes",
     vmsdk::info_field::IntegerBuilder()
-        .App()
+        .Dev()
         .Computed(StringInternStore::GetMemoryUsage)
         .CrashSafe());
 
@@ -984,7 +984,7 @@ static vmsdk::info_field::Integer string_interning_memory_human(
     "string_interning", "string_interning_memory_human",
     vmsdk::info_field::IntegerBuilder()
         .SIBytes()
-        .App()
+        .Dev()
         .Computed(StringInternStore::GetMemoryUsage)
         .CrashSafe());
 

@@ -1,0 +1,46 @@
+#
+# Script to generate examples in the various docs.
+#
+# run this with "set -x" in bash and it'll echo the commands on the terminal
+#
+x() {
+    echo "$@"
+    valkey-cli "$@"
+}
+
+x ft.dropindex index
+x flushall
+#
+# HASH Search examples
+#
+x FT.CREATE index on hash SCHEMA color TAG city TAG
+x hset key1 color blue city London
+x hset key2 color black city Paris
+x hset key3 color green city Berlin
+x hset key4 color white city Tokyo
+x hset key5 color blend cityextra Unknown
+
+
+x FT.SEARCH index @color:{bl*}
+x FT.SEARCH index @color:{bl*} NOCONTENT
+x FT.SEARCH index @color:{bl*} RETURN 2 color city
+
+
+#
+# JSON Search examples
+#
+x flushall
+x ft.dropindex index
+x FT.CREATE index on json SCHEMA $.color as color TAG $.city as city TAG
+set -x
+valkey-cli --raw json.set key1 . "{\"color\":\"blue\",\"city\":\"London\"}"
+valkey-cli --raw json.set key2 . "{\"color\":\"black\",\"city\":\"Paris\"}"
+valkey-cli --raw json.set key3 . "{\"color\":\"green\",\"city\":\"Berlin\"}"
+valkey-cli --raw json.set key4 . "{\"color\":\"white\",\"city\":\"Tokyo\"}"
+valkey-cli --raw json.set key5 . "{\"color\":\"blend\",\"cityextra\":\"Unknown\"}"
+set +x
+x FT.SEARCH index @color:{bl*}
+x FT.SEARCH index @color:{bl*} NOCONTENT
+x FT.SEARCH index @color:{bl*} RETURN 2 color city
+
+

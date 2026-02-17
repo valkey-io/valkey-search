@@ -328,6 +328,11 @@ class ValkeySearchTestCaseDebugMode(ValkeySearchTestCaseBase):
     '''
     def get_config_file_lines(self, testdir, port) -> List[str]:
         return EnableDebugMode(super(ValkeySearchTestCaseDebugMode, self).get_config_file_lines(testdir, port))
+    
+    def append_startup_args(self, args: dict[str, str]) -> dict[str, str]:
+        args = super().append_startup_args(args)
+        args["search.info-developer-visible"] = "yes"
+        return args
 
 class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
     # Default cluster size
@@ -535,3 +540,8 @@ class ValkeySearchClusterTestCaseDebugMode(ValkeySearchClusterTestCase):
     '''
     def get_config_file_lines(self, testdir, port) -> List[str]:
         return EnableDebugMode(super(ValkeySearchClusterTestCaseDebugMode, self).get_config_file_lines(testdir, port))
+    
+    def append_startup_args(self, args: dict[str, str]) -> dict[str, str]:
+        args = super().append_startup_args(args)
+        args["search.info-developer-visible"] = "yes"
+        return args

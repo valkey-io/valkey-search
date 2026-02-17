@@ -82,6 +82,7 @@ struct SearchPartitionResultsTracker {
   std::atomic_bool reached_oom{false};
   std::atomic_bool consistency_failed{false};
   std::atomic<size_t> accumulated_total_count{0};
+  uint64_t max_search_time_us ABSL_GUARDED_BY(mutex){0};
 
   SearchPartitionResultsTracker(int outstanding_requests, int k,
                                 query::SearchResponseCallback callback,
@@ -113,6 +114,9 @@ struct SearchPartitionResultsTracker {
     }
 
     absl::MutexLock lock(&mutex);
+
+    uint64_t shard_time = response.search_execution_time_us();
+    max_search_time_us = std::max(max_search_time_us, shard_time);
     accumulated_total_count.fetch_add(response.total_count(),
                                       std::memory_order_relaxed);
     while (response.neighbors_size() > 0) {
@@ -183,6 +187,7 @@ struct SearchPartitionResultsTracker {
       // complete results).
       result = SearchResult(accumulated_total_count, std::move(neighbors),
                             *parameters);
+      result->search_execution_time_us = max_search_time_us;
     }
     callback(result, std::move(parameters));
   }
@@ -350,6 +355,12 @@ absl::Status PerformSearchFanoutAsync(
             }
             tracker->AddResults(result->neighbors);
             tracker->AddTotalCount(result->total_count);
+
+            absl::MutexLock lock(&tracker->mutex);
+            uint64_t local_time = result->search_execution_time_us;
+            if (local_time > tracker->max_search_time_us) {
+              tracker->max_search_time_us = local_time;
+            }
           } else {
             VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
                 << "Error during local handling of FT.SEARCH: "

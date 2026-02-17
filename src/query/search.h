@@ -200,6 +200,8 @@ struct SearchResult {
   bool is_limited_with_buffer;
   // True if neighbors were offset using LIMIT first_index.
   bool is_offsetted;
+  // Time spent in the worker thread executing the search (in microseconds)
+  uint64_t search_execution_time_us{0};
 
   // Constructor with automatic trimming based on query requirements
   SearchResult(size_t total_count, std::vector<indexes::Neighbor> neighbors,

@@ -240,6 +240,7 @@ query::SearchResponseCallback Service::MakeSearchCallback(
     if (parameters->no_content) {
       SerializeNeighbors(response, result->neighbors);
       response->set_total_count(result->total_count);
+      response->set_search_execution_time_us(result->search_execution_time_us);
       reactor->Finish(grpc::Status::OK);
       RecordSearchMetrics(false, std::move(latency_sample));
     } else {
@@ -247,6 +248,7 @@ query::SearchResponseCallback Service::MakeSearchCallback(
                         latency_sample = std::move(latency_sample),
                         neighbors = std::move(result->neighbors),
                         total_count = result->total_count,
+                        search_time_us = result->search_execution_time_us,
                         sortby_parameter =
                             std::move(sortby_parameter)]() mutable {
         const auto& attribute_data_type =
@@ -267,6 +269,7 @@ query::SearchResponseCallback Service::MakeSearchCallback(
 
         SerializeNeighbors(response, neighbors);
         response->set_total_count(total_count);
+        response->set_search_execution_time_us(search_time_us);
         reactor->Finish(grpc::Status::OK);
         RecordSearchMetrics(false, std::move(latency_sample));
       });

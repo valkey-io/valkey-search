@@ -93,6 +93,14 @@ int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     return ValkeyModule_ReplyWithError(
         ctx, res->search_result.status().message().data());
   }
+
+  uint64_t search_time_us = res->search_result.value().search_execution_time_us;
+
+  Metrics::GetStats().worker_search_execution_latency.SubmitSample(
+      absl::Microseconds(search_time_us));
+
+  ++Metrics::GetStats().query_successful_requests_cnt;
+
   res->parameters->SendReply(ctx, res->search_result.value());
   return VALKEYMODULE_OK;
 }
@@ -179,6 +187,12 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
         ++Metrics::GetStats().query_failed_requests_cnt;
         return absl::OkStatus();
       }
+
+      Metrics::GetStats().worker_search_execution_latency.SubmitSample(
+          absl::Microseconds(search_result.search_execution_time_us));
+
+      ++Metrics::GetStats().query_successful_requests_cnt;
+
       parameters->SendReply(ctx, search_result);
       ValkeySearch::Instance().ScheduleSearchResultCleanup(
           [neighbors = std::move(search_result.neighbors)]() mutable {

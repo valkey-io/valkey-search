@@ -8,6 +8,7 @@
 #ifndef VMSDK_SRC_UTILS_H_
 #define VMSDK_SRC_UTILS_H_
 #include <absl/strings/str_format.h>
+#include <time.h>
 
 #include <optional>
 #include <string>
@@ -22,15 +23,64 @@
 
 namespace vmsdk {
 
+enum class TimeType {
+  kWallClock,  // Wall-clock time (includes interrupts, context switches)
+  kThreadCpu   // Thread CPU time (excludes interrupts, context switches)
+};
+
 class StopWatch {
  public:
-  StopWatch() { Reset(); }
+  explicit StopWatch(TimeType type = TimeType::kWallClock) : time_type_(type) {
+    Reset();
+  }
+
   ~StopWatch() = default;
-  void Reset() { start_time_ = absl::Now(); }
-  absl::Duration Duration() const { return absl::Now() - start_time_; }
+
+  void Reset() {
+    switch (time_type_) {
+      case TimeType::kWallClock:
+        start_time_ = absl::Now();
+        break;
+      case TimeType::kThreadCpu:
+        start_thread_time_ns_ = GetThreadTimeNanos();
+        break;
+      default:
+        CHECK(false) << "Unexpected TimeType value";
+        break;
+    }
+  }
+
+  absl::Duration Duration() const {
+    switch (time_type_) {
+      case TimeType::kWallClock:
+        return absl::Now() - start_time_;
+      case TimeType::kThreadCpu: {
+        uint64_t current_ns = GetThreadTimeNanos();
+        return absl::Nanoseconds(current_ns - start_thread_time_ns_);
+      }
+      default:
+        CHECK(false) << "Unexpected TimeType value";
+        return absl::ZeroDuration();
+    }
+  }
 
  private:
-  absl::Time start_time_;
+  TimeType time_type_{TimeType::kWallClock};
+  absl::Time start_time_;             // Used for wall-clock time
+  uint64_t start_thread_time_ns_{0};  // Used for thread CPU time
+
+  // Get thread CPU time in nanoseconds using CLOCK_THREAD_CPUTIME_ID
+  // This excludes time when the thread is not running (interrupts, context
+  // switches)
+  static uint64_t GetThreadTimeNanos() {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts) != 0) {
+      return 0;  // Failed to get time
+    }
+
+    return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL +
+           static_cast<uint64_t>(ts.tv_nsec);
+  }
 };
 // Timer creation from background threads is not safe. The event loop of Redis/
 // Valkey releases the GIL, and during this period also checks the timer data

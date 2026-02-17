@@ -32,8 +32,7 @@ class OrProximityIterator : public TextIterator {
  public:
   OrProximityIterator(
       absl::InlinedVector<std::unique_ptr<TextIterator>,
-                          kProximityTermsInlineCapacity>&& iters,
-      const InternedStringSet* untracked_keys = nullptr);
+                          kProximityTermsInlineCapacity>&& iters);
 
   /* Implementation of TextIterator APIs */
   FieldMaskPredicate QueryFieldMask() const override;
@@ -58,7 +57,6 @@ class OrProximityIterator : public TextIterator {
   std::optional<PositionRange> current_position_;
   FieldMaskPredicate current_field_mask_;
   FieldMaskPredicate query_field_mask_;
-  const InternedStringSet* untracked_keys_;
 
   // Multiset for efficient key management
   std::multiset<std::pair<Key, size_t>> key_set_;

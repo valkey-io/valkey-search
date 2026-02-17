@@ -221,10 +221,9 @@ BuildTextIterator(const Predicate *predicate, bool negate,
       if (iterators.empty()) return {nullptr, 0};
       bool skip_positional = !child_require_positions;
       size_t total_size = min_size == SIZE_MAX ? 0 : min_size;
-      return {
-          std::make_unique<indexes::text::ProximityIterator>(
-              std::move(iterators), slop, inorder, nullptr, skip_positional),
-          total_size};
+      return {std::make_unique<indexes::text::ProximityIterator>(
+                  std::move(iterators), slop, inorder, skip_positional),
+              total_size};
     } else {
       absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
                           indexes::text::kProximityTermsInlineCapacity>
@@ -245,7 +244,7 @@ BuildTextIterator(const Predicate *predicate, bool negate,
       // build a text iterator.
       if (iterators.empty() || has_non_text) return {nullptr, 0};
       return {std::make_unique<indexes::text::OrProximityIterator>(
-                  std::move(iterators), nullptr),
+                  std::move(iterators)),
               total_size};
     }
   }

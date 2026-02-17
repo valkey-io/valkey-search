@@ -67,7 +67,9 @@ class Text : public IndexBase {
       absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
       const override {
     absl::MutexLock lock(&index_mutex_);
-    // TODO: Implement proper key tracking
+    for (const auto& key : tracked_keys_) {
+      VMSDK_RETURN_IF_ERROR(fn(key));
+    }
     return absl::OkStatus();
   }
 
@@ -92,7 +94,9 @@ class Text : public IndexBase {
       absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
       const override {
     absl::MutexLock lock(&index_mutex_);
-    // TODO
+    for (const auto& key : untracked_keys_) {
+      VMSDK_RETURN_IF_ERROR(fn(key));
+    }
     return absl::OkStatus();
   }
 
@@ -108,11 +112,9 @@ class Text : public IndexBase {
    public:
     EntriesFetcher(size_t size,
                    const std::shared_ptr<text::TextIndex>& text_index,
-                   const InternedStringSet* untracked_keys,
                    text::FieldMaskPredicate field_mask, bool require_positions)
         : size_(size),
           text_index_(text_index),
-          untracked_keys_(untracked_keys),
           field_mask_(field_mask),
           require_positions_(require_positions) {}
 
@@ -126,7 +128,6 @@ class Text : public IndexBase {
     std::unique_ptr<EntriesFetcherIteratorBase> Begin() override;
 
     size_t size_;
-    const InternedStringSet* untracked_keys_;
     std::shared_ptr<text::TextIndex> text_index_;
     const query::TextPredicate* predicate_;
     text::FieldMaskPredicate field_mask_;
@@ -144,6 +145,9 @@ class Text : public IndexBase {
   std::shared_ptr<text::TextIndexSchema> text_index_schema_;
 
   InternedStringSet untracked_keys_;
+
+  // currently used for FT.INFO metrics only
+  InternedStringSet tracked_keys_;
 
   bool with_suffix_trie_;
   bool no_stem_;

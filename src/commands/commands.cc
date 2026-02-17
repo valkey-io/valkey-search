@@ -24,6 +24,7 @@
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/cluster_map.h"
 #include "vmsdk/src/debug.h"
+#include "vmsdk/src/info.h"
 #include "vmsdk/src/utils.h"
 
 namespace valkey_search {
@@ -107,6 +108,30 @@ void Free([[maybe_unused]] ValkeyModuleCtx *ctx, void *privdata) {
 }  // namespace async
 
 CONTROLLED_BOOLEAN(ForceReplicasOnly, false);
+DEV_INTEGER_COUNTER(stats, single_slot_queries);
+
+std::vector<vmsdk::cluster_map::NodeInfo> ComputeSearchTargets(
+    ValkeyModuleCtx *ctx, const QueryCommand &parameters) {
+  auto mode = /* !vmsdk::IsReadOnly(ctx) ? query::fanout::kPrimaries ? */
+      ForceReplicasOnly.GetValue()
+          ? vmsdk::cluster_map::FanoutTargetMode::kOneReplicaPerShard
+          : vmsdk::cluster_map::FanoutTargetMode::kRandom;
+
+  // refresh cluster map if needed
+  auto cluster_map = ValkeySearch::Instance().GetOrRefreshClusterMap(ctx);
+
+  if (vmsdk::ParseHashTag(parameters.index_schema_name).has_value()) {
+    auto key = vmsdk::MakeUniqueValkeyString(parameters.index_schema_name);
+    auto this_slot = ValkeyModule_ClusterKeySlot(key.get());
+    single_slot_queries.Increment();
+    return cluster_map->GetTargetsForSlot(
+        mode, query::fanout::IsSystemUnderLowUtilization(), this_slot);
+  } else {
+    return cluster_map->GetTargets(
+        mode, query::fanout::IsSystemUnderLowUtilization());
+  }
+}
+
 CONTROLLED_BOOLEAN(ForceInvalidIndexFingerprint, false);
 
 //
@@ -161,16 +186,28 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
       return absl::OkStatus();
     }
 
+    std::vector<vmsdk::cluster_map::NodeInfo> search_targets;
+
+    bool do_fanout = ValkeySearch::Instance().UsingCoordinator() &&
+                     ValkeySearch::Instance().IsCluster() &&
+                     !parameters->local_only;
+    if (do_fanout) {
+      search_targets = ComputeSearchTargets(ctx, *parameters);
+      if (search_targets.empty()) {
+        return absl::InternalError("No available nodes to execute the query");
+      }
+    }
+
     vmsdk::BlockedClient blocked_client(ctx, async::Reply, async::Timeout,
                                         async::Free, parameters->timeout_ms);
     blocked_client.MeasureTimeStart();
     auto on_done_callback = [blocked_client = std::move(blocked_client)](
-                                auto &neighbors, auto parameters) mutable {
+                                auto &search_result, auto parameters) mutable {
       std::unique_ptr<QueryCommand> upcast_parameters(
           dynamic_cast<QueryCommand *>(parameters.release()));
       CHECK(upcast_parameters != nullptr);
       auto result = std::make_unique<async::Result>(async::Result{
-          .search_result = std::move(neighbors),
+          .search_result = std::move(search_result),
           .parameters = std::move(upcast_parameters),
       });
 
@@ -190,17 +227,7 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
       blocked_client.SetReplyPrivateData(result.release());
     };
 
-    if (ValkeySearch::Instance().UsingCoordinator() &&
-        ValkeySearch::Instance().IsCluster() && !parameters->local_only) {
-      auto mode = /* !vmsdk::IsReadOnly(ctx) ? query::fanout::kPrimaries ? */
-          ForceReplicasOnly.GetValue()
-              ? vmsdk::cluster_map::FanoutTargetMode::kOneReplicaPerShard
-              : vmsdk::cluster_map::FanoutTargetMode::kRandom;
-      // refresh cluster map if needed
-      auto search_targets =
-          ValkeySearch::Instance().GetOrRefreshClusterMap(ctx)->GetTargets(
-              mode, query::fanout::IsSystemUnderLowUtilization());
-
+    if (do_fanout) {
       // get index fingerprint and version
       if (ForceInvalidIndexFingerprint.GetValue()) {
         // test only: simulate invalid index fingerprint and version

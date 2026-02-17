@@ -39,6 +39,10 @@
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
+namespace valkey_search {
+enum class QueryOperations : uint64_t;
+}
+
 namespace valkey_search::indexes {
 
 std::vector<char> NormalizeEmbedding(absl::string_view record, size_t type_size,
@@ -267,8 +271,9 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
 class PrefilterEvaluator : public query::Evaluator {
  public:
   explicit PrefilterEvaluator(
-      const valkey_search::indexes::text::TextIndex* text_index = nullptr)
-      : text_index_(text_index) {}
+      const valkey_search::indexes::text::TextIndex* text_index,
+      QueryOperations query_operations)
+      : query::Evaluator(query_operations), text_index_(text_index) {}
   bool Evaluate(const query::Predicate& predicate,
                 const InternedStringPtr& key);
   const InternedStringPtr& GetTargetKey() const override {

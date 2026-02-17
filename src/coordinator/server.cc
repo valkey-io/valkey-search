@@ -40,6 +40,7 @@
 #include "src/valkey_search.h"
 #include "valkey_search_options.h"
 #include "vmsdk/src/debug.h"
+#include "vmsdk/src/info.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -293,10 +294,13 @@ void Service::EnqueueSearchRequest(
   }
 }
 
+DEV_INTEGER_COUNTER(grpc, search_index_rpc_requests);
+
 grpc::ServerUnaryReactor* Service::SearchIndexPartition(
     grpc::CallbackServerContext* context,
     const SearchIndexPartitionRequest* request,
     SearchIndexPartitionResponse* response) {
+  search_index_rpc_requests.Increment();
   GRPCSuspensionGuard guard(GRPCSuspender::Instance());
   auto latency_sample = SAMPLE_EVERY_N(100);
   grpc::ServerUnaryReactor* reactor = context->DefaultReactor();
@@ -434,6 +438,13 @@ Service::GenerateInfoResponse(
   response.set_mutation_queue_size(data.mutation_queue_size);
   response.set_recent_mutations_queue_delay(data.recent_mutations_queue_delay);
   response.set_state(data.state);
+  for (const auto& [alias, attr] : schema->GetAttributes()) {
+    auto* attr_info = response.add_attributes();
+    attr_info->set_identifier(attr.GetIdentifier());
+    attr_info->set_alias(alias);
+    attr_info->set_user_indexed_memory(schema->GetSize(alias));
+    attr_info->set_num_records(attr.GetIndex()->GetTrackedKeyCount());
+  }
   return std::make_pair(grpc::Status::OK, response);
 }
 

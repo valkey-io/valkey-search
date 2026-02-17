@@ -26,7 +26,7 @@ namespace valkey_search {
 
 static constexpr absl::string_view kDefaultPunctuation =
     ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|";
-static uint32_t kDefaultMinStemSize = 4;
+static constexpr uint32_t kDefaultMinStemSize = 4;
 
 // Default stop words set
 const std::vector<std::string> kDefaultStopWords{
@@ -88,6 +88,7 @@ vmsdk::config::Number& GetMaxNumericFieldLen();
 
 /// Return the maximum number of attributes allowed per index.
 vmsdk::config::Number& GetMaxAttributes();
+vmsdk::config::Number& GetMaxVectorAttributes();
 
 /// Return the maximum number of dimensions allowed for vector indices.
 vmsdk::config::Number& GetMaxDimensions();

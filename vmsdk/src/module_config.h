@@ -100,6 +100,10 @@ class ModuleConfigManager {
   /// needed manually
   void UnregisterConfig(Registerable *config_item);
 
+  /// List all registered configs to the provided context
+  absl::Status ListAllConfigs(ValkeyModuleCtx *ctx, bool verbose,
+                              const std::string &filter = "") const;
+
  private:
   absl::Status UpdateConfigFromKeyVal(ValkeyModuleCtx *ctx,
                                       std::string_view key,
@@ -120,6 +124,9 @@ class Registerable {
   /// `false`] otherwise return an error status code
   virtual absl::Status FromString(std::string_view value) = 0;
   std::string_view GetName() const { return name_; }
+  // Returns true if this config was set at least once via CONFIG SET or an
+  // explicit SetValue call.
+  bool WasSet() const { return was_set_; }
 
   // bitwise OR'ed flags of `Flags`
   inline void SetFlags(size_t flags) { flags_ = flags; }
@@ -128,10 +135,13 @@ class Registerable {
 
   inline void SetDeveloperConfig(bool b) { this->developer_config_ = b; }
   inline bool IsDeveloperConfig() const { return developer_config_; }
+  // Getter for flags
+  inline size_t GetFlags() const { return flags_; }
 
  protected:
   std::string name_;
   size_t flags_{kDefault};
+  bool was_set_{false};
   bool developer_config_{false};
 };
 
@@ -158,7 +168,7 @@ class ConfigBase : public Registerable {
     if (!res.ok()) {
       return res;
     }
-
+    was_set_ = true;
     SetValueImpl(value);
     NotifyChanged();
     return absl::OkStatus();
@@ -174,6 +184,7 @@ class ConfigBase : public Registerable {
       return;
     }
 
+    was_set_ = true;
     SetValueImpl(value);
     NotifyChanged();
   }
@@ -200,6 +211,9 @@ class ConfigBase : public Registerable {
     return absl::OkStatus();
   }
 
+  // Check if modify callback is set
+  bool HasModifyCallback() const { return modify_callback_ != nullptr; }
+
  protected:
   ConfigBase(std::string_view name) : Registerable(name) {
     ModuleConfigManager::Instance().RegisterConfig(this);
@@ -223,6 +237,10 @@ class Number : public ConfigBase<long long> {
          int64_t max_value);
   ~Number() override = default;
   absl::Status FromString(std::string_view value) override;
+
+  // Getters for min/max values
+  int64_t GetMinValue() const { return min_value_; }
+  int64_t GetMaxValue() const { return max_value_; }
 
  protected:
   // Implementation specific

@@ -77,6 +77,12 @@ struct AttributeInfo {
 class IndexSchema : public KeyspaceEventSubscription,
                     public std::enable_shared_from_this<IndexSchema> {
  public:
+  struct IndexKeyInfo {
+    MutationSequenceNumber mutation_sequence_number_{0};
+  };
+
+  using IndexKeyInfoMap = absl::flat_hash_map<Key, IndexKeyInfo>;
+
   struct InfoIndexPartitionData {
     uint64_t num_docs;
     uint64_t num_records;
@@ -263,10 +269,6 @@ class IndexSchema : public KeyspaceEventSubscription,
     }
   };
 
-  struct IndexKeyInfo {
-    MutationSequenceNumber mutation_sequence_number_{0};
-  };
-
   MutationSequenceNumber GetIndexMutationSequenceNumber(const Key &key) const {
     auto itr = index_key_info_.find(key);
     CHECK(itr != index_key_info_.end()) << "Key not found: " << key->Str();
@@ -279,6 +281,12 @@ class IndexSchema : public KeyspaceEventSubscription,
     CHECK(itr != db_key_info_.Get().end()) << "Key not found: " << key->Str();
     return itr->second.mutation_sequence_number_;
   }
+
+  // Accessor for global key map (for negation queries)
+  // Safe to call from reader threads - protected by mutated_records_mutex_
+  const IndexKeyInfoMap &GetIndexKeyInfo() const { return index_key_info_; }
+
+  size_t GetIndexKeyInfoSize() const { return index_key_info_.size(); }
 
   // Unit test only
   void SetDbMutationSequenceNumber(const Key &key,
@@ -335,6 +343,10 @@ class IndexSchema : public KeyspaceEventSubscription,
     return 0;
   }
 
+  const absl::flat_hash_map<std::string, Attribute> &GetAttributes() const {
+    return attributes_;
+  }
+
  protected:
   IndexSchema(ValkeyModuleCtx *ctx,
               const data_model::IndexSchema &index_schema_proto,
@@ -366,6 +378,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   bool loaded_v2_{false};
   uint64_t fingerprint_{0};
   uint32_t version_{0};
+  bool skip_initial_scan_{false};
 
   vmsdk::ThreadPool *mutations_thread_pool_{nullptr};
   std::vector<uint64_t> attributes_indexed_data_size_;
@@ -378,9 +391,8 @@ class IndexSchema : public KeyspaceEventSubscription,
   MutationSequenceNumber schema_mutation_sequence_number_{0};
   vmsdk::MainThreadAccessGuard<absl::flat_hash_map<Key, DbKeyInfo>>
       db_key_info_;  // Mainthread.
-  absl::flat_hash_map<Key, IndexKeyInfo> index_key_info_ ABSL_GUARDED_BY(
+  IndexKeyInfoMap index_key_info_ ABSL_GUARDED_BY(
       mutated_records_mutex_);  // updates are guarded by mutated_records_mutex_
-
   struct BackfillJob {
     BackfillJob() = delete;
     BackfillJob(ValkeyModuleCtx *ctx, absl::string_view name, int db_num);
@@ -420,7 +432,6 @@ class IndexSchema : public KeyspaceEventSubscription,
   void DrainMutationQueue(ValkeyModuleCtx *ctx) const
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
 
-  bool IsTrackedByAnyIndex(const Key &key) const;
   void SyncProcessMutation(ValkeyModuleCtx *ctx,
                            MutatedAttributes &mutated_attributes,
                            const Key &key);

@@ -134,7 +134,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*38\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*36\r\n+index_name\r\n+test_name\r\n+index_"
                             "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
                             "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
                             "1\r\n1\r\n+attributes\r\n*1\r\n*10\r\n+"
@@ -147,8 +147,9 @@ INSTANTIATE_TEST_SUITE_P(
                             "algorithm\r\n*8\r\n+name\r\n+HNSW\r\n+m\r\n:"
                             "240\r\n+ef_construction\r\n:400\r\n+ef_"
                             "runtime\r\n:30\r\n+num_docs\r\n:0\r\n+num_"
-                            "records\r\n:0\r\n+num_total_terms\r\n:0\r\n+num_"
-                            "unique_terms\r\n:0\r\n+total_postings\r\n:0\r\n+"
+                            "records\r\n:0\r\n+total_term_occurrences\r\n:"
+                            "0\r\n+num_"
+                            "terms\r\n:0\r\n+"
                             "posting_sz_bytes\r\n:0\r\n+position_sz_bytes\r\n:"
                             "0\r\n+radix_sz_bytes\r\n:0\r\n+total_text_index_"
                             "sz_bytes\r\n:0\r\n+hash_indexing_failures\r\n$"
@@ -191,7 +192,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*38\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*36\r\n+index_name\r\n+test_name\r\n+index_"
                             "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
                             "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
                             "1\r\n1\r\n+attributes\r\n*1\r\n*10\r\n+"
@@ -203,8 +204,9 @@ INSTANTIATE_TEST_SUITE_P(
                             "1\r\n0\r\n+data_type\r\n+FLOAT32\r\n+"
                             "algorithm\r\n*4\r\n+name\r\n+FLAT\r\n+block_"
                             "size\r\n:1024\r\n+num_docs\r\n:0\r\n+num_"
-                            "records\r\n:0\r\n+num_total_terms\r\n:0\r\n+num_"
-                            "unique_terms\r\n:0\r\n+total_postings\r\n:0\r\n+"
+                            "records\r\n:0\r\n+total_term_occurrences\r\n:"
+                            "0\r\n+num_"
+                            "terms\r\n:0\r\n+"
                             "posting_sz_bytes\r\n:0\r\n+position_sz_bytes\r\n:"
                             "0\r\n+radix_sz_bytes\r\n:0\r\n+total_text_index_"
                             "sz_bytes\r\n:0\r\n+hash_indexing_failures\r\n$"
@@ -240,7 +242,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*38\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*36\r\n+index_name\r\n+test_name\r\n+index_"
                             "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
                             "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
                             "1\r\n1\r\n+attributes\r\n*1\r\n*14\r\n+"
@@ -248,9 +250,9 @@ INSTANTIATE_TEST_SUITE_P(
                             "attribute\r\n+test_attribute_1\r\n+user_indexed_"
                             "memory\r\n:0\r\n+type\r\n+TAG\r\n+SEPARATOR\r\n+@"
                             "\r\n+CASESENSITIVE\r\n+0\r\n+size\r\n$1\r\n0\r\n+"
-                            "num_docs\r\n:0\r\n+num_records\r\n:0\r\n+num_"
-                            "total_terms\r\n:0\r\n+num_unique_terms\r\n:0\r\n+"
-                            "total_postings\r\n:0\r\n+posting_sz_bytes\r\n:"
+                            "num_docs\r\n:0\r\n+num_records\r\n:0\r\n+total_"
+                            "term_occurrences\r\n:0\r\n+num_terms\r\n:0\r\n+"
+                            "posting_sz_bytes\r\n:"
                             "0\r\n+position_sz_bytes\r\n:0\r\n+radix_sz_"
                             "bytes\r\n:0\r\n+total_text_index_sz_bytes\r\n:"
                             "0\r\n+hash_indexing_failures\r\n$1\r\n0\r\n+"
@@ -287,7 +289,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*38\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*36\r\n+index_name\r\n+test_name\r\n+index_"
                             "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
                             "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
                             "1\r\n1\r\n+attributes\r\n*1\r\n*14\r\n+"
@@ -295,9 +297,9 @@ INSTANTIATE_TEST_SUITE_P(
                             "attribute\r\n+test_attribute_1\r\n+user_indexed_"
                             "memory\r\n:0\r\n+type\r\n+TAG\r\n+SEPARATOR\r\n+@"
                             "\r\n+CASESENSITIVE\r\n+1\r\n+size\r\n$1\r\n0\r\n+"
-                            "num_docs\r\n:0\r\n+num_records\r\n:0\r\n+num_"
-                            "total_terms\r\n:0\r\n+num_unique_terms\r\n:0\r\n+"
-                            "total_postings\r\n:0\r\n+posting_sz_bytes\r\n:"
+                            "num_docs\r\n:0\r\n+num_records\r\n:0\r\n+total_"
+                            "term_occurrences\r\n:0\r\n+num_terms\r\n:0\r\n+"
+                            "posting_sz_bytes\r\n:"
                             "0\r\n+position_sz_bytes\r\n:0\r\n+radix_sz_"
                             "bytes\r\n:0\r\n+total_text_index_sz_bytes\r\n:"
                             "0\r\n+hash_indexing_failures\r\n$1\r\n0\r\n+"
@@ -331,7 +333,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*38\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*36\r\n+index_name\r\n+test_name\r\n+index_"
                             "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
                             "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
                             "1\r\n1\r\n+attributes\r\n*1\r\n*10\r\n+"
@@ -339,8 +341,8 @@ INSTANTIATE_TEST_SUITE_P(
                             "attribute\r\n+test_attribute_1\r\n+user_indexed_"
                             "memory\r\n:0\r\n+type\r\n+NUMERIC\r\n+size\r\n$"
                             "1\r\n0\r\n+num_docs\r\n:0\r\n+num_records\r\n:"
-                            "0\r\n+num_total_terms\r\n:0\r\n+num_unique_"
-                            "terms\r\n:0\r\n+total_postings\r\n:0\r\n+posting_"
+                            "0\r\n+total_term_occurrences\r\n:0\r\n+num_"
+                            "terms\r\n:0\r\n+posting_"
                             "sz_bytes\r\n:0\r\n+position_sz_bytes\r\n:0\r\n+"
                             "radix_sz_bytes\r\n:0\r\n+total_text_index_sz_"
                             "bytes\r\n:0\r\n+hash_indexing_failures\r\n$"
@@ -402,7 +404,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                      .expect_return_failure = false,
                      .expected_output =
-                         "*46\r\n+index_name\r\n+test_name\r\n+index_"
+                         "*44\r\n+index_name\r\n+test_name\r\n+index_"
                          "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
                          "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
                          "1\r\n1\r\n+attributes\r\n*1\r\n*14\r\n+"
@@ -411,8 +413,8 @@ INSTANTIATE_TEST_SUITE_P(
                          "type\r\n+TEXT\r\n+WITH_SUFFIX_TRIE\r\n+0\r\n+NO_"
                          "STEM\r\n+0\r\n+WEIGHT\r\n+1\r\n+num_docs\r\n:0\r\n+"
                          "num_records\r\n:"
-                         "0\r\n+num_total_terms\r\n:0\r\n+num_unique_terms\r\n:"
-                         "0\r\n+total_postings\r\n:0\r\n+posting_sz_bytes\r\n:"
+                         "0\r\n+total_term_occurrences\r\n:0\r\n+num_terms\r\n:"
+                         "0\r\n+posting_sz_bytes\r\n:"
                          "0\r\n+position_sz_bytes\r\n:0\r\n+radix_sz_bytes\r\n:"
                          "0\r\n+total_text_index_sz_bytes\r\n:0\r\n+hash_"
                          "indexing_failures\r\n$1\r\n0\r\n+backfill_in_"
@@ -456,7 +458,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                      .expect_return_failure = false,
                      .expected_output =
-                         "*46\r\n+index_name\r\n+test_name\r\n+index_"
+                         "*44\r\n+index_name\r\n+test_name\r\n+index_"
                          "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
                          "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
                          "1\r\n1\r\n+attributes\r\n*1\r\n*14\r\n+"
@@ -465,8 +467,8 @@ INSTANTIATE_TEST_SUITE_P(
                          "type\r\n+TEXT\r\n+WITH_SUFFIX_TRIE\r\n+1\r\n+NO_"
                          "STEM\r\n+1\r\n+WEIGHT\r\n+1\r\n+num_docs\r\n:0\r\n+"
                          "num_records\r\n:"
-                         "0\r\n+num_total_terms\r\n:0\r\n+num_unique_terms\r\n:"
-                         "0\r\n+total_postings\r\n:0\r\n+posting_sz_bytes\r\n:"
+                         "0\r\n+total_term_occurrences\r\n:0\r\n+num_terms\r\n:"
+                         "0\r\n+posting_sz_bytes\r\n:"
                          "0\r\n+position_sz_bytes\r\n:0\r\n+radix_sz_bytes\r\n:"
                          "0\r\n+total_text_index_sz_bytes\r\n:0\r\n+hash_"
                          "indexing_failures\r\n$1\r\n0\r\n+backfill_in_"

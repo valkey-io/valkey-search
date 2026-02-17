@@ -59,6 +59,7 @@ struct FTCreateParameters {
   float score{1.0};
   absl::string_view score_field;
   absl::string_view payload_field;
+  bool skip_initial_scan{false};
   std::vector<AttributeParameters> attributes;
   ExpectedPerIndexTextParameters per_index_text_params;
 };
@@ -93,7 +94,7 @@ TEST_P(FTCreateParserTest, ParseParams) {
   const FTCreateParserTestCase &test_case = GetParam();
   auto command_str = std::string(test_case.command_str);
   if (test_case.too_many_attributes) {
-    for (int i = 0; i < 50; ++i) {
+    for (int i = 0; i < 10000; ++i) {
       absl::StrAppend(&command_str, " hash_field", std::to_string(i + 2),
                       " vector hnsw 6 TYPE FLOAT32 DIM 3 "
                       "DISTANCE_METRIC IP ");
@@ -118,6 +119,8 @@ TEST_P(FTCreateParserTest, ParseParams) {
     EXPECT_EQ(prefixes, test_case.expected.prefixes);
     EXPECT_EQ(index_schema_proto->attributes().size(),
               test_case.expected.attributes.size());
+    EXPECT_EQ(index_schema_proto->skip_initial_scan(),
+              test_case.expected.skip_initial_scan);
 
     // Verify schema-level text parameters if we have text fields
     bool has_text_fields = false;
@@ -651,6 +654,24 @@ INSTANTIATE_TEST_SUITE_P(
                           }}},
          },
          {
+             .test_name = "happy_path_skip_initial_scan",
+             .success = true,
+             .command_str = "idx1 on HASH SKIPINITIALSCAN SCHEMA hash_field1 as "
+                            "hash_field11 tag ",
+             .tag_parameters = {{
+                 .separator = ",",
+                 .case_sensitive = false,
+             }},
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .skip_initial_scan = true,
+                          .attributes = {{
+                              .identifier = "hash_field1",
+                              .attribute_alias = "hash_field11",
+                              .indexer_type = indexes::IndexerType::kTag,
+                          }}},
+         },
+         {
              .test_name = "invalid_separator",
              .success = false,
              .command_str =
@@ -817,7 +838,7 @@ INSTANTIATE_TEST_SUITE_P(
              .too_many_attributes = true,
              .expected_error_message =
                  "Invalid range: Value above maximum; The maximum number of "
-                 "attributes cannot exceed 50.",
+                 "attributes cannot exceed 1000.",
          },
          {
              .test_name = "invalid_param_num_1",
@@ -1002,15 +1023,43 @@ INSTANTIATE_TEST_SUITE_P(
              .expected_error_message = "Missing argument",
          },
          {
-             .test_name = "invalid_index_name",
+             .test_name = "missing_prefix_for_hash_tagged_index",
              .success = false,
              .command_str = "idx{a}",
-             .expected_error_message = "Index name must not contain a hash tag",
+             .expected_error_message = "PREFIX parameter is required for hash-tagged indexes",
          },
          {
              .test_name = "invalid_index_prefix",
              .success = false,
              .command_str = "idx on hash prefix 1 a{b}",
+             .expected_error_message =
+                 "PREFIX argument(s) must not contain a hash tag",
+         },
+         {
+             .test_name = "inconsistent_index_prefix_1",
+             .success = false,
+             .command_str = "idx on hash prefix 1 a{b} prefix 1 b",
+             .expected_error_message =
+                 "PREFIX argument(s) must not contain a hash tag",
+         },
+         {
+             .test_name = "inconsistent_index_prefix_2",
+             .success = false,
+             .command_str = "idx on hash prefix 1 a{b} prefix 1 b{c}",
+             .expected_error_message =
+                 "PREFIX argument(s) must not contain a hash tag",
+         },
+         {
+             .test_name = "inconsistent_index_prefix_3",
+             .success = false,
+             .command_str = "idx on hash prefix 1 a{b} prefix 2 b{c} c",
+             .expected_error_message =
+                 "PREFIX argument(s) must not contain a hash tag",
+         },
+         {
+             .test_name = "inconsistent_index_prefix_4",
+             .success = false,
+             .command_str = "idx on hash prefix 1 a{b} prefix 2 b{c} c{d}",
              .expected_error_message =
                  "PREFIX argument(s) must not contain a hash tag",
          },

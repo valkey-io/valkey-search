@@ -32,6 +32,10 @@ class TextIndexSchema;
 class TextIndex;
 }  // namespace valkey_search::indexes::text
 
+namespace valkey_search {
+enum class QueryOperations : uint64_t;
+}  // namespace valkey_search
+
 namespace valkey_search::query {
 
 enum class PredicateType {
@@ -70,6 +74,8 @@ struct EvaluationResult {
 
 class Evaluator {
  public:
+  explicit Evaluator(valkey_search::QueryOperations query_operations)
+      : query_operations_(query_operations) {}
   virtual ~Evaluator() = default;
   virtual EvaluationResult EvaluateText(const TextPredicate& predicate,
                                         bool require_positions) = 0;
@@ -79,6 +85,12 @@ class Evaluator {
   // Access target key for proximity validation (only for Text)
   virtual const InternedStringPtr& GetTargetKey() const = 0;
   virtual bool IsPrefilterEvaluator() const { return false; }
+  valkey_search::QueryOperations GetQueryOperations() const {
+    return query_operations_;
+  }
+
+ protected:
+  valkey_search::QueryOperations query_operations_;
 };
 
 class Predicate;

@@ -82,16 +82,13 @@ struct SearchPartitionResultsTracker {
   std::unique_ptr<SearchParameters> parameters ABSL_GUARDED_BY(mutex);
   std::atomic_bool consistency_failed{false};
   std::atomic<size_t> accumulated_total_count{0};
-  std::optional<query::SortByParameter> sortby_parameter;
 
   SearchPartitionResultsTracker(int outstanding_requests, int k,
                                 query::SearchResponseCallback callback,
-                                std::unique_ptr<SearchParameters> parameters,
-                                std::optional<query::SortByParameter> sortby)
+                                std::unique_ptr<SearchParameters> parameters)
       : outstanding_requests(outstanding_requests),
         callback(std::move(callback)),
-        parameters(std::move(parameters)),
-        sortby_parameter(std::move(sortby)) {}
+        parameters(std::move(parameters)) {}
 
   void HandleResponse(coordinator::SearchIndexPartitionResponse &response,
                       const std::string &address, const grpc::Status &status) {
@@ -181,10 +178,9 @@ struct SearchPartitionResultsTracker {
         results.pop();
       }
       CHECK(i == 0);
-      if (sortby_parameter.has_value() && parameters->IsNonVectorQuery()) {
-        ApplySortingWithParams(neighbors, parameters->index_schema,
-                               sortby_parameter.value(), parameters->limit);
-      }
+      // Note: We do not sort neighbors here because we do not have the content
+      // of the local shard yet. In the SendReply function, we will sort the all
+      // neighbors based on the content if sorting is required.
       result = SearchResult(accumulated_total_count, std::move(neighbors),
                             *parameters);
     }
@@ -288,7 +284,7 @@ absl::Status PerformSearchFanoutAsync(
   }
   auto tracker = std::make_shared<SearchPartitionResultsTracker>(
       search_targets.size(), parameters->k, std::move(callback),
-      std::move(parameters), sortby_parameter);
+      std::move(parameters));
   bool has_local_target = false;
   for (auto &node : search_targets) {
     auto detached_ctx = vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx);

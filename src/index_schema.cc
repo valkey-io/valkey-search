@@ -1712,9 +1712,9 @@ bool IndexSchema::PerformKeyContentionCheck(
     auto itr = tracked_mutated_records_.find(neighbor.external_id);
     if (itr != tracked_mutated_records_.end()) {
       if (params->content_resolution_blocked_++ == 0) {
-        ++Metrics::GetStats().fulltext_query_blocked_cnt;
+        ++Metrics::GetStats().text_query_blocked_cnt;
       }
-      ++Metrics::GetStats().fulltext_query_retry_cnt;
+      ++Metrics::GetStats().text_query_retry_cnt;
       itr->second.waiting_queries.push_back(std::move(params));
       return true;
     }

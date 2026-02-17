@@ -10,10 +10,10 @@
 #include <absl/strings/str_format.h>
 
 #include "module_config.h"
-#include "src/indexes/vector_flat.h"
-#include "src/indexes/vector_hnsw.h"
 #include "src/coordinator/metadata_manager.h"
 #include "src/index_schema.h"
+#include "src/indexes/vector_flat.h"
+#include "src/indexes/vector_hnsw.h"
 #include "src/schema_manager.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/command_parser.h"
@@ -273,36 +273,31 @@ absl::Status IndexInfoCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
   auto indexes = SchemaManager::Instance().GetIndexDebugInfo();
   // Reply with array of strings, one per index
   ValkeyModule_ReplyWithArray(ctx, indexes.size());
-  
+
   for (const auto &info : indexes) {
     std::string vector_details;
     // Get vector field details if any
     if (info.vector_count > 0 && info.schema) {
       const int attr_count = info.schema->GetAttributeCount();
       if (info.vector_count > 0) {
-        vector_details = absl::StrFormat("[Vector Fields:%d]", info.vector_count);
+        vector_details =
+            absl::StrFormat("[Vector Fields:%d]", info.vector_count);
       }
     }
-    std::string output = absl::StrFormat(
-      "db-%d:index_%lu %s Prefixes(%zu)",
-      info.db_num,
-      info.fingerprint,
-      info.datatype,
-      info.prefix_count
-    );
+    std::string output =
+        absl::StrFormat("db-%d:index_%lu %s Prefixes(%zu)", info.db_num,
+                        info.fingerprint, info.datatype, info.prefix_count);
     // Add vector details if present
     if (!vector_details.empty()) {
       output += " Vector: " + vector_details;
     }
     // Add non-vector field counts
-    output += absl::StrFormat(" NonVectorFields: Numerics:%d Tags:%d Text:%d",
-      info.numeric_count,
-      info.tag_count,
-      info.text_count
-    );
+    output +=
+        absl::StrFormat(" NonVectorFields: Numerics:%d Tags:%d Text:%d",
+                        info.numeric_count, info.tag_count, info.text_count);
     ValkeyModule_ReplyWithSimpleString(ctx, output.c_str());
   }
-  
+
   return absl::OkStatus();
 }
 
@@ -372,7 +367,7 @@ absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
        "control pause points"},
       {"FT._DEBUG TEXTINFO <index> ...", "show info about schema-level text"},
       {"FT._DEBUG STRINGPOOLSTATS", "Show InternStringPool Stats"},
-      {"FT._DEBUG INDEX_INFO", 
+      {"FT._DEBUG INDEX_INFO",
        "Show redacted overview of index information for all indexes"},
       {"FT_DEBUG SHOW_METADATA",
        "list internal metadata manager table namespace"},
@@ -441,8 +436,8 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   } else if (keyword == "LIST_CONFIGS") {
     return ListConfigsCmd(ctx, itr);
   } else {
-    return absl::InvalidArgumentError(absl::StrCat(
-        "Unknown subcommand: ", keyword, ", try HELP subcommand"));
+    return absl::InvalidArgumentError(
+        absl::StrCat("Unknown subcommand: ", keyword, ", try HELP subcommand"));
   }
 }
 

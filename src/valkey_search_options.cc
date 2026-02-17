@@ -375,7 +375,7 @@ static auto drain_mutation_queue_on_save =
 /// Formula: limit_per_shard = (K/N) + ((100-U) * (K - K/N) / 100)
 constexpr absl::string_view kFanoutDataUniformityConfig{
     "fanout-data-uniformity"};
-constexpr uint32_t kDefaultFanoutDataUniformity{0};
+constexpr uint32_t kDefaultFanoutDataUniformity{100};
 constexpr uint32_t kMinimumFanoutDataUniformity{0};
 constexpr uint32_t kMaximumFanoutDataUniformity{100};
 static auto fanout_data_uniformity =

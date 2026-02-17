@@ -768,7 +768,6 @@ absl::StatusOr<SearchResult> Search(const SearchParameters &parameters,
     return result.status();
   }
   size_t total_count = result.value().size();
-  // return SearchResult(total_count, std::move(result.value()), parameters);
   auto search_result =
       SearchResult(total_count, std::move(result.value()), parameters);
   for (auto &n : search_result.neighbors) {

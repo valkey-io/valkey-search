@@ -118,6 +118,7 @@ struct SearchParameters {
   bool inorder{false};
   std::optional<uint32_t> slop;
   bool verbatim{false};
+  std::optional<query::SortByParameter> sortby;
   coordinator::IndexFingerprintVersion index_fingerprint_version;
   uint64_t slot_fingerprint;
   struct ParseTimeVariables {
@@ -152,7 +153,9 @@ struct SearchParameters {
   // be able to return correct results. An example of this is when sorting on a
   // particular is needed on the results. This should be overridden in derived
   // classes if needed. The default implementation returns false.
-  virtual bool RequiresCompleteResults() const { return false; }
+  virtual bool RequiresCompleteResults() const {
+    return sortby.has_value();
+  }
 
   // Returns additional identifiers that need to be fetched for sorting.
   // Override in derived classes to provide sortby field identifier.

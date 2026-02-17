@@ -28,6 +28,7 @@
 #include "absl/synchronization/mutex.h"
 #include "grpcpp/support/status.h"
 #include "src/attribute_data_type.h"
+#include "src/commands/ft_search.h"
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/search_converter.h"
@@ -82,13 +83,16 @@ struct SearchPartitionResultsTracker {
   std::atomic_bool reached_oom{false};
   std::atomic_bool consistency_failed{false};
   std::atomic<size_t> accumulated_total_count{0};
+  std::optional<query::SortByParameter> sortby_parameter;
 
   SearchPartitionResultsTracker(int outstanding_requests, int k,
                                 query::SearchResponseCallback callback,
-                                std::unique_ptr<SearchParameters> parameters)
+                                std::unique_ptr<SearchParameters> parameters,
+                                std::optional<query::SortByParameter> sortby)
       : outstanding_requests(outstanding_requests),
         callback(std::move(callback)),
-        parameters(std::move(parameters)) {}
+        parameters(std::move(parameters)),
+        sortby_parameter(std::move(sortby)) {}
 
   void HandleResponse(coordinator::SearchIndexPartitionResponse &response,
                       const std::string &address, const grpc::Status &status) {
@@ -178,9 +182,10 @@ struct SearchPartitionResultsTracker {
         results.pop();
       }
       CHECK(i == 0);
-      // SearchResult construction automatically applies trimming based on LIMIT
-      // offset count IF the command allows it (ie - it does not require
-      // complete results).
+      if (sortby_parameter.has_value() && parameters->IsNonVectorQuery()) {
+        ApplySortingWithParams(neighbors, parameters->index_schema,
+                               sortby_parameter.value(), parameters->limit);
+      }
       result = SearchResult(accumulated_total_count, std::move(neighbors),
                             *parameters);
     }
@@ -261,25 +266,28 @@ absl::Status PerformSearchFanoutAsync(
       coordinator::ParametersToGRPCSearchRequest(*parameters, sortby_parameter);
   uint32_t U = options::GetFanoutDataUniformity().GetValue();
   size_t N = search_targets.size();
+  uint64_t K = parameters->limit.first_index + parameters->limit.number;
   if (parameters->IsNonVectorQuery()) {
-    // For non vector, use the LIMIT based range. Ensure we fetch enough
-    // results to cover offset + number.
-    uint64_t K = parameters->limit.first_index + parameters->limit.number;
     uint64_t limit_per_shard = (K / N) + ((100 - U) * (K - (K / N)) / 100);
     request->mutable_limit()->set_first_index(0);
     request->mutable_limit()->set_number(limit_per_shard);
+    if (sortby_parameter.has_value()) {
+      // Fetch enough results from each shard to cover the global top N
+      // In the worst case, all top N results could come from a single shard,
+      // so we need to fetch at least N from each shard.
+      request->mutable_limit()->set_number(K);
+    }
   } else {
     // Vector searches: Use k as the limit to find top k results. In worst case,
     // all top k results are from a single shard, so no need to fetch more than
     // k.
     uint64_t K = parameters->k;
-    uint64_t limit_per_shard = (K / N) + ((100 - U) * (K - (K / N)) / 100);
     request->mutable_limit()->set_first_index(0);
-    request->mutable_limit()->set_number(limit_per_shard);
+    request->mutable_limit()->set_number(K);
   }
   auto tracker = std::make_shared<SearchPartitionResultsTracker>(
       search_targets.size(), parameters->k, std::move(callback),
-      std::move(parameters));
+      std::move(parameters), sortby_parameter);
   bool has_local_target = false;
   for (auto &node : search_targets) {
     auto detached_ctx = vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx);

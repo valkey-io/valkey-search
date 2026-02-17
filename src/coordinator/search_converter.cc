@@ -254,6 +254,7 @@ GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request,
   parameters->slot_fingerprint = request.slot_fingerprint();
   parameters->filter_parse_results.query_operations =
       static_cast<QueryOperations>(request.query_operations());
+  parameters->sortby = SortByFromGRPC(request);
   return parameters;
 }
 

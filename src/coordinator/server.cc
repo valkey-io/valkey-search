@@ -25,6 +25,7 @@
 #include "grpcpp/support/server_callback.h"
 #include "grpcpp/support/status.h"
 #include "module_config.h"
+#include "src/commands/ft_search.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/grpc_suspender.h"
 #include "src/coordinator/metadata_manager.h"
@@ -127,19 +128,22 @@ class RemoteResponderSearch : public query::SearchParameters {
   std::unique_ptr<vmsdk::StopWatch> latency_sample;
   std::vector<indexes::Neighbor> neighbors;
   size_t total_count;
+  std::optional<query::SortByParameter> sortby_parameter;
 
   RemoteResponderSearch(SearchIndexPartitionResponse* resp,
                         grpc::ServerUnaryReactor* react,
                         std::unique_ptr<vmsdk::StopWatch>&& sample,
                         std::vector<indexes::Neighbor>&& nbrs,
                         std::unique_ptr<query::SearchParameters>&& params,
-                        size_t count)
+                        size_t count,
+                        std::optional<query::SortByParameter> sortby)
       : query::SearchParameters(std::move(*params)),
         response(resp),
         reactor(react),
         latency_sample(std::move(sample)),
         neighbors(std::move(nbrs)),
-        total_count(count) {}
+        total_count(count),
+        sortby_parameter(std::move(sortby)) {}
 
   const char* GetDesc() const override { return "remote-responder"; }
   std::vector<indexes::Neighbor>& GetNeighbors() override { return neighbors; }
@@ -154,6 +158,10 @@ class RemoteResponderSearch : public query::SearchParameters {
     }
     query::ProcessNeighborsForReply(ctx.get(), attribute_data_type, neighbors,
                                     *this, vector_identifier);
+    if (sortby_parameter.has_value() && !neighbors.empty()) {
+      ApplySortingWithParams(neighbors, index_schema,
+                             sortby_parameter.value(), limit);
+    }
     // Adjust total_count based on modified neighbours
     size_t removed = original_size - neighbors.size();
     size_t adjusted_total_count =
@@ -230,7 +238,7 @@ query::SearchResponseCallback Service::MakeSearchCallback(
       auto remote_responder = std::make_unique<RemoteResponderSearch>(
           response, reactor, std::move(latency_sample),
           std::move(result->neighbors), std::move(parameters),
-          result->total_count);
+          result->total_count, sortby_parameter);
       auto retry_ctx = std::make_shared<query::InFlightRetryContext>(
           std::move(remote_responder));
       retry_ctx->ScheduleOnMainThread();
@@ -264,6 +272,12 @@ query::SearchResponseCallback Service::MakeSearchCallback(
         query::ProcessNeighborsForReply(ctx.get(), attribute_data_type,
                                         neighbors, *parameters,
                                         vector_identifier, sortby_parameter);
+
+        // Sort on shard if SORTBY is present
+        if (sortby_parameter.has_value() && !neighbors.empty()) {
+          ApplySortingWithParams(neighbors, parameters->index_schema,
+                                 sortby_parameter.value(), parameters->limit);
+        }
 
         SerializeNeighbors(response, neighbors);
         response->set_total_count(total_count);

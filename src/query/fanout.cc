@@ -262,13 +262,36 @@ absl::Status PerformSearchFanoutAsync(
     std::optional<query::SortByParameter> sortby_parameter) {
   auto request =
       coordinator::ParametersToGRPCSearchRequest(*parameters, sortby_parameter);
-  uint32_t U = options::GetFanoutDataUniformity().GetValue();
   size_t N = search_targets.size();
   uint64_t K = parameters->limit.first_index + parameters->limit.number;
+  // The 'fanout-data-uniformity-percent' (U) represents the user's data
+  // distribution profile. 100 means data is perfectly balanced (Uniform); 0
+  // means data is heavily skewed.
+  uint32_t U = options::GetFanoutDataUniformity().GetValue();
   if (parameters->IsNonVectorQuery()) {
-    // For non vector, use the LIMIT based range. Ensure we fetch enough
-    // results to cover offset + number.
-    uint64_t limit_per_shard = (K / N) + ((100 - U) * (K - (K / N)) / 100);
+    // For non-vector queries, we optimize network traffic by reducing the
+    // per-shard fetch limit. Instead of fetching K from every shard, we
+    // calculate a limit based on the distribution profile to have enough
+    // inorder to cover offset + limit number.
+
+    // 1. The 'fair_share_limit' is the best-case scenario (Uniform
+    // Distribution). Each shard contributes an equal portion of the total
+    // results. We use ceiling division (K + N - 1) / N to ensure that if K < N,
+    // we still fetch at least 1 result per shard, preventing empty results in
+    // high-fanout clusters.
+    uint64_t fair_share_limit = (K + N - 1) / N;
+    // 2. The 'total_request_limit' is the worst-case scenario (Total Skew).
+    // We assume all K results might reside on a single shard. We never need to
+    // fetch more than K from a single shard to satisfy the global request.
+    uint64_t total_request_limit = K;
+    // 3. We perform a linear interpolation (Weighted Average) between the Fair
+    // Share and the Total Request based on the Uniformity percentage (U).
+    // - If U = 100: We fetch exactly the fair_share_limit (Maximum
+    // optimization).
+    // - If U = 0:   We fetch the total_request_limit (Maximum accuracy/safety).
+    // - Values in between allow users to tune for their specific data skew.
+    uint64_t limit_per_shard =
+        (U * fair_share_limit + (100 - U) * total_request_limit) / 100;
     request->mutable_limit()->set_first_index(0);
     request->mutable_limit()->set_number(limit_per_shard);
     if (sortby_parameter.has_value()) {

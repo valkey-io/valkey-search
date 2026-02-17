@@ -387,6 +387,13 @@ def do_answer(client, expected, data_set):
         load_data(client, expected['data_set_name'], expected['key_type'])
         data_set = (expected['data_set_name'], expected['key_type'])
 
+    # Set the cluster mode fanout-data-uniformity config to handle non uniform data distrubution 
+    # across shards.
+    try:
+        client.execute_command("CONFIG", "SET", "search.fanout-data-uniformity", "0")
+    except Exception as e:
+        print(f"⚠ Failed to set search.fanout-data-uniformity config for test: {expected['testname']}, error: {e}")
+
     # Set Valkey-specific config for inorder tests
     if 'inorder' in expected['testname'] or 'slop' in expected['testname']:
         try:

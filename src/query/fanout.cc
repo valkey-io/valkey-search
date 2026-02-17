@@ -274,24 +274,31 @@ absl::Status PerformSearchFanoutAsync(
     // calculate a limit based on the distribution profile to have enough
     // inorder to cover offset + limit number.
 
-    // 1. The 'fair_share_limit' is the best-case scenario (Uniform
-    // Distribution). Each shard contributes an equal portion of the total
-    // results. We use ceiling division (K + N - 1) / N to ensure that if K < N,
-    // we still fetch at least 1 result per shard, preventing empty results in
-    // high-fanout clusters.
+    // TODO:
+    // 1) Check how it works for single slot case
+    // 2) Check how it handles default / min / max values of K, U, N. K is
+    // particularly concerning since it has a default in some cases of
+    // integer::MAX
+
+    // 1. Calculate the 'fair_share_limit' (The Base).
+    // This is the minimum results needed per shard if data is perfectly
+    // uniform. We use ceiling division (K + N - 1) / N to ensure we fetch at
+    // least 1 per shard when K > 0, preventing empty results on high-fanout
+    // clusters.
     uint64_t fair_share_limit = (K + N - 1) / N;
-    // 2. The 'total_request_limit' is the worst-case scenario (Total Skew).
-    // We assume all K results might reside on a single shard. We never need to
-    // fetch more than K from a single shard to satisfy the global request.
-    uint64_t total_request_limit = K;
-    // 3. We perform a linear interpolation (Weighted Average) between the Fair
-    // Share and the Total Request based on the Uniformity percentage (U).
-    // - If U = 100: We fetch exactly the fair_share_limit (Maximum
-    // optimization).
-    // - If U = 0:   We fetch the total_request_limit (Maximum accuracy/safety).
-    // - Values in between allow users to tune for their specific data skew.
-    uint64_t limit_per_shard =
-        (U * fair_share_limit + (100 - U) * total_request_limit) / 100;
+
+    // 2. Calculate the 'skew_gap' (The Buffer).
+    // This represents the extra results we might need to fetch if one shard
+    // holds more than its fair share. The maximum gap is (K - fair_share).
+    uint64_t skew_gap = K - fair_share_limit;
+
+    // 3. Apply the 'Uniformity' (U) to the gap.
+    // - If U = 100 (Uniform): We add 0% of the gap. Result = fair_share_limit.
+    // - If U = 0 (Skewed): We add 100% of the gap. Result = K.
+    // Note: Multiplying by (100 - U) before dividing by 100 maintains integer
+    // precision.
+    uint64_t limit_per_shard = fair_share_limit + ((100 - U) * skew_gap / 100);
+
     request->mutable_limit()->set_first_index(0);
     request->mutable_limit()->set_number(limit_per_shard);
     if (sortby_parameter.has_value()) {

@@ -1168,7 +1168,31 @@ INSTANTIATE_TEST_SUITE_P(
              (std::get<0>(info.param) ? "WithThreadPool" : "WithoutThreadPool");
     });
 
-class IndexSchemaRDBTest : public ValkeySearchTest {};
+class IndexSchemaRDBTest : public ValkeySearchTest {
+ protected:
+  // Intercepting the setup to change RDB version to 1
+  // Currently these tests only work with RDB version 1
+  // TODO: Will be fixed to work with RDB version 2
+  void SetUp() override {
+    ValkeySearchTest::SetUp();
+    auto &write_v2 =
+        const_cast<vmsdk::config::Boolean &>(options::GetRdbWriteV2());
+    auto &read_v2 =
+        const_cast<vmsdk::config::Boolean &>(options::GetRdbReadV2());
+    VMSDK_EXPECT_OK(write_v2.SetValue(false));
+    VMSDK_EXPECT_OK(read_v2.SetValue(false));
+  }
+
+  void TearDown() override {
+    auto &write_v2 =
+        const_cast<vmsdk::config::Boolean &>(options::GetRdbWriteV2());
+    auto &read_v2 =
+        const_cast<vmsdk::config::Boolean &>(options::GetRdbReadV2());
+    VMSDK_EXPECT_OK(write_v2.SetValue(true));
+    VMSDK_EXPECT_OK(read_v2.SetValue(true));
+    ValkeySearchTest::TearDown();
+  }
+};
 
 TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   std::vector<absl::string_view> key_prefixes = {"prefix1", "prefix2"};

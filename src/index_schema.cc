@@ -71,11 +71,21 @@ LogLevel GetLogSeverity(bool ok) { return ok ? DEBUG : WARNING; }
 // Controls and stats for V2 RDB file
 //
 static auto config_rdb_write_v2 =
-    vmsdk::config::BooleanBuilder("rdb-write-v2", false).Dev().Build();
+    vmsdk::config::BooleanBuilder("rdb-write-v2", true).Dev().Build();
 static auto config_rdb_read_v2 =
-    vmsdk::config::BooleanBuilder("rdb-read-v2", false).Dev().Build();
+    vmsdk::config::BooleanBuilder("rdb-read-v2", true).Dev().Build();
 static auto config_rdb_validate_on_write =
     vmsdk::config::BooleanBuilder("rdb-validate-on-write", false).Dev().Build();
+
+namespace options {
+const vmsdk::config::Boolean &GetRdbWriteV2() {
+  return dynamic_cast<const vmsdk::config::Boolean &>(*config_rdb_write_v2);
+}
+
+const vmsdk::config::Boolean &GetRdbReadV2() {
+  return dynamic_cast<const vmsdk::config::Boolean &>(*config_rdb_read_v2);
+}
+}  // namespace options
 
 static bool RDBReadV2() {
   return dynamic_cast<vmsdk::config::Boolean &>(*config_rdb_read_v2).GetValue();

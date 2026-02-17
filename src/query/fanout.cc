@@ -274,12 +274,6 @@ absl::Status PerformSearchFanoutAsync(
     // calculate a limit based on the distribution profile to have enough
     // inorder to cover offset + limit number.
 
-    // TODO:
-    // 1) Check how it works for single slot case
-    // 2) Check how it handles default / min / max values of K, U, N. K is
-    // particularly concerning since it has a default in some cases of
-    // integer::MAX
-
     // 1. Calculate the 'fair_share_limit' (The Base).
     // This is the minimum results needed per shard if data is perfectly
     // uniform. We use ceiling division (K + N - 1) / N to ensure we fetch at

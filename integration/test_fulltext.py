@@ -381,6 +381,10 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert set(result[1]) == {b"year", b"1861", b"count", b"1"}
         assert set(result[2]) == {b"year", b"1925", b"count", b"1"}
         assert set(result[3]) == {b"year", b"2020", b"count", b"1"}
+        # Test VERBATIM: "great" without stemming should match exact term only
+        result = client.execute_command("FT.AGGREGATE", "books", "great", "LOAD", "1", "title", "VERBATIM")
+        assert result[0] == 3
+        assert {result[i][1] for i in range(1, 4)} == {b"The Great Gatsby", b"Great Expectations", b"The Great Adventure"}
 
     def test_text_search(self):
         """

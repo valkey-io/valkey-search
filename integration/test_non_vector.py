@@ -293,6 +293,10 @@ def validate_aggregate_complex_queries(client: Valkey):
     )
     assert result[0] == 5
     assert result[1][1] == b'1000'
+    assert result[2][1] == b'999'
+    assert result[3][1] == b'998'
+    assert result[4][1] == b'997'
+    assert result[5][1] == b'996'
 
     # 4. APPLY with arithmetic expression
     result = client.execute_command(
@@ -442,17 +446,17 @@ def validate_aggregate_complex_queries(client: Valkey):
     result = client.execute_command(
         "FT.AGGREGATE", "products", "@price:[0 1000]",
         "LOAD", "1", "price",
-        "SORTBY", "2", "@price", "ASC", "MAX", "1000",
-        "LIMIT", "900", "10",
-        "FILTER", "@price >= 906",
+        "SORTBY", "2", "@price", "ASC", "MAX", "500",
+        "LIMIT", "400", "10",
+        "FILTER", "@price >= 406",
         "LIMIT", "0", "5",
         "APPLY", "@price * 10", "AS", "scaled",
         "LIMIT", "0", "1"
     )
-    # [1, [b'price', b'906', b'scaled', b'9060']]
+    # [1, [b'price', b'406', b'scaled', b'4060']]
     assert result[0] == 1
-    assert result[1][1] == b'906'
-    assert result[1][3] == b'9060'
+    assert result[1][1] == b'406'
+    assert result[1][3] == b'4060'
 
 class TestNonVector(ValkeySearchTestCaseBase):
 

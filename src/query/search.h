@@ -149,7 +149,7 @@ enum ContentProcessing {
   // from a background thread.
   //
   kContentRequired,     // Content, but no contention check is needed
-  kContentionRequired,  // Content and contention check is required.
+  kContentionCheckRequired,  // Content and contention check is required.
 };
 
 struct SearchParameters {

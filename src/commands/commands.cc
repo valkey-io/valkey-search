@@ -198,15 +198,22 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
   return status;
 }
 
-void QueryCommand::QueryCompleteBackground(
+void QueryCommand::QueryCompleteImpl(
     std::unique_ptr<SearchParameters> parameters) {
   blocked_client->SetReplyPrivateData(parameters.release());
   blocked_client->UnblockClient();
 }
 
+void QueryCommand::QueryCompleteBackground(
+    std::unique_ptr<SearchParameters> parameters) {
+  CHECK(!vmsdk::IsMainThread());
+  QueryCompleteImpl(std::move(parameters));
+}
+
 void QueryCommand::QueryCompleteMainThread(
     std::unique_ptr<SearchParameters> parameters) {
-  QueryCompleteBackground(std::move(parameters));
+  CHECK(vmsdk::IsMainThread());
+  QueryCompleteImpl(std::move(parameters));
 }
 
 }  // namespace valkey_search

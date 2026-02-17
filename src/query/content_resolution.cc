@@ -19,14 +19,15 @@
 namespace valkey_search::query {
 
 void ResolveContent(std::unique_ptr<SearchParameters> params) {
+  vmsdk::VerifyMainThread();
   // 1. Check cancellation
   if (params->cancellation_token->IsCancelled()) {
     params->QueryCompleteMainThread(std::move(params));
     return;
   }
 
-  // 2. If kContentionRequired, check for in-flight mutations
-  if (params->GetContentProcessing() == kContentionRequired) {
+  // 2. If kContentionCheckRequired, check for in-flight mutations
+  if (params->GetContentProcessing() == kContentionCheckRequired) {
     if (params->index_schema->PerformKeyContentionCheck(
             params->search_result.neighbors, std::move(params))) {
       // Contention found — params has been moved into the mutation queue.

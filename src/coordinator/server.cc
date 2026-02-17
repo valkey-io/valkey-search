@@ -122,15 +122,20 @@ class RemoteResponderSearch : public query::SearchParameters {
   size_t total_count;
   void QueryCompleteBackground(
       std::unique_ptr<SearchParameters> self) override {
+    CHECK(!vmsdk::IsMainThread());
     CHECK(no_content);
-    SerializeNeighbors(response, search_result.neighbors);
-    response->set_total_count(search_result.total_count);
-    reactor->Finish(grpc::Status::OK);
-    RecordSearchMetrics(false, std::move(latency_sample));
+    QueryCompleteImpl();
   }
 
   void QueryCompleteMainThread(
       std::unique_ptr<SearchParameters> self) override {
+    CHECK(vmsdk::IsMainThread());
+    CHECK(!no_content);  // Shouldn't be here!
+    QueryCompleteImpl();
+  }
+
+ private:
+  void QueryCompleteImpl() {
     if (!search_result.status.ok() && !enable_partial_results ||
         cancellation_token->IsCancelled()) {
       reactor->Finish({grpc::StatusCode::DEADLINE_EXCEEDED,
@@ -138,8 +143,6 @@ class RemoteResponderSearch : public query::SearchParameters {
       RecordSearchMetrics(true, std::move(latency_sample));
       return;
     }
-    CHECK(!no_content);  // Shouldn't be here!
-    // Content already resolved by ResolveContent — just serialize and send.
     SerializeNeighbors(response, search_result.neighbors);
     response->set_total_count(search_result.total_count);
     reactor->Finish(grpc::Status::OK);

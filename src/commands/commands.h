@@ -109,6 +109,9 @@ struct QueryCommand : public query::SearchParameters {
   void QueryCompleteMainThread(std::unique_ptr<SearchParameters> self) override;
 
   std::optional<vmsdk::BlockedClient> blocked_client;
+
+ private:
+  void QueryCompleteImpl(std::unique_ptr<SearchParameters> parameters);
 };
 
 namespace async {

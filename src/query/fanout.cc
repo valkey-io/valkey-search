@@ -24,6 +24,7 @@
 #include "absl/strings/str_cat.h"
 #include "absl/synchronization/mutex.h"
 #include "grpcpp/support/status.h"
+#include "vmsdk/src/utils.h"
 #include "src/attribute_data_type.h"
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/coordinator.pb.h"
@@ -189,11 +190,18 @@ class LocalResponderSearch : public query::SearchParameters {
 
   void QueryCompleteMainThread(
       std::unique_ptr<SearchParameters> self) override {
-    QueryCompleteBackground(std::move(self));
+    CHECK(vmsdk::IsMainThread());
+    QueryCompleteImpl(std::move(self));
   }
 
   void QueryCompleteBackground(
       std::unique_ptr<SearchParameters> self) override {
+    CHECK(!vmsdk::IsMainThread());
+    QueryCompleteImpl(std::move(self));
+  }
+
+ private:
+  void QueryCompleteImpl(std::unique_ptr<SearchParameters> self) {
     if (search_result.status.ok() || enable_partial_results) {
       tracker->AddResults(search_result.neighbors);
       tracker->AddTotalCount(search_result.total_count);

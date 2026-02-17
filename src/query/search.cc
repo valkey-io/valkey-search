@@ -790,7 +790,7 @@ absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
             parameters->QueryCompleteBackground(std::move(parameters));
             break;
           case ContentProcessing::kContentRequired:
-          case ContentProcessing::kContentionRequired:
+          case ContentProcessing::kContentionCheckRequired:
             vmsdk::RunByMain([parameters = std::move(parameters)]() mutable {
               ResolveContent(std::move(parameters));
             });
@@ -1079,7 +1079,7 @@ ContentProcessing SearchParameters::GetContentProcessing() const {
   }
   // Currently, ContentAvailable isn't detected. Future use case.
   if (query::QueryHasTextPredicate(*this)) {
-    return kContentionRequired;
+    return kContentionCheckRequired;
   }
   return kContentRequired;
 }

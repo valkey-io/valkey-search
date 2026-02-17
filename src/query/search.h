@@ -224,7 +224,7 @@ struct SearchParameters {
   // Called when the query is complete and results are ready to be sent back to
   // the client.
   //
-  // Note form the parameter, that owernship is specifically passed back to the
+  // Note form the parameter, that ownership is specifically passed back to the
   // caller. Paranoid implementations of these functions could start with
   // the code: CHECK(this == self.get());
   //

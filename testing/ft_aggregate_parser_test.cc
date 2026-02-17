@@ -112,12 +112,18 @@ static struct SlopTestValue {
               {"SLOP 0", 0},      {"SLOP 1", 1},
               {"SLOP 10", 10},    {"SLOP fred", std::nullopt}};
 
+static struct VerbatimTestValue {
+  std::string text_;
+  bool value_;
+} VerbatimCases[]{{"", false}, {"VERBATIM", true}};
+
 static void DoPrefaceTestCase(FakeIndexInterface *fake_index, std::string test,
                               TimeoutTestValue timeout_test,
                               DialectTestValue dialect_test,
                               LoadsTestValue loads_test,
                               InorderTestValue inorder_test,
-                              SlopTestValue slop_test) {
+                              SlopTestValue slop_test,
+                              VerbatimTestValue verbatim_test) {
   std::cerr << "Running test: '" << test << "'\n";
   auto argv = vmsdk::ToValkeyStringVector(test);
   vmsdk::ArgsIterator itr(argv.data(), argv.size());
@@ -147,6 +153,7 @@ static void DoPrefaceTestCase(FakeIndexInterface *fake_index, std::string test,
     }
     EXPECT_EQ(params.inorder, inorder_test.value_);
     EXPECT_EQ(params.slop, slop_test.value_);
+    EXPECT_EQ(params.verbatim, verbatim_test.value_);
   } else {
     if (!timeout_test.value_) {
       EXPECT_EQ(params.timeout_ms, query::kTimeoutMS);
@@ -167,11 +174,15 @@ TEST_F(AggregateTest, PrefaceParserTest) {
       for (const auto &loads_test : LoadCases) {
         for (const auto &inorder_test : InorderCases) {
           for (const auto &slop_test : SlopCases) {
-            std::string test = timeout_test.text_ + " " + dialect_test.text_ +
-                               " " + loads_test.text_ + " " +
-                               inorder_test.text_ + " " + slop_test.text_;
-            DoPrefaceTestCase(&fake_index, test, timeout_test, dialect_test,
-                              loads_test, inorder_test, slop_test);
+            for (const auto &verbatim_test : VerbatimCases) {
+              std::string test = timeout_test.text_ + " " + dialect_test.text_ +
+                                 " " + loads_test.text_ + " " +
+                                 inorder_test.text_ + " " + slop_test.text_ +
+                                 " " + verbatim_test.text_;
+              DoPrefaceTestCase(&fake_index, test, timeout_test, dialect_test,
+                                loads_test, inorder_test, slop_test,
+                                verbatim_test);
+            }
           }
         }
       }

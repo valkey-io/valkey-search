@@ -15,7 +15,6 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "src/index_schema.h"
-#include "src/indexes/tag.h"
 #include "src/indexes/text/lexer.h"
 #include "src/query/predicate.h"
 #include "vmsdk/src/module_config.h"

@@ -12,15 +12,13 @@ namespace valkey_search::indexes::text {
 TermIterator::TermIterator(
     absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>&&
         key_iterators,
-    const FieldMaskPredicate query_field_mask,
-    const InternedStringSet* untracked_keys, const bool require_positions,
+    const FieldMaskPredicate query_field_mask, const bool require_positions,
     const FieldMaskPredicate stem_field_mask, bool has_original)
     : query_field_mask_(query_field_mask),
       stem_field_mask_(stem_field_mask),
       key_iterators_(std::move(key_iterators)),
       current_position_(std::nullopt),
       current_field_mask_(0ULL),
-      untracked_keys_(untracked_keys),
       require_positions_(require_positions),
       has_original_(has_original) {
   // Prime the first key and position if they exist.

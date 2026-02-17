@@ -125,3 +125,43 @@ class TestFTInfoCluster(ValkeySearchClusterTestCaseDebugMode):
         assert float(info["backfill_complete_percent_max"]) == 1.000000
         assert float(info["backfill_complete_percent_min"]) == 1.000000
         assert str(info["state"]) == "ready"
+
+    def test_ft_info_cluster_attribute(self):
+        cluster: ValkeyCluster = self.new_cluster_client()
+        node0: Valkey = self.new_client_for_primary(0)
+        index_name = "index1"
+
+        cluster.execute_command("HSET", "doc:1", "title", "hello", "body", "world")
+        cluster.execute_command("HSET", "doc:2", "title", "valkey")
+
+        assert node0.execute_command(
+            "FT.CREATE", index_name,
+            "ON", "HASH",
+            "PREFIX", "1", "doc:",
+            "SCHEMA", "title", "TEXT",
+            "body", "TEXT"
+        ) == b"OK"
+
+        waiters.wait_for_true(lambda: self.is_backfill_complete(node0, index_name))
+
+        raw = node0.execute_command("FT.INFO", index_name, "CLUSTER")
+        parser = FTInfoParser([])
+        info = parser._parse_key_value_list(raw)
+
+        # check primary info results
+        assert info is not None
+        assert str(info.get("index_name")) == index_name
+        assert str(info.get("mode")) == "cluster"
+        assert int(info["backfill_in_progress"]) == 0
+        assert float(info["backfill_complete_percent_max"]) == 1.000000
+        assert float(info["backfill_complete_percent_min"]) == 1.000000
+        assert str(info["state"]) == "ready"
+
+        # Parse attributes into a dict keyed by attribute name
+        attrs = {
+            parsed["attribute"]: parsed
+            for a in info["attributes"]
+            if isinstance(parsed := parser._parse_key_value_list(a), dict)
+        }
+        assert attrs["title"]["user_indexed_memory"] > 0
+        assert attrs["body"]["user_indexed_memory"] > 0

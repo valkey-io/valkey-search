@@ -459,12 +459,13 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                         "nn",
                 )
 
-    def test_search_sortby(self, key_type, dialect):
-        self.setup_data("sortable numbers", key_type)
+    @pytest.mark.parametrize("dataset", ["hard numbers", "hard strings"])
+    def test_search_sortby(self, key_type, dialect, dataset):
+        self.setup_data(dataset, key_type)
 
-        for sort_key in ["n1", "n2"]:
+        for sort_key in ["n1", "n2", "t1", "t2", "t3"]:
             for direction in ["ASC", "DESC", ""]:
-                for return_keys in ["", "RETURN 3 @n1 @t1"]:
+                for return_keys in ["", "RETURN 2 @n1 @t1"]:
                     for wsk in ["", "WITHSORTKEYS"]:
                         for limit in ["LIMIT 0 5", "LIMIT 2 3", ""]:
                             self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY {sort_key} {direction} {return_keys} {limit} {wsk}")

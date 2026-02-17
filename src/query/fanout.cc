@@ -178,7 +178,15 @@ struct SearchPartitionResultsTracker {
       status = absl::OkStatus();
     }
     parameters->search_result.status = status;
-    parameters->QueryCompleteBackground(std::move(parameters));
+    // The destructor runs on whichever thread drops the last shared_ptr
+    // reference. If remote shards complete first and the local shard (which
+    // completes on the main thread via content resolution) drops the last
+    // reference, we'll be on the main thread here.
+    if (vmsdk::IsMainThread()) {
+      parameters->QueryCompleteMainThread(std::move(parameters));
+    } else {
+      parameters->QueryCompleteBackground(std::move(parameters));
+    }
   }
 };
 

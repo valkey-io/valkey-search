@@ -49,7 +49,7 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
             )
         )
         waiters.wait_for_true(
-            lambda: client.info("SEARCH")["search_fulltext_query_blocked_count"] >= 1
+            lambda: client.info("SEARCH")["search_text_query_blocked_count"] >= 1
         )
         assert search_res[0] is None and search_thread.is_alive()
 
@@ -74,7 +74,7 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
 
         # Wait for search to retry and block on doc:2
         waiters.wait_for_true(
-            lambda: client.info("SEARCH")["search_fulltext_query_retry_count"] >= 2
+            lambda: client.info("SEARCH")["search_text_query_retry_count"] >= 2
         )
         assert search_res[0] is None and search_thread.is_alive()
 
@@ -126,7 +126,7 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
             )
         )
         waiters.wait_for_true(
-            lambda: client.info("SEARCH")["search_fulltext_query_blocked_count"] >= 1
+            lambda: client.info("SEARCH")["search_text_query_blocked_count"] >= 1
         )
         assert search_res[0] is None and search_thread.is_alive()
 
@@ -166,7 +166,7 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
         # TAG-only query should NOT block even though index has TEXT field
         result = client.execute_command("FT.SEARCH", "idx", "@category:{news}")
         assert result is not None
-        assert client.info("SEARCH")["search_fulltext_query_blocked_count"] == 0
+        assert client.info("SEARCH")["search_text_query_blocked_count"] == 0
 
         client.execute_command("FT._DEBUG PAUSEPOINT RESET mutation_processing")
         hset_thread.join()
@@ -232,7 +232,7 @@ class TestFullTextInFlightBlockingCME(ValkeySearchClusterTestCaseDebugMode):
             lambda: client.execute_command("FT.SEARCH", "idx", "@content:hello")
         )
         waiters.wait_for_true(
-            lambda: all(nc.info("SEARCH")["search_fulltext_query_blocked_count"] >= 1
+            lambda: all(nc.info("SEARCH")["search_text_query_blocked_count"] >= 1
                        for nc in primary_clients)
         )
         # Verify search is still blocked (hasn't returned yet)
@@ -291,12 +291,12 @@ class TestFullTextInFlightBlockingCME(ValkeySearchClusterTestCaseDebugMode):
             lambda: coordinator.execute_command("FT.SEARCH", "idx", "@content:hello")
         )
         waiters.wait_for_true(
-            lambda: all(nc.info("SEARCH")["search_fulltext_query_blocked_count"] >= 1
+            lambda: all(nc.info("SEARCH")["search_text_query_blocked_count"] >= 1
                        for nc in remote_clients)
         )
         assert search_res[0] is None and search_thread.is_alive()
         # Coordinator should not be blocked
-        assert coordinator.info("SEARCH")["search_fulltext_query_blocked_count"] == 0
+        assert coordinator.info("SEARCH")["search_text_query_blocked_count"] == 0
 
         for nc in remote_clients:
             nc.execute_command("FT._DEBUG PAUSEPOINT RESET mutation_processing")
@@ -309,6 +309,7 @@ class TestFullTextInFlightBlockingCME(ValkeySearchClusterTestCaseDebugMode):
         result = search_res[0]
         assert result[0] == 1
         assert result[1] == coordinator_key.encode()
+        assert result[2] == [b"content", b"hello coordinator"]
 
     def test_blocking_only_on_coordinator(self):
         """Test when coordinator is blocked but remote nodes are not blocked."""
@@ -346,12 +347,12 @@ class TestFullTextInFlightBlockingCME(ValkeySearchClusterTestCaseDebugMode):
             lambda: coordinator.execute_command("FT.SEARCH", "idx", "@content:hello")
         )
         waiters.wait_for_true(
-            lambda: coordinator.info("SEARCH")["search_fulltext_query_blocked_count"] >= 1
+            lambda: coordinator.info("SEARCH")["search_text_query_blocked_count"] >= 1
         )
         assert search_res[0] is None and search_thread.is_alive()
         # Remote nodes should not be blocked
         for nc in remote_clients:
-            assert nc.info("SEARCH")["search_fulltext_query_blocked_count"] == 0
+            assert nc.info("SEARCH")["search_text_query_blocked_count"] == 0
 
         coordinator.execute_command("FT._DEBUG PAUSEPOINT RESET mutation_processing")
         hset_thread.join()
@@ -362,3 +363,66 @@ class TestFullTextInFlightBlockingCME(ValkeySearchClusterTestCaseDebugMode):
         result = search_res[0]
         assert result[0] == len(remote_keys)
         assert set(result[1::2]) == {k.encode() for k in remote_keys}
+        for fields in result[2::2]:
+            assert fields == [b"content", b"hello remote"]
+
+    def test_fulltext_data_correctness_cluster_with_inflight_mutation(self):
+        """Test that full-text query results are correct in cluster mode when mutations
+        are in-flight, without asserting on the blocking mechanism itself."""
+        client: Valkey = self.client_for_primary(0)
+        cluster_client: ValkeyCluster = self.new_cluster_client()
+        primary_clients = self.get_all_primary_clients()
+        num_shards = len(primary_clients)
+
+        shard_keys = self._find_shard_keys(primary_clients)
+        assert len(shard_keys) == num_shards
+
+        client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:",
+            "SCHEMA", "content", "TEXT"
+        )
+        for i, key in enumerate(shard_keys):
+            cluster_client.execute_command("HSET", key, "content", f"hello world {i}")
+        IndexingTestHelper.wait_for_indexing_complete_on_all_nodes(primary_clients, "idx")
+        assert client.execute_command("FT.SEARCH", "idx", "@content:hello")[0] == num_shards
+
+        # Pause mutation processing on all nodes
+        for nc in primary_clients:
+            nc.execute_command("FT._DEBUG PAUSEPOINT SET mutation_processing")
+
+        # Update all documents to remove "hello"
+        hset_threads = []
+        for key in shard_keys:
+            t, _, _ = run_in_thread(
+                lambda k=key: cluster_client.execute_command("HSET", k, "content", "updated")
+            )
+            hset_threads.append(t)
+
+        waiters.wait_for_true(
+            lambda: all(nc.execute_command("FT._DEBUG PAUSEPOINT TEST mutation_processing") > 0
+                       for nc in primary_clients),
+        )
+
+        # Search while mutations are in-flight — only verify data correctness
+        search_thread, search_res, search_err = run_in_thread(
+            lambda: client.execute_command("FT.SEARCH", "idx", "@content:hello")
+        )
+
+        # Wait for search to be dispatched and blocked before releasing,
+        # to avoid a race where pausepoints are released mid-dispatch.
+        waiters.wait_for_true(
+            lambda: all(nc.info("SEARCH")["search_text_query_blocked_count"] >= 1
+                       for nc in primary_clients)
+        )
+
+        # Release all pausepoints and let everything complete
+        for nc in primary_clients:
+            nc.execute_command("FT._DEBUG PAUSEPOINT RESET mutation_processing")
+        for t in hset_threads:
+            t.join()
+        search_thread.join()
+
+        assert search_err[0] is None
+        # After mutations complete, no document contains "hello"
+        result = search_res[0]
+        assert result[0] == 0

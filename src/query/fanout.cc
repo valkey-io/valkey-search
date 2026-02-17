@@ -68,6 +68,18 @@ struct NeighborComparator {
 // the top k results to the callback.
 struct SearchPartitionResultsTracker {
   absl::Mutex mutex;
+  // Holds the LocalResponderSearch after it completes, keeping its
+  // SearchParameters fields (return_attributes, sortby_parameter, etc.) alive.
+  // Neighbors moved from the local search into `results` contain RecordsMap
+  // entries whose string_view keys point into those fields. Without this, the
+  // LocalResponderSearch would be destroyed immediately after adding its
+  // results to the tracker, leaving dangling string_view keys that are read
+  // when the priority queue reallocates (triggering absl::flat_hash_map rehash
+  // on move).
+  //
+  // Since there can only be a single LocalResponder, this doesn't need a lock.
+  //
+  std::unique_ptr<SearchParameters> local_responder_;
   std::priority_queue<indexes::Neighbor, std::vector<indexes::Neighbor>,
                       NeighborComparator>
       results ABSL_GUARDED_BY(mutex);
@@ -218,6 +230,18 @@ class LocalResponderSearch : public query::SearchParameters {
           << "Error during local handling of FT.SEARCH: "
           << search_result.status.message();
     }
+    // Stash `self` (the LocalResponderSearch) in the tracker so that its
+    // SearchParameters fields outlive the Neighbor entries moved into
+    // `results` above. Those entries' RecordsMaps contain string_view keys
+    // that reference data owned by this SearchParameters object.
+    //
+    // We must break the circular reference first: this LocalResponderSearch
+    // holds a shared_ptr to the tracker, so storing `self` in the tracker
+    // would create a cycle (tracker -> self -> tracker). Copy the shared_ptr
+    // to a local, clear the member, then stash.
+    auto tracker_copy = tracker;
+    tracker.reset();
+    tracker_copy->parameters->local_responder_ = std::move(self);
   }
 };
 

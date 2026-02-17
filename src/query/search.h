@@ -237,6 +237,13 @@ struct SearchParameters {
   // resolution due to contention with in-flight mutations.
   unsigned int content_resolution_blocked_{0};
 
+  // In CME, when a LocalResponderSearch is used, the neighbors of that
+  // operation get moved into this operation. But the neighbors has string_view
+  // references into the return_attributes of the owning operation. So in order
+  // to avoid a use-after-free we retain the LocalResponderSearch until this
+  // operation is destroyed.
+  std::unique_ptr<SearchParameters> local_responder_;
+
   SearchParameters() = default;
   SearchParameters(uint64_t timeout_ms, cancel::Token token, uint32_t db_num)
       : timeout_ms(timeout_ms), cancellation_token(token), db_num_(db_num) {}

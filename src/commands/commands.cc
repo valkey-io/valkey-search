@@ -12,7 +12,6 @@
 
 #include "fanout.h"
 #include "ft_create_parser.h"
-#include "ft_search_parser.h"
 #include "src/acl.h"
 #include "src/commands/ft_search.h"
 #include "src/metrics.h"
@@ -23,6 +22,7 @@
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/cluster_map.h"
 #include "vmsdk/src/debug.h"
+#include "vmsdk/src/info.h"
 #include "vmsdk/src/utils.h"
 
 namespace valkey_search {
@@ -185,7 +185,8 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
       return query::fanout::PerformSearchFanoutAsync(
           ctx, search_targets,
           ValkeySearch::Instance().GetCoordinatorClientPool(),
-          std::move(parameters), ValkeySearch::Instance().GetReaderThreadPool());
+          std::move(parameters),
+          ValkeySearch::Instance().GetReaderThreadPool());
     }
     return query::SearchAsync(std::move(parameters),
                               ValkeySearch::Instance().GetReaderThreadPool(),

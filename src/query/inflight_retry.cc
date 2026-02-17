@@ -18,7 +18,7 @@ InFlightRetryContext::InFlightRetryContext(
     : parameters_(std::move(params)) {}
 
 void InFlightRetryContext::ProcessRetry() {
-  auto& params = parameters_->GetParameters();
+  auto &params = parameters_->GetParameters();
   if (params.cancellation_token->IsCancelled()) {
     VMSDK_LOG(DEBUG, nullptr)
         << "In-flight retry cancelled for " << parameters_->GetDesc();
@@ -26,10 +26,8 @@ void InFlightRetryContext::ProcessRetry() {
     return;
   }
 
-  auto& neighbors = parameters_->GetNeighbors();
-
   // Try to register with a conflicting mutation entry
-  if (params.index_schema->RegisterWaitingQuery(neighbors,
+  if (params.index_schema->RegisterWaitingQuery(parameters_->GetNeighbors(),
                                                 shared_from_this())) {
     if (!blocked_) {
       blocked_ = true;
@@ -44,12 +42,12 @@ void InFlightRetryContext::ProcessRetry() {
   // No conflicts - complete the query
   VMSDK_LOG(DEBUG, nullptr)
       << "In-flight retry complete for " << parameters_->GetDesc();
-  parameters_->OnComplete(neighbors);
+  parameters_->OnComplete();
 }
 
 void InFlightRetryContext::OnMutationComplete() { ScheduleOnMainThread(); }
 
-const std::vector<indexes::Neighbor>& InFlightRetryContext::GetNeighbors()
+const std::vector<indexes::Neighbor> &InFlightRetryContext::GetNeighbors()
     const {
   return parameters_->GetNeighbors();
 }

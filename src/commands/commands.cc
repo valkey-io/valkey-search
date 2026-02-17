@@ -59,7 +59,7 @@ class InitiatorSearch : public query::SearchParameters {
     return result->search_result->neighbors;
   }
 
-  void OnComplete(std::vector<indexes::Neighbor> &neighbors) override {
+  void OnComplete() override {
     blocked_client.SetReplyPrivateData(result.release());
   }
 

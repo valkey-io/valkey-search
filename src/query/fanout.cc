@@ -193,28 +193,28 @@ struct SearchPartitionResultsTracker {
 class LocalResponderSearch : public query::SearchParameters {
  public:
   std::shared_ptr<SearchPartitionResultsTracker> tracker;
-  std::vector<indexes::Neighbor> neighbors;
-  size_t total_count;
+  query::SearchResult result;
 
   LocalResponderSearch(std::shared_ptr<SearchPartitionResultsTracker> trk,
                        std::unique_ptr<SearchParameters> &&params,
-                       std::vector<indexes::Neighbor> &&nbrs, size_t count)
+                       query::SearchResult &&res)
       : query::SearchParameters(std::move(*params)),
         tracker(std::move(trk)),
-        neighbors(std::move(nbrs)),
-        total_count(count) {}
+        result(std::move(res)) {}
 
   const char *GetDesc() const override { return "local-responder"; }
-  std::vector<indexes::Neighbor> &GetNeighbors() override { return neighbors; }
+  std::vector<indexes::Neighbor> &GetNeighbors() override {
+    return result.neighbors;
+  }
 
-  void OnComplete(std::vector<indexes::Neighbor> &neighbors) override {
-    tracker->AddResults(neighbors);
-    tracker->AddTotalCount(total_count);
+  void OnComplete() override {
+    tracker->AddResults(result.neighbors);
+    tracker->AddTotalCount(result.total_count);
   }
 
   void OnCancelled() override {
     if (enable_partial_results) {
-      OnComplete(neighbors);
+      OnComplete();
     }
   }
 };
@@ -341,8 +341,7 @@ absl::Status PerformSearchFanoutAsync(
             if (!parameters->no_content &&
                 query::QueryHasTextPredicate(*parameters)) {
               auto local_responder = std::make_unique<LocalResponderSearch>(
-                  tracker, std::move(parameters), std::move(result->neighbors),
-                  result->total_count);
+                  tracker, std::move(parameters), std::move(*result));
               auto retry_ctx = std::make_shared<query::InFlightRetryContext>(
                   std::move(local_responder));
               retry_ctx->ScheduleOnMainThread();

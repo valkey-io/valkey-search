@@ -442,7 +442,7 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     return ListConfigsCmd(ctx, itr);
   } else {
     return absl::InvalidArgumentError(absl::StrCat(
-        "Unknown subcommand: ", *itr.GetStringView(), " try HELP subcommand"));
+        "Unknown subcommand: ", keyword, ", try HELP subcommand"));
   }
 }
 

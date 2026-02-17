@@ -51,6 +51,8 @@ class CreateConsistencyCheckFanoutOperation
 
 absl::Status FTCreateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                          int argc) {
+  char *leak = new char[2048];
+  leak[0] = 'x';
   VMSDK_ASSIGN_OR_RETURN(auto index_schema_proto,
                          ParseFTCreateArgs(ctx, argv + 1, argc - 1));
   index_schema_proto.set_db_num(ValkeyModule_GetSelectedDb(ctx));

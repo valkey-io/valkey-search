@@ -193,11 +193,13 @@ void ApplySortingWithParams(std::vector<indexes::Neighbor> &neighbors,
   if (neighbors.empty()) return;
 
   auto index_result = index_schema->GetIndex(sortby.field);
-  bool is_numeric = index_result.ok() &&
+  bool is_numeric =
+      index_result.ok() &&
       index_result.value()->GetIndexerType() == indexes::IndexerType::kNumeric;
-  
+
   auto compare = [&](const indexes::Neighbor &a, const indexes::Neighbor &b) {
-    if (!a.attribute_contents.has_value() || !b.attribute_contents.has_value()) {
+    if (!a.attribute_contents.has_value() ||
+        !b.attribute_contents.has_value()) {
       return false;
     }
     auto it_a = a.attribute_contents->find(sortby.field);

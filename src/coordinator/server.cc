@@ -159,8 +159,8 @@ class RemoteResponderSearch : public query::SearchParameters {
     query::ProcessNeighborsForReply(ctx.get(), attribute_data_type, neighbors,
                                     *this, vector_identifier);
     if (sortby_parameter.has_value() && !neighbors.empty()) {
-      ApplySortingWithParams(neighbors, index_schema,
-                             sortby_parameter.value(), limit);
+      ApplySortingWithParams(neighbors, index_schema, sortby_parameter.value(),
+                             limit);
     }
     // Adjust total_count based on modified neighbours
     size_t removed = original_size - neighbors.size();

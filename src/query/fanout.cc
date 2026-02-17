@@ -80,7 +80,6 @@ struct SearchPartitionResultsTracker {
   int outstanding_requests ABSL_GUARDED_BY(mutex);
   query::SearchResponseCallback callback;
   std::unique_ptr<SearchParameters> parameters ABSL_GUARDED_BY(mutex);
-  std::atomic_bool reached_oom{false};
   std::atomic_bool consistency_failed{false};
   std::atomic<size_t> accumulated_total_count{0};
   std::optional<query::SortByParameter> sortby_parameter;
@@ -268,13 +267,15 @@ absl::Status PerformSearchFanoutAsync(
   size_t N = search_targets.size();
   uint64_t K = parameters->limit.first_index + parameters->limit.number;
   if (parameters->IsNonVectorQuery()) {
+    // For non vector, use the LIMIT based range. Ensure we fetch enough
+    // results to cover offset + number.
     uint64_t limit_per_shard = (K / N) + ((100 - U) * (K - (K / N)) / 100);
     request->mutable_limit()->set_first_index(0);
     request->mutable_limit()->set_number(limit_per_shard);
     if (sortby_parameter.has_value()) {
-      // Fetch enough results from each shard to cover the global top N
-      // In the worst case, all top N results could come from a single shard,
-      // so we need to fetch at least N from each shard.
+      // For SORTBY, fetch enough results from each shard to cover the global
+      // top N. In the worst case, all top N results could come from a single
+      // shard, so we need to fetch at least N from each shard.
       request->mutable_limit()->set_number(K);
     }
   } else {

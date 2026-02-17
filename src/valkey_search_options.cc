@@ -371,8 +371,8 @@ static auto drain_mutation_queue_on_save =
     config::BooleanBuilder(kDrainMutationQueueOnSaveConfig, false).Build();
 
 /// Register the "fanout-data-uniformity" flag
-/// U = uniformity (0-100): 100 = uniform distribution, 0 = all data in one shard
-/// Formula: limit_per_shard = (K/N) + ((100-U) * (K - K/N) / 100)
+/// U = uniformity (0-100): 100 = uniform distribution, 0 = all data in one
+/// shard Formula: limit_per_shard = (K/N) + ((100-U) * (K - K/N) / 100)
 constexpr absl::string_view kFanoutDataUniformityConfig{
     "fanout-data-uniformity"};
 constexpr uint32_t kDefaultFanoutDataUniformity{100};

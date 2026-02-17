@@ -26,12 +26,10 @@ namespace valkey_search::indexes::text {
 ProximityIterator::ProximityIterator(
     absl::InlinedVector<std::unique_ptr<TextIterator>,
                         kProximityTermsInlineCapacity>&& iters,
-    std::optional<uint32_t> slop, bool in_order,
-    const InternedStringSet* untracked_keys, bool skip_positional_checks)
+    std::optional<uint32_t> slop, bool in_order, bool skip_positional_checks)
     : iters_(std::move(iters)),
       slop_(slop),
       in_order_(in_order),
-      untracked_keys_(untracked_keys),
       current_position_(std::nullopt),
       current_field_mask_(0ULL),
       skip_positional_checks_(skip_positional_checks) {

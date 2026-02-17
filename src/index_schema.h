@@ -345,6 +345,10 @@ class IndexSchema : public KeyspaceEventSubscription,
     return 0;
   }
 
+  const absl::flat_hash_map<std::string, Attribute> &GetAttributes() const {
+    return attributes_;
+  }
+
  protected:
   IndexSchema(ValkeyModuleCtx *ctx,
               const data_model::IndexSchema &index_schema_proto,

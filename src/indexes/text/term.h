@@ -44,8 +44,7 @@ class TermIterator : public TextIterator {
   TermIterator(
       absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>&&
           key_iterators,
-      const FieldMaskPredicate query_field_mask,
-      const InternedStringSet* untracked_keys, const bool require_positions,
+      const FieldMaskPredicate query_field_mask, const bool require_positions,
       const FieldMaskPredicate stem_field_mask = 0, bool has_original = false);
   /* Implementation of TextIterator APIs */
   FieldMaskPredicate QueryFieldMask() const override;
@@ -84,7 +83,6 @@ class TermIterator : public TextIterator {
   Key current_key_;
   std::optional<PositionRange> current_position_;
   FieldMaskPredicate current_field_mask_;
-  const InternedStringSet* untracked_keys_;
   const bool require_positions_;
   const bool has_original_;  // True if first iterator is for original word
   bool FindMinimumValidKey();

@@ -318,10 +318,9 @@ absl::Status PerformSearchFanoutAsync(
 
     request->mutable_limit()->set_first_index(0);
     request->mutable_limit()->set_number(limit_per_shard);
-    if (parameters->sortby_parameter.has_value()) {
-      // For SORTBY, fetch enough results from each shard to cover the global
-      // top N. In the worst case, all top N results could come from a single
-      // shard, so we need to fetch at least N from each shard.
+    if (parameters->RequiresCompleteResults()) {
+      // For sorting (FT.SEARCH SORTBY or FT.AGGREGATE SORTBY stage), fetch K from each shard.
+      // Worst case: all top K results come from a single shard.
       request->mutable_limit()->set_number(K);
     }
   } else {

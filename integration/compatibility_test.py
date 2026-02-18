@@ -457,6 +457,14 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
 
         data_set = next_data_set
 
+    # Set fanout-data-uniformity to 0 on all nodes.
+    # This ensures we handle the case where all data is on one node.
+    for node_client in test_case.get_all_primary_clients():
+        try:
+            node_client.execute_command("CONFIG", "SET", "search.fanout-data-uniformity", "0")
+        except Exception as e:
+            print(f"⚠ Failed to set search.fanout-data-uniformity config: {e}")
+            assert False, "Failed to set search.fanout-data-uniformity config, cannot continue with test execution"
     result = {}
     try:
         print(

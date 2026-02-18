@@ -8,6 +8,7 @@
 #include <absl/base/no_destructor.h>
 #include <absl/strings/ascii.h>
 #include <absl/strings/str_format.h>
+#include <absl/strings/str_join.h>
 
 #include "module_config.h"
 #include "src/coordinator/metadata_manager.h"
@@ -273,28 +274,164 @@ absl::Status IndexInfoCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
   auto indexes = SchemaManager::Instance().GetIndexDebugInfo();
   // Reply with array of strings, one per index
   ValkeyModule_ReplyWithArray(ctx, indexes.size());
+  // Helper lambda to format bytes in human-readable form
+  auto format_bytes = [](uint64_t bytes) -> std::string {
+    if (bytes < 1024) {
+      return absl::StrFormat("%dB", bytes);
+    } else if (bytes < 1024 * 1024) {
+      return absl::StrFormat("%.1fKB", bytes / 1024.0);
+    } else if (bytes < 1024 * 1024 * 1024) {
+      return absl::StrFormat("%.1fMB", bytes / (1024.0 * 1024.0));
+    } else {
+      return absl::StrFormat("%.1fGB", bytes / (1024.0 * 1024.0 * 1024.0));
+    }
+  };
 
   for (const auto &info : indexes) {
     std::string vector_details;
-    // Get vector field details if any
-    if (info.vector_count > 0 && info.schema) {
-      const int attr_count = info.schema->GetAttributeCount();
-      if (info.vector_count > 0) {
-        vector_details =
-            absl::StrFormat("[Vector Fields:%d]", info.vector_count);
+    std::string text_details;
+    std::string tag_details;
+    uint64_t numeric_memory = 0;
+    
+    // Extract detailed information from proto if schema is available
+    if (info.schema) {
+      std::vector<std::string> vector_info_list;
+      std::vector<std::string> text_info_list;
+      std::vector<std::string> tag_info_list;
+      
+      // Get schema proto representation
+      auto schema_proto = info.schema->ToProto();
+      
+      // Iterate through attributes in proto
+      for (const auto& attr : schema_proto->attributes()) {
+        if (!attr.has_index()) {
+          continue;
+        }
+        
+        const auto& index = attr.index();
+        const std::string& alias = attr.alias();
+        
+        // Get memory usage for this attribute
+        uint64_t memory = info.schema->GetSize(alias);
+        std::string mem_str = format_bytes(memory);
+        
+        // Vector fields
+        if (index.has_vector_index()) {
+          const auto& vector_index = index.vector_index();
+          
+          // Determine algorithm type and build details
+          std::string algo_details;
+          if (vector_index.has_hnsw_algorithm()) {
+            const auto& hnsw = vector_index.hnsw_algorithm();
+            algo_details = absl::StrFormat("HNSW M:%d EfC:%d EfR:%d",
+                                          hnsw.m(), hnsw.ef_construction(), 
+                                          hnsw.ef_runtime());
+          } else if (vector_index.has_flat_algorithm()) {
+            const auto& flat = vector_index.flat_algorithm();
+            algo_details = absl::StrFormat("FLAT BlkSz:%d", flat.block_size());
+          } else {
+            algo_details = "UNKNOWN";
+          }
+          
+          // Get distance metric string
+          auto metric_str = indexes::LookupKeyByValue(
+              *indexes::kDistanceMetricByStr, vector_index.distance_metric());
+          
+          // Build complete vector info string with memory
+          vector_info_list.push_back(
+              absl::StrFormat("%s Dim:%d Metric:%s Mem:%s", 
+                            algo_details, vector_index.dimension_count(), 
+                            metric_str, mem_str));
+        }
+        
+        // Text fields
+        if (index.has_text_index()) {
+          const auto& text_index = index.text_index();
+          text_info_list.push_back(
+              absl::StrFormat("Weight:%.1f Stem:%s SuffixTrie:%s Mem:%s",
+                            text_index.weight(),
+                            text_index.no_stem() ? "false" : "true",
+                            text_index.with_suffix_trie() ? "true" : "false",
+                            mem_str));
+        }
+        
+        // Tag fields
+        if (index.has_tag_index()) {
+          const auto& tag_index = index.tag_index();
+          std::string sep = tag_index.separator().empty() ? "," : tag_index.separator();
+          tag_info_list.push_back(
+              absl::StrFormat("Sep:'%s' CaseSens:%s Mem:%s",
+                            sep,
+                            tag_index.case_sensitive() ? "true" : "false",
+                            mem_str));
+        }
+        
+        // Numeric fields - accumulate memory
+        if (index.has_numeric_index()) {
+          numeric_memory += memory;
+        }
+      }
+      
+      // Format vector fields
+      if (!vector_info_list.empty()) {
+        vector_details = absl::StrFormat("[%s]", 
+                                        absl::StrJoin(vector_info_list, ", "));
+      } else if (info.vector_count > 0) {
+        vector_details = absl::StrFormat("[Vector Fields:%d]", info.vector_count);
+      }
+      
+      // Format text fields
+      if (!text_info_list.empty()) {
+        text_details = absl::StrFormat("[%s]", 
+                                      absl::StrJoin(text_info_list, ", "));
+      }
+      
+      // Format tag fields
+      if (!tag_info_list.empty()) {
+        tag_details = absl::StrFormat("[%s]", 
+                                     absl::StrJoin(tag_info_list, ", "));
       }
     }
+    
+    // Build output string
     std::string output =
         absl::StrFormat("db-%d:index_%lu %s Prefixes(%zu)", info.db_num,
                         info.fingerprint, info.datatype, info.prefix_count);
+    
     // Add vector details if present
     if (!vector_details.empty()) {
       output += " Vector: " + vector_details;
     }
-    // Add non-vector field counts
-    output +=
-        absl::StrFormat(" NonVectorFields: Numerics:%d Tags:%d Text:%d",
-                        info.numeric_count, info.tag_count, info.text_count);
+    
+    // Add text details if present
+    if (info.text_count > 0) {
+      if (!text_details.empty()) {
+        output += absl::StrFormat(" Text(%d): %s", info.text_count, text_details);
+      } else {
+        output += absl::StrFormat(" Text:%d", info.text_count);
+      }
+    }
+    
+    // Add tag details if present
+    if (info.tag_count > 0) {
+      if (!tag_details.empty()) {
+        output += absl::StrFormat(" Tag(%d): %s", info.tag_count, tag_details);
+      } else {
+        output += absl::StrFormat(" Tag:%d", info.tag_count);
+      }
+    }
+    
+    // Add numeric count with memory if present
+    if (info.numeric_count > 0) {
+      if (numeric_memory > 0) {
+        output += absl::StrFormat(" Numeric(%d): [Mem:%s]", 
+                                 info.numeric_count, 
+                                 format_bytes(numeric_memory));
+      } else {
+        output += absl::StrFormat(" Numeric:%d", info.numeric_count);
+      }
+    }
+    
     ValkeyModule_ReplyWithSimpleString(ctx, output.c_str());
   }
 
@@ -371,7 +508,7 @@ absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
        "Show redacted overview of index information for all indexes"},
       {"FT_DEBUG SHOW_METADATA",
        "list internal metadata manager table namespace"},
-      {"FT_DEBUG SHOW_INDEXSCHEMAS", "list internal index schema tables"},
+      {"FT._DEBUG SHOW_INDEXSCHEMAS", "list internal index schema tables"},
       {"FT._DEBUG LIST_METRICS [APP|DEV] [NAMES_ONLY]",
        "List all APP or DEV metrics with optional names-only format"},
       {"FT._DEBUG LIST_CONFIGS [VERBOSE] [APP|DEV|HIDDEN]",

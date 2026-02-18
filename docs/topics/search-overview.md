@@ -12,13 +12,22 @@ Query expressions are constructed like a filter that uses the data in the column
 
 Indexes exist separate from the Valkey database. Updates of the database trigger updates of one or more indexes which are done by background threads. Query operations are also performed by background threads optionally switching to the main thread in order to access the Valkey database. The consistency model between these two domains is further described below.
 
-Indexes are created through the [`FT.CREATE`](../commands/ft.create.md) command which defines the rows and columns of the table-like abstraction. The command creates an empty index which can then be populated with data. Applications don't directly put data into an index, rather mutation operations on keys within the declared keyspace of an index automatically update the index with the value of that key. In other words, on an index of hash keys, a command like `HSET` which modifies a key causes any index which includes that key to automatically be updated.
+Indexes are created through the [`FT.CREATE`](../commands/ft.create.md) command which defines the rows and columns of the table-like abstraction. The command creates an empty index which can then be populated with data. Applications don't directly put data into an index, rather mutation operations on keys within the declared keyspace of an index automatically update the index with the value of that key. This update operation happens at the key level, i.e., even if only part of a key is mutated, the entire key is updated in the index. In other words, on an index of hash keys, a command like `HSET` which modifies a field of a key causes the entire key to be updated.
 
 # Data Ingestion
 
 Index updates are side effects of data mutation, based on prefix matching. A Valkey keyspace notification is used to capture a copy of the data associated with a key mutation. If this key belongs to multiple indexes, then the captured data goes into the mutation queue for each index independently. The client which executed the mutation command is blocked until all indexes are updated.
 
 Processing of the mutation queue does not respect the order of mutations. If multiple clients are updating different keys the updates may happen in any order not necessarily related to the order in which the mutation commands were executed. If a previous update for the same key is already in the mutation queue then these can be combined. An exception to the reordering rules applies to keys which are updated as part of a multi/exec block or a Lua script. These keys are always ingested as a group which cannot be split or reordered.
+
+# Index Creation and Backfill
+
+The automatic ingestion only applies to keys which are modified _after_ the creation of an index. But what about keys that exist _before_ the creation of an index? These keys cannot be instantly inserted into the index. By default, the creation of an index initiates an internal background process which scans the keyspace to locate and insert preexisting keys into the index. This process, known as backfilling, can be monitored via the `FT.INFO` command. The backfill process runs once after the creation of the index. Once it has completed it will not be initiated again. The backfill process does not directly change the behavior of an index. Applications may continue to modify indexed keys and they will be updated in the same way as if no backfill was executing. Query operations can freely be executed, but will only contain the results from keys which are currently in the index, i.e., all keys modified after creation of the index and _some_ of the keys that existed before creation of the index.
+
+The backfill process can be quite lengthy on a large system even if no keys are found. The backfill process can be suppressed by specifying the `SKIPINITIALSCAN` option on the `FT.CREATE` command. Applications that know _a priori_ that no preexisting keys exist or exist and need not be put into the index can specify this option as an optimization.
+
+The snapshot process (save or full sync) only partially preserves the state of the backfilling process. The process is able to save the fact that a backfill is in progress, but does not save the backfill cursor (because a `SCAN` cursor isn't valid across reloads).
+Thus on reload a backfilling index must restart the backfill at the begining. However, because the indexes for vector fields are saved and restored, the of vector fields (the really slow part) is preserved.
 
 # Query Operations
 
@@ -27,6 +36,11 @@ Query commands operate by blocking the client and sending the query to the backg
 # Save/Restore
 
 A generated RDB file (either due to an explicit save or full-sync operation) contains index definitions (index metadata), any vector field indexes, and a list of the keys currently in the index. On a load operation, each index is recreated from the definitions, any vector field indexes are reloaded, and any non-vector fields are rebuilt from the loaded Valkey database using the list of keys. If the index had a backfill in progress at the time of the save, then on completion of a load a backfill will be initiated for it.
+
+# Index Replication
+
+Indexes are node-local. Each node, regardless of whether it's a primary or a replica maintains its own index independently. Indexes on replicas are updated by key mutations transmitted on the replication channel and thus are subject to replication lag just like the Valkey database itself.
+No additional replication channel traffic is generated for updates. The index backfill process is also node-local, meaning just because one node (a primary) in a replication group has completed its backfill the other nodes may not have.
 
 # Cluster Mode
 

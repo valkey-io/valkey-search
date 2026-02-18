@@ -43,7 +43,7 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::query {
-class InFlightRetryContext;
+struct SearchParameters;
 }  // namespace valkey_search::query
 
 namespace valkey_search {
@@ -232,8 +232,7 @@ class IndexSchema : public KeyspaceEventSubscription,
     std::optional<absl::flat_hash_map<std::string, AttributeData>> attributes;
     std::vector<vmsdk::BlockedClient> blocked_clients;
     // Queries waiting for this mutation to complete
-    absl::flat_hash_set<std::shared_ptr<query::InFlightRetryContext>>
-        waiting_queries;
+    std::vector<std::unique_ptr<query::SearchParameters>> waiting_queries;
     MutationSequenceNumber sequence_number{0};
     bool consume_in_progress{false};
     bool from_backfill{false};
@@ -251,11 +250,14 @@ class IndexSchema : public KeyspaceEventSubscription,
   uint64_t GetBackfillScannedKeyCount() const;
   uint64_t GetBackfillDbSize() const;
   InfoIndexPartitionData GetInfoIndexPartitionData() const;
-  // Register a waiting query on the first conflicting in-flight key.
-  // Returns true if registered (conflict found), false otherwise.
-  bool RegisterWaitingQuery(
+  // Check neighbors for contention with in-flight mutations by comparing
+  // sequence numbers. Only neighbors whose db and index sequence numbers
+  // differ are checked against the mutation queue. If contention is found,
+  // params is moved into the mutation queue and true is returned.
+  // Otherwise params is untouched and false is returned.
+  bool PerformKeyContentionCheck(
       const std::vector<indexes::Neighbor> &neighbors,
-      std::shared_ptr<query::InFlightRetryContext> query_ctx)
+      std::unique_ptr<query::SearchParameters> &&params)
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
 
   static absl::Status TextInfoCmd(ValkeyModuleCtx *ctx,
@@ -270,6 +272,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   };
 
   MutationSequenceNumber GetIndexMutationSequenceNumber(const Key &key) const {
+    absl::MutexLock lock(&mutated_records_mutex_);
     auto itr = index_key_info_.find(key);
     CHECK(itr != index_key_info_.end()) << "Key not found: " << key->Str();
     return itr->second.mutation_sequence_number_;

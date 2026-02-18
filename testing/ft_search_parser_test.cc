@@ -22,6 +22,7 @@
 #include "gtest/gtest.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/numeric.h"
+#include "src/indexes/tag.h"
 #include "src/indexes/vector_flat.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
@@ -71,7 +72,7 @@ struct FTSearchParserTestCase {
   bool vector_query{true};
   bool verbatim{false};
   bool inorder{false};
-  std::optional<unsigned> slop{};
+  std::optional<unsigned> slop;
   // SORTBY test fields
   std::string sortby_parameters_str;
   std::string sortby_field;

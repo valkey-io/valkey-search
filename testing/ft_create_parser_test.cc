@@ -41,9 +41,13 @@ const std::vector<std::string> kDefStopWords{
     "of",   "on",   "or",  "such", "that", "their", "then", "there", "these",
     "they", "this", "to",  "was",  "will", "with"};
 
+// Default punctuation
+constexpr absl::string_view kDefPunctuation =
+    ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|?";
+
 struct ExpectedPerIndexTextParameters {
   std::string punctuation =
-      ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|";                  // Default punctuation
+      ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|?";                 // Default punctuation
   std::vector<std::string> stop_words = {kDefStopWords};  // Default stop words
   data_model::Language language = data_model::Language::LANGUAGE_ENGLISH;
   bool with_offsets = true;
@@ -1164,7 +1168,7 @@ INSTANTIATE_TEST_SUITE_P(
                      .indexer_type = indexes::IndexerType::kText,
                  }},
                  .per_index_text_params = {
-                     .punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|",
+                     .punctuation = std::string(kDefPunctuation),
                      .stop_words = {},  // Empty due to NOSTOPWORDS
                      .language = data_model::Language::LANGUAGE_ENGLISH,
                      .with_offsets = true,
@@ -1194,7 +1198,7 @@ INSTANTIATE_TEST_SUITE_P(
                      .indexer_type = indexes::IndexerType::kText,
                  }},
                  .per_index_text_params = {
-                     .punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|",
+                     .punctuation = std::string(kDefPunctuation),
                      .stop_words = {},  // Empty due to STOPWORDS 0
                      .language = data_model::Language::LANGUAGE_ENGLISH,
                      .with_offsets = true,
@@ -1368,7 +1372,7 @@ INSTANTIATE_TEST_SUITE_P(
                     .indexer_type = indexes::IndexerType::kText,
                 }},
                 .per_index_text_params = {
-                    .punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|",
+                    .punctuation = std::string(kDefPunctuation),
                     .stop_words = {kDefStopWords},
                     .language = data_model::Language::LANGUAGE_ENGLISH,
                     .with_offsets = false,  // NOOFFSETS should set this to false
@@ -1435,7 +1439,7 @@ INSTANTIATE_TEST_SUITE_P(
                      .indexer_type = indexes::IndexerType::kText,
                  }},
                  .per_index_text_params = {
-                     .punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|",
+                     .punctuation = std::string(kDefPunctuation),
                      .stop_words = {kDefStopWords},
                      .language = data_model::Language::LANGUAGE_ENGLISH,
                      .with_offsets = false,
@@ -1468,7 +1472,7 @@ INSTANTIATE_TEST_SUITE_P(
                     .indexer_type = indexes::IndexerType::kText,
                 }},
                 .per_index_text_params = {
-                    .punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|",
+                    .punctuation = std::string(kDefPunctuation),
                     .stop_words = {"a", "an", "and", "are", "as", "at", "be", "but", "by", "for"},
                     .language = data_model::Language::LANGUAGE_ENGLISH,
                     .with_offsets = true,

@@ -25,8 +25,6 @@ constexpr size_t kProximityTermsInlineCapacity = 64;
 #include "absl/synchronization/mutex.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/text/posting.h"
-#include "src/indexes/text/proximity.h"
-#include "src/indexes/text/term.h"
 #include "src/indexes/text/text_fetcher.h"
 #include "src/indexes/text/text_index.h"
 #include "src/query/predicate.h"
@@ -83,6 +81,13 @@ class Text : public IndexBase {
   bool IsUnTracked(const InternedStringPtr& key) const override {
     absl::MutexLock lock(&index_mutex_);
     return untracked_keys_.contains(key);
+  }
+
+  void UnTrack(const InternedStringPtr& key) override
+      ABSL_LOCKS_EXCLUDED(index_mutex_) {
+    CHECK(!IsTracked(key));
+    absl::MutexLock lock(&index_mutex_);
+    untracked_keys_.insert(key);
   }
 
   absl::Status ForEachUnTrackedKey(

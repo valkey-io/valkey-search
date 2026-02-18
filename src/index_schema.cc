@@ -43,7 +43,7 @@
 #include "src/indexes/vector_hnsw.h"
 #include "src/keyspace_event_manager.h"
 #include "src/metrics.h"
-#include "src/query/inflight_retry.h"
+#include "src/query/search.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
@@ -63,6 +63,11 @@
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
+namespace valkey_search::query {
+// Forward declaration to avoid circular dependency with content_resolution.
+void ResolveContent(std::unique_ptr<SearchParameters> params);
+}  // namespace valkey_search::query
+
 namespace valkey_search {
 
 LogLevel GetLogSeverity(bool ok) { return ok ? DEBUG : WARNING; }
@@ -71,11 +76,21 @@ LogLevel GetLogSeverity(bool ok) { return ok ? DEBUG : WARNING; }
 // Controls and stats for V2 RDB file
 //
 static auto config_rdb_write_v2 =
-    vmsdk::config::BooleanBuilder("rdb-write-v2", false).Dev().Build();
+    vmsdk::config::BooleanBuilder("rdb-write-v2", true).Dev().Build();
 static auto config_rdb_read_v2 =
-    vmsdk::config::BooleanBuilder("rdb-read-v2", false).Dev().Build();
+    vmsdk::config::BooleanBuilder("rdb-read-v2", true).Dev().Build();
 static auto config_rdb_validate_on_write =
     vmsdk::config::BooleanBuilder("rdb-validate-on-write", false).Dev().Build();
+
+namespace options {
+const vmsdk::config::Boolean &GetRdbWriteV2() {
+  return dynamic_cast<const vmsdk::config::Boolean &>(*config_rdb_write_v2);
+}
+
+const vmsdk::config::Boolean &GetRdbReadV2() {
+  return dynamic_cast<const vmsdk::config::Boolean &>(*config_rdb_read_v2);
+}
+}  // namespace options
 
 static bool RDBReadV2() {
   return dynamic_cast<vmsdk::config::Boolean &>(*config_rdb_read_v2).GetValue();
@@ -541,6 +556,7 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
     // Otherwise, it will be processed as a delete
     if (!record && !attribute.GetIndex()->IsTracked(interned_key) &&
         !InTrackedMutationRecords(interned_key, attribute.GetIdentifier())) {
+      attribute.GetIndex()->UnTrack(interned_key);
       continue;
     }
     if (!is_module_owned) {
@@ -874,6 +890,7 @@ void IndexSchema::ProcessSingleMutationAsync(ValkeyModuleCtx *ctx,
     }
     SyncProcessMutation(ctx, mutation_record.value(), key);
   } while (true);
+
   absl::MutexLock lock(&stats_.mutex_);
   --stats_.mutation_queue_size_;
   if (ABSL_PREDICT_FALSE(from_backfill)) {
@@ -1687,14 +1704,26 @@ vmsdk::BlockedClientCategory IndexSchema::GetBlockedCategoryFromProto() const {
   }
 }
 
-bool IndexSchema::RegisterWaitingQuery(
+bool IndexSchema::PerformKeyContentionCheck(
     const std::vector<indexes::Neighbor> &neighbors,
-    std::shared_ptr<query::InFlightRetryContext> query_ctx) {
-  absl::MutexLock lock(&mutated_records_mutex_);
+    std::unique_ptr<query::SearchParameters> &&params) {
+  vmsdk::VerifyMainThread();
+  const auto &dbkeyinfo_map = db_key_info_.Get();
   for (const auto &neighbor : neighbors) {
+    auto db_itr = dbkeyinfo_map.find(neighbor.external_id);
+    if (db_itr == dbkeyinfo_map.end() ||
+        db_itr->second.mutation_sequence_number_ == neighbor.sequence_number) {
+      continue;
+    }
+    // Sequence number mismatch — check the mutation queue for this key.
+    absl::MutexLock lock(&mutated_records_mutex_);
     auto itr = tracked_mutated_records_.find(neighbor.external_id);
     if (itr != tracked_mutated_records_.end()) {
-      itr->second.waiting_queries.insert(std::move(query_ctx));
+      if (params->content_resolution_blocked_++ == 0) {
+        ++Metrics::GetStats().text_query_blocked_cnt;
+      }
+      ++Metrics::GetStats().text_query_retry_cnt;
+      itr->second.waiting_queries.push_back(std::move(params));
       return true;
     }
   }
@@ -1783,8 +1812,7 @@ void IndexSchema::MarkAsDestructing() {
 
 std::optional<IndexSchema::MutatedAttributes>
 IndexSchema::ConsumeTrackedMutatedAttribute(const Key &key, bool first_time) {
-  absl::flat_hash_set<std::shared_ptr<query::InFlightRetryContext>>
-      queries_to_notify;
+  std::vector<std::unique_ptr<query::SearchParameters>> queries_to_notify;
   {
     absl::MutexLock lock(&mutated_records_mutex_);
     auto itr = tracked_mutated_records_.find(key);
@@ -1809,9 +1837,13 @@ IndexSchema::ConsumeTrackedMutatedAttribute(const Key &key, bool first_time) {
       return mutated_attributes;
     }
   }
-  // Notify waiting queries outside the lock
-  for (const auto &query_ctx : queries_to_notify) {
-    query_ctx->OnMutationComplete();
+  // Reschedule waiting queries outside the lock via ResolveContent
+  for (auto &params : queries_to_notify) {
+    vmsdk::RunByMain(
+        [p = std::move(params)]() mutable {
+          query::ResolveContent(std::move(p));
+        },
+        /*force_async=*/true);
   }
   return std::nullopt;
 }

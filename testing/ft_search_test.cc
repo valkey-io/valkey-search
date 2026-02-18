@@ -15,9 +15,11 @@
 #include <iostream>
 #include <iterator>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -601,6 +603,27 @@ TEST_P(FTSearchTest, FTSearchTests) {
   uint64_t initial_read_periods = mrmw_stats.read_periods;
   uint64_t initial_read_time = mrmw_stats.read_time_microseconds;
 
+  // When using thread pool, override EventLoopAddOneShot to capture callbacks
+  // so they can be drained on the main (test) thread, simulating the real
+  // Valkey event loop behavior. This is needed because SearchAsync dispatches
+  // content resolution via RunByMain, which must execute on the main thread.
+  std::mutex cb_mutex;
+  std::vector<std::pair<ValkeyModuleEventLoopOneShotFunc, void *>>
+      pending_oneshot_callbacks;
+  if (use_thread_pool) {
+    EXPECT_CALL(*kMockValkeyModule, EventLoopAddOneShot(testing::_, testing::_))
+        .WillRepeatedly(
+            [&](ValkeyModuleEventLoopOneShotFunc fn, void *data) -> int {
+              std::lock_guard<std::mutex> lock(cb_mutex);
+              pending_oneshot_callbacks.push_back({fn, data});
+              return 0;
+            });
+    // ResolveContent creates a thread-safe context for content resolution.
+    // Return fake_ctx_ so that OpenKey calls match existing test expectations.
+    EXPECT_CALL(*kMockValkeyModule, GetThreadSafeContext(testing::_))
+        .WillRepeatedly(testing::Return(&fake_ctx_));
+  }
+
   RE2 reply_regex(R"(\*3\r\n:1\r\n\+\d+\r\n\*2\r\n\+score\r\n\+.*\r\n)");
   uint64_t i = 0;
   for (auto &vector : vectors) {
@@ -639,7 +662,22 @@ TEST_P(FTSearchTest, FTSearchTests) {
               test_case.expected_run_return);
     if (use_thread_pool) {
       fake_ctx_.reply_capture.ClearReply();
-      search_done.WaitForNotification();
+      // Drain deferred EventLoopAddOneShot callbacks on the main (test) thread.
+      // This simulates the Valkey event loop running RunByMain callbacks
+      // (e.g., ResolveContent for content resolution after search completes).
+      while (!search_done.HasBeenNotified()) {
+        std::vector<std::pair<ValkeyModuleEventLoopOneShotFunc, void *>> to_run;
+        {
+          std::lock_guard<std::mutex> lock(cb_mutex);
+          to_run.swap(pending_oneshot_callbacks);
+        }
+        for (auto &[fn, data] : to_run) {
+          fn(data);
+        }
+        if (!search_done.HasBeenNotified() && to_run.empty()) {
+          std::this_thread::sleep_for(std::chrono::microseconds(100));
+        }
+      }
       EXPECT_CALL(*kMockValkeyModule, GetBlockedClientPrivateData(&fake_ctx_))
           .WillRepeatedly(testing::InvokeWithoutArgs(
               [&] { return private_data_external; }));

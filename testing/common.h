@@ -100,6 +100,7 @@ class MockIndex : public indexes::IndexBase {
               (const, override));
   MOCK_METHOD(bool, IsUnTracked, (const InternedStringPtr& key),
               (const, override));
+  MOCK_METHOD(void, UnTrack, (const InternedStringPtr& key), (override));
   MOCK_METHOD(
       (absl::Status), ForEachTrackedKey,
       (absl::AnyInvocable<absl::Status(const InternedStringPtr& key)> fn),
@@ -461,6 +462,23 @@ void WaitWorkerTasksAreCompleted(vmsdk::ThreadPool& mutations_thread_pool);
 
 inline auto VectorToStr = [](const std::vector<float>& v) {
   return absl::string_view((char*)v.data(), v.size() * sizeof(float));
+};
+
+class UnitTestSearchParameters : public query::SearchParameters {
+ public:
+  UnitTestSearchParameters() {
+    timeout_ms = 10000;
+    db_num = 0;
+    cancellation_token = cancel::Make(timeout_ms, nullptr);
+  }
+  void QueryCompleteBackground(
+      std::unique_ptr<SearchParameters> self) override {
+    CHECK(false);
+  }
+  void QueryCompleteMainThread(
+      std::unique_ptr<SearchParameters> self) override {
+    CHECK(false);
+  }
 };
 
 }  // namespace valkey_search

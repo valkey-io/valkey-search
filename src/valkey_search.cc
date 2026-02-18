@@ -878,16 +878,16 @@ static vmsdk::info_field::Integer pause_handle_cluster_message_round_cnt(
       return Metrics::GetStats().pause_handle_cluster_message_round_cnt;
     }));
 
-static vmsdk::info_field::Integer fulltext_query_blocked_count(
-    "query", "fulltext_query_blocked_count",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
-      return Metrics::GetStats().fulltext_query_blocked_cnt;
+static vmsdk::info_field::Integer text_query_blocked_count(
+    "query", "text_query_blocked_count",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().text_query_blocked_cnt;
     }));
 
-static vmsdk::info_field::Integer fulltext_query_retry_count(
-    "query", "fulltext_query_retry_count",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
-      return Metrics::GetStats().fulltext_query_retry_cnt;
+static vmsdk::info_field::Integer text_query_retry_count(
+    "query", "text_query_retry_count",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().text_query_retry_cnt;
     }));
 
 #ifdef DEBUG_INFO

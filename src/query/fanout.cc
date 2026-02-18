@@ -186,7 +186,7 @@ struct SearchPartitionResultsTracker {
       // neighbors based on the content if sorting is required.
       // SearchResult construction automatically applies trimming based on LIMIT
       // offset count IF the command allows it (ie - it does not require
-      // complete results / no sorting requirement).
+      // complete results).
       parameters->search_result = SearchResult(
           accumulated_total_count, std::move(neighbors), *parameters);
       status = absl::OkStatus();
@@ -318,18 +318,19 @@ absl::Status PerformSearchFanoutAsync(
 
     request->mutable_limit()->set_first_index(0);
     request->mutable_limit()->set_number(limit_per_shard);
+    // For queries requiring complete results (e.g. with SORTBY), we need to
+    // fetch K results from each shard to ensure we have enough results to
+    // sort and return the correct top K. In these cases, we ignore the
+    // fanout-data-uniformity optimization.
     if (parameters->RequiresCompleteResults()) {
-      // For sorting (FT.SEARCH SORTBY or FT.AGGREGATE SORTBY stage), fetch K from each shard.
-      // Worst case: all top K results come from a single shard.
       request->mutable_limit()->set_number(K);
     }
   } else {
     // Vector searches: Use k as the limit to find top k results. In worst case,
     // all top k results are from a single shard, so no need to fetch more than
     // k.
-    uint64_t K = parameters->k;
     request->mutable_limit()->set_first_index(0);
-    request->mutable_limit()->set_number(K);
+    request->mutable_limit()->set_number(parameters->k);
   }
   auto tracker = std::make_shared<SearchPartitionResultsTracker>(
       search_targets.size(), parameters->k, std::move(parameters));

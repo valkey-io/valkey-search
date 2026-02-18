@@ -621,8 +621,10 @@ bool DoesGlobalMetadataContainEntry(const GlobalMetadata &metadata) {
     return false;
   }
   for (const auto &[type_name, inner_map] : metadata.type_namespace_map()) {
-    if (!inner_map.entries().empty()) {
-      return true;
+    for (const auto &[id, entry] : inner_map.entries()) {
+      if (entry.has_content()) {
+        return true;
+      }
     }
   }
   return false;

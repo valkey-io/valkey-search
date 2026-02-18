@@ -3,6 +3,39 @@ title: "Search - Overview"
 description: Search Module Overview
 ---
 
+# Valkey-Search
+
+**Valkey-Search** (BSD-3-Clause), provided as a Valkey module, is a high-performance Search engine
+optimized for AI-driven / Search / Analytics / Recommendation System related workloads. It delivers single-digit millisecond
+latency and high QPS, capable of handling billions of vectors with over 99% recall as part of vector searches. It also provides
+support for hybrid / pure non vector workloads including Numeric, Tag, and Full-text searches.
+
+Valkey-Search allows users to create indexes and perform searches, incorporating complex filters.
+Users can index data using either **[Valkey Hash](hashes.md)** or **[Valkey-JSON](valkey-json.md)** data types.
+The vector queries support Approximate Nearest Neighbor (ANN) search with HNSW and exact matching using K-Nearest Neighbors (KNN).
+
+## Use-Cases Where **Valkey-Search** Shines
+
+Valkey-Search's ability to search billions of vectors with millisecond latencies makes it ideal for real-time applications such as:
+
+- Personalized Recommendations – Deliver instant, highly relevant recommendations based on real-time user interactions.
+- Fraud Detection & Security – Identify anomalies and suspicious activity with ultra-fast similarity matching.
+- Conversational AI & Chatbots – Enhance response accuracy and relevance by leveraging rapid vector-based retrieval.
+- Image & Video Search – Enable multimedia search through real-time similarity detection.
+- GenAI & Semantic Search – Power advanced AI applications with efficient vector retrieval for natural language understanding.
+
+## Supported Commands
+
+```plaintext
+FT.CREATE
+FT.DROPINDEX
+FT.INFO
+FT._LIST
+FT.SEARCH
+FT.AGGREGATE
+```
+
+For a detailed description of the supported commands, examples and configuration options, see the [Command Reference](../commands/#search).
 The search module enhances Valkey by creating searchable indexes for groups of keys. A query composed from data-type specific search operators is used to efficiently locate sets of keys. The `FT.SEARCH` command performs a query and then returns the set of located keys and their content. The `FT.AGGREGATE` command provides server-side computational capabilities by performing a query, and executing a series of user-defined computations on the contents of the located keys.
 
 # Indexes

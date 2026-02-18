@@ -92,11 +92,11 @@ The KNN search algorithm operates to locate vectors that are the nearest to the 
 The computation of the distance metrics is adjusted from their classical definitions in order to posses this property.
 This table shows the actual computation that Search uses when computing the distance between two vectors: $X$ and $Y$.
 
-| Classical Name | Valkey Search Distance Metric Name |      Classical Distance Formula Definition      | Valkey Search Distance Formula                      |
-| :------------: | :--------------------------------: | :---------------------------------------------: | :-------------------------------------------------- |
-| Inner Product  |                 IP                 |    ${\sum\limits_{i=0}^{n}(X_i \times Y_i)}$    | $1 - {\sum\limits_{i=0}^{n}(X_i \times Y_i)}$       |
-|   Euclidean    |                 L2                 |   $\sqrt{\sum\limits_{i=0}^{n}(X_i - Y_i)^2}$   | $\sqrt{\sum\limits_{i=0}^{n}(X_i - Y_i)^2}$         |
-|     Cosine     |               COSINE               | $\frac{X \cdot Y}{\|\|X\|\| \times \|\|Y\|\|} $ | $1 - \frac{X \cdot Y}{\|\|X\|\| \times \|\|Y\|\|} $ |
+| Classical Name | Valkey Search Distance Metric Name |   Classical Distance Formula Definition   | Valkey Search Distance Formula                  |
+| :------------: | :--------------------------------: | :---------------------------------------: | :---------------------------------------------- |
+| Inner Product  |                 IP                 |                 dot(X,Y)                  | 1 - dot(X,Y)                                    |
+|   Euclidean    |                 L2                 |          sqrt(sum(x[i]-y[i])^2)           | sqrt(sum(x[i]-y[i])^2)                          |
+|     Cosine     |               COSINE               | dot(x,y) / (magnitude(X) \* magnitude(Y)) | 1 - (dot(X,Y) / (magnitude(X) \* magnitude(Y))) |
 
 ### Field options
 

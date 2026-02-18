@@ -87,7 +87,7 @@ jobs:
           -e TEST_FILTER="${TEST_FILTER}" \
           -e VALKEY_SERVER_PATH="/workspace/valkey/src/valkey-server" \
           -e VALKEY_CLI_PATH="/workspace/valkey/src/valkey-cli" \
-          -e VALKEY_SEARCH_PATH="/workspace/build/libvalkey-search.so" \
+          -e VALKEY_SEARCH_PATH="/workspace/.build-release/libsearch.so" \
           -e MEMTIER_PATH="memtier_benchmark" \
           -e TEST_TMPDIR="/tmp/stability_test" \
           -e TEST_UNDECLARED_OUTPUTS_DIR="/workspace/stability-results" \

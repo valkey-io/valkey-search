@@ -73,19 +73,6 @@ check_prerequisites() {
         return 1
     fi
     
-    # Check Python dependencies
-    echo "Checking Python dependencies..."
-    local python_deps=("valkey" "absl-py")
-    for dep in "${python_deps[@]}"; do
-        if ! "${PYTHON_BIN}" -c "import ${dep//-/_}" &> /dev/null; then
-            echo "Installing Python dependency: ${dep}"
-            "${PYTHON_BIN}" -m pip install "${dep}" --quiet || {
-                echo "ERROR: Failed to install ${dep}"
-                return 1
-            }
-        fi
-    done
-    
     echo "All prerequisites satisfied"
 }
 

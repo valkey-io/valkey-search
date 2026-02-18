@@ -321,7 +321,7 @@ absl::Status PerformSearchFanoutAsync(
     // For queries requiring complete results (e.g. with SORTBY), we need to
     // fetch K results from each shard to ensure we have enough results to
     // sort and return the correct top K. In these cases, we ignore the
-    // fanout-data-uniformity optimization.
+    // fanout-data-uniformity optimization logic.
     if (parameters->RequiresCompleteResults()) {
       request->mutable_limit()->set_number(K);
     }

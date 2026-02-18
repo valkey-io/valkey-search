@@ -11,12 +11,16 @@ License: Apache License 2.0
 License URL: https://spdx.org/licenses/Apache-2.0.html
 License File: third_party/hnswlib/LICENSE
 Details: Provides HNSW (Hierarchical Navigable Small World) algorithm for approximate nearest neighbor search.
+Modifications: This package has been modified from its original form. Key changes include:
+  - Added query cancellation support (BaseCancellationFunctor integration)
+  - Integration with valkey-search metrics tracking for reclaimable memory
 
 Package: SimSIMD
 License: Apache License 2.0
 License URL: https://spdx.org/licenses/Apache-2.0.html
 License File: third_party/simsimd/LICENSE
 Details: Provides SIMD-optimized vector similarity functions for high-performance distance calculations.
+Modifications: This package has been modified from its original form with build system integration and performance optimizations.
 
 Package: Snowball
 License: BSD 3-Clause License

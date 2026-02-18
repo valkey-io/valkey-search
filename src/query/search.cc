@@ -252,10 +252,11 @@ BuildTextIterator(const Predicate *predicate, bool negate,
   if (predicate->GetType() == PredicateType::kText) {
     auto text_predicate = dynamic_cast<const TextPredicate *>(predicate);
     auto fetcher_ptr = text_predicate->Search(negate);
-    auto fetcher = static_cast<indexes::Text::EntriesFetcher *>(fetcher_ptr);
+    auto fetcher = std::unique_ptr<indexes::Text::EntriesFetcher>(
+        static_cast<indexes::Text::EntriesFetcher *>(fetcher_ptr));
     fetcher->require_positions_ = require_positions;
     size_t size = fetcher->Size();
-    return {text_predicate->BuildTextIterator(fetcher), size};
+    return {text_predicate->BuildTextIterator(fetcher.get()), size};
   }
   if (predicate->GetType() == PredicateType::kNegate) {
     // Cannot build text iterator for negation - return null

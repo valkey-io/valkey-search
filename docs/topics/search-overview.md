@@ -1,6 +1,6 @@
 ---
-title: "Search - Overview"
-description: Search Module Overview
+title: "Valkey Search - Overview"
+description: Valkey Search Module Overview
 ---
 
 # Valkey-Search
@@ -60,7 +60,7 @@ The automatic ingestion only applies to keys which are modified _after_ the crea
 The backfill process can be quite lengthy on a large system even if no keys are found. The backfill process can be suppressed by specifying the `SKIPINITIALSCAN` option on the `FT.CREATE` command. Applications that know _a priori_ that no preexisting keys exist or exist and need not be put into the index can specify this option as an optimization.
 
 The snapshot process (save or full sync) only partially preserves the state of the backfilling process. The process is able to save the fact that a backfill is in progress, but does not save the backfill cursor (because a `SCAN` cursor isn't valid across reloads).
-Thus on reload a backfilling index must restart the backfill at the begining. However, because the indexes for vector fields are saved and restored, the of vector fields (the really slow part) is preserved.
+Thus on reload a backfilling index must restart the backfill at the beginning. However, because the indexes for vector fields are saved and restored, the of vector fields (the really slow part) is preserved.
 
 # Query Operations
 

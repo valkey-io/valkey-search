@@ -64,6 +64,22 @@ jobs:
         mkdir -p stability-results
         chmod 777 stability-results
 
+    # Build Valkey server
+    - name: Build Valkey Server
+      run: |
+        docker run --rm \
+          -v "$(pwd):/workspace" \
+          -w /workspace \
+          --user "ubuntu:ubuntu" \
+          stability-test-image \
+          sudo bash -c "
+            if [ ! -d valkey ]; then
+              git clone https://github.com/valkey-io/valkey.git valkey
+            fi
+            cd valkey
+            make BUILD_TLS=yes -j\$(nproc)
+          "
+
     # Build valkey-search module
     - name: Build valkey-search Module
       run: |
@@ -73,22 +89,6 @@ jobs:
           --user "ubuntu:ubuntu" \
           stability-test-image \
           sudo -E ./build.sh
-
-    # Build Valkey server
-    - name: Build Valkey Server
-      run: |
-        docker run --rm \
-          -v "$(pwd):/workspace" \
-          -w /workspace \
-          --user "ubuntu:ubuntu" \
-          stability-test-image \
-          bash -c "
-            if [ ! -d valkey ]; then
-              git clone https://github.com/valkey-io/valkey.git valkey
-            fi
-            cd valkey
-            make BUILD_TLS=yes -j\$(nproc)
-          "
 
     # Run stability tests
     - name: Run Stability Tests

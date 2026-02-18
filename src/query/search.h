@@ -211,7 +211,9 @@ struct SearchParameters {
   // be able to return correct results. An example of this is when sorting on a
   // particular is needed on the results. This should be overridden in derived
   // classes if needed. The default implementation returns false.
-  virtual bool RequiresCompleteResults() const { return sortby.has_value(); }
+  virtual bool RequiresCompleteResults() const {
+    return sortby_parameter.has_value();
+  }
 
   virtual absl::Status PreParseQueryString();
   virtual absl::Status PostParseQueryString();

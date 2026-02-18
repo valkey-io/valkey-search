@@ -14,6 +14,8 @@ Details: Provides HNSW (Hierarchical Navigable Small World) algorithm for approx
 Modifications: This package has been modified from its original form. Key changes include:
   - Added query cancellation support (BaseCancellationFunctor integration)
   - Integration with valkey-search metrics tracking for reclaimable memory
+  - Added support for custom load and save functionality
+  - Transitioned the algorithm's payload storage from a single contiguous buffer to multiple contiguous chunks. This avoids expensive reallocations and the associated memory overhead when adding new vectors
 
 Package: SimSIMD
 License: Apache License 2.0

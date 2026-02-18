@@ -100,8 +100,8 @@ class FilterParser {
   absl::Status SetupTextFieldConfiguration(
       FieldMaskPredicate& field_mask,
       const std::optional<std::string>& field_name, bool with_suffix);
-  absl::StatusOr<std::unique_ptr<query::Predicate>> ParseTextTokens(
-      const std::optional<std::string>& field_for_default);
+  absl::StatusOr<std::optional<std::unique_ptr<query::Predicate>>>
+  ParseTextTokens(const std::optional<std::string>& field_for_default);
   absl::StatusOr<bool> IsMatchAllExpression();
 
   // Struct to hold parsing state including predicate, bracket counter, and

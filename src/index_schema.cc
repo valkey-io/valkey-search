@@ -1402,31 +1402,12 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
   // this key list explicitly which will trivially enable the SKIPINITIALSCAN
   // option.
   //
-  std::shared_ptr<indexes::IndexBase> index;
-  for (const auto &attribute : attributes_) {
-    if (!IsVectorIndex(attribute.second.GetIndex())) {
-      index = attribute.second.GetIndex();
-      break;
-    }
-  }
-  if (!index) {
-    VMSDK_RETURN_IF_ERROR(out.SaveObject<size_t>(0));  // zero keys
-  } else {
-    size_t key_count =
-        index->GetTrackedKeyCount() + index->GetUnTrackedKeyCount();
-    VMSDK_RETURN_IF_ERROR(out.SaveObject(key_count));
-    rdb_save_keys.Increment(key_count);
-    VMSDK_LOG(NOTICE, nullptr)
-        << "Writing Index Extension, keys = " << key_count;
-
-    auto write_a_key = [&](const Key &key) {
-      key_count--;
-      return out.SaveString(key->Str());
-    };
-    VMSDK_RETURN_IF_ERROR(index->ForEachTrackedKey(write_a_key));
-    VMSDK_RETURN_IF_ERROR(index->ForEachUnTrackedKey(write_a_key));
-    CHECK(key_count == 0) << "Key count mismatch for index "
-                          << vmsdk::config::RedactIfNeeded(GetName());
+  size_t key_count = db_key_info_.Get().size();
+  VMSDK_RETURN_IF_ERROR(out.SaveObject(key_count));
+  rdb_save_keys.Increment(key_count);
+  VMSDK_LOG(NOTICE, nullptr) << "Writing Index Extension, keys = " << key_count;
+  for (auto &[key, _] : db_key_info_.Get()) {
+    VMSDK_RETURN_IF_ERROR(out.SaveString(key->Str()));
   }
   //
   // Write out the mutation queue entries. As an optimization we only write
@@ -1672,11 +1653,13 @@ void IndexSchema::DrainMutationQueue(ValkeyModuleCtx *ctx) const {
 void IndexSchema::OnLoadingEnded(ValkeyModuleCtx *ctx) {
   if (loaded_v2_) {
     loaded_v2_ = false;
-    VMSDK_LOG_EVERY_N_SEC(NOTICE, ctx, 1)
-        << "RDB load completed, Mutation Queue contains "
-        << tracked_mutated_records_.size() << " entries."
-        << (backfill_job_.Get().has_value() ? " Backfill still required."
-                                            : " Backfill not needed.");
+    VMSDK_LOG(NOTICE, ctx) << "RDB load completed, "
+                           << " Mutation Queue contains "
+                           << tracked_mutated_records_.size() << " entries."
+                           << (backfill_job_.Get().has_value() &&
+                                       !backfill_job_.Get()->IsScanDone()
+                                   ? " Backfill still required."
+                                   : " Backfill not needed.");
     if (options::GetDrainMutationQueueOnLoad().GetValue()) {
       DrainMutationQueue(ctx);
     }

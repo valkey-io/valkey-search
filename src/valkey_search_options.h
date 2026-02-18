@@ -97,6 +97,12 @@ const config::Boolean& GetDrainMutationQueueOnLoad();
 /// Return the fanout data uniformity configuration (0-100)
 config::Number& GetFanoutDataUniformity();
 
+/// Return the configuration entry for RDB write v2
+const config::Boolean& GetRdbWriteV2();
+
+/// Return the configuration entry for RDB read v2
+const config::Boolean& GetRdbReadV2();
+
 /// Return the threshold for async fanout operations
 config::Number& GetAsyncFanoutThreshold();
 

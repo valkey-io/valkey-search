@@ -8,8 +8,6 @@
 #ifndef _VALKEY_SEARCH_INDEXES_TEXT_PHRASE_H_
 #define _VALKEY_SEARCH_INDEXES_TEXT_PHRASE_H_
 
-#include <vector>
-
 #include "absl/container/inlined_vector.h"
 #include "src/indexes/text.h"
 #include "src/indexes/text/text_iterator.h"
@@ -51,7 +49,6 @@ class ProximityIterator : public TextIterator {
   ProximityIterator(absl::InlinedVector<std::unique_ptr<TextIterator>,
                                         kProximityTermsInlineCapacity>&& iters,
                     const std::optional<uint32_t> slop, const bool in_order,
-                    const InternedStringSet* untracked_keys,
                     bool skip_positional_checks);
   /* Implementation of TextIterator APIs */
   FieldMaskPredicate QueryFieldMask() const override;
@@ -93,8 +90,6 @@ class ProximityIterator : public TextIterator {
   absl::InlinedVector<std::pair<Position, size_t>,
                       kProximityTermsInlineCapacity>
       pos_with_idx_;
-  // Used for Negate
-  const InternedStringSet* untracked_keys_;
   // Flag used to skip positional checks. This is used when performing
   // an AND on text predicates without any positional constraints.
   bool skip_positional_checks_;

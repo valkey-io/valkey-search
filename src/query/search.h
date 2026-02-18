@@ -10,7 +10,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -94,6 +93,65 @@ inline std::ostream& operator<<(std::ostream& os, const ReturnAttribute& r) {
   return os;
 }
 
+// Wrapper for search results that trims the neighbor deque based on query type
+
+struct SearchParameters;
+struct SerializationRange;
+
+//
+// The output of the query pipeline
+//
+struct SearchResult {
+  absl::Status status;
+  size_t total_count;
+  std::vector<indexes::Neighbor> neighbors;
+  // True if neighbors were limited using LIMIT count with a buffer multiplier.
+  bool is_limited_with_buffer;
+  // True if neighbors were offset using LIMIT first_index.
+  bool is_offsetted;
+
+  // Constructor with automatic trimming based on query requirements
+  SearchResult(size_t total_count, std::vector<indexes::Neighbor> neighbors,
+               const SearchParameters& parameters);
+  // Get the range of neighbors to serialize in response.
+  SerializationRange GetSerializationRange(
+      const SearchParameters& parameters) const;
+
+  SearchResult();
+
+ private:
+  void TrimResults(std::vector<indexes::Neighbor>& neighbors,
+                   const SearchParameters& parameters);
+};
+
+//
+// Describes the Content Processing that a query requires. Each
+// of these cases has different implications for how the query is processed
+// and whether it can run exclusively in the background or needs to fetch data
+// using the mainthread.
+//
+enum ContentProcessing {
+  //
+  // These first two cases do not require any validation of mutation, nor
+  // any content be fetched from the database. Thus the entire processing
+  // can be done on the background thread and the notification of completion
+  // is called from a background thread. QueryCompleteBackground
+  //
+  kNoContent,         // No Content needed.
+  kContentAvailable,  // Content needed, but can be sourced by indexes
+                      // (reserved)
+  //
+  // These two cases require content only available to the mainthread.
+  // Completion is done from the mainthread. QueryCompletedMainThread
+  // Because a switch to the mainthread is required, the keys must be
+  // revalidated in case of a mutation. The difference between the two
+  // cases is whether that validation process could contend with mutations
+  // from a background thread.
+  //
+  kContentRequired,          // Content, but no contention check is needed
+  kContentionCheckRequired,  // Content and contention check is required.
+};
+
 struct SearchParameters {
   mutable cancel::Token cancellation_token;
   virtual ~SearchParameters() = default;
@@ -104,23 +162,24 @@ struct SearchParameters {
   vmsdk::UniqueValkeyString score_as;
   std::string query;
   uint32_t dialect{kDialect};
-  uint32_t db_num_;
+  uint32_t db_num_{0};
   bool local_only{false};
   bool enable_partial_results{options::GetPreferPartialResults().GetValue()};
   bool enable_consistency{options::GetPreferConsistentResults().GetValue()};
   int k{0};
   std::optional<unsigned> ef;
   LimitParameter limit;
-  uint64_t timeout_ms;
+  uint64_t timeout_ms{0};
   bool no_content{false};
   FilterParseResults filter_parse_results;
   std::vector<ReturnAttribute> return_attributes;
   bool inorder{false};
   std::optional<uint32_t> slop;
   bool verbatim{false};
-  std::optional<query::SortByParameter> sortby;
+  // std::optional<query::SortByParameter> sortby;
   coordinator::IndexFingerprintVersion index_fingerprint_version;
   uint64_t slot_fingerprint;
+  SearchResult search_result;
   struct ParseTimeVariables {
     // Members of this struct are only valid during the parsing of
     // VectorSearchParameters on the mainthread. They get cleared
@@ -155,33 +214,40 @@ struct SearchParameters {
   // classes if needed. The default implementation returns false.
   virtual bool RequiresCompleteResults() const { return sortby.has_value(); }
 
-  // Returns additional identifiers that need to be fetched for sorting.
-  // Override in derived classes to provide sortby field identifier.
-  virtual std::optional<std::string> GetSortByIdentifier() const {
-    return std::nullopt;
-  }
-
   virtual absl::Status PreParseQueryString();
   virtual absl::Status PostParseQueryString();
-  // In-flight retry completion callbacks. Override in derived classes to
-  // handle completion of searches that were blocked waiting for in-flight
-  // mutations. Default implementations do nothing (for basic SearchParameters
-  // used in retry contexts).
-  virtual void OnComplete(std::vector<indexes::Neighbor>& neighbors) {}
-  virtual void OnCancelled() {}
-  virtual std::vector<indexes::Neighbor>& GetNeighbors() {
-    static std::vector<indexes::Neighbor> empty;
-    return empty;
-  }
-  // Description for debugging in-flight retry code paths.
-  virtual const char* GetDesc() const { return "base"; }
-  virtual SearchParameters& GetParameters() { return *this; }
+  ContentProcessing GetContentProcessing() const;
 
-  SearchParameters(uint64_t timeout, grpc::CallbackServerContext* context,
-                   uint32_t db_num)
-      : timeout_ms(timeout),
-        cancellation_token(cancel::Make(timeout, context)),
-        db_num_(db_num) {}
+  // The sortby parameter, populated by FT.SEARCH SORTBY clause or
+  // deserialized from gRPC requests. Available to all query operations.
+  std::optional<SortByParameter> sortby_parameter;
+  //
+  // Called when the query is complete and results are ready to be sent back to
+  // the client.
+  //
+  // Note form the parameter, that ownership is specifically passed back to the
+  // caller. Paranoid implementations of these functions could start with
+  // the code: CHECK(this == self.get());
+  //
+  virtual void QueryCompleteBackground(
+      std::unique_ptr<SearchParameters> self) = 0;
+  virtual void QueryCompleteMainThread(
+      std::unique_ptr<SearchParameters> self) = 0;
+
+  // Tracks how many times this query has been blocked during content
+  // resolution due to contention with in-flight mutations.
+  unsigned int content_resolution_blocked_{0};
+
+  // In CME, when a LocalResponderSearch is used, the neighbors of that
+  // operation get moved into this operation. But the neighbors has string_view
+  // references into the return_attributes of the owning operation. So in order
+  // to avoid a use-after-free we retain the LocalResponderSearch until this
+  // operation is destroyed.
+  std::unique_ptr<SearchParameters> local_responder_;
+
+  SearchParameters() = default;
+  SearchParameters(uint64_t timeout_ms, cancel::Token token, uint32_t db_num)
+      : timeout_ms(timeout_ms), cancellation_token(token), db_num_(db_num) {}
 
   SearchParameters(SearchParameters&&) = default;
 };
@@ -193,38 +259,14 @@ struct SerializationRange {
   size_t count() const { return end_index - start_index; }
 };
 
-// Wrapper for search results that trims the neighbor deque based on query type
-struct SearchResult {
-  size_t total_count;
-  std::vector<indexes::Neighbor> neighbors;
-  // True if neighbors were limited using LIMIT count with a buffer multiplier.
-  bool is_limited_with_buffer;
-  // True if neighbors were offset using LIMIT first_index.
-  bool is_offsetted;
-
-  // Constructor with automatic trimming based on query requirements
-  SearchResult(size_t total_count, std::vector<indexes::Neighbor> neighbors,
-               const SearchParameters& parameters);
-  // Get the range of neighbors to serialize in response.
-  SerializationRange GetSerializationRange(
-      const SearchParameters& parameters) const;
-
- private:
-  bool RetainAllNeighbors(const SearchParameters& parameters);
-  void TrimResults(std::vector<indexes::Neighbor>& neighbors,
-                   const SearchParameters& parameters);
-};
-
 // Callback to be called when the search is done.
-using SearchResponseCallback = absl::AnyInvocable<void(
-    absl::StatusOr<SearchResult>&, std::unique_ptr<SearchParameters>)>;
+using SearchResponseCallback =
+    absl::AnyInvocable<void(absl::Status, std::unique_ptr<SearchParameters>)>;
 
-absl::StatusOr<SearchResult> Search(const SearchParameters& parameters,
-                                    SearchMode search_mode);
+absl::Status Search(SearchParameters& parameters, SearchMode search_mode);
 
 absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
                          vmsdk::ThreadPool* thread_pool,
-                         SearchResponseCallback callback,
                          SearchMode search_mode);
 
 absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(

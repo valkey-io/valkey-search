@@ -34,6 +34,7 @@ target_link_libraries(search PUBLIC vector_hnsw)
 target_link_libraries(search PUBLIC hnswlib_vmsdk)
 target_link_libraries(search PUBLIC vmsdklib)
 target_link_libraries(search PUBLIC valkey_module)
+target_link_libraries(search PUBLIC content_resolution)
 
 set(SRCS_SEARCH_HEADER ${CMAKE_CURRENT_LIST_DIR}/search.h)
 
@@ -47,11 +48,15 @@ target_link_libraries(search_header INTERFACE vector_base)
 target_link_libraries(search_header INTERFACE hnswlib_vmsdk)
 target_link_libraries(search_header INTERFACE vmsdklib)
 
-set(SRCS_INFLIGHT_RETRY ${CMAKE_CURRENT_LIST_DIR}/inflight_retry.cc
-                        ${CMAKE_CURRENT_LIST_DIR}/inflight_retry.h)
+set(SRCS_CONTENT_RESOLUTION ${CMAKE_CURRENT_LIST_DIR}/content_resolution.cc
+                            ${CMAKE_CURRENT_LIST_DIR}/content_resolution.h)
 
-valkey_search_add_static_library(inflight_retry "${SRCS_INFLIGHT_RETRY}")
-target_link_libraries(inflight_retry PUBLIC index_schema)
+valkey_search_add_static_library(content_resolution "${SRCS_CONTENT_RESOLUTION}")
+target_link_libraries(content_resolution PUBLIC index_schema)
+target_link_libraries(content_resolution PUBLIC search_header)
+target_link_libraries(content_resolution PUBLIC response_generator)
+target_link_libraries(content_resolution PUBLIC metrics)
+target_link_libraries(content_resolution PUBLIC vmsdklib)
 
 set(SRCS_FANOUT ${CMAKE_CURRENT_LIST_DIR}/fanout.cc
                 ${CMAKE_CURRENT_LIST_DIR}/fanout.h
@@ -62,7 +67,6 @@ set(SRCS_FANOUT ${CMAKE_CURRENT_LIST_DIR}/fanout.cc
 
 valkey_search_add_static_library(fanout "${SRCS_FANOUT}")
 target_include_directories(fanout PUBLIC ${CMAKE_CURRENT_LIST_DIR})
-target_link_libraries(fanout PUBLIC inflight_retry)
 target_link_libraries(fanout PUBLIC search)
 target_link_libraries(fanout PUBLIC attribute_data_type)
 target_link_libraries(fanout PUBLIC index_schema)

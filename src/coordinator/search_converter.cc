@@ -211,11 +211,11 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
   CHECK(false);
 }
 
-absl::StatusOr<std::unique_ptr<query::SearchParameters>>
-GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request,
-                              grpc::CallbackServerContext* context) {
-  auto parameters = std::make_unique<query::SearchParameters>(
-      request.timeout_ms(), context, request.db_num());
+absl::Status GRPCSearchRequestToParameters(
+    const SearchIndexPartitionRequest& request,
+    grpc::CallbackServerContext* context, query::SearchParameters* parameters) {
+  parameters->timeout_ms = request.timeout_ms();
+  parameters->cancellation_token = cancel::Make(request.timeout_ms(), context);
   parameters->db_num = request.db_num();
   parameters->index_schema_name = request.index_schema_name();
   parameters->attribute_alias = request.attribute_alias();
@@ -254,8 +254,9 @@ GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request,
   parameters->slot_fingerprint = request.slot_fingerprint();
   parameters->filter_parse_results.query_operations =
       static_cast<QueryOperations>(request.query_operations());
-  parameters->sortby = SortByFromGRPC(request);
-  return parameters;
+  // parameters->sortby = SortByFromGRPC(request);
+  parameters->sortby_parameter = SortByFromGRPC(request);
+  return absl::OkStatus();
 }
 
 std::unique_ptr<Predicate> PredicateToGRPCPredicate(
@@ -372,8 +373,7 @@ std::unique_ptr<Predicate> PredicateToGRPCPredicate(
 }
 
 std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
-    const query::SearchParameters& parameters,
-    const std::optional<query::SortByParameter>& sortby_parameter) {
+    const query::SearchParameters& parameters) {
   auto request = std::make_unique<SearchIndexPartitionRequest>();
   request->set_db_num(parameters.db_num);
   request->set_index_schema_name(parameters.index_schema_name);
@@ -412,7 +412,7 @@ std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
   request->set_slot_fingerprint(parameters.slot_fingerprint);
   request->set_query_operations(
       static_cast<uint64_t>(parameters.filter_parse_results.query_operations));
-  SortByToGRPC(sortby_parameter, request.get());
+  SortByToGRPC(parameters.sortby_parameter, request.get());
   return request;
 }
 

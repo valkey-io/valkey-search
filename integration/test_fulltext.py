@@ -381,6 +381,10 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert set(result[1]) == {b"year", b"1861", b"count", b"1"}
         assert set(result[2]) == {b"year", b"1925", b"count", b"1"}
         assert set(result[3]) == {b"year", b"2020", b"count", b"1"}
+        # Test VERBATIM: "great" without stemming should match exact term only
+        result = client.execute_command("FT.AGGREGATE", "books", "great", "LOAD", "1", "title", "VERBATIM")
+        assert result[0] == 3
+        assert {result[i][1] for i in range(1, 4)} == {b"The Great Gatsby", b"Great Expectations", b"The Great Adventure"}
 
     def test_text_search(self):
         """
@@ -1873,10 +1877,9 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # NOSTEM index (idx1) should not give doc:3 (driving)
         result = client.execute_command("FT.SEARCH", "idx1", '%%drive%%')
         assert (result[0], set(result[1::2])) == (2, {b"doc:4", b"doc:11"})
-        # stemming enabled should give doc:3 (with word 'driving')
-        # TODO: fails as '?' is not ignored. Enable after fix
+        # stemming enabled: should give doc:3 (with word 'driving')
         # result = client.execute_command("FT.SEARCH", "idx2", '%%drive%%')
-        # assert (result[0], set(result[1::2])) == (2, {b"doc:3", b"doc:4"}) 
+        # assert (result[0], set(result[1::2])) == (3, {b"doc:3", b"doc:4", b"doc:11"}) 
         # Higher edit distance test (ED=10)
         # Add a document with a word that requires high edit distance
         # Increase max edit distance config
@@ -1893,10 +1896,9 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         result = client.execute_command("FT.SEARCH", "idx1", '%%%%%%%%%%xyzbcdefghnalization%%%%%%%%%%')
         assert result[0] >= 1 and b"doc:7" in result[1::2]
         # Multiple fields
-        # Known crash with Return clause. TODO: Enable after fix
-        # client.execute_command("HSET", "doc:12", "content", "I am going to a race", "content2", "Driver drove the car?")
-        # result = client.execute_command("FT.SEARCH", "idx3", '%%drive%%', "return", "1", "content2")
-        # assert (result[0], set(result[1::2])) == (3, {b"doc:4", b"doc:11", b"doc:12"})
+        client.execute_command("HSET", "doc:12", "content", "I am going to a race", "content2", "Driver drove the car?")
+        result = client.execute_command("FT.SEARCH", "idx3", '%%drive%%', "return", "1", "content2")
+        assert (result[0], set(result[1::2])) == (3, {b"doc:4", b"doc:11", b"doc:12"})
 
     def test_return_clause(self):
         client: Valkey = self.server.get_new_client()
@@ -2105,11 +2107,10 @@ class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
         
         # Text index specific fields to validate
         text_index_fields = [
-            "num_unique_terms",          # Total number of unique terms in the text index
-            "num_total_terms",           # Total frequency of all terms across all documents  
+            "num_terms",          # Total number of unique terms in the text index
+            "total_term_occurrences",    # Total frequency of all terms across all documents  
             "posting_sz_bytes",          # Memory used by posting lists (inverted index data) in bytes
             "position_sz_bytes",         # Memory used by position information for phrase queries in bytes
-            "total_postings",            # Total number of posting lists (equals unique terms)
             "radix_sz_bytes",            # Memory used by the radix tree (term dictionary) in bytes
             "total_text_index_sz_bytes"  # Total memory used by all text index components in bytes
         ]
@@ -2119,22 +2120,18 @@ class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
             assert field in info_data, f"Missing text index field: {field}"
             value = info_data[field]
             
-            if field == "num_unique_terms":
+            if field == "num_terms":
                 assert isinstance(value, (int, float)) and value > 0, f"{field} should be positive number, got {value}"
                 assert value >= 10, f"Expected at least 10 unique terms, got {value}"
                 
-            elif field == "num_total_terms":
+            elif field == "total_term_occurrences":
                 assert isinstance(value, (int, float)) and value > 0, f"{field} should be positive number, got {value}"
-                assert value >= info_data["num_unique_terms"], f"Total terms {value} should be >= unique terms {info_data['num_unique_terms']}"
+                assert value >= info_data["num_terms"], f"Total terms {value} should be >= unique terms {info_data['num_terms']}"
                 
             elif field in ["posting_sz_bytes", "position_sz_bytes", "radix_sz_bytes", "total_text_index_sz_bytes"]:
                 assert (isinstance(value, int) and value > 0) or \
                        (os.environ.get('SAN_BUILD', 'no') != 'no' and value == 0), \
                        f"{field} should be positive integer, got {value}"
-                    
-            elif field == "total_postings":
-                assert isinstance(value, (int, float)) and value > 0, f"{field} should be positive number, got {value}"
-                assert value == info_data["num_unique_terms"], f"Total postings {value} should equal unique terms {info_data['num_unique_terms']}"
         
         # Validate memory relationships
         total_memory = info_data["total_text_index_sz_bytes"]
@@ -2148,9 +2145,8 @@ class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
         
         print(f"Text Index Statistics Validation Passed:")
         print(f"  Documents: {info_data['num_docs']}")
-        print(f"  Unique Terms: {info_data['num_unique_terms']}")
-        print(f"  Total Terms: {info_data['num_total_terms']}")
-        print(f"  Total Postings: {info_data['total_postings']}")
+        print(f"  Unique Terms: {info_data['num_terms']}")
+        print(f"  Total Terms: {info_data['total_term_occurrences']}")
         print(f"  Total Memory: {info_data['total_text_index_sz_bytes']} bytes")
         print(f"  Posting Memory: {info_data['posting_sz_bytes']} bytes")
         print(f"  Position Memory: {info_data['position_sz_bytes']} bytes")
@@ -2164,8 +2160,8 @@ class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
         initial_radix_memory = info_data['radix_sz_bytes']
         initial_position_memory = info_data['position_sz_bytes']
         initial_total_memory = info_data['total_text_index_sz_bytes']
-        initial_unique_terms = info_data['num_unique_terms']
-        initial_total_terms = info_data['num_total_terms']
+        initial_unique_terms = info_data['num_terms']
+        initial_total_terms = info_data['total_term_occurrences']
         
         # Delete all documents
         for doc in hash_docs:
@@ -2188,10 +2184,10 @@ class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
         # Posting objects across schema and key indexes, these metrics will reach zero on deletion.
         
         # Always validate term count decreases
-        assert info_after_delete['num_unique_terms'] < initial_unique_terms, \
-            f"Unique terms should decrease after deletion: {info_after_delete['num_unique_terms']} >= {initial_unique_terms}"
-        assert info_after_delete['num_total_terms'] < initial_total_terms, \
-            f"Total terms should decrease after deletion: {info_after_delete['num_total_terms']} >= {initial_total_terms}"
+        assert info_after_delete['num_terms'] < initial_unique_terms, \
+            f"Unique terms should decrease after deletion: {info_after_delete['num_terms']} >= {initial_unique_terms}"
+        assert info_after_delete['total_term_occurrences'] < initial_total_terms, \
+            f"Total terms should decrease after deletion: {info_after_delete['total_term_occurrences']} >= {initial_total_terms}"
         
         # Skip memory size checks when running with sanitizers (SAN_BUILD)
         # as memory tracking may not be accurate in sanitizer builds
@@ -2208,8 +2204,8 @@ class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
         # Note: radix_sz_bytes validation skipped - will be fixed in radix tree memory tracking cleanup task
         
         print(f"  After deletion - Documents: {info_after_delete['num_docs']}")
-        print(f"  After deletion - Unique Terms: {info_after_delete['num_unique_terms']}")
-        print(f"  After deletion - Total Terms: {info_after_delete['num_total_terms']}")
+        print(f"  After deletion - Unique Terms: {info_after_delete['num_terms']}")
+        print(f"  After deletion - Total Terms: {info_after_delete['total_term_occurrences']}")
         print(f"  After deletion - Posting Memory: {info_after_delete['posting_sz_bytes']} bytes")
         print(f"  After deletion - Radix Memory: {info_after_delete['radix_sz_bytes']} bytes")
         print(f"  After deletion - Total Memory: {info_after_delete['total_text_index_sz_bytes']} bytes")

@@ -26,12 +26,10 @@ namespace valkey_search::indexes::text {
 ProximityIterator::ProximityIterator(
     absl::InlinedVector<std::unique_ptr<TextIterator>,
                         kProximityTermsInlineCapacity>&& iters,
-    std::optional<uint32_t> slop, bool in_order,
-    const InternedStringSet* untracked_keys, bool skip_positional_checks)
+    std::optional<uint32_t> slop, bool in_order, bool skip_positional_checks)
     : iters_(std::move(iters)),
       slop_(slop),
       in_order_(in_order),
-      untracked_keys_(untracked_keys),
       current_position_(std::nullopt),
       current_field_mask_(0ULL),
       skip_positional_checks_(skip_positional_checks) {
@@ -63,7 +61,9 @@ FieldMaskPredicate ProximityIterator::QueryFieldMask() const {
 }
 
 bool ProximityIterator::DoneKeys() const {
-  if (iters_.empty()) return true;
+  if (iters_.empty()) {
+    return true;
+  }
   for (auto& iter : iters_) {
     if (iter->DoneKeys()) {
       return true;
@@ -118,8 +118,12 @@ bool ProximityIterator::FindCommonKey() {
   Key max_key;
   for (auto& iter : iters_) {
     auto k = iter->CurrentKey();
-    if (!min_key || k < min_key) min_key = k;
-    if (!max_key || k > max_key) max_key = k;
+    if (!min_key || k < min_key) {
+      min_key = k;
+    }
+    if (!max_key || k > max_key) {
+      max_key = k;
+    }
   }
   // 2) If min == max, we found a common key
   if (min_key == max_key) {
@@ -167,7 +171,9 @@ bool ProximityIterator::SeekForwardKey(const Key& target_key) {
 }
 
 bool ProximityIterator::DonePositions() const {
-  if (iters_.empty()) return true;
+  if (iters_.empty()) {
+    return true;
+  }
   for (auto& iter : iters_) {
     if (iter->DonePositions()) {
       return true;

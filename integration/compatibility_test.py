@@ -393,6 +393,7 @@ def do_answer(client, expected, data_set):
         client.execute_command("CONFIG", "SET", "search.fanout-data-uniformity", "0")
     except Exception as e:
         print(f"⚠ Failed to set search.fanout-data-uniformity config for test: {expected['testname']}, error: {e}")
+        assert False, "Failed to set search.fanout-data-uniformity config, cannot continue with test execution"
 
     # Set Valkey-specific config for inorder tests
     if 'inorder' in expected['testname'] or 'slop' in expected['testname']:

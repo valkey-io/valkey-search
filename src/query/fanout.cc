@@ -25,7 +25,6 @@
 #include "absl/synchronization/mutex.h"
 #include "grpcpp/support/status.h"
 #include "src/attribute_data_type.h"
-#include "src/commands/ft_search.h"
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/search_converter.h"

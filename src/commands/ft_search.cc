@@ -184,36 +184,46 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
 }
 
 }  // namespace
+// Apply sorting to neighbors based on attribute values in attribute_contents
+void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
+                  const SearchCommand &parameters) {
+  if (!parameters.sortby.has_value() || neighbors.empty()) {
+    return;
+  }
 
-// Standalone sorting function that doesn't require SearchCommand
-void ApplySortingWithParams(std::vector<indexes::Neighbor> &neighbors,
-                            const std::shared_ptr<IndexSchema> &index_schema,
-                            const query::SortByParameter &sortby,
-                            const query::LimitParameter &limit) {
-  if (neighbors.empty()) return;
+  auto sortby = parameters.sortby.value();
 
-  auto index_result = index_schema->GetIndex(sortby.field);
+  // Check if field is a declared numeric attribute
+  auto index_result = parameters.index_schema->GetIndex(sortby.field);
   bool is_numeric =
       index_result.ok() &&
       index_result.value()->GetIndexerType() == indexes::IndexerType::kNumeric;
-
-  auto compare = [&](const indexes::Neighbor &a, const indexes::Neighbor &b) {
+  auto compare = [&](const indexes::Neighbor &a,
+                     const indexes::Neighbor &b) -> bool {
     if (!a.attribute_contents.has_value() ||
         !b.attribute_contents.has_value()) {
       return false;
     }
+
     auto it_a = a.attribute_contents->find(sortby.field);
     auto it_b = b.attribute_contents->find(sortby.field);
-    if (it_a == a.attribute_contents->end()) return false;
-    if (it_b == b.attribute_contents->end()) return true;
+
+    if (it_a == a.attribute_contents->end()) {
+      return false;
+    }
+    if (it_b == b.attribute_contents->end()) {
+      return true;
+    }
 
     auto str_a = vmsdk::ToStringView(it_a->second.value.get());
     auto str_b = vmsdk::ToStringView(it_b->second.value.get());
 
     expr::Value val_a, val_b;
     if (is_numeric) {
-      val_a = expr::Value(vmsdk::To<double>(str_a).value_or(0.0));
-      val_b = expr::Value(vmsdk::To<double>(str_b).value_or(0.0));
+      auto num_a = vmsdk::To<double>(str_a).value_or(0.0);
+      auto num_b = vmsdk::To<double>(str_b).value_or(0.0);
+      val_a = expr::Value(num_a);
+      val_b = expr::Value(num_b);
     } else {
       val_a = expr::Value(str_a);
       val_b = expr::Value(str_b);
@@ -229,23 +239,13 @@ void ApplySortingWithParams(std::vector<indexes::Neighbor> &neighbors,
     return false;
   };
 
-  auto amountToKeep = limit.first_index + limit.number;
+  auto amountToKeep = parameters.limit.first_index + parameters.limit.number;
   if (amountToKeep >= neighbors.size()) {
     std::stable_sort(neighbors.begin(), neighbors.end(), compare);
   } else {
     std::partial_sort(neighbors.begin(), neighbors.begin() + amountToKeep,
                       neighbors.end(), compare);
   }
-}
-
-// Apply sorting to neighbors based on attribute values in attribute_contents
-void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
-                  const SearchCommand &parameters) {
-  if (!parameters.sortby.has_value() || neighbors.empty()) {
-    return;
-  }
-  ApplySortingWithParams(neighbors, parameters.index_schema,
-                         parameters.sortby.value(), parameters.limit);
 }
 
 // Check for scenarios that require sending an early reply.

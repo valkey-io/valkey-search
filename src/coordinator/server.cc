@@ -24,8 +24,6 @@
 #include "grpcpp/server_context.h"
 #include "grpcpp/support/server_callback.h"
 #include "grpcpp/support/status.h"
-#include "module_config.h"
-#include "src/commands/ft_search.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/grpc_suspender.h"
 #include "src/coordinator/metadata_manager.h"

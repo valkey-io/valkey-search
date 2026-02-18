@@ -86,7 +86,8 @@ IndexSchema::BackfillJob::BackfillJob(RedisModuleCtx *ctx,
   RedisModule_SelectDb(scan_ctx.get(), db_num);
   db_size = RedisModule_DbSize(scan_ctx.get());
   VMSDK_LOG(NOTICE, ctx) << "Starting backfill for index schema in DB "
-                         << db_num << ": " << name;
+                         << db_num << ": "
+                         << vmsdk::config::RedactIfNeeded(name);
 }
 
 absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
@@ -240,7 +241,8 @@ absl::Status IndexSchema::Init(RedisModuleCtx *ctx) {
 
 IndexSchema::~IndexSchema() {
   VMSDK_LOG(NOTICE, detached_ctx_.get())
-      << "Index schema " << name_ << " dropped from DB " << db_num_;
+      << "Index schema " << vmsdk::config::RedactIfNeeded(name_)
+      << " dropped from DB " << db_num_;
 
   // If we are not already destructing, make sure we perform necessary cleanup.
   // Note that this will fail on background threads, so indices should be marked
@@ -630,8 +632,9 @@ uint32_t IndexSchema::PerformBackfill(RedisModuleCtx *ctx,
                           backfill_job->cursor.get(), BackfillScanCallback,
                           (void *)this)) {
       VMSDK_LOG(NOTICE, ctx)
-          << "Index schema " << name_ << " finished backfill. Scanned "
-          << backfill_job->scanned_key_count << " keys in "
+          << "Index schema " << vmsdk::config::RedactIfNeeded(name_)
+          << " finished backfill. Scanned " << backfill_job->scanned_key_count
+          << " keys in "
           << absl::FormatDuration(backfill_job->stopwatch.Duration());
       uint32_t res = current_scan_count - start_scan_count;
       backfill_job->MarkScanAsDone();
@@ -787,7 +790,8 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
 
   auto rdb_section_string = rdb_section->SerializeAsString();
   VMSDK_RETURN_IF_ERROR(rdb->SaveStringBuffer(rdb_section_string))
-      << "IO error while saving IndexSchema name: " << this->name_
+      << "IO error while saving IndexSchema name: "
+      << vmsdk::config::RedactIfNeeded(this->name_)
       << " in DB: " << this->db_num_ << " to RDB";
 
   for (auto &attribute : attributes_) {
@@ -805,7 +809,9 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
     VMSDK_RETURN_IF_ERROR(rdb->SaveStringBuffer(index_content_supp_str))
         << "IO error while saving supplemental content for index content for "
            "index name: "
-        << this->name_ << " attribute: " << attribute.first << " to RDB";
+        << vmsdk::config::RedactIfNeeded(this->name_)
+        << " attribute: " << vmsdk::config::RedactIfNeeded(attribute.first)
+        << " to RDB";
     RDBChunkOutputStream index_chunked_out(rdb);
     VMSDK_RETURN_IF_ERROR(
         attribute.second.GetIndex()->SaveIndex(std::move(index_chunked_out)))
@@ -824,14 +830,18 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
       VMSDK_RETURN_IF_ERROR(rdb->SaveStringBuffer(key_to_id_supp_str))
           << "IO error while saving supplemental content for key to ID mapping "
              "for index name: "
-          << this->name_ << " attribute: " << attribute.first << " to RDB";
+          << vmsdk::config::RedactIfNeeded(this->name_)
+          << " attribute: " << vmsdk::config::RedactIfNeeded(attribute.first)
+          << " to RDB";
       RDBChunkOutputStream key_to_id_chunked_out(rdb);
       VMSDK_RETURN_IF_ERROR(
           dynamic_cast<const indexes::VectorBase *>(
               attribute.second.GetIndex().get())
               ->SaveTrackedKeys(std::move(key_to_id_chunked_out)))
           << "IO error while saving Key to ID mapping (index name: "
-          << this->name_ << ", attribute: " << attribute.first << ") to RDB";
+          << vmsdk::config::RedactIfNeeded(this->name_)
+          << ", attribute: " << vmsdk::config::RedactIfNeeded(attribute.first)
+          << ") to RDB";
     }
   }
   return absl::OkStatus();
@@ -931,19 +941,21 @@ void IndexSchema::OnLoadingEnded(RedisModuleCtx *ctx) {
       }
       key_size++;
     });
-    VMSDK_LOG(NOTICE, ctx) << "Deleting " << stale_entries
-                           << " stale entries of " << key_size
-                           << " total keys for {Index: " << name_
-                           << ", Attribute: " << attribute.first << "}";
+    VMSDK_LOG(DEBUG, ctx) << "Deleting " << stale_entries
+                          << " stale entries of " << key_size
+                          << " total keys for {Index: " << name_
+                          << ", Attribute: " << attribute.first << "}";
   }
   VMSDK_LOG(NOTICE, ctx) << "Deleting " << deletion_attributes.size()
-                         << " stale entries for {Index: " << name_ << "}";
+                         << " stale entries for {Index: "
+                         << vmsdk::config::RedactIfNeeded(name_) << "}";
 
   for (auto &[key, attributes] : deletion_attributes) {
     auto interned_key = std::make_shared<InternedString>(key);
     ProcessMutation(ctx, attributes, interned_key, true);
   }
-  VMSDK_LOG(NOTICE, ctx) << "Scanned index schema " << name_
+  VMSDK_LOG(NOTICE, ctx) << "Scanned index schema "
+                         << vmsdk::config::RedactIfNeeded(name_)
                          << " for stale entries in "
                          << absl::FormatDuration(stop_watch.Duration());
 }
@@ -993,7 +1005,7 @@ void IndexSchema::MarkAsDestructing() {
     VMSDK_LOG(WARNING, detached_ctx_.get())
         << "Failed to remove keyspace event subscription for index "
            "schema "
-        << name_ << ": " << status.message();
+        << vmsdk::config::RedactIfNeeded(name_) << ": " << status.message();
   }
   backfill_job_.Get()->MarkScanAsDone();
   tracked_mutated_records_.clear();

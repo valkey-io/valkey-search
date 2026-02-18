@@ -40,6 +40,12 @@
 namespace vmsdk {
 namespace config {
 
+/// Controls the verbose logging flag
+static auto hide_user_data_config =
+    BooleanBuilder(kHideUserDataFromLog, true).Build();
+
+bool ShouldHideUserDataFromLog() { return hide_user_data_config->GetValue(); }
+
 namespace {
 
 constexpr absl::string_view kUseCoordinator = "--use-coordinator";
@@ -289,6 +295,9 @@ absl::Status Boolean::FromString(std::string_view value) {
   }
   return absl::OkStatus();
 }
-
+/// Get method to fetch the `hide_user_data_config`
+vmsdk::config::Boolean &GetHideUserDataFromLog() {
+  return dynamic_cast<vmsdk::config::Boolean &>(*hide_user_data_config);
+}
 }  // namespace config
 }  // namespace vmsdk

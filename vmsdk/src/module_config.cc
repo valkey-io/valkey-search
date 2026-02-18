@@ -26,6 +26,12 @@ static auto debug_mode = BooleanBuilder(kDebugMode, true).Hidden().Build();
 
 bool IsDebugModeEnabled() { return debug_mode->GetValue(); }
 
+/// Controls the verbose logging flag
+static auto hide_user_data_config =
+    BooleanBuilder(kHideUserDataFromLog, true).Build();
+
+bool ShouldHideUserDataFromLog() { return hide_user_data_config->GetValue(); }
+
 namespace {
 
 constexpr absl::string_view kUseCoordinator = "--use-coordinator";
@@ -332,6 +338,10 @@ absl::Status String::FromString(std::string_view value) {
   default_ = value.data();
   SetValueOrLog(default_, WARNING);
   return absl::OkStatus();
+}
+/// Get method to fetch the `hide_user_data_config`
+vmsdk::config::Boolean &GetHideUserDataFromLog() {
+  return dynamic_cast<vmsdk::config::Boolean &>(*hide_user_data_config);
 }
 
 absl::Status ModuleConfigManager::ListAllConfigs(

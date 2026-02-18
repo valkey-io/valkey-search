@@ -351,7 +351,7 @@ void MetadataManager::DelayHandleClusterMessage(
     std::unique_ptr<GlobalMetadataVersionHeader> header) {
   if (PauseHandleClusterMessage.GetValue()) {
     Metrics::GetStats().pause_handle_cluster_message_round_cnt++;
-    VMSDK_LOG_EVERY_N_SEC(NOTICE, nullptr, 2)
+    VMSDK_LOG_EVERY_N_SEC(DEBUG, nullptr, 2)
         << "DEBUG: Paused round is "
         << Metrics::GetStats().pause_handle_cluster_message_round_cnt;
     std::string sender_id_str(sender_id, VALKEYMODULE_NODE_ID_LEN);
@@ -564,7 +564,7 @@ absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
           VMSDK_LOG(WARNING, detached_ctx_.get())
               << "Failed during reconciliation callback: %s"
               << result.message().data() << " for type " << type_name << ", id "
-              << id << " from " << source;
+              << vmsdk::config::RedactIfNeeded(id) << " from " << source;
           return result;
         }
         auto status = CallFTInternalUpdateForReconciliation(id, proposed_entry);
@@ -891,7 +891,8 @@ ObjName ObjName::Decode(absl::string_view encoded) {
       }
     }
     VMSDK_LOG_EVERY_N(WARNING, nullptr, 10)
-        << "Found invalid encoded index name: " << encoded;
+        << "Found invalid encoded index name: "
+        << vmsdk::config::RedactIfNeeded(encoded);
   }
   // Assume 8/1.0 encoding.
   return {0, encoded};
@@ -968,7 +969,8 @@ absl::Status MetadataManager::CallFTInternalUpdateForReconciliation(
   if (reply == nullptr ||
       ValkeyModule_CallReplyType(reply) == VALKEYMODULE_REPLY_ERROR) {
     if (reply) ValkeyModule_FreeCallReply(reply);
-    CHECK(false) << "FT.INTERNAL_UPDATE failed for id: " << id;
+    CHECK(false) << "FT.INTERNAL_UPDATE failed for id: "
+                 << vmsdk::config::RedactIfNeeded(id);
   }
 
   ValkeyModule_FreeCallReply(reply);

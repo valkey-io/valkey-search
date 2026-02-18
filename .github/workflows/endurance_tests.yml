@@ -72,7 +72,7 @@ jobs:
           -w /workspace \
           --user "ubuntu:ubuntu" \
           stability-test-image \
-          bash -c "./build.sh"
+          sudo -E ./build.sh
 
     # Run stability tests
     - name: Run Stability Tests
@@ -93,7 +93,7 @@ jobs:
           -e TEST_UNDECLARED_OUTPUTS_DIR="/workspace/stability-results" \
           --user "ubuntu:ubuntu" \
           stability-test-image \
-          bash scripts/benchmark/run_endurance_test.sh
+          sudo -E scripts/benchmark/run_endurance_test.sh
 
     # Update results permissions
     - name: Update Results Permissions

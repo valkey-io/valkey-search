@@ -114,13 +114,13 @@ Supported numeric functions are listed. Numeric functions always convert their i
 
 |      Syntax       | Operation                                    |
 | :---------------: | :------------------------------------------- |
-|  log(expression)  | $log_e(expression)$                          |
+|  log(expression)  | ln(expression)                               |
 |  abs(expression)  | \| expression \|                             |
 | ceil(expression)  | Round to smallest not less than expression   |
 | floor(expression) | Round to largest not greater than expression |
-| log2(expression)  | $log_2(expression)$                          |
-|  exp(expression)  | $e^{expression}$                             |
-| sqrt(expression)  | $\sqrt{expression}$                          |
+| log2(expression)  | log2(expression)                             |
+|  exp(expression)  | exp(expression)                              |
+| sqrt(expression)  | sqrt(expression)                             |
 
 ## String Processing Functions
 

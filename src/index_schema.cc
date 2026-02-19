@@ -1951,7 +1951,16 @@ absl::StatusOr<vmsdk::ValkeyVersion> IndexSchema::GetMinVersion(
         "Unable to unpack metadata for index schema fingerprint "
         "calculation");
   }
-  if (unpacked->has_db_num() && unpacked->db_num() != 0) {
+  bool has_text_index = false;
+  for (const auto &attr : unpacked->attributes()) {
+    if (attr.index().has_text_index()) {
+      has_text_index = true;
+      break;
+    }
+  }
+  if (has_text_index) {
+    return kRelease12;
+  } else if (unpacked->has_db_num() && unpacked->db_num() != 0) {
     return kRelease11;
   } else {
     return kRelease10;

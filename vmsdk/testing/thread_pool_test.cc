@@ -355,6 +355,9 @@ TEST_F(ThreadPoolTest, TestCPUUsage) {
   ThreadPool thread_pool("test-pool", thread_count);
   std::atomic_bool atomic_flag{true};
   int modulo{0};
+  // Workers did not start, thread monitor not initialized,
+  // so it should return 0
+  EXPECT_EQ(thread_pool.GetAvgCPUPercentage().value(), 0.0);
   // Initializing the threads with first simple tasks
   auto blocking_counter = ScheduleTasks(thread_pool, atomic_flag, modulo);
   thread_pool.StartWorkers();

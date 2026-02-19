@@ -15,9 +15,8 @@ set -Eeuo pipefail
 # Default configuration
 VALKEY_SERVER_PATH="${VALKEY_SERVER_PATH:-valkey/src/valkey-server}"
 VALKEY_CLI_PATH="${VALKEY_CLI_PATH:-valkey/src/valkey-cli}"
-VALKEY_SEARCH_PATH="${VALKEY_SEARCH_PATH:-build/libvalkey-search.so}"
+VALKEY_SEARCH_PATH="${VALKEY_SEARCH_PATH:-.build-release/libsearch.so}"
 MEMTIER_PATH="${MEMTIER_PATH:-memtier_benchmark}"
-TEST_FILTER="${TEST_FILTER:-*}"
 TEST_TMPDIR="${TEST_TMPDIR:-/tmp/stability_test}"
 TEST_UNDECLARED_OUTPUTS_DIR="${TEST_UNDECLARED_OUTPUTS_DIR:-/tmp/stability_test_outputs}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
@@ -28,7 +27,6 @@ echo "Valkey Server: ${VALKEY_SERVER_PATH}"
 echo "Valkey CLI: ${VALKEY_CLI_PATH}"
 echo "Valkey Search Module: ${VALKEY_SEARCH_PATH}"
 echo "Memtier Path: ${MEMTIER_PATH}"
-echo "Test Filter: ${TEST_FILTER}"
 echo "Python: ${PYTHON_BIN}"
 echo ""
 
@@ -83,6 +81,7 @@ build_valkey() {
     echo "=== Building Valkey ==="
     
     local valkey_dir="valkey"
+    local original_dir="$(pwd)"
     
     if [[ ! -d "${valkey_dir}" ]]; then
         echo "Cloning valkey repository..."
@@ -96,14 +95,15 @@ build_valkey() {
     
     echo "Building valkey..."
     if ! make BUILD_TLS=yes -j$(nproc); then
+        cd "${original_dir}"  # Restore directory before returning error
         echo "ERROR: Failed to build valkey"
         return 1
     fi
     
-    cd ..
+    cd "${original_dir}"  # Always restore original directory
     
-    VALKEY_SERVER_PATH="$(pwd)/${valkey_dir}/src/valkey-server"
-    VALKEY_CLI_PATH="$(pwd)/${valkey_dir}/src/valkey-cli"
+    VALKEY_SERVER_PATH="${original_dir}/${valkey_dir}/src/valkey-server"
+    VALKEY_CLI_PATH="${original_dir}/${valkey_dir}/src/valkey-cli"
     
     echo "Valkey built successfully"
 }
@@ -125,14 +125,15 @@ build_valkey_search() {
         return 1
     fi
     
-    VALKEY_SEARCH_PATH="$(pwd)/build/libvalkey-search.so"
+    # build.sh creates .build-release/libsearch.so
+    VALKEY_SEARCH_PATH="$(pwd)/.build-release/libsearch.so"
     
     if [[ ! -f "${VALKEY_SEARCH_PATH}" ]]; then
-        echo "ERROR: valkey-search module not found after build"
+        echo "ERROR: valkey-search module not found after build at ${VALKEY_SEARCH_PATH}"
         return 1
     fi
     
-    echo "Valkey-search built successfully"
+    echo "Valkey-search built successfully at ${VALKEY_SEARCH_PATH}"
 }
 
 # ============================================================================
@@ -170,11 +171,12 @@ run_stability_tests() {
     
     cd testing/integration
     
-    # Run the stability tests with the specified filter
-    echo "Executing: ${PYTHON_BIN} stability_test.py --test_filter='${TEST_FILTER}'"
+    # Run the stability tests (absltest doesn't support --test_filter flag)
+    # To run specific tests, pass test name directly: python3 stability_test.py StabilityTests.test_valkeyquery_stability_<test_name>
+    echo "Executing: ${PYTHON_BIN} stability_test.py"
     echo ""
     
-    if "${PYTHON_BIN}" stability_test.py --test_filter="${TEST_FILTER}"; then
+    if "${PYTHON_BIN}" stability_test.py; then
         echo ""
         echo "=== Stability Tests PASSED ==="
         return 0
@@ -207,14 +209,13 @@ show_help() {
     cat << EOF
 Usage: $0 [OPTIONS]
 
-Run the valkey-search stability tests.
+Run the valkey-search stability tests (all tests).
 
 OPTIONS:
     --valkey-server PATH        Path to valkey-server binary (default: valkey/src/valkey-server)
     --valkey-cli PATH          Path to valkey-cli binary (default: valkey/src/valkey-cli)
-    --valkey-search PATH       Path to valkey-search module (default: build/libvalkey-search.so)
+    --valkey-search PATH       Path to valkey-search module (default: .build-release/libsearch.so)
     --memtier PATH             Path to memtier_benchmark (default: memtier_benchmark)
-    --test-filter PATTERN      Test filter pattern (default: *)
     --python PATH              Path to python3 binary (default: python3)
     --help                     Show this help message
 
@@ -222,16 +223,13 @@ EXAMPLES:
     # Run all stability tests
     $0
 
-    # Run only HNSW tests
-    $0 --test-filter='*hnsw*'
-
     # Run tests with specific valkey binary
     $0 --valkey-server /path/to/valkey-server
 
-    # Run specific test case
-    $0 --test-filter='*flat_with_backfill_coordinator*'
+    # Run specific test directly (bypassing this script)
+    python3 testing/integration/stability_test.py StabilityTests.test_valkeyquery_stability_flat_with_backfill_coordinator
 
-AVAILABLE TEST CASES:
+AVAILABLE TEST CASES (run via direct python call):
     - flat_with_backfill_coordinator
     - hnsw_with_backfill_no_coordinator
     - hnsw_no_backfill_no_coordinator
@@ -273,10 +271,6 @@ main() {
                 ;;
             --memtier)
                 MEMTIER_PATH="$2"
-                shift 2
-                ;;
-            --test-filter)
-                TEST_FILTER="$2"
                 shift 2
                 ;;
             --python)

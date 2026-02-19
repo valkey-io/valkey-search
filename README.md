@@ -1,10 +1,13 @@
 # valkey-search
 
-**valkey-search** (BSD-3-Clause), provided as a Valkey module, is a high-performance Vector Similarity Search engine optimized for AI-driven workloads. It delivers single-digit millisecond latency and high QPS, capable of handling billions of vectors with over 99% recall.
+**Valkey-Search** (BSD-3-Clause), provided as a Valkey module, is a high-performance Search engine
+optimized for AI-driven / Search / Analytics / Recommendation System related workloads. It delivers single-digit millisecond
+latency and high QPS, capable of handling billions of vectors with over 99% recall as part of vector searches. It also provides
+support for hybrid / pure non vector workloads including Numeric, Tag, and Full-text searches.
 
-valkey-search allows users to create indexes and perform similarity searches, incorporating complex filters. It supports Approximate Nearest Neighbor (ANN) search with HNSW and exact matching using K-Nearest Neighbors (KNN). Users can index data using either **Valkey Hash** or **[Valkey-JSON](https://github.com/valkey-io/valkey-json)** data types.
-
-While valkey-search currently focuses on Vector Search, its goal is to extend Valkey into a full-fledged search engine, supporting Full Text Search and additional indexing options.
+Valkey-Search allows users to create indexes and perform searches, incorporating complex filters.
+Users can index data using either **[Valkey Hash](hashes.md)** or **[Valkey-JSON](valkey-json.md)** data types.
+The vector queries support Approximate Nearest Neighbor (ANN) search with HNSW and exact matching using K-Nearest Neighbors (KNN).
 
 ## Supported Commands
 
@@ -14,6 +17,7 @@ FT.DROPINDEX
 FT.INFO
 FT._LIST
 FT.SEARCH
+FT.AGGREGATE
 ```
 
 For a detailed description of the supported commands and configuration options, see the [Command Reference](https://valkey.io/commands/#search).
@@ -36,7 +40,7 @@ valkey-search achieves high performance by storing vectors in-memory and applyin
 
 ## Hybrid Queries
 
-valkey-search supports hybrid queries, combining Vector Similarity Search with filtering on indexed fields, such as **Numeric** and **Tag indexes**.
+valkey-search supports hybrid queries, combining Vector Similarity Search with filtering on indexed fields, such as **Numeric**, **Tag**, and **Text indexes**.
 
 There are two primary approaches to hybrid queries:
 

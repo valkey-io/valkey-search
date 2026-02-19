@@ -251,12 +251,12 @@ BuildTextIterator(const Predicate *predicate, bool negate,
   }
   if (predicate->GetType() == PredicateType::kText) {
     auto text_predicate = dynamic_cast<const TextPredicate *>(predicate);
-    auto fetcher_ptr = text_predicate->Search(negate);
-    auto fetcher = std::unique_ptr<indexes::Text::EntriesFetcher>(
-        static_cast<indexes::Text::EntriesFetcher *>(fetcher_ptr));
-    fetcher->require_positions_ = require_positions;
-    size_t size = fetcher->Size();
-    return {text_predicate->BuildTextIterator(fetcher.get()), size};
+    auto text_index = text_predicate->GetTextIndexSchema()->GetTextIndex();
+    auto field_mask = text_predicate->GetFieldMask();
+    size_t size = text_predicate->EstimateSize();
+    auto result = text_predicate->BuildTextIterator(text_index, field_mask,
+                                                    require_positions);
+    return {std::move(result), size};
   }
   if (predicate->GetType() == PredicateType::kNegate) {
     // Cannot build text iterator for negation - return null
@@ -341,10 +341,11 @@ size_t EvaluateFilterAsPrimary(
   }
   if (predicate->GetType() == PredicateType::kText) {
     auto text_predicate = dynamic_cast<const TextPredicate *>(predicate);
-    auto fetcher = std::unique_ptr<indexes::EntriesFetcherBase>(
-        static_cast<indexes::EntriesFetcherBase *>(
-            text_predicate->Search(negate)));
-    size_t size = fetcher->Size();
+    size_t size = text_predicate->EstimateSize();
+    auto fetcher = std::make_unique<indexes::Text::EntriesFetcher>(
+        size, text_predicate->GetTextIndexSchema()->GetTextIndex(),
+        text_predicate->GetFieldMask(), false);
+    fetcher->predicate_ = text_predicate;
     entries_fetchers.push(std::move(fetcher));
     return size;
   }

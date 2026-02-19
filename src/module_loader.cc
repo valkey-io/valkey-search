@@ -10,15 +10,10 @@
 #include "src/commands/commands.h"
 #include "src/keyspace_event_manager.h"
 #include "src/valkey_search.h"
+#include "src/version.h"
 #include "vmsdk/src/module.h"
+#include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
-
-#define MODULE_VERSION 10000
-/* The release stage is used in order to provide release status information.
- * In unstable branch the status is always "dev".
- * During release process the status will be set to rc1,rc2...rcN.
- * When the version is released the status will be "ga". */
-#define MODULE_RELEASE_STAGE "rc1"
 
 namespace {
 
@@ -33,7 +28,7 @@ inline std::list<absl::string_view> ACLPermissionFormatter(
   }
   return permissions;
 }
-}
+}  // namespace
 
 static const std::string kModuleVersion = std::format("{}.{}.{}.{}",
                             MODULE_VERSION / 10000, 
@@ -46,7 +41,8 @@ vmsdk::module::Options options = {
     .acl_categories = ACLPermissionFormatter({
         valkey_search::kSearchCategory,
     }),
-    .version = MODULE_VERSION,
+    .version = kModuleVersion,
+    .minimum_valkey_server_version = kMinimumServerVersion,
     .info = valkey_search::ModuleInfo,
     .commands =
         {
@@ -54,7 +50,8 @@ vmsdk::module::Options options = {
                 .cmd_name = valkey_search::kCreateCommand,
                 .permissions = ACLPermissionFormatter(
                     valkey_search::kCreateCmdPermissions),
-                .flags = {vmsdk::module::kDenyOOMFlag},
+                .flags = {vmsdk::module::kWriteFlag, vmsdk::module::kFastFlag,
+                          vmsdk::module::kDenyOOMFlag},
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTCreateCmd>,
                 .command_info = vmsdk::command_info::Info {
                     .version = kModuleVersion,
@@ -202,6 +199,7 @@ vmsdk::module::Options options = {
                 .cmd_name = valkey_search::kDropIndexCommand,
                 .permissions = ACLPermissionFormatter(
                     valkey_search::kDropIndexCmdPermissions),
+                .flags = {vmsdk::module::kWriteFlag, vmsdk::module::kFastFlag},
                 .cmd_func =
                     &vmsdk::CreateCommand<valkey_search::FTDropIndexCmd>,
                 .command_info = vmsdk::command_info::Info {
@@ -223,6 +221,8 @@ vmsdk::module::Options options = {
                 .cmd_name = valkey_search::kInfoCommand,
                 .permissions =
                     ACLPermissionFormatter(valkey_search::kInfoCmdPermissions),
+                .flags = {vmsdk::module::kReadOnlyFlag,
+                          vmsdk::module::kFastFlag},
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTInfoCmd>,
                 .command_info = vmsdk::command_info::Info {
                     .version = kModuleVersion,
@@ -243,6 +243,8 @@ vmsdk::module::Options options = {
                 .cmd_name = valkey_search::kListCommand,
                 .permissions =
                     ACLPermissionFormatter(valkey_search::kListCmdPermissions),
+                .flags = {vmsdk::module::kReadOnlyFlag,
+                          vmsdk::module::kAdminFlag},
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTListCmd>,
                 .command_info = vmsdk::command_info::Info {
                     .version = kModuleVersion,
@@ -256,7 +258,7 @@ vmsdk::module::Options options = {
                 .cmd_name = valkey_search::kSearchCommand,
                 .permissions = ACLPermissionFormatter(
                     valkey_search::kSearchCmdPermissions),
-                .flags = {vmsdk::module::kDenyOOMFlag},
+                .flags = {vmsdk::module::kReadOnlyFlag},
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTSearchCmd>,
                 .command_info = vmsdk::command_info::Info {
                     .version = kModuleVersion,
@@ -379,6 +381,8 @@ vmsdk::module::Options options = {
                 .cmd_name = valkey_search::kDebugCommand,
                 .permissions =
                     ACLPermissionFormatter(valkey_search::kDebugCmdPermissions),
+                .flags = {vmsdk::module::kReadOnlyFlag,
+                          vmsdk::module::kAdminFlag},
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTDebugCmd>,
                 .command_info = vmsdk::command_info::Info {
                     .version = kModuleVersion,
@@ -388,8 +392,24 @@ vmsdk::module::Options options = {
                     .arity = -2,
                 },
             },
-        }  // namespace
-    ,
+            {
+                .cmd_name = valkey_search::kInternalUpdateCommand,
+                .permissions = ACLPermissionFormatter(
+                    valkey_search::kInternalUpdateCmdPermissions),
+                .flags = {vmsdk::module::kWriteFlag, vmsdk::module::kAdminFlag,
+                          vmsdk::module::kFastFlag},
+                .cmd_func =
+                    &vmsdk::CreateCommand<valkey_search::FTInternalUpdateCmd>,
+            },
+            {
+                .cmd_name = valkey_search::kAggregateCommand,
+                .permissions = ACLPermissionFormatter(
+                    valkey_search::kSearchCmdPermissions),
+                .flags = {vmsdk::module::kReadOnlyFlag},
+                .cmd_func =
+                    &vmsdk::CreateCommand<valkey_search::FTAggregateCmd>,
+            },
+        },
     .on_load =
         [](ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc,
            [[maybe_unused]] const vmsdk::module::Options &options) {

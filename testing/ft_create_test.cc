@@ -16,12 +16,17 @@
 #include "src/commands/ft_create_parser.h"
 #include "src/indexes/index_base.h"
 #include "src/schema_manager.h"
+#include "src/valkey_search_options.h"
 #include "testing/common.h"
 #include "vmsdk/src/module.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
+
+namespace options {
+vmsdk::config::Number& GetMaxIndexes();
+}
 
 namespace {
 
@@ -184,6 +189,26 @@ INSTANTIATE_TEST_SUITE_P(
                     },
                 },
         },
+        {
+            .test_name = "happy_path_sortable",
+            .argv = {"FT.CREATE", "test_index_schema", "schema", "field1",
+                     "numeric", "SORTABLE", "field2", "tag", "separator", "|",
+                     "sortable"},
+            .index_schema_name = "test_index_schema",
+            .expected_run_return = VALKEYMODULE_OK,
+            .expected_reply_message = "+OK\r\n",
+            .expected_indexes =
+                {
+                    {
+                        .attribute_alias = "field1",
+                        .indexer_type = indexes::IndexerType::kNumeric,
+                    },
+                    {
+                        .attribute_alias = "field2",
+                        .indexer_type = indexes::IndexerType::kTag,
+                    },
+                },
+        },
     }),
     [](const TestParamInfo<FTCreateTestCase>& info) {
       return info.param.test_name;
@@ -224,7 +249,7 @@ TEST_F(FTCreateTest, MaxIndexesLimit) {
   // Execute command with empty expected reply (we'll check it separately)
   ExecuteFTCreateCommand(
       &fake_ctx_, argv, VALKEYMODULE_OK,
-      "$108\r\nInvalid range: Value above maximum; Maximum number of indexes "
+      "-Invalid range: Value above maximum; Maximum number of indexes "
       "reached (2). Cannot create additional indexes.\r\n");
 }
 
@@ -292,7 +317,7 @@ INSTANTIATE_TEST_SUITE_P(
                             "INITIAL_CAP",
                             "15000"},
             .expected_error_message =
-                "$90\r\nInvalid range: Value above maximum; Number of prefixes "
+                "-Invalid range: Value above maximum; Number of prefixes "
                 "(3) exceeds the maximum allowed (2)\r\n",
         },
         {
@@ -311,7 +336,7 @@ INSTANTIATE_TEST_SUITE_P(
                             "INITIAL_CAP", "15000", "field_too_long", "tag",
                             "separator", "|"},
             .expected_error_message =
-                "$126\r\nInvalid field type for field `field_too_long`: "
+                "-Invalid field type for field `field_too_long`: "
                 "Invalid range: Value above maximum; A tag field can have a "
                 "maximum length of 5.\r\n",
         },
@@ -331,7 +356,7 @@ INSTANTIATE_TEST_SUITE_P(
                             "INITIAL_CAP", "15000", "field_too_long",
                             "numeric"},
             .expected_error_message =
-                "$130\r\nInvalid field type for field `field_too_long`: "
+                "-Invalid field type for field `field_too_long`: "
                 "Invalid range: Value above maximum; A numeric field can have "
                 "a maximum length of 5.\r\n",
         },
@@ -357,7 +382,7 @@ INSTANTIATE_TEST_SUITE_P(
                             "3",         "DISTANCE_METRIC",
                             "IP"},
             .expected_error_message =
-                "$85\r\nInvalid range: Value above maximum; The maximum number "
+                "-Invalid range: Value above maximum; The maximum number "
                 "of attributes cannot exceed 1.\r\n",
         },
         {
@@ -373,7 +398,7 @@ INSTANTIATE_TEST_SUITE_P(
                             "vector", "vector", "HNSW", "6", "TYPE", "FLOAT32",
                             "DIM", "11", "DISTANCE_METRIC", "IP"},
             .expected_error_message =
-                "$167\r\nInvalid field type for field `vector`: Invalid range: "
+                "-Invalid field type for field `vector`: Invalid range: "
                 "Value above maximum; The dimensions value must be a positive "
                 "integer greater than 0 and less than or equal to 10.\r\n",
         },
@@ -388,9 +413,9 @@ INSTANTIATE_TEST_SUITE_P(
                             "vector", "vector", "HNSW", "8", "TYPE", "FLOAT32",
                             "DIM", "3", "DISTANCE_METRIC", "IP", "M", "51"},
             .expected_error_message =
-                "$140\r\nInvalid field type for field `vector`: Invalid range: "
+                "-Invalid field type for field `vector`: Invalid range: "
                 "Value above maximum; M must be a positive integer greater "
-                "than 0 and cannot exceed 50.\r\n",
+                "than 2 and cannot exceed 50.\r\n",
         },
         {
             .test_name = "MaxEfConstructionLimit",
@@ -406,7 +431,7 @@ INSTANTIATE_TEST_SUITE_P(
                             "DIM", "3", "DISTANCE_METRIC", "IP",
                             "EF_CONSTRUCTION", "201"},
             .expected_error_message =
-                "$155\r\nInvalid field type for field `vector`: Invalid range: "
+                "-Invalid field type for field `vector`: Invalid range: "
                 "Value above maximum; EF_CONSTRUCTION must be a positive "
                 "integer greater than 0 and cannot exceed 200.\r\n",
         },
@@ -424,7 +449,7 @@ INSTANTIATE_TEST_SUITE_P(
                             "DIM", "3", "DISTANCE_METRIC", "IP", "EF_RUNTIME",
                             "101"},
             .expected_error_message =
-                "$150\r\nInvalid field type for field `vector`: Invalid range: "
+                "-Invalid field type for field `vector`: Invalid range: "
                 "Value above maximum; EF_RUNTIME must be a positive integer "
                 "greater than 0 and cannot exceed 100.\r\n",
         },
@@ -432,6 +457,35 @@ INSTANTIATE_TEST_SUITE_P(
     [](const TestParamInfo<MaxLimitTestCase>& info) {
       return info.param.test_name;
     });
+
+// Test replication behavior based on coordinator setting
+TEST_F(FTCreateTest, ReplicationBehaviorCoordinatorEnabled) {
+  VMSDK_EXPECT_OK(
+      const_cast<vmsdk::config::Boolean&>(options::GetUseCoordinator())
+          .SetValue(true));
+
+  EXPECT_CALL(*kMockValkeyModule, ReplicateVerbatim(&fake_ctx_))
+      .Times(0);  // Should NOT replicate when coordinator enabled
+
+  std::vector<std::string> argv = {
+      "FT.CREATE", "test_idx", "schema", "vec", "vector",          "FLAT", "6",
+      "TYPE",      "FLOAT32",  "DIM",    "3",   "DISTANCE_METRIC", "IP"};
+  ExecuteFTCreateCommand(&fake_ctx_, argv);
+}
+
+TEST_F(FTCreateTest, ReplicationBehaviorCoordinatorDisabled) {
+  VMSDK_EXPECT_OK(
+      const_cast<vmsdk::config::Boolean&>(options::GetUseCoordinator())
+          .SetValue(false));
+
+  EXPECT_CALL(*kMockValkeyModule, ReplicateVerbatim(&fake_ctx_))
+      .Times(1);  // Should replicate when coordinator disabled
+
+  std::vector<std::string> argv = {
+      "FT.CREATE", "test_idx", "schema", "vec", "vector",          "FLAT", "6",
+      "TYPE",      "FLOAT32",  "DIM",    "3",   "DISTANCE_METRIC", "IP"};
+  ExecuteFTCreateCommand(&fake_ctx_, argv);
+}
 
 }  // namespace
 

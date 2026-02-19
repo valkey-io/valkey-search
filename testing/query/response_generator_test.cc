@@ -41,7 +41,7 @@ using testing::ValuesIn;
 class MockPredicate : public query::Predicate {
  public:
   explicit MockPredicate(query::PredicateType type) : query::Predicate(type) {}
-  MOCK_METHOD(bool, Evaluate, (query::Evaluator & evaluator),
+  MOCK_METHOD(query::EvaluationResult, Evaluate, (query::Evaluator & evaluator),
               (override, const));
 };
 
@@ -77,18 +77,28 @@ TEST_P(ResponseGeneratorTest, ProcessNeighborsForReply) {
   auto &params = GetParam();
   ValkeyModuleCtx fake_ctx;
 
-  std::deque<indexes::Neighbor> expected_neighbors;
+  std::vector<indexes::Neighbor> expected_neighbors;
   for (const auto &external_id : params.external_id_neighbors) {
     auto string_interned_external_id = StringInternStore::Intern(external_id);
     expected_neighbors.push_back(
         indexes::Neighbor(string_interned_external_id, 0));
+    expected_neighbors.back().sequence_number = 0;
   }
   std::vector<RecordsMap> expected_contents;
   expected_contents.reserve(params.expected_contents.size());
   for (const auto &expected_content : params.expected_contents) {
     expected_contents.push_back(ToRecordsMap(expected_content));
   }
-  query::VectorSearchParameters parameters(100000, nullptr);
+  UnitTestSearchParameters parameters;
+  parameters.index_schema = CreateIndexSchema("index").value();
+  for (const auto &n : expected_neighbors) {
+    parameters.index_schema->SetIndexMutationSequenceNumber(n.external_id,
+                                                            n.sequence_number);
+    parameters.index_schema->SetDbMutationSequenceNumber(
+        n.external_id,
+        n.sequence_number + 1);  // + 1 forces call to filter.
+  }
+
   for (const auto &return_attribute : params.return_attributes) {
     parameters.return_attributes.push_back(
         {.identifier =
@@ -104,10 +114,11 @@ TEST_P(ResponseGeneratorTest, ProcessNeighborsForReply) {
       .WillRepeatedly([&params, &filter_evaluate_cnt](
                           [[maybe_unused]] query::Evaluator &evaluator) {
         if (params.filter_evaluate_not_match_index == -1) {
-          return true;
+          return query::EvaluationResult(true);
         }
         ++filter_evaluate_cnt;
-        return (filter_evaluate_cnt != params.filter_evaluate_not_match_index);
+        return query::EvaluationResult(filter_evaluate_cnt !=
+                                       params.filter_evaluate_not_match_index);
       });
 
   parameters.filter_parse_results.root_predicate = std::move(predicate);
@@ -123,13 +134,14 @@ TEST_P(ResponseGeneratorTest, ProcessNeighborsForReply) {
   }
   for (const auto &neighbor : expected_neighbors) {
     EXPECT_CALL(data_type,
-                FetchAllRecords(&fake_ctx, parameters.attribute_alias,
-                                absl::string_view(*neighbor.external_id),
-                                expected_fetched_identifiers))
+                FetchAllRecords(
+                    &fake_ctx, std::make_optional(parameters.attribute_alias),
+                    testing::_, absl::string_view(*neighbor.external_id),
+                    expected_fetched_identifiers))
         .WillOnce([&params](
                       ValkeyModuleCtx *ctx,
-                      const std::string &query_attribute_alias,
-                      absl::string_view key,
+                      const std::optional<std::string> &query_attribute_alias,
+                      ValkeyModuleKey *open_key, absl::string_view key,
                       const absl::flat_hash_set<absl::string_view> &identifiers)
                       -> absl::StatusOr<RecordsMap> {
           if (params.missing_keys.contains(key)) {
@@ -164,7 +176,7 @@ TEST_F(ResponseGeneratorTest, ProcessNeighborsForReplyContentLimits) {
       options::GetMaxSearchResultFieldsCount().SetValue(test_fields_limit));
 
   // Create neighbors with different content sizes and field counts
-  std::deque<indexes::Neighbor> neighbors;
+  std::vector<indexes::Neighbor> neighbors;
   auto small_external_id = StringInternStore::Intern("small_content_id");
   auto large_external_id = StringInternStore::Intern("large_content_id");
   auto many_fields_id = StringInternStore::Intern("many_fields_id");
@@ -174,7 +186,7 @@ TEST_F(ResponseGeneratorTest, ProcessNeighborsForReplyContentLimits) {
   neighbors.push_back(indexes::Neighbor(many_fields_id, 0));
 
   // Set up parameters
-  query::VectorSearchParameters parameters(100000, nullptr);
+  UnitTestSearchParameters parameters;
   parameters.return_attributes.push_back(
       {.identifier = vmsdk::MakeUniqueValkeyString("content"),
        .alias = vmsdk::MakeUniqueValkeyString("content_alias")});
@@ -193,12 +205,14 @@ TEST_F(ResponseGeneratorTest, ProcessNeighborsForReplyContentLimits) {
   });
 
   // Mock FetchAllRecords to return different sized content
-  EXPECT_CALL(data_type, FetchAllRecords(&fake_ctx, parameters.attribute_alias,
-                                         absl::string_view("small_content_id"),
-                                         testing::_))
+  EXPECT_CALL(
+      data_type,
+      FetchAllRecords(&fake_ctx, std::make_optional(parameters.attribute_alias),
+                      testing::_, absl::string_view("small_content_id"),
+                      testing::_))
       .WillOnce([](ValkeyModuleCtx *ctx,
-                   const std::string &query_attribute_alias,
-                   absl::string_view key,
+                   const std::optional<std::string> &query_attribute_alias,
+                   ValkeyModuleKey *open_key, absl::string_view key,
                    const absl::flat_hash_set<absl::string_view> &identifiers)
                     -> absl::StatusOr<RecordsMap> {
         // Return small content (within both size and field limits)
@@ -212,13 +226,15 @@ TEST_F(ResponseGeneratorTest, ProcessNeighborsForReplyContentLimits) {
         return small_content;
       });
 
-  EXPECT_CALL(data_type, FetchAllRecords(&fake_ctx, parameters.attribute_alias,
-                                         absl::string_view("large_content_id"),
-                                         testing::_))
+  EXPECT_CALL(
+      data_type,
+      FetchAllRecords(&fake_ctx, std::make_optional(parameters.attribute_alias),
+                      testing::_, absl::string_view("large_content_id"),
+                      testing::_))
       .WillOnce([test_size_limit](
                     ValkeyModuleCtx *ctx,
-                    const std::string &query_attribute_alias,
-                    absl::string_view key,
+                    const std::optional<std::string> &query_attribute_alias,
+                    ValkeyModuleKey *open_key, absl::string_view key,
                     const absl::flat_hash_set<absl::string_view> &identifiers)
                     -> absl::StatusOr<RecordsMap> {
         // Return large content (exceeds size limit)
@@ -233,11 +249,12 @@ TEST_F(ResponseGeneratorTest, ProcessNeighborsForReplyContentLimits) {
       });
 
   EXPECT_CALL(data_type,
-              FetchAllRecords(&fake_ctx, parameters.attribute_alias,
-                              absl::string_view("many_fields_id"), testing::_))
+              FetchAllRecords(
+                  &fake_ctx, std::make_optional(parameters.attribute_alias),
+                  testing::_, absl::string_view("many_fields_id"), testing::_))
       .WillOnce([](ValkeyModuleCtx *ctx,
-                   const std::string &query_attribute_alias,
-                   absl::string_view key,
+                   const std::optional<std::string> &query_attribute_alias,
+                   ValkeyModuleKey *open_key, absl::string_view key,
                    const absl::flat_hash_set<absl::string_view> &identifiers)
                     -> absl::StatusOr<RecordsMap> {
         // Return content with many fields (exceeds field count limit)
@@ -271,7 +288,7 @@ TEST_F(ResponseGeneratorTest, ProcessNeighborsForReplyContentLimits) {
 
   // Verify that the metric was incremented correctly
   // Should be incremented by 2: once for large content, once for many fields
-  EXPECT_EQ( Metrics::GetStats().query_result_record_dropped_cnt, 2);
+  EXPECT_EQ(Metrics::GetStats().query_result_record_dropped_cnt, 2);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -539,6 +556,108 @@ INSTANTIATE_TEST_SUITE_P(
          }}),
     [](const TestParamInfo<ResponseGeneratorTestCase> &info) {
       return info.param.test_name;
+    });
+
+class ResponseGeneratorDbParamTest
+    : public ValkeySearchTestWithParam<data_model::AttributeDataType> {};
+
+TEST_P(ResponseGeneratorDbParamTest, ProcessNeighborsForReplySelectsCorrectDB) {
+  ValkeyModuleCtx fake_ctx;
+  int target_db = 5;
+  int original_db = 0;
+  data_model::AttributeDataType type = GetParam();
+  UnitTestSearchParameters parameters;
+  parameters.db_num = target_db;
+  parameters.return_attributes.push_back(
+      {.identifier = vmsdk::MakeUniqueValkeyString("field"),
+       .alias = vmsdk::MakeUniqueValkeyString("field")});
+  parameters.attribute_alias = "attr";
+
+  std::vector<indexes::Neighbor> neighbors;
+  auto external_id = StringInternStore::Intern("key");
+  neighbors.push_back(indexes::Neighbor(external_id, 0));
+
+  MockAttributeDataType data_type;
+  EXPECT_CALL(data_type, ToProto()).WillRepeatedly(testing::Return(type));
+
+  {
+    // Expect DB selection sequence
+    testing::InSequence s;
+    EXPECT_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx))
+        .WillOnce(testing::Return(original_db));
+    EXPECT_CALL(*kMockValkeyModule, SelectDb(&fake_ctx, target_db))
+        .WillOnce(testing::Return(VALKEYMODULE_OK));
+
+    // Expect fetch
+    EXPECT_CALL(data_type,
+                FetchAllRecords(
+                    &fake_ctx, std::make_optional(parameters.attribute_alias),
+                    testing::_, absl::string_view("key"), testing::_))
+        .WillOnce(testing::Return(RecordsMap{}));
+
+    // Expect restore DB
+    EXPECT_CALL(*kMockValkeyModule, SelectDb(&fake_ctx, original_db))
+        .WillOnce(testing::Return(VALKEYMODULE_OK));
+  }
+
+  query::ProcessNeighborsForReply(&fake_ctx, data_type, neighbors, parameters,
+                                  parameters.attribute_alias);
+}
+
+TEST_P(ResponseGeneratorDbParamTest, ProcessNeighborsForReplyNoContent) {
+  ValkeyModuleCtx fake_ctx;
+  int target_db = 5;
+  int original_db = 0;
+  data_model::AttributeDataType type = GetParam();
+
+  UnitTestSearchParameters parameters;
+  parameters.db_num = target_db;
+  parameters.no_content = true;
+  parameters.attribute_alias = "attr";
+
+  std::vector<indexes::Neighbor> neighbors;
+  auto external_id = StringInternStore::Intern("key");
+  neighbors.push_back(indexes::Neighbor(external_id, 0));
+
+  MockAttributeDataType data_type;
+  EXPECT_CALL(data_type, ToProto()).WillRepeatedly(testing::Return(type));
+
+  absl::flat_hash_set<absl::string_view> expected_identifiers;
+  if (type == data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON) {
+    expected_identifiers.insert(kJsonRootElementQuery);
+  }
+
+  {
+    testing::InSequence s;
+    EXPECT_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx))
+        .WillOnce(testing::Return(original_db));
+    EXPECT_CALL(*kMockValkeyModule, SelectDb(&fake_ctx, target_db))
+        .WillOnce(testing::Return(VALKEYMODULE_OK));
+
+    EXPECT_CALL(data_type,
+                FetchAllRecords(
+                    &fake_ctx, std::make_optional(parameters.attribute_alias),
+                    testing::_, absl::string_view("key"), expected_identifiers))
+        .WillOnce(testing::Return(RecordsMap{}));
+
+    EXPECT_CALL(*kMockValkeyModule, SelectDb(&fake_ctx, original_db))
+        .WillOnce(testing::Return(VALKEYMODULE_OK));
+  }
+
+  query::ProcessNeighborsForReply(&fake_ctx, data_type, neighbors, parameters,
+                                  parameters.attribute_alias);
+  EXPECT_EQ(neighbors.size(), 1);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    ResponseGeneratorDbTests, ResponseGeneratorDbParamTest,
+    testing::Values(data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH,
+                    data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON),
+    [](const testing::TestParamInfo<data_model::AttributeDataType> &info) {
+      return info.param ==
+                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH
+                 ? "Hash"
+                 : "Json";
     });
 
 }  // namespace

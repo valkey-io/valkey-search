@@ -15,6 +15,239 @@
         "key_spec_index": 1,
         "name": "query",
         "type": "string"
+      },
+      {
+        "name": "shard-policy",
+        "type": "oneof",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "ALLSHARDS",
+            "type": "pure-token",
+            "token": "ALLSHARDS"
+          },
+          {
+            "name": "SOMESHARDS",
+            "type": "pure-token",
+            "token": "SOMESHARDS"
+          }
+        ]
+      },
+      {
+        "name": "consistency",
+        "type": "oneof",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "CONSISTENT",
+            "type": "pure-token",
+            "token": "CONSISTENT"
+          },
+          {
+            "name": "INCONSISTENT",
+            "type": "pure-token",
+            "token": "INCONSISTENT"
+          }
+        ]
+      },
+      {
+        "name": "DIALECT",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "dialect_token",
+            "type": "pure-token",
+            "token": "DIALECT"
+          },
+          {
+            "name": "dialect",
+            "type": "integer"
+          }
+        ]
+      },
+      {
+        "name": "INORDER",
+        "type": "pure-token",
+        "optional": true,
+        "token": "INORDER"
+      },
+      {
+        "name": "LIMIT",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "limit_token",
+            "type": "pure-token",
+            "token": "LIMIT"
+          },
+          {
+            "name": "offset",
+            "type": "integer"
+          },
+          {
+            "name": "count",
+            "type": "integer"
+          }
+        ]
+      },
+      {
+        "name": "NOCONTENT",
+        "type": "pure-token",
+        "optional": true,
+        "token": "NOCONTENT"
+      },
+      {
+        "name": "PARAMS",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "params_token",
+            "type": "pure-token",
+            "token": "PARAMS"
+          },
+          {
+            "name": "count",
+            "type": "integer"
+          },
+          {
+            "name": "parameters",
+            "type": "block",
+            "multiple": true,
+            "arguments": [
+              {
+                "name": "name",
+                "type": "string"
+              },
+              {
+                "name": "value",
+                "type": "string"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "RETURN",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "return_token",
+            "type": "pure-token",
+            "token": "RETURN"
+          },
+          {
+            "name": "count",
+            "type": "integer"
+          },
+          {
+            "name": "fields",
+            "type": "block",
+            "multiple": true,
+            "arguments": [
+              {
+                "name": "field",
+                "type": "string"
+              },
+              {
+                "name": "alias",
+                "type": "block",
+                "optional": true,
+                "arguments": [
+                  {
+                    "name": "as_token",
+                    "type": "pure-token",
+                    "token": "AS"
+                  },
+                  {
+                    "name": "name",
+                    "type": "string"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "SLOP",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "slop_token",
+            "type": "pure-token",
+            "token": "SLOP"
+          },
+          {
+            "name": "slop",
+            "type": "integer"
+          }
+        ]
+      },
+      {
+        "name": "SORTBY",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "sortby_token",
+            "type": "pure-token",
+            "token": "SORTBY"
+          },
+          {
+            "name": "field",
+            "type": "string"
+          },
+          {
+            "name": "direction",
+            "type": "oneof",
+            "optional": true,
+            "arguments": [
+              {
+                "name": "ASC",
+                "type": "pure-token",
+                "token": "ASC"
+              },
+              {
+                "name": "DESC",
+                "type": "pure-token",
+                "token": "DESC"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "TIMEOUT",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "timeout_token",
+            "type": "pure-token",
+            "token": "TIMEOUT"
+          },
+          {
+            "name": "timeout_ms",
+            "type": "integer"
+          }
+        ]
+      },
+      {
+        "name": "VERBATIM",
+        "type": "pure-token",
+        "optional": true,
+        "token": "VERBATIM"
+      },
+      {
+        "name": "WITHSORTKEYS",
+        "type": "pure-token",
+        "optional": true,
+        "token": "WITHSORTKEYS"
       }
     ],
     "arity": -3,

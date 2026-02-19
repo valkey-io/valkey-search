@@ -24,6 +24,10 @@
   extern "C" {                                                              \
   int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,  \
                           int argc) {                                       \
+    if (!vmsdk::verifyLoadedOnlyOnce()) {                                   \
+      VMSDK_LOG(NOTICE, ctx) << "Module cannot be loaded more than once";   \
+      return VALKEYMODULE_ERR;                                              \
+    }                                                                       \
     vmsdk::TrackCurrentAsMainThread();                                      \
     if (auto status = vmsdk::module::OnLoad(ctx, argv, argc, options);      \
         status != VALKEYMODULE_OK) {                                        \
@@ -48,6 +52,10 @@
 namespace vmsdk {
 namespace module {
 
+constexpr absl::string_view kWriteFlag{"write"};
+constexpr absl::string_view kReadOnlyFlag{"readonly"};
+constexpr absl::string_view kFastFlag{"fast"};
+constexpr absl::string_view kAdminFlag{"admin"};
 constexpr absl::string_view kDenyOOMFlag{"deny-oom"};
 
 struct CommandOptions {
@@ -65,7 +73,8 @@ struct CommandOptions {
 struct Options {
   std::string name;
   std::list<absl::string_view> acl_categories;
-  int version;
+  vmsdk::ValkeyVersion version;
+  vmsdk::ValkeyVersion minimum_valkey_server_version;
   ValkeyModuleInfoFunc info{nullptr};
   std::list<CommandOptions> commands;
   using OnLoad = std::optional<absl::AnyInvocable<absl::Status(
@@ -95,6 +104,8 @@ int CreateCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
   return VALKEYMODULE_OK;
 }
 bool IsModuleLoaded(ValkeyModuleCtx *ctx, const std::string &name);
+// Used only for testing
+void SetModuleLoaded(const std::string &name, bool remove = false);
 }  // namespace vmsdk
 
 #endif  // VMSDK_SRC_MODULE_H_

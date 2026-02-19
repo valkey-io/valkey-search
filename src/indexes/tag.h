@@ -8,9 +8,9 @@
 #ifndef VALKEYSEARCH_SRC_INDEXES_TAG_H_
 #define VALKEYSEARCH_SRC_INDEXES_TAG_H_
 #include <cstddef>
-#include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_set.h"
@@ -42,20 +42,27 @@ class Tag : public IndexBase {
   absl::StatusOr<bool> ModifyRecord(const InternedStringPtr& key,
                                     absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
-  int RespondWithInfo(ValkeyModuleCtx* ctx) const override;
-  bool IsTracked(const InternedStringPtr& key) const override;
+  int RespondWithInfo(ValkeyModuleCtx* ctx) const override
+      ABSL_LOCKS_EXCLUDED(index_mutex_);
   absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const override {
     return absl::OkStatus();
   }
 
-  inline void ForEachTrackedKey(
-      absl::AnyInvocable<void(const InternedStringPtr&)> fn) const override {
-    absl::MutexLock lock(&index_mutex_);
-    for (const auto& [key, _] : tracked_tags_by_keys_) {
-      fn(key);
-    }
-  }
-  uint64_t GetRecordCount() const override;
+  size_t GetTrackedKeyCount() const override ABSL_LOCKS_EXCLUDED(index_mutex_);
+  size_t GetUnTrackedKeyCount() const override
+      ABSL_LOCKS_EXCLUDED(index_mutex_);
+  bool IsTracked(const InternedStringPtr& key) const override
+      ABSL_LOCKS_EXCLUDED(index_mutex_);
+  bool IsUnTracked(const InternedStringPtr& key) const override
+      ABSL_LOCKS_EXCLUDED(index_mutex_);
+  void UnTrack(const InternedStringPtr& key) override
+      ABSL_LOCKS_EXCLUDED(index_mutex_);
+  absl::Status ForEachTrackedKey(
+      absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
+      const override ABSL_LOCKS_EXCLUDED(index_mutex_);
+  absl::Status ForEachUnTrackedKey(
+      absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
+      const override ABSL_LOCKS_EXCLUDED(index_mutex_);
   std::unique_ptr<data_model::Index> ToProto() const override;
 
   InternedStringPtr GetRawValue(const InternedStringPtr& key) const
@@ -64,12 +71,8 @@ class Tag : public IndexBase {
   const absl::flat_hash_set<absl::string_view>* GetValue(
       const InternedStringPtr& key,
       bool& case_sensitive) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
-  using PatriciaTreeIndex =
-      PatriciaTree<InternedStringPtr, InternedStringPtrHash,
-                   InternedStringPtrEqual>;
-  using PatriciaNodeIndex =
-      PatriciaNode<InternedStringPtr, InternedStringPtrHash,
-                   InternedStringPtrEqual>;
+  using PatriciaTreeIndex = PatriciaTree<InternedStringPtr>;
+  using PatriciaNodeIndex = PatriciaNode<InternedStringPtr>;
 
   class EntriesFetcherIterator : public EntriesFetcherIteratorBase {
    public:
@@ -101,7 +104,7 @@ class Tag : public IndexBase {
           size_(size),
           entries_(entries),
           negate_(negate),
-          untracked_keys_(untracked_keys) {};
+          untracked_keys_(untracked_keys){};
     size_t Size() const override;
     std::unique_ptr<EntriesFetcherIteratorBase> Begin() override;
 
@@ -122,6 +125,8 @@ class Tag : public IndexBase {
       absl::string_view data, char separator);
   static absl::flat_hash_set<absl::string_view> ParseRecordTags(
       absl::string_view data, char separator);
+  // Unescape a tag string (e.g. escaped pipe becomes literal pipe)
+  static std::string UnescapeTag(absl::string_view tag);
 
  private:
   mutable absl::Mutex index_mutex_;
@@ -130,7 +135,7 @@ class Tag : public IndexBase {
     absl::flat_hash_set<absl::string_view> tags;
   };
   // Map of tracked keys to their tags.
-  InternedStringMap<TagInfo> tracked_tags_by_keys_
+  InternedStringHashMap<TagInfo> tracked_tags_by_keys_
       ABSL_GUARDED_BY(index_mutex_);
   // untracked and tracked_ keys are mutually exclusive.
   InternedStringSet untracked_keys_ ABSL_GUARDED_BY(index_mutex_);

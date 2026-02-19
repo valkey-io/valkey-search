@@ -11,7 +11,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <deque>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -40,6 +39,10 @@
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
+namespace valkey_search {
+enum class QueryOperations : uint64_t;
+}
+
 namespace valkey_search::indexes {
 
 std::vector<char> NormalizeEmbedding(absl::string_view record, size_t type_size,
@@ -48,25 +51,40 @@ std::vector<char> NormalizeEmbedding(absl::string_view record, size_t type_size,
 struct Neighbor {
   InternedStringPtr external_id;
   float distance;
+  uint64_t sequence_number;
   std::optional<RecordsMap> attribute_contents;
+  Neighbor() : distance(0.0f), sequence_number(0) {}
   Neighbor(const InternedStringPtr& external_id, float distance)
-      : external_id(external_id), distance(distance) {}
+      : external_id(external_id), distance(distance), sequence_number(0) {}
   Neighbor(const InternedStringPtr& external_id, float distance,
            std::optional<RecordsMap>&& attribute_contents)
       : external_id(external_id),
         distance(distance),
+        sequence_number(0),
         attribute_contents(std::move(attribute_contents)) {}
   Neighbor(Neighbor&& other) noexcept
       : external_id(std::move(other.external_id)),
         distance(other.distance),
+        sequence_number(other.sequence_number),
         attribute_contents(std::move(other.attribute_contents)) {}
   Neighbor& operator=(Neighbor&& other) noexcept {
     if (this != &other) {
       external_id = std::move(other.external_id);
       distance = other.distance;
+      sequence_number = other.sequence_number;
       attribute_contents = std::move(other.attribute_contents);
     }
     return *this;
+  }
+  friend std::ostream& operator<<(std::ostream& os, const Neighbor& n) {
+    os << "Key: " << n.external_id->Str() << " Dist: " << n.distance
+       << " Seq: " << n.sequence_number;
+    if (n.attribute_contents.has_value()) {
+      os << ' ' << *n.attribute_contents;
+    } else {
+      os << " [NoContents]";
+    }
+    return os;
   }
 };
 
@@ -104,13 +122,14 @@ absl::string_view LookupKeyByValue(
 class VectorBase : public IndexBase, public hnswlib::VectorTracker {
  public:
   absl::StatusOr<bool> AddRecord(const InternedStringPtr& key,
-                                 absl::string_view record) override;
+                                 absl::string_view record) override
+      ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::StatusOr<bool> RemoveRecord(const InternedStringPtr& key,
                                     indexes::DeletionType deletion_type =
-                                        indexes::DeletionType::kNone) override;
+                                        indexes::DeletionType::kNone) override
+      ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::StatusOr<bool> ModifyRecord(const InternedStringPtr& key,
-                                    absl::string_view record) override;
-  bool IsTracked(const InternedStringPtr& key) const override
+                                    absl::string_view record) override
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   virtual size_t GetCapacity() const = 0;
   bool GetNormalize() const { return normalize_; }
@@ -121,31 +140,39 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   absl::Status LoadTrackedKeys(ValkeyModuleCtx* ctx,
                                const AttributeDataType* attribute_data_type,
                                SupplementalContentChunkIter&& iter);
-  void ForEachTrackedKey(
-      absl::AnyInvocable<void(const InternedStringPtr&)> fn) const override {
-    absl::MutexLock lock(&key_to_metadata_mutex_);
-    for (const auto& [key, _] : tracked_metadata_by_key_) {
-      fn(key);
-    }
-  }
+
+  size_t GetTrackedKeyCount() const override
+      ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
+  size_t GetUnTrackedKeyCount() const override
+      ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
+  bool IsTracked(const InternedStringPtr& key) const override
+      ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
+  bool IsUnTracked(const InternedStringPtr& key) const override;
+  void UnTrack(const InternedStringPtr& key) override;
+  absl::Status ForEachTrackedKey(
+      absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
+      const override ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
+  absl::Status ForEachUnTrackedKey(
+      absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
+      const override ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
+
   absl::StatusOr<InternedStringPtr> GetKeyDuringSearch(
       uint64_t internal_id) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
-  void AddPrefilteredKey(
+  bool AddPrefilteredKey(
       absl::string_view query, uint64_t count, const InternedStringPtr& key,
       std::priority_queue<std::pair<float, hnswlib::labeltype>>& results,
-      absl::flat_hash_set<hnswlib::labeltype>& top_keys) const;
+      absl::flat_hash_set<const char*>& top_keys) const;
   vmsdk::UniqueValkeyString NormalizeStringRecord(
       vmsdk::UniqueValkeyString record) const override;
-  uint64_t GetRecordCount() const override;
   template <typename T>
-  absl::StatusOr<std::deque<Neighbor>> CreateReply(
+  absl::StatusOr<std::vector<Neighbor>> CreateReply(
       std::priority_queue<std::pair<T, hnswlib::labeltype>>& knn_res);
   absl::StatusOr<std::vector<char>> GetValue(const InternedStringPtr& key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
   int GetVectorDataSize() const { return GetDataTypeSize() * dimensions_; }
   char* TrackVector(uint64_t internal_id, char* vector, size_t len) override;
-  std::shared_ptr<InternedString> InternVector(absl::string_view record,
-                                               std::optional<float>& magnitude);
+  InternedStringPtr InternVector(absl::string_view record,
+                                 std::optional<float>& magnitude);
 
  protected:
   VectorBase(IndexerType indexer_type, int dimensions,
@@ -231,7 +258,7 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
     float magnitude;
   };
 
-  InternedStringMap<TrackedKeyMetadata> tracked_metadata_by_key_
+  InternedStringHashMap<TrackedKeyMetadata> tracked_metadata_by_key_
       ABSL_GUARDED_BY(key_to_metadata_mutex_);
   uint64_t inc_id_ ABSL_GUARDED_BY(key_to_metadata_mutex_){0};
   mutable absl::Mutex key_to_metadata_mutex_;
@@ -241,14 +268,28 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   UniqueFixedSizeAllocatorPtr vector_allocator_{nullptr, nullptr};
 };
 
-class InlineVectorEvaluator : public query::Evaluator {
+class PrefilterEvaluator : public query::Evaluator {
  public:
+  explicit PrefilterEvaluator(
+      const valkey_search::indexes::text::TextIndex* text_index,
+      QueryOperations query_operations)
+      : query::Evaluator(query_operations), text_index_(text_index) {}
   bool Evaluate(const query::Predicate& predicate,
                 const InternedStringPtr& key);
+  const InternedStringPtr& GetTargetKey() const override {
+    CHECK(key_);
+    return *key_;
+  }
+  bool IsPrefilterEvaluator() const override { return true; }
 
  private:
-  bool EvaluateTags(const query::TagPredicate& predicate) override;
-  bool EvaluateNumeric(const query::NumericPredicate& predicate) override;
+  query::EvaluationResult EvaluateTags(
+      const query::TagPredicate& predicate) override;
+  query::EvaluationResult EvaluateNumeric(
+      const query::NumericPredicate& predicate) override;
+  query::EvaluationResult EvaluateText(const query::TextPredicate& predicate,
+                                       bool require_positions) override;
+  const valkey_search::indexes::text::TextIndex* text_index_;
   const InternedStringPtr* key_{nullptr};
 };
 

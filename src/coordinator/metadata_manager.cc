@@ -23,6 +23,7 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
+#include "command_parser.h"
 #include "google/protobuf/any.pb.h"
 #include "grpcpp/support/status.h"
 #include "highwayhash/arch_specific.h"
@@ -30,7 +31,13 @@
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/util.h"
+#include "src/metrics.h"
 #include "src/rdb_serialization.h"
+#include "src/schema_manager.h"
+#include "src/valkey_search.h"
+#include "version.h"
+#include "vmsdk/src/cluster_map.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/utils.h"
@@ -44,8 +51,48 @@ constexpr float kMetadataBroadcastJitterRatio = 0.5;
 
 }  // namespace
 
+CONTROLLED_BOOLEAN(PauseHandleClusterMessage, false);
+
+void DelayedClusterMessageTimerCallback(ValkeyModuleCtx *ctx, void *data) {
+  auto *params = static_cast<
+      std::tuple<std::string, std::unique_ptr<GlobalMetadataVersionHeader>> *>(
+      data);
+  auto &[sender_id, header] = *params;
+
+  MetadataManager::Instance().DelayHandleClusterMessage(ctx, sender_id.c_str(),
+                                                        std::move(header));
+
+  delete params;
+}
+
 static absl::NoDestructor<std::unique_ptr<MetadataManager>>
     metadata_manager_instance;
+
+MetadataManager::MetadataManager(ValkeyModuleCtx *ctx, ClientPool &client_pool)
+    : client_pool_(client_pool),
+      detached_ctx_(vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx)) {
+  RegisterRDBCallback(
+      data_model::RDB_SECTION_GLOBAL_METADATA,
+      RDBSectionCallbacks{
+          .load = [this](ValkeyModuleCtx *ctx,
+                         std::unique_ptr<data_model::RDBSection> section,
+                         SupplementalContentIter &&iter) -> absl::Status {
+            return LoadMetadata(ctx, std::move(section), std::move(iter));
+          },
+
+          .save = [this](ValkeyModuleCtx *ctx, SafeRDB *rdb, int when)
+              -> absl::Status { return SaveMetadata(ctx, rdb, when); },
+
+          .section_count = [this](ValkeyModuleCtx *ctx, int when) -> int {
+            return GetSectionsCount();
+          },
+          .minimum_semantic_version = [](ValkeyModuleCtx *ctx,
+                                         int when) -> int {
+            auto version = Instance().ComputeMinVersion();
+            CHECK(version.ok());
+            return *version;
+          }});
+}
 
 bool MetadataManager::IsInitialized() {
   return *metadata_manager_instance != nullptr;
@@ -116,38 +163,46 @@ uint64_t MetadataManager::ComputeTopLevelFingerprint(
 }
 
 absl::Status MetadataManager::TriggerCallbacks(
-    absl::string_view type_name, absl::string_view id,
+    absl::string_view type_name, const ObjName &obj_name,
     const GlobalMetadataEntry &entry) {
   auto &registered_types = registered_types_.Get();
   auto it = registered_types.find(type_name);
   if (it != registered_types.end()) {
     return registered_types.at(type_name).update_callback(
-        id, entry.has_content() ? &entry.content() : nullptr);
+        obj_name, entry.has_content() ? &entry.content() : nullptr,
+        entry.fingerprint(), entry.version());
   }
   VMSDK_LOG_EVERY_N_SEC(WARNING, detached_ctx_.get(), 10)
       << "No type registered for: " << type_name << ", skipping callback";
   return absl::OkStatus();
 }
 
-absl::StatusOr<google::protobuf::Any> MetadataManager::GetEntry(
-    absl::string_view type_name, absl::string_view id) {
+absl::StatusOr<const GlobalMetadataEntry *> MetadataManager::GetEntry(
+    absl::string_view type_name, const ObjName &obj_name) const {
+  auto encoded_id = obj_name.Encode();
   auto &metadata = metadata_.Get();
-  if (!metadata.type_namespace_map().contains(type_name) ||
-      !metadata.type_namespace_map().at(type_name).entries().contains(id) ||
-      !metadata.type_namespace_map()
-           .at(type_name)
-           .entries()
-           .at(id)
-           .has_content()) {
-    return absl::NotFoundError(
-        absl::StrCat("Entry not found: ", type_name, " ", id));
+  auto type_itr = metadata.type_namespace_map().find(type_name);
+  if (type_itr != metadata.type_namespace_map().end()) {
+    auto id_itr = type_itr->second.entries().find(encoded_id);
+    if (id_itr != type_itr->second.entries().end() &&
+        id_itr->second.has_content()) {
+      return &id_itr->second;
+    }
   }
-  return metadata.type_namespace_map().at(type_name).entries().at(id).content();
+  return absl::NotFoundError(
+      absl::StrCat("Entry not found: ", type_name, " ", obj_name));
 }
 
-absl::Status MetadataManager::CreateEntry(
-    absl::string_view type_name, absl::string_view id,
+absl::StatusOr<google::protobuf::Any> MetadataManager::GetEntryContent(
+    absl::string_view type_name, const ObjName &obj_name) {
+  VMSDK_ASSIGN_OR_RETURN(auto entry, GetEntry(type_name, obj_name));
+  return entry->content();
+}
+
+absl::StatusOr<IndexFingerprintVersion> MetadataManager::CreateEntry(
+    absl::string_view type_name, const ObjName &obj_name,
     std::unique_ptr<google::protobuf::Any> contents) {
+  auto encoded_id = obj_name.Encode();
   auto &registered_types = registered_types_.Get();
   auto rt_it = registered_types.find(type_name);
   if (rt_it == registered_types.end()) {
@@ -158,7 +213,7 @@ absl::Status MetadataManager::CreateEntry(
   auto &metadata = metadata_.Get();
   auto it = metadata.type_namespace_map().find(type_name);
   if (it != metadata.type_namespace_map().end()) {
-    auto inner_it = it->second.entries().find(id);
+    auto inner_it = it->second.entries().find(encoded_id);
     if (inner_it != it->second.entries().end()) {
       version = inner_it->second.version() + 1;
     }
@@ -167,63 +222,83 @@ absl::Status MetadataManager::CreateEntry(
       auto fingerprint,
       ComputeFingerprint(type_name, *contents, registered_types));
 
+  VMSDK_ASSIGN_OR_RETURN(auto min_version,
+                         rt_it->second.min_version_callback(*contents));
+
   GlobalMetadataEntry new_entry;
   new_entry.set_version(version);
   new_entry.set_fingerprint(fingerprint);
   new_entry.set_encoding_version(rt_it->second.encoding_version);
   new_entry.set_allocated_content(contents.release());
+  new_entry.set_min_version(min_version);
 
-  auto callback_status = TriggerCallbacks(type_name, id, new_entry);
+  auto callback_status = TriggerCallbacks(type_name, obj_name, new_entry);
   if (!callback_status.ok()) {
     return callback_status;
   }
 
   auto insert_result = metadata.mutable_type_namespace_map()->insert(
       {std::string(type_name), GlobalMetadataEntryMap()});
-  (*insert_result.first->second.mutable_entries())[id] = new_entry;
+  (*insert_result.first->second.mutable_entries())[encoded_id] = new_entry;
   // NOLINTNEXTLINE
   metadata.mutable_version_header()->set_top_level_version(
       metadata.version_header().top_level_version() + 1);
   metadata.mutable_version_header()->set_top_level_fingerprint(
       ComputeTopLevelFingerprint(metadata.type_namespace_map()));
+  VMSDK_ASSIGN_OR_RETURN(auto top_level_min_version, ComputeMinVersion());
+  metadata.mutable_version_header()->set_top_level_min_version(
+      top_level_min_version);
+
+  // Call FT.INTERNAL_UPDATE for coordinator to ensure unified AOF replication
+  ReplicateFTInternalUpdate(new_entry, metadata.version_header(), encoded_id);
+
   BroadcastMetadata(detached_ctx_.get(), metadata.version_header());
-  return absl::OkStatus();
+  IndexFingerprintVersion index_fingerprint_version;
+  index_fingerprint_version.set_fingerprint(fingerprint);
+  index_fingerprint_version.set_version(version);
+  return index_fingerprint_version;
 }
 
 absl::Status MetadataManager::DeleteEntry(absl::string_view type_name,
-                                          absl::string_view id) {
+                                          const ObjName &obj_name) {
+  auto encoded_id = obj_name.Encode();
   auto &metadata = metadata_.Get();
   auto it = metadata.type_namespace_map().find(type_name);
   if (it == metadata.type_namespace_map().end()) {
     return absl::NotFoundError(
-        absl::StrCat("Entry not found: ", type_name, " ", id));
+        absl::StrCat("Entry not found: ", type_name, " ", obj_name));
   }
-  auto inner_it = it->second.entries().find(id);
+  auto inner_it = it->second.entries().find(encoded_id);
   if (inner_it == it->second.entries().end()) {
     return absl::NotFoundError(
-        absl::StrCat("Entry not found: ", type_name, " ", id));
+        absl::StrCat("Entry not found: ", type_name, " ", obj_name));
   }
   if (!inner_it->second.has_content()) {
     return absl::NotFoundError(
-        absl::StrCat("Entry not found: ", type_name, " ", id));
+        absl::StrCat("Entry not found: ", type_name, " ", obj_name));
   }
   GlobalMetadataEntry new_entry;
   new_entry.set_version(inner_it->second.version() + 1);
-  // Note that fingerprint and encoding version are not set and will default to
-  // 0.
+  // Note that fingerprint and encoding version are not set and will default
+  // to 0.
 
-  auto callback_status = TriggerCallbacks(type_name, id, new_entry);
+  auto callback_status = TriggerCallbacks(type_name, obj_name, new_entry);
   if (!callback_status.ok()) {
     return callback_status;
   }
 
-  (*(*metadata.mutable_type_namespace_map())[type_name].mutable_entries())[id] =
-      new_entry;
+  (*(*metadata.mutable_type_namespace_map())[type_name]
+        .mutable_entries())[encoded_id] = new_entry;
 
   metadata.mutable_version_header()->set_top_level_version(
       metadata.version_header().top_level_version() + 1);
   metadata.mutable_version_header()->set_top_level_fingerprint(
       ComputeTopLevelFingerprint(metadata.type_namespace_map()));
+
+  // Call FT.INTERNAL_UPDATE for coordinator to ensure unified AOF replication
+  // for DROP
+  ReplicateFTInternalUpdate(new_entry, metadata.version_header(), encoded_id);
+
   BroadcastMetadata(detached_ctx_.get(), metadata.version_header());
   return absl::OkStatus();
 }
@@ -235,18 +310,20 @@ std::unique_ptr<GlobalMetadata> MetadataManager::GetGlobalMetadata() {
 }
 
 void MetadataManager::RegisterType(absl::string_view type_name,
-                                   uint32_t encoding_version,
                                    FingerprintCallback fingerprint_callback,
-                                   MetadataUpdateCallback callback) {
+                                   MetadataUpdateCallback callback,
+                                   MinVersionCallback min_version_callback,
+                                   vmsdk::ValkeyVersion encoding_version) {
   auto insert_result =
       registered_types_.Get().insert(std::pair<std::string, RegisteredType>{
-          type_name, RegisteredType{.encoding_version = encoding_version,
-                                    .fingerprint_callback =
-                                        std::move(fingerprint_callback),
-                                    .update_callback = std::move(callback)}});
-  VMSDK_LOG_EVERY_N_SEC(WARNING, detached_ctx_.get(), 10)
-      << "Type already registered for: " << type_name;
-  DCHECK(insert_result.second);
+          type_name,
+          RegisteredType{
+              .encoding_version = encoding_version,
+              .fingerprint_callback = std::move(fingerprint_callback),
+              .update_callback = std::move(callback),
+              .min_version_callback = std::move(min_version_callback)}});
+  VMSDK_LOG(DEBUG, nullptr) << "Registering type: " << type_name;
+  CHECK(insert_result.second) << "Type already registered: " << type_name;
 }
 
 void MetadataManager::BroadcastMetadata(ValkeyModuleCtx *ctx) {
@@ -262,10 +339,32 @@ void MetadataManager::BroadcastMetadata(
   }
   std::string payload;
   version_header.SerializeToString(&payload);
-  // Nullptr for target means broadcast to all.
+  // Broadcast to all nodes, let each node decide whether to accept based on
+  // primary status
   ValkeyModule_SendClusterMessage(ctx, /* target= */ nullptr,
                                   kMetadataBroadcastClusterMessageReceiverId,
                                   payload.c_str(), payload.size());
+}
+
+void MetadataManager::DelayHandleClusterMessage(
+    ValkeyModuleCtx *ctx, const char *sender_id,
+    std::unique_ptr<GlobalMetadataVersionHeader> header) {
+  if (PauseHandleClusterMessage.GetValue()) {
+    Metrics::GetStats().pause_handle_cluster_message_round_cnt++;
+    VMSDK_LOG_EVERY_N_SEC(DEBUG, nullptr, 2)
+        << "DEBUG: Paused round is "
+        << Metrics::GetStats().pause_handle_cluster_message_round_cnt;
+    std::string sender_id_str(sender_id, VALKEYMODULE_NODE_ID_LEN);
+    // Use a timer with a small delay (e.g., 100ms) to poll without blocking
+    auto *params = new std::tuple<std::string,
+                                  std::unique_ptr<GlobalMetadataVersionHeader>>(
+        std::move(sender_id_str), std::move(header));
+
+    ValkeyModule_CreateTimer(ctx, 100, DelayedClusterMessageTimerCallback,
+                             params);
+  } else {
+    HandleBroadcastedMetadata(ctx, sender_id, std::move(header));
+  }
 }
 
 void MetadataManager::HandleClusterMessage(ValkeyModuleCtx *ctx,
@@ -276,7 +375,8 @@ void MetadataManager::HandleClusterMessage(ValkeyModuleCtx *ctx,
     auto header = std::make_unique<GlobalMetadataVersionHeader>();
     header->ParseFromString(
         absl::string_view(reinterpret_cast<const char *>(payload), len));
-    HandleBroadcastedMetadata(ctx, sender_id, std::move(header));
+    std::string sender_id_str(sender_id, VALKEYMODULE_NODE_ID_LEN);
+    DelayHandleClusterMessage(ctx, sender_id_str.c_str(), std::move(header));
   } else {
     VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 10)
         << "Unsupported message type: " << type;
@@ -289,6 +389,22 @@ void MetadataManager::HandleBroadcastedMetadata(
   if (is_loading_.Get()) {
     VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 10)
         << "Ignoring incoming metadata message due to loading...";
+    return;
+  }
+
+  // Only accept metadata broadcasts if we are a primary
+  int flags = ValkeyModule_GetContextFlags(ctx);
+  if (flags & VALKEYMODULE_CTX_FLAGS_SLAVE) {
+    return;  // This is a replica, ignore the broadcast
+  }
+
+  if (header->top_level_min_version() > kModuleVersion.ToInt()) {
+    VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 10)
+        << "Ignoring incoming metadata message from "
+        << std::string(sender_id, VALKEYMODULE_NODE_ID_LEN)
+        << " due to minimum version requirement of "
+        << header->top_level_min_version() << ", current version is "
+        << kModuleVersion.ToString();
     return;
   }
   auto &metadata = metadata_.Get();
@@ -353,7 +469,7 @@ void MetadataManager::HandleBroadcastedMetadata(
               << "Got GlobalMetadata from " << address << ": "
               << schema->DebugString();
           auto &metadata_manager = MetadataManager::Instance();
-          auto status = metadata_manager.ReconcileMetadata(*schema);
+          auto status = metadata_manager.ReconcileMetadata(*schema, address);
           if (!status.ok()) {
             VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
                 << "Failed to reconcile schemas: " << status.message();
@@ -367,8 +483,20 @@ void MetadataManager::HandleBroadcastedMetadata(
 }
 
 absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
+                                                absl::string_view source,
                                                 bool trigger_callbacks,
                                                 bool prefer_incoming) {
+  if (proposed.version_header().top_level_version() > kModuleVersion.ToInt()) {
+    VMSDK_LOG(WARNING, nullptr)
+        << "Proposed GlobalMetadata from " << source
+        << " requires minimum version "
+        << proposed.version_header().top_level_version()
+        << ", current version is " << kModuleVersion.ToString();
+    return absl::InternalError(absl::StrCat(
+        "Proposed GlobalMetadata from ", source, " requires minimum version ",
+        proposed.version_header().top_level_version(), ", current version is ",
+        kModuleVersion.ToString()));
+  }
   // We synthesize the new version in a new variable, so that if we need to
   // fail, the state is unchanged. The new version starts as a copy of the
   // current version.
@@ -412,7 +540,8 @@ absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
       auto &registered_types = registered_types_.Get();
       auto rt_it = registered_types.find(type_name);
       if (rt_it != registered_types.end() && proposed_entry.has_content() &&
-          proposed_entry.encoding_version() < rt_it->second.encoding_version) {
+          proposed_entry.encoding_version() <
+              rt_it->second.encoding_version.ToInt()) {
         // If the encoding version is less than the current version, we need
         // to re-fingerprint the entry. New fields being added may result in
         // unstable fingerprinting.
@@ -429,12 +558,18 @@ absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
       }
 
       if (trigger_callbacks) {
-        auto result = TriggerCallbacks(type_name, id, proposed_entry);
+        auto obj_name = ObjName::Decode(id);
+        auto result = TriggerCallbacks(type_name, obj_name, proposed_entry);
         if (!result.ok()) {
           VMSDK_LOG(WARNING, detached_ctx_.get())
               << "Failed during reconciliation callback: %s"
-              << result.message().data();
+              << result.message().data() << " for type " << type_name << ", id "
+              << vmsdk::config::RedactIfNeeded(id) << " from " << source;
           return result;
+        }
+        auto status = CallFTInternalUpdateForReconciliation(id, proposed_entry);
+        if (!status.ok()) {
+          return status;
         }
       }
     }
@@ -447,8 +582,8 @@ absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
       ComputeTopLevelFingerprint(result.type_namespace_map());
   result.mutable_version_header()->set_top_level_fingerprint(new_fingerprint);
 
-  // The new version is the max of the old version and the proposed version. We
-  // also bump the version if the fingerprint changed, as this indicates a
+  // The new version is the max of the old version and the proposed version.
+  // We also bump the version if the fingerprint changed, as this indicates a
   // distinct version.
   auto old_version = metadata.version_header().top_level_version();
   auto new_version =
@@ -469,6 +604,14 @@ absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
   if (should_broadcast) {
     BroadcastMetadata(detached_ctx_.get(), metadata.version_header());
   }
+
+  // Update the timestamp of the last successful metadata reconciliation
+  last_healthy_metadata_millis_.store(ValkeyModule_Milliseconds(),
+                                      std::memory_order_relaxed);
+
+  // Increment the completion counter
+  metadata_reconciliation_completed_count_.fetch_add(1,
+                                                     std::memory_order_relaxed);
 
   return absl::OkStatus();
 }
@@ -532,6 +675,7 @@ absl::Status MetadataManager::LoadMetadata(
     // could happen if a module triggers a load after we have already been
     // running.
     VMSDK_RETURN_IF_ERROR(ReconcileMetadata(section->global_metadata_contents(),
+                                            "RDB Load",
                                             /*trigger_callbacks=*/false,
                                             /*prefer_incoming=*/true));
   }
@@ -566,10 +710,11 @@ void MetadataManager::OnServerCronCallback(
     [[maybe_unused]] uint64_t subevent, [[maybe_unused]] void *data) {
   static bool timer_started = false;
   if (!timer_started) {
-    // The first server cron tick after the FT.CREATE is run needs to kick start
-    // the timer. This can't be done during normal server event subscription
-    // because timers cannot be safely created in background threads (the GIL
-    // does not protect event loop code which uses the timers).
+    // The first server cron tick after the FT.CREATE is run needs to kick
+    // start the timer. This can't be done during normal server event
+    // subscription because timers cannot be safely created in background
+    // threads (the GIL does not protect event loop code which uses the
+    // timers).
     timer_started = true;
     ValkeyModule_CreateTimer(
         ctx,
@@ -588,7 +733,7 @@ void MetadataManager::OnLoadingEnded(ValkeyModuleCtx *ctx) {
     // Clear the local metadata, then use ReconcileMetadata to recompute
     // fingerprints in case encoding has changed.
     metadata_ = GlobalMetadata();
-    auto status = ReconcileMetadata(staged_metadata_.Get(),
+    auto status = ReconcileMetadata(staged_metadata_.Get(), "RDB Load Staged",
                                     /*trigger_callbacks=*/false,
                                     /*prefer_incoming=*/true);
     if (!status.ok()) {
@@ -599,6 +744,23 @@ void MetadataManager::OnLoadingEnded(ValkeyModuleCtx *ctx) {
     staging_metadata_due_to_repl_load_ = false;
   }
   is_loading_ = false;
+
+  // populate fingerprint and version to IndexSchema at the end of loading RDB
+  auto global_metadata = GetGlobalMetadata();
+  if (global_metadata->type_namespace_map().contains(
+          kSchemaManagerMetadataTypeName)) {
+    const auto &entries = global_metadata->type_namespace_map()
+                              .at(kSchemaManagerMetadataTypeName)
+                              .entries();
+    for (const auto &[name, entry] : entries) {
+      // In cluster mode, only support DB 0 for now
+      uint32_t db_num = 0;
+      uint64_t fingerprint = entry.fingerprint();
+      uint32_t version = entry.version();
+      SchemaManager::Instance().PopulateFingerprintVersionFromMetadata(
+          db_num, name, fingerprint, version);
+    }
+  }
 }
 
 void MetadataManager::OnReplicationLoadStart(ValkeyModuleCtx *ctx) {
@@ -631,9 +793,203 @@ void MetadataManager::OnLoadingCallback(ValkeyModuleCtx *ctx,
   }
 }
 
+int64_t MetadataManager::GetMilliSecondsSinceLastHealthyMetadata() const {
+  int64_t last_millis =
+      last_healthy_metadata_millis_.load(std::memory_order_relaxed);
+  if (last_millis == 0) {
+    // No metadata has been successfully received yet
+    return -1;
+  }
+
+  int64_t current_millis = ValkeyModule_Milliseconds();
+  return current_millis - last_millis;
+}
+
+int64_t MetadataManager::GetMetadataReconciliationCompletedCount() const {
+  return metadata_reconciliation_completed_count_.load(
+      std::memory_order_relaxed);
+}
+
 void MetadataManager::RegisterForClusterMessages(ValkeyModuleCtx *ctx) {
   ValkeyModule_RegisterClusterMessageReceiver(
       ctx, coordinator::kMetadataBroadcastClusterMessageReceiverId,
       MetadataManagerOnClusterMessageCallback);
 }
+
+absl::Status MetadataManager::ShowMetadata(
+    ValkeyModuleCtx *ctx, [[maybe_unused]] vmsdk::ArgsIterator &itr) const {
+  auto metadata = metadata_.Get().DebugString();
+  VMSDK_LOG(WARNING, ctx) << "Metadata: " << metadata;
+  ValkeyModule_ReplyWithStringBuffer(ctx, metadata.data(), metadata.size());
+  return absl::OkStatus();
+}
+
+absl::StatusOr<vmsdk::ValkeyVersion> MetadataManager::ComputeMinVersion()
+    const {
+  vmsdk::ValkeyVersion max_encoding_version(0);
+  for (auto &[type_name, inner_map] : metadata_.Get().type_namespace_map()) {
+    auto it = registered_types_.Get().find(type_name);
+    if (it == registered_types_.Get().end()) {
+      continue;
+    }
+    for (auto &[id, entry] : inner_map.entries()) {
+      VMSDK_ASSIGN_OR_RETURN(auto min_version,
+                             it->second.min_version_callback(entry.content()));
+      max_encoding_version = std::max(min_version, max_encoding_version);
+    }
+  }
+  return max_encoding_version;
+}
+
+/*
+
+The original metadata manager was designed to provide a 2-level hierarchy:
+<type-name, object-name>. This lead to the wire-format tied to:
+
+ Map<string, Map<string, protobuf>>.
+
+With Valkey 9, the introduction of DB num into CME creates a desire for a
+three-level hierarchy: <type-name, db-num, object-name>. This 3-level
+internal namespace is mapped into an external two-level namespace to provide
+backward and some degree of forward compatibility. The mapping is done by
+manipulating the object name.
+
+An 8/1.0(Valkey 8, Search 1.0) encoded string won't have a hashtag anywhere and
+is always for db_num == 0 An 9/1.1 encoded string will always have a
+false-hashtag at the START AND may have a real hashtag after that.
+
+Decoded strings that lack a hashtag and are for db_num == 0, are encoded with
+the 8/1.0 rules All other decoded strings are encoded according to the 9/1.1
+rules.
+
+A pseudo-hashtag is of the format: {dddd}
+dddd is the database number, i.e., ascii digits 0-9 ONLY.
+Characters after the database number up to the trailing right brace are
+explicitly ignored allowing for potential future expandability.
+
+*/
+
+ObjName ObjName::Decode(absl::string_view encoded) {
+  auto hash_tag = vmsdk::ParseHashTag(encoded);
+  if (hash_tag) {
+    std::string_view front_tag = *hash_tag;
+    CHECK(encoded.size() >= 3);  // hash_tag means >= 3 chars
+    if (front_tag.data() == (encoded.data() + 1)) {
+      std::string db_num_str;
+      while (!front_tag.empty() && std::isdigit(front_tag.front())) {
+        db_num_str += front_tag.front();
+        front_tag.remove_prefix(1);
+      }
+      if (!front_tag.empty()) {
+        VMSDK_LOG_EVERY_N_SEC(NOTICE, nullptr, 10)
+            << "Ignoring extended index name metadata";
+      }
+      if (!db_num_str.empty()) {
+        // Found valid 9/1.1 encoding.
+        return {static_cast<uint32_t>(std::stoul(db_num_str)),
+                encoded.substr(hash_tag->size() + 2)};
+      }
+    }
+    VMSDK_LOG_EVERY_N(WARNING, nullptr, 10)
+        << "Found invalid encoded index name: "
+        << vmsdk::config::RedactIfNeeded(encoded);
+  }
+  // Assume 8/1.0 encoding.
+  return {0, encoded};
+}
+
+std::string ObjName::Encode() const {
+  if (db_num_ == 0) {
+    // 8/1.0 encoding.
+    return name_;
+  }
+  // 9/1.1 encoding.
+  return absl::StrCat("{", db_num_, "}", name_);
+}
+
+absl::Status MetadataManager::CreateEntryOnReplica(
+    ValkeyModuleCtx *ctx, absl::string_view type_name, absl::string_view id,
+    const coordinator::GlobalMetadataEntry *metadata_entry,
+    const coordinator::GlobalMetadataVersionHeader *global_version_header) {
+  // Verify this is only called on replica nodes or during loading
+  CHECK((ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_SLAVE) ||
+        (ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_LOADING))
+      << "CreateEntryOnReplica should only be called on replica nodes or "
+         "during loading";
+
+  auto obj_name = ObjName::Decode(id);
+  auto callback_result = TriggerCallbacks(type_name, obj_name, *metadata_entry);
+  if (!callback_result.ok()) {
+    return callback_result;
+  }
+
+  auto result = metadata_.Get();
+
+  auto insert_result = result.mutable_type_namespace_map()->insert(
+      {std::string(type_name), coordinator::GlobalMetadataEntryMap()});
+  auto &existing_inner_map = insert_result.first->second;
+  auto mutable_entries = existing_inner_map.mutable_entries();
+  (*mutable_entries)[id] = *metadata_entry;
+
+  // Update global version header
+  const auto new_version = global_version_header->top_level_version();
+  const auto new_fingerprint =
+      ComputeTopLevelFingerprint(result.type_namespace_map());
+
+  result.mutable_version_header()->set_top_level_version(new_version);
+  result.mutable_version_header()->set_top_level_fingerprint(new_fingerprint);
+
+  metadata_ = result;
+
+  return absl::OkStatus();
+}
+
+absl::Status MetadataManager::CallFTInternalUpdateForReconciliation(
+    const std::string &id,
+    const coordinator::GlobalMetadataEntry &proposed_entry) {
+  coordinator::GlobalMetadataVersionHeader version_header;
+  version_header.set_top_level_version(
+      metadata_.Get().version_header().top_level_version());
+  version_header.set_top_level_fingerprint(
+      metadata_.Get().version_header().top_level_fingerprint());
+
+  std::string metadata_binary, header_binary;
+  proposed_entry.SerializeToString(&metadata_binary);
+  version_header.SerializeToString(&header_binary);
+
+  ValkeyModuleCallReply *reply;
+  ValkeyModuleCtx *safe_context = detached_ctx_.get();
+  vmsdk::UniqueValkeyDetachedThreadSafeContext thread_safe_ctx;
+
+  reply =
+      ValkeyModule_Call(safe_context, "FT.INTERNAL_UPDATE", "!Kcbb", id.c_str(),
+                        metadata_binary.data(), metadata_binary.size(),
+                        header_binary.data(), header_binary.size());
+
+  if (reply == nullptr ||
+      ValkeyModule_CallReplyType(reply) == VALKEYMODULE_REPLY_ERROR) {
+    if (reply) ValkeyModule_FreeCallReply(reply);
+    CHECK(false) << "FT.INTERNAL_UPDATE failed for id: "
+                 << vmsdk::config::RedactIfNeeded(id);
+  }
+
+  ValkeyModule_FreeCallReply(reply);
+  return absl::OkStatus();
+}
+
+void MetadataManager::ReplicateFTInternalUpdate(
+    const coordinator::GlobalMetadataEntry &entry,
+    const coordinator::GlobalMetadataVersionHeader &header,
+    absl::string_view encoded_id) {
+  std::string metadata_binary, header_binary;
+  entry.SerializeToString(&metadata_binary);
+  header.SerializeToString(&header_binary);
+
+  // Replicate FT.INTERNAL_UPDATE to replicas for AOF consistency
+  ValkeyModule_Replicate(detached_ctx_.get(), "FT.INTERNAL_UPDATE", "cbb",
+                         std::string(encoded_id).c_str(),
+                         metadata_binary.data(), metadata_binary.size(),
+                         header_binary.data(), header_binary.size());
+}
+
 }  // namespace valkey_search::coordinator

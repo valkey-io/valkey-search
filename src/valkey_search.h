@@ -21,11 +21,16 @@
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/server.h"
 #include "src/index_schema.h"
+#include "src/valkey_search_options.h"
+#include "vmsdk/src/cluster_map.h"
+#include "vmsdk/src/thread_group_cpu_monitor.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
+
+constexpr char kEventEngine[] = "event_engine";
 
 namespace server_events {
 extern void SubscribeToServerEvents();
@@ -46,6 +51,36 @@ class ValkeySearch {
   vmsdk::ThreadPool *GetWriterThreadPool() const {
     return writer_thread_pool_.get();
   }
+  vmsdk::ThreadPool *GetUtilityThreadPool() const {
+    return utility_thread_pool_.get();
+  }
+  std::shared_ptr<vmsdk::ThreadGroupCPUMonitor> GetCoordinatorThreadsMonitor()
+      const {
+    return coordinator_thread_monitor_;
+  }
+
+  // Generic background task scheduling
+  // This is meant for low priority tasks that can be deferred.
+  void ScheduleUtilityTask(absl::AnyInvocable<void()> task) {
+    if (utility_thread_pool_) {
+      utility_thread_pool_->Schedule(std::move(task),
+                                     vmsdk::ThreadPool::Priority::kLow);
+    } else {
+      // Execute synchronously if no pool available.
+      task();
+    }
+  }
+
+  // Generic cleanup scheduler that respects search result background cleanup
+  // setting
+  void ScheduleSearchResultCleanup(absl::AnyInvocable<void()> cleanup_task) {
+    if (options::GetSearchResultBackgroundCleanup().GetValue()) {
+      ScheduleUtilityTask(std::move(cleanup_task));
+    } else {
+      cleanup_task();
+    }
+  }
+
   void Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const;
 
   IndexSchema::Stats::ResultCnt<uint64_t> AccumulateIndexSchemaResults(
@@ -97,10 +132,22 @@ class ValkeySearch {
   // of the program.
   ValkeyModuleCtx *GetBackgroundCtx() const { return ctx_; }
 
+  // Get or create a new cluster map
+  std::shared_ptr<vmsdk::cluster_map::ClusterMap> GetOrRefreshClusterMap(
+      ValkeyModuleCtx *ctx);
+
+  // Get current cluster map without refresh (thread-safe)
+  std::shared_ptr<vmsdk::cluster_map::ClusterMap> GetClusterMap() const {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+    return std::atomic_load(&cluster_map_);
+#pragma GCC diagnostic pop
+  }
+
  protected:
   std::unique_ptr<vmsdk::ThreadPool> reader_thread_pool_;
   std::unique_ptr<vmsdk::ThreadPool> writer_thread_pool_;
-  virtual size_t GetMaxWorkerThreadPoolSuspensionSec() const;
+  std::unique_ptr<vmsdk::ThreadPool> utility_thread_pool_;
 
  private:
   absl::Status Startup(ValkeyModuleCtx *ctx);
@@ -121,8 +168,13 @@ class ValkeySearch {
 
   std::unique_ptr<coordinator::Server> coordinator_;
   std::unique_ptr<coordinator::ClientPool> client_pool_;
+  std::shared_ptr<vmsdk::cluster_map::ClusterMap> cluster_map_;
+  std::shared_ptr<vmsdk::ThreadGroupCPUMonitor> coordinator_thread_monitor_{
+      nullptr};
 };
 void ModuleInfo(ValkeyModuleInfoCtx *ctx, int for_crash_report);
 }  // namespace valkey_search
 
+int (*JSON_GetValue)(ValkeyModuleKey *key, const char *path,
+                     ValkeyModuleString **result) VALKEYMODULE_ATTR;
 #endif  // VALKEYSEARCH_SRC_VALKEY_SEARCH_H_

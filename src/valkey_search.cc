@@ -28,7 +28,6 @@
 #include "src/coordinator/metadata_manager.h"
 #include "src/coordinator/server.h"
 #include "src/coordinator/util.h"
-#include "src/index_schema.h"
 #include "src/metrics.h"
 #include "src/rdb_serialization.h"
 #include "src/schema_manager.h"
@@ -51,12 +50,6 @@ namespace valkey_search {
 using vmsdk::config::ModuleConfigManager;
 
 static absl::NoDestructor<std::unique_ptr<ValkeySearch>> valkey_search_instance;
-
-constexpr size_t kMaxWorkerThreadPoolSuspensionSec{60};
-
-size_t ValkeySearch::GetMaxWorkerThreadPoolSuspensionSec() const {
-  return kMaxWorkerThreadPoolSuspensionSec;
-}
 
 ValkeySearch &ValkeySearch::Instance() { return **valkey_search_instance; };
 
@@ -111,16 +104,32 @@ static vmsdk::info_field::Integer used_memory(
         .Computed(vmsdk::GetUsedMemoryCnt)
         .CrashSafe());
 
- static vmsdk::info_field::Integer reclaimable_memory("memory", "index_reclaimable_memory", 
-    vmsdk::info_field::IntegerBuilder()
-      .App()
-      .Computed([]() -> uint64_t { return Metrics::GetStats().reclaimable_memory; })
-      .CrashSafe());
+static vmsdk::info_field::Integer used_text_memory_bytes(
+    "memory", "used_text_memory_bytes",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> uint64_t {
+      return SchemaManager::Instance().GetTotalTextMemoryUsage();
+    }));
 
-static vmsdk::info_field::String background_indexing_status("indexing", "background_indexing_status",
-    vmsdk::info_field::StringBuilder()
+static vmsdk::info_field::Integer used_text_memory_human(
+    "memory", "used_text_memory_human",
+    vmsdk::info_field::IntegerBuilder().SIBytes().Dev().Computed(
+        []() -> uint64_t {
+          return SchemaManager::Instance().GetTotalTextMemoryUsage();
+        }));
+
+static vmsdk::info_field::Integer reclaimable_memory(
+    "memory", "index_reclaimable_memory",
+    vmsdk::info_field::IntegerBuilder()
         .App()
-        .ComputedCharPtr([]() -> const char * {
+        .Computed([]() -> uint64_t {
+          return Metrics::GetStats().reclaimable_memory;
+        })
+        .CrashSafe());
+
+static vmsdk::info_field::String background_indexing_status(
+    "indexing", "background_indexing_status",
+    vmsdk::info_field::StringBuilder().App().ComputedCharPtr(
+        []() -> const char * {
           return SchemaManager::Instance().IsIndexingInProgress()
                      ? "IN_PROGRESS"
                      : "NO_ACTIVITY";
@@ -142,105 +151,129 @@ static vmsdk::info_field::Float used_write_cpu(
 
 static vmsdk::info_field::Integer ingest_hash_keys(
     "global_ingestion", "ingest_hash_keys",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().ingest_hash_keys;
+    }));
+
+static vmsdk::info_field::Integer backfill_hash_keys(
+    "global_ingestion", "backfill_hash_keys",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().backfill_hash_keys;
     }));
 
 static vmsdk::info_field::Integer ingest_hash_blocked(
     "global_ingestion", "ingest_hash_blocked",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return vmsdk::BlockedClientTracker::GetInstance().GetClientCount(
           vmsdk::BlockedClientCategory::kHash);
     }));
 
 static vmsdk::info_field::Integer ingest_json_keys(
     "global_ingestion", "ingest_json_keys",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().ingest_json_keys;
+    }));
+
+static vmsdk::info_field::Integer backfill_json_keys(
+    "global_ingestion", "backfill_json_keys",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().backfill_json_keys;
     }));
 
 static vmsdk::info_field::Integer ingest_json_blocked(
     "global_ingestion", "ingest_json_blocked",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return vmsdk::BlockedClientTracker::GetInstance().GetClientCount(
           vmsdk::BlockedClientCategory::kJson);
     }));
 
 static vmsdk::info_field::Integer ingest_field_vector(
     "global_ingestion", "ingest_field_vector",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().ingest_field_vector;
     }));
 
 static vmsdk::info_field::Integer ingest_field_numeric(
     "global_ingestion", "ingest_field_numeric",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().ingest_field_numeric;
     }));
 
 static vmsdk::info_field::Integer ingest_field_tag(
     "global_ingestion", "ingest_field_tag",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().ingest_field_tag;
+    }));
+
+static vmsdk::info_field::Integer ingest_field_text(
+    "global_ingestion", "ingest_field_text",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().ingest_field_text;
     }));
 
 static vmsdk::info_field::Integer ingest_last_batch_size(
     "global_ingestion", "ingest_last_batch_size",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().ingest_last_batch_size;
     }));
 
 static vmsdk::info_field::Integer ingest_total_batches(
     "global_ingestion", "ingest_total_batches",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().ingest_total_batches;
     }));
 
 static vmsdk::info_field::Integer ingest_total_failures(
     "global_ingestion", "ingest_total_failures",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().ingest_total_failures;
     }));
 
 static vmsdk::info_field::Integer time_slice_read_periods(
     "time_slice_mutex", "time_slice_read_periods",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return vmsdk::GetGlobalTimeSlicedMRMWStats().read_periods;
     }));
 
 static vmsdk::info_field::Integer time_slice_read_time(
     "time_slice_mutex", "time_slice_read_time",
-    vmsdk::info_field::IntegerBuilder().App().Units(vmsdk::info_field::Units::kMicroSeconds).Computed([]() -> long long {
-      return vmsdk::GetGlobalTimeSlicedMRMWStats().read_time_microseconds;
-    }));
+    vmsdk::info_field::IntegerBuilder()
+        .Dev()
+        .Units(vmsdk::info_field::Units::kMicroSeconds)
+        .Computed([]() -> long long {
+          return vmsdk::GetGlobalTimeSlicedMRMWStats().read_time_microseconds;
+        }));
 
 static vmsdk::info_field::Integer time_slice_write_periods(
     "time_slice_mutex", "time_slice_write_periods",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return vmsdk::GetGlobalTimeSlicedMRMWStats().write_periods;
     }));
 
 static vmsdk::info_field::Integer time_slice_write_time(
     "time_slice_mutex", "time_slice_write_time",
-    vmsdk::info_field::IntegerBuilder().App().Units(vmsdk::info_field::Units::kMicroSeconds).Computed([]() -> long long {
-      return vmsdk::GetGlobalTimeSlicedMRMWStats().write_time_microseconds;
-    }));   
+    vmsdk::info_field::IntegerBuilder()
+        .Dev()
+        .Units(vmsdk::info_field::Units::kMicroSeconds)
+        .Computed([]() -> long long {
+          return vmsdk::GetGlobalTimeSlicedMRMWStats().write_time_microseconds;
+        }));
 
 static vmsdk::info_field::Integer time_slice_queries(
     "time_slice_mutex", "time_slice_queries",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().time_slice_queries;
     }));
 
 static vmsdk::info_field::Integer time_slice_upserts(
     "time_slice_mutex", "time_slice_upserts",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().time_slice_upserts;
     }));
 
 static vmsdk::info_field::Integer time_slice_deletes(
     "time_slice_mutex", "time_slice_deletes",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().time_slice_deletes;
     }));
 
@@ -305,6 +338,36 @@ static vmsdk::info_field::Integer rdb_save_failure_cnt(
       return Metrics::GetStats().rdb_save_failure_cnt;
     }));
 
+static vmsdk::info_field::Integer ft_internal_update_parse_failures_cnt(
+    "coordinator", "ft_internal_update_parse_failures_cnt",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().ft_internal_update_parse_failures_cnt;
+    }));
+
+static vmsdk::info_field::Integer ft_internal_update_call_failures_cnt(
+    "coordinator", "ft_internal_update_call_failures_cnt",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().ft_internal_update_call_failures_cnt;
+    }));
+
+static vmsdk::info_field::Integer ft_internal_update_process_failures_cnt(
+    "coordinator", "ft_internal_update_process_failures_cnt",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().ft_internal_update_process_failures_cnt;
+    }));
+
+static vmsdk::info_field::Integer process_internal_update_callback_failures_cnt(
+    "coordinator", "process_internal_update_callback_failures_cnt",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().process_internal_update_callback_failures_cnt;
+    }));
+
+static vmsdk::info_field::Integer ft_internal_update_skipped_entries_cnt(
+    "coordinator", "ft_internal_update_skipped_entries_cnt",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().ft_internal_update_skipped_entries_cnt;
+    }));
+
 static vmsdk::info_field::Integer successful_requests_count(
     "query", "successful_requests_count",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
@@ -341,6 +404,24 @@ static vmsdk::info_field::Integer query_prefiltering_requests_cnt(
       return Metrics::GetStats().query_prefiltering_requests_cnt;
     }));
 
+static vmsdk::info_field::Integer nonvector_requests_count(
+    "query", "nonvector_requests_count",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return Metrics::GetStats().query_nonvector_requests_cnt;
+    }));
+
+static vmsdk::info_field::Integer vector_requests_count(
+    "query", "vector_requests_count",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return Metrics::GetStats().query_vector_requests_cnt;
+    }));
+
+static vmsdk::info_field::Integer text_requests_count(
+    "query", "text_requests_count",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().query_text_requests_cnt;
+    }));
+
 static vmsdk::info_field::Integer hnsw_add_exceptions_count(
     "hnswlib", "hnsw_add_exceptions_count",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
@@ -374,7 +455,7 @@ static vmsdk::info_field::Integer hnsw_create_exceptions_count(
 static vmsdk::info_field::Integer string_interning_store_size(
     "string_interning", "string_interning_store_size",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
-      return StringInternStore::Instance().Size();
+      return StringInternStore::Instance().UniqueStrings();
     }));
 
 static vmsdk::info_field::Integer vector_externing_entry_count(
@@ -419,6 +500,23 @@ static vmsdk::info_field::Integer coordinator_server_listening_port(
         .App()
         .Computed([]() -> long long {
           return ValkeySearch::Instance().GetCoordinatorServer()->GetPort();
+        })
+        .VisibleIf([]() -> bool {
+          return ValkeySearch::Instance().UsingCoordinator();
+        }));
+
+static vmsdk::info_field::Float coordinator_threads_cpu_time_sec(
+    "coordinator", "coordinator_threads_cpu_time_sec",
+    vmsdk::info_field::FloatBuilder()
+        .App()
+        .Computed([]() -> double {
+          auto monitor =
+              ValkeySearch::Instance().GetCoordinatorThreadsMonitor();
+          if (!monitor) {
+            return 0.0;
+          }
+          monitor->UpdateTotalCPUTimeSec();
+          return monitor->GetTotalGrpcCPUTime();
         })
         .VisibleIf([]() -> bool {
           return ValkeySearch::Instance().UsingCoordinator();
@@ -553,6 +651,36 @@ static vmsdk::info_field::Integer coordinator_bytes_in(
         .VisibleIf([]() -> bool {
           return ValkeySearch::Instance().UsingCoordinator();
         }));
+
+static vmsdk::info_field::Integer coordinator_last_time_since_healthy_metadata(
+    "coordinator", "coordinator_last_time_since_healthy_metadata",
+    vmsdk::info_field::IntegerBuilder()
+        .Dev()
+        .Units(vmsdk::info_field::Units::kMilliSeconds)
+        .Computed([]() -> int64_t {
+          return coordinator::MetadataManager::Instance()
+              .GetMilliSecondsSinceLastHealthyMetadata();
+        })
+        .VisibleIf([]() -> bool {
+          return ValkeySearch::Instance().UsingCoordinator();
+        }));
+
+static vmsdk::info_field::Integer
+    coordinator_metadata_reconciliation_completed_count(
+        "coordinator", "coordinator_metadata_reconciliation_completed_count",
+        vmsdk::info_field::IntegerBuilder()
+            .Dev()
+            .Computed([]() -> int64_t {
+              // prevent failure in unit tests
+              if (!coordinator::MetadataManager::IsInitialized()) {
+                return 0;
+              }
+              return coordinator::MetadataManager::Instance()
+                  .GetMetadataReconciliationCompletedCount();
+            })
+            .VisibleIf([]() -> bool {
+              return ValkeySearch::Instance().UsingCoordinator();
+            }));
 
 static vmsdk::info_field::String
     coordinator_client_get_global_metadata_success_latency_usec(
@@ -732,6 +860,36 @@ static vmsdk::info_field::String flat_vector_index_search_latency_usec(
               .flat_vector_index_search_latency.HasSamples();
         }));
 
+static vmsdk::info_field::Integer info_fanout_retry_count(
+    "fanout", "info_fanout_retry_count",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().info_fanout_retry_cnt;
+    }));
+
+static vmsdk::info_field::Integer info_fanout_fail_count(
+    "fanout", "info_fanout_fail_count",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().info_fanout_fail_cnt;
+    }));
+
+static vmsdk::info_field::Integer pause_handle_cluster_message_round_cnt(
+    "fanout", "pause_handle_cluster_message_round_count",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().pause_handle_cluster_message_round_cnt;
+    }));
+
+static vmsdk::info_field::Integer text_query_blocked_count(
+    "query", "text_query_blocked_count",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().text_query_blocked_cnt;
+    }));
+
+static vmsdk::info_field::Integer text_query_retry_count(
+    "query", "text_query_retry_count",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().text_query_retry_cnt;
+    }));
+
 #ifdef DEBUG_INFO
 // Helper function to create subscription info fields with maximum deduplication
 template <typename StatsSelector>
@@ -801,6 +959,22 @@ static vmsdk::info_field::Integer &remove_subscription_skipped_count =
     remove_subscription_fields[2];
 
 #endif
+
+static vmsdk::info_field::Integer string_interning_memory_bytes(
+    "string_interning", "string_interning_memory_bytes",
+    vmsdk::info_field::IntegerBuilder()
+        .Dev()
+        .Computed(StringInternStore::GetMemoryUsage)
+        .CrashSafe());
+
+static vmsdk::info_field::Integer string_interning_memory_human(
+    "string_interning", "string_interning_memory_human",
+    vmsdk::info_field::IntegerBuilder()
+        .SIBytes()
+        .Dev()
+        .Computed(StringInternStore::GetMemoryUsage)
+        .CrashSafe());
+
 void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
   vmsdk::info_field::DoSections(ctx, for_crash_report);
 }
@@ -818,7 +992,8 @@ void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
 void ValkeySearch::AtForkPrepare() {
   // Sanity: fork can occur (by example: calling to "popen") before the thread
   // pool is initialized
-  if (writer_thread_pool_ == nullptr || reader_thread_pool_ == nullptr) {
+  if (writer_thread_pool_ == nullptr || reader_thread_pool_ == nullptr ||
+      utility_thread_pool_ == nullptr) {
     return;
   }
   Metrics::GetStats().worker_thread_pool_suspend_cnt++;
@@ -828,6 +1003,10 @@ void ValkeySearch::AtForkPrepare() {
                               << status.message();
   status = reader_thread_pool_->SuspendWorkers();
   VMSDK_LOG(WARNING, nullptr) << "At prepare fork callback, suspend reader "
+                                 "worker thread pool returned message: "
+                              << status.message();
+  status = utility_thread_pool_->SuspendWorkers();
+  VMSDK_LOG(WARNING, nullptr) << "At prepare fork callback, suspend utility "
                                  "worker thread pool returned message: "
                               << status.message();
   status = coordinator::GRPCSuspender::Instance().Suspend();
@@ -845,6 +1024,10 @@ void ValkeySearch::AfterForkParent() {
   auto status = reader_thread_pool_->ResumeWorkers();
   Metrics::GetStats().reader_worker_thread_pool_resumed_cnt++;
   VMSDK_LOG(WARNING, nullptr) << "After fork parent callback, resume reader "
+                                 "worker thread pool returned message: "
+                              << status.message();
+  status = utility_thread_pool_->ResumeWorkers();
+  VMSDK_LOG(WARNING, nullptr) << "After fork parent callback, resume utility "
                                  "worker thread pool returned message: "
                               << status.message();
   writer_thread_pool_suspend_watch_ = vmsdk::StopWatch();
@@ -865,12 +1048,20 @@ void ValkeySearch::OnServerCronCallback(ValkeyModuleCtx *ctx,
   if (reader_thread_pool_) {
     reader_thread_pool_->JoinTerminatedWorkers();
   }
+  if (utility_thread_pool_) {
+    utility_thread_pool_->JoinTerminatedWorkers();
+  }
   // Resume worker thread pool if suspension time exceeds the max allowed
   // duration
   if (writer_thread_pool_suspend_watch_.has_value() &&
+      options::GetMaxWorkerSuspensionSecs().GetValue() > 0 &&
       writer_thread_pool_suspend_watch_.value().Duration() >
-          absl::Seconds(GetMaxWorkerThreadPoolSuspensionSec())) {
+          absl::Seconds(options::GetMaxWorkerSuspensionSecs().GetValue())) {
     ResumeWriterThreadPool(ctx, /*is_expired=*/true);
+  }
+  // refresh cluster map in cluster mode
+  if (IsCluster() && UsingCoordinator()) {
+    GetOrRefreshClusterMap(ctx);
   }
 }
 
@@ -878,7 +1069,18 @@ void ValkeySearch::OnForkChildCallback(ValkeyModuleCtx *ctx,
                                        [[maybe_unused]] ValkeyModuleEvent eid,
                                        uint64_t subevent,
                                        [[maybe_unused]] void *data) {
-  if (subevent & VALKEYMODULE_SUBEVENT_FORK_CHILD_DIED) {
+  // if max-worker-suspension-secs config > 0, we resume the workers either when
+  // fork dies or when time expires (the second condition is checked on cron
+  // callback).
+  if (options::GetMaxWorkerSuspensionSecs().GetValue() > 0) {
+    if (subevent & VALKEYMODULE_SUBEVENT_FORK_CHILD_DIED) {
+      ResumeWriterThreadPool(ctx, /*is_expired=*/false);
+    }
+  } else {
+    // max-worker-suspension-secs <= 0 - we resume the workers on a 'fork born'
+    // event. We don't check if it's a 'fork born' event - in case the config
+    // was modified in the middle of the fork, we want to resume the workers
+    // also after 'fork died' event in case it wasn't already.
     ResumeWriterThreadPool(ctx, /*is_expired=*/false);
   }
 }
@@ -928,11 +1130,17 @@ absl::StatusOr<int> GetValkeyLocalPort(ValkeyModuleCtx *ctx) {
 
 absl::Status ValkeySearch::Startup(ValkeyModuleCtx *ctx) {
   reader_thread_pool_ = std::make_unique<vmsdk::ThreadPool>(
-      "read-worker-", options::GetReaderThreadCount().GetValue());
+      "read-worker-", options::GetReaderThreadCount().GetValue(),
+      options::GetThreadPoolWaitTimeSamples().GetValue());
   reader_thread_pool_->StartWorkers();
   writer_thread_pool_ = std::make_unique<vmsdk::ThreadPool>(
-      "write-worker-", options::GetWriterThreadCount().GetValue());
+      "write-worker-", options::GetWriterThreadCount().GetValue(),
+      options::GetThreadPoolWaitTimeSamples().GetValue());
   writer_thread_pool_->StartWorkers();
+  utility_thread_pool_ = std::make_unique<vmsdk::ThreadPool>(
+      "utility-worker-", options::GetUtilityThreadCount().GetValue(),
+      options::GetThreadPoolWaitTimeSamples().GetValue());
+  utility_thread_pool_->StartWorkers();
 
   VMSDK_LOG(NOTICE, ctx) << "use_coordinator: "
                          << options::GetUseCoordinator().GetValue()
@@ -942,6 +1150,8 @@ absl::Status ValkeySearch::Startup(ValkeyModuleCtx *ctx) {
                          << reader_thread_pool_->Size();
   VMSDK_LOG(NOTICE, ctx) << "Writer workers count: "
                          << writer_thread_pool_->Size();
+  VMSDK_LOG(NOTICE, ctx) << "Utility workers count: "
+                         << utility_thread_pool_->Size();
 
   if (options::GetUseCoordinator().GetValue() && IsCluster()) {
     client_pool_ = std::make_unique<coordinator::ClientPool>(
@@ -954,6 +1164,8 @@ absl::Status ValkeySearch::Startup(ValkeyModuleCtx *ctx) {
       ctx, server_events::SubscribeToServerEvents, writer_thread_pool_.get(),
       options::GetUseCoordinator().GetValue() && IsCluster()));
   if (options::GetUseCoordinator().GetValue()) {
+    coordinator_thread_monitor_ =
+        std::make_unique<vmsdk::ThreadGroupCPUMonitor>(kEventEngine);
     VMSDK_ASSIGN_OR_RETURN(auto valkey_port, GetValkeyLocalPort(ctx));
     auto coordinator_port = coordinator::GetCoordinatorPort(valkey_port);
     coordinator_ = coordinator::ServerImpl::Create(
@@ -972,7 +1184,7 @@ void ValkeySearch::ResumeWriterThreadPool(ValkeyModuleCtx *ctx,
       is_expired
           ? absl::StrFormat(
                 "Worker thread pool suspension took more than %lu seconds",
-                GetMaxWorkerThreadPoolSuspensionSec())
+                options::GetMaxWorkerSuspensionSecs().GetValue())
           : "Fork child died notification received";
   if (is_expired) {
     Metrics::GetStats().writer_worker_thread_pool_suspension_expired_cnt++;
@@ -1011,9 +1223,9 @@ absl::Status ValkeySearch::OnLoad(ValkeyModuleCtx *ctx,
       ctx, VALKEYMODULE_OPTIONS_HANDLE_IO_ERRORS |
                VALKEYMODULE_OPTIONS_HANDLE_REPL_ASYNC_LOAD |
                VALKEYMODULE_OPTION_NO_IMPLICIT_SIGNAL_MODIFIED);
-  VMSDK_LOG(NOTICE, ctx) << "Json module is "
-                         << (IsJsonModuleLoaded(ctx) ? "" : "not ")
-                         << "loaded!";
+  VMSDK_LOG(NOTICE, ctx) << "Json "
+                         << (IsJsonModuleSupported(ctx) ? "" : "not ")
+                         << "supported!";
   VectorExternalizer::Instance().Init(ctx_);
   ValkeyModule_Assert(vmsdk::info_field::Validate(ctx));
   VMSDK_LOG(DEBUG, ctx) << "Search module completed initialization!";
@@ -1047,6 +1259,28 @@ bool ValkeySearch::IsChildProcess() {
 void ValkeySearch::OnUnload(ValkeyModuleCtx *ctx) {
   ValkeyModule_FreeThreadSafeContext(ctx_);
   reader_thread_pool_ = nullptr;
+}
+
+std::shared_ptr<vmsdk::cluster_map::ClusterMap>
+ValkeySearch::GetOrRefreshClusterMap(ValkeyModuleCtx *ctx) {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+  auto current_map = std::atomic_load(&cluster_map_);
+#pragma GCC diagnostic pop
+  // Check if we need to refresh
+  bool needs_refresh =
+      !current_map || !current_map->IsConsistent() ||
+      std::chrono::steady_clock::now() > current_map->GetExpirationTime();
+  if (needs_refresh) {
+    VMSDK_LOG_EVERY_N_SEC(DEBUG, nullptr, 1) << "Creating a new cluster map";
+    auto new_map = vmsdk::cluster_map::ClusterMap::CreateNewClusterMap(ctx);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+    std::atomic_store(&cluster_map_, new_map);
+#pragma GCC diagnostic pop
+    return new_map;
+  }
+  return current_map;
 }
 
 }  // namespace valkey_search

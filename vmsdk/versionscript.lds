@@ -1,7 +1,11 @@
 {
-  global:
-    # Only expose the ValkeyModule APIs
-    ValkeyModule_OnLoad;
-    ValkeyModule_OnUnload;
-  local: *;  # hide everything else
+global:
+  *;
+local:
+  __wrap_*;
+  __real_*;
+  _Znwm*;
+  _Znam*;
+  _ZdlPv*;
+  _ZdaPv*;
 };

@@ -8,33 +8,36 @@
 #ifndef VALKEYSEARCH_SRC_COMMANDS_FT_SEARCH_PARSER_H_
 #define VALKEYSEARCH_SRC_COMMANDS_FT_SEARCH_PARSER_H_
 
-#include <cstddef>
-#include <cstdint>
-#include <memory>
+#include <optional>
 
-#include "absl/status/statusor.h"
-#include "src/commands/ft_create_parser.h"
+#include "src/commands/commands.h"
 #include "src/query/search.h"
-#include "src/schema_manager.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
-
-constexpr int64_t kTimeoutMS{50000};
-const size_t kMaxTimeoutMs{60000};
-
 namespace options {
 vmsdk::config::Number &GetMaxKnn();
 }  // namespace options
 
-struct LimitParameter {
-  uint64_t first_index{0};
-  uint64_t number{10};
-};
+absl::Status VerifyQueryString(query::SearchParameters &parameters);
 
-absl::StatusOr<std::unique_ptr<query::VectorSearchParameters>>
-ParseVectorSearchParameters(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
-                            int argc, const SchemaManager &schema_manager);
+//
+// Data Unique to the FT.SEARCH command
+//
+struct SearchCommand : public QueryCommand {
+  SearchCommand(int db_num) : QueryCommand(db_num) {}
+  absl::Status ParseCommand(vmsdk::ArgsIterator &itr) override;
+  void SendReply(ValkeyModuleCtx *ctx,
+                 query::SearchResult &search_result) override;
+  absl::Status PostParseQueryString() override;
+  // By default, FT.SEARCH does not require complete results and can be
+  // optimized with LIMIT based trimming. Implement the correct logic here to
+  // return true when those clauses are present.
+  bool RequiresCompleteResults() const override { return sortby.has_value(); }
+
+  std::optional<query::SortByParameter> sortby;
+  bool with_sort_keys{false};
+};
 
 }  // namespace valkey_search
 #endif  // VALKEYSEARCH_SRC_COMMANDS_FT_SEARCH_PARSER_H_

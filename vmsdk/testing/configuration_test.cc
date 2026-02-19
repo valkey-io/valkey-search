@@ -38,6 +38,13 @@ TEST_F(ConfigTest, registration) {
   vmsdk::config::Number number("number", 42, 0, 1024);
   vmsdk::config::Boolean boolean("boolean", true);
 
+  // Expect hide-user-data-from-log to be registered (it's auto-registered by
+  // the system)
+  EXPECT_CALL(*kMockValkeyModule,
+              RegisterBoolConfig(&fake_ctx, StrEq("hide-user-data-from-log"),
+                                 Eq(1), _, _, _, _, _))
+      .Times(testing::AtLeast(1));
+
   // 2 integer registration
   EXPECT_CALL(*kMockValkeyModule,
               RegisterNumericConfig(&fake_ctx, StrEq("number"), Eq(42), _,
@@ -253,6 +260,106 @@ TEST_F(ConfigTest, CheckStringConfig) {
   EXPECT_EQ(
       res.code(),
       absl::StatusCode::kInvalidArgument);  // Failure reason: invalid argument
+  FreeValkeyArgs(args);
+}
+
+template <typename Value>
+void CheckValue(std::shared_ptr<config::ConfigBase<Value>> conf,
+                bool debug_mode, Value new_value) {
+  Value old_val = conf->GetValue();
+  absl::Status st = conf->SetValue(new_value);
+  if (debug_mode) {
+    EXPECT_TRUE(st.ok());
+    EXPECT_EQ(new_value, conf->GetValue());
+  } else {
+    EXPECT_FALSE(st.ok());
+    EXPECT_TRUE(absl::IsPermissionDenied(st));
+    EXPECT_EQ(old_val, conf->GetValue());
+  }
+}
+
+TEST_F(ConfigTest, CheckDebugConfiguration) {
+  std::array<bool, 2> cases = {false, true};
+  for (auto debug_mode : cases) {
+    absl::Status st = absl::OkStatus();
+    std::string debug_mode_str = "no";
+    if (debug_mode) {
+      debug_mode_str = "yes";
+    }
+    std::stringstream ss;
+    ss << "--debug-mode " << debug_mode_str;
+    auto args = vmsdk::ToValkeyStringVector(ss.str());
+
+    auto res = ModuleConfigManager::Instance().Init(&fake_ctx);
+    EXPECT_TRUE(res.ok());
+    res = ModuleConfigManager::Instance().ParseAndLoadArgv(
+        &fake_ctx, args.data(), args.size());
+
+    EXPECT_EQ(vmsdk::config::IsDebugModeEnabled(), debug_mode);
+
+    // Check boolean
+    auto bool_config = config::BooleanBuilder("my-bool", true).Dev().Build();
+    CheckValue(bool_config, debug_mode, false);
+
+    // Check number
+    auto num_config = config::NumberBuilder("my-num", 42, 0, 100).Dev().Build();
+    CheckValue(num_config, debug_mode, 43LL);
+
+    // Check string
+    auto str_config =
+        config::StringBuilder("my-str", "hello world").Dev().Build();
+    CheckValue(str_config, debug_mode, std::string{"valkey-search"});
+
+    // Check enum
+    const std::vector<int> enum_values = {0, 1, 2};
+    const std::vector<std::string_view> enum_names = {"0", "1", "2"};
+
+    auto enum_config =
+        config::EnumBuilder("my-enum", 0, enum_names, enum_values)
+            .Dev()
+            .Build();
+    CheckValue(enum_config, debug_mode, 2);
+    FreeValkeyArgs(args);
+  }
+}
+
+TEST_F(ConfigTest, defaultValue) {
+  // Define some configuration entries that will register themselves with the
+  // configuration manager
+  auto enumerator =
+      config::Builder<int>("my-enum", 2, kEnumNames, kEnumValues).Build();
+  auto number_config =
+      config::Builder<long long>("my-number", 42, 0, 1024).Build();
+  auto boolean = config::Builder<bool>("my-bool", true).Build();
+
+  // check defaults
+  EXPECT_EQ(enumerator->GetDefaultValue(), 2);
+  EXPECT_EQ(number_config->GetDefaultValue(), 42);
+  EXPECT_EQ(boolean->GetDefaultValue(), true);
+
+  // Add command-line arguments
+  auto args =
+      vmsdk::ToValkeyStringVector("--my-bool no --my-number 10 --my-enum 4");
+  auto res = ModuleConfigManager::Instance().Init(&fake_ctx);
+  EXPECT_TRUE(res.ok());
+  res = ModuleConfigManager::Instance().ParseAndLoadArgv(&fake_ctx, args.data(),
+                                                         args.size());
+  EXPECT_TRUE(res.ok());
+  // Check that the default is updated
+  EXPECT_FALSE(boolean->GetDefaultValue());
+  EXPECT_EQ(enumerator->GetDefaultValue(), 4);
+  EXPECT_EQ(number_config->GetDefaultValue(), 10);
+
+  // Edit the configs
+  EXPECT_TRUE(enumerator->SetValue(1).ok());
+  EXPECT_TRUE(boolean->SetValue(true).ok());
+  EXPECT_TRUE(number_config->SetValue(55).ok());
+
+  // Make sure default is still the same
+  EXPECT_FALSE(boolean->GetDefaultValue());
+  EXPECT_EQ(enumerator->GetDefaultValue(), 4);
+  EXPECT_EQ(number_config->GetDefaultValue(), 10);
+
   FreeValkeyArgs(args);
 }
 

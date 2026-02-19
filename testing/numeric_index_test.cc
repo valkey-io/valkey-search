@@ -116,7 +116,7 @@ TEST_F(NumericIndexTest, ModifyWithNonNumericString) {
 
   fetcher = index.Search(predicate, false);
   EXPECT_EQ(Fetch(*fetcher).size(), 0);
-  EXPECT_EQ(index.GetRecordCount(), 0);
+  EXPECT_EQ(index.GetTrackedKeyCount(), 0);
 }
 
 TEST_F(NumericIndexTest, RangeSearchInclusiveExclusive) {

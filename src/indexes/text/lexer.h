@@ -1,80 +1,73 @@
+/*
+ * Copyright (c) 2025, valkey-search contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
+ *
+ */
+
 #ifndef _VALKEY_SEARCH_INDEXES_TEXT_LEXER_H_
 #define _VALKEY_SEARCH_INDEXES_TEXT_LEXER_H_
 
 /*
 
-The Lexer takes in a UTF-8 string and outputs a vector of words.
-Each word output is decorated with metadata like it's physical location, etc.
+STATELESS LEXER DESIGN
 
-1. The lexer treats configurable punctuation as whitespace.
-2. The lexer supports escaping of punctuation to force its treatment as a
-natural character that is part of a word.
-3. Words are defined as sequences of utf-8 characters separated by whitespace.
+The Lexer is a stateless processor that takes configuration parameters
+and produces tokenized output. Configuration is stored in TextIndexSchema
+and Text classes, then passed to lexer methods as parameters.
+
+Tokenization Pipeline:
+1. Split text on punctuation characters (configurable)
+2. Convert to lowercase
+3. Stop word removal (filter out common words)
+4. Apply stemming based on language and field settings
 
 */
 
+#include <bitset>
 #include <string>
 #include <vector>
 
+#include "absl/container/flat_hash_set.h"
 #include "absl/status/statusor.h"
-#include "src/text/text.h"
+#include "absl/strings/string_view.h"
+#include "src/index_schema.pb.h"
 
-namespace valkey_search::text {
+struct sb_stemmer;
 
-/*
-
-Configuration for Lexer operation. Typically, there's one of these for each
-index-field.
-
-*/
+namespace valkey_search::indexes::text {
 
 struct Lexer {
-  //
-  // Set/Get current punctuation characters.
-  //
-  // Since every scanned input character is subject to this table, we want to
-  // make the implementation efficient, so by restricting punctuation characters
-  // to ASCII characters a bitmap implementation becomes feasible and is
-  // preferred.
-  //
-  // Rejected if we find some non-ASCII characters
-  absl::Status SetPunctuation(const std::string& new_punctuation);
+  Lexer(data_model::Language language, const std::string& punctuation,
+        const std::vector<std::string>& stop_words);
+  ~Lexer() = default;
 
-  std::string GetPunctuation() const;
+  absl::StatusOr<std::vector<std::string>> Tokenize(
+      absl::string_view text, bool stemming_enabled, uint32_t min_stem_size,
+      absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>*
+          stem_mappings = nullptr) const;
 
-  // Instantiate with default Punctuation
-  Lexer();
+  std::string StemWord(const std::string& word, sb_stemmer* stemmer,
+                       uint32_t min_stem_size = 0) const;
+  bool IsPunctuation(char c) const {
+    return punct_bitmap_[static_cast<unsigned char>(c)];
+  }
 
-  //
-  // Process an input string
-  //
-  // May fail if there are non-UTF-8 characters present.
-  //
-  absl::StatusOr<LexerOutput> ProcessString(absl::string_view s) const;
-};
-
-//
-// The primary output of the lexer. most words are string-views of the original
-// input string. But for escaped words, the actual storage will be within this
-// object. Hence clients of this object don't have to worry about whether a word
-// is escaped or not. The position of a word is the index into the word vector.
-//
-struct LexerOutput {
-  struct Word {
-    std::string_view word;
-    struct Location {
-      unsigned start;  // Byte Offset of start within original text
-      unsigned end;    // Byte Offset of end+1
-    } location;
-  };
-
-  const std::vector<Word>& GetWords() const;
+  bool IsStopWord(const std::string& lowercase_word) const {
+    return stop_words_set_.contains(lowercase_word);
+  }
+  sb_stemmer* GetStemmer() const;
+  std::string NormalizeLowerCase(absl::string_view str) const;
 
  private:
-  // Storage for escaped words
-  std::vector<std::string> escaped_words_;
-}
+  data_model::Language language_;
+  std::bitset<256> punct_bitmap_;
+  absl::flat_hash_set<std::string> stop_words_set_;
 
-}  // namespace valkey_search::text
+  // UTF-8 processing helpers
+  bool IsValidUtf8(absl::string_view text) const;
+};
+
+}  // namespace valkey_search::indexes::text
 
 #endif

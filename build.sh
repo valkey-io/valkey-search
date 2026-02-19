@@ -6,40 +6,39 @@ ROOT_DIR=$(readlink -f $(dirname $0))
 VERBOSE_ARGS=""
 CMAKE_TARGET=""
 CMAKE_EXTRA_ARGS=""
+FORMAT="no"
 RUN_TEST=""
 RUN_BUILD="yes"
 DUMP_TEST_ERRORS_STDOUT="no"
-NINJA_TOOL="ninja"
 INTEGRATION_TEST="no"
 SAN_BUILD="no"
 ARGV=$@
 EXIT_CODE=0
-
-# Constants
-BOLD_PINK='\e[35;1m'
-RESET='\e[0m'
-GREEN='\e[32;1m'
-RED='\e[31;1m'
-BLUE='\e[34;1m'
+INTEG_RETRIES=1
+JOBS=""
+CMAKE_GENERATOR=${CMAKE_GENERATOR:-"Ninja"}
 
 echo "Root directory: ${ROOT_DIR}"
 
 function print_usage() {
-cat<<EOF
+    cat <<EOF
 Usage: build.sh [options...]
 
-    --help | -h               Print this help message and exit.
-    --configure               Run cmake stage (aka configure stage).
-    --verbose | -v            Run verbose build.
-    --debug                   Build for debug version.
-    --clean                   Clean the current build configuration (debug or release).
-    --run-tests               Run all tests. Optionally, pass a test name to run: "--run-tests=<test-name>".
-    --no-build                By default, build.sh always triggers a build. This option disables this behavior.
-    --test-errors-stdout      When a test fails, dump the captured tests output to stdout.
-    --run-integration-tests   Run integration tests.
-    --use-system-modules      Use system's installed gRPC, Protobuf & Abseil dependencies.
-    --asan                    Build with address sanitizer enabled.
-    --tsan                    Build with thread sanitizer enabled.
+    --help | -h                       Print this help message and exit.
+    --configure                       Run cmake stage (aka configure stage).
+    --verbose | -v                    Run verbose build.
+    --debug                           Build for debug version.
+    --clean                           Clean the current build configuration (debug or release).
+    --format                          Applies clang-format. (Run in dev container environment to ensure correct clang-format version)
+    --run-tests                       Run all tests. Optionally, pass a test name to run: "--run-tests=<test-name>".
+    --no-build                        By default, build.sh always triggers a build. This option disables this behavior.
+    --test-errors-stdout              When a test fails, dump the captured tests output to stdout.
+    --run-integration-tests[=pattern] Run integration tests.
+    --use-system-modules              Use system's installed gRPC, Protobuf & Abseil dependencies.
+    --asan                            Build with address sanitizer enabled.
+    --tsan                            Build with thread sanitizer enabled.
+    --retries=N                       Attempt to run integration tests N times. Default is 1.
+    --jobs=N                          Limit the build workers to N. Default: use all available cores.
 
 Example usage:
 
@@ -53,8 +52,7 @@ EOF
 }
 
 ## Parse command line arguments
-while [ $# -gt 0 ]
-do
+while [ $# -gt 0 ]; do
     arg=$1
     case $arg in
     --clean)
@@ -77,6 +75,10 @@ do
         RUN_BUILD="no"
         echo "Running build: no"
         ;;
+    --format)
+        FORMAT="yes"
+        shift || true
+        ;;
     --run-tests)
         RUN_TEST="all"
         shift || true
@@ -87,10 +89,32 @@ do
         shift || true
         echo "Running test ${RUN_TEST}"
         ;;
+    --unittest-output=*)
+        UNITTEST_OUTPUT="${arg#*=}"
+        shift || true
+        # echo "Unit Test Output Directory: ${UNITTEST_OUTPUT} ** not yet implemented **"
+        # Not currently implemented in build.sh, but used by upstream build_ubuntu.sh
+        ;;
     --run-integration-tests)
         INTEGRATION_TEST="yes"
         shift || true
-        echo "Running integration tests"
+        echo "Running integration tests (all)"
+        ;;
+    --integration-output=*)
+        INTEGRATION_OUTPUT="${arg#*=}"
+        shift || true
+        # echo "Integration Test Output Directory: ${INTEGRATION_OUTPUT} ** not yet implemented **"
+        # Not currently implemented in build.sh, but used by upstream build_ubuntu.sh
+        ;;
+    --run-integration-tests=*)
+        INTEGRATION_TEST="yes"
+        TEST_PATTERN=${1#*=}
+        shift || true
+        echo "Running integration tests with pattern=${TEST_PATTERN}"
+        ;;
+    --retries=*)
+        INTEG_RETRIES=${1#*=}
+        shift || true
         ;;
     --test-errors-stdout)
         DUMP_TEST_ERRORS_STDOUT="yes"
@@ -108,58 +132,141 @@ do
         shift || true
         echo "Using extra cmake arguments: ${CMAKE_EXTRA_ARGS}"
         ;;
-     --tsan)
+    --tsan)
         CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DSAN_BUILD=thread"
         SAN_BUILD="thread"
         shift || true
         echo "Using extra cmake arguments: ${CMAKE_EXTRA_ARGS}"
         ;;
-    --verbose|-v)
+    --jobs=*)
+        JOBS=${1#*=}
+        shift || true
+        ;;
+    --verbose | -v)
         shift || true
         VERBOSE_ARGS="-v"
         echo "Verbose build: true"
         ;;
-    --help|-h)
+    --help | -h)
         print_usage
         exit 0
         ;;
     *)
+        echo "Unknown argument: ${arg}"
         print_usage
         exit 1
         ;;
     esac
 done
 
-# Capitalize a word. This method is compatible with bash-3 and bash-4
-function capitalize_string() {
-    local string=$1
-    local first_char=${string:0:1}
-    local remainder=${string:1}
-    first_char=$(echo "${first_char}" | tr '[:lower:]' '[:upper:]')
-    remainder=$(echo "${remainder}" | tr '[:upper:]' '[:lower:]')
-    echo ${first_char}${remainder}
+# Import our functions, needs to be done after parsing the command line arguments
+export SAN_BUILD
+export ROOT_DIR
+. "${ROOT_DIR}/scripts/common.rc"
+
+if [[ "${CMAKE_GENERATOR}" == "Ninja" ]]; then
+  BUILD_TOOL="ninja"
+else
+  BUILD_TOOL="make -j$(num_proc)"
+fi
+
+function build_icu_if_needed() {
+    printf "${BOLD_PINK}Checking ICU dependencies...${RESET}\n"
+    
+    local ICU_SOURCE_DIR="${ROOT_DIR}/third_party/icu/source"
+    local ICU_BUILD_DIR="${BUILD_DIR}/icu"
+    
+    # ICU source is committed to repository - no download needed
+    if [ ! -d "${ICU_SOURCE_DIR}" ]; then
+        printf "${RED}ERROR: ICU source not found in third_party/icu/source${RESET}\n"
+        printf "ICU source should be committed to the repository.\n"
+        exit 1
+    fi
+    
+    # Check if ICU static libraries exist in build directory (clean approach)
+    if [ -f "${ICU_BUILD_DIR}/install/lib/libicudata.a" ] && \
+       [ -f "${ICU_BUILD_DIR}/install/lib/libicui18n.a" ] && \
+       [ -f "${ICU_BUILD_DIR}/install/lib/libicuuc.a" ]; then
+        printf "${GREEN}ICU static libraries found in build directory${RESET}\n"
+        return 0
+    fi
+    
+    printf "${BOLD_PINK}Building ICU with static data packaging...${RESET}\n"
+    
+    # Create clean build directory (out-of-tree build)
+    rm -rf "${ICU_BUILD_DIR}"
+    mkdir -p "${ICU_BUILD_DIR}"
+    cd "${ICU_BUILD_DIR}"
+    
+    printf "Configuring ICU for static linking with embedded data...\n"
+    
+    # Configure with static data packaging
+    "${ICU_SOURCE_DIR}/configure" \
+        --enable-static \
+        --disable-shared \
+        --with-data-packaging=static \
+        --disable-extras \
+        --disable-icuio \
+        --disable-layout \
+        --disable-tests \
+        --disable-samples \
+        --enable-tools \
+        --prefix="${ICU_BUILD_DIR}/install" \
+        CFLAGS="-O2 -fPIC" \
+        CXXFLAGS="-O2 -fPIC"
+    
+    printf "Building ICU static libraries...\n"
+    
+    # Build with static data mode
+    make PKGDATA_MODE=static -j$(nproc)
+    
+    printf "Installing ICU libraries...\n"
+    
+    # Install to build directory
+    make install PKGDATA_MODE=static
+    
+    cd "${ROOT_DIR}"
+    
+    # Verify libraries were created in build directory
+    if [ -f "${ICU_BUILD_DIR}/install/lib/libicudata.a" ] && \
+       [ -f "${ICU_BUILD_DIR}/install/lib/libicui18n.a" ] && \
+       [ -f "${ICU_BUILD_DIR}/install/lib/libicuuc.a" ]; then
+        printf "${GREEN}SUCCESS: ICU static libraries built successfully${RESET}\n"
+        printf "Libraries created in build directory:\n"
+        ls -lh "${ICU_BUILD_DIR}/install/lib/"*.a
+        printf "Source directory kept clean\n"
+    else
+        printf "${RED}ERROR: ICU static libraries not found after build${RESET}\n"
+        exit 1
+    fi
 }
+
 
 function configure() {
     printf "${BOLD_PINK}Running cmake...${RESET}\n"
+    printf "Generating ${GREEN}${CMAKE_GENERATOR}${RESET} build files\n"
     mkdir -p ${BUILD_DIR}
     cd $_
     local BUILD_TYPE=$(capitalize_string ${BUILD_CONFIG})
     rm -f CMakeCache.txt
-    printf "Running: cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DBUILD_TESTS=ON -Wno-dev -GNinja ${CMAKE_EXTRA_ARGS}\n"
-    cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DBUILD_TESTS=ON -Wno-dev -GNinja ${CMAKE_EXTRA_ARGS}
+    printf "Running: cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBUILD_TESTS=ON -Wno-dev -G"${CMAKE_GENERATOR}" ${CMAKE_EXTRA_ARGS}\n"
+    cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBUILD_TESTS=ON -Wno-dev -G"${CMAKE_GENERATOR}" ${CMAKE_EXTRA_ARGS}
     cd ${ROOT_DIR}
 }
 
 function build() {
     printf "${BOLD_PINK}Building${RESET}\n"
-    if [ -d ${BUILD_DIR} ]; then
-        cd ${BUILD_DIR}
-        ${NINJA_TOOL} ${VERBOSE_ARGS} ${CMAKE_TARGET}
-        cd ${ROOT_DIR}
+    if [ -d "${BUILD_DIR}" ]; then
+        cd "${BUILD_DIR}"
+        if [ -z "${JOBS}" ]; then
+            ${BUILD_TOOL} ${VERBOSE_ARGS} ${CMAKE_TARGET}
+        else
+            ${BUILD_TOOL} -j ${JOBS} ${VERBOSE_ARGS} ${CMAKE_TARGET}
+        fi
+        cd "${ROOT_DIR}"
 
         printf "\n${GREEN}Build Successful!${RESET}\n\n"
-        printf "${BOLD_PINK}Module path:${RESET} ${BUILD_DIR}/libsearch.so\n\n"
+        printf "${BOLD_PINK}Module path:${RESET} ${BUILD_DIR}/libsearch.${MODULE_EXT}\n\n"
 
         if [ -z "${RUN_TEST}" ]; then
             printf "You may want to run the unit tests by executing:\n"
@@ -167,8 +274,15 @@ function build() {
         fi
 
         printf "To load the module, execute the following command:\n"
-        printf "    valkey-server --loadmodule ${BUILD_DIR}/libsearch.so\n\n"
+        printf "    valkey-server --loadmodule ${BUILD_DIR}/libsearch.${MODULE_EXT}\n\n"
     fi
+}
+
+function format() {
+    cd "${ROOT_DIR}"
+    printf "Formatting...\n"
+    find src testing vmsdk/src vmsdk/testing -name "*.h" -o -name "*.cc" | grep -v '^src/indexes/text/rax/' | xargs clang-format -i
+    printf "Applied clang-format\n"
 }
 
 function print_test_prefix() {
@@ -186,10 +300,10 @@ function print_test_summary() {
 function print_test_error_and_exit() {
     printf " ... ${RED}failed${RESET}\n"
     if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then
-        cat ${TEST_OUTPUT_FILE}
+        cat "${TEST_OUTPUT_FILE}"
         # To avoid dumping the content over and over again,
         # clear the file
-        cp /dev/null ${TEST_OUTPUT_FILE}
+        cp /dev/null "${TEST_OUTPUT_FILE}"
     fi
 
     # When running tests with sanitizer enabled, do not terminate the execution after the first failure continue
@@ -207,9 +321,26 @@ function check_tool() {
     local tool_name=$1
     local message=$2
     printf "Checking for ${tool_name}..."
-    command -v ${tool_name} > /dev/null || \
+    command -v "${tool_name}" >/dev/null ||
         (printf "${RED}failed${RESET}.\n${RED}ERROR${RESET} - could not locate tool '${tool_name}'. ${message}\n" && exit 1)
     printf "${GREEN}ok${RESET}\n"
+}
+
+function determine_ninja() {
+    local os_name=$(uname -s)
+    if [[ "${os_name}" == "Darwin" ]]; then
+        # ninja is can be installed via "brew"
+        echo "ninja"
+    else
+        # Check for ninja. On RedHat based Linux, it is called ninja-build, while on Debian based Linux, it is simply ninja
+        # Ubuntu / Mint et al will report "ID_LIKE=debian"
+        local debian_output=$(cat /etc/*-release | grep -i debian | wc -l)
+        if [ ${debian_output} -gt 0 ]; then
+            echo "ninja"
+        else
+            echo "ninja-build"
+        fi
+    fi
 }
 
 function check_tools() {
@@ -218,42 +349,38 @@ function check_tools() {
         check_tool ${tool}
     done
 
-    os_name=$(uname -s)
-    if [[ "${os_name}" == "Darwin" ]]; then
-        # ninja is can be installed via "brew"
-        NINJA_TOOL="ninja"
-    else
-        # Check for ninja. On RedHat based Linux, it is called ninja-build, while on Debian based Linux, it is simply ninja
-        # Ubuntu / Mint et al will report "ID_LIKE=debian"
-        local debian_output=$(cat /etc/*-release|grep -i debian|wc -l)
-        if [ ${debian_output} -gt 0 ]; then
-            NINJA_TOOL="ninja"
-        else
-            NINJA_TOOL="ninja-build"
-        fi
+    local build_tool=$(determine_ninja)
+    if [[ "${BUILD_TOOL}" =~ make ]]; then
+        build_tool="make"
     fi
-    check_tool ${NINJA_TOOL}
+    check_tool ${build_tool}
 }
 
 # If any of the CMake files is newer than our "build.ninja" file, force "cmake" before building
 function is_configure_required() {
-    local ninja_build_file=${BUILD_DIR}/build.ninja
+    if [[ "${BUILD_TOOL}" =~ ninja ]]; then
+      local top_level_build_file=${BUILD_DIR}/build.ninja
+    else
+      local top_level_build_file=${BUILD_DIR}/Makefile
+    fi
+
     if [[ "${RUN_CMAKE}" == "yes" ]]; then
         # User asked for configure
         echo "yes"
         return
     fi
 
-    if [ ! -f ${ninja_build_file} ] || [ ! -f ${BUILD_DIR}/CMakeCache.txt ]; then
-        # No ninja build file
+    if [ ! -f "${top_level_build_file}" ] || [ ! -f "${BUILD_DIR}/CMakeCache.txt" ]; then
         echo "yes"
         return
     fi
-    local build_file_lastmodified=$(date -r ${ninja_build_file} +%s)
-    local cmake_files=$(find ${ROOT_DIR} -name "CMakeLists.txt" -o -name "*.cmake"| grep -v ".build-release" | grep -v ".build-debug")
-    for cmake_file in ${cmake_files}; do
-        local cmake_file_modified=$(date -r ${cmake_file} +%s)
-        if [ ${cmake_file_modified} -gt ${build_file_lastmodified} ]; then
+
+    local build_file_lastmodified=$(get_file_last_modified "${top_level_build_file}")
+    local IFS=$'\n'
+    local cmake_files=$(find "${ROOT_DIR}" -name "CMakeLists.txt" -o -name "*.cmake" | grep -v ".build-release" | grep -v ".build-debug")
+    for cmake_file in $cmake_files; do
+        local cmake_file_modified=$(get_file_last_modified "${cmake_file}")
+        if [ "${cmake_file_modified}" -gt "${build_file_lastmodified}" ]; then
             echo "yes"
             return
         fi
@@ -261,13 +388,25 @@ function is_configure_required() {
     echo "no"
 }
 
-
 cleanup() {
-  cd ${ROOT_DIR}
+    cd "${ROOT_DIR}"
 }
+
+if [[ "${CMAKE_GENERATOR}" == "Ninja" ]]; then
+  # Using Ninja (the default)
+  BUILD_TOOL=$(determine_ninja)
+else
+  # Using Makefile
+  BUILD_TOOL="make -j$(num_proc)"
+fi
 
 # Ensure cleanup runs on exit
 trap cleanup EXIT
+export CMAKE_POLICY_VERSION_MINIMUM=3.5
+
+if [[ "${FORMAT}" == "yes" ]]; then
+    format
+fi
 
 BUILD_DIR=${ROOT_DIR}/.build-${BUILD_CONFIG}
 if [[ "${SAN_BUILD}" != "no" ]]; then
@@ -284,11 +423,16 @@ TESTS_DIR=${BUILD_DIR}/tests
 TEST_OUTPUT_FILE=${BUILD_DIR}/tests.out
 
 printf "Checking if configure is required..."
+
 FORCE_CMAKE=$(is_configure_required)
 printf "${GREEN}${FORCE_CMAKE}${RESET}\n"
 check_tools
 
-START_TIME=`date +%s`
+START_TIME=$(date +%s)
+
+# Build ICU dependencies before configuring cmake
+build_icu_if_needed
+
 if [[ "${RUN_CMAKE}" == "yes" ]] || [[ "${FORCE_CMAKE}" == "yes" ]]; then
     configure
 fi
@@ -297,51 +441,70 @@ if [[ "${RUN_BUILD}" == "yes" ]]; then
     build
 fi
 
-END_TIME=`date +%s`
+END_TIME=$(date +%s)
 BUILD_RUNTIME=$((END_TIME - START_TIME))
 
-START_TIME=`date +%s`
+START_TIME=$(date +%s)
 
 if [[ "${SAN_BUILD}" != "no" ]]; then
     export ASAN_OPTIONS="detect_odr_violation=0"
 fi
 
 if [[ "${RUN_TEST}" == "all" ]]; then
-    rm -f ${TEST_OUTPUT_FILE}
-    TESTS=$(ls ${TESTS_DIR}/*_test)
-    for test in $TESTS; do
-        echo "==> Running executable: ${test}" >> ${TEST_OUTPUT_FILE}
-        echo "" >> ${TEST_OUTPUT_FILE}
+    rm -f "${TEST_OUTPUT_FILE}"
+    while read -r test; do
+        echo "==> Running executable: ${test}" >> "${TEST_OUTPUT_FILE}"
+        echo "" >> "${TEST_OUTPUT_FILE}"
         print_test_prefix "${test}"
-        (${test} >> ${TEST_OUTPUT_FILE} 2>&1 && print_test_ok) || print_test_error_and_exit
-    done
+        ("${test}" >> "${TEST_OUTPUT_FILE}" 2>&1 && print_test_ok) || print_test_error_and_exit
+    done < <(find "${TESTS_DIR}" -name "*_test" -type f)
     print_test_summary
 elif [ ! -z "${RUN_TEST}" ]; then
-    rm -f ${TEST_OUTPUT_FILE}
-    echo "==> Running executable: ${TESTS_DIR}/${RUN_TEST}" >> ${TEST_OUTPUT_FILE}
-    echo "" >> ${TEST_OUTPUT_FILE}
+    rm -f "${TEST_OUTPUT_FILE}"
+    echo "==> Running executable: ${TESTS_DIR}/${RUN_TEST}" >> "${TEST_OUTPUT_FILE}"
+    echo "" >> "${TEST_OUTPUT_FILE}"
     print_test_prefix "${TESTS_DIR}/${RUN_TEST}"
-    (${TESTS_DIR}/${RUN_TEST} && print_test_ok) || print_test_error_and_exit
+    ("${TESTS_DIR}/${RUN_TEST}" && print_test_ok) || print_test_error_and_exit
     print_test_summary
 elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
-    cd testing/integration
-    params=""
-    if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then
-        params=" --test-errors-stdout"
-    fi
-    if [[ "${BUILD_CONFIG}" == "debug" ]]; then
-        params="${params} --debug"
+    if [ ! -z "${TEST_PATTERN}" ]; then
+        echo ""
+        LOG_WARNING " ** TEST_PATTERN is found, skipping Abseil based integration tests **"
+        echo ""
+    else
+        # Abseil based tests do not support filtering tests based on "-k" flag
+        # so when the TEST_PATTERN env variable is found, skip Abseil based tests
+        pushd testing/integration >/dev/null
+        params=""
+        if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then
+            params=" --test-errors-stdout"
+        fi
+        if [[ "${BUILD_CONFIG}" == "debug" ]]; then
+            params="${params} --debug"
+        fi
+
+        if [[ "${SAN_BUILD}" == "address" ]]; then
+            params="${params} --asan"
+        fi
+        if [[ "${SAN_BUILD}" == "thread" ]]; then
+            params="${params} --tsan"
+        fi
+        ./run.sh ${params}
+        popd >/dev/null
     fi
 
-    if [[ "${SAN_BUILD}" == "address" ]]; then
-        params="${params} --asan"
+    # Run OSS integration tests
+    pushd integration >/dev/null
+    if [[ "${TEST_PATTERN}" == "oss" ]]; then
+        TEST_PATTERN=""
     fi
-    if [[ "${SAN_BUILD}" == "thread" ]]; then
-        params="${params} --tsan"
-    fi
-    ./run.sh ${params}
+    export TEST_PATTERN=${TEST_PATTERN}
+    export INTEG_RETRIES=${INTEG_RETRIES}
+    # Run will run ASan or normal tests based on the environment variable SAN_BUILD
+    ./run.sh
+    popd >/dev/null
 fi
 
-END_TIME=`date +%s`
+END_TIME=$(date +%s)
 TEST_RUNTIME=$((END_TIME - START_TIME))
 exit ${EXIT_CODE}

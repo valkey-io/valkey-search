@@ -9,8 +9,10 @@
 
 #include <cerrno>
 #include <cstddef>
+#include <fstream>
 #include <optional>
 #include <string>
+#include <unordered_map>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
@@ -127,7 +129,6 @@ absl::Status InitLogging(ValkeyModuleCtx* ctx,
         absl::StrCat("Unknown severity `", log_level_str.value(), "`"));
   }
   absl::SetGlobalVLogLevel(static_cast<int>(itr->second));
-
   return absl::OkStatus();
 }
 

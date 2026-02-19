@@ -1,12 +1,41 @@
 # See https://github.com/crate-ci/typos/blob/master/docs/reference.md to configure typos
 
 [files]
+ignore-hidden = true
 extend-exclude = [
+    "third_party/snowball/**",
+    "third_party/icu/**",
+    "src/indexes/text/rax/**"
 ]
 
+[default]
+extend-ignore-re = [
+    "grea.*",
+    "Grea.*",
+    "opposit",
+    "uniqu",
+    "worl*",
+    ".*unning"
+]
+[default.extend-words]
+Fo = "Fo"
+InFo = "InFo"
+SeArCh = "SeArCh" 
+CrEaTe = "CrEaTe"
+LiSt = "LiSt"
+DeBuG = "DeBuG"
+DrOpInDeX = "DrOpInDeX"
+updat = "updat" # Used for stem matching
+Clangd = "Clangd"
 
 [type.cpp]
 extend-ignore-re = [
     "baNAna",
     "eXIst",
+    "Hel",
+    "DIALEC",
+    "nghi",
+    "bubu",
+    "Teser",
+    "hel"
 ]

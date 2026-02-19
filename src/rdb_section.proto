@@ -40,6 +40,7 @@ enum SupplementalContentType {
   SUPPLEMENTAL_CONTENT_UNSPECIFIED = 0;
   SUPPLEMENTAL_CONTENT_INDEX_CONTENT = 1;
   SUPPLEMENTAL_CONTENT_KEY_TO_ID_MAP = 2;
+  SUPPLEMENTAL_CONTENT_INDEX_EXTENSION = 3;
 }
 
 message IndexContentHeader {
@@ -50,11 +51,17 @@ message KeyToIDMappingHeader {
   Attribute attribute = 1;
 }
 
+// V2 Saved Mutation Queue
+message MutationQueueHeader {
+  bool backfilling = 1;
+}
+
 message SupplementalContentHeader {
   SupplementalContentType type = 1;
   oneof header {
     IndexContentHeader index_content_header = 2;
     KeyToIDMappingHeader key_to_id_map_header = 3;
+    MutationQueueHeader mutation_queue_header = 4; // V2
   };
 }
 

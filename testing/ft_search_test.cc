@@ -15,9 +15,11 @@
 #include <iostream>
 #include <iterator>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -172,11 +174,12 @@ void SendReplyTest::DoSendReplyTest(
                                .value();
   EXPECT_CALL(*test_index_schema, GetIdentifier(input.attribute_alias))
       .WillRepeatedly(testing::Return(attribute_id));
-  std::deque<indexes::Neighbor> neighbors;
+  std::vector<indexes::Neighbor> neighbors;
   for (const auto &neighbor : input.neighbors) {
     neighbors.push_back(ToIndexesNeighbor(neighbor));
   }
-  auto parameters = std::make_unique<query::VectorSearchParameters>(10000, nullptr);
+  auto parameters = std::make_unique<SearchCommand>(0);
+  parameters->timeout_ms = 10000;
   parameters->index_schema = test_index_schema;
   parameters->attribute_alias = attribute_alias;
   parameters->score_as = vmsdk::MakeUniqueValkeyString(score_as);
@@ -187,8 +190,10 @@ void SendReplyTest::DoSendReplyTest(
     parameters->return_attributes.push_back(
         ToReturnAttribute(return_attribute));
   }
-  SendReply(&fake_ctx, neighbors, *parameters);
-
+  auto neighbor_count = neighbors.size();
+  query::SearchResult wrapper(neighbor_count, std::move(neighbors),
+                              *parameters);
+  parameters->SendReply(&fake_ctx, wrapper);
   EXPECT_EQ(ParseRespReply(fake_ctx.reply_capture.GetReply()), expected_output);
 }
 
@@ -423,6 +428,29 @@ INSTANTIATE_TEST_SUITE_P(
             .expected_output_no_content =
                 "*3\r\n:2\r\n$3\r\nabc\r\n$3\r\ndef\r\n",
         },
+        {
+            .test_name = "pagination_offset_exceeds_remaining",
+            .input =
+                {
+                    .neighbors =
+                        {{.external_id = "ext_1", .distance = 0.00999999977648},
+                         {.external_id = "ext_2", .distance = 0.019999999553},
+                         {.external_id = "ext_3", .distance = 0.0299999993294}},
+                    .attribute_alias = "attribute_alias_1",
+                    .score_as = "score_as_1",
+                    .limit = {.first_index = 1, .number = 5},
+                },
+            .expected_output =
+                "*5\r\n:3\r\n$5\r\next_2\r\n*6\r\n$10\r\nscore_as_1\r\n$"
+                "14\r\n0.019999999553\r\n$17\r\nattribute_alias_1\r\n$"
+                "28\r\nattribute_alias_1_hash_value\r\n$6\r\nfield1\r\n$"
+                "6\r\nvalue1\r\n$5\r\next_3\r\n*6\r\n$10\r\nscore_as_1\r\n$"
+                "15\r\n0.0299999993294\r\n$17\r\nattribute_alias_1\r\n$"
+                "28\r\nattribute_alias_1_hash_value\r\n$6\r\nfield1\r\n$"
+                "6\r\nvalue1\r\n",
+            .expected_output_no_content =
+                "*3\r\n:3\r\n$5\r\next_2\r\n$5\r\next_3\r\n",
+        },
     }),
     [](const TestParamInfo<SendReplyTestCase> &info) {
       return info.param.test_name;
@@ -451,7 +479,9 @@ class FTSearchTest : public ValkeySearchTestWithParam<
       std::string vector = std::string((char *)vectors[i].data(),
                                        vectors[i].size() * sizeof(float));
       auto interned_key = StringInternStore::Intern(key);
-
+      std::cerr << "Inserting Key: " << interned_key->Str() << std::endl;
+      index_schema.value()->SetDbMutationSequenceNumber(interned_key, i);
+      index_schema.value()->SetIndexMutationSequenceNumber(interned_key, i);
       VMSDK_EXPECT_OK(index.value()->AddRecord(interned_key, vector));
     }
   }
@@ -468,7 +498,7 @@ TEST_P(FTSearchTest, FTSearchTests) {
   auto &params = GetParam();
   bool use_thread_pool = std::get<1>(params);
   if (use_thread_pool) {
-    InitThreadPools(5, std::nullopt);
+    InitThreadPools(5, std::nullopt, 1);
   }
   bool use_fanout = std::get<0>(params);
   if (use_fanout) {
@@ -505,7 +535,7 @@ TEST_P(FTSearchTest, FTSearchTests) {
           delete[] ids;
         });
     for (size_t i = 0; i < node_ids.size(); ++i) {
-      const auto& node_id = node_ids[i];
+      const auto &node_id = node_ids[i];
       EXPECT_CALL(
           *kMockValkeyModule,
           GetClusterNodeInfo(testing::_, testing::StrEq(node_id), testing::_,
@@ -530,7 +560,7 @@ TEST_P(FTSearchTest, FTSearchTests) {
             GetClient(testing::StrEq(absl::StrCat("127.0.0.1:", coord_port))))
             .WillRepeatedly(testing::Return(mock_client));
         EXPECT_CALL(*mock_client, SearchIndexPartition(testing::_, testing::_))
-            .WillRepeatedly(testing::Invoke(
+            .WillRepeatedly(
                 [&](std::unique_ptr<coordinator::SearchIndexPartitionRequest>
                         request,
                     coordinator::SearchIndexPartitionCallback done) {
@@ -538,7 +568,7 @@ TEST_P(FTSearchTest, FTSearchTests) {
                   // nothing.
                   coordinator::SearchIndexPartitionResponse response;
                   done(grpc::Status::OK, response);
-                }));
+                });
       }
     }
   }
@@ -565,14 +595,35 @@ TEST_P(FTSearchTest, FTSearchTests) {
       .Times(::testing::AnyNumber());
   auto vectors = DeterministicallyGenerateVectors(100, dimensions, 10.0);
   AddVectors(vectors);
-  
+
   // Capture initial metrics before starting searches
-  auto& stats = Metrics::GetStats();
-  auto& mrmw_stats = vmsdk::GetGlobalTimeSlicedMRMWStats();
+  auto &stats = Metrics::GetStats();
+  auto &mrmw_stats = vmsdk::GetGlobalTimeSlicedMRMWStats();
   uint64_t initial_queries = stats.time_slice_queries;
   uint64_t initial_read_periods = mrmw_stats.read_periods;
   uint64_t initial_read_time = mrmw_stats.read_time_microseconds;
-  
+
+  // When using thread pool, override EventLoopAddOneShot to capture callbacks
+  // so they can be drained on the main (test) thread, simulating the real
+  // Valkey event loop behavior. This is needed because SearchAsync dispatches
+  // content resolution via RunByMain, which must execute on the main thread.
+  std::mutex cb_mutex;
+  std::vector<std::pair<ValkeyModuleEventLoopOneShotFunc, void *>>
+      pending_oneshot_callbacks;
+  if (use_thread_pool) {
+    EXPECT_CALL(*kMockValkeyModule, EventLoopAddOneShot(testing::_, testing::_))
+        .WillRepeatedly(
+            [&](ValkeyModuleEventLoopOneShotFunc fn, void *data) -> int {
+              std::lock_guard<std::mutex> lock(cb_mutex);
+              pending_oneshot_callbacks.push_back({fn, data});
+              return 0;
+            });
+    // ResolveContent creates a thread-safe context for content resolution.
+    // Return fake_ctx_ so that OpenKey calls match existing test expectations.
+    EXPECT_CALL(*kMockValkeyModule, GetThreadSafeContext(testing::_))
+        .WillRepeatedly(testing::Return(&fake_ctx_));
+  }
+
   RE2 reply_regex(R"(\*3\r\n:1\r\n\+\d+\r\n\*2\r\n\+score\r\n\+.*\r\n)");
   uint64_t i = 0;
   for (auto &vector : vectors) {
@@ -611,7 +662,22 @@ TEST_P(FTSearchTest, FTSearchTests) {
               test_case.expected_run_return);
     if (use_thread_pool) {
       fake_ctx_.reply_capture.ClearReply();
-      search_done.WaitForNotification();
+      // Drain deferred EventLoopAddOneShot callbacks on the main (test) thread.
+      // This simulates the Valkey event loop running RunByMain callbacks
+      // (e.g., ResolveContent for content resolution after search completes).
+      while (!search_done.HasBeenNotified()) {
+        std::vector<std::pair<ValkeyModuleEventLoopOneShotFunc, void *>> to_run;
+        {
+          std::lock_guard<std::mutex> lock(cb_mutex);
+          to_run.swap(pending_oneshot_callbacks);
+        }
+        for (auto &[fn, data] : to_run) {
+          fn(data);
+        }
+        if (!search_done.HasBeenNotified() && to_run.empty()) {
+          std::this_thread::sleep_for(std::chrono::microseconds(100));
+        }
+      }
       EXPECT_CALL(*kMockValkeyModule, GetBlockedClientPrivateData(&fake_ctx_))
           .WillRepeatedly(testing::InvokeWithoutArgs(
               [&] { return private_data_external; }));
@@ -626,7 +692,7 @@ TEST_P(FTSearchTest, FTSearchTests) {
       TestValkeyModule_FreeString(&fake_ctx_, cmd_arg);
     }
   }
-  
+
   // Verify that metrics were incremented correctly
   EXPECT_EQ(stats.time_slice_queries, initial_queries + vectors.size());
   EXPECT_GT(mrmw_stats.read_periods, initial_read_periods);
@@ -654,6 +720,25 @@ INSTANTIATE_TEST_SUITE_P(
                                  },
                              .expected_run_return = VALKEYMODULE_OK,
                          },
+                         {
+                             .test_name = "sortby_test",
+                             .argv =
+                                 {
+                                     "FT.SEARCH",
+                                     "$index_name",
+                                     "*=>[KNN 5 @vector $embedding AS score]",
+                                     "PARAMS",
+                                     "2",
+                                     "embedding",
+                                     "$embedding",
+                                     "SORTBY",
+                                     "vector",
+                                     "DESC",
+                                     "DIALECT",
+                                     "2",
+                                 },
+                             .expected_run_return = VALKEYMODULE_OK,
+                         },
                      })),
     [](const TestParamInfo<::testing::tuple<bool, bool, FTSearchTestCase>>
            &info) {
@@ -673,7 +758,8 @@ struct MaxLimitTestCase {
   std::string expected_error_message;
 };
 
-class FTSearchMaxLimitTest : public ValkeySearchTestWithParam<MaxLimitTestCase> {
+class FTSearchMaxLimitTest
+    : public ValkeySearchTestWithParam<MaxLimitTestCase> {
  public:
   void AddVectors(const std::vector<std::vector<float>> &vectors) {
     auto index_schema =
@@ -757,7 +843,7 @@ INSTANTIATE_TEST_SUITE_P(
                             "params", "2", "query_vector", "$embedding",
                             "DIALECT", "2"},
             .expected_error_message =
-                "$112\r\nInvalid range: Value above maximum; KNN parameter "
+                "-Invalid range: Value above maximum; KNN parameter "
                 "must be a positive integer greater than 0 and cannot exceed "
                 "5.\r\n",
         },
@@ -776,7 +862,7 @@ INSTANTIATE_TEST_SUITE_P(
                  "*=>[KNN 3 @vector $query_vector EF_RUNTIME 6 AS score]",
                  "params", "2", "query_vector", "$embedding", "DIALECT", "2"},
             .expected_error_message =
-                "$111\r\nInvalid range: Value above maximum; `EF_RUNTIME` must "
+                "-Invalid range: Value above maximum; `EF_RUNTIME` must "
                 "be a positive integer greater than 0 and cannot exceed 5.\r\n",
         },
     }),

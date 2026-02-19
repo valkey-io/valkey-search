@@ -1,0 +1,37 @@
+Valkey-search vendors the following third-party open source software in the third_party/ directory:
+
+Package: HdrHistogram_c
+License: CC0 1.0 Universal (Public Domain) / BSD 2-Clause License
+License URL: https://creativecommons.org/publicdomain/zero/1.0/
+License File: third_party/hdrhistogram_c/LICENSE
+Details: Provides high dynamic range histogram data structure for latency tracking.
+
+Package: hnswlib
+License: Apache License 2.0
+License URL: https://spdx.org/licenses/Apache-2.0.html
+License File: third_party/hnswlib/LICENSE
+Details: Provides HNSW (Hierarchical Navigable Small World) algorithm for approximate nearest neighbor search.
+Modifications: This package has been modified from its original form. Key changes include:
+  - Added query cancellation support (BaseCancellationFunctor integration)
+  - Integration with valkey-search metrics tracking for reclaimable memory
+  - Added support for custom load and save functionality
+  - Transitioned the algorithm's payload storage from a single contiguous buffer to multiple contiguous chunks. This avoids expensive reallocations and the associated memory overhead when adding new vectors
+
+Package: SimSIMD
+License: Apache License 2.0
+License URL: https://spdx.org/licenses/Apache-2.0.html
+License File: third_party/simsimd/LICENSE
+Details: Provides SIMD-optimized vector similarity functions for high-performance distance calculations.
+Modifications: This package has been modified from its original form with build system integration and performance optimizations.
+
+Package: Snowball
+License: BSD 3-Clause License
+License URL: https://spdx.org/licenses/BSD-3-Clause.html
+License File: third_party/snowball/COPYING
+Details: Provides stemming support for full-text search across multiple languages.
+
+Package: ICU (International Components for Unicode)
+License: ICU License
+License URL: https://spdx.org/licenses/ICU.html
+License File: third_party/icu/LICENSE
+Details: Provides Unicode normalization and case folding for international text processing.

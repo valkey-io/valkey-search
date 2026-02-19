@@ -12,7 +12,6 @@
 #include <memory>
 #include <string>
 #include <utility>
-#include <vector>
 
 #include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
@@ -68,29 +67,65 @@ absl::StatusOr<bool> Tag::AddRecord(const InternedStringPtr& key,
   return true;
 }
 
+std::string Tag::UnescapeTag(absl::string_view tag) {
+  std::string result;
+  result.reserve(tag.size());
+  for (size_t i = 0; i < tag.size(); ++i) {
+    if (tag[i] == '\\' && i + 1 < tag.size()) {
+      // Escape sequence: consume next character literally
+      result += tag[++i];
+    } else {
+      result += tag[i];
+    }
+  }
+  return result;
+}
+
 absl::StatusOr<absl::flat_hash_set<absl::string_view>> Tag::ParseSearchTags(
     absl::string_view data, char separator) {
   absl::flat_hash_set<absl::string_view> parsed_tags;
-  std::vector<absl::string_view> parts = absl::StrSplit(data, separator);
-  for (const auto& part : parts) {
-    auto tag = absl::StripAsciiWhitespace(part);
-    if (tag.empty()) {
-      continue;
-    }
 
-    // Prefix tag is identified by a trailing '*'.
+  // Helper: validate and insert a single tag (handles prefix wildcards)
+  auto InsertTag = [&](absl::string_view raw) -> absl::Status {
+    auto tag = absl::StripAsciiWhitespace(raw);
+    if (tag.empty()) {
+      return absl::OkStatus();  // Empty tags are silently ignored
+    }
     if (tag.back() == '*') {
       if (!IsValidPrefix(tag)) {
         return absl::InvalidArgumentError(
             absl::StrCat("Tag string `", tag, "` ends with multiple *."));
       }
-      // Prefix tags that are shorter than min length are ignored.
-      if (tag.length() <= kDefaultMinPrefixLength) {
-        continue;
+      // Prefix tags shorter than min length are ignored
+      if (tag.length() > kDefaultMinPrefixLength) {
+        parsed_tags.insert(tag);
       }
+    } else {
+      parsed_tags.insert(tag);
     }
-    parsed_tags.insert(tag);
+    return absl::OkStatus();
+  };
+
+  // Parse respecting escape sequences:
+  // - \<separator> is NOT a real separator
+  // - \\ is an escaped backslash (not an escape prefix)
+  // - Unescaped separator splits tags
+  // Returns string_view positions; unescaping happens later at TagPredicate.
+  size_t tag_start = 0;
+  for (size_t i = 0; i < data.size(); ++i) {
+    if (data[i] == '\\' && i + 1 < data.size()) {
+      // Skip escaped character
+      ++i;
+    } else if (data[i] == separator) {
+      // Unescaped separator: extract tag
+      VMSDK_RETURN_IF_ERROR(InsertTag(data.substr(tag_start, i - tag_start)));
+      tag_start = i + 1;
+    }
   }
+
+  // Handle the last tag (after final separator or if no separator)
+  VMSDK_RETURN_IF_ERROR(InsertTag(data.substr(tag_start)));
+
   return parsed_tags;
 }
 
@@ -167,26 +202,19 @@ absl::StatusOr<bool> Tag::RemoveRecord(const InternedStringPtr& key,
 }
 
 int Tag::RespondWithInfo(ValkeyModuleCtx* ctx) const {
-  auto num_replies = 6;
+  auto num_replies = 8;
   ValkeyModule_ReplyWithSimpleString(ctx, "type");
   ValkeyModule_ReplyWithSimpleString(ctx, "TAG");
   ValkeyModule_ReplyWithSimpleString(ctx, "SEPARATOR");
   ValkeyModule_ReplyWithSimpleString(
       ctx, std::string(&separator_, sizeof(char)).c_str());
-  if (case_sensitive_) {
-    num_replies++;
-    ValkeyModule_ReplyWithSimpleString(ctx, "CASESENSITIVE");
-  }
+  ValkeyModule_ReplyWithSimpleString(ctx, "CASESENSITIVE");
+  ValkeyModule_ReplyWithSimpleString(ctx, case_sensitive_ ? "1" : "0");
   ValkeyModule_ReplyWithSimpleString(ctx, "size");
   absl::MutexLock lock(&index_mutex_);
   ValkeyModule_ReplyWithCString(
       ctx, std::to_string(tracked_tags_by_keys_.size()).c_str());
   return num_replies;
-}
-
-bool Tag::IsTracked(const InternedStringPtr& key) const {
-  absl::MutexLock lock(&index_mutex_);
-  return tracked_tags_by_keys_.contains(key);
 }
 
 std::unique_ptr<data_model::Index> Tag::ToProto() const {
@@ -205,7 +233,7 @@ InternedStringPtr Tag::GetRawValue(const InternedStringPtr& key) const {
       it != tracked_tags_by_keys_.end()) {
     return it->second.raw_tag_string;
   }
-  return nullptr;
+  return {};
 }
 
 const absl::flat_hash_set<absl::string_view>* Tag::GetValue(
@@ -342,9 +370,48 @@ std::unique_ptr<EntriesFetcherIteratorBase> Tag::EntriesFetcher::Begin() {
 
 size_t Tag::EntriesFetcher::Size() const { return size_; }
 
-uint64_t Tag::GetRecordCount() const {
+size_t Tag::GetTrackedKeyCount() const {
   absl::MutexLock lock(&index_mutex_);
   return tracked_tags_by_keys_.size();
+}
+
+size_t Tag::GetUnTrackedKeyCount() const {
+  absl::MutexLock lock(&index_mutex_);
+  return untracked_keys_.size();
+}
+
+bool Tag::IsTracked(const InternedStringPtr& key) const {
+  absl::MutexLock lock(&index_mutex_);
+  return tracked_tags_by_keys_.contains(key);
+}
+
+bool Tag::IsUnTracked(const InternedStringPtr& key) const {
+  absl::MutexLock lock(&index_mutex_);
+  return untracked_keys_.contains(key);
+}
+
+void Tag::UnTrack(const InternedStringPtr& key) {
+  absl::MutexLock lock(&index_mutex_);
+  CHECK(!tracked_tags_by_keys_.contains(key));
+  untracked_keys_.insert(key);
+}
+
+absl::Status Tag::ForEachTrackedKey(
+    absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn) const {
+  absl::MutexLock lock(&index_mutex_);
+  for (const auto& [key, _] : tracked_tags_by_keys_) {
+    VMSDK_RETURN_IF_ERROR(fn(key));
+  }
+  return absl::OkStatus();
+}
+
+absl::Status Tag::ForEachUnTrackedKey(
+    absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn) const {
+  absl::MutexLock lock(&index_mutex_);
+  for (const auto& key : untracked_keys_) {
+    VMSDK_RETURN_IF_ERROR(fn(key));
+  }
+  return absl::OkStatus();
 }
 
 }  // namespace valkey_search::indexes

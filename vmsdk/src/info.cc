@@ -90,6 +90,8 @@ Base::~Base() {
 static auto show_developer =
     vmsdk::config::Boolean("info-developer-visible", false);
 
+bool GetShowDeveloper() { return show_developer.GetValue(); }
+
 //
 // Dump the sections that haven't been already dumped.
 //
@@ -384,6 +386,41 @@ absl::Status ShowInfo(ValkeyModuleCtx* ctx, vmsdk::ArgsIterator& itr,
     }
   }
   ValkeyModule_ReplySetArrayLength(ctx, num_infos);
+  return absl::OkStatus();
+}
+
+absl::Status ListMetrics(ValkeyModuleCtx* ctx, bool show_app, bool show_dev,
+                         bool names_only) {
+  SectionMap& section_map = GetSectionMap();
+  // Store section, name, and field pointer to access units
+  std::vector<std::tuple<std::string, std::string, const Base*>>
+      filtered_metrics;
+  for (const auto& [section, section_info] : section_map) {
+    for (const auto& [name, field] : section_info.fields_) {
+      bool is_dev = field->IsDeveloper();
+      bool is_app = field->IsApplication();
+      if ((show_app && is_app) || (show_dev && is_dev)) {
+        filtered_metrics.push_back({section, name, field});
+      }
+    }
+  }
+  if (names_only) {
+    // Return as array: [name1, name2, name3, ...]
+    ValkeyModule_ReplyWithArray(ctx, filtered_metrics.size());
+    for (const auto& [section, name, field] : filtered_metrics) {
+      ValkeyModule_ReplyWithCString(ctx, name.c_str());
+    }
+  } else {
+    // Return as array: [section1, name1, units1, section2, name2, units2, ...]
+    ValkeyModule_ReplyWithArray(ctx, filtered_metrics.size() * 3);
+    for (const auto& [section, name, field] : filtered_metrics) {
+      ValkeyModule_ReplyWithCString(ctx, section.c_str());
+      ValkeyModule_ReplyWithCString(ctx, name.c_str());
+      ValkeyModule_ReplyWithCString(ctx,
+                                    kUnitsToString[field->GetUnits()].data());
+    }
+  }
+
   return absl::OkStatus();
 }
 

@@ -1,0 +1,27 @@
+#
+# Script to generate examples in the various docs.
+#
+# run this with "set -x" in bash and it'll echo the commands on the terminal
+#
+x() {
+    echo "valkey-cli" $@
+    valkey-cli "$@"
+}
+
+x ft.dropindex index
+x FT.CREATE index SCHEMA color TAG city TAG
+set -x
+valkey-cli HSET key1 color blue city "San Jose"
+valkey-cli HSET key2 color black city "Seattle"
+valkey-cli HSET key3 color green city "New York, Barcelona, Kiev"
+valkey-cli HSET key4 color beige city " Taipei , Bangkok "
+valkey-cli HSET key5 color "beige,green" city " Cairo    ,  Tel Aviv   "
+valkey-cli HSET key6 color "hello world, green is my heart"
+set +x
+x hgetall key5
+x FT.SEARCH index "@color:{blue}" RETURN 1 color
+x FT.SEARCH index "@color:{blue | black}" RETURN 1 color
+x FT.SEARCH index "@color:{b\*}" RETURN 1 color
+x FT.SEARCH index "@color:{b*|green}" RETURN 1 color
+x FT.SEARCH index "@city: {  San Jose  }" RETURN 1 city
+x FT.SEARCH index "@city:{San  Jose}" RETURN 1 city

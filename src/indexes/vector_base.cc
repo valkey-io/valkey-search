@@ -15,7 +15,6 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <deque>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -78,25 +77,35 @@ std::unique_ptr<hnswlib::SpaceInterface<T>> CreateSpace(
 }  // namespace
 
 namespace indexes {
-bool InlineVectorEvaluator::Evaluate(const query::Predicate &predicate,
-                                     const InternedStringPtr &key) {
+bool PrefilterEvaluator::Evaluate(const query::Predicate &predicate,
+                                  const InternedStringPtr &key) {
   key_ = &key;
   auto res = predicate.Evaluate(*this);
   key_ = nullptr;
-  return res;
+  return res.matches;
 }
 
-bool InlineVectorEvaluator::EvaluateTags(const query::TagPredicate &predicate) {
+query::EvaluationResult PrefilterEvaluator::EvaluateTags(
+    const query::TagPredicate &predicate) {
   bool case_sensitive = true;
   auto tags = predicate.GetIndex()->GetValue(*key_, case_sensitive);
   return predicate.Evaluate(tags, case_sensitive);
 }
 
-bool InlineVectorEvaluator::EvaluateNumeric(
+query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(
     const query::NumericPredicate &predicate) {
   CHECK(key_);
   auto value = predicate.GetIndex()->GetValue(*key_);
   return predicate.Evaluate(value);
+}
+
+query::EvaluationResult PrefilterEvaluator::EvaluateText(
+    const query::TextPredicate &predicate, bool require_positions) {
+  CHECK(key_);
+  if (!text_index_) {
+    return query::EvaluationResult(false);
+  }
+  return predicate.Evaluate(*text_index_, *key_, require_positions);
 }
 
 template <typename T>
@@ -139,10 +148,10 @@ void VectorBase::Init(int dimensions,
   }
 }
 
-std::shared_ptr<InternedString> VectorBase::InternVector(
-    absl::string_view record, std::optional<float> &magnitude) {
+InternedStringPtr VectorBase::InternVector(absl::string_view record,
+                                           std::optional<float> &magnitude) {
   if (!IsValidSizeVector(record)) {
-    return nullptr;
+    return {};
   }
   if (normalize_) {
     magnitude = kDefaultMagnitude;
@@ -240,9 +249,10 @@ absl::StatusOr<bool> VectorBase::ModifyRecord(const InternedStringPtr &key,
 }
 
 template <typename T>
-absl::StatusOr<std::deque<Neighbor>> VectorBase::CreateReply(
+absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply(
     std::priority_queue<std::pair<T, hnswlib::labeltype>> &knn_res) {
-  std::deque<Neighbor> ret;
+  std::vector<Neighbor> ret;
+  ret.reserve(knn_res.size());
   while (!knn_res.empty()) {
     auto &ele = knn_res.top();
     auto vector_key = GetKeyDuringSearch(ele.second);
@@ -250,10 +260,12 @@ absl::StatusOr<std::deque<Neighbor>> VectorBase::CreateReply(
       knn_res.pop();
       continue;
     }
-    // Sorting in asc order.
-    ret.emplace_front(Neighbor{vector_key.value(), ele.first});
+    // Insert in desc order.
+    ret.emplace_back(Neighbor{vector_key.value(), ele.first});
     knn_res.pop();
   }
+  // Reverse to obtain asc order of closest neighbors first.
+  std::reverse(ret.begin(), ret.end());
   return ret;
 }
 
@@ -275,12 +287,6 @@ absl::StatusOr<std::vector<char>> VectorBase::GetValue(
     result.assign(value, value + GetVectorDataSize());
   }
   return result;
-}
-
-bool VectorBase::IsTracked(const InternedStringPtr &key) const {
-  absl::ReaderMutexLock lock(&key_to_metadata_mutex_);
-  auto it = tracked_metadata_by_key_.find(key);
-  return (it != tracked_metadata_by_key_.end());
 }
 
 absl::StatusOr<bool> VectorBase::RemoveRecord(
@@ -490,24 +496,27 @@ VectorBase::ComputeDistanceFromRecord(const InternedStringPtr &key,
   return ComputeDistanceFromRecordImpl(internal_id, query);
 }
 
-void VectorBase::AddPrefilteredKey(
+bool VectorBase::AddPrefilteredKey(
     absl::string_view query, uint64_t count, const InternedStringPtr &key,
     std::priority_queue<std::pair<float, hnswlib::labeltype>> &results,
-    absl::flat_hash_set<hnswlib::labeltype> &top_keys) const {
+    absl::flat_hash_set<const char *> &top_keys) const {
   auto result = ComputeDistanceFromRecord(key, query);
-  if (!result.ok() || top_keys.contains(result.value().second)) {
-    return;
+  if (!result.ok()) {
+    return false;
   }
   if (results.size() < count) {
     results.emplace(result.value());
-    top_keys.insert(result.value().second);
-  } else if (result.value().first < results.top().first) {
+    return true;
+  }
+  if (result.value().first < results.top().first) {
     auto top = results.top();
-    top_keys.erase(top.second);
+    auto vector_key = GetKeyDuringSearch(top.second);
+    top_keys.erase(vector_key.value()->Str().data());
     results.pop();
     results.emplace(result.value());
-    top_keys.insert(result.value().second);
+    return true;
   }
+  return false;
 }
 
 vmsdk::UniqueValkeyString VectorBase::NormalizeStringRecord(
@@ -531,16 +540,44 @@ vmsdk::UniqueValkeyString VectorBase::NormalizeStringRecord(
   return vmsdk::MakeUniqueValkeyString(binary_string);
 }
 
-uint64_t VectorBase::GetRecordCount() const {
+size_t VectorBase::GetTrackedKeyCount() const {
   absl::ReaderMutexLock lock(&key_to_metadata_mutex_);
   return key_by_internal_id_.size();
+}
+
+size_t VectorBase::GetUnTrackedKeyCount() const { return 0; }
+
+bool VectorBase::IsTracked(const InternedStringPtr &key) const {
+  absl::ReaderMutexLock lock(&key_to_metadata_mutex_);
+  auto it = tracked_metadata_by_key_.find(key);
+  return (it != tracked_metadata_by_key_.end());
+}
+
+bool VectorBase::IsUnTracked(const InternedStringPtr &key) const {
+  return false;
+}
+
+void VectorBase::UnTrack(const InternedStringPtr &key) {}
+
+absl::Status VectorBase::ForEachTrackedKey(
+    absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const {
+  absl::MutexLock lock(&key_to_metadata_mutex_);
+  for (const auto &[key, _] : tracked_metadata_by_key_) {
+    VMSDK_RETURN_IF_ERROR(fn(key));
+  }
+  return absl::OkStatus();
+}
+
+absl::Status VectorBase::ForEachUnTrackedKey(
+    absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const {
+  return absl::OkStatus();
 }
 
 template void VectorBase::Init<float>(
     int dimensions, data_model::DistanceMetric distance_metric,
     std::unique_ptr<hnswlib::SpaceInterface<float>> &space);
 
-template absl::StatusOr<std::deque<Neighbor>> VectorBase::CreateReply<float>(
+template absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply<float>(
     std::priority_queue<std::pair<float, hnswlib::labeltype>> &knn_res);
 }  // namespace indexes
 

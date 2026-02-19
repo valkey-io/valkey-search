@@ -8,7 +8,6 @@
 #ifndef VALKEYSEARCH_SRC_INDEXES_NUMERIC_H_
 #define VALKEYSEARCH_SRC_INDEXES_NUMERIC_H_
 #include <cstddef>
-#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -92,26 +91,34 @@ class Numeric : public IndexBase {
   absl::StatusOr<bool> ModifyRecord(const InternedStringPtr& key,
                                     absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
-  int RespondWithInfo(ValkeyModuleCtx* ctx) const override;
-  bool IsTracked(const InternedStringPtr& key) const override;
+  int RespondWithInfo(ValkeyModuleCtx* ctx) const override
+      ABSL_LOCKS_EXCLUDED(index_mutex_);
   absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const override {
     return absl::OkStatus();
   }
-  inline void ForEachTrackedKey(
-      absl::AnyInvocable<void(const InternedStringPtr&)> fn) const override {
-    absl::MutexLock lock(&index_mutex_);
-    for (const auto& [key, _] : tracked_keys_) {
-      fn(key);
-    }
-  }
-  uint64_t GetRecordCount() const override;
+
+  size_t GetTrackedKeyCount() const override ABSL_LOCKS_EXCLUDED(index_mutex_);
+  size_t GetUnTrackedKeyCount() const override
+      ABSL_LOCKS_EXCLUDED(index_mutex_);
+  bool IsTracked(const InternedStringPtr& key) const override
+      ABSL_LOCKS_EXCLUDED(index_mutex_);
+  bool IsUnTracked(const InternedStringPtr& key) const override
+      ABSL_LOCKS_EXCLUDED(index_mutex_);
+  void UnTrack(const InternedStringPtr& key) override
+      ABSL_LOCKS_EXCLUDED(index_mutex_);
+
+  absl::Status ForEachTrackedKey(
+      absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
+      const override ABSL_LOCKS_EXCLUDED(index_mutex_);
+  absl::Status ForEachUnTrackedKey(
+      absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
+      const override ABSL_LOCKS_EXCLUDED(index_mutex_);
+
   std::unique_ptr<data_model::Index> ToProto() const override;
 
   const double* GetValue(const InternedStringPtr& key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
-  using BTreeNumericIndex =
-      BTreeNumeric<InternedStringPtr, InternedStringPtrHash,
-                   InternedStringPtrEqual>;
+  using BTreeNumericIndex = BTreeNumeric<InternedStringPtr>;
   using EntriesRange = std::pair<BTreeNumericIndex::ConstIterator,
                                  BTreeNumericIndex::ConstIterator>;
   class EntriesFetcherIterator : public EntriesFetcherIteratorBase {
@@ -166,7 +173,7 @@ class Numeric : public IndexBase {
 
  private:
   mutable absl::Mutex index_mutex_;
-  InternedStringMap<double> tracked_keys_ ABSL_GUARDED_BY(index_mutex_);
+  InternedStringHashMap<double> tracked_keys_ ABSL_GUARDED_BY(index_mutex_);
   // untracked keys is needed to support negate filtering
   InternedStringSet untracked_keys_ ABSL_GUARDED_BY(index_mutex_);
   std::unique_ptr<BTreeNumericIndex> index_ ABSL_GUARDED_BY(index_mutex_);

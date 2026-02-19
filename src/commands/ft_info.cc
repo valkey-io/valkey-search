@@ -6,11 +6,20 @@
  */
 
 #include "absl/status/status.h"
+#include "absl/strings/ascii.h"
+#include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "src/acl.h"
 #include "src/commands/commands.h"
+#include "src/commands/ft_info_parser.h"
+#include "src/query/cluster_info_fanout_operation.h"
+#include "src/query/primary_info_fanout_operation.h"
 #include "src/schema_manager.h"
+#include "src/valkey_search.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/command_parser.h"
+#include "vmsdk/src/log.h"
+#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
@@ -21,23 +30,15 @@ namespace valkey_search {
 absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                        int argc) {
   if (argc < 2) {
-    return absl::InvalidArgumentError(vmsdk::WrongArity(kInfoCommand));
+    ValkeyModule_ReplyWithError(ctx, vmsdk::WrongArity(kInfoCommand).c_str());
+    return absl::OkStatus();
   }
-
   vmsdk::ArgsIterator itr{argv, argc};
   itr.Next();
-  VMSDK_ASSIGN_OR_RETURN(auto itr_arg, itr.Get());
-  auto index_schema_name = vmsdk::ToStringView(itr_arg);
 
-  VMSDK_ASSIGN_OR_RETURN(
-      auto index_schema,
-      SchemaManager::Instance().GetIndexSchema(ValkeyModule_GetSelectedDb(ctx),
-                                               index_schema_name));
-  static const auto permissions =
-      PrefixACLPermissions(kInfoCmdPermissions, kInfoCommand);
-  VMSDK_RETURN_IF_ERROR(
-      AclPrefixCheck(ctx, permissions, index_schema->GetKeyPrefixes()));
-  index_schema->RespondWithInfo(ctx);
+  InfoCommand cmd;
+  VMSDK_RETURN_IF_ERROR(cmd.ParseCommand(ctx, itr));
+  VMSDK_RETURN_IF_ERROR(cmd.Execute(ctx));
 
   return absl::OkStatus();
 }

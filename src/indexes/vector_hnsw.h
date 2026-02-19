@@ -65,12 +65,12 @@ class VectorHNSW : public VectorBase {
     return algo_->ef_;
   }
 
-  absl::StatusOr<std::deque<Neighbor>> Search(
+  absl::StatusOr<std::vector<Neighbor>> Search(
       absl::string_view query, uint64_t count,
       cancel::Token& cancellation_token,
       std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr,
-      std::optional<size_t> ef_runtime = std::nullopt)
-      ABSL_LOCKS_EXCLUDED(resize_mutex_);
+      std::optional<size_t> ef_runtime = std::nullopt,
+      bool enable_partial_results = false) ABSL_LOCKS_EXCLUDED(resize_mutex_);
 
  protected:
   absl::Status ResizeIfFull() ABSL_LOCKS_EXCLUDED(resize_mutex_);

@@ -56,11 +56,10 @@ class VectorFlat : public VectorBase {
       ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_) {
     return algo_->data_->getCapacity();
   }
-  absl::StatusOr<std::deque<Neighbor>> Search(
+  absl::StatusOr<std::vector<Neighbor>> Search(
       absl::string_view query, uint64_t count,
       cancel::Token& cancellation_token,
-      std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr
-    )
+      std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr)
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
 
  protected:

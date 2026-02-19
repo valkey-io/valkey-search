@@ -1,0 +1,27 @@
+name: unittests-macos
+
+on:
+  pull_request: # This triggers the workflow for pull requests
+    branches:
+      - main    # Run tests for pull requests targeting the "main" branch
+  push:
+    branches:
+      - main    # Optional: Run tests for direct pushes to "main"
+  workflow_dispatch: # allow manual triggering
+
+concurrency:
+  group: unittests-macos-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cmake-tests-macos:
+    runs-on: macos-latest
+
+    steps:
+    # Checkout the code from the repository
+    - name: Checkout Code
+      uses: actions/checkout@v3
+
+    # Set up Docker to build and run the container
+    - name: Build Code
+      run: ./build.sh

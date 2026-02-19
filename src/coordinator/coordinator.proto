@@ -21,12 +21,13 @@ import "google/protobuf/any.proto";
 service Coordinator {
   // Get the current schema metadata.
   rpc GetGlobalMetadata(GetGlobalMetadataRequest)
-      returns (GetGlobalMetadataResponse) {
-  }
+      returns (GetGlobalMetadataResponse) {}
   // Search the index partition for documents.
   rpc SearchIndexPartition(SearchIndexPartitionRequest)
-      returns (SearchIndexPartitionResponse) {
-  }
+      returns (SearchIndexPartitionResponse) {}
+  // Get index info across cluster
+  rpc InfoIndexPartition(InfoIndexPartitionRequest)
+      returns (InfoIndexPartitionResponse) {}
 }
 
 message LimitParameter {
@@ -47,14 +48,41 @@ message NumericPredicate {
   bool is_inclusive_end = 5;
 }
 
+message TermPredicate {
+  uint64 field_mask = 1;
+  string content = 2;
+  bool exact = 3;
+}
+
+message PrefixPredicate {
+  uint64 field_mask = 1;
+  string content = 2;
+}
+
+message SuffixPredicate {
+  uint64 field_mask = 1;
+  string content = 2;
+}
+
+message InfixPredicate {
+  uint64 field_mask = 1;
+  string content = 2;
+}
+
+message FuzzyPredicate {
+  uint64 field_mask = 1;
+  string content = 2;
+  uint32 distance = 3;
+}
+
 message AndPredicate {
-  Predicate lhs = 1;
-  Predicate rhs = 2;
+  repeated Predicate children = 1;
+  optional uint32 slop = 2;
+  bool inorder = 3;
 }
 
 message OrPredicate {
-  Predicate lhs = 1;
-  Predicate rhs = 2;
+  repeated Predicate children = 1;
 }
 
 message NegatePredicate {
@@ -68,6 +96,11 @@ message Predicate {
     AndPredicate and = 3;
     OrPredicate or = 4;
     NegatePredicate negate = 5;
+    TermPredicate term = 6;
+    PrefixPredicate prefix = 7;
+    SuffixPredicate suffix = 8;
+    InfixPredicate infix = 9;
+    FuzzyPredicate fuzzy = 10;
   }
 }
 
@@ -76,7 +109,23 @@ message ReturnParameter {
   string alias = 2;
 }
 
+enum SortOrder {
+  SORT_ORDER_ASCENDING = 0;
+  SORT_ORDER_DESCENDING = 1;
+}
+
+message SortByParameter {
+  string field = 1;
+  SortOrder order = 2;
+}
+
+message IndexFingerprintVersion {
+  uint64 fingerprint = 1;
+  uint32 version = 2;
+}
+
 message SearchIndexPartitionRequest {
+  uint32 db_num = 1;
   string index_schema_name = 2;
   string attribute_alias = 3;
   optional string score_as = 4;
@@ -89,6 +138,12 @@ message SearchIndexPartitionRequest {
   bool no_content = 11;
   optional Predicate root_filter_predicate = 12;
   repeated ReturnParameter return_parameters = 13;
+  bool enable_partial_results = 14;
+  bool enable_consistency = 15;
+  IndexFingerprintVersion index_fingerprint_version = 16;
+  uint64 slot_fingerprint = 17;
+  uint64 query_operations = 18;
+  optional SortByParameter sortby = 19;
 }
 
 message NeighborEntry {
@@ -99,6 +154,7 @@ message NeighborEntry {
 
 message SearchIndexPartitionResponse {
   repeated NeighborEntry neighbors = 1;
+  uint64 total_count = 2;
 }
 
 message AttributeContentEntry {
@@ -109,6 +165,7 @@ message AttributeContentEntry {
 message GlobalMetadataVersionHeader {
   uint64 top_level_fingerprint = 1;
   uint32 top_level_version = 2;
+  uint32 top_level_min_version = 3;
 }
 
 message GlobalMetadata {
@@ -127,9 +184,53 @@ message GlobalMetadataEntry {
   uint64 fingerprint = 2;
   uint32 encoding_version = 3;
   optional google.protobuf.Any content = 4;
+  uint32 min_version = 5;
 }
 
 message GetGlobalMetadataRequest {}
 message GetGlobalMetadataResponse {
   GlobalMetadata metadata = 1;
+}
+
+message InfoIndexPartitionRequest {
+  uint32 db_num = 1;
+  string index_name = 2;
+  bool require_consistency = 3;
+  IndexFingerprintVersion index_fingerprint_version = 4;
+  uint64 slot_fingerprint = 5;
+}
+
+enum FanoutErrorType {
+  OK = 0;
+  INDEX_NAME_ERROR = 1;
+  INCONSISTENT_STATE_ERROR = 2;
+  COMMUNICATION_ERROR = 3;
+}
+
+message AttributeInfo {
+  string identifier = 1;
+  string alias = 2;
+  uint64 user_indexed_memory = 3;
+  uint64 num_records = 4;
+}
+
+message InfoIndexPartitionResponse {
+  bool exists = 1;
+  string index_name = 2;
+  uint64 num_docs = 3;
+  uint64 num_records = 4;
+  uint64 hash_indexing_failures = 5;
+  uint64 backfill_scanned_count = 6;
+  uint64 backfill_db_size = 7;
+  uint64 backfill_inqueue_tasks = 8;
+  float backfill_complete_percent = 9;
+  bool backfill_in_progress = 10;
+  uint64 mutation_queue_size = 11;
+  uint64 recent_mutations_queue_delay = 12;
+  string state = 13;
+  string error = 14;
+  optional IndexFingerprintVersion index_fingerprint_version = 15;
+  FanoutErrorType error_type = 16;
+  uint32 db_num = 17;
+  repeated AttributeInfo attributes = 18;
 }

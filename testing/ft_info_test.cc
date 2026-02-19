@@ -134,24 +134,31 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*26\r\n+index_name\r\n+test_name\r\n+index_"
-                            "options\r\n*0\r\n+index_definition\r\n*6\r\n+key_"
-                            "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
-                            "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
-                            "8\r\n+identifier\r\n+test_identifier_1\r\n+"
-                            "attribute\r\n+test_attribute_1\r\n+type\r\n+"
-                            "VECTOR\r\n+index\r\n*12\r\n+capacity\r\n:100\r\n+"
-                            "dimensions\r\n:10\r\n+distance_metric\r\n+"
-                            "COSINE\r\n+size\r\n$1\r\n0\r\n+data_type\r\n+"
-                            "FLOAT32\r\n+algorithm\r\n*8\r\n+name\r\n+HNSW\r\n+"
-                            "m\r\n:240\r\n+ef_construction\r\n:400\r\n+ef_"
-                            "runtime\r\n:30\r\n+num_docs\r\n$1\r\n0\r\n+num_"
-                            "terms\r\n$1\r\n0\r\n+num_records\r\n$1\r\n0\r\n+"
-                            "hash_indexing_failures\r\n$1\r\n0\r\n+backfill_in_"
-                            "progress\r\n$1\r\n0\r\n+backfill_complete_"
-                            "percent\r\n$8\r\n1.000000\r\n+mutation_queue_"
-                            "size\r\n$1\r\n0\r\n+recent_mutations_queue_"
-                            "delay\r\n$5\r\n0 sec\r\n+state\r\n+ready\r\n",
+                            "*36\r\n+index_name\r\n+test_name\r\n+index_"
+                            "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
+                            "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
+                            "1\r\n1\r\n+attributes\r\n*1\r\n*10\r\n+"
+                            "identifier\r\n+test_identifier_1\r\n+"
+                            "attribute\r\n+test_attribute_1\r\n+user_indexed_"
+                            "memory\r\n:0\r\n+type\r\n+VECTOR\r\n+index\r\n*"
+                            "12\r\n+capacity\r\n:100\r\n+dimensions\r\n:10\r\n+"
+                            "distance_metric\r\n+COSINE\r\n+size\r\n$"
+                            "1\r\n0\r\n+data_type\r\n+FLOAT32\r\n+"
+                            "algorithm\r\n*8\r\n+name\r\n+HNSW\r\n+m\r\n:"
+                            "240\r\n+ef_construction\r\n:400\r\n+ef_"
+                            "runtime\r\n:30\r\n+num_docs\r\n:0\r\n+num_"
+                            "records\r\n:0\r\n+total_term_occurrences\r\n:"
+                            "0\r\n+num_"
+                            "terms\r\n:0\r\n+"
+                            "posting_sz_bytes\r\n:0\r\n+position_sz_bytes\r\n:"
+                            "0\r\n+radix_sz_bytes\r\n:0\r\n+total_text_index_"
+                            "sz_bytes\r\n:0\r\n+hash_indexing_failures\r\n$"
+                            "1\r\n0\r\n+backfill_in_progress\r\n$1\r\n0\r\n+"
+                            "backfill_complete_percent\r\n$8\r\n1.000000\r\n+"
+                            "mutation_queue_size\r\n$1\r\n0\r\n+recent_"
+                            "mutations_queue_delay\r\n$5\r\n0 "
+                            "sec\r\n+state\r\n+ready\r\n+language\r\n+"
+                            "english\r\n",
                     },
                 },
         },
@@ -185,23 +192,30 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*26\r\n+index_name\r\n+test_name\r\n+index_"
-                            "options\r\n*0\r\n+index_definition\r\n*6\r\n+key_"
-                            "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
-                            "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
-                            "8\r\n+identifier\r\n+test_identifier_1\r\n+"
-                            "attribute\r\n+test_attribute_1\r\n+type\r\n+"
-                            "VECTOR\r\n+index\r\n*12\r\n+capacity\r\n:100\r\n+"
-                            "dimensions\r\n:10\r\n+distance_metric\r\n+"
-                            "COSINE\r\n+size\r\n$1\r\n0\r\n+data_type\r\n+"
-                            "FLOAT32\r\n+algorithm\r\n*4\r\n+name\r\n+FLAT\r\n+"
-                            "block_size\r\n:1024\r\n+num_docs\r\n$1\r\n0\r\n+"
-                            "num_terms\r\n$1\r\n0\r\n+num_records\r\n$"
-                            "1\r\n0\r\n+hash_indexing_failures\r\n$1\r\n0\r\n+"
-                            "backfill_in_progress\r\n$1\r\n0\r\n+backfill_"
-                            "complete_percent\r\n$8\r\n1.000000\r\n+mutation_"
-                            "queue_size\r\n$1\r\n0\r\n+recent_mutations_queue_"
-                            "delay\r\n$5\r\n0 sec\r\n+state\r\n+ready\r\n",
+                            "*36\r\n+index_name\r\n+test_name\r\n+index_"
+                            "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
+                            "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
+                            "1\r\n1\r\n+attributes\r\n*1\r\n*10\r\n+"
+                            "identifier\r\n+test_identifier_1\r\n+"
+                            "attribute\r\n+test_attribute_1\r\n+user_indexed_"
+                            "memory\r\n:0\r\n+type\r\n+VECTOR\r\n+index\r\n*"
+                            "12\r\n+capacity\r\n:100\r\n+dimensions\r\n:10\r\n+"
+                            "distance_metric\r\n+COSINE\r\n+size\r\n$"
+                            "1\r\n0\r\n+data_type\r\n+FLOAT32\r\n+"
+                            "algorithm\r\n*4\r\n+name\r\n+FLAT\r\n+block_"
+                            "size\r\n:1024\r\n+num_docs\r\n:0\r\n+num_"
+                            "records\r\n:0\r\n+total_term_occurrences\r\n:"
+                            "0\r\n+num_"
+                            "terms\r\n:0\r\n+"
+                            "posting_sz_bytes\r\n:0\r\n+position_sz_bytes\r\n:"
+                            "0\r\n+radix_sz_bytes\r\n:0\r\n+total_text_index_"
+                            "sz_bytes\r\n:0\r\n+hash_indexing_failures\r\n$"
+                            "1\r\n0\r\n+backfill_in_progress\r\n$1\r\n0\r\n+"
+                            "backfill_complete_percent\r\n$8\r\n1.000000\r\n+"
+                            "mutation_queue_size\r\n$1\r\n0\r\n+recent_"
+                            "mutations_queue_delay\r\n$5\r\n0 "
+                            "sec\r\n+state\r\n+ready\r\n+language\r\n+"
+                            "english\r\n",
                     },
                 },
         },
@@ -228,20 +242,26 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*26\r\n+index_name\r\n+test_name\r\n+index_"
-                            "options\r\n*0\r\n+index_definition\r\n*6\r\n+key_"
-                            "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
-                            "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
-                            "10\r\n+identifier\r\n+test_identifier_1\r\n+"
-                            "attribute\r\n+test_attribute_1\r\n+type\r\n+"
-                            "TAG\r\n+SEPARATOR\r\n+@\r\n+size\r\n$1\r\n0\r\n+"
-                            "num_docs\r\n$1\r\n0\r\n+num_terms\r\n$1\r\n0\r\n+"
-                            "num_records\r\n$1\r\n0\r\n+hash_indexing_"
-                            "failures\r\n$1\r\n0\r\n+backfill_in_progress\r\n$"
-                            "1\r\n0\r\n+backfill_complete_percent\r\n$8\r\n1."
-                            "000000\r\n+mutation_queue_size\r\n$1\r\n0\r\n+"
-                            "recent_mutations_queue_delay\r\n$5\r\n0 sec\r\n"
-                            "+state\r\n+ready\r\n",
+                            "*36\r\n+index_name\r\n+test_name\r\n+index_"
+                            "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
+                            "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
+                            "1\r\n1\r\n+attributes\r\n*1\r\n*14\r\n+"
+                            "identifier\r\n+test_identifier_1\r\n+"
+                            "attribute\r\n+test_attribute_1\r\n+user_indexed_"
+                            "memory\r\n:0\r\n+type\r\n+TAG\r\n+SEPARATOR\r\n+@"
+                            "\r\n+CASESENSITIVE\r\n+0\r\n+size\r\n$1\r\n0\r\n+"
+                            "num_docs\r\n:0\r\n+num_records\r\n:0\r\n+total_"
+                            "term_occurrences\r\n:0\r\n+num_terms\r\n:0\r\n+"
+                            "posting_sz_bytes\r\n:"
+                            "0\r\n+position_sz_bytes\r\n:0\r\n+radix_sz_"
+                            "bytes\r\n:0\r\n+total_text_index_sz_bytes\r\n:"
+                            "0\r\n+hash_indexing_failures\r\n$1\r\n0\r\n+"
+                            "backfill_in_progress\r\n$1\r\n0\r\n+backfill_"
+                            "complete_percent\r\n$8\r\n1.000000\r\n+mutation_"
+                            "queue_size\r\n$1\r\n0\r\n+recent_mutations_queue_"
+                            "delay\r\n$5\r\n0 "
+                            "sec\r\n+state\r\n+ready\r\n+language\r\n+"
+                            "english\r\n",
                     },
                 },
         },
@@ -269,20 +289,26 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*26\r\n+index_name\r\n+test_name\r\n+index_"
-                            "options\r\n*0\r\n+index_definition\r\n*6\r\n+key_"
-                            "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
-                            "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
-                            "11\r\n+identifier\r\n+test_identifier_1\r\n+"
-                            "attribute\r\n+test_attribute_1\r\n+type\r\n+"
-                            "TAG\r\n+SEPARATOR\r\n+@\r\n+CASESENSITIVE\r\n+"
-                            "size\r\n$1\r\n0\r\n+num_docs\r\n$1\r\n0\r\n+num_"
-                            "terms\r\n$1\r\n0\r\n+num_records\r\n$1\r\n0\r\n+"
-                            "hash_indexing_failures\r\n$1\r\n0\r\n+backfill_in_"
-                            "progress\r\n$1\r\n0\r\n+backfill_complete_"
-                            "percent\r\n$8\r\n1.000000\r\n+mutation_queue_"
-                            "size\r\n$1\r\n0\r\n+recent_mutations_queue_"
-                            "delay\r\n$5\r\n0 sec\r\n+state\r\n+ready\r\n",
+                            "*36\r\n+index_name\r\n+test_name\r\n+index_"
+                            "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
+                            "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
+                            "1\r\n1\r\n+attributes\r\n*1\r\n*14\r\n+"
+                            "identifier\r\n+test_identifier_1\r\n+"
+                            "attribute\r\n+test_attribute_1\r\n+user_indexed_"
+                            "memory\r\n:0\r\n+type\r\n+TAG\r\n+SEPARATOR\r\n+@"
+                            "\r\n+CASESENSITIVE\r\n+1\r\n+size\r\n$1\r\n0\r\n+"
+                            "num_docs\r\n:0\r\n+num_records\r\n:0\r\n+total_"
+                            "term_occurrences\r\n:0\r\n+num_terms\r\n:0\r\n+"
+                            "posting_sz_bytes\r\n:"
+                            "0\r\n+position_sz_bytes\r\n:0\r\n+radix_sz_"
+                            "bytes\r\n:0\r\n+total_text_index_sz_bytes\r\n:"
+                            "0\r\n+hash_indexing_failures\r\n$1\r\n0\r\n+"
+                            "backfill_in_progress\r\n$1\r\n0\r\n+backfill_"
+                            "complete_percent\r\n$8\r\n1.000000\r\n+mutation_"
+                            "queue_size\r\n$1\r\n0\r\n+recent_mutations_queue_"
+                            "delay\r\n$5\r\n0 "
+                            "sec\r\n+state\r\n+ready\r\n+language\r\n+"
+                            "english\r\n",
                     },
                 },
         },
@@ -307,20 +333,25 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*26\r\n+index_name\r\n+test_name\r\n+index_"
-                            "options\r\n*0\r\n+index_definition\r\n*6\r\n+key_"
-                            "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
-                            "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
-                            "8\r\n+identifier\r\n+test_identifier_1\r\n+"
-                            "attribute\r\n+test_attribute_1\r\n+type\r\n+"
-                            "NUMERIC\r\n+size\r\n$1\r\n0\r\n+num_docs\r\n$"
-                            "1\r\n0\r\n+num_terms\r\n$1\r\n0\r\n+num_"
-                            "records\r\n$1\r\n0\r\n+hash_indexing_failures\r\n$"
+                            "*36\r\n+index_name\r\n+test_name\r\n+index_"
+                            "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
+                            "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
+                            "1\r\n1\r\n+attributes\r\n*1\r\n*10\r\n+"
+                            "identifier\r\n+test_identifier_1\r\n+"
+                            "attribute\r\n+test_attribute_1\r\n+user_indexed_"
+                            "memory\r\n:0\r\n+type\r\n+NUMERIC\r\n+size\r\n$"
+                            "1\r\n0\r\n+num_docs\r\n:0\r\n+num_records\r\n:"
+                            "0\r\n+total_term_occurrences\r\n:0\r\n+num_"
+                            "terms\r\n:0\r\n+posting_"
+                            "sz_bytes\r\n:0\r\n+position_sz_bytes\r\n:0\r\n+"
+                            "radix_sz_bytes\r\n:0\r\n+total_text_index_sz_"
+                            "bytes\r\n:0\r\n+hash_indexing_failures\r\n$"
                             "1\r\n0\r\n+backfill_in_progress\r\n$1\r\n0\r\n+"
                             "backfill_complete_percent\r\n$8\r\n1.000000\r\n+"
                             "mutation_queue_size\r\n$1\r\n0\r\n+recent_"
-                            "mutations_queue_delay\r\n$5\r\n0 sec\r\n+state\r\n"
-                            "+ready\r\n",
+                            "mutations_queue_delay\r\n$5\r\n0 "
+                            "sec\r\n+state\r\n+ready\r\n+language\r\n+"
+                            "english\r\n",
                     },
                 },
         },
@@ -331,8 +362,9 @@ INSTANTIATE_TEST_SUITE_P(
                     {
                         .argv = {"FT.Info"},
                         .expect_return_failure = true,
-                        .expected_output = "$51\r\nERR wrong number of "
-                                           "arguments for 'FT.INFO' command\r\n",
+                        .expected_output =
+                            "-ERR wrong number of "
+                            "arguments for 'FT.INFO' command\r\n",
                     },
                 },
         },
@@ -345,9 +377,109 @@ INSTANTIATE_TEST_SUITE_P(
                         .index_schema_pbtxt = std::nullopt,
                         .expect_return_failure = true,
                         .expected_output =
-                            "$47\r\nIndex with name 'non_exist_test_name' not "
-                            "found\r\n",
+                            "-Index with name 'non_exist_test_name' not "
+                            "found in database 0\r\n",
                     },
+                },
+        },
+        {
+            .test_name = "happy_path_text_defaults",
+            .test_cases =
+                {
+                    {.argv = {"FT.Info", "test_name"},
+                     .index_schema_pbtxt = R"(
+                          name: "test_name"
+                          db_num: 0
+                          subscribed_key_prefixes: "prefix_1"
+                          attribute_data_type: ATTRIBUTE_DATA_TYPE_HASH
+                          attributes: {
+                            alias: "test_attribute_1"
+                            identifier: "test_identifier_1"
+                            index: {
+                              text_index: { 
+                                weight: 1.0 
+                              }
+                            }
+                          }
+                        )",
+                     .expect_return_failure = false,
+                     .expected_output =
+                         "*44\r\n+index_name\r\n+test_name\r\n+index_"
+                         "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
+                         "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
+                         "1\r\n1\r\n+attributes\r\n*1\r\n*14\r\n+"
+                         "identifier\r\n+test_identifier_1\r\n+attribute\r\n+"
+                         "test_attribute_1\r\n+user_indexed_memory\r\n:0\r\n+"
+                         "type\r\n+TEXT\r\n+WITH_SUFFIX_TRIE\r\n+0\r\n+NO_"
+                         "STEM\r\n+0\r\n+WEIGHT\r\n+1\r\n+num_docs\r\n:0\r\n+"
+                         "num_records\r\n:"
+                         "0\r\n+total_term_occurrences\r\n:0\r\n+num_terms\r\n:"
+                         "0\r\n+posting_sz_bytes\r\n:"
+                         "0\r\n+position_sz_bytes\r\n:0\r\n+radix_sz_bytes\r\n:"
+                         "0\r\n+total_text_index_sz_bytes\r\n:0\r\n+hash_"
+                         "indexing_failures\r\n$1\r\n0\r\n+backfill_in_"
+                         "progress\r\n$1\r\n0\r\n+backfill_complete_"
+                         "percent\r\n$8\r\n1.000000\r\n+mutation_queue_"
+                         "size\r\n$1\r\n0\r\n+recent_mutations_queue_delay\r\n$"
+                         "5\r\n0 "
+                         "sec\r\n+state\r\n+ready\r\n+punctuation\r\n+\r\n+"
+                         "stop_words\r\n*0\r\n+with_offsets\r\n+0\r\n+min_stem_"
+                         "size\r\n:4\r\n+language\r\n+english\r\n"},
+                },
+        },
+        {
+            .test_name = "happy_path_text_all_options",
+            .test_cases =
+                {
+                    {.argv = {"FT.Info", "test_name"},
+                     .index_schema_pbtxt = R"(
+                          name: "test_name"
+                          db_num: 0
+                          subscribed_key_prefixes: "prefix_1"
+                          attribute_data_type: ATTRIBUTE_DATA_TYPE_HASH
+                          language: LANGUAGE_ENGLISH
+                          punctuation: ".,!?"
+                          with_offsets: true
+                          stop_words: "the"
+                          stop_words: "and"
+                          stop_words: "or"
+                          min_stem_size: 3
+                          attributes: {
+                            alias: "test_attribute_1"
+                            identifier: "test_identifier_1"
+                            index: {
+                              text_index: {
+                                with_suffix_trie: true
+                                no_stem: true
+                                weight: 1.0
+                              }
+                            }
+                          }
+                        )",
+                     .expect_return_failure = false,
+                     .expected_output =
+                         "*44\r\n+index_name\r\n+test_name\r\n+index_"
+                         "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
+                         "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
+                         "1\r\n1\r\n+attributes\r\n*1\r\n*14\r\n+"
+                         "identifier\r\n+test_identifier_1\r\n+attribute\r\n+"
+                         "test_attribute_1\r\n+user_indexed_memory\r\n:0\r\n+"
+                         "type\r\n+TEXT\r\n+WITH_SUFFIX_TRIE\r\n+1\r\n+NO_"
+                         "STEM\r\n+1\r\n+WEIGHT\r\n+1\r\n+num_docs\r\n:0\r\n+"
+                         "num_records\r\n:"
+                         "0\r\n+total_term_occurrences\r\n:0\r\n+num_terms\r\n:"
+                         "0\r\n+posting_sz_bytes\r\n:"
+                         "0\r\n+position_sz_bytes\r\n:0\r\n+radix_sz_bytes\r\n:"
+                         "0\r\n+total_text_index_sz_bytes\r\n:0\r\n+hash_"
+                         "indexing_failures\r\n$1\r\n0\r\n+backfill_in_"
+                         "progress\r\n$1\r\n0\r\n+backfill_complete_"
+                         "percent\r\n$8\r\n1.000000\r\n+mutation_queue_"
+                         "size\r\n$1\r\n0\r\n+recent_mutations_queue_delay\r\n$"
+                         "5\r\n0 "
+                         "sec\r\n+state\r\n+ready\r\n+punctuation\r\n+.,!?\r\n+"
+                         "stop_words\r\n*3\r\n+the\r\n+and\r\n+or\r\n+with_"
+                         "offsets\r\n+1\r\n+min_stem_size\r\n:3\r\n+"
+                         "language\r\n+english\r\n"},
                 },
         },
         {
@@ -380,8 +512,8 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = true,
                         .expected_output =
-                            "$47\r\nIndex with name 'non_exist_test_name' not "
-                            "found\r\n",
+                            "-Index with name 'non_exist_test_name' not "
+                            "found in database 0\r\n",
                     },
                 },
         },

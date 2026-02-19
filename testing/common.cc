@@ -53,7 +53,8 @@ std::vector<std::vector<float>> DeterministicallyGenerateVectors(
 }
 
 void TestableValkeySearch::InitThreadPools(std::optional<size_t> readers,
-                                           std::optional<size_t> writers) {
+                                           std::optional<size_t> writers,
+                                           std::optional<size_t> utility) {
   if (readers) {
     reader_thread_pool_ =
         std::make_unique<vmsdk::ThreadPool>("reader-pool", *readers);
@@ -63,6 +64,11 @@ void TestableValkeySearch::InitThreadPools(std::optional<size_t> readers,
     writer_thread_pool_ =
         std::make_unique<vmsdk::ThreadPool>("writer-pool", *writers);
     writer_thread_pool_->StartWorkers();
+  }
+  if (utility) {
+    utility_thread_pool_ =
+        std::make_unique<vmsdk::ThreadPool>("utility-pool", *utility);
+    utility_thread_pool_->StartWorkers();
   }
 }
 
@@ -104,12 +110,16 @@ absl::StatusOr<std::shared_ptr<MockIndexSchema>> CreateIndexSchema(
       .WillByDefault(testing::Return(index_schema_db_num));
   EXPECT_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
       .WillRepeatedly(testing::Return(fake_ctx));
+  data_model::Language language = data_model::LANGUAGE_ENGLISH;
+  std::string punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|";
+  bool with_offsets = true;
+  std::vector<std::string> stop_words = {};
   VMSDK_ASSIGN_OR_RETURN(
       auto test_index_schema,
-      valkey_search::MockIndexSchema::Create(
+      MockIndexSchema::Create(
           fake_ctx, index_schema_key, *key_prefixes,
           std::make_unique<valkey_search::HashAttributeDataType>(),
-          writer_thread_pool));
+          writer_thread_pool, language, punctuation, with_offsets, stop_words));
   VMSDK_RETURN_IF_ERROR(
       SchemaManager::Instance().ImportIndexSchema(test_index_schema));
   return test_index_schema;
@@ -151,6 +161,15 @@ data_model::TagIndex CreateTagIndexProto(const std::string &separator,
   tag_index_proto.set_separator(separator);
   tag_index_proto.set_case_sensitive(case_sensitive);
   return tag_index_proto;
+}
+
+data_model::TextIndex CreateTextIndexProto(bool with_suffix_trie, bool no_stem,
+                                           double weight) {
+  data_model::TextIndex text_index_proto;
+  text_index_proto.set_with_suffix_trie(with_suffix_trie);
+  text_index_proto.set_no_stem(no_stem);
+  text_index_proto.set_weight(weight);
+  return text_index_proto;
 }
 
 indexes::Neighbor ToIndexesNeighbor(const NeighborTest &neighbor_test) {

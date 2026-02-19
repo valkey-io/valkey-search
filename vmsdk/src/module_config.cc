@@ -18,6 +18,20 @@
 namespace vmsdk {
 namespace config {
 
+/// Controls the modules debug mode flag. We set it here to "true" to allow
+/// Valkey to load the configurations first time when the module loaded. Once
+/// this is done, we set it back to false. If the user passes "--debug-mode yes"
+/// we will change it back to "true".
+static auto debug_mode = BooleanBuilder(kDebugMode, true).Hidden().Build();
+
+bool IsDebugModeEnabled() { return debug_mode->GetValue(); }
+
+/// Controls the verbose logging flag
+static auto hide_user_data_config =
+    BooleanBuilder(kHideUserDataFromLog, true).Build();
+
+bool ShouldHideUserDataFromLog() { return hide_user_data_config->GetValue(); }
+
 namespace {
 
 constexpr absl::string_view kUseCoordinator = "--use-coordinator";
@@ -51,8 +65,7 @@ static ValkeyModuleString *OnGetStringConfig(const char *config_name,
                                              void *priv_data) {
   auto entry = static_cast<String *>(priv_data);
   CHECK(entry) << "null private data";
-  return ValkeyModule_CreateString(nullptr, entry->GetString().c_str(),
-                                   entry->GetString().size());
+  return entry->GetCachedValkeyString();
 }
 
 static int OnSetStringConfig(const char *config_name, ValkeyModuleString *value,
@@ -91,7 +104,9 @@ ModuleConfigManager &ModuleConfigManager::Instance() {
 }
 
 void ModuleConfigManager::RegisterConfig(Registerable *config_item) {
-  entries_.insert({std::string{config_item->GetName()}, config_item});
+  auto [it, inserted] =
+      entries_.insert({std::string{config_item->GetName()}, config_item});
+  CHECK(inserted) << "Duplicate config entry: " << config_item->GetName();
 }
 
 void ModuleConfigManager::UnregisterConfig(Registerable *config_item) {
@@ -111,6 +126,8 @@ absl::Status ModuleConfigManager::Init(ValkeyModuleCtx *ctx) {
 absl::Status ModuleConfigManager::ParseAndLoadArgv(ValkeyModuleCtx *ctx,
                                                    ValkeyModuleString **argv,
                                                    int argc) {
+  // reset the debug mode to "false".
+  debug_mode->SetValueOrLog(false, LogLevel::kWarning);
   vmsdk::ArgsIterator iter{argv, argc};
   while (iter.HasNext()) {
     VMSDK_ASSIGN_OR_RETURN(auto key, iter.Get());
@@ -315,7 +332,133 @@ absl::Status String::Register(ValkeyModuleCtx *ctx) {
 }
 
 absl::Status String::FromString(std::string_view value) {
-  SetValueOrLog(value.data(), WARNING);
+  if (value.data() == nullptr) {
+    return absl::InvalidArgumentError("Invalid string value: null");
+  }
+  default_ = value.data();
+  SetValueOrLog(default_, WARNING);
+  return absl::OkStatus();
+}
+/// Get method to fetch the `hide_user_data_config`
+vmsdk::config::Boolean &GetHideUserDataFromLog() {
+  return dynamic_cast<vmsdk::config::Boolean &>(*hide_user_data_config);
+}
+
+absl::Status ModuleConfigManager::ListAllConfigs(
+    ValkeyModuleCtx *ctx, bool verbose, const std::string &filter) const {
+  // Create a sorted vector of config entries for consistent output
+  std::vector<std::pair<std::string, Registerable *>> sorted_entries(
+      entries_.begin(), entries_.end());
+  std::sort(sorted_entries.begin(), sorted_entries.end());
+
+  // Helper lambda to check if entry matches filter
+  auto matches_filter = [](Registerable *entry,
+                           const std::string &filter) -> bool {
+    if (filter.empty()) return true;
+
+    if (filter == "APP") {
+      return !entry->IsHidden() && !entry->IsDeveloperConfig();
+    } else if (filter == "DEV") {
+      return entry->IsDeveloperConfig();
+    } else if (filter == "HIDDEN") {
+      return entry->IsHidden();
+    }
+    return false;
+  };
+  // Filter entries
+  std::vector<std::pair<std::string, Registerable *>> filtered_entries;
+  for (const auto &entry : sorted_entries) {
+    if (matches_filter(entry.second, filter)) {
+      filtered_entries.push_back(entry);
+    }
+  }
+
+  // Default (non-verbose) mode: return config names only
+  if (!verbose) {
+    ValkeyModule_ReplyWithArray(ctx, filtered_entries.size());
+    for (const auto &[name, entry] : filtered_entries) {
+      ValkeyModule_ReplyWithCString(ctx, name.data());
+    }
+    return absl::OkStatus();
+  }
+
+  // Verbose mode: return detailed config information
+  ValkeyModule_ReplyWithArray(ctx, filtered_entries.size());
+  for (const auto &[name, entry] : filtered_entries) {
+    // Each config entry is an array of key-value pairs
+    ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_LEN);
+    long long field_count = 0;
+
+    // Common fields
+    ValkeyModule_ReplyWithCString(ctx, "name");
+    ValkeyModule_ReplyWithCString(ctx, name.data());
+    field_count += 2;
+
+    // Determine type and visibility
+    std::string visibility = entry->IsHidden()            ? "HIDDEN"
+                             : entry->IsDeveloperConfig() ? "DEV"
+                                                          : "APP";
+
+    if (auto *num = dynamic_cast<Number *>(entry)) {
+      ValkeyModule_ReplyWithCString(ctx, "type");
+      ValkeyModule_ReplyWithCString(ctx, "Number");
+      ValkeyModule_ReplyWithCString(ctx, "default");
+      ValkeyModule_ReplyWithLongLong(ctx, num->GetDefaultValue());
+      ValkeyModule_ReplyWithCString(ctx, "min");
+      ValkeyModule_ReplyWithLongLong(ctx, num->GetMinValue());
+      ValkeyModule_ReplyWithCString(ctx, "max");
+      ValkeyModule_ReplyWithLongLong(ctx, num->GetMaxValue());
+      ValkeyModule_ReplyWithCString(ctx, "current_value");
+      ValkeyModule_ReplyWithLongLong(ctx, num->GetValue());
+      field_count += 10;
+    } else if (auto *boolean = dynamic_cast<Boolean *>(entry)) {
+      ValkeyModule_ReplyWithCString(ctx, "type");
+      ValkeyModule_ReplyWithCString(ctx, "Boolean");
+      ValkeyModule_ReplyWithCString(ctx, "default");
+      ValkeyModule_ReplyWithCString(
+          ctx, boolean->GetDefaultValue() ? "true" : "false");
+      ValkeyModule_ReplyWithCString(ctx, "min");
+      ValkeyModule_ReplyWithCString(ctx, "N/A");
+      ValkeyModule_ReplyWithCString(ctx, "max");
+      ValkeyModule_ReplyWithCString(ctx, "N/A");
+      ValkeyModule_ReplyWithCString(ctx, "current_value");
+      ValkeyModule_ReplyWithCString(ctx,
+                                    boolean->GetValue() ? "true" : "false");
+      field_count += 10;
+    } else if (auto *str = dynamic_cast<String *>(entry)) {
+      ValkeyModule_ReplyWithCString(ctx, "type");
+      ValkeyModule_ReplyWithCString(ctx, "String");
+      ValkeyModule_ReplyWithCString(ctx, "default");
+      ValkeyModule_ReplyWithCString(ctx, str->GetDefaultValue().c_str());
+      ValkeyModule_ReplyWithCString(ctx, "min");
+      ValkeyModule_ReplyWithCString(ctx, "N/A");
+      ValkeyModule_ReplyWithCString(ctx, "max");
+      ValkeyModule_ReplyWithCString(ctx, "N/A");
+      ValkeyModule_ReplyWithCString(ctx, "current_value");
+      ValkeyModule_ReplyWithCString(ctx, str->GetValue().c_str());
+      field_count += 10;
+    } else if (auto *enm = dynamic_cast<Enum *>(entry)) {
+      ValkeyModule_ReplyWithCString(ctx, "type");
+      ValkeyModule_ReplyWithCString(ctx, "Enum");
+      ValkeyModule_ReplyWithCString(ctx, "default");
+      ValkeyModule_ReplyWithLongLong(ctx, enm->GetDefaultValue());
+      ValkeyModule_ReplyWithCString(ctx, "min");
+      ValkeyModule_ReplyWithCString(ctx, "N/A");
+      ValkeyModule_ReplyWithCString(ctx, "max");
+      ValkeyModule_ReplyWithCString(ctx, "N/A");
+      ValkeyModule_ReplyWithCString(ctx, "current_value");
+      ValkeyModule_ReplyWithLongLong(ctx, enm->GetValue());
+      field_count += 10;
+    }
+
+    ValkeyModule_ReplyWithCString(ctx, "visibility");
+    ValkeyModule_ReplyWithCString(ctx, visibility.c_str());
+    field_count += 2;
+
+    // Set the actual array length
+    ValkeyModule_ReplySetArrayLength(ctx, field_count);
+  }
+
   return absl::OkStatus();
 }
 

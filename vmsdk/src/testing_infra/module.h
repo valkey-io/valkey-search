@@ -145,9 +145,13 @@ class MockValkeyModule {
               (ValkeyModuleCtx * ctx, ValkeyModuleScanCursor *cursor,
                ValkeyModuleScanCB fn, void *privdata));
   MOCK_METHOD(int, ReplicateVerbatim, (ValkeyModuleCtx * ctx));
+  MOCK_METHOD(int, Replicate,
+              (ValkeyModuleCtx * ctx, const char *cmdname, const char *fmt));
   MOCK_METHOD(ValkeyModuleType *, ModuleTypeGetType, (ValkeyModuleKey * key));
   MOCK_METHOD(ValkeyModuleCtx *, GetDetachedThreadSafeContext,
               (ValkeyModuleCtx * ctx));
+  MOCK_METHOD(ValkeyModuleCtx *, GetThreadSafeContext,
+              (ValkeyModuleBlockedClient * bc));
   MOCK_METHOD(void, FreeThreadSafeContext, (ValkeyModuleCtx * ctx));
   MOCK_METHOD(int, SelectDb, (ValkeyModuleCtx * ctx, int newid));
   MOCK_METHOD(int, GetSelectedDb, (ValkeyModuleCtx * ctx));
@@ -230,6 +234,11 @@ class MockValkeyModule {
                const char *arg1, const char *arg2));
   MOCK_METHOD(ValkeyModuleCallReply *, Call,
               (ValkeyModuleCtx * ctx, const char *cmd, const char *fmt,
+               const char *arg1, const char *arg2, size_t arg2_len,
+               const char *arg3, size_t arg3_len));
+  MOCK_METHOD(void *, GetSharedAPI, (ValkeyModuleCtx * ctx, const char *arg1));
+  MOCK_METHOD(ValkeyModuleCallReply *, Call,
+              (ValkeyModuleCtx * ctx, const char *cmd, const char *fmt,
                const char *arg1));
   MOCK_METHOD(ValkeyModuleCallReply *, CallReplyArrayElement,
               (ValkeyModuleCallReply * reply, size_t index));
@@ -252,6 +261,7 @@ class MockValkeyModule {
   MOCK_METHOD(void, FreeClusterNodesList, (char **ids));
   MOCK_METHOD(int, CallReplyType, (ValkeyModuleCallReply * reply));
   MOCK_METHOD(size_t, CallReplyLength, (ValkeyModuleCallReply * reply));
+  MOCK_METHOD(long long, CallReplyInteger, (ValkeyModuleCallReply * reply));
   MOCK_METHOD(ValkeyModuleString *, CreateStringFromCallReply,
               (ValkeyModuleCallReply * reply));
   MOCK_METHOD(int, WrongArity, (ValkeyModuleCtx * ctx));
@@ -273,7 +283,7 @@ class MockValkeyModule {
 // NOLINTBEGIN(readability-identifier-naming)
 // Global kMockValkeyModule is a fake Valkey module used for static wrappers
 // around MockValkeyModule methods.
-MockValkeyModule *kMockValkeyModule VALKEYMODULE_ATTR;
+inline MockValkeyModule *kMockValkeyModule VALKEYMODULE_ATTR;
 
 inline void TestValkeyModule_Log(ValkeyModuleCtx *ctx [[maybe_unused]],
                                  const char *levelstr [[maybe_unused]],
@@ -333,6 +343,7 @@ class ReplyCapture {
     std::optional<long long> long_long_value;  // NOLINT
     std::optional<std::string> simple_string_value;
     std::optional<std::string> string_value;
+    std::optional<std::string> err_string_value;
     std::optional<ReplyArray> array_value;
     std::optional<double> double_value;
   };
@@ -370,7 +381,11 @@ class ReplyCapture {
   }
   void ReplyWithError(const char *str) {
     auto result = AllocateElement();
-    result->string_value = std::string(str);
+    result->err_string_value = std::string(str);
+  }
+  void ReplyWithError(ValkeyModuleString *str) {
+    auto result = AllocateElement();
+    result->err_string_value = vmsdk::ToStringView(str);
   }
   void ReplyWithDouble(double val) {
     auto result = AllocateElement();
@@ -392,6 +407,8 @@ class ReplyCapture {
     } else if (element.string_value.has_value()) {
       return absl::StrFormat("$%d\r\n%s\r\n", element.string_value->size(),
                              *element.string_value);
+    } else if (element.err_string_value.has_value()) {
+      return absl::StrFormat("-%s\r\n", *element.err_string_value);
     } else if (element.array_value.has_value()) {
       std::string result =
           absl::StrFormat("*%d\r\n", element.array_value->target_length);
@@ -477,8 +494,7 @@ class InfoCapture {
       info_ << str << ": '" << field << "'" << std::endl;
     }
   }
-  void InfoAddFieldDouble(const char *str, double field,
-                            int in_dict_field) {
+  void InfoAddFieldDouble(const char *str, double field, int in_dict_field) {
     if (in_dict_field) {
       info_ << str << "=" << field << ",";
     } else {
@@ -890,6 +906,11 @@ inline int TestValkeyModule_ReplicateVerbatim(ValkeyModuleCtx *ctx) {
   return kMockValkeyModule->ReplicateVerbatim(ctx);
 }
 
+inline int TestValkeyModule_Replicate(ValkeyModuleCtx *ctx, const char *cmdname,
+                                      const char *fmt, ...) {
+  return kMockValkeyModule->Replicate(ctx, cmdname, fmt);
+}
+
 inline ValkeyModuleType *TestValkeyModule_ModuleTypeGetTypeDefaultImpl(
     ValkeyModuleKey *key) {
   if (key->ctx->registered_keys.contains(key->key)) {
@@ -908,6 +929,11 @@ inline ValkeyModuleType *TestValkeyModule_ModuleTypeGetType(
 inline ValkeyModuleCtx *TestValkeyModule_GetDetachedThreadSafeContext(
     ValkeyModuleCtx *ctx) {
   return kMockValkeyModule->GetDetachedThreadSafeContext(ctx);
+}
+
+inline ValkeyModuleCtx *TestValkeyModule_GetThreadSafeContext(
+    ValkeyModuleBlockedClient *bc) {
+  return kMockValkeyModule->GetThreadSafeContext(bc);
 }
 
 inline void TestValkeyModule_FreeThreadSafeContext(ValkeyModuleCtx *ctx) {
@@ -967,8 +993,7 @@ inline int TestValkeyModule_InfoAddFieldCString(ValkeyModuleInfoCtx *ctx,
 }
 
 inline int TestValkeyModule_InfoAddFieldDouble(ValkeyModuleInfoCtx *ctx,
-                                          const char *str,
-                                          double field) {
+                                               const char *str, double field) {
   if (ctx) {
     ctx->info_capture.InfoAddFieldDouble(str, field, ctx->in_dict_field);
   }
@@ -1171,7 +1196,10 @@ inline size_t TestValkeyModule_MallocUsableSize(void *ptr) {
 inline size_t TestValkeyModule_GetClusterSize() {
   return kMockValkeyModule->GetClusterSize();
 }
-
+inline void *TestValkeyModule_GetSharedAPI(ValkeyModuleCtx *ctx,
+                                           const char *arg1) {
+  return kMockValkeyModule->GetSharedAPI(ctx, arg1);
+}
 inline int TestValkeyModule_WrongArity(ValkeyModuleCtx *ctx) {
   return kMockValkeyModule->WrongArity(ctx);
 }
@@ -1223,7 +1251,7 @@ struct ValkeyModuleCallReply {
   CallReplyVariant val;
   std::string msg;
 };
-std::unique_ptr<ValkeyModuleCallReply> default_reply VALKEYMODULE_ATTR;
+inline std::unique_ptr<ValkeyModuleCallReply> default_reply VALKEYMODULE_ATTR;
 
 inline std::unique_ptr<ValkeyModuleCallReply> CreateValkeyModuleCallReply(
     CallReplyVariant value) {
@@ -1293,6 +1321,16 @@ inline ValkeyModuleCallReply *TestValkeyModule_Call(ValkeyModuleCtx *ctx,
     }
     auto ret =
         kMockValkeyModule->Call(ctx, cmdname, fmt, arg1, arg2->data.c_str());
+    return ret;
+  }
+  if (format == "!Kcbb") {
+    const char *arg1 = va_arg(args, const char *);
+    const char *arg2 = va_arg(args, const char *);
+    size_t arg2_len = va_arg(args, size_t);
+    const char *arg3 = va_arg(args, const char *);
+    size_t arg3_len = va_arg(args, size_t);
+    auto ret = kMockValkeyModule->Call(ctx, cmdname, fmt, arg1, arg2, arg2_len,
+                                       arg3, arg3_len);
     return ret;
   }
   CHECK(false && "Unsupported format specifier");
@@ -1404,6 +1442,20 @@ inline int TestValkeyModule_CallReplyTypeImpl(ValkeyModuleCallReply *reply) {
   return reply->type;
 }
 
+inline long long TestValkeyModule_CallReplyInteger(
+    ValkeyModuleCallReply *reply) {
+  return kMockValkeyModule->CallReplyInteger(reply);
+}
+
+inline long long TestValkeyModule_CallReplyIntegerImpl(
+    ValkeyModuleCallReply *reply) {
+  if (reply == nullptr || reply->type != VALKEYMODULE_REPLY_INTEGER) {
+    return 0;
+  }
+  CHECK(std::holds_alternative<CallReplyInteger>(reply->val));
+  return std::get<CallReplyInteger>(reply->val);
+}
+
 inline ValkeyModuleString *TestValkeyModule_CreateStringFromCallReply(
     ValkeyModuleCallReply *reply) {
   return kMockValkeyModule->CreateStringFromCallReply(reply);
@@ -1486,9 +1538,11 @@ inline void TestValkeyModule_Init() {
       &TestValkeyModule_SubscribeToServerEvent;
   ValkeyModule_Scan = &TestValkeyModule_Scan;
   ValkeyModule_ReplicateVerbatim = &TestValkeyModule_ReplicateVerbatim;
+  ValkeyModule_Replicate = &TestValkeyModule_Replicate;
   ValkeyModule_ModuleTypeGetType = &TestValkeyModule_ModuleTypeGetType;
   ValkeyModule_GetDetachedThreadSafeContext =
       &TestValkeyModule_GetDetachedThreadSafeContext;
+  ValkeyModule_GetThreadSafeContext = &TestValkeyModule_GetThreadSafeContext;
   ValkeyModule_FreeThreadSafeContext = &TestValkeyModule_FreeThreadSafeContext;
   ValkeyModule_SelectDb = &TestValkeyModule_SelectDb;
   ValkeyModule_GetSelectedDb = &TestValkeyModule_GetSelectedDb;
@@ -1537,6 +1591,7 @@ inline void TestValkeyModule_Init() {
   ValkeyModule_Calloc = &TestValkeyModule_Calloc;
   ValkeyModule_MallocUsableSize = &TestValkeyModule_MallocUsableSize;
   ValkeyModule_GetClusterSize = &TestValkeyModule_GetClusterSize;
+  ValkeyModule_GetSharedAPI = &TestValkeyModule_GetSharedAPI;
   ValkeyModule_Call = &TestValkeyModule_Call;
   ValkeyModule_CallReplyArrayElement = &TestValkeyModule_CallReplyArrayElement;
   ValkeyModule_CallReplyMapElement = &TestValkeyModule_CallReplyMapElement;
@@ -1551,6 +1606,7 @@ inline void TestValkeyModule_Init() {
   ValkeyModule_FreeClusterNodesList = &TestValkeyModule_FreeClusterNodesList;
   ValkeyModule_CallReplyType = &TestValkeyModule_CallReplyType;
   ValkeyModule_CallReplyLength = &TestValkeyModule_CallReplyLength;
+  ValkeyModule_CallReplyInteger = &TestValkeyModule_CallReplyInteger;
   ValkeyModule_CreateStringFromCallReply =
       &TestValkeyModule_CreateStringFromCallReply;
   ValkeyModule_WrongArity = &TestValkeyModule_WrongArity;
@@ -1605,10 +1661,22 @@ inline void TestValkeyModule_Init() {
   ON_CALL(*kMockValkeyModule,
           CallReplyMapElement(testing::_, testing::_, testing::_, testing::_))
       .WillByDefault(TestValkeyModule_CallReplyMapElementImpl);
+  ON_CALL(*kMockValkeyModule, CallReplyInteger(testing::_))
+      .WillByDefault(TestValkeyModule_CallReplyIntegerImpl);
+  ON_CALL(*kMockValkeyModule,
+          Call(testing::_, testing::_, testing::_, testing::_, testing::_,
+               testing::_, testing::_, testing::_))
+      .WillByDefault([](ValkeyModuleCtx *ctx, const char *cmd, const char *fmt,
+                        const char *arg1, const char *arg2, size_t arg2_len,
+                        const char *arg3,
+                        size_t arg3_len) -> ValkeyModuleCallReply * {
+        static auto ok_reply = CreateValkeyModuleCallReply(std::string("OK"));
+        return ok_reply.get();
+      });
   ON_CALL(*kMockValkeyModule, Milliseconds()).WillByDefault([]() -> long long {
     static long long fake_time = 0;
     return ++fake_time;
-   });
+  });
   static absl::once_flag flag;
   absl::call_once(flag, []() { vmsdk::TrackCurrentAsMainThread(); });
   CHECK(vmsdk::InitLogging(nullptr, "debug").ok());

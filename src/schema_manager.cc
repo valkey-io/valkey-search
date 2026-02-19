@@ -34,6 +34,7 @@
 #include "src/index_schema.pb.h"
 #include "src/rdb_section.pb.h"
 #include "src/rdb_serialization.h"
+#include "src/valkey_search.h"
 #include "src/vector_externalizer.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
@@ -46,22 +47,42 @@
 namespace valkey_search {
 
 constexpr absl::string_view kMaxIndexesConfig{"max-indexes"};
-constexpr uint32_t kMaxIndexes{10};
+constexpr uint32_t kMaxIndexes{10000000};
+constexpr uint32_t kMaxIndexesDefault{1000};
+
+constexpr absl::string_view kIndexSchemaBackfillBatchSizeConfig(
+    "backfill-batch-size");
+constexpr uint32_t kIndexSchemaBackfillBatchSize{10240};
 
 namespace options {
 
 /// Register the "--max-indexes" flag. Controls the max number of indexes we can
 /// have.
 static auto max_indexes =
-    vmsdk::config::NumberBuilder(kMaxIndexesConfig,  // name
-                                 kMaxIndexes,        // default size
-                                 1,                  // min size
-                                 kMaxIndexes)        // max size
+    vmsdk::config::NumberBuilder(kMaxIndexesConfig,   // name
+                                 kMaxIndexesDefault,  // default size
+                                 1,                   // min size
+                                 kMaxIndexes)         // max size
         .WithValidationCallback(CHECK_RANGE(1, kMaxIndexes, kMaxIndexesConfig))
         .Build();
 
 vmsdk::config::Number &GetMaxIndexes() {
   return dynamic_cast<vmsdk::config::Number &>(*max_indexes);
+}
+
+/// Register the "--backfill-batch-size" flag. Controls the max number of
+/// indexes we can have.
+static auto backfill_batch_size =
+    vmsdk::config::NumberBuilder(kIndexSchemaBackfillBatchSizeConfig,
+                                 kIndexSchemaBackfillBatchSize, 1,
+                                 std::numeric_limits<int32_t>::max())
+        .WithValidationCallback(
+            CHECK_RANGE(1, std::numeric_limits<int32_t>::max(),
+                        kIndexSchemaBackfillBatchSizeConfig))
+        .Build();
+
+vmsdk::config::Number &GetBackfillBatchSize() {
+  return dynamic_cast<vmsdk::config::Number &>(*backfill_batch_size);
 }
 
 }  // namespace options
@@ -103,40 +124,46 @@ SchemaManager::SchemaManager(
           .section_count = [this](ValkeyModuleCtx *ctx, int when) -> int {
             return this->GetNumberOfIndexSchemas();
           },
-          .minimum_semantic_version = [](ValkeyModuleCtx *ctx,
-                                         int when) -> int {
-            return 0x010000;  // Always use 1.0.0 for now
-          }});
+          .minimum_semantic_version =
+              [this](ValkeyModuleCtx *ctx, int when) {
+                return this->GetMinVersion();
+              }});
   if (coordinator_enabled) {
     coordinator::MetadataManager::Instance().RegisterType(
-        kSchemaManagerMetadataTypeName, kMetadataEncodingVersion,
-        ComputeFingerprint,
-        [this](absl::string_view id, const google::protobuf::Any *metadata)
-            -> absl::Status { return this->OnMetadataCallback(id, metadata); });
+        kSchemaManagerMetadataTypeName, ComputeFingerprint,
+        [this](const coordinator::ObjName &obj_name,
+               const google::protobuf::Any *metadata, uint64_t fingerprint,
+               uint32_t version) -> absl::Status {
+          return this->OnMetadataCallback(obj_name, metadata, fingerprint,
+                                          version);
+        },
+        [this](auto) { return this->GetMinVersion(); });
   }
 }
 
-constexpr uint32_t kIndexSchemaBackfillBatchSize{10240};
-
-absl::Status GenerateIndexNotFoundError(absl::string_view name) {
-  return absl::NotFoundError(
-      absl::StrFormat("Index with name '%s' not found", name));
+absl::Status GenerateIndexNotFoundError(uint32_t db_num,
+                                        absl::string_view name) {
+  return absl::NotFoundError(absl::StrFormat(
+      "Index with name '%s' not found in database %d", name, db_num));
 }
 
-absl::Status GenerateIndexAlreadyExistsError(absl::string_view name) {
+absl::Status GenerateIndexAlreadyExistsError(uint32_t db_num,
+                                             absl::string_view name) {
   return absl::AlreadyExistsError(
-      absl::StrFormat("Index %s already exists.", name));
+      absl::StrFormat("Index %s in database %d already exists.", name, db_num));
 }
 
 absl::StatusOr<std::shared_ptr<IndexSchema>> SchemaManager::LookupInternal(
     uint32_t db_num, absl::string_view name) const {
   auto db_itr = db_to_index_schemas_.find(db_num);
   if (db_itr == db_to_index_schemas_.end()) {
-    return absl::NotFoundError(absl::StrCat("Index schema not found: ", name));
+    return absl::NotFoundError(absl::StrCat(
+        "Index schema not found: ", vmsdk::config::RedactIfNeeded(name)));
   }
   auto name_itr = db_itr->second.find(name);
   if (name_itr == db_itr->second.end()) {
-    return absl::NotFoundError(absl::StrCat("Index schema not found: ", name));
+    return absl::NotFoundError(absl::StrCat(
+        "Index schema not found: ", vmsdk::config::RedactIfNeeded(name)));
   }
   return name_itr->second;
 }
@@ -156,7 +183,7 @@ absl::Status SchemaManager::ImportIndexSchema(
   const std::string &name = index_schema->GetName();
   auto existing_entry = LookupInternal(db_num, name);
   if (existing_entry.ok()) {
-    return GenerateIndexAlreadyExistsError(name);
+    return GenerateIndexAlreadyExistsError(db_num, name);
   }
 
   db_to_index_schemas_[db_num][name] = std::move(index_schema);
@@ -173,12 +200,13 @@ absl::Status SchemaManager::CreateIndexSchemaInternal(
   const std::string &name = index_schema_proto.name();
   auto existing_entry = LookupInternal(db_num, name);
   if (existing_entry.ok()) {
-    return GenerateIndexAlreadyExistsError(index_schema_proto.name());
+    return GenerateIndexAlreadyExistsError(db_num, index_schema_proto.name());
   }
 
   VMSDK_ASSIGN_OR_RETURN(
       auto index_schema,
-      IndexSchema::Create(ctx, index_schema_proto, mutations_thread_pool_));
+      IndexSchema::Create(ctx, index_schema_proto, mutations_thread_pool_,
+                          false, false));
 
   db_to_index_schemas_[db_num][name] = std::move(index_schema);
 
@@ -189,7 +217,8 @@ absl::Status SchemaManager::CreateIndexSchemaInternal(
   return absl::OkStatus();
 }
 
-absl::Status SchemaManager::CreateIndexSchema(
+absl::StatusOr<coordinator::IndexFingerprintVersion>
+SchemaManager::CreateIndexSchema(
     ValkeyModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto) {
   const auto max_indexes = options::GetMaxIndexes().GetValue();
 
@@ -200,25 +229,33 @@ absl::Status SchemaManager::CreateIndexSchema(
       << "). Cannot create additional indexes.";
 
   if (coordinator_enabled_) {
-    CHECK(index_schema_proto.db_num() == 0)
-        << "In cluster mode, we only support DB 0";
     // In coordinated mode, use the metadata_manager as the source of truth.
     // It will callback into us with the update.
     if (coordinator::MetadataManager::Instance()
-            .GetEntry(kSchemaManagerMetadataTypeName, index_schema_proto.name())
+            .GetEntryContent(kSchemaManagerMetadataTypeName,
+                             coordinator::ObjName(index_schema_proto.db_num(),
+                                                  index_schema_proto.name()))
             .ok()) {
-      return GenerateIndexAlreadyExistsError(index_schema_proto.name());
+      return GenerateIndexAlreadyExistsError(index_schema_proto.db_num(),
+                                             index_schema_proto.name());
     }
     auto any_proto = std::make_unique<google::protobuf::Any>();
     any_proto->PackFrom(index_schema_proto);
     return coordinator::MetadataManager::Instance().CreateEntry(
-        kSchemaManagerMetadataTypeName, index_schema_proto.name(),
+        kSchemaManagerMetadataTypeName,
+        coordinator::ObjName(index_schema_proto.db_num(),
+                             index_schema_proto.name()),
         std::move(any_proto));
   }
 
   // In non-coordinated mode, apply the update inline.
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  return CreateIndexSchemaInternal(ctx, index_schema_proto);
+  VMSDK_RETURN_IF_ERROR(CreateIndexSchemaInternal(ctx, index_schema_proto));
+  // return dummy value in non-cluster mode
+  coordinator::IndexFingerprintVersion index_fingerprint_version;
+  index_fingerprint_version.set_fingerprint(0);
+  index_fingerprint_version.set_version(0);
+  return index_fingerprint_version;
 }
 
 absl::StatusOr<std::shared_ptr<IndexSchema>> SchemaManager::GetIndexSchema(
@@ -226,7 +263,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> SchemaManager::GetIndexSchema(
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   auto existing_entry = LookupInternal(db_num, name);
   if (!existing_entry.ok()) {
-    return GenerateIndexNotFoundError(name);
+    return GenerateIndexNotFoundError(db_num, name);
   }
   return existing_entry.value();
 }
@@ -236,7 +273,7 @@ SchemaManager::RemoveIndexSchemaInternal(uint32_t db_num,
                                          absl::string_view name) {
   auto existing_entry = LookupInternal(db_num, name);
   if (!existing_entry.ok()) {
-    return GenerateIndexNotFoundError(name);
+    return GenerateIndexNotFoundError(db_num, name);
   }
   auto result = std::move(db_to_index_schemas_[db_num][name]);
   db_to_index_schemas_[db_num].erase(name);
@@ -251,17 +288,16 @@ SchemaManager::RemoveIndexSchemaInternal(uint32_t db_num,
 }
 
 absl::Status SchemaManager::RemoveIndexSchema(uint32_t db_num,
-                                              absl::string_view name) {
+                                              const absl::string_view name) {
   if (coordinator_enabled_) {
-    CHECK(db_num == 0) << "In cluster mode, we only support DB 0";
     // In coordinated mode, use the metadata_manager as the source of truth.
     // It will callback into us with the update.
     auto status = coordinator::MetadataManager::Instance().DeleteEntry(
-        kSchemaManagerMetadataTypeName, name);
+        kSchemaManagerMetadataTypeName, coordinator::ObjName(db_num, name));
     if (status.ok()) {
       return status;
     } else if (absl::IsNotFound(status)) {
-      return GenerateIndexNotFoundError(name);
+      return GenerateIndexNotFoundError(db_num, name);
     } else {
       return absl::InternalError(status.message());
     }
@@ -322,10 +358,11 @@ absl::StatusOr<uint64_t> SchemaManager::ComputeFingerprint(
 }
 
 absl::Status SchemaManager::OnMetadataCallback(
-    absl::string_view id, const google::protobuf::Any *metadata) {
+    const coordinator::ObjName &obj_name, const google::protobuf::Any *metadata,
+    uint64_t fingerprint, uint32_t version) {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  // Note that there is only DB 0 in cluster mode, so we can hardcode this.
-  auto status = RemoveIndexSchemaInternal(0, id);
+  auto status =
+      RemoveIndexSchemaInternal(obj_name.GetDbNum(), obj_name.GetName());
   if (!status.ok() && !absl::IsNotFound(status.status())) {
     return status.status();
   }
@@ -335,15 +372,18 @@ absl::Status SchemaManager::OnMetadataCallback(
   }
   auto proposed_schema = std::make_unique<data_model::IndexSchema>();
   if (!metadata->UnpackTo(proposed_schema.get())) {
-    return absl::InternalError(absl::StrFormat(
-        "Unable to unpack metadata for index schema %s", id.data()));
+    return absl::InternalError(
+        absl::StrCat("Unable to unpack metadata for index schema ", obj_name));
   }
 
-  auto result =
-      CreateIndexSchemaInternal(detached_ctx_.get(), *proposed_schema);
-  if (!result.ok()) {
-    return result;
-  }
+  VMSDK_RETURN_IF_ERROR(
+      CreateIndexSchemaInternal(detached_ctx_.get(), *proposed_schema));
+
+  auto created_schema =
+      LookupInternal(obj_name.GetDbNum(), obj_name.GetName()).value();
+  CHECK(created_schema != nullptr);
+  created_schema->SetFingerprint(fingerprint);
+  created_schema->SetVersion(version);
 
   return absl::OkStatus();
 }
@@ -356,16 +396,65 @@ uint64_t SchemaManager::GetNumberOfIndexSchemas() const {
   }
   return num_schemas;
 }
+
 uint64_t SchemaManager::GetNumberOfAttributes() const {
+  return GetAttributeCountByType(AttributeType::ALL);
+}
+
+uint64_t SchemaManager::GetAttributeCountByType(AttributeType type) const {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  auto num_attributes = 0;
+  uint64_t count = 0;
   for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
     for (const auto &[name, schema] : schema_map) {
-      num_attributes += schema->GetAttributeCount();
+      switch (type) {
+        case AttributeType::ALL:
+          count += schema->GetAttributeCount();
+          break;
+        case AttributeType::TEXT:
+          count += schema->GetTextAttributeCount();
+          break;
+        case AttributeType::TAG:
+          count += schema->GetTagAttributeCount();
+          break;
+        case AttributeType::NUMERIC:
+          count += schema->GetNumericAttributeCount();
+          break;
+        case AttributeType::VECTOR:
+          count += schema->GetVectorAttributeCount();
+          break;
+      }
     }
   }
-  return num_attributes;
+  return count;
 }
+
+uint64_t SchemaManager::GetNumberOfTextAttributes() const {
+  return GetAttributeCountByType(AttributeType::TEXT);
+}
+
+uint64_t SchemaManager::GetNumberOfTagAttributes() const {
+  return GetAttributeCountByType(AttributeType::TAG);
+}
+
+uint64_t SchemaManager::GetNumberOfNumericAttributes() const {
+  return GetAttributeCountByType(AttributeType::NUMERIC);
+}
+
+uint64_t SchemaManager::GetNumberOfVectorAttributes() const {
+  return GetAttributeCountByType(AttributeType::VECTOR);
+}
+
+uint64_t SchemaManager::GetCorpusNumTextItems() const {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  uint64_t count = 0;
+  for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
+    for (const auto &[name, schema] : schema_map) {
+      count += schema->GetTextItemCount();
+    }
+  }
+  return count;
+}
+
 uint64_t SchemaManager::GetTotalIndexedDocuments() const {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   auto num_hash_keys = 0;
@@ -375,6 +464,18 @@ uint64_t SchemaManager::GetTotalIndexedDocuments() const {
     }
   }
   return num_hash_keys;
+}
+uint64_t SchemaManager::GetTotalTextMemoryUsage() const {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  uint64_t total = 0;
+  for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
+    for (const auto &[name, schema] : schema_map) {
+      if (schema->GetTextIndexSchema()) {
+        total += schema->GetTextIndexSchema()->GetTotalTextIndexMemoryUsage();
+      }
+    }
+  }
+  return total;
 }
 bool SchemaManager::IsIndexingInProgress() const {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
@@ -412,16 +513,21 @@ void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx) {
     return;
   }
 
-  CHECK(!coordinator_enabled_ || selected_db == 0)
-      << "In cluster mode, we only support DB 0";
   auto to_delete = GetIndexSchemasInDBInternal(selected_db);
+  VMSDK_LOG(NOTICE, ctx) << "Deleting index schema on FLUSHDB of DB "
+                         << selected_db;
+  if (coordinator_enabled_) {
+    VMSDK_LOG(NOTICE, ctx) << "Recreating index schema on FLUSHDB of DB "
+                           << selected_db;
+  }
   for (const auto &name : to_delete) {
-    VMSDK_LOG(NOTICE, ctx) << "Deleting index schema " << name
-                           << " on FLUSHDB of DB " << selected_db;
+    VMSDK_LOG(DEBUG, ctx) << "Deleting index schema " << name
+                          << " on FLUSHDB of DB " << selected_db;
     auto old_schema = RemoveIndexSchemaInternal(selected_db, name);
     if (!old_schema.ok()) {
       VMSDK_LOG(WARNING, ctx)
-          << "Unable to delete index schema " << name << " on FLUSHDB of DB "
+          << "Unable to delete index schema "
+          << vmsdk::config::RedactIfNeeded(name) << " on FLUSHDB of DB "
           << selected_db << ": " << old_schema.status().message();
       continue;
     }
@@ -430,13 +536,14 @@ void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx) {
       // cluster-level construct, not a node-level construct. To delete,
       // FT.DROPINDEX must be done explicitly.
       auto to_add = old_schema.value()->ToProto();
-      VMSDK_LOG(NOTICE, ctx) << "Recreating index schema " << name
-                             << " on FLUSHDB of DB " << selected_db;
+      VMSDK_LOG(DEBUG, ctx) << "Recreating index schema " << name
+                            << " on FLUSHDB of DB " << selected_db;
       auto add_status = CreateIndexSchemaInternal(ctx, *to_add);
       if (!add_status.ok()) {
-        VMSDK_LOG(WARNING, ctx) << "Unable to recreate index schema " << name
-                                << " on FLUSHDB of DB " << selected_db << ": "
-                                << add_status.message();
+        VMSDK_LOG(WARNING, ctx)
+            << "Unable to recreate index schema "
+            << vmsdk::config::RedactIfNeeded(name) << " on FLUSHDB of DB "
+            << selected_db << ": " << add_status.message();
         continue;
       }
     }
@@ -590,14 +697,15 @@ absl::Status SchemaManager::LoadIndex(
   if (ValkeyModule_SelectDb(ctx, db_num) != VALKEYMODULE_OK) {
     return absl::InternalError(
         absl::StrFormat("Unable to select DB %d for loading of index schema %s",
-                        db_num, name.c_str()));
+                        db_num, vmsdk::config::RedactIfNeeded(name).data()));
   }
 
   // In diskless load scenarios, we stage the index to allow serving from
   // the existing index schemas. The loading ended callback will swap these
   // atomically.
   if (staging_indices_due_to_repl_load_.Get()) {
-    VMSDK_LOG(NOTICE, ctx) << "Staging index from RDB: " << name << " (in db "
+    VMSDK_LOG(NOTICE, ctx) << "Staging index from RDB: "
+                           << vmsdk::config::RedactIfNeeded(name) << " (in db "
                            << db_num << ")";
     staged_db_to_index_schemas_.Get()[db_num][name] = std::move(index_schema);
     return absl::OkStatus();
@@ -608,18 +716,19 @@ absl::Status SchemaManager::LoadIndex(
   // happens for example when a module triggers RDB load on a running
   // server. In this case, we may have existing indices when we load the DB.
   VMSDK_LOG(NOTICE, detached_ctx_.get())
-      << "Loading index from RDB: " << name << " (in db " << db_num << ")";
+      << "Loading index from RDB: " << vmsdk::config::RedactIfNeeded(name)
+      << " (in db " << db_num << ")";
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   auto remove_existing_status = RemoveIndexSchemaInternal(db_num, name);
   if (remove_existing_status.ok()) {
     ValkeyModule_Log(detached_ctx_.get(), VALKEYMODULE_LOGLEVEL_NOTICE,
                      "Deleted existing index from RDB for: %s (in db %d)",
-                     name.c_str(), db_num);
+                     vmsdk::config::RedactIfNeeded(name).data(), db_num);
   } else if (!absl::IsNotFound(remove_existing_status.status())) {
     ValkeyModule_Log(detached_ctx_.get(), VALKEYMODULE_LOGLEVEL_WARNING,
                      "Failed to delete existing index from RDB for: %s (in db "
                      "%d): %s",
-                     name.c_str(), db_num,
+                     vmsdk::config::RedactIfNeeded(name).data(), db_num,
                      remove_existing_status.status().message().data());
   }
 
@@ -651,7 +760,54 @@ void SchemaManager::OnServerCronCallback(ValkeyModuleCtx *ctx,
                                          [[maybe_unused]] ValkeyModuleEvent eid,
                                          [[maybe_unused]] uint64_t subevent,
                                          [[maybe_unused]] void *data) {
-  SchemaManager::Instance().PerformBackfill(ctx, kIndexSchemaBackfillBatchSize);
+  SchemaManager::Instance().PerformBackfill(
+      ctx, options::GetBackfillBatchSize().GetValue());
+}
+
+void SchemaManager::PopulateFingerprintVersionFromMetadata(
+    uint32_t db_num, absl::string_view name, uint64_t fingerprint,
+    uint32_t version) {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  auto existing_entry = LookupInternal(db_num, name);
+  if (existing_entry.ok()) {
+    existing_entry.value()->SetFingerprint(fingerprint);
+    existing_entry.value()->SetVersion(version);
+  }
+}
+
+absl::StatusOr<vmsdk::ValkeyVersion> SchemaManager::GetMinVersion() const {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  vmsdk::ValkeyVersion min_version(0);
+  for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
+    for (const auto &[name, schema] : schema_map) {
+      auto any_proto = std::make_unique<google::protobuf::Any>();
+      auto proto = schema->ToProto();
+      any_proto->PackFrom(*proto);
+
+      VMSDK_ASSIGN_OR_RETURN(auto this_version,
+                             IndexSchema::GetMinVersion(*any_proto));
+      min_version = std::max(min_version, this_version);
+    }
+  }
+  return min_version;
+}
+
+absl::Status SchemaManager::ShowIndexSchemas(ValkeyModuleCtx *ctx,
+                                             vmsdk::ArgsIterator &itr) const {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  ValkeyModule_ReplyWithArray(ctx, db_to_index_schemas_.size());
+  for (const auto &[db_num, inner_map] : db_to_index_schemas_) {
+    ValkeyModule_ReplyWithArray(ctx, 2);
+    ValkeyModule_ReplyWithLongLong(ctx, db_num);
+    ValkeyModule_ReplyWithArray(ctx, inner_map.size());
+    for (const auto &[name, schema] : inner_map) {
+      auto proto = schema->ToProto()->DebugString();
+      VMSDK_LOG(DEBUG, ctx)
+          << "Index Schema in DB " << db_num << ": " << name << " " << proto;
+      ValkeyModule_ReplyWithStringBuffer(ctx, proto.data(), proto.size());
+    }
+  }
+  return absl::OkStatus();
 }
 
 static vmsdk::info_field::Integer number_of_indexes(
@@ -664,10 +820,69 @@ static vmsdk::info_field::Integer number_of_attributes(
     vmsdk::info_field::IntegerBuilder().App().Computed([] {
       return SchemaManager::Instance().GetNumberOfAttributes();
     }));
+static vmsdk::info_field::Integer number_of_text_attributes(
+    "index_stats", "number_of_text_attributes",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([] {
+      return SchemaManager::Instance().GetNumberOfTextAttributes();
+    }));
+static vmsdk::info_field::Integer number_of_tag_attributes(
+    "index_stats", "number_of_tag_attributes",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([] {
+      return SchemaManager::Instance().GetNumberOfTagAttributes();
+    }));
+static vmsdk::info_field::Integer number_of_numeric_attributes(
+    "index_stats", "number_of_numeric_attributes",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([] {
+      return SchemaManager::Instance().GetNumberOfNumericAttributes();
+    }));
+static vmsdk::info_field::Integer number_of_vector_attributes(
+    "index_stats", "number_of_vector_attributes",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([] {
+      return SchemaManager::Instance().GetNumberOfVectorAttributes();
+    }));
+static vmsdk::info_field::Integer corpus_num_text_items(
+    "index_stats", "corpus_num_text_items",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([] {
+      return SchemaManager::Instance().GetCorpusNumTextItems();
+    }));
+
 static vmsdk::info_field::Integer total_indexed_documents(
     "index_stats", "total_indexed_documents",
     vmsdk::info_field::IntegerBuilder().App().Computed([] {
       return SchemaManager::Instance().GetTotalIndexedDocuments();
+    }));
+static vmsdk::info_field::Integer active_indexes(
+    "index_stats", "number_of_active_indexes",
+    vmsdk::info_field::IntegerBuilder().App().Computed([] {
+      return SchemaManager::Instance().GetNumberOfIndexSchemas();
+    }));
+static vmsdk::info_field::Integer active_indexes_running_queries(
+    "index_stats", "number_of_active_indexes_running_queries",
+    vmsdk::info_field::IntegerBuilder().App().Computed([] {
+      // TODO: need to implement active query tracking
+      return 0;
+    }));
+static vmsdk::info_field::Integer active_indexes_indexing(
+    "index_stats", "number_of_active_indexes_indexing",
+    vmsdk::info_field::IntegerBuilder().App().Computed([] {
+      return SchemaManager::Instance().IsIndexingInProgress() ? 1 : 0;
+    }));
+static vmsdk::info_field::Integer total_active_write_threads(
+    "index_stats", "total_active_write_threads",
+    vmsdk::info_field::IntegerBuilder().App().Computed([] {
+      auto &valkey_search = valkey_search::ValkeySearch::Instance();
+      auto writer_thread_pool = valkey_search.GetWriterThreadPool();
+      if (writer_thread_pool) {
+        return writer_thread_pool->IsSuspended() ? 0
+                                                 : writer_thread_pool->Size();
+      }
+      return (unsigned long)0;
+    }));
+static vmsdk::info_field::Integer total_indexing_time(
+    "index_stats", "total_indexing_time",
+    vmsdk::info_field::IntegerBuilder().App().Computed([] {
+      // TODO: need to implement indexing time tracking
+      return 0;
     }));
 
 }  // namespace valkey_search

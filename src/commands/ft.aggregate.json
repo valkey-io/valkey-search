@@ -1,0 +1,358 @@
+{
+  "FT.AGGREGATE": {
+    "acl_categories": [
+      "READ",
+      "SLOW",
+      "SEARCH"
+    ],
+    "arguments": [
+      {
+        "key_spec_index": 0,
+        "name": "index",
+        "type": "key"
+      },
+      {
+        "key_spec_index": 1,
+        "name": "query",
+        "type": "string"
+      },
+      {
+        "name": "DIALECT",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "dialect_token",
+            "type": "pure-token",
+            "token": "DIALECT"
+          },
+          {
+            "name": "dialect_version",
+            "type": "integer"
+          }
+        ]
+      },
+      {
+        "name": "INORDER",
+        "type": "pure-token",
+        "optional": true,
+        "token": "INORDER"
+      },
+      {
+        "name": "LOAD",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "load_token",
+            "type": "pure-token",
+            "token": "LOAD"
+          },
+          {
+            "name": "load_args",
+            "type": "oneof",
+            "arguments": [
+              {
+                "name": "all",
+                "type": "pure-token",
+                "token": "*"
+              },
+              {
+                "name": "fields",
+                "type": "block",
+                "arguments": [
+                  {
+                    "name": "count",
+                    "type": "integer"
+                  },
+                  {
+                    "name": "field",
+                    "type": "string",
+                    "multiple": true
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "PARAMS",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "params_token",
+            "type": "pure-token",
+            "token": "PARAMS"
+          },
+          {
+            "name": "count",
+            "type": "integer"
+          },
+          {
+            "name": "parameters",
+            "type": "block",
+            "multiple": true,
+            "arguments": [
+              {
+                "name": "name",
+                "type": "string"
+              },
+              {
+                "name": "value",
+                "type": "string"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "SLOP",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "slop_token",
+            "type": "pure-token",
+            "token": "SLOP"
+          },
+          {
+            "name": "slop",
+            "type": "integer"
+          }
+        ]
+      },
+      {
+        "name": "TIMEOUT",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "timeout_token",
+            "type": "pure-token",
+            "token": "TIMEOUT"
+          },
+          {
+            "name": "milliseconds",
+            "type": "integer"
+          }
+        ]
+      },
+      {
+        "name": "VERBATIM",
+        "type": "pure-token",
+        "optional": true,
+        "token": "VERBATIM"
+      },
+      {
+        "name": "APPLY",
+        "type": "block",
+        "optional": true,
+        "multiple": true,
+        "arguments": [
+          {
+            "name": "apply_token",
+            "type": "pure-token",
+            "token": "APPLY"
+          },
+          {
+            "name": "expression",
+            "type": "string"
+          },
+          {
+            "name": "as_token",
+            "type": "pure-token",
+            "token": "AS"
+          },
+          {
+            "name": "field",
+            "type": "string"
+          }
+        ]
+      },
+      {
+        "name": "FILTER",
+        "type": "block",
+        "optional": true,
+        "multiple": true,
+        "arguments": [
+          {
+            "name": "filter_token",
+            "type": "pure-token",
+            "token": "FILTER"
+          },
+          {
+            "name": "expression",
+            "type": "string"
+          }
+        ]
+      },
+      {
+        "name": "GROUPBY",
+        "type": "block",
+        "optional": true,
+        "multiple": true,
+        "arguments": [
+          {
+            "name": "groupby_token",
+            "type": "pure-token",
+            "token": "GROUPBY"
+          },
+          {
+            "name": "count",
+            "type": "integer"
+          },
+          {
+            "name": "field",
+            "type": "string",
+            "multiple": true
+          },
+          {
+            "name": "REDUCE",
+            "type": "block",
+            "optional": true,
+            "multiple": true,
+            "arguments": [
+              {
+                "name": "reduce_token",
+                "type": "pure-token",
+                "token": "REDUCE"
+              },
+              {
+                "name": "function",
+                "type": "oneof",
+                "arguments": [
+                  {
+                    "name": "COUNT",
+                    "type": "pure-token",
+                    "token": "COUNT"
+                  },
+                  {
+                    "name": "COUNT_DISTINCT",
+                    "type": "pure-token",
+                    "token": "COUNT_DISTINCT"
+                  },
+                  {
+                    "name": "SUM",
+                    "type": "pure-token",
+                    "token": "SUM"
+                  },
+                  {
+                    "name": "MIN",
+                    "type": "pure-token",
+                    "token": "MIN"
+                  },
+                  {
+                    "name": "MAX",
+                    "type": "pure-token",
+                    "token": "MAX"
+                  },
+                  {
+                    "name": "AVG",
+                    "type": "pure-token",
+                    "token": "AVG"
+                  },
+                  {
+                    "name": "STDDEV",
+                    "type": "pure-token",
+                    "token": "STDDEV"
+                  }
+                ]
+              },
+              {
+                "name": "count",
+                "type": "integer"
+              },
+              {
+                "name": "expression",
+                "type": "string",
+                "multiple": true,
+                "optional": true
+              },
+              {
+                "name": "alias",
+                "type": "block",
+                "optional": true,
+                "arguments": [
+                  {
+                    "name": "as_token",
+                    "type": "pure-token",
+                    "token": "AS"
+                  },
+                  {
+                    "name": "name",
+                    "type": "string"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "LIMIT",
+        "type": "block",
+        "optional": true,
+        "multiple": true,
+        "arguments": [
+          {
+            "name": "limit_token",
+            "type": "pure-token",
+            "token": "LIMIT"
+          },
+          {
+            "name": "offset",
+            "type": "integer"
+          },
+          {
+            "name": "count",
+            "type": "integer"
+          }
+        ]
+      },
+      {
+        "name": "SORTBY",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "sortby_token",
+            "type": "pure-token",
+            "token": "SORTBY"
+          },
+          {
+            "name": "count",
+            "type": "integer"
+          },
+          {
+            "name": "sort_params",
+            "type": "string",
+            "multiple": true
+          },
+          {
+            "name": "max",
+            "type": "block",
+            "optional": true,
+            "arguments": [
+              {
+                "name": "max_token",
+                "type": "pure-token",
+                "token": "MAX"
+              },
+              {
+                "name": "num",
+                "type": "integer"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "arity": -3,
+    "complexity": "O(log N)",
+    "group": "search",
+    "module_since": "1.1.0",
+    "summary": "Performs a search of the specified index. The keys which match the query expression are subjected to further processing as specified"
+  }
+}

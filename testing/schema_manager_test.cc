@@ -64,6 +64,24 @@ class SchemaManagerTest : public ValkeySearchTest {
         .WillByDefault(testing::Return());
     ON_CALL(*kMockValkeyModule, SelectDb(testing::_, db_num_))
         .WillByDefault(testing::Return(VALKEYMODULE_OK));
+
+    // Mock cluster operations to prevent abort in MetadataManager
+    ON_CALL(*kMockValkeyModule,
+            Call(testing::_, testing::StrEq("CLUSTER"), testing::StrEq("c"),
+                 testing::StrEq("SLOTS")))
+        .WillByDefault(testing::Return(
+            reinterpret_cast<ValkeyModuleCallReply *>(0xDEADBEEF)));
+    ON_CALL(
+        *kMockValkeyModule,
+        CallReplyType(reinterpret_cast<ValkeyModuleCallReply *>(0xDEADBEEF)))
+        .WillByDefault(testing::Return(VALKEYMODULE_REPLY_ARRAY));
+    ON_CALL(
+        *kMockValkeyModule,
+        CallReplyLength(reinterpret_cast<ValkeyModuleCallReply *>(0xDEADBEEF)))
+        .WillByDefault(testing::Return(0));
+    ON_CALL(*kMockValkeyModule, GetMyClusterID())
+        .WillByDefault(testing::Return("fake_node_id"));
+
     test_metadata_manager_ = std::make_unique<coordinator::MetadataManager>(
         &fake_ctx_, *mock_client_pool_);
   }
@@ -88,8 +106,9 @@ TEST_F(SchemaManagerTest, TestCreateIndexSchema) {
     SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
         &fake_ctx_, [&callback_triggered]() { callback_triggered = true; },
         nullptr, coordinator_enabled));
-    VMSDK_EXPECT_OK(SchemaManager::Instance().CreateIndexSchema(
-        &fake_ctx_, test_index_schema_proto_));
+    VMSDK_EXPECT_OK(SchemaManager::Instance()
+                        .CreateIndexSchema(&fake_ctx_, test_index_schema_proto_)
+                        .status());
     auto index_schema =
         SchemaManager::Instance().GetIndexSchema(db_num_, index_name_);
     VMSDK_EXPECT_OK(index_schema);
@@ -131,13 +150,16 @@ TEST_F(SchemaManagerTest, TestCreateIndexSchemaAlreadyExists) {
     SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
         &fake_ctx_, [&callback_triggered]() { callback_triggered++; }, nullptr,
         coordinator_enabled));
-    VMSDK_EXPECT_OK(SchemaManager::Instance().CreateIndexSchema(
-        &fake_ctx_, test_index_schema_proto_));
-    auto status = SchemaManager::Instance().CreateIndexSchema(
-        &fake_ctx_, test_index_schema_proto_);
+    VMSDK_EXPECT_OK(SchemaManager::Instance()
+                        .CreateIndexSchema(&fake_ctx_, test_index_schema_proto_)
+                        .status());
+    auto status = SchemaManager::Instance()
+                      .CreateIndexSchema(&fake_ctx_, test_index_schema_proto_)
+                      .status();
     EXPECT_EQ(status.code(), absl::StatusCode::kAlreadyExists);
-    EXPECT_EQ(status.message(),
-              absl::StrFormat("Index %s already exists.", index_name_));
+    EXPECT_EQ(
+        status.message(),
+        absl::StrFormat("Index %s in database 0 already exists.", index_name_));
     EXPECT_EQ(callback_triggered, 1);
   }
 }
@@ -152,6 +174,7 @@ TEST_F(SchemaManagerTest, TestCreateIndexSchemaInvalid) {
         &fake_ctx_, []() {}, nullptr, coordinator_enabled));
     EXPECT_EQ(SchemaManager::Instance()
                   .CreateIndexSchema(&fake_ctx_, data_model::IndexSchema())
+                  .status()
                   .code(),
               absl::StatusCode::kInvalidArgument);
   }
@@ -165,8 +188,9 @@ TEST_F(SchemaManagerTest, TestRemoveIndexSchema) {
     }
     SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
         &fake_ctx_, []() {}, nullptr, coordinator_enabled));
-    VMSDK_EXPECT_OK(SchemaManager::Instance().CreateIndexSchema(
-        &fake_ctx_, test_index_schema_proto_));
+    VMSDK_EXPECT_OK(SchemaManager::Instance()
+                        .CreateIndexSchema(&fake_ctx_, test_index_schema_proto_)
+                        .status());
     VMSDK_EXPECT_OK(
         SchemaManager::Instance().RemoveIndexSchema(db_num_, index_name_));
     EXPECT_EQ(SchemaManager::Instance()
@@ -200,8 +224,9 @@ TEST_F(SchemaManagerTest, TestOnFlushDB) {
     }
     SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
         &fake_ctx_, []() {}, nullptr, coordinator_enabled));
-    VMSDK_EXPECT_OK(SchemaManager::Instance().CreateIndexSchema(
-        &fake_ctx_, test_index_schema_proto_));
+    VMSDK_EXPECT_OK(SchemaManager::Instance()
+                        .CreateIndexSchema(&fake_ctx_, test_index_schema_proto_)
+                        .status());
     auto previous_schema_or =
         SchemaManager::Instance().GetIndexSchema(db_num_, index_name_);
     VMSDK_EXPECT_OK(previous_schema_or);
@@ -375,7 +400,7 @@ TEST_F(SchemaManagerTest, TestLoadIndexExistingData) {
 }
 
 TEST_F(SchemaManagerTest, OnServerCronCallback) {
-  InitThreadPools(10, 5);
+  InitThreadPools(10, 5, 1);
   auto test_index_schema_or = CreateVectorHNSWSchema(
       "index_schema_key", &fake_ctx_, nullptr, {}, db_num_);
   ValkeyModuleEvent eid;

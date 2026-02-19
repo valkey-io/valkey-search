@@ -13,6 +13,7 @@
 #include "absl/status/status.h"
 #include "absl/strings/ascii.h"
 #include "libstemmer.h"
+#include "src/indexes/text/rax_wrapper.h"
 #include "src/indexes/text/unicode_normalizer.h"
 #include "src/utils/scanner.h"
 
@@ -84,18 +85,14 @@ Lexer::Lexer(data_model::Language language, const std::string& punctuation,
 absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
     absl::string_view text, bool stemming_enabled, uint32_t min_stem_size,
     absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>*
-        stem_mappings) const {
+        stem_mappings,
+    const Rax* prefix_tree) const {
   if (!IsValidUtf8(text)) {
     return absl::InvalidArgumentError("Invalid UTF-8");
   }
 
   // Get or create the thread-local stemmer for this lexer's language
   sb_stemmer* stemmer = stemming_enabled ? GetStemmer() : nullptr;
-  
-  // Local cache to track words that have already been stemmed in this document.
-  // This avoids redundant stemming calls for repeated words.
-  absl::flat_hash_set<std::string> stemmed_words;
-  
   std::vector<std::string> tokens;
   size_t pos = 0;
   while (pos < text.size()) {
@@ -148,15 +145,22 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
         continue;  // Skip stop words
       }
 
-      if (stemming_enabled && !stemmed_words.contains(word)) {
-        // Only stem if we haven't already stemmed this word in this document
-        std::string stemmed_word = StemWord(word, stemmer, min_stem_size);
-        if (word != stemmed_word) {
-          CHECK(stem_mappings) << "stem_mappings must not be null";
-          (*stem_mappings)[stemmed_word].insert(word);
+      if (stemming_enabled) {
+        // Check if word already exists in the prefix tree before stemming
+        // If it does, skip stemming as the word is already indexed as-is
+        bool skip_stemming = false;
+        if (prefix_tree) {
+          auto iter = prefix_tree->GetWordIterator(word);
+          skip_stemming = !iter.Done() && iter.GetWord() == word;
         }
-        // Mark this word as stemmed to avoid redundant stemming calls
-        stemmed_words.insert(word);
+        
+        if (!skip_stemming) {
+          std::string stemmed_word = StemWord(word, stemmer, min_stem_size);
+          if (word != stemmed_word) {
+            CHECK(stem_mappings) << "stem_mappings must not be null";
+            (*stem_mappings)[stemmed_word].insert(word);
+          }
+        }
       }
       tokens.push_back(std::move(word));
     }

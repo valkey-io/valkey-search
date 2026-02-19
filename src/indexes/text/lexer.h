@@ -37,6 +37,8 @@ struct sb_stemmer;
 
 namespace valkey_search::indexes::text {
 
+class Rax;  // Forward declaration
+
 struct Lexer {
   Lexer(data_model::Language language, const std::string& punctuation,
         const std::vector<std::string>& stop_words);
@@ -45,7 +47,8 @@ struct Lexer {
   absl::StatusOr<std::vector<std::string>> Tokenize(
       absl::string_view text, bool stemming_enabled, uint32_t min_stem_size,
       absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>*
-          stem_mappings = nullptr) const;
+          stem_mappings = nullptr,
+      const Rax* prefix_tree = nullptr) const;
 
   std::string StemWord(const std::string& word, sb_stemmer* stemmer,
                        uint32_t min_stem_size = 0) const;

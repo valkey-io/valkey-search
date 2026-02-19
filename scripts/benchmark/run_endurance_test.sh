@@ -154,6 +154,10 @@ setup_test_environment() {
     export TEST_TMPDIR="$(realpath "${TEST_TMPDIR}")"
     export TEST_UNDECLARED_OUTPUTS_DIR="$(realpath "${TEST_UNDECLARED_OUTPUTS_DIR}")"
     
+    # VALKEY_JSON_PATH is optional - set to empty string if not provided
+    # This prevents KeyError in tests that check for this environment variable
+    export VALKEY_JSON_PATH="${VALKEY_JSON_PATH:-}"
+    
     echo "Environment configured:"
     echo "  VALKEY_SERVER_PATH=${VALKEY_SERVER_PATH}"
     echo "  VALKEY_CLI_PATH=${VALKEY_CLI_PATH}"
@@ -161,6 +165,7 @@ setup_test_environment() {
     echo "  MEMTIER_PATH=${MEMTIER_PATH}"
     echo "  TEST_TMPDIR=${TEST_TMPDIR}"
     echo "  TEST_UNDECLARED_OUTPUTS_DIR=${TEST_UNDECLARED_OUTPUTS_DIR}"
+    echo "  VALKEY_JSON_PATH=${VALKEY_JSON_PATH}"
 }
 
 # ============================================================================

@@ -2,6 +2,10 @@
 Endurance test for repeated save/restore cycles at maximum memory.
 This test loads data until OOM, saves RDB, restores, and repeats
 to detect ephemeral memory spikes during restore operations.
+
+IMPORTANT: This test includes swap guardrails to ensure the system
+never swaps to disk during testing, as swapping would invalidate
+performance and memory measurements.
 """
 
 import os
@@ -26,6 +30,11 @@ class TestEnduranceSaveRestore(ValkeySearchTestCaseBase):
     4. Restarts and restores from RDB
     5. Verifies data integrity and functionality
     6. Repeats for multiple cycles to detect memory issues
+    
+    SWAP GUARDRAILS:
+    - Monitors system swap usage throughout the test
+    - Fails immediately if any swap activity is detected
+    - Checks swap before and after critical operations
     """
     
     # Configuration
@@ -34,14 +43,130 @@ class TestEnduranceSaveRestore(ValkeySearchTestCaseBase):
     DOC_CONTENT_SIZE = 1000
     NUM_CYCLES = 1  # Number of save/restore cycles to perform per index type
     
+    # Swap monitoring state
+    _initial_swap_used = None
+    _swap_total = None
+    _swap_check_enabled = True
+    
     def append_startup_args(self, args):
         """Add maxmemory configuration to server startup"""
         args["maxmemory"] = str(self.MAXMEMORY_THRESHOLD)
         args["maxmemory-policy"] = "noeviction"
         return args
     
+    def _get_swap_info(self) -> dict:
+        """
+        Get current swap usage from /proc/meminfo.
+        
+        Returns dict with:
+        - swap_total: Total swap space in bytes
+        - swap_free: Free swap space in bytes  
+        - swap_used: Used swap space in bytes (calculated as total - free)
+        - swap_cached: Cached swap in bytes
+        """
+        swap_info = {
+            'swap_total': 0,
+            'swap_free': 0,
+            'swap_used': 0,
+            'swap_cached': 0
+        }
+        
+        try:
+            with open('/proc/meminfo', 'r') as f:
+                for line in f:
+                    if line.startswith('SwapTotal:'):
+                        # Format: "SwapTotal:       12345 kB"
+                        swap_info['swap_total'] = int(line.split()[1]) * 1024  # Convert KB to bytes
+                    elif line.startswith('SwapFree:'):
+                        swap_info['swap_free'] = int(line.split()[1]) * 1024
+                    elif line.startswith('SwapCached:'):
+                        swap_info['swap_cached'] = int(line.split()[1]) * 1024
+            
+            # Calculate used swap
+            swap_info['swap_used'] = swap_info['swap_total'] - swap_info['swap_free']
+            
+        except FileNotFoundError:
+            logging.warning("/proc/meminfo not found - swap monitoring disabled (non-Linux system?)")
+            self._swap_check_enabled = False
+        except Exception as e:
+            logging.warning(f"Error reading swap info: {e} - swap monitoring disabled")
+            self._swap_check_enabled = False
+        
+        return swap_info
+    
+    def _check_swap_usage(self, context: str = ""):
+        """
+        Check if system is using swap and fail test if swap usage has increased.
+        
+        Args:
+            context: Description of when this check is happening (for error messages)
+        
+        Raises:
+            AssertionError: If swap usage has increased since test start
+        """
+        if not self._swap_check_enabled:
+            return
+        
+        swap_info = self._get_swap_info()
+        swap_used = swap_info['swap_used']
+        swap_total = swap_info['swap_total']
+        
+        # Initialize baseline on first check
+        if self._initial_swap_used is None:
+            self._initial_swap_used = swap_used
+            self._swap_total = swap_total
+            
+            if swap_total == 0:
+                logging.info("✓ No swap configured on system - test will proceed safely without swap risk")
+                print("\n✓ No swap configured on system - ideal for this test")
+            elif swap_used > 0:
+                logging.warning(
+                    f"SWAP BASELINE: System already using {swap_used:,} bytes of swap "
+                    f"({swap_used / swap_total * 100:.2f}% of {swap_total:,} bytes total)"
+                )
+                print(
+                    f"\n⚠️  WARNING: System already using {swap_used:,} bytes of swap "
+                    f"({swap_used / swap_total * 100:.2f}%)"
+                )
+            else:
+                logging.info(f"SWAP BASELINE: No swap in use (total available: {swap_total:,} bytes)")
+                print(f"\n✓ Swap available but not in use: {swap_total:,} bytes total")
+            return
+        
+        # Check if swap usage has increased
+        swap_increase = swap_used - self._initial_swap_used
+        
+        if swap_increase > 0:
+            error_msg = (
+                f"\n{'='*60}\n"
+                f"❌ SWAP DETECTED - TEST FAILED\n"
+                f"{'='*60}\n"
+                f"Context: {context}\n"
+                f"Initial swap used: {self._initial_swap_used:,} bytes\n"
+                f"Current swap used: {swap_used:,} bytes\n"
+                f"Swap increase: {swap_increase:,} bytes\n"
+                f"Swap cached: {swap_info['swap_cached']:,} bytes\n"
+                f"Total swap: {swap_total:,} bytes\n"
+                f"{'='*60}\n"
+                f"\nThe test must not cause any swapping to disk as this invalidates\n"
+                f"memory measurements and indicates the system is under excessive\n"
+                f"memory pressure. Consider reducing MAXMEMORY_THRESHOLD or running\n"
+                f"on a system with more RAM.\n"
+                f"{'='*60}"
+            )
+            logging.error(error_msg)
+            print(error_msg)
+            assert False, f"Swap usage increased by {swap_increase:,} bytes during: {context}"
+        
+        # Log successful check for debugging
+        if context and swap_total > 0:
+            logging.debug(
+                f"Swap check PASSED at {context}: "
+                f"{swap_used:,}/{swap_total:,} bytes used (no increase)"
+            )
+    
     def _print_memory_info(self, client: Valkey, label: str) -> dict:
-        """Print memory info and return the info dict"""
+        """Print memory info and return the info dict. Also checks swap usage."""
         info = client.info("memory")
         print(f"\n{'='*60}")
         print(f"INFO MEMORY - {label}")
@@ -58,7 +183,24 @@ class TestEnduranceSaveRestore(ValkeySearchTestCaseBase):
         
         for key in keys:
             print(f"  {key}: {info.get(key, 'N/A')}")
+        
+        # Always show system swap info to make monitoring visible
+        if self._swap_check_enabled and self._swap_total is not None:
+            swap_info = self._get_swap_info()
+            print(f"  system_swap_used: {swap_info['swap_used']:,} bytes")
+            print(f"  system_swap_total: {swap_info['swap_total']:,} bytes")
+            if swap_info['swap_total'] == 0:
+                print(f"  swap_status: ✓ No swap (ideal)")
+            elif swap_info['swap_used'] == 0:
+                print(f"  swap_status: ✓ No swap in use")
+            else:
+                pct = (swap_info['swap_used'] / swap_info['swap_total'] * 100)
+                print(f"  swap_status: ⚠️  {pct:.1f}% in use")
+        
         print('='*60 + '\n')
+        
+        # Check for swap usage increase
+        self._check_swap_usage(label)
         
         return info
     
@@ -74,7 +216,12 @@ class TestEnduranceSaveRestore(ValkeySearchTestCaseBase):
         logging.info(f"Starting data load (maxmemory: {self.MAXMEMORY_THRESHOLD:,}, batch: {self.BATCH_SIZE})")
         print(f"\nLoading data (maxmemory: {self.MAXMEMORY_THRESHOLD:,}, batch: {self.BATCH_SIZE})")
         
+        # Check swap before starting load
+        self._check_swap_usage("before data load")
+        
         start_time = time.time()
+        last_swap_check = time.time()
+        
         while True:
             try:
                 pipe = client.pipeline(transaction=False)
@@ -97,12 +244,20 @@ class TestEnduranceSaveRestore(ValkeySearchTestCaseBase):
                     print(f"  {doc_id} docs, {used:,} / {max_mem:,} bytes ({rate:.0f} docs/sec)")
                     logging.info(f"Loaded {doc_id} documents ({rate:.0f} docs/sec)")
                     
+                    # Check swap every 10 seconds during load
+                    if time.time() - last_swap_check >= 10:
+                        self._check_swap_usage(f"during data load ({doc_id} docs)")
+                        last_swap_check = time.time()
+                    
             except (OutOfMemoryError, ResponseError) as e:
                 error_str = str(e).upper()
                 if "OOM" in error_str or isinstance(e, OutOfMemoryError):
                     elapsed = time.time() - start_time
                     print(f"\n*** OOM after {doc_id} documents: {e}")
                     logging.info(f"OOM reached after {doc_id} documents in {elapsed:.2f}s")
+                    
+                    # Final swap check after OOM
+                    self._check_swap_usage(f"after OOM ({doc_id} docs)")
                     break
                 raise
         
@@ -268,6 +423,9 @@ class TestEnduranceSaveRestore(ValkeySearchTestCaseBase):
             # Step 4: Save RDB
             print("\nSAVE...")
             logging.info("Executing SAVE command...")
+            self._check_swap_usage(f"CYCLE {cycle + 1} - before SAVE")
+            print("  ✓ Swap check passed")
+            
             try:
                 client.execute_command("SAVE")
                 print("  SAVE completed successfully")
@@ -308,7 +466,19 @@ class TestEnduranceSaveRestore(ValkeySearchTestCaseBase):
             # Wait for re-indexing to complete after restore
             print("Waiting for re-indexing to complete after restore...")
             logging.info("Waiting for re-indexing to complete...")
-            IndexingTestHelper.wait_for_backfill_complete_on_node(client, index_name)
+            
+            # Check swap periodically during re-indexing
+            start_reindex = time.time()
+            check_interval = 0
+            while not IndexingTestHelper.is_backfill_complete_on_node(client, index_name):
+                time.sleep(2)
+                check_interval += 2
+                # Check swap every 10 seconds during re-indexing
+                if check_interval >= 10:
+                    self._check_swap_usage(f"CYCLE {cycle + 1} - during re-indexing after restore")
+                    print("  ✓ Swap check passed during re-indexing")
+                    check_interval = 0
+            
             logging.info("Re-indexing completed")
             
             mem_after_restore = self._print_memory_info(client, f"CYCLE {cycle + 1} - AFTER RESTORE")

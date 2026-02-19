@@ -121,12 +121,6 @@ def do_rdb_load_without_module_test_cmd(test_case):
 
     # Phase 2: Start a new server WITHOUT valkey-search module
     port = test_case.get_bind_port()
-    process, new_client, logfile = _start_server_without_module(
-        test_case, port, testdir, dbfilename
-    )
-
-    # Phase 2: Start a new server WITHOUT valkey-search module
-    port = test_case.get_bind_port()
     new_server, new_client, logfile = _start_server_without_module(
         test_case, port, testdir, dbfilename
     )

@@ -140,8 +140,7 @@ class PositionIterator {
   size_t header_size_;              // Size of variable-length header
   uint64_t current_field_mask_;     // Bit mask of fields at current position
 
-  // Private static helper functions for decoding and navigation
-  static uint32_t ReadVarUint(const char* ptr, uint8_t num_bytes);
+  // Private static helper function for navigation
   static uint32_t FindPartitionForTarget(const char* partition_map,
                                          uint32_t num_partitions,
                                          Position target);

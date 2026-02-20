@@ -276,7 +276,8 @@ class IndexSchema : public KeyspaceEventSubscription,
   MutationSequenceNumber GetIndexMutationSequenceNumber(const Key &key) const {
     absl::MutexLock lock(&mutated_records_mutex_);
     auto itr = index_key_info_.find(key);
-    CHECK(itr != index_key_info_.end()) << "Key not found: " << key->Str();
+    CHECK(itr != index_key_info_.end())
+        << "Key not found: " << vmsdk::config::RedactIfNeeded(key->Str());
     return itr->second.mutation_sequence_number_;
   }
 

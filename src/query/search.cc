@@ -780,8 +780,7 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
   }
 
   VMSDK_ASSIGN_OR_RETURN(
-      auto result,
-      MaybeAddIndexedContent(std::move(neighbors), parameters));
+      auto result, MaybeAddIndexedContent(std::move(neighbors), parameters));
   size_t total_count = result.size();
   parameters.search_result =
       SearchResult(total_count, std::move(result), parameters);

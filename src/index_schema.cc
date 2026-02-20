@@ -622,7 +622,15 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
     // If all attributes are deletes, we can remove the key from the tracked
     // mutation records.
     absl::MutexLock lock(&mutated_records_mutex_);
-    index_key_info_.erase(key);
+    VMSDK_LOG(NOTICE, ctx)
+        << "[index_key_info_ ERASE] Key: " << key->Str()
+        << ", index_key_info_ size before: " << index_key_info_.size()
+        << ", all_deletes=true";
+    auto erase_count = index_key_info_.erase(key);
+    VMSDK_LOG(NOTICE, ctx)
+        << "[index_key_info_ ERASE COMPLETE] Key: " << key->Str()
+        << ", erased=" << erase_count
+        << ", index_key_info_ size after: " << index_key_info_.size();
   }
   if (text_index_schema_) {
     // Text index structures operate at the schema-level so we commit the
@@ -1843,8 +1851,15 @@ IndexSchema::ConsumeTrackedMutatedAttribute(const Key &key, bool first_time) {
       tracked_mutated_records_.erase(itr);
       // Will notify after releasing lock
     } else {
+      VMSDK_LOG(NOTICE, nullptr)
+          << "[index_key_info_ INSERT/UPDATE] Key: " << key->Str()
+          << ", sequence_number: " << itr->second.sequence_number
+          << ", index_key_info_ size before: " << index_key_info_.size();
       index_key_info_[key].mutation_sequence_number_ =
           itr->second.sequence_number;
+      VMSDK_LOG(NOTICE, nullptr)
+          << "[index_key_info_ INSERT/UPDATE COMPLETE] Key: " << key->Str()
+          << ", index_key_info_ size after: " << index_key_info_.size();
       // Track entry is now first consumed
       auto mutated_attributes = std::move(itr->second.attributes.value());
       itr->second.attributes = std::nullopt;

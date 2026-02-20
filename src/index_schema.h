@@ -36,10 +36,10 @@
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/command_parser.h"
+#include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/thread_pool.h"
-#include "vmsdk/src/log.h"
 #include "vmsdk/src/time_sliced_mrmw_mutex.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -275,16 +275,7 @@ class IndexSchema : public KeyspaceEventSubscription,
 
   MutationSequenceNumber GetIndexMutationSequenceNumber(const Key &key) const {
     absl::MutexLock lock(&mutated_records_mutex_);
-    VMSDK_LOG(NOTICE, nullptr)
-        << "[index_key_info_ LOOKUP] Key: " << key->Str()
-        << ", index_key_info_ size: " << index_key_info_.size();
     auto itr = index_key_info_.find(key);
-    if (itr == index_key_info_.end()) {
-      VMSDK_LOG(NOTICE, nullptr)
-          << "[index_key_info_ LOOKUP FAILED] Key: " << key->Str()
-          << " NOT FOUND in index_key_info_ (size=" << index_key_info_.size()
-          << ")";
-    }
     CHECK(itr != index_key_info_.end()) << "Key not found: " << key->Str();
     return itr->second.mutation_sequence_number_;
   }
@@ -312,15 +303,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   void SetIndexMutationSequenceNumber(const Key &key,
                                       MutationSequenceNumber sequence_number) {
     absl::MutexLock lock(&mutated_records_mutex_);
-    VMSDK_LOG(NOTICE, nullptr)
-        << "[index_key_info_ INSERT/UPDATE - TEST ONLY] Key: " << key->Str()
-        << ", sequence_number: " << sequence_number
-        << ", index_key_info_ size before: " << index_key_info_.size();
     index_key_info_[key].mutation_sequence_number_ = sequence_number;
-    VMSDK_LOG(NOTICE, nullptr)
-        << "[index_key_info_ INSERT/UPDATE - TEST ONLY COMPLETE] Key: "
-        << key->Str()
-        << ", index_key_info_ size after: " << index_key_info_.size();
   }
 
   /**

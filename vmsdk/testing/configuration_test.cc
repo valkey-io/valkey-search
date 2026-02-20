@@ -62,7 +62,7 @@ TEST_F(ConfigTest, registration) {
 
   // Expect hide-user-data-from-log to be registered (it's auto-registered by
   // the system)
-  EXPECT_CALL(*kMockValkeyModule,
+  EXPECT_CALL(*kMockRedisModule,
               RegisterBoolConfig(&fake_ctx, StrEq("hide-user-data-from-log"),
                                  Eq(1), _, _, _, _, _))
       .Times(testing::AtLeast(1));

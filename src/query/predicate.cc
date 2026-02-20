@@ -403,11 +403,16 @@ void ComposedPredicate::AddChild(std::unique_ptr<Predicate> child) {
 }
 // Helper to evaluate text predicates with conditional position requirements
 EvaluationResult EvaluatePredicate(const Predicate *predicate,
-                                   Evaluator &evaluator,
-                                   bool require_positions) {
+                                   Evaluator &evaluator, bool require_positions,
+                                   bool from_or = false) {
   if (predicate->GetType() == PredicateType::kText) {
     return evaluator.EvaluateText(
         *static_cast<const TextPredicate *>(predicate), require_positions);
+  }
+  if (predicate->GetType() == PredicateType::kComposedAnd) {
+    // Pass down the from_or flag to nested AND
+    return static_cast<const ComposedPredicate *>(predicate)
+        ->EvaluateWithContext(evaluator, from_or);
   }
   return predicate->Evaluate(evaluator);
 }
@@ -417,6 +422,11 @@ EvaluationResult EvaluatePredicate(const Predicate *predicate,
 // ProximityIterator to validate term positions meet distance and order
 // requirements.
 EvaluationResult ComposedPredicate::Evaluate(Evaluator &evaluator) const {
+  return EvaluateWithContext(evaluator, false);
+}
+
+EvaluationResult ComposedPredicate::EvaluateWithContext(Evaluator &evaluator,
+                                                        bool from_or) const {
   // Determine if children need to return positions for proximity checks.
   bool require_positions = slop_.has_value() || inorder_;
   // Handle AND logic
@@ -429,15 +439,19 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator &evaluator) const {
     for (const auto &child : children_) {
       // In AND: skip text children when in prefilter evaluation because text in
       // AND is fully (recursively) resolved in the entries fetcher layer
-      // already. UNLESS query contains negation.
+      // already. The only cases where this is not true are:
+      // 1) when an AND is under an OR which contains other non text children.
+      // This is not solved in entries fetcher yet.
+      // 2) when the query has negation on text. Currently, a universal set is
+      // used in the entries fetcher layer for text+negate queries.
       if (evaluator.IsPrefilterEvaluator() &&
-          child->GetType() == PredicateType::kText &&
+          child->GetType() == PredicateType::kText && !from_or &&
           !(evaluator.GetQueryOperations() &
             QueryOperations::kContainsNegate)) {
         continue;
       }
       EvaluationResult result =
-          EvaluatePredicate(child.get(), evaluator, require_positions);
+          EvaluatePredicate(child.get(), evaluator, require_positions, from_or);
       // Short-circuit on first false
       if (!result.matches) {
         return EvaluationResult(false);
@@ -487,7 +501,7 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator &evaluator) const {
                           indexes::text::kProximityTermsInlineCapacity>();
   for (const auto &child : children_) {
     EvaluationResult result =
-        EvaluatePredicate(child.get(), evaluator, require_positions);
+        EvaluatePredicate(child.get(), evaluator, require_positions, true);
     // Short-circuit if any matches and positions not required.
     if (result.matches && !require_positions) {
       return EvaluationResult(true);

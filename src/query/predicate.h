@@ -348,6 +348,8 @@ class ComposedPredicate : public Predicate {
                     bool inorder = false);
 
   EvaluationResult Evaluate(Evaluator& evaluator) const override;
+  EvaluationResult EvaluateWithContext(Evaluator& evaluator,
+                                       bool from_or) const;
   std::optional<uint32_t> GetSlop() const { return slop_; }
   bool GetInorder() const { return inorder_; }
 

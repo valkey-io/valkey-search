@@ -1,5 +1,4 @@
 import os
-import logging
 
 from valkey import Valkey
 from valkey_search_test_case import (
@@ -67,7 +66,7 @@ def do_rdb_load_without_module_test_cmd(test_case):
     assert new_client.ping()
 
     dbsize = new_client.dbsize()
-    logging.info(f"Database size after loading RDB without module: {dbsize}")
+    print(f"Database size after loading RDB without module: {dbsize}")
     assert dbsize == 10, f"Expected 10 keys, got {dbsize}"
 
     modules = new_client.execute_command("MODULE", "LIST")
@@ -76,7 +75,7 @@ def do_rdb_load_without_module_test_cmd(test_case):
     ]
     assert "search" not in module_names, "valkey-search should NOT be loaded"
 
-    logging.info("CMD: Server loaded RDB without module successfully, no crash.")
+    print("CMD: Server loaded RDB without module successfully, no crash.")
 
 def do_rdb_load_without_module_test_cme(test_case):
     """
@@ -122,7 +121,7 @@ def do_rdb_load_without_module_test_cme(test_case):
     assert new_client.ping()
 
     dbsize = new_client.dbsize()
-    logging.info(f"Node dbsize after loading RDB without module: {dbsize}")
+    print(f"Node dbsize after loading RDB without module: {dbsize}")
     assert dbsize > 0, "Expected keys in database"
 
     modules = new_client.execute_command("MODULE", "LIST")
@@ -131,7 +130,7 @@ def do_rdb_load_without_module_test_cme(test_case):
     ]
     assert "search" not in module_names
 
-    logging.info("CME: Node loaded RDB without module successfully, no crash.")
+    print("CME: Node loaded RDB without module successfully, no crash.")
 
 class TestRDBLoadWithoutModuleCMD(ValkeySearchTestCaseBase):
     """CMD mode: Verify server doesn't crash loading RDB from a module-enabled server."""

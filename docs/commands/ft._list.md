@@ -12,10 +12,8 @@ Example
 
 ```
 ft._list
-1) b
-2) a
-3) x
-4) index
-5) aa
-6) bb
+1) index
+2) products
+3) users
+4) transactions
 ```

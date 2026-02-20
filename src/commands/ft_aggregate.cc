@@ -376,12 +376,12 @@ absl::Status SendReplyInner(ValkeyModuleCtx *ctx,
   return absl::OkStatus();
 }
 
-// TODO: Implement the correct logic to detect if the FT.AGGREGATE query has a
-// clause (e.g. sorting) that requires all neighbors to be returned for the
-// correct search result.
+// SortBy and GroupBy stages need all results from shards.
+// Return true in these cases to indicate results must not be trimmed.
 bool AggregateParameters::RequiresCompleteResults() const {
   for (const auto &stage : stages_) {
-    if (dynamic_cast<const SortBy *>(stage.get()) != nullptr) {
+    if (dynamic_cast<const SortBy *>(stage.get()) != nullptr ||
+        dynamic_cast<const GroupBy *>(stage.get()) != nullptr) {
       return true;
     }
   }

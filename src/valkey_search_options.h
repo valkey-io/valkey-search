@@ -94,6 +94,9 @@ const config::Boolean& GetDrainMutationQueueOnSave();
 /// Return the configuration entry for draining mutation queue on load
 const config::Boolean& GetDrainMutationQueueOnLoad();
 
+/// Return the fanout data uniformity configuration (0-100)
+config::Number& GetFanoutDataUniformity();
+
 /// Return the configuration entry for RDB write v2
 const config::Boolean& GetRdbWriteV2();
 

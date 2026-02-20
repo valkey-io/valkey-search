@@ -370,6 +370,20 @@ constexpr absl::string_view kDrainMutationQueueOnSaveConfig{
 static auto drain_mutation_queue_on_save =
     config::BooleanBuilder(kDrainMutationQueueOnSaveConfig, false).Build();
 
+/// Register the "fanout-data-uniformity" flag
+/// U = uniformity (0-100): 100 = uniform distribution, 0 = all data in one
+/// shard Formula: limit_per_shard = (K/N) + ((100-U) * (K - K/N) / 100)
+constexpr absl::string_view kFanoutDataUniformityConfig{
+    "fanout-data-uniformity"};
+constexpr uint32_t kDefaultFanoutDataUniformity{100};
+constexpr uint32_t kMinimumFanoutDataUniformity{0};
+constexpr uint32_t kMaximumFanoutDataUniformity{100};
+static auto fanout_data_uniformity =
+    config::NumberBuilder(
+        kFanoutDataUniformityConfig, kDefaultFanoutDataUniformity,
+        kMinimumFanoutDataUniformity, kMaximumFanoutDataUniformity)
+        .Build();
+
 /// Register the "--async-fanout-threshold" flag. Controls the threshold
 /// for async fanout operations (minimum number of targets to use async)
 constexpr absl::string_view kAsyncFanoutThresholdConfig{
@@ -479,6 +493,10 @@ const vmsdk::config::Boolean& GetDrainMutationQueueOnSave() {
 const vmsdk::config::Boolean& GetDrainMutationQueueOnLoad() {
   return dynamic_cast<const vmsdk::config::Boolean&>(
       *drain_mutation_queue_on_load);
+}
+
+vmsdk::config::Number& GetFanoutDataUniformity() {
+  return dynamic_cast<vmsdk::config::Number&>(*fanout_data_uniformity);
 }
 
 vmsdk::config::Number& GetAsyncFanoutThreshold() {

@@ -771,11 +771,7 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
     neighbors = DoSearch(parameters, search_mode, lock);
     // Populate sequence numbers within the reader lock
     if (neighbors.ok()) {
-      for (auto &n : *neighbors) {
-        n.sequence_number =
-            parameters.index_schema->GetIndexMutationSequenceNumber(
-                n.external_id);
-      }
+      parameters.index_schema->PopulateIndexMutationSequenceNumbers(*neighbors);
     }
   }
 

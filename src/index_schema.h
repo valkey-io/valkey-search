@@ -273,12 +273,16 @@ class IndexSchema : public KeyspaceEventSubscription,
     }
   };
 
-  MutationSequenceNumber GetIndexMutationSequenceNumber(const Key &key) const {
+  void PopulateIndexMutationSequenceNumbers(
+      std::vector<indexes::Neighbor> &neighbors) const {
     absl::MutexLock lock(&mutated_records_mutex_);
-    auto itr = index_key_info_.find(key);
-    CHECK(itr != index_key_info_.end())
-        << "Key not found: " << vmsdk::config::RedactIfNeeded(key->Str());
-    return itr->second.mutation_sequence_number_;
+    for (auto &n : neighbors) {
+      auto itr = index_key_info_.find(n.external_id);
+      CHECK(itr != index_key_info_.end())
+          << "Key not found: "
+          << vmsdk::config::RedactIfNeeded(n.external_id->Str());
+      n.sequence_number = itr->second.mutation_sequence_number_;
+    }
   }
 
   MutationSequenceNumber GetDbMutationSequenceNumber(const Key &key) const {

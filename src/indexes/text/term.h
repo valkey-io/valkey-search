@@ -94,9 +94,11 @@ class TermIterator : public TextIterator {
                       std::vector<std::pair<uint32_t, size_t>>, std::greater<>>
       pos_heap_;
   // Indices of iterators at current_key_ (active, not in key_set_)
-  std::vector<size_t> current_key_indices_;
+  absl::InlinedVector<size_t, kWordExpansionInlineCapacity>
+      current_key_indices_;
   // Indices of iterators at current_position_ (active, not in pos_heap_)
-  std::vector<size_t> current_pos_indices_;
+  absl::InlinedVector<size_t, kWordExpansionInlineCapacity>
+      current_pos_indices_;
 
   bool FindMinimumValidKey();
   void InsertValidKeyIterator(

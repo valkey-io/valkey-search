@@ -116,22 +116,19 @@ bool TermIterator::SeekForwardKey(const InternedStringPtr& target_key) {
     return true;
   }
   // Seek iterators in key_set_ with keys < target_key
-  absl::InlinedVector<size_t, 8> to_seek;
-  for (auto it = key_set_.begin();
-       it != key_set_.end() && it->first < target_key;) {
-    to_seek.push_back(it->second);
-    it = key_set_.erase(it);
+  while (!key_set_.empty() && key_set_.begin()->first < target_key) {
+    size_t idx = key_set_.begin()->second;
+    key_set_.erase(key_set_.begin());
+    key_iterators_[idx].SkipForwardKey(target_key);
+    InsertValidKeyIterator(idx, target_key);
   }
   // Also seek iterators at current_key_ if current_key_ < target_key
   if (current_key_ && current_key_ < target_key) {
     for (size_t idx : current_key_indices_) {
-      to_seek.push_back(idx);
+      key_iterators_[idx].SkipForwardKey(target_key);
+      InsertValidKeyIterator(idx, target_key);
     }
     current_key_indices_.clear();
-  }
-  for (size_t idx : to_seek) {
-    key_iterators_[idx].SkipForwardKey(target_key);
-    InsertValidKeyIterator(idx, target_key);
   }
   return FindMinimumValidKey();
 }

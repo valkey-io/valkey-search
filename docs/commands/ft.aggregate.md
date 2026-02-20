@@ -73,18 +73,11 @@ If the MAX clause is present, then the output is trimmed after the first N recor
 The `GROUPBY` stage organizes the input records into buckets based on the values of the specified fields.
 For each unique combination of values a separate bucket is created to hold all records that have that combination of values.
 
-Each bucket of records is processed into a single output record, discarding the bucket contents. That output record has two sections. The first section has one value for each of the specified groupby fields. This section provides the values that formed (named) this unique bucket.
-
-The second section is the output of the reducers for that bucket. Reducers provide an efficient mechanism for reducing (summarizing) the contents of a bucket. Each reducer function processes each record of the bucket and generates a single output value which is inserted into the second section of groupby output record for this bucket.
-
-The `GROUPBY` stage organizes the input records into buckets based on the values of the specified fields.
-For each unique combination of values a separate bucket is created to hold all records that have that combination of values.
-
 Each bucket of records is processed into a single output record, discarding the bucket contents. That output record has two sections. The first section has one value for each of the specified `GROUPBY` fields. This section provides the values that formed (named) this unique bucket.
 
 The second section is the output of the reducers for that bucket. Reducers provide an efficient mechanism for reducing (summarizing) the contents of a bucket. Each reducer function processes each record of the bucket and generates a single output value which is inserted into the second section of `GROUPBY` output record for this bucket.
 
-The output of the `GROUPBY` stage is one record for each unique bucket.
+The output of the `GROUPBY`stage is one record for each unique bucket.
 
 ### Reducers
 

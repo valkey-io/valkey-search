@@ -8,6 +8,9 @@
 #ifndef _VALKEY_SEARCH_INDEXES_TEXT_TERM_H_
 #define _VALKEY_SEARCH_INDEXES_TEXT_TERM_H_
 
+#include <queue>
+#include <set>
+
 #include "absl/container/inlined_vector.h"
 #include "src/indexes/text.h"
 #include "src/indexes/text/flat_position_map.h"
@@ -82,8 +85,18 @@ class TermIterator : public TextIterator {
   std::optional<PositionRange> current_position_;
   FieldMaskPredicate current_field_mask_;
   const bool require_positions_;
-  const bool has_original_;  // True if first iterator is for original word
+  const bool has_original_;
+
+  std::multiset<std::pair<Key, size_t>> key_set_;
+  std::priority_queue<std::pair<uint32_t, size_t>,
+                      std::vector<std::pair<uint32_t, size_t>>, std::greater<>>
+      pos_heap_;
+  std::vector<size_t> current_key_indices_;
+  std::vector<size_t> current_pos_indices_;
+
   bool FindMinimumValidKey();
+  void InsertValidKeyIterator(size_t idx);
+  void InsertValidPositionIterator(size_t idx);
 };
 
 }  // namespace valkey_search::indexes::text

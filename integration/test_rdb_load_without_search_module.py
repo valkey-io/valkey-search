@@ -1,25 +1,13 @@
 import os
-import time
-import subprocess
-import shutil
 import logging
 
-import pytest
 from valkey import Valkey
 from valkey_search_test_case import (
     ValkeySearchTestCaseBase,
     ValkeySearchClusterTestCase,
-    Node,
-    ReplicationGroup,
-    LOGS_DIR,
 )
 from valkeytestframework.conftest import resource_port_tracker
-from valkeytestframework.valkey_test_case import (
-    ValkeyServerHandle,
-    verify_any_of_strings_in_file,
-    TEST_MAX_WAIT_TIME_SECONDS,
-)
-from indexes import Index, Numeric, Tag, Vector
+from indexes import Index, Numeric, Tag
 
 index = Index(
     "test_rdb_no_module_idx",
@@ -30,68 +18,20 @@ def _start_server_without_module(test_case, port, testdir, dbfilename):
     """Start a valkey server WITHOUT the valkey-search module, loading an existing RDB."""
     server_path = os.getenv("VALKEY_SERVER_PATH")
 
-    os.makedirs(testdir, exist_ok=True)
-
-    lines = [
-        "enable-debug-command yes",
-        f"dir {testdir}",
-        f"dbfilename {dbfilename}",
-        f"port {port}",
-        f"logfile logfile_{port}",
-    ]
-
-    # Only load JSON module if available, but NOT valkey-search
-    json_module = os.getenv("JSON_MODULE_PATH")
-    if json_module:
-        lines.append(f"loadmodule {json_module}")
-
-    conf_file = os.path.join(testdir, f"valkey_no_module_{port}.conf")
-    with open(conf_file, "w") as f:
-        for line in lines:
-            f.write(f"{line}\n")
-
-    process = subprocess.Popen(
-        [server_path, conf_file],
-        cwd=testdir,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+    # Use create_server from valkeytestframework, customize args to exclude module
+    server, client = test_case.create_server(
+        testdir=testdir,
+        port=port,
+        server_path=server_path,
+        args={
+            "enable-debug-command": "yes",
+            "appendonly": "no",
+            "dir": testdir,
+            "dbfilename": dbfilename,
+        }
     )
-
-    # Wait for server to be ready
-    logfile = os.path.join(testdir, f"logfile_{port}")
-    deadline = time.time() + TEST_MAX_WAIT_TIME_SECONDS
-    while time.time() < deadline:
-        if verify_any_of_strings_in_file(["Ready to accept connections"], logfile):
-            break
-        if process.poll() is not None:
-            # Server exited prematurely
-            if os.path.exists(logfile):
-                with open(logfile, "r") as lf:
-                    logging.error(f"Server log:\n{lf.read()}")
-            pytest.fail("Server without module exited prematurely during startup")
-        time.sleep(0.2)
-    else:
-        process.kill()
-        pytest.fail("Server without module did not start in time")
-
-    client = Valkey(host="localhost", port=port, socket_connect_timeout=5)
-    client.ping()
-
-    # Reuse the same ServerHandle pattern from test_skip_index_load.py
-    class ServerHandle:
-        def __init__(self, process, port):
-            self.process = process
-            self.port = port
-
-        def is_alive(self):
-            return self.process.poll() is None
-
-        def exit(self):
-            if self.process.poll() is None:
-                self.process.terminate()
-                self.process.wait(timeout=5)
-
-    return ServerHandle(process, port), client, logfile
+    logfile = os.path.join(server.cwd, server.args["logfile"])
+    return server, client, logfile
 
 def do_rdb_load_without_module_test_cmd(test_case):
     """
@@ -116,7 +56,6 @@ def do_rdb_load_without_module_test_cmd(test_case):
     assert os.path.exists(rdb_path), f"RDB file not found at {rdb_path}"
 
     # Stop the server (keep the RDB)
-    os.environ["SKIPLOGCLEAN"] = "1"
     server.exit(cleanup=False)
 
     # Phase 2: Start a new server WITHOUT valkey-search module
@@ -125,22 +64,19 @@ def do_rdb_load_without_module_test_cmd(test_case):
         test_case, port, testdir, dbfilename
     )
 
-    try:
-        assert new_client.ping()
+    assert new_client.ping()
 
-        dbsize = new_client.dbsize()
-        logging.info(f"Database size after loading RDB without module: {dbsize}")
-        assert dbsize == 10, f"Expected 10 keys, got {dbsize}"
+    dbsize = new_client.dbsize()
+    logging.info(f"Database size after loading RDB without module: {dbsize}")
+    assert dbsize == 10, f"Expected 10 keys, got {dbsize}"
 
-        modules = new_client.execute_command("MODULE", "LIST")
-        module_names = [
-            m[1].decode() if isinstance(m[1], bytes) else m[1] for m in modules
-        ]
-        assert "search" not in module_names, "valkey-search should NOT be loaded"
+    modules = new_client.execute_command("MODULE", "LIST")
+    module_names = [
+        m[1].decode() if isinstance(m[1], bytes) else m[1] for m in modules
+    ]
+    assert "search" not in module_names, "valkey-search should NOT be loaded"
 
-        logging.info("CMD: Server loaded RDB without module successfully, no crash.")
-    finally:
-        new_server.exit()
+    logging.info("CMD: Server loaded RDB without module successfully, no crash.")
 
 def do_rdb_load_without_module_test_cme(test_case):
     """
@@ -175,7 +111,6 @@ def do_rdb_load_without_module_test_cme(test_case):
     assert os.path.exists(rdb_path), f"RDB file not found at {rdb_path}"
 
     # Stop first primary, keep RDB
-    os.environ["SKIPLOGCLEAN"] = "1"
     primary0.server.exit(cleanup=False)
 
     # Phase 2: Start first node WITHOUT valkey-search module
@@ -184,22 +119,19 @@ def do_rdb_load_without_module_test_cme(test_case):
         test_case, port, testdir, dbfilename
     )
 
-    try:
-        assert new_client.ping()
+    assert new_client.ping()
 
-        dbsize = new_client.dbsize()
-        logging.info(f"Node dbsize after loading RDB without module: {dbsize}")
-        assert dbsize > 0, "Expected keys in database"
+    dbsize = new_client.dbsize()
+    logging.info(f"Node dbsize after loading RDB without module: {dbsize}")
+    assert dbsize > 0, "Expected keys in database"
 
-        modules = new_client.execute_command("MODULE", "LIST")
-        module_names = [
-            m[1].decode() if isinstance(m[1], bytes) else m[1] for m in modules
-        ]
-        assert "search" not in module_names
+    modules = new_client.execute_command("MODULE", "LIST")
+    module_names = [
+        m[1].decode() if isinstance(m[1], bytes) else m[1] for m in modules
+    ]
+    assert "search" not in module_names
 
-        logging.info("CME: Node loaded RDB without module successfully, no crash.")
-    finally:
-        new_server.exit()
+    logging.info("CME: Node loaded RDB without module successfully, no crash.")
 
 class TestRDBLoadWithoutModuleCMD(ValkeySearchTestCaseBase):
     """CMD mode: Verify server doesn't crash loading RDB from a module-enabled server."""

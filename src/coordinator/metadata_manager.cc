@@ -621,6 +621,8 @@ bool DoesGlobalMetadataContainEntry(const GlobalMetadata &metadata) {
     return false;
   }
   for (const auto &[type_name, inner_map] : metadata.type_namespace_map()) {
+    // The id is not deleted when index is dropped, need to check if content is
+    // empty
     for (const auto &[id, entry] : inner_map.entries()) {
       if (entry.has_content()) {
         return true;

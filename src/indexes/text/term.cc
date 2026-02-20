@@ -44,12 +44,14 @@ const InternedStringPtr& TermIterator::CurrentKey() const {
 }
 
 // Helper function to insert a key iterator into the heap if it is valid
-void TermIterator::InsertValidKeyIterator(size_t idx) {
+void TermIterator::InsertValidKeyIterator(
+    size_t idx, std::optional<InternedStringPtr> min_key) {
   auto& key_iter = key_iterators_[idx];
   const auto field_mask = ((idx == 0 && has_original_) || stem_field_mask_ == 0)
                               ? query_field_mask_
                               : stem_field_mask_;
-  while (key_iter.IsValid() && !key_iter.ContainsFields(field_mask)) {
+  while (key_iter.IsValid() && (!key_iter.ContainsFields(field_mask) ||
+                                (min_key && key_iter.GetKey() < *min_key))) {
     key_iter.NextKey();
   }
   if (key_iter.IsValid()) {
@@ -109,28 +111,28 @@ bool TermIterator::NextKey() {
   return FindMinimumValidKey();
 }
 
-// This code is questionable.
 bool TermIterator::SeekForwardKey(const InternedStringPtr& target_key) {
   if (current_key_ && current_key_ >= target_key) {
     return true;
   }
-
-  auto it = key_set_.lower_bound(std::make_pair(target_key, 0));
-  for (auto iter = key_set_.begin(); iter != it;) {
-    size_t idx = iter->second;
-    iter = key_set_.erase(iter);
-    key_iterators_[idx].SkipForwardKey(target_key);
-    InsertValidKeyIterator(idx);
+  // Seek iterators in key_set_ with keys < target_key
+  absl::InlinedVector<size_t, 8> to_seek;
+  for (auto it = key_set_.begin();
+       it != key_set_.end() && it->first < target_key;) {
+    to_seek.push_back(it->second);
+    it = key_set_.erase(it);
   }
-
-  for (size_t i = 0; i < key_iterators_.size(); ++i) {
-    if (key_iterators_[i].IsValid() &&
-        key_iterators_[i].GetKey() < target_key) {
-      key_iterators_[i].SkipForwardKey(target_key);
-      InsertValidKeyIterator(i);
+  // Also seek iterators at current_key_ if current_key_ < target_key
+  if (current_key_ && current_key_ < target_key) {
+    for (size_t idx : current_key_indices_) {
+      to_seek.push_back(idx);
     }
+    current_key_indices_.clear();
   }
-
+  for (size_t idx : to_seek) {
+    key_iterators_[idx].SkipForwardKey(target_key);
+    InsertValidKeyIterator(idx, target_key);
+  }
   return FindMinimumValidKey();
 }
 

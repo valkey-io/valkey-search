@@ -36,6 +36,7 @@
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/command_parser.h"
+#include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/thread_pool.h"

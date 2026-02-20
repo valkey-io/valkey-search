@@ -73,9 +73,13 @@ absl::StatusOr<double> ThreadPool::GetAvgCPUPercentage() {
     if (!err.ok()) {
       return;
     }
-    auto status = thread->thread_monitor_->GetThreadCPUPercentage();
+    auto status = thread->GetThreadCPUPercentage();
     if (!status.ok()) {
-      err = status.status();
+      if (!absl::IsUnavailable(status.status())) {
+        // Only if the error is not related to unavailable result,
+        // we return the error. Otherwise we continue to accumulate results.
+        err = status.status();
+      }
       return;
     }
     cpu_results.push_back(status.value());

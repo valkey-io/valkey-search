@@ -2028,13 +2028,12 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
                 cmd = ["FT.SEARCH", "idx", full_query, "PARAMS", "2", "vec", query_vec, "DIALECT", "2"] + list(extra_args) + ["NOCONTENT"]
                 result = client.execute_command(*cmd)
                 result_docs = set(result[1:]) if expected_count > 0 else set()
-                assert result[0] == expected_count, f"[{vector_index_type}] Query '{full_query}' expected count {expected_count}, got {result[0]}"
+                assert result[0] == expected_count, f"[{vector_index_type}] Query '{full_query}' (KNN={use_knn}) expected count {expected_count}, got {result[0]}"
                 if expected_count > 0:
                     assert result_docs == expected_docs, f"[{vector_index_type}] Query '{full_query}' (KNN={use_knn}) expected docs {expected_docs}, got {result_docs}"
             client.execute_command("FT.DROPINDEX", "idx")
             for i in range(5):
                 client.execute_command("DEL", f"hash:0{i}")
-                    assert result_docs == expected_docs, f"[{vector_index_type}] Query '{full_query}' expected docs {expected_docs}, got {result_docs}"
 
     def test_hybrid_non_vector_query(self):
         """Test hybrid non-vector queries with deeply nested combinations"""

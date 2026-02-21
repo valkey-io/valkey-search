@@ -34,6 +34,7 @@
 #include "src/index_schema.pb.h"
 #include "src/rdb_section.pb.h"
 #include "src/rdb_serialization.h"
+#include "src/commands/ft_create_parser.h"
 #include "src/valkey_search.h"
 #include "src/vector_externalizer.h"
 #include "vmsdk/src/info.h"
@@ -63,7 +64,21 @@ static auto max_indexes =
                                  kMaxIndexesDefault,  // default size
                                  1,                   // min size
                                  kMaxIndexes)         // max size
-        .WithValidationCallback(CHECK_RANGE(1, kMaxIndexes, kMaxIndexesConfig))
+        .WithValidationCallback([](const int value) -> absl::Status {
+          VMSDK_RETURN_IF_ERROR(
+              CHECK_RANGE(1, kMaxIndexes, kMaxIndexesConfig)(value));
+          // Ensure we don't lower the configured maximum below the current
+          // number of defined indexes.
+          uint64_t current =
+              SchemaManager::Instance().GetNumberOfIndexSchemas();
+          if (static_cast<uint64_t>(value) < current) {
+            return absl::FailedPreconditionError(absl::StrFormat(
+                "Cannot set %s to %d: there are currently %u "
+                "defined index schema(s)",
+                kMaxIndexesConfig, value, current));
+          }
+          return absl::OkStatus();
+        })
         .Build();
 
 vmsdk::config::Number &GetMaxIndexes() {
@@ -401,6 +416,18 @@ uint64_t SchemaManager::GetNumberOfAttributes() const {
   return GetAttributeCountByType(AttributeType::ALL);
 }
 
+uint64_t SchemaManager::GetMaxAttributeCountForAnyIndex() const {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  uint64_t max_count = 0;
+  for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
+    for (const auto &[name, schema] : schema_map) {
+      max_count = std::max(max_count,
+                           static_cast<uint64_t>(schema->GetAttributeCount()));
+    }
+  }
+  return max_count;
+}
+
 uint64_t SchemaManager::GetAttributeCountByType(AttributeType type) const {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   uint64_t count = 0;
@@ -707,6 +734,42 @@ absl::Status SchemaManager::LoadIndex(
     VMSDK_LOG(NOTICE, ctx) << "Staging index from RDB: "
                            << vmsdk::config::RedactIfNeeded(name) << " (in db "
                            << db_num << ")";
+    // Validate that applying staged indices will not violate operational
+    // limits (max indexes / max attributes per index).
+    const auto max_indexes = options::GetMaxIndexes().GetValue();
+    const auto max_attributes = options::GetMaxAttributes().GetValue();
+
+    // Per-index attribute limit check for the incoming index.
+    if (index_schema->GetAttributeCount() >
+        static_cast<int>(max_attributes)) {
+      return absl::ResourceExhaustedError(absl::StrFormat(
+          "RDB load would exceed configured max-attributes per index: "
+          "%d > %d",
+          index_schema->GetAttributeCount(), max_attributes));
+    }
+
+    // Compute projected index count: start from live, add staged and incoming.
+    absl::MutexLock lock(&db_to_index_schemas_mutex_);
+    absl::flat_hash_set<std::pair<uint32_t, std::string>> projected_indexes;
+    for (const auto &[db, schema_map] : db_to_index_schemas_) {
+      for (const auto &[idx_name, _] : schema_map) {
+        projected_indexes.emplace(db, idx_name);
+      }
+    }
+    for (const auto &[db, schema_map] : staged_db_to_index_schemas_.Get()) {
+      for (const auto &[idx_name, _] : schema_map) {
+        projected_indexes.emplace(db, idx_name);
+      }
+    }
+    projected_indexes.emplace(db_num, std::string(name));
+
+    if (projected_indexes.size() > static_cast<uint64_t>(max_indexes)) {
+      return absl::ResourceExhaustedError(absl::StrFormat(
+          "RDB load would exceed configured max-indexes: %u > %d",
+          projected_indexes.size(), max_indexes));
+    }
+
+    // All validations passed; stage the index.
     staged_db_to_index_schemas_.Get()[db_num][name] = std::move(index_schema);
     return absl::OkStatus();
   }
@@ -730,6 +793,26 @@ absl::Status SchemaManager::LoadIndex(
                      "%d): %s",
                      vmsdk::config::RedactIfNeeded(name).data(), db_num,
                      remove_existing_status.status().message().data());
+  }
+
+  // Validate that adding this index will not exceed configured limits.
+  const auto max_indexes = options::GetMaxIndexes().GetValue();
+  const auto max_attributes = options::GetMaxAttributes().GetValue();
+  // Per-index attribute limit check.
+  if (index_schema->GetAttributeCount() >
+      static_cast<int>(max_attributes)) {
+    return absl::ResourceExhaustedError(absl::StrFormat(
+        "RDB load would exceed configured max-attributes per index: "
+        "%d > %d",
+        index_schema->GetAttributeCount(), max_attributes));
+  }
+  // After RemoveIndexSchemaInternal above, if the index existed it was
+  // removed; so adding it back will increase index count by 1.
+  uint64_t projected_indexes = GetNumberOfIndexSchemas() + 1;
+  if (projected_indexes > static_cast<uint64_t>(max_indexes)) {
+    return absl::ResourceExhaustedError(absl::StrFormat(
+        "RDB load would exceed configured max-indexes: %u > %d",
+        projected_indexes, max_indexes));
   }
 
   db_to_index_schemas_[db_num][name] = std::move(index_schema);

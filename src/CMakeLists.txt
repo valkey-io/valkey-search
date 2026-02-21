@@ -162,6 +162,7 @@ target_link_libraries(schema_manager PUBLIC vector_externalizer)
 target_link_libraries(schema_manager PUBLIC coordinator_cc_proto)
 target_link_libraries(schema_manager PUBLIC metadata_manager)
 target_link_libraries(schema_manager PUBLIC valkey_module)
+target_link_libraries(schema_manager PUBLIC ft_create_parser)
 
 set(SRCS_SERVER_EVENTS ${CMAKE_CURRENT_LIST_DIR}/server_events.cc
                        ${CMAKE_CURRENT_LIST_DIR}/server_events.h)

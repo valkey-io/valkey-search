@@ -441,8 +441,8 @@ EvaluationResult ComposedPredicate::EvaluateWithContext(Evaluator &evaluator,
       // AND is fully (recursively) resolved in the entries fetcher layer
       // already. The only cases where this is not true are:
       // 1) when an AND predicate contains an OR which has some other non text
-      // children and an AND child containing text This is not solved in entries
-      // fetcher yet.
+      // children and an AND child containing text. This is not solved in
+      // entries fetcher yet.
       // 2) when the query has negation on text. Currently, a universal set is
       // used in the entries fetcher layer for text+negate queries.
       if (evaluator.IsPrefilterEvaluator() &&

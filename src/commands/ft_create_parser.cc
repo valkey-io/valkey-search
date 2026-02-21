@@ -33,6 +33,7 @@
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
+#include "src/schema_manager.h"
 
 namespace valkey_search {
 namespace {
@@ -141,8 +142,21 @@ static auto max_attributes =
                                  kDefaultAttributesCountLimit,  // default size
                                  1,                             // min size
                                  kMaxAttributesCount)           // max size
-        .WithValidationCallback(
-            CHECK_RANGE(1, kMaxAttributesCount, kMaxAttributesConfig))
+        .WithValidationCallback([](const int value) -> absl::Status {
+          VMSDK_RETURN_IF_ERROR(
+              CHECK_RANGE(1, kMaxAttributesCount, kMaxAttributesConfig)(value));
+          // Ensure we don't lower the per-index maximum below the largest
+          // attribute count of any existing index.
+          uint64_t max_per_index =
+              SchemaManager::Instance().GetMaxAttributeCountForAnyIndex();
+          if (static_cast<uint64_t>(value) < max_per_index) {
+            return absl::FailedPreconditionError(absl::StrFormat(
+                "Cannot set %s to %d: an existing index has %u "
+                "attribute(s)",
+                kMaxAttributesConfig, value, max_per_index));
+          }
+          return absl::OkStatus();
+        })
         .Build();
 
 /// Register the "--max-vector-attributes" flag. Controls the max number of

@@ -2043,6 +2043,7 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
                              "body", "TEXT", "NOSTEM",
                              "color", "TAG",
                              "price", "NUMERIC")
+        # Insert test data
         client.execute_command("HSET", "hash:00", "title", "plum", "body", "cat slow loud shark ocean eagle tomato", "color", "green", "price", "21")
         client.execute_command("HSET", "hash:01", "title", "kiwi peach apple chair orange door orange melon chair", "body", "lettuce", "color", "green", "price", "8")
         client.execute_command("HSET", "hash:02", "title", "plum", "body", "river cat slow build eagle fast dog", "color", "brown", "price", "40")
@@ -2054,12 +2055,11 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
 
         for query, (count, docs, extra_args, _, _) in HYBRID_QUERY_EXPECTED_RESULTS.items():
-            cmd = ["FT.SEARCH", "idx", query, "DIALECT", "2"] + list(extra_args) + ["NOCONTENT"]
+            cmd = ["FT.SEARCH", "idx", query, "DIALECT", "2"] + list(extra_args)
             result = client.execute_command(*cmd)
-            result_docs = set(result[1:]) if count > 0 else set()
             assert result[0] == count, f"Query '{query}' expected count {count}, got {result[0]}"
             if count > 0:
-                assert result_docs == docs, f"Query '{query}' expected docs {docs}, got {result_docs}"
+                assert set(result[1::2]) == docs, f"Query '{query}' expected docs {docs}, got {set(result[1::2])}"
 
 
     def test_text_negation(self):

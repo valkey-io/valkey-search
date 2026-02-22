@@ -979,7 +979,9 @@ absl::Status query::SearchParameters::PreParseQueryString() {
                      options::GetQueryStringBytes(), " bytes."));
   }
   auto filter_expression = absl::string_view(parse_vars.query_string);
-  VMSDK_LOG(DEBUG, nullptr) << "Query: '" << parse_vars.query_string << "'";
+  VMSDK_LOG(DEBUG, nullptr)
+      << "Query: '" << vmsdk::config::RedactIfNeeded(parse_vars.query_string)
+      << "'";
   auto pos = filter_expression.find(kVectorFilterDelimiter);
   absl::string_view pre_filter;
   absl::string_view vector_filter;

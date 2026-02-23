@@ -4,6 +4,7 @@ from valkey_search_test_case import (
     ValkeySearchClusterTestCase,
 )
 from valkeytestframework.conftest import resource_port_tracker
+from valkeytestframework.util import waiters
 from indexes import Index, Text
 import os
 import zipfile
@@ -14,6 +15,12 @@ index = Index(
     "test_rdb_load_v1_idx",
     [Text("t")],
 )
+
+def _log_contains(logfile, message):
+    if not os.path.exists(logfile):
+        return False
+    with open(logfile, "r") as f:
+        return message in f.read()
 
 def _start_server_with_search_v1(test_case, testdir, dbfilename):
     """Start a valkey server the valkey-search module v1.0, loading an existing RDB."""
@@ -66,22 +73,15 @@ def do_rdb_load_v1(test_case, client, server):
 
     # wait for server process to exit with time limit
     try:
-        proc.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait()
-
-    try:
+        waiters.wait_for_true(
+            lambda: _log_contains(logfile, "Failed to load ValkeySearch aux section from RDB"),
+            timeout=30,
+        )
         with open(logfile, "r") as f:
             log_contents = f.read()
-
-        assert "Failed to load ValkeySearch aux section from RDB" in log_contents, (
-            f"Expected RDB load failure message not found in log: {logfile}"
-        )
         assert "require minimum version" in log_contents, (
             f"Expected version requirement message not found in log: {logfile}"
         )
-
         logging.info("v1 server correctly failed to load RDB from newer version.")
     finally:
         if proc.poll() is None:

@@ -1,6 +1,6 @@
 ---
-title: "Search Aggregation Expressions"
-description: Aggregation Expression Language
+title: "Valkey Search - Aggregation Expressions"
+description: Valkey Search Module Aggregation Expression Language
 ---
 
 The `FILTER`, `APPLY`, `SORTBY` and `GROUPBY` stages of `FT.AGGREGATE` use expressions to compute values.

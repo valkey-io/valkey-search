@@ -36,6 +36,7 @@ struct FakeIndexInterface : public IndexInterface {
       absl::string_view alias) const override {
     std::cout << "Fake get identifier for " << alias << "\n";
     VMSDK_ASSIGN_OR_RETURN(auto type, GetFieldType(alias));
+    vmsdk::UnusedVar(type);
     return std::string(alias);
   }
   absl::StatusOr<std::string> GetAlias(

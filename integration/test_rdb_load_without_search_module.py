@@ -13,17 +13,15 @@ index = Index(
     [Numeric("n"), Tag("t")],
 )
 
-def _start_server_without_module(test_case, port, testdir, dbfilename):
+def _start_server_without_module(test_case, testdir, dbfilename):
     """Start a valkey server WITHOUT the valkey-search module, loading an existing RDB."""
     server_path = os.getenv("VALKEY_SERVER_PATH")
 
     # Use create_server from valkeytestframework, customize args to exclude module
     server, client = test_case.create_server(
         testdir=testdir,
-        port=port,
         server_path=server_path,
         args={
-            "enable-debug-command": "yes",
             "appendonly": "no",
             "dir": testdir,
             "dbfilename": dbfilename,
@@ -31,6 +29,11 @@ def _start_server_without_module(test_case, port, testdir, dbfilename):
     )
     logfile = os.path.join(server.cwd, server.args["logfile"])
     return server, client, logfile
+
+def _cleanup_data_files(rdb_path):
+    """Remove RDB files left behind by server.exit(cleanup=False)."""
+    if os.path.exists(rdb_path):
+        os.remove(rdb_path)
 
 def do_rdb_load_without_module_test_cmd(test_case):
     """
@@ -58,9 +61,8 @@ def do_rdb_load_without_module_test_cmd(test_case):
     server.exit(cleanup=False)
 
     # Phase 2: Start a new server WITHOUT valkey-search module
-    port = test_case.get_bind_port()
     new_server, new_client, logfile = _start_server_without_module(
-        test_case, port, testdir, dbfilename
+        test_case, testdir, dbfilename
     )
 
     assert new_client.ping()
@@ -76,6 +78,8 @@ def do_rdb_load_without_module_test_cmd(test_case):
     assert "search" not in module_names, "valkey-search should NOT be loaded"
 
     print("CMD: Server loaded RDB without module successfully, no crash.")
+
+    _cleanup_data_files(rdb_path)
 
 def do_rdb_load_without_module_test_cme(test_case):
     """
@@ -113,9 +117,8 @@ def do_rdb_load_without_module_test_cme(test_case):
     primary0.server.exit(cleanup=False)
 
     # Phase 2: Start first node WITHOUT valkey-search module
-    port = test_case.get_bind_port()
     new_server, new_client, logfile = _start_server_without_module(
-        test_case, port, testdir, dbfilename
+        test_case, testdir, dbfilename
     )
 
     assert new_client.ping()
@@ -131,6 +134,8 @@ def do_rdb_load_without_module_test_cme(test_case):
     assert "search" not in module_names
 
     print("CME: Node loaded RDB without module successfully, no crash.")
+
+    _cleanup_data_files(rdb_path)
 
 class TestRDBLoadWithoutModuleCMD(ValkeySearchTestCaseBase):
     """CMD mode: Verify server doesn't crash loading RDB from a module-enabled server."""

@@ -67,7 +67,7 @@ constexpr size_t kMaxAttributesCount{10000};
 constexpr int kMaxDimensionsCount{64000};
 constexpr int kMaxM{2000000};
 constexpr int kMaxEfConstruction{4096};
-constexpr int kMaxEfRuntime{4096};
+constexpr int kMaxEfRuntime{1000000};
 constexpr int kMaxPrefixesCount{16};
 constexpr int kMaxTagFieldLen{10000};
 constexpr int kMaxNumericFieldLen{256};

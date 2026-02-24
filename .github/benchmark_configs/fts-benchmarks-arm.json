@@ -322,6 +322,10 @@
             "description": "30% writes + 70% reads concurrent (scenarios b-i)",
             "duration": 200,
             "warmup": 60,
+            "options": {
+              "": "",
+              "NOCONTENT": "_nocontent"
+            },
             "writes": [
               {
                 "id": "a",

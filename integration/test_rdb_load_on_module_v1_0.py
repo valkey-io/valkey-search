@@ -16,7 +16,7 @@ index = Index(
     [Text("t")],
 )
 
-def _start_server_with_search_1_0_0(test_case, testdir, dbfilename):
+def _start_server_with_search_module_v1_0(test_case, testdir, dbfilename):
     """Start a valkey server the valkey-search module 1.0.0, loading an existing RDB."""
     server_path = os.getenv("VALKEY_SERVER_PATH")
     
@@ -44,12 +44,12 @@ def _start_server_with_search_1_0_0(test_case, testdir, dbfilename):
     logfile = os.path.join(server.cwd, server.args["logfile"])
     return server, logfile, module_path
 
-def do_rdb_load_1_0_0(test_case, client, server):
+def do_rdb_load_on_module_v1_0(test_case, client, server):
     # skip ASAN test for now since binary takes too much space
     if os.environ.get('SAN_BUILD', 'no') != 'no':
         pytest.skip("1.0.0 module binary is not ASAN-compatible")
 
-    # Phase 1: Create a text index, then save
+    # Phase 1: On the server with current search module, create a text index and save
     index.create(client, wait_for_backfill=True)
     index.load_data(client, 10)
     client.execute_command("SAVE")
@@ -63,12 +63,13 @@ def do_rdb_load_1_0_0(test_case, client, server):
     # Stop the server (keep the RDB)
     server.exit(cleanup=False)
 
-    # Phase 2: Start a new server WITHOUT valkey-search module
-    _, logfile, module_path = _start_server_with_search_1_0_0(
+    # Phase 2: Start a new server with 1.0 version valkey-search module
+    _, logfile, module_path = _start_server_with_search_module_v1_0(
         test_case, testdir, dbfilename
     )
 
-    # wait for server process to exit with time limit
+    # The server is expected to fail with certain error message
+    # Wait for error message to appear in logs
     try:
         test_case.wait_for_logfile(logfile, "Failed to load ValkeySearch aux section from RDB")
         test_case.wait_for_logfile(logfile, "require minimum version")
@@ -77,12 +78,16 @@ def do_rdb_load_1_0_0(test_case, client, server):
         if os.path.exists(module_path):
             os.remove(module_path)
 
-class TestRDBLoad_from_1_2_0_to_1_0_0_CMD(ValkeySearchTestCaseBase):
-    def test_rdb_load_1_0_0(self):
-        do_rdb_load_1_0_0(self, self.client, self.server)
+class TestRDBLoadOnModuleV1_0_CMD(ValkeySearchTestCaseBase):
+    # Saving an RDB from the current module version and loading it on the 1.0 module version 
+    # Expecting the appropriate error message
+    def test_rdb_load_on_module_v1_0(self):
+        do_rdb_load_on_module_v1_0(self, self.client, self.server)
 
-class TestRDBLoad_from_1_2_0_to_1_0_0_CME(ValkeySearchClusterTestCase):
-    def test_rdb_load_1_0_0(self):
+class TestRDBLoadOnModuleV1_0_CME(ValkeySearchClusterTestCase):
+    # Saving an RDB from the current module version and loading it on the 1.0 module version
+    # Expecting the appropriate error message
+    def test_rdb_load_on_module_v1_0(self):
         primary = self.replication_groups[0].primary
         cluster_client = self.new_cluster_client()
-        do_rdb_load_1_0_0(self, cluster_client, primary.server)
+        do_rdb_load_on_module_v1_0(self, cluster_client, primary.server)

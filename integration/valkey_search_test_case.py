@@ -148,6 +148,18 @@ class ReplicationGroup:
 class ValkeySearchTestCaseCommon(ValkeyTestCase):
     """Common base class for the various Search test cases"""
 
+    def cleanup_all_indexes(self, client: Valkey) -> None:
+        """Drop all indexes to ensure proper cleanup before server shutdown.
+        
+        This helps avoid false positive memory leak reports from ASAN when
+        InvasivePtr objects stored in Rax nodes aren't explicitly freed.
+        """
+        indexes = client.execute_command("FT._LIST")
+        for index_name in indexes:
+            if isinstance(index_name, bytes):
+                index_name = index_name.decode('utf-8')
+            client.execute_command("FT.DROPINDEX", index_name)
+
     def normalize_dir_name(self, name: str) -> str:
         """Replace special chars from a string with an underscore"""
         chars_to_replace: str = "!@#$%^&*() -~[]{}><+"
@@ -259,6 +271,7 @@ class ValkeySearchTestCaseBase(ValkeySearchTestCaseCommon):
         yield
 
         # Cleanup
+        self.cleanup_all_indexes(self.client)
         ReplicationGroup.cleanup(self.rg)
 
     def get_config_file_lines(self, testdir, port) -> List[str]:
@@ -471,6 +484,8 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
         yield
 
         # Cleanup
+        for rg in self.replication_groups:
+            self.cleanup_all_indexes(rg.primary.client)
         for rg in self.replication_groups:
             ReplicationGroup.cleanup(rg)
 

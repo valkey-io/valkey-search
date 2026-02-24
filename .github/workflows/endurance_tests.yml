@@ -74,7 +74,6 @@ jobs:
         docker run --rm \
           -v "$(pwd):/valkey-search" \
           -w /valkey-search \
-          --user "ubuntu:ubuntu" \
           -e VALKEY_SEARCH_PATH="/valkey-search/.build-release/libsearch.so" \
           stability-test-image \
           ./testing/integration/run.sh --test stability

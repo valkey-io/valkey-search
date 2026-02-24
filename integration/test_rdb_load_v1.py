@@ -16,12 +16,6 @@ index = Index(
     [Text("t")],
 )
 
-def _log_contains(logfile, message):
-    if not os.path.exists(logfile):
-        return False
-    with open(logfile, "r") as f:
-        return message in f.read()
-
 def _start_server_with_search_v1(test_case, testdir, dbfilename):
     """Start a valkey server the valkey-search module v1.0, loading an existing RDB."""
     server_path = os.getenv("VALKEY_SERVER_PATH")

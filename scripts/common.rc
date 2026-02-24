@@ -91,6 +91,8 @@ fi
 function get_third_party_build_dir() {
   if [ -z "${SAN_BUILD}" ] || [[ "${SAN_BUILD}" == "no" ]]; then
     echo ${_THIRD_PARTY_COMPONENTS_BUILD_DIR}
+  elif [[ "${SAN_BUILD}" == "thread" ]]; then
+    echo ${_THIRD_PARTY_COMPONENTS_BUILD_DIR}-tsan
   else
     echo ${_THIRD_PARTY_COMPONENTS_BUILD_DIR}-asan
   fi

@@ -412,7 +412,8 @@ void SchemaManager::OnFlushDBEnded(RedisModuleCtx *ctx) {
                          << selected_db;
   absl::once_flag log_recreate_once;
   for (const auto &name : to_delete) {
-    VMSDK_LOG(DEBUG, ctx) << "Deleting index schema " << name
+    VMSDK_LOG(DEBUG, ctx) << "Deleting index schema "
+                          << vmsdk::config::RedactIfNeeded(name)
                           << " on FLUSHDB of DB " << selected_db;
     auto old_schema = RemoveIndexSchemaInternal(selected_db, name);
     if (!old_schema.ok()) {
@@ -431,8 +432,9 @@ void SchemaManager::OnFlushDBEnded(RedisModuleCtx *ctx) {
             << "Recreating index schema on FLUSHDB of DB " << selected_db;
       });
       auto to_add = old_schema.value()->ToProto();
-      VMSDK_LOG(DEBUG, ctx) << "Recreating index schema " << name
-                            << " on FLUSHDB of DB " << selected_db;
+      VMSDK_LOG(DEBUG, ctx)
+          << "Recreating index schema " << vmsdk::config::RedactIfNeeded(name)
+          << " on FLUSHDB of DB " << selected_db;
       auto add_status = CreateIndexSchemaInternal(ctx, *to_add);
       if (!add_status.ok()) {
         VMSDK_LOG(WARNING, ctx)

@@ -944,8 +944,11 @@ void IndexSchema::OnLoadingEnded(RedisModuleCtx *ctx) {
     });
     VMSDK_LOG(DEBUG, ctx) << "Deleting " << stale_entries
                           << " stale entries of " << key_size
-                          << " total keys for {Index: " << name_
-                          << ", Attribute: " << attribute.first << "}";
+                          << " total keys for {Index: "
+                          << vmsdk::config::RedactIfNeeded(name_)
+                          << ", Attribute: "
+                          << vmsdk::config::RedactIfNeeded(attribute.first)
+                          << "}";
   }
   VMSDK_LOG(NOTICE, ctx) << "Deleting " << deletion_attributes.size()
                          << " stale entries for {Index: "

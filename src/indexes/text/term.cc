@@ -89,7 +89,7 @@ bool TermIterator::FindMinimumValidKey() {
   }
   // Clear position state for new key
   if (require_positions_) {
-    pos_heap_ = {};
+    pos_set_.clear();
     current_position_ = std::nullopt;
     current_field_mask_ = 0ULL;
     TermIterator::NextPosition();
@@ -145,20 +145,51 @@ const PositionRange& TermIterator::CurrentPosition() const {
   return current_position_.value();
 }
 
-// Helper function to insert a position iterator into the heap if it is valid
-void TermIterator::InsertValidPositionIterator(size_t idx) {
+// Helper function to insert a position iterator into the set if it is valid
+void TermIterator::InsertValidPositionIterator(
+    size_t idx, std::optional<uint32_t> min_position) {
   auto& pos_iter = pos_iterators_[idx];
-  while (pos_iter.IsValid() && !(pos_iter.GetFieldMask() & query_field_mask_)) {
+  while (pos_iter.IsValid() &&
+         (!(pos_iter.GetFieldMask() & query_field_mask_) ||
+          (min_position && pos_iter.GetPosition() < *min_position))) {
     pos_iter.NextPosition();
   }
   if (pos_iter.IsValid()) {
-    pos_heap_.emplace(pos_iter.GetPosition(), idx);
+    pos_set_.emplace(pos_iter.GetPosition(), idx);
   }
+}
+
+bool TermIterator::FindMinimumValidPosition() {
+  // Build set only if empty
+  if (pos_set_.empty()) {
+    for (size_t i = 0; i < pos_iterators_.size(); ++i) {
+      InsertValidPositionIterator(i);
+    }
+  }
+  // If still empty, we are done.
+  if (pos_set_.empty()) {
+    current_position_ = std::nullopt;
+    current_field_mask_ = 0ULL;
+    return false;
+  }
+  // Get minimum position
+  uint32_t min_position = pos_set_.begin()->first;
+  current_pos_indices_.clear();
+  // Collect all iterators with minimum position
+  for (auto it = pos_set_.begin();
+       it != pos_set_.end() && it->first == min_position;) {
+    size_t idx = it->second;
+    current_pos_indices_.push_back(idx);
+    it = pos_set_.erase(it);
+  }
+  current_position_ = PositionRange{min_position, min_position};
+  current_field_mask_ = pos_iterators_[current_pos_indices_[0]].GetFieldMask();
+  return true;
 }
 
 bool TermIterator::NextPosition() {
   if (current_position_.has_value()) {
-    // Advance all iterators at current position
+    // First advance all iterators at current position
     for (size_t idx : current_pos_indices_) {
       pos_iterators_[idx].NextPosition();
     }
@@ -166,29 +197,8 @@ bool TermIterator::NextPosition() {
     for (size_t idx : current_pos_indices_) {
       InsertValidPositionIterator(idx);
     }
-  } else {
-    // Initialize heap (new key)
-    for (size_t i = 0; i < pos_iterators_.size(); ++i) {
-      InsertValidPositionIterator(i);
-    }
   }
-
-  if (pos_heap_.empty()) {
-    current_position_ = std::nullopt;
-    current_field_mask_ = 0ULL;
-    return false;
-  }
-
-  uint32_t min_position = pos_heap_.top().first;
-  current_pos_indices_.clear();
-  // Collect all iterators at minimum position
-  while (!pos_heap_.empty() && pos_heap_.top().first == min_position) {
-    current_pos_indices_.push_back(pos_heap_.top().second);
-    pos_heap_.pop();
-  }
-  current_position_ = PositionRange{min_position, min_position};
-  current_field_mask_ = pos_iterators_[current_pos_indices_[0]].GetFieldMask();
-  return true;
+  return FindMinimumValidPosition();
 }
 
 bool TermIterator::SeekForwardPosition(Position target_position) {
@@ -196,20 +206,24 @@ bool TermIterator::SeekForwardPosition(Position target_position) {
       current_position_.value().start >= target_position) {
     return true;
   }
-  for (auto& pos_iter : pos_iterators_) {
-    if (pos_iter.IsValid()) {
-      // TRACKING CHECK: Only skip if the target is actually ahead of
-      // this specific child's current internal cumulative position.
-      if (target_position > pos_iter.GetPosition()) {
-        pos_iter.SkipForwardPosition(target_position);
-      }
-      // If target_position <= GetPosition(), we do nothing. This is safe
-      // because that child is already at or past the target.
-    }
+  // Seek iterators in pos_set_ with positions < target_position
+  while (!pos_set_.empty() && pos_set_.begin()->first < target_position) {
+    size_t idx = pos_set_.begin()->second;
+    pos_set_.erase(pos_set_.begin());
+    pos_iterators_[idx].SkipForwardPosition(target_position);
+    InsertValidPositionIterator(idx, target_position);
   }
-  current_position_ = std::nullopt;
-  current_field_mask_ = 0ULL;
-  return NextPosition();
+  // Also seek iterators at current_position_ if current_position_ <
+  // target_position
+  if (current_position_.has_value() &&
+      current_position_.value().start < target_position) {
+    for (size_t idx : current_pos_indices_) {
+      pos_iterators_[idx].SkipForwardPosition(target_position);
+      InsertValidPositionIterator(idx, target_position);
+    }
+    current_pos_indices_.clear();
+  }
+  return FindMinimumValidPosition();
 }
 
 FieldMaskPredicate TermIterator::CurrentFieldMask() const {

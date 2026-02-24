@@ -89,21 +89,22 @@ class TermIterator : public TextIterator {
 
   // Pending queue: valid iterators not currently being processed, sorted by key
   std::multiset<std::pair<Key, size_t>> key_set_;
-  // Min-heap for position iteration within current key
-  std::priority_queue<std::pair<uint32_t, size_t>,
-                      std::vector<std::pair<uint32_t, size_t>>, std::greater<>>
-      pos_heap_;
+  // Pending queue: valid iterators not currently being processed, sorted by
+  // position
+  std::multiset<std::pair<uint32_t, size_t>> pos_set_;
   // Indices of iterators at current_key_ (active, not in key_set_)
   absl::InlinedVector<size_t, kWordExpansionInlineCapacity>
       current_key_indices_;
-  // Indices of iterators at current_position_ (active, not in pos_heap_)
+  // Indices of iterators at current_position_ (active, not in pos_set_)
   absl::InlinedVector<size_t, kWordExpansionInlineCapacity>
       current_pos_indices_;
 
   bool FindMinimumValidKey();
   void InsertValidKeyIterator(
       size_t idx, std::optional<InternedStringPtr> min_key = std::nullopt);
-  void InsertValidPositionIterator(size_t idx);
+  bool FindMinimumValidPosition();
+  void InsertValidPositionIterator(
+      size_t idx, std::optional<uint32_t> min_position = std::nullopt);
 };
 
 }  // namespace valkey_search::indexes::text

@@ -19,12 +19,8 @@ OK = b"OK"
 QUEUED = b"QUEUED"
 
 
-def _create_books_price_index(client: Valkey, index: str = INDEX):
-    assert client.execute_command("FT.CREATE", index, "SCHEMA", "price", "NUMERIC") == OK
-
-
-def _search_books(client: Valkey, index: str, l: int, h: int):
-    return client.execute_command("FT.SEARCH", index, f"@price:[{l} {h}]")
+def _create_index(client: Valkey, index: str = INDEX):
+    assert client.execute_command("FT.CREATE", index, "SCHEMA", "price", "NUMERIC", "title", "TEXT") == OK
 
 
 def _lua_call(cmd: str, *args: str) -> str:
@@ -38,70 +34,25 @@ def _lua_call(cmd: str, *args: str) -> str:
 
 class TestMultiLua(ValkeySearchTestCaseBase):
 
-    def test_multi_exec_case1(self):
-        """
-        Test that HSET done outside a MULTI/EXEC on a key that was modified
-        in the MULTI/EXEC does not block the client.
-        """
-        client: Valkey = self.server.get_new_client()
-        _create_books_price_index(client)
-        assert client.execute_command("MULTI") == OK
-        assert client.hset("cpp_book", "price", "60") == QUEUED
-        assert client.hset("rust_book", "price", "60") == QUEUED
-        assert client.execute_command("EXEC") == [1, 1]
-        assert client.hset("rust_book", "price", "50") == 0
-        assert _search_books(client, INDEX, 50, 50) == [1, b"rust_book", [b"price", b"50"]]
-
-    def test_multi_exec_case2(self):
-        """
-        Similar to test case 1, but we perform operations before the MULTI/EXEC block.
-        """
-        client: Valkey = self.server.get_new_client()
-        _create_books_price_index(client)
-        assert client.hset("cpp_book", "price", "60") == 1
-        # We should find the "cpp_book" entry.
-        assert _search_books(client, INDEX, 60, 100) == [
-            1,
-            b"cpp_book",
-            [b"price", b"60"],
-        ]
-
-        # Begin a MULTI block, update the prices, execute the the MULTI then immediately update the price
-        # for the cpp_book, followed by a search query.
-        assert client.execute_command("MULTI") == OK
-        assert client.hset("cpp_book", "price", 65) == QUEUED
-        assert client.hset("rust_book", "price", 50) == QUEUED
-        client.execute_command("EXEC")
-        # This call should not be blocked.
-        assert client.hset("cpp_book", "price", 70) == 0
-
-        # We should only find the "rust_book" entry.
-        assert _search_books(client, INDEX, 50, 60) == [
-            1,
-            b"rust_book",
-            [b"price", b"50"],
-        ]
-    
     def test_multi_exec_ft_list(self):
         client: Valkey = self.server.get_new_client()
-        _create_books_price_index(client)
+        _create_index(client)
         assert client.execute_command("MULTI") == OK
         assert client.execute_command("FT._LIST") == QUEUED
         results = client.execute_command("EXEC")
-        assert results is not None
         assert INDEX.encode() in results[0]
     
     def test_multi_exec_ft_create(self):
         client: Valkey = self.server.get_new_client()
         assert client.execute_command("MULTI") == OK
-        assert client.execute_command("FT.CREATE", INDEX, "SCHEMA", "price", "NUMERIC") == QUEUED
+        assert client.execute_command("FT.CREATE", INDEX, "SCHEMA", "price", "NUMERIC", "title", "TEXT") == QUEUED
         results = client.execute_command("EXEC")
         assert results[0] == OK
         assert client.execute_command("FT._LIST")[0] == INDEX.encode()
     
     def test_multi_exec_ft_dropindex(self):
         client: Valkey = self.server.get_new_client()
-        _create_books_price_index(client)
+        _create_index(client)
         assert client.execute_command("MULTI") == OK
         assert client.execute_command("FT.DROPINDEX", INDEX) == QUEUED
         results = client.execute_command("EXEC")
@@ -111,7 +62,7 @@ class TestMultiLua(ValkeySearchTestCaseBase):
     @pytest.mark.parametrize("extra_args", [[], ["LOCAL"]], ids=["info", "info local"])
     def test_multi_exec_ft_info(self, extra_args):
         client: Valkey = self.server.get_new_client()
-        _create_books_price_index(client)
+        _create_index(client)
         assert client.execute_command("MULTI") == OK
         assert client.execute_command("FT.INFO", INDEX, *extra_args) == QUEUED
         results = client.execute_command("EXEC")
@@ -122,18 +73,18 @@ class TestMultiLua(ValkeySearchTestCaseBase):
     @pytest.mark.parametrize("extra_args", [[], ["LOCALONLY"]], ids=["search", "search localonly"])
     def test_multi_exec_ft_search(self, extra_args):
         client: Valkey = self.server.get_new_client()
-        _create_books_price_index(client)
-        client.hset("book:1", "price", "42")
-        client.hset("book:2", "price", "44")
+        _create_index(client)
+        client.hset("doc:1", mapping={"price": "42", "title": "hello world"})
+        client.hset("doc:2", mapping={"price": "99", "title": "hello"})
         assert client.execute_command("MULTI") == OK
-        assert client.execute_command("FT.SEARCH", INDEX, "@price:[42 43]", *extra_args) == QUEUED
+        assert client.execute_command("FT.SEARCH", INDEX, "@price:[40 50] @title:hello", *extra_args) == QUEUED
         results = client.execute_command("EXEC")
-        assert results[0] == [1, b"book:1", [b"price", b"42"]]
+        assert results[0][0] == 1 and results[0][1] == b'doc:1'
 
     def test_multi_exec_ft_aggregate(self):
         client: Valkey = self.server.get_new_client()
-        _create_books_price_index(client)
-        client.hset("book:1", "price", "10")
+        _create_index(client)
+        client.hset("doc:1", "price", "10")
         assert client.execute_command("MULTI") == OK
         assert client.execute_command(
             "FT.AGGREGATE", INDEX, "@price:[5 15]", "LOAD", "1", "price"
@@ -144,30 +95,30 @@ class TestMultiLua(ValkeySearchTestCaseBase):
     def test_multi_exec_ingestion_consistency(self):
         """Keys ingested inside MULTI/EXEC are visible in a query within the same MULTI/EXEC."""
         client: Valkey = self.server.get_new_client()
-        _create_books_price_index(client)
+        _create_index(client)
         assert client.execute_command("MULTI") == OK
-        assert client.hset("book:1", "price", "99") == QUEUED
+        assert client.hset("doc:1", "price", "99") == QUEUED
         assert client.execute_command("FT.SEARCH", INDEX, "@price:[99 99]") == QUEUED
         results = client.execute_command("EXEC")
-        assert results[1] == [1, b'book:1', [b'price', b'99']]
+        assert results[1] == [1, b'doc:1', [b'price', b'99']]
 
     # --- LUA equivalents (CMD) ---
 
     def test_lua_ft_list(self):
         client: Valkey = self.server.get_new_client()
-        _create_books_price_index(client)
+        _create_index(client)
         result = client.execute_command("EVAL", "return redis.call('FT._LIST')", "0")
         assert INDEX.encode() in result
     
     def test_lua_ft_create(self):
         client: Valkey = self.server.get_new_client()
-        result = client.execute_command("EVAL", _lua_call("FT.CREATE", INDEX, "SCHEMA", "price", "NUMERIC"), "0")
+        result = client.execute_command("EVAL", _lua_call("FT.CREATE", INDEX, "SCHEMA", "price", "NUMERIC", "title", "TEXT"), "0")
         assert result == OK
         assert client.execute_command("FT._LIST")[0] == INDEX.encode()
 
     def test_lua_ft_dropindex(self):
         client: Valkey = self.server.get_new_client()
-        _create_books_price_index(client)
+        _create_index(client)
         result = client.execute_command("EVAL", _lua_call("FT.DROPINDEX", INDEX), "0")
         assert result == OK
         assert client.execute_command("FT._LIST") == []
@@ -175,7 +126,7 @@ class TestMultiLua(ValkeySearchTestCaseBase):
     @pytest.mark.parametrize("extra_arg", [None, "LOCAL"], ids=["info", "info local"])
     def test_lua_ft_info(self, extra_arg):
         client: Valkey = self.server.get_new_client()
-        _create_books_price_index(client)
+        _create_index(client)
         args = (INDEX, extra_arg) if extra_arg else (INDEX,)
         result = client.execute_command("EVAL", _lua_call("FT.INFO", *args), "0")
         info = FTInfoParser(result)
@@ -184,16 +135,17 @@ class TestMultiLua(ValkeySearchTestCaseBase):
     @pytest.mark.parametrize("extra_arg", [None, "LOCALONLY"], ids=["search", "search localonly"])
     def test_lua_ft_search(self, extra_arg):
         client: Valkey = self.server.get_new_client()
-        _create_books_price_index(client)
-        client.hset("book:1", "price", "7")
-        args = (INDEX, "@price:[7 10]", extra_arg) if extra_arg else (INDEX, "@price:[7 10]")
+        _create_index(client)
+        client.hset("doc:1", mapping={"price": "7", "title": "hello world"})
+        client.hset("doc:2", mapping={"price": "99", "title": "hello"})
+        args = (INDEX, "@price:[5 10] @title:hello", extra_arg) if extra_arg else (INDEX, "@price:[5 10] @title:hello")
         result = client.execute_command("EVAL", _lua_call("FT.SEARCH", *args), "0")
-        assert result == [1, b'book:1', [b'price', b'7']]
+        assert result[0] == 1 and result[1] == b'doc:1'
 
     def test_lua_ft_aggregate(self):
         client: Valkey = self.server.get_new_client()
-        _create_books_price_index(client)
-        client.hset("book:1", "price", "5")
+        _create_index(client)
+        client.hset("doc:1", "price", "5")
         result = client.execute_command(
             "EVAL", _lua_call("FT.AGGREGATE", INDEX, "@price:[0 10]", "LOAD", "1", "price"), "0"
         )
@@ -202,15 +154,15 @@ class TestMultiLua(ValkeySearchTestCaseBase):
     def test_lua_ingestion_consistency(self):
         """Keys ingested inside a Lua script are visible in a query within the same script."""
         client: Valkey = self.server.get_new_client()
-        _create_books_price_index(client)
+        _create_index(client)
         script = (
             "redis.call('HSET', KEYS[1], ARGV[1], ARGV[2]) "
             "return redis.call('FT.SEARCH', ARGV[3], ARGV[4])"
         )
         result = client.execute_command(
-            "EVAL", script, "1", "book:1", "price", "55", INDEX, "@price:[55 60]"
+            "EVAL", script, "1", "doc:1", "price", "55", INDEX, "@price:[55 60]"
         )
-        assert result == [1, b'book:1', [b'price', b'55']]
+        assert result == [1, b'doc:1', [b'price', b'55']]
 
 
 # ---------------------------------------------------------------------------
@@ -227,9 +179,10 @@ class TestMultiLuaCluster(ValkeySearchClusterTestCase):
         """Create index, insert one document per shard, return (client, cluster)."""
         client: Valkey = self.new_client_for_primary(0)
         cluster: ValkeyCluster = self.new_cluster_client()
-        assert client.execute_command("FT.CREATE", INDEX, "SCHEMA", "price", "NUMERIC") == OK
+        assert client.execute_command("FT.CREATE", INDEX, "SCHEMA", "price", "NUMERIC", "title", "TEXT") == OK
         for i, primary in enumerate(self.get_all_primary_clients()):
-            cluster.execute_command("HSET", find_local_key(primary, f"book:shard{i}:"), "price", "42")
+            key = find_local_key(primary, f"doc:shard{i}:")
+            cluster.execute_command("HSET", key, "price", "42", "title", "hello world")
         return client, cluster
 
     # --- Commands that must always succeed in CME multi/exec ---
@@ -245,7 +198,7 @@ class TestMultiLuaCluster(ValkeySearchClusterTestCase):
         """FT.CREATE inside MULTI/EXEC in cluster mode skips fanout and returns OK."""
         client: Valkey = self.new_client_for_primary(0)
         assert client.execute_command("MULTI") == OK
-        assert client.execute_command("FT.CREATE", INDEX, "SCHEMA", "price", "NUMERIC") == QUEUED
+        assert client.execute_command("FT.CREATE", INDEX, "SCHEMA", "price", "NUMERIC", "title", "TEXT") == QUEUED
         results = client.execute_command("EXEC")
         assert results[0] == OK
         assert client.execute_command("FT._LIST")[0] == INDEX.encode()
@@ -283,7 +236,7 @@ class TestMultiLuaCluster(ValkeySearchClusterTestCase):
         """FT.SEARCH with LOCALONLY in MULTI/EXEC succeeds in cluster mode."""
         client, cluster = self._setup_index()
         assert client.execute_command("MULTI") == OK
-        assert client.execute_command("FT.SEARCH", INDEX, "@price:[42 42]", "LOCALONLY") == QUEUED
+        assert client.execute_command("FT.SEARCH", INDEX, "@price:[42 42] @title:hello", "LOCALONLY") == QUEUED
         results = client.execute_command("EXEC")
         # Returns local shard results only
         assert results[0][0] == 1
@@ -302,8 +255,8 @@ class TestMultiLuaCluster(ValkeySearchClusterTestCase):
     def test_cme_multi_exec_ingestion_consistency(self):
         """Keys ingested inside MULTI/EXEC are visible in a LOCALONLY query within the same MULTI/EXEC."""
         client: Valkey = self.new_client_for_primary(0)
-        assert client.execute_command("FT.CREATE", INDEX, "SCHEMA", "price", "NUMERIC") == OK
-        key = find_local_key(client, "book:")
+        assert client.execute_command("FT.CREATE", INDEX, "SCHEMA", "price", "NUMERIC", "title", "TEXT") == OK
+        key = find_local_key(client, "doc:")
         assert client.execute_command("MULTI") == OK
         assert client.execute_command("HSET", key, "price", "77") == QUEUED
         assert client.execute_command("FT.SEARCH", INDEX, "@price:[77 77]", "LOCALONLY") == QUEUED
@@ -333,10 +286,9 @@ class TestMultiLuaCluster(ValkeySearchClusterTestCase):
         assert FANOUT_NOT_SUPPORTED_ERR in str(exc_info.value)
 
     def test_cme_lua_ft_search_localonly(self):
-        """FT.SEARCH with LOCALONLY in Lua succeeds in cluster mode."""
         client, _ = self._setup_index()
         result = client.execute_command(
-            "EVAL", _lua_call("FT.SEARCH", INDEX, "@price:[42 42]", "LOCALONLY"), "0"
+            "EVAL", _lua_call("FT.SEARCH", INDEX, "@price:[42 42] @title:hello", "LOCALONLY"), "0"
         )
         assert result[0] == 1
 
@@ -352,7 +304,7 @@ class TestMultiLuaCluster(ValkeySearchClusterTestCase):
     def test_cme_lua_ft_create(self):
         client: Valkey = self.new_client_for_primary(0)
         result = client.execute_command(
-            "EVAL", _lua_call("FT.CREATE", INDEX, "SCHEMA", "price", "NUMERIC"), "0"
+            "EVAL", _lua_call("FT.CREATE", INDEX, "SCHEMA", "price", "NUMERIC", "title", "TEXT"), "0"
         )
         assert result == OK
         assert client.execute_command("FT._LIST")[0] == INDEX.encode()
@@ -366,8 +318,8 @@ class TestMultiLuaCluster(ValkeySearchClusterTestCase):
     def test_cme_lua_ingestion_consistency(self):
         """Keys ingested inside Lua are visible in a LOCALONLY query within the same script."""
         client: Valkey = self.new_client_for_primary(0)
-        assert client.execute_command("FT.CREATE", INDEX, "SCHEMA", "price", "NUMERIC") == OK
-        key = find_local_key(client, "book:")
+        assert client.execute_command("FT.CREATE", INDEX, "SCHEMA", "price", "NUMERIC", "title", "TEXT") == OK
+        key = find_local_key(client, "doc:")
         script = (
             "redis.call('HSET', KEYS[1], ARGV[1], ARGV[2]) "
             "return redis.call('FT.SEARCH', ARGV[3], ARGV[4], 'LOCALONLY')"

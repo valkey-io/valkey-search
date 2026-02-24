@@ -409,7 +409,12 @@ class IndexSchema : public KeyspaceEventSubscription,
   MutationSequenceNumber schema_mutation_sequence_number_{0};
   vmsdk::MainThreadAccessGuard<absl::flat_hash_map<Key, DbKeyInfo>>
       db_key_info_;  // Mainthread.
+
+  // For proper sequencing and thread-safety, we separate reads/writes into
+  // the corresponding time slice mutex phases. Within the write phase,
+  // exclusion is provided by mutated_records_mutex_.
   IndexKeyInfoMap index_key_info_ ABSL_GUARDED_BY(time_sliced_mutex_);
+
   struct BackfillJob {
     BackfillJob() = delete;
     BackfillJob(ValkeyModuleCtx *ctx, absl::string_view name, int db_num);

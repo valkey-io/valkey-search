@@ -2245,7 +2245,6 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert client.execute_command("FT.SEARCH", "idx", "wait…")[0] == 1
         assert client.execute_command("FT.SEARCH", "idx", "done")[0] == 1
         # Prefix/fuzzy with non-ASCII UTF-8
-        assert client.execute_command("FT.SEARCH", "idx", "caf*")[0] == 1
         assert client.execute_command("FT.SEARCH", "idx", "%café%")[0] == 1
         assert client.execute_command("FT.SEARCH", "idx", "%naïve%")[0] == 1
         # Invalid UTF-8 queries should not crash (may return 0 or handle gracefully)

@@ -76,15 +76,8 @@ def do_rdb_load_v1(test_case, client, server):
 
     # wait for server process to exit with time limit
     try:
-        waiters.wait_for_true(
-            lambda: _log_contains(logfile, "Failed to load ValkeySearch aux section from RDB"),
-            timeout=30,
-        )
-        with open(logfile, "r") as f:
-            log_contents = f.read()
-        assert "require minimum version" in log_contents, (
-            f"Expected version requirement message not found in log: {logfile}"
-        )
+        test_case.wait_for_logfile(logfile, "Failed to load ValkeySearch aux section from RDB")
+        test_case.wait_for_logfile(logfile, "require minimum version")
         print("v1 server correctly failed to load RDB from newer version.")
     finally:
         if os.path.exists(module_path):

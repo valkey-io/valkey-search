@@ -217,6 +217,10 @@ class TestMultiLua(ValkeySearchTestCaseBase):
 # CME (cluster) tests
 # ---------------------------------------------------------------------------
 
+# Error message for cluster fanout in multi/lua context
+FANOUT_NOT_SUPPORTED_ERR = "MULTI/EXEC or Lua script are not supported in CME mode"
+
+
 class TestMultiLuaCluster(ValkeySearchClusterTestCase):
 
     def _setup_index(self) -> tuple[Valkey, ValkeyCluster]:
@@ -265,35 +269,44 @@ class TestMultiLuaCluster(ValkeySearchClusterTestCase):
         info = FTInfoParser(results[0])
         assert info.index_name == INDEX
 
-    @pytest.mark.parametrize("extra_args", [[], ["LOCALONLY"]], ids=["search", "search localonly"])
-    def test_cme_multi_exec_ft_search(self, extra_args):
-        """With or without LOCALONLY, multi/exec returns only local results (fanout skipped)."""
-        client, cluster = self._setup_index()
-        # Outside multi/exec, full cluster search (no LOCALONLY) returns from all shards
-        assert cluster.execute_command("FT.SEARCH", INDEX, "@price:[42 42]")[0] == self.CLUSTER_SIZE
+    def test_cme_multi_exec_ft_search_rejects(self):
+        """FT.SEARCH without LOCALONLY in MULTI/EXEC must be rejected in cluster mode."""
+        client, _ = self._setup_index()
         assert client.execute_command("MULTI") == OK
-        assert client.execute_command("FT.SEARCH", INDEX, "@price:[42 42]", *extra_args) == QUEUED
+        assert client.execute_command("FT.SEARCH", INDEX, "@price:[42 42]") == QUEUED
         results = client.execute_command("EXEC")
-        # With multi/exec fanout is skipped — only local shard results returned
+        # EXEC returns error for the queued command
+        assert isinstance(results[0], ResponseError)
+        assert FANOUT_NOT_SUPPORTED_ERR in str(results[0])
+
+    def test_cme_multi_exec_ft_search_localonly_succeeds(self):
+        """FT.SEARCH with LOCALONLY in MULTI/EXEC succeeds in cluster mode."""
+        client, cluster = self._setup_index()
+        assert client.execute_command("MULTI") == OK
+        assert client.execute_command("FT.SEARCH", INDEX, "@price:[42 42]", "LOCALONLY") == QUEUED
+        results = client.execute_command("EXEC")
+        # Returns local shard results only
         assert results[0][0] == 1
 
-    def test_cme_multi_exec_ft_aggregate(self):
+    def test_cme_multi_exec_ft_aggregate_rejects(self):
+        """FT.AGGREGATE in MULTI/EXEC must be rejected in cluster mode."""
         client, _ = self._setup_index()
         assert client.execute_command("MULTI") == OK
         assert client.execute_command(
             "FT.AGGREGATE", INDEX, "@price:[0 100]", "LOAD", "1", "price"
         ) == QUEUED
         results = client.execute_command("EXEC")
-        assert results[0][0] == 1
+        assert isinstance(results[0], ResponseError)
+        assert FANOUT_NOT_SUPPORTED_ERR in str(results[0])
 
     def test_cme_multi_exec_ingestion_consistency(self):
-        """Keys ingested inside MULTI/EXEC are visible in a query within the same MULTI/EXEC."""
+        """Keys ingested inside MULTI/EXEC are visible in a LOCALONLY query within the same MULTI/EXEC."""
         client: Valkey = self.new_client_for_primary(0)
         assert client.execute_command("FT.CREATE", INDEX, "SCHEMA", "price", "NUMERIC") == OK
         key = find_local_key(client, "book:")
         assert client.execute_command("MULTI") == OK
         assert client.execute_command("HSET", key, "price", "77") == QUEUED
-        assert client.execute_command("FT.SEARCH", INDEX, "@price:[77 77]") == QUEUED
+        assert client.execute_command("FT.SEARCH", INDEX, "@price:[77 77]", "LOCALONLY") == QUEUED
         results = client.execute_command("EXEC")
         assert results[1] == [1, key.encode(), [b'price', b'77']]
 
@@ -312,23 +325,29 @@ class TestMultiLuaCluster(ValkeySearchClusterTestCase):
         info = FTInfoParser(result)
         assert info.index_name == INDEX
 
-    @pytest.mark.parametrize("extra_arg", [None, "LOCALONLY"], ids=["search", "search localonly"])
-    def test_cme_lua_ft_search(self, extra_arg):
-        """With or without LOCALONLY, Lua returns only local results (fanout skipped)."""
-        client, cluster = self._setup_index()
-        # Without Lua, full cluster search (no LOCALONLY) returns from all shards
-        assert cluster.execute_command("FT.SEARCH", INDEX, "@price:[42 42]")[0] == self.CLUSTER_SIZE
-        args = (INDEX, "@price:[42 42]", extra_arg) if extra_arg else (INDEX, "@price:[42 42]")
-        result = client.execute_command("EVAL", _lua_call("FT.SEARCH", *args), "0")
-        # Inside Lua fanout is skipped — only local shard results returned
-        assert result[0] == 1
+    def test_cme_lua_ft_search_rejects(self):
+        """FT.SEARCH without LOCALONLY in Lua must be rejected in cluster mode."""
+        client, _ = self._setup_index()
+        with pytest.raises(ResponseError) as exc_info:
+            client.execute_command("EVAL", _lua_call("FT.SEARCH", INDEX, "@price:[42 42]"), "0")
+        assert FANOUT_NOT_SUPPORTED_ERR in str(exc_info.value)
 
-    def test_cme_lua_ft_aggregate(self):
+    def test_cme_lua_ft_search_localonly(self):
+        """FT.SEARCH with LOCALONLY in Lua succeeds in cluster mode."""
         client, _ = self._setup_index()
         result = client.execute_command(
-            "EVAL", _lua_call("FT.AGGREGATE", INDEX, "@price:[0 100]", "LOAD", "1", "price"), "0"
+            "EVAL", _lua_call("FT.SEARCH", INDEX, "@price:[42 42]", "LOCALONLY"), "0"
         )
-        assert result == [1, [b'price', b'42']]
+        assert result[0] == 1
+
+    def test_cme_lua_ft_aggregate_rejects(self):
+        """FT.AGGREGATE in Lua must be rejected in cluster mode."""
+        client, _ = self._setup_index()
+        with pytest.raises(ResponseError) as exc_info:
+            client.execute_command(
+                "EVAL", _lua_call("FT.AGGREGATE", INDEX, "@price:[0 100]", "LOAD", "1", "price"), "0"
+            )
+        assert FANOUT_NOT_SUPPORTED_ERR in str(exc_info.value)
 
     def test_cme_lua_ft_create(self):
         client: Valkey = self.new_client_for_primary(0)
@@ -345,12 +364,13 @@ class TestMultiLuaCluster(ValkeySearchClusterTestCase):
         assert client.execute_command("FT._LIST") == []
 
     def test_cme_lua_ingestion_consistency(self):
+        """Keys ingested inside Lua are visible in a LOCALONLY query within the same script."""
         client: Valkey = self.new_client_for_primary(0)
         assert client.execute_command("FT.CREATE", INDEX, "SCHEMA", "price", "NUMERIC") == OK
         key = find_local_key(client, "book:")
         script = (
             "redis.call('HSET', KEYS[1], ARGV[1], ARGV[2]) "
-            "return redis.call('FT.SEARCH', ARGV[3], ARGV[4])"
+            "return redis.call('FT.SEARCH', ARGV[3], ARGV[4], 'LOCALONLY')"
         )
         result = client.execute_command("EVAL", script, "1", key, "price", "88", INDEX, "@price:[88 88]")
         assert result == [1, key.encode(), [b'price', b'88']]

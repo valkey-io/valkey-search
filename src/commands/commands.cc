@@ -132,6 +132,15 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
     parameters->index_schema->ProcessMultiQueue();
 
     const bool inside_multi_exec = vmsdk::MultiOrLua(ctx);
+    const bool do_fanout = ValkeySearch::Instance().UsingCoordinator() &&
+                           ValkeySearch::Instance().IsCluster() &&
+                           !parameters->local_only;
+
+    if (ABSL_PREDICT_FALSE(inside_multi_exec && do_fanout)) {
+      return absl::InvalidArgumentError(
+          "MULTI/EXEC or Lua script are not supported in CME mode.");
+    }
+
     if (ABSL_PREDICT_FALSE(!ValkeySearch::Instance().SupportParallelQueries() ||
                            inside_multi_exec)) {
       VMSDK_RETURN_IF_ERROR(
@@ -153,10 +162,6 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
     }
 
     std::vector<vmsdk::cluster_map::NodeInfo> search_targets;
-
-    bool do_fanout = ValkeySearch::Instance().UsingCoordinator() &&
-                     ValkeySearch::Instance().IsCluster() &&
-                     !parameters->local_only;
     if (do_fanout) {
       search_targets = ComputeSearchTargets(ctx, *parameters);
       if (search_targets.empty()) {

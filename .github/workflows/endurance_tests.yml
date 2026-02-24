@@ -58,63 +58,31 @@ jobs:
         echo "Verifying memtier-benchmark..."
         docker run --rm stability-test-image memtier_benchmark --version
 
-    # Create necessary directories
-    - name: Create Test Directories
-      run: |
-        mkdir -p stability-results
-        chmod 777 stability-results
-
-    # Build Valkey server
-    - name: Build Valkey Server
-      run: |
-        docker run --rm \
-          -v "$(pwd):/workspace" \
-          -w /workspace \
-          --user "ubuntu:ubuntu" \
-          stability-test-image \
-          sudo bash -c "
-            if [ ! -d valkey ]; then
-              git clone https://github.com/valkey-io/valkey.git valkey
-            fi
-            cd valkey
-            make BUILD_TLS=yes -j\$(nproc)
-          "
-
     # Build valkey-search module
     - name: Build valkey-search Module
       run: |
         docker run --rm \
-          -v "$(pwd):/workspace" \
-          -w /workspace \
+          -v "$(pwd):/valkey-search" \
+          -w /valkey-search \
           --user "ubuntu:ubuntu" \
           stability-test-image \
           sudo -E ./build.sh
 
     # Run stability tests
     - name: Run Stability Tests
-      id: test-run
-      env:
-        TEST_FILTER: ${{ github.event.inputs.test_filter || '*' }}
-        TEST_DURATION: ${{ github.event.inputs.test_duration || '60' }}
       run: |
-        docker run --privileged --rm \
-          -v "$(pwd):/workspace" \
-          -w /workspace \
-          -e TEST_FILTER="${TEST_FILTER}" \
-          -e VALKEY_SERVER_PATH="/workspace/valkey/src/valkey-server" \
-          -e VALKEY_CLI_PATH="/workspace/valkey/src/valkey-cli" \
-          -e VALKEY_SEARCH_PATH="/workspace/.build-release/libsearch.so" \
-          -e MEMTIER_PATH="memtier_benchmark" \
-          -e TEST_TMPDIR="/tmp/stability_test" \
-          -e TEST_UNDECLARED_OUTPUTS_DIR="/workspace/stability-results" \
+        docker run --rm \
+          -v "$(pwd):/valkey-search" \
+          -w /valkey-search \
           --user "ubuntu:ubuntu" \
+          -e VALKEY_SEARCH_PATH="/valkey-search/.build-release/libsearch.so" \
           stability-test-image \
-          sudo -E scripts/benchmark/run_endurance_test.sh
+          ./testing/integration/run.sh --test stability
 
     # Update results permissions
     - name: Update Results Permissions
       if: always()
-      run: sudo chmod -R 755 stability-results
+      run: sudo chmod -R 755 testing/integration/.build-release/output
 
     # Display logs and results on failure for debugging
     - name: Display Test Results
@@ -123,16 +91,16 @@ jobs:
         echo "=== Displaying Test Results and Logs ==="
         echo ""
         echo "=== Results Directory Structure ==="
-        ls -laR stability-results/ || echo "Results directory is empty or inaccessible"
+        ls -laR testing/integration/.build-release/output/ || echo "Results directory is empty or inaccessible"
         echo ""
         echo "=== Memtier JSON Results ==="
-        find stability-results -name "*memtier*.json" -type f -exec echo "File: {}" \; -exec cat {} \; -exec echo "" \; || echo "No memtier results found"
+        find testing/integration/.build-release/output -name "*memtier*.json" -type f -exec echo "File: {}" \; -exec cat {} \; -exec echo "" \; || echo "No memtier results found"
         echo ""
         echo "=== Server Logs (last 500 lines each) ==="
-        find stability-results -name "*.log" -type f -exec echo "File: {}" \; -exec tail -500 {} \; -exec echo "" \; || echo "No server logs found"
+        find testing/integration/.build-release/output -name "*.log" -type f -exec echo "File: {}" \; -exec tail -500 {} \; -exec echo "" \; || echo "No server logs found"
         echo ""
         echo "=== Test Output ==="
-        find stability-results -name "*.txt" -type f -exec echo "File: {}" \; -exec cat {} \; -exec echo "" \; || echo "No test output files found"
+        find testing/integration/.build-release/output -name "*.txt" -type f -exec echo "File: {}" \; -exec cat {} \; -exec echo "" \; || echo "No test output files found"
 
     # Display summary on success
     - name: Display Success Summary
@@ -141,10 +109,10 @@ jobs:
         echo "=== Stability Tests Passed Successfully ==="
         echo ""
         echo "Test Filter: ${{ github.event.inputs.test_filter || '*' }}"
-        echo "Results saved to: stability-results/"
+        echo "Results saved to: testing/integration/.build-release/output/"
         echo ""
         echo "=== Test Results Summary ==="
-        find stability-results -name "*memtier*.json" -type f | head -5 || echo "No results found"
+        find testing/integration/.build-release/output -name "*memtier*.json" -type f | head -5 || echo "No results found"
 
     # Upload test results as artifacts
     - name: Upload Test Results
@@ -152,7 +120,7 @@ jobs:
       if: always()
       with:
         name: stability-test-results-${{ github.run_number }}
-        path: stability-results
+        path: testing/integration/.build-release/output
         retention-days: 90
 
     # Upload server logs separately for easier access
@@ -161,7 +129,7 @@ jobs:
       if: always()
       with:
         name: server-logs-${{ github.run_number }}
-        path: stability-results/**/*.log
+        path: testing/integration/.build-release/output/**/*.log
         retention-days: 30
 
   # Summary job to show test results

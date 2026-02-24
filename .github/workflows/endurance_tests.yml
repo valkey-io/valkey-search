@@ -71,6 +71,8 @@ jobs:
     # Run stability tests
     - name: Run Stability Tests
       run: |
+        # Clean up any existing test build directory to avoid permission issues
+        sudo rm -rf testing/integration/.build-release
         docker run --rm \
           -v "$(pwd):/valkey-search" \
           -w /valkey-search \

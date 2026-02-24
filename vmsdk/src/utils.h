@@ -22,9 +22,6 @@
 
 namespace vmsdk {
 
-template <typename T>
-inline void UnusedVar(const T &) {}
-
 class StopWatch {
  public:
   StopWatch() { Reset(); }

@@ -42,7 +42,7 @@ struct IndexInterface {
 struct AggregateParameters : public expr::Expression::CompileContext,
                              public QueryCommand {
   ~AggregateParameters() override = default;
-  AggregateParameters(int db_num) : QueryCommand(db_num){};
+  AggregateParameters(int db_num) : QueryCommand(db_num) {};
   absl::Status ParseCommand(vmsdk::ArgsIterator& itr) override;
   void SendReply(ValkeyModuleCtx* ctx, query::SearchResult& result) override;
   bool loadall_{false};
@@ -197,7 +197,8 @@ class GroupBy : public Stage {
   absl::Status Execute(RecordSet& records) const override;
   struct ReducerInstance {
     virtual ~ReducerInstance() = default;
-    virtual void ProcessRecord(absl::InlinedVector<expr::Value, 4>& values) = 0;
+    virtual void ProcessRecords(
+        const std::vector<absl::InlinedVector<expr::Value, 4>>& all_values) = 0;
     virtual expr::Value GetResult() const = 0;
   };
   struct ReducerInfo {

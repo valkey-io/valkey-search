@@ -1,5 +1,5 @@
-#ifndef VALKEYSEARCH_SRC_UTILS_INLINED_MULTISET_H_
-#define VALKEYSEARCH_SRC_UTILS_INLINED_MULTISET_H_
+#ifndef VALKEYSEARCH_SRC_UTILS_INLINED_PRIORITY_QUEUE_H_
+#define VALKEYSEARCH_SRC_UTILS_INLINED_PRIORITY_QUEUE_H_
 
 #include <algorithm>
 #include <functional>  // For std::greater
@@ -9,7 +9,7 @@
 namespace valkey_search {
 
 template <typename T, size_t N>
-class InlinedMultiset {
+class InlinedPriorityQueue {
  public:
   using Storage = absl::InlinedVector<T, N>;
   using iterator = typename Storage::iterator;
@@ -59,4 +59,4 @@ class InlinedMultiset {
 
 }  // namespace valkey_search
 
-#endif  // VALKEYSEARCH_SRC_UTILS_INLINED_MULTISET_H_
+#endif  // VALKEYSEARCH_SRC_UTILS_INLINED_PRIORITY_QUEUE_H_

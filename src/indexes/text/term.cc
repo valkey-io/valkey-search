@@ -31,9 +31,7 @@ FieldMaskPredicate TermIterator::QueryFieldMask() const {
   return query_field_mask_;
 }
 
-bool TermIterator::DoneKeys() const {
-  return !current_key_;
-}
+bool TermIterator::DoneKeys() const { return !current_key_; }
 
 const InternedStringPtr& TermIterator::CurrentKey() const {
   CHECK(current_key_);
@@ -63,7 +61,6 @@ bool TermIterator::FindMinimumValidKey() {
       InsertValidKeyIterator(i);
     }
   }
-
   if (key_set_.empty()) {
     current_key_ = nullptr;
     current_position_ = std::nullopt;
@@ -74,14 +71,12 @@ bool TermIterator::FindMinimumValidKey() {
   // 1. Get the minimum key from the heap root
   current_key_ = key_set_.min().first;
   current_key_indices_.clear();
-
   // 2. Extract ALL iterators sharing this minimum key
   // In a heap, we must pop to see the next minimum
   while (!key_set_.empty() && key_set_.min().first == current_key_) {
     current_key_indices_.push_back(key_set_.min().second);
     key_set_.pop_min();  // O(log K)
   }
-
   // 3. FULL RESET for the new Key's positions
   if (require_positions_) {
     pos_iterators_.clear();
@@ -109,7 +104,6 @@ bool TermIterator::NextKey() {
 
 bool TermIterator::SeekForwardKey(const InternedStringPtr& target_key) {
   if (current_key_ && current_key_ >= target_key) return true;
-
   // Remove and seek laggards from heap
   while (!key_set_.empty() && key_set_.min().first < target_key) {
     size_t idx = key_set_.min().second;
@@ -117,7 +111,6 @@ bool TermIterator::SeekForwardKey(const InternedStringPtr& target_key) {
     key_iterators_[idx].SkipForwardKey(target_key);
     InsertValidKeyIterator(idx, target_key);
   }
-
   // Handle currently active indices
   if (current_key_) {
     for (size_t idx : current_key_indices_) {
@@ -126,7 +119,6 @@ bool TermIterator::SeekForwardKey(const InternedStringPtr& target_key) {
     }
     current_key_indices_.clear();
   }
-
   return FindMinimumValidKey();
 }
 
@@ -159,13 +151,11 @@ bool TermIterator::FindMinimumValidPosition() {
       InsertValidPositionIterator(i);
     }
   }
-
   if (pos_set_.empty()) {
     current_position_ = std::nullopt;
     current_field_mask_ = 0ULL;
     return false;
   }
-
   pos_set_.heapify();
   uint32_t min_position = pos_set_.min().first;
   current_pos_indices_.clear();
@@ -199,7 +189,6 @@ bool TermIterator::SeekForwardPosition(Position target_position) {
       current_position_.value().start >= target_position) {
     return true;
   }
-
   // Remove and seek laggards from heap
   while (!pos_set_.empty() && pos_set_.min().first < target_position) {
     size_t idx = pos_set_.min().second;
@@ -207,7 +196,6 @@ bool TermIterator::SeekForwardPosition(Position target_position) {
     pos_iterators_[idx].SkipForwardPosition(target_position);
     InsertValidPositionIterator(idx, target_position);
   }
-
   // Handle currently active indices
   if (current_position_.has_value()) {
     for (size_t idx : current_pos_indices_) {
@@ -216,7 +204,6 @@ bool TermIterator::SeekForwardPosition(Position target_position) {
     }
     current_pos_indices_.clear();
   }
-
   return FindMinimumValidPosition();
 }
 

@@ -12,7 +12,7 @@
 #include "src/indexes/text.h"
 #include "src/indexes/text/flat_position_map.h"
 #include "src/indexes/text/text_iterator.h"
-#include "src/utils/inlined_multiset.h"
+#include "src/utils/inlined_priority_queue.h"
 
 namespace valkey_search::indexes::text {
 
@@ -86,13 +86,13 @@ class TermIterator : public TextIterator {
   const bool has_original_;
 
   // Pending queue: valid iterators not currently being processed, sorted by key
-  valkey_search::InlinedMultiset<std::pair<Key, size_t>,
-                                 kWordExpansionInlineCapacity>
+  valkey_search::InlinedPriorityQueue<std::pair<Key, size_t>,
+                                      kWordExpansionInlineCapacity>
       key_set_;
   // Pending queue: valid iterators not currently being processed, sorted by
   // position
-  valkey_search::InlinedMultiset<std::pair<uint32_t, size_t>,
-                                 kWordExpansionInlineCapacity>
+  valkey_search::InlinedPriorityQueue<std::pair<uint32_t, size_t>,
+                                      kWordExpansionInlineCapacity>
       pos_set_;
   // Indices of iterators at current_key_ (active, not in key_set_)
   absl::InlinedVector<size_t, kWordExpansionInlineCapacity>
@@ -100,9 +100,6 @@ class TermIterator : public TextIterator {
   // Indices of iterators at current_position_ (active, not in pos_set_)
   absl::InlinedVector<size_t, kWordExpansionInlineCapacity>
       current_pos_indices_;
-
-  // Persistent scratchpad to avoid stack growth/allocation during Seeks.
-  absl::InlinedVector<size_t, kWordExpansionInlineCapacity> scratch_indices_;
 
   bool FindMinimumValidKey();
   void InsertValidKeyIterator(

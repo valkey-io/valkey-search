@@ -2,7 +2,7 @@
 #define VALKEYSEARCH_SRC_UTILS_INLINED_PRIORITY_QUEUE_H_
 
 #include <algorithm>
-#include <functional>  // For std::greater
+#include <functional>
 
 #include "absl/container/inlined_vector.h"
 
@@ -28,7 +28,7 @@ class InlinedPriorityQueue {
     storage_.emplace_back(std::forward<Args>(args)...);
   }
 
-  // O(K) complexity - much faster than Sort for large K
+  // O(K) complexity - faster than Sort for large K.
   void heapify() {
     std::make_heap(storage_.begin(), storage_.end(), std::greater<T>());
   }

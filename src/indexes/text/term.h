@@ -85,12 +85,13 @@ class TermIterator : public TextIterator {
   const bool require_positions_;
   const bool has_original_;
 
-  // Pending queue: valid iterators not currently being processed, sorted by key
+  // Pending queue: heap of valid iterators not currently being processed.
+  // Provides O(1) access to the minimum key and O(log K) extraction.
   valkey_search::InlinedPriorityQueue<std::pair<Key, size_t>,
                                       kWordExpansionInlineCapacity>
       key_set_;
-  // Pending queue: valid iterators not currently being processed, sorted by
-  // position
+  // Pending queue: heap of valid iterators not currently being processed.
+  // Provides O(1) access to the minimum position and O(log K) extraction.
   valkey_search::InlinedPriorityQueue<std::pair<uint32_t, size_t>,
                                       kWordExpansionInlineCapacity>
       pos_set_;

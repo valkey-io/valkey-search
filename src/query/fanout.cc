@@ -299,9 +299,12 @@ absl::Status PerformSearchFanoutAsync(
     // per-shard fetch limit. Instead of fetching K from every shard, we
     // calculate a limit based on the distribution profile to cover (offset +
     // limit) results across the cluster.
+
+    // For queries requiring complete results (e.g., with SORTBY), we must
+    // fetch K results from each shard to guarantee global correctness.
+    // Also, for small indices (below the configured threshold), we skip the
+    // optimization.
     if (index_size < min_index_size || parameters->RequiresCompleteResults()) {
-      // For queries requiring complete results (e.g., with SORTBY), we must
-      // fetch K results from each shard to guarantee global correctness.
       request->mutable_limit()->set_first_index(0);
       request->mutable_limit()->set_number(K);
     } else {

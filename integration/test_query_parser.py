@@ -218,3 +218,62 @@ class TestQueryParser(ValkeySearchTestCaseBase):
         # OR operator
         result = client.execute_command("FT.SEARCH", "idx1", 'con*+ | word1!!')
         assert result[0] == 2
+
+    def test_query_with_identifier_alias(self):
+        """
+        Test that query works with original identifier as well as alias
+        """
+        client: Valkey = self.server.get_new_client()
+        client.execute_command("FT.CREATE", "idx1", "ON", "HASH", "SCHEMA", "content", "AS", "con", "TEXT")
+        # Insert test documents
+        client.execute_command("HSET", "doc:1", "content", "I am going to a concert", "content2", "racing car")
+        client.execute_command("HSET", "doc:2", "content", "word1 word2 word3")
+        # Query with alias
+        result = client.execute_command("FT.SEARCH", "idx1", "@con:concert")
+        assert result[0] == 1
+        # Query with original identifier
+        result = client.execute_command("FT.SEARCH", "idx1", "@content:concert")
+        assert result[0] == 1
+
+    def test_simple_json_vector_query(self):
+        """
+        Test simple JSON vector field query to understand the behavior
+        """
+        client: Valkey = self.server.get_new_client()
+        
+        # Create a simple JSON index with one vector field WITH an alias
+        client.execute_command(
+            "FT.CREATE", "vec_idx", "ON", "JSON", 
+            "SCHEMA", "$.embedding", "AS", "embedalias", "VECTOR", "HNSW", "6", 
+            "TYPE", "FLOAT32", "DIM", "3", "DISTANCE_METRIC", "COSINE"
+        )
+        
+        # Insert a test document
+        import json
+        import struct
+        client.execute_command(
+            "JSON.SET", "doc:1", "$", 
+            json.dumps({"embedding": [1.0, 2.0, 3.0], "name": "test"})
+        )
+        
+        # Create proper 3-float vector blob (12 bytes)
+        vec_blob = struct.pack('fff', 1.0, 2.0, 3.0)
+        
+        # Try to search using the ALIAS (vector)
+        result = client.execute_command(
+            "FT.SEARCH", "vec_idx", "*=>[KNN 1 @embedalias $vec]",
+            "PARAMS", "2", "vec", vec_blob,
+            "DIALECT", "2"
+        )
+        print(f"Query with alias @vector: {result}")
+        assert result[0] == 1  # Should find 1 document
+        
+        # Try to search using the IDENTIFIER ($.embedding)
+        result = client.execute_command(
+            "FT.SEARCH", "vec_idx", "*=>[KNN 1 @$.embedding $vec]",
+            "PARAMS", "2", "vec", vec_blob,
+            "DIALECT", "2"
+        )
+        print(f"Query with identifier @$.embedding: {result}")
+        assert result[0] == 1  # Should also find 1 document
+

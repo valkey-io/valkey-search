@@ -342,9 +342,11 @@ grpc::ServerUnaryReactor* Service::InfoIndexPartition(
   GRPCSuspensionGuard guard(GRPCSuspender::Instance());
   auto latency_sample = SAMPLE_EVERY_N(100);
   grpc::ServerUnaryReactor* reactor = context->DefaultReactor();
-  // simulate grpc timeout for testing only
+  // simulate grpc failure for testing only
   if (ForceRemoteFailCount.GetValue() > 0) {
     ForceRemoteFailCount.Decrement();
+    reactor->Finish(grpc::Status(grpc::StatusCode::UNAVAILABLE,
+                                 "Simulated remote failure for testing"));
     return reactor;
   }
   vmsdk::RunByMain([reactor, response, request,

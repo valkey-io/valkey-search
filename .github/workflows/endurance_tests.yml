@@ -52,10 +52,7 @@ jobs:
     # Build valkey-search module directly on ARM64 host
     - name: Build valkey-search Module on ARM64
       run: |
-        export CC=$(which gcc)
-        export CXX=$(which g++)
         ./build.sh
-        echo "=== Build completed ==="
         ls -lh .build-release/libsearch.so
 
     # Run stability tests directly on ARM64 host

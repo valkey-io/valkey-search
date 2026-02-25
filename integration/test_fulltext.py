@@ -2225,19 +2225,22 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         """Test non-ASCII UTF-8 characters in English text - ingestion and query"""
         client: Valkey = self.server.get_new_client()
         client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA", "content", "TEXT", "NOSTEM")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
         # Ingestion: Common non-ASCII chars in English
         client.execute_command("HSET", "doc:1", "content", "\u201csmart quotes\u201d")  # U+201C/D
         client.execute_command("HSET", "doc:2", "content", "it's café naïve")  # U+2019, U+00E9
         client.execute_command("HSET", "doc:3", "content", "hello—world")  # U+2014 em-dash
         client.execute_command("HSET", "doc:4", "content", "wait… done")  # U+2026 ellipsis
+        assert IndexingTestHelper.get_ft_info(client, "idx").parsed_data["hash_indexing_failures"] == 0
         # Invalid UTF-8 sequences - should not crash
         client.execute_command("HSET", "doc:5", "content", b"invalid\xff\xfe bytes")
         client.execute_command("HSET", "doc:6", "content", b"truncated\xc3 char")
         client.execute_command("HSET", "doc:7", "content", b"mixed valid\xffand\xfeinvalid")
-        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
         # ft.info
         info_data = IndexingTestHelper.get_ft_info(client, "idx").parsed_data
         assert info_data["num_docs"] == 7
+        assert info_data["hash_indexing_failures"] == 3 
+        assert info_data["num_records"] == 4
         # Query parsing: Verify tokenization handles non-ASCII
         # assert client.execute_command("FT.SEARCH", "idx", "smart")[0] == 1
         assert client.execute_command("FT.SEARCH", "idx", "café")[0] == 1
@@ -2276,9 +2279,18 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         client.execute_command("HSET", "doc:8", "content", "नमस्ते दुनिया", "title", "हिन्दी", "price", "80")
         # Emoji (4-byte UTF-8)
         client.execute_command("HSET", "doc:9", "content", "Hello 👋 World 🌍 दुनिया 你好世界 مرحبا", "title", "emoji", "price", "90")
+        # one doc with no numeric fields
+        client.execute_command("HSET", "doc:10", "content", "纯中文文档", "title", "परीक्षण اختبار")
+        # check info
+        assert IndexingTestHelper.get_ft_info(client, "idx").parsed_data["hash_indexing_failures"] == 0
+        # Test different language in content + invalid UTF-8 in title (expect indexing failures)
+        client.execute_command("HSET", "doc:11", "content", "纯中文文档", "title", b"test\xff\xfe")
+        client.execute_command("HSET", "doc:12", "content", "مستند عربي فقط", "title", b"invalid\xc3")
         # ft.info
         info_data = IndexingTestHelper.get_ft_info(client, "idx").parsed_data
-        assert info_data["num_docs"] == 9
+        assert info_data["num_docs"] == 12
+        assert info_data["hash_indexing_failures"] == 2
+        assert info_data["num_records"] >= 27 # 9 docs with all fields
         # 1. Single term
         client.execute_command("FT.SEARCH", "idx", "très")
         client.execute_command("FT.SEARCH", "idx", "你好")

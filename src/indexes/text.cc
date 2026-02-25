@@ -14,6 +14,7 @@
 #include "src/indexes/text/fuzzy.h"
 #include "src/indexes/text/term.h"
 #include "src/valkey_search_options.h"
+#include "vmsdk/src/log.h"
 
 namespace valkey_search::indexes {
 

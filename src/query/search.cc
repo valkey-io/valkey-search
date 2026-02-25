@@ -766,21 +766,16 @@ SerializationRange SearchResult::GetSerializationRange(
 
 absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
   absl::StatusOr<std::vector<indexes::Neighbor>> neighbors;
-  {
-    auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
-    vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
-    neighbors = DoSearch(parameters, search_mode, lock);
-    // Populate sequence numbers within the reader lock
-    if (neighbors.ok()) {
-      parameters.index_schema->PopulateIndexMutationSequenceNumbers(*neighbors);
-    }
-  }
-
+  auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
+  vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
+  neighbors = DoSearch(parameters, search_mode, lock);
   VMSDK_ASSIGN_OR_RETURN(
       auto result, MaybeAddIndexedContent(std::move(neighbors), parameters));
   size_t total_count = result.size();
   parameters.search_result =
       SearchResult(total_count, std::move(result), parameters);
+  parameters.index_schema->PopulateIndexMutationSequenceNumbers(
+      parameters.search_result.neighbors);
   return absl::OkStatus();
 }
 

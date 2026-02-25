@@ -32,10 +32,7 @@ FieldMaskPredicate TermIterator::QueryFieldMask() const {
 }
 
 bool TermIterator::DoneKeys() const {
-  for (const auto& key_iter : key_iterators_) {
-    if (key_iter.IsValid()) return false;
-  }
-  return true;
+  return !current_key_;
 }
 
 const InternedStringPtr& TermIterator::CurrentKey() const {
@@ -134,10 +131,7 @@ bool TermIterator::SeekForwardKey(const InternedStringPtr& target_key) {
 }
 
 bool TermIterator::DonePositions() const {
-  for (const auto& pos_iter : pos_iterators_) {
-    if (pos_iter.IsValid()) return false;
-  }
-  return true;
+  return !current_position_.has_value();
 }
 
 const PositionRange& TermIterator::CurrentPosition() const {

@@ -765,10 +765,10 @@ SerializationRange SearchResult::GetSerializationRange(
 }
 
 absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
-  absl::StatusOr<std::vector<indexes::Neighbor>> neighbors;
   auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
   vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
-  neighbors = DoSearch(parameters, search_mode, lock);
+  absl::StatusOr<std::vector<indexes::Neighbor>> neighbors =
+      DoSearch(parameters, search_mode, lock);
   VMSDK_ASSIGN_OR_RETURN(
       auto result, MaybeAddIndexedContent(std::move(neighbors), parameters));
   size_t total_count = result.size();

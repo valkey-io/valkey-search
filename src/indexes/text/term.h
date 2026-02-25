@@ -107,6 +107,8 @@ class TermIterator : public TextIterator {
   bool FindMinimumValidPosition();
   void InsertValidPositionIterator(
       size_t idx, std::optional<uint32_t> min_position = std::nullopt);
+  void ClearKeyState();
+  void ClearPositionState();
 };
 
 }  // namespace valkey_search::indexes::text

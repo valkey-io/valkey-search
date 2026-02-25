@@ -43,7 +43,7 @@ const InternedStringPtr& TermIterator::CurrentKey() const {
   return current_key_;
 }
 
-// Helper function to insert a key iterator into the heap if it is valid
+// Helper function to advance key iterator and collect valid entries
 void TermIterator::InsertValidKeyIterator(
     size_t idx, std::optional<InternedStringPtr> min_key) {
   auto& key_iter = key_iterators_[idx];
@@ -55,34 +55,37 @@ void TermIterator::InsertValidKeyIterator(
     key_iter.NextKey();
   }
   if (key_iter.IsValid()) {
-    key_set_.emplace(key_iter.GetKey(), idx);
+    key_set_.push_back_unsorted(key_iter.GetKey(), idx);
   }
 }
 
 bool TermIterator::FindMinimumValidKey() {
-  // Build set only if empty
+  // Build heap only if empty
   if (key_set_.empty()) {
     for (size_t i = 0; i < key_iterators_.size(); ++i) {
       InsertValidKeyIterator(i);
     }
+    key_set_.heapify();  // O(K) building of the heap
   }
-  // If still empty, we are done.
+
   if (key_set_.empty()) {
     current_key_ = nullptr;
     current_position_ = std::nullopt;
     current_field_mask_ = 0ULL;
     return false;
   }
-  // 1. Peek minimum
-  auto it_begin = key_set_.begin();
-  current_key_ = it_begin->first;
+
+  // 1. Get the minimum key from the heap root
+  current_key_ = key_set_.min().first;
   current_key_indices_.clear();
-  // 2. Identify range
-  auto it_end = it_begin;
-  while (it_end != key_set_.end() && it_end->first == current_key_) {
-    current_key_indices_.push_back(it_end->second);
-    ++it_end;
+
+  // 2. Extract ALL iterators sharing this minimum key
+  // In a heap, we must pop to see the next minimum
+  while (!key_set_.empty() && key_set_.min().first == current_key_) {
+    current_key_indices_.push_back(key_set_.min().second);
+    key_set_.pop_min();  // O(log K)
   }
+
   // 3. FULL RESET for the new Key's positions
   if (require_positions_) {
     pos_iterators_.clear();
@@ -95,59 +98,42 @@ bool TermIterator::FindMinimumValidKey() {
     current_field_mask_ = 0ULL;
     TermIterator::NextPosition();
   }
-  // 4. Batch Erase
-  key_set_.erase(it_begin, it_end);
   return true;
 }
 
 bool TermIterator::NextKey() {
   if (current_key_) {
-    // First advance all iterators at current key
     for (size_t idx : current_key_indices_) {
       key_iterators_[idx].NextKey();
-    }
-    // Then insert them back if still valid
-    for (size_t idx : current_key_indices_) {
       InsertValidKeyIterator(idx);
     }
+    key_set_.heapify();  // Restore heap in O(K)
   }
   return FindMinimumValidKey();
 }
 
 bool TermIterator::SeekForwardKey(const InternedStringPtr& target_key) {
-  // 1. Early exit: already at or past the target key.
-  if (current_key_ && current_key_ >= target_key) {
-    return true;
+  if (current_key_ && current_key_ >= target_key) return true;
+
+  // Remove and seek laggards from heap
+  while (!key_set_.empty() && key_set_.min().first < target_key) {
+    size_t idx = key_set_.min().second;
+    key_set_.pop_min();
+    key_iterators_[idx].SkipForwardKey(target_key);
+    InsertValidKeyIterator(idx, target_key);
   }
-  // 2. Identify laggard keys in the set (keys < target_key)
-  // We use the same class-member scratch_indices_ for Key seeks.
-  scratch_indices_.clear();
-  auto it_end = key_set_.begin();
-  while (it_end != key_set_.end() && it_end->first < target_key) {
-    scratch_indices_.push_back(it_end->second);
-    ++it_end;
-  }
-  // 3. Batch process laggard keys from the set.
-  if (!scratch_indices_.empty()) {
-    key_set_.erase(key_set_.begin(), it_end);
-    for (size_t idx : scratch_indices_) {
-      key_iterators_[idx].SkipForwardKey(target_key);
-      InsertValidKeyIterator(idx, target_key);
-    }
-    // Optimization: Clear immediately to keep memory ready.
-    scratch_indices_.clear();
-  }
-  // 4. Handle the "currently active" key indices.
-  // Redundant check removed: if we are here, current_key_ is either
-  // null or < target_key.
+  key_set_.heapify();
+
+  // Handle currently active indices
   if (current_key_) {
     for (size_t idx : current_key_indices_) {
       key_iterators_[idx].SkipForwardKey(target_key);
       InsertValidKeyIterator(idx, target_key);
     }
+    key_set_.heapify();
     current_key_indices_.clear();
   }
-  // 5. Finalize state by finding the new minimum valid key.
+
   return FindMinimumValidKey();
 }
 
@@ -163,7 +149,6 @@ const PositionRange& TermIterator::CurrentPosition() const {
   return current_position_.value();
 }
 
-// Helper function to insert a position iterator into the set if it is valid
 void TermIterator::InsertValidPositionIterator(
     size_t idx, std::optional<uint32_t> min_position) {
   auto& pos_iter = pos_iterators_[idx];
@@ -173,35 +158,33 @@ void TermIterator::InsertValidPositionIterator(
     pos_iter.NextPosition();
   }
   if (pos_iter.IsValid()) {
-    pos_set_.emplace(pos_iter.GetPosition(), idx);
+    pos_set_.push_back_unsorted(pos_iter.GetPosition(), idx);
   }
 }
 
+// Position Logic follows the same Heap pattern
 bool TermIterator::FindMinimumValidPosition() {
-  // Build set only if empty
   if (pos_set_.empty()) {
     for (size_t i = 0; i < pos_iterators_.size(); ++i) {
       InsertValidPositionIterator(i);
     }
+    pos_set_.heapify();
   }
-  // If still empty, we are done.
+
   if (pos_set_.empty()) {
     current_position_ = std::nullopt;
     current_field_mask_ = 0ULL;
     return false;
   }
-  // 1. Get the minimum value for the position
-  uint32_t min_position = pos_set_.begin()->first;
+
+  uint32_t min_position = pos_set_.min().first;
   current_pos_indices_.clear();
-  // 2. Collect ALL matching indices into our inlined vector
-  auto it_end = pos_set_.begin();
-  while (it_end != pos_set_.end() && it_end->first == min_position) {
-    current_pos_indices_.push_back(it_end->second);
-    ++it_end;
+
+  while (!pos_set_.empty() && pos_set_.min().first == min_position) {
+    current_pos_indices_.push_back(pos_set_.min().second);
+    pos_set_.pop_min();
   }
-  // 3. Batch erase from the set (Now we only shift the vector once)
-  pos_set_.erase(pos_set_.begin(), it_end);
-  // 4. Set current state using the collected indices
+
   current_position_ = PositionRange{min_position, min_position};
   current_field_mask_ = pos_iterators_[current_pos_indices_[0]].GetFieldMask();
   return true;
@@ -209,54 +192,40 @@ bool TermIterator::FindMinimumValidPosition() {
 
 bool TermIterator::NextPosition() {
   if (current_position_.has_value()) {
-    // First advance all iterators at current position
     for (size_t idx : current_pos_indices_) {
       pos_iterators_[idx].NextPosition();
-    }
-    // Then insert them back if still valid
-    for (size_t idx : current_pos_indices_) {
       InsertValidPositionIterator(idx);
     }
+    pos_set_.heapify();
   }
   return FindMinimumValidPosition();
 }
 
 bool TermIterator::SeekForwardPosition(Position target_position) {
-  // 1. Early exit: already at or past the target.
   if (current_position_.has_value() &&
       current_position_.value().start >= target_position) {
     return true;
   }
-  // 2. Identify laggards in the set (positions < target).
-  // We use the class-member scratch_indices_ to avoid stack/heap churn.
-  scratch_indices_.clear();
-  auto it_end = pos_set_.begin();
-  while (it_end != pos_set_.end() && it_end->first < target_position) {
-    scratch_indices_.push_back(it_end->second);
-    ++it_end;
+
+  // Remove and seek laggards from heap
+  while (!pos_set_.empty() && pos_set_.min().first < target_position) {
+    size_t idx = pos_set_.min().second;
+    pos_set_.pop_min();
+    pos_iterators_[idx].SkipForwardPosition(target_position);
+    InsertValidPositionIterator(idx, target_position);
   }
-  // 3. Batch process laggards from the set.
-  if (!scratch_indices_.empty()) {
-    pos_set_.erase(pos_set_.begin(), it_end);
-    for (size_t idx : scratch_indices_) {
-      pos_iterators_[idx].SkipForwardPosition(target_position);
-      InsertValidPositionIterator(idx, target_position);
-    }
-    // Optimization: Clear immediately after use to keep the
-    // memory ready for the next phase or next call.
-    scratch_indices_.clear();
-  }
-  // 4. Handle the "currently active" indices.
-  // Redundant check removed: if we are here, current_position_ is either
-  // nullopt or < target_position.
+  pos_set_.heapify();
+
+  // Handle currently active indices
   if (current_position_.has_value()) {
     for (size_t idx : current_pos_indices_) {
       pos_iterators_[idx].SkipForwardPosition(target_position);
       InsertValidPositionIterator(idx, target_position);
     }
+    pos_set_.heapify();
     current_pos_indices_.clear();
   }
-  // 5. Finalize state by finding the new minimum.
+
   return FindMinimumValidPosition();
 }
 

@@ -291,7 +291,7 @@ absl::Status PerformSearchFanoutAsync(
   // distribution profile. 100 means data is perfectly balanced (Uniform); 0
   // means data is heavily skewed.
   uint32_t U = options::GetFanoutDataUniformity().GetValue();
-  uint64_t index_size = parameters->index_schema->GetSize("");
+  uint64_t index_size = parameters->index_schema->GetIndexKeyInfoSize();
   uint32_t min_index_size =
       options::GetFanoutUniformityMinIndexSize().GetValue();
   if (parameters->IsNonVectorQuery()) {

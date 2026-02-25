@@ -102,6 +102,16 @@ struct QueryCommand : public query::SearchParameters {
   //
   virtual void SendReply(ValkeyModuleCtx *ctx,
                          query::SearchResult &search_result) = 0;
+  //
+  // Called when query completes.
+  //
+  void QueryCompleteBackground(std::unique_ptr<SearchParameters> self) override;
+  void QueryCompleteMainThread(std::unique_ptr<SearchParameters> self) override;
+
+  std::optional<vmsdk::BlockedClient> blocked_client;
+
+ private:
+  void QueryCompleteImpl(std::unique_ptr<SearchParameters> parameters);
 };
 
 namespace async {

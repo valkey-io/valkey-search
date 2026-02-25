@@ -17,10 +17,26 @@
         "type": "string"
       },
       {
-        "name": "verbatim",
+        "name": "DIALECT",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "dialect_token",
+            "type": "pure-token",
+            "token": "DIALECT"
+          },
+          {
+            "name": "dialect_version",
+            "type": "integer"
+          }
+        ]
+      },
+      {
+        "name": "INORDER",
         "type": "pure-token",
         "optional": true,
-        "token": "VERBATIM"
+        "token": "INORDER"
       },
       {
         "name": "LOAD",
@@ -33,35 +49,142 @@
             "token": "LOAD"
           },
           {
-            "name": "nargs",
-            "type": "integer"
-          },
-          {
-            "name": "items",
-            "type": "block",
-            "multiple": true,
+            "name": "load_args",
+            "type": "oneof",
             "arguments": [
               {
-                "name": "identifier",
-                "type": "string"
+                "name": "all",
+                "type": "pure-token",
+                "token": "*"
               },
               {
-                "name": "alias",
+                "name": "fields",
                 "type": "block",
-                "optional": true,
                 "arguments": [
                   {
-                    "name": "as_token",
-                    "type": "pure-token",
-                    "token": "AS"
+                    "name": "count",
+                    "type": "integer"
                   },
                   {
-                    "name": "property",
-                    "type": "string"
+                    "name": "field",
+                    "type": "string",
+                    "multiple": true
                   }
                 ]
               }
             ]
+          }
+        ]
+      },
+      {
+        "name": "PARAMS",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "params_token",
+            "type": "pure-token",
+            "token": "PARAMS"
+          },
+          {
+            "name": "count",
+            "type": "integer"
+          },
+          {
+            "name": "parameters",
+            "type": "block",
+            "multiple": true,
+            "arguments": [
+              {
+                "name": "name",
+                "type": "string"
+              },
+              {
+                "name": "value",
+                "type": "string"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "SLOP",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "slop_token",
+            "type": "pure-token",
+            "token": "SLOP"
+          },
+          {
+            "name": "slop",
+            "type": "integer"
+          }
+        ]
+      },
+      {
+        "name": "TIMEOUT",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "timeout_token",
+            "type": "pure-token",
+            "token": "TIMEOUT"
+          },
+          {
+            "name": "milliseconds",
+            "type": "integer"
+          }
+        ]
+      },
+      {
+        "name": "VERBATIM",
+        "type": "pure-token",
+        "optional": true,
+        "token": "VERBATIM"
+      },
+      {
+        "name": "APPLY",
+        "type": "block",
+        "optional": true,
+        "multiple": true,
+        "arguments": [
+          {
+            "name": "apply_token",
+            "type": "pure-token",
+            "token": "APPLY"
+          },
+          {
+            "name": "expression",
+            "type": "string"
+          },
+          {
+            "name": "as_token",
+            "type": "pure-token",
+            "token": "AS"
+          },
+          {
+            "name": "field",
+            "type": "string"
+          }
+        ]
+      },
+      {
+        "name": "FILTER",
+        "type": "block",
+        "optional": true,
+        "multiple": true,
+        "arguments": [
+          {
+            "name": "filter_token",
+            "type": "pure-token",
+            "token": "FILTER"
+          },
+          {
+            "name": "expression",
+            "type": "string"
           }
         ]
       },
@@ -77,117 +200,114 @@
             "token": "GROUPBY"
           },
           {
-            "name": "nargs",
+            "name": "count",
             "type": "integer"
           },
           {
-            "name": "group_fields",
+            "name": "field",
             "type": "string",
             "multiple": true
+          },
+          {
+            "name": "REDUCE",
+            "type": "block",
+            "optional": true,
+            "multiple": true,
+            "arguments": [
+              {
+                "name": "reduce_token",
+                "type": "pure-token",
+                "token": "REDUCE"
+              },
+              {
+                "name": "function",
+                "type": "oneof",
+                "arguments": [
+                  {
+                    "name": "COUNT",
+                    "type": "pure-token",
+                    "token": "COUNT"
+                  },
+                  {
+                    "name": "COUNT_DISTINCT",
+                    "type": "pure-token",
+                    "token": "COUNT_DISTINCT"
+                  },
+                  {
+                    "name": "SUM",
+                    "type": "pure-token",
+                    "token": "SUM"
+                  },
+                  {
+                    "name": "MIN",
+                    "type": "pure-token",
+                    "token": "MIN"
+                  },
+                  {
+                    "name": "MAX",
+                    "type": "pure-token",
+                    "token": "MAX"
+                  },
+                  {
+                    "name": "AVG",
+                    "type": "pure-token",
+                    "token": "AVG"
+                  },
+                  {
+                    "name": "STDDEV",
+                    "type": "pure-token",
+                    "token": "STDDEV"
+                  }
+                ]
+              },
+              {
+                "name": "count",
+                "type": "integer"
+              },
+              {
+                "name": "expression",
+                "type": "string",
+                "multiple": true,
+                "optional": true
+              },
+              {
+                "name": "alias",
+                "type": "block",
+                "optional": true,
+                "arguments": [
+                  {
+                    "name": "as_token",
+                    "type": "pure-token",
+                    "token": "AS"
+                  },
+                  {
+                    "name": "name",
+                    "type": "string"
+                  }
+                ]
+              }
+            ]
           }
         ]
       },
       {
-        "name": "REDUCE",
+        "name": "LIMIT",
         "type": "block",
         "optional": true,
         "multiple": true,
         "arguments": [
           {
-            "name": "reduce_token",
+            "name": "limit_token",
             "type": "pure-token",
-            "token": "REDUCE"
+            "token": "LIMIT"
           },
           {
-            "name": "function",
-            "type": "oneof",
-            "arguments": [
-              {
-                "name": "count",
-                "type": "pure-token",
-                "token": "COUNT"
-              },
-              {
-                "name": "count_distinct",
-                "type": "pure-token",
-                "token": "COUNT_DISTINCT"
-              },
-              {
-                "name": "count_distinctish",
-                "type": "pure-token",
-                "token": "COUNT_DISTINCT_ISH"
-              },
-              {
-                "name": "sum",
-                "type": "pure-token",
-                "token": "SUM"
-              },
-              {
-                "name": "min",
-                "type": "pure-token",
-                "token": "MIN"
-              },
-              {
-                "name": "max",
-                "type": "pure-token",
-                "token": "MAX"
-              },
-              {
-                "name": "avg",
-                "type": "pure-token",
-                "token": "AVG"
-              },
-              {
-                "name": "stddev",
-                "type": "pure-token",
-                "token": "STDDEV"
-              },
-              {
-                "name": "quantile",
-                "type": "pure-token",
-                "token": "QUANTILE"
-              },
-              {
-                "name": "tolist",
-                "type": "pure-token",
-                "token": "TOLIST"
-              },
-              {
-                "name": "first_value",
-                "type": "pure-token",
-                "token": "FIRST_VALUE"
-              },
-              {
-                "name": "random_sample",
-                "type": "pure-token",
-                "token": "RANDOM_SAMPLE"
-              }
-            ]
-          },
-          {
-            "name": "nargs",
+            "name": "offset",
             "type": "integer"
           },
           {
-            "name": "identifier",
-            "type": "string",
-            "multiple": true
-          },
-          {
-            "name": "alias",
-            "type": "block",
-            "optional": true,
-            "arguments": [
-              {
-                "name": "as_token",
-                "type": "pure-token",
-                "token": "AS"
-              },
-              {
-                "name": "identifier",
-                "type": "string"
-              }
-            ]
+            "name": "count",
+            "type": "integer"
           }
         ]
       },
@@ -202,7 +322,7 @@
             "token": "SORTBY"
           },
           {
-            "name": "nargs",
+            "name": "count",
             "type": "integer"
           },
           {
@@ -225,203 +345,6 @@
                 "type": "integer"
               }
             ]
-          },
-          {
-            "name": "WITHCOUNT",
-            "type": "pure-token",
-            "optional": true,
-            "token": "WITHCOUNT"
-          }
-        ]
-      },
-      {
-        "name": "APPLY",
-        "type": "block",
-        "optional": true,
-        "multiple": true,
-        "arguments": [
-          {
-            "name": "apply_token",
-            "type": "pure-token",
-            "token": "APPLY"
-          },
-          {
-            "name": "expr",
-            "type": "string"
-          },
-          {
-            "name": "as_token",
-            "type": "pure-token",
-            "token": "AS"
-          },
-          {
-            "name": "name",
-            "type": "string"
-          }
-        ]
-      },
-      {
-        "name": "LIMIT",
-        "type": "block",
-        "optional": true,
-        "arguments": [
-          {
-            "name": "limit_token",
-            "type": "pure-token",
-            "token": "LIMIT"
-          },
-          {
-            "name": "offset",
-            "type": "integer"
-          },
-          {
-            "name": "num",
-            "type": "integer"
-          }
-        ]
-      },
-      {
-        "name": "FILTER",
-        "type": "block",
-        "optional": true,
-        "multiple": true,
-        "arguments": [
-          {
-            "name": "filter_token",
-            "type": "pure-token",
-            "token": "FILTER"
-          },
-          {
-            "name": "expr",
-            "type": "string"
-          }
-        ]
-      },
-      {
-        "name": "WITHCURSOR",
-        "type": "block",
-        "optional": true,
-        "arguments": [
-          {
-            "name": "withcursor_token",
-            "type": "pure-token",
-            "token": "WITHCURSOR"
-          },
-          {
-            "name": "count",
-            "type": "block",
-            "arguments": [
-              {
-                "name": "count_token",
-                "type": "pure-token",
-                "token": "COUNT"
-              },
-              {
-                "name": "read_size",
-                "type": "integer"
-              }
-            ]
-          },
-          {
-            "name": "maxidle",
-            "type": "block",
-            "optional": true,
-            "arguments": [
-              {
-                "name": "maxidle_token",
-                "type": "pure-token",
-                "token": "MAXIDLE"
-              },
-              {
-                "name": "idle_time",
-                "type": "integer"
-              }
-            ]
-          }
-        ]
-      },
-      {
-        "name": "TIMEOUT",
-        "type": "block",
-        "optional": true,
-        "arguments": [
-          {
-            "name": "timeout_token",
-            "type": "pure-token",
-            "token": "TIMEOUT"
-          },
-          {
-            "name": "milliseconds",
-            "type": "integer"
-          }
-        ]
-      },
-      {
-        "name": "PARAMS",
-        "type": "block",
-        "optional": true,
-        "arguments": [
-          {
-            "name": "params_token",
-            "type": "pure-token",
-            "token": "PARAMS"
-          },
-          {
-            "name": "nargs",
-            "type": "integer"
-          },
-          {
-            "name": "parameters",
-            "type": "block",
-            "multiple": true,
-            "arguments": [
-              {
-                "name": "name",
-                "type": "string"
-              },
-              {
-                "name": "value",
-                "type": "string"
-              }
-            ]
-          }
-        ]
-      },
-      {
-        "name": "SCORER",
-        "type": "block",
-        "optional": true,
-        "arguments": [
-          {
-            "name": "scorer_token",
-            "type": "pure-token",
-            "token": "SCORER"
-          },
-          {
-            "name": "scorer",
-            "type": "string"
-          }
-        ]
-      },
-      {
-        "name": "ADDSCORES",
-        "type": "pure-token",
-        "optional": true,
-        "token": "ADDSCORES"
-      },
-      {
-        "name": "DIALECT",
-        "type": "block",
-        "optional": true,
-        "arguments": [
-          {
-            "name": "dialect_token",
-            "type": "pure-token",
-            "token": "DIALECT"
-          },
-          {
-            "name": "dialect_version",
-            "type": "integer"
           }
         ]
       }

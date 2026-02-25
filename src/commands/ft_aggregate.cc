@@ -174,37 +174,25 @@ absl::StatusOr<std::pair<size_t, size_t>> ProcessNeighborsForProcessing(
     AggregateParameters &parameters) {
   size_t key_index = 0, scores_index = 0;
 
-  if (parameters.IsVectorQuery()) {
-    auto vector_identifier =
-        parameters.index_schema->GetIdentifier(parameters.attribute_alias);
-    if (!vector_identifier.ok()) {
-      ++Metrics::GetStats().query_failed_requests_cnt;
-      return vector_identifier.status();
-    }
+  std::optional<std::string> vector_identifier;
 
-    query::ProcessNeighborsForReply(
-        ctx, parameters.index_schema->GetAttributeDataType(), neighbors,
-        parameters, vector_identifier.value());
-
-    if (parameters.load_key) {
-      key_index = parameters.AddRecordAttribute("__key", "__key",
-                                                indexes::IndexerType::kNone);
-    }
-    if (parameters.IsVectorQuery()) {
-      auto score_sv = vmsdk::ToStringView(parameters.score_as.get());
-      scores_index = parameters.AddRecordAttribute(score_sv, score_sv,
-                                                   indexes::IndexerType::kNone);
-    }
-  } else {
-    query::ProcessNeighborsForReply(
-        ctx, parameters.index_schema->GetAttributeDataType(), neighbors,
-        parameters, std::nullopt);
-
-    if (parameters.load_key) {
-      key_index = parameters.AddRecordAttribute("__key", "__key",
-                                                indexes::IndexerType::kNone);
-    }
+  if (parameters.load_key) {
+    key_index = parameters.AddRecordAttribute("__key", "__key",
+                                              indexes::IndexerType::kNone);
   }
+  if (parameters.IsVectorQuery()) {
+    VMSDK_ASSIGN_OR_RETURN(
+        vector_identifier,
+        parameters.index_schema->GetIdentifier(parameters.attribute_alias));
+
+    auto score_sv = vmsdk::ToStringView(parameters.score_as.get());
+    scores_index = parameters.AddRecordAttribute(score_sv, score_sv,
+                                                 indexes::IndexerType::kNone);
+  }
+
+  query::ProcessNeighborsForReply(
+      ctx, parameters.index_schema->GetAttributeDataType(), neighbors,
+      parameters, vector_identifier);
 
   return std::make_pair(key_index, scores_index);
 }

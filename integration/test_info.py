@@ -145,8 +145,6 @@ class TestAppMetrics(ValkeySearchTestCaseDebugMode):
             "used_memory_bytes",
             "used_memory_human",
             "failure_requests_count",
-            "fulltext_query_blocked_count",
-            "fulltext_query_retry_count",
             "hybrid_requests_count",
             "inline_filtering_requests_count",
             "nonvector_requests_count",

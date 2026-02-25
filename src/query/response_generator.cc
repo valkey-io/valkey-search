@@ -43,7 +43,7 @@ constexpr absl::string_view kMaxSearchResultRecordSizeConfig{
 constexpr int kMaxSearchResultRecordSize{10 * 1024 * 1024};  // 10MB
 constexpr int kMinSearchResultRecordSize{100};
 constexpr absl::string_view kMaxSearchResultFieldsCountConfig{
-    "max-search-result-record-size"};
+    "max-search-result-fields-count"};
 constexpr int kMaxSearchResultFieldsCount{1000};
 
 /// Register the "--max-search-result-record-size" flag. Controls the max
@@ -374,10 +374,10 @@ void ProcessNeighborsForReply(
     bool size_exceeded = false;
     if (content.value().size() > max_content_fields) {
       ++Metrics::GetStats().query_result_record_dropped_cnt;
-      VMSDK_LOG(WARNING, ctx)
+      VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
           << "Content field number exceeds configured limit of "
-          << max_content_fields
-          << " for neighbor with ID: " << (*neighbor.external_id).Str();
+          << max_content_fields << " for neighbor with ID: "
+          << vmsdk::config::RedactIfNeeded((*neighbor.external_id).Str());
       continue;
     }
 
@@ -386,9 +386,10 @@ void ProcessNeighborsForReply(
       total_size += vmsdk::ToStringView(item.second.value.get()).size();
       if (total_size > max_content_size) {
         ++Metrics::GetStats().query_result_record_dropped_cnt;
-        VMSDK_LOG(WARNING, ctx)
+        VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
             << "Content size exceeds configured limit of " << max_content_size
-            << " bytes for neighbor with ID: " << (*neighbor.external_id).Str();
+            << " bytes for neighbor with ID: "
+            << vmsdk::config::RedactIfNeeded((*neighbor.external_id).Str());
         size_exceeded = true;
         break;
       }

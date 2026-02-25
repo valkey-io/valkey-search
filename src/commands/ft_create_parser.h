@@ -25,7 +25,7 @@
 namespace valkey_search {
 
 static constexpr absl::string_view kDefaultPunctuation =
-    ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|";
+    ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|?";
 static constexpr uint32_t kDefaultMinStemSize = 4;
 
 // Default stop words set

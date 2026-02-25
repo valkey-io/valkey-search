@@ -38,6 +38,7 @@
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
 #include "src/metrics.h"
+#include "src/query/content_resolution.h"
 #include "src/query/planner.h"
 #include "src/query/predicate.h"
 #include "src/valkey_search.h"
@@ -250,11 +251,12 @@ BuildTextIterator(const Predicate *predicate, bool negate,
   }
   if (predicate->GetType() == PredicateType::kText) {
     auto text_predicate = dynamic_cast<const TextPredicate *>(predicate);
-    auto fetcher_ptr = text_predicate->Search(negate);
-    auto fetcher = static_cast<indexes::Text::EntriesFetcher *>(fetcher_ptr);
-    fetcher->require_positions_ = require_positions;
-    size_t size = fetcher->Size();
-    return {text_predicate->BuildTextIterator(fetcher), size};
+    auto text_index = text_predicate->GetTextIndexSchema()->GetTextIndex();
+    auto field_mask = text_predicate->GetFieldMask();
+    size_t size = text_predicate->EstimateSize();
+    auto result = text_predicate->BuildTextIterator(text_index, field_mask,
+                                                    require_positions);
+    return {std::move(result), size};
   }
   if (predicate->GetType() == PredicateType::kNegate) {
     // Cannot build text iterator for negation - return null
@@ -339,10 +341,11 @@ size_t EvaluateFilterAsPrimary(
   }
   if (predicate->GetType() == PredicateType::kText) {
     auto text_predicate = dynamic_cast<const TextPredicate *>(predicate);
-    auto fetcher = std::unique_ptr<indexes::EntriesFetcherBase>(
-        static_cast<indexes::EntriesFetcherBase *>(
-            text_predicate->Search(negate)));
-    size_t size = fetcher->Size();
+    size_t size = text_predicate->EstimateSize();
+    auto fetcher = std::make_unique<indexes::Text::EntriesFetcher>(
+        size, text_predicate->GetTextIndexSchema()->GetTextIndex(),
+        text_predicate->GetFieldMask(), false);
+    fetcher->predicate_ = text_predicate;
     entries_fetchers.push(std::move(fetcher));
     return size;
   }
@@ -621,9 +624,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
 }
 
 absl::StatusOr<std::vector<indexes::Neighbor>> DoSearch(
-    const SearchParameters &parameters, SearchMode search_mode) {
-  auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
-  vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
+    const SearchParameters &parameters, SearchMode search_mode,
+    vmsdk::ReaderMutexLock &lock) {
   ++Metrics::GetStats().time_slice_queries;
   // Handle non vector queries first where attribute_alias is empty.
   if (parameters.IsNonVectorQuery()) {
@@ -675,6 +677,9 @@ bool ShouldReturnNoResults(const SearchParameters &parameters) {
               static_cast<uint64_t>(parameters.k)) ||
          parameters.limit.number == 0;
 }
+
+SearchResult::SearchResult()
+    : total_count(0), is_limited_with_buffer(false), is_offsetted(false) {}
 
 SearchResult::SearchResult(size_t total_count,
                            std::vector<indexes::Neighbor> neighbors,
@@ -759,33 +764,41 @@ SerializationRange SearchResult::GetSerializationRange(
   return {start_index, end_index};
 }
 
-absl::StatusOr<SearchResult> Search(const SearchParameters &parameters,
-                                    SearchMode search_mode) {
-  auto result =
-      MaybeAddIndexedContent(DoSearch(parameters, search_mode), parameters);
-  if (!result.ok()) {
-    return result.status();
-  }
-  size_t total_count = result.value().size();
-  // return SearchResult(total_count, std::move(result.value()), parameters);
-  auto search_result =
-      SearchResult(total_count, std::move(result.value()), parameters);
-  for (auto &n : search_result.neighbors) {
-    n.sequence_number =
-        parameters.index_schema->GetIndexMutationSequenceNumber(n.external_id);
-  }
-  return search_result;
+absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
+  auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
+  vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
+  absl::StatusOr<std::vector<indexes::Neighbor>> neighbors =
+      DoSearch(parameters, search_mode, lock);
+  VMSDK_ASSIGN_OR_RETURN(
+      auto result, MaybeAddIndexedContent(std::move(neighbors), parameters));
+  size_t total_count = result.size();
+  parameters.search_result =
+      SearchResult(total_count, std::move(result), parameters);
+  parameters.index_schema->PopulateIndexMutationSequenceNumbers(
+      parameters.search_result.neighbors);
+  return absl::OkStatus();
 }
 
 absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
                          vmsdk::ThreadPool *thread_pool,
-                         SearchResponseCallback callback,
                          SearchMode search_mode) {
   thread_pool->Schedule(
-      [parameters = std::move(parameters), callback = std::move(callback),
-       search_mode]() mutable {
+      [parameters = std::move(parameters), search_mode]() mutable {
         auto res = Search(*parameters, search_mode);
-        callback(res, std::move(parameters));
+        parameters->search_result.status = res;
+        switch (parameters->GetContentProcessing()) {
+          case ContentProcessing::kNoContent:
+            parameters->QueryCompleteBackground(std::move(parameters));
+            break;
+          case ContentProcessing::kContentRequired:
+          case ContentProcessing::kContentionCheckRequired:
+            vmsdk::RunByMain([parameters = std::move(parameters)]() mutable {
+              ResolveContent(std::move(parameters));
+            });
+            break;
+          default:
+            CHECK(false) << "Unknown content processing mode";
+        }
       },
       vmsdk::ThreadPool::Priority::kHigh);
   return absl::OkStatus();
@@ -967,7 +980,9 @@ absl::Status query::SearchParameters::PreParseQueryString() {
                      options::GetQueryStringBytes(), " bytes."));
   }
   auto filter_expression = absl::string_view(parse_vars.query_string);
-  VMSDK_LOG(DEBUG, nullptr) << "Query: '" << parse_vars.query_string << "'";
+  VMSDK_LOG(DEBUG, nullptr)
+      << "Query: '" << vmsdk::config::RedactIfNeeded(parse_vars.query_string)
+      << "'";
   auto pos = filter_expression.find(kVectorFilterDelimiter);
   absl::string_view pre_filter;
   absl::string_view vector_filter;
@@ -1059,6 +1074,17 @@ absl::Status query::SearchParameters::PostParseQueryString() {
   }
 
   return absl::OkStatus();
+}
+
+ContentProcessing SearchParameters::GetContentProcessing() const {
+  if (no_content) {
+    return kNoContent;
+  }
+  // Currently, ContentAvailable isn't detected. Future use case.
+  if (query::QueryHasTextPredicate(*this)) {
+    return kContentionCheckRequired;
+  }
+  return kContentRequired;
 }
 
 }  // namespace valkey_search::query

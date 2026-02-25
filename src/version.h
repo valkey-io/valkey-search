@@ -13,7 +13,7 @@
 //
 // Set the module version to the current release
 //
-constexpr auto kModuleVersion = vmsdk::ValkeyVersion(1, 1, 0);
+constexpr auto kModuleVersion = vmsdk::ValkeyVersion(1, 2, 0);
 
 /* The release stage is used in order to provide release status information.
  * In unstable branch the status is always "dev".
@@ -89,9 +89,14 @@ needed.
 constexpr vmsdk::ValkeyVersion kRelease10(1, 0, 0);
 
 //
-// Release 1.0, added support for cluster mode with non-zero DB numbers
+// Release 1.1, added support for cluster mode with non-zero DB numbers
 //
 constexpr vmsdk::ValkeyVersion kRelease11(1, 1, 0);
+
+//
+// Release 1.2, added support for full text search.
+//
+constexpr vmsdk::ValkeyVersion kRelease12(1, 2, 0);
 
 }  // namespace valkey_search
 

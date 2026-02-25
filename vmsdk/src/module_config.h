@@ -39,6 +39,16 @@ enum Flags {
 constexpr absl::string_view kDebugMode{"debug-mode"};
 bool IsDebugModeEnabled();
 
+/// Return true if user data should be hidden from logs.
+/// "search.hide-user-data-from-log == yes"
+constexpr absl::string_view kHideUserDataFromLog{"hide-user-data-from-log"};
+constexpr absl::string_view kRedactedString{"*redacted*"};
+bool ShouldHideUserDataFromLog();
+/// Helper to redact sensitive data in logs
+inline absl::string_view RedactIfNeeded(absl::string_view data) {
+  return ShouldHideUserDataFromLog() ? kRedactedString : data;
+}
+
 /// Support Valkey configuration entries in a one-liner.
 ///
 /// Example usage:
@@ -315,6 +325,8 @@ class Boolean : public ConfigBase<bool> {
 
   FRIEND_TEST(Builder, ConfigBuilder);
 };
+
+Boolean &GetHideUserDataFromLog();
 
 class String : public ConfigBase<std::string> {
  public:

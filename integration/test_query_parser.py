@@ -182,3 +182,39 @@ class TestQueryParser(ValkeySearchTestCaseBase):
             assert False
         except ResponseError as e:
             assert f"argument must be between 1 and {max_limit.decode()} inclusive" in str(e)
+
+    def test_query_ignore_punctuations(self):
+        """
+        Test that trailing punctuation (not reserved) after unquoted text tokens is consumed correctly.
+        """
+        client: Valkey = self.server.get_new_client()
+        client.execute_command("FT.CREATE", "idx1", "ON", "HASH", "SCHEMA", "content", "TEXT", "NOSTEM", "WITHSUFFIXTRIE", "content2", "TEXT", "NOSTEM")
+        # Insert test documents
+        client.execute_command("HSET", "doc:1", "content", "I am going to a concert", "content2", "racing car")
+        client.execute_command("HSET", "doc:2", "content", "word1 word2 word3")
+        # 1. Basic prefix wildcard with punctuation
+        result = client.execute_command("FT.SEARCH", "idx1", 'con*+')
+        assert result[0] == 1
+        result = client.execute_command("FT.SEARCH", "idx1", 'con*++')
+        assert result[0] == 1
+        result = client.execute_command("FT.SEARCH", "idx1", 'con*!!!')
+        assert result[0] == 1
+        result = client.execute_command("FT.SEARCH", "idx1", 'con*+!,.')
+        assert result[0] == 1
+        result = client.execute_command("FT.SEARCH", "idx1", '@content:con*+!!')
+        assert result[0] == 1
+        # 2. Suffix wildcard with punctuation
+        result = client.execute_command("FT.SEARCH", "idx1", '*cert+')
+        assert result[0] == 1
+        result = client.execute_command("FT.SEARCH", "idx1", '*cert!!!')
+        assert result[0] == 1
+        # 3. Reserved characters should STOP punctuation consumption
+        # Parentheses
+        result = client.execute_command("FT.SEARCH", "idx1", 'con*+ (racing)')
+        assert result[0] == 1
+        # with Field (@)
+        result = client.execute_command("FT.SEARCH", "idx1", 'con*+ @content2:racing=')
+        assert result[0] == 1
+        # OR operator
+        result = client.execute_command("FT.SEARCH", "idx1", 'con*+ | word1!!')
+        assert result[0] == 2

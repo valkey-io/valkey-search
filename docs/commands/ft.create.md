@@ -37,13 +37,13 @@ FT.CREATE <index-name>
 
 - `LANGUAGE <language>` (optional): For text fields, the language used to control lexical parsing and stemming. Currently only the value `ENGLISH` is supported.
 
-- `MINSTEMSIZE <min_stem_size>` (optional): For text fields with stemming enabled. This controls the minimum length of a word before it is subjected to stemming. The default value is 4.
+- `MINSTEMSIZE <min_stem_size>` (optional): For text fields with stemming enabled. This controls the minimum length of a word required for it to be subjected to stemming. The default value is 4.
 
 - `WITHOFFSETS | NOOFFSETS` (optional): Enables/Disables the retention of per-word offsets within a text field. Offsets are required to perform exact phrase matching and slop-based proximity matching. Thus if offsets are disabled, those query operations will be rejected with an error. The default is `WITHOFFSETS`.
 
-- `NOSTOPWORDS | STOPWORDS <count> <word1> <word2>...` (optional): Stop words are words which are not put into the indexes. The default value of `STOPWORDS`is language dependent. For`LANGUAGE ENGLISH` the default is: <?>.
+- `NOSTOPWORDS | STOPWORDS <count> <word1> <word2>...` (optional): Stop words are words which are not put into the indexes. The default value of `STOPWORDS`is language dependent. For`LANGUAGE ENGLISH` the default is: [a, an, and, are, as, at, be, but, by, for, if, in, into, is, it, no, not, of, on, or, such, that, their, then, there, these, they, this, to, was, will, with].
 
-- `PUNCTUATION <punctuation>` (optional): A string of characters that are used to define words in the text field. The default value is `,.<>{}[]"':;!@#$%^&\*()-+=~/\|`.
+- `PUNCTUATION <punctuation>` (optional): A string of characters that define the separation points between words, in addition to whitespace characters (spaces, tabs, newlines, carriage returns, and control characters) which always break words. The default value is `,.<>{}[]"':;!@#$%^&\*()-+=~/\|?`.
 
 - `SKIPINITIALSCAN` (optional): If specified, this option skips the normal backfill operation for an index. If this option is specified, pre-existing keys which match the `PREFIX` clause will not be loaded into the index during a backfill operation. This clause has no effect on processing of key mutations _after_ an index is created, i.e., keys which are mutated after an index is created and satisfy the data type and `PREFIX` clause will be inserted into that index.
 
@@ -92,11 +92,11 @@ The KNN search algorithm operates to locate vectors that are the nearest to the 
 The computation of the distance metrics is adjusted from their classical definitions in order to posses this property.
 This table shows the actual computation that Search uses when computing the distance between two vectors: $X$ and $Y$.
 
-| Classical Name | Valkey Search Distance Metric Name |      Classical Distance Formula Definition      | Valkey Search Distance Formula                      |
-| :------------: | :--------------------------------: | :---------------------------------------------: | :-------------------------------------------------- |
-| Inner Product  |                 IP                 |    ${\sum\limits_{i=0}^{n}(X_i \times Y_i)}$    | $1 - {\sum\limits_{i=0}^{n}(X_i \times Y_i)}$       |
-|   Euclidean    |                 L2                 |   $\sqrt{\sum\limits_{i=0}^{n}(X_i - Y_i)^2}$   | $\sqrt{\sum\limits_{i=0}^{n}(X_i - Y_i)^2}$         |
-|     Cosine     |               COSINE               | $\frac{X \cdot Y}{\|\|X\|\| \times \|\|Y\|\|} $ | $1 - \frac{X \cdot Y}{\|\|X\|\| \times \|\|Y\|\|} $ |
+| Classical Name | Valkey Search Distance Metric Name |   Classical Distance Formula Definition   | Valkey Search Distance Formula                  |
+| :------------: | :--------------------------------: | :---------------------------------------: | :---------------------------------------------- |
+| Inner Product  |                 IP                 |                 dot(X,Y)                  | 1 - dot(X,Y)                                    |
+|   Euclidean    |                 L2                 |          sqrt(sum(x[i]-y[i])^2)           | sqrt(sum(x[i]-y[i])^2)                          |
+|     Cosine     |               COSINE               | dot(x,y) / (magnitude(X) \* magnitude(Y)) | 1 - (dot(X,Y) / (magnitude(X) \* magnitude(Y))) |
 
 ### Field options
 

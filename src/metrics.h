@@ -141,8 +141,8 @@ class Metrics {
     std::atomic<uint64_t> pause_handle_cluster_message_round_cnt{0};
 
     // Full-text query in-flight blocking metrics
-    std::atomic<uint64_t> fulltext_query_blocked_cnt{0};
-    std::atomic<uint64_t> fulltext_query_retry_cnt{0};
+    std::atomic<uint64_t> text_query_blocked_cnt{0};
+    std::atomic<uint64_t> text_query_retry_cnt{0};
   };
   static Stats& GetStats() { return GetInstance().stats_; }
 

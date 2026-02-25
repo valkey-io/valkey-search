@@ -145,6 +145,8 @@ HYBRID_QUERY_EXPECTED_RESULTS = {
     "(cat | shark) (fox | @price:[10 30])": (1, {b"hash:00"}, (), 1, {b"hash:00"}),
     # Test 5: Multiple levels of mixed ORs - matches all 5, KNN2 returns 00,01
     "((cat | (quick | @price:[10 30])) | @color:{green})": (5, {b"hash:00", b"hash:01", b"hash:02", b"hash:03", b"hash:04"}, (), 2, {b"hash:00", b"hash:01"}),
+    # Test OR with mixed predicates on new documents: AND(N1 T1 OR(N2 | T2 | AND(T3 T4))) where N2 and T2 don't match
+    "@price:[40 60] alpha (@price:[100 200] | beta | (gamma delta))": (1, {b"hash:05"}, (), 1, {b"hash:05"}),
 }
 
 def validate_fulltext_search(client: Valkey):
@@ -1877,10 +1879,9 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # NOSTEM index (idx1) should not give doc:3 (driving)
         result = client.execute_command("FT.SEARCH", "idx1", '%%drive%%')
         assert (result[0], set(result[1::2])) == (2, {b"doc:4", b"doc:11"})
-        # stemming enabled should give doc:3 (with word 'driving')
-        # TODO: fails as '?' is not ignored. Enable after fix
+        # stemming enabled: should give doc:3 (with word 'driving')
         # result = client.execute_command("FT.SEARCH", "idx2", '%%drive%%')
-        # assert (result[0], set(result[1::2])) == (2, {b"doc:3", b"doc:4"}) 
+        # assert (result[0], set(result[1::2])) == (3, {b"doc:3", b"doc:4", b"doc:11"}) 
         # Higher edit distance test (ED=10)
         # Add a document with a word that requires high edit distance
         # Increase max edit distance config
@@ -1897,10 +1898,9 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         result = client.execute_command("FT.SEARCH", "idx1", '%%%%%%%%%%xyzbcdefghnalization%%%%%%%%%%')
         assert result[0] >= 1 and b"doc:7" in result[1::2]
         # Multiple fields
-        # Known crash with Return clause. TODO: Enable after fix
-        # client.execute_command("HSET", "doc:12", "content", "I am going to a race", "content2", "Driver drove the car?")
-        # result = client.execute_command("FT.SEARCH", "idx3", '%%drive%%', "return", "1", "content2")
-        # assert (result[0], set(result[1::2])) == (3, {b"doc:4", b"doc:11", b"doc:12"})
+        client.execute_command("HSET", "doc:12", "content", "I am going to a race", "content2", "Driver drove the car?")
+        result = client.execute_command("FT.SEARCH", "idx3", '%%drive%%', "return", "1", "content2")
+        assert (result[0], set(result[1::2])) == (3, {b"doc:4", b"doc:11", b"doc:12"})
 
     def test_return_clause(self):
         client: Valkey = self.server.get_new_client()
@@ -2015,6 +2015,9 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
             client.execute_command("HSET", "hash:02", "embedding", make_vector([0.7, 0.7, 0.0, 0.0]), "title", "plum", "body", "river cat slow build eagle fast dog", "color", "brown", "price", "40")
             client.execute_command("HSET", "hash:03", "embedding", make_vector([0.4, 0.9, 0.0, 0.0]), "title", "banana", "body", "quick brown fox jumps", "color", "red", "price", "15")
             client.execute_command("HSET", "hash:04", "embedding", make_vector([0.0, 1.0, 0.0, 0.0]), "title", "grape", "body", "lazy dog sleeps", "color", "blue", "price", "25")
+            client.execute_command("HSET", "hash:05", "embedding", make_vector([0.5, 0.5, 0.0, 0.0]), "body", "alpha gamma delta", "price", "50")
+            client.execute_command("HSET", "hash:06", "embedding", make_vector([0.3, 0.7, 0.0, 0.0]), "body", "gamma delta", "price", "50")
+            client.execute_command("HSET", "hash:07", "embedding", make_vector([0.2, 0.8, 0.0, 0.0]), "body", "alpha", "price", "50")
 
             IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
             query_vec = make_vector([1.0, 0.0, 0.0, 0.0])
@@ -2046,6 +2049,9 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         client.execute_command("HSET", "hash:02", "title", "plum", "body", "river cat slow build eagle fast dog", "color", "brown", "price", "40")
         client.execute_command("HSET", "hash:03", "title", "banana", "body", "quick brown fox jumps", "color", "red", "price", "15")
         client.execute_command("HSET", "hash:04", "title", "grape", "body", "lazy dog sleeps", "color", "blue", "price", "25")
+        client.execute_command("HSET", "hash:05", "body", "alpha gamma delta", "price", "50")
+        client.execute_command("HSET", "hash:06", "body", "gamma delta", "price", "50")
+        client.execute_command("HSET", "hash:07", "body", "alpha", "price", "50")
         IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
 
         for query, (count, docs, extra_args, _, _) in HYBRID_QUERY_EXPECTED_RESULTS.items():

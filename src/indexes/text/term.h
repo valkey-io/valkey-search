@@ -103,11 +103,9 @@ class TermIterator : public TextIterator {
       current_pos_indices_;
 
   bool FindMinimumValidKey();
-  void InsertValidKeyIterator(
-      size_t idx, std::optional<InternedStringPtr> min_key = std::nullopt);
+  void InsertValidKeyIterator(size_t idx);
   bool FindMinimumValidPosition();
-  void InsertValidPositionIterator(
-      size_t idx, std::optional<uint32_t> min_position = std::nullopt);
+  void InsertValidPositionIterator(size_t idx);
   void ClearKeyState();
   void ClearPositionState();
 };

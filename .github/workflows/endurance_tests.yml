@@ -51,7 +51,15 @@ jobs:
 
     # Build valkey-search module directly on ARM64 host
     - name: Build valkey-search Module on ARM64
+      env:
+        CC: /usr/bin/gcc
+        CXX: /usr/bin/g++
       run: |
+        echo "=== Compiler versions ==="
+        gcc --version
+        g++ --version
+        echo "CC=$CC"
+        echo "CXX=$CXX"
         ./build.sh
         echo "=== Build completed ==="
         ls -lh .build-release/libsearch.so

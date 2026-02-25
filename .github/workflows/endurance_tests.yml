@@ -49,47 +49,31 @@ jobs:
         ref: main
         submodules: recursive
 
-    # Set up Docker to build and run the container
-    - name: Set up Docker
-      uses: docker/setup-buildx-action@v2
-      with:
-        platforms: linux/arm64
-
-    # Build the Docker image
-    - name: Build Docker Image
+    # Build valkey-search module directly on ARM64 host
+    - name: Build valkey-search Module on ARM64
       run: |
-        docker buildx build --platform linux/arm64 --load -t stability-test-image -f .devcontainer/Dockerfile .
-        echo "Verifying memtier-benchmark..."
-        docker run --rm --platform linux/arm64 stability-test-image memtier_benchmark --version
+        ./build.sh
+        echo "=== Build completed ==="
+        ls -lh .build-release/libsearch.so
 
-    # Build valkey-search module
-    - name: Build valkey-search Module
-      run: |
-        docker run --rm --platform linux/arm64 \
-          -v "$(pwd):/valkey-search" \
-          -w /valkey-search \
-          --user "ubuntu:ubuntu" \
-          stability-test-image \
-          sudo -E ./build.sh
-
-    # Run stability tests
+    # Run stability tests directly on ARM64 host
     - name: Run Stability Tests
       run: |
         # Clean up test build directory
         mkdir -p testing/integration/.build-release
-        chmod -R 777 testing/integration/.build-release
-        sudo chmod -R 777 .build-release
-        docker run --rm --platform linux/arm64 \
-          -v "$(pwd):/valkey-search" \
-          -w /valkey-search \
-          -e VALKEY_SEARCH_PATH="/valkey-search/.build-release/libsearch.so" \
-          stability-test-image \
-          ./testing/integration/run.sh --test stability
+        chmod -R 755 testing/integration/.build-release
+        
+        # Set environment variable for module path
+        export VALKEY_SEARCH_PATH="$(pwd)/.build-release/libsearch.so"
+        
+        # Run tests
+        cd testing/integration
+        ./run.sh --test stability
 
     # Update results permissions
     - name: Update Results Permissions
       if: always()
-      run: sudo chmod -R 755 testing/integration/.build-release/output
+      run: chmod -R 755 testing/integration/.build-release/output || true
 
     # Upload test results as artifacts
     - name: Upload Test Results
@@ -115,7 +99,7 @@ jobs:
       - name: Clean Build Directories
         run: |
           echo "=== Cleaning up build directories and temporary files ==="
-          sudo rm -rf .build-release
-          sudo rm -rf testing/integration/.build-release
-          sudo rm -rf build/
+          rm -rf .build-release
+          rm -rf testing/integration/.build-release
+          rm -rf build/
           echo "✓ Cleanup completed successfully"

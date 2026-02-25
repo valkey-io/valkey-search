@@ -44,8 +44,6 @@ RUN apt update && \
         clangd \
         jq \
         memtier-benchmark && \
-    # Install Python packages for testing
-    PIP_BREAK_SYSTEM_PACKAGES=1 python3 -m pip install valkey absl-py numpy && \
     # Update certificates
     update-ca-certificates && \
     # Clean up apt cache to reduce image size

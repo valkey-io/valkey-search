@@ -45,6 +45,8 @@ jobs:
     - name: Checkout Code
       uses: actions/checkout@v4
       with:
+        repository: valkey-io/valkey-search
+        ref: main
         submodules: recursive
 
     # Set up Docker to build and run the container
@@ -72,7 +74,6 @@ jobs:
     - name: Run Stability Tests
       run: |
         # Clean up test build directory
-        sudo rm -rf testing/integration/.build-release
         mkdir -p testing/integration/.build-release
         chmod -R 777 testing/integration/.build-release
         sudo chmod -R 777 .build-release
@@ -88,36 +89,6 @@ jobs:
       if: always()
       run: sudo chmod -R 755 testing/integration/.build-release/output
 
-    # Display logs and results on failure for debugging
-    - name: Display Test Results
-      if: failure()
-      run: |
-        echo "=== Displaying Test Results and Logs ==="
-        echo ""
-        echo "=== Results Directory Structure ==="
-        ls -laR testing/integration/.build-release/output/ || echo "Results directory is empty or inaccessible"
-        echo ""
-        echo "=== Memtier JSON Results ==="
-        find testing/integration/.build-release/output -name "*memtier*.json" -type f -exec echo "File: {}" \; -exec cat {} \; -exec echo "" \; || echo "No memtier results found"
-        echo ""
-        echo "=== Server Logs (last 500 lines each) ==="
-        find testing/integration/.build-release/output -name "*.log" -type f -exec echo "File: {}" \; -exec tail -500 {} \; -exec echo "" \; || echo "No server logs found"
-        echo ""
-        echo "=== Test Output ==="
-        find testing/integration/.build-release/output -name "*.txt" -type f -exec echo "File: {}" \; -exec cat {} \; -exec echo "" \; || echo "No test output files found"
-
-    # Display summary on success
-    - name: Display Success Summary
-      if: success()
-      run: |
-        echo "=== Stability Tests Passed Successfully ==="
-        echo ""
-        echo "Test Filter: ${{ github.event.inputs.test_filter || '*' }}"
-        echo "Results saved to: testing/integration/.build-release/output/"
-        echo ""
-        echo "=== Test Results Summary ==="
-        find testing/integration/.build-release/output -name "*memtier*.json" -type f | head -5 || echo "No results found"
-
     # Upload test results as artifacts
     - name: Upload Test Results
       uses: actions/upload-artifact@v4
@@ -127,11 +98,22 @@ jobs:
         path: testing/integration/.build-release/output
         retention-days: 90
 
-    # Upload server logs separately for easier access
-    - name: Upload Server Logs
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: server-logs-${{ github.run_number }}
-        path: testing/integration/.build-release/output/**/*.log
-        retention-days: 30
+  # Cleanup job to remove temporary files and build artifacts
+  cleanup:
+    runs-on: ubuntu-latest
+    needs: stability-tests
+    if: always()
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          repository: valkey-io/valkey-search
+          ref: main
+
+      - name: Clean Build Directories
+        run: |
+          echo "=== Cleaning up build directories and temporary files ==="
+          sudo rm -rf .build-release
+          sudo rm -rf testing/integration/.build-release
+          sudo rm -rf build/
+          echo "✓ Cleanup completed successfully"

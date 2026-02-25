@@ -8,8 +8,6 @@
 #ifndef _VALKEY_SEARCH_INDEXES_TEXT_TERM_H_
 #define _VALKEY_SEARCH_INDEXES_TEXT_TERM_H_
 
-#include <queue>
-
 #include "absl/container/inlined_vector.h"
 #include "src/indexes/text.h"
 #include "src/indexes/text/flat_position_map.h"
@@ -102,6 +100,9 @@ class TermIterator : public TextIterator {
   // Indices of iterators at current_position_ (active, not in pos_set_)
   absl::InlinedVector<size_t, kWordExpansionInlineCapacity>
       current_pos_indices_;
+
+  // Persistent scratchpad to avoid stack growth/allocation during Seeks.
+  absl::InlinedVector<size_t, kWordExpansionInlineCapacity> scratch_indices_;
 
   bool FindMinimumValidKey();
   void InsertValidKeyIterator(

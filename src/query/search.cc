@@ -581,7 +581,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
   // Get the config for maximum number of keys to accumulate before content
   // fetching
   const size_t max_keys =
-      static_cast<size_t>(options::GetMaxSearchKeysBeforeContent().GetValue());
+      static_cast<size_t>(options::GetMaxSearchKeysAccumulated().GetValue());
   std::vector<indexes::Neighbor> neighbors;
   // TODO: For now, we just reserve a fixed size because text search operators
   // return a size of 0 currently.

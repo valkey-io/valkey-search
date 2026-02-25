@@ -503,7 +503,7 @@ vmsdk::config::Number& GetAsyncFanoutThreshold() {
   return dynamic_cast<vmsdk::config::Number&>(*async_fanout_threshold);
 }
 
-vmsdk::config::Number& GetMaxSearchKeysBeforeContent() {
+vmsdk::config::Number& GetMaxSearchKeysAccumulated() {
   return dynamic_cast<vmsdk::config::Number&>(*max_search_keys_accumulated);
 }
 

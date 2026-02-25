@@ -384,6 +384,20 @@ static auto fanout_data_uniformity =
         kMinimumFanoutDataUniformity, kMaximumFanoutDataUniformity)
         .Build();
 
+/// Register the "fanout-uniformity-min-index-size" flag
+/// Minimum index size before applying uniformity logic
+constexpr absl::string_view kFanoutUniformityMinIndexSizeConfig{
+    "fanout-uniformity-min-index-size"};
+constexpr uint32_t kDefaultFanoutUniformityMinIndexSize{1000};
+constexpr uint32_t kMinimumFanoutUniformityMinIndexSize{0};
+constexpr uint32_t kMaximumFanoutUniformityMinIndexSize{UINT32_MAX};
+static auto fanout_uniformity_min_index_size =
+    config::NumberBuilder(kFanoutUniformityMinIndexSizeConfig,
+                          kDefaultFanoutUniformityMinIndexSize,
+                          kMinimumFanoutUniformityMinIndexSize,
+                          kMaximumFanoutUniformityMinIndexSize)
+        .Build();
+
 /// Register the "--async-fanout-threshold" flag. Controls the threshold
 /// for async fanout operations (minimum number of targets to use async)
 constexpr absl::string_view kAsyncFanoutThresholdConfig{
@@ -497,6 +511,11 @@ const vmsdk::config::Boolean& GetDrainMutationQueueOnLoad() {
 
 vmsdk::config::Number& GetFanoutDataUniformity() {
   return dynamic_cast<vmsdk::config::Number&>(*fanout_data_uniformity);
+}
+
+vmsdk::config::Number& GetFanoutUniformityMinIndexSize() {
+  return dynamic_cast<vmsdk::config::Number&>(
+      *fanout_uniformity_min_index_size);
 }
 
 vmsdk::config::Number& GetAsyncFanoutThreshold() {

@@ -291,6 +291,9 @@ absl::Status PerformSearchFanoutAsync(
   // distribution profile. 100 means data is perfectly balanced (Uniform); 0
   // means data is heavily skewed.
   uint32_t U = options::GetFanoutDataUniformity().GetValue();
+  uint64_t index_size = parameters->index_schema->GetSize();
+  uint32_t min_index_size =
+      options::GetFanoutUniformityMinIndexSize().GetValue();
   if (parameters->IsNonVectorQuery()) {
     // For non-vector queries, we optimize network traffic by reducing the
     // per-shard fetch limit. Instead of fetching K from every shard, we
@@ -314,7 +317,11 @@ absl::Status PerformSearchFanoutAsync(
     // - If U = 0 (Skewed): We add 100% of the gap. Result = K.
     // Note: Multiplying by (100 - U) before dividing by 100 maintains integer
     // precision.
-    uint64_t limit_per_shard = fair_share_limit + ((100 - U) * skew_gap / 100);
+    // Skip uniformity logic for small indexes to avoid pathological behavior.
+    uint64_t limit_per_shard =
+        (index_size < min_index_size)
+            ? K
+            : fair_share_limit + ((100 - U) * skew_gap / 100);
 
     request->mutable_limit()->set_first_index(0);
     request->mutable_limit()->set_number(limit_per_shard);

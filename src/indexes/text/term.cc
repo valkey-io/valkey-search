@@ -73,29 +73,30 @@ bool TermIterator::FindMinimumValidKey() {
     current_field_mask_ = 0ULL;
     return false;
   }
-  // 1. Peek the minimum key from the front
-  current_key_ = key_set_.begin()->first;
-  pos_iterators_.clear();
+  // 1. Peek minimum
+  auto it_begin = key_set_.begin();
+  current_key_ = it_begin->first;
   current_key_indices_.clear();
-  // 2. COLLECT: Find the range of all expanded terms matching this minimum key
-  auto it_end = key_set_.begin();
+  // 2. Identify range
+  auto it_end = it_begin;
   while (it_end != key_set_.end() && it_end->first == current_key_) {
-    size_t idx = it_end->second;
-    current_key_indices_.push_back(idx);
-    if (require_positions_) {
-      pos_iterators_.emplace_back(key_iterators_[idx].GetPositionIterator());
-    }
+    current_key_indices_.push_back(it_end->second);
     ++it_end;
   }
-  // 3. BATCH ERASE: Shift the vector only once to remove all matching keys
-  key_set_.erase(key_set_.begin(), it_end);
-  // Clear position state for new key
+  // 3. FULL RESET for the new Key's positions
   if (require_positions_) {
+    pos_iterators_.clear();
+    for (size_t idx : current_key_indices_) {
+      pos_iterators_.emplace_back(key_iterators_[idx].GetPositionIterator());
+    }
     pos_set_.clear();
+    current_pos_indices_.clear();
     current_position_ = std::nullopt;
     current_field_mask_ = 0ULL;
     TermIterator::NextPosition();
   }
+  // 4. Batch Erase
+  key_set_.erase(it_begin, it_end);
   return true;
 }
 
@@ -113,27 +114,6 @@ bool TermIterator::NextKey() {
   return FindMinimumValidKey();
 }
 
-// bool TermIterator::SeekForwardKey(const InternedStringPtr& target_key) {
-//   if (current_key_ && current_key_ >= target_key) {
-//     return true;
-//   }
-//   // Seek iterators in key_set_ with keys < target_key
-//   while (!key_set_.empty() && key_set_.begin()->first < target_key) {
-//     size_t idx = key_set_.begin()->second;
-//     key_set_.erase(key_set_.begin());
-//     key_iterators_[idx].SkipForwardKey(target_key);
-//     InsertValidKeyIterator(idx, target_key);
-//   }
-//   // Also seek iterators at current_key_ if current_key_ < target_key
-//   if (current_key_ && current_key_ < target_key) {
-//     for (size_t idx : current_key_indices_) {
-//       key_iterators_[idx].SkipForwardKey(target_key);
-//       InsertValidKeyIterator(idx, target_key);
-//     }
-//     current_key_indices_.clear();
-//   }
-//   return FindMinimumValidKey();
-// }
 bool TermIterator::SeekForwardKey(const InternedStringPtr& target_key) {
   // 1. Early exit: already at or past the target key.
   if (current_key_ && current_key_ >= target_key) {
@@ -245,30 +225,6 @@ bool TermIterator::NextPosition() {
   return FindMinimumValidPosition();
 }
 
-// bool TermIterator::SeekForwardPosition(Position target_position) {
-//   if (current_position_.has_value() &&
-//       current_position_.value().start >= target_position) {
-//     return true;
-//   }
-//   // Seek iterators in pos_set_ with positions < target_position
-//   while (!pos_set_.empty() && pos_set_.begin()->first < target_position) {
-//     size_t idx = pos_set_.begin()->second;
-//     pos_set_.erase(pos_set_.begin());
-//     pos_iterators_[idx].SkipForwardPosition(target_position);
-//     InsertValidPositionIterator(idx, target_position);
-//   }
-//   // Also seek iterators at current_position_ if current_position_ <
-//   // target_position
-//   if (current_position_.has_value() &&
-//       current_position_.value().start < target_position) {
-//     for (size_t idx : current_pos_indices_) {
-//       pos_iterators_[idx].SkipForwardPosition(target_position);
-//       InsertValidPositionIterator(idx, target_position);
-//     }
-//     current_pos_indices_.clear();
-//   }
-//   return FindMinimumValidPosition();
-// }
 bool TermIterator::SeekForwardPosition(Position target_position) {
   // 1. Early exit: already at or past the target.
   if (current_position_.has_value() &&

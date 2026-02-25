@@ -39,34 +39,38 @@ void ResolveContent(std::unique_ptr<SearchParameters> params) {
     // moved). Fall through to content fetch.
   }
 
-  // 3. Content fetch + filter via ProcessNeighborsForReply
+  // 3. Content fetch + filter
   auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
+  FetchContent(*params, ctx.get());
+
+  // 4. Call QueryCompleteMainThread
+  params->QueryCompleteMainThread(std::move(params));
+}
+
+void FetchContent(SearchParameters& params, ValkeyModuleCtx* ctx) {
   const auto& attribute_data_type =
-      params->index_schema->GetAttributeDataType();
-  size_t original_size = params->search_result.neighbors.size();
+      params.index_schema->GetAttributeDataType();
+  size_t original_size = params.search_result.neighbors.size();
 
   std::optional<std::string> vector_identifier = std::nullopt;
-  if (!params->attribute_alias.empty()) {
-    auto id = params->index_schema->GetIdentifier(params->attribute_alias);
+  if (!params.attribute_alias.empty()) {
+    auto id = params.index_schema->GetIdentifier(params.attribute_alias);
     if (id.ok()) {
       vector_identifier = *id;
     }
   }
 
-  query::ProcessNeighborsForReply(ctx.get(), attribute_data_type,
-                                  params->search_result.neighbors, *params,
-                                  vector_identifier, params->sortby_parameter);
+  query::ProcessNeighborsForReply(ctx, attribute_data_type,
+                                  params.search_result.neighbors, params,
+                                  vector_identifier, params.sortby_parameter);
 
-  // 4. Adjust search_result.total_count for removed neighbors
-  size_t removed = original_size - params->search_result.neighbors.size();
-  if (params->search_result.total_count > removed) {
-    params->search_result.total_count -= removed;
+  // Adjust search_result.total_count for removed neighbors
+  size_t removed = original_size - params.search_result.neighbors.size();
+  if (params.search_result.total_count > removed) {
+    params.search_result.total_count -= removed;
   } else {
-    params->search_result.total_count = 0;
+    params.search_result.total_count = 0;
   }
-
-  // 5. Call QueryCompleteMainThread
-  params->QueryCompleteMainThread(std::move(params));
 }
 
 }  // namespace valkey_search::query

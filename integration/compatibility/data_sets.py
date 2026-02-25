@@ -146,32 +146,60 @@ TEXT_DATASETS = {
             ],
             'body': [
                 # Escaped only
-                'freedom\\,justice',
-                'begin\\.end',
-                'ask\\<question',
-                'get\\>answer',
-                'round\\{about',
-                'ever\\}green',
-                'square\\[feet',
-                'circle\\]triangle',
-                'chat\\"gpt',
-                "redis\\'valkey",
-                'sick\\:hungry',
-                'phone\\;laptop',
-                'soccer\\!tennis',
-                'address\\@field',
-                'hash\\#tag',
-                'money\\$rich',
-                'degree\\%cold',
-                'sharp\\^knife',
-                'friend\\&enemy',
-                'mountain\\*view',
-                'extra\\(time',
-                'sooner\\)later',
-                'deal\\-coupon',
-                'abundant\\+plant',
-                'blue\\=planet',
-                'milky\\~way',
+                # 'freedom\\,justice',
+                # 'begin\\.end',
+                # 'ask\\<question',
+                # 'get\\>answer',
+                # 'round\\{about',
+                # 'ever\\}green',
+                # 'square\\[feet',
+                # 'circle\\]triangle',
+                # 'chat\\"gpt',
+                # "redis\\'valkey",
+                # 'sick\\:hungry',
+                # 'phone\\;laptop',
+                # 'soccer\\!tennis',
+                # 'address\\@field',
+                # 'hash\\#tag',
+                # 'money\\$rich',
+                # 'degree\\%cold',
+                # 'sharp\\^knife',
+                # 'friend\\&enemy',
+                # 'mountain\\*view',
+                # 'extra\\(time',
+                # 'sooner\\)later',
+                # 'deal\\-coupon',
+                # 'abundant\\+plant',
+                # 'blue\\=planet',
+                # 'milky\\~way',
+
+                r'freedom\,justice',
+                r'begin\.end',
+                r'ask\<question',
+                r'get\>answer',
+                r'round\{about',
+                r'ever\}green',
+                r'square\[feet',
+                r'circle\]triangle',
+                r'chat\"gpt',
+                r"redis\'valkey",
+                r'sick\:hungry',
+                r'phone\;laptop',
+                r'soccer\!tennis',
+                r'address\@field',
+                r'hash\#tag',
+                r'money\$rich',
+                r'degree\%cold',
+                r'sharp\^knife',
+                r'friend\&enemy',
+                r'mountain\*view',
+                r'extra\(time',
+                r'sooner\)later',
+                r'deal\-coupon',
+                r'abundant\+plant',
+                r'blue\=planet',
+                r'milky\~way',
+
             ],
             'color': ['red', 'blue', 'green'],
             'price': (0, 10)
@@ -266,7 +294,6 @@ def compute_data_sets():
             for i in range(count)
         ]
         schema = " ".join(schema)
-        print(f"Generated schema: {schema}")
         #
         # Hard Numbers, edge case numbers.
         #
@@ -586,6 +613,7 @@ def load_data(client, data_set, key_type, data_source=None, schema_type="default
             data = compute_text_data_sets(data_set, schema_type=schema_type)
         case _:
             raise ValueError(f"Unknown data source: {data_source}")
+    # client.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET StopBackfill yes")
     load_list = data[data_set][SETS_KEY(key_type)]
     for create_index_cmd in data[data_set][CREATES_KEY(key_type)]:
         client.execute_command(create_index_cmd)

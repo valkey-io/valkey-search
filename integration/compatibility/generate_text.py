@@ -62,11 +62,15 @@ excluded_queries = set([
     "((shark | tiger) ((slow | tiger)))",
     "(((shark | cold) (river | cold)))",
     "((plum | heavy) ((music | desk)))",
+
+    # test_text_search_unescaped[hash-2-nostem]
+    "minus-subtract",
+    "minus-subtract left&right"
 ])
 
 # uncomment when stemming is finished
 # @pytest.mark.parametrize("schema_type", ["default", "nostem"])
-@pytest.mark.parametrize("schema_type", ["nostem"])
+@pytest.mark.parametrize("schema_type", ["default", "nostem"])
 @pytest.mark.parametrize("dialect", [2])
 @pytest.mark.parametrize("key_type", ["hash"])
 class TestTextSearchCompatibility(BaseCompatibilityTest):

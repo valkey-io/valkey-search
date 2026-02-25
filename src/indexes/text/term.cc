@@ -65,7 +65,6 @@ bool TermIterator::FindMinimumValidKey() {
     for (size_t i = 0; i < key_iterators_.size(); ++i) {
       InsertValidKeyIterator(i);
     }
-    key_set_.heapify();  // O(K) building of the heap
   }
 
   if (key_set_.empty()) {
@@ -74,7 +73,7 @@ bool TermIterator::FindMinimumValidKey() {
     current_field_mask_ = 0ULL;
     return false;
   }
-
+  key_set_.heapify();  // O(K) building of the heap
   // 1. Get the minimum key from the heap root
   current_key_ = key_set_.min().first;
   current_key_indices_.clear();
@@ -107,7 +106,6 @@ bool TermIterator::NextKey() {
       key_iterators_[idx].NextKey();
       InsertValidKeyIterator(idx);
     }
-    key_set_.heapify();  // Restore heap in O(K)
   }
   return FindMinimumValidKey();
 }
@@ -122,7 +120,6 @@ bool TermIterator::SeekForwardKey(const InternedStringPtr& target_key) {
     key_iterators_[idx].SkipForwardKey(target_key);
     InsertValidKeyIterator(idx, target_key);
   }
-  key_set_.heapify();
 
   // Handle currently active indices
   if (current_key_) {
@@ -130,7 +127,6 @@ bool TermIterator::SeekForwardKey(const InternedStringPtr& target_key) {
       key_iterators_[idx].SkipForwardKey(target_key);
       InsertValidKeyIterator(idx, target_key);
     }
-    key_set_.heapify();
     current_key_indices_.clear();
   }
 
@@ -168,7 +164,6 @@ bool TermIterator::FindMinimumValidPosition() {
     for (size_t i = 0; i < pos_iterators_.size(); ++i) {
       InsertValidPositionIterator(i);
     }
-    pos_set_.heapify();
   }
 
   if (pos_set_.empty()) {
@@ -177,16 +172,21 @@ bool TermIterator::FindMinimumValidPosition() {
     return false;
   }
 
+  pos_set_.heapify();
   uint32_t min_position = pos_set_.min().first;
   current_pos_indices_.clear();
-
+  current_field_mask_ = 0ULL;  // Reset before the loop
   while (!pos_set_.empty() && pos_set_.min().first == min_position) {
-    current_pos_indices_.push_back(pos_set_.min().second);
+    size_t idx = pos_set_.min().second;
+    current_pos_indices_.push_back(idx);
+    current_field_mask_ |=
+        pos_iterators_[idx]
+            .GetFieldMask();  // Bitwise OR - Check if this is needed.
     pos_set_.pop_min();
   }
-
   current_position_ = PositionRange{min_position, min_position};
-  current_field_mask_ = pos_iterators_[current_pos_indices_[0]].GetFieldMask();
+  // current_field_mask_ =
+  // pos_iterators_[current_pos_indices_[0]].GetFieldMask();
   return true;
 }
 
@@ -196,7 +196,6 @@ bool TermIterator::NextPosition() {
       pos_iterators_[idx].NextPosition();
       InsertValidPositionIterator(idx);
     }
-    pos_set_.heapify();
   }
   return FindMinimumValidPosition();
 }
@@ -214,7 +213,6 @@ bool TermIterator::SeekForwardPosition(Position target_position) {
     pos_iterators_[idx].SkipForwardPosition(target_position);
     InsertValidPositionIterator(idx, target_position);
   }
-  pos_set_.heapify();
 
   // Handle currently active indices
   if (current_position_.has_value()) {
@@ -222,7 +220,6 @@ bool TermIterator::SeekForwardPosition(Position target_position) {
       pos_iterators_[idx].SkipForwardPosition(target_position);
       InsertValidPositionIterator(idx, target_position);
     }
-    pos_set_.heapify();
     current_pos_indices_.clear();
   }
 

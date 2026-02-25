@@ -38,7 +38,7 @@ concurrency:
 
 jobs:
   stability-tests:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, ARM64]
 
     steps:
     # Checkout the code from the repository
@@ -52,18 +52,20 @@ jobs:
     # Set up Docker to build and run the container
     - name: Set up Docker
       uses: docker/setup-buildx-action@v2
+      with:
+        platforms: linux/arm64
 
     # Build the Docker image
     - name: Build Docker Image
       run: |
-        docker build -t stability-test-image -f .devcontainer/Dockerfile .
+        docker buildx build --platform linux/arm64 --load -t stability-test-image -f .devcontainer/Dockerfile .
         echo "Verifying memtier-benchmark..."
-        docker run --rm stability-test-image memtier_benchmark --version
+        docker run --rm --platform linux/arm64 stability-test-image memtier_benchmark --version
 
     # Build valkey-search module
     - name: Build valkey-search Module
       run: |
-        docker run --rm \
+        docker run --rm --platform linux/arm64 \
           -v "$(pwd):/valkey-search" \
           -w /valkey-search \
           --user "ubuntu:ubuntu" \
@@ -77,7 +79,7 @@ jobs:
         mkdir -p testing/integration/.build-release
         chmod -R 777 testing/integration/.build-release
         sudo chmod -R 777 .build-release
-        docker run --rm \
+        docker run --rm --platform linux/arm64 \
           -v "$(pwd):/valkey-search" \
           -w /valkey-search \
           -e VALKEY_SEARCH_PATH="/valkey-search/.build-release/libsearch.so" \
@@ -100,7 +102,7 @@ jobs:
 
   # Cleanup job to remove temporary files and build artifacts
   cleanup:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, ARM64]
     needs: stability-tests
     if: always()
     steps:

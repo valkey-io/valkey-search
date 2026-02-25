@@ -532,7 +532,6 @@ TEST_F(RaxTest, RaxMallocMemoryTracking) {
         << "Creating Rax should increase the tracked allocated memory";
     EXPECT_EQ(empty_rax.GetAllocSize(), after_create_memory - initial_memory);
   }
-  uint64_t final_memory = vmsdk::GetUsedMemoryCnt();
   // The memory should return to zero after falling out of scope.
   EXPECT_EQ(initial_memory, vmsdk::GetUsedMemoryCnt())
       << "Destroying Rax should free all rax allocations";

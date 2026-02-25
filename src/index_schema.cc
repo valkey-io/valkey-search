@@ -1478,7 +1478,8 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
     for (size_t i = 0; i < count; ++i) {
       VMSDK_ASSIGN_OR_RETURN(auto keyname_str, input.LoadString());
       VMSDK_ASSIGN_OR_RETURN(auto from_backfill, input.LoadObject<bool>());
-      VMSDK_ASSIGN_OR_RETURN(auto from_multi, input.LoadObject<bool>());
+      VMSDK_ASSIGN_OR_RETURN([[maybe_unused]] auto from_multi,
+                             input.LoadObject<bool>());
 
       auto keyname = vmsdk::MakeUniqueValkeyString(keyname_str);
       ProcessKeyspaceNotification(ctx, keyname.get(), from_backfill);

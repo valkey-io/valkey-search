@@ -544,10 +544,6 @@ class TestNonVectorCluster(ValkeySearchClusterTestCase):
         cluster_client: ValkeyCluster = self.new_cluster_client()
         client: Valkey = self.new_client_for_primary(0)
         create_indexes(client)
-        # Set fanout-data-uniformity to 0 on all nodes.
-        # This ensures we handle the case where all data is on one node.
-        for node_client in self.get_all_primary_clients():
-            assert node_client.execute_command("CONFIG SET search.fanout-data-uniformity 0") == b"OK"
         for doc in aggregate_complex_hash_docs:
             assert cluster_client.execute_command(*doc) == 3
         for doc in aggregate_complex_json_docs:

@@ -22,8 +22,6 @@ class TestDBNum(ValkeySearchClusterTestCaseDebugMode):
         self.client21 = self.get_primary(2).connect()
         self.client21.select(1)
         self.clients = [[self.client00, self.client01], [self.client10, self.client11], [self.client20, self.client21]]
-        for node_client in self.get_all_primary_clients():
-            node_client.execute_command("CONFIG", "SET", "search.fanout-data-uniformity", "0")
 
     def test_dbnum(self):
         """

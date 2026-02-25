@@ -388,7 +388,7 @@ static auto fanout_data_uniformity =
 /// Minimum index size before applying uniformity logic
 constexpr absl::string_view kFanoutUniformityMinIndexSizeConfig{
     "fanout-uniformity-min-index-size"};
-constexpr uint32_t kDefaultFanoutUniformityMinIndexSize{1000};
+constexpr uint32_t kDefaultFanoutUniformityMinIndexSize{10000};
 constexpr uint32_t kMinimumFanoutUniformityMinIndexSize{0};
 constexpr uint32_t kMaximumFanoutUniformityMinIndexSize{UINT32_MAX};
 static auto fanout_uniformity_min_index_size =

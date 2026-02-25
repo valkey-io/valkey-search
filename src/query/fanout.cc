@@ -291,46 +291,36 @@ absl::Status PerformSearchFanoutAsync(
   // distribution profile. 100 means data is perfectly balanced (Uniform); 0
   // means data is heavily skewed.
   uint32_t U = options::GetFanoutDataUniformity().GetValue();
-  uint64_t index_size = parameters->index_schema->GetSize();
+  uint64_t index_size = parameters->index_schema->GetSize("");
   uint32_t min_index_size =
       options::GetFanoutUniformityMinIndexSize().GetValue();
   if (parameters->IsNonVectorQuery()) {
     // For non-vector queries, we optimize network traffic by reducing the
     // per-shard fetch limit. Instead of fetching K from every shard, we
-    // calculate a limit based on the distribution profile to have enough
-    // inorder to cover offset + limit number.
-
-    // 1. Calculate the 'fair_share_limit' (The Base).
-    // This is the minimum results needed per shard if data is perfectly
-    // uniform. We use ceiling division (K + N - 1) / N to ensure we fetch at
-    // least 1 per shard when K > 0, preventing empty results on high-fanout
-    // clusters.
-    uint64_t fair_share_limit = (K + N - 1) / N;
-
-    // 2. Calculate the 'skew_gap' (The Buffer).
-    // This represents the extra results we might need to fetch if one shard
-    // holds more than its fair share. The maximum gap is (K - fair_share).
-    uint64_t skew_gap = K - fair_share_limit;
-
-    // 3. Apply the 'Uniformity' (U) to the gap.
-    // - If U = 100 (Uniform): We add 0% of the gap. Result = fair_share_limit.
-    // - If U = 0 (Skewed): We add 100% of the gap. Result = K.
-    // Note: Multiplying by (100 - U) before dividing by 100 maintains integer
-    // precision.
-    // Skip uniformity logic for small indexes to avoid pathological behavior.
-    uint64_t limit_per_shard =
-        (index_size < min_index_size)
-            ? K
-            : fair_share_limit + ((100 - U) * skew_gap / 100);
-
-    request->mutable_limit()->set_first_index(0);
-    request->mutable_limit()->set_number(limit_per_shard);
-    // For queries requiring complete results (e.g. with SORTBY), we need to
-    // fetch K results from each shard to ensure we have enough results to
-    // sort and return the correct top K. In these cases, we ignore the
-    // fanout-data-uniformity optimization logic.
-    if (parameters->RequiresCompleteResults()) {
+    // calculate a limit based on the distribution profile to cover (offset +
+    // limit) results across the cluster.
+    if (index_size < min_index_size || parameters->RequiresCompleteResults()) {
+      // For queries requiring complete results (e.g., with SORTBY), we must
+      // fetch K results from each shard to guarantee global correctness.
+      request->mutable_limit()->set_first_index(0);
       request->mutable_limit()->set_number(K);
+    } else {
+      // 1. Calculate the 'fair_share_limit' (The Base).
+      // This is the minimum results needed per shard if data is perfectly
+      // uniform. We use ceiling division (K + N - 1) / N to ensure the total
+      // sum across N shards is at least K.
+      uint64_t fair_share_limit = (K + N - 1) / N;
+      // 2. Calculate the 'skew_gap' (The Buffer).
+      // The extra results needed if data is skewed. The maximum gap is K -
+      // fair_share_limit.
+      uint64_t skew_gap = K - fair_share_limit;
+      // 3. Apply the 'Uniformity' (U) to the gap.
+      // - If U = 100 (Uniform): 0% gap added. Limit = fair_share_limit.
+      // - If U = 0 (Skewed): 100% gap added. Limit = K.
+      uint64_t optimized_limit =
+          fair_share_limit + ((100 - U) * skew_gap / 100);
+      request->mutable_limit()->set_first_index(0);
+      request->mutable_limit()->set_number(optimized_limit);
     }
   } else {
     // Vector searches: Use k as the limit to find top k results. In worst case,

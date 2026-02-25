@@ -7,6 +7,7 @@ import random
 from valkey.cluster import ValkeyCluster
 from valkey_search_test_case import ValkeySearchClusterTestCase
 import time
+import pytest
 
 """
 This file contains tests for non vector (numeric and tag) queries on Hash/JSON documents in Valkey Search - in CME / CMD.
@@ -549,3 +550,92 @@ class TestNonVectorCluster(ValkeySearchClusterTestCase):
         for doc in aggregate_complex_json_docs:
             assert cluster_client.execute_command(*doc) == b"OK"
         validate_aggregate_complex_queries(cluster_client)
+    
+    def test_max_search_keys_truncation(self):
+        """
+        Test max-search-keys-accumulated with non-vector fields.
+        Tests both prefilter path (numeric/tag queries) and optimized path (text queries).
+        """        
+        cluster_client: ValkeyCluster = self.new_cluster_client()
+        client: Valkey = self.new_client_for_primary(0)
+
+        # Test config validation
+        with pytest.raises(ResponseError, match=r"must be between 1 and 10000000"):
+            client.execute_command("CONFIG SET search.max-search-keys-accumulated 0")
+        with pytest.raises(ResponseError, match=r"must be between 1 and 10000000"):
+            client.execute_command("CONFIG SET search.max-search-keys-accumulated 20000000")
+        
+        # Set config on all cluster nodes 
+        for i in range(self.CLUSTER_SIZE):
+            node_client = self.new_client_for_primary(i)
+            assert node_client.execute_command("CONFIG SET search.max-search-keys-accumulated 5") == b"OK"
+    
+        # Create index with numeric, tag, AND text fields
+        index_cmd = "FT.CREATE idx ON HASH PREFIX 1 doc: SCHEMA price NUMERIC category TAG description TEXT"
+        assert client.execute_command(index_cmd) == b"OK"
+        # Insert 100 documents with all field types
+        for i in range(100):
+            price = 10 + i
+            category = "cat" + str(i % 5)
+            description = f"product laptop model{i}"
+            cluster_client.execute_command("HSET", f"doc:{i}", "price", str(price), "category", category, "description", description)
+        
+        # Query with limit 100 but should be restricted by the config
+        # In cluster mode with 3 nodes: each node truncates to 5, total ~15 returned
+        result = client.execute_command("FT.SEARCH", "idx", "@price:[0 +inf]", "LIMIT", "0", "100")
+        
+        # Verify truncation in cluster mode:
+        #  In cluster: 3 nodes × 5 limit = ~15 results (may vary by hash distribution)
+        assert 10 <= result[0] <= 20, f"Expected ~15 truncated count, got {result[0]}"
+        actual_results = (len(result) - 1) // 2
+        assert actual_results == result[0]
+        
+        # Test with NOCONTENT
+        result_nocontent = client.execute_command("FT.SEARCH", "idx", "@price:[0 +inf]", "LIMIT", "0", "100", "NOCONTENT")
+        assert 10 <= result_nocontent[0] <= 20, f"Expected ~15 truncated count, got {truncated_count_nocontent}"
+        actual_keys = len(result_nocontent) - 1
+        assert actual_keys == result_nocontent[0]
+        
+        # Test user's LIMIT with truncation
+        # Truncated to ~15, then LIMIT 0 5 returns first 5 of those
+        result_limit = client.execute_command("FT.SEARCH", "idx", "@price:[0 +inf]", "LIMIT", "0", "5")
+        assert 10 <= result_limit[0] <= 20, f"Expected ~15 truncated count, got {result_limit[0]}"
+        actual_limited = (len(result_limit) - 1) // 2
+        assert actual_limited == 5, f"Expected 5 results after user LIMIT, got {actual_limited}"
+        
+        # Test LIMIT with offset: LIMIT 5 10 (skip first 5, return next 10)
+        result_offset = client.execute_command("FT.SEARCH", "idx", "@price:[0 +inf]", "LIMIT", "5", "10")
+        assert 10 <= result_offset[0] <= 20, f"Expected ~15 truncated count, got {result_offset[0]}"
+        actual_offset = (len(result_offset) - 1) // 2
+        # Should get ~10 results (15 total - 5 skipped = 10 remaining, capped by user's 10)
+        assert 5 <= actual_offset <= 12, f"Expected ~10 results with LIMIT 5 10, got {actual_offset}"
+        
+        # Test LIMIT with offset exceeding available: LIMIT 5 20 (skip 5, request 20)
+        result_exceed = client.execute_command("FT.SEARCH", "idx", "@price:[0 +inf]", "LIMIT", "5", "20")
+        assert 10 <= result_exceed[0] <= 20, f"Expected ~15 truncated count, got {result_exceed[0]}"
+        actual_exceed = (len(result_exceed) - 1) // 2
+        # Should still get ~10 results (all remaining after offset 5)
+        assert 5 <= actual_exceed <= 12, f"Expected ~10 results with LIMIT 5 20, got {actual_exceed}"
+        
+        # TEXT QUERY TESTS (optimized path - no prefilter evaluation)
+        result_text = client.execute_command("FT.SEARCH", "idx", "@description:laptop", "LIMIT", "0", "100")
+        assert 10 <= result_text[0] <= 20, f"Expected ~15 truncated count for text query, got {result_text[0]}"
+        actual_text = (len(result_text) - 1) // 2
+        assert actual_text == result_text[0], f"Text query: Actual count should match result count"
+        
+        # Test text query with NOCONTENT
+        result_text_nocontent = client.execute_command("FT.SEARCH", "idx", "@description:laptop", "LIMIT", "0", "100", "NOCONTENT")
+        assert 10 <= result_text_nocontent[0] <= 20, f"Expected ~15 truncated count for text NOCONTENT, got {result_text_nocontent[0]}"
+        actual_text_keys = len(result_text_nocontent) - 1
+        assert actual_text_keys == result_text_nocontent[0], f"Text NOCONTENT: key count should match truncated count"
+        
+        # Test text query with user LIMIT
+        result_text_limit = client.execute_command("FT.SEARCH", "idx", "@description:laptop", "LIMIT", "0", "5")
+        assert 10 <= result_text_limit[0] <= 20, f"Expected ~15 truncated count for text LIMIT, got {result_text_limit[0]}"
+        actual_text_limited = (len(result_text_limit) - 1) // 2
+        assert actual_text_limited == 5, f"Expected 5 results after user LIMIT on text query, got {actual_text_limited}"
+        
+        # Verify truncated queries metric
+        client.execute_command("CONFIG SET search.info-developer-visible yes")
+        assert client.info("search").get("search_query_keys_truncated_cnt", 0) == 8
+

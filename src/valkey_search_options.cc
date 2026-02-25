@@ -385,6 +385,25 @@ static auto async_fanout_threshold =
         kMaximumAsyncFanoutThreshold)  // max threshold (10k)
         .Build();
 
+/// Register the "--max-search-keys-accumulated" flag. Controls the maximum
+/// number of keys to accumulate in background threads before content fetching.
+/// This controls potential OOM by limiting the result set size before expensive
+/// content fetching from the keyspace.
+constexpr absl::string_view kMaxSearchKeysAccumulatedConfig{
+    "max-search-keys-accumulated"};
+constexpr uint32_t kDefaultMaxSearchKeysAccumulated{
+    100000};  // 100K keys default
+constexpr uint32_t kMinimumMaxSearchKeysAccumulated{1};
+constexpr uint32_t kMaximumMaxSearchKeysAccumulated{
+    10000000};  // Max 10M keys
+static auto max_search_keys_accumulated =
+    vmsdk::config::NumberBuilder(
+        kMaxSearchKeysAccumulatedConfig,   // name
+        kDefaultMaxSearchKeysAccumulated,  // default limit (100K)
+        kMinimumMaxSearchKeysAccumulated,  // min limit (1)
+        kMaximumMaxSearchKeysAccumulated)  // max limit (10M)
+        .Build();
+
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 
 vmsdk::config::Number& GetHNSWBlockSize() {
@@ -483,6 +502,11 @@ const vmsdk::config::Boolean& GetDrainMutationQueueOnLoad() {
 
 vmsdk::config::Number& GetAsyncFanoutThreshold() {
   return dynamic_cast<vmsdk::config::Number&>(*async_fanout_threshold);
+}
+
+vmsdk::config::Number& GetMaxSearchKeysBeforeContent() {
+  return dynamic_cast<vmsdk::config::Number&>(
+      *max_search_keys_accumulated);
 }
 
 }  // namespace options

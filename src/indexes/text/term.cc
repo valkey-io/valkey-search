@@ -21,8 +21,12 @@ TermIterator::TermIterator(
       current_field_mask_(0ULL),
       require_positions_(require_positions),
       has_original_(has_original) {
+  // Populate the key_set_ heap.
+  for (size_t i = 0; i < key_iterators_.size(); ++i) {
+    InsertValidKeyIterator(i);
+  }
   // Prime the first key and position if they exist.
-  if (!key_iterators_.empty()) {
+  if (!key_set_.empty()) {
     TermIterator::NextKey();
   }
 }
@@ -61,37 +65,37 @@ void TermIterator::InsertValidKeyIterator(size_t idx) {
 }
 
 bool TermIterator::FindMinimumValidKey() {
-  // 1. If the heap is empty, it means all iterators from the previous match
-  // were extracted. Attempt to re-populate the heap with any iterators
-  // that still have valid data.
-  if (key_set_.empty()) {
-    for (size_t i = 0; i < key_iterators_.size(); ++i) {
-      InsertValidKeyIterator(i);
-    }
-  }
-  // 2. If the heap is still empty after the re-population attempt, it means
-  // all underlying expansion iterators are exhausted.
+  // 1. If the heap is empty, all underlying iterators are exhausted.
+  // Note: This can be due to three cases:
+  //   a) Initialization: No valid keys were found across any
+  //      iterators during the first scan in the constructor.
+  //   b) Natural Exhaustion: All iterators were at some point the 'current_key'
+  //      (active indices) and were popped, advanced, and found to be
+  //      Done/Invalid.
+  //   c) Seek Exhaustion: During SeekForwardKey, laggards were popped and
+  //      skipped, but found to be invalid/done.
   if (key_set_.empty()) {
     ClearKeyState();
     return false;
   }
-  // 3. Restore the min-heap property. O(K) is efficient here because
-  // multiple expansions often advance simultaneously.
+  // 2. Restore the min-heap property. O(K).
   key_set_.heapify();
   current_key_ = key_set_.min().first;
   current_key_indices_.clear();
-  // 4. Extract all iterators that share this minimum key.
+  // 3. Extract all iterators that share this minimum key.
   // This physically removes them from the heap (making it "empty" if all
   // match).
   while (!key_set_.empty() && key_set_.min().first == current_key_) {
     current_key_indices_.push_back(key_set_.min().second);
     key_set_.pop_min();  // O(log K)
   }
-  // 5. Initialize position iteration for the specific new key if required.
+  // 4. Initialize position iteration for the specific new key if required.
   if (require_positions_) {
     ClearPositionState();
     for (size_t idx : current_key_indices_) {
       pos_iterators_.emplace_back(key_iterators_[idx].GetPositionIterator());
+      // Populate the position heap.
+      InsertValidPositionIterator(pos_iterators_.size() - 1);
     }
     TermIterator::NextPosition();
   }
@@ -155,22 +159,26 @@ void TermIterator::InsertValidPositionIterator(size_t idx) {
 
 // Position Logic follows the same Heap pattern as Key logic.
 bool TermIterator::FindMinimumValidPosition() {
-  // 1. If the heap is empty, it means all iterators from the previous position
-  // match were extracted. Attempt to re-populate the heap from the
-  // current key's position iterators.
-  if (pos_set_.empty()) {
-    for (size_t i = 0; i < pos_iterators_.size(); ++i) {
-      InsertValidPositionIterator(i);
-    }
-  }
-  // 2. If the heap remains empty after the re-population attempt, it means
-  // we have exhausted all positions for the current key.
+  // 1. If the heap is empty, we have exhausted all positions for the current
+  // key.
+  // Note: This can be due to three cases:
+  //   a) Initialization: No valid positions were found across any
+  //      iterators during the first scan in the constructor.
+  //   b) Natural Exhaustion: All iterators were at some point the
+  //   'current_position'
+  //      (active indices) and were popped, advanced, and found to be
+  //      Done/Invalid.
+  //   c) Seek Exhaustion: During SeekForwardPosition, laggards were popped and
+  //      skipped, but found to be invalid/done.
   if (pos_set_.empty()) {
     ClearPositionState();
     return false;
   }
-  // 3. Restore the min-heap property.
+  // 2. Restore the min-heap property.
   pos_set_.heapify();
+  // 3. Collect all iterators at the same position and aggregate their field
+  // masks. This physically extracts them from the heap (making it "empty" if
+  // all match).
   uint32_t min_position = pos_set_.min().first;
   current_pos_indices_.clear();
   current_field_mask_ = 0ULL;

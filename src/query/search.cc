@@ -416,7 +416,7 @@ void EvaluatePrefilteredKeys(
         bool should_continue = appender(key, result_keys);
         if (!should_continue) {
           // Early exit - appender reached its limit
-          return;  
+          return;
         }
       }
       iterator->Next();
@@ -577,16 +577,17 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
       parameters.filter_parse_results.root_predicate.get(), entries_fetchers,
       false, parameters.filter_parse_results.query_operations,
       parameters.index_schema.get());
-  
-  // Get the config for maximum number of keys to accumulate before content fetching
-  const size_t max_keys = static_cast<size_t>(
-      options::GetMaxSearchKeysBeforeContent().GetValue());   
+
+  // Get the config for maximum number of keys to accumulate before content
+  // fetching
+  const size_t max_keys =
+      static_cast<size_t>(options::GetMaxSearchKeysBeforeContent().GetValue());
   std::vector<indexes::Neighbor> neighbors;
   // TODO: For now, we just reserve a fixed size because text search operators
   // return a size of 0 currently.
   const size_t reserve_size = 5000;
   neighbors.reserve(std::min(reserve_size, max_keys));
-  
+
   // Track accumulated count and truncation status (shared across both paths)
   size_t accumulated = 0;
   bool truncated = false;
@@ -629,7 +630,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
         // Check if we've reached the limit
         if (accumulated >= max_keys) {
           truncated = true;
-          break;  
+          break;
         }
         neighbors.emplace_back(indexes::Neighbor{key, 0.0f});
         ++accumulated;
@@ -647,12 +648,12 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
     EvaluatePrefilteredKeys(parameters, entries_fetchers,
                             std::move(results_appender), qualified_entries);
   }
-  
+
   // Update metric if truncation occurred in either path
   if (truncated) {
     query_keys_truncated_cnt.Increment();
   }
-  
+
   return neighbors;
 }
 

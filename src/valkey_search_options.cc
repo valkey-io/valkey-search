@@ -394,8 +394,7 @@ constexpr absl::string_view kMaxSearchKeysAccumulatedConfig{
 constexpr uint32_t kDefaultMaxSearchKeysAccumulated{
     100000};  // 100K keys default
 constexpr uint32_t kMinimumMaxSearchKeysAccumulated{1};
-constexpr uint32_t kMaximumMaxSearchKeysAccumulated{
-    10000000};  // Max 10M keys
+constexpr uint32_t kMaximumMaxSearchKeysAccumulated{10000000};  // Max 10M keys
 static auto max_search_keys_accumulated =
     vmsdk::config::NumberBuilder(
         kMaxSearchKeysAccumulatedConfig,   // name
@@ -505,8 +504,7 @@ vmsdk::config::Number& GetAsyncFanoutThreshold() {
 }
 
 vmsdk::config::Number& GetMaxSearchKeysBeforeContent() {
-  return dynamic_cast<vmsdk::config::Number&>(
-      *max_search_keys_accumulated);
+  return dynamic_cast<vmsdk::config::Number&>(*max_search_keys_accumulated);
 }
 
 }  // namespace options

@@ -248,7 +248,9 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
   if (!reload && index_schema_proto.skip_initial_scan()) {
     // Creating a new Index with SkipInitialScan. Mark the backfill as done
     // since we are skipping it.
-    VMSDK_LOG(DEBUG, ctx) << "Index " << index_schema_proto.name()
+    VMSDK_LOG(DEBUG, ctx) << "Index "
+                          << vmsdk::config::RedactIfNeeded(
+                                 index_schema_proto.name())
                           << " created with skip_initial_scan. "
                              "Marking backfill as done.";
     res->backfill_job_.Get()->MarkScanAsDone();
@@ -719,7 +721,8 @@ void IndexSchema::ProcessMultiQueue() {
 void IndexSchema::EnqueueMultiMutation(const Key &key) {
   auto &multi_mutations_keys = multi_mutations_keys_.Get();
   multi_mutations_keys.push_back(key);
-  VMSDK_LOG(DEBUG, nullptr) << "Enqueueing multi mutation for key: " << key
+  VMSDK_LOG(DEBUG, nullptr) << "Enqueueing multi mutation for key: "
+                            << vmsdk::config::RedactIfNeeded(key->Str())
                             << " Size is now " << multi_mutations_keys.size();
   if (multi_mutations_keys.size() >= mutations_thread_pool_->Size() &&
       !schedule_multi_exec_processing_.Get()) {
@@ -1242,8 +1245,9 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
   }
 
   VMSDK_LOG(DEBUG, nullptr)
-      << "Starting RDB save for index schema: " << name_
-      << " Saving in version " << (RDBWriteV2() ? "2" : "1") << " format";
+      << "Starting RDB save for index schema: "
+      << vmsdk::config::RedactIfNeeded(name_) << " Saving in version "
+      << (RDBWriteV2() ? "2" : "1") << " format";
 
   auto index_schema_proto = ToProto();
   auto rdb_section = std::make_unique<data_model::RDBSection>();
@@ -1273,7 +1277,8 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
 
   for (auto &attribute : attributes_) {
     VMSDK_LOG(DEBUG, nullptr)
-        << "Starting to save attribute: " << attribute.second.GetAlias();
+        << "Starting to save attribute: "
+        << vmsdk::config::RedactIfNeeded(attribute.second.GetAlias());
     // Note that the serialized attribute proto is also stored as part of the
     // serialized index schema proto above. We store here again to avoid any
     // dependencies on the ordering of multiple attributes.
@@ -1476,7 +1481,8 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
     for (size_t i = 0; i < count; ++i) {
       VMSDK_ASSIGN_OR_RETURN(auto keyname_str, input.LoadString());
       VMSDK_ASSIGN_OR_RETURN(auto from_backfill, input.LoadObject<bool>());
-      VMSDK_ASSIGN_OR_RETURN(auto from_multi, input.LoadObject<bool>());
+      VMSDK_ASSIGN_OR_RETURN([[maybe_unused]] auto from_multi,
+                             input.LoadObject<bool>());
 
       auto keyname = vmsdk::MakeUniqueValkeyString(keyname_str);
       ProcessKeyspaceNotification(ctx, keyname.get(), from_backfill);
@@ -1542,7 +1548,8 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
           auto &attribute =
               supplemental_content->index_content_header().attribute();
           VMSDK_LOG(DEBUG, nullptr)
-              << "Loading Index Content for attribute: " << attribute.alias();
+              << "Loading Index Content for attribute: "
+              << vmsdk::config::RedactIfNeeded(attribute.alias());
           VMSDK_ASSIGN_OR_RETURN(
               std::shared_ptr<indexes::IndexBase> index,
               IndexFactory(ctx, index_schema.get(), attribute,
@@ -1557,7 +1564,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
               supplemental_content->key_to_id_map_header().attribute();
           VMSDK_LOG(DEBUG, nullptr)
               << "Loading Key to ID Map Content for attribute: "
-              << attribute.alias();
+              << vmsdk::config::RedactIfNeeded(attribute.alias());
           VMSDK_ASSIGN_OR_RETURN(
               auto index, index_schema->GetIndex(attribute.alias()),
               _ << "Key to ID mapping found before index definition.");
@@ -1692,8 +1699,11 @@ void IndexSchema::OnLoadingEnded(ValkeyModuleCtx *ctx) {
     });
     VMSDK_LOG(DEBUG, ctx) << "Deleting " << stale_entries
                           << " stale entries of " << key_size
-                          << " total keys for {Index: " << name_
-                          << ", Attribute: " << attribute.first << "}";
+                          << " total keys for {Index: "
+                          << vmsdk::config::RedactIfNeeded(name_)
+                          << ", Attribute: "
+                          << vmsdk::config::RedactIfNeeded(attribute.first)
+                          << "}";
   }
   VMSDK_LOG(NOTICE, ctx) << "Deleting " << deletion_attributes.size()
                          << " stale entries for {Index: "

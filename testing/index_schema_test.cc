@@ -214,7 +214,6 @@ TEST_P(IndexSchemaSubscriptionTest, OnKeyspaceNotificationTest) {
         .success_cnt = index_schema->GetStats().subscription_modify.success_cnt,
         .skipped_cnt =
             index_schema->GetStats().subscription_modify.skipped_cnt};
-    uint32_t document_cnt = index_schema->GetStats().document_cnt;
 
     // Capture initial Time Slice Mutex metrics
     auto &global_stats = Metrics::GetStats();

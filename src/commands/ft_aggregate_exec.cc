@@ -180,14 +180,15 @@ absl::Status SortBy::Execute(RecordSet& records) const {
 absl::Status GroupBy::Execute(RecordSet& records) const {
   DBG << "Executing GROUPBY with groups: " << groups_.size()
       << " and reducers: " << reducers_.size() << "\n";
-  absl::flat_hash_map<GroupKey,
-                      absl::InlinedVector<std::unique_ptr<ReducerInstance>, 4>>
+
+  // struct InstanceArgsPair {
+  //   std::unique_ptr<ReducerInstance> instance;
+  //   std::vector<ArgVector> args;
+  // };
+  using InstanceArgsPair =
+      std::pair<std::unique_ptr<ReducerInstance>, std::vector<ArgVector>>;
+  absl::flat_hash_map<GroupKey, absl::InlinedVector<InstanceArgsPair, 4>>
       groups;
-  // Store all values for each group's reducers
-  absl::flat_hash_map<
-      GroupKey,
-      absl::InlinedVector<std::vector<absl::InlinedVector<expr::Value, 4>>, 4>>
-      group_values;
   size_t record_field_count = 0;
   agg_group_by_stages.Increment();
   agg_group_by_input_records.Increment(records.size());
@@ -209,16 +210,20 @@ absl::Status GroupBy::Execute(RecordSet& records) const {
     if (inserted) {
       DBG << "Was inserted, now have " << groups.size() << " groups\n";
       for (auto& reducer : reducers_) {
-        group_it->second.emplace_back(reducer.info_->make_instance());
+        ArgVector args;
+        for (auto& nargs : reducer.args_) {
+          args.emplace_back(nargs->Evaluate(ctx, *record));
+        }
+        group_it->second.emplace_back(std::move(reducer.info_->make_instance()),
+                                      std::vector<ArgVector>{});
       }
-      group_values[group_it->first].resize(reducers_.size());
     }
-    for (auto i = 0; i < reducers_.size(); ++i) {
-      absl::InlinedVector<expr::Value, 4> args;
+    for (int i = 0; i < reducers_.size(); ++i) {
+      ArgVector args;
       for (auto& nargs : reducers_[i].args_) {
         args.emplace_back(nargs->Evaluate(ctx, *record));
       }
-      group_values[group_it->first][i].push_back(std::move(args));
+      group_it->second[i].second.push_back(args);
     }
   }
   for (auto& group : groups) {
@@ -231,8 +236,9 @@ absl::Status GroupBy::Execute(RecordSet& records) const {
     CHECK(reducers_.size() == group.second.size());
     agg_reducer_stages.Increment(reducers_.size());
     for (auto i = 0; i < reducers_.size(); ++i) {
-      group.second[i]->ProcessRecords(group_values[group.first][i]);
-      SetField(*record, *reducers_[i].output_, group.second[i]->GetResult());
+      auto& [instance, args] = group.second[i];
+      instance->ProcessRecords(args);
+      SetField(*record, *reducers_[i].output_, instance->GetResult());
     }
     DBG << "Record (" << records.size() << ") is : " << *record << "\n";
     records.push_back(std::move(record));
@@ -243,8 +249,7 @@ absl::Status GroupBy::Execute(RecordSet& records) const {
 
 class Count : public GroupBy::ReducerInstance {
   size_t count_{0};
-  void ProcessRecords(const std::vector<absl::InlinedVector<expr::Value, 4>>&
-                          all_values) override {
+  void ProcessRecords(const std::vector<ArgVector>& all_values) override {
     count_ = all_values.size();
   }
   expr::Value GetResult() const override { return expr::Value(double(count_)); }
@@ -252,8 +257,7 @@ class Count : public GroupBy::ReducerInstance {
 
 class Min : public GroupBy::ReducerInstance {
   expr::Value min_;
-  void ProcessRecords(const std::vector<absl::InlinedVector<expr::Value, 4>>&
-                          all_values) override {
+  void ProcessRecords(const std::vector<ArgVector>& all_values) override {
     for (const auto& values : all_values) {
       if (values[0].IsNil()) {
         continue;
@@ -274,8 +278,7 @@ class Min : public GroupBy::ReducerInstance {
 
 class Max : public GroupBy::ReducerInstance {
   expr::Value max_;
-  void ProcessRecords(const std::vector<absl::InlinedVector<expr::Value, 4>>&
-                          all_values) override {
+  void ProcessRecords(const std::vector<ArgVector>& all_values) override {
     for (const auto& values : all_values) {
       if (values[0].IsNil()) {
         continue;
@@ -292,8 +295,7 @@ class Max : public GroupBy::ReducerInstance {
 
 class Sum : public GroupBy::ReducerInstance {
   double sum_{0};
-  void ProcessRecords(const std::vector<absl::InlinedVector<expr::Value, 4>>&
-                          all_values) override {
+  void ProcessRecords(const std::vector<ArgVector>& all_values) override {
     for (const auto& values : all_values) {
       auto val = values[0].AsDouble();
       if (val) {
@@ -307,8 +309,7 @@ class Sum : public GroupBy::ReducerInstance {
 class Avg : public GroupBy::ReducerInstance {
   double sum_{0};
   size_t count_{0};
-  void ProcessRecords(const std::vector<absl::InlinedVector<expr::Value, 4>>&
-                          all_values) override {
+  void ProcessRecords(const std::vector<ArgVector>& all_values) override {
     for (const auto& values : all_values) {
       auto val = values[0].AsDouble();
       if (val) {
@@ -325,8 +326,7 @@ class Avg : public GroupBy::ReducerInstance {
 class Stddev : public GroupBy::ReducerInstance {
   double sum_{0}, sq_sum_{0};
   size_t count_{0};
-  void ProcessRecords(const std::vector<absl::InlinedVector<expr::Value, 4>>&
-                          all_values) override {
+  void ProcessRecords(const std::vector<ArgVector>& all_values) override {
     for (const auto& values : all_values) {
       auto val = values[0].AsDouble();
       if (val) {
@@ -348,8 +348,7 @@ class Stddev : public GroupBy::ReducerInstance {
 
 class CountDistinct : public GroupBy::ReducerInstance {
   absl::flat_hash_set<expr::Value> values_;
-  void ProcessRecords(const std::vector<absl::InlinedVector<expr::Value, 4>>&
-                          all_values) override {
+  void ProcessRecords(const std::vector<ArgVector>& all_values) override {
     for (const auto& values : all_values) {
       if (!values[0].IsNil()) {
         values_.insert(values[0]);

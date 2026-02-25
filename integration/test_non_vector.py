@@ -592,7 +592,7 @@ class TestNonVectorCluster(ValkeySearchClusterTestCase):
         
         # Test with NOCONTENT
         result_nocontent = client.execute_command("FT.SEARCH", "idx", "@price:[0 +inf]", "LIMIT", "0", "100", "NOCONTENT")
-        assert 10 <= result_nocontent[0] <= 20, f"Expected ~15 truncated count, got {truncated_count_nocontent}"
+        assert 10 <= result_nocontent[0] <= 20, f"Expected ~15 truncated count, got {result_nocontent[0]}"
         actual_keys = len(result_nocontent) - 1
         assert actual_keys == result_nocontent[0]
         
@@ -634,7 +634,7 @@ class TestNonVectorCluster(ValkeySearchClusterTestCase):
         assert 10 <= result_text_limit[0] <= 20, f"Expected ~15 truncated count for text LIMIT, got {result_text_limit[0]}"
         actual_text_limited = (len(result_text_limit) - 1) // 2
         assert actual_text_limited == 5, f"Expected 5 results after user LIMIT on text query, got {actual_text_limited}"
-        
+
         # Verify truncated queries metric
         client.execute_command("CONFIG SET search.info-developer-visible yes")
         assert client.info("search").get("search_query_keys_truncated_cnt", 0) == 8

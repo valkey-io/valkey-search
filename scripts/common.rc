@@ -200,7 +200,7 @@ function setup_valkey_server() {
       "${VALKEY_SERVER_HOME_DIR}/src/util.c"
 
     # 2. RTLD_DEEPBIND is incompatible with TSAN; exclude it like ASAN already does.
-    https://github.com/valkey-io/valkey/blame/ab3c953b80289d88991095f53c1235fc2f8b44d6/src/module.c#L12548
+    # https://github.com/valkey-io/valkey/blame/ab3c953b80289d88991095f53c1235fc2f8b44d6/src/module.c#L12548
     sed -i 's/!defined(VALKEY_ADDRESS_SANITIZER) \&\& __has_include(<dlfcn.h>)/!defined(VALKEY_ADDRESS_SANITIZER) \&\& !defined(VALKEY_THREAD_SANITIZER) \&\& __has_include(<dlfcn.h>)/' \
       "${VALKEY_SERVER_HOME_DIR}/src/module.c"
 

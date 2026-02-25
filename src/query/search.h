@@ -237,6 +237,11 @@ struct SearchParameters {
   // resolution due to contention with in-flight mutations.
   unsigned int content_resolution_blocked_{0};
 
+  // Returns true if content resolution can be deferred to the Reply callback.
+  // Only QueryCommand overrides this to return true, since it has a Reply
+  // callback that can perform content resolution on the main thread.
+  virtual bool CanResolveContentInReply() const { return false; }
+
   // In CME, when a LocalResponderSearch is used, the neighbors of that
   // operation get moved into this operation. But the neighbors has string_view
   // references into the return_attributes of the owning operation. So in order

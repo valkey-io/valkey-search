@@ -791,6 +791,16 @@ absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
             parameters->QueryCompleteBackground(std::move(parameters));
             break;
           case ContentProcessing::kContentRequired:
+            if (parameters->CanResolveContentInReply()) {
+              // Optimization: defer content resolution to the Reply callback,
+              // combining RunByMain + UnblockClient into a single step.
+              parameters->QueryCompleteBackground(std::move(parameters));
+            } else {
+              vmsdk::RunByMain([parameters = std::move(parameters)]() mutable {
+                ResolveContent(std::move(parameters));
+              });
+            }
+            break;
           case ContentProcessing::kContentionCheckRequired:
             vmsdk::RunByMain([parameters = std::move(parameters)]() mutable {
               ResolveContent(std::move(parameters));

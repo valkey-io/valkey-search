@@ -15,6 +15,7 @@
 #include "src/acl.h"
 #include "src/commands/ft_search.h"
 #include "src/metrics.h"
+#include "src/query/content_resolution.h"
 #include "src/query/fanout.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
@@ -57,6 +58,10 @@ int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     ++Metrics::GetStats().query_failed_requests_cnt;
     return ValkeyModule_ReplyWithError(
         ctx, parameters->search_result.status.message().data());
+  }
+  if (parameters->GetContentProcessing() ==
+      query::ContentProcessing::kContentRequired) {
+    query::FetchContent(*parameters, ctx);
   }
   parameters->SendReply(ctx, parameters->search_result);
   return VALKEYMODULE_OK;

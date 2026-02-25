@@ -10,6 +10,8 @@
 
 #include <memory>
 
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
+
 namespace valkey_search::query {
 
 struct SearchParameters;
@@ -18,6 +20,11 @@ struct SearchParameters;
 // Handles contention checking (registering with mutation queue if needed),
 // content fetching via ProcessNeighborsForReply, and final completion.
 void ResolveContent(std::unique_ptr<SearchParameters> params);
+
+// Fetches content for neighbors and adjusts total_count for any removed
+// neighbors. Can be called directly from the Reply callback when content
+// resolution is deferred (content_resolution_pending_ optimization).
+void FetchContent(SearchParameters& params, ValkeyModuleCtx* ctx);
 
 }  // namespace valkey_search::query
 

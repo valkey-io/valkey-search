@@ -146,10 +146,6 @@ bool TermIterator::SeekForwardKey(const InternedStringPtr& target_key) {
       InsertValidKeyIterator(idx, target_key);
     }
     current_key_indices_.clear();
-    // current_key_ = nullptr;
-    // // Resetting position state as we are moving to a new potential key.
-    // current_position_ = std::nullopt;
-    // current_field_mask_ = 0ULL;
   }
   // 5. Finalize state by finding the new minimum valid key.
   return FindMinimumValidKey();
@@ -259,8 +255,6 @@ bool TermIterator::SeekForwardPosition(Position target_position) {
       InsertValidPositionIterator(idx, target_position);
     }
     current_pos_indices_.clear();
-    // current_position_ = std::nullopt;
-    // current_field_mask_ = 0ULL;
   }
   // 5. Finalize state by finding the new minimum.
   return FindMinimumValidPosition();

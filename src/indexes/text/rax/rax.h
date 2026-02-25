@@ -165,6 +165,7 @@ typedef struct raxNode {
     uint32_t isnull : 1;  /* Associated value is NULL (don't store it). */
     uint32_t iscompr : 1; /* Node is compressed. */
     uint32_t size : 29;   /* Number of children, or compressed string len. */
+    uint32_t subtree_keys; // SEARCH
     /* Data layout is as follows:
      *
      * If node is not compressed we have 'size' bytes, one for each children
@@ -254,10 +255,18 @@ typedef struct raxIterator {
     raxNode *head;           /* SEARCH - Used to limit iteration to a subtree */
 } raxIterator;
 
+/* BEGIN SEARCH */
+/* Used to modify the subtree_keys count */
+typedef enum {
+    ADD,
+    SUBTRACT
+} key_count_op;
+
 /* Callback type for raxMutate. Receives current value (NULL if key doesn't
  * exist) and the passed through caller context. Returns new value (NULL to
  * delete the key). */
 typedef void *(*raxMutateCallback)(void *current_value, void *caller_context);
+/* END SEARCH */
 
 /* Exported API. */
 rax *raxNew(void);
@@ -265,7 +274,7 @@ int raxInsert(rax *rax, unsigned char *s, size_t len, void *data, void **old);
 int raxTryInsert(rax *rax, unsigned char *s, size_t len, void *data, void **old);
 int raxRemove(rax *rax, unsigned char *s, size_t len, void **old);
 int raxFind(rax *rax, unsigned char *s, size_t len, void **value);
-int raxMutate(rax *rax, unsigned char *s, size_t len, raxMutateCallback callback, void *caller_context); // SEARCH
+int raxMutate(rax *rax, unsigned char *s, size_t len, raxMutateCallback callback, void *caller_context, key_count_op op); // SEARCH
 void raxFree(rax *rax);
 void raxFreeWithCallback(rax *rax, void (*free_callback)(void *));
 void raxStart(raxIterator *it, rax *rt);

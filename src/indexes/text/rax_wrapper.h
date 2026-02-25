@@ -90,7 +90,8 @@ class Rax {
   // itself.
   //
   void MutateTarget(absl::string_view word,
-                    absl::FunctionRef<void *(void *)> mutate);
+                    absl::FunctionRef<void *(void *)> mutate,
+                    key_count_op op);
 
   // Get the total number of unique words in the RadixTree (i.e. total number of
   // entries).

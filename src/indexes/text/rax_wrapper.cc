@@ -62,14 +62,15 @@ Rax &Rax::operator=(Rax &&other) noexcept {
 }
 
 void Rax::MutateTarget(absl::string_view word,
-                       absl::FunctionRef<void *(void *)> mutate) {
+                       absl::FunctionRef<void *(void *)> mutate,
+                       key_count_op op) {
   CHECK(!word.empty()) << "Can't mutate the target for an empty word";
 
   unsigned char *c_word = const_cast<unsigned char *>(
       reinterpret_cast<const unsigned char *>(word.data()));
   void *opaque_callback = reinterpret_cast<void *>(&mutate);
   int res = raxMutate(rax_, c_word, word.size(), MutateCallbackWrapper,
-                      opaque_callback);
+                      opaque_callback, op);
   CHECK(res) << "Rax mutation failed for word: " << word << ", errno: " << errno
              << " (" << strerror(errno) << ")";
 }

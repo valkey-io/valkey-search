@@ -2,6 +2,7 @@
   {
     "test_name": "FTS Performance Benchmarks",
     "seed": false,
+    "socket_timeout": 300,
     "dataset_generation": {
       "hybrid_data_100k.csv": {
         "doc_count": 100000,
@@ -180,6 +181,204 @@
                 "min_word_length": 8,
                 "max_word_length": 10,
                 "target_distance": 3
+              }
+            ]
+          }
+        ]
+      },
+      "posting_repeated_100_10m.csv": {
+        "doc_count": 100,
+        "fields": [
+          {
+            "name": "field1",
+            "size": 0,
+            "transforms": [
+              {
+                "type": "repeated_token",
+                "token": "b",
+                "token_count": 10000000
+              }
+            ]
+          }
+        ]
+      },
+      "posting_cyclic8193_1k_100k.csv": {
+        "doc_count": 1000,
+        "fields": [
+          {
+            "name": "field1",
+            "size": 0,
+            "transforms": [
+              {
+                "type": "cyclic_pattern",
+                "cycle_length": 8193,
+                "token_count": 100000
+              }
+            ]
+          }
+        ]
+      },
+      "wiki_10k_50field_1ktok.csv": {
+        "doc_count": 10000,
+        "generate_fields": {
+          "count": 50,
+          "prefix": "field",
+          "size": 1000,
+          "transforms": [
+            {
+              "type": "wikipedia"
+            }
+          ]
+        }
+      },
+      "wiki_1m_1field_100tok.xml": {
+        "doc_count": 1000000,
+        "fields": [
+          {
+            "name": "field1",
+            "size": 500,
+            "transforms": [
+              {
+                "type": "wikipedia"
+              }
+            ]
+          }
+        ]
+      },
+      "random_set_100k_20field_10tok.csv": {
+        "doc_count": 100000,
+        "generate_fields": {
+          "count": 20,
+          "prefix": "field",
+          "size": 0,
+          "transforms": [
+            {
+              "type": "random_from_set",
+              "token_set": [
+                "a",
+                "b",
+                "c",
+                "d",
+                "e",
+                "f",
+                "g",
+                "h",
+                "i",
+                "j"
+              ],
+              "token_count": 10
+            }
+          ]
+        }
+      },
+      "radix_unique_100_1mtok.csv": {
+        "doc_count": 100,
+        "fields": [
+          {
+            "name": "field1",
+            "size": 0,
+            "transforms": [
+              {
+                "type": "unique_tokens",
+                "token_count": 1000000
+              }
+            ]
+          }
+        ]
+      },
+      "radix_uuid_10k_1ktok.csv": {
+        "doc_count": 10000,
+        "fields": [
+          {
+            "name": "field1",
+            "size": 0,
+            "transforms": [
+              {
+                "type": "uuid_tokens",
+                "token_count": 1000
+              }
+            ]
+          }
+        ]
+      },
+      "radix_progressive_10k_1ktok.csv": {
+        "doc_count": 10000,
+        "fields": [
+          {
+            "name": "field1",
+            "size": 0,
+            "transforms": [
+              {
+                "type": "progressive_prefix",
+                "max_depth": 100,
+                "leaf_count": 10
+              }
+            ]
+          }
+        ]
+      },
+      "wiki_100k_1field_100tok_uuidkey.xml": {
+        "doc_count": 100000,
+        "fields": [
+          {
+            "name": "keyname",
+            "size": 0,
+            "transforms": [
+              {
+                "type": "uuid_tokens",
+                "token_count": 1,
+                "char_length": 128
+              }
+            ]
+          },
+          {
+            "name": "field1",
+            "size": 500,
+            "transforms": [
+              {
+                "type": "wikipedia"
+              }
+            ]
+          }
+        ]
+      },
+      "wiki_50k_10field_100tok.xml": {
+        "doc_count": 50000,
+        "generate_fields": {
+          "count": 10,
+          "prefix": "field",
+          "size": 500,
+          "transforms": [
+            {
+              "type": "wikipedia"
+            }
+          ]
+        }
+      },
+      "wiki_500k_1field_10ktok.xml": {
+        "doc_count": 500000,
+        "fields": [
+          {
+            "name": "field1",
+            "size": 50000,
+            "transforms": [
+              {
+                "type": "wikipedia"
+              }
+            ]
+          }
+        ]
+      },
+      "wiki_10k_1field_10ktok_stemmable.csv": {
+        "doc_count": 10000,
+        "fields": [
+          {
+            "name": "field1",
+            "size": 50000,
+            "transforms": [
+              {
+                "type": "stemmable_words",
+                "token_count": 10000
               }
             ]
           }
@@ -848,6 +1047,376 @@
             "options": {
               "": "",
               "NOCONTENT": "_nocontent"
+            }
+          }
+        ]
+      },
+      {
+        "group": 12,
+        "description": "Posting Tests - Position map partitions and byte size",
+        "scenarios": [
+          {
+            "id": "a",
+            "type": "write",
+            "cluster_execution": "single",
+            "description": "100 docs × 10M tokens of 'b' - position map partitions growth",
+            "setup_commands": [
+              "FT.CREATE rd0 ON HASH PREFIX 1 rd0- STOPWORDS 0 SCHEMA field1 TEXT NOSTEM"
+            ],
+            "flush_before": true,
+            "dataset": "datasets/posting_repeated_100_10m.csv",
+            "maxdocs": 100,
+            "clients": 10,
+            "sequential": true,
+            "command": "HSET rd0-{tag}:__rand_int__ field1 \"__field:field1__\"",
+            "profiling": {
+              "delays": {
+                "write": {
+                  "delay": 5,
+                  "duration": 30
+                }
+              }
+            }
+          },
+          {
+            "id": "b",
+            "type": "write",
+            "cluster_execution": "single",
+            "description": "1K docs × 100K tokens cyclic-8193 - position byte size increase",
+            "setup_commands": [
+              "FT.CREATE rd0 ON HASH PREFIX 1 rd0- STOPWORDS 0 SCHEMA field1 TEXT NOSTEM"
+            ],
+            "flush_before": true,
+            "dataset": "datasets/posting_cyclic8193_1k_100k.csv",
+            "maxdocs": 1000,
+            "clients": 100,
+            "sequential": true,
+            "command": "HSET rd0-{tag}:__rand_int__ field1 \"__field:field1__\"",
+            "profiling": {
+              "delays": {
+                "write": {
+                  "delay": 5,
+                  "duration": 15
+                }
+              }
+            }
+          },
+          {
+            "id": "c",
+            "type": "write",
+            "cluster_execution": "single",
+            "description": "10K docs × 50 fields × 1K tokens - field mask byte size increase",
+            "setup_commands": [
+              "FT.CREATE rd0 ON HASH PREFIX 1 rd0- SCHEMA field1 TEXT field2 TEXT field3 TEXT field4 TEXT field5 TEXT field6 TEXT field7 TEXT field8 TEXT field9 TEXT field10 TEXT field11 TEXT field12 TEXT field13 TEXT field14 TEXT field15 TEXT field16 TEXT field17 TEXT field18 TEXT field19 TEXT field20 TEXT field21 TEXT field22 TEXT field23 TEXT field24 TEXT field25 TEXT field26 TEXT field27 TEXT field28 TEXT field29 TEXT field30 TEXT field31 TEXT field32 TEXT field33 TEXT field34 TEXT field35 TEXT field36 TEXT field37 TEXT field38 TEXT field39 TEXT field40 TEXT field41 TEXT field42 TEXT field43 TEXT field44 TEXT field45 TEXT field46 TEXT field47 TEXT field48 TEXT field49 TEXT field50 TEXT"
+            ],
+            "flush_before": true,
+            "dataset": "datasets/wiki_10k_50field_1ktok.csv",
+            "maxdocs": 10000,
+            "clients": 500,
+            "sequential": true,
+            "command": "HSET rd0-{tag}:__rand_int__ field1 \"__field:field1__\" field2 \"__field:field2__\" field3 \"__field:field3__\" field4 \"__field:field4__\" field5 \"__field:field5__\" field6 \"__field:field6__\" field7 \"__field:field7__\" field8 \"__field:field8__\" field9 \"__field:field9__\" field10 \"__field:field10__\" field11 \"__field:field11__\" field12 \"__field:field12__\" field13 \"__field:field13__\" field14 \"__field:field14__\" field15 \"__field:field15__\" field16 \"__field:field16__\" field17 \"__field:field17__\" field18 \"__field:field18__\" field19 \"__field:field19__\" field20 \"__field:field20__\" field21 \"__field:field21__\" field22 \"__field:field22__\" field23 \"__field:field23__\" field24 \"__field:field24__\" field25 \"__field:field25__\" field26 \"__field:field26__\" field27 \"__field:field27__\" field28 \"__field:field28__\" field29 \"__field:field29__\" field30 \"__field:field30__\" field31 \"__field:field31__\" field32 \"__field:field32__\" field33 \"__field:field33__\" field34 \"__field:field34__\" field35 \"__field:field35__\" field36 \"__field:field36__\" field37 \"__field:field37__\" field38 \"__field:field38__\" field39 \"__field:field39__\" field40 \"__field:field40__\" field41 \"__field:field41__\" field42 \"__field:field42__\" field43 \"__field:field43__\" field44 \"__field:field44__\" field45 \"__field:field45__\" field46 \"__field:field46__\" field47 \"__field:field47__\" field48 \"__field:field48__\" field49 \"__field:field49__\" field50 \"__field:field50__\"",
+            "profiling": {
+              "delays": {
+                "write": {
+                  "delay": 5,
+                  "duration": 15
+                }
+              }
+            }
+          },
+          {
+            "id": "d",
+            "type": "write",
+            "cluster_execution": "single",
+            "description": "1M docs × 1 field × 100 tokens - key to position map size keeps increasing",
+            "setup_commands": [
+              "FT.CREATE rd0 ON HASH PREFIX 1 rd0- SCHEMA field1 TEXT"
+            ],
+            "flush_before": true,
+            "dataset": "datasets/wiki_1m_1field_100tok.xml",
+            "xml_root_element": "doc",
+            "maxdocs": 1000000,
+            "clients": 1000,
+            "sequential": true,
+            "command": "HSET rd0-{tag}:__rand_int__ field1 \"__field:field1__\"",
+            "profiling": {
+              "delays": {
+                "write": {
+                  "delay": 30,
+                  "duration": 60
+                }
+              }
+            }
+          },
+          {
+            "id": "e",
+            "type": "write",
+            "cluster_execution": "single",
+            "description": "100K docs × 20 fields × 10 tokens from set of 10 - small pos map (<128 bytes)",
+            "setup_commands": [
+              "FT.CREATE rd0 ON HASH PREFIX 1 rd0- STOPWORDS 0 SCHEMA field1 TEXT NOSTEM field2 TEXT NOSTEM field3 TEXT NOSTEM field4 TEXT NOSTEM field5 TEXT NOSTEM field6 TEXT NOSTEM field7 TEXT NOSTEM field8 TEXT NOSTEM field9 TEXT NOSTEM field10 TEXT NOSTEM field11 TEXT NOSTEM field12 TEXT NOSTEM field13 TEXT NOSTEM field14 TEXT NOSTEM field15 TEXT NOSTEM field16 TEXT NOSTEM field17 TEXT NOSTEM field18 TEXT NOSTEM field19 TEXT NOSTEM field20 TEXT NOSTEM"
+            ],
+            "flush_before": true,
+            "dataset": "datasets/random_set_100k_20field_10tok.csv",
+            "maxdocs": 100000,
+            "clients": 500,
+            "sequential": true,
+            "command": "HSET rd0-{tag}:__rand_int__ field1 \"__field:field1__\" field2 \"__field:field2__\" field3 \"__field:field3__\" field4 \"__field:field4__\" field5 \"__field:field5__\" field6 \"__field:field6__\" field7 \"__field:field7__\" field8 \"__field:field8__\" field9 \"__field:field9__\" field10 \"__field:field10__\" field11 \"__field:field11__\" field12 \"__field:field12__\" field13 \"__field:field13__\" field14 \"__field:field14__\" field15 \"__field:field15__\" field16 \"__field:field16__\" field17 \"__field:field17__\" field18 \"__field:field18__\" field19 \"__field:field19__\" field20 \"__field:field20__\"",
+            "profiling": {
+              "delays": {
+                "write": {
+                  "delay": 5,
+                  "duration": 15
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "group": 13,
+        "description": "Radix Tests - Node growth and prefix locality",
+        "scenarios": [
+          {
+            "id": "a",
+            "type": "write",
+            "cluster_execution": "single",
+            "description": "100 docs × 1M unique tokens - radix increasing number of nodes",
+            "setup_commands": [
+              "FT.CREATE rd0 ON HASH PREFIX 1 rd0- STOPWORDS 0 SCHEMA field1 TEXT NOSTEM"
+            ],
+            "flush_before": true,
+            "dataset": "datasets/radix_unique_100_1mtok.csv",
+            "maxdocs": 100,
+            "clients": 10,
+            "sequential": true,
+            "command": "HSET rd0-{tag}:__rand_int__ field1 \"__field:field1__\"",
+            "profiling": {
+              "delays": {
+                "write": {
+                  "delay": 5,
+                  "duration": 30
+                }
+              }
+            }
+          },
+          {
+            "id": "b",
+            "type": "write",
+            "cluster_execution": "single",
+            "description": "10K docs × 1K UUID tokens - low prefix locality check",
+            "setup_commands": [
+              "FT.CREATE rd0 ON HASH PREFIX 1 rd0- STOPWORDS 0 SCHEMA field1 TEXT NOSTEM"
+            ],
+            "flush_before": true,
+            "dataset": "datasets/radix_uuid_10k_1ktok.csv",
+            "maxdocs": 10000,
+            "clients": 500,
+            "sequential": true,
+            "command": "HSET rd0-{tag}:__rand_int__ field1 \"__field:field1__\"",
+            "profiling": {
+              "delays": {
+                "write": {
+                  "delay": 5,
+                  "duration": 15
+                }
+              }
+            }
+          },
+          {
+            "id": "c",
+            "type": "write",
+            "cluster_execution": "single",
+            "description": "10K docs × 1K progressive prefix tokens - single long path with leaf nodes",
+            "setup_commands": [
+              "FT.CREATE rd0 ON HASH PREFIX 1 rd0- STOPWORDS 0 SCHEMA field1 TEXT NOSTEM"
+            ],
+            "flush_before": true,
+            "dataset": "datasets/radix_progressive_10k_1ktok.csv",
+            "maxdocs": 10000,
+            "clients": 500,
+            "sequential": true,
+            "command": "HSET rd0-{tag}:__rand_int__ field1 \"__field:field1__\"",
+            "profiling": {
+              "delays": {
+                "write": {
+                  "delay": 5,
+                  "duration": 15
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "group": 14,
+        "description": "Misc Tests - String intern, schema options, extreme case",
+        "scenarios": [
+          {
+            "id": "a",
+            "type": "write",
+            "cluster_execution": "single",
+            "description": "100K docs × 1 field × 100 tokens - 128-char key names",
+            "setup_commands": [
+              "FT.CREATE rd0 ON HASH SCHEMA field1 TEXT"
+            ],
+            "flush_before": true,
+            "dataset": "datasets/wiki_100k_1field_100tok_uuidkey.xml",
+            "xml_root_element": "doc",
+            "maxdocs": 100000,
+            "clients": 500,
+            "sequential": true,
+            "command": "HSET __field:keyname__ field1 \"__field:field1__\"",
+            "profiling": {
+              "delays": {
+                "write": {
+                  "delay": 5,
+                  "duration": 15
+                }
+              }
+            }
+          },
+          {
+            "id": "b",
+            "type": "write",
+            "cluster_execution": "single",
+            "description": "50K docs × 10 fields × 100 tokens - baseline case",
+            "setup_commands": [
+              "FT.CREATE rd0 ON HASH PREFIX 1 rd0- SCHEMA field1 TEXT field2 TEXT field3 TEXT field4 TEXT field5 TEXT field6 TEXT field7 TEXT field8 TEXT field9 TEXT field10 TEXT"
+            ],
+            "flush_before": true,
+            "dataset": "datasets/wiki_50k_10field_100tok.xml",
+            "xml_root_element": "doc",
+            "maxdocs": 50000,
+            "clients": 500,
+            "sequential": true,
+            "command": "HSET rd0-{tag}:__rand_int__ field1 \"__field:field1__\" field2 \"__field:field2__\" field3 \"__field:field3__\" field4 \"__field:field4__\" field5 \"__field:field5__\" field6 \"__field:field6__\" field7 \"__field:field7__\" field8 \"__field:field8__\" field9 \"__field:field9__\" field10 \"__field:field10__\"",
+            "profiling": {
+              "delays": {
+                "write": {
+                  "delay": 5,
+                  "duration": 15
+                }
+              }
+            }
+          },
+          {
+            "id": "c",
+            "type": "write",
+            "cluster_execution": "single",
+            "description": "50K docs × 10 fields × 100 tokens - WITHSUFFIXTRIE",
+            "setup_commands": [
+              "FT.CREATE rd0 ON HASH PREFIX 1 rd0- SCHEMA field1 TEXT WITHSUFFIXTRIE field2 TEXT WITHSUFFIXTRIE field3 TEXT WITHSUFFIXTRIE field4 TEXT WITHSUFFIXTRIE field5 TEXT WITHSUFFIXTRIE field6 TEXT WITHSUFFIXTRIE field7 TEXT WITHSUFFIXTRIE field8 TEXT WITHSUFFIXTRIE field9 TEXT WITHSUFFIXTRIE field10 TEXT WITHSUFFIXTRIE"
+            ],
+            "flush_before": true,
+            "dataset": "datasets/wiki_50k_10field_100tok.xml",
+            "xml_root_element": "doc",
+            "maxdocs": 50000,
+            "clients": 500,
+            "sequential": true,
+            "command": "HSET rd0-{tag}:__rand_int__ field1 \"__field:field1__\" field2 \"__field:field2__\" field3 \"__field:field3__\" field4 \"__field:field4__\" field5 \"__field:field5__\" field6 \"__field:field6__\" field7 \"__field:field7__\" field8 \"__field:field8__\" field9 \"__field:field9__\" field10 \"__field:field10__\"",
+            "profiling": {
+              "delays": {
+                "write": {
+                  "delay": 5,
+                  "duration": 15
+                }
+              }
+            }
+          },
+          {
+            "id": "d",
+            "type": "write",
+            "cluster_execution": "single",
+            "description": "50K docs × 10 fields × 100 tokens - NOSTEM",
+            "setup_commands": [
+              "FT.CREATE rd0 ON HASH PREFIX 1 rd0- SCHEMA field1 TEXT NOSTEM field2 TEXT NOSTEM field3 TEXT NOSTEM field4 TEXT NOSTEM field5 TEXT NOSTEM field6 TEXT NOSTEM field7 TEXT NOSTEM field8 TEXT NOSTEM field9 TEXT NOSTEM field10 TEXT NOSTEM"
+            ],
+            "flush_before": true,
+            "dataset": "datasets/wiki_50k_10field_100tok.xml",
+            "xml_root_element": "doc",
+            "maxdocs": 50000,
+            "clients": 500,
+            "sequential": true,
+            "command": "HSET rd0-{tag}:__rand_int__ field1 \"__field:field1__\" field2 \"__field:field2__\" field3 \"__field:field3__\" field4 \"__field:field4__\" field5 \"__field:field5__\" field6 \"__field:field6__\" field7 \"__field:field7__\" field8 \"__field:field8__\" field9 \"__field:field9__\" field10 \"__field:field10__\"",
+            "profiling": {
+              "delays": {
+                "write": {
+                  "delay": 5,
+                  "duration": 15
+                }
+              }
+            }
+          },
+          {
+            "id": "e",
+            "type": "write",
+            "cluster_execution": "single",
+            "description": "50K docs × 10 fields × 100 tokens - STOPWORDS 0",
+            "setup_commands": [
+              "FT.CREATE rd0 ON HASH PREFIX 1 rd0- STOPWORDS 0 SCHEMA field1 TEXT field2 TEXT field3 TEXT field4 TEXT field5 TEXT field6 TEXT field7 TEXT field8 TEXT field9 TEXT field10 TEXT"
+            ],
+            "flush_before": true,
+            "dataset": "datasets/wiki_50k_10field_100tok.xml",
+            "xml_root_element": "doc",
+            "maxdocs": 50000,
+            "clients": 500,
+            "sequential": true,
+            "command": "HSET rd0-{tag}:__rand_int__ field1 \"__field:field1__\" field2 \"__field:field2__\" field3 \"__field:field3__\" field4 \"__field:field4__\" field5 \"__field:field5__\" field6 \"__field:field6__\" field7 \"__field:field7__\" field8 \"__field:field8__\" field9 \"__field:field9__\" field10 \"__field:field10__\"",
+            "profiling": {
+              "delays": {
+                "write": {
+                  "delay": 5,
+                  "duration": 15
+                }
+              }
+            }
+          },
+          {
+            "id": "f",
+            "type": "write",
+            "cluster_execution": "single",
+            "description": "10K docs × 1 field × 10K stemmable tokens - stemming words only",
+            "setup_commands": [
+              "FT.CREATE rd0 ON HASH PREFIX 1 rd0- SCHEMA field1 TEXT"
+            ],
+            "flush_before": true,
+            "dataset": "datasets/wiki_10k_1field_10ktok_stemmable.csv",
+            "maxdocs": 10000,
+            "clients": 500,
+            "sequential": true,
+            "command": "HSET rd0-{tag}:__rand_int__ field1 \"__field:field1__\"",
+            "profiling": {
+              "delays": {
+                "write": {
+                  "delay": 5,
+                  "duration": 15
+                }
+              }
+            }
+          },
+          {
+            "id": "g",
+            "type": "write",
+            "cluster_execution": "single",
+            "description": "500K docs × 1 field × 10K tokens - extreme case",
+            "setup_commands": [
+              "FT.CREATE rd0 ON HASH PREFIX 1 rd0- SCHEMA field1 TEXT"
+            ],
+            "flush_before": true,
+            "dataset": "datasets/wiki_500k_1field_10ktok.xml",
+            "xml_root_element": "doc",
+            "maxdocs": 500000,
+            "clients": 1000,
+            "sequential": true,
+            "command": "HSET rd0-{tag}:__rand_int__ field1 \"__field:field1__\"",
+            "profiling": {
+              "delays": {
+                "write": {
+                  "delay": 60,
+                  "duration": 120
+                }
+              }
             }
           }
         ]

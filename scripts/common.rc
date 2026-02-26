@@ -81,12 +81,12 @@ if [[ "${SAN_BUILD}" != "no" ]]; then
   fi
   if [[ "${SAN_BUILD}" == "address" ]]; then
     export LSAN_OPTIONS="suppressions=${MODULE_ROOT}/ci/asan.supp"
+    print_environment_var "LSAN_OPTIONS" "${LSAN_OPTIONS}"
   else
-    export LSAN_OPTIONS="suppressions=${MODULE_ROOT}/ci/tsan.supp"
     # TSAN deadlock detector overflows with valkey's lock count during module load.
-    export TSAN_OPTIONS="detect_deadlocks=0"
+    export TSAN_OPTIONS="detect_deadlocks=0:suppressions=${MODULE_ROOT}/ci/tsan.supp"
+    print_environment_var "TSAN_OPTIONS" "${TSAN_OPTIONS}"
   fi
-  print_environment_var "LSAN_OPTIONS" "${LSAN_OPTIONS}"
   print_environment_var "ASAN_OPTIONS" "${ASAN_OPTIONS}"
 fi
 

@@ -136,8 +136,8 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
         assert (
             client.info("SEARCH")["search_query_prefiltering_requests_cnt"] == 0
         )
-        hnsw_result = search(client, "hnsw", False, 2, enable_partial_results=True)
-        assert hnsw_result[0] == 2
+        hnsw_result = search(client, "hnsw", False, 1, enable_partial_results=True)
+        assert hnsw_result[0] == 1
         assert client.info("SEARCH")["search_test-counter-ForceCancels"] == 5
         assert (
             client.info("SEARCH")["search_query_prefiltering_requests_cnt"] == 1
@@ -149,7 +149,7 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
         assert (
             client.info("SEARCH")["search_query_prefiltering_requests_cnt"] == 1
         )
-        hnsw_result = search(client, "hnsw", True, 2, enable_partial_results=False)
+        hnsw_result = search(client, "hnsw", True, 1, enable_partial_results=False)
         assert client.info("SEARCH")["search_test-counter-ForceCancels"] == 6
         assert (
             client.info("SEARCH")["search_query_prefiltering_requests_cnt"] == 2
@@ -179,6 +179,8 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
             == b"OK"
         )
         assert(client.execute_command("FT._DEBUG PAUSEPOINT LIST") == [])
+
+
 class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
 
     def execute_primaries(self, command: Union[str, list[str]]) -> list[Any]:

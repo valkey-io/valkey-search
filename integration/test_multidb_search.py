@@ -12,7 +12,7 @@ from valkeytestframework.util import waiters
 from indexes import Index, Text, Tag, Numeric, Vector, float_to_bytes
 
 
-def verify_search_results(clients, num_dbs, key_names, index):
+def verify_common_keys_results(clients, num_dbs, key_names, index):
     """Verify search isolation across all DBs for text, numeric, tag, and vector searches."""
     for db_num in range(num_dbs):
         # Text search
@@ -63,15 +63,15 @@ def verify_unique_keys_results(clients, num_dbs, db_keys, index):
             assert result[1] == key_name.encode()
         
         # Numeric search
-        price = db_num * 100
+        price = 10000 + db_num * 100
         result = clients[db_num].execute_command(
             'FT.SEARCH', 'idx', f'@price:[{price} {price}]'
         )
         assert result[0] == 1, f"DB {db_num} numeric search failed"
         
-        # Tag search - should find all unique keys for this DB
+        # Tag search - uses unique category to only find unique keys for this DB
         result = clients[db_num].execute_command(
-            'FT.SEARCH', 'idx', f'@category:{{cat{db_num}}}', 'LIMIT', '0', '100'
+            'FT.SEARCH', 'idx', f'@category:{{cat{db_num}_unique}}', 'LIMIT', '0', '100'
         )
         assert result[0] == len(db_keys[db_num]), f"DB {db_num} tag search failed"
         
@@ -100,8 +100,8 @@ def create_clients(num_dbs, get_client_func):
     return clients
 
 
-def create_index(clients, num_dbs, prefixes=None):
-    """Create search index on all DBs."""
+def create_indexes(clients, num_dbs, prefixes=None):
+    """Create search indexes on all DBs."""
     index = Index('idx', [
         Text('name'),
         Numeric('price'),
@@ -146,8 +146,8 @@ def add_unique_keys_data(clients, num_dbs, key_prefix, keys_per_db=3):
             vec[db_num % 4] = 1.0
             clients[db_num].hset(key_name, mapping={
                 'name': f'product{db_num}_unique{key_idx}',
-                'price': str(db_num * 100 + key_idx),
-                'category': f'cat{db_num}',
+                'price': str(10000 + db_num * 100 + key_idx),
+                'category': f'cat{db_num}_unique',
                 'vec': float_to_bytes(vec)
             })
     
@@ -157,17 +157,22 @@ def add_unique_keys_data(clients, num_dbs, key_prefix, keys_per_db=3):
 class TestMultiDBCMD(ValkeySearchTestCaseDebugMode):
     """Standalone mode tests"""
 
-    def test_multidb_common_keys_isolation_CMD(self):
-        """Test isolation when same key names are used across DBs."""
+    def test_multidb_keys_isolation_CMD(self):
+        """Test isolation with both common and unique key names across DBs."""
         num_dbs = 4
         clients = create_clients(num_dbs, self.server.get_new_client)
-        index = create_index(clients, num_dbs, prefixes=['p:'])
+        index = create_indexes(clients, num_dbs, prefixes=['p:'])
         
-        key_names = add_common_keys_data(clients, num_dbs, 'p:', num_keys=3)
-        verify_search_results(clients, num_dbs, key_names, index)
+        # Test common keys (same key names across all DBs)
+        common_key_names = add_common_keys_data(clients, num_dbs, 'p:', num_keys=3)
+        verify_common_keys_results(clients, num_dbs, common_key_names, index)
         
-        # Update DB0, verify other DBs unchanged
-        clients[0].hset(key_names[0], mapping={
+        # Test unique keys (different key names per DB)
+        db_keys = add_unique_keys_data(clients, num_dbs, 'p:unique_', keys_per_db=3)
+        verify_unique_keys_results(clients, num_dbs, db_keys, index)
+        
+        # Update DB0 common key, verify other DBs unchanged
+        clients[0].hset(common_key_names[0], mapping={
             'name': 'updated',
             'price': '9999',
             'category': 'updated',
@@ -178,36 +183,27 @@ class TestMultiDBCMD(ValkeySearchTestCaseDebugMode):
         for db_num in range(1, num_dbs):
             assert len(index.query(clients[db_num], f"@name:product{db_num}_key0")) == 1
         
-        # Delete from DB0, verify other DBs still have data
-        clients[0].delete(key_names[0])
+        # Delete common key from DB0, verify other DBs still have data
+        clients[0].delete(common_key_names[0])
         assert len(index.query(clients[0], "@name:updated")) == 0
         for db_num in range(1, num_dbs):
             assert len(index.query(clients[db_num], f"@name:product{db_num}_key0")) == 1
-
-    def test_multidb_unique_keys_isolation_CMD(self):
-        """Test isolation when unique key names are used per DB."""
-        num_dbs = 4
-        clients = create_clients(num_dbs, self.server.get_new_client)
-        index = create_index(clients, num_dbs, prefixes=['p:'])
         
-        db_keys = add_unique_keys_data(clients, num_dbs, 'p:', keys_per_db=3)
-        verify_unique_keys_results(clients, num_dbs, db_keys, index)
-        
-        # Update DB0, verify other DBs unchanged
+        # Update DB0 unique key, verify other DBs unchanged
         clients[0].hset(db_keys[0][0], mapping={
-            'name': 'updated',
-            'price': '9999',
+            'name': 'updated_unique',
+            'price': '8888',
             'category': 'updated',
-            'vec': float_to_bytes([9.0, 9.0, 9.0, 9.0])
+            'vec': float_to_bytes([8.0, 8.0, 8.0, 8.0])
         })
-        assert len(index.query(clients[0], "@name:updated")) == 1
+        assert len(index.query(clients[0], "@name:updated_unique")) == 1
         assert len(index.query(clients[0], "@name:product0_unique0")) == 0
         for db_num in range(1, num_dbs):
             assert len(index.query(clients[db_num], f"@name:product{db_num}_unique0")) == 1
         
-        # Delete from DB0, verify other DBs still have data
+        # Delete unique key from DB0, verify other DBs still have data
         clients[0].delete(db_keys[0][0])
-        assert len(index.query(clients[0], "@name:updated")) == 0
+        assert len(index.query(clients[0], "@name:updated_unique")) == 0
         for db_num in range(1, num_dbs):
             assert len(index.query(clients[db_num], f"@name:product{db_num}_unique0")) == 1
 
@@ -215,12 +211,12 @@ class TestMultiDBCMD(ValkeySearchTestCaseDebugMode):
         """Test that multi-DB isolation persists after RDB save/load."""
         num_dbs = 4
         clients = create_clients(num_dbs, self.server.get_new_client)
-        index = create_index(clients, num_dbs, prefixes=['p:'])
+        index = create_indexes(clients, num_dbs, prefixes=['p:'])
         
         key_names = add_common_keys_data(clients, num_dbs, 'p:', num_keys=3)
         
         # Verify data before save
-        verify_search_results(clients, num_dbs, key_names, index)
+        verify_common_keys_results(clients, num_dbs, key_names, index)
         
         clients[0].execute_command('SAVE')
         os.environ["SKIPLOGCLEAN"] = "1"
@@ -240,23 +236,28 @@ class TestMultiDBCMD(ValkeySearchTestCaseDebugMode):
         for db_num in range(num_dbs):
             waiters.wait_for_true(lambda db=db_num: index.backfill_complete(clients[db]))
         
-        verify_search_results(clients, num_dbs, key_names, index)
+        verify_common_keys_results(clients, num_dbs, key_names, index)
 
 
 class TestMultiDBCME(ValkeySearchClusterTestCaseDebugMode):
     """Cluster mode tests"""
 
-    def test_multidb_common_keys_isolation_CME(self):
-        """Test isolation when same key names are used across DBs in cluster mode."""
+    def test_multidb_keys_isolation_CME(self):
+        """Test isolation with both common and unique key names across DBs in cluster mode."""
         num_dbs = 4
         clients = create_clients(num_dbs, self.get_primary(2).connect)
-        index = create_index(clients, num_dbs, prefixes=['p:'])
+        index = create_indexes(clients, num_dbs, prefixes=['p:'])
         
-        key_names = add_common_keys_data(clients, num_dbs, 'p:{0}', num_keys=3)
-        verify_search_results(clients, num_dbs, key_names, index)
+        # Test common keys (same key names across all DBs)
+        common_key_names = add_common_keys_data(clients, num_dbs, 'p:{0}', num_keys=3)
+        verify_common_keys_results(clients, num_dbs, common_key_names, index)
         
-        # Update DB0, verify other DBs unchanged
-        clients[0].hset(key_names[0], mapping={
+        # Test unique keys (different key names per DB)
+        db_keys = add_unique_keys_data(clients, num_dbs, 'p:{0}unique_', keys_per_db=3)
+        verify_unique_keys_results(clients, num_dbs, db_keys, index)
+        
+        # Update DB0 common key, verify other DBs unchanged
+        clients[0].hset(common_key_names[0], mapping={
             'name': 'updated',
             'price': '9999',
             'category': 'updated',
@@ -267,36 +268,27 @@ class TestMultiDBCME(ValkeySearchClusterTestCaseDebugMode):
         for db_num in range(1, num_dbs):
             assert len(index.query(clients[db_num], f"@name:product{db_num}_key0")) == 1
         
-        # Delete from DB0, verify other DBs still have data
-        clients[0].delete(key_names[0])
+        # Delete common key from DB0, verify other DBs still have data
+        clients[0].delete(common_key_names[0])
         assert len(index.query(clients[0], "@name:updated")) == 0
         for db_num in range(1, num_dbs):
             assert len(index.query(clients[db_num], f"@name:product{db_num}_key0")) == 1
-
-    def test_multidb_unique_keys_isolation_CME(self):
-        """Test isolation when unique key names are used per DB in cluster mode."""
-        num_dbs = 4
-        clients = create_clients(num_dbs, self.get_primary(2).connect)
-        index = create_index(clients, num_dbs, prefixes=['p:'])
         
-        db_keys = add_unique_keys_data(clients, num_dbs, 'p:{0}', keys_per_db=3)
-        verify_unique_keys_results(clients, num_dbs, db_keys, index)
-        
-        # Update DB0, verify other DBs unchanged
+        # Update DB0 unique key, verify other DBs unchanged
         clients[0].hset(db_keys[0][0], mapping={
-            'name': 'updated',
-            'price': '9999',
+            'name': 'updated_unique',
+            'price': '8888',
             'category': 'updated',
-            'vec': float_to_bytes([9.0, 9.0, 9.0, 9.0])
+            'vec': float_to_bytes([8.0, 8.0, 8.0, 8.0])
         })
-        assert len(index.query(clients[0], "@name:updated")) == 1
+        assert len(index.query(clients[0], "@name:updated_unique")) == 1
         assert len(index.query(clients[0], "@name:product0_unique0")) == 0
         for db_num in range(1, num_dbs):
             assert len(index.query(clients[db_num], f"@name:product{db_num}_unique0")) == 1
         
-        # Delete from DB0, verify other DBs still have data
+        # Delete unique key from DB0, verify other DBs still have data
         clients[0].delete(db_keys[0][0])
-        assert len(index.query(clients[0], "@name:updated")) == 0
+        assert len(index.query(clients[0], "@name:updated_unique")) == 0
         for db_num in range(1, num_dbs):
             assert len(index.query(clients[db_num], f"@name:product{db_num}_unique0")) == 1
 
@@ -304,12 +296,12 @@ class TestMultiDBCME(ValkeySearchClusterTestCaseDebugMode):
         """Test that multi-DB isolation persists after RDB save/load in cluster mode."""
         num_dbs = 4
         clients = create_clients(num_dbs, self.get_primary(2).connect)
-        index = create_index(clients, num_dbs, prefixes=['p:'])
+        index = create_indexes(clients, num_dbs, prefixes=['p:'])
         
         key_names = add_common_keys_data(clients, num_dbs, 'p:{0}', num_keys=3)
         
         # Verify data before save
-        verify_search_results(clients, num_dbs, key_names, index)
+        verify_common_keys_results(clients, num_dbs, key_names, index)
         
         # Save on the primary we're connected to
         clients[0].execute_command('BGSAVE')
@@ -336,13 +328,13 @@ class TestMultiDBCME(ValkeySearchClusterTestCaseDebugMode):
         for db_num in range(num_dbs):
             waiters.wait_for_true(lambda db=db_num: index.backfill_complete(clients[db]))
         
-        verify_search_results(clients, num_dbs, key_names, index)
+        verify_common_keys_results(clients, num_dbs, key_names, index)
 
     def test_multidb_slot_migration_CME(self):
         """Test that multi-DB isolation is maintained after slot migration."""
         num_dbs = 4
         clients = create_clients(num_dbs, self.get_primary(2).connect)
-        index = create_index(clients, num_dbs, prefixes=['p:'])
+        index = create_indexes(clients, num_dbs, prefixes=['p:'])
         
         key_names = add_common_keys_data(clients, num_dbs, 'p:{0}', num_keys=3)
         
@@ -383,4 +375,4 @@ class TestMultiDBCME(ValkeySearchClusterTestCaseDebugMode):
             client.select(db_num)
             dest_clients[db_num] = client
         
-        verify_search_results(dest_clients, num_dbs, key_names, index)
+        verify_common_keys_results(dest_clients, num_dbs, key_names, index)

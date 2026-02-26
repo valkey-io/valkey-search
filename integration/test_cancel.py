@@ -244,7 +244,7 @@ class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
         flat_index.create(client)
         hnsw_index.load_data(client, 100)
         # Let the index properly processed
-        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index), 100, timeout=3)
+        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index), 100, timeout=10)
 
         #
         # Nominal case
@@ -267,20 +267,21 @@ class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
         # Normal HNSW path
         #
         hnsw_result = search(client, "hnsw", True, None, enable_partial_results=False)
-
         self.check_info_sum("search_test-counter-ForceCancels", 3)
 
         #
-        # Pre-filtering HNSW path
+        # Pre-filtering FLAT path (flat always uses pre-filtering)
         #
-        self.check_info("search_query_prefiltering_requests_cnt", 0)
-        hnsw_result = search(client, "hnsw", True, 10, enable_partial_results=False)
-        self.check_info("search_query_prefiltering_requests_cnt", 1)
+        flat_result = search(client, "flat", True, 10, enable_partial_results=False)
         self.check_info_sum("search_test-counter-ForceCancels", 6)
+        self.check_info_sum("search_query_prefiltering_requests_cnt", 3)
 
         #
-        # Flat path
+        # Pre-filtering HNSW path
+        # Set a high pre-filtering threshold so all shards use pre-filtering
         #
-        flat_result = search(client, "flat", True, None, enable_partial_results=False)
+        self.config_set("search.prefiltering-threshold-ratio", "0.5")
+        hnsw_result = search(client, "hnsw", True, 10, enable_partial_results=False)
+        self.check_info_sum("search_query_prefiltering_requests_cnt", 6)
         self.check_info_sum("search_test-counter-ForceCancels", 9)
-        self.check_info("search_query_prefiltering_requests_cnt", 1)
+

@@ -12,10 +12,10 @@
 #include "absl/log/check.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/vector_base.h"
+#include "src/valkey_search_options.h"
 
 namespace valkey_search::query {
-// TODO: Tune this parameter.
-constexpr double kPreFilteringThresholdRatio = 0.001;  // 0.1%
+// TODO: Tune the threshold ratio.
 // The query planner decides whether to use pre or inline filtering based on
 // heuristics.
 bool UsePreFiltering(size_t estimated_num_of_keys,
@@ -38,7 +38,8 @@ bool UsePreFiltering(size_t estimated_num_of_keys,
 
     // We choose pre-filtering if the size of the filtered space is below a
     // certain threshold (relative to the total size).
-    return estimated_num_of_keys <= kPreFilteringThresholdRatio * N;
+    return estimated_num_of_keys <=
+           options::GetPrefilteringThresholdRatio() * N;
   }
   CHECK(false) << "Unsupported indexer type: "
                << (int)vector_index->GetIndexerType();

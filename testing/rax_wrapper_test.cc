@@ -555,7 +555,7 @@ TEST_F(RaxTest, SubtreeKeyCount) {
   VerifySubtreeKeyCount("car", 2);
   VerifySubtreeKeyCount("card", 2);
 
-  // Decrement "card" without changing tre structure
+  // Decrement "card" without changing tree structure
   rax_.MutateTarget("card", [](void *old) { return old; }, SUBTRACT);
   VerifySubtreeKeyCount("", 5);
   VerifySubtreeKeyCount("ca", 3);

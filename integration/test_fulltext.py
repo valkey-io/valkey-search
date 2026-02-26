@@ -2284,48 +2284,51 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # check info
         assert IndexingTestHelper.get_ft_info(client, "idx").parsed_data["hash_indexing_failures"] == 0
         # Test different language in content + invalid UTF-8 in title (expect indexing failures)
-        client.execute_command("HSET", "doc:11", "content", "纯中文文档", "title", b"test\xff\xfe")
+        client.execute_command("HSET", "doc:11", "content", "纯中文文档 中文测试", "title", b"test\xff\xfe")
         client.execute_command("HSET", "doc:12", "content", "مستند عربي فقط", "title", b"invalid\xc3")
+        # doc with only invalid numeric
+        client.execute_command("HSET", "doc:13", "price", b"invalid\xc3")
         # ft.info
         info_data = IndexingTestHelper.get_ft_info(client, "idx").parsed_data
-        assert info_data["num_docs"] == 12
-        assert info_data["hash_indexing_failures"] == 2
-        assert info_data["num_records"] >= 27 # 9 docs with all fields
+        assert info_data["num_docs"] == 13
+        assert info_data["hash_indexing_failures"] == 3
+        # 9 docs with all fields (27) + doc 10 with 2 text (2) + doc:11 with one valid field + doc:12 with 1 valid field + doc13(0 valid)-- 27+2+1+1+0=31
+        assert info_data["num_records"] == 31 
         # 1. Single term
-        client.execute_command("FT.SEARCH", "idx", "très")
-        client.execute_command("FT.SEARCH", "idx", "你好")
-        client.execute_command("FT.SEARCH", "idx", "مرحبا")
-        client.execute_command("FT.SEARCH", "idx", "नमस्ते")
-        client.execute_command("FT.SEARCH", "idx", "👋")
+        assert client.execute_command("FT.SEARCH", "idx", "très")[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx", "你好世界")[0] == 2
+        assert client.execute_command("FT.SEARCH", "idx", "مرحبا")[0] == 2
+        assert client.execute_command("FT.SEARCH", "idx", "नमस्ते")[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx", "👋")[0] == 1
         # 2. Prefix
-        client.execute_command("FT.SEARCH", "idx", "mañ*")
-        client.execute_command("FT.SEARCH", "idx", "你*")
+        assert client.execute_command("FT.SEARCH", "idx", "mañ*")[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx", "你*")[0] == 2
         # 3. Suffix
-        client.execute_command("FT.SEARCH", "idx", "@content:*ana")
-        client.execute_command("FT.SEARCH", "idx", "@content:*界")
-        # 4. Fuzzy
-        client.execute_command("FT.SEARCH", "idx", "%Hola%")
-        client.execute_command("FT.SEARCH", "idx", "%%très%%")
-        client.execute_command("FT.SEARCH", "idx", "%你好%")
+        assert client.execute_command("FT.SEARCH", "idx", "@content:*ana")[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx", "@content:*界")[0] == 2
+        # 4. Fuzzy (operates today at character level and not byte level)
+        assert client.execute_command("FT.SEARCH", "idx", "%Hola%")[0] == 0
+        assert client.execute_command("FT.SEARCH", "idx", "%%très%%")[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx", "%你好%")[0] == 0
         # 5. Exact phrase
-        client.execute_command("FT.SEARCH", "idx", '"El niño"')
-        client.execute_command("FT.SEARCH", "idx", '"très bien"')
-        client.execute_command("FT.SEARCH", "idx", '@content:"你好世界"')
+        assert client.execute_command("FT.SEARCH", "idx", '"El niño"')[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx", '"très bien"')[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx", '@content:"你好世界"')[0] == 2
         # 6. Proximity AND
-        client.execute_command("FT.SEARCH", "idx", "niño mañana", "SLOP", "1")
-        client.execute_command("FT.SEARCH", "idx", "Ça bien", "INORDER")
-        client.execute_command("FT.SEARCH", "idx", "你好 世界", "SLOP", "1", "INORDER")
+        assert client.execute_command("FT.SEARCH", "idx", "niño mañana", "SLOP", "1")[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx", "Ça bien", "INORDER")[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx", "纯中文文档 中文测试", "SLOP", "1", "INORDER")[0] == 1
         # 7. Proximity OR
-        client.execute_command("FT.SEARCH", "idx", "(Hola | très | 你好)")
+        assert client.execute_command("FT.SEARCH", "idx", "(Hola | très | 你好)")[0] == 1
         # 8. Nested queries
-        client.execute_command("FT.SEARCH", "idx", "((Hola mundo) | (très bien) | (你好 世界) | (%بالعالم%) | (World 🌍*))")
+        assert client.execute_command("FT.SEARCH", "idx", "((Hola mundo) | (très bien) | (你好 世界) | (%بالعالم%) | (World 🌍*))")[0] == 3
         # 9. Hybrid text + non-text
-        client.execute_command("FT.SEARCH", "idx", "@content:दुनिया @price:[80 100]")
-        client.execute_command("FT.SEARCH", "idx", "@content:très @price:[20 40]")
-        client.execute_command("FT.SEARCH", "idx", "@content:你好 @price:[40 60]")
+        assert client.execute_command("FT.SEARCH", "idx", "@content:दुनिया @price:[80 100]")[0] == 2
+        assert client.execute_command("FT.SEARCH", "idx", "@content:très @price:[20 40]")[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx", "@content:你好世界 @price:[40 60]")[0] == 1
         # 10. NOCONTENT
-        client.execute_command("FT.SEARCH", "idx", "très", "NOCONTENT")
-        client.execute_command("FT.SEARCH", "idx", "((Hola mundo) | (très bien) | (你好 世界) | (%بالعالم%) | (World 🌍*))", "NOCONTENT")
+        assert client.execute_command("FT.SEARCH", "idx", "très", "NOCONTENT")[0] == 1 
+        assert client.execute_command("FT.SEARCH", "idx", "((Hola mundo) | (très bien) | (你好 世界) | (%بالعالم%) | (World 🌍*))", "NOCONTENT")[0] == 3
 
 class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
     """

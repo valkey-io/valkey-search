@@ -2230,6 +2230,117 @@ class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
 
 class TestFullTextCluster(ValkeySearchClusterTestCaseDebugMode):
 
+    @pytest.mark.parametrize("setup_test", [{"replica_count": 1}], indirect=True)
+    def test_commandstats_timing_with_replica(self, setup_test):
+        """Test commandstats timing with replica and concurrent operations."""
+        import threading
+        
+        rg = self.get_replication_group(0)
+        primary = rg.get_primary_connection()
+        
+        primary.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA", "price", "NUMERIC", "tags", "TAG")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(primary, "idx")
+        
+        # Reset stats on all primaries
+        for i in range(self.CLUSTER_SIZE):
+            self.new_client_for_primary(i).execute_command("CONFIG", "RESETSTAT")
+        
+        num_writers = 50
+        num_searchers = 50
+        num_deleters = 50
+        num_expirers = 50
+        num_bgsavers = 50
+        ops_per_client = 10000
+        num_keys = 1000
+        
+        # Use cluster clients for all operations
+        write_clients = [self.new_cluster_client() for _ in range(num_writers)]
+        search_clients = [self.new_client_for_primary(0) for _ in range(num_searchers)]
+        delete_clients = [self.new_cluster_client() for _ in range(num_deleters)]
+        expire_clients = [self.new_cluster_client() for _ in range(num_expirers)]
+        # bgsave_clients = [self.new_client_for_primary(i % self.CLUSTER_SIZE) for i in range(num_bgsavers)]
+        
+        def writer(client_id):
+            for i in range(ops_per_client):
+                key = f"doc:{i % num_keys}"
+                write_clients[client_id].execute_command("HSET", key, "price", str(100 + i), "tags", f"tag{i % 5}")
+        
+        def searcher(client_id):
+            for i in range(ops_per_client):
+                search_clients[client_id].execute_command("FT.SEARCH", "idx", f"@price:[{90 + i} {110 + i}]")
+                search_clients[client_id].execute_command("FT.SEARCH", "idx", f"@tags:{{tag{i % 5}}}")
+        
+        def deleter(client_id):
+            for i in range(ops_per_client):
+                key = f"doc:{i % num_keys}"
+                delete_clients[client_id].execute_command("DEL", key)
+        
+        def expirer(client_id):
+            for i in range(ops_per_client):
+                key = f"doc:{i % num_keys}"
+                expire_clients[client_id].execute_command("EXPIRE", key, "1")
+        
+        def bgsaver(client_id):
+            import time
+            for i in range(100):
+                try:
+                    bgsave_clients[client_id].execute_command("BGSAVE")
+                    time.sleep(0.1)
+                except Exception:
+                    pass
+        
+        threads = [threading.Thread(target=writer, args=(i,)) for i in range(num_writers)]
+        threads += [threading.Thread(target=searcher, args=(i,)) for i in range(num_searchers)]
+        # threads += [threading.Thread(target=deleter, args=(i,)) for i in range(num_deleters)]
+        threads += [threading.Thread(target=expirer, args=(i,)) for i in range(num_expirers)]
+        # threads += [threading.Thread(target=bgsaver, args=(i,)) for i in range(num_bgsavers)]
+        
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        
+        IndexingTestHelper.wait_for_backfill_complete_on_node(primary, "idx")
+        
+        # Collect stats from all primaries
+        total_hset_calls = 0
+        total_hset_usec = 0
+        total_del_calls = 0
+        total_del_usec = 0
+        
+        for i in range(self.CLUSTER_SIZE):
+            node = self.new_client_for_primary(i)
+            info = node.info("commandstats")
+            hset_stats = info.get("cmdstat_hset", {})
+            del_stats = info.get("cmdstat_del", {})
+            total_hset_calls += hset_stats.get("calls", 0)
+            total_hset_usec += hset_stats.get("usec", 0)
+            total_del_calls += del_stats.get("calls", 0)
+            total_del_usec += del_stats.get("usec", 0)
+        
+        # Ping all nodes to check if any crashed
+        print("\nPinging all nodes...")
+        for i in range(self.CLUSTER_SIZE):
+            try:
+                node = self.new_client_for_primary(i)
+                node.ping()
+                print(f"  Primary {i}: OK")
+            except Exception as e:
+                print(f"  Primary {i}: FAILED - {e}")
+        
+        for rg_idx in range(len(self.replication_groups)):
+            rg = self.get_replication_group(rg_idx)
+            for rep_idx, replica in enumerate(rg.replicas):
+                try:
+                    replica.client.ping()
+                    print(f"  Replica {rg_idx}-{rep_idx}: OK")
+                except Exception as e:
+                    print(f"  Replica {rg_idx}-{rep_idx}: FAILED - {e}")
+        
+        print(f"\nHSET: calls={total_hset_calls}, usec={total_hset_usec} ({total_hset_usec / 1_000_000:.2f}s)")
+        print(f"DEL: calls={total_del_calls}, usec={total_del_usec} ({total_del_usec / 1_000_000:.2f}s)")
+        assert False, "Intentional failure to check commandstats output in test logs"
+
     def test_fulltext_search_cluster(self):
         """
             Test a fulltext search queries on Hash docs in Valkey Search CME.

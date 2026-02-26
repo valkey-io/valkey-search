@@ -144,6 +144,46 @@
             ]
           }
         ]
+      },
+      "fuzzy_best.csv": {
+        "doc_count": 10000,
+        "fields": [
+          {
+            "name": "field1",
+            "size": 50,
+            "transforms": [
+              {
+                "type": "fuzzy",
+                "variant_count": 5,
+                "docs_per_variant": 20,
+                "term_count": 100,
+                "min_word_length": 8,
+                "max_word_length": 10,
+                "target_distance": 1
+              }
+            ]
+          }
+        ]
+      },
+      "fuzzy_worst.csv": {
+        "doc_count": 400000,
+        "fields": [
+          {
+            "name": "field1",
+            "size": 500,
+            "transforms": [
+              {
+                "type": "fuzzy",
+                "variant_count": 200,
+                "docs_per_variant": 20,
+                "term_count": 100,
+                "min_word_length": 8,
+                "max_word_length": 10,
+                "target_distance": 3
+              }
+            ]
+          }
+        ]
       }
     },
     "query_generation": {
@@ -165,6 +205,20 @@
         "type": "proximity_phrase",
         "doc_count": 100,
         "term_count": 1
+      },
+      "fuzzy_queries_best.csv": {
+        "type": "fuzzy",
+        "doc_count": 100,
+        "min_word_length": 8,
+        "max_word_length": 10,
+        "target_distance": 1
+      },
+      "fuzzy_queries_worst.csv": {
+        "type": "fuzzy",
+        "doc_count": 100,
+        "min_word_length": 8,
+        "max_word_length": 10,
+        "target_distance": 3
       }
     },
     "test_groups": [
@@ -721,6 +775,76 @@
             "duration": 200,
             "warmup": 60,
             "command": "FT.SEARCH rd0 \"__field:term1__ @price:[50 500] @category:{electronics|books}\"",
+            "options": {
+              "": "",
+              "NOCONTENT": "_nocontent"
+            }
+          }
+        ]
+      },
+      {
+        "group": 10,
+        "description": "Fuzzy matching - best case (distance=1, 5-6 char words)",
+        "scenarios": [
+          {
+            "id": "a",
+            "type": "write",
+            "cluster_execution": "single",
+            "setup_commands": [
+              "FT.CREATE rd0 ON HASH PREFIX 1 rd0- SCHEMA field1 TEXT"
+            ],
+            "flush_before": true,
+            "dataset": "datasets/fuzzy_best.csv",
+            "maxdocs": 10000,
+            "clients": 1000,
+            "sequential": true,
+            "command": "HSET rd0-{tag}:__rand_int__ field1 \"__field:field1__\""
+          },
+          {
+            "id": "b",
+            "type": "read",
+            "cluster_execution": "parallel",
+            "description": "Fuzzy distance=1 (5 variants)",
+            "dataset": "datasets/fuzzy_queries_best.csv",
+            "clients": 1000,
+            "duration": 200,
+            "warmup": 60,
+            "command": "FT.SEARCH rd0 \"@field1:%__field:term__%\"",
+            "options": {
+              "": "",
+              "NOCONTENT": "_nocontent"
+            }
+          }
+        ]
+      },
+      {
+        "group": 11,
+        "description": "Fuzzy matching - worst case (distance=3, 8-10 char words)",
+        "scenarios": [
+          {
+            "id": "a",
+            "type": "write",
+            "cluster_execution": "single",
+            "setup_commands": [
+              "FT.CREATE rd0 ON HASH PREFIX 1 rd0- SCHEMA field1 TEXT"
+            ],
+            "flush_before": true,
+            "dataset": "datasets/fuzzy_worst.csv",
+            "maxdocs": 400000,
+            "clients": 1000,
+            "sequential": true,
+            "command": "HSET rd0-{tag}:__rand_int__ field1 \"__field:field1__\""
+          },
+          {
+            "id": "b",
+            "type": "read",
+            "cluster_execution": "parallel",
+            "description": "Fuzzy distance=3 (200 variants)",
+            "dataset": "datasets/fuzzy_queries_worst.csv",
+            "clients": 1000,
+            "duration": 200,
+            "warmup": 60,
+            "command": "FT.SEARCH rd0 \"@field1:%%%__field:term__%%%\"",
             "options": {
               "": "",
               "NOCONTENT": "_nocontent"

@@ -261,7 +261,8 @@ std::unique_ptr<indexes::text::TextIterator> FuzzyPredicate::BuildTextIterator(
       std::move(key_iterators), field_mask, require_positions);
 }
 
-// Size apis for estimation
+/* Size APIs for pre-filter or inline filter planning */
+
 size_t TermPredicate::EstimateSize() const {
   auto iter =
       text_index_schema_->GetTextIndex()->GetPrefix().GetWordIterator(term_);
@@ -287,12 +288,14 @@ size_t SuffixPredicate::EstimateSize() const {
 }
 
 size_t InfixPredicate::EstimateSize() const {
-  // TODO: Implementation
-  return SIZE_MAX;
+  // TODO: Implement once infix is supported
+  // Right now we return the upper bound
+  return text_index_schema_->GetTrackedKeyCount();
 }
 
 size_t FuzzyPredicate::EstimateSize() const {
-  // TODO: Implementation
-  return SIZE_MAX;
+  // TODO: Implement proper heuristic
+  // Right now we return the upper bound
+  return text_index_schema_->GetTrackedKeyCount();
 }
 }  // namespace valkey_search::query

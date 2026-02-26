@@ -215,6 +215,12 @@ class TextIndexSchema {
     return per_key_text_indexes_;
   }
 
+  // Total number of keys with text fields indexed in this schema.
+  // No locking needed because only called from read phase.
+  size_t GetTrackedKeyCount() const {
+    return per_key_text_indexes_.size();
+  }
+
   // Helper function to lookup text index for a key
   static const TextIndex *LookupTextIndex(
       const absl::node_hash_map<Key, TextIndex> &per_key_indexes,

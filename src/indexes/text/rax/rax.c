@@ -715,7 +715,7 @@ int raxGenericInsert(rax *rax, unsigned char *s, size_t len, void *data, void **
         /* BEGIN SEARCH
          * We replace the "h" node with the trimmed node if there is one.
          * If the split position is the first character of the compressed path from h,
-         * then there is no trimmed node and we replace h with the split node iteself. */
+         * then there is no trimmed node and we replace h with the split node itself. */
         splitnode->subtree_items = trimmedlen ? next->subtree_items : h->subtree_items;
         rax->alloc_size += rax_ptr_alloc_size(splitnode);
         /* END SEARCH */

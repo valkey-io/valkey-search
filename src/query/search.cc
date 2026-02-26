@@ -624,9 +624,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
 }
 
 absl::StatusOr<std::vector<indexes::Neighbor>> DoSearch(
-    const SearchParameters &parameters, SearchMode search_mode) {
-  auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
-  vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
+    const SearchParameters &parameters, SearchMode search_mode,
+    vmsdk::ReaderMutexLock &lock) {
   ++Metrics::GetStats().time_slice_queries;
   // Handle non vector queries first where attribute_alias is empty.
   if (parameters.IsNonVectorQuery()) {
@@ -766,16 +765,17 @@ SerializationRange SearchResult::GetSerializationRange(
 }
 
 absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
+  auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
+  vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
+  absl::StatusOr<std::vector<indexes::Neighbor>> neighbors =
+      DoSearch(parameters, search_mode, lock);
   VMSDK_ASSIGN_OR_RETURN(
-      auto result,
-      MaybeAddIndexedContent(DoSearch(parameters, search_mode), parameters));
+      auto result, MaybeAddIndexedContent(std::move(neighbors), parameters));
   size_t total_count = result.size();
   parameters.search_result =
       SearchResult(total_count, std::move(result), parameters);
-  for (auto &n : parameters.search_result.neighbors) {
-    n.sequence_number =
-        parameters.index_schema->GetIndexMutationSequenceNumber(n.external_id);
-  }
+  parameters.index_schema->PopulateIndexMutationSequenceNumbers(
+      parameters.search_result.neighbors);
   return absl::OkStatus();
 }
 

@@ -600,7 +600,6 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
 void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
                                       MutatedAttributes &mutated_attributes,
                                       const Key &key) {
-  vmsdk::WriterMutexLock lock(&time_sliced_mutex_);
   if (text_index_schema_) {
     // Always clean up indexed words from all text attributes of the key up
     // front
@@ -858,6 +857,7 @@ void IndexSchema::ProcessMutation(ValkeyModuleCtx *ctx,
 
   if (ABSL_PREDICT_FALSE(!mutations_thread_pool_ ||
                          mutations_thread_pool_->Size() == 0)) {
+    vmsdk::WriterMutexLock lock(&time_sliced_mutex_);
     SyncProcessMutation(ctx, mutated_attributes, interned_key);
     return;
   }
@@ -886,15 +886,18 @@ void IndexSchema::ProcessSingleMutationAsync(ValkeyModuleCtx *ctx,
                                              bool from_backfill, const Key &key,
                                              vmsdk::StopWatch *delay_capturer) {
   PAUSEPOINT("mutation_processing");
-  bool first_time = true;
-  do {
-    auto mutation_record = ConsumeTrackedMutatedAttribute(key, first_time);
-    first_time = false;
-    if (!mutation_record.has_value()) {
-      break;
-    }
-    SyncProcessMutation(ctx, mutation_record.value(), key);
-  } while (true);
+  {
+    vmsdk::WriterMutexLock lock(&time_sliced_mutex_);
+    bool first_time = true;
+    do {
+      auto mutation_record = ConsumeTrackedMutatedAttribute(key, first_time);
+      first_time = false;
+      if (!mutation_record.has_value()) {
+        break;
+      }
+      SyncProcessMutation(ctx, mutation_record.value(), key);
+    } while (true);
+  }
 
   absl::MutexLock lock(&stats_.mutex_);
   --stats_.mutation_queue_size_;
@@ -1478,7 +1481,8 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
     for (size_t i = 0; i < count; ++i) {
       VMSDK_ASSIGN_OR_RETURN(auto keyname_str, input.LoadString());
       VMSDK_ASSIGN_OR_RETURN(auto from_backfill, input.LoadObject<bool>());
-      VMSDK_ASSIGN_OR_RETURN(auto from_multi, input.LoadObject<bool>());
+      VMSDK_ASSIGN_OR_RETURN([[maybe_unused]] auto from_multi,
+                             input.LoadObject<bool>());
 
       auto keyname = vmsdk::MakeUniqueValkeyString(keyname_str);
       ProcessKeyspaceNotification(ctx, keyname.get(), from_backfill);

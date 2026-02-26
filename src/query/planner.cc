@@ -31,7 +31,11 @@ bool UsePreFiltering(size_t estimated_num_of_keys,
     // TODO: Come up with a formulation accounting for various
     // other factors like ef_construction, M, size of vectors, ef_runtime, k
     // etc. Also benchmark various combinations to tune the hyperparameters.
-    size_t N = vector_index->GetCapacity();
+    // size_t N = vector_index->GetCapacity();
+
+    // Switching to using the actual number of vectors in the index
+    size_t N = vector_index->GetTrackedKeyCount();
+
     // We choose pre-filtering if the size of the filtered space is below a
     // certain threshold (relative to the total size).
     return estimated_num_of_keys <= kPreFilteringThresholdRatio * N;

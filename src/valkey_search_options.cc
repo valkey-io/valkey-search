@@ -339,7 +339,7 @@ static auto prefiltering_threshold_ratio_config =
           if (parsed_value < kMinimumPrefilteringThresholdRatio ||
               parsed_value > kMaximumPrefilteringThresholdRatio) {
             return absl::InvalidArgumentError(absl::StrFormat(
-                "Prefiltering threshold ratio must be between %.3f and %.1f",
+                "Prefiltering threshold ratio must be between %.1f and %.1f",
                 kMinimumPrefilteringThresholdRatio,
                 kMaximumPrefilteringThresholdRatio));
           }

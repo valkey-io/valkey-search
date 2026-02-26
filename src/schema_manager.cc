@@ -688,20 +688,24 @@ absl::Status SchemaManager::LoadIndex(
   // Load the index schema into memory
   auto index_schema_pb = std::unique_ptr<data_model::IndexSchema>(
       section->release_index_schema_contents());
-  VMSDK_ASSIGN_OR_RETURN(auto index_schema,
-                         IndexSchema::LoadFromRDB(ctx, mutations_thread_pool_,
-                                                  std::move(index_schema_pb),
-                                                  std::move(supplemental_iter)),
-                         _ << "Failed to load index schema from RDB!");
-  uint32_t db_num = index_schema->GetDBNum();
-  const std::string &name = index_schema->GetName();
 
-  // Select the DB number in the context for subsequent usage.
+  // Select the DB number in the context BEFORE loading the index schema.
+  // This is critical because LoadFromRDB (specifically LoadIndexExtension in
+  // RDB v2) calls ProcessKeyspaceNotification which opens keys using the
+  // context, so the context must be pointing to the correct DB.
+  uint32_t db_num = index_schema_pb->db_num();
+  const std::string name = index_schema_pb->name();
   if (ValkeyModule_SelectDb(ctx, db_num) != VALKEYMODULE_OK) {
     return absl::InternalError(
         absl::StrFormat("Unable to select DB %d for loading of index schema %s",
                         db_num, vmsdk::config::RedactIfNeeded(name).data()));
   }
+
+  VMSDK_ASSIGN_OR_RETURN(auto index_schema,
+                         IndexSchema::LoadFromRDB(ctx, mutations_thread_pool_,
+                                                  std::move(index_schema_pb),
+                                                  std::move(supplemental_iter)),
+                         _ << "Failed to load index schema from RDB!");
 
   // In diskless load scenarios, we stage the index to allow serving from
   // the existing index schemas. The loading ended callback will swap these

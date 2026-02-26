@@ -44,6 +44,7 @@
 #include "src/valkey_search.h"
 #include "src/valkey_search_options.h"
 #include "third_party/hnswlib/hnswlib.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
@@ -80,6 +81,9 @@ class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
   ~InlineVectorFilter() override = default;
 
   bool operator()(hnswlib::labeltype id) override {
+    if (!vmsdk::IsMainThread()) {
+      PAUSEPOINT("search_inline_filter");
+    }
     auto key = vector_index_->GetKeyDuringSearch(id);
     if (!key.ok()) {
       return false;
@@ -408,6 +412,9 @@ void EvaluatePrefilteredKeys(
       }
       indexes::PrefilterEvaluator key_evaluator(
           text_index, parameters.filter_parse_results.query_operations);
+      if (!vmsdk::IsMainThread()) {
+        PAUSEPOINT("search_prefilter_eval");
+      }
       // 3. Evaluate predicate
       if (key_evaluator.Evaluate(
               *parameters.filter_parse_results.root_predicate, key)) {
@@ -614,6 +621,9 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
       auto iterator = fetcher->Begin();
       while (!iterator->Done()) {
         const auto &key = **iterator;
+        if (!vmsdk::IsMainThread()) {
+          PAUSEPOINT("search_entries_fetcher");
+        }
         if (needs_dedup) {
           if (seen_keys.contains(key->Str().data())) {
             iterator->Next();

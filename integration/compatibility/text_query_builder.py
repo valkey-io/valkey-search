@@ -219,7 +219,17 @@ def gen_unescaped_word(vocab: List[str], rng: random.Random) -> List[str]:
 
 def gen_escaped_word(vocab: List[str], rng: random.Random) -> List[str]:
     count = rng.randint(1, 3)
-    return [EscapedTerm(rng.choice(vocab)) for _ in range(count)]
+
+    # add extra pair of backslashes to make query work in Valkey
+    result = []
+    for _ in range(count):
+        word = rng.choice(vocab)
+        # Double the backslash: \, -> \\, to match server-side escaping
+        query = word.replace('\\', '\\\\')
+        result.append(EscapedTerm(query))
+    return result
+
+    # return [EscapedTerm(rng.choice(vocab)) for _ in range(count)]
 
 
 def effective_levenshtein_distance(term: str, requested: int) -> int:

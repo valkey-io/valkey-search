@@ -191,7 +191,7 @@
         "fields": [
           {
             "name": "field1",
-            "size": 0,
+            "size": 25000000,
             "transforms": [
               {
                 "type": "repeated_token",
@@ -207,7 +207,7 @@
         "fields": [
           {
             "name": "field1",
-            "size": 0,
+            "size": 1000000,
             "transforms": [
               {
                 "type": "cyclic_pattern",
@@ -223,7 +223,7 @@
         "generate_fields": {
           "count": 50,
           "prefix": "field",
-          "size": 1000,
+          "size": 100000,
           "transforms": [
             {
               "type": "wikipedia"
@@ -236,7 +236,7 @@
         "fields": [
           {
             "name": "field1",
-            "size": 500,
+            "size": 5000,
             "transforms": [
               {
                 "type": "wikipedia"
@@ -250,7 +250,7 @@
         "generate_fields": {
           "count": 20,
           "prefix": "field",
-          "size": 0,
+          "size": 25,
           "transforms": [
             {
               "type": "random_from_set",
@@ -276,7 +276,7 @@
         "fields": [
           {
             "name": "field1",
-            "size": 0,
+            "size": 10000000,
             "transforms": [
               {
                 "type": "unique_tokens",
@@ -291,7 +291,7 @@
         "fields": [
           {
             "name": "field1",
-            "size": 0,
+            "size": 250000,
             "transforms": [
               {
                 "type": "uuid_tokens",
@@ -306,7 +306,7 @@
         "fields": [
           {
             "name": "field1",
-            "size": 0,
+            "size": 1000000,
             "transforms": [
               {
                 "type": "progressive_prefix",
@@ -322,7 +322,7 @@
         "fields": [
           {
             "name": "keyname",
-            "size": 0,
+            "size": 150,
             "transforms": [
               {
                 "type": "uuid_tokens",
@@ -333,7 +333,7 @@
           },
           {
             "name": "field1",
-            "size": 500,
+            "size": 5000,
             "transforms": [
               {
                 "type": "wikipedia"
@@ -347,7 +347,7 @@
         "generate_fields": {
           "count": 10,
           "prefix": "field",
-          "size": 500,
+          "size": 5000,
           "transforms": [
             {
               "type": "wikipedia"
@@ -360,7 +360,7 @@
         "fields": [
           {
             "name": "field1",
-            "size": 50000,
+            "size": 500000,
             "transforms": [
               {
                 "type": "wikipedia"
@@ -374,7 +374,7 @@
         "fields": [
           {
             "name": "field1",
-            "size": 50000,
+            "size": 500000,
             "transforms": [
               {
                 "type": "stemmable_words",

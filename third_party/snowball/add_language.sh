@@ -173,6 +173,13 @@ echo "Updating CMakeLists.txt..."
     echo "# Set compile flags to match the original build"
     echo "target_compile_options(snowball PRIVATE -w) # Suppress warnings from third-party code"
     echo
+    echo "# Add optimization flags for performance"
+    echo "if(CMAKE_BUILD_TYPE MATCHES Release)"
+    echo "  target_compile_options(snowball PRIVATE -O3 -ffast-math -funroll-loops)"
+    echo "else()"
+    echo "  target_compile_options(snowball PRIVATE -O2)"
+    echo "endif()"
+    echo
     echo "# Export the target"
     echo "set_target_properties(snowball PROPERTIES"
     echo "  POSITION_INDEPENDENT_CODE ON"

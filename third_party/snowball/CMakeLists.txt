@@ -31,6 +31,13 @@ target_include_directories(snowball PRIVATE
 # Set compile flags to match the original build
 target_compile_options(snowball PRIVATE -w) # Suppress warnings from third-party code
 
+# Add optimization flags for performance
+if(CMAKE_BUILD_TYPE MATCHES Release)
+  target_compile_options(snowball PRIVATE -O3 -ffast-math -funroll-loops)
+else()
+  target_compile_options(snowball PRIVATE -O2)
+endif()
+
 # Export the target
 set_target_properties(snowball PROPERTIES
   POSITION_INDEPENDENT_CODE ON

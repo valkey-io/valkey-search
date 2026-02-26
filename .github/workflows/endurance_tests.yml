@@ -23,11 +23,6 @@ on:
         required: false
         default: '*'
         type: string
-      test_duration:
-        description: 'Test duration in seconds (for time-based tests)'
-        required: false
-        default: '180'
-        type: string
   schedule:
     # Run daily at 9 AM UTC
     - cron: "0 9 * * *"

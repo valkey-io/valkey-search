@@ -1,167 +1,104 @@
-name: Endurance and Stability Tests
+name: Stability Tests
 
 # ============================================================================
 # WORKFLOW PURPOSE
 # ============================================================================
-# Endurance testing workflow using memtier_benchmark with TLS
-# support for long-running performance and stability testing.
+# Comprehensive stability testing workflow for valkey-search using the
+# Python-based stability test suite. Tests multiple scenarios including:
+# - Multiple index types (FLAT, HNSW, TEXT, TAG, NUMERIC)
+# - Concurrent operations with memtier_benchmark
+# - Background stress tasks (BGSAVE, FT.CREATE, FT.DROPINDEX, FLUSHDB)
+# - Optional failover testing with replicas
 # ============================================================================
 
 on:
+  push:
+    branches:
+      - main
+      - gitHubEndurRun
   workflow_dispatch:
     inputs:
-      branch_version:
-        description: 'Branch/version to test'
+      test_filter:
+        description: 'Test filter pattern (e.g., "*hnsw*", "*text*", or "*" for all)'
         required: false
-        default: 'unstable'
+        default: '*'
         type: string
-      enable_tls:
-        description: 'Enable TLS'
-        required: false
-        default: true
-        type: boolean
       test_duration:
-        description: 'Test duration in seconds'
+        description: 'Test duration in seconds (for time-based tests)'
         required: false
-        default: '3600'
-        type: string
-      threads:
-        description: 'Number of memtier threads'
-        required: false
-        default: '10'
-        type: string
-      clients:
-        description: 'Number of memtier clients'
-        required: false
-        default: '10'
-        type: string
-      pipeline_depth:
-        description: 'Pipeline depth'
-        required: false
-        default: '1'
-        type: string
-      data_size:
-        description: 'Data size in bytes'
-        required: false
-        default: '1024'
-        type: string
-      workload_type:
-        description: 'Workload type'
-        required: false
-        default: 'mixed'
-        type: choice
-        options:
-          - mixed
-          - read_only
-          - write_only
-      keyspace_size:
-        description: 'Keyspace size'
-        required: false
-        default: '1000000'
+        default: '180'
         type: string
   schedule:
+    # Run daily at 9 AM UTC
     - cron: "0 9 * * *"
 
 concurrency:
-  group: endurance-tests-${{ github.head_ref || github.ref }}
+  group: stability-tests-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  endurance-tests:
-    runs-on: ubuntu-latest
+  stability-tests:
+    runs-on: [self-hosted, linux, ARM64]
 
     steps:
     # Checkout the code from the repository
     - name: Checkout Code
       uses: actions/checkout@v4
+      with:
+        repository: valkey-io/valkey-search
+        ref: main
+        submodules: recursive
 
-    # Set up Docker to build and run the container
-    - name: Set up Docker
-      uses: docker/setup-buildx-action@v2
-
-    # Build the Docker image from the Dockerfile in your repo
-    - name: Build Docker Image
+    # Build valkey-search module directly on ARM64 host
+    - name: Build valkey-search Module on ARM64
       run: |
-        docker build -t endurance-test-image -f .devcontainer/Dockerfile .
-        echo "Verifying memtier-benchmark..."
-        docker run --rm endurance-test-image memtier_benchmark --version
-        echo "Checking TLS support..."
-        docker run --rm endurance-test-image bash -c \
-          "memtier_benchmark --help | grep -q '\-\-tls' && echo 'TLS support confirmed' || echo 'WARNING: No TLS support'"
+        ./build.sh
+        ls -lh .build-release/libsearch.so
 
-    - name: Create Results Directory
+    # Run stability tests directly on ARM64 host
+    - name: Run Stability Tests
       run: |
-        mkdir -p endurance-results
-        mkdir -p tls
-        chmod 777 endurance-results
-        chmod 777 tls
+        # Clean up test build directory
+        mkdir -p testing/integration/.build-release
+        chmod -R 755 testing/integration/.build-release
+        
+        # Set environment variable for module path
+        export VALKEY_SEARCH_PATH="$(pwd)/.build-release/libsearch.so"
+        
+        # Run tests
+        cd testing/integration
+        ./run.sh --test stability
 
-    - name: Run Endurance Tests
-      id: test-run
-      env:
-        SERVER_TYPE: 'valkey'
-        BRANCH_VERSION: ${{ github.event.inputs.branch_version || 'unstable' }}
-        ENABLE_TLS: ${{ github.event.inputs.enable_tls == 'false' && 'false' || 'true' }}
-        TEST_DURATION: ${{ github.event.inputs.test_duration || '3600' }}
-        THREADS: ${{ github.event.inputs.threads || '10' }}
-        CLIENTS: ${{ github.event.inputs.clients || '10' }}
-        PIPELINE_DEPTH: ${{ github.event.inputs.pipeline_depth || '1' }}
-        DATA_SIZE: ${{ github.event.inputs.data_size || '1024' }}
-        WORKLOAD_TYPE: ${{ github.event.inputs.workload_type || 'mixed' }}
-        KEYSPACE_SIZE: ${{ github.event.inputs.keyspace_size || '1000000' }}
-      run: |
-        docker run --privileged --rm \
-          --mount type=bind,source="$(pwd)/endurance-results",target=/workspace/results \
-          --mount type=bind,source="$(pwd)/tls",target=/workspace/tls \
-          -v "$(pwd):/workspace" \
-          -e SERVER_TYPE="${SERVER_TYPE}" \
-          -e BRANCH_VERSION="${BRANCH_VERSION}" \
-          -e ENABLE_TLS="${ENABLE_TLS}" \
-          -e TEST_DURATION="${TEST_DURATION}" \
-          -e REQUEST_COUNT="0" \
-          -e THREADS="${THREADS}" \
-          -e CLIENTS="${CLIENTS}" \
-          -e PIPELINE_DEPTH="${PIPELINE_DEPTH}" \
-          -e DATA_SIZE="${DATA_SIZE}" \
-          -e WORKLOAD_TYPE="${WORKLOAD_TYPE}" \
-          -e KEYSPACE_SIZE="${KEYSPACE_SIZE}" \
-          --user "ubuntu:ubuntu" \
-          endurance-test-image \
-          sudo -E scripts/benchmark/run_endurance_test.sh
-
+    # Update results permissions
     - name: Update Results Permissions
       if: always()
-      run: sudo chmod -R 755 endurance-results
-
-    # Display logs and results on failure for debugging
-    - name: Display Error Logs and Results
-      if: failure()
-      run: |
-        echo "=== Displaying Error Logs and Test Results ==="
-        echo ""
-        echo "=== Results Directory Structure ==="
-        ls -laR endurance-results/ || echo "Results directory is empty or inaccessible"
-        echo ""
-        echo "=== CSV Summary Results ==="
-        find endurance-results -name "summary.csv" -type f -exec echo "File: {}" \; -exec cat {} \; -exec echo "" \; || echo "No CSV summary found"
-        echo ""
-        echo "=== JSON Results (First 100 lines) ==="
-        find endurance-results -name "results.json" -type f -exec echo "File: {}" \; -exec head -100 {} \; -exec echo "" \; || echo "No JSON results found"
-        echo ""
-        echo "=== Test Output Files ==="
-        find endurance-results -name "*.txt" -type f -exec echo "File: {}" \; -exec cat {} \; -exec echo "" \; || echo "No test output files found"
-        echo ""
-        echo "=== Server Logs ==="
-        find endurance-results -name "server.log" -type f -exec echo "File: {}" \; -exec cat {} \; -exec echo "" \; || echo "No server logs found"
-        echo ""
-        echo "=== Metadata ==="
-        find endurance-results -name "metadata.json" -type f -exec echo "File: {}" \; -exec cat {} \; -exec echo "" \; || echo "No metadata files found"
+      run: chmod -R 755 testing/integration/.build-release/output || true
 
     # Upload test results as artifacts
     - name: Upload Test Results
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: endurance-test-results-${{ github.run_number }}
-        path: endurance-results
+        name: stability-test-results-${{ github.run_number }}
+        path: testing/integration/.build-release/output
         retention-days: 90
+
+  # Cleanup job to remove temporary files and build artifacts
+  cleanup:
+    runs-on: [self-hosted, linux, ARM64]
+    needs: stability-tests
+    if: always()
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          repository: valkey-io/valkey-search
+          ref: main
+
+      - name: Clean Build Directories
+        run: |
+          echo "=== Cleaning up build directories and temporary files ==="
+          rm -rf .build-release
+          rm -rf testing/integration/.build-release
+          rm -rf build/
+          echo "✓ Cleanup completed successfully"

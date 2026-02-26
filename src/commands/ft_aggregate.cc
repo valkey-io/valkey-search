@@ -307,7 +307,10 @@ absl::Status ExecuteAggregationStages(AggregateParameters &parameters,
                                       RecordSet &records) {
   agg_input_records.Increment(records.size());
   for (auto &stage : parameters.stages_) {
-    // Todo Check for timeout
+    // Check for timeout
+    if (parameters.cancellation_token->IsCancelled()) {
+      return absl::CancelledError("Search operation cancelled due to timeout");
+    }
     VMSDK_RETURN_IF_ERROR(stage->Execute(records));
   }
   agg_output_records.Increment(records.size());
@@ -390,6 +393,12 @@ bool AggregateParameters::RequiresCompleteResults() const {
 
 void AggregateParameters::SendReply(ValkeyModuleCtx *ctx,
                                     query::SearchResult &result) {
+  if (cancellation_token->IsCancelled()) {
+    ++Metrics::GetStats().query_failed_requests_cnt;
+    ValkeyModule_ReplyWithError(ctx,
+                                "Search operation cancelled due to timeout");
+    return;
+  }
   auto status = SendReplyInner(ctx, result.neighbors, *this);
   if (!status.ok()) {
     ++Metrics::GetStats().query_failed_requests_cnt;

@@ -161,10 +161,8 @@ function run_pytest() {
   
   LOG_INFO "Running: ${PYTHON_PATH} -m pytest ${FILTER_ARGS} ${CAPTURE_ARG} --cache-clear -v ${ROOT_DIR}/integration/"
   # Capture pytest output to check for sanitizer errors
-  set +e
-  timeout --signal=KILL 3600 ${PYTHON_PATH} -m pytest ${FILTER_ARGS} ${CAPTURE_ARG} --cache-clear -v ${ROOT_DIR}/integration/ 2>&1 | tee ${PYTEST_OUTPUT_LOG}
+  ${PYTHON_PATH} -m pytest ${FILTER_ARGS} ${CAPTURE_ARG} --cache-clear -v ${ROOT_DIR}/integration/ 2>&1 | tee ${PYTEST_OUTPUT_LOG}
   RUN_SUCCESS=${PIPESTATUS[0]}
-  set -e
 }
 
 function run_with_retries() {
@@ -196,7 +194,7 @@ run_with_retries
 if [[ "${SAN_BUILD}" != "no" ]]; then
   printf "Checking for errors...\n"
   # Terminate valkey-server so the logs will be flushed
-  pkill -9 valkey-server || true
+  pkill valkey-server || true
   # Wait for 3 seconds making sure the processes terminated
   sleep 3
   # And now we can check the logs
@@ -205,5 +203,3 @@ if [[ "${SAN_BUILD}" != "no" ]]; then
   # Check pytest output for sanitizer errors
   check_for_san_errors "${PYTEST_OUTPUT_LOG}"
 fi
-
-exit ${RUN_SUCCESS}

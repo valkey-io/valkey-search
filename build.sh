@@ -488,12 +488,7 @@ elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
         if [[ "${SAN_BUILD}" == "thread" ]]; then
             params="${params} --tsan"
         fi
-        set +e
         ./run.sh ${params}
-        if [[ $? -ne 0 ]]; then
-            EXIT_CODE=1
-        fi
-        set -e
         popd >/dev/null
     fi
 
@@ -505,12 +500,7 @@ elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
     export TEST_PATTERN=${TEST_PATTERN}
     export INTEG_RETRIES=${INTEG_RETRIES}
     # Run will run ASan or normal tests based on the environment variable SAN_BUILD
-    set +e
-    ./run.sh
-    if [[ $? -ne 0 ]]; then
-        EXIT_CODE=1
-    fi
-    set -e
+    ./run.sh || EXIT_CODE=1
     popd >/dev/null
 fi
 

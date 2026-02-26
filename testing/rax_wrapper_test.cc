@@ -121,7 +121,7 @@ class RaxTest : public vmsdk::ValkeyTest {
   }
 
   void VerifySubtreeKeyCount(absl::string_view prefix, size_t expected_count) {
-    size_t actual = rax_.GetSubtreeKeyCount(prefix);
+    size_t actual = rax_.GetSubtreeItemCount(prefix);
     EXPECT_EQ(actual, expected_count)
         << "SubtreeKeyCount mismatch for prefix '" << prefix << "'";
   }

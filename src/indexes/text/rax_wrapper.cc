@@ -77,7 +77,7 @@ void Rax::MutateTarget(absl::string_view word,
 
 size_t Rax::GetTotalUniqueWordCount() const { return raxSize(rax_); }
 
-size_t Rax::GetSubtreeKeyCount(absl::string_view prefix) const {
+size_t Rax::GetSubtreeItemCount(absl::string_view prefix) const {
   return raxGetSubtreeItemCount(
       rax_,
       const_cast<unsigned char *>(

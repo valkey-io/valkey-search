@@ -97,8 +97,8 @@ class Rax {
   // entries).
   size_t GetTotalUniqueWordCount() const;
 
-  // Get the number of keys that have the specified prefix in O(len(prefix)) time.
-  size_t GetSubtreeKeyCount(absl::string_view prefix) const;
+  // Get the number of items tracked for the sub-tree at the prefix.
+  size_t GetSubtreeItemCount(absl::string_view prefix) const;
 
   // Get the length of the longest word in the RadixTree, this can be used to
   // pre-size arrays and strings that are used when iterating on this RadixTree.

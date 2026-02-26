@@ -15,7 +15,6 @@
 #include "libstemmer.h"
 #include "src/indexes/text/unicode_normalizer.h"
 #include "src/utils/scanner.h"
-#include "vmsdk/src/log.h"
 
 namespace valkey_search::indexes::text {
 
@@ -86,7 +85,6 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
     absl::string_view text, bool stemming_enabled, uint32_t min_stem_size,
     absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>*
         stem_mappings) const {
-  VMSDK_LOG(NOTICE, nullptr) << "Tokenizing text content: " << text;
   if (!IsValidUtf8(text)) {
     return absl::InvalidArgumentError("Invalid UTF-8");
   }

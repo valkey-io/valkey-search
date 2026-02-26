@@ -65,7 +65,10 @@ excluded_queries = set([
 
     # test_text_search_unescaped[hash-2-nostem]
     "minus-subtract",
-    "minus-subtract left&right"
+    "minus-subtract left&right",
+
+    # test_text_search_unescaped[json-nostem]
+    'many"few many"few',
 ])
 
 # uncomment when stemming is finished

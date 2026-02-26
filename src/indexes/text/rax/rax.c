@@ -181,7 +181,7 @@ raxNode *raxNewNode(size_t children, int datafield) {
     node->isnull = 0;
     node->iscompr = 0;
     node->size = children;
-    node->subtree_keys = 0; // SEARCH
+    node->subtree_items = 0; // SEARCH
     return node;
 }
 
@@ -712,7 +712,13 @@ int raxGenericInsert(rax *rax, unsigned char *s, size_t len, void *data, void **
             return 0;
         }
         splitnode->data[0] = h->data[j];
+        /* BEGIN SEARCH
+         * We replace the "h" node with the trimmed node if there is one.
+         * If the split position is the first character of the compressed path from h,
+         * then there is no trimmed node and we replace h with the split node iteself. */
+        splitnode->subtree_items = trimmedlen ? next->subtree_items : h->subtree_items;
         rax->alloc_size += rax_ptr_alloc_size(splitnode);
+        /* END SEARCH */
 
         if (j == 0) {
             /* 3a: Replace the old node with the split node. */
@@ -723,7 +729,7 @@ int raxGenericInsert(rax *rax, unsigned char *s, size_t len, void *data, void **
             memcpy(parentlink, &splitnode, sizeof(splitnode));
         } else {
             /* 3b: Trim the compressed node. */
-            trimmed->subtree_keys = 0; // SEARCH
+            trimmed->subtree_items = h->subtree_items; // SEARCH
             trimmed->size = j;
             memcpy(trimmed->data, h->data, j);
             trimmed->iscompr = j > 1 ? 1 : 0;
@@ -745,7 +751,7 @@ int raxGenericInsert(rax *rax, unsigned char *s, size_t len, void *data, void **
          * compressed node after the split. */
         if (postfixlen) {
             /* 4a: create a postfix node. */
-            postfix->subtree_keys = 0; // SEARCH
+            postfix->subtree_items = next->subtree_items; // SEARCH
             postfix->iskey = 0;
             postfix->isnull = 0;
             postfix->size = postfixlen;
@@ -797,7 +803,7 @@ int raxGenericInsert(rax *rax, unsigned char *s, size_t len, void *data, void **
         memcpy(&next, childfield, sizeof(next));
 
         /* 2: Create the postfix node. */
-        postfix->subtree_keys = 0; // SEARCH
+        postfix->subtree_items = next->subtree_items; // SEARCH
         postfix->size = postfixlen;
         postfix->iscompr = postfixlen > 1;
         postfix->iskey = 1;
@@ -810,7 +816,7 @@ int raxGenericInsert(rax *rax, unsigned char *s, size_t len, void *data, void **
         rax->alloc_size += rax_ptr_alloc_size(postfix);
 
         /* 3: Trim the compressed node. */
-        trimmed->subtree_keys = 0; // SEARCH
+        trimmed->subtree_items = h->subtree_items; // SEARCH
         trimmed->size = j;
         trimmed->iscompr = j > 1;
         trimmed->iskey = 0;
@@ -923,6 +929,17 @@ int raxFind(rax *rax, unsigned char *s, size_t len, void **value) {
 }
 
 /* BEGIN SEARCH */
+/* Return the number of keys in the subtree rooted at the node matching the
+ * given prefix. Returns 0 if the prefix is not found in the tree.
+ * An empty prefix (len == 0) returns the total key count of the tree. */
+uint32_t raxGetSubtreeItemCount(rax *rax, unsigned char *s, size_t len) {
+    raxNode *h;
+    int splitpos = 0;
+    size_t i = raxLowWalk(rax, s, len, &h, NULL, &splitpos, NULL);
+    if (i < len) return 0;
+    return h->subtree_items;
+}
+
 /* Atomically mutates the value at the given key by calling the provided
  * callback function. The callback receives the current value (NULL if the
  * key doesn't exist) and caller context, and returns the new value (NULL
@@ -934,7 +951,7 @@ int raxFind(rax *rax, unsigned char *s, size_t len, void **value) {
  * Returns 1 on success, 0 on error (errno will be set to ENOMEM
  * on out of memory). */
 // TODO: optimize to a single-pass version that doesn't traverse the tree multiple times.
-int raxMutate(rax *rax, unsigned char *s, size_t len, raxMutateCallback callback, void *caller_context, key_count_op op) {
+int raxMutate(rax *rax, unsigned char *s, size_t len, raxMutateCallback callback, void *caller_context, item_count_op op) {
     void *current_value = NULL;
 
     /* Find the current value */
@@ -960,19 +977,19 @@ int raxMutate(rax *rax, unsigned char *s, size_t len, raxMutateCallback callback
         }
     }
 
-    /* Update subtree_keys along the path after tree structure finalized */
-    if (success && new_value != current_value) {
+    /* Update subtree_items along the path after tree structure finalized */
+    if (success && op != NONE) {
         raxStack ts;
         raxStackInit(&ts);
         raxNode *h;
         raxLowWalk(rax, s, len, &h, NULL, NULL, &ts);
 
         int delta = (op == ADD) ? 1 : -1;
-        h->subtree_keys += delta;
+        h->subtree_items += delta;
 
         raxNode *ancestor;
         while ((ancestor = raxStackPop(&ts)) != NULL) {
-            ancestor->subtree_keys += delta;
+            ancestor->subtree_items += delta;
         }
         raxStackFree(&ts);
     }
@@ -1229,7 +1246,7 @@ int raxRemove(rax *rax, unsigned char *s, size_t len, void **old) {
                 raxStackFree(&ts);
                 return 1;
             }
-            new->subtree_keys = 0; // SEARCH
+            new->subtree_items = h->subtree_items; // SEARCH
             new->iskey = 0;
             new->isnull = 0;
             new->iscompr = 1;

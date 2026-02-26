@@ -63,7 +63,7 @@ Rax &Rax::operator=(Rax &&other) noexcept {
 
 void Rax::MutateTarget(absl::string_view word,
                        absl::FunctionRef<void *(void *)> mutate,
-                       key_count_op op) {
+                       item_count_op op) {
   CHECK(!word.empty()) << "Can't mutate the target for an empty word";
 
   unsigned char *c_word = const_cast<unsigned char *>(
@@ -77,9 +77,12 @@ void Rax::MutateTarget(absl::string_view word,
 
 size_t Rax::GetTotalUniqueWordCount() const { return raxSize(rax_); }
 
-size_t Rax::GetWordCount(absl::string_view prefix) const {
-  // TODO: Implement size estimation(?)
-  return 0;
+size_t Rax::GetSubtreeKeyCount(absl::string_view prefix) const {
+  return raxGetSubtreeItemCount(
+      rax_,
+      const_cast<unsigned char *>(
+          reinterpret_cast<const unsigned char *>(prefix.data())),
+      prefix.size());
 }
 
 size_t Rax::GetLongestWord() const {

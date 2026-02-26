@@ -52,21 +52,29 @@ class RaxTest : public vmsdk::ValkeyTest {
     rax_ = Rax{FreeTestTarget};
   }
 
-  void AddWords(const std::vector<std::pair<std::string, int>> &words) {
+  void AddWords(const std::vector<std::pair<std::string, int>> &words,
+                item_count_op op = NONE) {
     for (const auto &[word, value] : words) {
-      rax_.MutateTarget(word, [value](void *old) {
-        if (old) delete static_cast<TestTarget *>(old);
-        return static_cast<void *>(new TestTarget(value));
-      });
+      rax_.MutateTarget(
+          word,
+          [value](void *old) {
+            if (old) delete static_cast<TestTarget *>(old);
+            return static_cast<void *>(new TestTarget(value));
+          },
+          op);
     }
   }
 
-  void DeleteWords(const std::vector<std::string> &words) {
+  void DeleteWords(const std::vector<std::string> &words,
+                   item_count_op op = NONE) {
     for (const auto &word : words) {
-      rax_.MutateTarget(word, [](void *old) {
-        if (old) delete static_cast<TestTarget *>(old);
-        return static_cast<void *>(nullptr);
-      });
+      rax_.MutateTarget(
+          word,
+          [](void *old) {
+            if (old) delete static_cast<TestTarget *>(old);
+            return static_cast<void *>(nullptr);
+          },
+          op);
     }
   }
 
@@ -110,6 +118,12 @@ class RaxTest : public vmsdk::ValkeyTest {
   void VerifyWordCount(size_t expected_count) {
     size_t actual_count = rax_.GetTotalUniqueWordCount();
     EXPECT_EQ(actual_count, expected_count) << "Word count mismatch";
+  }
+
+  void VerifySubtreeKeyCount(absl::string_view prefix, size_t expected_count) {
+    size_t actual = rax_.GetSubtreeKeyCount(prefix);
+    EXPECT_EQ(actual, expected_count)
+        << "SubtreeKeyCount mismatch for prefix '" << prefix << "'";
   }
 
  protected:
@@ -514,6 +528,46 @@ TEST_F(RaxTest, PathIteratorAPIs) {
   EXPECT_EQ(ca_iter.GetChildEdge(), "t");
   ca_iter.NextChild();
   EXPECT_TRUE(ca_iter.Done());
+}
+
+TEST_F(RaxTest, SubtreeKeyCount) {
+  AddWords({{"c", 0},
+            {"card", 1},
+            {"cat", 2},
+            {"car", 3},
+            {"can", 4},
+            {"dog", 5},
+            {"card", 6}},
+           ADD);
+
+  VerifySubtreeKeyCount("", 7);
+  VerifySubtreeKeyCount("c", 6);
+  VerifySubtreeKeyCount("ca", 5);
+  VerifySubtreeKeyCount("car", 3);  // car + card(x2)
+  VerifySubtreeKeyCount("card", 2);
+  VerifySubtreeKeyCount("dog", 1);
+  VerifySubtreeKeyCount("z", 0);
+
+  // Remove "car" — "car" prefix still has card(x2)
+  DeleteWords({"car"}, SUBTRACT);
+  VerifySubtreeKeyCount("", 6);
+  VerifySubtreeKeyCount("ca", 4);
+  VerifySubtreeKeyCount("car", 2);
+  VerifySubtreeKeyCount("card", 2);
+
+  // Decrement "card" without changing tre structure
+  rax_.MutateTarget("card", [](void *old) { return old; }, SUBTRACT);
+  VerifySubtreeKeyCount("", 5);
+  VerifySubtreeKeyCount("ca", 3);
+  VerifySubtreeKeyCount("car", 1);
+  VerifySubtreeKeyCount("card", 1);
+
+  // Remove "card"
+  DeleteWords({"card"}, SUBTRACT);
+  VerifySubtreeKeyCount("", 4);
+  VerifySubtreeKeyCount("ca", 2);
+  VerifySubtreeKeyCount("car", 0);
+  VerifySubtreeKeyCount("card", 0);
 }
 
 TEST_F(RaxTest, RaxMallocMemoryTracking) {

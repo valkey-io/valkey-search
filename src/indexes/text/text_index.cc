@@ -266,10 +266,10 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
     // the key and position map
     {
       std::lock_guard<std::mutex> schema_guard(text_index_mutex_);
-      text_index_->GetPrefix().MutateTarget(token, target_add_fn);
+      text_index_->GetPrefix().MutateTarget(token, target_add_fn, item_count_op::ADD);
       if (suffix) {
         text_index_->GetSuffix().value().get().MutateTarget(*reverse_token,
-                                                            target_set_fn);
+                                                            target_set_fn, item_count_op::ADD);
       }
     }
 
@@ -338,10 +338,10 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
   while (!iter.Done()) {
     // Remove the key from the schema-level trees
     std::string_view word = iter.GetWord();
-    text_index_->GetPrefix().MutateTarget(word, target_remove_fn);
+    text_index_->GetPrefix().MutateTarget(word, target_remove_fn, item_count_op::SUBTRACT);
     if (suffix_opt.has_value()) {
       std::string reverse_word(word.rbegin(), word.rend());
-      suffix_opt.value().get().MutateTarget(reverse_word, target_set_fn);
+      suffix_opt.value().get().MutateTarget(reverse_word, target_set_fn, item_count_op::SUBTRACT);
     }
 
     // If the postings are now empty, remove from stem tree if it was a parent

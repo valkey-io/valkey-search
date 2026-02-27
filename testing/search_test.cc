@@ -22,6 +22,7 @@
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
+#include "absl/synchronization/notification.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
@@ -40,8 +41,10 @@
 #include "src/query/predicate.h"
 #include "src/utils/patricia_tree.h"
 #include "src/utils/string_interning.h"
+#include "src/valkey_search.h"
 #include "testing/common.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/type_conversions.h"
 
 namespace valkey_search {
@@ -1353,5 +1356,139 @@ INSTANTIATE_TEST_SUITE_P(
           absl::StrCat(distance_metric, "_", std::get<1>(info.param).test_name);
       return test_name;
     });
+// Test SearchParameters subclass that tracks which QueryComplete* method
+// is called.
+class TrackingSearchParameters : public query::SearchParameters {
+ public:
+  TrackingSearchParameters(bool can_resolve_in_reply)
+      : can_resolve_in_reply_(can_resolve_in_reply) {
+    timeout_ms = 10000;
+    db_num = 0;
+    cancellation_token = cancel::Make(timeout_ms, nullptr);
+  }
+
+  bool CanResolveContentInReply() const override {
+    return can_resolve_in_reply_;
+  }
+
+  void QueryCompleteBackground(
+      std::unique_ptr<SearchParameters> self) override {
+    background_called_ = true;
+    // Release ownership to prevent double-delete
+    self.release();
+    done_.Notify();
+  }
+
+  void QueryCompleteMainThread(
+      std::unique_ptr<SearchParameters> self) override {
+    main_thread_called_ = true;
+    // Release ownership to prevent double-delete
+    self.release();
+    done_.Notify();
+  }
+
+  absl::Notification done_;
+  bool background_called_{false};
+  bool main_thread_called_{false};
+
+ private:
+  bool can_resolve_in_reply_;
+};
+
+class ContentResolutionPendingTest : public ValkeySearchTest {
+ protected:
+  void SetUp() override {
+    ValkeySearchTest::SetUp();
+    InitThreadPools(2, 2, 1);
+  }
+};
+
+// When CanResolveContentInReply() returns true and GetContentProcessing()
+// returns kContentRequired, SearchAsync should call QueryCompleteBackground
+// (skipping RunByMain + ResolveContent).
+TEST_F(ContentResolutionPendingTest, OptimizedPathCallsBackground) {
+  auto index_schema = CreateIndexSchemaWithMultipleAttributes();
+  auto params = std::make_unique<TrackingSearchParameters>(true);
+  auto *params_ptr = params.get();
+
+  params->index_schema = index_schema;
+  params->index_schema_name = kIndexSchemaName;
+  params->attribute_alias = kVectorAttributeAlias;
+  params->score_as = vmsdk::MakeUniqueValkeyString(kScoreAs);
+  params->dialect = kDialect;
+  params->k = 1;
+  params->ef = kEfRuntime;
+  auto vectors = DeterministicallyGenerateVectors(1, kVectorDimensions, 10.0);
+  params->query =
+      std::string((char *)vectors[0].data(), vectors[0].size() * sizeof(float));
+
+  // Verify preconditions: this is a kContentRequired query
+  EXPECT_FALSE(params->no_content);
+  EXPECT_EQ(params->GetContentProcessing(),
+            query::ContentProcessing::kContentRequired);
+  EXPECT_TRUE(params->CanResolveContentInReply());
+
+  VMSDK_EXPECT_OK(query::SearchAsync(
+      std::move(params), ValkeySearch::Instance().GetReaderThreadPool(),
+      query::SearchMode::kLocal));
+
+  params_ptr->done_.WaitForNotification();
+
+  EXPECT_TRUE(params_ptr->background_called_);
+  EXPECT_FALSE(params_ptr->main_thread_called_);
+
+  delete params_ptr;
+}
+
+// When CanResolveContentInReply() returns false and GetContentProcessing()
+// returns kContentRequired, SearchAsync should use RunByMain (via
+// EventLoopAddOneShot) and NOT set content_resolution_pending_.
+TEST_F(ContentResolutionPendingTest, NonOptimizedPathUsesRunByMain) {
+  auto index_schema = CreateIndexSchemaWithMultipleAttributes();
+  auto params = std::make_unique<TrackingSearchParameters>(false);
+
+  params->index_schema = index_schema;
+  params->index_schema_name = kIndexSchemaName;
+  params->attribute_alias = kVectorAttributeAlias;
+  params->score_as = vmsdk::MakeUniqueValkeyString(kScoreAs);
+  params->dialect = kDialect;
+  params->k = 1;
+  params->ef = kEfRuntime;
+  auto vectors = DeterministicallyGenerateVectors(1, kVectorDimensions, 10.0);
+  params->query =
+      std::string((char *)vectors[0].data(), vectors[0].size() * sizeof(float));
+
+  // Verify preconditions: kContentRequired but can't resolve in reply
+  EXPECT_EQ(params->GetContentProcessing(),
+            query::ContentProcessing::kContentRequired);
+  EXPECT_FALSE(params->CanResolveContentInReply());
+
+  // Capture the RunByMain callback without executing it (ResolveContent
+  // requires the main thread). Just verify EventLoopAddOneShot was called.
+  absl::Notification oneshot_called;
+  ValkeyModuleEventLoopOneShotFunc captured_fn = nullptr;
+  void *captured_data = nullptr;
+  EXPECT_CALL(*kMockValkeyModule, EventLoopAddOneShot(testing::_, testing::_))
+      .WillOnce(
+          [&](ValkeyModuleEventLoopOneShotFunc fn, void *data) {
+            captured_fn = fn;
+            captured_data = data;
+            oneshot_called.Notify();
+            return 0;
+          });
+
+  VMSDK_EXPECT_OK(query::SearchAsync(
+      std::move(params), ValkeySearch::Instance().GetReaderThreadPool(),
+      query::SearchMode::kLocal));
+
+  // Wait for EventLoopAddOneShot to be called, confirming RunByMain was used
+  oneshot_called.WaitForNotification();
+  EXPECT_NE(captured_fn, nullptr);
+
+  // Clean up the captured callback data (it's an absl::AnyInvocable<void()>*)
+  auto *fn = static_cast<absl::AnyInvocable<void()> *>(captured_data);
+  delete fn;
+}
+
 }  // namespace
 }  // namespace valkey_search

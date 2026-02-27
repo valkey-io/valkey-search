@@ -107,6 +107,7 @@ struct QueryCommand : public query::SearchParameters {
   //
   void QueryCompleteBackground(std::unique_ptr<SearchParameters> self) override;
   void QueryCompleteMainThread(std::unique_ptr<SearchParameters> self) override;
+  bool CanResolveContentInReply() const override { return true; }
 
   std::optional<vmsdk::BlockedClient> blocked_client;
 

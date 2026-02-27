@@ -318,6 +318,40 @@ static auto max_term_expansions =
                           kMaximumMaxTermExpansions)  // max limit (100k)
         .Build();
 
+/// Register the "--prefiltering-threshold-ratio" flag
+/// Controls when pre-filtering is used vs inline-filtering for hybrid queries
+constexpr absl::string_view kPrefilteringThresholdRatioConfig{
+    "prefiltering-threshold-ratio"};
+constexpr absl::string_view kDefaultPrefilteringThresholdRatio{"0.001"};
+constexpr double kMinimumPrefilteringThresholdRatio{0.0};
+constexpr double kMaximumPrefilteringThresholdRatio{1.0};
+static double prefiltering_threshold_ratio{0.001};
+
+static auto prefiltering_threshold_ratio_config =
+    config::StringBuilder(kPrefilteringThresholdRatioConfig,
+                          kDefaultPrefilteringThresholdRatio)
+        .WithValidationCallback([](const std::string& value) -> absl::Status {
+          double parsed_value;
+          if (!absl::SimpleAtod(value, &parsed_value)) {
+            return absl::InvalidArgumentError(
+                "Prefiltering threshold ratio must be a valid number");
+          }
+          if (parsed_value < kMinimumPrefilteringThresholdRatio ||
+              parsed_value > kMaximumPrefilteringThresholdRatio) {
+            return absl::InvalidArgumentError(absl::StrFormat(
+                "Prefiltering threshold ratio must be between %.1f and %.1f",
+                kMinimumPrefilteringThresholdRatio,
+                kMaximumPrefilteringThresholdRatio));
+          }
+          return absl::OkStatus();
+        })
+        .WithModifyCallback([](const std::string& value) {
+          double parsed_value;
+          CHECK(absl::SimpleAtod(value, &parsed_value));
+          prefiltering_threshold_ratio = parsed_value;
+        })
+        .Build();
+
 /// Register the "search-result-buffer-multiplier" flag
 constexpr absl::string_view kSearchResultBufferMultiplierConfig{
     "search-result-buffer-multiplier"};
@@ -325,6 +359,7 @@ constexpr absl::string_view kDefaultSearchResultBufferMultiplier{"1.5"};
 constexpr double kMinimumSearchResultBufferMultiplier{1.0};
 constexpr double kMaximumSearchResultBufferMultiplier{1000.0};
 static double search_result_buffer_multiplier{1.5};
+
 static auto search_result_buffer_multiplier_config =
     config::StringBuilder(kSearchResultBufferMultiplierConfig,
                           kDefaultSearchResultBufferMultiplier)
@@ -353,6 +388,8 @@ static auto search_result_buffer_multiplier_config =
 double GetSearchResultBufferMultiplier() {
   return search_result_buffer_multiplier;
 }
+
+double GetPrefilteringThresholdRatio() { return prefiltering_threshold_ratio; }
 
 /// Register the "drain-mutation-queue-on-load" flag
 /// Drain the mutation queue after RDB load

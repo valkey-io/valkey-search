@@ -67,6 +67,7 @@
 #define raxTouch vs_raxTouch
 #define raxSetDebugMsg vs_raxSetDebugMsg
 #define raxSetData vs_raxSetData
+#define raxGetSubtreeItemCount vs_raxGetSubtreeItemCount
 
 /* Internal API */
 #define raxAddChild vs_raxAddChild
@@ -165,6 +166,7 @@ typedef struct raxNode {
     uint32_t isnull : 1;  /* Associated value is NULL (don't store it). */
     uint32_t iscompr : 1; /* Node is compressed. */
     uint32_t size : 29;   /* Number of children, or compressed string len. */
+    uint32_t subtree_items; // SEARCH
     /* Data layout is as follows:
      *
      * If node is not compressed we have 'size' bytes, one for each children
@@ -254,10 +256,23 @@ typedef struct raxIterator {
     raxNode *head;           /* SEARCH - Used to limit iteration to a subtree */
 } raxIterator;
 
+/* BEGIN SEARCH */
+/* Used to modify the subtree_items count */
+typedef enum {
+    NONE,
+    ADD,
+    SUBTRACT
+} item_count_op;
+
 /* Callback type for raxMutate. Receives current value (NULL if key doesn't
  * exist) and the passed through caller context. Returns new value (NULL to
  * delete the key). */
 typedef void *(*raxMutateCallback)(void *current_value, void *caller_context);
+
+uint32_t raxGetSubtreeItemCount(rax *rax, unsigned char *s, size_t len);
+int raxSeekSubTree(raxIterator *it, unsigned char *ele, size_t len);
+int raxMutate(rax *rax, unsigned char *s, size_t len, raxMutateCallback callback, void *caller_context, item_count_op op);
+/* END SEARCH */
 
 /* Exported API. */
 rax *raxNew(void);
@@ -265,11 +280,9 @@ int raxInsert(rax *rax, unsigned char *s, size_t len, void *data, void **old);
 int raxTryInsert(rax *rax, unsigned char *s, size_t len, void *data, void **old);
 int raxRemove(rax *rax, unsigned char *s, size_t len, void **old);
 int raxFind(rax *rax, unsigned char *s, size_t len, void **value);
-int raxMutate(rax *rax, unsigned char *s, size_t len, raxMutateCallback callback, void *caller_context); // SEARCH
 void raxFree(rax *rax);
 void raxFreeWithCallback(rax *rax, void (*free_callback)(void *));
 void raxStart(raxIterator *it, rax *rt);
-int raxSeekSubTree(raxIterator *it, unsigned char *ele, size_t len);  // SEARCH
 int raxSeek(raxIterator *it, const char *op, unsigned char *ele, size_t len);
 int raxNext(raxIterator *it);
 int raxPrev(raxIterator *it);

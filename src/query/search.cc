@@ -252,11 +252,12 @@ BuildTextIterator(const Predicate *predicate, bool negate,
   }
   if (predicate->GetType() == PredicateType::kText) {
     auto text_predicate = dynamic_cast<const TextPredicate *>(predicate);
-    auto fetcher_ptr = text_predicate->Search(negate);
-    auto fetcher = static_cast<indexes::Text::EntriesFetcher *>(fetcher_ptr);
-    fetcher->require_positions_ = require_positions;
-    size_t size = fetcher->Size();
-    return {text_predicate->BuildTextIterator(fetcher), size};
+    auto text_index = text_predicate->GetTextIndexSchema()->GetTextIndex();
+    auto field_mask = text_predicate->GetFieldMask();
+    size_t size = text_predicate->EstimateSize();
+    auto result = text_predicate->BuildTextIterator(text_index, field_mask,
+                                                    require_positions);
+    return {std::move(result), size};
   }
   if (predicate->GetType() == PredicateType::kNegate) {
     // Cannot build text iterator for negation - return null
@@ -341,10 +342,11 @@ size_t EvaluateFilterAsPrimary(
   }
   if (predicate->GetType() == PredicateType::kText) {
     auto text_predicate = dynamic_cast<const TextPredicate *>(predicate);
-    auto fetcher = std::unique_ptr<indexes::EntriesFetcherBase>(
-        static_cast<indexes::EntriesFetcherBase *>(
-            text_predicate->Search(negate)));
-    size_t size = fetcher->Size();
+    size_t size = text_predicate->EstimateSize();
+    auto fetcher = std::make_unique<indexes::Text::EntriesFetcher>(
+        size, text_predicate->GetTextIndexSchema()->GetTextIndex(),
+        text_predicate->GetFieldMask(), false);
+    fetcher->predicate_ = text_predicate;
     entries_fetchers.push(std::move(fetcher));
     return size;
   }
@@ -412,12 +414,7 @@ void EvaluatePrefilteredKeys(
         if (needs_dedup) {
           result_keys.insert(key->Str().data());
         }
-        // Check if appender signals to stop (returns false)
-        bool should_continue = appender(key, result_keys);
-        if (!should_continue) {
-          // Early exit - appender reached its limit
-          return;
-        }
+        appender(key, result_keys);
       }
       iterator->Next();
       if (parameters.cancellation_token->IsCancelled()) {
@@ -583,15 +580,10 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
   const size_t max_keys =
       static_cast<size_t>(options::GetMaxSearchKeysAccumulated().GetValue());
   std::vector<indexes::Neighbor> neighbors;
-  // TODO: For now, we just reserve a fixed size because text search operators
-  // return a size of 0 currently.
-  const size_t reserve_size = 5000;
-  neighbors.reserve(std::min(reserve_size, max_keys));
-
+  neighbors.reserve(std::min(qualified_entries, static_cast<size_t>(5000)));
   // Track accumulated count and truncation status (shared across both paths)
   size_t accumulated = 0;
   bool truncated = false;
-
   auto results_appender =
       [&neighbors, &parameters, &accumulated, max_keys, &truncated](
           const InternedStringPtr &key,
@@ -612,7 +604,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
         NeedsDeduplication(parameters.filter_parse_results.query_operations);
     absl::flat_hash_set<const char *> seen_keys;
     if (needs_dedup) {
-      seen_keys.reserve(std::min(reserve_size, max_keys));
+      seen_keys.reserve(std::min(qualified_entries, static_cast<size_t>(5000)));
     }
     while (!entries_fetchers.empty()) {
       auto fetcher = std::move(entries_fetchers.front());
@@ -658,9 +650,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
 }
 
 absl::StatusOr<std::vector<indexes::Neighbor>> DoSearch(
-    const SearchParameters &parameters, SearchMode search_mode) {
-  auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
-  vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
+    const SearchParameters &parameters, SearchMode search_mode,
+    vmsdk::ReaderMutexLock &lock) {
   ++Metrics::GetStats().time_slice_queries;
   // Handle non vector queries first where attribute_alias is empty.
   if (parameters.IsNonVectorQuery()) {
@@ -800,16 +791,17 @@ SerializationRange SearchResult::GetSerializationRange(
 }
 
 absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
+  auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
+  vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
+  absl::StatusOr<std::vector<indexes::Neighbor>> neighbors =
+      DoSearch(parameters, search_mode, lock);
   VMSDK_ASSIGN_OR_RETURN(
-      auto result,
-      MaybeAddIndexedContent(DoSearch(parameters, search_mode), parameters));
+      auto result, MaybeAddIndexedContent(std::move(neighbors), parameters));
   size_t total_count = result.size();
   parameters.search_result =
       SearchResult(total_count, std::move(result), parameters);
-  for (auto &n : parameters.search_result.neighbors) {
-    n.sequence_number =
-        parameters.index_schema->GetIndexMutationSequenceNumber(n.external_id);
-  }
+  parameters.index_schema->PopulateIndexMutationSequenceNumbers(
+      parameters.search_result.neighbors);
   return absl::OkStatus();
 }
 
@@ -1014,7 +1006,9 @@ absl::Status query::SearchParameters::PreParseQueryString() {
                      options::GetQueryStringBytes(), " bytes."));
   }
   auto filter_expression = absl::string_view(parse_vars.query_string);
-  VMSDK_LOG(DEBUG, nullptr) << "Query: '" << parse_vars.query_string << "'";
+  VMSDK_LOG(DEBUG, nullptr)
+      << "Query: '" << vmsdk::config::RedactIfNeeded(parse_vars.query_string)
+      << "'";
   auto pos = filter_expression.find(kVectorFilterDelimiter);
   absl::string_view pre_filter;
   absl::string_view vector_filter;

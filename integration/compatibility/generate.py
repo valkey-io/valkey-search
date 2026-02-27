@@ -150,8 +150,8 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
 
     def checkall(self, dialect, *orig_cmd, **kwargs):
         '''Non-vector commands. Doesn't have support for '*' yet. '''
-        self.checkvec(self, dialect, orig_cmd, kwargs)
-        self.check(self, dialect, orig_cmd)
+        self.checkvec(dialect, *orig_cmd, **kwargs)
+        self.check(dialect, *orig_cmd)
 
     def test_bad_numeric_data(self, key_type, dialect):
         self.setup_data("bad numbers", key_type)

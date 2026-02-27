@@ -27,6 +27,7 @@
 #include "src/indexes/text/text_iterator.h"
 #include "src/indexes/vector_base.h"
 #include "src/valkey_search_options.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 
@@ -127,6 +128,9 @@ EvaluationResult TermPredicate::Evaluate(
     }
     // Search for stem variants - these should all exist from ingestion
     for (const auto &variant : stem_variants) {
+      if (!vmsdk::IsMainThread()) {
+        PAUSEPOINT("search_term_predicate");
+      }
       TryAddWordKeyIteratorForPrefilter(text_index, variant, target_key,
                                         stem_field_mask, require_positions,
                                         key_iterators);
@@ -165,6 +169,9 @@ EvaluationResult PrefixPredicate::Evaluate(
   uint32_t max_words = options::GetMaxTermExpansions().GetValue();
   uint32_t word_count = 0;
   while (!word_iter.Done() && word_count < max_words) {
+    if (!vmsdk::IsMainThread()) {
+      PAUSEPOINT("search_prefix_predicate");
+    }
     std::string_view word = word_iter.GetWord();
     auto postings = word_iter.GetPostingsTarget();
     if (postings) {
@@ -218,6 +225,9 @@ EvaluationResult SuffixPredicate::Evaluate(
   uint32_t max_words = options::GetMaxTermExpansions().GetValue();
   uint32_t word_count = 0;
   while (!word_iter.Done() && word_count < max_words) {
+    if (!vmsdk::IsMainThread()) {
+      PAUSEPOINT("search_suffix_expansion");
+    }
     std::string_view word = word_iter.GetWord();
     if (!word.starts_with(reversed_term)) {
       break;
@@ -290,6 +300,9 @@ EvaluationResult FuzzyPredicate::Evaluate(
                       indexes::text::kWordExpansionInlineCapacity>
       filtered_key_iterators;
   for (auto &key_iter : key_iters) {
+    if (!vmsdk::IsMainThread()) {
+      PAUSEPOINT("search_fuzzy_search");
+    }
     if (key_iter.SkipForwardKey(target_key) &&
         key_iter.ContainsFields(field_mask)) {
       filtered_key_iterators.emplace_back(std::move(key_iter));
@@ -450,6 +463,9 @@ EvaluationResult ComposedPredicate::EvaluateWithContext(Evaluator &evaluator,
           !(evaluator.GetQueryOperations() &
             QueryOperations::kContainsNegate)) {
         continue;
+      }
+      if (!vmsdk::IsMainThread()) {
+        PAUSEPOINT("search_composed_predicate");
       }
       EvaluationResult result =
           EvaluatePredicate(child.get(), evaluator, require_positions, from_or);

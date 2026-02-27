@@ -2275,7 +2275,7 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA", 
                             "content", "TEXT", "NOSTEM", "WITHSUFFIXTRIE",
                             "title", "TEXT", "NOSTEM",
-                            "category", "TAG",
+                            "category", "TAG", "SEPARATOR", "|",
                             "price", "NUMERIC")
         IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
         # Spanish
@@ -2341,12 +2341,12 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # 10. NOCONTENT
         assert client.execute_command("FT.SEARCH", "idx", "très", "NOCONTENT")[0] == 1 
         assert client.execute_command("FT.SEARCH", "idx", "((Hola mundo) | (très bien) | (你好 世界) | (%بالعالم%) | (World 🌍*))", "NOCONTENT")[0] == 3
-        # 11. TAG fields with multi-language values - mostly return zero 
-        assert client.execute_command("FT.SEARCH", "idx", "@category:{中文}")[0] == 0
-        assert client.execute_command("FT.SEARCH", "idx", "@category:{français}")[0] == 0
-        assert client.execute_command("FT.SEARCH", "idx", "@category:{español}")[0] == 1 # works 
-        assert client.execute_command("FT.SEARCH", "idx", "@category:{عربي}")[0] == 0
-        assert client.execute_command("FT.SEARCH", "idx", "@category:{हिन्दी}")[0] == 0
+        # 11. TAG fields with multi-language values
+        assert client.execute_command("FT.SEARCH", "idx", "@category:{中文}")[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx", "@category:{français}")[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx", "@category:{español}")[0] == 1 
+        assert client.execute_command("FT.SEARCH", "idx", "@category:{عربي}")[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx", "@category:{हिन्दी}")[0] == 1
 
     def test_text_size_estimation_prefilter_decision(self):
         """Validate term/prefix/fuzzy EstimateSize() influences pre-filter vs inline"""

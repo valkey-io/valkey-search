@@ -261,7 +261,13 @@ std::unique_ptr<indexes::text::TextIterator> FuzzyPredicate::BuildTextIterator(
       std::move(key_iterators), field_mask, require_positions);
 }
 
-/* Size APIs for pre-filter or inline filter planning */
+/*
+ * Size APIs for pre-filter or inline filter planning.
+ *
+ * Size estimation is only done at the schema-level right now. It does not
+ * account for a field specifier in the text query and may over-estimate
+ * because of it if there are multiple text fields in the schema.
+ */
 
 size_t TermPredicate::EstimateSize() const {
   auto iter =
@@ -273,18 +279,22 @@ size_t TermPredicate::EstimateSize() const {
 }
 
 size_t PrefixPredicate::EstimateSize() const {
-  return text_index_schema_->GetTextIndex()->GetPrefix().GetSubtreeItemCount(
-      term_);
+  if (text_index_schema_->TrackSubtreeItemsCountEnabled()) {
+    return text_index_schema_->GetTextIndex()->GetPrefix().GetSubtreeItemCount(
+        term_);
+  } else {
+    return text_index_schema_->GetTrackedKeyCount();
+  }
 }
 
 size_t SuffixPredicate::EstimateSize() const {
-  auto suffix_tree = text_index_schema_->GetTextIndex()->GetSuffix();
-  CHECK(suffix_tree) << "Suffix estimation not supported";
-  return text_index_schema_->GetTextIndex()
-      ->GetSuffix()
-      .value()
-      .get()
-      .GetSubtreeItemCount(term_);
+  if (text_index_schema_->TrackSubtreeItemsCountEnabled()) {
+    auto suffix_tree = text_index_schema_->GetTextIndex()->GetSuffix();
+    CHECK(suffix_tree) << "Suffix estimation not supported";
+    return suffix_tree.value().get().GetSubtreeItemCount(term_);
+  } else {
+    return text_index_schema_->GetTrackedKeyCount();
+  }
 }
 
 size_t InfixPredicate::EstimateSize() const {

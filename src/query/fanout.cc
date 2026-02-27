@@ -320,6 +320,7 @@ absl::Status PerformSearchFanoutAsync(
       // 3. Apply the 'Uniformity' (U) to the gap.
       // - If U = 100 (Uniform): 0% gap added. Limit = fair_share_limit.
       // - If U = 0 (Skewed): 100% gap added. Limit = K.
+      // Note: Currently, U is set to 0 by default and is a Dev config.
       uint64_t optimized_limit =
           fair_share_limit + ((100 - U) * skew_gap / 100);
       request->mutable_limit()->set_first_index(0);

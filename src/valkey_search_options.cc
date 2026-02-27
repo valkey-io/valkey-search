@@ -373,15 +373,18 @@ static auto drain_mutation_queue_on_save =
 /// Register the "fanout-data-uniformity" flag
 /// U = uniformity (0-100): 100 = uniform distribution, 0 = all data in one
 /// shard Formula: limit_per_shard = (K/N) + ((100-U) * (K - K/N) / 100)
+/// By default, uniformity is disabled (U=0), we assume all data is in one
+/// shard.
 constexpr absl::string_view kFanoutDataUniformityConfig{
     "fanout-data-uniformity"};
-constexpr uint32_t kDefaultFanoutDataUniformity{100};
+constexpr uint32_t kDefaultFanoutDataUniformity{0};
 constexpr uint32_t kMinimumFanoutDataUniformity{0};
 constexpr uint32_t kMaximumFanoutDataUniformity{100};
 static auto fanout_data_uniformity =
     config::NumberBuilder(
         kFanoutDataUniformityConfig, kDefaultFanoutDataUniformity,
         kMinimumFanoutDataUniformity, kMaximumFanoutDataUniformity)
+        .Dev()  // can only be set in debug mode
         .Build();
 
 /// Register the "fanout-uniformity-min-index-size" flag
@@ -396,6 +399,7 @@ static auto fanout_uniformity_min_index_size =
                           kDefaultFanoutUniformityMinIndexSize,
                           kMinimumFanoutUniformityMinIndexSize,
                           kMaximumFanoutUniformityMinIndexSize)
+        .Dev()  // can only be set in debug mode
         .Build();
 
 /// Register the "--async-fanout-threshold" flag. Controls the threshold

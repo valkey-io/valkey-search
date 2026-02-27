@@ -2235,7 +2235,7 @@ class TestFullTextCluster(ValkeySearchClusterTestCaseDebugMode):
         """
             Test commandstats timing with text search and concurrent operations.
             In order to reproduce the num_ops code, using only numeric/tag rather than text searches
-            was more effective. So, I commented out the text search.
+            was more effective / faster. So, I commented out the text search.
             We just needed a numeric/tag search with concurrent expirations with a short TTL (e.g. 1).
         """
         import threading
@@ -2245,7 +2245,7 @@ class TestFullTextCluster(ValkeySearchClusterTestCaseDebugMode):
         IndexingTestHelper.wait_for_backfill_complete_on_node(primary, "idx")
         num_writers = 50
         num_searchers = 50
-        num_deleters = 50
+        num_deleters = 10
         num_expirers = 50
         ops_per_client = 10000
         num_keys = 1000
@@ -2274,8 +2274,8 @@ class TestFullTextCluster(ValkeySearchClusterTestCaseDebugMode):
                 if crash_detected.is_set():
                     return
                 key = f"doc:{i % num_keys}"
-                # write_clients[client_id].execute_command("HSET", key, "price", str(100 + i), "tags", f"tag{i % 5}")
-                write_clients[client_id].execute_command("HSET", key, "content", "word", "price", str(100 + i), "tags", f"tag{i % 5}")
+                # write_clients[client_id].execute_command("HSET", key, "content", "word", "price", str(100 + i), "tags", f"tag{i % 5}")
+                write_clients[client_id].execute_command("HSET", key, "price", str(100 + i), "tags", f"tag{i % 5}")
         def searcher(client_id):
             for i in range(ops_per_client):
                 if crash_detected.is_set():
@@ -2336,84 +2336,6 @@ class TestFullTextCluster(ValkeySearchClusterTestCaseDebugMode):
         # assert total_del_calls > 0, "Expected DEL calls in commandstats"
         assert total_expire_calls > 0, "Expected EXPIRE calls in commandstats"
         assert total_search_calls > 0, "Expected FT.SEARCH calls in commandstats"
-
-    @pytest.mark.parametrize("setup_test", [{"replica_count": 1}], indirect=True)
-    def test_commandstats_timing_with_replica(self, setup_test):
-        """Test commandstats timing with replica and concurrent operations."""
-        import threading
-        rg = self.get_replication_group(0)
-        primary = rg.get_primary_connection()
-        primary.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA", "price", "NUMERIC", "tags", "TAG")
-        IndexingTestHelper.wait_for_backfill_complete_on_node(primary, "idx")
-        num_writers = 50
-        num_searchers = 50
-        num_deleters = 50
-        num_expirers = 50
-        num_bgsavers = 50
-        ops_per_client = 10000
-        num_keys = 1000
-        # Use cluster clients for all operations
-        write_clients = [self.new_cluster_client() for _ in range(num_writers)]
-        search_clients = [self.new_client_for_primary(0) for _ in range(num_searchers)]
-        delete_clients = [self.new_cluster_client() for _ in range(num_deleters)]
-        expire_clients = [self.new_cluster_client() for _ in range(num_expirers)]
-        bgsave_clients = [self.new_client_for_primary(i % self.CLUSTER_SIZE) for i in range(num_bgsavers)]
-        # To repro the num_ops crash we just need HSET, FT.SEARCH and EXPIRE.
-        crash_detected = threading.Event()
-        stop_watchdog = threading.Event()
-        def watchdog():
-            import time
-            while not stop_watchdog.is_set():
-                for node in self.nodes:
-                    try:
-                        node.client.ping()
-                    except Exception as e:
-                        if not crash_detected.is_set():
-                            crash_detected.set()
-                            print(f"\nWatchdog detected crash on port {node.server.port}: {e}")
-                        stop_watchdog.set()
-                        return
-                time.sleep(0.1)
-        def writer(client_id):
-            for i in range(ops_per_client):
-                if crash_detected.is_set():
-                    return
-                key = f"doc:{i % num_keys}"
-                write_clients[client_id].execute_command("HSET", key, "price", str(100 + i), "tags", f"tag{i % 5}")
-        def searcher(client_id):
-            for i in range(ops_per_client):
-                if crash_detected.is_set():
-                    return
-                search_clients[client_id].execute_command("FT.SEARCH", "idx", f"@price:[{90 + i} {110 + i}]")
-                search_clients[client_id].execute_command("FT.SEARCH", "idx", f"@tags:{{tag{i % 5}}}")
-        def expirer(client_id):
-            for i in range(ops_per_client):
-                if crash_detected.is_set():
-                    return
-                key = f"doc:{i % num_keys}"
-                expire_clients[client_id].execute_command("EXPIRE", key, "1")
-        watchdog_thread = threading.Thread(target=watchdog, daemon=True)
-        watchdog_thread.start()
-        threads = [threading.Thread(target=writer, args=(i,)) for i in range(num_writers)]
-        threads += [threading.Thread(target=searcher, args=(i,)) for i in range(num_searchers)]
-        threads += [threading.Thread(target=expirer, args=(i,)) for i in range(num_expirers)]
-        for t in threads:
-            t.start()
-        # Check for crash while threads run, don't wait for all to finish
-        import time
-        while any(t.is_alive() for t in threads):
-            if crash_detected.is_set():
-                stop_watchdog.set()
-                pytest.fail("Server crash detected during test execution")
-            time.sleep(0.1)
-        stop_watchdog.set()
-        watchdog_thread.join(timeout=1)
-        IndexingTestHelper.wait_for_backfill_complete_on_node(primary, "idx")
-        # Final ping check
-        print("\nFinal ping check...")
-        for node in self.nodes:
-            node.client.ping()
-        assert False, "Intentional failure to check commandstats output in test logs"
 
     def test_fulltext_search_cluster(self):
         """

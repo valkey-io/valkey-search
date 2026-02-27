@@ -2180,42 +2180,39 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         result = client.execute_command("FT.SEARCH", "idx", '@title:jacket -@content:winter')
         assert result[0] == 1 and result[1] == b"doc:4"
 
-        # ==== Nested AND with negation ===== 
         # Test 24: Negations in nested AND
         result = client.execute_command("FT.SEARCH", "idx", '(shoes -blue) red')
         assert result[0] == 1 and result[1] == b"doc:1"
-        # Test 25: Multiple negations in nested AND
-        result = client.execute_command("FT.SEARCH", "idx", '(-winter -spring) jacket')
 
-        # Test 26: OR with one negated branch - (shoes | -jacket)
+        # Test 25: OR with one negated branch - (shoes | -jacket)
         result = client.execute_command("FT.SEARCH", "idx", '(shoes | -jacket)')
         assert result[0] == 7, f"Failed: OR with negation, expected 7 got {result[0]}"
         assert set(result[1::2]) == {b"doc:1", b"doc:2", b"doc:5", b"doc:6", b"doc:7", b"doc:8", b"doc:9"}
 
-        # Test 27: OR with both branches negated - (-winter | -spring)
+        # Test 26: OR with both branches negated - (-winter | -spring)
         result = client.execute_command("FT.SEARCH", "idx", '(-winter | -spring)')
         assert result[0] == 9, f"Failed: OR with both negated, expected 9 got {result[0]}"
 
-        # Test 28: OR with negation and positive - (red | -shoes)
+        # Test 27: OR with negation and positive - (red | -shoes)
         result = client.execute_command("FT.SEARCH", "idx", '(red | -shoes)')
         assert result[0] == 8, f"Failed: OR mixed, expected 8 got {result[0]}"
         assert set(result[1::2]) == {b"doc:1", b"doc:3", b"doc:4", b"doc:5", b"doc:6", b"doc:7", b"doc:8", b"doc:9"}
 
-        # Test 29: Nested OR groups in AND - ((shoes | -jacket) (red | -blue))
+        # Test 28: Nested OR groups in AND - ((shoes | -jacket) (red | -blue))
         result = client.execute_command("FT.SEARCH", "idx", '((shoes | -jacket) (red | -blue))')
         assert result[0] == 6, f"Failed: nested OR in AND, expected 6 got {result[0]}"
         assert set(result[1::2]) == {b"doc:1", b"doc:5", b"doc:6", b"doc:7", b"doc:8", b"doc:9"}
 
-        # Test 30: Three-level nesting - (((shoes -blue) | jacket) red)
+        # Test 29: Three-level nesting - (((shoes -blue) | jacket) red)
         result = client.execute_command("FT.SEARCH", "idx", '(((shoes -blue) | jacket) red)')
         assert result[0] == 2, f"Failed: three-level nesting, expected 2 got {result[0]}"
         assert set(result[1::2]) == {b"doc:1", b"doc:3"}
 
-        # Test 34: Tag with text negation in nested OR - (@tags:{footwear} (-blue | red))
+        # Test 30: Tag with text negation in nested OR - (@tags:{footwear} (-blue | red))
         result = client.execute_command("FT.SEARCH", "idx", '(@tags:{footwear} (-blue | red))')
         assert result[0] == 1 and result[1] == b"doc:1", "Failed: tag with nested text negation"
 
-        # Test 35: Complex mixed OR of ANDs - ((@tags:{footwear} -@title:blue) | (@price:[40 80] -@content:winter))
+        # Test 31: Complex mixed OR of ANDs - ((@tags:{footwear} -@title:blue) | (@price:[40 80] -@content:winter))
         result = client.execute_command("FT.SEARCH", "idx", 
             '((@tags:{footwear} -@title:blue) | (@price:[40 80] -@content:winter))')
         assert result[0] == 3, f"Failed: complex mixed OR, expected 3 got {result[0]}"

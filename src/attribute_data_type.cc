@@ -83,7 +83,7 @@ absl::StatusOr<RecordsMap> HashAttributeDataType::FetchAllRecords(
   vmsdk::VerifyMainThread();
   auto key_str = vmsdk::MakeUniqueValkeyString(key);
   auto key_obj =
-      vmsdk::MakeUniqueValkeyOpenKey(ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
+      vmsdk::MakeUniqueValkeyOpenKey(ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEXPIRE | VALKEYMODULE_READ);
   if (!key_obj) {
     return absl::NotFoundError(absl::StrCat(
         "No such record with key: `", vector_identifier.value_or(""), "`"));

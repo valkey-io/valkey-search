@@ -1,7 +1,4 @@
 ---
-title: "Search - Data Formats"
-description: Search Module Formats for Input Field Data
----
 title: "Valkey Search - Data Formats"
 description: Valkey Search Module Formats for Input Field Data
 ---
@@ -260,7 +257,7 @@ Removed stop words do not occupy a position in the token sequence. For example, 
 
 ### Stemming
 
-Stemming reduces words to their root form so that morphological variants match each other. For example, "running", "runs", and "runner" all stem to "run". The stemming algorithm is language-specific; currently only English (Snowball stemmer) is supported.
+Stemming reduces words to their root form so that morphological variants match each other. For example, "running", "runs", and "run" all have the same stem: "run". The stemming algorithm is language-specific; currently only English (Snowball stemmer) is supported.
 
 Stemming is controlled by these options:
 
@@ -268,7 +265,7 @@ Stemming is controlled by these options:
 - `NOSTEM` (per-field): Disables stemming for a specific text field.
 - `MINSTEMSIZE <size>` (schema-level): Words shorter than this length are not stemmed. The default is 4.
 
-When stemming is enabled, the original word (not the stemmed form) is stored in the index. The stem mapping is recorded separately so that a search for a stemmed root expands to match all words that share that root.
+When stemming is enabled, the original word (not the stemmed form) is stored in the index. The stem mapping is recorded separately so that a search on a term expands to match all terms that share the same stem, as well as the stem itself.
 
 ## Text Ingestion Examples
 
@@ -309,4 +306,4 @@ Given English stemming with the default `MINSTEMSIZE` of 4 and input `"The Runni
 | Indexed tokens          | `running` (position 0), `searches` (position 1), `cat` (position 2) |
 | Stem mappings           | `run` -> {`running`}, `search` -> {`searches`}       |
 
-The word `the` is removed as a stop word. The word `cat` (3 characters) is below the minimum stem size and is not stemmed. A search for `run` will match `running` through the stem mapping.
+The word `the` is removed as a stop word. The word `cat` (3 characters) is below the minimum stem size and is not stemmed. A search for `run` or `runs` will match `running` through the stem mapping.

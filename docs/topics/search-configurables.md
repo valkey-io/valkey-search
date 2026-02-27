@@ -1,6 +1,6 @@
 ---
-title: "Search - Configuration"
-description: Search Module Configurable Settings
+title: "Valkey Search - Configuration"
+description: Valkey Search Module Configurable Settings
 ---
 
 # Configurables

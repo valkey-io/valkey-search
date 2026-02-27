@@ -121,6 +121,8 @@ class TextIndexSchema {
     text_index_ = std::make_shared<TextIndex>(true);
   }
 
+  void EnableSubtreeItemCountTracking() { track_subtree_item_counts_ = true; }
+
  private:
   uint8_t num_text_fields_ = 0;
 
@@ -190,6 +192,10 @@ class TextIndexSchema {
   // IndexSchema::stem_text_field_mask_)
   uint64_t stem_text_field_mask_ = 0;
 
+  // We track subtree items if the index has a HNSW field to enable filtering
+  // planning decisions with prefix/suffix text filtering.
+  bool track_subtree_item_counts_ = false;
+
  public:
   // FT.INFO memory stats for text index
   uint64_t GetTotalPositions() const;
@@ -214,6 +220,10 @@ class TextIndexSchema {
   const absl::node_hash_map<Key, TextIndex> &GetPerKeyTextIndexes() const {
     return per_key_text_indexes_;
   }
+
+  // Total number of keys with text fields indexed in this schema.
+  // No locking needed because only called from read phase.
+  size_t GetTrackedKeyCount() const { return per_key_text_indexes_.size(); }
 
   // Helper function to lookup text index for a key
   static const TextIndex *LookupTextIndex(

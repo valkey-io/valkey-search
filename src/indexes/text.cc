@@ -135,28 +135,14 @@ std::unique_ptr<data_model::Index> Text::ToProto() const {
 size_t Text::EntriesFetcher::Size() const { return size_; }
 
 std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
-  auto iter = predicate_->BuildTextIterator(this);
+  auto iter = predicate_->BuildTextIterator(text_index_, field_mask_,
+                                            require_positions_);
   return std::make_unique<text::TextFetcher>(std::move(iter));
 }
 
 }  // namespace valkey_search::indexes
 
 namespace valkey_search::query {
-
-void *TextPredicate::Search(bool negate) const {
-  size_t estimated_size = EstimateSize();
-  // We do not perform positional checks on the initial term/prefix/suffix/fuzzy
-  // predicate fetchers from the entries fetcher search.
-  // This is yet another optimization that can be done in the future to complete
-  // the text search during the initial entries fetcher search itself for
-  // proximity queries.
-  bool require_positions = false;
-  auto fetcher = std::make_unique<indexes::Text::EntriesFetcher>(
-      estimated_size, GetTextIndexSchema()->GetTextIndex(), GetFieldMask(),
-      require_positions);
-  fetcher->predicate_ = this;
-  return fetcher.release();
-}
 
 namespace {
 
@@ -178,19 +164,18 @@ bool TryAddWordKeyIterator(
 }  // namespace
 
 std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
-    const void *fetcher_ptr) const {
-  const auto *fetcher =
-      static_cast<const indexes::Text::EntriesFetcher *>(fetcher_ptr);
+    const std::shared_ptr<indexes::text::TextIndex> &text_index,
+    FieldMaskPredicate field_mask, bool require_positions) const {
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
   absl::string_view text_string = GetTextString();
   // Search for the original word - may or may not exist in corpus
-  bool found_original = TryAddWordKeyIterator(fetcher->text_index_.get(),
-                                              text_string, key_iterators);
+  bool found_original =
+      TryAddWordKeyIterator(text_index.get(), text_string, key_iterators);
   // Get stem variants if not exact term search
   uint64_t stem_field_mask =
-      fetcher->field_mask_ & GetTextIndexSchema()->GetStemTextFieldMask();
+      field_mask & GetTextIndexSchema()->GetStemTextFieldMask();
   if (!IsExact() && stem_field_mask != 0) {
     // Collect stem variant words (words that also stem to the same form)
     absl::InlinedVector<absl::string_view,
@@ -200,12 +185,12 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
         text_string, stem_variants, stem_field_mask, false);
     // Search for the stemmed word itself - may or may not exist in corpus
     if (stemmed != text_string) {
-      TryAddWordKeyIterator(fetcher->text_index_.get(), stemmed, key_iterators);
+      TryAddWordKeyIterator(text_index.get(), stemmed, key_iterators);
     }
     // Search for stem variants - these should all exist from ingestion
     for (const auto &variant : stem_variants) {
-      bool found = TryAddWordKeyIterator(fetcher->text_index_.get(), variant,
-                                         key_iterators);
+      bool found =
+          TryAddWordKeyIterator(text_index.get(), variant, key_iterators);
       CHECK(found) << "Word in stem tree not found in index - ingestion issue";
     }
   }
@@ -213,16 +198,14 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
   // and stem_field_mask for stem variants (has_original becomes false after
   // first pass)
   return std::make_unique<indexes::text::TermIterator>(
-      std::move(key_iterators), fetcher->field_mask_,
-      fetcher->require_positions_, stem_field_mask, found_original);
+      std::move(key_iterators), field_mask, require_positions, stem_field_mask,
+      found_original);
 }
 
 std::unique_ptr<indexes::text::TextIterator> PrefixPredicate::BuildTextIterator(
-    const void *fetcher_ptr) const {
-  const auto *fetcher =
-      static_cast<const indexes::Text::EntriesFetcher *>(fetcher_ptr);
-  auto word_iter =
-      fetcher->text_index_->GetPrefix().GetWordIterator(GetTextString());
+    const std::shared_ptr<indexes::text::TextIndex> &text_index,
+    FieldMaskPredicate field_mask, bool require_positions) const {
+  auto word_iter = text_index->GetPrefix().GetWordIterator(GetTextString());
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
@@ -235,20 +218,17 @@ std::unique_ptr<indexes::text::TextIterator> PrefixPredicate::BuildTextIterator(
     ++word_count;
   }
   return std::make_unique<indexes::text::TermIterator>(
-      std::move(key_iterators), fetcher->field_mask_,
-      fetcher->require_positions_);
+      std::move(key_iterators), field_mask, require_positions);
 }
 
 std::unique_ptr<indexes::text::TextIterator> SuffixPredicate::BuildTextIterator(
-    const void *fetcher_ptr) const {
-  const auto *fetcher =
-      static_cast<const indexes::Text::EntriesFetcher *>(fetcher_ptr);
-  CHECK(fetcher->text_index_->GetSuffix().has_value())
+    const std::shared_ptr<indexes::text::TextIndex> &text_index,
+    FieldMaskPredicate field_mask, bool require_positions) const {
+  CHECK(text_index->GetSuffix().has_value())
       << "Text index does not have suffix trie enabled.";
   std::string reversed_word(GetTextString().rbegin(), GetTextString().rend());
   auto word_iter =
-      fetcher->text_index_->GetSuffix().value().get().GetWordIterator(
-          reversed_word);
+      text_index->GetSuffix().value().get().GetWordIterator(reversed_word);
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
@@ -261,52 +241,61 @@ std::unique_ptr<indexes::text::TextIterator> SuffixPredicate::BuildTextIterator(
     ++word_count;
   }
   return std::make_unique<indexes::text::TermIterator>(
-      std::move(key_iterators), fetcher->field_mask_,
-      fetcher->require_positions_);
+      std::move(key_iterators), field_mask, require_positions);
 }
 
 std::unique_ptr<indexes::text::TextIterator> InfixPredicate::BuildTextIterator(
-    const void *fetcher_ptr) const {
+    const std::shared_ptr<indexes::text::TextIndex> &text_index,
+    FieldMaskPredicate field_mask, bool require_positions) const {
   CHECK(false) << "Unsupported TextPredicate type";
 }
 
 std::unique_ptr<indexes::text::TextIterator> FuzzyPredicate::BuildTextIterator(
-    const void *fetcher_ptr) const {
-  const auto *fetcher =
-      static_cast<const indexes::Text::EntriesFetcher *>(fetcher_ptr);
+    const std::shared_ptr<indexes::text::TextIndex> &text_index,
+    FieldMaskPredicate field_mask, bool require_positions) const {
   // Limit the number of term word expansions
   uint32_t max_words = options::GetMaxTermExpansions().GetValue();
   auto key_iterators = indexes::text::FuzzySearch::Search(
-      fetcher->text_index_->GetPrefix(), GetTextString(), GetDistance(),
-      max_words);
+      text_index->GetPrefix(), GetTextString(), GetDistance(), max_words);
   return std::make_unique<indexes::text::TermIterator>(
-      std::move(key_iterators), fetcher->field_mask_,
-      fetcher->require_positions_);
+      std::move(key_iterators), field_mask, require_positions);
 }
 
-// Size apis for estimation
+/* Size APIs for pre-filter or inline filter planning */
+
 size_t TermPredicate::EstimateSize() const {
-  // TODO: Implementation
+  auto iter =
+      text_index_schema_->GetTextIndex()->GetPrefix().GetWordIterator(term_);
+  if (!iter.Done() && iter.GetWord() == term_) {
+    return iter.GetPostingsTarget()->GetKeyCount();
+  }
   return 0;
 }
 
 size_t PrefixPredicate::EstimateSize() const {
-  // TODO: Implementation
-  return 0;
+  return text_index_schema_->GetTextIndex()->GetPrefix().GetSubtreeItemCount(
+      term_);
 }
 
 size_t SuffixPredicate::EstimateSize() const {
-  // TODO: Implementation
-  return 0;
+  auto suffix_tree = text_index_schema_->GetTextIndex()->GetSuffix();
+  CHECK(suffix_tree) << "Suffix estimation not supported";
+  return text_index_schema_->GetTextIndex()
+      ->GetSuffix()
+      .value()
+      .get()
+      .GetSubtreeItemCount(term_);
 }
 
 size_t InfixPredicate::EstimateSize() const {
-  // TODO: Implementation
-  return 0;
+  // TODO: Implement once infix is supported
+  // Right now we return the upper bound
+  return text_index_schema_->GetTrackedKeyCount();
 }
 
 size_t FuzzyPredicate::EstimateSize() const {
-  // TODO: Implementation
-  return 0;
+  // TODO: Implement proper heuristic
+  // Right now we return the upper bound
+  return text_index_schema_->GetTrackedKeyCount();
 }
 }  // namespace valkey_search::query

@@ -516,12 +516,10 @@ void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx) {
   auto to_delete = GetIndexSchemasInDBInternal(selected_db);
   VMSDK_LOG(NOTICE, ctx) << "Deleting index schema on FLUSHDB of DB "
                          << selected_db;
-  if (coordinator_enabled_) {
-    VMSDK_LOG(NOTICE, ctx) << "Recreating index schema on FLUSHDB of DB "
-                           << selected_db;
-  }
+  absl::once_flag log_recreate_once;
   for (const auto &name : to_delete) {
-    VMSDK_LOG(DEBUG, ctx) << "Deleting index schema " << name
+    VMSDK_LOG(DEBUG, ctx) << "Deleting index schema "
+                          << vmsdk::config::RedactIfNeeded(name)
                           << " on FLUSHDB of DB " << selected_db;
     auto old_schema = RemoveIndexSchemaInternal(selected_db, name);
     if (!old_schema.ok()) {
@@ -535,9 +533,14 @@ void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx) {
       // In coordinated mode - we recreate the indices, since they are a
       // cluster-level construct, not a node-level construct. To delete,
       // FT.DROPINDEX must be done explicitly.
+      absl::call_once(log_recreate_once, [&]() {
+        VMSDK_LOG(NOTICE, ctx)
+            << "Recreating index schema on FLUSHDB of DB " << selected_db;
+      });
       auto to_add = old_schema.value()->ToProto();
-      VMSDK_LOG(DEBUG, ctx) << "Recreating index schema " << name
-                            << " on FLUSHDB of DB " << selected_db;
+      VMSDK_LOG(DEBUG, ctx)
+          << "Recreating index schema " << vmsdk::config::RedactIfNeeded(name)
+          << " on FLUSHDB of DB " << selected_db;
       auto add_status = CreateIndexSchemaInternal(ctx, *to_add);
       if (!add_status.ok()) {
         VMSDK_LOG(WARNING, ctx)
@@ -802,8 +805,9 @@ absl::Status SchemaManager::ShowIndexSchemas(ValkeyModuleCtx *ctx,
     ValkeyModule_ReplyWithArray(ctx, inner_map.size());
     for (const auto &[name, schema] : inner_map) {
       auto proto = schema->ToProto()->DebugString();
-      VMSDK_LOG(DEBUG, ctx)
-          << "Index Schema in DB " << db_num << ": " << name << " " << proto;
+      VMSDK_LOG(DEBUG, ctx) << "Index Schema in DB " << db_num << ": "
+                            << vmsdk::config::RedactIfNeeded(name) << " "
+                            << vmsdk::config::RedactIfNeeded(proto);
       ValkeyModule_ReplyWithStringBuffer(ctx, proto.data(), proto.size());
     }
   }

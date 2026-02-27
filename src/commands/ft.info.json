@@ -8,7 +8,7 @@
     "arguments": [
       {
         "key_spec_index": 0,
-        "name": "key",
+        "name": "index-name",
         "type": "key"
       },
       {
@@ -22,9 +22,48 @@
             "token": "LOCAL"
           },
           {
-            "name": "GLOBAL",
+            "name": "PRIMARY",
             "type": "pure-token",
-            "token": "GLOBAL"
+            "token": "PRIMARY"
+          },
+          {
+            "name": "CLUSTER",
+            "type": "pure-token",
+            "token": "CLUSTER"
+          }
+        ]
+      },
+      {
+        "name": "shard-policy",
+        "type": "oneof",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "ALLSHARDS",
+            "type": "pure-token",
+            "token": "ALLSHARDS"
+          },
+          {
+            "name": "SOMESHARDS",
+            "type": "pure-token",
+            "token": "SOMESHARDS"
+          }
+        ]
+      },
+      {
+        "name": "consistency",
+        "type": "oneof",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "CONSISTENT",
+            "type": "pure-token",
+            "token": "CONSISTENT"
+          },
+          {
+            "name": "INCONSISTENT",
+            "type": "pure-token",
+            "token": "INCONSISTENT"
           }
         ]
       }

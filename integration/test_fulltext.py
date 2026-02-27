@@ -2230,6 +2230,7 @@ class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
 
 class TestFullTextCluster(ValkeySearchClusterTestCaseDebugMode):
 
+    @pytest.mark.skip(reason="This test is designed to run for an extended period with high concurrency to detect crashes. It is not suitable for regular test runs and should be run manually when needed.")
     @pytest.mark.parametrize("setup_test", [{"replica_count": 1}], indirect=True)
     def test_concurrent_workload(self, setup_test):
         """
@@ -2244,9 +2245,9 @@ class TestFullTextCluster(ValkeySearchClusterTestCaseDebugMode):
         primary.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA", "content", "TEXT", "price", "NUMERIC", "tags", "TAG")
         IndexingTestHelper.wait_for_backfill_complete_on_node(primary, "idx")
         num_writers = 50
-        num_searchers = 50
+        num_searchers = 75
         num_deleters = 10
-        num_expirers = 50
+        num_expirers = 75
         ops_per_client = 10000
         num_keys = 1000
         write_clients = [self.new_cluster_client() for _ in range(num_writers)]

@@ -6,7 +6,6 @@ import random
 # ============================================================================
 # Term Types
 # ============================================================================
-
 class BaseTerm:
     """Base class for all query term types."""
     pass
@@ -36,19 +35,30 @@ class ExactPhraseTerm(BaseTerm):
     words: List[str]
 
 
+@dataclass(frozen=True)
+class UnescapedTerm(BaseTerm):
+    """Represents an uescaped term with puntuation."""
+    value: str
+
+
+@dataclass(frozen=True)
+class EscapedTerm(BaseTerm):
+    """Represents an escaped term with punctuation."""
+    value: str
+
+
 # ============================================================================
 # Term Renderer
 # ============================================================================
-
 class TermRenderer:
     """Converts term objects into query strings."""
-    
     def render(self, term: Union[BaseTerm, List[BaseTerm]]) -> str:
         """Render a single term or list of terms into a query string."""
         if isinstance(term, list):
             return " ".join(self._render_single(t) for t in term)
         return self._render_single(term)
     
+
     def _render_single(self, term: BaseTerm) -> str:
         """Render a single term based on its type."""
         if isinstance(term, WordTerm):
@@ -59,13 +69,16 @@ class TermRenderer:
             return term.value
         if isinstance(term, ExactPhraseTerm):
             return '"' + " ".join(term.words) + '"'
+        if isinstance(term, UnescapedTerm):
+            return term.value
+        if isinstance(term, EscapedTerm):
+            return term.value
         raise TypeError(f"Unknown term type: {type(term)}")
 
 
 # ============================================================================
 # Shape Rendering (for complex queries)
 # ============================================================================
-
 def render_shape(
     shape, 
     vocab: List[str], 
@@ -97,9 +110,9 @@ def render_shape(
 # Shape Generators
 # ============================================================================
 Mode = Literal["exact", "upto"]
-
 OPS_BINARY = ["AND", "OR"]
 OPS_UNARY = ["G"]
+
 
 def sample_shape(depth: int, rng: random.Random):
     """Generate a valid query shape with exact depth."""
@@ -130,7 +143,6 @@ def sample_shape(depth: int, rng: random.Random):
 # ============================================================================
 # Term Generators
 # ============================================================================
-
 def gen_atom(vocab: List[str], rng: random.Random) -> WordTerm:
     """Generate a single word term (used internally by shape rendering)."""
     return WordTerm(rng.choice(vocab))
@@ -177,11 +189,15 @@ def gen_exact_phrase(vocab: List[str], rng: random.Random) -> ExactPhraseTerm:
 # ============================================================================
 # Complex Query Generators
 # ============================================================================
-
 def gen_depth1(vocab: List[str], rng: random.Random) -> str:
     """Generate a depth-1 grouped query."""
     shape = sample_shape(1, rng)
     return render_shape(shape, vocab, rng)
+
+
+def gen_atom(vocab: List[str], rng: random.Random) -> WordTerm:
+    """Generate a single word term (used internally by shape rendering)."""
+    return WordTerm(rng.choice(vocab))
 
 
 def gen_depth2(vocab: List[str], rng: random.Random) -> str:
@@ -194,3 +210,87 @@ def gen_depth3(vocab: List[str], rng: random.Random) -> str:
     """Generate a depth-3 grouped query."""
     shape = sample_shape(3, rng)
     return render_shape(shape, vocab, rng)
+
+
+def gen_unescaped_word(vocab: List[str], rng: random.Random) -> List[str]:
+    count = rng.randint(1, 3)
+    return [UnescapedTerm(rng.choice(vocab)) for _ in range(count)]
+
+
+def gen_escaped_word(vocab: List[str], rng: random.Random) -> List[str]:
+    count = rng.randint(1, 3)
+
+    # add extra pair of backslashes to make query work in Valkey
+    result = []
+    for _ in range(count):
+        word = rng.choice(vocab)
+        # Double the backslash: \, -> \\, to match server-side escaping
+        query = word.replace('\\', '\\\\')
+        result.append(EscapedTerm(query))
+    return result
+
+    # return [EscapedTerm(rng.choice(vocab)) for _ in range(count)]
+
+
+def effective_levenshtein_distance(term: str, requested: int) -> int:
+    n = len(term)
+    if n <= 2:
+        return 0
+    if n == 3:
+        return min(requested, 1)
+    return min(requested, n // 2)
+
+
+def apply_levenshtein_transform(
+    word: str,
+    distance: int,
+    rng: random.Random,
+) -> str:
+    chars = list(word)
+    alphabet = list('abcdefghijklmnopqrstuvwxyz')
+    for _ in range(distance):
+        # If empty, only insertion is possible
+        if not chars:
+            chars.append(rng.choice(alphabet))
+            continue
+
+        op = rng.choice(("substitute", "insert", "delete"))
+
+        if op == "substitute":
+            i = rng.randrange(len(chars))
+            original = chars[i]
+            chars[i] = rng.choice([c for c in alphabet if c != original])
+
+        elif op == "insert":
+            i = rng.randrange(len(chars) + 1)
+            chars.insert(i, rng.choice(alphabet))
+
+        else:  # delete
+            i = rng.randrange(len(chars))
+            chars.pop(i)
+
+    return "".join(chars)
+
+
+def gen_fuzzy_1(vocab: List[str], rng: random.Random) -> str:
+    """Generate a fuzzy term with Levenshtein distance 1: %word%"""
+    word = rng.choice(vocab)
+    eff_dist = effective_levenshtein_distance(word, 1)
+    transformed = apply_levenshtein_transform(word, eff_dist, rng)
+    return f"%{transformed}%"
+
+
+def gen_fuzzy_2(vocab: List[str], rng: random.Random) -> str:
+    """Generate a fuzzy term with Levenshtein distance 2: %%word%%"""
+    word = rng.choice(vocab)
+    eff_dist = effective_levenshtein_distance(word, 2)
+    transformed = apply_levenshtein_transform(word, eff_dist, rng)
+    return f"%%{transformed}%%"
+
+
+def gen_fuzzy_3(vocab: List[str], rng: random.Random) -> str:
+    """Generate a fuzzy term with Levenshtein distance 3: %%%word%%%"""
+    word = rng.choice(vocab)
+    eff_dist = effective_levenshtein_distance(word, 3)
+    transformed = apply_levenshtein_transform(word, eff_dist, rng)
+    return f"%%%{transformed}%%%"

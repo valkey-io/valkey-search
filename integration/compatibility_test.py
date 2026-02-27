@@ -10,8 +10,11 @@ TEST_MARKER = "*" * 100
 from valkey_search_test_case import (
     ValkeySearchClusterTestCase,
     ValkeySearchTestCaseBase,
+    ValkeySearchTestCaseDebugMode
 )
 from valkeytestframework.conftest import resource_port_tracker
+from utils import IndexingTestHelper
+from valkeytestframework.util import waiters
 
 encoder = lambda x: x.encode() if not isinstance(x, bytes) else x
 
@@ -381,14 +384,19 @@ def mark_as_failed(testname):
 
 def do_answer(client, expected, data_set):
     global correct_answers, failed_tests, passed_tests
-    if (expected['data_set_name'], expected['key_type']) != data_set:
+    if (expected['data_set_name'], expected['key_type'], expected.get('schema_type')) != data_set:
         print("Loading data set:", expected['data_set_name'], "key type:", expected['key_type'])
         client.execute_command("FLUSHALL SYNC")
-        load_data(client, expected['data_set_name'], expected['key_type'])
-        data_set = (expected['data_set_name'], expected['key_type'])
+        schema_type = expected.get('schema_type')
+        if schema_type:
+            load_data(client, expected['data_set_name'], expected['key_type'], schema_type=schema_type)
+        else:
+            load_data(client, expected['data_set_name'], expected['key_type'])
+        waiters.wait_for_true(lambda: IndexingTestHelper.is_indexing_complete_on_node(client, f"{expected['key_type']}_idx1"))
+        data_set = (expected['data_set_name'], expected['key_type'], expected.get("schema_type"))
 
     # Set Valkey-specific config for inorder tests
-    if 'inorder' in expected['testname'] or 'slop' in expected['testname']:
+    if 'inorder' in expected['testname']:
         try:
             client.execute_command("CONFIG", "SET", "search.proximity-inorder-compat-mode", "yes")
             print(f"✓ Set Valkey compat mode for test: {expected['testname']}")
@@ -476,7 +484,7 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
 
     return data_set
 
-class TestAnswersCMD(ValkeySearchTestCaseBase):
+class TestAnswersCMD(ValkeySearchTestCaseDebugMode):
     @pytest.mark.parametrize("answers", ["aggregate-answers.pickle.gz", "text-search-answers.pickle.gz"])
     def test_answers(self, answers):
         global client, data_set
@@ -493,8 +501,9 @@ class TestAnswersCMD(ValkeySearchTestCaseBase):
             answers = pickle.load(answer_file)
 
         data_set = None
+        client = self.server.get_new_client()
         for i in range(len(answers)):
-            data_set = do_answer(self.server.get_new_client(), answers[i], data_set)
+            data_set = do_answer(client, answers[i], data_set)
 
         if correct_answers != len(answers):
             print(f"Correct answers: {correct_answers} out of {len(answers)}")

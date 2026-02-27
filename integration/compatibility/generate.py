@@ -155,10 +155,10 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
 
     def test_bad_numeric_data(self, key_type, dialect):
         self.setup_data("bad numbers", key_type)
-        self.check(dialect, f"ft.search {key_type}_idx1",  "@n1:[-inf inf]")
-        self.check(dialect, f"ft.search {key_type}_idx1", "-@n1:[-inf inf]")
-        self.check(dialect, f"ft.search {key_type}_idx1",  "@n2:[-inf inf]")
-        self.check(dialect, f"ft.search {key_type}_idx1", "-@n2:[-inf inf]")
+        self.check(dialect, f"ft.search", "{key_type}_idx1",  "@n1:[-inf inf]")
+        self.check(dialect, f"ft.search", "{key_type}_idx1", "-@n1:[-inf inf]")
+        self.check(dialect, f"ft.search", "{key_type}_idx1",  "@n2:[-inf inf]")
+        self.check(dialect, f"ft.search", "{key_type}_idx1", "-@n2:[-inf inf]")
 
     def test_search_reverse(self, key_type, dialect):
         self.setup_data("reverse vector numbers", key_type)

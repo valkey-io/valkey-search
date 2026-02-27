@@ -31,6 +31,11 @@ struct SearchCommand : public QueryCommand {
                  query::SearchResult &search_result) override;
   absl::Status PostParseQueryString() override;
 
+  // Override to indicate that sorting requires complete results before trimming
+  bool RequiresCompleteResults() const override {
+    return sortby_parameter.has_value();
+  }
+
   bool with_sort_keys{false};
 };
 

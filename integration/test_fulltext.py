@@ -2224,10 +2224,11 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
     def test_non_utf8_english_chars(self):
         """Test non-ASCII UTF-8 characters in English text - ingestion and query"""
         client: Valkey = self.server.get_new_client()
-        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA", "content", "TEXT", "NOSTEM")
+        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA", 
+                            "content", "TEXT", "NOSTEM","category", "TAG", "price", "NUMERIC")
         IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
         # Ingestion: Common non-ASCII chars in English
-        client.execute_command("HSET", "doc:1", "content", "\u201csmart quotes\u201d")  # U+201C/D
+        client.execute_command("HSET", "doc:1", "content", "“smart quotes“")  # U+201C/D
         client.execute_command("HSET", "doc:2", "content", "it's café naïve")  # U+2019, U+00E9
         client.execute_command("HSET", "doc:3", "content", "hello—world")  # U+2014 em-dash
         client.execute_command("HSET", "doc:4", "content", "wait… done")  # U+2026 ellipsis
@@ -2236,13 +2237,16 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         client.execute_command("HSET", "doc:5", "content", b"invalid\xff\xfe bytes")
         client.execute_command("HSET", "doc:6", "content", b"truncated\xc3 char")
         client.execute_command("HSET", "doc:7", "content", b"mixed valid\xffand\xfeinvalid")
+        client.execute_command("HSET", "doc:8", "price", b"invalid\xc3")
+        client.execute_command("HSET", "doc:9", "category", b"invalid\xc3")
         # ft.info
         info_data = IndexingTestHelper.get_ft_info(client, "idx").parsed_data
-        assert info_data["num_docs"] == 7
-        assert info_data["hash_indexing_failures"] == 3 
-        assert info_data["num_records"] == 4
+        assert info_data["num_docs"] == 9
+        # Current behavior: doc:9 tag is not rejected
+        assert info_data["hash_indexing_failures"] == 4  # doc: 5, doc:6, doc:7, doc:8
+        assert info_data["num_records"] == 5 # doc:1 to 4 , doc:9
         # Query parsing: Verify tokenization handles non-ASCII
-        # assert client.execute_command("FT.SEARCH", "idx", "smart")[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx", "“smart")[0] == 1
         assert client.execute_command("FT.SEARCH", "idx", "café")[0] == 1
         assert client.execute_command("FT.SEARCH", "idx", "hello—world")[0] == 1  
         assert client.execute_command("FT.SEARCH", "idx", "wait…")[0] == 1
@@ -2251,9 +2255,12 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert client.execute_command("FT.SEARCH", "idx", "%café%")[0] == 1
         assert client.execute_command("FT.SEARCH", "idx", "%naïve%")[0] == 1
         # Invalid UTF-8 queries should not crash (may return 0 or handle gracefully)
-        client.execute_command("FT.SEARCH", "idx", b"invalid\xff")  # Should not crash
-        client.execute_command("FT.SEARCH", "idx", b"\xff\xfe")
-        client.execute_command("FT.SEARCH", "idx",  b"%invalid%")
+        assert client.execute_command("FT.SEARCH", "idx", b"invalid\xff")[0] == 0
+        assert client.execute_command("FT.SEARCH", "idx", b"\xff\xfe")[0] == 0
+        assert client.execute_command("FT.SEARCH", "idx",  b"%invalid%")[0] == 0
+        assert client.execute_command("FT.SEARCH", "idx", b"@category:{invalid\xc3}")[0] == 1 #tag with non utf8 gives result
+        with pytest.raises(ResponseError):
+            client.execute_command("FT.SEARCH", "idx", b"@price:invalid\xc3 invalid\xc3]")
 
     def test_multilanguage_text(self):
         """Test multi-language text handling - should not crash"""
@@ -2262,13 +2269,14 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA", 
                             "content", "TEXT", "NOSTEM", "WITHSUFFIXTRIE",
                             "title", "TEXT", "NOSTEM",
+                            "category", "TAG",
                             "price", "NUMERIC")
         IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
         # Spanish
-        client.execute_command("HSET", "doc:1", "content", "¡Hola mundo!", "title", "español", "price", "10")
-        client.execute_command("HSET", "doc:2", "content", "El niño come mañana", "title", "comida", "price", "20")
+        client.execute_command("HSET", "doc:1", "content", "¡Hola mundo!", "title", "español", "category", "中文|français", "price", "10")
+        client.execute_command("HSET", "doc:2", "content", "El niño come mañana", "title", "comida", "category", "español", "price", "20")
         # French
-        client.execute_command("HSET", "doc:3", "content", "Ça va très bien", "title", "français", "price", "30")
+        client.execute_command("HSET", "doc:3", "content", "Ça va très bien", "title", "français", "category", "عربي|हिन्दी", "price", "30")
         client.execute_command("HSET", "doc:4", "content", "L'été à Paris", "title", "ville", "price", "40")
         # Mandarin
         client.execute_command("HSET", "doc:5", "content", "你好世界", "title", "中文", "price", "50")
@@ -2286,14 +2294,12 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # Test different language in content + invalid UTF-8 in title (expect indexing failures)
         client.execute_command("HSET", "doc:11", "content", "纯中文文档 中文测试", "title", b"test\xff\xfe")
         client.execute_command("HSET", "doc:12", "content", "مستند عربي فقط", "title", b"invalid\xc3")
-        # doc with only invalid numeric
-        client.execute_command("HSET", "doc:13", "price", b"invalid\xc3")
         # ft.info
         info_data = IndexingTestHelper.get_ft_info(client, "idx").parsed_data
-        assert info_data["num_docs"] == 13
-        assert info_data["hash_indexing_failures"] == 3
-        # 9 docs with all fields (27) + doc 10 with 2 text (2) + doc:11 with one valid field + doc:12 with 1 valid field + doc13(0 valid)-- 27+2+1+1+0=31
-        assert info_data["num_records"] == 31 
+        assert info_data["num_docs"] == 12
+        assert info_data["hash_indexing_failures"] == 2
+        # 3 docs with 4 fields(12) + 6 docs with 3 fields(18) + doc10 with 2 fields (2) + doc:11 with 1 valid field + doc:12 with 1 valid field -- 12+18+2+1+1=34
+        assert info_data["num_records"] == 34
         # 1. Single term
         assert client.execute_command("FT.SEARCH", "idx", "très")[0] == 1
         assert client.execute_command("FT.SEARCH", "idx", "你好世界")[0] == 2
@@ -2329,6 +2335,12 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # 10. NOCONTENT
         assert client.execute_command("FT.SEARCH", "idx", "très", "NOCONTENT")[0] == 1 
         assert client.execute_command("FT.SEARCH", "idx", "((Hola mundo) | (très bien) | (你好 世界) | (%بالعالم%) | (World 🌍*))", "NOCONTENT")[0] == 3
+        # 11. TAG fields with multi-language values - mostly return zero 
+        assert client.execute_command("FT.SEARCH", "idx", "@category:{中文}")[0] == 0
+        assert client.execute_command("FT.SEARCH", "idx", "@category:{français}")[0] == 0
+        assert client.execute_command("FT.SEARCH", "idx", "@category:{español}")[0] == 1 # works 
+        assert client.execute_command("FT.SEARCH", "idx", "@category:{عربي}")[0] == 0
+        assert client.execute_command("FT.SEARCH", "idx", "@category:{हिन्दी}")[0] == 0
 
 class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
     """

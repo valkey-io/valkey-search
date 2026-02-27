@@ -85,7 +85,6 @@ struct SearchPartitionResultsTracker {
       results ABSL_GUARDED_BY(mutex);
   int outstanding_requests ABSL_GUARDED_BY(mutex);
   std::unique_ptr<SearchParameters> parameters ABSL_GUARDED_BY(mutex);
-  std::atomic_bool reached_oom{false};
   std::atomic_bool consistency_failed{false};
   std::atomic<size_t> accumulated_total_count{0};
 
@@ -182,6 +181,9 @@ struct SearchPartitionResultsTracker {
         results.pop();
       }
       CHECK(i == 0);
+      // Note: We do not sort neighbors here because we do not have the content
+      // of the local shard yet. In the SendReply function, we will sort the all
+      // neighbors based on the content if sorting is required.
       // SearchResult construction automatically applies trimming based on LIMIT
       // offset count IF the command allows it (ie - it does not require
       // complete results).
@@ -283,25 +285,47 @@ absl::Status PerformSearchFanoutAsync(
     std::unique_ptr<SearchParameters> parameters,
     vmsdk::ThreadPool *thread_pool) {
   auto request = coordinator::ParametersToGRPCSearchRequest(*parameters);
+  size_t N = search_targets.size();
+  uint64_t K = parameters->limit.first_index + parameters->limit.number;
+  // The 'fanout-data-uniformity-percent' (U) represents the user's data
+  // distribution profile. 100 means data is perfectly balanced (Uniform); 0
+  // means data is heavily skewed.
+  uint32_t U = options::GetFanoutDataUniformity().GetValue();
+  uint64_t index_size = parameters->index_schema->GetIndexKeyInfoSize();
+  uint32_t min_index_size =
+      options::GetFanoutUniformityMinIndexSize().GetValue();
   if (parameters->IsNonVectorQuery()) {
-    // For non vector, use the LIMIT based range. Ensure we fetch enough
-    // results to cover offset + number.
-    request->mutable_limit()->set_first_index(0);
-    // For SORTBY queries, we need to fetch more results from each shard
-    // because the global top N might come from any shard. Multiply by the
-    // number of shards to ensure we get enough results.
-    uint64_t limit_number =
-        parameters->limit.first_index + parameters->limit.number;
-    if (parameters->sortby_parameter.has_value()) {
-      // Fetch enough results from each shard to cover the global top N
-      // In the worst case, all top N results could come from a single shard,
-      // so we need to fetch at least N from each shard.
-      limit_number = std::max(
-          limit_number,
-          static_cast<uint64_t>(search_targets.size()) *
-              (parameters->limit.first_index + parameters->limit.number));
+    // For non-vector queries, we optimize network traffic by reducing the
+    // per-shard fetch limit. Instead of fetching K from every shard, we
+    // calculate a limit based on the distribution profile to cover (offset +
+    // limit) results across the cluster.
+
+    // For queries requiring complete results (e.g., with SORTBY), we must
+    // fetch K results from each shard to guarantee global correctness.
+    // Also, for small indices (below the configured threshold), we skip the
+    // optimization.
+    if (index_size < min_index_size || parameters->RequiresCompleteResults()) {
+      request->mutable_limit()->set_first_index(0);
+      request->mutable_limit()->set_number(K);
+    } else {
+      // 1. Calculate the 'fair_share_limit' (The Base).
+      // This is the minimum results needed per shard if data is perfectly
+      // uniform. We use ceiling division (K + N - 1) / N to ensure the total
+      // sum across N shards is at least K.
+      uint64_t fair_share_limit = (K + N - 1) / N;
+      // 2. Calculate the 'skew_gap' (The Buffer).
+      // The extra results needed if data is skewed. The maximum gap is K -
+      // fair_share_limit.
+      uint64_t skew_gap = K - fair_share_limit;
+      // 3. Apply the 'Uniformity' (U) to the gap.
+      // - If U = 100 (Uniform): 0% gap added. Limit = fair_share_limit.
+      // - If U = 0 (Skewed): 100% gap added. Limit = K.
+      // Note: Currently, U is set to 0 by default and is a Dev config.
+      uint64_t optimized_limit =
+          fair_share_limit + ((100 - U) * skew_gap / 100);
+      request->mutable_limit()->set_first_index(0);
+      request->mutable_limit()->set_number(optimized_limit);
     }
-    request->mutable_limit()->set_number(limit_number);
   } else {
     // Vector searches: Use k as the limit to find top k results. In worst case,
     // all top k results are from a single shard, so no need to fetch more than

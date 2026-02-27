@@ -407,6 +407,38 @@ constexpr absl::string_view kDrainMutationQueueOnSaveConfig{
 static auto drain_mutation_queue_on_save =
     config::BooleanBuilder(kDrainMutationQueueOnSaveConfig, false).Build();
 
+/// Register the "fanout-data-uniformity" flag
+/// U = uniformity (0-100): 100 = uniform distribution, 0 = all data in one
+/// shard Formula: limit_per_shard = (K/N) + ((100-U) * (K - K/N) / 100)
+/// By default, uniformity is disabled (U=0), we assume all data is in one
+/// shard.
+constexpr absl::string_view kFanoutDataUniformityConfig{
+    "fanout-data-uniformity"};
+constexpr uint32_t kDefaultFanoutDataUniformity{0};
+constexpr uint32_t kMinimumFanoutDataUniformity{0};
+constexpr uint32_t kMaximumFanoutDataUniformity{100};
+static auto fanout_data_uniformity =
+    config::NumberBuilder(
+        kFanoutDataUniformityConfig, kDefaultFanoutDataUniformity,
+        kMinimumFanoutDataUniformity, kMaximumFanoutDataUniformity)
+        .Dev()  // can only be set in debug mode
+        .Build();
+
+/// Register the "fanout-uniformity-min-index-size" flag
+/// Minimum index size before applying uniformity logic
+constexpr absl::string_view kFanoutUniformityMinIndexSizeConfig{
+    "fanout-uniformity-min-index-size"};
+constexpr uint32_t kDefaultFanoutUniformityMinIndexSize{10000};
+constexpr uint32_t kMinimumFanoutUniformityMinIndexSize{0};
+constexpr uint32_t kMaximumFanoutUniformityMinIndexSize{UINT32_MAX};
+static auto fanout_uniformity_min_index_size =
+    config::NumberBuilder(kFanoutUniformityMinIndexSizeConfig,
+                          kDefaultFanoutUniformityMinIndexSize,
+                          kMinimumFanoutUniformityMinIndexSize,
+                          kMaximumFanoutUniformityMinIndexSize)
+        .Dev()  // can only be set in debug mode
+        .Build();
+
 /// Register the "--async-fanout-threshold" flag. Controls the threshold
 /// for async fanout operations (minimum number of targets to use async)
 constexpr absl::string_view kAsyncFanoutThresholdConfig{
@@ -516,6 +548,15 @@ const vmsdk::config::Boolean& GetDrainMutationQueueOnSave() {
 const vmsdk::config::Boolean& GetDrainMutationQueueOnLoad() {
   return dynamic_cast<const vmsdk::config::Boolean&>(
       *drain_mutation_queue_on_load);
+}
+
+vmsdk::config::Number& GetFanoutDataUniformity() {
+  return dynamic_cast<vmsdk::config::Number&>(*fanout_data_uniformity);
+}
+
+vmsdk::config::Number& GetFanoutUniformityMinIndexSize() {
+  return dynamic_cast<vmsdk::config::Number&>(
+      *fanout_uniformity_min_index_size);
 }
 
 vmsdk::config::Number& GetAsyncFanoutThreshold() {

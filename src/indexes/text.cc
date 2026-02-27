@@ -261,29 +261,41 @@ std::unique_ptr<indexes::text::TextIterator> FuzzyPredicate::BuildTextIterator(
       std::move(key_iterators), field_mask, require_positions);
 }
 
-// Size apis for estimation
+/* Size APIs for pre-filter or inline filter planning */
+
 size_t TermPredicate::EstimateSize() const {
-  // TODO: Implementation
+  auto iter =
+      text_index_schema_->GetTextIndex()->GetPrefix().GetWordIterator(term_);
+  if (!iter.Done() && iter.GetWord() == term_) {
+    return iter.GetPostingsTarget()->GetKeyCount();
+  }
   return 0;
 }
 
 size_t PrefixPredicate::EstimateSize() const {
-  // TODO: Implementation
-  return 0;
+  return text_index_schema_->GetTextIndex()->GetPrefix().GetSubtreeItemCount(
+      term_);
 }
 
 size_t SuffixPredicate::EstimateSize() const {
-  // TODO: Implementation
-  return 0;
+  auto suffix_tree = text_index_schema_->GetTextIndex()->GetSuffix();
+  CHECK(suffix_tree) << "Suffix estimation not supported";
+  return text_index_schema_->GetTextIndex()
+      ->GetSuffix()
+      .value()
+      .get()
+      .GetSubtreeItemCount(term_);
 }
 
 size_t InfixPredicate::EstimateSize() const {
-  // TODO: Implementation
-  return 0;
+  // TODO: Implement once infix is supported
+  // Right now we return the upper bound
+  return text_index_schema_->GetTrackedKeyCount();
 }
 
 size_t FuzzyPredicate::EstimateSize() const {
-  // TODO: Implementation
-  return 0;
+  // TODO: Implement proper heuristic
+  // Right now we return the upper bound
+  return text_index_schema_->GetTrackedKeyCount();
 }
 }  // namespace valkey_search::query

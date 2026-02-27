@@ -81,16 +81,20 @@ if [[ "${SAN_BUILD}" != "no" ]]; then
   fi
   if [[ "${SAN_BUILD}" == "address" ]]; then
     export LSAN_OPTIONS="suppressions=${MODULE_ROOT}/ci/asan.supp"
+    print_environment_var "LSAN_OPTIONS" "${LSAN_OPTIONS}"
   else
-    export LSAN_OPTIONS="suppressions=${MODULE_ROOT}/ci/tsan.supp"
+    # TSAN deadlock detector overflows with valkey's lock count during module load.
+    export TSAN_OPTIONS="detect_deadlocks=0:suppressions=${MODULE_ROOT}/ci/tsan.supp"
+    print_environment_var "TSAN_OPTIONS" "${TSAN_OPTIONS}"
   fi
-  print_environment_var "LSAN_OPTIONS" "${LSAN_OPTIONS}"
   print_environment_var "ASAN_OPTIONS" "${ASAN_OPTIONS}"
 fi
 
 function get_third_party_build_dir() {
   if [ -z "${SAN_BUILD}" ] || [[ "${SAN_BUILD}" == "no" ]]; then
     echo ${_THIRD_PARTY_COMPONENTS_BUILD_DIR}
+  elif [[ "${SAN_BUILD}" == "thread" ]]; then
+    echo ${_THIRD_PARTY_COMPONENTS_BUILD_DIR}-tsan
   else
     echo ${_THIRD_PARTY_COMPONENTS_BUILD_DIR}-asan
   fi
@@ -189,6 +193,22 @@ function setup_valkey_server() {
   if [ ! -z "${SAN_BUILD}" ] && [[ "${SAN_BUILD}" != "no" ]]; then
     VALKEY_CMAKE_EXTRA_ARGS="-DBUILD_SANITIZER=${SAN_BUILD}"
     LOG_INFO "Building Valkey with Sanitizer options: -DBUILD_SANITIZER=${SAN_BUILD}"
+    # Temporary workaround until these are merged into core upstream:
+    # 1. IFUNC resolvers run before TSAN runtime initializes, so no_sanitize("thread") is required.
+    # https://github.com/valkey-io/valkey/blob/4dee322edeb9c96029d89cfaf1600abad2afead0/src/util.c#L640-L642
+    sed -i 's/__attribute__((no_sanitize_address, used)) static int (\*string2ll_resolver/__attribute__((no_sanitize_address, no_sanitize("thread"), used)) static int (*string2ll_resolver/' \
+      "${VALKEY_SERVER_HOME_DIR}/src/util.c"
+
+    # 2. RTLD_DEEPBIND is incompatible with TSAN; exclude it like ASAN already does.
+    # https://github.com/valkey-io/valkey/blame/ab3c953b80289d88991095f53c1235fc2f8b44d6/src/module.c#L12548
+    sed -i 's/!defined(VALKEY_ADDRESS_SANITIZER) \&\& __has_include(<dlfcn.h>)/!defined(VALKEY_ADDRESS_SANITIZER) \&\& !defined(VALKEY_THREAD_SANITIZER) \&\& __has_include(<dlfcn.h>)/' \
+      "${VALKEY_SERVER_HOME_DIR}/src/module.c"
+
+    # 3. Define VALKEY_THREAD_SANITIZER via __SANITIZE_THREAD__ (mirrors VALKEY_ADDRESS_SANITIZER pattern).
+    # https://github.com/valkey-io/valkey/blob/4dee322edeb9c96029d89cfaf1600abad2afead0/src/config.h#L175-L181
+    grep -q 'VALKEY_THREAD_SANITIZER' "${VALKEY_SERVER_HOME_DIR}/src/config.h" || \
+      sed -i '/^#if defined(__SANITIZE_ADDRESS__)/i #if defined(__SANITIZE_THREAD__)\n#define VALKEY_THREAD_SANITIZER 1\n#endif\n' \
+        "${VALKEY_SERVER_HOME_DIR}/src/config.h"
   fi
 
   LOG_INFO "Working directory: ${VALKEY_SERVER_BUILD_DIR}"

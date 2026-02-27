@@ -415,7 +415,6 @@ if [[ "${SAN_BUILD}" != "no" ]]; then
         BUILD_DIR=${BUILD_DIR}-asan
     else
         BUILD_DIR=${BUILD_DIR}-tsan
-        export TSAN_OPTIONS="suppressions=${ROOT_DIR}/ci/tsan.supp"
     fi
 fi
 
@@ -501,7 +500,7 @@ elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
     export TEST_PATTERN=${TEST_PATTERN}
     export INTEG_RETRIES=${INTEG_RETRIES}
     # Run will run ASan or normal tests based on the environment variable SAN_BUILD
-    ./run.sh
+    ./run.sh || EXIT_CODE=1
     popd >/dev/null
 fi
 

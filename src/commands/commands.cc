@@ -67,6 +67,9 @@ void Free([[maybe_unused]] ValkeyModuleCtx *ctx, void *privdata) {
   // Some things can only be cleaned up on the main thread.
   // We need to do this here.
   parameters->index_schema = nullptr;
+  // VM_FreeString is not thread safe and must be called on the main thread.
+  // Release retained strings here before scheduling background cleanup.
+  parameters->return_attributes.clear();
   ValkeySearch::Instance().ScheduleSearchResultCleanup(
       [parameters]() { delete parameters; });
 }

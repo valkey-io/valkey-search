@@ -1,3 +1,11 @@
 # Temporarily suppressing HNSWLib race reports, which occur on the write path.
 # Fixing these may impact performance due to added synchronization. 
 race:hnswalg.h
+
+# Valkey uses a per-thread non-atomic counter (used_memory_thread) for memory
+# accounting, relying on cache-line-aligned word-sized loads/stores being atomic at
+# the hardware level instead of using C++ atomics. TSAN flags this as a race since
+# it enforces the C++ memory model, not hardware guarantees.
+#
+# Source: https://github.com/valkey-io/valkey/blob/9.0.1/src/zmalloc.c#L95-L108
+race:zmalloc_used_memory

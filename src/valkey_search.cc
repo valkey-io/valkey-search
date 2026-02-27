@@ -20,6 +20,7 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_format.h"
+#include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
 #include "absl/time/time.h"
 #include "src/attribute_data_type.h"
@@ -493,6 +494,185 @@ static vmsdk::info_field::Integer vector_externing_deferred_entry_cnt(
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
       return VectorExternalizer::Instance().GetStats().deferred_entry_cnt;
     }));
+
+// Helper function to format bytes in human-readable form
+static std::string FormatBytesHumanReadable(uint64_t bytes) {
+  if (bytes < 1024) {
+    return absl::StrFormat("%dB", bytes);
+  } else if (bytes < 1024 * 1024) {
+    return absl::StrFormat("%.1fKB", bytes / 1024.0);
+  } else if (bytes < 1024 * 1024 * 1024) {
+    return absl::StrFormat("%.1fMB", bytes / (1024.0 * 1024.0));
+  } else {
+    return absl::StrFormat("%.1fGB", bytes / (1024.0 * 1024.0 * 1024.0));
+  }
+}
+
+// Implementation of FormatIndexDebugInfo - shared by FT._DEBUG and INFO DEV
+std::vector<std::string> FormatIndexDebugInfo(
+    const std::vector<SchemaManager::IndexDebugInfo> &indexes,
+    bool sort_by_memory, size_t limit) {
+  struct IndexFormatted {
+    uint64_t total_field_memory;
+    std::string formatted_string;
+  };
+
+  std::vector<IndexFormatted> formatted_indexes;
+
+  for (const auto &info : indexes) {
+    uint64_t total_field_memory = 0;
+    std::string vector_details;
+    std::string text_details;
+    std::string tag_details;
+    uint64_t numeric_memory = 0;
+
+    if (info.schema) {
+      std::vector<std::string> vector_info_list;
+      std::vector<std::string> text_info_list;
+      std::vector<std::string> tag_info_list;
+
+      auto schema_proto = info.schema->ToProto();
+
+      for (const auto &attr : schema_proto->attributes()) {
+        if (!attr.has_index()) continue;
+
+        const auto &index = attr.index();
+        const std::string &alias = attr.alias();
+        uint64_t memory = info.schema->GetSize(alias);
+        total_field_memory += memory;
+        std::string mem_str = FormatBytesHumanReadable(memory);
+
+        if (index.has_vector_index()) {
+          const auto &vector_index = index.vector_index();
+          std::string algo_details;
+          if (vector_index.has_hnsw_algorithm()) {
+            const auto &hnsw = vector_index.hnsw_algorithm();
+            algo_details =
+                absl::StrFormat("HNSW M:%d EfC:%d EfR:%d", hnsw.m(),
+                                hnsw.ef_construction(), hnsw.ef_runtime());
+          } else if (vector_index.has_flat_algorithm()) {
+            const auto &flat = vector_index.flat_algorithm();
+            algo_details = absl::StrFormat("FLAT BlkSz:%d", flat.block_size());
+          } else {
+            algo_details = "UNKNOWN";
+          }
+          auto metric_str = indexes::LookupKeyByValue(
+              *indexes::kDistanceMetricByStr, vector_index.distance_metric());
+          vector_info_list.push_back(absl::StrFormat(
+              "%s Dim:%d Metric:%s Mem:%s", algo_details,
+              vector_index.dimension_count(), metric_str, mem_str));
+        }
+
+        if (index.has_text_index()) {
+          const auto &text_index = index.text_index();
+          text_info_list.push_back(absl::StrFormat(
+              "Weight:%.1f Stem:%s SuffixTrie:%s Mem:%s", text_index.weight(),
+              text_index.no_stem() ? "false" : "true",
+              text_index.with_suffix_trie() ? "true" : "false", mem_str));
+        }
+
+        if (index.has_tag_index()) {
+          const auto &tag_index = index.tag_index();
+          std::string sep =
+              tag_index.separator().empty() ? "," : tag_index.separator();
+          tag_info_list.push_back(absl::StrFormat(
+              "Sep:'%s' CaseSens:%s Mem:%s", sep,
+              tag_index.case_sensitive() ? "true" : "false", mem_str));
+        }
+
+        if (index.has_numeric_index()) {
+          numeric_memory += memory;
+        }
+      }
+
+      if (!vector_info_list.empty()) {
+        vector_details =
+            absl::StrFormat("[%s]", absl::StrJoin(vector_info_list, ", "));
+      }
+      if (!text_info_list.empty()) {
+        text_details =
+            absl::StrFormat("[%s]", absl::StrJoin(text_info_list, ", "));
+      }
+      if (!tag_info_list.empty()) {
+        tag_details =
+            absl::StrFormat("[%s]", absl::StrJoin(tag_info_list, ", "));
+      }
+    }
+
+    // Build output string
+    std::string output =
+        absl::StrFormat("db-%d:index_%lu %s Prefixes(%zu)", info.db_num,
+                        info.fingerprint, info.datatype, info.prefix_count);
+
+    if (!vector_details.empty()) {
+      output += " Vector: " + vector_details;
+    }
+    if (info.text_count > 0) {
+      if (!text_details.empty()) {
+        output +=
+            absl::StrFormat(" Text(%d): %s", info.text_count, text_details);
+      } else {
+        output += absl::StrFormat(" Text:%d", info.text_count);
+      }
+    }
+    if (info.tag_count > 0) {
+      if (!tag_details.empty()) {
+        output += absl::StrFormat(" Tag(%d): %s", info.tag_count, tag_details);
+      } else {
+        output += absl::StrFormat(" Tag:%d", info.tag_count);
+      }
+    }
+    if (info.numeric_count > 0) {
+      if (numeric_memory > 0) {
+        output += absl::StrFormat(" Numeric(%d): [Mem:%s]", info.numeric_count,
+                                  FormatBytesHumanReadable(numeric_memory));
+      } else {
+        output += absl::StrFormat(" Numeric:%d", info.numeric_count);
+      }
+    }
+
+    formatted_indexes.push_back({total_field_memory, output});
+  }
+
+  // Sort by memory if requested
+  if (sort_by_memory) {
+    std::sort(formatted_indexes.begin(), formatted_indexes.end(),
+              [](const auto &a, const auto &b) {
+                return a.total_field_memory > b.total_field_memory;
+              });
+  }
+
+  // Apply limit if specified
+  size_t result_size = formatted_indexes.size();
+  if (limit > 0 && limit < result_size) {
+    result_size = limit;
+  }
+
+  // Extract just the formatted strings
+  std::vector<std::string> result;
+  result.reserve(result_size);
+  for (size_t i = 0; i < result_size; i++) {
+    result.push_back(formatted_indexes[i].formatted_string);
+  }
+
+  return result;
+}
+
+static vmsdk::info_field::String index_memory_top_indexes(
+    "index_info", "top_10_indexes_redacted",
+    vmsdk::info_field::StringBuilder().Dev().ComputedString(
+        []() -> std::string {
+          auto indexes = SchemaManager::Instance().GetIndexDebugInfo();
+          auto formatted = FormatIndexDebugInfo(indexes, true, 10);
+          if (formatted.empty()) {
+            return "No indexes found";
+          }
+          // Add serial numbers for INFO output
+          for (size_t i = 0; i < formatted.size(); i++) {
+            formatted[i] = absl::StrFormat("%2d. %s", i + 1, formatted[i]);
+          }
+          return "\n" + absl::StrJoin(formatted, "\n");
+        }));
 
 static vmsdk::info_field::Integer coordinator_server_listening_port(
     "coordinator", "coordinator_server_listening_port",

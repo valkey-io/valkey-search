@@ -158,6 +158,8 @@ void SendReplyTest::DoSendReplyTest(
         OpenKey(&fake_ctx, vmsdk::ValkeyModuleStringValueEq(key), testing::_))
         .WillRepeatedly(testing::Return(nullptr));
   }
+  EXPECT_CALL(*kMockValkeyModule, GetExpire(An<ValkeyModuleKey *>()))
+      .WillRepeatedly(testing::Return(VALKEYMODULE_NO_EXPIRE));
 
   // using non-null terminated strings for attribute_alias and score_as
   std::string attribute_alias_with_extra_data{input.attribute_alias +

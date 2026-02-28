@@ -91,6 +91,7 @@ class MockValkeyModule {
               (ValkeyModuleKey * key, ValkeyModuleString *field,
                ValkeyModuleHashExternCB fn, void *privdata));
   MOCK_METHOD(int, GetApi, (const char *name, void *func));
+  MOCK_METHOD(mstime_t, GetExpire, (ValkeyModuleKey * key));
   MOCK_METHOD(int, HashGet,
               (ValkeyModuleKey * key, int flags, const char *field,
                int *exists_out, void *terminating_null));
@@ -689,6 +690,10 @@ inline int TestValkeyModule_HashExternalize(ValkeyModuleKey *key,
 
 inline int TestValkeyModule_GetApi(const char *name, void *func) {
   return kMockValkeyModule->GetApi(name, func);
+}
+
+inline mstime_t TestValkeyModule_GetExpire(ValkeyModuleKey *key) {
+  return kMockValkeyModule->GetExpire(key);
 }
 
 inline int TestValkeyModule_HashGet(ValkeyModuleKey *key, int flags, ...) {
@@ -1513,6 +1518,7 @@ inline void TestValkeyModule_Init() {
   ValkeyModule_OpenKey = &TestValkeyModule_OpenKey;
   ValkeyModule_HashExternalize = &TestValkeyModule_HashExternalize;
   ValkeyModule_GetApi = &TestValkeyModule_GetApi;
+  ValkeyModule_GetExpire = &TestValkeyModule_GetExpire;
   ValkeyModule_HashGet = &TestValkeyModule_HashGet;
   ValkeyModule_HashSet = &TestValkeyModule_HashSet;
   ValkeyModule_ScanKey = &TestValkeyModule_ScanKey;

@@ -184,13 +184,9 @@ unsigned int count_num_terms(const PositionMap& pos_map) {
   return num_terms;
 }
 
-void Postings::InsertKey(const Key& key, PositionMap&& pos_map,
-                         TextIndexMetadata* metadata, size_t num_text_fields) {
-  metadata->total_positions += pos_map.size();
-  metadata->total_term_frequency += count_num_terms(pos_map);
-
-  // Create FlatPositionMap and insert pointer into map
-  FlatPositionMap* flat_map = FlatPositionMap::Create(pos_map, num_text_fields);
+void Postings::InsertKey(const Key& key, FlatPositionMap* flat_map) {
+  // Insert pre-created FlatPositionMap pointer into map
+  // Metadata updates are done by the caller before this point
   key_to_positions_.emplace(key, flat_map);
 }
 

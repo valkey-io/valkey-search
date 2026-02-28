@@ -102,3 +102,4 @@ class TestCreateNonVectorIndexes(ValkeySearchClusterTestCase):
             f"@t:{{Tag:*}}"
         )
         assert tag_result[0] == 10
+        

@@ -34,9 +34,8 @@ static void FreeStemParentsCallback(void *target) {
 
 InvasivePtr<Postings> AddKeyToPostings(InvasivePtr<Postings> existing_postings,
                                        const InternedStringPtr &key,
-                                       PositionMap &&pos_map,
-                                       TextIndexMetadata *metadata,
-                                       size_t num_text_fields) {
+                                       FlatPositionMap *flat_map,
+                                       TextIndexMetadata *metadata) {
   InvasivePtr<Postings> postings;
   if (existing_postings) {
     postings = existing_postings;
@@ -45,7 +44,7 @@ InvasivePtr<Postings> AddKeyToPostings(InvasivePtr<Postings> existing_postings,
     postings = InvasivePtr<Postings>::Make();
   }
 
-  postings->InsertKey(key, std::move(pos_map), metadata, num_text_fields);
+  postings->InsertKey(key, flat_map);
   return postings;
 }
 
@@ -247,26 +246,32 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
                      std::string(token.rbegin(), token.rend()))
                : std::nullopt;
 
+    // Update metadata from PositionMap
+    metadata_.total_positions += pos_map.size();
+    for (const auto &[_, field_mask] : pos_map) {
+      metadata_.total_term_frequency += field_mask->CountSetFields();
+    }
+
+    // Create FlatPositionMap from PositionMap
+    FlatPositionMap *flat_map =
+        FlatPositionMap::Create(pos_map, num_text_fields_);
+
     // The updated target gets set in target_add_fn and later used in
     // target_set_fn, so that all trees point to the same postings object
     InvasivePtr<Postings> updated_target;
 
-    // Note: Right now the memory tracking won't include the position map memory
-    // since it's already allocated and moved into the postings object. Once we
-    // start creating a serialized version instead then it will be tracked. At
-    // that point stop moving the pos_map and just pass a reference so that it
-    // doesn't get cleaned up in the memory scope.
+    // Pass the FlatPositionMap to AddKeyToPostings
     auto target_add_fn = CreateTargetMutateFn(
         metadata_.posting_memory_pool_,
         [&](InvasivePtr<Postings> existing) {
-          return AddKeyToPostings(std::move(existing), key, std::move(pos_map),
-                                  &metadata_, num_text_fields_);
+          return AddKeyToPostings(std::move(existing), key, flat_map,
+                                  &metadata_);
         },
         updated_target);
     auto target_set_fn = CreateTargetSetFn(updated_target);
 
     // Update the postings object for the token in the schema-level index with
-    // the key and position map
+    // the key and flat position map
     {
       std::lock_guard<std::mutex> schema_guard(text_index_mutex_);
       text_index_->GetPrefix().MutateTarget(

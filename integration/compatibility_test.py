@@ -476,6 +476,15 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
 
     return data_set
 
+def _check_and_regenerate_answers(answer_file, generator_file):
+    root_dir = os.getenv("ROOT_DIR")
+    answer_path = os.path.join(root_dir, "integration/compatibility", answer_file)
+    generator_path = os.path.join(root_dir, "integration/compatibility", generator_file)
+    
+    if not os.path.exists(answer_path) or os.path.getmtime(generator_path) > os.path.getmtime(answer_path):
+        print(f"Regenerating {answer_file}...")
+        os.system(f"cd {root_dir}/integration/compatibility && pytest {generator_file}")
+
 class TestAnswersCMD(ValkeySearchTestCaseBase):
     @pytest.mark.parametrize("answers", ["aggregate-answers.pickle.gz", "text-search-answers.pickle.gz"])
     def test_answers(self, answers):
@@ -487,6 +496,8 @@ class TestAnswersCMD(ValkeySearchTestCaseBase):
         wrong_answers = 0
         failed_tests = {}
         passed_tests = {}
+
+        _check_and_regenerate_answers(answers, "generate.py" if "aggregate" in answers else "generate_text.py")
 
         print("Running test_answers with answers file:", answers)
         with gzip.open(os.getenv("ROOT_DIR") + "/integration/compatibility/" + answers, "rb") as answer_file:
@@ -543,6 +554,8 @@ class TestAnswersCME(ValkeySearchClusterTestCase):
         wrong_answers = 0
         failed_tests = {}
         passed_tests = {}
+
+        _check_and_regenerate_answers(answers, "generate.py")
 
         print("Running CLUSTER test_answers with answers file:", answers)
 

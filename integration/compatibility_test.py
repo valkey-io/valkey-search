@@ -1,4 +1,4 @@
-import pytest, logging, time, itertools, math, valkey, gzip, struct, os
+import pytest, logging, time, itertools, math, valkey, gzip, struct, os, subprocess
 import sys, json
 from collections import defaultdict
 from operator import itemgetter
@@ -478,10 +478,15 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
 
 def _check_and_regenerate_answers(answer_file, generator_file):
     root_dir = os.getenv("ROOT_DIR")
-    answer_path = os.path.join(root_dir, "integration/compatibility", answer_file)
-    generator_path = os.path.join(root_dir, "integration/compatibility", generator_file)
+    answer_path = f"integration/compatibility/{answer_file}"
+    generator_path = f"integration/compatibility/{generator_file}"
     
-    if not os.path.exists(answer_path) or os.path.getmtime(generator_path) > os.path.getmtime(answer_path):
+    answer_time = subprocess.run(["git", "log", "-1", "--format=%ct", answer_path], 
+                                  capture_output=True, text=True, cwd=root_dir).stdout.strip()
+    generator_time = subprocess.run(["git", "log", "-1", "--format=%ct", generator_path], 
+                                     capture_output=True, text=True, cwd=root_dir).stdout.strip()
+    
+    if not answer_time or (generator_time and int(generator_time) > int(answer_time)):
         print(f"Regenerating {answer_file}...")
         os.system(f"cd {root_dir}/integration/compatibility && pytest {generator_file}")
 

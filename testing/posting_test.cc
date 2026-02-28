@@ -82,8 +82,7 @@ TEST_F(PostingTest, InsertionCounters) {
   postings_ = std::make_unique<Postings>();
   metadata_ = std::make_unique<TextIndexMetadata>();
   InsertKeyWithPositionMap(
-      InternKey("doc1"),
-      CreatePositionMap({{10, {0}}, {20, {0}}, {30, {1}}}));
+      InternKey("doc1"), CreatePositionMap({{10, {0}}, {20, {0}}, {30, {1}}}));
   EXPECT_EQ(postings_->GetKeyCount(), 1);
   EXPECT_EQ(postings_->GetPositionCount(), 3);
   EXPECT_EQ(postings_->GetTotalTermFrequency(), 3);
@@ -167,8 +166,7 @@ TEST_F(PostingTest, KeyIteratorSkipForward) {
 TEST_F(PostingTest, PositionIteratorBasic) {
   // Add test data with multiple positions for one key
   InsertKeyWithPositionMap(
-      InternKey("doc1"),
-      CreatePositionMap({{10, {0}}, {20, {1}}, {30, {2}}}));
+      InternKey("doc1"), CreatePositionMap({{10, {0}}, {20, {1}}, {30, {2}}}));
 
   // Get key iterator and position iterator
   auto key_iter = postings_->GetKeyIterator();
@@ -199,8 +197,7 @@ TEST_F(PostingTest, PositionIteratorBasic) {
 TEST_F(PostingTest, PositionIteratorSkipForward) {
   // Add test data with gaps in positions
   InsertKeyWithPositionMap(
-      InternKey("doc1"),
-      CreatePositionMap({{10, {0}}, {30, {1}}, {50, {2}}}));
+      InternKey("doc1"), CreatePositionMap({{10, {0}}, {30, {1}}, {50, {2}}}));
 
   auto key_iter = postings_->GetKeyIterator();
   auto pos_iter = key_iter.GetPositionIterator();
@@ -330,9 +327,8 @@ TEST_F(PostingTest, LargeScaleOperations) {
 TEST_F(PostingTest, FieldMaskImplementations) {
   InsertKeyWithPositionMap(InternKey("doc1"),
                            CreatePositionMap({{10, {0}}, {20, {0}}}, 1), 1);
-  InsertKeyWithPositionMap(InternKey("doc2"),
-                           CreatePositionMap({{15, {0, 2}}, {25, {1, 3}}}, 5),
-                           5);
+  InsertKeyWithPositionMap(
+      InternKey("doc2"), CreatePositionMap({{15, {0, 2}}, {25, {1, 3}}}, 5), 5);
   InsertKeyWithPositionMap(InternKey("doc3"),
                            CreatePositionMap({{30, {0, 8}}, {40, {5}}}, 9), 9);
 

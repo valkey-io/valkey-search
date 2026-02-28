@@ -44,7 +44,6 @@ InvasivePtr<Postings> AddKeyToPostings(InvasivePtr<Postings> existing_postings,
     postings = InvasivePtr<Postings>::Make();
   }
 
-  // FlatPositionMap is pre-created and metadata is already updated by caller
   postings->InsertKey(key, flat_map);
   return postings;
 }
@@ -247,15 +246,13 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
                      std::string(token.rbegin(), token.rend()))
                : std::nullopt;
 
-    // Update metadata from PositionMap BEFORE creating FlatPositionMap
-    // This is more efficient than computing counts from FlatPositionMap later
+    // Update metadata from PositionMap
     metadata_.total_positions += pos_map.size();
     for (const auto &[_, field_mask] : pos_map) {
       metadata_.total_term_frequency += field_mask->CountSetFields();
     }
 
-    // Create FlatPositionMap BEFORE the lock context
-    // This serialization work is done outside the critical section
+    // Create FlatPositionMap from PositionMap
     FlatPositionMap *flat_map =
         FlatPositionMap::Create(pos_map, num_text_fields_);
 
@@ -263,7 +260,7 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
     // target_set_fn, so that all trees point to the same postings object
     InvasivePtr<Postings> updated_target;
 
-    // Pass the pre-created FlatPositionMap to AddKeyToPostings
+    // Pass the FlatPositionMap to AddKeyToPostings
     auto target_add_fn = CreateTargetMutateFn(
         metadata_.posting_memory_pool_,
         [&](InvasivePtr<Postings> existing) {
@@ -274,7 +271,7 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
     auto target_set_fn = CreateTargetSetFn(updated_target);
 
     // Update the postings object for the token in the schema-level index with
-    // the pre-created FlatPositionMap
+    // the key and flat position map
     {
       std::lock_guard<std::mutex> schema_guard(text_index_mutex_);
       text_index_->GetPrefix().MutateTarget(

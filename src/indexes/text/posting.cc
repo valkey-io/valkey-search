@@ -185,8 +185,7 @@ unsigned int count_num_terms(const PositionMap& pos_map) {
 }
 
 void Postings::InsertKey(const Key& key, FlatPositionMap* flat_map) {
-  // Insert pre-created FlatPositionMap pointer into map
-  // Metadata updates are done by the caller before this point
+  // Insert FlatPositionMap pointer into map
   key_to_positions_.emplace(key, flat_map);
 }
 

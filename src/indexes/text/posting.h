@@ -77,7 +77,7 @@ struct Postings {
   // Are there any postings in this object?
   bool IsEmpty() const;
 
-  // Insert the key with its pre-created FlatPositionMap
+  // Insert the key with FlatPositionMap
   void InsertKey(const Key& key, FlatPositionMap* flat_map);
 
   // Remove a key and all positions for it

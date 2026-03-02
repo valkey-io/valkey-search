@@ -121,6 +121,22 @@ class SchemaManager {
   absl::Status ShowIndexSchemas(ValkeyModuleCtx *ctx,
                                 vmsdk::ArgsIterator &itr) const;
 
+  // Structure for index information used by debug commands
+  struct IndexDebugInfo {
+    uint32_t db_num;
+    uint64_t fingerprint;
+    uint32_t version;
+    std::string datatype;
+    size_t prefix_count;
+    int numeric_count;
+    int tag_count;
+    int text_count;
+    int vector_count;
+    std::shared_ptr<IndexSchema> schema;
+  };
+  // Get debug information for all indexes
+  std::vector<IndexDebugInfo> GetIndexDebugInfo() const;
+
  private:
   absl::Status RemoveAll()
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);

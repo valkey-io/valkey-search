@@ -1522,6 +1522,14 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
     ValkeyModuleCtx *ctx, vmsdk::ThreadPool *mutations_thread_pool,
     std::unique_ptr<data_model::IndexSchema> index_schema_proto,
     SupplementalContentIter &&supplemental_iter) {
+  // Select the DB number in the context for subsequent usage.
+  uint32_t db_num = index_schema_proto->db_num();
+  if (ValkeyModule_SelectDb(ctx, db_num) != VALKEYMODULE_OK) {
+    return absl::InternalError(absl::StrFormat(
+        "Unable to select DB %d for loading index schema %s", db_num,
+        vmsdk::config::RedactIfNeeded(index_schema_proto->name()).data()));
+  }
+
   // flag to skip loading attributes and indices
   bool skip_loading_index_data = options::GetSkipIndexLoad().GetValue();
   // When skipping index data, create attributes immediately (with empty

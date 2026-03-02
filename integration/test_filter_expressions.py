@@ -1048,3 +1048,126 @@ class TestFilterExpressions(ValkeySearchTestCaseBase):
         )
         assert result[0] == 1
         assert result[2] == []
+
+    # =====================================================================
+    # CONCURRENT WORKLOAD - lazy expiration during FT.SEARCH
+    # =====================================================================
+
+    @pytest.mark.skip(reason="This test is designed to run for an extended period with high concurrency to detect crashes. It is not suitable for regular test runs and should be run manually when needed.")
+    def test_concurrent_workload(self):
+        """
+        Stress reproducer for a crash caused by lazy expiration in the middle
+        of Search commands: fetching content for search results used to open
+        keys without REDISMODULE_OPEN_KEY_NOEXPIRE, so a key that expired
+        mid-search was force-deleted (and the deletion propagated) from within
+        FT.SEARCH, crashing the server (`server.also_propagate.numops == 0`).
+        Numeric/tag filters with concurrent expirations using a short TTL
+        (e.g. 1) are enough to hit the race. On this branch FT.SEARCH always
+        requires a KNN vector clause, so the numeric/tag filters are exercised
+        as hybrid query pre-filters.
+        """
+        import threading
+        import time
+
+        client: Valkey = self.server.get_new_client()
+        assert client.execute_command(
+            "FT.CREATE", "concurrent_idx",
+            "ON", "HASH",
+            "PREFIX", "1", "doc:",
+            "SCHEMA",
+            "price", "NUMERIC",
+            "tags", "TAG",
+            "embedding", "VECTOR", "FLAT", "6",
+            "TYPE", "FLOAT32",
+            "DIM", "3",
+            "DISTANCE_METRIC", "COSINE"
+        ) == b"OK"
+
+        num_writers = 50
+        num_searchers = 75
+        num_expirers = 75
+        ops_per_client = 10000
+        num_keys = 1000
+        write_clients = [self.server.get_new_client() for _ in range(num_writers)]
+        search_clients = [self.server.get_new_client() for _ in range(num_searchers)]
+        expire_clients = [self.server.get_new_client() for _ in range(num_expirers)]
+
+        query_vec = struct.pack('3f', 1.0, 0.5, 0.0)
+
+        crash_detected = threading.Event()
+        stop_watchdog = threading.Event()
+        watchdog_client = self.server.get_new_client()
+
+        def watchdog():
+            while not stop_watchdog.is_set():
+                try:
+                    watchdog_client.ping()
+                except Exception as e:
+                    if not crash_detected.is_set():
+                        crash_detected.set()
+                        print(f"\nWatchdog detected crash: {e}")
+                    stop_watchdog.set()
+                    return
+                time.sleep(0.1)
+
+        def writer(client_id):
+            vec = struct.pack('3f', 1.0, client_id / num_writers, 0.0)
+            for i in range(ops_per_client):
+                if crash_detected.is_set():
+                    return
+                key = f"doc:{i % num_keys}"
+                write_clients[client_id].execute_command(
+                    "HSET", key,
+                    "price", str(100 + i),
+                    "tags", f"tag{i % 5}",
+                    "embedding", vec
+                )
+
+        def searcher(client_id):
+            for i in range(ops_per_client):
+                if crash_detected.is_set():
+                    return
+                search_clients[client_id].execute_command(
+                    "FT.SEARCH", "concurrent_idx",
+                    f"@price:[{90 + i} {110 + i}]=>[KNN 10 @embedding $vec]",
+                    "PARAMS", "2", "vec", query_vec
+                )
+                search_clients[client_id].execute_command(
+                    "FT.SEARCH", "concurrent_idx",
+                    f"@tags:{{tag{i % 5}}}=>[KNN 10 @embedding $vec]",
+                    "PARAMS", "2", "vec", query_vec
+                )
+
+        def expirer(client_id):
+            for i in range(ops_per_client):
+                if crash_detected.is_set():
+                    return
+                key = f"doc:{i % num_keys}"
+                expire_clients[client_id].execute_command("EXPIRE", key, "1")
+
+        watchdog_thread = threading.Thread(target=watchdog, daemon=True)
+        watchdog_thread.start()
+        threads = [threading.Thread(target=writer, args=(i,)) for i in range(num_writers)]
+        threads += [threading.Thread(target=searcher, args=(i,)) for i in range(num_searchers)]
+        threads += [threading.Thread(target=expirer, args=(i,)) for i in range(num_expirers)]
+        for t in threads:
+            t.start()
+        # Check for crash while threads run
+        while any(t.is_alive() for t in threads):
+            if crash_detected.is_set():
+                stop_watchdog.set()
+                pytest.fail("Server crash detected during test execution")
+            time.sleep(0.1)
+        stop_watchdog.set()
+        watchdog_thread.join(timeout=1)
+
+        info = client.info("commandstats")
+        total_hset_calls = info.get("cmdstat_hset", {}).get("calls", 0)
+        total_expire_calls = info.get("cmdstat_expire", {}).get("calls", 0)
+        total_search_calls = info.get("cmdstat_FT.SEARCH", {}).get("calls", 0)
+
+        print("\nFinal ping check...")
+        assert client.ping()
+        assert total_hset_calls > 0, "Expected HSET calls in commandstats"
+        assert total_expire_calls > 0, "Expected EXPIRE calls in commandstats"
+        assert total_search_calls > 0, "Expected FT.SEARCH calls in commandstats"

@@ -96,8 +96,14 @@ absl::StatusOr<RecordsMap> HashAttributeDataType::FetchAllRecords(
     const absl::flat_hash_set<absl::string_view> &identifiers) const {
   vmsdk::VerifyMainThread();
   auto key_str = vmsdk::MakeUniqueRedisString(key);
-  auto key_obj =
-      vmsdk::MakeUniqueRedisOpenKey(ctx, key_str.get(), REDISMODULE_READ);
+  // `REDISMODULE_OPEN_KEY_NOEXPIRE` is for safety. The caller functions to
+  // FetchAllRecords already check for key existence and expiration, so we do
+  // not return stale results which are already expired. But adding this flag
+  // ensures that even if they forget to check, we will not force deletion of
+  // lazy expired from the SEARCH based command results which was known to cause
+  // a `server.also_propagate.numops == 0` crash in the core.
+  auto key_obj = vmsdk::MakeUniqueRedisOpenKey(
+      ctx, key_str.get(), REDISMODULE_OPEN_KEY_NOEXPIRE | REDISMODULE_READ);
   if (!key_obj) {
     return absl::NotFoundError(
         absl::StrCat("No such record with key: `", vector_identifier, "`"));

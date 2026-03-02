@@ -112,6 +112,7 @@ class MockRedisModule {
               (RedisModuleKey * key, RedisModuleString *field,
                RedisModuleHashExternCB fn, void *privdata));
   MOCK_METHOD(int, GetApi, (const char *name, void *func));
+  MOCK_METHOD(mstime_t, GetExpire, (RedisModuleKey * key));
   MOCK_METHOD(int, HashGet,
               (RedisModuleKey * key, int flags, const char *field,
                int *exists_out, void *terminating_null));
@@ -678,6 +679,10 @@ inline int TestRedisModule_HashExternalize(RedisModuleKey *key,
 
 inline int TestRedisModule_GetApi(const char *name, void *func) {
   return kMockRedisModule->GetApi(name, func);
+}
+
+inline mstime_t TestRedisModule_GetExpire(RedisModuleKey *key) {
+  return kMockRedisModule->GetExpire(key);
 }
 
 inline int TestRedisModule_HashGet(RedisModuleKey *key, int flags, ...) {
@@ -1457,6 +1462,7 @@ inline void TestRedisModule_Init() {
   RedisModule_OpenKey = &TestRedisModule_OpenKey;
   RedisModule_HashExternalize = &TestRedisModule_HashExternalize;
   RedisModule_GetApi = &TestRedisModule_GetApi;
+  RedisModule_GetExpire = &TestRedisModule_GetExpire;
   RedisModule_HashGet = &TestRedisModule_HashGet;
   RedisModule_HashSet = &TestRedisModule_HashSet;
   RedisModule_ScanKey = &TestRedisModule_ScanKey;

@@ -688,13 +688,11 @@ absl::Status SchemaManager::LoadIndex(
   // Load the index schema into memory
   auto index_schema_pb = std::unique_ptr<data_model::IndexSchema>(
       section->release_index_schema_contents());
-
   VMSDK_ASSIGN_OR_RETURN(auto index_schema,
                          IndexSchema::LoadFromRDB(ctx, mutations_thread_pool_,
                                                   std::move(index_schema_pb),
                                                   std::move(supplemental_iter)),
                          _ << "Failed to load index schema from RDB!");
-
   uint32_t db_num = index_schema->GetDBNum();
   const std::string &name = index_schema->GetName();
 

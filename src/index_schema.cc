@@ -244,6 +244,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
           res->AddIndex(attribute.alias(), attribute.identifier(), index));
     }
   }
+  res->SetTextSizeEstimationConditions();
 
   if (!reload && index_schema_proto.skip_initial_scan()) {
     // Creating a new Index with SkipInitialScan. Mark the backfill as done
@@ -1611,6 +1612,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
       }
     }
   }
+  index_schema->SetTextSizeEstimationConditions();
   VMSDK_LOG(NOTICE, ctx) << "Loaded index schema with "
                          << index_schema->GetAttributeCount() << " attributes";
   return index_schema;
@@ -1977,6 +1979,16 @@ absl::StatusOr<vmsdk::ValkeyVersion> IndexSchema::GetMinVersion(
     return kRelease11;
   } else {
     return kRelease10;
+  }
+}
+
+void IndexSchema::SetTextSizeEstimationConditions() {
+  if (text_index_schema_) {
+    for (const auto &[_, attr] : attributes_) {
+      if (attr.GetIndex()->GetIndexerType() == indexes::IndexerType::kHNSW) {
+        text_index_schema_->EnableSubtreeItemCountTracking();
+      }
+    }
   }
 }
 

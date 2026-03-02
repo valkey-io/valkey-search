@@ -261,29 +261,51 @@ std::unique_ptr<indexes::text::TextIterator> FuzzyPredicate::BuildTextIterator(
       std::move(key_iterators), field_mask, require_positions);
 }
 
-// Size apis for estimation
+/*
+ * Size APIs for pre-filter or inline filter planning.
+ *
+ * Size estimation is only done at the schema-level right now. It does not
+ * account for a field specifier in the text query and may over-estimate
+ * because of it if there are multiple text fields in the schema.
+ */
+
 size_t TermPredicate::EstimateSize() const {
-  // TODO: Implementation
+  auto iter =
+      text_index_schema_->GetTextIndex()->GetPrefix().GetWordIterator(term_);
+  if (!iter.Done() && iter.GetWord() == term_) {
+    return iter.GetPostingsTarget()->GetKeyCount();
+  }
   return 0;
 }
 
 size_t PrefixPredicate::EstimateSize() const {
-  // TODO: Implementation
-  return 0;
+  if (text_index_schema_->TrackSubtreeItemsCountEnabled()) {
+    return text_index_schema_->GetTextIndex()->GetPrefix().GetSubtreeItemCount(
+        term_);
+  } else {
+    return text_index_schema_->GetTrackedKeyCount();
+  }
 }
 
 size_t SuffixPredicate::EstimateSize() const {
-  // TODO: Implementation
-  return 0;
+  if (text_index_schema_->TrackSubtreeItemsCountEnabled()) {
+    auto suffix_tree = text_index_schema_->GetTextIndex()->GetSuffix();
+    CHECK(suffix_tree) << "Suffix estimation not supported";
+    return suffix_tree.value().get().GetSubtreeItemCount(term_);
+  } else {
+    return text_index_schema_->GetTrackedKeyCount();
+  }
 }
 
 size_t InfixPredicate::EstimateSize() const {
-  // TODO: Implementation
-  return 0;
+  // TODO: Implement once infix is supported
+  // Right now we return the upper bound
+  return text_index_schema_->GetTrackedKeyCount();
 }
 
 size_t FuzzyPredicate::EstimateSize() const {
-  // TODO: Implementation
-  return 0;
+  // TODO: Implement proper heuristic
+  // Right now we return the upper bound
+  return text_index_schema_->GetTrackedKeyCount();
 }
 }  // namespace valkey_search::query

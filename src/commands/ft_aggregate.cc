@@ -380,12 +380,17 @@ absl::Status SendReplyInner(ValkeyModuleCtx *ctx,
 // clause (e.g. sorting) that requires all neighbors to be returned for the
 // correct search result.
 bool AggregateParameters::RequiresCompleteResults() const {
+  return GetSerializationRange() == query::SerializationRange::All();
+}
+
+query::SerializationRange AggregateParameters::GetSerializationRange() const {
   for (const auto &stage : stages_) {
-    if (dynamic_cast<const SortBy *>(stage.get()) != nullptr) {
-      return true;
+    auto stage_range = stage->GetSerializationRange();
+    if (stage_range) {
+      return *stage_range;
     }
   }
-  return false;
+  return query::SerializationRange::All();
 }
 
 void AggregateParameters::SendReply(ValkeyModuleCtx *ctx,

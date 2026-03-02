@@ -51,8 +51,6 @@ using Key = InternedStringPtr;
 using Position = uint32_t;
 using FieldMaskPredicate = uint64_t;
 
-// Bit-packed FieldMask
-#pragma pack(push, 1)
 struct FieldMask {
   // Constructors
   FieldMask();
@@ -72,9 +70,8 @@ struct FieldMask {
   uint64_t mask_{0};
   uint8_t num_fields_{1};
 };
-#pragma pack(pop)
 
-static_assert(sizeof(FieldMask) == 9, "FieldMask should exactly be 9 bytes");
+static_assert(sizeof(FieldMask) == 16, "FieldMask should exactly be 16 bytes");
 
 using PositionMap = std::map<Position, FieldMask>;
 

@@ -249,7 +249,7 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
     // Update metadata from PositionMap
     metadata_.total_positions += pos_map.size();
     for (const auto &[_, field_mask] : pos_map) {
-      metadata_.total_term_frequency += field_mask->CountSetFields();
+      metadata_.total_term_frequency += field_mask.CountSetFields();
     }
 
     // Create FlatPositionMap from PositionMap

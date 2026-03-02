@@ -201,8 +201,8 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
     auto &[positions, suffix_eligible] = (*token_positions)[token];
     if (suffix) suffix_eligible = true;
     auto [pos_it, _] =
-        positions.try_emplace(position, FieldMask::Create(num_text_fields_));
-    pos_it->second->SetField(text_field_number);
+        positions.try_emplace(position, FieldMask(num_text_fields_));
+    pos_it->second.SetField(text_field_number);
   }
 
   return true;

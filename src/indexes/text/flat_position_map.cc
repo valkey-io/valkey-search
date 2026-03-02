@@ -104,8 +104,7 @@ static inline std::pair<T, bool> DecodeValue(const char*& ptr) {
 
 // Static factory and destroyer
 FlatPositionMap* FlatPositionMap::Create(
-    const std::map<Position, std::unique_ptr<FieldMask>>& position_map,
-    size_t num_text_fields) {
+    const std::map<Position, FieldMask>& position_map, size_t num_text_fields) {
   CHECK(!position_map.empty())
       << "Cannot create FlatPositionMap from empty position_map";
 
@@ -138,7 +137,7 @@ FlatPositionMap* FlatPositionMap::Create(
 
     // Encode field mask if multi-field and changed
     if (num_text_fields > 1) {
-      uint64_t current_mask = field_mask->AsUint64();
+      uint64_t current_mask = field_mask.GetMask();
       if (is_partition_start || current_mask != prev_field_mask) {
         EncodeValue(position_data, current_mask, false);  // false = field_mask
         prev_field_mask = current_mask;

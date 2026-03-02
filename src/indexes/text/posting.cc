@@ -10,9 +10,6 @@
 #include <cstdint>
 #include <map>
 #include <memory>
-#include <stdexcept>
-#include <type_traits>
-#include <vector>
 
 #include "absl/log/check.h"
 #include "src/index_schema.h"
@@ -20,56 +17,42 @@
 
 namespace valkey_search::indexes::text {
 
-// Simple FieldMask implementation
-class FieldMaskImpl final : public FieldMask {
- public:
-  explicit FieldMaskImpl(size_t num_fields) : num_fields_(num_fields) {}
-  void SetField(size_t field_index) override;
-  void ClearField(size_t field_index) override;
-  bool HasField(size_t field_index) const override;
-  void SetAllFields() override;
-  void ClearAllFields() override;
-  size_t CountSetFields() const override;
-  uint64_t AsUint64() const override;
-  size_t MaxFields() const override { return num_fields_; }
+// FieldMask Implementation
 
- private:
-  uint64_t mask_{0};
-  size_t num_fields_;
-};
+FieldMask::FieldMask() : mask_(0), num_fields_(1) {}
 
-std::unique_ptr<FieldMask> FieldMask::Create(size_t num_fields) {
-  CHECK(num_fields > 0) << "num_fields must be greater than 0";
-  CHECK(num_fields <= 64) << "Too many text fields (max 64 supported)";
-  return std::make_unique<FieldMaskImpl>(num_fields);
+FieldMask::FieldMask(size_t num_fields) : mask_(0) {
+  CHECK(num_fields > 0 && num_fields <= 64)
+      << "num_fields must be between 1 and 64";
+  num_fields_ = static_cast<uint8_t>(num_fields);
 }
 
-void FieldMaskImpl::SetField(size_t field_index) {
+void FieldMask::SetField(size_t field_index) {
   CHECK(field_index < num_fields_) << "Field index out of range";
   mask_ |= (1ULL << field_index);
 }
 
-void FieldMaskImpl::ClearField(size_t field_index) {
+void FieldMask::ClearField(size_t field_index) {
   CHECK(field_index < num_fields_) << "Field index out of range";
   mask_ &= ~(1ULL << field_index);
 }
 
-bool FieldMaskImpl::HasField(size_t field_index) const {
+bool FieldMask::HasField(size_t field_index) const {
   if (field_index >= num_fields_) return false;
   return (mask_ & (1ULL << field_index)) != 0;
 }
 
-void FieldMaskImpl::SetAllFields() {
+void FieldMask::SetAllFields() {
   mask_ = (num_fields_ == 64) ? ~0ULL : ((1ULL << num_fields_) - 1);
 }
 
-void FieldMaskImpl::ClearAllFields() { mask_ = 0; }
+void FieldMask::ClearAllFields() { mask_ = 0; }
 
-size_t FieldMaskImpl::CountSetFields() const {
-  return __builtin_popcountll(mask_);
-}
+size_t FieldMask::CountSetFields() const { return __builtin_popcountll(mask_); }
 
-uint64_t FieldMaskImpl::AsUint64() const { return mask_; }
+uint64_t FieldMask::GetMask() const { return mask_; }
+
+size_t FieldMask::MaxFields() const { return num_fields_; }
 
 // Basic Postings Object Implementation
 
@@ -83,11 +66,11 @@ Postings::~Postings() {
 // Check if posting list contains any documents
 bool Postings::IsEmpty() const { return key_to_positions_.empty(); }
 
-// TODO: develop a better strategy to track terms
+// Count terms across all fields in a position map
 unsigned int count_num_terms(const PositionMap& pos_map) {
   unsigned int num_terms = 0;
   for (const auto& [_, field_mask] : pos_map) {
-    num_terms += field_mask->CountSetFields();
+    num_terms += field_mask.CountSetFields();
   }
   return num_terms;
 }

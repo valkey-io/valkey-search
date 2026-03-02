@@ -66,6 +66,7 @@ class SchemaManager {
   // generation.
   uint64_t GetNumberOfIndexSchemas() const;
   uint64_t GetNumberOfAttributes() const;
+  uint64_t GetMaxAttributeCountForAnyIndex() const;
   uint64_t GetNumberOfTextAttributes() const;
   uint64_t GetNumberOfTagAttributes() const;
   uint64_t GetNumberOfNumericAttributes() const;

@@ -239,6 +239,11 @@ class TextIndexSchema {
     // Key not found in text indexes - this is normal for keys without text data
     return nullptr;
   }
+
+  // TODO: remove this because we'll always track the counts once it's optimized
+  bool TrackSubtreeItemsCountEnabled() const {
+    return track_subtree_item_counts_;
+  }
 };
 
 }  // namespace valkey_search::indexes::text

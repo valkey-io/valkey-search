@@ -2263,10 +2263,11 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # Invalid UTF-8 queries should not crash (may return 0 or handle gracefully)
         assert client.execute_command("FT.SEARCH", "idx", b"invalid\xff")[0] == 0
         assert client.execute_command("FT.SEARCH", "idx", b"\xff\xfe")[0] == 0
-        assert client.execute_command("FT.SEARCH", "idx",  b"%invalid%")[0] == 0
+        assert client.execute_command("FT.SEARCH", "idx",  b"%invalid\xff%")[0] == 0
         assert client.execute_command("FT.SEARCH", "idx", b"@category:{invalid\xc3}")[0] == 1 #tag with non utf8 gives result
-        with pytest.raises(ResponseError):
+        with pytest.raises(ResponseError) as e:
             client.execute_command("FT.SEARCH", "idx", b"@price:invalid\xc3 invalid\xc3]")
+        assert "Invalid filter expression" in str(e.value)
 
     def test_multilanguage_text(self):
         """Test multi-language text handling - should not crash"""

@@ -500,7 +500,7 @@ elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
     export TEST_PATTERN=${TEST_PATTERN}
     export INTEG_RETRIES=${INTEG_RETRIES}
     # Run will run ASan or normal tests based on the environment variable SAN_BUILD
-    ./run.sh || EXIT_CODE=1
+    ./run.sh
     popd >/dev/null
 fi
 

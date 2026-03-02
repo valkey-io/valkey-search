@@ -21,8 +21,12 @@ TermIterator::TermIterator(
       current_field_mask_(0ULL),
       require_positions_(require_positions),
       has_original_(has_original) {
+  // Populate the key_set_ heap.
+  for (size_t i = 0; i < key_iterators_.size(); ++i) {
+    InsertValidKeyIterator(i);
+  }
   // Prime the first key and position if they exist.
-  if (!key_iterators_.empty()) {
+  if (!key_set_.empty()) {
     TermIterator::NextKey();
   }
 }
@@ -32,10 +36,9 @@ FieldMaskPredicate TermIterator::QueryFieldMask() const {
 }
 
 bool TermIterator::DoneKeys() const {
-  for (const auto& key_iter : key_iterators_) {
-    if (key_iter.IsValid()) return false;
-  }
-  return true;
+  // O(1) check: current_key_ is nullified when FindMinimumValidKey exhausts all
+  // iterators.
+  return !current_key_;
 }
 
 const InternedStringPtr& TermIterator::CurrentKey() const {
@@ -43,45 +46,57 @@ const InternedStringPtr& TermIterator::CurrentKey() const {
   return current_key_;
 }
 
-bool TermIterator::FindMinimumValidKey() {
-  current_key_ = nullptr;
-  current_position_ = std::nullopt;
-  current_field_mask_ = 0ULL;
-  for (size_t i = 0; i < key_iterators_.size(); ++i) {
-    auto& key_iter = key_iterators_[i];
-    // Use query_field_mask if first iterator AND original word exists
-    // Otherwise use stem field mask intersection
-    const auto field_mask = ((i == 0 && has_original_) || stem_field_mask_ == 0)
-                                ? query_field_mask_
-                                : (stem_field_mask_);
-
-    while (key_iter.IsValid() && !key_iter.ContainsFields(field_mask)) {
-      key_iter.NextKey();
-    }
-    if (key_iter.IsValid()) {
-      const auto& key = key_iter.GetKey();
-      // Only populate position iterators if the query requires positions.
-      // For example, an index with NOOFFSETS can still support AND
-      // intersections of term predicates.
-      if (require_positions_) {
-        if (!current_key_ || key < current_key_) {
-          pos_iterators_.clear();
-          pos_iterators_.emplace_back(key_iter.GetPositionIterator());
-          current_key_ = key;
-        } else if (key == current_key_) {
-          pos_iterators_.emplace_back(key_iter.GetPositionIterator());
-        }
-      } else if (!current_key_ || key < current_key_) {
-        current_key_ = key;
-      }
-    }
+// Helper function to advance key iterators and populate the heap with valid
+// iterators for the new key.
+void TermIterator::InsertValidKeyIterator(size_t idx) {
+  auto& key_iter = key_iterators_[idx];
+  // Use query_field_mask for the original word (idx 0) or if no stem mask is
+  // provided.
+  const auto field_mask = ((idx == 0 && has_original_) || stem_field_mask_ == 0)
+                              ? query_field_mask_
+                              : stem_field_mask_;
+  // Advance the iterator until it matches the required fields.
+  while (key_iter.IsValid() && (!key_iter.ContainsFields(field_mask))) {
+    key_iter.NextKey();
   }
-  if (!current_key_) {
+  if (key_iter.IsValid()) {
+    key_set_.push_back_unsorted(key_iter.GetKey(), idx);
+  }
+}
+
+bool TermIterator::FindMinimumValidKey() {
+  // 1. If the heap is empty, all underlying iterators are exhausted.
+  // Note: This can be due to three cases:
+  //   a) Initialization: No valid keys were found across any
+  //      iterators during the first scan in the constructor.
+  //   b) Natural Exhaustion: All iterators were at some point the 'current_key'
+  //      (active indices) and were popped, advanced, and found to be
+  //      Done/Invalid.
+  //   c) Seek Exhaustion: During SeekForwardKey, laggards were popped and
+  //      skipped, but found to be invalid/done.
+  if (key_set_.empty()) {
+    ClearKeyState();
     return false;
   }
+  // 2. Restore the min-heap property. O(K).
+  key_set_.heapify();
+  current_key_ = key_set_.min().first;
+  current_key_indices_.clear();
+  // 3. Extract all iterators that share this minimum key.
+  // This physically removes them from the heap (making it "empty" if all
+  // match).
+  while (!key_set_.empty() && key_set_.min().first == current_key_) {
+    current_key_indices_.push_back(key_set_.min().second);
+    key_set_.pop_min();  // O(log K)
+  }
+  // 4. Initialize position iteration for the specific new key if required.
   if (require_positions_) {
-    // No need to check the result since we know that at least one position
-    // exists based on ContainsFields.
+    ClearPositionState();
+    for (size_t idx : current_key_indices_) {
+      pos_iterators_.emplace_back(key_iterators_[idx].GetPositionIterator());
+      // Populate the position heap.
+      InsertValidPositionIterator(pos_iterators_.size() - 1);
+    }
     TermIterator::NextPosition();
   }
   return true;
@@ -89,32 +104,38 @@ bool TermIterator::FindMinimumValidKey() {
 
 bool TermIterator::NextKey() {
   if (current_key_) {
-    for (auto& key_iter : key_iterators_) {
-      if (key_iter.IsValid() && key_iter.GetKey() == current_key_) {
-        key_iter.NextKey();
-      }
+    // Advance all iterators that contributed to the current key.
+    for (size_t idx : current_key_indices_) {
+      key_iterators_[idx].NextKey();
+      InsertValidKeyIterator(idx);
     }
+    current_key_indices_.clear();
   }
   return FindMinimumValidKey();
 }
 
 bool TermIterator::SeekForwardKey(const InternedStringPtr& target_key) {
-  if (current_key_ && current_key_ >= target_key) {
-    return true;
+  if (current_key_ && current_key_ >= target_key) return true;
+  // Drain laggards from the heap that are behind the target.
+  while (!key_set_.empty() && key_set_.min().first < target_key) {
+    size_t idx = key_set_.min().second;
+    key_set_.pop_min();
+    key_iterators_[idx].SkipForwardKey(target_key);
+    InsertValidKeyIterator(idx);
   }
-  // Use SkipForwardKey to efficiently seek all key iterators to target_key or
-  // beyond
-  for (auto& key_iter : key_iterators_) {
-    key_iter.SkipForwardKey(target_key);
+  // Update active indices that were already extracted from the heap.
+  if (current_key_) {
+    for (size_t idx : current_key_indices_) {
+      key_iterators_[idx].SkipForwardKey(target_key);
+      InsertValidKeyIterator(idx);
+    }
+    current_key_indices_.clear();
   }
   return FindMinimumValidKey();
 }
 
 bool TermIterator::DonePositions() const {
-  for (const auto& pos_iter : pos_iterators_) {
-    if (pos_iter.IsValid()) return false;
-  }
-  return true;
+  return !current_position_.has_value();
 }
 
 const PositionRange& TermIterator::CurrentPosition() const {
@@ -122,40 +143,67 @@ const PositionRange& TermIterator::CurrentPosition() const {
   return current_position_.value();
 }
 
-bool TermIterator::NextPosition() {
-  if (current_position_.has_value()) {
-    for (auto& pos_iter : pos_iterators_) {
-      if (pos_iter.IsValid() &&
-          pos_iter.GetPosition() == current_position_.value().start) {
-        pos_iter.NextPosition();
-      }
-    }
+// Helper function to advance position iterators and populate the heap with
+// valid iterators for the new position.
+void TermIterator::InsertValidPositionIterator(size_t idx) {
+  auto& pos_iter = pos_iterators_[idx];
+  // Skip positions that don't match the query field mask.
+  while (pos_iter.IsValid() &&
+         (!(pos_iter.GetFieldMask() & query_field_mask_))) {
+    pos_iter.NextPosition();
   }
-  uint32_t min_position = UINT32_MAX;
-  bool found = false;
-  FieldMaskPredicate field;
-  for (auto& pos_iter : pos_iterators_) {
-    while (pos_iter.IsValid() &&
-           !(pos_iter.GetFieldMask() & query_field_mask_)) {
-      pos_iter.NextPosition();
-    }
-    if (pos_iter.IsValid()) {
-      uint32_t position = pos_iter.GetPosition();
-      if (position < min_position) {
-        min_position = position;
-        field = pos_iter.GetFieldMask();
-        found = true;
-      }
-    }
+  if (pos_iter.IsValid()) {
+    pos_set_.push_back_unsorted(pos_iter.GetPosition(), idx);
   }
-  if (!found) {
-    current_position_ = std::nullopt;
-    current_field_mask_ = 0ULL;
+}
+
+// Position Logic follows the same Heap pattern as Key logic.
+bool TermIterator::FindMinimumValidPosition() {
+  // 1. If the heap is empty, we have exhausted all positions for the current
+  // key.
+  // Note: This can be due to three cases:
+  //   a) Initialization: No valid positions were found across any
+  //      iterators during the first scan in the constructor.
+  //   b) Natural Exhaustion: All iterators were at some point the
+  //   'current_position'
+  //      (active indices) and were popped, advanced, and found to be
+  //      Done/Invalid.
+  //   c) Seek Exhaustion: During SeekForwardPosition, laggards were popped and
+  //      skipped, but found to be invalid/done.
+  if (pos_set_.empty()) {
+    ClearPositionState();
     return false;
   }
+  // 2. Restore the min-heap property.
+  pos_set_.heapify();
+  // 3. Collect all iterators at the same position and aggregate their field
+  // masks. This physically extracts them from the heap (making it "empty" if
+  // all match).
+  uint32_t min_position = pos_set_.min().first;
+  current_pos_indices_.clear();
+  current_field_mask_ = 0ULL;
+  // 4. Collect all iterators at the same position and aggregate their field
+  // masks. This physically extracts them from the heap (making it "empty" if
+  // all match).
+  while (!pos_set_.empty() && pos_set_.min().first == min_position) {
+    size_t idx = pos_set_.min().second;
+    current_pos_indices_.push_back(idx);
+    current_field_mask_ |= pos_iterators_[idx].GetFieldMask();
+    pos_set_.pop_min();  // O(log K)
+  }
   current_position_ = PositionRange{min_position, min_position};
-  current_field_mask_ = field;
   return true;
+}
+
+bool TermIterator::NextPosition() {
+  if (current_position_.has_value()) {
+    for (size_t idx : current_pos_indices_) {
+      pos_iterators_[idx].NextPosition();
+      InsertValidPositionIterator(idx);
+    }
+    current_pos_indices_.clear();
+  }
+  return FindMinimumValidPosition();
 }
 
 bool TermIterator::SeekForwardPosition(Position target_position) {
@@ -163,25 +211,42 @@ bool TermIterator::SeekForwardPosition(Position target_position) {
       current_position_.value().start >= target_position) {
     return true;
   }
-  for (auto& pos_iter : pos_iterators_) {
-    if (pos_iter.IsValid()) {
-      // TRACKING CHECK: Only skip if the target is actually ahead of
-      // this specific child's current internal cumulative position.
-      if (target_position > pos_iter.GetPosition()) {
-        pos_iter.SkipForwardPosition(target_position);
-      }
-      // If target_position <= GetPosition(), we do nothing. This is safe
-      // because that child is already at or past the target.
-    }
+  // Drain laggard positions from the heap.
+  while (!pos_set_.empty() && pos_set_.min().first < target_position) {
+    size_t idx = pos_set_.min().second;
+    pos_set_.pop_min();
+    pos_iterators_[idx].SkipForwardPosition(target_position);
+    InsertValidPositionIterator(idx);
   }
-  current_position_ = std::nullopt;
-  current_field_mask_ = 0ULL;
-  return NextPosition();
+  // Update active position indices.
+  if (current_position_.has_value()) {
+    for (size_t idx : current_pos_indices_) {
+      pos_iterators_[idx].SkipForwardPosition(target_position);
+      InsertValidPositionIterator(idx);
+    }
+    current_pos_indices_.clear();
+  }
+  return FindMinimumValidPosition();
 }
 
 FieldMaskPredicate TermIterator::CurrentFieldMask() const {
   CHECK(current_field_mask_ != 0ULL);
   return current_field_mask_;
+}
+
+void TermIterator::ClearKeyState() {
+  current_key_ = {};
+  key_set_.clear();
+  current_key_indices_.clear();
+  ClearPositionState();
+}
+
+void TermIterator::ClearPositionState() {
+  pos_iterators_.clear();
+  pos_set_.clear();
+  current_pos_indices_.clear();
+  current_position_ = std::nullopt;
+  current_field_mask_ = 0ULL;
 }
 
 }  // namespace valkey_search::indexes::text

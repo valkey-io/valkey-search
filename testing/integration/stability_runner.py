@@ -378,7 +378,7 @@ class StabilityRunner:
             f" -c {self.config.num_memtier_clients}"
             " --random-data"
             " -"
-            " --command='EXPIRE __key__ 172800'"
+            " --command='EXPIRE __key__ 1'"
             " --command-key-pattern=P"
             f" -d {self.config.vector_dimensions*4}"
             " --json-out-file"

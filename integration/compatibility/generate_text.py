@@ -1,5 +1,8 @@
 import pytest
 import random
+import re
+import os
+import traceback
 from . import data_sets
 from .data_sets import load_data
 from .generate import BaseCompatibilityTest
@@ -91,7 +94,6 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
     
     def execute_command(self, cmd):
         """Override to include schema_type in answer."""
-        import os, traceback
         answer = {"cmd": cmd,
                 "key_type": self.key_type,
                 "data_set_name": self.data_set_name,
@@ -111,31 +113,34 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
             answer["exception"] = True
         self.answers.append(answer)
 
-    # helper function to parse the result of Redis FT.EXPLAINCLI
-    # use it to detect parsing differences
     def parse_explaincli_to_query(self, index_name: str, query: str, dialect: int = 2) -> tuple[str, bool]:
-        import re
-        
-        # Execute FT.EXPLAINCLI command
+        """
+        Parse the result of Redis FT.EXPLAINCLI into query
+        Check and filter out queries with different parsing
+        """
+        lines = self._decode_explaincli_result(index_name, query, dialect)
+        stack = self._parse_tree_from_lines(lines)
+        reconstructed = self._reconstruct_query(stack)
+        original_normalized = self._normalize_query(query)
+        reconstructed_normalized = self._normalize_query(reconstructed)
+        return reconstructed, original_normalized == reconstructed_normalized
+
+    def _decode_explaincli_result(self, index_name: str, query: str, dialect: int) -> list[str]:
+        """Execute FT.EXPLAINCLI and return decoded lines."""
         result = self.client.execute_command("FT.EXPLAINCLI", index_name, query, "DIALECT", str(dialect))
-        
-        # Decode if bytes
         if isinstance(result, bytes):
             result = result.decode('utf-8')
         elif isinstance(result, list):
             result = '\n'.join(r.decode('utf-8') if isinstance(r, bytes) else str(r) for r in result)
-        
-        lines = result.split('\n')
-        
-        # Parse the tree structure
+        return result.split('\n')
+
+    def _parse_tree_from_lines(self, lines: list[str]) -> list:
+        """Parse EXPLAINCLI output lines into a tree of dicts/strings."""
         stack = []
-        
         for line in lines:
             cleaned = re.sub(r'^\d+\)\s*', '', line.strip())
-            
             if not cleaned:
                 continue
-            
             if 'INTERSECT' in cleaned:
                 stack.append({'type': 'AND', 'children': []})
             elif 'UNION' in cleaned:
@@ -154,286 +159,211 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
                         stack[-1]['children'].append(cleaned)
                     else:
                         stack.append(cleaned)
-        
-        # Reconstruct query
+        return stack
+
+    @staticmethod
+    def _reconstruct_query(stack: list) -> str:
+        """Reconstruct a query string from a parsed tree."""
         def reconstruct(node):
             if isinstance(node, str):
                 return node
-            elif isinstance(node, dict):
-                op_type = node['type']
-                children = node['children']
-                
+            if isinstance(node, dict):
+                children = [reconstruct(c) for c in node['children']]
                 if not children:
                     return ''
-                
-                reconstructed_children = [reconstruct(child) for child in children]
-                
-                if op_type == 'AND':
-                    result = ' '.join(reconstructed_children)
-                    return f'({result})' if len(reconstructed_children) > 1 else result
-                elif op_type == 'OR':
-                    # Sort OR terms for consistent comparison (OR is commutative)
-                    reconstructed_children.sort()
-                    result = ' | '.join(reconstructed_children)
-                    return f'({result})' if len(reconstructed_children) > 1 else result
+                if node['type'] == 'OR':
+                    children.sort()
+                    joiner = ' | '
+                else:
+                    joiner = ' '
+                result = joiner.join(children)
+                return f'({result})' if len(children) > 1 else result
             return ''
-        
+
         if not stack:
-            reconstructed = ''
-        elif len(stack) == 1:
-            reconstructed = reconstruct(stack[0])
-        else:
-            reconstructed = ' '.join(reconstruct(node) for node in stack)
-        
-        # Normalize function that handles Redis query normalization rules
-        def normalize(q):
-            # Remove all whitespace first for easier processing
-            q = re.sub(r'\s+', ' ', q.strip())
-            
-            # Parse into a tree structure
-            def parse_to_tree(s):
-                s = s.strip()
-                if not s:
-                    return None
-                
-                # Remove outer parentheses if they wrap everything
-                while s.startswith('(') and s.endswith(')'):
-                    # Check if these parens actually wrap the whole expression
-                    depth = 0
-                    wraps_all = True
-                    for i, c in enumerate(s[1:-1], 1):
-                        if c == '(':
-                            depth += 1
-                        elif c == ')':
-                            depth -= 1
-                        if depth < 0:
-                            wraps_all = False
-                            break
-                    if wraps_all and depth == 0:
-                        s = s[1:-1].strip()
-                    else:
-                        break
-                
-                # Check for OR operator at top level
-                depth = 0
-                or_positions = []
-                for i, c in enumerate(s):
-                    if c == '(':
-                        depth += 1
-                    elif c == ')':
-                        depth -= 1
-                    elif depth == 0 and i > 0 and s[i-1:i+1] == ' |':
-                        or_positions.append(i-1)
-                
-                if or_positions:
-                    # Split by OR
-                    parts = []
-                    last = 0
-                    for pos in or_positions:
-                        parts.append(s[last:pos].strip())
-                        last = pos + 2  # Skip ' |'
-                    parts.append(s[last:].strip())
-                    
-                    children = [parse_to_tree(p) for p in parts if p]
-                    children.sort()  # Sort OR terms
-                    return ('OR', children)
-                
-                # Check for AND (space-separated at top level)
-                depth = 0
-                and_positions = []
-                i = 0
-                while i < len(s):
-                    if s[i] == '(':
-                        depth += 1
-                    elif s[i] == ')':
-                        depth -= 1
-                    elif depth == 0 and s[i] == ' ' and (i + 1 >= len(s) or s[i+1] != '|'):
-                        and_positions.append(i)
+            return ''
+        if len(stack) == 1:
+            return reconstruct(stack[0])
+        return ' '.join(reconstruct(node) for node in stack)
+
+    @staticmethod
+    def _normalize_query(q: str) -> str:
+        """Normalize a query string so semantically equivalent queries produce
+        the same string. OR operands are sorted since OR is commutative."""
+
+        def tokenize(s):
+            """Split query into tokens: '(', ')', '|', and words."""
+            tokens = []
+            i = 0
+            s = s.strip()
+            while i < len(s):
+                if s[i] in '()':
+                    tokens.append(s[i])
                     i += 1
-                
-                if and_positions:
-                    # Split by AND
-                    parts = []
-                    last = 0
-                    for pos in and_positions:
-                        part = s[last:pos].strip()
-                        if part:
-                            parts.append(part)
-                        last = pos + 1
-                    part = s[last:].strip()
-                    if part:
-                        parts.append(part)
-                    
-                    if len(parts) > 1:
-                        children = [parse_to_tree(p) for p in parts]
-                        return ('AND', children)
-                
-                # It's a single term
-                return s
-            
-            # Convert tree back to normalized string
-            def tree_to_string(tree):
-                if isinstance(tree, str):
-                    return tree
-                op, children = tree
-                child_strs = [tree_to_string(c) for c in children]
-                if op == 'OR':
-                    result = ' | '.join(child_strs)
-                    return f'({result})'
-                else:  # AND
-                    result = ' '.join(child_strs)
-                    return f'({result})' if len(child_strs) > 1 else result
-            
-            tree = parse_to_tree(q)
-            return tree_to_string(tree) if tree else ''
-        
-        original_normalized = normalize(query)
-        reconstructed_normalized = normalize(reconstructed)
-        
-        is_valid = original_normalized == reconstructed_normalized
-        
-        return reconstructed, is_valid
+                elif s[i] == '|':
+                    tokens.append('|')
+                    i += 1
+                elif s[i].isspace():
+                    i += 1
+                else:
+                    # Read a word token
+                    j = i
+                    while j < len(s) and s[j] not in '()|' and not s[j].isspace():
+                        j += 1
+                    tokens.append(s[j:j] if i == j else s[i:j])
+                    i = j
+            return tokens
 
-    # extract only words from the result of FT.EXPLAINCLI
-    # return a list of words only
-    def extract_words_from_explaincli(self, index_name: str, query: str, dialect: int = 2) -> list:
-        import re
+        def parse_or(tokens, pos):
+            """Parse an OR expression: and_expr ( '|' and_expr )*"""
+            node, pos = parse_and(tokens, pos)
+            children = [node]
+            while pos < len(tokens) and tokens[pos] == '|':
+                pos += 1  # skip '|'
+                child, pos = parse_and(tokens, pos)
+                children.append(child)
+            if len(children) == 1:
+                return children[0], pos
+            children.sort()  # OR is commutative, sort for canonical form
+            return ('OR', children), pos
 
-        # Execute FT.EXPLAINCLI command
-        result = self.client.execute_command("FT.EXPLAINCLI", index_name, query, "DIALECT", str(dialect))
-        
-        # Decode if bytes
-        if isinstance(result, bytes):
-            result = result.decode('utf-8')
-        elif isinstance(result, list):
-            result = '\n'.join(r.decode('utf-8') if isinstance(r, bytes) else str(r) for r in result)
-        
-        # Extract terms
-        terms = []
-        for line in result.split('\n'):
-            # Remove leading numbers and closing parentheses
-            cleaned = re.sub(r'^\d+\)\s*', '', line.strip())
-            
-            # Skip empty lines, operators, braces, and expanded terms
-            if not cleaned or cleaned in ['{', '}'] or cleaned.startswith('+'):
-                continue
-            if any(keyword in cleaned for keyword in ['UNION', 'INTERSECT', 'NOT', '(expanded)']):
-                continue
-            
-            # If it's a simple word, add it
-            if re.match(r'^[a-zA-Z0-9_-]+$', cleaned):
-                terms.append(cleaned)
-        
-        return terms
-    
-    # extract only words from the result of FT.EXPLAINCLI
-    # return a list of words only
-    def extract_words_from_query(self, query: str) -> list:
-        import re
-        # Remove all non-alphanumeric characters except spaces and hyphens/underscores in words
-        # This removes: ( ) | { } => $ @ * % " and other special chars
-        cleaned = re.sub(r'[^\w\s-]', ' ', query)
-        
-        # Split by whitespace and filter out empty strings
-        words = [word for word in cleaned.split() if word]
-        
-        return words
+        def parse_and(tokens, pos):
+            """Parse an AND expression: atom+"""
+            node, pos = parse_atom(tokens, pos)
+            children = [node]
+            while pos < len(tokens) and tokens[pos] not in ('|', ')'):
+                child, pos = parse_atom(tokens, pos)
+                children.append(child)
+            if len(children) == 1:
+                return children[0], pos
+            return ('AND', children), pos
 
-    def _run_test(self, builder_fn, data_set_name, key_type, dialect, schema_type, inorder=False, slop=False, check_parsing=False, field=None, query_str=None):
-        """Helper to run a test with given term builder function.
-        
+        def parse_atom(tokens, pos):
+            """Parse a single term or a parenthesized sub-expression."""
+            if tokens[pos] == '(':
+                pos += 1  # skip '('
+                node, pos = parse_or(tokens, pos)
+                pos += 1  # skip ')'
+                return node, pos
+            word = tokens[pos]
+            return word, pos + 1
+
+        def tree_to_string(tree):
+            """Convert a parse tree back to a normalized string."""
+            if isinstance(tree, str):
+                return tree
+            op, children = tree
+            child_strs = [tree_to_string(c) for c in children]
+            if op == 'OR':
+                return '(' + ' | '.join(child_strs) + ')'
+            else:
+                result = ' '.join(child_strs)
+                return f'({result})' if len(child_strs) > 1 else result
+
+        tokens = tokenize(q)
+        if not tokens:
+            return ''
+        tree, _ = parse_or(tokens, 0)
+        return tree_to_string(tree)
+
+    def _is_redis_server(self) -> bool:
+        """Check if the connected server is Redis (vs Valkey)."""
+        # try:
+        #     info = self.client.execute_command("INFO", "SERVER")
+        #     if isinstance(info, bytes):
+        #         info = info.decode('utf-8')
+        #     return "redis_version" in info
+        # except Exception:
+        #     return False
+        try:
+            info = self.client.execute_command("INFO", "SERVER")
+            if isinstance(info, bytes):
+                info = info.decode('utf-8')
+            return "server_name:valkey" not in info
+        except Exception:
+            return False
+
+    @staticmethod
+    def _build_query(builder_fn, vocab, rng, renderer, query_str=None):
+        """Generate a query string from builder_fn, or return query_str if provided."""
+        if query_str:
+            return query_str
+        result = builder_fn(vocab, rng)
+        return result if isinstance(result, str) else renderer.render(result)
+
+    def _validate_parsing(self, key_type, query, dialect):
+        """Check if Redis parses the query consistently via FT.EXPLAINCLI.
+        Returns True if valid or skipped, False if mismatched."""
+        reconstructed, is_valid = self.parse_explaincli_to_query(
+            f"{key_type}_idx1", query, dialect
+        )
+        if not is_valid:
+            print(f"Redis parsing is inconsistent for query:")
+            print(f"  Original:      {query}")
+            print(f"  Reconstructed: {reconstructed}")
+        return is_valid
+
+    @staticmethod
+    def _build_search_args(key_type, query, dialect, inorder, slop, rng):
+        """Build the FT.SEARCH command argument list."""
+        args = ["FT.SEARCH", f"{key_type}_idx1", query]
+        if inorder:
+            args.append("INORDER")
+        if slop:
+            args.extend(["SLOP", str(rng.randint(1, 2))])
+        args.extend(["DIALECT", str(dialect)])
+        return args
+
+    def _run_test(self, builder_fn, data_set_name, key_type, dialect, schema_type,
+              inorder=False, slop=False, check_parsing=False, field=None, query_str=None):
+        """Helper to run a test with given term builder function
         Args:
             builder_fn: Function that takes (vocab, rng) and returns term(s) or query string
             data_set_name: Name of the data set to test against
             key_type: Type of key ("json" or "hash")
-            dialect: Query dialect version
+           dialect: Query dialect version
         """
-        try:
-            info = self.client.execute_command("INFO", "SERVER")
-            # Decode if bytes
-            if isinstance(info, bytes):
-                info = info.decode('utf-8')
-            is_redis = "redis_version" in info
-        except Exception:
-            is_redis = False
-        
-        matched_count = 0
-        mismatched_count = 0
+        is_redis = self._is_redis_server()
+        matched, mismatched = 0, 0
         self.setup_data(data_set_name, key_type, schema_type)
         rng = random.Random(self.TEXT_QUERY_TEST_SEED)
         renderer = TermRenderer()
-
-        vocab_by_field = data_sets.extract_vocab_by_field_from_text_data(
-            data_set_name, key_type
-        )
+        vocab_by_field = data_sets.extract_vocab_by_field_from_text_data(data_set_name, key_type)
 
         seen = set()
         query_count = 0
         attempts = 0
         max_queries = 1 if query_str else self.MAX_QUERIES
         max_attempts = self.MAX_QUERIES * 20
+
         while query_count < max_queries and attempts < max_attempts:
             attempts += 1
-
-            if field is not None:
-                selected_field = field
-            else:
-                selected_field = rng.choice(list(vocab_by_field.keys()))
+            selected_field = field if field is not None else rng.choice(list(vocab_by_field.keys()))
             vocab = vocab_by_field[selected_field]
 
             try:
-                if query_str:
-                    current_query = query_str
-                else:
-                    result = builder_fn(vocab, rng)
-                    current_query = result if isinstance(result, str) else renderer.render(result)
+                current_query = self._build_query(builder_fn, vocab, rng, renderer, query_str)
+                if current_query in seen:
+                    continue
+                seen.add(current_query)
 
-                if current_query not in seen:
-                    seen.add(current_query)
+                if is_redis and check_parsing:
+                    if self._validate_parsing(key_type, current_query, dialect):
+                        matched += 1
+                    else:
+                        mismatched += 1
+                        continue
+                    print(f"Matched: {matched}, Mismatched: {mismatched}")
 
-                    # check if Redis parsing is correct by calling FT.EXPLAINCLI, 
-                    # and compare the words order with the query string
-                    if is_redis and check_parsing:
-                        reconstructed_query, is_valid = self.parse_explaincli_to_query(
-                            f"{key_type}_idx1", 
-                            current_query, 
-                            dialect
-                        )
-                        if is_valid:
-                            matched_count += 1
-                        else:
-                            mismatched_count += 1
-                            print(f"Redis parsing is inconsistent for query:")
-                            print(f"  Original:      {current_query}")
-                            print(f"  Reconstructed: {reconstructed_query}")
-                            continue
-                        print(f"Matched: {matched_count}, Mismatched: {mismatched_count}")  
+                if current_query in excluded_queries:
+                    print(f"Query excluded with known Redis bug: {current_query}")
+                    continue
 
-                    # exclude queries with known bugs in Redis
-                    if current_query in excluded_queries:
-                        print(f"Query excluded with known Redis bug: {current_query}")
-                        continue  
+                args = self._build_search_args(key_type, current_query, dialect, inorder, slop, rng)
+                self.check(*args)
+                query_count += 1
 
-                    args = [
-                        "FT.SEARCH",
-                        f"{key_type}_idx1",
-                        current_query,
-                    ]
-                    if inorder:
-                        args.append("INORDER")
-                    if slop:
-                        slop_value = str(rng.randint(1, 2))
-                        args.append("SLOP")
-                        args.append(slop_value)
-                    args.extend([
-                        "DIALECT",
-                        str(dialect)
-                    ])
-                    self.check(*args)
-                    query_count += 1
-                    
             except Exception:
-                # Skip invalid queries and continue
                 continue
 
         print(f"Generated {query_count} unique queries from {attempts} attempts")

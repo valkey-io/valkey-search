@@ -77,6 +77,9 @@ TEST_P(ResponseGeneratorTest, ProcessNeighborsForReply) {
   auto &params = GetParam();
   ValkeyModuleCtx fake_ctx;
 
+  EXPECT_CALL(*kMockValkeyModule, GetExpire(testing::_))
+      .WillRepeatedly(testing::Return(VALKEYMODULE_NO_EXPIRE));
+
   std::deque<indexes::Neighbor> expected_neighbors;
   for (const auto &external_id : params.external_id_neighbors) {
     auto string_interned_external_id = StringInternStore::Intern(external_id);
@@ -153,6 +156,9 @@ TEST_P(ResponseGeneratorTest, ProcessNeighborsForReply) {
 
 TEST_F(ResponseGeneratorTest, ProcessNeighborsForReplyContentLimits) {
   ValkeyModuleCtx fake_ctx;
+
+  EXPECT_CALL(*kMockValkeyModule, GetExpire(testing::_))
+      .WillRepeatedly(testing::Return(VALKEYMODULE_NO_EXPIRE));
 
   // Set up a small content size limit for testing
   const size_t test_size_limit = 100;
@@ -550,6 +556,8 @@ TEST_P(ResponseGeneratorDbParamTest, ProcessNeighborsForReplySelectsCorrectDB) {
   int target_db = 5;
   int original_db = 0;
   data_model::AttributeDataType type = GetParam();
+  EXPECT_CALL(*kMockValkeyModule, GetExpire(testing::_))
+      .WillRepeatedly(testing::Return(VALKEYMODULE_NO_EXPIRE));
 
   query::SearchParameters parameters(100000, nullptr, 0);
   parameters.db_num = target_db;
@@ -594,6 +602,9 @@ TEST_P(ResponseGeneratorDbParamTest, ProcessNeighborsForReplyNoContent) {
   int target_db = 5;
   int original_db = 0;
   data_model::AttributeDataType type = GetParam();
+
+  EXPECT_CALL(*kMockValkeyModule, GetExpire(testing::_))
+      .WillRepeatedly(testing::Return(VALKEYMODULE_NO_EXPIRE));
 
   query::SearchParameters parameters(100000, nullptr, 0);
   parameters.db_num = target_db;

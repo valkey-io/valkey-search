@@ -279,7 +279,6 @@ class StabilityTests(parameterized.TestCase):
                 repl_diskless_load="swapdb",
             ),
         ),
-        # THIS TEST FAILS BECAUSE OF A KNOWN CRASH
         dict(
             testcase_name="text_with_backfill_coordinator_replica",
             config=stability_runner.StabilityTestConfig(
@@ -376,7 +375,6 @@ class StabilityTests(parameterized.TestCase):
                 repl_diskless_load="swapdb",
             ),
         ),
-        # THIS TEST FAILS BECAUSE OF A KNOWN CRASH
         dict(
             testcase_name="tag_with_backfill_coordinator_replica",
             config=stability_runner.StabilityTestConfig(
@@ -473,7 +471,6 @@ class StabilityTests(parameterized.TestCase):
                 repl_diskless_load="swapdb",
             ),
         ),
-        # THIS TEST FAILS BECAUSE OF A KNOWN CRASH
         dict(
             testcase_name="numeric_with_backfill_coordinator_replica",
             config=stability_runner.StabilityTestConfig(

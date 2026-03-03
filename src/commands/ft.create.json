@@ -44,10 +44,9 @@
         "name": "prefix",
         "type": "block",
         "optional": true,
-        "description": "Optional PREFIX clause to restrict indexed keys",
         "arguments": [
           {
-            "name": "PREFIX",
+            "name": "prefix_token",
             "type": "pure-token",
             "token": "PREFIX"
           },
@@ -59,6 +58,125 @@
             "name": "prefix",
             "type": "string",
             "multiple": true
+          }
+        ]
+      },
+      {
+        "name": "SCORE",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "score_token",
+            "type": "pure-token",
+            "token": "SCORE"
+          },
+          {
+            "name": "default_value",
+            "type": "string"
+          }
+        ]
+      },
+      {
+        "name": "LANGUAGE",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "language_token",
+            "type": "pure-token",
+            "token": "LANGUAGE"
+          },
+          {
+            "name": "language",
+            "type": "string"
+          }
+        ]
+      },
+      {
+        "name": "SKIPINITIALSCAN",
+        "type": "pure-token",
+        "optional": true,
+        "token": "SKIPINITIALSCAN"
+      },
+      {
+        "name": "MINSTEMSIZE",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "minstemsize_token",
+            "type": "pure-token",
+            "token": "MINSTEMSIZE"
+          },
+          {
+            "name": "min_stem_size",
+            "type": "integer"
+          }
+        ]
+      },
+      {
+        "name": "offsets",
+        "type": "oneof",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "WITHOFFSETS",
+            "type": "pure-token",
+            "token": "WITHOFFSETS"
+          },
+          {
+            "name": "NOOFFSETS",
+            "type": "pure-token",
+            "token": "NOOFFSETS"
+          }
+        ]
+      },
+      {
+        "name": "stopwords",
+        "type": "oneof",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "NOSTOPWORDS",
+            "type": "pure-token",
+            "token": "NOSTOPWORDS"
+          },
+          {
+            "name": "stopwords_list",
+            "type": "block",
+            "arguments": [
+              {
+                "name": "stopwords_token",
+                "type": "pure-token",
+                "token": "STOPWORDS"
+              },
+              {
+                "name": "count",
+                "type": "integer"
+              },
+              {
+                "name": "word",
+                "type": "string",
+                "multiple": true
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "PUNCTUATION",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "punctuation_token",
+            "type": "pure-token",
+            "token": "PUNCTUATION"
+          },
+          {
+            "name": "punctuation",
+            "type": "string"
           }
         ]
       },
@@ -87,12 +205,12 @@
                 "type": "block",
                 "arguments": [
                   {
-                    "name": "AS",
+                    "name": "as_token",
                     "type": "pure-token",
                     "token": "AS"
                   },
                   {
-                    "name": "field-identifier",
+                    "name": "field-alias",
                     "type": "string"
                   }
                 ]
@@ -105,11 +223,6 @@
                     "name": "NUMERIC",
                     "type": "pure-token",
                     "token": "NUMERIC"
-                  },
-                  {
-                    "name": "TEXT",
-                    "type": "pure-token",
-                    "token": "TEXT"
                   },
                   {
                     "name": "TAG",
@@ -137,7 +250,7 @@
                         ]
                       },
                       {
-                        "name": "casesensitive",
+                        "name": "CASESENSITIVE",
                         "optional": true,
                         "type": "pure-token",
                         "token": "CASESENSITIVE"
@@ -145,11 +258,61 @@
                     ]
                   },
                   {
-                    "name": "vector",
+                    "name": "TEXT",
                     "type": "block",
                     "arguments": [
                       {
-                        "name": "vector",
+                        "name": "text_token",
+                        "type": "pure-token",
+                        "token": "TEXT"
+                      },
+                      {
+                        "name": "NOSTEM",
+                        "optional": true,
+                        "type": "pure-token",
+                        "token": "NOSTEM"
+                      },
+                      {
+                        "name": "suffix_trie",
+                        "type": "oneof",
+                        "optional": true,
+                        "arguments": [
+                          {
+                            "name": "WITHSUFFIXTRIE",
+                            "type": "pure-token",
+                            "token": "WITHSUFFIXTRIE"
+                          },
+                          {
+                            "name": "NOSUFFIXTRIE",
+                            "type": "pure-token",
+                            "token": "NOSUFFIXTRIE"
+                          }
+                        ]
+                      },
+                      {
+                        "name": "weight",
+                        "optional": true,
+                        "type": "block",
+                        "arguments": [
+                          {
+                            "name": "weight_token",
+                            "type": "pure-token",
+                            "token": "WEIGHT"
+                          },
+                          {
+                            "name": "weight",
+                            "type": "string"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "name": "VECTOR",
+                    "type": "block",
+                    "arguments": [
+                      {
+                        "name": "vector_token",
                         "type": "pure-token",
                         "token": "VECTOR"
                       },
@@ -176,7 +339,7 @@
                       {
                         "name": "vector-params",
                         "type": "block",
-                        "description": "Vector algorithm parameters (DIM, TYPE, DISTANCE_METRIC, INITIAL_CAP, M, EF_CONSTRUCTION, EF_RUNTIME, BLOCK_SIZE)",
+                        "description": "Vector algorithm parameters (DIM, TYPE, DISTANCE_METRIC, INITIAL_CAP, M, EF_CONSTRUCTION, EF_RUNTIME)",
                         "arguments": [
                           {
                             "name": "type",
@@ -223,21 +386,37 @@
                                 "type": "oneof",
                                 "arguments": [
                                   {
-                                    "name": "l2",
+                                    "name": "L2",
                                     "type": "pure-token",
-                                    "token": "L2" 
+                                    "token": "L2"
                                   },
                                   {
-                                    "name": "ip",
-                                    "type": "pure-token", 
-                                    "token": "IP" 
+                                    "name": "IP",
+                                    "type": "pure-token",
+                                    "token": "IP"
                                   },
-                                  { 
-                                    "name": "cosine", 
-                                    "type": "pure-token", 
-                                    "token": "COSINE" 
+                                  {
+                                    "name": "COSINE",
+                                    "type": "pure-token",
+                                    "token": "COSINE"
                                   }
                                 ]
+                              }
+                            ]
+                          },
+                          {
+                            "name": "initial_cap",
+                            "type": "block",
+                            "optional": true,
+                            "arguments": [
+                              {
+                                "name": "ic_token",
+                                "type": "pure-token",
+                                "token": "INITIAL_CAP"
+                              },
+                              {
+                                "name": "value",
+                                "type": "integer"
                               }
                             ]
                           },
@@ -274,14 +453,14 @@
                             ]
                           },
                           {
-                            "name": "block_size",
+                            "name": "ef_runtime",
                             "type": "block",
                             "optional": true,
                             "arguments": [
                               {
-                                "name": "bs_token",
+                                "name": "efr_token",
                                 "type": "pure-token",
-                                "token": "BLOCK_SIZE"
+                                "token": "EF_RUNTIME"
                               },
                               {
                                 "name": "value",
@@ -294,6 +473,12 @@
                     ]
                   }
                 ]
+              },
+              {
+                "name": "SORTABLE",
+                "optional": true,
+                "type": "pure-token",
+                "token": "SORTABLE"
               }
             ]
           }

@@ -211,6 +211,13 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
   auto key_str = vmsdk::MakeUniqueValkeyString(key);
   auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
       ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
+  if (!key_obj) {
+    return absl::NotFoundError("Key not found");
+  }
+  mstime_t expire = ValkeyModule_GetExpire(key_obj.get());
+  if (expire != VALKEYMODULE_NO_EXPIRE && expire <= 0) {
+    return absl::NotFoundError("Key expired");
+  }
   VMSDK_ASSIGN_OR_RETURN(auto content, attribute_data_type.FetchAllRecords(
                                            ctx, vector_identifier,
                                            key_obj.get(), key, identifiers));
@@ -299,6 +306,13 @@ absl::StatusOr<RecordsMap> GetContent(
   auto key_str = vmsdk::MakeUniqueValkeyString(key);
   auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
       ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
+  if (!key_obj) {
+    return absl::NotFoundError("Key not found");
+  }
+  mstime_t expire = ValkeyModule_GetExpire(key_obj.get());
+  if (expire != VALKEYMODULE_NO_EXPIRE && expire <= 0) {
+    return absl::NotFoundError("Key expired");
+  }
   VMSDK_ASSIGN_OR_RETURN(auto content,
                          attribute_data_type.FetchAllRecords(
                              ctx, vector_identifier, key_obj.get(),
@@ -374,10 +388,10 @@ void ProcessNeighborsForReply(
     bool size_exceeded = false;
     if (content.value().size() > max_content_fields) {
       ++Metrics::GetStats().query_result_record_dropped_cnt;
-      VMSDK_LOG(WARNING, ctx)
+      VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
           << "Content field number exceeds configured limit of "
-          << max_content_fields
-          << " for neighbor with ID: " << (*neighbor.external_id).Str();
+          << max_content_fields << " for neighbor with ID: "
+          << vmsdk::config::RedactIfNeeded((*neighbor.external_id).Str());
       continue;
     }
 
@@ -386,9 +400,10 @@ void ProcessNeighborsForReply(
       total_size += vmsdk::ToStringView(item.second.value.get()).size();
       if (total_size > max_content_size) {
         ++Metrics::GetStats().query_result_record_dropped_cnt;
-        VMSDK_LOG(WARNING, ctx)
+        VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
             << "Content size exceeds configured limit of " << max_content_size
-            << " bytes for neighbor with ID: " << (*neighbor.external_id).Str();
+            << " bytes for neighbor with ID: "
+            << vmsdk::config::RedactIfNeeded((*neighbor.external_id).Str());
         size_exceeded = true;
         break;
       }

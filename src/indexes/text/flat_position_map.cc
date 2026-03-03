@@ -15,6 +15,19 @@
 #include "absl/log/check.h"
 #include "src/indexes/text/posting.h"
 
+namespace {
+
+// Read fixed-length unsigned int (little-endian) helper
+inline uint32_t ReadVarUint(const char* ptr, uint8_t num_bytes) {
+  uint32_t value = 0;
+  for (uint8_t i = 0; i < num_bytes; ++i) {
+    value |= (static_cast<uint32_t>(static_cast<uint8_t>(ptr[i])) << (i * 8));
+  }
+  return value;
+}
+
+}  // namespace
+
 namespace valkey_search::indexes::text {
 
 // Partition and encoding constants
@@ -202,10 +215,9 @@ uint8_t FlatPositionMap::BytesNeeded(uint32_t value) {
 
 std::pair<uint32_t, uint32_t> FlatPositionMap::ReadCounts(
     const char*& p) const {
-  uint32_t num_positions = 0, num_partitions = 0;
-  std::memcpy(&num_positions, p, pos_bytes_ + 1);
+  uint32_t num_positions = ReadVarUint(p, pos_bytes_ + 1);
   p += pos_bytes_ + 1;
-  std::memcpy(&num_partitions, p, part_bytes_ + 1);
+  uint32_t num_partitions = ReadVarUint(p, part_bytes_ + 1);
   p += part_bytes_ + 1;
   return {num_positions, num_partitions};
 }
@@ -216,15 +228,6 @@ void FlatPositionMap::WriteCounts(char*& p, uint32_t num_positions,
   p += pos_bytes_ + 1;
   std::memcpy(p, &num_partitions, part_bytes_ + 1);
   p += part_bytes_ + 1;
-}
-
-// Read fixed-length unsigned int from partition map (little-endian)
-uint32_t PositionIterator::ReadVarUint(const char* ptr, uint8_t num_bytes) {
-  uint32_t value = 0;
-  for (uint8_t i = 0; i < num_bytes; ++i) {
-    value |= (U32(U8(ptr[i])) << (i * 8));
-  }
-  return value;
 }
 
 //=============================================================================

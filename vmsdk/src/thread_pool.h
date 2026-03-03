@@ -96,6 +96,13 @@ class ThreadPool {
       }
     }
 
+    absl::StatusOr<double> GetThreadCPUPercentage() {
+      if (!thread_monitor_) {
+        return absl::UnavailableError("Thread monitor not initialized");
+      }
+      return thread_monitor_->GetThreadCPUPercentage();
+    }
+
     void InitThreadMonitor() {
       thread_monitor_ = std::make_unique<ThreadMonitor>(thread_id);
     }

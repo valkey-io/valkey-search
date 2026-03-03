@@ -143,7 +143,7 @@ absl::Status VectorFlat<T>::ResizeIfFull() {
   absl::WriterMutexLock lock(&resize_mutex_);
   std::unique_lock<std::mutex> index_lock(algo_->index_lock);
   if (algo_->cur_element_count_ == GetCapacity()) {
-    VMSDK_LOG(WARNING, nullptr)
+    VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
         << "Resizing FLAT Index, current size: " << GetCapacity()
         << ", expand by: " << block_size_;
     algo_->resizeIndex(GetCapacity() + block_size_);

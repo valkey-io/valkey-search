@@ -1,6 +1,6 @@
 ---
-title: "Search - Info Fields"
-description: Search Module INFO Fields
+title: "Valkey Search - Info Fields"
+description: Valkey Search Module INFO Fields
 ---
 
 # INFO Fields

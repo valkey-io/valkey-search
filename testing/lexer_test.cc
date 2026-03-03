@@ -220,18 +220,18 @@ TEST_F(LexerTest, StemMappingsMultipleWordsToSameStem) {
   absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>
       stem_mappings;
 
-  auto result = lexer_->Tokenize("running runs", true, 3, &stem_mappings);
+  auto result = lexer_->Tokenize("walking walks", true, 3, &stem_mappings);
 
   ASSERT_TRUE(result.ok());
   // Original words (case-folded, not stemmed)
-  EXPECT_EQ(*result, std::vector<std::string>({"running", "runs"}));
+  EXPECT_EQ(*result, std::vector<std::string>({"walking", "walks"}));
 
-  // Both words should map to the same stem "run"
+  // Both words should map to the same stem "walk"
   EXPECT_EQ(stem_mappings.size(), 1);
-  EXPECT_TRUE(stem_mappings.contains("run"));
-  EXPECT_EQ(stem_mappings["run"].size(), 2);  // Both words map to "run"
-  EXPECT_TRUE(stem_mappings["run"].contains("running"));
-  EXPECT_TRUE(stem_mappings["run"].contains("runs"));
+  EXPECT_TRUE(stem_mappings.contains("walk"));
+  EXPECT_EQ(stem_mappings["walk"].size(), 2);  // Both words map to "walk"
+  EXPECT_TRUE(stem_mappings["walk"].contains("walking"));
+  EXPECT_TRUE(stem_mappings["walk"].contains("walks"));
 }
 
 TEST_F(LexerTest, StemMappingsNoStemmingWhenDisabled) {

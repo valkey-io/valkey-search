@@ -150,6 +150,7 @@ target_link_libraries(coordinator_common INTERFACE server)
 # 1. Utils Test Suite - consolidates utility tests
 set(UTILS_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/utils/allocator_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/utils/bloom_filter_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/utils/intrusive_list_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/utils/intrusive_ref_count_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/utils/lru_test.cc
@@ -162,6 +163,7 @@ target_include_directories(valkey_utils_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_include_directories(valkey_utils_test
                            PUBLIC ${CMAKE_CURRENT_LIST_DIR}/utils)
 target_link_libraries(valkey_utils_test PRIVATE testing_common_base)
+target_link_libraries(valkey_utils_test PRIVATE bloom_filter)
 target_link_libraries(valkey_utils_test PRIVATE intrusive_list)
 target_link_libraries(valkey_utils_test PRIVATE lru)
 target_link_libraries(valkey_utils_test PRIVATE segment_tree)

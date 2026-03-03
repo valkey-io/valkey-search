@@ -14,6 +14,7 @@
 #include "absl/strings/ascii.h"
 #include "libstemmer.h"
 #include "src/indexes/text/unicode_normalizer.h"
+#include "src/utils/bloom_filter.h"
 #include "src/utils/scanner.h"
 
 namespace valkey_search::indexes::text {
@@ -72,6 +73,15 @@ using StemmerPtr = std::unique_ptr<sb_stemmer, StemmerDeleter>;
 // Each ingestion worker thread gets a stemmer for each language it tokenizes
 // at least once.
 thread_local absl::flat_hash_map<data_model::Language, StemmerPtr> stemmers_;
+
+// Configuration for the stemmed words bloom filter.
+constexpr size_t kStemmedWordsFilterCapacity = 1000;
+constexpr double kStemmedWordsFilterFalsePositiveRate = 0.01;
+
+// Thread-local bloom filter for tracking words that have already been stemmed.
+thread_local auto stemmed_words_filter_ =
+    valkey_search::utils::BloomFilter::CreateOptimal(
+        kStemmedWordsFilterCapacity, kStemmedWordsFilterFalsePositiveRate);
 
 }  // namespace
 
@@ -142,8 +152,9 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
         continue;  // Skip stop words
       }
 
-      if (stemming_enabled) {
+      if (stemming_enabled && !stemmed_words_filter_.MayContain(word)) {
         std::string stemmed_word = StemWord(word, stemmer, min_stem_size);
+        stemmed_words_filter_.Insert(word);
         if (word != stemmed_word) {
           CHECK(stem_mappings) << "stem_mappings must not be null";
           (*stem_mappings)[stemmed_word].insert(word);

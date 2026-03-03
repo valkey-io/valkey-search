@@ -54,3 +54,10 @@ add_library(scanner INTERFACE ${SRCS_SCANNER})
 target_include_directories(scanner INTERFACE ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(scanner INTERFACE absl::strings)
 target_link_libraries(scanner INTERFACE valkey_module)
+
+set(SRCS_BLOOM_FILTER ${CMAKE_CURRENT_LIST_DIR}/bloom_filter.h)
+
+add_library(bloom_filter INTERFACE ${SRCS_BLOOM_FILTER})
+target_include_directories(bloom_filter INTERFACE ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(bloom_filter INTERFACE absl::hash)
+target_link_libraries(bloom_filter INTERFACE absl::strings)

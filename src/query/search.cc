@@ -577,9 +577,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
 
   // Get the config for maximum number of keys to accumulate before content
   // fetching
-  const size_t max_keys =
-      static_cast<size_t>(
-          options::GetMaxNonVectorSearchResultsFetched().GetValue());
+  const size_t max_keys = static_cast<size_t>(
+      options::GetMaxNonVectorSearchResultsFetched().GetValue());
   std::vector<indexes::Neighbor> neighbors;
   neighbors.reserve(std::min(qualified_entries, static_cast<size_t>(5000)));
   auto results_appender =

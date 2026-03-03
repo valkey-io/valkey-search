@@ -438,7 +438,7 @@ static auto max_nonvector_search_results_fetched =
         kMaxNonVectorSearchResultsFetchedConfig,   // name
         kDefaultMaxNonVectorSearchResultsFetched,  // default limit (100K)
         kMinimumMaxNonVectorSearchResultsFetched,  // min limit (0)
-        kMaximumMaxNonVectorSearchResultsFetched)  // no upper limit (UINT32_MAX)
+        kMaximumMaxNonVectorSearchResultsFetched)  // UINT32_MAX
         .Build();
 
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }

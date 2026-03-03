@@ -395,7 +395,7 @@ def do_answer(client, expected, data_set):
         waiters.wait_for_true(lambda: IndexingTestHelper.is_indexing_complete_on_node(client, f"{expected['key_type']}_idx1"))
         data_set = (expected['data_set_name'], expected['key_type'], expected.get("schema_type"))
 
-    # for the excluded quereis with known difference
+    # for the excluded queries with known difference
     # just run in valkey to make sure they do not crash
     if expected.get('excluded'):
         try:

@@ -12,17 +12,21 @@
 #include <bitset>
 #include <cctype>
 #include <memory>
-#include <mutex>
 #include <optional>
 
+#include "absl/base/thread_annotations.h"
 #include "absl/container/btree_map.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/container/node_hash_map.h"
 #include "absl/functional/function_ref.h"
 #include "absl/strings/string_view.h"
+#include "absl/synchronization/mutex.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/text/invasive_ptr.h"
 #include "src/indexes/text/lexer.h"
 #include "src/indexes/text/posting.h"
+#include "src/indexes/text/postings_mutex_pool.h"
 #include "src/indexes/text/rax_wrapper.h"
 
 struct sb_stemmer;
@@ -134,9 +138,9 @@ class TextIndexSchema {
   //
   std::shared_ptr<TextIndex> text_index_ = std::make_shared<TextIndex>(false);
 
-  // Prevent concurrent mutations to schema-level text index
-  // TODO: develop a finer-grained TextIndex locking scheme
-  std::mutex text_index_mutex_;
+  // Guards tree structural changes (node insertions/removals) in text_index_.
+  // Writers take WriterMutexLock; readers (search) take ReaderMutexLock.
+  mutable absl::Mutex text_index_mutex_;
 
   //
   // Stem tree: maps stem roots to their parent words
@@ -144,8 +148,11 @@ class TextIndexSchema {
   //
   Rax stem_tree_;
 
-  // Prevent concurrent mutations to stem tree
-  std::mutex stem_tree_mutex_;
+  // Guards structural changes to stem_tree_.
+  mutable absl::Mutex stem_tree_mutex_;
+
+  // Per-word bucket locks for concurrent Postings updates.
+  PostingsMutexPool postings_mutex_pool_;
 
   //
   // To support the Delete record and the post-filtering case, there is a
@@ -205,6 +212,14 @@ class TextIndexSchema {
   uint64_t GetRadixTreeMemoryUsage() const;
   uint64_t GetPositionMemoryUsage() const;
   uint64_t GetTotalTextIndexMemoryUsage() const;
+
+  absl::Mutex &GetTreeMutex() ABSL_LOCK_RETURNED(text_index_mutex_) {
+    return text_index_mutex_;
+  }
+  const absl::Mutex &GetTreeMutex() const
+      ABSL_LOCK_RETURNED(text_index_mutex_) {
+    return text_index_mutex_;
+  }
 
   // Thread-safe accessor for per-key text indexes. Executes the provided
   // function while holding the mutex lock, ensuring safe concurrent access.

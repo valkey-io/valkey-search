@@ -570,6 +570,25 @@ TEST_F(RaxTest, SubtreeKeyCount) {
   VerifySubtreeKeyCount("card", 0);
 }
 
+TEST_F(RaxTest, GetTarget) {
+  AddWords({{"hello", 42}, {"world", 7}});
+
+  // Hit: returns the stored target pointer
+  void *target = rax_.GetTarget("hello");
+  ASSERT_NE(target, nullptr);
+  EXPECT_EQ(static_cast<TestTarget *>(target)->value, 42);
+
+  target = rax_.GetTarget("world");
+  ASSERT_NE(target, nullptr);
+  EXPECT_EQ(static_cast<TestTarget *>(target)->value, 7);
+
+  // Miss: word not in tree
+  EXPECT_EQ(rax_.GetTarget("missing"), nullptr);
+  EXPECT_EQ(rax_.GetTarget("hell"), nullptr);  // prefix of existing word
+  EXPECT_EQ(rax_.GetTarget("helloworld"),
+            nullptr);  // extension of existing word
+}
+
 TEST_F(RaxTest, RaxMallocMemoryTracking) {
   // Validates that rax_malloc.h correctly routes allocations through
   // the VMSDK memory tracking system.

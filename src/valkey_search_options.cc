@@ -422,6 +422,17 @@ static auto async_fanout_threshold =
         kMaximumAsyncFanoutThreshold)  // max threshold (10k)
         .Build();
 
+constexpr absl::string_view kPostingsMutexPoolSizeConfig{
+    "text-posting-mutex-pool-size"};
+constexpr uint32_t kDefaultPostingsMutexPoolSize{256};
+constexpr uint32_t kMinimumPostingsMutexPoolSize{1};
+constexpr uint32_t kMaximumPostingsMutexPoolSize{65536};
+static auto posting_mutex_pool_size =
+    config::NumberBuilder(
+        kPostingsMutexPoolSizeConfig, kDefaultPostingsMutexPoolSize,
+        kMinimumPostingsMutexPoolSize, kMaximumPostingsMutexPoolSize)
+        .Build();
+
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 
 vmsdk::config::Number& GetHNSWBlockSize() {
@@ -520,6 +531,10 @@ const vmsdk::config::Boolean& GetDrainMutationQueueOnLoad() {
 
 vmsdk::config::Number& GetAsyncFanoutThreshold() {
   return dynamic_cast<vmsdk::config::Number&>(*async_fanout_threshold);
+}
+
+config::Number& GetPostingsMutexPoolSize() {
+  return dynamic_cast<config::Number&>(*posting_mutex_pool_size);
 }
 
 }  // namespace options

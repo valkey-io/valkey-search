@@ -95,6 +95,7 @@ set(SRCS_TEXT ${CMAKE_CURRENT_LIST_DIR}/text/text_index.h
               ${CMAKE_CURRENT_LIST_DIR}/text/text_index.cc
               ${CMAKE_CURRENT_LIST_DIR}/text.cc
               ${CMAKE_CURRENT_LIST_DIR}/text.h
+              ${CMAKE_CURRENT_LIST_DIR}/text/postings_mutex_pool.h
               ${CMAKE_CURRENT_LIST_DIR}/text/posting.cc
               ${CMAKE_CURRENT_LIST_DIR}/text/posting.h
               ${CMAKE_CURRENT_LIST_DIR}/text/textinfocmd.cc

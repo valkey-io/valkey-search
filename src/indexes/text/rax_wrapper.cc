@@ -75,6 +75,15 @@ void Rax::MutateTarget(absl::string_view word,
              << " (" << strerror(errno) << ")";
 }
 
+void *Rax::GetTarget(absl::string_view word) const {
+  void *result = nullptr;
+  raxFind(rax_,
+          const_cast<unsigned char *>(
+              reinterpret_cast<const unsigned char *>(word.data())),
+          word.size(), &result);
+  return result;
+}
+
 size_t Rax::GetTotalUniqueWordCount() const { return raxSize(rax_); }
 
 size_t Rax::GetSubtreeItemCount(absl::string_view prefix) const {

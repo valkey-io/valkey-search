@@ -106,5 +106,8 @@ const config::Boolean& GetRdbReadV2();
 /// Return the threshold for async fanout operations
 config::Number& GetAsyncFanoutThreshold();
 
+/// Return the pool size for per-word Postings bucket mutexes
+config::Number& GetPostingsMutexPoolSize();
+
 }  // namespace options
 }  // namespace valkey_search

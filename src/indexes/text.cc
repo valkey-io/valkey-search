@@ -10,6 +10,7 @@
 #include "absl/container/inlined_vector.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "absl/synchronization/mutex.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/text/fuzzy.h"
 #include "src/indexes/text/term.h"
@@ -170,28 +171,36 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
   absl::string_view text_string = GetTextString();
-  // Search for the original word - may or may not exist in corpus
-  bool found_original =
-      TryAddWordKeyIterator(text_index.get(), text_string, key_iterators);
-  // Get stem variants if not exact term search
+  bool found_original;
   uint64_t stem_field_mask =
       field_mask & GetTextIndexSchema()->GetStemTextFieldMask();
-  if (!IsExact() && stem_field_mask != 0) {
-    // Collect stem variant words (words that also stem to the same form)
-    absl::InlinedVector<absl::string_view,
-                        indexes::text::kStemVariantsInlineCapacity>
-        stem_variants;
-    std::string stemmed = GetTextIndexSchema()->GetAllStemVariants(
-        text_string, stem_variants, stem_field_mask, false);
-    // Search for the stemmed word itself - may or may not exist in corpus
-    if (stemmed != text_string) {
-      TryAddWordKeyIterator(text_index.get(), stemmed, key_iterators);
-    }
-    // Search for stem variants - these should all exist from ingestion
-    for (const auto &variant : stem_variants) {
-      bool found =
-          TryAddWordKeyIterator(text_index.get(), variant, key_iterators);
-      CHECK(found) << "Word in stem tree not found in index - ingestion issue";
+
+  {
+    absl::ReaderMutexLock tree_lock(&GetTextIndexSchema()->GetTreeMutex());
+
+    // Search for the original word - may or may not exist in corpus
+    found_original =
+        TryAddWordKeyIterator(text_index.get(), text_string, key_iterators);
+
+    // Get stem variants if not exact term search
+    if (!IsExact() && stem_field_mask != 0) {
+      // Collect stem variant words (words that also stem to the same form)
+      absl::InlinedVector<absl::string_view,
+                          indexes::text::kStemVariantsInlineCapacity>
+          stem_variants;
+      std::string stemmed = GetTextIndexSchema()->GetAllStemVariants(
+          text_string, stem_variants, stem_field_mask, true);
+      // Search for the stemmed word itself - may or may not exist in corpus
+      if (stemmed != text_string) {
+        TryAddWordKeyIterator(text_index.get(), stemmed, key_iterators);
+      }
+      // Search for stem variants - these should all exist from ingestion
+      for (const auto &variant : stem_variants) {
+        bool found =
+            TryAddWordKeyIterator(text_index.get(), variant, key_iterators);
+        CHECK(found)
+            << "Word in stem tree not found in index - ingestion issue";
+      }
     }
   }
   // TermIterator will use query_field_mask when has_original is true,
@@ -205,6 +214,7 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
 std::unique_ptr<indexes::text::TextIterator> PrefixPredicate::BuildTextIterator(
     const std::shared_ptr<indexes::text::TextIndex> &text_index,
     FieldMaskPredicate field_mask, bool require_positions) const {
+  absl::ReaderMutexLock tree_lock(&GetTextIndexSchema()->GetTreeMutex());
   auto word_iter = text_index->GetPrefix().GetWordIterator(GetTextString());
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
@@ -226,6 +236,7 @@ std::unique_ptr<indexes::text::TextIterator> SuffixPredicate::BuildTextIterator(
     FieldMaskPredicate field_mask, bool require_positions) const {
   CHECK(text_index->GetSuffix().has_value())
       << "Text index does not have suffix trie enabled.";
+  absl::ReaderMutexLock tree_lock(&GetTextIndexSchema()->GetTreeMutex());
   std::string reversed_word(GetTextString().rbegin(), GetTextString().rend());
   auto word_iter =
       text_index->GetSuffix().value().get().GetWordIterator(reversed_word);
@@ -255,6 +266,7 @@ std::unique_ptr<indexes::text::TextIterator> FuzzyPredicate::BuildTextIterator(
     FieldMaskPredicate field_mask, bool require_positions) const {
   // Limit the number of term word expansions
   uint32_t max_words = options::GetMaxTermExpansions().GetValue();
+  absl::ReaderMutexLock tree_lock(&GetTextIndexSchema()->GetTreeMutex());
   auto key_iterators = indexes::text::FuzzySearch::Search(
       text_index->GetPrefix(), GetTextString(), GetDistance(), max_words);
   return std::make_unique<indexes::text::TermIterator>(
@@ -270,6 +282,7 @@ std::unique_ptr<indexes::text::TextIterator> FuzzyPredicate::BuildTextIterator(
  */
 
 size_t TermPredicate::EstimateSize() const {
+  absl::ReaderMutexLock tree_lock(&text_index_schema_->GetTreeMutex());
   auto iter =
       text_index_schema_->GetTextIndex()->GetPrefix().GetWordIterator(term_);
   if (!iter.Done() && iter.GetWord() == term_) {
@@ -280,6 +293,7 @@ size_t TermPredicate::EstimateSize() const {
 
 size_t PrefixPredicate::EstimateSize() const {
   if (text_index_schema_->TrackSubtreeItemsCountEnabled()) {
+    absl::ReaderMutexLock tree_lock(&text_index_schema_->GetTreeMutex());
     return text_index_schema_->GetTextIndex()->GetPrefix().GetSubtreeItemCount(
         term_);
   } else {
@@ -289,6 +303,7 @@ size_t PrefixPredicate::EstimateSize() const {
 
 size_t SuffixPredicate::EstimateSize() const {
   if (text_index_schema_->TrackSubtreeItemsCountEnabled()) {
+    absl::ReaderMutexLock tree_lock(&text_index_schema_->GetTreeMutex());
     auto suffix_tree = text_index_schema_->GetTextIndex()->GetSuffix();
     CHECK(suffix_tree) << "Suffix estimation not supported";
     return suffix_tree.value().get().GetSubtreeItemCount(term_);

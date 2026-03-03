@@ -431,13 +431,13 @@ constexpr absl::string_view kMaxSearchKeysAccumulatedConfig{
 constexpr uint32_t kDefaultMaxSearchKeysAccumulated{
     100000};  // 100K keys default
 constexpr uint32_t kMinimumMaxSearchKeysAccumulated{1};
-constexpr uint32_t kMaximumMaxSearchKeysAccumulated{10000000};  // Max 10M keys
+constexpr uint32_t kMaximumMaxSearchKeysAccumulated{UINT32_MAX};
 static auto max_search_keys_accumulated =
     vmsdk::config::NumberBuilder(
         kMaxSearchKeysAccumulatedConfig,   // name
         kDefaultMaxSearchKeysAccumulated,  // default limit (100K)
         kMinimumMaxSearchKeysAccumulated,  // min limit (1)
-        kMaximumMaxSearchKeysAccumulated)  // max limit (10M)
+        kMaximumMaxSearchKeysAccumulated)  // no upper limit (UINT32_MAX)
         .Build();
 
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }

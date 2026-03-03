@@ -559,11 +559,9 @@ class TestNonVectorCluster(ValkeySearchClusterTestCase):
         cluster_client: ValkeyCluster = self.new_cluster_client()
         client: Valkey = self.new_client_for_primary(0)
 
-        # Test config validation
-        with pytest.raises(ResponseError, match=r"must be between 1 and 10000000"):
+        # Test config validation - only minimum bound enforced (max is UINT32_MAX = 4294967295)
+        with pytest.raises(ResponseError, match=r"must be between 1 and 4294967295 inclusive"):
             client.execute_command("CONFIG SET search.max-search-keys-accumulated 0")
-        with pytest.raises(ResponseError, match=r"must be between 1 and 10000000"):
-            client.execute_command("CONFIG SET search.max-search-keys-accumulated 20000000")
         
         # Set config on all cluster nodes 
         for i in range(self.CLUSTER_SIZE):

@@ -38,7 +38,8 @@ class BloomFilter {
     Clear();
   }
 
-  // Creates an optimally-sized bloom filter for expected capacity and false positive rate.
+  // Creates an optimally-sized bloom filter for expected capacity and false
+  // positive rate.
   static BloomFilter CreateOptimal(
       size_t expected_capacity,
       double false_positive_rate = kDefaultFalsePositiveRate) {

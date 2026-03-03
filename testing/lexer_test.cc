@@ -199,21 +199,22 @@ TEST_F(LexerTest, StemMappingsBasic) {
       stem_mappings;
 
   auto result =
-      lexer_->Tokenize("running jumps happily", true, 3, &stem_mappings);
+      lexer_->Tokenize("swimming dances crazily", true, 3, &stem_mappings);
 
   ASSERT_TRUE(result.ok());
   // Original words (case-folded, not stemmed)
-  EXPECT_EQ(*result, std::vector<std::string>({"running", "jumps", "happily"}));
+  EXPECT_EQ(*result,
+            std::vector<std::string>({"swimming", "dances", "crazily"}));
 
   // Verify stem mappings: stemmed form -> original words
   EXPECT_EQ(stem_mappings.size(),
             3);  // All three words stem to different forms
-  EXPECT_TRUE(stem_mappings.contains("run"));
-  EXPECT_TRUE(stem_mappings["run"].contains("running"));
-  EXPECT_TRUE(stem_mappings.contains("jump"));
-  EXPECT_TRUE(stem_mappings["jump"].contains("jumps"));
-  EXPECT_TRUE(stem_mappings.contains("happili"));
-  EXPECT_TRUE(stem_mappings["happili"].contains("happily"));
+  EXPECT_TRUE(stem_mappings.contains("swim"));
+  EXPECT_TRUE(stem_mappings["swim"].contains("swimming"));
+  EXPECT_TRUE(stem_mappings.contains("danc"));
+  EXPECT_TRUE(stem_mappings["danc"].contains("dances"));
+  EXPECT_TRUE(stem_mappings.contains("crazili"));
+  EXPECT_TRUE(stem_mappings["crazili"].contains("crazily"));
 }
 
 TEST_F(LexerTest, StemMappingsMultipleWordsToSameStem) {

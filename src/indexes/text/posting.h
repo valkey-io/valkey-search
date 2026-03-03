@@ -51,22 +51,24 @@ using Key = InternedStringPtr;
 using Position = uint32_t;
 using FieldMaskPredicate = uint64_t;
 
-// Field mask interface optimized for different field counts
-class FieldMask {
- public:
-  static std::unique_ptr<FieldMask> Create(size_t num_fields);
-  virtual ~FieldMask() = default;
-  virtual void SetField(size_t field_index) = 0;
-  virtual void ClearField(size_t field_index) = 0;
-  virtual bool HasField(size_t field_index) const = 0;
-  virtual void SetAllFields() = 0;
-  virtual void ClearAllFields() = 0;
-  virtual size_t CountSetFields() const = 0;
-  virtual uint64_t AsUint64() const = 0;
-  virtual size_t MaxFields() const = 0;
+struct FieldMask {
+  // Constructors
+  FieldMask() = default;
+  explicit FieldMask(size_t num_fields);
+
+  // FieldMask functions
+  void SetField(size_t field_index);
+  size_t CountSetFields() const;
+  uint64_t GetMask() const;
+
+ private:
+  uint64_t mask_{0};
+  uint8_t num_fields_{0};
 };
 
-using PositionMap = std::map<Position, std::unique_ptr<FieldMask>>;
+static_assert(sizeof(FieldMask) == 16, "FieldMask should exactly be 16 bytes");
+
+using PositionMap = std::map<Position, FieldMask>;
 
 struct Postings {
   struct KeyIterator;

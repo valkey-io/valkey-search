@@ -64,7 +64,7 @@ namespace valkey_search::indexes::text {
 
 // Forward declarations to avoid circular dependency
 using Position = uint32_t;
-class FieldMask;
+struct FieldMask;
 
 // FlatPositionMap is a compact byte array representation
 // Layout: [Bitfield Header][Optional Partition Map][Position/Field Data]
@@ -72,7 +72,7 @@ class FlatPositionMap {
  public:
   // Factory: allocates single block [FlatPositionMap | data...]
   static FlatPositionMap* Create(
-      const std::map<Position, std::unique_ptr<FieldMask>>& position_map,
+      const std::map<Position, FieldMask>& position_map,
       size_t num_text_fields);
 
   // Destructor: frees the allocated memory

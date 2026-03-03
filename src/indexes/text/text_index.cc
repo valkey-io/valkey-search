@@ -201,8 +201,8 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
     auto &[positions, suffix_eligible] = (*token_positions)[token];
     if (suffix) suffix_eligible = true;
     auto [pos_it, _] =
-        positions.try_emplace(position, FieldMask::Create(num_text_fields_));
-    pos_it->second->SetField(text_field_number);
+        positions.try_emplace(position, FieldMask(num_text_fields_));
+    pos_it->second.SetField(text_field_number);
   }
 
   return true;
@@ -249,7 +249,7 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
     // Update metadata from PositionMap
     metadata_.total_positions += pos_map.size();
     for (const auto &[_, field_mask] : pos_map) {
-      metadata_.total_term_frequency += field_mask->CountSetFields();
+      metadata_.total_term_frequency += field_mask.CountSetFields();
     }
 
     // Create FlatPositionMap from PositionMap

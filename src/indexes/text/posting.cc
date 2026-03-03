@@ -19,8 +19,6 @@ namespace valkey_search::indexes::text {
 
 // FieldMask Implementation
 
-FieldMask::FieldMask() : mask_(0), num_fields_(1) {}
-
 FieldMask::FieldMask(size_t num_fields) : mask_(0) {
   CHECK(num_fields > 0 && num_fields <= 64)
       << "num_fields must be between 1 and 64";
@@ -32,27 +30,9 @@ void FieldMask::SetField(size_t field_index) {
   mask_ |= (1ULL << field_index);
 }
 
-void FieldMask::ClearField(size_t field_index) {
-  CHECK(field_index < num_fields_) << "Field index out of range";
-  mask_ &= ~(1ULL << field_index);
-}
-
-bool FieldMask::HasField(size_t field_index) const {
-  if (field_index >= num_fields_) return false;
-  return (mask_ & (1ULL << field_index)) != 0;
-}
-
-void FieldMask::SetAllFields() {
-  mask_ = (num_fields_ == 64) ? ~0ULL : ((1ULL << num_fields_) - 1);
-}
-
-void FieldMask::ClearAllFields() { mask_ = 0; }
-
 size_t FieldMask::CountSetFields() const { return __builtin_popcountll(mask_); }
 
 uint64_t FieldMask::GetMask() const { return mask_; }
-
-size_t FieldMask::MaxFields() const { return num_fields_; }
 
 // Basic Postings Object Implementation
 

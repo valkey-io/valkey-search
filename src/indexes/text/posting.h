@@ -53,22 +53,17 @@ using FieldMaskPredicate = uint64_t;
 
 struct FieldMask {
   // Constructors
-  FieldMask();
+  FieldMask() = default;
   explicit FieldMask(size_t num_fields);
 
   // FieldMask functions
   void SetField(size_t field_index);
-  void ClearField(size_t field_index);
-  bool HasField(size_t field_index) const;
-  void SetAllFields();
-  void ClearAllFields();
   size_t CountSetFields() const;
   uint64_t GetMask() const;
-  size_t MaxFields() const;
 
  private:
   uint64_t mask_{0};
-  uint8_t num_fields_{1};
+  uint8_t num_fields_{0};
 };
 
 static_assert(sizeof(FieldMask) == 16, "FieldMask should exactly be 16 bytes");

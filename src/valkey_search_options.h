@@ -107,7 +107,7 @@ const config::Boolean& GetRdbReadV2();
 config::Number& GetAsyncFanoutThreshold();
 
 /// Return the maximum number of keys to accumulate before content fetching
-config::Number& GetMaxSearchKeysAccumulated();
+config::Number& GetMaxNonVectorSearchResultsFetched();
 
 }  // namespace options
 }  // namespace valkey_search

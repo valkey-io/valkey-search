@@ -64,7 +64,7 @@ DEV_INTEGER_COUNTER(query_stats, query_text_fuzzy_count);
 DEV_INTEGER_COUNTER(query_stats, query_text_proximity_count);
 DEV_INTEGER_COUNTER(query_stats, query_numeric_count);
 DEV_INTEGER_COUNTER(query_stats, query_tag_count);
-DEV_INTEGER_COUNTER(query_stats, query_keys_truncated_cnt);
+DEV_INTEGER_COUNTER(query_stats, nonvector_results_fetched_limited_count);
 
 class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
  public:
@@ -578,22 +578,19 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
   // Get the config for maximum number of keys to accumulate before content
   // fetching
   const size_t max_keys =
-      static_cast<size_t>(options::GetMaxSearchKeysAccumulated().GetValue());
+      static_cast<size_t>(
+          options::GetMaxNonVectorSearchResultsFetched().GetValue());
   std::vector<indexes::Neighbor> neighbors;
   neighbors.reserve(std::min(qualified_entries, static_cast<size_t>(5000)));
-  // Track accumulated count and truncation status (shared across both paths)
-  size_t accumulated = 0;
-  bool truncated = false;
   auto results_appender =
-      [&neighbors, &parameters, &accumulated, max_keys, &truncated](
+      [&neighbors, &parameters, max_keys](
           const InternedStringPtr &key,
           absl::flat_hash_set<const char *> &top_keys) -> bool {
-    if (accumulated >= max_keys) {
-      truncated = true;
+    if (neighbors.size() >= max_keys) {
+      nonvector_results_fetched_limited_count.Increment();
       return false;
     }
     neighbors.emplace_back(indexes::Neighbor{key, 0.0f});
-    ++accumulated;
     return true;
   };
   // Cannot skip evaluation if the query contains unsolved composed operations.
@@ -620,32 +617,21 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
           seen_keys.insert(key->Str().data());
         }
         // Check if we've reached the limit
-        if (accumulated >= max_keys) {
-          truncated = true;
-          break;
+        if (neighbors.size() >= max_keys) {
+          nonvector_results_fetched_limited_count.Increment();
+          return neighbors;
         }
         neighbors.emplace_back(indexes::Neighbor{key, 0.0f});
-        ++accumulated;
         iterator->Next();
         if (parameters.cancellation_token->IsCancelled()) {
-          break;
+          return neighbors;
         }
       }
-      // If truncated or cancelled, stop processing remaining fetchers
-      if (truncated || parameters.cancellation_token->IsCancelled()) {
-        break;
-      }
     }
-  } else {
-    EvaluatePrefilteredKeys(parameters, entries_fetchers,
-                            std::move(results_appender), qualified_entries);
+    return neighbors;
   }
-
-  // Update metric if truncation occurred in either path
-  if (truncated) {
-    query_keys_truncated_cnt.Increment();
-  }
-
+  EvaluatePrefilteredKeys(parameters, entries_fetchers,
+                          std::move(results_appender), qualified_entries);
   return neighbors;
 }
 

@@ -422,22 +422,23 @@ static auto async_fanout_threshold =
         kMaximumAsyncFanoutThreshold)  // max threshold (10k)
         .Build();
 
-/// Register the "--max-search-keys-accumulated" flag. Controls the maximum
-/// number of keys to accumulate in background threads before content fetching.
-/// This controls potential OOM by limiting the result set size before expensive
-/// content fetching from the keyspace.
-constexpr absl::string_view kMaxSearchKeysAccumulatedConfig{
-    "max-search-keys-accumulated"};
-constexpr uint32_t kDefaultMaxSearchKeysAccumulated{
+/// Register the "--max-nonvector-search-results-fetched" flag. Controls the
+/// maximum number of results to fetch in background threads before content
+/// fetching on non-vector (numeric/tag/text) query paths. This controls
+/// potential OOM by limiting the result set size before expensive content
+/// fetching from the keyspace.
+constexpr absl::string_view kMaxNonVectorSearchResultsFetchedConfig{
+    "max-nonvector-search-results-fetched"};
+constexpr uint32_t kDefaultMaxNonVectorSearchResultsFetched{
     100000};  // 100K keys default
-constexpr uint32_t kMinimumMaxSearchKeysAccumulated{1};
-constexpr uint32_t kMaximumMaxSearchKeysAccumulated{UINT32_MAX};
-static auto max_search_keys_accumulated =
+constexpr uint32_t kMinimumMaxNonVectorSearchResultsFetched{0};
+constexpr uint32_t kMaximumMaxNonVectorSearchResultsFetched{UINT32_MAX};
+static auto max_nonvector_search_results_fetched =
     vmsdk::config::NumberBuilder(
-        kMaxSearchKeysAccumulatedConfig,   // name
-        kDefaultMaxSearchKeysAccumulated,  // default limit (100K)
-        kMinimumMaxSearchKeysAccumulated,  // min limit (1)
-        kMaximumMaxSearchKeysAccumulated)  // no upper limit (UINT32_MAX)
+        kMaxNonVectorSearchResultsFetchedConfig,   // name
+        kDefaultMaxNonVectorSearchResultsFetched,  // default limit (100K)
+        kMinimumMaxNonVectorSearchResultsFetched,  // min limit (0)
+        kMaximumMaxNonVectorSearchResultsFetched)  // no upper limit (UINT32_MAX)
         .Build();
 
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
@@ -540,8 +541,9 @@ vmsdk::config::Number& GetAsyncFanoutThreshold() {
   return dynamic_cast<vmsdk::config::Number&>(*async_fanout_threshold);
 }
 
-vmsdk::config::Number& GetMaxSearchKeysAccumulated() {
-  return dynamic_cast<vmsdk::config::Number&>(*max_search_keys_accumulated);
+vmsdk::config::Number& GetMaxNonVectorSearchResultsFetched() {
+  return dynamic_cast<vmsdk::config::Number&>(
+      *max_nonvector_search_results_fetched);
 }
 
 }  // namespace options

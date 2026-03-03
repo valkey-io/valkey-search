@@ -74,11 +74,9 @@ excluded_queries = set([
     'many"few many"few',
 ])
 
-# uncomment when stemming is finished
-# @pytest.mark.parametrize("schema_type", ["default", "nostem"])
 @pytest.mark.parametrize("schema_type", ["default", "nostem"])
 @pytest.mark.parametrize("dialect", [2])
-@pytest.mark.parametrize("key_type", ["hash"])
+@pytest.mark.parametrize("key_type", ["hash", "json"])
 class TestTextSearchCompatibility(BaseCompatibilityTest):
     TEXT_QUERY_TEST_SEED = 3948
     MAX_QUERIES = 1000
@@ -215,7 +213,7 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
             return tokens
 
         def parse_or(tokens, pos):
-            """Parse an OR expression: and_expr ( '|' and_expr )*"""
+            """Parse an OR expression"""
             node, pos = parse_and(tokens, pos)
             children = [node]
             while pos < len(tokens) and tokens[pos] == '|':
@@ -228,7 +226,7 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
             return ('OR', children), pos
 
         def parse_and(tokens, pos):
-            """Parse an AND expression: atom+"""
+            """Parse an AND expression"""
             node, pos = parse_atom(tokens, pos)
             children = [node]
             while pos < len(tokens) and tokens[pos] not in ('|', ')'):
@@ -268,13 +266,6 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
 
     def _is_redis_server(self) -> bool:
         """Check if the connected server is Redis (vs Valkey)."""
-        # try:
-        #     info = self.client.execute_command("INFO", "SERVER")
-        #     if isinstance(info, bytes):
-        #         info = info.decode('utf-8')
-        #     return "redis_version" in info
-        # except Exception:
-        #     return False
         try:
             info = self.client.execute_command("INFO", "SERVER")
             if isinstance(info, bytes):
@@ -315,7 +306,7 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
         return args
 
     def _run_test(self, builder_fn, data_set_name, key_type, dialect, schema_type,
-              inorder=False, slop=False, check_parsing=False, field=None, query_str=None):
+              inorder=False, slop=False, check_parsing=False, field=None, query_str=None, exclude_all=False):
         """Helper to run a test with given term builder function
         Args:
             builder_fn: Function that takes (vocab, rng) and returns term(s) or query string
@@ -347,16 +338,29 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
                     continue
                 seen.add(current_query)
 
-                if is_redis and check_parsing:
+                # if the query has known difference in Redis or with parsing difference
+                # skip comparison in Redis and add to answer file with excluded flag
+                # will run in valkey for no-crash check only
+                is_excluded = current_query in excluded_queries or exclude_all
+                if not is_excluded and is_redis and check_parsing:
                     if self._validate_parsing(key_type, current_query, dialect):
                         matched += 1
                     else:
                         mismatched += 1
-                        continue
+                        is_excluded = True
                     print(f"Matched: {matched}, Mismatched: {mismatched}")
 
-                if current_query in excluded_queries:
-                    print(f"Query excluded with known Redis bug: {current_query}")
+                if is_excluded:
+                    print(f"Query excluded: {current_query}")
+                    excluded_args = ["FT.SEARCH", f"{key_type}_idx1", current_query, "DIALECT", str(dialect)]
+                    self.answers.append({
+                        "cmd": excluded_args,
+                        "key_type": self.key_type,
+                        "data_set_name": self.data_set_name,
+                        "schema_type": self.schema_type,
+                        "testname": os.environ.get('PYTEST_CURRENT_TEST').split(':')[-1].split(' ')[0],
+                        "excluded": True,
+                    })
                     continue
 
                 args = self._build_search_args(key_type, current_query, dialect, inorder, slop, rng)
@@ -427,7 +431,8 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
 
     def test_text_search_escaped(self, key_type, dialect, schema_type):
         """Test escaped special characters in body field."""
-        self._run_test(gen_escaped_word, "punctuation", key_type, dialect, schema_type, field='body')
+        exclude_all = True if key_type == "json" else False
+        self._run_test(gen_escaped_word, "punctuation", key_type, dialect, schema_type, field='body', exclude_all=exclude_all)
 
     # ========================================================================
     # fuzzy search

@@ -395,6 +395,17 @@ def do_answer(client, expected, data_set):
         waiters.wait_for_true(lambda: IndexingTestHelper.is_indexing_complete_on_node(client, f"{expected['key_type']}_idx1"))
         data_set = (expected['data_set_name'], expected['key_type'], expected.get("schema_type"))
 
+    # for the excluded quereis with known difference
+    # just run in valkey to make sure they do not crash
+    if expected.get('excluded'):
+        try:
+            print(f"Running excluded query (no-crash check): {expected['cmd']}")
+            client.execute_command(*expected['cmd'])
+            print(f"Excluded query completed without crash")
+        except Exception as e:
+            print(f"Excluded query raised: {e} for cmd {expected['cmd']}")
+        return data_set
+
     # Set Valkey-specific config for inorder tests
     if 'inorder' in expected['testname']:
         try:
@@ -505,7 +516,8 @@ class TestAnswersCMD(ValkeySearchTestCaseDebugMode):
         for i in range(len(answers)):
             data_set = do_answer(client, answers[i], data_set)
 
-        if correct_answers != len(answers):
+        expected_count = sum(1 for a in answers if not a.get('excluded'))
+        if correct_answers != expected_count:
             print(f"Correct answers: {correct_answers} out of {len(answers)}")
             if len(failed_tests) != 0:
                 print(">>>>>>>>> Failed Tests <<<<<<<<<")

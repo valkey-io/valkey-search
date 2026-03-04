@@ -51,6 +51,19 @@ void TimeSlicedMRMWMutex::IncMayProlongCount() {
   ++may_prolong_count_;
 }
 
+void TimeSlicedMRMWMutex::RegisterEndOfWritePhaseCallback(
+    std::function<void()> callback) {
+  absl::MutexLock lock(&mutex_);
+  write_phase_callbacks_.push_back(std::move(callback));
+}
+
+void TimeSlicedMRMWMutex::InvokeEndOfWritePhaseCallbacks() {
+  // Already holding mutex_ from Unlock()
+  for (auto& callback : write_phase_callbacks_) {
+    callback();
+  }
+}
+
 void TimeSlicedMRMWMutex::ReaderLock(bool& may_prolong,
                                      bool ignore_time_quota) {
   Lock(Mode::kLockRead, may_prolong, ignore_time_quota);
@@ -100,6 +113,13 @@ void TimeSlicedMRMWMutex::Unlock(bool may_prolong, bool ignore_time_quota) {
   }
   CHECK(active_lock_count_ > 0 ||
         (may_prolong_count_ == 0 && ignore_time_quota_count_ == 0));
+  
+  // Invoke callbacks when last writer exits, BEFORE mode switch
+  if (active_lock_count_ == 0 && current_mode_ == Mode::kLockWrite &&
+      !write_phase_callbacks_.empty()) {
+    InvokeEndOfWritePhaseCallbacks();
+  }
+  
   if (ShouldSwitch() && GetWaiters(GetInverseMode(current_mode_)) > 0) {
     InitSwitch();
   }

@@ -132,6 +132,12 @@ class TextIndexSchema {
 
   void EnableSubtreeItemCountTracking() { track_subtree_item_counts_ = true; }
 
+  // Callback invoked at end of write phase to apply cached tree mutations.
+  // Serially applies all cached mutations from RaxTargetMutexPool buckets
+  // to the prefix and suffix trees. Called by IndexSchema's TimeSlicedMRMWMutex
+  // callback.
+  void ApplyCachedTreeMutations();
+
  private:
   uint8_t num_text_fields_ = 0;
 
@@ -143,11 +149,6 @@ class TextIndexSchema {
   //
   std::shared_ptr<TextIndex> text_index_ = std::make_shared<TextIndex>(false);
 
-  // Guards rax tree structural changes during concurrent writes.
-  // Used exclusively by CommitKeyData/DeleteKeyData when inserting or removing
-  // tree nodes.
-  mutable absl::Mutex text_index_mutex_;
-
   //
   // Stem tree: maps stem roots to their parent words
   // Example: "happi" → {"happy", "happiness", "happily"}
@@ -158,6 +159,7 @@ class TextIndexSchema {
   mutable absl::Mutex stem_tree_mutex_;
 
   // Per-word bucket locks for concurrent Rax target updates.
+  // Each bucket contains a mutex and a cache for pending tree mutations.
   RaxTargetMutexPool rax_target_mutex_pool_;
 
   //
@@ -218,14 +220,6 @@ class TextIndexSchema {
   uint64_t GetRadixTreeMemoryUsage() const;
   uint64_t GetPositionMemoryUsage() const;
   uint64_t GetTotalTextIndexMemoryUsage() const;
-
-  absl::Mutex &GetTreeMutex() ABSL_LOCK_RETURNED(text_index_mutex_) {
-    return text_index_mutex_;
-  }
-  const absl::Mutex &GetTreeMutex() const
-      ABSL_LOCK_RETURNED(text_index_mutex_) {
-    return text_index_mutex_;
-  }
 
   // Thread-safe accessor for per-key text indexes. Executes the provided
   // function while holding the mutex lock, ensuring safe concurrent access.

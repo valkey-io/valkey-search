@@ -576,8 +576,9 @@ class TestNonVectorCluster(ValkeySearchClusterTestCase):
             cluster_client.execute_command("HSET", f"doc:{i}", "price", str(price), "category", category, "description", description)
         
         # Query with limit 100 but should be restricted by the config
+        # Uses tag+numeric AND to route through EvaluatePrefilteredKeys (prefilter path)
         # In cluster mode with 3 nodes: each node fetch-limits to 5, total ~15 returned
-        result = client.execute_command("FT.SEARCH", "idx", "@price:[0 +inf]", "LIMIT", "0", "100")
+        result = client.execute_command("FT.SEARCH", "idx", "@category:{cat0} @price:[0 +inf]", "LIMIT", "0", "100")
         
         # Verify fetch-limited in cluster mode:
         #  In cluster: 3 nodes × 5 limit = ~15 results (may vary by hash distribution)
@@ -593,7 +594,7 @@ class TestNonVectorCluster(ValkeySearchClusterTestCase):
         
         # Test user's LIMIT with fetch-limited
         # Truncated to ~15, then LIMIT 0 5 returns first 5 of those
-        result_limit = client.execute_command("FT.SEARCH", "idx", "@price:[0 +inf]", "LIMIT", "0", "5")
+        result_limit = client.execute_command("FT.SEARCH", "idx", "@category:{cat0} @price:[0 +inf]", "LIMIT", "0", "5")
         assert 10 <= result_limit[0] <= 20, f"Expected ~15 after limiting the fetch count, got {result_limit[0]}"
         actual_limited = (len(result_limit) - 1) // 2
         assert actual_limited == 5, f"Expected 5 results after user LIMIT, got {actual_limited}"
@@ -612,7 +613,7 @@ class TestNonVectorCluster(ValkeySearchClusterTestCase):
         # Should still get ~10 results (all remaining after offset 5)
         assert 5 <= actual_exceed <= 12, f"Expected ~10 results with LIMIT 5 20, got {actual_exceed}"
         
-        # TEXT QUERY TESTS (optimized path - no prefilter evaluation)
+        # TEXT QUERY TESTS
         result_text = client.execute_command("FT.SEARCH", "idx", "@description:laptop", "LIMIT", "0", "100")
         assert 10 <= result_text[0] <= 20, f"Expected ~15 after limiting the fetch count for text query, got {result_text[0]}"
         actual_text = (len(result_text) - 1) // 2

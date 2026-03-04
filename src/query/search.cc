@@ -371,7 +371,7 @@ void EvaluatePrefilteredKeys(
     absl::AnyInvocable<bool(const InternedStringPtr &,
                             absl::flat_hash_set<const char *> &)>
         appender,
-    size_t max_keys) {
+    size_t max_keys, bool stop_on_fetch_limit = false) {
   // If there was a union operation, we need to handle deduplication.
   // This implementation skips deduplication (flat_hash_set usage) if not needed
   // for performance.
@@ -411,10 +411,14 @@ void EvaluatePrefilteredKeys(
       // 3. Evaluate predicate
       if (key_evaluator.Evaluate(
               *parameters.filter_parse_results.root_predicate, key)) {
-        if (needs_dedup) {
+        bool result = appender(key, result_keys);
+        if (needs_dedup && result) {
           result_keys.insert(key->Str().data());
         }
-        appender(key, result_keys);
+        // For non-vector queries that exceed the fetch limit, return early
+        if (stop_on_fetch_limit && !result) {
+          return;
+        }
       }
       iterator->Next();
       if (parameters.cancellation_token->IsCancelled()) {
@@ -581,12 +585,13 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
       options::GetMaxNonVectorSearchResultsFetched().GetValue());
   std::vector<indexes::Neighbor> neighbors;
   neighbors.reserve(std::min(qualified_entries, static_cast<size_t>(5000)));
+  bool fetch_limited = false;
   auto results_appender =
-      [&neighbors, &parameters, max_keys](
+      [&neighbors, &parameters, max_keys, &fetch_limited](
           const InternedStringPtr &key,
           absl::flat_hash_set<const char *> &top_keys) -> bool {
     if (neighbors.size() >= max_keys) {
-      nonvector_results_fetched_limited_count.Increment();
+      fetch_limited = true;
       return false;
     }
     neighbors.emplace_back(indexes::Neighbor{key, 0.0f});
@@ -630,7 +635,11 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
     return neighbors;
   }
   EvaluatePrefilteredKeys(parameters, entries_fetchers,
-                          std::move(results_appender), qualified_entries);
+                          std::move(results_appender), qualified_entries,
+                          /*stop_on_fetch_limit=*/true);
+  if (fetch_limited) {
+    nonvector_results_fetched_limited_count.Increment();
+  }
   return neighbors;
 }
 

@@ -145,8 +145,23 @@ def aggregate(
     except ResponseError as e:
         if not expect_timeout:
             raise
-        assert str(e) == "Search operation cancelled due to timeout"
+        error_msg = str(e)
+        assert "cancelled due to timeout" in error_msg, f"Expected timeout error, got: {error_msg}"
         return []
+
+def join_thread_with_cleanup(thread: threading.Thread, timeout: float = 10) -> None:
+    """
+    Join a thread and wait for any pending async operations to complete.
+    
+    Args:
+        thread: Thread to join
+        timeout: Maximum time to wait for thread (seconds)
+    """
+    thread.join(timeout=timeout)
+    # Allow time for pending event loop callbacks to execute
+    time.sleep(1)
+
+
 class TestCancelCMD(ValkeySearchTestCaseDebugMode):
 
     def test_timeoutCMD(self):
@@ -322,7 +337,7 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
         assert client.execute_command("FT._DEBUG", "PAUSEPOINT", "RESET", "search_entries_fetcher") == b"OK"
 
         # Wait for thread to complete
-        thread.join(timeout=10)
+        join_thread_with_cleanup(thread)
 
         # Verify timeout error was returned (FT.SEARCH has IsCancelled checks)
         assert error[0] is not None, "Expected timeout error"
@@ -387,7 +402,7 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
         # Reset pausepoint
         assert client.execute_command("FT._DEBUG", "PAUSEPOINT", "RESET", "search_prefilter_eval") == b"OK"
         
-        thread.join(timeout=10)
+        join_thread_with_cleanup(thread)
         
         # Verify timeout occurred
         assert error[0] is not None
@@ -433,7 +448,7 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
         assert verify_server_responsive(client, duration=3.0, ping_count=15)
         time.sleep(6.0)
         client.execute_command("FT._DEBUG", "PAUSEPOINT", "RESET", "search_term_predicate")
-        thread.join(timeout=10)
+        join_thread_with_cleanup(thread)
         # Verify timeout occurred (outer loop has IsCancelled check)
         assert error[0] is not None, "Expected timeout error"
         assert "timeout" in error[0].lower() or "cancelled" in error[0].lower(), \
@@ -482,17 +497,14 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
         thread = threading.Thread(target=run_search)
         thread.start()
 
-        if not wait_for_pausepoint(client, "search_prefix_predicate", timeout=10):
-            client.execute_command("FT._DEBUG", "PAUSEPOINT", "RESET", "search_prefix_predicate")
-            thread.join(timeout=10)
-            print("Pausepoint not hit - test inconclusive")
-            return
+        assert wait_for_pausepoint(client, "search_prefix_predicate", timeout=10), \
+            "Pausepoint search_prefix_predicate was not hit"
 
         assert verify_server_responsive(client, duration=3.0, ping_count=15)
         time.sleep(6.0)
 
         assert client.execute_command("FT._DEBUG", "PAUSEPOINT", "RESET", "search_prefix_predicate") == b"OK"
-        thread.join(timeout=10)
+        join_thread_with_cleanup(thread)
 
         # Verify timeout occurred via outer loop IsCancelled check
         assert error[0] is not None, "Expected timeout error"
@@ -542,17 +554,14 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
         thread = threading.Thread(target=run_search)
         thread.start()
 
-        if not wait_for_pausepoint(client, "search_suffix_expansion", timeout=10):
-            client.execute_command("FT._DEBUG", "PAUSEPOINT", "RESET", "search_suffix_expansion")
-            thread.join(timeout=10)
-            print("Pausepoint not hit - suffix search may use different code path")
-            return
+        assert wait_for_pausepoint(client, "search_suffix_expansion", timeout=10), \
+            "Pausepoint search_suffix_expansion was not hit"
 
         assert verify_server_responsive(client, duration=3.0, ping_count=15)
         time.sleep(6.0)
 
         assert client.execute_command("FT._DEBUG", "PAUSEPOINT", "RESET", "search_suffix_expansion") == b"OK"
-        thread.join(timeout=10)
+        join_thread_with_cleanup(thread)
 
         # Verify timeout occurred via outer loop IsCancelled check
         assert error[0] is not None, "Expected timeout error"
@@ -601,17 +610,14 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
         thread = threading.Thread(target=run_search)
         thread.start()
 
-        if not wait_for_pausepoint(client, "search_fuzzy_search", timeout=10):
-            client.execute_command("FT._DEBUG", "PAUSEPOINT", "RESET", "search_fuzzy_search")
-            thread.join(timeout=10)
-            print("Pausepoint not hit - test inconclusive")
-            return
+        assert wait_for_pausepoint(client, "search_fuzzy_search", timeout=10), \
+            "Pausepoint search_fuzzy_search was not hit"
 
         assert verify_server_responsive(client, duration=3.0, ping_count=15)
         time.sleep(6.0)
 
         assert client.execute_command("FT._DEBUG", "PAUSEPOINT", "RESET", "search_fuzzy_search") == b"OK"
-        thread.join(timeout=10)
+        join_thread_with_cleanup(thread)
 
         # Verify timeout occurred via outer loop IsCancelled check
         assert error[0] is not None, "Expected timeout error"
@@ -664,17 +670,14 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
         thread = threading.Thread(target=run_search)
         thread.start()
 
-        if not wait_for_pausepoint(client, "search_composed_predicate", timeout=10):
-            client.execute_command("FT._DEBUG", "PAUSEPOINT", "RESET", "search_composed_predicate")
-            thread.join(timeout=10)
-            print("Pausepoint not hit - test inconclusive")
-            return
+        assert wait_for_pausepoint(client, "search_composed_predicate", timeout=10), \
+            "Pausepoint search_composed_predicate was not hit"
 
         assert verify_server_responsive(client, duration=3.0, ping_count=15)
         time.sleep(6.0)
 
         assert client.execute_command("FT._DEBUG", "PAUSEPOINT", "RESET", "search_composed_predicate") == b"OK"
-        thread.join(timeout=10)
+        join_thread_with_cleanup(thread)
 
         # Verify timeout occurred via outer loop IsCancelled check
         assert error[0] is not None, "Expected timeout error"
@@ -745,7 +748,7 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
 
         # Reset pausepoint
         client.execute_command("FT._DEBUG", "PAUSEPOINT", "RESET", "search_inline_filter")
-        thread.join(timeout=2)
+        join_thread_with_cleanup(thread)
 
         # Verify timeout occurred
         assert error[0] is not None, "Expected timeout error"
@@ -929,9 +932,9 @@ class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
 
         hnsw_index.create(client)
         flat_index.create(client)
-        hnsw_index.load_data(client, 100)
+        hnsw_index.load_data(client, 1000)
 
-        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index), 100, timeout=10)
+        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index), 1000, timeout=10)
         self.check_info_sum("search_test-counter-ForceCancels", 0)
 
         self.control_set("ForceTimeout", "yes")

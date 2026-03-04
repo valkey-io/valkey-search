@@ -214,7 +214,6 @@ struct SearchParameters {
   // particular is needed on the results. This should be overridden in derived
   // classes if needed. The default implementation returns false.
   virtual bool RequiresCompleteResults() const { return false; }
-  virtual SerializationRange GetSerializationRange() const;
 
   virtual absl::Status PreParseQueryString();
   virtual absl::Status PostParseQueryString();

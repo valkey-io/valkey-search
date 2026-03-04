@@ -736,14 +736,6 @@ void SearchResult::TrimResults(std::vector<indexes::Neighbor> &neighbors,
   neighbors.erase(neighbors.begin() + max_needed, neighbors.end());
 }
 
-// Default implementation for SearchParameters::GetSerializationRange()
-SerializationRange SearchParameters::GetSerializationRange() const {
-  // Default implementation uses the limit parameters
-  size_t start_index = static_cast<size_t>(limit.first_index);
-  size_t end_index = start_index + static_cast<size_t>(limit.number);
-  return {start_index, end_index};
-}
-
 // Determine the range of neighbors to serialize in the response.
 SerializationRange SearchResult::GetSerializationRange(
     const SearchParameters &parameters) const {

@@ -390,7 +390,7 @@ bool AggregateParameters::RequiresCompleteResults() const {
       return true;
     }
   }
-  return true;  // No LIMIT found - need complete results
+  return false;  // No LIMIT found - need complete results
 }
 
 query::SerializationRange AggregateParameters::GetSerializationRange() const {

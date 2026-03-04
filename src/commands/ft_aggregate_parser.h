@@ -68,7 +68,7 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   // Determine if we need full results or if we can optimize with trimming via
   // LIMIT offset & count.
   bool RequiresCompleteResults() const override;
-  query::SerializationRange GetSerializationRange() const override;
+  query::SerializationRange GetSerializationRange() const;
 
   //
   // Information for each index position in a Record

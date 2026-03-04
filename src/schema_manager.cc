@@ -696,13 +696,6 @@ absl::Status SchemaManager::LoadIndex(
   uint32_t db_num = index_schema->GetDBNum();
   const std::string &name = index_schema->GetName();
 
-  // Select the DB number in the context for subsequent usage.
-  if (ValkeyModule_SelectDb(ctx, db_num) != VALKEYMODULE_OK) {
-    return absl::InternalError(
-        absl::StrFormat("Unable to select DB %d for loading of index schema %s",
-                        db_num, vmsdk::config::RedactIfNeeded(name).data()));
-  }
-
   // In diskless load scenarios, we stage the index to allow serving from
   // the existing index schemas. The loading ended callback will swap these
   // atomically.

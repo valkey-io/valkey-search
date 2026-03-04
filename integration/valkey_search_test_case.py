@@ -526,3 +526,4 @@ class ValkeySearchClusterTestCaseDebugMode(ValkeySearchClusterTestCase):
         args = super().append_startup_args(args)
         args["search.info-developer-visible"] = "yes"
         return args
+    

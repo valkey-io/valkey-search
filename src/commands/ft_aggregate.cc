@@ -402,8 +402,8 @@ query::SerializationRange AggregateParameters::GetSerializationRange() const {
               // stages
     }
   }
-  // Fallback to base class limit parameters
-  return SearchParameters::GetSerializationRange();
+  // Fallback to no limit
+  return {0, std::numeric_limits<size_t>::max()};
 }
 
 void AggregateParameters::SendReply(ValkeyModuleCtx *ctx,

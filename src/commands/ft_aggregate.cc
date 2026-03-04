@@ -380,30 +380,20 @@ absl::Status SendReplyInner(ValkeyModuleCtx *ctx,
 
 // Returns whether the entire search results are needed to be able to form the
 // aggregated response.
-// TODO: Check the code in aggregate and the stages. Which ones really need
-// complete results vs which ones do not.
 bool AggregateParameters::RequiresCompleteResults() const {
-  for (const auto &stage : stages_) {
-    if (!stage->GetSerializationRange().has_value()) {
-      // For now, assume any stage that doesn't explicitly support early
-      // trimming needs complete results
-      return true;
-    }
-  }
-  return false;  // No LIMIT found - need complete results
+  return GetSerializationRange() == query::SerializationRange::All();
 }
 
 query::SerializationRange AggregateParameters::GetSerializationRange() const {
   for (const auto &stage : stages_) {
-    if (auto range = stage->GetSerializationRange()) {
-      return *range;  // Use first LIMIT stage for early trimming
-    } else {
-      break;  // Non LIMIT stage encountered, stop looking for further LIMIT
-              // stages
+    auto stage_range = stage->GetSerializationRange();
+    // Use the first limit.
+    if (stage_range) {
+      return *stage_range;
     }
   }
   // Fallback to no limit
-  return {0, std::numeric_limits<size_t>::max()};
+  return query::SerializationRange::All();
 }
 
 void AggregateParameters::SendReply(ValkeyModuleCtx *ctx,

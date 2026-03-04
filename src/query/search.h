@@ -258,6 +258,10 @@ struct SerializationRange {
   size_t start_index;
   size_t end_index;
   size_t count() const { return end_index - start_index; }
+  static SerializationRange All() {
+    return {0, std::numeric_limits<size_t>::max()};
+  }
+  auto operator<=>(const SerializationRange& other) const = default;
 };
 
 // Callback to be called when the search is done.

@@ -34,6 +34,7 @@ struct SearchCommand : public QueryCommand {
   // optimized with LIMIT based trimming. Implement the correct logic here to
   // return true when those clauses are present.
   bool RequiresCompleteResults() const override { return sortby.has_value(); }
+  query::SerializationRange GetSerializationRange() const;
 
   std::optional<query::SortByParameter> sortby;
   bool with_sort_keys{false};

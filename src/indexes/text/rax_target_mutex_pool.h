@@ -5,8 +5,8 @@
  *
  */
 
-#ifndef VALKEY_SEARCH_INDEXES_TEXT_POSTINGS_MUTEX_POOL_H_
-#define VALKEY_SEARCH_INDEXES_TEXT_POSTINGS_MUTEX_POOL_H_
+#ifndef VALKEY_SEARCH_INDEXES_TEXT_RAX_TARGET_MUTEX_POOL_H_
+#define VALKEY_SEARCH_INDEXES_TEXT_RAX_TARGET_MUTEX_POOL_H_
 
 #include <cstddef>
 #include <vector>
@@ -17,8 +17,8 @@
 
 namespace valkey_search::indexes::text {
 
-// A sharded pool of absl::Mutex objects used to protect individual Postings
-// objects during concurrent write operations in TextIndexSchema.
+// A sharded pool of absl::Mutex objects used to protect Rax tree targets
+// during concurrent write operations.
 //
 // This pool provides N mutexes shared across all words via
 // hashing. The mutex for a given word is chosen by:
@@ -29,15 +29,15 @@ namespace valkey_search::indexes::text {
 // Pool size is configured at construction time and does not change. absl::Mutex
 // is neither copyable nor movable, so the pool cannot be resized after
 // construction.
-class PostingsMutexPool {
+class RaxTargetMutexPool {
  public:
-  explicit PostingsMutexPool(size_t pool_size) : mutexes_(pool_size) {}
+  explicit RaxTargetMutexPool(size_t pool_size) : mutexes_(pool_size) {}
 
   // Non-copyable, non-movable (contains absl::Mutex).
-  PostingsMutexPool(const PostingsMutexPool&) = delete;
-  PostingsMutexPool& operator=(const PostingsMutexPool&) = delete;
-  PostingsMutexPool(PostingsMutexPool&&) = delete;
-  PostingsMutexPool& operator=(PostingsMutexPool&&) = delete;
+  RaxTargetMutexPool(const RaxTargetMutexPool&) = delete;
+  RaxTargetMutexPool& operator=(const RaxTargetMutexPool&) = delete;
+  RaxTargetMutexPool(RaxTargetMutexPool&&) = delete;
+  RaxTargetMutexPool& operator=(RaxTargetMutexPool&&) = delete;
 
   // Returns the mutex for the given word. Always returns the same mutex for
   // the same word string. Thread-safe: no mutation of pool state occurs.
@@ -54,4 +54,4 @@ class PostingsMutexPool {
 
 }  // namespace valkey_search::indexes::text
 
-#endif  // VALKEY_SEARCH_INDEXES_TEXT_POSTINGS_MUTEX_POOL_H_
+#endif  // VALKEY_SEARCH_INDEXES_TEXT_RAX_TARGET_MUTEX_POOL_H_

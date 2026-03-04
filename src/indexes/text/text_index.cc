@@ -68,14 +68,11 @@ template <typename Target>
 std::function<void *(void *)> CreateTargetSetFn(
     const InvasivePtr<Target> &updated_target) {
   return [&updated_target](void *old_val) -> void * {
-    // Take ownership of the existing target reference if there is one.
-    // It will be deconstructed as it falls out of scope.
     if (old_val) {
       InvasivePtr<Target>::AdoptRaw(
           static_cast<InvasivePtrRaw<Target>>(old_val));
     }
-    // Grab a new reference to the new shared target and pass ownership
-    // of it to the tree.
+    if (!updated_target) return nullptr;
     InvasivePtr<Target> copy = updated_target;
     return static_cast<void *>(std::move(copy).ReleaseRaw());
   };
@@ -97,18 +94,6 @@ std::function<void *(void *)> CreateSimpleTargetMutateFn(MutateFn mutate_fn) {
   };
 }
 
-// Applies |fn| to the prefix tree for |word| and, if the index has a suffix
-// tree, to the suffix tree for reverse(word).
-void MutateWordInIndex(TextIndex &index, absl::string_view word,
-                       absl::FunctionRef<void *(void *)> fn,
-                       item_count_op op = NONE) {
-  index.GetPrefix().MutateTarget(word, fn, op);
-  if (auto suffix = index.GetSuffix(); suffix.has_value()) {
-    std::string rev(word.rbegin(), word.rend());
-    suffix.value().get().MutateTarget(rev, fn, op);
-  }
-}
-
 }  // namespace
 
 /*** TextIndex ***/
@@ -117,6 +102,17 @@ TextIndex::TextIndex(bool suffix)
     : prefix_tree_(FreePostingsCallback),
       suffix_tree_(suffix ? std::make_unique<Rax>(FreePostingsCallback)
                           : nullptr) {}
+
+void TextIndex::MutateTarget(absl::string_view word,
+                             const InvasivePtr<Postings> &target,
+                             item_count_op op) {
+  auto target_set_fn = CreateTargetSetFn(target);
+  prefix_tree_.MutateTarget(word, target_set_fn, op);
+  if (suffix_tree_) {
+    std::string rev(word.rbegin(), word.rend());
+    suffix_tree_->MutateTarget(rev, target_set_fn, op);
+  }
+}
 
 Rax &TextIndex::GetPrefix() { return prefix_tree_; }
 
@@ -150,7 +146,7 @@ TextIndexSchema::TextIndexSchema(data_model::Language language,
       lexer_(language, punctuation, stop_words),
       stem_tree_(FreeStemParentsCallback),
       min_stem_size_(min_stem_size),
-      postings_mutex_pool_(options::GetPostingsMutexPoolSize().GetValue()) {}
+      rax_target_mutex_pool_(options::GetRaxTargetMutexPoolSize().GetValue()) {}
 
 absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
     const InternedStringPtr &key, absl::string_view data,
@@ -248,15 +244,13 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
     // target_set_fn, so that all trees point to the same postings object
     InvasivePtr<Postings> updated_target;
     {
-      absl::MutexLock word_lock(&postings_mutex_pool_.Get(token));
+      absl::MutexLock word_lock(&rax_target_mutex_pool_.Get(token));
 
       InvasivePtr<Postings> existing;
       {
-        // Tree read lock prevents rax node reallocation racing with GetTarget.
+        // Tree read lock prevents rax node reallocation racing with FindTarget.
         absl::ReaderMutexLock tree_read(&text_index_mutex_);
-        existing = InvasivePtr<Postings>::CopyRaw(
-            static_cast<InvasivePtrRaw<Postings>>(
-                text_index_->GetPrefix().GetTarget(token)));
+        existing = text_index_->GetPrefix().FindPostingsTarget(token);
       }
       bool is_new_word = !existing;
 
@@ -268,21 +262,14 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
 
       if (is_new_word) {
         absl::WriterMutexLock tree_lock(&text_index_mutex_);
-        auto target_set_fn = CreateTargetSetFn(updated_target);
-        text_index_->GetPrefix().MutateTarget(
-            token, target_set_fn,
+        text_index_->MutateTarget(
+            token, updated_target,
             ITEM_COUNT_TRACKING_ENABLED(item_count_op::ADD));
-        if (suffix) {
-          text_index_->GetSuffix().value().get().MutateTarget(
-              *reverse_token, target_set_fn,
-              ITEM_COUNT_TRACKING_ENABLED(item_count_op::ADD));
-        }
       }
     }
 
     // Update per-key index (no locking needed — local to this call).
-    auto target_set_fn = CreateTargetSetFn(updated_target);
-    MutateWordInIndex(key_index, token, target_set_fn);
+    key_index.MutateTarget(token, updated_target);
   }
 
   if (stem_text_field_mask_ && !stem_mappings.empty()) {
@@ -326,14 +313,12 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
   while (!iter.Done()) {
     std::string word_str(iter.GetWord());
     {
-      absl::MutexLock word_lock(&postings_mutex_pool_.Get(word_str));
+      absl::MutexLock word_lock(&rax_target_mutex_pool_.Get(word_str));
 
       InvasivePtr<Postings> existing;
       {
         absl::ReaderMutexLock tree_read(&text_index_mutex_);
-        existing = InvasivePtr<Postings>::CopyRaw(
-            static_cast<InvasivePtrRaw<Postings>>(
-                text_index_->GetPrefix().GetTarget(word_str)));
+        existing = text_index_->GetPrefix().FindPostingsTarget(word_str);
       }
 
       InvasivePtr<Postings> updated_target;
@@ -344,16 +329,10 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
       }
 
       if (!updated_target) {
-        auto drop_fn = [](void *old_val) -> void * {
-          if (old_val) {
-            InvasivePtr<Postings>::AdoptRaw(
-                static_cast<InvasivePtrRaw<Postings>>(old_val));
-          }
-          return nullptr;
-        };
         absl::WriterMutexLock tree_lock(&text_index_mutex_);
-        MutateWordInIndex(*text_index_, word_str, drop_fn,
-                          ITEM_COUNT_TRACKING_ENABLED(item_count_op::SUBTRACT));
+        text_index_->MutateTarget(
+            word_str, updated_target,
+            ITEM_COUNT_TRACKING_ENABLED(item_count_op::SUBTRACT));
         if (stem_text_field_mask_) {
           empty_words.push_back(word_str);
         }

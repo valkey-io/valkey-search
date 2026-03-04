@@ -107,7 +107,7 @@ const config::Boolean& GetRdbReadV2();
 config::Number& GetAsyncFanoutThreshold();
 
 /// Return the pool size for per-word Postings bucket mutexes
-config::Number& GetPostingsMutexPoolSize();
+config::Number& GetRaxTargetMutexPoolSize();
 
 }  // namespace options
 }  // namespace valkey_search

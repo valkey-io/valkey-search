@@ -93,8 +93,12 @@ class Rax {
                     absl::FunctionRef<void *(void *)> mutate,
                     item_count_op op = NONE);
 
-  // Returns the current target for word, or nullptr if not found.
-  void *GetTarget(absl::string_view word) const;
+  // Searches for word and returns its target, or nullptr if not found.
+  void *FindTarget(absl::string_view word) const;
+
+  // Searches for word and returns its Postings target as InvasivePtr.
+  // Returns empty InvasivePtr if word not found.
+  InvasivePtr<Postings> FindPostingsTarget(absl::string_view word) const;
 
   // Get the total number of unique words in the RadixTree (i.e. total number of
   // entries).

@@ -26,7 +26,7 @@
 #include "src/indexes/text/invasive_ptr.h"
 #include "src/indexes/text/lexer.h"
 #include "src/indexes/text/posting.h"
-#include "src/indexes/text/postings_mutex_pool.h"
+#include "src/indexes/text/rax_target_mutex_pool.h"
 #include "src/indexes/text/rax_wrapper.h"
 
 struct sb_stemmer;
@@ -73,6 +73,11 @@ class TextIndex {
   const Rax &GetPrefix() const;
   std::optional<std::reference_wrapper<Rax>> GetSuffix();
   std::optional<std::reference_wrapper<const Rax>> GetSuffix() const;
+
+  // Applies target mutation to both prefix tree for |word| and, if the index
+  // has a suffix tree, to the suffix tree for reverse(word).
+  void MutateTarget(absl::string_view word, const InvasivePtr<Postings> &target,
+                    item_count_op op = NONE);
 
  private:
   Rax prefix_tree_;
@@ -138,8 +143,9 @@ class TextIndexSchema {
   //
   std::shared_ptr<TextIndex> text_index_ = std::make_shared<TextIndex>(false);
 
-  // Guards tree structural changes (node insertions/removals) in text_index_.
-  // Writers take WriterMutexLock; readers (search) take ReaderMutexLock.
+  // Guards rax tree structural changes during concurrent writes.
+  // Used exclusively by CommitKeyData/DeleteKeyData when inserting or removing
+  // tree nodes.
   mutable absl::Mutex text_index_mutex_;
 
   //
@@ -151,8 +157,8 @@ class TextIndexSchema {
   // Guards structural changes to stem_tree_.
   mutable absl::Mutex stem_tree_mutex_;
 
-  // Per-word bucket locks for concurrent Postings updates.
-  PostingsMutexPool postings_mutex_pool_;
+  // Per-word bucket locks for concurrent Rax target updates.
+  RaxTargetMutexPool rax_target_mutex_pool_;
 
   //
   // To support the Delete record and the post-filtering case, there is a

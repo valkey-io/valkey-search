@@ -112,7 +112,7 @@ absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator &itr) {
   // Set limit parameters based on GetSerializationRange logic
   auto range = GetSerializationRange();
   limit.first_index = range.start_index;
-  limit.number = range.count();
+  limit.number = range.end_index - range.start_index;
 
   VMSDK_RETURN_IF_ERROR(PostParseQueryString());
   VMSDK_RETURN_IF_ERROR(VerifyQueryString(*this));

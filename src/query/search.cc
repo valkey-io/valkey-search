@@ -748,7 +748,6 @@ SerializationRange SearchParameters::GetSerializationRange() const {
 SerializationRange SearchResult::GetSerializationRange(
     const SearchParameters &parameters) const {
   CHECK(!ShouldReturnNoResults(parameters));
-  auto range = parameters.GetSerializationRange();
   // Determine start_index
   size_t start_index = 0;
   // If we have already offsetted, start_index is 0.
@@ -756,10 +755,11 @@ SerializationRange SearchResult::GetSerializationRange(
     if (parameters.IsVectorQuery()) {
       CHECK_GT(parameters.k, parameters.limit.first_index);
     }
-    start_index = std::min(neighbors.size(), range.start_index);
+    start_index = std::min(neighbors.size(),
+                           static_cast<size_t>(parameters.limit.first_index));
   }
   // Determine end_index logic
-  size_t limit_count = range.end_index - range.start_index;
+  size_t limit_count = static_cast<size_t>(parameters.limit.number);
   size_t count;
   if (parameters.IsNonVectorQuery()) {
     count = std::min(limit_count, neighbors.size());

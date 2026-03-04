@@ -112,7 +112,8 @@ struct SearchResult {
 
   // Constructor with automatic trimming based on query requirements
   SearchResult(size_t total_count, std::vector<indexes::Neighbor> neighbors,
-               const SearchParameters& parameters);
+               const SearchParameters& parameters,
+               bool trim_offset_in_background = false);
   // Get the range of neighbors to serialize in response.
   SerializationRange GetSerializationRange(
       const SearchParameters& parameters) const;
@@ -121,7 +122,8 @@ struct SearchResult {
 
  private:
   void TrimResults(std::vector<indexes::Neighbor>& neighbors,
-                   const SearchParameters& parameters);
+                   const SearchParameters& parameters,
+                   bool trim_offset_in_background);
 };
 
 //
@@ -212,6 +214,7 @@ struct SearchParameters {
   // particular is needed on the results. This should be overridden in derived
   // classes if needed. The default implementation returns false.
   virtual bool RequiresCompleteResults() const { return false; }
+  virtual SerializationRange GetSerializationRange() const;
 
   virtual absl::Status PreParseQueryString();
   virtual absl::Status PostParseQueryString();

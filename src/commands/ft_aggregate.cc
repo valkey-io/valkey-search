@@ -109,8 +109,10 @@ absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator &itr) {
     return absl::InvalidArgumentError("Only Dialects 2, 3 and 4 are supported");
   }
 
-  limit.number = std::numeric_limits<uint64_t>::max();  // Override default of
-                                                        // 10 from search
+  // Set limit parameters based on GetSerializationRange logic
+  auto range = GetSerializationRange();
+  limit.first_index = range.start_index;
+  limit.number = range.count();
 
   VMSDK_RETURN_IF_ERROR(PostParseQueryString());
   VMSDK_RETURN_IF_ERROR(VerifyQueryString(*this));
@@ -376,16 +378,32 @@ absl::Status SendReplyInner(ValkeyModuleCtx *ctx,
   return absl::OkStatus();
 }
 
-// TODO: Implement the correct logic to detect if the FT.AGGREGATE query has a
-// clause (e.g. sorting) that requires all neighbors to be returned for the
-// correct search result.
+// Returns whether the entire search results are needed to be able to form the
+// aggregated response.
+// TODO: Check the code in aggregate and the stages. Which ones really need
+// complete results vs which ones do not.
 bool AggregateParameters::RequiresCompleteResults() const {
   for (const auto &stage : stages_) {
-    if (dynamic_cast<const SortBy *>(stage.get()) != nullptr) {
+    if (!stage->GetSerializationRange().has_value()) {
+      // For now, assume any stage that doesn't explicitly support early
+      // trimming needs complete results
       return true;
     }
   }
-  return false;
+  return true;  // No LIMIT found - need complete results
+}
+
+query::SerializationRange AggregateParameters::GetSerializationRange() const {
+  for (const auto &stage : stages_) {
+    if (auto range = stage->GetSerializationRange()) {
+      return *range;  // Use first LIMIT stage for early trimming
+    } else {
+      break;  // Non LIMIT stage encountered, stop looking for further LIMIT
+              // stages
+    }
+  }
+  // Fallback to base class limit parameters
+  return SearchParameters::GetSerializationRange();
 }
 
 void AggregateParameters::SendReply(ValkeyModuleCtx *ctx,

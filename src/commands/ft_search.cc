@@ -332,6 +332,13 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
   }
 }
 
+query::SerializationRange SearchCommand::GetSerializationRange() const {
+  // FT.SEARCH serialization logic - use limit parameters directly
+  size_t start_index = static_cast<size_t>(limit.first_index);
+  size_t end_index = start_index + static_cast<size_t>(limit.number);
+  return {start_index, end_index};
+}
+
 absl::Status FTSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                          int argc) {
   return QueryCommand::Execute(ctx, argv, argc,

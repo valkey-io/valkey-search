@@ -68,6 +68,7 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   // Determine if we need full results or if we can optimize with trimming via
   // LIMIT offset & count.
   bool RequiresCompleteResults() const override;
+  query::SerializationRange GetSerializationRange() const override;
 
   //
   // Information for each index position in a Record
@@ -139,6 +140,10 @@ class Stage {
   virtual ~Stage() = default;
   virtual absl::Status Execute(RecordSet& records) const = 0;
   virtual void Dump(std::ostream& os) const = 0;
+  virtual std::optional<query::SerializationRange> GetSerializationRange()
+      const {
+    return std::nullopt;
+  }
   friend std::ostream& operator<<(std::ostream& os, const Stage& s) {
     s.Dump(os);
     return os;
@@ -168,6 +173,10 @@ class Limit : public Stage {
     os << "LIMIT: " << offset_ << " " << limit_;
   }
   absl::Status Execute(RecordSet& records) const override;
+  std::optional<query::SerializationRange> GetSerializationRange()
+      const override {
+    return query::SerializationRange{offset_, offset_ + limit_};
+  }
 };
 
 class Apply : public Stage {

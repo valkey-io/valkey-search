@@ -679,7 +679,8 @@ SearchResult::SearchResult()
 
 SearchResult::SearchResult(size_t total_count,
                            std::vector<indexes::Neighbor> neighbors,
-                           const SearchParameters &parameters)
+                           const SearchParameters &parameters,
+                           bool trim_offset_in_background)
     : total_count(total_count),
       is_limited_with_buffer(false),
       is_offsetted(false) {
@@ -691,24 +692,25 @@ SearchResult::SearchResult(size_t total_count,
   this->neighbors = std::move(neighbors);
   // Check if the command needs all results (e.g. for sorting). Trim otherwise.
   if (!parameters.RequiresCompleteResults()) {
-    TrimResults(this->neighbors, parameters);
+    TrimResults(this->neighbors, parameters, trim_offset_in_background);
   }
 }
 
 // Apply limiting in background thread if possible.
 void SearchResult::TrimResults(std::vector<indexes::Neighbor> &neighbors,
-                               const SearchParameters &parameters) {
-  // Calculate max_needed for consistent vector/non-vector handling
+                               const SearchParameters &parameters,
+                               bool trim_offset_in_background) {
+  // Use the existing complex logic from SearchResult::GetSerializationRange
   SerializationRange range = GetSerializationRange(parameters);
   size_t max_needed = static_cast<size_t>(
       range.end_index * options::GetSearchResultBufferMultiplier());
   // In standalone mode, we can optimize by trimming from front first.
-  // Note: We cannot trim from the front in a Cluster Mode setting because
-  // each shard produces X results and we need to trim the OFFSET on the
-  // aggregated results. Thus, we can only trim from the end in searches for
-  // individual nodes. In cluster mode, the offset based trimming is applied
-  // after merging all results from shards at the coordinator level.
-  if (!ValkeySearch::Instance().IsCluster()) {
+  // In cluster mode on remote searches on individual shards, we cannot trim
+  // from the front yet because each shard produces X results. However, the
+  // coordinator (after merging) WILL trim from the front and back in the
+  // background thread to avoid memory bloat with large offsets / limit counts
+  // before returning to the main thread.
+  if (!ValkeySearch::Instance().IsCluster() || trim_offset_in_background) {
     this->is_offsetted = true;
     // Trim from front (apply offset)
     if (range.start_index > 0 && range.start_index < neighbors.size()) {

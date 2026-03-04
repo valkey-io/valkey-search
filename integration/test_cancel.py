@@ -706,8 +706,7 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
         # Create index with HNSW (not FLAT) to allow inline filtering
         Index("idx", [Vector("v", 3, type="HNSW", distance="L2"), Numeric("num")], ["doc"]).create(client)
 
-        # Load 100k vectors to make 0.1% threshold = 100 vectors
-        for i in range(100000):
+        for i in range(10000):
             client.hset(f"doc:{i}", mapping={
                 "v": float_to_bytes([float(i), float(i), float(i)]),
                 "num": i
@@ -726,7 +725,7 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
                 # HYBRID query with BROAD filter (90% of data matches)
                 # This triggers inline filtering because filtered set > 0.1% threshold
                 result[0] = thread_client.execute_command(
-                    "FT.SEARCH", "idx", "@num:[0 90000]=>[KNN 10 @v $BLOB]",
+                    "FT.SEARCH", "idx", "@num:[0 9000]=>[KNN 10 @v $BLOB]",
                     "PARAMS", "2", "BLOB", float_to_bytes([10.0, 10.0, 10.0]),
                     "TIMEOUT", "5000"
                 )

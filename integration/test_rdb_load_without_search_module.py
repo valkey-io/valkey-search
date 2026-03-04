@@ -65,6 +65,9 @@ def do_rdb_load_without_module_test_cmd(test_case):
         test_case, testdir, dbfilename
     )
 
+    # Update the primary's server handle so teardown cleanup can kill the new process
+    test_case.rg.primary.server = new_server
+
     assert new_client.ping()
 
     dbsize = new_client.dbsize()
@@ -120,6 +123,9 @@ def do_rdb_load_without_module_test_cme(test_case):
     new_server, new_client, logfile = _start_server_without_module(
         test_case, testdir, dbfilename
     )
+
+    # Update the primary's server handle so teardown cleanup can kill the new process
+    primary0.server = new_server
 
     assert new_client.ping()
 

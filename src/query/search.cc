@@ -711,8 +711,6 @@ void SearchResult::TrimResults(std::vector<indexes::Neighbor> &neighbors,
   // background thread to avoid memory bloat with large offsets / limit counts
   // before returning to the main thread.
   if (!ValkeySearch::Instance().IsCluster() || trim_offset_in_background) {
-    // TODO: Check if we preserve the state of is_offsetted between the
-    // coordinator and the reply callback.
     this->is_offsetted = true;
     // Trim from front (apply offset)
     if (range.start_index > 0 && range.start_index < neighbors.size()) {

@@ -384,6 +384,9 @@ bool AggregateParameters::RequiresCompleteResults() const {
   return GetSerializationRange() == query::SerializationRange::All();
 }
 
+// Determine the serialization range required based on the stages in the
+// aggregation. This is only used in construction of the aggregate command to
+// set limit params. These params will be used later on in the SearchResult.
 query::SerializationRange AggregateParameters::GetSerializationRange() const {
   for (const auto &stage : stages_) {
     auto stage_range = stage->GetSerializationRange();

@@ -121,7 +121,7 @@ absl::StatusOr<std::deque<std::string>> Lexer::Tokenize(
         pos++;  // Consume the backslash
         if (next_ch == '\\' || IsPunctuation(next_ch)) {
           // Backslash escapes backslash or punctuation
-          scratch.push_back(text[pos++]);
+          scratch.push_back(text[pos++]);  // Keep the escaped character
         } else {
           // Backslash before non-punctuation
           if (IsPunctuation('\\')) {
@@ -206,27 +206,27 @@ void Lexer::StemWord(
     std::string& word, sb_stemmer* stemmer, uint32_t min_stem_size,
     absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>*
         stem_mappings) const {
-  if (word.empty() || word.length() < min_stem_size || !stemmer) {
+  if (word.empty() || word.length() < min_stem_size) {
     return;
   }
-
+  CHECK(stemmer) << "Stemmer is not initialized";
   const sb_symbol* stemmed = sb_stemmer_stem(
       stemmer, reinterpret_cast<const sb_symbol*>(word.c_str()), word.length());
   CHECK(stemmed) << "Stemming failed";
-
   int stemmed_length = sb_stemmer_length(stemmer);
   CHECK(stemmed_length > 0 && stemmed_length <= word.length())
       << "Stemming failed";
-
   std::string_view stemmed_view(reinterpret_cast<const char*>(stemmed),
                                 stemmed_length);
-
   if (stemmed_view != word) {
     if (stem_mappings) {
       auto it = stem_mappings->find(stemmed_view);
       if (it != stem_mappings->end()) {
+        // Existing Stem Root: add variant to its set.
         it->second.insert(word);
       } else {
+        // New Stem Root: create a new map entry and track this word as its
+        // first variant.
         (*stem_mappings)[std::string(stemmed_view)].insert(word);
       }
     }

@@ -33,7 +33,6 @@ Key.
 */
 
 #include <cstdint>
-#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -68,7 +67,7 @@ struct FieldMask {
 
 static_assert(sizeof(FieldMask) == 16, "FieldMask should exactly be 16 bytes");
 
-using PositionMap = std::map<Position, FieldMask>;
+using PositionMap = absl::btree_map<Position, FieldMask>;
 
 struct Postings {
   struct KeyIterator;

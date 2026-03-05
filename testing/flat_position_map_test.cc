@@ -8,11 +8,11 @@
 #include "src/indexes/text/flat_position_map.h"
 
 #include <algorithm>
-#include <map>
 #include <memory>
 #include <random>
 #include <vector>
 
+#include "absl/container/btree_map.h"
 #include "gtest/gtest.h"
 #include "src/indexes/text/posting.h"
 
@@ -21,7 +21,7 @@ namespace valkey_search::indexes::text {
 // RAII wrapper for FlatPositionMap pointer
 class FlatPositionMapPtr {
  public:
-  FlatPositionMapPtr(const std::map<Position, FieldMask>& position_map,
+  FlatPositionMapPtr(const absl::btree_map<Position, FieldMask>& position_map,
                      size_t num_text_fields)
       : ptr_(FlatPositionMap::Create(position_map, num_text_fields)) {}
 
@@ -57,10 +57,10 @@ class FlatPositionMapPtr {
 
 class FlatPositionMapTest : public ::testing::Test {
  protected:
-  std::map<Position, FieldMask> CreatePositionMap(
+  absl::btree_map<Position, FieldMask> CreatePositionMap(
       const std::vector<std::pair<Position, uint64_t>>& positions,
       size_t num_fields) {
-    std::map<Position, FieldMask> position_map;
+    absl::btree_map<Position, FieldMask> position_map;
     for (const auto& [pos, mask] : positions) {
       FieldMask field_mask(num_fields);
       for (size_t i = 0; i < num_fields; ++i) {
@@ -97,7 +97,7 @@ class FlatPositionMapTest : public ::testing::Test {
 //=============================================================================
 
 TEST_F(FlatPositionMapTest, EmptyMap) {
-  std::map<Position, FieldMask> empty_map;
+  absl::btree_map<Position, FieldMask> empty_map;
   EXPECT_DEATH(FlatPositionMap::Create(empty_map, 1),
                "Cannot create FlatPositionMap from empty position_map");
 }

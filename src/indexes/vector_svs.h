@@ -57,7 +57,10 @@ class VectorSVS : public VectorBase {
 
   size_t GetDataTypeSize() const override { return sizeof(T); }
   int GetDimensions() const { return dimensions_; }
-  size_t GetCapacity() const override { return num_elements_; }
+  size_t GetCapacity() const override ABSL_LOCKS_EXCLUDED(index_mutex_) {
+    absl::ReaderMutexLock lock(&index_mutex_);
+    return num_elements_;
+  }
 
   absl::StatusOr<std::vector<Neighbor>> Search(
       absl::string_view query, uint64_t count,
@@ -103,7 +106,7 @@ class VectorSVS : public VectorBase {
   svs::runtime::v0::DynamicVamanaIndex* svs_index_
       ABSL_GUARDED_BY(index_mutex_){nullptr};
   SVSBuildConfig build_config_;
-  size_t num_elements_{0};
+  size_t num_elements_ ABSL_GUARDED_BY(index_mutex_){0};
 
   mutable absl::Mutex index_mutex_;
   mutable absl::Mutex tracked_vectors_mutex_;

@@ -17,6 +17,8 @@
 #include <omp.h>
 #endif
 
+#include <exception>
+
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
@@ -188,44 +190,55 @@ absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::Create(
 template <typename T>
 absl::Status VectorSVS<T>::AddRecordImpl(uint64_t internal_id,
                                           absl::string_view record) {
-  absl::MutexLock lock(&index_mutex_);
+  try {
+    absl::MutexLock lock(&index_mutex_);
 
-  // Store raw vector data for retrieval and distance computation.
-  // This is a temporary measure for Iteration 0: SVS does not yet expose
-  // reconstruct() or compute_distance(), so we keep a full FP32 copy.
-  raw_vectors_[internal_id] = std::vector<char>(record.begin(), record.end());
+    // Store raw vector data for retrieval and distance computation.
+    // This is a temporary measure for Iteration 0: SVS does not yet expose
+    // reconstruct() or compute_distance(), so we keep a full FP32 copy.
+    raw_vectors_[internal_id] =
+        std::vector<char>(record.begin(), record.end());
 
-  size_t label = static_cast<size_t>(internal_id);
-  auto status = svs_index_->add(
-      1, &label, reinterpret_cast<const float*>(record.data()));
+    size_t label = static_cast<size_t>(internal_id);
+    auto status = svs_index_->add(
+        1, &label, reinterpret_cast<const float*>(record.data()));
 
-  if (!status.ok()) {
-    raw_vectors_.erase(internal_id);
+    if (!status.ok()) {
+      raw_vectors_.erase(internal_id);
+      return absl::InternalError(
+          absl::StrCat("SVS add failed: ", status.message()));
+    }
+
+    ++num_elements_;
+    return absl::OkStatus();
+  } catch (const std::exception& e) {
     return absl::InternalError(
-        absl::StrCat("SVS add failed: ", status.message()));
+        absl::StrCat("SVS add exception: ", e.what()));
   }
-
-  ++num_elements_;
-  return absl::OkStatus();
 }
 
 template <typename T>
 absl::Status VectorSVS<T>::RemoveRecordImpl(uint64_t internal_id) {
-  absl::MutexLock lock(&index_mutex_);
+  try {
+    absl::MutexLock lock(&index_mutex_);
 
-  size_t label = static_cast<size_t>(internal_id);
-  auto status = svs_index_->remove(1, &label);
+    size_t label = static_cast<size_t>(internal_id);
+    auto status = svs_index_->remove(1, &label);
 
-  if (!status.ok()) {
+    if (!status.ok()) {
+      return absl::InternalError(
+          absl::StrCat("SVS remove failed: ", status.message()));
+    }
+
+    raw_vectors_.erase(internal_id);
+    if (num_elements_ > 0) {
+      --num_elements_;
+    }
+    return absl::OkStatus();
+  } catch (const std::exception& e) {
     return absl::InternalError(
-        absl::StrCat("SVS remove failed: ", status.message()));
+        absl::StrCat("SVS remove exception: ", e.what()));
   }
-
-  raw_vectors_.erase(internal_id);
-  if (num_elements_ > 0) {
-    --num_elements_;
-  }
-  return absl::OkStatus();
 }
 
 template <typename T>
@@ -235,26 +248,57 @@ absl::Status VectorSVS<T>::ModifyRecordImpl(uint64_t internal_id,
   // a gap where the vector is absent from the index. HNSW uses a reader lock
   // because hnswlib handles markDelete + addPoint atomically. SVS requires
   // separate remove() + add() calls, so we need exclusive access.
-  absl::MutexLock lock(&index_mutex_);
+  try {
+    absl::MutexLock lock(&index_mutex_);
 
-  size_t label = static_cast<size_t>(internal_id);
-  auto remove_status = svs_index_->remove(1, &label);
-  if (!remove_status.ok()) {
+    // Save old vector for rollback in case add() fails after remove().
+    auto old_it = raw_vectors_.find(internal_id);
+    std::vector<char> old_raw;
+    if (old_it != raw_vectors_.end()) {
+      old_raw = std::move(old_it->second);
+    }
+
+    size_t label = static_cast<size_t>(internal_id);
+    auto remove_status = svs_index_->remove(1, &label);
+    if (!remove_status.ok()) {
+      // Restore old raw vector (it was moved out).
+      if (!old_raw.empty()) {
+        raw_vectors_[internal_id] = std::move(old_raw);
+      }
+      return absl::InternalError(
+          absl::StrCat("SVS remove (modify) failed: ",
+                       remove_status.message()));
+    }
+
+    raw_vectors_[internal_id] =
+        std::vector<char>(record.begin(), record.end());
+
+    auto add_status = svs_index_->add(
+        1, &label, reinterpret_cast<const float*>(record.data()));
+    if (!add_status.ok()) {
+      // Rollback: restore old vector and re-add to SVS index.
+      raw_vectors_[internal_id] = std::move(old_raw);
+      auto restore_status = svs_index_->add(
+          1, &label,
+          reinterpret_cast<const float*>(
+              raw_vectors_[internal_id].data()));
+      if (!restore_status.ok()) {
+        // Failed to restore — vector is lost from SVS graph.
+        // Decrement count to stay consistent.
+        if (num_elements_ > 0) {
+          --num_elements_;
+        }
+      }
+      return absl::InternalError(
+          absl::StrCat("SVS add (modify) failed: ",
+                       add_status.message()));
+    }
+
+    return absl::OkStatus();
+  } catch (const std::exception& e) {
     return absl::InternalError(
-        absl::StrCat("SVS remove (modify) failed: ",
-                     remove_status.message()));
+        absl::StrCat("SVS modify exception: ", e.what()));
   }
-
-  raw_vectors_[internal_id] = std::vector<char>(record.begin(), record.end());
-
-  auto add_status = svs_index_->add(
-      1, &label, reinterpret_cast<const float*>(record.data()));
-  if (!add_status.ok()) {
-    return absl::InternalError(
-        absl::StrCat("SVS add (modify) failed: ", add_status.message()));
-  }
-
-  return absl::OkStatus();
 }
 
 // --- Search (stub, implemented in Phase 3) ---
@@ -323,10 +367,11 @@ char* VectorSVS<T>::GetValueImpl(uint64_t internal_id) const {
   if (it == raw_vectors_.end()) {
     return nullptr;
   }
-  // The returned pointer into raw_vectors_ is safe because callers hold
-  // VectorBase's read-path guarantees: the main thread serializes mutations,
-  // which prevents concurrent writes to raw_vectors_ that could invalidate
-  // this pointer.
+  // Safety: the returned pointer into raw_vectors_ outlives the reader lock
+  // held here. This is safe because the caller (VectorBase::GetValue) executes
+  // during the read time-slice of IndexSchema's TimeSlicedMRMWMutex, which
+  // blocks all writer threads (mutations). The pointer remains valid until the
+  // read time-slice ends. Do NOT use this pointer outside that context.
   return const_cast<char*>(it->second.data());
 }
 

@@ -34,6 +34,7 @@ namespace valkey_search {
 constexpr absl::string_view kMaxKnnConfig{"max-vector-knn"};
 constexpr int kDefaultKnnLimit{10000};
 constexpr int kMaxKnn{100000};
+constexpr unsigned kMaxSearchWindowSize{10000};
 
 /// Register the "--max-knn" flag. Controls the max KNN parameter for vector
 /// search.
@@ -70,7 +71,6 @@ absl::Status Verify(query::SearchParameters &parameters) {
           << max_ef_runtime_value << ".";
     }
     if (parameters.search_window_size.has_value()) {
-      constexpr unsigned kMaxSearchWindowSize = 10000;
       VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(
           parameters.search_window_size.value(), 1u, kMaxSearchWindowSize))
           << "`SEARCH_WINDOW_SIZE` must be a positive integer greater than 0 "
@@ -279,7 +279,6 @@ absl::Status VerifyQueryString(query::SearchParameters &parameters) {
           << max_ef_runtime_value << ".";
     }
     if (parameters.search_window_size.has_value()) {
-      constexpr unsigned kMaxSearchWindowSize = 10000;
       VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(
           parameters.search_window_size.value(), 1u, kMaxSearchWindowSize))
           << "`SEARCH_WINDOW_SIZE` must be a positive integer greater than 0 "

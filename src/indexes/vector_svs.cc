@@ -8,7 +8,9 @@
 #include "src/indexes/vector_svs.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <type_traits>
 #include <utility>
@@ -138,12 +140,16 @@ absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::Create(
   }
 
   // SVS requires alpha <= 1.0 for MIP/Cosine distance metrics.
-  // Clamp to 1.0 if the user didn't explicitly set a lower value.
   if (vector_index_proto.distance_metric() ==
           data_model::DISTANCE_METRIC_IP ||
       vector_index_proto.distance_metric() ==
           data_model::DISTANCE_METRIC_COSINE) {
-    config.alpha = std::min(config.alpha, 1.0f);
+    if (config.alpha > 1.0f) {
+      VMSDK_LOG(NOTICE, nullptr)
+          << "Clamping SVS alpha from " << config.alpha
+          << " to 1.0 (required for IP/COSINE metrics)";
+      config.alpha = 1.0f;
+    }
   }
 
   auto index = std::shared_ptr<VectorSVS<T>>(new VectorSVS<T>(
@@ -354,7 +360,8 @@ absl::StatusOr<std::vector<Neighbor>> VectorSVS<T>::Search(
   }
 
   auto perform_search =
-      [this, count, &filter, &search_window_size](absl::string_view q)
+      [this, count, &filter, &search_window_size,
+       &cancellation_token](absl::string_view q)
           -> absl::StatusOr<
               std::priority_queue<std::pair<T, hnswlib::labeltype>>> {
     try {
@@ -399,9 +406,22 @@ absl::StatusOr<std::vector<Neighbor>> VectorSVS<T>::Search(
             absl::StrCat("SVS search failed: ", status.message()));
       }
 
+      // SVS search() is synchronous and non-interruptible. Check the
+      // cancellation token after completion to avoid wasted post-processing.
+      if (cancellation_token->IsCancelled()) {
+        return absl::CancelledError(
+            "Search operation cancelled due to timeout");
+      }
+
       // Convert flat arrays to priority queue (max-heap by distance).
+      // Skip sentinel entries that SVS may produce for filtered searches
+      // where fewer than k results match the filter.
       std::priority_queue<std::pair<T, hnswlib::labeltype>> results;
       for (size_t i = 0; i < k; ++i) {
+        if (labels[i] == std::numeric_limits<size_t>::max() ||
+            std::isinf(distances[i])) {
+          continue;
+        }
         results.emplace(distances[i],
                         static_cast<hnswlib::labeltype>(labels[i]));
       }

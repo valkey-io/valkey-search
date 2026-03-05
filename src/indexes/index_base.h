@@ -24,7 +24,15 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
-enum class IndexerType { kHNSW, kFlat, kNumeric, kTag, kVector, kNone, kText };
+enum class IndexerType {
+  kHNSW, kFlat, kNumeric, kTag, kVector, kNone, kText, kSVS
+};
+
+// Helper to check if an IndexerType is a vector index type.
+inline bool IsVectorIndexType(IndexerType type) {
+  return type == IndexerType::kVector || type == IndexerType::kHNSW ||
+         type == IndexerType::kFlat || type == IndexerType::kSVS;
+}
 
 enum class DeletionType {
   kRecord,      // The record was deleted from the index.

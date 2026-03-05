@@ -100,6 +100,7 @@ const absl::NoDestructor<absl::flat_hash_map<
     kVectorAlgoByStr({
         {"HNSW", data_model::VectorIndex::AlgorithmCase::kHnswAlgorithm},
         {"FLAT", data_model::VectorIndex::AlgorithmCase::kFlatAlgorithm},
+        {"SVS", data_model::VectorIndex::AlgorithmCase::kSvsVamanaAlgorithm},
     });
 
 const absl::NoDestructor<

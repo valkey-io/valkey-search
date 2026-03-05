@@ -229,8 +229,6 @@ def gen_escaped_word(vocab: List[str], rng: random.Random) -> List[str]:
         result.append(EscapedTerm(query))
     return result
 
-    # return [EscapedTerm(rng.choice(vocab)) for _ in range(count)]
-
 
 def effective_levenshtein_distance(term: str, requested: int) -> int:
     n = len(term)

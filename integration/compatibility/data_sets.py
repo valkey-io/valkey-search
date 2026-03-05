@@ -584,7 +584,6 @@ def load_data(client, data_set, key_type, data_source=None, schema_type="default
             data = compute_text_data_sets(data_set, schema_type=schema_type)
         case _:
             raise ValueError(f"Unknown data source: {data_source}")
-    # client.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET StopBackfill yes")
     load_list = data[data_set][SETS_KEY(key_type)]
     for create_index_cmd in data[data_set][CREATES_KEY(key_type)]:
         client.execute_command(create_index_cmd)

@@ -191,7 +191,9 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
   TokenPositions *token_positions;
   {
     std::lock_guard<std::mutex> guard(in_progress_key_updates_mutex_);
-    token_positions = &in_progress_key_updates_[key];
+    auto& token_map = in_progress_key_updates_[key];
+    token_map.reserve(tokens.value().size() * 1.5);  // Pre-reserve to avoid rehashing
+    token_positions = &token_map;
   }
   for (uint32_t i = 0; i < tokens->size(); ++i) {
     const auto &token = tokens.value()[i];

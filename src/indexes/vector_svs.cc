@@ -183,26 +183,81 @@ absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::Create(
   return index;
 }
 
-// --- Mutation stubs (Phase 2) ---
+// --- Mutation methods ---
 
 template <typename T>
 absl::Status VectorSVS<T>::AddRecordImpl(uint64_t internal_id,
                                           absl::string_view record) {
-  return absl::UnimplementedError("SVS AddRecord not yet implemented");
+  absl::MutexLock lock(&index_mutex_);
+
+  // Store raw vector data for retrieval and distance computation.
+  // This is a temporary measure for Iteration 0: SVS does not yet expose
+  // reconstruct() or compute_distance(), so we keep a full FP32 copy.
+  raw_vectors_[internal_id] = std::vector<char>(record.begin(), record.end());
+
+  size_t label = static_cast<size_t>(internal_id);
+  auto status = svs_index_->add(
+      1, &label, reinterpret_cast<const float*>(record.data()));
+
+  if (!status.ok()) {
+    raw_vectors_.erase(internal_id);
+    return absl::InternalError(
+        absl::StrCat("SVS add failed: ", status.message()));
+  }
+
+  ++num_elements_;
+  return absl::OkStatus();
 }
 
 template <typename T>
 absl::Status VectorSVS<T>::RemoveRecordImpl(uint64_t internal_id) {
-  return absl::UnimplementedError("SVS RemoveRecord not yet implemented");
+  absl::MutexLock lock(&index_mutex_);
+
+  size_t label = static_cast<size_t>(internal_id);
+  auto status = svs_index_->remove(1, &label);
+
+  if (!status.ok()) {
+    return absl::InternalError(
+        absl::StrCat("SVS remove failed: ", status.message()));
+  }
+
+  raw_vectors_.erase(internal_id);
+  if (num_elements_ > 0) {
+    --num_elements_;
+  }
+  return absl::OkStatus();
 }
 
 template <typename T>
 absl::Status VectorSVS<T>::ModifyRecordImpl(uint64_t internal_id,
                                              absl::string_view record) {
-  return absl::UnimplementedError("SVS ModifyRecord not yet implemented");
+  // Atomic modify: hold a single exclusive lock for remove + add to prevent
+  // a gap where the vector is absent from the index. HNSW uses a reader lock
+  // because hnswlib handles markDelete + addPoint atomically. SVS requires
+  // separate remove() + add() calls, so we need exclusive access.
+  absl::MutexLock lock(&index_mutex_);
+
+  size_t label = static_cast<size_t>(internal_id);
+  auto remove_status = svs_index_->remove(1, &label);
+  if (!remove_status.ok()) {
+    return absl::InternalError(
+        absl::StrCat("SVS remove (modify) failed: ",
+                     remove_status.message()));
+  }
+
+  raw_vectors_[internal_id] = std::vector<char>(record.begin(), record.end());
+
+  auto add_status = svs_index_->add(
+      1, &label, reinterpret_cast<const float*>(record.data()));
+  if (!add_status.ok()) {
+    return absl::InternalError(
+        absl::StrCat("SVS add (modify) failed: ", add_status.message()));
+  }
+
+  return absl::OkStatus();
 }
 
-// --- Search stub (Phase 3) ---
+// --- Search (stub, implemented in Phase 3) ---
 
 template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorSVS<T>::Search(
@@ -213,7 +268,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorSVS<T>::Search(
   return absl::UnimplementedError("SVS Search not yet implemented");
 }
 
-// --- Tracking stubs (Phase 2) ---
+// --- Vector tracking ---
 
 template <typename T>
 void VectorSVS<T>::TrackVector(uint64_t internal_id,

@@ -64,6 +64,7 @@ DEV_INTEGER_COUNTER(query_stats, query_text_fuzzy_count);
 DEV_INTEGER_COUNTER(query_stats, query_text_proximity_count);
 DEV_INTEGER_COUNTER(query_stats, query_numeric_count);
 DEV_INTEGER_COUNTER(query_stats, query_tag_count);
+DEV_INTEGER_COUNTER(query_stats, nonvector_results_fetched_limited_count);
 
 class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
  public:
@@ -370,7 +371,7 @@ void EvaluatePrefilteredKeys(
     absl::AnyInvocable<bool(const InternedStringPtr &,
                             absl::flat_hash_set<const char *> &)>
         appender,
-    size_t max_keys) {
+    size_t max_keys, bool stop_on_fetch_limit) {
   // If there was a union operation, we need to handle deduplication.
   // This implementation skips deduplication (flat_hash_set usage) if not needed
   // for performance.
@@ -410,10 +411,14 @@ void EvaluatePrefilteredKeys(
       // 3. Evaluate predicate
       if (key_evaluator.Evaluate(
               *parameters.filter_parse_results.root_predicate, key)) {
-        if (needs_dedup) {
+        bool result = appender(key, result_keys);
+        if (needs_dedup && result) {
           result_keys.insert(key->Str().data());
         }
-        appender(key, result_keys);
+        // For non-vector queries that exceed the fetch limit, return early
+        if (stop_on_fetch_limit && !result) {
+          return;
+        }
       }
       iterator->Next();
       if (parameters.cancellation_token->IsCancelled()) {
@@ -437,7 +442,8 @@ CalcBestMatchingPrefilteredKeys(
                                            results, top_keys);
   };
   EvaluatePrefilteredKeys(parameters, entries_fetchers,
-                          std::move(results_appender), qualified_entries);
+                          std::move(results_appender), qualified_entries,
+                          /*stop_on_fetch_limit=*/false);
   return results;
 }
 
@@ -573,12 +579,22 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
       parameters.filter_parse_results.root_predicate.get(), entries_fetchers,
       false, parameters.filter_parse_results.query_operations,
       parameters.index_schema.get());
+
+  // Get the config for maximum number of keys to accumulate before content
+  // fetching
+  const size_t max_keys = static_cast<size_t>(
+      options::GetMaxNonVectorSearchResultsFetched().GetValue());
   std::vector<indexes::Neighbor> neighbors;
   neighbors.reserve(std::min(qualified_entries, static_cast<size_t>(5000)));
+  bool fetch_limited = false;
   auto results_appender =
-      [&neighbors, &parameters](
+      [&neighbors, &parameters, max_keys, &fetch_limited](
           const InternedStringPtr &key,
           absl::flat_hash_set<const char *> &top_keys) -> bool {
+    if (neighbors.size() >= max_keys) {
+      fetch_limited = true;
+      return false;
+    }
     neighbors.emplace_back(indexes::Neighbor{key, 0.0f});
     return true;
   };
@@ -605,6 +621,11 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
           }
           seen_keys.insert(key->Str().data());
         }
+        // Check if we've reached the limit
+        if (neighbors.size() >= max_keys) {
+          nonvector_results_fetched_limited_count.Increment();
+          return neighbors;
+        }
         neighbors.emplace_back(indexes::Neighbor{key, 0.0f});
         iterator->Next();
         if (parameters.cancellation_token->IsCancelled()) {
@@ -615,7 +636,11 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
     return neighbors;
   }
   EvaluatePrefilteredKeys(parameters, entries_fetchers,
-                          std::move(results_appender), qualified_entries);
+                          std::move(results_appender), qualified_entries,
+                          /*stop_on_fetch_limit=*/true);
+  if (fetch_limited) {
+    nonvector_results_fetched_limited_count.Increment();
+  }
   return neighbors;
 }
 

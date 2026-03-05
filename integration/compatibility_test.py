@@ -386,11 +386,7 @@ def do_answer(client, expected, data_set):
     if (expected['data_set_name'], expected['key_type'], expected.get('schema_type')) != data_set:
         print("Loading data set:", expected['data_set_name'], "key type:", expected['key_type'])
         client.execute_command("FLUSHALL SYNC")
-        schema_type = expected.get('schema_type')
-        if schema_type:
-            load_data(client, expected['data_set_name'], expected['key_type'], schema_type=schema_type)
-        else:
-            load_data(client, expected['data_set_name'], expected['key_type'])
+        load_data(client, expected['data_set_name'], expected['key_type'], schema_type=expected.get('schema_type', 'default'))
         waiters.wait_for_true(lambda: IndexingTestHelper.is_indexing_complete_on_node(client, f"{expected['key_type']}_idx1"))
         data_set = (expected['data_set_name'], expected['key_type'], expected.get("schema_type"))
 

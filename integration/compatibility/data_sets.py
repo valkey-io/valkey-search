@@ -145,38 +145,66 @@ TEXT_DATASETS = {
                 'random~sum',
             ],
             'body': [
-                r'freedom\,justice',
-                r'begin\.end',
-                r'ask\<question',
-                r'get\>answer',
-                r'round\{about',
-                r'ever\}green',
-                r'square\[feet',
-                r'circle\]triangle',
-                r'chat\"gpt',
-                r"redis\'valkey",
-                r'sick\:hungry',
-                r'phone\;laptop',
-                r'soccer\!tennis',
-                r'address\@field',
-                r'hash\#tag',
-                r'money\$rich',
-                r'degree\%cold',
-                r'sharp\^knife',
-                r'friend\&enemy',
-                r'mountain\*view',
-                r'extra\(time',
-                r'sooner\)later',
-                r'deal\-coupon',
-                r'abundant\+plant',
-                r'blue\=planet',
-                r'milky\~way',
+                'freedom\\,justice',
+                'begin\\.end',
+                'ask\\<question',
+                'get\\>answer',
+                'round\\{about',
+                'ever\\}green',
+                'square\\[feet',
+                'circle\\]triangle',
+                'chat\\"gpt',
+                'redis\\\'valkey',
+                'sick\\:hungry',
+                'phone\\;laptop',
+                'soccer\\!tennis',
+                'address\\@field',
+                'hash\\#tag',
+                'money\\$rich',
+                'degree\\%cold',
+                'sharp\\^knife',
+                'friend\\&enemy',
+                'mountain\\*view',
+                'extra\\(time',
+                'sooner\\)later',
+                'deal\\-coupon',
+                'abundant\\+plant',
+                'blue\\=planet',
+                'milky\\~way',
             ],
             'color': ['red', 'blue', 'green'],
             'price': (0, 10)
         }
     }
 }
+
+# Schema flags per field type and schema variant.
+# For field types with multiple variants (like "text"), use a dict keyed by schema_type.
+# For simple field types, use a plain string (empty string if no extra flags needed).
+SCHEMA_FLAGS = {
+    "text": {
+        "default": "WITHSUFFIXTRIE",
+        "nostem": "WITHSUFFIXTRIE NOSTEM",
+    },
+    "tag": "",
+    "numeric": "",
+}
+
+def _build_field_schema(field: str, field_type: str, schema_type: str, for_json: bool = False) -> str:
+    """Build a single field's schema string for FT.CREATE."""
+    flags_entry = SCHEMA_FLAGS[field_type]
+    if isinstance(flags_entry, dict):
+        if schema_type not in flags_entry:
+            raise ValueError(f"Unknown index schema type: {schema_type}")
+        flags = flags_entry[schema_type]
+    else:
+        flags = flags_entry
+
+    field_def = f"{field} {field_type.upper()} {flags}".strip()
+
+    if for_json:
+        return f"$.{field} AS {field_def}"
+    return field_def
 
 def unbytes(b):
     if isinstance(b, bytes):
@@ -468,8 +496,6 @@ def compute_data_sets():
                 ]
     return data
 
-# TODO: stopwords, punctuation, numbers in text field (with periods, float, +/-)
-# TODO: special case with lexers (random lexical chars, prove lexical analyzer work correct) (isolation)
 def compute_text_data_sets(dataset_name, seed=123, schema_type="default"):
     """Generate random documents for a specific dataset.
     
@@ -502,29 +528,22 @@ def compute_text_data_sets(dataset_name, seed=123, schema_type="default"):
         "json": "FT.CREATE json_idx1 ON JSON PREFIX 1 json: SCHEMA {}",
     }
     
-    # Build schema strings
+    # Build schema strings using the shared helper
     hash_schema_parts = []
     json_schema_parts = []
-    
+
     for field in text_fields:
-        match schema_type:
-            case "default":
-                hash_schema_parts.append(f"{field} TEXT WITHSUFFIXTRIE")
-                json_schema_parts.append(f"$.{field} AS {field} TEXT WITHSUFFIXTRIE")
-            case "nostem":
-                hash_schema_parts.append(f"{field} TEXT WITHSUFFIXTRIE NOSTEM")
-                json_schema_parts.append(f"$.{field} AS {field} TEXT WITHSUFFIXTRIE NOSTEM")
-            case _:
-                raise ValueError(f"Unknown index schema type: {schema_type}")
-    
+        hash_schema_parts.append(_build_field_schema(field, "text", schema_type, for_json=False))
+        json_schema_parts.append(_build_field_schema(field, "text", schema_type, for_json=True))
+
     for field in tag_fields:
-        hash_schema_parts.append(f"{field} TAG")
-        json_schema_parts.append(f"$.{field} AS {field} TAG")
-    
+        hash_schema_parts.append(_build_field_schema(field, "tag", schema_type, for_json=False))
+        json_schema_parts.append(_build_field_schema(field, "tag", schema_type, for_json=True))
+
     for field in numeric_fields:
-        hash_schema_parts.append(f"{field} NUMERIC")
-        json_schema_parts.append(f"$.{field} AS {field} NUMERIC")
-    
+        hash_schema_parts.append(_build_field_schema(field, "numeric", schema_type, for_json=False))
+        json_schema_parts.append(_build_field_schema(field, "numeric", schema_type, for_json=True))
+
     hash_schema = " ".join(hash_schema_parts)
     json_schema = " ".join(json_schema_parts)
     

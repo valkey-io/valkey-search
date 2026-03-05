@@ -2676,10 +2676,6 @@ class TestFullTextCluster(ValkeySearchClusterTestCaseDebugMode):
             for c in all_clients:
                 IndexingTestHelper.wait_for_backfill_complete_on_node(c, index)
         
-        # Validate initial fulltext memory metrics - these were removed
-        # assert int(client.info("search").get("search_used_text_memory_bytes", 0)) == 0
-        # assert client.info("search").get("search_used_text_memory_human", 0) == 0
-        
         # Insert 10 documents such that even numbered ones are pure text and others are non-text
         for i in range(10):
             vec = struct.pack("<3f", float(i), float(i+1), float(i+2))
@@ -2692,13 +2688,6 @@ class TestFullTextCluster(ValkeySearchClusterTestCaseDebugMode):
                     "tags", f"tag{i}|category{i % 3}",
                     "vector", vec
                 )
-        info_search = client.info("search")
-        # Validate memory metrics - these were removed
-        # ft_memory_fulldata = int(info_search.get("search_used_text_memory_bytes", 0))
-        # is_san_build = os.environ.get('SAN_BUILD', 'no') != 'no'
-        # if not is_san_build:
-        #     assert ft_memory_fulldata > 0
-        #     assert info_search.get("search_used_text_memory_human", 0) != 0
         
         # Validate attribute count metrics on ALL shards (schema should be replicated)
         for i, c in enumerate(all_clients):
@@ -2707,11 +2696,8 @@ class TestFullTextCluster(ValkeySearchClusterTestCaseDebugMode):
             assert total == text + tag + numeric + vector == 8 and text == tag == numeric == vector == 2, \
                 f"Shard {i}: Attribute counts mismatch"
 
-        # Validate metrics after deletion of a record - these were removed
+        # Validate metrics after deletion of a record
         client.execute_command("DEL", "doc:8")
-        # info_search = client.info("search")
-        # if not is_san_build:
-        #     assert 0 < int(info_search.get("search_used_text_memory_bytes", 0)) < ft_memory_fulldata
         # QUERY METRICS
         # Query1 Pure text query (non-vector with text)
         client.execute_command("FT.SEARCH", "idx", 'document number', "RETURN", "1", "content")

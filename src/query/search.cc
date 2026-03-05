@@ -172,7 +172,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
     auto vector_svs = dynamic_cast<indexes::VectorSVS<float> *>(vector_index);
     return vector_svs->Search(parameters.query, parameters.k,
                               parameters.cancellation_token,
-                              std::move(inline_filter));
+                              std::move(inline_filter),
+                              parameters.search_window_size);
   }
 #endif
   CHECK(false) << "Unsupported indexer type: "
@@ -1002,6 +1003,13 @@ absl::Status ParseKnnInner(query::SearchParameters &parameters,
         return absl::InvalidArgumentError("EF_RUNTIME argument is missing");
       }
       parameters.parse_vars.ef_string = params[i++];
+    } else if (absl::EqualsIgnoreCase(params[i], "SEARCH_WINDOW_SIZE")) {
+      i++;
+      if (i == params.size()) {
+        return absl::InvalidArgumentError(
+            "SEARCH_WINDOW_SIZE argument is missing");
+      }
+      parameters.parse_vars.search_window_size_string = params[i++];
     } else if (absl::EqualsIgnoreCase(params[i], kAsParam)) {
       i++;
       if (i == params.size()) {
@@ -1174,6 +1182,15 @@ absl::Status PostParseVectorParameters(query::SearchParameters &parameters) {
         auto ef_string,
         SubstituteParam(parameters, parameters.parse_vars.ef_string));
     VMSDK_ASSIGN_OR_RETURN(parameters.ef, vmsdk::To<unsigned>(ef_string));
+  }
+
+  if (!parameters.parse_vars.search_window_size_string.empty()) {
+    VMSDK_ASSIGN_OR_RETURN(
+        auto sws_string,
+        SubstituteParam(parameters,
+                        parameters.parse_vars.search_window_size_string));
+    VMSDK_ASSIGN_OR_RETURN(parameters.search_window_size,
+                           vmsdk::To<unsigned>(sws_string));
   }
 
   if (!parameters.parse_vars.score_as_string.empty()) {

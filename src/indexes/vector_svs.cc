@@ -7,6 +7,7 @@
 
 #include "src/indexes/vector_svs.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <type_traits>
@@ -134,6 +135,15 @@ absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::Create(
     if (svs_params.compression() != data_model::SVS_COMPRESSION_NONE) {
       config.compression = svs_params.compression();
     }
+  }
+
+  // SVS requires alpha <= 1.0 for MIP/Cosine distance metrics.
+  // Clamp to 1.0 if the user didn't explicitly set a lower value.
+  if (vector_index_proto.distance_metric() ==
+          data_model::DISTANCE_METRIC_IP ||
+      vector_index_proto.distance_metric() ==
+          data_model::DISTANCE_METRIC_COSINE) {
+    config.alpha = std::min(config.alpha, 1.0f);
   }
 
   auto index = std::shared_ptr<VectorSVS<T>>(new VectorSVS<T>(
@@ -315,7 +325,20 @@ absl::Status VectorSVS<T>::ModifyRecordImpl(uint64_t internal_id,
   }
 }
 
-// --- Search (stub, implemented in Phase 3) ---
+// --- Search ---
+
+// Adapter: bridge hnswlib's BaseFilterFunctor to SVS's IDFilter interface.
+class SVSIDFilterAdapter : public svs::runtime::v0::IDFilter {
+ public:
+  explicit SVSIDFilterAdapter(hnswlib::BaseFilterFunctor* filter)
+      : filter_(filter) {}
+  bool is_member(size_t id) const override {
+    return (*filter_)(static_cast<hnswlib::labeltype>(id));
+  }
+
+ private:
+  hnswlib::BaseFilterFunctor* filter_;
+};
 
 template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorSVS<T>::Search(
@@ -323,7 +346,83 @@ absl::StatusOr<std::vector<Neighbor>> VectorSVS<T>::Search(
     cancel::Token& cancellation_token,
     std::unique_ptr<hnswlib::BaseFilterFunctor> filter,
     std::optional<unsigned> search_window_size) {
-  return absl::UnimplementedError("SVS Search not yet implemented");
+  if (!IsValidSizeVector(query)) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Error parsing vector similarity query: query vector blob size (",
+        query.size(), ") does not match index's expected size (",
+        dimensions_ * GetDataTypeSize(), ")."));
+  }
+
+  auto perform_search =
+      [this, count, &filter, &search_window_size](absl::string_view q)
+          -> absl::StatusOr<
+              std::priority_queue<std::pair<T, hnswlib::labeltype>>> {
+    try {
+      absl::ReaderMutexLock lock(&index_mutex_);
+
+      if (num_elements_ == 0) {
+        return std::priority_queue<std::pair<T, hnswlib::labeltype>>();
+      }
+
+      // Clamp k to available elements.
+      size_t k = std::min(static_cast<size_t>(count), num_elements_);
+
+      // Allocate flat output arrays for SVS search results.
+      std::vector<float> distances(k);
+      std::vector<size_t> labels(k);
+
+      // Build optional search params override.
+      svs::runtime::v0::VamanaIndex::SearchParams params;
+      svs::runtime::v0::VamanaIndex::SearchParams* params_ptr = nullptr;
+      if (search_window_size.has_value()) {
+        params.search_window_size = search_window_size.value();
+        params_ptr = &params;
+      }
+
+      // Build optional filter adapter.
+      std::unique_ptr<SVSIDFilterAdapter> svs_filter;
+      if (filter) {
+        svs_filter = std::make_unique<SVSIDFilterAdapter>(filter.get());
+      }
+
+      auto status = svs_index_->search(
+          1,  // single query
+          reinterpret_cast<const float*>(q.data()),
+          k,
+          distances.data(),
+          labels.data(),
+          params_ptr,
+          svs_filter.get());
+
+      if (!status.ok()) {
+        return absl::InternalError(
+            absl::StrCat("SVS search failed: ", status.message()));
+      }
+
+      // Convert flat arrays to priority queue (max-heap by distance).
+      std::priority_queue<std::pair<T, hnswlib::labeltype>> results;
+      for (size_t i = 0; i < k; ++i) {
+        results.emplace(distances[i],
+                        static_cast<hnswlib::labeltype>(labels[i]));
+      }
+      return results;
+    } catch (const std::exception& e) {
+      return absl::InternalError(
+          absl::StrCat("SVS search exception: ", e.what()));
+    }
+  };
+
+  if (normalize_) {
+    auto norm_record = NormalizeEmbedding(query, GetDataTypeSize());
+    VMSDK_ASSIGN_OR_RETURN(
+        auto search_result,
+        perform_search(absl::string_view(
+            reinterpret_cast<const char*>(norm_record.data()),
+            norm_record.size())));
+    return CreateReply(search_result);
+  }
+  VMSDK_ASSIGN_OR_RETURN(auto search_result, perform_search(query));
+  return CreateReply(search_result);
 }
 
 // --- Vector tracking ---

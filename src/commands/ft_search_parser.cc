@@ -69,6 +69,14 @@ absl::Status Verify(query::SearchParameters &parameters) {
              "exceed "
           << max_ef_runtime_value << ".";
     }
+    if (parameters.search_window_size.has_value()) {
+      constexpr unsigned kMaxSearchWindowSize = 10000;
+      VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(
+          parameters.search_window_size.value(), 1u, kMaxSearchWindowSize))
+          << "`SEARCH_WINDOW_SIZE` must be a positive integer greater than 0 "
+             "and cannot exceed "
+          << kMaxSearchWindowSize << ".";
+    }
     auto max_knn_value = options::GetMaxKnn().GetValue();
     VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(parameters.k, 1, max_knn_value))
         << "KNN parameter must be a positive integer greater than 0 and cannot "
@@ -269,6 +277,14 @@ absl::Status VerifyQueryString(query::SearchParameters &parameters) {
              "cannot "
              "exceed "
           << max_ef_runtime_value << ".";
+    }
+    if (parameters.search_window_size.has_value()) {
+      constexpr unsigned kMaxSearchWindowSize = 10000;
+      VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(
+          parameters.search_window_size.value(), 1u, kMaxSearchWindowSize))
+          << "`SEARCH_WINDOW_SIZE` must be a positive integer greater than 0 "
+             "and cannot exceed "
+          << kMaxSearchWindowSize << ".";
     }
     auto max_knn_value = options::GetMaxKnn().GetValue();
     VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(parameters.k, 1, max_knn_value))

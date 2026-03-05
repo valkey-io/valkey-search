@@ -64,6 +64,7 @@ DEV_INTEGER_COUNTER(query_stats, query_text_fuzzy_count);
 DEV_INTEGER_COUNTER(query_stats, query_text_proximity_count);
 DEV_INTEGER_COUNTER(query_stats, query_numeric_count);
 DEV_INTEGER_COUNTER(query_stats, query_tag_count);
+DEV_INTEGER_COUNTER(query_stats, nonvector_results_fetched_limited_count);
 
 class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
  public:
@@ -370,7 +371,7 @@ void EvaluatePrefilteredKeys(
     absl::AnyInvocable<bool(const InternedStringPtr &,
                             absl::flat_hash_set<const char *> &)>
         appender,
-    size_t max_keys) {
+    size_t max_keys, bool stop_on_fetch_limit) {
   // If there was a union operation, we need to handle deduplication.
   // This implementation skips deduplication (flat_hash_set usage) if not needed
   // for performance.
@@ -410,10 +411,14 @@ void EvaluatePrefilteredKeys(
       // 3. Evaluate predicate
       if (key_evaluator.Evaluate(
               *parameters.filter_parse_results.root_predicate, key)) {
-        if (needs_dedup) {
+        bool result = appender(key, result_keys);
+        if (needs_dedup && result) {
           result_keys.insert(key->Str().data());
         }
-        appender(key, result_keys);
+        // For non-vector queries that exceed the fetch limit, return early
+        if (stop_on_fetch_limit && !result) {
+          return;
+        }
       }
       iterator->Next();
       if (parameters.cancellation_token->IsCancelled()) {
@@ -437,7 +442,8 @@ CalcBestMatchingPrefilteredKeys(
                                            results, top_keys);
   };
   EvaluatePrefilteredKeys(parameters, entries_fetchers,
-                          std::move(results_appender), qualified_entries);
+                          std::move(results_appender), qualified_entries,
+                          /*stop_on_fetch_limit=*/false);
   return results;
 }
 
@@ -573,12 +579,22 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
       parameters.filter_parse_results.root_predicate.get(), entries_fetchers,
       false, parameters.filter_parse_results.query_operations,
       parameters.index_schema.get());
+
+  // Get the config for maximum number of keys to accumulate before content
+  // fetching
+  const size_t max_keys = static_cast<size_t>(
+      options::GetMaxNonVectorSearchResultsFetched().GetValue());
   std::vector<indexes::Neighbor> neighbors;
   neighbors.reserve(std::min(qualified_entries, static_cast<size_t>(5000)));
+  bool fetch_limited = false;
   auto results_appender =
-      [&neighbors, &parameters](
+      [&neighbors, &parameters, max_keys, &fetch_limited](
           const InternedStringPtr &key,
           absl::flat_hash_set<const char *> &top_keys) -> bool {
+    if (neighbors.size() >= max_keys) {
+      fetch_limited = true;
+      return false;
+    }
     neighbors.emplace_back(indexes::Neighbor{key, 0.0f});
     return true;
   };
@@ -605,6 +621,11 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
           }
           seen_keys.insert(key->Str().data());
         }
+        // Check if we've reached the limit
+        if (neighbors.size() >= max_keys) {
+          nonvector_results_fetched_limited_count.Increment();
+          return neighbors;
+        }
         neighbors.emplace_back(indexes::Neighbor{key, 0.0f});
         iterator->Next();
         if (parameters.cancellation_token->IsCancelled()) {
@@ -615,7 +636,11 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
     return neighbors;
   }
   EvaluatePrefilteredKeys(parameters, entries_fetchers,
-                          std::move(results_appender), qualified_entries);
+                          std::move(results_appender), qualified_entries,
+                          /*stop_on_fetch_limit=*/true);
+  if (fetch_limited) {
+    nonvector_results_fetched_limited_count.Increment();
+  }
   return neighbors;
 }
 
@@ -679,7 +704,8 @@ SearchResult::SearchResult()
 
 SearchResult::SearchResult(size_t total_count,
                            std::vector<indexes::Neighbor> neighbors,
-                           const SearchParameters &parameters)
+                           const SearchParameters &parameters,
+                           bool trim_offset_in_background)
     : total_count(total_count),
       is_limited_with_buffer(false),
       is_offsetted(false) {
@@ -691,24 +717,25 @@ SearchResult::SearchResult(size_t total_count,
   this->neighbors = std::move(neighbors);
   // Check if the command needs all results (e.g. for sorting). Trim otherwise.
   if (!parameters.RequiresCompleteResults()) {
-    TrimResults(this->neighbors, parameters);
+    TrimResults(this->neighbors, parameters, trim_offset_in_background);
   }
 }
 
 // Apply limiting in background thread if possible.
 void SearchResult::TrimResults(std::vector<indexes::Neighbor> &neighbors,
-                               const SearchParameters &parameters) {
-  // Calculate max_needed for consistent vector/non-vector handling
+                               const SearchParameters &parameters,
+                               bool trim_offset_in_background) {
+  // Use the existing complex logic from SearchResult::GetSerializationRange
   SerializationRange range = GetSerializationRange(parameters);
   size_t max_needed = static_cast<size_t>(
       range.end_index * options::GetSearchResultBufferMultiplier());
   // In standalone mode, we can optimize by trimming from front first.
-  // Note: We cannot trim from the front in a Cluster Mode setting because
-  // each shard produces X results and we need to trim the OFFSET on the
-  // aggregated results. Thus, we can only trim from the end in searches for
-  // individual nodes. In cluster mode, the offset based trimming is applied
-  // after merging all results from shards at the coordinator level.
-  if (!ValkeySearch::Instance().IsCluster()) {
+  // In cluster mode on remote searches on individual shards, we cannot trim
+  // from the front yet because each shard produces X results. However, the
+  // coordinator (after merging) WILL trim from the front and back in the
+  // background thread to avoid memory bloat with large offsets / limit counts
+  // before returning to the main thread.
+  if (!ValkeySearch::Instance().IsCluster() || trim_offset_in_background) {
     this->is_offsetted = true;
     // Trim from front (apply offset)
     if (range.start_index > 0 && range.start_index < neighbors.size()) {

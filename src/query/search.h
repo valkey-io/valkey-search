@@ -112,7 +112,8 @@ struct SearchResult {
 
   // Constructor with automatic trimming based on query requirements
   SearchResult(size_t total_count, std::vector<indexes::Neighbor> neighbors,
-               const SearchParameters& parameters);
+               const SearchParameters& parameters,
+               bool trim_offset_in_background = false);
   // Get the range of neighbors to serialize in response.
   SerializationRange GetSerializationRange(
       const SearchParameters& parameters) const;
@@ -121,7 +122,8 @@ struct SearchResult {
 
  private:
   void TrimResults(std::vector<indexes::Neighbor>& neighbors,
-                   const SearchParameters& parameters);
+                   const SearchParameters& parameters,
+                   bool trim_offset_in_background);
 };
 
 //
@@ -256,6 +258,10 @@ struct SerializationRange {
   size_t start_index;
   size_t end_index;
   size_t count() const { return end_index - start_index; }
+  static SerializationRange All() {
+    return {0, std::numeric_limits<size_t>::max()};
+  }
+  auto operator<=>(const SerializationRange& other) const = default;
 };
 
 // Callback to be called when the search is done.

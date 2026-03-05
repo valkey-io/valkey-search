@@ -2063,29 +2063,291 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
                 assert set(result[1::2]) == docs, f"Query '{query}' expected docs {docs}, got {set(result[1::2])}"
 
     def test_text_negation(self):
-        """Test negation with text predicates"""
+        """
+        Comprehensive test combining basic negation, proximity, fuzzy, exact phrase, suffix, prefix,
+        mixed predicates
+        """
         client: Valkey = self.server.get_new_client()
-        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA", "content", "TEXT", "NOSTEM")
         
-        client.execute_command("HSET", "doc:1", "content", "apple banana")
-        client.execute_command("HSET", "doc:2", "content", "apple cherry")
-        client.execute_command("HSET", "doc:3", "content", "banana cherry")
-        client.execute_command("HSET", "doc:4", "content", "grape orange")
+        # Create comprehensive index with all field types
+        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA",
+                             "title", "TEXT", "NOSTEM", "WITHSUFFIXTRIE",
+                             "content", "TEXT", "NOSTEM", "WITHSUFFIXTRIE",
+                             "tags", "TAG",
+                             "price", "NUMERIC")
+        
+        # Insert realistic product dataset with varied content
+        client.execute_command("HSET", "doc:1", "title", "red running shoes", "content", "comfortable running shoes for athletes", "tags", "footwear", "price", "50")
+        client.execute_command("HSET", "doc:2", "title", "blue walking shoes", "content", "stylish walking shoes for everyday", "tags", "footwear", "price", "40")
+        client.execute_command("HSET", "doc:3", "title", "red winter jacket", "content", "warm winter jacket for cold weather", "tags", "clothing", "price", "80")
+        client.execute_command("HSET", "doc:4", "title", "blue spring jacket", "content", "lightweight jacket for spring", "tags", "clothing", "price", "60")
+        client.execute_command("HSET", "doc:5", "title", "marathon training gear", "content", "complete set for marathon training", "tags", "sports", "price", "120")
+        client.execute_command("HSET", "doc:6", "title", "hello world example", "content", "quick brown fox jumps", "tags", "demo", "price", "10")
+        client.execute_command("HSET", "doc:7", "title", "goodbye world", "content", "lazy dog running", "tags", "demo", "price", "15")
+        client.execute_command("HSET", "doc:8", "content", "clearance sale items")  # No title
+        client.execute_command("HSET", "doc:9", "tags", "accessories", "price", "5")  # No text fields
         
         IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+        all_docs = {b"doc:1", b"doc:2", b"doc:3", b"doc:4", b"doc:5", b"doc:6", b"doc:7", b"doc:8", b"doc:9"}
         
-        # Negation of single term
-        result = client.execute_command("FT.SEARCH", "idx", "-apple", "DIALECT", "2")
-        assert (result[0], set(result[1::2])) == (2, {b"doc:3", b"doc:4"})
+        # === BASIC NEGATION TESTS ===
+        # Test 1: Simple field-specific negation
+        result = client.execute_command("FT.SEARCH", "idx", "-@title:shoes")
+        assert result[0] == 7
+        assert set(result[1::2]) == {b"doc:3", b"doc:4", b"doc:5", b"doc:6", b"doc:7", b"doc:8", b"doc:9"}
+        # Test 2: Schema-wide negation (any field)
+        result = client.execute_command("FT.SEARCH", "idx", "-hello")
+        assert result[0] == 8
+        assert  all_docs - set(result[1::2]) == {b"doc:6"}
+        # Test 3: Negation with positive term (AND)
+        result = client.execute_command("FT.SEARCH", "idx", "world -hello")
+        assert result[0] == 1 and result[1] == b"doc:7"
+        # Test 4: Multiple negations
+        result = client.execute_command("FT.SEARCH", "idx", "-@title:shoes -@content:running")
+        assert result[0] == 6
+        assert set(result[1::2]) == {b"doc:3", b"doc:4", b"doc:5", b"doc:6", b"doc:8", b"doc:9"}
         
-        # Negation with AND
-        result = client.execute_command("FT.SEARCH", "idx", "banana -apple", "DIALECT", "2")
-        print(result)
-        assert (result[0], result[1]) == (1, b"doc:3")
+        # === PREFIX/SUFFIX NEGATION TESTS ===
+        # Test 5: Prefix negation
+        result = client.execute_command("FT.SEARCH", "idx", "-@content:run*")
+        assert result[0] == 7
+        assert  all_docs - set(result[1::2]) == {b"doc:1", b"doc:7"}
+        # Test 6: Suffix negation
+        result = client.execute_command("FT.SEARCH", "idx", "-@content:*ing")
+        assert result[0] == 4
+        assert set(result[1::2]) == {b"doc:3", b"doc:6", b"doc:8", b"doc:9"}
         
-        # Negation of phrase
-        result = client.execute_command("FT.SEARCH", "idx", '-"apple banana"', "DIALECT", "2")
-        assert (result[0], set(result[1::2])) == (3, {b"doc:2", b"doc:3", b"doc:4"})
+        # === FUZZY NEGATION TESTS ===
+        # Test 7: Fuzzy negation (ED=1)
+        result = client.execute_command("FT.SEARCH", "idx", "-@title:%shues%")
+        assert result[0] == 7
+        assert  all_docs - set(result[1::2]) == {b"doc:1", b"doc:2"}
+        
+        # === EXACT PHRASE NEGATION TESTS ===
+        # Test 8: Exact phrase negation
+        result = client.execute_command("FT.SEARCH", "idx", '-@content:"running shoes"')
+        assert result[0] == 8
+        assert  all_docs - set(result[1::2]) == {b"doc:1"}
+        # Test 9: Phrase with positive term
+        result = client.execute_command("FT.SEARCH", "idx", '@content:shoes -@content:"walking shoes"')
+        assert result[0] == 1 and result[1] == b"doc:1"
+        
+        # === PROXIMITY WITH NEGATION TESTS ===
+        # Test 10: SLOP with negation
+        result = client.execute_command("FT.SEARCH", "idx", '@content:comfortable @content:shoes -@content:walking', "SLOP", "2")
+        assert result[0] == 1 and result[1] == b"doc:1"
+        # Test 11: INORDER with negation
+        result = client.execute_command("FT.SEARCH", "idx", '@content:lightweight @content:jacket -@content:winter', "INORDER")
+        assert result[0] == 1 and result[1] == b"doc:4"
+        
+        # === MIXED PREDICATES WITH NEGATION ===
+        # Test 12: Negation with tag filter
+        result = client.execute_command("FT.SEARCH", "idx", '@tags:{footwear} -@title:blue')
+        assert result[0] == 1 and result[1] == b"doc:1"
+        # Test 13: Negation with numeric range
+        result = client.execute_command("FT.SEARCH", "idx", '@price:[40 80] -@title:jacket')
+        assert result[0] == 2
+        assert set(result[1::2]) == {b"doc:1", b"doc:2"}
+        # # Test 14: Complex mixed predicate
+        result = client.execute_command("FT.SEARCH", "idx", '@price:[40 80] @tags:{footwear|clothing} -@content:*ing')
+        assert result[0] == 1 and result[1] == b"doc:3"
+        
+        # === CROSS-FIELD NEGATION TESTS ===
+        # Test 15: Cross-field negation
+        result = client.execute_command("FT.SEARCH", "idx", "@title:shoes -@content:walking")
+        assert result[0] == 1 and result[1] == b"doc:1"
+        # Test 16: Multiple cross-field negations
+        result = client.execute_command("FT.SEARCH", "idx", "-@title:shoes -@content:jacket")
+        assert result[0] == 5
+        assert set(result[1::2]) == {b"doc:5", b"doc:6", b"doc:7", b"doc:8", b"doc:9"}
+        
+        # === DOUBLE/TRIPLE NEGATION TESTS ===
+        # Test 17: Double negation (NOT NOT)
+        result = client.execute_command("FT.SEARCH", "idx", '-(-@title:red)')
+        assert result[0] == 2
+        assert set(result[1::2]) == {b"doc:1", b"doc:3"}
+        # Test 18: Triple negation
+        result = client.execute_command("FT.SEARCH", "idx", '-(-(-@title:red))')
+        assert result[0] == 7
+        assert  all_docs - set(result[1::2]) == {b"doc:1", b"doc:3"} 
+        
+        # === EDGE CASES ===
+        # Test 19: Negation with nonexistent term (should return all)
+        result = client.execute_command("FT.SEARCH", "idx", "-nonexistent")
+        assert result[0] == 9
+        # Test 20: Negation includes docs with missing field
+        result = client.execute_command("FT.SEARCH", "idx", "-@title:shoes")
+        assert b"doc:8" in result[1::2] and b"doc:9" in result[1::2]
+        # Test 21: Empty result from strict negations
+        result = client.execute_command("FT.SEARCH", "idx", "shoes -shoes")
+        assert result[0] == 0
+        
+        # Test 22: Find affordable footwear NOT for running
+        result = client.execute_command("FT.SEARCH", "idx", '@tags:{footwear} @price:[0 50] -@content:running')
+        assert result[0] == 1 and result[1] == b"doc:2"
+        # Test 23: Find jackets NOT for winter
+        result = client.execute_command("FT.SEARCH", "idx", '@title:jacket -@content:winter')
+        assert result[0] == 1 and result[1] == b"doc:4"
+
+        # Test 24: Negations in nested AND
+        result = client.execute_command("FT.SEARCH", "idx", '(shoes -blue) red')
+        assert result[0] == 1 and result[1] == b"doc:1"
+
+        # Test 25: OR with one negated branch - (shoes | -jacket)
+        result = client.execute_command("FT.SEARCH", "idx", '(shoes | -jacket)')
+        assert result[0] == 7, f"Failed: OR with negation, expected 7 got {result[0]}"
+        assert set(result[1::2]) == {b"doc:1", b"doc:2", b"doc:5", b"doc:6", b"doc:7", b"doc:8", b"doc:9"}
+
+        # Test 26: OR with both branches negated - (-winter | -spring)
+        result = client.execute_command("FT.SEARCH", "idx", '(-winter | -spring)')
+        assert result[0] == 9, f"Failed: OR with both negated, expected 9 got {result[0]}"
+
+        # Test 27: OR with negation and positive - (red | -shoes)
+        result = client.execute_command("FT.SEARCH", "idx", '(red | -shoes)')
+        assert result[0] == 8, f"Failed: OR mixed, expected 8 got {result[0]}"
+        assert set(result[1::2]) == {b"doc:1", b"doc:3", b"doc:4", b"doc:5", b"doc:6", b"doc:7", b"doc:8", b"doc:9"}
+
+        # Test 28: Nested OR groups in AND - ((shoes | -jacket) (red | -blue))
+        result = client.execute_command("FT.SEARCH", "idx", '((shoes | -jacket) (red | -blue))')
+        assert result[0] == 6, f"Failed: nested OR in AND, expected 6 got {result[0]}"
+        assert set(result[1::2]) == {b"doc:1", b"doc:5", b"doc:6", b"doc:7", b"doc:8", b"doc:9"}
+
+        # Test 29: Three-level nesting - (((shoes -blue) | jacket) red)
+        result = client.execute_command("FT.SEARCH", "idx", '(((shoes -blue) | jacket) red)')
+        assert result[0] == 2, f"Failed: three-level nesting, expected 2 got {result[0]}"
+        assert set(result[1::2]) == {b"doc:1", b"doc:3"}
+
+        # Test 30: Tag with text negation in nested OR - (@tags:{footwear} (-blue | red))
+        result = client.execute_command("FT.SEARCH", "idx", '(@tags:{footwear} (-blue | red))')
+        assert result[0] == 1 and result[1] == b"doc:1", "Failed: tag with nested text negation"
+
+        # Test 31: Complex mixed OR of ANDs - ((@tags:{footwear} -@title:blue) | (@price:[40 80] -@content:winter))
+        result = client.execute_command("FT.SEARCH", "idx", 
+            '((@tags:{footwear} -@title:blue) | (@price:[40 80] -@content:winter))')
+        assert result[0] == 3, f"Failed: complex mixed OR, expected 3 got {result[0]}"
+        assert set(result[1::2]) == {b"doc:1", b"doc:2", b"doc:4"}
+
+    def test_non_utf8_english_chars(self):
+        """Test non-ASCII UTF-8 characters in English text - ingestion and query"""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA", 
+                            "content", "TEXT", "NOSTEM","category", "TAG", "price", "NUMERIC")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+        # Ingestion: Common non-ASCII chars in English
+        client.execute_command("HSET", "doc:1", "content", "“smart quotes“")  # U+201C/D
+        client.execute_command("HSET", "doc:2", "content", "it's café naïve")  # U+2019, U+00E9
+        client.execute_command("HSET", "doc:3", "content", "hello—world")  # U+2014 em-dash
+        client.execute_command("HSET", "doc:4", "content", "wait… done")  # U+2026 ellipsis
+        assert IndexingTestHelper.get_ft_info(client, "idx").parsed_data["hash_indexing_failures"] == 0
+        # Invalid UTF-8 sequences - should not crash
+        client.execute_command("HSET", "doc:5", "content", b"invalid\xff\xfe bytes")
+        client.execute_command("HSET", "doc:6", "content", b"truncated\xc3 char")
+        client.execute_command("HSET", "doc:7", "content", b"mixed valid\xffand\xfeinvalid")
+        client.execute_command("HSET", "doc:8", "price", b"invalid\xc3")
+        client.execute_command("HSET", "doc:9", "category", b"invalid\xc3")
+        # ft.info
+        info_data = IndexingTestHelper.get_ft_info(client, "idx").parsed_data
+        assert info_data["num_docs"] == 9
+        # Current behavior: doc:9 tag is not rejected
+        assert info_data["hash_indexing_failures"] == 4  # doc: 5, doc:6, doc:7, doc:8
+        assert info_data["num_records"] == 5 # doc:1 to 4 , doc:9
+        # Query parsing: Verify tokenization handles non-ASCII
+        assert client.execute_command("FT.SEARCH", "idx", "“smart")[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx", "café")[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx", "hello—world")[0] == 1  
+        assert client.execute_command("FT.SEARCH", "idx", "wait…")[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx", "done")[0] == 1
+        # Prefix/fuzzy with non-ASCII UTF-8
+        assert client.execute_command("FT.SEARCH", "idx", "%café%")[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx", "%naïve%")[0] == 1
+        # Invalid UTF-8 queries should not crash (may return 0 or handle gracefully)
+        assert client.execute_command("FT.SEARCH", "idx", b"invalid\xff")[0] == 0
+        assert client.execute_command("FT.SEARCH", "idx", b"\xff\xfe")[0] == 0
+        assert client.execute_command("FT.SEARCH", "idx",  b"%invalid\xff%")[0] == 0
+        assert client.execute_command("FT.SEARCH", "idx", b"@category:{invalid\xc3}")[0] == 1 #tag with non utf8 gives result
+        with pytest.raises(ResponseError) as e:
+            client.execute_command("FT.SEARCH", "idx", b"@price:invalid\xc3 invalid\xc3]")
+        assert "Invalid filter expression" in str(e.value)
+
+    def test_multilanguage_text(self):
+        """Test multi-language text handling - should not crash"""
+        client: Valkey = self.server.get_new_client()
+        
+        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA", 
+                            "content", "TEXT", "NOSTEM", "WITHSUFFIXTRIE",
+                            "title", "TEXT", "NOSTEM",
+                            "category", "TAG", "SEPARATOR", "|",
+                            "price", "NUMERIC")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+        # Spanish
+        client.execute_command("HSET", "doc:1", "content", "¡Hola mundo!", "title", "español", "category", "中文|français", "price", "10")
+        client.execute_command("HSET", "doc:2", "content", "El niño come mañana", "title", "comida", "category", "español", "price", "20")
+        # French
+        client.execute_command("HSET", "doc:3", "content", "Ça va très bien", "title", "français", "category", "عربي|हिन्दी", "price", "30")
+        client.execute_command("HSET", "doc:4", "content", "L'été à Paris", "title", "ville", "price", "40")
+        # Mandarin
+        client.execute_command("HSET", "doc:5", "content", "你好世界", "title", "中文", "price", "50")
+        client.execute_command("HSET", "doc:6", "content", "中文测试", "title", "测试", "price", "60")
+        # Arabic (RTL script)
+        client.execute_command("HSET", "doc:7", "content", "مرحبا بالعالم", "title", "عربي", "price", "70")
+        # Hindi
+        client.execute_command("HSET", "doc:8", "content", "नमस्ते दुनिया", "title", "हिन्दी", "price", "80")
+        # Emoji (4-byte UTF-8)
+        client.execute_command("HSET", "doc:9", "content", "Hello 👋 World 🌍 दुनिया 你好世界 مرحبا", "title", "emoji", "price", "90")
+        # one doc with no numeric fields
+        client.execute_command("HSET", "doc:10", "content", "纯中文文档", "title", "परीक्षण اختبار")
+        # check info
+        assert IndexingTestHelper.get_ft_info(client, "idx").parsed_data["hash_indexing_failures"] == 0
+        # Test different language in content + invalid UTF-8 in title (expect indexing failures)
+        client.execute_command("HSET", "doc:11", "content", "纯中文文档 中文测试", "title", b"test\xff\xfe")
+        client.execute_command("HSET", "doc:12", "content", "مستند عربي فقط", "title", b"invalid\xc3")
+        # ft.info
+        info_data = IndexingTestHelper.get_ft_info(client, "idx").parsed_data
+        assert info_data["num_docs"] == 12
+        assert info_data["hash_indexing_failures"] == 2
+        # 3 docs with 4 fields(12) + 6 docs with 3 fields(18) + doc10 with 2 fields (2) + doc:11 with 1 valid field + doc:12 with 1 valid field -- 12+18+2+1+1=34
+        assert info_data["num_records"] == 34
+        # 1. Single term
+        assert client.execute_command("FT.SEARCH", "idx", "très")[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx", "你好世界")[0] == 2
+        assert client.execute_command("FT.SEARCH", "idx", "مرحبا")[0] == 2
+        assert client.execute_command("FT.SEARCH", "idx", "नमस्ते")[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx", "👋")[0] == 1
+        # 2. Prefix
+        assert client.execute_command("FT.SEARCH", "idx", "mañ*")[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx", "你*")[0] == 2
+        # 3. Suffix
+        assert client.execute_command("FT.SEARCH", "idx", "@content:*ana")[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx", "@content:*界")[0] == 2
+        # 4. Fuzzy (operates today at character level and not byte level)
+        assert client.execute_command("FT.SEARCH", "idx", "%Hola%")[0] == 0
+        assert client.execute_command("FT.SEARCH", "idx", "%%très%%")[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx", "%你好%")[0] == 0
+        # 5. Exact phrase
+        assert client.execute_command("FT.SEARCH", "idx", '"El niño"')[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx", '"très bien"')[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx", '@content:"你好世界"')[0] == 2
+        # 6. Proximity AND
+        assert client.execute_command("FT.SEARCH", "idx", "niño mañana", "SLOP", "1")[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx", "Ça bien", "INORDER")[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx", "纯中文文档 中文测试", "SLOP", "1", "INORDER")[0] == 1
+        # 7. Proximity OR
+        assert client.execute_command("FT.SEARCH", "idx", "(Hola | très | 你好)")[0] == 1
+        # 8. Nested queries
+        assert client.execute_command("FT.SEARCH", "idx", "((Hola mundo) | (très bien) | (你好 世界) | (%بالعالم%) | (World 🌍*))")[0] == 3
+        # 9. Hybrid text + non-text
+        assert client.execute_command("FT.SEARCH", "idx", "@content:दुनिया @price:[80 100]")[0] == 2
+        assert client.execute_command("FT.SEARCH", "idx", "@content:très @price:[20 40]")[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx", "@content:你好世界 @price:[40 60]")[0] == 1
+        # 10. NOCONTENT
+        assert client.execute_command("FT.SEARCH", "idx", "très", "NOCONTENT")[0] == 1 
+        assert client.execute_command("FT.SEARCH", "idx", "((Hola mundo) | (très bien) | (你好 世界) | (%بالعالم%) | (World 🌍*))", "NOCONTENT")[0] == 3
+        # 11. TAG fields with multi-language values
+        assert client.execute_command("FT.SEARCH", "idx", "@category:{中文}")[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx", "@category:{français}")[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx", "@category:{español}")[0] == 1 
+        assert client.execute_command("FT.SEARCH", "idx", "@category:{عربي}")[0] == 1
+        assert client.execute_command("FT.SEARCH", "idx", "@category:{हिन्दी}")[0] == 1
 
     def test_text_size_estimation_prefilter_decision(self):
         """Validate term/prefix/fuzzy EstimateSize() influences pre-filter vs inline"""
@@ -2310,6 +2572,114 @@ class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
         # Deletion pending of per_key_index, On deletion only prefix tree cleared
 
 class TestFullTextCluster(ValkeySearchClusterTestCaseDebugMode):
+
+    @pytest.mark.skip(reason="This test is designed to run for an extended period with high concurrency to detect crashes. It is not suitable for regular test runs and should be run manually when needed.")
+    @pytest.mark.parametrize("setup_test", [{"replica_count": 1}], indirect=True)
+    def test_concurrent_workload(self, setup_test):
+        """
+            Test commandstats timing with text search and concurrent operations.
+            In order to reproduce the num_ops code, using only numeric/tag rather than text searches
+            was more effective / faster. So, I commented out the text search.
+            We just needed a numeric/tag search with concurrent expirations with a short TTL (e.g. 1).
+        """
+        import threading
+        rg = self.get_replication_group(0)
+        primary = rg.get_primary_connection()
+        primary.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA", "content", "TEXT", "price", "NUMERIC", "tags", "TAG")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(primary, "idx")
+        num_writers = 50
+        num_searchers = 75
+        num_deleters = 10
+        num_expirers = 75
+        ops_per_client = 10000
+        num_keys = 1000
+        write_clients = [self.new_cluster_client() for _ in range(num_writers)]
+        search_clients = [self.new_client_for_primary(0) for _ in range(num_searchers)]
+        delete_clients = [self.new_cluster_client() for _ in range(num_deleters)]
+        expire_clients = [self.new_cluster_client() for _ in range(num_expirers)]
+        
+        crash_detected = threading.Event()
+        stop_watchdog = threading.Event()
+        def watchdog():
+            import time
+            while not stop_watchdog.is_set():
+                for node in self.nodes:
+                    try:
+                        node.client.ping()
+                    except Exception as e:
+                        if not crash_detected.is_set():
+                            crash_detected.set()
+                            print(f"\nWatchdog detected crash on port {node.server.port}: {e}")
+                        stop_watchdog.set()
+                        return
+                time.sleep(0.1)
+        def writer(client_id):
+            for i in range(ops_per_client):
+                if crash_detected.is_set():
+                    return
+                key = f"doc:{i % num_keys}"
+                # write_clients[client_id].execute_command("HSET", key, "content", "word", "price", str(100 + i), "tags", f"tag{i % 5}")
+                write_clients[client_id].execute_command("HSET", key, "price", str(100 + i), "tags", f"tag{i % 5}")
+        def searcher(client_id):
+            for i in range(ops_per_client):
+                if crash_detected.is_set():
+                    return
+                search_clients[client_id].execute_command("FT.SEARCH", "idx", f"@price:[{90 + i} {110 + i}]")
+                search_clients[client_id].execute_command("FT.SEARCH", "idx", f"@tags:{{tag{i % 5}}}")
+                # search_clients[client_id].execute_command("FT.SEARCH", "idx", f"@content:word")
+        def deleter(client_id):
+            for i in range(ops_per_client):
+                if crash_detected.is_set():
+                    return
+                key = f"doc:{i % num_keys}"
+                delete_clients[client_id].execute_command("DEL", key)
+        def expirer(client_id):
+            for i in range(ops_per_client):
+                if crash_detected.is_set():
+                    return
+                key = f"doc:{i % num_keys}"
+                expire_clients[client_id].execute_command("EXPIRE", key, "1")
+        watchdog_thread = threading.Thread(target=watchdog, daemon=True)
+        watchdog_thread.start()
+        threads = [threading.Thread(target=writer, args=(i,)) for i in range(num_writers)]
+        threads += [threading.Thread(target=searcher, args=(i,)) for i in range(num_searchers)]
+        # threads += [threading.Thread(target=deleter, args=(i,)) for i in range(num_deleters)]
+        threads += [threading.Thread(target=expirer, args=(i,)) for i in range(num_expirers)]
+        for t in threads:
+            t.start()
+        # Check for crash while threads run
+        import time
+        while any(t.is_alive() for t in threads):
+            if crash_detected.is_set():
+                stop_watchdog.set()
+                pytest.fail("Server crash detected during test execution")
+            time.sleep(0.1)
+        stop_watchdog.set()
+        watchdog_thread.join(timeout=1)
+        IndexingTestHelper.wait_for_backfill_complete_on_node(primary, "idx")
+        # Collect stats from all primaries
+        total_hset_calls = 0
+        total_del_calls = 0
+        total_expire_calls = 0
+        total_search_calls = 0
+        for i in range(self.CLUSTER_SIZE):
+            node = self.new_client_for_primary(i)
+            info = node.info("commandstats")
+            hset_stats = info.get("cmdstat_hset", {})
+            del_stats = info.get("cmdstat_del", {})
+            expire_stats = info.get("cmdstat_expire", {})
+            search_stats = info.get("cmdstat_FT.SEARCH", {})
+            total_hset_calls += hset_stats.get("calls", 0)
+            total_del_calls += del_stats.get("calls", 0)
+            total_expire_calls += expire_stats.get("calls", 0)
+            total_search_calls += search_stats.get("calls", 0)
+        print("\nFinal ping check...")
+        for node in self.nodes:
+            node.client.ping()
+        assert total_hset_calls > 0, "Expected HSET calls in commandstats"
+        # assert total_del_calls > 0, "Expected DEL calls in commandstats"
+        assert total_expire_calls > 0, "Expected EXPIRE calls in commandstats"
+        assert total_search_calls > 0, "Expected FT.SEARCH calls in commandstats"
 
     def test_fulltext_search_cluster(self):
         """

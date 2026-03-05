@@ -422,6 +422,28 @@ static auto async_fanout_threshold =
         kMaximumAsyncFanoutThreshold)  // max threshold (10k)
         .Build();
 
+/// Register the "--max-nonvector-search-results-fetched" flag. Controls the
+/// maximum number of results to fetch in background threads before content
+/// fetching on non-vector (numeric/tag/text) query paths. This controls
+/// potential OOM by limiting the result set size before expensive content
+/// fetching from the keyspace.
+/// Note: If queries use LIMIT with a large offset (e.g., LIMIT offset count
+/// where offset + count exceeds this value), consider increasing this config
+/// to ensure all paginated results are accessible.
+constexpr absl::string_view kMaxNonVectorSearchResultsFetchedConfig{
+    "max-nonvector-search-results-fetched"};
+constexpr uint32_t kDefaultMaxNonVectorSearchResultsFetched{
+    100000};  // 100K keys default
+constexpr uint32_t kMinimumMaxNonVectorSearchResultsFetched{0};
+constexpr uint32_t kMaximumMaxNonVectorSearchResultsFetched{UINT32_MAX};
+static auto max_nonvector_search_results_fetched =
+    vmsdk::config::NumberBuilder(
+        kMaxNonVectorSearchResultsFetchedConfig,   // name
+        kDefaultMaxNonVectorSearchResultsFetched,  // default limit (100K)
+        kMinimumMaxNonVectorSearchResultsFetched,  // min limit (0)
+        kMaximumMaxNonVectorSearchResultsFetched)  // UINT32_MAX
+        .Build();
+
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 
 vmsdk::config::Number& GetHNSWBlockSize() {
@@ -520,6 +542,11 @@ const vmsdk::config::Boolean& GetDrainMutationQueueOnLoad() {
 
 vmsdk::config::Number& GetAsyncFanoutThreshold() {
   return dynamic_cast<vmsdk::config::Number&>(*async_fanout_threshold);
+}
+
+vmsdk::config::Number& GetMaxNonVectorSearchResultsFetched() {
+  return dynamic_cast<vmsdk::config::Number&>(
+      *max_nonvector_search_results_fetched);
 }
 
 }  // namespace options

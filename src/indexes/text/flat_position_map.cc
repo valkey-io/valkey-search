@@ -104,7 +104,8 @@ static inline std::pair<T, bool> DecodeValue(const char*& ptr) {
 
 // Static factory and destroyer
 FlatPositionMap* FlatPositionMap::Create(
-    const std::map<Position, FieldMask>& position_map, size_t num_text_fields) {
+    const absl::btree_map<Position, FieldMask>& position_map,
+    size_t num_text_fields) {
   CHECK(!position_map.empty())
       << "Cannot create FlatPositionMap from empty position_map";
 

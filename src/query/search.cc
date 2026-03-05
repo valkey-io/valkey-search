@@ -550,7 +550,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
         }
         case indexes::IndexerType::kVector:
         case indexes::IndexerType::kHNSW:
-        case indexes::IndexerType::kFlat: {
+        case indexes::IndexerType::kFlat:
+        case indexes::IndexerType::kSVS: {
           auto vector_index =
               dynamic_cast<indexes::VectorBase *>(attribute_info.index);
           auto vector = vector_index->GetValue(neighbor.external_id);
@@ -695,8 +696,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearchVector(
   VMSDK_ASSIGN_OR_RETURN(auto index, parameters.index_schema->GetIndex(
                                          parameters.attribute_alias));
   auto vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
-  if (index->GetIndexerType() != indexes::IndexerType::kHNSW &&
-      index->GetIndexerType() != indexes::IndexerType::kFlat) {
+  if (!indexes::IsVectorIndexType(index->GetIndexerType())) {
     return absl::InvalidArgumentError(
         absl::StrCat(parameters.attribute_alias, " is not a Vector index "));
   }
@@ -1115,8 +1115,7 @@ absl::Status query::SearchParameters::PreParseQueryString() {
         << "`. ";
     // Validate the index exists and is a vector index.
     VMSDK_ASSIGN_OR_RETURN(auto index, index_schema->GetIndex(attribute_alias));
-    if (index->GetIndexerType() != indexes::IndexerType::kHNSW &&
-        index->GetIndexerType() != indexes::IndexerType::kFlat) {
+    if (!indexes::IsVectorIndexType(index->GetIndexerType())) {
       return absl::InvalidArgumentError(absl::StrCat(
           "Index field `", attribute_alias, "` is not a Vector index "));
     }

@@ -769,6 +769,7 @@ bool IndexSchema::ProcessAttributeMutation(
         case indexes::IndexerType::kVector:
         case indexes::IndexerType::kHNSW:
         case indexes::IndexerType::kFlat:
+        case indexes::IndexerType::kSVS:
           Metrics::GetStats().ingest_field_vector++;
           break;
         case indexes::IndexerType::kNumeric:
@@ -1290,6 +1291,11 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
       break;
   }
 }
+
+bool IsVectorIndex(std::shared_ptr<indexes::IndexBase> index) {
+  return indexes::IsVectorIndexType(index->GetIndexerType());
+}
+
 
 std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
   auto index_schema_proto = std::make_unique<data_model::IndexSchema>();

@@ -371,7 +371,7 @@ void EvaluatePrefilteredKeys(
     absl::AnyInvocable<bool(const InternedStringPtr &,
                             absl::flat_hash_set<const char *> &)>
         appender,
-    size_t max_keys, bool stop_on_fetch_limit = false) {
+    size_t max_keys, bool stop_on_fetch_limit) {
   // If there was a union operation, we need to handle deduplication.
   // This implementation skips deduplication (flat_hash_set usage) if not needed
   // for performance.
@@ -442,7 +442,8 @@ CalcBestMatchingPrefilteredKeys(
                                            results, top_keys);
   };
   EvaluatePrefilteredKeys(parameters, entries_fetchers,
-                          std::move(results_appender), qualified_entries);
+                          std::move(results_appender), qualified_entries,
+                          /*stop_on_fetch_limit=*/false);
   return results;
 }
 

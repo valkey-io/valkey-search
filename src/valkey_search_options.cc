@@ -427,6 +427,9 @@ static auto async_fanout_threshold =
 /// fetching on non-vector (numeric/tag/text) query paths. This controls
 /// potential OOM by limiting the result set size before expensive content
 /// fetching from the keyspace.
+/// Note: If queries use LIMIT with a large offset (e.g., LIMIT offset count
+/// where offset + count exceeds this value), consider increasing this config
+/// to ensure all paginated results are accessible.
 constexpr absl::string_view kMaxNonVectorSearchResultsFetchedConfig{
     "max-nonvector-search-results-fetched"};
 constexpr uint32_t kDefaultMaxNonVectorSearchResultsFetched{

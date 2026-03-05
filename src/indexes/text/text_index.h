@@ -219,14 +219,6 @@ class TextIndexSchema {
   uint64_t GetPositionMemoryUsage() const;
   uint64_t GetTotalTextIndexMemoryUsage() const;
 
-  absl::Mutex &GetTreeMutex() ABSL_LOCK_RETURNED(text_index_mutex_) {
-    return text_index_mutex_;
-  }
-  const absl::Mutex &GetTreeMutex() const
-      ABSL_LOCK_RETURNED(text_index_mutex_) {
-    return text_index_mutex_;
-  }
-
   // Thread-safe accessor for per-key text indexes. Executes the provided
   // function while holding the mutex lock, ensuring safe concurrent access.
   template <typename Func>

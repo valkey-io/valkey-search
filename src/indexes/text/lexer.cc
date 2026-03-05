@@ -98,8 +98,8 @@ absl::StatusOr<std::deque<std::string>> Lexer::Tokenize(
   // Deque grows by adding new blocks—avoids the cost of copying
   // existing elements during reallocation.
   std::deque<std::string> tokens;
-  std::string scratch;
-  scratch.reserve(64);
+  std::string word;
+  word.reserve(64);
   size_t pos = 0;
   while (pos < text.size()) {
     // Skip leading punctuation, but check for backslash escape sequences
@@ -111,7 +111,7 @@ absl::StatusOr<std::deque<std::string>> Lexer::Tokenize(
       pos++;
     }
 
-    scratch.clear();
+    word.clear();
 
     // Build word, handling backslash escape sequences
     while (pos < text.size()) {
@@ -121,7 +121,7 @@ absl::StatusOr<std::deque<std::string>> Lexer::Tokenize(
         pos++;  // Consume the backslash
         if (next_ch == '\\' || IsPunctuation(next_ch)) {
           // Backslash escapes backslash or punctuation
-          scratch.push_back(text[pos++]);  // Keep the escaped character
+          word.push_back(text[pos++]);  // Keep the escaped character
         } else {
           // Backslash before non-punctuation
           if (IsPunctuation('\\')) {
@@ -130,7 +130,7 @@ absl::StatusOr<std::deque<std::string>> Lexer::Tokenize(
             break;
           } else {
             // Backslash not punctuation → keep letter
-            scratch.push_back(text[pos++]);
+            word.push_back(text[pos++]);
           }
         }
       } else if (IsPunctuation(ch)) {
@@ -138,25 +138,23 @@ absl::StatusOr<std::deque<std::string>> Lexer::Tokenize(
         break;
       } else {
         // Regular character
-        scratch.push_back(ch);
+        word.push_back(ch);
         pos++;
       }
     }
 
-    if (!scratch.empty()) {
-      NormalizeLowerCaseInPlace(scratch);
+    if (!word.empty()) {
+      NormalizeLowerCaseInPlace(word);
 
-      if (IsStopWord(scratch)) {
+      if (IsStopWord(word)) {
         continue;  // Skip stop words
       }
 
-      // Save original before stemming
-      std::string token_to_store = scratch;
       if (stemming_enabled) {
-        UpdateStemMap(scratch, stemmer, min_stem_size, *stem_mappings);
+        UpdateStemMap(word, stemmer, min_stem_size, *stem_mappings);
       }
-      tokens.push_back(token_to_store);
-      scratch.clear();
+      tokens.push_back(std::move(word));
+      word.clear();
     }
   }
 

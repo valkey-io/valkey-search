@@ -178,18 +178,25 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
   }
 
   // Tokenize and collect stem mappings
-  VMSDK_ASSIGN_OR_RETURN(auto tokens, lexer_.Tokenize(data, stem, min_stem_size_, stem_mappings_ptr));
+  auto tokens = lexer_.Tokenize(data, stem, min_stem_size_, stem_mappings_ptr);
+
+  if (!tokens.ok()) {
+    if (tokens.status().code() == absl::StatusCode::kInvalidArgument) {
+      return false;  // UTF-8 errors → hash_indexing_failures
+    }
+    return tokens.status();
+  }
 
   // Map tokens -> positions -> field-masks
   TokenPositions *token_positions;
   {
     std::lock_guard<std::mutex> guard(in_progress_key_updates_mutex_);
     auto& token_map = in_progress_key_updates_[key];
-    token_map.reserve(tokens.size());  // Reserve based on token count
+    token_map.reserve(tokens->size());  // Reserve based on token count
     token_positions = &token_map;
   }
-  for (uint32_t i = 0; i < tokens.size(); ++i) {
-    const auto &token = tokens[i];
+  for (uint32_t i = 0; i < tokens->size(); ++i) {
+    const auto &token = (*tokens)[i];
     uint32_t position =
         with_offsets_ ? i
                       : 0;  // If positional info is disabled we default to 0

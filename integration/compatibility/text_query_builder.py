@@ -278,19 +278,3 @@ def gen_fuzzy_1(vocab: List[str], rng: random.Random) -> str:
     eff_dist = effective_levenshtein_distance(word, 1)
     transformed = apply_levenshtein_transform(word, eff_dist, rng)
     return f"%{transformed}%"
-
-
-def gen_fuzzy_2(vocab: List[str], rng: random.Random) -> str:
-    """Generate a fuzzy term with Levenshtein distance 2: %%word%%"""
-    word = rng.choice(vocab)
-    eff_dist = effective_levenshtein_distance(word, 2)
-    transformed = apply_levenshtein_transform(word, eff_dist, rng)
-    return f"%%{transformed}%%"
-
-
-def gen_fuzzy_3(vocab: List[str], rng: random.Random) -> str:
-    """Generate a fuzzy term with Levenshtein distance 3: %%%word%%%"""
-    word = rng.choice(vocab)
-    eff_dist = effective_levenshtein_distance(word, 3)
-    transformed = apply_levenshtein_transform(word, eff_dist, rng)
-    return f"%%%{transformed}%%%"

@@ -298,13 +298,36 @@ template <typename T>
 absl::StatusOr<std::pair<float, hnswlib::labeltype>>
 VectorSVS<T>::ComputeDistanceFromRecordImpl(
     uint64_t internal_id, absl::string_view query) const {
-  return absl::UnimplementedError(
-      "SVS ComputeDistanceFromRecord not yet implemented");
+  absl::ReaderMutexLock lock(&index_mutex_);
+  auto it = raw_vectors_.find(internal_id);
+  if (it == raw_vectors_.end()) {
+    return absl::InternalError(
+        absl::StrCat("Couldn't find internal id: ", internal_id));
+  }
+
+  // Use the hnswlib space interface for distance computation.
+  // This is a temporary measure for Iteration 0: SVS does not yet expose
+  // compute_distance(). We compute on the raw FP32 copy instead.
+  auto dist = space_->get_dist_func()(
+      reinterpret_cast<const T*>(query.data()),
+      reinterpret_cast<const T*>(it->second.data()),
+      space_->get_dist_func_param());
+
+  return std::pair<float, hnswlib::labeltype>{dist, internal_id};
 }
 
 template <typename T>
 char* VectorSVS<T>::GetValueImpl(uint64_t internal_id) const {
-  return nullptr;
+  absl::ReaderMutexLock lock(&index_mutex_);
+  auto it = raw_vectors_.find(internal_id);
+  if (it == raw_vectors_.end()) {
+    return nullptr;
+  }
+  // The returned pointer into raw_vectors_ is safe because callers hold
+  // VectorBase's read-path guarantees: the main thread serializes mutations,
+  // which prevents concurrent writes to raw_vectors_ that could invalidate
+  // this pointer.
+  return const_cast<char*>(it->second.data());
 }
 
 // --- Serialization ---

@@ -191,9 +191,9 @@ TEST_F(LexerTest, EmptyStopWordsHandling) {
 
   ASSERT_TRUE(result.ok());
   std::vector<std::string> result_vector(result->begin(), result->end());
-  EXPECT_EQ(result_vector, std::vector<std::string>({"hello", "world", "testing",
-                                               "123", "with", "dashes", "and",
-                                               "or", "symbols"}));
+  EXPECT_EQ(result_vector, std::vector<std::string>(
+                               {"hello", "world", "testing", "123", "with",
+                                "dashes", "and", "or", "symbols"}));
 }
 
 // Stem tree tests - verify stem mappings are populated correctly
@@ -207,7 +207,8 @@ TEST_F(LexerTest, StemMappingsBasic) {
   ASSERT_TRUE(result.ok());
   // Original words (case-folded, not stemmed)
   std::vector<std::string> result_vector(result->begin(), result->end());
-  EXPECT_EQ(result_vector, std::vector<std::string>({"running", "jumps", "happily"}));
+  EXPECT_EQ(result_vector,
+            std::vector<std::string>({"running", "jumps", "happily"}));
 
   // Verify stem mappings: stemmed form -> original words
   EXPECT_EQ(stem_mappings.size(),
@@ -249,7 +250,8 @@ TEST_F(LexerTest, StemMappingsNoStemmingWhenDisabled) {
   ASSERT_TRUE(result.ok());
   // Original words (not stemmed)
   std::vector<std::string> result_vector(result->begin(), result->end());
-  EXPECT_EQ(result_vector, std::vector<std::string>({"running", "jumps", "happily"}));
+  EXPECT_EQ(result_vector,
+            std::vector<std::string>({"running", "jumps", "happily"}));
 
   // No stem mappings when stemming is disabled
   EXPECT_TRUE(stem_mappings.empty());

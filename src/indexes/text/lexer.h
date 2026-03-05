@@ -25,8 +25,8 @@ Tokenization Pipeline:
 */
 
 #include <bitset>
-#include <string>
 #include <deque>
+#include <string>
 
 #include "absl/container/flat_hash_set.h"
 #include "absl/status/statusor.h"
@@ -57,8 +57,10 @@ struct Lexer {
   sb_stemmer* GetStemmer() const;
   std::string NormalizeLowerCase(absl::string_view str) const;
   void NormalizeInPlace(std::string& str) const;
-  void StemWord(std::string& word, sb_stemmer* stemmer, uint32_t min_stem_size,
-                absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>* stem_mappings) const;
+  void StemWord(
+      std::string& word, sb_stemmer* stemmer, uint32_t min_stem_size,
+      absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>*
+          stem_mappings) const;
 
  private:
   data_model::Language language_;

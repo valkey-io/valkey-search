@@ -86,7 +86,9 @@ absl::StatusOr<std::deque<std::string>> Lexer::Tokenize(
     absl::string_view text, bool stemming_enabled, uint32_t min_stem_size,
     absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>*
         stem_mappings) const {
-  CHECK(stem_mappings) << "stem_mappings must not be null";
+  if (stemming_enabled) {
+    CHECK(stem_mappings) << "stem_mappings must not be null";
+  }
   if (!IsValidUtf8(text)) {
     return absl::InvalidArgumentError("Invalid UTF-8");
   }
@@ -94,12 +96,12 @@ absl::StatusOr<std::deque<std::string>> Lexer::Tokenize(
   // Get or create the thread-local stemmer for this lexer's language
   sb_stemmer* stemmer = stemming_enabled ? GetStemmer() : nullptr;
 
-  // Deque grows by adding new blocks—avoids the cost of copying 
+  // Deque grows by adding new blocks—avoids the cost of copying
   // existing elements during reallocation.
   std::deque<std::string> tokens;
   std::string scratch;
   scratch.reserve(64);
-  
+
   size_t pos = 0;
   while (pos < text.size()) {
     // Skip leading punctuation, but check for backslash escape sequences
@@ -148,12 +150,14 @@ absl::StatusOr<std::deque<std::string>> Lexer::Tokenize(
         continue;  // Skip stop words
       }
 
+      std::string token_to_store = scratch;  // Save original before stemming
       if (stemming_enabled) {
         StemWord(scratch, stemmer, min_stem_size, stem_mappings);
       }
-      
-      tokens.push_back(scratch);
-      scratch.clear();  // Length becomes 0, but capacity stays
+
+      tokens.push_back(
+          token_to_store);  // Store original word like original code
+      scratch.clear();
     }
   }
 
@@ -204,8 +208,10 @@ void Lexer::NormalizeInPlace(std::string& str) const {
   }
 }
 
-void Lexer::StemWord(std::string& word, sb_stemmer* stemmer, uint32_t min_stem_size,
-                     absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>* stem_mappings) const {
+void Lexer::StemWord(
+    std::string& word, sb_stemmer* stemmer, uint32_t min_stem_size,
+    absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>*
+        stem_mappings) const {
   if (word.empty() || word.length() < min_stem_size || !stemmer) {
     return;
   }
@@ -215,10 +221,12 @@ void Lexer::StemWord(std::string& word, sb_stemmer* stemmer, uint32_t min_stem_s
   CHECK(stemmed) << "Stemming failed";
 
   int stemmed_length = sb_stemmer_length(stemmer);
-  CHECK(stemmed_length > 0 && stemmed_length <= word.length()) << "Stemming failed";
+  CHECK(stemmed_length > 0 && stemmed_length <= word.length())
+      << "Stemming failed";
 
-  std::string_view stemmed_view(reinterpret_cast<const char*>(stemmed), stemmed_length);
-  
+  std::string_view stemmed_view(reinterpret_cast<const char*>(stemmed),
+                                stemmed_length);
+
   if (stemmed_view != word) {
     if (stem_mappings) {
       auto it = stem_mappings->find(stemmed_view);

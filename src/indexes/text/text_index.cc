@@ -365,7 +365,7 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
     if (!updated_target && stem_text_field_mask_) {
       // Check if this word has a stem mapping using schema-level minimum
       std::string word_copy(word);
-      lexer_.StemWord(word_copy, lexer_.GetStemmer(), min_stem_size_, nullptr);
+      lexer_.StemWordInPlace(word_copy, lexer_.GetStemmer(), min_stem_size_);
       if (word_copy != word) {
         // This word was a stem parent, remove it from stem tree
         std::lock_guard<std::mutex> stem_guard(stem_tree_mutex_);
@@ -432,7 +432,7 @@ std::string TextIndexSchema::GetAllStemVariants(
     uint64_t stem_enabled_mask, bool lock_needed) {
   // Stem the search term
   std::string stemmed(search_term);
-  lexer_.StemWord(stemmed, lexer_.GetStemmer(), 0, nullptr);
+  lexer_.StemWordInPlace(stemmed, lexer_.GetStemmer());
 
   // Conditionally acquire lock - use unique_lock with defer_lock for
   // conditional locking

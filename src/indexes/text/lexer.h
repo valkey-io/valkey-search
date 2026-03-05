@@ -56,9 +56,12 @@ struct Lexer {
   }
   sb_stemmer* GetStemmer() const;
   void NormalizeLowerCaseInPlace(std::string& str) const;
-  void StemWord(
-      std::string& word, sb_stemmer* stemmer, uint32_t min_stem_size,
-      absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>*
+  void StemWordInPlace(std::string& word, sb_stemmer* stemmer,
+                       uint32_t min_stem_size = 0) const;
+  void UpdateStemMap(
+      absl::string_view original_word, sb_stemmer* stemmer,
+      uint32_t min_stem_size,
+      absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>&
           stem_mappings) const;
 
  private:
@@ -68,6 +71,9 @@ struct Lexer {
 
   // UTF-8 processing helpers
   bool IsValidUtf8(absl::string_view text) const;
+  // Common stemming logic
+  std::string_view DoStemming(absl::string_view word, sb_stemmer* stemmer,
+                              uint32_t min_stem_size) const;
 };
 
 }  // namespace valkey_search::indexes::text

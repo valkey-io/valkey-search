@@ -231,12 +231,13 @@ class TestQueryParser(ValkeySearchTestCaseBase):
         client.execute_command("FT.CREATE", "idx1", "ON", "HASH", "SCHEMA", "content", "AS", "con", "TEXT")
         client.execute_command("HSET", "doc:1", "content", "I am going to a concert")
         client.execute_command("HSET", "doc:2", "content", "word1 word2 word3")
+        client.execute_command("HSET", "doc:3", "con", "I am going to a concert") # doc with field name as alias.
         # Query with alias
         result = client.execute_command("FT.SEARCH", "idx1", "@con:concert")
-        assert result[0] == 1
+        assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
         # Query with original identifier
         result = client.execute_command("FT.SEARCH", "idx1", "@content:concert")
-        assert result[0] == 1
+        assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
 
         # json index with vector
         client.execute_command(
@@ -245,7 +246,7 @@ class TestQueryParser(ValkeySearchTestCaseBase):
             "TYPE", "FLOAT32", "DIM", "3", "DISTANCE_METRIC", "COSINE"
         )
         client.execute_command(
-            "JSON.SET", "doc:3", "$",
+            "JSON.SET", "doc:4", "$",
             json.dumps({"embedding": [1.0, 2.0, 3.0]})
         )
         vec_blob = struct.pack('fff', 1.0, 2.0, 3.0)
@@ -255,7 +256,7 @@ class TestQueryParser(ValkeySearchTestCaseBase):
             "PARAMS", "2", "vec", vec_blob,
             "DIALECT", "2"
         )
-        assert result[0] == 1
+        assert (result[0], set(result[1::2])) == (1, {b"doc:4"})
         # Query with original identifier
         result = client.execute_command(
             "FT.SEARCH", "vec_idx", "*=>[KNN 1 @$.embedding $vec]",

@@ -234,17 +234,12 @@ void Lexer::UpdateStemMap(
       DoStemming(original_word, stemmer, min_stem_size);
   if (stemmed_view != original_word) {
     auto it = stem_mappings.find(stemmed_view);
-    if (it != stem_mappings.end()) {
-      // Existing Stem Root: check if word already exists before inserting
-      if (!it->second.contains(original_word)) {
-        it->second.insert(std::string(original_word));
-      }
-    } else {
-      // New Stem Root: create a new map entry and track this word as its
-      // first variant.
-      stem_mappings[std::string(stemmed_view)].insert(
-          std::string(original_word));
+    if (it == stem_mappings.end()) {
+      // New Stem Root: create a new map entry
+      it = stem_mappings.try_emplace(std::string(stemmed_view)).first;
     }
+    // Add original word to the set of variants for this stem root
+    it->second.emplace(original_word);
   }
 }
 }  // namespace valkey_search::indexes::text

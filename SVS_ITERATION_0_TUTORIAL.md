@@ -27,10 +27,10 @@ A step-by-step guide to how we integrated Intel's SVS graph-based ANN index alon
 ```bash
 mkdir -p ~/projects/cee-valkey-svs && cd ~/projects/cee-valkey-svs
 
-# Fork and clone valkey-search (with SVS branch)
-gh repo fork valkey-io/valkey-search --clone=true -- valkey-search-svs
+# Clone valkey-search fork with SVS integration
+git clone https://github.com/izaakk/valkey-search.git valkey-search-svs
 cd valkey-search-svs
-git checkout -b svs-iteration-0 1.2.0-rc2
+git checkout svs-iteration-0
 cd ..
 
 # Clone Valkey server

@@ -20,37 +20,26 @@ A step-by-step guide to how we integrated Intel's SVS graph-based ANN index alon
 - cmake >= 3.22, ninja-build
 - C++20 compiler (gcc 12+ or clang 15+)
 - Python 3.10+ with numpy and redis-py (`pip install redis numpy`)
+- Internet access (cmake fetches SVS runtime during build)
 
 ### Step 1: Clone Repositories
 
 ```bash
 mkdir -p ~/projects/cee-valkey-svs && cd ~/projects/cee-valkey-svs
 
-# Fork and clone valkey-search
+# Fork and clone valkey-search (with SVS branch)
 gh repo fork valkey-io/valkey-search --clone=true -- valkey-search-svs
 cd valkey-search-svs
 git checkout -b svs-iteration-0 1.2.0-rc2
 cd ..
 
-# Clone SVS runtime
-git clone https://github.com/intel/ScalableVectorSearch.git
-
 # Clone Valkey server
 git clone https://github.com/valkey-io/valkey.git
 ```
 
-### Step 2: Build SVS Runtime Library
+Note: You do **not** need to clone `ScalableVectorSearch` separately. The SVS runtime library is fetched automatically during the cmake build step (see below).
 
-```bash
-cd ScalableVectorSearch/bindings/cpp
-mkdir -p build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-make -j$(nproc)
-# Produces: libsvs_runtime.so
-cd ~/projects/cee-valkey-svs
-```
-
-### Step 3: Build Valkey Server
+### Step 2: Build Valkey Server
 
 ```bash
 cd valkey && make -j$(nproc)
@@ -58,12 +47,9 @@ cd valkey && make -j$(nproc)
 cd ..
 ```
 
-### Step 4: Build valkey-search with SVS
+### Step 3: Build valkey-search with SVS
 
 ```bash
-# Install protoc if not available
-# Download protoc v29.0: https://github.com/protocolbuffers/protobuf/releases
-
 cmake -S valkey-search-svs -B valkey-search-svs/.build-release \
   -DCMAKE_BUILD_TYPE=Release \
   -DENABLE_SVS=ON \
@@ -73,21 +59,34 @@ ninja -C valkey-search-svs/.build-release libsearch.so
 # Produces: valkey-search-svs/.build-release/libsearch.so (~140MB)
 ```
 
-If cmake can't find SVS runtime automatically (FetchContent fails), specify paths manually:
+#### How the SVS build integration works
+
+When `-DENABLE_SVS=ON` is passed to cmake, the build system in `src/indexes/CMakeLists.txt` does the following:
+
+1. **FetchContent downloads** a pre-built SVS C++ runtime tarball from GitHub releases (v0.2.0):
+   ```cmake
+   FetchContent_Declare(svs URL
+     "https://github.com/intel/ScalableVectorSearch/releases/download/v0.2.0/svs-cpp-runtime-bindings-0.2.0.tar.gz")
+   FetchContent_MakeAvailable(svs)
+   ```
+2. **find_package** locates the downloaded `svs_runtime` cmake package and links it:
+   ```cmake
+   find_package(svs_runtime REQUIRED)
+   target_link_libraries(vector_svs PUBLIC svs::svs_runtime)
+   ```
+3. **OpenMP** is found via `find_package(OpenMP REQUIRED)` — SVS uses it internally for parallelism.
+
+This means the SVS runtime is a **pre-built binary dependency**, not compiled from source. The tarball contains headers (`svs/runtime/*.h`) and a static library that gets linked into `libsearch.so`. No separate SVS clone or build step is needed.
+
+If FetchContent fails (e.g., no internet during build), you can override the URL:
 ```bash
-cmake -S valkey-search-svs -B valkey-search-svs/.build-release \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DENABLE_SVS=ON \
-  -DSVS_RUNTIME_INCLUDE_DIR=$(pwd)/ScalableVectorSearch/bindings/cpp/include \
-  -DSVS_RUNTIME_LIB=$(pwd)/ScalableVectorSearch/bindings/cpp/build/libsvs_runtime.so \
-  -G Ninja
+cmake ... -DSVS_URL=/path/to/local/svs-cpp-runtime-bindings-0.2.0.tar.gz
 ```
 
-### Step 5: Start the Server
+### Step 4: Start the Server
 
 ```bash
-LD_LIBRARY_PATH=$(pwd)/ScalableVectorSearch/bindings/cpp/build:$LD_LIBRARY_PATH \
-  valkey/src/valkey-server \
+valkey/src/valkey-server \
   --loadmodule valkey-search-svs/.build-release/libsearch.so \
   --port 6399 \
   --save ""
@@ -392,12 +391,29 @@ FT.SEARCH idx "*=>[KNN 10 @vec $blob SEARCH_WINDOW_SIZE 50]"
 |--------|------|----------|------------|
 | Index create | 4.0ms | 2.6ms | 29.7ms |
 | Insert rate | 25 vec/s | 22 vec/s | 22 vec/s |
-| Search p50 | 0.83ms | **0.21ms** | 0.49ms |
-| Search mean | 0.82ms | **0.38ms** | 0.74ms |
-| QPS (serial) | ~1,220 | **~2,630** | ~1,350 |
+| Search p50 | 0.83ms | 0.21ms | 0.49ms |
+| Search mean | 0.82ms | 0.38ms | 0.74ms |
+| QPS (serial) | ~1,220 | ~2,630 | ~1,350 |
 | Recall@5 | 1.0000 | 1.0000 | 1.0000 |
 
-**Caveat**: 50 vectors is too small for meaningful ANN comparison. Perfect recall is expected at this scale. Larger benchmarks blocked by SVS insert performance (see Learnings document).
+### These results are NOT meaningful
+
+**Do not draw performance conclusions from this benchmark.** The dataset is far too small:
+
+- **50 vectors at 4 dimensions** fits entirely in L1 cache. The numbers measure framework overhead (RESP parsing, function dispatch, lock acquisition), not ANN algorithm performance.
+- **Perfect recall (1.00)** is expected — with only 50 vectors, both HNSW and SVS find the exact neighbors every time. There is no approximation happening. The whole point of ANN benchmarks is to measure the **recall-vs-latency tradeoff**, which requires datasets large enough that the algorithms must actually approximate (typically 10K+ vectors at 128+ dimensions).
+- **LVQ compression shows overhead, not benefit** — quantization adds overhead on 4-dimensional vectors where it compresses almost nothing. LVQ is designed for high-dimensional vectors (128+) where it significantly reduces memory and can improve cache utilization.
+
+### Why we can't run meaningful benchmarks yet
+
+SVS `DynamicVamanaIndex::add()` is extremely slow for per-vector insertion:
+
+| Dimension | SVS Insert Rate | Time for 10K vectors |
+|-----------|----------------|---------------------|
+| 4-dim | ~22 vec/s | ~8 minutes |
+| 128-dim | ~0.1 vec/s | **~28 hours** |
+
+Standard ANN benchmarks (SIFT-128 at 10K vectors, OpenAI-1536 at 50K vectors) are impractical until bulk loading is implemented. **This is the #1 priority for Iteration 1** — see the Learnings document for proposed solutions.
 
 ---
 
@@ -411,12 +427,12 @@ FT.SEARCH idx "*=>[KNN 10 @vec $blob SEARCH_WINDOW_SIZE 50]"
 - Pre-filter path with SVS distance computation
 
 ### What's Blocked
-- **Meaningful benchmarks** — SVS per-vector insert is ~0.1 vec/s at 128-dim
-- **RDB persistence** — not implemented
+- **Meaningful benchmarks** — SVS per-vector insert is ~0.1 vec/s at 128-dim, making standard datasets (10K+ vectors) impractical to load
+- **RDB persistence** — not implemented, server restart loses all SVS data
 - **Memory efficiency** — raw_vectors_ doubles memory footprint
 
 ### Iteration 1 Priorities
-1. **Bulk vector loading** — buffer + build instead of per-vector add (critical path)
+1. **Bulk vector loading** — buffer + build instead of per-vector add. This is the critical blocker — without it, we cannot load enough data to produce meaningful recall-vs-latency benchmarks or evaluate LVQ compression benefits at scale
 2. **Replace raw_vectors_** with SVS reconstruct/compute_distance
 3. **RDB persistence**
-4. **Run VectorDBBench at scale** — SIFT-128 10K, OpenAI-1536 50K
+4. **Run VectorDBBench at scale** — SIFT-128 10K, OpenAI-1536 50K with ground truth for recall measurement

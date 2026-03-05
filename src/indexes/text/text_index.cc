@@ -364,9 +364,9 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
     // If the postings are now empty, remove from stem tree if it was a parent
     if (!updated_target && stem_text_field_mask_) {
       // Check if this word has a stem mapping using schema-level minimum
-      std::string word_copy(word);
-      lexer_.StemWordInPlace(word_copy, lexer_.GetStemmer(), min_stem_size_);
-      if (word_copy != word) {
+      std::string stem(word);
+      lexer_.StemWordInPlace(stem, lexer_.GetStemmer(), min_stem_size_);
+      if (stem != word) {
         // This word was a stem parent, remove it from stem tree
         std::lock_guard<std::mutex> stem_guard(stem_tree_mutex_);
         auto stem_remove_fn = CreateSimpleTargetMutateFn<StemParents>(
@@ -383,7 +383,7 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
               }
               return existing;
             });
-        stem_tree_.MutateTarget(word_copy, stem_remove_fn);
+        stem_tree_.MutateTarget(stem, stem_remove_fn);
       }
     }
 

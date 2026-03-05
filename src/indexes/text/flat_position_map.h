@@ -57,8 +57,9 @@ minimal state overhead, maintaining cumulative position for delta decoding.
 
 #include <cstddef>
 #include <cstdint>
-#include <map>
 #include <memory>
+
+#include "absl/container/btree_map.h"
 
 namespace valkey_search::indexes::text {
 
@@ -72,7 +73,7 @@ class FlatPositionMap {
  public:
   // Factory: allocates single block [FlatPositionMap | data...]
   static FlatPositionMap* Create(
-      const std::map<Position, FieldMask>& position_map,
+      const absl::btree_map<Position, FieldMask>& position_map,
       size_t num_text_fields);
 
   // Destructor: frees the allocated memory

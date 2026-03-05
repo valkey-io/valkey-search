@@ -195,7 +195,7 @@ void Lexer::NormalizeLowerCaseInPlace(std::string& str) const {
   if (absl::c_all_of(str, absl::ascii_isascii)) {
     absl::AsciiStrToLower(&str);
   } else {
-    str = UnicodeNormalizer::CaseFold(str);
+    UnicodeNormalizer::CaseFoldInPlace(str);
   }
 }
 

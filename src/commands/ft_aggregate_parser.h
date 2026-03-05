@@ -145,15 +145,11 @@ class Stage {
   virtual ~Stage() = default;
   virtual absl::Status Execute(RecordSet& records) const = 0;
   virtual void Dump(std::ostream& os) const = 0;
-<<<<<<< HEAD
-  virtual bool RequiresCompleteResults() const { return false; }
-=======
   // std::nullopt means this stage doesn't require a specific number of input
   // records, otherwise it is the number required.
   // For ALL records std::numeric_limits<size_t>::max() is returned.
   virtual std::optional<query::SerializationRange> GetSerializationRange()
       const = 0;
->>>>>>> origin/main
   friend std::ostream& operator<<(std::ostream& os, const Stage& s) {
     s.Dump(os);
     return os;
@@ -222,14 +218,10 @@ class Filter : public Stage {
 class GroupBy : public Stage {
  public:
   absl::Status Execute(RecordSet& records) const override;
-<<<<<<< HEAD
-  bool RequiresCompleteResults() const override { return true; }
-=======
   std::optional<query::SerializationRange> GetSerializationRange()
       const override {
     return query::SerializationRange::All();
   }
->>>>>>> origin/main
   struct ReducerInstance {
     virtual ~ReducerInstance() = default;
     virtual void ProcessRecord(absl::InlinedVector<expr::Value, 4>& values) = 0;
@@ -282,14 +274,10 @@ class GroupBy : public Stage {
 class SortBy : public Stage {
  public:
   absl::Status Execute(RecordSet& records) const override;
-<<<<<<< HEAD
-  bool RequiresCompleteResults() const override { return true; }
-=======
   std::optional<query::SerializationRange> GetSerializationRange()
       const override {
     return query::SerializationRange::All();
   }
->>>>>>> origin/main
   enum Direction { kASC, kDESC };
   struct SortKey {
     Direction direction_;

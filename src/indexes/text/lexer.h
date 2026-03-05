@@ -47,17 +47,18 @@ struct Lexer {
       absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>*
           stem_mappings = nullptr) const;
 
-  std::string StemWord(const std::string& word, sb_stemmer* stemmer,
-                       uint32_t min_stem_size = 0) const;
   bool IsPunctuation(char c) const {
     return punct_bitmap_[static_cast<unsigned char>(c)];
   }
 
-  bool IsStopWord(const std::string& lowercase_word) const {
+  bool IsStopWord(absl::string_view lowercase_word) const {
     return stop_words_set_.contains(lowercase_word);
   }
   sb_stemmer* GetStemmer() const;
   std::string NormalizeLowerCase(absl::string_view str) const;
+  void NormalizeInPlace(std::string& str) const;
+  void StemWord(std::string& word, sb_stemmer* stemmer, uint32_t min_stem_size,
+                absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>* stem_mappings) const;
 
  private:
   data_model::Language language_;

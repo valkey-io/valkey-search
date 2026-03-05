@@ -1273,67 +1273,7 @@ uint32_t raxGetSubtreeItemCount(rax *rax, unsigned char *s, size_t len) {
     return h->subtree_items;
 }
 
-// /* Atomically mutates the value at the given key by calling the provided
-//  * callback function. The callback receives the current value (NULL if the
-//  * key doesn't exist) and caller context, and returns the new value (NULL
-//  * to delete the key).
-//  * 
-//  * OWNERSHIP: The callback takes ownership of the old value. If returning a
-//  * new value, the callback MUST clean up the old value.
-//  * 
-//  * Returns 1 on success, 0 on error (errno will be set to ENOMEM
-//  * on out of memory). */
-// // TODO: optimize to a single-pass version that doesn't traverse the tree multiple times.
-// int raxMutate(rax *rax, unsigned char *s, size_t len, raxMutateCallback callback, void *caller_context, item_count_op op) {
-//     void *current_value = NULL;
-
-//     /* Find the current value */
-//     int found = raxFind(rax, s, len, &current_value);
-
-//     /* Call the callback to get the new value */
-//     void *new_value = callback(current_value, caller_context);
-
-//     /* Apply the mutation */
-//     int success = 1;
-//     if (new_value == NULL) {
-//         /* Delete the key if it exists */
-//         if (found) {
-//             success = raxRemove(rax, s, len, NULL);
-//         }
-//         /* Key doesn't exist and callback returned NULL - nothing to do */
-//     } else if (new_value != current_value) {
-//         /* Callback created a new target. Insert or update the key. */
-//         int res = raxInsert(rax, s, len, new_value, NULL);
-//         if (res == 0 && errno != 0) {
-//             /* Actual failure (OOM) */
-//             success = 0;
-//         }
-//     }
-
-//     /* Update subtree_items along the path after tree structure finalized */
-//     if (success && op != NONE) {
-//         raxStack ts;
-//         raxStackInit(&ts);
-//         raxNode *h;
-//         raxLowWalk(rax, s, len, &h, NULL, NULL, &ts);
-
-//         int delta = (op == ADD) ? 1 : -1;
-//         h->subtree_items += delta;
-
-//         raxNode *ancestor;
-//         while ((ancestor = raxStackPop(&ts)) != NULL) {
-//             ancestor->subtree_items += delta;
-//         }
-//         raxStackFree(&ts);
-//     }
-
-//     return success;
-// }
-
 int raxMutate(rax *rax, unsigned char *s, size_t len, raxMutateCallback callback, void *caller_context, item_count_op op) {
-    // Rax low walk to find the node if it exists or where the insertion needs to begin
-    // if it doesn't
-
     raxNode *h, **parentlink;
     int splitpos = 0;
     raxStack ts;
@@ -1343,9 +1283,8 @@ int raxMutate(rax *rax, unsigned char *s, size_t len, raxMutateCallback callback
         raxStackInit(ts_ptr);
     }
 
-    // Find the current value
+    // Search for an existing target
     size_t match_len = raxLowWalk(rax, s, len, &h, &parentlink, &splitpos, ts_ptr, &op);
-    // int exists = !(match_len != len || (h->iscompr && splitpos != 0) || !h->iskey);
     int exists = (match_len == len && (!h->iscompr || splitpos == 0) && h->iskey);
     void *current_value = exists ? raxGetData(h) : NULL;
 
@@ -1363,6 +1302,10 @@ int raxMutate(rax *rax, unsigned char *s, size_t len, raxMutateCallback callback
     } else if (new_value) {
       // New target added.
       res = raxGenericInsertHelper(rax, s, len, new_value, NULL, 1, h, parentlink, match_len, splitpos);
+      // Check if it's an actual error (OOM)
+      if (errno == 0) {
+        res = 1;
+      }
     } else if (current_value) {
       // Old target removed.
       res = raxRemoveHelper(rax, s, len, NULL, h, ts, match_len, splitpos);
@@ -1376,18 +1319,6 @@ int raxMutate(rax *rax, unsigned char *s, size_t len, raxMutateCallback callback
         ts_ptr = NULL;
     }
     return res;
-
-
-
-    // Add or delete the word if needed
-
-    // If a key is being added, increment the count while doing the initial walk.
-    // If the node already exists then great. If we have to create new nodes, those
-    // nodes will have a count of 1.
-
-    // If a key is being removed, decrment the count while doing the initial walk.
-    // If the node isn't removed then great. If we do remove the node, then it's
-    // also fine the nodes that now have a count of zero are removed.
 }
 /* END SEARCH */
 

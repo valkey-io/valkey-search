@@ -113,13 +113,13 @@ void TimeSlicedMRMWMutex::Unlock(bool may_prolong, bool ignore_time_quota) {
   }
   CHECK(active_lock_count_ > 0 ||
         (may_prolong_count_ == 0 && ignore_time_quota_count_ == 0));
-
+  
   // Invoke callbacks when last writer exits, BEFORE mode switch
   if (active_lock_count_ == 0 && current_mode_ == Mode::kLockWrite &&
       !write_phase_callbacks_.empty()) {
     InvokeEndOfWritePhaseCallbacks();
   }
-
+  
   if (ShouldSwitch() && GetWaiters(GetInverseMode(current_mode_)) > 0) {
     InitSwitch();
   }

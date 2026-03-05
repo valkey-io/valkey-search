@@ -121,7 +121,8 @@ class ABSL_LOCKABLE TimeSlicedMRMWMutex {
   static inline Mode GetInverseMode(Mode target_mode) {
     return target_mode == Mode::kLockRead ? Mode::kLockWrite : Mode::kLockRead;
   }
-  void InvokeEndOfWritePhaseCallbacks() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+  void InvokeEndOfWritePhaseCallbacks()
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
 
   mutable absl::Mutex mutex_;
   Mode current_mode_ ABSL_GUARDED_BY(mutex_){Mode::kLockRead};

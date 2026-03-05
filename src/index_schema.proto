@@ -93,6 +93,7 @@ message VectorIndex {
   oneof algorithm {
     HNSWAlgorithm hnsw_algorithm = 6;
     FlatAlgorithm flat_algorithm = 7;
+    SVSVamanaAlgorithm svs_vamana_algorithm = 8;
   }
 }
 
@@ -108,6 +109,15 @@ enum VectorDataType {
   VECTOR_DATA_TYPE_FLOAT32 = 1;
 }
 
+enum SVSCompressionType {
+  SVS_COMPRESSION_NONE = 0;
+  SVS_COMPRESSION_FP16 = 1;
+  SVS_COMPRESSION_LVQ4 = 2;
+  SVS_COMPRESSION_LVQ8 = 3;
+  SVS_COMPRESSION_LVQ4X4 = 4;
+  SVS_COMPRESSION_LVQ4X8 = 5;
+}
+
 message HNSWAlgorithm {
   uint32 m = 1;
   uint32 ef_construction = 2;
@@ -116,5 +126,13 @@ message HNSWAlgorithm {
 
 message FlatAlgorithm {
   uint32 block_size = 1;
+}
+
+message SVSVamanaAlgorithm {
+  uint32 graph_max_degree = 1;
+  uint32 construction_window_size = 2;
+  uint32 search_window_size = 3;
+  float alpha = 4;
+  SVSCompressionType compression = 5;
 }
 

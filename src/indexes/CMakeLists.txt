@@ -80,6 +80,35 @@ target_link_libraries(tag PUBLIC vmsdklib)
 target_link_libraries(tag PUBLIC ${INDEX_SCHEMA_PROTO_LIB})
 target_link_libraries(tag PUBLIC rax_lib)
 
+if(ENABLE_SVS)
+  set(SRCS_VECTOR_SVS ${CMAKE_CURRENT_LIST_DIR}/vector_svs.cc
+                      ${CMAKE_CURRENT_LIST_DIR}/vector_svs.h)
+
+  valkey_search_add_static_library(vector_svs "${SRCS_VECTOR_SVS}")
+  target_include_directories(vector_svs PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+  target_link_libraries(vector_svs PUBLIC index_base)
+  target_link_libraries(vector_svs PUBLIC vector_base)
+  target_link_libraries(vector_svs PUBLIC attribute_data_type)
+  target_link_libraries(vector_svs PUBLIC rdb_serialization)
+  target_link_libraries(vector_svs PUBLIC string_interning)
+  target_link_libraries(vector_svs PUBLIC hnswlib_vmsdk)
+  target_link_libraries(vector_svs PUBLIC vmsdklib)
+  target_link_libraries(vector_svs PUBLIC valkey_module)
+
+  # SVS runtime: auto-fetch pre-built bindings from GitHub releases
+  # (same pattern as FAISS -DFAISS_ENABLE_SVS=ON)
+  find_package(OpenMP REQUIRED)
+  include(FetchContent)
+  set(SVS_URL
+      "https://github.com/intel/ScalableVectorSearch/releases/download/v0.2.0/svs-cpp-runtime-bindings-0.2.0.tar.gz"
+      CACHE STRING "URL to fetch SVS runtime library")
+  FetchContent_Declare(svs URL "${SVS_URL}")
+  FetchContent_MakeAvailable(svs)
+  list(APPEND CMAKE_PREFIX_PATH "${svs_SOURCE_DIR}")
+  find_package(svs_runtime REQUIRED)
+  target_link_libraries(vector_svs PUBLIC svs::svs_runtime)
+endif()
+
 set(SRCS_VECTOR_FLAT ${CMAKE_CURRENT_LIST_DIR}/vector_flat.cc
                      ${CMAKE_CURRENT_LIST_DIR}/vector_flat.h)
 

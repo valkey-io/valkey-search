@@ -126,6 +126,21 @@ struct FlatParameters : public FTCreateVectorParameters {
   std::unique_ptr<data_model::VectorIndex> ToProto() const;
 };
 
+constexpr int kDefaultSVSGraphMaxDegree{64};
+constexpr int kDefaultSVSConstructionWindowSize{128};
+constexpr int kDefaultSVSSearchWindowSize{10};
+constexpr float kDefaultSVSAlpha{1.2f};
+
+struct SVSParameters : public FTCreateVectorParameters {
+  int graph_max_degree{kDefaultSVSGraphMaxDegree};
+  int construction_window_size{kDefaultSVSConstructionWindowSize};
+  int search_window_size{kDefaultSVSSearchWindowSize};
+  float alpha{kDefaultSVSAlpha};
+  data_model::SVSCompressionType compression{data_model::SVS_COMPRESSION_NONE};
+  absl::Status Verify() const;
+  std::unique_ptr<data_model::VectorIndex> ToProto() const;
+};
+
 absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
     ValkeyModuleCtx* ctx, ValkeyModuleString** argv, int argc);
 }  // namespace valkey_search

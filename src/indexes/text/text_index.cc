@@ -62,16 +62,14 @@ InvasivePtr<Postings> RemoveKeyFromPostings(
   return existing_postings;
 }
 
-// Factory for target mutate callback with memory tracking and new target
+// Factory for target mutate callback with new target
 // copying to the outer scope
 template <typename Target, typename MutateFn>
 std::function<void *(void *)> CreateTargetMutateFn(
-    MemoryPool &memory_pool, MutateFn mutate_fn,
+    MutateFn mutate_fn,
     InvasivePtr<Target> &updated_target) {
-  return [&updated_target, &memory_pool,
+  return [&updated_target,
           mutate_fn = std::move(mutate_fn)](void *old_val) -> void * {
-    NestedMemoryScope scope{memory_pool};
-
     // Take ownership of the existing target reference. Nullptr is
     // handled gracefully as a no-op.
     auto existing = InvasivePtr<Target>::AdoptRaw(
@@ -167,8 +165,6 @@ TextIndexSchema::TextIndexSchema(data_model::Language language,
 absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
     const InternedStringPtr &key, absl::string_view data,
     size_t text_field_number, bool stem, bool suffix) {
-  NestedMemoryScope scope{metadata_.text_index_memory_pool_};
-
   // Get or create stem mappings for this key if stemming is enabled
   absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>
       *stem_mappings_ptr = nullptr;
@@ -209,8 +205,6 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
 }
 
 void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
-  NestedMemoryScope scope{metadata_.text_index_memory_pool_};
-
   // Retrieve the key's staged data
   TokenPositions token_positions;
   {
@@ -262,7 +256,6 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
 
     // Pass the FlatPositionMap to AddKeyToPostings
     auto target_add_fn = CreateTargetMutateFn(
-        metadata_.posting_memory_pool_,
         [&](InvasivePtr<Postings> existing) {
           return AddKeyToPostings(std::move(existing), key, flat_map,
                                   &metadata_);
@@ -317,8 +310,6 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
 }
 
 void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
-  NestedMemoryScope scope{metadata_.text_index_memory_pool_};
-
   // Extract the per-key index
   absl::node_hash_map<Key, TextIndex>::node_type node;
   {
@@ -335,7 +326,6 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
   InvasivePtr<Postings> updated_target;
 
   auto target_remove_fn = CreateTargetMutateFn(
-      metadata_.posting_memory_pool_,
       [&](InvasivePtr<Postings> existing) {
         return RemoveKeyFromPostings(std::move(existing), key, &metadata_);
       },
@@ -399,28 +389,6 @@ uint64_t TextIndexSchema::GetNumUniqueTerms() const {
 
 uint64_t TextIndexSchema::GetTotalTermFrequency() const {
   return metadata_.total_term_frequency.load();
-}
-
-uint64_t TextIndexSchema::GetPostingsMemoryUsage() const {
-  if (!text_index_) {
-    return 0;
-  }
-  return metadata_.posting_memory_pool_.GetUsage();
-}
-
-uint64_t TextIndexSchema::GetRadixTreeMemoryUsage() const {
-  // TODO: properly implement
-  return GetTotalTextIndexMemoryUsage() - GetPostingsMemoryUsage();
-}
-
-// Note: This is a subset of the memory reported by GetPostingsMemoryUsage(),
-uint64_t TextIndexSchema::GetPositionMemoryUsage() const {
-  uint64_t total_positions = GetTotalPositions();
-  return total_positions * sizeof(uint32_t);
-}
-
-uint64_t TextIndexSchema::GetTotalTextIndexMemoryUsage() const {
-  return metadata_.text_index_memory_pool_.GetUsage();
 }
 
 std::string TextIndexSchema::GetAllStemVariants(

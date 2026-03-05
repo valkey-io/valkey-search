@@ -66,8 +66,7 @@ InvasivePtr<Postings> RemoveKeyFromPostings(
 // copying to the outer scope
 template <typename Target, typename MutateFn>
 std::function<void *(void *)> CreateTargetMutateFn(
-    MutateFn mutate_fn,
-    InvasivePtr<Target> &updated_target) {
+    MutateFn mutate_fn, InvasivePtr<Target> &updated_target) {
   return [&updated_target,
           mutate_fn = std::move(mutate_fn)](void *old_val) -> void * {
     // Take ownership of the existing target reference. Nullptr is

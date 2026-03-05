@@ -235,8 +235,10 @@ void Lexer::UpdateStemMap(
   if (stemmed_view != original_word) {
     auto it = stem_mappings.find(stemmed_view);
     if (it != stem_mappings.end()) {
-      // Existing Stem Root: add variant to its set.
-      it->second.insert(std::string(original_word));
+      // Existing Stem Root: check if word already exists before inserting
+      if (!it->second.contains(original_word)) {
+        it->second.insert(std::string(original_word));
+      }
     } else {
       // New Stem Root: create a new map entry and track this word as its
       // first variant.

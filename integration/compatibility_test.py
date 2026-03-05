@@ -1,4 +1,4 @@
-import pytest, logging, time, itertools, math, valkey, gzip, struct, os
+import pytest, logging, time, itertools, math, valkey, gzip, struct, os, subprocess
 import sys, json
 from collections import defaultdict
 from operator import itemgetter
@@ -476,6 +476,20 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
 
     return data_set
 
+def _check_and_regenerate_answers(answer_file, generator_file):
+    root_dir = os.getenv("ROOT_DIR")
+    answer_path = f"integration/compatibility/{answer_file}"
+    generator_path = f"integration/compatibility/{generator_file}"
+    
+    answer_time = subprocess.run(["git", "log", "-1", "--format=%ct", answer_path], 
+                                  capture_output=True, text=True, cwd=root_dir).stdout.strip()
+    generator_time = subprocess.run(["git", "log", "-1", "--format=%ct", generator_path], 
+                                     capture_output=True, text=True, cwd=root_dir).stdout.strip()
+    
+    if not answer_time or (generator_time and int(generator_time) > int(answer_time)):
+        print(f"Regenerating {answer_file}...")
+        os.system(f"cd {root_dir}/integration/compatibility && pytest {generator_file}")
+
 class TestAnswersCMD(ValkeySearchTestCaseBase):
     @pytest.mark.parametrize("answers", ["aggregate-answers.pickle.gz", "text-search-answers.pickle.gz"])
     def test_answers(self, answers):
@@ -487,6 +501,8 @@ class TestAnswersCMD(ValkeySearchTestCaseBase):
         wrong_answers = 0
         failed_tests = {}
         passed_tests = {}
+
+        _check_and_regenerate_answers(answers, "generate.py" if "aggregate" in answers else "generate_text.py")
 
         print("Running test_answers with answers file:", answers)
         with gzip.open(os.getenv("ROOT_DIR") + "/integration/compatibility/" + answers, "rb") as answer_file:
@@ -543,6 +559,8 @@ class TestAnswersCME(ValkeySearchClusterTestCase):
         wrong_answers = 0
         failed_tests = {}
         passed_tests = {}
+
+        _check_and_regenerate_answers(answers, "generate.py")
 
         print("Running CLUSTER test_answers with answers file:", answers)
 

@@ -58,7 +58,7 @@ TEST_F(TextIndexSchemaTest, ConcurrentCommitKeyData) {
     });
   }
   for (auto &t : threads) t.join();
-
+  
   // Apply cached mutations once after all threads complete
   schema->ApplyCachedTreeMutations();
 

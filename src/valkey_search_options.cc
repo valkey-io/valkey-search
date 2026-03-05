@@ -409,10 +409,10 @@ static auto drain_mutation_queue_on_save =
 
 /// Register the "fanout-data-uniformity" flag
 /// U = uniformity (0-100): 100 = uniform distribution, 0 = all data in one
-/// shard Formula: limit_per_shard = ceil(K/N) + ((100-U) * (K - ceil(K/N)) / 100)
-/// Where ceil(K/N) is calculated as (K + N - 1) / N using integer division.
-/// By default, uniformity is disabled (U=0), we assume all data is in one
-/// shard.
+/// shard Formula: limit_per_shard = ceil(K/N) + ((100-U) * (K - ceil(K/N)) /
+/// 100) Where ceil(K/N) is calculated as (K + N - 1) / N using integer
+/// division. By default, uniformity is disabled (U=0), we assume all data is in
+/// one shard.
 constexpr absl::string_view kFanoutDataUniformityConfig{
     "fanout-data-uniformity"};
 constexpr uint32_t kDefaultFanoutDataUniformity{0};

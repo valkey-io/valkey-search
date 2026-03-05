@@ -285,12 +285,6 @@ absl::Status PerformSearchFanoutAsync(
     std::unique_ptr<SearchParameters> parameters,
     vmsdk::ThreadPool *thread_pool) {
   auto request = coordinator::ParametersToGRPCSearchRequest(*parameters);
-  size_t N = search_targets.size();
-  uint64_t K = parameters->limit.first_index + parameters->limit.number;
-  // The 'fanout-data-uniformity-percent' (U) represents the user's data
-  // distribution profile. 100 means data is perfectly balanced (Uniform); 0
-  // means data is heavily skewed.
-  uint32_t U = options::GetFanoutDataUniformity().GetValue();
   uint64_t index_size = parameters->index_schema->GetIndexKeyInfoSize();
   uint32_t min_index_size =
       options::GetFanoutUniformityMinIndexSize().GetValue();
@@ -299,7 +293,7 @@ absl::Status PerformSearchFanoutAsync(
     // per-shard fetch limit. Instead of fetching K from every shard, we
     // calculate a limit based on the distribution profile to cover (offset +
     // limit) results across the cluster.
-
+    uint64_t K = parameters->limit.first_index + parameters->limit.number;
     // For queries requiring complete results (e.g., with SORTBY), we must
     // fetch K results from each shard to guarantee global correctness.
     // Also, for small indices (below the configured threshold), we skip the
@@ -308,6 +302,11 @@ absl::Status PerformSearchFanoutAsync(
       request->mutable_limit()->set_first_index(0);
       request->mutable_limit()->set_number(K);
     } else {
+      size_t N = search_targets.size();
+      // The 'fanout-data-uniformity-percent' (U) represents the user's data
+      // distribution profile. 100 means data is perfectly balanced (Uniform); 0
+      // means data is heavily skewed.
+      uint32_t U = options::GetFanoutDataUniformity().GetValue();
       // 1. Calculate the 'fair_share_limit' (The Base).
       // This is the minimum results needed per shard if data is perfectly
       // uniform. We use ceiling division (K + N - 1) / N to ensure the total

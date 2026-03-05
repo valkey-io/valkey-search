@@ -106,7 +106,6 @@ class TextTest : public ::testing::Test {
     ASSERT_TRUE(result.ok()) << result.status();
     ASSERT_TRUE(result.value());
     schema->CommitKeyData(key);
-    schema->ApplyCachedTreeMutations();
   }
 
   // Adds the record to the default text index

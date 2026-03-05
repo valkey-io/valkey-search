@@ -14,7 +14,6 @@
 #include "libstemmer.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/memory_allocation.h"
-#include "vmsdk/src/time_sliced_mrmw_mutex.h"
 namespace valkey_search::indexes::text {
 
 namespace {
@@ -241,25 +240,18 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
     FlatPositionMap *flat_map =
         FlatPositionMap::Create(pos_map, num_text_fields_);
 
-    // Cache-first approach: check bucket cache, then tree if needed
+    // The updated target gets set in target_add_fn and later used in
+    // target_set_fn, so that all trees point to the same postings object
     InvasivePtr<Postings> updated_target;
     {
-      auto &bucket = rax_target_mutex_pool_.GetBucket(token);
-      absl::MutexLock word_lock(&bucket.mutex);
+      absl::MutexLock word_lock(&rax_target_mutex_pool_.Get(token));
 
-      // Check cache first (previous writes from other threads)
-      auto cache_it = bucket.cache.find(token);
       InvasivePtr<Postings> existing;
-      bool was_in_cache = false;
-
-      if (cache_it != bucket.cache.end()) {
-        existing = cache_it->second.target;
-        was_in_cache = true;
-      } else {
-        // Not in cache, check tree
+      {
+        // Tree read lock prevents rax node reallocation racing with FindTarget.
+        absl::ReaderMutexLock tree_read(&text_index_mutex_);
         existing = text_index_->GetPrefix().FindPostingsTarget(token);
       }
-
       bool is_new_word = !existing;
 
       {
@@ -268,9 +260,12 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
             AddKeyToPostings(std::move(existing), key, flat_map, &metadata_);
       }
 
-      // Cache mutation (applied to tree at end of write phase)
-      // Only mark as new if it wasn't in cache AND wasn't in tree
-      bucket.cache[token] = {updated_target, is_new_word && !was_in_cache};
+      if (is_new_word) {
+        absl::WriterMutexLock tree_lock(&text_index_mutex_);
+        text_index_->MutateTarget(
+            token, updated_target,
+            ITEM_COUNT_TRACKING_ENABLED(item_count_op::ADD));
+      }
     }
 
     // Update per-key index (no locking needed — local to this call).
@@ -318,17 +313,11 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
   while (!iter.Done()) {
     std::string word_str(iter.GetWord());
     {
-      auto &bucket = rax_target_mutex_pool_.GetBucket(word_str);
-      absl::MutexLock word_lock(&bucket.mutex);
+      absl::MutexLock word_lock(&rax_target_mutex_pool_.Get(word_str));
 
-      // Check cache first
-      auto cache_it = bucket.cache.find(word_str);
       InvasivePtr<Postings> existing;
-
-      if (cache_it != bucket.cache.end()) {
-        existing = cache_it->second.target;
-      } else {
-        // Not in cache, check tree
+      {
+        absl::ReaderMutexLock tree_read(&text_index_mutex_);
         existing = text_index_->GetPrefix().FindPostingsTarget(word_str);
       }
 
@@ -339,13 +328,14 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
             RemoveKeyFromPostings(std::move(existing), key, &metadata_);
       }
 
-      // Cache mutation (applied to tree at end of write phase)
-      // is_new_word=false for deletions (word already exists, we're removing
-      // it)
-      bucket.cache[word_str] = {updated_target, false};
-
-      if (!updated_target && stem_text_field_mask_) {
-        empty_words.push_back(word_str);
+      if (!updated_target) {
+        absl::WriterMutexLock tree_lock(&text_index_mutex_);
+        text_index_->MutateTarget(
+            word_str, updated_target,
+            ITEM_COUNT_TRACKING_ENABLED(item_count_op::SUBTRACT));
+        if (stem_text_field_mask_) {
+          empty_words.push_back(word_str);
+        }
       }
     }
     iter.Next();
@@ -438,26 +428,6 @@ std::string TextIndexSchema::GetAllStemVariants(
   }
 
   return stemmed;  // Caller owns this and will add view to words_to_search
-}
-
-void TextIndexSchema::ApplyCachedTreeMutations() {
-  // Called at end of write phase by last exiting writer.
-  // No concurrent writers at this point - safe to iterate buckets without
-  // locks.
-  for (auto &bucket : rax_target_mutex_pool_.GetBuckets()) {
-    for (auto &[word, mutation] : bucket.cache) {
-      item_count_op op = item_count_op::NONE;
-      if (track_subtree_item_counts_) {
-        if (mutation.target && mutation.is_new_word) {
-          op = item_count_op::ADD;
-        } else if (!mutation.target) {
-          op = item_count_op::SUBTRACT;
-        }
-      }
-      text_index_->MutateTarget(word, mutation.target, op);
-    }
-    bucket.cache.clear();
-  }
 }
 
 }  // namespace valkey_search::indexes::text

@@ -93,7 +93,8 @@ absl::StatusOr<std::deque<std::string>> Lexer::Tokenize(
   // Get or create the thread-local stemmer for this lexer's language
   sb_stemmer* stemmer = stemming_enabled ? GetStemmer() : nullptr;
   
-  // Local deque - no reallocations, better for large token counts
+  // Deque grows by adding new blocks—avoids the cost of copying 
+  // existing elements during reallocation.
   std::deque<std::string> tokens;
   std::string word_buffer;
   word_buffer.reserve(64);  // Reserve reasonable word size

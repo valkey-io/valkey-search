@@ -40,17 +40,16 @@ An array of key value pairs.
   - Type-specific extension (see below)
 - `num_docs` (integer) Total keys in the index
 - `num_records` (integer) Total number of fields indexed.
-- `num_total_terms` (integer) Total number of terms in all text fields in this index.
-- `num_unique_terms` (integer) Total number of unique terms in all text fields in this index.
-- `total_postings` (integer) Total number of postings entries in all text fields in this index.
+- `total_term_occurrences` (integer) Total number of terms in all text fields in this index.
+- `num_terms` (integer) Total number of unique terms in all text fields in this index.
 - `hash_indexing_failures` (integer) Count of unsuccessful indexing attempts
 - `backfill_in_progress` (string). "1" if a backfill is currently running. "0" if not.
 - `backfill_complete_percent` (string) Estimated progress of background indexing. Percentage is expressed as a fractional value from 0 to 1.0.
 - `mutation_queue_size` (string) Number of keys contained in the mutation queue.
 - `recent_mutations_queue_delay` (string) 0 if the mutation queue is empty. Otherwise it is the mutation queue occupancy of the of the last key to be ingested in seconds.
-- `state` (string) Backfill state. `ready` indicates not backfill is in progress. `backfill_in_progress` backfill operation proceeding normally. `backfill_paused_by_oom` backfill is paused because the Valkey instance is out of memory.
+- `state` (string) Current backfill state. `ready` indicates not backfill is in progress. `backfill_in_progress` backfill operation proceeding normally. `backfill_paused_by_oom` backfill is paused because the Valkey instance is out of memory.
 - `punctuation` (string) list of punctuation characters.
-- `stopwords` (array of strings) list of stopwords.
+- `stopwords` (array of strings) list of `stopwords`.
 - `with_offsets` (string) "1" if offsets are included. "0" if offsets are not included
 - `min_stem_size` (integer) Minimum stemming size for this field.
 

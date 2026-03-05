@@ -1,6 +1,6 @@
 ---
-title: "Search - Queries"
-description: Search Module Query Language Syntax, Semantics and Examples
+title: "Valkey Search - Queries"
+description: Valkey Search Module Query Language Syntax, Semantics and Examples
 ---
 
 The query of the `FT.SEARCH` and `FT.AGGREGATE` commands identifies a subset of the keys in the index to be processed by those commands.
@@ -44,7 +44,7 @@ Where:
 
 ## Filter Expression
 
-A filter identifies a set of keys. Filters are constructed by combining matching operators with the operators and, or and negate.
+A filter identifies a set of keys. Filters can be constructed using individual query operator as well as by combining operators with `AND`, `OR`, `NEGATE` operators.
 
 It is not the case that the of filtering terminology implies an O(N) scan of keys in an index. Valkey search intelligently combines the usage of secondary indexes and simple filtering to efficiently locate the keys that a filter identifies. Determining the computational complexity of a particular filter is difficult, but generally no worse than O(log N) and sometimes as fast as O(1).
 
@@ -95,10 +95,10 @@ As another example, the following query will return documents containing "hello 
 @color:{hello world | hello universe}
 ```
 
-This example will match black or any word that starts with ferd:
+This example will match black or any word that starts with fred:
 
 ```
-@color:{black | ferd*}
+@color:{black | fred*}
 ```
 
 For more examples see [Tag Fields](#example-tag-queries).
@@ -121,7 +121,7 @@ Bounds without a leading open paren are inclusive, whereas bounds with the leadi
 
 Use the following table as a guide for mapping mathematical expressions to filtering queries:
 
-| Desired comparison | Numeric Matcher    |
+| Desired comparison | Numeric matcher    |
 | :----------------: | :----------------- |
 | min ≤ field ≤ max  | @field:[min max]   |
 | min < field ≤ max  | @field:[(min max]  |
@@ -147,7 +147,7 @@ Unlike the other search operators. The text search operators do not require that
 
 ### Term Search
 
-The term search operator matches a single word. If the word matches a stop word it is removed.
+The term search operator matches a single word. If the word is a stop word, the term search operator is removed from the query expression.
 Term searches are subject to stemming unless the `VERBATIM` option is specified.
 
 Examples include:
@@ -189,7 +189,7 @@ The exact phrase search operator matches an exact sequence of words in a text fi
 
 ### Fuzzy Search
 
-The fuzzy search operator matches words within a fixed Damerau-Levenshtein distance. See [Damerau-Levenshtein edit distance](https://en.wikipedia.org/wiki/Damerau%E2%80%93Levenshtein_distance) for more information. Fuzzy matching is specified by enclosing the base word in percent symbols `%` one for each allowable edit distance. The maximum allowed edit distance is control by the configuration setting `search.fuzzy-max-distance`.
+The fuzzy search operator matches words within a fixed damerau-levenshtein distance. See [damerau-levenshtein edit distance](https://en.wikipedia.org/wiki/Damerau%E2%80%93Levenshtein_distance) for more information. Fuzzy matching is specified by enclosing the base word in percent symbols `%` one for each allowable edit distance. The maximum allowed edit distance is control by the configuration setting `search.fuzzy-max-distance`.
 
 ```
 %hello%                 matches words that are one edit away from hello such as hello, hello1
@@ -202,14 +202,11 @@ The fuzzy search operator matches words within a fixed Damerau-Levenshtein dista
 
 ### Logical Negation
 
-Any query can be negated by prepending the `-` character before each query. Negative queries return all keys that don't
-match the query. This also includes keys that don't have the field.
+Any query can be negated by prepending the `-` character before each query. Negative queries return all keys that don't match the query. This also includes keys that don't have the field.
 
-For example, a negative query on @genre:{comedy} will return all books that are not comedy AND all books that don't have
-a genre field.
+For example, the negative query `-@genre:{comedy}` will return all books that are not comedy AND all books that don't have a genre field.
 
-The following query will return all books with "comedy" genre that are not published between 2015 and 2024, or that have
-no year field:
+The following query will return all books with "comedy" genre that are not published between 2015 and 2024, or that have no year field:
 
 ```
 @genre: {comedy} \-@year:[2015 2024]
@@ -239,7 +236,7 @@ query1 query2 query3
 
 ### Proximity `AND`
 
-When two or more predicates of an AND operation contain text matchers if becomes possible to also perform positional matching. Positional matching extends key-based matching to additionally require that matching words meet specified distance and ordering constraints. Note that it's only meaningful to apply positional matching within a single field. In other words, if
+When two or more predicates of an AND operation contain text matchers, it becomes possible to also perform positional matching. Positional matching extends key-based matching to additionally require that matching words meet specified distance and ordering constraints. Positional matching is only applied within a single Text field. There is no positional relationship between terms in different Text fields.
 
 Position matching is enabled when either the `SLOP` or `INORDER` clauses are used on the command and applies to all multi-predicate AND operations within the current command.
 

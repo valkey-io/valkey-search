@@ -308,7 +308,6 @@ bool ProximityIterator::NextPosition() {
       should_advance = false;
       if (violation) {
         size_t idx = violation->iter_idx;
-        Position current_start = iters_[idx]->CurrentPosition().start;
         if (violation->seek_target.has_value()) {
           iters_[idx]->SeekForwardPosition(*violation->seek_target);
         } else {

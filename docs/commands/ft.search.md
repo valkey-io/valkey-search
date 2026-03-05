@@ -22,17 +22,17 @@ FT.SEARCH <index> <query>
 - `ALLSHARDS` (Optional): If specified, the command is terminated with a timeout error if a valid response from all shards is not received within the timeout interval. This is the default.
 - `CONSISTENT` (Optional): If specified, the command is terminated with an error if the cluster is in an inconsistent state. This is the default.
 - `DIALECT <dialect>` (optional): Specifies your dialect. The only supported dialect is 2.
-- `INORDER` (optional): Indicates that proximity matching of terms must be inorder.
 - `INCONSISTENT` (Optional): If specified, the command will generate a best-effort reply if the cluster remains inconsistent within the timeout interval.
 - `LIMIT <offset> <count>` (optional): Lets you choose a portion of the result. The first `<offset>` keys are skipped and only a maximum of `<count>` keys are included. The default is LIMIT 0 10, which returns at most 10 keys.
 - `NOCONTENT` (optional): When present, only the resulting key names are returned, no key values are included.
 - `PARAMS <count> <name> <value> [<name> <value> ...]` (optional): `count` is of the number of arguments, i.e., twice the number of value/name pairs. [Search - query language](../topics/search-query.md) for details.
 - `RETURN <count> <field> [AS <name>] <field> [AS <name>] ...` (options): `count` is the number of fields to return. Specifies the fields you want to retrieve from your documents, along with any renaming for the returned values. By default, all fields are returned unless the `NOCONTENT` option is set, in which case no fields are returned. If num is set to 0, it behaves the same as `NOCONTENT`.
-- `SLOP <slop>` (Optional): Specifies a slop value for proximity matching of terms.
+- `INORDER` (optional): Indicates that proximity matching of text terms in the query must be in order.
+- `SLOP <slop>` (Optional): Specifies a slop value for proximity matching of text terms in the query.
+- `VERBATIM` (Optional): If specified, stemming is not applied to text terms in the query.
 - `SOMESHARDS` (Optional): If specified, the command will generate a best-effort reply if all shards have not responded within the timeout interval.
 - `SORTBY <field> [ASC | DESC]` (Optional): If present, results are sorted according the value of the specified field and the optional sort-direction instruction. By default, vector results are sorted in distance order and non-vector results are not sorted in any particular order. Sorting is applied before the `LIMIT` clause is applied.
 - `TIMEOUT <timeout>` (optional): Lets you set a timeout value for the search command. This must be an integer in milliseconds.
-- `VERBATIM` (Optional): If specified stemming is not applied to term searches.
 - `WITHSORTKEYS` (Optional): If `SORTBY` is specified then enabling this option augments the output with the value of the field used for sorting.
 
 Response

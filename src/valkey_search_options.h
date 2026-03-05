@@ -88,6 +88,9 @@ config::Number& GetMaxTermExpansions();
 /// Return the search result buffer multiplier value
 double GetSearchResultBufferMultiplier();
 
+/// Return the prefiltering threshold ratio value
+double GetPrefilteringThresholdRatio();
+
 /// Return the configuration entry for draining mutation queue on save
 const config::Boolean& GetDrainMutationQueueOnSave();
 

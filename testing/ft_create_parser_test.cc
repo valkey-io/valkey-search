@@ -737,7 +737,7 @@ INSTANTIATE_TEST_SUITE_P(
              .expected_error_message =
                  "Invalid field type for field `hash_field1`: Invalid range: "
                  "Value below minimum; EF_RUNTIME must be a positive integer "
-                 "greater than 0 and cannot exceed 4096.",
+                 "greater than 0 and cannot exceed 1000000.",
          },
          {
              .test_name = "invalid_m_negative",
@@ -781,7 +781,7 @@ INSTANTIATE_TEST_SUITE_P(
              .expected_error_message =
                  "Invalid field type for field `hash_field1`: Invalid range: "
                  "Value below minimum; EF_CONSTRUCTION must be a positive "
-                 "integer greater than 0 and cannot exceed 4096.",
+                 "integer greater than 0 and cannot exceed 1000000.",
          },
          {
              .test_name = "invalid_ef_construction_negative",
@@ -792,7 +792,7 @@ INSTANTIATE_TEST_SUITE_P(
              .expected_error_message =
                  "Invalid field type for field `hash_field1`: Invalid range: "
                  "Value below minimum; EF_CONSTRUCTION must be a positive "
-                 "integer greater than 0 and cannot exceed 4096.",
+                 "integer greater than 0 and cannot exceed 1000000.",
          },
          {
              .test_name = "invalid_as",

@@ -27,7 +27,7 @@ absl::Status HandleInternalUpdateFailure(
 
   VMSDK_LOG(WARNING, ctx) << "CRITICAL: " << operation_type
                           << " failed in FT.INTERNAL_UPDATE. "
-                          << "Index ID: " << id;
+                          << "Index ID: " << vmsdk::config::RedactIfNeeded(id);
 
   VMSDK_LOG(WARNING, ctx) << "Error: " << error_status.message();
 

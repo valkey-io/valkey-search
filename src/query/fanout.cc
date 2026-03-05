@@ -188,7 +188,7 @@ struct SearchPartitionResultsTracker {
       // offset count IF the command allows it (ie - it does not require
       // complete results).
       parameters->search_result = SearchResult(
-          accumulated_total_count, std::move(neighbors), *parameters);
+          accumulated_total_count, std::move(neighbors), *parameters, true);
       status = absl::OkStatus();
     }
     parameters->search_result.status = status;

@@ -103,7 +103,6 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
       pos++;
     }
 
-    size_t word_start = pos;
     std::string word_buffer;
 
     // Build word, handling backslash escape sequences

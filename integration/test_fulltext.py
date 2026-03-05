@@ -2438,7 +2438,7 @@ class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
     def test_ft_info_text_index_fields(self):
         """
         Test FT.INFO text index specific fields after inserting documents.
-        Validates text index memory usage and statistics fields.
+        Validates text index statistics fields.
         """
         client: Valkey = self.server.get_new_client()
         
@@ -2460,10 +2460,6 @@ class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
         text_index_fields = [
             "num_terms",          # Total number of unique terms in the text index
             "total_term_occurrences",    # Total frequency of all terms across all documents  
-            "posting_sz_bytes",          # Memory used by posting lists (inverted index data) in bytes
-            "position_sz_bytes",         # Memory used by position information for phrase queries in bytes
-            "radix_sz_bytes",            # Memory used by the radix tree (term dictionary) in bytes
-            "total_text_index_sz_bytes"  # Total memory used by all text index components in bytes
         ]
         
         # Validate that all text index fields are present and have reasonable values
@@ -2478,39 +2474,16 @@ class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
             elif field == "total_term_occurrences":
                 assert isinstance(value, (int, float)) and value > 0, f"{field} should be positive number, got {value}"
                 assert value >= info_data["num_terms"], f"Total terms {value} should be >= unique terms {info_data['num_terms']}"
-                
-            elif field in ["posting_sz_bytes", "position_sz_bytes", "radix_sz_bytes", "total_text_index_sz_bytes"]:
-                assert (isinstance(value, int) and value > 0) or \
-                       (os.environ.get('SAN_BUILD', 'no') != 'no' and value == 0), \
-                       f"{field} should be positive integer, got {value}"
-        
-        # Validate memory relationships
-        total_memory = info_data["total_text_index_sz_bytes"]
-        posting_memory = info_data["posting_sz_bytes"]
-        position_memory = info_data["position_sz_bytes"]
-        radix_memory = info_data["radix_sz_bytes"]
-        
-        # Total memory should be at least the sum of components
-        component_sum = posting_memory + radix_memory
-        assert total_memory >= component_sum, f"Total memory {total_memory} should equal component sum {component_sum}"
         
         print(f"Text Index Statistics Validation Passed:")
         print(f"  Documents: {info_data['num_docs']}")
         print(f"  Unique Terms: {info_data['num_terms']}")
         print(f"  Total Terms: {info_data['total_term_occurrences']}")
-        print(f"  Total Memory: {info_data['total_text_index_sz_bytes']} bytes")
-        print(f"  Posting Memory: {info_data['posting_sz_bytes']} bytes")
-        print(f"  Position Memory: {info_data['position_sz_bytes']} bytes")
-        print(f"  Radix Memory: {info_data['radix_sz_bytes']} bytes")
 
         # Test cleanup after document deletion
         print("\nTesting cleanup after document deletion...")
         
-        # Store initial memory values
-        initial_posting_memory = info_data['posting_sz_bytes']
-        initial_radix_memory = info_data['radix_sz_bytes']
-        initial_position_memory = info_data['position_sz_bytes']
-        initial_total_memory = info_data['total_text_index_sz_bytes']
+        # Store initial values
         initial_unique_terms = info_data['num_terms']
         initial_total_terms = info_data['total_term_occurrences']
         
@@ -2526,40 +2499,15 @@ class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
         # Verify document count is zero
         assert info_after_delete["num_docs"] == 0, f"Expected 0 documents after deletion, got {info_after_delete['num_docs']}"
         
-        # Verify complete cleanup for schema-level metrics
-        # TODO: this won't be zero until serialized position map is added
-        # assert info_after_delete['posting_sz_bytes'] == 0, \
-        #     f"Posting memory should be zero after deletion: got {info_after_delete['posting_sz_bytes']}"
-        
-        # Note: Postings are currently stored in per-key indexes. When we implement shared
-        # Posting objects across schema and key indexes, these metrics will reach zero on deletion.
-        
         # Always validate term count decreases
         assert info_after_delete['num_terms'] < initial_unique_terms, \
             f"Unique terms should decrease after deletion: {info_after_delete['num_terms']} >= {initial_unique_terms}"
         assert info_after_delete['total_term_occurrences'] < initial_total_terms, \
             f"Total terms should decrease after deletion: {info_after_delete['total_term_occurrences']} >= {initial_total_terms}"
         
-        # Skip memory size checks when running with sanitizers (SAN_BUILD)
-        # as memory tracking may not be accurate in sanitizer builds
-        is_san_build = os.environ.get('SAN_BUILD', 'no') != 'no'
-        
-        if not is_san_build:
-            assert info_after_delete['position_sz_bytes'] < initial_position_memory, \
-                f"Position memory should decrease after deletion: {info_after_delete['position_sz_bytes']} >= {initial_position_memory}"
-            assert info_after_delete['total_text_index_sz_bytes'] < initial_total_memory, \
-                f"Total memory should decrease after deletion: {info_after_delete['total_text_index_sz_bytes']} >= {initial_total_memory}"
-        else:
-            print("  Skipping memory size checks (SAN_BUILD mode)")
-
-        # Note: radix_sz_bytes validation skipped - will be fixed in radix tree memory tracking cleanup task
-        
         print(f"  After deletion - Documents: {info_after_delete['num_docs']}")
         print(f"  After deletion - Unique Terms: {info_after_delete['num_terms']}")
         print(f"  After deletion - Total Terms: {info_after_delete['total_term_occurrences']}")
-        print(f"  After deletion - Posting Memory: {info_after_delete['posting_sz_bytes']} bytes")
-        print(f"  After deletion - Radix Memory: {info_after_delete['radix_sz_bytes']} bytes")
-        print(f"  After deletion - Total Memory: {info_after_delete['total_text_index_sz_bytes']} bytes")
         
         # Now delete the index and verify complete cleanup
         client.execute_command("FT.DROPINDEX", "products")
@@ -2569,7 +2517,6 @@ class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
         assert b"products" not in indices, "Index should not exist after FT.DROPINDEX"
         
         print("\nCleanup verification passed!")
-        # Deletion pending of per_key_index, On deletion only prefix tree cleared
 
 class TestFullTextCluster(ValkeySearchClusterTestCaseDebugMode):
 
@@ -2729,9 +2676,9 @@ class TestFullTextCluster(ValkeySearchClusterTestCaseDebugMode):
             for c in all_clients:
                 IndexingTestHelper.wait_for_backfill_complete_on_node(c, index)
         
-        # Validate initial fulltext memory metrics
-        assert int(client.info("search").get("search_used_text_memory_bytes", 0)) == 0
-        assert client.info("search").get("search_used_text_memory_human", 0) == 0
+        # Validate initial fulltext memory metrics - these were removed
+        # assert int(client.info("search").get("search_used_text_memory_bytes", 0)) == 0
+        # assert client.info("search").get("search_used_text_memory_human", 0) == 0
         
         # Insert 10 documents such that even numbered ones are pure text and others are non-text
         for i in range(10):
@@ -2746,12 +2693,12 @@ class TestFullTextCluster(ValkeySearchClusterTestCaseDebugMode):
                     "vector", vec
                 )
         info_search = client.info("search")
-        # Validate memory metrics
-        ft_memory_fulldata = int(info_search.get("search_used_text_memory_bytes", 0))
-        is_san_build = os.environ.get('SAN_BUILD', 'no') != 'no'
-        if not is_san_build:
-            assert ft_memory_fulldata > 0
-            assert info_search.get("search_used_text_memory_human", 0) != 0
+        # Validate memory metrics - these were removed
+        # ft_memory_fulldata = int(info_search.get("search_used_text_memory_bytes", 0))
+        # is_san_build = os.environ.get('SAN_BUILD', 'no') != 'no'
+        # if not is_san_build:
+        #     assert ft_memory_fulldata > 0
+        #     assert info_search.get("search_used_text_memory_human", 0) != 0
         
         # Validate attribute count metrics on ALL shards (schema should be replicated)
         for i, c in enumerate(all_clients):
@@ -2760,11 +2707,11 @@ class TestFullTextCluster(ValkeySearchClusterTestCaseDebugMode):
             assert total == text + tag + numeric + vector == 8 and text == tag == numeric == vector == 2, \
                 f"Shard {i}: Attribute counts mismatch"
 
-        # Validate metrics after deletion of a record
+        # Validate metrics after deletion of a record - these were removed
         client.execute_command("DEL", "doc:8")
-        info_search = client.info("search")
-        if not is_san_build:
-            assert 0 < int(info_search.get("search_used_text_memory_bytes", 0)) < ft_memory_fulldata
+        # info_search = client.info("search")
+        # if not is_san_build:
+        #     assert 0 < int(info_search.get("search_used_text_memory_bytes", 0)) < ft_memory_fulldata
         # QUERY METRICS
         # Query1 Pure text query (non-vector with text)
         client.execute_command("FT.SEARCH", "idx", 'document number', "RETURN", "1", "content")

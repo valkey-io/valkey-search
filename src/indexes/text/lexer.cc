@@ -95,13 +95,11 @@ absl::StatusOr<std::deque<std::string>> Lexer::Tokenize(
 
   // Get or create the thread-local stemmer for this lexer's language
   sb_stemmer* stemmer = stemming_enabled ? GetStemmer() : nullptr;
-
   // Deque grows by adding new blocks—avoids the cost of copying
   // existing elements during reallocation.
   std::deque<std::string> tokens;
   std::string scratch;
   scratch.reserve(64);
-
   size_t pos = 0;
   while (pos < text.size()) {
     // Skip leading punctuation, but check for backslash escape sequences
@@ -122,6 +120,7 @@ absl::StatusOr<std::deque<std::string>> Lexer::Tokenize(
         char next_ch = text[pos + 1];
         pos++;  // Consume the backslash
         if (next_ch == '\\' || IsPunctuation(next_ch)) {
+          // Backslash escapes backslash or punctuation
           scratch.push_back(text[pos++]);
         } else {
           // Backslash before non-punctuation
@@ -130,6 +129,7 @@ absl::StatusOr<std::deque<std::string>> Lexer::Tokenize(
             // segmentation)
             break;
           } else {
+            // Backslash not punctuation → keep letter
             scratch.push_back(text[pos++]);
           }
         }
@@ -144,17 +144,17 @@ absl::StatusOr<std::deque<std::string>> Lexer::Tokenize(
     }
 
     if (!scratch.empty()) {
-      NormalizeInPlace(scratch);
+      NormalizeLowerCaseInPlace(scratch);
 
       if (IsStopWord(scratch)) {
         continue;  // Skip stop words
       }
 
+      // Save original before stemming
       std::string token_to_store = scratch;  // Save original before stemming
       if (stemming_enabled) {
         StemWord(scratch, stemmer, min_stem_size, stem_mappings);
       }
-
       tokens.push_back(
           token_to_store);  // Store original word like original code
       scratch.clear();
@@ -194,13 +194,7 @@ bool Lexer::IsValidUtf8(absl::string_view text) const {
          scanner.GetPosition() == text.size();
 }
 
-std::string Lexer::NormalizeLowerCase(absl::string_view str) const {
-  return absl::c_all_of(str, absl::ascii_isascii)
-             ? absl::AsciiStrToLower(str)
-             : UnicodeNormalizer::CaseFold(str);
-}
-
-void Lexer::NormalizeInPlace(std::string& str) const {
+void Lexer::NormalizeLowerCaseInPlace(std::string& str) const {
   if (absl::c_all_of(str, absl::ascii_isascii)) {
     absl::AsciiStrToLower(&str);
   } else {

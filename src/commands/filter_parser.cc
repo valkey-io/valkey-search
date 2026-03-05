@@ -604,7 +604,8 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
   if (processed_content.empty()) {
     return FilterParser::TokenResult{nullptr, false};
   }
-  std::string token = lexer.NormalizeLowerCase(processed_content);
+  std::string token = processed_content;
+  lexer.NormalizeLowerCaseInPlace(token);
   FieldMaskPredicate field_mask;
   VMSDK_RETURN_IF_ERROR(
       SetupTextFieldConfiguration(field_mask, field_or_default, false));
@@ -703,7 +704,8 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     processed_content.push_back(ch);
     ++pos_;
   }
-  std::string token = lexer.NormalizeLowerCase(processed_content);
+  std::string token = processed_content;
+  lexer.NormalizeLowerCaseInPlace(token);
   FieldMaskPredicate field_mask;
   // Build predicate directly based on detected pattern
   if (leading_percent_count > 0) {

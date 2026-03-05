@@ -26,7 +26,7 @@ Tokenization Pipeline:
 
 #include <bitset>
 #include <string>
-#include <vector>
+#include <deque>
 
 #include "absl/container/flat_hash_set.h"
 #include "absl/status/statusor.h"
@@ -42,7 +42,7 @@ struct Lexer {
         const std::vector<std::string>& stop_words);
   ~Lexer() = default;
 
-  absl::StatusOr<std::vector<std::string>> Tokenize(
+  absl::StatusOr<std::deque<std::string>> Tokenize(
       absl::string_view text, bool stemming_enabled, uint32_t min_stem_size,
       absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>*
           stem_mappings = nullptr) const;

@@ -6,6 +6,7 @@
 
 #include "src/indexes/text/lexer.h"
 
+#include <deque>
 #include <memory>
 
 #include "absl/container/flat_hash_map.h"
@@ -73,10 +74,6 @@ using StemmerPtr = std::unique_ptr<sb_stemmer, StemmerDeleter>;
 // at least once.
 thread_local absl::flat_hash_map<data_model::Language, StemmerPtr> stemmers_;
 
-// Thread-local reusable token buffer to reduce allocations
-thread_local std::vector<std::string> token_buffer_;
-thread_local std::string word_buffer_;
-
 }  // namespace
 
 Lexer::Lexer(data_model::Language language, const std::string& punctuation,
@@ -85,7 +82,7 @@ Lexer::Lexer(data_model::Language language, const std::string& punctuation,
       punct_bitmap_(BuildPunctuationBitmap(punctuation)),
       stop_words_set_(BuildStopWordsSet(stop_words)) {}
 
-absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
+absl::StatusOr<std::deque<std::string>> Lexer::Tokenize(
     absl::string_view text, bool stemming_enabled, uint32_t min_stem_size,
     absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>*
         stem_mappings) const {
@@ -96,9 +93,10 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
   // Get or create the thread-local stemmer for this lexer's language
   sb_stemmer* stemmer = stemming_enabled ? GetStemmer() : nullptr;
   
-  // Reuse thread-local token buffer to avoid allocations
-  token_buffer_.clear();
-  token_buffer_.reserve(text.size() / 6);  // Estimate ~6 chars per token
+  // Local deque - no reallocations, better for large token counts
+  std::deque<std::string> tokens;
+  std::string word_buffer;
+  word_buffer.reserve(64);  // Reserve reasonable word size
   
   size_t pos = 0;
   while (pos < text.size()) {
@@ -111,8 +109,8 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
       pos++;
     }
 
-    // Reuse thread-local word buffer
-    word_buffer_.clear();
+    // Clear and reuse word buffer
+    word_buffer.clear();
 
     // Build word, handling backslash escape sequences
     while (pos < text.size()) {
@@ -122,7 +120,7 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
         pos++;  // Consume the backslash
         if (next_ch == '\\' || IsPunctuation(next_ch)) {
           // Backslash escapes backslash or punctuation
-          word_buffer_.push_back(text[pos++]);  // Keep the escaped character
+          word_buffer.push_back(text[pos++]);  // Keep the escaped character
         } else {
           // Backslash before non-punctuation
           if (IsPunctuation('\\')) {
@@ -131,7 +129,7 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
             break;
           } else {
             // Backslash not punctuation → keep letter
-            word_buffer_.push_back(text[pos++]);
+            word_buffer.push_back(text[pos++]);
           }
         }
       } else if (IsPunctuation(ch)) {
@@ -139,13 +137,13 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
         break;
       } else {
         // Regular character
-        word_buffer_.push_back(ch);
+        word_buffer.push_back(ch);
         pos++;
       }
     }
 
-    if (!word_buffer_.empty()) {
-      std::string word = NormalizeLowerCase(word_buffer_);
+    if (!word_buffer.empty()) {
+      std::string word = NormalizeLowerCase(word_buffer);
 
       if (IsStopWord(word)) {
         continue;  // Skip stop words
@@ -158,11 +156,11 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
           (*stem_mappings)[stemmed_word].insert(word);
         }
       }
-      token_buffer_.push_back(std::move(word));
+      tokens.push_back(std::move(word));
     }
   }
 
-  return token_buffer_;
+  return tokens;
 }
 
 // Returns a thread-local cached stemmer for this lexer's language, creating it

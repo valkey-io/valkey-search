@@ -39,6 +39,9 @@
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
+#ifdef ENABLE_SVS
+#include "src/indexes/vector_svs.h"
+#endif
 #include "src/metrics.h"
 #include "src/query/content_resolution.h"
 #include "src/query/planner.h"
@@ -164,6 +167,14 @@ absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
         std::move(latency_sample));
     return res;
   }
+#ifdef ENABLE_SVS
+  if (vector_index->GetIndexerType() == indexes::IndexerType::kSVS) {
+    auto vector_svs = dynamic_cast<indexes::VectorSVS<float> *>(vector_index);
+    return vector_svs->Search(parameters.query, parameters.k,
+                              parameters.cancellation_token,
+                              std::move(inline_filter));
+  }
+#endif
   CHECK(false) << "Unsupported indexer type: "
                << (int)vector_index->GetIndexerType();
 }

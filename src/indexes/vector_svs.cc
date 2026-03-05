@@ -100,7 +100,11 @@ VectorSVS<T>::VectorSVS(
 template <typename T>
 VectorSVS<T>::~VectorSVS() {
   if (svs_index_) {
-    svs::runtime::v0::DynamicVamanaIndex::destroy(svs_index_);
+    auto status = svs::runtime::v0::DynamicVamanaIndex::destroy(svs_index_);
+    if (!status.ok()) {
+      VMSDK_LOG(WARNING, nullptr)
+          << "SVS destroy failed: " << status.message();
+    }
     svs_index_ = nullptr;
   }
 }
@@ -212,6 +216,7 @@ absl::Status VectorSVS<T>::AddRecordImpl(uint64_t internal_id,
     ++num_elements_;
     return absl::OkStatus();
   } catch (const std::exception& e) {
+    raw_vectors_.erase(internal_id);
     return absl::InternalError(
         absl::StrCat("SVS add exception: ", e.what()));
   }
@@ -277,14 +282,23 @@ absl::Status VectorSVS<T>::ModifyRecordImpl(uint64_t internal_id,
         1, &label, reinterpret_cast<const float*>(record.data()));
     if (!add_status.ok()) {
       // Rollback: restore old vector and re-add to SVS index.
-      raw_vectors_[internal_id] = std::move(old_raw);
-      auto restore_status = svs_index_->add(
-          1, &label,
-          reinterpret_cast<const float*>(
-              raw_vectors_[internal_id].data()));
-      if (!restore_status.ok()) {
-        // Failed to restore — vector is lost from SVS graph.
-        // Decrement count to stay consistent.
+      if (!old_raw.empty()) {
+        raw_vectors_[internal_id] = std::move(old_raw);
+        auto restore_status = svs_index_->add(
+            1, &label,
+            reinterpret_cast<const float*>(
+                raw_vectors_[internal_id].data()));
+        if (!restore_status.ok()) {
+          // Failed to restore — vector is lost from SVS graph.
+          // Erase raw_vectors_ entry to stay consistent with graph.
+          raw_vectors_.erase(internal_id);
+          if (num_elements_ > 0) {
+            --num_elements_;
+          }
+        }
+      } else {
+        // No old vector to restore — just clean up.
+        raw_vectors_.erase(internal_id);
         if (num_elements_ > 0) {
           --num_elements_;
         }

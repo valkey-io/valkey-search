@@ -10,7 +10,6 @@ TEST_MARKER = "*" * 100
 from valkey_search_test_case import (
     ValkeySearchClusterTestCase,
     ValkeySearchTestCaseBase,
-    ValkeySearchTestCaseDebugMode
 )
 from valkeytestframework.conftest import resource_port_tracker
 from utils import IndexingTestHelper
@@ -495,7 +494,7 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
 
     return data_set
 
-class TestAnswersCMD(ValkeySearchTestCaseDebugMode):
+class TestAnswersCMD(ValkeySearchTestCaseBase):
     @pytest.mark.parametrize("answers", ["aggregate-answers.pickle.gz", "text-search-answers.pickle.gz"])
     def test_answers(self, answers):
         global client, data_set

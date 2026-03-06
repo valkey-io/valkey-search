@@ -823,7 +823,7 @@ void MetadataManager::RegisterForClusterMessages(ValkeyModuleCtx *ctx) {
 absl::Status MetadataManager::ShowMetadata(
     ValkeyModuleCtx *ctx, [[maybe_unused]] vmsdk::ArgsIterator &itr) const {
   auto metadata = metadata_.Get().DebugString();
-  VMSDK_LOG(WARNING, ctx) << "Metadata: " << metadata;
+  VMSDK_LOG(DEBUG, ctx) << "Metadata: " << metadata;
   ValkeyModule_ReplyWithStringBuffer(ctx, metadata.data(), metadata.size());
   return absl::OkStatus();
 }

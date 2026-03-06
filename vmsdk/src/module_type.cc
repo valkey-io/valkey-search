@@ -22,7 +22,7 @@ namespace vmsdk {
 void DoDeregister(ValkeyModuleCtx *ctx, ValkeyModuleKey *module_key,
                   absl::string_view key) {
   if (ValkeyModule_DeleteKey(module_key) != VALKEYMODULE_OK) {
-    VMSDK_LOG(WARNING, ctx) << "failed to delete redis key " << key;
+    VMSDK_LOG(WARNING, ctx) << "failed to delete Valkey key " << key;
     DCHECK(false);
   }
 }

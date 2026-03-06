@@ -9,7 +9,9 @@
 #define VMSDK_SRC_MRMW_MUTEX_H_
 
 #include <cstdint>
+#include <functional>
 #include <optional>
+#include <vector>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/synchronization/mutex.h"
@@ -67,6 +69,12 @@ class ABSL_LOCKABLE TimeSlicedMRMWMutex {
   void Unlock(bool may_prolong, bool ignore_time_quota) ABSL_UNLOCK_FUNCTION();
   void IncMayProlongCount() ABSL_LOCKS_EXCLUDED(mutex_);
 
+  // Register a callback to be invoked at the end of each write phase
+  // (when active_lock_count_ reaches 0 during write mode).
+  // Thread-safe: can be called at any time.
+  void RegisterEndOfWritePhaseCallback(std::function<void()> callback)
+      ABSL_LOCKS_EXCLUDED(mutex_);
+
  private:
   void Lock(Mode target_mode, bool& may_prolong, bool ignore_time_quota)
       ABSL_LOCKS_EXCLUDED(mutex_);
@@ -113,6 +121,7 @@ class ABSL_LOCKABLE TimeSlicedMRMWMutex {
   static inline Mode GetInverseMode(Mode target_mode) {
     return target_mode == Mode::kLockRead ? Mode::kLockWrite : Mode::kLockRead;
   }
+  void InvokeEndOfWritePhaseCallbacks() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
 
   mutable absl::Mutex mutex_;
   Mode current_mode_ ABSL_GUARDED_BY(mutex_){Mode::kLockRead};
@@ -133,6 +142,8 @@ class ABSL_LOCKABLE TimeSlicedMRMWMutex {
   int switches_ ABSL_GUARDED_BY(mutex_){0};
   uint32_t may_prolong_count_ ABSL_GUARDED_BY(mutex_){0};
   uint32_t ignore_time_quota_count_ ABSL_GUARDED_BY(mutex_){0};
+  std::vector<std::function<void()>> write_phase_callbacks_
+      ABSL_GUARDED_BY(mutex_);
 };
 
 class ABSL_SCOPED_LOCKABLE ReaderMutexLock {

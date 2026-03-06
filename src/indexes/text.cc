@@ -10,6 +10,7 @@
 #include "absl/container/inlined_vector.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "absl/synchronization/mutex.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/text/fuzzy.h"
 #include "src/indexes/text/term.h"
@@ -166,19 +167,22 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
   absl::string_view text_string = GetTextString();
-  // Search for the original word - may or may not exist in corpus
-  bool found_original =
-      TryAddWordKeyIterator(text_index.get(), text_string, key_iterators);
-  // Get stem variants if not exact term search
+  bool found_original;
   uint64_t stem_field_mask =
       field_mask & GetTextIndexSchema()->GetStemTextFieldMask();
+
+  // Search for the original word - may or may not exist in corpus
+  found_original =
+      TryAddWordKeyIterator(text_index.get(), text_string, key_iterators);
+
+  // Get stem variants if not exact term search
   if (!IsExact() && stem_field_mask != 0) {
     // Collect stem variant words (words that also stem to the same form)
     absl::InlinedVector<absl::string_view,
                         indexes::text::kStemVariantsInlineCapacity>
         stem_variants;
     std::string stemmed = GetTextIndexSchema()->GetAllStemVariants(
-        text_string, stem_variants, stem_field_mask, false);
+        text_string, stem_variants, stem_field_mask, true);
     // Search for the stemmed word itself - may or may not exist in corpus
     if (stemmed != text_string) {
       TryAddWordKeyIterator(text_index.get(), stemmed, key_iterators);
@@ -190,6 +194,7 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
       CHECK(found) << "Word in stem tree not found in index - ingestion issue";
     }
   }
+
   // TermIterator will use query_field_mask when has_original is true,
   // and stem_field_mask for stem variants (has_original becomes false after
   // first pass)

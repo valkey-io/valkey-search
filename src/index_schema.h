@@ -168,6 +168,9 @@ class IndexSchema : public KeyspaceEventSubscription,
   void CreateTextIndexSchema() {
     text_index_schema_ = std::make_shared<indexes::text::TextIndexSchema>(
         language_, punctuation_, with_offsets_, stop_words_, min_stem_size_);
+
+    time_sliced_mutex_.RegisterEndOfWritePhaseCallback(
+        [this]() { text_index_schema_->ApplyCachedTreeMutations(); });
   }
   std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
     return text_index_schema_;

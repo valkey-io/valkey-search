@@ -56,3 +56,26 @@ Some special cases of the group queries with INORDER and SLOP are not supported 
 
 ## 3. Fuzzy Search with Levenshtein > 1
 Some queries are excluded due to different behavior in fuzzy search. ValkeySearch uses Damerau-Levenshtein to calculate the distance in fuzzy search. The results produced by Valkey is consistent with the Damerau-Levenshtein rules.
+
+## 4. Escaped character search in JSON
+Some queries are excluded due to different behavior in escaped character search. Any punctuation followed by a backslash will be escaped. This is the standard format in both ingesting documents and performing search.
+   
+   Example:
+
+   ```
+   127.0.0.1:7001> ft.create idx on json prefix 1 json: schema $.body as body text
+   OK
+   127.0.0.1:7001> json.set json:1 $ '{"body":"black\\,white"}'
+   OK
+   127.0.0.1:7001> ft.search idx 'black\\,white'
+   1) (integer) 1
+   2) "json:1"
+   3) 1) "$"
+      2) "{\"body\":\"black\\\\,white\"}"
+   127.0.0.1:7001> ft.search idx "black\\\\,white"
+   1) (integer) 1
+   2) "json:1"
+   3) 1) "$"
+      2) "{\"body\":\"black\\\\,white\"}"
+   ```
+

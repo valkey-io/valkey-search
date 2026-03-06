@@ -33,27 +33,32 @@ TEST_F(ValueTest, TypesTest) {
     bool is_bool;
     bool is_double;
     bool is_string;
+    bool is_vector;
   };
 
-  std::vector<Testcase> t{{Value(), true, false, false, false},
-                          {Value(false), false, true, false, false},
-                          {Value(true), false, true, false, false},
-                          {Value(0.0), false, false, true, false},
-                          {Value(1.0), false, false, true, false},
-                          {Value(std::numeric_limits<double>::infinity()),
-                           false, false, true, false},
-                          {Value(-std::numeric_limits<double>::infinity()),
-                           false, false, true, false},
-                          {Value(std::nan("a nan")), false, false, true, false},
-                          {Value(std::string("")), false, false, false, true},
-                          {Value(std::string("a")), false, false, false, true},
-                          {Value(std::nan("nan")), false, false, true, false}};
+  std::vector<Testcase> t{
+      {Value(), true, false, false, false, false},
+      {Value(false), false, true, false, false, false},
+      {Value(true), false, true, false, false, false},
+      {Value(0.0), false, false, true, false, false},
+      {Value(1.0), false, false, true, false, false},
+      {Value(std::numeric_limits<double>::infinity()), false, false, true,
+       false, false},
+      {Value(-std::numeric_limits<double>::infinity()), false, false, true,
+       false, false},
+      {Value(std::nan("a nan")), false, false, true, false, false},
+      {Value(std::string("")), false, false, false, true, false},
+      {Value(std::string("a")), false, false, false, true, false},
+      {Value(std::nan("nan")), false, false, true, false, false},
+      {Value({Value(1.0), Value(2.0)}), false, false, false, false, true},
+      {Value({}), false, false, false, false, true}};
 
   for (auto& c : t) {
     EXPECT_EQ(c.v.IsNil(), c.is_nil) << "Value is " << c.v;
     EXPECT_EQ(c.v.IsBool(), c.is_bool) << "Value is " << c.v;
     EXPECT_EQ(c.v.IsDouble(), c.is_double) << "Value is " << c.v;
     EXPECT_EQ(c.v.IsString(), c.is_string) << "Value is " << c.v;
+    EXPECT_EQ(c.v.IsVector(), c.is_vector) << "Value is " << c.v;
   };
 }
 
@@ -265,4 +270,150 @@ TEST_F(ValueTest, timetest) {
   EXPECT_EQ(FuncDay(ts), Value(1739491200));
   EXPECT_EQ(FuncMonth(ts), Value(1738281600));
 }
+
+TEST_F(ValueTest, VectorConstruction) {
+  // Test construction from shared_ptr
+  auto vec_ptr = std::make_shared<std::vector<Value>>();
+  vec_ptr->push_back(Value(1.0));
+  vec_ptr->push_back(Value(2.0));
+  vec_ptr->push_back(Value(3.0));
+  Value v1(vec_ptr);
+  EXPECT_FALSE(v1.IsNil());
+  EXPECT_FALSE(v1.IsBool());
+  EXPECT_FALSE(v1.IsDouble());
+  EXPECT_FALSE(v1.IsString());
+
+  // Test construction from initializer_list
+  Value v2({Value(1.0), Value(2.0), Value(3.0)});
+  EXPECT_FALSE(v2.IsNil());
+  EXPECT_FALSE(v2.IsBool());
+  EXPECT_FALSE(v2.IsDouble());
+  EXPECT_FALSE(v2.IsString());
+
+  // Test construction from vector with move semantics
+  std::vector<Value> vec;
+  vec.push_back(Value(1.0));
+  vec.push_back(Value(2.0));
+  vec.push_back(Value(3.0));
+  Value v3(std::move(vec));
+  EXPECT_FALSE(v3.IsNil());
+  EXPECT_FALSE(v3.IsBool());
+  EXPECT_FALSE(v3.IsDouble());
+  EXPECT_FALSE(v3.IsString());
+
+  // Test nested vectors
+  Value nested(
+      {Value({Value(1.0), Value(2.0)}), Value({Value(3.0), Value(4.0)})});
+  EXPECT_FALSE(nested.IsNil());
+  EXPECT_FALSE(nested.IsBool());
+  EXPECT_FALSE(nested.IsDouble());
+  EXPECT_FALSE(nested.IsString());
+}
+
+TEST_F(ValueTest, VectorTypeChecking) {
+  // Test IsVector() on vector values
+  Value vec({Value(1.0), Value(2.0), Value(3.0)});
+  EXPECT_TRUE(vec.IsVector());
+  EXPECT_FALSE(vec.IsNil());
+  EXPECT_FALSE(vec.IsBool());
+  EXPECT_FALSE(vec.IsDouble());
+  EXPECT_FALSE(vec.IsString());
+
+  // Test IsVector() on scalar values
+  EXPECT_FALSE(Value().IsVector());
+  EXPECT_FALSE(Value(true).IsVector());
+  EXPECT_FALSE(Value(42.0).IsVector());
+  EXPECT_FALSE(Value(std::string("test")).IsVector());
+
+  // Test VectorSize() on vector values
+  Value empty_vec({});
+  EXPECT_EQ(empty_vec.VectorSize(), 0);
+
+  Value single_elem({Value(1.0)});
+  EXPECT_EQ(single_elem.VectorSize(), 1);
+
+  Value three_elem({Value(1.0), Value(2.0), Value(3.0)});
+  EXPECT_EQ(three_elem.VectorSize(), 3);
+
+  // Test VectorSize() on scalar values (should return 0)
+  EXPECT_EQ(Value().VectorSize(), 0);
+  EXPECT_EQ(Value(true).VectorSize(), 0);
+  EXPECT_EQ(Value(42.0).VectorSize(), 0);
+  EXPECT_EQ(Value(std::string("test")).VectorSize(), 0);
+
+  // Test IsEmptyVector()
+  EXPECT_TRUE(empty_vec.IsEmptyVector());
+  EXPECT_FALSE(single_elem.IsEmptyVector());
+  EXPECT_FALSE(three_elem.IsEmptyVector());
+
+  // Test IsEmptyVector() on scalar values (should return false)
+  EXPECT_FALSE(Value().IsEmptyVector());
+  EXPECT_FALSE(Value(true).IsEmptyVector());
+  EXPECT_FALSE(Value(42.0).IsEmptyVector());
+  EXPECT_FALSE(Value(std::string("test")).IsEmptyVector());
+
+  // Test nested vectors
+  Value nested({Value({Value(1.0), Value(2.0)}),
+                Value({Value(3.0), Value(4.0), Value(5.0)})});
+  EXPECT_TRUE(nested.IsVector());
+  EXPECT_EQ(nested.VectorSize(), 2);
+  EXPECT_FALSE(nested.IsEmptyVector());
+}
+
+TEST_F(ValueTest, VectorAccessors) {
+  // Test GetVector() on vector values
+  Value vec({Value(1.0), Value(2.0), Value(3.0)});
+  auto vec_ptr = vec.GetVector();
+  ASSERT_NE(vec_ptr, nullptr);
+  EXPECT_EQ(vec_ptr->size(), 3);
+  EXPECT_EQ((*vec_ptr)[0].GetDouble(), 1.0);
+  EXPECT_EQ((*vec_ptr)[1].GetDouble(), 2.0);
+  EXPECT_EQ((*vec_ptr)[2].GetDouble(), 3.0);
+
+  // Test GetVectorElement() with valid indices
+  EXPECT_EQ(vec.GetVectorElement(0).GetDouble(), 1.0);
+  EXPECT_EQ(vec.GetVectorElement(1).GetDouble(), 2.0);
+  EXPECT_EQ(vec.GetVectorElement(2).GetDouble(), 3.0);
+
+  // Test GetVectorElement() with out of bounds index (should throw)
+  EXPECT_THROW(vec.GetVectorElement(3), std::out_of_range);
+  EXPECT_THROW(vec.GetVectorElement(100), std::out_of_range);
+
+  // Test AsVector() on vector values
+  auto opt_vec = vec.AsVector();
+  ASSERT_TRUE(opt_vec.has_value());
+  EXPECT_EQ(opt_vec.value()->size(), 3);
+
+  // Test AsVector() on scalar values (should return nullopt)
+  EXPECT_FALSE(Value().AsVector().has_value());
+  EXPECT_FALSE(Value(true).AsVector().has_value());
+  EXPECT_FALSE(Value(42.0).AsVector().has_value());
+  EXPECT_FALSE(Value(std::string("test")).AsVector().has_value());
+
+  // Test GetVector() returns shared_ptr (efficient copying)
+  Value vec1({Value(1.0), Value(2.0), Value(3.0)});
+  Value vec2 = vec1;  // Copy - intentionally testing shared_ptr semantics
+  auto ptr1 = vec1.GetVector();
+  auto ptr2 = vec2.GetVector();
+  EXPECT_EQ(ptr1, ptr2);  // Should point to same underlying vector
+  // Verify the copy is valid by accessing elements
+  EXPECT_EQ(vec2.GetVectorElement(0).GetDouble(), 1.0);
+
+  // Test nested vector access
+  Value nested(
+      {Value({Value(1.0), Value(2.0)}), Value({Value(3.0), Value(4.0)})});
+  auto outer = nested.GetVector();
+  EXPECT_EQ(outer->size(), 2);
+
+  auto inner1 = (*outer)[0].GetVector();
+  EXPECT_EQ(inner1->size(), 2);
+  EXPECT_EQ((*inner1)[0].GetDouble(), 1.0);
+  EXPECT_EQ((*inner1)[1].GetDouble(), 2.0);
+
+  auto inner2 = (*outer)[1].GetVector();
+  EXPECT_EQ(inner2->size(), 2);
+  EXPECT_EQ((*inner2)[0].GetDouble(), 3.0);
+  EXPECT_EQ((*inner2)[1].GetDouble(), 4.0);
+}
+
 }  // namespace valkey_search::expr

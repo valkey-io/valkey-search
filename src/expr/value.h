@@ -8,8 +8,10 @@
 #define VALKEYSEARCH_EXPR_VALUE_H
 
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <variant>
+#include <vector>
 
 #include "absl/container/inlined_vector.h"
 #include "absl/strings/string_view.h"
@@ -28,8 +30,9 @@ class Value {
    private:
     const char* reason_;
   };
+  using Vector = std::shared_ptr<std::vector<Value>>;
 
-  Value() : value_(Nil()){};
+  Value() : value_(Nil()) {};
   explicit Value(Nil n) : value_(n) {}
   explicit Value(bool b) : value_(b) {}
   explicit Value(int i) : value_(double(i)) {}
@@ -38,17 +41,29 @@ class Value {
   explicit Value(const char* s) : value_(absl::string_view(s)) {}
   explicit Value(std::string&& s) : value_(std::move(s)) {}
 
+  // Vector constructors
+  explicit Value(Vector vec) : value_(vec) {}
+  explicit Value(std::initializer_list<Value> elements)
+      : value_(std::make_shared<std::vector<Value>>(elements)) {}
+  explicit Value(std::vector<Value>&& vec)
+      : value_(std::make_shared<std::vector<Value>>(std::move(vec))) {}
+
   // test for type of Value
   bool IsNil() const;
   bool IsBool() const;
   bool IsDouble() const;
   bool IsString() const;
+  bool IsVector() const;
+  size_t VectorSize() const;
+  bool IsEmptyVector() const;
 
   // When you already know the type, will assert if you're wrong
   Nil GetNil() const;
   bool GetBool() const;
   double GetDouble() const;
   absl::string_view GetStringView() const;
+  Vector GetVector() const;
+  const Value& GetVectorElement(size_t index) const;
 
   // convert to type
   std::optional<Nil> AsNil() const;
@@ -57,6 +72,7 @@ class Value {
   std::optional<int64_t> AsInteger() const;
   absl::string_view AsStringView() const;
   std::string AsString() const;
+  std::optional<Vector> AsVector() const;
 
   bool IsTrue() const {
     auto r = AsBool();
@@ -79,7 +95,8 @@ class Value {
  private:
   mutable std::optional<std::string> storage_;
 
-  std::variant<Nil, bool, double, absl::string_view, std::string> value_;
+  std::variant<Nil, bool, double, absl::string_view, std::string, Vector>
+      value_;
 };
 
 enum Ordering { kLESS, kEQUAL, kGREATER, kUNORDERED };

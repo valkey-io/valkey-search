@@ -43,6 +43,22 @@ bool Value::IsString() const {
          std::get_if<std::string>(&value_);
 }
 
+bool Value::IsVector() const { return std::holds_alternative<Vector>(value_); }
+
+size_t Value::VectorSize() const {
+  if (auto vec_ptr = std::get_if<Vector>(&value_)) {
+    return (*vec_ptr)->size();
+  }
+  return 0;
+}
+
+bool Value::IsEmptyVector() const {
+  if (auto vec_ptr = std::get_if<Vector>(&value_)) {
+    return (*vec_ptr)->empty();
+  }
+  return false;
+}
+
 Value::Nil Value::GetNil() const { return std::get<Nil>(value_); }
 
 bool Value::GetBool() const { return std::get<bool>(value_); }
@@ -158,6 +174,24 @@ std::string Value::AsString() const {
   } else {
     CHECK(false);
   }
+}
+
+std::optional<Value::Vector> Value::AsVector() const {
+  if (auto result = std::get_if<Vector>(&value_)) {
+    return *result;
+  }
+  return std::nullopt;
+}
+
+Value::Vector Value::GetVector() const { return std::get<Vector>(value_); }
+
+const Value& Value::GetVectorElement(size_t index) const {
+  auto vec = GetVector();
+  if (index >= vec->size()) {
+    // This will throw std::out_of_range
+    return vec->at(index);
+  }
+  return (*vec)[index];
 }
 
 std::ostream& operator<<(std::ostream& os, const Value& v) {
@@ -495,7 +529,7 @@ Value FuncConcat(const absl::InlinedVector<Value, 4>& values) {
     if (!ts) {                                            \
       return Value(Value::Nil("timestamp not a number")); \
     }                                                     \
-    time_t time = (time_t) * ts;                          \
+    time_t time = (time_t)*ts;                            \
     struct ::tm tm;                                       \
     gmtime_r(&time, &tm);                                 \
     return Value(double(tm.field + (adjustment)));        \

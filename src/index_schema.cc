@@ -335,6 +335,9 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexSchema::GetIndex(
     absl::string_view attribute_alias) const {
   auto itr = attributes_.find(std::string{attribute_alias});
   if (ABSL_PREDICT_FALSE(itr == attributes_.end())) {
+    // Fallback: treat input as an identifier and resolve to alias
+    auto *attr = FindAttributeByIdentifier(attribute_alias);
+    if (attr) return attr->GetIndex();
     return absl::NotFoundError(
         absl::StrCat("Index field `", attribute_alias, "` does not exist"));
   }
@@ -408,7 +411,10 @@ absl::flat_hash_set<std::string> IndexSchema::GetTextIdentifiersByFieldMask(
 absl::StatusOr<std::string> IndexSchema::GetIdentifier(
     absl::string_view attribute_alias) const {
   auto itr = attributes_.find(std::string{attribute_alias});
-  if (itr == attributes_.end()) {
+  if (ABSL_PREDICT_FALSE(itr == attributes_.end())) {
+    // Fallback: treat input as an identifier and resolve to alias
+    auto *attr = FindAttributeByIdentifier(attribute_alias);
+    if (attr) return attr->GetIdentifier();
     return absl::NotFoundError(
         absl::StrCat("Index field `", attribute_alias, "` does not exist"));
   }
@@ -441,10 +447,23 @@ absl::StatusOr<std::string> IndexSchema::GetAlias(
   return itr->second;
 }
 
+// Looks up an attribute by treating input as an identifier.
+// Returns nullptr if the identifier is not found.
+const Attribute *IndexSchema::FindAttributeByIdentifier(
+    absl::string_view identifier) const {
+  auto alias = GetAlias(identifier);
+  if (!alias.ok()) return nullptr;
+  auto itr = attributes_.find(alias.value());
+  return itr != attributes_.end() ? &itr->second : nullptr;
+}
+
 absl::StatusOr<vmsdk::UniqueValkeyString> IndexSchema::DefaultReplyScoreAs(
     absl::string_view attribute_alias) const {
   auto itr = attributes_.find(std::string{attribute_alias});
   if (ABSL_PREDICT_FALSE(itr == attributes_.end())) {
+    // Fallback: treat input as an identifier and resolve to alias
+    auto *attr = FindAttributeByIdentifier(attribute_alias);
+    if (attr) return attr->DefaultReplyScoreAs();
     return absl::NotFoundError(
         absl::StrCat("Index field `", attribute_alias, "` does not exist"));
   }

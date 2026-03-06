@@ -16,23 +16,12 @@ set(STEMMER_SOURCES
   ${SNOWBALL_SOURCE_DIR}/src_c/stem_UTF_8_english.c
 )
 
-# Create the snowball library
-add_library(snowball STATIC ${LIBSTEMMER_SOURCES} ${STEMMER_SOURCES})
+# Create the snowball library using valkey_search function to inherit optimization flags
+valkey_search_add_static_library(snowball "${LIBSTEMMER_SOURCES};${STEMMER_SOURCES}")
 
 # Set include directories
-target_include_directories(snowball PUBLIC
-  ${SNOWBALL_SOURCE_DIR}/include
-)
+target_include_directories(snowball PUBLIC ${SNOWBALL_SOURCE_DIR}/include)
+target_include_directories(snowball PRIVATE ${SNOWBALL_SOURCE_DIR})
 
-target_include_directories(snowball PRIVATE
-  ${SNOWBALL_SOURCE_DIR}
-)
-
-# Set compile flags to match the original build
-target_compile_options(snowball PRIVATE -w) # Suppress warnings from third-party code
-
-# Export the target
-set_target_properties(snowball PROPERTIES
-  POSITION_INDEPENDENT_CODE ON
-  CXX_STANDARD 20
-)
+# Suppress warnings from third-party code
+target_compile_options(snowball PRIVATE -w)

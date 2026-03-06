@@ -161,23 +161,15 @@ echo "Updating CMakeLists.txt..."
     done
     echo ")"
     echo
-    echo "# Create the snowball library"
-    echo "add_library(snowball STATIC \${LIBSTEMMER_SOURCES} \${STEMMER_SOURCES})"
+    echo "# Create the snowball library using valkey_search function to inherit optimization flags"
+    echo "valkey_search_add_static_library(snowball \"\${LIBSTEMMER_SOURCES};\${STEMMER_SOURCES}\")"
     echo
     echo "# Set include directories"
-    echo "target_include_directories(snowball PUBLIC" 
-    echo "  \${SNOWBALL_SOURCE_DIR}/include"
-    echo "  \${SNOWBALL_SOURCE_DIR}"
-    echo ")"
+    echo "target_include_directories(snowball PUBLIC \${SNOWBALL_SOURCE_DIR}/include)"
+    echo "target_include_directories(snowball PRIVATE \${SNOWBALL_SOURCE_DIR})"
     echo
-    echo "# Set compile flags to match the original build"
-    echo "target_compile_options(snowball PRIVATE -w) # Suppress warnings from third-party code"
-    echo
-    echo "# Export the target"
-    echo "set_target_properties(snowball PROPERTIES"
-    echo "  POSITION_INDEPENDENT_CODE ON"
-    echo "  CXX_STANDARD 20"
-    echo ")"
+    echo "# Suppress warnings from third-party code"
+    echo "target_compile_options(snowball PRIVATE -w)"
 } > CMakeLists.txt
 
 rm -rf "$TEMP_DIR"

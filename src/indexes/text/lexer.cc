@@ -146,7 +146,7 @@ absl::StatusOr<std::vector<Lexer::Token>> Lexer::Tokenize(
       NormalizeLowerCaseInPlace(word);
 
       if (IsStopWord(word)) {
-        continue;               // Skip stop words
+        continue;  // Skip stop words
       }
 
       if (stemming_enabled) {

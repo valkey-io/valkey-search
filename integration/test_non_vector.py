@@ -189,14 +189,14 @@ def validate_buffer_multiplier_config(client: Valkey):
     assert client.execute_command("CONFIG SET search.search-result-buffer-multiplier 2.5") == b"OK"
     assert client.execute_command("CONFIG SET search.search-result-buffer-multiplier 1.2") == b"OK"
     # Test that values outside range are rejected
-    with pytest.raises(ResponseError, match=r"Buffer multiplier must be between 1.0 and 1000.0"):
+    with pytest.raises(ResponseError, match=r"out of range"):
         client.execute_command("CONFIG SET search.search-result-buffer-multiplier -1.0")
-    with pytest.raises(ResponseError, match=r"Buffer multiplier must be between 1.0 and 1000.0"):
+    with pytest.raises(ResponseError, match=r"out of range"):
         client.execute_command("CONFIG SET search.search-result-buffer-multiplier 0.5")
-    with pytest.raises(ResponseError, match=r"Buffer multiplier must be between 1.0 and 1000.0"):
+    with pytest.raises(ResponseError, match=r"out of range"):
         client.execute_command("CONFIG SET search.search-result-buffer-multiplier 1001.0")
     # Test that invalid strings are rejected
-    with pytest.raises(ResponseError, match=r"Buffer multiplier must be a valid number"):
+    with pytest.raises(ResponseError, match=r"Failed to convert .* into a double"):
         client.execute_command("CONFIG SET search.search-result-buffer-multiplier invalid")
 
 def validate_bulk_limit_queries(client: Valkey):

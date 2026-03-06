@@ -259,6 +259,7 @@ class ValkeySearchTestCaseBase(ValkeySearchTestCaseCommon):
         yield
 
         # Cleanup
+        self.client.execute_command("FLUSHALL", "SYNC") # Prevent ASAN false reporting
         ReplicationGroup.cleanup(self.rg)
 
     def get_config_file_lines(self, testdir, port) -> List[str]:
@@ -471,6 +472,8 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
         yield
 
         # Cleanup
+        for rg in self.replication_groups:
+            rg.primary.client.execute_command("FLUSHALL", "SYNC") # Prevent ASAN false reporting
         for rg in self.replication_groups:
             ReplicationGroup.cleanup(rg)
 

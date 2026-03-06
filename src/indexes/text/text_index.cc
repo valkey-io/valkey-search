@@ -250,11 +250,8 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
       }
       bool is_new_word = !existing;
 
-      {
-        NestedMemoryScope posting_scope{metadata_.posting_memory_pool_};
-        updated_target =
-            AddKeyToPostings(std::move(existing), key, flat_map, &metadata_);
-      }
+      updated_target =
+          AddKeyToPostings(std::move(existing), key, flat_map, &metadata_);
 
       if (is_new_word) {
         absl::WriterMutexLock tree_lock(&text_index_mutex_);
@@ -316,11 +313,8 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
       }
 
       InvasivePtr<Postings> updated_target;
-      {
-        NestedMemoryScope posting_scope{metadata_.posting_memory_pool_};
-        updated_target =
-            RemoveKeyFromPostings(std::move(existing), key, &metadata_);
-      }
+      updated_target =
+          RemoveKeyFromPostings(std::move(existing), key, &metadata_);
 
       if (!updated_target) {
         absl::WriterMutexLock tree_lock(&text_index_mutex_);

@@ -176,7 +176,7 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
     token_positions = &in_progress_key_updates_[key];
   }
   for (uint32_t i = 0; i < tokens->size(); ++i) {
-    const auto &token = tokens.value()[i];
+    const auto &token = (*tokens)[i];
     uint32_t position =
         with_offsets_ ? i
                       : 0;  // If positional info is disabled we default to 0
@@ -332,9 +332,9 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
   if (!empty_words.empty() && stem_text_field_mask_) {
     absl::WriterMutexLock stem_lock(&stem_tree_mutex_);
     for (const auto &word : empty_words) {
-      std::string stemmed =
-          lexer_.StemWord(word, lexer_.GetStemmer(), min_stem_size_);
-      if (stemmed != word) {
+      std::string stem(word);
+      lexer_.StemWordInPlace(stem, lexer_.GetStemmer(), min_stem_size_);
+      if (stem != word) {
         auto stem_remove_fn = CreateSimpleTargetMutateFn<StemParents>(
             [&word](InvasivePtr<StemParents> existing) {
               // The term may not exist in the stem tree if it was only present
@@ -347,7 +347,7 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
               }
               return existing;
             });
-        stem_tree_.MutateTarget(stemmed, stem_remove_fn);
+        stem_tree_.MutateTarget(stem, stem_remove_fn);
       }
     }
   }
@@ -371,8 +371,8 @@ std::string TextIndexSchema::GetAllStemVariants(
         &words_to_search,
     uint64_t stem_enabled_mask, bool lock_needed) {
   // Stem the search term
-  std::string stemmed =
-      lexer_.StemWord(std::string(search_term), lexer_.GetStemmer());
+  std::string stemmed(search_term);
+  lexer_.StemWordInPlace(stemmed, lexer_.GetStemmer());
 
   std::optional<absl::ReaderMutexLock> stem_guard;
   if (lock_needed) stem_guard.emplace(&stem_tree_mutex_);

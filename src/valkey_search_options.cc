@@ -455,6 +455,17 @@ static auto async_fanout_threshold =
         kMaximumAsyncFanoutThreshold)  // max threshold (10k)
         .Build();
 
+constexpr absl::string_view kRaxTargetMutexPoolSizeConfig{
+    "text-rax-target-mutex-pool-size"};
+constexpr uint32_t kDefaultRaxTargetMutexPoolSize{256};
+constexpr uint32_t kMinimumRaxTargetMutexPoolSize{1};
+constexpr uint32_t kMaximumRaxTargetMutexPoolSize{65536};
+static auto rax_target_mutex_pool_size =
+    config::NumberBuilder(
+        kRaxTargetMutexPoolSizeConfig, kDefaultRaxTargetMutexPoolSize,
+        kMinimumRaxTargetMutexPoolSize, kMaximumRaxTargetMutexPoolSize)
+        .Build();
+
 /// Register the "--max-nonvector-search-results-fetched" flag. Controls the
 /// maximum number of results to fetch in background threads before content
 /// fetching on non-vector (numeric/tag/text) query paths. This controls
@@ -584,6 +595,10 @@ vmsdk::config::Number& GetFanoutUniformityMinIndexSize() {
 
 vmsdk::config::Number& GetAsyncFanoutThreshold() {
   return dynamic_cast<vmsdk::config::Number&>(*async_fanout_threshold);
+}
+
+config::Number& GetRaxTargetMutexPoolSize() {
+  return dynamic_cast<config::Number&>(*rax_target_mutex_pool_size);
 }
 
 vmsdk::config::Number& GetMaxNonVectorSearchResultsFetched() {

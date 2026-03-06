@@ -7,6 +7,7 @@
 #include "src/expr/value.h"
 
 #include <cmath>
+#include <random>
 
 #include "gtest/gtest.h"
 
@@ -414,6 +415,74 @@ TEST_F(ValueTest, VectorAccessors) {
   EXPECT_EQ(inner2->size(), 2);
   EXPECT_EQ((*inner2)[0].GetDouble(), 3.0);
   EXPECT_EQ((*inner2)[1].GetDouble(), 4.0);
+}
+
+TEST_F(ValueTest, vector_arithmetic) {
+  // Test vector-scalar addition
+  Value vec1({Value(1.0), Value(2.0), Value(3.0)});
+  Value scalar(5.0);
+  Value result1 = FuncAdd(vec1, scalar);
+  ASSERT_TRUE(result1.IsVector());
+  EXPECT_EQ(result1.VectorSize(), 3);
+  EXPECT_EQ(result1.GetVectorElement(0).GetDouble(), 6.0);
+  EXPECT_EQ(result1.GetVectorElement(1).GetDouble(), 7.0);
+  EXPECT_EQ(result1.GetVectorElement(2).GetDouble(), 8.0);
+
+  // Test scalar-vector addition
+  Value result2 = FuncAdd(scalar, vec1);
+  ASSERT_TRUE(result2.IsVector());
+  EXPECT_EQ(result2.VectorSize(), 3);
+  EXPECT_EQ(result2.GetVectorElement(0).GetDouble(), 6.0);
+  EXPECT_EQ(result2.GetVectorElement(1).GetDouble(), 7.0);
+  EXPECT_EQ(result2.GetVectorElement(2).GetDouble(), 8.0);
+
+  // Test vector-vector addition
+  Value vec2({Value(10.0), Value(20.0), Value(30.0)});
+  Value result3 = FuncAdd(vec1, vec2);
+  ASSERT_TRUE(result3.IsVector());
+  EXPECT_EQ(result3.VectorSize(), 3);
+  EXPECT_EQ(result3.GetVectorElement(0).GetDouble(), 11.0);
+  EXPECT_EQ(result3.GetVectorElement(1).GetDouble(), 22.0);
+  EXPECT_EQ(result3.GetVectorElement(2).GetDouble(), 33.0);
+
+  // Test vector-scalar subtraction
+  Value result4 = FuncSub(vec1, Value(1.0));
+  ASSERT_TRUE(result4.IsVector());
+  EXPECT_EQ(result4.VectorSize(), 3);
+  EXPECT_EQ(result4.GetVectorElement(0).GetDouble(), 0.0);
+  EXPECT_EQ(result4.GetVectorElement(1).GetDouble(), 1.0);
+  EXPECT_EQ(result4.GetVectorElement(2).GetDouble(), 2.0);
+
+  // Test vector-scalar multiplication
+  Value result5 = FuncMul(vec1, Value(2.0));
+  ASSERT_TRUE(result5.IsVector());
+  EXPECT_EQ(result5.VectorSize(), 3);
+  EXPECT_EQ(result5.GetVectorElement(0).GetDouble(), 2.0);
+  EXPECT_EQ(result5.GetVectorElement(1).GetDouble(), 4.0);
+  EXPECT_EQ(result5.GetVectorElement(2).GetDouble(), 6.0);
+
+  // Test vector-scalar division
+  Value result6 = FuncDiv(vec1, Value(2.0));
+  ASSERT_TRUE(result6.IsVector());
+  EXPECT_EQ(result6.VectorSize(), 3);
+  EXPECT_EQ(result6.GetVectorElement(0).GetDouble(), 0.5);
+  EXPECT_EQ(result6.GetVectorElement(1).GetDouble(), 1.0);
+  EXPECT_EQ(result6.GetVectorElement(2).GetDouble(), 1.5);
+
+  // Test vector-scalar power
+  Value result7 = FuncPower(vec1, Value(2.0));
+  ASSERT_TRUE(result7.IsVector());
+  EXPECT_EQ(result7.VectorSize(), 3);
+  EXPECT_EQ(result7.GetVectorElement(0).GetDouble(), 1.0);
+  EXPECT_EQ(result7.GetVectorElement(1).GetDouble(), 4.0);
+  EXPECT_EQ(result7.GetVectorElement(2).GetDouble(), 9.0);
+
+  // Test length mismatch error
+  Value vec3({Value(1.0), Value(2.0)});
+  Value result8 = FuncAdd(vec1, vec3);
+  ASSERT_TRUE(result8.IsNil());
+  std::string error_msg = result8.GetNil().GetReason();
+  EXPECT_NE(error_msg.find("Length mismatch"), std::string::npos);
 }
 
 }  // namespace valkey_search::expr

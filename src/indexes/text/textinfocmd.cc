@@ -150,7 +150,7 @@ absl::Status IndexSchema::TextInfoCmd(ValkeyModuleCtx* ctx,
     VMSDK_ASSIGN_OR_RETURN(auto result, lexer.Tokenize(text, false, 0));
     ValkeyModule_ReplyWithArray(ctx, result.size());
     for (auto& token : result) {
-      ValkeyModule_ReplyWithStringBuffer(ctx, token.data(), token.size());
+      ValkeyModule_ReplyWithStringBuffer(ctx, token.text.data(), token.text.size());
     }
   } else {
     return absl::InvalidArgumentError(

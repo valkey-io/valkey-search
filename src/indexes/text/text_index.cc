@@ -160,31 +160,51 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
   }
 
   // Tokenize and collect stem mappings
-  auto tokens = lexer_.Tokenize(data, stem, min_stem_size_, stem_mappings_ptr);
+  auto tokens_res = lexer_.Tokenize(data, stem, min_stem_size_, stem_mappings_ptr);
 
-  if (!tokens.ok()) {
-    if (tokens.status().code() == absl::StatusCode::kInvalidArgument) {
+  if (!tokens_res.ok()) {
+    if (tokens_res.status().code() == absl::StatusCode::kInvalidArgument) {
       return false;  // UTF-8 errors → hash_indexing_failures
     }
-    return tokens.status();
+    return tokens_res.status();
   }
 
-  // Map tokens -> positions -> field-masks
-  TokenPositions *token_positions;
+  const auto& tokens = tokens_res.value();
+  if (tokens.empty()) return true;
+
+  // 2. Batch Merge (Inside the Lock)
   {
     std::lock_guard<std::mutex> guard(in_progress_key_updates_mutex_);
-    token_positions = &in_progress_key_updates_[key];
-  }
-  for (uint32_t i = 0; i < tokens->size(); ++i) {
-    const auto &token = (*tokens)[i];
-    uint32_t position =
-        with_offsets_ ? i
-                      : 0;  // If positional info is disabled we default to 0
-    auto &[positions, suffix_eligible] = (*token_positions)[token];
-    if (suffix) suffix_eligible = true;
-    auto [pos_it, _] =
-        positions.try_emplace(position, FieldMask(num_text_fields_));
-    pos_it->second.SetField(text_field_number);
+    auto& token_map = in_progress_key_updates_[key];
+
+    // Iterator cache for repeated tokens
+    TokenPositions::iterator entry_it = token_map.end();
+    absl::string_view last_text;
+
+    for (const auto& token : tokens) {
+      // If the word is the same as the previous one, we skip the hash lookup.
+      if (entry_it == token_map.end() || token.text != last_text) {
+        // Optimization: Only convert string_view to string if we actually insert
+        auto it = token_map.find(token.text);
+        if (it == token_map.end()) {
+          it = token_map.emplace(token.text, std::pair<PositionMap, bool>()).first;
+        }
+        entry_it = it;
+        last_text = token.text;
+      }
+
+      auto& [pos_map, suffix_eligible] = entry_it->second;
+      if (suffix) suffix_eligible = true;
+      
+      uint32_t position = with_offsets_ ? token.position : 0;
+      
+      // Use find/emplace to avoid constructing FieldMask unnecessarily
+      auto pos_it = pos_map.find(position);
+      if (pos_it == pos_map.end()) {
+        pos_it = pos_map.emplace(position, FieldMask(num_text_fields_)).first;
+      }
+      pos_it->second.SetField(text_field_number);
+    }
   }
 
   return true;

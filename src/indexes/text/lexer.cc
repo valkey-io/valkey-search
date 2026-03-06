@@ -82,7 +82,7 @@ Lexer::Lexer(data_model::Language language, const std::string& punctuation,
       punct_bitmap_(BuildPunctuationBitmap(punctuation)),
       stop_words_set_(BuildStopWordsSet(stop_words)) {}
 
-absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
+absl::StatusOr<std::vector<Lexer::Token>> Lexer::Tokenize(
     absl::string_view text, bool stemming_enabled, uint32_t min_stem_size,
     absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>*
         stem_mappings) const {
@@ -95,12 +95,11 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
 
   // Get or create the thread-local stemmer for this lexer's language
   sb_stemmer* stemmer = stemming_enabled ? GetStemmer() : nullptr;
-  // Deque grows by adding new blocks—avoids the cost of copying
-  // existing elements during reallocation.
-  std::vector<std::string> tokens;
+  std::vector<Lexer::Token> tokens;
   std::string word;
   word.reserve(64);
   size_t pos = 0;
+  uint32_t current_token_index = 0;
   while (pos < text.size()) {
     // Skip leading punctuation, but check for backslash escape sequences
     while (pos < text.size() && IsPunctuation(text[pos])) {
@@ -147,16 +146,21 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
       NormalizeLowerCaseInPlace(word);
 
       if (IsStopWord(word)) {
+        current_token_index++; // Maintain positional offset
         continue;  // Skip stop words
       }
 
       if (stemming_enabled) {
         UpdateStemMap(word, stemmer, min_stem_size, *stem_mappings);
       }
-      tokens.push_back(std::move(word));
-      word.clear();
+      tokens.push_back({std::move(word), current_token_index++});
     }
   }
+  // Final Sort: Improve Cache Locality.
+  // Groups identical words to ensure linear access during map insertion.
+  std::sort(tokens.begin(), tokens.end(), [](const Lexer::Token& a, const Lexer::Token& b) {
+    return a.text < b.text;
+  });
 
   return tokens;
 }

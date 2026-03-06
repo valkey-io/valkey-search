@@ -6,8 +6,8 @@
 
 #include "src/indexes/text/lexer.h"
 
-#include <deque>
 #include <memory>
+#include <vector>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
@@ -82,7 +82,7 @@ Lexer::Lexer(data_model::Language language, const std::string& punctuation,
       punct_bitmap_(BuildPunctuationBitmap(punctuation)),
       stop_words_set_(BuildStopWordsSet(stop_words)) {}
 
-absl::StatusOr<std::deque<std::string>> Lexer::Tokenize(
+absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
     absl::string_view text, bool stemming_enabled, uint32_t min_stem_size,
     absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>*
         stem_mappings) const {
@@ -97,7 +97,7 @@ absl::StatusOr<std::deque<std::string>> Lexer::Tokenize(
   sb_stemmer* stemmer = stemming_enabled ? GetStemmer() : nullptr;
   // Deque grows by adding new blocks—avoids the cost of copying
   // existing elements during reallocation.
-  std::deque<std::string> tokens;
+  std::vector<std::string> tokens;
   std::string word;
   word.reserve(64);
   size_t pos = 0;

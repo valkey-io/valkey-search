@@ -157,17 +157,18 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
     std::lock_guard<std::mutex> stem_guard(in_progress_stem_mappings_mutex_);
     stem_mappings_ptr = &in_progress_stem_mappings_[key];
   }
+  // Tokenize and collect stem mappings
   auto tokens_res =
       lexer_.Tokenize(data, stem, min_stem_size_, stem_mappings_ptr);
   if (!tokens_res.ok()) {
     if (tokens_res.status().code() == absl::StatusCode::kInvalidArgument) {
-      return false;  // Automatically converts to StatusOr<bool>(false)
+      return false;
     }
-    return tokens_res
-        .status();  // Automatically converts to StatusOr<bool>(error_status)
+    return tokens_res.status();
   }
   const auto &tokens = tokens_res.value();
   if (tokens.empty()) return true;
+  // Map tokens -> positions -> field-masks
   TokenPositions *token_positions;
   {
     std::lock_guard<std::mutex> guard(in_progress_key_updates_mutex_);
@@ -180,7 +181,6 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
     // Because 'tokens' is sorted, identical words are adjacent.
     // We only perform a hash lookup when the word actually changes.
     if (entry_it == token_positions->end() || token.text != last_text) {
-      // try_emplace is faster than find + insert
       entry_it = token_positions->try_emplace(token.text).first;
       last_text = token.text;
     }

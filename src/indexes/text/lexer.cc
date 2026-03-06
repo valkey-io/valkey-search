@@ -146,7 +146,6 @@ absl::StatusOr<std::vector<Lexer::Token>> Lexer::Tokenize(
       NormalizeLowerCaseInPlace(word);
 
       if (IsStopWord(word)) {
-        current_token_index++;  // Maintain positional offset
         continue;               // Skip stop words
       }
 

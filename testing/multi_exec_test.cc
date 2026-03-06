@@ -104,9 +104,16 @@ class MultiExecTest : public ValkeySearchTest {
 TEST_F(MultiExecTest, Basic) {
   EXPECT_CALL(*kMockValkeyModule, GetContextFlags(testing::_))
       .WillRepeatedly(testing::Return(VALKEYMODULE_CTX_FLAGS_MULTI));
+  // First call is the MULTI/EXEC batch flush callback — capture it.
+  // Subsequent calls are ValkeyStringDeleter string frees from worker threads
+  // (RunByMain routes VM_FreeString via EventLoopAddOneShot to avoid unsafe
+  // cross-thread module API access) — tolerate but don't capture.
   EXPECT_CALL(*kMockValkeyModule, EventLoopAddOneShot(testing::_, testing::_))
       .WillOnce([this](ValkeyModuleEventLoopOneShotFunc func, void *data) {
         cb_data = data;
+        return VALKEYMODULE_OK;
+      })
+      .WillRepeatedly([](ValkeyModuleEventLoopOneShotFunc, void *) {
         return VALKEYMODULE_OK;
       });
   std::vector<std::string> expected_keys;
@@ -180,9 +187,16 @@ TEST_F(MultiExecTest, TrackMutationOverride) {
   uint64_t initial_batches = metrics.ingest_total_batches;
 
   VMSDK_EXPECT_OK(mutations_thread_pool->SuspendWorkers());
+  // First call is the blocked client flush callback — capture it.
+  // Subsequent calls are ValkeyStringDeleter string frees from worker threads
+  // (RunByMain routes VM_FreeString via EventLoopAddOneShot to avoid unsafe
+  // cross-thread module API access) — tolerate but don't capture.
   EXPECT_CALL(*kMockValkeyModule, EventLoopAddOneShot(testing::_, testing::_))
       .WillOnce([this](ValkeyModuleEventLoopOneShotFunc func, void *data) {
         cb_data = data;
+        return VALKEYMODULE_OK;
+      })
+      .WillRepeatedly([](ValkeyModuleEventLoopOneShotFunc, void *) {
         return VALKEYMODULE_OK;
       });
   EXPECT_CALL(*kMockValkeyModule, GetContextFlags(testing::_))
@@ -260,8 +274,14 @@ TEST_F(MultiExecTest, TrackMutationOverride) {
 }
 
 TEST_F(MultiExecTest, FtSearchMulti) {
+  // EXPECT_CALL(*kMockValkeyModule, EventLoopAddOneShot(testing::_,
+  // testing::_))
+  //     .Times(0);
+  // ValkeyStringDeleter now routes VM_FreeString through RunByMain
+  // (->EventLoopAddOneShot) from worker threads. FT.SEARCH correctness in
+  // MULTI context is still enforced by BlockClient/UnblockClient Times(0).
   EXPECT_CALL(*kMockValkeyModule, EventLoopAddOneShot(testing::_, testing::_))
-      .Times(0);
+      .WillRepeatedly(testing::Return(VALKEYMODULE_OK));
   VMSDK_EXPECT_OK(
       ValkeySearch::Instance().GetReaderThreadPool()->SuspendWorkers());
   EXPECT_CALL(

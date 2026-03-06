@@ -465,18 +465,6 @@ uint64_t SchemaManager::GetTotalIndexedDocuments() const {
   }
   return num_hash_keys;
 }
-uint64_t SchemaManager::GetTotalTextMemoryUsage() const {
-  absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  uint64_t total = 0;
-  for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
-    for (const auto &[name, schema] : schema_map) {
-      if (schema->GetTextIndexSchema()) {
-        total += schema->GetTextIndexSchema()->GetTotalTextIndexMemoryUsage();
-      }
-    }
-  }
-  return total;
-}
 bool SchemaManager::IsIndexingInProgress() const {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   for (const auto &[db_num, schema_map] : db_to_index_schemas_) {

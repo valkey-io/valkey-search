@@ -197,10 +197,12 @@ class TextIndexSchema {
   bool track_subtree_item_counts_ = false;
 
  public:
-  // FT.INFO memory stats for text index
+  // FT.INFO stats for text index
   uint64_t GetTotalPositions() const;
   uint64_t GetNumUniqueTerms() const;
   uint64_t GetTotalTermFrequency() const;
+  // TODO: Implement the following APIs when we want granular memory metrics for
+  // text index components
   uint64_t GetPostingsMemoryUsage() const;
   uint64_t GetRadixTreeMemoryUsage() const;
   uint64_t GetPositionMemoryUsage() const;

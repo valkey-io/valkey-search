@@ -151,60 +151,46 @@ TextIndexSchema::TextIndexSchema(data_model::Language language,
 absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
     const InternedStringPtr &key, absl::string_view data,
     size_t text_field_number, bool stem, bool suffix) {
-  // Get or create stem mappings for this key if stemming is enabled
   absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>
       *stem_mappings_ptr = nullptr;
   if (stem) {
     std::lock_guard<std::mutex> stem_guard(in_progress_stem_mappings_mutex_);
     stem_mappings_ptr = &in_progress_stem_mappings_[key];
   }
-
-  // Tokenize and collect stem mappings
-  auto tokens_res = lexer_.Tokenize(data, stem, min_stem_size_, stem_mappings_ptr);
-
+  auto tokens_res =
+      lexer_.Tokenize(data, stem, min_stem_size_, stem_mappings_ptr);
   if (!tokens_res.ok()) {
     if (tokens_res.status().code() == absl::StatusCode::kInvalidArgument) {
-      return false;  // UTF-8 errors → hash_indexing_failures
+      return false;  // Automatically converts to StatusOr<bool>(false)
     }
-    return tokens_res.status();
+    return tokens_res
+        .status();  // Automatically converts to StatusOr<bool>(error_status)
   }
-
-  const auto& tokens = tokens_res.value();
+  const auto &tokens = tokens_res.value();
   if (tokens.empty()) return true;
-
-  // 2. Batch Merge (Inside the Lock)
+  TokenPositions *token_positions;
   {
     std::lock_guard<std::mutex> guard(in_progress_key_updates_mutex_);
-    auto& token_map = in_progress_key_updates_[key];
-
-    // Iterator cache for repeated tokens
-    TokenPositions::iterator entry_it = token_map.end();
-    absl::string_view last_text;
-
-    for (const auto& token : tokens) {
-      // If the word is the same as the previous one, we skip the hash lookup.
-      if (entry_it == token_map.end() || token.text != last_text) {
-        // Optimization: Only convert string_view to string if we actually insert
-        auto it = token_map.find(token.text);
-        if (it == token_map.end()) {
-          it = token_map.emplace(token.text, std::pair<PositionMap, bool>()).first;
-        }
-        entry_it = it;
-        last_text = token.text;
-      }
-
-      auto& [pos_map, suffix_eligible] = entry_it->second;
-      if (suffix) suffix_eligible = true;
-      
-      uint32_t position = with_offsets_ ? token.position : 0;
-      
-      // Use find/emplace to avoid constructing FieldMask unnecessarily
-      auto pos_it = pos_map.find(position);
-      if (pos_it == pos_map.end()) {
-        pos_it = pos_map.emplace(position, FieldMask(num_text_fields_)).first;
-      }
-      pos_it->second.SetField(text_field_number);
+    token_positions = &in_progress_key_updates_[key];
+  }
+  // Iterator Caching relying on the sorted tokens helps with cache locality.
+  TokenPositions::iterator entry_it = token_positions->end();
+  absl::string_view last_text;
+  for (const auto &token : tokens) {
+    // Because 'tokens' is sorted, identical words are adjacent.
+    // We only perform a hash lookup when the word actually changes.
+    if (entry_it == token_positions->end() || token.text != last_text) {
+      // try_emplace is faster than find + insert
+      entry_it = token_positions->try_emplace(token.text).first;
+      last_text = token.text;
     }
+    auto &[pos_map, suffix_eligible] = entry_it->second;
+    if (suffix) suffix_eligible = true;
+    // Use the positional index preserved by the Lexer during tokenization
+    uint32_t position = with_offsets_ ? token.position : 0;
+    // PositionMap update: Use try_emplace for internal efficiency
+    auto [pos_it, _] = pos_map.try_emplace(position, num_text_fields_);
+    pos_it->second.SetField(text_field_number);
   }
 
   return true;

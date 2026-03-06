@@ -146,8 +146,8 @@ absl::StatusOr<std::vector<Lexer::Token>> Lexer::Tokenize(
       NormalizeLowerCaseInPlace(word);
 
       if (IsStopWord(word)) {
-        current_token_index++; // Maintain positional offset
-        continue;  // Skip stop words
+        current_token_index++;  // Maintain positional offset
+        continue;               // Skip stop words
       }
 
       if (stemming_enabled) {
@@ -158,9 +158,10 @@ absl::StatusOr<std::vector<Lexer::Token>> Lexer::Tokenize(
   }
   // Final Sort: Improve Cache Locality.
   // Groups identical words to ensure linear access during map insertion.
-  std::sort(tokens.begin(), tokens.end(), [](const Lexer::Token& a, const Lexer::Token& b) {
-    return a.text < b.text;
-  });
+  std::sort(tokens.begin(), tokens.end(),
+            [](const Lexer::Token& a, const Lexer::Token& b) {
+              return a.text < b.text;
+            });
 
   return tokens;
 }

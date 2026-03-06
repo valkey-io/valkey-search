@@ -70,7 +70,11 @@ TEST_P(LexerParameterizedTest, TokenizeTest) {
       test_case.stemming_enabled ? &stem_mappings : nullptr);
 
   ASSERT_TRUE(result.ok()) << "Test case: " << test_case.description;
-  std::vector<std::string> result_vector(result->begin(), result->end());
+  std::vector<std::string> result_vector;
+  result_vector.reserve(result->size());
+  for (const auto& token : *result) {
+    result_vector.push_back(token.text);
+  }
   EXPECT_EQ(result_vector, test_case.expected)
       << "Test case: " << test_case.description;
 }
@@ -172,7 +176,11 @@ TEST_F(LexerTest, LongWord) {
   auto result = lexer_->Tokenize(long_word, default_stemming_enabled_,
                                  default_min_stem_size_, &stem_mappings);
   ASSERT_TRUE(result.ok());
-  std::vector<std::string> result_vector(result->begin(), result->end());
+  std::vector<std::string> result_vector;
+  result_vector.reserve(result->size());
+  for (const auto& token : *result) {
+    result_vector.push_back(token.text);
+  }
   EXPECT_EQ(result_vector, std::vector<std::string>({long_word}));
 }
 
@@ -190,7 +198,11 @@ TEST_F(LexerTest, EmptyStopWordsHandling) {
                        true, 3, &stem_mappings);
 
   ASSERT_TRUE(result.ok());
-  std::vector<std::string> result_vector(result->begin(), result->end());
+  std::vector<std::string> result_vector;
+  result_vector.reserve(result->size());
+  for (const auto& token : *result) {
+    result_vector.push_back(token.text);
+  }
   EXPECT_EQ(result_vector, std::vector<std::string>(
                                {"hello", "world", "testing", "123", "with",
                                 "dashes", "and", "or", "symbols"}));
@@ -206,7 +218,11 @@ TEST_F(LexerTest, StemMappingsBasic) {
 
   ASSERT_TRUE(result.ok());
   // Original words (case-folded, not stemmed)
-  std::vector<std::string> result_vector(result->begin(), result->end());
+  std::vector<std::string> result_vector;
+  result_vector.reserve(result->size());
+  for (const auto& token : *result) {
+    result_vector.push_back(token.text);
+  }
   EXPECT_EQ(result_vector,
             std::vector<std::string>({"running", "jumps", "happily"}));
 
@@ -229,7 +245,11 @@ TEST_F(LexerTest, StemMappingsMultipleWordsToSameStem) {
 
   ASSERT_TRUE(result.ok());
   // Original words (case-folded, not stemmed)
-  std::vector<std::string> result_vector(result->begin(), result->end());
+  std::vector<std::string> result_vector;
+  result_vector.reserve(result->size());
+  for (const auto& token : *result) {
+    result_vector.push_back(token.text);
+  }
   EXPECT_EQ(result_vector, std::vector<std::string>({"running", "runs"}));
 
   // Both words should map to the same stem "run"
@@ -249,7 +269,11 @@ TEST_F(LexerTest, StemMappingsNoStemmingWhenDisabled) {
 
   ASSERT_TRUE(result.ok());
   // Original words (not stemmed)
-  std::vector<std::string> result_vector(result->begin(), result->end());
+  std::vector<std::string> result_vector;
+  result_vector.reserve(result->size());
+  for (const auto& token : *result) {
+    result_vector.push_back(token.text);
+  }
   EXPECT_EQ(result_vector,
             std::vector<std::string>({"running", "jumps", "happily"}));
 

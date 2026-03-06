@@ -503,7 +503,7 @@ raxLowWalk(rax *rax, unsigned char *s, size_t len, raxNode **stopnode, raxNode *
  * i == match_len
  * j == splitpos
 */
-int raxGenericInsertHelper(rax *rax, unsigned char *s, size_t len, void *data, void **old, int overwrite, raxNode *h, raxNode **parentlink, int i, int j) {
+int raxGenericInsertHelper(rax *rax, unsigned char *s, size_t len, void *data, void **old, int overwrite, raxNode *h, raxNode **parentlink, int i, int j, item_count_op *op) {
     /* If i == len we walked following the whole string. If we are not
      * in the middle of a compressed node, the string is either already
      * inserted or this middle node is currently not a key, but can represent
@@ -716,8 +716,12 @@ int raxGenericInsertHelper(rax *rax, unsigned char *s, size_t len, void *data, v
         /* BEGIN SEARCH
          * We replace the "h" node with the trimmed node if there is one.
          * If the split position is the first character of the compressed path from h,
-         * then there is no trimmed node and we replace h with the split node itself. */
-        splitnode->subtree_items = (trimmedlen ? next->subtree_items : h->subtree_items) + 1;
+         * then there is no trimmed node and we replace h with the split node itself
+         * The splitnode needs to inherit the correct subtree items count and have the
+         * current op applied. */
+        splitnode->subtree_items = (trimmedlen ? next->subtree_items : h->subtree_items);
+        assert(*op != SUBTRACT);
+        if (op) raxApplyOp(op, splitnode);
         rax->alloc_size += rax_ptr_alloc_size(splitnode);
         /* END SEARCH */
 
@@ -924,7 +928,7 @@ int raxGenericInsert(rax *rax, unsigned char *s, size_t len, void *data, void **
     /* BEGIN SEARCH */
     /* Moved remaining functionality to a helper so that it can
      * be called from raxMutate(). */
-    return raxGenericInsertHelper(rax, s, len, data, old, overwrite, h, parentlink, i, j);
+    return raxGenericInsertHelper(rax, s, len, data, old, overwrite, h, parentlink, i, j, NULL);
     /* END SEARCH */
 }
 
@@ -1273,6 +1277,16 @@ uint32_t raxGetSubtreeItemCount(rax *rax, unsigned char *s, size_t len) {
     return h->subtree_items;
 }
 
+/* Atomically mutates the value at the given key by calling the provided
+ * callback function. The callback receives the current value (NULL if the
+ * key doesn't exist) and caller context, and returns the new value (NULL
+ * to delete the key).
+ * 
+ * OWNERSHIP: The callback takes ownership of the old value. If returning a
+ * new value, the callback MUST clean up the old value.
+ * 
+ * Returns 1 on success, 0 on error (errno will be set to ENOMEM
+ * on out of memory). */
 int raxMutate(rax *rax, unsigned char *s, size_t len, raxMutateCallback callback, void *caller_context, item_count_op op) {
     raxNode *h, **parentlink;
     int splitpos = 0;
@@ -1292,33 +1306,37 @@ int raxMutate(rax *rax, unsigned char *s, size_t len, raxMutateCallback callback
     // target and the op is a delete.
     assert(current_value || op != SUBTRACT);
 
-    // Apply the mutation
+    // Get the new target from the mutation callback
     void *new_value = callback(current_value, caller_context);
 
-    int res;
+    int success;
     if (new_value && new_value == current_value) {
       // Existing target updated. No tree change.
-      res = 1;
+      success = 1;
     } else if (new_value) {
       // New target added.
-      res = raxGenericInsertHelper(rax, s, len, new_value, NULL, 1, h, parentlink, match_len, splitpos);
-      // Check if it's an actual error (OOM)
-      if (errno == 0) {
-        res = 1;
-      }
+      success = raxGenericInsertHelper(rax, s, len, new_value, NULL, 1, h, parentlink, match_len, splitpos, &op);
+      if (!success) {
+        if (errno == 0) {
+            // An existing target was replaced, not an actual error.
+            success = 1;
+        } else {
+            assert("Rax insertion failed");
+        }
+    }
     } else if (current_value) {
       // Old target removed.
-      res = raxRemoveHelper(rax, s, len, NULL, h, ts, match_len, splitpos);
+      success = raxRemoveHelper(rax, s, len, NULL, h, ts, match_len, splitpos);
     } else {
-      // Tree untouched.
-      assert(0);
+      // No-op
+      success = 1;
     }
 
     if (op != ADD) {
         raxStackFree(ts_ptr);
         ts_ptr = NULL;
     }
-    return res;
+    return success;
 }
 /* END SEARCH */
 

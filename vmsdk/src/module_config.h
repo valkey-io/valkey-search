@@ -17,6 +17,7 @@
 #include "gtest/gtest_prod.h"
 #include "managed_pointers.h"
 #include "vmsdk/src/log.h"
+#include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace vmsdk {
@@ -365,6 +366,43 @@ class String : public ConfigBase<std::string> {
   FRIEND_TEST(Builder, ConfigBuilder);
 };
 
+class Double : public ConfigBase<double> {
+ public:
+  Double(std::string_view name, double default_value, double min_value,
+         double max_value);
+  ~Double() override = default;
+  absl::Status FromString(std::string_view value) override;
+
+  double GetMinValue() const { return min_value_; }
+  double GetMaxValue() const { return max_value_; }
+  std::string GetString() const { return std::to_string(current_value_); }
+  ValkeyModuleString *GetCachedValkeyString() const {
+    if (!cached_string_) {
+      cached_string_ = vmsdk::MakeUniqueValkeyString(std::to_string(current_value_));
+    }
+    return cached_string_.get();
+  }
+
+ protected:
+  absl::Status Register(ValkeyModuleCtx *ctx) override;
+  double GetValueImpl() const override { return current_value_; }
+
+  double GetDefaultValueImpl() const override { return default_value_; }
+
+  void SetValueImpl(double val) override {
+    VerifyMainThread();
+    current_value_ = val;
+    cached_string_.reset();
+  }
+
+  double default_value_{0.0};
+  double min_value_{0.0};
+  double max_value_{0.0};
+  double current_value_{0.0};
+  mutable UniqueValkeyString cached_string_;
+  FRIEND_TEST(Builder, ConfigBuilder);
+};
+
 template <typename ValkeyT>
 class ConfigBuilder {
  public:
@@ -437,7 +475,8 @@ template <typename ValkeyT, typename... Args>
   requires(std::is_same<ValkeyT, long long>() == true ||
            std::is_same<ValkeyT, std::string>() == true ||
            std::is_same<ValkeyT, int>() == true ||
-           std::is_same<ValkeyT, bool>() == true)
+           std::is_same<ValkeyT, bool>() == true ||
+           std::is_same<ValkeyT, double>() == true)
 ConfigBuilder<ValkeyT> Builder(Args &&...args) {
   if constexpr (std::is_same<ValkeyT, long long>()) {
     // Number
@@ -451,6 +490,9 @@ ConfigBuilder<ValkeyT> Builder(Args &&...args) {
   } else if constexpr (std::is_same<ValkeyT, std::string>()) {
     // String
     return ConfigBuilder<std::string>(new String(std::forward<Args>(args)...));
+  } else if constexpr (std::is_same<ValkeyT, double>()) {
+    // Double
+    return ConfigBuilder<double>(new Double(std::forward<Args>(args)...));
   } else {
     static_assert(!std::is_same_v<ValkeyT, ValkeyT>, "Unreachable");
   }
@@ -478,6 +520,12 @@ ConfigBuilder<bool> BooleanBuilder(Args &&...args) {
 template <typename... Args>
 ConfigBuilder<std::string> StringBuilder(Args &&...args) {
   return Builder<std::string>(std::forward<Args>(args)...);
+}
+
+/// Wrapper for building Double
+template <typename... Args>
+ConfigBuilder<double> DoubleBuilder(Args &&...args) {
+  return Builder<double>(std::forward<Args>(args)...);
 }
 
 #define CHECK_RANGE(MIN, MAX, CONFIG_NAME)                         \

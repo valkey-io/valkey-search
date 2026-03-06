@@ -28,7 +28,7 @@ The search module uses the Valkey configuration mechanism. Thus each of the name
 | search.local-fanout-queue-wait-threshold      | Number  |               | Queue wait threshold in milliseconds for preferring local node in fanout operations                                               |
 | search.thread-pool-wait-time-samples          | Number  |               | Sample queue size for thread pool wait time tracking                                                                              |
 | search.max-term-expansions                    | Number  |               | Maximum number of words to search in text operations (prefix, suffix, fuzzy) to limit memory usage                                |
-| search.search-result-buffer-multiplier        | String  |               | Multiplier for search result buffer size allocation                                                                               |
+| search.search-result-buffer-multiplier        | String* |               | Multiplier for search result buffer size allocation                                                                               |
 | search.drain-mutation-queue-on-save           | Boolean |               | Drain the mutation queue before RDB save                                                                                          |
 | search.query-string-depth                     | Number  |               | Controls the depth of the query string parsing from the FT.SEARCH cmd                                                             |
 | search.query-string-terms-count               | Number  |               | Controls the size of the query string parsing from the FT.SEARCH cmd (number of nodes in predicate tree)                          |
@@ -50,3 +50,5 @@ The search module uses the Valkey configuration mechanism. Thus each of the name
 | search.coordinator-query-timeout-secs         | Number  |               | Controls the gRPC deadline timeout (in seconds) for distributed coordinator query operations.                                     |
 | search.max-indexes                            | Number  |               | Controls the maximum number of search indexes that can be created in the system                                                   |
 | search.cluster-map-expiration-ms              | Number  |               | Controls how long (in milliseconds) the coordinator caches the cluster topology map before refreshing it from the Valkey cluster. |
+
+\* Double types are registered as String configs in Valkey and must be treated as strings when using `CONFIG SET` and `CONFIG GET`.

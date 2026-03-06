@@ -127,16 +127,23 @@ class TestFTDropindexConsistency(ValkeySearchClusterTestCaseDebugMode):
         with ThreadPoolExecutor() as executor:
             future1 = executor.submit(do_dropindex, node0, index_name)
             future2 = executor.submit(run_pausepoint_reset, 0, node0, node1)
-            
-            dropindex_result = future1.result(timeout=10)
-            reset_pausepoint_result, reset_pause_handle_message_result, exception = future2.result(timeout=10)
+
+            # Poll the retry count to detect completion instead of using a fixed timeout.
+            # Once the retry count has a value within the threshold, the dropindex
+            # consistency check has completed with the expected low retry behavior.
+            def retry_count_is_satisfactory():
+                if not future2.done():
+                    return False
+                retry_count = node0.info("SEARCH")["search_info_fanout_retry_count"]
+                return retry_count - retry_count_before <= RETRY_MIN_THRESHOLD and future1.done()
+
+            waiters.wait_for_true(retry_count_is_satisfactory)
+
+            dropindex_result = future1.result()
+            reset_pausepoint_result, reset_pause_handle_message_result, exception = future2.result()
 
         assert exception is None, f"Unexpected exception: {exception}"
         assert dropindex_result == b"OK"
-        # assert no retry when handle message on node1 released first
-        # taking the threshold to account for retries caused by grpc launch latency
-        retry_count_after = node0.info("SEARCH")["search_info_fanout_retry_count"]
-        assert retry_count_after - retry_count_before <= RETRY_MIN_THRESHOLD
         pause_handle_cluster_message_round_count = int(node1.info("SEARCH")["search_pause_handle_cluster_message_round_count"])
         assert pause_handle_cluster_message_round_count > 0
     
@@ -164,13 +171,21 @@ class TestFTDropindexConsistency(ValkeySearchClusterTestCaseDebugMode):
         with ThreadPoolExecutor() as executor:
             future1 = executor.submit(do_dropindex, node0, index_name)
             future2 = executor.submit(run_pausepoint_reset, 1, node0, node1)
-            
-            dropindex_result = future1.result(timeout=10)
-            reset_pausepoint_result, reset_pause_handle_message_result, exception = future2.result(timeout=10)
+
+            # Poll the retry count to detect completion instead of using a fixed timeout.
+            # This test expects many retries since the consistency check starts first.
+            def retry_count_is_satisfactory():
+                if not future2.done():
+                    return False
+                retry_count = node0.info("SEARCH")["search_info_fanout_retry_count"]
+                return retry_count - retry_count_before > RETRY_MIN_THRESHOLD and future1.done()
+
+            waiters.wait_for_true(retry_count_is_satisfactory)
+
+            dropindex_result = future1.result()
+            reset_pausepoint_result, reset_pause_handle_message_result, exception = future2.result()
 
         assert exception is None, f"Unexpected exception: {exception}"
         assert dropindex_result == b"OK"
-        retry_count_after = node0.info("SEARCH")["search_info_fanout_retry_count"]
-        assert retry_count_after - retry_count_before > RETRY_MIN_THRESHOLD
         pause_handle_cluster_message_round_count = int(node1.info("SEARCH")["search_pause_handle_cluster_message_round_count"])
         assert pause_handle_cluster_message_round_count > 0

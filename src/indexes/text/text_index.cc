@@ -151,8 +151,6 @@ TextIndexSchema::TextIndexSchema(data_model::Language language,
 absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
     const InternedStringPtr &key, absl::string_view data,
     size_t text_field_number, bool stem, bool suffix) {
-  NestedMemoryScope scope{metadata_.text_index_memory_pool_};
-
   // Get or create stem mappings for this key if stemming is enabled
   absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>
       *stem_mappings_ptr = nullptr;
@@ -193,8 +191,6 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
 }
 
 void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
-  NestedMemoryScope scope{metadata_.text_index_memory_pool_};
-
   // Retrieve the key's staged data
   TokenPositions token_positions;
   {
@@ -293,8 +289,6 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
 }
 
 void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
-  NestedMemoryScope scope{metadata_.text_index_memory_pool_};
-
   // Extract the per-key index
   absl::node_hash_map<Key, TextIndex>::node_type node;
   {
@@ -375,28 +369,6 @@ uint64_t TextIndexSchema::GetNumUniqueTerms() const {
 
 uint64_t TextIndexSchema::GetTotalTermFrequency() const {
   return metadata_.total_term_frequency.load();
-}
-
-uint64_t TextIndexSchema::GetPostingsMemoryUsage() const {
-  if (!text_index_) {
-    return 0;
-  }
-  return metadata_.posting_memory_pool_.GetUsage();
-}
-
-uint64_t TextIndexSchema::GetRadixTreeMemoryUsage() const {
-  // TODO: properly implement
-  return GetTotalTextIndexMemoryUsage() - GetPostingsMemoryUsage();
-}
-
-// Note: This is a subset of the memory reported by GetPostingsMemoryUsage(),
-uint64_t TextIndexSchema::GetPositionMemoryUsage() const {
-  uint64_t total_positions = GetTotalPositions();
-  return total_positions * sizeof(uint32_t);
-}
-
-uint64_t TextIndexSchema::GetTotalTextIndexMemoryUsage() const {
-  return metadata_.text_index_memory_pool_.GetUsage();
 }
 
 std::string TextIndexSchema::GetAllStemVariants(

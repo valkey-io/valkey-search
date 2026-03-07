@@ -70,11 +70,7 @@ TEST_P(LexerParameterizedTest, TokenizeTest) {
       test_case.stemming_enabled ? &stem_mappings : nullptr);
 
   ASSERT_TRUE(result.ok()) << "Test case: " << test_case.description;
-  std::vector<std::string> result_vector;
-  result_vector.reserve(result->size());
-  for (const auto& token : *result) {
-    result_vector.push_back(token.text);
-  }
+  std::vector<std::string> result_vector = *result;
   std::sort(result_vector.begin(), result_vector.end());
   std::vector<std::string> expected_sorted = test_case.expected;
   std::sort(expected_sorted.begin(), expected_sorted.end());
@@ -182,7 +178,7 @@ TEST_F(LexerTest, LongWord) {
   std::vector<std::string> result_vector;
   result_vector.reserve(result->size());
   for (const auto& token : *result) {
-    result_vector.push_back(token.text);
+    result_vector.push_back(token);
   }
   std::sort(result_vector.begin(), result_vector.end());
   std::vector<std::string> expected_sorted = {long_word};
@@ -207,7 +203,7 @@ TEST_F(LexerTest, EmptyStopWordsHandling) {
   std::vector<std::string> result_vector;
   result_vector.reserve(result->size());
   for (const auto& token : *result) {
-    result_vector.push_back(token.text);
+    result_vector.push_back(token);
   }
   std::sort(result_vector.begin(), result_vector.end());
   std::vector<std::string> expected_sorted = {"hello", "world", "testing",
@@ -230,7 +226,7 @@ TEST_F(LexerTest, StemMappingsBasic) {
   std::vector<std::string> result_vector;
   result_vector.reserve(result->size());
   for (const auto& token : *result) {
-    result_vector.push_back(token.text);
+    result_vector.push_back(token);
   }
   std::sort(result_vector.begin(), result_vector.end());
   std::vector<std::string> expected_sorted = {"running", "jumps", "happily"};
@@ -259,7 +255,7 @@ TEST_F(LexerTest, StemMappingsMultipleWordsToSameStem) {
   std::vector<std::string> result_vector;
   result_vector.reserve(result->size());
   for (const auto& token : *result) {
-    result_vector.push_back(token.text);
+    result_vector.push_back(token);
   }
   std::sort(result_vector.begin(), result_vector.end());
   std::vector<std::string> expected_sorted = {"running", "runs"};
@@ -286,7 +282,7 @@ TEST_F(LexerTest, StemMappingsNoStemmingWhenDisabled) {
   std::vector<std::string> result_vector;
   result_vector.reserve(result->size());
   for (const auto& token : *result) {
-    result_vector.push_back(token.text);
+    result_vector.push_back(token);
   }
   std::sort(result_vector.begin(), result_vector.end());
   std::vector<std::string> expected_sorted = {"running", "jumps", "happily"};

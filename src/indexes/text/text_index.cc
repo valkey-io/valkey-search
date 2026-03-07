@@ -7,6 +7,10 @@
 
 #include "src/indexes/text/text_index.h"
 
+#include <cstring>
+#include <numeric>
+
+#include "absl/hash/hash.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/strings/ascii.h"
@@ -168,29 +172,49 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
   }
   const auto &tokens = tokens_res.value();
   if (tokens.empty()) return true;
+
+  // Partition tokens by hash to ensure locality during map operations
+  constexpr size_t kNumBuckets = 128;  // Power of 2 for fast modulo
+  std::vector<std::vector<uint32_t>> buckets(kNumBuckets);
+  
+  // Distribute tokens into buckets - O(N) operation
+  for (uint32_t i = 0; i < tokens.size(); ++i) {
+    size_t h = absl::Hash<std::string>{}(tokens[i]);
+    buckets[h % kNumBuckets].push_back(i);
+  }
+
   // Map tokens -> positions -> field-masks
   TokenPositions *token_positions;
   {
     std::lock_guard<std::mutex> guard(in_progress_key_updates_mutex_);
     token_positions = &in_progress_key_updates_[key];
   }
-  // Iterator Caching relying on the sorted tokens helps with cache locality.
-  TokenPositions::iterator entry_it = token_positions->end();
-  absl::string_view last_text;
-  for (const auto &token : tokens) {
-    // Because 'tokens' is sorted, identical words are adjacent.
-    // We only perform a hash lookup when the word actually changes.
-    if (entry_it == token_positions->end() || token.text != last_text) {
-      entry_it = token_positions->try_emplace(token.text).first;
-      last_text = token.text;
+
+  // Process each bucket for cache locality - identical tokens are grouped
+  for (const auto& bucket : buckets) {
+    if (bucket.empty()) continue;
+    
+    // LOCAL AGGREGATION: Group by token within this small bucket
+    // This map is tiny and stays in L1/L2 cache
+    absl::flat_hash_map<absl::string_view, std::vector<uint32_t>> local_groups;
+    for (uint32_t pos_idx : bucket) {
+      local_groups[tokens[pos_idx]].push_back(pos_idx);
     }
-    auto &[pos_map, suffix_eligible] = entry_it->second;
-    if (suffix) suffix_eligible = true;
-    // Use the positional index preserved by the Lexer during tokenization
-    uint32_t position = with_offsets_ ? token.position : 0;
-    // PositionMap update: Use try_emplace for internal efficiency
-    auto [pos_it, _] = pos_map.try_emplace(position, num_text_fields_);
-    pos_it->second.SetField(text_field_number);
+
+    // GLOBAL UPDATE: Now hit the big map once per unique word
+    for (auto& [token_view, positions] : local_groups) {
+      // One jump into the big map for "apple", regardless of how many times it appeared
+      auto [entry_it, inserted] = token_positions->try_emplace(std::string(token_view));
+      
+      auto &[pos_map, suffix_eligible] = entry_it->second;
+      if (suffix) suffix_eligible = true;
+      
+      for (uint32_t pos_idx : positions) {
+        uint32_t position = with_offsets_ ? pos_idx : pos_idx;
+        auto [pos_it, _] = pos_map.try_emplace(position, num_text_fields_);
+        pos_it->second.SetField(text_field_number);
+      }
+    }
   }
 
   return true;

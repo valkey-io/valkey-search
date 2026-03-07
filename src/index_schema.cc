@@ -1442,10 +1442,52 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
   VMSDK_ASSIGN_OR_RETURN(size_t key_count, input.LoadObject<size_t>());
   rdb_load_keys.Increment(key_count);
   VMSDK_LOG(NOTICE, ctx) << "Loading Index Extension, keys = " << key_count;
+  
+  const size_t max_queue_size = 
+      options::GetMaxMutationQueueSizeOnRestore().GetValue();
+  size_t backpressure_wait_count = 0;
+  
+  // Batch size for queue checks - check every N keys to reduce mutex overhead
+  // Check more frequently when queue is near limit to maintain responsiveness
+  constexpr size_t kQueueCheckBatchSize = 100;
+  size_t keys_since_last_check = 0;
+  size_t current_queue_size = 0;
+  
   for (size_t i = 0; i < key_count; ++i) {
+    // Batch queue size checks to reduce mutex lock overhead
+    // Only check every kQueueCheckBatchSize keys, or when queue was recently full
+    if (keys_since_last_check >= kQueueCheckBatchSize || 
+        current_queue_size >= max_queue_size) {
+      current_queue_size = GetMutatedRecordsSize();
+      keys_since_last_check = 0;
+      
+      // Apply backpressure if mutation queue is too large
+      while (current_queue_size >= max_queue_size) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        backpressure_wait_count++;
+        current_queue_size = GetMutatedRecordsSize();
+        
+        // Log periodically to show progress
+        if (backpressure_wait_count % 1000 == 0) {
+          VMSDK_LOG(NOTICE, ctx)
+              << "RDB restore backpressure: waiting for mutation queue to drain. "
+              << "Queue size: " << current_queue_size
+              << ", Progress: " << i << "/" << key_count << " keys loaded";
+        }
+      }
+    }
+    
     VMSDK_ASSIGN_OR_RETURN(auto keyname_str, input.LoadString());
     auto keyname = vmsdk::MakeUniqueValkeyString(keyname_str);
     ProcessKeyspaceNotification(ctx, keyname.get(), false);
+    keys_since_last_check++;
+  }
+  
+  if (backpressure_wait_count > 0) {
+    VMSDK_LOG(NOTICE, ctx)
+        << "RDB restore completed with backpressure. Total wait iterations: "
+        << backpressure_wait_count
+        << " (max queue size: " << max_queue_size << ")";
   }
   // Need to suspend workers so that MultiMutation and Regular Mutation queues
   // are synced

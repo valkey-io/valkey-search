@@ -103,6 +103,9 @@ config::Number& GetFanoutDataUniformity();
 /// Return the minimum index size for applying fanout uniformity logic
 config::Number& GetFanoutUniformityMinIndexSize();
 
+/// Return the configuration entry for max mutation queue size during restore
+config::Number& GetMaxMutationQueueSizeOnRestore();
+
 /// Return the configuration entry for RDB write v2
 const config::Boolean& GetRdbWriteV2();
 
@@ -114,6 +117,7 @@ config::Number& GetAsyncFanoutThreshold();
 
 /// Return the pool size for per-word Postings bucket mutexes
 config::Number& GetRaxTargetMutexPoolSize();
+
 /// Return the maximum number of keys to accumulate before content fetching
 config::Number& GetMaxNonVectorSearchResultsFetched();
 

@@ -209,8 +209,7 @@ std::string_view Lexer::DoStemming(absl::string_view word, sb_stemmer* stemmer,
       stemmer, reinterpret_cast<const sb_symbol*>(word.data()), word.length());
   CHECK(stemmed) << "Stemming failed";
   int stemmed_length = sb_stemmer_length(stemmer);
-  CHECK(stemmed_length > 0 && stemmed_length <= word.length())
-      << "Stemming failed";
+  CHECK(stemmed_length > 0) << "Stemming failed";
   return std::string_view(reinterpret_cast<const char*>(stemmed),
                           stemmed_length);
 }

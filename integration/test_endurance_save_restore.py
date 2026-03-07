@@ -29,7 +29,7 @@ class TestEnduranceSaveRestore(ValkeySearchTestCaseBase):
     """
     
     # Configuration
-    MAXMEMORY_THRESHOLD = 1024 * 1024 * 1024  # 1GB
+    MAXMEMORY_THRESHOLD = 2 * 1024 * 1024 * 1024  # 1GB
     BATCH_SIZE = 100
     DOC_CONTENT_SIZE = 1000
     
@@ -37,6 +37,9 @@ class TestEnduranceSaveRestore(ValkeySearchTestCaseBase):
         """Add maxmemory configuration to server startup"""
         args["maxmemory"] = str(self.MAXMEMORY_THRESHOLD)
         args["maxmemory-policy"] = "noeviction"
+        # Disable auto-save to prevent background saves from interfering with our explicit SAVE commands
+        # This ensures we have full control over when RDB snapshots are created
+        args["save"] = '""'
         return args
     
     def _print_memory_info(self, client: Valkey, label: str) -> dict:
@@ -110,12 +113,32 @@ class TestEnduranceSaveRestore(ValkeySearchTestCaseBase):
                 
                 if doc_id % 1000 == 0:
                     info = client.info("memory")
-                    used = info.get('used_memory', 0)
+                    
+                    # Allen's experiment: Track OSS vs Valkey memory
+                    used_memory = info.get('used_memory', 0)  # B = Valkey's internal tracking
+                    used_memory_rss = info.get('used_memory_rss', 0)  # A = OS-level memory
                     max_mem = info.get('maxmemory', 0)
+                    
+                    # Calculate metrics Allen requested
+                    diff_a_minus_b = used_memory_rss - used_memory  # (A-B)
+                    ratio_a_over_b = used_memory_rss / used_memory if used_memory > 0 else 0  # (A/B)
+                    
                     elapsed = time.time() - start_time
                     rate = doc_id / elapsed if elapsed > 0 else 0
-                    print(f"  {doc_id} docs, {used:,} / {max_mem:,} bytes ({rate:.0f} docs/sec)")
-                    logging.info(f"Loaded {doc_id} documents ({rate:.0f} docs/sec)")
+                    
+                    # Enhanced output with OSS vs Valkey memory comparison
+                    print(f"  {doc_id:,} docs | "
+                          f"Valkey: {used_memory:,} / {max_mem:,} | "
+                          f"OSS_RSS: {used_memory_rss:,} | "
+                          f"Diff(RSS-Valkey): {diff_a_minus_b:,} | "
+                          f"Ratio(RSS/Valkey): {ratio_a_over_b:.4f} | "
+                          f"Rate: {rate:.0f} docs/sec")
+                    
+                    logging.info(f"Loaded {doc_id} documents ({rate:.0f} docs/sec) | "
+                               f"used_memory: {used_memory:,}, "
+                               f"used_memory_rss: {used_memory_rss:,}, "
+                               f"diff: {diff_a_minus_b:,}, "
+                               f"ratio: {ratio_a_over_b:.4f}")
                     
             except (OutOfMemoryError, ResponseError) as e:
                 error_str = str(e).upper()
@@ -151,6 +174,68 @@ class TestEnduranceSaveRestore(ValkeySearchTestCaseBase):
             f"num_docs not found in FT.INFO response for index '{index_name}'"
         
         return parser.num_docs
+    
+    def _cleanup_between_tests(self, index_name: str):
+        """Clean up data and state after test completes
+        
+        Args:
+            index_name: Name of the index that was created in this test
+        """
+        print("\n" + "="*60)
+        print("CLEANUP BETWEEN TESTS")
+        print("="*60 + "\n")
+        
+        # Drop the index that was created in this test
+        self.client.execute_command("FT.DROPINDEX", index_name)
+        print(f"  Dropped index: {index_name}")
+        
+        # Clear all remaining data
+        self.client.flushall()
+        print("  Executed FLUSHALL")
+        
+        # Clear environment variable
+        if "SKIPLOGCLEAN" in os.environ:
+            del os.environ["SKIPLOGCLEAN"]
+            print("  Cleared SKIPLOGCLEAN environment variable")
+        
+        # Remove RDB file from test directory
+        testdir = f"{os.getenv('LOGS_DIR', '/tmp/valkey-test-framework-files')}/{self.test_name}"
+        rdb_file = os.path.join(testdir, "dump.rdb")
+        if os.path.exists(rdb_file):
+            os.remove(rdb_file)
+            print(f"  Removed RDB file: {rdb_file}")
+        else:
+            print(f"  RDB file not present (may have been auto-cleaned): {rdb_file}")
+        
+        # Restart server to truly clear memory
+        # After loading 2GB+ of data and restoring, FLUSHALL alone doesn't
+        # release memory back to OS due to fragmentation and allocator overhead
+        print("\n  Restarting server to clear memory...")
+        self.server.restart(remove_rdb=True)
+        
+        # Reconnect after restart
+        self.client = self.server.get_new_client()
+        
+        # Wait for server to be ready
+        max_wait = 30
+        waited = 0
+        while waited < max_wait:
+            try:
+                self.client.ping()
+                print(f"  Server restarted and ready after {waited}s")
+                break
+            except Exception:
+                time.sleep(1)
+                waited += 1
+        else:
+            raise TimeoutError(f"Server did not become responsive after restart within {max_wait}s")
+        
+        # Verify memory is back to baseline
+        mem_info = self._print_memory_info(self.client, "AFTER CLEANUP")
+        
+        print("="*60)
+        print("✓ CLEANUP COMPLETED")
+        print("="*60 + "\n")
     
     def _run_endurance_test(self, index_name: str, schema_args: list, 
                             data_generator, search_query: str, 
@@ -195,11 +280,13 @@ class TestEnduranceSaveRestore(ValkeySearchTestCaseBase):
         print(f"FT.INFO before SAVE:")
         print(f"  num_docs: {parser.num_docs}")
         print(f"  hash_indexing_failures: {parser.hash_indexing_failures}")
+        time.sleep(15)
         
         # Step 4: Save RDB
         print("\nSAVE...")
         client.execute_command("SAVE")
         print("  SAVE completed successfully")
+        time.sleep(15)
         
         mem_after_save = self._print_memory_info(client, "AFTER SAVE")
         
@@ -211,6 +298,7 @@ class TestEnduranceSaveRestore(ValkeySearchTestCaseBase):
         # Reconnect and wait for server to be ready
         client = self.server.get_new_client()
         self.client = client
+        time.sleep(15)
         
         # Wait for server to be responsive after restart
         # Large datasets can take significant time to restore, using generous timeout
@@ -273,6 +361,8 @@ class TestEnduranceSaveRestore(ValkeySearchTestCaseBase):
         print("="*60)
         print("✓ TEST COMPLETED SUCCESSFULLY")
         print("="*60)
+        # Cleanup before test
+        self._cleanup_between_tests(index_name)
     
     def test_endurance_text_index(self):
         """Endurance test for TEXT index"""
@@ -349,3 +439,66 @@ class TestEnduranceSaveRestore(ValkeySearchTestCaseBase):
             },
             write_verify_query="@price:[99998 100000]"
         )
+    # def test_endurance_vector_index(self):
+    #     """Endurance test for VECTOR index."""
+    #     import numpy as np
+
+    #     # Vector dimension - must match schema
+    #     DIM = 128
+    #     NUM_QUERY_VECTORS = 5  # Test multiple query vectors to increase search coverage
+
+    #     def vector_data_generator(doc_id):
+    #         """Generate a unique, reproducible float32 vector for each doc_id.
+            
+    #         Uses seeded RNG so the same doc_id always produces the same vector,
+    #         making post-restore verification deterministic.
+    #         """
+    #         rng = np.random.default_rng(seed=doc_id)
+    #         vector = rng.random(DIM).astype(np.float32)
+    #         # Normalize to unit length for consistent L2 distance behavior
+    #         vector = vector / np.linalg.norm(vector)
+    #         return {
+    #             "vector": vector.tobytes(),
+    #             "id": str(doc_id),
+    #             "doc_id": str(doc_id),  # Store doc_id for result verification
+    #         }
+
+    #     def generate_query_blob(seed):
+    #         """Generate a reproducible normalized query vector."""
+    #         rng = np.random.default_rng(seed=seed)
+    #         query_vector = rng.random(DIM).astype(np.float32)
+    #         # Normalize to unit length - consistent with stored vectors
+    #         query_vector = query_vector / np.linalg.norm(query_vector)
+    #         return query_vector.tobytes()
+
+    #     # Primary query vector (seed=42)
+    #     query_blob = generate_query_blob(seed=42)
+
+    #     # Write test vector - use a distinct seed so it doesn't collide with bulk data
+    #     write_rng = np.random.default_rng(seed=99999)
+    #     write_vector = write_rng.random(DIM).astype(np.float32)
+    #     write_vector = write_vector / np.linalg.norm(write_vector)
+
+    #     self._run_endurance_test(
+    #         index_name="endurance_vector_idx",
+    #         schema_args=[
+    #             "vector", "VECTOR", "HNSW", "10",
+    #                 "TYPE", "FLOAT32",
+    #                 "DIM", str(DIM),
+    #                 "DISTANCE_METRIC", "L2",
+    #                 "M", "16",              # Number of connections per layer - higher = better recall, more memory
+    #                 "EF_CONSTRUCTION", "200",  # Higher = better index quality, slower build
+    #             "id", "TEXT",
+    #             "doc_id", "NUMERIC",
+    #         ],
+    #         data_generator=vector_data_generator,
+    #         search_query="*=>[KNN 10 @vector $query_vec AS vector_score]",
+    #         write_test_data={
+    #             "vector": write_vector.tobytes(),
+    #             "id": "test_vector",
+    #             "doc_id": "-1",  # Sentinel value to identify the write test doc
+    #         },
+    #         write_verify_query="*=>[KNN 10 @vector $query_vec AS vector_score]"
+    #     )
+    
+    

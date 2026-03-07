@@ -7,6 +7,11 @@
 
 #include "src/indexes/text/text_index.h"
 
+#include <array>
+#include <cstring>
+#include <numeric>
+
+#include "absl/hash/hash.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/strings/ascii.h"
@@ -151,22 +156,50 @@ TextIndexSchema::TextIndexSchema(data_model::Language language,
 absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
     const InternedStringPtr &key, absl::string_view data,
     size_t text_field_number, bool stem, bool suffix) {
-  // Get or create stem mappings for this key if stemming is enabled
   absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>
       *stem_mappings_ptr = nullptr;
   if (stem) {
     std::lock_guard<std::mutex> stem_guard(in_progress_stem_mappings_mutex_);
     stem_mappings_ptr = &in_progress_stem_mappings_[key];
   }
-
   // Tokenize and collect stem mappings
-  auto tokens = lexer_.Tokenize(data, stem, min_stem_size_, stem_mappings_ptr);
-
-  if (!tokens.ok()) {
-    if (tokens.status().code() == absl::StatusCode::kInvalidArgument) {
-      return false;  // UTF-8 errors → hash_indexing_failures
+  auto tokens_res =
+      lexer_.Tokenize(data, stem, min_stem_size_, stem_mappings_ptr);
+  if (!tokens_res.ok()) {
+    if (tokens_res.status().code() == absl::StatusCode::kInvalidArgument) {
+      return false;
     }
-    return tokens.status();
+    return tokens_res.status();
+  }
+  const auto &tokens = tokens_res.value();
+  if (tokens.empty()) return true;
+
+  const size_t num_tokens = tokens.size();
+  constexpr size_t kNumBuckets = 128;
+  constexpr size_t kMask = kNumBuckets - 1;
+
+  // 1. PRE-CALCULATE COUNTS: Avoid vector resizing entirely
+  std::array<uint32_t, kNumBuckets> bucket_counts = {0};
+  std::vector<size_t> hashes(num_tokens);
+  for (size_t i = 0; i < num_tokens; ++i) {
+    hashes[i] = absl::Hash<absl::string_view>{}(tokens[i]);
+    bucket_counts[hashes[i] & kMask]++;
+  }
+
+  // 2. FLAT ALLOCATION: One single allocation for ALL bucket data
+  // This drastically reduces Page Faults compared to vector<vector>
+  std::vector<uint32_t> all_bucket_data(num_tokens);
+  std::array<size_t, kNumBuckets> bucket_offsets;
+  size_t current_offset = 0;
+  for (int i = 0; i < kNumBuckets; ++i) {
+    bucket_offsets[i] = current_offset;
+    current_offset += bucket_counts[i];
+  }
+
+  // 3. DISTRIBUTE: Fill the flat buffer
+  auto current_ptrs = bucket_offsets; // Copy for tracking
+  for (uint32_t i = 0; i < num_tokens; ++i) {
+    all_bucket_data[current_ptrs[hashes[i] & kMask]++] = i;
   }
 
   // Map tokens -> positions -> field-masks
@@ -175,16 +208,37 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
     std::lock_guard<std::mutex> guard(in_progress_key_updates_mutex_);
     token_positions = &in_progress_key_updates_[key];
   }
-  for (uint32_t i = 0; i < tokens->size(); ++i) {
-    const auto &token = (*tokens)[i];
-    uint32_t position =
-        with_offsets_ ? i
-                      : 0;  // If positional info is disabled we default to 0
-    auto &[positions, suffix_eligible] = (*token_positions)[token];
-    if (suffix) suffix_eligible = true;
-    auto [pos_it, _] =
-        positions.try_emplace(position, FieldMask(num_text_fields_));
-    pos_it->second.SetField(text_field_number);
+
+  // 4. PROCESS: Reuse the map to avoid 128 allocations
+  absl::flat_hash_map<absl::string_view, std::vector<uint32_t>> local_groups;
+  
+  for (size_t b = 0; b < kNumBuckets; ++b) {
+    size_t start = bucket_offsets[b];
+    size_t end = current_ptrs[b]; // Use the pointers from the distribution step
+    if (start == end) continue;
+
+    local_groups.clear(); // Reuses memory! No malloc/free here.
+    
+    for (size_t i = start; i < end; ++i) {
+      uint32_t pos_idx = all_bucket_data[i];
+      local_groups[tokens[pos_idx]].push_back(pos_idx);
+    }
+
+    for (auto& [token_view, positions] : local_groups) {
+      auto it = token_positions->find(token_view);
+      if (it == token_positions->end()) {
+        it = token_positions->emplace(std::string(token_view), std::make_pair(PositionMap{}, false)).first;
+      }
+      
+      auto &[pos_map, suffix_eligible] = it->second;
+      if (suffix) suffix_eligible = true;
+      
+      for (uint32_t pos_idx : positions) {
+        uint32_t position = with_offsets_ ? pos_idx : pos_idx;
+        auto [pos_it, _] = pos_map.try_emplace(position, num_text_fields_);
+        pos_it->second.SetField(text_field_number);
+      }
+    }
   }
 
   return true;

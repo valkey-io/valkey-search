@@ -95,8 +95,6 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
 
   // Get or create the thread-local stemmer for this lexer's language
   sb_stemmer* stemmer = stemming_enabled ? GetStemmer() : nullptr;
-  // Deque grows by adding new blocks—avoids the cost of copying
-  // existing elements during reallocation.
   std::vector<std::string> tokens;
   std::string word;
   word.reserve(64);
@@ -154,7 +152,6 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
         UpdateStemMap(word, stemmer, min_stem_size, *stem_mappings);
       }
       tokens.push_back(std::move(word));
-      word.clear();
     }
   }
 

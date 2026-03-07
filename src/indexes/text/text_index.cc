@@ -7,6 +7,7 @@
 
 #include "src/indexes/text/text_index.h"
 
+#include <array>
 #include <cstring>
 #include <numeric>
 
@@ -173,20 +174,32 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
   const auto &tokens = tokens_res.value();
   if (tokens.empty()) return true;
 
-  // Partition tokens by hash to ensure locality during map operations
-  constexpr size_t kNumBuckets = 128;  // Power of 2 for fast modulo
-  std::vector<std::vector<uint32_t>> buckets(kNumBuckets);
-  
-  // Reserve bucket space to prevent reallocations during distribution
-  size_t avg_bucket_size = (tokens.size() / kNumBuckets) + 100;
-  for (auto& b : buckets) {
-    b.reserve(avg_bucket_size);
+  const size_t num_tokens = tokens.size();
+  constexpr size_t kNumBuckets = 128;
+  constexpr size_t kMask = kNumBuckets - 1;
+
+  // 1. PRE-CALCULATE COUNTS: Avoid vector resizing entirely
+  std::array<uint32_t, kNumBuckets> bucket_counts = {0};
+  std::vector<size_t> hashes(num_tokens);
+  for (size_t i = 0; i < num_tokens; ++i) {
+    hashes[i] = absl::Hash<absl::string_view>{}(tokens[i]);
+    bucket_counts[hashes[i] & kMask]++;
   }
-  
-  // Distribute tokens into buckets - O(N) operation
-  for (uint32_t i = 0; i < tokens.size(); ++i) {
-    size_t h = absl::Hash<absl::string_view>{}(tokens[i]);
-    buckets[h % kNumBuckets].push_back(i);
+
+  // 2. FLAT ALLOCATION: One single allocation for ALL bucket data
+  // This drastically reduces Page Faults compared to vector<vector>
+  std::vector<uint32_t> all_bucket_data(num_tokens);
+  std::array<size_t, kNumBuckets> bucket_offsets;
+  size_t current_offset = 0;
+  for (int i = 0; i < kNumBuckets; ++i) {
+    bucket_offsets[i] = current_offset;
+    current_offset += bucket_counts[i];
+  }
+
+  // 3. DISTRIBUTE: Fill the flat buffer
+  auto current_ptrs = bucket_offsets; // Copy for tracking
+  for (uint32_t i = 0; i < num_tokens; ++i) {
+    all_bucket_data[current_ptrs[hashes[i] & kMask]++] = i;
   }
 
   // Map tokens -> positions -> field-masks
@@ -196,26 +209,28 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
     token_positions = &in_progress_key_updates_[key];
   }
 
-  // Process each bucket for cache locality - identical tokens are grouped
-  for (const auto& bucket : buckets) {
-    if (bucket.empty()) continue;
+  // 4. PROCESS: Reuse the map to avoid 128 allocations
+  absl::flat_hash_map<absl::string_view, std::vector<uint32_t>> local_groups;
+  
+  for (size_t b = 0; b < kNumBuckets; ++b) {
+    size_t start = bucket_offsets[b];
+    size_t end = current_ptrs[b]; // Use the pointers from the distribution step
+    if (start == end) continue;
+
+    local_groups.clear(); // Reuses memory! No malloc/free here.
     
-    // LOCAL AGGREGATION: Group by token within this small bucket
-    // This map is tiny and stays in L1/L2 cache
-    absl::flat_hash_map<absl::string_view, std::vector<uint32_t>> local_groups;
-    for (uint32_t pos_idx : bucket) {
+    for (size_t i = start; i < end; ++i) {
+      uint32_t pos_idx = all_bucket_data[i];
       local_groups[tokens[pos_idx]].push_back(pos_idx);
     }
 
-    // GLOBAL UPDATE: Now hit the big map once per unique word
     for (auto& [token_view, positions] : local_groups) {
-      // Avoid std::string allocation if word already exists
-      auto entry_it = token_positions->find(token_view);
-      if (entry_it == token_positions->end()) {
-        entry_it = token_positions->emplace(std::string(token_view), std::make_pair(PositionMap{}, false)).first;
+      auto it = token_positions->find(token_view);
+      if (it == token_positions->end()) {
+        it = token_positions->emplace(std::string(token_view), std::make_pair(PositionMap{}, false)).first;
       }
       
-      auto &[pos_map, suffix_eligible] = entry_it->second;
+      auto &[pos_map, suffix_eligible] = it->second;
       if (suffix) suffix_eligible = true;
       
       for (uint32_t pos_idx : positions) {

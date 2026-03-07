@@ -177,9 +177,15 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
   constexpr size_t kNumBuckets = 128;  // Power of 2 for fast modulo
   std::vector<std::vector<uint32_t>> buckets(kNumBuckets);
   
+  // Reserve bucket space to prevent reallocations during distribution
+  size_t avg_bucket_size = (tokens.size() / kNumBuckets) + 100;
+  for (auto& b : buckets) {
+    b.reserve(avg_bucket_size);
+  }
+  
   // Distribute tokens into buckets - O(N) operation
   for (uint32_t i = 0; i < tokens.size(); ++i) {
-    size_t h = absl::Hash<std::string>{}(tokens[i]);
+    size_t h = absl::Hash<absl::string_view>{}(tokens[i]);
     buckets[h % kNumBuckets].push_back(i);
   }
 
@@ -203,8 +209,11 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
 
     // GLOBAL UPDATE: Now hit the big map once per unique word
     for (auto& [token_view, positions] : local_groups) {
-      // One jump into the big map for "apple", regardless of how many times it appeared
-      auto [entry_it, inserted] = token_positions->try_emplace(std::string(token_view));
+      // Avoid std::string allocation if word already exists
+      auto entry_it = token_positions->find(token_view);
+      if (entry_it == token_positions->end()) {
+        entry_it = token_positions->emplace(std::string(token_view), std::make_pair(PositionMap{}, false)).first;
+      }
       
       auto &[pos_map, suffix_eligible] = entry_it->second;
       if (suffix) suffix_eligible = true;

@@ -113,7 +113,9 @@ TEST_F(MultiExecTest, Basic) {
         cb_data = data;
         return VALKEYMODULE_OK;
       })
-      .WillRepeatedly([](ValkeyModuleEventLoopOneShotFunc, void *) {
+      .WillRepeatedly([](ValkeyModuleEventLoopOneShotFunc func, void *data) {
+        // Execute to free the AnyInvocable; avoids ASAN leaks.
+        func(data);
         return VALKEYMODULE_OK;
       });
   std::vector<std::string> expected_keys;
@@ -196,7 +198,9 @@ TEST_F(MultiExecTest, TrackMutationOverride) {
         cb_data = data;
         return VALKEYMODULE_OK;
       })
-      .WillRepeatedly([](ValkeyModuleEventLoopOneShotFunc, void *) {
+      .WillRepeatedly([](ValkeyModuleEventLoopOneShotFunc func, void *data) {
+        // Execute to free the AnyInvocable; avoids ASAN leaks.
+        func(data);
         return VALKEYMODULE_OK;
       });
   EXPECT_CALL(*kMockValkeyModule, GetContextFlags(testing::_))
@@ -281,7 +285,11 @@ TEST_F(MultiExecTest, FtSearchMulti) {
   // (->EventLoopAddOneShot) from worker threads. FT.SEARCH correctness in
   // MULTI context is still enforced by BlockClient/UnblockClient Times(0).
   EXPECT_CALL(*kMockValkeyModule, EventLoopAddOneShot(testing::_, testing::_))
-      .WillRepeatedly(testing::Return(VALKEYMODULE_OK));
+      .WillRepeatedly([](ValkeyModuleEventLoopOneShotFunc func, void *data) {
+        // Execute to free the AnyInvocable; avoids ASAN leaks.
+        func(data);
+        return VALKEYMODULE_OK;
+      });
   VMSDK_EXPECT_OK(
       ValkeySearch::Instance().GetReaderThreadPool()->SuspendWorkers());
   EXPECT_CALL(

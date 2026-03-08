@@ -1063,10 +1063,6 @@ int IndexSchema::GetTextItemCount() const {
 
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   int arrSize = 28;
-  // Debug Text index Memory info fields
-  if (vmsdk::config::IsDebugModeEnabled()) {
-    arrSize += 8;
-  }
   // Text-attribute info fields
   if (text_index_schema_) {
     arrSize += 8;  // punctuation, stop_words, with_offsets, min_stem_size (4
@@ -1112,26 +1108,6 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithLongLong(
       ctx, text_index_schema_ ? text_index_schema_->GetNumUniqueTerms() : 0);
 
-  // Memory statistics are only shown when debug mode is enabled
-  if (vmsdk::config::IsDebugModeEnabled()) {
-    ValkeyModule_ReplyWithSimpleString(ctx, "posting_sz_bytes");
-    ValkeyModule_ReplyWithLongLong(
-        ctx,
-        text_index_schema_ ? text_index_schema_->GetPostingsMemoryUsage() : 0);
-    ValkeyModule_ReplyWithSimpleString(ctx, "position_sz_bytes");
-    ValkeyModule_ReplyWithLongLong(
-        ctx,
-        text_index_schema_ ? text_index_schema_->GetPositionMemoryUsage() : 0);
-    ValkeyModule_ReplyWithSimpleString(ctx, "radix_sz_bytes");
-    ValkeyModule_ReplyWithLongLong(
-        ctx,
-        text_index_schema_ ? text_index_schema_->GetRadixTreeMemoryUsage() : 0);
-    ValkeyModule_ReplyWithSimpleString(ctx, "total_text_index_sz_bytes");
-    ValkeyModule_ReplyWithLongLong(
-        ctx, text_index_schema_
-                 ? text_index_schema_->GetTotalTextIndexMemoryUsage()
-                 : 0);
-  }
   // Text Index info fields end
   ValkeyModule_ReplyWithSimpleString(ctx, "hash_indexing_failures");
   ValkeyModule_ReplyWithCString(
@@ -1523,6 +1499,14 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
     ValkeyModuleCtx *ctx, vmsdk::ThreadPool *mutations_thread_pool,
     std::unique_ptr<data_model::IndexSchema> index_schema_proto,
     SupplementalContentIter &&supplemental_iter) {
+  // Select the DB number in the context for subsequent usage.
+  uint32_t db_num = index_schema_proto->db_num();
+  if (ValkeyModule_SelectDb(ctx, db_num) != VALKEYMODULE_OK) {
+    return absl::InternalError(absl::StrFormat(
+        "Unable to select DB %d for loading index schema %s", db_num,
+        vmsdk::config::RedactIfNeeded(index_schema_proto->name()).data()));
+  }
+
   // flag to skip loading attributes and indices
   bool skip_loading_index_data = options::GetSkipIndexLoad().GetValue();
   // When skipping index data, create attributes immediately (with empty

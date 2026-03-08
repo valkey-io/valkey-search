@@ -465,18 +465,6 @@ uint64_t SchemaManager::GetTotalIndexedDocuments() const {
   }
   return num_hash_keys;
 }
-uint64_t SchemaManager::GetTotalTextMemoryUsage() const {
-  absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  uint64_t total = 0;
-  for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
-    for (const auto &[name, schema] : schema_map) {
-      if (schema->GetTextIndexSchema()) {
-        total += schema->GetTextIndexSchema()->GetTotalTextIndexMemoryUsage();
-      }
-    }
-  }
-  return total;
-}
 bool SchemaManager::IsIndexingInProgress() const {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
@@ -695,13 +683,6 @@ absl::Status SchemaManager::LoadIndex(
                          _ << "Failed to load index schema from RDB!");
   uint32_t db_num = index_schema->GetDBNum();
   const std::string &name = index_schema->GetName();
-
-  // Select the DB number in the context for subsequent usage.
-  if (ValkeyModule_SelectDb(ctx, db_num) != VALKEYMODULE_OK) {
-    return absl::InternalError(
-        absl::StrFormat("Unable to select DB %d for loading of index schema %s",
-                        db_num, vmsdk::config::RedactIfNeeded(name).data()));
-  }
 
   // In diskless load scenarios, we stage the index to allow serving from
   // the existing index schemas. The loading ended callback will swap these

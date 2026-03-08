@@ -57,6 +57,9 @@ if(BUILD_TESTS)
   add_subdirectory(testing)
 endif()
 
+# Add fuzzing directory
+add_subdirectory(fuzzing)
+
 # Create a symbolic link to the root directory for compile_commands.json
 execute_process(
   COMMAND

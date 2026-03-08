@@ -88,6 +88,21 @@ TEST_F(FTListTest, basic) {
                 testing::AnyOf(
                     "*2\r\n+index_schema_name_1\r\n+index_schema_name_2\r\n",
                     "*2\r\n+index_schema_name_2\r\n+index_schema_name_1\r\n"));
+
+    fake_ctx.reply_capture.ClearReply();
+    ValkeyModuleString *argv[3];
+    argv[0] = TestValkeyModule_CreateStringPrintf(&fake_ctx, "FT._LIST");
+    argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx, "REGEX");
+    argv[2] =
+        TestValkeyModule_CreateStringPrintf(&fake_ctx, "^index_schema_name_1$");
+    VMSDK_EXPECT_OK(FTListCmd(&fake_ctx, argv, 3));
+    EXPECT_THAT(fake_ctx.reply_capture.GetReply(),
+                testing::AnyOf("*1\r\n+index_schema_name_1\r\n",
+                               "+index_schema_name_1\r\n"));
+    for (ValkeyModuleString *arg : argv) {
+      TestValkeyModule_FreeString(&fake_ctx, arg);
+    }
+
     VMSDK_EXPECT_OK(SchemaManager::Instance().RemoveIndexSchema(
         0, index_schema_name_1_str));
     VMSDK_EXPECT_OK(SchemaManager::Instance().RemoveIndexSchema(

@@ -20,24 +20,36 @@ fuzzing/
 
 ## Building
 
-### Standard Build
+### Standard Build (no instrumentation)
+
+Builds the fuzz harnesses without AFL instrumentation. Useful for manual testing.
 
 ```bash
 ./build.sh
 # Binary: .build-release/tests/fuzz_query_parser
 ```
 
-### AFL Build
+### Instrumented Build (for AFL fuzzing)
 
-Use `afl-gcc` mode. The codebase has compatibility issues with clang-17, so `afl-clang-fast` is not currently supported.
+The `--fuzz` flag sets `CC=afl-gcc CXX=afl-g++` and uses a dedicated `.build-fuzz` directory:
 
 ```bash
-CC=afl-gcc CXX=afl-g++ ./build.sh --configure
+./build.sh --fuzz
+# Binary: .build-fuzz/tests/fuzz_query_parser
 ```
+
+For AFL + AddressSanitizer (catches memory errors during fuzzing):
+
+```bash
+./build.sh --fuzz --asan
+# Binary: .build-fuzz-asan/tests/fuzz_query_parser
+```
+
+Uses `afl-gcc` mode. The codebase has compatibility issues with clang-17, so `afl-clang-fast` is not currently supported.
 
 ## Running
 
-### Manual Testing
+### Manual Testing (no instrumentation needed)
 
 ```bash
 echo "*" | .build-release/tests/fuzz_query_parser
@@ -51,18 +63,28 @@ echo "(hello|world) @tag:{a|b}" | .build-release/tests/fuzz_query_parser
 afl-fuzz -i fuzzing/query_parser/seeds \
          -o fuzzing/afl_out/query_parser \
          -x fuzzing/query_parser/query.dict \
-         -- .build-release/tests/fuzz_query_parser
+         -- .build-fuzz/tests/fuzz_query_parser
 ```
 
 ### All Targets
+
+Build and run in one step:
+
+```bash
+./fuzzing/run_all_fuzzers.sh --build --duration 300
+```
+
+Or run against an existing instrumented build:
 
 ```bash
 ./fuzzing/run_all_fuzzers.sh --duration 300
 ```
 
 Options:
+- `--build` — build with AFL instrumentation before fuzzing
+- `--asan` — enable AddressSanitizer (`AFL_USE_ASAN=1`)
 - `--duration <seconds>` — time per target (default: 300)
-- `--build-dir <path>` — build directory (default: `.build-release`)
+- `--build-dir <path>` — build directory (default: `.build-fuzz`)
 
 Results are saved to `fuzzing/fuzz_results.txt`.
 

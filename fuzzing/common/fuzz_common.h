@@ -8,6 +8,7 @@
 #define FUZZING_COMMON_FUZZ_COMMON_H_
 
 #include <atomic>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -39,8 +40,10 @@ struct ValkeyModuleType {};
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "src/attribute_data_type.h"
+#include "src/commands/ft_aggregate_parser.h"
 #include "src/index_schema.h"
 #include "src/index_schema.pb.h"
+#include "src/indexes/index_base.h"
 #include "src/query/search.h"
 #include "src/rdb_serialization.h"
 
@@ -89,6 +92,35 @@ class FuzzSearchParameters : public valkey_search::query::SearchParameters {
   void QueryCompleteBackground(std::unique_ptr<SearchParameters>) override {}
   void QueryCompleteMainThread(std::unique_ptr<SearchParameters>) override {}
 };
+
+// ---------------------------------------------------------------------------
+// FuzzIndexInterface - implements aggregate::IndexInterface for fuzzing,
+// modeled after FakeIndexInterface in testing/ft_aggregate_parser_test.cc.
+// ---------------------------------------------------------------------------
+class FuzzIndexInterface
+    : public valkey_search::aggregate::IndexInterface {
+ public:
+  explicit FuzzIndexInterface(
+      std::shared_ptr<valkey_search::IndexSchema> schema);
+
+  absl::StatusOr<valkey_search::indexes::IndexerType> GetFieldType(
+      absl::string_view field_name) const override;
+  absl::StatusOr<std::string> GetIdentifier(
+      absl::string_view alias) const override;
+  absl::StatusOr<std::string> GetAlias(
+      absl::string_view identifier) const override;
+
+ private:
+  std::map<std::string, valkey_search::indexes::IndexerType> fields_;
+};
+
+// ---------------------------------------------------------------------------
+// Argv helper functions - split fuzz input into ValkeyModuleString** arrays,
+// mirroring vmsdk::ToValkeyStringVector without gtest dependency.
+// ---------------------------------------------------------------------------
+std::vector<ValkeyModuleString *> SplitToValkeyStringVector(const char *data,
+                                                            size_t size);
+void FreeValkeyStringVector(std::vector<ValkeyModuleString *> &vec);
 
 // ---------------------------------------------------------------------------
 // Global state accessible to all fuzz targets

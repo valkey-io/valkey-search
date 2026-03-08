@@ -104,6 +104,53 @@ static int StubEventLoopAddOneShot(ValkeyModuleEventLoopOneShotFunc callback,
 
 static void StubSetModuleOptions(ValkeyModuleCtx *, int) {}
 
+// Reply stubs - needed when linking against commands library.
+// These are never called by the fuzz harnesses but must be non-null
+// to avoid crashes if any code path accidentally reaches them.
+static int StubReplyWithArray(ValkeyModuleCtx *, long) {  // NOLINT
+  return VALKEYMODULE_OK;
+}
+static int StubReplyWithLongLong(ValkeyModuleCtx *, long long) {  // NOLINT
+  return VALKEYMODULE_OK;
+}
+static int StubReplyWithStringBuffer(ValkeyModuleCtx *, const char *, size_t) {
+  return VALKEYMODULE_OK;
+}
+static int StubReplyWithSimpleString(ValkeyModuleCtx *, const char *) {
+  return VALKEYMODULE_OK;
+}
+static int StubReplyWithCString(ValkeyModuleCtx *, const char *) {
+  return VALKEYMODULE_OK;
+}
+static void StubReplySetArrayLength(ValkeyModuleCtx *, long) {}  // NOLINT
+static int StubReplyWithError(ValkeyModuleCtx *, const char *) {
+  return VALKEYMODULE_OK;
+}
+static int StubReplyWithString(ValkeyModuleCtx *, ValkeyModuleString *) {
+  return VALKEYMODULE_OK;
+}
+static int StubReplyWithDouble(ValkeyModuleCtx *, double) {
+  return VALKEYMODULE_OK;
+}
+static void *StubGetBlockedClientPrivateData(ValkeyModuleCtx *) {
+  return nullptr;
+}
+static unsigned int StubClusterKeySlot(ValkeyModuleString *) { return 0; }
+static ValkeyModuleBlockedClient *StubBlockClient(
+    ValkeyModuleCtx *, ValkeyModuleCmdFunc, ValkeyModuleCmdFunc,
+    void (*)(ValkeyModuleCtx *, void *), long long) {  // NOLINT
+  return nullptr;
+}
+static int StubUnblockClient(ValkeyModuleBlockedClient *, void *) {
+  return VALKEYMODULE_OK;
+}
+static int StubBlockedClientMeasureTimeStart(ValkeyModuleBlockedClient *) {
+  return VALKEYMODULE_OK;
+}
+static int StubBlockedClientMeasureTimeEnd(ValkeyModuleBlockedClient *) {
+  return VALKEYMODULE_OK;
+}
+
 void InitValkeyModuleStubs() {
   ValkeyModule_StringPtrLen = StubStringPtrLen;
   ValkeyModule_CreateString = StubCreateString;
@@ -123,6 +170,24 @@ void InitValkeyModuleStubs() {
   ValkeyModule_SubscribeToServerEvent = StubSubscribeToServerEvent;
   ValkeyModule_EventLoopAddOneShot = StubEventLoopAddOneShot;
   ValkeyModule_SetModuleOptions = StubSetModuleOptions;
+
+  // Reply stubs
+  ValkeyModule_ReplyWithArray = StubReplyWithArray;
+  ValkeyModule_ReplyWithLongLong = StubReplyWithLongLong;
+  ValkeyModule_ReplyWithStringBuffer = StubReplyWithStringBuffer;
+  ValkeyModule_ReplyWithSimpleString = StubReplyWithSimpleString;
+  ValkeyModule_ReplyWithCString = StubReplyWithCString;
+  ValkeyModule_ReplySetArrayLength = StubReplySetArrayLength;
+  ValkeyModule_ReplyWithError = StubReplyWithError;
+  ValkeyModule_ReplyWithString = StubReplyWithString;
+  ValkeyModule_ReplyWithDouble = StubReplyWithDouble;
+  ValkeyModule_GetBlockedClientPrivateData = StubGetBlockedClientPrivateData;
+  ValkeyModule_ClusterKeySlot = StubClusterKeySlot;
+  ValkeyModule_BlockClient = StubBlockClient;
+  ValkeyModule_UnblockClient = StubUnblockClient;
+  ValkeyModule_BlockedClientMeasureTimeStart =
+      StubBlockedClientMeasureTimeStart;
+  ValkeyModule_BlockedClientMeasureTimeEnd = StubBlockedClientMeasureTimeEnd;
 }
 
 // ---------------------------------------------------------------------------
@@ -183,4 +248,78 @@ void InitFuzzEnvironment() {
   g_index_schema = FuzzIndexSchema::Create(
       &g_fake_ctx, "fuzz_index", key_prefixes,
       std::make_unique<valkey_search::HashAttributeDataType>());
+}
+
+// ---------------------------------------------------------------------------
+// Argv helper functions
+// ---------------------------------------------------------------------------
+
+std::vector<ValkeyModuleString *> SplitToValkeyStringVector(const char *data,
+                                                            size_t size) {
+  std::vector<ValkeyModuleString *> result;
+  size_t i = 0;
+  while (i < size) {
+    // Skip leading spaces
+    while (i < size && data[i] == ' ') {
+      ++i;
+    }
+    if (i >= size) break;
+    // Find end of token
+    size_t start = i;
+    while (i < size && data[i] != ' ') {
+      ++i;
+    }
+    result.push_back(
+        ValkeyModule_CreateString(nullptr, data + start, i - start));
+  }
+  return result;
+}
+
+void FreeValkeyStringVector(std::vector<ValkeyModuleString *> &vec) {
+  for (auto *s : vec) {
+    ValkeyModule_FreeString(nullptr, s);
+  }
+  vec.clear();
+}
+
+// ---------------------------------------------------------------------------
+// FuzzIndexInterface implementation
+// ---------------------------------------------------------------------------
+
+FuzzIndexInterface::FuzzIndexInterface(
+    std::shared_ptr<valkey_search::IndexSchema> /*schema*/) {
+  // Provide a reasonable set of fields for fuzzing.
+  using valkey_search::indexes::IndexerType;
+  fields_["n1"] = IndexerType::kNumeric;
+  fields_["n2"] = IndexerType::kNumeric;
+  fields_["title"] = IndexerType::kTag;
+  fields_["price"] = IndexerType::kNumeric;
+  fields_["status"] = IndexerType::kTag;
+}
+
+absl::StatusOr<valkey_search::indexes::IndexerType>
+FuzzIndexInterface::GetFieldType(absl::string_view field_name) const {
+  auto it = fields_.find(std::string(field_name));
+  if (it == fields_.end()) {
+    return absl::NotFoundError(
+        absl::StrCat("Unknown field ", field_name, " in index."));
+  }
+  return it->second;
+}
+
+absl::StatusOr<std::string> FuzzIndexInterface::GetIdentifier(
+    absl::string_view alias) const {
+  auto status = GetFieldType(alias);
+  if (!status.ok()) return status.status();
+  return std::string(alias);
+}
+
+absl::StatusOr<std::string> FuzzIndexInterface::GetAlias(
+    absl::string_view identifier) const {
+  auto it = fields_.find(std::string(identifier));
+  if (it == fields_.end()) {
+    return absl::NotFoundError(
+        absl::StrCat("Unknown identifier ", identifier, " in index."));
+  }
+  return it->first;
 }

@@ -2,7 +2,7 @@
 # Orchestrator script: build and run all fuzz targets, collect results.
 #
 # Usage:
-#   ./fuzzing/run_all_fuzzers.sh [--build] [--asan] [--duration <seconds>] [--build-dir <path>]
+#   ./fuzzing/run_all_fuzzers.sh [--duration <seconds>] [--build-dir <path>]
 
 set -e
 
@@ -11,21 +11,11 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Defaults
 DURATION=300
-BUILD_DIR=""
-DO_BUILD="no"
-USE_ASAN="no"
+BUILD_DIR=".build-fuzz-asan"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --build)
-      DO_BUILD="yes"
-      shift
-      ;;
-    --asan)
-      USE_ASAN="yes"
-      shift
-      ;;
     --duration)
       DURATION="$2"
       shift 2
@@ -35,13 +25,13 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     -h|--help)
-      echo "Usage: $0 [--build] [--asan] [--duration <seconds>] [--build-dir <path>]"
+      echo "Usage: $0 [--duration <seconds>] [--build-dir <path>]"
       echo ""
       echo "Options:"
-      echo "  --build      Build with AFL instrumentation before fuzzing"
-      echo "  --asan       Enable address sanitizer (AFL_USE_ASAN=1)"
       echo "  --duration   Seconds to run each fuzzer (default: 300)"
-      echo "  --build-dir  Build output directory (default: .build-fuzz or .build-fuzz-asan)"
+      echo "  --build-dir  Build output directory (default: .build-fuzz-asan)"
+      echo ""
+      echo "Automatically builds AFL+ASAN instrumented binaries if not already present."
       exit 0
       ;;
     *)
@@ -51,38 +41,19 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Set build directory default based on asan flag
-if [[ -z "$BUILD_DIR" ]]; then
-  if [[ "$USE_ASAN" == "yes" ]]; then
-    BUILD_DIR=".build-fuzz-asan"
-  else
-    BUILD_DIR=".build-fuzz"
-  fi
-fi
-
-# ---------------------------------------------------------------------------
-# Build with AFL instrumentation if requested
-# ---------------------------------------------------------------------------
-if [[ "$DO_BUILD" == "yes" ]]; then
-  echo "=== Building with AFL instrumentation ==="
-  BUILD_ARGS="--fuzz"
-  if [[ "$USE_ASAN" == "yes" ]]; then
-    BUILD_ARGS="$BUILD_ARGS --asan"
-  fi
-  cd "$PROJECT_ROOT"
-  ./build.sh $BUILD_ARGS
-fi
-
 # ---------------------------------------------------------------------------
 # Fuzz target definitions
-# Each entry: "<target_name> <binary_path> <seeds_dir> <dict_file>"
+# Each entry: "<target_name> <binary_name> <seeds_dir> <dict_file>"
 # ---------------------------------------------------------------------------
 FUZZ_TARGETS=(
-  "query_parser ${BUILD_DIR}/tests/fuzz_query_parser fuzzing/query_parser/seeds fuzzing/query_parser/query.dict"
+  "query_parser fuzz_query_parser fuzzing/query_parser/seeds fuzzing/query_parser/query.dict"
+  "ft_create_parser fuzz_ft_create_parser fuzzing/ft_create_parser/seeds fuzzing/ft_create_parser/ft_create.dict"
+  "ft_search_parser fuzz_ft_search_parser fuzzing/ft_search_parser/seeds fuzzing/ft_search_parser/ft_search.dict"
+  "ft_aggregate_parser fuzz_ft_aggregate_parser fuzzing/ft_aggregate_parser/seeds fuzzing/ft_aggregate_parser/ft_aggregate.dict"
 )
 
 # ---------------------------------------------------------------------------
-# Preflight checks
+# Preflight: ensure afl-fuzz is available
 # ---------------------------------------------------------------------------
 if ! command -v afl-fuzz &>/dev/null; then
   echo "ERROR: afl-fuzz not found. Install AFL++ first."
@@ -90,12 +61,32 @@ if ! command -v afl-fuzz &>/dev/null; then
   exit 1
 fi
 
+# ---------------------------------------------------------------------------
+# Auto-build AFL+ASAN binaries if any are missing
+# ---------------------------------------------------------------------------
+NEED_BUILD="no"
 for entry in "${FUZZ_TARGETS[@]}"; do
-  read -r name binary seeds dict <<< "$entry"
+  read -r _name bin_name _seeds _dict <<< "$entry"
+  if [[ ! -x "$PROJECT_ROOT/$BUILD_DIR/tests/$bin_name" ]]; then
+    NEED_BUILD="yes"
+    break
+  fi
+done
+
+if [[ "$NEED_BUILD" == "yes" ]]; then
+  echo "=== Building AFL+ASAN instrumented binaries ==="
+  cd "$PROJECT_ROOT"
+  ./build.sh --fuzz --asan
+fi
+
+# ---------------------------------------------------------------------------
+# Verify all binaries and seeds exist
+# ---------------------------------------------------------------------------
+for entry in "${FUZZ_TARGETS[@]}"; do
+  read -r name bin_name seeds dict <<< "$entry"
+  binary="$BUILD_DIR/tests/$bin_name"
   if [[ ! -x "$PROJECT_ROOT/$binary" ]]; then
-    echo "ERROR: Binary not found: $PROJECT_ROOT/$binary"
-    echo "  Build with: ./build.sh --fuzz"
-    echo "  Or run:     $0 --build"
+    echo "ERROR: Binary not found after build: $PROJECT_ROOT/$binary"
     exit 1
   fi
   if [[ ! -d "$PROJECT_ROOT/$seeds" ]]; then
@@ -105,11 +96,11 @@ for entry in "${FUZZ_TARGETS[@]}"; do
 done
 
 # Verify the binary has AFL instrumentation
-FIRST_BINARY="${PROJECT_ROOT}/$(echo "${FUZZ_TARGETS[0]}" | awk '{print $2}')"
+FIRST_BIN_NAME=$(echo "${FUZZ_TARGETS[0]}" | awk '{print $2}')
+FIRST_BINARY="$PROJECT_ROOT/$BUILD_DIR/tests/$FIRST_BIN_NAME"
 if ! strings "$FIRST_BINARY" 2>/dev/null | grep -q "__afl"; then
   echo "WARNING: Binary does not appear to have AFL instrumentation."
-  echo "  Rebuild with: ./build.sh --fuzz"
-  echo "  Or run:       $0 --build"
+  echo "  Rebuild with: ./build.sh --fuzz --asan"
   echo ""
 fi
 
@@ -132,15 +123,16 @@ RESULTS_FILE="$SCRIPT_DIR/fuzz_results.txt"
 echo "Fuzzing Results - $(date)" > "$RESULTS_FILE"
 echo "Duration per target: ${DURATION}s" >> "$RESULTS_FILE"
 echo "Build directory: ${BUILD_DIR}" >> "$RESULTS_FILE"
-if [[ "$USE_ASAN" == "yes" ]]; then
-  echo "Address sanitizer: enabled" >> "$RESULTS_FILE"
-fi
+echo "Address sanitizer: enabled" >> "$RESULTS_FILE"
 echo "========================================" >> "$RESULTS_FILE"
 
 cd "$PROJECT_ROOT"
 
+trap 'echo ""; echo "Interrupted."; exit 130' INT TERM
+
 for entry in "${FUZZ_TARGETS[@]}"; do
-  read -r name binary seeds dict <<< "$entry"
+  read -r name bin_name seeds dict <<< "$entry"
+  binary="$BUILD_DIR/tests/$bin_name"
   OUT_DIR="fuzzing/afl_out/$name"
   mkdir -p "$OUT_DIR"
 
@@ -156,13 +148,25 @@ for entry in "${FUZZ_TARGETS[@]}"; do
     DICT_FLAG="-x $dict"
   fi
 
-  # Run with timeout; afl-fuzz returns non-zero on timeout, which is expected
-  timeout "${DURATION}s" afl-fuzz \
+  # Save terminal state before running afl-fuzz
+  STTY_SAVED=$(stty -g 2>/dev/null) || true
+
+  # Run afl-fuzz in a new session (setsid -w) to prevent signal propagation
+  # to the parent shell. Redirect stdin from /dev/null and capture output to
+  # a log file to prevent afl-fuzz's TUI from corrupting the terminal.
+  AFL_LOG="$OUT_DIR/afl_log.txt"
+  setsid -w timeout "${DURATION}s" afl-fuzz \
     -i "$seeds" \
     -o "$OUT_DIR" \
     $DICT_FLAG \
     -- "$binary" \
-    2>&1 || true
+    </dev/null >"$AFL_LOG" 2>&1 &
+  wait $! 2>/dev/null || true
+
+  # Restore terminal state in case afl-fuzz corrupted it
+  if [[ -n "$STTY_SAVED" ]]; then
+    stty "$STTY_SAVED" 2>/dev/null || true
+  fi
 
   # Collect stats
   echo "" >> "$RESULTS_FILE"

@@ -7,6 +7,9 @@ target_include_directories(fuzz_common PUBLIC
 
 target_link_libraries(fuzz_common PUBLIC
     attribute_data_type
+    commands
+    ft_create_parser
+    ft_search_parser
     index_schema
     keyspace_event_manager
     valkey_search

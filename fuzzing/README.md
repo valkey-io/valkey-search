@@ -16,6 +16,21 @@ fuzzing/
     CMakeLists.txt            # Builds fuzz_query_parser executable
     seeds/                    # Seed inputs (checked into git)
     query.dict                # AFL dictionary for query syntax
+  ft_create_parser/
+    fuzz_ft_create_parser.cc  # Harness: ParseFTCreateArgs() + AFL main()
+    CMakeLists.txt            # Builds fuzz_ft_create_parser executable
+    seeds/                    # Seed inputs (FT.CREATE arg strings)
+    ft_create.dict            # AFL dictionary for FT.CREATE keywords
+  ft_search_parser/
+    fuzz_ft_search_parser.cc  # Harness: SearchCommand::ParseCommand() + AFL main()
+    CMakeLists.txt            # Builds fuzz_ft_search_parser executable
+    seeds/                    # Seed inputs (FT.SEARCH option strings)
+    ft_search.dict            # AFL dictionary for FT.SEARCH keywords
+  ft_aggregate_parser/
+    fuzz_ft_aggregate_parser.cc # Harness: CreateAggregateParser().Parse() + AFL main()
+    CMakeLists.txt            # Builds fuzz_ft_aggregate_parser executable
+    seeds/                    # Seed inputs (FT.AGGREGATE option strings)
+    ft_aggregate.dict         # AFL dictionary for FT.AGGREGATE keywords
 ```
 
 ## Building
@@ -26,7 +41,10 @@ Builds the fuzz harnesses without AFL instrumentation. Useful for manual testing
 
 ```bash
 ./build.sh
-# Binary: .build-release/tests/fuzz_query_parser
+# Binaries: .build-release/tests/fuzz_query_parser
+#           .build-release/tests/fuzz_ft_create_parser
+#           .build-release/tests/fuzz_ft_search_parser
+#           .build-release/tests/fuzz_ft_aggregate_parser
 ```
 
 ### Instrumented Build (for AFL fuzzing)
@@ -35,14 +53,20 @@ The `--fuzz` flag sets `CC=afl-gcc CXX=afl-g++` and uses a dedicated `.build-fuz
 
 ```bash
 ./build.sh --fuzz
-# Binary: .build-fuzz/tests/fuzz_query_parser
+# Binaries: .build-fuzz/tests/fuzz_query_parser
+#           .build-fuzz/tests/fuzz_ft_create_parser
+#           .build-fuzz/tests/fuzz_ft_search_parser
+#           .build-fuzz/tests/fuzz_ft_aggregate_parser
 ```
 
 For AFL + AddressSanitizer (catches memory errors during fuzzing):
 
 ```bash
 ./build.sh --fuzz --asan
-# Binary: .build-fuzz-asan/tests/fuzz_query_parser
+# Binaries: .build-fuzz-asan/tests/fuzz_query_parser
+#           .build-fuzz-asan/tests/fuzz_ft_create_parser
+#           .build-fuzz-asan/tests/fuzz_ft_search_parser
+#           .build-fuzz-asan/tests/fuzz_ft_aggregate_parser
 ```
 
 Uses `afl-gcc` mode. The codebase has compatibility issues with clang-17, so `afl-clang-fast` is not currently supported.

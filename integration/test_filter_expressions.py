@@ -905,7 +905,6 @@ class TestFilterExpressions(ValkeySearchTestCaseBase):
     def test_10k_tag_filters(self):
         """
         Test with 10,000 tag filters to verify query complexity limits.
-        This tests the query-string-terms-count configuration limit.
         """
         client: Valkey = self.server.get_new_client()
         # Set query-string-bytes to 100k to handle large query string size

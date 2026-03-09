@@ -485,4 +485,183 @@ TEST_F(ValueTest, vector_arithmetic) {
   EXPECT_NE(error_msg.find("Length mismatch"), std::string::npos);
 }
 
+TEST_F(ValueTest, VectorComparison_EqualVectors) {
+  // Test equal vectors with same elements
+  Value vec1({Value(1.0), Value(2.0), Value(3.0)});
+  Value vec2({Value(1.0), Value(2.0), Value(3.0)});
+  EXPECT_EQ(Compare(vec1, vec2), Ordering::kEQUAL);
+  EXPECT_TRUE(vec1 == vec2);
+  EXPECT_FALSE(vec1 != vec2);
+  EXPECT_FALSE(vec1 < vec2);
+  EXPECT_TRUE(vec1 <= vec2);
+  EXPECT_FALSE(vec1 > vec2);
+  EXPECT_TRUE(vec1 >= vec2);
+
+  // Test equal empty vectors
+  Value empty1({});
+  Value empty2({});
+  EXPECT_EQ(Compare(empty1, empty2), Ordering::kEQUAL);
+  EXPECT_TRUE(empty1 == empty2);
+
+  // Test equal single-element vectors
+  Value single1({Value(42.0)});
+  Value single2({Value(42.0)});
+  EXPECT_EQ(Compare(single1, single2), Ordering::kEQUAL);
+  EXPECT_TRUE(single1 == single2);
+
+  // Test equal vectors with string elements
+  Value str_vec1({Value(std::string("a")), Value(std::string("b"))});
+  Value str_vec2({Value(std::string("a")), Value(std::string("b"))});
+  EXPECT_EQ(Compare(str_vec1, str_vec2), Ordering::kEQUAL);
+  EXPECT_TRUE(str_vec1 == str_vec2);
+
+  // Test equal vectors with mixed types
+  Value mixed1({Value(1.0), Value(std::string("test")), Value(true)});
+  Value mixed2({Value(1.0), Value(std::string("test")), Value(true)});
+  EXPECT_EQ(Compare(mixed1, mixed2), Ordering::kEQUAL);
+  EXPECT_TRUE(mixed1 == mixed2);
+
+  // Test equal nested vectors
+  Value nested1(
+      {Value({Value(1.0), Value(2.0)}), Value({Value(3.0), Value(4.0)})});
+  Value nested2(
+      {Value({Value(1.0), Value(2.0)}), Value({Value(3.0), Value(4.0)})});
+  EXPECT_EQ(Compare(nested1, nested2), Ordering::kEQUAL);
+  EXPECT_TRUE(nested1 == nested2);
+}
+
+TEST_F(ValueTest, VectorComparison_DifferingElements) {
+  // Test vectors differing in first element
+  Value vec1({Value(1.0), Value(2.0), Value(3.0)});
+  Value vec2({Value(2.0), Value(2.0), Value(3.0)});
+  EXPECT_EQ(Compare(vec1, vec2), Ordering::kLESS);
+  EXPECT_EQ(Compare(vec2, vec1), Ordering::kGREATER);
+  EXPECT_TRUE(vec1 < vec2);
+  EXPECT_TRUE(vec2 > vec1);
+  EXPECT_FALSE(vec1 == vec2);
+  EXPECT_TRUE(vec1 != vec2);
+
+  // Test vectors differing in middle element
+  Value vec3({Value(1.0), Value(2.0), Value(3.0)});
+  Value vec4({Value(1.0), Value(5.0), Value(3.0)});
+  EXPECT_EQ(Compare(vec3, vec4), Ordering::kLESS);
+  EXPECT_EQ(Compare(vec4, vec3), Ordering::kGREATER);
+  EXPECT_TRUE(vec3 < vec4);
+  EXPECT_TRUE(vec4 > vec3);
+
+  // Test vectors differing in last element
+  Value vec5({Value(1.0), Value(2.0), Value(3.0)});
+  Value vec6({Value(1.0), Value(2.0), Value(10.0)});
+  EXPECT_EQ(Compare(vec5, vec6), Ordering::kLESS);
+  EXPECT_EQ(Compare(vec6, vec5), Ordering::kGREATER);
+  EXPECT_TRUE(vec5 < vec6);
+  EXPECT_TRUE(vec6 > vec5);
+
+  // Test vectors with string elements differing
+  Value str_vec1({Value(std::string("a")), Value(std::string("b"))});
+  Value str_vec2({Value(std::string("a")), Value(std::string("c"))});
+  EXPECT_EQ(Compare(str_vec1, str_vec2), Ordering::kLESS);
+  EXPECT_EQ(Compare(str_vec2, str_vec1), Ordering::kGREATER);
+  EXPECT_TRUE(str_vec1 < str_vec2);
+
+  // Test vectors with negative numbers
+  Value neg_vec1({Value(-5.0), Value(2.0)});
+  Value neg_vec2({Value(-3.0), Value(2.0)});
+  EXPECT_EQ(Compare(neg_vec1, neg_vec2), Ordering::kLESS);
+  EXPECT_EQ(Compare(neg_vec2, neg_vec1), Ordering::kGREATER);
+
+  // Test nested vectors differing in inner elements
+  Value nested1(
+      {Value({Value(1.0), Value(2.0)}), Value({Value(3.0), Value(4.0)})});
+  Value nested2(
+      {Value({Value(1.0), Value(2.0)}), Value({Value(3.0), Value(5.0)})});
+  EXPECT_EQ(Compare(nested1, nested2), Ordering::kLESS);
+  EXPECT_EQ(Compare(nested2, nested1), Ordering::kGREATER);
+}
+
+TEST_F(ValueTest, VectorComparison_DifferingLength) {
+  // Test shorter vector vs longer vector (same prefix)
+  Value short_vec({Value(1.0), Value(2.0)});
+  Value long_vec({Value(1.0), Value(2.0), Value(3.0)});
+  EXPECT_EQ(Compare(short_vec, long_vec), Ordering::kLESS);
+  EXPECT_EQ(Compare(long_vec, short_vec), Ordering::kGREATER);
+  EXPECT_TRUE(short_vec < long_vec);
+  EXPECT_TRUE(long_vec > short_vec);
+  EXPECT_FALSE(short_vec == long_vec);
+  EXPECT_TRUE(short_vec != long_vec);
+
+  // Test empty vector vs non-empty vector
+  Value empty({});
+  Value non_empty({Value(1.0)});
+  EXPECT_EQ(Compare(empty, non_empty), Ordering::kLESS);
+  EXPECT_EQ(Compare(non_empty, empty), Ordering::kGREATER);
+  EXPECT_TRUE(empty < non_empty);
+  EXPECT_TRUE(non_empty > empty);
+
+  // Test vectors of different lengths with different first elements
+  Value vec1({Value(5.0)});
+  Value vec2({Value(1.0), Value(2.0), Value(3.0)});
+  // First element differs (5.0 > 1.0), so length doesn't matter
+  EXPECT_EQ(Compare(vec1, vec2), Ordering::kGREATER);
+  EXPECT_EQ(Compare(vec2, vec1), Ordering::kLESS);
+
+  // Test vectors where shorter has larger elements
+  Value short_large({Value(10.0), Value(20.0)});
+  Value long_small({Value(10.0), Value(20.0), Value(1.0)});
+  // All common elements equal, so shorter < longer
+  EXPECT_EQ(Compare(short_large, long_small), Ordering::kLESS);
+  EXPECT_EQ(Compare(long_small, short_large), Ordering::kGREATER);
+
+  // Test nested vectors with different lengths
+  Value nested_short({Value({Value(1.0)})});
+  Value nested_long({Value({Value(1.0)}), Value({Value(2.0)})});
+  EXPECT_EQ(Compare(nested_short, nested_long), Ordering::kLESS);
+  EXPECT_EQ(Compare(nested_long, nested_short), Ordering::kGREATER);
+}
+
+TEST_F(ValueTest, VectorComparison_VectorVsScalar) {
+  // Test vector vs scalar comparisons (should be UNORDERED)
+  Value vec({Value(1.0), Value(2.0), Value(3.0)});
+  Value scalar_double(1.0);
+  Value scalar_string(std::string("test"));
+  Value scalar_bool(true);
+  Value scalar_nil;
+
+  // Vector vs double
+  EXPECT_EQ(Compare(vec, scalar_double), Ordering::kUNORDERED);
+  EXPECT_EQ(Compare(scalar_double, vec), Ordering::kUNORDERED);
+  EXPECT_TRUE(vec == scalar_double);   // UNORDERED treated as equal by ==
+  EXPECT_FALSE(vec != scalar_double);  // UNORDERED not treated as != by !=
+
+  // Vector vs string
+  EXPECT_EQ(Compare(vec, scalar_string), Ordering::kUNORDERED);
+  EXPECT_EQ(Compare(scalar_string, vec), Ordering::kUNORDERED);
+  EXPECT_TRUE(vec == scalar_string);
+
+  // Vector vs bool
+  EXPECT_EQ(Compare(vec, scalar_bool), Ordering::kUNORDERED);
+  EXPECT_EQ(Compare(scalar_bool, vec), Ordering::kUNORDERED);
+  EXPECT_TRUE(vec == scalar_bool);
+
+  // Vector vs nil
+  EXPECT_EQ(Compare(vec, scalar_nil), Ordering::kUNORDERED);
+  EXPECT_EQ(Compare(scalar_nil, vec), Ordering::kUNORDERED);
+  EXPECT_TRUE(vec == scalar_nil);
+
+  // Empty vector vs scalar
+  Value empty_vec({});
+  EXPECT_EQ(Compare(empty_vec, scalar_double), Ordering::kUNORDERED);
+  EXPECT_EQ(Compare(scalar_double, empty_vec), Ordering::kUNORDERED);
+
+  // Single-element vector vs scalar
+  Value single_vec({Value(42.0)});
+  EXPECT_EQ(Compare(single_vec, Value(42.0)), Ordering::kUNORDERED);
+  EXPECT_EQ(Compare(Value(42.0), single_vec), Ordering::kUNORDERED);
+
+  // Nested vector vs scalar
+  Value nested({Value({Value(1.0)})});
+  EXPECT_EQ(Compare(nested, scalar_double), Ordering::kUNORDERED);
+  EXPECT_EQ(Compare(scalar_double, nested), Ordering::kUNORDERED);
+}
+
 }  // namespace valkey_search::expr

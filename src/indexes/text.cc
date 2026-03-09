@@ -15,7 +15,6 @@
 #include "src/indexes/text/fuzzy.h"
 #include "src/indexes/text/term.h"
 #include "src/valkey_search_options.h"
-#include "vmsdk/src/debug.h"
 
 namespace valkey_search::indexes {
 
@@ -190,9 +189,6 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
     }
     // Search for stem variants - these should all exist from ingestion
     for (const auto &variant : stem_variants) {
-      if (!vmsdk::IsMainThread()) {
-        PAUSEPOINT("search_term_predicate");
-      }
       bool found =
           TryAddWordKeyIterator(text_index.get(), variant, key_iterators);
       CHECK(found) << "Word in stem tree not found in index - ingestion issue";

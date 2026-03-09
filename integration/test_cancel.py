@@ -67,9 +67,6 @@ def search(
 def wait_for_pausepoint(client: Valkey, pausepoint_name: str, timeout: int = 5) -> bool:
     """
     Wait for a pausepoint to be hit by at least one thread.
-
-    Returns:
-        True if pausepoint was hit, False if timeout
     """
     start = time.time()
     while time.time() - start < timeout:
@@ -78,34 +75,6 @@ def wait_for_pausepoint(client: Valkey, pausepoint_name: str, timeout: int = 5) 
             return True
         time.sleep(0.1)
     return False
-
-def verify_server_responsive(client: Valkey, duration: float = 2.0, ping_count: int = 10) -> bool:
-    """
-    Verify server remains responsive by sending multiple PINGs over time.
-
-    This proves the reader thread is NOT spinning at 100% CPU, which would
-    block the main thread from processing PING commands.
-
-    Args:
-        client: Valkey client
-        duration: Total time to test responsiveness (seconds)
-        ping_count: Number of PINGs to send
-        
-    Returns:
-        True if all PINGs succeeded, False otherwise
-    """
-    interval = duration / ping_count
-    for i in range(ping_count):
-        try:
-            result = client.ping()
-            if result != True:
-                return False
-        except Exception as e:
-            print(f"PING {i+1}/{ping_count} failed: {e}")
-            return False
-        time.sleep(interval)
-    return True
-
 
 def aggregate_command(index: str, filter: Union[int, None], stages: list[str] = None) -> list[str]:
     """Build FT.AGGREGATE command with specified stages and timeout."""
@@ -149,18 +118,56 @@ def aggregate(
         assert "cancelled due to timeout" in error_msg, f"Expected timeout error, got: {error_msg}"
         return []
 
-def join_thread_with_cleanup(thread: threading.Thread, timeout: float = 10) -> None:
-    """
-    Join a thread and wait for any pending async operations to complete.
-    
-    Args:
-        thread: Thread to join
-        timeout: Maximum time to wait for thread (seconds)
-    """
-    thread.join(timeout=timeout)
-    # Allow time for pending event loop callbacks to execute
-    time.sleep(1)
 
+def run_pausepoint_timeout_test(self, pausepoint_name, setup_fn, search_cmd, timeout_ms=5000):
+    """
+    Shared helper for pausepoint-based timeout tests.
+
+    Verifies:
+    1. Pausepoint is hit (proves the code path is exercised)
+    2. Server remains responsive (not spinning at 100% CPU)
+    3. Timeout fires and command returns error
+
+    Args:
+        pausepoint_name: Name of the pausepoint to set
+        setup_fn: Callable(client) that creates indexes and loads data
+        search_cmd: List of command args to execute as the search.
+        timeout_ms: Timeout in milliseconds for the search command
+    """
+    client = self.server.get_new_client()
+    client.execute_command("FLUSHALL", "SYNC")
+
+    setup_fn(client)
+
+    assert client.execute_command("FT._DEBUG", "PAUSEPOINT", "SET", pausepoint_name) == b"OK"
+
+    error = [None]
+    def run_search():
+        tc = self.server.get_new_client()
+        try:
+            tc.execute_command(*search_cmd)
+        except ResponseError as e:
+            error[0] = str(e)
+        finally:
+            tc.close()
+
+    thread = threading.Thread(target=run_search)
+    thread.start()
+
+    assert wait_for_pausepoint(client, pausepoint_name, timeout=10), \
+        f"Pausepoint {pausepoint_name} was not hit"
+    assert client.ping() == True, "Server not responsive while pausepoint is held"
+
+    # Wait for timeout to fire (timeout_ms + 1s buffer)
+    time.sleep(timeout_ms / 1000 + 1)
+
+    client.execute_command("FT._DEBUG", "PAUSEPOINT", "RESET", pausepoint_name)
+    thread.join(timeout=10)
+    time.sleep(1)  # Allow async callbacks to complete
+
+    assert error[0] is not None, f"Expected timeout error for pausepoint {pausepoint_name}"
+    assert "timeout" in error[0].lower() or "cancelled" in error[0].lower(), \
+        f"Expected timeout error, got: {error[0]}"
 
 class TestCancelCMD(ValkeySearchTestCaseDebugMode):
 
@@ -279,480 +286,137 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
         )
         assert(client.execute_command("FT._DEBUG PAUSEPOINT LIST") == [])
 
-    def test_pausepoint_search_entries_fetcher(self):
+    def test_pausepoint_entries_fetcher(self):
         """
-        Test FT.SEARCH timeout during entries fetcher loop (Issue #686).
-
-        This test verifies:
-        1. Pausepoint correctly pauses execution in entries fetcher
-        2. Server remains responsive during pause (not 100% CPU)
-        3. Timeout is properly detected and command returns error
-
-        Code path: src/query/search.cc - DoSearch() entries fetcher loop
+        Test timeout in entries fetcher loop (Issue #686 path 1).
+        Path: SearchNonVectorQuery → entries fetcher iterator loop
         """
+        def setup(client):
+            Index("idx", [Tag("tag"), Numeric("n")], ["doc"]).create(client)
+            for i in range(1000):
+                client.hset(f"doc:{i}", mapping={"tag": f"value{i % 10}", "n": i})
 
-        client: Valkey = self.server.get_new_client()
-        client.execute_command("FLUSHALL SYNC")
+        run_pausepoint_timeout_test(
+            self, "search_entries_fetcher", setup,
+            ["FT.SEARCH", "idx", "@tag:{value1}", "TIMEOUT", "5000"]
+        )
 
-        # Create index with Tag field to trigger entries fetcher path
-        Index("idx", [Tag("tag"), Numeric("n")], ["doc"]).create(client)
-
-        # Load data
-        for i in range(1000):
-            client.hset(f"doc:{i}", mapping={"tag": f"value{i % 10}", "n": i})
-
-        # Set pausepoint to simulate infinite loop in entries fetcher
-        assert client.execute_command("FT._DEBUG", "PAUSEPOINT", "SET", "search_entries_fetcher") == b"OK"
-        # Execute search in background thread (pausepoint will block it)
-        result = [None]
-        error = [None]
-
-        def run_search():
-            thread_client = None
-            try:
-                thread_client = self.server.get_new_client()
-                result[0] = thread_client.execute_command(
-                    "FT.SEARCH", "idx", "@tag:{value1}",
-                    "TIMEOUT", "5000" # 5 second timeout
-                )
-            except ResponseError as e:
-                error[0] = str(e)
-            finally:
-                if thread_client:
-                    thread_client.close()
-        
-        thread = threading.Thread(target=run_search)
-        thread.start()
-
-        # Wait for pausepoint to be hit (confirms we're in entries fetcher)
-        assert wait_for_pausepoint(client, "search_entries_fetcher"), \
-            "Pausepoint search_entries_fetcher was not hit"
-        assert client.ping() == True, "Server not responsive during pausepoint"
-
-        # Wait for timeout to trigger (5s + buffer)
-        print("Waiting for timeout to trigger...")
-        time.sleep(6.0)
-
-        # Reset pausepoint to allow command to complete
-        assert client.execute_command("FT._DEBUG", "PAUSEPOINT", "RESET", "search_entries_fetcher") == b"OK"
-
-        # Wait for thread to complete
-        join_thread_with_cleanup(thread)
-
-        # Verify timeout error was returned (FT.SEARCH has IsCancelled checks)
-        assert error[0] is not None, "Expected timeout error"
-        print(error[0])
-        assert "timeout" in error[0].lower() or "cancelled" in error[0].lower(), \
-            f"Expected timeout error, got: {error[0]}"
-
-    def test_pausepoint_search_prefilter_eval(self):
+    def test_pausepoint_prefilter_eval(self):
         """
-        Test FT.SEARCH timeout during prefilter evaluation (Issue #686).
-
-        This test verifies timeout handling in the pre-filtering code path,
-        which is triggered when a filter significantly reduces the result set
-        before vector search.
-
-        Code path: src/query/search.cc - EvaluatePrefilteredKeys()
+        Test timeout in prefilter evaluation loop
         """
-        client: Valkey = self.server.get_new_client()
-        client.execute_command("FLUSHALL SYNC")
+        def setup(client):
+            Index("idx", [Numeric("num"), Tag("tag")], ["doc"]).create(client)
+            for i in range(1000):
+                client.hset(f"doc:{i}", mapping={"num": i, "tag": f"val{i % 10}"})
 
-        # Create index with Numeric and Tag to trigger pre-filtering
-        Index("idx", [Numeric("num"), Tag("tag")], ["doc"]).create(client)
+        run_pausepoint_timeout_test(
+            self, "search_prefilter_eval", setup,
+            ["FT.SEARCH", "idx", "@num:[0 50] @tag:{val5}", "TIMEOUT", "5000"]
+        )
 
-        # Load data
-        for i in range(1000):
-            client.hset(f"doc:{i}", mapping={"num": i, "tag": f"val{i % 10}"})
-
-        # Set pausepoint in prefilter evaluation
-        assert client.execute_command("FT._DEBUG", "PAUSEPOINT", "SET", "search_prefilter_eval") == b"OK"
-
-        result = [None]
-        error = [None]
-
-        def run_search():
-            thread_client = None
-            try:
-                # Query with filter that triggers pre-filtering
-                thread_client = self.server.get_new_client()
-                result[0] = thread_client.execute_command(
-                    "FT.SEARCH", "idx", "@num:[0 50] @tag:{val5}",
-                    "TIMEOUT", "5000"
-                )
-            except ResponseError as e:
-                error[0] = str(e)
-            finally:
-                if thread_client:
-                    thread_client.close()
-        
-        thread = threading.Thread(target=run_search)
-        thread.start()
-        
-        # Wait for pausepoint to be hit
-        assert wait_for_pausepoint(client, "search_prefilter_eval", timeout=10), \
-            "Pausepoint search_prefilter_eval was not hit"
-        
-        # Verify server responsive
-        assert client.ping() == True
-        
-        # Wait for timeout
-        time.sleep(6.0)
-        
-        # Reset pausepoint
-        assert client.execute_command("FT._DEBUG", "PAUSEPOINT", "RESET", "search_prefilter_eval") == b"OK"
-        
-        join_thread_with_cleanup(thread)
-        
-        # Verify timeout occurred
-        assert error[0] is not None
-        print(error[0])
-        assert "timeout" in error[0].lower() or "cancelled" in error[0].lower(), \
-            f"Expected timeout error, got: {error[0]}"
-
-    def test_search_pausepoint_term_predicate(self):
-        """Test timeout in term predicate evaluation."""
-        client = self.server.get_new_client()
-        client.execute_command("FLUSHALL", "SYNC")
-
-        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:",
-                            "WITHOFFSETS",
-                            "SCHEMA", "text", "TEXT", "num", "NUMERIC")
-
-        for i in range(2000):
-            client.hset(f"doc:{i}", mapping={
-                "text": f"running runner runs run word{i}",
-                "num": i
-            })
-
-        assert client.execute_command("FT._DEBUG", "PAUSEPOINT", "SET", "search_term_predicate") == b"OK"
-
-        result, error = [None], [None]
-        def run_search():
-            thread_client = None
-            try:
-                thread_client = self.server.get_new_client()
-                result[0] = thread_client.execute_command("FT.SEARCH", "idx", "@text:running", "TIMEOUT", "5000")
-            except ResponseError as e:
-                error[0] = str(e)
-            finally:
-                if thread_client:
-                    thread_client.close()
-
-        thread = threading.Thread(target=run_search)
-        thread.start()
-
-        assert wait_for_pausepoint(client, "search_term_predicate", timeout=10), \
-            "Pausepoint search_term_predicate was not hit"
-
-        assert verify_server_responsive(client, duration=3.0, ping_count=15)
-        time.sleep(6.0)
-        client.execute_command("FT._DEBUG", "PAUSEPOINT", "RESET", "search_term_predicate")
-        join_thread_with_cleanup(thread)
-        # Verify timeout occurred (outer loop has IsCancelled check)
-        assert error[0] is not None, "Expected timeout error"
-        assert "timeout" in error[0].lower() or "cancelled" in error[0].lower(), \
-            f"Expected timeout error, got: {error[0]}"
-
-    def test_search_pausepoint_prefix_expansion(self):
+    def test_pausepoint_inline_filter(self):
         """
-        Test timeout in prefix predicate word expansion loop.
-        
-        Path: Predicate evaluation → PrefixPredicate::Evaluate → word expansion loop
-        File: src/query/predicate.cc line ~169
-        
-        NOTE: Inner loop has NO direct IsCancelled check. Timeout occurs via
-        outer loop (EvaluatePrefilteredKeys at line 426) which checks IsCancelled.
+        Test timeout in HNSW inline filter callback
         """
-        client = self.server.get_new_client()
-        client.execute_command("FLUSHALL", "SYNC")
+        def setup(client):
+            Index("idx", [Vector("v", 3, type="HNSW", distance="L2"), Numeric("num")], ["doc"]).create(client)
+            for i in range(10000):
+                client.hset(f"doc:{i}", mapping={
+                    "v": float_to_bytes([float(i), float(i), float(i)]),
+                    "num": i
+                })
 
-        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:",
-                      "SCHEMA", "text", "TEXT", "num", "NUMERIC")
+        run_pausepoint_timeout_test(
+            self, "search_inline_filter", setup,
+            ["FT.SEARCH", "idx", "@num:[0 9000]=>[KNN 10 @v $BLOB]",
+             "PARAMS", "2", "BLOB", float_to_bytes([10.0, 10.0, 10.0]),
+             "TIMEOUT", "5000"]
+        )
 
-        # Create many words with same prefix
-        for i in range(1000):
-            client.hset(f"doc:{i}", mapping={"text": f"prefix{i} word{i}", "num": i})
-
-        assert client.execute_command("FT._DEBUG", "PAUSEPOINT", "SET", "search_prefix_predicate") == b"OK"
-
-        result = [None]
-        error = [None]
-
-        def run_search():
-            thread_client = None
-            try:
-                # Prefix query
-                thread_client = self.server.get_new_client()
-                result[0] = thread_client.execute_command(
-                    "FT.SEARCH", "idx", "-@text:notexist @text:prefix* @num:[0 500]",
-                    "TIMEOUT", "5000"
-                )
-            except ResponseError as e:
-                error[0] = str(e)
-            finally:
-                if thread_client:
-                    thread_client.close()
-
-        thread = threading.Thread(target=run_search)
-        thread.start()
-
-        assert wait_for_pausepoint(client, "search_prefix_predicate", timeout=10), \
-            "Pausepoint search_prefix_predicate was not hit"
-
-        assert verify_server_responsive(client, duration=3.0, ping_count=15)
-        time.sleep(6.0)
-
-        assert client.execute_command("FT._DEBUG", "PAUSEPOINT", "RESET", "search_prefix_predicate") == b"OK"
-        join_thread_with_cleanup(thread)
-
-        # Verify timeout occurred via outer loop IsCancelled check
-        assert error[0] is not None, "Expected timeout error"
-        assert "timeout" in error[0].lower() or "cancelled" in error[0].lower(), \
-            f"Expected timeout via outer loop check, got: {error[0]}"
-
-    def test_search_pausepoint_suffix_expansion(self):
+    def test_pausepoint_term_predicate(self):
         """
-        Test timeout in suffix predicate word expansion loop.
-
-        Path: Predicate evaluation → SuffixPredicate::Evaluate → word expansion loop
-        File: src/query/predicate.cc line ~225
-        
-        NOTE: Inner loop has NO direct IsCancelled check. Timeout occurs via
-        outer loop (EvaluatePrefilteredKeys at line 426) which checks IsCancelled.
+        Test timeout in term predicate stem variant evaluation
         """
-        client = self.server.get_new_client()
-        client.execute_command("FLUSHALL", "SYNC")
+        def setup(client):
+            client.execute_command("FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:",
+                                "SCHEMA", "text", "TEXT", "num", "NUMERIC")
+            for i in range(2000):
+                # No literal "run" or "ran" - only stem variants like "running", "runs"
+                client.hset(f"doc:{i}", mapping={
+                    "text": f"running runner runs word{i}",
+                    "num": i
+                })
 
-        # Need WITHSUFFIXTRIE for suffix search
-        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:",
-                        "SCHEMA", "text", "TEXT", "WITHSUFFIXTRIE", "num", "NUMERIC")
+        run_pausepoint_timeout_test(
+            self, "search_term_predicate", setup,
+            ["FT.SEARCH", "idx", "-@num:[-inf 0] @text:ran", "TIMEOUT", "5000"]
+        )
 
-        for i in range(1000):
-            client.hset(f"doc:{i}", mapping={"text": f"word{i}suffix", "num": i})
-        
-        assert client.execute_command("FT._DEBUG", "PAUSEPOINT", "SET", "search_suffix_expansion") == b"OK"
 
-        result = [None]
-        error = [None]
-
-        def run_search():
-            thread_client = None
-            try:
-                # Suffix query
-                thread_client = self.server.get_new_client()
-                result[0] = thread_client.execute_command(
-                    "FT.SEARCH", "idx", "-@text:notexist @text:*suffix @num:[0 500]",
-                    "TIMEOUT", "5000"
-                )
-            except ResponseError as e:
-                error[0] = str(e)
-            finally:
-                if thread_client:
-                    thread_client.close()
-
-        thread = threading.Thread(target=run_search)
-        thread.start()
-
-        assert wait_for_pausepoint(client, "search_suffix_expansion", timeout=10), \
-            "Pausepoint search_suffix_expansion was not hit"
-
-        assert verify_server_responsive(client, duration=3.0, ping_count=15)
-        time.sleep(6.0)
-
-        assert client.execute_command("FT._DEBUG", "PAUSEPOINT", "RESET", "search_suffix_expansion") == b"OK"
-        join_thread_with_cleanup(thread)
-
-        # Verify timeout occurred via outer loop IsCancelled check
-        assert error[0] is not None, "Expected timeout error"
-        assert "timeout" in error[0].lower() or "cancelled" in error[0].lower(), \
-            f"Expected timeout via outer loop check, got: {error[0]}"
-
-    def test_search_pausepoint_fuzzy_search(self):
+    def test_pausepoint_prefix_predicate(self):
         """
-        Test timeout in fuzzy predicate Levenshtein search loop.
-        
-        Path: Predicate evaluation → FuzzyPredicate::Evaluate → fuzzy search loop
-        File: src/query/predicate.cc line ~300
-        
-        NOTE: Inner loop has NO direct IsCancelled check. Timeout occurs via
-        outer loop (EvaluatePrefilteredKeys at line 426) which checks IsCancelled.
+        Test timeout in prefix predicate word expansion
         """
-        client = self.server.get_new_client()
-        client.execute_command("FLUSHALL", "SYNC")
-        
-        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:",
-                      "SCHEMA", "text", "TEXT", "num", "NUMERIC")
-        
-        for i in range(1000):
-            client.hset(f"doc:{i}", mapping={"text": f"fuzzy{i} word{i}", "num": i})
-        
-        assert client.execute_command("FT._DEBUG", "PAUSEPOINT", "SET", "search_fuzzy_search") == b"OK"
+        def setup(client):
+            client.execute_command("FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:",
+                                  "SCHEMA", "text", "TEXT", "num", "NUMERIC")
+            for i in range(1000):
+                client.hset(f"doc:{i}", mapping={"text": f"prefix{i} word{i}", "num": i})
 
-        result = [None]
-        error = [None]
+        run_pausepoint_timeout_test(
+            self, "search_prefix_predicate", setup,
+            ["FT.SEARCH", "idx", "-@text:notexist @text:prefix* @num:[0 500]", "TIMEOUT", "5000"]
+        )
 
-        def run_search():
-            thread_client = None
-            try:
-                thread_client = self.server.get_new_client()
-                # Fuzzy query with edit distance 2
-                result[0] = thread_client.execute_command(
-                    "FT.SEARCH", "idx", "-@text:notexist @text:%fuzzy% @num:[0 500]",
-                    "TIMEOUT", "5000"
-                )
-            except ResponseError as e:
-                error[0] = str(e)
-            finally:
-                if thread_client:
-                    thread_client.close()
-
-        thread = threading.Thread(target=run_search)
-        thread.start()
-
-        assert wait_for_pausepoint(client, "search_fuzzy_search", timeout=10), \
-            "Pausepoint search_fuzzy_search was not hit"
-
-        assert verify_server_responsive(client, duration=3.0, ping_count=15)
-        time.sleep(6.0)
-
-        assert client.execute_command("FT._DEBUG", "PAUSEPOINT", "RESET", "search_fuzzy_search") == b"OK"
-        join_thread_with_cleanup(thread)
-
-        # Verify timeout occurred via outer loop IsCancelled check
-        assert error[0] is not None, "Expected timeout error"
-        assert "timeout" in error[0].lower() or "cancelled" in error[0].lower(), \
-            f"Expected timeout via outer loop check, got: {error[0]}"
-
-    def test_search_pausepoint_composed_children(self):
+    def test_pausepoint_suffix_predicate(self):
         """
-        Test timeout in composed predicate children iteration loop.
-        
-        Path: Predicate evaluation → ComposedPredicate::EvaluateWithContext → children loop
-        File: src/query/predicate.cc line ~464
-        
-        NOTE: Inner loop has NO direct IsCancelled check. Timeout occurs via
-        outer loop (EvaluatePrefilteredKeys at line 426) which checks IsCancelled.
+        Test timeout in suffix predicate word expansion
         """
-        client = self.server.get_new_client()
-        client.execute_command("FLUSHALL", "SYNC")
+        def setup(client):
+            client.execute_command("FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:",
+                                  "SCHEMA", "text", "TEXT", "WITHSUFFIXTRIE", "num", "NUMERIC")
+            for i in range(1000):
+                client.hset(f"doc:{i}", mapping={"text": f"word{i}suffix", "num": i})
 
-        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:",
-                          "SCHEMA", "text", "TEXT", "tag", "TAG", "num", "NUMERIC")
+        run_pausepoint_timeout_test(
+            self, "search_suffix_expansion", setup,
+            ["FT.SEARCH", "idx", "-@text:notexist @text:*suffix @num:[0 500]", "TIMEOUT", "5000"]
+        )
 
-        for i in range(1000):
-            client.hset(f"doc:{i}", mapping={
-                "text": f"word{i}",
-                "tag": f"tag{i % 10}",
-                "num": i
-            })
-
-        assert client.execute_command("FT._DEBUG", "PAUSEPOINT", "SET", "search_composed_predicate") == b"OK"
-
-        result = [None]
-        error = [None]
-        
-        def run_search():
-            thread_client = None
-            try:
-                thread_client = self.server.get_new_client()
-                # Complex composed query with multiple children
-                result[0] = thread_client.execute_command(
-                    "FT.SEARCH", "idx", "(@text:word* | @tag:{tag1}) @num:[0 500]",
-                    "TIMEOUT", "5000"
-                )
-            except ResponseError as e:
-                error[0] = str(e)
-            finally:
-                if thread_client:
-                    thread_client.close()
-
-        thread = threading.Thread(target=run_search)
-        thread.start()
-
-        assert wait_for_pausepoint(client, "search_composed_predicate", timeout=10), \
-            "Pausepoint search_composed_predicate was not hit"
-
-        assert verify_server_responsive(client, duration=3.0, ping_count=15)
-        time.sleep(6.0)
-
-        assert client.execute_command("FT._DEBUG", "PAUSEPOINT", "RESET", "search_composed_predicate") == b"OK"
-        join_thread_with_cleanup(thread)
-
-        # Verify timeout occurred via outer loop IsCancelled check
-        assert error[0] is not None, "Expected timeout error"
-        assert "timeout" in error[0].lower() or "cancelled" in error[0].lower(), \
-            f"Expected timeout via outer loop check, got: {error[0]}"
-
-    def test_pausepoint_search_inline_filter(self):
+    def test_pausepoint_fuzzy_predicate(self):
         """
-        Test FT.SEARCH timeout during inline filtering (HYBRID query).
-        
-        This tests the inline filtering path used in HYBRID queries where
-        vector search is performed with filters applied during the search.
-        
-        Code path: src/query/search.cc - InlineVectorFilter::operator()
-        
-        NOTE: InlineVectorFilter itself has NO direct IsCancelled check.
-        Timeout depends on HNSW's CancelCondition being checked by the
-        searchKnn algorithm. This test verifies timeout via that mechanism.
-        
-        FLAT index always uses prefiltering. Must use HNSW with broad filter
-        to trigger inline filtering (filter must match > 0.1% of vectors).
+        Test timeout in fuzzy predicate search loop
         """
-        client: Valkey = self.server.get_new_client()
-        client.execute_command("FLUSHALL SYNC")
+        def setup(client):
+            client.execute_command("FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:",
+                                  "SCHEMA", "text", "TEXT", "num", "NUMERIC")
+            for i in range(1000):
+                client.hset(f"doc:{i}", mapping={"text": f"fuzzy{i} word{i}", "num": i})
 
-        # Create index with HNSW (not FLAT) to allow inline filtering
-        Index("idx", [Vector("v", 3, type="HNSW", distance="L2"), Numeric("num")], ["doc"]).create(client)
+        run_pausepoint_timeout_test(
+            self, "search_fuzzy_search", setup,
+            ["FT.SEARCH", "idx", "-@text:notexist @text:%fuzzy% @num:[0 500]", "TIMEOUT", "5000"]
+        )
 
-        for i in range(10000):
-            client.hset(f"doc:{i}", mapping={
-                "v": float_to_bytes([float(i), float(i), float(i)]),
-                "num": i
-            })
+    def test_pausepoint_composed_predicate(self):
+        """
+        Test timeout in composed predicate children iteration
+        """
+        def setup(client):
+            client.execute_command("FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:",
+                                  "SCHEMA", "text", "TEXT", "tag", "TAG", "num", "NUMERIC")
+            for i in range(1000):
+                client.hset(f"doc:{i}", mapping={
+                    "text": f"word{i}",
+                    "tag": f"tag{i % 10}",
+                    "num": i
+                })
 
-        # Set pausepoint in inline filter
-        assert client.execute_command("FT._DEBUG", "PAUSEPOINT", "SET", "search_inline_filter") == b"OK"
-
-        result = [None]
-        error = [None]
-
-        def run_search():
-            thread_client = None
-            try:
-                thread_client = self.server.get_new_client()
-                # HYBRID query with BROAD filter (90% of data matches)
-                # This triggers inline filtering because filtered set > 0.1% threshold
-                result[0] = thread_client.execute_command(
-                    "FT.SEARCH", "idx", "@num:[0 9000]=>[KNN 10 @v $BLOB]",
-                    "PARAMS", "2", "BLOB", float_to_bytes([10.0, 10.0, 10.0]),
-                    "TIMEOUT", "5000"
-                )
-            except ResponseError as e:
-                error[0] = str(e)
-            finally:
-                if thread_client:
-                    thread_client.close()
-
-        thread = threading.Thread(target=run_search)
-        thread.start()
-
-        # Wait for pausepoint
-        assert wait_for_pausepoint(client, "search_inline_filter", timeout=10), \
-            "Pausepoint search_inline_filter was not hit"
-
-        verify_server_responsive(client)
-        time.sleep(6.0)
-
-        # Reset pausepoint
-        client.execute_command("FT._DEBUG", "PAUSEPOINT", "RESET", "search_inline_filter")
-        join_thread_with_cleanup(thread)
-
-        # Verify timeout occurred
-        assert error[0] is not None, "Expected timeout error"
-        assert "timeout" in error[0].lower(), f"Expected timeout error, got: {error[0]}"
-        print(f"Timeout correctly detected: {error[0]}")
+        run_pausepoint_timeout_test(
+            self, "search_composed_predicate", setup,
+            ["FT.SEARCH", "idx", "(@text:word* | @tag:{tag1}) @num:[0 500]", "TIMEOUT", "5000"]
+        )
 
     def test_aggregate_timeout(self):
         """Test FT.AGGREGATE timeout handling across all aggregation stages."""
@@ -800,12 +464,9 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
         aggregate(client, "hnsw", True, stages=["LOAD", "1", "@n", "FILTER", "@n > 0", "SORTBY", "2", "@n", "ASC", "LIMIT", "0", "5"])
         assert client.info("SEARCH")["search_test-counter-ForceCancels"] == 5
         
-        # Test with filter (may or may not trigger pre-filtering depending on dataset)
         aggregate(client, "hnsw", True, 2, stages=["LOAD", "1", "@n", "SORTBY", "2", "@n", "DESC"])
         assert client.info("SEARCH")["search_test-counter-ForceCancels"] == 6
-        # Remove pre-filtering assertion - not guaranteed with small filter
         
-        # Test flat index
         aggregate(client, "flat", True, stages=["LOAD", "1", "@n", "SORTBY", "2", "@n", "DESC"])
         assert client.info("SEARCH")["search_test-counter-ForceCancels"] == 7
         

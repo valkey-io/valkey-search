@@ -540,6 +540,9 @@ Value FuncLand(const Value& l, const Value& r) {
 }
 
 Value FuncFloor(const Value& o) {
+  if (o.IsVector()) {
+    return ApplyToElements(o, FuncFloor);
+  }
   auto d = o.AsDouble();
   if (!d) {
     return Value(Value::Nil("floor couldn't convert to a double"));
@@ -548,6 +551,9 @@ Value FuncFloor(const Value& o) {
 }
 
 Value FuncCeil(const Value& o) {
+  if (o.IsVector()) {
+    return ApplyToElements(o, FuncCeil);
+  }
   auto d = o.AsDouble();
   if (!d) {
     return Value(Value::Nil("ceil couldn't convert to a double"));
@@ -556,6 +562,9 @@ Value FuncCeil(const Value& o) {
 }
 
 Value FuncAbs(const Value& o) {
+  if (o.IsVector()) {
+    return ApplyToElements(o, FuncAbs);
+  }
   auto d = o.AsDouble();
   if (!d) {
     return Value(Value::Nil("abs couldn't convert to a double"));
@@ -564,6 +573,9 @@ Value FuncAbs(const Value& o) {
 }
 
 Value FuncLog(const Value& o) {
+  if (o.IsVector()) {
+    return ApplyToElements(o, FuncLog);
+  }
   auto d = o.AsDouble();
   if (!d) {
     return Value(Value::Nil("log couldn't convert to a double"));
@@ -572,6 +584,9 @@ Value FuncLog(const Value& o) {
 }
 
 Value FuncLog2(const Value& o) {
+  if (o.IsVector()) {
+    return ApplyToElements(o, FuncLog2);
+  }
   auto d = o.AsDouble();
   if (!d) {
     return Value(Value::Nil("log2 couldn't convert to a double"));
@@ -580,6 +595,9 @@ Value FuncLog2(const Value& o) {
 }
 
 Value FuncExp(const Value& o) {
+  if (o.IsVector()) {
+    return ApplyToElements(o, FuncExp);
+  }
   auto d = o.AsDouble();
   if (!d) {
     return Value(Value::Nil("exp couldn't convert to a double"));
@@ -588,6 +606,9 @@ Value FuncExp(const Value& o) {
 }
 
 Value FuncSqrt(const Value& o) {
+  if (o.IsVector()) {
+    return ApplyToElements(o, FuncSqrt);
+  }
   auto d = o.AsDouble();
   if (!d) {
     return Value(Value::Nil("sqrt couldn't convert to a double"));

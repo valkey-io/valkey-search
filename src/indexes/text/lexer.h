@@ -42,7 +42,8 @@ namespace valkey_search::indexes::text {
 // Inline capacity for per-document stem mapping
 constexpr size_t kInProgressStemVariantsInlineCapacity = 4;
 
-// Per-document stem mappings: stemmed_word -> list of original words that stem to it
+// Per-document stem mappings: stemmed_word -> list of original words that stem
+// to it
 using InProgressStemMap = absl::flat_hash_map<
     std::string,
     absl::InlinedVector<std::string, kInProgressStemVariantsInlineCapacity>>;

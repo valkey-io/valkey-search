@@ -280,24 +280,42 @@ Ordering Compare(const Value& l, const Value& r) {
   return CompareStrings(l.AsStringView(), r.AsStringView());
 }
 
+// Vector error message generation functions
+
+static std::string MakeTypeMismatchError(const char* operation,
+                                         const char* expected,
+                                         const char* actual) {
+  return std::string("Type error in ") + operation + ": expected " + expected +
+         ", got " + actual;
+}
+
+static std::string MakeLengthMismatchError(size_t length1, size_t length2) {
+  return "Length mismatch: vectors have lengths " + std::to_string(length1) +
+         " and " + std::to_string(length2);
+}
+
+static std::string MakeIndexOutOfBoundsError(size_t index, size_t length) {
+  return "Index out of bounds: index " + std::to_string(index) +
+         ", vector length " + std::to_string(length);
+}
+
+static std::string MakeElementError(size_t index, const char* reason) {
+  return "Element error at index " + std::to_string(index) + ": " + reason;
+}
+
 // Vector operation helper functions
 
-Value ApplyToElements(const Value& vec,
+Value ApplyToElements(const Value::Vector vec,
                       std::function<Value(const Value&)> func) {
-  if (!vec.IsVector()) {
-    return Value(Value::Nil("Type error: expected vector"));
-  }
-
-  auto input_vec = vec.GetVector();
   auto result = std::make_shared<std::vector<Value>>();
-  result->reserve(input_vec->size());
+  result->reserve(vec->size());
 
-  for (size_t i = 0; i < input_vec->size(); ++i) {
-    Value elem_result = func((*input_vec)[i]);
+  for (size_t i = 0; i < vec->size(); ++i) {
+    Value elem_result = func((*vec)[i]);
     if (elem_result.IsNil()) {
       // Propagate error with index information
-      std::string error_msg = "Element error at index " + std::to_string(i) +
-                              ": " + elem_result.GetNil().GetReason();
+      std::string error_msg =
+          MakeElementError(i, elem_result.GetNil().GetReason());
       return Value(Value::Nil(error_msg.c_str()));
     }
     result->push_back(std::move(elem_result));
@@ -306,24 +324,19 @@ Value ApplyToElements(const Value& vec,
   return Value(result);
 }
 
-Value ApplyWithScalar(const Value& vec, const Value& scalar,
+Value ApplyWithScalar(const Value::Vector vec, const Value& scalar,
                       std::function<Value(const Value&, const Value&)> func,
                       bool scalar_on_left) {
-  if (!vec.IsVector()) {
-    return Value(Value::Nil("Type error: expected vector as first operand"));
-  }
-
-  auto input_vec = vec.GetVector();
   auto result = std::make_shared<std::vector<Value>>();
-  result->reserve(input_vec->size());
+  result->reserve(vec->size());
 
-  for (size_t i = 0; i < input_vec->size(); ++i) {
-    Value elem_result = scalar_on_left ? func(scalar, (*input_vec)[i])
-                                       : func((*input_vec)[i], scalar);
+  for (size_t i = 0; i < vec->size(); ++i) {
+    Value elem_result =
+        scalar_on_left ? func(scalar, (*vec)[i]) : func((*vec)[i], scalar);
     if (elem_result.IsNil()) {
       // Propagate error with index information
-      std::string error_msg = "Element error at index " + std::to_string(i) +
-                              ": " + elem_result.GetNil().GetReason();
+      std::string error_msg =
+          MakeElementError(i, elem_result.GetNil().GetReason());
       return Value(Value::Nil(error_msg.c_str()));
     }
     result->push_back(std::move(elem_result));
@@ -332,31 +345,22 @@ Value ApplyWithScalar(const Value& vec, const Value& scalar,
   return Value(result);
 }
 
-Value ApplyElementWise(const Value& vec1, const Value& vec2,
+Value ApplyElementWise(const Value::Vector vec1, const Value::Vector vec2,
                        std::function<Value(const Value&, const Value&)> func) {
-  if (!vec1.IsVector() || !vec2.IsVector()) {
-    return Value(Value::Nil("Type error: both operands must be vectors"));
-  }
-
-  auto input_vec1 = vec1.GetVector();
-  auto input_vec2 = vec2.GetVector();
-
-  if (input_vec1->size() != input_vec2->size()) {
-    std::string error_msg = "Length mismatch: vectors have lengths " +
-                            std::to_string(input_vec1->size()) + " and " +
-                            std::to_string(input_vec2->size());
+  if (vec1->size() != vec2->size()) {
+    std::string error_msg = MakeLengthMismatchError(vec1->size(), vec2->size());
     return Value(Value::Nil(error_msg.c_str()));
   }
 
   auto result = std::make_shared<std::vector<Value>>();
-  result->reserve(input_vec1->size());
+  result->reserve(vec1->size());
 
-  for (size_t i = 0; i < input_vec1->size(); ++i) {
-    Value elem_result = func((*input_vec1)[i], (*input_vec2)[i]);
+  for (size_t i = 0; i < vec1->size(); ++i) {
+    Value elem_result = func((*vec1)[i], (*vec2)[i]);
     if (elem_result.IsNil()) {
       // Propagate error with index information
-      std::string error_msg = "Element error at index " + std::to_string(i) +
-                              ": " + elem_result.GetNil().GetReason();
+      std::string error_msg =
+          MakeElementError(i, elem_result.GetNil().GetReason());
       return Value(Value::Nil(error_msg.c_str()));
     }
     result->push_back(std::move(elem_result));
@@ -379,16 +383,16 @@ Value FuncAdd(const Value& l, const Value& r) {
 
   // Case 2: Left is vector, right is scalar (broadcast)
   if (l.IsVector() && !r.IsVector()) {
-    return ApplyWithScalar(l, r, FuncAdd, false);
+    return ApplyWithScalar(l.GetVector(), r, FuncAdd, false);
   }
 
   // Case 3: Left is scalar, right is vector (broadcast)
   if (!l.IsVector() && r.IsVector()) {
-    return ApplyWithScalar(r, l, FuncAdd, true);
+    return ApplyWithScalar(r.GetVector(), l, FuncAdd, true);
   }
 
   // Case 4: Both are vectors (element-wise)
-  return ApplyElementWise(l, r, FuncAdd);
+  return ApplyElementWise(l.GetVector(), r.GetVector(), FuncAdd);
 }
 
 Value FuncSub(const Value& l, const Value& r) {
@@ -405,16 +409,16 @@ Value FuncSub(const Value& l, const Value& r) {
 
   // Case 2: Left is vector, right is scalar (broadcast)
   if (l.IsVector() && !r.IsVector()) {
-    return ApplyWithScalar(l, r, FuncSub, false);
+    return ApplyWithScalar(l.GetVector(), r, FuncSub, false);
   }
 
   // Case 3: Left is scalar, right is vector (broadcast)
   if (!l.IsVector() && r.IsVector()) {
-    return ApplyWithScalar(r, l, FuncSub, true);
+    return ApplyWithScalar(r.GetVector(), l, FuncSub, true);
   }
 
   // Case 4: Both are vectors (element-wise)
-  return ApplyElementWise(l, r, FuncSub);
+  return ApplyElementWise(l.GetVector(), r.GetVector(), FuncSub);
 }
 
 Value FuncMul(const Value& l, const Value& r) {
@@ -431,16 +435,16 @@ Value FuncMul(const Value& l, const Value& r) {
 
   // Case 2: Left is vector, right is scalar (broadcast)
   if (l.IsVector() && !r.IsVector()) {
-    return ApplyWithScalar(l, r, FuncMul, false);
+    return ApplyWithScalar(l.GetVector(), r, FuncMul, false);
   }
 
   // Case 3: Left is scalar, right is vector (broadcast)
   if (!l.IsVector() && r.IsVector()) {
-    return ApplyWithScalar(r, l, FuncMul, true);
+    return ApplyWithScalar(r.GetVector(), l, FuncMul, true);
   }
 
   // Case 4: Both are vectors (element-wise)
-  return ApplyElementWise(l, r, FuncMul);
+  return ApplyElementWise(l.GetVector(), r.GetVector(), FuncMul);
 }
 
 Value FuncDiv(const Value& l, const Value& r) {
@@ -465,16 +469,16 @@ Value FuncDiv(const Value& l, const Value& r) {
 
   // Case 2: Left is vector, right is scalar (broadcast)
   if (l.IsVector() && !r.IsVector()) {
-    return ApplyWithScalar(l, r, FuncDiv, false);
+    return ApplyWithScalar(l.GetVector(), r, FuncDiv, false);
   }
 
   // Case 3: Left is scalar, right is vector (broadcast)
   if (!l.IsVector() && r.IsVector()) {
-    return ApplyWithScalar(r, l, FuncDiv, true);
+    return ApplyWithScalar(r.GetVector(), l, FuncDiv, true);
   }
 
   // Case 4: Both are vectors (element-wise)
-  return ApplyElementWise(l, r, FuncDiv);
+  return ApplyElementWise(l.GetVector(), r.GetVector(), FuncDiv);
 }
 
 Value FuncPower(const Value& l, const Value& r) {
@@ -491,16 +495,16 @@ Value FuncPower(const Value& l, const Value& r) {
 
   // Case 2: Left is vector, right is scalar (broadcast)
   if (l.IsVector() && !r.IsVector()) {
-    return ApplyWithScalar(l, r, FuncPower, false);
+    return ApplyWithScalar(l.GetVector(), r, FuncPower, false);
   }
 
   // Case 3: Left is scalar, right is vector (broadcast)
   if (!l.IsVector() && r.IsVector()) {
-    return ApplyWithScalar(r, l, FuncPower, true);
+    return ApplyWithScalar(r.GetVector(), l, FuncPower, true);
   }
 
   // Case 4: Both are vectors (element-wise)
-  return ApplyElementWise(l, r, FuncPower);
+  return ApplyElementWise(l.GetVector(), r.GetVector(), FuncPower);
 }
 
 Value FuncLt(const Value& l, const Value& r) { return Value(l < r); }
@@ -541,7 +545,7 @@ Value FuncLand(const Value& l, const Value& r) {
 
 Value FuncFloor(const Value& o) {
   if (o.IsVector()) {
-    return ApplyToElements(o, FuncFloor);
+    return ApplyToElements(o.GetVector(), FuncFloor);
   }
   auto d = o.AsDouble();
   if (!d) {
@@ -552,7 +556,7 @@ Value FuncFloor(const Value& o) {
 
 Value FuncCeil(const Value& o) {
   if (o.IsVector()) {
-    return ApplyToElements(o, FuncCeil);
+    return ApplyToElements(o.GetVector(), FuncCeil);
   }
   auto d = o.AsDouble();
   if (!d) {
@@ -563,7 +567,7 @@ Value FuncCeil(const Value& o) {
 
 Value FuncAbs(const Value& o) {
   if (o.IsVector()) {
-    return ApplyToElements(o, FuncAbs);
+    return ApplyToElements(o.GetVector(), FuncAbs);
   }
   auto d = o.AsDouble();
   if (!d) {
@@ -574,7 +578,7 @@ Value FuncAbs(const Value& o) {
 
 Value FuncLog(const Value& o) {
   if (o.IsVector()) {
-    return ApplyToElements(o, FuncLog);
+    return ApplyToElements(o.GetVector(), FuncLog);
   }
   auto d = o.AsDouble();
   if (!d) {
@@ -585,7 +589,7 @@ Value FuncLog(const Value& o) {
 
 Value FuncLog2(const Value& o) {
   if (o.IsVector()) {
-    return ApplyToElements(o, FuncLog2);
+    return ApplyToElements(o.GetVector(), FuncLog2);
   }
   auto d = o.AsDouble();
   if (!d) {
@@ -596,7 +600,7 @@ Value FuncLog2(const Value& o) {
 
 Value FuncExp(const Value& o) {
   if (o.IsVector()) {
-    return ApplyToElements(o, FuncExp);
+    return ApplyToElements(o.GetVector(), FuncExp);
   }
   auto d = o.AsDouble();
   if (!d) {
@@ -607,7 +611,7 @@ Value FuncExp(const Value& o) {
 
 Value FuncSqrt(const Value& o) {
   if (o.IsVector()) {
-    return ApplyToElements(o, FuncSqrt);
+    return ApplyToElements(o.GetVector(), FuncSqrt);
   }
   auto d = o.AsDouble();
   if (!d) {

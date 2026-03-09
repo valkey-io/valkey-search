@@ -86,6 +86,29 @@ static int OnSetStringConfig(const char *config_name, ValkeyModuleString *value,
   return VALKEYMODULE_OK;
 }
 
+static ValkeyModuleString *OnGetDoubleConfig(const char *config_name,
+                                             void *priv_data) {
+  auto entry = static_cast<Double *>(priv_data);
+  CHECK(entry) << "null private data";
+  return entry->GetCachedValkeyString();
+}
+
+static int OnSetDoubleConfig(const char *config_name, ValkeyModuleString *value,
+                             void *priv_data, ValkeyModuleString **err) {
+  auto entry = static_cast<Double *>(priv_data);
+  CHECK(entry) << "null private data";
+  auto sv = vmsdk::ToStringView(value);
+  auto res = entry->FromString(sv);
+  if (!res.ok()) {
+    if (err) {
+      *err =
+          ValkeyModule_CreateStringPrintf(nullptr, "%s", res.message().data());
+    }
+    return VALKEYMODULE_ERR;
+  }
+  return VALKEYMODULE_OK;
+}
+
 /// Convert `vector<string>` -> `vector<const char*>`
 /// IMPORTANT: `vec` must outlive the returned value
 std::vector<const char *> ToCharPtrPtrVec(const std::vector<std::string> &vec) {
@@ -339,6 +362,44 @@ absl::Status String::FromString(std::string_view value) {
   SetValueOrLog(default_, WARNING);
   return absl::OkStatus();
 }
+
+Double::Double(std::string_view name, double default_value, double min_value,
+               double max_value)
+    : ConfigBase(name),
+      default_value_(default_value),
+      min_value_(min_value),
+      max_value_(max_value),
+      current_value_(default_value) {}
+
+absl::Status Double::Register(ValkeyModuleCtx *ctx) {
+  if (ValkeyModule_RegisterStringConfig(ctx,
+                                        name_.data(),
+                                        std::to_string(default_value_).c_str(),
+                                        flags_,
+                                        OnGetDoubleConfig,
+                                        OnSetDoubleConfig,
+                                        nullptr,
+                                        this) != VALKEYMODULE_OK) {
+    return absl::InternalError(
+        absl::StrCat("Failed to register Double configuration entry: ", name_));
+  }
+  return absl::OkStatus();
+}
+
+absl::Status Double::FromString(std::string_view value) {
+  double parsed_value;
+  if (!absl::SimpleAtod(value, &parsed_value)) {
+    return absl::InvalidArgumentError(
+        absl::StrFormat("Failed to convert '%s' into a double", value));
+  }
+  if (parsed_value < min_value_ || parsed_value > max_value_) {
+    return absl::OutOfRangeError(
+        absl::StrFormat("Value %f is out of range [%f, %f]", parsed_value,
+                        min_value_, max_value_));
+  }
+  SetValueOrLog(parsed_value, WARNING);
+  return absl::OkStatus();
+}
 /// Get method to fetch the `hide_user_data_config`
 vmsdk::config::Boolean &GetHideUserDataFromLog() {
   return dynamic_cast<vmsdk::config::Boolean &>(*hide_user_data_config);
@@ -410,6 +471,18 @@ absl::Status ModuleConfigManager::ListAllConfigs(
       ValkeyModule_ReplyWithLongLong(ctx, num->GetMaxValue());
       ValkeyModule_ReplyWithCString(ctx, "current_value");
       ValkeyModule_ReplyWithLongLong(ctx, num->GetValue());
+      field_count += 10;
+    } else if (auto *dbl = dynamic_cast<Double *>(entry)) {
+      ValkeyModule_ReplyWithCString(ctx, "type");
+      ValkeyModule_ReplyWithCString(ctx, "Double");
+      ValkeyModule_ReplyWithCString(ctx, "default");
+      ValkeyModule_ReplyWithCString(ctx, std::to_string(dbl->GetDefaultValue()).c_str());
+      ValkeyModule_ReplyWithCString(ctx, "min");
+      ValkeyModule_ReplyWithCString(ctx, std::to_string(dbl->GetMinValue()).c_str());
+      ValkeyModule_ReplyWithCString(ctx, "max");
+      ValkeyModule_ReplyWithCString(ctx, std::to_string(dbl->GetMaxValue()).c_str());
+      ValkeyModule_ReplyWithCString(ctx, "current_value");
+      ValkeyModule_ReplyWithCString(ctx, std::to_string(dbl->GetValue()).c_str());
       field_count += 10;
     } else if (auto *boolean = dynamic_cast<Boolean *>(entry)) {
       ValkeyModule_ReplyWithCString(ctx, "type");

@@ -76,6 +76,18 @@ void Free([[maybe_unused]] ValkeyModuleCtx *ctx, void *privdata) {
 CONTROLLED_BOOLEAN(ForceReplicasOnly, false);
 DEV_INTEGER_COUNTER(stats, single_slot_queries);
 
+bool IsSingleSlotQueryRoutedToLocalNode(ValkeyModuleCtx *ctx,
+                                        const QueryCommand &parameters) {
+  if (!vmsdk::ParseHashTag(parameters.index_schema_name).has_value()) {
+    return false;
+  }
+
+  auto key = vmsdk::MakeUniqueValkeyString(parameters.index_schema_name);
+  auto slot = ValkeyModule_ClusterKeySlot(key.get());
+  auto cluster_map = ValkeySearch::Instance().GetOrRefreshClusterMap(ctx);
+  return cluster_map && cluster_map->IOwnSlot(slot);
+}
+
 std::vector<vmsdk::cluster_map::NodeInfo> ComputeSearchTargets(
     ValkeyModuleCtx *ctx, const QueryCommand &parameters) {
   auto mode = /* !vmsdk::IsReadOnly(ctx) ? query::fanout::kPrimaries ? */
@@ -136,7 +148,7 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
                            ValkeySearch::Instance().IsCluster() &&
                            !parameters->local_only;
 
-    if (ABSL_PREDICT_FALSE(inside_multi_exec && do_fanout)) {
+    if (ABSL_PREDICT_FALSE(inside_multi_exec && do_fanout) && !IsSingleSlotQueryRoutedToLocalNode(ctx, *parameters)) {
       return absl::InvalidArgumentError(
           "MULTI/EXEC or Lua script are not supported in CME mode.");
     }

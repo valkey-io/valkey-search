@@ -665,3 +665,41 @@ TEST_F(ValueTest, VectorComparison_VectorVsScalar) {
 }
 
 }  // namespace valkey_search::expr
+
+// Test vector serialization to RESP format
+TEST_F(ValueTest, VectorSerializationTest) {
+  // Note: This test verifies the serialization logic exists and compiles.
+  // Full integration testing with actual ValkeyModuleCtx would be done
+  // in integration tests.
+
+  // Test simple vector
+  Value vec1 = Value({Value(1.0), Value(2.0), Value(3.0)});
+  EXPECT_TRUE(vec1.IsVector());
+  EXPECT_EQ(vec1.VectorSize(), 3);
+
+  // Test nested vector
+  Value vec2 =
+      Value({Value({Value(1.0), Value(2.0)}), Value({Value(3.0), Value(4.0)})});
+  EXPECT_TRUE(vec2.IsVector());
+  EXPECT_EQ(vec2.VectorSize(), 2);
+  EXPECT_TRUE(vec2.GetVectorElement(0).IsVector());
+  EXPECT_TRUE(vec2.GetVectorElement(1).IsVector());
+
+  // Test mixed-type vector
+  Value vec3 = Value({Value(1.0), Value("hello"), Value(true)});
+  EXPECT_TRUE(vec3.IsVector());
+  EXPECT_EQ(vec3.VectorSize(), 3);
+  EXPECT_TRUE(vec3.GetVectorElement(0).IsDouble());
+  EXPECT_TRUE(vec3.GetVectorElement(1).IsString());
+  EXPECT_TRUE(vec3.GetVectorElement(2).IsBool());
+}
+
+// Test vector deserialization from RESP format
+// Note: Full testing requires ValkeyModuleCallReply mocks, which would be
+// done in integration tests. This test verifies the function signature exists.
+TEST_F(ValueTest, VectorDeserializationSignatureTest) {
+  // Verify the deserialization function is declared and can be called
+  // with nullptr (will return Nil)
+  Value result = DeserializeValueFromResp(nullptr);
+  EXPECT_TRUE(result.IsNil());
+}

@@ -17,6 +17,9 @@
 #include "absl/container/inlined_vector.h"
 #include "absl/strings/string_view.h"
 
+// Forward declarations for Valkey module types
+struct ValkeyModuleCallReply;
+
 namespace valkey_search {
 namespace expr {
 
@@ -206,6 +209,11 @@ Value FuncDayofmonth(const Value& t);
 Value FuncDayofyear(const Value& t);
 Value FuncYear(const Value& t);
 Value FuncMonthofyear(const Value& t);
+
+// Vector serialization/deserialization helpers
+// Deserialize a ValkeyModuleCallReply (RESP data) into a Value
+// Handles arrays recursively to support nested vectors
+expr::Value DeserializeValueFromResp(ValkeyModuleCallReply* reply);
 
 }  // namespace expr
 }  // namespace valkey_search

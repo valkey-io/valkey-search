@@ -12,6 +12,7 @@
 #include <sstream>
 
 #include "src/utils/scanner.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 // #define DBG std::cerr
 #define DBG 0 && std::cerr
@@ -268,9 +269,35 @@ Ordering Compare(const Value& l, const Value& r) {
     return CompareStrings(l.GetStringView(), r.GetStringView());
   }
 
+  // Vector comparisons
+  if (l.IsVector() && r.IsVector()) {
+    // Lexicographic comparison for vector-vector
+    auto lvec = l.GetVector();
+    auto rvec = r.GetVector();
+
+    // Compare element-by-element until mismatch found
+    size_t min_size = std::min(lvec->size(), rvec->size());
+    for (size_t i = 0; i < min_size; ++i) {
+      Ordering cmp = Compare((*lvec)[i], (*rvec)[i]);
+      if (cmp != Ordering::kEQUAL) {
+        return cmp;
+      }
+    }
+
+    // All elements equal, compare by length
+    if (lvec->size() < rvec->size()) {
+      return Ordering::kLESS;
+    } else if (lvec->size() > rvec->size()) {
+      return Ordering::kGREATER;
+    }
+    return Ordering::kEQUAL;
+  } else if (l.IsVector() || r.IsVector()) {
+    // Vector vs scalar
+    return Ordering::kUNORDERED;
+  }
+
   // Need to handle non-equivalent types.
   // Prefer to promote to double unless that fails.
-
   auto ld = l.AsDouble();
   auto rd = r.AsDouble();
   if (ld && rd) {
@@ -786,6 +813,61 @@ TIME_ROUND(FuncMonth, true, true, true)
 TIME_ROUND(FuncDay, false, true, true)
 TIME_ROUND(FuncHour, false, false, true)
 TIME_ROUND(FuncMinute, false, false, false)
+
+Value DeserializeValueFromResp(ValkeyModuleCallReply* reply) {
+  if (reply == nullptr) {
+    return Value(Value::Nil("null reply"));
+  }
+
+  int reply_type = ValkeyModule_CallReplyType(reply);
+
+  switch (reply_type) {
+    case VALKEYMODULE_REPLY_NULL: {
+      return Value(Value::Nil("null"));
+    }
+
+    case VALKEYMODULE_REPLY_INTEGER: {
+      long long val = ValkeyModule_CallReplyInteger(reply);
+      return Value(static_cast<double>(val));
+    }
+
+    case VALKEYMODULE_REPLY_STRING: {
+      size_t len;
+      const char* str = ValkeyModule_CallReplyStringPtr(reply, &len);
+      if (str == nullptr) {
+        return Value(Value::Nil("invalid string"));
+      }
+      return Value(std::string(str, len));
+    }
+
+    case VALKEYMODULE_REPLY_ARRAY: {
+      size_t array_len = ValkeyModule_CallReplyLength(reply);
+      auto vec = std::make_shared<std::vector<Value>>();
+      vec->reserve(array_len);
+
+      for (size_t i = 0; i < array_len; ++i) {
+        ValkeyModuleCallReply* elem =
+            ValkeyModule_CallReplyArrayElement(reply, i);
+        vec->push_back(DeserializeValueFromResp(elem));
+      }
+
+      return Value(vec);
+    }
+
+    case VALKEYMODULE_REPLY_ERROR: {
+      size_t len;
+      const char* err = ValkeyModule_CallReplyStringPtr(reply, &len);
+      if (err == nullptr) {
+        return Value(Value::Nil("error"));
+      }
+      return Value(Value::Nil(err));
+    }
+
+    default: {
+      return Value(Value::Nil("unsupported reply type"));
+    }
+  }
+}
 
 }  // namespace expr
 }  // namespace valkey_search

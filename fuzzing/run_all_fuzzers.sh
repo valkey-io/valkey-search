@@ -63,22 +63,11 @@ if ! command -v afl-fuzz &>/dev/null; then
 fi
 
 # ---------------------------------------------------------------------------
-# Auto-build AFL+ASAN binaries if any are missing
+# Build AFL+ASAN binaries (incremental — CMake only recompiles changed files)
 # ---------------------------------------------------------------------------
-NEED_BUILD="no"
-for entry in "${FUZZ_TARGETS[@]}"; do
-  read -r _name bin_name _seeds _dict <<< "$entry"
-  if [[ ! -x "$PROJECT_ROOT/$BUILD_DIR/tests/$bin_name" ]]; then
-    NEED_BUILD="yes"
-    break
-  fi
-done
-
-if [[ "$NEED_BUILD" == "yes" ]]; then
-  echo "=== Building AFL+ASAN instrumented binaries ==="
-  cd "$PROJECT_ROOT"
-  ./build.sh --fuzz --asan
-fi
+echo "=== Building AFL+ASAN instrumented binaries ==="
+cd "$PROJECT_ROOT"
+./build.sh --fuzz --asan
 
 # ---------------------------------------------------------------------------
 # Verify all binaries and seeds exist

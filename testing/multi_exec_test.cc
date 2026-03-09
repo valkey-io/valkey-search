@@ -278,9 +278,6 @@ TEST_F(MultiExecTest, TrackMutationOverride) {
 }
 
 TEST_F(MultiExecTest, FtSearchMulti) {
-  // EXPECT_CALL(*kMockValkeyModule, EventLoopAddOneShot(testing::_,
-  // testing::_))
-  //     .Times(0);
   // ValkeyStringDeleter now routes VM_FreeString through RunByMain
   // (->EventLoopAddOneShot) from worker threads. FT.SEARCH correctness in
   // MULTI context is still enforced by BlockClient/UnblockClient Times(0).

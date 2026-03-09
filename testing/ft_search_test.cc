@@ -693,20 +693,13 @@ TEST_P(FTSearchTest, FTSearchTests) {
     for (auto cmd_arg : cmd_argv) {
       TestValkeyModule_FreeString(&fake_ctx_, cmd_arg);
     }
-    // Drain any remaining RunByMain callbacks (e.g., ValkeyStringDeleter string
-    // frees from ~SearchParameters) that arrived after the search drain loop.
-    if (use_thread_pool) {
-      std::lock_guard<std::mutex> lock(cb_mutex);
-      for (auto &[fn, data] : pending_oneshot_callbacks) {
-        fn(data);
-      }
-      pending_oneshot_callbacks.clear();
-    }
   }
 
-  // Wait for all worker threads to finish and drain any remaining callbacks.
-  // Without this, worker threads from the last iteration may still post to
-  // pending_oneshot_callbacks after TestBody returns (stack-use-after-return).
+  // Wait for all worker threads to finish, then drain all pending RunByMain
+  // callbacks (e.g., ValkeyStringDeleter string frees from ~SearchParameters).
+  // WaitWorkerTasksAreCompleted is necessary to prevent stack-use-after-return:
+  // without it, workers from the last iteration may still post to
+  // pending_oneshot_callbacks after TestBody's stack frame is destroyed.
   if (use_thread_pool) {
     WaitWorkerTasksAreCompleted(
         *ValkeySearch::Instance().GetReaderThreadPool());

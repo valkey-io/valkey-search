@@ -210,6 +210,13 @@ Value FuncDayofyear(const Value& t);
 Value FuncYear(const Value& t);
 Value FuncMonthofyear(const Value& t);
 
+// Vector-specific functions
+Value FuncVectorLen(const Value& vec);
+Value FuncVectorAt(const Value& vec, const Value& index);
+Value FuncIsVector(const Value& val);
+Value FuncMakeVector(const absl::InlinedVector<Value, 4>& elements);
+Value FuncFlatten(const Value& vec, const Value& depth);
+
 // Vector serialization/deserialization helpers
 // Deserialize a ValkeyModuleCallReply (RESP data) into a Value
 // Handles arrays recursively to support nested vectors

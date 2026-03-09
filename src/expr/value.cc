@@ -814,6 +814,82 @@ TIME_ROUND(FuncDay, false, true, true)
 TIME_ROUND(FuncHour, false, false, true)
 TIME_ROUND(FuncMinute, false, false, false)
 
+// Vector-specific functions
+
+Value FuncVectorLen(const Value& vec) {
+  if (!vec.IsVector()) {
+    return Value(Value::Nil("vectorlen: operand is not a vector"));
+  }
+  return Value(static_cast<double>(vec.VectorSize()));
+}
+
+Value FuncVectorAt(const Value& vec, const Value& index) {
+  if (!vec.IsVector()) {
+    return Value(Value::Nil("vectorat: first operand is not a vector"));
+  }
+
+  auto idx = index.AsInteger();
+  if (!idx) {
+    return Value(Value::Nil("vectorat: index is not an integer"));
+  }
+
+  size_t vec_size = vec.VectorSize();
+  if (*idx < 0 || static_cast<size_t>(*idx) >= vec_size) {
+    std::string error = "Index out of bounds: index " + std::to_string(*idx) +
+                        ", vector length " + std::to_string(vec_size);
+    return Value(Value::Nil(error.c_str()));
+  }
+
+  return vec.GetVectorElement(static_cast<size_t>(*idx));
+}
+
+Value FuncIsVector(const Value& val) { return Value(val.IsVector()); }
+
+Value FuncMakeVector(const absl::InlinedVector<Value, 4>& elements) {
+  auto vec = std::make_shared<std::vector<Value>>();
+  vec->reserve(elements.size());
+  for (const auto& elem : elements) {
+    vec->push_back(elem);
+  }
+  return Value(vec);
+}
+
+Value FuncFlatten(const Value& vec, const Value& depth) {
+  if (!vec.IsVector()) {
+    return Value(Value::Nil("flatten: first operand is not a vector"));
+  }
+
+  auto depth_int = depth.AsInteger();
+  if (!depth_int) {
+    return Value(Value::Nil("flatten: depth is not an integer"));
+  }
+
+  if (*depth_int <= 0) {
+    return vec;
+  }
+
+  auto result = std::make_shared<std::vector<Value>>();
+  auto input_vec = vec.GetVector();
+
+  for (const auto& elem : *input_vec) {
+    if (elem.IsVector() && *depth_int > 0) {
+      // Recursively flatten nested vectors
+      Value flattened =
+          FuncFlatten(elem, Value(static_cast<double>(*depth_int - 1)));
+      if (flattened.IsNil()) {
+        return flattened;  // Propagate error
+      }
+      auto flattened_vec = flattened.GetVector();
+      result->insert(result->end(), flattened_vec->begin(),
+                     flattened_vec->end());
+    } else {
+      result->push_back(elem);
+    }
+  }
+
+  return Value(result);
+}
+
 Value DeserializeValueFromResp(ValkeyModuleCallReply* reply) {
   if (reply == nullptr) {
     return Value(Value::Nil("null reply"));

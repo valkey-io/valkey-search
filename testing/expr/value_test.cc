@@ -664,8 +664,6 @@ TEST_F(ValueTest, VectorComparison_VectorVsScalar) {
   EXPECT_EQ(Compare(scalar_double, nested), Ordering::kUNORDERED);
 }
 
-}  // namespace valkey_search::expr
-
 // Test vector serialization to RESP format
 TEST_F(ValueTest, VectorSerializationTest) {
   // Note: This test verifies the serialization logic exists and compiles.
@@ -703,3 +701,200 @@ TEST_F(ValueTest, VectorDeserializationSignatureTest) {
   Value result = DeserializeValueFromResp(nullptr);
   EXPECT_TRUE(result.IsNil());
 }
+
+// Vector-specific function tests
+
+TEST_F(ValueTest, FuncVectorLen_ValidVector) {
+  Value vec = Value({Value(1.0), Value(2.0), Value(3.0)});
+  Value result = FuncVectorLen(vec);
+  EXPECT_TRUE(result.IsDouble());
+  EXPECT_EQ(result.GetDouble(), 3.0);
+}
+
+TEST_F(ValueTest, FuncVectorLen_EmptyVector) {
+  Value vec = Value(std::vector<Value>{});
+  Value result = FuncVectorLen(vec);
+  EXPECT_TRUE(result.IsDouble());
+  EXPECT_EQ(result.GetDouble(), 0.0);
+}
+
+TEST_F(ValueTest, FuncVectorLen_NotAVector) {
+  Value scalar = Value(42.0);
+  Value result = FuncVectorLen(scalar);
+  EXPECT_TRUE(result.IsNil());
+  EXPECT_STREQ(result.GetNil().GetReason(),
+               "vectorlen: operand is not a vector");
+}
+
+TEST_F(ValueTest, FuncVectorAt_ValidIndex) {
+  Value vec = Value({Value(10.0), Value(20.0), Value(30.0)});
+  Value result = FuncVectorAt(vec, Value(1.0));
+  EXPECT_TRUE(result.IsDouble());
+  EXPECT_EQ(result.GetDouble(), 20.0);
+}
+
+TEST_F(ValueTest, FuncVectorAt_FirstElement) {
+  Value vec = Value({Value("first"), Value("second"), Value("third")});
+  Value result = FuncVectorAt(vec, Value(0.0));
+  EXPECT_TRUE(result.IsString());
+  EXPECT_EQ(result.AsString(), "first");
+}
+
+TEST_F(ValueTest, FuncVectorAt_LastElement) {
+  Value vec = Value({Value(1.0), Value(2.0), Value(3.0)});
+  Value result = FuncVectorAt(vec, Value(2.0));
+  EXPECT_TRUE(result.IsDouble());
+  EXPECT_EQ(result.GetDouble(), 3.0);
+}
+
+TEST_F(ValueTest, FuncVectorAt_IndexOutOfBounds) {
+  Value vec = Value({Value(1.0), Value(2.0), Value(3.0)});
+  Value result = FuncVectorAt(vec, Value(10.0));
+  EXPECT_TRUE(result.IsNil());
+  std::string reason = result.GetNil().GetReason();
+  EXPECT_NE(reason.find("Index out of bounds"), std::string::npos);
+  EXPECT_NE(reason.find("index 10"), std::string::npos);
+  EXPECT_NE(reason.find("vector length 3"), std::string::npos);
+}
+
+TEST_F(ValueTest, FuncVectorAt_NegativeIndex) {
+  Value vec = Value({Value(1.0), Value(2.0), Value(3.0)});
+  Value result = FuncVectorAt(vec, Value(-1.0));
+  EXPECT_TRUE(result.IsNil());
+  std::string reason = result.GetNil().GetReason();
+  EXPECT_NE(reason.find("Index out of bounds"), std::string::npos);
+}
+
+TEST_F(ValueTest, FuncVectorAt_NotAVector) {
+  Value scalar = Value(42.0);
+  Value result = FuncVectorAt(scalar, Value(0.0));
+  EXPECT_TRUE(result.IsNil());
+  EXPECT_STREQ(result.GetNil().GetReason(),
+               "vectorat: first operand is not a vector");
+}
+
+TEST_F(ValueTest, FuncVectorAt_InvalidIndex) {
+  Value vec = Value({Value(1.0), Value(2.0), Value(3.0)});
+  Value result = FuncVectorAt(vec, Value("not a number"));
+  EXPECT_TRUE(result.IsNil());
+  EXPECT_STREQ(result.GetNil().GetReason(),
+               "vectorat: index is not an integer");
+}
+
+TEST_F(ValueTest, FuncIsVector_Vector) {
+  Value vec = Value({Value(1.0), Value(2.0)});
+  Value result = FuncIsVector(vec);
+  EXPECT_TRUE(result.IsBool());
+  EXPECT_TRUE(result.GetBool());
+}
+
+TEST_F(ValueTest, FuncIsVector_EmptyVector) {
+  Value vec = Value(std::vector<Value>{});
+  Value result = FuncIsVector(vec);
+  EXPECT_TRUE(result.IsBool());
+  EXPECT_TRUE(result.GetBool());
+}
+
+TEST_F(ValueTest, FuncIsVector_Scalar) {
+  Value scalar = Value(42.0);
+  Value result = FuncIsVector(scalar);
+  EXPECT_TRUE(result.IsBool());
+  EXPECT_FALSE(result.GetBool());
+}
+
+TEST_F(ValueTest, FuncIsVector_String) {
+  Value str = Value("hello");
+  Value result = FuncIsVector(str);
+  EXPECT_TRUE(result.IsBool());
+  EXPECT_FALSE(result.GetBool());
+}
+
+TEST_F(ValueTest, FuncMakeVector_MultipleElements) {
+  absl::InlinedVector<Value, 4> elements = {Value(1.0), Value(2.0), Value(3.0)};
+  Value result = FuncMakeVector(elements);
+  EXPECT_TRUE(result.IsVector());
+  EXPECT_EQ(result.VectorSize(), 3);
+  EXPECT_EQ(result.GetVectorElement(0).GetDouble(), 1.0);
+  EXPECT_EQ(result.GetVectorElement(1).GetDouble(), 2.0);
+  EXPECT_EQ(result.GetVectorElement(2).GetDouble(), 3.0);
+}
+
+TEST_F(ValueTest, FuncMakeVector_MixedTypes) {
+  absl::InlinedVector<Value, 4> elements = {Value(42.0), Value("hello"),
+                                            Value(true)};
+  Value result = FuncMakeVector(elements);
+  EXPECT_TRUE(result.IsVector());
+  EXPECT_EQ(result.VectorSize(), 3);
+  EXPECT_TRUE(result.GetVectorElement(0).IsDouble());
+  EXPECT_TRUE(result.GetVectorElement(1).IsString());
+  EXPECT_TRUE(result.GetVectorElement(2).IsBool());
+}
+
+TEST_F(ValueTest, FuncMakeVector_EmptyVector) {
+  absl::InlinedVector<Value, 4> elements;
+  Value result = FuncMakeVector(elements);
+  EXPECT_TRUE(result.IsVector());
+  EXPECT_EQ(result.VectorSize(), 0);
+}
+
+TEST_F(ValueTest, FuncFlatten_SingleLevel) {
+  Value nested =
+      Value({Value({Value(1.0), Value(2.0)}), Value({Value(3.0), Value(4.0)})});
+  Value result = FuncFlatten(nested, Value(1.0));
+  EXPECT_TRUE(result.IsVector());
+  EXPECT_EQ(result.VectorSize(), 4);
+  EXPECT_EQ(result.GetVectorElement(0).GetDouble(), 1.0);
+  EXPECT_EQ(result.GetVectorElement(1).GetDouble(), 2.0);
+  EXPECT_EQ(result.GetVectorElement(2).GetDouble(), 3.0);
+  EXPECT_EQ(result.GetVectorElement(3).GetDouble(), 4.0);
+}
+
+TEST_F(ValueTest, FuncFlatten_MultiLevel) {
+  Value nested =
+      Value({Value({Value({Value(1.0), Value(2.0)}), Value(3.0)}), Value(4.0)});
+  Value result = FuncFlatten(nested, Value(2.0));
+  EXPECT_TRUE(result.IsVector());
+  EXPECT_EQ(result.VectorSize(), 4);
+  EXPECT_EQ(result.GetVectorElement(0).GetDouble(), 1.0);
+  EXPECT_EQ(result.GetVectorElement(1).GetDouble(), 2.0);
+  EXPECT_EQ(result.GetVectorElement(2).GetDouble(), 3.0);
+  EXPECT_EQ(result.GetVectorElement(3).GetDouble(), 4.0);
+}
+
+TEST_F(ValueTest, FuncFlatten_DepthZero) {
+  Value nested = Value({Value({Value(1.0), Value(2.0)}), Value(3.0)});
+  Value result = FuncFlatten(nested, Value(0.0));
+  EXPECT_TRUE(result.IsVector());
+  EXPECT_EQ(result.VectorSize(), 2);
+  EXPECT_TRUE(result.GetVectorElement(0).IsVector());
+  EXPECT_EQ(result.GetVectorElement(1).GetDouble(), 3.0);
+}
+
+TEST_F(ValueTest, FuncFlatten_MixedScalarsAndVectors) {
+  Value mixed =
+      Value({Value(1.0), Value({Value(2.0), Value(3.0)}), Value(4.0)});
+  Value result = FuncFlatten(mixed, Value(1.0));
+  EXPECT_TRUE(result.IsVector());
+  EXPECT_EQ(result.VectorSize(), 4);
+  EXPECT_EQ(result.GetVectorElement(0).GetDouble(), 1.0);
+  EXPECT_EQ(result.GetVectorElement(1).GetDouble(), 2.0);
+  EXPECT_EQ(result.GetVectorElement(2).GetDouble(), 3.0);
+  EXPECT_EQ(result.GetVectorElement(3).GetDouble(), 4.0);
+}
+
+TEST_F(ValueTest, FuncFlatten_NotAVector) {
+  Value scalar = Value(42.0);
+  Value result = FuncFlatten(scalar, Value(1.0));
+  EXPECT_TRUE(result.IsNil());
+  EXPECT_STREQ(result.GetNil().GetReason(),
+               "flatten: first operand is not a vector");
+}
+
+TEST_F(ValueTest, FuncFlatten_InvalidDepth) {
+  Value vec = Value({Value(1.0), Value(2.0)});
+  Value result = FuncFlatten(vec, Value("not a number"));
+  EXPECT_TRUE(result.IsNil());
+  EXPECT_STREQ(result.GetNil().GetReason(), "flatten: depth is not an integer");
+}
+
+}  // namespace valkey_search::expr

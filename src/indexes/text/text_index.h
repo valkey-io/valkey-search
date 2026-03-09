@@ -76,8 +76,10 @@ class TextIndex {
 
   // Applies target mutation to both prefix tree for |word| and, if the index
   // has a suffix tree, to the suffix tree for reverse(word).
-  void MutateTarget(absl::string_view word, const InvasivePtr<Postings> &target,
-                    item_count_op op = NONE);
+  void MutateTarget(
+      absl::string_view word, const InvasivePtr<Postings> &target,
+      const std::optional<std::string> &reverse_word = std::nullopt,
+      item_count_op op = NONE);
 
  private:
   Rax prefix_tree_;

@@ -135,6 +135,13 @@ static int StubReplyWithDouble(ValkeyModuleCtx *, double) {
 static void *StubGetBlockedClientPrivateData(ValkeyModuleCtx *) {
   return nullptr;
 }
+static void *StubGetSharedAPI(ValkeyModuleCtx *, const char *) {
+  return nullptr;
+}
+static ValkeyModuleCallReply *StubCall(ValkeyModuleCtx *, const char *,
+                                       const char *, ...) {
+  return nullptr;
+}
 static unsigned int StubClusterKeySlot(ValkeyModuleString *) { return 0; }
 static ValkeyModuleBlockedClient *StubBlockClient(
     ValkeyModuleCtx *, ValkeyModuleCmdFunc, ValkeyModuleCmdFunc,
@@ -188,6 +195,8 @@ void InitValkeyModuleStubs() {
   ValkeyModule_BlockedClientMeasureTimeStart =
       StubBlockedClientMeasureTimeStart;
   ValkeyModule_BlockedClientMeasureTimeEnd = StubBlockedClientMeasureTimeEnd;
+  ValkeyModule_GetSharedAPI = StubGetSharedAPI;
+  ValkeyModule_Call = StubCall;
 }
 
 // ---------------------------------------------------------------------------

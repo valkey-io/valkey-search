@@ -31,6 +31,11 @@ fuzzing/
     CMakeLists.txt            # Builds fuzz_ft_aggregate_parser executable
     seeds/                    # Seed inputs (FT.AGGREGATE option strings)
     ft_aggregate.dict         # AFL dictionary for FT.AGGREGATE keywords
+  expr/
+    fuzz_expr.cc              # Harness: Expression::Compile() + AFL main()
+    CMakeLists.txt            # Builds fuzz_expr executable
+    seeds/                    # Seed inputs (expression strings)
+    expr.dict                 # AFL dictionary for expression syntax
 ```
 
 ## Building
@@ -45,6 +50,7 @@ Builds the fuzz harnesses without AFL instrumentation. Useful for manual testing
 #           .build-release/tests/fuzz_ft_create_parser
 #           .build-release/tests/fuzz_ft_search_parser
 #           .build-release/tests/fuzz_ft_aggregate_parser
+#           .build-release/tests/fuzz_expr
 ```
 
 ### Instrumented Build (for AFL fuzzing)
@@ -57,6 +63,7 @@ The `--fuzz` flag sets `CC=afl-gcc CXX=afl-g++` and uses a dedicated `.build-fuz
 #           .build-fuzz/tests/fuzz_ft_create_parser
 #           .build-fuzz/tests/fuzz_ft_search_parser
 #           .build-fuzz/tests/fuzz_ft_aggregate_parser
+#           .build-fuzz/tests/fuzz_expr
 ```
 
 For AFL + AddressSanitizer (catches memory errors during fuzzing):
@@ -67,6 +74,7 @@ For AFL + AddressSanitizer (catches memory errors during fuzzing):
 #           .build-fuzz-asan/tests/fuzz_ft_create_parser
 #           .build-fuzz-asan/tests/fuzz_ft_search_parser
 #           .build-fuzz-asan/tests/fuzz_ft_aggregate_parser
+#           .build-fuzz-asan/tests/fuzz_expr
 ```
 
 Uses `afl-gcc` mode. The codebase has compatibility issues with clang-17, so `afl-clang-fast` is not currently supported.

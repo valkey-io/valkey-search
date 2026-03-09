@@ -50,6 +50,7 @@ FUZZ_TARGETS=(
   "ft_create_parser fuzz_ft_create_parser fuzzing/ft_create_parser/seeds fuzzing/ft_create_parser/ft_create.dict"
   "ft_search_parser fuzz_ft_search_parser fuzzing/ft_search_parser/seeds fuzzing/ft_search_parser/ft_search.dict"
   "ft_aggregate_parser fuzz_ft_aggregate_parser fuzzing/ft_aggregate_parser/seeds fuzzing/ft_aggregate_parser/ft_aggregate.dict"
+  "expr fuzz_expr fuzzing/expr/seeds fuzzing/expr/expr.dict"
 )
 
 # ---------------------------------------------------------------------------

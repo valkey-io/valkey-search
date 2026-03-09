@@ -221,21 +221,6 @@ class TextIndexSchema {
   uint64_t GetPositionMemoryUsage() const;
   uint64_t GetTotalTextIndexMemoryUsage() const;
 
-  // Thread-safe accessor for per-key text indexes. Executes the provided
-  // function while holding the mutex lock, ensuring safe concurrent access.
-  // template <typename Func>
-  // auto WithPerKeyTextIndexes(Func &&func)
-  //     -> decltype(func(per_key_text_indexes_)) {
-  //   std::lock_guard<std::mutex> guard(per_key_text_indexes_mutex_);
-  //   return func(per_key_text_indexes_);
-  // }
-
-  // Direct accessor for per-key text indexes.
-  // Assumes that lock is already acquired earlier.
-  // const absl::node_hash_map<Key, TextIndex> &GetPerKeyTextIndexes() const {
-  //   return per_key_text_indexes_;
-  // }
-
   // Total number of keys with text fields indexed in this schema.
   // No locking needed because only called from read phase.
   size_t GetTrackedKeyCount() const { return per_key_text_indexes_.size(); }
@@ -249,7 +234,7 @@ class TextIndexSchema {
 
   // Helper function to lookup text index for a key.
   // Locking needs to be specified if called outside of read phase.
-  const TextIndex *LookupPerKeyTextIndex(const Key &key, bool lock = false);
+  const TextIndex *GetPerKeyTextIndex(const Key &key, bool lock = false);
 
   // TODO: remove this because we'll always track the counts once it's optimized
   bool TrackSubtreeItemsCountEnabled() const {

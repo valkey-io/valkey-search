@@ -396,13 +396,15 @@ std::string TextIndexSchema::GetAllStemVariants(
   return stemmed;  // Caller owns this and will add view to words_to_search
 }
 
-const TextIndex *TextIndexSchema::LookupPerKeyTextIndex(const Key &key, bool lock) {
+const TextIndex *TextIndexSchema::GetPerKeyTextIndex(const Key &key,
+                                                     bool lock) {
   if (!key) {
-    CHECK(false) << "Invalid null key passed to LookupPerKeyTextIndex";
+    CHECK(false) << "Invalid null key passed to GetPerKeyTextIndex";
   }
   std::optional<std::lock_guard<std::mutex>> per_key_guard;
   if (lock) per_key_guard.emplace(per_key_text_indexes_mutex_);
-  if (auto it = per_key_text_indexes_.find(key); it != per_key_text_indexes_.end()) {
+  if (auto it = per_key_text_indexes_.find(key);
+      it != per_key_text_indexes_.end()) {
     return &it->second;
   }
   // Key not found in text indexes - this is normal for keys without text data

@@ -150,7 +150,7 @@ TEST_P(FilterTest, ParseParams) {
     // Set up text index for text predicate evaluation
     if (index_schema->GetTextIndexSchema()) {
       auto text_index =
-          index_schema->GetTextIndexSchema()->LookupPerKeyTextIndex(interned_key);
+          index_schema->GetTextIndexSchema()->GetPerKeyTextIndex(interned_key);
       indexes::PrefilterEvaluator evaluator(
           text_index, parse_results.value().query_operations);
       EXPECT_EQ(test_case.evaluate_success.value(),

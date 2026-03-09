@@ -168,16 +168,25 @@ bool VerifyFilter(const query::SearchParameters &parameters,
       parameters.index_schema->GetTextIndexSchema()) {
     // TODO: Wait for any in-flight indexing operations to complete before
     // acquiring the lock, ensuring we evaluate against the latest index state.
-    return parameters.index_schema->GetTextIndexSchema()->WithPerKeyTextIndexes(
-        [&](const auto &per_key_indexes) {
-          PredicateEvaluator evaluator(
+    const indexes::text::TextIndex *text_index = parameters.index_schema->GetTextIndexSchema()->LookupPerKeyTextIndex(n.external_id, true);
+
+    PredicateEvaluator evaluator(
               records,
-              valkey_search::indexes::text::TextIndexSchema::LookupTextIndex(
-                  per_key_indexes, n.external_id),
+              text_index,
               n.external_id, parameters.filter_parse_results.query_operations);
-          EvaluationResult result = predicate->Evaluate(evaluator);
-          return result.matches;
-        });
+    EvaluationResult result = predicate->Evaluate(evaluator);
+    return result.matches;
+    
+    // ->WithPerKeyTextIndexes(
+    //     [&](const auto &per_key_indexes) {
+    //       PredicateEvaluator evaluator(
+    //           records,
+    //           valkey_search::indexes::text::TextIndexSchema::LookupPerKeyTextIndex(
+    //               per_key_indexes, n.external_id),
+    //           n.external_id, parameters.filter_parse_results.query_operations);
+    //       EvaluationResult result = predicate->Evaluate(evaluator);
+    //       return result.matches;
+    //     });
   }
   PredicateEvaluator evaluator(
       records, parameters.filter_parse_results.query_operations);

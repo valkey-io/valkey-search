@@ -1193,6 +1193,49 @@ class IndexSchemaRDBTest : public ValkeySearchTest {
   }
 };
 
+TEST_F(IndexSchemaRDBTest, SingleSlotNumberComputedOnCreate) {
+  std::vector<absl::string_view> key_prefixes = {"doc:{slot1}:"};
+  std::string single_slot_index_name("index_schema_name{slot1}");
+  auto single_slot_schema =
+      MockIndexSchema::Create(&fake_ctx_, single_slot_index_name, key_prefixes,
+                              std::make_unique<HashAttributeDataType>(), nullptr)
+          .value();
+
+  ASSERT_TRUE(single_slot_schema->GetSingleSlotNumber().has_value());
+
+  std::string multi_slot_index_name("index_schema_name");
+  auto multi_slot_schema =
+      MockIndexSchema::Create(&fake_ctx_, multi_slot_index_name, key_prefixes,
+                              std::make_unique<HashAttributeDataType>(), nullptr)
+          .value();
+  EXPECT_FALSE(multi_slot_schema->GetSingleSlotNumber().has_value());
+}
+
+TEST_F(IndexSchemaRDBTest, SaveAndLoadSingleSlotNumber) {
+  std::vector<absl::string_view> key_prefixes = {"doc:{slot2}:"};
+  std::string index_schema_name_str("index_schema_name{slot2}");
+
+  auto index_schema =
+      MockIndexSchema::Create(&fake_ctx_, index_schema_name_str, key_prefixes,
+                              std::make_unique<HashAttributeDataType>(), nullptr)
+          .value();
+  ASSERT_TRUE(index_schema->GetSingleSlotNumber().has_value());
+  auto slot_number = index_schema->GetSingleSlotNumber();
+  auto proto = index_schema->ToProto();
+
+  ValkeyModuleCtx load_ctx;
+  EXPECT_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(&load_ctx))
+      .WillRepeatedly(Return(&load_ctx));
+  auto loaded_schema_or = IndexSchema::Create(
+      &load_ctx, *proto, /*mutations_thread_pool=*/nullptr,
+      /*skip_attributes=*/false, /*reload=*/true);
+  VMSDK_EXPECT_OK_STATUSOR(loaded_schema_or);
+  auto loaded_schema = loaded_schema_or.value();
+
+  ASSERT_TRUE(loaded_schema->GetSingleSlotNumber().has_value());
+  EXPECT_EQ(*loaded_schema->GetSingleSlotNumber(), slot_number);
+}
+
 TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   std::vector<absl::string_view> key_prefixes = {"prefix1", "prefix2"};
   std::string index_schema_name_str("index_schema_name");

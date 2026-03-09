@@ -105,12 +105,12 @@ TextIndex::TextIndex(bool suffix)
 
 void TextIndex::MutateTarget(absl::string_view word,
                              const InvasivePtr<Postings> &target,
+                             const std::optional<std::string> &reverse_word,
                              item_count_op op) {
   auto target_set_fn = CreateTargetSetFn(target);
   prefix_tree_.MutateTarget(word, target_set_fn, op);
-  if (suffix_tree_) {
-    std::string rev(word.rbegin(), word.rend());
-    suffix_tree_->MutateTarget(rev, target_set_fn, op);
+  if (suffix_tree_ && reverse_word.has_value()) {
+    suffix_tree_->MutateTarget(*reverse_word, target_set_fn, op);
   }
 }
 
@@ -256,13 +256,13 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
       if (is_new_word) {
         absl::WriterMutexLock tree_lock(&text_index_mutex_);
         text_index_->MutateTarget(
-            token, updated_target,
+            token, updated_target, reverse_token,
             ITEM_COUNT_TRACKING_ENABLED(item_count_op::ADD));
       }
     }
 
     // Update per-key index (no locking needed — local to this call).
-    key_index.MutateTarget(token, updated_target);
+    key_index.MutateTarget(token, updated_target, reverse_token);
   }
 
   if (stem_text_field_mask_ && !stem_mappings.empty()) {
@@ -303,6 +303,10 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
   auto iter = key_index.GetPrefix().GetWordIterator("");
   while (!iter.Done()) {
     std::string word_str(iter.GetWord());
+    const std::optional<std::string> reverse_word =
+        with_suffix_trie_ ? std::optional<std::string>(
+                                std::string(word_str.rbegin(), word_str.rend()))
+                          : std::nullopt;
     {
       absl::MutexLock word_lock(&rax_target_mutex_pool_.Get(word_str));
 
@@ -319,7 +323,7 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
       if (!updated_target) {
         absl::WriterMutexLock tree_lock(&text_index_mutex_);
         text_index_->MutateTarget(
-            word_str, updated_target,
+            word_str, updated_target, reverse_word,
             ITEM_COUNT_TRACKING_ENABLED(item_count_op::SUBTRACT));
         if (stem_text_field_mask_) {
           empty_words.push_back(word_str);

@@ -10,7 +10,6 @@ import threading
 import time
 import os
 from utils import IndexingTestHelper
-from concurrent.futures import ThreadPoolExecutor
 
 """
 This file contains tests for full text search.
@@ -267,44 +266,6 @@ def validate_fulltext_search(client: Valkey):
 
 class TestFullText(ValkeySearchTestCaseDebugMode):
 
-    def test_commandstats_timing(self):
-        """Test that commandstats timing is accurate for HSET operations during indexing."""
-        import threading
-        
-        client: Valkey = self.server.get_new_client()
-        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA", "content", "TEXT")
-        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
-        client.execute_command("CONFIG", "RESETSTAT")
-        
-        num_clients = 100
-        docs_per_client = 1000
-        clients = [self.server.get_new_client() for _ in range(num_clients)]
-        
-        def insert_docs(client_id):
-            for i in range(docs_per_client):
-                clients[client_id].execute_command("HSET", f"doc:{client_id}_{i}", "content", f"document {client_id}_{i} with text")
-        
-        threads = [threading.Thread(target=insert_docs, args=(i,)) for i in range(num_clients)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-        
-        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
-        
-        info = client.info("commandstats")
-        hset_stats = info.get("cmdstat_hset", {})
-        calls = hset_stats.get("calls", 0)
-        usec = hset_stats.get("usec", 0)
-        total_seconds = usec / 1_000_000
-        
-        expected_calls = num_clients * docs_per_client
-        assert calls == expected_calls, f"Expected {expected_calls} HSET calls, got {calls}"
-        assert total_seconds < 60, f"HSET commandstats shows {total_seconds:.2f}s ({usec} usec) for {expected_calls} operations - timing appears incorrect"
-        print(info)
-        print(f"HSET commandstats: calls={calls}, usec={usec} ({total_seconds:.2f}s total)")
-        assert False, "Intentional failure to check commandstats output in test logs"
-
     def test_escape_sequences(self):
         """Test backslash escape handling with default and custom punctuation."""
         client: Valkey = self.server.get_new_client()
@@ -331,7 +292,7 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # Test idx_default: backslash IS punctuation
         # Escaped comma: single token
         assert client.execute_command("FT.SEARCH", "idx_default", r'@content:test\,value')[0] == 1
-        # Backslash + letter: splits tokensduring ingestion
+        # Backslash + letter: splits tokens during ingestion
         assert client.execute_command("FT.SEARCH", "idx_default", r'@content:test2')[0] == 1
         assert client.execute_command("FT.SEARCH", "idx_default", r'@content:nvalue2')[0] == 1
         # Test query side processing of backslash when it is a punctuation
@@ -2268,179 +2229,6 @@ class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
         # Deletion pending of per_key_index, On deletion only prefix tree cleared
 
 class TestFullTextCluster(ValkeySearchClusterTestCaseDebugMode):
-
-    @pytest.mark.parametrize("setup_test", [{"replica_count": 1}], indirect=True)
-    def test_commandstats_timing_with_replica(self, setup_test):
-        """Test commandstats timing with replica and concurrent operations."""
-        import threading
-        
-        rg = self.get_replication_group(0)
-        primary = rg.get_primary_connection()
-        
-        primary.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA", "price", "NUMERIC", "tags", "TAG")
-        IndexingTestHelper.wait_for_backfill_complete_on_node(primary, "idx")
-        
-        # Reset stats on all primaries
-        for i in range(self.CLUSTER_SIZE):
-            self.new_client_for_primary(i).execute_command("CONFIG", "RESETSTAT")
-        
-        num_writers = 50
-        num_searchers = 50
-        num_deleters = 50
-        num_expirers = 50
-        num_bgsavers = 50
-        ops_per_client = 10000
-        num_keys = 1000
-        
-        # Use cluster clients for all operations
-        write_clients = [self.new_cluster_client() for _ in range(num_writers)]
-        search_clients = [self.new_client_for_primary(0) for _ in range(num_searchers)]
-        delete_clients = [self.new_cluster_client() for _ in range(num_deleters)]
-        expire_clients = [self.new_cluster_client() for _ in range(num_expirers)]
-        # bgsave_clients = [self.new_client_for_primary(i % self.CLUSTER_SIZE) for i in range(num_bgsavers)]
-        
-        def writer(client_id):
-            for i in range(ops_per_client):
-                key = f"doc:{i % num_keys}"
-                write_clients[client_id].execute_command("HSET", key, "price", str(100 + i), "tags", f"tag{i % 5}")
-        
-        def searcher(client_id):
-            for i in range(ops_per_client):
-                search_clients[client_id].execute_command("FT.SEARCH", "idx", f"@price:[{90 + i} {110 + i}]")
-                search_clients[client_id].execute_command("FT.SEARCH", "idx", f"@tags:{{tag{i % 5}}}")
-        
-        def deleter(client_id):
-            for i in range(ops_per_client):
-                key = f"doc:{i % num_keys}"
-                delete_clients[client_id].execute_command("DEL", key)
-        
-        def expirer(client_id):
-            for i in range(ops_per_client):
-                key = f"doc:{i % num_keys}"
-                expire_clients[client_id].execute_command("EXPIRE", key, "1")
-        
-        def bgsaver(client_id):
-            import time
-            for i in range(100):
-                try:
-                    bgsave_clients[client_id].execute_command("BGSAVE")
-                    time.sleep(0.1)
-                except Exception:
-                    pass
-        
-        threads = [threading.Thread(target=writer, args=(i,)) for i in range(num_writers)]
-        threads += [threading.Thread(target=searcher, args=(i,)) for i in range(num_searchers)]
-        # threads += [threading.Thread(target=deleter, args=(i,)) for i in range(num_deleters)]
-        threads += [threading.Thread(target=expirer, args=(i,)) for i in range(num_expirers)]
-        # threads += [threading.Thread(target=bgsaver, args=(i,)) for i in range(num_bgsavers)]
-        
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-        
-        IndexingTestHelper.wait_for_backfill_complete_on_node(primary, "idx")
-        
-        # Collect stats from all primaries
-        total_hset_calls = 0
-        total_hset_usec = 0
-        total_del_calls = 0
-        total_del_usec = 0
-        
-        for i in range(self.CLUSTER_SIZE):
-            node = self.new_client_for_primary(i)
-            info = node.info("commandstats")
-            hset_stats = info.get("cmdstat_hset", {})
-            del_stats = info.get("cmdstat_del", {})
-            total_hset_calls += hset_stats.get("calls", 0)
-            total_hset_usec += hset_stats.get("usec", 0)
-            total_del_calls += del_stats.get("calls", 0)
-            total_del_usec += del_stats.get("usec", 0)
-        
-        # Ping all nodes to check if any crashed
-        print("\nPinging all nodes...")
-        for i in range(self.CLUSTER_SIZE):
-            try:
-                node = self.new_client_for_primary(i)
-                node.ping()
-                print(f"  Primary {i}: OK")
-            except Exception as e:
-                print(f"  Primary {i}: FAILED - {e}")
-        
-        for rg_idx in range(len(self.replication_groups)):
-            rg = self.get_replication_group(rg_idx)
-            for rep_idx, replica in enumerate(rg.replicas):
-                try:
-                    replica.client.ping()
-                    print(f"  Replica {rg_idx}-{rep_idx}: OK")
-                except Exception as e:
-                    print(f"  Replica {rg_idx}-{rep_idx}: FAILED - {e}")
-        
-        print(f"\nHSET: calls={total_hset_calls}, usec={total_hset_usec} ({total_hset_usec / 1_000_000:.2f}s)")
-        print(f"DEL: calls={total_del_calls}, usec={total_del_usec} ({total_del_usec / 1_000_000:.2f}s)")
-        assert False, "Intentional failure to check commandstats output in test logs"
-
-    @pytest.mark.parametrize("setup_test", [{"replica_count": 1}], indirect=True)
-    def test_commandstats_high_throughput_full(self, setup_test):
-        # Fix for the NameError: ThreadPoolExecutor is now imported above
-        rg = self.get_replication_group(0)
-        primary = rg.get_primary_connection()
-        
-        # 1. Setup Index
-        primary.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA", "price", "NUMERIC", "tags", "TAG")
-
-        # 3. Parameters
-        num_workers = 75
-        ops_per_worker = 50000 # Reduced slightly to stabilize timing stats
-        pipeline_size = 50
-        num_keys = 1000
-
-        def run_pipeline_batch(task_type):
-            client = self.new_cluster_client()
-            pipe = client.pipeline(transaction=False)
-            
-            for i in range(ops_per_worker):
-                key = f"doc:{i % num_keys}"
-                if task_type == "writer":
-                    pipe.execute_command("HSET", key, "price", 100 + i, "tags", f"tag{i % 5}")
-                elif task_type == "searcher":
-                    pipe.execute_command("FT.SEARCH", "idx", f"@price:[0 100000]", "LIMIT", "0", "0")
-                elif task_type == "deleter":
-                    pipe.execute_command("DEL", key)
-                elif task_type == "expirer":
-                    pipe.execute_command("EXPIRE", key, 60)
-
-                if i % pipeline_size == 0:
-                    pipe.execute()
-            pipe.execute()
-
-        def controlled_bgsaver():
-            client = self.new_client_for_primary(0)
-            for _ in range(2):
-                try:
-                    # Only trigger if not already saving
-                    if not client.info("persistence").get('rdb_bgsave_in_progress'):
-                        client.execute_command("BGSAVE")
-                    time.sleep(2)
-                except: pass
-
-        # 4. Execution Logic
-        with ThreadPoolExecutor(max_workers=num_workers + 1) as executor:
-            futures = []
-            # futures.append(executor.submit(controlled_bgsaver))
-            
-            tasks = ["writer", "searcher", "deleter", "expirer"]
-            for i in range(num_workers):
-                task = tasks[i % 4]
-                futures.append(executor.submit(run_pipeline_batch, task))
-
-            # Ensure all tasks finish
-            for f in futures:
-                f.result()
-
-        # 5. Stability Verification
-        for i in range(self.CLUSTER_SIZE):
-            assert self.new_client_for_primary(i).ping() == True
 
     def test_fulltext_search_cluster(self):
         """

@@ -221,11 +221,6 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
     const std::string &token = entry.first;
     auto &[pos_map, suffix] = entry.second;
 
-    const std::optional<std::string> reverse_token =
-        suffix ? std::optional<std::string>(
-                     std::string(token.rbegin(), token.rend()))
-               : std::nullopt;
-
     // Update metadata from PositionMap
     metadata_.total_positions += pos_map.size();
     for (const auto &[_, field_mask] : pos_map) {

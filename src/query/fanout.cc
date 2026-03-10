@@ -47,7 +47,6 @@ namespace valkey_search::query::fanout {
 
 CONTROLLED_BOOLEAN(ForceInvalidSlotFingerprint, false);
 
-
 struct NeighborComparator {
   bool operator()(const indexes::Neighbor &a,
                   const indexes::Neighbor &b) const {
@@ -232,11 +231,10 @@ class LocalResponderSearch : public query::SearchParameters {
 
  private:
   void QueryCompleteImpl(std::unique_ptr<SearchParameters> self) {
-    if (search_result.status.ok() || enable_partial_results) {
+    if (search_result.status.ok()) {
       tracker->AddResults(search_result.neighbors);
       tracker->AddTotalCount(search_result.total_count);
-    }
-    if (!search_result.status.ok()) {
+    } else {
       if (absl::IsResourceExhausted(search_result.status)) {
         tracker->reached_oom.store(true);
       }

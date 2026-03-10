@@ -28,11 +28,11 @@ class Value {
   class Nil {
    public:
     Nil() : reason_("ctor") {}
-    Nil(const char* reason) : reason_(reason) {}
-    const char* GetReason() const { return reason_; }
+    explicit Nil(std::string reason) : reason_(reason) {}
+    const char* GetReason() const { return reason_.c_str(); }
 
    private:
-    const char* reason_;
+    std::string reason_;
   };
   using Vector = std::shared_ptr<std::vector<Value>>;
 

@@ -343,7 +343,7 @@ Value ApplyToElements(const Value::Vector vec,
       // Propagate error with index information
       std::string error_msg =
           MakeElementError(i, elem_result.GetNil().GetReason());
-      return Value(Value::Nil(error_msg.c_str()));
+      return Value(Value::Nil(error_msg));
     }
     result->push_back(std::move(elem_result));
   }
@@ -364,7 +364,7 @@ Value ApplyWithScalar(const Value::Vector vec, const Value& scalar,
       // Propagate error with index information
       std::string error_msg =
           MakeElementError(i, elem_result.GetNil().GetReason());
-      return Value(Value::Nil(error_msg.c_str()));
+      return Value(Value::Nil(error_msg));
     }
     result->push_back(std::move(elem_result));
   }
@@ -376,7 +376,7 @@ Value ApplyElementWise(const Value::Vector vec1, const Value::Vector vec2,
                        std::function<Value(const Value&, const Value&)> func) {
   if (vec1->size() != vec2->size()) {
     std::string error_msg = MakeLengthMismatchError(vec1->size(), vec2->size());
-    return Value(Value::Nil(error_msg.c_str()));
+    return Value(Value::Nil(error_msg));
   }
 
   auto result = std::make_shared<std::vector<Value>>();
@@ -388,7 +388,7 @@ Value ApplyElementWise(const Value::Vector vec1, const Value::Vector vec2,
       // Propagate error with index information
       std::string error_msg =
           MakeElementError(i, elem_result.GetNil().GetReason());
-      return Value(Value::Nil(error_msg.c_str()));
+      return Value(Value::Nil(error_msg));
     }
     result->push_back(std::move(elem_result));
   }

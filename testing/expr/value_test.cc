@@ -482,7 +482,7 @@ TEST_F(ValueTest, vector_arithmetic) {
   Value result8 = FuncAdd(vec1, vec3);
   ASSERT_TRUE(result8.IsNil());
   std::string error_msg = result8.GetNil().GetReason();
-  EXPECT_NE(error_msg.find("Length mismatch"), std::string::npos);
+  EXPECT_EQ(error_msg, "Length mismatch: vectors have lengths 3 and 2");
 }
 
 TEST_F(ValueTest, VectorComparison_EqualVectors) {
@@ -752,9 +752,8 @@ TEST_F(ValueTest, FuncVectorAt_IndexOutOfBounds) {
   Value result = FuncVectorAt(vec, Value(10.0));
   EXPECT_TRUE(result.IsNil());
   std::string reason = result.GetNil().GetReason();
-  EXPECT_NE(reason.find("Index out of bounds"), std::string::npos);
-  EXPECT_NE(reason.find("index 10"), std::string::npos);
-  EXPECT_NE(reason.find("vector length 3"), std::string::npos);
+  EXPECT_EQ(reason,
+            std::string("Index out of bounds: index 10, vector length 3"));
 }
 
 TEST_F(ValueTest, FuncVectorAt_NegativeIndex) {
@@ -762,7 +761,7 @@ TEST_F(ValueTest, FuncVectorAt_NegativeIndex) {
   Value result = FuncVectorAt(vec, Value(-1.0));
   EXPECT_TRUE(result.IsNil());
   std::string reason = result.GetNil().GetReason();
-  EXPECT_NE(reason.find("Index out of bounds"), std::string::npos);
+  EXPECT_EQ(reason, "Index out of bounds: index -1, vector length 3");
 }
 
 TEST_F(ValueTest, FuncVectorAt_NotAVector) {
@@ -1039,8 +1038,6 @@ TEST_F(ValueTest, NestedVector_EmptyInnerVectors) {
   EXPECT_EQ(elem3.VectorSize(), 0);
   EXPECT_TRUE(elem3.IsEmptyVector());
 }
-
-}  // namespace valkey_search::expr
 
 // Operations on nested vectors tests
 

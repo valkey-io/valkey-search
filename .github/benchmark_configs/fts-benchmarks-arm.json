@@ -1537,7 +1537,7 @@
               "NOCONTENT": "_nocontent"
             },
             "warmup": 60,
-            "command": "FT.SEARCH rd0 \"(@title:__field:search_term__)=>[KNN 10 @embedding $vec AS score]\" PARAMS 2 vec \"__field:query_vector__\" RETURN 2 title score"
+            "command": "FT.SEARCH rd0 \"(@title:__field:search_term__)=>[KNN 10 @embedding $vec AS score]\" PARAMS 2 vec \"__field:query_vector__\" RETURN 2 title score DIALECT 2"
           },
           {
             "id": "c",
@@ -1552,7 +1552,7 @@
               "NOCONTENT": "_nocontent"
             },
             "warmup": 60,
-            "command": "FT.SEARCH rd0 \"(@price:[100 500])=>[KNN 10 @embedding $vec AS score]\" PARAMS 2 vec \"__field:query_vector__\" RETURN 2 price score"
+            "command": "FT.SEARCH rd0 \"(@price:[100 500])=>[KNN 10 @embedding $vec AS score]\" PARAMS 2 vec \"__field:query_vector__\" RETURN 2 price score DIALECT 2"
           }
         ]
       }

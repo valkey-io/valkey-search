@@ -186,10 +186,8 @@ class TextIndexSchema {
   std::mutex in_progress_key_updates_mutex_;
 
   // Temporary storage for stem mappings during indexing
-  // Maps key -> (stemmed_word -> set of original words that stem to it)
-  absl::node_hash_map<
-      Key, absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>>
-      in_progress_stem_mappings_;
+  // Maps key -> (stemmed_word -> list of original words that stem to it)
+  absl::node_hash_map<Key, InProgressStemMap> in_progress_stem_mappings_;
 
   // Prevent concurrent mutations to in-progress stem mappings map
   std::mutex in_progress_stem_mappings_mutex_;
@@ -223,39 +221,21 @@ class TextIndexSchema {
   uint64_t GetPositionMemoryUsage() const;
   uint64_t GetTotalTextIndexMemoryUsage() const;
 
-  // Thread-safe accessor for per-key text indexes. Executes the provided
-  // function while holding the mutex lock, ensuring safe concurrent access.
-  template <typename Func>
-  auto WithPerKeyTextIndexes(Func &&func)
-      -> decltype(func(per_key_text_indexes_)) {
-    std::lock_guard<std::mutex> guard(per_key_text_indexes_mutex_);
-    return func(per_key_text_indexes_);
-  }
-
-  // Direct accessor for per-key text indexes.
-  // Assumes that lock is already acquired earlier.
-  const absl::node_hash_map<Key, TextIndex> &GetPerKeyTextIndexes() const {
-    return per_key_text_indexes_;
-  }
-
   // Total number of keys with text fields indexed in this schema.
   // No locking needed because only called from read phase.
   size_t GetTrackedKeyCount() const { return per_key_text_indexes_.size(); }
 
-  // Helper function to lookup text index for a key
-  static const TextIndex *LookupTextIndex(
-      const absl::node_hash_map<Key, TextIndex> &per_key_indexes,
-      const Key &key) {
-    if (!key) {
-      CHECK(false) << "Invalid null key passed to LookupTextIndex";
-      return nullptr;
-    }
-    if (auto it = per_key_indexes.find(key); it != per_key_indexes.end()) {
-      return &it->second;
-    }
-    // Key not found in text indexes - this is normal for keys without text data
-    return nullptr;
+  // Locking-enabled version of GetTrackedKeyCount.
+  size_t GetTrackedKeyCount(bool lock) {
+    std::optional<std::lock_guard<std::mutex>> per_key_guard;
+    if (lock) per_key_guard.emplace(per_key_text_indexes_mutex_);
+    return GetTrackedKeyCount();
   }
+
+  // Helper function to lookup text index for a key.
+  // Locking needs to be true if called outside of read phase of time sliced
+  // mutex.
+  const TextIndex *GetPerKeyTextIndex(const Key &key, bool lock);
 
   // TODO: remove this because we'll always track the counts once it's optimized
   bool TrackSubtreeItemsCountEnabled() const {

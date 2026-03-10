@@ -124,5 +124,17 @@ config::Number& GetRaxTargetMutexPoolSize();
 /// Return the maximum number of keys to accumulate before content fetching
 config::Number& GetMaxNonVectorSearchResultsFetched();
 
+/// Return the mutation weight for vector index types
+config::Number& GetMutationWeightVector();
+
+/// Return the mutation weight for text index types
+config::Number& GetMutationWeightText();
+
+/// Return the mutation weight for numeric index types
+config::Number& GetMutationWeightNumeric();
+
+/// Return the mutation weight for tag index types
+config::Number& GetMutationWeightTag();
+
 }  // namespace options
 }  // namespace valkey_search

@@ -56,34 +56,77 @@ struct TextIndexMetadata {
 
 class TextIndex {
   //
-  // The main query data structure maps Words into Postings objects. This
-  // is always done with a prefix tree. Optionally, a suffix tree can also be
-  // maintained. But in any case for the same word the two trees must point to
-  // the same Postings object, which is owned by this pair of trees. Plus,
-  // updates to these two trees need to be atomic when viewed externally. The
-  // locking provided by the RadixTree object is NOT quite sufficient to
-  // guarantee that the two trees are always in lock step. thus this object
-  // becomes responsible for cross-tree locking issues. Multiple locking
-  // strategies are possible. TBD (a shared-ed word lock table should work well)
+  // Sharded radix trees: words with same first byte share a shard.
+  // Each shard has independent tree + mutex, enabling true write parallelism.
+  // Words with different first bytes can modify their shards concurrently
+  // without blocking. Eliminates global text_index_mutex_ bottleneck.
   //
 
  public:
-  explicit TextIndex(bool suffix);
-  Rax &GetPrefix();
-  const Rax &GetPrefix() const;
-  std::optional<std::reference_wrapper<Rax>> GetSuffix();
-  std::optional<std::reference_wrapper<const Rax>> GetSuffix() const;
+  // Constructor for sharded index (schema-level)
+  explicit TextIndex(bool suffix, size_t num_shards);
 
-  // Applies target mutation to both prefix tree for |word| and, if the index
-  // has a suffix tree, to the suffix tree for reverse(word).
+  // Constructor for non-sharded index (per-key)
+  explicit TextIndex(bool suffix);
+
+  // Get shard index for a word (based on first byte)
+  size_t GetShardIndex(absl::string_view word) const;
+
+  // Check if this is a sharded index
+  bool IsSharded() const { return num_shards_ > 1; }
+
+  // Accessors for specific shard
+  Rax &GetPrefixShard(size_t shard_index);
+  const Rax &GetPrefixShard(size_t shard_index) const;
+  std::optional<std::reference_wrapper<Rax>> GetSuffixShard(size_t shard_index);
+  std::optional<std::reference_wrapper<const Rax>> GetSuffixShard(
+      size_t shard_index) const;
+
+  // Applies target mutation to appropriate shard for |word|
+  // If reverse_word is provided, also adds to suffix tree (if enabled)
   void MutateTarget(
       absl::string_view word, const InvasivePtr<Postings> &target,
       const std::optional<std::string> &reverse_word = std::nullopt,
       item_count_op op = NONE);
 
- private:
-  Rax prefix_tree_;
-  std::unique_ptr<Rax> suffix_tree_;
+  // Get mutex for shard protecting this word
+  absl::Mutex &GetShardMutex(absl::string_view word);
+  const absl::Mutex &GetShardMutex(absl::string_view word) const;
+
+  size_t GetNumShards() const { return num_shards_; }
+
+  // API compatibility: delegate to shard[0] for non-sharded/per-key access
+  Rax &GetPrefix() { return GetPrefixShard(0); }
+  const Rax &GetPrefix() const { return GetPrefixShard(0); }
+  std::optional<std::reference_wrapper<Rax>> GetSuffix() {
+    return GetSuffixShard(0);
+  }
+  std::optional<std::reference_wrapper<const Rax>> GetSuffix() const {
+    return GetSuffixShard(0);
+  }
+
+  // Convenience method for suffix queries
+  Rax::WordIterator GetSuffixWordIterator(absl::string_view word) const {
+    size_t shard = GetShardIndex(word);
+    auto suffix_shard = GetSuffixShard(shard);
+    CHECK(suffix_shard.has_value()) << "Suffix not enabled";
+    return suffix_shard->get().GetWordIterator(word);
+  }
+
+  struct Shard {
+    Rax prefix_tree;
+    std::unique_ptr<Rax> suffix_tree;
+    mutable absl::Mutex mutex;
+
+    explicit Shard(void (*free_callback)(void *), bool with_suffix)
+        : prefix_tree(free_callback),
+          suffix_tree(with_suffix ? std::make_unique<Rax>(free_callback)
+                                  : nullptr) {}
+  };
+
+  // Use unique_ptr for indirection - Shard contains non-movable Mutex
+  std::vector<std::unique_ptr<Shard>> shards_;
+  size_t num_shards_;
 };
 
 class TextIndexSchema {
@@ -127,10 +170,7 @@ class TextIndexSchema {
   uint64_t GetStemTextFieldMask() const { return stem_text_field_mask_; }
 
   // Enable suffix trie.
-  void EnableSuffix() {
-    with_suffix_trie_ = true;
-    text_index_ = std::make_shared<TextIndex>(true);
-  }
+  void EnableSuffix();
 
   void EnableSubtreeItemCountTracking() { track_subtree_item_counts_ = true; }
 
@@ -142,13 +182,9 @@ class TextIndexSchema {
 
   //
   // This is the main index of all Text fields in this index schema
+  // Sharded by first byte for parallel writes (per-shard locks in TextIndex)
   //
-  std::shared_ptr<TextIndex> text_index_ = std::make_shared<TextIndex>(false);
-
-  // Guards rax tree structural changes during concurrent writes.
-  // Used exclusively by CommitKeyData/DeleteKeyData when inserting or removing
-  // tree nodes.
-  mutable absl::Mutex text_index_mutex_;
+  std::shared_ptr<TextIndex> text_index_;
 
   //
   // Stem tree: maps stem roots to their parent words

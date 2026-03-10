@@ -71,7 +71,8 @@ bool TryAddWordKeyIteratorForPrefilter(
         valkey_search::indexes::text::Postings::KeyIterator,
         valkey_search::indexes::text::kWordExpansionInlineCapacity>
         &key_iterators) {
-  auto word_iter = text_index.GetPrefix().GetWordIterator(word);
+  size_t shard = text_index.GetShardIndex(word);
+  auto word_iter = text_index.GetPrefixShard(shard).GetWordIterator(word);
   if (!word_iter.Done() && word_iter.GetWord() == word) {
     auto postings = word_iter.GetPostingsTarget();
     if (postings) {
@@ -157,13 +158,15 @@ EvaluationResult PrefixPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex &text_index,
     const InternedStringPtr &target_key, bool require_positions) const {
   uint64_t field_mask = field_mask_;
-  auto word_iter = text_index.GetPrefix().GetWordIterator(term_);
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
   // Limit the number of term word expansions
   uint32_t max_words = options::GetMaxTermExpansions().GetValue();
   uint32_t word_count = 0;
+
+  size_t shard = text_index.GetShardIndex(term_);
+  auto word_iter = text_index.GetPrefixShard(shard).GetWordIterator(term_);
   while (!word_iter.Done() && word_count < max_words) {
     std::string_view word = word_iter.GetWord();
     auto postings = word_iter.GetPostingsTarget();
@@ -178,6 +181,7 @@ EvaluationResult PrefixPredicate::Evaluate(
     word_iter.Next();
     ++word_count;
   }
+
   if (key_iterators.empty()) {
     return EvaluationResult(false);
   }
@@ -205,35 +209,43 @@ EvaluationResult SuffixPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex &text_index,
     const InternedStringPtr &target_key, bool require_positions) const {
   uint64_t field_mask = field_mask_;
-  auto suffix_opt = text_index.GetSuffix();
-  if (!suffix_opt.has_value()) {
+  if (!text_index.GetSuffix().has_value()) {
     return EvaluationResult(false);
   }
   std::string reversed_term(term_.rbegin(), term_.rend());
-  auto word_iter = suffix_opt.value().get().GetWordIterator(reversed_term);
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
-  // Limit the number of term word expansions
   uint32_t max_words = options::GetMaxTermExpansions().GetValue();
   uint32_t word_count = 0;
-  while (!word_iter.Done() && word_count < max_words) {
-    std::string_view word = word_iter.GetWord();
-    if (!word.starts_with(reversed_term)) {
-      break;
-    }
-    auto postings = word_iter.GetPostingsTarget();
-    if (postings) {
-      auto key_iter = postings->GetKeyIterator();
-      // Skip to target key and verify it contains the required fields
-      if (key_iter.SkipForwardKey(target_key) &&
-          key_iter.ContainsFields(field_mask)) {
-        key_iterators.emplace_back(std::move(key_iter));
+
+  // Suffix routes to SINGLE shard using reversed term's prefix hash.
+  // "*ing" reversed = "gni" → shard hash("gni")
+  size_t shard = text_index.GetShardIndex(reversed_term);
+  {
+    auto suffix_shard = text_index.GetSuffixShard(shard);
+    if (suffix_shard) {
+      auto word_iter = suffix_shard->get().GetWordIterator(reversed_term);
+      while (!word_iter.Done() && word_count < max_words) {
+        std::string_view word = word_iter.GetWord();
+        if (!word.starts_with(reversed_term)) {
+          break;
+        }
+        auto postings = word_iter.GetPostingsTarget();
+        if (postings) {
+          auto key_iter = postings->GetKeyIterator();
+          // Skip to target key and verify it contains the required fields
+          if (key_iter.SkipForwardKey(target_key) &&
+              key_iter.ContainsFields(field_mask)) {
+            key_iterators.emplace_back(std::move(key_iter));
+          }
+        }
+        word_iter.Next();
+        ++word_count;
       }
-    }
-    word_iter.Next();
-    ++word_count;
-  }
+    }  // end if suffix_shard
+  }  // end single shard block
+
   if (key_iterators.empty()) {
     return EvaluationResult(false);
   }
@@ -282,19 +294,29 @@ EvaluationResult FuzzyPredicate::Evaluate(
   uint64_t field_mask = field_mask_;
   // Limit the number of term word expansions
   uint32_t max_words = options::GetMaxTermExpansions().GetValue();
-  // Get all KeyIterators for words within edit distance
-  auto key_iters = indexes::text::FuzzySearch::Search(
-      text_index.GetPrefix(), term_, distance_, max_words);
-  // Filter to only include KeyIterators that match target_key and field_mask
+
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
       filtered_key_iterators;
-  for (auto &key_iter : key_iters) {
-    if (key_iter.SkipForwardKey(target_key) &&
-        key_iter.ContainsFields(field_mask)) {
-      filtered_key_iterators.emplace_back(std::move(key_iter));
+
+  // Fuzzy search MUST query ALL shards - words within edit distance can be in
+  // any shard
+  for (size_t shard = 0; shard < text_index.GetNumShards(); ++shard) {
+    uint32_t shard_max = max_words - filtered_key_iterators.size();
+    if (shard_max == 0) break;
+
+    auto key_iters = indexes::text::FuzzySearch::Search(
+        text_index.GetPrefixShard(shard), term_, distance_, shard_max);
+
+    // Filter and add to result
+    for (auto &key_iter : key_iters) {
+      if (key_iter.SkipForwardKey(target_key) &&
+          key_iter.ContainsFields(field_mask)) {
+        filtered_key_iterators.emplace_back(std::move(key_iter));
+      }
     }
   }
+
   if (filtered_key_iterators.empty()) {
     return EvaluationResult(false);
   }

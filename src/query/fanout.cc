@@ -47,6 +47,7 @@ namespace valkey_search::query::fanout {
 
 CONTROLLED_BOOLEAN(ForceInvalidSlotFingerprint, false);
 
+
 struct NeighborComparator {
   bool operator()(const indexes::Neighbor &a,
                   const indexes::Neighbor &b) const {
@@ -85,6 +86,7 @@ struct SearchPartitionResultsTracker {
       results ABSL_GUARDED_BY(mutex);
   int outstanding_requests ABSL_GUARDED_BY(mutex);
   std::unique_ptr<SearchParameters> parameters ABSL_GUARDED_BY(mutex);
+  std::atomic_bool reached_oom{false};
   std::atomic_bool consistency_failed{false};
   std::atomic<size_t> accumulated_total_count{0};
 
@@ -103,10 +105,14 @@ struct SearchPartitionResultsTracker {
       bool should_cancel = status.error_code() == grpc::RESOURCE_EXHAUSTED ||
                            !parameters->enable_partial_results ||
                            consistency_failed.load();
+      if (status.error_code() == grpc::RESOURCE_EXHAUSTED) {
+        reached_oom.store(true);
+      }
       if (should_cancel) {
         parameters->cancellation_token->Cancel();
       }
       if (status.error_code() != grpc::DEADLINE_EXCEEDED ||
+          status.error_code() != grpc::RESOURCE_EXHAUSTED ||
           status.error_code() != grpc::FAILED_PRECONDITION) {
         VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
             << "Error during handling of FT.SEARCH on node " << address << ": "
@@ -169,7 +175,9 @@ struct SearchPartitionResultsTracker {
     absl::MutexLock lock(&mutex);
     absl::Status status;
     if (consistency_failed) {
-      status = absl::FailedPreconditionError(kFailedPreconditionMsg);
+      status = absl::FailedPreconditionError(query::kFailedPreconditionMsg);
+    } else if (reached_oom) {
+      status = absl::ResourceExhaustedError(query::kOOMMsg);
     } else {
       std::vector<indexes::Neighbor> neighbors;
       neighbors.resize(results.size());
@@ -227,7 +235,11 @@ class LocalResponderSearch : public query::SearchParameters {
     if (search_result.status.ok() || enable_partial_results) {
       tracker->AddResults(search_result.neighbors);
       tracker->AddTotalCount(search_result.total_count);
-    } else {
+    }
+    if (!search_result.status.ok()) {
+      if (absl::IsResourceExhausted(search_result.status)) {
+        tracker->reached_oom.store(true);
+      }
       VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
           << "Error during local handling of FT.SEARCH: "
           << search_result.status.message();

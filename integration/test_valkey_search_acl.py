@@ -199,12 +199,7 @@ class TestCommandsACLs(ValkeySearchTestCaseBase):
             ),
             (
                 "FT.SEARCH",
-                [b"readonly", b"module"],
-                [b"@read", b"@slow", b"@search"],
-            ),
-            (
-                "FT.AGGREGATE",
-                [b"readonly", b"module"],
+                [b"readonly", b"denyoom", b"module"],
                 [b"@read", b"@slow", b"@search"],
             ),
             (

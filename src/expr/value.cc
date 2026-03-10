@@ -648,10 +648,32 @@ Value FuncSqrt(const Value& o) {
 }
 
 Value FuncStrlen(const Value& o) {
+  if (o.IsVector()) {
+    return ApplyToElements(o.GetVector(), FuncStrlen);
+  }
   return Value(double(o.AsStringView().size()));
 }
 
 Value FuncStartswith(const Value& l, const Value& r) {
+  bool l_is_vec = l.IsVector();
+  bool r_is_vec = r.IsVector();
+
+  // Case 1: Left is vector, right is scalar (broadcast)
+  if (l_is_vec && !r_is_vec) {
+    return ApplyWithScalar(l.GetVector(), r, FuncStartswith, false);
+  }
+
+  // Case 2: Left is scalar, right is vector (broadcast)
+  if (!l_is_vec && r_is_vec) {
+    return ApplyWithScalar(r.GetVector(), l, FuncStartswith, true);
+  }
+
+  // Case 3: Both are vectors (element-wise)
+  if (l_is_vec && r_is_vec) {
+    return ApplyElementWise(l.GetVector(), r.GetVector(), FuncStartswith);
+  }
+
+  // Case 4: Both scalars (existing behavior)
   auto ls = l.AsStringView();
   auto rs = r.AsStringView();
   if (rs.size() > ls.size()) {
@@ -662,6 +684,25 @@ Value FuncStartswith(const Value& l, const Value& r) {
 }
 
 Value FuncContains(const Value& l, const Value& r) {
+  bool l_is_vec = l.IsVector();
+  bool r_is_vec = r.IsVector();
+
+  // Case 1: Left is vector, right is scalar (broadcast)
+  if (l_is_vec && !r_is_vec) {
+    return ApplyWithScalar(l.GetVector(), r, FuncContains, false);
+  }
+
+  // Case 2: Left is scalar, right is vector (broadcast)
+  if (!l_is_vec && r_is_vec) {
+    return ApplyWithScalar(r.GetVector(), l, FuncContains, true);
+  }
+
+  // Case 3: Both are vectors (element-wise)
+  if (l_is_vec && r_is_vec) {
+    return ApplyElementWise(l.GetVector(), r.GetVector(), FuncContains);
+  }
+
+  // Case 4: Both scalars (existing behavior)
   auto ls = l.AsStringView();
   auto rs = r.AsStringView();
   size_t count = 0;
@@ -678,6 +719,10 @@ Value FuncContains(const Value& l, const Value& r) {
 }
 
 Value FuncSubstr(const Value& l, const Value& m, const Value& r) {
+  if (l.IsVector() || m.IsVector() || r.IsVector()) {
+    return Value(Value::Nil("SUBSTR does not accept lists as parameters"));
+  }
+
   auto ls = l.AsStringView();
   auto offset_p = m.AsInteger();
   auto length_p = r.AsInteger();
@@ -703,6 +748,9 @@ Value FuncSubstr(const Value& l, const Value& m, const Value& r) {
 }
 
 Value FuncLower(const Value& o) {
+  if (o.IsVector()) {
+    return ApplyToElements(o.GetVector(), FuncLower);
+  }
   auto os = o.AsStringView();
   std::string result;
   result.reserve(os.size());
@@ -718,6 +766,9 @@ Value FuncLower(const Value& o) {
 }
 
 Value FuncUpper(const Value& o) {
+  if (o.IsVector()) {
+    return ApplyToElements(o.GetVector(), FuncUpper);
+  }
   auto os = o.AsStringView();
   std::string result;
   result.reserve(os.size());
@@ -837,7 +888,7 @@ Value FuncVectorAt(const Value& vec, const Value& index) {
   if (*idx < 0 || static_cast<size_t>(*idx) >= vec_size) {
     std::string error = "Index out of bounds: index " + std::to_string(*idx) +
                         ", vector length " + std::to_string(vec_size);
-    return Value(Value::Nil(error.c_str()));
+    return Value(Value::Nil(error));
   }
 
   return vec.GetVectorElement(static_cast<size_t>(*idx));

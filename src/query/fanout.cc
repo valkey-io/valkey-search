@@ -174,9 +174,9 @@ struct SearchPartitionResultsTracker {
     absl::MutexLock lock(&mutex);
     absl::Status status;
     if (consistency_failed) {
-      status = absl::FailedPreconditionError(query::kFailedPreconditionMsg);
+      status = absl::FailedPreconditionError(kFailedPreconditionMsg);
     } else if (reached_oom) {
-      status = absl::ResourceExhaustedError(query::kOOMMsg);
+      status = absl::ResourceExhaustedError(kOOMMsg);
     } else {
       std::vector<indexes::Neighbor> neighbors;
       neighbors.resize(results.size());

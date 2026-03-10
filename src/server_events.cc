@@ -50,6 +50,11 @@ void OnServerCronCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
   }
 }
 
+void OnShutdownCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
+                        uint64_t subevent, void *data) {
+  SchemaManager::Instance().OnShutdownCallback(ctx, eid, subevent, data);
+}
+
 void AtForkPrepare() { ValkeySearch::Instance().AtForkPrepare(); }
 
 void AfterForkParent() { ValkeySearch::Instance().AfterForkParent(); }
@@ -72,6 +77,8 @@ void SubscribeToServerEvents() {
                                       &OnSwapDBCallback);
   ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_FlushDB,
                                       &OnFlushDBCallback);
+  ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_Shutdown,
+                                      &OnShutdownCallback);
 }
 
 }  // namespace valkey_search::server_events

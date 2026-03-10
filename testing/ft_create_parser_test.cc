@@ -73,6 +73,7 @@ struct FTCreateParserTestCase {
   bool success{false};
   absl::string_view command_str;
   bool too_many_attributes{false};
+  int text_field_count{0};
   std::vector<HNSWParameters> hnsw_parameters;
   std::vector<FlatParameters> flat_parameters;
   std::vector<FTCreateTagParameters> tag_parameters;
@@ -97,6 +98,13 @@ void VerifyVectorParams(const data_model::VectorIndex &vector_index_proto,
 TEST_P(FTCreateParserTest, ParseParams) {
   const FTCreateParserTestCase &test_case = GetParam();
   auto command_str = std::string(test_case.command_str);
+  if (test_case.text_field_count > 0) {
+    command_str = "idx1 on HASH SCHEMA";
+    for (int i = 0; i < test_case.text_field_count; ++i) {
+      absl::StrAppend(&command_str, " text_field", std::to_string(i + 1),
+                      " TEXT");
+    }
+  }
   if (test_case.too_many_attributes) {
     for (int i = 0; i < 10000; ++i) {
       absl::StrAppend(&command_str, " hash_field", std::to_string(i + 2),
@@ -1627,6 +1635,15 @@ INSTANTIATE_TEST_SUITE_P(
              .success = false,
              .command_str = "idx1 on HASH SCHEMA text_field TEXT UNKNOWN_PARAM value",
              .expected_error_message = "Invalid field type for field `UNKNOWN_PARAM`: Unknown argument `value`",
+         },
+         {
+             .test_name = "invalid_text_fields_above_64",
+             .success = false,
+             .command_str = "",
+             .text_field_count = 65,
+             .expected_error_message =
+                 "Invalid range: Value above maximum; The maximum number of "
+                 "text fields cannot exceed 64.",
          },
          {
              .test_name = "text_case_insensitive_parameters",

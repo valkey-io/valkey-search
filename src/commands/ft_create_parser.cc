@@ -74,6 +74,7 @@ constexpr int kMaxNumericFieldLen{256};
 constexpr int kTimeoutMs{50000};
 constexpr int kMinTimeoutMs{1};
 constexpr int kMaxTimeoutMs{60000};
+constexpr size_t kMaxTextFieldsCount{64};
 
 constexpr absl::string_view kMaxPrefixesConfig{"max-prefixes"};
 constexpr absl::string_view kMaxTagFieldLenConfig{"max-tag-field-length"};
@@ -711,6 +712,7 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
         "Index schema must have at least one attribute");
   }
   std::set<absl::string_view> identifier_names;
+  size_t text_fields_count = 0;
   while (itr.HasNext()) {
     absl::string_view attribute_identifier;
     VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, attribute_identifier));
@@ -729,6 +731,14 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
         identifier_names.size() + 1, std::nullopt, max_attributes_value))
         << "The maximum number of attributes cannot exceed "
         << max_attributes_value << ".";
+    if (attribute->index().index_type_case() ==
+        data_model::Index::IndexTypeCase::kTextIndex) {
+      VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(
+          text_fields_count + 1, std::nullopt, kMaxTextFieldsCount))
+          << "The maximum number of text fields cannot exceed "
+          << kMaxTextFieldsCount << ".";
+      ++text_fields_count;
+    }
 
     identifier_names.insert(attribute->identifier());
   }

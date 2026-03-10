@@ -43,6 +43,13 @@ def find_local_key(client: Valkey, prefix: str = "key:") -> str:
                     return key
     raise RuntimeError(f"No key found for node on port {node_port}")
 
+def wait_for_pausepoint(client, pausepoint_name, timeout=10):
+    """Wait for a pausepoint to be hit by at least one thread."""
+    waiters.wait_for_true(
+        lambda: client.execute_command("FT._DEBUG", "PAUSEPOINT", "TEST", pausepoint_name) > 0,
+        timeout=timeout
+    )
+    return True
 
 class IndexingTestHelper:
     """Helper class containing common functions for testing indexing operations."""

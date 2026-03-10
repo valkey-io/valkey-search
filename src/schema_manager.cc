@@ -511,10 +511,9 @@ void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx) {
                           << " on FLUSHDB of DB " << selected_db;
     auto old_schema = RemoveIndexSchemaInternal(selected_db, name);
     if (!old_schema.ok()) {
-      VMSDK_LOG(WARNING, ctx)
-          << "Unable to delete index schema "
-          << vmsdk::config::RedactIfNeeded(name) << " on FLUSHDB of DB "
-          << selected_db << ": " << old_schema.status().message();
+      VMSDK_LOG(WARNING, ctx) << "Unable to delete index schema "
+                              << vmsdk::config::RedactIfNeeded(name)
+                              << " on FLUSHDB of DB " << selected_db;
       continue;
     }
     if (coordinator_enabled_) {

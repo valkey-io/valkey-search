@@ -457,8 +457,7 @@ void MetadataManager::HandleBroadcastedMetadata(
       [address, this](grpc::Status s, GetGlobalMetadataResponse &response) {
         if (!s.ok()) {
           VMSDK_LOG_EVERY_N_SEC(WARNING, detached_ctx_.get(), 1)
-              << "Failed to get GlobalMetadata from " << address << ": "
-              << s.error_message();
+              << "Failed to get GlobalMetadata from " << address;
           return;
         }
         vmsdk::RunByMain([ctx = detached_ctx_.get(),

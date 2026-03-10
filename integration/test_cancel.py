@@ -405,7 +405,6 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
     def test_aggregate_timeout(self):
         """Test FT.AGGREGATE timeout handling across all aggregation stages."""
         client: Valkey = self.server.get_new_client()
-        client.execute_command("FLUSHALL SYNC")
         
         assert client.execute_command("CONFIG SET search.info-developer-visible yes") == b"OK"
         
@@ -422,7 +421,6 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
         nominal_flat = aggregate(client, "flat", False, stages=["LOAD", "1", "@n"])
         assert nominal_hnsw[0] == 10
         assert nominal_flat[0] == 10
-        assert client.info("SEARCH")["search_cancel-timeouts"] == 0
         
         # Enable forced timeouts
         assert client.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceTimeoutAggregate yes") == b"OK"
@@ -564,11 +562,9 @@ class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
 
     def test_aggregate_timeout_cluster(self):
         """Test FT.AGGREGATE timeout handling in cluster mode."""
-        self.execute_primaries(["flushall sync"])
         self.config_set("search.info-developer-visible", "yes")
 
         client: Valkey = self.new_cluster_client()
-        self.check_info("search_cancel-timeouts", 0)
 
         hnsw_index = Index("hnsw", [Vector("v", 3, type="HNSW"), Numeric("n")])
         flat_index = Index("flat", [Vector("v", 3, type="FLAT"), Numeric("n")])

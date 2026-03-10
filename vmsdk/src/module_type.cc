@@ -68,7 +68,7 @@ absl::Status ModuleType::Deregister(ValkeyModuleCtx *ctx,
   if (!module_key) {
     DCHECK(false);
     return absl::InternalError(
-        absl::StrCat("failed to open redis key: ", key.data()));
+        absl::StrCat("failed to open valkey key: ", key.data()));
   }
   DoDeregister(ctx, module_key.get(), key);
   return absl::OkStatus();

@@ -235,7 +235,8 @@ class TextIndexSchema {
   }
 
   // Helper function to lookup text index for a key.
-  // Locking needs to be true if called outside of read phase of time sliced mutex.
+  // Locking needs to be true if called outside of read phase of time sliced
+  // mutex.
   const TextIndex *GetPerKeyTextIndex(const Key &key, bool lock);
 
   // TODO: remove this because we'll always track the counts once it's optimized

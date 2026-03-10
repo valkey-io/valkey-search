@@ -134,9 +134,6 @@ std::optional<std::reference_wrapper<const Rax>> TextIndex::GetSuffix() const {
 
 /*** TextIndexSchema ***/
 
-#define ITEM_COUNT_TRACKING_ENABLED(op) \
-  (track_subtree_item_counts_ ? op : item_count_op::NONE)
-
 TextIndexSchema::TextIndexSchema(data_model::Language language,
                                  const std::string &punctuation,
                                  bool with_offsets,
@@ -255,9 +252,8 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
 
       if (is_new_word) {
         absl::WriterMutexLock tree_lock(&text_index_mutex_);
-        text_index_->MutateTarget(
-            token, updated_target, reverse_token,
-            ITEM_COUNT_TRACKING_ENABLED(item_count_op::ADD));
+        text_index_->MutateTarget(token, updated_target, reverse_token,
+                                  item_count_op::ADD);
       }
     }
 
@@ -322,9 +318,8 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
 
       if (!updated_target) {
         absl::WriterMutexLock tree_lock(&text_index_mutex_);
-        text_index_->MutateTarget(
-            word_str, updated_target, reverse_word,
-            ITEM_COUNT_TRACKING_ENABLED(item_count_op::SUBTRACT));
+        text_index_->MutateTarget(word_str, updated_target, reverse_word,
+                                  item_count_op::SUBTRACT);
         if (stem_text_field_mask_) {
           empty_words.push_back(word_str);
         }

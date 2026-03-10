@@ -195,7 +195,7 @@ inline bool NeedsDeduplication(QueryOperations query_operations) {
 // estimated size.
 std::pair<std::unique_ptr<indexes::text::TextIterator>, size_t>
 BuildTextIterator(const Predicate *predicate, bool negate,
-                  bool require_positions) {
+                  bool require_positions, bool is_vec_query) {
   if (predicate->GetType() == PredicateType::kComposedAnd ||
       predicate->GetType() == PredicateType::kComposedOr) {
     auto composed_predicate =
@@ -212,7 +212,7 @@ BuildTextIterator(const Predicate *predicate, bool negate,
       size_t min_size = SIZE_MAX;
       for (const auto &child : composed_predicate->GetChildren()) {
         auto [iter, size] =
-            BuildTextIterator(child.get(), negate, child_require_positions);
+            BuildTextIterator(child.get(), negate, child_require_positions, is_vec_query);
         if (iter) {
           iterators.push_back(std::move(iter));
           min_size = std::min(min_size, size);
@@ -234,7 +234,7 @@ BuildTextIterator(const Predicate *predicate, bool negate,
       bool has_non_text = false;
       for (const auto &child : composed_predicate->GetChildren()) {
         auto [iter, size] =
-            BuildTextIterator(child.get(), negate, child_require_positions);
+            BuildTextIterator(child.get(), negate, child_require_positions, is_vec_query);
         if (iter) {
           iterators.push_back(std::move(iter));
           total_size += size;
@@ -254,7 +254,7 @@ BuildTextIterator(const Predicate *predicate, bool negate,
     auto text_predicate = dynamic_cast<const TextPredicate *>(predicate);
     auto text_index = text_predicate->GetTextIndexSchema()->GetTextIndex();
     auto field_mask = text_predicate->GetFieldMask();
-    size_t size = text_predicate->EstimateSize();
+    size_t size = text_predicate->EstimateSize(is_vec_query);
     auto result = text_predicate->BuildTextIterator(text_index, field_mask,
                                                     require_positions);
     return {std::move(result), size};
@@ -271,7 +271,7 @@ size_t EvaluateFilterAsPrimary(
     const Predicate *predicate,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     bool negate, QueryOperations query_operations,
-    const IndexSchema *index_schema) {
+    const IndexSchema *index_schema, bool is_vec_query) {
   // Always use universal set when query has text + negate
   if ((query_operations & QueryOperations::kContainsText) &&
       (query_operations & QueryOperations::kContainsNegate)) {
@@ -291,7 +291,7 @@ size_t EvaluateFilterAsPrimary(
         EvaluateAsComposedPredicate(composed_predicate, negate);
     if (predicate_type == PredicateType::kComposedAnd) {
       auto [text_iter, size] =
-          BuildTextIterator(composed_predicate, negate, false);
+          BuildTextIterator(composed_predicate, negate, is_vec_query, is_vec_query);
       if (text_iter) {
         entries_fetchers.push(
             std::make_unique<indexes::text::TextIteratorFetcher>(
@@ -304,7 +304,7 @@ size_t EvaluateFilterAsPrimary(
         std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
         size_t child_size =
             EvaluateFilterAsPrimary(child.get(), child_fetchers, negate,
-                                    query_operations, index_schema);
+                                    query_operations, index_schema, is_vec_query);
         if (child_size < min_size) {
           min_size = child_size;
           best_fetchers = std::move(child_fetchers);
@@ -318,7 +318,7 @@ size_t EvaluateFilterAsPrimary(
         std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
         size_t child_size =
             EvaluateFilterAsPrimary(child.get(), child_fetchers, negate,
-                                    query_operations, index_schema);
+                                    query_operations, index_schema, is_vec_query);
         AppendQueue(entries_fetchers, child_fetchers);
         total_size += child_size;
       }
@@ -342,7 +342,7 @@ size_t EvaluateFilterAsPrimary(
   }
   if (predicate->GetType() == PredicateType::kText) {
     auto text_predicate = dynamic_cast<const TextPredicate *>(predicate);
-    size_t size = text_predicate->EstimateSize();
+    size_t size = text_predicate->EstimateSize(is_vec_query);
     auto fetcher = std::make_unique<indexes::Text::EntriesFetcher>(
         size, text_predicate->GetTextIndexSchema()->GetTextIndex(),
         text_predicate->GetFieldMask(), false);
@@ -354,7 +354,7 @@ size_t EvaluateFilterAsPrimary(
     auto negate_predicate = dynamic_cast<const NegatePredicate *>(predicate);
     size_t result = EvaluateFilterAsPrimary(negate_predicate->GetPredicate(),
                                             entries_fetchers, !negate,
-                                            query_operations, index_schema);
+                                            query_operations, index_schema, is_vec_query);
     return result;
   }
   CHECK(false);
@@ -578,7 +578,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
   size_t qualified_entries = EvaluateFilterAsPrimary(
       parameters.filter_parse_results.root_predicate.get(), entries_fetchers,
       false, parameters.filter_parse_results.query_operations,
-      parameters.index_schema.get());
+      parameters.index_schema.get(), false);
 
   // Get the config for maximum number of keys to accumulate before content
   // fetching
@@ -668,7 +668,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearch(
   size_t qualified_entries = EvaluateFilterAsPrimary(
       parameters.filter_parse_results.root_predicate.get(), entries_fetchers,
       false, parameters.filter_parse_results.query_operations,
-      parameters.index_schema.get());
+      parameters.index_schema.get(), parameters.IsVectorQuery());
 
   // Query planner makes the decision for pre-filtering vs inline-filtering.
   if (UsePreFiltering(qualified_entries, vector_index)) {

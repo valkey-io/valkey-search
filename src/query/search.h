@@ -286,7 +286,7 @@ size_t EvaluateFilterAsPrimary(
     const Predicate* predicate,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>& entries_fetchers,
     bool negate, QueryOperations query_operations,
-    const IndexSchema* index_schema);
+    const IndexSchema* index_schema, bool is_vec_query);
 
 // Defined in the header to support testing
 absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(

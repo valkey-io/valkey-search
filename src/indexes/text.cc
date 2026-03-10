@@ -268,19 +268,28 @@ std::unique_ptr<indexes::text::TextIterator> FuzzyPredicate::BuildTextIterator(
  * Size estimation is only done at the schema-level right now. It does not
  * account for a field specifier in the text query and may over-estimate
  * because of it if there are multiple text fields in the schema.
+ * 
+ * When there a vector componeet of the query, we perform a more sophisticated
+ * size estimation by traversing the tree which will help make the correct
+ * in-line vs pre-filter query planning decision. Otherwise we simply grab the
+ * upper bound which will only be used to help reserve space in collections.
  */
 
-size_t TermPredicate::EstimateSize() const {
-  auto iter =
-      text_index_schema_->GetTextIndex()->GetPrefix().GetWordIterator(term_);
-  if (!iter.Done() && iter.GetWord() == term_) {
-    return iter.GetPostingsTarget()->GetKeyCount();
+size_t TermPredicate::EstimateSize(bool is_vec_query) const {
+  if (is_vec_query) {
+    auto iter =
+        text_index_schema_->GetTextIndex()->GetPrefix().GetWordIterator(term_);
+    if (!iter.Done() && iter.GetWord() == term_) {
+      return iter.GetPostingsTarget()->GetKeyCount();
+    }
+  } else {
+    return text_index_schema_->GetTrackedKeyCount();
   }
   return 0;
 }
 
-size_t PrefixPredicate::EstimateSize() const {
-  if (text_index_schema_->TrackSubtreeItemsCountEnabled()) {
+size_t PrefixPredicate::EstimateSize(bool is_vec_query) const {
+  if (is_vec_query) {
     return text_index_schema_->GetTextIndex()->GetPrefix().GetSubtreeItemCount(
         term_);
   } else {
@@ -288,8 +297,8 @@ size_t PrefixPredicate::EstimateSize() const {
   }
 }
 
-size_t SuffixPredicate::EstimateSize() const {
-  if (text_index_schema_->TrackSubtreeItemsCountEnabled()) {
+size_t SuffixPredicate::EstimateSize(bool is_vec_query) const {
+  if (is_vec_query) {
     auto suffix_tree = text_index_schema_->GetTextIndex()->GetSuffix();
     CHECK(suffix_tree) << "Suffix estimation not supported";
     return suffix_tree.value().get().GetSubtreeItemCount(term_);
@@ -298,13 +307,13 @@ size_t SuffixPredicate::EstimateSize() const {
   }
 }
 
-size_t InfixPredicate::EstimateSize() const {
+size_t InfixPredicate::EstimateSize(bool is_vec_query) const {
   // TODO: Implement once infix is supported
   // Right now we return the upper bound
   return text_index_schema_->GetTrackedKeyCount();
 }
 
-size_t FuzzyPredicate::EstimateSize() const {
+size_t FuzzyPredicate::EstimateSize(bool is_vec_query) const {
   // TODO: Implement proper heuristic
   // Right now we return the upper bound
   return text_index_schema_->GetTrackedKeyCount();

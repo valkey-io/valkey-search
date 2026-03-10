@@ -350,6 +350,7 @@ static auto prefiltering_threshold_ratio_config =
           CHECK(absl::SimpleAtod(value, &parsed_value));
           prefiltering_threshold_ratio = parsed_value;
         })
+        .Dev()  // can only be set in debug mode
         .Build();
 
 /// Register the "search-result-buffer-multiplier" flag
@@ -464,6 +465,7 @@ static auto rax_target_mutex_pool_size =
     config::NumberBuilder(
         kRaxTargetMutexPoolSizeConfig, kDefaultRaxTargetMutexPoolSize,
         kMinimumRaxTargetMutexPoolSize, kMaximumRaxTargetMutexPoolSize)
+        .Dev()  // can only be set in debug mode
         .Build();
 
 /// Register the "--max-nonvector-search-results-fetched" flag. Controls the

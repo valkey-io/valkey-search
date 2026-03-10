@@ -85,7 +85,7 @@ class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
     }
     const valkey_search::indexes::text::TextIndex *text_index = nullptr;
     if (text_index_schema_) {
-      text_index = text_index_schema_->GetPerKeyTextIndex(*key);
+      text_index = text_index_schema_->GetPerKeyTextIndex(*key, false);
     }
     indexes::PrefilterEvaluator evaluator(text_index, query_operations_);
     return evaluator.Evaluate(*filter_predicate_, *key);
@@ -373,7 +373,6 @@ void EvaluatePrefilteredKeys(
   if (needs_dedup) {
     result_keys.reserve(max_keys);
   }
-  // Get per-key text indexes directly since we have reader lock
   const std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema =
       parameters.index_schema ? parameters.index_schema->GetTextIndexSchema()
                               : nullptr;
@@ -389,7 +388,7 @@ void EvaluatePrefilteredKeys(
         continue;
       }
       const valkey_search::indexes::text::TextIndex *text_index =
-          text_index_schema ? text_index_schema->GetPerKeyTextIndex(key)
+          text_index_schema ? text_index_schema->GetPerKeyTextIndex(key, false)
                             : nullptr;
       indexes::PrefilterEvaluator key_evaluator(
           text_index, parameters.filter_parse_results.query_operations);

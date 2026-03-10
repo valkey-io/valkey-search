@@ -248,7 +248,7 @@ TEST_P(EvaluateFilterAsPrimaryTest, ParseParams) {
   UnitTestSearchParameters params;
   params.index_schema = index_schema;
   params.filter_parse_results = std::move(filter_parse_results.value());
-  params.attribute_alias = ""; // Makes is_vec_query = false
+  params.attribute_alias = "";  // Makes is_vec_query = false
   EXPECT_EQ(EvaluateFilterAsPrimary(
                 params, params.filter_parse_results.root_predicate.get(),
                 entries_fetchers, false),

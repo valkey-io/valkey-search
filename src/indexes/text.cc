@@ -268,11 +268,12 @@ std::unique_ptr<indexes::text::TextIterator> FuzzyPredicate::BuildTextIterator(
  * Size estimation is only done at the schema-level right now. It does not
  * account for a field specifier in the text query and may over-estimate
  * because of it if there are multiple text fields in the schema.
- * 
- * When there a vector componeet of the query, we perform a more sophisticated
- * size estimation by traversing the tree which will help make the correct
- * in-line vs pre-filter query planning decision. Otherwise we simply grab the
- * upper bound which will only be used to help reserve space in collections.
+ *
+ * When a query has a vector component, we perform a more sophisticated size
+ * estimation with a tree traversal to help make the correct in-line vs
+ * pre-filter query planning decision. Otherwise we simply grab a rough upper
+ * bound using the total number of tracked keys since the estimation will only
+ * be used to reserve space in a collection.
  */
 
 size_t TermPredicate::EstimateSize(bool is_vec_query) const {
@@ -282,10 +283,10 @@ size_t TermPredicate::EstimateSize(bool is_vec_query) const {
     if (!iter.Done() && iter.GetWord() == term_) {
       return iter.GetPostingsTarget()->GetKeyCount();
     }
+    return 0;
   } else {
     return text_index_schema_->GetTrackedKeyCount();
   }
-  return 0;
 }
 
 size_t PrefixPredicate::EstimateSize(bool is_vec_query) const {

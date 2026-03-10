@@ -1058,7 +1058,7 @@ int IndexSchema::GetTextItemCount() const {
     return 0;
   }
   // Count documents that actually have text content indexed
-  return text_index_schema->GetPerKeyTextIndexes().size();
+  return text_index_schema->GetTrackedKeyCount(true);
 }
 
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {

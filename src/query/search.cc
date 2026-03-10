@@ -70,12 +70,11 @@ class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
  public:
   InlineVectorFilter(
       query::Predicate *filter_predicate, indexes::VectorBase *vector_index,
-      const InternedStringNodeHashMap<valkey_search::indexes::text::TextIndex>
-          *per_key_indexes,
+      const std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
       QueryOperations query_operations)
       : filter_predicate_(filter_predicate),
         vector_index_(vector_index),
-        per_key_indexes_(per_key_indexes),
+        text_index_schema_(text_index_schema),
         query_operations_(query_operations) {}
   ~InlineVectorFilter() override = default;
 
@@ -85,10 +84,8 @@ class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
       return false;
     }
     const valkey_search::indexes::text::TextIndex *text_index = nullptr;
-    if (per_key_indexes_) {
-      text_index =
-          valkey_search::indexes::text::TextIndexSchema::LookupTextIndex(
-              *per_key_indexes_, *key);
+    if (text_index_schema_) {
+      text_index = text_index_schema_->GetPerKeyTextIndex(*key, false);
     }
     indexes::PrefilterEvaluator evaluator(text_index, query_operations_);
     return evaluator.Evaluate(*filter_predicate_, *key);
@@ -97,23 +94,18 @@ class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
  private:
   query::Predicate *filter_predicate_;
   indexes::VectorBase *vector_index_;
-  const InternedStringNodeHashMap<valkey_search::indexes::text::TextIndex>
-      *per_key_indexes_;
+  const std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
   QueryOperations query_operations_;
 };
 absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
     indexes::VectorBase *vector_index, const SearchParameters &parameters) {
   std::unique_ptr<InlineVectorFilter> inline_filter;
   if (parameters.filter_parse_results.root_predicate != nullptr) {
-    const InternedStringNodeHashMap<valkey_search::indexes::text::TextIndex>
-        *per_key_indexes = nullptr;
-    if (parameters.index_schema->GetTextIndexSchema()) {
-      per_key_indexes = &parameters.index_schema->GetTextIndexSchema()
-                             ->GetPerKeyTextIndexes();
-    }
+    const std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema =
+        parameters.index_schema->GetTextIndexSchema();
     inline_filter = std::make_unique<InlineVectorFilter>(
         parameters.filter_parse_results.root_predicate.get(), vector_index,
-        per_key_indexes, parameters.filter_parse_results.query_operations);
+        text_index_schema, parameters.filter_parse_results.query_operations);
     VMSDK_LOG(DEBUG, nullptr) << "Performing vector search with inline filter";
   }
   if (vector_index->GetIndexerType() == indexes::IndexerType::kHNSW) {
@@ -381,14 +373,9 @@ void EvaluatePrefilteredKeys(
   if (needs_dedup) {
     result_keys.reserve(max_keys);
   }
-  // Get per-key text indexes directly since we have reader lock
-  const InternedStringNodeHashMap<valkey_search::indexes::text::TextIndex>
-      *per_key_indexes = nullptr;
-  if (parameters.index_schema &&
-      parameters.index_schema->GetTextIndexSchema()) {
-    per_key_indexes =
-        &parameters.index_schema->GetTextIndexSchema()->GetPerKeyTextIndexes();
-  }
+  const std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema =
+      parameters.index_schema ? parameters.index_schema->GetTextIndexSchema()
+                              : nullptr;
   while (!entries_fetchers.empty()) {
     auto fetcher = std::move(entries_fetchers.front());
     entries_fetchers.pop();
@@ -400,12 +387,9 @@ void EvaluatePrefilteredKeys(
         iterator->Next();
         continue;
       }
-      const valkey_search::indexes::text::TextIndex *text_index = nullptr;
-      if (per_key_indexes) {
-        text_index =
-            valkey_search::indexes::text::TextIndexSchema::LookupTextIndex(
-                *per_key_indexes, key);
-      }
+      const valkey_search::indexes::text::TextIndex *text_index =
+          text_index_schema ? text_index_schema->GetPerKeyTextIndex(key, false)
+                            : nullptr;
       indexes::PrefilterEvaluator key_evaluator(
           text_index, parameters.filter_parse_results.query_operations);
       // 3. Evaluate predicate

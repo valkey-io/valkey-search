@@ -11,6 +11,7 @@ from typing import Any, Union
 from valkeytestframework.util import waiters
 import threading
 import time
+from utils import wait_for_pausepoint
 
 def canceller(client, client_id):
     my_id = client.execute_command("client id")
@@ -64,18 +65,6 @@ def search(
             assert str(e) == "Search operation cancelled due to timeout"
         return []
 
-def wait_for_pausepoint(client: Valkey, pausepoint_name: str, timeout: int = 5) -> bool:
-    """
-    Wait for a pausepoint to be hit by at least one thread.
-    """
-    start = time.time()
-    while time.time() - start < timeout:
-        count = client.execute_command("FT._DEBUG", "PAUSEPOINT", "TEST", pausepoint_name)
-        if count > 0:
-            return True
-        time.sleep(0.1)
-    return False
-
 def aggregate_command(index: str, filter: Union[int, None], stages: list[str] = None) -> list[str]:
     """Build FT.AGGREGATE command with specified stages and timeout."""
     predicate = "*" if filter is None else f"(@n:[0 {filter}])"
@@ -115,11 +104,11 @@ def aggregate(
         if not expect_timeout:
             raise
         error_msg = str(e)
-        assert "cancelled due to timeout" in error_msg, f"Expected timeout error, got: {error_msg}"
+        assert "Aggregate operation cancelled due to timeout" in error_msg, f"Expected timeout error, got: {error_msg}"
         return []
 
 
-def run_pausepoint_timeout_test(self, pausepoint_name, setup_fn, search_cmd, timeout_ms=5000):
+def run_pausepoint_timeout_test(self, pausepoint_name, setup_fn, search_cmd):
     """
     Shared helper for pausepoint-based timeout tests.
 
@@ -132,10 +121,8 @@ def run_pausepoint_timeout_test(self, pausepoint_name, setup_fn, search_cmd, tim
         pausepoint_name: Name of the pausepoint to set
         setup_fn: Callable(client) that creates indexes and loads data
         search_cmd: List of command args to execute as the search.
-        timeout_ms: Timeout in milliseconds for the search command
     """
     client = self.server.get_new_client()
-    client.execute_command("FLUSHALL", "SYNC")
 
     setup_fn(client)
 
@@ -158,16 +145,13 @@ def run_pausepoint_timeout_test(self, pausepoint_name, setup_fn, search_cmd, tim
         f"Pausepoint {pausepoint_name} was not hit"
     assert client.ping() == True, "Server not responsive while pausepoint is held"
 
-    # Wait for timeout to fire (timeout_ms + 1s buffer)
-    time.sleep(timeout_ms / 1000 + 1)
-
-    client.execute_command("FT._DEBUG", "PAUSEPOINT", "RESET", pausepoint_name)
-    thread.join(timeout=10)
-    time.sleep(1)  # Allow async callbacks to complete
+    thread.join()
 
     assert error[0] is not None, f"Expected timeout error for pausepoint {pausepoint_name}"
-    assert "timeout" in error[0].lower() or "cancelled" in error[0].lower(), \
+    assert "search operation cancelled due to timeout" in error[0].lower() or "cancelled" in error[0].lower(), \
         f"Expected timeout error, got: {error[0]}"
+    client.execute_command("FT._DEBUG", "PAUSEPOINT", "RESET", pausepoint_name)
+    time.sleep(1)
 
 class TestCancelCMD(ValkeySearchTestCaseDebugMode):
 
@@ -441,37 +425,36 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
         assert client.info("SEARCH")["search_cancel-timeouts"] == 0
         
         # Enable forced timeouts
-        assert client.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceTimeout yes") == b"OK"
-        assert client.execute_command("ft._debug CONTROLLED_VARIABLE SET timeoutpollfrequency 1") == b"OK"
+        assert client.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceTimeoutAggregate yes") == b"OK"
         
         # Test timeout with SORTBY stage
         aggregate(client, "hnsw", True, stages=["LOAD", "2", "@n", "@__key", "SORTBY", "2", "@n", "DESC"])
-        assert client.info("SEARCH")["search_test-counter-ForceCancels"] == 1
+        assert client.info("SEARCH")["search_test-counter-ForceTimeoutAggregateCancels"] == 1
         
         # Test timeout with GROUPBY stage
         aggregate(client, "hnsw", True, stages=["LOAD", "1", "@n", "GROUPBY", "1", "@n", "REDUCE", "COUNT", "0"])
-        assert client.info("SEARCH")["search_test-counter-ForceCancels"] == 2
+        assert client.info("SEARCH")["search_test-counter-ForceTimeoutAggregateCancels"] == 2
         
         # Test timeout with APPLY stage
         aggregate(client, "hnsw", True, stages=["LOAD", "1", "@n", "APPLY", "@n*2", "AS", "double_n"])
-        assert client.info("SEARCH")["search_test-counter-ForceCancels"] == 3
+        assert client.info("SEARCH")["search_test-counter-ForceTimeoutAggregateCancels"] == 3
         
         # Test timeout with FILTER stage
         aggregate(client, "hnsw", True, stages=["LOAD", "1", "@n", "FILTER", "@n > 5"])
-        assert client.info("SEARCH")["search_test-counter-ForceCancels"] == 4
+        assert client.info("SEARCH")["search_test-counter-ForceTimeoutAggregateCancels"] == 4
         
         # Test multiple stages pipeline
         aggregate(client, "hnsw", True, stages=["LOAD", "1", "@n", "FILTER", "@n > 0", "SORTBY", "2", "@n", "ASC", "LIMIT", "0", "5"])
-        assert client.info("SEARCH")["search_test-counter-ForceCancels"] == 5
+        assert client.info("SEARCH")["search_test-counter-ForceTimeoutAggregateCancels"] == 5
         
         aggregate(client, "hnsw", True, 2, stages=["LOAD", "1", "@n", "SORTBY", "2", "@n", "DESC"])
-        assert client.info("SEARCH")["search_test-counter-ForceCancels"] == 6
+        assert client.info("SEARCH")["search_test-counter-ForceTimeoutAggregateCancels"] == 6
         
         aggregate(client, "flat", True, stages=["LOAD", "1", "@n", "SORTBY", "2", "@n", "DESC"])
-        assert client.info("SEARCH")["search_test-counter-ForceCancels"] == 7
+        assert client.info("SEARCH")["search_test-counter-ForceTimeoutAggregateCancels"] == 7
         
         # Cleanup
-        assert client.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceTimeout no") == b"OK"
+        assert client.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceTimeoutAggregate no") == b"OK"
 
 class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
 
@@ -595,21 +578,21 @@ class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
         hnsw_index.load_data(client, 1000)
 
         waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index), 1000, timeout=10)
-        self.check_info_sum("search_test-counter-ForceCancels", 0)
+        self.check_info_sum("search_test-counter-ForceTimeoutAggregateCancels", 0)
 
-        self.control_set("ForceTimeout", "yes")
-        self.control_set("TimeoutPollFrequency", "1")
+        self.control_set("ForceTimeoutAggregate", "yes")
 
         # Test HNSW with SORTBY - expect 4 cancels (3 shards + 1 coordinator)
         aggregate(client, "hnsw", True, stages=["LOAD", "1", "@n", "SORTBY", "2", "@n", "DESC"])
-        self.check_info_sum("search_test-counter-ForceCancels", 4)
+        self.check_info_sum("search_test-counter-ForceTimeoutAggregateCancels", 1)
 
         # Test other aggregation stages
         aggregate(client, "hnsw", True, stages=["GROUPBY", "1", "@n", "REDUCE", "COUNT", "0"])
-        self.check_info_sum("search_test-counter-ForceCancels", 8)
+        self.check_info_sum("search_test-counter-ForceTimeoutAggregateCancels", 2)
 
         aggregate(client, "hnsw", True, stages=["APPLY", "1+1", "AS", "result"])
-        self.check_info_sum("search_test-counter-ForceCancels", 12)
+        self.check_info_sum("search_test-counter-ForceTimeoutAggregateCancels", 3)
 
         aggregate(client, "hnsw", True, stages=["FILTER", "@n > 0"])
-        self.check_info_sum("search_test-counter-ForceCancels", 16)
+        self.check_info_sum("search_test-counter-ForceTimeoutAggregateCancels", 4)
+        self.control_set("ForceTimeoutAggregate", "no")

@@ -9,6 +9,7 @@
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "debug.h"
 #include "ft_search_parser.h"
 #include "src/commands/commands.h"
 #include "src/commands/ft_aggregate_exec.h"
@@ -21,6 +22,8 @@
 namespace valkey_search {
 namespace aggregate {
 
+CONTROLLED_BOOLEAN(ForceTimeoutAggregate, false);
+TEST_COUNTER(ForceTimeoutAggregateCancels);
 DEV_INTEGER_COUNTER(agg_stats, agg_input_records);
 DEV_INTEGER_COUNTER(agg_stats, agg_output_records);
 
@@ -310,7 +313,10 @@ absl::Status ExecuteAggregationStages(AggregateParameters &parameters,
   agg_input_records.Increment(records.size());
   for (auto &stage : parameters.stages_) {
     // Check for timeout
-    if (parameters.cancellation_token->IsCancelled()) {
+    if (parameters.cancellation_token->IsCancelled() ||
+        // Testing purpose only
+        ForceTimeoutAggregate.GetValue()) {
+      ForceTimeoutAggregateCancels.Increment(1);
       return absl::CancelledError(
           "Aggregate operation cancelled due to timeout");
     }
@@ -405,12 +411,6 @@ query::SerializationRange AggregateParameters::GetSerializationRange() const {
 
 void AggregateParameters::SendReply(ValkeyModuleCtx *ctx,
                                     query::SearchResult &result) {
-  if (cancellation_token->IsCancelled()) {
-    ++Metrics::GetStats().query_failed_requests_cnt;
-    ValkeyModule_ReplyWithError(ctx,
-                                "Aggregate operation cancelled due to timeout");
-    return;
-  }
   auto status = SendReplyInner(ctx, result.neighbors, *this);
   if (!status.ok()) {
     ++Metrics::GetStats().query_failed_requests_cnt;

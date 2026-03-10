@@ -186,10 +186,8 @@ class TextIndexSchema {
   std::mutex in_progress_key_updates_mutex_;
 
   // Temporary storage for stem mappings during indexing
-  // Maps key -> (stemmed_word -> set of original words that stem to it)
-  absl::node_hash_map<
-      Key, absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>>
-      in_progress_stem_mappings_;
+  // Maps key -> (stemmed_word -> list of original words that stem to it)
+  absl::node_hash_map<Key, InProgressStemMap> in_progress_stem_mappings_;
 
   // Prevent concurrent mutations to in-progress stem mappings map
   std::mutex in_progress_stem_mappings_mutex_;

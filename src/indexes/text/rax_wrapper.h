@@ -47,9 +47,9 @@ query planning.
 
 namespace valkey_search::indexes::text {
 
-// Stem tree target: maps stem root to set of parent words that stem to it
+// Stem tree target: maps stem root to list of parent words that stem to it.
 // Example: "happi" → {"happy", "happiness", "happily"}
-using StemParents = absl::flat_hash_set<std::string>;
+using StemParents = std::vector<std::string>;
 
 class Rax {
  public:

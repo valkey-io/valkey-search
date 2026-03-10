@@ -34,9 +34,10 @@ Text::Text(const data_model::TextIndex &text_index_proto,
 
 absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr &key,
                                      absl::string_view data) {
-  absl::MutexLock lock(&index_mutex_);
   auto result = text_index_schema_->StageAttributeData(
       key, data, text_field_number_, !no_stem_, with_suffix_trie_);
+
+  absl::MutexLock lock(&index_mutex_);
   if (result.ok() && *result) {
     auto [_, succ] = tracked_keys_.insert(key);
     if (!succ) {
@@ -74,24 +75,19 @@ absl::StatusOr<bool> Text::ModifyRecord(const InternedStringPtr &key,
   // The old key value has already been removed from the index by a call to
   // TextIndexSchema::DeleteKey() at this point, so we simply add the new key
   // data
-  bool need_remove = false;
-  {
-    absl::MutexLock lock(&index_mutex_);
-    auto it = tracked_keys_.find(key);
-    if (it == tracked_keys_.end()) {
-      return absl::NotFoundError(
-          absl::StrCat("Key `", key->Str(), "` not found"));
-    }
-    auto result = text_index_schema_->StageAttributeData(
-        key, data, text_field_number_, !no_stem_, with_suffix_trie_);
-    if (!result.ok() || !*result) {
-      need_remove = true;
-    }
-  }
-  if (need_remove) {
-    [[maybe_unused]] auto res =
-        RemoveRecord(key, indexes::DeletionType::kIdentifier);
+  auto result = text_index_schema_->StageAttributeData(
+      key, data, text_field_number_, !no_stem_, with_suffix_trie_);
+
+  absl::MutexLock lock(&index_mutex_);
+  if (!result.ok() || !*result) {
+    tracked_keys_.erase(key);
+    untracked_keys_.insert(key);
     return false;
+  }
+  auto it = tracked_keys_.find(key);
+  if (it == tracked_keys_.end()) {
+    return absl::NotFoundError(
+        absl::StrCat("Key `", key->Str(), "` not found"));
   }
   return true;
 }
@@ -261,29 +257,51 @@ std::unique_ptr<indexes::text::TextIterator> FuzzyPredicate::BuildTextIterator(
       std::move(key_iterators), field_mask, require_positions);
 }
 
-// Size apis for estimation
+/*
+ * Size APIs for pre-filter or inline filter planning.
+ *
+ * Size estimation is only done at the schema-level right now. It does not
+ * account for a field specifier in the text query and may over-estimate
+ * because of it if there are multiple text fields in the schema.
+ */
+
 size_t TermPredicate::EstimateSize() const {
-  // TODO: Implementation
+  auto iter =
+      text_index_schema_->GetTextIndex()->GetPrefix().GetWordIterator(term_);
+  if (!iter.Done() && iter.GetWord() == term_) {
+    return iter.GetPostingsTarget()->GetKeyCount();
+  }
   return 0;
 }
 
 size_t PrefixPredicate::EstimateSize() const {
-  // TODO: Implementation
-  return 0;
+  if (text_index_schema_->TrackSubtreeItemsCountEnabled()) {
+    return text_index_schema_->GetTextIndex()->GetPrefix().GetSubtreeItemCount(
+        term_);
+  } else {
+    return text_index_schema_->GetTrackedKeyCount();
+  }
 }
 
 size_t SuffixPredicate::EstimateSize() const {
-  // TODO: Implementation
-  return 0;
+  if (text_index_schema_->TrackSubtreeItemsCountEnabled()) {
+    auto suffix_tree = text_index_schema_->GetTextIndex()->GetSuffix();
+    CHECK(suffix_tree) << "Suffix estimation not supported";
+    return suffix_tree.value().get().GetSubtreeItemCount(term_);
+  } else {
+    return text_index_schema_->GetTrackedKeyCount();
+  }
 }
 
 size_t InfixPredicate::EstimateSize() const {
-  // TODO: Implementation
-  return 0;
+  // TODO: Implement once infix is supported
+  // Right now we return the upper bound
+  return text_index_schema_->GetTrackedKeyCount();
 }
 
 size_t FuzzyPredicate::EstimateSize() const {
-  // TODO: Implementation
-  return 0;
+  // TODO: Implement proper heuristic
+  // Right now we return the upper bound
+  return text_index_schema_->GetTrackedKeyCount();
 }
 }  // namespace valkey_search::query

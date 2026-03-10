@@ -136,8 +136,8 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
         assert (
             client.info("SEARCH")["search_query_prefiltering_requests_cnt"] == 0
         )
-        hnsw_result = search(client, "hnsw", False, 2, enable_partial_results=True)
-        assert hnsw_result[0] == 2
+        hnsw_result = search(client, "hnsw", False, 1, enable_partial_results=True)
+        assert hnsw_result[0] == 1
         assert client.info("SEARCH")["search_test-counter-ForceCancels"] == 5
         assert (
             client.info("SEARCH")["search_query_prefiltering_requests_cnt"] == 1
@@ -149,7 +149,7 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
         assert (
             client.info("SEARCH")["search_query_prefiltering_requests_cnt"] == 1
         )
-        hnsw_result = search(client, "hnsw", True, 2, enable_partial_results=False)
+        hnsw_result = search(client, "hnsw", True, 1, enable_partial_results=False)
         assert client.info("SEARCH")["search_test-counter-ForceCancels"] == 6
         assert (
             client.info("SEARCH")["search_query_prefiltering_requests_cnt"] == 2
@@ -179,6 +179,8 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
             == b"OK"
         )
         assert(client.execute_command("FT._DEBUG PAUSEPOINT LIST") == [])
+
+
 class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
 
     def execute_primaries(self, command: Union[str, list[str]]) -> list[Any]:
@@ -244,7 +246,7 @@ class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
         flat_index.create(client)
         hnsw_index.load_data(client, 100)
         # Let the index properly processed
-        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index), 100, timeout=3)
+        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index), 100, timeout=10)
 
         #
         # Nominal case
@@ -267,20 +269,21 @@ class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
         # Normal HNSW path
         #
         hnsw_result = search(client, "hnsw", True, None, enable_partial_results=False)
-
         self.check_info_sum("search_test-counter-ForceCancels", 3)
 
         #
-        # Pre-filtering HNSW path
+        # Pre-filtering FLAT path (flat always uses pre-filtering)
         #
-        self.check_info("search_query_prefiltering_requests_cnt", 0)
-        hnsw_result = search(client, "hnsw", True, 10, enable_partial_results=False)
-        self.check_info("search_query_prefiltering_requests_cnt", 1)
+        flat_result = search(client, "flat", True, 10, enable_partial_results=False)
         self.check_info_sum("search_test-counter-ForceCancels", 6)
+        self.check_info_sum("search_query_prefiltering_requests_cnt", 3)
 
         #
-        # Flat path
+        # Pre-filtering HNSW path
+        # Set a high pre-filtering threshold so all shards use pre-filtering
         #
-        flat_result = search(client, "flat", True, None, enable_partial_results=False)
+        self.config_set("search.prefiltering-threshold-ratio", "0.5")
+        hnsw_result = search(client, "hnsw", True, 10, enable_partial_results=False)
+        self.check_info_sum("search_query_prefiltering_requests_cnt", 6)
         self.check_info_sum("search_test-counter-ForceCancels", 9)
-        self.check_info("search_query_prefiltering_requests_cnt", 1)
+

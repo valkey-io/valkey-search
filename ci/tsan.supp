@@ -12,3 +12,9 @@ race:zmalloc_usable
 # jemalloc internal try-lock pattern
 race:malloc_mutex_trylock_final
 
+# Valkey core race: serverCron (main thread) reads from the global 'server'
+# struct while the bio_rdb_save background thread writes to it during
+# replica RDB transfer (replicaReceiveRDBFromPrimaryToDisk).
+# valkey-search code is not involved.
+race:replicaReceiveRDBFromPrimaryToDisk
+

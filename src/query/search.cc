@@ -268,10 +268,14 @@ BuildTextIterator(const Predicate *predicate, bool negate,
 }
 
 size_t EvaluateFilterAsPrimary(
-    const Predicate *predicate,
+    const SearchParameters &parameters, const Predicate *predicate,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
-    bool negate, QueryOperations query_operations,
-    const IndexSchema *index_schema, bool is_vec_query) {
+    bool negate) {
+  const QueryOperations query_operations =
+      parameters.filter_parse_results.query_operations;
+  const IndexSchema *index_schema = parameters.index_schema.get();
+  const bool is_vec_query = parameters.IsVectorQuery();
+
   // Always use universal set when query has text + negate
   if ((query_operations & QueryOperations::kContainsText) &&
       (query_operations & QueryOperations::kContainsNegate)) {
@@ -290,8 +294,8 @@ size_t EvaluateFilterAsPrimary(
     auto predicate_type =
         EvaluateAsComposedPredicate(composed_predicate, negate);
     if (predicate_type == PredicateType::kComposedAnd) {
-      auto [text_iter, size] = BuildTextIterator(composed_predicate, negate,
-                                                 false, is_vec_query);
+      auto [text_iter, size] =
+          BuildTextIterator(composed_predicate, negate, false, is_vec_query);
       if (text_iter) {
         entries_fetchers.push(
             std::make_unique<indexes::text::TextIteratorFetcher>(
@@ -302,9 +306,8 @@ size_t EvaluateFilterAsPrimary(
       std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> best_fetchers;
       for (const auto &child : composed_predicate->GetChildren()) {
         std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
-        size_t child_size = EvaluateFilterAsPrimary(child.get(), child_fetchers,
-                                                    negate, query_operations,
-                                                    index_schema, is_vec_query);
+        size_t child_size = EvaluateFilterAsPrimary(parameters, child.get(),
+                                                    child_fetchers, negate);
         if (child_size < min_size) {
           min_size = child_size;
           best_fetchers = std::move(child_fetchers);
@@ -316,9 +319,8 @@ size_t EvaluateFilterAsPrimary(
       size_t total_size = 0;
       for (const auto &child : composed_predicate->GetChildren()) {
         std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
-        size_t child_size = EvaluateFilterAsPrimary(child.get(), child_fetchers,
-                                                    negate, query_operations,
-                                                    index_schema, is_vec_query);
+        size_t child_size = EvaluateFilterAsPrimary(parameters, child.get(),
+                                                    child_fetchers, negate);
         AppendQueue(entries_fetchers, child_fetchers);
         total_size += child_size;
       }
@@ -352,9 +354,9 @@ size_t EvaluateFilterAsPrimary(
   }
   if (predicate->GetType() == PredicateType::kNegate) {
     auto negate_predicate = dynamic_cast<const NegatePredicate *>(predicate);
-    size_t result = EvaluateFilterAsPrimary(
-        negate_predicate->GetPredicate(), entries_fetchers, !negate,
-        query_operations, index_schema, is_vec_query);
+    size_t result =
+        EvaluateFilterAsPrimary(parameters, negate_predicate->GetPredicate(),
+                                entries_fetchers, !negate);
     return result;
   }
   CHECK(false);
@@ -576,9 +578,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
     const SearchParameters &parameters) {
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
   size_t qualified_entries = EvaluateFilterAsPrimary(
-      parameters.filter_parse_results.root_predicate.get(), entries_fetchers,
-      false, parameters.filter_parse_results.query_operations,
-      parameters.index_schema.get(), false);
+      parameters, parameters.filter_parse_results.root_predicate.get(),
+      entries_fetchers, false);
 
   // Get the config for maximum number of keys to accumulate before content
   // fetching
@@ -666,9 +667,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearch(
   }
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
   size_t qualified_entries = EvaluateFilterAsPrimary(
-      parameters.filter_parse_results.root_predicate.get(), entries_fetchers,
-      false, parameters.filter_parse_results.query_operations,
-      parameters.index_schema.get(), parameters.IsVectorQuery());
+      parameters, parameters.filter_parse_results.root_predicate.get(),
+      entries_fetchers, false);
 
   // Query planner makes the decision for pre-filtering vs inline-filtering.
   if (UsePreFiltering(qualified_entries, vector_index)) {

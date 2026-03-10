@@ -283,10 +283,9 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
 class Predicate;
 // Defined in the header to support testing
 size_t EvaluateFilterAsPrimary(
-    const Predicate* predicate,
+    const SearchParameters& parameters, const Predicate* predicate,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>& entries_fetchers,
-    bool negate, QueryOperations query_operations,
-    const IndexSchema* index_schema, bool is_vec_query);
+    bool negate);
 
 // Defined in the header to support testing
 absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(

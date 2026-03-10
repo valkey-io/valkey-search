@@ -897,4 +897,333 @@ TEST_F(ValueTest, FuncFlatten_InvalidDepth) {
   EXPECT_STREQ(result.GetNil().GetReason(), "flatten: depth is not an integer");
 }
 
+// Nested vector construction tests
+
+TEST_F(ValueTest, NestedVector_TwoLevels) {
+  // Create a 2-level nested vector: [[1, 2], [3, 4], [5, 6]]
+  Value nested =
+      Value({Value({Value(1.0), Value(2.0)}), Value({Value(3.0), Value(4.0)}),
+             Value({Value(5.0), Value(6.0)})});
+
+  EXPECT_TRUE(nested.IsVector());
+  EXPECT_EQ(nested.VectorSize(), 3);
+
+  // Verify first inner vector
+  Value inner1 = nested.GetVectorElement(0);
+  EXPECT_TRUE(inner1.IsVector());
+  EXPECT_EQ(inner1.VectorSize(), 2);
+  EXPECT_EQ(inner1.GetVectorElement(0).GetDouble(), 1.0);
+  EXPECT_EQ(inner1.GetVectorElement(1).GetDouble(), 2.0);
+
+  // Verify second inner vector
+  Value inner2 = nested.GetVectorElement(1);
+  EXPECT_TRUE(inner2.IsVector());
+  EXPECT_EQ(inner2.VectorSize(), 2);
+  EXPECT_EQ(inner2.GetVectorElement(0).GetDouble(), 3.0);
+  EXPECT_EQ(inner2.GetVectorElement(1).GetDouble(), 4.0);
+
+  // Verify third inner vector
+  Value inner3 = nested.GetVectorElement(2);
+  EXPECT_TRUE(inner3.IsVector());
+  EXPECT_EQ(inner3.VectorSize(), 2);
+  EXPECT_EQ(inner3.GetVectorElement(0).GetDouble(), 5.0);
+  EXPECT_EQ(inner3.GetVectorElement(1).GetDouble(), 6.0);
+}
+
+TEST_F(ValueTest, NestedVector_ThreeLevels) {
+  // Create a 3-level nested vector: [[[1, 2], [3, 4]], [[5, 6], [7, 8]]]
+  Value nested = Value({Value({Value({Value(1.0), Value(2.0)}),
+                               Value({Value(3.0), Value(4.0)})}),
+                        Value({Value({Value(5.0), Value(6.0)}),
+                               Value({Value(7.0), Value(8.0)})})});
+
+  EXPECT_TRUE(nested.IsVector());
+  EXPECT_EQ(nested.VectorSize(), 2);
+
+  // Verify first level 2 vector
+  Value level2_1 = nested.GetVectorElement(0);
+  EXPECT_TRUE(level2_1.IsVector());
+  EXPECT_EQ(level2_1.VectorSize(), 2);
+
+  // Verify first level 3 vector
+  Value level3_1 = level2_1.GetVectorElement(0);
+  EXPECT_TRUE(level3_1.IsVector());
+  EXPECT_EQ(level3_1.VectorSize(), 2);
+  EXPECT_EQ(level3_1.GetVectorElement(0).GetDouble(), 1.0);
+  EXPECT_EQ(level3_1.GetVectorElement(1).GetDouble(), 2.0);
+
+  // Verify second level 3 vector
+  Value level3_2 = level2_1.GetVectorElement(1);
+  EXPECT_TRUE(level3_2.IsVector());
+  EXPECT_EQ(level3_2.VectorSize(), 2);
+  EXPECT_EQ(level3_2.GetVectorElement(0).GetDouble(), 3.0);
+  EXPECT_EQ(level3_2.GetVectorElement(1).GetDouble(), 4.0);
+
+  // Verify second level 2 vector
+  Value level2_2 = nested.GetVectorElement(1);
+  EXPECT_TRUE(level2_2.IsVector());
+  EXPECT_EQ(level2_2.VectorSize(), 2);
+
+  // Verify third level 3 vector
+  Value level3_3 = level2_2.GetVectorElement(0);
+  EXPECT_TRUE(level3_3.IsVector());
+  EXPECT_EQ(level3_3.VectorSize(), 2);
+  EXPECT_EQ(level3_3.GetVectorElement(0).GetDouble(), 5.0);
+  EXPECT_EQ(level3_3.GetVectorElement(1).GetDouble(), 6.0);
+
+  // Verify fourth level 3 vector
+  Value level3_4 = level2_2.GetVectorElement(1);
+  EXPECT_TRUE(level3_4.IsVector());
+  EXPECT_EQ(level3_4.VectorSize(), 2);
+  EXPECT_EQ(level3_4.GetVectorElement(0).GetDouble(), 7.0);
+  EXPECT_EQ(level3_4.GetVectorElement(1).GetDouble(), 8.0);
+}
+
+TEST_F(ValueTest, NestedVector_MixedDepths) {
+  // Create a vector with mixed nesting depths: [1, [2, 3], [[4, 5], 6]]
+  Value nested = Value({Value(1.0), Value({Value(2.0), Value(3.0)}),
+                        Value({Value({Value(4.0), Value(5.0)}), Value(6.0)})});
+
+  EXPECT_TRUE(nested.IsVector());
+  EXPECT_EQ(nested.VectorSize(), 3);
+
+  // First element is scalar
+  EXPECT_TRUE(nested.GetVectorElement(0).IsDouble());
+  EXPECT_EQ(nested.GetVectorElement(0).GetDouble(), 1.0);
+
+  // Second element is 1-level nested vector
+  Value elem2 = nested.GetVectorElement(1);
+  EXPECT_TRUE(elem2.IsVector());
+  EXPECT_EQ(elem2.VectorSize(), 2);
+  EXPECT_EQ(elem2.GetVectorElement(0).GetDouble(), 2.0);
+  EXPECT_EQ(elem2.GetVectorElement(1).GetDouble(), 3.0);
+
+  // Third element is 2-level nested vector
+  Value elem3 = nested.GetVectorElement(2);
+  EXPECT_TRUE(elem3.IsVector());
+  EXPECT_EQ(elem3.VectorSize(), 2);
+
+  Value elem3_inner = elem3.GetVectorElement(0);
+  EXPECT_TRUE(elem3_inner.IsVector());
+  EXPECT_EQ(elem3_inner.VectorSize(), 2);
+  EXPECT_EQ(elem3_inner.GetVectorElement(0).GetDouble(), 4.0);
+  EXPECT_EQ(elem3_inner.GetVectorElement(1).GetDouble(), 5.0);
+
+  EXPECT_TRUE(elem3.GetVectorElement(1).IsDouble());
+  EXPECT_EQ(elem3.GetVectorElement(1).GetDouble(), 6.0);
+}
+
+TEST_F(ValueTest, NestedVector_EmptyInnerVectors) {
+  // Create a vector containing empty vectors: [[], [1, 2], []]
+  Value nested =
+      Value({Value(std::vector<Value>{}), Value({Value(1.0), Value(2.0)}),
+             Value(std::vector<Value>{})});
+
+  EXPECT_TRUE(nested.IsVector());
+  EXPECT_EQ(nested.VectorSize(), 3);
+
+  // First element is empty vector
+  Value elem1 = nested.GetVectorElement(0);
+  EXPECT_TRUE(elem1.IsVector());
+  EXPECT_EQ(elem1.VectorSize(), 0);
+  EXPECT_TRUE(elem1.IsEmptyVector());
+
+  // Second element is non-empty vector
+  Value elem2 = nested.GetVectorElement(1);
+  EXPECT_TRUE(elem2.IsVector());
+  EXPECT_EQ(elem2.VectorSize(), 2);
+
+  // Third element is empty vector
+  Value elem3 = nested.GetVectorElement(2);
+  EXPECT_TRUE(elem3.IsVector());
+  EXPECT_EQ(elem3.VectorSize(), 0);
+  EXPECT_TRUE(elem3.IsEmptyVector());
+}
+
+}  // namespace valkey_search::expr
+
+// Operations on nested vectors tests
+
+TEST_F(ValueTest, NestedVector_ScalarFunctionRecursiveApplication) {
+  // Test that scalar functions recursively apply to nested elements
+  // Create nested vector of strings: [["HELLO", "WORLD"], ["FOO", "BAR"]]
+  Value nested =
+      Value({Value({Value(std::string("HELLO")), Value(std::string("WORLD"))}),
+             Value({Value(std::string("FOO")), Value(std::string("BAR"))})});
+
+  // Apply FuncLower - should recursively lowercase all strings
+  Value result = FuncLower(nested);
+
+  EXPECT_TRUE(result.IsVector());
+  EXPECT_EQ(result.VectorSize(), 2);
+
+  // Verify first inner vector
+  Value inner1 = result.GetVectorElement(0);
+  EXPECT_TRUE(inner1.IsVector());
+  EXPECT_EQ(inner1.VectorSize(), 2);
+  EXPECT_EQ(inner1.GetVectorElement(0).AsString(), "hello");
+  EXPECT_EQ(inner1.GetVectorElement(1).AsString(), "world");
+
+  // Verify second inner vector
+  Value inner2 = result.GetVectorElement(1);
+  EXPECT_TRUE(inner2.IsVector());
+  EXPECT_EQ(inner2.VectorSize(), 2);
+  EXPECT_EQ(inner2.GetVectorElement(0).AsString(), "foo");
+  EXPECT_EQ(inner2.GetVectorElement(1).AsString(), "bar");
+}
+
+TEST_F(ValueTest, NestedVector_MathFunctionRecursiveApplication) {
+  // Test that math functions recursively apply to nested elements
+  // Create nested vector: [[1.5, 2.7], [3.2, 4.9]]
+  Value nested =
+      Value({Value({Value(1.5), Value(2.7)}), Value({Value(3.2), Value(4.9)})});
+
+  // Apply FuncFloor - should recursively floor all numbers
+  Value result = FuncFloor(nested);
+
+  EXPECT_TRUE(result.IsVector());
+  EXPECT_EQ(result.VectorSize(), 2);
+
+  // Verify first inner vector
+  Value inner1 = result.GetVectorElement(0);
+  EXPECT_TRUE(inner1.IsVector());
+  EXPECT_EQ(inner1.VectorSize(), 2);
+  EXPECT_EQ(inner1.GetVectorElement(0).GetDouble(), 1.0);
+  EXPECT_EQ(inner1.GetVectorElement(1).GetDouble(), 2.0);
+
+  // Verify second inner vector
+  Value inner2 = result.GetVectorElement(1);
+  EXPECT_TRUE(inner2.IsVector());
+  EXPECT_EQ(inner2.VectorSize(), 2);
+  EXPECT_EQ(inner2.GetVectorElement(0).GetDouble(), 3.0);
+  EXPECT_EQ(inner2.GetVectorElement(1).GetDouble(), 4.0);
+}
+
+TEST_F(ValueTest, NestedVector_ThreeLevelRecursiveApplication) {
+  // Test recursive application on 3-level nested vector
+  // Create: [[[1.1, 2.2]], [[3.3, 4.4]]]
+  Value nested = Value({Value({Value({Value(1.1), Value(2.2)})}),
+                        Value({Value({Value(3.3), Value(4.4)})})});
+
+  // Apply FuncCeil - should recursively ceil all numbers
+  Value result = FuncCeil(nested);
+
+  EXPECT_TRUE(result.IsVector());
+  EXPECT_EQ(result.VectorSize(), 2);
+
+  // Navigate to innermost vectors and verify
+  Value level2_1 = result.GetVectorElement(0);
+  EXPECT_TRUE(level2_1.IsVector());
+  Value level3_1 = level2_1.GetVectorElement(0);
+  EXPECT_TRUE(level3_1.IsVector());
+  EXPECT_EQ(level3_1.GetVectorElement(0).GetDouble(), 2.0);
+  EXPECT_EQ(level3_1.GetVectorElement(1).GetDouble(), 3.0);
+
+  Value level2_2 = result.GetVectorElement(1);
+  EXPECT_TRUE(level2_2.IsVector());
+  Value level3_2 = level2_2.GetVectorElement(0);
+  EXPECT_TRUE(level3_2.IsVector());
+  EXPECT_EQ(level3_2.GetVectorElement(0).GetDouble(), 4.0);
+  EXPECT_EQ(level3_2.GetVectorElement(1).GetDouble(), 5.0);
+}
+
+TEST_F(ValueTest, NestedVector_ArithmeticWithScalar) {
+  // Test arithmetic operations on nested vectors with scalar
+  // Create nested vector: [[1, 2], [3, 4]]
+  Value nested =
+      Value({Value({Value(1.0), Value(2.0)}), Value({Value(3.0), Value(4.0)})});
+
+  // Add scalar to nested vector
+  Value result = FuncAdd(nested, Value(10.0));
+
+  EXPECT_TRUE(result.IsVector());
+  EXPECT_EQ(result.VectorSize(), 2);
+
+  // Verify first inner vector
+  Value inner1 = result.GetVectorElement(0);
+  EXPECT_TRUE(inner1.IsVector());
+  EXPECT_EQ(inner1.VectorSize(), 2);
+  EXPECT_EQ(inner1.GetVectorElement(0).GetDouble(), 11.0);
+  EXPECT_EQ(inner1.GetVectorElement(1).GetDouble(), 12.0);
+
+  // Verify second inner vector
+  Value inner2 = result.GetVectorElement(1);
+  EXPECT_TRUE(inner2.IsVector());
+  EXPECT_EQ(inner2.VectorSize(), 2);
+  EXPECT_EQ(inner2.GetVectorElement(0).GetDouble(), 13.0);
+  EXPECT_EQ(inner2.GetVectorElement(1).GetDouble(), 14.0);
+}
+
+TEST_F(ValueTest, NestedVector_ElementAccess) {
+  // Test element access for nested vectors
+  // Create: [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+  Value nested = Value({Value({Value(1.0), Value(2.0), Value(3.0)}),
+                        Value({Value(4.0), Value(5.0), Value(6.0)}),
+                        Value({Value(7.0), Value(8.0), Value(9.0)})});
+
+  // Access middle row
+  Value row2 = nested.GetVectorElement(1);
+  EXPECT_TRUE(row2.IsVector());
+  EXPECT_EQ(row2.VectorSize(), 3);
+
+  // Access middle element of middle row
+  Value elem = row2.GetVectorElement(1);
+  EXPECT_TRUE(elem.IsDouble());
+  EXPECT_EQ(elem.GetDouble(), 5.0);
+
+  // Test FuncVectorAt on nested structure
+  Value row2_via_func = FuncVectorAt(nested, Value(1.0));
+  EXPECT_TRUE(row2_via_func.IsVector());
+  EXPECT_EQ(row2_via_func.VectorSize(), 3);
+
+  Value elem_via_func = FuncVectorAt(row2_via_func, Value(1.0));
+  EXPECT_TRUE(elem_via_func.IsDouble());
+  EXPECT_EQ(elem_via_func.GetDouble(), 5.0);
+}
+
+TEST_F(ValueTest, NestedVector_VectorLenOnNestedStructure) {
+  // Test FuncVectorLen on nested vectors
+  // Create: [[1, 2], [3, 4, 5]]
+  Value nested = Value({Value({Value(1.0), Value(2.0)}),
+                        Value({Value(3.0), Value(4.0), Value(5.0)})});
+
+  // Get length of outer vector
+  Value outer_len = FuncVectorLen(nested);
+  EXPECT_TRUE(outer_len.IsDouble());
+  EXPECT_EQ(outer_len.GetDouble(), 2.0);
+
+  // Get length of first inner vector
+  Value inner1 = nested.GetVectorElement(0);
+  Value inner1_len = FuncVectorLen(inner1);
+  EXPECT_TRUE(inner1_len.IsDouble());
+  EXPECT_EQ(inner1_len.GetDouble(), 2.0);
+
+  // Get length of second inner vector
+  Value inner2 = nested.GetVectorElement(1);
+  Value inner2_len = FuncVectorLen(inner2);
+  EXPECT_TRUE(inner2_len.IsDouble());
+  EXPECT_EQ(inner2_len.GetDouble(), 3.0);
+}
+
+TEST_F(ValueTest, NestedVector_MixedTypesRecursive) {
+  // Test operations on nested vectors with mixed types
+  // Create: [[1, "hello"], [true, 3.14]]
+  Value nested = Value({Value({Value(1.0), Value(std::string("hello"))}),
+                        Value({Value(true), Value(3.14)})});
+
+  EXPECT_TRUE(nested.IsVector());
+  EXPECT_EQ(nested.VectorSize(), 2);
+
+  // Verify structure is preserved
+  Value inner1 = nested.GetVectorElement(0);
+  EXPECT_TRUE(inner1.IsVector());
+  EXPECT_TRUE(inner1.GetVectorElement(0).IsDouble());
+  EXPECT_TRUE(inner1.GetVectorElement(1).IsString());
+
+  Value inner2 = nested.GetVectorElement(1);
+  EXPECT_TRUE(inner2.IsVector());
+  EXPECT_TRUE(inner2.GetVectorElement(0).IsBool());
+  EXPECT_TRUE(inner2.GetVectorElement(1).IsDouble());
+}
+
 }  // namespace valkey_search::expr

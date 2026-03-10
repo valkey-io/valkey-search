@@ -4,7 +4,7 @@ from valkey_search_test_case import ValkeySearchClusterTestCase, ValkeySearchTes
 from valkeytestframework.conftest import resource_port_tracker
 import struct
 import pytest
-from valkey.exceptions import OutOfMemoryError
+from valkey.exceptions import OutOfMemoryError, ResponseError
 
 INDEX_NAME = "myIndex"
 
@@ -72,12 +72,19 @@ class TestSearchOOMHandlingCME(ValkeySearchClusterTestCase):
         maxmemory_client_2 = client_primary_2.info("memory")["maxmemory"]
         assert maxmemory_client_2 == 0  # Unlimited usage
         
-        # Expect OOM when trying to run search on second primary
+        # Expect OOM when trying to run search on a node which is OOMing.
+        # It is rejected with OOM from the engine itself.
         with pytest.raises(OutOfMemoryError):
             run_search_query(client_primary_1)
-
-        # Run search query using third primary, and expect to fail on OOM
-        with pytest.raises(OutOfMemoryError):
+        # Run search query using third primary, and expect to fail on OOM.
+        result = run_search_query(client_primary_2)
+        assert result[0] == 2
+        # Disable partial results.
+        for node in self.nodes:
+            node.client.execute_command("CONFIG", "SET", "search.enable-partial-results", "no")
+        # The OOM error during fanout results in the coordinator cancelling the command, and we
+        # expect to see timeout error on the client side.
+        with pytest.raises(ResponseError, match="Search operation cancelled due to timeout"):
             run_search_query(client_primary_2)
 
 class TestSearchOOMHandlingCMD(ValkeySearchTestCaseBase):

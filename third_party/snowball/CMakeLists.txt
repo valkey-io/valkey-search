@@ -28,14 +28,10 @@ target_include_directories(snowball PRIVATE
   ${SNOWBALL_SOURCE_DIR}
 )
 
-# Optimization: -O3 -march=native -flto
-# Rationale: Benchmarking confirmed a ~30% overall and ~48% peak speedup over
-# default builds. -O3 enables aggressive auto-vectorization and inlining,
-# while -march=native allows the compiler to utilize hardware-specific
-# instructions (AVX2/BMI) for string manipulation. -flto (Link Time
-# Optimization) mitigates code bloat by optimizing across translation units,
-# ensuring maximum instruction cache efficiency.
-target_compile_options(snowball PRIVATE -O3 -march=native -flto)
+# Optimization: -O3 -flto
+# Rationale: Benchmarking confirmed a ~26% overall and ~42% peak speedup over
+# default builds.
+target_compile_options(snowball PRIVATE -O3 -flto)
 
 # Set compile flags to match the original build
 target_compile_options(snowball PRIVATE -w) # Suppress warnings from third-party code

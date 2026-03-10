@@ -258,7 +258,7 @@ TEST_F(FTCreateTest, TextFieldsLimit) {
   ON_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
       .WillByDefault(testing::Return(db_num));
 
-  auto build_text_schema_argv = [](const std::string &index_name,
+  auto build_text_schema_argv = [](const std::string& index_name,
                                    int text_field_count) {
     std::vector<std::string> argv = {"FT.CREATE", index_name, "SCHEMA"};
     for (int i = 0; i < text_field_count; ++i) {
@@ -273,8 +273,7 @@ TEST_F(FTCreateTest, TextFieldsLimit) {
       SchemaManager::Instance().RemoveIndexSchema(db_num, "text_idx_ok"));
 
   ExecuteFTCreateCommand(
-      &fake_ctx_, build_text_schema_argv("text_idx_fail", 65),
-      VALKEYMODULE_OK,
+      &fake_ctx_, build_text_schema_argv("text_idx_fail", 65), VALKEYMODULE_OK,
       "-Invalid range: Value above maximum; The maximum number of text fields "
       "cannot exceed 64.\r\n");
 }

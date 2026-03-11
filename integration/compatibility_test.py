@@ -496,9 +496,9 @@ def _check_and_regenerate_answers(answer_file, generator_file):
     generator_path = f"integration/compatibility/{generator_file}"
     
     answer_time = subprocess.run(["git", "log", "-1", "--format=%ct", answer_path], 
-                                  capture_output=True, text=True, cwd=root_dir).stdout.strip()
+                                  capture_output=True, text=True, cwd=root_dir).stdout.strip().split('\n')[-1]
     generator_time = subprocess.run(["git", "log", "-1", "--format=%ct", generator_path], 
-                                     capture_output=True, text=True, cwd=root_dir).stdout.strip()
+                                     capture_output=True, text=True, cwd=root_dir).stdout.strip().split('\n')[-1]
     
     if not answer_time or (generator_time and int(generator_time) > int(answer_time)):
         print(f"Regenerating {answer_file}...")

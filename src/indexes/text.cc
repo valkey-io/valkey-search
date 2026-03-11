@@ -145,8 +145,10 @@ namespace {
 
 // Helper to search for a word in the text index and add its key iterator
 // Returns true if the word was found and added
+template <size_t NumShards>
 bool TryAddWordKeyIterator(
-    const indexes::text::TextIndex *text_index, absl::string_view word,
+    const indexes::text::TextIndex<NumShards> *text_index,
+    absl::string_view word,
     absl::InlinedVector<indexes::text::Postings::KeyIterator,
                         indexes::text::kWordExpansionInlineCapacity>
         &key_iterators) {
@@ -162,7 +164,9 @@ bool TryAddWordKeyIterator(
 }  // namespace
 
 std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
-    const std::shared_ptr<indexes::text::TextIndex> &text_index,
+    const std::shared_ptr<
+        indexes::text::TextIndex<indexes::text::kSchemaTextIndexShards>>
+        &text_index,
     FieldMaskPredicate field_mask, bool require_positions) const {
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
@@ -205,7 +209,9 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
 }
 
 std::unique_ptr<indexes::text::TextIterator> PrefixPredicate::BuildTextIterator(
-    const std::shared_ptr<indexes::text::TextIndex> &text_index,
+    const std::shared_ptr<
+        indexes::text::TextIndex<indexes::text::kSchemaTextIndexShards>>
+        &text_index,
     FieldMaskPredicate field_mask, bool require_positions) const {
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
@@ -228,7 +234,9 @@ std::unique_ptr<indexes::text::TextIterator> PrefixPredicate::BuildTextIterator(
 }
 
 std::unique_ptr<indexes::text::TextIterator> SuffixPredicate::BuildTextIterator(
-    const std::shared_ptr<indexes::text::TextIndex> &text_index,
+    const std::shared_ptr<
+        indexes::text::TextIndex<indexes::text::kSchemaTextIndexShards>>
+        &text_index,
     FieldMaskPredicate field_mask, bool require_positions) const {
   CHECK(text_index->GetSuffix().has_value())
       << "Text index does not have suffix trie enabled.";
@@ -262,13 +270,17 @@ std::unique_ptr<indexes::text::TextIterator> SuffixPredicate::BuildTextIterator(
 }
 
 std::unique_ptr<indexes::text::TextIterator> InfixPredicate::BuildTextIterator(
-    const std::shared_ptr<indexes::text::TextIndex> &text_index,
+    const std::shared_ptr<
+        indexes::text::TextIndex<indexes::text::kSchemaTextIndexShards>>
+        &text_index,
     FieldMaskPredicate field_mask, bool require_positions) const {
   CHECK(false) << "Unsupported TextPredicate type";
 }
 
 std::unique_ptr<indexes::text::TextIterator> FuzzyPredicate::BuildTextIterator(
-    const std::shared_ptr<indexes::text::TextIndex> &text_index,
+    const std::shared_ptr<
+        indexes::text::TextIndex<indexes::text::kSchemaTextIndexShards>>
+        &text_index,
     FieldMaskPredicate field_mask, bool require_positions) const {
   // Limit the number of term word expansions
   uint32_t max_words = options::GetMaxTermExpansions().GetValue();

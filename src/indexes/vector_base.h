@@ -271,7 +271,7 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
 class PrefilterEvaluator : public query::Evaluator {
  public:
   explicit PrefilterEvaluator(
-      const valkey_search::indexes::text::TextIndex* text_index,
+      const valkey_search::indexes::text::PerKeyTextIndex* text_index,
       QueryOperations query_operations)
       : query::Evaluator(query_operations), text_index_(text_index) {}
   bool Evaluate(const query::Predicate& predicate,
@@ -289,7 +289,7 @@ class PrefilterEvaluator : public query::Evaluator {
       const query::NumericPredicate& predicate) override;
   query::EvaluationResult EvaluateText(const query::TextPredicate& predicate,
                                        bool require_positions) override;
-  const valkey_search::indexes::text::TextIndex* text_index_;
+  const valkey_search::indexes::text::PerKeyTextIndex* text_index_;
   const InternedStringPtr* key_{nullptr};
 };
 

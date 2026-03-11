@@ -88,10 +88,10 @@ class PredicateEvaluator : public query::Evaluator {
                      QueryOperations query_operations)
       : Evaluator(query_operations), records_(records), text_index_(nullptr) {}
 
-  PredicateEvaluator(const RecordsMap &records,
-                     const valkey_search::indexes::text::TextIndex *text_index,
-                     InternedStringPtr target_key,
-                     QueryOperations query_operations)
+  PredicateEvaluator(
+      const RecordsMap &records,
+      const valkey_search::indexes::text::PerKeyTextIndex *text_index,
+      InternedStringPtr target_key, QueryOperations query_operations)
       : Evaluator(query_operations),
         records_(records),
         text_index_(text_index),
@@ -145,7 +145,7 @@ class PredicateEvaluator : public query::Evaluator {
 
  private:
   const RecordsMap &records_;
-  const valkey_search::indexes::text::TextIndex *text_index_ = nullptr;
+  const valkey_search::indexes::text::PerKeyTextIndex *text_index_ = nullptr;
   InternedStringPtr target_key_;
 };
 

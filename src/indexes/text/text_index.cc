@@ -20,21 +20,6 @@ namespace valkey_search::indexes::text {
 
 namespace {
 
-// InvasivePtrRaw<Postings> deletion
-static void FreePostingsCallback(void *target) {
-  if (target) {
-    auto raw = static_cast<InvasivePtrRaw<Postings>>(target);
-    InvasivePtr<Postings>::AdoptRaw(raw);
-  }
-}
-
-static void FreeStemParentsCallback(void *target) {
-  if (target) {
-    auto raw = static_cast<InvasivePtrRaw<StemParents>>(target);
-    InvasivePtr<StemParents>::AdoptRaw(raw);
-  }
-}
-
 InvasivePtr<Postings> AddKeyToPostings(InvasivePtr<Postings> existing_postings,
                                        const InternedStringPtr &key,
                                        FlatPositionMap *flat_map,
@@ -98,98 +83,6 @@ std::function<void *(void *)> CreateSimpleTargetMutateFn(MutateFn mutate_fn) {
 
 }  // namespace
 
-/*** TextIndex ***/
-
-// Sharded constructor (for schema-level index)
-TextIndex::TextIndex(bool suffix, size_t num_shards) : num_shards_(num_shards) {
-  CHECK_GT(num_shards, 0) << "Must have at least one shard";
-  shards_.reserve(num_shards);  // Safe now with unique_ptr
-  for (size_t i = 0; i < num_shards; ++i) {
-    shards_.push_back(std::make_unique<Shard>(FreePostingsCallback, suffix));
-  }
-}
-
-// Non-sharded constructor (for per-key indexes)
-TextIndex::TextIndex(bool suffix)
-    : num_shards_(1) {  // Single shard = non-sharded
-  shards_.push_back(std::make_unique<Shard>(FreePostingsCallback, suffix));
-}
-
-size_t TextIndex::GetShardIndex(absl::string_view word) const {
-  // Use first byte for deterministic sharding
-  // This allows short prefixes (< 3 chars) to route to a single shard
-  unsigned char first_byte =
-      word.empty() ? 0 : static_cast<unsigned char>(word[0]);
-  return first_byte % num_shards_;
-}
-
-Rax &TextIndex::GetPrefixShard(size_t shard_index) {
-  CHECK_LT(shard_index, num_shards_);
-  return shards_[shard_index]->prefix_tree;
-}
-
-const Rax &TextIndex::GetPrefixShard(size_t shard_index) const {
-  CHECK_LT(shard_index, num_shards_);
-  return shards_[shard_index]->prefix_tree;
-}
-
-std::optional<std::reference_wrapper<Rax>> TextIndex::GetSuffixShard(
-    size_t shard_index) {
-  CHECK_LT(shard_index, num_shards_);
-  if (!shards_[shard_index]->suffix_tree) {
-    return std::nullopt;
-  }
-  return std::ref(*shards_[shard_index]->suffix_tree);
-}
-
-std::optional<std::reference_wrapper<const Rax>> TextIndex::GetSuffixShard(
-    size_t shard_index) const {
-  CHECK_LT(shard_index, num_shards_);
-  if (!shards_[shard_index]->suffix_tree) {
-    return std::nullopt;
-  }
-  return std::ref(*shards_[shard_index]->suffix_tree);
-}
-
-void TextIndex::MutateTarget(absl::string_view word,
-                             const InvasivePtr<Postings> &target,
-                             const std::optional<std::string> &reverse_word,
-                             item_count_op op) {
-  size_t prefix_shard = GetShardIndex(word);
-  auto target_set_fn = CreateTargetSetFn(target);
-
-  size_t suffix_shard = prefix_shard;
-  if (reverse_word.has_value() && shards_[0]->suffix_tree) {
-    suffix_shard = GetShardIndex(*reverse_word);
-  }
-
-  // Lock shards in sorted order to prevent deadlock
-  if (reverse_word.has_value() && suffix_shard != prefix_shard) {
-    size_t first = std::min(prefix_shard, suffix_shard);
-    size_t second = std::max(prefix_shard, suffix_shard);
-    absl::MutexLock lock1(&shards_[first]->mutex);
-    absl::MutexLock lock2(&shards_[second]->mutex);
-    shards_[prefix_shard]->prefix_tree.MutateTarget(word, target_set_fn, op);
-    shards_[suffix_shard]->suffix_tree->MutateTarget(*reverse_word,
-                                                     target_set_fn, op);
-  } else {
-    absl::MutexLock lock(&shards_[prefix_shard]->mutex);
-    shards_[prefix_shard]->prefix_tree.MutateTarget(word, target_set_fn, op);
-    if (reverse_word.has_value() && shards_[prefix_shard]->suffix_tree) {
-      shards_[prefix_shard]->suffix_tree->MutateTarget(*reverse_word,
-                                                       target_set_fn, op);
-    }
-  }
-}
-
-absl::Mutex &TextIndex::GetShardMutex(absl::string_view word) {
-  return shards_[GetShardIndex(word)]->mutex;
-}
-
-const absl::Mutex &TextIndex::GetShardMutex(absl::string_view word) const {
-  return shards_[GetShardIndex(word)]->mutex;
-}
-
 /*** TextIndexSchema ***/
 
 #define ITEM_COUNT_TRACKING_ENABLED(op) \
@@ -205,8 +98,7 @@ TextIndexSchema::TextIndexSchema(data_model::Language language,
       stem_tree_(FreeStemParentsCallback),
       min_stem_size_(min_stem_size),
       rax_target_mutex_pool_(options::GetRaxTargetMutexPoolSize().GetValue()) {
-  size_t num_shards = options::GetRaxTargetMutexPoolSize().GetValue();
-  text_index_ = std::make_shared<TextIndex>(false, num_shards);
+  text_index_ = std::make_shared<TextIndex<kSchemaTextIndexShards>>(false);
 }
 
 absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
@@ -273,8 +165,8 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
     }
   }
 
-  // Per-key index is non-sharded (single tree) - only schema index is sharded
-  TextIndex key_index{with_suffix_trie_};
+  // Create local per-key index (lightweight, moveable)
+  PerKeyTextIndex key_index{with_suffix_trie_};
 
   // Index the key's tokens
   for (auto &entry : token_positions) {
@@ -303,7 +195,7 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
       absl::MutexLock word_lock(&rax_target_mutex_pool_.Get(token));
 
       size_t shard = text_index_->GetShardIndex(token);
-      auto &shard_obj = *text_index_->shards_[shard];
+      auto &shard_obj = text_index_->shards_[shard];
 
       // Read tree structure under shard_lock
       InvasivePtr<Postings> existing;
@@ -323,7 +215,7 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
       }
     }
 
-    // Update per-key index (no locking needed — local to this call).
+    // Update local per-key index
     key_index.MutateTarget(token, updated_target, reverse_token);
   }
 
@@ -345,7 +237,7 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
     }
   }
 
-  // Map the key to the newly created per-key index
+  // Move per-key index into map (PerKeyTextIndex is moveable)
   {
     std::lock_guard<std::mutex> per_key_guard(per_key_text_indexes_mutex_);
     per_key_text_indexes_.emplace(key, std::move(key_index));
@@ -354,7 +246,7 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
 
 void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
   // Extract the per-key index
-  absl::node_hash_map<Key, TextIndex>::node_type node;
+  absl::node_hash_map<Key, PerKeyTextIndex>::node_type node;
   {
     std::lock_guard<std::mutex> per_key_guard(per_key_text_indexes_mutex_);
     node = per_key_text_indexes_.extract(key);
@@ -362,7 +254,7 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
       return;
     }
   }
-  TextIndex &key_index = node.mapped();
+  PerKeyTextIndex &key_index = node.mapped();
 
   std::vector<std::string> empty_words;
 
@@ -377,7 +269,7 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
       absl::MutexLock word_lock(&rax_target_mutex_pool_.Get(word_str));
 
       size_t shard = text_index_->GetShardIndex(word_str);
-      auto &shard_obj = *text_index_->shards_[shard];
+      auto &shard_obj = text_index_->shards_[shard];
 
       // Read tree structure under shard_lock
       InvasivePtr<Postings> existing;
@@ -444,8 +336,7 @@ uint64_t TextIndexSchema::GetTotalTermFrequency() const {
 void TextIndexSchema::EnableSuffix() {
   if (with_suffix_trie_) return;
   with_suffix_trie_ = true;
-  size_t num_shards = options::GetRaxTargetMutexPoolSize().GetValue();
-  text_index_ = std::make_shared<TextIndex>(true, num_shards);
+  text_index_ = std::make_shared<TextIndex<kSchemaTextIndexShards>>(true);
 }
 
 std::string TextIndexSchema::GetAllStemVariants(

@@ -244,6 +244,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
           res->AddIndex(attribute.alias(), attribute.identifier(), index));
     }
   }
+  res->SetTextSizeEstimationConditions();
 
   if (!reload && index_schema_proto.skip_initial_scan()) {
     // Creating a new Index with SkipInitialScan. Mark the backfill as done
@@ -600,7 +601,6 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
 void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
                                       MutatedAttributes &mutated_attributes,
                                       const Key &key) {
-  vmsdk::WriterMutexLock lock(&time_sliced_mutex_);
   if (text_index_schema_) {
     // Always clean up indexed words from all text attributes of the key up
     // front
@@ -858,6 +858,7 @@ void IndexSchema::ProcessMutation(ValkeyModuleCtx *ctx,
 
   if (ABSL_PREDICT_FALSE(!mutations_thread_pool_ ||
                          mutations_thread_pool_->Size() == 0)) {
+    vmsdk::WriterMutexLock lock(&time_sliced_mutex_);
     SyncProcessMutation(ctx, mutated_attributes, interned_key);
     return;
   }
@@ -886,15 +887,18 @@ void IndexSchema::ProcessSingleMutationAsync(ValkeyModuleCtx *ctx,
                                              bool from_backfill, const Key &key,
                                              vmsdk::StopWatch *delay_capturer) {
   PAUSEPOINT("mutation_processing");
-  bool first_time = true;
-  do {
-    auto mutation_record = ConsumeTrackedMutatedAttribute(key, first_time);
-    first_time = false;
-    if (!mutation_record.has_value()) {
-      break;
-    }
-    SyncProcessMutation(ctx, mutation_record.value(), key);
-  } while (true);
+  {
+    vmsdk::WriterMutexLock lock(&time_sliced_mutex_);
+    bool first_time = true;
+    do {
+      auto mutation_record = ConsumeTrackedMutatedAttribute(key, first_time);
+      first_time = false;
+      if (!mutation_record.has_value()) {
+        break;
+      }
+      SyncProcessMutation(ctx, mutation_record.value(), key);
+    } while (true);
+  }
 
   absl::MutexLock lock(&stats_.mutex_);
   --stats_.mutation_queue_size_;
@@ -1054,15 +1058,11 @@ int IndexSchema::GetTextItemCount() const {
     return 0;
   }
   // Count documents that actually have text content indexed
-  return text_index_schema->GetPerKeyTextIndexes().size();
+  return text_index_schema->GetTrackedKeyCount(true);
 }
 
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   int arrSize = 28;
-  // Debug Text index Memory info fields
-  if (vmsdk::config::IsDebugModeEnabled()) {
-    arrSize += 8;
-  }
   // Text-attribute info fields
   if (text_index_schema_) {
     arrSize += 8;  // punctuation, stop_words, with_offsets, min_stem_size (4
@@ -1108,26 +1108,6 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithLongLong(
       ctx, text_index_schema_ ? text_index_schema_->GetNumUniqueTerms() : 0);
 
-  // Memory statistics are only shown when debug mode is enabled
-  if (vmsdk::config::IsDebugModeEnabled()) {
-    ValkeyModule_ReplyWithSimpleString(ctx, "posting_sz_bytes");
-    ValkeyModule_ReplyWithLongLong(
-        ctx,
-        text_index_schema_ ? text_index_schema_->GetPostingsMemoryUsage() : 0);
-    ValkeyModule_ReplyWithSimpleString(ctx, "position_sz_bytes");
-    ValkeyModule_ReplyWithLongLong(
-        ctx,
-        text_index_schema_ ? text_index_schema_->GetPositionMemoryUsage() : 0);
-    ValkeyModule_ReplyWithSimpleString(ctx, "radix_sz_bytes");
-    ValkeyModule_ReplyWithLongLong(
-        ctx,
-        text_index_schema_ ? text_index_schema_->GetRadixTreeMemoryUsage() : 0);
-    ValkeyModule_ReplyWithSimpleString(ctx, "total_text_index_sz_bytes");
-    ValkeyModule_ReplyWithLongLong(
-        ctx, text_index_schema_
-                 ? text_index_schema_->GetTotalTextIndexMemoryUsage()
-                 : 0);
-  }
   // Text Index info fields end
   ValkeyModule_ReplyWithSimpleString(ctx, "hash_indexing_failures");
   ValkeyModule_ReplyWithCString(
@@ -1478,7 +1458,8 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
     for (size_t i = 0; i < count; ++i) {
       VMSDK_ASSIGN_OR_RETURN(auto keyname_str, input.LoadString());
       VMSDK_ASSIGN_OR_RETURN(auto from_backfill, input.LoadObject<bool>());
-      VMSDK_ASSIGN_OR_RETURN(auto from_multi, input.LoadObject<bool>());
+      VMSDK_ASSIGN_OR_RETURN([[maybe_unused]] auto from_multi,
+                             input.LoadObject<bool>());
 
       auto keyname = vmsdk::MakeUniqueValkeyString(keyname_str);
       ProcessKeyspaceNotification(ctx, keyname.get(), from_backfill);
@@ -1518,6 +1499,14 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
     ValkeyModuleCtx *ctx, vmsdk::ThreadPool *mutations_thread_pool,
     std::unique_ptr<data_model::IndexSchema> index_schema_proto,
     SupplementalContentIter &&supplemental_iter) {
+  // Select the DB number in the context for subsequent usage.
+  uint32_t db_num = index_schema_proto->db_num();
+  if (ValkeyModule_SelectDb(ctx, db_num) != VALKEYMODULE_OK) {
+    return absl::InternalError(absl::StrFormat(
+        "Unable to select DB %d for loading index schema %s", db_num,
+        vmsdk::config::RedactIfNeeded(index_schema_proto->name()).data()));
+  }
+
   // flag to skip loading attributes and indices
   bool skip_loading_index_data = options::GetSkipIndexLoad().GetValue();
   // When skipping index data, create attributes immediately (with empty
@@ -1607,6 +1596,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
       }
     }
   }
+  index_schema->SetTextSizeEstimationConditions();
   VMSDK_LOG(NOTICE, ctx) << "Loaded index schema with "
                          << index_schema->GetAttributeCount() << " attributes";
   return index_schema;
@@ -1973,6 +1963,16 @@ absl::StatusOr<vmsdk::ValkeyVersion> IndexSchema::GetMinVersion(
     return kRelease11;
   } else {
     return kRelease10;
+  }
+}
+
+void IndexSchema::SetTextSizeEstimationConditions() {
+  if (text_index_schema_) {
+    for (const auto &[_, attr] : attributes_) {
+      if (attr.GetIndex()->GetIndexerType() == indexes::IndexerType::kHNSW) {
+        text_index_schema_->EnableSubtreeItemCountTracking();
+      }
+    }
   }
 }
 

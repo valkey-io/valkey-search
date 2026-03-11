@@ -318,6 +318,41 @@ static auto max_term_expansions =
                           kMaximumMaxTermExpansions)  // max limit (100k)
         .Build();
 
+/// Register the "--prefiltering-threshold-ratio" flag
+/// Controls when pre-filtering is used vs inline-filtering for hybrid queries
+constexpr absl::string_view kPrefilteringThresholdRatioConfig{
+    "prefiltering-threshold-ratio"};
+constexpr absl::string_view kDefaultPrefilteringThresholdRatio{"0.001"};
+constexpr double kMinimumPrefilteringThresholdRatio{0.0};
+constexpr double kMaximumPrefilteringThresholdRatio{1.0};
+static double prefiltering_threshold_ratio{0.001};
+
+static auto prefiltering_threshold_ratio_config =
+    config::StringBuilder(kPrefilteringThresholdRatioConfig,
+                          kDefaultPrefilteringThresholdRatio)
+        .WithValidationCallback([](const std::string& value) -> absl::Status {
+          double parsed_value;
+          if (!absl::SimpleAtod(value, &parsed_value)) {
+            return absl::InvalidArgumentError(
+                "Prefiltering threshold ratio must be a valid number");
+          }
+          if (parsed_value < kMinimumPrefilteringThresholdRatio ||
+              parsed_value > kMaximumPrefilteringThresholdRatio) {
+            return absl::InvalidArgumentError(absl::StrFormat(
+                "Prefiltering threshold ratio must be between %.1f and %.1f",
+                kMinimumPrefilteringThresholdRatio,
+                kMaximumPrefilteringThresholdRatio));
+          }
+          return absl::OkStatus();
+        })
+        .WithModifyCallback([](const std::string& value) {
+          double parsed_value;
+          CHECK(absl::SimpleAtod(value, &parsed_value));
+          prefiltering_threshold_ratio = parsed_value;
+        })
+        .Dev()  // can only be set in debug mode
+        .Build();
+
 /// Register the "search-result-buffer-multiplier" flag
 constexpr absl::string_view kSearchResultBufferMultiplierConfig{
     "search-result-buffer-multiplier"};
@@ -325,6 +360,7 @@ constexpr absl::string_view kDefaultSearchResultBufferMultiplier{"1.5"};
 constexpr double kMinimumSearchResultBufferMultiplier{1.0};
 constexpr double kMaximumSearchResultBufferMultiplier{1000.0};
 static double search_result_buffer_multiplier{1.5};
+
 static auto search_result_buffer_multiplier_config =
     config::StringBuilder(kSearchResultBufferMultiplierConfig,
                           kDefaultSearchResultBufferMultiplier)
@@ -354,6 +390,8 @@ double GetSearchResultBufferMultiplier() {
   return search_result_buffer_multiplier;
 }
 
+double GetPrefilteringThresholdRatio() { return prefiltering_threshold_ratio; }
+
 /// Register the "drain-mutation-queue-on-load" flag
 /// Drain the mutation queue after RDB load
 constexpr absl::string_view kDrainMutationQueueOnLoadConfig{
@@ -370,6 +408,39 @@ constexpr absl::string_view kDrainMutationQueueOnSaveConfig{
 static auto drain_mutation_queue_on_save =
     config::BooleanBuilder(kDrainMutationQueueOnSaveConfig, false).Build();
 
+/// Register the "fanout-data-uniformity" flag
+/// U = uniformity (0-100): 100 = uniform distribution, 0 = all data in one
+/// shard Formula: limit_per_shard = ceil(K/N) + ((100-U) * (K - ceil(K/N)) /
+/// 100) Where ceil(K/N) is calculated as (K + N - 1) / N using integer
+/// division. By default, uniformity is disabled (U=0), we assume all data is in
+/// one shard.
+constexpr absl::string_view kFanoutDataUniformityConfig{
+    "fanout-data-uniformity"};
+constexpr uint32_t kDefaultFanoutDataUniformity{0};
+constexpr uint32_t kMinimumFanoutDataUniformity{0};
+constexpr uint32_t kMaximumFanoutDataUniformity{100};
+static auto fanout_data_uniformity =
+    config::NumberBuilder(
+        kFanoutDataUniformityConfig, kDefaultFanoutDataUniformity,
+        kMinimumFanoutDataUniformity, kMaximumFanoutDataUniformity)
+        .Dev()  // can only be set in debug mode
+        .Build();
+
+/// Register the "fanout-uniformity-min-index-size" flag
+/// Minimum index size before applying uniformity logic
+constexpr absl::string_view kFanoutUniformityMinIndexSizeConfig{
+    "fanout-uniformity-min-index-size"};
+constexpr uint32_t kDefaultFanoutUniformityMinIndexSize{10000};
+constexpr uint32_t kMinimumFanoutUniformityMinIndexSize{0};
+constexpr uint32_t kMaximumFanoutUniformityMinIndexSize{UINT32_MAX};
+static auto fanout_uniformity_min_index_size =
+    config::NumberBuilder(kFanoutUniformityMinIndexSizeConfig,
+                          kDefaultFanoutUniformityMinIndexSize,
+                          kMinimumFanoutUniformityMinIndexSize,
+                          kMaximumFanoutUniformityMinIndexSize)
+        .Dev()  // can only be set in debug mode
+        .Build();
+
 /// Register the "--async-fanout-threshold" flag. Controls the threshold
 /// for async fanout operations (minimum number of targets to use async)
 constexpr absl::string_view kAsyncFanoutThresholdConfig{
@@ -383,6 +454,40 @@ static auto async_fanout_threshold =
         kDefaultAsyncFanoutThreshold,  // default threshold (30)
         kMinimumAsyncFanoutThreshold,  // min threshold (1)
         kMaximumAsyncFanoutThreshold)  // max threshold (10k)
+        .Build();
+
+constexpr absl::string_view kRaxTargetMutexPoolSizeConfig{
+    "text-rax-target-mutex-pool-size"};
+constexpr uint32_t kDefaultRaxTargetMutexPoolSize{256};
+constexpr uint32_t kMinimumRaxTargetMutexPoolSize{1};
+constexpr uint32_t kMaximumRaxTargetMutexPoolSize{65536};
+static auto rax_target_mutex_pool_size =
+    config::NumberBuilder(
+        kRaxTargetMutexPoolSizeConfig, kDefaultRaxTargetMutexPoolSize,
+        kMinimumRaxTargetMutexPoolSize, kMaximumRaxTargetMutexPoolSize)
+        .Dev()  // can only be set in debug mode
+        .Build();
+
+/// Register the "--max-nonvector-search-results-fetched" flag. Controls the
+/// maximum number of results to fetch in background threads before content
+/// fetching on non-vector (numeric/tag/text) query paths. This controls
+/// potential OOM by limiting the result set size before expensive content
+/// fetching from the keyspace.
+/// Note: If queries use LIMIT with a large offset (e.g., LIMIT offset count
+/// where offset + count exceeds this value), consider increasing this config
+/// to ensure all paginated results are accessible.
+constexpr absl::string_view kMaxNonVectorSearchResultsFetchedConfig{
+    "max-nonvector-search-results-fetched"};
+constexpr uint32_t kDefaultMaxNonVectorSearchResultsFetched{
+    100000};  // 100K keys default
+constexpr uint32_t kMinimumMaxNonVectorSearchResultsFetched{0};
+constexpr uint32_t kMaximumMaxNonVectorSearchResultsFetched{UINT32_MAX};
+static auto max_nonvector_search_results_fetched =
+    vmsdk::config::NumberBuilder(
+        kMaxNonVectorSearchResultsFetchedConfig,   // name
+        kDefaultMaxNonVectorSearchResultsFetched,  // default limit (100K)
+        kMinimumMaxNonVectorSearchResultsFetched,  // min limit (0)
+        kMaximumMaxNonVectorSearchResultsFetched)  // UINT32_MAX
         .Build();
 
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
@@ -481,8 +586,26 @@ const vmsdk::config::Boolean& GetDrainMutationQueueOnLoad() {
       *drain_mutation_queue_on_load);
 }
 
+vmsdk::config::Number& GetFanoutDataUniformity() {
+  return dynamic_cast<vmsdk::config::Number&>(*fanout_data_uniformity);
+}
+
+vmsdk::config::Number& GetFanoutUniformityMinIndexSize() {
+  return dynamic_cast<vmsdk::config::Number&>(
+      *fanout_uniformity_min_index_size);
+}
+
 vmsdk::config::Number& GetAsyncFanoutThreshold() {
   return dynamic_cast<vmsdk::config::Number&>(*async_fanout_threshold);
+}
+
+config::Number& GetRaxTargetMutexPoolSize() {
+  return dynamic_cast<config::Number&>(*rax_target_mutex_pool_size);
+}
+
+vmsdk::config::Number& GetMaxNonVectorSearchResultsFetched() {
+  return dynamic_cast<vmsdk::config::Number&>(
+      *max_nonvector_search_results_fetched);
 }
 
 }  // namespace options

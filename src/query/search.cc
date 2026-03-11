@@ -44,6 +44,7 @@
 #include "src/valkey_search.h"
 #include "src/valkey_search_options.h"
 #include "third_party/hnswlib/hnswlib.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
@@ -64,30 +65,29 @@ DEV_INTEGER_COUNTER(query_stats, query_text_fuzzy_count);
 DEV_INTEGER_COUNTER(query_stats, query_text_proximity_count);
 DEV_INTEGER_COUNTER(query_stats, query_numeric_count);
 DEV_INTEGER_COUNTER(query_stats, query_tag_count);
+DEV_INTEGER_COUNTER(query_stats, nonvector_results_fetched_limited_count);
 
 class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
  public:
   InlineVectorFilter(
       query::Predicate *filter_predicate, indexes::VectorBase *vector_index,
-      const InternedStringNodeHashMap<valkey_search::indexes::text::TextIndex>
-          *per_key_indexes,
+      const std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
       QueryOperations query_operations)
       : filter_predicate_(filter_predicate),
         vector_index_(vector_index),
-        per_key_indexes_(per_key_indexes),
+        text_index_schema_(text_index_schema),
         query_operations_(query_operations) {}
   ~InlineVectorFilter() override = default;
 
   bool operator()(hnswlib::labeltype id) override {
+    BACKGROUND_PAUSEPOINT("search_inline_filter");
     auto key = vector_index_->GetKeyDuringSearch(id);
     if (!key.ok()) {
       return false;
     }
     const valkey_search::indexes::text::TextIndex *text_index = nullptr;
-    if (per_key_indexes_) {
-      text_index =
-          valkey_search::indexes::text::TextIndexSchema::LookupTextIndex(
-              *per_key_indexes_, *key);
+    if (text_index_schema_) {
+      text_index = text_index_schema_->GetPerKeyTextIndex(*key, false);
     }
     indexes::PrefilterEvaluator evaluator(text_index, query_operations_);
     return evaluator.Evaluate(*filter_predicate_, *key);
@@ -96,23 +96,18 @@ class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
  private:
   query::Predicate *filter_predicate_;
   indexes::VectorBase *vector_index_;
-  const InternedStringNodeHashMap<valkey_search::indexes::text::TextIndex>
-      *per_key_indexes_;
+  const std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
   QueryOperations query_operations_;
 };
 absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
     indexes::VectorBase *vector_index, const SearchParameters &parameters) {
   std::unique_ptr<InlineVectorFilter> inline_filter;
   if (parameters.filter_parse_results.root_predicate != nullptr) {
-    const InternedStringNodeHashMap<valkey_search::indexes::text::TextIndex>
-        *per_key_indexes = nullptr;
-    if (parameters.index_schema->GetTextIndexSchema()) {
-      per_key_indexes = &parameters.index_schema->GetTextIndexSchema()
-                             ->GetPerKeyTextIndexes();
-    }
+    const std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema =
+        parameters.index_schema->GetTextIndexSchema();
     inline_filter = std::make_unique<InlineVectorFilter>(
         parameters.filter_parse_results.root_predicate.get(), vector_index,
-        per_key_indexes, parameters.filter_parse_results.query_operations);
+        text_index_schema, parameters.filter_parse_results.query_operations);
     VMSDK_LOG(DEBUG, nullptr) << "Performing vector search with inline filter";
   }
   if (vector_index->GetIndexerType() == indexes::IndexerType::kHNSW) {
@@ -370,7 +365,7 @@ void EvaluatePrefilteredKeys(
     absl::AnyInvocable<bool(const InternedStringPtr &,
                             absl::flat_hash_set<const char *> &)>
         appender,
-    size_t max_keys) {
+    size_t max_keys, bool stop_on_fetch_limit) {
   // If there was a union operation, we need to handle deduplication.
   // This implementation skips deduplication (flat_hash_set usage) if not needed
   // for performance.
@@ -380,14 +375,9 @@ void EvaluatePrefilteredKeys(
   if (needs_dedup) {
     result_keys.reserve(max_keys);
   }
-  // Get per-key text indexes directly since we have reader lock
-  const InternedStringNodeHashMap<valkey_search::indexes::text::TextIndex>
-      *per_key_indexes = nullptr;
-  if (parameters.index_schema &&
-      parameters.index_schema->GetTextIndexSchema()) {
-    per_key_indexes =
-        &parameters.index_schema->GetTextIndexSchema()->GetPerKeyTextIndexes();
-  }
+  const std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema =
+      parameters.index_schema ? parameters.index_schema->GetTextIndexSchema()
+                              : nullptr;
   while (!entries_fetchers.empty()) {
     auto fetcher = std::move(entries_fetchers.front());
     entries_fetchers.pop();
@@ -399,21 +389,23 @@ void EvaluatePrefilteredKeys(
         iterator->Next();
         continue;
       }
-      const valkey_search::indexes::text::TextIndex *text_index = nullptr;
-      if (per_key_indexes) {
-        text_index =
-            valkey_search::indexes::text::TextIndexSchema::LookupTextIndex(
-                *per_key_indexes, key);
-      }
+      const valkey_search::indexes::text::TextIndex *text_index =
+          text_index_schema ? text_index_schema->GetPerKeyTextIndex(key, false)
+                            : nullptr;
       indexes::PrefilterEvaluator key_evaluator(
           text_index, parameters.filter_parse_results.query_operations);
+      BACKGROUND_PAUSEPOINT("search_prefilter_eval");
       // 3. Evaluate predicate
       if (key_evaluator.Evaluate(
               *parameters.filter_parse_results.root_predicate, key)) {
-        if (needs_dedup) {
+        bool result = appender(key, result_keys);
+        if (needs_dedup && result) {
           result_keys.insert(key->Str().data());
         }
-        appender(key, result_keys);
+        // For non-vector queries that exceed the fetch limit, return early
+        if (stop_on_fetch_limit && !result) {
+          return;
+        }
       }
       iterator->Next();
       if (parameters.cancellation_token->IsCancelled()) {
@@ -437,7 +429,8 @@ CalcBestMatchingPrefilteredKeys(
                                            results, top_keys);
   };
   EvaluatePrefilteredKeys(parameters, entries_fetchers,
-                          std::move(results_appender), qualified_entries);
+                          std::move(results_appender), qualified_entries,
+                          /*stop_on_fetch_limit=*/false);
   return results;
 }
 
@@ -573,14 +566,22 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
       parameters.filter_parse_results.root_predicate.get(), entries_fetchers,
       false, parameters.filter_parse_results.query_operations,
       parameters.index_schema.get());
+
+  // Get the config for maximum number of keys to accumulate before content
+  // fetching
+  const size_t max_keys = static_cast<size_t>(
+      options::GetMaxNonVectorSearchResultsFetched().GetValue());
   std::vector<indexes::Neighbor> neighbors;
-  // TODO: For now, we just reserve a fixed size because text search operators
-  // return a size of 0 currently.
-  neighbors.reserve(5000);
+  neighbors.reserve(std::min(qualified_entries, static_cast<size_t>(5000)));
+  bool fetch_limited = false;
   auto results_appender =
-      [&neighbors, &parameters](
+      [&neighbors, &parameters, max_keys, &fetch_limited](
           const InternedStringPtr &key,
           absl::flat_hash_set<const char *> &top_keys) -> bool {
+    if (neighbors.size() >= max_keys) {
+      fetch_limited = true;
+      return false;
+    }
     neighbors.emplace_back(indexes::Neighbor{key, 0.0f});
     return true;
   };
@@ -592,9 +593,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
         NeedsDeduplication(parameters.filter_parse_results.query_operations);
     absl::flat_hash_set<const char *> seen_keys;
     if (needs_dedup) {
-      // TODO: Use the qualified_entries size when text indexes return correct
-      // size.
-      seen_keys.reserve(5000);
+      seen_keys.reserve(std::min(qualified_entries, static_cast<size_t>(5000)));
     }
     while (!entries_fetchers.empty()) {
       auto fetcher = std::move(entries_fetchers.front());
@@ -602,12 +601,18 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
       auto iterator = fetcher->Begin();
       while (!iterator->Done()) {
         const auto &key = **iterator;
+        BACKGROUND_PAUSEPOINT("search_entries_fetcher");
         if (needs_dedup) {
           if (seen_keys.contains(key->Str().data())) {
             iterator->Next();
             continue;
           }
           seen_keys.insert(key->Str().data());
+        }
+        // Check if we've reached the limit
+        if (neighbors.size() >= max_keys) {
+          nonvector_results_fetched_limited_count.Increment();
+          return neighbors;
         }
         neighbors.emplace_back(indexes::Neighbor{key, 0.0f});
         iterator->Next();
@@ -619,14 +624,17 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
     return neighbors;
   }
   EvaluatePrefilteredKeys(parameters, entries_fetchers,
-                          std::move(results_appender), qualified_entries);
+                          std::move(results_appender), qualified_entries,
+                          /*stop_on_fetch_limit=*/true);
+  if (fetch_limited) {
+    nonvector_results_fetched_limited_count.Increment();
+  }
   return neighbors;
 }
 
 absl::StatusOr<std::vector<indexes::Neighbor>> DoSearch(
-    const SearchParameters &parameters, SearchMode search_mode) {
-  auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
-  vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
+    const SearchParameters &parameters, SearchMode search_mode,
+    vmsdk::ReaderMutexLock &lock) {
   ++Metrics::GetStats().time_slice_queries;
   // Handle non vector queries first where attribute_alias is empty.
   if (parameters.IsNonVectorQuery()) {
@@ -684,7 +692,8 @@ SearchResult::SearchResult()
 
 SearchResult::SearchResult(size_t total_count,
                            std::vector<indexes::Neighbor> neighbors,
-                           const SearchParameters &parameters)
+                           const SearchParameters &parameters,
+                           bool trim_offset_in_background)
     : total_count(total_count),
       is_limited_with_buffer(false),
       is_offsetted(false) {
@@ -696,24 +705,25 @@ SearchResult::SearchResult(size_t total_count,
   this->neighbors = std::move(neighbors);
   // Check if the command needs all results (e.g. for sorting). Trim otherwise.
   if (!parameters.RequiresCompleteResults()) {
-    TrimResults(this->neighbors, parameters);
+    TrimResults(this->neighbors, parameters, trim_offset_in_background);
   }
 }
 
 // Apply limiting in background thread if possible.
 void SearchResult::TrimResults(std::vector<indexes::Neighbor> &neighbors,
-                               const SearchParameters &parameters) {
-  // Calculate max_needed for consistent vector/non-vector handling
+                               const SearchParameters &parameters,
+                               bool trim_offset_in_background) {
+  // Use the existing complex logic from SearchResult::GetSerializationRange
   SerializationRange range = GetSerializationRange(parameters);
   size_t max_needed = static_cast<size_t>(
       range.end_index * options::GetSearchResultBufferMultiplier());
   // In standalone mode, we can optimize by trimming from front first.
-  // Note: We cannot trim from the front in a Cluster Mode setting because
-  // each shard produces X results and we need to trim the OFFSET on the
-  // aggregated results. Thus, we can only trim from the end in searches for
-  // individual nodes. In cluster mode, the offset based trimming is applied
-  // after merging all results from shards at the coordinator level.
-  if (!ValkeySearch::Instance().IsCluster()) {
+  // In cluster mode on remote searches on individual shards, we cannot trim
+  // from the front yet because each shard produces X results. However, the
+  // coordinator (after merging) WILL trim from the front and back in the
+  // background thread to avoid memory bloat with large offsets / limit counts
+  // before returning to the main thread.
+  if (!ValkeySearch::Instance().IsCluster() || trim_offset_in_background) {
     this->is_offsetted = true;
     // Trim from front (apply offset)
     if (range.start_index > 0 && range.start_index < neighbors.size()) {
@@ -766,16 +776,17 @@ SerializationRange SearchResult::GetSerializationRange(
 }
 
 absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
+  auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
+  vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
+  absl::StatusOr<std::vector<indexes::Neighbor>> neighbors =
+      DoSearch(parameters, search_mode, lock);
   VMSDK_ASSIGN_OR_RETURN(
-      auto result,
-      MaybeAddIndexedContent(DoSearch(parameters, search_mode), parameters));
+      auto result, MaybeAddIndexedContent(std::move(neighbors), parameters));
   size_t total_count = result.size();
   parameters.search_result =
       SearchResult(total_count, std::move(result), parameters);
-  for (auto &n : parameters.search_result.neighbors) {
-    n.sequence_number =
-        parameters.index_schema->GetIndexMutationSequenceNumber(n.external_id);
-  }
+  parameters.index_schema->PopulateIndexMutationSequenceNumbers(
+      parameters.search_result.neighbors);
   return absl::OkStatus();
 }
 

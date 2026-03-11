@@ -62,23 +62,41 @@ Rax &Rax::operator=(Rax &&other) noexcept {
 }
 
 void Rax::MutateTarget(absl::string_view word,
-                       absl::FunctionRef<void *(void *)> mutate) {
+                       absl::FunctionRef<void *(void *)> mutate,
+                       item_count_op op) {
   CHECK(!word.empty()) << "Can't mutate the target for an empty word";
 
   unsigned char *c_word = const_cast<unsigned char *>(
       reinterpret_cast<const unsigned char *>(word.data()));
   void *opaque_callback = reinterpret_cast<void *>(&mutate);
   int res = raxMutate(rax_, c_word, word.size(), MutateCallbackWrapper,
-                      opaque_callback);
+                      opaque_callback, op);
   CHECK(res) << "Rax mutation failed for word: " << word << ", errno: " << errno
              << " (" << strerror(errno) << ")";
 }
 
+void *Rax::FindTarget(absl::string_view word) const {
+  void *result = nullptr;
+  raxFind(rax_,
+          const_cast<unsigned char *>(
+              reinterpret_cast<const unsigned char *>(word.data())),
+          word.size(), &result);
+  return result;
+}
+
+InvasivePtr<Postings> Rax::FindPostingsTarget(absl::string_view word) const {
+  return InvasivePtr<Postings>::CopyRaw(
+      static_cast<InvasivePtrRaw<Postings>>(FindTarget(word)));
+}
+
 size_t Rax::GetTotalUniqueWordCount() const { return raxSize(rax_); }
 
-size_t Rax::GetWordCount(absl::string_view prefix) const {
-  // TODO: Implement size estimation(?)
-  return 0;
+size_t Rax::GetSubtreeItemCount(absl::string_view prefix) const {
+  return raxGetSubtreeItemCount(
+      rax_,
+      const_cast<unsigned char *>(
+          reinterpret_cast<const unsigned char *>(prefix.data())),
+      prefix.size());
 }
 
 size_t Rax::GetLongestWord() const {

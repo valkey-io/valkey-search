@@ -30,6 +30,8 @@ class RecordSet;
 class Stage;
 class SortBy;
 
+using ArgVector = absl::InlinedVector<expr::Value, 4>;
+
 struct IndexInterface {
   virtual absl::StatusOr<indexes::IndexerType> GetFieldType(
       absl::string_view s) const = 0;
@@ -68,6 +70,12 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   // Determine if we need full results or if we can optimize with trimming via
   // LIMIT offset & count.
   bool RequiresCompleteResults() const override;
+  //
+  // Number of records required as output of the query phase.
+  // If all records are required, then it will be
+  // [0..std::numeric_limits<size_t>::max()]
+  //
+  query::SerializationRange GetSerializationRange() const;
 
   //
   // Information for each index position in a Record
@@ -139,6 +147,11 @@ class Stage {
   virtual ~Stage() = default;
   virtual absl::Status Execute(RecordSet& records) const = 0;
   virtual void Dump(std::ostream& os) const = 0;
+  // std::nullopt means this stage doesn't require a specific number of input
+  // records, otherwise it is the number required.
+  // For ALL records std::numeric_limits<size_t>::max() is returned.
+  virtual std::optional<query::SerializationRange> GetSerializationRange()
+      const = 0;
   friend std::ostream& operator<<(std::ostream& os, const Stage& s) {
     s.Dump(os);
     return os;
@@ -168,6 +181,10 @@ class Limit : public Stage {
     os << "LIMIT: " << offset_ << " " << limit_;
   }
   absl::Status Execute(RecordSet& records) const override;
+  std::optional<query::SerializationRange> GetSerializationRange()
+      const override {
+    return query::SerializationRange{offset_, offset_ + limit_};
+  }
 };
 
 class Apply : public Stage {
@@ -175,6 +192,10 @@ class Apply : public Stage {
   std::unique_ptr<Attribute> name_;
   std::unique_ptr<expr::Expression> expr_;
   absl::Status Execute(RecordSet& records) const override;
+  std::optional<query::SerializationRange> GetSerializationRange()
+      const override {
+    return query::SerializationRange::All();
+  }
   void Dump(std::ostream& os) const override {
     os << "APPLY: ";
     name_->Dump(os);
@@ -187,6 +208,10 @@ class Filter : public Stage {
  public:
   std::unique_ptr<expr::Expression> expr_;
   absl::Status Execute(RecordSet& records) const override;
+  std::optional<query::SerializationRange> GetSerializationRange()
+      const override {
+    return query::SerializationRange::All();
+  }
   void Dump(std::ostream& os) const override {
     os << "FILTER: " << expr_.get();
   }
@@ -195,9 +220,13 @@ class Filter : public Stage {
 class GroupBy : public Stage {
  public:
   absl::Status Execute(RecordSet& records) const override;
+  std::optional<query::SerializationRange> GetSerializationRange()
+      const override {
+    return query::SerializationRange::All();
+  }
   struct ReducerInstance {
     virtual ~ReducerInstance() = default;
-    virtual void ProcessRecord(absl::InlinedVector<expr::Value, 4>& values) = 0;
+    virtual void ProcessRecords(const std::vector<ArgVector>& all_values) = 0;
     virtual expr::Value GetResult() const = 0;
   };
   struct ReducerInfo {
@@ -247,6 +276,10 @@ class GroupBy : public Stage {
 class SortBy : public Stage {
  public:
   absl::Status Execute(RecordSet& records) const override;
+  std::optional<query::SerializationRange> GetSerializationRange()
+      const override {
+    return query::SerializationRange::All();
+  }
   enum Direction { kASC, kDESC };
   struct SortKey {
     Direction direction_;

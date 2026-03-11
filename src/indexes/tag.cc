@@ -96,10 +96,12 @@ absl::StatusOr<absl::flat_hash_set<absl::string_view>> Tag::ParseSearchTags(
         return absl::InvalidArgumentError(
             absl::StrCat("Tag string `", tag, "` ends with multiple *."));
       }
-      // Prefix tags shorter than min length are ignored
-      if (tag.length() > kDefaultMinPrefixLength) {
-        parsed_tags.insert(tag);
+      // Prefix tags shorter than min length are rejected.
+      if (tag.length() <= kDefaultMinPrefixLength) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "Tag string `", tag, "` is too short for prefix wildcard."));
       }
+      parsed_tags.insert(tag);
     } else {
       parsed_tags.insert(tag);
     }

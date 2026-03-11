@@ -70,6 +70,10 @@ void ResolveContent(std::unique_ptr<SearchParameters> params);
 
 namespace valkey_search {
 
+namespace {
+constexpr size_t kMaxTextFieldsCount{64};
+}  // namespace
+
 LogLevel GetLogSeverity(bool ok) { return ok ? DEBUG : WARNING; }
 
 //
@@ -230,6 +234,17 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
     default:
       return absl::InvalidArgumentError("Unsupported attribute data type.");
   }
+  size_t text_fields_count = 0;
+  for (const auto &attribute : index_schema_proto.attributes()) {
+    if (attribute.index().index_type_case() ==
+        data_model::Index::IndexTypeCase::kTextIndex) {
+      VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(
+          text_fields_count + 1, std::nullopt, kMaxTextFieldsCount))
+          << "The maximum number of text fields cannot exceed "
+          << kMaxTextFieldsCount << ".";
+      ++text_fields_count;
+    }
+  }
 
   auto res = std::shared_ptr<IndexSchema>(
       new IndexSchema(ctx, index_schema_proto, std::move(attribute_data_type),
@@ -244,8 +259,6 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
           res->AddIndex(attribute.alias(), attribute.identifier(), index));
     }
   }
-  res->SetTextSizeEstimationConditions();
-
   if (!reload && index_schema_proto.skip_initial_scan()) {
     // Creating a new Index with SkipInitialScan. Mark the backfill as done
     // since we are skipping it.

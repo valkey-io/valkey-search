@@ -70,6 +70,10 @@ void ResolveContent(std::unique_ptr<SearchParameters> params);
 
 namespace valkey_search {
 
+namespace {
+constexpr size_t kMaxTextFieldsCount{64};
+}  // namespace
+
 LogLevel GetLogSeverity(bool ok) { return ok ? DEBUG : WARNING; }
 
 //
@@ -230,6 +234,17 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
     default:
       return absl::InvalidArgumentError("Unsupported attribute data type.");
   }
+  size_t text_fields_count = 0;
+  for (const auto &attribute : index_schema_proto.attributes()) {
+    if (attribute.index().index_type_case() ==
+        data_model::Index::IndexTypeCase::kTextIndex) {
+      VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(
+          text_fields_count + 1, std::nullopt, kMaxTextFieldsCount))
+          << "The maximum number of text fields cannot exceed "
+          << kMaxTextFieldsCount << ".";
+      ++text_fields_count;
+    }
+  }
 
   auto res = std::shared_ptr<IndexSchema>(
       new IndexSchema(ctx, index_schema_proto, std::move(attribute_data_type),
@@ -244,8 +259,6 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
           res->AddIndex(attribute.alias(), attribute.identifier(), index));
     }
   }
-  res->SetTextSizeEstimationConditions();
-
   if (!reload && index_schema_proto.skip_initial_scan()) {
     // Creating a new Index with SkipInitialScan. Mark the backfill as done
     // since we are skipping it.
@@ -1058,15 +1071,11 @@ int IndexSchema::GetTextItemCount() const {
     return 0;
   }
   // Count documents that actually have text content indexed
-  return text_index_schema->GetPerKeyTextIndexes().size();
+  return text_index_schema->GetTrackedKeyCount(true);
 }
 
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   int arrSize = 28;
-  // Debug Text index Memory info fields
-  if (vmsdk::config::IsDebugModeEnabled()) {
-    arrSize += 8;
-  }
   // Text-attribute info fields
   if (text_index_schema_) {
     arrSize += 8;  // punctuation, stop_words, with_offsets, min_stem_size (4
@@ -1112,26 +1121,6 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithLongLong(
       ctx, text_index_schema_ ? text_index_schema_->GetNumUniqueTerms() : 0);
 
-  // Memory statistics are only shown when debug mode is enabled
-  if (vmsdk::config::IsDebugModeEnabled()) {
-    ValkeyModule_ReplyWithSimpleString(ctx, "posting_sz_bytes");
-    ValkeyModule_ReplyWithLongLong(
-        ctx,
-        text_index_schema_ ? text_index_schema_->GetPostingsMemoryUsage() : 0);
-    ValkeyModule_ReplyWithSimpleString(ctx, "position_sz_bytes");
-    ValkeyModule_ReplyWithLongLong(
-        ctx,
-        text_index_schema_ ? text_index_schema_->GetPositionMemoryUsage() : 0);
-    ValkeyModule_ReplyWithSimpleString(ctx, "radix_sz_bytes");
-    ValkeyModule_ReplyWithLongLong(
-        ctx,
-        text_index_schema_ ? text_index_schema_->GetRadixTreeMemoryUsage() : 0);
-    ValkeyModule_ReplyWithSimpleString(ctx, "total_text_index_sz_bytes");
-    ValkeyModule_ReplyWithLongLong(
-        ctx, text_index_schema_
-                 ? text_index_schema_->GetTotalTextIndexMemoryUsage()
-                 : 0);
-  }
   // Text Index info fields end
   ValkeyModule_ReplyWithSimpleString(ctx, "hash_indexing_failures");
   ValkeyModule_ReplyWithCString(
@@ -1523,6 +1512,14 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
     ValkeyModuleCtx *ctx, vmsdk::ThreadPool *mutations_thread_pool,
     std::unique_ptr<data_model::IndexSchema> index_schema_proto,
     SupplementalContentIter &&supplemental_iter) {
+  // Select the DB number in the context for subsequent usage.
+  uint32_t db_num = index_schema_proto->db_num();
+  if (ValkeyModule_SelectDb(ctx, db_num) != VALKEYMODULE_OK) {
+    return absl::InternalError(absl::StrFormat(
+        "Unable to select DB %d for loading index schema %s", db_num,
+        vmsdk::config::RedactIfNeeded(index_schema_proto->name()).data()));
+  }
+
   // flag to skip loading attributes and indices
   bool skip_loading_index_data = options::GetSkipIndexLoad().GetValue();
   // When skipping index data, create attributes immediately (with empty
@@ -1612,7 +1609,6 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
       }
     }
   }
-  index_schema->SetTextSizeEstimationConditions();
   VMSDK_LOG(NOTICE, ctx) << "Loaded index schema with "
                          << index_schema->GetAttributeCount() << " attributes";
   return index_schema;
@@ -1979,16 +1975,6 @@ absl::StatusOr<vmsdk::ValkeyVersion> IndexSchema::GetMinVersion(
     return kRelease11;
   } else {
     return kRelease10;
-  }
-}
-
-void IndexSchema::SetTextSizeEstimationConditions() {
-  if (text_index_schema_) {
-    for (const auto &[_, attr] : attributes_) {
-      if (attr.GetIndex()->GetIndexerType() == indexes::IndexerType::kHNSW) {
-        text_index_schema_->EnableSubtreeItemCountTracking();
-      }
-    }
   }
 }
 

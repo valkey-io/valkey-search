@@ -1226,12 +1226,20 @@ static absl::Status SaveSupplementalSection(
 }
 
 absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
-  // Drain mutation queue before save if configured
+  // Drain mutation queue before save if configured.
+  // Skip draining in forked child (BGSave) — the queue is a frozen snapshot
+  // and will never drain, causing an infinite loop.
   if (options::GetDrainMutationQueueOnSave().GetValue()) {
+    int flags = ValkeyModule_GetContextFlags(nullptr);
+    bool is_bgsave = (flags & VALKEYMODULE_CTX_FLAGS_IS_CHILD) != 0;
+    if (is_bgsave) {
+      return absl::InternalError(
+          "Cannot drain mutation queue in forked child process");
+    }
     VMSDK_LOG(NOTICE, nullptr)
         << "Draining mutation queue before RDB save for index "
         << vmsdk::config::RedactIfNeeded(name_);
-    DrainMutationQueue(detached_ctx_.get());
+    VMSDK_RETURN_IF_ERROR(DrainMutationQueue(detached_ctx_.get()));
   }
 
   VMSDK_LOG(DEBUG, nullptr)
@@ -1635,9 +1643,12 @@ void IndexSchema::OnSwapDB(ValkeyModuleSwapDbInfo *swap_db_info) {
   }
 }
 
-void IndexSchema::DrainMutationQueue(ValkeyModuleCtx *ctx) const {
+absl::Status IndexSchema::DrainMutationQueue(ValkeyModuleCtx *ctx) const {
   static const auto max_sleep = std::chrono::milliseconds(100);
   auto sleep_duration = std::chrono::milliseconds(1);
+  auto timeout = std::chrono::milliseconds(
+      options::GetDrainMutationQueueTimeoutMs().GetValue());
+  auto start = std::chrono::steady_clock::now();
 
   while (true) {
     size_t queue_size;
@@ -1645,8 +1656,15 @@ void IndexSchema::DrainMutationQueue(ValkeyModuleCtx *ctx) const {
       absl::MutexLock lock(&mutated_records_mutex_);
       queue_size = tracked_mutated_records_.size();
       if (queue_size == 0) {
-        break;
+        return absl::OkStatus();
       }
+    }
+    if (timeout.count() > 0 &&
+        std::chrono::steady_clock::now() - start >= timeout) {
+      VMSDK_LOG(WARNING, ctx) << "Drain mutation queue timed out for index "
+                              << vmsdk::config::RedactIfNeeded(name_)
+                              << ", entries remaining: " << queue_size;
+      return absl::DeadlineExceededError("Drain mutation queue timed out");
     }
     VMSDK_LOG_EVERY_N_SEC(NOTICE, ctx, 10)
         << "Draining Mutation Queue for index "
@@ -1669,7 +1687,12 @@ void IndexSchema::OnLoadingEnded(ValkeyModuleCtx *ctx) {
                                    ? " Backfill still required."
                                    : " Backfill not needed.");
     if (options::GetDrainMutationQueueOnLoad().GetValue()) {
-      DrainMutationQueue(ctx);
+      auto status = DrainMutationQueue(ctx);
+      if (!status.ok()) {
+        VMSDK_LOG(WARNING, ctx)
+            << "Failed to drain mutation queue on load for index "
+            << vmsdk::config::RedactIfNeeded(name_) << ": " << status;
+      }
     }
     return;
   }

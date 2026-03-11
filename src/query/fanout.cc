@@ -231,13 +231,13 @@ class LocalResponderSearch : public query::SearchParameters {
 
  private:
   void QueryCompleteImpl(std::unique_ptr<SearchParameters> self) {
-    if (search_result.status.ok()) {
+    if (absl::IsResourceExhausted(search_result.status)) {
+      tracker->reached_oom.store(true);
+    }
+    if (search_result.status.ok() || enable_partial_results) {
       tracker->AddResults(search_result.neighbors);
       tracker->AddTotalCount(search_result.total_count);
     } else {
-      if (absl::IsResourceExhausted(search_result.status)) {
-        tracker->reached_oom.store(true);
-      }
       VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
           << "Error during local handling of FT.SEARCH: "
           << search_result.status.message();

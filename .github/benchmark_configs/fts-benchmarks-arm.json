@@ -477,6 +477,11 @@
         "type": "vector",
         "doc_count": 100,
         "dimensions": 256
+      },
+      "composed_tag_queries.csv": {
+        "type": "tag_only",
+        "doc_count": 100,
+        "tags": ["electronics", "books", "clothing", "food", "sports"]
       }
     },
     "test_groups": [
@@ -1052,6 +1057,21 @@
               "": "",
               "NOCONTENT": "_nocontent"
             }
+          },
+          {
+            "id": "e",
+            "type": "read",
+            "cluster_execution": "parallel",
+            "description": "NUMERIC + TAG composed (entries fetcher optimization test)",
+            "dataset": "datasets/composed_tag_queries.csv",
+            "clients": 1000,
+            "duration": 200,
+            "warmup": 60,
+            "command": "FT.SEARCH rd0 \"@price:[100 500] @category:{__field:category__}\"",
+            "options": {
+              "": "",
+              "NOCONTENT": "_nocontent"
+            }
           }
         ]
       },
@@ -1553,6 +1573,41 @@
             },
             "warmup": 60,
             "command": "FT.SEARCH rd0 \"(@price:[100 500])=>[KNN 10 @embedding $vec AS score]\" PARAMS 2 vec \"__field:query_vector__\" RETURN 2 price score DIALECT 2"
+          }
+        ]
+      },
+      {
+        "group": 16,
+        "description": "Composed Queries - Nominal Case (entries fetcher test)",
+        "scenarios": [
+          {
+            "id": "a",
+            "type": "write",
+            "cluster_execution": "single",
+            "setup_commands": [
+              "FT.CREATE rd0 ON HASH PREFIX 1 rd0- SCHEMA field1 TEXT field2 TEXT"
+            ],
+            "flush_before": true,
+            "dataset": "datasets/proximity_phrases.csv",
+            "maxdocs": 50000,
+            "clients": 1000,
+            "sequential": true,
+            "command": "HSET rd0-{tag}:__rand_int__ field1 \"__field:term1__\" field2 \"__field:term2__\""
+          },
+          {
+            "id": "b",
+            "type": "read",
+            "cluster_execution": "parallel",
+            "description": "TEXT + TEXT cross-field composed (entries fetcher optimization test)",
+            "dataset": "datasets/proximity_phrases.csv",
+            "clients": 1000,
+            "duration": 200,
+            "warmup": 60,
+            "command": "FT.SEARCH rd0 \"@field1:__field:term1__ @field2:__field:term2__\"",
+            "options": {
+              "": "",
+              "NOCONTENT": "_nocontent"
+            }
           }
         ]
       }

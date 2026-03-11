@@ -85,9 +85,6 @@ std::function<void *(void *)> CreateSimpleTargetMutateFn(MutateFn mutate_fn) {
 
 /*** TextIndexSchema ***/
 
-#define ITEM_COUNT_TRACKING_ENABLED(op) \
-  (track_subtree_item_counts_ ? op : item_count_op::NONE)
-
 TextIndexSchema::TextIndexSchema(data_model::Language language,
                                  const std::string &punctuation,
                                  bool with_offsets,
@@ -209,9 +206,8 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
           AddKeyToPostings(std::move(existing), key, flat_map, &metadata_);
 
       if (is_new_word) {
-        text_index_->MutateTarget(
-            token, updated_target, reverse_token,
-            ITEM_COUNT_TRACKING_ENABLED(item_count_op::ADD));
+        text_index_->MutateTarget(token, updated_target, reverse_token,
+                                  item_count_op::ADD);
       }
     }
 
@@ -282,9 +278,8 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
           RemoveKeyFromPostings(std::move(existing), key, &metadata_);
 
       if (!updated_target) {
-        text_index_->MutateTarget(
-            word_str, updated_target, reverse_word,
-            ITEM_COUNT_TRACKING_ENABLED(item_count_op::SUBTRACT));
+        text_index_->MutateTarget(word_str, updated_target, reverse_word,
+                                  item_count_op::SUBTRACT);
         if (stem_text_field_mask_) {
           empty_words.push_back(word_str);
         }
@@ -368,6 +363,22 @@ std::string TextIndexSchema::GetAllStemVariants(
   }
 
   return stemmed;  // Caller owns this and will add view to words_to_search
+}
+
+const PerKeyTextIndex *TextIndexSchema::GetPerKeyTextIndex(const Key &key,
+                                                           bool lock) {
+  if (!key) {
+    CHECK(false) << "Invalid null key passed to GetPerKeyTextIndex";
+    return nullptr;
+  }
+  std::optional<std::lock_guard<std::mutex>> per_key_guard;
+  if (lock) per_key_guard.emplace(per_key_text_indexes_mutex_);
+  if (auto it = per_key_text_indexes_.find(key);
+      it != per_key_text_indexes_.end()) {
+    return &it->second;
+  }
+  // Key not found in text indexes - this is normal for keys without text data
+  return nullptr;
 }
 
 }  // namespace valkey_search::indexes::text

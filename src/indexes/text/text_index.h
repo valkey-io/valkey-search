@@ -339,8 +339,6 @@ class TextIndexSchema {
   // Enable suffix trie.
   void EnableSuffix();
 
-  void EnableSubtreeItemCountTracking() { track_subtree_item_counts_ = true; }
-
  private:
   uint8_t num_text_fields_ = 0;
 
@@ -461,6 +459,15 @@ class TextIndexSchema {
     // Key not found in text indexes - this is normal for keys without text data
     return nullptr;
   }
+  // Locking-enabled version of GetTrackedKeyCount.
+  size_t GetTrackedKeyCount(bool lock) {
+    std::optional<std::lock_guard<std::mutex>> per_key_guard;
+    if (lock) per_key_guard.emplace(per_key_text_indexes_mutex_);
+    return GetTrackedKeyCount();
+  }
+
+  // Lookup per-key text index for a key
+  const PerKeyTextIndex *GetPerKeyTextIndex(const Key &key, bool lock);
 
   // TODO: remove this because we'll always track the counts once it's optimized
   bool TrackSubtreeItemsCountEnabled() const {

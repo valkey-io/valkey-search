@@ -27,6 +27,7 @@
 #include "src/indexes/text/text_iterator.h"
 #include "src/indexes/vector_base.h"
 #include "src/valkey_search_options.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 
@@ -99,6 +100,7 @@ EvaluationResult TermPredicate::Evaluate(
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
   // Search for the original word - may or may not exist in corpus
+  BACKGROUND_PAUSEPOINT("search_term_predicate");
   bool found_original = TryAddWordKeyIteratorForPrefilter(
       text_index, term_, target_key, field_mask, require_positions,
       key_iterators);
@@ -166,6 +168,7 @@ EvaluationResult PrefixPredicate::Evaluate(
 
   auto word_iter = text_index.GetPrefix().GetWordIterator(term_);
   while (!word_iter.Done() && word_count < max_words) {
+    BACKGROUND_PAUSEPOINT("search_prefix_predicate");
     std::string_view word = word_iter.GetWord();
     auto postings = word_iter.GetPostingsTarget();
     if (postings) {
@@ -220,6 +223,7 @@ EvaluationResult SuffixPredicate::Evaluate(
 
   auto word_iter = suffix_opt->get().GetWordIterator(reversed_term);
   while (!word_iter.Done() && word_count < max_words) {
+    BACKGROUND_PAUSEPOINT("search_suffix_expansion");
     std::string_view word = word_iter.GetWord();
     if (!word.starts_with(reversed_term)) {
       break;
@@ -296,6 +300,7 @@ EvaluationResult FuzzyPredicate::Evaluate(
 
   // Filter and add to result
   for (auto &key_iter : key_iters) {
+    BACKGROUND_PAUSEPOINT("search_fuzzy_search");
     if (key_iter.SkipForwardKey(target_key) &&
         key_iter.ContainsFields(field_mask)) {
       filtered_key_iterators.emplace_back(std::move(key_iter));
@@ -458,6 +463,7 @@ EvaluationResult ComposedPredicate::EvaluateWithContext(Evaluator &evaluator,
             QueryOperations::kContainsNegate)) {
         continue;
       }
+      BACKGROUND_PAUSEPOINT("search_composed_predicate");
       EvaluationResult result =
           EvaluatePredicate(child.get(), evaluator, require_positions, from_or);
       // Short-circuit on first false

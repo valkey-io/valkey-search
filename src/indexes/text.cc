@@ -314,21 +314,31 @@ std::unique_ptr<indexes::text::TextIterator> FuzzyPredicate::BuildTextIterator(
  * Size estimation is only done at the schema-level right now. It does not
  * account for a field specifier in the text query and may over-estimate
  * because of it if there are multiple text fields in the schema.
+ *
+ * When a query has a vector component, we perform a more sophisticated size
+ * estimation with a tree traversal to help make the correct in-line vs
+ * pre-filter query planning decision. Otherwise we simply grab a rough upper
+ * bound using the total number of tracked keys since the estimation will only
+ * be used to reserve space in a collection.
  */
 
-size_t TermPredicate::EstimateSize() const {
-  size_t shard = text_index_schema_->GetTextIndex()->GetShardIndex(term_);
-  auto iter =
-      text_index_schema_->GetTextIndex()->GetPrefixShard(shard).GetWordIterator(
-          term_);
-  if (!iter.Done() && iter.GetWord() == term_) {
-    return iter.GetPostingsTarget()->GetKeyCount();
+size_t TermPredicate::EstimateSize(bool is_vec_query) const {
+  if (is_vec_query) {
+    size_t shard = text_index_schema_->GetTextIndex()->GetShardIndex(term_);
+    auto iter = text_index_schema_->GetTextIndex()
+                    ->GetPrefixShard(shard)
+                    .GetWordIterator(term_);
+    if (!iter.Done() && iter.GetWord() == term_) {
+      return iter.GetPostingsTarget()->GetKeyCount();
+    }
+    return 0;
+  } else {
+    return text_index_schema_->GetTrackedKeyCount();
   }
-  return 0;
 }
 
-size_t PrefixPredicate::EstimateSize() const {
-  if (text_index_schema_->TrackSubtreeItemsCountEnabled()) {
+size_t PrefixPredicate::EstimateSize(bool is_vec_query) const {
+  if (is_vec_query) {
     size_t shard = text_index_schema_->GetTextIndex()->GetShardIndex(term_);
     return text_index_schema_->GetTextIndex()
         ->GetPrefixShard(shard)
@@ -338,8 +348,8 @@ size_t PrefixPredicate::EstimateSize() const {
   }
 }
 
-size_t SuffixPredicate::EstimateSize() const {
-  if (text_index_schema_->TrackSubtreeItemsCountEnabled()) {
+size_t SuffixPredicate::EstimateSize(bool is_vec_query) const {
+  if (is_vec_query) {
     std::string reversed(term_.rbegin(), term_.rend());
     size_t shard = text_index_schema_->GetTextIndex()->GetShardIndex(reversed);
     auto suffix_shard =
@@ -351,13 +361,13 @@ size_t SuffixPredicate::EstimateSize() const {
   }
 }
 
-size_t InfixPredicate::EstimateSize() const {
+size_t InfixPredicate::EstimateSize(bool is_vec_query) const {
   // TODO: Implement once infix is supported
   // Right now we return the upper bound
   return text_index_schema_->GetTrackedKeyCount();
 }
 
-size_t FuzzyPredicate::EstimateSize() const {
+size_t FuzzyPredicate::EstimateSize(bool is_vec_query) const {
   // TODO: Implement proper heuristic
   // Right now we return the upper bound
   return text_index_schema_->GetTrackedKeyCount();

@@ -132,8 +132,6 @@ class TextIndexSchema {
     text_index_ = std::make_shared<TextIndex>(true);
   }
 
-  void EnableSubtreeItemCountTracking() { track_subtree_item_counts_ = true; }
-
  private:
   uint8_t num_text_fields_ = 0;
 

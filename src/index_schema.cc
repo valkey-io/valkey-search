@@ -1609,7 +1609,6 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
       }
     }
   }
-  index_schema->SetTextSizeEstimationConditions();
   VMSDK_LOG(NOTICE, ctx) << "Loaded index schema with "
                          << index_schema->GetAttributeCount() << " attributes";
   return index_schema;
@@ -1976,16 +1975,6 @@ absl::StatusOr<vmsdk::ValkeyVersion> IndexSchema::GetMinVersion(
     return kRelease11;
   } else {
     return kRelease10;
-  }
-}
-
-void IndexSchema::SetTextSizeEstimationConditions() {
-  if (text_index_schema_) {
-    for (const auto &[_, attr] : attributes_) {
-      if (attr.GetIndex()->GetIndexerType() == indexes::IndexerType::kHNSW) {
-        text_index_schema_->EnableSubtreeItemCountTracking();
-      }
-    }
   }
 }
 

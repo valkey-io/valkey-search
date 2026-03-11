@@ -136,9 +136,6 @@ std::optional<std::reference_wrapper<const Rax>> TextIndex::GetSuffix() const {
 
 /*** TextIndexSchema ***/
 
-#define ITEM_COUNT_TRACKING_ENABLED(op) \
-  (track_subtree_item_counts_ ? op : item_count_op::NONE)
-
 TextIndexSchema::TextIndexSchema(data_model::Language language,
                                  const std::string &punctuation,
                                  bool with_offsets,

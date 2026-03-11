@@ -166,18 +166,15 @@ bool VerifyFilter(const query::SearchParameters &parameters,
   // For text predicates, evaluate using the text index instead of raw data.
   if (parameters.index_schema &&
       parameters.index_schema->GetTextIndexSchema()) {
-    // TODO: Wait for any in-flight indexing operations to complete before
-    // acquiring the lock, ensuring we evaluate against the latest index state.
-    return parameters.index_schema->GetTextIndexSchema()->WithPerKeyTextIndexes(
-        [&](const auto &per_key_indexes) {
-          PredicateEvaluator evaluator(
-              records,
-              valkey_search::indexes::text::TextIndexSchema::LookupTextIndex(
-                  per_key_indexes, n.external_id),
-              n.external_id, parameters.filter_parse_results.query_operations);
-          EvaluationResult result = predicate->Evaluate(evaluator);
-          return result.matches;
-        });
+    const indexes::text::TextIndex *text_index =
+        parameters.index_schema->GetTextIndexSchema()->GetPerKeyTextIndex(
+            n.external_id, true);
+
+    PredicateEvaluator evaluator(
+        records, text_index, n.external_id,
+        parameters.filter_parse_results.query_operations);
+    EvaluationResult result = predicate->Evaluate(evaluator);
+    return result.matches;
   }
   PredicateEvaluator evaluator(
       records, parameters.filter_parse_results.query_operations);
@@ -211,6 +208,13 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
   auto key_str = vmsdk::MakeUniqueValkeyString(key);
   auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
       ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
+  if (!key_obj) {
+    return absl::NotFoundError("Key not found");
+  }
+  mstime_t expire = ValkeyModule_GetExpire(key_obj.get());
+  if (expire != VALKEYMODULE_NO_EXPIRE && expire <= 0) {
+    return absl::NotFoundError("Key expired");
+  }
   VMSDK_ASSIGN_OR_RETURN(auto content, attribute_data_type.FetchAllRecords(
                                            ctx, vector_identifier,
                                            key_obj.get(), key, identifiers));
@@ -299,6 +303,13 @@ absl::StatusOr<RecordsMap> GetContent(
   auto key_str = vmsdk::MakeUniqueValkeyString(key);
   auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
       ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
+  if (!key_obj) {
+    return absl::NotFoundError("Key not found");
+  }
+  mstime_t expire = ValkeyModule_GetExpire(key_obj.get());
+  if (expire != VALKEYMODULE_NO_EXPIRE && expire <= 0) {
+    return absl::NotFoundError("Key expired");
+  }
   VMSDK_ASSIGN_OR_RETURN(auto content,
                          attribute_data_type.FetchAllRecords(
                              ctx, vector_identifier, key_obj.get(),

@@ -901,3 +901,32 @@ class TestFilterExpressions(ValkeySearchTestCaseBase):
         assert result[0] >= 1
         keys = set(result[i].decode('utf-8') for i in range(1, len(result)))
         assert "item:9" in keys
+
+    def test_10k_tag_filters(self):
+        """
+        Test with 10,000 tag filters to verify query complexity limits.
+        """
+        client: Valkey = self.server.get_new_client()
+        # Set query-string-bytes to 100k to handle large query string size
+        assert client.execute_command("CONFIG", "SET", "search.query-string-bytes", "100000") == b"OK"
+        # Create index with tag field
+        assert client.execute_command(
+            "FT.CREATE", "large_idx",
+            "ON", "HASH",
+            "PREFIX", "1", "item:",
+            "SCHEMA", "tags", "TAG"
+        ) == b"OK"
+        # Add a few test documents
+        assert client.execute_command("HSET", "item:1", "tags", "tag_1") == 1
+        assert client.execute_command("HSET", "item:2", "tags", "tag_5000") == 1
+        assert client.execute_command("HSET", "item:3", "tags", "tag_9999") == 1
+        # Generate 10k tag filters using OR syntax: @tags:{tag_1|tag_2|...|tag_10000}
+        tag_list = [f"tag_{i}" for i in range(1, 10001)]
+        tags_string = '|'.join(tag_list)
+        query = f"@tags:{{{tags_string}}}"
+        # This should work within the increased 100k query terms limit
+        result = client.execute_command("FT.SEARCH", "large_idx", query, "NOCONTENT")
+        # Should find the 3 documents that match some of the tags
+        assert result[0] == 3
+        keys = set(result[i].decode('utf-8') for i in range(1, len(result)))
+        assert keys == {"item:1", "item:2", "item:3"}

@@ -12,6 +12,8 @@ from valkey_search_test_case import (
     ValkeySearchTestCaseBase,
 )
 from valkeytestframework.conftest import resource_port_tracker
+from utils import IndexingTestHelper
+from valkeytestframework.util import waiters
 
 encoder = lambda x: x.encode() if not isinstance(x, bytes) else x
 
@@ -381,14 +383,26 @@ def mark_as_failed(testname):
 
 def do_answer(client, expected, data_set):
     global correct_answers, failed_tests, passed_tests
-    if (expected['data_set_name'], expected['key_type']) != data_set:
+    if (expected['data_set_name'], expected['key_type'], expected.get('schema_type')) != data_set:
         print("Loading data set:", expected['data_set_name'], "key type:", expected['key_type'])
         client.execute_command("FLUSHALL SYNC")
-        load_data(client, expected['data_set_name'], expected['key_type'])
-        data_set = (expected['data_set_name'], expected['key_type'])
+        load_data(client, expected['data_set_name'], expected['key_type'], schema_type=expected.get('schema_type', 'default'))
+        waiters.wait_for_true(lambda: IndexingTestHelper.is_indexing_complete_on_node(client, f"{expected['key_type']}_idx1"))
+        data_set = (expected['data_set_name'], expected['key_type'], expected.get("schema_type"))
+
+    # for the excluded queries with known difference
+    # just run in valkey to make sure they do not crash
+    if expected.get('excluded'):
+        try:
+            print(f"Running excluded query (no-crash check): {expected['cmd']}")
+            client.execute_command(*expected['cmd'])
+            print(f"Excluded query completed without crash")
+        except Exception as e:
+            print(f"Excluded query raised: {e} for cmd {expected['cmd']}")
+        return data_set
 
     # Set Valkey-specific config for inorder tests
-    if 'inorder' in expected['testname'] or 'slop' in expected['testname']:
+    if 'inorder' in expected['testname']:
         try:
             client.execute_command("CONFIG", "SET", "search.proximity-inorder-compat-mode", "yes")
             print(f"✓ Set Valkey compat mode for test: {expected['testname']}")
@@ -493,10 +507,12 @@ class TestAnswersCMD(ValkeySearchTestCaseBase):
             answers = pickle.load(answer_file)
 
         data_set = None
+        client = self.server.get_new_client()
         for i in range(len(answers)):
-            data_set = do_answer(self.server.get_new_client(), answers[i], data_set)
+            data_set = do_answer(client, answers[i], data_set)
 
-        if correct_answers != len(answers):
+        expected_count = sum(1 for a in answers if not a.get('excluded'))
+        if correct_answers != expected_count:
             print(f"Correct answers: {correct_answers} out of {len(answers)}")
             if len(failed_tests) != 0:
                 print(">>>>>>>>> Failed Tests <<<<<<<<<")

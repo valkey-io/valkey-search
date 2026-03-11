@@ -166,7 +166,7 @@ typedef struct raxNode {
     uint32_t isnull : 1;  /* Associated value is NULL (don't store it). */
     uint32_t iscompr : 1; /* Node is compressed. */
     uint32_t size : 29;   /* Number of children, or compressed string len. */
-    uint32_t subtree_items; // SEARCH
+    uint64_t subtree_items; // SEARCH
     /* Data layout is as follows:
      *
      * If node is not compressed we have 'size' bytes, one for each children

@@ -9,6 +9,7 @@
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "debug.h"
 #include "ft_search_parser.h"
 #include "src/commands/commands.h"
 #include "src/commands/ft_aggregate_exec.h"
@@ -21,6 +22,8 @@
 namespace valkey_search {
 namespace aggregate {
 
+CONTROLLED_BOOLEAN(ForceTimeoutAggregate, false);
+TEST_COUNTER(ForceTimeoutAggregateCancels);
 DEV_INTEGER_COUNTER(agg_stats, agg_input_records);
 DEV_INTEGER_COUNTER(agg_stats, agg_output_records);
 
@@ -109,8 +112,10 @@ absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator &itr) {
     return absl::InvalidArgumentError("Only Dialects 2, 3 and 4 are supported");
   }
 
-  limit.number = std::numeric_limits<uint64_t>::max();  // Override default of
-                                                        // 10 from search
+  // Set limit parameters based on GetSerializationRange logic
+  auto range = GetSerializationRange();
+  limit.first_index = range.start_index;
+  limit.number = range.end_index - range.start_index;
 
   VMSDK_RETURN_IF_ERROR(PostParseQueryString());
   VMSDK_RETURN_IF_ERROR(VerifyQueryString(*this));
@@ -307,7 +312,14 @@ absl::Status ExecuteAggregationStages(AggregateParameters &parameters,
                                       RecordSet &records) {
   agg_input_records.Increment(records.size());
   for (auto &stage : parameters.stages_) {
-    // Todo Check for timeout
+    // Check for timeout
+    if (parameters.cancellation_token->IsCancelled() ||
+        // Testing purpose only
+        ForceTimeoutAggregate.GetValue()) {
+      ForceTimeoutAggregateCancels.Increment(1);
+      return absl::CancelledError(
+          "Aggregate operation cancelled due to timeout");
+    }
     VMSDK_RETURN_IF_ERROR(stage->Execute(records));
   }
   agg_output_records.Increment(records.size());
@@ -376,16 +388,25 @@ absl::Status SendReplyInner(ValkeyModuleCtx *ctx,
   return absl::OkStatus();
 }
 
-// TODO: Implement the correct logic to detect if the FT.AGGREGATE query has a
-// clause (e.g. sorting) that requires all neighbors to be returned for the
-// correct search result.
+// Returns whether the entire search results are needed to be able to form the
+// aggregated response.
 bool AggregateParameters::RequiresCompleteResults() const {
+  return GetSerializationRange() == query::SerializationRange::All();
+}
+
+// Determine the serialization range required based on the stages in the
+// aggregation. This is only used in construction of the aggregate command to
+// set limit params. These params will be used later on in the SearchResult.
+query::SerializationRange AggregateParameters::GetSerializationRange() const {
   for (const auto &stage : stages_) {
-    if (dynamic_cast<const SortBy *>(stage.get()) != nullptr) {
-      return true;
+    auto stage_range = stage->GetSerializationRange();
+    // Use the first limit.
+    if (stage_range) {
+      return *stage_range;
     }
   }
-  return false;
+  // Fallback to no limit
+  return query::SerializationRange::All();
 }
 
 void AggregateParameters::SendReply(ValkeyModuleCtx *ctx,

@@ -8,11 +8,11 @@
 #include "src/indexes/text/flat_position_map.h"
 
 #include <algorithm>
-#include <map>
 #include <memory>
 #include <random>
 #include <vector>
 
+#include "absl/container/btree_map.h"
 #include "gtest/gtest.h"
 #include "src/indexes/text/posting.h"
 
@@ -21,9 +21,8 @@ namespace valkey_search::indexes::text {
 // RAII wrapper for FlatPositionMap pointer
 class FlatPositionMapPtr {
  public:
-  FlatPositionMapPtr(
-      const std::map<Position, std::unique_ptr<FieldMask>>& position_map,
-      size_t num_text_fields)
+  FlatPositionMapPtr(const absl::btree_map<Position, FieldMask>& position_map,
+                     size_t num_text_fields)
       : ptr_(FlatPositionMap::Create(position_map, num_text_fields)) {}
 
   ~FlatPositionMapPtr() { FlatPositionMap::Destroy(ptr_); }
@@ -58,18 +57,18 @@ class FlatPositionMapPtr {
 
 class FlatPositionMapTest : public ::testing::Test {
  protected:
-  std::map<Position, std::unique_ptr<FieldMask>> CreatePositionMap(
+  absl::btree_map<Position, FieldMask> CreatePositionMap(
       const std::vector<std::pair<Position, uint64_t>>& positions,
       size_t num_fields) {
-    std::map<Position, std::unique_ptr<FieldMask>> position_map;
+    absl::btree_map<Position, FieldMask> position_map;
     for (const auto& [pos, mask] : positions) {
-      auto field_mask = FieldMask::Create(num_fields);
+      FieldMask field_mask(num_fields);
       for (size_t i = 0; i < num_fields; ++i) {
         if (mask & (1ULL << i)) {
-          field_mask->SetField(i);
+          field_mask.SetField(i);
         }
       }
-      position_map[pos] = std::move(field_mask);
+      position_map[pos] = field_mask;
     }
     return position_map;
   }
@@ -98,7 +97,7 @@ class FlatPositionMapTest : public ::testing::Test {
 //=============================================================================
 
 TEST_F(FlatPositionMapTest, EmptyMap) {
-  std::map<Position, std::unique_ptr<FieldMask>> empty_map;
+  absl::btree_map<Position, FieldMask> empty_map;
   EXPECT_DEATH(FlatPositionMap::Create(empty_map, 1),
                "Cannot create FlatPositionMap from empty position_map");
 }

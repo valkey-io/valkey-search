@@ -383,6 +383,60 @@
             ]
           }
         ]
+      },
+      "vector_hybrid_100k.csv": {
+        "doc_count": 100000,
+        "fields": [
+          {
+            "name": "title",
+            "size": 50,
+            "transforms": [
+              {
+                "type": "proximity_phrase",
+                "term_count": 1,
+                "combinations": 1,
+                "repeats": 1000
+              }
+            ]
+          },
+          {
+            "name": "price",
+            "size": 10,
+            "transforms": [
+              {
+                "type": "numeric_range",
+                "min": 10,
+                "max": 1000
+              }
+            ]
+          },
+          {
+            "name": "category",
+            "size": 30,
+            "transforms": [
+              {
+                "type": "tag_list",
+                "tags": [
+                  "electronics",
+                  "books",
+                  "clothing",
+                  "food",
+                  "sports"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "embedding",
+            "size": 1,
+            "transforms": [
+              {
+                "type": "vector",
+                "dimensions": 256
+              }
+            ]
+          }
+        ]
       }
     },
     "query_generation": {
@@ -418,6 +472,11 @@
         "min_word_length": 8,
         "max_word_length": 10,
         "target_distance": 3
+      },
+      "vector_queries_100.csv": {
+        "type": "vector",
+        "doc_count": 100,
+        "dimensions": 256
       }
     },
     "test_groups": [
@@ -638,6 +697,21 @@
                 "clients": 88
               }
             ]
+          },
+          {
+            "id": "k",
+            "type": "read",
+            "cluster_execution": "parallel",
+            "description": "Pure negation - exclude term from all fields",
+            "dataset": "datasets/proximity_phrases.csv",
+            "clients": 1000,
+            "duration": 200,
+            "warmup": 60,
+            "command": "FT.SEARCH rd0 \"-__field:term2__\"",
+            "options": {
+              "": "",
+              "NOCONTENT": "_nocontent"
+            }
           }
         ]
       },
@@ -1073,7 +1147,7 @@
               "delays": {
                 "write": {
                   "delay": 5,
-                  "duration": 30
+                  "duration": 10
                 }
               }
             }
@@ -1097,7 +1171,7 @@
               "delays": {
                 "write": {
                   "delay": 5,
-                  "duration": 15
+                  "duration": 10
                 }
               }
             }
@@ -1114,14 +1188,14 @@
             "dataset": "datasets/wiki_10k_50field_1ktok.csv",
             "duration": 200,
             "keyspacelen": 10000,
-            "clients": 500,
+            "clients": 1000,
             "sequential": true,
             "command": "HSET rd0-{tag}:__rand_int__ field1 \"__field:field1__\" field2 \"__field:field2__\" field3 \"__field:field3__\" field4 \"__field:field4__\" field5 \"__field:field5__\" field6 \"__field:field6__\" field7 \"__field:field7__\" field8 \"__field:field8__\" field9 \"__field:field9__\" field10 \"__field:field10__\" field11 \"__field:field11__\" field12 \"__field:field12__\" field13 \"__field:field13__\" field14 \"__field:field14__\" field15 \"__field:field15__\" field16 \"__field:field16__\" field17 \"__field:field17__\" field18 \"__field:field18__\" field19 \"__field:field19__\" field20 \"__field:field20__\" field21 \"__field:field21__\" field22 \"__field:field22__\" field23 \"__field:field23__\" field24 \"__field:field24__\" field25 \"__field:field25__\" field26 \"__field:field26__\" field27 \"__field:field27__\" field28 \"__field:field28__\" field29 \"__field:field29__\" field30 \"__field:field30__\" field31 \"__field:field31__\" field32 \"__field:field32__\" field33 \"__field:field33__\" field34 \"__field:field34__\" field35 \"__field:field35__\" field36 \"__field:field36__\" field37 \"__field:field37__\" field38 \"__field:field38__\" field39 \"__field:field39__\" field40 \"__field:field40__\" field41 \"__field:field41__\" field42 \"__field:field42__\" field43 \"__field:field43__\" field44 \"__field:field44__\" field45 \"__field:field45__\" field46 \"__field:field46__\" field47 \"__field:field47__\" field48 \"__field:field48__\" field49 \"__field:field49__\" field50 \"__field:field50__\"",
             "profiling": {
               "delays": {
                 "write": {
                   "delay": 5,
-                  "duration": 15
+                  "duration": 10
                 }
               }
             }
@@ -1146,7 +1220,7 @@
               "delays": {
                 "write": {
                   "delay": 30,
-                  "duration": 60
+                  "duration": 10
                 }
               }
             }
@@ -1163,14 +1237,14 @@
             "dataset": "datasets/random_set_100k_20field_10tok.csv",
             "duration": 200,
             "keyspacelen": 100000,
-            "clients": 500,
+            "clients": 1000,
             "sequential": true,
             "command": "HSET rd0-{tag}:__rand_int__ field1 \"__field:field1__\" field2 \"__field:field2__\" field3 \"__field:field3__\" field4 \"__field:field4__\" field5 \"__field:field5__\" field6 \"__field:field6__\" field7 \"__field:field7__\" field8 \"__field:field8__\" field9 \"__field:field9__\" field10 \"__field:field10__\" field11 \"__field:field11__\" field12 \"__field:field12__\" field13 \"__field:field13__\" field14 \"__field:field14__\" field15 \"__field:field15__\" field16 \"__field:field16__\" field17 \"__field:field17__\" field18 \"__field:field18__\" field19 \"__field:field19__\" field20 \"__field:field20__\"",
             "profiling": {
               "delays": {
                 "write": {
                   "delay": 5,
-                  "duration": 15
+                  "duration": 10
                 }
               }
             }
@@ -1199,7 +1273,7 @@
               "delays": {
                 "write": {
                   "delay": 5,
-                  "duration": 30
+                  "duration": 10
                 }
               }
             }
@@ -1216,14 +1290,14 @@
             "dataset": "datasets/radix_uuid_10k_1ktok.csv",
             "duration": 200,
             "keyspacelen": 10000,
-            "clients": 500,
+            "clients": 1000,
             "sequential": true,
             "command": "HSET rd0-{tag}:__rand_int__ field1 \"__field:field1__\"",
             "profiling": {
               "delays": {
                 "write": {
                   "delay": 5,
-                  "duration": 15
+                  "duration": 10
                 }
               }
             }
@@ -1240,14 +1314,14 @@
             "dataset": "datasets/radix_progressive_10k_1ktok.csv",
             "duration": 200,
             "keyspacelen": 10000,
-            "clients": 500,
+            "clients": 1000,
             "sequential": true,
             "command": "HSET rd0-{tag}:__rand_int__ field1 \"__field:field1__\"",
             "profiling": {
               "delays": {
                 "write": {
                   "delay": 5,
-                  "duration": 15
+                  "duration": 10
                 }
               }
             }
@@ -1271,14 +1345,14 @@
             "xml_root_element": "doc",
             "duration": 200,
             "keyspacelen": 100000,
-            "clients": 500,
+            "clients": 1000,
             "sequential": true,
             "command": "HSET __field:keyname__ field1 \"__field:field1__\"",
             "profiling": {
               "delays": {
                 "write": {
                   "delay": 5,
-                  "duration": 15
+                  "duration": 10
                 }
               }
             }
@@ -1296,14 +1370,14 @@
             "xml_root_element": "doc",
             "duration": 200,
             "keyspacelen": 50000,
-            "clients": 500,
+            "clients": 1000,
             "sequential": true,
             "command": "HSET rd0-{tag}:__rand_int__ field1 \"__field:field1__\" field2 \"__field:field2__\" field3 \"__field:field3__\" field4 \"__field:field4__\" field5 \"__field:field5__\" field6 \"__field:field6__\" field7 \"__field:field7__\" field8 \"__field:field8__\" field9 \"__field:field9__\" field10 \"__field:field10__\"",
             "profiling": {
               "delays": {
                 "write": {
                   "delay": 5,
-                  "duration": 15
+                  "duration": 10
                 }
               }
             }
@@ -1321,14 +1395,14 @@
             "xml_root_element": "doc",
             "duration": 200,
             "keyspacelen": 50000,
-            "clients": 500,
+            "clients": 1000,
             "sequential": true,
             "command": "HSET rd0-{tag}:__rand_int__ field1 \"__field:field1__\" field2 \"__field:field2__\" field3 \"__field:field3__\" field4 \"__field:field4__\" field5 \"__field:field5__\" field6 \"__field:field6__\" field7 \"__field:field7__\" field8 \"__field:field8__\" field9 \"__field:field9__\" field10 \"__field:field10__\"",
             "profiling": {
               "delays": {
                 "write": {
                   "delay": 5,
-                  "duration": 15
+                  "duration": 10
                 }
               }
             }
@@ -1346,14 +1420,14 @@
             "xml_root_element": "doc",
             "duration": 200,
             "keyspacelen": 50000,
-            "clients": 500,
+            "clients": 1000,
             "sequential": true,
             "command": "HSET rd0-{tag}:__rand_int__ field1 \"__field:field1__\" field2 \"__field:field2__\" field3 \"__field:field3__\" field4 \"__field:field4__\" field5 \"__field:field5__\" field6 \"__field:field6__\" field7 \"__field:field7__\" field8 \"__field:field8__\" field9 \"__field:field9__\" field10 \"__field:field10__\"",
             "profiling": {
               "delays": {
                 "write": {
                   "delay": 5,
-                  "duration": 15
+                  "duration": 10
                 }
               }
             }
@@ -1371,14 +1445,14 @@
             "xml_root_element": "doc",
             "duration": 200,
             "keyspacelen": 50000,
-            "clients": 500,
+            "clients": 1000,
             "sequential": true,
             "command": "HSET rd0-{tag}:__rand_int__ field1 \"__field:field1__\" field2 \"__field:field2__\" field3 \"__field:field3__\" field4 \"__field:field4__\" field5 \"__field:field5__\" field6 \"__field:field6__\" field7 \"__field:field7__\" field8 \"__field:field8__\" field9 \"__field:field9__\" field10 \"__field:field10__\"",
             "profiling": {
               "delays": {
                 "write": {
                   "delay": 5,
-                  "duration": 15
+                  "duration": 10
                 }
               }
             }
@@ -1394,14 +1468,14 @@
             "flush_before": true,
             "dataset": "datasets/wiki_10k_1field_10ktok_stemmable.csv",
             "maxdocs": 10000,
-            "clients": 500,
+            "clients": 1000,
             "sequential": true,
             "command": "HSET rd0-{tag}:__rand_int__ field1 \"__field:field1__\"",
             "profiling": {
               "delays": {
                 "write": {
                   "delay": 5,
-                  "duration": 15
+                  "duration": 10
                 }
               }
             }
@@ -1425,10 +1499,60 @@
               "delays": {
                 "write": {
                   "delay": 60,
-                  "duration": 120
+                  "duration": 10
                 }
               }
             }
+          }
+        ]
+      },
+      {
+        "group": 15,
+        "description": "Vector + Text Hybrid (KNN with filters)",
+        "scenarios": [
+          {
+            "id": "a",
+            "type": "write",
+            "cluster_execution": "single",
+            "setup_commands": [
+              "FT.CREATE rd0 ON HASH PREFIX 1 rd0- SCHEMA title TEXT price NUMERIC category TAG SEPARATOR | embedding VECTOR FLAT 6 DIM 256 DISTANCE_METRIC L2 TYPE FLOAT32"
+            ],
+            "flush_before": true,
+            "dataset": "datasets/vector_hybrid_100k.npy",
+            "maxdocs": 100000,
+            "clients": 1000,
+            "sequential": true,
+            "command": "HSET rd0-{tag}:__rand_int__ title \"__field:title__\" price \"__field:price__\" category \"__field:category__\" embedding \"__field:embedding__\""
+          },
+          {
+            "id": "b",
+            "type": "read",
+            "cluster_execution": "parallel",
+            "description": "Hybrid: Text filter + KNN",
+            "dataset": "datasets/vector_queries_100.npy",
+            "clients": 1000,
+            "duration": 200,
+            "options": {
+              "": "",
+              "NOCONTENT": "_nocontent"
+            },
+            "warmup": 60,
+            "command": "FT.SEARCH rd0 \"(@title:__field:search_term__)=>[KNN 10 @embedding $vec AS score]\" PARAMS 2 vec \"__field:query_vector__\" RETURN 2 title score DIALECT 2"
+          },
+          {
+            "id": "c",
+            "type": "read",
+            "cluster_execution": "parallel",
+            "description": "Hybrid: Numeric filter + KNN",
+            "dataset": "datasets/vector_queries_100.npy",
+            "clients": 1000,
+            "duration": 200,
+            "options": {
+              "": "",
+              "NOCONTENT": "_nocontent"
+            },
+            "warmup": 60,
+            "command": "FT.SEARCH rd0 \"(@price:[100 500])=>[KNN 10 @embedding $vec AS score]\" PARAMS 2 vec \"__field:query_vector__\" RETURN 2 price score DIALECT 2"
           }
         ]
       }

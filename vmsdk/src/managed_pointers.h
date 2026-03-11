@@ -19,7 +19,7 @@ namespace vmsdk {
 
 struct ValkeyStringDeleter {
   void operator()(ValkeyModuleString *str) {
-    vmsdk::RunByMain([str]() { ValkeyModule_FreeString(nullptr, str); });
+    ValkeyModule_FreeString(nullptr, str);
   }
 };
 

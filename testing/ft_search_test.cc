@@ -695,21 +695,6 @@ TEST_P(FTSearchTest, FTSearchTests) {
     }
   }
 
-  // Wait for all worker threads to finish, then drain all pending RunByMain
-  // callbacks (e.g., ValkeyStringDeleter string frees from ~SearchParameters).
-  // WaitWorkerTasksAreCompleted is necessary to prevent stack-use-after-return:
-  // without it, workers from the last iteration may still post to
-  // pending_oneshot_callbacks after TestBody's stack frame is destroyed.
-  if (use_thread_pool) {
-    WaitWorkerTasksAreCompleted(
-        *ValkeySearch::Instance().GetReaderThreadPool());
-    std::lock_guard<std::mutex> lock(cb_mutex);
-    for (auto &[fn, data] : pending_oneshot_callbacks) {
-      fn(data);
-    }
-    pending_oneshot_callbacks.clear();
-  }
-
   // Verify that metrics were incremented correctly
   EXPECT_EQ(stats.time_slice_queries, initial_queries + vectors.size());
   EXPECT_GT(mrmw_stats.read_periods, initial_read_periods);

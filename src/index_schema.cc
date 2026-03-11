@@ -1469,12 +1469,11 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
         current_queue_size = GetMutatedRecordsSize();
         
         // Log periodically to show progress
-        if (backpressure_wait_count % 1000 == 0) {
-          VMSDK_LOG(NOTICE, ctx)
-              << "RDB restore backpressure: waiting for mutation queue to drain. "
-              << "Queue size: " << current_queue_size
-              << ", Progress: " << i << "/" << key_count << " keys loaded";
-        }
+        VMSDK_LOG_EVERY_N_SEC(NOTICE, ctx, 2)
+            << "RDB restore backpressure: waiting for mutation queue to drain. "
+            << "Queue size: " << current_queue_size
+            << ", Progress: " << i << "/" << key_count << " keys loaded";
+        
       }
     }
     

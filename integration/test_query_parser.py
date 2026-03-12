@@ -218,3 +218,83 @@ class TestQueryParser(ValkeySearchTestCaseBase):
         # OR operator
         result = client.execute_command("FT.SEARCH", "idx1", 'con*+ | word1!!')
         assert result[0] == 2
+
+    def test_tag_min_prefix_length_config(self):
+        """
+        Test that search.tag-min-prefix-length dynamically controls TAG wildcard
+        prefix validation (prefix length excludes the trailing '*').
+        """
+        client: Valkey = self.server.get_new_client()
+        config_name = "search.tag-min-prefix-length"
+        original = client.execute_command(f"CONFIG GET {config_name}")
+        assert original == [b"search.tag-min-prefix-length", b"2"]
+        original_value = int(original[1])
+
+        try:
+            # Ensure deterministic baseline for this test.
+            assert client.execute_command(f"CONFIG SET {config_name} 2") == b"OK"
+            assert client.execute_command(
+                "FT.CREATE", "tag_prefix_cfg_idx",
+                "ON", "HASH",
+                "PREFIX", "1", "tagcfg:",
+                "SCHEMA", "color", "TAG"
+            ) == b"OK"
+            assert client.execute_command("HSET", "tagcfg:1", "color", "blue") == 1
+            assert client.execute_command("HSET", "tagcfg:2", "color", "black") == 1
+            assert client.execute_command("HSET", "tagcfg:3", "color", "green") == 1
+
+            # Default min-prefix-length=2:
+            # "bl*" (2 chars before '*') works, "b*" is rejected.
+            result = client.execute_command(
+                "FT.SEARCH", "tag_prefix_cfg_idx", "@color:{bl*}", "NOCONTENT"
+            )
+            assert result[0] == 2
+            with pytest.raises(ResponseError, match="too short for prefix wildcard"):
+                client.execute_command(
+                    "FT.SEARCH", "tag_prefix_cfg_idx", "@color:{b*}", "NOCONTENT"
+                )
+
+            # Lowering to 1 allows "b*".
+            assert client.execute_command(f"CONFIG SET {config_name} 1") == b"OK"
+            result = client.execute_command(
+                "FT.SEARCH", "tag_prefix_cfg_idx", "@color:{b*}", "NOCONTENT"
+            )
+            assert result[0] == 2
+
+            # Even at 1, "*" is still too short (0 chars before '*').
+            with pytest.raises(ResponseError, match="too short for prefix wildcard"):
+                client.execute_command(
+                    "FT.SEARCH", "tag_prefix_cfg_idx", "@color:{*}", "NOCONTENT"
+                )
+
+            # Lowering to 0 allows wildcard-only query ("*" has 0 chars before
+            # trailing '*').
+            assert client.execute_command(f"CONFIG SET {config_name} 0") == b"OK"
+            result = client.execute_command(
+                "FT.SEARCH", "tag_prefix_cfg_idx", "@color:{*}", "NOCONTENT"
+            )
+            assert result[0] == 3
+
+            # Raising to 3 makes "bl*" invalid; "blu*" remains valid.
+            assert client.execute_command(f"CONFIG SET {config_name} 3") == b"OK"
+            with pytest.raises(ResponseError, match="too short for prefix wildcard"):
+                client.execute_command(
+                    "FT.SEARCH", "tag_prefix_cfg_idx", "@color:{bl*}", "NOCONTENT"
+                )
+            result = client.execute_command(
+                "FT.SEARCH", "tag_prefix_cfg_idx", "@color:{blu*}", "NOCONTENT"
+            )
+            assert result[0] == 1
+            assert result[1] == b"tagcfg:1"
+
+            # Lower bound validation: negative value is invalid.
+            with pytest.raises(
+                ResponseError,
+                match="argument must be between 0 and 4294967295 inclusive",
+            ):
+                client.execute_command(f"CONFIG SET {config_name} -1")
+        finally:
+            assert (
+                client.execute_command(f"CONFIG SET {config_name} {original_value}")
+                == b"OK"
+            )

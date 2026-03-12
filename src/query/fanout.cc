@@ -181,19 +181,14 @@ struct SearchPartitionResultsTracker {
     if (consistency_failed) {
       // Consistency failures always take precedence
       status = absl::FailedPreconditionError(kFailedPreconditionMsg);
-    } else if (!parameters->enable_partial_results && has_node_error.load()) {
-      // When partial results are disabled, use the first error we encountered
-      status = first_node_error;
-    } else if (parameters->enable_partial_results && has_node_error.load() &&
-               !has_successful_node.load()) {
-      // When partial results are enabled but all nodes failed (no successful
-      // responses)
+    } else if (has_node_error.load() && (!parameters->enable_partial_results ||
+                                         !has_successful_node.load())) {
+      // Use first error when:
+      // - Partial results disabled (any error fails the operation), OR
+      // - Partial results enabled but no nodes succeeded (all failed)
       status = first_node_error;
     } else {
       // No errors detected - success case
-      status = absl::OkStatus();
-    }
-    if (status.ok()) {
       std::vector<indexes::Neighbor> neighbors;
       neighbors.resize(results.size());
       size_t i = neighbors.size();
@@ -214,7 +209,6 @@ struct SearchPartitionResultsTracker {
           accumulated_total_count, std::move(neighbors), *parameters, true);
       status = absl::OkStatus();
     }
-
     parameters->search_result.status = status;
     // The destructor runs on whichever thread drops the last shared_ptr
     // reference. If remote shards complete first and the local shard (which

@@ -85,10 +85,7 @@ struct SearchPartitionResultsTracker {
       results ABSL_GUARDED_BY(mutex);
   int outstanding_requests ABSL_GUARDED_BY(mutex);
   std::unique_ptr<SearchParameters> parameters ABSL_GUARDED_BY(mutex);
-
   // Error tracking
-  std::atomic_bool has_any_results{
-      false};  // Whether we got any results from any node
   std::atomic_bool consistency_failed{false};
   std::atomic<size_t> accumulated_total_count{0};
   std::atomic_bool has_node_error{false};  // Whether any node failed
@@ -111,12 +108,10 @@ struct SearchPartitionResultsTracker {
           first_node_error = ToAbslStatus(status);
         }
       }
-
       if (parameters->enable_consistency &&
           status.error_code() == grpc::FAILED_PRECONDITION) {
         consistency_failed.store(true);
       }
-
       // Cancel for consistency failures or when partial results are disabled
       bool should_cancel =
           consistency_failed.load() || !parameters->enable_partial_results;
@@ -135,10 +130,7 @@ struct SearchPartitionResultsTracker {
           << "Error during handling of FT.SEARCH on node " << address;
       return;
     }
-
-    // Success case - node successfully responded (even with 0 results)
-    has_any_results.store(true);
-
+    // Success case
     absl::MutexLock lock(&mutex);
     accumulated_total_count.fetch_add(response.total_count(),
                                       std::memory_order_relaxed);
@@ -192,7 +184,6 @@ struct SearchPartitionResultsTracker {
   ~SearchPartitionResultsTracker() {
     absl::MutexLock lock(&mutex);
     absl::Status status;
-
     if (consistency_failed) {
       // Consistency failures always take precedence
       status = absl::FailedPreconditionError(kFailedPreconditionMsg);
@@ -210,7 +201,6 @@ struct SearchPartitionResultsTracker {
       // No errors detected - success case
       status = absl::OkStatus();
     }
-
     if (status.ok()) {
       std::vector<indexes::Neighbor> neighbors;
       neighbors.resize(results.size());
@@ -222,11 +212,21 @@ struct SearchPartitionResultsTracker {
         results.pop();
       }
       CHECK(i == 0);
+      // Note: We do not sort neighbors here because we do not have the content
+      // of the local shard yet. In the SendReply function, we will sort the all
+      // neighbors based on the content if sorting is required.
+      // SearchResult construction automatically applies trimming based on LIMIT
+      // offset count IF the command allows it (ie - it does not require
+      // complete results).
       parameters->search_result = SearchResult(
           accumulated_total_count, std::move(neighbors), *parameters, true);
     }
 
     parameters->search_result.status = status;
+    // The destructor runs on whichever thread drops the last shared_ptr
+    // reference. If remote shards complete first and the local shard (which
+    // completes on the main thread via content resolution) drops the last
+    // reference, we'll be on the main thread here.
     if (vmsdk::IsMainThread()) {
       parameters->QueryCompleteMainThread(std::move(parameters));
     } else {
@@ -255,12 +255,11 @@ class LocalResponderSearch : public query::SearchParameters {
 
  private:
   void QueryCompleteImpl(std::unique_ptr<SearchParameters> self) {
-    if (search_result.status.ok()) {
-      // Local node successfully responded (even with 0 results)
-      tracker->has_any_results.store(true);
+    if (search_result.status.ok() || enable_partial_results) {
       tracker->AddResults(search_result.neighbors);
       tracker->AddTotalCount(search_result.total_count);
-    } else {
+    }
+    if (!search_result.status.ok()) {
       // Store first error for partial results disabled case
       {
         absl::MutexLock lock(&tracker->mutex);
@@ -269,20 +268,9 @@ class LocalResponderSearch : public query::SearchParameters {
           tracker->first_node_error = search_result.status;
         }
       }
-
-      // Only add results if partial results are enabled
-      if (enable_partial_results) {
-        // Even partial results count as a successful response
-        tracker->has_any_results.store(true);
-        tracker->AddResults(search_result.neighbors);
-        tracker->AddTotalCount(search_result.total_count);
-      }
-
-      VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
-          << "Error during local handling of FT.SEARCH: "
-          << search_result.status.message();
+      VMSDK_LOG_EVERY_N_SEC(DEBUG, nullptr, 1)
+          << "Error during local handling of the search operation";
     }
-
     // Stash `self` (the LocalResponderSearch) in the tracker so that its
     // SearchParameters fields outlive the Neighbor entries moved into
     // `results` above. Those entries' RecordsMaps contain string_view keys

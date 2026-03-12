@@ -10,6 +10,7 @@
 #include "absl/container/inlined_vector.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "absl/synchronization/mutex.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/text/fuzzy.h"
 #include "src/indexes/text/term.h"
@@ -166,19 +167,22 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
   absl::string_view text_string = GetTextString();
-  // Search for the original word - may or may not exist in corpus
-  bool found_original =
-      TryAddWordKeyIterator(text_index.get(), text_string, key_iterators);
-  // Get stem variants if not exact term search
+  bool found_original;
   uint64_t stem_field_mask =
       field_mask & GetTextIndexSchema()->GetStemTextFieldMask();
+
+  // Search for the original word - may or may not exist in corpus
+  found_original =
+      TryAddWordKeyIterator(text_index.get(), text_string, key_iterators);
+
+  // Get stem variants if not exact term search
   if (!IsExact() && stem_field_mask != 0) {
     // Collect stem variant words (words that also stem to the same form)
     absl::InlinedVector<absl::string_view,
                         indexes::text::kStemVariantsInlineCapacity>
         stem_variants;
     std::string stemmed = GetTextIndexSchema()->GetAllStemVariants(
-        text_string, stem_variants, stem_field_mask, false);
+        text_string, stem_variants, stem_field_mask, true);
     // Search for the stemmed word itself - may or may not exist in corpus
     if (stemmed != text_string) {
       TryAddWordKeyIterator(text_index.get(), stemmed, key_iterators);
@@ -190,6 +194,7 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
       CHECK(found) << "Word in stem tree not found in index - ingestion issue";
     }
   }
+
   // TermIterator will use query_field_mask when has_original is true,
   // and stem_field_mask for stem variants (has_original becomes false after
   // first pass)
@@ -263,19 +268,29 @@ std::unique_ptr<indexes::text::TextIterator> FuzzyPredicate::BuildTextIterator(
  * Size estimation is only done at the schema-level right now. It does not
  * account for a field specifier in the text query and may over-estimate
  * because of it if there are multiple text fields in the schema.
+ *
+ * When a query has a vector component, we perform a more sophisticated size
+ * estimation with a tree traversal to help make the correct in-line vs
+ * pre-filter query planning decision. Otherwise we simply grab a rough upper
+ * bound using the total number of tracked keys since the estimation will only
+ * be used to reserve space in a collection.
  */
 
-size_t TermPredicate::EstimateSize() const {
-  auto iter =
-      text_index_schema_->GetTextIndex()->GetPrefix().GetWordIterator(term_);
-  if (!iter.Done() && iter.GetWord() == term_) {
-    return iter.GetPostingsTarget()->GetKeyCount();
+size_t TermPredicate::EstimateSize(bool is_vec_query) const {
+  if (is_vec_query) {
+    auto iter =
+        text_index_schema_->GetTextIndex()->GetPrefix().GetWordIterator(term_);
+    if (!iter.Done() && iter.GetWord() == term_) {
+      return iter.GetPostingsTarget()->GetKeyCount();
+    }
+    return 0;
+  } else {
+    return text_index_schema_->GetTrackedKeyCount();
   }
-  return 0;
 }
 
-size_t PrefixPredicate::EstimateSize() const {
-  if (text_index_schema_->TrackSubtreeItemsCountEnabled()) {
+size_t PrefixPredicate::EstimateSize(bool is_vec_query) const {
+  if (is_vec_query) {
     return text_index_schema_->GetTextIndex()->GetPrefix().GetSubtreeItemCount(
         term_);
   } else {
@@ -283,8 +298,8 @@ size_t PrefixPredicate::EstimateSize() const {
   }
 }
 
-size_t SuffixPredicate::EstimateSize() const {
-  if (text_index_schema_->TrackSubtreeItemsCountEnabled()) {
+size_t SuffixPredicate::EstimateSize(bool is_vec_query) const {
+  if (is_vec_query) {
     auto suffix_tree = text_index_schema_->GetTextIndex()->GetSuffix();
     CHECK(suffix_tree) << "Suffix estimation not supported";
     return suffix_tree.value().get().GetSubtreeItemCount(term_);
@@ -293,13 +308,13 @@ size_t SuffixPredicate::EstimateSize() const {
   }
 }
 
-size_t InfixPredicate::EstimateSize() const {
+size_t InfixPredicate::EstimateSize(bool is_vec_query) const {
   // TODO: Implement once infix is supported
   // Right now we return the upper bound
   return text_index_schema_->GetTrackedKeyCount();
 }
 
-size_t FuzzyPredicate::EstimateSize() const {
+size_t FuzzyPredicate::EstimateSize(bool is_vec_query) const {
   // TODO: Implement proper heuristic
   // Right now we return the upper bound
   return text_index_schema_->GetTrackedKeyCount();

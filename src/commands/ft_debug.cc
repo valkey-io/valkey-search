@@ -7,12 +7,17 @@
 
 #include <absl/base/no_destructor.h>
 #include <absl/strings/ascii.h>
+#include <absl/strings/str_format.h>
+#include <absl/strings/str_join.h>
 
 #include "module_config.h"
 #include "src/coordinator/metadata_manager.h"
 #include "src/index_schema.h"
+#include "src/indexes/vector_flat.h"
+#include "src/indexes/vector_hnsw.h"
 #include "src/schema_manager.h"
 #include "src/utils/string_interning.h"
+#include "src/valkey_search.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/info.h"
@@ -261,6 +266,25 @@ std::ostream &operator<<(std::ostream &os,
             << " Utilization: " << int(100.0 * utilization) << '%';
 }
 
+//
+// FT._DEBUG INDEX_INFO
+//
+absl::Status IndexInfoCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
+  VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
+  // Get index information from SchemaManager
+  auto indexes = SchemaManager::Instance().GetIndexDebugInfo();
+  // Use shared formatting function (no sorting, no limit)
+  auto formatted = FormatIndexDebugInfo(indexes, false, 0);
+
+  // Reply with array of strings, one per index
+  ValkeyModule_ReplyWithArray(ctx, formatted.size());
+  for (const auto &output : formatted) {
+    ValkeyModule_ReplyWithSimpleString(ctx, output.c_str());
+  }
+
+  return absl::OkStatus();
+}
+
 absl::Status StringPoolStats(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
   VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
   auto stats = StringInternStore::Instance().GetStats();
@@ -327,9 +351,11 @@ absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
        "control pause points"},
       {"FT._DEBUG TEXTINFO <index> ...", "show info about schema-level text"},
       {"FT._DEBUG STRINGPOOLSTATS", "Show InternStringPool Stats"},
+      {"FT._DEBUG INDEX_INFO",
+       "Show redacted overview of index information for all indexes"},
       {"FT_DEBUG SHOW_METADATA",
        "list internal metadata manager table namespace"},
-      {"FT_DEBUG SHOW_INDEXSCHEMAS", "list internal index schema tables"},
+      {"FT._DEBUG SHOW_INDEXSCHEMAS", "list internal index schema tables"},
       {"FT._DEBUG LIST_METRICS [APP|DEV] [NAMES_ONLY]",
        "List all APP or DEV metrics with optional names-only format"},
       {"FT._DEBUG LIST_CONFIGS [VERBOSE] [APP|DEV|HIDDEN]",
@@ -378,6 +404,8 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     return ControlledCmd(ctx, itr);
   } else if (keyword == "STRINGPOOLSTATS") {
     return StringPoolStats(ctx, itr);
+  } else if (keyword == "INDEX_INFO") {
+    return IndexInfoCmd(ctx, itr);
   } else if (keyword == "TEXTINFO") {
     return IndexSchema::TextInfoCmd(ctx, itr);
   } else if (keyword == "SHOW_METADATA") {
@@ -392,8 +420,8 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   } else if (keyword == "LIST_CONFIGS") {
     return ListConfigsCmd(ctx, itr);
   } else {
-    return absl::InvalidArgumentError(absl::StrCat(
-        "Unknown subcommand: ", *itr.GetStringView(), " try HELP subcommand"));
+    return absl::InvalidArgumentError(
+        absl::StrCat("Unknown subcommand: ", keyword, ", try HELP subcommand"));
   }
 }
 

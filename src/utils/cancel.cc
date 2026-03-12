@@ -7,6 +7,7 @@
 
 #include "src/utils/cancel.h"
 
+#include "absl/status/status.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
@@ -33,7 +34,21 @@ struct TokenImpl : public Base {
       : deadline_ms_(deadline_ms), context_(context) {}
 
   void Cancel() override {
-    is_cancelled_ = true;  // Once cancelled, stay cancelled
+    if (!is_cancelled_) {
+      is_cancelled_ = true;
+      cancellation_reason_ = absl::CancelledError("Operation was manually cancelled");
+    }
+  }
+
+  void Cancel(const absl::Status& reason) override {
+    if (!is_cancelled_) {
+      is_cancelled_ = true;
+      cancellation_reason_ = reason;
+    }
+  }
+
+  std::optional<absl::Status> GetCancellationReason() override {
+    return cancellation_reason_;
   }
 
   bool IsCancelled() override {
@@ -41,16 +56,19 @@ struct TokenImpl : public Base {
       count_ = 0;
       if (!is_cancelled_) {
         if (ValkeyModule_Milliseconds() >= deadline_ms_) {
-          is_cancelled_ = true;  // Operation should be cancelled
+          is_cancelled_ = true;
+          cancellation_reason_ = absl::DeadlineExceededError("Search operation timed out");
           Timeouts.Increment(1);
           VMSDK_LOG(DEBUG, nullptr)
               << "CANCEL: Timeout reached, cancelling operation";
         } else if (context_ && context_->IsCancelled()) {
-          is_cancelled_ = true;  // Operation should be cancelled
+          is_cancelled_ = true;
+          cancellation_reason_ = absl::CancelledError("gRPC request was cancelled by client");
           gRPCCancels.Increment(1);
           VMSDK_LOG(DEBUG, nullptr) << "CANCEL: gRPC context cancelled";
         } else if (ForceTimeout.GetValue()) {
-          is_cancelled_ = true;  // Operation should be cancelled
+          is_cancelled_ = true;
+          cancellation_reason_ = absl::DeadlineExceededError("Search operation forced timeout (test mode)");
           ForceCancels.Increment(1);
           VMSDK_LOG(WARNING, nullptr) << "CANCEL: Timeout forced";
         } else if (!vmsdk::IsMainThread()) {
@@ -62,6 +80,7 @@ struct TokenImpl : public Base {
   }
 
   bool is_cancelled_{false};  // Once cancelled, stay cancelled
+  std::optional<absl::Status> cancellation_reason_;  // Reason for cancellation
 
   long long deadline_ms_;
   grpc::CallbackServerContext *context_;

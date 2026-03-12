@@ -85,7 +85,11 @@ struct SearchPartitionResultsTracker {
       results ABSL_GUARDED_BY(mutex);
   int outstanding_requests ABSL_GUARDED_BY(mutex);
   std::unique_ptr<SearchParameters> parameters ABSL_GUARDED_BY(mutex);
-  std::atomic_bool reached_oom{false};
+
+  // Enhanced OOM tracking
+  std::atomic<int> nodes_with_oom{0};  // Count of nodes that hit OOM
+  std::atomic_bool has_any_results{
+      false};  // Whether we got any results from any node
   std::atomic_bool consistency_failed{false};
   std::atomic<size_t> accumulated_total_count{0};
 
@@ -97,28 +101,34 @@ struct SearchPartitionResultsTracker {
   void HandleResponse(coordinator::SearchIndexPartitionResponse &response,
                       const std::string &address, const grpc::Status &status) {
     if (!status.ok()) {
+      if (status.error_code() == grpc::RESOURCE_EXHAUSTED) {
+        nodes_with_oom.fetch_add(1);
+      }
+      
       if (parameters->enable_consistency &&
           status.error_code() == grpc::FAILED_PRECONDITION) {
         consistency_failed.store(true);
       }
-      bool should_cancel = status.error_code() == grpc::RESOURCE_EXHAUSTED ||
-                           !parameters->enable_partial_results ||
-                           consistency_failed.load();
-      if (status.error_code() == grpc::RESOURCE_EXHAUSTED) {
-        reached_oom.store(true);
-      }
+      
+      // Cancel for consistency failures or when partial results are disabled (except for OOM)
+      bool should_cancel = consistency_failed.load() || 
+                          (!parameters->enable_partial_results && 
+                           status.error_code() != grpc::RESOURCE_EXHAUSTED);
       if (should_cancel) {
-        parameters->cancellation_token->Cancel();
+        // Use appropriate cancellation reason based on the gRPC error
+        if (status.error_code() == grpc::DEADLINE_EXCEEDED) {
+          parameters->cancellation_token->Cancel(absl::DeadlineExceededError("Request timeout"));
+        } else {
+          parameters->cancellation_token->Cancel(absl::CancelledError("Node failure during fanout"));
+        }
       }
-      if (status.error_code() != grpc::DEADLINE_EXCEEDED ||
-          status.error_code() != grpc::RESOURCE_EXHAUSTED ||
-          status.error_code() != grpc::FAILED_PRECONDITION) {
-        VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
-            << "Error during handling of FT.SEARCH on node " << address << ": "
-            << status.error_message();
-      }
+      VMSDK_LOG_EVERY_N_SEC(DEBUG, nullptr, 1)
+          << "Error during handling of FT.SEARCH on node " << address;
       return;
     }
+    
+    // Success case - node successfully responded (even with 0 results)
+    has_any_results.store(true);
 
     absl::MutexLock lock(&mutex);
     accumulated_total_count.fetch_add(response.total_count(),
@@ -173,10 +183,18 @@ struct SearchPartitionResultsTracker {
   ~SearchPartitionResultsTracker() {
     absl::MutexLock lock(&mutex);
     absl::Status status;
+
     if (consistency_failed) {
       status = absl::FailedPreconditionError(kFailedPreconditionMsg);
-    } else if (reached_oom) {
+    } else if (ShouldReturnOOM()) {
       status = absl::ResourceExhaustedError(kOOMMsg);
+    } else if (parameters->cancellation_token &&
+               parameters->cancellation_token->IsCancelled()) {
+      // Only check cancellation if no other critical errors occurred
+      auto cancellation_reason =
+          parameters->cancellation_token->GetCancellationReason();
+      status = cancellation_reason.value_or(
+          absl::CancelledError("Operation was cancelled"));
     } else {
       std::vector<indexes::Neighbor> neighbors;
       neighbors.resize(results.size());
@@ -198,6 +216,7 @@ struct SearchPartitionResultsTracker {
           accumulated_total_count, std::move(neighbors), *parameters, true);
       status = absl::OkStatus();
     }
+
     parameters->search_result.status = status;
     // The destructor runs on whichever thread drops the last shared_ptr
     // reference. If remote shards complete first and the local shard (which
@@ -208,6 +227,27 @@ struct SearchPartitionResultsTracker {
     } else {
       parameters->QueryCompleteBackground(std::move(parameters));
     }
+  }
+
+ private:
+  bool ShouldReturnOOM() {
+    int oom_nodes = nodes_with_oom.load();
+    bool got_results = has_any_results.load();
+
+    // If partial results are disabled, return OOM if any node hit OOM
+    if (!parameters->enable_partial_results && oom_nodes > 0) {
+      return true;
+    }
+
+    // If partial results are enabled, only return OOM if:
+    // No results from any node AND at least one hit OOM
+    if (parameters->enable_partial_results) {
+      if (!got_results && oom_nodes > 0) {
+        return true;
+      }
+    }
+
+    return false;
   }
 };
 
@@ -231,17 +271,29 @@ class LocalResponderSearch : public query::SearchParameters {
 
  private:
   void QueryCompleteImpl(std::unique_ptr<SearchParameters> self) {
-    if (absl::IsResourceExhausted(search_result.status)) {
-      tracker->reached_oom.store(true);
-    }
-    if (search_result.status.ok() || enable_partial_results) {
+    if (search_result.status.ok()) {
+      // Local node successfully responded (even with 0 results)
+      tracker->has_any_results.store(true);
       tracker->AddResults(search_result.neighbors);
       tracker->AddTotalCount(search_result.total_count);
     } else {
+      if (absl::IsResourceExhausted(search_result.status)) {
+        tracker->nodes_with_oom.fetch_add(1);
+      }
+
+      // Only add results if partial results are enabled
+      if (enable_partial_results) {
+        // Even partial results count as a successful response
+        tracker->has_any_results.store(true);
+        tracker->AddResults(search_result.neighbors);
+        tracker->AddTotalCount(search_result.total_count);
+      }
+
       VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
           << "Error during local handling of FT.SEARCH: "
           << search_result.status.message();
     }
+
     // Stash `self` (the LocalResponderSearch) in the tracker so that its
     // SearchParameters fields outlive the Neighbor entries moved into
     // `results` above. Those entries' RecordsMaps contain string_view keys

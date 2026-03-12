@@ -45,19 +45,28 @@ int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
       ValkeyModule_GetBlockedClientPrivateData(ctx));
   CHECK(parameters != nullptr);
 
-  // Check if operation was cancelled and partial results are disabled
-  if (!parameters->enable_partial_results &&
-      parameters->cancellation_token->IsCancelled()) {
-    ++Metrics::GetStats().query_failed_requests_cnt;
-    return ValkeyModule_ReplyWithError(
-        ctx, "Search operation cancelled due to timeout");
-  }
-
+  // Check if operation failed first to get the actual error message
   if (!parameters->search_result.status.ok()) {
+    VMSDK_LOG(WARNING, ctx) << "Search failed with status: "
+                            << parameters->search_result.status.message();
     ++Metrics::GetStats().query_failed_requests_cnt;
     return ValkeyModule_ReplyWithError(
         ctx, parameters->search_result.status.message().data());
   }
+
+  // // Check if operation was cancelled and partial results are disabled
+  // if (!parameters->enable_partial_results &&
+  //     parameters->cancellation_token->IsCancelled()) {
+  //   VMSDK_LOG(WARNING, ctx) << "Search cancelled but status is OK -
+  //   cancellation_token: "
+  //                          << (parameters->cancellation_token->IsCancelled()
+  //                          ? "true" : "false")
+  //                          << ", enable_partial_results: " <<
+  //                          parameters->enable_partial_results;
+  //   ++Metrics::GetStats().query_failed_requests_cnt;
+  //   return ValkeyModule_ReplyWithError(
+  //       ctx, "Search operation cancelled due to timeout");
+  // }
   parameters->SendReply(ctx, parameters->search_result);
   return VALKEYMODULE_OK;
 }
@@ -145,13 +154,29 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
                            inside_multi_exec)) {
       VMSDK_RETURN_IF_ERROR(
           query::Search(*parameters, query::SearchMode::kLocal));
-      if (!parameters->enable_partial_results &&
-          parameters->cancellation_token->IsCancelled()) {
+      // Check if operation failed first to get the actual error message
+      if (!parameters->search_result.status.ok()) {
+        VMSDK_LOG(WARNING, ctx) << "Sync search failed with status: "
+                                << parameters->search_result.status.message();
         ValkeyModule_ReplyWithError(
-            ctx, "Search operation cancelled due to timeout");
+            ctx, parameters->search_result.status.message().data());
         ++Metrics::GetStats().query_failed_requests_cnt;
         return absl::OkStatus();
       }
+      // if (!parameters->enable_partial_results &&
+      //     parameters->cancellation_token->IsCancelled()) {
+      //   VMSDK_LOG(WARNING, ctx) << "Sync search cancelled but status is OK -
+      //   cancellation_token: "
+      //                          <<
+      //                          (parameters->cancellation_token->IsCancelled()
+      //                          ? "true" : "false")
+      //                          << ", enable_partial_results: " <<
+      //                          parameters->enable_partial_results;
+      //   ValkeyModule_ReplyWithError(
+      //       ctx, "Search operation cancelled due to timeout");
+      //   ++Metrics::GetStats().query_failed_requests_cnt;
+      //   return absl::OkStatus();
+      // }
       parameters->SendReply(ctx, parameters->search_result);
       ValkeySearch::Instance().ScheduleSearchResultCleanup(
           [neighbors =

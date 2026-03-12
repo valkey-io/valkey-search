@@ -9,9 +9,7 @@
 #define VALKEYSEARCH_SRC_UTILS_CANCEL_H_
 
 #include <memory>
-#include <optional>
 
-#include "absl/status/status.h"
 #include "grpcpp/server_context.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -32,8 +30,6 @@ struct Base {
   virtual ~Base() = default;
   virtual bool IsCancelled() = 0;
   virtual void Cancel() = 0;
-  virtual void Cancel(const absl::Status& reason) = 0;
-  virtual std::optional<absl::Status> GetCancellationReason() = 0;
 };
 
 using Token = std::shared_ptr<Base>;

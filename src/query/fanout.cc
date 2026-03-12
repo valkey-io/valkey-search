@@ -88,8 +88,8 @@ struct SearchPartitionResultsTracker {
   // Error tracking
   std::atomic_bool consistency_failed{false};
   std::atomic<size_t> accumulated_total_count{0};
-  std::atomic_bool has_node_error{false};  // Whether any node failed
   std::atomic_bool has_successful_node{false};  // Whether any node succeeded
+  std::atomic_bool has_node_error{false};       // Whether any node failed
   absl::Status first_node_error
       ABSL_GUARDED_BY(mutex);  // First error encountered
 
@@ -118,14 +118,6 @@ struct SearchPartitionResultsTracker {
           consistency_failed.load() || !parameters->enable_partial_results;
       if (should_cancel) {
         parameters->cancellation_token->Cancel();
-        // // Use appropriate cancellation reason based on the gRPC error
-        // if (status.error_code() == grpc::DEADLINE_EXCEEDED) {
-        //   parameters->cancellation_token->Cancel(absl::DeadlineExceededError("Request
-        //   timeout"));
-        // } else {
-        //   parameters->cancellation_token->Cancel(absl::CancelledError("Node
-        //   failure during fanout"));
-        // }
       }
       VMSDK_LOG_EVERY_N_SEC(DEBUG, nullptr, 1)
           << "Error during handling of FT.SEARCH on node " << address;
@@ -192,20 +184,12 @@ struct SearchPartitionResultsTracker {
     } else if (!parameters->enable_partial_results && has_node_error.load()) {
       // When partial results are disabled, use the first error we encountered
       status = first_node_error;
-    } else if (parameters->enable_partial_results && has_node_error.load() && !has_successful_node.load()) {
-      // When partial results are enabled but all nodes failed (no successful responses)
+    } else if (parameters->enable_partial_results && has_node_error.load() &&
+               !has_successful_node.load()) {
+      // When partial results are enabled but all nodes failed (no successful
+      // responses)
       status = first_node_error;
-    }
-    // THink about deleting the commented code below if not needed.
-    // else if (parameters->cancellation_token &&
-    //            parameters->cancellation_token->IsCancelled()) {
-    //   // Check for timeout cancellation
-    //   auto cancellation_reason =
-    //       parameters->cancellation_token->GetCancellationReason();
-    //   status = cancellation_reason.value_or(
-    //       absl::CancelledError("Operation was cancelled"));
-    // }
-    else {
+    } else {
       // No errors detected - success case
       status = absl::OkStatus();
     }
@@ -225,8 +209,9 @@ struct SearchPartitionResultsTracker {
     } else {
       // Create empty SearchResult for error cases
       std::vector<indexes::Neighbor> empty_neighbors;
-      parameters->search_result = SearchResult(
-          accumulated_total_count, std::move(empty_neighbors), *parameters, true);
+      parameters->search_result =
+          SearchResult(accumulated_total_count, std::move(empty_neighbors),
+                       *parameters, true);
     }
 
     parameters->search_result.status = status;

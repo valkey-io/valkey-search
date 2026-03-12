@@ -106,11 +106,9 @@ struct SearchPartitionResultsTracker {
       if (should_cancel) {
         parameters->cancellation_token->Cancel();
       }
-      if (status.error_code() != grpc::DEADLINE_EXCEEDED ||
-          status.error_code() != grpc::FAILED_PRECONDITION) {
-        VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
-            << "Error during handling of FT.SEARCH on node " << address;
-      }
+      VMSDK_LOG_EVERY_N_SEC(DEBUG, nullptr, 1)
+          << "Error during handling of FT.SEARCH on node " << address
+          << ", Error code: " << status.error_code();
       return;
     }
 
@@ -228,7 +226,8 @@ class LocalResponderSearch : public query::SearchParameters {
       tracker->AddTotalCount(search_result.total_count);
     } else {
       VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
-          << "Error during local handling of FT.SEARCH";
+          << "Error during local handling of FT.SEARCH: "
+          << search_result.status.code();
     }
     // Stash `self` (the LocalResponderSearch) in the tracker so that its
     // SearchParameters fields outlive the Neighbor entries moved into

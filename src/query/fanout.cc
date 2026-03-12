@@ -89,6 +89,7 @@ struct SearchPartitionResultsTracker {
   std::atomic_bool consistency_failed{false};
   std::atomic<size_t> accumulated_total_count{0};
   std::atomic_bool has_node_error{false};  // Whether any node failed
+  std::atomic_bool has_successful_node{false};  // Whether any node succeeded
   absl::Status first_node_error
       ABSL_GUARDED_BY(mutex);  // First error encountered
 
@@ -131,6 +132,7 @@ struct SearchPartitionResultsTracker {
       return;
     }
     // Success case
+    has_successful_node.store(true);
     absl::MutexLock lock(&mutex);
     accumulated_total_count.fetch_add(response.total_count(),
                                       std::memory_order_relaxed);
@@ -190,7 +192,11 @@ struct SearchPartitionResultsTracker {
     } else if (!parameters->enable_partial_results && has_node_error.load()) {
       // When partial results are disabled, use the first error we encountered
       status = first_node_error;
+    } else if (parameters->enable_partial_results && has_node_error.load() && !has_successful_node.load()) {
+      // When partial results are enabled but all nodes failed (no successful responses)
+      status = first_node_error;
     }
+    // THink about deleting the commented code below if not needed.
     // else if (parameters->cancellation_token &&
     //            parameters->cancellation_token->IsCancelled()) {
     //   // Check for timeout cancellation
@@ -214,14 +220,13 @@ struct SearchPartitionResultsTracker {
         results.pop();
       }
       CHECK(i == 0);
-      // Note: We do not sort neighbors here because we do not have the content
-      // of the local shard yet. In the SendReply function, we will sort the all
-      // neighbors based on the content if sorting is required.
-      // SearchResult construction automatically applies trimming based on LIMIT
-      // offset count IF the command allows it (ie - it does not require
-      // complete results).
       parameters->search_result = SearchResult(
           accumulated_total_count, std::move(neighbors), *parameters, true);
+    } else {
+      // Create empty SearchResult for error cases
+      std::vector<indexes::Neighbor> empty_neighbors;
+      parameters->search_result = SearchResult(
+          accumulated_total_count, std::move(empty_neighbors), *parameters, true);
     }
 
     parameters->search_result.status = status;
@@ -257,11 +262,11 @@ class LocalResponderSearch : public query::SearchParameters {
 
  private:
   void QueryCompleteImpl(std::unique_ptr<SearchParameters> self) {
-    if (search_result.status.ok() || enable_partial_results) {
+    if (search_result.status.ok()) {
+      tracker->has_successful_node.store(true);
       tracker->AddResults(search_result.neighbors);
       tracker->AddTotalCount(search_result.total_count);
-    }
-    if (!search_result.status.ok()) {
+    } else {
       // Store first error for partial results disabled case
       {
         absl::MutexLock lock(&tracker->mutex);
@@ -269,6 +274,11 @@ class LocalResponderSearch : public query::SearchParameters {
           tracker->has_node_error.store(true);
           tracker->first_node_error = search_result.status;
         }
+      }
+      // Only add results if partial results are enabled
+      if (enable_partial_results) {
+        tracker->AddResults(search_result.neighbors);
+        tracker->AddTotalCount(search_result.total_count);
       }
       VMSDK_LOG_EVERY_N_SEC(DEBUG, nullptr, 1)
           << "Error during local handling of the search operation";

@@ -1441,6 +1441,11 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
   CHECK(RDBReadV2());
   VMSDK_ASSIGN_OR_RETURN(size_t key_count, input.LoadObject<size_t>());
   rdb_load_keys.Increment(key_count);
+
+  // Track current index restore progress
+  Metrics::GetStats().rdb_restore_current_index_keys_total = key_count;
+  Metrics::GetStats().rdb_restore_current_index_keys_loaded = 0;
+
   VMSDK_LOG(NOTICE, ctx) << "Loading Index Extension, keys = " << key_count;
   
   const size_t max_queue_size = 
@@ -1481,6 +1486,9 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
     auto keyname = vmsdk::MakeUniqueValkeyString(keyname_str);
     ProcessKeyspaceNotification(ctx, keyname.get(), false);
     keys_since_last_check++;
+
+    // Update restore progress counter
+    Metrics::GetStats().rdb_restore_current_index_keys_loaded = i + 1;
   }
   
   if (backpressure_wait_count > 0) {

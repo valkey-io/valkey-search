@@ -86,12 +86,14 @@ struct SearchPartitionResultsTracker {
   int outstanding_requests ABSL_GUARDED_BY(mutex);
   std::unique_ptr<SearchParameters> parameters ABSL_GUARDED_BY(mutex);
 
-  // Enhanced OOM tracking
-  std::atomic<int> nodes_with_oom{0};  // Count of nodes that hit OOM
+  // Error tracking
   std::atomic_bool has_any_results{
       false};  // Whether we got any results from any node
   std::atomic_bool consistency_failed{false};
   std::atomic<size_t> accumulated_total_count{0};
+  std::atomic_bool has_node_error{false};  // Whether any node failed
+  absl::Status first_node_error
+      ABSL_GUARDED_BY(mutex);  // First error encountered
 
   SearchPartitionResultsTracker(int outstanding_requests, int k,
                                 std::unique_ptr<SearchParameters> parameters)
@@ -101,32 +103,39 @@ struct SearchPartitionResultsTracker {
   void HandleResponse(coordinator::SearchIndexPartitionResponse &response,
                       const std::string &address, const grpc::Status &status) {
     if (!status.ok()) {
-      if (status.error_code() == grpc::RESOURCE_EXHAUSTED) {
-        nodes_with_oom.fetch_add(1);
+      // Store first error for partial results disabled case
+      {
+        absl::MutexLock lock(&mutex);
+        if (!has_node_error.load()) {
+          has_node_error.store(true);
+          first_node_error = ToAbslStatus(status);
+        }
       }
-      
+
       if (parameters->enable_consistency &&
           status.error_code() == grpc::FAILED_PRECONDITION) {
         consistency_failed.store(true);
       }
-      
-      // Cancel for consistency failures or when partial results are disabled (except for OOM)
-      bool should_cancel = consistency_failed.load() || 
-                          (!parameters->enable_partial_results && 
-                           status.error_code() != grpc::RESOURCE_EXHAUSTED);
+
+      // Cancel for consistency failures or when partial results are disabled
+      bool should_cancel =
+          consistency_failed.load() || !parameters->enable_partial_results;
       if (should_cancel) {
-        // Use appropriate cancellation reason based on the gRPC error
-        if (status.error_code() == grpc::DEADLINE_EXCEEDED) {
-          parameters->cancellation_token->Cancel(absl::DeadlineExceededError("Request timeout"));
-        } else {
-          parameters->cancellation_token->Cancel(absl::CancelledError("Node failure during fanout"));
-        }
+        parameters->cancellation_token->Cancel();
+        // // Use appropriate cancellation reason based on the gRPC error
+        // if (status.error_code() == grpc::DEADLINE_EXCEEDED) {
+        //   parameters->cancellation_token->Cancel(absl::DeadlineExceededError("Request
+        //   timeout"));
+        // } else {
+        //   parameters->cancellation_token->Cancel(absl::CancelledError("Node
+        //   failure during fanout"));
+        // }
       }
       VMSDK_LOG_EVERY_N_SEC(DEBUG, nullptr, 1)
           << "Error during handling of FT.SEARCH on node " << address;
       return;
     }
-    
+
     // Success case - node successfully responded (even with 0 results)
     has_any_results.store(true);
 
@@ -185,17 +194,24 @@ struct SearchPartitionResultsTracker {
     absl::Status status;
 
     if (consistency_failed) {
+      // Consistency failures always take precedence
       status = absl::FailedPreconditionError(kFailedPreconditionMsg);
-    } else if (ShouldReturnOOM()) {
-      status = absl::ResourceExhaustedError(kOOMMsg);
+    } else if (!parameters->enable_partial_results && has_node_error.load()) {
+      // When partial results are disabled, use the first error we encountered
+      status = first_node_error;
     } else if (parameters->cancellation_token &&
                parameters->cancellation_token->IsCancelled()) {
-      // Only check cancellation if no other critical errors occurred
+      // Check for timeout cancellation
       auto cancellation_reason =
           parameters->cancellation_token->GetCancellationReason();
       status = cancellation_reason.value_or(
           absl::CancelledError("Operation was cancelled"));
     } else {
+      // No errors detected - success case
+      status = absl::OkStatus();
+    }
+
+    if (status.ok()) {
       std::vector<indexes::Neighbor> neighbors;
       neighbors.resize(results.size());
       size_t i = neighbors.size();
@@ -206,48 +222,16 @@ struct SearchPartitionResultsTracker {
         results.pop();
       }
       CHECK(i == 0);
-      // Note: We do not sort neighbors here because we do not have the content
-      // of the local shard yet. In the SendReply function, we will sort the all
-      // neighbors based on the content if sorting is required.
-      // SearchResult construction automatically applies trimming based on LIMIT
-      // offset count IF the command allows it (ie - it does not require
-      // complete results).
       parameters->search_result = SearchResult(
           accumulated_total_count, std::move(neighbors), *parameters, true);
-      status = absl::OkStatus();
     }
 
     parameters->search_result.status = status;
-    // The destructor runs on whichever thread drops the last shared_ptr
-    // reference. If remote shards complete first and the local shard (which
-    // completes on the main thread via content resolution) drops the last
-    // reference, we'll be on the main thread here.
     if (vmsdk::IsMainThread()) {
       parameters->QueryCompleteMainThread(std::move(parameters));
     } else {
       parameters->QueryCompleteBackground(std::move(parameters));
     }
-  }
-
- private:
-  bool ShouldReturnOOM() {
-    int oom_nodes = nodes_with_oom.load();
-    bool got_results = has_any_results.load();
-
-    // If partial results are disabled, return OOM if any node hit OOM
-    if (!parameters->enable_partial_results && oom_nodes > 0) {
-      return true;
-    }
-
-    // If partial results are enabled, only return OOM if:
-    // No results from any node AND at least one hit OOM
-    if (parameters->enable_partial_results) {
-      if (!got_results && oom_nodes > 0) {
-        return true;
-      }
-    }
-
-    return false;
   }
 };
 
@@ -277,8 +261,13 @@ class LocalResponderSearch : public query::SearchParameters {
       tracker->AddResults(search_result.neighbors);
       tracker->AddTotalCount(search_result.total_count);
     } else {
-      if (absl::IsResourceExhausted(search_result.status)) {
-        tracker->nodes_with_oom.fetch_add(1);
+      // Store first error for partial results disabled case
+      {
+        absl::MutexLock lock(&tracker->mutex);
+        if (!tracker->has_node_error.load()) {
+          tracker->has_node_error.store(true);
+          tracker->first_node_error = search_result.status;
+        }
       }
 
       // Only add results if partial results are enabled

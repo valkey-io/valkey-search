@@ -82,10 +82,11 @@ class TestSearchOOMHandlingCME(ValkeySearchClusterTestCase):
         # Disable partial results.
         for node in self.nodes:
             node.client.execute_command("CONFIG", "SET", "search.enable-partial-results", "no")
-        # The OOM error during fanout results in the coordinator cancelling the command, and we
-        # expect to see timeout error on the client side.
-        with pytest.raises(ResponseError, match="Search operation cancelled due to timeout"):
-            run_search_query(client_primary_2)
+        # The OOM error during fanout results in the coordinator cancelling the command.
+        # Even if it cancels it, it should propagate the correct reason (OOM) in the error message.
+        with pytest.raises(ResponseError, match="command not allowed when used memory > 'maxmemory'"):
+            res = run_search_query(client_primary_2)
+            print(res)
 
 class TestSearchOOMHandlingCMD(ValkeySearchTestCaseBase):
     """

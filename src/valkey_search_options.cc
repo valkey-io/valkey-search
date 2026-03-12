@@ -408,12 +408,12 @@ constexpr absl::string_view kDrainMutationQueueOnSaveConfig{
 static auto drain_mutation_queue_on_save =
     config::BooleanBuilder(kDrainMutationQueueOnSaveConfig, false).Build();
 
-/// Register the "drain-mutation-queue-timeout-ms" flag
+/// Register the "drain-mutation-queue-on-save-timeout-ms" flag
 /// Timeout for draining the mutation queue in milliseconds
-constexpr absl::string_view kDrainMutationQueueTimeoutMsConfig{
-    "drain-mutation-queue-timeout-ms"};
-static auto drain_mutation_queue_timeout_ms =
-    config::NumberBuilder(kDrainMutationQueueTimeoutMsConfig,
+constexpr absl::string_view kDrainMutationQueueOnSaveTimeoutMsConfig{
+    "drain-mutation-queue-on-save-timeout-ms"};
+static auto drain_mutation_queue_on_save_timeout_ms =
+    config::NumberBuilder(kDrainMutationQueueOnSaveTimeoutMsConfig,
                           5000,       // default 5 seconds
                           0,          // min
                           INT64_MAX)  // max
@@ -597,8 +597,9 @@ const vmsdk::config::Boolean& GetDrainMutationQueueOnLoad() {
       *drain_mutation_queue_on_load);
 }
 
-vmsdk::config::Number& GetDrainMutationQueueTimeoutMs() {
-  return dynamic_cast<vmsdk::config::Number&>(*drain_mutation_queue_timeout_ms);
+vmsdk::config::Number& GetDrainMutationQueueOnSaveTimeoutMs() {
+  return dynamic_cast<vmsdk::config::Number&>(
+      *drain_mutation_queue_on_save_timeout_ms);
 }
 
 vmsdk::config::Number& GetFanoutDataUniformity() {

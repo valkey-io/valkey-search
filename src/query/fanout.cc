@@ -190,14 +190,16 @@ struct SearchPartitionResultsTracker {
     } else if (!parameters->enable_partial_results && has_node_error.load()) {
       // When partial results are disabled, use the first error we encountered
       status = first_node_error;
-    } else if (parameters->cancellation_token &&
-               parameters->cancellation_token->IsCancelled()) {
-      // Check for timeout cancellation
-      auto cancellation_reason =
-          parameters->cancellation_token->GetCancellationReason();
-      status = cancellation_reason.value_or(
-          absl::CancelledError("Operation was cancelled"));
-    } else {
+    }
+    // else if (parameters->cancellation_token &&
+    //            parameters->cancellation_token->IsCancelled()) {
+    //   // Check for timeout cancellation
+    //   auto cancellation_reason =
+    //       parameters->cancellation_token->GetCancellationReason();
+    //   status = cancellation_reason.value_or(
+    //       absl::CancelledError("Operation was cancelled"));
+    // }
+    else {
       // No errors detected - success case
       status = absl::OkStatus();
     }

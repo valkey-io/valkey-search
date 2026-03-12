@@ -1407,6 +1407,8 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
   for (auto &[key, _] : db_key_info_.Get()) {
     VMSDK_RETURN_IF_ERROR(out.SaveString(key->Str()));
   }
+  // acquire lock for tracked_mutated_records_
+  absl::MutexLock lock(&mutated_records_mutex_);
   //
   // Write out the mutation queue entries. As an optimization we only write
   // out non-backfill entries. But this requires that the index itself be
@@ -1663,7 +1665,7 @@ void IndexSchema::OnLoadingEnded(ValkeyModuleCtx *ctx) {
     loaded_v2_ = false;
     VMSDK_LOG(NOTICE, ctx) << "RDB load completed, "
                            << " Mutation Queue contains "
-                           << tracked_mutated_records_.size() << " entries."
+                           << GetMutatedRecordsSize() << " entries."
                            << (backfill_job_.Get().has_value() &&
                                        !backfill_job_.Get()->IsScanDone()
                                    ? " Backfill still required."

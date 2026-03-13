@@ -1560,6 +1560,149 @@ IndexSchema::MutatedAttributes CreateMutatedAttributes(
   return mutated_attributes;
 }
 
+TEST_F(IndexSchemaFriendTest, WeightedBuffer) {
+  // The IndexSchemaFriendTest fixture already has an HNSW index with alias
+  // "hnsw_id". Add additional index types for testing.
+  auto numeric_index =
+      std::make_shared<indexes::Numeric>(CreateNumericIndexProto());
+  VMSDK_EXPECT_OK(
+      index_schema->AddIndex("numeric_id", "numeric_identifier", numeric_index));
+
+  auto tag_index =
+      std::make_shared<indexes::Tag>(CreateTagIndexProto(",", false));
+  VMSDK_EXPECT_OK(
+      index_schema->AddIndex("tag_id", "tag_identifier", tag_index));
+
+  index_schema->CreateTextIndexSchema();
+  auto text_index = std::make_shared<indexes::Text>(
+      CreateTextIndexProto(true, false, 1.0),
+      index_schema->GetTextIndexSchema());
+  VMSDK_EXPECT_OK(
+      index_schema->AddIndex("text_id", "text_identifier", text_index));
+
+  // Default weights: vector=130, text=550, numeric=430, tag=330
+  // Test 1: New entry with vector data (HNSW index)
+  {
+    std::string vector_data(400, 'x');  // 400 bytes
+    auto mutated_attrs =
+        CreateMutatedAttributes(attribute_identifier, vector_data);
+    auto key1 = StringInternStore::Intern("weighted_key_1");
+    EXPECT_TRUE(index_schema->TrackMutatedRecord(
+        nullptr, key1, std::move(mutated_attrs), 0, false, false, false));
+    absl::MutexLock lock(&index_schema->mutated_records_mutex_);
+    auto itr = index_schema->tracked_mutated_records_.find(key1);
+    ASSERT_NE(itr, index_schema->tracked_mutated_records_.end());
+    // 400 * 130 / 100 = 520
+    EXPECT_EQ(itr->second.weighted_buffer.size(), 520);
+  }
+
+  // Test 2: New entry with text data
+  {
+    std::string text_data(200, 'a');  // 200 bytes
+    auto mutated_attrs = CreateMutatedAttributes("text_id", text_data);
+    auto key2 = StringInternStore::Intern("weighted_key_2");
+    EXPECT_TRUE(index_schema->TrackMutatedRecord(
+        nullptr, key2, std::move(mutated_attrs), 0, false, false, false));
+    absl::MutexLock lock(&index_schema->mutated_records_mutex_);
+    auto itr = index_schema->tracked_mutated_records_.find(key2);
+    ASSERT_NE(itr, index_schema->tracked_mutated_records_.end());
+    // 200 * 550 / 100 = 1100
+    EXPECT_EQ(itr->second.weighted_buffer.size(), 1100);
+  }
+
+  // Test 3: New entry with numeric data
+  {
+    std::string numeric_data(8, 'n');  // 8 bytes
+    auto mutated_attrs = CreateMutatedAttributes("numeric_id", numeric_data);
+    auto key3 = StringInternStore::Intern("weighted_key_3");
+    EXPECT_TRUE(index_schema->TrackMutatedRecord(
+        nullptr, key3, std::move(mutated_attrs), 0, false, false, false));
+    absl::MutexLock lock(&index_schema->mutated_records_mutex_);
+    auto itr = index_schema->tracked_mutated_records_.find(key3);
+    ASSERT_NE(itr, index_schema->tracked_mutated_records_.end());
+    // 8 * 430 / 100 = 34
+    EXPECT_EQ(itr->second.weighted_buffer.size(), 34);
+  }
+
+  // Test 4: New entry with tag data
+  {
+    std::string tag_data(100, 't');  // 100 bytes
+    auto mutated_attrs = CreateMutatedAttributes("tag_id", tag_data);
+    auto key4 = StringInternStore::Intern("weighted_key_4");
+    EXPECT_TRUE(index_schema->TrackMutatedRecord(
+        nullptr, key4, std::move(mutated_attrs), 0, false, false, false));
+    absl::MutexLock lock(&index_schema->mutated_records_mutex_);
+    auto itr = index_schema->tracked_mutated_records_.find(key4);
+    ASSERT_NE(itr, index_schema->tracked_mutated_records_.end());
+    // 100 * 330 / 100 = 330
+    EXPECT_EQ(itr->second.weighted_buffer.size(), 330);
+  }
+
+  // Test 5: Null data contributes 0 to size
+  {
+    IndexSchema::MutatedAttributes mutated_attrs;
+    mutated_attrs[attribute_identifier].data = nullptr;
+    auto key5 = StringInternStore::Intern("weighted_key_5");
+    EXPECT_TRUE(index_schema->TrackMutatedRecord(
+        nullptr, key5, std::move(mutated_attrs), 0, false, false, false));
+    absl::MutexLock lock(&index_schema->mutated_records_mutex_);
+    auto itr = index_schema->tracked_mutated_records_.find(key5);
+    ASSERT_NE(itr, index_schema->tracked_mutated_records_.end());
+    EXPECT_EQ(itr->second.weighted_buffer.size(), 0);
+  }
+
+  // Test 6: Buffer resize on attribute merge (update path)
+  {
+    std::string initial_data(100, 'x');  // 100 bytes
+    auto mutated_attrs =
+        CreateMutatedAttributes(attribute_identifier, initial_data);
+    auto key6 = StringInternStore::Intern("weighted_key_6");
+    EXPECT_TRUE(index_schema->TrackMutatedRecord(
+        nullptr, key6, std::move(mutated_attrs), 0, false, false, false));
+    {
+      absl::MutexLock lock(&index_schema->mutated_records_mutex_);
+      auto itr = index_schema->tracked_mutated_records_.find(key6);
+      ASSERT_NE(itr, index_schema->tracked_mutated_records_.end());
+      // 100 * 130 / 100 = 130
+      EXPECT_EQ(itr->second.weighted_buffer.size(), 130);
+    }
+
+    // Update with larger data — buffer should resize
+    std::string larger_data(500, 'y');  // 500 bytes
+    auto mutated_attrs2 =
+        CreateMutatedAttributes(attribute_identifier, larger_data);
+    EXPECT_FALSE(index_schema->TrackMutatedRecord(
+        nullptr, key6, std::move(mutated_attrs2), 0, false, false, false));
+    {
+      absl::MutexLock lock(&index_schema->mutated_records_mutex_);
+      auto itr = index_schema->tracked_mutated_records_.find(key6);
+      ASSERT_NE(itr, index_schema->tracked_mutated_records_.end());
+      // 500 * 130 / 100 = 650
+      EXPECT_EQ(itr->second.weighted_buffer.size(), 650);
+    }
+  }
+
+  // Test 7: Different weight config values
+  {
+    VMSDK_EXPECT_OK(options::GetMutationWeightVector().SetValue(200));
+    std::string data(100, 'v');  // 100 bytes
+    auto mutated_attrs =
+        CreateMutatedAttributes(attribute_identifier, data);
+    auto key7 = StringInternStore::Intern("weighted_key_7");
+    EXPECT_TRUE(index_schema->TrackMutatedRecord(
+        nullptr, key7, std::move(mutated_attrs), 0, false, false, false));
+    {
+      absl::MutexLock lock(&index_schema->mutated_records_mutex_);
+      auto itr = index_schema->tracked_mutated_records_.find(key7);
+      ASSERT_NE(itr, index_schema->tracked_mutated_records_.end());
+      // 100 * 200 / 100 = 200
+      EXPECT_EQ(itr->second.weighted_buffer.size(), 200);
+    }
+    // Restore default
+    VMSDK_EXPECT_OK(options::GetMutationWeightVector().SetValue(130));
+  }
+}
+
 TEST_F(IndexSchemaFriendTest, MutatedAttributesSanity) {
   absl::string_view data_ptr;
   EXPECT_EQ(index_schema->attributes_.size(), 1);

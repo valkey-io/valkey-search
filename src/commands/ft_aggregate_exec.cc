@@ -12,6 +12,7 @@
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
 #include "src/commands/ft_aggregate_parser.h"
+#include "src/utils/hyperloglog_counter.h"
 #include "vmsdk/src/info.h"
 
 // #define DBG std::cerr
@@ -360,6 +361,20 @@ class CountDistinct : public GroupBy::ReducerInstance {
   }
 };
 
+class CountDistinctish : public GroupBy::ReducerInstance {
+  HyperLogLog hll_;
+  void ProcessRecords(const std::vector<ArgVector>& all_values) override {
+    for (const auto& values : all_values) {
+      if (!values[0].IsNil()) {
+        hll_.Add(values[0]);
+      }
+    }
+  }
+  expr::Value GetResult() const override {
+    return expr::Value(static_cast<double>(hll_.Estimate()));
+  }
+};
+
 template <typename T>
 std::unique_ptr<GroupBy::ReducerInstance> MakeReducer() {
   return std::unique_ptr<GroupBy::ReducerInstance>(std::make_unique<T>());
@@ -370,6 +385,8 @@ absl::flat_hash_map<std::string, GroupBy::ReducerInfo> GroupBy::reducerTable{
     {"COUNT", GroupBy::ReducerInfo{"COUNT", 0, 0, &MakeReducer<Count>}},
     {"COUNT_DISTINCT",
      GroupBy::ReducerInfo{"COUNT_DISTINCT", 1, 1, &MakeReducer<CountDistinct>}},
+    {"COUNT_DISTINCTISH", GroupBy::ReducerInfo{"COUNT_DISTINCTISH", 1, 1,
+                                               &MakeReducer<CountDistinctish>}},
     {"MIN", GroupBy::ReducerInfo{"MIN", 1, 1, &MakeReducer<Min>}},
     {"MAX", GroupBy::ReducerInfo{"MAX", 1, 1, &MakeReducer<Max>}},
     {"STDDEV", GroupBy::ReducerInfo{"STDDEV", 1, 1, &MakeReducer<Stddev>}},

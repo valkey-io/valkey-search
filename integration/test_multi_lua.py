@@ -25,6 +25,30 @@ def _lua_call(cmd: str, *args: str) -> str:
     return f"return redis.call('{cmd}', {quoted})"
 
 
+def _find_owner_primary_for_slot(primaries, slot: int) -> Valkey:
+    slot_ranges = primaries[0].execute_command("CLUSTER", "SLOTS")
+    owner_port = None
+    for slot_range in slot_ranges:
+        if slot_range[0] <= slot <= slot_range[1]:
+            owner_port = slot_range[2][1]
+            break
+    if owner_port is None:
+        raise RuntimeError(f"Failed to find owner for slot {slot}")
+
+    for node in primaries:
+        if node.connection_pool.connection_kwargs["port"] == owner_port:
+            return node
+    raise RuntimeError(f"No local client found for owner port {owner_port}")
+
+
+def _find_non_owner_primary(primaries, owner: Valkey) -> Valkey:
+    owner_port = owner.connection_pool.connection_kwargs["port"]
+    for node in primaries:
+        if node.connection_pool.connection_kwargs["port"] != owner_port:
+            return node
+    raise RuntimeError("Failed to find a non-owner primary node")
+
+
 class TestMultiLuaCMD(ValkeySearchTestCaseBase):
     """Test all search commands in MULTI/EXEC and Lua contexts for standalone (CMD) mode."""
 
@@ -171,6 +195,44 @@ class TestMultiLuaCME(ValkeySearchClusterTestCase):
         assert client.execute_command("EXEC")[0] == OK
         assert client.execute_command("FT._LIST") == []
 
+        # Single-slot index: owner node should allow FT.SEARCH/FT.AGGREGATE in MULTI/EXEC
+        single_slot_index = "idx{multi_local}"
+        single_slot_prefix = "doc:{multi_local}:"
+        slot = client.execute_command("CLUSTER", "KEYSLOT", single_slot_index)
+        primaries = self.get_all_primary_clients()
+        owner_client = _find_owner_primary_for_slot(primaries, slot)
+        non_owner_client = _find_non_owner_primary(primaries, owner_client)
+
+        assert owner_client.execute_command(
+            "FT.CREATE", single_slot_index, "PREFIX", "1", single_slot_prefix,
+            "SCHEMA", "price", "NUMERIC", "title", "TEXT") == OK
+
+        local_key = f"{single_slot_prefix}1"
+        cluster.execute_command("HSET", local_key, "price", "42", "title",
+                                "hello world")
+
+        assert owner_client.execute_command("MULTI") == OK
+        assert owner_client.execute_command(
+            "FT.SEARCH", single_slot_index, "@price:[42 42]") == QUEUED
+        assert owner_client.execute_command("EXEC")[0][0] == 1
+
+        assert owner_client.execute_command("MULTI") == OK
+        assert owner_client.execute_command(
+            "FT.AGGREGATE", single_slot_index, "@price:[0 100]", "LOAD", "1",
+            "price") == QUEUED
+        assert owner_client.execute_command("EXEC")[0][0] == 1
+
+        assert non_owner_client.execute_command("MULTI") == OK
+        assert non_owner_client.execute_command(
+            "FT.SEARCH", single_slot_index, "@price:[42 42]") == QUEUED
+        results = non_owner_client.execute_command("EXEC")
+        assert isinstance(results[0],
+                          ResponseError) and FANOUT_NOT_SUPPORTED_ERR in str(
+                              results[0])
+
+        assert owner_client.execute_command("FT.DROPINDEX",
+                                            single_slot_index) == OK
+
     def test_lua_all_commands(self):
         client: Valkey = self.new_client_for_primary(0)
         cluster: ValkeyCluster = self.new_cluster_client()
@@ -214,3 +276,39 @@ class TestMultiLuaCME(ValkeySearchClusterTestCase):
         # FT.DROPINDEX in Lua (skips fanout, succeeds)
         assert client.execute_command("EVAL", _lua_call("FT.DROPINDEX", INDEX), "0") == OK
         assert client.execute_command("FT._LIST") == []
+
+        # Single-slot index: owner node should allow FT.SEARCH/FT.AGGREGATE in Lua
+        single_slot_index = "idx{lua_local}"
+        single_slot_prefix = "doc:{lua_local}:"
+        slot = client.execute_command("CLUSTER", "KEYSLOT", single_slot_index)
+        primaries = self.get_all_primary_clients()
+        owner_client = _find_owner_primary_for_slot(primaries, slot)
+        non_owner_client = _find_non_owner_primary(primaries, owner_client)
+
+        assert owner_client.execute_command(
+            "FT.CREATE", single_slot_index, "PREFIX", "1", single_slot_prefix,
+            "SCHEMA", "price", "NUMERIC", "title", "TEXT") == OK
+
+        local_key = f"{single_slot_prefix}1"
+        cluster.execute_command("HSET", local_key, "price", "42", "title",
+                                "hello world")
+
+        result = owner_client.execute_command(
+            "EVAL", _lua_call("FT.SEARCH", single_slot_index,
+                              "@price:[42 42]"), "0")
+        assert result[0] == 1
+
+        result = owner_client.execute_command(
+            "EVAL",
+            _lua_call("FT.AGGREGATE", single_slot_index, "@price:[0 100]",
+                      "LOAD", "1", "price"), "0")
+        assert result[0] == 1
+
+        with pytest.raises(ResponseError) as exc_info:
+            non_owner_client.execute_command(
+                "EVAL", _lua_call("FT.SEARCH", single_slot_index,
+                                  "@price:[42 42]"), "0")
+        assert FANOUT_NOT_SUPPORTED_ERR in str(exc_info.value)
+
+        assert owner_client.execute_command("FT.DROPINDEX",
+                                            single_slot_index) == OK

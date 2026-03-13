@@ -145,12 +145,15 @@ namespace {
 
 // Helper to search for a word in the text index and add its key iterator
 // Returns true if the word was found and added
+template <size_t NumShards>
 bool TryAddWordKeyIterator(
-    const indexes::text::TextIndex *text_index, absl::string_view word,
+    const indexes::text::TextIndex<NumShards> *text_index,
+    absl::string_view word,
     absl::InlinedVector<indexes::text::Postings::KeyIterator,
                         indexes::text::kWordExpansionInlineCapacity>
         &key_iterators) {
-  auto word_iter = text_index->GetPrefix().GetWordIterator(word);
+  size_t shard = text_index->GetShardIndex(word);
+  auto word_iter = text_index->GetPrefixShard(shard).GetWordIterator(word);
   if (!word_iter.Done() && word_iter.GetWord() == word) {
     key_iterators.emplace_back(word_iter.GetPostingsTarget()->GetKeyIterator());
     return true;
@@ -161,7 +164,9 @@ bool TryAddWordKeyIterator(
 }  // namespace
 
 std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
-    const std::shared_ptr<indexes::text::TextIndex> &text_index,
+    const std::shared_ptr<
+        indexes::text::TextIndex<indexes::text::kSchemaTextIndexShards>>
+        &text_index,
     FieldMaskPredicate field_mask, bool require_positions) const {
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
@@ -204,62 +209,103 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
 }
 
 std::unique_ptr<indexes::text::TextIterator> PrefixPredicate::BuildTextIterator(
-    const std::shared_ptr<indexes::text::TextIndex> &text_index,
+    const std::shared_ptr<
+        indexes::text::TextIndex<indexes::text::kSchemaTextIndexShards>>
+        &text_index,
     FieldMaskPredicate field_mask, bool require_positions) const {
-  auto word_iter = text_index->GetPrefix().GetWordIterator(GetTextString());
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
   // Limit the number of term word expansions
   uint32_t max_words = options::GetMaxTermExpansions().GetValue();
   uint32_t word_count = 0;
+
+  size_t shard = text_index->GetShardIndex(GetTextString());
+  auto word_iter =
+      text_index->GetPrefixShard(shard).GetWordIterator(GetTextString());
   while (!word_iter.Done() && word_count < max_words) {
     key_iterators.emplace_back(word_iter.GetPostingsTarget()->GetKeyIterator());
     word_iter.Next();
     ++word_count;
   }
+
   return std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), field_mask, require_positions);
 }
 
 std::unique_ptr<indexes::text::TextIterator> SuffixPredicate::BuildTextIterator(
-    const std::shared_ptr<indexes::text::TextIndex> &text_index,
+    const std::shared_ptr<
+        indexes::text::TextIndex<indexes::text::kSchemaTextIndexShards>>
+        &text_index,
     FieldMaskPredicate field_mask, bool require_positions) const {
   CHECK(text_index->GetSuffix().has_value())
       << "Text index does not have suffix trie enabled.";
   std::string reversed_word(GetTextString().rbegin(), GetTextString().rend());
-  auto word_iter =
-      text_index->GetSuffix().value().get().GetWordIterator(reversed_word);
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
-  // Limit the number of term word expansions
   uint32_t max_words = options::GetMaxTermExpansions().GetValue();
   uint32_t word_count = 0;
-  while (!word_iter.Done() && word_count < max_words) {
-    key_iterators.emplace_back(word_iter.GetPostingsTarget()->GetKeyIterator());
-    word_iter.Next();
-    ++word_count;
-  }
+
+  // Suffix search routes to SINGLE shard using the reversed word's prefix.
+  // The suffix tree stores reversed words, so "running" -> "gnirunr" is in
+  // shard hash("gni"). Query "*ing" -> reverse to "gni" -> shard hash("gni") ->
+  // prefix search finds all "*ing" words.
+  size_t shard = text_index->GetShardIndex(reversed_word);
+  {
+    auto suffix_shard = text_index->GetSuffixShard(shard);
+    if (suffix_shard) {
+      auto word_iter = suffix_shard->get().GetWordIterator(reversed_word);
+      while (!word_iter.Done() && word_count < max_words) {
+        key_iterators.emplace_back(
+            word_iter.GetPostingsTarget()->GetKeyIterator());
+        word_iter.Next();
+        ++word_count;
+      }
+    }  // end if suffix_shard
+  }  // end single shard block
+
   return std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), field_mask, require_positions);
 }
 
 std::unique_ptr<indexes::text::TextIterator> InfixPredicate::BuildTextIterator(
-    const std::shared_ptr<indexes::text::TextIndex> &text_index,
+    const std::shared_ptr<
+        indexes::text::TextIndex<indexes::text::kSchemaTextIndexShards>>
+        &text_index,
     FieldMaskPredicate field_mask, bool require_positions) const {
   CHECK(false) << "Unsupported TextPredicate type";
 }
 
 std::unique_ptr<indexes::text::TextIterator> FuzzyPredicate::BuildTextIterator(
-    const std::shared_ptr<indexes::text::TextIndex> &text_index,
+    const std::shared_ptr<
+        indexes::text::TextIndex<indexes::text::kSchemaTextIndexShards>>
+        &text_index,
     FieldMaskPredicate field_mask, bool require_positions) const {
   // Limit the number of term word expansions
   uint32_t max_words = options::GetMaxTermExpansions().GetValue();
-  auto key_iterators = indexes::text::FuzzySearch::Search(
-      text_index->GetPrefix(), GetTextString(), GetDistance(), max_words);
+
+  // Fuzzy search MUST query ALL shards: words within edit distance can be in
+  // any shard since they may have different 3-letter prefixes
+  absl::InlinedVector<indexes::text::Postings::KeyIterator,
+                      indexes::text::kWordExpansionInlineCapacity>
+      all_key_iterators;
+
+  for (size_t shard = 0; shard < text_index->GetNumShards(); ++shard) {
+    uint32_t shard_max = max_words - all_key_iterators.size();
+    if (shard_max == 0) break;
+
+    auto key_iterators = indexes::text::FuzzySearch::Search(
+        text_index->GetPrefixShard(shard), GetTextString(), GetDistance(),
+        shard_max);
+
+    all_key_iterators.insert(all_key_iterators.end(),
+                             std::make_move_iterator(key_iterators.begin()),
+                             std::make_move_iterator(key_iterators.end()));
+  }
+
   return std::make_unique<indexes::text::TermIterator>(
-      std::move(key_iterators), field_mask, require_positions);
+      std::move(all_key_iterators), field_mask, require_positions);
 }
 
 /*
@@ -278,8 +324,10 @@ std::unique_ptr<indexes::text::TextIterator> FuzzyPredicate::BuildTextIterator(
 
 size_t TermPredicate::EstimateSize(bool is_vec_query) const {
   if (is_vec_query) {
-    auto iter =
-        text_index_schema_->GetTextIndex()->GetPrefix().GetWordIterator(term_);
+    size_t shard = text_index_schema_->GetTextIndex()->GetShardIndex(term_);
+    auto iter = text_index_schema_->GetTextIndex()
+                    ->GetPrefixShard(shard)
+                    .GetWordIterator(term_);
     if (!iter.Done() && iter.GetWord() == term_) {
       return iter.GetPostingsTarget()->GetKeyCount();
     }
@@ -291,8 +339,10 @@ size_t TermPredicate::EstimateSize(bool is_vec_query) const {
 
 size_t PrefixPredicate::EstimateSize(bool is_vec_query) const {
   if (is_vec_query) {
-    return text_index_schema_->GetTextIndex()->GetPrefix().GetSubtreeItemCount(
-        term_);
+    size_t shard = text_index_schema_->GetTextIndex()->GetShardIndex(term_);
+    return text_index_schema_->GetTextIndex()
+        ->GetPrefixShard(shard)
+        .GetSubtreeItemCount(term_);
   } else {
     return text_index_schema_->GetTrackedKeyCount();
   }
@@ -300,9 +350,12 @@ size_t PrefixPredicate::EstimateSize(bool is_vec_query) const {
 
 size_t SuffixPredicate::EstimateSize(bool is_vec_query) const {
   if (is_vec_query) {
-    auto suffix_tree = text_index_schema_->GetTextIndex()->GetSuffix();
-    CHECK(suffix_tree) << "Suffix estimation not supported";
-    return suffix_tree.value().get().GetSubtreeItemCount(term_);
+    std::string reversed(term_.rbegin(), term_.rend());
+    size_t shard = text_index_schema_->GetTextIndex()->GetShardIndex(reversed);
+    auto suffix_shard =
+        text_index_schema_->GetTextIndex()->GetSuffixShard(shard);
+    CHECK(suffix_shard.has_value()) << "Suffix estimation not supported";
+    return suffix_shard->get().GetSubtreeItemCount(reversed);
   } else {
     return text_index_schema_->GetTrackedKeyCount();
   }

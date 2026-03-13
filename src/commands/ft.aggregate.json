@@ -263,6 +263,11 @@
                     "name": "STDDEV",
                     "type": "pure-token",
                     "token": "STDDEV"
+                  },
+                  {
+                    "name": "QUANTILE",
+                    "type": "pure-token",
+                    "token": "QUANTILE"
                   }
                 ]
               },

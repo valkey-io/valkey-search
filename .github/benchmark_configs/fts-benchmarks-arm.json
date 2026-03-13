@@ -481,13 +481,7 @@
       "composed_tag_queries.csv": {
         "type": "tag_only",
         "doc_count": 100,
-        "tags": [
-          "electronics",
-          "books",
-          "clothing",
-          "food",
-          "sports"
-        ]
+        "tags": ["electronics", "books", "clothing", "food", "sports"]
       }
     },
     "test_groups": [

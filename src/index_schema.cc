@@ -33,6 +33,7 @@
 #include "google/protobuf/repeated_ptr_field.h"
 #include "src/attribute.h"
 #include "src/attribute_data_type.h"
+#include "src/filter_expr.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
@@ -244,6 +245,12 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
           res->AddIndex(attribute.alias(), attribute.identifier(), index));
     }
   }
+  if (!res->filter_expression_str_.empty()) {
+    VMSDK_ASSIGN_OR_RETURN(
+        res->compiled_filter_,
+        expr::Expression::Compile(*res, res->filter_expression_str_));
+  }
+
   res->SetTextSizeEstimationConditions();
 
   if (!reload && index_schema_proto.skip_initial_scan()) {
@@ -283,6 +290,9 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
       stop_words_(index_schema_proto.stop_words().begin(),
                   index_schema_proto.stop_words().end()),
       skip_initial_scan_(index_schema_proto.skip_initial_scan()),
+      filter_expression_str_(index_schema_proto.has_filter()
+                                 ? index_schema_proto.filter()
+                                 : ""),
       min_stem_size_(index_schema_proto.min_stem_size() > 0
                          ? index_schema_proto.min_stem_size()
                          : 4),
@@ -605,6 +615,24 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
     // Always clean up indexed words from all text attributes of the key up
     // front
     text_index_schema_->DeleteKeyData(key);
+  }
+  // Apply filter if present: check if the key has actual data (not all
+  // deletes). If the filter evaluates to false, convert all entries to
+  // deletes so the key is removed from the index.
+  if (compiled_filter_) {
+    bool has_any_data = false;
+    for (const auto &attr : mutated_attributes) {
+      if (attr.second.deletion_type == indexes::DeletionType::kNone) {
+        has_any_data = true;
+        break;
+      }
+    }
+    if (has_any_data && !EvaluateFilter(mutated_attributes)) {
+      for (auto &attr : mutated_attributes) {
+        attr.second.data = nullptr;
+        attr.second.deletion_type = indexes::DeletionType::kRecord;
+      }
+    }
   }
   bool all_deletes = true;
   for (auto &attribute_data_itr : mutated_attributes) {
@@ -1073,7 +1101,11 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, name_.data());
 
   ValkeyModule_ReplyWithSimpleString(ctx, "index_definition");
-  ValkeyModule_ReplyWithArray(ctx, 6);
+  int index_def_size = 6;
+  if (compiled_filter_) {
+    index_def_size += 2;
+  }
+  ValkeyModule_ReplyWithArray(ctx, index_def_size);
   ValkeyModule_ReplyWithSimpleString(ctx, "key_type");
   ValkeyModule_ReplyWithSimpleString(ctx,
                                      attribute_data_type_->ToString().c_str());
@@ -1086,6 +1118,10 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   // supported.
   ValkeyModule_ReplyWithSimpleString(ctx, "default_score");
   ValkeyModule_ReplyWithCString(ctx, "1");
+  if (compiled_filter_) {
+    ValkeyModule_ReplyWithSimpleString(ctx, "filter");
+    ValkeyModule_ReplyWithSimpleString(ctx, filter_expression_str_.c_str());
+  }
 
   ValkeyModule_ReplyWithSimpleString(ctx, "attributes");
   ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
@@ -1185,6 +1221,9 @@ std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
   index_schema_proto->mutable_stop_words()->Assign(stop_words_.begin(),
                                                    stop_words_.end());
   index_schema_proto->set_skip_initial_scan(skip_initial_scan_);
+  if (!filter_expression_str_.empty()) {
+    index_schema_proto->set_filter(filter_expression_str_);
+  }
 
   auto stats = index_schema_proto->mutable_stats();
   stats->set_documents_count(stats_.document_cnt);
@@ -1964,6 +2003,45 @@ absl::StatusOr<vmsdk::ValkeyVersion> IndexSchema::GetMinVersion(
   } else {
     return kRelease10;
   }
+}
+
+absl::StatusOr<std::unique_ptr<expr::Expression::AttributeReference>>
+IndexSchema::MakeReference(absl::string_view name, bool create) {
+  // Try to find by alias first (attributes_ is keyed by alias)
+  auto itr = attributes_.find(std::string(name));
+  if (itr != attributes_.end()) {
+    return std::make_unique<FilterAttributeReference>(
+        std::string(name), itr->second.GetIndex()->GetIndexerType());
+  }
+  // Try to find by identifier
+  auto id_itr = identifier_to_alias_.find(std::string(name));
+  if (id_itr != identifier_to_alias_.end()) {
+    auto attr_itr = attributes_.find(id_itr->second);
+    auto type = attr_itr != attributes_.end()
+                    ? attr_itr->second.GetIndex()->GetIndexerType()
+                    : indexes::IndexerType::kNone;
+    return std::make_unique<FilterAttributeReference>(id_itr->second, type);
+  }
+  if (!create) {
+    return absl::NotFoundError(
+        absl::StrCat("Field `", name, "` not found in index schema"));
+  }
+  return std::make_unique<FilterAttributeReference>(
+      std::string(name), indexes::IndexerType::kNone);
+}
+
+absl::StatusOr<expr::Value> IndexSchema::GetParam(
+    absl::string_view s) const {
+  return absl::NotFoundError(
+      absl::StrCat("Parameter `", s, "` not found"));
+}
+
+bool IndexSchema::EvaluateFilter(
+    const MutatedAttributes &mutated_attributes) const {
+  FilterRecord record(&mutated_attributes);
+  expr::Expression::EvalContext ctx;
+  auto result = compiled_filter_->Evaluate(ctx, record);
+  return result.IsTrue();
 }
 
 void IndexSchema::SetTextSizeEstimationConditions() {

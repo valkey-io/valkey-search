@@ -136,8 +136,12 @@ class RemoteResponderSearch : public query::SearchParameters {
 
  private:
   void QueryCompleteImpl() {
-    if (!search_result.status.ok() && !enable_partial_results ||
-        cancellation_token->IsCancelled()) {
+    if (!search_result.status.ok() && !enable_partial_results) {
+      reactor->Finish(ToGrpcStatus(search_result.status));
+      RecordSearchMetrics(true, std::move(latency_sample));
+      return;
+    }
+    if (cancellation_token->IsCancelled()) {
       reactor->Finish({grpc::StatusCode::DEADLINE_EXCEEDED,
                        "Search operation cancelled due to timeout"});
       RecordSearchMetrics(true, std::move(latency_sample));

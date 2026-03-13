@@ -260,9 +260,11 @@ class GroupBy : public Stage {
   absl::InlinedVector<std::unique_ptr<Reducer>, 4> reducers_;
 
   void Dump(std::ostream& os) const override {
-    os << "GROUPBY ";
+    os << "GROUPBY";
     for (auto& g : groups_) {
-      if (&g != &groups_[0]) {
+      if (&g == &groups_[0]) {
+        os << ' ';
+      } else {
         os << ',';
       }
       os << '@' << g.get();

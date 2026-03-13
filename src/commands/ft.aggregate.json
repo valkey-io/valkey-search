@@ -206,6 +206,11 @@
                     "name": "TOLIST",
                     "type": "pure-token",
                     "token": "TOLIST"
+                  },
+                  {
+                    "name": "QUANTILE",
+                    "type": "pure-token",
+                    "token": "QUANTILE"
                   }
                 ]
               },

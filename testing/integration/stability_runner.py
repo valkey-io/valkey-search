@@ -367,6 +367,8 @@ class StabilityRunner:
             " --json-out-file"
             f" {memtier_output_dir}/{self.config.index_name}_memtier_del.json"
         )
+        # Use 2-day TTL (172800 seconds) to avoid crash bug with short expiration times
+        # while still testing expiration functionality
         expire_command = (
             f"{self.config.memtier_path}"
             " --cluster-mode"

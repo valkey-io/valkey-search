@@ -97,6 +97,9 @@ const config::Boolean& GetDrainMutationQueueOnSave();
 /// Return the configuration entry for draining mutation queue on load
 const config::Boolean& GetDrainMutationQueueOnLoad();
 
+/// Return the drain mutation queue on save timeout in milliseconds
+config::Number& GetDrainMutationQueueOnSaveTimeoutMs();
+
 /// Return the fanout data uniformity configuration (0-100)
 config::Number& GetFanoutDataUniformity();
 

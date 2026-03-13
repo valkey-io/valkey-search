@@ -451,7 +451,8 @@ class IndexSchema : public KeyspaceEventSubscription,
                         vmsdk::ThreadPool::Priority priority,
                         absl::BlockingCounter *blocking_counter);
   void EnqueueMultiMutation(const Key &key);
-  void DrainMutationQueue(ValkeyModuleCtx *ctx) const
+  absl::Status DrainMutationQueue(ValkeyModuleCtx *ctx,
+                                  int64_t timeout_ms) const
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
 
   void SyncProcessMutation(ValkeyModuleCtx *ctx,

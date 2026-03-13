@@ -408,6 +408,17 @@ constexpr absl::string_view kDrainMutationQueueOnSaveConfig{
 static auto drain_mutation_queue_on_save =
     config::BooleanBuilder(kDrainMutationQueueOnSaveConfig, false).Build();
 
+/// Register the "drain-mutation-queue-on-save-timeout-ms" flag
+/// Timeout for draining the mutation queue in milliseconds
+constexpr absl::string_view kDrainMutationQueueOnSaveTimeoutMsConfig{
+    "drain-mutation-queue-on-save-timeout-ms"};
+static auto drain_mutation_queue_on_save_timeout_ms =
+    config::NumberBuilder(kDrainMutationQueueOnSaveTimeoutMsConfig,
+                          5000,       // default 5 seconds
+                          0,          // min
+                          INT64_MAX)  // max
+        .Build();
+
 /// Register the "fanout-data-uniformity" flag
 /// U = uniformity (0-100): 100 = uniform distribution, 0 = all data in one
 /// shard Formula: limit_per_shard = ceil(K/N) + ((100-U) * (K - ceil(K/N)) /
@@ -584,6 +595,11 @@ const vmsdk::config::Boolean& GetDrainMutationQueueOnSave() {
 const vmsdk::config::Boolean& GetDrainMutationQueueOnLoad() {
   return dynamic_cast<const vmsdk::config::Boolean&>(
       *drain_mutation_queue_on_load);
+}
+
+vmsdk::config::Number& GetDrainMutationQueueOnSaveTimeoutMs() {
+  return dynamic_cast<vmsdk::config::Number&>(
+      *drain_mutation_queue_on_save_timeout_ms);
 }
 
 vmsdk::config::Number& GetFanoutDataUniformity() {

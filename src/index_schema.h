@@ -464,6 +464,10 @@ class IndexSchema : public KeyspaceEventSubscription,
   static void BackfillScanCallback(ValkeyModuleCtx *ctx,
                                    ValkeyModuleString *keyname,
                                    ValkeyModuleKey *key, void *privdata);
+  // Looks up an attribute by treating input as an identifier.
+  // Returns nullptr if the identifier is not found.
+  const Attribute *FindAttributeByIdentifier(
+      absl::string_view identifier) const;
   bool DeleteIfNotInValkeyDict(ValkeyModuleCtx *ctx, ValkeyModuleString *key,
                                const Attribute &attribute);
   vmsdk::BlockedClientCategory GetBlockedCategoryFromProto() const;

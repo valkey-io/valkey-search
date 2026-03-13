@@ -211,6 +211,11 @@
                     "name": "FIRST_VALUE",
                     "type": "pure-token",
                     "token": "FIRST_VALUE"
+                  },
+                  {
+                    "name": "QUANTILE",
+                    "type": "pure-token",
+                    "token": "QUANTILE"
                   }
                 ]
               },

@@ -401,6 +401,20 @@ static auto drain_mutation_queue_on_load =
         .Dev()  // can only be set in debug mode
         .Build();
 
+/// Register the "max-mutation-queue-size-on-restore" parameter
+/// Limit the mutation queue size during RDB restore to prevent memory spikes
+constexpr absl::string_view kMaxMutationQueueSizeOnRestoreConfig{
+    "max-mutation-queue-size-on-restore"};
+constexpr uint32_t kDefaultMaxMutationQueueSizeOnRestore{10000};
+constexpr uint32_t kMinimumMaxMutationQueueSizeOnRestore{100};
+constexpr uint32_t kMaximumMaxMutationQueueSizeOnRestore{1000000};
+static auto max_mutation_queue_size_on_restore =
+    config::NumberBuilder(kMaxMutationQueueSizeOnRestoreConfig,
+                          kDefaultMaxMutationQueueSizeOnRestore,
+                          kMinimumMaxMutationQueueSizeOnRestore,
+                          kMaximumMaxMutationQueueSizeOnRestore)
+        .Build();
+
 /// Register the "drain-mutation-queue-on-save" flag
 /// Drain the mutation queue before RDB save
 constexpr absl::string_view kDrainMutationQueueOnSaveConfig{
@@ -593,6 +607,11 @@ vmsdk::config::Number& GetFanoutDataUniformity() {
 vmsdk::config::Number& GetFanoutUniformityMinIndexSize() {
   return dynamic_cast<vmsdk::config::Number&>(
       *fanout_uniformity_min_index_size);
+}
+
+vmsdk::config::Number& GetMaxMutationQueueSizeOnRestore() {
+  return dynamic_cast<vmsdk::config::Number&>(
+      *max_mutation_queue_size_on_restore);
 }
 
 vmsdk::config::Number& GetAsyncFanoutThreshold() {

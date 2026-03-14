@@ -128,10 +128,9 @@ IndexSchema::BackfillJob::BackfillJob(ValkeyModuleCtx *ctx,
   scan_ctx = vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx);
   ValkeyModule_SelectDb(scan_ctx.get(), db_num);
   db_size = ValkeyModule_DbSize(scan_ctx.get());
-  VMSDK_LOG(NOTICE, ctx) << "Starting backfill for index schema in DB "
-                         << db_num << ": "
-                         << vmsdk::config::RedactIfNeeded(name)
-                         << " (size: " << db_size << ")";
+  VMSDK_LOG_EVERY_N_SEC(NOTICE, ctx, 1)
+      << "Starting backfill for index schema in DB " << db_num << ": "
+      << vmsdk::config::RedactIfNeeded(name) << " (size: " << db_size << ")";
 }
 
 absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
@@ -332,7 +331,7 @@ absl::Status IndexSchema::Init(ValkeyModuleCtx *ctx) {
 }
 
 IndexSchema::~IndexSchema() {
-  VMSDK_LOG(NOTICE, detached_ctx_.get())
+  VMSDK_LOG_EVERY_N_SEC(NOTICE, detached_ctx_.get(), 1)
       << "Index schema " << vmsdk::config::RedactIfNeeded(name_)
       << " dropped from DB " << db_num_;
 
@@ -977,7 +976,7 @@ uint32_t IndexSchema::PerformBackfill(ValkeyModuleCtx *ctx,
     if (!ValkeyModule_Scan(backfill_job->scan_ctx.get(),
                            backfill_job->cursor.get(), BackfillScanCallback,
                            (void *)this)) {
-      VMSDK_LOG(NOTICE, ctx)
+      VMSDK_LOG_EVERY_N_SEC(NOTICE, ctx, 1)
           << "Index schema " << vmsdk::config::RedactIfNeeded(name_)
           << " finished backfill. Scanned " << backfill_job->scanned_key_count
           << " keys in "
@@ -1217,8 +1216,8 @@ static absl::Status SaveSupplementalSection(
   rdb_save_sections.Increment();
   auto header = std::make_unique<data_model::SupplementalContentHeader>();
   header->set_type(type);
-  VMSDK_LOG(NOTICE, nullptr) << "Writing supplemental section type "
-                             << data_model::SupplementalContentType_Name(type);
+  VMSDK_LOG(DEBUG, nullptr) << "Writing supplemental section type "
+                            << data_model::SupplementalContentType_Name(type);
   init(*header);
   auto header_str = header->SerializeAsString();
   VMSDK_RETURN_IF_ERROR(rdb->SaveStringBuffer(header_str));
@@ -1266,7 +1265,7 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
       << vmsdk::config::RedactIfNeeded(this->name_)
       << " in DB: " << this->db_num_ << " to RDB";
 
-  VMSDK_LOG(NOTICE, nullptr)
+  VMSDK_LOG(DEBUG, nullptr)
       << "Starting to save " << attributes_.size() << " attributes.";
 
   for (auto &attribute : attributes_) {
@@ -1308,7 +1307,7 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
           rdb_save_backfilling_indexes.Increment(int(IsBackfillInProgress()));
           header.mutable_mutation_queue_header()->set_backfilling(
               IsBackfillInProgress());
-          VMSDK_LOG(NOTICE, nullptr)
+          VMSDK_LOG(DEBUG, nullptr)
               << "RDB: Saving Index Extension Backfill = "
               << header.mutation_queue_header().backfilling();
         },
@@ -1407,7 +1406,7 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
   size_t key_count = db_key_info_.Get().size();
   VMSDK_RETURN_IF_ERROR(out.SaveObject(key_count));
   rdb_save_keys.Increment(key_count);
-  VMSDK_LOG(NOTICE, nullptr) << "Writing Index Extension, keys = " << key_count;
+  VMSDK_LOG(DEBUG, nullptr) << "Writing Index Extension, keys = " << key_count;
   for (auto &[key, _] : db_key_info_.Get()) {
     VMSDK_RETURN_IF_ERROR(out.SaveString(key->Str()));
   }
@@ -1423,7 +1422,7 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
                                            [](const auto &entry) {
                                              return !entry.second.from_backfill;
                                            });
-  VMSDK_LOG(NOTICE, nullptr)
+  VMSDK_LOG(DEBUG, nullptr)
       << "Writing mutation queue records = " << count
       << " Total queue:" << tracked_mutated_records_.size();
   VMSDK_RETURN_IF_ERROR(out.SaveObject(count));
@@ -1444,8 +1443,8 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
   VMSDK_RETURN_IF_ERROR(
       out.SaveObject<size_t>(multi_mutations_keys_.Get().size()));
   rdb_save_multi_exec_entries.Increment(multi_mutations_keys_.Get().size());
-  VMSDK_LOG(NOTICE, nullptr) << "Writing Multi/Exec Queue, records = "
-                             << multi_mutations_keys_.Get().size();
+  VMSDK_LOG(DEBUG, nullptr) << "Writing Multi/Exec Queue, records = "
+                            << multi_mutations_keys_.Get().size();
   for (const auto &key : multi_mutations_keys_.Get()) {
     CHECK(tracked_mutated_records_.find(key) != tracked_mutated_records_.end());
     VMSDK_RETURN_IF_ERROR(out.SaveString(key->Str()));

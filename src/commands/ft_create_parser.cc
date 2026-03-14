@@ -534,6 +534,20 @@ absl::StatusOr<indexes::IndexerType> ParseIndexerType(
                              index_type_str, *indexes::kIndexerTypeByStr));
   return index_type;
 }
+
+constexpr absl::string_view kInvalidAttributeAliasChars{"{}[]:;$"};
+
+absl::Status ValidateAttributeAlias(absl::string_view alias) {
+  for (const char ch : alias) {
+    if (kInvalidAttributeAliasChars.find(ch) != absl::string_view::npos) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Attribute alias `", alias, "` contains invalid character `",
+          std::string(1, ch), "`"));
+    }
+  }
+  return absl::OkStatus();
+}
+
 absl::StatusOr<data_model::Attribute *> ParseAttributeArgs(
     vmsdk::ArgsIterator &itr, absl::string_view attribute_identifier,
     data_model::IndexSchema &index_schema_proto,
@@ -546,6 +560,7 @@ absl::StatusOr<data_model::Attribute *> ParseAttributeArgs(
   if (!res) {
     attribute_proto->set_alias(attribute_proto->identifier());
   }
+  VMSDK_RETURN_IF_ERROR(ValidateAttributeAlias(attribute_proto->alias()));
   VMSDK_ASSIGN_OR_RETURN(auto index_type, ParseIndexerType(itr));
   auto index_proto = std::make_unique<data_model::Index>();
   switch (index_type) {

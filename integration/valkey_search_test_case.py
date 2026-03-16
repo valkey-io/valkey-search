@@ -253,7 +253,6 @@ class ValkeySearchTestCaseBase(ValkeySearchTestCaseCommon):
                 port=external_port,
                 external_server=True
             )
-            self.client.flushall()
             self.rg = None
             self.nodes = []
         else:

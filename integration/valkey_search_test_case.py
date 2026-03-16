@@ -278,11 +278,7 @@ class ValkeySearchTestCaseBase(ValkeySearchTestCaseCommon):
 
         # Cleanup
         if use_external:
-            # Flush all data after test to clean up
-            try:
-                self.client.flushall()
-            except:
-                pass
+            self.client.flushall()
         else:
             ReplicationGroup.cleanup(self.rg)
 

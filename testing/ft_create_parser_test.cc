@@ -812,6 +812,96 @@ INSTANTIATE_TEST_SUITE_P(
                  "Invalid field type for field `hash_field1`: Unknown argument "
                  "`asa`",
          },
+         {
+             .test_name = "invalid_alias_with_closing_bracket",
+             .success = false,
+             .command_str =
+                 "idx1 on HASH SChema hash_field1 as hash_field]1 numeric",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Attribute alias "
+                 "`hash_field]1` contains invalid character `]`",
+         },
+         {
+             .test_name = "invalid_alias_with_closing_brace",
+             .success = false,
+             .command_str =
+                 "idx1 on HASH SChema hash_field1 as hash_field}1 numeric",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Attribute alias "
+                 "`hash_field}1` contains invalid character `}`",
+         },
+         {
+             .test_name = "invalid_alias_with_opening_brace",
+             .success = false,
+             .command_str =
+                 "idx1 on HASH SChema hash_field1 as hash_field{1 numeric",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Attribute alias "
+                 "`hash_field{1` contains invalid character `{`",
+         },
+         {
+             .test_name = "invalid_alias_with_opening_bracket",
+             .success = false,
+             .command_str =
+                 "idx1 on HASH SChema hash_field1 as hash_field[1 numeric",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Attribute alias "
+                 "`hash_field[1` contains invalid character `[`",
+         },
+         {
+             .test_name = "invalid_alias_with_colon",
+             .success = false,
+             .command_str =
+                 "idx1 on HASH SChema hash_field1 as hash_field:1 numeric",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Attribute alias "
+                 "`hash_field:1` contains invalid character `:`",
+         },
+         {
+             .test_name = "invalid_alias_with_semicolon",
+             .success = false,
+             .command_str =
+                 "idx1 on HASH SChema hash_field1 as hash_field;1 numeric",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Attribute alias "
+                 "`hash_field;1` contains invalid character `;`",
+         },
+         {
+             .test_name = "invalid_alias_with_dollar_sign",
+             .success = false,
+             .command_str =
+                 "idx1 on HASH SChema hash_field1 as hash_field$1 numeric",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Attribute alias "
+                 "`hash_field$1` contains invalid character `$`",
+         },
+         {
+             .test_name = "invalid_alias_with_comma",
+             .success = false,
+             .command_str =
+                 "idx1 on HASH SChema hash_field1 as hash_field,1 numeric",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Attribute alias "
+                 "`hash_field,1` contains invalid character `,`",
+         },
+         {
+             .test_name = "invalid_alias_with_exclamation_mark",
+             .success = false,
+             .command_str =
+                 "idx1 on HASH SChema hash_field1 as hash_field!1 numeric",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Attribute alias "
+                 "`hash_field!1` contains invalid character `!`",
+         },
+         {
+             .test_name = "invalid_alias_with_dash",
+             .success = false,
+             .command_str =
+                 "idx1 on HASH SChema hash_field1 as hash-field1 numeric",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Attribute alias "
+                 "`hash-field1` contains invalid character `-`",
+         },
          {.test_name = "invalid_negative_prefix_cnt",
           .success = false,
           .command_str =

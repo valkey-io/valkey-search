@@ -85,8 +85,13 @@ struct SearchPartitionResultsTracker {
       results ABSL_GUARDED_BY(mutex);
   int outstanding_requests ABSL_GUARDED_BY(mutex);
   std::unique_ptr<SearchParameters> parameters ABSL_GUARDED_BY(mutex);
+  // Error tracking
   std::atomic_bool consistency_failed{false};
   std::atomic<size_t> accumulated_total_count{0};
+  std::atomic_bool has_successful_node{false};  // Whether any node succeeded
+  std::atomic_bool has_node_error{false};       // Whether any node failed
+  absl::Status first_node_error
+      ABSL_GUARDED_BY(mutex);  // First error encountered
 
   SearchPartitionResultsTracker(int outstanding_requests, int k,
                                 std::unique_ptr<SearchParameters> parameters)
@@ -96,25 +101,30 @@ struct SearchPartitionResultsTracker {
   void HandleResponse(coordinator::SearchIndexPartitionResponse &response,
                       const std::string &address, const grpc::Status &status) {
     if (!status.ok()) {
+      // Store first error for partial results disabled case
+      {
+        absl::MutexLock lock(&mutex);
+        if (!has_node_error.load()) {
+          has_node_error.store(true);
+          first_node_error = ToAbslStatus(status);
+        }
+      }
       if (parameters->enable_consistency &&
           status.error_code() == grpc::FAILED_PRECONDITION) {
         consistency_failed.store(true);
       }
-      bool should_cancel = status.error_code() == grpc::RESOURCE_EXHAUSTED ||
-                           !parameters->enable_partial_results ||
-                           consistency_failed.load();
+      // Cancel for consistency failures or when partial results are disabled
+      bool should_cancel =
+          consistency_failed.load() || !parameters->enable_partial_results;
       if (should_cancel) {
         parameters->cancellation_token->Cancel();
       }
-      if (status.error_code() != grpc::DEADLINE_EXCEEDED ||
-          status.error_code() != grpc::FAILED_PRECONDITION) {
-        VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
-            << "Error during handling of FT.SEARCH on node " << address << ": "
-            << status.error_message();
-      }
+      VMSDK_LOG_EVERY_N_SEC(DEBUG, nullptr, 1)
+          << "Error during handling of FT.SEARCH on node " << address;
       return;
     }
-
+    // Success case
+    has_successful_node.store(true);
     absl::MutexLock lock(&mutex);
     accumulated_total_count.fetch_add(response.total_count(),
                                       std::memory_order_relaxed);
@@ -169,8 +179,16 @@ struct SearchPartitionResultsTracker {
     absl::MutexLock lock(&mutex);
     absl::Status status;
     if (consistency_failed) {
+      // Consistency failures always take precedence
       status = absl::FailedPreconditionError(kFailedPreconditionMsg);
+    } else if (has_node_error.load() && (!parameters->enable_partial_results ||
+                                         !has_successful_node.load())) {
+      // Use first error when:
+      // - Partial results disabled (any error fails the operation), OR
+      // - Partial results enabled but no nodes succeeded (all failed)
+      status = first_node_error;
     } else {
+      // No errors detected - success case
       std::vector<indexes::Neighbor> neighbors;
       neighbors.resize(results.size());
       size_t i = neighbors.size();
@@ -224,13 +242,26 @@ class LocalResponderSearch : public query::SearchParameters {
 
  private:
   void QueryCompleteImpl(std::unique_ptr<SearchParameters> self) {
-    if (search_result.status.ok() || enable_partial_results) {
+    if (search_result.status.ok()) {
+      tracker->has_successful_node.store(true);
       tracker->AddResults(search_result.neighbors);
       tracker->AddTotalCount(search_result.total_count);
     } else {
-      VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
-          << "Error during local handling of FT.SEARCH: "
-          << search_result.status.message();
+      // Store first error for partial results disabled case
+      {
+        absl::MutexLock lock(&tracker->mutex);
+        if (!tracker->has_node_error.load()) {
+          tracker->has_node_error.store(true);
+          tracker->first_node_error = search_result.status;
+        }
+      }
+      // Only add results if partial results are enabled
+      if (enable_partial_results) {
+        tracker->AddResults(search_result.neighbors);
+        tracker->AddTotalCount(search_result.total_count);
+      }
+      VMSDK_LOG_EVERY_N_SEC(DEBUG, nullptr, 1)
+          << "Error during local handling of the search operation";
     }
     // Stash `self` (the LocalResponderSearch) in the tracker so that its
     // SearchParameters fields outlive the Neighbor entries moved into

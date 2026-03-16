@@ -797,7 +797,7 @@ Value FuncConcat(const absl::InlinedVector<Value, 4>& values) {
     if (!ts) {                                            \
       return Value(Value::Nil("timestamp not a number")); \
     }                                                     \
-    time_t time = (time_t)*ts;                            \
+    time_t time = (time_t) * ts;                          \
     struct ::tm tm;                                       \
     gmtime_r(&time, &tm);                                 \
     return Value(double(tm.field + (adjustment)));        \

@@ -1469,7 +1469,7 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
       // Apply backpressure if mutation queue is too large
       while (current_queue_size >= max_queue_size) {
         // Use ValkeyModule_Yield to cooperatively yield during loading
-        ValkeyModule_Yield(ctx, VALKEYMODULE_YIELD_FLAG_NONE, nullptr);
+        ValkeyModule_Yield(ctx, VALKEYMODULE_YIELD_FLAG_CLIENTS, "slow module operation");
         backpressure_wait_count++;
         current_queue_size = GetMutatedRecordsSize();
         

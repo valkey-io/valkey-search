@@ -1237,7 +1237,7 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
     DrainMutationQueue(detached_ctx_.get());
   }
 
-  VMSDK_LOG(DEBUG, nullptr)
+  VMSDK_LOG(NOTICE, nullptr)
       << "Starting RDB save for index schema: "
       << vmsdk::config::RedactIfNeeded(name_) << " Saving in version "
       << (RDBWriteV2() ? "2" : "1") << " format";
@@ -1265,7 +1265,7 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
       << vmsdk::config::RedactIfNeeded(this->name_)
       << " in DB: " << this->db_num_ << " to RDB";
 
-  VMSDK_LOG(DEBUG, nullptr)
+  VMSDK_LOG(NOTICE, nullptr)
       << "Starting to save " << attributes_.size() << " attributes.";
 
   for (auto &attribute : attributes_) {
@@ -1406,7 +1406,7 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
   size_t key_count = db_key_info_.Get().size();
   VMSDK_RETURN_IF_ERROR(out.SaveObject(key_count));
   rdb_save_keys.Increment(key_count);
-  VMSDK_LOG(DEBUG, nullptr) << "Writing Index Extension, keys = " << key_count;
+  VMSDK_LOG(NOTICE, nullptr) << "Writing Index Extension, keys = " << key_count;
   for (auto &[key, _] : db_key_info_.Get()) {
     VMSDK_RETURN_IF_ERROR(out.SaveString(key->Str()));
   }
@@ -1422,7 +1422,7 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
                                            [](const auto &entry) {
                                              return !entry.second.from_backfill;
                                            });
-  VMSDK_LOG(DEBUG, nullptr)
+  VMSDK_LOG(NOTICE, nullptr)
       << "Writing mutation queue records = " << count
       << " Total queue:" << tracked_mutated_records_.size();
   VMSDK_RETURN_IF_ERROR(out.SaveObject(count));

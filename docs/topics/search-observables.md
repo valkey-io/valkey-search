@@ -5,7 +5,7 @@ description: Valkey Search Module INFO Fields
 
 # INFO Fields
 
-| Metric Name                                                    |     Section      |     Unit     | Description                                                                                                                                                                       |
+| APP Metric Name                                                |     Section      |     Unit     | APP metric Description                                                                                                                                                            |
 | :------------------------------------------------------------- | :--------------: | :----------: | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | coordinator_bytes_in                                           |   coordinator    |    Bytes     | Total size (in bytes) of incoming gRPC response messages received by the coordinator client from remote nodes                                                                     |
 | coordinator_bytes_out                                          |   coordinator    |    Bytes     | Total size (in bytes) of outgoing gRPC request messages sent by the coordinator client to remote nodes.                                                                           |

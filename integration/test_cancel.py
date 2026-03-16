@@ -224,25 +224,25 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
         # Now, test pre-filtering case.
         #
         assert (
-            client.info("SEARCH")["search_query_prefiltering_requests_cnt"] == 0
+            client.info("SEARCH")["search_prefiltering_requests_count"] == 0
         )
         hnsw_result = search(client, "hnsw", False, 1, enable_partial_results=True)
         assert hnsw_result[0] == 1
         assert client.info("SEARCH")["search_test-counter-ForceCancels"] == 5
         assert (
-            client.info("SEARCH")["search_query_prefiltering_requests_cnt"] == 1
+            client.info("SEARCH")["search_prefiltering_requests_count"] == 1
         )
 
         #
         # Disable partial results, and force timeout with pre-filtering
         #
         assert (
-            client.info("SEARCH")["search_query_prefiltering_requests_cnt"] == 1
+            client.info("SEARCH")["search_prefiltering_requests_count"] == 1
         )
         hnsw_result = search(client, "hnsw", True, 1, enable_partial_results=False)
         assert client.info("SEARCH")["search_test-counter-ForceCancels"] == 6
         assert (
-            client.info("SEARCH")["search_query_prefiltering_requests_cnt"] == 2
+            client.info("SEARCH")["search_prefiltering_requests_count"] == 2
         )
         assert hnsw_result != nominal_hnsw_result
 
@@ -551,7 +551,7 @@ class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
         #
         flat_result = search(client, "flat", True, 10, enable_partial_results=False)
         self.check_info_sum("search_test-counter-ForceCancels", 6)
-        self.check_info_sum("search_query_prefiltering_requests_cnt", 3)
+        self.check_info_sum("search_prefiltering_requests_count", 3)
 
         #
         # Pre-filtering HNSW path
@@ -559,7 +559,7 @@ class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
         #
         self.config_set("search.prefiltering-threshold-ratio", "0.5")
         hnsw_result = search(client, "hnsw", True, 10, enable_partial_results=False)
-        self.check_info_sum("search_query_prefiltering_requests_cnt", 6)
+        self.check_info_sum("search_prefiltering_requests_count", 6)
         self.check_info_sum("search_test-counter-ForceCancels", 9)
 
     def test_aggregate_timeout_cluster(self):

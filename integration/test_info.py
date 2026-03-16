@@ -145,7 +145,7 @@ class TestAppMetrics(ValkeySearchTestCaseDebugMode):
             "hybrid_requests_count",
             "inline_filtering_requests_count",
             "nonvector_requests_count",
-            "query_prefiltering_requests_cnt",
+            "prefiltering_requests_count",
             "result_record_dropped_count",
             "successful_requests_count",
             "vector_requests_count",

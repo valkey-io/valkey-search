@@ -511,10 +511,9 @@ void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx) {
                           << " on FLUSHDB of DB " << selected_db;
     auto old_schema = RemoveIndexSchemaInternal(selected_db, name);
     if (!old_schema.ok()) {
-      VMSDK_LOG(WARNING, ctx)
-          << "Unable to delete index schema "
-          << vmsdk::config::RedactIfNeeded(name) << " on FLUSHDB of DB "
-          << selected_db << ": " << old_schema.status().message();
+      VMSDK_LOG(WARNING, ctx) << "Unable to delete index schema "
+                              << vmsdk::config::RedactIfNeeded(name)
+                              << " on FLUSHDB of DB " << selected_db;
       continue;
     }
     if (coordinator_enabled_) {
@@ -531,10 +530,9 @@ void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx) {
           << " on FLUSHDB of DB " << selected_db;
       auto add_status = CreateIndexSchemaInternal(ctx, *to_add);
       if (!add_status.ok()) {
-        VMSDK_LOG(WARNING, ctx)
-            << "Unable to recreate index schema "
-            << vmsdk::config::RedactIfNeeded(name) << " on FLUSHDB of DB "
-            << selected_db << ": " << add_status.message();
+        VMSDK_LOG(WARNING, ctx) << "Unable to recreate index schema "
+                                << vmsdk::config::RedactIfNeeded(name)
+                                << " on FLUSHDB of DB " << selected_db;
         continue;
       }
     }
@@ -590,8 +588,7 @@ void SchemaManager::OnLoadingEnded(ValkeyModuleCtx *ctx) {
     auto status = RemoveAll();
     if (!status.ok()) {
       VMSDK_LOG(WARNING, ctx) << "Failed to remove contents of existing "
-                                 "schemas on loading end: "
-                              << status.message();
+                                 "schemas on loading end.";
     }
     db_to_index_schemas_ = staged_db_to_index_schemas_.Get();
     staged_db_to_index_schemas_ = absl::flat_hash_map<
@@ -711,9 +708,8 @@ absl::Status SchemaManager::LoadIndex(
   } else if (!absl::IsNotFound(remove_existing_status.status())) {
     ValkeyModule_Log(detached_ctx_.get(), VALKEYMODULE_LOGLEVEL_WARNING,
                      "Failed to delete existing index from RDB for: %s (in db "
-                     "%d): %s",
-                     vmsdk::config::RedactIfNeeded(name).data(), db_num,
-                     remove_existing_status.status().message().data());
+                     "%d)",
+                     vmsdk::config::RedactIfNeeded(name).data(), db_num);
   }
 
   db_to_index_schemas_[db_num][name] = std::move(index_schema);

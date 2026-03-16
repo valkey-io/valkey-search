@@ -22,7 +22,7 @@ namespace vmsdk {
 void DoDeregister(ValkeyModuleCtx *ctx, ValkeyModuleKey *module_key,
                   absl::string_view key) {
   if (ValkeyModule_DeleteKey(module_key) != VALKEYMODULE_OK) {
-    VMSDK_LOG(WARNING, ctx) << "failed to delete redis key " << key;
+    VMSDK_LOG(WARNING, ctx) << "failed to delete Valkey key " << key;
     DCHECK(false);
   }
 }
@@ -68,7 +68,7 @@ absl::Status ModuleType::Deregister(ValkeyModuleCtx *ctx,
   if (!module_key) {
     DCHECK(false);
     return absl::InternalError(
-        absl::StrCat("failed to open redis key: ", key.data()));
+        absl::StrCat("failed to open valkey key: ", key.data()));
   }
   DoDeregister(ctx, module_key.get(), key);
   return absl::OkStatus();

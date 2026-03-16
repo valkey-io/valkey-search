@@ -1226,8 +1226,12 @@ static absl::Status SaveSupplementalSection(
 }
 
 absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
-  // Drain mutation queue before save if configured
-  if (options::GetDrainMutationQueueOnSave().GetValue()) {
+  // Drain mutation queue before save if configured and queue is non-empty.
+  // In forked child (BGSave), the queue is a frozen snapshot that will never
+  // drain, so skip it instead.
+  int flags = ValkeyModule_GetContextFlags(nullptr);
+  bool is_bgsave = (flags & VALKEYMODULE_CTX_FLAGS_IS_CHILD) != 0;
+  if (options::GetDrainMutationQueueOnSave().GetValue() && !is_bgsave) {
     VMSDK_LOG(NOTICE, nullptr)
         << "Draining mutation queue before RDB save for index "
         << vmsdk::config::RedactIfNeeded(name_);

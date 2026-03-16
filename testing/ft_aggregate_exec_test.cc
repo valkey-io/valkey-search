@@ -127,12 +127,11 @@ struct AggregateExecTest : public vmsdk::ValkeyTest {
     EXPECT_TRUE(result.ok()) << " Status is: " << result << "\n";
 
     // Free the allocated ValkeyModuleStrings to avoid memory leaks
-    for (auto *str : argv) {
+    for (auto* str : argv) {
       ValkeyModule_FreeString(nullptr, str);
     }
     return params;
   }
-
 };
 
 TEST_F(AggregateExecTest, LimitTest) {
@@ -349,7 +348,7 @@ TEST_F(AggregateExecTest, FirstValueReducerTest) {
       {"groupby 1 @n2 reduce first_value 4 @n1 BY @n1 UP", 4, {}, false},
   };
 
-  for (auto &tc : testcases) {
+  for (auto& tc : testcases) {
     std::cerr << "FirstValueReducerTest: " << tc.text_ << "\n";
     if (!tc.should_succeed) {
       // Parse errors are now surfaced at parse time, not execution time.
@@ -362,7 +361,7 @@ TEST_F(AggregateExecTest, FirstValueReducerTest) {
       auto parser = CreateAggregateParser();
       auto result = parser.Parse(*params, itr);
       EXPECT_FALSE(result.ok()) << tc.text_ << ": expected parse failure";
-      for (auto *str : argv) ValkeyModule_FreeString(nullptr, str);
+      for (auto* str : argv) ValkeyModule_FreeString(nullptr, str);
       continue;
     }
     auto param = MakeStages(tc.text_);
@@ -374,8 +373,7 @@ TEST_F(AggregateExecTest, FirstValueReducerTest) {
     std::cerr << "Result: " << *record << "\n";
     for (size_t i = 0; i < tc.values_.size(); ++i) {
       EXPECT_TRUE(record->fields_.at(i + 2).IsDouble());
-      EXPECT_NEAR(*(record->fields_.at(i + 2).AsDouble()), tc.values_[i],
-                  .001);
+      EXPECT_NEAR(*(record->fields_.at(i + 2).AsDouble()), tc.values_[i], .001);
     }
   }
 }
@@ -393,8 +391,8 @@ TEST_F(AggregateExecTest, FirstValueReducerEdgeCasesTest) {
   // All nil comparison values: result is nil.
   {
     std::cerr << "FirstValueReducerEdgeCasesTest: all nil comparison values\n";
-    auto param = MakeStages(
-        "groupby 1 @n2 reduce first_value 4 @n1 BY @n1 ASC");
+    auto param =
+        MakeStages("groupby 1 @n2 reduce first_value 4 @n1 BY @n1 ASC");
     RecordSet records(nullptr);
     for (size_t i = 0; i < 4; ++i) {
       auto rec = std::make_unique<Record>(2);
@@ -412,8 +410,8 @@ TEST_F(AggregateExecTest, FirstValueReducerEdgeCasesTest) {
   // Nil return value is preserved when that record has the optimal comparison.
   {
     std::cerr << "FirstValueReducerEdgeCasesTest: nil return value preserved\n";
-    auto param = MakeStages(
-        "groupby 1 @n2 reduce first_value 4 @n1 BY @n2 ASC");
+    auto param =
+        MakeStages("groupby 1 @n2 reduce first_value 4 @n1 BY @n2 ASC");
     RecordSet records(nullptr);
     // rec with n2=1 (best ASC) has nil n1 — that nil should be returned.
     auto r1 = std::make_unique<Record>(2);
@@ -427,12 +425,12 @@ TEST_F(AggregateExecTest, FirstValueReducerEdgeCasesTest) {
     EXPECT_TRUE(param->stages_[0]->Execute(records).ok());
     ASSERT_EQ(records.size(), 2);
     std::cerr << "Results:\n";
-    for (auto &rec : records) {
+    for (auto& rec : records) {
       std::cerr << *rec << "\n";
     }
     // Find the group with n2=1 and verify its result is nil.
     bool found = false;
-    for (auto &rec : records) {
+    for (auto& rec : records) {
       if (rec->fields_.at(1).IsDouble() &&
           *rec->fields_.at(1).AsDouble() == 1.0) {
         EXPECT_TRUE(rec->fields_.at(2).IsNil());
@@ -445,8 +443,8 @@ TEST_F(AggregateExecTest, FirstValueReducerEdgeCasesTest) {
   // Tie-breaking: first encountered record wins (ASC).
   {
     std::cerr << "FirstValueReducerEdgeCasesTest: tie-breaking ASC\n";
-    auto param = MakeStages(
-        "groupby 1 @n2 reduce first_value 4 @n1 BY @n1 ASC");
+    auto param =
+        MakeStages("groupby 1 @n2 reduce first_value 4 @n1 BY @n1 ASC");
     RecordSet records(nullptr);
     for (double v : {10.0, 10.0, 50.0}) {
       auto rec = std::make_unique<Record>(2);
@@ -464,8 +462,8 @@ TEST_F(AggregateExecTest, FirstValueReducerEdgeCasesTest) {
   // Tie-breaking: first encountered record wins (DESC).
   {
     std::cerr << "FirstValueReducerEdgeCasesTest: tie-breaking DESC\n";
-    auto param = MakeStages(
-        "groupby 1 @n2 reduce first_value 4 @n1 BY @n1 DESC");
+    auto param =
+        MakeStages("groupby 1 @n2 reduce first_value 4 @n1 BY @n1 DESC");
     RecordSet records(nullptr);
     for (double v : {50.0, 100.0, 100.0}) {
       auto rec = std::make_unique<Record>(2);
@@ -483,8 +481,8 @@ TEST_F(AggregateExecTest, FirstValueReducerEdgeCasesTest) {
   // Mixed nil/non-nil comparison values: nils are skipped.
   {
     std::cerr << "FirstValueReducerEdgeCasesTest: mixed nil/non-nil\n";
-    auto param = MakeStages(
-        "groupby 1 @n2 reduce first_value 4 @n1 BY @n1 ASC");
+    auto param =
+        MakeStages("groupby 1 @n2 reduce first_value 4 @n1 BY @n1 ASC");
     RecordSet records(nullptr);
     // nil, 50, nil, 100 — minimum non-nil is 50.
     for (auto v : {std::optional<double>{}, std::optional<double>{50.0},
@@ -501,7 +499,6 @@ TEST_F(AggregateExecTest, FirstValueReducerEdgeCasesTest) {
     EXPECT_NEAR(*result->fields_.at(2).AsDouble(), 50.0, 0.001);
   }
 }
-
 
 }  // namespace aggregate
 }  // namespace valkey_search

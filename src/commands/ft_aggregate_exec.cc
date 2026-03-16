@@ -451,8 +451,7 @@ ParseFirstValueArgs(AggregateParameters &params, vmsdk::ArgsIterator &itr,
   // Optional direction token (default: ASC).
   if (nargs == 4) {
     VMSDK_ASSIGN_OR_RETURN(auto dir_tok, itr.PopNext());
-    auto dir_upper =
-        expr::FuncUpper(expr::Value(vmsdk::ToStringView(dir_tok)));
+    auto dir_upper = expr::FuncUpper(expr::Value(vmsdk::ToStringView(dir_tok)));
     auto dir_str = dir_upper.AsStringView();
     if (dir_str != "ASC" && dir_str != "DESC") {
       return absl::InvalidArgumentError(

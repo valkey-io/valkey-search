@@ -234,7 +234,7 @@ class GroupBy : public Stage {
     size_t min_nargs_{0};
     size_t max_nargs_{0};
     std::unique_ptr<ReducerInstance> (*make_instance)(
-        const std::vector<std::unique_ptr<expr::Expression>> &args);
+        const std::vector<std::unique_ptr<expr::Expression>>& args);
 
     // Optional custom argument parser. When set, called instead of the generic
     // expression-compile loop. Receives the raw iterator positioned just after
@@ -242,9 +242,9 @@ class GroupBy : public Stage {
     // to store in Reducer::args_, or an error surfaced at parse time.
     using ArgParser =
         absl::StatusOr<std::vector<std::unique_ptr<expr::Expression>>>(
-            AggregateParameters &params, vmsdk::ArgsIterator &itr,
+            AggregateParameters& params, vmsdk::ArgsIterator& itr,
             uint32_t nargs);
-    ArgParser *parse_args{nullptr};
+    ArgParser* parse_args{nullptr};
   };
   static absl::flat_hash_map<std::string, ReducerInfo> reducerTable;
 

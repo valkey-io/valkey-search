@@ -234,17 +234,17 @@ ConstructGroupByParser() {
           }
 
           if (r.info_->parse_args) {
-            VMSDK_ASSIGN_OR_RETURN(r.args_, r.info_->parse_args(parameters, itr, cnt),
+            VMSDK_ASSIGN_OR_RETURN(r.args_,
+                                   r.info_->parse_args(parameters, itr, cnt),
                                    _ << " in GROUPBY stage");
           } else {
             for (int i = 0; i < cnt; ++i) {
               VMSDK_ASSIGN_OR_RETURN(auto arg, itr.PopNext(),
                                      _ << "Missing Reducer argument " << i);
-              VMSDK_ASSIGN_OR_RETURN(
-                  auto expr,
-                  expr::Expression::Compile(parameters,
-                                            vmsdk::ToStringView(arg)),
-                  _ << " in GROUPBY stage");
+              VMSDK_ASSIGN_OR_RETURN(auto expr,
+                                     expr::Expression::Compile(
+                                         parameters, vmsdk::ToStringView(arg)),
+                                     _ << " in GROUPBY stage");
               r.args_.emplace_back(std::move(expr));
             }
           }

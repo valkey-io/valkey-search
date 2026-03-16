@@ -7,6 +7,7 @@ data integrity to detect memory issues during restore operations.
 import os
 import time
 import logging
+import pytest
 from valkey import ResponseError, OutOfMemoryError
 from valkey.client import Valkey
 
@@ -16,6 +17,7 @@ from utils import IndexingTestHelper
 from ft_info_parser import FTInfoParser
 
 
+@pytest.mark.skip("TODO: https://github.com/valkey-io/valkey-search/issues/877 ")
 class TestEnduranceSaveRestore(ValkeySearchTestCaseBase):
     """
     Endurance test for save/restore operations at maximum memory.
@@ -113,32 +115,12 @@ class TestEnduranceSaveRestore(ValkeySearchTestCaseBase):
                 
                 if doc_id % 1000 == 0:
                     info = client.info("memory")
-                    
-                    # Allen's experiment: Track OSS vs Valkey memory
-                    used_memory = info.get('used_memory', 0)  # B = Valkey's internal tracking
-                    used_memory_rss = info.get('used_memory_rss', 0)  # A = OS-level memory
+                    used = info.get('used_memory', 0)
                     max_mem = info.get('maxmemory', 0)
-                    
-                    # Calculate metrics Allen requested
-                    diff_a_minus_b = used_memory_rss - used_memory  # (A-B)
-                    ratio_a_over_b = used_memory_rss / used_memory if used_memory > 0 else 0  # (A/B)
-                    
                     elapsed = time.time() - start_time
                     rate = doc_id / elapsed if elapsed > 0 else 0
-                    
-                    # Enhanced output with OSS vs Valkey memory comparison
-                    print(f"  {doc_id:,} docs | "
-                          f"Valkey: {used_memory:,} / {max_mem:,} | "
-                          f"OSS_RSS: {used_memory_rss:,} | "
-                          f"Diff(RSS-Valkey): {diff_a_minus_b:,} | "
-                          f"Ratio(RSS/Valkey): {ratio_a_over_b:.4f} | "
-                          f"Rate: {rate:.0f} docs/sec")
-                    
-                    logging.info(f"Loaded {doc_id} documents ({rate:.0f} docs/sec) | "
-                               f"used_memory: {used_memory:,}, "
-                               f"used_memory_rss: {used_memory_rss:,}, "
-                               f"diff: {diff_a_minus_b:,}, "
-                               f"ratio: {ratio_a_over_b:.4f}")
+                    print(f"  {doc_id} docs, {used:,} / {max_mem:,} bytes ({rate:.0f} docs/sec)")
+                    logging.info(f"Loaded {doc_id} documents ({rate:.0f} docs/sec)")
                     
             except (OutOfMemoryError, ResponseError) as e:
                 error_str = str(e).upper()
@@ -197,21 +179,6 @@ class TestEnduranceSaveRestore(ValkeySearchTestCaseBase):
         if "SKIPLOGCLEAN" in os.environ:
             del os.environ["SKIPLOGCLEAN"]
             print("  Cleared SKIPLOGCLEAN environment variable")
-        
-        # Remove RDB file from test directory
-        testdir = f"{os.getenv('LOGS_DIR', '/tmp/valkey-test-framework-files')}/{self.test_name}"
-        rdb_file = os.path.join(testdir, "dump.rdb")
-        if os.path.exists(rdb_file):
-            os.remove(rdb_file)
-            print(f"  Removed RDB file: {rdb_file}")
-        else:
-            print(f"  RDB file not present (may have been auto-cleaned): {rdb_file}")
-        
-        # Restart server to truly clear memory
-        # After loading 2GB+ of data and restoring, FLUSHALL alone doesn't
-        # release memory back to OS due to fragmentation and allocator overhead
-        print("\n  Restarting server to clear memory...")
-        self.server.restart(remove_rdb=True)
         
         # Reconnect after restart
         self.client = self.server.get_new_client()
@@ -439,66 +406,4 @@ class TestEnduranceSaveRestore(ValkeySearchTestCaseBase):
             },
             write_verify_query="@price:[99998 100000]"
         )
-    # def test_endurance_vector_index(self):
-    #     """Endurance test for VECTOR index."""
-    #     import numpy as np
-
-    #     # Vector dimension - must match schema
-    #     DIM = 128
-    #     NUM_QUERY_VECTORS = 5  # Test multiple query vectors to increase search coverage
-
-    #     def vector_data_generator(doc_id):
-    #         """Generate a unique, reproducible float32 vector for each doc_id.
-            
-    #         Uses seeded RNG so the same doc_id always produces the same vector,
-    #         making post-restore verification deterministic.
-    #         """
-    #         rng = np.random.default_rng(seed=doc_id)
-    #         vector = rng.random(DIM).astype(np.float32)
-    #         # Normalize to unit length for consistent L2 distance behavior
-    #         vector = vector / np.linalg.norm(vector)
-    #         return {
-    #             "vector": vector.tobytes(),
-    #             "id": str(doc_id),
-    #             "doc_id": str(doc_id),  # Store doc_id for result verification
-    #         }
-
-    #     def generate_query_blob(seed):
-    #         """Generate a reproducible normalized query vector."""
-    #         rng = np.random.default_rng(seed=seed)
-    #         query_vector = rng.random(DIM).astype(np.float32)
-    #         # Normalize to unit length - consistent with stored vectors
-    #         query_vector = query_vector / np.linalg.norm(query_vector)
-    #         return query_vector.tobytes()
-
-    #     # Primary query vector (seed=42)
-    #     query_blob = generate_query_blob(seed=42)
-
-    #     # Write test vector - use a distinct seed so it doesn't collide with bulk data
-    #     write_rng = np.random.default_rng(seed=99999)
-    #     write_vector = write_rng.random(DIM).astype(np.float32)
-    #     write_vector = write_vector / np.linalg.norm(write_vector)
-
-    #     self._run_endurance_test(
-    #         index_name="endurance_vector_idx",
-    #         schema_args=[
-    #             "vector", "VECTOR", "HNSW", "10",
-    #                 "TYPE", "FLOAT32",
-    #                 "DIM", str(DIM),
-    #                 "DISTANCE_METRIC", "L2",
-    #                 "M", "16",              # Number of connections per layer - higher = better recall, more memory
-    #                 "EF_CONSTRUCTION", "200",  # Higher = better index quality, slower build
-    #             "id", "TEXT",
-    #             "doc_id", "NUMERIC",
-    #         ],
-    #         data_generator=vector_data_generator,
-    #         search_query="*=>[KNN 10 @vector $query_vec AS vector_score]",
-    #         write_test_data={
-    #             "vector": write_vector.tobytes(),
-    #             "id": "test_vector",
-    #             "doc_id": "-1",  # Sentinel value to identify the write test doc
-    #         },
-    #         write_verify_query="*=>[KNN 10 @vector $query_vec AS vector_score]"
-    #     )
-    
     

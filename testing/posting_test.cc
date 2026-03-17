@@ -39,11 +39,11 @@ class PostingTest : public ValkeySearchTest {
       size_t num_fields = 5) {
     PositionMap pos_map;
     for (const auto& [pos, field_indices] : pos_fields_pairs) {
-      auto field_mask = FieldMask::Create(num_fields);
+      FieldMask field_mask(num_fields);
       for (size_t field_idx : field_indices) {
-        field_mask->SetField(field_idx);
+        field_mask.SetField(field_idx);
       }
-      pos_map[pos] = std::move(field_mask);
+      pos_map[pos] = field_mask;
     }
     return pos_map;
   }
@@ -261,8 +261,8 @@ TEST_F(PostingTest, ContainsFieldsCheck) {
   // Test basic field containment functionality
   InsertKeyWithPositionMap(InternKey("doc1"), CreatePositionMap({{10, {0}}}));
 
-  auto field_mask = FieldMask::Create(5);
-  field_mask->SetField(0);
+  FieldMask field_mask(5);
+  field_mask.SetField(0);
 
   auto key_iter = postings_->GetKeyIterator();
 
@@ -272,12 +272,12 @@ TEST_F(PostingTest, ContainsFieldsCheck) {
   // Iterator should be valid and contain the field we inserted
   EXPECT_TRUE(key_iter.IsValid());
   EXPECT_EQ(key_iter.GetKey()->Str(), "doc1");
-  EXPECT_TRUE(key_iter.ContainsFields(field_mask->AsUint64()));
+  EXPECT_TRUE(key_iter.ContainsFields(field_mask.GetMask()));
 
   // Test that it doesn't contain fields that weren't set
-  auto field_mask_2 = FieldMask::Create(5);
-  field_mask_2->SetField(1);
-  EXPECT_FALSE(key_iter.ContainsFields(field_mask_2->AsUint64()));
+  FieldMask field_mask_2(5);
+  field_mask_2.SetField(1);
+  EXPECT_FALSE(key_iter.ContainsFields(field_mask_2.GetMask()));
 }
 
 TEST_F(PostingTest, LargeScaleOperations) {
@@ -294,14 +294,14 @@ TEST_F(PostingTest, LargeScaleOperations) {
       Position pos = std::rand() % 10000;
       if (pos_map.count(pos)) continue;  // Skip duplicates within same doc
 
-      auto field_mask = FieldMask::Create(5);
+      FieldMask field_mask(5);
       int num_fields = 1 + (std::rand() % 5);  // 1-5 fields per position
       for (int f = 0; f < num_fields; ++f) {
-        field_mask->SetField(std::rand() % 5);
+        field_mask.SetField(std::rand() % 5);
       }
 
-      total_term_frequency += field_mask->CountSetFields();
-      pos_map[pos] = std::move(field_mask);
+      total_term_frequency += field_mask.CountSetFields();
+      pos_map[pos] = field_mask;
     }
 
     total_positions += pos_map.size();

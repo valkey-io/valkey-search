@@ -107,7 +107,6 @@ void BlockedClient::UnblockClient() {
   if (!blocked_client_) {
     return;
   }
-  MeasureTimeEnd();
   auto blocked_client = std::exchange(blocked_client_, nullptr);
   auto private_data = std::exchange(private_data_, nullptr);
   auto tracked_client_id = std::exchange(tracked_client_id_, 0);
@@ -126,6 +125,7 @@ void BlockedClient::UnblockClient() {
     }
     category_map.erase(tracked_client_id);
   }
+  MeasureTimeEnd(blocked_client);
   ValkeyModule_UnblockClient(blocked_client, private_data);
 }
 
@@ -137,11 +137,11 @@ void BlockedClient::MeasureTimeStart() {
   time_measurement_ongoing_ = true;
 }
 
-void BlockedClient::MeasureTimeEnd() {
-  if (!time_measurement_ongoing_ || !blocked_client_) {
+void BlockedClient::MeasureTimeEnd(ValkeyModuleBlockedClient *blocked_client) {
+  if (!time_measurement_ongoing_ || !blocked_client) {
     return;
   }
-  ValkeyModule_BlockedClientMeasureTimeEnd(blocked_client_);
+  ValkeyModule_BlockedClientMeasureTimeEnd(blocked_client);
   time_measurement_ongoing_ = false;
 }
 }  // namespace vmsdk

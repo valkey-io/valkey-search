@@ -419,7 +419,7 @@ static auto drain_mutation_queue_on_load =
 constexpr absl::string_view kMaxMutationQueueSizeOnRestoreConfig{
     "max-mutation-queue-size-on-restore"};
 constexpr uint32_t kDefaultMaxMutationQueueSizeOnRestore{10000};
-constexpr uint32_t kMinimumMaxMutationQueueSizeOnRestore{100};
+constexpr uint32_t kMinimumMaxMutationQueueSizeOnRestore{1};
 constexpr uint32_t kMaximumMaxMutationQueueSizeOnRestore{1000000};
 static auto max_mutation_queue_size_on_restore =
     config::NumberBuilder(kMaxMutationQueueSizeOnRestoreConfig,

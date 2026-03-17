@@ -181,6 +181,7 @@ raxNode *raxNewNode(size_t children, int datafield) {
     node->isnull = 0;
     node->iscompr = 0;
     node->size = children;
+    node->subtree_items = 0; // SEARCH
     return node;
 }
 
@@ -411,6 +412,16 @@ raxNode *raxCompressNode(raxNode *n, unsigned char *s, size_t len, raxNode **chi
     return n;
 }
 
+/* BEGIN SEARCH
+ * Apply the item count operation to the nodes along the path. */
+void raxApplyOp(item_count_op *op, raxNode *n) {
+    if (op && *op != NONE) {
+        int delta = (*op == ADD) ? 1 : -1;
+        n->subtree_items += delta;
+    }
+}
+/* END SEARCH */
+
 /* Low level function that walks the tree looking for the string
  * 's' of 'len' bytes. The function returns the number of characters
  * of the key that was possible to process: if the returned integer
@@ -441,9 +452,11 @@ raxNode *raxCompressNode(raxNode *n, unsigned char *s, size_t len, raxNode **chi
  * compressed node characters are needed to represent the key, just all
  * its parents nodes). */
 static inline size_t
-raxLowWalk(rax *rax, unsigned char *s, size_t len, raxNode **stopnode, raxNode ***plink, int *splitpos, raxStack *ts) {
+raxLowWalk(rax *rax, unsigned char *s, size_t len, raxNode **stopnode, raxNode ***plink, int *splitpos, raxStack *ts, item_count_op *op /* SEARCH */) {
     raxNode *h = rax->head;
     raxNode **parentlink = &rax->head;
+
+    raxApplyOp(op, h); // SEARCH
 
     size_t i = 0; /* Position in the string. */
     size_t j = 0; /* Position in the node children (or bytes if compressed).*/
@@ -476,6 +489,8 @@ raxLowWalk(rax *rax, unsigned char *s, size_t len, raxNode **stopnode, raxNode *
                   iterate again (since i == len) set the split
                   position to 0 to signal this node represents
                   the searched key. */
+
+        raxApplyOp(op, h); // SEARCH
     }
     debugnode("Lookup stop node is", h);
     if (stopnode) *stopnode = h;
@@ -484,24 +499,11 @@ raxLowWalk(rax *rax, unsigned char *s, size_t len, raxNode **stopnode, raxNode *
     return i;
 }
 
-/* Insert the element 's' of size 'len', setting as auxiliary data
- * the pointer 'data'. If the element is already present, the associated
- * data is updated (only if 'overwrite' is set to 1), and 0 is returned,
- * otherwise the element is inserted and 1 is returned. On out of memory the
- * function returns 0 as well but sets errno to ENOMEM, otherwise errno will
- * be set to 0.
- */
-int raxGenericInsert(rax *rax, unsigned char *s, size_t len, void *data, void **old, int overwrite) {
-    size_t i;
-    int j = 0; /* Split position. If raxLowWalk() stops in a compressed
-                  node, the index 'j' represents the char we stopped within the
-                  compressed node, that is, the position where to split the
-                  node for insertion. */
-    raxNode *h, **parentlink;
-
-    debugf("### Insert %.*s with value %p\n", (int)len, s, data);
-    i = raxLowWalk(rax, s, len, &h, &parentlink, &j, NULL);
-
+/*
+ * i == match_len
+ * j == splitpos
+*/
+int raxGenericInsertHelper(rax *rax, unsigned char *s, size_t len, void *data, void **old, int overwrite, raxNode *h, raxNode **parentlink, int i, int j, item_count_op *op) {
     /* If i == len we walked following the whole string. If we are not
      * in the middle of a compressed node, the string is either already
      * inserted or this middle node is currently not a key, but can represent
@@ -711,7 +713,17 @@ int raxGenericInsert(rax *rax, unsigned char *s, size_t len, void *data, void **
             return 0;
         }
         splitnode->data[0] = h->data[j];
+        /* BEGIN SEARCH
+         * We replace the "h" node with the trimmed node if there is one.
+         * If the split position is the first character of the compressed path from h,
+         * then there is no trimmed node and we replace h with the split node itself
+         * The splitnode needs to inherit the correct subtree items count and have the
+         * current op applied. */
+        splitnode->subtree_items = (trimmedlen ? next->subtree_items : h->subtree_items);
+        assert(*op != SUBTRACT);
+        if (op) raxApplyOp(op, splitnode);
         rax->alloc_size += rax_ptr_alloc_size(splitnode);
+        /* END SEARCH */
 
         if (j == 0) {
             /* 3a: Replace the old node with the split node. */
@@ -722,6 +734,7 @@ int raxGenericInsert(rax *rax, unsigned char *s, size_t len, void *data, void **
             memcpy(parentlink, &splitnode, sizeof(splitnode));
         } else {
             /* 3b: Trim the compressed node. */
+            trimmed->subtree_items = h->subtree_items; // SEARCH
             trimmed->size = j;
             memcpy(trimmed->data, h->data, j);
             trimmed->iscompr = j > 1 ? 1 : 0;
@@ -743,6 +756,7 @@ int raxGenericInsert(rax *rax, unsigned char *s, size_t len, void *data, void **
          * compressed node after the split. */
         if (postfixlen) {
             /* 4a: create a postfix node. */
+            postfix->subtree_items = next->subtree_items; // SEARCH
             postfix->iskey = 0;
             postfix->isnull = 0;
             postfix->size = postfixlen;
@@ -794,6 +808,7 @@ int raxGenericInsert(rax *rax, unsigned char *s, size_t len, void *data, void **
         memcpy(&next, childfield, sizeof(next));
 
         /* 2: Create the postfix node. */
+        postfix->subtree_items = next->subtree_items; // SEARCH
         postfix->size = postfixlen;
         postfix->iscompr = postfixlen > 1;
         postfix->iskey = 1;
@@ -806,6 +821,7 @@ int raxGenericInsert(rax *rax, unsigned char *s, size_t len, void *data, void **
         rax->alloc_size += rax_ptr_alloc_size(postfix);
 
         /* 3: Trim the compressed node. */
+        trimmed->subtree_items = h->subtree_items; // SEARCH
         trimmed->size = j;
         trimmed->iscompr = j > 1;
         trimmed->iskey = 0;
@@ -862,6 +878,7 @@ int raxGenericInsert(rax *rax, unsigned char *s, size_t len, void *data, void **
         }
         rax->numnodes++;
         rax->alloc_size = rax->alloc_size - oldalloc + rax_ptr_alloc_size(h) + rax_ptr_alloc_size(child);
+        child->subtree_items = 1; // SEARCH - new nodes along insertion path have one child item
         h = child;
     }
     size_t oldalloc = rax_ptr_alloc_size(h);
@@ -888,6 +905,31 @@ oom:
     }
     errno = ENOMEM;
     return 0;
+  }
+
+/* Insert the element 's' of size 'len', setting as auxiliary data
+ * the pointer 'data'. If the element is already present, the associated
+ * data is updated (only if 'overwrite' is set to 1), and 0 is returned,
+ * otherwise the element is inserted and 1 is returned. On out of memory the
+ * function returns 0 as well but sets errno to ENOMEM, otherwise errno will
+ * be set to 0.
+ */
+int raxGenericInsert(rax *rax, unsigned char *s, size_t len, void *data, void **old, int overwrite) {
+    size_t i;
+    int j = 0; /* Split position. If raxLowWalk() stops in a compressed
+                  node, the index 'j' represents the char we stopped within the
+                  compressed node, that is, the position where to split the
+                  node for insertion. */
+    raxNode *h, **parentlink;
+
+    debugf("### Insert %.*s with value %p\n", (int)len, s, data);
+    i = raxLowWalk(rax, s, len, &h, &parentlink, &j, NULL, NULL /* SEARCH */);
+
+    /* BEGIN SEARCH */
+    /* Moved remaining functionality to a helper so that it can
+     * be called from raxMutate(). */
+    return raxGenericInsertHelper(rax, s, len, data, old, overwrite, h, parentlink, i, j, NULL);
+    /* END SEARCH */
 }
 
 /* Overwriting insert. Just a wrapper for raxGenericInsert() that will
@@ -911,57 +953,11 @@ int raxFind(rax *rax, unsigned char *s, size_t len, void **value) {
 
     debugf("### Lookup: %.*s\n", (int)len, s);
     int splitpos = 0;
-    size_t i = raxLowWalk(rax, s, len, &h, NULL, &splitpos, NULL);
+    size_t i = raxLowWalk(rax, s, len, &h, NULL, &splitpos, NULL, NULL /* SEARCH */);
     if (i != len || (h->iscompr && splitpos != 0) || !h->iskey) return 0;
     if (value != NULL) *value = raxGetData(h);
     return 1;
 }
-
-/* BEGIN SEARCH */
-/* Atomically mutates the value at the given key by calling the provided
- * callback function. The callback receives the current value (NULL if the
- * key doesn't exist) and caller context, and returns the new value (NULL
- * to delete the key).
- * 
- * OWNERSHIP: The callback takes ownership of the old value. If returning a
- * new value, the callback MUST clean up the old value.
- * 
- * Returns 1 on success, 0 on error (errno will be set to ENOMEM
- * on out of memory). */
-// TODO: implement a lower-level version that doesn't traverse the tree twice.
-int raxMutate(rax *rax, unsigned char *s, size_t len, raxMutateCallback callback, void *caller_context) {
-    void *current_value = NULL;
-
-    /* Find the current value */
-    int found = raxFind(rax, s, len, &current_value);
-
-    /* Call the callback to get the new value */
-    void *new_value = callback(current_value, caller_context);
-
-    /* Handle the result */
-    if (new_value == NULL) {
-        /* Delete the key if it exists */
-        if (found) {
-            return raxRemove(rax, s, len, NULL);
-        }
-        /* Key doesn't exist and callback returned NULL - nothing to do */
-        return 1;
-    } else {
-        /* If the callback returned the same pointer, no update needed */
-        if (new_value == current_value) {
-            return 1;
-        }
-        /* Insert or update the key. */
-        int res = raxInsert(rax, s, len, new_value, NULL);
-        if (res == 0 && errno != 0) {
-            /* Actual failure (OOM) */
-            return 0;
-        }
-        /* Success: either new insert (res=1) or update (res=0, errno=0) */
-        return 1;
-    }
-}
-/* END SEARCH */
 
 /* Return the memory address where the 'parent' node stores the specified
  * 'child' pointer, so that the caller can update the pointer with another
@@ -1053,21 +1049,7 @@ raxNode *raxRemoveChild(raxNode *parent, raxNode *child) {
     return newnode ? newnode : parent;
 }
 
-/* Remove the specified item. Returns 1 if the item was found and
- * deleted, 0 otherwise. */
-int raxRemove(rax *rax, unsigned char *s, size_t len, void **old) {
-    raxNode *h;
-    raxStack ts;
-
-    debugf("### Delete: %.*s\n", (int)len, s);
-    raxStackInit(&ts);
-    int splitpos = 0;
-    size_t i = raxLowWalk(rax, s, len, &h, NULL, &splitpos, &ts);
-    if (i != len || (h->iscompr && splitpos != 0) || !h->iskey) {
-        raxStackFree(&ts);
-        return 0;
-    }
-    if (old) *old = raxGetData(h);
+int raxRemoveHelper(rax *rax, unsigned char *s, size_t len, void **old, raxNode *h, raxStack ts, int i, int j) {
     h->iskey = 0;
     rax->numele--;
 
@@ -1208,9 +1190,10 @@ int raxRemove(rax *rax, unsigned char *s, size_t len, void **old) {
             /* An out of memory here just means we cannot optimize this
              * node, but the tree is left in a consistent state. */
             if (new == NULL) {
-                raxStackFree(&ts);
+                // raxStackFree(&ts); - SEARCH moved to caller
                 return 1;
             }
+            new->subtree_items = h->subtree_items; // SEARCH
             new->iskey = 0;
             new->isnull = 0;
             new->iscompr = 1;
@@ -1253,9 +1236,109 @@ int raxRemove(rax *rax, unsigned char *s, size_t len, void **old) {
             debugf("Compressed %d nodes, %d total bytes\n", nodes, (int)comprsize);
         }
     }
-    raxStackFree(&ts);
+    // raxStackFree(&ts); - SEARCH moved to caller
     return 1;
 }
+
+/* Remove the specified item. Returns 1 if the item was found and
+ * deleted, 0 otherwise. */
+int raxRemove(rax *rax, unsigned char *s, size_t len, void **old) {
+    raxNode *h;
+    raxStack ts;
+
+    debugf("### Delete: %.*s\n", (int)len, s);
+    raxStackInit(&ts);
+    int splitpos = 0;
+    size_t i = raxLowWalk(rax, s, len, &h, NULL, &splitpos, &ts, NULL /* SEARCH */);
+    if (i != len || (h->iscompr && splitpos != 0) || !h->iskey) {
+        raxStackFree(&ts);
+        return 0;
+    }
+    if (old) *old = raxGetData(h);
+    
+    /* BEGIN SEARCH */
+    /* Moved remaining functionality to a helper so that it can
+    * be called from raxMutate(). */
+    int res = raxRemoveHelper(rax, s, len, old, h, ts, i, splitpos);
+    raxStackFree(&ts);
+    return res;
+    /* END SEARCH */
+}
+
+/* BEGIN SEARCH */
+/* Return the number of keys in the subtree rooted at the node matching the
+ * given prefix. Returns 0 if the prefix is not found in the tree.
+ * An empty prefix (len == 0) returns the total key count of the tree. */
+uint32_t raxGetSubtreeItemCount(rax *rax, unsigned char *s, size_t len) {
+    raxNode *h;
+    int splitpos = 0;
+    size_t i = raxLowWalk(rax, s, len, &h, NULL, &splitpos, NULL, NULL /* SEARCH */);
+    if (i < len) return 0;
+    return h->subtree_items;
+}
+
+/* Atomically mutates the value at the given key by calling the provided
+ * callback function. The callback receives the current value (NULL if the
+ * key doesn't exist) and caller context, and returns the new value (NULL
+ * to delete the key).
+ * 
+ * OWNERSHIP: The callback takes ownership of the old value. If returning a
+ * new value, the callback MUST clean up the old value.
+ * 
+ * Returns 1 on success, 0 on error (errno will be set to ENOMEM
+ * on out of memory). */
+int raxMutate(rax *rax, unsigned char *s, size_t len, raxMutateCallback callback, void *caller_context, item_count_op op) {
+    raxNode *h, **parentlink;
+    int splitpos = 0;
+    raxStack ts;
+    raxStack *ts_ptr = NULL;
+    if (op != ADD) {
+        ts_ptr = &ts;
+        raxStackInit(ts_ptr);
+    }
+
+    // Search for an existing target
+    size_t match_len = raxLowWalk(rax, s, len, &h, &parentlink, &splitpos, ts_ptr, &op);
+    int exists = (match_len == len && (!h->iscompr || splitpos == 0) && h->iskey);
+    void *current_value = exists ? raxGetData(h) : NULL;
+
+    // The tree became out of sync with the user data if there is no
+    // target and the op is a delete.
+    assert(current_value || op != SUBTRACT);
+
+    // Get the new target from the mutation callback
+    void *new_value = callback(current_value, caller_context);
+
+    int success;
+    if (new_value && new_value == current_value) {
+      // Existing target updated. No tree change.
+      success = 1;
+    } else if (new_value) {
+      // New target added.
+      success = raxGenericInsertHelper(rax, s, len, new_value, NULL, 1, h, parentlink, match_len, splitpos, &op);
+      if (!success) {
+        if (errno == 0) {
+            // An existing target was replaced, not an actual error.
+            success = 1;
+        } else {
+            assert("Rax insertion failed");
+        }
+    }
+    } else if (current_value) {
+      // Old target removed.
+      success = raxRemoveHelper(rax, s, len, NULL, h, ts, match_len, splitpos);
+    } else {
+      // No-op
+      success = 1;
+    }
+
+    if (op != ADD) {
+        raxStackFree(ts_ptr);
+        ts_ptr = NULL;
+    }
+    return success;
+}
+/* END SEARCH */
 
 /* This is the core of raxFree(): performs a depth-first scan of the
  * tree and releases all the nodes found. */
@@ -1602,7 +1685,7 @@ int raxSeek(raxIterator *it, const char *op, unsigned char *ele, size_t len) {
      * perform a lookup, and later invoke the prev/next key code that
      * we already use for iteration. */
     int splitpos = 0;
-    size_t i = raxLowWalk(it->rt, ele, len, &it->node, NULL, &splitpos, &it->stack);
+    size_t i = raxLowWalk(it->rt, ele, len, &it->node, NULL, &splitpos, &it->stack, NULL /* SEARCH */);
     /* BEGIN SEARCH */
     if (it->flags & RAX_ITER_SUB_TREE) {
         // Check if we found a node with a matching prefix.

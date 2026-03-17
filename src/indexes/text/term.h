@@ -12,6 +12,7 @@
 #include "src/indexes/text.h"
 #include "src/indexes/text/flat_position_map.h"
 #include "src/indexes/text/text_iterator.h"
+#include "src/utils/inlined_priority_queue.h"
 
 namespace valkey_search::indexes::text {
 
@@ -82,8 +83,31 @@ class TermIterator : public TextIterator {
   std::optional<PositionRange> current_position_;
   FieldMaskPredicate current_field_mask_;
   const bool require_positions_;
-  const bool has_original_;  // True if first iterator is for original word
+  const bool has_original_;
+
+  // Pending queue: heap of valid iterators not currently being processed.
+  // Provides O(1) access to the minimum key and O(log K) extraction.
+  valkey_search::InlinedPriorityQueue<std::pair<Key, size_t>,
+                                      kWordExpansionInlineCapacity>
+      key_set_;
+  // Pending queue: heap of valid iterators not currently being processed.
+  // Provides O(1) access to the minimum position and O(log K) extraction.
+  valkey_search::InlinedPriorityQueue<std::pair<uint32_t, size_t>,
+                                      kWordExpansionInlineCapacity>
+      pos_set_;
+  // Indices of iterators at current_key_ (active, not in key_set_)
+  absl::InlinedVector<size_t, kWordExpansionInlineCapacity>
+      current_key_indices_;
+  // Indices of iterators at current_position_ (active, not in pos_set_)
+  absl::InlinedVector<size_t, kWordExpansionInlineCapacity>
+      current_pos_indices_;
+
   bool FindMinimumValidKey();
+  void InsertValidKeyIterator(size_t idx);
+  bool FindMinimumValidPosition();
+  void InsertValidPositionIterator(size_t idx);
+  void ClearKeyState();
+  void ClearPositionState();
 };
 
 }  // namespace valkey_search::indexes::text

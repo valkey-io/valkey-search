@@ -280,5 +280,88 @@ TEST_F(AggregateTest, StageParserTest) {
   }
 }
 
+TEST_F(AggregateTest, GetSerializationRange_NoStages) {
+  AggregateParameters params(0);
+  auto range = params.GetSerializationRange();
+  EXPECT_EQ(range, query::SerializationRange::All());
+}
+
+TEST_F(AggregateTest, GetSerializationRange_WithLimitStage) {
+  AggregateParameters params(0);
+  auto limit = std::make_unique<Limit>();
+  limit->offset_ = 10;
+  limit->limit_ = 20;
+  params.stages_.push_back(std::move(limit));
+
+  auto range = params.GetSerializationRange();
+  EXPECT_EQ(range.start_index, 10u);
+  EXPECT_EQ(range.end_index, 30u);
+}
+
+TEST_F(AggregateTest, GetSerializationRange_WithApplyStage) {
+  AggregateParameters params(0);
+  auto apply = std::make_unique<Apply>();
+  params.stages_.push_back(std::move(apply));
+
+  auto range = params.GetSerializationRange();
+  EXPECT_EQ(range, query::SerializationRange::All());
+}
+
+TEST_F(AggregateTest, GetSerializationRange_WithFilterStage) {
+  AggregateParameters params(0);
+  auto filter = std::make_unique<Filter>();
+  params.stages_.push_back(std::move(filter));
+
+  auto range = params.GetSerializationRange();
+  EXPECT_EQ(range, query::SerializationRange::All());
+}
+
+TEST_F(AggregateTest, GetSerializationRange_WithSortByStage) {
+  AggregateParameters params(0);
+  auto sortby = std::make_unique<SortBy>();
+  params.stages_.push_back(std::move(sortby));
+
+  auto range = params.GetSerializationRange();
+  EXPECT_EQ(range, query::SerializationRange::All());
+}
+
+TEST_F(AggregateTest, GetSerializationRange_WithGroupByStage) {
+  AggregateParameters params(0);
+  auto groupby = std::make_unique<GroupBy>();
+  params.stages_.push_back(std::move(groupby));
+
+  auto range = params.GetSerializationRange();
+  EXPECT_EQ(range, query::SerializationRange::All());
+}
+
+TEST_F(AggregateTest, GetSerializationRange_LimitBeforeOtherStages) {
+  AggregateParameters params(0);
+  auto limit = std::make_unique<Limit>();
+  limit->offset_ = 5;
+  limit->limit_ = 15;
+  params.stages_.push_back(std::move(limit));
+
+  auto filter = std::make_unique<Filter>();
+  params.stages_.push_back(std::move(filter));
+
+  auto range = params.GetSerializationRange();
+  EXPECT_EQ(range.start_index, 5u);
+  EXPECT_EQ(range.end_index, 20u);
+}
+
+TEST_F(AggregateTest, GetSerializationRange_OtherStagesBeforeLimit) {
+  AggregateParameters params(0);
+  auto filter = std::make_unique<Filter>();
+  params.stages_.push_back(std::move(filter));
+
+  auto limit = std::make_unique<Limit>();
+  limit->offset_ = 0;
+  limit->limit_ = 100;
+  params.stages_.push_back(std::move(limit));
+
+  auto range = params.GetSerializationRange();
+  EXPECT_EQ(range, query::SerializationRange::All());
+}
+
 }  // namespace aggregate
 }  // namespace valkey_search

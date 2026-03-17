@@ -112,7 +112,8 @@ struct SearchResult {
 
   // Constructor with automatic trimming based on query requirements
   SearchResult(size_t total_count, std::vector<indexes::Neighbor> neighbors,
-               const SearchParameters& parameters);
+               const SearchParameters& parameters,
+               bool trim_offset_in_background = false);
   // Get the range of neighbors to serialize in response.
   SerializationRange GetSerializationRange(
       const SearchParameters& parameters) const;
@@ -121,7 +122,8 @@ struct SearchResult {
 
  private:
   void TrimResults(std::vector<indexes::Neighbor>& neighbors,
-                   const SearchParameters& parameters);
+                   const SearchParameters& parameters,
+                   bool trim_offset_in_background);
 };
 
 //
@@ -211,7 +213,9 @@ struct SearchParameters {
   // be able to return correct results. An example of this is when sorting on a
   // particular is needed on the results. This should be overridden in derived
   // classes if needed. The default implementation returns false.
-  virtual bool RequiresCompleteResults() const { return false; }
+  virtual bool RequiresCompleteResults() const {
+    return sortby_parameter.has_value();
+  }
 
   virtual absl::Status PreParseQueryString();
   virtual absl::Status PostParseQueryString();
@@ -256,6 +260,10 @@ struct SerializationRange {
   size_t start_index;
   size_t end_index;
   size_t count() const { return end_index - start_index; }
+  static SerializationRange All() {
+    return {0, std::numeric_limits<size_t>::max()};
+  }
+  auto operator<=>(const SerializationRange& other) const = default;
 };
 
 // Callback to be called when the search is done.
@@ -275,10 +283,9 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
 class Predicate;
 // Defined in the header to support testing
 size_t EvaluateFilterAsPrimary(
-    const Predicate* predicate,
+    const SearchParameters& parameters, const Predicate* predicate,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>& entries_fetchers,
-    bool negate, QueryOperations query_operations,
-    const IndexSchema* index_schema);
+    bool negate);
 
 // Defined in the header to support testing
 absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(

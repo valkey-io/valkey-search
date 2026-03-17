@@ -104,19 +104,6 @@ static vmsdk::info_field::Integer used_memory(
         .Computed(vmsdk::GetUsedMemoryCnt)
         .CrashSafe());
 
-static vmsdk::info_field::Integer used_text_memory_bytes(
-    "memory", "used_text_memory_bytes",
-    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> uint64_t {
-      return SchemaManager::Instance().GetTotalTextMemoryUsage();
-    }));
-
-static vmsdk::info_field::Integer used_text_memory_human(
-    "memory", "used_text_memory_human",
-    vmsdk::info_field::IntegerBuilder().SIBytes().Dev().Computed(
-        []() -> uint64_t {
-          return SchemaManager::Instance().GetTotalTextMemoryUsage();
-        }));
-
 static vmsdk::info_field::Integer reclaimable_memory(
     "memory", "index_reclaimable_memory",
     vmsdk::info_field::IntegerBuilder()
@@ -398,8 +385,8 @@ static vmsdk::info_field::Integer inline_filtering_requests_count(
       return Metrics::GetStats().query_inline_filtering_requests_cnt;
     }));
 
-static vmsdk::info_field::Integer query_prefiltering_requests_cnt(
-    "query", "query_prefiltering_requests_cnt",
+static vmsdk::info_field::Integer prefiltering_requests_count(
+    "query", "prefiltering_requests_count",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
       return Metrics::GetStats().query_prefiltering_requests_cnt;
     }));

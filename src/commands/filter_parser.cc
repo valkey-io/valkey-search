@@ -604,14 +604,14 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
   if (processed_content.empty()) {
     return FilterParser::TokenResult{nullptr, false};
   }
-  std::string token = lexer.NormalizeLowerCase(processed_content);
+  lexer.NormalizeLowerCaseInPlace(processed_content);
   FieldMaskPredicate field_mask;
   VMSDK_RETURN_IF_ERROR(
       SetupTextFieldConfiguration(field_mask, field_or_default, false));
   query_operations_ |= QueryOperations::kContainsTextTerm;
   return FilterParser::TokenResult{
-      std::make_unique<query::TermPredicate>(text_index_schema, field_mask,
-                                             std::move(token), true),
+      std::make_unique<query::TermPredicate>(
+          text_index_schema, field_mask, std::move(processed_content), true),
       false};
 }
 
@@ -703,18 +703,19 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     processed_content.push_back(ch);
     ++pos_;
   }
-  std::string token = lexer.NormalizeLowerCase(processed_content);
+  lexer.NormalizeLowerCaseInPlace(processed_content);
   FieldMaskPredicate field_mask;
   // Build predicate directly based on detected pattern
   if (leading_percent_count > 0) {
     if (trailing_percent_count == leading_percent_count &&
         leading_percent_count <= options::GetFuzzyMaxDistance().GetValue()) {
-      if (token.empty()) return absl::InvalidArgumentError("Empty fuzzy token");
+      if (processed_content.empty())
+        return absl::InvalidArgumentError("Empty fuzzy token");
       VMSDK_RETURN_IF_ERROR(
           SetupTextFieldConfiguration(field_mask, field_or_default, false));
       auto fuzzy = FilterParser::TokenResult{
           std::make_unique<query::FuzzyPredicate>(text_index_schema, field_mask,
-                                                  std::move(token),
+                                                  std::move(processed_content),
                                                   leading_percent_count),
           break_on_query_syntax};
       query_operations_ |= QueryOperations::kContainsTextFuzzy;
@@ -723,37 +724,37 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
       return absl::InvalidArgumentError("Invalid fuzzy '%' markers");
     }
   } else if (starts_with_star) {
-    if (token.empty())
+    if (processed_content.empty())
       return absl::InvalidArgumentError("Invalid wildcard '*' markers");
     VMSDK_RETURN_IF_ERROR(
         SetupTextFieldConfiguration(field_mask, field_or_default, true));
     if (ends_with_star) {
       auto infix = FilterParser::TokenResult{
           std::make_unique<query::InfixPredicate>(text_index_schema, field_mask,
-                                                  std::move(token)),
+                                                  std::move(processed_content)),
           break_on_query_syntax};
       return absl::InvalidArgumentError("Unsupported query operation");
     } else {
       query_operations_ |= QueryOperations::kContainsTextSuffix;
       return FilterParser::TokenResult{
           std::make_unique<query::SuffixPredicate>(
-              text_index_schema, field_mask, std::move(token)),
+              text_index_schema, field_mask, std::move(processed_content)),
           break_on_query_syntax};
     }
   } else if (ends_with_star) {
-    if (token.empty())
+    if (processed_content.empty())
       return absl::InvalidArgumentError("Invalid wildcard '*' markers");
     VMSDK_RETURN_IF_ERROR(
         SetupTextFieldConfiguration(field_mask, field_or_default, false));
     query_operations_ |= QueryOperations::kContainsTextPrefix;
     return FilterParser::TokenResult{
         std::make_unique<query::PrefixPredicate>(text_index_schema, field_mask,
-                                                 std::move(token)),
+                                                 std::move(processed_content)),
         break_on_query_syntax};
   } else {
     // Term predicate handling:
     bool exact = options_.verbatim;
-    if (lexer.IsStopWord(token) || token.empty()) {
+    if (lexer.IsStopWord(processed_content) || processed_content.empty()) {
       // Skip stop words and empty words.
       return FilterParser::TokenResult{nullptr, break_on_query_syntax};
     }
@@ -763,8 +764,8 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     // TODO: Implement Composite query between original and its stem variants
     // for Non Exact Term search after Composite query execution is optimized
     return FilterParser::TokenResult{
-        std::make_unique<query::TermPredicate>(text_index_schema, field_mask,
-                                               std::move(token), exact),
+        std::make_unique<query::TermPredicate>(
+            text_index_schema, field_mask, std::move(processed_content), exact),
         break_on_query_syntax};
   }
 }

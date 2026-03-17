@@ -325,53 +325,30 @@ static vmsdk::info_field::Integer rdb_save_failure_cnt(
       return Metrics::GetStats().rdb_save_failure_cnt;
     }));
 
-// RDB Restore Progress Tracking - App() fields (visible by default)
 static vmsdk::info_field::Integer rdb_restore_in_progress(
     "rdb", "rdb_restore_in_progress",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().rdb_restore_in_progress ? 1 : 0;
     }));
 
-static vmsdk::info_field::String rdb_restore_indexes_ratio(
-    "rdb", "rdb_restore_indexes_ratio",
-    vmsdk::info_field::StringBuilder().App().ComputedString([]() -> std::string {
+static vmsdk::info_field::Float rdb_indexes_restored_percent(
+    "rdb", "rdb_indexes_restored_percent",
+    vmsdk::info_field::FloatBuilder().Dev().Computed([]() -> double {
       auto completed = Metrics::GetStats().rdb_restore_completed_indexes.load();
       auto total = Metrics::GetStats().rdb_restore_total_indexes.load();
-      return absl::StrFormat("%llu/%llu", completed, total);
+      if (total == 0) return 100.0;
+      return (completed * 100.0) / total;
     }));
 
-static vmsdk::info_field::Float rdb_restore_current_index_percent(
-    "rdb", "rdb_restore_current_index_percent",
-    vmsdk::info_field::FloatBuilder().App().Computed([]() -> double {
-      auto total = Metrics::GetStats().rdb_restore_current_index_keys_total.load();
-      auto loaded = Metrics::GetStats().rdb_restore_current_index_keys_loaded.load();
+static vmsdk::info_field::Float rdb_current_index_keys_restored_percent(
+    "rdb", "rdb_current_index_keys_restored_percent",
+    vmsdk::info_field::FloatBuilder().Dev().Computed([]() -> double {
+      auto total =
+          Metrics::GetStats().rdb_restore_current_index_keys_total.load();
+      auto loaded =
+          Metrics::GetStats().rdb_restore_current_index_keys_loaded.load();
       if (total == 0) return 100.0;
       return (loaded * 100.0) / total;
-    }));
-
-// RDB Restore Progress Tracking - Dev() fields (developer mode only)
-static vmsdk::info_field::Integer rdb_restore_total_indexes(
-    "rdb", "rdb_restore_total_indexes",
-    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
-      return Metrics::GetStats().rdb_restore_total_indexes;
-    }));
-
-static vmsdk::info_field::Integer rdb_restore_completed_indexes(
-    "rdb", "rdb_restore_completed_indexes",
-    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
-      return Metrics::GetStats().rdb_restore_completed_indexes;
-    }));
-
-static vmsdk::info_field::Integer rdb_restore_current_index_keys_total(
-    "rdb", "rdb_restore_current_index_keys_total",
-    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
-      return Metrics::GetStats().rdb_restore_current_index_keys_total;
-    }));
-
-static vmsdk::info_field::Integer rdb_restore_current_index_keys_loaded(
-    "rdb", "rdb_restore_current_index_keys_loaded",
-    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
-      return Metrics::GetStats().rdb_restore_current_index_keys_loaded;
     }));
 
 static vmsdk::info_field::Integer rdb_restore_backpressure_wait_cycles(

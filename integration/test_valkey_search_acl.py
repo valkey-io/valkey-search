@@ -46,6 +46,7 @@ class TestCommandsACLs(ValkeySearchTestCaseBase):
         self, user, should_access_read, should_access_write
     ):
         search_vector = struct.pack("<3f", *[1.0, 2.0, 3.0])
+        should_access_debug = "+@all" in user.lower() or "+@admin" in user.lower()
         # List of search commands
         valkey_search_commands = [
             (
@@ -80,7 +81,7 @@ class TestCommandsACLs(ValkeySearchTestCaseBase):
             ),
             (["FT.INFO", INDEX_NAME], should_access_read),
             (["FT._LIST"], should_access_read),
-            (["FT._DEBUG", "SHOW_INFO"], should_access_read),
+            (["FT._DEBUG", "SHOW_INFO"], should_access_debug),
             (["FT.DROPINDEX", INDEX_NAME], should_access_write),
         ]
         client: Valkey = self.server.get_new_client()

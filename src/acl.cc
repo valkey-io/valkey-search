@@ -403,4 +403,38 @@ absl::Status AclPrefixCheck(ValkeyModuleCtx *ctx, acl::KeyAccess access,
   }
   return AclPrefixCheck(ctx, KeyAccessToStringView(access), module_prefixes);
 }
+
+absl::Status AclAdminCheck(ValkeyModuleCtx *ctx) {
+  auto username =
+      vmsdk::UniqueValkeyString(ValkeyModule_GetCurrentUserName(ctx));
+  if (!username) {
+    return absl::PermissionDeniedError(
+        "The user does not have admin permissions");
+  }
+
+  auto reply = vmsdk::UniquePtrValkeyCallReply(
+      ValkeyModule_Call(ctx, "ACL", "cs3", "GETUSER", username.get()));
+  VMSDK_ASSIGN_OR_RETURN(auto acl_views, GetAclViewFromCallReply(reply.get()));
+  for (const auto &acl_view : acl_views) {
+    bool is_admin = false;
+    for (const auto token :
+         absl::StrSplit(acl_view.cmds, ' ', absl::SkipEmpty())) {
+      if (absl::EqualsIgnoreCase(token, "allcommands") || token == "+@all" ||
+          token == "+@admin") {
+        is_admin = true;
+      } else if (absl::EqualsIgnoreCase(token, "nocommands") ||
+                 absl::EqualsIgnoreCase(token, "resetcommands") ||
+                 token == "-@all" || token == "-@admin") {
+        is_admin = false;
+      }
+    }
+
+    if (is_admin) {
+      return absl::OkStatus();
+    }
+  }
+
+  return absl::PermissionDeniedError(
+      "The user does not have admin permissions");
+}
 }  // namespace valkey_search

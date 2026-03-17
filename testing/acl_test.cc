@@ -14,6 +14,97 @@ using testing::ValuesIn;
 
 class AclPrefixCheckFuzzTest : public ValkeySearchTest {};
 
+class AclAdminCheckTest : public ValkeySearchTest {};
+
+TEST_F(AclAdminCheckTest, DeniesWhenCurrentUserIsMissing) {
+  EXPECT_CALL(*kMockValkeyModule, GetCurrentUserName(testing::_))
+      .WillOnce([](ValkeyModuleCtx *ctx) { return nullptr; });
+
+  EXPECT_EQ(
+      absl::PermissionDeniedError("The user does not have admin permissions"),
+      AclAdminCheck(&fake_ctx_));
+}
+
+TEST_F(AclAdminCheckTest, AllowsUserWithAdminCategory) {
+  EXPECT_CALL(*kMockValkeyModule, GetCurrentUserName(testing::_))
+      .WillOnce([](ValkeyModuleCtx *ctx) {
+        return new ValkeyModuleString(std::string("alice"));
+      });
+
+  CallReplyMap reply_map;
+  AddElementToCallReplyMap(reply_map, "commands", "-@all +@read +@admin");
+  AddElementToCallReplyMap(reply_map, "keys", "~*");
+  AddElementToCallReplyMap(reply_map, "channels", "&");
+  AddElementToCallReplyMap(reply_map, "selectors", nullptr);
+  std::unique_ptr<ValkeyModuleCallReply> reply =
+      CreateValkeyModuleCallReply(std::move(reply_map));
+
+  EXPECT_CALL(*kMockValkeyModule,
+              Call(testing::_, testing::StrEq(std::string("ACL")),
+                   testing::StrEq("cs3"), testing::StrEq("GETUSER"),
+                   testing::StrEq("alice")))
+      .WillOnce([&reply](ValkeyModuleCtx *ctx, const char *cmd, const char *fmt,
+                         const char *arg1,
+                         const char *arg2) { return (reply.get()); });
+
+  EXPECT_EQ(absl::OkStatus(), AclAdminCheck(&fake_ctx_));
+}
+
+TEST_F(AclAdminCheckTest, DeniesUserWithoutAdminCategory) {
+  EXPECT_CALL(*kMockValkeyModule, GetCurrentUserName(testing::_))
+      .WillOnce([](ValkeyModuleCtx *ctx) {
+        return new ValkeyModuleString(std::string("alice"));
+      });
+
+  CallReplyMap reply_map;
+  AddElementToCallReplyMap(reply_map, "commands",
+                           "-@all +@read +@search +@slow");
+  AddElementToCallReplyMap(reply_map, "keys", "~*");
+  AddElementToCallReplyMap(reply_map, "channels", "&");
+  AddElementToCallReplyMap(reply_map, "selectors", nullptr);
+  std::unique_ptr<ValkeyModuleCallReply> reply =
+      CreateValkeyModuleCallReply(std::move(reply_map));
+
+  EXPECT_CALL(*kMockValkeyModule,
+              Call(testing::_, testing::StrEq(std::string("ACL")),
+                   testing::StrEq("cs3"), testing::StrEq("GETUSER"),
+                   testing::StrEq("alice")))
+      .WillOnce([&reply](ValkeyModuleCtx *ctx, const char *cmd, const char *fmt,
+                         const char *arg1,
+                         const char *arg2) { return (reply.get()); });
+
+  EXPECT_EQ(
+      absl::PermissionDeniedError("The user does not have admin permissions"),
+      AclAdminCheck(&fake_ctx_));
+}
+
+TEST_F(AclAdminCheckTest, DeniesWhenAdminCategoryIsRevoked) {
+  EXPECT_CALL(*kMockValkeyModule, GetCurrentUserName(testing::_))
+      .WillOnce([](ValkeyModuleCtx *ctx) {
+        return new ValkeyModuleString(std::string("alice"));
+      });
+
+  CallReplyMap reply_map;
+  AddElementToCallReplyMap(reply_map, "commands", "+@all -@admin");
+  AddElementToCallReplyMap(reply_map, "keys", "~*");
+  AddElementToCallReplyMap(reply_map, "channels", "&");
+  AddElementToCallReplyMap(reply_map, "selectors", nullptr);
+  std::unique_ptr<ValkeyModuleCallReply> reply =
+      CreateValkeyModuleCallReply(std::move(reply_map));
+
+  EXPECT_CALL(*kMockValkeyModule,
+              Call(testing::_, testing::StrEq(std::string("ACL")),
+                   testing::StrEq("cs3"), testing::StrEq("GETUSER"),
+                   testing::StrEq("alice")))
+      .WillOnce([&reply](ValkeyModuleCtx *ctx, const char *cmd, const char *fmt,
+                         const char *arg1,
+                         const char *arg2) { return (reply.get()); });
+
+  EXPECT_EQ(
+      absl::PermissionDeniedError("The user does not have admin permissions"),
+      AclAdminCheck(&fake_ctx_));
+}
+
 // This test is copied from valkey-io/valkey/blob/unstable/src/util.c
 TEST_F(AclPrefixCheckFuzzTest, AclPrefixCheckTests) {
   char str[32];

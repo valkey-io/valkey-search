@@ -1,6 +1,7 @@
 from valkey import ResponseError
 from valkey.client import Valkey
 from valkey_search_test_case import (
+    ValkeySearchTestCaseBase,
     ValkeySearchTestCaseDebugMode,
     ValkeySearchClusterTestCaseDebugMode,
 )
@@ -79,3 +80,46 @@ class TestFtDebugCommand(ValkeySearchTestCaseDebugMode):
         assert byref[6] == {'Count': 10, 'Bytes': 140, 'AvgSize': b'14', 'Allocated': 320, 'AvgAllocated': b'32', 'Utilization': 43}
         assert bysize[-12] == {'Count': 10, 'Bytes': 120, 'AvgSize': b'12', 'Allocated': 280, 'AvgAllocated': b'28', 'Utilization': 42}
         assert bysize[14] == {'Count': 10, 'Bytes': 140, 'AvgSize': b'14', 'Allocated': 320, 'AvgAllocated': b'32', 'Utilization': 43}
+
+    def test_non_admin_user_can_run_ft_debug_when_debug_mode_enabled(self):
+        self.client.execute_command(
+            "ACL", "SETUSER", "debug_user", "on", ">password",
+            "~*", "&*", "-@all", "+@read", "+@search", "+@slow"
+        )
+        restricted_client = self.server.get_new_client()
+        restricted_client.execute_command("AUTH", "debug_user", "password")
+
+        result = restricted_client.execute_command("FT._DEBUG", "HELP")
+        assert isinstance(result, list)
+        assert len(result) > 0
+
+        self.client.execute_command("ACL", "DELUSER", "debug_user")
+
+
+class TestFtDebugCommandACL(ValkeySearchTestCaseBase):
+    def test_non_admin_user_cannot_run_ft_debug_when_debug_mode_disabled(self):
+        self.client.execute_command(
+            "ACL", "SETUSER", "non_admin", "on", ">password",
+            "~*", "&*", "-@all", "+@read", "+@search", "+@slow"
+        )
+        restricted_client = self.server.get_new_client()
+        restricted_client.execute_command("AUTH", "non_admin", "password")
+
+        with pytest.raises(ResponseError):
+            restricted_client.execute_command("FT._DEBUG", "HELP")
+
+        self.client.execute_command("ACL", "DELUSER", "non_admin")
+
+    def test_admin_user_can_run_ft_debug_when_debug_mode_disabled(self):
+        self.client.execute_command(
+            "ACL", "SETUSER", "admin_user", "on", ">password",
+            "~*", "&*", "-@all", "+@admin", "+@read", "+@search", "+@slow"
+        )
+        admin_client = self.server.get_new_client()
+        admin_client.execute_command("AUTH", "admin_user", "password")
+
+        result = admin_client.execute_command("FT._DEBUG", "HELP")
+        assert isinstance(result, list)
+        assert len(result) > 0
+
+        self.client.execute_command("ACL", "DELUSER", "admin_user")

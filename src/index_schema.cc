@@ -1463,16 +1463,16 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
   Metrics::GetStats().rdb_restore_current_index_keys_loaded = 0;
 
   VMSDK_LOG(NOTICE, ctx) << "Loading Index Extension, keys = " << key_count;
-  
+
   const size_t max_queue_size =
       options::GetMaxMutationQueueSizeOnRestore().GetValue();
-  
+
   // Batch size for queue checks - check every N keys to reduce mutex overhead
   // Check more frequently when queue is near limit to maintain responsiveness
   constexpr size_t kQueueCheckBatchSize = 100;
   size_t keys_since_last_check = 0;
   size_t current_queue_size = 0;
-  
+
   for (size_t i = 0; i < key_count; ++i) {
     // Batch queue size checks to reduce mutex lock overhead
     // Only check every kQueueCheckBatchSize keys, or when queue was recently
@@ -1481,7 +1481,7 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
         current_queue_size >= max_queue_size) {
       current_queue_size = GetMutatedRecordsSize();
       keys_since_last_check = 0;
-      
+
       // Apply backpressure if mutation queue is too large
       while (current_queue_size >= max_queue_size) {
         // Use ValkeyModule_Yield to cooperatively yield during loading
@@ -1489,16 +1489,15 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
                            "slow module operation");
         Metrics::GetStats().rdb_restore_backpressure_wait_cycles++;
         current_queue_size = GetMutatedRecordsSize();
-        
+
         // Log periodically to show progress
         VMSDK_LOG_EVERY_N_SEC(NOTICE, ctx, 2)
             << "RDB restore backpressure: waiting for mutation queue to drain. "
             << "Queue size: " << current_queue_size << ", Progress: " << i
             << "/" << key_count << " keys loaded";
-        
       }
     }
-    
+
     VMSDK_ASSIGN_OR_RETURN(auto keyname_str, input.LoadString());
     auto keyname = vmsdk::MakeUniqueValkeyString(keyname_str);
     ProcessKeyspaceNotification(ctx, keyname.get(), false);

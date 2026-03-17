@@ -753,22 +753,6 @@ static vmsdk::info_field::Integer total_indexed_documents(
     vmsdk::info_field::IntegerBuilder().App().Computed([] {
       return SchemaManager::Instance().GetTotalIndexedDocuments();
     }));
-static vmsdk::info_field::Integer active_indexes(
-    "index_stats", "number_of_active_indexes",
-    vmsdk::info_field::IntegerBuilder().App().Computed([] {
-      return SchemaManager::Instance().GetNumberOfIndexSchemas();
-    }));
-static vmsdk::info_field::Integer active_indexes_running_queries(
-    "index_stats", "number_of_active_indexes_running_queries",
-    vmsdk::info_field::IntegerBuilder().App().Computed([] {
-      // TODO: need to implement active query tracking
-      return 0;
-    }));
-static vmsdk::info_field::Integer active_indexes_indexing(
-    "index_stats", "number_of_active_indexes_indexing",
-    vmsdk::info_field::IntegerBuilder().App().Computed([] {
-      return SchemaManager::Instance().IsIndexingInProgress() ? 1 : 0;
-    }));
 static vmsdk::info_field::Integer total_active_write_threads(
     "index_stats", "total_active_write_threads",
     vmsdk::info_field::IntegerBuilder().App().Computed([] {

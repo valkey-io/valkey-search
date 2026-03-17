@@ -213,7 +213,7 @@ static config::Boolean prefer_consistent_results(kEnableConsistentResults,
 constexpr absl::string_view kSearchResultBackgroundCleanup{
     "search-result-background-cleanup"};
 static config::Boolean search_result_background_cleanup(
-    kSearchResultBackgroundCleanup, true);
+    kSearchResultBackgroundCleanup, false);
 
 /// Configure the weight for high priority tasks in thread pools (0-100)
 /// Low priority weight = 100 - high_priority_weight

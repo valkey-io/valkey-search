@@ -1464,7 +1464,7 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
 
   VMSDK_LOG(NOTICE, ctx) << "Loading Index Extension, keys = " << key_count;
   
-  const size_t max_queue_size = 
+  const size_t max_queue_size =
       options::GetMaxMutationQueueSizeOnRestore().GetValue();
   
   // Batch size for queue checks - check every N keys to reduce mutex overhead
@@ -1475,8 +1475,9 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
   
   for (size_t i = 0; i < key_count; ++i) {
     // Batch queue size checks to reduce mutex lock overhead
-    // Only check every kQueueCheckBatchSize keys, or when queue was recently full
-    if (keys_since_last_check >= kQueueCheckBatchSize || 
+    // Only check every kQueueCheckBatchSize keys, or when queue was recently
+    // full
+    if (keys_since_last_check >= kQueueCheckBatchSize ||
         current_queue_size >= max_queue_size) {
       current_queue_size = GetMutatedRecordsSize();
       keys_since_last_check = 0;
@@ -1484,15 +1485,16 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
       // Apply backpressure if mutation queue is too large
       while (current_queue_size >= max_queue_size) {
         // Use ValkeyModule_Yield to cooperatively yield during loading
-        ValkeyModule_Yield(ctx, VALKEYMODULE_YIELD_FLAG_CLIENTS, "slow module operation");
+        ValkeyModule_Yield(ctx, VALKEYMODULE_YIELD_FLAG_CLIENTS,
+                           "slow module operation");
         Metrics::GetStats().rdb_restore_backpressure_wait_cycles++;
         current_queue_size = GetMutatedRecordsSize();
         
         // Log periodically to show progress
         VMSDK_LOG_EVERY_N_SEC(NOTICE, ctx, 2)
             << "RDB restore backpressure: waiting for mutation queue to drain. "
-            << "Queue size: " << current_queue_size
-            << ", Progress: " << i << "/" << key_count << " keys loaded";
+            << "Queue size: " << current_queue_size << ", Progress: " << i
+            << "/" << key_count << " keys loaded";
         
       }
     }
@@ -1500,13 +1502,14 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
     VMSDK_ASSIGN_OR_RETURN(auto keyname_str, input.LoadString());
     auto keyname = vmsdk::MakeUniqueValkeyString(keyname_str);
     ProcessKeyspaceNotification(ctx, keyname.get(), false);
-    ValkeyModule_Yield(ctx, VALKEYMODULE_YIELD_FLAG_CLIENTS, "Slow module operation");
+    ValkeyModule_Yield(ctx, VALKEYMODULE_YIELD_FLAG_CLIENTS,
+                       "Slow module operation");
     keys_since_last_check++;
 
     // Update restore progress counter
     Metrics::GetStats().rdb_restore_current_index_keys_loaded = i + 1;
   }
-  
+
   if (Metrics::GetStats().rdb_restore_backpressure_wait_cycles > 0) {
     VMSDK_LOG(NOTICE, ctx)
         << "RDB restore completed with backpressure. Total wait cycles: "

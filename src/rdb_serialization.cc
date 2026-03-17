@@ -165,6 +165,13 @@ absl::Status PerformRDBLoad(ValkeyModuleCtx *ctx, SafeRDB *rdb, int encver) {
   VMSDK_LOG(NOTICE, ctx) << "Loading RDB from version: " << rdb_version
                          << " with " << rdb_section_count << " sections.";
 
+  // Initialize restore progress tracking
+  Metrics::GetStats().rdb_restore_in_progress = true;
+  Metrics::GetStats().rdb_restore_total_indexes = rdb_section_count;
+  Metrics::GetStats().rdb_restore_completed_indexes = 0;
+  Metrics::GetStats().rdb_restore_current_index_keys_total = 0;
+  Metrics::GetStats().rdb_restore_current_index_keys_loaded = 0;
+
   // Begin RDBSection iteration
   RDBSectionIter it(rdb, rdb_section_count);
   while (it.HasNext()) {
@@ -190,6 +197,10 @@ absl::Status PerformRDBLoad(ValkeyModuleCtx *ctx, SafeRDB *rdb, int encver) {
       }
     }
   }
+
+  // Mark restore as complete (all indexes loaded successfully)
+  Metrics::GetStats().rdb_restore_in_progress = false;
+
   return absl::OkStatus();
 }
 

@@ -748,6 +748,23 @@ void SchemaManager::OnServerCronCallback(ValkeyModuleCtx *ctx,
       ctx, options::GetBackfillBatchSize().GetValue());
 }
 
+void SchemaManager::OnShutdownCallback(ValkeyModuleCtx *ctx,
+                                       [[maybe_unused]] ValkeyModuleEvent eid,
+                                       [[maybe_unused]] uint64_t subevent,
+                                       [[maybe_unused]] void *data) {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  if (db_to_index_schemas_.empty()) {
+    return;
+  }
+  VMSDK_LOG(NOTICE, ctx) << "Deleting all index schemas on SHUTDOWN event";
+  auto status = RemoveAll();
+  if (!status.ok()) {
+    VMSDK_LOG(WARNING, ctx)
+        << "Failed to delete all index schemas on SHUTDOWN event: "
+        << status.message();
+  }
+}
+
 void SchemaManager::PopulateFingerprintVersionFromMetadata(
     uint32_t db_num, absl::string_view name, uint64_t fingerprint,
     uint32_t version) {
@@ -846,12 +863,6 @@ static vmsdk::info_field::Integer total_active_write_threads(
                                                  : writer_thread_pool->Size();
       }
       return (unsigned long)0;
-    }));
-static vmsdk::info_field::Integer total_indexing_time(
-    "index_stats", "total_indexing_time",
-    vmsdk::info_field::IntegerBuilder().App().Computed([] {
-      // TODO: need to implement indexing time tracking
-      return 0;
     }));
 
 }  // namespace valkey_search

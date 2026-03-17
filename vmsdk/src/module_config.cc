@@ -27,8 +27,9 @@ static auto debug_mode = BooleanBuilder(kDebugMode, true).Hidden().Build();
 bool IsDebugModeEnabled() { return debug_mode->GetValue(); }
 
 /// Controls the verbose logging flag
-static auto hide_user_data_config =
-    BooleanBuilder(kHideUserDataFromLog, true).Build();
+static auto hide_user_data_config = BooleanBuilder(kHideUserDataFromLog, true)
+                                        .Dev()  // can only be set in debug mode
+                                        .Build();
 
 bool ShouldHideUserDataFromLog() { return hide_user_data_config->GetValue(); }
 

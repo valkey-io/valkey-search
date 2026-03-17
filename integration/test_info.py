@@ -49,7 +49,6 @@ class TestVSSBasic(ValkeySearchTestCaseBase):
             "search_number_of_indexes",
             "search_total_indexed_documents",
             "search_total_active_write_threads",
-            "search_total_indexing_time",
             "search_used_memory_bytes",
             "search_index_reclaimable_memory"
         ]
@@ -134,7 +133,6 @@ class TestAppMetrics(ValkeySearchTestCaseDebugMode):
             "number_of_indexes",
             "total_active_write_threads",
             "total_indexed_documents",
-            "total_indexing_time",
             "background_indexing_status",
             "flat_vector_index_search_latency_usec",
             "hnsw_vector_index_search_latency_usec",

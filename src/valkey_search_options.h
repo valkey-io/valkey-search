@@ -85,6 +85,9 @@ config::Number& GetThreadPoolWaitTimeSamples();
 /// suffix, fuzzy)
 config::Number& GetMaxTermExpansions();
 
+/// Return the minimum TAG prefix length for wildcard queries (excluding '*')
+config::Number& GetTagMinPrefixLength();
+
 /// Return the search result buffer multiplier value
 double GetSearchResultBufferMultiplier();
 

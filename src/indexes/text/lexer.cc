@@ -84,8 +84,7 @@ Lexer::Lexer(data_model::Language language, const std::string& punctuation,
 
 absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
     absl::string_view text, bool stemming_enabled, uint32_t min_stem_size,
-    absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>*
-        stem_mappings) const {
+    InProgressStemMap* stem_mappings) const {
   if (stemming_enabled) {
     CHECK(stem_mappings) << "stem_mappings must not be null";
   }
@@ -209,8 +208,7 @@ std::string_view Lexer::DoStemming(absl::string_view word, sb_stemmer* stemmer,
       stemmer, reinterpret_cast<const sb_symbol*>(word.data()), word.length());
   CHECK(stemmed) << "Stemming failed";
   int stemmed_length = sb_stemmer_length(stemmer);
-  CHECK(stemmed_length > 0 && stemmed_length <= word.length())
-      << "Stemming failed";
+  CHECK(stemmed_length > 0) << "Stemming failed";
   return std::string_view(reinterpret_cast<const char*>(stemmed),
                           stemmed_length);
 }
@@ -223,11 +221,9 @@ void Lexer::StemWordInPlace(std::string& word, sb_stemmer* stemmer,
   }
 }
 
-void Lexer::UpdateStemMap(
-    absl::string_view original_word, sb_stemmer* stemmer,
-    uint32_t min_stem_size,
-    absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>&
-        stem_mappings) const {
+void Lexer::UpdateStemMap(absl::string_view original_word, sb_stemmer* stemmer,
+                          uint32_t min_stem_size,
+                          InProgressStemMap& stem_mappings) const {
   std::string_view stemmed_view =
       DoStemming(original_word, stemmer, min_stem_size);
   if (stemmed_view != original_word) {
@@ -236,8 +232,12 @@ void Lexer::UpdateStemMap(
       // New Stem Root: create a new map entry
       it = stem_mappings.try_emplace(std::string(stemmed_view)).first;
     }
-    // Add original word to the set of variants for this stem root
-    it->second.emplace(original_word);
+    // Add original word to the list of variants for this stem root
+    auto& variants = it->second;
+    if (std::find(variants.begin(), variants.end(), original_word) ==
+        variants.end()) {
+      variants.emplace_back(original_word);
+    }
   }
 }
 }  // namespace valkey_search::indexes::text

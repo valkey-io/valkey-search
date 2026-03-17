@@ -863,11 +863,5 @@ static vmsdk::info_field::Integer total_active_write_threads(
       }
       return (unsigned long)0;
     }));
-static vmsdk::info_field::Integer total_indexing_time(
-    "index_stats", "total_indexing_time",
-    vmsdk::info_field::IntegerBuilder().App().Computed([] {
-      // TODO: need to implement indexing time tracking
-      return 0;
-    }));
 
 }  // namespace valkey_search

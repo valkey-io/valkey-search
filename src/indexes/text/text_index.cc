@@ -7,6 +7,8 @@
 
 #include "src/indexes/text/text_index.h"
 
+#include <algorithm>
+
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/strings/ascii.h"
@@ -105,12 +107,12 @@ TextIndex::TextIndex(bool suffix)
 
 void TextIndex::MutateTarget(absl::string_view word,
                              const InvasivePtr<Postings> &target,
+                             const std::optional<std::string> &reverse_word,
                              item_count_op op) {
   auto target_set_fn = CreateTargetSetFn(target);
   prefix_tree_.MutateTarget(word, target_set_fn, op);
-  if (suffix_tree_) {
-    std::string rev(word.rbegin(), word.rend());
-    suffix_tree_->MutateTarget(rev, target_set_fn, op);
+  if (suffix_tree_ && reverse_word.has_value()) {
+    suffix_tree_->MutateTarget(*reverse_word, target_set_fn, op);
   }
 }
 
@@ -134,9 +136,6 @@ std::optional<std::reference_wrapper<const Rax>> TextIndex::GetSuffix() const {
 
 /*** TextIndexSchema ***/
 
-#define ITEM_COUNT_TRACKING_ENABLED(op) \
-  (track_subtree_item_counts_ ? op : item_count_op::NONE)
-
 TextIndexSchema::TextIndexSchema(data_model::Language language,
                                  const std::string &punctuation,
                                  bool with_offsets,
@@ -152,8 +151,7 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
     const InternedStringPtr &key, absl::string_view data,
     size_t text_field_number, bool stem, bool suffix) {
   // Get or create stem mappings for this key if stemming is enabled
-  absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>
-      *stem_mappings_ptr = nullptr;
+  InProgressStemMap *stem_mappings_ptr = nullptr;
   if (stem) {
     std::lock_guard<std::mutex> stem_guard(in_progress_stem_mappings_mutex_);
     stem_mappings_ptr = &in_progress_stem_mappings_[key];
@@ -204,8 +202,7 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
   }
 
   // Retrieve the key's stem mappings
-  absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>
-      stem_mappings;
+  InProgressStemMap stem_mappings;
   if (stem_text_field_mask_) {
     std::lock_guard<std::mutex> stem_guard(in_progress_stem_mappings_mutex_);
     auto stem_node = in_progress_stem_mappings_.extract(key);
@@ -222,9 +219,9 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
     auto &[pos_map, suffix] = entry.second;
 
     const std::optional<std::string> reverse_token =
-        suffix ? std::optional<std::string>(
-                     std::string(token.rbegin(), token.rend()))
-               : std::nullopt;
+        with_suffix_trie_ ? std::optional<std::string>(
+                                std::string(token.rbegin(), token.rend()))
+                          : std::nullopt;
 
     // Update metadata from PositionMap
     metadata_.total_positions += pos_map.size();
@@ -255,14 +252,13 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
 
       if (is_new_word) {
         absl::WriterMutexLock tree_lock(&text_index_mutex_);
-        text_index_->MutateTarget(
-            token, updated_target,
-            ITEM_COUNT_TRACKING_ENABLED(item_count_op::ADD));
+        text_index_->MutateTarget(token, updated_target, reverse_token,
+                                  item_count_op::ADD);
       }
     }
 
     // Update per-key index (no locking needed — local to this call).
-    key_index.MutateTarget(token, updated_target);
+    key_index.MutateTarget(token, updated_target, reverse_token);
   }
 
   if (stem_text_field_mask_ && !stem_mappings.empty()) {
@@ -271,7 +267,12 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
       auto stem_mutate_fn = CreateSimpleTargetMutateFn<StemParents>(
           [&originals](InvasivePtr<StemParents> existing) {
             if (!existing) existing = InvasivePtr<StemParents>::Make();
-            existing->insert(originals.begin(), originals.end());
+            for (const auto &orig : originals) {
+              if (std::find(existing->begin(), existing->end(), orig) ==
+                  existing->end()) {
+                existing->push_back(orig);
+              }
+            }
             return existing;
           });
       stem_tree_.MutateTarget(stemmed, stem_mutate_fn);
@@ -303,6 +304,10 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
   auto iter = key_index.GetPrefix().GetWordIterator("");
   while (!iter.Done()) {
     std::string word_str(iter.GetWord());
+    const std::optional<std::string> reverse_word =
+        with_suffix_trie_ ? std::optional<std::string>(
+                                std::string(word_str.rbegin(), word_str.rend()))
+                          : std::nullopt;
     {
       absl::MutexLock word_lock(&rax_target_mutex_pool_.Get(word_str));
 
@@ -318,9 +323,8 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
 
       if (!updated_target) {
         absl::WriterMutexLock tree_lock(&text_index_mutex_);
-        text_index_->MutateTarget(
-            word_str, updated_target,
-            ITEM_COUNT_TRACKING_ENABLED(item_count_op::SUBTRACT));
+        text_index_->MutateTarget(word_str, updated_target, reverse_word,
+                                  item_count_op::SUBTRACT);
         if (stem_text_field_mask_) {
           empty_words.push_back(word_str);
         }
@@ -342,7 +346,11 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
               if (existing) {
                 CHECK(!existing->empty())
                     << "Stem tree entry should not be empty";
-                existing->erase(word);
+                auto it = std::find(existing->begin(), existing->end(), word);
+                if (it != existing->end()) {
+                  *it = std::move(existing->back());
+                  existing->pop_back();
+                }
                 if (existing->empty()) existing.Clear();
               }
               return existing;
@@ -394,6 +402,21 @@ std::string TextIndexSchema::GetAllStemVariants(
   }
 
   return stemmed;  // Caller owns this and will add view to words_to_search
+}
+
+const TextIndex *TextIndexSchema::GetPerKeyTextIndex(const Key &key,
+                                                     bool lock) {
+  if (!key) {
+    CHECK(false) << "Invalid null key passed to GetPerKeyTextIndex";
+  }
+  std::optional<std::lock_guard<std::mutex>> per_key_guard;
+  if (lock) per_key_guard.emplace(per_key_text_indexes_mutex_);
+  if (auto it = per_key_text_indexes_.find(key);
+      it != per_key_text_indexes_.end()) {
+    return &it->second;
+  }
+  // Key not found in text indexes - this is normal for keys without text data
+  return nullptr;
 }
 
 }  // namespace valkey_search::indexes::text

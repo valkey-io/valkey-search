@@ -5,6 +5,12 @@
       "SLOW",
       "SEARCH"
     ],
+    "history": [
+      [
+        "1.2.0", 
+        "Added Text Indexing and Search support"
+      ]
+    ],
     "arguments": [
       {
         "key_spec_index": 0,

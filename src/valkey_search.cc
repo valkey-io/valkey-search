@@ -440,8 +440,8 @@ static vmsdk::info_field::Integer inline_filtering_requests_count(
       return Metrics::GetStats().query_inline_filtering_requests_cnt;
     }));
 
-static vmsdk::info_field::Integer query_prefiltering_requests_cnt(
-    "query", "query_prefiltering_requests_cnt",
+static vmsdk::info_field::Integer prefiltering_requests_count(
+    "query", "prefiltering_requests_count",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
       return Metrics::GetStats().query_prefiltering_requests_cnt;
     }));

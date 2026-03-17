@@ -318,6 +318,19 @@ static auto max_term_expansions =
                           kMaximumMaxTermExpansions)  // max limit (100k)
         .Build();
 
+/// Register the "--tag-min-prefix-length" flag. Controls the minimum number
+/// of characters required before trailing '*' in TAG wildcard queries.
+/// The length excludes the '*' character itself.
+constexpr absl::string_view kTagMinPrefixLengthConfig{"tag-min-prefix-length"};
+constexpr uint32_t kDefaultTagMinPrefixLength{2};
+constexpr uint32_t kMinimumTagMinPrefixLength{0};
+static auto tag_min_prefix_length =
+    config::NumberBuilder(kTagMinPrefixLengthConfig,   // name
+                          kDefaultTagMinPrefixLength,  // default limit (2)
+                          kMinimumTagMinPrefixLength,  // min limit (0)
+                          UINT_MAX)                    // max limit
+        .Build();
+
 /// Register the "--prefiltering-threshold-ratio" flag
 /// Controls when pre-filtering is used vs inline-filtering for hybrid queries
 constexpr absl::string_view kPrefilteringThresholdRatioConfig{
@@ -350,6 +363,7 @@ static auto prefiltering_threshold_ratio_config =
           CHECK(absl::SimpleAtod(value, &parsed_value));
           prefiltering_threshold_ratio = parsed_value;
         })
+        .Dev()  // can only be set in debug mode
         .Build();
 
 /// Register the "search-result-buffer-multiplier" flag
@@ -478,6 +492,7 @@ static auto rax_target_mutex_pool_size =
     config::NumberBuilder(
         kRaxTargetMutexPoolSizeConfig, kDefaultRaxTargetMutexPoolSize,
         kMinimumRaxTargetMutexPoolSize, kMaximumRaxTargetMutexPoolSize)
+        .Dev()  // can only be set in debug mode
         .Build();
 
 /// Register the "--max-nonvector-search-results-fetched" flag. Controls the
@@ -586,6 +601,10 @@ vmsdk::config::Number& GetThreadPoolWaitTimeSamples() {
 
 vmsdk::config::Number& GetMaxTermExpansions() {
   return dynamic_cast<vmsdk::config::Number&>(*max_term_expansions);
+}
+
+vmsdk::config::Number& GetTagMinPrefixLength() {
+  return dynamic_cast<vmsdk::config::Number&>(*tag_min_prefix_length);
 }
 
 const vmsdk::config::Boolean& GetDrainMutationQueueOnSave() {

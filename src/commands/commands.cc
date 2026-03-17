@@ -69,7 +69,6 @@ void Free([[maybe_unused]] ValkeyModuleCtx *ctx, void *privdata) {
   parameters->index_schema = nullptr;
   // return_attributes holds ValkeyModuleStrings retained from client argv.
   // Must be freed here (main thread) to avoid racing with freeClientArgv().
-  parameters->return_attributes.clear();
   ValkeySearch::Instance().ScheduleSearchResultCleanup(
       [parameters]() { delete parameters; });
 }

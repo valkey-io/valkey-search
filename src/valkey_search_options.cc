@@ -243,7 +243,7 @@ static auto ft_info_timeout_ms =
         kDefaultFTInfoTimeoutMs,  // default timeout (5 seconds)
         kMinimumFTInfoTimeoutMs,  // min timeout (100ms)
         kMaximumFTInfoTimeoutMs)  // max timeout (5 minutes)
-        .Dev()  // can only be set in debug mode
+        .Dev()                    // can only be set in debug mode
         .Build();
 
 /// Register the "--ft-info-rpc-timeout-ms" flag. Controls the timeout for
@@ -255,7 +255,7 @@ static auto ft_info_rpc_timeout_ms =
         kDefaultFTInfoRpcTimeoutMs,  // default timeout (2.5 seconds)
         kMinimumFTInfoRpcTimeoutMs,  // min timeout (100ms)
         kMaximumFTInfoRpcTimeoutMs)  // max timeout (5 minutes)
-        .Dev()  // can only be set in debug mode
+        .Dev()                       // can only be set in debug mode
         .Build();
 
 /// Register the "--local-fanout-queue-wait-threshold" flag. Controls the queue

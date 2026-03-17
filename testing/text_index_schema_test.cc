@@ -5,6 +5,9 @@
  *
  */
 
+#include <thread>
+#include <vector>
+
 #include "gtest/gtest.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/text.h"
@@ -29,6 +32,36 @@ class TextIndexSchemaTest : public vmsdk::ValkeyTest {
         4);
   }
 };
+
+// Concurrent CommitKeyData calls with overlapping words must
+//  not crash or corrupt the index.
+TEST_F(TextIndexSchemaTest, ConcurrentCommitKeyData) {
+  auto schema = CreateSchema();
+  data_model::TextIndex proto;
+  auto text = std::make_shared<Text>(proto, schema);
+
+  // 4 documents with overlapping words ("the" appears in all).
+  const std::vector<std::pair<std::string, std::string>> docs = {
+      {"key:1", "the cat sat"},
+      {"key:2", "the cat ran"},
+      {"key:3", "the dog barked"},
+      {"key:4", "the dog howled"},
+  };
+
+  std::vector<std::thread> threads;
+  for (const auto &[key_str, content] : docs) {
+    threads.emplace_back([&schema, key_str, content]() {
+      auto key = StringInternStore::Intern(key_str);
+      auto result = schema->StageAttributeData(key, content, 0, false, false);
+      EXPECT_TRUE(result.ok());
+      schema->CommitKeyData(key);
+    });
+  }
+  for (auto &t : threads) t.join();
+
+  // Unique words across all documents: the, cat, sat, ran, dog, barked, howled
+  EXPECT_EQ(schema->GetNumUniqueTerms(), 7);
+}
 
 TEST_F(TextIndexSchemaTest, FieldAllocationAcrossMultipleTexts) {
   // Test that TextIndexSchema properly manages field number allocation

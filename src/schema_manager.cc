@@ -465,18 +465,6 @@ uint64_t SchemaManager::GetTotalIndexedDocuments() const {
   }
   return num_hash_keys;
 }
-uint64_t SchemaManager::GetTotalTextMemoryUsage() const {
-  absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  uint64_t total = 0;
-  for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
-    for (const auto &[name, schema] : schema_map) {
-      if (schema->GetTextIndexSchema()) {
-        total += schema->GetTextIndexSchema()->GetTotalTextIndexMemoryUsage();
-      }
-    }
-  }
-  return total;
-}
 bool SchemaManager::IsIndexingInProgress() const {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
@@ -523,10 +511,9 @@ void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx) {
                           << " on FLUSHDB of DB " << selected_db;
     auto old_schema = RemoveIndexSchemaInternal(selected_db, name);
     if (!old_schema.ok()) {
-      VMSDK_LOG(WARNING, ctx)
-          << "Unable to delete index schema "
-          << vmsdk::config::RedactIfNeeded(name) << " on FLUSHDB of DB "
-          << selected_db << ": " << old_schema.status().message();
+      VMSDK_LOG(WARNING, ctx) << "Unable to delete index schema "
+                              << vmsdk::config::RedactIfNeeded(name)
+                              << " on FLUSHDB of DB " << selected_db;
       continue;
     }
     if (coordinator_enabled_) {
@@ -543,10 +530,9 @@ void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx) {
           << " on FLUSHDB of DB " << selected_db;
       auto add_status = CreateIndexSchemaInternal(ctx, *to_add);
       if (!add_status.ok()) {
-        VMSDK_LOG(WARNING, ctx)
-            << "Unable to recreate index schema "
-            << vmsdk::config::RedactIfNeeded(name) << " on FLUSHDB of DB "
-            << selected_db << ": " << add_status.message();
+        VMSDK_LOG(WARNING, ctx) << "Unable to recreate index schema "
+                                << vmsdk::config::RedactIfNeeded(name)
+                                << " on FLUSHDB of DB " << selected_db;
         continue;
       }
     }
@@ -602,8 +588,7 @@ void SchemaManager::OnLoadingEnded(ValkeyModuleCtx *ctx) {
     auto status = RemoveAll();
     if (!status.ok()) {
       VMSDK_LOG(WARNING, ctx) << "Failed to remove contents of existing "
-                                 "schemas on loading end: "
-                              << status.message();
+                                 "schemas on loading end.";
     }
     db_to_index_schemas_ = staged_db_to_index_schemas_.Get();
     staged_db_to_index_schemas_ = absl::flat_hash_map<
@@ -696,13 +681,6 @@ absl::Status SchemaManager::LoadIndex(
   uint32_t db_num = index_schema->GetDBNum();
   const std::string &name = index_schema->GetName();
 
-  // Select the DB number in the context for subsequent usage.
-  if (ValkeyModule_SelectDb(ctx, db_num) != VALKEYMODULE_OK) {
-    return absl::InternalError(
-        absl::StrFormat("Unable to select DB %d for loading of index schema %s",
-                        db_num, vmsdk::config::RedactIfNeeded(name).data()));
-  }
-
   // In diskless load scenarios, we stage the index to allow serving from
   // the existing index schemas. The loading ended callback will swap these
   // atomically.
@@ -730,9 +708,8 @@ absl::Status SchemaManager::LoadIndex(
   } else if (!absl::IsNotFound(remove_existing_status.status())) {
     ValkeyModule_Log(detached_ctx_.get(), VALKEYMODULE_LOGLEVEL_WARNING,
                      "Failed to delete existing index from RDB for: %s (in db "
-                     "%d): %s",
-                     vmsdk::config::RedactIfNeeded(name).data(), db_num,
-                     remove_existing_status.status().message().data());
+                     "%d)",
+                     vmsdk::config::RedactIfNeeded(name).data(), db_num);
   }
 
   db_to_index_schemas_[db_num][name] = std::move(index_schema);
@@ -765,6 +742,23 @@ void SchemaManager::OnServerCronCallback(ValkeyModuleCtx *ctx,
                                          [[maybe_unused]] void *data) {
   SchemaManager::Instance().PerformBackfill(
       ctx, options::GetBackfillBatchSize().GetValue());
+}
+
+void SchemaManager::OnShutdownCallback(ValkeyModuleCtx *ctx,
+                                       [[maybe_unused]] ValkeyModuleEvent eid,
+                                       [[maybe_unused]] uint64_t subevent,
+                                       [[maybe_unused]] void *data) {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  if (db_to_index_schemas_.empty()) {
+    return;
+  }
+  VMSDK_LOG(NOTICE, ctx) << "Deleting all index schemas on SHUTDOWN event";
+  auto status = RemoveAll();
+  if (!status.ok()) {
+    VMSDK_LOG(WARNING, ctx)
+        << "Failed to delete all index schemas on SHUTDOWN event: "
+        << status.message();
+  }
 }
 
 void SchemaManager::PopulateFingerprintVersionFromMetadata(
@@ -855,22 +849,6 @@ static vmsdk::info_field::Integer total_indexed_documents(
     vmsdk::info_field::IntegerBuilder().App().Computed([] {
       return SchemaManager::Instance().GetTotalIndexedDocuments();
     }));
-static vmsdk::info_field::Integer active_indexes(
-    "index_stats", "number_of_active_indexes",
-    vmsdk::info_field::IntegerBuilder().App().Computed([] {
-      return SchemaManager::Instance().GetNumberOfIndexSchemas();
-    }));
-static vmsdk::info_field::Integer active_indexes_running_queries(
-    "index_stats", "number_of_active_indexes_running_queries",
-    vmsdk::info_field::IntegerBuilder().App().Computed([] {
-      // TODO: need to implement active query tracking
-      return 0;
-    }));
-static vmsdk::info_field::Integer active_indexes_indexing(
-    "index_stats", "number_of_active_indexes_indexing",
-    vmsdk::info_field::IntegerBuilder().App().Computed([] {
-      return SchemaManager::Instance().IsIndexingInProgress() ? 1 : 0;
-    }));
 static vmsdk::info_field::Integer total_active_write_threads(
     "index_stats", "total_active_write_threads",
     vmsdk::info_field::IntegerBuilder().App().Computed([] {
@@ -881,12 +859,6 @@ static vmsdk::info_field::Integer total_active_write_threads(
                                                  : writer_thread_pool->Size();
       }
       return (unsigned long)0;
-    }));
-static vmsdk::info_field::Integer total_indexing_time(
-    "index_stats", "total_indexing_time",
-    vmsdk::info_field::IntegerBuilder().App().Computed([] {
-      // TODO: need to implement indexing time tracking
-      return 0;
     }));
 
 }  // namespace valkey_search

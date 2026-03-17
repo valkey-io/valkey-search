@@ -10,9 +10,6 @@
 #include <cstdint>
 #include <map>
 #include <memory>
-#include <stdexcept>
-#include <type_traits>
-#include <vector>
 
 #include "absl/log/check.h"
 #include "src/index_schema.h"
@@ -20,148 +17,22 @@
 
 namespace valkey_search::indexes::text {
 
-// Internal FieldMask classes - not part of external interface
+// FieldMask Implementation
 
-// Template implementation for field mask with optimized storage
-template <typename MaskType, size_t MAX_FIELDS>
-class FieldMaskImpl : public FieldMask {
- public:
-  explicit FieldMaskImpl(size_t num_fields = MAX_FIELDS);
-  void SetField(size_t field_index) override;
-  void ClearField(size_t field_index) override;
-  bool HasField(size_t field_index) const override;
-  void SetAllFields() override;
-  void ClearAllFields() override;
-  size_t CountSetFields() const override;
-  uint64_t AsUint64() const override;
-  size_t MaxFields() const override { return num_fields_; }
-
- private:
-  MaskType mask_;
-  size_t num_fields_;
-};
-
-// Empty placeholder type that takes no space
-struct EmptyFieldMask {};
-
-// Optimized implementations for different field counts
-using SingleFieldMask = FieldMaskImpl<EmptyFieldMask, 1>;
-using ByteFieldMask = FieldMaskImpl<uint8_t, 8>;
-using Uint64FieldMask = FieldMaskImpl<uint64_t, 64>;
-
-// Field Mask Implementation
-
-// Factory method to create optimal field mask based on field count
-std::unique_ptr<FieldMask> FieldMask::Create(size_t num_fields) {
-  CHECK(num_fields > 0) << "num_fields must be greater than 0";
-  CHECK(num_fields <= 64) << "Too many text fields (max 64 supported)";
-
-  // Select most memory-efficient implementation
-  if (num_fields <= 1) {
-    return std::make_unique<SingleFieldMask>();  // EmptyFieldMask (no storage)
-  } else if (num_fields <= 8) {
-    return std::make_unique<ByteFieldMask>(num_fields);  // uint8_t (1 byte)
-  } else {
-    return std::make_unique<Uint64FieldMask>(num_fields);  // uint64_t (8 bytes)
-  }
+FieldMask::FieldMask(size_t num_fields) : mask_(0) {
+  CHECK(num_fields > 0 && num_fields <= 64)
+      << "num_fields must be between 1 and 64";
+  num_fields_ = static_cast<uint8_t>(num_fields);
 }
 
-// Initialize field mask with specified field count
-template <typename MaskType, size_t MAX_FIELDS>
-FieldMaskImpl<MaskType, MAX_FIELDS>::FieldMaskImpl(size_t num_fields)
-    : num_fields_(num_fields) {
-  CHECK(num_fields <= MAX_FIELDS)
-      << "Field count exceeds maximum for this mask type";
-
-  if constexpr (!std::is_same_v<MaskType, EmptyFieldMask>) {
-    mask_ = MaskType{};
-  }
-}
-
-// Set a specific field bit to true
-template <typename MaskType, size_t MAX_FIELDS>
-void FieldMaskImpl<MaskType, MAX_FIELDS>::SetField(size_t field_index) {
+void FieldMask::SetField(size_t field_index) {
   CHECK(field_index < num_fields_) << "Field index out of range";
-
-  if constexpr (!std::is_same_v<MaskType, EmptyFieldMask>) {
-    mask_ |= (MaskType(1) << field_index);
-  }
+  mask_ |= (1ULL << field_index);
 }
 
-// Clear a specific field bit
-template <typename MaskType, size_t MAX_FIELDS>
-void FieldMaskImpl<MaskType, MAX_FIELDS>::ClearField(size_t field_index) {
-  CHECK(field_index < num_fields_) << "Field index out of range";
+size_t FieldMask::CountSetFields() const { return __builtin_popcountll(mask_); }
 
-  if constexpr (!std::is_same_v<MaskType, EmptyFieldMask>) {
-    mask_ &= ~(MaskType(1) << field_index);
-  }
-}
-
-// Check if a specific field bit is set
-template <typename MaskType, size_t MAX_FIELDS>
-bool FieldMaskImpl<MaskType, MAX_FIELDS>::HasField(size_t field_index) const {
-  if (field_index >= num_fields_) {
-    return false;
-  }
-
-  if constexpr (std::is_same_v<MaskType, EmptyFieldMask>) {
-    return true;  // Single field case: presence of object implies field is set
-  } else {
-    return (mask_ & (MaskType(1) << field_index)) != 0;
-  }
-}
-
-// Set all field bits to true
-template <typename MaskType, size_t MAX_FIELDS>
-void FieldMaskImpl<MaskType, MAX_FIELDS>::SetAllFields() {
-  if constexpr (std::is_same_v<MaskType, EmptyFieldMask>) {
-    // No-op: field is already implicitly set by object presence
-  } else if (num_fields_ == MAX_FIELDS && MAX_FIELDS == 64) {
-    mask_ = ~MaskType(
-        0);  // Special case: avoid undefined behavior for 64-bit shift
-  } else {
-    mask_ = (MaskType(1) << num_fields_) - 1;  // Set num_fields_ bits
-  }
-}
-
-// Clear all field bits
-template <typename MaskType, size_t MAX_FIELDS>
-void FieldMaskImpl<MaskType, MAX_FIELDS>::ClearAllFields() {
-  if constexpr (!std::is_same_v<MaskType, EmptyFieldMask>) {
-    mask_ = MaskType{};  // Zero-initialize
-  }
-}
-
-// Count number of set field bits
-template <typename MaskType, size_t MAX_FIELDS>
-size_t FieldMaskImpl<MaskType, MAX_FIELDS>::CountSetFields() const {
-  if constexpr (std::is_same_v<MaskType, EmptyFieldMask>) {
-    return 1;  // Single field case: presence of object implies field is set
-  } else if constexpr (std::is_same_v<MaskType, uint8_t>) {
-    return __builtin_popcount(
-        static_cast<unsigned int>(mask_));  // Count bits in uint8_t
-  } else if constexpr (std::is_same_v<MaskType, uint64_t>) {
-    return __builtin_popcountll(mask_);  // Count bits in uint64_t
-  } else {
-    CHECK(false) << "Unsupported mask type for CountSetFields";
-  }
-}
-
-// Convert field mask to standard uint64_t representation
-template <typename MaskType, size_t MAX_FIELDS>
-uint64_t FieldMaskImpl<MaskType, MAX_FIELDS>::AsUint64() const {
-  if constexpr (std::is_same_v<MaskType, EmptyFieldMask>) {
-    return 1ULL;  // Single field case: presence of object implies field is set
-  } else {
-    return static_cast<uint64_t>(mask_);  // Cast integer types to uint64_t
-  }
-}
-
-// Explicit template instantiations
-template class FieldMaskImpl<EmptyFieldMask, 1>;
-template class FieldMaskImpl<uint8_t, 8>;
-template class FieldMaskImpl<uint64_t, 64>;
+uint64_t FieldMask::GetMask() const { return mask_; }
 
 // Basic Postings Object Implementation
 
@@ -175,11 +46,11 @@ Postings::~Postings() {
 // Check if posting list contains any documents
 bool Postings::IsEmpty() const { return key_to_positions_.empty(); }
 
-// TODO: develop a better strategy to track terms
+// Count terms across all fields in a position map
 unsigned int count_num_terms(const PositionMap& pos_map) {
   unsigned int num_terms = 0;
   for (const auto& [_, field_mask] : pos_map) {
-    num_terms += field_mask->CountSetFields();
+    num_terms += field_mask.CountSetFields();
   }
   return num_terms;
 }

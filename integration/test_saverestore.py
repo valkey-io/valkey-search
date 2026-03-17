@@ -410,3 +410,33 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
         i = self.client.info("search")
         save_mutation_entries = i["search_rdb_save_mutation_entries"]
         assert save_mutation_entries == 0
+
+    def test_mutation_queue_drain_on_bgsave_child(self):
+        """BGSAVE forks a child — drain must not hang on a frozen queue."""
+        self.client.execute_command("CONFIG SET search.drain-mutation-queue-on-save yes")
+        self.client.execute_command("CONFIG SET search.writer-threads 1")
+        self.client.execute_command("ft._debug PAUSEPOINT SET block_mutation_queue")
+        index.create(self.client, True)
+        records = make_data(num_vectors=100)
+
+        # Load data with blocked mutation queue so entries stay queued
+        client_threads = []
+        for i in range(len(records)):
+            new_client = self.server.get_new_client()
+            t = threading.Thread(target=index.write_data, args=(new_client, i, records[i]))
+            t.start()
+            client_threads += [t]
+
+        waiters.wait_for_true(lambda: self.mutation_queue_size() == len(records))
+
+        # Unblock writer thread then immediately BGSAVE — fork will snapshot
+        # while queue is still non-empty. Child must not hang.
+        self.client.execute_command("ft._debug PAUSEPOINT RESET block_mutation_queue")
+        self.client.execute_command("BGSAVE")
+        waiters.wait_for_true(
+            lambda: self.client.info('persistence')['rdb_bgsave_in_progress'] == 0,
+            timeout=10
+        )
+
+        for t in client_threads:
+            t.join()

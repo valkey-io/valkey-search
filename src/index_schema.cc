@@ -1485,13 +1485,12 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
       // Apply backpressure if mutation queue is too large
       while (current_queue_size >= max_queue_size) {
         // Use ValkeyModule_Yield to cooperatively yield during loading
-        ValkeyModule_Yield(ctx, VALKEYMODULE_YIELD_FLAG_CLIENTS,
-                           "slow module operation");
+        ValkeyModule_Yield(ctx, VALKEYMODULE_YIELD_FLAG_CLIENTS, nullptr);
         Metrics::GetStats().rdb_restore_backpressure_wait_cycles++;
         current_queue_size = GetMutatedRecordsSize();
 
         // Log periodically to show progress
-        VMSDK_LOG_EVERY_N_SEC(NOTICE, ctx, 2)
+        VMSDK_LOG_EVERY_N_SEC(NOTICE, ctx, 30)
             << "RDB restore backpressure: waiting for mutation queue to drain. "
             << "Queue size: " << current_queue_size << ", Progress: " << i
             << "/" << key_count << " keys loaded";
@@ -1501,8 +1500,7 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
     VMSDK_ASSIGN_OR_RETURN(auto keyname_str, input.LoadString());
     auto keyname = vmsdk::MakeUniqueValkeyString(keyname_str);
     ProcessKeyspaceNotification(ctx, keyname.get(), false);
-    ValkeyModule_Yield(ctx, VALKEYMODULE_YIELD_FLAG_CLIENTS,
-                       "Slow module operation");
+    ValkeyModule_Yield(ctx, VALKEYMODULE_YIELD_FLAG_CLIENTS, nullptr);
     keys_since_last_check++;
 
     // Update restore progress counter

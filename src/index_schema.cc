@@ -1499,9 +1499,8 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
     
     VMSDK_ASSIGN_OR_RETURN(auto keyname_str, input.LoadString());
     auto keyname = vmsdk::MakeUniqueValkeyString(keyname_str);
-    ValkeyModule_Yield(ctx, VALKEYMODULE_YIELD_FLAG_CLIENTS, "Slow module operation");
     ProcessKeyspaceNotification(ctx, keyname.get(), false);
-    ValkeyModule_Yield(ctx, VALKEYMODULE_YIELD_FLAG_CLIENTS, "slow module operation");
+    ValkeyModule_Yield(ctx, VALKEYMODULE_YIELD_FLAG_CLIENTS, "Slow module operation");
     keys_since_last_check++;
 
     // Update restore progress counter

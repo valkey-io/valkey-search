@@ -1,6 +1,7 @@
 from valkey.client import Valkey
 from valkey_search_test_case import ValkeySearchTestCaseBase
 from valkeytestframework.conftest import resource_port_tracker
+import time
 
 class TestAggregateMetrics(ValkeySearchTestCaseBase):
 
@@ -145,3 +146,4 @@ class TestAggregateMetrics(ValkeySearchTestCaseBase):
         # Overall: 20 in, 10 out
         assert int(info["search_agg_input_records"]) == initial_input_records + 20
         assert int(info["search_agg_output_records"]) == initial_output_records + 10
+        time.sleep(10)  

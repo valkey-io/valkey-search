@@ -42,5 +42,12 @@ absl::Status AclPrefixCheck(ValkeyModuleCtx *ctx, acl::KeyAccess access,
 absl::Status AclPrefixCheck(ValkeyModuleCtx *ctx, acl::KeyAccess access,
                             const std::vector<std::string> &module_prefixes);
 
+/*
+ * Check whether the current client has admin command permissions.
+ * Returns PermissionDenied when the current user cannot be resolved or
+ * does not include admin privileges.
+ */
+absl::Status AclAdminCheck(ValkeyModuleCtx *ctx);
+
 }  // namespace valkey_search
 #endif  // VALKEYSEARCH_SRC_COMMANDS_ACL_H_

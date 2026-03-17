@@ -9,6 +9,7 @@
 #include <absl/strings/ascii.h>
 
 #include "module_config.h"
+#include "src/acl.h"
 #include "src/coordinator/metadata_manager.h"
 #include "src/index_schema.h"
 #include "src/schema_manager.h"
@@ -347,7 +348,7 @@ absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
 absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                         int argc) {
   std::string msg;
-  if (!vmsdk::config::IsDebugModeEnabled()) {
+  if (!vmsdk::config::IsDebugModeEnabled() && !AclAdminCheck(ctx).ok()) {
     // Pretend like we don't exist
     msg = "ERR unknown command '";
     msg += vmsdk::ToStringView(argv[0]);

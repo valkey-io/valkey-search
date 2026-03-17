@@ -62,6 +62,7 @@ class Metrics {
     std::atomic<uint64_t> rdb_restore_current_index_keys_total{0};
     std::atomic<uint64_t> rdb_restore_current_index_keys_loaded{0};
     std::atomic<bool> rdb_restore_in_progress{false};
+    std::atomic<uint64_t> rdb_restore_backpressure_wait_cycles{0};
 
     // FT.INTERNAL_UPDATE error handling metrics
     std::atomic<uint64_t> ft_internal_update_parse_failures_cnt{0};

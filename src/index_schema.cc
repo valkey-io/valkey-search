@@ -1450,7 +1450,6 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
   
   const size_t max_queue_size = 
       options::GetMaxMutationQueueSizeOnRestore().GetValue();
-  size_t backpressure_wait_count = 0;
   
   // Batch size for queue checks - check every N keys to reduce mutex overhead
   // Check more frequently when queue is near limit to maintain responsiveness
@@ -1470,7 +1469,7 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
       while (current_queue_size >= max_queue_size) {
         // Use ValkeyModule_Yield to cooperatively yield during loading
         ValkeyModule_Yield(ctx, VALKEYMODULE_YIELD_FLAG_CLIENTS, "slow module operation");
-        backpressure_wait_count++;
+        Metrics::GetStats().rdb_restore_backpressure_wait_cycles++;
         current_queue_size = GetMutatedRecordsSize();
         
         // Log periodically to show progress
@@ -1492,10 +1491,10 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
     Metrics::GetStats().rdb_restore_current_index_keys_loaded = i + 1;
   }
   
-  if (backpressure_wait_count > 0) {
+  if (Metrics::GetStats().rdb_restore_backpressure_wait_cycles > 0) {
     VMSDK_LOG(NOTICE, ctx)
-        << "RDB restore completed with backpressure. Total wait iterations: "
-        << backpressure_wait_count
+        << "RDB restore completed with backpressure. Total wait cycles: "
+        << Metrics::GetStats().rdb_restore_backpressure_wait_cycles
         << " (max queue size: " << max_queue_size << ")";
   }
   // Need to suspend workers so that MultiMutation and Regular Mutation queues

@@ -374,6 +374,12 @@ static vmsdk::info_field::Integer rdb_restore_current_index_keys_loaded(
       return Metrics::GetStats().rdb_restore_current_index_keys_loaded;
     }));
 
+static vmsdk::info_field::Integer rdb_restore_backpressure_wait_cycles(
+    "rdb", "rdb_restore_backpressure_wait_cycles",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().rdb_restore_backpressure_wait_cycles;
+    }));
+
 static vmsdk::info_field::Integer ft_internal_update_parse_failures_cnt(
     "coordinator", "ft_internal_update_parse_failures_cnt",
     vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {

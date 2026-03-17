@@ -25,13 +25,10 @@
 #include "src/query/predicate.h"
 #include "src/utils/patricia_tree.h"
 #include "src/utils/string_interning.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
-
-// For performance reasons, a minimum term length is enforced. The default is 2,
-// but configurable.
-const int16_t kDefaultMinPrefixLength{2};
 
 static bool IsValidPrefix(absl::string_view str) {
   return str.length() < 2 || str[str.length() - 1] != '*' ||
@@ -96,10 +93,15 @@ absl::StatusOr<absl::flat_hash_set<absl::string_view>> Tag::ParseSearchTags(
         return absl::InvalidArgumentError(
             absl::StrCat("Tag string `", tag, "` ends with multiple *."));
       }
-      // Prefix tags shorter than min length are ignored
-      if (tag.length() > kDefaultMinPrefixLength) {
-        parsed_tags.insert(tag);
+      const auto min_prefix_length =
+          options::GetTagMinPrefixLength().GetValue();
+
+      // Prefix tags shorter than min length are rejected.
+      if (tag.length() <= min_prefix_length) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "Tag string `", tag, "` is too short for prefix wildcard."));
       }
+      parsed_tags.insert(tag);
     } else {
       parsed_tags.insert(tag);
     }

@@ -637,6 +637,15 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearch(
     const SearchParameters &parameters, SearchMode search_mode,
     vmsdk::ReaderMutexLock &lock) {
   ++Metrics::GetStats().time_slice_queries;
+  // Handle OOM for search requests, defends against request
+  // coming from the coordinator
+  if (search_mode == SearchMode::kRemote) {
+    auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
+    auto ctx_flags = ValkeyModule_GetContextFlags(ctx.get());
+    if (ctx_flags & VALKEYMODULE_CTX_FLAGS_OOM) {
+      return absl::ResourceExhaustedError(kOOMMsg);
+    }
+  }
   // Handle non vector queries first where attribute_alias is empty.
   if (parameters.IsNonVectorQuery()) {
     return SearchNonVectorQuery(parameters);

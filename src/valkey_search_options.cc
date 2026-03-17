@@ -243,6 +243,7 @@ static auto ft_info_timeout_ms =
         kDefaultFTInfoTimeoutMs,  // default timeout (5 seconds)
         kMinimumFTInfoTimeoutMs,  // min timeout (100ms)
         kMaximumFTInfoTimeoutMs)  // max timeout (5 minutes)
+        .Dev()                    // can only be set in debug mode
         .Build();
 
 /// Register the "--ft-info-rpc-timeout-ms" flag. Controls the timeout for
@@ -254,6 +255,7 @@ static auto ft_info_rpc_timeout_ms =
         kDefaultFTInfoRpcTimeoutMs,  // default timeout (2.5 seconds)
         kMinimumFTInfoRpcTimeoutMs,  // min timeout (100ms)
         kMaximumFTInfoRpcTimeoutMs)  // max timeout (5 minutes)
+        .Dev()                       // can only be set in debug mode
         .Build();
 
 /// Register the "--local-fanout-queue-wait-threshold" flag. Controls the queue
@@ -316,6 +318,19 @@ static auto max_term_expansions =
                           kDefaultMaxTermExpansions,  // default limit (200)
                           kMinimumMaxTermExpansions,  // min limit (1)
                           kMaximumMaxTermExpansions)  // max limit (100k)
+        .Build();
+
+/// Register the "--tag-min-prefix-length" flag. Controls the minimum number
+/// of characters required before trailing '*' in TAG wildcard queries.
+/// The length excludes the '*' character itself.
+constexpr absl::string_view kTagMinPrefixLengthConfig{"tag-min-prefix-length"};
+constexpr uint32_t kDefaultTagMinPrefixLength{2};
+constexpr uint32_t kMinimumTagMinPrefixLength{0};
+static auto tag_min_prefix_length =
+    config::NumberBuilder(kTagMinPrefixLengthConfig,   // name
+                          kDefaultTagMinPrefixLength,  // default limit (2)
+                          kMinimumTagMinPrefixLength,  // min limit (0)
+                          UINT_MAX)                    // max limit
         .Build();
 
 /// Register the "--prefiltering-threshold-ratio" flag
@@ -399,6 +414,20 @@ constexpr absl::string_view kDrainMutationQueueOnLoadConfig{
 static auto drain_mutation_queue_on_load =
     config::BooleanBuilder(kDrainMutationQueueOnLoadConfig, true)
         .Dev()  // can only be set in debug mode
+        .Build();
+
+/// Register the "max-mutation-queue-size-on-restore" parameter
+/// Limit the mutation queue size during RDB restore to prevent memory spikes
+constexpr absl::string_view kMaxMutationQueueSizeOnRestoreConfig{
+    "max-mutation-queue-size-on-restore"};
+constexpr uint32_t kDefaultMaxMutationQueueSizeOnRestore{10000};
+constexpr uint32_t kMinimumMaxMutationQueueSizeOnRestore{1};
+constexpr uint32_t kMaximumMaxMutationQueueSizeOnRestore{1000000};
+static auto max_mutation_queue_size_on_restore =
+    config::NumberBuilder(kMaxMutationQueueSizeOnRestoreConfig,
+                          kDefaultMaxMutationQueueSizeOnRestore,
+                          kMinimumMaxMutationQueueSizeOnRestore,
+                          kMaximumMaxMutationQueueSizeOnRestore)
         .Build();
 
 /// Register the "drain-mutation-queue-on-save" flag
@@ -576,6 +605,10 @@ vmsdk::config::Number& GetMaxTermExpansions() {
   return dynamic_cast<vmsdk::config::Number&>(*max_term_expansions);
 }
 
+vmsdk::config::Number& GetTagMinPrefixLength() {
+  return dynamic_cast<vmsdk::config::Number&>(*tag_min_prefix_length);
+}
+
 const vmsdk::config::Boolean& GetDrainMutationQueueOnSave() {
   return dynamic_cast<const vmsdk::config::Boolean&>(
       *drain_mutation_queue_on_save);
@@ -593,6 +626,11 @@ vmsdk::config::Number& GetFanoutDataUniformity() {
 vmsdk::config::Number& GetFanoutUniformityMinIndexSize() {
   return dynamic_cast<vmsdk::config::Number&>(
       *fanout_uniformity_min_index_size);
+}
+
+vmsdk::config::Number& GetMaxMutationQueueSizeOnRestore() {
+  return dynamic_cast<vmsdk::config::Number&>(
+      *max_mutation_queue_size_on_restore);
 }
 
 vmsdk::config::Number& GetAsyncFanoutThreshold() {

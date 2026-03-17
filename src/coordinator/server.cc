@@ -136,8 +136,12 @@ class RemoteResponderSearch : public query::SearchParameters {
 
  private:
   void QueryCompleteImpl() {
-    if (!search_result.status.ok() && !enable_partial_results ||
-        cancellation_token->IsCancelled()) {
+    if (!search_result.status.ok() && !enable_partial_results) {
+      reactor->Finish(ToGrpcStatus(search_result.status));
+      RecordSearchMetrics(true, std::move(latency_sample));
+      return;
+    }
+    if (cancellation_token->IsCancelled()) {
       reactor->Finish({grpc::StatusCode::DEADLINE_EXCEEDED,
                        "Search operation cancelled due to timeout"});
       RecordSearchMetrics(true, std::move(latency_sample));
@@ -280,7 +284,7 @@ Service::GenerateInfoResponse(
     response.set_error_type(
         coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR);
     VMSDK_LOG_EVERY_N_SEC(NOTICE, nullptr, 1)
-        << "DEBUG: Fingerprint, version or slot "
+        << "Fingerprint, version or slot "
            "fingerprint mismatch at server.cc";
     grpc::Status error_status(
         grpc::StatusCode::FAILED_PRECONDITION,

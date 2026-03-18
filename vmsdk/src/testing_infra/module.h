@@ -230,6 +230,7 @@ class MockValkeyModule {
   MOCK_METHOD(void *, Calloc, (size_t nmemb, size_t size));
   MOCK_METHOD(size_t, MallocUsableSize, (void *ptr));
   MOCK_METHOD(size_t, GetClusterSize, ());
+  MOCK_METHOD(unsigned int, ClusterKeySlot, (ValkeyModuleString * key));
   MOCK_METHOD(ValkeyModuleCallReply *, Call,
               (ValkeyModuleCtx * ctx, const char *cmd, const char *fmt,
                const char *arg1, const char *arg2));
@@ -1201,6 +1202,33 @@ inline size_t TestValkeyModule_MallocUsableSize(void *ptr) {
 inline size_t TestValkeyModule_GetClusterSize() {
   return kMockValkeyModule->GetClusterSize();
 }
+
+inline unsigned int TestValkeyModule_ClusterKeySlotImpl(
+    ValkeyModuleString *key) {
+  if (key == nullptr) {
+    return 0;
+  }
+
+  absl::string_view key_view = vmsdk::ToStringView(key);
+  absl::string_view slot_key = key_view;
+  auto hash_tag = vmsdk::ParseHashTag(key_view);
+  if (hash_tag.has_value()) {
+    slot_key = *hash_tag;
+  }
+
+  // Use a lightweight deterministic hash for tests.
+  uint32_t hash = 2166136261u;
+  for (char c : slot_key) {
+    hash ^= static_cast<unsigned char>(c);
+    hash *= 16777619u;
+  }
+  return hash % 16384;
+}
+
+inline unsigned int TestValkeyModule_ClusterKeySlot(ValkeyModuleString *key) {
+  return kMockValkeyModule->ClusterKeySlot(key);
+}
+
 inline void *TestValkeyModule_GetSharedAPI(ValkeyModuleCtx *ctx,
                                            const char *arg1) {
   return kMockValkeyModule->GetSharedAPI(ctx, arg1);
@@ -1597,6 +1625,7 @@ inline void TestValkeyModule_Init() {
   ValkeyModule_Calloc = &TestValkeyModule_Calloc;
   ValkeyModule_MallocUsableSize = &TestValkeyModule_MallocUsableSize;
   ValkeyModule_GetClusterSize = &TestValkeyModule_GetClusterSize;
+  ValkeyModule_ClusterKeySlot = &TestValkeyModule_ClusterKeySlot;
   ValkeyModule_GetSharedAPI = &TestValkeyModule_GetSharedAPI;
   ValkeyModule_Call = &TestValkeyModule_Call;
   ValkeyModule_CallReplyArrayElement = &TestValkeyModule_CallReplyArrayElement;
@@ -1652,6 +1681,8 @@ inline void TestValkeyModule_Init() {
   ON_CALL(*kMockValkeyModule,
           HashExternalize(testing::_, testing::_, testing::_, testing::_))
       .WillByDefault(TestValkeyModule_HashExternalizeDefaultImpl);
+  ON_CALL(*kMockValkeyModule, ClusterKeySlot(testing::_))
+      .WillByDefault(TestValkeyModule_ClusterKeySlotImpl);
   ON_CALL(*kMockValkeyModule, GetApi(testing::_, testing::_))
       .WillByDefault(TestValkeyModule_GetApiDefaultImpl);
 

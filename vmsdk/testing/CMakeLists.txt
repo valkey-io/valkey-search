@@ -13,7 +13,6 @@ set(VMSDK_CORE_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/cluster_map_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/command_parser_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/concurrency_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/configuration_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/log_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/memory_allocation_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/module_test.cc
@@ -27,6 +26,7 @@ finalize_test_flags(vmsdk_core_test)
 
 # 2. VMSDK Infra Test Suite - lightweight tests requiring only vmsdklib
 set(VMSDK_INFRA_TEST_SOURCES
+    ${CMAKE_CURRENT_LIST_DIR}/configuration_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/thread_pool_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/mrmw_mutex_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/status_macros_test.cc)

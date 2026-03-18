@@ -10,6 +10,7 @@
 
 #include <cstdint>
 
+#include "absl/base/no_destructor.h"
 #include "absl/base/thread_annotations.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
@@ -23,8 +24,12 @@ namespace valkey_search::coordinator {
 class GRPCSuspender {
  public:
   static GRPCSuspender& Instance() {
-    static GRPCSuspender instance;
-    return instance;
+    // Use NoDestructor to avoid atexit destruction racing with gRPC
+    // event_engine threads that may still be executing GRPCSuspensionGuard
+    // destructors (which call Decrement() -> MutexLock). The GRPCSuspender
+    // singleton outlives all threads; the OS reclaims memory at process exit.
+    static absl::NoDestructor<GRPCSuspender> instance;
+    return *instance;
   }
   absl::Status Suspend();
   absl::Status Resume();
@@ -33,6 +38,7 @@ class GRPCSuspender {
 
  private:
   GRPCSuspender() = default;
+  friend class absl::NoDestructor<GRPCSuspender>;
 
   absl::Mutex mutex_;
   int64_t count_ ABSL_GUARDED_BY(mutex_) = 0;

@@ -71,7 +71,7 @@ void Free([[maybe_unused]] ValkeyModuleCtx *ctx, void *privdata) {
   // Must be freed here (main thread) to avoid racing with freeClientArgv().
   parameters->return_attributes.clear();
   // Cleanup of score_as
-  parameters->score_as = nullptr;
+  // parameters->score_as = nullptr;
   ValkeySearch::Instance().ScheduleSearchResultCleanup(
       [parameters]() { delete parameters; });
 }

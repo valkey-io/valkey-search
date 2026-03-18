@@ -146,4 +146,4 @@ class TestAggregateMetrics(ValkeySearchTestCaseBase):
         # Overall: 20 in, 10 out
         assert int(info["search_agg_input_records"]) == initial_input_records + 20
         assert int(info["search_agg_output_records"]) == initial_output_records + 10
-        time.sleep(25)  
+        # time.sleep(25)  

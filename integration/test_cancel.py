@@ -269,7 +269,7 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
             == b"OK"
         )
         assert(client.execute_command("FT._DEBUG PAUSEPOINT LIST") == [])
-        time.sleep(25)
+        # time.sleep(25)
 
     def test_pausepoint_entries_fetcher(self):
         """

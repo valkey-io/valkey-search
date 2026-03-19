@@ -10,6 +10,7 @@ VECTOR_DIM = 3
 
 SETS_KEY = lambda key_type: f"{key_type} sets"
 CREATES_KEY = lambda key_type: f"{key_type} creates"
+SETUP_KEY = lambda key_type: f"{key_type} setup"
 
 # Text data configuration
 TEXT_SCHEMA = {
@@ -211,6 +212,8 @@ def unbytes(b):
         return b.decode("utf-8")
     else:
         return b
+
+
 class ClientSystem:
     def __init__(self, address):
         self.address = address
@@ -591,18 +594,64 @@ def compute_text_data_sets(dataset_name, seed=123, schema_type="default"):
     return data
 
 ### Helper Functions ###
+def compute_alias_data():
+    """Return alias compatibility dataset in the standard compute_data_sets() shape.
+
+    Uses CREATES_KEY for FT.CREATE commands, SETS_KEY for HSET key/field pairs,
+    and SETUP_KEY for post-load alias management commands (each entry is a list
+    of args passed directly to execute_command).
+    """
+    data = {"alias": {}}
+    key_type = "hash"
+    # Use hash_idx1/hash_idx2 so the generic "{key_type}_idx1" waiter in
+    # compatibility_test.py works without any dataset-specific special-casing.
+    data["alias"][CREATES_KEY(key_type)] = [
+        "FT.CREATE hash_idx1 ON HASH PREFIX 1 adoc: SCHEMA price NUMERIC category TAG",
+        "FT.CREATE hash_idx2 ON HASH PREFIX 1 bdoc: SCHEMA price NUMERIC category TAG",
+    ]
+    data["alias"][SETS_KEY(key_type)] = [
+        (f"adoc:{i}", {"price": str(i * 10),
+                       "category": "electronics" if i % 2 == 0 else "books"})
+        for i in range(5)
+    ] + [
+        (f"bdoc:{i}", {"price": str(i * 100), "category": "furniture"})
+        for i in range(3)
+    ]
+    # Post-load alias setup: each entry is a flat arg list for execute_command.
+    data["alias"][SETUP_KEY(key_type)] = [
+        ["FT.ALIASADD", "alias_search", "hash_idx1"],
+        ["FT.ALIASADD", "alias_agg",    "hash_idx1"],
+        # alias_del: added then immediately removed — tests query hash_idx1 directly
+        ["FT.ALIASADD", "alias_del",    "hash_idx1"],
+        ["FT.ALIASDEL", "alias_del"],
+        # alias_upd: starts on hash_idx1, updated to hash_idx2
+        ["FT.ALIASADD",    "alias_upd", "hash_idx1"],
+        ["FT.ALIASUPDATE", "alias_upd", "hash_idx2"],
+    ]
+    return data
+
+
 def load_data(client, data_set, key_type, data_source=None, schema_type="default"):
     # Auto-detect data source based on data_set name
     if data_source is None:
-        data_source = "text" if data_set in TEXT_DATASETS else "vector"
+        if data_set == "alias":
+            data_source = "alias"
+        elif data_set in TEXT_DATASETS:
+            data_source = "text"
+        else:
+            data_source = "vector"
 
     match data_source:
+        case "alias":
+            data = compute_alias_data()
+            key_type = "hash"  # alias dataset is hash-only
         case "vector":
             data = compute_data_sets()
         case "text":
             data = compute_text_data_sets(data_set, schema_type=schema_type)
         case _:
             raise ValueError(f"Unknown data source: {data_source}")
+
     load_list = data[data_set][SETS_KEY(key_type)]
     for create_index_cmd in data[data_set][CREATES_KEY(key_type)]:
         client.execute_command(create_index_cmd)
@@ -618,7 +667,23 @@ def load_data(client, data_set, key_type, data_source=None, schema_type="default
                 pipe.execute_command(*["JSON.SET", cmd[0], "$", json.dumps(cmd[1])])
         pipe.execute()
 
-    # client.wait_for_indexing_done(f"{key_type}_idx1")
+    # Run any post-load setup commands
+    for setup_cmd in data[data_set].get(SETUP_KEY(key_type), []):
+        client.execute_command(*setup_cmd)
+    # Verify that each alias expected to be live after setup actually resolves.
+    if data[data_set].get(SETUP_KEY(key_type)):
+        setup_cmds = data[data_set][SETUP_KEY(key_type)]
+        live_aliases: set[str] = set()
+        for cmd in setup_cmds:
+            verb = cmd[0].upper()
+            alias = cmd[1]
+            if verb in ("FT.ALIASADD", "FT.ALIASUPDATE"):
+                live_aliases.add(alias)
+            elif verb == "FT.ALIASDEL":
+                live_aliases.discard(alias)
+        for alias in live_aliases:
+            client.execute_command("FT.INFO", alias)
+
     print(f"setup_data completed {data_set} {key_type}")
 
     # Print loaded data for debugging

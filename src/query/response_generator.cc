@@ -27,6 +27,7 @@
 #include "src/metrics.h"
 #include "src/query/predicate.h"
 #include "src/query/search.h"
+#include "src/valkey_search.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -180,6 +181,18 @@ bool VerifyFilter(const query::SearchParameters &parameters,
       records, parameters.filter_parse_results.query_operations);
   EvaluationResult result = predicate->Evaluate(evaluator);
   return result.matches;
+}
+
+// Check if this node owns the slot for the given key in cluster mode
+bool CheckSlotOwnership(absl::string_view key) {
+  // In standalone mode, we own all keys.
+  if (!ValkeySearch::Instance().IsCluster()) {
+    return true;
+  }
+  auto cluster_map = ValkeySearch::Instance().GetClusterMap();
+  auto key_str = vmsdk::MakeUniqueValkeyString(key);
+  unsigned int slot = ValkeyModule_ClusterKeySlot(key_str.get());
+  return cluster_map->IOwnSlot(static_cast<uint16_t>(slot));
 }
 
 absl::StatusOr<RecordsMap> GetContentNoReturnJson(
@@ -371,6 +384,11 @@ void ProcessNeighborsForReply(
     // neighbors which were added from remote nodes already have attribute
     // content
     if (neighbor.attribute_contents.has_value()) {
+      continue;
+    }
+    // Check slot ownership for local neighbors before fetching content
+    if (!CheckSlotOwnership(neighbor.external_id->Str())) {
+      // Skip this neighbor - we don't own its slot.
       continue;
     }
     auto content = GetContent(ctx, attribute_data_type, parameters, neighbor,

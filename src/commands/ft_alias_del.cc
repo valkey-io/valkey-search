@@ -29,9 +29,8 @@ absl::Status FTAliasDelCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
 
   ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 
-  if (!options::GetUseCoordinator().GetValue()) {
-    ValkeyModule_ReplicateVerbatim(ctx);
-  }
+  // Unlike indexes, aliases have no MetadataManager path, therefore always replicate.
+  ValkeyModule_ReplicateVerbatim(ctx);
   return absl::OkStatus();
 }
 

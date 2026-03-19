@@ -1,0 +1,20 @@
+{
+    "FT.ALIASDEL": {
+        "acl_categories": [
+            "FAST",
+            "WRITE",
+            "SEARCH"
+        ],
+        "arguments": [
+            {
+                "name": "alias",
+                "type": "string"
+            }
+        ],
+        "arity": 2,
+        "complexity": "O(1)",
+        "group": "search",
+        "module_since": "1.0.0",
+        "summary": "Remove an alias from an index"
+    }
+}

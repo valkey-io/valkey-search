@@ -672,8 +672,8 @@ void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx) {
                                 << " on FLUSHDB of DB " << selected_db;
         continue;
       }
-      // Restore aliases purged by RemoveIndexSchemaInternal, index is still
-      // live in cluster mode.
+      // Restore aliases purged by RemoveIndexSchemaInternal. The mutex is
+      // held for the entire OnFlushDBEnded call
       for (const auto &[alias, target] : saved_aliases) {
         db_to_aliases_[selected_db][alias] = target;
       }
@@ -824,11 +824,6 @@ absl::Status SchemaManager::SaveAliases(ValkeyModuleCtx *ctx, SafeRDB *rdb,
       entry->set_index_name(index_name);
     }
   }
-  // Defensive guard, section_count returns 0 when empty so the framework
-  // won't call us, but protect against direct callers too.
-  if (alias_map_proto.entries().empty()) {
-    return absl::OkStatus();
-  }
 
   data_model::RDBSection section;
   section.set_type(data_model::RDB_SECTION_ALIAS_MAP);
@@ -850,19 +845,15 @@ absl::Status SchemaManager::LoadAliasMap(
   const auto &alias_map_proto = section->alias_map_contents();
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   // ORDERING REQUIREMENT: LookupInternal requires indexes to already be loaded,
-  // so RDB_SECTION_INDEX_SCHEMA callbacks must run before this one. If that
-  // ordering breaks, unresolved aliases are silently dropped with a WARNING.
+  // so RDB_SECTION_INDEX_SCHEMA callbacks must run before this one.
   for (const auto &entry : alias_map_proto.entries()) {
-    // Validate that the referenced index exists. If not, the RDB may be
-    // corrupt or from a future version; log a warning and skip the entry
-    // rather than loading a dangling alias.
+    // Validate that the referenced index exists. A missing index means the RDB
+    // is corrupt or the registration ordering invariant was violated
     if (!LookupInternal(entry.db_num(), entry.index_name()).ok()) {
-      VMSDK_LOG(WARNING, ctx)
-          << "Skipping alias '" << entry.alias() << "' in db "
-          << entry.db_num() << ": target index '"
-          << vmsdk::config::RedactIfNeeded(entry.index_name())
-          << "' not found during RDB load";
-      continue;
+      return absl::InternalError(absl::StrFormat(
+          "RDB alias '%s' in db %d references unknown index '%s'; "
+          "RDB may be corrupt or index registration order was violated",
+          entry.alias(), entry.db_num(), entry.index_name()));
     }
     db_to_aliases_[entry.db_num()][entry.alias()] = entry.index_name();
   }

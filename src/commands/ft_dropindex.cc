@@ -118,8 +118,10 @@ absl::Status FTDropIndexCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   VMSDK_RETURN_IF_ERROR(AclPrefixCheck(ctx, acl::KeyAccess::kWrite,
                                        index_schema->GetKeyPrefixes()));
 
+  // Use the resolved real name so that dropping via an alias works correctly
+  // and alias cleanup in RemoveIndexSchemaInternal matches by real name.
   VMSDK_RETURN_IF_ERROR(SchemaManager::Instance().RemoveIndexSchema(
-      ValkeyModule_GetSelectedDb(ctx), index_schema_name));
+      ValkeyModule_GetSelectedDb(ctx), index_schema->GetName()));
 
   // directly handle reply in standalone mode
   // let fanout operation handle reply in cluster mode

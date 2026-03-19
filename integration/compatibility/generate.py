@@ -468,3 +468,86 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                         for limit in ["LIMIT 0 5", "LIMIT 2 3", ""]:
                             self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY {sort_key} {direction} {return_keys} {limit} {wsk}")
 
+
+
+@pytest.mark.parametrize("key_type", ["hash"])
+class TestAliasCompatibility(BaseCompatibilityTest):
+
+    ANSWER_FILE_NAME = "alias-answers.pickle.gz"
+
+    def setup_method(self):
+        super().setup_method()
+        # Delegate entirely to load_data so the replay path in
+        # compatibility_test.py uses the exact same state.
+        load_data(self.client, "alias", "hash")
+        self.data_set_name = "alias"
+        self.key_type = "hash"
+
+    def test_aliasadd_search(self, key_type):
+        """FT.SEARCH via alias returns same results as via index name."""
+        # alias_search -> hash_idx1 is pre-configured by load_data
+        self._record_cmd("FT.SEARCH", "alias_search", "@price:[0 +inf]", "SORTBY", "price", "ASC")
+        self._record_cmd("FT.SEARCH", "alias_search", "@category:{electronics}", "SORTBY", "price", "ASC")
+        self._record_cmd("FT.SEARCH", "alias_search", "@price:[20 40]", "SORTBY", "price", "ASC")
+
+    def test_aliasadd_aggregate(self, key_type):
+        """FT.AGGREGATE via alias returns same results as via index name."""
+        # alias_agg -> hash_idx1 is pre-configured by load_data
+        self._record_cmd("FT.AGGREGATE", "alias_agg", "@category:{electronics}",
+           "LOAD", "1", "@category",
+           "GROUPBY", "1", "@category",
+           "REDUCE", "COUNT", "0", "AS", "count",
+        )
+
+        self._record_cmd(
+            "FT.AGGREGATE", "alias_agg", "@price:[0 +inf]",
+            "LOAD", "2", "@price", "@category",
+            "SORTBY", "2", "@price", "ASC",
+        )
+
+    def test_aliasdel_then_direct(self, key_type):
+        """After FT.ALIASDEL the underlying index is still queryable by name."""
+        # alias_del was added then deleted by load_alias_data; query index directly.
+        self._record_cmd("FT.SEARCH", "hash_idx1", "@price:[0 +inf]", "SORTBY", "price", "ASC")
+
+    def test_aliasupdate_search(self, key_type):
+        """FT.SEARCH via alias after ALIASUPDATE reflects the new target index."""
+        # alias_upd -> hash_idx2 is pre-configured by load_data
+        self._record_cmd("FT.SEARCH", "alias_upd", "@category:{furniture}", "SORTBY", "price", "ASC")
+
+    def test_aliasupdate_old_index_unaffected(self, key_type):
+        """After ALIASUPDATE, the original index is still queryable by its real name."""
+        # alias_upd was moved from hash_idx1 to hash_idx2; hash_idx1 must still work.
+        self._record_cmd("FT.SEARCH", "hash_idx1", "@price:[0 +inf]", "SORTBY", "price", "ASC")
+
+    def test_aliasupdate_upsert(self, key_type):
+        """FT.ALIASUPDATE on an existing alias succeeds (upsert, no error)."""
+        # alias_upd already points to hash_idx2 after setup; updating it again
+        # to hash_idx1 must succeed without an "already exists" error.
+        self._record_cmd("FT.ALIASUPDATE", "alias_upd", "hash_idx1")
+
+    def _record_cmd(self, *orig_cmd):
+        """Execute a command against the reference server and record the answer.
+
+        Named _record_cmd (not check) to avoid shadowing BaseCompatibilityTest.check,
+        which has a different signature (dialect, *orig_cmd). Alias commands are
+        dialect-agnostic so no '*' substitution is needed here.
+        """
+        cmd = list(orig_cmd)
+        answer = {
+            "cmd": cmd,
+            "key_type": self.key_type,
+            "data_set_name": self.data_set_name,
+            "testname": os.environ.get("PYTEST_CURRENT_TEST", "unknown").split(":")[-1].split(" ")[0],
+            "traceback": "".join(traceback.format_stack()),
+        }
+        try:
+            print("Cmd:", *cmd)
+            answer["result"] = self.client.execute_command(*cmd)
+            answer["exception"] = False
+            print(f"replied: {answer['result']}")
+        except Exception as exc:
+            print(f"Got exception: '{exc}', Cmd:{cmd}")
+            answer["result"] = {}
+            answer["exception"] = True
+        self.answers.append(answer)

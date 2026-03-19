@@ -134,25 +134,25 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
         # Now, test pre-filtering case.
         #
         assert (
-            client.info("SEARCH")["search_query_prefiltering_requests_cnt"] == 0
+            client.info("SEARCH")["search_prefiltering_requests_count"] == 0
         )
         hnsw_result = search(client, "hnsw", False, 2, enable_partial_results=True)
         assert hnsw_result[0] == 2
         assert client.info("SEARCH")["search_test-counter-ForceCancels"] == 5
         assert (
-            client.info("SEARCH")["search_query_prefiltering_requests_cnt"] == 1
+            client.info("SEARCH")["search_prefiltering_requests_count"] == 1
         )
 
         #
         # Disable partial results, and force timeout with pre-filtering
         #
         assert (
-            client.info("SEARCH")["search_query_prefiltering_requests_cnt"] == 1
+            client.info("SEARCH")["search_prefiltering_requests_count"] == 1
         )
         hnsw_result = search(client, "hnsw", True, 2, enable_partial_results=False)
         assert client.info("SEARCH")["search_test-counter-ForceCancels"] == 6
         assert (
-            client.info("SEARCH")["search_query_prefiltering_requests_cnt"] == 2
+            client.info("SEARCH")["search_prefiltering_requests_count"] == 2
         )
         assert hnsw_result != nominal_hnsw_result
 
@@ -273,9 +273,9 @@ class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
         #
         # Pre-filtering HNSW path
         #
-        self.check_info("search_query_prefiltering_requests_cnt", 0)
+        self.check_info("search_prefiltering_requests_count", 0)
         hnsw_result = search(client, "hnsw", True, 10, enable_partial_results=False)
-        self.check_info("search_query_prefiltering_requests_cnt", 1)
+        self.check_info("search_prefiltering_requests_count", 1)
         self.check_info_sum("search_test-counter-ForceCancels", 6)
 
         #
@@ -283,4 +283,4 @@ class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
         #
         flat_result = search(client, "flat", True, None, enable_partial_results=False)
         self.check_info_sum("search_test-counter-ForceCancels", 9)
-        self.check_info("search_query_prefiltering_requests_cnt", 1)
+        self.check_info("search_prefiltering_requests_count", 1)

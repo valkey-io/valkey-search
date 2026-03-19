@@ -61,6 +61,14 @@ class SchemaManager {
   absl::StatusOr<std::shared_ptr<IndexSchema>> GetIndexSchema(
       uint32_t db_num, absl::string_view name) const
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
+  absl::Status AddAlias(uint32_t db_num, absl::string_view alias,
+                        absl::string_view index_name)
+      ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
+  absl::Status RemoveAlias(uint32_t db_num, absl::string_view alias)
+      ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
+  absl::Status UpdateAlias(uint32_t db_num, absl::string_view alias,
+                           absl::string_view index_name)
+      ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
   absl::flat_hash_set<std::string> GetIndexSchemasInDB(uint32_t db_num) const;
   // TODO Investigate storing aggregated counters to optimize stats
   // generation.
@@ -116,6 +124,10 @@ class SchemaManager {
                          std::unique_ptr<data_model::RDBSection> section,
                          SupplementalContentIter &&supplemental_iter);
   absl::Status SaveIndexes(ValkeyModuleCtx *ctx, SafeRDB *rdb, int when);
+  absl::Status LoadAliasMap(ValkeyModuleCtx *ctx,
+                            std::unique_ptr<data_model::RDBSection> section,
+                            SupplementalContentIter &&supplemental_iter);
+  absl::Status SaveAliases(ValkeyModuleCtx *ctx, SafeRDB *rdb, int when);
   static absl::StatusOr<uint64_t> ComputeFingerprint(
       const google::protobuf::Any &metadata);
   absl::StatusOr<vmsdk::ValkeyVersion> GetMinVersion() const;
@@ -157,6 +169,8 @@ class SchemaManager {
   absl::flat_hash_map<
       uint32_t, absl::flat_hash_map<std::string, std::shared_ptr<IndexSchema>>>
       db_to_index_schemas_ ABSL_GUARDED_BY(db_to_index_schemas_mutex_);
+  absl::flat_hash_map<uint32_t, absl::flat_hash_map<std::string, std::string>>
+      db_to_aliases_ ABSL_GUARDED_BY(db_to_index_schemas_mutex_);
 
   // Staged changes to index schemas, to be applied on loading ended.
   vmsdk::MainThreadAccessGuard<absl::flat_hash_map<

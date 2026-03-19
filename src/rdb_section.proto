@@ -25,6 +25,19 @@ enum RDBSectionType {
   RDB_SECTION_UNSET = 0;
   RDB_SECTION_INDEX_SCHEMA = 1;
   RDB_SECTION_GLOBAL_METADATA = 2;
+  RDB_SECTION_ALIAS_MAP = 3;
+}
+
+// A single alias entry: alias name -> index name, scoped to a DB.
+message AliasEntry {
+  uint32 db_num = 1;
+  string alias = 2;
+  string index_name = 3;
+}
+
+// All alias entries across all DBs, stored as a single RDB section.
+message AliasMap {
+  repeated AliasEntry entries = 1;
 }
 
 message RDBSection {
@@ -33,6 +46,7 @@ message RDBSection {
   oneof contents {
     IndexSchema index_schema_contents = 3;
     coordinator.GlobalMetadata global_metadata_contents = 4;
+    AliasMap alias_map_contents = 5;
   }
 }
 

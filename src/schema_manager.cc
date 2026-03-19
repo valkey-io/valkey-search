@@ -128,6 +128,37 @@ SchemaManager::SchemaManager(
               [this](ValkeyModuleCtx *ctx, int when) {
                 return this->GetMinVersion();
               }});
+  // NOTE: RDB_SECTION_ALIAS_MAP must be registered AFTER
+  // RDB_SECTION_INDEX_SCHEMA. LoadAliasMap validates that each alias target
+  // exists, so indexes must already be loaded when aliases are restored.
+  // The RDB framework calls load callbacks in registration order.
+  RegisterRDBCallback(
+      data_model::RDB_SECTION_ALIAS_MAP,
+      RDBSectionCallbacks{
+          .load = [this](ValkeyModuleCtx *ctx,
+                         std::unique_ptr<data_model::RDBSection> section,
+                         SupplementalContentIter &&iter) -> absl::Status {
+            return LoadAliasMap(ctx, std::move(section), std::move(iter));
+          },
+          .save = [this](ValkeyModuleCtx *ctx, SafeRDB *rdb, int when)
+              -> absl::Status { return SaveAliases(ctx, rdb, when); },
+          // Returns 1 if any DB has aliases to persist (all aliases are packed
+          // into a single RDB section), 0 otherwise.
+          .section_count = [this](ValkeyModuleCtx *ctx, int when) -> int {
+            // Only report sections for the AFTER phase, matching SaveAliases.
+            if (when == VALKEYMODULE_AUX_BEFORE_RDB) {
+              return 0;
+            }
+            absl::MutexLock lock(&db_to_index_schemas_mutex_);
+            for (const auto &kv : db_to_aliases_) {
+              if (!kv.second.empty()) return 1;
+            }
+            return 0;
+          },
+          .minimum_semantic_version =
+              [this](ValkeyModuleCtx *ctx, int when) {
+                return this->GetMinVersion();
+              }});
   if (coordinator_enabled) {
     coordinator::MetadataManager::Instance().RegisterType(
         kSchemaManagerMetadataTypeName, ComputeFingerprint,
@@ -263,9 +294,86 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> SchemaManager::GetIndexSchema(
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   auto existing_entry = LookupInternal(db_num, name);
   if (!existing_entry.ok()) {
+    // Try alias resolution
+    auto db_alias_it = db_to_aliases_.find(db_num);
+    if (db_alias_it != db_to_aliases_.end()) {
+      auto alias_it = db_alias_it->second.find(name);
+      if (alias_it != db_alias_it->second.end()) {
+        existing_entry = LookupInternal(db_num, alias_it->second);
+      }
+    }
+  }
+  if (!existing_entry.ok()) {
     return GenerateIndexNotFoundError(db_num, name);
   }
   return existing_entry.value();
+}
+
+absl::Status SchemaManager::AddAlias(uint32_t db_num, absl::string_view alias,
+                                     absl::string_view index_name) {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  // find() avoids default-inserting an empty map on failed paths. Skipping
+  // the block when db_num has no entry is correct: no aliases exist yet so
+  // neither collision check can fire.
+  auto db_alias_it = db_to_aliases_.find(db_num);
+  if (db_alias_it != db_to_aliases_.end()) {
+    // Reject alias-to-alias: index_name must not itself be an alias.
+    if (db_alias_it->second.contains(index_name)) {
+      return absl::InvalidArgumentError(
+          "Unknown index name or name is an alias");
+    }
+    // Reject duplicate alias.
+    if (db_alias_it->second.contains(alias)) {
+      return absl::AlreadyExistsError("Alias already exists");
+    }
+  }
+  // Lookup and insertion are both under db_to_index_schemas_mutex_, so there
+  // is no TOCTOU window between the existence check and the write.
+  if (!LookupInternal(db_num, index_name).ok()) {
+    return GenerateIndexNotFoundError(db_num, index_name);
+  }
+  db_to_aliases_[db_num][std::string(alias)] = std::string(index_name);
+  return absl::OkStatus();
+}
+
+absl::Status SchemaManager::RemoveAlias(uint32_t db_num,
+                                        absl::string_view alias) {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  // Use find() to avoid default-inserting an empty map for db_num.
+  auto db_alias_it = db_to_aliases_.find(db_num);
+  if (db_alias_it == db_to_aliases_.end() ||
+      !db_alias_it->second.contains(alias)) {
+    // Matches RediSearch error message for unknown alias.
+    return absl::NotFoundError("Alias does not exist");
+  }
+  db_alias_it->second.erase(alias);
+  return absl::OkStatus();
+}
+
+absl::Status SchemaManager::UpdateAlias(uint32_t db_num,
+                                        absl::string_view alias,
+                                        absl::string_view index_name) {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  // find() avoids default-inserting an empty map on failed paths. Skipping
+  // the block when db_num has no entry is correct: no aliases exist yet so
+  // the alias-to-alias check cannot fire.
+  auto db_alias_it = db_to_aliases_.find(db_num);
+  if (db_alias_it != db_to_aliases_.end()) {
+    // Reject alias-to-alias: index_name must not itself be an alias.
+    if (db_alias_it->second.contains(index_name)) {
+      return absl::InvalidArgumentError(
+          "Unknown index name or name is an alias");
+    }
+  }
+  // Lookup and insertion are both under db_to_index_schemas_mutex_, so there
+  // is no TOCTOU window between the existence check and the write.
+  if (!LookupInternal(db_num, index_name).ok()) {
+    return GenerateIndexNotFoundError(db_num, index_name);
+  }
+  // ALIASUPDATE is an upsert: it creates the alias if it doesn't exist, or
+  // silently reassigns it if it does.
+  db_to_aliases_[db_num][std::string(alias)] = std::string(index_name);
+  return absl::OkStatus();
 }
 
 absl::StatusOr<std::shared_ptr<IndexSchema>>
@@ -279,6 +387,20 @@ SchemaManager::RemoveIndexSchemaInternal(uint32_t db_num,
   db_to_index_schemas_[db_num].erase(name);
   if (db_to_index_schemas_[db_num].empty()) {
     db_to_index_schemas_.erase(db_num);
+  }
+  // Purge any aliases that pointed to the dropped index so they don't dangle.
+  auto db_alias_it = db_to_aliases_.find(db_num);
+  if (db_alias_it != db_to_aliases_.end()) {
+    auto &alias_map = db_alias_it->second;
+    for (auto it = alias_map.begin(); it != alias_map.end();) {
+      if (it->second == name) {
+        // Advance before erasing: erasing invalidates the current iterator.
+        auto to_erase = it++;
+        alias_map.erase(to_erase);
+      } else {
+        ++it;
+      }
+    }
   }
   // Mark the index schema as lame duck. Otherwise, if there is a large
   // backlog of mutations, they can keep the index schema alive and cause
@@ -509,6 +631,21 @@ void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx) {
     VMSDK_LOG(DEBUG, ctx) << "Deleting index schema "
                           << vmsdk::config::RedactIfNeeded(name)
                           << " on FLUSHDB of DB " << selected_db;
+
+    // In coordinator mode the index is immediately recreated, so its aliases
+    // must survive. Snapshot them before RemoveIndexSchemaInternal purges them.
+    absl::flat_hash_map<std::string, std::string> saved_aliases;
+    if (coordinator_enabled_) {
+      auto db_alias_it = db_to_aliases_.find(selected_db);
+      if (db_alias_it != db_to_aliases_.end()) {
+        for (const auto &[alias, target] : db_alias_it->second) {
+          if (target == name) {
+            saved_aliases[alias] = target;
+          }
+        }
+      }
+    }
+
     auto old_schema = RemoveIndexSchemaInternal(selected_db, name);
     if (!old_schema.ok()) {
       VMSDK_LOG(WARNING, ctx) << "Unable to delete index schema "
@@ -535,6 +672,11 @@ void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx) {
                                 << " on FLUSHDB of DB " << selected_db;
         continue;
       }
+      // Restore aliases purged by RemoveIndexSchemaInternal, index is still
+      // live in cluster mode.
+      for (const auto &[alias, target] : saved_aliases) {
+        db_to_aliases_[selected_db][alias] = target;
+      }
     }
   }
 }
@@ -542,6 +684,8 @@ void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx) {
 void SchemaManager::OnSwapDB(ValkeyModuleSwapDbInfo *swap_db_info) {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   if (swap_db_info->dbnum_first == swap_db_info->dbnum_second) {
+    // Swapping a DB with itself is a no-op, indexes stay in place and aliases
+    // need no changes
     for (auto &schema : db_to_index_schemas_[swap_db_info->dbnum_first]) {
       schema.second->OnSwapDB(swap_db_info);
     }
@@ -561,6 +705,26 @@ void SchemaManager::OnSwapDB(ValkeyModuleSwapDbInfo *swap_db_info) {
   for (auto &schema : db_to_index_schemas_[swap_db_info->dbnum_second]) {
     schema.second->OnSwapDB(swap_db_info);
   }
+  // Swap alias maps in lockstep with index schemas.
+  // Use find() + conditional insert to avoid polluting db_to_aliases_ with
+  // empty maps for DBs that have no aliases.
+  auto swap_aliases = [this](uint32_t a, uint32_t b) {
+    auto it_a = db_to_aliases_.find(a);
+    auto it_b = db_to_aliases_.find(b);
+    bool has_a = it_a != db_to_aliases_.end();
+    bool has_b = it_b != db_to_aliases_.end();
+    if (!has_a && !has_b) return;
+    if (has_a && !has_b) {
+      db_to_aliases_.emplace(b, std::move(it_a->second));
+      db_to_aliases_.erase(a);
+    } else if (!has_a && has_b) {
+      db_to_aliases_.emplace(a, std::move(it_b->second));
+      db_to_aliases_.erase(b);
+    } else {
+      std::swap(it_a->second, it_b->second);
+    }
+  };
+  swap_aliases(swap_db_info->dbnum_first, swap_db_info->dbnum_second);
 }
 
 void SchemaManager::OnReplicationLoadStart(ValkeyModuleCtx *ctx) {
@@ -594,6 +758,8 @@ void SchemaManager::OnLoadingEnded(ValkeyModuleCtx *ctx) {
     staged_db_to_index_schemas_ = absl::flat_hash_map<
         uint32_t,
         absl::flat_hash_map<std::string, std::shared_ptr<IndexSchema>>>();
+    // Aliases are re-loaded from RDB; clear any stale in-memory state.
+    db_to_aliases_.clear();
     staging_indices_due_to_repl_load_ = false;
   }
 
@@ -642,6 +808,67 @@ absl::Status SchemaManager::SaveIndexes(ValkeyModuleCtx *ctx, SafeRDB *rdb,
   return absl::OkStatus();
 }
 
+absl::Status SchemaManager::SaveAliases(ValkeyModuleCtx *ctx, SafeRDB *rdb,
+                                        int when) {
+  if (when == VALKEYMODULE_AUX_BEFORE_RDB) {
+    return absl::OkStatus();
+  }
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+
+  data_model::AliasMap alias_map_proto;
+  for (const auto &[db_num, alias_map] : db_to_aliases_) {
+    for (const auto &[alias, index_name] : alias_map) {
+      auto *entry = alias_map_proto.add_entries();
+      entry->set_db_num(db_num);
+      entry->set_alias(alias);
+      entry->set_index_name(index_name);
+    }
+  }
+  // Defensive guard, section_count returns 0 when empty so the framework
+  // won't call us, but protect against direct callers too.
+  if (alias_map_proto.entries().empty()) {
+    return absl::OkStatus();
+  }
+
+  data_model::RDBSection section;
+  section.set_type(data_model::RDB_SECTION_ALIAS_MAP);
+  section.set_supplemental_count(0);
+  section.mutable_alias_map_contents()->CopyFrom(alias_map_proto);
+  std::string serialized = section.SerializeAsString();
+  VMSDK_RETURN_IF_ERROR(rdb->SaveStringBuffer(serialized))
+      << "IO error while saving alias map to RDB";
+  return absl::OkStatus();
+}
+
+absl::Status SchemaManager::LoadAliasMap(
+    ValkeyModuleCtx *ctx, std::unique_ptr<data_model::RDBSection> section,
+    SupplementalContentIter &&supplemental_iter) {
+  if (section->type() != data_model::RDB_SECTION_ALIAS_MAP) {
+    return absl::InternalError(
+        "Unexpected RDB section type passed to SchemaManager alias loader");
+  }
+  const auto &alias_map_proto = section->alias_map_contents();
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  // ORDERING REQUIREMENT: LookupInternal requires indexes to already be loaded,
+  // so RDB_SECTION_INDEX_SCHEMA callbacks must run before this one. If that
+  // ordering breaks, unresolved aliases are silently dropped with a WARNING.
+  for (const auto &entry : alias_map_proto.entries()) {
+    // Validate that the referenced index exists. If not, the RDB may be
+    // corrupt or from a future version; log a warning and skip the entry
+    // rather than loading a dangling alias.
+    if (!LookupInternal(entry.db_num(), entry.index_name()).ok()) {
+      VMSDK_LOG(WARNING, ctx)
+          << "Skipping alias '" << entry.alias() << "' in db "
+          << entry.db_num() << ": target index '"
+          << vmsdk::config::RedactIfNeeded(entry.index_name())
+          << "' not found during RDB load";
+      continue;
+    }
+    db_to_aliases_[entry.db_num()][entry.alias()] = entry.index_name();
+  }
+  return absl::OkStatus();
+}
+
 absl::Status SchemaManager::RemoveAll() {
   std::vector<std::pair<int, std::string>> to_delete;
   for (const auto &[db_num, inner_map] : db_to_index_schemas_) {
@@ -655,6 +882,8 @@ absl::Status SchemaManager::RemoveAll() {
       return status.status();
     }
   }
+  // Clear all aliases so none dangle after all indexes are removed.
+  db_to_aliases_.clear();
   return absl::OkStatus();
 }
 

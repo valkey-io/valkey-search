@@ -172,19 +172,33 @@ class TestFTAliasUpdate(ValkeySearchTestCaseBase):
 class TestFTAliasDropIndex(ValkeySearchTestCaseBase):
     """Tests that FT.DROPINDEX works when called with an alias name."""
 
-    def test_dropindex_via_alias_removes_alias(self):
-        """FT.DROPINDEX via alias drops the index and cleans up the alias."""
+    def test_dropindex_via_real_name_removes_alias(self):
+        """FT.DROPINDEX by real index name drops the index and cleans up the alias."""
         client = self.client
         assert client.execute_command(*CREATE_TAG_INDEX) == b"OK"
         assert client.execute_command("FT.ALIASADD", ALIAS_NAME, INDEX_NAME) == b"OK"
 
-        # Drop using the real index name (alias resolution happens in ft_dropindex).
         assert client.execute_command("FT.DROPINDEX", INDEX_NAME) == b"OK"
 
         # Index is gone.
         with pytest.raises(ResponseError):
             client.execute_command("FT.INFO", INDEX_NAME)
         # Alias is also gone (purged by RemoveIndexSchemaInternal).
+        with pytest.raises(ResponseError):
+            client.execute_command("FT.INFO", ALIAS_NAME)
+
+    def test_dropindex_via_alias_name(self):
+        """FT.DROPINDEX called with an alias name resolves to the real index and drops it."""
+        client = self.client
+        assert client.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        assert client.execute_command("FT.ALIASADD", ALIAS_NAME, INDEX_NAME) == b"OK"
+
+        # Drop using the alias name directly.
+        assert client.execute_command("FT.DROPINDEX", ALIAS_NAME) == b"OK"
+
+        # Both the index and the alias are gone.
+        with pytest.raises(ResponseError):
+            client.execute_command("FT.INFO", INDEX_NAME)
         with pytest.raises(ResponseError):
             client.execute_command("FT.INFO", ALIAS_NAME)
 

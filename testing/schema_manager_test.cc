@@ -861,4 +861,125 @@ TEST_F(SchemaManagerAliasTest, MissingIndexRejectedOnUpdate) {
   EXPECT_EQ(by_alias.value().get(), by_name.value().get());
 }
 
+// RDB round-trip: SaveAliases -> LoadAliasMap restores aliases correctly.
+// We construct the AliasMap proto directly (bypassing the RDB byte-stream
+// layer) to keep the test focused on the alias save/load logic.
+TEST_F(SchemaManagerAliasTest, AliasSaveLoadRoundTrip) {
+  ON_CALL(*kMockValkeyModule, GetContextFromIO(testing::_))
+      .WillByDefault(testing::Return(&fake_ctx_));
+
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "rdb_alias", kIndexName));
+
+  // Build the RDB section proto that SaveAliases would produce.
+  data_model::RDBSection section_proto;
+  section_proto.set_type(data_model::RDB_SECTION_ALIAS_MAP);
+  section_proto.set_supplemental_count(0);
+  auto *entry =
+      section_proto.mutable_alias_map_contents()->add_entries();
+  entry->set_db_num(kDb0);
+  entry->set_alias("rdb_alias");
+  entry->set_index_name(kIndexName);
+
+  // Remove the alias so we can verify it is restored by LoadAliasMap.
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().RemoveAlias(kDb0, "rdb_alias"));
+  EXPECT_EQ(SchemaManager::Instance()
+                .GetIndexSchema(kDb0, "rdb_alias")
+                .status()
+                .code(),
+            absl::StatusCode::kNotFound);
+
+  // Load the section back.
+  FakeSafeRDB fake_rdb;
+  auto section =
+      std::make_unique<data_model::RDBSection>(section_proto);
+  VMSDK_EXPECT_OK(SchemaManager::Instance().LoadAliasMap(
+      &fake_ctx_, std::move(section),
+      SupplementalContentIter(&fake_rdb, 0)));
+
+  // Alias must resolve again after load.
+  auto by_alias =
+      SchemaManager::Instance().GetIndexSchema(kDb0, "rdb_alias");
+  auto by_name =
+      SchemaManager::Instance().GetIndexSchema(kDb0, kIndexName);
+  VMSDK_EXPECT_OK(by_alias);
+  VMSDK_EXPECT_OK(by_name);
+  EXPECT_EQ(by_alias.value().get(), by_name.value().get());
+}
+
+// LoadAliasMap with an orphaned alias (index missing) logs a warning and
+// skips the entry rather than failing the entire load.
+TEST_F(SchemaManagerAliasTest, LoadAliasMapSkipsOrphanedAlias) {
+  ON_CALL(*kMockValkeyModule, GetContextFromIO(testing::_))
+      .WillByDefault(testing::Return(&fake_ctx_));
+
+  // Build a section that references a non-existent index.
+  data_model::RDBSection section_proto;
+  section_proto.set_type(data_model::RDB_SECTION_ALIAS_MAP);
+  section_proto.set_supplemental_count(0);
+  auto *entry = section_proto.mutable_alias_map_contents()->add_entries();
+  entry->set_db_num(kDb0);
+  entry->set_alias("orphan_alias");
+  entry->set_index_name("nonexistent_index");
+
+  auto section = std::make_unique<data_model::RDBSection>(section_proto);
+  FakeSafeRDB fake_rdb;
+  // Must succeed (skip, not fail).
+  VMSDK_EXPECT_OK(SchemaManager::Instance().LoadAliasMap(
+      &fake_ctx_, std::move(section),
+      SupplementalContentIter(&fake_rdb, 0)));
+
+  // Orphaned alias must not have been inserted.
+  EXPECT_EQ(SchemaManager::Instance()
+                .GetIndexSchema(kDb0, "orphan_alias")
+                .status()
+                .code(),
+            absl::StatusCode::kNotFound);
+}
+
+// OnSwapDB swaps alias maps in lockstep with index schemas.
+// Uses CreateVectorHNSWSchema so the stored IndexSchema is a MockIndexSchema
+// with OnSwapDB properly set up, matching the pattern in OnSwapDBCallbackTest.
+TEST_F(SchemaManagerTest, OnSwapDBAliasesSwapped) {
+  const int32_t kDb0 = 0;
+  const int32_t kDb1 = 1;
+
+  // Create a mock index in db 0 via the helper (registers with SchemaManager).
+  auto schema_or = CreateVectorHNSWSchema(
+      "swap_idx", &fake_ctx_, nullptr, nullptr, kDb0);
+  VMSDK_EXPECT_OK(schema_or);
+  auto schema = schema_or.value();
+
+  // Complete backfill so OnSwapDB doesn't need to update the scan context db.
+  ValkeyModuleEvent eid;
+  SchemaManager::Instance().OnServerCronCallback(nullptr, eid, 0, nullptr);
+
+  // Add alias in db 0 pointing to the index.
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "swap_alias", "swap_idx"));
+
+  // Alias resolves in db 0 before swap.
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().GetIndexSchema(kDb0, "swap_alias"));
+
+  ValkeyModuleSwapDbInfo swap_db_info;
+  swap_db_info.dbnum_first = kDb0;
+  swap_db_info.dbnum_second = kDb1;
+
+  // OnSwapDB calls schema->OnSwapDB; the mock default delegates to the real
+  // implementation which is safe once backfill is complete.
+  EXPECT_CALL(*schema, OnSwapDB(&swap_db_info)).Times(1);
+  SchemaManager::Instance().OnSwapDB(&swap_db_info);
+
+  // After swap: alias must be visible in db 1, not db 0.
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().GetIndexSchema(kDb1, "swap_alias"));
+  EXPECT_EQ(SchemaManager::Instance()
+                .GetIndexSchema(kDb0, "swap_alias")
+                .status()
+                .code(),
+            absl::StatusCode::kNotFound);
+}
+
 }  // namespace valkey_search

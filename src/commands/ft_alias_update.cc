@@ -30,7 +30,9 @@ absl::Status FTAliasUpdateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
 
   ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 
-  // Unlike indexes, aliases have no MetadataManager path, therefore always replicate.
+  // Aliases have no MetadataManager path, so always replicate verbatim.
+  // TODO: propagate alias mutations to other primaries in cluster mode
+  // via a dedicated coordinator path (currently only replicas receive this).
   ValkeyModule_ReplicateVerbatim(ctx);
   return absl::OkStatus();
 }

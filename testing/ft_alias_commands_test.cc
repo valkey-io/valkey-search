@@ -170,7 +170,7 @@ INSTANTIATE_TEST_SUITE_P(
       return info.param.test_name;
     });
 
-TEST_F(FTAliasAddTest, ReplicationBehaviorCoordinatorEnabled) {
+TEST_F(FTAliasAddTest, AlwaysReplicatesVerbatim_CoordinatorEnabled) {
   VMSDK_EXPECT_OK(
       const_cast<vmsdk::config::Boolean&>(options::GetUseCoordinator())
           .SetValue(true));
@@ -196,7 +196,7 @@ TEST_F(FTAliasAddTest, ReplicationBehaviorCoordinatorEnabled) {
   }
 }
 
-TEST_F(FTAliasAddTest, ReplicationBehaviorCoordinatorDisabled) {
+TEST_F(FTAliasAddTest, AlwaysReplicatesVerbatim_CoordinatorDisabled) {
   VMSDK_EXPECT_OK(
       const_cast<vmsdk::config::Boolean&>(options::GetUseCoordinator())
           .SetValue(false));
@@ -313,7 +313,7 @@ INSTANTIATE_TEST_SUITE_P(
       return info.param.test_name;
     });
 
-TEST_F(FTAliasDelTest, ReplicationBehaviorCoordinatorEnabled) {
+TEST_F(FTAliasDelTest, AlwaysReplicatesVerbatim_CoordinatorEnabled) {
   VMSDK_EXPECT_OK(
       const_cast<vmsdk::config::Boolean&>(options::GetUseCoordinator())
           .SetValue(true));
@@ -335,7 +335,7 @@ TEST_F(FTAliasDelTest, ReplicationBehaviorCoordinatorEnabled) {
   for (auto* arg : argv) TestValkeyModule_FreeString(&fake_ctx_, arg);
 }
 
-TEST_F(FTAliasDelTest, ReplicationBehaviorCoordinatorDisabled) {
+TEST_F(FTAliasDelTest, AlwaysReplicatesVerbatim_CoordinatorDisabled) {
   VMSDK_EXPECT_OK(
       const_cast<vmsdk::config::Boolean&>(options::GetUseCoordinator())
           .SetValue(false));
@@ -531,7 +531,7 @@ INSTANTIATE_TEST_SUITE_P(
       return info.param.test_name;
     });
 
-TEST_F(FTAliasUpdateTest, ReplicationBehaviorCoordinatorEnabled) {
+TEST_F(FTAliasUpdateTest, AlwaysReplicatesVerbatim_CoordinatorEnabled) {
   VMSDK_EXPECT_OK(
       const_cast<vmsdk::config::Boolean&>(options::GetUseCoordinator())
           .SetValue(true));
@@ -552,7 +552,7 @@ TEST_F(FTAliasUpdateTest, ReplicationBehaviorCoordinatorEnabled) {
   for (auto* arg : argv) TestValkeyModule_FreeString(&fake_ctx_, arg);
 }
 
-TEST_F(FTAliasUpdateTest, ReplicationBehaviorCoordinatorDisabled) {
+TEST_F(FTAliasUpdateTest, AlwaysReplicatesVerbatim_CoordinatorDisabled) {
   VMSDK_EXPECT_OK(
       const_cast<vmsdk::config::Boolean&>(options::GetUseCoordinator())
           .SetValue(false));

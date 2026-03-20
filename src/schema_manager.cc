@@ -715,10 +715,16 @@ void SchemaManager::OnSwapDB(ValkeyModuleSwapDbInfo *swap_db_info) {
     bool has_b = it_b != db_to_aliases_.end();
     if (!has_a && !has_b) return;
     if (has_a && !has_b) {
-      db_to_aliases_.emplace(b, std::move(it_a->second));
+      // Extract the inner map into a local before calling emplace: emplace may
+      // trigger a rehash of db_to_aliases_, which would move all existing
+      // elements to a new backing array and invalidate it_a. Extracting first
+      // ensures the value lives on the stack and is safe across the rehash.
+      auto inner = std::move(it_a->second);
+      db_to_aliases_.emplace(b, std::move(inner));
       db_to_aliases_.erase(a);
     } else if (!has_a && has_b) {
-      db_to_aliases_.emplace(a, std::move(it_b->second));
+      auto inner = std::move(it_b->second);
+      db_to_aliases_.emplace(a, std::move(inner));
       db_to_aliases_.erase(b);
     } else {
       std::swap(it_a->second, it_b->second);
@@ -758,7 +764,8 @@ void SchemaManager::OnLoadingEnded(ValkeyModuleCtx *ctx) {
     staged_db_to_index_schemas_ = absl::flat_hash_map<
         uint32_t,
         absl::flat_hash_map<std::string, std::shared_ptr<IndexSchema>>>();
-    // Aliases are re-loaded from RDB; clear any stale in-memory state.
+    // Aliases are re-loaded from RDB after replication, clear any stale
+    // in-memory state so LoadAliasMap starts from a clean slate.
     db_to_aliases_.clear();
     staging_indices_due_to_repl_load_ = false;
   }
@@ -847,13 +854,15 @@ absl::Status SchemaManager::LoadAliasMap(
   // ORDERING REQUIREMENT: LookupInternal requires indexes to already be loaded,
   // so RDB_SECTION_INDEX_SCHEMA callbacks must run before this one.
   for (const auto &entry : alias_map_proto.entries()) {
-    // Validate that the referenced index exists. A missing index means the RDB
-    // is corrupt or the registration ordering invariant was violated
+    // Validate that the referenced index exists. If the index is missing the
+    // RDB may be partially corrupt; skip the alias with a warning rather than
+    // aborting the entire load.
     if (!LookupInternal(entry.db_num(), entry.index_name()).ok()) {
-      return absl::InternalError(absl::StrFormat(
-          "RDB alias '%s' in db %d references unknown index '%s'; "
+      VMSDK_LOG(WARNING, ctx) << absl::StrFormat(
+          "Skipping RDB alias '%s' in db %d: referenced index '%s' not found; "
           "RDB may be corrupt or index registration order was violated",
-          entry.alias(), entry.db_num(), entry.index_name()));
+          entry.alias(), entry.db_num(), entry.index_name());
+      continue;
     }
     db_to_aliases_[entry.db_num()][entry.alias()] = entry.index_name();
   }

@@ -213,7 +213,7 @@ static config::Boolean prefer_consistent_results(kEnableConsistentResults,
 constexpr absl::string_view kSearchResultBackgroundCleanup{
     "search-result-background-cleanup"};
 static config::Boolean search_result_background_cleanup(
-    kSearchResultBackgroundCleanup, true);
+    kSearchResultBackgroundCleanup, false);
 
 /// Configure the weight for high priority tasks in thread pools (0-100)
 /// Low priority weight = 100 - high_priority_weight
@@ -243,6 +243,7 @@ static auto ft_info_timeout_ms =
         kDefaultFTInfoTimeoutMs,  // default timeout (5 seconds)
         kMinimumFTInfoTimeoutMs,  // min timeout (100ms)
         kMaximumFTInfoTimeoutMs)  // max timeout (5 minutes)
+        .Dev()                    // can only be set in debug mode
         .Build();
 
 /// Register the "--ft-info-rpc-timeout-ms" flag. Controls the timeout for
@@ -254,6 +255,7 @@ static auto ft_info_rpc_timeout_ms =
         kDefaultFTInfoRpcTimeoutMs,  // default timeout (2.5 seconds)
         kMinimumFTInfoRpcTimeoutMs,  // min timeout (100ms)
         kMaximumFTInfoRpcTimeoutMs)  // max timeout (5 minutes)
+        .Dev()                       // can only be set in debug mode
         .Build();
 
 /// Register the "--local-fanout-queue-wait-threshold" flag. Controls the queue
@@ -412,6 +414,20 @@ constexpr absl::string_view kDrainMutationQueueOnLoadConfig{
 static auto drain_mutation_queue_on_load =
     config::BooleanBuilder(kDrainMutationQueueOnLoadConfig, true)
         .Dev()  // can only be set in debug mode
+        .Build();
+
+/// Register the "max-mutation-queue-size-on-restore" parameter
+/// Limit the mutation queue size during RDB restore to prevent memory spikes
+constexpr absl::string_view kMaxMutationQueueSizeOnRestoreConfig{
+    "max-mutation-queue-size-on-restore"};
+constexpr uint32_t kDefaultMaxMutationQueueSizeOnRestore{10000};
+constexpr uint32_t kMinimumMaxMutationQueueSizeOnRestore{1};
+constexpr uint32_t kMaximumMaxMutationQueueSizeOnRestore{1000000};
+static auto max_mutation_queue_size_on_restore =
+    config::NumberBuilder(kMaxMutationQueueSizeOnRestoreConfig,
+                          kDefaultMaxMutationQueueSizeOnRestore,
+                          kMinimumMaxMutationQueueSizeOnRestore,
+                          kMaximumMaxMutationQueueSizeOnRestore)
         .Build();
 
 /// Register the "drain-mutation-queue-on-save" flag
@@ -610,6 +626,11 @@ vmsdk::config::Number& GetFanoutDataUniformity() {
 vmsdk::config::Number& GetFanoutUniformityMinIndexSize() {
   return dynamic_cast<vmsdk::config::Number&>(
       *fanout_uniformity_min_index_size);
+}
+
+vmsdk::config::Number& GetMaxMutationQueueSizeOnRestore() {
+  return dynamic_cast<vmsdk::config::Number&>(
+      *max_mutation_queue_size_on_restore);
 }
 
 vmsdk::config::Number& GetAsyncFanoutThreshold() {

@@ -56,6 +56,14 @@ class Metrics {
     uint64_t rdb_save_success_cnt{0};
     uint64_t rdb_save_failure_cnt{0};
 
+    // RDB Restore Progress Tracking
+    std::atomic<uint64_t> rdb_restore_total_indexes{0};
+    std::atomic<uint64_t> rdb_restore_completed_indexes{0};
+    std::atomic<uint64_t> rdb_restore_current_index_keys_total{0};
+    std::atomic<uint64_t> rdb_restore_current_index_keys_loaded{0};
+    std::atomic<bool> rdb_restore_in_progress{false};
+    std::atomic<uint64_t> rdb_restore_backpressure_wait_cycles{0};
+
     // FT.INTERNAL_UPDATE error handling metrics
     std::atomic<uint64_t> ft_internal_update_parse_failures_cnt{0};
     std::atomic<uint64_t> ft_internal_update_process_failures_cnt{0};

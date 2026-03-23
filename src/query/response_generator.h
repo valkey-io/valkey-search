@@ -32,7 +32,7 @@ vmsdk::config::Number &GetMaxSearchResultFieldsCount();
 namespace valkey_search::query {
 
 // Check if this node owns the slot for the given key in cluster mode
-bool CheckSlotOwnership(absl::string_view key);
+bool CheckSlotOwnership(ValkeyModuleCtx *ctx, absl::string_view key);
 
 // Adds all local content for neighbors to the list of neighbors.
 // Skipping neighbors if one of the following:

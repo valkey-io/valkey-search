@@ -360,6 +360,35 @@ class CountDistinct : public GroupBy::ReducerInstance {
   }
 };
 
+class ToList : public GroupBy::ReducerInstance {
+  absl::flat_hash_set<expr::Value> values_;
+  void ProcessRecords(const std::vector<ArgVector>& all_values) override {
+    for (const auto& values : all_values) {
+      if (values[0].IsNil()) {
+        continue;
+      }
+      if (values[0].IsVector()) {
+        auto vec = values[0].GetVector();
+        for (const auto& elem : *vec) {
+          if (!elem.IsNil()) {
+            values_.insert(elem);
+          }
+        }
+      } else {
+        values_.insert(values[0]);
+      }
+    }
+  }
+  expr::Value GetResult() const override {
+    std::vector<expr::Value> result;
+    result.reserve(values_.size());
+    for (const auto& v : values_) {
+      result.push_back(v);
+    }
+    return expr::Value(std::move(result));
+  }
+};
+
 template <typename T>
 std::unique_ptr<GroupBy::ReducerInstance> MakeReducer() {
   return std::unique_ptr<GroupBy::ReducerInstance>(std::make_unique<T>());
@@ -374,6 +403,7 @@ absl::flat_hash_map<std::string, GroupBy::ReducerInfo> GroupBy::reducerTable{
     {"MAX", GroupBy::ReducerInfo{"MAX", 1, 1, &MakeReducer<Max>}},
     {"STDDEV", GroupBy::ReducerInfo{"STDDEV", 1, 1, &MakeReducer<Stddev>}},
     {"SUM", GroupBy::ReducerInfo{"SUM", 1, 1, &MakeReducer<Sum>}},
+    {"TOLIST", GroupBy::ReducerInfo{"TOLIST", 1, 1, &MakeReducer<ToList>}},
 };
 
 }  // namespace aggregate

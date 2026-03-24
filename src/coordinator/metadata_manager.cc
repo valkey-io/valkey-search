@@ -250,7 +250,8 @@ absl::StatusOr<IndexFingerprintVersion> MetadataManager::CreateEntry(
       top_level_min_version);
 
   // Call FT.INTERNAL_UPDATE for coordinator to ensure unified AOF replication
-  ReplicateFTInternalUpdate(new_entry, metadata.version_header(), encoded_id);
+  ReplicateFTInternalUpdate(new_entry, metadata.version_header(), encoded_id,
+                            type_name);
 
   BroadcastMetadata(detached_ctx_.get(), metadata.version_header());
   IndexFingerprintVersion index_fingerprint_version;
@@ -297,7 +298,8 @@ absl::Status MetadataManager::DeleteEntry(absl::string_view type_name,
 
   // Call FT.INTERNAL_UPDATE for coordinator to ensure unified AOF replication
   // for DROP
-  ReplicateFTInternalUpdate(new_entry, metadata.version_header(), encoded_id);
+  ReplicateFTInternalUpdate(new_entry, metadata.version_header(), encoded_id,
+                            type_name);
 
   BroadcastMetadata(detached_ctx_.get(), metadata.version_header());
   return absl::OkStatus();
@@ -567,9 +569,14 @@ absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
               << vmsdk::config::RedactIfNeeded(id) << " from " << source;
           return result;
         }
-        auto status = CallFTInternalUpdateForReconciliation(id, proposed_entry);
-        if (!status.ok()) {
-          return status;
+        // Only replicate via FT.INTERNAL_UPDATE if the type is registered
+        // locally — unregistered types are stored but not acted upon.
+        if (registered_types_.Get().contains(type_name)) {
+          auto status = CallFTInternalUpdateForReconciliation(
+              id, proposed_entry, type_name);
+          if (!status.ok()) {
+            return status;
+          }
         }
       }
     }
@@ -950,7 +957,8 @@ absl::Status MetadataManager::CreateEntryOnReplica(
 
 absl::Status MetadataManager::CallFTInternalUpdateForReconciliation(
     const std::string &id,
-    const coordinator::GlobalMetadataEntry &proposed_entry) {
+    const coordinator::GlobalMetadataEntry &proposed_entry,
+    absl::string_view type_name) {
   coordinator::GlobalMetadataVersionHeader version_header;
   version_header.set_top_level_version(
       metadata_.Get().version_header().top_level_version());
@@ -960,15 +968,15 @@ absl::Status MetadataManager::CallFTInternalUpdateForReconciliation(
   std::string metadata_binary, header_binary;
   proposed_entry.SerializeToString(&metadata_binary);
   version_header.SerializeToString(&header_binary);
+  std::string type_name_str(type_name);
 
   ValkeyModuleCallReply *reply;
   ValkeyModuleCtx *safe_context = detached_ctx_.get();
-  vmsdk::UniqueValkeyDetachedThreadSafeContext thread_safe_ctx;
 
-  reply =
-      ValkeyModule_Call(safe_context, "FT.INTERNAL_UPDATE", "!Kcbb", id.c_str(),
-                        metadata_binary.data(), metadata_binary.size(),
-                        header_binary.data(), header_binary.size());
+  reply = ValkeyModule_Call(safe_context, "FT.INTERNAL_UPDATE", "!Kcbbc",
+                            id.c_str(), metadata_binary.data(),
+                            metadata_binary.size(), header_binary.data(),
+                            header_binary.size(), type_name_str.c_str());
 
   if (reply == nullptr ||
       ValkeyModule_CallReplyType(reply) == VALKEYMODULE_REPLY_ERROR) {
@@ -984,16 +992,18 @@ absl::Status MetadataManager::CallFTInternalUpdateForReconciliation(
 void MetadataManager::ReplicateFTInternalUpdate(
     const coordinator::GlobalMetadataEntry &entry,
     const coordinator::GlobalMetadataVersionHeader &header,
-    absl::string_view encoded_id) {
+    absl::string_view encoded_id, absl::string_view type_name) {
   std::string metadata_binary, header_binary;
   entry.SerializeToString(&metadata_binary);
   header.SerializeToString(&header_binary);
+  std::string type_name_str(type_name);
 
   // Replicate FT.INTERNAL_UPDATE to replicas for AOF consistency
-  ValkeyModule_Replicate(detached_ctx_.get(), "FT.INTERNAL_UPDATE", "cbb",
+  ValkeyModule_Replicate(detached_ctx_.get(), "FT.INTERNAL_UPDATE", "cbbc",
                          std::string(encoded_id).c_str(),
                          metadata_binary.data(), metadata_binary.size(),
-                         header_binary.data(), header_binary.size());
+                         header_binary.data(), header_binary.size(),
+                         type_name_str.c_str());
 }
 
 }  // namespace valkey_search::coordinator

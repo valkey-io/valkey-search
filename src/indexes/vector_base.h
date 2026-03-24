@@ -174,6 +174,7 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   InternedStringPtr InternVector(absl::string_view record,
                                  std::optional<float>& magnitude);
   virtual uint64_t GetMaxInternalLabel() const { return 0; }
+  virtual size_t GetLabelCount() const { return 0; }
 
  protected:
   VectorBase(IndexerType indexer_type, int dimensions,

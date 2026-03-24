@@ -406,6 +406,13 @@ uint64_t VectorHNSW<T>::GetMaxInternalLabel() const {
   return max_label;
 }
 
+template <typename T>
+size_t VectorHNSW<T>::GetLabelCount() const {
+  absl::ReaderMutexLock lock(&resize_mutex_);
+  std::unique_lock<std::mutex> lock_label(algo_->label_lookup_lock);
+  return algo_->label_lookup_.size();
+}
+
 template class VectorHNSW<float>;
 
 }  // namespace valkey_search::indexes

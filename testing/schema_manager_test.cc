@@ -765,8 +765,7 @@ TEST_F(SchemaManagerAliasTest, UpdateAliasToAliasRejected) {
   auto status = SchemaManager::Instance().UpdateAlias(kDb0, "second_alias",
                                                       "first_alias");
   EXPECT_EQ(status.code(), absl::StatusCode::kInvalidArgument);
-  EXPECT_EQ(status.message(),
-            "Unknown index name or name is an alias");
+  EXPECT_EQ(status.message(), "Unknown index name or name is an alias");
 }
 
 // FT.DROPINDEX via alias: after dropping, both the alias and the index are
@@ -777,23 +776,22 @@ TEST_F(SchemaManagerAliasTest, DropIndexViaAliasRemovesAlias) {
       SchemaManager::Instance().AddAlias(kDb0, "drop_alias", kIndexName));
 
   // Resolve alias to real name (as ft_dropindex.cc does) then drop.
-  auto schema =
-      SchemaManager::Instance().GetIndexSchema(kDb0, "drop_alias");
+  auto schema = SchemaManager::Instance().GetIndexSchema(kDb0, "drop_alias");
   VMSDK_EXPECT_OK(schema);
   const std::string real_name = schema.value()->GetName();
-  VMSDK_EXPECT_OK(
-      SchemaManager::Instance().RemoveIndexSchema(kDb0, real_name));
+  VMSDK_EXPECT_OK(SchemaManager::Instance().RemoveIndexSchema(kDb0, real_name));
 
   // Both the index and the alias must be gone.
-  EXPECT_EQ(
-      SchemaManager::Instance().GetIndexSchema(kDb0, kIndexName).status().code(),
-      absl::StatusCode::kNotFound);
-  EXPECT_EQ(
-      SchemaManager::Instance()
-          .GetIndexSchema(kDb0, "drop_alias")
-          .status()
-          .code(),
-      absl::StatusCode::kNotFound);
+  EXPECT_EQ(SchemaManager::Instance()
+                .GetIndexSchema(kDb0, kIndexName)
+                .status()
+                .code(),
+            absl::StatusCode::kNotFound);
+  EXPECT_EQ(SchemaManager::Instance()
+                .GetIndexSchema(kDb0, "drop_alias")
+                .status()
+                .code(),
+            absl::StatusCode::kNotFound);
 }
 
 // After UpdateAlias succeeds, GetIndexSchema(db, alias) returns IndexSchema
@@ -875,15 +873,13 @@ TEST_F(SchemaManagerAliasTest, AliasSaveLoadRoundTrip) {
   data_model::RDBSection section_proto;
   section_proto.set_type(data_model::RDB_SECTION_ALIAS_MAP);
   section_proto.set_supplemental_count(0);
-  auto *entry =
-      section_proto.mutable_alias_map_contents()->add_entries();
+  auto *entry = section_proto.mutable_alias_map_contents()->add_entries();
   entry->set_db_num(kDb0);
   entry->set_alias("rdb_alias");
   entry->set_index_name(kIndexName);
 
   // Remove the alias so we can verify it is restored by LoadAliasMap.
-  VMSDK_EXPECT_OK(
-      SchemaManager::Instance().RemoveAlias(kDb0, "rdb_alias"));
+  VMSDK_EXPECT_OK(SchemaManager::Instance().RemoveAlias(kDb0, "rdb_alias"));
   EXPECT_EQ(SchemaManager::Instance()
                 .GetIndexSchema(kDb0, "rdb_alias")
                 .status()
@@ -892,17 +888,13 @@ TEST_F(SchemaManagerAliasTest, AliasSaveLoadRoundTrip) {
 
   // Load the section back.
   FakeSafeRDB fake_rdb;
-  auto section =
-      std::make_unique<data_model::RDBSection>(section_proto);
+  auto section = std::make_unique<data_model::RDBSection>(section_proto);
   VMSDK_EXPECT_OK(SchemaManager::Instance().LoadAliasMap(
-      &fake_ctx_, std::move(section),
-      SupplementalContentIter(&fake_rdb, 0)));
+      &fake_ctx_, std::move(section), SupplementalContentIter(&fake_rdb, 0)));
 
   // Alias must resolve again after load.
-  auto by_alias =
-      SchemaManager::Instance().GetIndexSchema(kDb0, "rdb_alias");
-  auto by_name =
-      SchemaManager::Instance().GetIndexSchema(kDb0, kIndexName);
+  auto by_alias = SchemaManager::Instance().GetIndexSchema(kDb0, "rdb_alias");
+  auto by_name = SchemaManager::Instance().GetIndexSchema(kDb0, kIndexName);
   VMSDK_EXPECT_OK(by_alias);
   VMSDK_EXPECT_OK(by_name);
   EXPECT_EQ(by_alias.value().get(), by_name.value().get());
@@ -927,8 +919,7 @@ TEST_F(SchemaManagerAliasTest, LoadAliasMapSkipsOrphanedAlias) {
   FakeSafeRDB fake_rdb;
   // Must succeed (skip, not fail).
   VMSDK_EXPECT_OK(SchemaManager::Instance().LoadAliasMap(
-      &fake_ctx_, std::move(section),
-      SupplementalContentIter(&fake_rdb, 0)));
+      &fake_ctx_, std::move(section), SupplementalContentIter(&fake_rdb, 0)));
 
   // Orphaned alias must not have been inserted.
   EXPECT_EQ(SchemaManager::Instance()
@@ -946,8 +937,8 @@ TEST_F(SchemaManagerTest, OnSwapDBAliasesSwapped) {
   const int32_t kDb1 = 1;
 
   // Create a mock index in db 0 via the helper (registers with SchemaManager).
-  auto schema_or = CreateVectorHNSWSchema(
-      "swap_idx", &fake_ctx_, nullptr, nullptr, kDb0);
+  auto schema_or =
+      CreateVectorHNSWSchema("swap_idx", &fake_ctx_, nullptr, nullptr, kDb0);
   VMSDK_EXPECT_OK(schema_or);
   auto schema = schema_or.value();
 
@@ -960,8 +951,7 @@ TEST_F(SchemaManagerTest, OnSwapDBAliasesSwapped) {
       SchemaManager::Instance().AddAlias(kDb0, "swap_alias", "swap_idx"));
 
   // Alias resolves in db 0 before swap.
-  VMSDK_EXPECT_OK(
-      SchemaManager::Instance().GetIndexSchema(kDb0, "swap_alias"));
+  VMSDK_EXPECT_OK(SchemaManager::Instance().GetIndexSchema(kDb0, "swap_alias"));
 
   ValkeyModuleSwapDbInfo swap_db_info;
   swap_db_info.dbnum_first = kDb0;
@@ -973,8 +963,7 @@ TEST_F(SchemaManagerTest, OnSwapDBAliasesSwapped) {
   SchemaManager::Instance().OnSwapDB(&swap_db_info);
 
   // After swap: alias must be visible in db 1, not db 0.
-  VMSDK_EXPECT_OK(
-      SchemaManager::Instance().GetIndexSchema(kDb1, "swap_alias"));
+  VMSDK_EXPECT_OK(SchemaManager::Instance().GetIndexSchema(kDb1, "swap_alias"));
   EXPECT_EQ(SchemaManager::Instance()
                 .GetIndexSchema(kDb0, "swap_alias")
                 .status()

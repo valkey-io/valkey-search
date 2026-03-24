@@ -135,8 +135,7 @@ absl::Status FTDropIndexCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     // Use the resolved real name so the fanout reaches other nodes correctly
     // even when the user supplied an alias.
     auto op = new DropConsistencyCheckFanoutOperation(
-        ValkeyModule_GetSelectedDb(ctx), index_schema->GetName(),
-        timeout_ms);
+        ValkeyModule_GetSelectedDb(ctx), index_schema->GetName(), timeout_ms);
     op->StartOperation(ctx);
   } else {
     if (is_loading || inside_multi_exec) {

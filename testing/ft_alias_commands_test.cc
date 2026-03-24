@@ -182,7 +182,7 @@ TEST_F(FTAliasAddTest, AlwaysReplicatesVerbatim_CoordinatorEnabled) {
       &fake_ctx_, index_schema_proto));
 
   EXPECT_CALL(*kMockValkeyModule, ReplicateVerbatim(&fake_ctx_))
-      .Times(1);  // Always replicates: aliases have no MetadataManager path
+      .Times(0);  // Coordinator mode: MetadataManager handles propagation
 
   ValkeyModuleString* argv[3];
   argv[0] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.ALIASADD");
@@ -326,7 +326,7 @@ TEST_F(FTAliasDelTest, AlwaysReplicatesVerbatim_CoordinatorEnabled) {
   VMSDK_EXPECT_OK(
       SchemaManager::Instance().AddAlias(0, "my_alias", "test_idx"));
 
-  EXPECT_CALL(*kMockValkeyModule, ReplicateVerbatim(&fake_ctx_)).Times(1);
+  EXPECT_CALL(*kMockValkeyModule, ReplicateVerbatim(&fake_ctx_)).Times(0);
 
   ValkeyModuleString* argv[2];
   argv[0] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.ALIASDEL");
@@ -542,7 +542,7 @@ TEST_F(FTAliasUpdateTest, AlwaysReplicatesVerbatim_CoordinatorEnabled) {
   VMSDK_EXPECT_OK(SchemaManager::Instance().CreateIndexSchema(
       &fake_ctx_, index_schema_proto));
 
-  EXPECT_CALL(*kMockValkeyModule, ReplicateVerbatim(&fake_ctx_)).Times(1);
+  EXPECT_CALL(*kMockValkeyModule, ReplicateVerbatim(&fake_ctx_)).Times(0);
 
   ValkeyModuleString* argv[3];
   argv[0] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.ALIASUPDATE");

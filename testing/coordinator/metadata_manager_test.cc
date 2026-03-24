@@ -523,6 +523,14 @@ class MetadataManagerReconciliationTest
                                       testing::Return("primary_id")));
     ON_CALL(*kMockValkeyModule, GetMyClusterID())
         .WillByDefault(testing::Return("fake_node_id"));
+    ON_CALL(*kMockValkeyModule, FreeCallReply(testing::_))
+        .WillByDefault(testing::Return());
+    ON_CALL(*kMockValkeyModule,
+            Call(testing::_, testing::StrEq("FT.INTERNAL_UPDATE"),
+                 testing::StrEq("!Kcbbc"), testing::_, testing::_, testing::_,
+                 testing::_, testing::_, testing::_))
+        .WillByDefault(testing::Return(
+            reinterpret_cast<ValkeyModuleCallReply*>(0xBEEF0002)));
 
     auto test_metadata_manager =
         std::make_unique<MetadataManager>(&fake_ctx_, *mock_client_pool_);
@@ -665,9 +673,11 @@ TEST_P(MetadataManagerReconciliationTest, TestReconciliation) {
   if (!test_case.expected_callbacks.empty() && !expect_failure) {
     EXPECT_CALL(*kMockValkeyModule,
                 Call(testing::_, testing::StrEq("FT.INTERNAL_UPDATE"),
-                     testing::StrEq("!Kcbb"), testing::_, testing::_,
-                     testing::_, testing::_, testing::_))
-        .Times(test_case.expected_callbacks.size());
+                     testing::StrEq("!Kcbbc"), testing::_, testing::_,
+                     testing::_, testing::_, testing::_, testing::_))
+        .Times(test_case.expected_callbacks.size())
+        .WillRepeatedly(testing::Return(
+            reinterpret_cast<ValkeyModuleCallReply*>(0xDEADBEEF)));
   }
   std::string payload = proposed_metadata.version_header().SerializeAsString();
 
@@ -1644,6 +1654,16 @@ class MetadataManagerTest : public vmsdk::ValkeyTest {
         .WillByDefault(testing::Return(fake_ctx));
     ON_CALL(*kMockValkeyModule, FreeThreadSafeContext(testing::_))
         .WillByDefault(testing::Return());
+    ON_CALL(*kMockValkeyModule,
+            Call(testing::_, testing::StrEq("FT.INTERNAL_UPDATE"),
+                 testing::StrEq("!Kcbbc"), testing::_, testing::_, testing::_,
+                 testing::_, testing::_, testing::_))
+        .WillByDefault(testing::Return(
+            reinterpret_cast<ValkeyModuleCallReply*>(0xDEADBEEF)));
+    ON_CALL(*kMockValkeyModule, CallReplyType(testing::_))
+        .WillByDefault(testing::Return(VALKEYMODULE_REPLY_INTEGER));
+    ON_CALL(*kMockValkeyModule, FreeCallReply(testing::_))
+        .WillByDefault(testing::Return());
     test_metadata_manager_ =
         std::make_unique<MockMetadataManager>(fake_ctx, *mock_client_pool_);
   }
@@ -2132,6 +2152,78 @@ TEST_F(MetadataManagerTest, IndexName) {
   auto obj_name = ObjName::Decode("{1abc}def");
   EXPECT_EQ("def", obj_name.GetName());
   EXPECT_EQ(1, obj_name.GetDbNum());
+}
+
+// Verify that ReconcileMetadata forwards the correct type_name for each entry
+// to CallFTInternalUpdateForReconciliation. The 5th argument to
+// FT.INTERNAL_UPDATE (argv[4]) must match the type_name of the namespace the
+// entry belongs to, not a hardcoded fallback.
+TEST_F(MetadataManagerTest, ReconcileMetadataForwardsTypeNamePerEntry) {
+  // Register two distinct types so both are "known" and will trigger
+  // CallFTInternalUpdateForReconciliation.
+  test_metadata_manager_->RegisterType(
+      "vs_index_schema",
+      [](const google::protobuf::Any&) -> absl::StatusOr<uint64_t> {
+        return 1111;
+      },
+      [](const ObjName&, const google::protobuf::Any*, uint64_t,
+         uint32_t) -> absl::Status { return absl::OkStatus(); },
+      [](auto) { return kModuleVersion; });
+
+  test_metadata_manager_->RegisterType(
+      "vs_alias",
+      [](const google::protobuf::Any&) -> absl::StatusOr<uint64_t> {
+        return 2222;
+      },
+      [](const ObjName&, const google::protobuf::Any*, uint64_t,
+         uint32_t) -> absl::Status { return absl::OkStatus(); },
+      [](auto) { return kModuleVersion; });
+
+  // Build proposed metadata with one entry per type.
+  GlobalMetadata proposed;
+  proposed.mutable_version_header()->set_top_level_version(1);
+
+  auto& index_entries =
+      (*proposed.mutable_type_namespace_map())["vs_index_schema"];
+  auto& index_entry = (*index_entries.mutable_entries())["schema_id"];
+  index_entry.set_version(1);
+  index_entry.set_fingerprint(1111);
+  index_entry.set_encoding_version(1);
+  index_entry.mutable_content()->set_type_url("type.googleapis.com/FakeType");
+  index_entry.mutable_content()->set_value("schema_content");
+
+  auto& alias_entries = (*proposed.mutable_type_namespace_map())["vs_alias"];
+  auto& alias_entry = (*alias_entries.mutable_entries())["alias_id"];
+  alias_entry.set_version(1);
+  alias_entry.set_fingerprint(2222);
+  alias_entry.set_encoding_version(1);
+  alias_entry.mutable_content()->set_type_url("type.googleapis.com/FakeType");
+  alias_entry.mutable_content()->set_value("alias_content");
+
+  // Expect exactly two FT.INTERNAL_UPDATE calls. The 5th string argument
+  // (argv[4], format char 'c' at position 4 in "!Kcbbc") must be the
+  // type_name of the entry being replicated. We capture all calls and
+  // verify the type_names seen.
+  std::vector<std::string> seen_type_names;
+  EXPECT_CALL(*kMockValkeyModule,
+              Call(testing::_, testing::StrEq("FT.INTERNAL_UPDATE"),
+                   testing::StrEq("!Kcbbc"), testing::_, testing::_, testing::_,
+                   testing::_, testing::_, testing::_))
+      .Times(2)
+      .WillRepeatedly([&](ValkeyModuleCtx*, const char*, const char*,
+                          const char* /*id*/, const char* /*meta*/, size_t,
+                          const char* /*hdr*/, size_t,
+                          const char* type_name) -> ValkeyModuleCallReply* {
+        seen_type_names.emplace_back(type_name);
+        return reinterpret_cast<ValkeyModuleCallReply*>(0xDEADBEEF);
+      });
+
+  VMSDK_EXPECT_OK(
+      test_metadata_manager_->ReconcileMetadata(proposed, "test_source"));
+
+  // Both type names must appear — order is unspecified (hash map iteration).
+  EXPECT_THAT(seen_type_names,
+              testing::UnorderedElementsAre("vs_index_schema", "vs_alias"));
 }
 
 }  // namespace valkey_search::coordinator

@@ -227,14 +227,13 @@ TEST_F(MRMWMutexTest, VerifyMayProlong) {
   thread_pool.Schedule(
       [&mrmw_mutex, &may_prolong_notification,
        &read_tasks_completed_notification, &in_prolong_read,
-       &may_prolong_release_notification, &options]() {
+       &may_prolong_release_notification]() {
         {
           ReaderMutexLock lock(&mrmw_mutex, true);
           in_prolong_read = true;
           may_prolong_notification.Notify();
-          absl::SleepFor(options.read_quota_duration * 2);
+          read_tasks_completed_notification.WaitForNotification();
         }
-        read_tasks_completed_notification.WaitForNotification();
         in_prolong_read = false;
         may_prolong_release_notification.Notify();
       },

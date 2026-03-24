@@ -128,10 +128,9 @@ SchemaManager::SchemaManager(
               [this](ValkeyModuleCtx *ctx, int when) {
                 return this->GetMinVersion();
               }});
-  // NOTE: RDB_SECTION_ALIAS_MAP must be registered AFTER
-  // RDB_SECTION_INDEX_SCHEMA. LoadAliasMap validates that each alias target
-  // exists, so indexes must already be loaded when aliases are restored.
-  // The RDB framework calls load callbacks in registration order.
+  // RDB_SECTION_ALIAS_MAP must be registered after RDB_SECTION_INDEX_SCHEMA.
+  // LoadAliasMap validates alias targets exist, so indexes must be loaded
+  // first. The RDB framework calls load callbacks in registration order.
   RegisterRDBCallback(
       data_model::RDB_SECTION_ALIAS_MAP,
       RDBSectionCallbacks{
@@ -169,6 +168,18 @@ SchemaManager::SchemaManager(
                                           version);
         },
         [this](auto) { return this->GetMinVersion(); });
+    coordinator::MetadataManager::Instance().RegisterType(
+        kAliasMetadataTypeName, ComputeAliasFingerprint,
+        [this](const coordinator::ObjName &obj_name,
+               const google::protobuf::Any *metadata, uint64_t fingerprint,
+               uint32_t version) -> absl::Status {
+          return this->OnAliasMetadataCallback(obj_name, metadata, fingerprint,
+                                               version);
+        },
+        [](const google::protobuf::Any &)
+            -> absl::StatusOr<vmsdk::ValkeyVersion> {
+          return vmsdk::ValkeyVersion(0);
+        });
   }
 }
 
@@ -309,26 +320,20 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> SchemaManager::GetIndexSchema(
   return existing_entry.value();
 }
 
-absl::Status SchemaManager::AddAlias(uint32_t db_num, absl::string_view alias,
-                                     absl::string_view index_name) {
-  absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  // find() avoids default-inserting an empty map on failed paths. Skipping
-  // the block when db_num has no entry is correct: no aliases exist yet so
-  // neither collision check can fire.
+absl::Status SchemaManager::AddAliasInternal(uint32_t db_num,
+                                             absl::string_view alias,
+                                             absl::string_view index_name) {
+  // find() avoids default-inserting an empty map for db_num.
   auto db_alias_it = db_to_aliases_.find(db_num);
   if (db_alias_it != db_to_aliases_.end()) {
-    // Reject alias-to-alias: index_name must not itself be an alias.
     if (db_alias_it->second.contains(index_name)) {
       return absl::InvalidArgumentError(
           "Unknown index name or name is an alias");
     }
-    // Reject duplicate alias.
     if (db_alias_it->second.contains(alias)) {
       return absl::AlreadyExistsError("Alias already exists");
     }
   }
-  // Lookup and insertion are both under db_to_index_schemas_mutex_, so there
-  // is no TOCTOU window between the existence check and the write.
   if (!LookupInternal(db_num, index_name).ok()) {
     return GenerateIndexNotFoundError(db_num, index_name);
   }
@@ -336,9 +341,43 @@ absl::Status SchemaManager::AddAlias(uint32_t db_num, absl::string_view alias,
   return absl::OkStatus();
 }
 
-absl::Status SchemaManager::RemoveAlias(uint32_t db_num,
-                                        absl::string_view alias) {
+absl::Status SchemaManager::AddAlias(uint32_t db_num, absl::string_view alias,
+                                     absl::string_view index_name) {
+  if (coordinator_enabled_) {
+    if (coordinator::MetadataManager::Instance()
+            .GetEntryContent(kAliasMetadataTypeName,
+                             coordinator::ObjName(db_num, alias))
+            .ok()) {
+      return absl::AlreadyExistsError("Alias already exists");
+    }
+    if (coordinator::MetadataManager::Instance()
+            .GetEntryContent(kAliasMetadataTypeName,
+                             coordinator::ObjName(db_num, index_name))
+            .ok()) {
+      return absl::InvalidArgumentError(
+          "Unknown index name or name is an alias");
+    }
+    {
+      absl::MutexLock lock(&db_to_index_schemas_mutex_);
+      if (!LookupInternal(db_num, index_name).ok()) {
+        return GenerateIndexNotFoundError(db_num, index_name);
+      }
+    }
+    data_model::AliasEntry entry;
+    entry.set_index_name(std::string(index_name));
+    auto any_proto = std::make_unique<google::protobuf::Any>();
+    any_proto->PackFrom(entry);
+    return coordinator::MetadataManager::Instance()
+        .CreateEntry(kAliasMetadataTypeName,
+                     coordinator::ObjName(db_num, alias), std::move(any_proto))
+        .status();
+  }
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  return AddAliasInternal(db_num, alias, index_name);
+}
+
+absl::Status SchemaManager::RemoveAliasInternal(uint32_t db_num,
+                                                absl::string_view alias) {
   // Use find() to avoid default-inserting an empty map for db_num.
   auto db_alias_it = db_to_aliases_.find(db_num);
   if (db_alias_it == db_to_aliases_.end() ||
@@ -350,30 +389,70 @@ absl::Status SchemaManager::RemoveAlias(uint32_t db_num,
   return absl::OkStatus();
 }
 
-absl::Status SchemaManager::UpdateAlias(uint32_t db_num,
-                                        absl::string_view alias,
-                                        absl::string_view index_name) {
+absl::Status SchemaManager::RemoveAlias(uint32_t db_num,
+                                        absl::string_view alias) {
+  if (coordinator_enabled_) {
+    auto status = coordinator::MetadataManager::Instance().DeleteEntry(
+        kAliasMetadataTypeName, coordinator::ObjName(db_num, alias));
+    if (absl::IsNotFound(status)) {
+      return absl::NotFoundError("Alias does not exist");
+    }
+    return status;
+  }
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  // find() avoids default-inserting an empty map on failed paths. Skipping
-  // the block when db_num has no entry is correct: no aliases exist yet so
-  // the alias-to-alias check cannot fire.
+  return RemoveAliasInternal(db_num, alias);
+}
+
+absl::Status SchemaManager::UpdateAliasInternal(uint32_t db_num,
+                                                absl::string_view alias,
+                                                absl::string_view index_name) {
+  // find() avoids default-inserting an empty map for db_num when db_num has
+  // no aliases yet (alias-to-alias check would be a false negative otherwise).
   auto db_alias_it = db_to_aliases_.find(db_num);
   if (db_alias_it != db_to_aliases_.end()) {
-    // Reject alias-to-alias: index_name must not itself be an alias.
     if (db_alias_it->second.contains(index_name)) {
       return absl::InvalidArgumentError(
           "Unknown index name or name is an alias");
     }
   }
-  // Lookup and insertion are both under db_to_index_schemas_mutex_, so there
-  // is no TOCTOU window between the existence check and the write.
   if (!LookupInternal(db_num, index_name).ok()) {
     return GenerateIndexNotFoundError(db_num, index_name);
   }
-  // ALIASUPDATE is an upsert: it creates the alias if it doesn't exist, or
-  // silently reassigns it if it does.
+  // ALIASUPDATE is an upsert: creates the alias if absent, reassigns if
+  // present.
   db_to_aliases_[db_num][std::string(alias)] = std::string(index_name);
   return absl::OkStatus();
+}
+
+absl::Status SchemaManager::UpdateAlias(uint32_t db_num,
+                                        absl::string_view alias,
+                                        absl::string_view index_name) {
+  if (coordinator_enabled_) {
+    if (coordinator::MetadataManager::Instance()
+            .GetEntryContent(kAliasMetadataTypeName,
+                             coordinator::ObjName(db_num, index_name))
+            .ok()) {
+      return absl::InvalidArgumentError(
+          "Unknown index name or name is an alias");
+    }
+    // Verify the target index exists.
+    {
+      absl::MutexLock lock(&db_to_index_schemas_mutex_);
+      if (!LookupInternal(db_num, index_name).ok()) {
+        return GenerateIndexNotFoundError(db_num, index_name);
+      }
+    }
+    data_model::AliasEntry entry;
+    entry.set_index_name(std::string(index_name));
+    auto any_proto = std::make_unique<google::protobuf::Any>();
+    any_proto->PackFrom(entry);
+    return coordinator::MetadataManager::Instance()
+        .CreateEntry(kAliasMetadataTypeName,
+                     coordinator::ObjName(db_num, alias), std::move(any_proto))
+        .status();
+  }
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  return UpdateAliasInternal(db_num, alias, index_name);
 }
 
 absl::StatusOr<std::shared_ptr<IndexSchema>>
@@ -412,8 +491,33 @@ SchemaManager::RemoveIndexSchemaInternal(uint32_t db_num,
 absl::Status SchemaManager::RemoveIndexSchema(uint32_t db_num,
                                               const absl::string_view name) {
   if (coordinator_enabled_) {
-    // In coordinated mode, use the metadata_manager as the source of truth.
-    // It will callback into us with the update.
+    // Snapshot aliases pointing to this index to tombstone them in
+    // MetadataManager before dropping the index schema itself.
+    std::vector<std::string> aliases_to_remove;
+    {
+      absl::MutexLock lock(&db_to_index_schemas_mutex_);
+      auto db_alias_it = db_to_aliases_.find(db_num);
+      if (db_alias_it != db_to_aliases_.end()) {
+        for (const auto &[alias, target] : db_alias_it->second) {
+          if (target == name) {
+            aliases_to_remove.push_back(alias);
+          }
+        }
+      }
+    }
+    for (const auto &alias : aliases_to_remove) {
+      auto status = coordinator::MetadataManager::Instance().DeleteEntry(
+          kAliasMetadataTypeName, coordinator::ObjName(db_num, alias));
+      if (!status.ok() && !absl::IsNotFound(status)) {
+        VMSDK_LOG(WARNING, detached_ctx_.get())
+            << "Failed to delete alias MetadataManager entry for '"
+            << vmsdk::config::RedactIfNeeded(alias)
+            << "' while dropping index '" << vmsdk::config::RedactIfNeeded(name)
+            << "': " << status.message();
+      }
+    }
+    // MetadataManager is the source of truth in coordinator mode; it will
+    // callback into us with the update.
     auto status = coordinator::MetadataManager::Instance().DeleteEntry(
         kSchemaManagerMetadataTypeName, coordinator::ObjName(db_num, name));
     if (status.ok()) {
@@ -479,6 +583,25 @@ absl::StatusOr<uint64_t> SchemaManager::ComputeFingerprint(
   return entry_fingerprint;
 }
 
+absl::StatusOr<uint64_t> SchemaManager::ComputeAliasFingerprint(
+    const google::protobuf::Any &metadata) {
+  data_model::AliasEntry unpacked;
+  if (!metadata.UnpackTo(&unpacked)) {
+    return absl::InternalError(
+        "Unable to unpack metadata for alias fingerprint calculation");
+  }
+  std::string serialized_entry;
+  if (!unpacked.SerializeToString(&serialized_entry)) {
+    return absl::InternalError(
+        "Unable to serialize metadata for alias fingerprint calculation");
+  }
+  uint64_t entry_fingerprint;
+  highwayhash::HHStateT<HH_TARGET> state(kHashKey);
+  highwayhash::HighwayHashT(&state, serialized_entry.data(),
+                            serialized_entry.size(), &entry_fingerprint);
+  return entry_fingerprint;
+}
+
 absl::Status SchemaManager::OnMetadataCallback(
     const coordinator::ObjName &obj_name, const google::protobuf::Any *metadata,
     uint64_t fingerprint, uint32_t version) {
@@ -507,6 +630,41 @@ absl::Status SchemaManager::OnMetadataCallback(
   created_schema->SetFingerprint(fingerprint);
   created_schema->SetVersion(version);
 
+  return absl::OkStatus();
+}
+
+absl::Status SchemaManager::OnAliasMetadataCallback(
+    const coordinator::ObjName &obj_name, const google::protobuf::Any *metadata,
+    uint64_t /*fingerprint*/, uint32_t /*version*/) {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  // Idempotent remove first; ignore NotFound, propagate other errors.
+  auto remove_status =
+      RemoveAliasInternal(obj_name.GetDbNum(), obj_name.GetName());
+  if (!remove_status.ok() && !absl::IsNotFound(remove_status)) {
+    return remove_status;
+  }
+  if (metadata == nullptr) {
+    // Tombstone/deletion: alias already removed above.
+    return absl::OkStatus();
+  }
+  data_model::AliasEntry entry;
+  if (!metadata->UnpackTo(&entry)) {
+    return absl::InternalError(
+        absl::StrCat("Unable to unpack alias metadata for ", obj_name));
+  }
+  uint32_t db_num = obj_name.GetDbNum();
+  const std::string &alias = obj_name.GetName();
+  const std::string &index_name = entry.index_name();
+  if (!LookupInternal(db_num, index_name).ok()) {
+    // Target index not yet present; transient during reconciliation.
+    VMSDK_LOG(WARNING, detached_ctx_.get())
+        << "Alias callback: target index '"
+        << vmsdk::config::RedactIfNeeded(index_name)
+        << "' not found for alias '" << vmsdk::config::RedactIfNeeded(alias)
+        << "' in db " << db_num << "; will retry on next reconciliation";
+    return absl::OkStatus();
+  }
+  db_to_aliases_[db_num][alias] = index_name;
   return absl::OkStatus();
 }
 
@@ -632,20 +790,6 @@ void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx) {
                           << vmsdk::config::RedactIfNeeded(name)
                           << " on FLUSHDB of DB " << selected_db;
 
-    // In coordinator mode the index is immediately recreated, so its aliases
-    // must survive. Snapshot them before RemoveIndexSchemaInternal purges them.
-    absl::flat_hash_map<std::string, std::string> saved_aliases;
-    if (coordinator_enabled_) {
-      auto db_alias_it = db_to_aliases_.find(selected_db);
-      if (db_alias_it != db_to_aliases_.end()) {
-        for (const auto &[alias, target] : db_alias_it->second) {
-          if (target == name) {
-            saved_aliases[alias] = target;
-          }
-        }
-      }
-    }
-
     auto old_schema = RemoveIndexSchemaInternal(selected_db, name);
     if (!old_schema.ok()) {
       VMSDK_LOG(WARNING, ctx) << "Unable to delete index schema "
@@ -654,9 +798,8 @@ void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx) {
       continue;
     }
     if (coordinator_enabled_) {
-      // In coordinated mode - we recreate the indices, since they are a
-      // cluster-level construct, not a node-level construct. To delete,
-      // FT.DROPINDEX must be done explicitly.
+      // In coordinator mode, indexes are cluster-level constructs; recreate
+      // them after flush. To permanently delete, FT.DROPINDEX must be used.
       absl::call_once(log_recreate_once, [&]() {
         VMSDK_LOG(NOTICE, ctx)
             << "Recreating index schema on FLUSHDB of DB " << selected_db;
@@ -672,11 +815,7 @@ void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx) {
                                 << " on FLUSHDB of DB " << selected_db;
         continue;
       }
-      // Restore aliases purged by RemoveIndexSchemaInternal. The mutex is
-      // held for the entire OnFlushDBEnded call
-      for (const auto &[alias, target] : saved_aliases) {
-        db_to_aliases_[selected_db][alias] = target;
-      }
+      // Aliases are managed by MetadataManager and reconciled cluster-wide.
     }
   }
 }
@@ -820,6 +959,9 @@ absl::Status SchemaManager::SaveAliases(ValkeyModuleCtx *ctx, SafeRDB *rdb,
   if (when == VALKEYMODULE_AUX_BEFORE_RDB) {
     return absl::OkStatus();
   }
+  // All aliases across all DBs are packed into a single RDB section proto.
+  // This is intentional: aliases are lightweight (two strings per entry) and
+  // their total count is implicitly bounded by the max-indexes config.
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
 
   data_model::AliasMap alias_map_proto;

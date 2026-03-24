@@ -37,6 +37,7 @@ class ObjName;
 }
 
 constexpr absl::string_view kSchemaManagerMetadataTypeName{"vs_index_schema"};
+constexpr absl::string_view kAliasMetadataTypeName{"vs_alias"};
 // Enum for attribute metrics
 enum class AttributeType { ALL, TEXT, TAG, NUMERIC, VECTOR };
 
@@ -147,6 +148,25 @@ class SchemaManager {
                                   const google::protobuf::Any *metadata,
                                   uint64_t fingerprint, uint32_t version)
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
+
+  absl::Status OnAliasMetadataCallback(const coordinator::ObjName &obj_name,
+                                       const google::protobuf::Any *metadata,
+                                       uint64_t fingerprint, uint32_t version)
+      ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
+
+  static absl::StatusOr<uint64_t> ComputeAliasFingerprint(
+      const google::protobuf::Any &metadata);
+
+  absl::Status AddAliasInternal(uint32_t db_num, absl::string_view alias,
+                                absl::string_view index_name)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
+
+  absl::Status RemoveAliasInternal(uint32_t db_num, absl::string_view alias)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
+
+  absl::Status UpdateAliasInternal(uint32_t db_num, absl::string_view alias,
+                                   absl::string_view index_name)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
 
   absl::Status CreateIndexSchemaInternal(
       ValkeyModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto)

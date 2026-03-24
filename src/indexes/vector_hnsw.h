@@ -101,9 +101,8 @@ class VectorHNSW : public VectorBase {
       ABSL_LOCKS_EXCLUDED(tracked_vectors_mutex_);
   void UnTrackVector(uint64_t internal_id) override
       ABSL_LOCKS_EXCLUDED(tracked_vectors_mutex_);
-  uint64_t GetMaxInternalLabel() const override
-      ABSL_LOCKS_EXCLUDED(resize_mutex_);
-  size_t GetLabelCount() const override ABSL_LOCKS_EXCLUDED(resize_mutex_);
+  uint64_t GetMaxInternalLabel() const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  size_t GetLabelCount() const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
  private:
   VectorHNSW(int dimensions, absl::string_view attribute_identifier,

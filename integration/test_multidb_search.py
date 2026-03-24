@@ -17,12 +17,6 @@ def verify_common_keys_results(clients, num_dbs, key_names, index):
     for db_num in range(num_dbs):
         # Text search
         for key_idx, key_name in enumerate(key_names):
-            print(clients[db_num].execute_command(
-                'INFO SEARCH'
-            ))
-            print(clients[db_num].execute_command(
-                'FT.INFO ' + str(index.name)
-            ))
             result = clients[db_num].execute_command(
                 'FT.SEARCH', 'idx', f'@name:product{db_num}_key{key_idx}'
             )

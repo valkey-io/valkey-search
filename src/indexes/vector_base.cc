@@ -42,7 +42,6 @@
 #include "src/query/predicate.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
-#include "src/valkey_search_options.h"
 #include "src/vector_externalizer.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "third_party/hnswlib/space_ip.h"
@@ -468,18 +467,11 @@ absl::Status VectorBase::LoadTrackedKeys(
           .magnitude = tracked_key_metadata.magnitude()}});
     key_by_internal_id_.insert(
         {tracked_key_metadata.internal_id(), interned_key});
-    if (!options::GetHNSWAllowReplaceDeleted().GetValue()) {
-      inc_id_ = std::max(
-          inc_id_, static_cast<uint64_t>(tracked_key_metadata.internal_id()));
-    }
     ExternalizeVector(ctx, attribute_data_type, tracked_key_metadata.key(),
                       attribute_identifier_);
   }
-  if (options::GetHNSWAllowReplaceDeleted().GetValue()) {
-    // If allow-replace-deleted enabled, select max label from label_lookup_
-    // (includes tombstoned entries) to avoid inc_id_ collisions.
-    inc_id_ = GetMaxInternalLabel();
-  }
+  // Use max label from label_lookup_
+  inc_id_ = GetMaxInternalLabel();
   ++inc_id_;
   return absl::OkStatus();
 }

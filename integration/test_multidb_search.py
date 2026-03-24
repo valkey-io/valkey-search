@@ -374,5 +374,13 @@ class TestMultiDBCME(ValkeySearchClusterTestCaseDebugMode):
             client = self.get_primary(0).connect()
             client.select(db_num)
             dest_clients[db_num] = client
-        
+
+        # Wait for destination node's search index to finish indexing migrated keys.
+        for db_num in range(num_dbs):
+            waiters.wait_for_equal(
+                lambda db=db_num: index.info(dest_clients[db]).num_docs,
+                len(key_names),
+                timeout=10
+            )
+
         verify_common_keys_results(dest_clients, num_dbs, key_names, index)

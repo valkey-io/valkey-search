@@ -37,6 +37,7 @@
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
+#include "src/valkey_search_options.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/query/predicate.h"
@@ -467,10 +468,17 @@ absl::Status VectorBase::LoadTrackedKeys(
           .magnitude = tracked_key_metadata.magnitude()}});
     key_by_internal_id_.insert(
         {tracked_key_metadata.internal_id(), interned_key});
-    inc_id_ = std::max(
-        inc_id_, static_cast<uint64_t>(tracked_key_metadata.internal_id()));
+    if (!options::GetHNSWAllowReplaceDeleted().GetValue()) {
+      inc_id_ = std::max(
+          inc_id_, static_cast<uint64_t>(tracked_key_metadata.internal_id()));
+    }
     ExternalizeVector(ctx, attribute_data_type, tracked_key_metadata.key(),
                       attribute_identifier_);
+  }
+  if (options::GetHNSWAllowReplaceDeleted().GetValue()) {
+    // If allow-replace-deleted enabled, select max label from label_lookup_
+    // (includes tombstoned entries) to avoid inc_id_ collisions. (ELMO-117193)
+    inc_id_ = GetMaxInternalLabel();
   }
   ++inc_id_;
   return absl::OkStatus();

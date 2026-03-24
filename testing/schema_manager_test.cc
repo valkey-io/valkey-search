@@ -971,4 +971,256 @@ TEST_F(SchemaManagerTest, OnSwapDBAliasesSwapped) {
             absl::StatusCode::kNotFound);
 }
 
+// Helper: build a coordinator-enabled SchemaManager backed by a real
+// MetadataManager.  Returns the index schema proto used for setup.
+class SchemaManagerCoordinatorAliasTest : public ValkeySearchTest {
+ public:
+  void SetUp() override {
+    ValkeySearchTest::SetUp();
+
+    ON_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
+        .WillByDefault(testing::Return(0));
+    ON_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
+        .WillByDefault(testing::Return(&fake_ctx_));
+    ON_CALL(*kMockValkeyModule, FreeThreadSafeContext(testing::_))
+        .WillByDefault(testing::Return());
+    ON_CALL(*kMockValkeyModule, SelectDb(testing::_, testing::_))
+        .WillByDefault(testing::Return(VALKEYMODULE_OK));
+    ON_CALL(*kMockValkeyModule,
+            Call(testing::_, testing::StrEq("CLUSTER"), testing::StrEq("c"),
+                 testing::StrEq("SLOTS")))
+        .WillByDefault(testing::Return(
+            reinterpret_cast<ValkeyModuleCallReply *>(0xDEADBEEF)));
+    ON_CALL(
+        *kMockValkeyModule,
+        CallReplyType(reinterpret_cast<ValkeyModuleCallReply *>(0xDEADBEEF)))
+        .WillByDefault(testing::Return(VALKEYMODULE_REPLY_ARRAY));
+    ON_CALL(
+        *kMockValkeyModule,
+        CallReplyLength(reinterpret_cast<ValkeyModuleCallReply *>(0xDEADBEEF)))
+        .WillByDefault(testing::Return(0));
+    ON_CALL(*kMockValkeyModule, GetMyClusterID())
+        .WillByDefault(testing::Return("fake_node_id"));
+
+    mock_client_pool_ = std::make_unique<coordinator::MockClientPool>();
+    coordinator::MetadataManager::InitInstance(
+        std::make_unique<coordinator::MetadataManager>(&fake_ctx_,
+                                                       *mock_client_pool_));
+
+    SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+        &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/true));
+
+    // Create the test index.
+    std::string proto_str = R"(
+        name: "test_idx"
+        db_num: 0
+        subscribed_key_prefixes: "prefix_1"
+        attribute_data_type: ATTRIBUTE_DATA_TYPE_HASH
+        attributes: {
+          alias: "attr1"
+          identifier: "id1"
+          index: {
+            vector_index: {
+              dimension_count: 10
+              normalize: true
+              distance_metric: DISTANCE_METRIC_COSINE
+              vector_data_type: VECTOR_DATA_TYPE_FLOAT32
+              initial_cap: 100
+              hnsw_algorithm { m: 16 ef_construction: 200 ef_runtime: 10 }
+            }
+          }
+        }
+      )";
+    ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(proto_str,
+                                                              &index_proto_));
+    ASSERT_TRUE(SchemaManager::Instance()
+                    .CreateIndexSchema(&fake_ctx_, index_proto_)
+                    .ok());
+  }
+
+  void TearDown() override {
+    coordinator::MetadataManager::InitInstance(nullptr);
+    ValkeySearchTest::TearDown();
+  }
+
+ protected:
+  std::unique_ptr<coordinator::MockClientPool> mock_client_pool_;
+  data_model::IndexSchema index_proto_;
+  const uint32_t kDb0 = 0;
+  const std::string kIndexName = "test_idx";
+};
+
+TEST_F(SchemaManagerCoordinatorAliasTest,
+       ComputeAliasFingerprintIsDeterministic) {
+  // ComputeAliasFingerprint is private; test determinism indirectly via
+  // AddAlias + UpdateAlias with the same payload. MetadataManager accepts the
+  // reapply without error only if the fingerprint is stable.
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "fp_alias", kIndexName));
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().UpdateAlias(kDb0, "fp_alias", kIndexName));
+  auto by_alias = SchemaManager::Instance().GetIndexSchema(kDb0, "fp_alias");
+  auto by_name = SchemaManager::Instance().GetIndexSchema(kDb0, kIndexName);
+  VMSDK_EXPECT_OK(by_alias);
+  VMSDK_EXPECT_OK(by_name);
+  EXPECT_EQ(by_alias.value().get(), by_name.value().get());
+}
+
+TEST_F(SchemaManagerCoordinatorAliasTest,
+       ComputeAliasFingerprintUnpackFailure) {
+  // An Any with a mismatched type_url fails to unpack; ComputeFingerprint
+  // must return an error rather than silently producing a garbage hash.
+  google::protobuf::Any bad_any;
+  bad_any.set_type_url(
+      "type.googleapis.com/valkey_search.data_model.IndexSchema");
+  bad_any.set_value("not-valid-proto-bytes");
+  // ComputeFingerprint unpacks as IndexSchema; that will fail on bad bytes.
+  auto status = SchemaManager::ComputeFingerprint(bad_any);
+  EXPECT_FALSE(status.ok());
+}
+
+TEST_F(SchemaManagerCoordinatorAliasTest, OnAliasMetadataCallbackCreate) {
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "cb_alias", kIndexName));
+
+  auto by_alias = SchemaManager::Instance().GetIndexSchema(kDb0, "cb_alias");
+  auto by_name = SchemaManager::Instance().GetIndexSchema(kDb0, kIndexName);
+  VMSDK_EXPECT_OK(by_alias);
+  VMSDK_EXPECT_OK(by_name);
+  EXPECT_EQ(by_alias.value().get(), by_name.value().get());
+}
+
+TEST_F(SchemaManagerCoordinatorAliasTest, OnAliasMetadataCallbackDelete) {
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "del_alias", kIndexName));
+  VMSDK_EXPECT_OK(SchemaManager::Instance().RemoveAlias(kDb0, "del_alias"));
+
+  EXPECT_EQ(SchemaManager::Instance()
+                .GetIndexSchema(kDb0, "del_alias")
+                .status()
+                .code(),
+            absl::StatusCode::kNotFound);
+  // Underlying index still accessible.
+  VMSDK_EXPECT_OK(SchemaManager::Instance().GetIndexSchema(kDb0, kIndexName));
+}
+
+TEST_F(SchemaManagerCoordinatorAliasTest, OnAliasMetadataCallbackIdempotent) {
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "idem_alias", kIndexName));
+  // UpdateAlias with same target is an upsert; triggers callback again.
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().UpdateAlias(kDb0, "idem_alias", kIndexName));
+
+  auto by_alias = SchemaManager::Instance().GetIndexSchema(kDb0, "idem_alias");
+  auto by_name = SchemaManager::Instance().GetIndexSchema(kDb0, kIndexName);
+  VMSDK_EXPECT_OK(by_alias);
+  VMSDK_EXPECT_OK(by_name);
+  EXPECT_EQ(by_alias.value().get(), by_name.value().get());
+}
+
+TEST_F(SchemaManagerCoordinatorAliasTest, CoordAddAliasDuplicate) {
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "dup_alias", kIndexName));
+  auto status =
+      SchemaManager::Instance().AddAlias(kDb0, "dup_alias", kIndexName);
+  EXPECT_EQ(status.code(), absl::StatusCode::kAlreadyExists);
+}
+
+TEST_F(SchemaManagerCoordinatorAliasTest, CoordAddAliasToAlias) {
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "first_alias", kIndexName));
+  auto status =
+      SchemaManager::Instance().AddAlias(kDb0, "second_alias", "first_alias");
+  EXPECT_EQ(status.code(), absl::StatusCode::kInvalidArgument);
+}
+
+TEST_F(SchemaManagerCoordinatorAliasTest, CoordAddAliasMissingIndex) {
+  auto status =
+      SchemaManager::Instance().AddAlias(kDb0, "x_alias", "no_such_index");
+  EXPECT_EQ(status.code(), absl::StatusCode::kNotFound);
+}
+
+TEST_F(SchemaManagerCoordinatorAliasTest, CoordRemoveAliasMissing) {
+  auto status =
+      SchemaManager::Instance().RemoveAlias(kDb0, "nonexistent_alias");
+  EXPECT_EQ(status.code(), absl::StatusCode::kNotFound);
+  EXPECT_EQ(status.message(), "Alias does not exist");
+}
+
+TEST_F(SchemaManagerCoordinatorAliasTest, CoordUpdateAliasToAlias) {
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "first_alias", kIndexName));
+  auto status = SchemaManager::Instance().UpdateAlias(kDb0, "second_alias",
+                                                      "first_alias");
+  EXPECT_EQ(status.code(), absl::StatusCode::kInvalidArgument);
+}
+
+TEST_F(SchemaManagerCoordinatorAliasTest, CoordUpdateAliasUpsert) {
+  // Create when absent.
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().UpdateAlias(kDb0, "upsert_alias", kIndexName));
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().GetIndexSchema(kDb0, "upsert_alias"));
+
+  // Update when present (same target; still succeeds).
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().UpdateAlias(kDb0, "upsert_alias", kIndexName));
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().GetIndexSchema(kDb0, "upsert_alias"));
+}
+
+TEST_F(SchemaManagerCoordinatorAliasTest, OnFlushDBEndedAliasesPurged) {
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "flush_alias", kIndexName));
+
+  // Alias resolves before flush.
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().GetIndexSchema(kDb0, "flush_alias"));
+
+  SchemaManager::Instance().OnFlushDBEnded(&fake_ctx_);
+
+  // After flush: alias is gone from db_to_aliases_ (RemoveIndexSchemaInternal
+  // purges it), but MetadataManager still holds the entry.
+  EXPECT_EQ(SchemaManager::Instance()
+                .GetIndexSchema(kDb0, "flush_alias")
+                .status()
+                .code(),
+            absl::StatusCode::kNotFound);
+  // MetadataManager entry survives the flush.
+  VMSDK_EXPECT_OK(coordinator::MetadataManager::Instance().GetEntryContent(
+      kAliasMetadataTypeName, coordinator::ObjName(kDb0, "flush_alias")));
+}
+
+TEST_F(SchemaManagerCoordinatorAliasTest, RemoveIndexSchemaTombstonesAliases) {
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "alias_a", kIndexName));
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "alias_b", kIndexName));
+
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().RemoveIndexSchema(kDb0, kIndexName));
+
+  // Both aliases must be gone from in-memory state.
+  EXPECT_EQ(
+      SchemaManager::Instance().GetIndexSchema(kDb0, "alias_a").status().code(),
+      absl::StatusCode::kNotFound);
+  EXPECT_EQ(
+      SchemaManager::Instance().GetIndexSchema(kDb0, "alias_b").status().code(),
+      absl::StatusCode::kNotFound);
+
+  // Both alias MetadataManager entries must be tombstoned (NotFound).
+  EXPECT_EQ(coordinator::MetadataManager::Instance()
+                .GetEntryContent(kAliasMetadataTypeName,
+                                 coordinator::ObjName(kDb0, "alias_a"))
+                .status()
+                .code(),
+            absl::StatusCode::kNotFound);
+  EXPECT_EQ(coordinator::MetadataManager::Instance()
+                .GetEntryContent(kAliasMetadataTypeName,
+                                 coordinator::ObjName(kDb0, "alias_b"))
+                .status()
+                .code(),
+            absl::StatusCode::kNotFound);
+}
+
 }  // namespace valkey_search

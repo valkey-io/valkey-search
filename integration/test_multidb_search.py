@@ -10,7 +10,7 @@ from valkey_search_test_case import (
 from valkeytestframework.conftest import resource_port_tracker
 from valkeytestframework.util import waiters
 from indexes import Index, Text, Tag, Numeric, Vector, float_to_bytes
-
+import time
 
 def verify_common_keys_results(clients, num_dbs, key_names, index):
     """Verify search isolation across all DBs for text, numeric, tag, and vector searches."""
@@ -382,5 +382,6 @@ class TestMultiDBCME(ValkeySearchClusterTestCaseDebugMode):
                 len(key_names),
                 timeout=10
             )
-
+        # Wait longer than cluster map expiration (250ms default) plus some buffer
+        time.sleep(1)
         verify_common_keys_results(dest_clients, num_dbs, key_names, index)

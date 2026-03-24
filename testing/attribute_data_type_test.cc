@@ -305,7 +305,8 @@ class JsonAttributeDataTypeTest
   absl::flat_hash_map<std::string, std::string> json_path_results = {
       {"$", "[\"res0\"]"},
       {"json_path_results1", "[\"res1\"]"},
-      {"json_path_results2", "[\"res2\"]"}};
+      {"json_path_results2", "[\"res2\"]"},
+      {"wildcard_city", "[\"Seoul\",\"New York\"]"}};
   ;
 };
 
@@ -425,6 +426,22 @@ TEST_P(JsonAttributeDataTypeTest, JsonGetRecord) {
       }
     }
   }
+}
+
+TEST_F(JsonAttributeDataTypeTest, JsonGetRecordWildcardArray) {
+  constexpr absl::string_view kIdentifier = "wildcard_city";
+
+  ResetJsonLoadedCache();
+  CheckJsonGetRecord(fake_ctx, kIdentifier, VALKEYMODULE_REPLY_STRING,
+                     json_path_results);
+
+  auto record = json_attribute_data_type.GetRecord(
+      &fake_ctx, key_obj.get(), vmsdk::ToStringView(key_str.get()).data(),
+      kIdentifier);
+
+  ASSERT_TRUE(record.ok());
+  EXPECT_EQ(vmsdk::ToStringView(record.value().get()), "Seoul,New York");
+  ResetJsonLoadedCache();
 }
 
 std::unordered_map<std::string, std::string> NormalizeExpected(

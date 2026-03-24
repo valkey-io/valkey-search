@@ -14,6 +14,7 @@
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_replace.h"
 #include "absl/strings/string_view.h"
 #include "absl/strings/strip.h"
 #include "src/valkey_search.h"
@@ -115,9 +116,20 @@ absl::Status NormalizeJsonRecord(absl::string_view record,
     return absl::NotFoundError("Invalid record");
   }
   if (absl::ConsumePrefix(&record, "[")) {
-    absl::ConsumeSuffix(&record, "]");
+    if (!absl::ConsumeSuffix(&record, "]")) {
+      return absl::NotFoundError("Invalid record");
+    }
     if (absl::ConsumePrefix(&record, "\"")) {
-      absl::ConsumeSuffix(&record, "\"");
+      if (!absl::ConsumeSuffix(&record, "\"")) {
+        return absl::NotFoundError("Invalid record");
+      }
+      auto normalized_record = absl::StrReplaceAll(record, {{"\",\"", ","}});
+      if (normalized_record.empty()) {
+        return absl::NotFoundError("Empty record");
+      }
+      auto record_ptr = vmsdk::MakeUniqueValkeyString(normalized_record);
+      out_record.swap(record_ptr);
+      return absl::OkStatus();
     }
   }
   if (record.empty()) {

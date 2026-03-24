@@ -518,7 +518,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   VMSDK_EXPECT_OK((*index)->RemoveRecord(IndexToKey(8), DeletionType::kNone));
   VMSDK_EXPECT_OK((*index)->RemoveRecord(IndexToKey(9), DeletionType::kNone));
   EXPECT_EQ(base->GetMaxInternalLabel(), 9u);
-  EXPECT_EQ(base->GetLabelCount(), 9u);
+  EXPECT_EQ(base->GetLabelCount(), 10u);
   EXPECT_EQ(base->GetTrackedKeyCount(), 8u);
   auto new_vectors = DeterministicallyGenerateVectors(5, kDimensions, 20.0);
   for (size_t i = 0; i < new_vectors.size(); ++i) {

@@ -37,12 +37,12 @@
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
+#include "src/valkey_search_options.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/query/predicate.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
-#include "src/valkey_search_options.h"
 #include "src/vector_externalizer.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "third_party/hnswlib/space_ip.h"
@@ -477,7 +477,7 @@ absl::Status VectorBase::LoadTrackedKeys(
   }
   if (options::GetHNSWAllowReplaceDeleted().GetValue()) {
     // If allow-replace-deleted enabled, select max label from label_lookup_
-    // (includes tombstoned entries) to avoid inc_id_ collisions. (ELMO-117193)
+    // (includes tombstoned entries) to avoid inc_id_ collisions.
     inc_id_ = GetMaxInternalLabel();
   }
   ++inc_id_;

@@ -263,6 +263,30 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce max 1 @n1 as nmax"
         )
         self.check(dialect, f'ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce max 1 @n2 as nmax')
+
+    def test_aggregate_groupby_tolist(self, key_type, dialect):
+        self.setup_data("sortable numbers", key_type)
+        # Basic TOLIST on numeric field grouped by tag
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce tolist 1 @n1 as items"
+        )
+        # TOLIST on a different numeric field
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce tolist 1 @n2 as items"
+        )
+        # TOLIST alongside COUNT in the same GROUPBY
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce tolist 1 @n1 as items reduce count 0 as cnt"
+        )
+        # TOLIST on tag field grouped by another tag
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce tolist 1 @t2 as tag_items"
+        )
+        # Case insensitivity
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce TOLIST 1 @n1 as items"
+        )
+
     def test_aggregate_limit(self, key_type, dialect):
         self.setup_data("sortable numbers", key_type)
         self.check(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2")

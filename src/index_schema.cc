@@ -1691,9 +1691,6 @@ void IndexSchema::OnSwapDB(ValkeyModuleSwapDbInfo *swap_db_info) {
 }
 
 void IndexSchema::DrainMutationQueue(ValkeyModuleCtx *ctx) const {
-  static const auto max_sleep = std::chrono::milliseconds(100);
-  auto sleep_duration = std::chrono::milliseconds(1);
-
   while (true) {
     size_t queue_size;
     {
@@ -1707,9 +1704,7 @@ void IndexSchema::DrainMutationQueue(ValkeyModuleCtx *ctx) const {
         << "Draining Mutation Queue for index "
         << vmsdk::config::RedactIfNeeded(name_)
         << ", entries remaining: " << queue_size;
-    std::this_thread::sleep_for(sleep_duration);
-    sleep_duration =
-        std::min(sleep_duration * 2, max_sleep);  // Exponential backoff
+    ValkeyModule_Yield(ctx, VALKEYMODULE_YIELD_FLAG_CLIENTS, nullptr);
   }
 }
 

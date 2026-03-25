@@ -200,8 +200,10 @@ function build_icu_if_needed() {
     
     printf "Configuring ICU for static linking with embedded data...\n"
     
-    # Configure with static data packaging
-    "${ICU_SOURCE_DIR}/configure" \
+    local ICU_LOG="${ICU_BUILD_DIR}/icu-build.log"
+
+    # Configure with static data packaging (output saved to log file)
+    if ! "${ICU_SOURCE_DIR}/configure" \
         --enable-static \
         --disable-shared \
         --with-data-packaging=static \
@@ -213,17 +215,29 @@ function build_icu_if_needed() {
         --enable-tools \
         --prefix="${ICU_BUILD_DIR}/install" \
         CFLAGS="-O2 -fPIC" \
-        CXXFLAGS="-O2 -fPIC"
+        CXXFLAGS="-O2 -fPIC" > "${ICU_LOG}" 2>&1; then
+        printf "${RED}ICU configure failed. See ${ICU_LOG}${RESET}\n"
+        tail -30 "${ICU_LOG}"
+        exit 1
+    fi
     
     printf "Building ICU static libraries...\n"
     
-    # Build with static data mode
-    make PKGDATA_MODE=static -j$(nproc)
+    # Build with static data mode (output saved to log file)
+    if ! make PKGDATA_MODE=static -j$(num_proc) >> "${ICU_LOG}" 2>&1; then
+        printf "${RED}ICU build failed. See ${ICU_LOG}${RESET}\n"
+        tail -50 "${ICU_LOG}"
+        exit 1
+    fi
     
     printf "Installing ICU libraries...\n"
     
     # Install to build directory
-    make install PKGDATA_MODE=static
+    if ! make install PKGDATA_MODE=static >> "${ICU_LOG}" 2>&1; then
+        printf "${RED}ICU install failed. See ${ICU_LOG}${RESET}\n"
+        tail -30 "${ICU_LOG}"
+        exit 1
+    fi
     
     cd "${ROOT_DIR}"
     

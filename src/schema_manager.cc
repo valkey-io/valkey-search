@@ -480,6 +480,11 @@ SchemaManager::RemoveIndexSchemaInternal(uint32_t db_num,
         ++it;
       }
     }
+    // Remove the empty inner map to avoid accumulating empty entries,
+    // consistent with how db_to_index_schemas_ is cleaned up above.
+    if (alias_map.empty()) {
+      db_to_aliases_.erase(db_alias_it);
+    }
   }
   // Mark the index schema as lame duck. Otherwise, if there is a large
   // backlog of mutations, they can keep the index schema alive and cause

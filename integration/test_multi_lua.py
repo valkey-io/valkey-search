@@ -10,7 +10,7 @@ from valkey_search_test_case import (
 )
 from valkeytestframework.conftest import resource_port_tracker
 from valkeytestframework.util import waiters
-from utils import find_local_key
+from utils import find_local_key, wait_for_background_tasks
 from indexes import *
 
 
@@ -28,6 +28,7 @@ def _lua_call(cmd: str, *args: str) -> str:
 class TestMultiLuaCMD(ValkeySearchTestCaseBase):
     """Test all search commands in MULTI/EXEC and Lua contexts for standalone (CMD) mode."""
 
+    @wait_for_background_tasks()
     def test_multi_exec_all_commands(self):
         client: Valkey = self.server.get_new_client()
         # FT.CREATE in MULTI/EXEC
@@ -74,6 +75,7 @@ class TestMultiLuaCMD(ValkeySearchTestCaseBase):
         assert client.execute_command("EXEC")[0] == OK
         assert client.execute_command("FT._LIST") == []
 
+    @wait_for_background_tasks()
     def test_lua_all_commands(self):
         client: Valkey = self.server.get_new_client()
 
@@ -114,6 +116,7 @@ class TestMultiLuaCMD(ValkeySearchTestCaseBase):
 class TestMultiLuaCME(ValkeySearchClusterTestCase):
     """Test all search commands in MULTI/EXEC and Lua contexts for cluster (CME) mode."""
 
+    @wait_for_background_tasks()
     def test_multi_exec_all_commands(self):
         client: Valkey = self.new_client_for_primary(0)
         cluster: ValkeyCluster = self.new_cluster_client()
@@ -171,6 +174,7 @@ class TestMultiLuaCME(ValkeySearchClusterTestCase):
         assert client.execute_command("EXEC")[0] == OK
         assert client.execute_command("FT._LIST") == []
 
+    @wait_for_background_tasks()
     def test_lua_all_commands(self):
         client: Valkey = self.new_client_for_primary(0)
         cluster: ValkeyCluster = self.new_cluster_client()

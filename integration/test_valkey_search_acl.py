@@ -27,23 +27,57 @@ class TestCommandsACLs(ValkeySearchTestCaseBase):
             assert True
 
     @pytest.mark.parametrize(
-        "user,should_access_read,should_access_write",
+        "user,should_access_read,should_access_write,should_access_debug",
         [
-            ("ACL SETUSER user1 on >search_pass -@search", False, False),
-            ("ACL SETUSER user1 on >search_pass -@all", False, False),
-            ("ACL SETUSER user1 on >search_pass ~* &* +@all", True, True),
-            ("ACL SETUSER user1 on >search_pass ~* &* -@all +@search", True, True),
+            ("ACL SETUSER user1 on >search_pass -@search", False, False, False),
+            ("ACL SETUSER user1 on >search_pass -@all", False, False, False),
+            ("ACL SETUSER user1 on >search_pass ~* &* +@all", True, True, True),
+            (
+                "ACL SETUSER user1 on >search_pass ~* &* -@all +@search",
+                True,
+                True,
+                False,
+            ),
             (
                 "ACL SETUSER user1 on >search_pass ~* &* -@all +@write +@read",
                 True,
                 True,
+                False,
             ),
-            ("ACL SETUSER user1 on >search_pass ~* &* -@all +@write", False, True),
-            ("ACL SETUSER user1 on >search_pass ~* &* -@all +@read", True, False),
+            (
+                "ACL SETUSER user1 on >search_pass ~* &* -@all +@write",
+                False,
+                True,
+                False,
+            ),
+            (
+                "ACL SETUSER user1 on >search_pass ~* &* -@all +@read",
+                True,
+                False,
+                False,
+            ),
+            (
+                "ACL SETUSER user1 on >search_pass ~* &* -@all +@slow",
+                False,
+                False,
+                True,
+            ),
+            (
+                "ACL SETUSER user1 on >search_pass ~* &* -@all +@dangerous",
+                False,
+                False,
+                True,
+            ),
+            (
+                "ACL SETUSER user1 on >search_pass ~* &* -@all +@admin",
+                False,
+                False,
+                True,
+            ),
         ],
     )
     def test_acl_category_permissions(
-        self, user, should_access_read, should_access_write
+        self, user, should_access_read, should_access_write, should_access_debug
     ):
         search_vector = struct.pack("<3f", *[1.0, 2.0, 3.0])
         # List of search commands
@@ -80,7 +114,7 @@ class TestCommandsACLs(ValkeySearchTestCaseBase):
             ),
             (["FT.INFO", INDEX_NAME], should_access_read),
             (["FT._LIST"], should_access_read),
-            (["FT._DEBUG", "SHOW_INFO"], should_access_read),
+            (["FT._DEBUG", "SHOW_INFO"], should_access_debug),
             (["FT.DROPINDEX", INDEX_NAME], should_access_write),
         ]
         client: Valkey = self.server.get_new_client()
@@ -225,7 +259,7 @@ class TestCommandsACLs(ValkeySearchTestCaseBase):
             (
                 "FT._DEBUG",
                 [b"readonly", b"module", b"admin"],
-                [b"@read", b"@slow", b"@search", b"@admin"],
+                [b"@admin", b"@slow", b"@dangerous", b"@search"],
             ),
         ]
         for cmd in valkey_search_commands:

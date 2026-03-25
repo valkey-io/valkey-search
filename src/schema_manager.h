@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
@@ -71,6 +72,9 @@ class SchemaManager {
                            absl::string_view index_name)
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
   absl::flat_hash_set<std::string> GetIndexSchemasInDB(uint32_t db_num) const;
+  std::vector<std::string> GetAliasesForIndex(
+      uint32_t db_num, absl::string_view index_name) const
+      ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
   // TODO Investigate storing aggregated counters to optimize stats
   // generation.
   uint64_t GetNumberOfIndexSchemas() const;

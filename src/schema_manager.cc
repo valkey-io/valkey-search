@@ -555,6 +555,22 @@ absl::flat_hash_set<std::string> SchemaManager::GetIndexSchemasInDB(
   return GetIndexSchemasInDBInternal(db_num);
 }
 
+std::vector<std::string> SchemaManager::GetAliasesForIndex(
+    uint32_t db_num, absl::string_view index_name) const {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  std::vector<std::string> result;
+  auto db_alias_it = db_to_aliases_.find(db_num);
+  if (db_alias_it != db_to_aliases_.end()) {
+    for (const auto &[alias, target] : db_alias_it->second) {
+      if (target == index_name) {
+        result.push_back(alias);
+      }
+    }
+  }
+  std::sort(result.begin(), result.end());
+  return result;
+}
+
 absl::StatusOr<uint64_t> SchemaManager::ComputeFingerprint(
     const google::protobuf::Any &metadata) {
   auto unpacked = std::make_unique<data_model::IndexSchema>();

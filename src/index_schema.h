@@ -152,7 +152,8 @@ class IndexSchema : public KeyspaceEventSubscription,
                         absl::string_view identifier,
                         std::shared_ptr<indexes::IndexBase> index);
 
-  void RespondWithInfo(ValkeyModuleCtx *ctx) const;
+  void RespondWithInfo(ValkeyModuleCtx *ctx,
+                       const std::vector<std::string> &aliases) const;
 
   inline const AttributeDataType &GetAttributeDataType() const override {
     return *attribute_data_type_;

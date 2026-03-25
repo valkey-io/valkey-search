@@ -455,7 +455,7 @@ if [[ "${RUN_TEST}" == "all" ]]; then
         echo "==> Running executable: ${test}" >> "${TEST_OUTPUT_FILE}"
         echo "" >> "${TEST_OUTPUT_FILE}"
         print_test_prefix "${test}"
-        ("${test}" >> "${TEST_OUTPUT_FILE}" 2>&1 && print_test_ok) || print_test_error_and_exit
+        ("${test}" --gtest_brief=1 >> "${TEST_OUTPUT_FILE}" 2>&1 && print_test_ok) || print_test_error_and_exit
     done < <(find "${TESTS_DIR}" -name "*_test" -type f)
     print_test_summary
 elif [ ! -z "${RUN_TEST}" ]; then
@@ -463,7 +463,7 @@ elif [ ! -z "${RUN_TEST}" ]; then
     echo "==> Running executable: ${TESTS_DIR}/${RUN_TEST}" >> "${TEST_OUTPUT_FILE}"
     echo "" >> "${TEST_OUTPUT_FILE}"
     print_test_prefix "${TESTS_DIR}/${RUN_TEST}"
-    ("${TESTS_DIR}/${RUN_TEST}" && print_test_ok) || print_test_error_and_exit
+    ("${TESTS_DIR}/${RUN_TEST}" --gtest_brief=1 && print_test_ok) || print_test_error_and_exit
     print_test_summary
 elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
     if [ ! -z "${TEST_PATTERN}" ]; then

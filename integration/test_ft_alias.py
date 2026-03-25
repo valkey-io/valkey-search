@@ -336,3 +336,77 @@ class TestFTAliasFlushDB(ValkeySearchTestCaseBase):
             assert client.execute_command("FT.INFO", ALIAS_NAME) is not None
         finally:
             client.execute_command("SELECT", "0")
+
+
+def _get_aliases_from_info(client, name):
+    """Extract the aliases list from FT.INFO response for the given name."""
+    info = client.execute_command("FT.INFO", name)
+    info_list = list(info)
+    idx = next(
+        (i for i, v in enumerate(info_list) if v == b"aliases"), None
+    )
+    assert idx is not None, "FT.INFO response missing 'aliases' field"
+    aliases = info_list[idx + 1]
+    if aliases is None:
+        return []
+    return sorted(aliases) if isinstance(aliases, list) else sorted(list(aliases))
+
+
+class TestFTInfoAliases(ValkeySearchTestCaseBase):
+    """Tests that FT.INFO reports aliases associated with an index."""
+
+    def test_info_no_aliases(self):
+        """FT.INFO on an index with no aliases returns an empty aliases list."""
+        client = self.client
+        assert client.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        aliases = _get_aliases_from_info(client, INDEX_NAME)
+        assert aliases == []
+
+    def test_info_single_alias(self):
+        """FT.INFO reports a single alias after ALIASADD."""
+        client = self.client
+        assert client.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        assert client.execute_command("FT.ALIASADD", ALIAS_NAME, INDEX_NAME) == b"OK"
+        aliases = _get_aliases_from_info(client, INDEX_NAME)
+        assert aliases == [ALIAS_NAME.encode()]
+
+    def test_info_multiple_aliases_sorted(self):
+        """FT.INFO reports multiple aliases in sorted order."""
+        client = self.client
+        assert client.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        assert client.execute_command("FT.ALIASADD", "z_alias", INDEX_NAME) == b"OK"
+        assert client.execute_command("FT.ALIASADD", "a_alias", INDEX_NAME) == b"OK"
+        aliases = _get_aliases_from_info(client, INDEX_NAME)
+        assert aliases == [b"a_alias", b"z_alias"]
+
+    def test_info_via_alias_shows_aliases(self):
+        """FT.INFO queried via alias still reports the aliases of the real index."""
+        client = self.client
+        assert client.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        assert client.execute_command("FT.ALIASADD", ALIAS_NAME, INDEX_NAME) == b"OK"
+        aliases = _get_aliases_from_info(client, ALIAS_NAME)
+        assert aliases == [ALIAS_NAME.encode()]
+
+    def test_info_alias_removed_after_aliasdel(self):
+        """After ALIASDEL, FT.INFO no longer reports the deleted alias."""
+        client = self.client
+        assert client.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        assert client.execute_command("FT.ALIASADD", ALIAS_NAME, INDEX_NAME) == b"OK"
+        assert client.execute_command("FT.ALIASDEL", ALIAS_NAME) == b"OK"
+        aliases = _get_aliases_from_info(client, INDEX_NAME)
+        assert aliases == []
+
+    def test_info_alias_updated_after_aliasupdate(self):
+        """After ALIASUPDATE moves an alias, FT.INFO reflects the change."""
+        client = self.client
+        assert client.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        assert client.execute_command(*CREATE_TAG_INDEX_2) == b"OK"
+        assert client.execute_command("FT.ALIASADD", ALIAS_NAME, INDEX_NAME) == b"OK"
+        # Move alias to INDEX_NAME_2
+        assert client.execute_command("FT.ALIASUPDATE", ALIAS_NAME, INDEX_NAME_2) == b"OK"
+        # INDEX_NAME should have no aliases now
+        aliases_idx1 = _get_aliases_from_info(client, INDEX_NAME)
+        assert aliases_idx1 == []
+        # INDEX_NAME_2 should have the alias
+        aliases_idx2 = _get_aliases_from_info(client, INDEX_NAME_2)
+        assert aliases_idx2 == [ALIAS_NAME.encode()]

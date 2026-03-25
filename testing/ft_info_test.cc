@@ -134,7 +134,8 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*28\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*30\r\n+index_name\r\n+test_name\r\n+aliases\r\n"
+                            "*0\r\n+index_"
                             "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
                             "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
                             "1\r\n1\r\n+attributes\r\n*1\r\n*10\r\n+"
@@ -190,7 +191,8 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*28\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*30\r\n+index_name\r\n+test_name\r\n+aliases\r\n"
+                            "*0\r\n+index_"
                             "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
                             "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
                             "1\r\n1\r\n+attributes\r\n*1\r\n*10\r\n+"
@@ -238,7 +240,8 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*28\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*30\r\n+index_name\r\n+test_name\r\n+aliases\r\n"
+                            "*0\r\n+index_"
                             "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
                             "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
                             "1\r\n1\r\n+attributes\r\n*1\r\n*14\r\n+"
@@ -282,7 +285,8 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*28\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*30\r\n+index_name\r\n+test_name\r\n+aliases\r\n"
+                            "*0\r\n+index_"
                             "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
                             "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
                             "1\r\n1\r\n+attributes\r\n*1\r\n*14\r\n+"
@@ -323,7 +327,8 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*28\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*30\r\n+index_name\r\n+test_name\r\n+aliases\r\n"
+                            "*0\r\n+index_"
                             "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
                             "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
                             "1\r\n1\r\n+attributes\r\n*1\r\n*10\r\n+"
@@ -392,7 +397,8 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                      .expect_return_failure = false,
                      .expected_output =
-                         "*36\r\n+index_name\r\n+test_name\r\n+index_"
+                         "*38\r\n+index_name\r\n+test_name\r\n+aliases\r\n"
+                         "*0\r\n+index_"
                          "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
                          "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
                          "1\r\n1\r\n+attributes\r\n*1\r\n*14\r\n+"
@@ -444,7 +450,8 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                      .expect_return_failure = false,
                      .expected_output =
-                         "*36\r\n+index_name\r\n+test_name\r\n+index_"
+                         "*38\r\n+index_name\r\n+test_name\r\n+aliases\r\n"
+                         "*0\r\n+index_"
                          "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
                          "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
                          "1\r\n1\r\n+attributes\r\n*1\r\n*14\r\n+"
@@ -505,6 +512,134 @@ INSTANTIATE_TEST_SUITE_P(
     [](const TestParamInfo<MultiFtInfoTestCase>& info) {
       return info.param.test_name;
     });
+
+// Verify that FT.INFO includes aliases in its response.
+class FTInfoAliasTest : public ValkeySearchTest {};
+
+TEST_F(FTInfoAliasTest, InfoShowsSingleAlias) {
+  vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 5);
+  SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+      &fake_ctx_, []() {}, &mutations_thread_pool, false));
+
+  data_model::IndexSchema proto;
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(R"(
+    name: "test_name"
+    db_num: 0
+    subscribed_key_prefixes: "prefix_1"
+    attribute_data_type: ATTRIBUTE_DATA_TYPE_HASH
+    attributes: {
+      alias: "test_attribute_1"
+      identifier: "test_identifier_1"
+      index: { numeric_index: {} }
+    }
+  )",
+                                                            &proto));
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().CreateIndexSchema(&fake_ctx_, proto));
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(0, "my_alias", "test_name"));
+
+  ValkeyModuleString* argv[2];
+  argv[0] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.Info");
+  argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_name");
+
+  EXPECT_EQ(vmsdk::CreateCommand<FTInfoCmd>(&fake_ctx_, argv, 2),
+            VALKEYMODULE_OK);
+
+  // The response should contain *30 (base 30) and the alias array with 1
+  // element.
+  auto reply = fake_ctx_.reply_capture.GetReply();
+  EXPECT_TRUE(reply.find("*30\r\n") == 0)
+      << "Expected arrSize 30, got: " << reply.substr(0, 10);
+  EXPECT_NE(reply.find("+aliases\r\n*1\r\n+my_alias\r\n"), std::string::npos)
+      << "Expected aliases array with my_alias in response";
+
+  for (auto* arg : argv) TestValkeyModule_FreeString(&fake_ctx_, arg);
+}
+
+TEST_F(FTInfoAliasTest, InfoShowsMultipleAliasesSorted) {
+  vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 5);
+  SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+      &fake_ctx_, []() {}, &mutations_thread_pool, false));
+
+  data_model::IndexSchema proto;
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(R"(
+    name: "test_name"
+    db_num: 0
+    subscribed_key_prefixes: "prefix_1"
+    attribute_data_type: ATTRIBUTE_DATA_TYPE_HASH
+    attributes: {
+      alias: "test_attribute_1"
+      identifier: "test_identifier_1"
+      index: { numeric_index: {} }
+    }
+  )",
+                                                            &proto));
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().CreateIndexSchema(&fake_ctx_, proto));
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(0, "z_alias", "test_name"));
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(0, "a_alias", "test_name"));
+
+  ValkeyModuleString* argv[2];
+  argv[0] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.Info");
+  argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_name");
+
+  EXPECT_EQ(vmsdk::CreateCommand<FTInfoCmd>(&fake_ctx_, argv, 2),
+            VALKEYMODULE_OK);
+
+  auto reply = fake_ctx_.reply_capture.GetReply();
+  // Aliases must be sorted alphabetically: a_alias before z_alias.
+  EXPECT_NE(reply.find("+aliases\r\n*2\r\n+a_alias\r\n+z_alias\r\n"),
+            std::string::npos)
+      << "Expected sorted aliases array in response";
+
+  for (auto* arg : argv) TestValkeyModule_FreeString(&fake_ctx_, arg);
+}
+
+TEST_F(FTInfoAliasTest, InfoViaAliasShowsEmptyAliasesForRealIndex) {
+  vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 5);
+  SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+      &fake_ctx_, []() {}, &mutations_thread_pool, false));
+
+  data_model::IndexSchema proto;
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(R"(
+    name: "test_name"
+    db_num: 0
+    subscribed_key_prefixes: "prefix_1"
+    attribute_data_type: ATTRIBUTE_DATA_TYPE_HASH
+    attributes: {
+      alias: "test_attribute_1"
+      identifier: "test_identifier_1"
+      index: { numeric_index: {} }
+    }
+  )",
+                                                            &proto));
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().CreateIndexSchema(&fake_ctx_, proto));
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(0, "my_alias", "test_name"));
+
+  // Query via alias name — the response should still show the real index
+  // name and its aliases.
+  ValkeyModuleString* argv[2];
+  argv[0] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.Info");
+  argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "my_alias");
+
+  EXPECT_EQ(vmsdk::CreateCommand<FTInfoCmd>(&fake_ctx_, argv, 2),
+            VALKEYMODULE_OK);
+
+  auto reply = fake_ctx_.reply_capture.GetReply();
+  // index_name should be the real name, not the alias.
+  EXPECT_NE(reply.find("+index_name\r\n+test_name\r\n"), std::string::npos)
+      << "Expected real index name in response";
+  // Aliases should include my_alias.
+  EXPECT_NE(reply.find("+aliases\r\n*1\r\n+my_alias\r\n"), std::string::npos)
+      << "Expected aliases array with my_alias in response";
+
+  for (auto* arg : argv) TestValkeyModule_FreeString(&fake_ctx_, arg);
+}
 
 }  // namespace
 

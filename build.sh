@@ -314,10 +314,10 @@ function print_test_summary() {
 function print_test_error_and_exit() {
     printf " ... ${RED}failed${RESET}\n"
     if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then
-        cat "${TEST_OUTPUT_FILE}"
-        # To avoid dumping the content over and over again,
-        # clear the file
-        cp /dev/null "${TEST_OUTPUT_FILE}"
+        # Only dump the failed test's output, not the entire accumulated log
+        if [ -f "${CURRENT_TEST_OUTPUT_FILE}" ]; then
+            cat "${CURRENT_TEST_OUTPUT_FILE}"
+        fi
     fi
 
     # When running tests with sanitizer enabled, do not terminate the execution after the first failure continue
@@ -465,19 +465,26 @@ fi
 
 if [[ "${RUN_TEST}" == "all" ]]; then
     rm -f "${TEST_OUTPUT_FILE}"
+    CURRENT_TEST_OUTPUT_FILE="${BUILD_DIR}/current_test.out"
     while read -r test; do
         echo "==> Running executable: ${test}" >> "${TEST_OUTPUT_FILE}"
         echo "" >> "${TEST_OUTPUT_FILE}"
+        # Write each test's output to a per-test file so on failure we only dump the relevant output
+        rm -f "${CURRENT_TEST_OUTPUT_FILE}"
         print_test_prefix "${test}"
-        ("${test}" --gtest_brief=1 >> "${TEST_OUTPUT_FILE}" 2>&1 && print_test_ok) || print_test_error_and_exit
+        ("${test}" --gtest_brief=1 > "${CURRENT_TEST_OUTPUT_FILE}" 2>&1 && cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}" && print_test_ok) || { cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}"; print_test_error_and_exit; }
     done < <(find "${TESTS_DIR}" -name "*_test" -type f)
+    rm -f "${CURRENT_TEST_OUTPUT_FILE}"
     print_test_summary
 elif [ ! -z "${RUN_TEST}" ]; then
     rm -f "${TEST_OUTPUT_FILE}"
+    CURRENT_TEST_OUTPUT_FILE="${BUILD_DIR}/current_test.out"
     echo "==> Running executable: ${TESTS_DIR}/${RUN_TEST}" >> "${TEST_OUTPUT_FILE}"
     echo "" >> "${TEST_OUTPUT_FILE}"
+    rm -f "${CURRENT_TEST_OUTPUT_FILE}"
     print_test_prefix "${TESTS_DIR}/${RUN_TEST}"
-    ("${TESTS_DIR}/${RUN_TEST}" --gtest_brief=1 && print_test_ok) || print_test_error_and_exit
+    ("${TESTS_DIR}/${RUN_TEST}" --gtest_brief=1 > "${CURRENT_TEST_OUTPUT_FILE}" 2>&1 && cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}" && print_test_ok) || { cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}"; print_test_error_and_exit; }
+    rm -f "${CURRENT_TEST_OUTPUT_FILE}"
     print_test_summary
 elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
     if [ ! -z "${TEST_PATTERN}" ]; then

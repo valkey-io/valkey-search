@@ -468,6 +468,40 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                         for limit in ["LIMIT 0 5", "LIMIT 2 3", ""]:
                             self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY {sort_key} {direction} {return_keys} {limit} {wsk}")
 
+    def test_alias_search(self, key_type, dialect):
+        """FT.SEARCH via alias returns same results as via the real index name."""
+        self.setup_data("sortable numbers", key_type)
+        idx = f"{key_type}_idx1"
+        alias = f"{key_type}_alias_compat"
+        self.client.execute_command("FT.ALIASADD", alias, idx)
+        self.check(dialect, f"ft.search {alias} @n1:[-inf inf]")
+        self.check(dialect, f"ft.search {alias} @n1:[-inf inf] SORTBY n1 ASC")
+        self.check(dialect, f"ft.search {alias} @t1:{{aaaaaaa*}}")
+        self.check(dialect, f"ft.search {alias} * SORTBY n2 DESC LIMIT 0 5")
+        self.client.execute_command("FT.ALIASDEL", alias)
+
+    def test_alias_aggregate(self, key_type, dialect):
+        """FT.AGGREGATE via alias returns same results as via the real index name."""
+        self.setup_data("sortable numbers", key_type)
+        idx = f"{key_type}_idx1"
+        alias = f"{key_type}_alias_compat"
+        self.client.execute_command("FT.ALIASADD", alias, idx)
+        self.check(dialect, f"ft.aggregate {alias} * load 3 @__key @n1 @n2 sortby 2 @__key asc")
+        self.check(dialect, f"ft.aggregate {alias} * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce count 0 as count")
+        self.check(dialect, f"ft.aggregate {alias} * load 3 @__key @n1 @n2 sortby 2 @__key desc limit 0 5")
+        self.client.execute_command("FT.ALIASDEL", alias)
+
+    def test_aliasupdate_search(self, key_type, dialect):
+        """FT.ALIASUPDATE reassigns alias; queries via alias reflect the new target."""
+        self.setup_data("sortable numbers", key_type)
+        idx = f"{key_type}_idx1"
+        alias = f"{key_type}_alias_compat"
+        # Create alias then immediately update it to the same index (upsert).
+        self.client.execute_command("FT.ALIASADD", alias, idx)
+        self.client.execute_command("FT.ALIASUPDATE", alias, idx)
+        self.check(dialect, f"ft.search {alias} @n1:[-inf inf] SORTBY n1 ASC")
+        self.client.execute_command("FT.ALIASDEL", alias)
+
 
 
 @pytest.mark.parametrize("key_type", ["hash"])

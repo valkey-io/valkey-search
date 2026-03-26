@@ -311,6 +311,14 @@ def compare_results(expected, results):
         print(TEST_MARKER)
         return False
 
+    # Handle simple (non-list) results from mutation commands like ALIASADD/ALIASDEL/ALIASUPDATE.
+    # These return b'OK' rather than a list, so unpack_result would crash on them.
+    if not isinstance(expected["result"], list):
+        match = expected["result"] == results["result"]
+        if not match:
+            print(f"Simple result mismatch: expected={expected['result']!r} got={results['result']!r}")
+        return match
+
     # Output raw results
     # print("Raw expected result:", expected["result"])
     rl = unpack_result(cmd, expected["key_type"], expected["result"], sortkeys)

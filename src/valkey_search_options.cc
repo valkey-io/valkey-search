@@ -581,7 +581,9 @@ config::Boolean& GetHNSWAllowReplaceDeletedMutable() {
 absl::Status Reset() {
   VMSDK_RETURN_IF_ERROR(use_coordinator->SetValue(false));
   VMSDK_RETURN_IF_ERROR(rdb_load_skip_index->SetValue(false));
-  VMSDK_RETURN_IF_ERROR(hnsw_allow_replace_deleted->SetValue(false));
+  if (vmsdk::config::IsDebugModeEnabled()) {
+    VMSDK_RETURN_IF_ERROR(hnsw_allow_replace_deleted->SetValue(false));
+  }
   return absl::OkStatus();
 }
 

@@ -15,9 +15,11 @@
 #include "absl/status/status.h"
 #include "absl/strings/str_format.h"
 #include "gmock/gmock.h"
+#include "google/protobuf/any.pb.h"
 #include "google/protobuf/text_format.h"
 #include "gtest/gtest.h"
 #include "src/coordinator/metadata_manager.h"
+#include "src/rdb_section.pb.h"
 #include "testing/common.h"
 #include "testing/coordinator/common.h"
 #include "vmsdk/src/testing_infra/module.h"
@@ -1218,6 +1220,213 @@ TEST_F(SchemaManagerCoordinatorAliasTest, RemoveIndexSchemaTombstonesAliases) {
   EXPECT_EQ(coordinator::MetadataManager::Instance()
                 .GetEntryContent(kAliasMetadataTypeName,
                                  coordinator::ObjName(kDb0, "alias_b"))
+                .status()
+                .code(),
+            absl::StatusCode::kNotFound);
+}
+
+// SaveAliases serializes aliases correctly across multiple DBs.
+// Calls SaveAliases with a FakeSafeRDB, deserializes the captured bytes back
+// into an AliasMap proto, and verifies the entries match.
+TEST_F(SchemaManagerAliasTest, SaveAliasesAfterRDB) {
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "save_alias_a", kIndexName));
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "save_alias_b", kIndexName));
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb1, "save_alias_c", kIndexName));
+
+  FakeSafeRDB fake_rdb;
+  VMSDK_EXPECT_OK(SchemaManager::Instance().SaveAliases(
+      &fake_ctx_, &fake_rdb, VALKEYMODULE_AUX_AFTER_RDB));
+
+  // Deserialize: SaveStringBuffer writes size then data.
+  auto saved_str = fake_rdb.LoadString();
+  VMSDK_EXPECT_OK(saved_str);
+  size_t len;
+  const char *buf = ValkeyModule_StringPtrLen(saved_str.value().get(), &len);
+  data_model::RDBSection section;
+  ASSERT_TRUE(section.ParseFromArray(buf, len));
+  EXPECT_EQ(section.type(), data_model::RDB_SECTION_ALIAS_MAP);
+  EXPECT_EQ(section.supplemental_count(), 0);
+
+  const auto &entries = section.alias_map_contents().entries();
+  EXPECT_EQ(entries.size(), 3);
+
+  // Collect into a set for order-independent comparison (flat_hash_map
+  // iteration order is unspecified).
+  absl::flat_hash_set<std::string> found;
+  for (const auto &e : entries) {
+    found.insert(
+        absl::StrFormat("%d/%s->%s", e.db_num(), e.alias(), e.index_name()));
+  }
+  EXPECT_TRUE(found.contains("0/save_alias_a->test_key"));
+  EXPECT_TRUE(found.contains("0/save_alias_b->test_key"));
+  EXPECT_TRUE(found.contains("1/save_alias_c->test_key"));
+}
+
+// SaveAliases BEFORE_RDB is a no-op.
+TEST_F(SchemaManagerAliasTest, SaveAliasesBeforeRDBIsNoop) {
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "noop_alias", kIndexName));
+
+  FakeSafeRDB fake_rdb;
+  VMSDK_EXPECT_OK(SchemaManager::Instance().SaveAliases(
+      &fake_ctx_, &fake_rdb, VALKEYMODULE_AUX_BEFORE_RDB));
+
+  // Nothing should have been written to the RDB buffer.
+  EXPECT_EQ(fake_rdb.buffer_.str().size(), 0u);
+}
+
+// OnAliasMetadataCallback with a missing target index must return OkStatus
+// without inserting the alias (transient during reconciliation; will retry).
+TEST_F(SchemaManagerCoordinatorAliasTest,
+       OnAliasMetadataCallbackMissingTargetIndex) {
+  data_model::AliasEntry entry;
+  entry.set_index_name("nonexistent_index");
+  auto any_proto = std::make_unique<google::protobuf::Any>();
+  any_proto->PackFrom(entry);
+
+  // OnAliasMetadataCallback is private; exercise it via MetadataManager.
+  auto status = coordinator::MetadataManager::Instance().CreateEntry(
+      kAliasMetadataTypeName, coordinator::ObjName(kDb0, "orphan_alias"),
+      std::move(any_proto));
+  // CreateEntry itself succeeds (the entry is stored in MetadataManager).
+  VMSDK_EXPECT_OK(status);
+
+  // But the alias must NOT resolve because the target index is missing.
+  EXPECT_EQ(SchemaManager::Instance()
+                .GetIndexSchema(kDb0, "orphan_alias")
+                .status()
+                .code(),
+            absl::StatusCode::kNotFound);
+}
+
+// ComputeAliasFingerprint must not crash on a malformed Any payload.
+TEST_F(SchemaManagerCoordinatorAliasTest,
+       CreateEntryWithMalformedAnyHandledGracefully) {
+  auto bad_any = std::make_unique<google::protobuf::Any>();
+  bad_any->set_type_url(
+      "type.googleapis.com/valkey_search.data_model.AliasEntry");
+  bad_any->set_value("not-valid-proto-bytes");
+  // Protobuf is lenient with unknown bytes so UnpackTo may succeed on garbage;
+  // either outcome is acceptable as long as the alias does not resolve.
+  auto status = coordinator::MetadataManager::Instance().CreateEntry(
+      kAliasMetadataTypeName, coordinator::ObjName(kDb0, "bad_alias"),
+      std::move(bad_any));
+  // Either succeeds (protobuf parsed garbage) or returns an error — both OK.
+  EXPECT_EQ(SchemaManager::Instance()
+                .GetIndexSchema(kDb0, "bad_alias")
+                .status()
+                .code(),
+            absl::StatusCode::kNotFound);
+}
+
+// RemoveAll (via OnShutdownCallback) clears aliases.
+TEST_F(SchemaManagerAliasTest, ShutdownClearsAliases) {
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "shutdown_alias", kIndexName));
+
+  ValkeyModuleEvent eid;
+  SchemaManager::Instance().OnShutdownCallback(&fake_ctx_, eid, 0, nullptr);
+  EXPECT_EQ(SchemaManager::Instance()
+                .GetIndexSchema(kDb0, kIndexName)
+                .status()
+                .code(),
+            absl::StatusCode::kNotFound);
+  EXPECT_EQ(SchemaManager::Instance()
+                .GetIndexSchema(kDb0, "shutdown_alias")
+                .status()
+                .code(),
+            absl::StatusCode::kNotFound);
+}
+
+// OnLoadingEnded during replication clears stale aliases so LoadAliasMap
+// starts from a clean slate.
+TEST_F(SchemaManagerAliasTest, ReplicationLoadClearsStaleAliases) {
+  ON_CALL(*kMockValkeyModule, GetContextFromIO(testing::_))
+      .WillByDefault(testing::Return(&fake_ctx_));
+
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "stale_alias", kIndexName));
+
+  ValkeyModuleEvent eid;
+  SchemaManager::Instance().OnLoadingCallback(
+      &fake_ctx_, eid, VALKEYMODULE_SUBEVENT_LOADING_REPL_START, nullptr);
+
+  FakeSafeRDB fake_rdb;
+  auto section = std::make_unique<data_model::RDBSection>();
+  section->set_type(data_model::RDB_SECTION_INDEX_SCHEMA);
+  section->mutable_index_schema_contents()->CopyFrom(index_schema_proto_);
+  section->set_supplemental_count(0);
+  VMSDK_EXPECT_OK(SchemaManager::Instance().LoadIndex(
+      &fake_ctx_, std::move(section), SupplementalContentIter(&fake_rdb, 0)));
+
+  SchemaManager::Instance().OnLoadingCallback(
+      &fake_ctx_, eid, VALKEYMODULE_SUBEVENT_LOADING_ENDED, nullptr);
+
+  VMSDK_EXPECT_OK(SchemaManager::Instance().GetIndexSchema(kDb0, kIndexName));
+
+  // db_to_aliases_ is cleared by OnLoadingEnded; the alias is gone.
+  EXPECT_EQ(SchemaManager::Instance()
+                .GetIndexSchema(kDb0, "stale_alias")
+                .status()
+                .code(),
+            absl::StatusCode::kNotFound);
+}
+
+// OnSwapDB — both DBs have aliases (has_a && has_b branch of swap_aliases).
+TEST_F(SchemaManagerAliasTest, OnSwapDBAliasesBothDBsHaveAliases) {
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "alias_in_0", kIndexName));
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb1, "alias_in_1", kIndexName));
+
+  VMSDK_EXPECT_OK(SchemaManager::Instance().GetIndexSchema(kDb0, "alias_in_0"));
+  VMSDK_EXPECT_OK(SchemaManager::Instance().GetIndexSchema(kDb1, "alias_in_1"));
+  EXPECT_EQ(SchemaManager::Instance()
+                .GetIndexSchema(kDb0, "alias_in_1")
+                .status()
+                .code(),
+            absl::StatusCode::kNotFound);
+  EXPECT_EQ(SchemaManager::Instance()
+                .GetIndexSchema(kDb1, "alias_in_0")
+                .status()
+                .code(),
+            absl::StatusCode::kNotFound);
+
+  ValkeyModuleSwapDbInfo swap_db_info;
+  swap_db_info.dbnum_first = kDb0;
+  swap_db_info.dbnum_second = kDb1;
+  SchemaManager::Instance().OnSwapDB(&swap_db_info);
+
+  VMSDK_EXPECT_OK(SchemaManager::Instance().GetIndexSchema(kDb1, "alias_in_0"));
+  VMSDK_EXPECT_OK(SchemaManager::Instance().GetIndexSchema(kDb0, "alias_in_1"));
+  EXPECT_EQ(SchemaManager::Instance()
+                .GetIndexSchema(kDb0, "alias_in_0")
+                .status()
+                .code(),
+            absl::StatusCode::kNotFound);
+  EXPECT_EQ(SchemaManager::Instance()
+                .GetIndexSchema(kDb1, "alias_in_1")
+                .status()
+                .code(),
+            absl::StatusCode::kNotFound);
+}
+
+// OnSwapDB — only DB 1 has aliases (!has_a && has_b branch of swap_aliases).
+TEST_F(SchemaManagerAliasTest, OnSwapDBAliasesOnlySecondDBHasAlias) {
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb1, "alias_in_1", kIndexName));
+
+  ValkeyModuleSwapDbInfo swap_db_info;
+  swap_db_info.dbnum_first = kDb0;
+  swap_db_info.dbnum_second = kDb1;
+  SchemaManager::Instance().OnSwapDB(&swap_db_info);
+
+  VMSDK_EXPECT_OK(SchemaManager::Instance().GetIndexSchema(kDb0, "alias_in_1"));
+  EXPECT_EQ(SchemaManager::Instance()
+                .GetIndexSchema(kDb1, "alias_in_1")
                 .status()
                 .code(),
             absl::StatusCode::kNotFound);

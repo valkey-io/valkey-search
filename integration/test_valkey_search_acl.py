@@ -258,7 +258,13 @@ class TestCommandsACLs(ValkeySearchTestCaseBase):
             ),
             (
                 "FT._DEBUG",
-                [b"readonly", b"module", b"admin"],
+                [
+                    b"module",
+                    b"admin",
+                    b"noscript",
+                    b"loading",
+                    b"stale",
+                ],
                 [b"@admin", b"@slow", b"@dangerous", b"@search"],
             ),
         ]

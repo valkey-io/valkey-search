@@ -503,6 +503,7 @@ TEST_F(VectorIndexTest, SaveAndLoadHnsw) {
 // Verify allow-replace-deleted replaces deleted HNSW elements
 TEST_F(VectorIndexTest, AllowReplaceDeletedNoLabelReuse)
 ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  VMSDK_EXPECT_OK(options::GetHNSWAllowReplaceDeletedMutable().SetValue(true));
   EXPECT_TRUE(options::GetHNSWAllowReplaceDeleted().GetValue());
   auto index = VectorHNSW<float>::Create(
       CreateHNSWVectorIndexProto(kDimensions, data_model::DISTANCE_METRIC_L2,

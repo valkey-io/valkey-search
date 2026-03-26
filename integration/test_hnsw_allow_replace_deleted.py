@@ -3,14 +3,14 @@ import os
 import pytest
 
 from valkey.client import Valkey
-from valkey_search_test_case import ValkeySearchTestCaseBase
+from valkey_search_test_case import ValkeySearchTestCaseDebugMode
 from valkeytestframework.conftest import resource_port_tracker
 from indexes import Index, Vector
 from ft_info_parser import FTInfoParser
 from util import waiters
 
 
-class TestHNSWAllowReplaceDeleted(ValkeySearchTestCaseBase):
+class TestHNSWAllowReplaceDeleted(ValkeySearchTestCaseDebugMode):
     """
     Verify HNSW allow_replace_deleted works correctly with both yes/no settings.
     """

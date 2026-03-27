@@ -542,6 +542,21 @@ static vmsdk::info_field::Float coordinator_threads_cpu_time_sec(
         }));
 
 static vmsdk::info_field::Integer
+    coordinator_server_search_index_partition_cpu_time_usec(
+        "coordinator",
+        "coordinator_server_search_index_partition_cpu_time_usec",
+        vmsdk::info_field::IntegerBuilder()
+            .App()
+            .Units(vmsdk::info_field::Units::kMicroSeconds)
+            .Computed([]() -> long long {
+              return Metrics::GetStats()
+                  .coordinator_server_search_index_partition_cpu_time_usec;
+            })
+            .VisibleIf([]() -> bool {
+              return ValkeySearch::Instance().UsingCoordinator();
+            }));
+
+static vmsdk::info_field::Integer
     coordinator_server_get_global_metadata_success_count(
         "coordinator", "coordinator_server_get_global_metadata_success_count",
         vmsdk::info_field::IntegerBuilder()

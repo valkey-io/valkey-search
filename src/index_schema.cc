@@ -1837,25 +1837,7 @@ size_t IndexSchema::ComputeWeightedBufferSize(
     uint32_t weight = 0;
     auto attr_itr = attributes_.find(alias);
     if (attr_itr != attributes_.end()) {
-      switch (attr_itr->second.GetIndex()->GetIndexerType()) {
-        case indexes::IndexerType::kHNSW:
-        case indexes::IndexerType::kFlat:
-        case indexes::IndexerType::kVector:
-          weight = options::GetMutationWeightVector().GetValue();
-          break;
-        case indexes::IndexerType::kText:
-          weight = options::GetMutationWeightText().GetValue();
-          break;
-        case indexes::IndexerType::kNumeric:
-          weight = options::GetMutationWeightNumeric().GetValue();
-          break;
-        case indexes::IndexerType::kTag:
-          weight = options::GetMutationWeightTag().GetValue();
-          break;
-        case indexes::IndexerType::kNone:
-          weight = 0;
-          break;
-      }
+      weight = attr_itr->second.GetIndex()->GetMutationWeight();
     }
     total += data_size * weight;
   }

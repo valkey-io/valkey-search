@@ -657,6 +657,7 @@ static auto mutation_weight_vector =
     config::NumberBuilder(kMutationWeightVectorConfig,
                           kDefaultMutationWeightVector, kMinimumMutationWeight,
                           kMaximumMutationWeight)
+        .Dev()
         .Build();
 
 /// Register the "--mutation-weight-text" flag. Controls the weight multiplier
@@ -667,6 +668,7 @@ static auto mutation_weight_text =
     config::NumberBuilder(kMutationWeightTextConfig,
                           kDefaultMutationWeightText, kMinimumMutationWeight,
                           kMaximumMutationWeight)
+        .Dev()
         .Build();
 
 /// Register the "--mutation-weight-numeric" flag. Controls the weight
@@ -679,6 +681,7 @@ static auto mutation_weight_numeric =
     config::NumberBuilder(kMutationWeightNumericConfig,
                           kDefaultMutationWeightNumeric,
                           kMinimumMutationWeight, kMaximumMutationWeight)
+        .Dev()
         .Build();
 
 /// Register the "--mutation-weight-tag" flag. Controls the weight multiplier
@@ -688,6 +691,7 @@ constexpr uint32_t kDefaultMutationWeightTag{330};
 static auto mutation_weight_tag =
     config::NumberBuilder(kMutationWeightTagConfig, kDefaultMutationWeightTag,
                           kMinimumMutationWeight, kMaximumMutationWeight)
+        .Dev()
         .Build();
 
 config::Number& GetMutationWeightVector() {

@@ -141,6 +141,8 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
                                const AttributeDataType* attribute_data_type,
                                SupplementalContentChunkIter&& iter);
 
+  uint32_t GetMutationWeight() const override;
+
   size_t GetTrackedKeyCount() const override
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   size_t GetUnTrackedKeyCount() const override

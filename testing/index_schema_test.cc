@@ -1565,8 +1565,8 @@ TEST_F(IndexSchemaFriendTest, WeightedBuffer) {
   // "hnsw_id". Add additional index types for testing.
   auto numeric_index =
       std::make_shared<indexes::Numeric>(CreateNumericIndexProto());
-  VMSDK_EXPECT_OK(
-      index_schema->AddIndex("numeric_id", "numeric_identifier", numeric_index));
+  VMSDK_EXPECT_OK(index_schema->AddIndex("numeric_id", "numeric_identifier",
+                                         numeric_index));
 
   auto tag_index =
       std::make_shared<indexes::Tag>(CreateTagIndexProto(",", false));
@@ -1574,9 +1574,9 @@ TEST_F(IndexSchemaFriendTest, WeightedBuffer) {
       index_schema->AddIndex("tag_id", "tag_identifier", tag_index));
 
   index_schema->CreateTextIndexSchema();
-  auto text_index = std::make_shared<indexes::Text>(
-      CreateTextIndexProto(true, false, 1.0),
-      index_schema->GetTextIndexSchema());
+  auto text_index =
+      std::make_shared<indexes::Text>(CreateTextIndexProto(true, false, 1.0),
+                                      index_schema->GetTextIndexSchema());
   VMSDK_EXPECT_OK(
       index_schema->AddIndex("text_id", "text_identifier", text_index));
 
@@ -1686,8 +1686,7 @@ TEST_F(IndexSchemaFriendTest, WeightedBuffer) {
   {
     VMSDK_EXPECT_OK(options::GetMutationWeightVector().SetValue(200));
     std::string data(100, 'v');  // 100 bytes
-    auto mutated_attrs =
-        CreateMutatedAttributes(attribute_identifier, data);
+    auto mutated_attrs = CreateMutatedAttributes(attribute_identifier, data);
     auto key7 = StringInternStore::Intern("weighted_key_7");
     EXPECT_TRUE(index_schema->TrackMutatedRecord(
         nullptr, key7, std::move(mutated_attrs), 0, false, false, false));

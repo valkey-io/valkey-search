@@ -477,8 +477,7 @@ class IndexSchema : public KeyspaceEventSubscription,
                           bool from_multi)
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
 
-  size_t ComputeWeightedBufferSize(
-      const MutatedAttributes &attributes) const;
+  size_t ComputeWeightedBufferSize(const MutatedAttributes &attributes) const;
 
   // REQUIRES: time_sliced_mutex_ held in write phase
   std::optional<MutatedAttributes> ConsumeTrackedMutatedAttribute(

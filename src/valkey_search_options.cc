@@ -665,9 +665,8 @@ static auto mutation_weight_vector =
 constexpr absl::string_view kMutationWeightTextConfig{"mutation-weight-text"};
 constexpr uint32_t kDefaultMutationWeightText{550};
 static auto mutation_weight_text =
-    config::NumberBuilder(kMutationWeightTextConfig,
-                          kDefaultMutationWeightText, kMinimumMutationWeight,
-                          kMaximumMutationWeight)
+    config::NumberBuilder(kMutationWeightTextConfig, kDefaultMutationWeightText,
+                          kMinimumMutationWeight, kMaximumMutationWeight)
         .Dev()
         .Build();
 
@@ -679,8 +678,8 @@ constexpr absl::string_view kMutationWeightNumericConfig{
 constexpr uint32_t kDefaultMutationWeightNumeric{430};
 static auto mutation_weight_numeric =
     config::NumberBuilder(kMutationWeightNumericConfig,
-                          kDefaultMutationWeightNumeric,
-                          kMinimumMutationWeight, kMaximumMutationWeight)
+                          kDefaultMutationWeightNumeric, kMinimumMutationWeight,
+                          kMaximumMutationWeight)
         .Dev()
         .Build();
 

@@ -31,6 +31,7 @@
 #include "src/indexes/vector_hnsw.h"
 #include "src/utils/cancel.h"
 #include "src/utils/string_interning.h"
+#include "src/valkey_search_options.h"
 #include "testing/common.h"
 #include "third_party/hnswlib/space_ip.h"
 #include "third_party/hnswlib/space_l2.h"
@@ -497,6 +498,44 @@ TEST_F(VectorIndexTest, SaveAndLoadHnsw) {
       EXPECT_GE(default_ef_runtime_recall, 0.96f);
     }
   }
+}
+
+// Verify allow-replace-deleted replaces deleted HNSW elements
+TEST_F(VectorIndexTest, AllowReplaceDeletedNoLabelReuse)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  VMSDK_EXPECT_OK(options::GetHNSWAllowReplaceDeletedMutable().SetValue(true));
+  EXPECT_TRUE(options::GetHNSWAllowReplaceDeleted().GetValue());
+  auto index = VectorHNSW<float>::Create(
+      CreateHNSWVectorIndexProto(kDimensions, data_model::DISTANCE_METRIC_L2,
+                                 kInitialCap, kM, kEFConstruction, kEFRuntime),
+      "attr_id", data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
+  VMSDK_EXPECT_OK(index);
+  auto vectors = DeterministicallyGenerateVectors(10, kDimensions, 10.0);
+  for (size_t i = 0; i < vectors.size(); ++i) {
+    VerifyAdd(index->get(), vectors, i, ExpectedResults::kSuccess);
+  }
+  VectorBase* base = index->get();
+  EXPECT_EQ(base->GetMaxInternalLabel(), 9u);
+  VMSDK_EXPECT_OK((*index)->RemoveRecord(IndexToKey(8), DeletionType::kNone));
+  VMSDK_EXPECT_OK((*index)->RemoveRecord(IndexToKey(9), DeletionType::kNone));
+  EXPECT_EQ(base->GetMaxInternalLabel(), 9u);
+  EXPECT_EQ(base->GetLabelCount(), 10u);
+  EXPECT_EQ(base->GetTrackedKeyCount(), 8u);
+  auto new_vectors = DeterministicallyGenerateVectors(5, kDimensions, 20.0);
+  for (size_t i = 0; i < new_vectors.size(); ++i) {
+    auto key = StringInternStore::Intern(absl::StrCat("new_", i, "_key"));
+    absl::string_view vec_str = VectorToStr(new_vectors[i]);
+    auto res = (*index)->AddRecord(key, vec_str);
+    VMSDK_EXPECT_OK(res) << "AddRecord failed for new vector " << i;
+    EXPECT_TRUE(res.value());
+  }
+  EXPECT_EQ(base->GetTrackedKeyCount(), 13u);
+  // Verifies we reused tombstoned hnsw nodes
+  EXPECT_EQ(base->GetLabelCount(), 13u);
+  absl::string_view query = VectorToStr(new_vectors[0]);
+  auto search_result = (*index)->Search(query, 13, CancelNever());
+  VMSDK_EXPECT_OK(search_result);
+  EXPECT_EQ(search_result->size(), 13u);
 }
 
 TEST_F(VectorIndexTest, SaveAndLoadFlat) {

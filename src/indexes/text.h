@@ -103,6 +103,8 @@ class Text : public IndexBase {
   size_t GetTrackedKeyCount() const override;
   std::unique_ptr<data_model::Index> ToProto() const override;
 
+  uint32_t GetMutationWeight() const override;
+
   InternedStringPtr GetRawValue(const InternedStringPtr& key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
 

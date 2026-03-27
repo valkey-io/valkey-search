@@ -42,6 +42,7 @@
 #include "src/query/predicate.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
+#include "src/valkey_search_options.h"
 #include "src/vector_externalizer.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "third_party/hnswlib/space_ip.h"
@@ -487,6 +488,10 @@ std::unique_ptr<data_model::Index> VectorBase::ToProto() const {
   ToProtoImpl(vector_index.get());
   index_proto->set_allocated_vector_index(vector_index.release());
   return index_proto;
+}
+
+uint32_t VectorBase::GetMutationWeight() const {
+  return options::GetMutationWeightVector().GetValue();
 }
 
 absl::StatusOr<std::pair<float, hnswlib::labeltype>>

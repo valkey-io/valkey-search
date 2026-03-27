@@ -228,6 +228,10 @@ std::unique_ptr<data_model::Index> Tag::ToProto() const {
   return index_proto;
 }
 
+uint32_t Tag::GetMutationWeight() const {
+  return options::GetMutationWeightTag().GetValue();
+}
+
 InternedStringPtr Tag::GetRawValue(const InternedStringPtr& key) const {
   // Note that the Tag index is not mutated while the time sliced mutex is
   // in a read mode and therefor it is safe to skip lock acquiring.

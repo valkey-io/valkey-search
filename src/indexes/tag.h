@@ -65,6 +65,8 @@ class Tag : public IndexBase {
       const override ABSL_LOCKS_EXCLUDED(index_mutex_);
   std::unique_ptr<data_model::Index> ToProto() const override;
 
+  uint32_t GetMutationWeight() const override;
+
   InternedStringPtr GetRawValue(const InternedStringPtr& key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
 

@@ -467,11 +467,11 @@ absl::Status VectorBase::LoadTrackedKeys(
           .magnitude = tracked_key_metadata.magnitude()}});
     key_by_internal_id_.insert(
         {tracked_key_metadata.internal_id(), interned_key});
-    inc_id_ = std::max(
-        inc_id_, static_cast<uint64_t>(tracked_key_metadata.internal_id()));
     ExternalizeVector(ctx, attribute_data_type, tracked_key_metadata.key(),
                       attribute_identifier_);
   }
+  // Use max label from label_lookup_
+  inc_id_ = GetMaxInternalLabel();
   ++inc_id_;
   return absl::OkStatus();
 }

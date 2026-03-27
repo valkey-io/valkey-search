@@ -662,5 +662,65 @@ vmsdk::config::Number& GetMaxNonVectorSearchResultsFetched() {
       *max_nonvector_search_results_fetched);
 }
 
+/// Register the "--mutation-weight-vector" flag. Controls the weight multiplier
+/// for vector index types in mutation queue entries (scale: 100 = 1.0x)
+constexpr absl::string_view kMutationWeightVectorConfig{
+    "mutation-weight-vector"};
+constexpr uint32_t kDefaultMutationWeightVector{130};
+constexpr uint32_t kMinimumMutationWeight{0};
+constexpr uint32_t kMaximumMutationWeight{10000};
+static auto mutation_weight_vector =
+    config::NumberBuilder(kMutationWeightVectorConfig,
+                          kDefaultMutationWeightVector, kMinimumMutationWeight,
+                          kMaximumMutationWeight)
+        .Build();
+
+/// Register the "--mutation-weight-text" flag. Controls the weight multiplier
+/// for text index types in mutation queue entries (scale: 100 = 1.0x)
+constexpr absl::string_view kMutationWeightTextConfig{"mutation-weight-text"};
+constexpr uint32_t kDefaultMutationWeightText{550};
+static auto mutation_weight_text =
+    config::NumberBuilder(kMutationWeightTextConfig,
+                          kDefaultMutationWeightText, kMinimumMutationWeight,
+                          kMaximumMutationWeight)
+        .Build();
+
+/// Register the "--mutation-weight-numeric" flag. Controls the weight
+/// multiplier for numeric index types in mutation queue entries
+/// (scale: 100 = 1.0x)
+constexpr absl::string_view kMutationWeightNumericConfig{
+    "mutation-weight-numeric"};
+constexpr uint32_t kDefaultMutationWeightNumeric{430};
+static auto mutation_weight_numeric =
+    config::NumberBuilder(kMutationWeightNumericConfig,
+                          kDefaultMutationWeightNumeric,
+                          kMinimumMutationWeight, kMaximumMutationWeight)
+        .Build();
+
+/// Register the "--mutation-weight-tag" flag. Controls the weight multiplier
+/// for tag index types in mutation queue entries (scale: 100 = 1.0x)
+constexpr absl::string_view kMutationWeightTagConfig{"mutation-weight-tag"};
+constexpr uint32_t kDefaultMutationWeightTag{330};
+static auto mutation_weight_tag =
+    config::NumberBuilder(kMutationWeightTagConfig, kDefaultMutationWeightTag,
+                          kMinimumMutationWeight, kMaximumMutationWeight)
+        .Build();
+
+config::Number& GetMutationWeightVector() {
+  return dynamic_cast<config::Number&>(*mutation_weight_vector);
+}
+
+config::Number& GetMutationWeightText() {
+  return dynamic_cast<config::Number&>(*mutation_weight_text);
+}
+
+config::Number& GetMutationWeightNumeric() {
+  return dynamic_cast<config::Number&>(*mutation_weight_numeric);
+}
+
+config::Number& GetMutationWeightTag() {
+  return dynamic_cast<config::Number&>(*mutation_weight_tag);
+}
+
 }  // namespace options
 }  // namespace valkey_search

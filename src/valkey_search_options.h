@@ -56,6 +56,12 @@ const config::Boolean& GetSkipCorruptedInternalUpdateEntries();
 /// Return the log level
 config::Enum& GetLogLevel();
 
+/// Return the configuration entry for HNSW allow_replace_deleted flag
+const config::Boolean& GetHNSWAllowReplaceDeleted();
+
+/// Return a mutable reference for testing
+config::Boolean& GetHNSWAllowReplaceDeletedMutable();
+
 /// Reset the state of the options (mainly needed for testing)
 absl::Status Reset();
 

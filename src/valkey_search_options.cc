@@ -145,6 +145,14 @@ static auto use_coordinator = config::BooleanBuilder(kUseCoordinator, false)
                                   .Hidden()  // can only be set during start-up
                                   .Build();
 
+// Not allowing replace delete is aligned with RediSearch
+constexpr absl::string_view kHNSWAllowReplaceDeleted{
+    "hnsw-allow-replace-deleted"};
+static auto hnsw_allow_replace_deleted =
+    config::BooleanBuilder(kHNSWAllowReplaceDeleted, false)  // default false
+        .Dev()
+        .Build();
+
 // Register an enumerator for the log level
 static const std::vector<std::string_view> kLogLevelNames = {
     VALKEYMODULE_LOGLEVEL_WARNING,
@@ -560,6 +568,14 @@ const vmsdk::config::Boolean& GetSkipCorruptedInternalUpdateEntries() {
 
 vmsdk::config::Enum& GetLogLevel() {
   return dynamic_cast<vmsdk::config::Enum&>(*log_level);
+}
+
+const config::Boolean& GetHNSWAllowReplaceDeleted() {
+  return dynamic_cast<const config::Boolean&>(*hnsw_allow_replace_deleted);
+}
+
+config::Boolean& GetHNSWAllowReplaceDeletedMutable() {
+  return dynamic_cast<config::Boolean&>(*hnsw_allow_replace_deleted);
 }
 
 absl::Status Reset() {

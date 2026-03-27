@@ -517,6 +517,32 @@ class TestNonVector(ValkeySearchTestCaseBase):
         create_bulk_data_standalone(client)
         validate_bulk_limit_queries(client)
 
+    def test_json_tag_query_wildcard_path(self):
+        client: Valkey = self.server.get_new_client()
+
+        assert client.execute_command(
+            "FT.CREATE", "idx_wildcard_json_tag",
+            "ON", "JSON",
+            "PREFIX", "1", "user:",
+            "SCHEMA", "$.address[*].city", "AS", "address__city", "TAG"
+        ) == b"OK"
+
+        assert client.execute_command(
+            "JSON.SET", "user:1", "$",
+            '{"address":[{"city":"Seoul"},{"city":"New York"}]}'
+        ) == b"OK"
+
+        time.sleep(1)
+
+        result = client.execute_command(
+            "FT.SEARCH", "idx_wildcard_json_tag",
+            "@address__city:{Seoul}",
+            "NOCONTENT"
+        )
+
+        assert result[0] == 1
+        assert result[1] == b"user:1"
+
 class TestNonVectorCluster(ValkeySearchClusterTestCase):
 
     def test_non_vector_cluster(self):
@@ -634,4 +660,3 @@ class TestNonVectorCluster(ValkeySearchClusterTestCase):
         # Verify fetch-limited queries metric
         client.execute_command("CONFIG SET search.info-developer-visible yes")
         assert client.info("search").get("search_nonvector_results_fetched_limited_count", 0) == 8
-

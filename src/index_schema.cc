@@ -1826,6 +1826,9 @@ bool IndexSchema::InTrackedMutationRecords(
   }
   return true;
 }
+
+// This function is used to compute how much memory will be allocated
+// in approximate as a result of ingestion.
 size_t IndexSchema::ComputeWeightedBufferSize(
     const MutatedAttributes &attributes) const {
   size_t total = 0;
@@ -1859,6 +1862,8 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx, const Key &key,
     itr->second.from_backfill = from_backfill;
     itr->second.from_multi = from_multi;
     itr->second.sequence_number = sequence_number;
+    // Allocate memory buffer proportional to data size and mutation weights
+    // Buffer is freed when the mutation record is erased.
     itr->second.weighted_buffer.resize(
         ComputeWeightedBufferSize(itr->second.attributes.value()));
     if (ABSL_PREDICT_TRUE(block_client)) {
@@ -1883,6 +1888,8 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx, const Key &key,
     itr->second.attributes.value()[mutated_attribute.first] =
         std::move(mutated_attribute.second);
   }
+  // Allocate memory buffer proportional to data size and mutation weights
+  // Buffer is freed when the mutation record is erased.
   itr->second.weighted_buffer.resize(
       ComputeWeightedBufferSize(itr->second.attributes.value()));
 

@@ -189,6 +189,50 @@ class TestSaveRestore_v2_v2(ValkeySearchTestCaseDebugMode):
     def test_saverestore_v2_v2(self, parameters):
         do_save_restore_test(self, parameters[0], parameters[1], parameters[2])
 
+    def test_rdb_load_exceeds_max_indexes(self):
+        """Verify that RDB load fails when the saved index count exceeds
+        the configured max-indexes limit on the loading server."""
+        index_a = Index("idx_a", [Numeric("n")])
+        index_b = Index("idx_b", [Tag("t")])
+
+        index_a.create(self.client, True)
+        index_b.create(self.client, True)
+        assert sorted(self.client.execute_command("FT._LIST")) == \
+            [b"idx_a", b"idx_b"]
+
+        self.client.execute_command("save")
+
+        # Restart with max-indexes = 1 so the two saved indexes violate the
+        # limit during RDB load.
+        os.environ["SKIPLOGCLEAN"] = "1"
+        self.server.args["search.max-indexes"] = "1"
+        self.server.restart(remove_rdb=False)
+
+        i = self.client.info("search")
+        assert i["search_rdb_load_failure_cnt"] > 0
+        assert self.client.execute_command("FT._LIST") == []
+
+    def test_rdb_load_exceeds_max_attributes(self):
+        """Verify that RDB load fails when a saved index has more attributes
+        than the configured per-index max-attributes limit."""
+        # Create an index with 3 attributes (vector + numeric + tag).
+        multi_attr_index = Index("idx_multi",
+            [Vector("v", 3, type="HNSW", m=2, efc=1), Numeric("n"), Tag("t")])
+        multi_attr_index.create(self.client, True)
+        assert self.client.execute_command("FT._LIST") == [b"idx_multi"]
+
+        self.client.execute_command("save")
+
+        # Restart with max-attributes = 1 so the 3-attribute index violates
+        # the per-index limit during RDB load.
+        os.environ["SKIPLOGCLEAN"] = "1"
+        self.server.args["search.max-attributes"] = "1"
+        self.server.restart(remove_rdb=False)
+
+        i = self.client.info("search")
+        assert i["search_rdb_load_failure_cnt"] > 0
+        assert self.client.execute_command("FT._LIST") == []
+
 class TestMutationQueue(ValkeySearchTestCaseDebugMode):
     def append_startup_args(self, args):
         args["search.rdb_write_v2"] = "yes"

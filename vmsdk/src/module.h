@@ -56,6 +56,9 @@ constexpr absl::string_view kReadOnlyFlag{"readonly"};
 constexpr absl::string_view kFastFlag{"fast"};
 constexpr absl::string_view kAdminFlag{"admin"};
 constexpr absl::string_view kDenyOOMFlag{"deny-oom"};
+constexpr absl::string_view kNoScriptFlag{"deny-script"};
+constexpr absl::string_view kLoadingFlag{"allow-loading"};
+constexpr absl::string_view kStaleFlag{"allow-stale"};
 
 struct CommandOptions {
   absl::string_view cmd_name;

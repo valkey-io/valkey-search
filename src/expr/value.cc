@@ -12,6 +12,7 @@
 #include <sstream>
 
 #include "src/utils/scanner.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 // #define DBG std::cerr
 #define DBG 0 && std::cerr
@@ -41,6 +42,22 @@ bool Value::IsDouble() const { return std::get_if<double>(&value_); }
 bool Value::IsString() const {
   return std::get_if<absl::string_view>(&value_) ||
          std::get_if<std::string>(&value_);
+}
+
+bool Value::IsVector() const { return std::holds_alternative<Vector>(value_); }
+
+size_t Value::VectorSize() const {
+  if (auto vec_ptr = std::get_if<Vector>(&value_)) {
+    return (*vec_ptr)->size();
+  }
+  return 0;
+}
+
+bool Value::IsEmptyVector() const {
+  if (auto vec_ptr = std::get_if<Vector>(&value_)) {
+    return (*vec_ptr)->empty();
+  }
+  return false;
 }
 
 Value::Nil Value::GetNil() const { return std::get<Nil>(value_); }
@@ -160,6 +177,24 @@ std::string Value::AsString() const {
   }
 }
 
+std::optional<Value::Vector> Value::AsVector() const {
+  if (auto result = std::get_if<Vector>(&value_)) {
+    return *result;
+  }
+  return std::nullopt;
+}
+
+Value::Vector Value::GetVector() const { return std::get<Vector>(value_); }
+
+const Value& Value::GetVectorElement(size_t index) const {
+  auto vec = GetVector();
+  if (index >= vec->size()) {
+    // This will throw std::out_of_range
+    return vec->at(index);
+  }
+  return (*vec)[index];
+}
+
 std::ostream& operator<<(std::ostream& os, const Value& v) {
   if (v.IsNil()) {
     return os << "Nil(" << v.AsNil().value().GetReason() << ")";
@@ -234,9 +269,35 @@ Ordering Compare(const Value& l, const Value& r) {
     return CompareStrings(l.GetStringView(), r.GetStringView());
   }
 
+  // Vector comparisons
+  if (l.IsVector() && r.IsVector()) {
+    // Lexicographic comparison for vector-vector
+    auto lvec = l.GetVector();
+    auto rvec = r.GetVector();
+
+    // Compare element-by-element until mismatch found
+    size_t min_size = std::min(lvec->size(), rvec->size());
+    for (size_t i = 0; i < min_size; ++i) {
+      Ordering cmp = Compare((*lvec)[i], (*rvec)[i]);
+      if (cmp != Ordering::kEQUAL) {
+        return cmp;
+      }
+    }
+
+    // All elements equal, compare by length
+    if (lvec->size() < rvec->size()) {
+      return Ordering::kLESS;
+    } else if (lvec->size() > rvec->size()) {
+      return Ordering::kGREATER;
+    }
+    return Ordering::kEQUAL;
+  } else if (l.IsVector() || r.IsVector()) {
+    // Vector vs scalar
+    return Ordering::kUNORDERED;
+  }
+
   // Need to handle non-equivalent types.
   // Prefer to promote to double unless that fails.
-
   auto ld = l.AsDouble();
   auto rd = r.AsDouble();
   if (ld && rd) {
@@ -246,62 +307,231 @@ Ordering Compare(const Value& l, const Value& r) {
   return CompareStrings(l.AsStringView(), r.AsStringView());
 }
 
-Value FuncAdd(const Value& l, const Value& r) {
-  auto lv = l.AsDouble();
-  auto rv = r.AsDouble();
-  if (lv && rv) {
-    return Value(lv.value() + rv.value());
-  } else {
-    return Value(Value::Nil("Add requires numeric operands"));
+// Vector error message generation functions
+
+static std::string MakeTypeMismatchError(const char* operation,
+                                         const char* expected,
+                                         const char* actual) {
+  return std::string("Type error in ") + operation + ": expected " + expected +
+         ", got " + actual;
+}
+
+static std::string MakeLengthMismatchError(size_t length1, size_t length2) {
+  return "Length mismatch: vectors have lengths " + std::to_string(length1) +
+         " and " + std::to_string(length2);
+}
+
+static std::string MakeIndexOutOfBoundsError(size_t index, size_t length) {
+  return "Index out of bounds: index " + std::to_string(index) +
+         ", vector length " + std::to_string(length);
+}
+
+static std::string MakeElementError(size_t index, const char* reason) {
+  return "Element error at index " + std::to_string(index) + ": " + reason;
+}
+
+// Vector operation helper functions
+
+Value ApplyToElements(const Value::Vector vec,
+                      std::function<Value(const Value&)> func) {
+  auto result = std::make_shared<std::vector<Value>>();
+  result->reserve(vec->size());
+
+  for (size_t i = 0; i < vec->size(); ++i) {
+    Value elem_result = func((*vec)[i]);
+    if (elem_result.IsNil()) {
+      // Propagate error with index information
+      std::string error_msg =
+          MakeElementError(i, elem_result.GetNil().GetReason());
+      return Value(Value::Nil(error_msg));
+    }
+    result->push_back(std::move(elem_result));
   }
+
+  return Value(result);
+}
+
+Value ApplyWithScalar(const Value::Vector vec, const Value& scalar,
+                      std::function<Value(const Value&, const Value&)> func,
+                      bool scalar_on_left) {
+  auto result = std::make_shared<std::vector<Value>>();
+  result->reserve(vec->size());
+
+  for (size_t i = 0; i < vec->size(); ++i) {
+    Value elem_result =
+        scalar_on_left ? func(scalar, (*vec)[i]) : func((*vec)[i], scalar);
+    if (elem_result.IsNil()) {
+      // Propagate error with index information
+      std::string error_msg =
+          MakeElementError(i, elem_result.GetNil().GetReason());
+      return Value(Value::Nil(error_msg));
+    }
+    result->push_back(std::move(elem_result));
+  }
+
+  return Value(result);
+}
+
+Value ApplyElementWise(const Value::Vector vec1, const Value::Vector vec2,
+                       std::function<Value(const Value&, const Value&)> func) {
+  if (vec1->size() != vec2->size()) {
+    std::string error_msg = MakeLengthMismatchError(vec1->size(), vec2->size());
+    return Value(Value::Nil(error_msg));
+  }
+
+  auto result = std::make_shared<std::vector<Value>>();
+  result->reserve(vec1->size());
+
+  for (size_t i = 0; i < vec1->size(); ++i) {
+    Value elem_result = func((*vec1)[i], (*vec2)[i]);
+    if (elem_result.IsNil()) {
+      // Propagate error with index information
+      std::string error_msg =
+          MakeElementError(i, elem_result.GetNil().GetReason());
+      return Value(Value::Nil(error_msg));
+    }
+    result->push_back(std::move(elem_result));
+  }
+
+  return Value(result);
+}
+
+Value FuncAdd(const Value& l, const Value& r) {
+  // Case 1: Both scalars (existing behavior)
+  if (!l.IsVector() && !r.IsVector()) {
+    auto lv = l.AsDouble();
+    auto rv = r.AsDouble();
+    if (lv && rv) {
+      return Value(lv.value() + rv.value());
+    } else {
+      return Value(Value::Nil("Add requires numeric operands"));
+    }
+  }
+
+  // Case 2: Left is vector, right is scalar (broadcast)
+  if (l.IsVector() && !r.IsVector()) {
+    return ApplyWithScalar(l.GetVector(), r, FuncAdd, false);
+  }
+
+  // Case 3: Left is scalar, right is vector (broadcast)
+  if (!l.IsVector() && r.IsVector()) {
+    return ApplyWithScalar(r.GetVector(), l, FuncAdd, true);
+  }
+
+  // Case 4: Both are vectors (element-wise)
+  return ApplyElementWise(l.GetVector(), r.GetVector(), FuncAdd);
 }
 
 Value FuncSub(const Value& l, const Value& r) {
-  auto lv = l.AsDouble();
-  auto rv = r.AsDouble();
-  if (lv && rv) {
-    return Value(lv.value() - rv.value());
-  } else {
-    return Value(Value::Nil("Subtract requires numeric operands"));
+  // Case 1: Both scalars (existing behavior)
+  if (!l.IsVector() && !r.IsVector()) {
+    auto lv = l.AsDouble();
+    auto rv = r.AsDouble();
+    if (lv && rv) {
+      return Value(lv.value() - rv.value());
+    } else {
+      return Value(Value::Nil("Subtract requires numeric operands"));
+    }
   }
+
+  // Case 2: Left is vector, right is scalar (broadcast)
+  if (l.IsVector() && !r.IsVector()) {
+    return ApplyWithScalar(l.GetVector(), r, FuncSub, false);
+  }
+
+  // Case 3: Left is scalar, right is vector (broadcast)
+  if (!l.IsVector() && r.IsVector()) {
+    return ApplyWithScalar(r.GetVector(), l, FuncSub, true);
+  }
+
+  // Case 4: Both are vectors (element-wise)
+  return ApplyElementWise(l.GetVector(), r.GetVector(), FuncSub);
 }
 
 Value FuncMul(const Value& l, const Value& r) {
-  auto lv = l.AsDouble();
-  auto rv = r.AsDouble();
-  if (lv && rv) {
-    return Value(lv.value() * rv.value());
-  } else {
-    return Value(Value::Nil("Multiply requires numeric operands"));
+  // Case 1: Both scalars (existing behavior)
+  if (!l.IsVector() && !r.IsVector()) {
+    auto lv = l.AsDouble();
+    auto rv = r.AsDouble();
+    if (lv && rv) {
+      return Value(lv.value() * rv.value());
+    } else {
+      return Value(Value::Nil("Multiply requires numeric operands"));
+    }
   }
+
+  // Case 2: Left is vector, right is scalar (broadcast)
+  if (l.IsVector() && !r.IsVector()) {
+    return ApplyWithScalar(l.GetVector(), r, FuncMul, false);
+  }
+
+  // Case 3: Left is scalar, right is vector (broadcast)
+  if (!l.IsVector() && r.IsVector()) {
+    return ApplyWithScalar(r.GetVector(), l, FuncMul, true);
+  }
+
+  // Case 4: Both are vectors (element-wise)
+  return ApplyElementWise(l.GetVector(), r.GetVector(), FuncMul);
 }
 
 Value FuncDiv(const Value& l, const Value& r) {
-  auto lv = l.AsDouble();
-  auto rv = r.AsDouble();
-  if (lv && rv) {
-    if (rv.value() == 0) {
-      // if (std::signbit(lv.value())) {
-      return Value(std::nan(""));
-      //} else {
-      //  return Value(-std::abs(std::nan("nan")));
-      //}
+  // Case 1: Both scalars (existing behavior)
+  if (!l.IsVector() && !r.IsVector()) {
+    auto lv = l.AsDouble();
+    auto rv = r.AsDouble();
+    if (lv && rv) {
+      if (rv.value() == 0) {
+        // if (std::signbit(lv.value())) {
+        return Value(std::nan(""));
+        //} else {
+        //  return Value(-std::abs(std::nan("nan")));
+        //}
+      } else {
+        return Value(lv.value() / rv.value());
+      }
     } else {
-      return Value(lv.value() / rv.value());
+      return Value(Value::Nil("Divide requires numeric operands"));
     }
-  } else {
-    return Value(Value::Nil("Divide requires numeric operands"));
   }
+
+  // Case 2: Left is vector, right is scalar (broadcast)
+  if (l.IsVector() && !r.IsVector()) {
+    return ApplyWithScalar(l.GetVector(), r, FuncDiv, false);
+  }
+
+  // Case 3: Left is scalar, right is vector (broadcast)
+  if (!l.IsVector() && r.IsVector()) {
+    return ApplyWithScalar(r.GetVector(), l, FuncDiv, true);
+  }
+
+  // Case 4: Both are vectors (element-wise)
+  return ApplyElementWise(l.GetVector(), r.GetVector(), FuncDiv);
 }
 
 Value FuncPower(const Value& l, const Value& r) {
-  auto lv = l.AsDouble();
-  auto rv = r.AsDouble();
-  if (lv && rv) {
-    return Value(std::pow(lv.value(), rv.value()));
-  } else {
-    return Value(Value::Nil("Power requires numeric operands"));
+  // Case 1: Both scalars (existing behavior)
+  if (!l.IsVector() && !r.IsVector()) {
+    auto lv = l.AsDouble();
+    auto rv = r.AsDouble();
+    if (lv && rv) {
+      return Value(std::pow(lv.value(), rv.value()));
+    } else {
+      return Value(Value::Nil("Power requires numeric operands"));
+    }
   }
+
+  // Case 2: Left is vector, right is scalar (broadcast)
+  if (l.IsVector() && !r.IsVector()) {
+    return ApplyWithScalar(l.GetVector(), r, FuncPower, false);
+  }
+
+  // Case 3: Left is scalar, right is vector (broadcast)
+  if (!l.IsVector() && r.IsVector()) {
+    return ApplyWithScalar(r.GetVector(), l, FuncPower, true);
+  }
+
+  // Case 4: Both are vectors (element-wise)
+  return ApplyElementWise(l.GetVector(), r.GetVector(), FuncPower);
 }
 
 Value FuncLt(const Value& l, const Value& r) { return Value(l < r); }
@@ -341,6 +571,9 @@ Value FuncLand(const Value& l, const Value& r) {
 }
 
 Value FuncFloor(const Value& o) {
+  if (o.IsVector()) {
+    return ApplyToElements(o.GetVector(), FuncFloor);
+  }
   auto d = o.AsDouble();
   if (!d) {
     return Value(Value::Nil("floor couldn't convert to a double"));
@@ -349,6 +582,9 @@ Value FuncFloor(const Value& o) {
 }
 
 Value FuncCeil(const Value& o) {
+  if (o.IsVector()) {
+    return ApplyToElements(o.GetVector(), FuncCeil);
+  }
   auto d = o.AsDouble();
   if (!d) {
     return Value(Value::Nil("ceil couldn't convert to a double"));
@@ -357,6 +593,9 @@ Value FuncCeil(const Value& o) {
 }
 
 Value FuncAbs(const Value& o) {
+  if (o.IsVector()) {
+    return ApplyToElements(o.GetVector(), FuncAbs);
+  }
   auto d = o.AsDouble();
   if (!d) {
     return Value(Value::Nil("abs couldn't convert to a double"));
@@ -365,6 +604,9 @@ Value FuncAbs(const Value& o) {
 }
 
 Value FuncLog(const Value& o) {
+  if (o.IsVector()) {
+    return ApplyToElements(o.GetVector(), FuncLog);
+  }
   auto d = o.AsDouble();
   if (!d) {
     return Value(Value::Nil("log couldn't convert to a double"));
@@ -373,6 +615,9 @@ Value FuncLog(const Value& o) {
 }
 
 Value FuncLog2(const Value& o) {
+  if (o.IsVector()) {
+    return ApplyToElements(o.GetVector(), FuncLog2);
+  }
   auto d = o.AsDouble();
   if (!d) {
     return Value(Value::Nil("log2 couldn't convert to a double"));
@@ -381,6 +626,9 @@ Value FuncLog2(const Value& o) {
 }
 
 Value FuncExp(const Value& o) {
+  if (o.IsVector()) {
+    return ApplyToElements(o.GetVector(), FuncExp);
+  }
   auto d = o.AsDouble();
   if (!d) {
     return Value(Value::Nil("exp couldn't convert to a double"));
@@ -389,6 +637,9 @@ Value FuncExp(const Value& o) {
 }
 
 Value FuncSqrt(const Value& o) {
+  if (o.IsVector()) {
+    return ApplyToElements(o.GetVector(), FuncSqrt);
+  }
   auto d = o.AsDouble();
   if (!d) {
     return Value(Value::Nil("sqrt couldn't convert to a double"));
@@ -397,10 +648,32 @@ Value FuncSqrt(const Value& o) {
 }
 
 Value FuncStrlen(const Value& o) {
+  if (o.IsVector()) {
+    return ApplyToElements(o.GetVector(), FuncStrlen);
+  }
   return Value(double(o.AsStringView().size()));
 }
 
 Value FuncStartswith(const Value& l, const Value& r) {
+  bool l_is_vec = l.IsVector();
+  bool r_is_vec = r.IsVector();
+
+  // Case 1: Left is vector, right is scalar (broadcast)
+  if (l_is_vec && !r_is_vec) {
+    return ApplyWithScalar(l.GetVector(), r, FuncStartswith, false);
+  }
+
+  // Case 2: Left is scalar, right is vector (broadcast)
+  if (!l_is_vec && r_is_vec) {
+    return ApplyWithScalar(r.GetVector(), l, FuncStartswith, true);
+  }
+
+  // Case 3: Both are vectors (element-wise)
+  if (l_is_vec && r_is_vec) {
+    return ApplyElementWise(l.GetVector(), r.GetVector(), FuncStartswith);
+  }
+
+  // Case 4: Both scalars (existing behavior)
   auto ls = l.AsStringView();
   auto rs = r.AsStringView();
   if (rs.size() > ls.size()) {
@@ -411,6 +684,25 @@ Value FuncStartswith(const Value& l, const Value& r) {
 }
 
 Value FuncContains(const Value& l, const Value& r) {
+  bool l_is_vec = l.IsVector();
+  bool r_is_vec = r.IsVector();
+
+  // Case 1: Left is vector, right is scalar (broadcast)
+  if (l_is_vec && !r_is_vec) {
+    return ApplyWithScalar(l.GetVector(), r, FuncContains, false);
+  }
+
+  // Case 2: Left is scalar, right is vector (broadcast)
+  if (!l_is_vec && r_is_vec) {
+    return ApplyWithScalar(r.GetVector(), l, FuncContains, true);
+  }
+
+  // Case 3: Both are vectors (element-wise)
+  if (l_is_vec && r_is_vec) {
+    return ApplyElementWise(l.GetVector(), r.GetVector(), FuncContains);
+  }
+
+  // Case 4: Both scalars (existing behavior)
   auto ls = l.AsStringView();
   auto rs = r.AsStringView();
   size_t count = 0;
@@ -427,6 +719,10 @@ Value FuncContains(const Value& l, const Value& r) {
 }
 
 Value FuncSubstr(const Value& l, const Value& m, const Value& r) {
+  if (l.IsVector() || m.IsVector() || r.IsVector()) {
+    return Value(Value::Nil("SUBSTR does not accept lists as parameters"));
+  }
+
   auto ls = l.AsStringView();
   auto offset_p = m.AsInteger();
   auto length_p = r.AsInteger();
@@ -452,6 +748,9 @@ Value FuncSubstr(const Value& l, const Value& m, const Value& r) {
 }
 
 Value FuncLower(const Value& o) {
+  if (o.IsVector()) {
+    return ApplyToElements(o.GetVector(), FuncLower);
+  }
   auto os = o.AsStringView();
   std::string result;
   result.reserve(os.size());
@@ -467,6 +766,9 @@ Value FuncLower(const Value& o) {
 }
 
 Value FuncUpper(const Value& o) {
+  if (o.IsVector()) {
+    return ApplyToElements(o.GetVector(), FuncUpper);
+  }
   auto os = o.AsStringView();
   std::string result;
   result.reserve(os.size());
@@ -562,6 +864,137 @@ TIME_ROUND(FuncMonth, true, true, true)
 TIME_ROUND(FuncDay, false, true, true)
 TIME_ROUND(FuncHour, false, false, true)
 TIME_ROUND(FuncMinute, false, false, false)
+
+// Vector-specific functions
+
+Value FuncVectorLen(const Value& vec) {
+  if (!vec.IsVector()) {
+    return Value(Value::Nil("vectorlen: operand is not a vector"));
+  }
+  return Value(static_cast<double>(vec.VectorSize()));
+}
+
+Value FuncVectorAt(const Value& vec, const Value& index) {
+  if (!vec.IsVector()) {
+    return Value(Value::Nil("vectorat: first operand is not a vector"));
+  }
+
+  auto idx = index.AsInteger();
+  if (!idx) {
+    return Value(Value::Nil("vectorat: index is not an integer"));
+  }
+
+  size_t vec_size = vec.VectorSize();
+  if (*idx < 0 || static_cast<size_t>(*idx) >= vec_size) {
+    std::string error = "Index out of bounds: index " + std::to_string(*idx) +
+                        ", vector length " + std::to_string(vec_size);
+    return Value(Value::Nil(error));
+  }
+
+  return vec.GetVectorElement(static_cast<size_t>(*idx));
+}
+
+Value FuncIsVector(const Value& val) { return Value(val.IsVector()); }
+
+Value FuncMakeVector(const absl::InlinedVector<Value, 4>& elements) {
+  auto vec = std::make_shared<std::vector<Value>>();
+  vec->reserve(elements.size());
+  for (const auto& elem : elements) {
+    vec->push_back(elem);
+  }
+  return Value(vec);
+}
+
+Value FuncFlatten(const Value& vec, const Value& depth) {
+  if (!vec.IsVector()) {
+    return Value(Value::Nil("flatten: first operand is not a vector"));
+  }
+
+  auto depth_int = depth.AsInteger();
+  if (!depth_int) {
+    return Value(Value::Nil("flatten: depth is not an integer"));
+  }
+
+  if (*depth_int <= 0) {
+    return vec;
+  }
+
+  auto result = std::make_shared<std::vector<Value>>();
+  auto input_vec = vec.GetVector();
+
+  for (const auto& elem : *input_vec) {
+    if (elem.IsVector() && *depth_int > 0) {
+      // Recursively flatten nested vectors
+      Value flattened =
+          FuncFlatten(elem, Value(static_cast<double>(*depth_int - 1)));
+      if (flattened.IsNil()) {
+        return flattened;  // Propagate error
+      }
+      auto flattened_vec = flattened.GetVector();
+      result->insert(result->end(), flattened_vec->begin(),
+                     flattened_vec->end());
+    } else {
+      result->push_back(elem);
+    }
+  }
+
+  return Value(result);
+}
+
+Value DeserializeValueFromResp(ValkeyModuleCallReply* reply) {
+  if (reply == nullptr) {
+    return Value(Value::Nil("null reply"));
+  }
+
+  int reply_type = ValkeyModule_CallReplyType(reply);
+
+  switch (reply_type) {
+    case VALKEYMODULE_REPLY_NULL: {
+      return Value(Value::Nil("null"));
+    }
+
+    case VALKEYMODULE_REPLY_INTEGER: {
+      long long val = ValkeyModule_CallReplyInteger(reply);
+      return Value(static_cast<double>(val));
+    }
+
+    case VALKEYMODULE_REPLY_STRING: {
+      size_t len;
+      const char* str = ValkeyModule_CallReplyStringPtr(reply, &len);
+      if (str == nullptr) {
+        return Value(Value::Nil("invalid string"));
+      }
+      return Value(std::string(str, len));
+    }
+
+    case VALKEYMODULE_REPLY_ARRAY: {
+      size_t array_len = ValkeyModule_CallReplyLength(reply);
+      auto vec = std::make_shared<std::vector<Value>>();
+      vec->reserve(array_len);
+
+      for (size_t i = 0; i < array_len; ++i) {
+        ValkeyModuleCallReply* elem =
+            ValkeyModule_CallReplyArrayElement(reply, i);
+        vec->push_back(DeserializeValueFromResp(elem));
+      }
+
+      return Value(vec);
+    }
+
+    case VALKEYMODULE_REPLY_ERROR: {
+      size_t len;
+      const char* err = ValkeyModule_CallReplyStringPtr(reply, &len);
+      if (err == nullptr) {
+        return Value(Value::Nil("error"));
+      }
+      return Value(Value::Nil(err));
+    }
+
+    default: {
+      return Value(Value::Nil("unsupported reply type"));
+    }
+  }
+}
 
 }  // namespace expr
 }  // namespace valkey_search

@@ -114,7 +114,6 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
   auto status = [&]() -> absl::Status {
     auto &schema_manager = SchemaManager::Instance();
     vmsdk::ArgsIterator itr{argv + 1, argc - 1};
-    parameters->timeout_ms = options::GetDefaultTimeoutMs().GetValue();
     VMSDK_RETURN_IF_ERROR(
         vmsdk::ParseParamValue(itr, parameters->index_schema_name));
 
@@ -124,6 +123,10 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
     VMSDK_ASSIGN_OR_RETURN(
         parameters->index_schema,
         schema_manager.GetIndexSchema(db_num, parameters->index_schema_name));
+    parameters->timeout_ms =
+        parameters->index_schema->GetSearchTimeoutMs() > 0
+            ? parameters->index_schema->GetSearchTimeoutMs()
+            : options::GetDefaultTimeoutMs().GetValue();
     VMSDK_RETURN_IF_ERROR(
         vmsdk::ParseParamValue(itr, parameters->parse_vars.query_string));
     VMSDK_RETURN_IF_ERROR(parameters->ParseCommand(itr));

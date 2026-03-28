@@ -239,27 +239,47 @@ class ValkeySearchTestCaseBase(ValkeySearchTestCaseCommon):
         test_name = self.normalize_dir_name(request.node.name)
         self.test_name = test_name
 
-        replica_count = 0
-        if hasattr(request, "param") and request.param["replica_count"]:
-            replica_count = request.param["replica_count"]
+        use_external = os.environ.get("VALKEY_EXTERNAL_SERVER", "false").lower() == "true"
 
-        primary = self.start_new_server(is_primary=True)
-        replicas: List[Node] = []
-        for _ in range(0, replica_count):
-            replicas.append(self.start_new_server(is_primary=False))
+        if use_external:
+            # Use external server to test core functionality for Valkey-Bundle
+            external_host = os.environ.get("VALKEY_HOST", "localhost")
+            external_port = int(os.environ.get("VALKEY_PORT", "6379"))
+            testdir = f"{LOGS_DIR}/{test_name}"
+            os.makedirs(testdir, exist_ok=True)
+            self.server, self.client = self.create_server(
+                testdir=testdir,
+                bind_ip=external_host,
+                port=external_port,
+                external_server=True
+            )
+            self.rg = None
+            self.nodes = []
+        else:
+            replica_count = 0
+            if hasattr(request, "param") and request.param["replica_count"]:
+                replica_count = request.param["replica_count"]
 
-        self.rg = ReplicationGroup(primary=primary, replicas=replicas)
-        self.rg.setup_replications_cmd()
-        self.server = self.rg.primary.server
-        self.client = self.rg.primary.client
+            primary = self.start_new_server(is_primary=True)
+            replicas: List[Node] = []
+            for _ in range(0, replica_count):
+                replicas.append(self.start_new_server(is_primary=False))
 
-        self.nodes: List[Node] = [self.rg.primary]
-        self.nodes += self.rg.replicas
+            self.rg = ReplicationGroup(primary=primary, replicas=replicas)
+            self.rg.setup_replications_cmd()
+            self.server = self.rg.primary.server
+            self.client = self.rg.primary.client
+
+            self.nodes: List[Node] = [self.rg.primary]
+            self.nodes += self.rg.replicas
 
         yield
 
         # Cleanup
-        ReplicationGroup.cleanup(self.rg)
+        if use_external:
+            self.client.flushall()
+        else:
+            ReplicationGroup.cleanup(self.rg)
 
     def get_config_file_lines(self, testdir, port) -> List[str]:
         return [

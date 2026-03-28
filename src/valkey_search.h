@@ -21,6 +21,7 @@
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/server.h"
 #include "src/index_schema.h"
+#include "src/schema_manager.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/cluster_map.h"
 #include "vmsdk/src/thread_group_cpu_monitor.h"
@@ -29,6 +30,14 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
+
+// Helper function to format index debug info as strings
+// Used by both FT._DEBUG INDEX_INFO and INFO DEV metrics
+// If sort_by_memory is true, returns indexes sorted by total memory descending
+// If limit > 0, returns at most that many indexes
+std::vector<std::string> FormatIndexDebugInfo(
+    const std::vector<SchemaManager::IndexDebugInfo> &indexes,
+    bool sort_by_memory = false, size_t limit = 0);
 
 constexpr char kEventEngine[] = "event_engine";
 

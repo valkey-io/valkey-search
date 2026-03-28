@@ -285,6 +285,92 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
             ["FT.SEARCH", "idx", "@tag:{value1}", "TIMEOUT", "5000"]
         )
 
+    def test_pausepoint_entries_fetcher_with_index_default_timeout(self):
+        """
+        Verify index-level SEARCH_TIMEOUT is used when FT.SEARCH has no TIMEOUT.
+        """
+        client = self.server.get_new_client()
+        assert (
+            client.execute_command("CONFIG SET search.default-timeout-ms 60000")
+            == b"OK"
+        )
+        assert (
+            client.execute_command(
+                "FT._DEBUG CONTROLLED_VARIABLE SET timeoutpollfrequency 1"
+            )
+            == b"OK"
+        )
+
+        try:
+            client.execute_command(
+                "FT.CREATE",
+                "idx",
+                "ON",
+                "HASH",
+                "PREFIX",
+                "1",
+                "doc:",
+                "SEARCH_TIMEOUT",
+                "50",
+                "SCHEMA",
+                "tag",
+                "TAG",
+                "n",
+                "NUMERIC",
+            )
+            for i in range(1000):
+                client.hset(f"doc:{i}", mapping={"tag": f"value{i % 10}", "n": i})
+
+            assert (
+                client.execute_command(
+                    "FT._DEBUG", "PAUSEPOINT", "SET", "search_entries_fetcher"
+                )
+                == b"OK"
+            )
+
+            error = [None]
+            result = [None]
+
+            def run_search():
+                tc = self.server.get_new_client()
+                try:
+                    result[0] = tc.execute_command(
+                        "FT.SEARCH", "idx", "@tag:{value1}", "ALLSHARDS"
+                    )
+                except ResponseError as e:
+                    error[0] = str(e)
+                finally:
+                    tc.close()
+
+            thread = threading.Thread(target=run_search)
+            thread.start()
+
+            assert wait_for_pausepoint(client, "search_entries_fetcher", timeout=10), \
+                "Pausepoint search_entries_fetcher was not hit"
+
+            # Hold the query at pausepoint long enough to exceed index timeout.
+            time.sleep(0.2)
+            assert (
+                client.execute_command(
+                    "FT._DEBUG", "PAUSEPOINT", "RESET", "search_entries_fetcher"
+                )
+                == b"OK"
+            )
+
+            thread.join(timeout=10)
+            assert not thread.is_alive(), "Search thread did not finish in time"
+            assert error[0] is not None, f"Expected timeout error, got result: {result[0]}"
+            assert "search operation cancelled due to timeout" in error[0].lower(), \
+                f"Expected timeout error, got: {error[0]}"
+        finally:
+            client.execute_command(
+                "FT._DEBUG", "PAUSEPOINT", "RESET", "search_entries_fetcher"
+            )
+            client.execute_command(
+                "FT._DEBUG CONTROLLED_VARIABLE SET timeoutpollfrequency 100"
+            )
+            client.execute_command("CONFIG SET search.default-timeout-ms 50000")
+
     def test_pausepoint_prefilter_eval(self):
         """
         Test timeout in prefilter evaluation loop

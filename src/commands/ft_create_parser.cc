@@ -58,6 +58,7 @@ const absl::string_view kCaseSensitiveParam{"CASESENSITIVE"};
 const absl::string_view kScoreParam{"SCORE"};
 constexpr absl::string_view kSchemaParam{"SCHEMA"};
 constexpr absl::string_view kSkipInitialScan("SKIPINITIALSCAN");
+constexpr absl::string_view kSearchTimeoutParam{"SEARCH_TIMEOUT"};
 constexpr size_t kDefaultAttributesCountLimit{1000};
 constexpr int kDefaultDimensionsCountLimit{32768};
 constexpr int kDefaultPrefixesCountLimit{8};
@@ -301,6 +302,26 @@ absl::Status ParseScore(vmsdk::ArgsIterator &itr,
   index_schema_proto.set_score(score);
   return absl::OkStatus();
 }
+
+absl::Status ParseSearchTimeout(vmsdk::ArgsIterator &itr,
+                                data_model::IndexSchema &index_schema_proto) {
+  uint32_t timeout_ms = 0;
+  VMSDK_ASSIGN_OR_RETURN(
+      auto res, vmsdk::ParseParam(kSearchTimeoutParam, false, itr, timeout_ms));
+  if (!res) {
+    return absl::OkStatus();
+  }
+  if (timeout_ms < kMinTimeoutMs || timeout_ms > kMaxTimeoutMs) {
+    return absl::InvalidArgumentError(
+        absl::StrCat(kSearchTimeoutParam,
+                     " must be a positive integer greater than 0 and cannot "
+                     "exceed ",
+                     kMaxTimeoutMs, "."));
+  }
+  index_schema_proto.set_search_timeout_ms(timeout_ms);
+  return absl::OkStatus();
+}
+
 vmsdk::KeyValueParser<HNSWParameters> CreateHNSWParser() {
   vmsdk::KeyValueParser<HNSWParameters> parser;
   parser.AddParamParser(kDimensionsParam,
@@ -685,6 +706,8 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
       return absl::InvalidArgumentError(
           NotSupportedParamErrorMsg(kPayloadFieldParam));
     }
+
+    VMSDK_RETURN_IF_ERROR(ParseSearchTimeout(itr, index_schema_proto));
 
     // Try schema text parameters using the KeyValue parser
     VMSDK_RETURN_IF_ERROR(

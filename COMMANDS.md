@@ -22,6 +22,7 @@ FT.CREATE <index-name>
     ON HASH
     [PREFIX <count> <prefix> [<prefix>...]]
     [SKIPINITIALSCAN]
+    [SEARCH_TIMEOUT <timeout>]
     SCHEMA
         (
             <field-identifier> [AS <field-alias>]
@@ -39,6 +40,8 @@ FT.CREATE <index-name>
 - **PREFIX \<prefix-count\> \<prefix\>** (optional): If this clause is specified, then only keys that begin with the same bytes as one or more of the specified prefixes will be included into this index. If this clause is omitted, all keys of the correct type will be included. A zero-length prefix would also match all keys of the correct type.
 
 - **SKIPINITIALSCAN** (optional): If this clause is specified, then no backfill operation is performed. This means that pre-existing keys which match the prefix clause will not be loaded into the index.
+
+- **SEARCH_TIMEOUT \<timeout\>** (optional): Sets the default timeout in milliseconds for `FT.SEARCH` and `FT.AGGREGATE` on this index. A query-level `TIMEOUT` clause overrides this value.
 
 ### Field types
 

@@ -202,6 +202,26 @@ INSTANTIATE_TEST_SUITE_P(
                                        "}\n",
         },
         {
+            .test_name = "numeric_happy_path_3",
+            .filter = "@num_field_2.0:[-1.5 2.5] @num_field_1.5:[-1.0 2.0]",
+            .create_success = true,
+            .evaluate_success = true,
+            .expected_tree_structure = "AND{\n"
+                                       "  NUMERIC(num_field_2.0)\n"
+                                       "  NUMERIC(num_field_1.5)\n"
+                                       "}\n",
+        },
+        {
+            .test_name = "numeric_happy_path_scientific_notation",
+            .filter = "@num_field_2.0:[1.0 1e2] @num_field_1.5:[1e0 1.5]",
+            .create_success = true,
+            .evaluate_success = true,
+            .expected_tree_structure = "AND{\n"
+                                       "  NUMERIC(num_field_2.0)\n"
+                                       "  NUMERIC(num_field_1.5)\n"
+                                       "}\n",
+        },
+        {
             .test_name = "numeric_happy_path_inclusive_1",
             .filter = "@num_field_2.0:[2 2.5] @num_field_1.5:[1.0 1.5]",
             .create_success = true,

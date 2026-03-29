@@ -437,6 +437,17 @@ INSTANTIATE_TEST_SUITE_P(
             .vector_query = false,
         },
         {
+            .test_name = "happy_path_numeric_scientific_notation",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[1.0 1e3]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .vector_query = false,
+        },
+        {
             .test_name = "happy_path_tag",
             .success = true,
             .params_str = "",

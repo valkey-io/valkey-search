@@ -235,6 +235,7 @@ class IndexSchema : public KeyspaceEventSubscription,
     // Queries waiting for this mutation to complete
     std::vector<std::unique_ptr<query::SearchParameters>> waiting_queries;
     MutationSequenceNumber sequence_number{0};
+    std::vector<uint8_t> weighted_buffer;
     bool consume_in_progress{false};
     bool from_backfill{false};
     bool from_multi{false};
@@ -476,6 +477,8 @@ class IndexSchema : public KeyspaceEventSubscription,
                           bool from_multi)
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
 
+  size_t ComputeWeightedBufferSize(const MutatedAttributes &attributes) const;
+
   // REQUIRES: time_sliced_mutex_ held in write phase
   std::optional<MutatedAttributes> ConsumeTrackedMutatedAttribute(
       const Key &key, bool first_time)
@@ -518,6 +521,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   FRIEND_TEST(IndexSchemaRDBTest, ComprehensiveSkipLoadTest);
   FRIEND_TEST(IndexSchemaFriendTest, ConsistencyTest);
   FRIEND_TEST(IndexSchemaFriendTest, MutatedAttributes);
+  FRIEND_TEST(IndexSchemaFriendTest, WeightedBuffer);
   FRIEND_TEST(IndexSchemaFriendTest, MutatedAttributesSanity);
   FRIEND_TEST(ValkeySearchTest, Info);
   FRIEND_TEST(OnSwapDBCallbackTest, OnSwapDBCallback);

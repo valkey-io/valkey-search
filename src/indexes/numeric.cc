@@ -24,6 +24,7 @@
 #include "src/indexes/index_base.h"
 #include "src/query/predicate.h"
 #include "src/utils/string_interning.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
@@ -115,6 +116,10 @@ std::unique_ptr<data_model::Index> Numeric::ToProto() const {
   auto numeric_index = std::make_unique<data_model::NumericIndex>();
   index_proto->set_allocated_numeric_index(numeric_index.release());
   return index_proto;
+}
+
+uint32_t Numeric::GetMutationWeight() const {
+  return options::GetMutationWeightNumeric().GetValue();
 }
 
 const double* Numeric::GetValue(const InternedStringPtr& key) const {

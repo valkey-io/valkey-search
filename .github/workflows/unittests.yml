@@ -30,19 +30,29 @@ jobs:
 
     # Build the Docker image from the Dockerfile in your repo
     - name: Build Docker Image
-      run: docker build -t presubmit-image -f .devcontainer/Dockerfile .
+      run: |
+        echo "::group::Docker Build"
+        DOCKER_START=$(date +%s)
+        docker build -t presubmit-image -f .devcontainer/Dockerfile .
+        DOCKER_END=$(date +%s)
+        echo "::endgroup::"
+        echo "[TIMING] Docker Image Build: $((DOCKER_END - DOCKER_START))s"
 
-    - name: Run Tests
+    - name: Build and Run Unit Tests
       id: test-run
       continue-on-error: true
       run: |
         mkdir test-results
+        echo "[TIMING] Build+Test started at $(date)"
+        TEST_START=$(date +%s)
         docker run --privileged --rm \
           --mount type=bind,source="$(pwd)/test-results",target=/workspace/test-results \
           -v "$(pwd):/workspace" \
           --user "ubuntu:ubuntu" \
           presubmit-image \
           sudo ci/build_ubuntu.sh --run-tests --unittest-output=/workspace/test-results
+        TEST_END=$(date +%s)
+        echo "[TIMING] Build+Test completed in $((TEST_END - TEST_START))s"
 
     - name: Update Test Results Permissions
       if: always()

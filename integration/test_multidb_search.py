@@ -369,11 +369,7 @@ class TestMultiDBCME(ValkeySearchClusterTestCaseDebugMode):
             node_client.execute_command('CLUSTER SETSLOT', slot, 'NODE', dest_id)
         
         # Verify isolation on destination shard
-        dest_clients = {}
-        for db_num in range(num_dbs):
-            client = self.get_primary(0).connect()
-            client.select(db_num)
-            dest_clients[db_num] = client
+        dest_clients = create_clients(num_dbs, self.get_primary(0).create_from_server)
 
         # Wait for destination node's search index to finish indexing migrated keys.
         for db_num in range(num_dbs):

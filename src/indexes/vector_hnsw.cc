@@ -95,10 +95,8 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::Create(
         index->space_.get(), vector_index_proto.initial_cap(), hnsw_proto.m(),
         hnsw_proto.ef_construction());
     index->algo_->setEf(hnsw_proto.ef_runtime());
-    // Notes:
-    // 1. Not allowing replace delete is aligned with RediSearch
-    // 2. Consider making allow_replace_deleted_ configurable
-    index->algo_->allow_replace_deleted_ = false;
+    index->algo_->allow_replace_deleted_ =
+        options::GetHNSWAllowReplaceDeleted().GetValue();
     return index;
   } catch (const std::exception &e) {
     ++Metrics::GetStats().hnsw_create_exceptions_cnt;
@@ -160,10 +158,8 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
                                 vector_index_proto.initial_cap(), index.get()));
     // ef_runtime is not persisted in the index contents
     index->algo_->setEf(vector_index_proto.hnsw_algorithm().ef_runtime());
-    // Notes:
-    // 1. Not allowing replace delete is aligned with RediSearch
-    // 2. Consider making allow_replace_deleted_ configurable
-    index->algo_->allow_replace_deleted_ = false;
+    index->algo_->allow_replace_deleted_ =
+        options::GetHNSWAllowReplaceDeleted().GetValue();
     return index;
   } catch (const std::exception &e) {
     ++Metrics::GetStats().hnsw_create_exceptions_cnt;
@@ -186,7 +182,8 @@ absl::Status VectorHNSW<T>::AddRecordImpl(uint64_t internal_id,
     try {
       absl::ReaderMutexLock lock(&resize_mutex_);
 
-      algo_->addPoint((T *)record.data(), internal_id);
+      algo_->addPoint((T *)record.data(), internal_id,
+                      algo_->allow_replace_deleted_);
       return absl::OkStatus();
     } catch (const std::exception &e) {
       std::string error_msg = e.what();
@@ -284,7 +281,8 @@ absl::Status VectorHNSW<T>::ModifyRecordImpl(uint64_t internal_id,
     // The concern with calling updatePoint is that it might have implications
     // on the search accuracy. Need to revisit this in the future.
     algo_->markDelete(internal_id);
-    algo_->addPoint((T *)record.data(), internal_id);
+    algo_->addPoint((T *)record.data(), internal_id,
+                    algo_->allow_replace_deleted_);
   } catch (const std::exception &e) {
     ++Metrics::GetStats().hnsw_modify_exceptions_cnt;
     return absl::InternalError(
@@ -394,6 +392,23 @@ VectorHNSW<T>::ComputeDistanceFromRecordImpl(uint64_t internal_id,
       algo_->fstdistfunc_((T *)query.data(), algo_->getDataByInternalId(*id),
                           algo_->dist_func_param_),
       internal_id};
+}
+
+// Getting max label from label_lookup_ (active + tombstoned).
+template <typename T>
+uint64_t VectorHNSW<T>::GetMaxInternalLabel() const {
+  std::unique_lock<std::mutex> lock_label(algo_->label_lookup_lock);
+  uint64_t max_label = 0;
+  for (const auto &[label, _] : algo_->label_lookup_) {
+    max_label = std::max(max_label, static_cast<uint64_t>(label));
+  }
+  return max_label;
+}
+
+template <typename T>
+size_t VectorHNSW<T>::GetLabelCount() const {
+  std::unique_lock<std::mutex> lock_label(algo_->label_lookup_lock);
+  return algo_->label_lookup_.size();
 }
 
 template class VectorHNSW<float>;

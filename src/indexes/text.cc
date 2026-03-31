@@ -126,6 +126,10 @@ std::unique_ptr<data_model::Index> Text::ToProto() const {
   return index_proto;
 }
 
+uint32_t Text::GetMutationWeight() const {
+  return options::GetMutationWeightText().GetValue();
+}
+
 // Size is needed for Inline queries (for approximation of qualified entries)
 // and for multi sub query operations (with AND/OR). This should be implemented
 // as part of either Inline support OR multi sub query search.

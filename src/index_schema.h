@@ -174,7 +174,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   }
   inline uint64_t GetFingerprint() const { return fingerprint_; }
   inline uint32_t GetVersion() const { return version_; }
-  inline uint32_t GetSearchTimeoutMs() const { return search_timeout_ms_; }
+  inline uint32_t GetQueryTimeoutMs() const { return query_timeout_ms_; }
 
   inline void SetFingerprint(uint64_t fingerprint) {
     fingerprint_ = fingerprint;
@@ -398,7 +398,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   uint64_t fingerprint_{0};
   uint32_t version_{0};
   bool skip_initial_scan_{false};
-  uint32_t search_timeout_ms_{0};
+  uint32_t query_timeout_ms_{0};
 
   vmsdk::ThreadPool *mutations_thread_pool_{nullptr};
   std::vector<uint64_t> attributes_indexed_data_size_;

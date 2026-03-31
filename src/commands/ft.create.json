@@ -106,17 +106,17 @@
         "token": "SKIPINITIALSCAN"
       },
       {
-        "name": "SEARCH_TIMEOUT",
+        "name": "QUERY_TIMEOUT",
         "type": "block",
         "optional": true,
         "arguments": [
           {
-            "name": "search_timeout_token",
+            "name": "query_timeout_token",
             "type": "pure-token",
-            "token": "SEARCH_TIMEOUT"
+            "token": "QUERY_TIMEOUT"
           },
           {
-            "name": "search_timeout_ms",
+            "name": "query_timeout_ms",
             "type": "integer"
           }
         ]

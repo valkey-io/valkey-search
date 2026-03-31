@@ -287,7 +287,7 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
 
     def test_pausepoint_entries_fetcher_with_index_default_timeout(self):
         """
-        Verify index-level SEARCH_TIMEOUT is used when FT.SEARCH has no TIMEOUT.
+        Verify index-level QUERY_TIMEOUT is used when FT.SEARCH has no TIMEOUT.
         """
         client = self.server.get_new_client()
         assert (
@@ -310,7 +310,7 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
                 "PREFIX",
                 "1",
                 "doc:",
-                "SEARCH_TIMEOUT",
+                "QUERY_TIMEOUT",
                 "50",
                 "SCHEMA",
                 "tag",

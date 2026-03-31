@@ -58,7 +58,7 @@ const absl::string_view kCaseSensitiveParam{"CASESENSITIVE"};
 const absl::string_view kScoreParam{"SCORE"};
 constexpr absl::string_view kSchemaParam{"SCHEMA"};
 constexpr absl::string_view kSkipInitialScan("SKIPINITIALSCAN");
-constexpr absl::string_view kSearchTimeoutParam{"SEARCH_TIMEOUT"};
+constexpr absl::string_view kQueryTimeoutParam{"QUERY_TIMEOUT"};
 constexpr size_t kDefaultAttributesCountLimit{1000};
 constexpr int kDefaultDimensionsCountLimit{32768};
 constexpr int kDefaultPrefixesCountLimit{8};
@@ -303,22 +303,22 @@ absl::Status ParseScore(vmsdk::ArgsIterator &itr,
   return absl::OkStatus();
 }
 
-absl::Status ParseSearchTimeout(vmsdk::ArgsIterator &itr,
-                                data_model::IndexSchema &index_schema_proto) {
+absl::Status ParseQueryTimeout(vmsdk::ArgsIterator &itr,
+                               data_model::IndexSchema &index_schema_proto) {
   uint32_t timeout_ms = 0;
   VMSDK_ASSIGN_OR_RETURN(
-      auto res, vmsdk::ParseParam(kSearchTimeoutParam, false, itr, timeout_ms));
+      auto res, vmsdk::ParseParam(kQueryTimeoutParam, false, itr, timeout_ms));
   if (!res) {
     return absl::OkStatus();
   }
   if (timeout_ms < kMinTimeoutMs || timeout_ms > kMaxTimeoutMs) {
     return absl::InvalidArgumentError(
-        absl::StrCat(kSearchTimeoutParam,
+        absl::StrCat(kQueryTimeoutParam,
                      " must be a positive integer greater than 0 and cannot "
                      "exceed ",
                      kMaxTimeoutMs, "."));
   }
-  index_schema_proto.set_search_timeout_ms(timeout_ms);
+  index_schema_proto.set_query_timeout_ms(timeout_ms);
   return absl::OkStatus();
 }
 
@@ -707,7 +707,7 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
           NotSupportedParamErrorMsg(kPayloadFieldParam));
     }
 
-    VMSDK_RETURN_IF_ERROR(ParseSearchTimeout(itr, index_schema_proto));
+    VMSDK_RETURN_IF_ERROR(ParseQueryTimeout(itr, index_schema_proto));
 
     // Try schema text parameters using the KeyValue parser
     VMSDK_RETURN_IF_ERROR(

@@ -14,7 +14,7 @@ FT.CREATE <index-name>
     [SCORE default_value]
     [LANGUAGE <language>]
     [SKIPINITIALSCAN]
-    [SEARCH_TIMEOUT <timeout>]
+    [QUERY_TIMEOUT <timeout>]
     [MINSTEMSIZE <min_stem_size>]
     [WITHOFFSETS | NOOFFSETS]
     [NOSTOPWORDS | STOPWORDS <count> <word> word ...]

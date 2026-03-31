@@ -124,8 +124,8 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
         parameters->index_schema,
         schema_manager.GetIndexSchema(db_num, parameters->index_schema_name));
     parameters->timeout_ms =
-        parameters->index_schema->GetSearchTimeoutMs() > 0
-            ? parameters->index_schema->GetSearchTimeoutMs()
+        parameters->index_schema->GetQueryTimeoutMs() > 0
+            ? parameters->index_schema->GetQueryTimeoutMs()
             : options::GetDefaultTimeoutMs().GetValue();
     VMSDK_RETURN_IF_ERROR(
         vmsdk::ParseParamValue(itr, parameters->parse_vars.query_string));

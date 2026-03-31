@@ -38,20 +38,6 @@ target_link_libraries(testing_common_base PUBLIC valkey_module)
 target_link_libraries(testing_common_base PUBLIC vmsdk_testing_infra)
 target_link_libraries(testing_common_base PUBLIC expr)
 
-# Precompiled headers: parse heavy third-party headers once and reuse across
-# all test files that link against testing_common_base.
-target_precompile_headers(testing_common_base PUBLIC
-  <gtest/gtest.h>
-  <gmock/gmock.h>
-  <google/protobuf/message.h>
-  <absl/status/statusor.h>
-  <absl/strings/string_view.h>
-  <string>
-  <vector>
-  <memory>
-  <unordered_map>
-)
-
 # Coordinator common library - used by tests that need coordinator functionality
 add_library(testing_common_coordinator INTERFACE)
 target_link_libraries(testing_common_coordinator INTERFACE coordinator_common)

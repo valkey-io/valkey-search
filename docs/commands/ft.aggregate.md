@@ -33,7 +33,7 @@ FT.AGGREGATE <index-name> <query>
 - `LOAD * | LOAD <count> <field> [<field> ...]` (optional): This controls which fields of those keys are loaded into the working set. A star (\*) indicates that all of the fields of the - `PARAMS <count> <name> <value> [<name> <value> ...]` (optional): `count` is of the number of arguments, i.e., twice the number of `name`/`value` pairs. `PARAMS` can be used in both the query string as well as within an expression context. See [Search - query language](../topics/search-query.md) for usage details.
   keys are loaded. The key itself can be loaded by specifying `@__key`. For vector queries, the distance can also be loaded by using the name of that field.
 - `SLOP <slop>` (Optional): Specifies a slop value for proximity matching of terms.
-- `TIMEOUT <timeout>` (optional): Lets you set a timeout value for the search command. This must be an integer in milliseconds. If an index was created with `SEARCH_TIMEOUT`, this query-level `TIMEOUT` value takes precedence.
+- `TIMEOUT <timeout>` (optional): Lets you set a timeout value for the search command. This must be an integer in milliseconds. If present, overrides the default `TIMEOUT` value. The default timeout can be specified by the `QUERY_TIMEOUT` option for this index or the global `search.default-timeout-ms` configuration value.
 - `VERBATIM` (Optional): If specified stemming is not applied to term searches.
 
 - `APPLY <expression> as <field>` (optional): An expression is computed and insert into the record. See [APPLY Stage](#apply-stage) below. See [Search - expressions](../topics/search-expressions.md) for details on the expression syntax.

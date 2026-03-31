@@ -32,7 +32,7 @@ FT.SEARCH <index> <query>
 - `VERBATIM` (Optional): If specified, stemming is not applied to text terms in the query.
 - `SOMESHARDS` (Optional): If specified, the command will generate a best-effort reply if all shards have not responded within the timeout interval.
 - `SORTBY <field> [ASC | DESC]` (Optional): If present, results are sorted according the value of the specified field and the optional sort-direction instruction. By default, vector results are sorted in distance order and non-vector results are not sorted in any particular order. Sorting is applied before the `LIMIT` clause is applied.
-- `TIMEOUT <timeout>` (optional): Lets you set a timeout value for the search command. This must be an integer in milliseconds. If an index was created with `SEARCH_TIMEOUT`, this query-level `TIMEOUT` value takes precedence.
+- `TIMEOUT <timeout>` (optional): Lets you set a timeout value for the search command. This must be an integer in milliseconds. If present, overrides the default `TIMEOUT` value. The default timeout can be specified by the `QUERY_TIMEOUT` option for this index or the global `search.default-timeout-ms` configuration value.
 - `WITHSORTKEYS` (Optional): If `SORTBY` is specified then enabling this option augments the output with the value of the field used for sorting.
 
 Response

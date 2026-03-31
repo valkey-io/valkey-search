@@ -295,10 +295,10 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
       stop_words_(index_schema_proto.stop_words().begin(),
                   index_schema_proto.stop_words().end()),
       skip_initial_scan_(index_schema_proto.skip_initial_scan()),
-      query_timeout_ms_(index_schema_proto.has_query_timeout_ms()
-                            ? std::make_optional(
-                                  index_schema_proto.query_timeout_ms())
-                            : std::nullopt),
+      query_timeout_ms_(
+          index_schema_proto.has_query_timeout_ms()
+              ? std::make_optional(index_schema_proto.query_timeout_ms())
+              : std::nullopt),
       min_stem_size_(index_schema_proto.min_stem_size() > 0
                          ? index_schema_proto.min_stem_size()
                          : 4),

@@ -206,10 +206,8 @@ absl::Status PerformRDBLoad(ValkeyModuleCtx *ctx, SafeRDB *rdb, int encver) {
 
 absl::StatusOr<vmsdk::UniqueValkeyDetachedThreadSafeContext>
 CreateRDBDetachedContext(ValkeyModuleIO *rdb) {
-  /* Wrap the RDB context in a detached context to ensure we have a client. */
   auto ctx = ValkeyModule_GetContextFromIO(rdb);
-  return vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(
-      ValkeyModule_GetDetachedThreadSafeContext(ctx));
+  return vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx);
 }
 
 int AuxLoadCallback(ValkeyModuleIO *rdb, int encver, int when) {

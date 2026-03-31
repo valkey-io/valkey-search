@@ -151,7 +151,7 @@ INSTANTIATE_TEST_SUITE_P(
             .return_code = absl::StatusCode::kInvalidArgument,
         },
         {
-            // alias == index_name is allowed when neither is already an alias
+            // alias == index_name is permitted, matches RediSearch behavior
             .test_name = "self_referential_alias",
             .argv = {"FT.ALIASADD", "test_idx", "test_idx"},
             .index_schema_pbtxt = std::string(kTestIndexSchemaPbtxt),
@@ -163,6 +163,16 @@ INSTANTIATE_TEST_SUITE_P(
             .argv = {"FT.ALIASADD", "my_alias", "test_idx", "extra"},
             .index_schema_pbtxt = std::nullopt,
             .pre_existing_alias = std::nullopt,
+            .return_code = absl::StatusCode::kInvalidArgument,
+        },
+        {
+            // Regression: alias-to-alias check must fire even when this is
+            // the only alias for the DB (db_alias_it != end() but map has
+            // exactly one entry).
+            .test_name = "alias_to_alias_first_alias_for_db",
+            .argv = {"FT.ALIASADD", "alias2", "my_alias"},
+            .index_schema_pbtxt = std::string(kTestIndexSchemaPbtxt),
+            .pre_existing_alias = "my_alias",
             .return_code = absl::StatusCode::kInvalidArgument,
         },
     }),

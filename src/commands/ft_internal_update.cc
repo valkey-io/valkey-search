@@ -64,6 +64,8 @@ absl::Status FTInternalUpdateCmd(ValkeyModuleCtx *ctx,
   if (argc == kFTInternalUpdateMaxArgCount) {
     type_name = vmsdk::ToStringView(argv[4]);
   }
+  // argc == 4: default to kSchemaManagerMetadataTypeName for AOF backward
+  // compatibility (replicas-before-primary upgrade order required).
 
   auto id_view = vmsdk::ToStringView(argv[1]);
   std::string id(id_view);

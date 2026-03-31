@@ -680,6 +680,20 @@ TEST_F(SchemaManagerAliasTest, AliasToAliasRejected) {
   EXPECT_EQ(status.message(), "Unknown index name or name is an alias");
 }
 
+// Regression: alias-to-alias check must fire even when the DB has no prior
+// aliases (db_alias_it == end()).
+TEST_F(SchemaManagerAliasTest, AliasToAliasRejectedWhenFirstAliasForDb) {
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "first_alias", kIndexName));
+
+  // "first_alias" is the only alias in kDb0. Using it as index_name must
+  // still return kInvalidArgument.
+  auto status =
+      SchemaManager::Instance().AddAlias(kDb0, "third_alias", "first_alias");
+  EXPECT_EQ(status.code(), absl::StatusCode::kInvalidArgument);
+  EXPECT_EQ(status.message(), "Unknown index name or name is an alias");
+}
+
 // N distinct aliases all pointing to same index each resolve to the same
 // IndexSchema pointer.
 TEST_F(SchemaManagerAliasTest, MultipleAliasesToSameIndex) {
@@ -765,6 +779,17 @@ TEST_F(SchemaManagerAliasTest, UpdateAliasToAliasRejected) {
   VMSDK_EXPECT_OK(
       SchemaManager::Instance().AddAlias(kDb0, "first_alias", kIndexName));
   auto status = SchemaManager::Instance().UpdateAlias(kDb0, "second_alias",
+                                                      "first_alias");
+  EXPECT_EQ(status.code(), absl::StatusCode::kInvalidArgument);
+  EXPECT_EQ(status.message(), "Unknown index name or name is an alias");
+}
+
+// Regression: same alias-to-alias check gap in UpdateAliasInternal.
+TEST_F(SchemaManagerAliasTest, UpdateAliasToAliasRejectedWhenFirstAliasForDb) {
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "first_alias", kIndexName));
+
+  auto status = SchemaManager::Instance().UpdateAlias(kDb0, "third_alias",
                                                       "first_alias");
   EXPECT_EQ(status.code(), absl::StatusCode::kInvalidArgument);
   EXPECT_EQ(status.message(), "Unknown index name or name is an alias");

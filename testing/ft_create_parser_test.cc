@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <iostream>
 #include <iterator>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -64,7 +65,7 @@ struct FTCreateParameters {
   absl::string_view score_field;
   absl::string_view payload_field;
   bool skip_initial_scan{false};
-  uint32_t query_timeout_ms{0};
+  std::optional<uint32_t> query_timeout_ms;
   std::vector<AttributeParameters> attributes;
   ExpectedPerIndexTextParameters per_index_text_params;
 };
@@ -134,8 +135,12 @@ TEST_P(FTCreateParserTest, ParseParams) {
               test_case.expected.attributes.size());
     EXPECT_EQ(index_schema_proto->skip_initial_scan(),
               test_case.expected.skip_initial_scan);
-    EXPECT_EQ(index_schema_proto->query_timeout_ms(),
-              test_case.expected.query_timeout_ms);
+    EXPECT_EQ(index_schema_proto->has_query_timeout_ms(),
+              test_case.expected.query_timeout_ms.has_value());
+    if (test_case.expected.query_timeout_ms.has_value()) {
+      EXPECT_EQ(index_schema_proto->query_timeout_ms(),
+                *test_case.expected.query_timeout_ms);
+    }
 
     // Verify schema-level text parameters if we have text fields
     bool has_text_fields = false;

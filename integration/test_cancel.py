@@ -302,6 +302,7 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
         )
 
         try:
+            query_timeout_ms = 50
             client.execute_command(
                 "FT.CREATE",
                 "idx",
@@ -311,7 +312,7 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
                 "1",
                 "doc:",
                 "QUERY_TIMEOUT",
-                "50",
+                str(query_timeout_ms),
                 "SCHEMA",
                 "tag",
                 "TAG",
@@ -347,9 +348,17 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
 
             assert wait_for_pausepoint(client, "search_entries_fetcher", timeout=10), \
                 "Pausepoint search_entries_fetcher was not hit"
+            pausepoint_hit_time = time.monotonic()
 
             # Hold the query at pausepoint long enough to exceed index timeout.
-            time.sleep(0.2)
+            waiters.wait_for_true(
+                lambda: client.execute_command(
+                    "FT._DEBUG", "PAUSEPOINT", "TEST", "search_entries_fetcher"
+                ) > 0
+                and (time.monotonic() - pausepoint_hit_time) * 1000
+                >= query_timeout_ms + 150,
+                timeout=5,
+            )
             assert (
                 client.execute_command(
                     "FT._DEBUG", "PAUSEPOINT", "RESET", "search_entries_fetcher"

@@ -157,7 +157,7 @@ function build_and_run_tests() {
 
     # Skip building C++ test binaries for integration tests (they only need libsearch.so)
     if [[ "${BUILD_SH_ARGS}" == *"--run-integration-tests"* ]] && [[ "${BUILD_SH_ARGS}" != *"--run-tests"* ]]; then
-        export CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DBUILD_TESTS=OFF"
+        export CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DBUILD_UNIT_TESTS=OFF"
     fi
 
     (cd ${ROOT_DIR} && ./build.sh --use-system-modules --test-errors-stdout ${BUILD_SH_ARGS})

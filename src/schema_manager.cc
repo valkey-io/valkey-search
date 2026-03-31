@@ -323,16 +323,15 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> SchemaManager::GetIndexSchema(
 absl::Status SchemaManager::AddAliasInternal(uint32_t db_num,
                                              absl::string_view alias,
                                              absl::string_view index_name) {
-  // find() avoids default-inserting an empty map for db_num.
+  // Use find() to avoid default-inserting an empty map for db_num.
   auto db_alias_it = db_to_aliases_.find(db_num);
-  if (db_alias_it != db_to_aliases_.end()) {
-    if (db_alias_it->second.contains(index_name)) {
-      return absl::InvalidArgumentError(
-          "Unknown index name or name is an alias");
-    }
-    if (db_alias_it->second.contains(alias)) {
-      return absl::AlreadyExistsError("Alias already exists");
-    }
+  if (db_alias_it != db_to_aliases_.end() &&
+      db_alias_it->second.contains(index_name)) {
+    return absl::InvalidArgumentError("Unknown index name or name is an alias");
+  }
+  if (db_alias_it != db_to_aliases_.end() &&
+      db_alias_it->second.contains(alias)) {
+    return absl::AlreadyExistsError("Alias already exists");
   }
   if (!LookupInternal(db_num, index_name).ok()) {
     return GenerateIndexNotFoundError(db_num, index_name);
@@ -406,14 +405,11 @@ absl::Status SchemaManager::RemoveAlias(uint32_t db_num,
 absl::Status SchemaManager::UpdateAliasInternal(uint32_t db_num,
                                                 absl::string_view alias,
                                                 absl::string_view index_name) {
-  // find() avoids default-inserting an empty map for db_num when db_num has
-  // no aliases yet (alias-to-alias check would be a false negative otherwise).
+  // Use find() to avoid default-inserting an empty map for db_num.
   auto db_alias_it = db_to_aliases_.find(db_num);
-  if (db_alias_it != db_to_aliases_.end()) {
-    if (db_alias_it->second.contains(index_name)) {
-      return absl::InvalidArgumentError(
-          "Unknown index name or name is an alias");
-    }
+  if (db_alias_it != db_to_aliases_.end() &&
+      db_alias_it->second.contains(index_name)) {
+    return absl::InvalidArgumentError("Unknown index name or name is an alias");
   }
   if (!LookupInternal(db_num, index_name).ok()) {
     return GenerateIndexNotFoundError(db_num, index_name);
@@ -677,12 +673,14 @@ absl::Status SchemaManager::OnAliasMetadataCallback(
   const std::string &alias = obj_name.GetName();
   const std::string &index_name = entry.index_name();
   if (!LookupInternal(db_num, index_name).ok()) {
-    // Target index not yet present; transient during reconciliation.
+    // Target index not yet present; alias will be installed on the next
+    // reconciliation pass (topology change or FT.INTERNAL_UPDATE broadcast).
     VMSDK_LOG(WARNING, detached_ctx_.get())
         << "Alias callback: target index '"
         << vmsdk::config::RedactIfNeeded(index_name)
         << "' not found for alias '" << vmsdk::config::RedactIfNeeded(alias)
-        << "' in db " << db_num << "; will retry on next reconciliation";
+        << "' in db " << db_num
+        << "; alias will be installed on next reconciliation";
     return absl::OkStatus();
   }
   db_to_aliases_[db_num][alias] = index_name;
@@ -999,7 +997,10 @@ absl::Status SchemaManager::SaveAliases(ValkeyModuleCtx *ctx, SafeRDB *rdb,
   section.set_type(data_model::RDB_SECTION_ALIAS_MAP);
   section.set_supplemental_count(0);
   section.mutable_alias_map_contents()->CopyFrom(alias_map_proto);
-  std::string serialized = section.SerializeAsString();
+  std::string serialized;
+  if (!section.SerializeToString(&serialized)) {
+    return absl::InternalError("Failed to serialize alias map RDB section");
+  }
   VMSDK_RETURN_IF_ERROR(rdb->SaveStringBuffer(serialized))
       << "IO error while saving alias map to RDB";
   return absl::OkStatus();

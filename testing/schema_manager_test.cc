@@ -789,8 +789,8 @@ TEST_F(SchemaManagerAliasTest, UpdateAliasToAliasRejectedWhenFirstAliasForDb) {
   VMSDK_EXPECT_OK(
       SchemaManager::Instance().AddAlias(kDb0, "first_alias", kIndexName));
 
-  auto status = SchemaManager::Instance().UpdateAlias(kDb0, "third_alias",
-                                                      "first_alias");
+  auto status =
+      SchemaManager::Instance().UpdateAlias(kDb0, "third_alias", "first_alias");
   EXPECT_EQ(status.code(), absl::StatusCode::kInvalidArgument);
   EXPECT_EQ(status.message(), "Unknown index name or name is an alias");
 }

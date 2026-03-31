@@ -58,8 +58,8 @@ jobs:
         docker run --privileged --rm \
           --mount type=bind,source="$(pwd)/test-results",target=/workspace/test-results \
           -v "$(pwd):/workspace" \
-          --user "ubuntu:ubuntu"
-          -e CCACHE_DIR=/workspace/.ccache
+          --user "ubuntu:ubuntu" \
+          -e CCACHE_DIR=/workspace/.ccache \
           -e CCACHE_MAXSIZE=1G \
           presubmit-image \
           sudo -E ci/build_ubuntu.sh --run-integration-tests --integration-output=/workspace/test-results

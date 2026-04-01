@@ -492,6 +492,5 @@ TEST_F(AggregateExecTest, RandomSampleGroupByTest) {
   }
 }
 
-
 }  // namespace aggregate
 }  // namespace valkey_search

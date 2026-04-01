@@ -1691,8 +1691,8 @@ void IndexSchema::OnSwapDB(ValkeyModuleSwapDbInfo *swap_db_info) {
 }
 
 void IndexSchema::DrainMutationQueue(ValkeyModuleCtx *ctx) const {
-  static const auto max_sleep = std::chrono::milliseconds(100);
-  auto sleep_duration = std::chrono::milliseconds(1);
+  static const auto max_yield = std::chrono::milliseconds(100);
+  auto yield_duration = std::chrono::milliseconds(1);
 
   while (true) {
     size_t queue_size;
@@ -1707,9 +1707,12 @@ void IndexSchema::DrainMutationQueue(ValkeyModuleCtx *ctx) const {
         << "Draining Mutation Queue for index "
         << vmsdk::config::RedactIfNeeded(name_)
         << ", entries remaining: " << queue_size;
-    std::this_thread::sleep_for(sleep_duration);
-    sleep_duration =
-        std::min(sleep_duration * 2, max_sleep);  // Exponential backoff
+    auto start = std::chrono::steady_clock::now();
+    while (std::chrono::steady_clock::now() - start < yield_duration) {
+      ValkeyModule_Yield(ctx, VALKEYMODULE_YIELD_FLAG_CLIENTS, nullptr);
+    }
+    yield_duration =
+        std::min(yield_duration * 2, max_yield);  // Exponential backoff
   }
 }
 
@@ -1823,6 +1826,27 @@ bool IndexSchema::InTrackedMutationRecords(
   }
   return true;
 }
+
+// This function is used to compute how much memory will be allocated
+// in approximate as a result of ingestion.
+size_t IndexSchema::ComputeWeightedBufferSize(
+    const MutatedAttributes &attributes) const {
+  size_t total = 0;
+  for (const auto &[alias, attr_data] : attributes) {
+    size_t data_size = 0;
+    if (attr_data.data.get() != nullptr) {
+      data_size = vmsdk::ToStringView(attr_data.data.get()).length();
+    }
+    uint32_t weight = 0;
+    auto attr_itr = attributes_.find(alias);
+    if (attr_itr != attributes_.end()) {
+      weight = attr_itr->second.GetIndex()->GetMutationWeight();
+    }
+    total += data_size * weight;
+  }
+  return total / 100;
+}
+
 // Returns true if the inserted key not exists otherwise false
 bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx, const Key &key,
                                      MutatedAttributes &&mutated_attributes,
@@ -1838,6 +1862,10 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx, const Key &key,
     itr->second.from_backfill = from_backfill;
     itr->second.from_multi = from_multi;
     itr->second.sequence_number = sequence_number;
+    // Allocate memory buffer proportional to data size and mutation weights
+    // Buffer is freed when the mutation record is erased.
+    itr->second.weighted_buffer.resize(
+        ComputeWeightedBufferSize(itr->second.attributes.value()));
     if (ABSL_PREDICT_TRUE(block_client)) {
       vmsdk::BlockedClient blocked_client(ctx, true,
                                           GetBlockedCategoryFromProto());
@@ -1860,6 +1888,10 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx, const Key &key,
     itr->second.attributes.value()[mutated_attribute.first] =
         std::move(mutated_attribute.second);
   }
+  // Allocate memory buffer proportional to data size and mutation weights
+  // Buffer is freed when the mutation record is erased.
+  itr->second.weighted_buffer.resize(
+      ComputeWeightedBufferSize(itr->second.attributes.value()));
 
   if (ABSL_PREDICT_TRUE(block_client) &&
       ABSL_PREDICT_TRUE(!itr->second.from_multi)) {

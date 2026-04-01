@@ -246,22 +246,21 @@ class Count : public GroupBy::ReducerInstance {
 class RandomSample : public GroupBy::ReducerInstance {
  public:
   void ProcessRecords(const std::vector<ArgVector>& all_values) override {
-    if (error_) return;
+    if (all_values.empty()) return;
+
+    // Initialize sample_size_ once from arg[1], which is a query parameter
+    // constant across all records.
+    constexpr size_t kMaxSampleSize = 1000;
+    auto sz_opt = all_values[0][1].AsDouble();
+    double sz = sz_opt.value_or(-1.0);
+    if (!sz_opt.has_value() || sz < 0 || sz != std::floor(sz) ||
+        static_cast<size_t>(sz) > kMaxSampleSize) {
+      return;
+    }
+    sample_size_ = static_cast<size_t>(sz);
+    samples_.reserve(sample_size_);
+
     for (const auto& values : all_values) {
-      // Lazily initialize sample_size_ from arg[1] on the first record.
-      if (!initialized_) {
-        constexpr size_t kMaxSampleSize = 1000;
-        auto sz_opt = values[1].AsDouble();
-        double sz = sz_opt.value_or(-1.0);
-        if (!sz_opt.has_value() || sz < 0 || sz != std::floor(sz) ||
-            static_cast<size_t>(sz) > kMaxSampleSize) {
-          error_ = true;
-          return;
-        }
-        sample_size_ = static_cast<size_t>(sz);
-        samples_.reserve(sample_size_);
-        initialized_ = true;
-      }
       if (values[0].IsNil()) {
         continue;
       }
@@ -291,8 +290,6 @@ class RandomSample : public GroupBy::ReducerInstance {
     return rng;
   }
 
-  bool initialized_ = false;
-  bool error_ = false;
   std::vector<expr::Value> samples_;
   size_t sample_size_ = 0;
   size_t seen_count_ = 0;

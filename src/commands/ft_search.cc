@@ -119,11 +119,12 @@ void SerializeNeighbors(ValkeyModuleCtx *ctx,
 // Helper function to get the sort key value for a neighbor
 std::string GetSortKeyValue(const indexes::Neighbor &neighbor,
                             const SearchCommand &command) {
-  if (!command.sortby.has_value() || !neighbor.attribute_contents.has_value()) {
+  if (!command.sortby_parameter.has_value() ||
+      !neighbor.attribute_contents.has_value()) {
     return "";
   }
 
-  auto it = neighbor.attribute_contents->find(command.sortby->field);
+  auto it = neighbor.attribute_contents->find(command.sortby_parameter->field);
   if (it == neighbor.attribute_contents->end()) {
     return "";
   }
@@ -187,11 +188,11 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
 // Apply sorting to neighbors based on attribute values in attribute_contents
 void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
                   const SearchCommand &parameters) {
-  if (!parameters.sortby.has_value() || neighbors.empty()) {
+  if (!parameters.sortby_parameter.has_value() || neighbors.empty()) {
     return;
   }
 
-  auto sortby = parameters.sortby.value();
+  auto sortby = parameters.sortby_parameter.value();
 
   // Check if field is a declared numeric attribute
   auto index_result = parameters.index_schema->GetIndex(sortby.field);
@@ -283,10 +284,9 @@ absl::Status ProcessNeighborsForQuery(ValkeyModuleCtx *ctx,
   }
   // Handle vector queries
 
-  query::ProcessNeighborsForReply(ctx,
-                                  command.index_schema->GetAttributeDataType(),
-                                  search_result.neighbors, command,
-                                  vector_identifier, command.sortby_parameter);
+  query::ProcessNeighborsForReply(
+      ctx, command.index_schema->GetAttributeDataType(),
+      search_result.neighbors, command, vector_identifier);
   // Adjust total count based on neighbors removed during processing
   // due to filtering or missing attributes.
   search_result.total_count -= (original_size - search_result.neighbors.size());

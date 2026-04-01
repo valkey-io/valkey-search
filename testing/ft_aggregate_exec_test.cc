@@ -285,5 +285,212 @@ TEST_F(AggregateExecTest, testHash) {
   }));
 }
 */
+
+// Extracts the elements from a RANDOM_SAMPLE reducer result (Value::Vector).
+static std::vector<expr::Value> GetSampleArray(const expr::Value& value) {
+  EXPECT_TRUE(value.IsVector()) << "Expected vector Value";
+  if (!value.IsVector()) {
+    return {};
+  }
+  auto vec = value.GetVector();
+  return std::vector<expr::Value>(vec->begin(), vec->end());
+}
+
+// Checks that every element in `sample` appears in `allowed`.
+static void ExpectAllElementsIn(const std::vector<expr::Value>& sample,
+                                const std::vector<std::string>& allowed) {
+  for (const auto& elem : sample) {
+    std::string elem_str = elem.AsString();
+    EXPECT_TRUE(std::find(allowed.begin(), allowed.end(), elem_str) !=
+                allowed.end())
+        << "Sample element \"" << elem_str << "\" not in allowed set";
+  }
+}
+
+TEST_F(AggregateExecTest, RandomSampleBasicTest) {
+  // Edge case: empty record set produces no groups
+  {
+    auto param = MakeStages("groupby 1 @n2 reduce RANDOM_SAMPLE 2 @n1 5");
+    RecordSet records(nullptr);
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 0);
+  }
+
+  // Edge case: single value in group
+  {
+    auto param = MakeStages("groupby 1 @n2 reduce RANDOM_SAMPLE 2 @n1 5");
+    auto records = MakeData(1);
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 1);
+    auto record = records.pop_front();
+    auto sample = GetSampleArray(record->fields_.at(2));
+    EXPECT_EQ(sample.size(), 1);
+    EXPECT_EQ(sample[0].AsString(), expr::Value(0.0).AsString());
+  }
+
+  // Sampled values must come from the input set
+  {
+    auto param = MakeStages("groupby 1 @n2 reduce RANDOM_SAMPLE 2 @n1 3");
+    auto records = MakeData(5);
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 1);
+    auto record = records.pop_front();
+    auto sample = GetSampleArray(record->fields_.at(2));
+    std::vector<std::string> allowed;
+    for (int i = 0; i < 5; ++i) {
+      allowed.push_back(expr::Value(double(i)).AsString());
+    }
+    ExpectAllElementsIn(sample, allowed);
+  }
+
+  // Sample size == group size: all elements selected
+  {
+    auto param = MakeStages("groupby 1 @n2 reduce RANDOM_SAMPLE 2 @n1 4");
+    auto records = MakeData(4);
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 1);
+    auto record = records.pop_front();
+    auto sample = GetSampleArray(record->fields_.at(2));
+    EXPECT_EQ(sample.size(), 4);
+    std::vector<std::string> all_values;
+    for (int i = 0; i < 4; ++i) {
+      all_values.push_back(expr::Value(double(i)).AsString());
+    }
+    ExpectAllElementsIn(sample, all_values);
+  }
+
+  // Sample size > group size: all elements selected, no duplicates
+  {
+    auto param = MakeStages("groupby 1 @n2 reduce RANDOM_SAMPLE 2 @n1 10");
+    auto records = MakeData(4);
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 1);
+    auto record = records.pop_front();
+    auto sample = GetSampleArray(record->fields_.at(2));
+    EXPECT_EQ(sample.size(), 4);
+    std::vector<std::string> all_values;
+    for (int i = 0; i < 4; ++i) {
+      all_values.push_back(expr::Value(double(i)).AsString());
+    }
+    ExpectAllElementsIn(sample, all_values);
+  }
+}
+
+TEST_F(AggregateExecTest, RandomSampleNilHandlingTest) {
+  // Mixed nil and non-nil: only non-nil values should be sampled
+  auto param = MakeStages("groupby 1 @n2 reduce RANDOM_SAMPLE 2 @n1 3");
+  RecordSet records(nullptr);
+  // 3 non-nil values at indices 0, 2, 4
+  for (int i = 0; i < 5; ++i) {
+    auto rec = std::make_unique<Record>(2);
+    rec->fields_[0] =
+        (i % 2 == 0) ? expr::Value(double(i)) : expr::Value();  // nil
+    rec->fields_[1] = expr::Value(1.0);
+    records.emplace_back(std::move(rec));
+  }
+  EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+  EXPECT_EQ(records.size(), 1);
+  auto record = records.pop_front();
+  auto sample = GetSampleArray(record->fields_.at(2));
+  EXPECT_EQ(sample.size(), 3);
+  std::vector<std::string> allowed;
+  for (int i : {0, 2, 4}) {
+    allowed.push_back(expr::Value(double(i)).AsString());
+  }
+  ExpectAllElementsIn(sample, allowed);
+}
+
+TEST_F(AggregateExecTest, RandomSampleTypeHandlingTest) {
+  // String values: type is preserved in output
+  {
+    auto param = MakeStages("groupby 1 @n2 reduce RANDOM_SAMPLE 2 @n1 3");
+    RecordSet records(nullptr);
+    std::vector<std::string> allowed;
+    for (int i = 0; i < 5; ++i) {
+      auto rec = std::make_unique<Record>(2);
+      std::string val = std::string("str") + std::to_string(i);
+      allowed.push_back(val);
+      rec->fields_[0] = expr::Value(std::move(val));
+      rec->fields_[1] = expr::Value(1.0);
+      records.emplace_back(std::move(rec));
+    }
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 1);
+    auto record = records.pop_front();
+    auto sample = GetSampleArray(record->fields_.at(2));
+    EXPECT_EQ(sample.size(), 3);
+    ExpectAllElementsIn(sample, allowed);
+  }
+
+  // Mixed types: no nil in output, types preserved
+  {
+    auto param = MakeStages("groupby 1 @n2 reduce RANDOM_SAMPLE 2 @n1 4");
+    RecordSet records(nullptr);
+    std::vector<std::string> allowed;
+    for (int i = 0; i < 6; ++i) {
+      auto rec = std::make_unique<Record>(2);
+      if (i % 2 == 0) {
+        rec->fields_[0] = expr::Value(double(i));
+        allowed.push_back(expr::Value(double(i)).AsString());
+      } else {
+        std::string val = std::string("str") + std::to_string(i);
+        allowed.push_back(val);
+        rec->fields_[0] = expr::Value(std::move(val));
+      }
+      rec->fields_[1] = expr::Value(1.0);
+      records.emplace_back(std::move(rec));
+    }
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 1);
+    auto record = records.pop_front();
+    auto sample = GetSampleArray(record->fields_.at(2));
+    EXPECT_EQ(sample.size(), 4);
+    ExpectAllElementsIn(sample, allowed);
+  }
+}
+
+TEST_F(AggregateExecTest, RandomSampleMultipleReducersTest) {
+  {
+    auto param = MakeStages(
+        "groupby 1 @n2 "
+        "reduce RANDOM_SAMPLE 2 @n1 3 "
+        "reduce RANDOM_SAMPLE 2 @n1 2");
+    auto records = MakeData(5);
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 1);
+    auto record = records.pop_front();
+    auto sample1 = GetSampleArray(record->fields_.at(2));
+    auto sample2 = GetSampleArray(record->fields_.at(3));
+    EXPECT_EQ(sample1.size(), 3);
+    EXPECT_EQ(sample2.size(), 2);
+    std::vector<std::string> allowed;
+    for (int i = 0; i < 5; ++i) {
+      allowed.push_back(expr::Value(double(i)).AsString());
+    }
+    ExpectAllElementsIn(sample1, allowed);
+    ExpectAllElementsIn(sample2, allowed);
+  }
+}
+
+TEST_F(AggregateExecTest, RandomSampleGroupByTest) {
+  {
+    auto param = MakeStages("groupby 1 @n1 reduce RANDOM_SAMPLE 2 @n2 2");
+    RecordSet records(nullptr);
+    // 6 records, 3 groups (n1 values 0,1,2), each group has 2 records
+    for (int i = 0; i < 6; ++i) {
+      auto rec = std::make_unique<Record>(2);
+      rec->fields_[0] = expr::Value(double(i % 3));  // 3 groups
+      rec->fields_[1] = expr::Value(double(i));
+      records.emplace_back(std::move(rec));
+    }
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 3);
+    for (auto& rec : records) {
+      auto sample = GetSampleArray(rec->fields_.at(2));
+      EXPECT_EQ(sample.size(), 2);
+    }
+  }
+}
+
 }  // namespace aggregate
 }  // namespace valkey_search

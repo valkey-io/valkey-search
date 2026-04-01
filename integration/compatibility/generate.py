@@ -150,15 +150,15 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
 
     def checkall(self, dialect, *orig_cmd, **kwargs):
         '''Non-vector commands. Doesn't have support for '*' yet. '''
-        self.checkvec(self, dialect, orig_cmd, kwargs)
-        self.check(self, dialect, orig_cmd)
+        self.checkvec(dialect, *orig_cmd, **kwargs)
+        self.check(dialect, *orig_cmd)
 
     def test_bad_numeric_data(self, key_type, dialect):
         self.setup_data("bad numbers", key_type)
-        self.check(dialect, f"ft.search {key_type}_idx1",  "@n1:[-inf inf]")
-        self.check(dialect, f"ft.search {key_type}_idx1", "-@n1:[-inf inf]")
-        self.check(dialect, f"ft.search {key_type}_idx1",  "@n2:[-inf inf]")
-        self.check(dialect, f"ft.search {key_type}_idx1", "-@n2:[-inf inf]")
+        self.check(dialect, "ft.search", f"{key_type}_idx1", "@n1:[-inf inf]")
+        self.check(dialect, "ft.search", f"{key_type}_idx1", "-@n1:[-inf inf]")
+        self.check(dialect, "ft.search", f"{key_type}_idx1", "@n2:[-inf inf]")
+        self.check(dialect, "ft.search", f"{key_type}_idx1", "-@n2:[-inf inf]")
 
     def test_search_reverse(self, key_type, dialect):
         self.setup_data("reverse vector numbers", key_type)
@@ -263,6 +263,30 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce max 1 @n1 as nmax"
         )
         self.check(dialect, f'ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce max 1 @n2 as nmax')
+
+    def test_aggregate_groupby_tolist(self, key_type, dialect):
+        self.setup_data("sortable numbers", key_type)
+        # Basic TOLIST on numeric field grouped by tag
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce tolist 1 @n1 as items"
+        )
+        # TOLIST on a different numeric field
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce tolist 1 @n2 as items"
+        )
+        # TOLIST alongside COUNT in the same GROUPBY
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce tolist 1 @n1 as items reduce count 0 as cnt"
+        )
+        # TOLIST on tag field grouped by another tag
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce tolist 1 @t2 as tag_items"
+        )
+        # Case insensitivity
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce TOLIST 1 @n1 as items"
+        )
+
     def test_aggregate_limit(self, key_type, dialect):
         self.setup_data("sortable numbers", key_type)
         self.check(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2")
@@ -463,7 +487,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
 
         for sort_key in ["n1", "n2"]:
             for direction in ["ASC", "DESC", ""]:
-                for return_keys in ["", "RETURN 3 @n1 @t1"]:
+                for return_keys in ["", "RETURN 2 @n1 @t1"]:
                     for wsk in ["", "WITHSORTKEYS"]:
                         for limit in ["LIMIT 0 5", "LIMIT 2 3", ""]:
                             self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY {sort_key} {direction} {return_keys} {limit} {wsk}")

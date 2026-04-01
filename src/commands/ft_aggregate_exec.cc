@@ -298,7 +298,6 @@ class FirstValue : public GroupBy::ReducerInstance {
   expr::Value comparison_value_;
   bool is_sorted_{false};
   bool is_desc_{false};
-  bool initialized_{false};
 
  public:
   void SetSorted(bool is_desc) {
@@ -318,12 +317,6 @@ class FirstValue : public GroupBy::ReducerInstance {
     // Sorted mode: args layout is [return_field, sort_field].
     for (const auto &values : all_values) {
       const expr::Value &comparison_val = values[1];
-      if (!initialized_) {
-        result_value_ = values[0];
-        comparison_value_ = comparison_val;
-        initialized_ = true;
-        continue;
-      }
       if (comparison_val.IsNil()) {
         continue;
       }

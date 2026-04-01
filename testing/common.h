@@ -109,6 +109,7 @@ class MockIndex : public indexes::IndexBase {
       (absl::Status), ForEachUnTrackedKey,
       (absl::AnyInvocable<absl::Status(const InternedStringPtr& key)> fn),
       (const, override));
+  MOCK_METHOD(uint32_t, GetMutationWeight, (), (const, override));
 };
 
 class MockKeyspaceEventSubscription : public KeyspaceEventSubscription {

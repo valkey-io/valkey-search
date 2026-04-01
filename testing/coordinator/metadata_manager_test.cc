@@ -176,11 +176,6 @@ TEST_P(EntryOperationTest, TestEntryOperations) {
   google::protobuf::TextFormat::Parser parser;
   EXPECT_TRUE(
       parser.ParseFromString(test_case.expected_metadata_pbtxt, &expected));
-  std::cout << "Actual Metadata: "
-            << test_metadata_manager_->GetGlobalMetadata()->DebugString()
-            << std::endl;
-  std::cout << "Expected Metadata: " << test_case.expected_metadata_pbtxt
-            << std::endl;
   EXPECT_TRUE(google::protobuf::util::MessageDifferencer::Equals(
       *test_metadata_manager_->GetGlobalMetadata(), expected));
 }
@@ -696,10 +691,6 @@ TEST_P(MetadataManagerReconciliationTest, TestReconciliation) {
       payload.length());
 
   auto actual_metadata = test_metadata_manager_->GetGlobalMetadata();
-  std::cout << "Actual Metadata: " << actual_metadata->DebugString()
-            << std::endl;
-  std::cout << "Expected Metadata: " << expected_metadata.DebugString()
-            << std::endl;
   EXPECT_TRUE(google::protobuf::util::MessageDifferencer::Equals(
       *actual_metadata, expected_metadata));
 }
@@ -2118,7 +2109,6 @@ TEST_F(MetadataManagerTest, IndexName) {
           //
           // Construct a IndexName
           //
-          std::cout << "Doing test: DB:" << db_num << " name:'" << id << "'\n";
           std::string encoded = ObjName(db_num, id).Encode();
           //
           // Now reverse it and compare equality

@@ -2,12 +2,27 @@
 Utility functions and helper classes for Valkey Search integration tests.
 """
 
+import functools
 import threading
+import time
 from typing import Dict, Any, Optional
 from valkey.client import Valkey
 from valkey import ResponseError
 from ft_info_parser import FTInfoParser
 from valkeytestframework.util import waiters
+
+
+def wait_for_background_tasks(seconds=10):
+    """Decorator that adds a sleep after the test body to let runByMain tasks
+    complete before the fixture teardown shuts down the server."""
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            result = func(*args, **kwargs)
+            time.sleep(seconds)
+            return result
+        return wrapper
+    return decorator
 
 def run_in_thread(func):
     """Run func in thread, return (thread, result, error) for later inspection."""

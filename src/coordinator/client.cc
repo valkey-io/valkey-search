@@ -59,7 +59,7 @@ constexpr absl::string_view kRetryPolicy =
 
 static constexpr absl::string_view kCoordinatorQueryTimeout{
     "coordinator-query-timeout-secs"};
-static constexpr int kCoordinatorQueryDefaultTimeout{30};
+static constexpr int kCoordinatorQueryDefaultTimeout{25};
 static constexpr int kCoordinatorQueryMinTimeout{1};
 static constexpr int kCoordinatorQueryMaxTimeout{3600};
 

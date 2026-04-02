@@ -89,7 +89,7 @@
         "token": "SKIPINITIALSCAN"
       },
       {
-        "name": "min_stem_size",
+        "name": "MINSTEMSIZE",
         "token": "MINSTEMSIZE",
         "type": "integer",
         "optional": true

@@ -186,7 +186,7 @@
         ]
       },
       {
-        "name": "timeout_ms",
+        "name": "timeout",
         "token": "TIMEOUT",
         "type": "integer",
         "optional": true

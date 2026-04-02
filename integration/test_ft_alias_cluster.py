@@ -296,3 +296,35 @@ class TestFTAliasClusterPropagation(ValkeySearchClusterTestCase):
             assert result[0] >= 1, (
                 f"Expected at least 1 result via alias on node, got {result[0]}"
             )
+
+    def test_aliasupdate_on_non_zero_node_propagates(self):
+        """ALIASUPDATE issued on node 1 propagates the new target to all nodes."""
+        node0 = self.new_client_for_primary(0)
+        node1 = self.new_client_for_primary(1)
+
+        assert node0.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        assert node0.execute_command(*CREATE_TAG_INDEX_2) == b"OK"
+        self._wait_for_index_on_all_nodes(INDEX_NAME)
+        self._wait_for_index_on_all_nodes(INDEX_NAME_2)
+
+        assert node0.execute_command(
+            "FT.ALIASADD", ALIAS_NAME, INDEX_NAME
+        ) == b"OK"
+        _wait_for_alias_target_on_all_nodes(
+            self._all_primaries(), ALIAS_NAME, INDEX_NAME
+        )
+
+        # Issue ALIASUPDATE from node 1.
+        assert node1.execute_command(
+            "FT.ALIASUPDATE", ALIAS_NAME, INDEX_NAME_2
+        ) == b"OK"
+        _wait_for_alias_target_on_all_nodes(
+            self._all_primaries(), ALIAS_NAME, INDEX_NAME_2
+        )
+
+    def test_aliasdel_nonexistent_alias_cluster(self):
+        """FT.ALIASDEL on a non-existent alias returns an error in cluster mode."""
+        node0 = self.new_client_for_primary(0)
+        with pytest.raises(ResponseError) as exc_info:
+            node0.execute_command("FT.ALIASDEL", "no_such_alias")
+        assert "Alias does not exist" in str(exc_info.value)

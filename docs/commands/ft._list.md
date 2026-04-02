@@ -1,8 +1,10 @@
 Lists the currently defined indexes for the current data base.
 
 ```
-FT._LIST
+FT._LIST [REGEX <pattern>]
 ```
+
+- `REGEX <pattern>` (optional): Returns only indexes whose name matches the regular expression pattern.
 
 Response
 
@@ -16,4 +18,10 @@ ft._list
 2) products
 3) users
 4) transactions
+```
+
+```
+ft._list REGEX ^index_.*
+1) index_1
+2) index_2
 ```

@@ -7,8 +7,10 @@
 
 #include "src/rdb_serialization.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdlib>
+#include <vector>
 
 #include "absl/log/check.h"
 #include "absl/status/status.h"
@@ -255,8 +257,16 @@ absl::Status PerformRDBSave(ValkeyModuleCtx *ctx, SafeRDB *rdb, int when) {
   VMSDK_RETURN_IF_ERROR(rdb->SaveUnsigned(min_version.ToInt()));
   VMSDK_RETURN_IF_ERROR(rdb->SaveUnsigned(rdb_section_count));
 
-  // Now do the save of the contents
-  for (auto &section_count : section_counts) {
+  // Now do the save of the contents.
+  // Sort by section type value to guarantee a deterministic write order.
+  // In particular, RDB_SECTION_INDEX_SCHEMA (1) must be written before
+  // RDB_SECTION_ALIAS_MAP (3) so that LoadAliasMap can validate alias targets
+  // during load (sections are loaded in the order they appear in the file).
+  std::vector<std::pair<data_model::RDBSectionType, int>> ordered_sections(
+      section_counts.begin(), section_counts.end());
+  std::sort(ordered_sections.begin(), ordered_sections.end(),
+            [](const auto &a, const auto &b) { return a.first < b.first; });
+  for (auto &section_count : ordered_sections) {
     if (section_count.second == 0) {
       continue;
     }

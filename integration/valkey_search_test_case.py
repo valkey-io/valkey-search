@@ -544,7 +544,7 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
                 return False
         return True
 
-    def wait_for_cluster_topology(self):
+    def wait_for_cluster_setup(self):
         """Wait for cluster topology to propagate to all nodes."""
         replica_count = len(self.replication_groups[0].replicas)
         expected_nodes_per_shard = 1 + replica_count

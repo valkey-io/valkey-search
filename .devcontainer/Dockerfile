@@ -43,6 +43,7 @@ RUN apt update && \
         clang-format \
         clangd \
         jq \
+        ccache \
         memtier-benchmark && \
     # Update certificates
     update-ca-certificates && \

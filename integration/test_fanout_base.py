@@ -10,16 +10,6 @@ from ft_info_parser import FTInfoParser
 
 MAX_RETRIES = "4294967295"
 
-def cluster_slots_complete(client, expected_nodes_per_shard: int) -> bool:
-    """Check if CLUSTER SLOTS returns complete topology with all replicas."""
-    slots = client.execute_command("CLUSTER", "SLOTS")
-    for slot_range in slots:
-        # slot_range format: [start, end, [primary_ip, port, id, ...], [replica1...], [replica2...], ...]
-        # Length should be 2 (start, end) + expected_nodes_per_shard (1 primary + N replicas)
-        if len(slot_range) < 2 + expected_nodes_per_shard:
-            return False
-    return True
-
 class TestFanoutBase(ValkeySearchClusterTestCaseDebugMode):
 
     # force retry by manually creating remote failure once
@@ -173,13 +163,7 @@ class TestFanout(ValkeySearchClusterTestCase):
         assert(primary.info("replication")["role"] == "master")
 
         # Wait for cluster topology to propagate to all nodes
-        # Get replica count from the actual cluster setup (1 primary + N replicas per shard)
-        expected_nodes_per_shard = 1 + len(rg.replicas)
-        for node in self.get_nodes():
-            waiters.wait_for_true(
-                lambda n=node: cluster_slots_complete(n.client, expected_nodes_per_shard),
-                timeout=30
-            )
+        self.wait_for_cluster_topology()
         
         # Set the fanout low utilization threshold
         primary.execute_command("CONFIG", "SET", "search.local-fanout-queue-wait-threshold", threshold)

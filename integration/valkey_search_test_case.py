@@ -467,6 +467,10 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
                 rg.primary.logfile, "Cluster state changed: ok"
             )
             rg.setup_replications_cluster()
+
+        # Wait for cluster topology to propagate to all nodes
+        self.wait_for_cluster_setup()
+
         logging.info("Cluster is up and running!")
         yield
 

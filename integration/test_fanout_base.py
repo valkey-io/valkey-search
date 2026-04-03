@@ -162,9 +162,6 @@ class TestFanout(ValkeySearchClusterTestCase):
         primary = rg.get_primary_connection()
         assert(primary.info("replication")["role"] == "master")
 
-        # Wait for cluster topology to propagate to all nodes
-        self.wait_for_cluster_setup()
-        
         # Set the fanout low utilization threshold
         primary.execute_command("CONFIG", "SET", "search.local-fanout-queue-wait-threshold", threshold)
         

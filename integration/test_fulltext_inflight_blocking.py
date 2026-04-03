@@ -15,6 +15,12 @@ from utils import IndexingTestHelper, run_in_thread
 class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
     """Tests for CMD (standalone) mode."""
 
+    def append_startup_args(self, args: dict[str, str]) -> dict[str, str]:
+        args = super().append_startup_args(args)
+        # Need 2 writer threads for concurrent pausepoint blocking.
+        args["search.writer-threads"] = "2"
+        return args
+
     def test_fulltext_inflight_blocking_with_pausepoint(self):
         """Test that full-text queries block and retry on sequential in-flight mutations."""
         client: Valkey = self.server.get_new_client()

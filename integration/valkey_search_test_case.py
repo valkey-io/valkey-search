@@ -468,6 +468,9 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
             )
             rg.setup_replications_cluster()
         logging.info("Cluster is up and running!")
+
+        # Wait for search module's cluster topology map to be updated
+        self.wait_for_search_cluster_topology_map_update()
         yield
 
         # Cleanup
@@ -534,25 +537,13 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
     def replication_lag(self) -> int:
         return max([rg.replication_lag() for rg in self.replication_groups])
 
-    def _cluster_slots_complete(self, client, expected_nodes_per_shard: int) -> bool:
-        """Check if CLUSTER SLOTS returns complete topology with all replicas."""
-        slots = client.execute_command("CLUSTER", "SLOTS")
-        for slot_range in slots:
-            # slot_range format: [start, end, [primary_ip, port, id, ...], [replica1...], ...]
-            # Length should be 2 (start, end) + expected_nodes_per_shard (1 primary + N replicas)
-            if len(slot_range) < 2 + expected_nodes_per_shard:
-                return False
-        return True
-
-    def wait_for_cluster_setup(self):
-        """Wait for cluster topology to propagate to all nodes."""
-        replica_count = len(self.replication_groups[0].replicas)
-        expected_nodes_per_shard = 1 + replica_count
-        for node in self.get_nodes():
-            waiters.wait_for_true(
-                lambda n=node: self._cluster_slots_complete(n.client, expected_nodes_per_shard),
-                timeout=30
-            )
+    def wait_for_search_cluster_topology_map_update(self):
+        """Wait for the search module's cached cluster map to expire so it
+        refreshes with the full topology on the next query."""
+        expiration_ms = int(self.client_for_primary(0).config_get(
+            "search.cluster-map-expiration-ms"
+        )["search.cluster-map-expiration-ms"])
+        time.sleep(expiration_ms / 1000.0)
 
 class ValkeySearchClusterTestCaseDebugMode(ValkeySearchClusterTestCase):
     '''

@@ -30,6 +30,8 @@ class RecordSet;
 class Stage;
 class SortBy;
 
+using ArgVector = absl::InlinedVector<expr::Value, 4>;
+
 struct IndexInterface {
   virtual absl::StatusOr<indexes::IndexerType> GetFieldType(
       absl::string_view s) const = 0;
@@ -224,7 +226,7 @@ class GroupBy : public Stage {
   }
   struct ReducerInstance {
     virtual ~ReducerInstance() = default;
-    virtual void ProcessRecord(absl::InlinedVector<expr::Value, 4>& values) = 0;
+    virtual void ProcessRecords(const std::vector<ArgVector>& all_values) = 0;
     virtual expr::Value GetResult() const = 0;
   };
   struct ReducerInfo {
@@ -255,9 +257,11 @@ class GroupBy : public Stage {
   absl::InlinedVector<Reducer, 4> reducers_;
 
   void Dump(std::ostream& os) const override {
-    os << "GROUPBY ";
+    os << "GROUPBY";
     for (auto& g : groups_) {
-      if (&g != &groups_[0]) {
+      if (&g == &groups_[0]) {
+        os << ' ';
+      } else {
         os << ',';
       }
       os << '@' << g.get();

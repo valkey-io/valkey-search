@@ -468,6 +468,9 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
             )
             rg.setup_replications_cluster()
         logging.info("Cluster is up and running!")
+
+        # Wait for cluster topology to settle
+        self.wait_for_cluster_topology_to_settle()
         yield
 
         # Cleanup
@@ -544,8 +547,8 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
                 return False
         return True
 
-    def wait_for_cluster_setup(self):
-        """Wait for cluster topology to propagate to all nodes."""
+    def wait_for_cluster_topology_to_settle(self):
+        # Wait for the core's cluster view to sync.
         replica_count = len(self.replication_groups[0].replicas)
         expected_nodes_per_shard = 1 + replica_count
         for node in self.get_nodes():
@@ -553,6 +556,12 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
                 lambda n=node: self._cluster_slots_complete(n.client, expected_nodes_per_shard),
                 timeout=30
             )
+        # Then wait for the search module's cached cluster map to expire and update.
+        # TODO: Replace the sleep with a wait on condition.
+        expiration_ms = int(self.client_for_primary(0).config_get(
+            "search.cluster-map-expiration-ms"
+        )["search.cluster-map-expiration-ms"])
+        time.sleep(expiration_ms / 1000.0)
 
 class ValkeySearchClusterTestCaseDebugMode(ValkeySearchClusterTestCase):
     '''

@@ -42,6 +42,8 @@ class Tag : public IndexBase {
   absl::StatusOr<bool> ModifyRecord(const InternedStringPtr& key,
                                     absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
+  vmsdk::UniqueValkeyString NormalizeStringRecord(
+      vmsdk::UniqueValkeyString input) const override;
   int RespondWithInfo(ValkeyModuleCtx* ctx) const override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
   absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const override {

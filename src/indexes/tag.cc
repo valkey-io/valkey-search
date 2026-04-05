@@ -18,6 +18,7 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/ascii.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_replace.h"
 #include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
@@ -27,6 +28,7 @@
 #include "src/utils/scanner.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
+#include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
@@ -252,6 +254,21 @@ absl::StatusOr<RecordResult> Tag::ModifyRecord(const InternedStringPtr &key,
 
   tag_info.raw_tag_string = std::move(interned_data);
   return RecordResult::kAdded;
+}
+
+vmsdk::UniqueValkeyString Tag::NormalizeStringRecord(
+    vmsdk::UniqueValkeyString input) const {
+  if (!input) {
+    return input;
+  }
+  auto record = vmsdk::ToStringView(input.get());
+  if (record.find("\",\"") == absl::string_view::npos) {
+    return input;
+  }
+
+  std::string replacement(1, separator_);
+  return vmsdk::MakeUniqueValkeyString(
+      absl::StrReplaceAll(record, {{"\",\"", replacement}}));
 }
 
 absl::StatusOr<bool> Tag::RemoveRecord(const InternedStringPtr &key,

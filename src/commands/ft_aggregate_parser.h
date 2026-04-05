@@ -30,6 +30,8 @@ class RecordSet;
 class Stage;
 class SortBy;
 
+using ArgVector = absl::InlinedVector<expr::Value, 4>;
+
 struct IndexInterface {
   virtual absl::StatusOr<indexes::IndexerType> GetFieldType(
       absl::string_view s) const = 0;
@@ -224,14 +226,25 @@ class GroupBy : public Stage {
   }
   struct ReducerInstance {
     virtual ~ReducerInstance() = default;
-    virtual void ProcessRecord(absl::InlinedVector<expr::Value, 4>& values) = 0;
+    virtual void ProcessRecords(const std::vector<ArgVector>& all_values) = 0;
     virtual expr::Value GetResult() const = 0;
   };
   struct ReducerInfo {
     std::string name_;
     size_t min_nargs_{0};
     size_t max_nargs_{0};
-    std::unique_ptr<ReducerInstance> (*make_instance)();
+    std::unique_ptr<ReducerInstance> (*make_instance)(
+        const std::vector<std::unique_ptr<expr::Expression>>& args);
+
+    // Optional custom argument parser. When set, called instead of the generic
+    // expression-compile loop. Receives the raw iterator positioned just after
+    // the nargs count token, and the declared nargs. Returns the compiled args
+    // to store in Reducer::args_, or an error surfaced at parse time.
+    using ArgParser =
+        absl::StatusOr<std::vector<std::unique_ptr<expr::Expression>>>(
+            AggregateParameters& params, vmsdk::ArgsIterator& itr,
+            uint32_t nargs);
+    ArgParser* parse_args{nullptr};
   };
   static absl::flat_hash_map<std::string, ReducerInfo> reducerTable;
 
@@ -241,10 +254,11 @@ class GroupBy : public Stage {
     ReducerInfo* info_;
     friend std::ostream& operator<<(std::ostream& os, const Reducer& r) {
       os << r.info_->name_ << '(';
+      bool first = true;
       for (auto& a : r.args_) {
-        if (&a != &r.args_[0]) {
-          os << ',';
-        }
+        if (!a) continue;  // skip nullptr sentinels (e.g. DESC marker)
+        if (!first) os << ',';
+        first = false;
         os << a.get();
       }
       return os << ')';

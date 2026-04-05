@@ -19,6 +19,7 @@
 #include "absl/strings/ascii.h"
 #include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_replace.h"
 #include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
@@ -258,6 +259,21 @@ absl::StatusOr<RecordResult> Tag::ModifyRecord(const InternedStringPtr &key,
 
   tag_info.raw_tag_string = std::move(interned_data);
   return RecordResult::kAdded;
+}
+
+vmsdk::UniqueValkeyString Tag::NormalizeStringAttribute(
+    vmsdk::UniqueValkeyString input) const {
+  if (!input) {
+    return input;
+  }
+  auto record = vmsdk::ToStringView(input.get());
+  if (record.find("\",\"") == absl::string_view::npos) {
+    return input;
+  }
+
+  std::string replacement(1, separator_);
+  return vmsdk::MakeUniqueValkeyString(
+      absl::StrReplaceAll(record, {{"\",\"", replacement}}));
 }
 
 absl::StatusOr<bool> Tag::RemoveRecord(const InternedStringPtr &key,

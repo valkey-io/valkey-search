@@ -102,6 +102,9 @@ class VectorSVS : public VectorBase {
             absl::string_view attribute_identifier,
             data_model::AttributeDataType attribute_data_type);
 
+  // Flush buffered vectors to SVS graph
+  absl::Status FlushBuffer() ABSL_EXCLUSIVE_LOCKS_REQUIRED(index_mutex_);
+
   // SVS index (owned, destroyed via DynamicVamanaIndex::destroy)
   svs::runtime::v0::DynamicVamanaIndex* svs_index_
       ABSL_GUARDED_BY(index_mutex_){nullptr};
@@ -119,6 +122,15 @@ class VectorSVS : public VectorBase {
 
   // Space interface for distance computation in pre-filter path
   std::unique_ptr<hnswlib::SpaceInterface<T>> space_;
+
+  // Buffering for benchmarking (simple 10K batch approach)
+  static constexpr size_t kBufferSize = 10000;
+  struct PendingInsert {
+    uint64_t internal_id;
+    std::vector<char> data;
+  };
+  std::vector<PendingInsert> pending_buffer_ ABSL_GUARDED_BY(index_mutex_);
+  bool buffer_flushing_ ABSL_GUARDED_BY(index_mutex_){false};
 };
 
 }  // namespace valkey_search::indexes

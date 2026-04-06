@@ -102,6 +102,15 @@ VectorSVS<T>::VectorSVS(
 
 template <typename T>
 VectorSVS<T>::~VectorSVS() {
+  // Flush any remaining buffered vectors before cleanup
+  if (!pending_buffer_.empty()) {
+    VMSDK_LOG(WARNING, nullptr)
+        << "Destructor flushing " << pending_buffer_.size()
+        << " remaining vectors";
+    absl::MutexLock lock(&index_mutex_);
+    (void)FlushBuffer();  // Ignore errors at shutdown
+  }
+
   if (svs_index_) {
     auto status = svs::runtime::v0::DynamicVamanaIndex::destroy(svs_index_);
     if (!status.ok()) {
@@ -213,25 +222,30 @@ absl::Status VectorSVS<T>::AddRecordImpl(uint64_t internal_id,
   try {
     absl::MutexLock lock(&index_mutex_);
 
-    // Store raw vector data for retrieval and distance computation.
+    // Buffer the vector instead of immediate SVS insert (for benchmarking)
+    pending_buffer_.push_back({
+        .internal_id = internal_id,
+        .data = std::vector<char>(record.begin(), record.end())
+    });
+
+    // Store raw vector data for retrieval and distance computation during buffering.
     // This is a temporary measure for Iteration 0: SVS does not yet expose
     // reconstruct() or compute_distance(), so we keep a full FP32 copy.
-    raw_vectors_[internal_id] =
-        std::vector<char>(record.begin(), record.end());
+    raw_vectors_[internal_id] = pending_buffer_.back().data;
 
-    size_t label = static_cast<size_t>(internal_id);
-    auto status = svs_index_->add(
-        1, &label, reinterpret_cast<const float*>(record.data()));
-
-    if (!status.ok()) {
-      raw_vectors_.erase(internal_id);
-      return absl::InternalError(
-          absl::StrCat("SVS add failed: ", status.message()));
+    // Check if buffer is full → trigger auto-flush
+    if (pending_buffer_.size() >= kBufferSize) {
+      VMSDK_RETURN_IF_ERROR(FlushBuffer());
     }
 
     ++num_elements_;
     return absl::OkStatus();
   } catch (const std::exception& e) {
+    // Rollback: remove from buffer and raw_vectors if exception occurred
+    if (!pending_buffer_.empty() &&
+        pending_buffer_.back().internal_id == internal_id) {
+      pending_buffer_.pop_back();
+    }
     raw_vectors_.erase(internal_id);
     return absl::InternalError(
         absl::StrCat("SVS add exception: ", e.what()));
@@ -239,9 +253,65 @@ absl::Status VectorSVS<T>::AddRecordImpl(uint64_t internal_id,
 }
 
 template <typename T>
+absl::Status VectorSVS<T>::FlushBuffer() {
+  // Called under index_mutex_ (exclusive lock already held by AddRecordImpl)
+
+  if (pending_buffer_.empty()) {
+    return absl::OkStatus();  // Nothing to flush
+  }
+
+  size_t batch_size = pending_buffer_.size();
+  VMSDK_LOG(NOTICE, nullptr) << "Flushing " << batch_size << " vectors to SVS graph...";
+
+  buffer_flushing_ = true;  // Block searches during flush
+
+  try {
+    // Prepare batch arrays for SVS API
+    std::vector<size_t> labels(batch_size);
+    std::vector<T> data_flat(batch_size * dimensions_);
+
+    for (size_t i = 0; i < batch_size; ++i) {
+      labels[i] = static_cast<size_t>(pending_buffer_[i].internal_id);
+
+      // Copy vector data (flatten for SVS batch API)
+      const T* src = reinterpret_cast<const T*>(pending_buffer_[i].data.data());
+      std::copy(src, src + dimensions_, data_flat.begin() + i * dimensions_);
+    }
+
+    // Batch insert to SVS (this takes ~seconds for 10K vectors)
+    auto status = svs_index_->add(
+        batch_size, labels.data(), data_flat.data());
+
+    if (!status.ok()) {
+      buffer_flushing_ = false;
+      return absl::InternalError(
+          absl::StrCat("SVS batch add failed: ", status.message()));
+    }
+
+    // Clear buffer
+    pending_buffer_.clear();
+    buffer_flushing_ = false;
+
+    VMSDK_LOG(NOTICE, nullptr) << "Flush complete. SVS graph now has "
+                                << num_elements_ << " vectors.";
+
+    return absl::OkStatus();
+  } catch (const std::exception& e) {
+    buffer_flushing_ = false;
+    return absl::InternalError(
+        absl::StrCat("SVS flush exception: ", e.what()));
+  }
+}
+
+template <typename T>
 absl::Status VectorSVS<T>::RemoveRecordImpl(uint64_t internal_id) {
   try {
     absl::MutexLock lock(&index_mutex_);
+
+    // Flush buffered vectors before removal (simplest approach for benchmarking)
+    if (!pending_buffer_.empty()) {
+      VMSDK_RETURN_IF_ERROR(FlushBuffer());
+    }
 
     size_t label = static_cast<size_t>(internal_id);
     auto status = svs_index_->remove(1, &label);
@@ -271,6 +341,11 @@ absl::Status VectorSVS<T>::ModifyRecordImpl(uint64_t internal_id,
   // separate remove() + add() calls, so we need exclusive access.
   try {
     absl::MutexLock lock(&index_mutex_);
+
+    // Flush buffered vectors before modification (simplest approach for benchmarking)
+    if (!pending_buffer_.empty()) {
+      VMSDK_RETURN_IF_ERROR(FlushBuffer());
+    }
 
     // Save old vector for rollback in case add() fails after remove().
     auto old_it = raw_vectors_.find(internal_id);
@@ -365,6 +440,21 @@ absl::StatusOr<std::vector<Neighbor>> VectorSVS<T>::Search(
           -> absl::StatusOr<
               std::priority_queue<std::pair<T, hnswlib::labeltype>>> {
     try {
+      // Auto-flush buffered vectors before searching (for benchmarking)
+      bool needs_flush = false;
+      {
+        absl::ReaderMutexLock check_lock(&index_mutex_);
+        needs_flush = !pending_buffer_.empty() && !buffer_flushing_;
+      }
+
+      if (needs_flush) {
+        absl::MutexLock flush_lock(&index_mutex_);
+        // Double-check buffer is still non-empty after acquiring write lock
+        if (!pending_buffer_.empty()) {
+          VMSDK_RETURN_IF_ERROR(FlushBuffer());
+        }
+      }
+
       absl::ReaderMutexLock lock(&index_mutex_);
 
       if (num_elements_ == 0) {

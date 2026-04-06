@@ -92,6 +92,6 @@ The following reducer functions are available. The reducer functions that take a
 | MAX 1 <expression>            | The largest numerical values of the expression.                                                                                    |
 | AVG 1 <expression>            | The numerical average of the values of the expression.                                                                             |
 | STDDEV 1 <expression>         | The standard deviation the values of the expression.                                                                               |
-| FIRST_VALUE 1 <expression>    | The first value of the expression encountered in the group. Order depends on record retrieval order and is non-deterministic. Use only when order does not matter. |
+| FIRST_VALUE 1 <expression>    | The first value of the expression encountered in the group. Order depends on record retrieval order. Use only when order does not matter. |
 | FIRST_VALUE 3 <expression> BY <expression> | The value of the first expression from the record with the smallest comparison expression (ascending). Ties broken by first-encountered order. |
 | FIRST_VALUE 4 <expression> BY <expression> ASC\|DESC | The value of the first expression from the record with the minimum (ASC) or maximum (DESC) comparison expression. Ties broken by first-encountered order. Invalid keyword arguments (e.g., wrong BY token or unrecognised direction) produce a nil result. |

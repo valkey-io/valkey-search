@@ -159,7 +159,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.check(dialect, "ft.search", f"{key_type}_idx1", "-@n1:[-inf inf]")
         self.check(dialect, "ft.search", f"{key_type}_idx1", "@n2:[-inf inf]")
         self.check(dialect, "ft.search", f"{key_type}_idx1", "-@n2:[-inf inf]")
-    '''
+    
     def test_search_reverse(self, key_type, dialect):
         self.setup_data("reverse vector numbers", key_type)
         self.checkall(dialect, f"ft.search {key_type}_idx1 *")

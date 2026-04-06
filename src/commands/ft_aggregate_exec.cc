@@ -212,14 +212,14 @@ absl::Status GroupBy::Execute(RecordSet& records) const {
       for (auto& reducer : reducers_) {
         group_it->second.emplace_back(
             reducer.info_->make_instance(reducer.args_),
-                                      std::vector<ArgVector>{});
+            std::vector<ArgVector>{});
       }
     }
     for (int i = 0; i < reducers_.size(); ++i) {
       ArgVector args;
       for (auto& nargs : reducers_[i].args_) {
         if (nargs) {
-        args.emplace_back(nargs->Evaluate(ctx, *record));
+          args.emplace_back(nargs->Evaluate(ctx, *record));
         }
       }
       group_it->second[i].second.push_back(args);
@@ -478,7 +478,7 @@ std::unique_ptr<GroupBy::ReducerInstance> MakeFirstValueReducer(
 
 template <typename T>
 std::unique_ptr<GroupBy::ReducerInstance> MakeReducer(
-    const std::vector<std::unique_ptr<expr::Expression>> & /*args*/) {
+    const std::vector<std::unique_ptr<expr::Expression>>& /*args*/) {
   return std::make_unique<T>();
 }
 

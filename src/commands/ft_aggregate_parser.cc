@@ -234,9 +234,10 @@ ConstructGroupByParser() {
           }
 
           if (r.info_->parse_args) {
-            VMSDK_ASSIGN_OR_RETURN(r.args_,
-                                   r.info_->parse_args(parameters, itr, cnt),
-                                   _ << " in GROUPBY stage");
+            VMSDK_ASSIGN_OR_RETURN(
+                r.args_, r.info_->parse_args(parameters, itr, cnt),
+                _ << " while parsing GROUPBY stage for function "
+                  << vmsdk::ToStringView(name));
           } else {
             for (int i = 0; i < cnt; ++i) {
               VMSDK_ASSIGN_OR_RETURN(auto arg, itr.PopNext(),

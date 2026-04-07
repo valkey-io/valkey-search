@@ -82,6 +82,8 @@ class Metrics {
         0};
     std::atomic<uint64_t> coordinator_server_search_index_partition_failure_cnt{
         0};
+    std::atomic<uint64_t>
+        coordinator_server_search_index_partition_cpu_time_usec{0};
     std::atomic<uint64_t> coordinator_client_get_global_metadata_success_cnt{0};
     std::atomic<uint64_t> coordinator_client_get_global_metadata_failure_cnt{0};
     std::atomic<uint64_t> coordinator_client_search_index_partition_success_cnt{

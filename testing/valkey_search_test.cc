@@ -479,6 +479,7 @@ TEST_F(ValkeySearchTest, Info) {
   stats.coordinator_server_get_global_metadata_success_cnt = 26;
   stats.coordinator_server_search_index_partition_failure_cnt = 27;
   stats.coordinator_server_search_index_partition_success_cnt = 28;
+  stats.coordinator_server_search_index_partition_cpu_time_usec = 29000;
   stats.coordinator_bytes_out = 1000;
   stats.coordinator_bytes_in = 2000;
   auto interned_key_1 = StringInternStore::Intern("key1");
@@ -509,6 +510,7 @@ TEST_F(ValkeySearchTest, Info) {
       "26\ncoordinator_server_get_global_metadata_failure_count: 25\n"
       "coordinator_server_search_index_partition_success_count: "
       "28\ncoordinator_server_search_index_partition_failure_count: 27\n"
+      "coordinator_server_search_index_partition_cpu_time_usec: 29000\n"
       "coordinator_client_get_global_metadata_success_count: "
       "22\ncoordinator_client_get_global_metadata_failure_count: 21\n"
       "coordinator_client_search_index_partition_success_count: "

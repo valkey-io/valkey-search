@@ -1917,6 +1917,18 @@ void IndexSchema::MarkAsDestructing() {
            "schema "
         << vmsdk::config::RedactIfNeeded(name_) << ": " << status.message();
   }
+
+  // Send error response to any waiting queries
+  for (auto &[key, mutation] : tracked_mutated_records_) {
+    for (auto &params : mutation.waiting_queries) {
+      if (params) {
+        params->search_result.status = absl::CancelledError(
+            "Search operation cancelled because index was dropped");
+        params->QueryCompleteMainThread(std::move(params));
+      }
+    }
+  }
+
   backfill_job_.Get()->MarkScanAsDone();
   tracked_mutated_records_.clear();
   is_destructing_ = true;

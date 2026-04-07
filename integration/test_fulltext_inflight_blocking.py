@@ -278,10 +278,7 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
         hset_thread.join()
         search_thread.join()
 
-        print(search_res)
-        print(search_err)
-
-        # Expect search to error
+        # Expect search to error rather than returning a result
         assert search_err[0] is not None
         assert b"Index with name 'idx' not found in database 0" in str(search_err[0]).encode()
 

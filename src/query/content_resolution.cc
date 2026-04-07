@@ -28,10 +28,10 @@ void ResolveContent(std::unique_ptr<SearchParameters> params) {
 
   // 2. Check if index is dropped
   if (params->index_schema->IsMarkedDestructing()) {
-      params->search_result.status = absl::NotFoundError(
-        "Search operation cancelled because index was dropped");
-      params->QueryCompleteMainThread(std::move(params));
-      return;
+    params->search_result.status = GenerateIndexNotFoundError(
+        params->index_schema->GetDBNum(), params->index_schema->GetName());
+    params->QueryCompleteMainThread(std::move(params));
+    return;
   }
 
   // 3. If kContentionCheckRequired, check for in-flight mutations

@@ -20,6 +20,7 @@
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/blocking_counter.h"
 #include "absl/synchronization/mutex.h"
@@ -50,6 +51,12 @@ struct SearchParameters;
 namespace valkey_search {
 bool ShouldBlockClient(ValkeyModuleCtx *ctx, bool inside_multi_exec,
                        bool from_backfill);
+
+inline absl::Status GenerateIndexNotFoundError(uint32_t db_num,
+                                               absl::string_view name) {
+  return absl::NotFoundError(absl::StrFormat(
+      "Index with name '%s' not found in database %d", name, db_num));
+}
 
 using Key = InternedStringPtr;
 using MutationSequenceNumber = uint64_t;

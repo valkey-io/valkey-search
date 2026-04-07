@@ -1922,7 +1922,7 @@ void IndexSchema::MarkAsDestructing() {
   for (auto &[key, mutation] : tracked_mutated_records_) {
     for (auto &params : mutation.waiting_queries) {
       if (params) {
-        params->search_result.status = absl::CancelledError(
+        params->search_result.status = absl::NotFoundError(
             "Search operation cancelled because index was dropped");
         params->QueryCompleteMainThread(std::move(params));
       }

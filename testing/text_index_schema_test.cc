@@ -86,6 +86,68 @@ TEST_F(TextIndexSchemaTest, FieldAllocationAcrossMultipleTexts) {
   // Schema correctly tracks field allocation for posting list identification
 }
 
+// Validate first-byte sharding routes words correctly
+TEST_F(TextIndexSchemaTest, ShardRoutingByFirstByte) {
+  auto schema = CreateSchema();
+  auto text_index = schema->GetTextIndex();
+
+  // Verify different first bytes go to different shards
+  EXPECT_NE(text_index->GetShardIndex("apple"),
+            text_index->GetShardIndex("banana"));
+  EXPECT_NE(text_index->GetShardIndex("cat"), text_index->GetShardIndex("dog"));
+  EXPECT_NE(text_index->GetShardIndex("test"),
+            text_index->GetShardIndex("zebra"));
+
+  // Same first byte = same shard
+  EXPECT_EQ(text_index->GetShardIndex("apple"),
+            text_index->GetShardIndex("avocado"));
+  EXPECT_EQ(text_index->GetShardIndex("test"),
+            text_index->GetShardIndex("tennis"));
+
+  // Verify deterministic routing
+  EXPECT_EQ(text_index->GetShardIndex("word"),
+            text_index->GetShardIndex("word"));
+}
+
+// Validate cross-shard suffix indexing (prefix and suffix in different shards)
+TEST_F(TextIndexSchemaTest, CrossShardSuffixIndexing) {
+  auto schema = CreateSchema();
+  schema->EnableSuffix();
+
+  // Allocate field number before staging data
+  uint8_t field_num = schema->AllocateTextFieldNumber();
+
+  auto text_index = schema->GetTextIndex();
+  auto key = StringInternStore::Intern("test_key");
+
+  // Index word where reversed word routes to different shard
+  // "forest" → shard['f'], reversed "tserof" → shard['t']
+  auto result =
+      schema->StageAttributeData(key, "forest", field_num, false, true);
+  EXPECT_TRUE(result.ok());
+  EXPECT_TRUE(*result);
+  schema->CommitKeyData(key);
+
+  // Verify word exists in prefix tree
+  size_t prefix_shard = text_index->GetShardIndex("forest");
+  auto prefix_iter =
+      text_index->GetPrefixShard(prefix_shard).GetWordIterator("forest");
+  EXPECT_FALSE(prefix_iter.Done());
+  EXPECT_EQ(prefix_iter.GetWord(), "forest");
+
+  // Verify reversed word exists in suffix tree
+  std::string reversed("tserof");
+  size_t suffix_shard = text_index->GetShardIndex(reversed);
+  auto suffix_shard_opt = text_index->GetSuffixShard(suffix_shard);
+  ASSERT_TRUE(suffix_shard_opt.has_value());
+  auto suffix_iter = suffix_shard_opt->get().GetWordIterator(reversed);
+  EXPECT_FALSE(suffix_iter.Done());
+  EXPECT_EQ(suffix_iter.GetWord(), reversed);
+
+  // Verify they're in different shards (key property of first-byte sharding)
+  EXPECT_NE(prefix_shard, suffix_shard);
+}
+
 }  // namespace text
 }  // namespace indexes
 }  // namespace valkey_search

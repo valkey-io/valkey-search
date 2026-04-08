@@ -20,21 +20,6 @@ namespace valkey_search::indexes::text {
 
 namespace {
 
-// InvasivePtrRaw<Postings> deletion
-static void FreePostingsCallback(void *target) {
-  if (target) {
-    auto raw = static_cast<InvasivePtrRaw<Postings>>(target);
-    InvasivePtr<Postings>::AdoptRaw(raw);
-  }
-}
-
-static void FreeStemParentsCallback(void *target) {
-  if (target) {
-    auto raw = static_cast<InvasivePtrRaw<StemParents>>(target);
-    InvasivePtr<StemParents>::AdoptRaw(raw);
-  }
-}
-
 InvasivePtr<Postings> AddKeyToPostings(InvasivePtr<Postings> existing_postings,
                                        const InternedStringPtr &key,
                                        FlatPositionMap *flat_map,
@@ -98,42 +83,6 @@ std::function<void *(void *)> CreateSimpleTargetMutateFn(MutateFn mutate_fn) {
 
 }  // namespace
 
-/*** TextIndex ***/
-
-TextIndex::TextIndex(bool suffix)
-    : prefix_tree_(FreePostingsCallback),
-      suffix_tree_(suffix ? std::make_unique<Rax>(FreePostingsCallback)
-                          : nullptr) {}
-
-void TextIndex::MutateTarget(absl::string_view word,
-                             const InvasivePtr<Postings> &target,
-                             const std::optional<std::string> &reverse_word,
-                             item_count_op op) {
-  auto target_set_fn = CreateTargetSetFn(target);
-  prefix_tree_.MutateTarget(word, target_set_fn, op);
-  if (suffix_tree_ && reverse_word.has_value()) {
-    suffix_tree_->MutateTarget(*reverse_word, target_set_fn, op);
-  }
-}
-
-Rax &TextIndex::GetPrefix() { return prefix_tree_; }
-
-const Rax &TextIndex::GetPrefix() const { return prefix_tree_; }
-
-std::optional<std::reference_wrapper<Rax>> TextIndex::GetSuffix() {
-  if (!suffix_tree_) {
-    return std::nullopt;
-  }
-  return std::ref(*suffix_tree_);
-}
-
-std::optional<std::reference_wrapper<const Rax>> TextIndex::GetSuffix() const {
-  if (!suffix_tree_) {
-    return std::nullopt;
-  }
-  return std::ref(*suffix_tree_);
-}
-
 /*** TextIndexSchema ***/
 
 TextIndexSchema::TextIndexSchema(data_model::Language language,
@@ -145,7 +94,9 @@ TextIndexSchema::TextIndexSchema(data_model::Language language,
       lexer_(language, punctuation, stop_words),
       stem_tree_(FreeStemParentsCallback),
       min_stem_size_(min_stem_size),
-      rax_target_mutex_pool_(options::GetRaxTargetMutexPoolSize().GetValue()) {}
+      rax_target_mutex_pool_(options::GetRaxTargetMutexPoolSize().GetValue()) {
+  text_index_ = std::make_shared<TextIndex<kSchemaTextIndexShards>>(false);
+}
 
 absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
     const InternedStringPtr &key, absl::string_view data,
@@ -211,7 +162,8 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
     }
   }
 
-  TextIndex key_index{with_suffix_trie_};
+  // Create local per-key index (lightweight, moveable)
+  PerKeyTextIndex key_index{with_suffix_trie_};
 
   // Index the key's tokens
   for (auto &entry : token_positions) {
@@ -239,25 +191,27 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
     {
       absl::MutexLock word_lock(&rax_target_mutex_pool_.Get(token));
 
+      size_t shard = text_index_->GetShardIndex(token);
+      auto &shard_obj = text_index_->shards_[shard];
+
+      // Read tree structure under shard_lock
       InvasivePtr<Postings> existing;
       {
-        // Tree read lock prevents rax node reallocation racing with FindTarget.
-        absl::ReaderMutexLock tree_read(&text_index_mutex_);
-        existing = text_index_->GetPrefix().FindPostingsTarget(token);
+        absl::ReaderMutexLock shard_lock(&shard_obj.mutex);
+        existing = shard_obj.prefix_tree.FindPostingsTarget(token);
       }
-      bool is_new_word = !existing;
 
+      bool is_new_word = !existing;
       updated_target =
           AddKeyToPostings(std::move(existing), key, flat_map, &metadata_);
 
       if (is_new_word) {
-        absl::WriterMutexLock tree_lock(&text_index_mutex_);
         text_index_->MutateTarget(token, updated_target, reverse_token,
                                   item_count_op::ADD);
       }
     }
 
-    // Update per-key index (no locking needed — local to this call).
+    // Update local per-key index
     key_index.MutateTarget(token, updated_target, reverse_token);
   }
 
@@ -279,7 +233,7 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
     }
   }
 
-  // Map the key to the newly created per-key index
+  // Move per-key index into map (PerKeyTextIndex is moveable)
   {
     std::lock_guard<std::mutex> per_key_guard(per_key_text_indexes_mutex_);
     per_key_text_indexes_.emplace(key, std::move(key_index));
@@ -288,7 +242,7 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
 
 void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
   // Extract the per-key index
-  absl::node_hash_map<Key, TextIndex>::node_type node;
+  absl::node_hash_map<Key, PerKeyTextIndex>::node_type node;
   {
     std::lock_guard<std::mutex> per_key_guard(per_key_text_indexes_mutex_);
     node = per_key_text_indexes_.extract(key);
@@ -296,8 +250,7 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
       return;
     }
   }
-  TextIndex &key_index = node.mapped();
-  auto suffix_opt = text_index_->GetSuffix();
+  PerKeyTextIndex &key_index = node.mapped();
 
   std::vector<std::string> empty_words;
 
@@ -311,18 +264,20 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
     {
       absl::MutexLock word_lock(&rax_target_mutex_pool_.Get(word_str));
 
+      size_t shard = text_index_->GetShardIndex(word_str);
+      auto &shard_obj = text_index_->shards_[shard];
+
+      // Read tree structure under shard_lock
       InvasivePtr<Postings> existing;
       {
-        absl::ReaderMutexLock tree_read(&text_index_mutex_);
-        existing = text_index_->GetPrefix().FindPostingsTarget(word_str);
+        absl::ReaderMutexLock shard_lock(&shard_obj.mutex);
+        existing = shard_obj.prefix_tree.FindPostingsTarget(word_str);
       }
 
-      InvasivePtr<Postings> updated_target;
-      updated_target =
+      InvasivePtr<Postings> updated_target =
           RemoveKeyFromPostings(std::move(existing), key, &metadata_);
 
       if (!updated_target) {
-        absl::WriterMutexLock tree_lock(&text_index_mutex_);
         text_index_->MutateTarget(word_str, updated_target, reverse_word,
                                   item_count_op::SUBTRACT);
         if (stem_text_field_mask_) {
@@ -373,6 +328,12 @@ uint64_t TextIndexSchema::GetTotalTermFrequency() const {
   return metadata_.total_term_frequency.load();
 }
 
+void TextIndexSchema::EnableSuffix() {
+  if (with_suffix_trie_) return;
+  with_suffix_trie_ = true;
+  text_index_ = std::make_shared<TextIndex<kSchemaTextIndexShards>>(true);
+}
+
 std::string TextIndexSchema::GetAllStemVariants(
     absl::string_view search_term,
     absl::InlinedVector<absl::string_view, kStemVariantsInlineCapacity>
@@ -404,10 +365,11 @@ std::string TextIndexSchema::GetAllStemVariants(
   return stemmed;  // Caller owns this and will add view to words_to_search
 }
 
-const TextIndex *TextIndexSchema::GetPerKeyTextIndex(const Key &key,
-                                                     bool lock) {
+const PerKeyTextIndex *TextIndexSchema::GetPerKeyTextIndex(const Key &key,
+                                                           bool lock) {
   if (!key) {
     CHECK(false) << "Invalid null key passed to GetPerKeyTextIndex";
+    return nullptr;
   }
   std::optional<std::lock_guard<std::mutex>> per_key_guard;
   if (lock) per_key_guard.emplace(per_key_text_indexes_mutex_);

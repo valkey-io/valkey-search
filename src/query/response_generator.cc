@@ -89,10 +89,10 @@ class PredicateEvaluator : public query::Evaluator {
                      QueryOperations query_operations)
       : Evaluator(query_operations), records_(records), text_index_(nullptr) {}
 
-  PredicateEvaluator(const RecordsMap &records,
-                     const valkey_search::indexes::text::TextIndex *text_index,
-                     InternedStringPtr target_key,
-                     QueryOperations query_operations)
+  PredicateEvaluator(
+      const RecordsMap &records,
+      const valkey_search::indexes::text::PerKeyTextIndex *text_index,
+      InternedStringPtr target_key, QueryOperations query_operations)
       : Evaluator(query_operations),
         records_(records),
         text_index_(text_index),
@@ -146,7 +146,7 @@ class PredicateEvaluator : public query::Evaluator {
 
  private:
   const RecordsMap &records_;
-  const valkey_search::indexes::text::TextIndex *text_index_ = nullptr;
+  const valkey_search::indexes::text::PerKeyTextIndex *text_index_ = nullptr;
   InternedStringPtr target_key_;
 };
 
@@ -167,7 +167,7 @@ bool VerifyFilter(const query::SearchParameters &parameters,
   // For text predicates, evaluate using the text index instead of raw data.
   if (parameters.index_schema &&
       parameters.index_schema->GetTextIndexSchema()) {
-    const indexes::text::TextIndex *text_index =
+    const indexes::text::PerKeyTextIndex *text_index =
         parameters.index_schema->GetTextIndexSchema()->GetPerKeyTextIndex(
             n.external_id, true);
 

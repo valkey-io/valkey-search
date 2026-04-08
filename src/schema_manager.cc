@@ -141,12 +141,6 @@ SchemaManager::SchemaManager(
   }
 }
 
-absl::Status GenerateIndexNotFoundError(uint32_t db_num,
-                                        absl::string_view name) {
-  return absl::NotFoundError(absl::StrFormat(
-      "Index with name '%s' not found in database %d", name, db_num));
-}
-
 absl::Status GenerateIndexAlreadyExistsError(uint32_t db_num,
                                              absl::string_view name) {
   return absl::AlreadyExistsError(

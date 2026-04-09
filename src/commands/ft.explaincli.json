@@ -1,0 +1,32 @@
+{
+    "FT.EXPLAINCLI": {
+        "acl_categories": [
+            "READ",
+            "FAST",
+            "SEARCH"
+        ],
+        "history": [
+            [
+                "1.3.0",
+                "FT.EXPLAINCLI added"
+            ]
+        ],
+        "arguments": [
+            {
+                "key_spec_index": 0,
+                "name": "index",
+                "type": "key"
+            },
+            {
+                "key_spec_index": 1,
+                "name": "query",
+                "type": "string"
+            }
+        ],
+        "arity": 3,
+        "complexity": "O(1)",
+        "group": "search",
+        "module_since": "1.3.0",
+        "summary": "Explains the query execution plan for the specified index and query string, showing the predicate tree structure"
+    }
+}

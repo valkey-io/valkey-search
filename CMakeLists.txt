@@ -15,7 +15,7 @@ if(NOT UNIX)
 endif()
 
 # Options
-option(BUILD_TESTS "Build valkey-search tests" ON)
+option(BUILD_UNIT_TESTS "Build valkey-search unit tests" ON)
 option(WITH_SUBMODULES_SYSTEM "Use system submodules" OFF)
 
 set(SAN_BUILD
@@ -52,7 +52,7 @@ add_subdirectory(vmsdk)
 add_subdirectory(third_party)
 add_subdirectory(src)
 
-if(BUILD_TESTS)
+if(BUILD_UNIT_TESTS)
   message(STATUS "Building tests")
   add_subdirectory(testing)
 endif()

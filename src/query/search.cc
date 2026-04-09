@@ -805,6 +805,7 @@ absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
   thread_pool->Schedule(
       [parameters = std::move(parameters), search_mode]() mutable {
         auto res = Search(*parameters, search_mode);
+        BACKGROUND_PAUSEPOINT("background_search_completing");
         parameters->search_result.status = res;
         switch (parameters->GetContentProcessing()) {
           case ContentProcessing::kNoContent:

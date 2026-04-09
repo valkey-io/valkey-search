@@ -12,6 +12,7 @@
 #include "src/coordinator/metadata_manager.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::server_events {
@@ -52,6 +53,9 @@ void OnServerCronCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
 
 void OnShutdownCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                         uint64_t subevent, void *data) {
+  // Clear all PausePoints first so any waiting worker threads wake up and
+  // exit their spin loops before global destructors destroy the map.
+  vmsdk::debug::ClearAllPausePoints();
   SchemaManager::Instance().OnShutdownCallback(ctx, eid, subevent, data);
 }
 

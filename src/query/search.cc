@@ -564,9 +564,17 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
 absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
     const SearchParameters &parameters) {
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
-  size_t qualified_entries = EvaluateFilterAsPrimary(
-      parameters, parameters.filter_parse_results.root_predicate.get(),
-      entries_fetchers, false);
+  size_t qualified_entries = 0;
+  if (parameters.filter_parse_results.is_match_all) {
+    auto universal_fetcher = std::make_unique<indexes::UniversalSetFetcher>(
+        parameters.index_schema.get());
+    qualified_entries = universal_fetcher->Size();
+    entries_fetchers.push(std::move(universal_fetcher));
+  } else {
+    qualified_entries = EvaluateFilterAsPrimary(
+        parameters, parameters.filter_parse_results.root_predicate.get(),
+        entries_fetchers, false);
+  }
 
   // Get the config for maximum number of keys to accumulate before content
   // fetching
@@ -1024,7 +1032,8 @@ absl::Status query::SearchParameters::PreParseQueryString() {
   VMSDK_ASSIGN_OR_RETURN(
       filter_parse_results, ParsePreFilter(*index_schema, pre_filter, *this),
       _.SetPrepend() << "Invalid filter expression: `" << pre_filter << "`. ");
-  if (!filter_parse_results.root_predicate && vector_filter.empty()) {
+  if (!filter_parse_results.root_predicate && vector_filter.empty() &&
+      !filter_parse_results.is_match_all) {
     // Return an error if no valid pre-filter and no vector filter is provided.
     return absl::InvalidArgumentError("Invalid query string syntax");
   }

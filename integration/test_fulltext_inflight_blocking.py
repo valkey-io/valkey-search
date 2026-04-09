@@ -273,8 +273,9 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
         # Drop the index
         client.execute_command("FT.DROPINDEX", "idx")
 
-        # Complete the search
+        # Complete the search and mutation
         client.execute_command("FT._DEBUG PAUSEPOINT RESET background_search_completing")
+        client.execute_command("FT._DEBUG PAUSEPOINT RESET mutation_processing")
         hset_thread.join()
         search_thread.join()
 

@@ -36,7 +36,12 @@ class TestFTAliasAdd(ValkeySearchTestCaseBase):
         assert client.execute_command("FT.ALIASADD", ALIAS_NAME, INDEX_NAME) == b"OK"
         # Alias should resolve to the underlying index via FT.INFO
         info = client.execute_command("FT.INFO", ALIAS_NAME)
-        assert info is not None
+        info_list = list(info)
+        idx = next(
+            (i for i, v in enumerate(info_list) if v == b"index_name"), None
+        )
+        assert idx is not None, "FT.INFO response missing 'index_name' field"
+        assert info_list[idx + 1] == INDEX_NAME.encode()
 
     def test_aliasadd_duplicate_alias(self):
         """Adding the same alias twice returns an error."""

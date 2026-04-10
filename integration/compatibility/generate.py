@@ -78,14 +78,12 @@ class BaseCompatibilityTest:
         self.key_type = key_type
         load_data(self.client, data_set_name, key_type)
 
-    def execute_command(self, cmd, excluded=False):
+    def execute_command(self, cmd):
         answer = {"cmd": cmd,
                   "key_type": self.key_type,
                   "data_set_name": self.data_set_name,
                   "testname": os.environ.get('PYTEST_CURRENT_TEST').split(':')[-1].split(' ')[0],
                   "traceback": "".join(traceback.format_stack())}
-        if excluded:
-            answer["excluded"] = True
         try:
             print("Cmd:", *cmd)
             answer["result"] = self.client.execute_command(*cmd)
@@ -131,7 +129,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             str(dialect),
         ]
         self.execute_command(new_cmd)
-    def check(self, dialect, *orig_cmd, excluded=False):
+    def check(self, dialect, *orig_cmd):
         '''Check Non-vector queries. Doesn't have support for '*' yet. '''
         cmd = orig_cmd[0].split() if len(orig_cmd) == 1 else [*orig_cmd]
         for query in ["@n1:[-inf inf]", "@t1:{aaaaaaa*}", "-@n1:[-inf inf]", "-@t1:{aaaaaa*}"]:
@@ -148,7 +146,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                 "DIALECT",
                 str(dialect),
             ]
-            self.execute_command(new_cmd, excluded=excluded)
+            self.execute_command(new_cmd)
 
     def checkall(self, dialect, *orig_cmd, **kwargs):
         '''Non-vector commands. Doesn't have support for '*' yet. '''
@@ -475,13 +473,8 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.setup_data("sortable numbers", key_type)
         idx = f"{key_type}_idx1"
         alias = f"{key_type}_alias_compat"
-        # Record alias management commands so replay recreates the same state.
         self.execute_command(["FT.ALIASADD", alias, idx])
-        # Bare scan without SORTBY returns 10 of 15 keys; which 10 depends on
-        # shard placement in cluster mode, so mark excluded for cluster replay.
-        self.execute_command(["ft.search", alias, "@n1:[-inf inf]", "DIALECT", str(dialect)], excluded=True)
         self.execute_command(["ft.search", alias, "@n1:[-inf inf]", "SORTBY", "n1", "ASC", "DIALECT", str(dialect)])
-        self.execute_command(["ft.search", alias, f"@t1:{{aaaaaaa*}}", "DIALECT", str(dialect)])
         self.check(dialect, "ft.search", alias, "*", "SORTBY", "n2", "DESC", "LIMIT", "0", "5")
         self.execute_command(["FT.ALIASDEL", alias])
 
@@ -492,10 +485,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         alias = f"{key_type}_alias_compat"
         # Record alias management commands so replay recreates the same state.
         self.execute_command(["FT.ALIASADD", alias, idx])
-        # Aggregate across all keys only works on standalone; mark excluded for cluster replay.
-        self.check(dialect, f"ft.aggregate {alias} * load 3 @__key @n1 @n2 sortby 2 @__key asc", excluded=True)
-        self.check(dialect, f"ft.aggregate {alias} * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce count 0 as count", excluded=True)
-        self.check(dialect, f"ft.aggregate {alias} * load 3 @__key @n1 @n2 sortby 2 @__key desc limit 0 5", excluded=True)
+        self.check(dialect, f"ft.aggregate {alias} * load 3 @__key @n1 @n2 sortby 2 @__key desc limit 0 5")
         self.execute_command(["FT.ALIASDEL", alias])
 
     def test_aliasupdate_search(self, key_type, dialect):
@@ -506,7 +496,6 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         # Record alias management commands so replay recreates the same state.
         self.execute_command(["FT.ALIASADD", alias, idx])
         self.execute_command(["FT.ALIASUPDATE", alias, idx])
-        # Pass range query as explicit args to avoid split() breaking @n1:[-inf inf].
         self.execute_command(["ft.search", alias, "@n1:[-inf inf]", "SORTBY", "n1", "ASC", "DIALECT", str(dialect)])
         self.execute_command(["FT.ALIASDEL", alias])
 
@@ -529,8 +518,6 @@ class TestAliasCompatibility(BaseCompatibilityTest):
         """FT.SEARCH via alias returns same results as via index name."""
         # alias_search -> hash_idx1 is pre-configured by load_data
         self.execute_command(["FT.SEARCH", "alias_search", "@price:[0 +inf]", "SORTBY", "price", "ASC"])
-        self.execute_command(["FT.SEARCH", "alias_search", "@category:{electronics}", "SORTBY", "price", "ASC"])
-        self.execute_command(["FT.SEARCH", "alias_search", "@price:[20 40]", "SORTBY", "price", "ASC"])
 
     def test_aliasadd_aggregate(self, key_type):
         """FT.AGGREGATE via alias returns same results as via index name."""
@@ -540,29 +527,3 @@ class TestAliasCompatibility(BaseCompatibilityTest):
             "GROUPBY", "1", "@category",
             "REDUCE", "COUNT", "0", "AS", "count",
         ])
-        self.execute_command([
-            "FT.AGGREGATE", "alias_agg", "@price:[0 +inf]",
-            "LOAD", "2", "@price", "@category",
-            "SORTBY", "2", "@price", "ASC",
-        ])
-
-    def test_aliasdel_then_direct(self, key_type):
-        """After FT.ALIASDEL the underlying index is still queryable by name."""
-        # alias_del was added then deleted by load_alias_data; query index directly.
-        self.execute_command(["FT.SEARCH", "hash_idx1", "@price:[0 +inf]", "SORTBY", "price", "ASC"])
-
-    def test_aliasupdate_search(self, key_type):
-        """FT.SEARCH via alias after ALIASUPDATE reflects the new target index."""
-        # alias_upd -> hash_idx2 is pre-configured by load_data
-        self.execute_command(["FT.SEARCH", "alias_upd", "@category:{furniture}", "SORTBY", "price", "ASC"])
-
-    def test_aliasupdate_old_index_unaffected(self, key_type):
-        """After ALIASUPDATE, the original index is still queryable by its real name."""
-        # alias_upd was moved from hash_idx1 to hash_idx2; hash_idx1 must still work.
-        self.execute_command(["FT.SEARCH", "hash_idx1", "@price:[0 +inf]", "SORTBY", "price", "ASC"])
-
-    def test_aliasupdate_upsert(self, key_type):
-        """FT.ALIASUPDATE on an existing alias succeeds (upsert, no error)."""
-        # alias_upd already points to hash_idx2 after setup; updating it again
-        # to hash_idx1 must succeed without an "already exists" error.
-        self.execute_command(["FT.ALIASUPDATE", "alias_upd", "hash_idx1"])

@@ -435,13 +435,12 @@ def do_answer(client, expected, data_set):
             ) from e
         return data_set
 
-    # for the excluded queries with known difference
-    # just run in valkey to make sure they do not crash
+    # Excluded entries have known result differences (e.g. parsing divergence in
+    # generate_text.py). Run them for crash-check only — don't count in tally.
     if expected.get('excluded'):
         try:
             print(f"Running excluded query (no-crash check): {expected['cmd']}")
             client.execute_command(*expected['cmd'])
-            print(f"Excluded query completed without crash")
         except Exception as e:
             print(f"Excluded query raised: {e} for cmd {expected['cmd']}")
         return data_set
@@ -542,15 +541,6 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
                 waiters.wait_for_true(_alias_visible, timeout=10)
             except Exception as e:
                 print(f"WARNING: alias {alias_name} propagation timed out: {e}")
-        return data_set
-
-    # Excluded entries are run for crash-check only, not counted.
-    if expected.get('excluded'):
-        try:
-            print(f"Running excluded cluster query (no-crash check): {expected['cmd']}")
-            cluster_client.execute_command(*expected["cmd"])
-        except Exception as e:
-            print(f"Excluded cluster query raised: {e}")
         return data_set
 
     result = {}
@@ -672,7 +662,7 @@ class TestAnswersCME(ValkeySearchClusterTestCase):
 
         expected_count = sum(
             1 for a in answers
-            if not a.get('excluded') and not _is_alias_management_cmd(a.get('cmd', []))
+            if not _is_alias_management_cmd(a.get('cmd', []))
         )
         if correct_answers != expected_count:
             print(f"Correct answers: {correct_answers} out of {expected_count} (total entries: {len(answers)})")

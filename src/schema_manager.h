@@ -172,6 +172,15 @@ class SchemaManager {
                                    absl::string_view index_name)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
 
+  // Helpers to keep db_to_index_to_aliases_ in lockstep with db_to_aliases_.
+  void AddToReverseAliasMap(uint32_t db_num, absl::string_view index_name,
+                            absl::string_view alias)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
+  void RemoveFromReverseAliasMap(uint32_t db_num,
+                                 absl::string_view index_name,
+                                 absl::string_view alias)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
+
   absl::Status CreateIndexSchemaInternal(
       ValkeyModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
@@ -195,6 +204,13 @@ class SchemaManager {
       db_to_index_schemas_ ABSL_GUARDED_BY(db_to_index_schemas_mutex_);
   absl::flat_hash_map<uint32_t, absl::flat_hash_map<std::string, std::string>>
       db_to_aliases_ ABSL_GUARDED_BY(db_to_index_schemas_mutex_);
+  // Reverse map: db_num -> index_name -> set of aliases pointing to that index.
+  // Kept in lockstep with db_to_aliases_ to provide O(1) index-to-aliases
+  // lookup instead of an O(n) scan of db_to_aliases_.
+  absl::flat_hash_map<uint32_t,
+                      absl::flat_hash_map<std::string,
+                                          absl::flat_hash_set<std::string>>>
+      db_to_index_to_aliases_ ABSL_GUARDED_BY(db_to_index_schemas_mutex_);
 
   // Staged changes to index schemas, to be applied on loading ended.
   vmsdk::MainThreadAccessGuard<absl::flat_hash_map<

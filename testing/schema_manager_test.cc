@@ -1457,4 +1457,159 @@ TEST_F(SchemaManagerAliasTest, OnSwapDBAliasesOnlySecondDBHasAlias) {
             absl::StatusCode::kNotFound);
 }
 
+// ---- Reverse map consistency tests (GetAliasesForIndex uses the reverse map)
+
+// After AddAlias, GetAliasesForIndex returns the alias.
+TEST_F(SchemaManagerAliasTest, ReverseMapConsistentAfterAdd) {
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "rev_alias_a", kIndexName));
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "rev_alias_b", kIndexName));
+
+  auto aliases =
+      SchemaManager::Instance().GetAliasesForIndex(kDb0, kIndexName);
+  EXPECT_THAT(aliases,
+              testing::UnorderedElementsAre("rev_alias_a", "rev_alias_b"));
+}
+
+// After RemoveAlias, GetAliasesForIndex no longer returns the removed alias.
+TEST_F(SchemaManagerAliasTest, ReverseMapConsistentAfterRemove) {
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "rem_alias_a", kIndexName));
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "rem_alias_b", kIndexName));
+  VMSDK_EXPECT_OK(SchemaManager::Instance().RemoveAlias(kDb0, "rem_alias_a"));
+
+  auto aliases =
+      SchemaManager::Instance().GetAliasesForIndex(kDb0, kIndexName);
+  EXPECT_THAT(aliases, testing::ElementsAre("rem_alias_b"));
+}
+
+// After UpdateAlias reassigns to a new index, the reverse map reflects the
+// new target and no longer lists the alias under the old index.
+TEST_F(SchemaManagerAliasTest, ReverseMapConsistentAfterUpdate) {
+  // Create a second index in db 0.
+  std::string proto_str2 = R"(
+      name: "test_key2"
+      db_num: 0
+      subscribed_key_prefixes: "prefix_2"
+      attribute_data_type: ATTRIBUTE_DATA_TYPE_HASH
+      attributes: {
+        alias: "test_attribute_2"
+        identifier: "test_identifier_2"
+        index: {
+          vector_index: {
+            dimension_count: 10
+            normalize: true
+            distance_metric: DISTANCE_METRIC_COSINE
+            vector_data_type: VECTOR_DATA_TYPE_FLOAT32
+            initial_cap: 100
+            hnsw_algorithm { m: 240 ef_construction: 400 ef_runtime: 30 }
+          }
+        }
+      }
+    )";
+  data_model::IndexSchema proto2;
+  ASSERT_TRUE(
+      google::protobuf::TextFormat::ParseFromString(proto_str2, &proto2));
+  ASSERT_TRUE(
+      SchemaManager::Instance().CreateIndexSchema(&fake_ctx_, proto2).ok());
+
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "upd_rev_alias", kIndexName));
+  // Reassign to test_key2.
+  VMSDK_EXPECT_OK(SchemaManager::Instance().UpdateAlias(kDb0, "upd_rev_alias",
+                                                        "test_key2"));
+
+  // Alias must appear under test_key2, not test_key.
+  auto aliases_new =
+      SchemaManager::Instance().GetAliasesForIndex(kDb0, "test_key2");
+  EXPECT_THAT(aliases_new, testing::ElementsAre("upd_rev_alias"));
+
+  auto aliases_old =
+      SchemaManager::Instance().GetAliasesForIndex(kDb0, kIndexName);
+  EXPECT_THAT(aliases_old, testing::IsEmpty());
+}
+
+// After dropping an index, GetAliasesForIndex returns empty for that index
+// and the aliases no longer resolve.
+TEST_F(SchemaManagerAliasTest, ReverseMapConsistentAfterIndexDrop) {
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "drop_rev_a", kIndexName));
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "drop_rev_b", kIndexName));
+
+  VMSDK_EXPECT_OK(SchemaManager::Instance().RemoveIndexSchema(kDb0, kIndexName));
+
+  // Reverse map must be empty for the dropped index.
+  auto aliases =
+      SchemaManager::Instance().GetAliasesForIndex(kDb0, kIndexName);
+  EXPECT_THAT(aliases, testing::IsEmpty());
+
+  // Aliases must no longer resolve.
+  EXPECT_EQ(SchemaManager::Instance()
+                .GetIndexSchema(kDb0, "drop_rev_a")
+                .status()
+                .code(),
+            absl::StatusCode::kNotFound);
+  EXPECT_EQ(SchemaManager::Instance()
+                .GetIndexSchema(kDb0, "drop_rev_b")
+                .status()
+                .code(),
+            absl::StatusCode::kNotFound);
+}
+
+// After OnSwapDB, GetAliasesForIndex reflects the swapped state.
+TEST_F(SchemaManagerAliasTest, ReverseMapConsistentAfterSwapDB) {
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "swap_rev_alias", kIndexName));
+
+  auto aliases_before =
+      SchemaManager::Instance().GetAliasesForIndex(kDb0, kIndexName);
+  EXPECT_THAT(aliases_before, testing::ElementsAre("swap_rev_alias"));
+
+  ValkeyModuleSwapDbInfo swap_db_info;
+  swap_db_info.dbnum_first = kDb0;
+  swap_db_info.dbnum_second = kDb1;
+  SchemaManager::Instance().OnSwapDB(&swap_db_info);
+
+  // After swap: alias is under db 1.
+  auto aliases_db1 =
+      SchemaManager::Instance().GetAliasesForIndex(kDb1, kIndexName);
+  EXPECT_THAT(aliases_db1, testing::ElementsAre("swap_rev_alias"));
+
+  // db 0 has no aliases for the index anymore.
+  auto aliases_db0 =
+      SchemaManager::Instance().GetAliasesForIndex(kDb0, kIndexName);
+  EXPECT_THAT(aliases_db0, testing::IsEmpty());
+}
+
+// After LoadAliasMap, GetAliasesForIndex returns the loaded aliases.
+TEST_F(SchemaManagerAliasTest, ReverseMapConsistentAfterLoad) {
+  ON_CALL(*kMockValkeyModule, GetContextFromIO(testing::_))
+      .WillByDefault(testing::Return(&fake_ctx_));
+
+  data_model::RDBSection section_proto;
+  section_proto.set_type(data_model::RDB_SECTION_ALIAS_MAP);
+  section_proto.set_supplemental_count(0);
+  auto *e1 = section_proto.mutable_alias_map_contents()->add_entries();
+  e1->set_db_num(kDb0);
+  e1->set_alias("load_rev_a");
+  e1->set_index_name(kIndexName);
+  auto *e2 = section_proto.mutable_alias_map_contents()->add_entries();
+  e2->set_db_num(kDb0);
+  e2->set_alias("load_rev_b");
+  e2->set_index_name(kIndexName);
+
+  FakeSafeRDB fake_rdb;
+  auto section = std::make_unique<data_model::RDBSection>(section_proto);
+  VMSDK_EXPECT_OK(SchemaManager::Instance().LoadAliasMap(
+      &fake_ctx_, std::move(section), SupplementalContentIter(&fake_rdb, 0)));
+
+  auto aliases =
+      SchemaManager::Instance().GetAliasesForIndex(kDb0, kIndexName);
+  EXPECT_THAT(aliases,
+              testing::UnorderedElementsAre("load_rev_a", "load_rev_b"));
+}
+
 }  // namespace valkey_search

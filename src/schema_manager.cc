@@ -320,6 +320,29 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> SchemaManager::GetIndexSchema(
   return existing_entry.value();
 }
 
+void SchemaManager::AddToReverseAliasMap(uint32_t db_num,
+                                         absl::string_view index_name,
+                                         absl::string_view alias) {
+  db_to_index_to_aliases_[db_num][std::string(index_name)].insert(
+      std::string(alias));
+}
+
+void SchemaManager::RemoveFromReverseAliasMap(uint32_t db_num,
+                                              absl::string_view index_name,
+                                              absl::string_view alias) {
+  auto rev_db_it = db_to_index_to_aliases_.find(db_num);
+  if (rev_db_it == db_to_index_to_aliases_.end()) return;
+  auto rev_idx_it = rev_db_it->second.find(index_name);
+  if (rev_idx_it == rev_db_it->second.end()) return;
+  rev_idx_it->second.erase(alias);
+  if (rev_idx_it->second.empty()) {
+    rev_db_it->second.erase(rev_idx_it);
+  }
+  if (rev_db_it->second.empty()) {
+    db_to_index_to_aliases_.erase(rev_db_it);
+  }
+}
+
 absl::Status SchemaManager::AddAliasInternal(uint32_t db_num,
                                              absl::string_view alias,
                                              absl::string_view index_name) {
@@ -337,6 +360,7 @@ absl::Status SchemaManager::AddAliasInternal(uint32_t db_num,
     return GenerateIndexNotFoundError(db_num, index_name);
   }
   db_to_aliases_[db_num][std::string(alias)] = std::string(index_name);
+  AddToReverseAliasMap(db_num, index_name, alias);
   return absl::OkStatus();
 }
 
@@ -384,7 +408,10 @@ absl::Status SchemaManager::RemoveAliasInternal(uint32_t db_num,
     // Matches RediSearch error message for unknown alias.
     return absl::NotFoundError("Alias does not exist");
   }
-  db_alias_it->second.erase(alias);
+  // Remove from reverse map before erasing from forward map.
+  auto alias_it = db_alias_it->second.find(alias);
+  RemoveFromReverseAliasMap(db_num, alias_it->second, alias);
+  db_alias_it->second.erase(alias_it);
   return absl::OkStatus();
 }
 
@@ -414,9 +441,17 @@ absl::Status SchemaManager::UpdateAliasInternal(uint32_t db_num,
   if (!LookupInternal(db_num, index_name).ok()) {
     return GenerateIndexNotFoundError(db_num, index_name);
   }
+  // Remove old reverse mapping if the alias already exists.
+  if (db_alias_it != db_to_aliases_.end()) {
+    auto old_it = db_alias_it->second.find(alias);
+    if (old_it != db_alias_it->second.end()) {
+      RemoveFromReverseAliasMap(db_num, old_it->second, alias);
+    }
+  }
   // ALIASUPDATE is an upsert: creates the alias if absent, reassigns if
   // present.
   db_to_aliases_[db_num][std::string(alias)] = std::string(index_name);
+  AddToReverseAliasMap(db_num, index_name, alias);
   return absl::OkStatus();
 }
 
@@ -464,22 +499,24 @@ SchemaManager::RemoveIndexSchemaInternal(uint32_t db_num,
     db_to_index_schemas_.erase(db_num);
   }
   // Purge any aliases that pointed to the dropped index so they don't dangle.
-  auto db_alias_it = db_to_aliases_.find(db_num);
-  if (db_alias_it != db_to_aliases_.end()) {
-    auto &alias_map = db_alias_it->second;
-    for (auto it = alias_map.begin(); it != alias_map.end();) {
-      if (it->second == name) {
-        // Advance before erasing: erasing invalidates the current iterator.
-        auto to_erase = it++;
-        alias_map.erase(to_erase);
-      } else {
-        ++it;
+  // Use the reverse map for O(1) lookup instead of scanning db_to_aliases_.
+  auto rev_db_it = db_to_index_to_aliases_.find(db_num);
+  if (rev_db_it != db_to_index_to_aliases_.end()) {
+    auto rev_idx_it = rev_db_it->second.find(name);
+    if (rev_idx_it != rev_db_it->second.end()) {
+      auto db_alias_it = db_to_aliases_.find(db_num);
+      if (db_alias_it != db_to_aliases_.end()) {
+        for (const auto &alias : rev_idx_it->second) {
+          db_alias_it->second.erase(alias);
+        }
+        if (db_alias_it->second.empty()) {
+          db_to_aliases_.erase(db_alias_it);
+        }
       }
+      rev_db_it->second.erase(rev_idx_it);
     }
-    // Remove the empty inner map to avoid accumulating empty entries,
-    // consistent with how db_to_index_schemas_ is cleaned up above.
-    if (alias_map.empty()) {
-      db_to_aliases_.erase(db_alias_it);
+    if (rev_db_it->second.empty()) {
+      db_to_index_to_aliases_.erase(rev_db_it);
     }
   }
   // Mark the index schema as lame duck. Otherwise, if there is a large
@@ -497,12 +534,12 @@ absl::Status SchemaManager::RemoveIndexSchema(uint32_t db_num,
     std::vector<std::string> aliases_to_remove;
     {
       absl::MutexLock lock(&db_to_index_schemas_mutex_);
-      auto db_alias_it = db_to_aliases_.find(db_num);
-      if (db_alias_it != db_to_aliases_.end()) {
-        for (const auto &[alias, target] : db_alias_it->second) {
-          if (target == name) {
-            aliases_to_remove.push_back(alias);
-          }
+      auto rev_db_it = db_to_index_to_aliases_.find(db_num);
+      if (rev_db_it != db_to_index_to_aliases_.end()) {
+        auto rev_idx_it = rev_db_it->second.find(name);
+        if (rev_idx_it != rev_db_it->second.end()) {
+          aliases_to_remove.assign(rev_idx_it->second.begin(),
+                                   rev_idx_it->second.end());
         }
       }
     }
@@ -560,12 +597,11 @@ std::vector<std::string> SchemaManager::GetAliasesForIndex(
     uint32_t db_num, absl::string_view index_name) const {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   std::vector<std::string> result;
-  auto db_alias_it = db_to_aliases_.find(db_num);
-  if (db_alias_it != db_to_aliases_.end()) {
-    for (const auto &[alias, target] : db_alias_it->second) {
-      if (target == index_name) {
-        result.push_back(alias);
-      }
+  auto rev_db_it = db_to_index_to_aliases_.find(db_num);
+  if (rev_db_it != db_to_index_to_aliases_.end()) {
+    auto rev_idx_it = rev_db_it->second.find(index_name);
+    if (rev_idx_it != rev_db_it->second.end()) {
+      result.assign(rev_idx_it->second.begin(), rev_idx_it->second.end());
     }
   }
   std::sort(result.begin(), result.end());
@@ -684,6 +720,7 @@ absl::Status SchemaManager::OnAliasMetadataCallback(
     return absl::OkStatus();
   }
   db_to_aliases_[db_num][alias] = index_name;
+  AddToReverseAliasMap(db_num, index_name, alias);
   return absl::OkStatus();
 }
 
@@ -889,6 +926,26 @@ void SchemaManager::OnSwapDB(ValkeyModuleSwapDbInfo *swap_db_info) {
     }
   };
   swap_aliases(swap_db_info->dbnum_first, swap_db_info->dbnum_second);
+  // Swap reverse alias maps in lockstep with forward alias maps.
+  auto swap_rev_aliases = [this](uint32_t a, uint32_t b) {
+    auto it_a = db_to_index_to_aliases_.find(a);
+    auto it_b = db_to_index_to_aliases_.find(b);
+    bool has_a = it_a != db_to_index_to_aliases_.end();
+    bool has_b = it_b != db_to_index_to_aliases_.end();
+    if (!has_a && !has_b) return;
+    if (has_a && !has_b) {
+      auto inner = std::move(it_a->second);
+      db_to_index_to_aliases_.emplace(b, std::move(inner));
+      db_to_index_to_aliases_.erase(a);
+    } else if (!has_a && has_b) {
+      auto inner = std::move(it_b->second);
+      db_to_index_to_aliases_.emplace(a, std::move(inner));
+      db_to_index_to_aliases_.erase(b);
+    } else {
+      std::swap(it_a->second, it_b->second);
+    }
+  };
+  swap_rev_aliases(swap_db_info->dbnum_first, swap_db_info->dbnum_second);
 }
 
 void SchemaManager::OnReplicationLoadStart(ValkeyModuleCtx *ctx) {
@@ -925,6 +982,7 @@ void SchemaManager::OnLoadingEnded(ValkeyModuleCtx *ctx) {
     // Aliases are re-loaded from RDB after replication, clear any stale
     // in-memory state so LoadAliasMap starts from a clean slate.
     db_to_aliases_.clear();
+    db_to_index_to_aliases_.clear();
     staging_indices_due_to_repl_load_ = false;
   }
 
@@ -1029,6 +1087,7 @@ absl::Status SchemaManager::LoadAliasMap(
       continue;
     }
     db_to_aliases_[entry.db_num()][entry.alias()] = entry.index_name();
+    AddToReverseAliasMap(entry.db_num(), entry.index_name(), entry.alias());
   }
   return absl::OkStatus();
 }
@@ -1048,6 +1107,7 @@ absl::Status SchemaManager::RemoveAll() {
   }
   // Clear all aliases so none dangle after all indexes are removed.
   db_to_aliases_.clear();
+  db_to_index_to_aliases_.clear();
   return absl::OkStatus();
 }
 

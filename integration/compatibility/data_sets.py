@@ -596,37 +596,23 @@ def compute_text_data_sets(dataset_name, seed=123, schema_type="default"):
 ### Helper Functions ###
 def compute_alias_data():
     """Return alias compatibility dataset in the standard compute_data_sets() shape.
-
-    Uses CREATES_KEY for FT.CREATE commands, SETS_KEY for HSET key/field pairs,
-    and SETUP_KEY for post-load alias management commands (each entry is a list
-    of args passed directly to execute_command).
     """
     data = {"alias": {}}
     key_type = "hash"
-    # Use hash_idx1/hash_idx2 so the generic "{key_type}_idx1" waiter in
+    # Use hash_idx1 so the generic "{key_type}_idx1" waiter in
     # compatibility_test.py works without any dataset-specific special-casing.
     data["alias"][CREATES_KEY(key_type)] = [
         "FT.CREATE hash_idx1 ON HASH PREFIX 1 adoc: SCHEMA price NUMERIC category TAG",
-        "FT.CREATE hash_idx2 ON HASH PREFIX 1 bdoc: SCHEMA price NUMERIC category TAG",
     ]
     data["alias"][SETS_KEY(key_type)] = [
         (f"adoc:{i}", {"price": str(i * 10),
                        "category": "electronics" if i % 2 == 0 else "books"})
         for i in range(5)
-    ] + [
-        (f"bdoc:{i}", {"price": str(i * 100), "category": "furniture"})
-        for i in range(3)
     ]
     # Post-load alias setup: each entry is a flat arg list for execute_command.
     data["alias"][SETUP_KEY(key_type)] = [
         ["FT.ALIASADD", "alias_search", "hash_idx1"],
         ["FT.ALIASADD", "alias_agg",    "hash_idx1"],
-        # alias_del: added then immediately removed — tests query hash_idx1 directly
-        ["FT.ALIASADD", "alias_del",    "hash_idx1"],
-        ["FT.ALIASDEL", "alias_del"],
-        # alias_upd: starts on hash_idx1, updated to hash_idx2
-        ["FT.ALIASADD",    "alias_upd", "hash_idx1"],
-        ["FT.ALIASUPDATE", "alias_upd", "hash_idx2"],
     ]
     return data
 

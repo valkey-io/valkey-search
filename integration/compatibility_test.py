@@ -429,7 +429,10 @@ def do_answer(client, expected, data_set):
             client.execute_command(*expected['cmd'])
             print(f"Alias setup: {expected['cmd']}")
         except valkey.ResponseError as e:
-            print(f"WARNING: alias management command failed during replay: {e} cmd={expected['cmd']}")
+            raise AssertionError(
+                f"Alias management command failed during replay — subsequent search results will be wrong. "
+                f"cmd={expected['cmd']} error={e}"
+            ) from e
         return data_set
 
     # for the excluded queries with known difference
@@ -517,7 +520,10 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
             primary0.execute_command(*expected["cmd"])
             print(f"Alias setup (cluster): {expected['cmd']}")
         except valkey.ResponseError as e:
-            print(f"WARNING: alias management command failed during cluster replay: {e} cmd={expected['cmd']}")
+            raise AssertionError(
+                f"Alias management command failed during cluster replay — subsequent search results will be wrong. "
+                f"cmd={expected['cmd']} error={e}"
+            ) from e
         # After ALIASADD/ALIASUPDATE, wait for propagation to all primaries
         # before running search commands that depend on the alias.
         if verb in ("FT.ALIASADD", "FT.ALIASUPDATE"):

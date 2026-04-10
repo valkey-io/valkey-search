@@ -19,6 +19,7 @@
 #include "google/protobuf/text_format.h"
 #include "gtest/gtest.h"
 #include "src/coordinator/metadata_manager.h"
+#include "src/coordinator/coordinator.pb.h"
 #include "src/rdb_section.pb.h"
 #include "testing/common.h"
 #include "testing/coordinator/common.h"
@@ -887,7 +888,7 @@ TEST_F(SchemaManagerAliasTest, MissingIndexRejectedOnUpdate) {
 }
 
 // RDB round-trip: SaveAliases -> LoadAliasMap restores aliases correctly.
-// We construct the AliasMap proto directly (bypassing the RDB byte-stream
+// We construct the GlobalMetadata proto directly (bypassing the RDB byte-stream
 // layer) to keep the test focused on the alias save/load logic.
 TEST_F(SchemaManagerAliasTest, AliasSaveLoadRoundTrip) {
   ON_CALL(*kMockValkeyModule, GetContextFromIO(testing::_))
@@ -897,13 +898,21 @@ TEST_F(SchemaManagerAliasTest, AliasSaveLoadRoundTrip) {
       SchemaManager::Instance().AddAlias(kDb0, "rdb_alias", kIndexName));
 
   // Build the RDB section proto that SaveAliases would produce.
-  data_model::RDBSection section_proto;
-  section_proto.set_type(data_model::RDB_SECTION_ALIAS_MAP);
-  section_proto.set_supplemental_count(0);
-  auto *entry = section_proto.mutable_alias_map_contents()->add_entries();
+  coordinator::AliasMap alias_map;
+  auto *entry = alias_map.add_entries();
   entry->set_db_num(kDb0);
   entry->set_alias("rdb_alias");
   entry->set_index_name(kIndexName);
+  std::string alias_map_bytes;
+  ASSERT_TRUE(alias_map.SerializeToString(&alias_map_bytes));
+
+  coordinator::GlobalMetadata global_metadata;
+  global_metadata.set_alias_map_bytes(alias_map_bytes);
+
+  data_model::RDBSection section_proto;
+  section_proto.set_type(data_model::RDB_SECTION_GLOBAL_METADATA);
+  section_proto.set_supplemental_count(0);
+  section_proto.mutable_global_metadata_contents()->CopyFrom(global_metadata);
 
   // Remove the alias so we can verify it is restored by LoadAliasMap.
   VMSDK_EXPECT_OK(SchemaManager::Instance().RemoveAlias(kDb0, "rdb_alias"));
@@ -927,28 +936,37 @@ TEST_F(SchemaManagerAliasTest, AliasSaveLoadRoundTrip) {
   EXPECT_EQ(by_alias.value().get(), by_name.value().get());
 }
 
-// LoadAliasMap with an orphaned alias (index missing) logs a warning and
-// skips the entry rather than failing the entire load.
-TEST_F(SchemaManagerAliasTest, LoadAliasMapSkipsOrphanedAlias) {
+// LoadAliasMap with an orphaned alias (index missing) installs the alias
+// unconditionally (deferred validation — GetIndexSchema returns not-found
+// naturally if the target is missing).
+TEST_F(SchemaManagerAliasTest, LoadAliasMapInstallsOrphanedAlias) {
   ON_CALL(*kMockValkeyModule, GetContextFromIO(testing::_))
       .WillByDefault(testing::Return(&fake_ctx_));
 
   // Build a section that references a non-existent index.
-  data_model::RDBSection section_proto;
-  section_proto.set_type(data_model::RDB_SECTION_ALIAS_MAP);
-  section_proto.set_supplemental_count(0);
-  auto *entry = section_proto.mutable_alias_map_contents()->add_entries();
+  coordinator::AliasMap alias_map;
+  auto *entry = alias_map.add_entries();
   entry->set_db_num(kDb0);
   entry->set_alias("orphan_alias");
   entry->set_index_name("nonexistent_index");
+  std::string alias_map_bytes;
+  ASSERT_TRUE(alias_map.SerializeToString(&alias_map_bytes));
+
+  coordinator::GlobalMetadata global_metadata;
+  global_metadata.set_alias_map_bytes(alias_map_bytes);
+
+  data_model::RDBSection section_proto;
+  section_proto.set_type(data_model::RDB_SECTION_GLOBAL_METADATA);
+  section_proto.set_supplemental_count(0);
+  section_proto.mutable_global_metadata_contents()->CopyFrom(global_metadata);
 
   auto section = std::make_unique<data_model::RDBSection>(section_proto);
   FakeSafeRDB fake_rdb;
-  // Must succeed (skip, not fail).
+  // Must succeed — deferred validation, alias is installed unconditionally.
   VMSDK_EXPECT_OK(SchemaManager::Instance().LoadAliasMap(
       &fake_ctx_, std::move(section), SupplementalContentIter(&fake_rdb, 0)));
 
-  // Orphaned alias must not have been inserted.
+  // Orphaned alias is installed but resolves to not-found (target missing).
   EXPECT_EQ(SchemaManager::Instance()
                 .GetIndexSchema(kDb0, "orphan_alias")
                 .status()
@@ -1272,10 +1290,14 @@ TEST_F(SchemaManagerAliasTest, SaveAliasesAfterRDB) {
   const char *buf = ValkeyModule_StringPtrLen(saved_str.value().get(), &len);
   data_model::RDBSection section;
   ASSERT_TRUE(section.ParseFromArray(buf, len));
-  EXPECT_EQ(section.type(), data_model::RDB_SECTION_ALIAS_MAP);
+  EXPECT_EQ(section.type(), data_model::RDB_SECTION_GLOBAL_METADATA);
   EXPECT_EQ(section.supplemental_count(), 0);
 
-  const auto &entries = section.alias_map_contents().entries();
+  // Deserialize the alias_map_bytes field from the embedded GlobalMetadata.
+  coordinator::AliasMap alias_map;
+  ASSERT_TRUE(alias_map.ParseFromString(
+      section.global_metadata_contents().alias_map_bytes()));
+  const auto &entries = alias_map.entries();
   EXPECT_EQ(entries.size(), 3);
 
   // Collect into a set for order-independent comparison (flat_hash_map
@@ -1307,7 +1329,7 @@ TEST_F(SchemaManagerAliasTest, SaveAliasesBeforeRDBIsNoop) {
 // without inserting the alias (transient during reconciliation; will retry).
 TEST_F(SchemaManagerCoordinatorAliasTest,
        OnAliasMetadataCallbackMissingTargetIndex) {
-  data_model::AliasEntry entry;
+  coordinator::AliasEntry entry;
   entry.set_index_name("nonexistent_index");
   auto any_proto = std::make_unique<google::protobuf::Any>();
   any_proto->PackFrom(entry);
@@ -1332,7 +1354,7 @@ TEST_F(SchemaManagerCoordinatorAliasTest,
        CreateEntryWithMalformedAnyHandledGracefully) {
   auto bad_any = std::make_unique<google::protobuf::Any>();
   bad_any->set_type_url(
-      "type.googleapis.com/valkey_search.data_model.AliasEntry");
+      "type.googleapis.com/valkey_search.coordinator.AliasEntry");
   bad_any->set_value("not-valid-proto-bytes");
   // Protobuf is lenient with unknown bytes so UnpackTo may succeed on garbage;
   // either outcome is acceptable as long as the alias does not resolve.
@@ -1589,17 +1611,25 @@ TEST_F(SchemaManagerAliasTest, ReverseMapConsistentAfterLoad) {
   ON_CALL(*kMockValkeyModule, GetContextFromIO(testing::_))
       .WillByDefault(testing::Return(&fake_ctx_));
 
-  data_model::RDBSection section_proto;
-  section_proto.set_type(data_model::RDB_SECTION_ALIAS_MAP);
-  section_proto.set_supplemental_count(0);
-  auto *e1 = section_proto.mutable_alias_map_contents()->add_entries();
+  coordinator::AliasMap alias_map;
+  auto *e1 = alias_map.add_entries();
   e1->set_db_num(kDb0);
   e1->set_alias("load_rev_a");
   e1->set_index_name(kIndexName);
-  auto *e2 = section_proto.mutable_alias_map_contents()->add_entries();
+  auto *e2 = alias_map.add_entries();
   e2->set_db_num(kDb0);
   e2->set_alias("load_rev_b");
   e2->set_index_name(kIndexName);
+  std::string alias_map_bytes;
+  ASSERT_TRUE(alias_map.SerializeToString(&alias_map_bytes));
+
+  coordinator::GlobalMetadata global_metadata;
+  global_metadata.set_alias_map_bytes(alias_map_bytes);
+
+  data_model::RDBSection section_proto;
+  section_proto.set_type(data_model::RDB_SECTION_GLOBAL_METADATA);
+  section_proto.set_supplemental_count(0);
+  section_proto.mutable_global_metadata_contents()->CopyFrom(global_metadata);
 
   FakeSafeRDB fake_rdb;
   auto section = std::make_unique<data_model::RDBSection>(section_proto);

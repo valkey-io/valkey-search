@@ -128,36 +128,33 @@ SchemaManager::SchemaManager(
               [this](ValkeyModuleCtx *ctx, int when) {
                 return this->GetMinVersion();
               }});
-  // RDB_SECTION_ALIAS_MAP must be registered after RDB_SECTION_INDEX_SCHEMA.
-  // LoadAliasMap validates alias targets exist, so indexes must be loaded
-  // first. The RDB framework calls load callbacks in registration order.
-  RegisterRDBCallback(
-      data_model::RDB_SECTION_ALIAS_MAP,
-      RDBSectionCallbacks{
-          .load = [this](ValkeyModuleCtx *ctx,
-                         std::unique_ptr<data_model::RDBSection> section,
-                         SupplementalContentIter &&iter) -> absl::Status {
-            return LoadAliasMap(ctx, std::move(section), std::move(iter));
-          },
-          .save = [this](ValkeyModuleCtx *ctx, SafeRDB *rdb, int when)
-              -> absl::Status { return SaveAliases(ctx, rdb, when); },
-          // Returns 1 if any DB has aliases to persist (all aliases are packed
-          // into a single RDB section), 0 otherwise.
-          .section_count = [this](ValkeyModuleCtx *ctx, int when) -> int {
-            // Only report sections for the AFTER phase, matching SaveAliases.
-            if (when == VALKEYMODULE_AUX_BEFORE_RDB) {
+  // In standalone mode, register for RDB_SECTION_GLOBAL_METADATA to persist
+  // aliases. In coordinator mode, MetadataManager owns that section and aliases
+  // are already stored in its type_namespace_map — no separate save needed.
+  if (!coordinator_enabled) {
+    RegisterRDBCallback(
+        data_model::RDB_SECTION_GLOBAL_METADATA,
+        RDBSectionCallbacks{
+            .load = [this](ValkeyModuleCtx *ctx,
+                           std::unique_ptr<data_model::RDBSection> section,
+                           SupplementalContentIter &&iter) -> absl::Status {
+              return LoadAliasMap(ctx, std::move(section), std::move(iter));
+            },
+            .save = [this](ValkeyModuleCtx *ctx, SafeRDB *rdb, int when)
+                -> absl::Status { return SaveAliases(ctx, rdb, when); },
+            .section_count = [this](ValkeyModuleCtx *ctx, int when) -> int {
+              if (when == VALKEYMODULE_AUX_BEFORE_RDB) return 0;
+              absl::MutexLock lock(&db_to_index_schemas_mutex_);
+              for (const auto &kv : db_to_aliases_) {
+                if (!kv.second.empty()) return 1;
+              }
               return 0;
-            }
-            absl::MutexLock lock(&db_to_index_schemas_mutex_);
-            for (const auto &kv : db_to_aliases_) {
-              if (!kv.second.empty()) return 1;
-            }
-            return 0;
-          },
-          .minimum_semantic_version =
-              [this](ValkeyModuleCtx *ctx, int when) {
-                return this->GetMinVersion();
-              }});
+            },
+            .minimum_semantic_version =
+                [this](ValkeyModuleCtx *ctx, int when) {
+                  return this->GetMinVersion();
+                }});
+  }
   if (coordinator_enabled) {
     coordinator::MetadataManager::Instance().RegisterType(
         kSchemaManagerMetadataTypeName, ComputeFingerprint,
@@ -386,7 +383,7 @@ absl::Status SchemaManager::AddAlias(uint32_t db_num, absl::string_view alias,
         return GenerateIndexNotFoundError(db_num, index_name);
       }
     }
-    data_model::AliasEntry entry;
+    coordinator::AliasEntry entry;
     entry.set_index_name(std::string(index_name));
     auto any_proto = std::make_unique<google::protobuf::Any>();
     any_proto->PackFrom(entry);
@@ -473,7 +470,7 @@ absl::Status SchemaManager::UpdateAlias(uint32_t db_num,
         return GenerateIndexNotFoundError(db_num, index_name);
       }
     }
-    data_model::AliasEntry entry;
+    coordinator::AliasEntry entry;
     entry.set_index_name(std::string(index_name));
     auto any_proto = std::make_unique<google::protobuf::Any>();
     any_proto->PackFrom(entry);
@@ -638,7 +635,7 @@ absl::StatusOr<uint64_t> SchemaManager::ComputeFingerprint(
 
 absl::StatusOr<uint64_t> SchemaManager::ComputeAliasFingerprint(
     const google::protobuf::Any &metadata) {
-  data_model::AliasEntry unpacked;
+  coordinator::AliasEntry unpacked;
   if (!metadata.UnpackTo(&unpacked)) {
     return absl::InternalError(
         "Unable to unpack metadata for alias fingerprint calculation");
@@ -700,7 +697,7 @@ absl::Status SchemaManager::OnAliasMetadataCallback(
     // Tombstone/deletion: alias already removed above.
     return absl::OkStatus();
   }
-  data_model::AliasEntry entry;
+  coordinator::AliasEntry entry;
   if (!metadata->UnpackTo(&entry)) {
     return absl::InternalError(
         absl::StrCat("Unable to unpack alias metadata for ", obj_name));
@@ -1036,12 +1033,13 @@ absl::Status SchemaManager::SaveAliases(ValkeyModuleCtx *ctx, SafeRDB *rdb,
   if (when == VALKEYMODULE_AUX_BEFORE_RDB) {
     return absl::OkStatus();
   }
-  // All aliases across all DBs are packed into a single RDB section proto.
-  // This is intentional: aliases are lightweight (two strings per entry) and
-  // their total count is implicitly bounded by the max-indexes config.
+  // All aliases across all DBs are packed into a single RDB section proto
+  // embedded in the GlobalMetadata section. This is intentional: aliases are
+  // lightweight (two strings per entry) and their total count is implicitly
+  // bounded by the max-indexes config.
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
 
-  data_model::AliasMap alias_map_proto;
+  coordinator::AliasMap alias_map_proto;
   for (const auto &[db_num, alias_map] : db_to_aliases_) {
     for (const auto &[alias, index_name] : alias_map) {
       auto *entry = alias_map_proto.add_entries();
@@ -1051,13 +1049,22 @@ absl::Status SchemaManager::SaveAliases(ValkeyModuleCtx *ctx, SafeRDB *rdb,
     }
   }
 
+  std::string serialized_alias_map;
+  if (!alias_map_proto.SerializeToString(&serialized_alias_map)) {
+    return absl::InternalError("Failed to serialize alias map");
+  }
+
+  coordinator::GlobalMetadata global_metadata;
+  global_metadata.set_alias_map_bytes(serialized_alias_map);
+
   data_model::RDBSection section;
-  section.set_type(data_model::RDB_SECTION_ALIAS_MAP);
+  section.set_type(data_model::RDB_SECTION_GLOBAL_METADATA);
   section.set_supplemental_count(0);
-  section.mutable_alias_map_contents()->CopyFrom(alias_map_proto);
+  section.mutable_global_metadata_contents()->CopyFrom(global_metadata);
   std::string serialized;
   if (!section.SerializeToString(&serialized)) {
-    return absl::InternalError("Failed to serialize alias map RDB section");
+    return absl::InternalError(
+        "Failed to serialize global metadata (alias) RDB section");
   }
   VMSDK_RETURN_IF_ERROR(rdb->SaveStringBuffer(serialized))
       << "IO error while saving alias map to RDB";
@@ -1067,25 +1074,27 @@ absl::Status SchemaManager::SaveAliases(ValkeyModuleCtx *ctx, SafeRDB *rdb,
 absl::Status SchemaManager::LoadAliasMap(
     ValkeyModuleCtx *ctx, std::unique_ptr<data_model::RDBSection> section,
     SupplementalContentIter &&supplemental_iter) {
-  if (section->type() != data_model::RDB_SECTION_ALIAS_MAP) {
+  if (section->type() != data_model::RDB_SECTION_GLOBAL_METADATA) {
     return absl::InternalError(
         "Unexpected RDB section type passed to SchemaManager alias loader");
   }
-  const auto &alias_map_proto = section->alias_map_contents();
+  const auto &alias_map_bytes =
+      section->global_metadata_contents().alias_map_bytes();
+  if (alias_map_bytes.empty()) {
+    // Section present but no alias data (e.g. coordinator mode section loaded
+    // in standalone context, or empty alias map).
+    return absl::OkStatus();
+  }
+  coordinator::AliasMap alias_map_proto;
+  if (!alias_map_proto.ParseFromString(alias_map_bytes)) {
+    return absl::InternalError(
+        "Failed to deserialize alias map from global metadata RDB section");
+  }
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  // ORDERING REQUIREMENT: LookupInternal requires indexes to already be loaded,
-  // so RDB_SECTION_INDEX_SCHEMA callbacks must run before this one.
+  // Deferred validation: install aliases unconditionally. If the target index
+  // is missing, GetIndexSchema will return not-found naturally. This removes
+  // the ordering dependency between INDEX_SCHEMA and GLOBAL_METADATA sections.
   for (const auto &entry : alias_map_proto.entries()) {
-    // Validate that the referenced index exists. If the index is missing the
-    // RDB may be partially corrupt; skip the alias with a warning rather than
-    // aborting the entire load.
-    if (!LookupInternal(entry.db_num(), entry.index_name()).ok()) {
-      VMSDK_LOG(WARNING, ctx) << absl::StrFormat(
-          "Skipping RDB alias '%s' in db %d: referenced index '%s' not found; "
-          "RDB may be corrupt or index registration order was violated",
-          entry.alias(), entry.db_num(), entry.index_name());
-      continue;
-    }
     db_to_aliases_[entry.db_num()][entry.alias()] = entry.index_name();
     AddToReverseAliasMap(entry.db_num(), entry.index_name(), entry.alias());
   }

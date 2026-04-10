@@ -172,6 +172,11 @@ message GlobalMetadata {
   GlobalMetadataVersionHeader version_header = 1;
   // Nested map. Outer map is namespace, inner map is ID to entry.
   map<string, GlobalMetadataEntryMap> type_namespace_map = 2;
+  // Serialized valkey_search.data_model.AliasMap proto for standalone
+  // (non-coordinator) mode persistence. In coordinator mode, aliases are
+  // stored in type_namespace_map via MetadataManager. In standalone mode,
+  // this field carries all aliases.
+  bytes alias_map_bytes = 3;
 }
 
 // GlobalMetadataEntryMap is a wrapper around a map from ID to metadata entry.
@@ -233,4 +238,20 @@ message InfoIndexPartitionResponse {
   FanoutErrorType error_type = 16;
   uint32 db_num = 17;
   repeated AttributeInfo attributes = 18;
+}
+
+// Alias metadata entry stored in MetadataManager (coordinator mode) and
+// serialized into GlobalMetadata.alias_map_bytes (standalone mode).
+// In coordinator mode only index_name is used (packed into Any proto).
+// In standalone mode all three fields are populated for RDB persistence.
+message AliasEntry {
+  uint32 db_num = 1;
+  string alias = 2;
+  string index_name = 3;
+}
+
+// Collection of alias entries for RDB persistence in standalone mode.
+// Serialized into GlobalMetadata.alias_map_bytes.
+message AliasMap {
+  repeated AliasEntry entries = 1;
 }

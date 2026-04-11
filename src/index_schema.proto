@@ -36,6 +36,7 @@ message IndexSchema {
   repeated string stop_words = 11;
   uint32 min_stem_size = 12;
   bool skip_initial_scan = 13;
+  optional uint32 query_timeout_ms = 14;
 }
 
 
@@ -112,4 +113,3 @@ message HNSWAlgorithm {
 message FlatAlgorithm {
   uint32 block_size = 1;
 }
-

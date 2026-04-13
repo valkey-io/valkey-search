@@ -57,6 +57,28 @@ vmsdk::module::Options options = {
                     &vmsdk::CreateCommand<valkey_search::FTDropIndexCmd>,
             },
             {
+                .cmd_name = valkey_search::kAliasAddCommand,
+                .permissions = ACLPermissionFormatter(
+                    valkey_search::kAliasAddCmdPermissions),
+                .flags = {vmsdk::module::kWriteFlag, vmsdk::module::kFastFlag},
+                .cmd_func = &vmsdk::CreateCommand<valkey_search::FTAliasAddCmd>,
+            },
+            {
+                .cmd_name = valkey_search::kAliasDelCommand,
+                .permissions = ACLPermissionFormatter(
+                    valkey_search::kAliasDelCmdPermissions),
+                .flags = {vmsdk::module::kWriteFlag, vmsdk::module::kFastFlag},
+                .cmd_func = &vmsdk::CreateCommand<valkey_search::FTAliasDelCmd>,
+            },
+            {
+                .cmd_name = valkey_search::kAliasUpdateCommand,
+                .permissions = ACLPermissionFormatter(
+                    valkey_search::kAliasUpdateCmdPermissions),
+                .flags = {vmsdk::module::kWriteFlag, vmsdk::module::kFastFlag},
+                .cmd_func =
+                    &vmsdk::CreateCommand<valkey_search::FTAliasUpdateCmd>,
+            },
+            {
                 .cmd_name = valkey_search::kInfoCommand,
                 .permissions =
                     ACLPermissionFormatter(valkey_search::kInfoCmdPermissions),

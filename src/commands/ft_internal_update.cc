@@ -14,7 +14,7 @@
 
 namespace valkey_search {
 
-constexpr int kFTInternalUpdateArgCount = 4;
+constexpr int kFTInternalUpdateMinArgCount = 4;
 
 // Helper function to handle parse failures with poison pill recovery
 absl::Status HandleInternalUpdateFailure(
@@ -55,8 +55,19 @@ absl::Status HandleInternalUpdateFailure(
 
 absl::Status FTInternalUpdateCmd(ValkeyModuleCtx *ctx,
                                  ValkeyModuleString **argv, int argc) {
-  CHECK_EQ(argc, kFTInternalUpdateArgCount)
+  CHECK(argc >= kFTInternalUpdateMinArgCount)
       << "FT.INTERNAL_UPDATE called with wrong argument count: " << argc;
+
+  // Parse keyword/value pairs from argv[4..argc-1].
+  // Recognized keywords: TYPE (metadata type name).
+  // Unrecognized keywords are silently ignored for forward compatibility.
+  absl::string_view type_name = kSchemaManagerMetadataTypeName;
+  for (int i = 4; i + 1 < argc; i += 2) {
+    auto key = vmsdk::ToStringView(argv[i]);
+    if (key == "TYPE") {
+      type_name = vmsdk::ToStringView(argv[i + 1]);
+    }
+  }
 
   auto id_view = vmsdk::ToStringView(argv[1]);
   std::string id(id_view);
@@ -82,8 +93,7 @@ absl::Status FTInternalUpdateCmd(ValkeyModuleCtx *ctx,
   if ((flags & VALKEYMODULE_CTX_FLAGS_SLAVE) ||
       (flags & VALKEYMODULE_CTX_FLAGS_LOADING)) {
     auto status = coordinator::MetadataManager::Instance().CreateEntryOnReplica(
-        ctx, kSchemaManagerMetadataTypeName, id, &metadata_entry,
-        &version_header);
+        ctx, type_name, id, &metadata_entry, &version_header);
     VMSDK_RETURN_IF_ERROR(
         HandleInternalUpdateFailure(ctx, "CreateEntryOnReplica", id, status));
   }

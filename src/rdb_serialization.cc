@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdlib>
+#include <vector>
 
 #include "absl/log/check.h"
 #include "absl/status/status.h"
@@ -255,14 +256,12 @@ absl::Status PerformRDBSave(ValkeyModuleCtx *ctx, SafeRDB *rdb, int when) {
   VMSDK_RETURN_IF_ERROR(rdb->SaveUnsigned(min_version.ToInt()));
   VMSDK_RETURN_IF_ERROR(rdb->SaveUnsigned(rdb_section_count));
 
-  // Now do the save of the contents
-  for (auto &section_count : section_counts) {
-    if (section_count.second == 0) {
+  // Now do the save of the contents.
+  for (auto &[type, callbacks] : kRegisteredRDBSectionCallbacks) {
+    if (section_counts[type] == 0) {
       continue;
     }
-    VMSDK_RETURN_IF_ERROR(
-        kRegisteredRDBSectionCallbacks[section_count.first].save(ctx, rdb,
-                                                                 when));
+    VMSDK_RETURN_IF_ERROR(callbacks.save(ctx, rdb, when));
   }
 
   return absl::OkStatus();

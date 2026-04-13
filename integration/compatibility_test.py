@@ -311,9 +311,10 @@ def compare_results(expected, results):
         print(TEST_MARKER)
         return False
 
-    # Handle simple (non-list) results from mutation commands like ALIASADD/ALIASDEL/ALIASUPDATE.
-    # These return b'OK' rather than a list, so unpack_result would crash on them.
-    if not isinstance(expected["result"], list):
+    # Alias mutation commands (ALIASADD/ALIASDEL/ALIASUPDATE) return a simple
+    # value (b'OK') rather than a result list, check the command, not the
+    # result type, so the intent is explicit.
+    if _is_alias_management_cmd(cmd):
         match = expected["result"] == results["result"]
         if not match:
             print(f"Simple result mismatch: expected={expected['result']!r} got={results['result']!r}")

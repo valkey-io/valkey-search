@@ -8,7 +8,9 @@
 #include "absl/status/status.h"
 #include "absl/strings/string_view.h"
 #include "src/commands/commands.h"
+#include "src/commands/ft_alias_consistency.h"
 #include "src/schema_manager.h"
+#include "src/valkey_search.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
@@ -28,7 +30,31 @@ absl::Status FTAliasUpdateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   VMSDK_RETURN_IF_ERROR(SchemaManager::Instance().UpdateAlias(
       ValkeyModule_GetSelectedDb(ctx), alias, index_name));
 
-  ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+  // Cluster consistency check — wait for alias to propagate to all nodes.
+  const bool is_loading =
+      ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_LOADING;
+  const bool inside_multi_exec = vmsdk::MultiOrLua(ctx);
+  if (ValkeySearch::Instance().IsCluster() &&
+      ValkeySearch::Instance().UsingCoordinator() && !is_loading &&
+      !inside_multi_exec) {
+    VMSDK_ASSIGN_OR_RETURN(auto schema,
+                           SchemaManager::Instance().GetIndexSchema(
+                               ValkeyModule_GetSelectedDb(ctx), alias));
+    coordinator::IndexFingerprintVersion ifv;
+    ifv.set_fingerprint(schema->GetFingerprint());
+    ifv.set_version(schema->GetVersion());
+    unsigned timeout_ms = options::GetFTInfoTimeoutMs().GetValue();
+    auto op = new AliasExistsConsistencyCheckFanoutOperation(
+        ValkeyModule_GetSelectedDb(ctx), std::string(alias), timeout_ms, ifv);
+    op->StartOperation(ctx);
+  } else {
+    if (is_loading || inside_multi_exec) {
+      VMSDK_LOG(NOTICE, nullptr) << "The server is loading AOF or inside "
+                                    "multi/exec or lua script, skip "
+                                    "fanout operation";
+    }
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+  }
 
   if (!options::GetUseCoordinator().GetValue()) {
     ValkeyModule_ReplicateVerbatim(ctx);

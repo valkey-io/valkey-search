@@ -1,10 +1,5 @@
 """
-Cluster propagation integration tests for FT.ALIASADD, FT.ALIASDEL, and
-FT.ALIASUPDATE.
-
-These tests verify that alias mutations issued on one cluster primary are
-propagated to all other primaries via the MetadataManager / FT.INTERNAL_UPDATE
-mechanism introduced by the cluster alias propagation feature.
+Cluster propagation integration tests for FT.ALIASADD, FT.ALIASDEL, and FT.ALIASUPDATE.
 """
 
 import pytest
@@ -53,29 +48,6 @@ def _wait_for_alias_on_all_nodes(nodes, alias_name, expect_present=True,
     waiters.wait_for_true(check, timeout=timeout)
 
 
-def _wait_for_alias_target_on_all_nodes(nodes, alias_name, expected_index,
-                                         timeout=10):
-    """
-    Poll until FT.INFO alias_name reports index_name == expected_index on
-    every node.
-    """
-    def check():
-        for node in nodes:
-            try:
-                info = list(node.execute_command("FT.INFO", alias_name))
-                idx = next(
-                    (i for i, v in enumerate(info) if v == b"index_name"),
-                    None,
-                )
-                if idx is None or info[idx + 1] != expected_index.encode():
-                    return False
-            except ResponseError:
-                return False
-        return True
-
-    waiters.wait_for_true(check, timeout=timeout)
-
-
 class TestFTAliasClusterPropagation(ValkeySearchClusterTestCase):
     """
     Verify that alias mutations on one primary propagate to all cluster nodes.
@@ -91,6 +63,26 @@ class TestFTAliasClusterPropagation(ValkeySearchClusterTestCase):
             nodes, index_name
         )
 
+    def _verify_alias_on_all_nodes(self, alias_name, expected_index):
+        """Assert the alias resolves to expected_index on every primary."""
+        for node in self._all_primaries():
+            info = list(node.execute_command("FT.INFO", alias_name))
+            idx = next(
+                (i for i, v in enumerate(info) if v == b"index_name"),
+                None,
+            )
+            assert idx is not None, "FT.INFO missing index_name field"
+            assert info[idx + 1] == expected_index.encode(), (
+                f"Expected alias to resolve to {expected_index}, "
+                f"got {info[idx + 1]}"
+            )
+
+    def _verify_alias_absent_on_all_nodes(self, alias_name):
+        """Assert the alias is not resolvable on any primary."""
+        for node in self._all_primaries():
+            with pytest.raises(ResponseError):
+                node.execute_command("FT.INFO", alias_name)
+
     # ------------------------------------------------------------------
     # ALIASADD propagation
     # ------------------------------------------------------------------
@@ -105,7 +97,8 @@ class TestFTAliasClusterPropagation(ValkeySearchClusterTestCase):
             "FT.ALIASADD", ALIAS_NAME, INDEX_NAME
         ) == b"OK"
 
-        _wait_for_alias_on_all_nodes(self._all_primaries(), ALIAS_NAME)
+        # Command waited for consistency — alias is visible immediately.
+        self._verify_alias_on_all_nodes(ALIAS_NAME, INDEX_NAME)
 
     def test_aliasadd_on_non_zero_node_propagates(self):
         """ALIASADD issued on node 1 must propagate to all other nodes."""
@@ -119,7 +112,7 @@ class TestFTAliasClusterPropagation(ValkeySearchClusterTestCase):
             "FT.ALIASADD", ALIAS_NAME, INDEX_NAME
         ) == b"OK"
 
-        _wait_for_alias_on_all_nodes(self._all_primaries(), ALIAS_NAME)
+        self._verify_alias_on_all_nodes(ALIAS_NAME, INDEX_NAME)
 
     def test_aliasadd_duplicate_rejected_cluster_wide(self):
         """A duplicate ALIASADD is rejected even after the first has propagated."""
@@ -132,7 +125,6 @@ class TestFTAliasClusterPropagation(ValkeySearchClusterTestCase):
         assert node0.execute_command(
             "FT.ALIASADD", ALIAS_NAME, INDEX_NAME
         ) == b"OK"
-        _wait_for_alias_on_all_nodes(self._all_primaries(), ALIAS_NAME)
 
         # Second add on a different node must fail.
         with pytest.raises(ResponseError) as exc_info:
@@ -153,12 +145,11 @@ class TestFTAliasClusterPropagation(ValkeySearchClusterTestCase):
         assert node0.execute_command(
             "FT.ALIASADD", ALIAS_NAME, INDEX_NAME
         ) == b"OK"
-        _wait_for_alias_on_all_nodes(self._all_primaries(), ALIAS_NAME)
 
         assert node0.execute_command("FT.ALIASDEL", ALIAS_NAME) == b"OK"
-        _wait_for_alias_on_all_nodes(
-            self._all_primaries(), ALIAS_NAME, expect_present=False
-        )
+
+        # Command waited for consistency — alias is gone immediately.
+        self._verify_alias_absent_on_all_nodes(ALIAS_NAME)
 
     def test_aliasdel_on_non_zero_node_propagates(self):
         """ALIASDEL issued on node 1 must remove the alias from all nodes."""
@@ -171,12 +162,10 @@ class TestFTAliasClusterPropagation(ValkeySearchClusterTestCase):
         assert node0.execute_command(
             "FT.ALIASADD", ALIAS_NAME, INDEX_NAME
         ) == b"OK"
-        _wait_for_alias_on_all_nodes(self._all_primaries(), ALIAS_NAME)
 
         assert node1.execute_command("FT.ALIASDEL", ALIAS_NAME) == b"OK"
-        _wait_for_alias_on_all_nodes(
-            self._all_primaries(), ALIAS_NAME, expect_present=False
-        )
+
+        self._verify_alias_absent_on_all_nodes(ALIAS_NAME)
 
     # ------------------------------------------------------------------
     # ALIASUPDATE propagation
@@ -193,7 +182,7 @@ class TestFTAliasClusterPropagation(ValkeySearchClusterTestCase):
             "FT.ALIASUPDATE", ALIAS_NAME, INDEX_NAME
         ) == b"OK"
 
-        _wait_for_alias_on_all_nodes(self._all_primaries(), ALIAS_NAME)
+        self._verify_alias_on_all_nodes(ALIAS_NAME, INDEX_NAME)
 
     def test_aliasupdate_reassign_propagates(self):
         """ALIASUPDATE reassignment propagates the new target to all nodes."""
@@ -207,26 +196,19 @@ class TestFTAliasClusterPropagation(ValkeySearchClusterTestCase):
         assert node0.execute_command(
             "FT.ALIASADD", ALIAS_NAME, INDEX_NAME
         ) == b"OK"
-        _wait_for_alias_target_on_all_nodes(
-            self._all_primaries(), ALIAS_NAME, INDEX_NAME
-        )
+        self._verify_alias_on_all_nodes(ALIAS_NAME, INDEX_NAME)
 
         assert node0.execute_command(
             "FT.ALIASUPDATE", ALIAS_NAME, INDEX_NAME_2
         ) == b"OK"
-        _wait_for_alias_target_on_all_nodes(
-            self._all_primaries(), ALIAS_NAME, INDEX_NAME_2
-        )
+        self._verify_alias_on_all_nodes(ALIAS_NAME, INDEX_NAME_2)
 
     # ------------------------------------------------------------------
     # DROPINDEX alias cleanup propagation
     # ------------------------------------------------------------------
 
     def test_dropindex_tombstones_alias_on_all_nodes(self):
-        """
-        FT.DROPINDEX must tombstone alias MetadataManager entries so the alias
-        disappears from every node, not just the node that issued the drop.
-        """
+        """DROPINDEX tombstones aliases so they disappear cluster-wide."""
         node0 = self.new_client_for_primary(0)
 
         assert node0.execute_command(*CREATE_TAG_INDEX) == b"OK"
@@ -235,11 +217,10 @@ class TestFTAliasClusterPropagation(ValkeySearchClusterTestCase):
         assert node0.execute_command(
             "FT.ALIASADD", ALIAS_NAME, INDEX_NAME
         ) == b"OK"
-        _wait_for_alias_on_all_nodes(self._all_primaries(), ALIAS_NAME)
 
         assert node0.execute_command("FT.DROPINDEX", INDEX_NAME) == b"OK"
 
-        # Both the index and the alias must disappear cluster-wide.
+        # DROPINDEX waits for index consistency, not alias cleanup — poll.
         _wait_for_alias_on_all_nodes(
             self._all_primaries(), ALIAS_NAME, expect_present=False
         )
@@ -257,8 +238,6 @@ class TestFTAliasClusterPropagation(ValkeySearchClusterTestCase):
         assert node0.execute_command(
             "FT.ALIASADD", "alias_b", INDEX_NAME
         ) == b"OK"
-        _wait_for_alias_on_all_nodes(self._all_primaries(), "alias_a")
-        _wait_for_alias_on_all_nodes(self._all_primaries(), "alias_b")
 
         assert node0.execute_command("FT.DROPINDEX", INDEX_NAME) == b"OK"
 
@@ -274,10 +253,7 @@ class TestFTAliasClusterPropagation(ValkeySearchClusterTestCase):
     # ------------------------------------------------------------------
 
     def test_search_via_alias_works_on_all_nodes(self):
-        """
-        After ALIASADD propagates, FT.SEARCH using the alias returns results
-        on every node (not just the one that created the alias).
-        """
+        """FT.SEARCH using an alias returns results on every node."""
         node0 = self.new_client_for_primary(0)
 
         assert node0.execute_command(*CREATE_TAG_INDEX) == b"OK"
@@ -287,7 +263,6 @@ class TestFTAliasClusterPropagation(ValkeySearchClusterTestCase):
         assert node0.execute_command(
             "FT.ALIASADD", ALIAS_NAME, INDEX_NAME
         ) == b"OK"
-        _wait_for_alias_on_all_nodes(self._all_primaries(), ALIAS_NAME)
 
         for node in self._all_primaries():
             result = node.execute_command(
@@ -310,17 +285,13 @@ class TestFTAliasClusterPropagation(ValkeySearchClusterTestCase):
         assert node0.execute_command(
             "FT.ALIASADD", ALIAS_NAME, INDEX_NAME
         ) == b"OK"
-        _wait_for_alias_target_on_all_nodes(
-            self._all_primaries(), ALIAS_NAME, INDEX_NAME
-        )
+        self._verify_alias_on_all_nodes(ALIAS_NAME, INDEX_NAME)
 
         # Issue ALIASUPDATE from node 1.
         assert node1.execute_command(
             "FT.ALIASUPDATE", ALIAS_NAME, INDEX_NAME_2
         ) == b"OK"
-        _wait_for_alias_target_on_all_nodes(
-            self._all_primaries(), ALIAS_NAME, INDEX_NAME_2
-        )
+        self._verify_alias_on_all_nodes(ALIAS_NAME, INDEX_NAME_2)
 
     def test_aliasdel_nonexistent_alias_cluster(self):
         """FT.ALIASDEL on a non-existent alias returns an error in cluster mode."""

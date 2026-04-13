@@ -507,14 +507,10 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
 
         data_set = next_data_set
 
-    # Alias management commands are recorded inline for replay state; execute
-    # silently without counting them in the pass/fail tally.
+    # Replay alias setup commands without counting them in the pass/fail tally.
     if _is_alias_management_cmd(expected["cmd"]):
-        verb = expected["cmd"][0].upper()
-        alias_name = expected["cmd"][1]
         try:
-            # Route to a specific primary since cluster client can't determine
-            # the slot for FT.ALIAS* commands (no key argument).
+            # Route to primary 0 — cluster client can't slot FT.ALIAS* commands.
             primary0 = test_case.new_client_for_primary(0)
             primary0.execute_command(*expected["cmd"])
             print(f"Alias setup (cluster): {expected['cmd']}")
@@ -523,24 +519,6 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
                 f"Alias management command failed during cluster replay — subsequent search results will be wrong. "
                 f"cmd={expected['cmd']} error={e}"
             ) from e
-        # After ALIASADD/ALIASUPDATE, wait for propagation to all primaries
-        # before running search commands that depend on the alias.
-        if verb in ("FT.ALIASADD", "FT.ALIASUPDATE"):
-            primaries = [
-                test_case.new_client_for_primary(i)
-                for i in range(test_case.CLUSTER_SIZE)
-            ]
-            def _alias_visible(name=alias_name):
-                for node in primaries:
-                    try:
-                        node.execute_command("FT.INFO", name)
-                    except valkey.ResponseError:
-                        return False
-                return True
-            try:
-                waiters.wait_for_true(_alias_visible, timeout=10)
-            except Exception as e:
-                print(f"WARNING: alias {alias_name} propagation timed out: {e}")
         return data_set
 
     result = {}

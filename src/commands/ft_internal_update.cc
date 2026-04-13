@@ -15,7 +15,6 @@
 namespace valkey_search {
 
 constexpr int kFTInternalUpdateMinArgCount = 4;
-constexpr int kFTInternalUpdateMaxArgCount = 5;
 
 // Helper function to handle parse failures with poison pill recovery
 absl::Status HandleInternalUpdateFailure(
@@ -56,16 +55,19 @@ absl::Status HandleInternalUpdateFailure(
 
 absl::Status FTInternalUpdateCmd(ValkeyModuleCtx *ctx,
                                  ValkeyModuleString **argv, int argc) {
-  CHECK(argc >= kFTInternalUpdateMinArgCount &&
-        argc <= kFTInternalUpdateMaxArgCount)
+  CHECK(argc >= kFTInternalUpdateMinArgCount)
       << "FT.INTERNAL_UPDATE called with wrong argument count: " << argc;
 
+  // Parse keyword/value pairs from argv[4..argc-1].
+  // Recognized keywords: TYPE (metadata type name).
+  // Unrecognized keywords are silently ignored for forward compatibility.
   absl::string_view type_name = kSchemaManagerMetadataTypeName;
-  if (argc == kFTInternalUpdateMaxArgCount) {
-    type_name = vmsdk::ToStringView(argv[4]);
+  for (int i = 4; i + 1 < argc; i += 2) {
+    auto key = vmsdk::ToStringView(argv[i]);
+    if (key == "TYPE") {
+      type_name = vmsdk::ToStringView(argv[i + 1]);
+    }
   }
-  // argc == 4: default to kSchemaManagerMetadataTypeName for AOF backward
-  // compatibility (replicas-before-primary upgrade order required).
 
   auto id_view = vmsdk::ToStringView(argv[1]);
   std::string id(id_view);

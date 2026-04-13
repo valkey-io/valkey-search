@@ -973,10 +973,10 @@ absl::Status MetadataManager::CallFTInternalUpdateForReconciliation(
   ValkeyModuleCallReply *reply;
   ValkeyModuleCtx *safe_context = detached_ctx_.get();
 
-  reply = ValkeyModule_Call(safe_context, "FT.INTERNAL_UPDATE", "!Kcbbc",
-                            id.c_str(), metadata_binary.data(),
-                            metadata_binary.size(), header_binary.data(),
-                            header_binary.size(), type_name_str.c_str());
+  reply = ValkeyModule_Call(
+      safe_context, "FT.INTERNAL_UPDATE", "!Kcbbcc", id.c_str(),
+      metadata_binary.data(), metadata_binary.size(), header_binary.data(),
+      header_binary.size(), "TYPE", type_name_str.c_str());
 
   if (reply == nullptr ||
       ValkeyModule_CallReplyType(reply) == VALKEYMODULE_REPLY_ERROR) {
@@ -999,10 +999,10 @@ void MetadataManager::ReplicateFTInternalUpdate(
   std::string type_name_str(type_name);
 
   // Replicate FT.INTERNAL_UPDATE to replicas for AOF consistency
-  ValkeyModule_Replicate(detached_ctx_.get(), "FT.INTERNAL_UPDATE", "cbbc",
+  ValkeyModule_Replicate(detached_ctx_.get(), "FT.INTERNAL_UPDATE", "cbbcc",
                          std::string(encoded_id).c_str(),
                          metadata_binary.data(), metadata_binary.size(),
-                         header_binary.data(), header_binary.size(),
+                         header_binary.data(), header_binary.size(), "TYPE",
                          type_name_str.c_str());
 }
 

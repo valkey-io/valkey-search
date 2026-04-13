@@ -18,8 +18,8 @@
 #include "google/protobuf/any.pb.h"
 #include "google/protobuf/text_format.h"
 #include "gtest/gtest.h"
-#include "src/coordinator/metadata_manager.h"
 #include "src/coordinator/coordinator.pb.h"
+#include "src/coordinator/metadata_manager.h"
 #include "src/rdb_section.pb.h"
 #include "testing/common.h"
 #include "testing/coordinator/common.h"
@@ -1488,8 +1488,7 @@ TEST_F(SchemaManagerAliasTest, ReverseMapConsistentAfterAdd) {
   VMSDK_EXPECT_OK(
       SchemaManager::Instance().AddAlias(kDb0, "rev_alias_b", kIndexName));
 
-  auto aliases =
-      SchemaManager::Instance().GetAliasesForIndex(kDb0, kIndexName);
+  auto aliases = SchemaManager::Instance().GetAliasesForIndex(kDb0, kIndexName);
   EXPECT_THAT(aliases,
               testing::UnorderedElementsAre("rev_alias_a", "rev_alias_b"));
 }
@@ -1502,8 +1501,7 @@ TEST_F(SchemaManagerAliasTest, ReverseMapConsistentAfterRemove) {
       SchemaManager::Instance().AddAlias(kDb0, "rem_alias_b", kIndexName));
   VMSDK_EXPECT_OK(SchemaManager::Instance().RemoveAlias(kDb0, "rem_alias_a"));
 
-  auto aliases =
-      SchemaManager::Instance().GetAliasesForIndex(kDb0, kIndexName);
+  auto aliases = SchemaManager::Instance().GetAliasesForIndex(kDb0, kIndexName);
   EXPECT_THAT(aliases, testing::ElementsAre("rem_alias_b"));
 }
 
@@ -1561,11 +1559,11 @@ TEST_F(SchemaManagerAliasTest, ReverseMapConsistentAfterIndexDrop) {
   VMSDK_EXPECT_OK(
       SchemaManager::Instance().AddAlias(kDb0, "drop_rev_b", kIndexName));
 
-  VMSDK_EXPECT_OK(SchemaManager::Instance().RemoveIndexSchema(kDb0, kIndexName));
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().RemoveIndexSchema(kDb0, kIndexName));
 
   // Reverse map must be empty for the dropped index.
-  auto aliases =
-      SchemaManager::Instance().GetAliasesForIndex(kDb0, kIndexName);
+  auto aliases = SchemaManager::Instance().GetAliasesForIndex(kDb0, kIndexName);
   EXPECT_THAT(aliases, testing::IsEmpty());
 
   // Aliases must no longer resolve.
@@ -1636,8 +1634,7 @@ TEST_F(SchemaManagerAliasTest, ReverseMapConsistentAfterLoad) {
   VMSDK_EXPECT_OK(SchemaManager::Instance().LoadAliasMap(
       &fake_ctx_, std::move(section), SupplementalContentIter(&fake_rdb, 0)));
 
-  auto aliases =
-      SchemaManager::Instance().GetAliasesForIndex(kDb0, kIndexName);
+  auto aliases = SchemaManager::Instance().GetAliasesForIndex(kDb0, kIndexName);
   EXPECT_THAT(aliases,
               testing::UnorderedElementsAre("load_rev_a", "load_rev_b"));
 }

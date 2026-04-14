@@ -162,7 +162,11 @@ inline PredicateType EvaluateAsComposedPredicate(
 // search, meaning it requires prefilter evaluation Prefiltering is needed when
 // query contains an AND with numeric or tag predicates.
 // It is also needed when negate is involved.
-inline bool IsUnsolvedQuery(QueryOperations query_operations) {
+inline bool IsUnsolvedQuery(QueryOperations query_operations,
+                            bool is_match_all) {
+  if (is_match_all) {
+    return false;
+  }
   return query_operations & (QueryOperations::kContainsNumeric |
                              QueryOperations::kContainsTag) &&
              query_operations & QueryOperations::kContainsAnd ||
@@ -596,7 +600,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
   };
   // Cannot skip evaluation if the query contains unsolved composed operations.
   bool requires_prefilter_evaluation =
-      IsUnsolvedQuery(parameters.filter_parse_results.query_operations);
+      IsUnsolvedQuery(parameters.filter_parse_results.query_operations,
+                      parameters.filter_parse_results.is_match_all);
   if (!requires_prefilter_evaluation) {
     bool needs_dedup =
         NeedsDeduplication(parameters.filter_parse_results.query_operations);

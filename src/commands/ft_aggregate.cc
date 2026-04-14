@@ -124,6 +124,33 @@ absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator &itr) {
   return absl::OkStatus();
 }
 
+// Forward declaration for recursive serialization
+void SerializeValueToResp(ValkeyModuleCtx *ctx, const expr::Value &value);
+
+void SerializeArrayToResp(ValkeyModuleCtx *ctx, const expr::Value::Array vec) {
+  ValkeyModule_ReplyWithArray(ctx, vec->size());
+  for (const auto &elem : *vec) {
+    SerializeValueToResp(ctx, elem);
+  }
+}
+
+void SerializeValueToResp(ValkeyModuleCtx *ctx, const expr::Value &value) {
+  if (value.IsArray()) {
+    SerializeArrayToResp(ctx, value.GetArray());
+  } else if (value.IsBool()) {
+    ValkeyModule_ReplyWithLongLong(ctx, value.GetBool() ? 1 : 0);
+  } else if (value.IsDouble()) {
+    auto value_str = value.AsString();
+    ValkeyModule_ReplyWithStringBuffer(ctx, value_str.data(), value_str.size());
+  } else if (value.IsString()) {
+    auto value_sv = value.GetStringView();
+    ValkeyModule_ReplyWithStringBuffer(ctx, value_sv.data(), value_sv.size());
+  } else {
+    // Fallback for Nil and unknown types
+    ValkeyModule_ReplyWithNull(ctx);
+  }
+}
+
 bool ReplyWithValue(ValkeyModuleCtx *ctx,
                     data_model::AttributeDataType data_type,
                     std::string_view name, indexes::IndexerType indexer_type,
@@ -131,6 +158,14 @@ bool ReplyWithValue(ValkeyModuleCtx *ctx,
   if (value.IsNil()) {
     return false;
   }
+
+  // Handle vector values with RESP array serialization
+  if (value.IsArray()) {
+    ValkeyModule_ReplyWithSimpleString(ctx, name.data());
+    SerializeArrayToResp(ctx, value.GetArray());
+    return true;
+  }
+
   if (data_type == data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH) {
     ValkeyModule_ReplyWithSimpleString(ctx, name.data());
     auto value_sv = value.AsStringView();

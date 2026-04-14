@@ -23,6 +23,7 @@
 #include <utility>
 #include <vector>
 
+#include "absl/container/flat_hash_set.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/notification.h"
@@ -871,6 +872,94 @@ INSTANTIATE_TEST_SUITE_P(
     [](const TestParamInfo<MaxLimitTestCase> &info) {
       return info.param.test_name;
     });
+
+}  // namespace
+
+namespace {
+
+std::vector<indexes::Neighbor> MakeNeighbors(
+    const std::vector<std::string> &keys) {
+  std::vector<indexes::Neighbor> neighbors;
+  neighbors.reserve(keys.size());
+  for (const auto &key : keys) {
+    neighbors.emplace_back(StringInternStore::Intern(key), 0.0f);
+  }
+  return neighbors;
+}
+
+std::vector<std::string> NeighborKeys(
+    const std::vector<indexes::Neighbor> &neighbors) {
+  std::vector<std::string> keys;
+  keys.reserve(neighbors.size());
+  for (const auto &n : neighbors) {
+    keys.push_back(std::string(n.external_id->Str()));
+  }
+  return keys;
+}
+
+// Verifies intersection semantics and count accuracy across representative
+// cases: all match, no match, partial overlap, empty neighbors, special chars.
+TEST(ApplyInkeysFilterTest, IntersectionAndCount) {
+  const std::vector<
+      std::pair<std::vector<std::string>, std::vector<std::string>>>
+      cases = {
+          {{"a", "b", "c"}, {"a", "b", "c"}},
+          {{"x", "y", "z"}, {"a", "b"}},
+          {{"a", "b", "c", "d"}, {"b", "d"}},
+          {{}, {"a", "b"}},
+          {{"only"}, {"only"}},
+          {{"key:1", "key:2", "key:3"}, {"key:1", "key:3"}},
+      };
+
+  for (const auto &[neighbor_keys, inkeys_vec] : cases) {
+    SCOPED_TRACE("neighbors=" + std::to_string(neighbor_keys.size()) +
+                 " inkeys=" + std::to_string(inkeys_vec.size()));
+
+    absl::flat_hash_set<std::string> inkeys(inkeys_vec.begin(),
+                                            inkeys_vec.end());
+    absl::flat_hash_set<std::string> expected;
+    for (const auto &k : neighbor_keys) {
+      if (inkeys.contains(k)) {
+        expected.insert(k);
+      }
+    }
+
+    auto neighbors = MakeNeighbors(neighbor_keys);
+    size_t total_count = neighbors.size();
+    ApplyInkeysFilter(neighbors, total_count, inkeys);
+
+    EXPECT_EQ(neighbors.size(), expected.size());
+    EXPECT_EQ(total_count, neighbors.size());
+    for (const auto &n : neighbors) {
+      EXPECT_TRUE(inkeys.contains(n.external_id->Str()));
+    }
+  }
+}
+
+// Empty inkeys is a no-op; total_count saturates at zero when underflow would
+// occur.
+TEST(ApplyInkeysFilterTest, EdgeCases) {
+  // Empty inkeys — no-op
+  {
+    auto neighbors = MakeNeighbors({"a", "b", "c"});
+    size_t total_count = neighbors.size() + 3;
+    size_t original_count = total_count;
+    auto original_keys = NeighborKeys(neighbors);
+    absl::flat_hash_set<std::string> empty_inkeys;
+    ApplyInkeysFilter(neighbors, total_count, empty_inkeys);
+    EXPECT_EQ(NeighborKeys(neighbors), original_keys);
+    EXPECT_EQ(total_count, original_count);
+  }
+  // total_count smaller than removed count — saturates at 0
+  {
+    auto neighbors = MakeNeighbors({"x", "y"});
+    size_t total_count = 1;
+    absl::flat_hash_set<std::string> inkeys = {"a"};
+    ApplyInkeysFilter(neighbors, total_count, inkeys);
+    EXPECT_TRUE(neighbors.empty());
+    EXPECT_EQ(total_count, 0u);
+  }
+}
 
 }  // namespace
 

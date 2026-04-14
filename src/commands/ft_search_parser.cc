@@ -201,6 +201,25 @@ std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructReturnParser() {
       });
 }
 
+std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructInkeysParser() {
+  return std::make_unique<vmsdk::ParamParser<SearchCommand>>(
+      [](SearchCommand &parameters, vmsdk::ArgsIterator &itr) -> absl::Status {
+        int count{0};
+        VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, count));
+        if (count < 0) {
+          return absl::InvalidArgumentError(
+              "INKEYS count must not be negative");
+        }
+        parameters.has_inkeys = true;
+        for (int i = 0; i < count; ++i) {
+          VMSDK_ASSIGN_OR_RETURN(auto key, itr.Get());
+          itr.Next();
+          parameters.inkeys.insert(std::string(vmsdk::ToStringView(key)));
+        }
+        return absl::OkStatus();
+      });
+}
+
 vmsdk::KeyValueParser<SearchCommand> CreateSearchParser() {
   vmsdk::KeyValueParser<SearchCommand> parser;
   parser.AddParamParser(query::kDialectParam,
@@ -235,6 +254,7 @@ vmsdk::KeyValueParser<SearchCommand> CreateSearchParser() {
                         GENERATE_FLAG_PARSER(SearchCommand, verbatim));
   parser.AddParamParser(query::kSlop,
                         GENERATE_VALUE_PARSER(SearchCommand, slop));
+  parser.AddParamParser(query::kInkeysParam, ConstructInkeysParser());
 
   return parser;
 }

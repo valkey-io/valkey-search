@@ -528,3 +528,6 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.check(dialect, "ft.search", f"{key_type}_idx1",
                    r"@tags:{ a\}b | a\|b | x\}y\}z | a\\b | normal }",
                    "LIMIT", "0", "40")
+
+
+

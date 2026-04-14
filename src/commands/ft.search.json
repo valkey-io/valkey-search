@@ -7,7 +7,7 @@
     ],
     "history": [
       [
-        "1.2.0", 
+        "1.2.0",
         "Added Text Indexing and Search support"
       ]
     ],
@@ -61,6 +61,27 @@
         "token": "DIALECT",
         "type": "integer",
         "optional": true
+      },
+      {
+        "name": "INKEYS",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "inkeys_token",
+            "type": "pure-token",
+            "token": "INKEYS"
+          },
+          {
+            "name": "count",
+            "type": "integer"
+          },
+          {
+            "name": "keys",
+            "type": "string",
+            "multiple": true
+          }
+        ]
       },
       {
         "name": "INORDER",

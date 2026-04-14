@@ -5,6 +5,7 @@ FT.SEARCH <index> <query>
   [ALLSHARDS | SOMESHARDS]
   [CONSISTENT | INCONSISTENT]
   [DIALECT <dialect>]
+  [INKEYS <count> <key> [<key> ...]]
   [INORDER]
   [LIMIT <offset> <num>]
   [NOCONTENT]
@@ -23,6 +24,7 @@ FT.SEARCH <index> <query>
 - `CONSISTENT` (Optional): If specified, the command is terminated with an error if the cluster is in an inconsistent state. This is the default.
 - `DIALECT <dialect>` (optional): Specifies your dialect. The only supported dialect is 2.
 - `INCONSISTENT` (Optional): If specified, the command will generate a best-effort reply if the cluster remains inconsistent within the timeout interval.
+- `INKEYS <count> <key> [<key> ...]` (optional): If specified, only documents whose key appears in the provided list are included in the results. `<count>` is the number of keys that follow and must be a positive integer. Non-existent keys are silently ignored. If none of the specified keys exist in the index or match the query, an empty result is returned.
 - `LIMIT <offset> <count>` (optional): Lets you choose a portion of the result. The first `<offset>` keys are skipped and only a maximum of `<count>` keys are included. The default is LIMIT 0 10, which returns at most 10 keys.
 - `NOCONTENT` (optional): When present, only the resulting key names are returned, no key values are included.
 - `PARAMS <count> <name> <value> [<name> <value> ...]` (optional): `count` is of the number of arguments, i.e., twice the number of value/name pairs. [Search - query language](../topics/search-query.md) for details.

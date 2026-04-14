@@ -34,9 +34,9 @@ class Value {
    private:
     std::string reason_;
   };
-  using Vector = std::shared_ptr<std::vector<Value>>;
+  using Array = std::shared_ptr<std::vector<Value>>;
 
-  Value() : value_(Nil()){};
+  Value() : value_(Nil()) {};
   explicit Value(Nil n) : value_(n) {}
   explicit Value(bool b) : value_(b) {}
   explicit Value(int i) : value_(double(i)) {}
@@ -45,8 +45,9 @@ class Value {
   explicit Value(const char* s) : value_(absl::string_view(s)) {}
   explicit Value(std::string&& s) : value_(std::move(s)) {}
 
-  // Vector constructors
-  explicit Value(Vector vec) : value_(vec) {}
+  // Array constructors
+  explicit Value(const Array& vec) : value_(vec) {}
+  explicit Value(Array&& vec) : value_(std::move(vec)) {}
   explicit Value(std::initializer_list<Value> elements)
       : value_(std::make_shared<std::vector<Value>>(elements)) {}
   explicit Value(std::vector<Value>&& vec)
@@ -57,17 +58,17 @@ class Value {
   bool IsBool() const;
   bool IsDouble() const;
   bool IsString() const;
-  bool IsVector() const;
-  size_t VectorSize() const;
-  bool IsEmptyVector() const;
+  bool IsArray() const;
+  size_t ArraySize() const;
+  bool IsEmptyArray() const;
 
   // When you already know the type, will assert if you're wrong
   Nil GetNil() const;
   bool GetBool() const;
   double GetDouble() const;
   absl::string_view GetStringView() const;
-  Vector GetVector() const;
-  const Value& GetVectorElement(size_t index) const;
+  Array GetArray() const;
+  const Value& GetArrayElement(size_t index) const;
 
   // convert to type
   std::optional<Nil> AsNil() const;
@@ -76,7 +77,7 @@ class Value {
   std::optional<int64_t> AsInteger() const;
   absl::string_view AsStringView() const;
   std::string AsString() const;
-  std::optional<Vector> AsVector() const;
+  std::optional<Array> AsArray() const;
 
   bool IsTrue() const {
     auto r = AsBool();
@@ -99,8 +100,7 @@ class Value {
  private:
   mutable std::optional<std::string> storage_;
 
-  std::variant<Nil, bool, double, absl::string_view, std::string, Vector>
-      value_;
+  std::variant<Nil, bool, double, absl::string_view, std::string, Array> value_;
 };
 
 enum Ordering { kLESS, kEQUAL, kGREATER, kUNORDERED };
@@ -122,13 +122,13 @@ static inline std::ostream& operator<<(std::ostream& os, Ordering o) {
 
 Ordering Compare(const Value& l, const Value& r);
 
-// Vector operation helper functions
-Value ApplyToElements(const Value::Vector vec,
+// Array operation helper functions
+Value ApplyToElements(const Value::Array vec,
                       std::function<Value(const Value&)> func);
-Value ApplyWithScalar(const Value::Vector vec, const Value& scalar,
+Value ApplyWithScalar(const Value::Array vec, const Value& scalar,
                       std::function<Value(const Value&, const Value&)> func,
                       bool scalar_on_left);
-Value ApplyElementWise(const Value::Vector vec1, const Value::Vector vec2,
+Value ApplyElementWise(const Value::Array vec1, const Value::Array vec2,
                        std::function<Value(const Value&, const Value&)> func);
 
 //
@@ -210,14 +210,13 @@ Value FuncDayofyear(const Value& t);
 Value FuncYear(const Value& t);
 Value FuncMonthofyear(const Value& t);
 
-// Vector-specific functions
-Value FuncVectorLen(const Value& vec);
-Value FuncVectorAt(const Value& vec, const Value& index);
-Value FuncIsVector(const Value& val);
-Value FuncMakeVector(const absl::InlinedVector<Value, 4>& elements);
+// Array-specific functions
+Value FuncArrayLen(const Value& vec);
+Value FuncArrayAt(const Value& vec, const Value& index);
+Value FuncIsArray(const Value& val);
 Value FuncFlatten(const Value& vec, const Value& depth);
 
-// Vector serialization/deserialization helpers
+// Array serialization/deserialization helpers
 // Deserialize a ValkeyModuleCallReply (RESP data) into a Value
 // Handles arrays recursively to support nested vectors
 expr::Value DeserializeValueFromResp(ValkeyModuleCallReply* reply);

@@ -286,6 +286,62 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.check(dialect,
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce TOLIST 1 @n1 as items"
         )
+        # TOLIST on t3 which is "all_the_same_value" for every record — all
+        # records land in one group, so the list should contain all unique n1
+        # values (15 distinct integers from -5 to 9).
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce tolist 1 @n1 as items"
+        )
+        # TOLIST collecting t3 grouped by t3 — every record has the same t3,
+        # so the result list should contain exactly one element (dedup).
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce tolist 1 @t3 as items"
+        )
+        # Multiple TOLIST reducers on different fields in the same GROUPBY
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce tolist 1 @n1 as n1_items reduce tolist 1 @n2 as n2_items"
+        )
+        # TOLIST with TOLIST + COUNT + SUM in the same GROUPBY
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce tolist 1 @n1 as items reduce count 0 as cnt reduce sum 1 @n1 as total"
+        )
+        # TOLIST on n3 field grouped by t3 (single group, all unique n3 values)
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 7 @__key @n1 @n2 @n3 @t1 @t2 @t3 groupby 1 @t3 reduce tolist 1 @n3 as items"
+        )
+        # Mixed case reducer name: ToLiSt
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce ToLiSt 1 @n1 as items"
+        )
+
+    def test_aggregate_groupby_tolist_duplicates(self, key_type, dialect):
+        """Test TOLIST with a dataset where duplicate values exist within groups."""
+        self.setup_data("hard numbers", key_type)
+        # hard numbers has t3="all_the_same_value" for all records, and
+        # numeric fields with repeated values like -0.5, 0, -0, 1, -1 in
+        # various combinations. TOLIST should deduplicate within the group.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce tolist 1 @n1 as items"
+        )
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce tolist 1 @n2 as items"
+        )
+        # TOLIST on t3 grouped by t3 — all same value, should produce single-element list
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce tolist 1 @t3 as items"
+        )
+        # TOLIST with COUNT to verify count reflects total records, not unique values
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce tolist 1 @n1 as items reduce count 0 as cnt"
+        )
+        # Multiple TOLIST reducers on different fields
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce tolist 1 @n1 as n1_items reduce tolist 1 @n2 as n2_items"
+        )
+        # TOLIST per-tag group (each t1 is unique, so each group has one record)
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce tolist 1 @n1 as items"
+        )
 
     def test_aggregate_limit(self, key_type, dialect):
         self.setup_data("sortable numbers", key_type)

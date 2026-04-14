@@ -278,8 +278,8 @@ TEST_F(AggregateExecTest, ToListReducerTest) {
     EXPECT_EQ(records.size(), 1);
     auto record = records.pop_front();
     auto& result = record->fields_.at(2);
-    EXPECT_TRUE(result.IsVector());
-    EXPECT_EQ(result.VectorSize(), 4);
+    EXPECT_TRUE(result.IsArray());
+    EXPECT_EQ(result.ArraySize(), 4);
   }
   // Deduplication: records with duplicate n2 values produce fewer elements
   {
@@ -291,8 +291,8 @@ TEST_F(AggregateExecTest, ToListReducerTest) {
     EXPECT_EQ(records.size(), 4);
     for (auto& r : records) {
       auto& result = r->fields_.at(2);
-      EXPECT_TRUE(result.IsVector());
-      EXPECT_EQ(result.VectorSize(), 1);
+      EXPECT_TRUE(result.IsArray());
+      EXPECT_EQ(result.ArraySize(), 1);
     }
   }
   // TOLIST alongside another reducer in the same GROUPBY
@@ -304,8 +304,8 @@ TEST_F(AggregateExecTest, ToListReducerTest) {
     EXPECT_EQ(records.size(), 1);
     auto record = records.pop_front();
     // First reducer output (index 2) is the TOLIST vector
-    EXPECT_TRUE(record->fields_.at(2).IsVector());
-    EXPECT_EQ(record->fields_.at(2).VectorSize(), 4);
+    EXPECT_TRUE(record->fields_.at(2).IsArray());
+    EXPECT_EQ(record->fields_.at(2).ArraySize(), 4);
     // Second reducer output (index 3) is the COUNT double
     EXPECT_TRUE(record->fields_.at(3).IsDouble());
     EXPECT_NEAR(*(record->fields_.at(3).AsDouble()), 4.0, .001);

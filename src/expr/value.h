@@ -92,6 +92,11 @@ class Value {
       return H::combine(std::move(h), 0);
     } else if (v.IsDouble()) {
       return H::combine(std::move(h), *v.AsDouble());
+    } else if (v.IsArray()) {
+      for (auto value : *v.AsArray().value().get()) {
+        h = H::combine(std::move(h), value);
+      }
+      return h;
     } else {
       return H::combine(std::move(h), v.AsString());
     }

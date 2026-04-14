@@ -361,30 +361,21 @@ class CountDistinct : public GroupBy::ReducerInstance {
 };
 
 class ToList : public GroupBy::ReducerInstance {
-  absl::flat_hash_set<expr::Value> values_;
+  absl::flat_hash_set<expr::Value> unique_values_;
+  std::vector<expr::Value> ordered_values_;
   void ProcessRecords(const std::vector<ArgVector>& all_values) override {
     for (const auto& values : all_values) {
       if (values[0].IsNil()) {
         continue;
       }
-      if (values[0].IsVector()) {
-        auto vec = values[0].GetVector();
-        for (const auto& elem : *vec) {
-          if (!elem.IsNil()) {
-            values_.insert(elem);
-          }
-        }
-      } else {
-        values_.insert(values[0]);
+      if (!unique_values_.contains(values[0])) {
+        unique_values_.insert(values[0]);
+        ordered_values_.push_back(values[0]);
       }
     }
   }
   expr::Value GetResult() const override {
-    std::vector<expr::Value> result;
-    result.reserve(values_.size());
-    for (const auto& v : values_) {
-      result.push_back(v);
-    }
+    auto result = ordered_values_;
     return expr::Value(std::move(result));
   }
 };

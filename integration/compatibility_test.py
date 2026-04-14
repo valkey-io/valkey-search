@@ -1,4 +1,4 @@
-import pytest, logging, time, itertools, math, valkey, gzip, struct, os
+import pytest, logging, time, itertools, math, valkey, gzip, struct, os, subprocess
 import sys, json
 from collections import defaultdict
 from operator import itemgetter
@@ -78,7 +78,10 @@ def parse_field(x, key_type):
 
 def parse_value(x, key_type):
     try:
-        if key_type == "json" and isinstance(x, int):
+        if isinstance(x, list):
+            # TOLIST reducer returns a Python list for both hash and json
+            result = x
+        elif key_type == "json" and isinstance(x, int):
             result = x
         elif key_type == "json" and x.startswith(b'['):
             assert isinstance(x, bytes), f"Expected bytes for JSON value, got {type(x)}"
@@ -229,9 +232,17 @@ def compare_row(l, r, key_type):
         return False
     for i in range(len(lks)):
         #
+        # TOLIST reducer returns lists where order is non-deterministic.
+        # Check for list values first, before any field-name-based heuristics.
+        #
+        if isinstance(l[lks[i]], list) and isinstance(r[rks[i]], list):
+            if sorted(l[lks[i]]) != sorted(r[rks[i]]):
+                print("mismatch list field: ", lks[i], " ", sorted(l[lks[i]]), "!=", sorted(r[rks[i]]))
+                return False
+        #
         # Hack, fields that start with an 'n' are assumed to be numeric
         #
-        if lks[i].startswith("n") or lks[i].endswith("score"):
+        elif lks[i].startswith("n") or lks[i].endswith("score"):
             if not compare_number_eq(l[lks[i]], r[rks[i]]):
                 print(f"mismatch numeric field: {l[lks[i]]}:{type(l[lks[i]])} and {r[rks[i]]}:{type(r[rks[i]])}")
                 print("RL: ", r)

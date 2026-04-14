@@ -153,6 +153,7 @@ message SearchIndexPartitionRequest {
   uint64 query_operations = 18;
   optional SortByParameter sortby = 19;
   Scorer scorer = 20;
+  repeated string inkeys = 21;
 }
 
 message NeighborEntry {

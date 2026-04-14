@@ -11,6 +11,7 @@
 #include <string>
 #include <utility>
 
+#include "src/commands/ft_search.h"
 #include "src/index_schema.h"
 #include "src/query/response_generator.h"
 #include "src/query/search.h"
@@ -73,7 +74,13 @@ void ResolveContent(std::unique_ptr<SearchParameters> params) {
     params->search_result.total_count = 0;
   }
 
-  // 6. Call QueryCompleteMainThread
+  // 6. Apply INKEYS post-filter (shard-local in cluster mode)
+  if (!params->inkeys.empty()) {
+    ApplyInkeysFilter(params->search_result.neighbors,
+                      params->search_result.total_count, params->inkeys);
+  }
+
+  // 7. Call QueryCompleteMainThread
   params->QueryCompleteMainThread(std::move(params));
 }
 

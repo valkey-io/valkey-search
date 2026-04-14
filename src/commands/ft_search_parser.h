@@ -33,7 +33,9 @@ struct SearchCommand : public QueryCommand {
   // By default, FT.SEARCH does not require complete results and can be
   // optimized with LIMIT based trimming. Implement the correct logic here to
   // return true when those clauses are present.
-  bool RequiresCompleteResults() const override { return sortby.has_value(); }
+  bool RequiresCompleteResults() const override {
+    return sortby.has_value() || !inkeys.empty();
+  }
   query::SerializationRange GetSerializationRange() const;
 
   std::optional<query::SortByParameter> sortby;

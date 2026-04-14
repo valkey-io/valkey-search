@@ -5,6 +5,8 @@
  *
  */
 
+#include "src/commands/ft_search.h"
+
 #include <strings.h>
 
 #include <algorithm>
@@ -14,6 +16,7 @@
 #include <utility>
 #include <vector>
 
+#include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -184,6 +187,7 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
 }
 
 }  // namespace
+
 // Apply sorting to neighbors based on attribute values in attribute_contents
 void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
                   const SearchCommand &parameters) {
@@ -260,11 +264,6 @@ bool HandleEarlyReplyScenarios(ValkeyModuleCtx *ctx,
     return true;  // Early reply sent, stop processing
   }
 
-  if (command.no_content) {
-    SendReplyNoContent(ctx, search_result, command);
-    return true;  // Early reply sent, stop processing
-  }
-
   return false;  // No early reply needed, continue processing
 }
 
@@ -314,18 +313,34 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
     return;
   }
 
-  // 2. Process neighbors for the query
-  auto status = ProcessNeighborsForQuery(ctx, search_result, *this);
-  if (!status.ok()) {
-    ++Metrics::GetStats().query_failed_requests_cnt;
-    ValkeyModule_ReplyWithError(ctx, status.message().data());
+  // 1.5. INKEYS 0 means no keys can match — return empty result
+  if (has_inkeys && inkeys.empty()) {
+    ValkeyModule_ReplyWithArray(ctx, 1);
+    ValkeyModule_ReplyWithLongLong(ctx, 0);
     return;
   }
 
+  // 2. Content resolution (skipped for NOCONTENT)
+  if (!no_content) {
+    auto status = ProcessNeighborsForQuery(ctx, search_result, *this);
+    if (!status.ok()) {
+      ++Metrics::GetStats().query_failed_requests_cnt;
+      ValkeyModule_ReplyWithError(ctx, status.message().data());
+      return;
+    }
+  }
+
+  // 3. Apply INKEYS post-filter and sorting
+  if (!inkeys.empty()) {
+    ApplyInkeysFilter(search_result.neighbors, search_result.total_count,
+                      inkeys);
+  }
   ApplySorting(search_result.neighbors, *this);
 
-  // 3. Serialize neighbors based on query type
-  if (IsNonVectorQuery()) {
+  // 4. Serialize
+  if (no_content) {
+    SendReplyNoContent(ctx, search_result, *this);
+  } else if (IsNonVectorQuery()) {
     SerializeNonVectorNeighbors(ctx, search_result, *this);
   } else {
     SerializeNeighbors(ctx, search_result, *this);

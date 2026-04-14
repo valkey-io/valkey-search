@@ -17,6 +17,7 @@
 #include <utility>
 #include <vector>
 
+#include "absl/container/flat_hash_set.h"
 #include "absl/strings/string_view.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -79,6 +80,8 @@ struct FTSearchParserTestCase {
   query::SortOrder sortby_order{query::SortOrder::kAscending};
   bool sortby_enabled{false};
   bool with_sort_keys{false};
+  absl::flat_hash_set<std::string> inkeys;
+  bool has_inkeys{false};
 };
 
 class FTSearchParserTest
@@ -303,6 +306,8 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
       EXPECT_EQ(search_params.value()->sortby->field, test_case.sortby_field);
       EXPECT_EQ(search_params.value()->sortby->order, test_case.sortby_order);
     }
+    EXPECT_EQ(search_params.value()->inkeys, test_case.inkeys);
+    EXPECT_EQ(search_params.value()->has_inkeys, test_case.has_inkeys);
   } else {
     std::cerr << "Failed to parse command: `" << vmsdk::ToStringView(args[0])
               << "` Because: " << search_params.status().message() << "\n";
@@ -1015,10 +1020,135 @@ INSTANTIATE_TEST_SUITE_P(
             .sortby_enabled = true,
             .with_sort_keys = true,
         },
+        // INKEYS parameter tests
+        {
+            .test_name = "inkeys_single_key",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str = "INKEYS 1 key1",
+            .vector_query = false,
+            .inkeys = {"key1"},
+            .has_inkeys = true,
+        },
+        {
+            .test_name = "inkeys_multiple_keys",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str = "INKEYS 3 k1 k2 k3",
+            .vector_query = false,
+            .inkeys = {"k1", "k2", "k3"},
+            .has_inkeys = true,
+        },
+        {
+            .test_name = "inkeys_duplicate_keys_deduplicated",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str = "INKEYS 3 k1 k1 k2",
+            .vector_query = false,
+            .inkeys = {"k1", "k2"},
+            .has_inkeys = true,
+        },
+        {
+            .test_name = "inkeys_zero_count",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str = "INKEYS 0",
+            .vector_query = false,
+            .has_inkeys = true,
+        },
+        {
+            .test_name = "inkeys_non_integer_count_error",
+            .success = false,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .expected_error_message =
+                "Error parsing value for the parameter `INKEYS`",
+            .search_parameters_str = "INKEYS abc",
+            .vector_query = false,
+        },
+        {
+            .test_name = "inkeys_count_exceeds_args_error",
+            .success = false,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .expected_error_message =
+                "Error parsing value for the parameter `INKEYS` - Missing "
+                "argument",
+            .search_parameters_str = "INKEYS 5 k1 k2",
+            .vector_query = false,
+        },
+        {
+            .test_name = "inkeys_default_empty",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .vector_query = false,
+            .inkeys = {},
+        },
+        {
+            .test_name = "inkeys_with_vector_query",
+            .success = true,
+            .params_str = " PARAMS 4 EF 150",
+            .filter_str = "*=>[KNN 10 @vec $BLOB EF_RUNTIME $EF]",
+            .k = 10,
+            .ef = 150,
+            .search_parameters_str = "INKEYS 2 vdoc:0 vdoc:1",
+            .vector_query = true,
+            .inkeys = {"vdoc:0", "vdoc:1"},
+            .has_inkeys = true,
+        },
+        {
+            .test_name = "inkeys_with_nocontent",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .no_content = true,
+            .search_parameters_str = "INKEYS 2 k1 k2 NOCONTENT",
+            .vector_query = false,
+            .inkeys = {"k1", "k2"},
+            .has_inkeys = true,
+        },
     }),
     [](const TestParamInfo<FTSearchParserTestCase> &info) {
       return info.param.test_name;
     });
+
 }  // namespace
 
 }  // namespace valkey_search

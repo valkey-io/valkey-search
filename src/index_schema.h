@@ -253,7 +253,10 @@ class IndexSchema : public KeyspaceEventSubscription,
     return time_sliced_mutex_;
   }
   void MarkAsDestructing();
-  bool IsMarkedDestructing() { return is_destructing_; };
+  bool IsMarkedDestructing() const ABSL_LOCKS_EXCLUDED(mutated_records_mutex_) {
+    absl::MutexLock lock(&mutated_records_mutex_);
+    return is_destructing_;
+  }
   void ProcessMultiQueue();
   void SubscribeToVectorExternalizer(absl::string_view attribute_identifier,
                                      indexes::VectorBase *vector_index);

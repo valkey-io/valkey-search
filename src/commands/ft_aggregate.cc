@@ -127,8 +127,7 @@ absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator &itr) {
 // Forward declaration for recursive serialization
 void SerializeValueToResp(ValkeyModuleCtx *ctx, const expr::Value &value);
 
-void SerializeVectorToResp(ValkeyModuleCtx *ctx,
-                           const expr::Value::Vector vec) {
+void SerializeArrayToResp(ValkeyModuleCtx *ctx, const expr::Value::Array vec) {
   ValkeyModule_ReplyWithArray(ctx, vec->size());
   for (const auto &elem : *vec) {
     SerializeValueToResp(ctx, elem);
@@ -136,8 +135,8 @@ void SerializeVectorToResp(ValkeyModuleCtx *ctx,
 }
 
 void SerializeValueToResp(ValkeyModuleCtx *ctx, const expr::Value &value) {
-  if (value.IsVector()) {
-    SerializeVectorToResp(ctx, value.GetVector());
+  if (value.IsArray()) {
+    SerializeArrayToResp(ctx, value.GetArray());
   } else if (value.IsBool()) {
     ValkeyModule_ReplyWithLongLong(ctx, value.GetBool() ? 1 : 0);
   } else if (value.IsDouble()) {
@@ -161,9 +160,9 @@ bool ReplyWithValue(ValkeyModuleCtx *ctx,
   }
 
   // Handle vector values with RESP array serialization
-  if (value.IsVector()) {
+  if (value.IsArray()) {
     ValkeyModule_ReplyWithSimpleString(ctx, name.data());
-    SerializeVectorToResp(ctx, value.GetVector());
+    SerializeArrayToResp(ctx, value.GetArray());
     return true;
   }
 

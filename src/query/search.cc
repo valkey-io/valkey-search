@@ -427,6 +427,12 @@ void EvaluatePrefilteredKeys(
         iterator->Next();
         continue;
       }
+      // 2. Skip keys not in the INKEYS set (when specified).
+      if (!parameters.inkeys.empty() &&
+          !parameters.inkeys.contains(key->Str())) {
+        iterator->Next();
+        continue;
+      }
       const valkey_search::indexes::text::TextIndex *text_index =
           text_index_schema ? text_index_schema->GetPerKeyTextIndex(key, false)
                             : nullptr;
@@ -655,6 +661,12 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
       while (!iterator->Done()) {
         const auto &key = **iterator;
         BACKGROUND_PAUSEPOINT("search_entries_fetcher");
+        // Skip keys not in the INKEYS set (when specified).
+        if (!parameters.inkeys.empty() &&
+            !parameters.inkeys.contains(key->Str())) {
+          iterator->Next();
+          continue;
+        }
         if (needs_dedup) {
           if (seen_keys.contains(key->Str().data())) {
             iterator->Next();

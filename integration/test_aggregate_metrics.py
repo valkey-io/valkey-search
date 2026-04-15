@@ -145,3 +145,9 @@ class TestAggregateMetrics(ValkeySearchTestCaseBase):
         # Overall: 20 in, 10 out
         assert int(info["search_agg_input_records"]) == initial_input_records + 20
         assert int(info["search_agg_output_records"]) == initial_output_records + 10
+
+    def test_reduce_count_distinct(self):
+        client: Valkey = self.server.get_new_client()
+        client.execute_command("FT.CREATE idx ON HASH PREFIX 1 a: SCHEMA t TEXT n NUMERIC tag TAG")
+        client.execute_command('HSET a:1 t "data" n 1 tag t0')
+        client.execute_command('FT.AGGREGATE idx "data" GROUPBY 1 @tag REDUCE COUNT_DISTINCT 1 @n')

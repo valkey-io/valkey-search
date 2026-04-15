@@ -250,14 +250,28 @@ ConstructGroupByParser() {
             r.output_ = std::unique_ptr<Attribute>(
                 dynamic_cast<Attribute *>(output.release()));
           } else {
-            std::ostringstream os;
-            os << r;
-            VMSDK_ASSIGN_OR_RETURN(auto output,
-                                   parameters.MakeReference(os.str(), true));
+            // Build the default reducer name without using Reducer::operator<<
+            // and its ostringstream, to avoid allocator mismatch in
+            // stringbuf's internal buffer management.
+            std::string generated_name;
+            generated_name += r.info_->name_;
+            generated_name += '(';
+            for (size_t ai = 0; ai < r.args_.size(); ++ai) {
+              if (ai > 0) {
+                generated_name += ',';
+              }
+              if (r.args_[ai]) {
+                std::ostringstream tmp;
+                r.args_[ai]->Dump(tmp);
+                generated_name += tmp.str();
+              }
+            }
+            generated_name += ')';
+            VMSDK_ASSIGN_OR_RETURN(
+                auto output, parameters.MakeReference(generated_name, true));
             r.output_ = std::unique_ptr<Attribute>(
                 dynamic_cast<Attribute *>(output.release()));
           }
-          groupby->reducers_.emplace_back(std::move(r));
         }
         parameters.stages_.emplace_back(std::move(groupby));
         DBG << "After groupby: " << parameters << "\n";

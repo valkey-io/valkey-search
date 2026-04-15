@@ -286,13 +286,13 @@ TEST_F(AggregateExecTest, testHash) {
 }
 */
 
-// Extracts the elements from a RANDOM_SAMPLE reducer result (Value::Vector).
+// Extracts the elements from a RANDOM_SAMPLE reducer result (Value::Array).
 static std::vector<expr::Value> GetSampleArray(const expr::Value& value) {
-  EXPECT_TRUE(value.IsVector()) << "Expected vector Value";
-  if (!value.IsVector()) {
+  EXPECT_TRUE(value.IsArray()) << "Expected vector Value";
+  if (!value.IsArray()) {
     return {};
   }
-  auto vec = value.GetVector();
+  auto vec = value.GetArray();
   return std::vector<expr::Value>(vec->begin(), vec->end());
 }
 

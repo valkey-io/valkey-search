@@ -232,14 +232,22 @@ ConstructGroupByParser() {
                 absl::StrCat("incorrect number of arguments (", cnt,
                              ") to reducer ", uc_name.AsStringView()));
           }
-          for (int i = 0; i < cnt; ++i) {
-            VMSDK_ASSIGN_OR_RETURN(auto arg, itr.PopNext(),
-                                   _ << "Missing Reducer argument " << i);
+
+          if (r.info_->parse_args) {
             VMSDK_ASSIGN_OR_RETURN(
-                auto expr,
-                expr::Expression::Compile(parameters, vmsdk::ToStringView(arg)),
-                _ << " in GROUPBY stage");
-            r.args_.emplace_back(std::move(expr));
+                r.args_, r.info_->parse_args(parameters, itr, cnt),
+                _ << " while parsing GROUPBY stage for function "
+                  << vmsdk::ToStringView(name));
+          } else {
+            for (int i = 0; i < cnt; ++i) {
+              VMSDK_ASSIGN_OR_RETURN(auto arg, itr.PopNext(),
+                                     _ << "Missing Reducer argument " << i);
+              VMSDK_ASSIGN_OR_RETURN(auto expr,
+                                     expr::Expression::Compile(
+                                         parameters, vmsdk::ToStringView(arg)),
+                                     _ << " in GROUPBY stage");
+              r.args_.emplace_back(std::move(expr));
+            }
           }
           if (itr.PopIfNextIgnoreCase(kAsParam)) {
             VMSDK_ASSIGN_OR_RETURN(auto alias, itr.PopNext(),

@@ -785,6 +785,12 @@ SerializationRange SearchResult::GetSerializationRange(
 }
 
 absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
+  // INKEYS 0 (has_inkeys=true, empty set) means no keys can match.
+  // Short-circuit before acquiring the lock to avoid unnecessary contention.
+  if (parameters.has_inkeys && parameters.inkeys.empty()) {
+    parameters.search_result = SearchResult(0, {}, parameters);
+    return absl::OkStatus();
+  }
   auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
   vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
   absl::StatusOr<std::vector<indexes::Neighbor>> neighbors =

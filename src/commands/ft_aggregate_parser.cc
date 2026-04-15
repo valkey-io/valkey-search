@@ -196,9 +196,7 @@ ConstructGroupByParser() {
         auto groupby = std::make_unique<GroupBy>();
         uint32_t cnt{0};
         VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, cnt));
-        if (cnt == 0) {
-          return absl::OutOfRangeError("Groupby requires arguments");
-        }
+        // cnt == 0 is valid: means aggregate all records into single group
         for (auto i = 0; i < cnt; ++i) {
           VMSDK_ASSIGN_OR_RETURN(auto group_string, itr.PopNext());
           auto group_string_view = vmsdk::ToStringView(group_string);

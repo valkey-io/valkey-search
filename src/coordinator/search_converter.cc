@@ -380,7 +380,6 @@ std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
   auto request = std::make_unique<SearchIndexPartitionRequest>();
   request->set_db_num(parameters.db_num);
   request->set_index_schema_name(parameters.index_schema_name);
-  request->set_db_num(parameters.db_num_);
   request->set_attribute_alias(parameters.attribute_alias);
   request->set_score_as(vmsdk::ToStringView(parameters.score_as.get()));
   request->set_query(parameters.query);

@@ -62,7 +62,7 @@ TEST_F(SearchConverterInfieldsTest, WireRoundTrip) {
   ASSERT_TRUE(parsed.ParseFromString(wire));
 
   absl::flat_hash_set<std::string> deserialized(parsed.infields().begin(),
-                                                 parsed.infields().end());
+                                                parsed.infields().end());
   EXPECT_EQ(deserialized, params.infields);
 }
 

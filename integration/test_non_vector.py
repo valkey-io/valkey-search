@@ -338,9 +338,12 @@ def validate_aggregate_complex_queries(client: Valkey):
         "REDUCE", "COUNT", "0"
     )
     assert result[0] == 2
-    rows = {result[i][1]: result[i][3] for i in range(1, len(result))}
-    assert rows[b'electronics'] == b'500'
-    assert rows[b'books'] == b'500'
+    for i in range(1, len(result)):
+        row = dict(zip(result[i][::2], result[i][1::2]))
+        if row[b'category'] == b'electronics':
+            assert row[b'__generated_aliascount'] == b'500'
+        else:
+            assert row[b'__generated_aliascount'] == b'500'
 
     # 7. GROUPBY with SUM reducer
     result = client.execute_command(
@@ -363,9 +366,12 @@ def validate_aggregate_complex_queries(client: Valkey):
         "REDUCE", "SUM", "1", "@price"
     )
     assert result[0] == 2
-    rows = {result[i][1]: result[i][3] for i in range(1, len(result))}
-    assert rows[b'electronics'] == b'25'
-    assert rows[b'books'] == b'30'
+    for i in range(1, len(result)):
+        row = dict(zip(result[i][::2], result[i][1::2]))
+        if row[b'category'] == b'electronics':
+            assert row[b'__generated_aliassumprice'] == b'25'
+        else:
+            assert row[b'__generated_aliassumprice'] == b'30'
 
     # 8. GROUPBY with AVG reducer
     result = client.execute_command(
@@ -388,9 +394,12 @@ def validate_aggregate_complex_queries(client: Valkey):
         "REDUCE", "AVG", "1", "@price"
     )
     assert result[0] == 2
-    rows = {result[i][1]: result[i][3] for i in range(1, len(result))}
-    assert rows[b'electronics'] == b'2'
-    assert rows[b'books'] == b'3'
+    for i in range(1, len(result)):
+        row = dict(zip(result[i][::2], result[i][1::2]))
+        if row[b'category'] == b'electronics':
+            assert row[b'__generated_aliasavgprice'] == b'2'
+        else:
+            assert row[b'__generated_aliasavgprice'] == b'3'
 
     # 9. GROUPBY with MIN and MAX reducers
     result = client.execute_command(
@@ -422,11 +431,11 @@ def validate_aggregate_complex_queries(client: Valkey):
     for i in range(1, len(result)):
         row = dict(zip(result[i][::2], result[i][1::2]))
         if row[b'category'] == b'electronics':
-            assert row[b'MIN(@price)'] == b'1'
-            assert row[b'MAX(@price)'] == b'999'
+            assert row[b'__generated_aliasminprice'] == b'1'
+            assert row[b'__generated_aliasmaxprice'] == b'999'
         else:
-            assert row[b'MIN(@price)'] == b'2'
-            assert row[b'MAX(@price)'] == b'1000'
+            assert row[b'__generated_aliasminprice'] == b'2'
+            assert row[b'__generated_aliasmaxprice'] == b'1000'
 
     # 10. GROUPBY with COUNT_DISTINCT reducer
     result = client.execute_command(
@@ -450,7 +459,7 @@ def validate_aggregate_complex_queries(client: Valkey):
     assert result[0] == 2
     for i in range(1, len(result)):
         row = dict(zip(result[i][::2], result[i][1::2]))
-        assert row[b'COUNT_DISTINCT(@rating)'] == b'50'
+        assert row[b'__generated_aliascount_distinctrating'] == b'50'
 
     # 11. GROUPBY with STDDEV reducer
     result = client.execute_command(
@@ -469,6 +478,10 @@ def validate_aggregate_complex_queries(client: Valkey):
         "REDUCE", "STDDEV", "1", "@price"
     )
     assert result[0] == 2
+    for i in range(1, len(result)):
+        row = dict(zip(result[i][::2], result[i][1::2]))
+        # electronics: stddev([1,3]) = sqrt(2), books: stddev([2,4]) = sqrt(2)
+        assert abs(float(row[b'__generated_aliasstddevprice']) - 2**0.5) < 0.0001
 
     # 12. GROUPBY + SORTBY + LIMIT pipeline
     result = client.execute_command(

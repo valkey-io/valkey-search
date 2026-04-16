@@ -17,6 +17,7 @@
 #include <utility>
 #include <vector>
 
+#include "absl/container/flat_hash_set.h"
 #include "absl/strings/string_view.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -79,6 +80,7 @@ struct FTSearchParserTestCase {
   query::SortOrder sortby_order{query::SortOrder::kAscending};
   bool sortby_enabled{false};
   bool with_sort_keys{false};
+  absl::flat_hash_set<std::string> expected_infields;
 };
 
 class FTSearchParserTest
@@ -303,6 +305,7 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
       EXPECT_EQ(search_params.value()->sortby->field, test_case.sortby_field);
       EXPECT_EQ(search_params.value()->sortby->order, test_case.sortby_order);
     }
+    EXPECT_EQ(search_params.value()->infields, test_case.expected_infields);
   } else {
     std::cerr << "Failed to parse command: `" << vmsdk::ToStringView(args[0])
               << "` Because: " << search_params.status().message() << "\n";
@@ -1014,6 +1017,111 @@ INSTANTIATE_TEST_SUITE_P(
             .sortby_order = query::SortOrder::kAscending,
             .sortby_enabled = true,
             .with_sort_keys = true,
+        },
+        // INFIELDS parameter tests
+        {
+            .test_name = "infields_single_field",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str = "INFIELDS 1 attribute_identifier_1",
+            .vector_query = false,
+            .expected_infields = {"attribute_identifier_1"},
+        },
+        {
+            .test_name = "infields_multiple_fields",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str = "INFIELDS 3 f1 f2 f3",
+            .vector_query = false,
+            .expected_infields = {"f1", "f2", "f3"},
+        },
+        {
+            .test_name = "infields_duplicate_fields_deduped",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str = "INFIELDS 3 f1 f1 f2",
+            .vector_query = false,
+            .expected_infields = {"f1", "f2"},
+        },
+        {
+            .test_name = "infields_zero_count_no_op",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str = "INFIELDS 0",
+            .vector_query = false,
+            .expected_infields = {},
+        },
+        {
+            .test_name = "infields_non_integer_count_error",
+            .success = false,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .expected_error_message =
+                "Error parsing value for the parameter `INFIELDS`",
+            .search_parameters_str = "INFIELDS abc",
+            .vector_query = false,
+        },
+        {
+            .test_name = "infields_count_exceeds_args_error",
+            .success = false,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .expected_error_message =
+                "Error parsing value for the parameter `INFIELDS`",
+            .search_parameters_str = "INFIELDS 5 f1 f2",
+            .vector_query = false,
+        },
+        {
+            .test_name = "infields_with_vector_query",
+            .success = true,
+            .params_str = " PARAMS 2",
+            .filter_str = "* =>[KNN 5 @vec $BLOB]",
+            .k = 5,
+            .search_parameters_str = "INFIELDS 2 f1 f2",
+            .expected_infields = {"f1", "f2"},
+        },
+        {
+            .test_name = "infields_negative_count_error",
+            .success = false,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .expected_error_message =
+                "Error parsing value for the parameter `INFIELDS` - "
+                "INFIELDS count must not be negative",
+            .search_parameters_str = "INFIELDS -1",
+            .vector_query = false,
         },
     }),
     [](const TestParamInfo<FTSearchParserTestCase> &info) {

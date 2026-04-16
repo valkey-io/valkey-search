@@ -28,6 +28,7 @@ struct TextParsingOptions {
   bool verbatim = false;
   bool inorder = false;
   std::optional<uint32_t> slop = std::nullopt;
+  const absl::flat_hash_set<std::string>* infields = nullptr;
 };
 enum class QueryOperations : uint64_t {
   kNone = 0,

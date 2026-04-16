@@ -281,6 +281,8 @@ bool IsIdentifierChar(int c) {
 }
 
 struct Compiler {
+  int depth_ = 0;
+  static constexpr int kMaxDepth = 1000;
   utils::Scanner s_;
   Compiler(absl::string_view sv) : s_(sv) {}
 
@@ -349,6 +351,9 @@ struct Compiler {
   }
 
   absl::StatusOr<ExprPtr> Primary(CompileContext& ctx) {
+    if (++depth_ > kMaxDepth) {
+      return absl::InvalidArgumentError("Expression too complex");
+    }
     s_.SkipWhiteSpace();
     DBG << "Primary: '" << s_.GetUnscanned() << "'\n";
     switch (s_.PeekByte()) {

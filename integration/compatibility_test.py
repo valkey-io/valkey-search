@@ -1,4 +1,4 @@
-import pytest, logging, time, itertools, math, valkey, gzip, struct, os, subprocess
+import pytest, logging, time, itertools, math, valkey, gzip, struct, os
 import sys, json
 from collections import defaultdict
 from operator import itemgetter

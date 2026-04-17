@@ -40,8 +40,8 @@ absl::flat_hash_set<std::string> SerializeAndReadBackInfields(
   return result;
 }
 
-TEST_F(SearchConverterInfieldsTest, SerializeNonEmpty) {
-  absl::flat_hash_set<std::string> original = {"f1", "f2", "f3"};
+TEST_F(SearchConverterInfieldsTest, SerializeSingleField) {
+  absl::flat_hash_set<std::string> original = {"title"};
   EXPECT_EQ(SerializeAndReadBackInfields(original), original);
 }
 

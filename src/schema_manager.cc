@@ -392,10 +392,9 @@ uint64_t SchemaManager::GetNumberOfIndexSchemas() const {
   // Use rdb_restore_total_indexes while rdb_restore_in_progress
   if (Metrics::GetStats().rdb_restore_in_progress.load(
           std::memory_order_relaxed)) {
-    num_schemas = std::max(
-        static_cast<uint64_t>(num_schemas),
-        Metrics::GetStats().rdb_restore_total_indexes.load(
-            std::memory_order_relaxed));
+    num_schemas = std::max(static_cast<uint64_t>(num_schemas),
+                           Metrics::GetStats().rdb_restore_total_indexes.load(
+                               std::memory_order_relaxed));
   }
   return num_schemas;
 }

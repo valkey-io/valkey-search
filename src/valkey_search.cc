@@ -373,9 +373,11 @@ static vmsdk::info_field::Integer rdb_last_restore_backfill_duration_ms(
         .Dev()
         .Units(vmsdk::info_field::Units::kMilliSeconds)
         .Computed([]() -> long long {
-          auto start_ms = Metrics::GetStats().rdb_last_restore_backfill_start_ms.load();
+          auto start_ms =
+              Metrics::GetStats().rdb_last_restore_backfill_start_ms.load();
           if (start_ms == 0) return 0;
-          auto stored = Metrics::GetStats().rdb_last_restore_backfill_duration_ms.load();
+          auto stored =
+              Metrics::GetStats().rdb_last_restore_backfill_duration_ms.load();
           if (stored > 0) return stored;
           // In progress - compute elapsed
           if (SchemaManager::Instance().IsIndexingInProgress()) {

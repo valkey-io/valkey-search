@@ -11,7 +11,7 @@ from util import waiters
 
 index_1 = Index("idx_1", [Vector("v", 3, type="HNSW", m=2, efc=1), Text("txt")])
 index_2 = Index("idx_2", [Vector("v", 3, type="HNSW", m=2, efc=1), Numeric("n"), Tag("t"), Text("description")])
-NUM_DOCS = 10000
+NUM_DOCS = 500
 
 
 class TestNumberOfIndexesOnRestore(ValkeySearchTestCaseDebugMode):

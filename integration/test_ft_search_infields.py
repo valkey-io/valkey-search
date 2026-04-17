@@ -5,7 +5,7 @@ INFIELDS restricts full-text query term matching to a caller-specified set of
 indexed TEXT fields.
 """
 
-import json as _json
+import json
 import struct
 
 import pytest
@@ -244,11 +244,11 @@ class TestFTSearchInfields(ValkeySearchTestCaseBase):
         )
         client.execute_command(
             "JSON.SET", "jdoc:1", "$",
-            _json.dumps({"title": "valkey search", "body": "learn databases"})
+            json.dumps({"title": "valkey search", "body": "learn databases"})
         )
         client.execute_command(
             "JSON.SET", "jdoc:2", "$",
-            _json.dumps({"title": "learn python", "body": "valkey is fast"})
+            json.dumps({"title": "learn python", "body": "valkey is fast"})
         )
 
         result = client.execute_command(

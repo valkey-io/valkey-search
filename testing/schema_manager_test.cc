@@ -18,6 +18,7 @@
 #include "google/protobuf/text_format.h"
 #include "gtest/gtest.h"
 #include "src/coordinator/metadata_manager.h"
+#include "src/metrics.h"
 #include "testing/common.h"
 #include "testing/coordinator/common.h"
 #include "vmsdk/src/testing_infra/module.h"
@@ -354,6 +355,72 @@ TEST_F(SchemaManagerTest, TestLoadIndexNoReplication) {
       &fake_ctx_, eid, VALKEYMODULE_SUBEVENT_LOADING_ENDED, nullptr);
   VMSDK_EXPECT_OK(
       SchemaManager::Instance().GetIndexSchema(db_num_, index_name_));
+}
+
+TEST_F(SchemaManagerTest, TestNumberOfIndexSchemasDuringReplication) {
+  // Verify that during replication, rdb_restore_total_indexes covers the
+  // staging gap where indexes are in the staged map but not the live map.
+  ValkeyModuleEvent eid;
+  ON_CALL(*kMockValkeyModule, GetContextFromIO(testing::_))
+      .WillByDefault(testing::Return(&fake_ctx_));
+
+  auto &stats = Metrics::GetStats();
+  auto old_in_progress = stats.rdb_restore_in_progress.load();
+  auto old_total = stats.rdb_restore_total_indexes.load();
+
+  // Simulate RDB restore starting with 1 index (replication scenario)
+  stats.rdb_restore_in_progress.store(true);
+  stats.rdb_restore_total_indexes.store(1);
+
+  SchemaManager::Instance().OnLoadingCallback(
+      &fake_ctx_, eid, VALKEYMODULE_SUBEVENT_LOADING_REPL_START, nullptr);
+
+  // No indexes in live map yet, but rdb_restore_total_indexes = 1
+  EXPECT_EQ(SchemaManager::Instance().GetNumberOfIndexSchemas(), 1);
+
+  FakeSafeRDB fake_rdb;
+  auto section = std::make_unique<data_model::RDBSection>();
+  section->set_type(data_model::RDB_SECTION_INDEX_SCHEMA);
+  section->mutable_index_schema_contents()->CopyFrom(test_index_schema_proto_);
+  section->set_supplemental_count(0);
+
+  VMSDK_EXPECT_OK(SchemaManager::Instance().LoadIndex(
+      &fake_ctx_, std::move(section), SupplementalContentIter(&fake_rdb, 0)));
+
+  // Index is staged (not in live map), rdb_restore_total_indexes still covers
+  EXPECT_EQ(SchemaManager::Instance().GetNumberOfIndexSchemas(), 1);
+
+  // Simulate restore completed
+  stats.rdb_restore_in_progress.store(false);
+
+  // Apply the staged schemas.
+  SchemaManager::Instance().OnLoadingCallback(
+      &fake_ctx_, eid, VALKEYMODULE_SUBEVENT_LOADING_ENDED, nullptr);
+
+  // Now in live map, no restore fallback needed
+  EXPECT_EQ(SchemaManager::Instance().GetNumberOfIndexSchemas(), 1);
+
+  // Restore original metric state
+  stats.rdb_restore_in_progress.store(old_in_progress);
+  stats.rdb_restore_total_indexes.store(old_total);
+}
+
+TEST_F(SchemaManagerTest,
+       TestNumberOfIndexSchemasNotInflatedWhenNotRestoring) {
+  // When rdb_restore_in_progress is false, stale rdb_restore_total_indexes
+  // should NOT inflate the count.
+  auto &stats = Metrics::GetStats();
+  auto old_in_progress = stats.rdb_restore_in_progress.load();
+  auto old_total = stats.rdb_restore_total_indexes.load();
+
+  stats.rdb_restore_in_progress.store(false);
+  stats.rdb_restore_total_indexes.store(5);  // stale from a previous load
+
+  EXPECT_EQ(SchemaManager::Instance().GetNumberOfIndexSchemas(), 0);
+
+  // Restore original metric state
+  stats.rdb_restore_in_progress.store(old_in_progress);
+  stats.rdb_restore_total_indexes.store(old_total);
 }
 
 TEST_F(SchemaManagerTest, TestLoadIndexExistingData) {

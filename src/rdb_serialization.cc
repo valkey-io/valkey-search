@@ -16,6 +16,7 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
+#include "absl/time/clock.h"
 #include "src/metrics.h"
 #include "src/rdb_section.pb.h"
 #include "src/valkey_search.h"
@@ -166,6 +167,7 @@ absl::Status PerformRDBLoad(ValkeyModuleCtx *ctx, SafeRDB *rdb, int encver) {
                          << " with " << rdb_section_count << " sections.";
 
   // Initialize restore progress tracking
+  auto rdb_load_start = absl::Now();
   Metrics::GetStats().rdb_restore_in_progress = true;
   Metrics::GetStats().rdb_restore_total_indexes = rdb_section_count;
   Metrics::GetStats().rdb_restore_completed_indexes = 0;
@@ -200,6 +202,12 @@ absl::Status PerformRDBLoad(ValkeyModuleCtx *ctx, SafeRDB *rdb, int encver) {
 
   // Mark restore as complete (all indexes loaded successfully)
   Metrics::GetStats().rdb_restore_in_progress = false;
+  Metrics::GetStats().rdb_last_restore_aux_load_duration_ms =
+      absl::ToInt64Milliseconds(absl::Now() - rdb_load_start);
+  Metrics::GetStats().rdb_last_restore_backfill_start_ms =
+      absl::ToUnixMillis(absl::Now());
+  Metrics::GetStats().rdb_last_restore_backfill_duration_ms = 0;
+  
 
   return absl::OkStatus();
 }

@@ -539,3 +539,20 @@ class TestInfieldsCompatibility(BaseCompatibilityTest):
         self.check("ft.search", f"{key_type}_idx1", "@color:{red}",
                    "INFIELDS", "1", "title",
                    "DIALECT", str(dialect))
+
+    def test_infields_duplicate_fields(self, key_type, dialect):
+        """Duplicate field names — verify dedup matches Redis Stack."""
+        self.setup_data("pure text small", key_type)
+        self.check("ft.search", f"{key_type}_idx1", "apple",
+                   "INFIELDS", "3", "title", "title", "body",
+                   "DIALECT", str(dialect))
+
+    def test_infields_mixed_text_and_filter(self, key_type, dialect):
+        """Mixed text term + non-text filter with INFIELDS scoping the text part."""
+        self.setup_data("pure text small", key_type)
+        self.check("ft.search", f"{key_type}_idx1", "apple @color:{red}",
+                   "INFIELDS", "1", "title",
+                   "DIALECT", str(dialect))
+        self.check("ft.search", f"{key_type}_idx1", "apple @price:[0 5]",
+                   "INFIELDS", "1", "body",
+                   "DIALECT", str(dialect))

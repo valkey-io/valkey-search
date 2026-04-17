@@ -1841,6 +1841,14 @@ INSTANTIATE_TEST_SUITE_P(
             .create_success = true,
             .evaluate_success = true,
         },
+        // Case-sensitive field name: uppercase field name doesn't match.
+        {
+            .test_name = "infields_case_sensitive_field_name",
+            .filter = "hello",
+            .infields = {"TEXT_FIELD1"},
+            .create_success = true,
+            .evaluate_success = false,
+        },
     }),
     [](const TestParamInfo<InfieldsFilterTestCase> &info) {
       return info.param.test_name;

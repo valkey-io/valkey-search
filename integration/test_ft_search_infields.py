@@ -320,3 +320,19 @@ class TestFTSearchInfields(ValkeySearchTestCaseBase):
         )
         assert result[0] == 1
         assert b"doc:3" in result
+
+    def test_infields_explicit_field_prefix_overrides(self):
+        """Explicit @field: prefix takes precedence over INFIELDS."""
+        client: Valkey = self.server.get_new_client()
+        _setup_index_and_docs(client)
+
+        # @title:programming searches title regardless of INFIELDS 1 body
+        result = client.execute_command(
+            "FT.SEARCH", "infields_idx", "@title:programming",
+            "INFIELDS", "1", "body",
+            "NOCONTENT", "DIALECT", "2"
+        )
+        assert result[0] == 1
+        assert b"doc:1" in result
+
+

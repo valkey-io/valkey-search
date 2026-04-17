@@ -256,9 +256,8 @@ absl::Status GRPCSearchRequestToParameters(
       static_cast<QueryOperations>(request.query_operations());
   parameters->sortby_parameter = SortByFromGRPC(request);
   parameters->infields.reserve(request.infields().size());
-  for (const auto& field : request.infields()) {
-    parameters->infields.insert(field);
-  }
+  parameters->infields.insert(request.infields().begin(),
+                              request.infields().end());
   return absl::OkStatus();
 }
 

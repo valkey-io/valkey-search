@@ -405,8 +405,7 @@ TEST_F(SchemaManagerTest, TestNumberOfIndexSchemasDuringReplication) {
   stats.rdb_restore_total_indexes.store(old_total);
 }
 
-TEST_F(SchemaManagerTest,
-       TestNumberOfIndexSchemasNotInflatedWhenNotRestoring) {
+TEST_F(SchemaManagerTest, TestNumberOfIndexSchemasNotInflatedWhenNotRestoring) {
   // When rdb_restore_in_progress is false, stale rdb_restore_total_indexes
   // should NOT inflate the count.
   auto &stats = Metrics::GetStats();

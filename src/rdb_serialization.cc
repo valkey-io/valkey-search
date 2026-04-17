@@ -207,7 +207,6 @@ absl::Status PerformRDBLoad(ValkeyModuleCtx *ctx, SafeRDB *rdb, int encver) {
   Metrics::GetStats().rdb_last_restore_backfill_start_ms =
       absl::ToUnixMillis(absl::Now());
   Metrics::GetStats().rdb_last_restore_backfill_duration_ms = 0;
-  
 
   return absl::OkStatus();
 }

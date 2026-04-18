@@ -9,6 +9,9 @@
 #include "absl/container/inlined_vector.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/ascii.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -214,6 +217,7 @@ ConstructGroupByParser() {
         }
         while (itr.PopIfNextIgnoreCase(kReduceParam)) {
           GroupBy::Reducer r;
+          std::vector<std::string> arg_strs;
           VMSDK_ASSIGN_OR_RETURN(auto name, itr.PopNext(),
                                  _ << "Missing Reducer name");
           auto uc_name =
@@ -235,6 +239,7 @@ ConstructGroupByParser() {
           for (int i = 0; i < cnt; ++i) {
             VMSDK_ASSIGN_OR_RETURN(auto arg, itr.PopNext(),
                                    _ << "Missing Reducer argument " << i);
+            arg_strs.push_back(std::string(vmsdk::ToStringView(arg)));
             VMSDK_ASSIGN_OR_RETURN(
                 auto expr,
                 expr::Expression::Compile(parameters, vmsdk::ToStringView(arg)),
@@ -250,10 +255,22 @@ ConstructGroupByParser() {
             r.output_ = std::unique_ptr<Attribute>(
                 dynamic_cast<Attribute *>(output.release()));
           } else {
-            std::ostringstream os;
-            os << r;
+            // Avoid std::ostringstream due to allocator mismatch issues.
+            // Generate compatible auto alias:
+            // "__generated_alias" + lowercase(reducer_name) + args without '@'
+            std::string lower_name = absl::AsciiStrToLower(r.info_->name_);
+            std::string args_concat;
+            for (const auto &arg : arg_strs) {
+              absl::string_view sv = arg;
+              if (!sv.empty() && sv[0] == '@') {
+                sv.remove_prefix(1);
+              }
+              absl::StrAppend(&args_concat, sv);
+            }
+            auto auto_alias =
+                absl::StrCat("__generated_alias", lower_name, args_concat);
             VMSDK_ASSIGN_OR_RETURN(auto output,
-                                   parameters.MakeReference(os.str(), true));
+                                   parameters.MakeReference(auto_alias, true));
             r.output_ = std::unique_ptr<Attribute>(
                 dynamic_cast<Attribute *>(output.release()));
           }

@@ -391,6 +391,12 @@ void EvaluatePrefilteredKeys(
         iterator->Next();
         continue;
       }
+      // 2. Skip keys not in the INKEYS set (when specified).
+      if (!parameters.inkeys.empty() &&
+          !parameters.inkeys.contains(key->Str())) {
+        iterator->Next();
+        continue;
+      }
       const valkey_search::indexes::text::TextIndex *text_index =
           text_index_schema ? text_index_schema->GetPerKeyTextIndex(key, false)
                             : nullptr;
@@ -603,6 +609,12 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
       while (!iterator->Done()) {
         const auto &key = **iterator;
         BACKGROUND_PAUSEPOINT("search_entries_fetcher");
+        // Skip keys not in the INKEYS set (when specified).
+        if (!parameters.inkeys.empty() &&
+            !parameters.inkeys.contains(key->Str())) {
+          iterator->Next();
+          continue;
+        }
         if (needs_dedup) {
           if (seen_keys.contains(key->Str().data())) {
             iterator->Next();
@@ -785,6 +797,12 @@ SerializationRange SearchResult::GetSerializationRange(
 }
 
 absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
+  // INKEYS 0 (has_inkeys=true, empty set) means no keys can match.
+  // Short-circuit before acquiring the lock to avoid unnecessary contention.
+  if (parameters.has_inkeys && parameters.inkeys.empty()) {
+    parameters.search_result = SearchResult(0, {}, parameters);
+    return absl::OkStatus();
+  }
   auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
   vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
   absl::StatusOr<std::vector<indexes::Neighbor>> neighbors =

@@ -1909,29 +1909,38 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx, const Key &key,
 }
 
 void IndexSchema::MarkAsDestructing() {
-  absl::MutexLock lock(&mutated_records_mutex_);
-  auto status = keyspace_event_manager_->RemoveSubscription(this);
-  if (!status.ok()) {
-    VMSDK_LOG(WARNING, detached_ctx_.get())
-        << "Failed to remove keyspace event subscription for index "
-           "schema "
-        << vmsdk::config::RedactIfNeeded(name_) << ": " << status.message();
-  }
+  std::vector<std::unique_ptr<query::SearchParameters>> to_notify;
+  {
+    absl::MutexLock lock(&mutated_records_mutex_);
+    auto status = keyspace_event_manager_->RemoveSubscription(this);
+    if (!status.ok()) {
+      VMSDK_LOG(WARNING, detached_ctx_.get())
+          << "Failed to remove keyspace event subscription for index "
+             "schema "
+          << vmsdk::config::RedactIfNeeded(name_) << ": " << status.message();
+    }
 
-  // Send error response to any waiting queries
-  for (auto &[key, mutation] : tracked_mutated_records_) {
-    for (auto &params : mutation.waiting_queries) {
-      if (params) {
-        params->search_result.status =
-            GenerateIndexNotFoundError(db_num_, name_);
-        params->QueryCompleteMainThread(std::move(params));
+    // Collect waiting queries so we can notify them outside the lock.
+    for (auto &[key, mutation] : tracked_mutated_records_) {
+      for (auto &params : mutation.waiting_queries) {
+        if (params) {
+          params->search_result.status =
+              GenerateIndexNotFoundError(db_num_, name_);
+          to_notify.push_back(std::move(params));
+        }
       }
     }
+
+    backfill_job_.Get()->MarkScanAsDone();
+    tracked_mutated_records_.clear();
+    is_destructing_ = true;
   }
 
-  backfill_job_.Get()->MarkScanAsDone();
-  tracked_mutated_records_.clear();
-  is_destructing_ = true;
+  // Notify outside the lock to avoid holding mutated_records_mutex_ during
+  // client unblock callbacks.
+  for (auto &params : to_notify) {
+    params->QueryCompleteMainThread(std::move(params));
+  }
 }
 
 std::optional<IndexSchema::MutatedAttributes>

@@ -22,6 +22,10 @@ jobs:
     - name: Checkout Code
       uses: actions/checkout@v3
 
-    # Set up Docker to build and run the container
     - name: Build Code
-      run: ./build.sh
+      run: |
+        echo "[TIMING] macOS Build started at $(date)"
+        BUILD_START=$(date +%s)
+        ./build.sh
+        BUILD_END=$(date +%s)
+        echo "[TIMING] macOS Build completed in $((BUILD_END - BUILD_START))s"

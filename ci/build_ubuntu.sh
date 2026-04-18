@@ -168,6 +168,29 @@ trap cleanup EXIT
 
 cd ${CI_DIR}
 
+CI_TOTAL_START=$(date +%s)
+
+LOG_INFO "[TIMING] ▶ Prepare Environment started"
+PREPARE_START=$(date +%s)
 prepare_env
+PREPARE_END=$(date +%s)
+LOG_INFO "[TIMING] ■ Prepare Environment completed in $((PREPARE_END - PREPARE_START))s"
+
+LOG_INFO "[TIMING] ▶ Build and Run Tests started"
+BUILD_TEST_START=$(date +%s)
 build_and_run_tests
+BUILD_TEST_END=$(date +%s)
+LOG_INFO "[TIMING] ■ Build and Run Tests completed in $((BUILD_TEST_END - BUILD_TEST_START))s"
+
+CI_TOTAL_END=$(date +%s)
+CI_TOTAL=$((CI_TOTAL_END - CI_TOTAL_START))
+
+LOG_INFO "═══════════════════════════════════════"
+LOG_INFO "  CI TIMING SUMMARY"
+LOG_INFO "═══════════════════════════════════════"
+LOG_INFO "  Prepare Environment: $((PREPARE_END - PREPARE_START))s"
+LOG_INFO "  Build and Run Tests: $((BUILD_TEST_END - BUILD_TEST_START))s"
+LOG_INFO "  ─────────────────────────────────────"
+LOG_INFO "  CI Total:            ${CI_TOTAL}s"
+LOG_INFO "═══════════════════════════════════════"
 

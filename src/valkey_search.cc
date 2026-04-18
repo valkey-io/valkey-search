@@ -21,6 +21,7 @@
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
+#include "absl/time/clock.h"
 #include "absl/time/time.h"
 #include "src/attribute_data_type.h"
 #include "src/coordinator/client_pool.h"
@@ -356,6 +357,37 @@ static vmsdk::info_field::Integer rdb_restore_backpressure_wait_cycles(
     vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().rdb_restore_backpressure_wait_cycles;
     }));
+
+static vmsdk::info_field::Integer rdb_last_restore_aux_load_duration_ms(
+    "rdb", "rdb_last_restore_aux_load_duration_ms",
+    vmsdk::info_field::IntegerBuilder()
+        .Dev()
+        .Units(vmsdk::info_field::Units::kMilliSeconds)
+        .Computed([]() -> long long {
+          return Metrics::GetStats().rdb_last_restore_aux_load_duration_ms;
+        }));
+
+static vmsdk::info_field::Integer rdb_last_restore_backfill_duration_ms(
+    "rdb", "rdb_last_restore_backfill_duration_ms",
+    vmsdk::info_field::IntegerBuilder()
+        .Dev()
+        .Units(vmsdk::info_field::Units::kMilliSeconds)
+        .Computed([]() -> long long {
+          auto start_ms =
+              Metrics::GetStats().rdb_last_restore_backfill_start_ms.load();
+          if (start_ms == 0) return 0;
+          auto stored =
+              Metrics::GetStats().rdb_last_restore_backfill_duration_ms.load();
+          if (stored > 0) return stored;
+          // In progress - compute elapsed
+          if (SchemaManager::Instance().IsIndexingInProgress()) {
+            return absl::ToUnixMillis(absl::Now()) - start_ms;
+          }
+          // Finished
+          auto duration = absl::ToUnixMillis(absl::Now()) - start_ms;
+          Metrics::GetStats().rdb_last_restore_backfill_duration_ms = duration;
+          return duration;
+        }));
 
 static vmsdk::info_field::Integer ft_internal_update_parse_failures_cnt(
     "coordinator", "ft_internal_update_parse_failures_cnt",

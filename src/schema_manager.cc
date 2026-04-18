@@ -32,6 +32,7 @@
 #include "src/coordinator/metadata_manager.h"
 #include "src/index_schema.h"
 #include "src/index_schema.pb.h"
+#include "src/metrics.h"
 #include "src/rdb_section.pb.h"
 #include "src/rdb_serialization.h"
 #include "src/valkey_search.h"
@@ -387,6 +388,13 @@ uint64_t SchemaManager::GetNumberOfIndexSchemas() const {
   auto num_schemas = 0;
   for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
     num_schemas += schema_map.size();
+  }
+  // Use rdb_restore_total_indexes while rdb_restore_in_progress
+  if (Metrics::GetStats().rdb_restore_in_progress.load(
+          std::memory_order_relaxed)) {
+    num_schemas = std::max(static_cast<uint64_t>(num_schemas),
+                           Metrics::GetStats().rdb_restore_total_indexes.load(
+                               std::memory_order_relaxed));
   }
   return num_schemas;
 }

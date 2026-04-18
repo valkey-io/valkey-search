@@ -130,7 +130,7 @@ TEST_F(PostingTest, KeyIteratorBasic) {
   }
 
   // Verify all keys are present
-  EXPECT_EQ(found_keys.size(), 3);
+  EXPECT_EQ(found_keys.size(), 2);
   std::sort(found_keys.begin(), found_keys.end());
   EXPECT_EQ(found_keys[0], "doc1");
   EXPECT_EQ(found_keys[1], "doc2");

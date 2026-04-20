@@ -75,9 +75,8 @@ void ResolveContent(std::unique_ptr<SearchParameters> params) {
   }
 
   // 6. Apply INKEYS post-filter (shard-local in cluster mode)
-  if (!params->inkeys.empty()) {
-    ApplyInkeysFilter(params->search_result.neighbors,
-                      params->search_result.total_count, params->inkeys);
+  if (params->inkeys.has_value()) {
+    ApplyInkeysFilter(params->search_result, *params->inkeys);
   }
 
   // 7. Call QueryCompleteMainThread

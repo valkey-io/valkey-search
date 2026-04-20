@@ -16,7 +16,6 @@
 #include <utility>
 #include <vector>
 
-#include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -313,34 +312,32 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
     return;
   }
 
-  // 1.5. INKEYS 0 means no keys can match — return empty result
-  if (has_inkeys && inkeys.empty()) {
-    ValkeyModule_ReplyWithArray(ctx, 1);
-    ValkeyModule_ReplyWithLongLong(ctx, 0);
+  // 2. NOCONTENT: skip content resolution entirely.
+  if (no_content) {
+    if (inkeys.has_value()) {
+      ApplyInkeysFilter(search_result, *inkeys);
+    }
+    ApplySorting(search_result.neighbors, *this);
+    SendReplyNoContent(ctx, search_result, *this);
     return;
   }
 
-  // 2. Content resolution (skipped for NOCONTENT)
-  if (!no_content) {
-    auto status = ProcessNeighborsForQuery(ctx, search_result, *this);
-    if (!status.ok()) {
-      ++Metrics::GetStats().query_failed_requests_cnt;
-      ValkeyModule_ReplyWithError(ctx, status.message().data());
-      return;
-    }
+  // 3. Content resolution
+  auto status = ProcessNeighborsForQuery(ctx, search_result, *this);
+  if (!status.ok()) {
+    ++Metrics::GetStats().query_failed_requests_cnt;
+    ValkeyModule_ReplyWithError(ctx, status.message().data());
+    return;
   }
 
-  // 3. Apply INKEYS post-filter and sorting
-  if (!inkeys.empty()) {
-    ApplyInkeysFilter(search_result.neighbors, search_result.total_count,
-                      inkeys);
+  // 4. INKEYS post-filter + sort
+  if (inkeys.has_value()) {
+    ApplyInkeysFilter(search_result, *inkeys);
   }
   ApplySorting(search_result.neighbors, *this);
 
-  // 4. Serialize
-  if (no_content) {
-    SendReplyNoContent(ctx, search_result, *this);
-  } else if (IsNonVectorQuery()) {
+  // 5. Serialize
+  if (IsNonVectorQuery()) {
     SerializeNonVectorNeighbors(ctx, search_result, *this);
   } else {
     SerializeNeighbors(ctx, search_result, *this);

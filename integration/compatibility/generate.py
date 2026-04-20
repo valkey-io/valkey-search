@@ -76,7 +76,7 @@ class BaseCompatibilityTest:
     def setup_data(self, data_set_name, key_type):
         self.data_set_name = data_set_name
         self.key_type = key_type
-        load_data(self.client, data_set_name, key_type)
+        return load_data(self.client, data_set_name, key_type)
 
     def execute_command(self, cmd):
         answer = {"cmd": cmd,
@@ -475,39 +475,83 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
 class TestSearchCompatibility(BaseCompatibilityTest):
     ANSWER_FILE_NAME = "search-answers.pickle.gz"
 
+    # Expand '*' into both a non-vector and a vector run so INKEYS
+    # exercises both code paths.
+    def _run_both(self, dialect, *cmd_parts):
+        non_vector = []
+        for c in cmd_parts:
+            non_vector += ["@n1:[-inf inf]"] if c == "*" else [c]
+        self.check(*non_vector, "DIALECT", str(dialect))
+        vector = []
+        did_one = False
+        for c in cmd_parts:
+            if c == "*" and not did_one:
+                vector += ["*=>[KNN 10 @v1 $BLOB]"]
+                did_one = True
+            else:
+                vector += [c]
+        if did_one:
+            self.check(
+                *vector,
+                "PARAMS", "2", "BLOB",
+                struct.pack(f"<{VECTOR_DIM}f", *([0] * VECTOR_DIM)),
+                "DIALECT", str(dialect),
+            )
+
     def test_inkeys_basic(self, key_type, dialect):
-        self.setup_data("sortable numbers", key_type)
-        self.check("ft.search", f"{key_type}_idx1", "@n1:[-inf inf]", "INKEYS", "3", f"{key_type}:00", f"{key_type}:01", f"{key_type}:02", "DIALECT", str(dialect))
-        self.check("ft.search", f"{key_type}_idx1", "@n1:[-inf inf]", "INKEYS", "1", f"{key_type}:05", "DIALECT", str(dialect))
+        load_list = self.setup_data("sortable numbers", key_type)
+        keys = [item[0] for item in load_list]
+        self._run_both(dialect, "ft.search", f"{key_type}_idx1", "*",
+                       "INKEYS", "3", *keys[:3])
+        self._run_both(dialect, "ft.search", f"{key_type}_idx1", "*",
+                       "INKEYS", "1", keys[5])
 
     def test_inkeys_nonexistent(self, key_type, dialect):
         self.setup_data("sortable numbers", key_type)
-        self.check("ft.search", f"{key_type}_idx1", "@n1:[-inf inf]", "INKEYS", "2", "nonexistent:99", "nonexistent:100", "DIALECT", str(dialect))
+        self._run_both(dialect, "ft.search", f"{key_type}_idx1", "*",
+                       "INKEYS", "2", "nonexistent:99", "nonexistent:100")
 
     def test_inkeys_mixed(self, key_type, dialect):
-        self.setup_data("sortable numbers", key_type)
-        self.check("ft.search", f"{key_type}_idx1", "@n1:[-inf inf]", "INKEYS", "3", f"{key_type}:00", "nonexistent:99", f"{key_type}:01", "DIALECT", str(dialect))
+        load_list = self.setup_data("sortable numbers", key_type)
+        keys = [item[0] for item in load_list]
+        self._run_both(dialect, "ft.search", f"{key_type}_idx1", "*",
+                       "INKEYS", "3", keys[0], "nonexistent:99", keys[1])
 
     def test_inkeys_with_limit(self, key_type, dialect):
-        self.setup_data("sortable numbers", key_type)
-        self.check("ft.search", f"{key_type}_idx1", "@n1:[-inf inf]", "INKEYS", "5", f"{key_type}:00", f"{key_type}:01", f"{key_type}:02", f"{key_type}:03", f"{key_type}:04", "LIMIT", "0", "3", "DIALECT", str(dialect))
-        self.check("ft.search", f"{key_type}_idx1", "@n1:[-inf inf]", "INKEYS", "5", f"{key_type}:00", f"{key_type}:01", f"{key_type}:02", f"{key_type}:03", f"{key_type}:04", "LIMIT", "2", "2", "DIALECT", str(dialect))
+        load_list = self.setup_data("sortable numbers", key_type)
+        keys = [item[0] for item in load_list][:5]
+        self._run_both(dialect, "ft.search", f"{key_type}_idx1", "*",
+                       "INKEYS", "5", *keys, "LIMIT", "0", "3")
+        self._run_both(dialect, "ft.search", f"{key_type}_idx1", "*",
+                       "INKEYS", "5", *keys, "LIMIT", "2", "2")
 
     def test_inkeys_with_sortby(self, key_type, dialect):
-        self.setup_data("sortable numbers", key_type)
+        load_list = self.setup_data("sortable numbers", key_type)
+        keys = [item[0] for item in load_list][:5]
         for sort_key in ["n1", "n2"]:
             for direction in ["ASC", "DESC"]:
-                self.check("ft.search", f"{key_type}_idx1", "@n1:[-inf inf]", "INKEYS", "5", f"{key_type}:00", f"{key_type}:01", f"{key_type}:02", f"{key_type}:03", f"{key_type}:04", "SORTBY", sort_key, direction, "DIALECT", str(dialect))
+                # Non-vector only — SORTBY + vector KNN has its own ordering.
+                self.check("ft.search", f"{key_type}_idx1",
+                           "@n1:[-inf inf]", "INKEYS", "5", *keys,
+                           "SORTBY", sort_key, direction,
+                           "DIALECT", str(dialect))
 
     def test_inkeys_with_return(self, key_type, dialect):
-        self.setup_data("sortable numbers", key_type)
-        self.check("ft.search", f"{key_type}_idx1", "@n1:[-inf inf]", "INKEYS", "3", f"{key_type}:00", f"{key_type}:01", f"{key_type}:02", "RETURN", "2", "n1", "t1", "DIALECT", str(dialect))
+        load_list = self.setup_data("sortable numbers", key_type)
+        keys = [item[0] for item in load_list][:3]
+        self._run_both(dialect, "ft.search", f"{key_type}_idx1", "*",
+                       "INKEYS", "3", *keys, "RETURN", "2", "n1", "t1")
 
     def test_inkeys_with_filter(self, key_type, dialect):
-        self.setup_data("sortable numbers", key_type)
-        self.check("ft.search", f"{key_type}_idx1", "@n1:[0 5]", "INKEYS", "4", f"{key_type}:00", f"{key_type}:01", f"{key_type}:02", f"{key_type}:03", "DIALECT", str(dialect))
-        self.check("ft.search", f"{key_type}_idx1", "@t3:{all_the_same_value}", "INKEYS", "3", f"{key_type}:00", f"{key_type}:01", f"{key_type}:02", "DIALECT", str(dialect))
+        load_list = self.setup_data("sortable numbers", key_type)
+        keys = [item[0] for item in load_list]
+        self.check("ft.search", f"{key_type}_idx1", "@n1:[0 5]",
+                   "INKEYS", "4", *keys[:4], "DIALECT", str(dialect))
+        self.check("ft.search", f"{key_type}_idx1",
+                   "@t3:{all_the_same_value}",
+                   "INKEYS", "3", *keys[:3], "DIALECT", str(dialect))
 
     def test_inkeys_error_zero_count(self, key_type, dialect):
         self.setup_data("sortable numbers", key_type)
-        self.check("ft.search", f"{key_type}_idx1", "@n1:[-inf inf]", "INKEYS", "0", "DIALECT", str(dialect))
+        self._run_both(dialect, "ft.search", f"{key_type}_idx1", "*",
+                       "INKEYS", "0")

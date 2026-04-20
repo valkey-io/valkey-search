@@ -173,8 +173,7 @@ struct SearchParameters {
   int k{0};
   std::optional<unsigned> ef;
   LimitParameter limit;
-  absl::flat_hash_set<std::string> inkeys;
-  bool has_inkeys{false};
+  std::optional<absl::flat_hash_set<std::string>> inkeys;
   uint64_t timeout_ms{0};
   bool no_content{false};
   FilterParseResults filter_parse_results;

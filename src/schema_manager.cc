@@ -389,13 +389,6 @@ uint64_t SchemaManager::GetNumberOfIndexSchemas() const {
   for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
     num_schemas += schema_map.size();
   }
-  // Use rdb_restore_total_indexes while rdb_restore_in_progress
-  if (Metrics::GetStats().rdb_restore_in_progress.load(
-          std::memory_order_relaxed)) {
-    num_schemas = std::max(static_cast<uint64_t>(num_schemas),
-                           Metrics::GetStats().rdb_restore_total_indexes.load(
-                               std::memory_order_relaxed));
-  }
   return num_schemas;
 }
 
@@ -816,8 +809,13 @@ absl::Status SchemaManager::ShowIndexSchemas(ValkeyModuleCtx *ctx,
 
 static vmsdk::info_field::Integer number_of_indexes(
     "index_stats", "number_of_indexes",
-    vmsdk::info_field::IntegerBuilder().App().Computed([] {
-      return SchemaManager::Instance().GetNumberOfIndexSchemas();
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // Consider indexes pending RDB load
+      auto &stats = Metrics::GetStats();
+      return SchemaManager::Instance().GetNumberOfIndexSchemas() +
+             std::max(stats.rdb_restore_total_indexes.load() -
+                          stats.rdb_restore_completed_indexes.load(),
+                      uint64_t{0});
     }));
 static vmsdk::info_field::Integer number_of_attributes(
     "index_stats", "number_of_attributes",

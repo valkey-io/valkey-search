@@ -88,7 +88,7 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
         self.key_type = key_type
         self.schema_type = schema_type
         self.client.execute_command("FLUSHALL SYNC")
-        load_data(self.client, data_set_name, key_type, data_source='text', schema_type=schema_type)
+        return load_data(self.client, data_set_name, key_type, data_source='text', schema_type=schema_type)
     
     def execute_command(self, cmd):
         """Override to include schema_type in answer."""

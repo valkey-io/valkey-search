@@ -75,22 +75,24 @@ class TextTest : public ::testing::Test {
         data_model::LANGUAGE_ENGLISH, punct, with_offsets, stop_words, 4);
   }
 
-  // Helper to check if a token exists in the prefix tree
+  // Helper to check if a token exists in the prefix tree (shard-aware)
   bool TokenExists(const std::string& token,
                    std::shared_ptr<text::TextIndexSchema> schema = nullptr) {
     auto active_schema = schema ? schema : text_index_schema_;
-    auto iter =
-        active_schema->GetTextIndex()->GetPrefix().GetWordIterator(token);
+    auto text_index = active_schema->GetTextIndex();
+    size_t shard = text_index->GetShardIndex(token);
+    auto iter = text_index->GetPrefixShard(shard).GetWordIterator(token);
     return !iter.Done();
   }
 
-  // Helper to get postings for a token
+  // Helper to get postings for a token (shard-aware)
   text::InvasivePtr<text::Postings> GetPostingsForToken(
       const std::string& token,
       std::shared_ptr<text::TextIndexSchema> schema = nullptr) {
     auto active_schema = schema ? schema : text_index_schema_;
-    auto iter =
-        active_schema->GetTextIndex()->GetPrefix().GetWordIterator(token);
+    auto text_index = active_schema->GetTextIndex();
+    size_t shard = text_index->GetShardIndex(token);
+    auto iter = text_index->GetPrefixShard(shard).GetWordIterator(token);
     if (iter.Done()) {
       return nullptr;
     }
@@ -384,18 +386,22 @@ TEST_F(TextTest, StemmingBehavior) {
 
   // Stemming behavior depends on the stemmer implementation
   // This test ensures stemming doesn't break the indexing pipeline
-  auto& prefix_tree = stemming_schema->GetTextIndex()->GetPrefix();
-
-  // Should create some tokens (exact form depends on stemmer)
   bool has_tokens = false;
-  // We can't easily iterate over all tokens, but we know at least some should
-  // exist
-  auto run_iter = prefix_tree.GetWordIterator("run");
-  if (!run_iter.Done()) {
+  auto text_index = stemming_schema->GetTextIndex();
+
+  // Check if "run" exists
+  size_t shard1 = text_index->GetShardIndex("run");
+  auto run_postings =
+      text_index->GetPrefixShard(shard1).FindPostingsTarget("run");
+  if (run_postings) {
     has_tokens = true;
   }
-  auto running_iter = prefix_tree.GetWordIterator("running");
-  if (!running_iter.Done()) {
+
+  // Check if "running" exists
+  size_t shard2 = text_index->GetShardIndex("running");
+  auto running_postings =
+      text_index->GetPrefixShard(shard2).FindPostingsTarget("running");
+  if (running_postings) {
     has_tokens = true;
   }
 

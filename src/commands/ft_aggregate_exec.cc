@@ -181,13 +181,8 @@ absl::Status GroupBy::Execute(RecordSet& records) const {
   DBG << "Executing GROUPBY with groups: " << groups_.size()
       << " and reducers: " << reducers_.size() << "\n";
 
-  // struct InstanceArgsPair {
-  //   std::unique_ptr<ReducerInstance> instance;
-  //   std::vector<ArgVector> args;
-  // };
-  using InstanceArgsPair =
-      std::pair<std::unique_ptr<ReducerInstance>, std::vector<ArgVector>>;
-  absl::flat_hash_map<GroupKey, absl::InlinedVector<InstanceArgsPair, 4>>
+  absl::flat_hash_map<GroupKey,
+                      absl::InlinedVector<std::unique_ptr<ReducerInstance>, 4>>
       groups;
   size_t record_field_count = 0;
   agg_group_by_stages.Increment();
@@ -210,20 +205,15 @@ absl::Status GroupBy::Execute(RecordSet& records) const {
     if (inserted) {
       DBG << "Was inserted, now have " << groups.size() << " groups\n";
       for (auto& reducer : reducers_) {
-        ArgVector args;
-        for (auto& nargs : reducer.args_) {
-          args.emplace_back(nargs->Evaluate(ctx, *record));
-        }
-        group_it->second.emplace_back(std::move(reducer.info_->make_instance()),
-                                      std::vector<ArgVector>{});
+        group_it->second.emplace_back(reducer->MakeInstance());
       }
     }
-    for (int i = 0; i < reducers_.size(); ++i) {
+    for (auto i = 0; i < reducers_.size(); ++i) {
       ArgVector args;
-      for (auto& nargs : reducers_[i].args_) {
+      for (auto& nargs : reducers_[i]->args_) {
         args.emplace_back(nargs->Evaluate(ctx, *record));
       }
-      group_it->second[i].second.push_back(args);
+      group_it->second[i]->ProcessRecord(args);
     }
   }
   for (auto& group : groups) {
@@ -236,9 +226,7 @@ absl::Status GroupBy::Execute(RecordSet& records) const {
     CHECK(reducers_.size() == group.second.size());
     agg_reducer_stages.Increment(reducers_.size());
     for (auto i = 0; i < reducers_.size(); ++i) {
-      auto& [instance, args] = group.second[i];
-      instance->ProcessRecords(args);
-      SetField(*record, *reducers_[i].output_, instance->GetResult());
+      SetField(*record, *reducers_[i]->output_, group.second[i]->GetResult());
     }
     DBG << "Record (" << records.size() << ") is : " << *record << "\n";
     records.push_back(std::move(record));
@@ -249,45 +237,46 @@ absl::Status GroupBy::Execute(RecordSet& records) const {
 
 class Count : public GroupBy::ReducerInstance {
   size_t count_{0};
-  void ProcessRecords(const std::vector<ArgVector>& all_values) override {
-    count_ = all_values.size();
-  }
+  void ProcessRecord(const ArgVector& values) override { count_++; }
   expr::Value GetResult() const override { return expr::Value(double(count_)); }
 };
 
 class Min : public GroupBy::ReducerInstance {
   expr::Value min_;
-  void ProcessRecords(const std::vector<ArgVector>& all_values) override {
-    for (const auto& values : all_values) {
-      if (values[0].IsNil()) {
-        continue;
-      }
-      if (min_.IsNil()) {
-        DBG << "First Value Min is " << values[0] << "\n";
-        min_ = values[0];
-      } else if (min_ > values[0]) {
-        DBG << " New Min: " << values[0] << "\n";
-        min_ = values[0];
-      } else {
-        DBG << "Not new Min: " << values[0] << "\n";
-      }
+  void ProcessRecord(const ArgVector& values) override {
+    if (values[0].IsNil()) {
+      return;
+    }
+    if (min_.IsNil()) {
+      DBG << "First Value Min is " << values[0] << "\n";
+      min_ = values[0];
+    } else if (min_ > values[0]) {
+      DBG << " New Min: " << values[0] << "\n";
+      min_ = values[0];
+    } else {
+      DBG << "Not new Min: " << values[0] << "\n";
     }
   }
   expr::Value GetResult() const override { return min_; }
 };
 
+struct ReducerInstanceVector : GroupBy::ReducerInstance {
+  std::vector<ArgVector> collected_values_;
+  void ProcessRecord(const ArgVector& values) override {
+    collected_values_.push_back(values);
+  }
+};
+
 class Max : public GroupBy::ReducerInstance {
   expr::Value max_;
-  void ProcessRecords(const std::vector<ArgVector>& all_values) override {
-    for (const auto& values : all_values) {
-      if (values[0].IsNil()) {
-        continue;
-      }
-      if (max_.IsNil()) {
-        max_ = values[0];
-      } else if (max_ < values[0]) {
-        max_ = values[0];
-      }
+  void ProcessRecord(const ArgVector& values) override {
+    if (values[0].IsNil()) {
+      return;
+    }
+    if (max_.IsNil()) {
+      max_ = values[0];
+    } else if (max_ < values[0]) {
+      max_ = values[0];
     }
   }
   expr::Value GetResult() const override { return max_; }
@@ -295,12 +284,10 @@ class Max : public GroupBy::ReducerInstance {
 
 class Sum : public GroupBy::ReducerInstance {
   double sum_{0};
-  void ProcessRecords(const std::vector<ArgVector>& all_values) override {
-    for (const auto& values : all_values) {
-      auto val = values[0].AsDouble();
-      if (val) {
-        sum_ += *val;
-      }
+  void ProcessRecord(const ArgVector& values) override {
+    auto val = values[0].AsDouble();
+    if (val) {
+      sum_ += *val;
     }
   }
   expr::Value GetResult() const override { return expr::Value(sum_); }
@@ -309,13 +296,11 @@ class Sum : public GroupBy::ReducerInstance {
 class Avg : public GroupBy::ReducerInstance {
   double sum_{0};
   size_t count_{0};
-  void ProcessRecords(const std::vector<ArgVector>& all_values) override {
-    for (const auto& values : all_values) {
-      auto val = values[0].AsDouble();
-      if (val) {
-        sum_ += *val;
-        count_++;
-      }
+  void ProcessRecord(const ArgVector& values) override {
+    auto val = values[0].AsDouble();
+    if (val) {
+      sum_ += *val;
+      count_++;
     }
   }
   expr::Value GetResult() const override {
@@ -326,14 +311,12 @@ class Avg : public GroupBy::ReducerInstance {
 class Stddev : public GroupBy::ReducerInstance {
   double sum_{0}, sq_sum_{0};
   size_t count_{0};
-  void ProcessRecords(const std::vector<ArgVector>& all_values) override {
-    for (const auto& values : all_values) {
-      auto val = values[0].AsDouble();
-      if (val) {
-        sum_ += *val;
-        sq_sum_ += (*val) * (*val);
-        count_++;
-      }
+  void ProcessRecord(const ArgVector& values) override {
+    auto val = values[0].AsDouble();
+    if (val) {
+      sum_ += *val;
+      sq_sum_ += (*val) * (*val);
+      count_++;
     }
   }
   expr::Value GetResult() const override {
@@ -348,11 +331,9 @@ class Stddev : public GroupBy::ReducerInstance {
 
 class CountDistinct : public GroupBy::ReducerInstance {
   absl::flat_hash_set<expr::Value> values_;
-  void ProcessRecords(const std::vector<ArgVector>& all_values) override {
-    for (const auto& values : all_values) {
-      if (!values[0].IsNil()) {
-        values_.insert(values[0]);
-      }
+  void ProcessRecord(const ArgVector& values) override {
+    if (!values[0].IsNil()) {
+      values_.insert(values[0]);
     }
   }
   expr::Value GetResult() const override {
@@ -381,20 +362,63 @@ class ToList : public GroupBy::ReducerInstance {
 };
 
 template <typename T>
-std::unique_ptr<GroupBy::ReducerInstance> MakeReducer() {
-  return std::unique_ptr<GroupBy::ReducerInstance>(std::make_unique<T>());
+struct BasicReducer : GroupBy::Reducer {
+  // BasicReducer(std::string name) : GroupBy::Reducer(std::move(name)) {}
+  std::unique_ptr<GroupBy::ReducerInstance> MakeInstance() override {
+    return std::unique_ptr<GroupBy::ReducerInstance>(std::make_unique<T>());
+  }
+};
+
+template <typename T, size_t min_nargs = 0, size_t max_nargs = 0>
+absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> BasicReducerParser(
+    std::string_view name, AggregateParameters& parameters,
+    vmsdk::ArgsIterator& itr) {
+  std::unique_ptr<BasicReducer<T>> r = std::make_unique<BasicReducer<T>>();
+  r->name_ = name;
+
+  uint32_t cnt{0};
+  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, cnt));
+  if (cnt < min_nargs || cnt > max_nargs) {
+    return absl::OutOfRangeError(absl::StrCat("incorrect number of arguments (",
+                                              cnt, ") to reducer ", name));
+  }
+  for (int i = 0; i < cnt; ++i) {
+    VMSDK_ASSIGN_OR_RETURN(auto arg, itr.PopNext(),
+                           _ << "Missing Reducer argument " << i);
+    VMSDK_ASSIGN_OR_RETURN(
+        auto expr,
+        expr::Expression::Compile(parameters, vmsdk::ToStringView(arg)),
+        _ << " in GROUPBY stage");
+    r->args_.emplace_back(std::move(expr));
+  }
+  if (itr.PopIfNextIgnoreCase(valkey_search::aggregate::kAsParam)) {
+    VMSDK_ASSIGN_OR_RETURN(auto alias, itr.PopNext(),
+                           _ << "Missing Reducer alias");
+    VMSDK_ASSIGN_OR_RETURN(auto output, parameters.MakeReference(
+                                            vmsdk::ToStringView(alias), true));
+    r->output_ =
+        std::unique_ptr<Attribute>(dynamic_cast<Attribute*>(output.release()));
+  } else {
+    std::ostringstream os;
+    os << *r;
+    VMSDK_ASSIGN_OR_RETURN(auto output,
+                           parameters.MakeReference(os.str(), true));
+    r->output_ =
+        std::unique_ptr<Attribute>(dynamic_cast<Attribute*>(output.release()));
+  }
+
+  return std::unique_ptr<GroupBy::Reducer>(std::move(r));
 }
 
 absl::flat_hash_map<std::string, GroupBy::ReducerInfo> GroupBy::reducerTable{
-    {"AVG", GroupBy::ReducerInfo{"AVG", 1, 1, &MakeReducer<Avg>}},
-    {"COUNT", GroupBy::ReducerInfo{"COUNT", 0, 0, &MakeReducer<Count>}},
-    {"COUNT_DISTINCT",
-     GroupBy::ReducerInfo{"COUNT_DISTINCT", 1, 1, &MakeReducer<CountDistinct>}},
-    {"MIN", GroupBy::ReducerInfo{"MIN", 1, 1, &MakeReducer<Min>}},
-    {"MAX", GroupBy::ReducerInfo{"MAX", 1, 1, &MakeReducer<Max>}},
-    {"STDDEV", GroupBy::ReducerInfo{"STDDEV", 1, 1, &MakeReducer<Stddev>}},
-    {"SUM", GroupBy::ReducerInfo{"SUM", 1, 1, &MakeReducer<Sum>}},
-    {"TOLIST", GroupBy::ReducerInfo{"TOLIST", 1, 1, &MakeReducer<ToList>}},
+    {"AVG", &BasicReducerParser<Avg, 1, 1>},
+    {"COUNT", &BasicReducerParser<Count, 0, 0>},
+    {"COUNT_DISTINCT", &BasicReducerParser<CountDistinct, 1, 1>},
+    {"MIN", &BasicReducerParser<Min, 1, 1>},
+    {"MAX", &BasicReducerParser<Max, 1, 1>},
+    {"STDDEV", &BasicReducerParser<Stddev, 1, 1>},
+    {"SUM", &BasicReducerParser<Sum, 1, 1>},
+    {"TOLIST", &BasicReducerParser<ToList, 1, 1>},
 };
 
 }  // namespace aggregate

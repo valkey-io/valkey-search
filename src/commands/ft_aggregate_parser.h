@@ -24,6 +24,8 @@ struct SearchResult;
 namespace valkey_search {
 namespace aggregate {
 
+constexpr absl::string_view kAsParam{"AS"};
+
 class Command;
 class Record;
 class RecordSet;
@@ -44,7 +46,7 @@ struct IndexInterface {
 struct AggregateParameters : public expr::Expression::CompileContext,
                              public QueryCommand {
   ~AggregateParameters() override = default;
-  AggregateParameters(int db_num) : QueryCommand(db_num){};
+  AggregateParameters(int db_num) : QueryCommand(db_num) {};
   absl::Status ParseCommand(vmsdk::ArgsIterator& itr) override;
   void SendReply(ValkeyModuleCtx* ctx, query::SearchResult& result) override;
   bool loadall_{false};
@@ -226,23 +228,20 @@ class GroupBy : public Stage {
   }
   struct ReducerInstance {
     virtual ~ReducerInstance() = default;
-    virtual void ProcessRecords(const std::vector<ArgVector>& all_values) = 0;
+    virtual void ProcessRecord(const ArgVector& value) = 0;
     virtual expr::Value GetResult() const = 0;
   };
-  struct ReducerInfo {
-    std::string name_;
-    size_t min_nargs_{0};
-    size_t max_nargs_{0};
-    std::unique_ptr<ReducerInstance> (*make_instance)();
-  };
-  static absl::flat_hash_map<std::string, ReducerInfo> reducerTable;
 
   struct Reducer {
+    std::string name_;
     std::unique_ptr<Attribute> output_;
     std::vector<std::unique_ptr<expr::Expression>> args_;
-    ReducerInfo* info_;
+
+    virtual ~Reducer() = default;
+    virtual std::unique_ptr<ReducerInstance> MakeInstance() = 0;
+
     friend std::ostream& operator<<(std::ostream& os, const Reducer& r) {
-      os << r.info_->name_ << '(';
+      os << r.name_ << '(';
       for (auto& a : r.args_) {
         if (&a != &r.args_[0]) {
           os << ',';
@@ -253,8 +252,12 @@ class GroupBy : public Stage {
     }
   };
 
+  using ReducerInfo = absl::StatusOr<std::unique_ptr<Reducer>> (*)(
+      std::string_view name, AggregateParameters&, vmsdk::ArgsIterator&);
+  static absl::flat_hash_map<std::string, ReducerInfo> reducerTable;
+
   absl::InlinedVector<std::unique_ptr<Attribute>, 4> groups_;
-  absl::InlinedVector<Reducer, 4> reducers_;
+  absl::InlinedVector<std::unique_ptr<Reducer>, 4> reducers_;
 
   void Dump(std::ostream& os) const override {
     os << "GROUPBY ";
@@ -268,7 +271,7 @@ class GroupBy : public Stage {
       if (&r != &reducers_[0]) {
         os << ',';
       }
-      os << ' ' << r << " => " << r.output_->name_;
+      os << ' ' << *r << " => " << r->output_->name_;
     }
   }
 };

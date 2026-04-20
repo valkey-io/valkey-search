@@ -9,6 +9,7 @@
 #include <map>
 
 #include "gtest/gtest.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/testing_infra/utils.h"
 
 std::ostream &operator<<(std::ostream &os, ValkeyModuleString *s) {
@@ -367,6 +368,28 @@ TEST_F(AggregateTest, GetSerializationRange_OtherStagesBeforeLimit) {
 
   auto range = params.GetSerializationRange();
   EXPECT_EQ(range, query::SerializationRange::All());
+}
+
+TEST_F(AggregateTest, ExpressionDepthAtLimit) {
+  auto limit = options::GetQueryStringDepth().GetValue();
+  std::string deep_expr(limit - 1, '(');
+  deep_expr += "1";
+  deep_expr += std::string(limit - 1, ')');
+
+  AggregateParameters params(0);
+  EXPECT_TRUE(expr::Expression::Compile(params, deep_expr).ok());
+}
+
+TEST_F(AggregateTest, ExpressionDepthExceedsLimit) {
+  auto limit = options::GetQueryStringDepth().GetValue();
+  std::string deep_expr(limit, '(');
+  deep_expr += "1";
+  deep_expr += std::string(limit, ')');
+
+  AggregateParameters params(0);
+  auto result = expr::Expression::Compile(params, deep_expr);
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(absl::IsInvalidArgument(result.status()));
 }
 
 }  // namespace aggregate

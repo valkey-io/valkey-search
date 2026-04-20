@@ -269,6 +269,49 @@ TEST_F(AggregateExecTest, ReducerTest) {
     }
   }
 }
+TEST_F(AggregateExecTest, ToListReducerTest) {
+  // Basic collection: 4 distinct values (0, 1, 2, 3) grouped by n2
+  {
+    auto param = MakeStages("groupby 1 @n2 reduce tolist 1 @n1 as items");
+    auto records = MakeData(4);
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 1);
+    auto record = records.pop_front();
+    auto& result = record->fields_.at(2);
+    EXPECT_TRUE(result.IsArray());
+    EXPECT_EQ(result.ArraySize(), 4);
+  }
+  // Deduplication: records with duplicate n2 values produce fewer elements
+  {
+    auto param = MakeStages("groupby 1 @n1 reduce tolist 1 @n2 as items");
+    auto records = MakeData(4);
+    // All 4 records have n2 = 4.0, so TOLIST should deduplicate to 1 element
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    // 4 groups (one per distinct n1), each with a single n2 value
+    EXPECT_EQ(records.size(), 4);
+    for (auto& r : records) {
+      auto& result = r->fields_.at(2);
+      EXPECT_TRUE(result.IsArray());
+      EXPECT_EQ(result.ArraySize(), 1);
+    }
+  }
+  // TOLIST alongside another reducer in the same GROUPBY
+  {
+    auto param =
+        MakeStages("groupby 1 @n2 reduce tolist 1 @n1 as items reduce count 0");
+    auto records = MakeData(4);
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 1);
+    auto record = records.pop_front();
+    // First reducer output (index 2) is the TOLIST vector
+    EXPECT_TRUE(record->fields_.at(2).IsArray());
+    EXPECT_EQ(record->fields_.at(2).ArraySize(), 4);
+    // Second reducer output (index 3) is the COUNT double
+    EXPECT_TRUE(record->fields_.at(3).IsDouble());
+    EXPECT_NEAR(*(record->fields_.at(3).AsDouble()), 4.0, .001);
+  }
+}
+
 /*
 TEST_F(AggregateExecTest, testHash) {
   GroupKey key1({expr::Value(1.0), expr::Value(2.0)});

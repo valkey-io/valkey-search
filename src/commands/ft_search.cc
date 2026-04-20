@@ -317,7 +317,6 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
     if (inkeys.has_value()) {
       ApplyInkeysFilter(search_result, *inkeys);
     }
-    ApplySorting(search_result.neighbors, *this);
     SendReplyNoContent(ctx, search_result, *this);
     return;
   }

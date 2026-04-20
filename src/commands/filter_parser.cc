@@ -790,6 +790,8 @@ absl::Status FilterParser::SetupTextFieldConfiguration(
     // INFIELDS: restrict field mask to specified text fields.
     if (options_.infields && !options_.infields->empty()) {
       field_mask = 0ULL;
+      filter_identifiers_.reserve(filter_identifiers_.size() +
+                                  options_.infields->size());
       for (const auto& field : *options_.infields) {
         auto index = index_schema_.GetIndex(field);
         if (!index.ok() ||
@@ -797,7 +799,7 @@ absl::Status FilterParser::SetupTextFieldConfiguration(
           continue;  // Silently ignore non-text / non-existent fields
         }
         auto* text_index =
-            dynamic_cast<const indexes::Text*>(index.value().get());
+            static_cast<const indexes::Text*>(index.value().get());
         if (with_suffix && !text_index->WithSuffixTrie()) {
           continue;  // Skip fields that don't support suffix
         }

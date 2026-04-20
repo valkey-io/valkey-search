@@ -14,6 +14,7 @@
 
 #include "absl/strings/str_cat.h"
 #include "src/utils/scanner.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -280,7 +281,14 @@ bool IsIdentifierChar(int c) {
   return c != EOF && (std::isalnum(c) || c == '_');
 }
 
+struct DepthGuard {
+  int& depth;
+  DepthGuard(int& d) : depth(d) { ++depth; }
+  ~DepthGuard() { --depth; }
+};
+
 struct Compiler {
+  int depth_ = 0;
   utils::Scanner s_;
   Compiler(absl::string_view sv) : s_(sv) {}
 
@@ -349,6 +357,10 @@ struct Compiler {
   }
 
   absl::StatusOr<ExprPtr> Primary(CompileContext& ctx) {
+    DepthGuard guard(depth_);
+    if (depth_ > options::GetQueryStringDepth().GetValue()) {
+      return absl::InvalidArgumentError("Expression too complex");
+    }
     s_.SkipWhiteSpace();
     DBG << "Primary: '" << s_.GetUnscanned() << "'\n";
     switch (s_.PeekByte()) {

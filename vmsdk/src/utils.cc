@@ -82,9 +82,7 @@ int RunByMain(absl::AnyInvocable<void()> fn, bool force_async) {
     return VALKEYMODULE_OK;
   }
   // During shutdown the event loop is no longer processing one-shot
-  // callbacks.  Execute the function directly to avoid leaking the
-  // allocation.  At this point IO threads are inactive so it is safe
-  // to call ValkeyModule_FreeThreadSafeContext from a worker thread.
+  // callbacks.
   if (IsShuttingDown()) {
     VMSDK_LOG(DEBUG, nullptr) << "RunByMain: dropping callback during shutdown";
     return VALKEYMODULE_OK;

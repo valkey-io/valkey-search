@@ -54,9 +54,8 @@ void OnServerCronCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
 
 void OnShutdownCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                         uint64_t subevent, void *data) {
-  // Mark the module as shutting down so that RunByMain() calls from
-  // background threads execute their callbacks directly instead of
-  // posting to the (now-dead) event loop.
+  // Mark the module as shutting down so that RunByMain() stops
+  // scheduling new tasks.
   vmsdk::MarkAsShuttingDown();
   // Clear all PausePoints so any waiting worker threads wake up and exit
   // their spin loops, then join all thread pools so every in-flight task

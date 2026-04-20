@@ -177,6 +177,111 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
         client.execute_command("FT._DEBUG PAUSEPOINT RESET mutation_processing")
         hset_thread.join()
 
+    def test_dropindex_with_blocked_queries(self):
+        """
+        Regression test against crash bug when an index is dropped while there are queries
+        blocked on in-flight mutations. The query clients were previously unblocked without
+        setting the private data.
+        """
+        client: Valkey = self.server.get_new_client()
+
+        client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:",
+            "SCHEMA", "content", "TEXT"
+        )
+        client.execute_command("HSET", "doc:1", "content", "hello world")
+        IndexingTestHelper.is_indexing_complete_on_node(client, "idx")
+
+        # Plug the mutation queue
+        client.execute_command("FT._DEBUG PAUSEPOINT SET mutation_processing")
+
+        hset_thread, _, _ = run_in_thread(
+            lambda: self.server.get_new_client().execute_command(
+                "HSET", "doc:1", "content", "updated"
+            )
+        )
+        waiters.wait_for_true(
+            lambda: client.execute_command("FT._DEBUG PAUSEPOINT TEST mutation_processing") > 0,
+            timeout=5
+        )
+
+        # Expect the search to be blocked on a conflict with the in flight mutation
+        search_thread, search_res, search_err = run_in_thread(
+            lambda: self.server.get_new_client().execute_command(
+                "FT.SEARCH", "idx", "@content:hello"
+            )
+        )
+        waiters.wait_for_true(
+            lambda: client.info("SEARCH")["search_text_query_blocked_count"] == 1
+        )
+
+        # Drop the index - we no longer expect a crash
+        client.execute_command("FT.DROPINDEX", "idx")
+
+        # Complete the mutation and search
+        client.execute_command("FT._DEBUG PAUSEPOINT RESET mutation_processing")
+        hset_thread.join()
+        search_thread.join()
+
+        # Expect search to error
+        assert search_err[0] is not None
+        assert b"Index with name 'idx' not found in database 0" in str(search_err[0]).encode()
+
+    def test_dropindex_with_background_queries(self):
+        """
+        Regression test similar to test_dropindex_with_blocked_queries except the queries are
+        still executing on a background worker when the index is dropped. The mutation queue
+        is cleared on FT.DROPINDEX and new mutations stop being accepted, so
+        PerformKeyContentionCheck() becomes a no-op. Instead we now explicitly error out.
+        """
+        client: Valkey = self.server.get_new_client()
+
+        client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:",
+            "SCHEMA", "content", "TEXT"
+        )
+        client.execute_command("HSET", "doc:1", "content", "hello world")
+        IndexingTestHelper.is_indexing_complete_on_node(client, "idx")
+
+        # Plug the mutation queue
+        client.execute_command("FT._DEBUG PAUSEPOINT SET mutation_processing")
+
+        hset_thread, _, _ = run_in_thread(
+            lambda: self.server.get_new_client().execute_command(
+                "HSET", "doc:1", "content", "updated"
+            )
+        )
+        waiters.wait_for_true(
+            lambda: client.execute_command("FT._DEBUG PAUSEPOINT TEST mutation_processing") > 0,
+            timeout=5
+        )
+
+        # Pause queries before they exit the background execution
+        client.execute_command("FT._DEBUG PAUSEPOINT SET background_search_completing")
+
+        # Expect the search to be blocked on the pauspoint
+        search_thread, search_res, search_err = run_in_thread(
+            lambda: self.server.get_new_client().execute_command(
+                "FT.SEARCH", "idx", "@content:hello", "timeout", "5000"
+            )
+        )
+        waiters.wait_for_true(
+            lambda: client.execute_command("FT._DEBUG PAUSEPOINT TEST background_search_completing") > 0,
+            timeout=5
+        )
+
+        # Drop the index
+        client.execute_command("FT.DROPINDEX", "idx")
+
+        # Complete the search
+        client.execute_command("FT._DEBUG PAUSEPOINT RESET background_search_completing")
+        hset_thread.join()
+        search_thread.join()
+
+        # Expect search to error rather than returning a result
+        assert search_err[0] is not None
+        assert b"Index with name 'idx' not found in database 0" in str(search_err[0]).encode()
+
 
 class TestFullTextInFlightBlockingCME(ValkeySearchClusterTestCaseDebugMode):
     """Tests for CME (cluster) mode."""

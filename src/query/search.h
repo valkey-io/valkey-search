@@ -17,6 +17,7 @@
 #include <utility>
 #include <vector>
 
+#include "absl/container/flat_hash_set.h"
 #include "absl/functional/any_invocable.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
@@ -73,6 +74,7 @@ constexpr absl::string_view kVectorFilterDelimiter{"=>"};
 constexpr absl::string_view kSlop{"SLOP"};
 constexpr absl::string_view kInorder{"INORDER"};
 constexpr absl::string_view kVerbatim{"VERBATIM"};
+constexpr absl::string_view kInkeysParam{"INKEYS"};
 
 struct LimitParameter {
   uint64_t first_index{0};
@@ -171,6 +173,7 @@ struct SearchParameters {
   int k{0};
   std::optional<unsigned> ef;
   LimitParameter limit;
+  std::optional<absl::flat_hash_set<std::string>> inkeys;
   uint64_t timeout_ms{0};
   bool no_content{false};
   FilterParseResults filter_parse_results;

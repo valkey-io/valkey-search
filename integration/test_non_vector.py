@@ -258,6 +258,13 @@ def validate_aggregate_queries(client: Valkey):
     )
     assert result[0] == 2
 
+    for command in (
+        ("FT.AGGREGATE", "products", "@price:[1 +inf]", "APPLY", "", "AS", "result"),
+        ("FT.AGGREGATE", "products", "@price:[1 +inf]", "FILTER", ""),
+    ):
+        with pytest.raises(ResponseError, match=r"Invalid or missing expression"):
+            client.execute_command(*command)
+
 def validate_aggregate_complex_queries(client: Valkey):
     """
         Test complex FT.AGGREGATE queries with numeric and tag.
@@ -634,4 +641,3 @@ class TestNonVectorCluster(ValkeySearchClusterTestCase):
         # Verify fetch-limited queries metric
         client.execute_command("CONFIG SET search.info-developer-visible yes")
         assert client.info("search").get("search_nonvector_results_fetched_limited_count", 0) == 8
-

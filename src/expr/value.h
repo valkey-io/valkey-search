@@ -36,7 +36,7 @@ class Value {
   };
   using Array = std::shared_ptr<std::vector<Value>>;
 
-  Value() : value_(Nil()){};
+  Value() : value_(Nil()) {};
   explicit Value(Nil n) : value_(n) {}
   explicit Value(bool b) : value_(b) {}
   explicit Value(int i) : value_(double(i)) {}
@@ -50,6 +50,8 @@ class Value {
   explicit Value(Array&& vec) : value_(std::move(vec)) {}
   explicit Value(std::initializer_list<Value> elements)
       : value_(std::make_shared<std::vector<Value>>(elements)) {}
+  explicit Value(const std::vector<Value>& vec)
+      : value_(std::make_shared<std::vector<Value>>(vec)) {}
   explicit Value(std::vector<Value>&& vec)
       : value_(std::make_shared<std::vector<Value>>(std::move(vec))) {}
 

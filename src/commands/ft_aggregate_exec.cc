@@ -344,20 +344,17 @@ class CountDistinct : public GroupBy::ReducerInstance {
 class ToList : public GroupBy::ReducerInstance {
   absl::flat_hash_set<expr::Value> unique_values_;
   std::vector<expr::Value> ordered_values_;
-  void ProcessRecords(const std::vector<ArgVector>& all_values) override {
-    for (const auto& values : all_values) {
-      if (values[0].IsNil()) {
-        continue;
-      }
-      if (!unique_values_.contains(values[0])) {
-        unique_values_.insert(values[0]);
-        ordered_values_.push_back(values[0]);
-      }
+  void ProcessRecord(const ArgVector& values) override {
+    if (values[0].IsNil()) {
+      return;
+    }
+    if (!unique_values_.contains(values[0])) {
+      unique_values_.insert(values[0]);
+      ordered_values_.push_back(values[0]);
     }
   }
   expr::Value GetResult() const override {
-    auto result = ordered_values_;
-    return expr::Value(std::move(result));
+    return expr::Value(ordered_values_);
   }
 };
 

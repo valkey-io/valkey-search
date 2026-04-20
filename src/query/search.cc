@@ -428,8 +428,8 @@ void EvaluatePrefilteredKeys(
         continue;
       }
       // 2. Skip keys not in the INKEYS set (when specified).
-      if (!parameters.inkeys.empty() &&
-          !parameters.inkeys.contains(key->Str())) {
+      if (parameters.inkeys.has_value() &&
+          !parameters.inkeys->contains(key->Str())) {
         iterator->Next();
         continue;
       }
@@ -662,8 +662,8 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
         const auto &key = **iterator;
         BACKGROUND_PAUSEPOINT("search_entries_fetcher");
         // Skip keys not in the INKEYS set (when specified).
-        if (!parameters.inkeys.empty() &&
-            !parameters.inkeys.contains(key->Str())) {
+        if (parameters.inkeys.has_value() &&
+            !parameters.inkeys->contains(key->Str())) {
           iterator->Next();
           continue;
         }

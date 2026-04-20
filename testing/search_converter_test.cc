@@ -20,10 +20,11 @@ namespace valkey_search {
 
 namespace {
 
-// Inkeys survive a serialize/deserialize round-trip through the proto.
+// Non-empty inkeys round-trip through the proto. The empty/unset case is
+// indistinguishable on the wire and degrades to a coordinator-side filter —
+// the shard will over-return, the coordinator still returns zero rows.
 TEST_F(ValkeySearchTest, InkeysProtoSerializationRoundTrip) {
   const std::vector<absl::flat_hash_set<std::string>> key_sets = {
-      {},
       {"key1"},
       {"k1", "k2", "k3"},
   };
@@ -37,21 +38,13 @@ TEST_F(ValkeySearchTest, InkeysProtoSerializationRoundTrip) {
     auto request = coordinator::ParametersToGRPCSearchRequest(params);
     ASSERT_NE(request, nullptr);
 
-    // Verify serialization: read inkeys directly from the proto message.
-    absl::flat_hash_set<std::string> serialized_inkeys(
-        request->inkeys().begin(), request->inkeys().end());
-    EXPECT_EQ(serialized_inkeys, original_inkeys);
-
-    // Verify round-trip: serialize proto to bytes, parse back, read inkeys.
     std::string wire;
     ASSERT_TRUE(request->SerializeToString(&wire));
     coordinator::SearchIndexPartitionRequest parsed;
     ASSERT_TRUE(parsed.ParseFromString(wire));
 
-    absl::flat_hash_set<std::string> deserialized_inkeys;
-    for (const auto &key : parsed.inkeys()) {
-      deserialized_inkeys.insert(key);
-    }
+    absl::flat_hash_set<std::string> deserialized_inkeys(
+        parsed.inkeys().begin(), parsed.inkeys().end());
     EXPECT_EQ(deserialized_inkeys, original_inkeys);
   }
 }

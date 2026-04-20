@@ -81,8 +81,7 @@ struct FTSearchParserTestCase {
   query::SortOrder sortby_order{query::SortOrder::kAscending};
   bool sortby_enabled{false};
   bool with_sort_keys{false};
-  absl::flat_hash_set<std::string> inkeys;
-  bool has_inkeys{false};
+  std::optional<absl::flat_hash_set<std::string>> inkeys;
 };
 
 class FTSearchParserTest
@@ -313,7 +312,6 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
                 test_case.sortby_order);
     }
     EXPECT_EQ(search_params.value()->inkeys, test_case.inkeys);
-    EXPECT_EQ(search_params.value()->has_inkeys, test_case.has_inkeys);
   } else {
     std::cerr << "Failed to parse command: `" << vmsdk::ToStringView(args[0])
               << "` Because: " << search_params.status().message() << "\n";
@@ -1060,8 +1058,7 @@ INSTANTIATE_TEST_SUITE_P(
             .score_as = "",
             .search_parameters_str = "INKEYS 1 key1",
             .vector_query = false,
-            .inkeys = {"key1"},
-            .has_inkeys = true,
+            .inkeys = absl::flat_hash_set<std::string>{"key1"},
         },
         {
             .test_name = "inkeys_multiple_keys",
@@ -1074,8 +1071,7 @@ INSTANTIATE_TEST_SUITE_P(
             .score_as = "",
             .search_parameters_str = "INKEYS 3 k1 k2 k3",
             .vector_query = false,
-            .inkeys = {"k1", "k2", "k3"},
-            .has_inkeys = true,
+            .inkeys = absl::flat_hash_set<std::string>{"k1", "k2", "k3"},
         },
         {
             .test_name = "inkeys_duplicate_keys_deduplicated",
@@ -1088,8 +1084,7 @@ INSTANTIATE_TEST_SUITE_P(
             .score_as = "",
             .search_parameters_str = "INKEYS 3 k1 k1 k2",
             .vector_query = false,
-            .inkeys = {"k1", "k2"},
-            .has_inkeys = true,
+            .inkeys = absl::flat_hash_set<std::string>{"k1", "k2"},
         },
         {
             .test_name = "inkeys_zero_count",
@@ -1102,7 +1097,7 @@ INSTANTIATE_TEST_SUITE_P(
             .score_as = "",
             .search_parameters_str = "INKEYS 0",
             .vector_query = false,
-            .has_inkeys = true,
+            .inkeys = absl::flat_hash_set<std::string>{},
         },
         {
             .test_name = "inkeys_non_integer_count_error",
@@ -1154,8 +1149,7 @@ INSTANTIATE_TEST_SUITE_P(
             .ef = 150,
             .search_parameters_str = "INKEYS 2 vdoc:0 vdoc:1",
             .vector_query = true,
-            .inkeys = {"vdoc:0", "vdoc:1"},
-            .has_inkeys = true,
+            .inkeys = absl::flat_hash_set<std::string>{"vdoc:0", "vdoc:1"},
         },
         {
             .test_name = "inkeys_with_nocontent",
@@ -1169,8 +1163,7 @@ INSTANTIATE_TEST_SUITE_P(
             .no_content = true,
             .search_parameters_str = "INKEYS 2 k1 k2 NOCONTENT",
             .vector_query = false,
-            .inkeys = {"k1", "k2"},
-            .has_inkeys = true,
+            .inkeys = absl::flat_hash_set<std::string>{"k1", "k2"},
         },
     }),
     [](const TestParamInfo<FTSearchParserTestCase> &info) {

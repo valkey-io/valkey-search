@@ -70,9 +70,21 @@ void TrackCurrentAsMainThread() {
 
 bool IsMainThread() { return is_main_thread; }
 
+static std::atomic<bool> shutting_down{false};
+
+void MarkAsShuttingDown() { shutting_down.store(true); }
+
+bool IsShuttingDown() { return shutting_down.load(); }
+
 int RunByMain(absl::AnyInvocable<void()> fn, bool force_async) {
   if (IsMainThread() && !force_async) {
     fn();
+    return VALKEYMODULE_OK;
+  }
+  // During shutdown the event loop is no longer processing one-shot
+  // callbacks.
+  if (IsShuttingDown()) {
+    VMSDK_LOG(DEBUG, nullptr) << "RunByMain: dropping callback during shutdown";
     return VALKEYMODULE_OK;
   }
   auto call_by_main = new absl::AnyInvocable<void()>(std::move(fn));

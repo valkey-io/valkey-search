@@ -55,6 +55,9 @@ void TrackCurrentAsMainThread();
 bool IsMainThread();
 inline void VerifyMainThread() { CHECK(IsMainThread()); }
 
+void MarkAsShuttingDown();
+bool IsShuttingDown();
+
 // MainThreadAccessGuard ensures that all access to the underlying data
 // structure is done on the main thread.
 template <typename T>

@@ -311,6 +311,15 @@ def compare_results(expected, results):
         print(TEST_MARKER)
         return False
 
+    # Alias mutation commands (ALIASADD/ALIASDEL/ALIASUPDATE) return a simple
+    # value (b'OK') rather than a result list, check the command, not the
+    # result type, so the intent is explicit.
+    if _is_alias_management_cmd(cmd):
+        match = expected["result"] == results["result"]
+        if not match:
+            print(f"Simple result mismatch: expected={expected['result']!r} got={results['result']!r}")
+        return match
+
     # Output raw results
     # print("Raw expected result:", expected["result"])
     rl = unpack_result(cmd, expected["key_type"], expected["result"], sortkeys)
@@ -381,22 +390,58 @@ def mark_as_failed(testname):
     wrong_answers += 1
     assert not StopOnFailure, "Test failed, stopping execution"
 
+_ALIAS_VERBS = {"FT.ALIASADD", "FT.ALIASDEL", "FT.ALIASUPDATE"}
+
+def _is_alias_management_cmd(cmd):
+    """Return True if cmd is an alias management command (not a search/aggregate)."""
+    return cmd and cmd[0].upper() in _ALIAS_VERBS
+
+def _first_index_name(data_set_name, key_type):
+    """Return the first index name created by a dataset's CREATES_KEY commands."""
+    if data_set_name == "alias":
+        data = compute_alias_data()
+        key_type = "hash"
+    elif data_set_name in TEXT_DATASETS:
+        data = compute_text_data_sets(data_set_name)
+    else:
+        data = compute_data_sets()
+    create_cmd = data[data_set_name][CREATES_KEY(key_type)][0]
+    # FT.CREATE <index_name> ... — index name is the second token.
+    return create_cmd.split()[1]
+
 def do_answer(client, expected, data_set):
     global correct_answers, failed_tests, passed_tests
     if (expected['data_set_name'], expected['key_type'], expected.get('schema_type')) != data_set:
         print("Loading data set:", expected['data_set_name'], "key type:", expected['key_type'])
         client.execute_command("FLUSHALL SYNC")
         load_data(client, expected['data_set_name'], expected['key_type'], schema_type=expected.get('schema_type', 'default'))
-        waiters.wait_for_true(lambda: IndexingTestHelper.is_indexing_complete_on_node(client, f"{expected['key_type']}_idx1"))
+        # Derive the index name to wait on from the dataset's first CREATE command
+        # rather than hardcoding per-dataset names.
+        index_to_wait = _first_index_name(expected['data_set_name'], expected['key_type'])
+        waiters.wait_for_true(lambda: IndexingTestHelper.is_indexing_complete_on_node(client, index_to_wait))
         data_set = (expected['data_set_name'], expected['key_type'], expected.get("schema_type"))
 
-    # for the excluded queries with known difference
-    # just run in valkey to make sure they do not crash
+    # Alias management commands (ALIASADD/ALIASDEL/ALIASUPDATE) are recorded inline
+    # so that replay recreates the same alias state before the search commands that
+    # depend on it.  Execute them and verify they succeed, but don't count them as
+    # test answers in the pass/fail tally.
+    if _is_alias_management_cmd(expected['cmd']):
+        try:
+            client.execute_command(*expected['cmd'])
+            print(f"Alias setup: {expected['cmd']}")
+        except valkey.ResponseError as e:
+            raise AssertionError(
+                f"Alias management command failed during replay — subsequent search results will be wrong. "
+                f"cmd={expected['cmd']} error={e}"
+            ) from e
+        return data_set
+
+    # Excluded entries have known result differences (e.g. parsing divergence in
+    # generate_text.py). Run them for crash-check only — don't count in tally.
     if expected.get('excluded'):
         try:
             print(f"Running excluded query (no-crash check): {expected['cmd']}")
             client.execute_command(*expected['cmd'])
-            print(f"Excluded query completed without crash")
         except Exception as e:
             print(f"Excluded query raised: {e} for cmd {expected['cmd']}")
         return data_set
@@ -463,6 +508,20 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
 
         data_set = next_data_set
 
+    # Replay alias setup commands without counting them in the pass/fail tally.
+    if _is_alias_management_cmd(expected["cmd"]):
+        try:
+            # Route to primary 0 — cluster client can't slot FT.ALIAS* commands.
+            primary0 = test_case.new_client_for_primary(0)
+            primary0.execute_command(*expected["cmd"])
+            print(f"Alias setup (cluster): {expected['cmd']}")
+        except valkey.ResponseError as e:
+            raise AssertionError(
+                f"Alias management command failed during cluster replay — subsequent search results will be wrong. "
+                f"cmd={expected['cmd']} error={e}"
+            ) from e
+        return data_set
+
     result = {}
     try:
         print(
@@ -490,8 +549,9 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
 
     return data_set
 
+
 class TestAnswersCMD(ValkeySearchTestCaseBase):
-    @pytest.mark.parametrize("answers", ["aggregate-answers.pickle.gz", "text-search-answers.pickle.gz"])
+    @pytest.mark.parametrize("answers", ["aggregate-answers.pickle.gz", "text-search-answers.pickle.gz", "alias-answers.pickle.gz"])
     def test_answers(self, answers):
         global client, data_set
         global correct_answers, failed_tests, passed_tests
@@ -511,7 +571,7 @@ class TestAnswersCMD(ValkeySearchTestCaseBase):
         for i in range(len(answers)):
             data_set = do_answer(client, answers[i], data_set)
 
-        expected_count = sum(1 for a in answers if not a.get('excluded'))
+        expected_count = sum(1 for a in answers if not a.get('excluded') and not _is_alias_management_cmd(a.get('cmd', [])))
         if correct_answers != expected_count:
             print(f"Correct answers: {correct_answers} out of {len(answers)}")
             if len(failed_tests) != 0:
@@ -579,8 +639,12 @@ class TestAnswersCME(ValkeySearchClusterTestCase):
                 test_case=self,
             )
 
-        if correct_answers != len(answers):
-            print(f"Correct answers: {correct_answers} out of {len(answers)}")
+        expected_count = sum(
+            1 for a in answers
+            if not _is_alias_management_cmd(a.get('cmd', []))
+        )
+        if correct_answers != expected_count:
+            print(f"Correct answers: {correct_answers} out of {expected_count} (total entries: {len(answers)})")
             if failed_tests:
                 print(">>>>>>>>> Failed Tests <<<<<<<<<")
                 for k, v in failed_tests.items():

@@ -468,3 +468,62 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                         for limit in ["LIMIT 0 5", "LIMIT 2 3", ""]:
                             self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY {sort_key} {direction} {return_keys} {limit} {wsk}")
 
+    def test_alias_search(self, key_type, dialect):
+        """FT.SEARCH via alias returns same results as via the real index name."""
+        self.setup_data("sortable numbers", key_type)
+        idx = f"{key_type}_idx1"
+        alias = f"{key_type}_alias_compat"
+        self.execute_command(["FT.ALIASADD", alias, idx])
+        self.execute_command(["ft.search", alias, "@n1:[-inf inf]", "SORTBY", "n1", "ASC", "DIALECT", str(dialect)])
+        self.check(dialect, "ft.search", alias, "*", "SORTBY", "n2", "DESC", "LIMIT", "0", "5")
+        self.execute_command(["FT.ALIASDEL", alias])
+
+    def test_alias_aggregate(self, key_type, dialect):
+        """FT.AGGREGATE via alias returns same results as via the real index name."""
+        self.setup_data("sortable numbers", key_type)
+        idx = f"{key_type}_idx1"
+        alias = f"{key_type}_alias_compat"
+        # Record alias management commands so replay recreates the same state.
+        self.execute_command(["FT.ALIASADD", alias, idx])
+        self.check(dialect, f"ft.aggregate {alias} * load 3 @__key @n1 @n2 sortby 2 @__key desc limit 0 5")
+        self.execute_command(["FT.ALIASDEL", alias])
+
+    def test_aliasupdate_search(self, key_type, dialect):
+        """FT.ALIASUPDATE reassigns alias; queries via alias reflect the new target."""
+        self.setup_data("sortable numbers", key_type)
+        idx = f"{key_type}_idx1"
+        alias = f"{key_type}_alias_compat"
+        # Record alias management commands so replay recreates the same state.
+        self.execute_command(["FT.ALIASADD", alias, idx])
+        self.execute_command(["FT.ALIASUPDATE", alias, idx])
+        self.execute_command(["ft.search", alias, "@n1:[-inf inf]", "SORTBY", "n1", "ASC", "DIALECT", str(dialect)])
+        self.execute_command(["FT.ALIASDEL", alias])
+
+
+
+@pytest.mark.parametrize("key_type", ["hash"])
+class TestAliasCompatibility(BaseCompatibilityTest):
+
+    ANSWER_FILE_NAME = "alias-answers.pickle.gz"
+
+    def setup_method(self):
+        super().setup_method()
+        # Delegate entirely to load_data so the replay path in
+        # compatibility_test.py uses the exact same state.
+        load_data(self.client, "alias", "hash")
+        self.data_set_name = "alias"
+        self.key_type = "hash"
+
+    def test_aliasadd_search(self, key_type):
+        """FT.SEARCH via alias returns same results as via index name."""
+        # alias_search -> hash_idx1 is pre-configured by load_data
+        self.execute_command(["FT.SEARCH", "alias_search", "@price:[0 +inf]", "SORTBY", "price", "ASC"])
+
+    def test_aliasadd_aggregate(self, key_type):
+        """FT.AGGREGATE via alias returns same results as via index name."""
+        # alias_agg -> hash_idx1 is pre-configured by load_data
+        self.execute_command(["FT.AGGREGATE", "alias_agg", "@category:{electronics}",
+            "LOAD", "1", "@category",
+            "GROUPBY", "1", "@category",
+            "REDUCE", "COUNT", "0", "AS", "count",
+        ])

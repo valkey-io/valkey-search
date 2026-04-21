@@ -1,0 +1,25 @@
+{
+    "FT.ALIASADD": {
+        "acl_categories": [
+            "FAST",
+            "WRITE",
+            "SEARCH"
+        ],
+        "arguments": [
+            {
+                "name": "alias",
+                "type": "string"
+            },
+            {
+                "key_spec_index": 0,
+                "name": "index-name",
+                "type": "key"
+            }
+        ],
+        "arity": 3,
+        "complexity": "O(1)",
+        "group": "search",
+        "module_since": "1.0.0",
+        "summary": "Add an alias to an existing index"
+    }
+}

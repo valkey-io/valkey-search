@@ -118,8 +118,10 @@ absl::Status FTDropIndexCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   VMSDK_RETURN_IF_ERROR(AclPrefixCheck(ctx, acl::KeyAccess::kWrite,
                                        index_schema->GetKeyPrefixes()));
 
+  // Use the resolved real name so that dropping via an alias works correctly
+  // and alias cleanup in RemoveIndexSchemaInternal matches by real name.
   VMSDK_RETURN_IF_ERROR(SchemaManager::Instance().RemoveIndexSchema(
-      ValkeyModule_GetSelectedDb(ctx), index_schema_name));
+      ValkeyModule_GetSelectedDb(ctx), index_schema->GetName()));
 
   // directly handle reply in standalone mode
   // let fanout operation handle reply in cluster mode
@@ -130,9 +132,10 @@ absl::Status FTDropIndexCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
       ValkeySearch::Instance().UsingCoordinator() && !is_loading &&
       !inside_multi_exec) {
     unsigned timeout_ms = options::GetFTInfoTimeoutMs().GetValue();
+    // Use the resolved real name so the fanout reaches other nodes correctly
+    // even when the user supplied an alias.
     auto op = new DropConsistencyCheckFanoutOperation(
-        ValkeyModule_GetSelectedDb(ctx), std::string(index_schema_name),
-        timeout_ms);
+        ValkeyModule_GetSelectedDb(ctx), index_schema->GetName(), timeout_ms);
     op->StartOperation(ctx);
   } else {
     if (is_loading || inside_multi_exec) {

@@ -1073,8 +1073,9 @@ int IndexSchema::GetTextItemCount() const {
   return text_index_schema->GetTrackedKeyCount(true);
 }
 
-void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
-  int arrSize = 28;
+void IndexSchema::RespondWithInfo(
+    ValkeyModuleCtx *ctx, const std::vector<std::string> &aliases) const {
+  int arrSize = 30;
   // Text-attribute info fields
   if (text_index_schema_) {
     arrSize += 8;  // punctuation, stop_words, with_offsets, min_stem_size (4
@@ -1083,6 +1084,12 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithArray(ctx, arrSize);
   ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
   ValkeyModule_ReplyWithSimpleString(ctx, name_.data());
+
+  ValkeyModule_ReplyWithSimpleString(ctx, "aliases");
+  ValkeyModule_ReplyWithArray(ctx, aliases.size());
+  for (const auto &alias : aliases) {
+    ValkeyModule_ReplyWithSimpleString(ctx, alias.c_str());
+  }
 
   ValkeyModule_ReplyWithSimpleString(ctx, "index_definition");
   ValkeyModule_ReplyWithArray(ctx, 6);

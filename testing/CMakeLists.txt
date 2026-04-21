@@ -54,6 +54,7 @@ set(COMMANDS_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/ft_search_parser_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_search_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_dropindex_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/ft_alias_commands_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_list_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_info_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_create_test.cc

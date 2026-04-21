@@ -5,6 +5,9 @@
 - [`FT.INFO`](#ftinfo)
 - [`FT._LIST`](#ft_list)
 - [`FT.SEARCH`](#ftsearch)
+- [`FT.ALIASADD`](#ftaliasadd)
+- [`FT.ALIASDEL`](#ftaliasdel)
+- [`FT.ALIASUPDATE`](#ftaliasupdate)
 
 #
 
@@ -308,3 +311,43 @@ The following query will return all books with "comedy" or "horror" genre (OR) p
 The following query will return all books that either don't have a genre field, or have a genre field not equal to "comedy", that are published between 2015 and 2024:
 
 `-@genre:[comedy] @year:[2015 2024]`
+
+## FT.ALIASADD
+
+```
+FT.ALIASADD <alias> <index-name>
+```
+
+Adds an alias to an existing index. The alias can then be used in place of the index name in any command that accepts an index name (e.g., `FT.SEARCH`, `FT.AGGREGATE`).
+
+- **\<alias\>** (required): The alias name to create.
+- **\<index-name\>** (required): The name of an existing index to associate with the alias.
+
+An alias cannot point to another alias. Multiple aliases may point to the same index.
+
+**RESPONSE** OK or error.
+
+## FT.ALIASDEL
+
+```
+FT.ALIASDEL <alias>
+```
+
+Removes an alias. The underlying index is unaffected and remains accessible by its original name.
+
+- **\<alias\>** (required): The alias name to remove.
+
+**RESPONSE** OK or error.
+
+## FT.ALIASUPDATE
+
+```
+FT.ALIASUPDATE <alias> <index-name>
+```
+
+Adds or updates an alias. If the alias does not exist it is created (equivalent to `FT.ALIASADD`). If it already exists, it is atomically reassigned to the new index, enabling zero-downtime schema migrations.
+
+- **\<alias\>** (required): The alias name to create or update.
+- **\<index-name\>** (required): The name of an existing index to associate with the alias.
+
+**RESPONSE** OK or error.

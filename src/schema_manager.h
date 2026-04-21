@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
@@ -37,6 +38,7 @@ class ObjName;
 }
 
 constexpr absl::string_view kSchemaManagerMetadataTypeName{"vs_index_schema"};
+constexpr absl::string_view kAliasMetadataTypeName{"vs_alias"};
 // Enum for attribute metrics
 enum class AttributeType { ALL, TEXT, TAG, NUMERIC, VECTOR };
 
@@ -61,7 +63,18 @@ class SchemaManager {
   absl::StatusOr<std::shared_ptr<IndexSchema>> GetIndexSchema(
       uint32_t db_num, absl::string_view name) const
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
+  absl::Status AddAlias(uint32_t db_num, absl::string_view alias,
+                        absl::string_view index_name)
+      ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
+  absl::Status RemoveAlias(uint32_t db_num, absl::string_view alias)
+      ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
+  absl::Status UpdateAlias(uint32_t db_num, absl::string_view alias,
+                           absl::string_view index_name)
+      ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
   absl::flat_hash_set<std::string> GetIndexSchemasInDB(uint32_t db_num) const;
+  std::vector<std::string> GetAliasesForIndex(
+      uint32_t db_num, absl::string_view index_name) const
+      ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
   // TODO Investigate storing aggregated counters to optimize stats
   // generation.
   uint64_t GetNumberOfIndexSchemas() const;
@@ -116,6 +129,10 @@ class SchemaManager {
                          std::unique_ptr<data_model::RDBSection> section,
                          SupplementalContentIter &&supplemental_iter);
   absl::Status SaveIndexes(ValkeyModuleCtx *ctx, SafeRDB *rdb, int when);
+  absl::Status LoadAliasMap(ValkeyModuleCtx *ctx,
+                            std::unique_ptr<data_model::RDBSection> section,
+                            SupplementalContentIter &&supplemental_iter);
+  absl::Status SaveAliases(ValkeyModuleCtx *ctx, SafeRDB *rdb, int when);
   static absl::StatusOr<uint64_t> ComputeFingerprint(
       const google::protobuf::Any &metadata);
   absl::StatusOr<vmsdk::ValkeyVersion> GetMinVersion() const;
@@ -135,6 +152,33 @@ class SchemaManager {
                                   const google::protobuf::Any *metadata,
                                   uint64_t fingerprint, uint32_t version)
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
+
+  absl::Status OnAliasMetadataCallback(const coordinator::ObjName &obj_name,
+                                       const google::protobuf::Any *metadata,
+                                       uint64_t fingerprint, uint32_t version)
+      ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
+
+  static absl::StatusOr<uint64_t> ComputeAliasFingerprint(
+      const google::protobuf::Any &metadata);
+
+  absl::Status AddAliasInternal(uint32_t db_num, absl::string_view alias,
+                                absl::string_view index_name)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
+
+  absl::Status RemoveAliasInternal(uint32_t db_num, absl::string_view alias)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
+
+  absl::Status UpdateAliasInternal(uint32_t db_num, absl::string_view alias,
+                                   absl::string_view index_name)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
+
+  // Helpers to keep db_to_index_to_aliases_ in lockstep with db_to_aliases_.
+  void AddToReverseAliasMap(uint32_t db_num, absl::string_view index_name,
+                            absl::string_view alias)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
+  void RemoveFromReverseAliasMap(uint32_t db_num, absl::string_view index_name,
+                                 absl::string_view alias)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
 
   absl::Status CreateIndexSchemaInternal(
       ValkeyModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto)
@@ -157,6 +201,15 @@ class SchemaManager {
   absl::flat_hash_map<
       uint32_t, absl::flat_hash_map<std::string, std::shared_ptr<IndexSchema>>>
       db_to_index_schemas_ ABSL_GUARDED_BY(db_to_index_schemas_mutex_);
+  absl::flat_hash_map<uint32_t, absl::flat_hash_map<std::string, std::string>>
+      db_to_aliases_ ABSL_GUARDED_BY(db_to_index_schemas_mutex_);
+  // Reverse map: db_num -> index_name -> set of aliases pointing to that index.
+  // Kept in lockstep with db_to_aliases_ to provide O(1) index-to-aliases
+  // lookup instead of an O(n) scan of db_to_aliases_.
+  absl::flat_hash_map<
+      uint32_t,
+      absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>>
+      db_to_index_to_aliases_ ABSL_GUARDED_BY(db_to_index_schemas_mutex_);
 
   // Staged changes to index schemas, to be applied on loading ended.
   vmsdk::MainThreadAccessGuard<absl::flat_hash_map<

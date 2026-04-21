@@ -255,9 +255,11 @@ absl::Status GRPCSearchRequestToParameters(
   parameters->filter_parse_results.query_operations =
       static_cast<QueryOperations>(request.query_operations());
   parameters->sortby_parameter = SortByFromGRPC(request);
-  parameters->infields.reserve(request.infields().size());
-  parameters->infields.insert(request.infields().begin(),
-                              request.infields().end());
+  if (!request.infields().empty()) {
+    auto& infields = parameters->infields.emplace();
+    infields.reserve(request.infields().size());
+    infields.insert(request.infields().begin(), request.infields().end());
+  }
   return absl::OkStatus();
 }
 
@@ -414,8 +416,10 @@ std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
   request->set_query_operations(
       static_cast<uint64_t>(parameters.filter_parse_results.query_operations));
   SortByToGRPC(parameters.sortby_parameter, request.get());
-  for (const auto& field : parameters.infields) {
-    request->add_infields(field);
+  if (parameters.infields.has_value()) {
+    for (const auto& field : *parameters.infields) {
+      request->add_infields(field);
+    }
   }
   return request;
 }

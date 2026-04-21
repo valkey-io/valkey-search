@@ -967,9 +967,9 @@ absl::StatusOr<FilterParseResults> ParsePreFilter(
   TextParsingOptions options{.verbatim = search_params.verbatim,
                              .inorder = search_params.inorder,
                              .slop = search_params.slop,
-                             .infields = search_params.infields.empty()
-                                             ? nullptr
-                                             : &search_params.infields};
+                             .infields = search_params.infields.has_value()
+                                             ? &*search_params.infields
+                                             : nullptr};
   FilterParser parser(index_schema, pre_filter, options);
   return parser.Parse();
 }

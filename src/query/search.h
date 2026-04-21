@@ -180,7 +180,7 @@ struct SearchParameters {
   bool inorder{false};
   std::optional<uint32_t> slop;
   bool verbatim{false};
-  absl::flat_hash_set<std::string> infields;
+  std::optional<absl::flat_hash_set<std::string>> infields;
   coordinator::IndexFingerprintVersion index_fingerprint_version;
   uint64_t slot_fingerprint;
   SearchResult search_result;

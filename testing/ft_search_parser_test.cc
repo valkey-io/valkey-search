@@ -80,7 +80,7 @@ struct FTSearchParserTestCase {
   query::SortOrder sortby_order{query::SortOrder::kAscending};
   bool sortby_enabled{false};
   bool with_sort_keys{false};
-  absl::flat_hash_set<std::string> expected_infields;
+  std::optional<absl::flat_hash_set<std::string>> expected_infields;
 };
 
 class FTSearchParserTest
@@ -1030,7 +1030,8 @@ INSTANTIATE_TEST_SUITE_P(
             .score_as = "",
             .search_parameters_str = "INFIELDS 1 attribute_identifier_1",
             .vector_query = false,
-            .expected_infields = {"attribute_identifier_1"},
+            .expected_infields =
+                absl::flat_hash_set<std::string>{"attribute_identifier_1"},
         },
         {
             .test_name = "infields_multiple_fields",
@@ -1043,7 +1044,8 @@ INSTANTIATE_TEST_SUITE_P(
             .score_as = "",
             .search_parameters_str = "INFIELDS 3 f1 f2 f3",
             .vector_query = false,
-            .expected_infields = {"f1", "f2", "f3"},
+            .expected_infields =
+                absl::flat_hash_set<std::string>{"f1", "f2", "f3"},
         },
         {
             .test_name = "infields_duplicate_fields_deduped",
@@ -1056,7 +1058,7 @@ INSTANTIATE_TEST_SUITE_P(
             .score_as = "",
             .search_parameters_str = "INFIELDS 3 f1 f1 f2",
             .vector_query = false,
-            .expected_infields = {"f1", "f2"},
+            .expected_infields = absl::flat_hash_set<std::string>{"f1", "f2"},
         },
         {
             .test_name = "infields_zero_count_no_op",
@@ -1069,7 +1071,10 @@ INSTANTIATE_TEST_SUITE_P(
             .score_as = "",
             .search_parameters_str = "INFIELDS 0",
             .vector_query = false,
-            .expected_infields = {},
+            // INFIELDS 0 engages the optional to an empty set. Downstream,
+            // the filter parser treats an empty set as "search all fields"
+            // for Redis parity.
+            .expected_infields = absl::flat_hash_set<std::string>{},
         },
         {
             .test_name = "infields_non_integer_count_error",
@@ -1106,7 +1111,7 @@ INSTANTIATE_TEST_SUITE_P(
             .filter_str = "* =>[KNN 5 @vec $BLOB]",
             .k = 5,
             .search_parameters_str = "INFIELDS 2 f1 f2",
-            .expected_infields = {"f1", "f2"},
+            .expected_infields = absl::flat_hash_set<std::string>{"f1", "f2"},
         },
         {
             .test_name = "infields_negative_count_error",
@@ -1119,7 +1124,7 @@ INSTANTIATE_TEST_SUITE_P(
             .score_as = "",
             .expected_error_message =
                 "Error parsing value for the parameter `INFIELDS` - "
-                "INFIELDS count must not be negative",
+                "`-1` is outside acceptable bounds",
             .search_parameters_str = "INFIELDS -1",
             .vector_query = false,
         },

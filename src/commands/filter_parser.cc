@@ -312,7 +312,17 @@ FilterParser::ParseNumericPredicate(const std::string& attribute_alias) {
 
 absl::StatusOr<absl::string_view> FilterParser::ParseTagString() {
   SkipWhitespace();
-  auto stop_pos = expression_.substr(pos_).find('}');
+  // Scan for the closing '}' while respecting backslash escapes.
+  auto remaining = expression_.substr(pos_);
+  size_t stop_pos = std::string::npos;
+  for (size_t i = 0; i < remaining.size(); ++i) {
+    if (remaining[i] == '\\' && i + 1 < remaining.size()) {
+      ++i;  // skip escaped character
+    } else if (remaining[i] == '}') {
+      stop_pos = i;
+      break;
+    }
+  }
   if (stop_pos == std::string::npos) {
     return absl::InvalidArgumentError("Missing closing TAG bracket, '}'");
   }

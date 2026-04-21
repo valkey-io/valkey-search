@@ -84,8 +84,10 @@ vmsdk::module::Options options = {
                 .cmd_name = valkey_search::kDebugCommand,
                 .permissions =
                     ACLPermissionFormatter(valkey_search::kDebugCmdPermissions),
-                .flags = {vmsdk::module::kReadOnlyFlag,
-                          vmsdk::module::kAdminFlag},
+                .flags = {vmsdk::module::kAdminFlag,
+                          vmsdk::module::kNoScriptFlag,
+                          vmsdk::module::kLoadingFlag,
+                          vmsdk::module::kStaleFlag},
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTDebugCmd>,
             },
             {

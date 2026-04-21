@@ -63,6 +63,7 @@ def start_valkey_process(
     command = f"{valkey_server_path} --port {port} --dir {directory}"
     modules_args = [f'"--loadmodule {k} {v}"' for k, v in modules.items()]
     args_str = " ".join([f"--{k} {v}" for k, v in args.items()] + modules_args)
+    # Only load VALKEY_JSON_PATH if it's set and not empty
     command += " --loadmodule " + os.environ["VALKEY_JSON_PATH"]
     command += " " + args_str
     command = "ulimit -c unlimited && " + command

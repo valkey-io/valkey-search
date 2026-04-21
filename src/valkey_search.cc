@@ -1021,25 +1021,33 @@ void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
 void ValkeySearch::AtForkPrepare() {
   // Sanity: fork can occur (by example: calling to "popen") before the thread
   // pool is initialized
+  SuspendWorkers("At prepare fork callback");
+}
+
+void ValkeySearch::SuspendWorkers(std::string_view reason) {
   if (writer_thread_pool_ == nullptr || reader_thread_pool_ == nullptr ||
       utility_thread_pool_ == nullptr) {
     return;
   }
   Metrics::GetStats().worker_thread_pool_suspend_cnt++;
   auto status = writer_thread_pool_->SuspendWorkers();
-  VMSDK_LOG(WARNING, nullptr) << "At prepare fork callback, suspend writer "
+  VMSDK_LOG(WARNING, nullptr) << reason
+                              << ", suspend writer "
                                  "worker thread pool returned message: "
                               << status.message();
   status = reader_thread_pool_->SuspendWorkers();
-  VMSDK_LOG(WARNING, nullptr) << "At prepare fork callback, suspend reader "
+  VMSDK_LOG(WARNING, nullptr) << reason
+                              << ", suspend reader "
                                  "worker thread pool returned message: "
                               << status.message();
   status = utility_thread_pool_->SuspendWorkers();
-  VMSDK_LOG(WARNING, nullptr) << "At prepare fork callback, suspend utility "
+  VMSDK_LOG(WARNING, nullptr) << reason
+                              << ", suspend utility "
                                  "worker thread pool returned message: "
                               << status.message();
   status = coordinator::GRPCSuspender::Instance().Suspend();
-  VMSDK_LOG(WARNING, nullptr) << "At prepare fork callback, suspend gRPC "
+  VMSDK_LOG(WARNING, nullptr) << reason
+                              << ", suspend gRPC "
                                  "returned message: "
                               << status.message();
 }
@@ -1064,6 +1072,10 @@ void ValkeySearch::AfterForkParent() {
   VMSDK_LOG(WARNING, nullptr) << "After fork parent callback, resume gRPC "
                                  "returned message: "
                               << status.message();
+}
+
+void ValkeySearch::OnShutdownCallback() {
+  SuspendWorkers("On shutdown callback");
 }
 
 void ValkeySearch::OnServerCronCallback(ValkeyModuleCtx *ctx,

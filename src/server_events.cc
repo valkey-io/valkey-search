@@ -57,6 +57,7 @@ void OnShutdownCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
   // exit their spin loops before global destructors destroy the map.
   vmsdk::debug::ClearAllPausePoints();
   SchemaManager::Instance().OnShutdownCallback(ctx, eid, subevent, data);
+  ValkeySearch::Instance().OnShutdownCallback();
 }
 
 void AtForkPrepare() { ValkeySearch::Instance().AtForkPrepare(); }

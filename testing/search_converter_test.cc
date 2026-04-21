@@ -8,6 +8,7 @@
 #include "src/coordinator/search_converter.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "absl/container/flat_hash_set.h"
@@ -25,7 +26,7 @@ using coordinator::ParametersToGRPCSearchRequest;
 
 class SearchConverterInfieldsTest : public vmsdk::ValkeyTest {};
 
-// Helper: serialize SearchParameters to proto and read back the infields field.
+// Helper: serialize engaged infields to proto, read back as a set.
 absl::flat_hash_set<std::string> SerializeAndReadBackInfields(
     const absl::flat_hash_set<std::string>& original) {
   UnitTestSearchParameters params;
@@ -45,14 +46,29 @@ TEST_F(SearchConverterInfieldsTest, SerializeSingleField) {
   EXPECT_EQ(SerializeAndReadBackInfields(original), original);
 }
 
-TEST_F(SearchConverterInfieldsTest, SerializeEmpty) {
-  absl::flat_hash_set<std::string> original;
-  EXPECT_EQ(SerializeAndReadBackInfields(original), original);
+// Unset infields (nullopt) emits no bytes.
+TEST_F(SearchConverterInfieldsTest, UnsetIsNotSerialized) {
+  UnitTestSearchParameters params;
+  EXPECT_FALSE(params.infields.has_value());
+
+  auto request = ParametersToGRPCSearchRequest(params);
+  EXPECT_EQ(request->infields_size(), 0);
+}
+
+// An engaged-but-empty set collapses to the same wire bytes as unset. This is
+// acceptable because INFIELDS 0 means "search all text fields" (Redis parity),
+// which is also what unset means.
+TEST_F(SearchConverterInfieldsTest, EngagedEmptyCollapsesToUnset) {
+  UnitTestSearchParameters params;
+  params.infields.emplace();  // engaged but empty
+
+  auto request = ParametersToGRPCSearchRequest(params);
+  EXPECT_EQ(request->infields_size(), 0);
 }
 
 TEST_F(SearchConverterInfieldsTest, WireRoundTrip) {
   UnitTestSearchParameters params;
-  params.infields = {"f1", "f2", "f3"};
+  params.infields = absl::flat_hash_set<std::string>{"f1", "f2", "f3"};
 
   auto request = ParametersToGRPCSearchRequest(params);
 
@@ -63,7 +79,7 @@ TEST_F(SearchConverterInfieldsTest, WireRoundTrip) {
 
   absl::flat_hash_set<std::string> deserialized(parsed.infields().begin(),
                                                 parsed.infields().end());
-  EXPECT_EQ(deserialized, params.infields);
+  EXPECT_EQ(deserialized, *params.infields);
 }
 
 }  // namespace

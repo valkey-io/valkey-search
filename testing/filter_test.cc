@@ -67,6 +67,8 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
   VMSDK_EXPECT_OK(tag_index_1->AddRecord("key_backslash_pipe", R"(a\|b)"));
   // key_backslash has tag "a\" (trailing backslash)
   VMSDK_EXPECT_OK(tag_index_1->AddRecord("key_backslash", R"(a\)"));
+  // key_brace has tag "a}b" (literal closing brace in the stored value)
+  VMSDK_EXPECT_OK(tag_index_1->AddRecord("key_brace", "a}b"));
   VMSDK_EXPECT_OK(
       index_schema->AddIndex("tag_field_1", "tag_field_1", tag_index_1));
   auto tag_index_1_2 =
@@ -1638,6 +1640,29 @@ INSTANTIATE_TEST_SUITE_P(
             .create_success = true,
             .evaluate_success = false,
             .key = "key1",
+        },
+        // =================================================================
+        // Test escaped closing brace tests
+        // =================================================================
+        {
+            .test_name = "tag_escaped_brace_matches_literal_brace",
+            .filter = R"(@tag_field_1:{a\}b})",
+            .create_success = true,
+            .evaluate_success = true,
+            .key = "key_brace",  // has tag "a}b"
+        },
+        {
+            .test_name = "tag_escaped_brace_no_match",
+            .filter = R"(@tag_field_1:{x\}y})",
+            .create_success = true,
+            .evaluate_success = false,
+            .key = "key1",
+        },
+        {
+            .test_name = "tag_escaped_brace_missing_close_bracket",
+            .filter = R"(@tag_field_1:{a\}b)",
+            .create_success = false,
+            .create_expected_error_message = "Missing closing TAG bracket, '}'",
         },
         // =================================================================
         // Hierarchical tests: ensure escaping works with AND/OR operators

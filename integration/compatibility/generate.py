@@ -76,7 +76,7 @@ class BaseCompatibilityTest:
     def setup_data(self, data_set_name, key_type):
         self.data_set_name = data_set_name
         self.key_type = key_type
-        load_data(self.client, data_set_name, key_type)
+        return load_data(self.client, data_set_name, key_type)
 
     def execute_command(self, cmd):
         answer = {"cmd": cmd,
@@ -468,6 +468,25 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                         for limit in ["LIMIT 0 5", "LIMIT 2 3", ""]:
                             self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY {sort_key} {direction} {return_keys} {limit} {wsk}")
 
+    def test_search_limit_zero_number(self, key_type, dialect):
+        """LIMIT 0 0 — ShouldReturnNoResults path: reply is [total_count] only."""
+        self.setup_data("sortable numbers", key_type)
+        self.check(dialect, f"ft.search {key_type}_idx1 * LIMIT 0 0")
+        self.check(dialect, f"ft.search {key_type}_idx1 @n1:[-inf inf] LIMIT 0 0")
+
+    def test_search_limit_offset_beyond_results(self, key_type, dialect):
+        """LIMIT first_index > total results — reply is [total_count] only."""
+        self.setup_data("sortable numbers", key_type)
+        self.check(dialect, f"ft.search {key_type}_idx1 * LIMIT 10000 10")
+
+    def test_infields_with_knn_query(self, key_type, dialect):
+        """INFIELDS is inert for pure KNN queries — Redis Stack parity."""
+        self.setup_data("sortable numbers", key_type)
+        # With INFIELDS naming a valid text field: same results as without.
+        self.checkvec(dialect, f"ft.search {key_type}_idx1 * INFIELDS 1 t1")
+        # With INFIELDS naming a non-existent field: still same results.
+        self.checkvec(dialect, f"ft.search {key_type}_idx1 * INFIELDS 1 nonexistent")
+
 
 
 @pytest.mark.parametrize("dialect", [2])
@@ -555,4 +574,60 @@ class TestInfieldsCompatibility(BaseCompatibilityTest):
                    "DIALECT", str(dialect))
         self.check("ft.search", f"{key_type}_idx1", "apple @price:[0 5]",
                    "INFIELDS", "1", "body",
+                   "DIALECT", str(dialect))
+
+    def test_infields_with_verbatim(self, key_type, dialect):
+        """INFIELDS + VERBATIM — no stemming applied, matches Redis Stack."""
+        self.setup_data("pure text small", key_type)
+        self.check("ft.search", f"{key_type}_idx1", "apple",
+                   "INFIELDS", "1", "title", "VERBATIM",
+                   "DIALECT", str(dialect))
+
+    def test_infields_with_slop_inorder(self, key_type, dialect):
+        """INFIELDS + SLOP + INORDER for multi-term queries."""
+        self.setup_data("pure text small", key_type)
+        self.check("ft.search", f"{key_type}_idx1", "apple banana",
+                   "INFIELDS", "1", "title",
+                   "SLOP", "0", "INORDER",
+                   "DIALECT", str(dialect))
+
+    def test_infields_with_sortby_and_return(self, key_type, dialect):
+        """INFIELDS + SORTBY + RETURN projection."""
+        self.setup_data("pure text small", key_type)
+        self.check("ft.search", f"{key_type}_idx1", "apple",
+                   "INFIELDS", "1", "title",
+                   "SORTBY", "title", "ASC",
+                   "RETURN", "1", "title",
+                   "DIALECT", str(dialect))
+
+    def test_infields_with_nocontent_and_sortby(self, key_type, dialect):
+        """NOCONTENT + SORTBY — verify ordering matches Redis Stack.
+        No LIMIT so all results are returned, avoids flakiness from ties
+        at the page boundary."""
+        self.setup_data("pure text small", key_type)
+        self.check("ft.search", f"{key_type}_idx1", "apple",
+                   "INFIELDS", "2", "title", "body",
+                   "SORTBY", "price", "ASC",
+                   "NOCONTENT",
+                   "DIALECT", str(dialect))
+
+    def test_infields_error_bad_count(self, key_type, dialect):
+        """INFIELDS with non-integer count — both engines raise."""
+        self.setup_data("pure text small", key_type)
+        self.check("ft.search", f"{key_type}_idx1", "apple",
+                   "INFIELDS", "abc",
+                   "DIALECT", str(dialect))
+
+    def test_infields_error_negative_count(self, key_type, dialect):
+        """INFIELDS -1 — both engines raise."""
+        self.setup_data("pure text small", key_type)
+        self.check("ft.search", f"{key_type}_idx1", "apple",
+                   "INFIELDS", "-1",
+                   "DIALECT", str(dialect))
+
+    def test_infields_error_count_mismatch(self, key_type, dialect):
+        """INFIELDS count > args — both engines raise."""
+        self.setup_data("pure text small", key_type)
+        self.check("ft.search", f"{key_type}_idx1", "apple",
+                   "INFIELDS", "5", "f1", "f2",
                    "DIALECT", str(dialect))

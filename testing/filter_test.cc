@@ -1768,13 +1768,21 @@ INSTANTIATE_TEST_SUITE_P(
             .create_success = true,
             .evaluate_success = true,
         },
-        // Explicit @field: prefix takes precedence over INFIELDS.
+        // Explicit @field: is intersected with INFIELDS. If the field isn't
+        // in INFIELDS, the term matches nothing (Redis Stack parity).
         {
-            .test_name = "infields_explicit_field_prefix_not_restricted",
+            .test_name = "infields_explicit_field_not_in_infields_no_match",
             .filter = "@text_field1:hello",
-            .infields = {"text_field2"},  // INFIELDS names a different field
+            .infields = {"text_field2"},
             .create_success = true,
-            .evaluate_success = true,  // @text_field1: still matches
+            .evaluate_success = false,
+        },
+        {
+            .test_name = "infields_explicit_field_in_infields_matches",
+            .filter = "@text_field1:hello",
+            .infields = {"text_field1", "text_field2"},
+            .create_success = true,
+            .evaluate_success = true,
         },
         // Prefix query restricted by INFIELDS.
         {

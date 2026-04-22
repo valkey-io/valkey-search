@@ -121,7 +121,7 @@ def result_has_sortkeys(rs):
         return second_elem.startswith('#') or second_elem.startswith('$')
     return False
 
-def unpack_search_result(rs, key_type, has_sortkeys=False):
+def unpack_search_result(rs, key_type, has_sortkeys=False, no_content=False):
     rows = []
     if has_sortkeys:
         # Format: [count, key1, sortkey1, [fields1], key2, sortkey2, [fields2], ...]
@@ -131,6 +131,10 @@ def unpack_search_result(rs, key_type, has_sortkeys=False):
             for j in range(0, len(value), 2):
                 row[parse_field(value[j], key_type)] = parse_value(value[j+1], key_type)
             rows += [row]
+    elif no_content:
+        # Format: [count, key1, key2, ...]
+        for key in rs[1:]:
+            rows += [{"__key": key}]
     else:
         # Format: [count, key1, [fields1], key2, [fields2], ...]
         for (key, value) in [(rs[i],rs[i+1]) for i in range(1, len(rs), 2)]:
@@ -161,7 +165,10 @@ def unpack_result(cmd, key_type, rs, sortkeys):
         # where the expected result (from pickle) may not have sort keys even
         # if the command requested them.
         has_sortkeys = result_has_sortkeys(rs)
-        out = unpack_search_result(rs, key_type, has_sortkeys)
+        no_content = any(
+            str(t).upper() == "NOCONTENT" for t in cmd
+        )
+        out = unpack_search_result(rs, key_type, has_sortkeys, no_content)
     else:
         out = unpack_agg_result(rs, key_type)
     #
@@ -491,7 +498,7 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
     return data_set
 
 class TestAnswersCMD(ValkeySearchTestCaseBase):
-    @pytest.mark.parametrize("answers", ["aggregate-answers.pickle.gz", "text-search-answers.pickle.gz"])
+    @pytest.mark.parametrize("answers", ["aggregate-answers.pickle.gz", "text-search-answers.pickle.gz", "search-answers.pickle.gz"])
     def test_answers(self, answers):
         global client, data_set
         global correct_answers, failed_tests, passed_tests

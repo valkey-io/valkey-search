@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 
+#include "absl/container/flat_hash_set.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "src/commands/filter_parser.h"
@@ -1658,6 +1659,206 @@ INSTANTIATE_TEST_SUITE_P(
         },
     }),
     [](const TestParamInfo<FilterTestCase> &info) {
+      return info.param.test_name;
+    });
+
+// =========================================================================
+// INFIELDS unit tests — verify field mask restriction in
+// SetupTextFieldConfiguration()
+// =========================================================================
+
+struct InfieldsFilterTestCase {
+  std::string test_name;
+  std::string filter;
+  absl::flat_hash_set<std::string> infields;
+  bool create_success{false};
+  std::string create_expected_error_message;
+  std::optional<bool> evaluate_success;
+  std::string key{"key1"};
+};
+
+class InfieldsFilterTest
+    : public ValkeySearchTestWithParam<InfieldsFilterTestCase> {};
+
+TEST_P(InfieldsFilterTest, ParseParams) {
+  const InfieldsFilterTestCase &test_case = GetParam();
+  auto index_schema = CreateIndexSchema("index_schema_name").value();
+  InitIndexSchema(index_schema.get());
+  TextParsingOptions options{
+      .infields = test_case.infields.empty() ? nullptr : &test_case.infields};
+  FilterParser parser(*index_schema, test_case.filter, options);
+  auto parse_results = parser.Parse();
+  EXPECT_EQ(test_case.create_success, parse_results.ok());
+  if (!test_case.create_success) {
+    EXPECT_EQ(parse_results.status().message(),
+              test_case.create_expected_error_message);
+    return;
+  }
+  if (test_case.evaluate_success.has_value()) {
+    auto interned_key = StringInternStore::Intern(test_case.key);
+    if (index_schema->GetTextIndexSchema()) {
+      auto text_index = index_schema->GetTextIndexSchema()->GetPerKeyTextIndex(
+          interned_key, false);
+      indexes::PrefilterEvaluator evaluator(
+          text_index, parse_results.value().query_operations);
+      EXPECT_EQ(test_case.evaluate_success.value(),
+                evaluator.Evaluate(*parse_results.value().root_predicate,
+                                   interned_key));
+    }
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    InfieldsFilterTests, InfieldsFilterTest,
+    ValuesIn<InfieldsFilterTestCase>({
+        {
+            .test_name = "infields_single_valid_text_field_matches",
+            .filter = "hello",
+            .infields = {"text_field1"},
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        {
+            .test_name = "infields_single_valid_text_field_no_match",
+            .filter = "hello",
+            .infields = {"text_field1"},
+            .create_success = true,
+            .evaluate_success = false,
+            .key = "missing_key",
+        },
+        {
+            .test_name = "infields_multiple_valid_text_fields",
+            .filter = "hello",
+            .infields = {"text_field1", "text_field2"},
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        {
+            .test_name = "infields_nonexistent_field_only_error",
+            .filter = "hello",
+            .infields = {"nonexistent_field"},
+            .create_success = true,
+            .evaluate_success = false,
+        },
+        {
+            .test_name = "infields_non_text_field_only_error",
+            .filter = "hello",
+            .infields = {"num_field_1.5"},
+            .create_success = true,
+            .evaluate_success = false,
+        },
+        {
+            .test_name = "infields_mix_valid_and_nonexistent",
+            .filter = "hello",
+            .infields = {"text_field1", "nonexistent_field"},
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        {
+            .test_name = "infields_mix_valid_and_non_text",
+            .filter = "hello",
+            .infields = {"text_field1", "num_field_1.5"},
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        {
+            .test_name = "infields_null_uses_all_text_fields",
+            .filter = "hello",
+            .infields = {},
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        // Explicit @field: is intersected with INFIELDS. If the field isn't
+        // in INFIELDS, the term matches nothing (Redis Stack parity).
+        {
+            .test_name = "infields_explicit_field_not_in_infields_no_match",
+            .filter = "@text_field1:hello",
+            .infields = {"text_field2"},
+            .create_success = true,
+            .evaluate_success = false,
+        },
+        {
+            .test_name = "infields_explicit_field_in_infields_matches",
+            .filter = "@text_field1:hello",
+            .infields = {"text_field1", "text_field2"},
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        // Prefix query restricted by INFIELDS.
+        {
+            .test_name = "infields_prefix_query",
+            .filter = "hel*",
+            .infields = {"text_field1"},
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        // Suffix query restricted to a field that supports suffix trie.
+        {
+            .test_name = "infields_suffix_query_supported_field",
+            .filter = "*ello",
+            .infields = {"text_field1"},  // has suffix trie
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        // Suffix query restricted to a field without suffix trie — no
+        // valid fields, field_mask stays 0, returns OK but matches nothing.
+        {
+            .test_name = "infields_suffix_query_unsupported_field",
+            .filter = "*ello",
+            .infields = {"text_field2"},  // no suffix trie
+            .create_success = true,
+            .evaluate_success = false,
+        },
+        // Fuzzy query restricted by INFIELDS.
+        {
+            .test_name = "infields_fuzzy_query",
+            .filter = "%hllo%",
+            .infields = {"text_field1"},
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        // Exact phrase restricted by INFIELDS.
+        {
+            .test_name = "infields_exact_phrase",
+            .filter = "\"hello my name is\"",
+            .infields = {"text_field1"},
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        // Composed AND: both terms restricted by INFIELDS.
+        {
+            .test_name = "infields_composed_and",
+            .filter = "hello name",
+            .infields = {"text_field1"},
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        // Composed OR: both branches restricted by INFIELDS.
+        {
+            .test_name = "infields_composed_or",
+            .filter = "hello|word",
+            .infields = {"text_field1"},
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        // Negation restricted by INFIELDS.
+        {
+            .test_name = "infields_negation",
+            .filter = "-nonexistent hello",
+            .infields = {"text_field1"},
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        // Case-sensitive field name: uppercase field name doesn't match.
+        {
+            .test_name = "infields_case_sensitive_field_name",
+            .filter = "hello",
+            .infields = {"TEXT_FIELD1"},
+            .create_success = true,
+            .evaluate_success = false,
+        },
+    }),
+    [](const TestParamInfo<InfieldsFilterTestCase> &info) {
       return info.param.test_name;
     });
 

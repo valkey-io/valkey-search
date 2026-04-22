@@ -7,7 +7,7 @@
     ],
     "history": [
       [
-        "1.2.0", 
+        "1.2.0",
         "Added Text Indexing and Search support"
       ]
     ],
@@ -77,6 +77,27 @@
         "type": "pure-token",
         "optional": true,
         "token": "INORDER"
+      },
+      {
+        "name": "INFIELDS",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "infields_token",
+            "type": "pure-token",
+            "token": "INFIELDS"
+          },
+          {
+            "name": "count",
+            "type": "integer"
+          },
+          {
+            "name": "fields",
+            "type": "string",
+            "multiple": true
+          }
+        ]
       },
       {
         "name": "LIMIT",

@@ -765,24 +765,61 @@ absl::Status FilterParser::SetupTextFieldConfiguration(
     if (with_suffix && !text_index->WithSuffixTrie()) {
       return absl::InvalidArgumentError("Field does not support suffix search");
     }
+    // INFIELDS restricts the allowed field set for every term, including
+    // explicit @field: terms. If the explicit field is not in INFIELDS, the
+    // intersection is empty and the term matches nothing (Redis Stack parity).
+    if (options_.infields && !options_.infields->empty() &&
+        !options_.infields->contains(*field_name)) {
+      field_mask = 0ULL;
+      return absl::OkStatus();
+    }
     auto identifier = index_schema_.GetIdentifier(*field_name).value();
     filter_identifiers_.insert(identifier);
     field_mask = 1ULL << text_index->GetTextFieldNumber();
   } else {
-    // Set identifiers to include all text fields in the index schema.
-    auto text_identifiers = index_schema_.GetAllTextIdentifiers(with_suffix);
-    // Set field mask to include all text fields in the index schema.
-    field_mask = index_schema_.GetAllTextFieldMask(with_suffix);
-    if (text_identifiers.size() == 0 || field_mask == 0ULL) {
-      if (with_suffix) {
-        return absl::InvalidArgumentError("No fields support suffix search");
+    // INFIELDS: restrict field mask to specified text fields.
+    if (options_.infields && !options_.infields->empty()) {
+      field_mask = 0ULL;
+      filter_identifiers_.reserve(filter_identifiers_.size() +
+                                  options_.infields->size());
+      for (const auto& field : *options_.infields) {
+        auto index = index_schema_.GetIndex(field);
+        if (!index.ok() ||
+            index.value()->GetIndexerType() != indexes::IndexerType::kText) {
+          continue;  // Silently ignore non-text / non-existent fields
+        }
+        auto* text_index =
+            static_cast<const indexes::Text*>(index.value().get());
+        if (with_suffix && !text_index->WithSuffixTrie()) {
+          continue;  // Skip fields that don't support suffix
+        }
+        auto identifier = index_schema_.GetIdentifier(field);
+        if (!identifier.ok()) {
+          continue;  // Silently ignore fields without identifiers
+        }
+        filter_identifiers_.insert(identifier.value());
+        field_mask |= 1ULL << text_index->GetTextFieldNumber();
       }
-      return absl::InvalidArgumentError("Index does not have any text field");
+      if (field_mask == 0ULL) {
+        // No valid INFIELDS fields - field_mask stays 0, matching nothing.
+        return absl::OkStatus();
+      }
+    } else {
+      // Set identifiers to include all text fields in the index schema.
+      auto text_identifiers = index_schema_.GetAllTextIdentifiers(with_suffix);
+      // Set field mask to include all text fields in the index schema.
+      field_mask = index_schema_.GetAllTextFieldMask(with_suffix);
+      if (text_identifiers.size() == 0 || field_mask == 0ULL) {
+        if (with_suffix) {
+          return absl::InvalidArgumentError("No fields support suffix search");
+        }
+        return absl::InvalidArgumentError("Index does not have any text field");
+      }
+      filter_identifiers_.reserve(filter_identifiers_.size() +
+                                  text_identifiers.size());
+      filter_identifiers_.insert(text_identifiers.begin(),
+                                 text_identifiers.end());
     }
-    filter_identifiers_.reserve(filter_identifiers_.size() +
-                                text_identifiers.size());
-    filter_identifiers_.insert(text_identifiers.begin(),
-                               text_identifiers.end());
   }
   return absl::OkStatus();
 }

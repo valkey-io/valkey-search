@@ -22,23 +22,20 @@
 namespace valkey_search {
 namespace {
 
+using coordinator::InfieldsFromGRPC;
 using coordinator::ParametersToGRPCSearchRequest;
 
 class SearchConverterInfieldsTest : public vmsdk::ValkeyTest {};
 
-// Helper: serialize engaged infields to proto, read back as a set.
+// Helper: serialize engaged infields to proto, decode via InfieldsFromGRPC.
 absl::flat_hash_set<std::string> SerializeAndReadBackInfields(
     const absl::flat_hash_set<std::string>& original) {
   UnitTestSearchParameters params;
   params.infields = original;
 
   auto request = ParametersToGRPCSearchRequest(params);
-
-  absl::flat_hash_set<std::string> result;
-  for (const auto& field : request->infields()) {
-    result.insert(field);
-  }
-  return result;
+  auto decoded = InfieldsFromGRPC(*request);
+  return decoded.value_or(absl::flat_hash_set<std::string>{});
 }
 
 TEST_F(SearchConverterInfieldsTest, SerializeSingleField) {
@@ -46,13 +43,14 @@ TEST_F(SearchConverterInfieldsTest, SerializeSingleField) {
   EXPECT_EQ(SerializeAndReadBackInfields(original), original);
 }
 
-// Unset infields (nullopt) emits no bytes.
+// Unset infields (nullopt) emits no bytes and decodes back to nullopt.
 TEST_F(SearchConverterInfieldsTest, UnsetIsNotSerialized) {
   UnitTestSearchParameters params;
   EXPECT_FALSE(params.infields.has_value());
 
   auto request = ParametersToGRPCSearchRequest(params);
   EXPECT_EQ(request->infields_size(), 0);
+  EXPECT_FALSE(InfieldsFromGRPC(*request).has_value());
 }
 
 // An engaged-but-empty set collapses to the same wire bytes as unset. This is
@@ -64,6 +62,7 @@ TEST_F(SearchConverterInfieldsTest, EngagedEmptyCollapsesToUnset) {
 
   auto request = ParametersToGRPCSearchRequest(params);
   EXPECT_EQ(request->infields_size(), 0);
+  EXPECT_FALSE(InfieldsFromGRPC(*request).has_value());
 }
 
 TEST_F(SearchConverterInfieldsTest, WireRoundTrip) {

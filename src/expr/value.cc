@@ -516,11 +516,16 @@ Value FuncTimefmt(const Value& ts, const Value& fmt) {
   time_t timestamp = (time_t)*timestampd;
   ::gmtime_r(&timestamp, &tm);
 
+  const std::string_view fmt_view = fmt.AsStringView();
+  if (fmt_view.empty()) {
+    return Value(std::string{});
+  }
+
   std::string result;
   result.resize(100);
   size_t result_bytes = 0;
   while ((result_bytes = strftime(result.data(), result.size(),
-                                  fmt.AsStringView().data(), &tm)) == 0) {
+                                  fmt_view.data(), &tm)) == 0) {
     result.resize(result.size() * 2);
   }
   result.resize(result_bytes);

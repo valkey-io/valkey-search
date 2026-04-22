@@ -148,8 +148,7 @@ std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructInfieldsParser() {
         parameters.infields->reserve(parameters.infields->size() + count);
         for (uint32_t i = 0; i < count; ++i) {
           VMSDK_ASSIGN_OR_RETURN(auto field, itr.PopNext());
-          parameters.infields->insert(
-              std::string(vmsdk::ToStringView(field)));
+          parameters.infields->insert(std::string(vmsdk::ToStringView(field)));
         }
         return absl::OkStatus();
       });

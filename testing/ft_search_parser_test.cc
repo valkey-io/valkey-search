@@ -1044,8 +1044,8 @@ INSTANTIATE_TEST_SUITE_P(
             .score_as = "",
             .search_parameters_str = "INFIELDS 3 f1 f2 f3",
             .vector_query = false,
-            .expected_infields =
-                absl::flat_hash_set<std::string>{"f1", "f2", "f3"},
+            .expected_infields = absl::flat_hash_set<std::string>{"f1", "f2",
+                                                                  "f3"},
         },
         {
             .test_name = "infields_duplicate_fields_deduped",

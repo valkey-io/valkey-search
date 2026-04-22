@@ -783,6 +783,14 @@ absl::Status FilterParser::SetupTextFieldConfiguration(
     if (with_suffix && !text_index->WithSuffixTrie()) {
       return absl::InvalidArgumentError("Field does not support suffix search");
     }
+    // INFIELDS restricts the allowed field set for every term, including
+    // explicit @field: terms. If the explicit field is not in INFIELDS, the
+    // intersection is empty and the term matches nothing (Redis Stack parity).
+    if (options_.infields && !options_.infields->empty() &&
+        !options_.infields->contains(*field_name)) {
+      field_mask = 0ULL;
+      return absl::OkStatus();
+    }
     auto identifier = index_schema_.GetIdentifier(*field_name).value();
     filter_identifiers_.insert(identifier);
     field_mask = 1ULL << text_index->GetTextFieldNumber();

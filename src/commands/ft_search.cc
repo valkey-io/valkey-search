@@ -309,12 +309,20 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
   // Increment success counter.
   ++Metrics::GetStats().query_successful_requests_cnt;
 
-  // 1. Handle early reply scenarios
-  if (HandleEarlyReplyScenarios(ctx, search_result, *this)) {
+  // 1. Handle early reply for zero-results case.
+  if (query::ShouldReturnNoResults(*this)) {
+    ValkeyModule_ReplyWithArray(ctx, 1);
+    ValkeyModule_ReplyWithLongLong(ctx, search_result.total_count);
     return;
   }
 
-  // 2. Process neighbors for the query
+  // 2. NOCONTENT without SORTBY: skip content fetching entirely.
+  if (no_content && !sortby.has_value()) {
+    SendReplyNoContent(ctx, search_result, *this);
+    return;
+  }
+
+  // 3. Fetch attribute contents (needed for SORTBY and/or content replies).
   auto status = ProcessNeighborsForQuery(ctx, search_result, *this);
   if (!status.ok()) {
     ++Metrics::GetStats().query_failed_requests_cnt;
@@ -322,9 +330,16 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
     return;
   }
 
+  // 4. Sort — must run after attribute contents are populated.
   ApplySorting(search_result.neighbors, *this);
 
-  // 3. Serialize neighbors based on query type
+  // 5. NOCONTENT with SORTBY: reply without field content.
+  if (no_content) {
+    SendReplyNoContent(ctx, search_result, *this);
+    return;
+  }
+
+  // 6. Serialize neighbors based on query type.
   if (IsNonVectorQuery()) {
     SerializeNonVectorNeighbors(ctx, search_result, *this);
   } else {

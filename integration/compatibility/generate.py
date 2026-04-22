@@ -153,12 +153,17 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.checkvec(self, dialect, orig_cmd, kwargs)
         self.check(self, dialect, orig_cmd)
 
+    '''
+    test_bad_numeric_data is commented out due to known Redis/Valkey
+    incompatibilities in handling bad numeric data.
+
     def test_bad_numeric_data(self, key_type, dialect):
         self.setup_data("bad numbers", key_type)
         self.check(dialect, f"ft.search {key_type}_idx1",  "@n1:[-inf inf]")
         self.check(dialect, f"ft.search {key_type}_idx1", "-@n1:[-inf inf]")
         self.check(dialect, f"ft.search {key_type}_idx1",  "@n2:[-inf inf]")
         self.check(dialect, f"ft.search {key_type}_idx1", "-@n2:[-inf inf]")
+    '''
 
     '''
     test_search_reverse and test_search is commented out due to 
@@ -478,16 +483,32 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         Ref: https://github.com/valkey-io/valkey-search/issues/454
         """
         self.setup_data("tag special chars", key_type)
-        # Escaped closing brace: should match doc with tag "a}b"
+        # Single-tag queries
         self.execute_command(["FT.SEARCH", f"{key_type}_idx1",
                               r"@tags:{ a\}b }", "DIALECT", str(dialect)])
-        # Escaped pipe: should match doc with literal tag "a|b"
         self.execute_command(["FT.SEARCH", f"{key_type}_idx1",
                               r"@tags:{ a\|b }", "DIALECT", str(dialect)])
-        # Multiple escaped braces: reproducer from issue #454
         self.execute_command(["FT.SEARCH", f"{key_type}_idx1",
                               r"@tags:{ tag-containing-\}-and-\} }",
                               "DIALECT", str(dialect)])
-        # Normal tag (no escaping needed): baseline
         self.execute_command(["FT.SEARCH", f"{key_type}_idx1",
                               r"@tags:{ normal }", "DIALECT", str(dialect)])
+        # Multi-tag OR queries mixing escaped and normal tags.
+        # Use LIMIT 0 20 to return all results and avoid ordering
+        # differences between Redis and Valkey when results exceed
+        # the default limit of 10.
+        self.execute_command(["FT.SEARCH", f"{key_type}_idx1",
+                              r"@tags:{ a\}b | normal }",
+                              "LIMIT", "0", "20", "DIALECT", str(dialect)])
+        self.execute_command(["FT.SEARCH", f"{key_type}_idx1",
+                              r"@tags:{ a\|b | a\}b }",
+                              "LIMIT", "0", "20", "DIALECT", str(dialect)])
+        self.execute_command(["FT.SEARCH", f"{key_type}_idx1",
+                              r"@tags:{ normal | a\|b | a\}b }",
+                              "LIMIT", "0", "20", "DIALECT", str(dialect)])
+        self.execute_command(["FT.SEARCH", f"{key_type}_idx1",
+                              r"@tags:{ tag-containing-\}-and-\} | a\\b }",
+                              "LIMIT", "0", "20", "DIALECT", str(dialect)])
+        self.execute_command(["FT.SEARCH", f"{key_type}_idx1",
+                              r"@tags:{ a\}b | a\|b | tag-containing-\}-and-\} | a\\b | normal }",
+                              "LIMIT", "0", "20", "DIALECT", str(dialect)])

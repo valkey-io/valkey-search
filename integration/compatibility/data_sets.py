@@ -281,6 +281,7 @@ def compute_data_sets():
     data["reverse vector numbers"] = {}
     data["bad numbers"] = {}
     data["hard strings"] = {}
+    data["tag special chars"] = {}
     vec_algos = ["flat", "hnsw"]
     metrics = ["cosine", "ip", "l2"]
     for algo in vec_algos:
@@ -494,29 +495,34 @@ def compute_data_sets():
                     for y in vector_points
                     for z in vector_points
                 ]
-    return data
 
-
-def compute_tag_special_chars_data():
-    ''' Generate data set for testing escaped special characters in tag queries. '''
-    data = {"tag special chars": {}}
+    # Tag special characters data set
+    # Uses comma separator so }, |, and \ appear literally in stored tags.
+    tag_special_base_tags = ["a}b", "a|b", "normal", "tag-containing-}-and-}", "a\\b"]
     for key_type in ["hash", "json"]:
+        # Comma separator (non-default)
         if key_type == "hash":
             create_cmd = ("FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: "
                           "SCHEMA tags TAG SEPARATOR ,")
         else:
             create_cmd = ("FT.CREATE json_idx1 ON JSON PREFIX 1 json: "
                           "SCHEMA $.tags AS tags TAG SEPARATOR ,")
-        data["tag special chars"][CREATES_KEY(key_type)] = [create_cmd]
-        data["tag special chars"][SETS_KEY(key_type)] = [
-            (f"{key_type}:1", {"tags": "a}b"}),
-            (f"{key_type}:2", {"tags": "a|b"}),
-            (f"{key_type}:3", {"tags": "normal"}),
-            (f"{key_type}:4", {"tags": "tag-containing-}-and-}"}),
-            (f"{key_type}:5", {"tags": "a\\b"}),
-        ]
-    return data
 
+        docs = []
+        doc_id = 1
+        # Single-tag documents
+        for tag in tag_special_base_tags:
+            docs.append((f"{key_type}:{doc_id}", {"tags": tag}))
+            doc_id += 1
+        # Multi-tag combinations (all pairs)
+        for t1, t2 in itertools.combinations(tag_special_base_tags, 2):
+            docs.append((f"{key_type}:{doc_id}", {"tags": f"{t1},{t2}"}))
+            doc_id += 1
+
+        data["tag special chars"][CREATES_KEY(key_type)] = [create_cmd]
+        data["tag special chars"][SETS_KEY(key_type)] = docs
+
+    return data
 
 def compute_text_data_sets(dataset_name, seed=123, schema_type="default"):
     """Generate random documents for a specific dataset.
@@ -616,20 +622,13 @@ def compute_text_data_sets(dataset_name, seed=123, schema_type="default"):
 def load_data(client, data_set, key_type, data_source=None, schema_type="default"):
     # Auto-detect data source based on data_set name
     if data_source is None:
-        if data_set in TEXT_DATASETS:
-            data_source = "text"
-        elif data_set == "tag special chars":
-            data_source = "tag_special_chars"
-        else:
-            data_source = "vector"
+        data_source = "text" if data_set in TEXT_DATASETS else "vector"
 
     match data_source:
         case "vector":
             data = compute_data_sets()
         case "text":
             data = compute_text_data_sets(data_set, schema_type=schema_type)
-        case "tag_special_chars":
-            data = compute_tag_special_chars_data()
         case _:
             raise ValueError(f"Unknown data source: {data_source}")
     load_list = data[data_set][SETS_KEY(key_type)]
@@ -663,7 +662,6 @@ def load_data(client, data_set, key_type, data_source=None, schema_type="default
 
 def load_data_cluster(cluster_client, test_case, data_set, key_type):
     data = compute_data_sets()
-    data.update(compute_tag_special_chars_data())
 
     primary0 = test_case.new_client_for_primary(0)
     for create_cmd in data[data_set][CREATES_KEY(key_type)]:

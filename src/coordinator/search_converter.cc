@@ -43,6 +43,17 @@ void SortByToGRPC(const std::optional<query::SortByParameter>& sortby,
                        : coordinator::SORT_ORDER_DESCENDING);
 }
 
+std::optional<absl::flat_hash_set<std::string>> InfieldsFromGRPC(
+    const SearchIndexPartitionRequest& request) {
+  if (request.infields().empty()) {
+    return std::nullopt;
+  }
+  absl::flat_hash_set<std::string> infields;
+  infields.reserve(request.infields().size());
+  infields.insert(request.infields().begin(), request.infields().end());
+  return infields;
+}
+
 std::optional<query::SortByParameter> SortByFromGRPC(
     const SearchIndexPartitionRequest& request) {
   if (!request.has_sortby()) {
@@ -255,11 +266,7 @@ absl::Status GRPCSearchRequestToParameters(
   parameters->filter_parse_results.query_operations =
       static_cast<QueryOperations>(request.query_operations());
   parameters->sortby_parameter = SortByFromGRPC(request);
-  if (!request.infields().empty()) {
-    auto& infields = parameters->infields.emplace();
-    infields.reserve(request.infields().size());
-    infields.insert(request.infields().begin(), request.infields().end());
-  }
+  parameters->infields = InfieldsFromGRPC(request);
   return absl::OkStatus();
 }
 

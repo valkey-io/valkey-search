@@ -377,6 +377,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   MakeReference(absl::string_view name, bool create) override;
   absl::StatusOr<expr::Value> GetParam(
       absl::string_view s) const override;
+  bool UseFilterComparisonSemantics() const override { return true; }
 
  protected:
   IndexSchema(ValkeyModuleCtx *ctx,

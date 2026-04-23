@@ -7,10 +7,9 @@
 
 #include "src/filter_expr.h"
 
-#include <iostream>
-
 #include "absl/strings/numbers.h"
 #include "src/index_schema.h"
+#include "vmsdk/src/log.h"
 #include "vmsdk/src/type_conversions.h"
 
 namespace valkey_search {
@@ -31,6 +30,10 @@ expr::Value FilterAttributeReference::GetValue(
     if (absl::SimpleAtod(data_view, &d)) {
       return expr::Value(d);
     }
+    VMSDK_LOG(WARNING, nullptr)
+        << "FILTER: Failed to parse numeric field '" << alias_
+        << "' as double, raw value: [" << data_view
+        << "] (length=" << data_view.size() << ")";
   }
   return expr::Value(data_view);
 }

@@ -12,6 +12,7 @@
 
 #include "src/expr/expr.h"
 #include "src/expr/value.h"
+#include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
 
 namespace valkey_search {
@@ -20,8 +21,9 @@ namespace valkey_search {
 // Holds the alias used to look up values in MutatedAttributes.
 class FilterAttributeReference : public expr::Expression::AttributeReference {
  public:
-  FilterAttributeReference(std::string alias, indexes::IndexerType type)
-      : alias_(std::move(alias)), type_(type) {}
+  FilterAttributeReference(std::string alias, indexes::IndexerType type,
+                           data_model::AttributeDataType data_type)
+      : alias_(std::move(alias)), type_(type), data_type_(data_type) {}
 
   expr::Value GetValue(expr::Expression::EvalContext& ctx,
                        const expr::Expression::Record& record) const override;
@@ -31,6 +33,7 @@ class FilterAttributeReference : public expr::Expression::AttributeReference {
  private:
   std::string alias_;
   indexes::IndexerType type_;
+  data_model::AttributeDataType data_type_;
 };
 
 // Adapter that makes MutatedAttributes accessible through the expression

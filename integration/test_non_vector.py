@@ -466,6 +466,157 @@ def validate_aggregate_complex_queries(client: Valkey):
     assert result[1][1] == b'406'
     assert result[1][3] == b'4060'
 
+    # 17. FIRST_VALUE reducer - simple mode (no BY clause)
+    # Note: Simple mode is non-deterministic as it depends on retrieval order
+    # We only verify that valid values are returned, not specific values
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "2", "price", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "FIRST_VALUE", "1", "@price", "AS", "first_price"
+    )
+    assert result[0] == 2
+    for i in range(1, len(result)):
+        row = dict(zip(result[i][::2], result[i][1::2]))
+        assert b'category' in row
+        assert b'first_price' in row
+        first_price = float(row[b'first_price'])
+        # Verify it's a valid price from the dataset (1-1000)
+        assert 1.0 <= first_price <= 1000.0
+        # Verify category matches expected values
+        if row[b'category'] == b'electronics':
+            # Electronics has odd prices (1, 3, 5, ..., 999)
+            assert int(first_price) % 2 == 1
+        else:
+            # Books has even prices (2, 4, 6, ..., 1000)
+            assert int(first_price) % 2 == 0
+
+    # 18. FIRST_VALUE reducer - sorted ASC mode (with BY clause)
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "3", "price", "rating", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "FIRST_VALUE", "4", "@price", "BY", "@rating", "ASC", "AS", "price_with_min_rating"
+    )
+    assert result[0] == 2
+    for i in range(1, len(result)):
+        row = dict(zip(result[i][::2], result[i][1::2]))
+        assert b'category' in row
+        assert b'price_with_min_rating' in row
+        price_with_min_rating = float(row[b'price_with_min_rating'])
+        if row[b'category'] == b'electronics':
+            # Multiple electronics have the same minimum rating (1.0), so any of their prices is valid
+            valid_prices_for_min_rating = {1, 101, 201, 301, 401, 501, 601, 701, 801, 901}
+            assert price_with_min_rating in valid_prices_for_min_rating, \
+                f"Electronics price_with_min_rating should be one of {valid_prices_for_min_rating}, got {price_with_min_rating}"
+        else:
+            # Multiple books have the same minimum rating (2.0), so any of their prices is valid
+            valid_prices_for_min_rating = {2, 102, 202, 302, 402, 502, 602, 702, 802, 902}
+            assert price_with_min_rating in valid_prices_for_min_rating, \
+                f"Books price_with_min_rating should be one of {valid_prices_for_min_rating}, got {price_with_min_rating}"
+
+    # 19. FIRST_VALUE reducer - sorted DESC mode (with BY clause)
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "3", "price", "rating", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "FIRST_VALUE", "4", "@price", "BY", "@rating", "DESC", "AS", "price_with_max_rating"
+    )
+    assert result[0] == 2
+    for i in range(1, len(result)):
+        row = dict(zip(result[i][::2], result[i][1::2]))
+        assert b'category' in row
+        assert b'price_with_max_rating' in row
+        price_with_max_rating = float(row[b'price_with_max_rating'])
+        if row[b'category'] == b'electronics':
+            # Multiple electronics have the same maximum rating (99.0), so any of their prices is valid
+            valid_prices_for_max_rating = {99, 199, 299, 399, 499, 599, 699, 799, 899, 999}
+            assert price_with_max_rating in valid_prices_for_max_rating, \
+                f"Electronics price_with_max_rating should be one of {valid_prices_for_max_rating}, got {price_with_max_rating}"
+        else:
+            # Multiple books have the same maximum rating (100.0), so any of their prices is valid
+            valid_prices_for_max_rating = {100, 200, 300, 400, 500, 600, 700, 800, 900, 1000}
+            assert price_with_max_rating in valid_prices_for_max_rating, \
+                f"Books price_with_max_rating should be one of {valid_prices_for_max_rating}, got {price_with_max_rating}"
+
+    # 20. FIRST_VALUE reducer - multiple groups with independent results
+    # Note: Simple mode (first_price) is non-deterministic
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "3", "price", "rating", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "FIRST_VALUE", "1", "@price", "AS", "first_price",
+        "REDUCE", "FIRST_VALUE", "4", "@price", "BY", "@rating", "ASC", "AS", "price_min_rating",
+        "REDUCE", "FIRST_VALUE", "4", "@price", "BY", "@rating", "DESC", "AS", "price_max_rating",
+        "REDUCE", "COUNT", "0", "AS", "count"
+    )
+    assert result[0] == 2
+    
+    electronics_found = False
+    books_found = False
+    
+    for i in range(1, len(result)):
+        row = dict(zip(result[i][::2], result[i][1::2]))
+        assert b'category' in row
+        assert b'first_price' in row
+        assert b'price_min_rating' in row
+        assert b'price_max_rating' in row
+        assert b'count' in row
+        
+        category = row[b'category']
+        first_price = float(row[b'first_price'])
+        price_min_rating = float(row[b'price_min_rating'])
+        price_max_rating = float(row[b'price_max_rating'])
+        count = int(row[b'count'])
+        
+        if category == b'electronics':
+            electronics_found = True
+            # Simple mode is non-deterministic, just verify valid range
+            assert 1.0 <= first_price <= 1000.0, f"Electronics first_price out of range: {first_price}"
+            assert int(first_price) % 2 == 1, f"Electronics should have odd prices, got {first_price}"
+            # Sorted modes - multiple electronics have the same min/max rating, so any of their prices is valid
+            valid_prices_for_min_rating = {1, 101, 201, 301, 401, 501, 601, 701, 801, 901}
+            assert price_min_rating in valid_prices_for_min_rating, \
+                f"Electronics price_min_rating should be one of {valid_prices_for_min_rating}, got {price_min_rating}"
+            valid_prices_for_max_rating = {99, 199, 299, 399, 499, 599, 699, 799, 899, 999}
+            assert price_max_rating in valid_prices_for_max_rating, \
+                f"Electronics price_max_rating should be one of {valid_prices_for_max_rating}, got {price_max_rating}"
+            assert count == 500, f"Electronics count should be 500, got {count}"
+        elif category == b'books':
+            books_found = True
+            # Simple mode is non-deterministic, just verify valid range
+            assert 1.0 <= first_price <= 1000.0, f"Books first_price out of range: {first_price}"
+            assert int(first_price) % 2 == 0, f"Books should have even prices, got {first_price}"
+            # Sorted modes - multiple books have the same min/max rating, so any of their prices is valid
+            valid_prices_for_min_rating = {2, 102, 202, 302, 402, 502, 602, 702, 802, 902}
+            assert price_min_rating in valid_prices_for_min_rating, \
+                f"Books price_min_rating should be one of {valid_prices_for_min_rating}, got {price_min_rating}"
+            valid_prices_for_max_rating = {100, 200, 300, 400, 500, 600, 700, 800, 900, 1000}
+            assert price_max_rating in valid_prices_for_max_rating, \
+                f"Books price_max_rating should be one of {valid_prices_for_max_rating}, got {price_max_rating}"
+            assert count == 500, f"Books count should be 500, got {count}"
+        else:
+            raise AssertionError(f"Unexpected category: {category}")
+    
+    assert electronics_found, "Electronics group not found in results"
+    assert books_found, "Books group not found in results"
+
+    # 21. FIRST_VALUE reducer - numeric field type handling
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "2", "price", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "FIRST_VALUE", "4", "@price", "BY", "@price", "ASC", "AS", "min_price"
+    )
+    assert result[0] == 2
+    for i in range(1, len(result)):
+        row = dict(zip(result[i][::2], result[i][1::2]))
+        min_price = float(row[b'min_price'])
+        if row[b'category'] == b'electronics':
+            assert min_price == 1.0, f"Electronics min_price should be 1.0, got {min_price}"
+        else:
+            assert min_price == 2.0, f"Books min_price should be 2.0, got {min_price}"
+
 class TestNonVector(ValkeySearchTestCaseBase):
 
     def test_basic(self):

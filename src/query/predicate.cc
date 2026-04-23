@@ -78,20 +78,14 @@ TagPredicate::TagPredicate(const indexes::Tag* index,
                            const absl::flat_hash_set<absl::string_view>& tags)
     : Predicate(PredicateType::kTag),
       index_(index),
-<<<<<<< HEAD
-      identifier_(vmsdk::MakeUniqueRedisString(identifier)),
-      raw_tag_string_(raw_tag_string),
-      tags_(tags.begin(), tags.end()) {}
-=======
       alias_(alias),
-      identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
+      identifier_(vmsdk::MakeUniqueRedisString(identifier)),
       raw_tag_string_(raw_tag_string) {
   // Unescape each tag (e.g., \| -> |, \\ -> \)
   for (const auto& tag : tags) {
     tags_.insert(indexes::Tag::UnescapeTag(tag));
   }
 }
->>>>>>> 1b16543 (Fix tag OR syntax in hybrid queries and add filter expression tests (#452))
 
 bool TagPredicate::Evaluate(Evaluator& evaluator) const {
   return evaluator.EvaluateTags(*this);

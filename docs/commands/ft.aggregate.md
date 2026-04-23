@@ -83,12 +83,13 @@ The output of the `GROUPBY`stage is one record for each unique bucket.
 
 The following reducer functions are available. The reducer functions that take an input expression will convert that expression into a number.
 
-| Syntax                        | Function                                                                                                                           |
-| :---------------------------- | :--------------------------------------------------------------------------------------------------------------------------------- |
-| COUNT 0                       | Number of records                                                                                                                  |
-| COUNT_DISTINCT 1 <expression> | The exact number of distinct values of the expression. Caution this consumes memory proportional to the number of distinct values. |
-| SUM 1 <expression>            | The numerical sum of the values of the expression.                                                                                 |
-| MIN 1 <expression>            | The smallest numerical values of the expression.                                                                                   |
-| MAX 1 <expression>            | The largest numerical values of the expression.                                                                                    |
-| AVG 1 <expression>            | The numerical average of the values of the expression.                                                                             |
-| STDDEV 1 <expression>         | The standard deviation the values of the expression.                                                                               |
+| Syntax                             | Function                                                                                                                           |
+| :--------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------- |
+| COUNT 0                            | Number of records                                                                                                                  |
+| COUNT_DISTINCT 1 <expression>      | The exact number of distinct values of the expression. Caution this consumes memory proportional to the number of distinct values. |
+| COUNT_DISTINCTISH 1 <expression>   | Approximate number of distinct values using HyperLogLog (P=14). Uses constant ~12KB memory per group with ~0.81% standard error. Preferred over COUNT_DISTINCT for large groups. Nil values are excluded. |
+| SUM 1 <expression>                 | The numerical sum of the values of the expression.                                                                                 |
+| MIN 1 <expression>                 | The smallest numerical values of the expression.                                                                                   |
+| MAX 1 <expression>                 | The largest numerical values of the expression.                                                                                    |
+| AVG 1 <expression>                 | The numerical average of the values of the expression.                                                                             |
+| STDDEV 1 <expression>              | The standard deviation the values of the expression.                                                                               |

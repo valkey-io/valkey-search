@@ -245,37 +245,25 @@ class Count : public GroupBy::ReducerInstance {
 
 class RandomSample : public GroupBy::ReducerInstance {
  public:
-  void ProcessRecords(const std::vector<ArgVector>& all_values) override {
-    if (all_values.empty()) return;
+  static constexpr size_t kMaxSampleSize = 1000;
 
-    // Initialize sample_size_ once from arg[1], which is a query parameter
-    // constant across all records.
-    constexpr size_t kMaxSampleSize = 1000;
-    auto sz_opt = all_values[0][1].AsDouble();
-    double sz = sz_opt.value_or(-1.0);
-    if (!sz_opt.has_value() || sz < 0 || sz != std::floor(sz) ||
-        static_cast<size_t>(sz) > kMaxSampleSize) {
-      return;
-    }
-    sample_size_ = static_cast<size_t>(sz);
+  explicit RandomSample(size_t sample_size) : sample_size_(sample_size) {
     samples_.reserve(sample_size_);
+  }
 
-    for (const auto& values : all_values) {
-      if (values[0].IsNil()) {
-        continue;
+  void ProcessRecord(const ArgVector& values) override {
+    if (values[0].IsNil()) return;
+    // Reservoir sampling algorithm (Algorithm R)
+    if (seen_count_ < sample_size_) {
+      samples_.push_back(values[0]);
+    } else if (sample_size_ > 0) {
+      std::uniform_int_distribution<size_t> dist(0, seen_count_ - 1);
+      size_t j = dist(Rng());
+      if (j < sample_size_) {
+        samples_[j] = values[0];
       }
-      // Reservoir sampling algorithm (Algorithm R)
-      if (seen_count_ < sample_size_) {
-        samples_.push_back(values[0]);
-      } else if (sample_size_ > 0) {
-        std::uniform_int_distribution<size_t> dist(0, seen_count_ - 1);
-        size_t j = dist(Rng());
-        if (j < sample_size_) {
-          samples_[j] = values[0];
-        }
-      }
-      seen_count_++;
     }
+    seen_count_++;
   }
 
   expr::Value GetResult() const override {
@@ -291,7 +279,7 @@ class RandomSample : public GroupBy::ReducerInstance {
   }
 
   std::vector<expr::Value> samples_;
-  size_t sample_size_ = 0;
+  size_t sample_size_;
   size_t seen_count_ = 0;
 };
 
@@ -312,13 +300,6 @@ class Min : public GroupBy::ReducerInstance {
     }
   }
   expr::Value GetResult() const override { return min_; }
-};
-
-struct ReducerInstanceVector : GroupBy::ReducerInstance {
-  std::vector<ArgVector> collected_values_;
-  void ProcessRecord(const ArgVector& values) override {
-    collected_values_.push_back(values);
-  }
 };
 
 class Max : public GroupBy::ReducerInstance {
@@ -395,6 +376,75 @@ class CountDistinct : public GroupBy::ReducerInstance {
   }
 };
 
+struct RandomSampleReducer : GroupBy::Reducer {
+  size_t sample_size_ = 0;
+  std::unique_ptr<GroupBy::ReducerInstance> MakeInstance() override {
+    return std::make_unique<RandomSample>(sample_size_);
+  }
+};
+
+// Custom parser for RANDOM_SAMPLE: compiles both args as expressions (so the
+// base Reducer::operator<< produces a correct auto-alias), then evaluates the
+// sample-size arg at parse time to validate it.
+absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> RandomSampleReducerParser(
+    std::string_view name, AggregateParameters& parameters,
+    vmsdk::ArgsIterator& itr) {
+  auto r = std::make_unique<RandomSampleReducer>();
+  r->name_ = name;
+
+  uint32_t cnt{0};
+  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, cnt));
+  if (cnt < 2) {
+    return absl::OutOfRangeError(absl::StrCat("incorrect number of arguments (",
+                                              cnt, ") to reducer ", name));
+  }
+  for (uint32_t i = 0; i < cnt; ++i) {
+    VMSDK_ASSIGN_OR_RETURN(auto arg, itr.PopNext(),
+                           _ << "Missing Reducer argument " << i);
+    if (i < 2) {
+      VMSDK_ASSIGN_OR_RETURN(
+          auto expr,
+          expr::Expression::Compile(parameters, vmsdk::ToStringView(arg)),
+          _ << " in GROUPBY stage");
+      r->args_.emplace_back(std::move(expr));
+    }
+    // Extra args beyond the two we need are silently consumed (Redis compat).
+  }
+
+  // Evaluate the sample-size expression (arg 1) at parse time.
+  expr::Expression::EvalContext ctx;
+  expr::Expression::Record record;
+  auto size_opt = r->args_[1]->Evaluate(ctx, record).AsDouble();
+  if (!size_opt.has_value() || *size_opt < 0 ||
+      *size_opt != std::floor(*size_opt)) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        name, " sample size must be a non-negative integer constant"));
+  }
+  if (static_cast<size_t>(*size_opt) > RandomSample::kMaxSampleSize) {
+    return absl::OutOfRangeError(absl::StrCat(
+        name, " sample size must be <= ", RandomSample::kMaxSampleSize));
+  }
+  r->sample_size_ = static_cast<size_t>(*size_opt);
+
+  if (itr.PopIfNextIgnoreCase(valkey_search::aggregate::kAsParam)) {
+    VMSDK_ASSIGN_OR_RETURN(auto alias, itr.PopNext(),
+                           _ << "Missing Reducer alias");
+    VMSDK_ASSIGN_OR_RETURN(auto output, parameters.MakeReference(
+                                            vmsdk::ToStringView(alias), true));
+    r->output_ =
+        std::unique_ptr<Attribute>(dynamic_cast<Attribute*>(output.release()));
+  } else {
+    std::ostringstream os;
+    os << *r;
+    VMSDK_ASSIGN_OR_RETURN(auto output,
+                           parameters.MakeReference(os.str(), true));
+    r->output_ =
+        std::unique_ptr<Attribute>(dynamic_cast<Attribute*>(output.release()));
+  }
+
+  return std::unique_ptr<GroupBy::Reducer>(std::move(r));
+}
+
 template <typename T>
 struct BasicReducer : GroupBy::Reducer {
   // BasicReducer(std::string name) : GroupBy::Reducer(std::move(name)) {}
@@ -450,6 +500,7 @@ absl::flat_hash_map<std::string, GroupBy::ReducerInfo> GroupBy::reducerTable{
     {"COUNT_DISTINCT", &BasicReducerParser<CountDistinct, 1, 1>},
     {"MIN", &BasicReducerParser<Min, 1, 1>},
     {"MAX", &BasicReducerParser<Max, 1, 1>},
+    {"RANDOM_SAMPLE", &RandomSampleReducerParser},
     {"STDDEV", &BasicReducerParser<Stddev, 1, 1>},
     {"SUM", &BasicReducerParser<Sum, 1, 1>},
 };

@@ -68,6 +68,9 @@ class IndexBase {
   virtual absl::Status ForEachUnTrackedKey(
       absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn) const = 0;
 
+  // Default behavior: no extra normalization.
+  // JSON-specific type handling should be implemented by overriding in concrete
+  // index types as needed.
   virtual vmsdk::UniqueValkeyString NormalizeStringRecord(
       vmsdk::UniqueValkeyString input) const {
     return input;

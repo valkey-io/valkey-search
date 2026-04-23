@@ -64,17 +64,10 @@ inline UniqueRedisString MakeUniqueRedisString(const char *str) {
   return UniquePtrRedisString(nullptr);
 }
 
-<<<<<<< HEAD
 inline UniqueRedisString RetainUniqueRedisString(RedisModuleString *redis_str) {
+  VerifyMainThread();
   RedisModule_RetainString(nullptr, redis_str);
   return UniquePtrRedisString(redis_str);
-=======
-inline UniqueValkeyString RetainUniqueValkeyString(
-    ValkeyModuleString *valkey_str) {
-  VerifyMainThread();
-  ValkeyModule_RetainString(nullptr, valkey_str);
-  return UniquePtrValkeyString(valkey_str);
->>>>>>> a3fdb5c (Fix use-after-free race in DefaultReplyScoreAs() (#565))
 }
 
 struct RedisOpenKeyDeleter {

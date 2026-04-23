@@ -14,6 +14,7 @@
 
 #include "absl/container/btree_map.h"
 #include "gtest/gtest.h"
+#include "vmsdk/src/testing_infra/utils.h"
 #include "src/indexes/text/posting.h"
 
 namespace valkey_search::indexes::text {
@@ -98,8 +99,8 @@ class FlatPositionMapTest : public ::testing::Test {
 
 TEST_F(FlatPositionMapTest, EmptyMap) {
   absl::btree_map<Position, FieldMask> empty_map;
-  EXPECT_DEATH(FlatPositionMap::Create(empty_map, 1),
-               "Cannot create FlatPositionMap from empty position_map");
+  VMSDK_EXPECT_DEATH(FlatPositionMap::Create(empty_map, 1),
+                     "Cannot create FlatPositionMap from empty position_map");
 }
 
 TEST_F(FlatPositionMapTest, SinglePositionSingleField) {

@@ -19,7 +19,7 @@ TEST_F(FTInternalUpdateTest, WrongArguments) {
       TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.INTERNAL_UPDATE");
   argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_id");
 
-  EXPECT_DEATH(
+  VMSDK_EXPECT_DEATH(
       [[maybe_unused]] auto res = FTInternalUpdateCmd(&fake_ctx_, argv, 2),
       "FT.INTERNAL_UPDATE called with wrong argument count: 2");
 
@@ -60,7 +60,7 @@ TEST_F(FTInternalUpdateTest, ParseErrorWithLoadingFlagCrashes) {
   argv[3] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "invalid");
 
   // With LOADING flag but skip disabled by default, should crash
-  EXPECT_DEATH(
+  VMSDK_EXPECT_DEATH(
       [[maybe_unused]] auto res = FTInternalUpdateCmd(&fake_ctx_, argv, 4),
       "Internal update failure during AOF loading");
 
@@ -78,7 +78,7 @@ TEST_F(FTInternalUpdateTest, TooManyArguments) {
   argv[3] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "data2");
   argv[4] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "extra");
 
-  EXPECT_DEATH(
+  VMSDK_EXPECT_DEATH(
       [[maybe_unused]] auto res = FTInternalUpdateCmd(&fake_ctx_, argv, 5),
       "FT.INTERNAL_UPDATE called with wrong argument count: 5");
 

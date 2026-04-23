@@ -150,15 +150,15 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
 
     def checkall(self, dialect, *orig_cmd, **kwargs):
         '''Non-vector commands. Doesn't have support for '*' yet. '''
-        self.checkvec(self, dialect, orig_cmd, kwargs)
-        self.check(self, dialect, orig_cmd)
+        self.checkvec(dialect, *orig_cmd, **kwargs)
+        self.check(dialect, *orig_cmd)
 
     def test_bad_numeric_data(self, key_type, dialect):
         self.setup_data("bad numbers", key_type)
-        self.check(dialect, f"ft.search {key_type}_idx1",  "@n1:[-inf inf]")
-        self.check(dialect, f"ft.search {key_type}_idx1", "-@n1:[-inf inf]")
-        self.check(dialect, f"ft.search {key_type}_idx1",  "@n2:[-inf inf]")
-        self.check(dialect, f"ft.search {key_type}_idx1", "-@n2:[-inf inf]")
+        self.check(dialect, "ft.search", f"{key_type}_idx1", "@n1:[-inf inf]")
+        self.check(dialect, "ft.search", f"{key_type}_idx1", "-@n1:[-inf inf]")
+        self.check(dialect, "ft.search", f"{key_type}_idx1", "@n2:[-inf inf]")
+        self.check(dialect, "ft.search", f"{key_type}_idx1", "-@n2:[-inf inf]")
 
     def test_search_reverse(self, key_type, dialect):
         self.setup_data("reverse vector numbers", key_type)
@@ -463,8 +463,14 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
 
         for sort_key in ["n1", "n2"]:
             for direction in ["ASC", "DESC", ""]:
-                for return_keys in ["", "RETURN 3 @n1 @t1"]:
+                for return_keys in ["", "RETURN 2 @n1 @t1"]:
                     for wsk in ["", "WITHSORTKEYS"]:
                         for limit in ["LIMIT 0 5", "LIMIT 2 3", ""]:
                             self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY {sort_key} {direction} {return_keys} {limit} {wsk}")
 
+    # COUNT_DISTINCTISH compatibility tests are intentionally omitted.
+    # COUNT_DISTINCTISH uses HyperLogLog which is an approximate algorithm.
+    # Our implementation uses Valkey's dense HLL (P=14, MurmurHash64A)
+    # while Redis uses a different HLL (P=8, FNV hash), producing different
+    # approximate counts. Exact comparison is not meaningful.
+    # Functional testing is covered in integration/test_non_vector.py.

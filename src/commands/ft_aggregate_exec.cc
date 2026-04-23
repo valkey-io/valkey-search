@@ -12,6 +12,7 @@
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
 #include "src/commands/ft_aggregate_parser.h"
+#include "src/utils/hyperloglog_counter.h"
 #include "vmsdk/src/info.h"
 
 // #define DBG std::cerr
@@ -341,6 +342,18 @@ class CountDistinct : public GroupBy::ReducerInstance {
   }
 };
 
+class CountDistinctish : public GroupBy::ReducerInstance {
+  HyperLogLog hll_;
+  void ProcessRecord(const ArgVector& values) override {
+    if (!values[0].IsNil()) {
+      hll_.Add(values[0]);
+    }
+  }
+  expr::Value GetResult() const override {
+    return expr::Value(static_cast<double>(hll_.Estimate()));
+  }
+};
+
 template <typename T>
 struct BasicReducer : GroupBy::Reducer {
   // BasicReducer(std::string name) : GroupBy::Reducer(std::move(name)) {}
@@ -394,6 +407,7 @@ absl::flat_hash_map<std::string, GroupBy::ReducerInfo> GroupBy::reducerTable{
     {"AVG", &BasicReducerParser<Avg, 1, 1>},
     {"COUNT", &BasicReducerParser<Count, 0, 0>},
     {"COUNT_DISTINCT", &BasicReducerParser<CountDistinct, 1, 1>},
+    {"COUNT_DISTINCTISH", &BasicReducerParser<CountDistinctish, 1, 1>},
     {"MIN", &BasicReducerParser<Min, 1, 1>},
     {"MAX", &BasicReducerParser<Max, 1, 1>},
     {"STDDEV", &BasicReducerParser<Stddev, 1, 1>},

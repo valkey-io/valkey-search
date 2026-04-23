@@ -176,5 +176,21 @@ TEST_F(ExprTest, TypesTest) {
   }
 }
 
+TEST_F(ExprTest, EmptyExpressionIsRejected) {
+  for (absl::string_view expr : {"", " "}) {
+    auto compiled = Expression::Compile(cc, expr);
+    EXPECT_FALSE(compiled.ok())
+        << "Expression unexpectedly compiled: '" << expr << "'";
+  }
+}
+
+TEST_F(ExprTest, NotOperatorRequiresOperand) {
+  for (absl::string_view expr : {"!", "! ", "!()"}) {
+    auto compiled = Expression::Compile(cc, expr);
+    EXPECT_FALSE(compiled.ok())
+        << "Expression unexpectedly compiled: '" << expr << "'";
+  }
+}
+
 }  // namespace expr
 }  // namespace valkey_search

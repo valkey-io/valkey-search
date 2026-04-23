@@ -253,6 +253,31 @@ TEST_F(FTCreateTest, MaxIndexesLimit) {
       "reached (2). Cannot create additional indexes.\r\n");
 }
 
+TEST_F(FTCreateTest, TextFieldsLimit) {
+  int db_num = 1;
+  ON_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
+      .WillByDefault(testing::Return(db_num));
+
+  auto build_text_schema_argv = [](const std::string& index_name,
+                                   int text_field_count) {
+    std::vector<std::string> argv = {"FT.CREATE", index_name, "SCHEMA"};
+    for (int i = 0; i < text_field_count; ++i) {
+      argv.push_back(absl::StrCat("text_field", i + 1));
+      argv.push_back("TEXT");
+    }
+    return argv;
+  };
+
+  ExecuteFTCreateCommand(&fake_ctx_, build_text_schema_argv("text_idx_ok", 64));
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().RemoveIndexSchema(db_num, "text_idx_ok"));
+
+  ExecuteFTCreateCommand(
+      &fake_ctx_, build_text_schema_argv("text_idx_fail", 65), VALKEYMODULE_OK,
+      "-Invalid range: Value above maximum; The maximum number of text fields "
+      "cannot exceed 64.\r\n");
+}
+
 // Struct to hold parameters for max limit tests
 struct MaxLimitTestCase {
   std::string test_name;

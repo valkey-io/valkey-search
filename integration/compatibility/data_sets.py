@@ -110,8 +110,101 @@ TEXT_DATASETS = {
             ],
             'price': (0, 50)
         }
+    },
+    # ,.<>{}[]"':;!@#$%^&*()-+=~
+    'punctuation': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                # Unescaped only - these split into multiple tokens
+                "comma,period",
+                'run.jump',
+                'book<paper',
+                'physics>maths',
+                'cat{dog',
+                'fish}rabbit',
+                'old[new',
+                'tall]short',
+                'many"few',
+                "great'wall",
+                'inside:out',
+                'swim;pass',
+                'shout!out',
+                'email@password',
+                'office#home',
+                'dollar$sign',
+                'ten%percent',
+                'top^down',
+                'left&right',
+                'star*moon',
+                'include(exclude',
+                'key)board',
+                'minus-subtract',
+                'city+village',
+                'equal=lity',
+                'random~sum',
+            ],
+            'body': [
+                'freedom\\,justice',
+                'begin\\.end',
+                'ask\\<question',
+                'get\\>answer',
+                'round\\{about',
+                'ever\\}green',
+                'square\\[feet',
+                'circle\\]triangle',
+                'chat\\"gpt',
+                'redis\\\'valkey',
+                'sick\\:hungry',
+                'phone\\;laptop',
+                'soccer\\!tennis',
+                'address\\@field',
+                'hash\\#tag',
+                'money\\$rich',
+                'degree\\%cold',
+                'sharp\\^knife',
+                'friend\\&enemy',
+                'mountain\\*view',
+                'extra\\(time',
+                'sooner\\)later',
+                'deal\\-coupon',
+                'abundant\\+plant',
+                'blue\\=planet',
+                'milky\\~way',
+            ],
+            'color': ['red', 'blue', 'green'],
+            'price': (0, 10)
+        }
     }
 }
+
+# Schema flags per field type and schema variant.
+# For field types with multiple variants (like "text"), use a dict keyed by schema_type.
+# For simple field types, use a plain string (empty string if no extra flags needed).
+SCHEMA_FLAGS = {
+    "text": {
+        "default": "WITHSUFFIXTRIE",
+        "nostem": "WITHSUFFIXTRIE NOSTEM",
+    },
+    "tag": "",
+    "numeric": "",
+}
+
+def _build_field_schema(field: str, field_type: str, schema_type: str, for_json: bool = False) -> str:
+    """Build a single field's schema string for FT.CREATE."""
+    flags_entry = SCHEMA_FLAGS[field_type]
+    if isinstance(flags_entry, dict):
+        if schema_type not in flags_entry:
+            raise ValueError(f"Unknown index schema type: {schema_type}")
+        flags = flags_entry[schema_type]
+    else:
+        flags = flags_entry
+
+    field_def = f"{field} {field_type.upper()} {flags}".strip()
+
+    if for_json:
+        return f"$.{field} AS {field_def}"
+    return field_def
 
 def unbytes(b):
     if isinstance(b, bytes):
@@ -200,7 +293,6 @@ def compute_data_sets():
             for i in range(count)
         ]
         schema = " ".join(schema)
-        print(f"Generated schema: {schema}")
         #
         # Hard Numbers, edge case numbers.
         #
@@ -404,9 +496,7 @@ def compute_data_sets():
                 ]
     return data
 
-# TODO: stopwords, punctuation, numbers in text field (with periods, float, +/-)
-# TODO: special case with lexers (random lexical chars, prove lexical analyzer work correct) (isolation)
-def compute_text_data_sets(dataset_name, seed=123):
+def compute_text_data_sets(dataset_name, seed=123, schema_type="default"):
     """Generate random documents for a specific dataset.
     
     Args:
@@ -438,22 +528,22 @@ def compute_text_data_sets(dataset_name, seed=123):
         "json": "FT.CREATE json_idx1 ON JSON PREFIX 1 json: SCHEMA {}",
     }
     
-    # Build schema strings
+    # Build schema strings using the shared helper
     hash_schema_parts = []
     json_schema_parts = []
-    
+
     for field in text_fields:
-        hash_schema_parts.append(f"{field} TEXT WITHSUFFIXTRIE NOSTEM")
-        json_schema_parts.append(f"$.{field} AS {field} TEXT WITHSUFFIXTRIE NOSTEM")
-    
+        hash_schema_parts.append(_build_field_schema(field, "text", schema_type, for_json=False))
+        json_schema_parts.append(_build_field_schema(field, "text", schema_type, for_json=True))
+
     for field in tag_fields:
-        hash_schema_parts.append(f"{field} TAG")
-        json_schema_parts.append(f"$.{field} AS {field} TAG")
-    
+        hash_schema_parts.append(_build_field_schema(field, "tag", schema_type, for_json=False))
+        json_schema_parts.append(_build_field_schema(field, "tag", schema_type, for_json=True))
+
     for field in numeric_fields:
-        hash_schema_parts.append(f"{field} NUMERIC")
-        json_schema_parts.append(f"$.{field} AS {field} NUMERIC")
-    
+        hash_schema_parts.append(_build_field_schema(field, "numeric", schema_type, for_json=False))
+        json_schema_parts.append(_build_field_schema(field, "numeric", schema_type, for_json=True))
+
     hash_schema = " ".join(hash_schema_parts)
     json_schema = " ".join(json_schema_parts)
     
@@ -566,7 +656,7 @@ def compute_filter_data_sets(dataset_name):
     return data
 
 ### Helper Functions ###
-def load_data(client, data_set, key_type, data_source=None):
+def load_data(client, data_set, key_type, data_source=None, schema_type="default"):
     # Auto-detect data source based on data_set name
     if data_source is None:
         if data_set in TEXT_DATASETS:
@@ -580,7 +670,7 @@ def load_data(client, data_set, key_type, data_source=None):
         case "vector":
             data = compute_data_sets()
         case "text":
-            data = compute_text_data_sets(data_set)
+            data = compute_text_data_sets(data_set, schema_type=schema_type)
         case "filter":
             data = compute_filter_data_sets(data_set)
         case _:

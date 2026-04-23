@@ -34,6 +34,10 @@ namespace debug {
   vmsdk::debug::PausePoint(name, std::source_location::current())
 void PausePoint(absl::string_view point, std::source_location location);
 
+#define BACKGROUND_PAUSEPOINT(name) \
+  if (!vmsdk::IsMainThread()) {     \
+    PAUSEPOINT(name);               \
+  }                                 \
 //
 // This function is used by the control machinery (FT.DEBUG) to enable/disable
 // and test PausePoints.
@@ -51,6 +55,13 @@ absl::StatusOr<size_t> PausePointWaiters(absl::string_view point);
 //
 void PausePointList(ValkeyModuleCtx* ctx);
 
+//
+// Release all PausePoint waiters and clear the map.
+// Must be called during shutdown before global destructors run.
+//
+void ClearAllPausePoints();
+
+//
 //
 // Controlled variables are similar to Configurables in that they are
 // variables that code can use to control their behavior. Controlled Variables

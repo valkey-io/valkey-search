@@ -73,6 +73,9 @@ class IndexBase {
     return input;
   }
 
+  /// Returns the mutation weight for this index type
+  virtual uint32_t GetMutationWeight() const = 0;
+
  private:
   IndexerType indexer_type_{IndexerType::kNone};
 };

@@ -457,8 +457,8 @@ void MetadataManager::HandleBroadcastedMetadata(
       [address, this](grpc::Status s, GetGlobalMetadataResponse &response) {
         if (!s.ok()) {
           VMSDK_LOG_EVERY_N_SEC(WARNING, detached_ctx_.get(), 1)
-              << "Failed to get GlobalMetadata from " << address << ": "
-              << s.error_message();
+              << "Failed to get GlobalMetadata from " << address
+              << ", Error code: " << s.error_code();
           return;
         }
         vmsdk::RunByMain([ctx = detached_ctx_.get(),
@@ -823,7 +823,7 @@ void MetadataManager::RegisterForClusterMessages(ValkeyModuleCtx *ctx) {
 absl::Status MetadataManager::ShowMetadata(
     ValkeyModuleCtx *ctx, [[maybe_unused]] vmsdk::ArgsIterator &itr) const {
   auto metadata = metadata_.Get().DebugString();
-  VMSDK_LOG(WARNING, ctx) << "Metadata: " << metadata;
+  VMSDK_LOG(DEBUG, ctx) << "Metadata: " << metadata;
   ValkeyModule_ReplyWithStringBuffer(ctx, metadata.data(), metadata.size());
   return absl::OkStatus();
 }

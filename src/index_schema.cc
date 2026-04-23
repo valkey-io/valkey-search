@@ -462,27 +462,28 @@ std::unique_ptr<vmsdk::StopWatch> CreateQueueDelayCapturer() {
 // command.
 void IndexSchema::ProcessMultiQueue() {
   schedule_multi_exec_processing_ = false;
-  auto &multi_mutations = multi_mutations_.Get();
-  if (ABSL_PREDICT_TRUE(multi_mutations.keys.empty())) {
+  auto &multi_mutations_keys = multi_mutations_keys_.Get();
+  if (ABSL_PREDICT_TRUE(multi_mutations_keys.empty())) {
     return;
   }
-  multi_mutations.blocking_counter =
-      std::make_unique<absl::BlockingCounter>(multi_mutations.keys.size());
-  vmsdk::WriterMutexLock lock(&time_sliced_mutex_);
-  while (!multi_mutations.keys.empty()) {
-    auto key = multi_mutations.keys.front();
-    multi_mutations.keys.pop();
+
+  absl::BlockingCounter blocking_counter(multi_mutations_keys.size());
+  vmsdk::WriterMutexLock lock(&time_sliced_mutex_, false, true);
+  while (!multi_mutations_keys.empty()) {
+    auto key = multi_mutations_keys.front();
+    multi_mutations_keys.pop_front();
     ScheduleMutation(false, key, vmsdk::ThreadPool::Priority::kMax,
-                     multi_mutations.blocking_counter.get());
+                     &blocking_counter);
   }
-  multi_mutations.blocking_counter->Wait();
-  multi_mutations.blocking_counter.reset();
+  blocking_counter.Wait();
 }
 
 void IndexSchema::EnqueueMultiMutation(const InternedStringPtr &key) {
-  auto &multi_mutations = multi_mutations_.Get();
-  multi_mutations.keys.push(key);
-  if (multi_mutations.keys.size() >= mutations_thread_pool_->Size() &&
+  auto &multi_mutations_keys = multi_mutations_keys_.Get();
+  multi_mutations_keys.push_back(key);
+  VMSDK_LOG(DEBUG, nullptr) << "Enqueueing multi mutation for key: " << key
+                            << " Size is now " << multi_mutations_keys.size();
+  if (multi_mutations_keys.size() >= mutations_thread_pool_->Size() &&
       !schedule_multi_exec_processing_.Get()) {
     schedule_multi_exec_processing_.Get() = true;
     vmsdk::RunByMain(
@@ -497,7 +498,7 @@ void IndexSchema::EnqueueMultiMutation(const InternedStringPtr &key) {
   }
 }
 
-void IndexSchema::ScheduleMutation(bool from_backfill,
+bool IndexSchema::ScheduleMutation(bool from_backfill,
                                    const InternedStringPtr &key,
                                    vmsdk::ThreadPool::Priority priority,
                                    absl::BlockingCounter *blocking_counter) {
@@ -508,21 +509,32 @@ void IndexSchema::ScheduleMutation(bool from_backfill,
       ++stats_.backfill_inqueue_tasks;
     }
   }
-  mutations_thread_pool_->Schedule(
+  auto scheduled = mutations_thread_pool_->Schedule(
       [from_backfill, weak_index_schema = GetWeakPtr(),
        ctx = detached_ctx_.get(), delay_capturer = CreateQueueDelayCapturer(),
        key_str = std::move(key), blocking_counter]() mutable {
         auto index_schema = weak_index_schema.lock();
+        // index_schema will be nullptr if the index schema has already been
+        // destructed
         if (ABSL_PREDICT_FALSE(!index_schema)) {
+          CHECK(!blocking_counter);
           return;
         }
         index_schema->ProcessSingleMutationAsync(ctx, from_backfill, key_str,
                                                  delay_capturer.get());
+        // The blocking_counter is stack-allocated by a caller that
+        // holds a strong reference to the index schema object. Consequently, if
+        // index_schema is non-null, the blocking_counter is guaranteed to be
+        // valid.
         if (ABSL_PREDICT_FALSE(blocking_counter)) {
           blocking_counter->DecrementCount();
         }
       },
       priority);
+  if (ABSL_PREDICT_FALSE(!scheduled && blocking_counter)) {
+    blocking_counter->DecrementCount();
+  }
+  return scheduled;
 }
 
 bool ShouldBlockClient(RedisModuleCtx *ctx, bool inside_multi_exec,

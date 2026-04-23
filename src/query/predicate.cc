@@ -79,8 +79,12 @@ TagPredicate::TagPredicate(const indexes::Tag* index,
     : Predicate(PredicateType::kTag),
       index_(index),
       identifier_(vmsdk::MakeUniqueRedisString(identifier)),
-      raw_tag_string_(raw_tag_string),
-      tags_(tags.begin(), tags.end()) {}
+      raw_tag_string_(raw_tag_string) {
+  // Unescape each tag (e.g., \| -> |, \\ -> \)
+  for (const auto& tag : tags) {
+    tags_.insert(indexes::Tag::UnescapeTag(tag));
+  }
+}
 
 bool TagPredicate::Evaluate(Evaluator& evaluator) const {
   return evaluator.EvaluateTags(*this);

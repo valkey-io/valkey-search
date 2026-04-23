@@ -65,6 +65,7 @@ inline UniqueRedisString MakeUniqueRedisString(const char *str) {
 }
 
 inline UniqueRedisString RetainUniqueRedisString(RedisModuleString *redis_str) {
+  VerifyMainThread();
   RedisModule_RetainString(nullptr, redis_str);
   return UniquePtrRedisString(redis_str);
 }

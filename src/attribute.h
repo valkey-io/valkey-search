@@ -68,20 +68,18 @@ class Attribute {
     return 1;
   }
 
+  // Creates a new score-as string for each call.
+  // We intentionally avoid caching because ValkeyModule_RetainString uses
+  // non-atomic refcount increment (o->refcount++), causing race conditions
+  // when multiple threads call it on the same ValkeyModuleString.
   inline vmsdk::UniqueRedisString DefaultReplyScoreAs() const {
-    if (!cached_score_as_) {
-      cached_score_as_ =
-          vmsdk::MakeUniqueRedisString(absl::StrCat("__", alias_, "_score"));
-    }
-    return vmsdk::RetainUniqueRedisString(cached_score_as_.get());
+    return vmsdk::MakeUniqueRedisString(absl::StrCat("__", alias_, "_score"));
   }
 
  private:
   std::string alias_;
   std::string identifier_;
   std::shared_ptr<indexes::IndexBase> index_;
-  // Maintaining a cached version
-  mutable vmsdk::UniqueRedisString cached_score_as_;
 };
 
 }  // namespace valkey_search

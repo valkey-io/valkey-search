@@ -1,22 +1,22 @@
-name: Integration tests
+name: unittests-tsan
 
 on:
   pull_request: # This triggers the workflow for pull requests
     branches:
-      - main # Run tests for pull requests targeting the "main" branch
+      - main    # Run tests for pull requests targeting the "main" branch
       - "1.0"
   push:
     branches:
-      - main # Optional: Run tests for direct pushes to "main"
+      - main    # Optional: Run tests for direct pushes to "main"
       - "1.0"
   workflow_dispatch: # allow manual triggering
 
 concurrency:
-  group: integration-tests-${{ github.head_ref || github.ref }}
+  group: unittests-tsan-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  integration-tests:
+  cmake-tests:
     runs-on: ubuntu-latest
 
     steps:
@@ -32,9 +32,8 @@ jobs:
     - name: Build Docker Image
       run: docker build -t presubmit-image -f .devcontainer/Dockerfile .
 
-    - name: Run Integration Tests
+    - name: Run Tests TSAN
       id: test-run
-      timeout-minutes: 140
       continue-on-error: true
       run: |
         mkdir test-results
@@ -43,18 +42,18 @@ jobs:
           -v "$(pwd):/workspace" \
           --user "ubuntu:ubuntu" \
           presubmit-image \
-          sudo ci/build_ubuntu.sh --run-integration-tests --integration-output=/workspace/test-results
+          sudo ci/build_ubuntu.sh --run-tests --tsan --unittest-output=/workspace/test-results
 
     - name: Update Test Results Permissions
       if: always()
       run: sudo chmod -R 755 test-results
 
-    # Upload test results as artifacts
+     # Upload test results as artifacts
     - name: Upload Test Results
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: integration-test-results
+        name: unittest-results
         path: test-results
 
     # Fail the job if tests failed

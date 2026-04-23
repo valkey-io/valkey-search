@@ -205,16 +205,10 @@ FilterParser::ParseTagPredicate(const std::string& attribute_alias) {
 
   auto tag_index = dynamic_cast<indexes::Tag*>(index.value().get());
   VMSDK_ASSIGN_OR_RETURN(auto tag_string, ParseTagString());
-<<<<<<< HEAD
-  VMSDK_ASSIGN_OR_RETURN(auto parsed_tags, ParseTags(tag_string, tag_index));
-  return std::make_unique<query::TagPredicate>(tag_index, identifier,
-                                               tag_string, parsed_tags);
-=======
   VMSDK_ASSIGN_OR_RETURN(auto parsed_tags, ParseQueryTags(tag_string));
   query_operations_ |= QueryOperations::kContainsTag;
   return std::make_unique<query::TagPredicate>(
       tag_index, attribute_alias, identifier, tag_string, parsed_tags);
->>>>>>> 4b6878b (fixing tag query parsing (#602))
 }
 
 absl::Status UnexpectedChar(absl::string_view expression, size_t pos) {

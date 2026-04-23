@@ -58,7 +58,6 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
-#include "src/indexes/text.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
@@ -467,10 +466,6 @@ void IndexSchema::ProcessMultiQueue() {
   if (ABSL_PREDICT_TRUE(multi_mutations_keys.empty())) {
     return;
   }
-
-  // Track batch metrics
-  Metrics::GetStats().ingest_last_batch_size = multi_mutations_keys.size();
-  Metrics::GetStats().ingest_total_batches++;
 
   absl::BlockingCounter blocking_counter(multi_mutations_keys.size());
   vmsdk::WriterMutexLock lock(&time_sliced_mutex_, false, true);

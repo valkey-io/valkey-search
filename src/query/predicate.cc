@@ -78,7 +78,6 @@ TagPredicate::TagPredicate(const indexes::Tag* index,
                            const absl::flat_hash_set<absl::string_view>& tags)
     : Predicate(PredicateType::kTag),
       index_(index),
-      alias_(alias),
       identifier_(vmsdk::MakeUniqueRedisString(identifier)),
       raw_tag_string_(raw_tag_string) {
   // Unescape each tag (e.g., \| -> |, \\ -> \)

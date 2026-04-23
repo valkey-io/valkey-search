@@ -83,12 +83,6 @@ class FilterParser {
   absl::StatusOr<double> ParseNumber();
 
   absl::StatusOr<absl::string_view> ParseTagString();
-
-  absl::StatusOr<std::unique_ptr<query::Predicate>> WrapPredicate(
-      std::unique_ptr<query::Predicate> prev_predicate,
-      std::unique_ptr<query::Predicate> predicate, bool& negate,
-      query::LogicalOperator logical_operator, bool no_prev_grp,
-      bool not_rightmost_bracket);
 };
 
 }  // namespace valkey_search

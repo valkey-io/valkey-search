@@ -150,8 +150,6 @@ class ABSL_SCOPED_LOCKABLE ReaderMutexLock {
       : mutex_(mutex),
         may_prolong_(may_prolong),
         ignore_time_quota_(ignore_time_quota) {
-    ++global_stats.read_periods;
-    timer_.Reset();
     mutex->ReaderLock(may_prolong_, ignore_time_quota);
   }
 
@@ -162,15 +160,12 @@ class ABSL_SCOPED_LOCKABLE ReaderMutexLock {
   void SetMayProlong();
   ~ReaderMutexLock() ABSL_UNLOCK_FUNCTION() {
     mutex_->Unlock(may_prolong_, ignore_time_quota_);
-    global_stats.read_time_microseconds +=
-        absl::ToInt64Microseconds(timer_.Duration());
   }
 
  private:
   TimeSlicedMRMWMutex* const mutex_;
   bool may_prolong_;
   bool ignore_time_quota_;
-  vmsdk::StopWatch timer_;
 };
 
 class ABSL_SCOPED_LOCKABLE WriterMutexLock {
@@ -181,8 +176,6 @@ class ABSL_SCOPED_LOCKABLE WriterMutexLock {
       : mutex_(mutex),
         may_prolong_(may_prolong),
         ignore_time_quota_(ignore_time_quota) {
-    ++global_stats.write_periods;
-    timer_.Reset();
     mutex->WriterLock(may_prolong_, ignore_time_quota);
   }
 
@@ -193,15 +186,12 @@ class ABSL_SCOPED_LOCKABLE WriterMutexLock {
   void SetMayProlong();
   ~WriterMutexLock() ABSL_UNLOCK_FUNCTION() {
     mutex_->Unlock(may_prolong_, ignore_time_quota_);
-    global_stats.write_time_microseconds +=
-        absl::ToInt64Microseconds(timer_.Duration());
   }
 
  private:
   TimeSlicedMRMWMutex* const mutex_;
   bool may_prolong_;
   bool ignore_time_quota_;
-  vmsdk::StopWatch timer_;
 };
 
 }  // namespace vmsdk

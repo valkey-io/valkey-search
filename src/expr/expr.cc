@@ -509,9 +509,15 @@ struct Compiler {
     return DoDyadic(ctx, &Compiler::CmpOp, ops);
   }
   absl::StatusOr<ExprPtr> CmpOp(CompileContext& ctx) {
-    static std::vector<DyadicOp> ops{{"<=", &FuncLe}, {"<", &FuncLt},
-                                     {"==", &FuncEq}, {"!=", &FuncNe},
-                                     {">=", &FuncGe}, {">", &FuncGt}};
+    static std::vector<DyadicOp> apply_ops{{"<=", &FuncLe}, {"<", &FuncLt},
+                                           {"==", &FuncEq}, {"!=", &FuncNe},
+                                           {">=", &FuncGe}, {">", &FuncGt}};
+    static std::vector<DyadicOp> filter_ops{
+        {"<=", &FilterFuncLe}, {"<", &FilterFuncLt},
+        {"==", &FilterFuncEq}, {"!=", &FilterFuncNe},
+        {">=", &FilterFuncGe}, {">", &FilterFuncGt}};
+    auto& ops =
+        ctx.UseFilterComparisonSemantics() ? filter_ops : apply_ops;
     return DoDyadic(ctx, &Compiler::AddOp, ops);
   }
   absl::StatusOr<ExprPtr> AddOp(CompileContext& ctx) {

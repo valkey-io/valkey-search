@@ -590,22 +590,99 @@ def compute_text_data_sets(dataset_name, seed=123, schema_type="default"):
     
     return data
 
+### Filter Data ###
+
+FILTER_DOCS = [
+    {"status": "active",   "price": 100,  "category": "electronics", "title": "quick fox jumps high",    "rating": 5},
+    {"status": "inactive", "price": 25,   "category": "books",       "title": "slow turtle walks far",   "rating": 3},
+    {"status": "active",   "price": 200,  "category": "clothing",    "title": "red hat sells well",      "rating": 4},
+    {"status": "pending",  "price": 50,   "category": "food",        "title": "fresh apple grows fast",  "rating": 2},
+    {"status": "active",   "price": 75,   "category": "electronics", "title": "bright screen shines on", "rating": 5},
+    {"status": "inactive", "price": 300,  "category": "books",       "title": "old book reads fine",     "rating": 1},
+    {"status": "active",   "price": 150,                              "title": "new phone rings loud",    "rating": 4},  # missing category
+    {"status": "pending",  "price": 10,   "category": "clothing",    "title": "blue shirt fits right"},                  # missing rating
+    {                       "price": 500,  "category": "electronics", "title": "fast chip runs cool",     "rating": 5},  # missing status
+    {"status": "active",   "price": 1000, "category": "food",        "title": "big cake bakes slow",     "rating": 3},
+]
+
+FILTER_DATASETS = {
+    "filter base":               None,
+    "filter tag eq":             "@status=='active'",
+    "filter tag neq":            "@status!='inactive'",
+    "filter numeric gt":         "@price>100",
+    "filter numeric range":      "@price>=50 && @price<=200",
+    "filter exists rating":      "exists(@rating)",
+    "filter not exists category": "!exists(@category)",
+    "filter combined":           "@status=='active' && @price>100",
+    "filter strlen numeric":     "strlen(@price)>=3",
+    "filter startswith numeric": "startswith(@price,'1')",
+    "filter contains text":      "contains(@title,'slow')",
+}
+
+def compute_filter_data_sets(dataset_name):
+    if dataset_name not in FILTER_DATASETS:
+        raise ValueError(f"Unknown filter dataset: {dataset_name}. Available: {list(FILTER_DATASETS.keys())}")
+
+    filter_expr = FILTER_DATASETS[dataset_name]
+    data = {dataset_name: {}}
+
+    hash_schema_parts = [
+        "status TAG", "price NUMERIC", "category TAG",
+        "title TEXT NOSTEM", "rating NUMERIC",
+    ]
+    json_schema_parts = [
+        "$.status AS status TAG", "$.price AS price NUMERIC",
+        "$.category AS category TAG", "$.title AS title TEXT NOSTEM",
+        "$.rating AS rating NUMERIC",
+    ]
+
+    for key_type in ["hash", "json"]:
+        schema_parts = hash_schema_parts if key_type == "hash" else json_schema_parts
+        create_cmd = [
+            "FT.CREATE", f"{key_type}_idx1", "ON", key_type.upper(),
+            "PREFIX", "1", f"{key_type}:",
+        ]
+        if filter_expr is not None:
+            create_cmd += ["FILTER", filter_expr]
+        create_cmd += ["SCHEMA"] + " ".join(schema_parts).split()
+
+        data[dataset_name][CREATES_KEY(key_type)] = [create_cmd]
+
+        docs = []
+        for i, doc in enumerate(FILTER_DOCS):
+            docs.append((f"{key_type}:{i:02d}", dict(doc)))
+        data[dataset_name][SETS_KEY(key_type)] = docs
+
+    return data
+
 ### Helper Functions ###
 def load_data(client, data_set, key_type, data_source=None, schema_type="default"):
     # Auto-detect data source based on data_set name
     if data_source is None:
-        data_source = "text" if data_set in TEXT_DATASETS else "vector"
+        if data_set in TEXT_DATASETS:
+            data_source = "text"
+        elif data_set in FILTER_DATASETS:
+            data_source = "filter"
+        else:
+            data_source = "vector"
 
     match data_source:
         case "vector":
             data = compute_data_sets()
         case "text":
             data = compute_text_data_sets(data_set, schema_type=schema_type)
+        case "filter":
+            data = compute_filter_data_sets(data_set)
         case _:
             raise ValueError(f"Unknown data source: {data_source}")
     load_list = data[data_set][SETS_KEY(key_type)]
     for create_index_cmd in data[data_set][CREATES_KEY(key_type)]:
-        client.execute_command(create_index_cmd)
+        if isinstance(create_index_cmd, (list, tuple)):
+            print("Create Index: ", *create_index_cmd)
+            client.execute_command(*create_index_cmd)
+        else:
+            print("Create Index: ", create_index_cmd)
+            client.execute_command(create_index_cmd)
 
     # Make large chunks to accelerate things
     batch_size = 50

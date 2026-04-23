@@ -638,7 +638,12 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
 
   VMSDK_ASSIGN_OR_RETURN(res, vmsdk::IsParamKeyMatch(kFilterParam, false, itr));
   if (res) {
-    return absl::InvalidArgumentError(NotSupportedParamErrorMsg(kFilterParam));
+    absl::string_view filter_expr;
+    VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, filter_expr));
+    if (filter_expr.empty()) {
+      return absl::InvalidArgumentError("FILTER expression cannot be empty");
+    }
+    index_schema_proto.set_filter(std::string(filter_expr));
   }
   // Parse schema-level text parameters before SCHEMA
   PerIndexTextParams schema_text_defaults;

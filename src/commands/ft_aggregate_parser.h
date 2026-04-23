@@ -54,6 +54,8 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   absl::StatusOr<std::unique_ptr<expr::Expression::AttributeReference>>
   MakeReference(const absl::string_view s, bool create) override;
 
+  bool UseFilterComparisonSemantics() const override { return false; }
+
   absl::StatusOr<expr::Value> GetParam(
       const absl::string_view s) const override {
     auto it = parse_vars.params.find(s);

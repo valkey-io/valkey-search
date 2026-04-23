@@ -316,6 +316,24 @@ Value FuncGt(const Value& l, const Value& r) { return Value(l > r); }
 
 Value FuncGe(const Value& l, const Value& r) { return Value(l >= r); }
 
+// Filter comparison semantics: identical to APPLY except for !=.
+// In FILTER context, Nil != value → true (missing field is not equal to any
+// value). All other operators use the same kUNORDERED handling as APPLY.
+Value FilterFuncEq(const Value& l, const Value& r) { return Value(l == r); }
+
+Value FilterFuncNe(const Value& l, const Value& r) {
+  auto res = Compare(l, r);
+  return Value(res != Ordering::kEQUAL);
+}
+
+Value FilterFuncLt(const Value& l, const Value& r) { return Value(l < r); }
+
+Value FilterFuncLe(const Value& l, const Value& r) { return Value(l <= r); }
+
+Value FilterFuncGt(const Value& l, const Value& r) { return Value(l > r); }
+
+Value FilterFuncGe(const Value& l, const Value& r) { return Value(l >= r); }
+
 Value FuncLor(const Value& l, const Value& r) {
   DBG << "FuncLor: " << l << " || " << r << "\n";
   auto lv = l.AsBool();
@@ -397,10 +415,16 @@ Value FuncSqrt(const Value& o) {
 }
 
 Value FuncStrlen(const Value& o) {
+  if (o.IsNil()) {
+    return Value(Value::Nil("strlen of nil"));
+  }
   return Value(double(o.AsStringView().size()));
 }
 
 Value FuncStartswith(const Value& l, const Value& r) {
+  if (l.IsNil() || r.IsNil()) {
+    return Value(Value::Nil("startswith with nil"));
+  }
   auto ls = l.AsStringView();
   auto rs = r.AsStringView();
   if (rs.size() > ls.size()) {
@@ -411,6 +435,9 @@ Value FuncStartswith(const Value& l, const Value& r) {
 }
 
 Value FuncContains(const Value& l, const Value& r) {
+  if (l.IsNil() || r.IsNil()) {
+    return Value(Value::Nil("contains with nil"));
+  }
   auto ls = l.AsStringView();
   auto rs = r.AsStringView();
   size_t count = 0;
@@ -427,6 +454,9 @@ Value FuncContains(const Value& l, const Value& r) {
 }
 
 Value FuncSubstr(const Value& l, const Value& m, const Value& r) {
+  if (l.IsNil()) {
+    return Value(Value::Nil("substr of nil"));
+  }
   auto ls = l.AsStringView();
   auto offset_p = m.AsInteger();
   auto length_p = r.AsInteger();
@@ -452,6 +482,9 @@ Value FuncSubstr(const Value& l, const Value& m, const Value& r) {
 }
 
 Value FuncLower(const Value& o) {
+  if (o.IsNil()) {
+    return Value(Value::Nil("lower of nil"));
+  }
   auto os = o.AsStringView();
   std::string result;
   result.reserve(os.size());
@@ -467,6 +500,9 @@ Value FuncLower(const Value& o) {
 }
 
 Value FuncUpper(const Value& o) {
+  if (o.IsNil()) {
+    return Value(Value::Nil("upper of nil"));
+  }
   auto os = o.AsStringView();
   std::string result;
   result.reserve(os.size());
@@ -482,6 +518,11 @@ Value FuncUpper(const Value& o) {
 }
 
 Value FuncConcat(const absl::InlinedVector<Value, 4>& values) {
+  for (auto& v : values) {
+    if (v.IsNil()) {
+      return Value(Value::Nil("concat with nil"));
+    }
+  }
   std::string result;
   for (auto& v : values) {
     result.append(v.AsStringView());

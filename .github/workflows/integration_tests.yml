@@ -43,7 +43,7 @@ jobs:
           -v "$(pwd):/workspace" \
           --user "ubuntu:ubuntu" \
           presubmit-image \
-          sudo ci/build_ubuntu.sh --run-integration-tests --integration-output=/workspace/test-results
+          sudo ci/build_ubuntu.sh --run-integration-tests
 
     - name: Update Test Results Permissions
       if: always()

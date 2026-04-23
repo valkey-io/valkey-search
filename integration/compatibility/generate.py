@@ -263,6 +263,34 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce max 1 @n1 as nmax"
         )
         self.check(dialect, f'ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce max 1 @n2 as nmax')
+
+    def test_aggregate_random_sample_errors(self, key_type, dialect):
+        """Test error behavior for RANDOM_SAMPLE edge cases against Redis.
+
+        Only cases that Redis rejects are included. Success succeeds 
+        are omitted because RANDOM_SAMPLE output is non-deterministic 
+        and can't be compared row-by-row against a recorded answer.
+        """
+        self.setup_data("sortable numbers", key_type)
+
+        error_cases = [
+            # Wrong argument counts.
+            f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 groupby 1 @t1 reduce random_sample 0 as s",
+            f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 groupby 1 @t1 reduce random_sample 1 @n1 as s",
+            # Non-numeric sample size.
+            f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 groupby 1 @t1 reduce random_sample 2 @n1 invalid as s",
+            # Non-integer sample size.
+            f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 groupby 1 @t1 reduce random_sample 2 @n1 1.5 as s",
+            # Negative sample size.
+            f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 groupby 1 @t1 reduce random_sample 2 @n1 -1 as s",
+            f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 groupby 1 @t1 reduce random_sample 2 @n1 -5 as s",
+            # Above cap (1000).
+            f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 groupby 1 @t1 reduce random_sample 2 @n1 1001 as s",
+            f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 groupby 1 @t1 reduce random_sample 2 @n1 10000 as s",
+        ]
+        for cmd in error_cases:
+            self.execute_command(cmd.split())
+
     def test_aggregate_limit(self, key_type, dialect):
         self.setup_data("sortable numbers", key_type)
         self.check(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2")

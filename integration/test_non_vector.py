@@ -414,70 +414,6 @@ def validate_random_sample_queries(client: Valkey):
     assert len(price_sample) == 3
     assert len(rating_sample) == 3
 
-def validate_random_sample_error_handling(client: Valkey):
-    """
-        Test RANDOM_SAMPLE error handling for invalid sample sizes.
-    """
-    import pytest
-    
-    # Test with too few arguments (nargs=0)
-    with pytest.raises(ResponseError):
-        client.execute_command(
-            "FT.AGGREGATE", "products", "@price:[1 100]",
-            "APPLY", "1", "AS", "all",
-            "GROUPBY", "1", "@all",
-            "REDUCE", "RANDOM_SAMPLE", "0", "AS", "sample"
-        )
-    
-    # Test with too few arguments (nargs=1)
-    with pytest.raises(ResponseError):
-        client.execute_command(
-            "FT.AGGREGATE", "products", "@price:[1 100]",
-            "APPLY", "1", "AS", "all",
-            "GROUPBY", "1", "@all",
-            "REDUCE", "RANDOM_SAMPLE", "1", "@price", "AS", "sample"
-        )
-    
-    # Test with too many arguments (nargs=3)
-    with pytest.raises(ResponseError):
-        client.execute_command(
-            "FT.AGGREGATE", "products", "@price:[1 100]",
-            "APPLY", "1", "AS", "all",
-            "GROUPBY", "1", "@all",
-            "REDUCE", "RANDOM_SAMPLE", "3", "@price", "5", "extra", "AS", "sample"
-        )
-    
-    # Test with negative sample size - returns empty sample (lazy validation)
-    result = client.execute_command(
-        "FT.AGGREGATE", "products", "@price:[1 100]",
-        "APPLY", "1", "AS", "all",
-        "GROUPBY", "1", "@all",
-        "REDUCE", "RANDOM_SAMPLE", "2", "@price", "-5", "AS", "sample"
-    )
-    assert result[0] == 1
-    row = dict(zip(result[1][::2], result[1][1::2]))
-    assert row[b'sample'] == []
-
-    # Test with non-numeric sample size - parse error at expression compile time
-    with pytest.raises(ResponseError):
-        client.execute_command(
-            "FT.AGGREGATE", "products", "@price:[1 100]",
-            "APPLY", "1", "AS", "all",
-            "GROUPBY", "1", "@all",
-            "REDUCE", "RANDOM_SAMPLE", "2", "@price", "invalid", "AS", "sample"
-        )
-
-    # Test with sample size > MAX_SAMPLE_SIZE (1000) - returns empty sample (lazy validation)
-    result = client.execute_command(
-        "FT.AGGREGATE", "products", "@price:[1 100]",
-        "APPLY", "1", "AS", "all",
-        "GROUPBY", "1", "@all",
-        "REDUCE", "RANDOM_SAMPLE", "2", "@price", "1001", "AS", "sample"
-    )
-    assert result[0] == 1
-    row = dict(zip(result[1][::2], result[1][1::2]))
-    assert row[b'sample'] == []
-
 def validate_aggregate_complex_queries(client: Valkey):
     """
         Test complex FT.AGGREGATE queries with numeric and tag.
@@ -710,8 +646,6 @@ class TestNonVector(ValkeySearchTestCaseBase):
         validate_aggregate_complex_queries(client)
         # Test RANDOM_SAMPLE functionality
         validate_random_sample_queries(client)
-        # Test RANDOM_SAMPLE error handling
-        validate_random_sample_error_handling(client)
 
     def test_uningested_multi_field(self):
         """
@@ -776,8 +710,6 @@ class TestNonVectorCluster(ValkeySearchClusterTestCase):
         validate_aggregate_complex_queries(cluster_client)
         # Test RANDOM_SAMPLE functionality in cluster mode
         validate_random_sample_queries(cluster_client)
-        # Test RANDOM_SAMPLE error handling in cluster mode
-        validate_random_sample_error_handling(cluster_client)
     
     def test_max_search_keys_fetch_limited(self):
         """

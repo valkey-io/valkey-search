@@ -98,6 +98,26 @@ struct AggregateExecTest : public vmsdk::ValkeyTest {
     }
     return params;
   }
+
+  // Variant that returns the parse status instead of asserting success, for
+  // exercising error paths.
+  absl::Status TryParseStages(absl::string_view test) {
+    auto argv = vmsdk::ToValkeyStringVector(test);
+    vmsdk::ArgsIterator itr(argv.data(), argv.size());
+
+    AggregateParameters params(0);
+    params.parse_vars_.index_interface_ = &fakeIndex;
+    params.AddRecordAttribute("n1", "n1", indexes::IndexerType::kNumeric);
+    params.AddRecordAttribute("n2", "n1", indexes::IndexerType::kNumeric);
+
+    auto parser = CreateAggregateParser();
+    auto status = parser.Parse(params, itr);
+
+    for (auto* str : argv) {
+      ValkeyModule_FreeString(nullptr, str);
+    }
+    return status;
+  }
 };
 
 TEST_F(AggregateExecTest, LimitTest) {
@@ -489,6 +509,58 @@ TEST_F(AggregateExecTest, RandomSampleGroupByTest) {
       auto sample = GetSampleArray(rec->fields_.at(2));
       EXPECT_EQ(sample.size(), 2);
     }
+  }
+}
+
+TEST_F(AggregateExecTest, RandomSampleParseErrorsTest) {
+  // Negative sample size is rejected at parse time.
+  {
+    auto status = TryParseStages("groupby 1 @n2 reduce RANDOM_SAMPLE 2 @n1 -5");
+    EXPECT_FALSE(status.ok());
+    EXPECT_EQ(status.code(), absl::StatusCode::kInvalidArgument);
+  }
+
+  // Sample size above kMaxSampleSize is rejected.
+  {
+    auto status =
+        TryParseStages("groupby 1 @n2 reduce RANDOM_SAMPLE 2 @n1 1001");
+    EXPECT_FALSE(status.ok());
+    EXPECT_EQ(status.code(), absl::StatusCode::kOutOfRange);
+  }
+
+  // Non-integer sample size is rejected.
+  {
+    auto status =
+        TryParseStages("groupby 1 @n2 reduce RANDOM_SAMPLE 2 @n1 1.5");
+    EXPECT_FALSE(status.ok());
+    EXPECT_EQ(status.code(), absl::StatusCode::kInvalidArgument);
+  }
+
+  // Wrong argument count (1 instead of 2) is rejected.
+  {
+    auto status = TryParseStages("groupby 1 @n2 reduce RANDOM_SAMPLE 1 @n1");
+    EXPECT_FALSE(status.ok());
+    EXPECT_EQ(status.code(), absl::StatusCode::kOutOfRange);
+  }
+
+  // Sample size zero is accepted (empty sample is a valid result).
+  {
+    auto status = TryParseStages("groupby 1 @n2 reduce RANDOM_SAMPLE 2 @n1 0");
+    EXPECT_TRUE(status.ok()) << status;
+  }
+
+  // Sample size at the upper bound is accepted.
+  {
+    auto status =
+        TryParseStages("groupby 1 @n2 reduce RANDOM_SAMPLE 2 @n1 1000");
+    EXPECT_TRUE(status.ok()) << status;
+  }
+
+  // Extra declared arguments beyond 2 are silently consumed (Redis compat).
+  {
+    auto status =
+        TryParseStages("groupby 1 @n2 reduce RANDOM_SAMPLE 3 @n1 5 extra");
+    EXPECT_TRUE(status.ok()) << status;
   }
 }
 

@@ -147,17 +147,12 @@ class ABSL_SCOPED_LOCKABLE ReaderMutexLock {
   explicit ReaderMutexLock(TimeSlicedMRMWMutex* mutex, bool may_prolong = false,
                            bool ignore_time_quota = false)
       ABSL_SHARED_LOCK_FUNCTION(mutex)
-<<<<<<< HEAD
-      : mutex_(mutex), may_prolong_(may_prolong) {
-    mutex->ReaderLock(may_prolong_);
-=======
       : mutex_(mutex),
         may_prolong_(may_prolong),
         ignore_time_quota_(ignore_time_quota) {
     ++global_stats.read_periods;
     timer_.Reset();
     mutex->ReaderLock(may_prolong_, ignore_time_quota);
->>>>>>> 016e983 (Avoid deadlock while processing  MULTI/EXEC mutations (#629))
   }
 
   ReaderMutexLock(const ReaderMutexLock&) = delete;
@@ -165,24 +160,17 @@ class ABSL_SCOPED_LOCKABLE ReaderMutexLock {
   ReaderMutexLock& operator=(const ReaderMutexLock&) = delete;
   ReaderMutexLock& operator=(ReaderMutexLock&&) = delete;
   void SetMayProlong();
-<<<<<<< HEAD
-  ~ReaderMutexLock() ABSL_UNLOCK_FUNCTION() { mutex_->Unlock(may_prolong_); }
-=======
   ~ReaderMutexLock() ABSL_UNLOCK_FUNCTION() {
     mutex_->Unlock(may_prolong_, ignore_time_quota_);
     global_stats.read_time_microseconds +=
         absl::ToInt64Microseconds(timer_.Duration());
   }
->>>>>>> 016e983 (Avoid deadlock while processing  MULTI/EXEC mutations (#629))
 
  private:
   TimeSlicedMRMWMutex* const mutex_;
   bool may_prolong_;
-<<<<<<< HEAD
-=======
   bool ignore_time_quota_;
   vmsdk::StopWatch timer_;
->>>>>>> 016e983 (Avoid deadlock while processing  MULTI/EXEC mutations (#629))
 };
 
 class ABSL_SCOPED_LOCKABLE WriterMutexLock {
@@ -190,17 +178,12 @@ class ABSL_SCOPED_LOCKABLE WriterMutexLock {
   explicit WriterMutexLock(TimeSlicedMRMWMutex* mutex, bool may_prolong = false,
                            bool ignore_time_quota = false)
       ABSL_SHARED_LOCK_FUNCTION(mutex)
-<<<<<<< HEAD
-      : mutex_(mutex), may_prolong_(may_prolong) {
-    mutex->WriterLock(may_prolong_);
-=======
       : mutex_(mutex),
         may_prolong_(may_prolong),
         ignore_time_quota_(ignore_time_quota) {
     ++global_stats.write_periods;
     timer_.Reset();
     mutex->WriterLock(may_prolong_, ignore_time_quota);
->>>>>>> 016e983 (Avoid deadlock while processing  MULTI/EXEC mutations (#629))
   }
 
   WriterMutexLock(const WriterMutexLock&) = delete;
@@ -208,24 +191,17 @@ class ABSL_SCOPED_LOCKABLE WriterMutexLock {
   WriterMutexLock& operator=(const WriterMutexLock&) = delete;
   WriterMutexLock& operator=(WriterMutexLock&&) = delete;
   void SetMayProlong();
-<<<<<<< HEAD
-  ~WriterMutexLock() ABSL_UNLOCK_FUNCTION() { mutex_->Unlock(may_prolong_); }
-=======
   ~WriterMutexLock() ABSL_UNLOCK_FUNCTION() {
     mutex_->Unlock(may_prolong_, ignore_time_quota_);
     global_stats.write_time_microseconds +=
         absl::ToInt64Microseconds(timer_.Duration());
   }
->>>>>>> 016e983 (Avoid deadlock while processing  MULTI/EXEC mutations (#629))
 
  private:
   TimeSlicedMRMWMutex* const mutex_;
   bool may_prolong_;
-<<<<<<< HEAD
-=======
   bool ignore_time_quota_;
   vmsdk::StopWatch timer_;
->>>>>>> 016e983 (Avoid deadlock while processing  MULTI/EXEC mutations (#629))
 };
 
 }  // namespace vmsdk

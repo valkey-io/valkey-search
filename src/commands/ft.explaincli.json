@@ -1,0 +1,60 @@
+{
+    "FT.EXPLAINCLI": {
+        "acl_categories": [
+            "READ",
+            "FAST",
+            "SEARCH"
+        ],
+        "history": [
+            [
+                "1.3.0",
+                "FT.EXPLAINCLI added"
+            ]
+        ],
+        "arguments": [
+            {
+                "key_spec_index": 0,
+                "name": "index",
+                "type": "key"
+            },
+            {
+                "key_spec_index": 1,
+                "name": "query",
+                "type": "string"
+            },
+            {
+                "name": "INORDER",
+                "type": "pure-token",
+                "optional": true,
+                "token": "INORDER"
+            },
+            {
+                "name": "SLOP",
+                "type": "block",
+                "optional": true,
+                "arguments": [
+                    {
+                        "name": "slop_token",
+                        "type": "pure-token",
+                        "token": "SLOP"
+                    },
+                    {
+                        "name": "slop",
+                        "type": "integer"
+                    }
+                ]
+            },
+            {
+                "name": "VERBATIM",
+                "type": "pure-token",
+                "optional": true,
+                "token": "VERBATIM"
+            }
+        ],
+        "arity": -3,
+        "complexity": "O(1)",
+        "group": "search",
+        "module_since": "1.3.0",
+        "summary": "Explains the query execution plan for the specified index and query string, showing the predicate tree structure"
+    }
+}

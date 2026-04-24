@@ -9,6 +9,7 @@
 #define VALKEYSEARCH_SRC_COMMANDS_FT_SEARCH_PARSER_H_
 
 #include <optional>
+#include <string>
 
 #include "src/commands/commands.h"
 #include "src/query/search.h"
@@ -38,6 +39,16 @@ struct SearchCommand : public QueryCommand {
 
   std::optional<query::SortByParameter> sortby;
   bool with_sort_keys{false};
+
+  // Returns true if this is a standalone vector range query (no KNN).
+  bool IsVectorRangeQuery() const {
+    return IsNonVectorQuery() && !vector_range_predicates.empty();
+  }
+
+  // Returns the distance score field name for vector range queries.
+  // Uses $yield_distance_as if specified, otherwise defaults to
+  // __<field_name>_score.
+  std::string GetVectorRangeScoreFieldName() const;
 };
 
 }  // namespace valkey_search

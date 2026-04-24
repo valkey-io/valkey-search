@@ -132,12 +132,19 @@ def unpack_search_result(rs, key_type, has_sortkeys=False):
                 row[parse_field(value[j], key_type)] = parse_value(value[j+1], key_type)
             rows += [row]
     else:
-        # Format: [count, key1, [fields1], key2, [fields2], ...]
-        for (key, value) in [(rs[i],rs[i+1]) for i in range(1, len(rs), 2)]:
-            row = {"__key": key}
-            for i in range(0, len(value), 2):
-                row[parse_field(value[i], key_type)] = parse_value(value[i+1], key_type)
-            rows += [row]
+        # Detect NOCONTENT format: [count, key1, key2, ...] (no field arrays)
+        # vs normal format: [count, key1, [fields1], key2, [fields2], ...]
+        if len(rs) >= 2 and not isinstance(rs[1], list) and (len(rs) < 3 or not isinstance(rs[2], list)):
+            # NOCONTENT: just keys, no field arrays
+            for key in rs[1:]:
+                rows += [{"__key": key}]
+        else:
+            # Format: [count, key1, [fields1], key2, [fields2], ...]
+            for (key, value) in [(rs[i],rs[i+1]) for i in range(1, len(rs), 2)]:
+                row = {"__key": key}
+                for i in range(0, len(value), 2):
+                    row[parse_field(value[i], key_type)] = parse_value(value[i+1], key_type)
+                rows += [row]
     return rows
 
 def unpack_agg_result(rs, key_type):
@@ -221,8 +228,15 @@ def compare_number_eq(l, r):
         
     
 def compare_row(l, r, key_type):
-    lks = sorted(list(l.keys()))
-    rks = sorted(list(r.keys()))
+    # Strip auto-generated vector range score fields (e.g. __v1_score) that
+    # Valkey includes but Redis does not, so the comparison is fair.
+    score_suffix = "_score"
+    l_filtered = {k: v for k, v in l.items()
+                  if not (k.startswith("__") and k.endswith(score_suffix) and k != "__key")}
+    r_filtered = {k: v for k, v in r.items()
+                  if not (k.startswith("__") and k.endswith(score_suffix) and k != "__key")}
+    lks = sorted(list(l_filtered.keys()))
+    rks = sorted(list(r_filtered.keys()))
     #print("Comparing row: ", l, " and ", r)
     #print("Sorted keys: ", lks, " and ", rks)
     if lks != rks:
@@ -232,35 +246,35 @@ def compare_row(l, r, key_type):
         # Hack, fields that start with an 'n' are assumed to be numeric
         #
         if lks[i].startswith("n") or lks[i].endswith("score"):
-            if not compare_number_eq(l[lks[i]], r[rks[i]]):
-                print(f"mismatch numeric field: {l[lks[i]]}:{type(l[lks[i]])} and {r[rks[i]]}:{type(r[rks[i]])}")
-                print("RL: ", r)
-                print("VK: ", l)
+            if not compare_number_eq(l_filtered[lks[i]], r_filtered[rks[i]]):
+                print(f"mismatch numeric field: {l_filtered[lks[i]]}:{type(l_filtered[lks[i]])} and {r_filtered[rks[i]]}:{type(r_filtered[rks[i]])}")
+                print("RL: ", r_filtered)
+                print("VK: ", l_filtered)
                 return False
         elif lks[i].startswith("v") and key_type == "json":
             # Vector compare fields
-            assert isinstance(l[lks[i]], list)
-            assert isinstance(r[rks[i]], list)
-            if len(l[lks[i]]) != len(r[rks[i]]):
-                print("mismatch vector field length: ", l[lks[i]], " ", r[rks[i]])
+            assert isinstance(l_filtered[lks[i]], list)
+            assert isinstance(r_filtered[rks[i]], list)
+            if len(l_filtered[lks[i]]) != len(r_filtered[rks[i]]):
+                print("mismatch vector field length: ", l_filtered[lks[i]], " ", r_filtered[rks[i]])
                 return False
-            for i in range(l[lks[i]]):
-                if not compare_number_eq(l[lks[i]][i], r[rks[i]][i]):
-                    print("mismatch vector field value: ", l[lks[i]], " ", r[rks[i]])
+            for i in range(l_filtered[lks[i]]):
+                if not compare_number_eq(l_filtered[lks[i]][i], r_filtered[rks[i]][i]):
+                    print("mismatch vector field value: ", l_filtered[lks[i]], " ", r_filtered[rks[i]])
                     return False
         elif lks[i] == b'$' and rks[i] == b'$':
             try:
-                l_json = json_load(l[lks[i]])
-                r_json = json_load(r[rks[i]])
+                l_json = json_load(l_filtered[lks[i]])
+                r_json = json_load(r_filtered[rks[i]])
                 if l_json != r_json:
-                    print("mismatch JSON field: ", l[lks[i]], " and ", r[rks[i]])
+                    print("mismatch JSON field: ", l_filtered[lks[i]], " and ", r_filtered[rks[i]])
                     print("Loaded JSON: L:", l_json, " and R:", r_json)
                     return False
             except json.decoder.JSONDecodeError:
-                print("JSON decode error comparing: ", l[lks[i]], " and ", r[rks[i]])
+                print("JSON decode error comparing: ", l_filtered[lks[i]], " and ", r_filtered[rks[i]])
                 return False
-        elif l[lks[i]] != r[rks[i]]:
-            print("mismatch field: ", lks[i], " and ", rks[i], " ", l[lks[i]], "!=", r[rks[i]])
+        elif l_filtered[lks[i]] != r_filtered[rks[i]]:
+            print("mismatch field: ", lks[i], " and ", rks[i], " ", l_filtered[lks[i]], "!=", r_filtered[rks[i]])
             return False
     return True            
     

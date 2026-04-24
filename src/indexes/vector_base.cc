@@ -35,6 +35,7 @@
 #include "absl/strings/strip.h"
 #include "absl/synchronization/mutex.h"
 #include "src/attribute_data_type.h"
+#include "src/index_schema.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
@@ -107,6 +108,35 @@ query::EvaluationResult PrefilterEvaluator::EvaluateText(
     return query::EvaluationResult(false);
   }
   return predicate.Evaluate(*text_index_, *key_, require_positions);
+}
+
+query::EvaluationResult PrefilterEvaluator::EvaluateVectorRange(
+    const query::VectorRangePredicate &predicate) {
+  CHECK(key_);
+  auto resolved_query = predicate.GetResolvedQuery();
+  if (resolved_query.empty()) {
+    return query::EvaluationResult(false);
+  }
+  if (!index_schema_) {
+    return query::EvaluationResult(false);
+  }
+  auto index = index_schema_->GetIndex(predicate.GetAlias());
+  if (!index.ok()) {
+    return query::EvaluationResult(false);
+  }
+  auto *vector_index = dynamic_cast<VectorBase *>(index->get());
+  if (!vector_index) {
+    return query::EvaluationResult(false);
+  }
+  auto distance_result =
+      vector_index->ComputeDistanceFromRecord(*key_, resolved_query);
+  if (!distance_result.ok()) {
+    // Key not tracked in this vector index — treat as non-matching.
+    return query::EvaluationResult(false);
+  }
+  float distance = distance_result->first;
+  last_vector_range_distance_ = distance;
+  return query::EvaluationResult(distance <= predicate.GetRadius());
 }
 
 template <typename T>

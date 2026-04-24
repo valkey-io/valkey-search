@@ -41,7 +41,8 @@
 
 namespace valkey_search {
 enum class QueryOperations : uint64_t;
-}
+class IndexSchema;
+}  // namespace valkey_search
 
 namespace valkey_search::indexes {
 
@@ -177,6 +178,9 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
                                  std::optional<float>& magnitude);
   virtual uint64_t GetMaxInternalLabel() const { return 0; }
   virtual size_t GetLabelCount() const { return 0; }
+  absl::StatusOr<std::pair<float, hnswlib::labeltype>>
+  ComputeDistanceFromRecord(const InternedStringPtr& key,
+                            absl::string_view query) const;
 
  protected:
   VectorBase(IndexerType indexer_type, int dimensions,
@@ -266,9 +270,6 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
       ABSL_GUARDED_BY(key_to_metadata_mutex_);
   uint64_t inc_id_ ABSL_GUARDED_BY(key_to_metadata_mutex_){0};
   mutable absl::Mutex key_to_metadata_mutex_;
-  absl::StatusOr<std::pair<float, hnswlib::labeltype>>
-  ComputeDistanceFromRecord(const InternedStringPtr& key,
-                            absl::string_view query) const;
   UniqueFixedSizeAllocatorPtr vector_allocator_{nullptr, nullptr};
 };
 
@@ -276,8 +277,11 @@ class PrefilterEvaluator : public query::Evaluator {
  public:
   explicit PrefilterEvaluator(
       const valkey_search::indexes::text::TextIndex* text_index,
-      QueryOperations query_operations)
-      : query::Evaluator(query_operations), text_index_(text_index) {}
+      QueryOperations query_operations,
+      const valkey_search::IndexSchema* index_schema = nullptr)
+      : query::Evaluator(query_operations),
+        text_index_(text_index),
+        index_schema_(index_schema) {}
   bool Evaluate(const query::Predicate& predicate,
                 const InternedStringPtr& key);
   const InternedStringPtr& GetTargetKey() const override {
@@ -286,6 +290,13 @@ class PrefilterEvaluator : public query::Evaluator {
   }
   bool IsPrefilterEvaluator() const override { return true; }
 
+  // Returns the distance computed during the last EvaluateVectorRange call.
+  // Only valid after a successful Evaluate that included a VectorRange
+  // predicate.
+  float GetLastVectorRangeDistance() const {
+    return last_vector_range_distance_;
+  }
+
  private:
   query::EvaluationResult EvaluateTags(
       const query::TagPredicate& predicate) override;
@@ -293,8 +304,12 @@ class PrefilterEvaluator : public query::Evaluator {
       const query::NumericPredicate& predicate) override;
   query::EvaluationResult EvaluateText(const query::TextPredicate& predicate,
                                        bool require_positions) override;
+  query::EvaluationResult EvaluateVectorRange(
+      const query::VectorRangePredicate& predicate) override;
   const valkey_search::indexes::text::TextIndex* text_index_;
   const InternedStringPtr* key_{nullptr};
+  const valkey_search::IndexSchema* index_schema_{nullptr};
+  float last_vector_range_distance_{0.0f};
 };
 
 }  // namespace valkey_search::indexes

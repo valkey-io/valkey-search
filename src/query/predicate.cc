@@ -8,6 +8,7 @@
 #include "src/query/predicate.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -357,6 +358,28 @@ TagPredicate::TagPredicate(const indexes::Tag *index, absl::string_view alias,
 
 EvaluationResult TagPredicate::Evaluate(Evaluator &evaluator) const {
   return evaluator.EvaluateTags(*this);
+}
+
+VectorRangePredicate::VectorRangePredicate(absl::string_view attribute_alias,
+                                           absl::string_view identifier,
+                                           double radius,
+                                           absl::string_view vector_param_name,
+                                           std::optional<std::string> score_as,
+                                           std::optional<double> epsilon)
+    : Predicate(PredicateType::kVectorRange),
+      alias_(attribute_alias),
+      identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
+      radius_(radius),
+      vector_param_name_(vector_param_name),
+      score_as_(std::move(score_as)),
+      epsilon_(epsilon) {}
+
+EvaluationResult VectorRangePredicate::Evaluate(Evaluator &evaluator) const {
+  return evaluator.EvaluateVectorRange(*this);
+}
+
+void VectorRangePredicate::SetResolvedQuery(std::string query) {
+  resolved_query_ = std::move(query);
 }
 
 EvaluationResult TagPredicate::Evaluate(

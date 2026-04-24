@@ -2,10 +2,11 @@
 
 import pytest
 from valkey import ResponseError
-from valkey_search_test_case import ValkeySearchTestCase
+from valkey_search_test_case import ValkeySearchTestCaseBase
+from valkeytestframework.conftest import resource_port_tracker
 
 
-class TestFTExplainCli(ValkeySearchTestCase):
+class TestFTExplainCli(ValkeySearchTestCaseBase):
     """Test cases for FT.EXPLAINCLI command"""
 
     def test_ft_explaincli_basic(self):

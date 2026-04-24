@@ -75,6 +75,16 @@ message FuzzyPredicate {
   uint32 distance = 3;
 }
 
+message VectorRangePredicate {
+  string attribute_alias = 1;
+  double radius = 2;
+  string vector_param_name = 3;
+  optional string score_as = 4;
+  optional double epsilon = 5;
+  bytes resolved_query = 6;
+  string radius_param_name = 7;
+}
+
 message AndPredicate {
   repeated Predicate children = 1;
   optional uint32 slop = 2;
@@ -101,6 +111,7 @@ message Predicate {
     SuffixPredicate suffix = 8;
     InfixPredicate infix = 9;
     FuzzyPredicate fuzzy = 10;
+    VectorRangePredicate vector_range = 11;
   }
 }
 

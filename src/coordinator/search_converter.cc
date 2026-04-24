@@ -205,6 +205,30 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
           text_index_schema, predicate.fuzzy().field_mask(),
           predicate.fuzzy().content(), predicate.fuzzy().distance());
     }
+    case Predicate::kVectorRange: {
+      const auto& vr = predicate.vector_range();
+      VMSDK_ASSIGN_OR_RETURN(auto identifier,
+                             index_schema->GetIdentifier(vr.attribute_alias()));
+      attribute_identifiers.insert(identifier);
+      std::optional<std::string> score_as;
+      if (vr.has_score_as()) {
+        score_as = vr.score_as();
+      }
+      std::optional<double> epsilon;
+      if (vr.has_epsilon()) {
+        epsilon = vr.epsilon();
+      }
+      auto vr_predicate = std::make_unique<query::VectorRangePredicate>(
+          vr.attribute_alias(), identifier, vr.radius(), vr.vector_param_name(),
+          score_as, epsilon);
+      if (!vr.resolved_query().empty()) {
+        vr_predicate->SetResolvedQuery(vr.resolved_query());
+      }
+      if (!vr.radius_param_name().empty()) {
+        vr_predicate->SetRadiusParamName(vr.radius_param_name());
+      }
+      return vr_predicate;
+    }
     case Predicate::PREDICATE_NOT_SET:
       return absl::InvalidArgumentError("Predicate not set");
   }
@@ -255,6 +279,13 @@ absl::Status GRPCSearchRequestToParameters(
   parameters->filter_parse_results.query_operations =
       static_cast<QueryOperations>(request.query_operations());
   parameters->sortby_parameter = SortByFromGRPC(request);
+  // Collect VectorRangePredicate nodes from the deserialized predicate tree
+  // so that the search path can detect and handle vector range queries.
+  if (parameters->filter_parse_results.root_predicate) {
+    query::CollectVectorRangePredicates(
+        parameters->filter_parse_results.root_predicate.get(),
+        parameters->vector_range_predicates);
+  }
   return absl::OkStatus();
 }
 
@@ -366,6 +397,31 @@ std::unique_ptr<Predicate> PredicateToGRPCPredicate(
     }
     case query::PredicateType::kNone: {
       return nullptr;
+    }
+    case query::PredicateType::kVectorRange: {
+      auto vr_predicate =
+          dynamic_cast<const query::VectorRangePredicate*>(&predicate);
+      auto proto = std::make_unique<Predicate>();
+      proto->mutable_vector_range()->set_attribute_alias(
+          std::string(vr_predicate->GetAlias()));
+      proto->mutable_vector_range()->set_radius(vr_predicate->GetRadius());
+      proto->mutable_vector_range()->set_vector_param_name(
+          std::string(vr_predicate->GetVectorParamName()));
+      if (vr_predicate->GetScoreAs().has_value()) {
+        proto->mutable_vector_range()->set_score_as(
+            vr_predicate->GetScoreAs().value());
+      }
+      if (vr_predicate->GetEpsilon().has_value()) {
+        proto->mutable_vector_range()->set_epsilon(
+            vr_predicate->GetEpsilon().value());
+      }
+      proto->mutable_vector_range()->set_resolved_query(
+          std::string(vr_predicate->GetResolvedQuery()));
+      if (!vr_predicate->GetRadiusParamName().empty()) {
+        proto->mutable_vector_range()->set_radius_param_name(
+            std::string(vr_predicate->GetRadiusParamName()));
+      }
+      return proto;
     }
   }
   CHECK(false);

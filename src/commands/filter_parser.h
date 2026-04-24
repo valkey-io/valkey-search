@@ -43,6 +43,7 @@ enum class QueryOperations : uint64_t {
   kContainsTextPrefix = 1 << 9,
   kContainsTextSuffix = 1 << 10,
   kContainsTextFuzzy = 1 << 11,
+  kContainsVectorRange = 1 << 12,
 };
 
 inline QueryOperations operator|(QueryOperations a, QueryOperations b) {
@@ -119,6 +120,14 @@ class FilterParser {
   ParseNumericPredicate(const std::string& attribute_alias);
   absl::StatusOr<std::unique_ptr<query::TagPredicate>> ParseTagPredicate(
       const std::string& attribute_alias);
+  struct QueryAttributes {
+    std::optional<std::string> yield_distance_as;
+    std::optional<double> epsilon;
+  };
+
+  absl::StatusOr<QueryAttributes> ParseQueryAttributes();
+  absl::StatusOr<std::unique_ptr<query::VectorRangePredicate>>
+  ParseVectorRangePredicate(const std::string& attribute_alias);
   absl::StatusOr<std::unique_ptr<query::TextPredicate>> ParseTextPredicate(
       const std::string& field_name);
   void SkipWhitespace();

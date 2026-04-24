@@ -150,15 +150,15 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
 
     def checkall(self, dialect, *orig_cmd, **kwargs):
         '''Non-vector commands. Doesn't have support for '*' yet. '''
-        self.checkvec(self, dialect, orig_cmd, kwargs)
-        self.check(self, dialect, orig_cmd)
+        self.checkvec(dialect, *orig_cmd, **kwargs)
+        self.check(dialect, *orig_cmd)
 
     def test_bad_numeric_data(self, key_type, dialect):
         self.setup_data("bad numbers", key_type)
-        self.check(dialect, f"ft.search {key_type}_idx1",  "@n1:[-inf inf]")
-        self.check(dialect, f"ft.search {key_type}_idx1", "-@n1:[-inf inf]")
-        self.check(dialect, f"ft.search {key_type}_idx1",  "@n2:[-inf inf]")
-        self.check(dialect, f"ft.search {key_type}_idx1", "-@n2:[-inf inf]")
+        self.check(dialect, "ft.search", f"{key_type}_idx1", "@n1:[-inf inf]")
+        self.check(dialect, "ft.search", f"{key_type}_idx1", "-@n1:[-inf inf]")
+        self.check(dialect, "ft.search", f"{key_type}_idx1", "@n2:[-inf inf]")
+        self.check(dialect, "ft.search", f"{key_type}_idx1", "-@n2:[-inf inf]")
 
     def test_search_reverse(self, key_type, dialect):
         self.setup_data("reverse vector numbers", key_type)
@@ -463,8 +463,129 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
 
         for sort_key in ["n1", "n2"]:
             for direction in ["ASC", "DESC", ""]:
-                for return_keys in ["", "RETURN 3 @n1 @t1"]:
+                for return_keys in ["", "RETURN 2 @n1 @t1"]:
                     for wsk in ["", "WITHSORTKEYS"]:
                         for limit in ["LIMIT 0 5", "LIMIT 2 3", ""]:
                             self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY {sort_key} {direction} {return_keys} {limit} {wsk}")
+
+
+    # test_first_value_simple_mode is intentionally omitted.
+    # FIRST_VALUE without a BY clause is non-deterministic: the order of
+    # records within a group depends on retrieval order, which differs between
+    # Redis and Valkey implementations. Compatibility testing requires
+    # deterministic results, so only BY-clause (sorted) mode is tested here.
+
+    def test_first_value_by_clause(self, key_type, dialect):
+        """Test FIRST_VALUE with BY clause - sorted mode."""
+        self.setup_data("sortable numbers", key_type)
+
+        # (value_field, group_field, load_fields, by_field, order)
+        # order=None means default (3-arg form, no explicit ASC/DESC)
+        cases = [
+            ("@n1", "@n2", "3 @__key @n1 @n2", "@n1", "ASC"),
+            ("@n1", "@n2", "3 @__key @n1 @n2", "@n1", "DESC"),
+            ("@n1", "@n2", "3 @__key @n1 @n2", "@n1", None),   # default order
+            ("@t1", "@t2", "3 @__key @t1 @t2", "@t1", "ASC"),
+            ("@t1", "@t2", "3 @__key @t1 @t2", "@t1", "DESC"),
+            ("@t1", "@n2", "4 @__key @t1 @n1 @n2", "@n1", "ASC"),  # cross-field
+            ("@n1", "@n2", "3 @__key @n1 @n2", "@n2", "ASC"),  # tie-breaking
+        ]
+        for val, group, load, by, order in cases:
+            if order is None:
+                nargs, order_clause = "3", ""
+            else:
+                nargs, order_clause = "4", f" {order}"
+            alias = f"first_{val[1:]}_{by[1:]}_{order or 'default'}"
+            self.check(dialect,
+                f"ft.aggregate {key_type}_idx1 * "
+                f"load {load} "
+                f"groupby 1 {group} "
+                f"reduce first_value {nargs} {val} BY {by}{order_clause} as {alias}"
+            )
+
+    def test_first_value_keyword_case(self, key_type, dialect):
+        """Test FIRST_VALUE with case-insensitive keywords."""
+        self.setup_data("sortable numbers", key_type)
+
+        # 3-arg form: vary BY keyword case only
+        for by_kw in ["by", "BY", "By"]:
+            self.check(dialect,
+                f"ft.aggregate {key_type}_idx1 * "
+                f"load 3 @__key @n1 @n2 "
+                f"groupby 1 @n2 "
+                f"reduce first_value 3 @n1 {by_kw} @n1 as first_{by_kw}"
+            )
+
+        # 4-arg form: vary order keyword case (ASC and DESC variants)
+        for order_kw in ["asc", "ASC", "Asc", "desc", "DESC", "Desc"]:
+            self.check(dialect,
+                f"ft.aggregate {key_type}_idx1 * "
+                f"load 3 @__key @n1 @n2 "
+                f"groupby 1 @n2 "
+                f"reduce first_value 4 @n1 BY @n1 {order_kw} as first_{order_kw}"
+            )
+
+    def test_first_value_edge_cases(self, key_type, dialect):
+        """Test FIRST_VALUE with edge cases like nil values."""
+        self.setup_data("hard numbers", key_type)
+
+        # nil values in comparison field, both directions
+        for order in ["ASC", "DESC"]:
+            self.check(dialect,
+                f"ft.aggregate {key_type}_idx1 * "
+                f"load 3 @__key @n1 @n2 "
+                f"groupby 1 @n2 "
+                f"reduce first_value 4 @n1 BY @n1 {order} as first_nil_{order.lower()}"
+            )
+
+        # NOTE: Simple mode test removed due to non-deterministic ordering.
+        # When FIRST_VALUE is used without a BY clause, the order of values
+        # within each group is undefined, leading to inconsistent results.
+        
+        # Switch to sortable numbers for duplicate comparison values
+        self.client.execute_command("FLUSHALL SYNC")
+        time.sleep(0.5)
+        self.setup_data("sortable numbers", key_type)
+        
+        # Test with duplicate comparison values (tie-breaking)
+        self.check(dialect, 
+            f"ft.aggregate {key_type}_idx1 * "
+            f"load 3 @__key @n1 @n2 "
+            f"groupby 1 @n2 "
+            f"reduce first_value 4 @n1 BY @n2 ASC as first_dup_tie"
+        )
+
+    def test_first_value_errors(self, key_type, dialect):
+        """Test FIRST_VALUE error conditions."""
+        self.setup_data("sortable numbers", key_type)
+        
+        # Test nargs=0 (too few arguments) - this will be caught by parser
+        # Note: This may not be testable via compatibility tests if parser rejects it
+        
+        # Test nargs=2 (incomplete BY clause)
+        self.check(dialect, 
+            f"ft.aggregate {key_type}_idx1 * "
+            f"load 3 @__key @n1 @n2 "
+            f"groupby 1 @n2 "
+            f"reduce first_value 2 @n1 @n2 as first_error_nargs2"
+        )
+        
+        # Test nargs=5 (too many arguments) - this will be caught by parser
+        # Note: This may not be testable via compatibility tests if parser rejects it
+        
+        # Test invalid BY keyword (e.g., NOTBY)
+        self.check(dialect, 
+            f"ft.aggregate {key_type}_idx1 * "
+            f"load 3 @__key @n1 @n2 "
+            f"groupby 1 @n2 "
+            f"reduce first_value 3 @n1 NOTBY @n2 as first_error_notby"
+        )
+        
+        # Test invalid sort order (not ASC/DESC)
+        self.check(dialect, 
+            f"ft.aggregate {key_type}_idx1 * "
+            f"load 3 @__key @n1 @n2 "
+            f"groupby 1 @n2 "
+            f"reduce first_value 4 @n1 BY @n2 INVALID as first_error_invalid"
+        )
 

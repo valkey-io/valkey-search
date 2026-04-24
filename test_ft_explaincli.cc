@@ -18,12 +18,10 @@ TEST_F(FTExplainCliTest, WrongNumberOfArguments) {
       ValkeyModule_CreateString(&fake_ctx_, "myindex", 7)};
 
   auto status = FTExplainCliCmd(&fake_ctx_, cmd_argv.data(), cmd_argv.size());
-  EXPECT_TRUE(status.ok());
 
-  // Should reply with error for wrong number of arguments
-  auto replies = fake_ctx_.reply_capture.GetReplies();
-  EXPECT_EQ(replies.size(), 1);
-  EXPECT_TRUE(replies[0].error_value.has_value());
+  // Should return error for too few arguments (argc < 3)
+  EXPECT_FALSE(status.ok());
+  EXPECT_TRUE(absl::IsInvalidArgument(status));
 }
 
 TEST_F(FTExplainCliTest, NonExistentIndex) {

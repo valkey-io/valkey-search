@@ -13,18 +13,37 @@
 #include "src/commands/filter_parser.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
+#include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 
+struct ExplainCliCommand {
+  bool verbatim{false};
+  bool inorder{false};
+  std::optional<uint32_t> slop;
+};
+
+static vmsdk::KeyValueParser<ExplainCliCommand> CreateExplainCliParser() {
+  vmsdk::KeyValueParser<ExplainCliCommand> parser;
+  parser.AddParamParser(query::kVerbatim,
+                        GENERATE_FLAG_PARSER(ExplainCliCommand, verbatim));
+  parser.AddParamParser(query::kInorder,
+                        GENERATE_FLAG_PARSER(ExplainCliCommand, inorder));
+  parser.AddParamParser(query::kSlop,
+                        GENERATE_VALUE_PARSER(ExplainCliCommand, slop));
+  return parser;
+}
+
 absl::Status FTExplainCliCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                              int argc) {
-  if (argc != 3) {
+  if (argc < 3) {
     return absl::InvalidArgumentError(
         "Wrong number of arguments for FT.EXPLAINCLI command. "
-        "Usage: FT.EXPLAINCLI <index> <query>");
+        "Usage: FT.EXPLAINCLI <index> <query> [VERBATIM] [INORDER] [SLOP "
+        "<slop>]");
   }
 
   // Get index name and query string
@@ -37,13 +56,28 @@ absl::Status FTExplainCliCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   const char *query_str = ValkeyModule_StringPtrLen(argv[2], &query_len);
   absl::string_view query(query_str, query_len);
 
+  // Parse optional arguments (VERBATIM, INORDER, SLOP)
+  ExplainCliCommand cmd;
+  if (argc > 3) {
+    static auto parser = CreateExplainCliParser();
+    vmsdk::ArgsIterator itr{argv + 3, argc - 3};
+    VMSDK_RETURN_IF_ERROR(parser.Parse(cmd, itr));
+  }
+
   // Get the index schema
   VMSDK_ASSIGN_OR_RETURN(auto index_schema,
                          SchemaManager::Instance().GetIndexSchema(
                              ValkeyModule_GetSelectedDb(ctx), index_name));
 
+  // If INORDER or SLOP, validate that the index supports offsets
+  if ((cmd.inorder || cmd.slop.has_value()) &&
+      !index_schema->HasTextOffsets()) {
+    return absl::InvalidArgumentError("Index does not support offsets");
+  }
+
   // Parse the query to build the predicate tree
-  TextParsingOptions options{};
+  TextParsingOptions options{
+      .verbatim = cmd.verbatim, .inorder = cmd.inorder, .slop = cmd.slop};
   FilterParser parser(*index_schema, query, options);
 
   auto parse_results = parser.Parse();

@@ -5,8 +5,6 @@
  *
  */
 
-#include <vector>
-
 #include "absl/status/status.h"
 #include "absl/strings/string_view.h"
 #include "src/commands/commands.h"
@@ -85,29 +83,21 @@ absl::Status FTExplainCliCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   } else {
     explanation = "No predicate tree (empty or match-all query)";
   }
-  // Split the explanation into lines for better CLI display
-  std::vector<std::string> lines;
+  // Stream lines directly using a postponed-length array
+  ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
+  size_t line_count = 0;
   size_t start = 0;
-  size_t pos = 0;
-  while ((pos = explanation.find('\n', start)) != std::string::npos) {
-    std::string line = explanation.substr(start, pos - start);
-    if (!line.empty()) {  // Skip empty lines
-      lines.push_back(line);
+  while (start < explanation.length()) {
+    size_t pos = explanation.find('\n', start);
+    size_t end = (pos != std::string::npos) ? pos : explanation.length();
+    if (end > start) {
+      ValkeyModule_ReplyWithStringBuffer(ctx, explanation.c_str() + start,
+                                         end - start);
+      ++line_count;
     }
-    start = pos + 1;
+    start = end + 1;
   }
-  // Add the last line if it doesn't end with newline
-  if (start < explanation.length()) {
-    std::string line = explanation.substr(start);
-    if (!line.empty()) {
-      lines.push_back(line);
-    }
-  }
-  // Reply with an array of lines
-  ValkeyModule_ReplyWithArray(ctx, lines.size());
-  for (const auto &line : lines) {
-    ValkeyModule_ReplyWithStringBuffer(ctx, line.c_str(), line.length());
-  }
+  ValkeyModule_ReplySetArrayLength(ctx, line_count);
   return absl::OkStatus();
 }
 

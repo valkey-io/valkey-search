@@ -144,6 +144,14 @@ class PredicateEvaluator : public query::Evaluator {
     return predicate.Evaluate(*text_index_, target_key_, require_positions);
   }
 
+  EvaluationResult EvaluateVectorRange(
+      const query::VectorRangePredicate & /*predicate*/) override {
+    // Vector range predicates are fully evaluated during the search phase.
+    // During content resolution re-verification, we pass through since the
+    // distance check was already performed.
+    return EvaluationResult(true);
+  }
+
  private:
   const RecordsMap &records_;
   const valkey_search::indexes::text::TextIndex *text_index_ = nullptr;

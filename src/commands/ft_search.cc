@@ -139,6 +139,13 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
   const auto &neighbors = search_result.neighbors;
   auto range = search_result.GetSerializationRange(command);
 
+  // Determine if this is a vector range query that needs distance scores.
+  bool is_vector_range = command.IsVectorRangeQuery();
+  std::string score_field_name;
+  if (is_vector_range) {
+    score_field_name = command.GetVectorRangeScoreFieldName();
+  }
+
   // When with_sort_keys is true, we add an extra element per result (the sort
   // key)
   size_t elements_per_result = command.with_sort_keys ? 3 : 2;
@@ -160,7 +167,18 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
     const auto &contents = neighbors[i].attribute_contents.value();
 
     if (command.return_attributes.empty()) {
-      ValkeyModule_ReplyWithArray(ctx, 2 * contents.size());
+      // For vector range queries, add 2 extra elements for the distance score.
+      size_t array_size =
+          is_vector_range ? 2 * contents.size() + 2 : 2 * contents.size();
+      ValkeyModule_ReplyWithArray(ctx, array_size);
+      // Include distance score for vector range queries.
+      if (is_vector_range) {
+        ValkeyModule_ReplyWithString(
+            ctx, vmsdk::MakeUniqueValkeyString(score_field_name).get());
+        auto score_value = absl::StrFormat("%.12g", neighbors[i].distance);
+        ValkeyModule_ReplyWithString(
+            ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
+      }
       for (const auto &attribute_content : contents) {
         ValkeyModule_ReplyWithString(ctx,
                                      attribute_content.second.GetIdentifier());
@@ -169,7 +187,28 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
     } else {
       ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_LEN);
       size_t cnt = 0;
+      // Include distance score for vector range queries when the score field
+      // is in the RETURN list.
+      if (is_vector_range) {
+        for (const auto &return_attribute : command.return_attributes) {
+          if (score_field_name ==
+              vmsdk::ToStringView(return_attribute.identifier.get())) {
+            ValkeyModule_ReplyWithString(ctx, return_attribute.alias.get());
+            auto score_value = absl::StrFormat("%.12g", neighbors[i].distance);
+            ValkeyModule_ReplyWithString(
+                ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
+            ++cnt;
+            break;
+          }
+        }
+      }
       for (const auto &return_attribute : command.return_attributes) {
+        // Skip the score field if already handled above.
+        if (is_vector_range &&
+            score_field_name ==
+                vmsdk::ToStringView(return_attribute.identifier.get())) {
+          continue;
+        }
         auto it = contents.find(
             vmsdk::ToStringView(return_attribute.identifier.get()));
         if (it != contents.end()) {

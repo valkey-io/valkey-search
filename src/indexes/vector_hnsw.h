@@ -24,6 +24,7 @@
 #include "src/rdb_serialization.h"
 #include "src/utils/cancel.h"
 #include "src/utils/string_interning.h"
+#include "src/indexes/fp16.h"
 #include "third_party/hnswlib/hnswalg.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -107,9 +108,9 @@ class VectorHNSW : public VectorBase {
  private:
   VectorHNSW(int dimensions, absl::string_view attribute_identifier,
              data_model::AttributeDataType attribute_data_type);
-  std::unique_ptr<hnswlib::HierarchicalNSW<T>> algo_
+  std::unique_ptr<hnswlib::HierarchicalNSW<float>> algo_
       ABSL_GUARDED_BY(resize_mutex_);
-  std::unique_ptr<hnswlib::SpaceInterface<T>> space_;
+  std::unique_ptr<hnswlib::SpaceInterface<float>> space_;
   mutable absl::Mutex resize_mutex_;
   mutable absl::Mutex tracked_vectors_mutex_;
   std::deque<InternedStringPtr> tracked_vectors_

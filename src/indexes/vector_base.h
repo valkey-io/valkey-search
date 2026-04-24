@@ -36,6 +36,7 @@
 #include "src/utils/string_interning.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "third_party/hnswlib/iostream.h"
+#include "src/indexes/fp16.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -104,7 +105,8 @@ const absl::NoDestructor<
 
 const absl::NoDestructor<
     absl::flat_hash_map<absl::string_view, data_model::VectorDataType>>
-    kVectorDataTypeByStr({{"FLOAT32", data_model::VECTOR_DATA_TYPE_FLOAT32}});
+    kVectorDataTypeByStr({{"FLOAT32", data_model::VECTOR_DATA_TYPE_FLOAT32},
+                          {"FLOAT16", data_model::VECTOR_DATA_TYPE_FLOAT16}});
 
 template <typename V>
 absl::string_view LookupKeyByValue(
@@ -171,6 +173,7 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
       std::priority_queue<std::pair<T, hnswlib::labeltype>>& knn_res);
   absl::StatusOr<std::vector<char>> GetValue(const InternedStringPtr& key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  virtual size_t GetDataTypeSize() const = 0;
   int GetVectorDataSize() const { return GetDataTypeSize() * dimensions_; }
   char* TrackVector(uint64_t internal_id, char* vector, size_t len) override;
   InternedStringPtr InternVector(absl::string_view record,
@@ -179,7 +182,7 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   virtual size_t GetLabelCount() const { return 0; }
 
  protected:
-  VectorBase(IndexerType indexer_type, int dimensions,
+  VectorBase(IndexerType indexer_type, int dimensions, size_t element_size,
              data_model::AttributeDataType attribute_data_type,
              absl::string_view attribute_identifier)
       : IndexBase(indexer_type),
@@ -189,7 +192,7 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
 #ifndef SAN_BUILD
         ,
         vector_allocator_(CREATE_UNIQUE_PTR(
-            FixedSizeAllocator, dimensions * sizeof(float) + 1, true))
+            FixedSizeAllocator, dimensions * element_size + 1, true))
 #endif  // !SAN_BUILD
   {
   }
@@ -200,9 +203,9 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
     return dim == dimensions_ && (record.size() % data_type_size == 0);
   }
   int RespondWithInfo(ValkeyModuleCtx* ctx) const override;
-  template <typename T>
+  template <typename StorageT>
   void Init(int dimensions, data_model::DistanceMetric distance_metric,
-            std::unique_ptr<hnswlib::SpaceInterface<T>>& space);
+            std::unique_ptr<hnswlib::SpaceInterface<float>>& space);
   virtual absl::Status AddRecordImpl(uint64_t internal_id,
                                      absl::string_view record) = 0;
 
@@ -211,7 +214,6 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
                                         absl::string_view record) = 0;
   virtual int RespondWithInfoImpl(ValkeyModuleCtx* ctx) const = 0;
 
-  virtual size_t GetDataTypeSize() const = 0;
   virtual void ToProtoImpl(
       data_model::VectorIndex* vector_index_proto) const = 0;
   virtual absl::Status SaveIndexImpl(

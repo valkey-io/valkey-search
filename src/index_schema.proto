@@ -101,6 +101,7 @@ enum DistanceMetric {
 enum VectorDataType {
   VECTOR_DATA_TYPE_UNSPECIFIED = 0;
   VECTOR_DATA_TYPE_FLOAT32 = 1;
+  VECTOR_DATA_TYPE_FLOAT16 = 2;
 }
 
 message HNSWAlgorithm {

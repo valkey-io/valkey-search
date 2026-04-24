@@ -45,8 +45,11 @@
 #include "src/valkey_search_options.h"
 #include "src/vector_externalizer.h"
 #include "third_party/hnswlib/hnswlib.h"
+#include "src/indexes/fp16.h"
 #include "third_party/hnswlib/space_ip.h"
+#include "third_party/hnswlib/space_ip_fp16.h"
 #include "third_party/hnswlib/space_l2.h"
+#include "third_party/hnswlib/space_l2_fp16.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -58,20 +61,28 @@ constexpr float kDefaultMagnitude = -1.0f;
 
 namespace {
 
-template <typename T>
-std::unique_ptr<hnswlib::SpaceInterface<T>> CreateSpace(
+template <typename StorageT>
+std::unique_ptr<hnswlib::SpaceInterface<float>> CreateSpace(
     int dimensions, valkey_search::data_model::DistanceMetric distance_metric) {
-  if constexpr (std::is_same_v<T, float>) {
-    if (distance_metric ==
-            valkey_search::data_model::DistanceMetric::DISTANCE_METRIC_COSINE ||
-        distance_metric ==
-            valkey_search::data_model::DistanceMetric::DISTANCE_METRIC_IP) {
+  bool is_ip =
+      distance_metric ==
+          valkey_search::data_model::DistanceMetric::DISTANCE_METRIC_COSINE ||
+      distance_metric ==
+          valkey_search::data_model::DistanceMetric::DISTANCE_METRIC_IP;
+  if constexpr (std::is_same_v<StorageT, float>) {
+    if (is_ip) {
       return std::make_unique<hnswlib::InnerProductSpace>(dimensions);
     } else {
       return std::make_unique<hnswlib::L2Space>(dimensions);
     }
+  } else if constexpr (std::is_same_v<StorageT, float16>) {
+    if (is_ip) {
+      return std::make_unique<hnswlib::InnerProductSpaceFP16>(dimensions);
+    } else {
+      return std::make_unique<hnswlib::L2SpaceFP16>(dimensions);
+    }
   }
-  DCHECK(false) << "no matching spacer";
+  DCHECK(false) << "no matching space";
   return std::make_unique<hnswlib::L2Space>(dimensions);
 }
 
@@ -110,15 +121,16 @@ query::EvaluationResult PrefilterEvaluator::EvaluateText(
 }
 
 template <typename T>
-T CopyAndNormalizeEmbedding(T *dst, T *src, size_t size) {
-  T magnitude = 0.0f;
+float CopyAndNormalizeEmbedding(T *dst, T *src, size_t size) {
+  float magnitude = 0.0f;
   for (size_t i = 0; i < size; i++) {
-    magnitude += src[i] * src[i];
+    float val = static_cast<float>(src[i]);
+    magnitude += val * val;
   }
   magnitude = std::sqrt(magnitude);
-  T norm = (magnitude == 0.0f) ? 1.0f : (1.0f / magnitude);
+  float norm = (magnitude == 0.0f) ? 1.0f : (1.0f / magnitude);
   for (size_t i = 0; i < size; i++) {
-    dst[i] = norm * src[i];
+    dst[i] = static_cast<T>(norm * static_cast<float>(src[i]));
   }
   return magnitude;
 }
@@ -134,14 +146,23 @@ std::vector<char> NormalizeEmbedding(absl::string_view record, size_t type_size,
     }
     return ret;
   }
+  if (type_size == sizeof(float16)) {
+    float result = CopyAndNormalizeEmbedding(
+        (float16 *)&ret[0], (float16 *)record.data(),
+        ret.size() / sizeof(float16));
+    if (magnitude) {
+      *magnitude = result;
+    }
+    return ret;
+  }
   CHECK(false) << "unsupported type size";
 }
 
-template <typename T>
+template <typename StorageT>
 void VectorBase::Init(int dimensions,
                       valkey_search::data_model::DistanceMetric distance_metric,
-                      std::unique_ptr<hnswlib::SpaceInterface<T>> &space) {
-  space = CreateSpace<T>(dimensions, distance_metric);
+                      std::unique_ptr<hnswlib::SpaceInterface<float>> &space) {
+  space = CreateSpace<StorageT>(dimensions, distance_metric);
   distance_metric_ = distance_metric;
   if (distance_metric ==
       valkey_search::data_model::DistanceMetric::DISTANCE_METRIC_COSINE) {
@@ -446,7 +467,7 @@ void VectorBase::ExternalizeVector(ValkeyModuleCtx *ctx,
   if (interned_vector) {
     VectorExternalizer::Instance().Externalize(
         interned_key, attribute_identifier, attribute_data_type->ToProto(),
-        interned_vector, magnitude);
+        interned_vector, magnitude, GetDataTypeSize());
   }
 }
 
@@ -526,7 +547,6 @@ bool VectorBase::AddPrefilteredKey(
 
 vmsdk::UniqueValkeyString VectorBase::NormalizeStringRecord(
     vmsdk::UniqueValkeyString record) const {
-  CHECK_EQ(GetDataTypeSize(), sizeof(float));
   auto record_str = vmsdk::ToStringView(record.get());
   if (absl::ConsumePrefix(&record_str, "[")) {
     absl::ConsumeSuffix(&record_str, "]");
@@ -534,13 +554,19 @@ vmsdk::UniqueValkeyString VectorBase::NormalizeStringRecord(
   std::vector<std::string> float_strings =
       absl::StrSplit(record_str, ',', absl::SkipWhitespace());
   std::string binary_string;
-  binary_string.reserve(float_strings.size() * sizeof(float));
+  const auto type_size = GetDataTypeSize();
+  binary_string.reserve(float_strings.size() * type_size);
   for (const auto &float_str : float_strings) {
     float value;
     if (!absl::SimpleAtof(float_str, &value)) {
       return nullptr;
     }
-    binary_string += std::string((char *)&value, sizeof(float));
+    if (type_size == sizeof(float)) {
+      binary_string += std::string((char *)&value, sizeof(float));
+    } else if (type_size == sizeof(float16)) {
+      float16 fp16_value = static_cast<float16>(value);
+      binary_string += std::string((char *)&fp16_value, sizeof(float16));
+    }
   }
   return vmsdk::MakeUniqueValkeyString(binary_string);
 }
@@ -579,6 +605,10 @@ absl::Status VectorBase::ForEachUnTrackedKey(
 }
 
 template void VectorBase::Init<float>(
+    int dimensions, data_model::DistanceMetric distance_metric,
+    std::unique_ptr<hnswlib::SpaceInterface<float>> &space);
+
+template void VectorBase::Init<float16>(
     int dimensions, data_model::DistanceMetric distance_metric,
     std::unique_ptr<hnswlib::SpaceInterface<float>> &space);
 

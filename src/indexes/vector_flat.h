@@ -25,6 +25,7 @@
 #include "src/rdb_serialization.h"
 #include "src/utils/cancel.h"
 #include "src/utils/string_interning.h"
+#include "src/indexes/fp16.h"
 #include "third_party/hnswlib/bruteforce.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -95,9 +96,9 @@ class VectorFlat : public VectorBase {
   VectorFlat(int dimensions, data_model::DistanceMetric distance_metric,
              uint32_t block_size, absl::string_view attribute_identifier,
              data_model::AttributeDataType attribute_data_type);
-  std::unique_ptr<hnswlib::BruteforceSearch<T>> algo_
+  std::unique_ptr<hnswlib::BruteforceSearch<float>> algo_
       ABSL_GUARDED_BY(resize_mutex_);
-  std::unique_ptr<hnswlib::SpaceInterface<T>> space_;
+  std::unique_ptr<hnswlib::SpaceInterface<float>> space_;
   uint32_t block_size_;
   mutable absl::Mutex resize_mutex_;
   mutable absl::Mutex tracked_vectors_mutex_;

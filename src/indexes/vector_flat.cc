@@ -60,9 +60,10 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::Create(
                           vector_index_proto.distance_metric(),
                           vector_index_proto.flat_algorithm().block_size(),
                           attribute_identifier, attribute_data_type));
-    index->Init(vector_index_proto.dimension_count(),
-                vector_index_proto.distance_metric(), index->space_);
-    index->algo_ = std::make_unique<hnswlib::BruteforceSearch<T>>(
+    index->template Init<T>(vector_index_proto.dimension_count(),
+                            vector_index_proto.distance_metric(),
+                            index->space_);
+    index->algo_ = std::make_unique<hnswlib::BruteforceSearch<float>>(
         index->space_.get(), vector_index_proto.initial_cap());
     return index;
   } catch (const std::exception &e) {
@@ -108,10 +109,11 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
         vector_index_proto.distance_metric(),
         vector_index_proto.flat_algorithm().block_size(), attribute_identifier,
         attribute_data_type->ToProto()));
-    index->Init(vector_index_proto.dimension_count(),
-                vector_index_proto.distance_metric(), index->space_);
+    index->template Init<T>(vector_index_proto.dimension_count(),
+                            vector_index_proto.distance_metric(),
+                            index->space_);
     index->algo_ =
-        std::make_unique<hnswlib::BruteforceSearch<T>>(index->space_.get());
+        std::make_unique<hnswlib::BruteforceSearch<float>>(index->space_.get());
     RDBChunkInputStream input(std::move(iter));
     VMSDK_RETURN_IF_ERROR(
         index->algo_->LoadIndex(input, index->space_.get(), index.get()));
@@ -128,8 +130,8 @@ VectorFlat<T>::VectorFlat(
     int dimensions, valkey_search::data_model::DistanceMetric distance_metric,
     uint32_t block_size, absl::string_view attribute_identifier,
     data_model::AttributeDataType attribute_data_type)
-    : VectorBase(IndexerType::kFlat, dimensions, attribute_data_type,
-                 attribute_identifier),
+    : VectorBase(IndexerType::kFlat, dimensions, sizeof(T),
+                 attribute_data_type, attribute_identifier),
       block_size_(block_size) {}
 
 template <typename T>
@@ -158,7 +160,7 @@ absl::Status VectorFlat<T>::AddRecordImpl(uint64_t internal_id,
     try {
       absl::ReaderMutexLock lock(&resize_mutex_);
 
-      algo_->addPoint((T *)record.data(), internal_id);
+      algo_->addPoint((void *)record.data(), internal_id);
     } catch (const std::exception &e) {
       ++Metrics::GetStats().flat_add_exceptions_cnt;
       std::string error_msg = e.what();
@@ -230,12 +232,13 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
   }
   auto perform_search = [this, count, &filter,
                          &cancellation_token](absl::string_view query)
-      -> absl::StatusOr<std::priority_queue<std::pair<T, hnswlib::labeltype>>> {
+      -> absl::StatusOr<
+          std::priority_queue<std::pair<float, hnswlib::labeltype>>> {
     absl::ReaderMutexLock lock(&resize_mutex_);
     try {
       CancelCondition canceler(cancellation_token);
       return algo_->searchKnn(
-          (T *)query.data(),
+          (void *)query.data(),
           std::min(count, static_cast<uint64_t>(algo_->cur_element_count_)),
           filter.get(), &canceler);
     } catch (const std::exception &e) {
@@ -267,7 +270,7 @@ VectorFlat<T>::ComputeDistanceFromRecordImpl(uint64_t internal_id,
         absl::StrCat("Couldn't find internal id: ", internal_id));
   }
   return (std::pair<float, hnswlib::labeltype>){
-      algo_->fstdistfunc_((T *)query.data(),
+      algo_->fstdistfunc_((void *)query.data(),
                           *(char **)(*algo_->data_)[search->second],
                           algo_->dist_func_param_),
       internal_id};
@@ -279,6 +282,8 @@ void VectorFlat<T>::ToProtoImpl(
   data_model::VectorDataType data_type;
   if constexpr (std::is_same_v<T, float>) {
     data_type = data_model::VectorDataType::VECTOR_DATA_TYPE_FLOAT32;
+  } else if constexpr (std::is_same_v<T, float16>) {
+    data_type = data_model::VectorDataType::VECTOR_DATA_TYPE_FLOAT16;
   } else {
     DCHECK(false) << "Unsupported type: " << typeid(T).name();
     data_type = data_model::VectorDataType::VECTOR_DATA_TYPE_UNSPECIFIED;
@@ -299,6 +304,12 @@ int VectorFlat<T>::RespondWithInfoImpl(ValkeyModuleCtx *ctx) const {
         ctx,
         LookupKeyByValue(*kVectorDataTypeByStr,
                          data_model::VectorDataType::VECTOR_DATA_TYPE_FLOAT32)
+            .data());
+  } else if constexpr (std::is_same_v<T, float16>) {
+    ValkeyModule_ReplyWithSimpleString(
+        ctx,
+        LookupKeyByValue(*kVectorDataTypeByStr,
+                         data_model::VectorDataType::VECTOR_DATA_TYPE_FLOAT16)
             .data());
   } else {
     ValkeyModule_ReplyWithSimpleString(ctx, "UNKNOWN");
@@ -325,5 +336,6 @@ absl::Status VectorFlat<T>::SaveIndexImpl(
 }
 
 template class VectorFlat<float>;
+template class VectorFlat<float16>;
 
 }  // namespace valkey_search::indexes

@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
+#include "src/indexes/fp16.h"
 #include "absl/log/check.h"
 #include "absl/strings/string_view.h"
 #include "src/attribute_data_type.h"
@@ -44,7 +45,8 @@ class VectorExternalizer {
                    absl::string_view attribute_identifier,
                    data_model::AttributeDataType attribute_data_type,
                    const InternedStringPtr& vector,
-                   std::optional<float> magnitude);
+                   std::optional<float> magnitude,
+                   size_t type_size = sizeof(float));
   void Remove(const InternedStringPtr& key,
               absl::string_view attribute_identifier,
               data_model::AttributeDataType attribute_data_type);
@@ -75,6 +77,7 @@ class VectorExternalizer {
   struct VectorExternalizerEntry {
     InternedStringPtr vector;
     std::optional<float> magnitude;
+    size_t type_size{sizeof(float)};
     // We cache the normalized vector to ensure that the generated normalized
     // vector string remains alive until the engine deep copy it.
     std::unique_ptr<LRUCacheEntry> cache_normalized_;
@@ -116,7 +119,7 @@ class VectorExternalizer {
 template <typename T>
 void CopyAndDenormalizeEmbedding(T* dst, T* src, size_t size, float magnitude) {
   for (size_t i = 0; i < size; i++) {
-    dst[i] = src[i] * magnitude;
+    dst[i] = static_cast<T>(static_cast<float>(src[i]) * magnitude);
   }
 }
 

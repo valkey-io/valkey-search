@@ -19,6 +19,9 @@ class KeyDataType(Enum):
 def float_to_bytes(flt: list[float]) -> bytes:
     return struct.pack(f"<{len(flt)}f", *flt)
 
+def float16_to_bytes(flt: list[float]) -> bytes:
+    return struct.pack(f"<{len(flt)}e", *flt)
+
 
 class Field:
     name: str
@@ -54,6 +57,7 @@ class Vector(Field):
         ef: Union[int, None] = None,
         efc: Union[int, None] = None,
         initialcap: Union[int, None] = None,
+        data_type: str = "FLOAT32",
     ):
         super().__init__(name, alias)
         self.dim = dim
@@ -63,6 +67,7 @@ class Vector(Field):
         self.ef = ef
         self.efc = efc
         self.initialcap = initialcap
+        self.data_type = data_type
 
     def create(self, data_type: KeyDataType):
         extra: list[str] = []
@@ -82,7 +87,7 @@ class Vector(Field):
                 self.type,
                 str(6 + len(extra)),
                 "TYPE",
-                "FLOAT32",
+                self.data_type,
                 "DIM",
                 str(self.dim),
                 "DISTANCE_METRIC",
@@ -94,6 +99,8 @@ class Vector(Field):
     def make_value(self, row: int, column: int, type: KeyDataType) -> Union[str, bytes, float, list[float]]:
         data = [float(i + row + column) for i in range(self.dim)]
         if type == KeyDataType.HASH:
+            if self.data_type == "FLOAT16":
+                return float16_to_bytes(data)
             return float_to_bytes(data)
         else:
             return data

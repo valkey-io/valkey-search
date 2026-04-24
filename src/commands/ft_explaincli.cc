@@ -45,17 +45,14 @@ absl::Status FTExplainCliCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
         "Usage: FT.EXPLAINCLI <index> <query> [VERBATIM] [INORDER] [SLOP "
         "<slop>]");
   }
-
   // Get index name and query string
   size_t index_name_len;
   const char *index_name_str =
       ValkeyModule_StringPtrLen(argv[1], &index_name_len);
   absl::string_view index_name(index_name_str, index_name_len);
-
   size_t query_len;
   const char *query_str = ValkeyModule_StringPtrLen(argv[2], &query_len);
   absl::string_view query(query_str, query_len);
-
   // Parse optional arguments (VERBATIM, INORDER, SLOP)
   ExplainCliCommand cmd;
   if (argc > 3) {
@@ -63,29 +60,24 @@ absl::Status FTExplainCliCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     vmsdk::ArgsIterator itr{argv + 3, argc - 3};
     VMSDK_RETURN_IF_ERROR(parser.Parse(cmd, itr));
   }
-
   // Get the index schema
   VMSDK_ASSIGN_OR_RETURN(auto index_schema,
                          SchemaManager::Instance().GetIndexSchema(
                              ValkeyModule_GetSelectedDb(ctx), index_name));
-
   // If INORDER or SLOP, validate that the index supports offsets
   if ((cmd.inorder || cmd.slop.has_value()) &&
       !index_schema->HasTextOffsets()) {
     return absl::InvalidArgumentError("Index does not support offsets");
   }
-
   // Parse the query to build the predicate tree
   TextParsingOptions options{
       .verbatim = cmd.verbatim, .inorder = cmd.inorder, .slop = cmd.slop};
   FilterParser parser(*index_schema, query, options);
-
   auto parse_results = parser.Parse();
   if (!parse_results.ok()) {
     ValkeyModule_ReplyWithError(ctx, parse_results.status().message().data());
     return absl::OkStatus();
   }
-
   // Generate the predicate tree explanation
   std::string explanation;
   if (parse_results->root_predicate) {
@@ -93,12 +85,10 @@ absl::Status FTExplainCliCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   } else {
     explanation = "No predicate tree (empty or match-all query)";
   }
-
   // Split the explanation into lines for better CLI display
   std::vector<std::string> lines;
   size_t start = 0;
   size_t pos = 0;
-
   while ((pos = explanation.find('\n', start)) != std::string::npos) {
     std::string line = explanation.substr(start, pos - start);
     if (!line.empty()) {  // Skip empty lines
@@ -106,7 +96,6 @@ absl::Status FTExplainCliCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     }
     start = pos + 1;
   }
-
   // Add the last line if it doesn't end with newline
   if (start < explanation.length()) {
     std::string line = explanation.substr(start);
@@ -114,13 +103,11 @@ absl::Status FTExplainCliCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
       lines.push_back(line);
     }
   }
-
   // Reply with an array of lines
   ValkeyModule_ReplyWithArray(ctx, lines.size());
   for (const auto &line : lines) {
     ValkeyModule_ReplyWithStringBuffer(ctx, line.c_str(), line.length());
   }
-
   return absl::OkStatus();
 }
 

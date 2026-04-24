@@ -1,0 +1,220 @@
+name: Slash Commands
+
+# Supported comment commands (triage access or above):
+#   /label <label-name>        — add a label from the allowlist
+#   /reviewer <github-login>   — request a review from a specific user
+#   /resolves <issue-number>   — append "Resolves #N" to the PR body
+#   /rerun                     — re-run all failed CI jobs for this PR
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [opened]
+
+permissions:
+  actions: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  # Auto-assign the PR author as the PR assignee when a PR is opened
+  auto-assign:
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: toshimaru/auto-author-assign@v3.0.1
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+  # Handle all slash commands posted in PR/issue comments
+  dispatch:
+    if: github.event_name == 'issue_comment'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.comment.body.trim();
+            const commenter = context.payload.comment.user.login;
+
+            if (!/^\/(label|reviewer|resolves|rerun)\b/.test(body)) return;
+
+            // Verify commenter has at least triage access
+            const { data: perm } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              username: commenter,
+            });
+            const allowed = ['admin', 'maintain', 'write', 'triage'];
+            if (!allowed.includes(perm.permission)) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: `@${commenter} You need at least **triage** access to use slash commands.`,
+              });
+              return;
+            }
+
+            // ── /label <name> ──────────────────────────────────────────────
+            const ALLOWED_LABELS = new Set([
+              'wontfix',
+              '1.2-ga-blocker',
+              '1.2-nice-to-have',
+              '1.2-rc1-blocker',
+              '1.2-rc2',
+              '1.2-rc3',
+              '1.2.1',
+              '1.3.0',
+              'ACL',
+              'breaking-change',
+              'bug',
+              'build-improvment',
+              'client-integration',
+              'documentation',
+              'duplicate',
+              'enhancement',
+              'FT',
+              'good first issue',
+              'help wanted',
+              'invalid',
+              'major-decision-approved',
+              'major-decision-pending',
+              'needs-documentation',
+              'optimization',
+              'question',
+              'release blocker',
+              'reviewable',
+              'test',
+              'to-be-backported',
+            ]);
+
+            const labelMatch = body.match(/^\/label\s+(.+)$/m);
+            if (labelMatch) {
+              const requested = labelMatch[1].trim();
+              if (!ALLOWED_LABELS.has(requested)) {
+                const list = [...ALLOWED_LABELS].map(l => `\`${l}\``).join(', ');
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  body: `\`${requested}\` is not a recognised label. Allowed labels: ${list}`,
+                });
+                return;
+              }
+              const { data: issue } = await github.rest.issues.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+              });
+              if (issue.labels.map(l => l.name).includes(requested)) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  body: `Label \`${requested}\` is already applied.`,
+                });
+                return;
+              }
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels: [requested],
+              });
+              return;
+            }
+
+            // ── /reviewer <login> ──────────────────────────────────────────
+            const reviewerMatch = body.match(/^\/reviewer\s+@?(\S+)$/m);
+            if (reviewerMatch) {
+              if (!context.payload.issue.pull_request) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  body: `/reviewer can only be used on pull requests.`,
+                });
+                return;
+              }
+              await github.rest.pulls.requestReviewers({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+                reviewers: [reviewerMatch[1]],
+              });
+              return;
+            }
+
+            // ── /resolves <issue-number> ───────────────────────────────────
+            const resolvesMatch = body.match(/^\/resolves\s+#?(\d+)$/m);
+            if (resolvesMatch) {
+              if (!context.payload.issue.pull_request) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  body: `/resolves can only be used on pull requests.`,
+                });
+                return;
+              }
+              const issueNumber = resolvesMatch[1];
+              const { data: pr } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+              });
+              const currentBody = pr.body || '';
+              if (new RegExp(`(?:resolves|fixes|closes)\\s+#${issueNumber}\\b`, 'i').test(currentBody)) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  body: `Issue #${issueNumber} is already linked in this PR.`,
+                });
+                return;
+              }
+              await github.rest.pulls.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+                body: currentBody ? `${currentBody}\n\nResolves #${issueNumber}` : `Resolves #${issueNumber}`,
+              });
+              return;
+            }
+
+            // ── /rerun ─────────────────────────────────────────────────────
+            if (/^\/rerun\b/.test(body)) {
+              if (!context.payload.issue.pull_request) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  body: `/rerun can only be used on pull requests.`,
+                });
+                return;
+              }
+              const { data: pr } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+              });
+              const { data: runs } = await github.rest.actions.listWorkflowRunsForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                head_sha: pr.head.sha,
+                per_page: 20,
+              });
+              const failed = runs.workflow_runs.filter(
+                r => ['failure', 'timed_out'].includes(r.conclusion)
+              );
+              if (failed.length === 0) return;
+              for (const run of failed) {
+                await github.rest.actions.reRunFailedJobs({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  run_id: run.id,
+                });
+              }
+            }

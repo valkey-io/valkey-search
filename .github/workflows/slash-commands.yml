@@ -114,12 +114,36 @@ jobs:
                 });
                 return;
               }
-              await github.rest.pulls.requestReviewers({
+              const reviewer = reviewerMatch[1];
+              const { data: pr } = await github.rest.pulls.get({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 pull_number: context.issue.number,
-                reviewers: [reviewerMatch[1]],
               });
+              if (reviewer === pr.user.login) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  body: `@${reviewer} is the PR author and cannot be requested as a reviewer.`,
+                });
+                return;
+              }
+              try {
+                await github.rest.pulls.requestReviewers({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: context.issue.number,
+                  reviewers: [reviewer],
+                });
+              } catch (e) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  body: `Could not request review from \`${reviewer}\` — they may not be a collaborator on this repository.`,
+                });
+              }
               return;
             }
 

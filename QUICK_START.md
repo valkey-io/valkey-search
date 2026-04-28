@@ -4,7 +4,7 @@ Follow these steps to set up, build, and run the Valkey server with the valkey-s
 
 ## Step 1: Install Valkey and valkey-search
 
-1. Follow the [instructions to build Valkey from source](https://github.com/valkey-io/valkey?tab=readme-ov-file#building-valkey-using-makefile). Make sure to use Valkey version 7.2.6 or later as the previous versions have Valkey module API bugs.
+1. Follow the [instructions to build Valkey from source](https://github.com/valkey-io/valkey?tab=readme-ov-file#building-valkey-using-makefile). Make sure to use Valkey version 9.0.1 or later.
 2. Follow the [instructions to build the valkey-search module from source](https://github.com/valkey-io/valkey-search/tree/main?tab=readme-ov-file#build-instructions).
 
 ## Step 2: Run the Valkey Server
@@ -21,7 +21,7 @@ For optimal performance, valkey-search matches worker threads to the number of C
 valkey-server "--loadmodule /path/to/libsearch.so --reader-threads 64 --writer-threads 64"
 ```
 
-To enable JSON support, load the JSON module as well:
+To enable JSON support, load the [valkey-json](https://github.com/valkey-io/valkey-json) module as well:
 
 ```bash
 valkey-server --loadmodule /path/to/libsearch.so --loadmodule /path/to/libjson.so
@@ -51,16 +51,16 @@ FT.CREATE myIndex SCHEMA vector VECTOR HNSW 6 TYPE FLOAT32 DIM 3 DISTANCE_METRIC
 
 ### Insert Some Vectors
 
+Vectors must be encoded as 32-bit IEEE 754 floats in little-endian byte order. Each vector must have exactly `DIM` elements.
+
 ```bash
 HSET my_hash_key_1 vector "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x80?"
 HSET my_hash_key_2 vector "\x00\xaa\x00\x00\x00\x00\x00\x00\x00\x00\x80?"
 ```
 
-Replace the `\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x80?` and `\x00\xaa\x00\x00\x00\x00\x00\x00\x00\x00\x80?` with actual vectors. Vectors must be encoded as 32-bit IEEE 754 floats in little-endian byte order.
-
 ### Issue a Vector Query
 
-Perform a KNN search returning the top 5 nearest vectors:
+Perform a K-Nearest Neighbors (KNN) search returning the top 5 nearest vectors:
 
 ```bash
 FT.SEARCH myIndex "*=>[KNN 5 @vector $query_vector]" PARAMS 2 query_vector "\xcd\xccL?\x00\x00\x00\x00\x00\x00\x00\x00"
@@ -71,6 +71,8 @@ The `*` before `=>` means no pre-filtering — all vectors in the index are sear
 ---
 
 ## Working with Tag and Numeric Fields
+
+Tag fields store categorical values like status labels or product categories and support exact-match and prefix-match queries. Numeric fields store numbers and support range queries with inclusive or exclusive bounds.
 
 ### Create an Index with Tag and Numeric Fields
 

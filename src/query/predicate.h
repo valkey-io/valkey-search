@@ -196,6 +196,20 @@ class TextPredicate : public Predicate {
       const std::shared_ptr<indexes::text::TextIndex>& text_index,
       FieldMaskPredicate field_mask, bool require_positions) const = 0;
   virtual size_t EstimateSize(bool is_vec_query) const = 0;
+  // Returns the field name if a specific field was targeted, or nullopt for
+  // default (all text fields) searches.
+  const std::optional<std::string>& GetFieldName() const {
+    return field_name_;
+  }
+  void SetFieldName(std::optional<std::string> field_name) {
+    field_name_ = std::move(field_name);
+  }
+
+ private:
+  // Optional field name used locally by FT.EXPLAINCLI for display purposes.
+  // Not serialized or sent over the network. Set during query parsing in
+  // FilterParser; nullopt indicates a default (all text fields) search.
+  std::optional<std::string> field_name_;
 };
 
 class TermPredicate : public TextPredicate {

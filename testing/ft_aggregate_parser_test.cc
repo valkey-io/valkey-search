@@ -287,6 +287,27 @@ TEST_F(AggregateTest, StageParserTest) {
   }
 }
 
+TEST_F(AggregateTest, EmptyApplyAndFilterExpressionsAreRejected) {
+  for (absl::string_view test_case :
+       {"FILTER ''", "FILTER ' '", "APPLY '' AS r", "APPLY ' ' AS r"}) {
+    auto argv = vmsdk::ToValkeyStringVector(test_case);
+    vmsdk::ArgsIterator itr(argv.data(), argv.size());
+
+    AggregateParameters params(0);
+    params.timeout_ms = 0;
+    params.parse_vars_.index_interface_ = &fake_index;
+
+    auto parser = CreateAggregateParser();
+    auto result = parser.Parse(params, itr);
+
+    EXPECT_FALSE(result.ok()) << "Parser unexpectedly accepted: " << test_case;
+
+    for (auto arg : argv) {
+      ValkeyModule_FreeString(nullptr, arg);
+    }
+  }
+}
+
 TEST_F(AggregateTest, GetSerializationRange_NoStages) {
   AggregateParameters params(0);
   auto range = params.GetSerializationRange();

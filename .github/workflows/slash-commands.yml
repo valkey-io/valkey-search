@@ -58,37 +58,13 @@ jobs:
             }
 
             // ── /label <name> ──────────────────────────────────────────────
-            const ALLOWED_LABELS = new Set([
-              'wontfix',
-              '1.2-ga-blocker',
-              '1.2-nice-to-have',
-              '1.2-rc1-blocker',
-              '1.2-rc2',
-              '1.2-rc3',
-              '1.2.1',
-              '1.3.0',
-              'ACL',
-              'breaking-change',
-              'bug',
-              'build-improvment',
-              'client-integration',
-              'documentation',
-              'duplicate',
-              'enhancement',
-              'FT',
-              'good first issue',
-              'help wanted',
-              'invalid',
-              'major-decision-approved',
-              'major-decision-pending',
-              'needs-documentation',
-              'optimization',
-              'question',
-              'release blocker',
-              'reviewable',
-              'test',
-              'to-be-backported',
-            ]);
+            // Fetch the repo's defined labels dynamically — no hardcoded list.
+            const { data: repoLabels } = await github.rest.issues.listLabelsForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+            });
+            const ALLOWED_LABELS = new Set(repoLabels.map(l => l.name));
 
             const labelMatch = body.match(/^\/label\s+(.+)$/m);
             if (labelMatch) {

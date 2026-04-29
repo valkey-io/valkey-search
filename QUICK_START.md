@@ -40,10 +40,10 @@ valkey-cli
 ### Create a Vector Index
 
 ```bash
-FT.CREATE myIndex SCHEMA vector VECTOR HNSW 6 TYPE FLOAT32 DIM 3 DISTANCE_METRIC COSINE
+FT.CREATE myIndex SCHEMA embedding VECTOR HNSW 6 TYPE FLOAT32 DIM 3 DISTANCE_METRIC COSINE
 ```
 
-- `vector` is the vector field name for storing the vectors.
+- `embedding` is the field name for storing vectors.
 - `VECTOR HNSW` uses the Hierarchical Navigable Small World algorithm for approximate nearest neighbor search. The other option is `VECTOR FLAT` for exact brute-force search.
 - `DIM 3` sets the vector dimensionality to 3.
 - `DISTANCE_METRIC COSINE` sets the distance metric to cosine similarity. Other options are `L2` and `IP`.
@@ -54,8 +54,8 @@ FT.CREATE myIndex SCHEMA vector VECTOR HNSW 6 TYPE FLOAT32 DIM 3 DISTANCE_METRIC
 Vectors must be encoded as 32-bit IEEE 754 floats in little-endian byte order. Each vector must have exactly `DIM` elements.
 
 ```bash
-HSET my_hash_key_1 vector "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x80?"
-HSET my_hash_key_2 vector "\x00\xaa\x00\x00\x00\x00\x00\x00\x00\x00\x80?"
+HSET my_hash_key_1 embedding "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x80?"
+HSET my_hash_key_2 embedding "\x00\xaa\x00\x00\x00\x00\x00\x00\x00\x00\x80?"
 ```
 
 ### Issue a Vector Query
@@ -63,7 +63,7 @@ HSET my_hash_key_2 vector "\x00\xaa\x00\x00\x00\x00\x00\x00\x00\x00\x80?"
 Perform a K-Nearest Neighbors (KNN) search returning the top 5 nearest vectors:
 
 ```bash
-FT.SEARCH myIndex "*=>[KNN 5 @vector $query_vector]" PARAMS 2 query_vector "\xcd\xccL?\x00\x00\x00\x00\x00\x00\x00\x00"
+FT.SEARCH myIndex "*=>[KNN 5 @embedding $query_vector]" PARAMS 2 query_vector "\xcd\xccL?\x00\x00\x00\x00\x00\x00\x00\x00"
 ```
 
 The `*` before `=>` means no pre-filtering — all vectors in the index are searched. Replace `*` with a filter expression (e.g. `@category:{electronics}`) to run a hybrid query that narrows candidates before KNN.
@@ -122,8 +122,16 @@ FT.SEARCH products "@price:[-inf (500]"
 
 ### Combine Tag and Numeric Filters
 
+Multiple filters separated by spaces are AND'ed together:
+
 ```bash
 FT.SEARCH products "@category:{books} @price:[10 30] @rating:[4.7 +inf]"
+```
+
+Use `|` between predicates for OR:
+
+```bash
+FT.SEARCH products "@category:{books} | @price:[500 +inf]"
 ```
 
 ---
@@ -192,6 +200,12 @@ HSET doc:1 content "great introduction to databases" category "tech" year 2024
 HSET doc:2 content "great recipes for summer" category "cooking" year 2023
 
 FT.SEARCH docs "@category:{tech} database*"
+```
+
+OR example — match documents in "tech" category or containing "recipes":
+
+```bash
+FT.SEARCH docs "@category:{tech} | recipes"
 ```
 
 ---

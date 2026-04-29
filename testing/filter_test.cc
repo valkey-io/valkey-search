@@ -830,21 +830,24 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = "@text_field1:word",
             .create_success = true,
             .evaluate_success = true,
-            .expected_tree_structure = "TEXT-TERM(\"word\", field=text_field1)\n",
+            .expected_tree_structure =
+                "TEXT-TERM(\"word\", field=text_field1)\n",
         },
         {
             .test_name = "exact_prefix",
             .filter = "@text_field1:word*",
             .create_success = true,
             .evaluate_success = true,
-            .expected_tree_structure = "TEXT-PREFIX(\"word\", field=text_field1)\n",
+            .expected_tree_structure =
+                "TEXT-PREFIX(\"word\", field=text_field1)\n",
         },
         {
             .test_name = "exact_suffix_supported",
             .filter = "@text_field1:*word",
             .create_success = true,
             .evaluate_success = true,
-            .expected_tree_structure = "TEXT-SUFFIX(\"word\", field=text_field1)\n",
+            .expected_tree_structure =
+                "TEXT-SUFFIX(\"word\", field=text_field1)\n",
         },
         {
             .test_name = "exact_suffix_unsupported",
@@ -888,12 +891,13 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = "@text_field1:\"hello my name is\"",
             .create_success = true,
             .evaluate_success = true,
-            .expected_tree_structure = "AND(slop=0, inorder=true){\n"
-                                       "  TEXT-TERM(\"hello\", field=text_field1)\n"
-                                       "  TEXT-TERM(\"my\", field=text_field1)\n"
-                                       "  TEXT-TERM(\"name\", field=text_field1)\n"
-                                       "  TEXT-TERM(\"is\", field=text_field1)\n"
-                                       "}\n",
+            .expected_tree_structure =
+                "AND(slop=0, inorder=true){\n"
+                "  TEXT-TERM(\"hello\", field=text_field1)\n"
+                "  TEXT-TERM(\"my\", field=text_field1)\n"
+                "  TEXT-TERM(\"name\", field=text_field1)\n"
+                "  TEXT-TERM(\"is\", field=text_field1)\n"
+                "}\n",
         },
         {
             .test_name = "proximity2",
@@ -901,12 +905,13 @@ INSTANTIATE_TEST_SUITE_P(
                       "@text_field2:is",
             .create_success = true,
             .evaluate_success = true,
-            .expected_tree_structure = "AND{\n"
-                                       "  TEXT-TERM(\"hello\", field=text_field1)\n"
-                                       "  TEXT-TERM(\"my\", field=text_field2)\n"
-                                       "  TEXT-TERM(\"name\", field=text_field1)\n"
-                                       "  TEXT-TERM(\"is\", field=text_field2)\n"
-                                       "}\n",
+            .expected_tree_structure =
+                "AND{\n"
+                "  TEXT-TERM(\"hello\", field=text_field1)\n"
+                "  TEXT-TERM(\"my\", field=text_field2)\n"
+                "  TEXT-TERM(\"name\", field=text_field1)\n"
+                "  TEXT-TERM(\"is\", field=text_field2)\n"
+                "}\n",
         },
         {
             .test_name = "default_field_text",
@@ -955,58 +960,54 @@ INSTANTIATE_TEST_SUITE_P(
             .filter =
                 "\"\\\\\\\\\\Hello, \\how \\\\are \\\\\\you \\\\\\\\doing?\"",
             .create_success = true,
-            .expected_tree_structure =
-                "AND(slop=0, inorder=true){\n"
-                "  TEXT-TERM(\"\\\\\", field=*)\n"
-                "  TEXT-TERM(\"hello\", field=*)\n"
-                "  TEXT-TERM(\"how\", field=*)\n"
-                "  TEXT-TERM(\"\\are\", field=*)\n"
-                "  TEXT-TERM(\"\\\", field=*)\n"
-                "  TEXT-TERM(\"you\", field=*)\n"
-                "  TEXT-TERM(\"\\\\doing?\", field=*)\n"
-                "}\n",
+            .expected_tree_structure = "AND(slop=0, inorder=true){\n"
+                                       "  TEXT-TERM(\"\\\\\", field=*)\n"
+                                       "  TEXT-TERM(\"hello\", field=*)\n"
+                                       "  TEXT-TERM(\"how\", field=*)\n"
+                                       "  TEXT-TERM(\"\\are\", field=*)\n"
+                                       "  TEXT-TERM(\"\\\", field=*)\n"
+                                       "  TEXT-TERM(\"you\", field=*)\n"
+                                       "  TEXT-TERM(\"\\\\doing?\", field=*)\n"
+                                       "}\n",
         },
         {
             .test_name = "default_field_with_escape2",
             .filter = "\\\\\\\\\\Hello, \\how \\\\are \\\\\\you \\\\\\\\doing?",
             .create_success = true,
-            .expected_tree_structure =
-                "AND{\n"
-                "  TEXT-TERM(\"\\\\\", field=*)\n"
-                "  TEXT-TERM(\"hello\", field=*)\n"
-                "  TEXT-TERM(\"how\", field=*)\n"
-                "  TEXT-TERM(\"\\are\", field=*)\n"
-                "  TEXT-TERM(\"\\\", field=*)\n"
-                "  TEXT-TERM(\"you\", field=*)\n"
-                "  TEXT-TERM(\"\\\\doing?\", field=*)\n"
-                "}\n",
+            .expected_tree_structure = "AND{\n"
+                                       "  TEXT-TERM(\"\\\\\", field=*)\n"
+                                       "  TEXT-TERM(\"hello\", field=*)\n"
+                                       "  TEXT-TERM(\"how\", field=*)\n"
+                                       "  TEXT-TERM(\"\\are\", field=*)\n"
+                                       "  TEXT-TERM(\"\\\", field=*)\n"
+                                       "  TEXT-TERM(\"you\", field=*)\n"
+                                       "  TEXT-TERM(\"\\\\doing?\", field=*)\n"
+                                       "}\n",
         },
         {
             .test_name = "default_field_with_escape3",
             .filter = "Hel\\(lo, ho\\$w a\\*re yo\\{u do\\|ing?",
             .create_success = true,
-            .expected_tree_structure =
-                "AND{\n"
-                "  TEXT-TERM(\"hel(lo\", field=*)\n"
-                "  TEXT-TERM(\"ho$w\", field=*)\n"
-                "  TEXT-TERM(\"a*re\", field=*)\n"
-                "  TEXT-TERM(\"yo{u\", field=*)\n"
-                "  TEXT-TERM(\"do|ing?\", field=*)\n"
-                "}\n",
+            .expected_tree_structure = "AND{\n"
+                                       "  TEXT-TERM(\"hel(lo\", field=*)\n"
+                                       "  TEXT-TERM(\"ho$w\", field=*)\n"
+                                       "  TEXT-TERM(\"a*re\", field=*)\n"
+                                       "  TEXT-TERM(\"yo{u\", field=*)\n"
+                                       "  TEXT-TERM(\"do|ing?\", field=*)\n"
+                                       "}\n",
         },
         {
             .test_name = "default_field_with_escape4",
             .filter = "\\\\\\\\\\(Hello, \\$how \\\\\\*are \\\\\\-you "
                       "\\\\\\\\\\%doing?",
             .create_success = true,
-            .expected_tree_structure =
-                "AND{\n"
-                "  TEXT-TERM(\"\\\\(hello\", field=*)\n"
-                "  TEXT-TERM(\"$how\", field=*)\n"
-                "  TEXT-TERM(\"\\*are\", field=*)\n"
-                "  TEXT-TERM(\"\\-you\", field=*)\n"
-                "  TEXT-TERM(\"\\\\%doing?\", field=*)\n"
-                "}\n",
+            .expected_tree_structure = "AND{\n"
+                                       "  TEXT-TERM(\"\\\\(hello\", field=*)\n"
+                                       "  TEXT-TERM(\"$how\", field=*)\n"
+                                       "  TEXT-TERM(\"\\*are\", field=*)\n"
+                                       "  TEXT-TERM(\"\\-you\", field=*)\n"
+                                       "  TEXT-TERM(\"\\\\%doing?\", field=*)\n"
+                                       "}\n",
         },
         {
             .test_name = "default_field_with_escape5",
@@ -1024,14 +1025,13 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "default_field_with_escape6",
             .filter = "Hello, how are you\\\\\\\\\\% doing",
             .create_success = true,
-            .expected_tree_structure =
-                "AND{\n"
-                "  TEXT-TERM(\"hello\", field=*)\n"
-                "  TEXT-TERM(\"how\", field=*)\n"
-                "  TEXT-TERM(\"are\", field=*)\n"
-                "  TEXT-TERM(\"you\\\\%\", field=*)\n"
-                "  TEXT-TERM(\"doing\", field=*)\n"
-                "}\n",
+            .expected_tree_structure = "AND{\n"
+                                       "  TEXT-TERM(\"hello\", field=*)\n"
+                                       "  TEXT-TERM(\"how\", field=*)\n"
+                                       "  TEXT-TERM(\"are\", field=*)\n"
+                                       "  TEXT-TERM(\"you\\\\%\", field=*)\n"
+                                       "  TEXT-TERM(\"doing\", field=*)\n"
+                                       "}\n",
         },
         {
             .test_name = "default_field_with_escape_query_syntax",

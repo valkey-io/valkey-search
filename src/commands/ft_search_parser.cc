@@ -160,7 +160,7 @@ std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructSortByParser() {
             // If it's neither ASC nor DESC, leave it for the next parser
           }
         }
-        parameters.sortby = std::make_optional(sortbyparams);
+        parameters.sortby_parameter = std::make_optional(sortbyparams);
         return absl::OkStatus();
       });
 }
@@ -246,10 +246,10 @@ static vmsdk::KeyValueParser<SearchCommand> SearchParser = CreateSearchParser();
 absl::Status SearchCommand::PostParseQueryString() {
   VMSDK_RETURN_IF_ERROR(query::SearchParameters::PostParseQueryString());
 
-  if (sortby.has_value()) {
+  if (sortby_parameter.has_value()) {
     // Validate sortby field exists in the index schema
-    VMSDK_RETURN_IF_ERROR(index_schema->GetIdentifier(sortby->field).status());
-    sortby_parameter = sortby;
+    VMSDK_RETURN_IF_ERROR(
+        index_schema->GetIdentifier(sortby_parameter->field).status());
   }
 
   return absl::OkStatus();

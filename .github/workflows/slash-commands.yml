@@ -1,10 +1,12 @@
 name: Slash Commands
 
-# Supported comment commands (triage access or above):
+# Supported comment commands:
 #   /label <label-name>        — add a label from the allowlist
 #   /reviewer <github-login>   — request a review from a specific user
 #   /resolves <issue-number>   — append "Resolves #N" to the PR body
 #   /rerun                     — re-run all failed CI jobs for this PR
+#
+# Access: triage permission or above, OR the issue/PR author.
 
 on:
   issue_comment:
@@ -40,19 +42,26 @@ jobs:
 
             if (!/^\/(label|reviewer|resolves|rerun)\b/.test(body)) return;
 
-            // Verify commenter has at least triage access
-            const { data: perm } = await github.rest.repos.getCollaboratorPermissionLevel({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              username: commenter,
-            });
-            const allowed = ['admin', 'maintain', 'write', 'triage'];
-            if (!allowed.includes(perm.permission)) {
+            // Allow the issue/PR author OR anyone with triage+ access
+            const issueAuthor = context.payload.issue.user.login;
+            let hasAccess = (commenter === issueAuthor);
+
+            if (!hasAccess) {
+              const { data: perm } = await github.rest.repos.getCollaboratorPermissionLevel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                username: commenter,
+              });
+              const allowed = ['admin', 'maintain', 'write', 'triage'];
+              hasAccess = allowed.includes(perm.permission);
+            }
+
+            if (!hasAccess) {
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: context.issue.number,
-                body: `@${commenter} You need at least **triage** access to use slash commands.`,
+                body: `@${commenter} You need at least **triage** access or to be the issue/PR author to use slash commands.`,
               });
               return;
             }

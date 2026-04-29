@@ -22,7 +22,6 @@ namespace aggregate {
 
 constexpr absl::string_view kAddScoresParam{"ADDSCORES"};
 constexpr absl::string_view kApplyParam{"APPLY"};
-constexpr absl::string_view kAsParam{"AS"};
 constexpr absl::string_view kAscParam{"ASC"};
 constexpr absl::string_view kDescParam{"DESC"};
 constexpr absl::string_view kDialectParam{"DIALECT"};
@@ -213,7 +212,6 @@ ConstructGroupByParser() {
               dynamic_cast<Attribute *>(group.release())));
         }
         while (itr.PopIfNextIgnoreCase(kReduceParam)) {
-          GroupBy::Reducer r;
           VMSDK_ASSIGN_OR_RETURN(auto name, itr.PopNext(),
                                  _ << "Missing Reducer name");
           auto uc_name =
@@ -224,39 +222,10 @@ ConstructGroupByParser() {
                                                     vmsdk::ToStringView(name),
                                                     "` not found"));
           }
-          r.info_ = &reducer_itr->second;
-          uint32_t cnt{0};
-          VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, cnt));
-          if (cnt < r.info_->min_nargs_ || cnt > r.info_->max_nargs_) {
-            return absl::OutOfRangeError(
-                absl::StrCat("incorrect number of arguments (", cnt,
-                             ") to reducer ", uc_name.AsStringView()));
-          }
-          for (int i = 0; i < cnt; ++i) {
-            VMSDK_ASSIGN_OR_RETURN(auto arg, itr.PopNext(),
-                                   _ << "Missing Reducer argument " << i);
-            VMSDK_ASSIGN_OR_RETURN(
-                auto expr,
-                expr::Expression::Compile(parameters, vmsdk::ToStringView(arg)),
-                _ << " in GROUPBY stage");
-            r.args_.emplace_back(std::move(expr));
-          }
-          if (itr.PopIfNextIgnoreCase(kAsParam)) {
-            VMSDK_ASSIGN_OR_RETURN(auto alias, itr.PopNext(),
-                                   _ << "Missing Reducer alias");
-            VMSDK_ASSIGN_OR_RETURN(
-                auto output,
-                parameters.MakeReference(vmsdk::ToStringView(alias), true));
-            r.output_ = std::unique_ptr<Attribute>(
-                dynamic_cast<Attribute *>(output.release()));
-          } else {
-            std::ostringstream os;
-            os << r;
-            VMSDK_ASSIGN_OR_RETURN(auto output,
-                                   parameters.MakeReference(os.str(), true));
-            r.output_ = std::unique_ptr<Attribute>(
-                dynamic_cast<Attribute *>(output.release()));
-          }
+
+          VMSDK_ASSIGN_OR_RETURN(
+              std::unique_ptr<GroupBy::Reducer> r,
+              reducer_itr->second(uc_name.AsStringView(), parameters, itr));
           groupby->reducers_.emplace_back(std::move(r));
         }
         parameters.stages_.emplace_back(std::move(groupby));

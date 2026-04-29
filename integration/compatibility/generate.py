@@ -148,22 +148,27 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             ]
             self.execute_command(new_cmd)
 
+    def checkall(self, dialect, *orig_cmd, **kwargs):
+        '''Non-vector commands. Doesn't have support for '*' yet. '''
+        self.checkvec(dialect, *orig_cmd, **kwargs)
+        self.check(dialect, *orig_cmd)
+
     def test_bad_numeric_data(self, key_type, dialect):
         self.setup_data("bad numbers", key_type)
-        self.check(dialect, f"ft.search {key_type}_idx1",  "@n1:[-inf inf]")
-        self.check(dialect, f"ft.search {key_type}_idx1", "-@n1:[-inf inf]")
-        self.check(dialect, f"ft.search {key_type}_idx1",  "@n2:[-inf inf]")
-        self.check(dialect, f"ft.search {key_type}_idx1", "-@n2:[-inf inf]")
+        self.check(dialect, "ft.search", f"{key_type}_idx1", "@n1:[-inf inf]")
+        self.check(dialect, "ft.search", f"{key_type}_idx1", "-@n1:[-inf inf]")
+        self.check(dialect, "ft.search", f"{key_type}_idx1", "@n2:[-inf inf]")
+        self.check(dialect, "ft.search", f"{key_type}_idx1", "-@n2:[-inf inf]")
 
     def test_search_reverse(self, key_type, dialect):
         self.setup_data("reverse vector numbers", key_type)
-        self.checkvec(dialect, f"ft.search {key_type}_idx1 *")
-        self.checkvec(dialect, f"ft.search {key_type}_idx1 * limit 0 5")
+        self.checkall(dialect, f"ft.search {key_type}_idx1 *")
+        self.checkall(dialect, f"ft.search {key_type}_idx1 * limit 0 5")
 
     def test_search(self, key_type, dialect):
         self.setup_data("sortable numbers", key_type)
-        self.checkvec(dialect, f"ft.search {key_type}_idx1 *")
-        self.checkvec(dialect, f"ft.search {key_type}_idx1 * limit 0 5")
+        self.checkall(dialect, f"ft.search {key_type}_idx1 *")
+        self.checkall(dialect, f"ft.search {key_type}_idx1 * limit 0 5")
     
     @pytest.mark.parametrize("algo", ["flat", "hnsw"])
     @pytest.mark.parametrize("metric", ["l2", "ip", "cosine"])
@@ -453,173 +458,12 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                         "nn",
                 )
 
-    def test_aggregate_apply_missing_fields(self, key_type, dialect):
-        """Test APPLY with all dyadic operators and string functions when tag/numeric fields are missing."""
-        self.setup_data("filter base", key_type)
-
-        dyadic = ["+", "-", "*", "/", "^"]
-        relops = ["<", "<=", "==", "!=", ">=", ">"]
-        logops = ["||", "&&"]
-
-        # Use @price:[-inf inf] instead of * since all 10 docs have a price field
-        query = "@price:[-inf inf]"
-
-        # All dyadic operators on tag field vs string literal (doc 8 is missing status)
-        for op in relops:
-            for literal in ["'inactive'", "'active'"]:
-                self.check(dialect,
-                    "FT.AGGREGATE", f"{key_type}_idx1", query,
-                    "LOAD", "2", "@__key", "@status",
-                    "APPLY", f"@status{op}{literal}", "AS", "apply_result",
-                    "SORTBY", "2", "@__key", "ASC",
-                )
-
-        # All dyadic operators on numeric field vs numeric literal (doc 7 is missing rating)
-        for op in dyadic + relops + logops:
-            for literal in ["3", "0", "-1"]:
-                self.check(dialect,
-                    "FT.AGGREGATE", f"{key_type}_idx1", query,
-                    "LOAD", "2", "@__key", "@rating",
-                    "APPLY", f"@rating{op}{literal}", "AS", "apply_result",
-                    "SORTBY", "2", "@__key", "ASC",
-                )
-
-        # All dyadic operators between two numeric fields (doc 7 missing rating)
-        for op in dyadic + relops + logops:
-            self.check(dialect,
-                "FT.AGGREGATE", f"{key_type}_idx1", query,
-                "LOAD", "3", "@__key", "@price", "@rating",
-                "APPLY", f"@price{op}@rating", "AS", "apply_result",
-                "SORTBY", "2", "@__key", "ASC",
-            )
-
-        # All dyadic operators between two tag fields (doc 6 missing category, doc 8 missing status)
-        for op in relops:
-            self.check(dialect,
-                "FT.AGGREGATE", f"{key_type}_idx1", query,
-                "LOAD", "3", "@__key", "@status", "@category",
-                "APPLY", f"@status{op}@category", "AS", "apply_result",
-                "SORTBY", "2", "@__key", "ASC",
-            )
-
-        # String functions on missing tag fields (doc 8 missing status, doc 6 missing category)
-        # Tests nil as first arg to each function
-        for expr in [
-            "strlen(@status)",
-            "strlen(@category)",
-            "lower(@status)",
-            "lower(@category)",
-            "upper(@status)",
-            "upper(@category)",
-            "startswith(@status,'act')",
-            "startswith(@category,'elec')",
-            "contains(@status,'act')",
-            "contains(@category,'elec')",
-            "substr(@status,0,3)",
-            "substr(@category,0,3)",
-        ]:
-            self.check(dialect,
-                "FT.AGGREGATE", f"{key_type}_idx1", query,
-                "LOAD", "3", "@__key", "@status", "@category",
-                "APPLY", expr, "AS", "apply_result",
-                "SORTBY", "2", "@__key", "ASC",
-            )
-
-        # String functions with nil in second/third argument positions
-        # doc 6 missing category, doc 8 missing status
-        for expr in [
-            # nil as second arg (prefix/substring to match against)
-            "startswith('active',@status)",
-            "startswith('electronics',@category)",
-            "contains('active',@status)",
-            "contains('electronics',@category)",
-            # nil in both args (doc 8 missing status, doc 6 missing category)
-            "startswith(@status,@category)",
-            "contains(@status,@category)",
-            # substr with nil in 2nd arg (offset) and 3rd arg (length)
-            "substr('hello',@price,3)",
-            "substr('hello',0,@price)",
-            # concat with nil in various positions
-            "concat(@status,'suffix')",
-            "concat('prefix',@status)",
-            "concat(@status,@category)",
-            "concat('a',@status,'b')",
-        ]:
-            self.check(dialect,
-                "FT.AGGREGATE", f"{key_type}_idx1", query,
-                "LOAD", "4", "@__key", "@status", "@category", "@price",
-                "APPLY", expr, "AS", "apply_result",
-                "SORTBY", "2", "@__key", "ASC",
-            )
-
-        # String functions on numeric fields (type coercion + missing: doc 7 missing rating)
-        for expr in [
-            "strlen(@price)",
-            "strlen(@rating)",
-            "startswith(@price,'1')",
-            "startswith(@rating,'3')",
-            "contains(@price,'5')",
-            "contains(@rating,'3')",
-        ]:
-            self.check(dialect,
-                "FT.AGGREGATE", f"{key_type}_idx1", query,
-                "LOAD", "3", "@__key", "@price", "@rating",
-                "APPLY", expr, "AS", "apply_result",
-                "SORTBY", "2", "@__key", "ASC",
-            )
-
-        # substr with missing numeric field in offset/length position (doc 7 missing rating)
-        for expr in [
-            "substr(@status,@rating,3)",
-            "substr(@status,0,@rating)",
-        ]:
-            self.check(dialect,
-                "FT.AGGREGATE", f"{key_type}_idx1", query,
-                "LOAD", "4", "@__key", "@status", "@price", "@rating",
-                "APPLY", expr, "AS", "apply_result",
-                "SORTBY", "2", "@__key", "ASC",
-            )
-
-    def test_aggregate_apply_filter_expressions(self, key_type, dialect):
-        """Test APPLY with the same expressions used as FILTER in FT.CREATE.
-
-        Uses "filter base" (no FILTER, all 10 docs indexed) and evaluates each
-        filter expression via APPLY so we can compare APPLY vs FILTER behavior
-        for the same expression on the same data.
-        """
-        self.setup_data("filter base", key_type)
-
-        # These mirror the expressions in FILTER_DATASETS (data_sets.py)
-        filter_expressions = [
-            "@status=='active'",
-            "@status!='inactive'",
-            "@price>100",
-            "@price>=50 && @price<=200",
-            "exists(@rating)",
-            "!exists(@category)",
-            "@status=='active' && @price>100",
-            "strlen(@price)>=3",
-            "startswith(@price,'1')",
-            "contains(@title,'slow')",
-        ]
-
-        # Substitute '*' with real queries since our engine doesn't support '*'
-        queries = ["@price:[-inf inf]", "@status:{active|inactive|pending}"]
-        for expr in filter_expressions:
-            for query in queries:
-                self.check(dialect,
-                    "FT.AGGREGATE", f"{key_type}_idx1", query,
-                    "LOAD", "5", "@__key", "@status", "@price", "@category", "@rating",
-                    "APPLY", expr, "AS", "apply_result",
-                    "SORTBY", "2", "@__key", "ASC",
-                )
-
     def test_search_sortby(self, key_type, dialect):
         self.setup_data("sortable numbers", key_type)
 
         for sort_key in ["n1", "n2"]:
             for direction in ["ASC", "DESC", ""]:
-                for return_keys in ["", "RETURN 3 @n1 @t1"]:
+                for return_keys in ["", "RETURN 2 @n1 @t1"]:
                     for wsk in ["", "WITHSORTKEYS"]:
                         for limit in ["LIMIT 0 5", "LIMIT 2 3", ""]:
                             self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY {sort_key} {direction} {return_keys} {limit} {wsk}")

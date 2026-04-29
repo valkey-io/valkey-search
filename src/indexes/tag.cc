@@ -263,15 +263,15 @@ Tag::EntriesFetcherIterator::EntriesFetcherIterator(
       untracked_keys_(untracked_keys),
       negate_(negate) {}
 
-void Tag::EntriesFetcherIterator::EnsureTreeIter() {
-  if (!tree_iter_.has_value()) {
-    tree_iter_.emplace(tree_.RootIterator());
+void Tag::EntriesFetcherIterator::EnsureNegateRootIter() {
+  if (!negate_root_iter_.has_value()) {
+    negate_root_iter_.emplace(tree_.RootIterator());
   }
 }
 
 bool Tag::EntriesFetcherIterator::Done() const {
   if (negate_) {
-    return tree_iter_.has_value() && tree_iter_->Done() &&
+    return negate_root_iter_.has_value() && negate_root_iter_->Done() &&
            (untracked_keys_.empty() ||
             (untracked_keys_iter_.has_value() &&
              untracked_keys_iter_.value() == untracked_keys_.end()));
@@ -280,22 +280,22 @@ bool Tag::EntriesFetcherIterator::Done() const {
 }
 
 void Tag::EntriesFetcherIterator::NextNegate() {
-  EnsureTreeIter();
+  EnsureNegateRootIter();
   if (next_node_) {
     ++next_iter_;
     if (next_iter_ != next_node_->value.value().end()) {
       return;
     }
-    tree_iter_->Next();
+    negate_root_iter_->Next();
   }
-  while (!tree_iter_->Done()) {
-    next_node_ = tree_iter_->Value();
+  while (!negate_root_iter_->Done()) {
+    next_node_ = negate_root_iter_->Value();
     if (next_node_ && !entries_.contains(next_node_) &&
         next_node_->value.has_value() && !next_node_->value.value().empty()) {
       next_iter_ = next_node_->value.value().begin();
       return;
     }
-    tree_iter_->Next();
+    negate_root_iter_->Next();
   }
   next_node_ = nullptr;
   if (!untracked_keys_iter_.has_value()) {
@@ -329,7 +329,7 @@ void Tag::EntriesFetcherIterator::Next() {
 }
 
 const InternedStringPtr& Tag::EntriesFetcherIterator::operator*() const {
-  if (negate_ && tree_iter_.has_value() && tree_iter_->Done()) {
+  if (negate_ && negate_root_iter_.has_value() && negate_root_iter_->Done()) {
     return *untracked_keys_iter_.value();
   }
   return *next_iter_;

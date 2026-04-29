@@ -87,16 +87,28 @@ class Tag : public IndexBase {
     const InternedStringPtr& operator*() const override;
 
    private:
+    // Reference to the Patricia tree, held so we can lazily construct the
+    // root iterator on demand (only when negation requires it).
     const PatriciaTreeIndex& tree_;
-    std::optional<PatriciaTreeIndex::PrefixSubTreeIterator> tree_iter_;
+
+    // Full-tree root iterator used exclusively by the negated path.
+    // Lazily initialized by EnsureNegateRootIter() to avoid an O(N) DFS
+    // of the entire Patricia tree for non-negated queries, where N is the
+    // number of unique tag values in the index.
+    std::optional<PatriciaTreeIndex::PrefixSubTreeIterator> negate_root_iter_;
+
+    // The set of Patricia nodes matching the query tags. For non-negated
+    // queries, we iterate these directly. For negated queries, these are
+    // the nodes to *exclude* during the full-tree walk.
     absl::flat_hash_set<PatriciaNodeIndex*>& entries_;
+
     PatriciaNodeIndex* next_node_{nullptr};
     InternedStringSet::const_iterator next_iter_;
     const InternedStringSet& untracked_keys_;
     bool negate_;
     std::optional<InternedStringSet::const_iterator> untracked_keys_iter_;
     void NextNegate();
-    void EnsureTreeIter();
+    void EnsureNegateRootIter();
   };
 
   class EntriesFetcher : public EntriesFetcherBase {

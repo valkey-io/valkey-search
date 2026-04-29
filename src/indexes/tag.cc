@@ -258,14 +258,20 @@ Tag::EntriesFetcherIterator::EntriesFetcherIterator(
     const PatriciaTreeIndex& tree,
     absl::flat_hash_set<PatriciaNodeIndex*>& entries,
     const InternedStringSet& untracked_keys, bool negate)
-    : tree_iter_(tree.RootIterator()),
+    : tree_(tree),
       entries_(entries),
       untracked_keys_(untracked_keys),
       negate_(negate) {}
 
+void Tag::EntriesFetcherIterator::EnsureTreeIter() {
+  if (!tree_iter_.has_value()) {
+    tree_iter_.emplace(tree_.RootIterator());
+  }
+}
+
 bool Tag::EntriesFetcherIterator::Done() const {
   if (negate_) {
-    return tree_iter_.Done() &&
+    return tree_iter_.has_value() && tree_iter_->Done() &&
            (untracked_keys_.empty() ||
             (untracked_keys_iter_.has_value() &&
              untracked_keys_iter_.value() == untracked_keys_.end()));
@@ -274,21 +280,22 @@ bool Tag::EntriesFetcherIterator::Done() const {
 }
 
 void Tag::EntriesFetcherIterator::NextNegate() {
+  EnsureTreeIter();
   if (next_node_) {
     ++next_iter_;
     if (next_iter_ != next_node_->value.value().end()) {
       return;
     }
-    tree_iter_.Next();
+    tree_iter_->Next();
   }
-  while (!tree_iter_.Done()) {
-    next_node_ = tree_iter_.Value();
+  while (!tree_iter_->Done()) {
+    next_node_ = tree_iter_->Value();
     if (next_node_ && !entries_.contains(next_node_) &&
         next_node_->value.has_value() && !next_node_->value.value().empty()) {
       next_iter_ = next_node_->value.value().begin();
       return;
     }
-    tree_iter_.Next();
+    tree_iter_->Next();
   }
   next_node_ = nullptr;
   if (!untracked_keys_iter_.has_value()) {
@@ -322,7 +329,7 @@ void Tag::EntriesFetcherIterator::Next() {
 }
 
 const InternedStringPtr& Tag::EntriesFetcherIterator::operator*() const {
-  if (negate_ && tree_iter_.Done()) {
+  if (negate_ && tree_iter_.has_value() && tree_iter_->Done()) {
     return *untracked_keys_iter_.value();
   }
   return *next_iter_;

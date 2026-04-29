@@ -87,7 +87,8 @@ class Tag : public IndexBase {
     const InternedStringPtr& operator*() const override;
 
    private:
-    PatriciaTreeIndex::PrefixSubTreeIterator tree_iter_;
+    const PatriciaTreeIndex& tree_;
+    std::optional<PatriciaTreeIndex::PrefixSubTreeIterator> tree_iter_;
     absl::flat_hash_set<PatriciaNodeIndex*>& entries_;
     PatriciaNodeIndex* next_node_{nullptr};
     InternedStringSet::const_iterator next_iter_;
@@ -95,6 +96,7 @@ class Tag : public IndexBase {
     bool negate_;
     std::optional<InternedStringSet::const_iterator> untracked_keys_iter_;
     void NextNegate();
+    void EnsureTreeIter();
   };
 
   class EntriesFetcher : public EntriesFetcherBase {

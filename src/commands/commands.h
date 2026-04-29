@@ -110,7 +110,7 @@ struct QueryCommand : public query::SearchParameters {
   //
   // Determine if we need full results or if we can optimize with trimming
   //
-  virtual bool RequiresCompleteResults() const = 0;
+  bool RequiresCompleteResults() const override = 0;
   //
   // Called when query completes.
   //

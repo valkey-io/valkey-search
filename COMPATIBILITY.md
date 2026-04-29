@@ -26,11 +26,11 @@ The contract below applies only to features that Valkey Search actually implemen
 
 ### Command and argument syntax
 
-The set of commands exposed by the module, their argument ordering, their flag and option names, and the shape of their replies are expected to match Redisearch. This includes index management commands (e.g. `FT.CREATE`, `FT.DROPINDEX`), query commands (`FT.SEARCH`, `FT.AGGREGATE`), cursor commands, and other command-surface entry points that applications invoke directly. Applications using standard Redisearch client libraries should be able to issue these commands unmodified and receive replies they can parse with existing response handlers.
+The set of commands exposed by the module, their argument ordering, their flag and option names, and the shape of their replies are expected to match Redisearch. This includes index management commands (e.g. `FT.CREATE`, `FT.DROPINDEX`), query commands (`FT.SEARCH`, `FT.AGGREGATE`) and other command-surface entry points that applications invoke directly. Applications using standard Redisearch client libraries should be able to issue these commands unmodified and receive replies they can parse with existing response handlers.
 
 ### Query language and semantics
 
-The query language accepted by `FT.SEARCH` and `FT.AGGREGATE` — including text queries, tag filters, numeric filters, boolean operators, field modifiers, scoring behavior, return-value shapes, and vector search syntax — is expected to match Redisearch. A query that returns a given set of documents under a defined sort order against Redisearch should return the same documents in the same order against Valkey Search for an equivalently configured index.
+The query language accepted by `FT.SEARCH` and `FT.AGGREGATE` — including text queries, tag filters, numeric filters, boolean operators, field modifiers, return-value shapes, and vector search syntax — is expected to match Redisearch. A query that returns a given set of documents under a defined sort order against Redisearch should return the same documents in the same order against Valkey Search for an equivalently configured index.
 
 Note, however, that some queries are inherently unsorted: when no sort order is specified (explicitly via `SORTBY` or implicitly via a score-producing query), Redisearch and Valkey Search are both free to return matching documents in any order, and that order may differ between the two modules. Equivalence in those cases means the same _set_ of documents, not the same sequence. Differences in result ordering for queries without a defined sort order are not considered compatibility bugs.
 
@@ -44,7 +44,7 @@ In some cases Redisearch silently accepts extraneous or malformed syntax — for
 
 ### A note on attribute ordering within returned keys
 
-Within a single document returned by `FT.SEARCH` or `FT.AGGREGATE`, the order in which attributes (field name / value pairs) appear is not guaranteed to match between Redisearch and Valkey Search. The _set_ of attributes returned for each document is expected to match; the sequence in which those attributes are laid out inside the reply may differ. This is **not** considered a compatibility bug.
+Within a single document returned by `FT.SEARCH` or `FT.AGGREGATE`, the order in which attributes (attribute name / value pairs) appear is not guaranteed to match between Redisearch and Valkey Search. The _set_ of attributes returned for each document is expected to match; the sequence in which those attributes are laid out inside the reply may differ. This is **not** considered a compatibility bug.
 
 ### A note on floating-point precision
 
@@ -66,17 +66,17 @@ This section describes areas where Valkey Search intentionally diverges from Red
 
 **What differs.** The metrics emitted by Valkey Search — both the global module-level metrics reported by `INFO` and the per-index metrics reported by `FT.INFO` — do not match Redisearch's metric set name-for-name.
 
-**Why.** The `FT.INFO` output format is not fully extensible, and its rigidity is a major cause of incompatibility: the format does not cleanly accommodate the additional or differently-shaped metrics that Valkey Search needs to report on its own implementation, so matching it verbatim would foreclose Valkey Search's ability to report meaningfully on its own behavior. In addition, because Valkey Search's implementation differs from Redisearch's, some Redisearch metrics simply have no meaningful equivalent in Valkey Search (and, conversely, Valkey Search exposes metrics with no Redisearch counterpart).
+**Why.** The Redisearch `FT.INFO` output format is not fully extensible, and its rigidity is a major cause of incompatibility: the format does not cleanly accommodate the additional or differently-shaped metrics that Valkey Search needs to report on its own implementation, so matching it verbatim would foreclose Valkey Search's ability to report meaningfully on its own behavior. In addition, because Valkey Search's implementation differs from Redisearch's, some Redisearch metrics simply have no meaningful equivalent in Valkey Search (and, conversely, Valkey Search exposes metrics with no Redisearch counterpart).
 
 **Migration impact.** Monitoring dashboards, alerting rules, and any operational tooling that scrapes Redisearch metric names will need to be re-pointed at the Valkey Search equivalents or adapted to the Valkey Search metric set. Applications that do not consume these metrics programmatically are not affected.
 
 ### Cluster and sharding behavior
 
-**What differs.** Redisearch relies on a separate Sentinel component, along with specific command options, to carry out cluster-wide operations. Valkey Search has this functionality built in: no separate component and no special command-level options are required to obtain cluster-wide behavior. Valkey Search provides cluster-wide consistency for both index-mutation commands — `FT.CREATE` and `FT.DROPINDEX` — and query commands — `FT.INFO`, `FT.SEARCH`, and `FT.AGGREGATE`. Cluster-wide operations are retried as needed until whole-cluster consistency is obtained, and time out if that cannot be achieved within the operation's timeout window.
+**What differs.** Redisearch relies on a separate RSCoordinator component, along with specific command options, to carry out cluster-wide operations. Valkey Search has this functionality built in: no separate component and no special command-level options are required to obtain cluster-wide behavior. Valkey Search provides cluster-wide consistency for both index-mutation commands — `FT.CREATE` and `FT.DROPINDEX` — and query commands — `FT.INFO`, `FT.SEARCH`, and `FT.AGGREGATE`. Cluster-wide operations are retried as needed until whole-cluster consistency is obtained, and time out if that cannot be achieved within the operation's timeout window.
 
 **Why.** Folding cluster coordination into the module itself removes a separate deployable component and the operational complexity that comes with it, and produces a deployment model that aligns with how Valkey's own cluster mode is operated. Making cluster-wide consistency the default behavior — rather than something the caller has to opt into with special options — means applications do not need to know whether they are talking to a clustered deployment or a single-node deployment to get correct results.
 
-**Migration impact.** Applications no longer need to invoke a separate Sentinel component or add cluster-specific options to their commands; any such options should be removed as part of migration. Operational tooling that deployed, monitored, or scaled the Sentinel component will no longer apply. Callers should be prepared for the possibility that a cluster-wide operation may return a timeout error when cluster-wide consistency cannot be established within the operation's timeout, and should handle that case — for example by retrying at the application level or surfacing the failure to the user — rather than treating success as guaranteed.
+**Migration impact.** Applications no longer need to invoke a separate RSCoordinator component or add cluster-specific options to their commands; any such options should be removed as part of migration. Operational tooling that deployed, monitored, or scaled the Sentinel component will no longer apply. Callers should be prepared for the possibility that a cluster-wide operation may return a timeout error when cluster-wide consistency cannot be established within the operation's timeout, and should handle that case — for example by retrying at the application level or surfacing the failure to the user — rather than treating success as guaranteed.
 
 ### Persistence and on-disk index format
 
@@ -84,7 +84,7 @@ This section describes areas where Valkey Search intentionally diverges from Red
 
 **Why.** The on-disk index format is an internal implementation detail and is not part of the compatibility contract. Fixing it would constrain Valkey Search's ability to evolve its storage and recovery strategies independently of Redisearch.
 
-**Migration impact.** Redisearch RDB files cannot be loaded directly by Valkey Search, and vice versa. Migrations between the two must rebuild indexes from the underlying keyspace (hashes or JSON documents), not by copying persisted index state.
+**Migration impact.** Redisearch RDB files cannot be loaded directly by Valkey Search, and vice versa. Migrations between the two must rebuild indexes from the underlying data (hashes or JSON documents), not by copying persisted index state.
 
 ### Log messages
 
@@ -94,29 +94,11 @@ This section describes areas where Valkey Search intentionally diverges from Red
 
 **Migration impact.** Log-scraping rules, alerting triggers keyed on specific log strings, log-shipping parsers, and runbooks that instruct operators to look for particular Redisearch log phrases all need to be reviewed and updated against Valkey Search's log output. Applications that do not consume logs programmatically are not affected.
 
-### Additional intentional differences
-
-_(TBD — reserved for additional intentional incompatibilities to be enumerated. Each item should follow the same pattern: what differs, why, migration impact.)_
-
 ## Extensions
 
 Valkey Search may extend the syntax and semantics beyond what Redisearch provides. Where an extension is additive — for example, a new option on an existing command, a new field type, a new query operator, or a new command entirely — it is not considered an incompatibility: applications written against Redisearch do not exercise these surfaces and are unaffected. Extensions are, however, Valkey-Search-specific: applications that adopt them lose portability back to Redisearch.
 
 Extensions are documented alongside the features they extend rather than centralized here. When an extension modifies the behavior of an existing Redisearch surface in a non-additive way, that change is tracked as an intentional incompatibility in the section above, not as an extension.
-
-## Inter-Release Compatibility of Valkey Search
-
-Separately from compatibility with Redisearch, Valkey Search makes its own commitments about how it evolves across its own releases. These commitments are expressed through a two-tier classification that applies to configuration variables and to INFO metrics (both global and per-index). Every such item is marked in the code as either **App** or **Dev**.
-
-**App-classified items** are part of Valkey Search's public surface and are governed by SemVer. No breaking change to an App-classified configuration variable or INFO metric will be made outside a major release. Renames, removals, semantic changes, and changes to value format are all considered breaking. Applications, dashboards, alerting rules, and operational tooling may rely on App-classified items within a given major version.
-
-**Dev-classified items** exist strictly for internal development and diagnostics. They are subject to change in any release — explicitly including patch releases — without notice and without a migration path. Dev items may be renamed, removed, or have their semantics altered at any time. **Users must not rely on Dev-classified items** in applications, dashboards, alerts, scripts, or any other context where stability matters.
-
-The external Valkey Search documentation covers App-classified items, and only App-classified items. The relationship is intended to be biconditional: every App-classified item is expected to appear in the external documentation, and every item that appears in the external documentation is expected to be App-classified. Dev-classified items are not documented externally — their presence, names, semantics, and output format are intentionally left as implementation details. Either direction failing — an App-classified item missing from the documentation, or a Dev-classified item appearing in it — is a documentation bug and should be reported so it can be corrected.
-
-The `FT._DEBUG` command is treated on the same footing as Dev-classified items: its subcommands, arguments, and output are subject to change in any release, including patch releases. It is provided for internal development and diagnostics only, and should not be used from applications or production tooling.
-
-This classification applies only to Valkey Search's inter-release compatibility story. It is independent of Redisearch compatibility: an item can be App-classified (stable across Valkey Search releases) and still fall under an intentional incompatibility with Redisearch, or vice versa.
 
 ## Migration Guide
 
@@ -124,11 +106,11 @@ This section describes the steps an application team should work through when mi
 
 ### 1. Verify feature coverage against the documentation
 
-Before making any code changes, review the Valkey Search documentation and confirm that every Redisearch feature the application depends on is currently supported. Walk through the commands the application issues, the field types and index options it uses, the query syntax it constructs, and any module-specific behavior it relies on. Anything the application uses that is not listed as supported should be resolved — either by waiting for support, replacing the dependency, or re-scoping the migration — before proceeding to later steps. This check is cheapest to do first because it determines whether migration is viable at all.
+Before making any code changes, review the Valkey Search documentation and confirm that every Redisearch feature the application depends on is currently supported. Walk through the commands the application issues, the field types and index options it uses, the query syntax it constructs, and any module-specific behavior it relies on. Anything the application uses that is not listed as supported should be resolved before proceeding to later steps. This check is cheapest to do first because it determines whether migration is viable at all.
 
 ### 2. Remove usage of `FT.CONFIG`
 
-Valkey Search does not expose module configuration through `FT.CONFIG`. Configurables are managed through Valkey's native configuration machinery: `CONFIG GET` and `CONFIG SET` for self-hosted deployments, or whatever equivalent mechanism is exposed by the managed service provider (for example, a cloud console, a provider-specific API, or parameter groups). Any application code or operational tooling that issues `FT.CONFIG GET` or `FT.CONFIG SET` needs to be replaced with the corresponding Valkey configuration call, and the relevant configuration parameter names need to be updated to the Valkey Search equivalents.
+Valkey Search does not expose module configuration through `FT.CONFIG`. Configurables are managed through Valkey's native configuration machinery: `CONFIG GET` and `CONFIG SET` for self-hosted deployments, or whatever equivalent mechanism is exposed by a managed service provider (for example, a cloud console, a provider-specific API, or parameter groups). Any application code or operational tooling that issues `FT.CONFIG GET` or `FT.CONFIG SET` needs to be replaced with the corresponding Valkey configuration call, and the relevant configuration parameter names need to be updated to the Valkey Search equivalents.
 
 ### 3. Update `FT.INFO` response parsing
 
@@ -136,7 +118,7 @@ The response format of `FT.INFO` in Valkey Search differs from Redisearch's form
 
 ### 4. Remove unsupported `INFO` and `FT.INFO` fields
 
-Some fields that Redisearch exposes through `INFO` (module-level, global) and `FT.INFO` (per-index) have no equivalent in Valkey Search, either because the underlying metric does not apply to Valkey Search's implementation or because the format has been restructured. Dashboards, alerts, scripts, and application code that reference such fields need to have those references removed or remapped to the closest Valkey Search equivalent. Items classified as Dev (see _Inter-Release Compatibility of Valkey Search_ above) should likewise not be carried over into production monitoring, regardless of whether a Redisearch counterpart exists.
+Some fields that Redisearch exposes through `INFO` (module-level, global) and `FT.INFO` (per-index) have no equivalent in Valkey Search, either because the underlying metric does not apply to Valkey Search's implementation or because the format has been restructured. Dashboards, alerts, scripts, and application code that reference such fields need to have those references removed or remapped to the closest Valkey Search equivalent.
 
 ### 5. Open the gRPC ports used by Valkey Search (cluster mode only)
 
@@ -158,7 +140,7 @@ Audit the application's queries and identify any that (a) have no defined sort o
 
 ### 8. Review custom result-parsing code for attribute ordering
 
-Within each document returned by `FT.SEARCH` or `FT.AGGREGATE`, the order in which the document's attributes (field name / value pairs) appear inside the reply is not guaranteed to match between Redisearch and Valkey Search (see _Query language and semantics_ above). Standard Redisearch client libraries parse these replies into name-keyed maps or structured records and are not affected. Custom or hand-rolled result-parsing code, however, may be reading fields by position — for example, "the value at index 3 is the `price` field" — and will break when the attributes come back in a different sequence. Review any such code and change it to look up attributes by name rather than by position.
+Within each document returned by `FT.SEARCH` or `FT.AGGREGATE`, the order in which the document's attributes (attribute name / value pairs) appear inside the reply is not guaranteed to match between Redisearch and Valkey Search (see _Query language and semantics_ above). Standard Redisearch client libraries parse these replies into name-keyed maps or structured records and are not affected. Custom or hand-rolled result-parsing code, however, may be reading fields by position — for example, "the value at index 3 is the `price` field" — and will break when the attributes come back in a different sequence. Review any such code and change it to look up attributes by name rather than by position.
 
 ## Known Compatibility Defects
 

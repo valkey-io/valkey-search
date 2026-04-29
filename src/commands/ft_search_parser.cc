@@ -255,6 +255,20 @@ absl::Status SearchCommand::PostParseQueryString() {
   return absl::OkStatus();
 }
 
+std::string SearchCommand::GetVectorRangeScoreFieldName() const {
+  if (vector_range_predicates.empty()) {
+    return "";
+  }
+  // Use the first vector range predicate's score_as if specified.
+  const auto &score_as = vector_range_predicates.front()->GetScoreAs();
+  if (score_as.has_value()) {
+    return score_as.value();
+  }
+  // Default to __<field_name>_score.
+  return absl::StrCat("__", vector_range_predicates.front()->GetAlias(),
+                      "_score");
+}
+
 absl::Status VerifyQueryString(query::SearchParameters &parameters) {
   // Only verify the vector KNN parameters for vector based queries.
   if (!parameters.IsNonVectorQuery()) {

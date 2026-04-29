@@ -38,6 +38,7 @@
 #include "src/coordinator/util.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
+#include "src/query/predicate.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "src/utils/string_interning.h"
@@ -455,6 +456,267 @@ INSTANTIATE_TEST_SUITE_P(
         },
     }),
     [](const TestParamInfo<SendReplyTestCase> &info) {
+      return info.param.test_name;
+    });
+
+// --- Vector Range SendReply Tests ---
+// Tests for vector range query result serialization, including distance score
+// reporting, NOCONTENT, RETURN, SORTBY, and LIMIT interactions.
+
+struct VectorRangeSendReplyTestInput {
+  std::deque<NeighborTest> neighbors;
+  std::string vector_field_alias;
+  std::optional<std::string> score_as;
+  query::LimitParameter limit;
+  std::vector<TestReturnAttribute> return_attributes;
+  std::optional<query::SortByParameter> sortby;
+};
+
+struct VectorRangeSendReplyTestCase {
+  std::string test_name;
+  VectorRangeSendReplyTestInput input;
+  absl::string_view expected_output;
+  absl::string_view expected_output_no_content;
+  std::set<std::string> open_key_exclude_ids;
+};
+
+class VectorRangeSendReplyTest
+    : public ValkeySearchTestWithParam<VectorRangeSendReplyTestCase> {
+ public:
+  void DoTest(const VectorRangeSendReplyTestInput &input, bool no_content,
+              const RespReply &expected_output,
+              const std::set<std::string> &open_key_exclude_ids,
+              vmsdk::ThreadPool *mutations_thread_pool);
+};
+
+void VectorRangeSendReplyTest::DoTest(
+    const VectorRangeSendReplyTestInput &input, bool no_content,
+    const RespReply &expected_output,
+    const std::set<std::string> &open_key_exclude_ids,
+    vmsdk::ThreadPool *mutations_thread_pool) {
+  ValkeyModuleCtx fake_ctx;
+  SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+      &fake_ctx, []() {}, mutations_thread_pool, false));
+
+  EXPECT_CALL(*kMockValkeyModule,
+              HashGet(An<ValkeyModuleKey *>(),
+                      VALKEYMODULE_HASH_CFIELDS | VALKEYMODULE_HASH_EXISTS,
+                      An<const char *>(), An<int *>(), An<void *>()))
+      .WillRepeatedly([&](ValkeyModuleKey *module_key, int flags,
+                          const char *field, int *exists,
+                          void *terminating_null) {
+        *exists = 1;
+        return VALKEYMODULE_OK;
+      });
+  EXPECT_CALL(*kMockValkeyModule,
+              ScanKey(An<ValkeyModuleKey *>(), An<ValkeyModuleScanCursor *>(),
+                      An<ValkeyModuleScanKeyCB>(), An<void *>()))
+      .WillRepeatedly([&](ValkeyModuleKey *key,
+                          ValkeyModuleScanCursor *scan_cursor,
+                          ValkeyModuleScanKeyCB fn, void *privdata) {
+        ++scan_cursor->cursor;
+        if ((scan_cursor->cursor % 3) == 0) {
+          return 0;
+        }
+        if ((scan_cursor->cursor % 3) == 1) {
+          static const absl::string_view field_str = "tag1";
+          static const absl::string_view value_str = "val1";
+          auto field_s = vmsdk::MakeUniqueValkeyString(field_str);
+          auto value_s = vmsdk::MakeUniqueValkeyString(value_str);
+          fn(key, field_s.get(), value_s.get(), privdata);
+          return 1;
+        }
+        fn(key, nullptr, nullptr, privdata);
+        return 1;
+      });
+  EXPECT_CALL(*kMockValkeyModule,
+              OpenKey(&fake_ctx, An<ValkeyModuleString *>(), testing::_))
+      .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
+  for (const auto &key : open_key_exclude_ids) {
+    EXPECT_CALL(
+        *kMockValkeyModule,
+        OpenKey(&fake_ctx, vmsdk::ValkeyModuleStringValueEq(key), testing::_))
+        .WillRepeatedly(testing::Return(nullptr));
+  }
+  EXPECT_CALL(*kMockValkeyModule, GetExpire(An<ValkeyModuleKey *>()))
+      .WillRepeatedly(testing::Return(VALKEYMODULE_NO_EXPIRE));
+
+  auto test_index_schema = CreateVectorHNSWSchema("index_schema_key", &fake_ctx,
+                                                  mutations_thread_pool)
+                               .value();
+
+  std::vector<indexes::Neighbor> neighbors;
+  for (const auto &neighbor : input.neighbors) {
+    neighbors.push_back(ToIndexesNeighbor(neighbor));
+  }
+
+  // Create a VectorRangePredicate to populate vector_range_predicates.
+  query::VectorRangePredicate vr_pred(input.vector_field_alias,
+                                      "vec_identifier", 1.0, "blob_param",
+                                      input.score_as, std::nullopt);
+
+  auto parameters = std::make_unique<SearchCommand>(0);
+  parameters->timeout_ms = 10000;
+  parameters->index_schema = test_index_schema;
+  // attribute_alias is empty for non-vector (vector range) queries.
+  parameters->attribute_alias = "";
+  parameters->limit = input.limit;
+  parameters->no_content = no_content;
+  parameters->vector_range_predicates.push_back(&vr_pred);
+  for (const auto &return_attribute : input.return_attributes) {
+    parameters->return_attributes.push_back(
+        ToReturnAttribute(return_attribute));
+  }
+  if (input.sortby.has_value()) {
+    parameters->sortby = input.sortby;
+    parameters->sortby_parameter = input.sortby;
+  }
+
+  auto neighbor_count = neighbors.size();
+  query::SearchResult wrapper(neighbor_count, std::move(neighbors),
+                              *parameters);
+  parameters->SendReply(&fake_ctx, wrapper);
+  EXPECT_EQ(ParseRespReply(fake_ctx.reply_capture.GetReply()), expected_output);
+}
+
+TEST_P(VectorRangeSendReplyTest, SendReply) {
+  const VectorRangeSendReplyTestCase &test_case = GetParam();
+  vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 5);
+  for (bool use_thread_pool : {true, false}) {
+    DoTest(test_case.input, false, ParseRespReply(test_case.expected_output),
+           test_case.open_key_exclude_ids,
+           use_thread_pool ? &mutations_thread_pool : nullptr);
+    DoTest(test_case.input, true,
+           ParseRespReply(test_case.expected_output_no_content),
+           test_case.open_key_exclude_ids,
+           use_thread_pool ? &mutations_thread_pool : nullptr);
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    VectorRangeSendReplyTests, VectorRangeSendReplyTest,
+    ValuesIn<VectorRangeSendReplyTestCase>({
+        {
+            // Test default distance field naming: __<field>_score
+            .test_name = "default_distance_field_name",
+            .input =
+                {
+                    .neighbors = {{.external_id = "k1", .distance = 0.1f},
+                                  {.external_id = "k2", .distance = 0.3f}},
+                    .vector_field_alias = "myvec",
+                    .score_as = std::nullopt,
+                    .limit = {.first_index = 0, .number = 10},
+                },
+            .expected_output =
+                "*5\r\n:2\r\n$2\r\nk1\r\n*4\r\n$13\r\n__myvec_score\r\n"
+                "$13\r\n0.10000000149\r\n$4\r\ntag1\r\n$4\r\nval1\r\n"
+                "$2\r\nk2\r\n*4\r\n$13\r\n__myvec_score\r\n"
+                "$14\r\n0.300000011921\r\n$4\r\ntag1\r\n$4\r\nval1\r\n",
+            .expected_output_no_content =
+                "*3\r\n:2\r\n$2\r\nk1\r\n$2\r\nk2\r\n",
+        },
+        {
+            // Test custom $yield_distance_as naming
+            .test_name = "custom_score_as_name",
+            .input =
+                {
+                    .neighbors = {{.external_id = "k1", .distance = 0.25f}},
+                    .vector_field_alias = "vec",
+                    .score_as = "my_dist",
+                    .limit = {.first_index = 0, .number = 10},
+                },
+            .expected_output = "*3\r\n:1\r\n$2\r\nk1\r\n*4\r\n$7\r\nmy_dist\r\n"
+                               "$4\r\n0.25\r\n$4\r\ntag1\r\n$4\r\nval1\r\n",
+            .expected_output_no_content = "*2\r\n:1\r\n$2\r\nk1\r\n",
+        },
+        {
+            // Test NOCONTENT suppresses all fields and scores
+            .test_name = "nocontent_suppresses_scores",
+            .input =
+                {
+                    .neighbors = {{.external_id = "a", .distance = 0.1f},
+                                  {.external_id = "b", .distance = 0.2f},
+                                  {.external_id = "c", .distance = 0.3f}},
+                    .vector_field_alias = "vec",
+                    .score_as = std::nullopt,
+                    .limit = {.first_index = 0, .number = 10},
+                },
+            .expected_output =
+                "*7\r\n:3\r\n$1\r\na\r\n*4\r\n$11\r\n__vec_score\r\n"
+                "$13\r\n0.10000000149\r\n$4\r\ntag1\r\n$4\r\nval1\r\n"
+                "$1\r\nb\r\n*4\r\n$11\r\n__vec_score\r\n"
+                "$13\r\n0.20000000298\r\n$4\r\ntag1\r\n$4\r\nval1\r\n"
+                "$1\r\nc\r\n*4\r\n$11\r\n__vec_score\r\n"
+                "$14\r\n0.300000011921\r\n$4\r\ntag1\r\n$4\r\nval1\r\n",
+            .expected_output_no_content =
+                "*4\r\n:3\r\n$1\r\na\r\n$1\r\nb\r\n$1\r\nc\r\n",
+        },
+        {
+            // Test LIMIT slicing after sort
+            .test_name = "limit_slicing",
+            .input =
+                {
+                    .neighbors = {{.external_id = "k1", .distance = 0.1f},
+                                  {.external_id = "k2", .distance = 0.2f},
+                                  {.external_id = "k3", .distance = 0.3f}},
+                    .vector_field_alias = "vec",
+                    .score_as = std::nullopt,
+                    .limit = {.first_index = 1, .number = 1},
+                },
+            .expected_output =
+                "*3\r\n:3\r\n$2\r\nk2\r\n*4\r\n$11\r\n__vec_score\r\n"
+                "$13\r\n0.20000000298\r\n$4\r\ntag1\r\n$4\r\nval1\r\n",
+            .expected_output_no_content = "*2\r\n:3\r\n$2\r\nk2\r\n",
+        },
+        {
+            // Test LIMIT number=0 returns only count
+            .test_name = "limit_zero",
+            .input =
+                {
+                    .neighbors = {{.external_id = "k1", .distance = 0.1f},
+                                  {.external_id = "k2", .distance = 0.2f}},
+                    .vector_field_alias = "vec",
+                    .score_as = std::nullopt,
+                    .limit = {.first_index = 0, .number = 0},
+                },
+            .expected_output = "*1\r\n:2\r\n",
+            .expected_output_no_content = "*1\r\n:2\r\n",
+        },
+        {
+            // Test RETURN includes distance score plus specified fields
+            .test_name = "return_with_score_field",
+            .input =
+                {
+                    .neighbors = {{.external_id = "k1", .distance = 0.5f}},
+                    .vector_field_alias = "vec",
+                    .score_as = "my_dist",
+                    .limit = {.first_index = 0, .number = 10},
+                    .return_attributes =
+                        {{.identifier = "tag1", .alias = "tag1"},
+                         {.identifier = "my_dist", .alias = "my_dist"}},
+                },
+            .expected_output = "*3\r\n:1\r\n$2\r\nk1\r\n*4\r\n$7\r\nmy_dist\r\n"
+                               "$3\r\n0.5\r\n$4\r\ntag1\r\n$4\r\nval1\r\n",
+            .expected_output_no_content = "*2\r\n:1\r\n$2\r\nk1\r\n",
+        },
+        {
+            // Test RETURN without score field - score not included
+            .test_name = "return_without_score_field",
+            .input =
+                {
+                    .neighbors = {{.external_id = "k1", .distance = 0.5f}},
+                    .vector_field_alias = "vec",
+                    .score_as = "my_dist",
+                    .limit = {.first_index = 0, .number = 10},
+                    .return_attributes = {{.identifier = "tag1",
+                                           .alias = "tag1"}},
+                },
+            .expected_output = "*3\r\n:1\r\n$2\r\nk1\r\n*2\r\n$4\r\ntag1\r\n"
+                               "$4\r\nval1\r\n",
+            .expected_output_no_content = "*2\r\n:1\r\n$2\r\nk1\r\n",
+        },
+    }),
+    [](const TestParamInfo<VectorRangeSendReplyTestCase> &info) {
       return info.param.test_name;
     });
 

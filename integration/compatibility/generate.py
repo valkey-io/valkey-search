@@ -108,6 +108,39 @@ class BaseCompatibilityTest:
 class TestAggregateCompatibility(BaseCompatibilityTest):
     ANSWER_FILE_NAME = "aggregate-answers.pickle.gz"
 
+    def checkrange(self, dialect, *orig_cmd, radius=1.0,
+                   query_vector=[0] * VECTOR_DIM, field="v1",
+                   extra_params="", query_attrs="", negate=False):
+        """Build and execute a VECTOR_RANGE query.
+
+        The first ``*`` in *orig_cmd* is replaced with the range clause.
+        ``extra_params`` can be e.g. ``"EF_RUNTIME 100"`` or ``"AS dist"``.
+        ``query_attrs`` can be e.g. ``"{$yield_distance_as: dist}"`` and will
+        be prepended with ``=>`` before the ``@field:`` clause.
+        ``negate`` prepends ``-`` to the range clause.
+        """
+        cmd = orig_cmd[0].split() if len(orig_cmd) == 1 else [*orig_cmd]
+        range_clause = f"@{field}:[VECTOR_RANGE $RADIUS $BLOB {extra_params}]".strip()
+        if query_attrs:
+            range_clause = f"{query_attrs}=>{range_clause}"
+        if negate:
+            range_clause = f"-{range_clause}"
+        new_cmd = []
+        did_one = False
+        for c in cmd:
+            if c.strip() == "*" and not did_one:
+                new_cmd.append(range_clause)
+                did_one = True
+            else:
+                new_cmd.append(c)
+        new_cmd += [
+            "PARAMS", "4",
+            "BLOB", struct.pack(f"<{VECTOR_DIM}f", *query_vector),
+            "RADIUS", str(radius),
+            "DIALECT", str(dialect),
+        ]
+        self.execute_command(new_cmd)
+
     def checkvec(self, dialect, *orig_cmd, knn=10000, score_as="", query_vector=[0] * VECTOR_DIM):
         '''Check vector queries only.'''
         cmd = orig_cmd[0].split() if len(orig_cmd) == 1 else [*orig_cmd]
@@ -170,7 +203,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.checkall(dialect, f"ft.search {key_type}_idx1 *")
         self.checkall(dialect, f"ft.search {key_type}_idx1 * limit 0 5")
     
-    @pytest.mark.parametrize("algo", ["flat", "hnsw"])
+@pytest.mark.parametrize("algo", ["flat", "hnsw"])
     @pytest.mark.parametrize("metric", ["l2", "ip", "cosine"])
     def test_vector_distance(self, key_type, dialect, algo, metric):
         self.setup_data(f"vector data {metric} {algo}", key_type)
@@ -467,4 +500,121 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                     for wsk in ["", "WITHSORTKEYS"]:
                         for limit in ["LIMIT 0 5", "LIMIT 2 3", ""]:
                             self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY {sort_key} {direction} {return_keys} {limit} {wsk}")
+
+    @pytest.mark.parametrize("algo", ["flat", "hnsw"])
+    @pytest.mark.parametrize("metric", ["l2", "ip", "cosine"])
+    def test_vector_range_basic(self, key_type, dialect, algo, metric):
+        """Standalone VECTOR_RANGE across algos/metrics with varying radii."""
+        self.setup_data(f"vector data {metric} {algo}", key_type)
+        vector_points = [-.75, .75]
+        radii = [0, 0.5, 2.0, 100.0]
+        for x in vector_points:
+            for y in vector_points:
+                for z in vector_points:
+                    for r in radii:
+                        self.checkrange(
+                            dialect,
+                            f"ft.search {key_type}_idx1 *",
+                            radius=r, query_vector=[x, y, z],
+                        )
+
+    @pytest.mark.parametrize("algo", ["flat", "hnsw"])
+    @pytest.mark.parametrize("metric", ["l2", "ip", "cosine"])
+    def test_vector_range_nocontent(self, key_type, dialect, algo, metric):
+        """VECTOR_RANGE with NOCONTENT returns only keys."""
+        self.setup_data(f"vector data {metric} {algo}", key_type)
+        for r in [0.5, 5.0]:
+            self.checkrange(
+                dialect,
+                f"ft.search {key_type}_idx1 * NOCONTENT",
+                radius=r, query_vector=[0.75, 0.75, 0.75],
+            )
+
+    def test_vector_range_and_numeric(self, key_type, dialect):
+        """VECTOR_RANGE combined with numeric filter via AND."""
+        self.setup_data("sortable numbers", key_type)
+        for r in [5.0, 50.0]:
+            self.checkrange(
+                dialect,
+                f"ft.search {key_type}_idx1 * @n1:[0 +inf] NOCONTENT",
+                radius=r,
+            )
+
+    def test_vector_range_and_tag(self, key_type, dialect):
+        """VECTOR_RANGE combined with tag filter via AND."""
+        self.setup_data("sortable numbers", key_type)
+        self.checkrange(
+            dialect,
+            f"ft.search {key_type}_idx1 * @t3:{{all_the_same_value}} NOCONTENT",
+            radius=50,
+        )
+
+    def test_vector_range_or_numeric(self, key_type, dialect):
+        """VECTOR_RANGE combined with numeric filter via OR."""
+        self.setup_data("sortable numbers", key_type)
+        self.checkrange(
+            dialect,
+            f"ft.search {key_type}_idx1 * | @n1:[0 +inf] NOCONTENT",
+            radius=1,
+        )
+
+    def test_vector_range_negate(self, key_type, dialect):
+        """Negated VECTOR_RANGE returns complement."""
+        self.setup_data("sortable numbers", key_type)
+        for r in [5.0, 50.0]:
+            self.checkrange(
+                dialect,
+                f"ft.search {key_type}_idx1 * NOCONTENT",
+                radius=r, negate=True,
+            )
+
+    def test_vector_range_sortby(self, key_type, dialect):
+        """VECTOR_RANGE with SORTBY overrides default distance ordering."""
+        self.setup_data("sortable numbers", key_type)
+        for sort_key in ["n1", "n2"]:
+            for direction in ["ASC", "DESC"]:
+                self.checkrange(
+                    dialect,
+                    f"ft.search {key_type}_idx1 * SORTBY {sort_key} {direction}",
+                    radius=50,
+                )
+
+    def test_vector_range_limit(self, key_type, dialect):
+        """VECTOR_RANGE with LIMIT returns the correct subset."""
+        self.setup_data("sortable numbers", key_type)
+        for offset, count in [(0, 3), (2, 5), (0, 0)]:
+            self.checkrange(
+                dialect,
+                f"ft.search {key_type}_idx1 * LIMIT {offset} {count} NOCONTENT",
+                radius=50,
+            )
+
+    def test_vector_range_return(self, key_type, dialect):
+        """VECTOR_RANGE with RETURN limits returned fields."""
+        self.setup_data("sortable numbers", key_type)
+        self.checkrange(
+            dialect,
+            f"ft.search {key_type}_idx1 * RETURN 2 n1 __v1_score",
+            radius=50,
+        )
+
+    def test_vector_range_yield_distance_as(self, key_type, dialect):
+        """VECTOR_RANGE with $yield_distance_as query attribute."""
+        self.setup_data("sortable numbers", key_type)
+        self.checkrange(
+            dialect,
+            f"ft.search {key_type}_idx1 * RETURN 2 n1 my_dist",
+            radius=50,
+            query_attrs="{$yield_distance_as: my_dist}",
+        )
+
+    def test_vector_range_epsilon(self, key_type, dialect):
+        """VECTOR_RANGE with $epsilon query attribute."""
+        self.setup_data("sortable numbers", key_type)
+        self.checkrange(
+            dialect,
+            f"ft.search {key_type}_idx1 * NOCONTENT",
+            radius=50, query_vector=[0] * VECTOR_DIM,
+            query_attrs="{$epsilon: 0.5}",
+        )
 

@@ -31,7 +31,8 @@ namespace valkey_search {
 
 constexpr size_t kLRUCapacity = 100;
 char* ExternalizeCB(void* cb_data, size_t* len);
-std::vector<char> DenormalizeVector(absl::string_view record, size_t type_size,
+std::vector<char> DenormalizeVector(absl::string_view record,
+                                    data_model::VectorDataType data_type,
                                     float magnitude);
 
 class VectorExternalizer {
@@ -46,7 +47,8 @@ class VectorExternalizer {
                    data_model::AttributeDataType attribute_data_type,
                    const InternedStringPtr& vector,
                    std::optional<float> magnitude,
-                   size_t type_size = sizeof(float));
+                   data_model::VectorDataType vector_data_type =
+                       data_model::VECTOR_DATA_TYPE_FLOAT32);
   void Remove(const InternedStringPtr& key,
               absl::string_view attribute_identifier,
               data_model::AttributeDataType attribute_data_type);
@@ -77,7 +79,8 @@ class VectorExternalizer {
   struct VectorExternalizerEntry {
     InternedStringPtr vector;
     std::optional<float> magnitude;
-    size_t type_size{sizeof(float)};
+    data_model::VectorDataType vector_data_type{
+        data_model::VECTOR_DATA_TYPE_FLOAT32};
     // We cache the normalized vector to ensure that the generated normalized
     // vector string remains alive until the engine deep copy it.
     std::unique_ptr<LRUCacheEntry> cache_normalized_;

@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "absl/log/check.h"
+#include "src/indexes/bfloat16.h"
 #include "src/indexes/fp16.h"
 #include "absl/strings/string_view.h"
 #include "src/attribute_data_type.h"
@@ -28,20 +29,27 @@ namespace valkey_search {
 VectorExternalizer::VectorExternalizer()
     : lru_cache_(std::make_unique<LRU<LRUCacheEntry>>(kLRUCapacity)) {}
 
-std::vector<char> DenormalizeVector(absl::string_view record, size_t type_size,
+std::vector<char> DenormalizeVector(absl::string_view record,
+                                    data_model::VectorDataType data_type,
                                     float magnitude) {
   std::vector<char> ret(record.size());
-  if (type_size == sizeof(float)) {
-    CopyAndDenormalizeEmbedding((float*)ret.data(), (float*)record.data(),
-                                ret.size() / sizeof(float), magnitude);
-    return ret;
+  switch (data_type) {
+    case data_model::VECTOR_DATA_TYPE_FLOAT32:
+      CopyAndDenormalizeEmbedding((float*)ret.data(), (float*)record.data(),
+                                  ret.size() / sizeof(float), magnitude);
+      return ret;
+    case data_model::VECTOR_DATA_TYPE_FLOAT16:
+      CopyAndDenormalizeEmbedding((float16*)ret.data(), (float16*)record.data(),
+                                  ret.size() / sizeof(float16), magnitude);
+      return ret;
+    case data_model::VECTOR_DATA_TYPE_BFLOAT16:
+      CopyAndDenormalizeEmbedding((bfloat16*)ret.data(),
+                                  (bfloat16*)record.data(),
+                                  ret.size() / sizeof(bfloat16), magnitude);
+      return ret;
+    default:
+      CHECK(false) << "unsupported vector data type";
   }
-  if (type_size == sizeof(float16)) {
-    CopyAndDenormalizeEmbedding((float16*)ret.data(), (float16*)record.data(),
-                                ret.size() / sizeof(float16), magnitude);
-    return ret;
-  }
-  CHECK(false) << "unsupported type size";
 }
 
 char* ExternalizeCB(void* cb_data, size_t* len) {
@@ -61,7 +69,7 @@ char* ExternalizeCB(void* cb_data, size_t* len) {
   if (vector_externalizer_entry->magnitude.has_value()) {
     auto vector = DenormalizeVector(
         vector_externalizer_entry->vector->Str(),
-        vector_externalizer_entry->type_size,
+        vector_externalizer_entry->vector_data_type,
         *vector_externalizer_entry->magnitude);
     vector_externalizer_entry->cache_normalized_ =
         std::make_unique<VectorExternalizer::LRUCacheEntry>(
@@ -113,7 +121,7 @@ bool VectorExternalizer::Externalize(
     const InternedStringPtr& key, absl::string_view attribute_identifier,
     data_model::AttributeDataType attribute_data_type,
     const InternedStringPtr& vector, std::optional<float> magnitude,
-    size_t type_size) {
+    data_model::VectorDataType vector_data_type) {
   if (!hash_registration_supported_ ||
       attribute_data_type !=
           data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH) {
@@ -123,14 +131,14 @@ bool VectorExternalizer::Externalize(
   // This ensures that consecutive reads of the record do not lose precision due
   // to vector denormalization.
   auto& deferred_shared_vectors = deferred_shared_vectors_.Get();
-  VectorExternalizerEntry entry = {vector, magnitude, type_size};
+  VectorExternalizerEntry entry = {vector, magnitude, vector_data_type};
   auto result = deferred_shared_vectors[key].emplace(attribute_identifier,
                                                      std::move(entry));
   if (!result.second) {
     // To maintain precision and reduce denormalization overhead, prefer
     // externalizing the unnormalized vector, if available.
     if (result.first->second.magnitude != std::nullopt) {
-      VectorExternalizerEntry tmp = {vector, magnitude, type_size};
+      VectorExternalizerEntry tmp = {vector, magnitude, vector_data_type};
       result.first->second = std::move(tmp);
     }
   }
@@ -151,14 +159,15 @@ void VectorExternalizer::ProcessEngineUpdateQueue() {
       if (it != shared_vectors[key].end()) {
         it->second.magnitude = vector_externalizer_entry.magnitude;
         it->second.vector = std::move(vector_externalizer_entry.vector);
-        it->second.type_size = vector_externalizer_entry.type_size;
+        it->second.vector_data_type =
+            vector_externalizer_entry.vector_data_type;
         it->second.cache_normalized_ = nullptr;
         continue;
       }
       auto& entry = shared_vectors[key][attribute_identifier];
       entry.magnitude = vector_externalizer_entry.magnitude;
       entry.vector = std::move(vector_externalizer_entry.vector);
-      entry.type_size = vector_externalizer_entry.type_size;
+      entry.vector_data_type = vector_externalizer_entry.vector_data_type;
       if (!key_obj) {
         auto key_str = vmsdk::MakeUniqueValkeyString(key->Str());
         key_obj = vmsdk::MakeUniqueValkeyOpenKey(

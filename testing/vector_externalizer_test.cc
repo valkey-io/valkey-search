@@ -58,7 +58,8 @@ void ExternalizeVectors(const std::vector<std::vector<float>> &vectors,
     if (normalize) {
       float magnitude;
       auto norm_vector =
-          indexes::NormalizeEmbedding(vector, sizeof(float), &magnitude);
+          indexes::NormalizeEmbedding(
+              vector, data_model::VECTOR_DATA_TYPE_FLOAT32, &magnitude);
       vector = absl::string_view((const char *)norm_vector.data(),
                                  norm_vector.size());
       auto interned_vector = StringInternStore::Intern(vector, allocator);
@@ -132,11 +133,13 @@ TEST_P(VectorExternalizerTest, SimpleExternalize) {
     if (normalize) {
       float magnitude_value;
       auto norm_vector = indexes::NormalizeEmbedding(
-          VectorToStr(vectors[j]), sizeof(float), &magnitude_value);
+          VectorToStr(vectors[j]), data_model::VECTOR_DATA_TYPE_FLOAT32,
+          &magnitude_value);
       auto denorm_vector =
           DenormalizeVector(absl::string_view((const char *)norm_vector.data(),
                                               norm_vector.size()),
-                            sizeof(float), magnitude_value);
+                            data_model::VECTOR_DATA_TYPE_FLOAT32,
+                            magnitude_value);
       EXPECT_EQ(absl::string_view(denorm_vector.data(), denorm_vector.size()),
                 absl::string_view(vector, len));
     } else {
@@ -214,11 +217,13 @@ void VerifyCB(const std::vector<std::vector<float>> &vectors, size_t offset,
     if (normalized) {
       float magnitude_value;
       auto norm_vector = indexes::NormalizeEmbedding(
-          VectorToStr(vectors[j]), sizeof(float), &magnitude_value);
+          VectorToStr(vectors[j]), data_model::VECTOR_DATA_TYPE_FLOAT32,
+          &magnitude_value);
       auto denorm_vector =
           DenormalizeVector(absl::string_view((const char *)norm_vector.data(),
                                               norm_vector.size()),
-                            sizeof(float), magnitude_value);
+                            data_model::VECTOR_DATA_TYPE_FLOAT32,
+                            magnitude_value);
       EXPECT_EQ(absl::string_view(denorm_vector.data(), denorm_vector.size()),
                 absl::string_view(vector, len));
     } else {

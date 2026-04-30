@@ -105,7 +105,7 @@ class BaseCompatibilityTest:
         cmd = orig_cmd[0].split() if len(orig_cmd) == 1 else [*orig_cmd]
         self.execute_command(cmd)
 
-@pytest.mark.parametrize("vector_data_type", ["FLOAT32", "FLOAT16"])
+@pytest.mark.parametrize("vector_data_type", ["FLOAT32", "FLOAT16", "BFLOAT16"])
 @pytest.mark.parametrize("dialect", [2])
 @pytest.mark.parametrize("key_type", ["json", "hash"])
 class TestAggregateCompatibility(BaseCompatibilityTest):
@@ -126,12 +126,27 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         # Pack the query BLOB matching the index's data type so RediSearch
         # accepts it. The compatibility consumer (`compatibility_test.py`) replays
         # this same cmd verbatim against a Valkey-search index of the same type.
-        fmt = "e" if getattr(self, "vector_data_type", "FLOAT32") == "FLOAT16" else "f"
+        vdt = getattr(self, "vector_data_type", "FLOAT32")
+        if vdt == "FLOAT16":
+            blob = struct.pack(f"<{VECTOR_DIM}e", *query_vector)
+        elif vdt == "BFLOAT16":
+            # FP32 -> BF16 with round-to-nearest, ties-to-even. Mirrors the
+            # C++ bfloat16(float) constructor and indexes.bfloat16_to_bytes.
+            fp32 = struct.pack(f"<{VECTOR_DIM}f", *query_vector)
+            buf = bytearray()
+            for i in range(VECTOR_DIM):
+                u = int.from_bytes(fp32[i * 4 : i * 4 + 4], "little")
+                rounding_bias = 0x7FFF + ((u >> 16) & 1)
+                u = (u + rounding_bias) & 0xFFFFFFFF
+                buf += u.to_bytes(4, "little")[2:4]
+            blob = bytes(buf)
+        else:
+            blob = struct.pack(f"<{VECTOR_DIM}f", *query_vector)
         new_cmd += [
             "PARAMS",
             "2",
             "BLOB",
-            struct.pack(f"<{VECTOR_DIM}{fmt}", *query_vector),
+            blob,
             "DIALECT",
             str(dialect),
         ]

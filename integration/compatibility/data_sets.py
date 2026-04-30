@@ -240,6 +240,17 @@ def array_encode(key_type, array, data_type="FLOAT32"):
     if key_type == "hash":
         if data_type == "FLOAT16":
             return struct.pack(f"<{len(array)}e", *array)
+        if data_type == "BFLOAT16":
+            # FP32 -> BF16 with round-to-nearest, ties-to-even. Matches the
+            # C++ bfloat16(float) constructor and RediSearch's BF16 rounding.
+            fp32 = struct.pack(f"<{len(array)}f", *array)
+            out = bytearray()
+            for i in range(len(array)):
+                u = int.from_bytes(fp32[i * 4 : i * 4 + 4], "little")
+                rounding_bias = 0x7FFF + ((u >> 16) & 1)
+                u = (u + rounding_bias) & 0xFFFFFFFF
+                out += u.to_bytes(4, "little")[2:4]
+            return bytes(out)
         return struct.pack(f"<{len(array)}f", *array)
     else:
         return array

@@ -214,6 +214,12 @@ int VectorHNSW<T>::RespondWithInfoImpl(ValkeyModuleCtx *ctx) const {
         LookupKeyByValue(*kVectorDataTypeByStr,
                          data_model::VectorDataType::VECTOR_DATA_TYPE_FLOAT16)
             .data());
+  } else if constexpr (std::is_same_v<T, bfloat16>) {
+    ValkeyModule_ReplyWithSimpleString(
+        ctx,
+        LookupKeyByValue(*kVectorDataTypeByStr,
+                         data_model::VectorDataType::VECTOR_DATA_TYPE_BFLOAT16)
+            .data());
   } else {
     ValkeyModule_ReplyWithSimpleString(ctx, "UNKNOWN");
   }
@@ -353,7 +359,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
     }
   };
   if (normalize_) {
-    auto norm_record = NormalizeEmbedding(query, GetDataTypeSize());
+    auto norm_record = NormalizeEmbedding(query, GetVectorDataType());
     VMSDK_ASSIGN_OR_RETURN(
         auto search_result,
         perform_search(absl::string_view((const char *)norm_record.data(),
@@ -372,6 +378,8 @@ void VectorHNSW<T>::ToProtoImpl(
     data_type = data_model::VectorDataType::VECTOR_DATA_TYPE_FLOAT32;
   } else if constexpr (std::is_same_v<T, float16>) {
     data_type = data_model::VectorDataType::VECTOR_DATA_TYPE_FLOAT16;
+  } else if constexpr (std::is_same_v<T, bfloat16>) {
+    data_type = data_model::VectorDataType::VECTOR_DATA_TYPE_BFLOAT16;
   } else {
     DCHECK(false) << "Unsupported type: " << typeid(T).name();
     data_type = data_model::VectorDataType::VECTOR_DATA_TYPE_UNSPECIFIED;
@@ -422,5 +430,6 @@ size_t VectorHNSW<T>::GetLabelCount() const {
 
 template class VectorHNSW<float>;
 template class VectorHNSW<float16>;
+template class VectorHNSW<bfloat16>;
 
 }  // namespace valkey_search::indexes

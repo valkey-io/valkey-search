@@ -30,20 +30,27 @@
 #include <vector>
 
 #include "gtest/gtest.h"
+#include "src/indexes/bfloat16.h"
 #include "src/indexes/fp16.h"
 // hnswlib.h must precede space_*.h: stop_condition.h (pulled in by hnswlib.h)
 // references symbols defined later in space_ip.h / space_l2.h, so the umbrella
 // header has to be parsed end-to-end first to satisfy unqualified lookup.
 #include "third_party/hnswlib/hnswlib.h"
 #include "third_party/hnswlib/space_ip.h"
+#include "third_party/hnswlib/space_ip_bfloat16.h"
 #include "third_party/hnswlib/space_ip_fp16.h"
 #include "third_party/hnswlib/space_l2.h"
+#include "third_party/hnswlib/space_l2_bfloat16.h"
 #include "third_party/hnswlib/space_l2_fp16.h"
 
 namespace valkey_search {
 namespace {
 
 constexpr float kFp16Tolerance = 1e-3f;
+// BF16 has the same exponent range as FP32 but only 7 mantissa bits (vs FP16's
+// 10), so integer-valued sums up to ~128 are exact but products can introduce
+// ~2^-7 relative error per term. 1e-2 absolute slack covers our test inputs.
+constexpr float kBf16Tolerance = 1e-2f;
 
 const std::vector<size_t>& AllDims() {
   static const std::vector<size_t> dims{3, 4, 16, 17, 20};
@@ -73,6 +80,18 @@ std::vector<float16> PadFp16(std::initializer_list<float> prefix, size_t dim) {
       break;
     }
     v[i++] = static_cast<float16>(x);
+  }
+  return v;
+}
+
+std::vector<bfloat16> PadBf16(std::initializer_list<float> prefix, size_t dim) {
+  std::vector<bfloat16> v(dim, bfloat16{0.0f});
+  size_t i = 0;
+  for (float x : prefix) {
+    if (i >= dim) {
+      break;
+    }
+    v[i++] = bfloat16{x};
   }
   return v;
 }
@@ -216,6 +235,68 @@ TEST(SpaceDistanceIpFp16, OrthogonalBases) {
     std::vector<float16> e1(dim, static_cast<float16>(0.0f));
     e1[1] = static_cast<float16>(1.0f);
     EXPECT_NEAR(CallDist(space, e0.data(), e1.data()), 1.0f, kFp16Tolerance)
+        << "dim=" << dim;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// L2SpaceBF16
+// ---------------------------------------------------------------------------
+
+TEST(SpaceDistanceL2Bf16, HandComputed) {
+  for (size_t dim : AllDims()) {
+    hnswlib::L2SpaceBF16 space(dim);
+    auto v1 = PadBf16({3.0f, 4.0f}, dim);
+    auto v2 = PadBf16({}, dim);
+    EXPECT_NEAR(CallDist(space, v1.data(), v2.data()), 25.0f, kBf16Tolerance)
+        << "dim=" << dim;
+  }
+}
+
+TEST(SpaceDistanceL2Bf16, SelfDistanceZero) {
+  for (size_t dim : AllDims()) {
+    hnswlib::L2SpaceBF16 space(dim);
+    auto v = PadBf16({1.0f, 2.0f, 3.0f, 4.0f, 5.0f}, dim);
+    EXPECT_NEAR(CallDist(space, v.data(), v.data()), 0.0f, kBf16Tolerance)
+        << "dim=" << dim;
+  }
+}
+
+TEST(SpaceDistanceL2Bf16, Symmetric) {
+  for (size_t dim : AllDims()) {
+    hnswlib::L2SpaceBF16 space(dim);
+    auto a = PadBf16({1.0f, -2.0f, 3.0f}, dim);
+    auto b = PadBf16({4.0f, 5.0f, -6.0f}, dim);
+    EXPECT_NEAR(CallDist(space, a.data(), b.data()),
+                CallDist(space, b.data(), a.data()), kBf16Tolerance)
+        << "dim=" << dim;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// InnerProductSpaceBF16 — returns 1.0 - dot(a, b)
+// ---------------------------------------------------------------------------
+
+TEST(SpaceDistanceIpBf16, HandComputed) {
+  for (size_t dim : AllDims()) {
+    hnswlib::InnerProductSpaceBF16 space(dim);
+    auto v1 = PadBf16({1.0f, 2.0f, 3.0f}, dim);
+    auto v2 = PadBf16({4.0f, 5.0f, 6.0f}, dim);
+    EXPECT_NEAR(CallDist(space, v1.data(), v2.data()), -31.0f, kBf16Tolerance)
+        << "dim=" << dim;
+  }
+}
+
+TEST(SpaceDistanceIpBf16, OrthogonalBases) {
+  for (size_t dim : AllDims()) {
+    if (dim < 2) {
+      continue;
+    }
+    hnswlib::InnerProductSpaceBF16 space(dim);
+    auto e0 = PadBf16({1.0f}, dim);
+    std::vector<bfloat16> e1(dim, bfloat16{0.0f});
+    e1[1] = bfloat16{1.0f};
+    EXPECT_NEAR(CallDist(space, e0.data(), e1.data()), 1.0f, kBf16Tolerance)
         << "dim=" << dim;
   }
 }

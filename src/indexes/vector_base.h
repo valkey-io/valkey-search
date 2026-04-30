@@ -46,7 +46,8 @@ enum class QueryOperations : uint64_t;
 
 namespace valkey_search::indexes {
 
-std::vector<char> NormalizeEmbedding(absl::string_view record, size_t type_size,
+std::vector<char> NormalizeEmbedding(absl::string_view record,
+                                     data_model::VectorDataType data_type,
                                      float* magnitude = nullptr);
 
 struct Neighbor {
@@ -106,7 +107,8 @@ const absl::NoDestructor<
 const absl::NoDestructor<
     absl::flat_hash_map<absl::string_view, data_model::VectorDataType>>
     kVectorDataTypeByStr({{"FLOAT32", data_model::VECTOR_DATA_TYPE_FLOAT32},
-                          {"FLOAT16", data_model::VECTOR_DATA_TYPE_FLOAT16}});
+                          {"FLOAT16", data_model::VECTOR_DATA_TYPE_FLOAT16},
+                          {"BFLOAT16", data_model::VECTOR_DATA_TYPE_BFLOAT16}});
 
 template <typename V>
 absl::string_view LookupKeyByValue(
@@ -174,6 +176,11 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   absl::StatusOr<std::vector<char>> GetValue(const InternedStringPtr& key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
   virtual size_t GetDataTypeSize() const = 0;
+  // Returns the vector data type enum. Used to disambiguate FLOAT16 from
+  // BFLOAT16 in normalize/denormalize dispatch — both are 2 bytes, so a
+  // size-based check would silently route the wrong format through the wrong
+  // helper.
+  virtual data_model::VectorDataType GetVectorDataType() const = 0;
   int GetVectorDataSize() const { return GetDataTypeSize() * dimensions_; }
   char* TrackVector(uint64_t internal_id, char* vector, size_t len) override;
   InternedStringPtr InternVector(absl::string_view record,

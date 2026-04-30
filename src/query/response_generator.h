@@ -43,9 +43,7 @@ void ProcessNeighborsForReply(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
     std::vector<indexes::Neighbor> &neighbors,
     const query::SearchParameters &parameters,
-    const std::optional<std::string> &vector_identifier,
-    const std::optional<query::SortByParameter> &sortby_parameter =
-        std::nullopt);
+    const std::optional<std::string> &vector_identifier);
 
 }  // namespace valkey_search::query
 

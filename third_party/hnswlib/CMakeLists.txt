@@ -16,7 +16,8 @@ target_link_libraries(hnswlib_vmsdk INTERFACE iostream)
 target_link_libraries(hnswlib_vmsdk INTERFACE simsimd)
 target_link_libraries(hnswlib_vmsdk INTERFACE vmsdklib)
 target_compile_definitions(hnswlib_vmsdk
-                           INTERFACE VMSDK_ENABLE_MEMORY_ALLOCATION_OVERRIDES)
+                           INTERFACE VMSDK_ENABLE_MEMORY_ALLOCATION_OVERRIDES
+                                     USE_SIMSIMD)
 target_link_libraries(hnswlib_vmsdk INTERFACE index_cc_proto)
 
 set(SRCS_SIMSIMD ${CMAKE_CURRENT_LIST_DIR}/simsimd.h)

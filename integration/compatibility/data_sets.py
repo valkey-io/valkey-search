@@ -236,8 +236,10 @@ class ClientSystem:
     def hset(self, *cmd):
         return self.client.hset(*cmd)
     
-def array_encode(key_type, array):
+def array_encode(key_type, array, data_type="FLOAT32"):
     if key_type == "hash":
+        if data_type == "FLOAT16":
+            return struct.pack(f"<{len(array)}e", *array)
         return struct.pack(f"<{len(array)}f", *array)
     else:
         return array
@@ -255,7 +257,7 @@ def binary_string_encode(key_type, s):
     else:
         return '"' + "".join([json_quote(s[i]) for i in range(len(s))]) + '"'       
     
-def compute_data_sets():
+def compute_data_sets(vector_data_type="FLOAT32"):
     '''Generate all of the possible data sets'''
     data = {}
 
@@ -269,10 +271,9 @@ def compute_data_sets():
     def make_field_definition(key_type, name, typ, i):
         if typ == "vector":
             if key_type == "hash":
-                return f"{name}{i} vector HNSW 6 DIM {VECTOR_DIM} TYPE FLOAT32 DISTANCE_METRIC L2"
+                return f"{name}{i} vector HNSW 6 DIM {VECTOR_DIM} TYPE {vector_data_type} DISTANCE_METRIC L2"
             else:
-                return f"$.{name}{i} as {name}{i} vector HNSW 6 DIM {VECTOR_DIM} TYPE FLOAT32 DISTANCE_METRIC L2"
-            return f"{name}{i} vector HNSW 6 DIM {VECTOR_DIM} TYPE FLOAT32 DISTANCE_METRIC L2"
+                return f"$.{name}{i} as {name}{i} vector HNSW 6 DIM {VECTOR_DIM} TYPE {vector_data_type} DISTANCE_METRIC L2"
         else:
             return f"{name}{i} {typ}" if key_type == "hash" else f"$.{name}{i} AS {name}{i} {typ}"
 
@@ -311,7 +312,7 @@ def compute_data_sets():
                     "t1": f"one.one{i*2}",
                     "t2": f"two.two{i*-2}",
                     "t3": "all_the_same_value",
-                    "v1": array_encode(key_type, [i for _ in range(VECTOR_DIM)]),
+                    "v1": array_encode(key_type, [i for _ in range(VECTOR_DIM)], vector_data_type),
                     "e1" : 1,
                     "e2" : "two",
                 },
@@ -334,7 +335,7 @@ def compute_data_sets():
                     "t1": f"one.one{i*2}",
                     "t2": f"two.two{i*-2}",
                     "t3": "all_the_same_value",
-                    "v1": array_encode(key_type, [i for _ in range(VECTOR_DIM)]),
+                    "v1": array_encode(key_type, [i for _ in range(VECTOR_DIM)], vector_data_type),
                     "e1" : 1,
                     "e2" : "two",
                 },
@@ -357,7 +358,7 @@ def compute_data_sets():
                     "t1": f"one.one{i*2}",
                     "t2": f"two.two{i*-2}",
                     "t3": "all_the_same_value",
-                    "v1": array_encode(key_type, [(len(sortable_numbers)-i) for _ in range(VECTOR_DIM)]),
+                    "v1": array_encode(key_type, [(len(sortable_numbers)-i) for _ in range(VECTOR_DIM)], vector_data_type),
                     "e1" : 1,
                     "e2" : "two",
                 },
@@ -377,7 +378,7 @@ def compute_data_sets():
                     "t1": "",
                     "t2": "",
                     "t3": "",
-                    "v1": array_encode(key_type, [0 for _ in range(VECTOR_DIM)]),
+                    "v1": array_encode(key_type, [0 for _ in range(VECTOR_DIM)], vector_data_type),
                     "e1" : 1,
                     "e2" : "two",
                 },
@@ -390,7 +391,7 @@ def compute_data_sets():
                     "t1": "",
                     "t2": "",
                     "t3": "",
-                    "v1": array_encode(key_type, [1 for _ in range(VECTOR_DIM)]),
+                    "v1": array_encode(key_type, [1 for _ in range(VECTOR_DIM)], vector_data_type),
                     "e1" : 1,
                     "e2" : "two",
                 },
@@ -403,7 +404,7 @@ def compute_data_sets():
                     "t1": "",
                     "t2": "",
                     "t3": "",
-                    "v1": array_encode(key_type, [2 for _ in range(VECTOR_DIM)]),
+                    "v1": array_encode(key_type, [2 for _ in range(VECTOR_DIM)], vector_data_type),
                     "e1" : 1,
                     "e2" : "two",
                 },
@@ -416,7 +417,7 @@ def compute_data_sets():
                     "t1": "",
                     "t2": "",
                     "t3": "",
-                    "v1": array_encode(key_type, [3 for _ in range(VECTOR_DIM)]),
+                    "v1": array_encode(key_type, [3 for _ in range(VECTOR_DIM)], vector_data_type),
                     "e1" : 1,
                     "e2" : "two",
                 },
@@ -428,7 +429,7 @@ def compute_data_sets():
                     "n3": 0,
                     "t2": "",
                     "t3": "",
-                    "v1": array_encode(key_type, [4 for _ in range(VECTOR_DIM)]),
+                    "v1": array_encode(key_type, [4 for _ in range(VECTOR_DIM)], vector_data_type),
                     "e1" : 1,
                     "e2" : "two",
                 },
@@ -440,7 +441,7 @@ def compute_data_sets():
                     "n3": 0,
                     "t2": "",
                     "t3": "",
-                    "v1": array_encode(key_type, [5 for _ in range(VECTOR_DIM+1)]),
+                    "v1": array_encode(key_type, [5 for _ in range(VECTOR_DIM+1)], vector_data_type),
                 },
             ),
         ]
@@ -464,7 +465,7 @@ def compute_data_sets():
                     "t1": unicode_chars,
                     "t2": unicode_chars[i:],
                     "t3": "all_the_same_value",
-                    "v1": array_encode(key_type, [i for _ in range(VECTOR_DIM)]),
+                    "v1": array_encode(key_type, [i for _ in range(VECTOR_DIM)], vector_data_type),
                     "e1" : 1,
                     "e2" : "two",
                 },
@@ -485,7 +486,7 @@ def compute_data_sets():
                             "t1": "",
                             "t2": "",
                             "t3": "all_the_same_value",
-                            "v1": array_encode(key_type, [x, y, z]),
+                            "v1": array_encode(key_type, [x, y, z], vector_data_type),
                             "e1" : 1,
                             "e2" : "two",
                         },
@@ -591,14 +592,14 @@ def compute_text_data_sets(dataset_name, seed=123, schema_type="default"):
     return data
 
 ### Helper Functions ###
-def load_data(client, data_set, key_type, data_source=None, schema_type="default"):
+def load_data(client, data_set, key_type, data_source=None, schema_type="default", vector_data_type="FLOAT32"):
     # Auto-detect data source based on data_set name
     if data_source is None:
         data_source = "text" if data_set in TEXT_DATASETS else "vector"
 
     match data_source:
         case "vector":
-            data = compute_data_sets()
+            data = compute_data_sets(vector_data_type=vector_data_type)
         case "text":
             data = compute_text_data_sets(data_set, schema_type=schema_type)
         case _:
@@ -632,8 +633,8 @@ def load_data(client, data_set, key_type, data_source=None, schema_type="default
             print(f"{s}:{load_list[s][0]}:  ", k)
     return len(load_list)
 
-def load_data_cluster(cluster_client, test_case, data_set, key_type):
-    data = compute_data_sets()
+def load_data_cluster(cluster_client, test_case, data_set, key_type, vector_data_type="FLOAT32"):
+    data = compute_data_sets(vector_data_type=vector_data_type)
 
     primary0 = test_case.new_client_for_primary(0)
     for create_cmd in data[data_set][CREATES_KEY(key_type)]:

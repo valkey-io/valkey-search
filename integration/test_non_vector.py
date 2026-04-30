@@ -240,6 +240,45 @@ def validate_bulk_limit_queries(client: Valkey):
     assert actual_results <= 3  # Should return at most 3 results
     assert actual_results == min(3, max(0, total_count - 2))  # Respect offset of 2
 
+def validate_tag_and_negate_queries(client: Valkey):
+    """
+        Test TAG and negated TAG queries using the bulk_products index (2500 docs, 10 categories).
+        Reuses the bulk data created by create_bulk_data_standalone: category = "cat0".."cat9",
+        each with 250 docs.
+    """
+    # Exact tag match
+    result = client.execute_command("FT.SEARCH", "bulk_products", "@category:{cat0}", "NOCONTENT", "LIMIT", "0", "0")
+    assert result[0] == 250
+
+    # Tag OR
+    result = client.execute_command("FT.SEARCH", "bulk_products", "@category:{cat0|cat1}", "NOCONTENT", "LIMIT", "0", "0")
+    assert result[0] == 500
+
+    # Nonexistent tag
+    result = client.execute_command("FT.SEARCH", "bulk_products", "@category:{nonexistent}", "NOCONTENT", "LIMIT", "0", "0")
+    assert result[0] == 0
+
+    # Negate single category: 2500 - 250 = 2250
+    result = client.execute_command("FT.SEARCH", "bulk_products", "-@category:{cat0}", "NOCONTENT", "LIMIT", "0", "0")
+    assert result[0] == 2250
+
+    # Negate two categories: 2500 - 500 = 2000
+    result = client.execute_command("FT.SEARCH", "bulk_products", "-@category:{cat0|cat1}", "NOCONTENT", "LIMIT", "0", "0")
+    assert result[0] == 2000
+
+    # Positive tag AND negate: cat0 AND NOT rating=3.0
+    # cat0 = 250 docs. rating cycles 3.0/4.0/5.0, so 1/3 of cat0 has rating 3.0.
+    # cat0 docs are at indices 0,10,20,...2490. rating=3.0 when i%3==0.
+    # cat0 AND rating=3.0: i%10==0 AND i%3==0 => i%30==0 => 84 docs (0..2490 step 30 = 83+1=84)
+    # Result: 250 - 84 = 166
+    result = client.execute_command("FT.SEARCH", "bulk_products", "@category:{cat0} @rating:[4.0 +inf]", "NOCONTENT", "LIMIT", "0", "0")
+    assert result[0] == 166, f"Expected 166, got {result[0]}"
+
+    # Negate with LIMIT pagination
+    result = client.execute_command("FT.SEARCH", "bulk_products", "-@category:{cat0}", "NOCONTENT", "LIMIT", "0", "50")
+    assert result[0] == 2250
+    assert len(result) - 1 == 50
+
 def validate_aggregate_queries(client: Valkey):
     """
         Test FT.AGGREGATE with numeric and tag queries.
@@ -523,6 +562,14 @@ class TestNonVector(ValkeySearchTestCaseBase):
         client: Valkey = self.server.get_new_client()
         create_bulk_data_standalone(client)
         validate_bulk_limit_queries(client)
+
+    def test_tag_and_negate_at_scale(self):
+        """
+            Test TAG and negated TAG queries with bulk data to exercise the tag index at scale.
+        """
+        client: Valkey = self.server.get_new_client()
+        create_bulk_data_standalone(client)
+        validate_tag_and_negate_queries(client)
 
 class TestNonVectorCluster(ValkeySearchClusterTestCase):
 

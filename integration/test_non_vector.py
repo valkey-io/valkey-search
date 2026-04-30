@@ -154,6 +154,25 @@ def validate_limit_queries(client: Valkey):
     assert result[0] == 4  # Total count only
     assert len(result) == 1
 
+def validate_bare_wildcard_queries(client: Valkey):
+    """
+        Test bare '*' match-all behavior for non-vector FT.SEARCH in DIALECT 2.
+    """
+    result = client.execute_command("FT.SEARCH", "products", "*", "DIALECT", "2")
+    assert result[0] == 4
+
+    result = client.execute_command("FT.SEARCH", "products", "*", "NOCONTENT", "DIALECT", "2")
+    assert result[0] == 4
+    assert len(result) == 5
+
+    result = client.execute_command("FT.SEARCH", "products", "*", "LIMIT", "0", "2", "NOCONTENT", "DIALECT", "2")
+    assert result[0] == 4
+    assert len(result) == 3
+
+    result = client.execute_command("FT.SEARCH", "products", "*", "SORTBY", "price", "ASC", "NOCONTENT", "DIALECT", "2")
+    assert result[0] == 4
+    assert len(result) == 5
+
 def create_bulk_data_standalone(client: Valkey):
     """
         Create bulk data for standalone testing.
@@ -484,6 +503,8 @@ class TestNonVector(ValkeySearchTestCaseBase):
         validate_non_vector_queries(client)
         # Test LIMIT functionality
         validate_limit_queries(client)
+        # Test bare wildcard functionality
+        validate_bare_wildcard_queries(client)
         # Test AGGREGATE functionality
         validate_aggregate_queries(client)
 

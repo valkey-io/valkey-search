@@ -87,14 +87,13 @@ class Tag : public IndexBase {
     const InternedStringPtr& operator*() const override;
 
    private:
-    // Reference to the Patricia tree, held so we can lazily construct the
+    // Reference to the Patricia tree, held so we can construct the
     // root iterator on demand (only when negation requires it).
     const PatriciaTreeIndex& tree_;
 
     // Full-tree root iterator used exclusively by the negated path.
-    // Lazily initialized by EnsureNegateRootIter() to avoid an O(N) DFS
-    // of the entire Patricia tree for non-negated queries, where N is the
-    // number of unique tag values in the index.
+    // Only constructed by EnsureNegateRootIter() on first negated
+    // iteration — non-negated queries never create this.
     std::optional<PatriciaTreeIndex::PrefixSubTreeIterator> negate_root_iter_;
 
     // The set of Patricia nodes matching the query tags. For non-negated

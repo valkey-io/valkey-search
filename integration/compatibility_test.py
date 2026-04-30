@@ -78,6 +78,12 @@ def parse_field(x, key_type):
 
 def parse_value(x, key_type):
     try:
+        if x is None:
+            # Both engines can return RESP nil for an APPLY expression that
+            # evaluates to nil (e.g. a string function applied to a numeric
+            # field on JSON). Represent it as None on both sides so equality
+            # works.
+            return None
         if key_type == "json" and isinstance(x, int):
             result = x
         elif key_type == "json" and x.startswith(b'['):

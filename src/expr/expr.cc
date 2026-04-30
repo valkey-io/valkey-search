@@ -513,11 +513,9 @@ struct Compiler {
                                            {"==", &FuncEq}, {"!=", &FuncNe},
                                            {">=", &FuncGe}, {">", &FuncGt}};
     static std::vector<DyadicOp> filter_ops{
-        {"<=", &FilterFuncLe}, {"<", &FilterFuncLt},
-        {"==", &FilterFuncEq}, {"!=", &FilterFuncNe},
-        {">=", &FilterFuncGe}, {">", &FilterFuncGt}};
-    auto& ops =
-        ctx.UseFilterComparisonSemantics() ? filter_ops : apply_ops;
+        {"<=", &FilterFuncLe}, {"<", &FilterFuncLt},  {"==", &FilterFuncEq},
+        {"!=", &FilterFuncNe}, {">=", &FilterFuncGe}, {">", &FilterFuncGt}};
+    auto& ops = ctx.UseFilterComparisonSemantics() ? filter_ops : apply_ops;
     return DoDyadic(ctx, &Compiler::AddOp, ops);
   }
   absl::StatusOr<ExprPtr> AddOp(CompileContext& ctx) {

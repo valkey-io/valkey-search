@@ -108,11 +108,24 @@ class TestFilterCompatibility(BaseCompatibilityTest):
         self.setup_data("filter combined", key_type)
         self._run_filter_queries(key_type, dialect)
 
+    # Hash-only: applying a string function (strlen / startswith) to a NUMERIC
+    # attribute is well-defined for hash (the original string bytes are stored
+    # verbatim) but diverges on JSON. JSON parses the value to a double, losing
+    # the original textual form. valkey-search re-stringifies via %.11g and
+    # applies the function (e.g. strlen(100)==3); Redis Stack on JSON appears
+    # not to coerce a numeric to a string at all and admits every document
+    # unconditionally. Coverage of strlen/startswith on JSON is provided by
+    # HARD_STR_FILTER_EXPRS, which operates on TEXT/TAG fields where both
+    # engines agree.
     def test_filter_strlen_numeric(self, key_type, dialect):
+        if key_type == "json":
+            pytest.skip("strlen() on JSON NUMERIC behaves inconsistently in Redis Stack")
         self.setup_data("filter strlen numeric", key_type)
         self._run_filter_queries(key_type, dialect)
 
     def test_filter_startswith_numeric(self, key_type, dialect):
+        if key_type == "json":
+            pytest.skip("startswith() on JSON NUMERIC behaves inconsistently in Redis Stack")
         self.setup_data("filter startswith numeric", key_type)
         self._run_filter_queries(key_type, dialect)
 

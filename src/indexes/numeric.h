@@ -64,6 +64,8 @@ class BTreeNumeric {
     return segment_tree_.Count(start, end, start_inclusive, end_inclusive);
   }
 
+  size_t GetSegmentTreeNodeCount() const { return segment_tree_.GetNodeCount(); }
+
  private:
   // Right now we have both BTree and Segment Tree. The BTree is used to
   // maintain the keys and the values. The segment tree is used to maintain the
@@ -120,6 +122,8 @@ class Numeric : public IndexBase {
 
   const double* GetValue(const InternedStringPtr& key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
+
+  size_t GetSegmentTreeNodeCount() const ABSL_LOCKS_EXCLUDED(index_mutex_);
   using BTreeNumericIndex = BTreeNumeric<InternedStringPtr>;
   using EntriesRange = std::pair<BTreeNumericIndex::ConstIterator,
                                  BTreeNumericIndex::ConstIterator>;

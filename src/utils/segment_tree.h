@@ -58,6 +58,7 @@ class SegmentTree {
     return count_greater_than_start - count_greater_than_end;
   }
   int GetHeight() { return GetHeight(root_); }
+  size_t GetNodeCount() const { return GetNodeCount(root_.get()); }
 
   // Testing only
   void GetTreeString(const std::unique_ptr<SegmentTreeNode>& node,
@@ -80,6 +81,14 @@ class SegmentTree {
  private:
   static int GetHeight(const std::unique_ptr<SegmentTreeNode>& node) {
     return node ? (node->height) : 0;
+  }
+
+  static size_t GetNodeCount(const SegmentTreeNode* node) {
+    if (node == nullptr) {
+      return 0;
+    }
+    return 1 + GetNodeCount(node->left_node.get()) +
+           GetNodeCount(node->right_node.get());
   }
 
   static uint64_t CountGreaterThan(double value, bool inclusive,

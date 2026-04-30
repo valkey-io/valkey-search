@@ -120,8 +120,7 @@ TEST(SpaceDistanceL2Fp32, SelfDistanceZero) {
   for (size_t dim : AllDims()) {
     hnswlib::L2Space space(dim);
     auto v = PadFp32({1.0f, 2.0f, 3.0f, 4.0f, 5.0f}, dim);
-    EXPECT_FLOAT_EQ(CallDist(space, v.data(), v.data()), 0.0f)
-        << "dim=" << dim;
+    EXPECT_FLOAT_EQ(CallDist(space, v.data(), v.data()), 0.0f) << "dim=" << dim;
   }
 }
 
@@ -130,9 +129,9 @@ TEST(SpaceDistanceL2Fp32, Symmetric) {
     hnswlib::L2Space space(dim);
     auto a = PadFp32({1.0f, -2.0f, 3.0f}, dim);
     auto b = PadFp32({4.0f, 5.0f, -6.0f}, dim);
-    float ab = CallDist(space, a.data(), b.data());
-    float ba = CallDist(space, b.data(), a.data());
-    EXPECT_FLOAT_EQ(ab, ba) << "dim=" << dim;
+    float a_b = CallDist(space, a.data(), b.data());
+    float b_a = CallDist(space, b.data(), a.data());
+    EXPECT_FLOAT_EQ(a_b, b_a) << "dim=" << dim;
   }
 }
 
@@ -329,16 +328,15 @@ int simsimd_uses_sve_bf16(void);
 }
 
 TEST(SimsimdCpuConfig, BF16HasSimdSafePath) {
-  const bool has_x86_simd_bf16_path = simsimd_uses_haswell() ||
-                                      simsimd_uses_genoa() ||
-                                      simsimd_uses_sapphire();
+  const bool has_x86_simd_bf16_path =
+      simsimd_uses_haswell() || simsimd_uses_genoa() || simsimd_uses_sapphire();
   const bool has_arm_simd_bf16_path =
       simsimd_uses_neon_bf16() || simsimd_uses_sve_bf16();
 
   EXPECT_TRUE(has_x86_simd_bf16_path || has_arm_simd_bf16_path)
       << "simsimd's dispatcher will fall back to simsimd_l2sq_bf16_serial / "
          "simsimd_dot_bf16_serial on this CPU. With SIMSIMD_NATIVE_BF16=1 "
-         "(set in third_party/simsimd/c/lib.c) the serial path mis-interprets "
+         "(set in third_party/simsimd/c/lib.c) the serial path misinterprets "
          "BF16 bits as IEEE FP16. Either run on a Haswell+ x86 (or BF16-"
          "capable ARM) CPU, or set SIMSIMD_NATIVE_BF16 back to 0 in lib.c.";
 }

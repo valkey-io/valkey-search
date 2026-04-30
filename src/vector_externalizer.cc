@@ -15,10 +15,10 @@
 #include <vector>
 
 #include "absl/log/check.h"
-#include "src/indexes/bfloat16.h"
-#include "src/indexes/fp16.h"
 #include "absl/strings/string_view.h"
 #include "src/attribute_data_type.h"
+#include "src/indexes/bfloat16.h"
+#include "src/indexes/fp16.h"
 #include "src/utils/lru.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -67,10 +67,9 @@ char* ExternalizeCB(void* cb_data, size_t* len) {
     return (char*)ptr;
   }
   if (vector_externalizer_entry->magnitude.has_value()) {
-    auto vector = DenormalizeVector(
-        vector_externalizer_entry->vector->Str(),
-        vector_externalizer_entry->vector_data_type,
-        *vector_externalizer_entry->magnitude);
+    auto vector = DenormalizeVector(vector_externalizer_entry->vector->Str(),
+                                    vector_externalizer_entry->vector_data_type,
+                                    *vector_externalizer_entry->magnitude);
     vector_externalizer_entry->cache_normalized_ =
         std::make_unique<VectorExternalizer::LRUCacheEntry>(
             std::move(vector), vector_externalizer_entry);

@@ -64,7 +64,7 @@ int simsimd_uses_sve_bf16(void);
 
 // Verify the running CPU exposes a SIMD-targeted BF16 path. lib.c is built
 // with SIMSIMD_NATIVE_BF16=1, which retypes simsimd_bf16_t to _Float16 on
-// x86. The serial fallback then mis-interprets BF16 bits as IEEE FP16; only
+// x86. The serial fallback then misinterprets BF16 bits as IEEE FP16; only
 // the SIMD variants (*_haswell / *_genoa / *_sapphire on x86,
 // neon_bf16 / sve_bf16 on ARM) load raw 16-bit words and convert via SIMD
 // shifts, which is bit-correct. If the CPU is missing all of those, the

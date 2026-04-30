@@ -113,32 +113,30 @@ absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
   if (vector_index->GetIndexerType() == indexes::IndexerType::kHNSW) {
     if (auto *p = dynamic_cast<indexes::VectorHNSW<float> *>(vector_index)) {
       auto latency_sample = SAMPLE_EVERY_N(100);
-      auto res = p->Search(parameters.query, parameters.k,
-                            parameters.cancellation_token,
-                            std::move(inline_filter), parameters.ef,
-                            parameters.enable_partial_results);
+      auto res =
+          p->Search(parameters.query, parameters.k,
+                    parameters.cancellation_token, std::move(inline_filter),
+                    parameters.ef, parameters.enable_partial_results);
       Metrics::GetStats().hnsw_vector_index_search_latency.SubmitSample(
           std::move(latency_sample));
       return res;
     }
-    if (auto *p =
-            dynamic_cast<indexes::VectorHNSW<float16> *>(vector_index)) {
+    if (auto *p = dynamic_cast<indexes::VectorHNSW<float16> *>(vector_index)) {
       auto latency_sample = SAMPLE_EVERY_N(100);
-      auto res = p->Search(parameters.query, parameters.k,
-                            parameters.cancellation_token,
-                            std::move(inline_filter), parameters.ef,
-                            parameters.enable_partial_results);
+      auto res =
+          p->Search(parameters.query, parameters.k,
+                    parameters.cancellation_token, std::move(inline_filter),
+                    parameters.ef, parameters.enable_partial_results);
       Metrics::GetStats().hnsw_vector_index_search_latency.SubmitSample(
           std::move(latency_sample));
       return res;
     }
-    if (auto *p =
-            dynamic_cast<indexes::VectorHNSW<bfloat16> *>(vector_index)) {
+    if (auto *p = dynamic_cast<indexes::VectorHNSW<bfloat16> *>(vector_index)) {
       auto latency_sample = SAMPLE_EVERY_N(100);
-      auto res = p->Search(parameters.query, parameters.k,
-                            parameters.cancellation_token,
-                            std::move(inline_filter), parameters.ef,
-                            parameters.enable_partial_results);
+      auto res =
+          p->Search(parameters.query, parameters.k,
+                    parameters.cancellation_token, std::move(inline_filter),
+                    parameters.ef, parameters.enable_partial_results);
       Metrics::GetStats().hnsw_vector_index_search_latency.SubmitSample(
           std::move(latency_sample));
       return res;
@@ -147,29 +145,27 @@ absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
   if (vector_index->GetIndexerType() == indexes::IndexerType::kFlat) {
     if (auto *p = dynamic_cast<indexes::VectorFlat<float> *>(vector_index)) {
       auto latency_sample = SAMPLE_EVERY_N(100);
-      auto res = p->Search(parameters.query, parameters.k,
-                            parameters.cancellation_token,
-                            std::move(inline_filter));
+      auto res =
+          p->Search(parameters.query, parameters.k,
+                    parameters.cancellation_token, std::move(inline_filter));
       Metrics::GetStats().flat_vector_index_search_latency.SubmitSample(
           std::move(latency_sample));
       return res;
     }
-    if (auto *p =
-            dynamic_cast<indexes::VectorFlat<float16> *>(vector_index)) {
+    if (auto *p = dynamic_cast<indexes::VectorFlat<float16> *>(vector_index)) {
       auto latency_sample = SAMPLE_EVERY_N(100);
-      auto res = p->Search(parameters.query, parameters.k,
-                            parameters.cancellation_token,
-                            std::move(inline_filter));
+      auto res =
+          p->Search(parameters.query, parameters.k,
+                    parameters.cancellation_token, std::move(inline_filter));
       Metrics::GetStats().flat_vector_index_search_latency.SubmitSample(
           std::move(latency_sample));
       return res;
     }
-    if (auto *p =
-            dynamic_cast<indexes::VectorFlat<bfloat16> *>(vector_index)) {
+    if (auto *p = dynamic_cast<indexes::VectorFlat<bfloat16> *>(vector_index)) {
       auto latency_sample = SAMPLE_EVERY_N(100);
-      auto res = p->Search(parameters.query, parameters.k,
-                            parameters.cancellation_token,
-                            std::move(inline_filter));
+      auto res =
+          p->Search(parameters.query, parameters.k,
+                    parameters.cancellation_token, std::move(inline_filter));
       Metrics::GetStats().flat_vector_index_search_latency.SubmitSample(
           std::move(latency_sample));
       return res;

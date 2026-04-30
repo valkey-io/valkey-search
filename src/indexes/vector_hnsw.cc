@@ -171,8 +171,8 @@ template <typename T>
 VectorHNSW<T>::VectorHNSW(int dimensions,
                           absl::string_view attribute_identifier,
                           data_model::AttributeDataType attribute_data_type)
-    : VectorBase(IndexerType::kHNSW, dimensions, sizeof(T),
-                 attribute_data_type, attribute_identifier) {}
+    : VectorBase(IndexerType::kHNSW, dimensions, sizeof(T), attribute_data_type,
+                 attribute_identifier) {}
 
 template <typename T>
 absl::Status VectorHNSW<T>::AddRecordImpl(uint64_t internal_id,
@@ -405,8 +405,7 @@ VectorHNSW<T>::ComputeDistanceFromRecordImpl(uint64_t internal_id,
         absl::StrCat("Couldn't find internal id: ", internal_id));
   }
   return (std::pair<float, hnswlib::labeltype>){
-      algo_->fstdistfunc_((void *)query.data(),
-                          algo_->getDataByInternalId(*id),
+      algo_->fstdistfunc_((void *)query.data(), algo_->getDataByInternalId(*id),
                           algo_->dist_func_param_),
       internal_id};
 }

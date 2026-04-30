@@ -16,11 +16,11 @@
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
-#include "src/indexes/fp16.h"
 #include "absl/log/check.h"
 #include "absl/strings/string_view.h"
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"
+#include "src/indexes/fp16.h"
 #include "src/utils/lru.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/managed_pointers.h"

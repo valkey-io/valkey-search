@@ -130,8 +130,8 @@ VectorFlat<T>::VectorFlat(
     int dimensions, valkey_search::data_model::DistanceMetric distance_metric,
     uint32_t block_size, absl::string_view attribute_identifier,
     data_model::AttributeDataType attribute_data_type)
-    : VectorBase(IndexerType::kFlat, dimensions, sizeof(T),
-                 attribute_data_type, attribute_identifier),
+    : VectorBase(IndexerType::kFlat, dimensions, sizeof(T), attribute_data_type,
+                 attribute_identifier),
       block_size_(block_size) {}
 
 template <typename T>

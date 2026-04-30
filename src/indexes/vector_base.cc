@@ -36,6 +36,8 @@
 #include "absl/synchronization/mutex.h"
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"
+#include "src/indexes/bfloat16.h"
+#include "src/indexes/fp16.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
@@ -45,8 +47,6 @@
 #include "src/valkey_search_options.h"
 #include "src/vector_externalizer.h"
 #include "third_party/hnswlib/hnswlib.h"
-#include "src/indexes/bfloat16.h"
-#include "src/indexes/fp16.h"
 #include "third_party/hnswlib/space_ip.h"
 #include "third_party/hnswlib/space_ip_bfloat16.h"
 #include "third_party/hnswlib/space_ip_fp16.h"
@@ -156,16 +156,16 @@ std::vector<char> NormalizeEmbedding(absl::string_view record,
       return ret;
     }
     case data_model::VECTOR_DATA_TYPE_FLOAT16: {
-      float result = CopyAndNormalizeEmbedding(
-          (float16 *)&ret[0], (float16 *)record.data(),
-          ret.size() / sizeof(float16));
+      float result = CopyAndNormalizeEmbedding((float16 *)&ret[0],
+                                               (float16 *)record.data(),
+                                               ret.size() / sizeof(float16));
       if (magnitude) *magnitude = result;
       return ret;
     }
     case data_model::VECTOR_DATA_TYPE_BFLOAT16: {
-      float result = CopyAndNormalizeEmbedding(
-          (bfloat16 *)&ret[0], (bfloat16 *)record.data(),
-          ret.size() / sizeof(bfloat16));
+      float result = CopyAndNormalizeEmbedding((bfloat16 *)&ret[0],
+                                               (bfloat16 *)record.data(),
+                                               ret.size() / sizeof(bfloat16));
       if (magnitude) *magnitude = result;
       return ret;
     }

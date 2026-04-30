@@ -147,34 +147,36 @@ std::string PrintPredicateTree(const query::Predicate* predicate, int indent) {
     }
     case query::PredicateType::kText: {
       const auto* text = static_cast<const query::TextPredicate*>(predicate);
-      std::string field_mask_str = std::to_string(text->GetFieldMask());
+      const auto& field_name = text->GetFieldName();
+      std::string field_info =
+          field_name.has_value() ? "field=" + field_name.value() : "field=*";
 
       // Determine specific text predicate type
       if (auto term = dynamic_cast<const query::TermPredicate*>(predicate)) {
         result += indent_str + "TEXT-TERM(\"" +
-                  std::string(term->GetTextString()) +
-                  "\", field_mask=" + field_mask_str + ")\n";
+                  std::string(term->GetTextString()) + "\", " + field_info +
+                  ")\n";
       } else if (auto prefix =
                      dynamic_cast<const query::PrefixPredicate*>(predicate)) {
         result += indent_str + "TEXT-PREFIX(\"" +
-                  std::string(prefix->GetTextString()) +
-                  "\", field_mask=" + field_mask_str + ")\n";
+                  std::string(prefix->GetTextString()) + "\", " + field_info +
+                  ")\n";
       } else if (auto suffix =
                      dynamic_cast<const query::SuffixPredicate*>(predicate)) {
         result += indent_str + "TEXT-SUFFIX(\"" +
-                  std::string(suffix->GetTextString()) +
-                  "\", field_mask=" + field_mask_str + ")\n";
+                  std::string(suffix->GetTextString()) + "\", " + field_info +
+                  ")\n";
       } else if (auto infix =
                      dynamic_cast<const query::InfixPredicate*>(predicate)) {
         result += indent_str + "TEXT-INFIX(\"" +
-                  std::string(infix->GetTextString()) +
-                  "\", field_mask=" + field_mask_str + ")\n";
+                  std::string(infix->GetTextString()) + "\", " + field_info +
+                  ")\n";
       } else if (auto fuzzy =
                      dynamic_cast<const query::FuzzyPredicate*>(predicate)) {
         result += indent_str + "TEXT-FUZZY(\"" +
                   std::string(fuzzy->GetTextString()) +
                   "\", distance=" + std::to_string(fuzzy->GetDistance()) +
-                  ", field_mask=" + field_mask_str + ")\n";
+                  ", " + field_info + ")\n";
       } else {
         result += indent_str + "UNKNOWN\n";
       }
@@ -592,10 +594,10 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
   VMSDK_RETURN_IF_ERROR(
       SetupTextFieldConfiguration(field_mask, field_or_default, false));
   query_operations_ |= QueryOperations::kContainsTextTerm;
-  return FilterParser::TokenResult{
-      std::make_unique<query::TermPredicate>(
-          text_index_schema, field_mask, std::move(processed_content), true),
-      false};
+  auto predicate = std::make_unique<query::TermPredicate>(
+      text_index_schema, field_mask, std::move(processed_content), true);
+  predicate->SetFieldName(field_or_default);
+  return FilterParser::TokenResult{std::move(predicate), false};
 }
 
 // Returns a token after parsing it until the token boundary while handling
@@ -696,13 +698,13 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
         return absl::InvalidArgumentError("Empty fuzzy token");
       VMSDK_RETURN_IF_ERROR(
           SetupTextFieldConfiguration(field_mask, field_or_default, false));
-      auto fuzzy = FilterParser::TokenResult{
-          std::make_unique<query::FuzzyPredicate>(text_index_schema, field_mask,
-                                                  std::move(processed_content),
-                                                  leading_percent_count),
-          break_on_query_syntax};
+      auto fuzzy_pred = std::make_unique<query::FuzzyPredicate>(
+          text_index_schema, field_mask, std::move(processed_content),
+          leading_percent_count);
+      fuzzy_pred->SetFieldName(field_or_default);
       query_operations_ |= QueryOperations::kContainsTextFuzzy;
-      return fuzzy;
+      return FilterParser::TokenResult{std::move(fuzzy_pred),
+                                       break_on_query_syntax};
     } else {
       return absl::InvalidArgumentError("Invalid fuzzy '%' markers");
     }
@@ -712,17 +714,17 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     VMSDK_RETURN_IF_ERROR(
         SetupTextFieldConfiguration(field_mask, field_or_default, true));
     if (ends_with_star) {
-      auto infix = FilterParser::TokenResult{
-          std::make_unique<query::InfixPredicate>(text_index_schema, field_mask,
-                                                  std::move(processed_content)),
-          break_on_query_syntax};
+      auto infix_pred = std::make_unique<query::InfixPredicate>(
+          text_index_schema, field_mask, std::move(processed_content));
+      infix_pred->SetFieldName(field_or_default);
       return absl::InvalidArgumentError("Unsupported query operation");
     } else {
       query_operations_ |= QueryOperations::kContainsTextSuffix;
-      return FilterParser::TokenResult{
-          std::make_unique<query::SuffixPredicate>(
-              text_index_schema, field_mask, std::move(processed_content)),
-          break_on_query_syntax};
+      auto suffix_pred = std::make_unique<query::SuffixPredicate>(
+          text_index_schema, field_mask, std::move(processed_content));
+      suffix_pred->SetFieldName(field_or_default);
+      return FilterParser::TokenResult{std::move(suffix_pred),
+                                       break_on_query_syntax};
     }
   } else if (ends_with_star) {
     if (processed_content.empty())
@@ -730,10 +732,11 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     VMSDK_RETURN_IF_ERROR(
         SetupTextFieldConfiguration(field_mask, field_or_default, false));
     query_operations_ |= QueryOperations::kContainsTextPrefix;
-    return FilterParser::TokenResult{
-        std::make_unique<query::PrefixPredicate>(text_index_schema, field_mask,
-                                                 std::move(processed_content)),
-        break_on_query_syntax};
+    auto prefix_pred = std::make_unique<query::PrefixPredicate>(
+        text_index_schema, field_mask, std::move(processed_content));
+    prefix_pred->SetFieldName(field_or_default);
+    return FilterParser::TokenResult{std::move(prefix_pred),
+                                     break_on_query_syntax};
   } else {
     // Term predicate handling:
     bool exact = options_.verbatim;
@@ -746,10 +749,11 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     query_operations_ |= QueryOperations::kContainsTextTerm;
     // TODO: Implement Composite query between original and its stem variants
     // for Non Exact Term search after Composite query execution is optimized
-    return FilterParser::TokenResult{
-        std::make_unique<query::TermPredicate>(
-            text_index_schema, field_mask, std::move(processed_content), exact),
-        break_on_query_syntax};
+    auto term_pred = std::make_unique<query::TermPredicate>(
+        text_index_schema, field_mask, std::move(processed_content), exact);
+    term_pred->SetFieldName(field_or_default);
+    return FilterParser::TokenResult{std::move(term_pred),
+                                     break_on_query_syntax};
   }
 }
 

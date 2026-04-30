@@ -6,312 +6,224 @@ from valkey_search_test_case import ValkeySearchTestCaseBase
 from valkeytestframework.conftest import resource_port_tracker
 
 
+def _decode(result):
+    """Decode EXPLAINCLI byte-string result into a list of str."""
+    return [line.decode() if isinstance(line, bytes) else line
+            for line in result]
+
 class TestFTExplainCli(ValkeySearchTestCaseBase):
-    """Test cases for FT.EXPLAINCLI command"""
+    """Test cases for FT.EXPLAINCLI command."""
 
-    def _create_text_index(self, client, index_name):
-        client.execute_command(
-            "FT.CREATE", index_name,
-            "ON", "HASH",
-            "PREFIX", "1", "doc:",
-            "SCHEMA", "title", "TEXT", "content", "TEXT"
-        )
-
-    def _create_mixed_index(self, client, index_name):
-        """Create an index with TEXT, NUMERIC, and TAG fields."""
-        client.execute_command(
-            "FT.CREATE", index_name,
-            "ON", "HASH",
-            "PREFIX", "1", "item:",
-            "SCHEMA",
-            "name", "TEXT",
-            "description", "TEXT",
-            "price", "NUMERIC",
-            "rating", "NUMERIC",
-            "category", "TAG",
-            "status", "TAG",
-        )
-
-    @staticmethod
-    def _parse_tree(result):
-        """Decode the EXPLAINCLI result into a list of strings."""
-        return [line.decode() if isinstance(line, bytes) else line
-                for line in result]
-
-    def test_ft_explaincli_basic(self):
-        """Validate predicate tree output for various query types."""
+    def test_text_index_queries(self):
+        """Validate predicate trees for a TEXT-only index."""
         client = self.server.get_new_client()
-        self._create_text_index(client, "testidx")
-
-        # --- Single text term (default field) ---
-        result = self._parse_tree(
-            client.execute_command("FT.EXPLAINCLI", "testidx", "hello"))
-        assert result == ['TEXT-TERM("hello", field=*)']
-
-        # --- Multi-term query produces AND of TEXT-TERMs ---
-        result = self._parse_tree(
-            client.execute_command("FT.EXPLAINCLI", "testidx", "hello world"))
-        assert result == [
-            'AND{',
-            '  TEXT-TERM("hello", field=*)',
-            '  TEXT-TERM("world", field=*)',
-            '}',
+        client.execute_command(
+            "FT.CREATE", "txtidx",
+            "ON", "HASH", "PREFIX", "1", "doc:",
+            "SCHEMA", "title", "TEXT", "content", "TEXT",
+        )
+        # (label, query_string, extra_args, expected_tree_lines)
+        cases = [
+            ("single term",
+             "hello", [],
+             ['TEXT-TERM("hello", field=*)']),
+            ("multi-term AND",
+             "hello world", [],
+             ['AND{',
+              '  TEXT-TERM("hello", field=*)',
+              '  TEXT-TERM("world", field=*)',
+              '}']),
+            ("field-specific term",
+             "@title:hello", [],
+             ['TEXT-TERM("hello", field=title)']),
+            ("exact phrase",
+             '@title:"hello world"', [],
+             ['AND(slop=0, inorder=true){',
+              '  TEXT-TERM("hello", field=title)',
+              '  TEXT-TERM("world", field=title)',
+              '}']),
+            ("prefix",
+             "@title:hel*", [],
+             ['TEXT-PREFIX("hel", field=title)']),
+            ("fuzzy distance=1",
+             "@title:%hello%", [],
+             ['TEXT-FUZZY("hello", distance=1, field=title)']),
+            ("fuzzy distance=2",
+             "@title:%%hello%%", [],
+             ['TEXT-FUZZY("hello", distance=2, field=title)']),
+            ("fuzzy distance=3",
+             "@title:%%%hello%%%", [],
+             ['TEXT-FUZZY("hello", distance=3, field=title)']),
+            ("VERBATIM single term",
+             "hello", ["VERBATIM"],
+             ['TEXT-TERM("hello", field=*)']),
+            ("INORDER + SLOP",
+             "hello world", ["INORDER", "SLOP", "2"],
+             ['AND(slop=2, inorder=true){',
+              '  TEXT-TERM("hello", field=*)',
+              '  TEXT-TERM("world", field=*)',
+              '}']),
+            ("VERBATIM + INORDER + SLOP",
+             "hello world", ["VERBATIM", "INORDER", "SLOP", "3"],
+             ['AND(slop=3, inorder=true){',
+              '  TEXT-TERM("hello", field=*)',
+              '  TEXT-TERM("world", field=*)',
+              '}']),
+            ("multi-field terms",
+             "@title:hello @content:world", [],
+             ['AND{',
+              '  TEXT-TERM("hello", field=title)',
+              '  TEXT-TERM("world", field=content)',
+              '}']),
         ]
+        for label, query, extra_args, expected in cases:
+            result = _decode(
+                client.execute_command("FT.EXPLAINCLI", "txtidx", query, *extra_args))
+            assert result == expected, f"[{label}] query={query!r}\n  got: {result}"
 
-        # --- Field-specific term ---
-        result = self._parse_tree(
-            client.execute_command("FT.EXPLAINCLI", "testidx", "@title:hello"))
-        assert result == ['TEXT-TERM("hello", field=title)']
-
-        # --- Exact phrase produces AND with slop/inorder ---
-        result = self._parse_tree(
-            client.execute_command(
-                "FT.EXPLAINCLI", "testidx", '@title:"hello world"'))
-        assert result == [
-            'AND(slop=0, inorder=true){',
-            '  TEXT-TERM("hello", field=title)',
-            '  TEXT-TERM("world", field=title)',
-            '}',
-        ]
-
-        # --- Prefix query ---
-        result = self._parse_tree(
-            client.execute_command("FT.EXPLAINCLI", "testidx", "@title:hel*"))
-        assert result == ['TEXT-PREFIX("hel", field=title)']
-
-        # --- Fuzzy query (distance 1) ---
-        result = self._parse_tree(
-            client.execute_command(
-                "FT.EXPLAINCLI", "testidx", "@title:%hello%"))
-        assert result == ['TEXT-FUZZY("hello", distance=1, field=title)']
-
-        # --- Fuzzy query (distance 2) ---
-        result = self._parse_tree(
-            client.execute_command(
-                "FT.EXPLAINCLI", "testidx", "@title:%%hello%%"))
-        assert result == ['TEXT-FUZZY("hello", distance=2, field=title)']
-
-        # --- Fuzzy query (distance 3) ---
-        result = self._parse_tree(
-            client.execute_command(
-                "FT.EXPLAINCLI", "testidx", "@title:%%%hello%%%"))
-        assert result == ['TEXT-FUZZY("hello", distance=3, field=title)']
-
-        # --- VERBATIM does not change tree shape for a single term ---
-        result = self._parse_tree(
-            client.execute_command(
-                "FT.EXPLAINCLI", "testidx", "hello", "VERBATIM"))
-        assert result == ['TEXT-TERM("hello", field=*)']
-
-        # --- INORDER + SLOP on multi-term query ---
-        result = self._parse_tree(
-            client.execute_command(
-                "FT.EXPLAINCLI", "testidx", "hello world",
-                "INORDER", "SLOP", "2"))
-        assert result == [
-            'AND(slop=2, inorder=true){',
-            '  TEXT-TERM("hello", field=*)',
-            '  TEXT-TERM("world", field=*)',
-            '}',
-        ]
-
-        # --- All options combined ---
-        result = self._parse_tree(
-            client.execute_command(
-                "FT.EXPLAINCLI", "testidx", "hello world",
-                "VERBATIM", "INORDER", "SLOP", "3"))
-        assert result == [
-            'AND(slop=3, inorder=true){',
-            '  TEXT-TERM("hello", field=*)',
-            '  TEXT-TERM("world", field=*)',
-            '}',
-        ]
-
-    def test_ft_explaincli_mixed_field_types(self):
+    def test_mixed_index_queries(self):
         """Validate predicate trees with NUMERIC, TAG, and TEXT fields."""
         client = self.server.get_new_client()
-        self._create_mixed_index(client, "mixedidx")
-
-        # --- Single numeric range ---
-        result = self._parse_tree(
-            client.execute_command(
-                "FT.EXPLAINCLI", "mixedidx", "@price:[10 100]"))
-        assert result == ['NUMERIC(price)']
-
-        # --- Single tag filter ---
-        result = self._parse_tree(
-            client.execute_command(
-                "FT.EXPLAINCLI", "mixedidx", "@category:{books}"))
-        assert result == ['TAG(category)']
-
-        # --- Tag with multiple values (OR within tag) ---
-        result = self._parse_tree(
-            client.execute_command(
-                "FT.EXPLAINCLI", "mixedidx",
-                "@category:{books|electronics}"))
-        assert result == ['TAG(category)']
-
-        # --- Numeric AND tag (implicit AND) ---
-        result = self._parse_tree(
-            client.execute_command(
-                "FT.EXPLAINCLI", "mixedidx",
-                "@price:[10 100] @category:{books}"))
-        assert result == [
-            'AND{',
-            '  NUMERIC(price)',
-            '  TAG(category)',
-            '}',
+        client.execute_command(
+            "FT.CREATE", "mixidx",
+            "ON", "HASH", "PREFIX", "1", "item:",
+            "SCHEMA",
+            "name", "TEXT", "description", "TEXT",
+            "price", "NUMERIC", "rating", "NUMERIC",
+            "category", "TAG", "status", "TAG",
+        )
+        # (label, query_string, expected_tree_lines)
+        cases = [
+            ("single numeric",
+             "@price:[10 100]",
+             ['NUMERIC(price)']),
+            ("single tag",
+             "@category:{books}",
+             ['TAG(category)']),
+            ("tag multi-value",
+             "@category:{books|electronics}",
+             ['TAG(category)']),
+            ("numeric AND tag",
+             "@price:[10 100] @category:{books}",
+             ['AND{',
+              '  NUMERIC(price)',
+              '  TAG(category)',
+              '}']),
+            ("numeric OR tag",
+             "@price:[10 100] | @category:{books}",
+             ['OR{',
+              '  NUMERIC(price)',
+              '  TAG(category)',
+              '}']),
+            ("negated numeric",
+             "-@price:[10 100]",
+             ['NOT{',
+              '  NUMERIC(price)',
+              '}']),
+            ("negated tag",
+             "-@category:{books}",
+             ['NOT{',
+              '  TAG(category)',
+              '}']),
+            ("text + numeric + tag AND",
+             "@name:laptop @price:[500 2000] @category:{electronics}",
+             ['AND{',
+              '  TEXT-TERM("laptop", field=name)',
+              '  NUMERIC(price)',
+              '  TAG(category)',
+              '}']),
+            ("grouped OR",
+             "(@price:[0 50] @category:{books}) | "
+             "(@price:[100 500] @category:{electronics})",
+             ['OR{',
+              '  AND{',
+              '    NUMERIC(price)',
+              '    TAG(category)',
+              '  }',
+              '  AND{',
+              '    NUMERIC(price)',
+              '    TAG(category)',
+              '  }',
+              '}']),
+            ("negated group",
+             "-(@price:[0 10] @category:{clearance})",
+             ['NOT{',
+              '  AND{',
+              '    NUMERIC(price)',
+              '    TAG(category)',
+              '  }',
+              '}']),
+            ("two numerics",
+             "@price:[10 100] @rating:[4 5]",
+             ['AND{',
+              '  NUMERIC(price)',
+              '  NUMERIC(rating)',
+              '}']),
+            ("numeric with inf",
+             "@price:[-inf +inf]",
+             ['NUMERIC(price)']),
+            ("two tags",
+             "@category:{books} @status:{active}",
+             ['AND{',
+              '  TAG(category)',
+              '  TAG(status)',
+              '}']),
+            ("OR precedence: A B | C",
+             "@price:[10 50] @category:{books} | @status:{active}",
+             ['OR{',
+              '  AND{',
+              '    NUMERIC(price)',
+              '    TAG(category)',
+              '  }',
+              '  TAG(status)',
+              '}']),
+            ("double negation",
+             "-(-@price:[10 100])",
+             ['NOT{',
+              '  NOT{',
+              '    NUMERIC(price)',
+              '  }',
+              '}']),
+            ("negated OR group",
+             "-(@price:[0 50] | @category:{clearance})",
+             ['NOT{',
+              '  OR{',
+              '    NUMERIC(price)',
+              '    TAG(category)',
+              '  }',
+              '}']),
+            ("mixed text OR chains",
+             "@name:laptop @price:[100 500] | @category:{books} @status:{active}",
+             ['OR{',
+              '  AND{',
+              '    TEXT-TERM("laptop", field=name)',
+              '    NUMERIC(price)',
+              '  }',
+              '  AND{',
+              '    TAG(category)',
+              '    TAG(status)',
+              '  }',
+              '}']),
         ]
 
-        # --- OR between numeric and tag ---
-        result = self._parse_tree(
-            client.execute_command(
-                "FT.EXPLAINCLI", "mixedidx",
-                "@price:[10 100] | @category:{books}"))
-        assert result == [
-            'OR{',
-            '  NUMERIC(price)',
-            '  TAG(category)',
-            '}',
-        ]
+        for label, query, expected in cases:
+            result = _decode(
+                client.execute_command("FT.EXPLAINCLI", "mixidx", query))
+            assert result == expected, f"[{label}] query={query!r}\n  got: {result}"
 
-        # --- Negated numeric ---
-        result = self._parse_tree(
-            client.execute_command(
-                "FT.EXPLAINCLI", "mixedidx", "-@price:[10 100]"))
-        assert result == [
-            'NOT{',
-            '  NUMERIC(price)',
-            '}',
-        ]
-
-        # --- Negated tag ---
-        result = self._parse_tree(
-            client.execute_command(
-                "FT.EXPLAINCLI", "mixedidx", "-@category:{books}"))
-        assert result == [
-            'NOT{',
-            '  TAG(category)',
-            '}',
-        ]
-
-        # --- Mixed: text + numeric + tag with AND ---
-        result = self._parse_tree(
-            client.execute_command(
-                "FT.EXPLAINCLI", "mixedidx",
-                "@name:laptop @price:[500 2000] @category:{electronics}"))
-        assert result == [
-            'AND{',
-            '  TEXT-TERM("laptop", field=name)',
-            '  NUMERIC(price)',
-            '  TAG(category)',
-            '}',
-        ]
-
-        # --- Complex: OR with grouped AND clauses ---
-        result = self._parse_tree(
-            client.execute_command(
-                "FT.EXPLAINCLI", "mixedidx",
-                "(@price:[0 50] @category:{books}) | "
-                "(@price:[100 500] @category:{electronics})"))
-        assert result == [
-            'OR{',
-            '  AND{',
-            '    NUMERIC(price)',
-            '    TAG(category)',
-            '  }',
-            '  AND{',
-            '    NUMERIC(price)',
-            '    TAG(category)',
-            '  }',
-            '}',
-        ]
-
-        # --- Negated group ---
-        result = self._parse_tree(
-            client.execute_command(
-                "FT.EXPLAINCLI", "mixedidx",
-                "-(@price:[0 10] @category:{clearance})"))
-        assert result == [
-            'NOT{',
-            '  AND{',
-            '    NUMERIC(price)',
-            '    TAG(category)',
-            '  }',
-            '}',
-        ]
-
-        # --- Two numeric ranges with AND ---
-        result = self._parse_tree(
-            client.execute_command(
-                "FT.EXPLAINCLI", "mixedidx",
-                "@price:[10 100] @rating:[4 5]"))
-        assert result == [
-            'AND{',
-            '  NUMERIC(price)',
-            '  NUMERIC(rating)',
-            '}',
-        ]
-
-        # --- Numeric with inf ---
-        result = self._parse_tree(
-            client.execute_command(
-                "FT.EXPLAINCLI", "mixedidx", "@price:[-inf +inf]"))
-        assert result == ['NUMERIC(price)']
-
-        # --- Two tags with AND ---
-        result = self._parse_tree(
-            client.execute_command(
-                "FT.EXPLAINCLI", "mixedidx",
-                "@category:{books} @status:{active}"))
-        assert result == [
-            'AND{',
-            '  TAG(category)',
-            '  TAG(status)',
-            '}',
-        ]
-
-        # --- OR precedence: A B | C  =>  OR{ AND{A,B}, C } ---
-        result = self._parse_tree(
-            client.execute_command(
-                "FT.EXPLAINCLI", "mixedidx",
-                "@price:[10 50] @category:{books} | @status:{active}"))
-        assert result == [
-            'OR{',
-            '  AND{',
-            '    NUMERIC(price)',
-            '    TAG(category)',
-            '  }',
-            '  TAG(status)',
-            '}',
-        ]
-
-        # --- Double negation ---
-        result = self._parse_tree(
-            client.execute_command(
-                "FT.EXPLAINCLI", "mixedidx",
-                "-(-@price:[10 100])"))
-        assert result == [
-            'NOT{',
-            '  NOT{',
-            '    NUMERIC(price)',
-            '  }',
-            '}',
-        ]
-
-    def test_ft_explaincli_errors(self):
-        """Test error cases: wrong args, bad args, nonexistent index, empty query"""
+    def test_errors(self):
+        """Error cases: wrong arg count, bad arg, nonexistent index, empty query."""
         client = self.server.get_new_client()
-        self._create_text_index(client, "testidx")
-        # Too few arguments
+        client.execute_command(
+            "FT.CREATE", "erridx",
+            "ON", "HASH", "PREFIX", "1", "doc:",
+            "SCHEMA", "title", "TEXT",
+        )
         with pytest.raises(ResponseError, match="Wrong number of arguments"):
-            client.execute_command("FT.EXPLAINCLI", "testidx")
-        # Unknown optional argument
+            client.execute_command("FT.EXPLAINCLI", "erridx")
         with pytest.raises(ResponseError):
-            client.execute_command("FT.EXPLAINCLI", "testidx", "query", "BADARG")
-        # Non-existent index
+            client.execute_command("FT.EXPLAINCLI", "erridx", "query", "BADARG")
         with pytest.raises(ResponseError):
             client.execute_command("FT.EXPLAINCLI", "nonexistent", "hello")
-        # Empty query
-        result = client.execute_command("FT.EXPLAINCLI", "testidx", "")
+        result = client.execute_command("FT.EXPLAINCLI", "erridx", "")
         assert isinstance(result, list)

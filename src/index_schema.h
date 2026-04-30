@@ -64,6 +64,8 @@ using RDBLoadFunc = void *(*)(ValkeyModuleIO *, int);
 using FreeFunc = void (*)(void *);
 using FieldMaskPredicate = uint64_t;
 
+constexpr size_t kMaxTextFieldsCount{64};
+
 struct AttributeInfo {
   explicit AttributeInfo(uint16_t pos, uint64_t size)
       : position_(pos), size_(size) {}

@@ -70,10 +70,6 @@ void ResolveContent(std::unique_ptr<SearchParameters> params);
 
 namespace valkey_search {
 
-namespace {
-constexpr size_t kMaxTextFieldsCount{64};
-}  // namespace
-
 LogLevel GetLogSeverity(bool ok) { return ok ? DEBUG : WARNING; }
 
 //

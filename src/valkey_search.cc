@@ -54,6 +54,12 @@ using vmsdk::config::ModuleConfigManager;
 // provided by third_party/simsimd/c/lib.c, linked in via hnswlib_vmsdk. We
 // avoid including simsimd's headers here because they pull in lib.c (which
 // would multi-define the dispatcher symbols if included from a second TU).
+//
+// macOS builds set SIMSIMD_NATIVE_BF16=0 in lib.c, so simsimd_bf16_t is
+// `unsigned short` and the serial path performs explicit conversion — safe
+// regardless of CPU. The check below is therefore unnecessary on Apple and
+// is compiled out to avoid blocking older Intel Macs without AVX2.
+#if !defined(__APPLE__)
 extern "C" {
 int simsimd_uses_haswell(void);
 int simsimd_uses_genoa(void);
@@ -61,15 +67,20 @@ int simsimd_uses_sapphire(void);
 int simsimd_uses_neon_bf16(void);
 int simsimd_uses_sve_bf16(void);
 }
+#endif
 
-// Verify the running CPU exposes a SIMD-targeted BF16 path. lib.c is built
-// with SIMSIMD_NATIVE_BF16=1, which retypes simsimd_bf16_t to _Float16 on
-// x86. The serial fallback then misinterprets BF16 bits as IEEE FP16; only
-// the SIMD variants (*_haswell / *_genoa / *_sapphire on x86,
+// Verify the running CPU exposes a SIMD-targeted BF16 path. On non-Apple
+// builds lib.c uses SIMSIMD_NATIVE_BF16=1, which retypes simsimd_bf16_t to
+// _Float16 on x86. The serial fallback then misinterprets BF16 bits as IEEE
+// FP16; only the SIMD variants (*_haswell / *_genoa / *_sapphire on x86,
 // neon_bf16 / sve_bf16 on ARM) load raw 16-bit words and convert via SIMD
 // shifts, which is bit-correct. If the CPU is missing all of those, the
 // dispatcher would land on the broken serial path — fail the load instead.
 absl::Status CheckSimsimdCpuCapabilities(ValkeyModuleCtx *ctx) {
+#if defined(__APPLE__)
+  (void)ctx;
+  return absl::OkStatus();
+#else
   const bool has_simd_safe_bf16_path =
       simsimd_uses_haswell() || simsimd_uses_genoa() ||
       simsimd_uses_sapphire() || simsimd_uses_neon_bf16() ||
@@ -86,6 +97,7 @@ absl::Status CheckSimsimdCpuCapabilities(ValkeyModuleCtx *ctx) {
         "CPU does not support a SIMD-safe BF16 path required by simsimd");
   }
   return absl::OkStatus();
+#endif
 }
 
 static absl::NoDestructor<std::unique_ptr<ValkeySearch>> valkey_search_instance;

@@ -304,21 +304,23 @@ TEST(SpaceDistanceIpBf16, OrthogonalBases) {
 // SimsimdCpuConfig — guards the contract between third_party/simsimd/c/lib.c's
 // build flags and the CPU running the binary.
 //
-// lib.c sets SIMSIMD_NATIVE_BF16=1, which on x86 makes simsimd_bf16_t a
-// `_Float16` typedef instead of `unsigned short`. The serial fallback path
-// (`simsimd_l2sq_bf16_serial`) then assumes implicit type-to-float conversion
-// and produces wrong distances on BF16 input — `_Float16` interprets the
-// stored bits as IEEE half-precision rather than brain-float. The
-// SIMD-targeted variants (`*_haswell`, `*_genoa`, `*_sapphire` on x86;
-// neon_bf16 / sve_bf16 on ARM) are immune because they cast to `__m128i*`
-// and convert via SIMD shifts — bit-correct regardless of the typedef.
+// On non-Apple builds lib.c sets SIMSIMD_NATIVE_BF16=1, which on x86 makes
+// simsimd_bf16_t a `_Float16` typedef instead of `unsigned short`. The serial
+// fallback path (`simsimd_l2sq_bf16_serial`) then assumes implicit
+// type-to-float conversion and produces wrong distances on BF16 input —
+// `_Float16` interprets the stored bits as IEEE half-precision rather than
+// brain-float. The SIMD-targeted variants (`*_haswell`, `*_genoa`,
+// `*_sapphire` on x86; neon_bf16 / sve_bf16 on ARM) are immune because they
+// cast to `__m128i*` and convert via SIMD shifts — bit-correct regardless of
+// the typedef. So as long as the runtime CPU exposes at least one of those
+// caps, simsimd's dispatcher picks a safe path. This test is the canary.
 //
-// So as long as the runtime CPU exposes at least one of those caps,
-// simsimd's dispatcher picks a safe path and the BF16 spaces are correct.
-// If we ever land on a host with neither, we'd silently corrupt BF16
-// distances; this test is the canary.
+// On Apple builds NATIVE_BF16=0, simsimd_bf16_t is `unsigned short`, and the
+// serial path performs explicit conversion — so the canary is unnecessary
+// and the test is compiled out.
 // ---------------------------------------------------------------------------
 
+#if !defined(__APPLE__)
 extern "C" {
 int simsimd_uses_haswell(void);
 int simsimd_uses_genoa(void);
@@ -340,6 +342,7 @@ TEST(SimsimdCpuConfig, BF16HasSimdSafePath) {
          "BF16 bits as IEEE FP16. Either run on a Haswell+ x86 (or BF16-"
          "capable ARM) CPU, or set SIMSIMD_NATIVE_BF16 back to 0 in lib.c.";
 }
+#endif  // !__APPLE__
 
 }  // namespace
 }  // namespace valkey_search

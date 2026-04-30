@@ -13,7 +13,17 @@
 // bf16 to _Float16 — but on any CPU with AVX2 (haswell+) or BF16 hw
 // (genoa, sapphire) the dispatcher avoids the serial path. Toggle back
 // to 0 if running on a CPU older than Haswell.
+//
+// On macOS we keep this at 0: Apple Clang's `_Float16` / `__bf16` support
+// is uneven across versions and toolchains, and the safe portable typedef
+// (`unsigned short` + explicit conversion in the serial path) avoids the
+// build-fragility. Linux/Windows builds keep NATIVE_BF16=1 for the SIMD
+// dispatch win.
+#if defined(__APPLE__)
+#define SIMSIMD_NATIVE_BF16 0
+#else
 #define SIMSIMD_NATIVE_BF16 1
+#endif
 
 /*  Depending on the Operating System, the following intrinsics are available
  *  on recent compiler toolchains:

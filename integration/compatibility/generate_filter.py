@@ -2,7 +2,6 @@ import pytest
 from .generate import BaseCompatibilityTest
 from .data_sets import load_data, HARD_NUM_FILTER_EXPRS, HARD_STR_FILTER_EXPRS
 
-
 @pytest.mark.parametrize("dialect", [2])
 @pytest.mark.parametrize("key_type", ["hash", "json"])
 class TestFilterCompatibility(BaseCompatibilityTest):

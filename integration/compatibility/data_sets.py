@@ -605,6 +605,121 @@ FILTER_DOCS = [
     {"status": "active",   "price": 1000, "category": "food",        "title": "big cake bakes slow",     "rating": 3},
 ]
 
+# Edge-case numeric documents for FILTER tests.
+# Includes 0, +/-0.5, +/-1, large magnitudes, +/-inf (hash-only), nan (hash-only).
+# Kept small and focused on edge cases.
+_INF = float("inf")
+_NEG_INF = float("-inf")
+_NAN = float("nan")
+
+# (n1, n2, n3) tuples. n3 is kept >= 0 so it can safely be used with sqrt/log.
+_HARD_NUMBERS_COMMON = [
+    ( 0.0,  0.0,    0.0),
+    # NOTE: a row with n1=-0.0, n2=+0.0 is intentionally omitted.
+    # Redis Stack's hash NUMERIC FILTER does not follow IEEE 754 for signed
+    # zeros: it treats `-0.0` and `+0.0` as distinct in ==, !=, <, >=, even
+    # though IEEE 754 mandates -0.0 == +0.0 (and the matching answers for the
+    # related orderings). The most likely explanation is a defect in the
+    # string-to-double conversion used on hash field values: it doesn't
+    # preserve the negative-zero sign bit when parsing "-0.0", so by the time
+    # the FILTER comparator runs, the two values no longer compare as IEEE
+    # equal. Notably, the JSON path produces the IEEE-correct answer for the
+    # same row, which is consistent with this being a hash-side parsing bug
+    # rather than a deliberate FILTER semantic. valkey-search uses
+    # absl::SimpleAtod on the same bytes, gets a proper IEEE -0.0 double, and
+    # therefore returns the IEEE-correct result. Including this row in the
+    # data set would produce permanent (and intentional) compat failures, so
+    # we exclude it.
+    # ( -0.0, 0.0, 1.0 ),
+    ( 1.0, -1.0,    1.0),
+    (-1.0,  1.0,    2.0),
+    ( 0.5, -0.5,    0.25),
+    (-0.5,  0.5,    4.0),
+    ( 100.0, -100.0, 16.0),
+]
+# Extra rows that can only be expressed in hash (JSON has no inf/nan).
+_HARD_NUMBERS_HASH_ONLY = [
+    ( _INF,     -1.0,    _INF),
+    ( _NEG_INF,  1.0,    1.0),
+    ( _NAN,      0.0,    0.0),
+]
+
+# Edge-case string documents for FILTER tests.
+# s1 is a TAG (exact-match), s2 is a TEXT field.
+_HARD_STRINGS = [
+    {"s1": "alpha",       "s2": "alpha bravo charlie"},
+    {"s1": "Alpha",       "s2": "ALPHA BRAVO"},
+    {"s1": "a",           "s2": "a"},
+    {"s1": "abc",         "s2": "abc def"},
+    {"s1": "abc123",      "s2": "abc 123"},
+    {"s1": "alpha-bravo", "s2": "alpha bravo"},
+    {"s1": "zulu",        "s2": "zulu yankee"},
+]
+
+# Filter expressions exercising every numeric operator and function on hard numbers.
+HARD_NUM_FILTER_EXPRS = {
+    # arithmetic dyadic operators
+    "filter num add":   "(@n1 + @n2) >= 0",
+    "filter num sub":   "(@n1 - @n2) > 0",
+    "filter num mul":   "(@n1 * @n2) <= 0",
+    "filter num div":   "(@n1 / @n3) > 0",
+    "filter num pow":   "(@n3 ^ 2) > 0",
+    # relational operators
+    "filter num lt":    "@n1 < @n2",
+    "filter num le":    "@n1 <= @n2",
+    "filter num eq":    "@n1 == @n2",
+    "filter num ne":    "@n1 != @n2",
+    "filter num ge":    "@n1 >= @n2",
+    "filter num gt":    "@n1 > @n2",
+    # logical operators
+    "filter num and":   "(@n1 >= 0) && (@n2 >= 0)",
+    "filter num or":    "(@n1 < 0) || (@n2 > 0)",
+    # comparison against literal infinity
+    "filter num lt inf": "@n1 < +inf",
+    "filter num gt ninf": "@n1 > -inf",
+    # numeric monadic functions
+    "filter num abs":   "abs(@n1) > 0",
+    "filter num ceil":  "ceil(@n2) >= 0",
+    "filter num floor": "floor(@n2) >= 0",
+    "filter num log":   "log(@n3) >= 0",
+    "filter num log2":  "log2(@n3) >= 0",
+    "filter num exp":   "exp(@n3) > 1",
+    "filter num sqrt":  "sqrt(@n3) >= 1",
+    # nested function/operator combinations
+    "filter num abs sub": "abs(@n1 - @n2) > 0",
+    "filter num exp neg": "exp(0 - @n3) <= 1",
+}
+
+# Filter expressions exercising every string operator and function on hard strings.
+HARD_STR_FILTER_EXPRS = {
+    # equality on TAG and TEXT
+    "filter str eq tag":     "@s1 == 'alpha'",
+    "filter str ne tag":     "@s1 != 'alpha'",
+    "filter str eq text":    "@s2 == 'alpha bravo'",
+    "filter str ne text":    "@s2 != 'alpha bravo'",
+    # contains / startswith
+    "filter str contains tag":   "contains(@s1, 'lph')",
+    "filter str contains text":  "contains(@s2, 'bravo')",
+    "filter str contains empty": "contains(@s1, '')",
+    "filter str starts tag":     "startswith(@s1, 'a')",
+    "filter str starts text":    "startswith(@s2, 'alpha')",
+    "filter str starts empty":   "startswith(@s1, '')",
+    # strlen
+    "filter str strlen gt":   "strlen(@s1) > 1",
+    "filter str strlen eq1":  "strlen(@s1) == 1",
+    "filter str strlen text": "strlen(@s2) >= 5",
+    # substr
+    "filter str substr eq":  "substr(@s1, 0, 3) == 'alp'",
+    "filter str substr neg": "substr(@s1, -3, 3) == 'pha'",
+    # case conversion
+    "filter str lower":      "lower(@s1) == 'alpha'",
+    "filter str upper":      "upper(@s1) == 'ALPHA'",
+    "filter str lower text": "lower(@s2) == 'alpha bravo'",
+    # nested function combinations
+    "filter str strlen lower":  "strlen(lower(@s1)) > 1",
+    "filter str contains upper": "contains(upper(@s1), 'PHA')",
+}
+
 FILTER_DATASETS = {
     "filter base":               None,
     "filter tag eq":             "@status=='active'",
@@ -617,7 +732,52 @@ FILTER_DATASETS = {
     "filter strlen numeric":     "strlen(@price)>=3",
     "filter startswith numeric": "startswith(@price,'1')",
     "filter contains text":      "contains(@title,'slow')",
+    **HARD_NUM_FILTER_EXPRS,
+    **HARD_STR_FILTER_EXPRS,
 }
+
+def _filter_docs_schema(key_type):
+    """Schema for the FILTER_DOCS dataset family."""
+    if key_type == "hash":
+        return [
+            "status TAG", "price NUMERIC", "category TAG",
+            "title TEXT NOSTEM", "rating NUMERIC",
+        ]
+    return [
+        "$.status AS status TAG", "$.price AS price NUMERIC",
+        "$.category AS category TAG", "$.title AS title TEXT NOSTEM",
+        "$.rating AS rating NUMERIC",
+    ]
+
+def _hard_numbers_schema(key_type):
+    """Schema for the hard-numbers FILTER tests (n1, n2, n3 NUMERIC)."""
+    if key_type == "hash":
+        return ["n1 NUMERIC", "n2 NUMERIC", "n3 NUMERIC"]
+    return [
+        "$.n1 AS n1 NUMERIC", "$.n2 AS n2 NUMERIC", "$.n3 AS n3 NUMERIC",
+    ]
+
+def _hard_strings_schema(key_type):
+    """Schema for the hard-strings FILTER tests (s1 TAG, s2 TEXT)."""
+    if key_type == "hash":
+        return ["s1 TAG", "s2 TEXT NOSTEM"]
+    return [
+        "$.s1 AS s1 TAG", "$.s2 AS s2 TEXT NOSTEM",
+    ]
+
+def _hard_numbers_docs(key_type):
+    """Build (key, fields) docs for the hard-numbers FILTER tests."""
+    rows = list(_HARD_NUMBERS_COMMON)
+    if key_type == "hash":
+        # JSON has no inf/nan, so only hash gets the extreme rows.
+        rows += list(_HARD_NUMBERS_HASH_ONLY)
+    docs = []
+    for i, (n1, n2, n3) in enumerate(rows):
+        docs.append((f"{key_type}:{i:02d}", {"n1": n1, "n2": n2, "n3": n3}))
+    return docs
+
+def _hard_strings_docs(key_type):
+    return [(f"{key_type}:{i:02d}", dict(d)) for i, d in enumerate(_HARD_STRINGS)]
 
 def compute_filter_data_sets(dataset_name):
     if dataset_name not in FILTER_DATASETS:
@@ -626,18 +786,17 @@ def compute_filter_data_sets(dataset_name):
     filter_expr = FILTER_DATASETS[dataset_name]
     data = {dataset_name: {}}
 
-    hash_schema_parts = [
-        "status TAG", "price NUMERIC", "category TAG",
-        "title TEXT NOSTEM", "rating NUMERIC",
-    ]
-    json_schema_parts = [
-        "$.status AS status TAG", "$.price AS price NUMERIC",
-        "$.category AS category TAG", "$.title AS title TEXT NOSTEM",
-        "$.rating AS rating NUMERIC",
-    ]
+    if dataset_name in HARD_NUM_FILTER_EXPRS:
+        schema_fn, docs_fn = _hard_numbers_schema, _hard_numbers_docs
+    elif dataset_name in HARD_STR_FILTER_EXPRS:
+        schema_fn, docs_fn = _hard_strings_schema, _hard_strings_docs
+    else:
+        schema_fn = _filter_docs_schema
+        def docs_fn(kt):
+            return [(f"{kt}:{i:02d}", dict(doc)) for i, doc in enumerate(FILTER_DOCS)]
 
     for key_type in ["hash", "json"]:
-        schema_parts = hash_schema_parts if key_type == "hash" else json_schema_parts
+        schema_parts = schema_fn(key_type)
         create_cmd = [
             "FT.CREATE", f"{key_type}_idx1", "ON", key_type.upper(),
             "PREFIX", "1", f"{key_type}:",
@@ -647,11 +806,7 @@ def compute_filter_data_sets(dataset_name):
         create_cmd += ["SCHEMA"] + " ".join(schema_parts).split()
 
         data[dataset_name][CREATES_KEY(key_type)] = [create_cmd]
-
-        docs = []
-        for i, doc in enumerate(FILTER_DOCS):
-            docs.append((f"{key_type}:{i:02d}", dict(doc)))
-        data[dataset_name][SETS_KEY(key_type)] = docs
+        data[dataset_name][SETS_KEY(key_type)] = docs_fn(key_type)
 
     return data
 

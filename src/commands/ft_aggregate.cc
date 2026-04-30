@@ -143,6 +143,7 @@ bool ReplyWithValue(ValkeyModuleCtx *ctx,
     } else {
       switch (indexer_type) {
         case indexes::IndexerType::kTag:
+        case indexes::IndexerType::kText:
         case indexes::IndexerType::kNone: {
           value_view = value.AsStringView();
           break;

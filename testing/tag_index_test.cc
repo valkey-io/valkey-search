@@ -18,6 +18,7 @@
 #include "src/query/predicate.h"
 #include "testing/common.h"
 #include "vmsdk/src/testing_infra/utils.h"
+#include "vmsdk/src/type_conversions.h"
 
 namespace valkey_search::indexes {
 
@@ -116,6 +117,20 @@ TEST_F(TagIndexTest, ModifyRecordWithEmptyString) {
 
   EXPECT_EQ(entries_fetcher->Size(), 0);
   EXPECT_EQ(index->GetTrackedKeyCount(), 0);
+}
+
+TEST_F(TagIndexTest, NormalizeStringRecordConvertsWildcardJsonArrayFormat) {
+  auto normalized = index->NormalizeStringRecord(
+      vmsdk::MakeUniqueValkeyString("Seoul\",\"New York"));
+  ASSERT_TRUE(normalized);
+  EXPECT_EQ(vmsdk::ToStringView(normalized.get()), "Seoul,New York");
+}
+
+TEST_F(TagIndexTest, NormalizeStringRecordLeavesRegularStringUntouched) {
+  auto normalized =
+      index->NormalizeStringRecord(vmsdk::MakeUniqueValkeyString("Seoul"));
+  ASSERT_TRUE(normalized);
+  EXPECT_EQ(vmsdk::ToStringView(normalized.get()), "Seoul");
 }
 
 TEST_F(TagIndexTest, KeyTrackingTest) {

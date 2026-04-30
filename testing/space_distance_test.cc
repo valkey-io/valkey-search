@@ -301,5 +301,47 @@ TEST(SpaceDistanceIpBf16, OrthogonalBases) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// SimsimdCpuConfig — guards the contract between third_party/simsimd/c/lib.c's
+// build flags and the CPU running the binary.
+//
+// lib.c sets SIMSIMD_NATIVE_BF16=1, which on x86 makes simsimd_bf16_t a
+// `_Float16` typedef instead of `unsigned short`. The serial fallback path
+// (`simsimd_l2sq_bf16_serial`) then assumes implicit type-to-float conversion
+// and produces wrong distances on BF16 input — `_Float16` interprets the
+// stored bits as IEEE half-precision rather than brain-float. The
+// SIMD-targeted variants (`*_haswell`, `*_genoa`, `*_sapphire` on x86;
+// neon_bf16 / sve_bf16 on ARM) are immune because they cast to `__m128i*`
+// and convert via SIMD shifts — bit-correct regardless of the typedef.
+//
+// So as long as the runtime CPU exposes at least one of those caps,
+// simsimd's dispatcher picks a safe path and the BF16 spaces are correct.
+// If we ever land on a host with neither, we'd silently corrupt BF16
+// distances; this test is the canary.
+// ---------------------------------------------------------------------------
+
+extern "C" {
+int simsimd_uses_haswell(void);
+int simsimd_uses_genoa(void);
+int simsimd_uses_sapphire(void);
+int simsimd_uses_neon_bf16(void);
+int simsimd_uses_sve_bf16(void);
+}
+
+TEST(SimsimdCpuConfig, BF16HasSimdSafePath) {
+  const bool has_x86_simd_bf16_path = simsimd_uses_haswell() ||
+                                      simsimd_uses_genoa() ||
+                                      simsimd_uses_sapphire();
+  const bool has_arm_simd_bf16_path =
+      simsimd_uses_neon_bf16() || simsimd_uses_sve_bf16();
+
+  EXPECT_TRUE(has_x86_simd_bf16_path || has_arm_simd_bf16_path)
+      << "simsimd's dispatcher will fall back to simsimd_l2sq_bf16_serial / "
+         "simsimd_dot_bf16_serial on this CPU. With SIMSIMD_NATIVE_BF16=1 "
+         "(set in third_party/simsimd/c/lib.c) the serial path mis-interprets "
+         "BF16 bits as IEEE FP16. Either run on a Haswell+ x86 (or BF16-"
+         "capable ARM) CPU, or set SIMSIMD_NATIVE_BF16 back to 0 in lib.c.";
+}
+
 }  // namespace
 }  // namespace valkey_search

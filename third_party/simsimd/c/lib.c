@@ -5,7 +5,15 @@
  */
 #define SIMSIMD_DYNAMIC_DISPATCH 1
 #define SIMSIMD_NATIVE_F16 0
-#define SIMSIMD_NATIVE_BF16 0
+// Native BF16 support: lets the compiler manage `simsimd_bf16_t` as the
+// platform's native bfloat16 type and lets the runtime dispatch pick a
+// SIMD implementation that uses raw 16-bit loads + bf16->f32 SIMD shifts
+// (e.g. simsimd_l2sq_bf16_haswell). The serial fallback assumes implicit
+// type-to-float conversion, which is wrong on x86 where simsimd typedefs
+// bf16 to _Float16 — but on any CPU with AVX2 (haswell+) or BF16 hw
+// (genoa, sapphire) the dispatcher avoids the serial path. Toggle back
+// to 0 if running on a CPU older than Haswell.
+#define SIMSIMD_NATIVE_BF16 1
 
 /*  Depending on the Operating System, the following intrinsics are available
  *  on recent compiler toolchains:

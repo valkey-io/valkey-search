@@ -1686,6 +1686,7 @@ TEST_P(InfieldsFilterTest, ParseParams) {
   InitIndexSchema(index_schema.get());
   TextParsingOptions options{
       .infields = test_case.infields.empty() ? nullptr : &test_case.infields};
+  options.PrecomputeInfieldsMasks(*index_schema);
   FilterParser parser(*index_schema, test_case.filter, options);
   auto parse_results = parser.Parse();
   EXPECT_EQ(test_case.create_success, parse_results.ok());

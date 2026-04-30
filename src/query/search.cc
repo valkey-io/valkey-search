@@ -970,6 +970,7 @@ absl::StatusOr<FilterParseResults> ParsePreFilter(
                              .infields = search_params.infields.has_value()
                                              ? &*search_params.infields
                                              : nullptr};
+  options.PrecomputeInfieldsMasks(index_schema);
   FilterParser parser(index_schema, pre_filter, options);
   return parser.Parse();
 }

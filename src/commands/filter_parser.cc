@@ -34,6 +34,35 @@
 
 namespace valkey_search {
 
+void TextParsingOptions::PrecomputeInfieldsMasks(
+    const IndexSchema& index_schema) {
+  if (!infields || infields->empty()) {
+    return;
+  }
+  FieldMaskPredicate mask = 0ULL;
+  FieldMaskPredicate suffix_mask = 0ULL;
+  for (const auto& field : *infields) {
+    auto index = index_schema.GetIndex(field);
+    if (!index.ok() ||
+        index.value()->GetIndexerType() != indexes::IndexerType::kText) {
+      continue;
+    }
+    auto* text_index = static_cast<const indexes::Text*>(index.value().get());
+    auto identifier = index_schema.GetIdentifier(field);
+    if (!identifier.ok()) {
+      continue;
+    }
+    mask |= 1ULL << text_index->GetTextFieldNumber();
+    infields_identifiers.insert(identifier.value());
+    if (text_index->WithSuffixTrie()) {
+      suffix_mask |= 1ULL << text_index->GetTextFieldNumber();
+      infields_suffix_identifiers.insert(identifier.value());
+    }
+  }
+  infields_field_mask = mask;
+  infields_suffix_field_mask = suffix_mask;
+}
+
 namespace options {
 
 /// Register the "--query-string-depth" flag. Controls the depth of the query
@@ -795,33 +824,23 @@ absl::Status FilterParser::SetupTextFieldConfiguration(
     filter_identifiers_.insert(identifier);
     field_mask = 1ULL << text_index->GetTextFieldNumber();
   } else {
-    // INFIELDS: restrict field mask to specified text fields.
+    // INFIELDS: use precomputed field mask and identifiers.
     if (options_.infields && !options_.infields->empty()) {
-      field_mask = 0ULL;
-      filter_identifiers_.reserve(filter_identifiers_.size() +
-                                  options_.infields->size());
-      for (const auto& field : *options_.infields) {
-        auto index = index_schema_.GetIndex(field);
-        if (!index.ok() ||
-            index.value()->GetIndexerType() != indexes::IndexerType::kText) {
-          continue;  // Silently ignore non-text / non-existent fields
-        }
-        auto* text_index =
-            static_cast<const indexes::Text*>(index.value().get());
-        if (with_suffix && !text_index->WithSuffixTrie()) {
-          continue;  // Skip fields that don't support suffix
-        }
-        auto identifier = index_schema_.GetIdentifier(field);
-        if (!identifier.ok()) {
-          continue;  // Silently ignore fields without identifiers
-        }
-        filter_identifiers_.insert(identifier.value());
-        field_mask |= 1ULL << text_index->GetTextFieldNumber();
-      }
+      const auto& precomputed_identifiers =
+          with_suffix ? options_.infields_suffix_identifiers
+                      : options_.infields_identifiers;
+      FieldMaskPredicate precomputed_mask =
+          with_suffix ? options_.infields_suffix_field_mask
+                      : options_.infields_field_mask;
+      field_mask = precomputed_mask;
       if (field_mask == 0ULL) {
         // No valid INFIELDS fields - field_mask stays 0, matching nothing.
         return absl::OkStatus();
       }
+      filter_identifiers_.reserve(filter_identifiers_.size() +
+                                  precomputed_identifiers.size());
+      filter_identifiers_.insert(precomputed_identifiers.begin(),
+                                 precomputed_identifiers.end());
     } else {
       // Set identifiers to include all text fields in the index schema.
       auto text_identifiers = index_schema_.GetAllTextIdentifiers(with_suffix);

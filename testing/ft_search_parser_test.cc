@@ -1128,6 +1128,21 @@ INSTANTIATE_TEST_SUITE_P(
             .search_parameters_str = "INFIELDS -1",
             .vector_query = false,
         },
+        {
+            .test_name = "infields_count_exceeds_max_error",
+            .success = false,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .expected_error_message =
+                "Error parsing value for the parameter `INFIELDS` - "
+                "INFIELDS count exceeds maximum supported (64)",
+            .search_parameters_str = "INFIELDS 65",
+            .vector_query = false,
+        },
     }),
     [](const TestParamInfo<FTSearchParserTestCase> &info) {
       return info.param.test_name;

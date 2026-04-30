@@ -25,6 +25,7 @@
 #include "src/query/predicate.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
+#include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
@@ -46,6 +47,13 @@ void SortByToGRPC(const std::optional<query::SortByParameter>& sortby,
 std::optional<absl::flat_hash_set<std::string>> InfieldsFromGRPC(
     const SearchIndexPartitionRequest& request) {
   if (request.infields().empty()) {
+    return std::nullopt;
+  }
+  if (static_cast<size_t>(request.infields().size()) > kMaxTextFieldsCount) {
+    VMSDK_LOG(WARNING, nullptr)
+        << "INFIELDS count (" << request.infields().size()
+        << ") exceeds maximum supported (" << kMaxTextFieldsCount
+        << "), ignoring INFIELDS";
     return std::nullopt;
   }
   absl::flat_hash_set<std::string> infields;

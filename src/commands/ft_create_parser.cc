@@ -77,7 +77,6 @@ constexpr int kMaxNumericFieldLen{256};
 constexpr int kTimeoutMs{50000};
 constexpr int kMinTimeoutMs{1};
 constexpr int kMaxTimeoutMs{60000};
-constexpr size_t kMaxTextFieldsCount{64};
 
 constexpr absl::string_view kMaxPrefixesConfig{"max-prefixes"};
 constexpr absl::string_view kMaxTagFieldLenConfig{"max-tag-field-length"};

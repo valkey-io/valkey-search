@@ -36,6 +36,7 @@ message IndexSchema {
   repeated string stop_words = 11;
   uint32 min_stem_size = 12;
   bool skip_initial_scan = 13;
+  optional string score_field = 14;
 }
 
 

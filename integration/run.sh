@@ -167,7 +167,7 @@ function run_pytest() {
 
 function run_with_retries() {
   counter=1
-  retries=${INTEG_RETRIES}
+  retries=${INTEG_RETRIES:-1}
   if ((retries == 1)); then
     # Avoid the clutter and run it once.
     run_pytest

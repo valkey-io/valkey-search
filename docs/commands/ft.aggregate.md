@@ -92,3 +92,4 @@ The following reducer functions are available. The reducer functions that take a
 | MAX 1 <expression>            | The largest numerical values of the expression.                                                                                    |
 | AVG 1 <expression>            | The numerical average of the values of the expression.                                                                             |
 | STDDEV 1 <expression>         | The standard deviation the values of the expression.                                                                               |
+| QUANTILE 2 <expression> <quantile> | The value at the specified quantile (0 to 1) of the expression. Uses Greenwald-Khanna streaming algorithm with 1% error bound for memory-efficient approximate quantile estimation. |

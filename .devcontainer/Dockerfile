@@ -14,8 +14,9 @@ RUN apt update && \
         gpg \
         sudo \
         wget && \
-    # Add repositories
-    add-apt-repository ppa:ubuntu-toolchain-r/test && \
+    # Add ubuntu-toolchain-r/test PPA manually (avoids launchpadlib API timeout)
+    curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x1E9377A2BA9EF27F" | gpg --dearmor -o /usr/share/keyrings/ubuntu-toolchain-r-test.gpg && \
+    echo "deb [signed-by=/usr/share/keyrings/ubuntu-toolchain-r-test.gpg] https://ppa.launchpadcontent.net/ubuntu-toolchain-r/test/ubuntu $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/ubuntu-toolchain-r-test.list && \
     # Add Redis repository
     curl -fsSL https://packages.redis.io/gpg | gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg && \
     echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/redis.list && \

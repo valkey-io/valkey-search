@@ -8,15 +8,11 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt update && \
     apt install -y --no-install-recommends \
         ca-certificates \
-        software-properties-common \
         lsb-release \
         curl \
         gpg \
         sudo \
         wget && \
-    # Add ubuntu-toolchain-r/test PPA manually (avoids launchpadlib API timeout)
-    curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x1E9377A2BA9EF27F" | gpg --dearmor -o /usr/share/keyrings/ubuntu-toolchain-r-test.gpg && \
-    echo "deb [signed-by=/usr/share/keyrings/ubuntu-toolchain-r-test.gpg] https://ppa.launchpadcontent.net/ubuntu-toolchain-r/test/ubuntu $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/ubuntu-toolchain-r-test.list && \
     # Add Redis repository
     curl -fsSL https://packages.redis.io/gpg | gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg && \
     echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/redis.list && \

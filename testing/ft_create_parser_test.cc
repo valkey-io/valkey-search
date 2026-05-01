@@ -133,6 +133,11 @@ TEST_P(FTCreateParserTest, ParseParams) {
               test_case.expected.attributes.size());
     EXPECT_EQ(index_schema_proto->skip_initial_scan(),
               test_case.expected.skip_initial_scan);
+    if (!test_case.expected.score_field.empty()) {
+      EXPECT_TRUE(index_schema_proto->has_score_field());
+      EXPECT_EQ(index_schema_proto->score_field(),
+                test_case.expected.score_field);
+    }
 
     // Verify schema-level text parameters if we have text fields
     bool has_text_fields = false;
@@ -684,6 +689,30 @@ INSTANTIATE_TEST_SUITE_P(
                           }}},
          },
          {
+            .test_name = "score_field_supported",
+            .success = true,
+            .command_str =
+                " idx1 SCORE_FIELD my_score SCHEMA hash_field1 vector hnsw "
+                "6 TYPE FLOAT32 DIM 5 DISTANCE_METRIC IP ",
+            .hnsw_parameters =
+                {{
+                    {
+                        .dimensions = 5,
+                        .distance_metric = data_model::DISTANCE_METRIC_IP,
+                        .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
+                    },
+                }},
+            .expected =
+                {.index_schema_name = "idx1",
+                .score_field = "my_score",
+                .attributes =
+                    {{
+                        .identifier = "hash_field1",
+                        .attribute_alias = "hash_field1",
+                        .indexer_type = indexes::IndexerType::kHNSW,
+                    }}},
+        },
+         {
              .test_name = "invalid_separator",
              .success = false,
              .command_str =
@@ -1091,18 +1120,20 @@ INSTANTIATE_TEST_SUITE_P(
                  " idx1 SCORE 2 SChema hash_field1 vector hnsw 6 TYPE "
                  "FLOAT321 DIM 5 DISTANCE_METRIC IP ",
              .expected_error_message = "`SCORE` parameter with a value `2` is "
-                                       "not supported. The only "
-                                       "supported value is `1.0`",
-         },
+                          "not supported. The value must be between "
+                          "0.0 and 1.0",
+         }, 
          {
-             .test_name = "unexpected_score_field",
-             .success = false,
-             .command_str =
-                 " idx1 SCORE_FIELD SChema hash_field1 vector hnsw 6 TYPE "
-                 "FLOAT321 DIM 5 DISTANCE_METRIC IP ",
-             .expected_error_message =
-                 "The parameter `SCORE_FIELD` is not supported",
-         },
+            .test_name = "invalid_negative_score_parameter_value",
+            .success = false,
+            .command_str =
+                " idx1 SCORE -0.5 SChema hash_field1 vector hnsw 6 TYPE "
+                "FLOAT32 DIM 5 DISTANCE_METRIC IP ",
+            .expected_error_message =
+                "`SCORE` parameter with a value `-0.5` is "
+                "not supported. The value must be between "
+                "0.0 and 1.0",
+        },
          {
              .test_name = "invalid_parameter_before_schema",
              .success = false,

@@ -171,6 +171,9 @@ class IndexSchema : public KeyspaceEventSubscription,
 
   inline const std::string &GetName() const { return name_; }
   inline std::uint32_t GetDBNum() const { return db_num_; }
+  inline float GetScore() const { return score_; }
+  inline const std::string &GetScoreField() const { return score_field_; }
+  inline bool HasScoreField() const { return !score_field_.empty(); }
 
   void CreateTextIndexSchema() {
     text_index_schema_ = std::make_shared<indexes::text::TextIndexSchema>(
@@ -395,6 +398,8 @@ class IndexSchema : public KeyspaceEventSubscription,
   bool with_offsets_{true};
   std::vector<std::string> stop_words_;
   uint32_t min_stem_size_{4};
+  float score_{1.0};
+  std::string score_field_;
   std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
   // Precomputed text field information for searches
   uint64_t all_text_field_mask_{0ULL};

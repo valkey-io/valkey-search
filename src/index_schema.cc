@@ -298,6 +298,10 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
       min_stem_size_(index_schema_proto.min_stem_size() > 0
                          ? index_schema_proto.min_stem_size()
                          : 4),
+      score_(index_schema_proto.score()),
+      score_field_(index_schema_proto.has_score_field()
+                       ? index_schema_proto.score_field()
+                       : ""),
       mutations_thread_pool_(mutations_thread_pool),
       time_sliced_mutex_(CreateMrmwMutexOptions()) {
   ValkeyModule_SelectDb(detached_ctx_.get(), db_num_);
@@ -1085,7 +1089,7 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, name_.data());
 
   ValkeyModule_ReplyWithSimpleString(ctx, "index_definition");
-  ValkeyModule_ReplyWithArray(ctx, 6);
+  ValkeyModule_ReplyWithArray(ctx, 8);
   ValkeyModule_ReplyWithSimpleString(ctx, "key_type");
   ValkeyModule_ReplyWithSimpleString(ctx,
                                      attribute_data_type_->ToString().c_str());
@@ -1094,10 +1098,12 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   for (const auto &prefix : subscribed_key_prefixes_) {
     ValkeyModule_ReplyWithSimpleString(ctx, prefix.c_str());
   }
-  // hard-code default score of 1 as it's the only value we currently
-  // supported.
   ValkeyModule_ReplyWithSimpleString(ctx, "default_score");
-  ValkeyModule_ReplyWithCString(ctx, "1");
+  ValkeyModule_ReplyWithCString(ctx, absl::StrCat(score_).c_str());
+
+  ValkeyModule_ReplyWithSimpleString(ctx, "score_field_name");
+  ValkeyModule_ReplyWithSimpleString(
+      ctx, score_field_.empty() ? "" : score_field_.c_str());
 
   ValkeyModule_ReplyWithSimpleString(ctx, "attributes");
   ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
@@ -1197,6 +1203,10 @@ std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
   index_schema_proto->mutable_stop_words()->Assign(stop_words_.begin(),
                                                    stop_words_.end());
   index_schema_proto->set_skip_initial_scan(skip_initial_scan_);
+  index_schema_proto->set_score(score_);
+  if (!score_field_.empty()) {
+    index_schema_proto->set_score_field(score_field_);
+  }
 
   auto stats = index_schema_proto->mutable_stats();
   stats->set_documents_count(stats_.document_cnt);

@@ -70,7 +70,7 @@ target_link_libraries(commands_test PRIVATE commands)
 target_link_libraries(commands_test PRIVATE vmsdklib)
 finalize_test_flags(commands_test)
 
-# 1. Indexes Test Suite - consolidates index-related tests
+# 2. Indexes Test Suite - consolidates index-related tests
 set(INDEXES_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/index_schema_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/lexer_test.cc
@@ -87,7 +87,7 @@ target_link_libraries(indexes_test PRIVATE text)
 target_link_libraries(indexes_test PRIVATE hnswlib_vmsdk)
 finalize_test_flags(indexes_test)
 
-# 1. Core Test Suite - consolidates core functionality tests
+# 3. Core Test Suite - consolidates core functionality tests
 set(CORE_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/valkey_search_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/schema_manager_test.cc
@@ -109,7 +109,7 @@ target_link_libraries(core_test PRIVATE acl)
 target_link_libraries(core_test PRIVATE vmsdklib)
 finalize_test_flags(core_test)
 
-# 1. Query Test Suite - consolidates query and search related tests
+# 4. Query Test Suite - consolidates query and search related tests
 set(QUERY_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/search_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/query/response_generator_test.cc)
@@ -124,7 +124,7 @@ target_link_libraries(query_test PRIVATE response_generator)
 target_link_libraries(query_test PRIVATE search_converter)
 finalize_test_flags(query_test)
 
-# 1. Coordinator Test Suite - consolidates coordinator related tests
+# 5. Coordinator Test Suite - consolidates coordinator related tests
 set(COORDINATOR_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/coordinator/metadata_manager_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/coordinator/client_test.cc)
@@ -147,7 +147,7 @@ target_link_libraries(coordinator_common INTERFACE client)
 target_link_libraries(coordinator_common INTERFACE client_pool)
 target_link_libraries(coordinator_common INTERFACE server)
 
-# 1. Utils Test Suite - consolidates utility tests
+# 6. Utils Test Suite - consolidates utility tests
 set(UTILS_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/utils/allocator_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/utils/intrusive_list_test.cc
@@ -167,8 +167,8 @@ target_link_libraries(valkey_utils_test PRIVATE lru)
 target_link_libraries(valkey_utils_test PRIVATE segment_tree)
 finalize_test_flags(valkey_utils_test)
 
-# 7. Text Index Test Suite
-add_executable(text_index_test 
+# 7. Text Index Test Suite - consolidates text index tests
+add_executable(text_index_test
     ${CMAKE_CURRENT_LIST_DIR}/flat_position_map_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/radix_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/rax_wrapper_test.cc
@@ -177,3 +177,16 @@ target_include_directories(text_index_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(text_index_test PRIVATE testing_common_base)
 target_link_libraries(text_index_test PRIVATE text)
 finalize_test_flags(text_index_test)
+
+# 8. Expr Test Suite - consolidates expression evaluation tests
+set(EXPR_TEST_SOURCES
+    ${CMAKE_CURRENT_LIST_DIR}/expr/expr_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/expr/value_test.cc)
+
+add_executable(expr_test ${EXPR_TEST_SOURCES})
+target_include_directories(expr_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_include_directories(expr_test PUBLIC ${CMAKE_CURRENT_LIST_DIR}/expr)
+target_link_libraries(expr_test PRIVATE testing_common_base)
+target_link_libraries(expr_test PRIVATE testing_common_coordinator)
+target_link_libraries(expr_test PRIVATE expr)
+finalize_test_flags(expr_test)

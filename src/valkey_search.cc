@@ -1217,7 +1217,7 @@ absl::Status ValkeySearch::Startup(ValkeyModuleCtx *ctx) {
       options::GetThreadPoolWaitTimeSamples().GetValue());
   writer_thread_pool_->StartWorkers();
   utility_thread_pool_ = std::make_unique<vmsdk::ThreadPool>(
-      "utility-worker-", options::GetUtilityThreadCount().GetValue(),
+      "util-worker-", options::GetUtilityThreadCount().GetValue(),
       options::GetThreadPoolWaitTimeSamples().GetValue());
   utility_thread_pool_->StartWorkers();
 

@@ -287,16 +287,21 @@ absl::Status ParseScore(vmsdk::ArgsIterator &itr,
   float score{1.0};
   VMSDK_ASSIGN_OR_RETURN(auto res,
                          vmsdk::ParseParam(kScoreParam, false, itr, score));
-  if (res && score != 1.0) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("`", kScoreParam, "` parameter with a value `", score,
-                     "` is not supported. The only supported value is `1.0`"));
-  }
-  VMSDK_ASSIGN_OR_RETURN(res,
-                         vmsdk::IsParamKeyMatch(kScoreFieldParam, false, itr));
   if (res) {
-    return absl::InvalidArgumentError(
-        NotSupportedParamErrorMsg(kScoreFieldParam));
+    if (score < 0.0 || score > 1.0) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("`", kScoreParam, "` parameter with a value `", score,
+                       "` is not supported. The value must be between "
+                       "0.0 and 1.0"));
+    }
+  }
+  // Parse SCORE_FIELD: the name of the document field whose numeric value
+  // is used as the document's custom score. Only one per index.
+  std::string score_field;
+  VMSDK_ASSIGN_OR_RETURN(
+      res, vmsdk::ParseParam(kScoreFieldParam, false, itr, score_field));
+  if (res) {
+    index_schema_proto.set_score_field(score_field);
   }
   index_schema_proto.set_score(score);
   return absl::OkStatus();

@@ -312,12 +312,18 @@ function print_test_summary() {
 }
 
 function print_test_error_and_exit() {
-    printf " ... ${RED}failed${RESET}\n"
-    if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then
-        # Only dump the failed test's output, not the entire accumulated log
-        if [ -f "${CURRENT_TEST_OUTPUT_FILE}" ]; then
-            cat "${CURRENT_TEST_OUTPUT_FILE}"
-        fi
+    local test_name="${1:-unknown}"
+    local test_exit_code="${2:-1}"
+
+    printf " ... ${RED}FAILED (exit code: ${test_exit_code})${RESET}\n"
+
+    # Always dump the failed test's output so failures are visible
+    if [ -f "${CURRENT_TEST_OUTPUT_FILE}" ]; then
+        printf "\n${RED}========================================${RESET}\n"
+        printf "${RED}  FAILED: $(basename "${test_name}")${RESET}\n"
+        printf "${RED}========================================${RESET}\n"
+        cat "${CURRENT_TEST_OUTPUT_FILE}"
+        printf "${RED}======== END OF FAILED TEST OUTPUT ========${RESET}\n\n"
     fi
 
     # When running tests with sanitizer enabled, do not terminate the execution after the first failure continue
@@ -472,7 +478,17 @@ if [[ "${RUN_TEST}" == "all" ]]; then
         # Write each test's output to a per-test file so on failure we only dump the relevant output
         rm -f "${CURRENT_TEST_OUTPUT_FILE}"
         print_test_prefix "${test}"
-        ("${test}" --gtest_brief=1 > "${CURRENT_TEST_OUTPUT_FILE}" 2>&1 && cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}" && print_test_ok) || { cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}"; print_test_error_and_exit; }
+        # Run test and capture exit code (set +e to prevent bash -e from exiting on failure)
+        set +e
+        "${test}" --gtest_brief=1 > "${CURRENT_TEST_OUTPUT_FILE}" 2>&1
+        test_rc=$?
+        set -e
+        cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}"
+        if [[ ${test_rc} -eq 0 ]]; then
+            print_test_ok
+        else
+            print_test_error_and_exit "${test}" "${test_rc}"
+        fi
     done < <(find "${TESTS_DIR}" -name "*_test" -type f)
     rm -f "${CURRENT_TEST_OUTPUT_FILE}"
     print_test_summary
@@ -483,7 +499,17 @@ elif [ ! -z "${RUN_TEST}" ]; then
     echo "" >> "${TEST_OUTPUT_FILE}"
     rm -f "${CURRENT_TEST_OUTPUT_FILE}"
     print_test_prefix "${TESTS_DIR}/${RUN_TEST}"
-    ("${TESTS_DIR}/${RUN_TEST}" --gtest_brief=1 > "${CURRENT_TEST_OUTPUT_FILE}" 2>&1 && cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}" && print_test_ok) || { cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}"; print_test_error_and_exit; }
+    # Run test and capture exit code (set +e to prevent bash -e from exiting on failure)
+    set +e
+    "${TESTS_DIR}/${RUN_TEST}" --gtest_brief=1 > "${CURRENT_TEST_OUTPUT_FILE}" 2>&1
+    test_rc=$?
+    set -e
+    cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}"
+    if [[ ${test_rc} -eq 0 ]]; then
+        print_test_ok
+    else
+        print_test_error_and_exit "${TESTS_DIR}/${RUN_TEST}" "${test_rc}"
+    fi
     rm -f "${CURRENT_TEST_OUTPUT_FILE}"
     print_test_summary
 elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then

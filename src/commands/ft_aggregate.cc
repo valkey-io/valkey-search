@@ -68,6 +68,12 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
       content = true;
       VMSDK_ASSIGN_OR_RETURN(auto indexer, params.index_schema->GetIndex(load));
       auto indexer_type = indexer->GetIndexerType();
+      if (indexer_type == indexes::IndexerType::kVector ||
+          indexer_type == indexes::IndexerType::kHNSW ||
+          indexer_type == indexes::IndexerType::kFlat) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "Loading of vector fields is not supported (field `", load, "`)"));
+      }
       auto schema_identifier = params.index_schema->GetIdentifier(load);
       if (schema_identifier.ok()) {
         params.return_attributes.emplace_back(query::ReturnAttribute{
@@ -143,6 +149,7 @@ bool ReplyWithValue(ValkeyModuleCtx *ctx,
     } else {
       switch (indexer_type) {
         case indexes::IndexerType::kTag:
+        case indexes::IndexerType::kText:
         case indexes::IndexerType::kNone: {
           value_view = value.AsStringView();
           break;

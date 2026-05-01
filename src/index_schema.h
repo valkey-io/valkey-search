@@ -46,6 +46,32 @@
 
 namespace valkey_search::query {
 struct SearchParameters;
+
+// Owns a query operation that has been parked because one or more of its
+// result-set keys are concurrently being mutated. As each conflicting key's
+// mutation queue is drained, the writer thread evaluates the predicate
+// against the now-up-to-date index and decrements pending_count. Each
+// WaitingQuery is consumed by exactly one path (writer-side validation in
+// ConsumeTrackedMutatedAttribute or MarkAsDestructing's sweep — they are
+// mutually exclusive under mutated_records_mutex_), so total decrements
+// equal the initial pending_count and the thread that drives the count
+// from one to zero is the unique dispatcher.
+struct PendingValidationContext {
+  PendingValidationContext();
+  ~PendingValidationContext();
+
+  std::unique_ptr<SearchParameters> params;
+  std::atomic<int> pending_count{0};
+};
+
+// One attachment of a query to a specific conflicting key. Stored on the
+// DocumentMutation::waiting_queries vector. neighbor_index is the index
+// into ctx->params->search_result.neighbors for the neighbor whose
+// external_id matches this mutation entry's key.
+struct WaitingQuery {
+  std::shared_ptr<PendingValidationContext> ctx;
+  size_t neighbor_index;
+};
 }  // namespace valkey_search::query
 
 namespace valkey_search {
@@ -239,8 +265,11 @@ class IndexSchema : public KeyspaceEventSubscription,
     };
     std::optional<absl::flat_hash_map<std::string, AttributeData>> attributes;
     std::vector<vmsdk::BlockedClient> blocked_clients;
-    // Queries waiting for this mutation to complete
-    std::vector<std::unique_ptr<query::SearchParameters>> waiting_queries;
+    // Queries waiting for this mutation to complete. Each entry pairs a
+    // shared PendingValidationContext (a single query may be attached to
+    // multiple mutation entries, one per conflicting neighbor) with the
+    // index of that neighbor inside the query's result set.
+    std::vector<query::WaitingQuery> waiting_queries;
     MutationSequenceNumber sequence_number{0};
     std::vector<uint8_t> weighted_buffer;
     bool consume_in_progress{false};
@@ -261,12 +290,18 @@ class IndexSchema : public KeyspaceEventSubscription,
   uint64_t GetBackfillDbSize() const;
   InfoIndexPartitionData GetInfoIndexPartitionData() const;
   // Check neighbors for contention with in-flight mutations by comparing
-  // sequence numbers. Only neighbors whose db and index sequence numbers
-  // differ are checked against the mutation queue. If contention is found,
-  // params is moved into the mutation queue and true is returned.
-  // Otherwise params is untouched and false is returned.
+  // sequence numbers. Walks every neighbor; for each one whose db and
+  // index sequence numbers differ AND whose key has a queued mutation,
+  // attaches the query (via a shared PendingValidationContext) to that
+  // mutation entry's waiting_queries and marks the neighbor's
+  // validation_state as kPending.
+  //
+  // If at least one such attachment was made, params is moved into the
+  // PendingValidationContext and true is returned (the caller must not
+  // touch params; final delivery is driven by the writer thread).
+  // Otherwise params is left untouched and false is returned.
   bool PerformKeyContentionCheck(
-      const std::vector<indexes::Neighbor> &neighbors,
+      std::vector<indexes::Neighbor> &neighbors,
       std::unique_ptr<query::SearchParameters> &&params)
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
 

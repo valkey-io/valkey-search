@@ -112,6 +112,7 @@ finalize_test_flags(core_test)
 # 1. Query Test Suite - consolidates query and search related tests
 set(QUERY_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/search_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/query/content_resolution_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/query/response_generator_test.cc)
 
 add_executable(query_test ${QUERY_TEST_SOURCES})
@@ -122,6 +123,7 @@ target_link_libraries(query_test PRIVATE testing_common_coordinator)
 target_link_libraries(query_test PRIVATE fanout)
 target_link_libraries(query_test PRIVATE response_generator)
 target_link_libraries(query_test PRIVATE search_converter)
+target_link_libraries(query_test PRIVATE content_resolution)
 finalize_test_flags(query_test)
 
 # 1. Coordinator Test Suite - consolidates coordinator related tests

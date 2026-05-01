@@ -48,10 +48,25 @@ namespace valkey_search::indexes {
 std::vector<char> NormalizeEmbedding(absl::string_view record, size_t type_size,
                                      float* magnitude = nullptr);
 
+// Outcome of writer-side per-key contention validation. Default state is
+// kNotChecked (no contention observed for this neighbor); kPending is set
+// while attached to a mutation queue entry; kPass / kFail are set by the
+// writer thread after re-evaluating the predicate against the up-to-date
+// per-key index. Read on the main thread only after every attached writer
+// has signaled completion via PendingValidationContext::pending_count, so
+// no atomic is required.
+enum class ValidationState : uint8_t {
+  kNotChecked = 0,
+  kPending,
+  kPass,
+  kFail,
+};
+
 struct Neighbor {
   InternedStringPtr external_id;
   float distance;
   uint64_t sequence_number;
+  ValidationState validation_state{ValidationState::kNotChecked};
   std::optional<RecordsMap> attribute_contents;
   Neighbor() : distance(0.0f), sequence_number(0) {}
   Neighbor(const InternedStringPtr& external_id, float distance)
@@ -66,12 +81,14 @@ struct Neighbor {
       : external_id(std::move(other.external_id)),
         distance(other.distance),
         sequence_number(other.sequence_number),
+        validation_state(other.validation_state),
         attribute_contents(std::move(other.attribute_contents)) {}
   Neighbor& operator=(Neighbor&& other) noexcept {
     if (this != &other) {
       external_id = std::move(other.external_id);
       distance = other.distance;
       sequence_number = other.sequence_number;
+      validation_state = other.validation_state;
       attribute_contents = std::move(other.attribute_contents);
     }
     return *this;

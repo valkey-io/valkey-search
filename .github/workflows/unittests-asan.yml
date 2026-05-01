@@ -30,19 +30,40 @@ jobs:
 
     # Build the Docker image from the Dockerfile in your repo
     - name: Build Docker Image
-      run: docker build -t presubmit-image -f .devcontainer/Dockerfile .
+      run: |
+        echo "::group::Docker Build"
+        DOCKER_START=$(date +%s)
+        docker build -t presubmit-image -f .devcontainer/Dockerfile .
+        DOCKER_END=$(date +%s)
+        echo "::endgroup::"
+        echo "[TIMING] Docker Image Build: $((DOCKER_END - DOCKER_START))s"
 
-    - name: Run Tests ASAN
+    - name: Restore ccache
+      uses: actions/cache@v4
+      with:
+        path: .ccache
+        key: ccache-unittests-asan-${{ github.ref }}-${{ github.sha }}
+        restore-keys: |
+          ccache-unittests-asan-${{ github.ref }}-
+          ccache-unittests-asan-
+
+    - name: Build and Run Unit Tests (ASAN)
       id: test-run
       continue-on-error: true
       run: |
-        mkdir test-results
+        mkdir -p test-results .ccache
+        echo "[TIMING] Build+Test (ASAN) started at $(date)"
+        TEST_START=$(date +%s)
         docker run --privileged --rm \
           --mount type=bind,source="$(pwd)/test-results",target=/workspace/test-results \
           -v "$(pwd):/workspace" \
           --user "ubuntu:ubuntu" \
+          -e CCACHE_DIR=/workspace/.ccache \
+          -e CCACHE_MAXSIZE=1G \
           presubmit-image \
-          sudo ci/build_ubuntu.sh --run-tests --asan --unittest-output=/workspace/test-results
+          sudo -E ci/build_ubuntu.sh --run-tests --asan --unittest-output=/workspace/test-results
+        TEST_END=$(date +%s)
+        echo "[TIMING] Build+Test (ASAN) completed in $((TEST_END - TEST_START))s"
 
     - name: Update Test Results Permissions
       if: always()

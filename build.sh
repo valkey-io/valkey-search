@@ -164,6 +164,43 @@ export SAN_BUILD
 export ROOT_DIR
 . "${ROOT_DIR}/scripts/common.rc"
 
+# ── Build Timing Instrumentation ──────────────────────────────────────────────
+# Tracks wall-clock time for each build phase so we can identify bottlenecks.
+declare -A _PHASE_TIMES 2>/dev/null || true
+_BUILD_PHASES_LOG=""
+
+function timing_start() {
+    local phase_name="$1"
+    eval "_PHASE_START_${phase_name//[- ]/_}=$(date +%s)"
+    printf "${BLUE}[TIMING]${RESET} ▶ ${phase_name} started\n"
+}
+
+function timing_end() {
+    local phase_name="$1"
+    local var_name="_PHASE_START_${phase_name//[- ]/_}"
+    local start_time=${!var_name}
+    local end_time=$(date +%s)
+    local elapsed=$((end_time - start_time))
+    local minutes=$((elapsed / 60))
+    local seconds=$((elapsed % 60))
+    printf "${BLUE}[TIMING]${RESET} ■ ${phase_name} completed in ${GREEN}${minutes}m ${seconds}s${RESET} (${elapsed}s)\n"
+    _BUILD_PHASES_LOG="${_BUILD_PHASES_LOG}  ${phase_name}: ${minutes}m ${seconds}s (${elapsed}s)\n"
+}
+
+function timing_summary() {
+    if [ -n "${_BUILD_PHASES_LOG}" ]; then
+        printf "\n${BOLD_PINK}═══════════════════════════════════════${RESET}\n"
+        printf "${BOLD_PINK}  BUILD TIMING SUMMARY${RESET}\n"
+        printf "${BOLD_PINK}═══════════════════════════════════════${RESET}\n"
+        printf "${_BUILD_PHASES_LOG}"
+        printf "${BOLD_PINK}───────────────────────────────────────${RESET}\n"
+        printf "  Total build time: ${GREEN}${BUILD_RUNTIME}s${RESET}\n"
+        printf "  Total test time:  ${GREEN}${TEST_RUNTIME}s${RESET}\n"
+        printf "${BOLD_PINK}═══════════════════════════════════════${RESET}\n\n"
+    fi
+}
+# ──────────────────────────────────────────────────────────────────────────────
+
 if [[ "${CMAKE_GENERATOR}" == "Ninja" ]]; then
   BUILD_TOOL="ninja"
 else
@@ -444,14 +481,20 @@ check_tools
 START_TIME=$(date +%s)
 
 # Build ICU dependencies before configuring cmake
+timing_start "ICU_Build"
 build_icu_if_needed
+timing_end "ICU_Build"
 
 if [[ "${RUN_CMAKE}" == "yes" ]] || [[ "${FORCE_CMAKE}" == "yes" ]]; then
+    timing_start "CMake_Configure"
     configure
+    timing_end "CMake_Configure"
 fi
 
 if [[ "${RUN_BUILD}" == "yes" ]]; then
+    timing_start "Ninja_Build"
     build
+    timing_end "Ninja_Build"
 fi
 
 END_TIME=$(date +%s)
@@ -464,6 +507,7 @@ if [[ "${SAN_BUILD}" != "no" ]]; then
 fi
 
 if [[ "${RUN_TEST}" == "all" ]]; then
+    timing_start "Unit_Tests"
     rm -f "${TEST_OUTPUT_FILE}"
     CURRENT_TEST_OUTPUT_FILE="${BUILD_DIR}/current_test.out"
     while read -r test; do
@@ -476,7 +520,9 @@ if [[ "${RUN_TEST}" == "all" ]]; then
     done < <(find "${TESTS_DIR}" -name "*_test" -type f)
     rm -f "${CURRENT_TEST_OUTPUT_FILE}"
     print_test_summary
+    timing_end "Unit_Tests"
 elif [ ! -z "${RUN_TEST}" ]; then
+    timing_start "Unit_Tests"
     rm -f "${TEST_OUTPUT_FILE}"
     CURRENT_TEST_OUTPUT_FILE="${BUILD_DIR}/current_test.out"
     echo "==> Running executable: ${TESTS_DIR}/${RUN_TEST}" >> "${TEST_OUTPUT_FILE}"
@@ -486,7 +532,9 @@ elif [ ! -z "${RUN_TEST}" ]; then
     ("${TESTS_DIR}/${RUN_TEST}" --gtest_brief=1 > "${CURRENT_TEST_OUTPUT_FILE}" 2>&1 && cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}" && print_test_ok) || { cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}"; print_test_error_and_exit; }
     rm -f "${CURRENT_TEST_OUTPUT_FILE}"
     print_test_summary
+    timing_end "Unit_Tests"
 elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
+    timing_start "Integration_Tests"
     if [ ! -z "${TEST_PATTERN}" ]; then
         echo ""
         LOG_WARNING " ** TEST_PATTERN is found, skipping Abseil based integration tests **"
@@ -523,8 +571,11 @@ elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
     # Run will run ASan or normal tests based on the environment variable SAN_BUILD
     ./run.sh || EXIT_CODE=1
     popd >/dev/null
+    timing_end "Integration_Tests"
 fi
 
 END_TIME=$(date +%s)
 TEST_RUNTIME=$((END_TIME - START_TIME))
+
+timing_summary
 exit ${EXIT_CODE}

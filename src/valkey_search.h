@@ -107,6 +107,7 @@ class ValkeySearch {
   void SendMetadataBroadcast(ValkeyModuleCtx *ctx, void *data);
   void AtForkPrepare();
   void AfterForkParent();
+  void OnShutdownCallback();
   static ValkeySearch &Instance();
   static void InitInstance(std::unique_ptr<ValkeySearch> instance);
 
@@ -167,6 +168,7 @@ class ValkeySearch {
   static void *RDBLoad(ValkeyModuleIO *rdb, int encoding_version);
   static void FreeIndexSchema(void *value);
   static bool IsChildProcess();
+  void SuspendWorkers(std::string_view reason);
   void ProcessIndexSchemaBackfill(ValkeyModuleCtx *ctx, uint32_t batch_size);
   void ResumeWriterThreadPool(ValkeyModuleCtx *ctx, bool is_expired);
   absl::StatusOr<std::string> GetConfigGetReply(ValkeyModuleCtx *ctx,

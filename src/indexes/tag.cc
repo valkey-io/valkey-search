@@ -25,13 +25,10 @@
 #include "src/query/predicate.h"
 #include "src/utils/patricia_tree.h"
 #include "src/utils/string_interning.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
-
-// For performance reasons, a minimum term length is enforced. The default is 2,
-// but configurable.
-const int16_t kDefaultMinPrefixLength{2};
 
 static bool IsValidPrefix(absl::string_view str) {
   return str.length() < 2 || str[str.length() - 1] != '*' ||
@@ -96,10 +93,15 @@ absl::StatusOr<absl::flat_hash_set<absl::string_view>> Tag::ParseSearchTags(
         return absl::InvalidArgumentError(
             absl::StrCat("Tag string `", tag, "` ends with multiple *."));
       }
-      // Prefix tags shorter than min length are ignored
-      if (tag.length() > kDefaultMinPrefixLength) {
-        parsed_tags.insert(tag);
+      const auto min_prefix_length =
+          options::GetTagMinPrefixLength().GetValue();
+
+      // Prefix tags shorter than min length are rejected.
+      if (tag.length() <= min_prefix_length) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "Tag string `", tag, "` is too short for prefix wildcard."));
       }
+      parsed_tags.insert(tag);
     } else {
       parsed_tags.insert(tag);
     }
@@ -226,6 +228,10 @@ std::unique_ptr<data_model::Index> Tag::ToProto() const {
   return index_proto;
 }
 
+uint32_t Tag::GetMutationWeight() const {
+  return options::GetMutationWeightTag().GetValue();
+}
+
 InternedStringPtr Tag::GetRawValue(const InternedStringPtr& key) const {
   // Note that the Tag index is not mutated while the time sliced mutex is
   // in a read mode and therefor it is safe to skip lock acquiring.
@@ -252,14 +258,20 @@ Tag::EntriesFetcherIterator::EntriesFetcherIterator(
     const PatriciaTreeIndex& tree,
     absl::flat_hash_set<PatriciaNodeIndex*>& entries,
     const InternedStringSet& untracked_keys, bool negate)
-    : tree_iter_(tree.RootIterator()),
+    : tree_(tree),
       entries_(entries),
       untracked_keys_(untracked_keys),
       negate_(negate) {}
 
+void Tag::EntriesFetcherIterator::EnsureNegateRootIter() {
+  if (!negate_root_iter_.has_value()) {
+    negate_root_iter_.emplace(tree_.RootIterator());
+  }
+}
+
 bool Tag::EntriesFetcherIterator::Done() const {
   if (negate_) {
-    return tree_iter_.Done() &&
+    return negate_root_iter_.has_value() && negate_root_iter_->Done() &&
            (untracked_keys_.empty() ||
             (untracked_keys_iter_.has_value() &&
              untracked_keys_iter_.value() == untracked_keys_.end()));
@@ -268,21 +280,22 @@ bool Tag::EntriesFetcherIterator::Done() const {
 }
 
 void Tag::EntriesFetcherIterator::NextNegate() {
+  EnsureNegateRootIter();
   if (next_node_) {
     ++next_iter_;
     if (next_iter_ != next_node_->value.value().end()) {
       return;
     }
-    tree_iter_.Next();
+    negate_root_iter_->Next();
   }
-  while (!tree_iter_.Done()) {
-    next_node_ = tree_iter_.Value();
+  while (!negate_root_iter_->Done()) {
+    next_node_ = negate_root_iter_->Value();
     if (next_node_ && !entries_.contains(next_node_) &&
         next_node_->value.has_value() && !next_node_->value.value().empty()) {
       next_iter_ = next_node_->value.value().begin();
       return;
     }
-    tree_iter_.Next();
+    negate_root_iter_->Next();
   }
   next_node_ = nullptr;
   if (!untracked_keys_iter_.has_value()) {
@@ -316,7 +329,7 @@ void Tag::EntriesFetcherIterator::Next() {
 }
 
 const InternedStringPtr& Tag::EntriesFetcherIterator::operator*() const {
-  if (negate_ && tree_iter_.Done()) {
+  if (negate_ && negate_root_iter_.has_value() && negate_root_iter_->Done()) {
     return *untracked_keys_iter_.value();
   }
   return *next_iter_;

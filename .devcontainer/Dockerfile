@@ -8,14 +8,11 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt update && \
     apt install -y --no-install-recommends \
         ca-certificates \
-        software-properties-common \
         lsb-release \
         curl \
         gpg \
         sudo \
         wget && \
-    # Add repositories
-    add-apt-repository ppa:ubuntu-toolchain-r/test && \
     # Add Redis repository
     curl -fsSL https://packages.redis.io/gpg | gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg && \
     echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/redis.list && \

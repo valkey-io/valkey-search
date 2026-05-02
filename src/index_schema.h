@@ -20,6 +20,7 @@
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/blocking_counter.h"
 #include "absl/synchronization/mutex.h"
@@ -50,6 +51,12 @@ struct SearchParameters;
 namespace valkey_search {
 bool ShouldBlockClient(ValkeyModuleCtx *ctx, bool inside_multi_exec,
                        bool from_backfill);
+
+inline absl::Status GenerateIndexNotFoundError(uint32_t db_num,
+                                               absl::string_view name) {
+  return absl::NotFoundError(absl::StrFormat(
+      "Index with name '%s' not found in database %d", name, db_num));
+}
 
 using Key = InternedStringPtr;
 using MutationSequenceNumber = uint64_t;
@@ -235,6 +242,7 @@ class IndexSchema : public KeyspaceEventSubscription,
     // Queries waiting for this mutation to complete
     std::vector<std::unique_ptr<query::SearchParameters>> waiting_queries;
     MutationSequenceNumber sequence_number{0};
+    std::vector<uint8_t> weighted_buffer;
     bool consume_in_progress{false};
     bool from_backfill{false};
     bool from_multi{false};
@@ -245,6 +253,7 @@ class IndexSchema : public KeyspaceEventSubscription,
     return time_sliced_mutex_;
   }
   void MarkAsDestructing();
+  bool IsMarkedDestructing() { return is_destructing_; };
   void ProcessMultiQueue();
   void SubscribeToVectorExternalizer(absl::string_view attribute_identifier,
                                      indexes::VectorBase *vector_index);
@@ -476,6 +485,8 @@ class IndexSchema : public KeyspaceEventSubscription,
                           bool from_multi)
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
 
+  size_t ComputeWeightedBufferSize(const MutatedAttributes &attributes) const;
+
   // REQUIRES: time_sliced_mutex_ held in write phase
   std::optional<MutatedAttributes> ConsumeTrackedMutatedAttribute(
       const Key &key, bool first_time)
@@ -514,14 +525,11 @@ class IndexSchema : public KeyspaceEventSubscription,
   vmsdk::MainThreadAccessGuard<std::deque<Key>> multi_mutations_keys_;
   vmsdk::MainThreadAccessGuard<bool> schedule_multi_exec_processing_{false};
 
-  // Enable text index size tracking features if the schema has HNSW and Text
-  // attributes.
-  void SetTextSizeEstimationConditions();
-
   FRIEND_TEST(IndexSchemaRDBTest, SaveAndLoad);
   FRIEND_TEST(IndexSchemaRDBTest, ComprehensiveSkipLoadTest);
   FRIEND_TEST(IndexSchemaFriendTest, ConsistencyTest);
   FRIEND_TEST(IndexSchemaFriendTest, MutatedAttributes);
+  FRIEND_TEST(IndexSchemaFriendTest, WeightedBuffer);
   FRIEND_TEST(IndexSchemaFriendTest, MutatedAttributesSanity);
   FRIEND_TEST(ValkeySearchTest, Info);
   FRIEND_TEST(OnSwapDBCallbackTest, OnSwapDBCallback);

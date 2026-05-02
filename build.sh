@@ -5,7 +5,7 @@ RUN_CMAKE="no"
 ROOT_DIR=$(readlink -f $(dirname $0))
 VERBOSE_ARGS=""
 CMAKE_TARGET=""
-CMAKE_EXTRA_ARGS=""
+CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS:-}"
 FORMAT="no"
 RUN_TEST=""
 RUN_BUILD="yes"
@@ -200,8 +200,10 @@ function build_icu_if_needed() {
     
     printf "Configuring ICU for static linking with embedded data...\n"
     
-    # Configure with static data packaging
-    "${ICU_SOURCE_DIR}/configure" \
+    local ICU_LOG="${ICU_BUILD_DIR}/icu-build.log"
+
+    # Configure with static data packaging (output saved to log file)
+    if ! "${ICU_SOURCE_DIR}/configure" \
         --enable-static \
         --disable-shared \
         --with-data-packaging=static \
@@ -213,17 +215,29 @@ function build_icu_if_needed() {
         --enable-tools \
         --prefix="${ICU_BUILD_DIR}/install" \
         CFLAGS="-O2 -fPIC" \
-        CXXFLAGS="-O2 -fPIC"
+        CXXFLAGS="-O2 -fPIC" > "${ICU_LOG}" 2>&1; then
+        printf "${RED}ICU configure failed. See ${ICU_LOG}${RESET}\n"
+        tail -30 "${ICU_LOG}"
+        exit 1
+    fi
     
     printf "Building ICU static libraries...\n"
     
-    # Build with static data mode
-    make PKGDATA_MODE=static -j$(nproc)
+    # Build with static data mode (output saved to log file)
+    if ! make PKGDATA_MODE=static -j$(num_proc) >> "${ICU_LOG}" 2>&1; then
+        printf "${RED}ICU build failed. See ${ICU_LOG}${RESET}\n"
+        tail -50 "${ICU_LOG}"
+        exit 1
+    fi
     
     printf "Installing ICU libraries...\n"
     
     # Install to build directory
-    make install PKGDATA_MODE=static
+    if ! make install PKGDATA_MODE=static >> "${ICU_LOG}" 2>&1; then
+        printf "${RED}ICU install failed. See ${ICU_LOG}${RESET}\n"
+        tail -30 "${ICU_LOG}"
+        exit 1
+    fi
     
     cd "${ROOT_DIR}"
     
@@ -249,8 +263,8 @@ function configure() {
     cd $_
     local BUILD_TYPE=$(capitalize_string ${BUILD_CONFIG})
     rm -f CMakeCache.txt
-    printf "Running: cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBUILD_TESTS=ON -Wno-dev -G"${CMAKE_GENERATOR}" ${CMAKE_EXTRA_ARGS}\n"
-    cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBUILD_TESTS=ON -Wno-dev -G"${CMAKE_GENERATOR}" ${CMAKE_EXTRA_ARGS}
+    printf "Running: cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBUILD_UNIT_TESTS=ON -Wno-dev -G"${CMAKE_GENERATOR}" ${CMAKE_EXTRA_ARGS}\n"
+    cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBUILD_UNIT_TESTS=ON -Wno-dev -G"${CMAKE_GENERATOR}" ${CMAKE_EXTRA_ARGS}
     cd ${ROOT_DIR}
 }
 
@@ -300,10 +314,10 @@ function print_test_summary() {
 function print_test_error_and_exit() {
     printf " ... ${RED}failed${RESET}\n"
     if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then
-        cat "${TEST_OUTPUT_FILE}"
-        # To avoid dumping the content over and over again,
-        # clear the file
-        cp /dev/null "${TEST_OUTPUT_FILE}"
+        # Only dump the failed test's output, not the entire accumulated log
+        if [ -f "${CURRENT_TEST_OUTPUT_FILE}" ]; then
+            cat "${CURRENT_TEST_OUTPUT_FILE}"
+        fi
     fi
 
     # When running tests with sanitizer enabled, do not terminate the execution after the first failure continue
@@ -451,19 +465,26 @@ fi
 
 if [[ "${RUN_TEST}" == "all" ]]; then
     rm -f "${TEST_OUTPUT_FILE}"
+    CURRENT_TEST_OUTPUT_FILE="${BUILD_DIR}/current_test.out"
     while read -r test; do
         echo "==> Running executable: ${test}" >> "${TEST_OUTPUT_FILE}"
         echo "" >> "${TEST_OUTPUT_FILE}"
+        # Write each test's output to a per-test file so on failure we only dump the relevant output
+        rm -f "${CURRENT_TEST_OUTPUT_FILE}"
         print_test_prefix "${test}"
-        ("${test}" >> "${TEST_OUTPUT_FILE}" 2>&1 && print_test_ok) || print_test_error_and_exit
+        ("${test}" --gtest_brief=1 > "${CURRENT_TEST_OUTPUT_FILE}" 2>&1 && cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}" && print_test_ok) || { cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}"; print_test_error_and_exit; }
     done < <(find "${TESTS_DIR}" -name "*_test" -type f)
+    rm -f "${CURRENT_TEST_OUTPUT_FILE}"
     print_test_summary
 elif [ ! -z "${RUN_TEST}" ]; then
     rm -f "${TEST_OUTPUT_FILE}"
+    CURRENT_TEST_OUTPUT_FILE="${BUILD_DIR}/current_test.out"
     echo "==> Running executable: ${TESTS_DIR}/${RUN_TEST}" >> "${TEST_OUTPUT_FILE}"
     echo "" >> "${TEST_OUTPUT_FILE}"
+    rm -f "${CURRENT_TEST_OUTPUT_FILE}"
     print_test_prefix "${TESTS_DIR}/${RUN_TEST}"
-    ("${TESTS_DIR}/${RUN_TEST}" && print_test_ok) || print_test_error_and_exit
+    ("${TESTS_DIR}/${RUN_TEST}" --gtest_brief=1 > "${CURRENT_TEST_OUTPUT_FILE}" 2>&1 && cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}" && print_test_ok) || { cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}"; print_test_error_and_exit; }
+    rm -f "${CURRENT_TEST_OUTPUT_FILE}"
     print_test_summary
 elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
     if [ ! -z "${TEST_PATTERN}" ]; then
@@ -500,7 +521,7 @@ elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
     export TEST_PATTERN=${TEST_PATTERN}
     export INTEG_RETRIES=${INTEG_RETRIES}
     # Run will run ASan or normal tests based on the environment variable SAN_BUILD
-    ./run.sh
+    ./run.sh || EXIT_CODE=1
     popd >/dev/null
 fi
 

@@ -145,6 +145,14 @@ static auto use_coordinator = config::BooleanBuilder(kUseCoordinator, false)
                                   .Hidden()  // can only be set during start-up
                                   .Build();
 
+// Not allowing replace delete is aligned with RediSearch
+constexpr absl::string_view kHNSWAllowReplaceDeleted{
+    "hnsw-allow-replace-deleted"};
+static auto hnsw_allow_replace_deleted =
+    config::BooleanBuilder(kHNSWAllowReplaceDeleted, false)  // default false
+        .Dev()
+        .Build();
+
 // Register an enumerator for the log level
 static const std::vector<std::string_view> kLogLevelNames = {
     VALKEYMODULE_LOGLEVEL_WARNING,
@@ -213,7 +221,7 @@ static config::Boolean prefer_consistent_results(kEnableConsistentResults,
 constexpr absl::string_view kSearchResultBackgroundCleanup{
     "search-result-background-cleanup"};
 static config::Boolean search_result_background_cleanup(
-    kSearchResultBackgroundCleanup, true);
+    kSearchResultBackgroundCleanup, false);
 
 /// Configure the weight for high priority tasks in thread pools (0-100)
 /// Low priority weight = 100 - high_priority_weight
@@ -243,6 +251,7 @@ static auto ft_info_timeout_ms =
         kDefaultFTInfoTimeoutMs,  // default timeout (5 seconds)
         kMinimumFTInfoTimeoutMs,  // min timeout (100ms)
         kMaximumFTInfoTimeoutMs)  // max timeout (5 minutes)
+        .Dev()                    // can only be set in debug mode
         .Build();
 
 /// Register the "--ft-info-rpc-timeout-ms" flag. Controls the timeout for
@@ -254,6 +263,7 @@ static auto ft_info_rpc_timeout_ms =
         kDefaultFTInfoRpcTimeoutMs,  // default timeout (2.5 seconds)
         kMinimumFTInfoRpcTimeoutMs,  // min timeout (100ms)
         kMaximumFTInfoRpcTimeoutMs)  // max timeout (5 minutes)
+        .Dev()                       // can only be set in debug mode
         .Build();
 
 /// Register the "--local-fanout-queue-wait-threshold" flag. Controls the queue
@@ -318,6 +328,19 @@ static auto max_term_expansions =
                           kMaximumMaxTermExpansions)  // max limit (100k)
         .Build();
 
+/// Register the "--tag-min-prefix-length" flag. Controls the minimum number
+/// of characters required before trailing '*' in TAG wildcard queries.
+/// The length excludes the '*' character itself.
+constexpr absl::string_view kTagMinPrefixLengthConfig{"tag-min-prefix-length"};
+constexpr uint32_t kDefaultTagMinPrefixLength{2};
+constexpr uint32_t kMinimumTagMinPrefixLength{0};
+static auto tag_min_prefix_length =
+    config::NumberBuilder(kTagMinPrefixLengthConfig,   // name
+                          kDefaultTagMinPrefixLength,  // default limit (2)
+                          kMinimumTagMinPrefixLength,  // min limit (0)
+                          UINT_MAX)                    // max limit
+        .Build();
+
 /// Register the "--prefiltering-threshold-ratio" flag
 /// Controls when pre-filtering is used vs inline-filtering for hybrid queries
 constexpr absl::string_view kPrefilteringThresholdRatioConfig{
@@ -350,6 +373,7 @@ static auto prefiltering_threshold_ratio_config =
           CHECK(absl::SimpleAtod(value, &parsed_value));
           prefiltering_threshold_ratio = parsed_value;
         })
+        .Dev()  // can only be set in debug mode
         .Build();
 
 /// Register the "search-result-buffer-multiplier" flag
@@ -398,6 +422,20 @@ constexpr absl::string_view kDrainMutationQueueOnLoadConfig{
 static auto drain_mutation_queue_on_load =
     config::BooleanBuilder(kDrainMutationQueueOnLoadConfig, true)
         .Dev()  // can only be set in debug mode
+        .Build();
+
+/// Register the "max-mutation-queue-size-on-restore" parameter
+/// Limit the mutation queue size during RDB restore to prevent memory spikes
+constexpr absl::string_view kMaxMutationQueueSizeOnRestoreConfig{
+    "max-mutation-queue-size-on-restore"};
+constexpr uint32_t kDefaultMaxMutationQueueSizeOnRestore{10000};
+constexpr uint32_t kMinimumMaxMutationQueueSizeOnRestore{1};
+constexpr uint32_t kMaximumMaxMutationQueueSizeOnRestore{1000000};
+static auto max_mutation_queue_size_on_restore =
+    config::NumberBuilder(kMaxMutationQueueSizeOnRestoreConfig,
+                          kDefaultMaxMutationQueueSizeOnRestore,
+                          kMinimumMaxMutationQueueSizeOnRestore,
+                          kMaximumMaxMutationQueueSizeOnRestore)
         .Build();
 
 /// Register the "drain-mutation-queue-on-save" flag
@@ -464,6 +502,7 @@ static auto rax_target_mutex_pool_size =
     config::NumberBuilder(
         kRaxTargetMutexPoolSizeConfig, kDefaultRaxTargetMutexPoolSize,
         kMinimumRaxTargetMutexPoolSize, kMaximumRaxTargetMutexPoolSize)
+        .Dev()  // can only be set in debug mode
         .Build();
 
 /// Register the "--max-nonvector-search-results-fetched" flag. Controls the
@@ -486,6 +525,20 @@ static auto max_nonvector_search_results_fetched =
         kDefaultMaxNonVectorSearchResultsFetched,  // default limit (100K)
         kMinimumMaxNonVectorSearchResultsFetched,  // min limit (0)
         kMaximumMaxNonVectorSearchResultsFetched)  // UINT32_MAX
+        .Build();
+
+/// Register the "--query-string-depth" flag. Controls the depth of the query
+/// string parsing from the FT.SEARCH cmd.
+constexpr absl::string_view kQueryStringDepthConfig{"query-string-depth"};
+constexpr uint32_t kDefaultQueryStringDepth{1000};
+constexpr uint32_t kMinimumQueryStringDepth{1};
+static auto query_string_depth =
+    config::NumberBuilder(kQueryStringDepthConfig,   // name
+                          kDefaultQueryStringDepth,  // default size
+                          kMinimumQueryStringDepth,  // min size
+                          UINT_MAX)                  // max size
+        .WithValidationCallback(CHECK_RANGE(kMinimumQueryStringDepth, UINT_MAX,
+                                            kQueryStringDepthConfig))
         .Build();
 
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
@@ -531,6 +584,14 @@ vmsdk::config::Enum& GetLogLevel() {
   return dynamic_cast<vmsdk::config::Enum&>(*log_level);
 }
 
+const config::Boolean& GetHNSWAllowReplaceDeleted() {
+  return dynamic_cast<const config::Boolean&>(*hnsw_allow_replace_deleted);
+}
+
+config::Boolean& GetHNSWAllowReplaceDeletedMutable() {
+  return dynamic_cast<config::Boolean&>(*hnsw_allow_replace_deleted);
+}
+
 absl::Status Reset() {
   VMSDK_RETURN_IF_ERROR(use_coordinator->SetValue(false));
   VMSDK_RETURN_IF_ERROR(rdb_load_skip_index->SetValue(false));
@@ -574,6 +635,10 @@ vmsdk::config::Number& GetMaxTermExpansions() {
   return dynamic_cast<vmsdk::config::Number&>(*max_term_expansions);
 }
 
+vmsdk::config::Number& GetTagMinPrefixLength() {
+  return dynamic_cast<vmsdk::config::Number&>(*tag_min_prefix_length);
+}
+
 const vmsdk::config::Boolean& GetDrainMutationQueueOnSave() {
   return dynamic_cast<const vmsdk::config::Boolean&>(
       *drain_mutation_queue_on_save);
@@ -593,6 +658,11 @@ vmsdk::config::Number& GetFanoutUniformityMinIndexSize() {
       *fanout_uniformity_min_index_size);
 }
 
+vmsdk::config::Number& GetMaxMutationQueueSizeOnRestore() {
+  return dynamic_cast<vmsdk::config::Number&>(
+      *max_mutation_queue_size_on_restore);
+}
+
 vmsdk::config::Number& GetAsyncFanoutThreshold() {
   return dynamic_cast<vmsdk::config::Number&>(*async_fanout_threshold);
 }
@@ -604,6 +674,73 @@ config::Number& GetRaxTargetMutexPoolSize() {
 vmsdk::config::Number& GetMaxNonVectorSearchResultsFetched() {
   return dynamic_cast<vmsdk::config::Number&>(
       *max_nonvector_search_results_fetched);
+}
+
+vmsdk::config::Number& GetQueryStringDepth() {
+  return dynamic_cast<vmsdk::config::Number&>(*query_string_depth);
+}
+
+/// Register the "--mutation-weight-vector" flag. Controls the weight multiplier
+/// for vector index types in mutation queue entries (scale: 100 = 1.0x)
+constexpr absl::string_view kMutationWeightVectorConfig{
+    "mutation-weight-vector"};
+constexpr uint32_t kDefaultMutationWeightVector{130};
+constexpr uint32_t kMinimumMutationWeight{0};
+constexpr uint32_t kMaximumMutationWeight{10000};
+static auto mutation_weight_vector =
+    config::NumberBuilder(kMutationWeightVectorConfig,
+                          kDefaultMutationWeightVector, kMinimumMutationWeight,
+                          kMaximumMutationWeight)
+        .Dev()
+        .Build();
+
+/// Register the "--mutation-weight-text" flag. Controls the weight multiplier
+/// for text index types in mutation queue entries (scale: 100 = 1.0x)
+constexpr absl::string_view kMutationWeightTextConfig{"mutation-weight-text"};
+constexpr uint32_t kDefaultMutationWeightText{550};
+static auto mutation_weight_text =
+    config::NumberBuilder(kMutationWeightTextConfig, kDefaultMutationWeightText,
+                          kMinimumMutationWeight, kMaximumMutationWeight)
+        .Dev()
+        .Build();
+
+/// Register the "--mutation-weight-numeric" flag. Controls the weight
+/// multiplier for numeric index types in mutation queue entries
+/// (scale: 100 = 1.0x)
+constexpr absl::string_view kMutationWeightNumericConfig{
+    "mutation-weight-numeric"};
+constexpr uint32_t kDefaultMutationWeightNumeric{430};
+static auto mutation_weight_numeric =
+    config::NumberBuilder(kMutationWeightNumericConfig,
+                          kDefaultMutationWeightNumeric, kMinimumMutationWeight,
+                          kMaximumMutationWeight)
+        .Dev()
+        .Build();
+
+/// Register the "--mutation-weight-tag" flag. Controls the weight multiplier
+/// for tag index types in mutation queue entries (scale: 100 = 1.0x)
+constexpr absl::string_view kMutationWeightTagConfig{"mutation-weight-tag"};
+constexpr uint32_t kDefaultMutationWeightTag{330};
+static auto mutation_weight_tag =
+    config::NumberBuilder(kMutationWeightTagConfig, kDefaultMutationWeightTag,
+                          kMinimumMutationWeight, kMaximumMutationWeight)
+        .Dev()
+        .Build();
+
+config::Number& GetMutationWeightVector() {
+  return dynamic_cast<config::Number&>(*mutation_weight_vector);
+}
+
+config::Number& GetMutationWeightText() {
+  return dynamic_cast<config::Number&>(*mutation_weight_text);
+}
+
+config::Number& GetMutationWeightNumeric() {
+  return dynamic_cast<config::Number&>(*mutation_weight_numeric);
+}
+
+config::Number& GetMutationWeightTag() {
+  return dynamic_cast<config::Number&>(*mutation_weight_tag);
 }
 
 }  // namespace options

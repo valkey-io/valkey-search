@@ -1839,8 +1839,9 @@ bool IndexSchema::InTrackedMutationRecords(
   if (ABSL_PREDICT_FALSE(itr == tracked_mutated_records_.end())) {
     return false;
   }
-  if (itr->second.attributes->find(identifier) ==
-      itr->second.attributes->end()) {
+  if (!itr->second.attributes.has_value() ||
+      itr->second.attributes->find(identifier) ==
+          itr->second.attributes->end()) {
     return false;
   }
   return true;

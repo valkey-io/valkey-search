@@ -1945,8 +1945,8 @@ void IndexSchema::MarkAsDestructing() {
   for (auto &[key, mutation] : tracked_mutated_records_) {
     for (auto &wq : mutation.waiting_queries) {
       auto &ctx = wq.ctx;
-      ctx->params->search_result.neighbors[wq.neighbor_index]
-          .validation_state = indexes::ValidationState::kFail;
+      ctx->params->search_result.neighbors[wq.neighbor_index].validation_state =
+          indexes::ValidationState::kFail;
       if (ctx->pending_count.fetch_sub(1, std::memory_order_acq_rel) == 1) {
         contexts_to_dispatch.push_back(ctx);
       }
@@ -2012,8 +2012,7 @@ IndexSchema::ConsumeTrackedMutatedAttribute(const Key &key, bool first_time) {
     if (ctx->params->cancellation_token->IsCancelled() || is_destructing_) {
       keep = false;
     } else {
-      auto *predicate =
-          ctx->params->filter_parse_results.root_predicate.get();
+      auto *predicate = ctx->params->filter_parse_results.root_predicate.get();
       if (predicate == nullptr) {
         keep = true;
       } else {

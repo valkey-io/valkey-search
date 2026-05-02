@@ -56,7 +56,7 @@ void ResolveContent(std::unique_ptr<SearchParameters> params) {
 
   // 4. Content fetch + filter via ProcessNeighborsForReply
   auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
-  const auto& attribute_data_type =
+  const auto &attribute_data_type =
       params->index_schema->GetAttributeDataType();
   size_t original_size = params->search_result.neighbors.size();
 
@@ -97,13 +97,12 @@ void DispatchValidatedQuery(std::shared_ptr<PendingValidationContext> ctx) {
     }
   }
   size_t original_size = neighbors.size();
-  neighbors.erase(
-      std::remove_if(neighbors.begin(), neighbors.end(),
-                     [](const indexes::Neighbor &n) {
-                       return n.validation_state ==
-                              indexes::ValidationState::kFail;
-                     }),
-      neighbors.end());
+  neighbors.erase(std::remove_if(neighbors.begin(), neighbors.end(),
+                                 [](const indexes::Neighbor &n) {
+                                   return n.validation_state ==
+                                          indexes::ValidationState::kFail;
+                                 }),
+                  neighbors.end());
   size_t removed = original_size - neighbors.size();
   if (params->search_result.total_count > removed) {
     params->search_result.total_count -= removed;

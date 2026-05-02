@@ -135,29 +135,45 @@ class PatriciaTree {
   // This iterator is used to iterate over all the values of a given prefix and
   // it's subtrees. In short, it will return all values that starts with a given
   // prefix.
+  // Iterates over all value-bearing nodes in the subtree rooted at the given
+  // node. Construction is O(1) — the DFS traversal is deferred until the
+  // first call to Done(), Next(), or Value().
   class PrefixSubTreeIterator {
    public:
-    PrefixSubTreeIterator(PatriciaNodeType *node) {
-      if (node == nullptr) {
-        return;
-      }
-      DfsHelper(node);
+    PrefixSubTreeIterator(PatriciaNodeType *node) : root_(node) {}
+
+    bool Done() const {
+      EnsureInitialized();
+      return values_.empty();
     }
 
-    bool Done() const { return values_.empty(); }
-
     void Next() {
+      EnsureInitialized();
       if (!values_.empty()) {
         values_.pop();
       }
     }
 
-    PatriciaNodeType *Value() const { return values_.top(); }
+    PatriciaNodeType *Value() const {
+      EnsureInitialized();
+      return values_.top();
+    }
 
    private:
-    std::stack<PatriciaNodeType *> values_;
+    PatriciaNodeType *root_;
+    mutable bool initialized_{false};
+    mutable std::stack<PatriciaNodeType *> values_;
 
-    void DfsHelper(PatriciaNodeType *node) {
+    void EnsureInitialized() const {
+      if (!initialized_) {
+        initialized_ = true;
+        if (root_ != nullptr) {
+          DfsHelper(root_);
+        }
+      }
+    }
+
+    void DfsHelper(PatriciaNodeType *node) const {
       if (node->value.has_value()) {
         values_.push(node);
       }

@@ -270,6 +270,22 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
         )
         assert(client.execute_command("FT._DEBUG PAUSEPOINT LIST") == [])
 
+        # The cancellation reply was returned to the client well before the
+        # reader-pool worker finishes its lambda — when the worker is released
+        # from the pausepoint above it still has to dispatch a ResolveContent
+        # continuation back to the main thread via vmsdk::RunByMain, which
+        # allocates an AnyInvocable and posts it to the event loop. Dropping
+        # the indexes here forces the worker's post-pausepoint work to run
+        # against a still-live schema, and the subsequent ping + sleep give
+        # main an event-loop iteration to drain the queued one-shot before
+        # the test framework tears the server down. Without this, the queued
+        # continuation (and the SearchParameters / HNSW index it pins alive)
+        # is reported as an LSan leak at server shutdown between tests.
+        hnsw_index.drop(client)
+        flat_index.drop(client)
+        client.ping()
+        time.sleep(0.5)
+
     def test_pausepoint_entries_fetcher(self):
         """
         Test timeout in entries fetcher loop (Issue #686 path 1).

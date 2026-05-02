@@ -43,6 +43,7 @@
 #include "src/indexes/vector_hnsw.h"
 #include "src/keyspace_event_manager.h"
 #include "src/metrics.h"
+#include "src/query/content_resolution.h"
 #include "src/query/search.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
@@ -1787,30 +1788,48 @@ vmsdk::BlockedClientCategory IndexSchema::GetBlockedCategoryFromProto() const {
   }
 }
 
+// Defined here so the destructor of std::unique_ptr<query::SearchParameters>
+// inside PendingValidationContext can be instantiated against the complete
+// SearchParameters type (search.h is included in this translation unit).
+namespace query {
+PendingValidationContext::PendingValidationContext() = default;
+PendingValidationContext::~PendingValidationContext() = default;
+}  // namespace query
+
 bool IndexSchema::PerformKeyContentionCheck(
-    const std::vector<indexes::Neighbor> &neighbors,
+    std::vector<indexes::Neighbor> &neighbors,
     std::unique_ptr<query::SearchParameters> &&params) {
   vmsdk::VerifyMainThread();
   const auto &dbkeyinfo_map = db_key_info_.Get();
-  for (const auto &neighbor : neighbors) {
-    auto db_itr = dbkeyinfo_map.find(neighbor.external_id);
-    if (db_itr == dbkeyinfo_map.end() ||
-        db_itr->second.mutation_sequence_number_ == neighbor.sequence_number) {
-      continue;
-    }
-    // Sequence number mismatch — check the mutation queue for this key.
+  std::shared_ptr<query::PendingValidationContext> ctx;
+  {
     absl::MutexLock lock(&mutated_records_mutex_);
-    auto itr = tracked_mutated_records_.find(neighbor.external_id);
-    if (itr != tracked_mutated_records_.end()) {
-      if (params->content_resolution_blocked_++ == 0) {
-        ++Metrics::GetStats().text_query_blocked_cnt;
+    for (size_t i = 0; i < neighbors.size(); ++i) {
+      auto &neighbor = neighbors[i];
+      auto db_itr = dbkeyinfo_map.find(neighbor.external_id);
+      if (db_itr == dbkeyinfo_map.end() ||
+          db_itr->second.mutation_sequence_number_ ==
+              neighbor.sequence_number) {
+        continue;
+      }
+      auto itr = tracked_mutated_records_.find(neighbor.external_id);
+      if (itr == tracked_mutated_records_.end()) {
+        continue;
+      }
+      if (!ctx) {
+        ctx = std::make_shared<query::PendingValidationContext>();
+        ctx->params = std::move(params);
+        if (ctx->params->content_resolution_blocked_++ == 0) {
+          ++Metrics::GetStats().text_query_blocked_cnt;
+        }
       }
       ++Metrics::GetStats().text_query_retry_cnt;
-      itr->second.waiting_queries.push_back(std::move(params));
-      return true;
+      neighbor.validation_state = indexes::ValidationState::kPending;
+      itr->second.waiting_queries.push_back(query::WaitingQuery{ctx, i});
+      ctx->pending_count.fetch_add(1, std::memory_order_relaxed);
     }
   }
-  return false;
+  return ctx != nullptr;
 }
 
 bool IndexSchema::InTrackedMutationRecords(
@@ -1820,8 +1839,9 @@ bool IndexSchema::InTrackedMutationRecords(
   if (ABSL_PREDICT_FALSE(itr == tracked_mutated_records_.end())) {
     return false;
   }
-  if (itr->second.attributes->find(identifier) ==
-      itr->second.attributes->end()) {
+  if (!itr->second.attributes.has_value() ||
+      itr->second.attributes->find(identifier) ==
+          itr->second.attributes->end()) {
     return false;
   }
   return true;
@@ -1918,13 +1938,18 @@ void IndexSchema::MarkAsDestructing() {
         << vmsdk::config::RedactIfNeeded(name_) << ": " << status.message();
   }
 
-  // Send error response to any waiting queries
+  // Mark every attached neighbor as kFail and collect contexts that
+  // become fully resolved (pending_count drops to zero) so we can
+  // respond outside the lock.
+  std::vector<std::shared_ptr<query::PendingValidationContext>>
+      contexts_to_dispatch;
   for (auto &[key, mutation] : tracked_mutated_records_) {
-    for (auto &params : mutation.waiting_queries) {
-      if (params) {
-        params->search_result.status =
-            GenerateIndexNotFoundError(db_num_, name_);
-        params->QueryCompleteMainThread(std::move(params));
+    for (auto &wq : mutation.waiting_queries) {
+      auto &ctx = wq.ctx;
+      ctx->params->search_result.neighbors[wq.neighbor_index].validation_state =
+          indexes::ValidationState::kFail;
+      if (ctx->pending_count.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+        contexts_to_dispatch.push_back(ctx);
       }
     }
   }
@@ -1932,11 +1957,19 @@ void IndexSchema::MarkAsDestructing() {
   backfill_job_.Get()->MarkScanAsDone();
   tracked_mutated_records_.clear();
   is_destructing_ = true;
+
+  // Complete each fully-resolved query with a not-found error.
+  for (auto &ctx : contexts_to_dispatch) {
+    ctx->params->search_result.status =
+        GenerateIndexNotFoundError(db_num_, name_);
+    auto params = std::move(ctx->params);
+    params->QueryCompleteMainThread(std::move(params));
+  }
 }
 
 std::optional<IndexSchema::MutatedAttributes>
 IndexSchema::ConsumeTrackedMutatedAttribute(const Key &key, bool first_time) {
-  std::vector<std::unique_ptr<query::SearchParameters>> queries_to_notify;
+  std::vector<query::WaitingQuery> queries_to_validate;
   {
     absl::MutexLock lock(&mutated_records_mutex_);
     auto itr = tracked_mutated_records_.find(key);
@@ -1949,9 +1982,9 @@ IndexSchema::ConsumeTrackedMutatedAttribute(const Key &key, bool first_time) {
     itr->second.consume_in_progress = true;
     // Delete this tracked document if no additional mutations were tracked
     if (!itr->second.attributes.has_value()) {
-      queries_to_notify = std::move(itr->second.waiting_queries);
+      queries_to_validate = std::move(itr->second.waiting_queries);
       tracked_mutated_records_.erase(itr);
-      // Will notify after releasing lock
+      // Will validate and notify after releasing lock
     } else {
       index_key_info_[key].mutation_sequence_number_ =
           itr->second.sequence_number;
@@ -1961,13 +1994,45 @@ IndexSchema::ConsumeTrackedMutatedAttribute(const Key &key, bool first_time) {
       return mutated_attributes;
     }
   }
-  // Reschedule waiting queries outside the lock via ResolveContent
-  for (auto &params : queries_to_notify) {
-    vmsdk::RunByMain(
-        [p = std::move(params)]() mutable {
-          query::ResolveContent(std::move(p));
-        },
-        /*force_async=*/true);
+  // The writer holds time_sliced_mutex_ in writer mode and has just applied
+  // all queued mutations for this key. Re-evaluate each attached query's
+  // predicate against the now-current per-key index. The thread that drives
+  // a context's pending_count to zero CAS-wins `dispatched` and schedules
+  // the final main-thread delivery exactly once.
+  const indexes::text::TextIndex *text_index =
+      GetTextIndexSchema()
+          ? GetTextIndexSchema()->GetPerKeyTextIndex(key, /*lock=*/true)
+          : nullptr;
+  if (!queries_to_validate.empty()) {
+    PAUSEPOINT("writer_validation_pre_eval");
+  }
+  for (auto &wq : queries_to_validate) {
+    auto &ctx = wq.ctx;
+    auto &neighbor = ctx->params->search_result.neighbors[wq.neighbor_index];
+    bool keep;
+    if (ctx->params->cancellation_token->IsCancelled() || is_destructing_) {
+      keep = false;
+    } else {
+      auto *predicate = ctx->params->filter_parse_results.root_predicate.get();
+      if (predicate == nullptr) {
+        keep = true;
+      } else {
+        indexes::PrefilterEvaluator evaluator(
+            text_index, ctx->params->filter_parse_results.query_operations);
+        keep = evaluator.Evaluate(*predicate, neighbor.external_id);
+      }
+    }
+    neighbor.validation_state = keep ? indexes::ValidationState::kPass
+                                     : indexes::ValidationState::kFail;
+    if (ctx->pending_count.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+      PAUSEPOINT("writer_pre_dispatch_main_thread");
+      auto ctx_copy = ctx;
+      vmsdk::RunByMain(
+          [ctx_copy = std::move(ctx_copy)]() mutable {
+            query::DispatchValidatedQuery(std::move(ctx_copy));
+          },
+          /*force_async=*/true);
+    }
   }
   return std::nullopt;
 }

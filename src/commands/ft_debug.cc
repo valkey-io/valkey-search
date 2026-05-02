@@ -9,6 +9,7 @@
 #include <absl/strings/ascii.h>
 
 #include "module_config.h"
+#include "src/commands/ft_debug_indexstats.h"
 #include "src/coordinator/metadata_manager.h"
 #include "src/index_schema.h"
 #include "src/schema_manager.h"
@@ -326,6 +327,8 @@ absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
       {"FT._DEBUG PAUSEPOINT [ SET | RESET | TEST | LIST] <pausepoint>",
        "control pause points"},
       {"FT._DEBUG TEXTINFO <index> ...", "show info about schema-level text"},
+      {"FT._DEBUG INDEXSTATS <index> [<field> ...]",
+       "show extended statistics for an index and its attributes"},
       {"FT._DEBUG STRINGPOOLSTATS", "Show InternStringPool Stats"},
       {"FT_DEBUG SHOW_METADATA",
        "list internal metadata manager table namespace"},
@@ -380,6 +383,8 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     return StringPoolStats(ctx, itr);
   } else if (keyword == "TEXTINFO") {
     return IndexSchema::TextInfoCmd(ctx, itr);
+  } else if (keyword == "INDEXSTATS") {
+    return IndexStatsCmd(ctx, itr);
   } else if (keyword == "SHOW_METADATA") {
     return valkey_search::coordinator::MetadataManager::Instance().ShowMetadata(
         ctx, itr);

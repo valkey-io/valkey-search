@@ -122,6 +122,11 @@ uint32_t Numeric::GetMutationWeight() const {
   return options::GetMutationWeightNumeric().GetValue();
 }
 
+size_t Numeric::GetSegmentTreeNodeCount() const {
+  absl::MutexLock lock(&index_mutex_);
+  return index_->GetSegmentTreeNodeCount();
+}
+
 const double* Numeric::GetValue(const InternedStringPtr& key) const {
   // Note that the Numeric index is not mutated while the time sliced mutex is
   // in a read mode and therefor it is safe to skip lock acquiring.

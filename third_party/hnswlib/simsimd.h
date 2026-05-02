@@ -3,8 +3,6 @@
 
 #include <cstddef>
 
-#include "third_party/simsimd/c/lib.c"
-
 #include "third_party/simsimd/include/simsimd/simsimd.h"
 #include "third_party/simsimd/include/simsimd/types.h"
 

@@ -50,6 +50,56 @@ namespace valkey_search {
 
 using vmsdk::config::ModuleConfigManager;
 
+// Forward-declare simsimd's runtime CPU capability probes. Implementations are
+// provided by third_party/simsimd/c/lib.c, linked in via hnswlib_vmsdk. We
+// avoid including simsimd's headers here because they pull in lib.c (which
+// would multi-define the dispatcher symbols if included from a second TU).
+//
+// macOS builds set SIMSIMD_NATIVE_BF16=0 in lib.c, so simsimd_bf16_t is
+// `unsigned short` and the serial path performs explicit conversion — safe
+// regardless of CPU. The check below is therefore unnecessary on Apple and
+// is compiled out to avoid blocking older Intel Macs without AVX2.
+#if !defined(__APPLE__)
+extern "C" {
+int simsimd_uses_haswell(void);
+int simsimd_uses_genoa(void);
+int simsimd_uses_sapphire(void);
+int simsimd_uses_neon_bf16(void);
+int simsimd_uses_sve_bf16(void);
+}
+#endif
+
+// Verify the running CPU exposes a SIMD-targeted BF16 path. On non-Apple
+// builds lib.c uses SIMSIMD_NATIVE_BF16=1, which retypes simsimd_bf16_t to
+// _Float16 on x86. The serial fallback then misinterprets BF16 bits as IEEE
+// FP16; only the SIMD variants (*_haswell / *_genoa / *_sapphire on x86,
+// neon_bf16 / sve_bf16 on ARM) load raw 16-bit words and convert via SIMD
+// shifts, which is bit-correct. If the CPU is missing all of those, the
+// dispatcher would land on the broken serial path — fail the load instead.
+absl::Status CheckSimsimdCpuCapabilities(ValkeyModuleCtx *ctx) {
+#if defined(__APPLE__)
+  (void)ctx;
+  return absl::OkStatus();
+#else
+  const bool has_simd_safe_bf16_path =
+      simsimd_uses_haswell() || simsimd_uses_genoa() ||
+      simsimd_uses_sapphire() || simsimd_uses_neon_bf16() ||
+      simsimd_uses_sve_bf16();
+  if (!has_simd_safe_bf16_path) {
+    VMSDK_LOG(WARNING, ctx)
+        << "valkey-search: this CPU lacks a SIMD-targeted BF16 path "
+           "(needs Haswell/Genoa/Sapphire on x86, or NEON-BF16/SVE-BF16 "
+           "on ARM). simsimd's serial BF16 fallback is unsafe under the "
+           "current build (SIMSIMD_NATIVE_BF16=1 in "
+           "third_party/simsimd/c/lib.c). Refusing to load. Either run "
+           "on a newer CPU or rebuild with SIMSIMD_NATIVE_BF16=0.";
+    return absl::FailedPreconditionError(
+        "CPU does not support a SIMD-safe BF16 path required by simsimd");
+  }
+  return absl::OkStatus();
+#endif
+}
+
 static absl::NoDestructor<std::unique_ptr<ValkeySearch>> valkey_search_instance;
 
 ValkeySearch &ValkeySearch::Instance() { return **valkey_search_instance; };
@@ -1232,6 +1282,11 @@ void ValkeySearch::ResumeWriterThreadPool(ValkeyModuleCtx *ctx,
 absl::Status ValkeySearch::OnLoad(ValkeyModuleCtx *ctx,
                                   ValkeyModuleString **argv, int argc) {
   ctx_ = ValkeyModule_GetDetachedThreadSafeContext(ctx);
+
+  // Bail out early on CPUs that would route BF16 distance through the broken
+  // serial fallback. Done before any registration so a refusal leaves no
+  // partial state behind.
+  VMSDK_RETURN_IF_ERROR(CheckSimsimdCpuCapabilities(ctx));
 
   // Register a single module type for Aux load/save callbacks.
   VMSDK_RETURN_IF_ERROR(RegisterModuleType(ctx));

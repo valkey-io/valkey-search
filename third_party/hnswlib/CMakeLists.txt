@@ -13,10 +13,11 @@ valkey_search_create_proto_library("third_party/hnswlib/index.proto"
 add_library(hnswlib_vmsdk INTERFACE ${SRCS_HNSWLIB_VMSDK})
 target_include_directories(hnswlib_vmsdk INTERFACE ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(hnswlib_vmsdk INTERFACE iostream)
-target_link_libraries(hnswlib_vmsdk INTERFACE simsimd)
+target_link_libraries(hnswlib_vmsdk INTERFACE simsimd simsimd_c)
 target_link_libraries(hnswlib_vmsdk INTERFACE vmsdklib)
 target_compile_definitions(hnswlib_vmsdk
-                           INTERFACE VMSDK_ENABLE_MEMORY_ALLOCATION_OVERRIDES)
+                           INTERFACE VMSDK_ENABLE_MEMORY_ALLOCATION_OVERRIDES
+                                     USE_SIMSIMD)
 target_link_libraries(hnswlib_vmsdk INTERFACE index_cc_proto)
 
 set(SRCS_SIMSIMD ${CMAKE_CURRENT_LIST_DIR}/simsimd.h)

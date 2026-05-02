@@ -20,6 +20,7 @@
 #include "absl/strings/string_view.h"
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"
+#include "src/indexes/fp16.h"
 #include "src/utils/lru.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -30,7 +31,8 @@ namespace valkey_search {
 
 constexpr size_t kLRUCapacity = 100;
 char* ExternalizeCB(void* cb_data, size_t* len);
-std::vector<char> DenormalizeVector(absl::string_view record, size_t type_size,
+std::vector<char> DenormalizeVector(absl::string_view record,
+                                    data_model::VectorDataType data_type,
                                     float magnitude);
 
 class VectorExternalizer {
@@ -44,7 +46,9 @@ class VectorExternalizer {
                    absl::string_view attribute_identifier,
                    data_model::AttributeDataType attribute_data_type,
                    const InternedStringPtr& vector,
-                   std::optional<float> magnitude);
+                   std::optional<float> magnitude,
+                   data_model::VectorDataType vector_data_type =
+                       data_model::VECTOR_DATA_TYPE_FLOAT32);
   void Remove(const InternedStringPtr& key,
               absl::string_view attribute_identifier,
               data_model::AttributeDataType attribute_data_type);
@@ -75,6 +79,8 @@ class VectorExternalizer {
   struct VectorExternalizerEntry {
     InternedStringPtr vector;
     std::optional<float> magnitude;
+    data_model::VectorDataType vector_data_type{
+        data_model::VECTOR_DATA_TYPE_FLOAT32};
     // We cache the normalized vector to ensure that the generated normalized
     // vector string remains alive until the engine deep copy it.
     std::unique_ptr<LRUCacheEntry> cache_normalized_;
@@ -116,7 +122,7 @@ class VectorExternalizer {
 template <typename T>
 void CopyAndDenormalizeEmbedding(T* dst, T* src, size_t size, float magnitude) {
   for (size_t i = 0; i < size; i++) {
-    dst[i] = src[i] * magnitude;
+    dst[i] = static_cast<T>(static_cast<float>(src[i]) * magnitude);
   }
 }
 

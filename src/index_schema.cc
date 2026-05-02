@@ -172,6 +172,36 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
                   attribute.identifier(), index.get());
               return index;
             }
+            case data_model::VECTOR_DATA_TYPE_FLOAT16: {
+              VMSDK_ASSIGN_OR_RETURN(
+                  auto index,
+                  (iter.has_value())
+                      ? indexes::VectorHNSW<float16>::LoadFromRDB(
+                            ctx, &index_schema->GetAttributeDataType(),
+                            index.vector_index(), attribute.identifier(),
+                            std::move(*iter))
+                      : indexes::VectorHNSW<float16>::Create(
+                            index.vector_index(), attribute.identifier(),
+                            index_schema->GetAttributeDataType().ToProto()));
+              index_schema->SubscribeToVectorExternalizer(
+                  attribute.identifier(), index.get());
+              return index;
+            }
+            case data_model::VECTOR_DATA_TYPE_BFLOAT16: {
+              VMSDK_ASSIGN_OR_RETURN(
+                  auto index,
+                  (iter.has_value())
+                      ? indexes::VectorHNSW<bfloat16>::LoadFromRDB(
+                            ctx, &index_schema->GetAttributeDataType(),
+                            index.vector_index(), attribute.identifier(),
+                            std::move(*iter))
+                      : indexes::VectorHNSW<bfloat16>::Create(
+                            index.vector_index(), attribute.identifier(),
+                            index_schema->GetAttributeDataType().ToProto()));
+              index_schema->SubscribeToVectorExternalizer(
+                  attribute.identifier(), index.get());
+              return index;
+            }
             default: {
               return absl::InvalidArgumentError(
                   "Unsupported vector data type.");
@@ -191,6 +221,36 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
                             index.vector_index(), attribute.identifier(),
                             std::move(*iter))
                       : indexes::VectorFlat<float>::Create(
+                            index.vector_index(), attribute.identifier(),
+                            index_schema->GetAttributeDataType().ToProto()));
+              index_schema->SubscribeToVectorExternalizer(
+                  attribute.identifier(), index.get());
+              return index;
+            }
+            case data_model::VECTOR_DATA_TYPE_FLOAT16: {
+              VMSDK_ASSIGN_OR_RETURN(
+                  auto index,
+                  (iter.has_value())
+                      ? indexes::VectorFlat<float16>::LoadFromRDB(
+                            ctx, &index_schema->GetAttributeDataType(),
+                            index.vector_index(), attribute.identifier(),
+                            std::move(*iter))
+                      : indexes::VectorFlat<float16>::Create(
+                            index.vector_index(), attribute.identifier(),
+                            index_schema->GetAttributeDataType().ToProto()));
+              index_schema->SubscribeToVectorExternalizer(
+                  attribute.identifier(), index.get());
+              return index;
+            }
+            case data_model::VECTOR_DATA_TYPE_BFLOAT16: {
+              VMSDK_ASSIGN_OR_RETURN(
+                  auto index,
+                  (iter.has_value())
+                      ? indexes::VectorFlat<bfloat16>::LoadFromRDB(
+                            ctx, &index_schema->GetAttributeDataType(),
+                            index.vector_index(), attribute.identifier(),
+                            std::move(*iter))
+                      : indexes::VectorFlat<bfloat16>::Create(
                             index.vector_index(), attribute.identifier(),
                             index_schema->GetAttributeDataType().ToProto()));
               index_schema->SubscribeToVectorExternalizer(
@@ -1996,7 +2056,7 @@ void IndexSchema::VectorExternalizer(const Key &key,
     if (interned_vector) {
       VectorExternalizer::Instance().Externalize(
           key, attribute_identifier, attribute_data_type_->ToProto(),
-          interned_vector, magnitude);
+          interned_vector, magnitude, it->second->GetVectorDataType());
     }
     return;
   }

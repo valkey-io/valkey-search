@@ -73,15 +73,17 @@ class BaseCompatibilityTest:
         self.client.execute_command("FLUSHALL SYNC")
         time.sleep(1)
 
-    def setup_data(self, data_set_name, key_type):
+    def setup_data(self, data_set_name, key_type, vector_data_type="FLOAT32"):
         self.data_set_name = data_set_name
         self.key_type = key_type
-        load_data(self.client, data_set_name, key_type)
+        self.vector_data_type = vector_data_type
+        load_data(self.client, data_set_name, key_type, vector_data_type=vector_data_type)
 
     def execute_command(self, cmd):
         answer = {"cmd": cmd,
                   "key_type": self.key_type,
                   "data_set_name": self.data_set_name,
+                  "vector_data_type": getattr(self, "vector_data_type", "FLOAT32"),
                   "testname": os.environ.get('PYTEST_CURRENT_TEST').split(':')[-1].split(' ')[0],
                   "traceback": "".join(traceback.format_stack())}
         try:
@@ -103,6 +105,7 @@ class BaseCompatibilityTest:
         cmd = orig_cmd[0].split() if len(orig_cmd) == 1 else [*orig_cmd]
         self.execute_command(cmd)
 
+@pytest.mark.parametrize("vector_data_type", ["FLOAT32", "FLOAT16", "BFLOAT16"])
 @pytest.mark.parametrize("dialect", [2])
 @pytest.mark.parametrize("key_type", ["json", "hash"])
 class TestAggregateCompatibility(BaseCompatibilityTest):
@@ -120,11 +123,30 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                 did_one = True
             else:
                 new_cmd += [c]
+        # Pack the query BLOB matching the index's data type so RediSearch
+        # accepts it. The compatibility consumer (`compatibility_test.py`) replays
+        # this same cmd verbatim against a Valkey-search index of the same type.
+        vdt = getattr(self, "vector_data_type", "FLOAT32")
+        if vdt == "FLOAT16":
+            blob = struct.pack(f"<{VECTOR_DIM}e", *query_vector)
+        elif vdt == "BFLOAT16":
+            # FP32 -> BF16 with round-to-nearest, ties-to-even. Mirrors the
+            # C++ bfloat16(float) constructor and indexes.bfloat16_to_bytes.
+            fp32 = struct.pack(f"<{VECTOR_DIM}f", *query_vector)
+            buf = bytearray()
+            for i in range(VECTOR_DIM):
+                u = int.from_bytes(fp32[i * 4 : i * 4 + 4], "little")
+                rounding_bias = 0x7FFF + ((u >> 16) & 1)
+                u = (u + rounding_bias) & 0xFFFFFFFF
+                buf += u.to_bytes(4, "little")[2:4]
+            blob = bytes(buf)
+        else:
+            blob = struct.pack(f"<{VECTOR_DIM}f", *query_vector)
         new_cmd += [
             "PARAMS",
             "2",
             "BLOB",
-            struct.pack(f"<{VECTOR_DIM}f", *query_vector),
+            blob,
             "DIALECT",
             str(dialect),
         ]
@@ -160,20 +182,20 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.check(dialect, "ft.search", f"{key_type}_idx1", "@n2:[-inf inf]")
         self.check(dialect, "ft.search", f"{key_type}_idx1", "-@n2:[-inf inf]")
 
-    def test_search_reverse(self, key_type, dialect):
-        self.setup_data("reverse vector numbers", key_type)
+    def test_search_reverse(self, key_type, dialect, vector_data_type):
+        self.setup_data("reverse vector numbers", key_type, vector_data_type=vector_data_type)
         self.checkall(dialect, f"ft.search {key_type}_idx1 *")
         self.checkall(dialect, f"ft.search {key_type}_idx1 * limit 0 5")
 
-    def test_search(self, key_type, dialect):
-        self.setup_data("sortable numbers", key_type)
+    def test_search(self, key_type, dialect, vector_data_type):
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
         self.checkall(dialect, f"ft.search {key_type}_idx1 *")
         self.checkall(dialect, f"ft.search {key_type}_idx1 * limit 0 5")
     
     @pytest.mark.parametrize("algo", ["flat", "hnsw"])
     @pytest.mark.parametrize("metric", ["l2", "ip", "cosine"])
-    def test_vector_distance(self, key_type, dialect, algo, metric):
-        self.setup_data(f"vector data {metric} {algo}", key_type)
+    def test_vector_distance(self, key_type, dialect, algo, metric, vector_data_type):
+        self.setup_data(f"vector data {metric} {algo}", key_type, vector_data_type=vector_data_type)
         vector_points = [-.75, .75]
         for x in vector_points:
             for y in vector_points:
@@ -181,8 +203,8 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                     self.checkvec(dialect, f"ft.aggregate {key_type}_idx1 * load 1 __key", query_vector=[x, y, z])
                     self.checkvec(dialect, f"ft.aggregate {key_type}_idx1 * load 2 __v1_score __key", query_vector=[x, y, z])
                     self.checkvec(dialect, f"ft.search {key_type}_idx1 *", query_vector=[x, y, z])
-    def test_aggregate_sortby(self, key_type, dialect):
-        self.setup_data("sortable numbers", key_type)
+    def test_aggregate_sortby(self, key_type, dialect, vector_data_type):
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
         self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 2 @__key @n2 sortby 1 @n2")
         self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 sortby 1 @n2")
         self.check(dialect, 
@@ -201,8 +223,8 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 sortby 2 @__v1_score asc"
         )
 
-    def test_aggregate_groupby(self, key_type, dialect):
-        self.setup_data("sortable numbers", key_type)
+    def test_aggregate_groupby(self, key_type, dialect, vector_data_type):
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
         self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @n1")
         self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1")
         self.check(dialect, 
@@ -263,26 +285,26 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce max 1 @n1 as nmax"
         )
         self.check(dialect, f'ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce max 1 @n2 as nmax')
-    def test_aggregate_limit(self, key_type, dialect):
-        self.setup_data("sortable numbers", key_type)
+    def test_aggregate_limit(self, key_type, dialect, vector_data_type):
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
         self.check(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2")
         self.check(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key asc limit 1 4 ")
         self.check(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key desc limit 1 4")
 
-    def test_aggregate_short_limit(self, key_type, dialect):
-        self.setup_data("sortable numbers", key_type)
+    def test_aggregate_short_limit(self, key_type, dialect, vector_data_type):
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
         self.checkvec(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 limit 0 5")
         self.check(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key desc")
         self.check(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key desc limit 0 5")
         self.checkvec(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key asc limit 1 4", knn=4)
 
-    def test_aggregate_load(self, key_type, dialect):
-        self.setup_data("sortable numbers", key_type)
+    def test_aggregate_load(self, key_type, dialect, vector_data_type):
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
         self.checkvec(dialect, f"ft.aggregate {key_type}_idx1  *")
         self.checkvec(dialect, f"ft.aggregate {key_type}_idx1  * load *")
 
-    def test_aggregate_numeric_dyadic_operators(self, key_type, dialect):
-        self.setup_data("hard numbers", key_type)
+    def test_aggregate_numeric_dyadic_operators(self, key_type, dialect, vector_data_type):
+        self.setup_data("hard numbers", key_type, vector_data_type=vector_data_type)
         dyadic = ["+", "-", "*", "/", "^"]
         relops = ["<", "<=", "==", "!=", ">=", ">"]
         logops = ["||", "&&"] if dialect == 2 else []
@@ -290,8 +312,8 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             self.check(dialect, 
                 f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 apply @n1{op}@n2 as nn"
             )
-    def test_aggregate_numeric_dyadic_operators_sortable_numbers(self, key_type, dialect):
-        self.setup_data("sortable numbers", key_type)
+    def test_aggregate_numeric_dyadic_operators_sortable_numbers(self, key_type, dialect, vector_data_type):
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
         dyadic = ["+", "-", "*", "/", "^"]
         relops = ["<", "<=", "==", "!=", ">=", ">"]
         logops = ["||", "&&"] if dialect == 2 else []
@@ -300,8 +322,8 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                 f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 apply @n1{op}@n2 as nn"
             )
 
-    def test_aggregate_numeric_triadic_operators(self, key_type, dialect):
-        self.setup_data("hard numbers", key_type)
+    def test_aggregate_numeric_triadic_operators(self, key_type, dialect, vector_data_type):
+        self.setup_data("hard numbers", key_type, vector_data_type=vector_data_type)
         dyadic = ["+", "-", "*", "/", "^"]
         relops = ["<", "<=", "==", "!=", ">=", ">"]
         logops = ["||", "&&"] if dialect == 2 else []
@@ -311,8 +333,8 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                     f"ft.aggregate {key_type}_idx1  * load 4 @__key @n1 @n2 @n3 apply @n1{op1}@n2{op2}@n3 as nn apply (@n1{op1}@n2) as nn1"
                 )
 
-    def test_aggregate_numeric_functions(self, key_type, dialect):
-        self.setup_data("hard numbers", key_type)
+    def test_aggregate_numeric_functions(self, key_type, dialect, vector_data_type):
+        self.setup_data("hard numbers", key_type, vector_data_type=vector_data_type)
         function = ["log", "abs", "ceil", "floor", "log2", "exp", "sqrt"]
         for f in function:
             self.check(dialect, 
@@ -320,8 +342,8 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             )
 
     @pytest.mark.parametrize("dataset", ["hard numbers", "hard strings"])
-    def test_aggregate_string_apply_functions(self, key_type, dialect, dataset):
-        self.setup_data(dataset, key_type)
+    def test_aggregate_string_apply_functions(self, key_type, dialect, dataset, vector_data_type):
+        self.setup_data(dataset, key_type, vector_data_type=vector_data_type)
 
         # String apply function "contains"
         self.check(dialect, 
@@ -417,8 +439,8 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         )
 
     @pytest.mark.parametrize("dataset", ["hard numbers", "hard strings"])
-    def test_aggregate_substr(self, key_type, dialect, dataset):
-        self.setup_data(dataset, key_type)
+    def test_aggregate_substr(self, key_type, dialect, dataset, vector_data_type):
+        self.setup_data(dataset, key_type, vector_data_type=vector_data_type)
         for offset in [0, 1, 2, 100, -1, -2, -3, -1000]:
             for len in [0, 1, 2, 100, -1, -2, -3, -1000]:
                 self.check(dialect, 
@@ -435,8 +457,8 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                     "apply_result",
         )
 
-    def test_aggregate_dyadic_ops(self, key_type, dialect):
-        self.setup_data("hard numbers", key_type)
+    def test_aggregate_dyadic_ops(self, key_type, dialect, vector_data_type):
+        self.setup_data("hard numbers", key_type, vector_data_type=vector_data_type)
         values = ["-inf", "-1.5", "-1", "-0.5", "0", "0.5", "1.0", "+inf"]
         dyadic = ["+", "-", "*", "/", "^"]
         relops = ["<", "<=", "==", "!=", ">=", ">"]
@@ -458,8 +480,8 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                         "nn",
                 )
 
-    def test_search_sortby(self, key_type, dialect):
-        self.setup_data("sortable numbers", key_type)
+    def test_search_sortby(self, key_type, dialect, vector_data_type):
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
 
         for sort_key in ["n1", "n2"]:
             for direction in ["ASC", "DESC", ""]:

@@ -383,12 +383,18 @@ def mark_as_failed(testname):
 
 def do_answer(client, expected, data_set):
     global correct_answers, failed_tests, passed_tests
-    if (expected['data_set_name'], expected['key_type'], expected.get('schema_type')) != data_set:
-        print("Loading data set:", expected['data_set_name'], "key type:", expected['key_type'])
+    next_data_set = (expected['data_set_name'], expected['key_type'],
+                     expected.get('schema_type'),
+                     expected.get('vector_data_type', 'FLOAT32'))
+    if next_data_set != data_set:
+        print("Loading data set:", expected['data_set_name'], "key type:", expected['key_type'],
+              "vector_data_type:", expected.get('vector_data_type', 'FLOAT32'))
         client.execute_command("FLUSHALL SYNC")
-        load_data(client, expected['data_set_name'], expected['key_type'], schema_type=expected.get('schema_type', 'default'))
+        load_data(client, expected['data_set_name'], expected['key_type'],
+                  schema_type=expected.get('schema_type', 'default'),
+                  vector_data_type=expected.get('vector_data_type', 'FLOAT32'))
         waiters.wait_for_true(lambda: IndexingTestHelper.is_indexing_complete_on_node(client, f"{expected['key_type']}_idx1"))
-        data_set = (expected['data_set_name'], expected['key_type'], expected.get("schema_type"))
+        data_set = next_data_set
 
     # for the excluded queries with known difference
     # just run in valkey to make sure they do not crash
@@ -570,6 +576,11 @@ class TestAnswersCME(ValkeySearchClusterTestCase):
 
         data_set = None
         cluster_client = self.new_cluster_client()
+
+        # Cluster mode does not yet thread vector_data_type through the
+        # data-loading path, so restrict the cluster compatibility run to FP32
+        # entries. FP16 single-node coverage is exercised by TestAnswersCMD.
+        answers = [a for a in answers if a.get("vector_data_type", "FLOAT32") == "FLOAT32"]
 
         for expected in answers:
             data_set = do_answer_cluster(

@@ -21,6 +21,8 @@
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "src/attribute_data_type.h"
+#include "src/indexes/bfloat16.h"
+#include "src/indexes/fp16.h"
 #include "src/indexes/vector_base.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/cancel.h"
@@ -46,6 +48,17 @@ class VectorFlat : public VectorBase {
       SupplementalContentChunkIter&& iter) ABSL_NO_THREAD_SAFETY_ANALYSIS;
   ~VectorFlat() override = default;
   size_t GetDataTypeSize() const override { return sizeof(T); }
+  data_model::VectorDataType GetVectorDataType() const override {
+    if constexpr (std::is_same_v<T, float>) {
+      return data_model::VECTOR_DATA_TYPE_FLOAT32;
+    } else if constexpr (std::is_same_v<T, float16>) {
+      return data_model::VECTOR_DATA_TYPE_FLOAT16;
+    } else if constexpr (std::is_same_v<T, bfloat16>) {
+      return data_model::VECTOR_DATA_TYPE_BFLOAT16;
+    } else {
+      static_assert(sizeof(T) == 0, "unsupported vector storage type");
+    }
+  }
 
   const hnswlib::SpaceInterface<float>* GetSpace() const {
     return space_.get();
@@ -95,9 +108,9 @@ class VectorFlat : public VectorBase {
   VectorFlat(int dimensions, data_model::DistanceMetric distance_metric,
              uint32_t block_size, absl::string_view attribute_identifier,
              data_model::AttributeDataType attribute_data_type);
-  std::unique_ptr<hnswlib::BruteforceSearch<T>> algo_
+  std::unique_ptr<hnswlib::BruteforceSearch<float>> algo_
       ABSL_GUARDED_BY(resize_mutex_);
-  std::unique_ptr<hnswlib::SpaceInterface<T>> space_;
+  std::unique_ptr<hnswlib::SpaceInterface<float>> space_;
   uint32_t block_size_;
   mutable absl::Mutex resize_mutex_;
   mutable absl::Mutex tracked_vectors_mutex_;

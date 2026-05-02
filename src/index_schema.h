@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -373,6 +374,13 @@ class IndexSchema : public KeyspaceEventSubscription,
   const absl::flat_hash_map<std::string, Attribute> &GetAttributes() const {
     return attributes_;
   }
+
+  // Returns attributes sorted by alias (map key) for deterministic ordering.
+  // Use this instead of iterating attributes_ directly in any serialization
+  // path (RDB, FT.INFO, protobuf).
+  std::vector<
+      std::reference_wrapper<const std::pair<const std::string, Attribute>>>
+  GetSortedAttributes() const;
 
  protected:
   IndexSchema(ValkeyModuleCtx *ctx,

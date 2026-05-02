@@ -319,102 +319,60 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                 f"ft.aggregate {key_type}_idx1  * load 2 @__key @n1 apply {f}(@n1) as nn"
             )
 
+    # Each case is (load_field, apply_expr).
+    #
+    # The TAG-field entries (@t1/@t2/@t3) are the original coverage of
+    # contains() over string attributes and string literals.
+    #
+    # The NUMERIC-field entries (@n1) probe how each engine handles a
+    # numeric attribute when a string function is applied to it. Observed
+    # Redis Stack behavior:
+    #   - strlen/startswith/contains/substr on a numeric -> the APPLY
+    #     pipeline raises an error. The compat framework auto-skips the
+    #     comparison whenever Redis Stack raised, so these cases act as
+    #     no-crash probes against valkey's coercion path -- valkey itself
+    #     coerces the numeric to a string (FormatDouble, %.11g) and
+    #     produces a value. The only assertion here is that valkey does
+    #     not crash on the same input that errors in Redis Stack.
+    #   - lower/upper on a numeric -> Redis Stack returns nil (no error).
+    #     valkey returns the formatted string. This is a *real*
+    #     divergence; lower(@n1) / upper(@n1) are intentionally NOT
+    #     included in the table because they would produce permanent
+    #     compat failures rather than informative coverage.
+    AGGREGATE_STRING_APPLY_CASES = [
+        ("t3", 'contains(@t3, "all")'),
+        ("t3", 'contains(@t3, "value")'),
+        ("t2", 'contains(@t2, "two")'),
+        ("t1", 'contains(@t1, "one")'),
+        ("t1", 'contains(@t1, "")'),
+        ("t1", 'contains("", "one")'),
+        ("t3", 'contains("", "")'),
+        # String functions on a NUMERIC attribute (no-crash probe; see comment).
+        ("n1", 'strlen(@n1)'),
+        ("n1", 'startswith(@n1, "1")'),
+        ("n1", 'startswith(@n1, "-")'),
+        ("n1", 'contains(@n1, "0")'),
+        ("n1", 'substr(@n1, 0, 1)'),
+        ("n1", 'substr(@n1, 0, 3)'),
+    ]
+
     @pytest.mark.parametrize("dataset", ["hard numbers", "hard strings"])
     def test_aggregate_string_apply_functions(self, key_type, dialect, dataset):
         self.setup_data(dataset, key_type)
-
-        # String apply function "contains"
-        self.check(dialect, 
-            "ft.aggregate",
-            f"{key_type}_idx1",
-            "*",
-            "load",
-            "2",
-            "__key",
-            "t3",
-            "apply",
-            'contains(@t3, "all")',
-            "as",
-            "apply_result",
-        )
-        self.check(dialect, 
-            "ft.aggregate",
-            f"{key_type}_idx1",
-            "*",
-            "load",
-            "2",
-            "__key",
-            "t3",
-            "apply",
-            'contains(@t3, "value")',
-            "as",
-            "apply_result",
-        )
-        self.check(dialect, 
-            "ft.aggregate",
-            f"{key_type}_idx1",
-            "*",
-            "load",
-            "2",
-            "t2",
-            "__key",
-            "apply",
-            'contains(@t2, "two")',
-            "as",
-            "apply_result",
-        )
-        self.check(dialect, 
-            "ft.aggregate",
-            f"{key_type}_idx1",
-            "*",
-            "load",
-            "2",
-            "t1",
-            "__key",
-            "apply",
-            'contains(@t1, "one")',
-            "as",
-            "apply_result",
-        )
-        self.check(dialect, 
-            "ft.aggregate",
-            f"{key_type}_idx1",
-            "*",
-            "load",
-            "2",
-            "t1",
-            "__key",
-            "apply",
-            'contains(@t1, "")',
-            "as",
-            "apply_result",
-        )
-        self.check(dialect, 
-            "ft.aggregate",
-            f"{key_type}_idx1",
-            "*",
-            "load",
-            "2",
-            "__key",
-            "t1",
-            "apply",
-            'contains("", "one")',
-            "as",
-            "apply_result",
-        )
-        self.check(dialect, 
-            "ft.aggregate",
-            f"{key_type}_idx1",
-            "*",
-            "load",
-            "2",
-            "__key",
-            "t3",
-            "apply",
-            'contains("", "")',
-            "as",
-            "apply_result",
-        )
+        for load_field, apply_expr in self.AGGREGATE_STRING_APPLY_CASES:
+            self.check(dialect,
+                "ft.aggregate",
+                f"{key_type}_idx1",
+                "*",
+                "load",
+                "2",
+                "__key",
+                load_field,
+                "apply",
+                apply_expr,
+                "as",
+                "apply_result",
+            )
 
     @pytest.mark.parametrize("dataset", ["hard numbers", "hard strings"])
     def test_aggregate_substr(self, key_type, dialect, dataset):

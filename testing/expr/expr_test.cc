@@ -61,6 +61,7 @@ class ExprTest : public testing::Test {
         return absl::NotFoundError("param not found");
       }
     }
+    bool UseFilterComparisonSemantics() const override { return false; }
   } cc;
   std::unique_ptr<Record> record_;
 

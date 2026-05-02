@@ -105,7 +105,9 @@ target_include_directories(metrics INTERFACE ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(metrics INTERFACE vmsdklib)
 
 set(SRCS_INDEX_SCHEMA ${CMAKE_CURRENT_LIST_DIR}/index_schema.cc
-                      ${CMAKE_CURRENT_LIST_DIR}/index_schema.h)
+                      ${CMAKE_CURRENT_LIST_DIR}/index_schema.h
+                      ${CMAKE_CURRENT_LIST_DIR}/filter_expr.cc
+                      ${CMAKE_CURRENT_LIST_DIR}/filter_expr.h)
 
 valkey_search_add_static_library(index_schema "${SRCS_INDEX_SCHEMA}")
 target_include_directories(index_schema PUBLIC ${CMAKE_CURRENT_LIST_DIR})
@@ -127,6 +129,7 @@ target_link_libraries(index_schema PUBLIC vector_flat)
 target_link_libraries(index_schema PUBLIC vector_hnsw)
 target_link_libraries(index_schema PUBLIC string_interning)
 target_link_libraries(index_schema PUBLIC valkey_module)
+target_link_libraries(index_schema PUBLIC expr)
 
 set(SRCS_ATTRIBUTE_DATA_TYPE ${CMAKE_CURRENT_LIST_DIR}/attribute_data_type.cc
                              ${CMAKE_CURRENT_LIST_DIR}/attribute_data_type.h)

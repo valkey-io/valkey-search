@@ -28,6 +28,7 @@
 #include "gtest/gtest_prod.h"
 #include "src/attribute.h"
 #include "src/attribute_data_type.h"
+#include "src/expr/expr.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/text/text_index.h"
@@ -83,6 +84,7 @@ struct AttributeInfo {
 };
 
 class IndexSchema : public KeyspaceEventSubscription,
+                    public expr::Expression::CompileContext,
                     public std::enable_shared_from_this<IndexSchema> {
  public:
   struct IndexKeyInfo {
@@ -374,6 +376,17 @@ class IndexSchema : public KeyspaceEventSubscription,
     return attributes_;
   }
 
+  bool HasFilter() const { return compiled_filter_ != nullptr; }
+  const std::string &GetFilterExpression() const {
+    return filter_expression_str_;
+  }
+
+  // CompileContext interface
+  absl::StatusOr<std::unique_ptr<expr::Expression::AttributeReference>>
+  MakeReference(absl::string_view name, bool create) override;
+  absl::StatusOr<expr::Value> GetParam(absl::string_view s) const override;
+  bool UseFilterComparisonSemantics() const override { return true; }
+
  protected:
   IndexSchema(ValkeyModuleCtx *ctx,
               const data_model::IndexSchema &index_schema_proto,
@@ -406,6 +419,9 @@ class IndexSchema : public KeyspaceEventSubscription,
   uint64_t fingerprint_{0};
   uint32_t version_{0};
   bool skip_initial_scan_{false};
+
+  std::string filter_expression_str_;
+  std::unique_ptr<expr::Expression> compiled_filter_;
 
   vmsdk::ThreadPool *mutations_thread_pool_{nullptr};
   std::vector<uint64_t> attributes_indexed_data_size_;
@@ -524,6 +540,8 @@ class IndexSchema : public KeyspaceEventSubscription,
   mutable vmsdk::TimeSlicedMRMWMutex time_sliced_mutex_;
   vmsdk::MainThreadAccessGuard<std::deque<Key>> multi_mutations_keys_;
   vmsdk::MainThreadAccessGuard<bool> schedule_multi_exec_processing_{false};
+
+  bool EvaluateFilter(const MutatedAttributes &mutated_attributes) const;
 
   FRIEND_TEST(IndexSchemaRDBTest, SaveAndLoad);
   FRIEND_TEST(IndexSchemaRDBTest, ComprehensiveSkipLoadTest);

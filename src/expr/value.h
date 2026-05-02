@@ -139,13 +139,21 @@ Value FuncMul(const Value& l, const Value& r);
 Value FuncDiv(const Value& l, const Value& r);
 Value FuncPower(const Value& l, const Value& r);
 
-// Compare Functions
+// Compare Functions (APPLY semantics: kUNORDERED treated as equal for ==)
 Value FuncGt(const Value& l, const Value& r);
 Value FuncGe(const Value& l, const Value& r);
 Value FuncEq(const Value& l, const Value& r);
 Value FuncNe(const Value& l, const Value& r);
 Value FuncLt(const Value& l, const Value& r);
 Value FuncLe(const Value& l, const Value& r);
+
+// Compare Functions (FILTER semantics: kUNORDERED → false, except != → true)
+Value FilterFuncGt(const Value& l, const Value& r);
+Value FilterFuncGe(const Value& l, const Value& r);
+Value FilterFuncEq(const Value& l, const Value& r);
+Value FilterFuncNe(const Value& l, const Value& r);
+Value FilterFuncLt(const Value& l, const Value& r);
+Value FilterFuncLe(const Value& l, const Value& r);
 
 // Logical Functions
 Value FuncLor(const Value& l, const Value& r);

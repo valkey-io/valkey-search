@@ -78,6 +78,12 @@ def parse_field(x, key_type):
 
 def parse_value(x, key_type):
     try:
+        if x is None:
+            # Both engines can return RESP nil for an APPLY expression that
+            # evaluates to nil (e.g. a string function applied to a numeric
+            # field on JSON). Represent it as None on both sides so equality
+            # works.
+            return None
         if key_type == "json" and isinstance(x, int):
             result = x
         elif key_type == "json" and x.startswith(b'['):
@@ -491,7 +497,7 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
     return data_set
 
 class TestAnswersCMD(ValkeySearchTestCaseBase):
-    @pytest.mark.parametrize("answers", ["aggregate-answers.pickle.gz", "text-search-answers.pickle.gz"])
+    @pytest.mark.parametrize("answers", ["aggregate-answers.pickle.gz", "text-search-answers.pickle.gz", "filter-answers.pickle.gz"])
     def test_answers(self, answers):
         global client, data_set
         global correct_answers, failed_tests, passed_tests

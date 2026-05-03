@@ -7,12 +7,18 @@
 #ifndef VALKEYSEARCH_EXPR_VALUE_H
 #define VALKEYSEARCH_EXPR_VALUE_H
 
+#include <functional>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <variant>
+#include <vector>
 
 #include "absl/container/inlined_vector.h"
 #include "absl/strings/string_view.h"
+
+// Forward declarations for Valkey module types
+struct ValkeyModuleCallReply;
 
 namespace valkey_search {
 namespace expr {
@@ -22,12 +28,13 @@ class Value {
   class Nil {
    public:
     Nil() : reason_("ctor") {}
-    Nil(const char* reason) : reason_(reason) {}
-    const char* GetReason() const { return reason_; }
+    explicit Nil(std::string reason) : reason_(reason) {}
+    const char* GetReason() const { return reason_.c_str(); }
 
    private:
-    const char* reason_;
+    std::string reason_;
   };
+  using Array = std::shared_ptr<std::vector<Value>>;
 
   Value() : value_(Nil()){};
   explicit Value(Nil n) : value_(n) {}
@@ -38,17 +45,30 @@ class Value {
   explicit Value(const char* s) : value_(absl::string_view(s)) {}
   explicit Value(std::string&& s) : value_(std::move(s)) {}
 
+  // Array constructors
+  explicit Value(const Array& vec) : value_(vec) {}
+  explicit Value(Array&& vec) : value_(std::move(vec)) {}
+  explicit Value(std::initializer_list<Value> elements)
+      : value_(std::make_shared<std::vector<Value>>(elements)) {}
+  explicit Value(std::vector<Value>&& vec)
+      : value_(std::make_shared<std::vector<Value>>(std::move(vec))) {}
+
   // test for type of Value
   bool IsNil() const;
   bool IsBool() const;
   bool IsDouble() const;
   bool IsString() const;
+  bool IsArray() const;
+  size_t ArraySize() const;
+  bool IsEmptyArray() const;
 
   // When you already know the type, will assert if you're wrong
   Nil GetNil() const;
   bool GetBool() const;
   double GetDouble() const;
   absl::string_view GetStringView() const;
+  Array GetArray() const;
+  const Value& GetArrayElement(size_t index) const;
 
   // convert to type
   std::optional<Nil> AsNil() const;
@@ -57,6 +77,7 @@ class Value {
   std::optional<int64_t> AsInteger() const;
   absl::string_view AsStringView() const;
   std::string AsString() const;
+  std::optional<Array> AsArray() const;
 
   bool IsTrue() const {
     auto r = AsBool();
@@ -79,7 +100,7 @@ class Value {
  private:
   mutable std::optional<std::string> storage_;
 
-  std::variant<Nil, bool, double, absl::string_view, std::string> value_;
+  std::variant<Nil, bool, double, absl::string_view, std::string, Array> value_;
 };
 
 enum Ordering { kLESS, kEQUAL, kGREATER, kUNORDERED };
@@ -100,6 +121,15 @@ static inline std::ostream& operator<<(std::ostream& os, Ordering o) {
 }
 
 Ordering Compare(const Value& l, const Value& r);
+
+// Array operation helper functions
+Value ApplyToElements(const Value::Array vec,
+                      std::function<Value(const Value&)> func);
+Value ApplyWithScalar(const Value::Array vec, const Value& scalar,
+                      std::function<Value(const Value&, const Value&)> func,
+                      bool scalar_on_left);
+Value ApplyElementWise(const Value::Array vec1, const Value::Array vec2,
+                       std::function<Value(const Value&, const Value&)> func);
 
 //
 // These orderings aren't IEEE compatible, but they match the legacy
@@ -179,6 +209,17 @@ Value FuncDayofmonth(const Value& t);
 Value FuncDayofyear(const Value& t);
 Value FuncYear(const Value& t);
 Value FuncMonthofyear(const Value& t);
+
+// Array-specific functions
+Value FuncArrayLen(const Value& vec);
+Value FuncArrayAt(const Value& vec, const Value& index);
+Value FuncIsArray(const Value& val);
+Value FuncFlatten(const Value& vec, const Value& depth);
+
+// Array serialization/deserialization helpers
+// Deserialize a ValkeyModuleCallReply (RESP data) into a Value
+// Handles arrays recursively to support nested vectors
+expr::Value DeserializeValueFromResp(ValkeyModuleCallReply* reply);
 
 }  // namespace expr
 }  // namespace valkey_search

@@ -11,10 +11,6 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
-    software-properties-common
-RUN add-apt-repository ppa:ubuntu-toolchain-r/test && apt update
-
-RUN apt update && apt-get install -y \
     libssl-dev \
     build-essential \
     git \

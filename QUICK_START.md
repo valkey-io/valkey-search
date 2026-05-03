@@ -7,6 +7,8 @@ Follow these steps to set up, build, and run the Valkey server with the valkey-s
 1. Follow the [instructions to build Valkey from source](https://github.com/valkey-io/valkey?tab=readme-ov-file#building-valkey-using-makefile). Make sure to use Valkey version 9.0.1 or later.
 2. Follow the [instructions to build the valkey-search module from source](https://github.com/valkey-io/valkey-search/tree/main?tab=readme-ov-file#build-instructions).
 
+Alternatively, you can get started quickly using the [pre-built Docker bundle](https://github.com/valkey-io/valkey-search#docker), which includes both Valkey and valkey-search ready to run.
+
 ## Step 2: Run the Valkey Server
 
 Once valkey-search is built, run the Valkey server with the valkey-search module loaded:
@@ -15,13 +17,7 @@ Once valkey-search is built, run the Valkey server with the valkey-search module
 valkey-server --loadmodule /path/to/libsearch.so
 ```
 
-For optimal performance, valkey-search matches worker threads to the number of CPU cores on the host. You can override this explicitly:
-
-```bash
-valkey-server "--loadmodule /path/to/libsearch.so --reader-threads 64 --writer-threads 64"
-```
-
-To enable JSON support, load the [valkey-json](https://github.com/valkey-io/valkey-json) module as well:
+To enable JSON support, you'll need to also load the JSON module. See the [valkey-json build instructions](https://github.com/valkey-io/valkey-json#build-instructions) for how to build it.
 
 ```bash
 valkey-server --loadmodule /path/to/libsearch.so --loadmodule /path/to/libjson.so
@@ -48,25 +44,32 @@ FT.CREATE myIndex SCHEMA embedding VECTOR HNSW 6 TYPE FLOAT32 DIM 3 DISTANCE_MET
 - `DIM 3` sets the vector dimensionality to 3.
 - `DISTANCE_METRIC COSINE` sets the distance metric to cosine similarity. Other options are `L2` and `IP`.
 
-
 ### Insert Some Vectors
 
 Vectors must be encoded as 32-bit IEEE 754 floats in little-endian byte order. Each vector must have exactly `DIM` elements.
 
 ```bash
+# [0.0, 0.0, 1.0]
 HSET my_hash_key_1 embedding "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x80?"
+# [0.000145, 0.0, 1.0]
 HSET my_hash_key_2 embedding "\x00\xaa\x00\x00\x00\x00\x00\x00\x00\x00\x80?"
 ```
 
 ### Issue a Vector Query
 
-Perform a K-Nearest Neighbors (KNN) search returning the top 5 nearest vectors:
+Perform a K-Nearest Neighbors (KNN) search, which returns the 5 vectors in the index most similar to the supplied query vector `[0.8, 0.0, 0.0]`:
 
 ```bash
+# query vector: [0.8, 0.0, 0.0]
 FT.SEARCH myIndex "*=>[KNN 5 @embedding $query_vector]" PARAMS 2 query_vector "\xcd\xccL?\x00\x00\x00\x00\x00\x00\x00\x00"
 ```
 
-The `*` before `=>` means no pre-filtering — all vectors in the index are searched. Replace `*` with a filter expression (e.g. `@category:{electronics}`) to run a hybrid query that narrows candidates before KNN.
+The `*` before `=>` means no pre-filtering — all vectors in the index are searched. For a hybrid query, replace `*` with a filter expression to narrow candidates before the KNN step:
+
+```bash
+# query vector: [0.8, 0.0, 0.0] — only search within "electronics" category
+FT.SEARCH myIndex "@category:{electronics}=>[KNN 5 @embedding $query_vector]" PARAMS 2 query_vector "\xcd\xccL?\x00\x00\x00\x00\x00\x00\x00\x00"
+```
 
 ---
 

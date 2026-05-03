@@ -252,13 +252,13 @@ absl::StatusOr<double> FilterParser::ParseNumber() {
   }
   std::string number_str;
   double value;
-  int multiplier = Match('-', false) ? -1 : 1;
-  while (!IsEnd() && (std::isdigit(Peek()) || Peek() == '.')) {
+  while (!IsEnd() && (std::isdigit(Peek()) || Peek() == '.' || Peek() == 'e' ||
+                      Peek() == 'E' || Peek() == '+' || Peek() == '-')) {
     number_str += expression_[pos_++];
   }
-  if (absl::AsciiStrToLower(number_str) != "nan" &&
+  if (!number_str.empty() && absl::AsciiStrToLower(number_str) != "nan" &&
       absl::SimpleAtod(number_str, &value)) {
-    return value * multiplier;
+    return value;
   }
   return absl::InvalidArgumentError(
       absl::StrCat("Invalid number: ", number_str));

@@ -25,6 +25,8 @@ namespace valkey_search {
 namespace expr {
 
 using ExprPtr = std::unique_ptr<Expression>;
+constexpr absl::string_view kInvalidOrMissingExpression{
+    "Invalid or missing expression"};
 
 struct Constant : Expression {
   Constant(std::string constant) : constant_(std::move(constant)) {}
@@ -353,6 +355,9 @@ struct Compiler {
   absl::StatusOr<ExprPtr> Invert(CompileContext& ctx) {
     CHECK(s_.PopByte('!'));
     VMSDK_ASSIGN_OR_RETURN(auto expr, Primary(ctx));
+    if (!expr) {
+      return absl::InvalidArgumentError(kInvalidOrMissingExpression);
+    }
     return std::make_unique<Not>(std::move(expr));
   }
 
@@ -526,6 +531,9 @@ struct Compiler {
 
   absl::StatusOr<ExprPtr> Compile(CompileContext& ctx) {
     VMSDK_ASSIGN_OR_RETURN(auto result, ParseExpression(ctx));
+    if (!result) {
+      return absl::InvalidArgumentError(kInvalidOrMissingExpression);
+    }
     if (s_.SkipWhiteSpacePeekByte() != EOF) {
       return absl::InvalidArgumentError(absl::StrCat(
           "Extra characters at or near position ", s_.GetPosition()));

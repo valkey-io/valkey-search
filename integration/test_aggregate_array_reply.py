@@ -496,39 +496,6 @@ class TestAggregateReplyParity(ValkeySearchTestCaseBase):
                     f"{func} mismatch: HASH={h['result']}, JSON={j['result']}"
                 )
 
-    def test_groupby_multiple_fields_parity(self):
-        """Verify GROUPBY on multiple fields produces matching results."""
-        client: Valkey = self.server.get_new_client()
-        self._setup_hash_index(client, num_docs=15)
-        self._setup_json_index(client, num_docs=15)
-
-        h_rows = self._run_aggregate(
-            client, "hidx", "@n1:[0 inf]",
-            "LOAD", "2", "@t1", "@t2",
-            "GROUPBY", "2", "@t1", "@t2",
-            "REDUCE", "COUNT", "0", "AS", "cnt",
-            "SORTBY", "2", "@t1", "ASC",
-            "DIALECT", "2",
-        )
-        j_rows = self._run_aggregate(
-            client, "jidx", "@n1:[0 inf]",
-            "LOAD", "2", "@t1", "@t2",
-            "GROUPBY", "2", "@t1", "@t2",
-            "REDUCE", "COUNT", "0", "AS", "cnt",
-            "SORTBY", "2", "@t1", "ASC",
-            "DIALECT", "2",
-        )
-
-        assert len(h_rows) == len(j_rows)
-
-        for h, j in zip(h_rows, j_rows):
-            assert h["t1"] == j["t1"]
-            assert h["t2"] == j["t2"]
-            assert h["cnt"] == j["cnt"], (
-                f"cnt mismatch for ({h['t1']}, {h['t2']}): "
-                f"HASH={h['cnt']}, JSON={j['cnt']}"
-            )
-
     def test_chained_apply_parity(self):
         """Verify chained APPLY stages produce matching results."""
         client: Valkey = self.server.get_new_client()

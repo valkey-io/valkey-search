@@ -168,9 +168,11 @@ inline PredicateType EvaluateAsComposedPredicate(
 // search, meaning it requires prefilter evaluation Prefiltering is needed when
 // query contains an AND with numeric or tag predicates.
 // It is also needed when negate is involved.
-// Vector range queries always require prefilter evaluation since the
-// UniversalSetFetcher returns all keys and each needs distance evaluation.
-inline bool IsUnsolvedQuery(QueryOperations query_operations) {
+inline bool IsUnsolvedQuery(QueryOperations query_operations,
+                            bool is_match_all) {
+  if (is_match_all) {
+    return false;
+  }
   return query_operations & (QueryOperations::kContainsNumeric |
                              QueryOperations::kContainsTag) &&
              query_operations & QueryOperations::kContainsAnd ||
@@ -663,12 +665,109 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
   return neighbors;
 }
 
+// Handle standalone Vector Range queries (no KNN). Scans all keys, evaluates
+// the predicate tree (including vector range distance checks), collects
+// matching keys with their distances, and sorts by ascending distance.
+absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
+    const SearchParameters &parameters) {
+  std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
+  size_t qualified_entries = 0;
+  if (parameters.filter_parse_results.is_match_all) {
+    auto universal_fetcher = std::make_unique<indexes::UniversalSetFetcher>(
+        parameters.index_schema.get());
+    qualified_entries = universal_fetcher->Size();
+    entries_fetchers.push(std::move(universal_fetcher));
+  } else {
+    qualified_entries = EvaluateFilterAsPrimary(
+        parameters, parameters.filter_parse_results.root_predicate.get(),
+        entries_fetchers, false);
+  }
+
+  const size_t max_keys = static_cast<size_t>(
+      options::GetMaxNonVectorSearchResultsFetched().GetValue());
+  std::vector<indexes::Neighbor> neighbors;
+  neighbors.reserve(std::min(qualified_entries, static_cast<size_t>(5000)));
+  bool fetch_limited = false;
+
+  // Deduplication setup
+  bool needs_dedup =
+      NeedsDeduplication(parameters.filter_parse_results.query_operations);
+  absl::flat_hash_set<const char *> result_keys;
+  if (needs_dedup) {
+    result_keys.reserve(std::min(qualified_entries, static_cast<size_t>(5000)));
+  }
+
+  const std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema =
+      parameters.index_schema ? parameters.index_schema->GetTextIndexSchema()
+                              : nullptr;
+
+  while (!entries_fetchers.empty()) {
+    auto fetcher = std::move(entries_fetchers.front());
+    entries_fetchers.pop();
+    auto iterator = fetcher->Begin();
+    while (!iterator->Done()) {
+      const auto &key = **iterator;
+      if (needs_dedup && result_keys.contains(key->Str().data())) {
+        iterator->Next();
+        continue;
+      }
+      const valkey_search::indexes::text::TextIndex *text_index =
+          text_index_schema ? text_index_schema->GetPerKeyTextIndex(key, false)
+                            : nullptr;
+      indexes::PrefilterEvaluator key_evaluator(
+          text_index, parameters.filter_parse_results.query_operations,
+          parameters.index_schema.get());
+      BACKGROUND_PAUSEPOINT("search_prefilter_eval");
+      if (key_evaluator.Evaluate(
+              *parameters.filter_parse_results.root_predicate, key)) {
+        if (neighbors.size() >= max_keys) {
+          fetch_limited = true;
+          break;
+        }
+        // Use the distance computed during evaluation.
+        float distance = key_evaluator.GetLastVectorRangeDistance();
+        neighbors.emplace_back(indexes::Neighbor{key, distance});
+        if (needs_dedup) {
+          result_keys.insert(key->Str().data());
+        }
+      }
+      iterator->Next();
+      if (parameters.cancellation_token->IsCancelled()) {
+        break;
+      }
+    }
+    if (fetch_limited) {
+      break;
+    }
+  }
+
+  if (fetch_limited) {
+    nonvector_results_fetched_limited_count.Increment();
+  }
+
+  // Sort by ascending distance by default for vector range queries.
+  std::sort(neighbors.begin(), neighbors.end(),
+            [](const indexes::Neighbor &a, const indexes::Neighbor &b) {
+              return a.distance < b.distance;
+            });
+
+  return neighbors;
+}
+
 absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
     const SearchParameters &parameters) {
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
-  size_t qualified_entries = EvaluateFilterAsPrimary(
-      parameters, parameters.filter_parse_results.root_predicate.get(),
-      entries_fetchers, false);
+  size_t qualified_entries = 0;
+  if (parameters.filter_parse_results.is_match_all) {
+    auto universal_fetcher = std::make_unique<indexes::UniversalSetFetcher>(
+        parameters.index_schema.get());
+    qualified_entries = universal_fetcher->Size();
+    entries_fetchers.push(std::move(universal_fetcher));
+  } else {
+    qualified_entries = EvaluateFilterAsPrimary(
+        parameters, parameters.filter_parse_results.root_predicate.get(),
+        entries_fetchers, false);
+  }
 
   // Get the config for maximum number of keys to accumulate before content
   // fetching
@@ -690,7 +789,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
   };
   // Cannot skip evaluation if the query contains unsolved composed operations.
   bool requires_prefilter_evaluation =
-      IsUnsolvedQuery(parameters.filter_parse_results.query_operations);
+      IsUnsolvedQuery(parameters.filter_parse_results.query_operations,
+                      parameters.filter_parse_results.is_match_all);
   if (!requires_prefilter_evaluation) {
     bool needs_dedup =
         NeedsDeduplication(parameters.filter_parse_results.query_operations);
@@ -1193,7 +1293,8 @@ absl::Status query::SearchParameters::PreParseQueryString() {
   VMSDK_ASSIGN_OR_RETURN(
       filter_parse_results, ParsePreFilter(*index_schema, pre_filter, *this),
       _.SetPrepend() << "Invalid filter expression: `" << pre_filter << "`. ");
-  if (!filter_parse_results.root_predicate && vector_filter.empty()) {
+  if (!filter_parse_results.root_predicate && vector_filter.empty() &&
+      !filter_parse_results.is_match_all) {
     // Return an error if no valid pre-filter and no vector filter is provided.
     return absl::InvalidArgumentError("Invalid query string syntax");
   }

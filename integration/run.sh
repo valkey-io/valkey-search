@@ -161,8 +161,13 @@ function run_pytest() {
   
   LOG_INFO "Running: ${PYTHON_PATH} -m pytest ${FILTER_ARGS} ${CAPTURE_ARG} --cache-clear -v ${ROOT_DIR}/integration/"
   # Capture pytest output to check for sanitizer errors
-  script -q -e -c "${PYTHON_PATH} -m pytest ${FILTER_ARGS} ${CAPTURE_ARG} --cache-clear -v ${ROOT_DIR}/integration/" ${PYTEST_OUTPUT_LOG}
-  RUN_SUCCESS=$?
+  if [[ "$(uname)" == "Darwin" ]]; then
+    ${PYTHON_PATH} -m pytest ${FILTER_ARGS} ${CAPTURE_ARG} --color=yes --cache-clear -v ${ROOT_DIR}/integration/ 2>&1 | tee ${PYTEST_OUTPUT_LOG}
+    RUN_SUCCESS=${PIPESTATUS[0]}
+  else
+    script -q -e -c "${PYTHON_PATH} -m pytest ${FILTER_ARGS} ${CAPTURE_ARG} --cache-clear -v ${ROOT_DIR}/integration/" ${PYTEST_OUTPUT_LOG}
+    RUN_SUCCESS=$?
+  fi
 }
 
 function run_with_retries() {

@@ -47,10 +47,8 @@ bool Value::IsString() const {
 bool Value::IsArray() const { return std::holds_alternative<Array>(value_); }
 
 size_t Value::ArraySize() const {
-  if (auto vec_ptr = std::get_if<Array>(&value_)) {
-    return (*vec_ptr)->size();
-  }
-  return 0;
+  CHECK(IsArray());
+  return std::get<Array>(value_)->size();
 }
 
 bool Value::IsEmptyArray() const {
@@ -186,13 +184,12 @@ std::optional<Value::Array> Value::AsArray() const {
 
 Value::Array Value::GetArray() const { return std::get<Array>(value_); }
 
-const Value& Value::GetArrayElement(size_t index) const {
-  auto vec = GetArray();
-  if (index >= vec->size()) {
-    // This will throw std::out_of_range
-    return vec->at(index);
+std::optional<Value> Value::GetArrayElement(size_t index) const {
+  auto arr = GetArray();
+  if (index >= arr->size()) {
+    return std::nullopt;
   }
-  return (*vec)[index];
+  return std::make_optional((*arr)[index]);
 }
 
 std::ostream& operator<<(std::ostream& os, const Value& v) {
@@ -269,9 +266,9 @@ Ordering Compare(const Value& l, const Value& r) {
     return CompareStrings(l.GetStringView(), r.GetStringView());
   }
 
-  // Vector comparisons
+  // Array comparisons
   if (l.IsArray() && r.IsArray()) {
-    // Lexicographic comparison for vector-vector
+    // Lexicographic comparison for array-array
     auto lvec = l.GetArray();
     auto rvec = r.GetArray();
 
@@ -292,7 +289,7 @@ Ordering Compare(const Value& l, const Value& r) {
     }
     return Ordering::kEQUAL;
   } else if (l.IsArray() || r.IsArray()) {
-    // Vector vs scalar
+    // Array vs scalar
     return Ordering::kUNORDERED;
   }
 
@@ -307,89 +304,49 @@ Ordering Compare(const Value& l, const Value& r) {
   return CompareStrings(l.AsStringView(), r.AsStringView());
 }
 
-// Vector error message generation functions
-
-static std::string MakeTypeMismatchError(const char* operation,
-                                         const char* expected,
-                                         const char* actual) {
-  return std::string("Type error in ") + operation + ": expected " + expected +
-         ", got " + actual;
-}
-
-static std::string MakeLengthMismatchError(size_t length1, size_t length2) {
-  return "Length mismatch: vectors have lengths " + std::to_string(length1) +
-         " and " + std::to_string(length2);
-}
-
-static std::string MakeIndexOutOfBoundsError(size_t index, size_t length) {
-  return "Index out of bounds: index " + std::to_string(index) +
-         ", vector length " + std::to_string(length);
-}
-
-static std::string MakeElementError(size_t index, const char* reason) {
-  return "Element error at index " + std::to_string(index) + ": " + reason;
-}
-
 // Vector operation helper functions
-
-Value ApplyToElements(const Value::Array vec,
+Value ApplyToElements(const Value::Array arr,
                       std::function<Value(const Value&)> func) {
   auto result = std::make_shared<std::vector<Value>>();
-  result->reserve(vec->size());
+  result->reserve(arr->size());
 
-  for (size_t i = 0; i < vec->size(); ++i) {
-    Value elem_result = func((*vec)[i]);
-    if (elem_result.IsNil()) {
-      // Propagate error with index information
-      std::string error_msg =
-          MakeElementError(i, elem_result.GetNil().GetReason());
-      return Value(Value::Nil(error_msg));
-    }
+  for (size_t i = 0; i < arr->size(); ++i) {
+    Value elem_result = func((*arr)[i]);
     result->push_back(std::move(elem_result));
   }
 
   return Value(result);
 }
 
-Value ApplyWithScalar(const Value::Array vec, const Value& scalar,
+Value ApplyWithScalar(const Value::Array arr, const Value& scalar,
                       std::function<Value(const Value&, const Value&)> func,
                       bool scalar_on_left) {
   auto result = std::make_shared<std::vector<Value>>();
-  result->reserve(vec->size());
+  result->reserve(arr->size());
 
-  for (size_t i = 0; i < vec->size(); ++i) {
+  for (size_t i = 0; i < arr->size(); ++i) {
     Value elem_result =
-        scalar_on_left ? func(scalar, (*vec)[i]) : func((*vec)[i], scalar);
-    if (elem_result.IsNil()) {
-      // Propagate error with index information
-      std::string error_msg =
-          MakeElementError(i, elem_result.GetNil().GetReason());
-      return Value(Value::Nil(error_msg));
-    }
+        scalar_on_left ? func(scalar, (*arr)[i]) : func((*arr)[i], scalar);
     result->push_back(std::move(elem_result));
   }
 
   return Value(result);
 }
 
-Value ApplyElementWise(const Value::Array vec1, const Value::Array vec2,
+Value ApplyElementWise(const Value::Array arr1, const Value::Array arr2,
                        std::function<Value(const Value&, const Value&)> func) {
-  if (vec1->size() != vec2->size()) {
-    std::string error_msg = MakeLengthMismatchError(vec1->size(), vec2->size());
+  if (arr1->size() != arr2->size()) {
+    std::string error_msg = "Length mismatch: arrays have lengths " +
+                            std::to_string(arr1->size()) + " and " +
+                            std::to_string(arr2->size());
     return Value(Value::Nil(error_msg));
   }
 
   auto result = std::make_shared<std::vector<Value>>();
-  result->reserve(vec1->size());
+  result->reserve(arr1->size());
 
-  for (size_t i = 0; i < vec1->size(); ++i) {
-    Value elem_result = func((*vec1)[i], (*vec2)[i]);
-    if (elem_result.IsNil()) {
-      // Propagate error with index information
-      std::string error_msg =
-          MakeElementError(i, elem_result.GetNil().GetReason());
-      return Value(Value::Nil(error_msg));
-    }
+  for (size_t i = 0; i < arr1->size(); ++i) {
+    Value elem_result = func((*arr1)[i], (*arr2)[i]);
     result->push_back(std::move(elem_result));
   }
 
@@ -397,7 +354,6 @@ Value ApplyElementWise(const Value::Array vec1, const Value::Array vec2,
 }
 
 Value FuncAdd(const Value& l, const Value& r) {
-  // Case 1: Both scalars (existing behavior)
   if (!l.IsArray() && !r.IsArray()) {
     auto lv = l.AsDouble();
     auto rv = r.AsDouble();
@@ -407,23 +363,16 @@ Value FuncAdd(const Value& l, const Value& r) {
       return Value(Value::Nil("Add requires numeric operands"));
     }
   }
-
-  // Case 2: Left is vector, right is scalar (broadcast)
   if (l.IsArray() && !r.IsArray()) {
     return ApplyWithScalar(l.GetArray(), r, FuncAdd, false);
   }
-
-  // Case 3: Left is scalar, right is vector (broadcast)
   if (!l.IsArray() && r.IsArray()) {
     return ApplyWithScalar(r.GetArray(), l, FuncAdd, true);
   }
-
-  // Case 4: Both are vectors (element-wise)
   return ApplyElementWise(l.GetArray(), r.GetArray(), FuncAdd);
 }
 
 Value FuncSub(const Value& l, const Value& r) {
-  // Case 1: Both scalars (existing behavior)
   if (!l.IsArray() && !r.IsArray()) {
     auto lv = l.AsDouble();
     auto rv = r.AsDouble();
@@ -433,23 +382,16 @@ Value FuncSub(const Value& l, const Value& r) {
       return Value(Value::Nil("Subtract requires numeric operands"));
     }
   }
-
-  // Case 2: Left is vector, right is scalar (broadcast)
   if (l.IsArray() && !r.IsArray()) {
     return ApplyWithScalar(l.GetArray(), r, FuncSub, false);
   }
-
-  // Case 3: Left is scalar, right is vector (broadcast)
   if (!l.IsArray() && r.IsArray()) {
     return ApplyWithScalar(r.GetArray(), l, FuncSub, true);
   }
-
-  // Case 4: Both are vectors (element-wise)
   return ApplyElementWise(l.GetArray(), r.GetArray(), FuncSub);
 }
 
 Value FuncMul(const Value& l, const Value& r) {
-  // Case 1: Both scalars (existing behavior)
   if (!l.IsArray() && !r.IsArray()) {
     auto lv = l.AsDouble();
     auto rv = r.AsDouble();
@@ -459,33 +401,22 @@ Value FuncMul(const Value& l, const Value& r) {
       return Value(Value::Nil("Multiply requires numeric operands"));
     }
   }
-
-  // Case 2: Left is vector, right is scalar (broadcast)
   if (l.IsArray() && !r.IsArray()) {
     return ApplyWithScalar(l.GetArray(), r, FuncMul, false);
   }
-
-  // Case 3: Left is scalar, right is vector (broadcast)
   if (!l.IsArray() && r.IsArray()) {
     return ApplyWithScalar(r.GetArray(), l, FuncMul, true);
   }
-
-  // Case 4: Both are vectors (element-wise)
   return ApplyElementWise(l.GetArray(), r.GetArray(), FuncMul);
 }
 
 Value FuncDiv(const Value& l, const Value& r) {
-  // Case 1: Both scalars (existing behavior)
   if (!l.IsArray() && !r.IsArray()) {
     auto lv = l.AsDouble();
     auto rv = r.AsDouble();
     if (lv && rv) {
       if (rv.value() == 0) {
-        // if (std::signbit(lv.value())) {
         return Value(std::nan(""));
-        //} else {
-        //  return Value(-std::abs(std::nan("nan")));
-        //}
       } else {
         return Value(lv.value() / rv.value());
       }
@@ -493,23 +424,16 @@ Value FuncDiv(const Value& l, const Value& r) {
       return Value(Value::Nil("Divide requires numeric operands"));
     }
   }
-
-  // Case 2: Left is vector, right is scalar (broadcast)
   if (l.IsArray() && !r.IsArray()) {
     return ApplyWithScalar(l.GetArray(), r, FuncDiv, false);
   }
-
-  // Case 3: Left is scalar, right is vector (broadcast)
   if (!l.IsArray() && r.IsArray()) {
     return ApplyWithScalar(r.GetArray(), l, FuncDiv, true);
   }
-
-  // Case 4: Both are vectors (element-wise)
   return ApplyElementWise(l.GetArray(), r.GetArray(), FuncDiv);
 }
 
 Value FuncPower(const Value& l, const Value& r) {
-  // Case 1: Both scalars (existing behavior)
   if (!l.IsArray() && !r.IsArray()) {
     auto lv = l.AsDouble();
     auto rv = r.AsDouble();
@@ -519,18 +443,12 @@ Value FuncPower(const Value& l, const Value& r) {
       return Value(Value::Nil("Power requires numeric operands"));
     }
   }
-
-  // Case 2: Left is vector, right is scalar (broadcast)
   if (l.IsArray() && !r.IsArray()) {
     return ApplyWithScalar(l.GetArray(), r, FuncPower, false);
   }
-
-  // Case 3: Left is scalar, right is vector (broadcast)
   if (!l.IsArray() && r.IsArray()) {
     return ApplyWithScalar(r.GetArray(), l, FuncPower, true);
   }
-
-  // Case 4: Both are vectors (element-wise)
   return ApplyElementWise(l.GetArray(), r.GetArray(), FuncPower);
 }
 
@@ -658,22 +576,15 @@ Value FuncStartswith(const Value& l, const Value& r) {
   bool l_is_vec = l.IsArray();
   bool r_is_vec = r.IsArray();
 
-  // Case 1: Left is vector, right is scalar (broadcast)
   if (l_is_vec && !r_is_vec) {
     return ApplyWithScalar(l.GetArray(), r, FuncStartswith, false);
   }
-
-  // Case 2: Left is scalar, right is vector (broadcast)
   if (!l_is_vec && r_is_vec) {
     return ApplyWithScalar(r.GetArray(), l, FuncStartswith, true);
   }
-
-  // Case 3: Both are vectors (element-wise)
   if (l_is_vec && r_is_vec) {
     return ApplyElementWise(l.GetArray(), r.GetArray(), FuncStartswith);
   }
-
-  // Case 4: Both scalars (existing behavior)
   auto ls = l.AsStringView();
   auto rs = r.AsStringView();
   if (rs.size() > ls.size()) {
@@ -687,22 +598,18 @@ Value FuncContains(const Value& l, const Value& r) {
   bool l_is_vec = l.IsArray();
   bool r_is_vec = r.IsArray();
 
-  // Case 1: Left is vector, right is scalar (broadcast)
   if (l_is_vec && !r_is_vec) {
     return ApplyWithScalar(l.GetArray(), r, FuncContains, false);
   }
 
-  // Case 2: Left is scalar, right is vector (broadcast)
   if (!l_is_vec && r_is_vec) {
     return ApplyWithScalar(r.GetArray(), l, FuncContains, true);
   }
 
-  // Case 3: Both are vectors (element-wise)
   if (l_is_vec && r_is_vec) {
     return ApplyElementWise(l.GetArray(), r.GetArray(), FuncContains);
   }
 
-  // Case 4: Both scalars (existing behavior)
   auto ls = l.AsStringView();
   auto rs = r.AsStringView();
   size_t count = 0;
@@ -865,40 +772,41 @@ TIME_ROUND(FuncDay, false, true, true)
 TIME_ROUND(FuncHour, false, false, true)
 TIME_ROUND(FuncMinute, false, false, false)
 
-// Vector-specific functions
+// Array-specific functions
 
-Value FuncArrayLen(const Value& vec) {
-  if (!vec.IsArray()) {
-    return Value(Value::Nil("vectorlen: operand is not a vector"));
+Value FuncArrayLen(const Value& arr) {
+  if (!arr.IsArray()) {
+    return Value(Value::Nil("arraylen: operand is not an array"));
   }
-  return Value(static_cast<double>(vec.ArraySize()));
+  return Value(static_cast<double>(arr.ArraySize()));
 }
 
-Value FuncArrayAt(const Value& vec, const Value& index) {
-  if (!vec.IsArray()) {
-    return Value(Value::Nil("vectorat: first operand is not a vector"));
+Value FuncArrayAt(const Value& arr, const Value& index) {
+  if (!arr.IsArray()) {
+    return Value(Value::Nil("arrayat: first operand is not an array"));
   }
 
   auto idx = index.AsInteger();
   if (!idx) {
-    return Value(Value::Nil("vectorat: index is not an integer"));
+    return Value(Value::Nil("arrayat: index is not an integer"));
   }
 
-  size_t vec_size = vec.ArraySize();
-  if (*idx < 0 || static_cast<size_t>(*idx) >= vec_size) {
+  size_t arr_size = arr.ArraySize();
+  if (*idx < 0 || static_cast<size_t>(*idx) >= arr_size) {
     std::string error = "Index out of bounds: index " + std::to_string(*idx) +
-                        ", vector length " + std::to_string(vec_size);
+                        ", array length " + std::to_string(arr_size);
     return Value(Value::Nil(error));
   }
 
-  return vec.GetArrayElement(static_cast<size_t>(*idx));
+  return arr.GetArrayElement(static_cast<size_t>(*idx))
+      .value_or(Value(Value::Nil("arrayat: could not get element")));
 }
 
 Value FuncIsArray(const Value& val) { return Value(val.IsArray()); }
 
-Value FuncFlatten(const Value& vec, const Value& depth) {
-  if (!vec.IsArray()) {
-    return Value(Value::Nil("flatten: first operand is not a vector"));
+Value FuncFlatten(const Value& arr, const Value& depth) {
+  if (!arr.IsArray()) {
+    return Value(Value::Nil("flatten: first operand is not an array"));
   }
 
   auto depth_int = depth.AsInteger();
@@ -907,84 +815,29 @@ Value FuncFlatten(const Value& vec, const Value& depth) {
   }
 
   if (*depth_int <= 0) {
-    return vec;
+    return arr;
   }
 
   auto result = std::make_shared<std::vector<Value>>();
-  auto input_vec = vec.GetArray();
+  auto input_arr = arr.GetArray();
 
-  for (const auto& elem : *input_vec) {
+  for (const auto& elem : *input_arr) {
     if (elem.IsArray() && *depth_int > 0) {
-      // Recursively flatten nested vectors
+      // Recursively flatten nested arrays
       Value flattened =
           FuncFlatten(elem, Value(static_cast<double>(*depth_int - 1)));
       if (flattened.IsNil()) {
         return flattened;  // Propagate error
       }
-      auto flattened_vec = flattened.GetArray();
-      result->insert(result->end(), flattened_vec->begin(),
-                     flattened_vec->end());
+      auto flattened_arr = flattened.GetArray();
+      result->insert(result->end(), flattened_arr->begin(),
+                     flattened_arr->end());
     } else {
       result->push_back(elem);
     }
   }
 
   return Value(result);
-}
-
-Value DeserializeValueFromResp(ValkeyModuleCallReply* reply) {
-  if (reply == nullptr) {
-    return Value(Value::Nil("null reply"));
-  }
-
-  int reply_type = ValkeyModule_CallReplyType(reply);
-
-  switch (reply_type) {
-    case VALKEYMODULE_REPLY_NULL: {
-      return Value(Value::Nil("null"));
-    }
-
-    case VALKEYMODULE_REPLY_INTEGER: {
-      long long val = ValkeyModule_CallReplyInteger(reply);
-      return Value(static_cast<double>(val));
-    }
-
-    case VALKEYMODULE_REPLY_STRING: {
-      size_t len;
-      const char* str = ValkeyModule_CallReplyStringPtr(reply, &len);
-      if (str == nullptr) {
-        return Value(Value::Nil("invalid string"));
-      }
-      return Value(std::string(str, len));
-    }
-
-    case VALKEYMODULE_REPLY_ARRAY: {
-      size_t array_len = ValkeyModule_CallReplyLength(reply);
-      auto vec = std::make_shared<std::vector<Value>>();
-      vec->reserve(array_len);
-
-      for (size_t i = 0; i < array_len; ++i) {
-        ValkeyModuleCallReply* elem =
-            ValkeyModule_CallReplyArrayElement(reply, i);
-        vec->push_back(DeserializeValueFromResp(elem));
-      }
-
-      return Value(vec);
-    }
-
-    case VALKEYMODULE_REPLY_ERROR: {
-      size_t len;
-      const char* err = ValkeyModule_CallReplyStringPtr(reply, &len);
-      if (err == nullptr) {
-        return Value(Value::Nil("error"));
-      }
-      return Value(Value::Nil(err));
-    }
-
-    default: {
-      return Value(Value::Nil("unsupported reply type"));
-    }
-  }
 }
 
 }  // namespace expr

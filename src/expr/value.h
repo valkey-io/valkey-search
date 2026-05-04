@@ -68,7 +68,7 @@ class Value {
   double GetDouble() const;
   absl::string_view GetStringView() const;
   Array GetArray() const;
-  const Value& GetArrayElement(size_t index) const;
+  std::optional<Value> GetArrayElement(size_t index) const;
 
   // convert to type
   std::optional<Nil> AsNil() const;
@@ -215,11 +215,6 @@ Value FuncArrayLen(const Value& vec);
 Value FuncArrayAt(const Value& vec, const Value& index);
 Value FuncIsArray(const Value& val);
 Value FuncFlatten(const Value& vec, const Value& depth);
-
-// Array serialization/deserialization helpers
-// Deserialize a ValkeyModuleCallReply (RESP data) into a Value
-// Handles arrays recursively to support nested vectors
-expr::Value DeserializeValueFromResp(ValkeyModuleCallReply* reply);
 
 }  // namespace expr
 }  // namespace valkey_search

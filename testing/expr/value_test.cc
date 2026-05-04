@@ -692,16 +692,6 @@ TEST_F(ValueTest, ArraySerializationTest) {
   EXPECT_TRUE(vec3.GetArrayElement(2).IsBool());
 }
 
-// Test vector deserialization from RESP format
-// Note: Full testing requires ValkeyModuleCallReply mocks, which would be
-// done in integration tests. This test verifies the function signature exists.
-TEST_F(ValueTest, ArrayDeserializationSignatureTest) {
-  // Verify the deserialization function is declared and can be called
-  // with nullptr (will return Nil)
-  Value result = DeserializeValueFromResp(nullptr);
-  EXPECT_TRUE(result.IsNil());
-}
-
 // Array-specific function tests
 
 TEST_F(ValueTest, FuncArrayLen_ValidArray) {

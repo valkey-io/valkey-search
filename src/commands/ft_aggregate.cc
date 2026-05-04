@@ -159,7 +159,7 @@ bool ReplyWithValue(ValkeyModuleCtx *ctx,
     return false;
   }
 
-  // Handle vector values with RESP array serialization
+  // Handle array values with RESP array serialization
   if (value.IsArray()) {
     ValkeyModule_ReplyWithSimpleString(ctx, name.data());
     SerializeArrayToResp(ctx, value.GetArray());

@@ -298,7 +298,7 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
       min_stem_size_(index_schema_proto.min_stem_size() > 0
                          ? index_schema_proto.min_stem_size()
                          : 4),
-      score_(index_schema_proto.score()),
+      score_(index_schema_proto.score() > 0 ? index_schema_proto.score() : 1.0),
       score_field_(index_schema_proto.has_score_field()
                        ? index_schema_proto.score_field()
                        : ""),
@@ -590,6 +590,25 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
       added = true;
     }
   }
+
+  // Read the per-document score from SCORE_FIELD if configured
+  float document_score = score_;
+  if (key_obj && HasScoreField()) {
+    ValkeyModuleString *score_record = nullptr;
+    ValkeyModule_HashGet(key_obj.get(), VALKEYMODULE_HASH_CFIELDS,
+                         score_field_.c_str(), &score_record, NULL);
+    if (score_record) {
+      vmsdk::UniqueValkeyString score_str(score_record);
+      auto parsed = vmsdk::To<float>(vmsdk::ToStringView(score_record));
+      // Use the parsed value if succeeded; Otherwise, we fall back to the
+      // default score silently.
+      // TODO: Check what Redis Search does.
+      if (parsed.ok()) {
+        document_score = parsed.value();
+      }
+    }
+  }
+
   if (added) {
     switch (attribute_data_type_->ToProto()) {
       case data_model::ATTRIBUTE_DATA_TYPE_HASH:
@@ -610,7 +629,7 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
         CHECK(false);
     }
     ProcessMutation(ctx, mutated_attributes, interned_key, from_backfill,
-                    key_obj == nullptr);
+                    key_obj == nullptr, document_score);
   }
 }
 
@@ -868,13 +887,14 @@ MutationSequenceNumber IndexSchema::UpdateDbInfoKey(
 void IndexSchema::ProcessMutation(ValkeyModuleCtx *ctx,
                                   MutatedAttributes &mutated_attributes,
                                   const Key &interned_key, bool from_backfill,
-                                  bool is_delete) {
+                                  bool is_delete, float document_score) {
   auto this_mutation = UpdateDbInfoKey(ctx, mutated_attributes, interned_key,
                                        from_backfill, is_delete);
 
   if (ABSL_PREDICT_FALSE(!mutations_thread_pool_ ||
                          mutations_thread_pool_->Size() == 0)) {
     vmsdk::WriterMutexLock lock(&time_sliced_mutex_);
+    index_key_info_[interned_key].document_score = document_score;
     SyncProcessMutation(ctx, mutated_attributes, interned_key);
     return;
   }
@@ -887,7 +907,7 @@ void IndexSchema::ProcessMutation(ValkeyModuleCtx *ctx,
 
   if (ABSL_PREDICT_FALSE(!TrackMutatedRecord(
           ctx, interned_key, std::move(mutated_attributes), this_mutation,
-          from_backfill, block_client, inside_multi_exec)) ||
+          from_backfill, block_client, inside_multi_exec, document_score)) ||
       inside_multi_exec) {
     // Skip scheduling if the mutation key has already been tracked or is part
     // of a multi exec command.
@@ -1113,7 +1133,7 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "default_score");
   ValkeyModule_ReplyWithCString(ctx, absl::StrCat(score_).c_str());
 
-  ValkeyModule_ReplyWithSimpleString(ctx, "score_field_name");
+  ValkeyModule_ReplyWithSimpleString(ctx, "score_field");
   ValkeyModule_ReplyWithSimpleString(
       ctx, score_field_.empty() ? "" : score_field_.c_str());
 
@@ -1874,7 +1894,7 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx, const Key &key,
                                      MutatedAttributes &&mutated_attributes,
                                      MutationSequenceNumber sequence_number,
                                      bool from_backfill, bool block_client,
-                                     bool from_multi) {
+                                     bool from_multi, float document_score) {
   absl::MutexLock lock(&mutated_records_mutex_);
   auto [itr, inserted] =
       tracked_mutated_records_.insert({key, DocumentMutation{}});
@@ -1884,6 +1904,7 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx, const Key &key,
     itr->second.from_backfill = from_backfill;
     itr->second.from_multi = from_multi;
     itr->second.sequence_number = sequence_number;
+    itr->second.document_score = document_score;
     // Allocate memory buffer proportional to data size and mutation weights
     // Buffer is freed when the mutation record is erased.
     itr->second.weighted_buffer.resize(
@@ -1898,6 +1919,7 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx, const Key &key,
   }
 
   itr->second.sequence_number = sequence_number;
+  itr->second.document_score = document_score;
 
   if (!itr->second.from_multi && from_multi) {
     itr->second.from_multi = from_multi;
@@ -1975,8 +1997,9 @@ IndexSchema::ConsumeTrackedMutatedAttribute(const Key &key, bool first_time) {
       tracked_mutated_records_.erase(itr);
       // Will notify after releasing lock
     } else {
-      index_key_info_[key].mutation_sequence_number_ =
-          itr->second.sequence_number;
+      auto &key_info = index_key_info_[key];
+      key_info.mutation_sequence_number_ = itr->second.sequence_number;
+      key_info.document_score = itr->second.document_score;
       // Track entry is now first consumed
       auto mutated_attributes = std::move(itr->second.attributes.value());
       itr->second.attributes = std::nullopt;

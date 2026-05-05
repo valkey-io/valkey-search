@@ -88,6 +88,7 @@ class IndexSchema : public KeyspaceEventSubscription,
  public:
   struct IndexKeyInfo {
     MutationSequenceNumber mutation_sequence_number_{0};
+    float document_score{1.0};
   };
 
   using IndexKeyInfoMap = absl::flat_hash_map<Key, IndexKeyInfo>;
@@ -175,6 +176,14 @@ class IndexSchema : public KeyspaceEventSubscription,
   inline float GetScore() const { return score_; }
   inline const std::string &GetScoreField() const { return score_field_; }
   inline bool HasScoreField() const { return !score_field_.empty(); }
+  float GetDocumentScore(const Key &key) const
+      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
+    auto itr = index_key_info_.find(key);
+    if (itr == index_key_info_.end()) {
+      return score_;
+    }
+    return itr->second.document_score;
+  }
 
   void CreateTextIndexSchema() {
     text_index_schema_ = std::make_shared<indexes::text::TextIndexSchema>(
@@ -250,6 +259,7 @@ class IndexSchema : public KeyspaceEventSubscription,
     bool consume_in_progress{false};
     bool from_backfill{false};
     bool from_multi{false};
+    float document_score{1.0};
   };
   using MutatedAttributes =
       absl::flat_hash_map<std::string, DocumentMutation::AttributeData>;
@@ -468,7 +478,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   void ProcessMutation(ValkeyModuleCtx *ctx,
                        MutatedAttributes &mutated_attributes,
                        const Key &interned_key, bool from_backfill,
-                       bool is_delete);
+                       bool is_delete, float document_score = 1.0);
   bool ScheduleMutation(bool from_backfill, const Key &key,
                         vmsdk::ThreadPool::Priority priority,
                         absl::BlockingCounter *blocking_counter);
@@ -495,7 +505,7 @@ class IndexSchema : public KeyspaceEventSubscription,
                           MutatedAttributes &&mutated_attributes,
                           MutationSequenceNumber sequence_number,
                           bool from_backfill, bool block_client,
-                          bool from_multi)
+                          bool from_multi, float document_score = 1.0)
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
 
   size_t ComputeWeightedBufferSize(const MutatedAttributes &attributes) const;

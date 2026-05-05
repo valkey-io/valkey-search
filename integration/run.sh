@@ -161,7 +161,11 @@ function run_pytest() {
   
   LOG_INFO "Running: ${PYTHON_PATH} -m pytest ${FILTER_ARGS} ${CAPTURE_ARG} --cache-clear -v ${ROOT_DIR}/integration/"
   # Capture pytest output to check for sanitizer errors
-  script -q -e -c "${PYTHON_PATH} -m pytest ${FILTER_ARGS} ${CAPTURE_ARG} --cache-clear -v ${ROOT_DIR}/integration/" ${PYTEST_OUTPUT_LOG}
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    script -q ${PYTEST_OUTPUT_LOG} ${PYTHON_PATH} -m pytest ${FILTER_ARGS} ${CAPTURE_ARG} --cache-clear -v ${ROOT_DIR}/integration/
+  else
+    script -q -e -c "${PYTHON_PATH} -m pytest ${FILTER_ARGS} ${CAPTURE_ARG} --cache-clear -v ${ROOT_DIR}/integration/" ${PYTEST_OUTPUT_LOG}
+  fi
   RUN_SUCCESS=$?
 }
 

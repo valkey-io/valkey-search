@@ -341,6 +341,23 @@ class CountDistinct : public GroupBy::ReducerInstance {
   }
 };
 
+class ToList : public GroupBy::ReducerInstance {
+  absl::flat_hash_set<expr::Value> unique_values_;
+  std::vector<expr::Value> ordered_values_;
+  void ProcessRecord(const ArgVector& values) override {
+    if (values[0].IsNil()) {
+      return;
+    }
+    if (!unique_values_.contains(values[0])) {
+      unique_values_.insert(values[0]);
+      ordered_values_.push_back(values[0]);
+    }
+  }
+  expr::Value GetResult() const override {
+    return expr::Value(ordered_values_);
+  }
+};
+
 template <typename T>
 struct BasicReducer : GroupBy::Reducer {
   // BasicReducer(std::string name) : GroupBy::Reducer(std::move(name)) {}
@@ -398,6 +415,7 @@ absl::flat_hash_map<std::string, GroupBy::ReducerInfo> GroupBy::reducerTable{
     {"MAX", &BasicReducerParser<Max, 1, 1>},
     {"STDDEV", &BasicReducerParser<Stddev, 1, 1>},
     {"SUM", &BasicReducerParser<Sum, 1, 1>},
+    {"TOLIST", &BasicReducerParser<ToList, 1, 1>},
 };
 
 }  // namespace aggregate

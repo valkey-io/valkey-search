@@ -7,7 +7,7 @@
     ],
     "history": [
       [
-        "1.2.0", 
+        "1.2.0",
         "Added Text Indexing and Search support"
       ]
     ],
@@ -263,6 +263,11 @@
                     "name": "STDDEV",
                     "type": "pure-token",
                     "token": "STDDEV"
+                  },
+                  {
+                    "name": "TOLIST",
+                    "type": "pure-token",
+                    "token": "TOLIST"
                   }
                 ]
               },

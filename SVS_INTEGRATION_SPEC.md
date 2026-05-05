@@ -433,6 +433,14 @@ Test pair **01** (see §3.3) exercises the modify path.
 
 ### 3.5 `GetValueImpl()`
 
+> **Note on scope.** The ask on the SVS runtime for this method is
+> just: *"provide `reconstruct(label, float* out)`."* The interesting
+> question — whether valkey-search should drop its FP32 shadow and use
+> `reconstruct()` directly, or keep the shadow and ignore it — is a
+> **valkey-search** decision, not an SVS-team one. This section is
+> dedicated to that decision so the SVS team sees the context of how
+> their API will be consumed.
+
 #### Contract
 
 ```cpp
@@ -463,7 +471,7 @@ char* VectorSVS<T>::GetValueImpl(uint64_t internal_id) const {
 }
 ```
 
-We keep `raw_vectors_` — a parallel `hash_map<uint64_t, std::vector<char>>` of every vector ever inserted, **uncompressed**. It exists entirely because the SVS runtime has no way to read back a vector that's already in the graph.
+We keep `raw_vectors_` — a parallel `hash_map<uint64_t, std::vector<char>>` of every vector ever inserted, **uncompressed**. Needed today because the SVS 0.2.0 runtime cannot read a vector back out of the graph; disposable once `reconstruct()` exists.
 
 Memory cost at 1 M × 768-dim:
 
@@ -473,119 +481,93 @@ Memory cost at 1 M × 768-dim:
 | `raw_vectors_` FP32 shadow | ~3 GB |
 | Total | ~4.5 GB |
 
-The shadow is **2×** the compressed index for LVQ4X8 — the dominant cost of an SVS index. Dropping it makes a real difference.
+The shadow is **2×** the compressed index for LVQ4X8 — the dominant cost of an SVS index. The policy question is whether to keep paying it.
 
-#### Where the returned bytes actually flow
+---
 
-There are three call paths that pull bytes out:
+#### The valkey-search policy question: keep the shadow, or drop it?
 
-1. **`FT.SEARCH ... RETURN vector`** (`src/query/search.cc:525-548`) — the user-visible one. Serialized back verbatim in the reply.
-2. **`ComputeDistanceFromRecord`** (`src/indexes/vector_base.cc:492-497`) — internal distance computation against a query; used by pre-filter scoring. Can be redirected to a future SVS `compute_distance(label, query)` API (see §3.6) and therefore doesn't constrain `GetValueImpl`.
-3. **`IsVectorMatch`** (tracked-key bookkeeping) — byte comparison with a candidate update to skip no-op re-indexing. Silent perf optimization.
+Once SVS ships `reconstruct()` (see the "Ask on new SVS runtime" below), `GetValueImpl` has two viable implementations in valkey-search. This subsection walks through which valkey-search user-facing commands hit this path, which workflows care, and why we think this should be a user-configurable choice rather than a silent engineering decision.
 
-Only call path (1) determines user-visible behavior. The next subsection walks through the user-facing commands and workflows that hit it.
+#### Commands that hit `GetValueImpl`
 
-#### User-visible commands that return vector bytes
+The only valkey-search read paths that go through `GetValueImpl` are the ones where the index is asked to hand vector bytes back to a client:
 
-Several command-level paths end up handing vector bytes back to clients. Each one has a different expectation profile.
+1. **`FT.SEARCH idx "..." RETURN <n> vector`** (`src/query/search.cc:525-548`). The canonical case. Example:
+   ```
+   FT.SEARCH idx "*=>[KNN 10 @vec $blob]" PARAMS 2 blob <binary>
+             RETURN 1 vec DIALECT 2
+   ```
+   Each top-k neighbor's `vec` bytes are serialized into the reply.
+2. **`FT.SEARCH idx "..."` with no `RETURN` clause**. Returns every indexed attribute, which pulls vector bytes through `GetValueImpl` for a schema that has `vec VECTOR ...`. Many casual users hit this without realizing.
+3. **`FT.AGGREGATE`** with a vector attribute projected (`LOAD`/`GROUPBY`/`APPLY` on the vector field). Less common.
 
-**1. `FT.SEARCH idx "..." RETURN <n> vector`** — primary case, see `src/query/search.cc:525-548`.
+Commands that do **not** hit `GetValueImpl`:
 
-Example:
-```
-FT.SEARCH idx "*=>[KNN 10 @vec $blob]" PARAMS 2 blob <binary> RETURN 1 vec DIALECT 2
-```
+- **`FT.SEARCH idx "..." RETURN <n> __key`** — returns Redis keys only. This is the dominant mode for RAG/semantic-search clients: they read the vector back separately via `HGET`/`JSON.GET` against primary storage. Unaffected by this policy decision.
+- **`HGET key vec` / `JSON.GET key $.vec` / `DUMP key`** — primary KV/doc storage. Always exact bytes. Unaffected.
+- **Internal pre-filter `ComputeDistanceFromRecordImpl`** (`src/indexes/vector_base.cc:492-497`) — will switch to SVS `compute_distance()` (§3.6). Not user-visible.
 
-The reply includes the stored bytes of each top-k neighbor's `vec` attribute. This is the canonical read path and the one users touch most often when debugging or reviewing results. Users who `RETURN vec` typically care — otherwise they'd list non-vector fields only.
+#### Workflows and whether they care about exact bytes
 
-**2. `FT.SEARCH idx "..." RETURN <n> __key`** — **does not** go through `GetValueImpl`. Returns the Redis key only, not the vector bytes. This is the dominant mode for RAG / semantic search pipelines: clients read back the vector with a separate `HGET`/`JSON.GET` against the stored document, not through the index. **Not affected** by approximation.
-
-**3. `FT.SEARCH idx "..."` with no `RETURN` clause** — returns every indexed attribute. If the schema includes `vec VECTOR ...`, this *will* pull vector bytes out through `GetValueImpl` as part of returning the full document. Many casual users hit this path without realizing it.
-
-**4. `FT.AGGREGATE`** — same as `FT.SEARCH` when a vector attribute is projected (`LOAD` / `GROUPBY` / `APPLY` on the vector field). Less common; most aggregations are over scalar fields.
-
-**5. Pre-filter path (`ComputeDistanceFromRecordImpl`)** — internal only; user doesn't observe the bytes. Will be redirected to SVS `compute_distance()` (§3.6) so it's not constrained by `GetValueImpl`.
-
-**Workflows and how much they care about exact bytes:**
-
-| Workflow | How it reads vectors back | Notices approximation? | Notes |
-|---|---|---|---|
-| RAG / semantic search (majority) | `RETURN __key`, then `HGET` on the original key | **No** | Never goes through `GetValueImpl`. `HGET` returns exact bytes from primary KV storage. |
-| Debugging recall issues | `RETURN vec` then inspect/compare numerically | **Mildly** | Diagnostic signal is muddied — reconstruction error looks indistinguishable from an index bug. Workaround: always cross-check with `HGET`. |
-| Vector ETL pipelines / audit (read-modify-write) | `RETURN vec`, edit, `HSET` back | **Yes** | A write-read-write cycle through `FT.SEARCH RETURN vec` would accumulate approximation error on every round-trip. `HGET`-based cycles are safe. |
-| Nearest-neighbor re-ranking using cosine / dot against the *returned* vector | `RETURN vec`, compute distance client-side | **Yes** | Re-ranking math done on the approximate vector gives different ordering than the same math on the original. |
-| Duplicate detection across shards / replicas | `RETURN vec`, hash or byte-compare | **Yes** | Approximate bytes hash differently across reads, breaking dedup invariants. |
-| `DUMP key` for backup / migration | Does not go through the index at all — reads the primary hash via Valkey's `DUMP` command | **N/A** | Always exact; backup/restore integrity is preserved regardless of what the index does. |
-| Cross-API consistency (`FT.SEARCH ... RETURN vec` ↔ `HGET key vec`) | Both paths | **Yes** | Today these agree. With approximation, they'd diverge — the same logical vector returned differently depending on which API you ask. |
-
-**The critical insight.** Valkey's primary storage (`HGET`, `JSON.GET`, `DUMP`) is *not* affected by what we do here. The user's original bytes live in the hash value and come back exact via those commands. `GetValueImpl` only governs the *index read path* — `FT.SEARCH` returns. So "approximate RETURN vector" is really a choice about whether the search-index read path matches the primary-storage read path, or diverges from it.
-
-Users in profiles 1-2 (most of them) either don't notice or only notice when debugging, and can work around it by reading via `HGET`. Users in profiles 3-5 (power / platform / data-ops) expect the two paths to agree and would hit real bugs if they don't.
-
-This is why we think the decision has to be a user-facing knob, not a silent SVS-team-chooses default.
-
-#### Design question: is an approximate reconstruction acceptable?
-
-We put this question to the SVS team and walked through the trade-offs. The short answer: **yes at the SVS-API level, maybe at the valkey-search level — we'd like to leave that as a user-facing configuration knob and let the community weigh in before we commit.**
-
-Here's the reasoning.
-
-**What "approximate" means concretely.** LVQ4X8 stores each dimension as 4+8 bits after a per-block rescale; reconstruction error per coordinate is ~0.5% of the vector's max component for unit-normalized data, larger for unnormalized. LeanVec adds a PCA projection whose inverse is lossy by construction — low-variance dimensions are effectively gone. So "approximate" is not "the 8th decimal differs"; it's "every coordinate is off by ~0.5%, and some dimensions may be absent."
-
-**User profiles and impact:**
-
-| Profile | Cares about exact bytes? | Why |
+| Workflow | Read path | Notices? |
 |---|---|---|
-| Typical RAG / semantic search | No | They only consume IDs; `RETURN vector` is rare |
-| User debugging recall issues | Mildly | Loses diagnostic signal — can't tell whether a mismatch is index bug or quantization |
-| User treating valkey as a vector store | **Yes** | Expects `FT.SEARCH ... RETURN vector` to match what they `HSET`'d and what `HGET` returns |
-| Dedup / update pipelines using our `IsVectorMatch` | **Yes** | Byte-compare always fails on approximation → silent perf regression |
+| RAG / semantic search (majority) | `RETURN __key` → `HGET` | **No** — never touches `GetValueImpl` |
+| Debugging recall issues | `RETURN vec` | Mildly — reconstruction error blurs the signal, but they can cross-check with `HGET` |
+| ETL / read-modify-write cycles | `RETURN vec` → edit → `HSET` | **Yes** — error accumulates across iterations if they loop through the index read path |
+| Client-side re-ranking against returned vectors | `RETURN vec` → distance math | **Yes** — re-ranking on approximate bytes gives different ordering than on originals |
+| Duplicate detection / content-addressing | `RETURN vec` → hash / byte-compare | **Yes** — approximate bytes hash differently; breaks dedup invariants |
+| Backup & migration | `DUMP key` / `BGSAVE` | N/A — reads primary storage, bypasses the index |
+| Cross-API consistency (`FT.SEARCH ... RETURN vec` ↔ `HGET key vec`) | Both | **Yes** — today these agree for all index kinds; approximate returns would diverge |
 
-**The consistency argument.** Whatever the user put into the hash via `HSET doc:X vector <bytes>` is still there. `HGET doc:X vector` will always return the exact bytes — Valkey's primary KV store is not involved in the secondary index. But `FT.SEARCH ... RETURN vector` would return *approximate* bytes if we rely on SVS reconstruction for compressed indexes. So two calls the user reasonably expects to agree would diverge. That's arguably worse than "the vector is approximate in isolation"; it's a cross-API consistency bug.
+#### The consistency argument
 
-For HNSW and FP32-SVS there's no divergence today because the index storage is bit-exact. The divergence is LVQ/LeanVec-specific.
+This is the part we think matters most to upstream reviewers.
 
-**No precedent in the Redis ecosystem.** Redis Stack / RediSearch `FT.SEARCH ... RETURN vector` returns exact bytes for every supported algorithm today. We'd be the first to ship approximate returns.
+Whatever the user put in via `HSET doc:X vec <bytes>` is sitting in the primary hash value. `HGET doc:X vec`, `JSON.GET`, `DUMP` — all of those always return the original bytes, regardless of what the index does. The index is a **secondary** structure.
 
-#### Ask on new SVS runtime
+Today, `FT.SEARCH ... RETURN vec` and `HGET key vec` are guaranteed to return the same bytes for the same logical vector. HNSW satisfies this trivially (stores bytes inline). FP32 SVS satisfies it (no lossy storage). LVQ/LeanVec SVS satisfies it **only because we keep `raw_vectors_`**. If we drop the shadow, the two API calls diverge: `FT.SEARCH` returns approximate bytes while `HGET` returns exact ones. Same logical vector, different answers depending on which command a client happens to use.
 
-Add **`reconstruct(size_t label, float* out)`** to `DynamicVamanaIndex`. Semantics we're asking for:
+There is no precedent in the Redis/RediSearch ecosystem for this kind of divergence. We'd be the first.
 
-- For `StorageKind::FP32`: **bit-exact** reconstruction (it's already FP32 internally, so this should be free).
-- For quantized kinds (`LVQ*`, `LeanVec*`): best-effort reconstruction. **Please document the per-kind error bound** so valkey-search can make an informed decision about whether to still keep our shadow.
-- Safe to call concurrently with `search()` and `add()`.
-- O(1) or close to it — not a full graph traversal.
+#### Proposal: per-index user-configurable option
 
-Approximate reconstruction is acceptable at the SVS API surface. The bit-exactness question is **valkey-search's** to answer, not SVS's — see the next subsection.
+We think the decision is a real trade-off with no universally-correct default, so we want to ship it as a knob rather than pick for everyone. Two options stay on the table for the upstream RFC:
 
-#### How valkey-search will use it — two options, pending community feedback
+- **Option A — Keep the shadow for lossy storage kinds.** `GetValueImpl` returns exact bytes always. `raw_vectors_` persists for LVQ/LeanVec indexes (and is dropped for FP32). Preserves the `FT.SEARCH ↔ HGET` consistency; pays the ~2× memory cost for compression users.
+- **Option B — Drop the shadow, use `reconstruct()`.** `GetValueImpl` returns approximate bytes for lossy storage. `raw_vectors_` is deleted entirely. Halves memory for compression users; breaks the consistency guarantee.
 
-Once `reconstruct()` exists, we have two plausible policies:
+Neither is obviously right; the community should pick.
 
-- **Option A — Always keep the shadow for lossy storage kinds.** `GetValueImpl` returns exact bytes unconditionally. `raw_vectors_` stays for LVQ/LeanVec indexes; we drop it only for FP32. Preserves user expectations; pays the memory cost for compression users.
-
-- **Option B — Drop the shadow, return approximate bytes for lossy storage.** `GetValueImpl` calls `reconstruct()` directly. `raw_vectors_` is deleted entirely. Halves the memory cost for compression users; breaks the `HSET`↔`FT.SEARCH RETURN` consistency guarantee.
-
-These are genuine trade-offs with no obviously-correct answer, so we'd rather ship a config knob than pick for everyone. Sketch:
+Proposed surface (name bikesheddable):
 
 ```
 FT.CREATE idx ... VECTOR SVS ...
   COMPRESSION LVQ4X8
-  RETURN_MODE EXACT | APPROXIMATE   # new; default decided by community feedback
+  RAW_VECTOR_STORAGE KEEP | DROP
 ```
 
-- `EXACT` — valkey-search keeps `raw_vectors_`. `FT.SEARCH ... RETURN vector` always returns exactly what the user inserted.
-- `APPROXIMATE` — valkey-search drops `raw_vectors_`. `FT.SEARCH ... RETURN vector` returns reconstructed bytes. Memory roughly halved.
+- `KEEP` — valkey-search stores the FP32 shadow. `FT.SEARCH ... RETURN vec` returns exact bytes.
+- `DROP` — no shadow. `FT.SEARCH ... RETURN vec` returns reconstructed bytes for lossy compression.
 
-The default is a community question. Our current hypothesis is that `EXACT` is safer and matches Redis/Valkey conventions, but memory-bound production users will want `APPROXIMATE` — and shipping a default of `APPROXIMATE` might be the pragmatic choice for an algorithm whose whole point is compression. **We'll raise this explicitly in the upstream RFC before committing to a default.**
+Default: **pending community feedback.** Our current hypothesis is `KEEP` matches Valkey conventions better, but `DROP` is the pragmatic choice for an algorithm whose entire value prop is compression. We'll raise this explicitly in the upstream RFC.
 
-What the SVS team should take away: do not gate `reconstruct()` on bit-exactness for compressed kinds. Ship it with best-effort semantics; valkey-search will decide per-index whether to use it or fall back to a shadow copy.
+For FP32 storage there's no trade-off — the option has no effect, and `raw_vectors_` is dropped unconditionally.
+
+#### Ask on new SVS runtime
+
+Add **`reconstruct(size_t label, float* out)`** to `DynamicVamanaIndex`. This is the enabler for the policy choice above; the lossiness per `StorageKind` is whatever SVS already does internally — we don't need SVS to change it. Requirements:
+
+- Safe to call concurrently with `search()` and `add()`.
+- Thread-safe in the same sense as `search()` — no internal OS-thread fan-out per call.
+- O(1) or close to it — not a full graph traversal.
+- Fills `out[0..dim)` with FP32 values matching whatever SVS would use internally as the reconstructed approximation (for lossy kinds) or the stored vector (for FP32).
 
 #### Validation
 
 Test pair **07** — reconstruct vector by label:
 - [`svs_integration_tests/hnsw/test_07_reconstruct.cc`](./svs_integration_tests/hnsw/test_07_reconstruct.cc) — baseline via `algo_->getDataByInternalId()`. Bit-exact round-trip.
-- [`svs_integration_tests/svs/test_07_reconstruct.cc`](./svs_integration_tests/svs/test_07_reconstruct.cc) — **fails to link on 0.2.0** with `undefined reference to svs::runtime::v0::dynamic_vamana_reconstruct`. The link error is the ask. On the new runtime the test prints the per-vector L2 reconstruction error so the SVS team can document the bound.
+- [`svs_integration_tests/svs/test_07_reconstruct.cc`](./svs_integration_tests/svs/test_07_reconstruct.cc) — **fails to link on 0.2.0** with `undefined reference to svs::runtime::v0::dynamic_vamana_reconstruct`. The link error is the ask. On the new runtime, the test prints per-vector L2 reconstruction error so we can characterize the bound.
 
 ---
 

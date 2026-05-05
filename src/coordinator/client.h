@@ -24,6 +24,8 @@ using GetGlobalMetadataCallback =
     absl::AnyInvocable<void(grpc::Status, GetGlobalMetadataResponse&)>;
 using SearchIndexPartitionCallback =
     absl::AnyInvocable<void(grpc::Status, SearchIndexPartitionResponse&)>;
+using MultiSearchIndexPartitionCallback =
+    absl::AnyInvocable<void(grpc::Status, MultiSearchIndexPartitionResponse&)>;
 using InfoIndexPartitionCallback =
     absl::AnyInvocable<void(grpc::Status, InfoIndexPartitionResponse&)>;
 
@@ -34,6 +36,9 @@ class Client {
   virtual void SearchIndexPartition(
       std::unique_ptr<SearchIndexPartitionRequest> request,
       SearchIndexPartitionCallback done) = 0;
+  virtual void MultiSearchIndexPartition(
+      std::unique_ptr<MultiSearchIndexPartitionRequest> request,
+      MultiSearchIndexPartitionCallback done) = 0;
   virtual void InfoIndexPartition(
       std::unique_ptr<InfoIndexPartitionRequest> request,
       InfoIndexPartitionCallback done, int timeout_ms = 5000) = 0;
@@ -55,6 +60,9 @@ class ClientImpl : public Client {
   void SearchIndexPartition(
       std::unique_ptr<SearchIndexPartitionRequest> request,
       SearchIndexPartitionCallback done) override;
+  void MultiSearchIndexPartition(
+      std::unique_ptr<MultiSearchIndexPartitionRequest> request,
+      MultiSearchIndexPartitionCallback done) override;
   void InfoIndexPartition(std::unique_ptr<InfoIndexPartitionRequest> request,
                           InfoIndexPartitionCallback done,
                           int timeout_ms = 5000) override;

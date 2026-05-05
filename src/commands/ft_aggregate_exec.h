@@ -8,14 +8,30 @@
 #define VALKEYSEARCH_COMMANDS_FT_AGGREGATE_EXEC
 
 #include <deque>
+#include <vector>
 
 #include "absl/container/inlined_vector.h"
+#include "absl/status/status.h"
 #include "src/commands/ft_aggregate_parser.h"
 #include "src/expr/expr.h"
 #include "src/expr/value.h"
+#include "src/indexes/vector_base.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 namespace aggregate {
+
+// Runs the full aggregate reply pipeline on the supplied neighbors:
+//   1. Process query setup (key/score record indices)
+//   2. Convert neighbors -> Record objects (LOAD pass)
+//   3. Execute aggregation stages (APPLY/FILTER/GROUPBY/SORTBY/LIMIT)
+//   4. Emit the response
+//
+// Used by aggregate::AggregateParameters::SendReply and by FT.HYBRID's
+// MultiSearchParameters::SendReply (which feeds the post-fusion neighbor list).
+absl::Status RunAggregatePipeline(ValkeyModuleCtx* ctx,
+                                  std::vector<indexes::Neighbor>& neighbors,
+                                  AggregateParameters& parameters);
 
 class Record : public expr::Expression::Record {
  public:

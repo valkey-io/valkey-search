@@ -181,6 +181,49 @@ void ClientImpl::SearchIndexPartition(
       });
 }
 
+void ClientImpl::MultiSearchIndexPartition(
+    std::unique_ptr<MultiSearchIndexPartitionRequest> request,
+    MultiSearchIndexPartitionCallback done) {
+  struct MultiSearchIndexPartitionArgs {
+    ::grpc::ClientContext context;
+    std::unique_ptr<MultiSearchIndexPartitionRequest> request;
+    MultiSearchIndexPartitionResponse response;
+    MultiSearchIndexPartitionCallback callback;
+    std::unique_ptr<vmsdk::StopWatch> latency_sample;
+  };
+  auto args = std::make_unique<MultiSearchIndexPartitionArgs>();
+  args->context.set_deadline(absl::ToChronoTime(
+      absl::Now() + absl::Seconds(query_connection_timeout->GetValue())));
+  args->callback = std::move(done);
+  args->request = std::move(request);
+  args->latency_sample = SAMPLE_EVERY_N(100);
+  auto args_raw = args.release();
+  Metrics::GetStats().coordinator_bytes_out.fetch_add(
+      args_raw->request->ByteSizeLong(), std::memory_order_relaxed);
+  stub_->async()->MultiSearchIndexPartition(
+      &args_raw->context, args_raw->request.get(), &args_raw->response,
+      [args_raw](grpc::Status s) mutable {
+        GRPCSuspensionGuard guard(GRPCSuspender::Instance());
+        auto args = std::unique_ptr<MultiSearchIndexPartitionArgs>(args_raw);
+        args->callback(s, args->response);
+        if (s.ok()) {
+          Metrics::GetStats()
+              .coordinator_client_search_index_partition_success_cnt++;
+          Metrics::GetStats()
+              .coordinator_client_search_index_partition_success_latency
+              .SubmitSample(std::move(args->latency_sample));
+          Metrics::GetStats().coordinator_bytes_in.fetch_add(
+              args->response.ByteSizeLong(), std::memory_order_relaxed);
+        } else {
+          Metrics::GetStats()
+              .coordinator_client_search_index_partition_failure_cnt++;
+          Metrics::GetStats()
+              .coordinator_client_search_index_partition_failure_latency
+              .SubmitSample(std::move(args->latency_sample));
+        }
+      });
+}
+
 void ClientImpl::InfoIndexPartition(
     std::unique_ptr<InfoIndexPartitionRequest> request,
     InfoIndexPartitionCallback done, int timeout_ms) {

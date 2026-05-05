@@ -58,6 +58,19 @@ target_link_libraries(content_resolution PUBLIC response_generator)
 target_link_libraries(content_resolution PUBLIC metrics)
 target_link_libraries(content_resolution PUBLIC vmsdklib)
 
+set(SRCS_MULTI_SEARCH ${CMAKE_CURRENT_LIST_DIR}/multi_search.cc
+                      ${CMAKE_CURRENT_LIST_DIR}/multi_search.h)
+
+valkey_search_add_static_library(multi_search "${SRCS_MULTI_SEARCH}")
+target_include_directories(multi_search PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(multi_search PUBLIC search)
+target_link_libraries(multi_search PUBLIC index_schema)
+target_link_libraries(multi_search PUBLIC coordinator_cc_proto)
+# Pull in ft_aggregate_parser (and thus AggregateParameters' complete type)
+# via the commands library link path. The header is declared in
+# src/commands/ft_aggregate_parser.h.
+target_link_libraries(multi_search PUBLIC vmsdklib)
+
 set(SRCS_FANOUT ${CMAKE_CURRENT_LIST_DIR}/fanout.cc
                 ${CMAKE_CURRENT_LIST_DIR}/fanout.h
                 ${CMAKE_CURRENT_LIST_DIR}/primary_info_fanout_operation.cc

@@ -10,7 +10,7 @@
 
 valkey-search uses a vector index through an abstract C++ class (`VectorBase`). Two concrete implementations exist today: `VectorHNSW` (wraps hnswlib) and `VectorSVS` (wraps the SVS runtime at `libsvs_runtime.so.0.2.0`).
 
-The HNSW implementation hits valkey-search's threading requirements naturally: readers run concurrently, writers run concurrently, and the only serialization point is a rare index resize. hnswlib does the locking itself with per-label mutexes, so valkey-search's wrapper can use a shared reader lock for everything except resize.
+The HNSW implementation hits valkey-search's threading requirements naturally: readers run concurrently, writers run concurrently, and the only serialization point is a rare index resize. hnswlib does the locking itself with per-label mutexes (`link_list_locks_` and `label_lookup_lock` in `hnswalg.h`), so the valkey-search wrapper takes no lock at all on the search path, and takes a *shared* lock only for mutations so the resize writer can shoot down all in-flight mutations briefly while it grows the backing arrays.
 
 The SVS prototype cannot match this yet. Our wrapper takes an **exclusive mutex** on every mutation, buffers inserts in a 10 K-entry queue (`pending_buffer_`), and flushes the buffer inside the same lock — blocking searches for 0.5-1 s on each flush. It also keeps a full FP32 shadow copy of every vector (`raw_vectors_`) because the SVS runtime does not expose the retrieval/distance APIs we need. These workarounds exist because the current SVS runtime API and threading model don't support the access pattern valkey-search needs.
 
@@ -20,7 +20,7 @@ This document walks through each `VectorBase` virtual method, shows how hnswlib 
 
 ## 2. valkey-search threading model (1-page primer)
 
-valkey-search runs three worker thread pools, created at module startup in `src/valkey_search.cc:1236-1240` (sizes default to the physical CPU count):
+valkey-search runs three worker thread pools, created at module startup in `src/valkey_search.cc:1236-1248` (reader/writer sizes default to the physical CPU count; utility pool defaults to 1 thread):
 
 ```
 reader_thread_pool_  ← FT.SEARCH commands dispatch here
@@ -28,20 +28,20 @@ writer_thread_pool_  ← HSET / HDEL / FT.CREATE / FT.DROPINDEX dispatch here
 utility_thread_pool_ ← background cleanup
 ```
 
-Each `VectorBase` instance owns a single `absl::Mutex` (the "resize mutex" in HNSW, the "index mutex" in SVS). All method calls to the index take either a **shared** (reader) lock or an **exclusive** (writer) lock on this mutex.
+Each `VectorBase` instance owns a single `absl::Mutex` (the "resize mutex" in HNSW, the "index mutex" in SVS). The lock is used only on *mutation* paths — the HNSW search path doesn't take it at all. SVS does take a reader lock on it in Search (but that's a SVS-specific workaround; see §3.1.4).
 
-**What we require from the underlying index:**
+**What we require from the underlying index, per method:**
 
-| Method called from | Lock valkey-search holds | Expected to be |
+| Method called from | valkey-search locking | Index impl must support |
 |---|---|---|
-| `Search()` (reader pool) | shared | safely concurrent with other shared-lock calls |
-| `AddRecordImpl()` (writer pool) | shared (HNSW) / exclusive (SVS today) | safely concurrent with searches |
+| `Search()` (reader pool) | **no lock at all** (HNSW); reader lock (SVS today as a workaround) | fully concurrent calls, safely re-entrant |
+| `AddRecordImpl()` (writer pool) | shared on `resize_mutex_` (HNSW) / exclusive on `index_mutex_` (SVS today) | safely concurrent with searches and other adds |
 | `RemoveRecordImpl()` (writer pool) | shared (HNSW) / exclusive (SVS today) | safely concurrent with searches |
 | `ModifyRecordImpl()` (writer pool) | shared (HNSW) / exclusive (SVS today) | safely concurrent with searches |
 
-**HNSW passes this contract**: under a shared lock, hnswlib's `searchKnn` / `addPoint` / `markDelete` are safe because hnswlib internally locks per-label (`src/indexes/vector_hnsw.cc:117-133`). Only `resizeIndex` needs an exclusive lock — hence the name `resize_mutex_`. See `src/indexes/vector_hnsw.cc:244-276`.
+**HNSW passes this contract**: hnswlib's `searchKnn` / `addPoint` / `markDelete` are safe to call concurrently (from unlocked readers and shared-lock writers) because hnswlib has its own per-label locks — `link_list_locks_[node]` protecting each node's outgoing edges and `label_lookup_lock` protecting the label→id map (see `hnswalg.h:43`, `hnswalg.h:59`, and the locking in `addPoint` at `hnswalg.h:954-992`). The wrapper's `resize_mutex_` reader lock on mutations exists solely so that the rare `ResizeIfFull` exclusive-lock writer can drain all in-flight adds before growing the arrays (`src/indexes/vector_hnsw.cc:244-276`). Search itself takes no lock on the wrapper side (`src/indexes/vector_hnsw.cc:320-361`, with `ABSL_NO_THREAD_SAFETY_ANALYSIS` on the inner lambda).
 
-**SVS fails this contract today**: the prototype takes exclusive locks everywhere because the SVS runtime doesn't guarantee safety under concurrent mutation. This is the root cause the SVS team is being asked to address.
+**SVS fails this contract today**: the prototype takes exclusive locks on every mutation and a reader lock on every search. Searches can become writers (auto-flush under exclusive lock). We're asking the SVS runtime to close that gap so the wrapper can match HNSW's locking discipline — see §3.1 for the detailed view of the Search path specifically.
 
 ---
 
@@ -57,86 +57,192 @@ Every section below has five parts:
 
 ### 3.1 `Search()`
 
-#### Contract
+This section is deliberately long. `Search()` is the method valkey-search
+cares about most — every read-path command (`FT.SEARCH`, filter
+evaluation, KNN-within-predicate) ultimately lands here, and the
+concurrency model around it determines whether valkey-search can serve
+queries at core-count throughput.
+
+#### 3.1.1 Contract
 
 ```cpp
 absl::StatusOr<std::vector<Neighbor>> Search(
     absl::string_view query, uint64_t count,
     cancel::Token& cancellation_token,
     std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr,
-    /* impl-specific runtime tuning parameter */
-);
+    /* impl-specific runtime tuning parameter: ef_runtime for HNSW,
+       search_window_size for SVS */);
 ```
 
-Find the top-`count` nearest neighbors to `query`. Called on a **reader-pool thread**. Many calls run concurrently. valkey-search expects the index to be safely re-entrant under a shared lock.
+- Return the top-`count` nearest neighbors to `query`, ordered by distance using the index's configured metric.
+- Called on a **reader-pool thread** (`reader_thread_pool_`, set up in `src/valkey_search.cc:1236-1239`). Many calls may be in-flight concurrently on different reader threads.
+- `filter` is optional and can cause the call to evaluate a pre-filter predicate against each candidate (extra distance computations against stored vectors).
+- `cancellation_token` lets the caller abort a search mid-traversal (FT.SEARCH timeout).
+- **valkey-search does not wrap this call in any lock** (neither `VectorBase` nor the query layer take a lock before calling Search — see §3.1.3 below). All thread-safety is delegated to the index implementation.
 
-#### HNSW today (`src/indexes/vector_hnsw.cc:320-361`)
+#### 3.1.2 How FT.SEARCH reaches the index
+
+1. `FT.SEARCH` arrives on Valkey's main thread.
+2. The command handler at `src/commands/commands.cc:196-198` calls `query::SearchAsync(..., ValkeySearch::Instance().GetReaderThreadPool(), ...)`, which enqueues a task on the reader pool and returns.
+3. A reader-pool worker picks up the task and calls into `src/query/search.cc:121-149`, which dispatches to `VectorHNSW::Search(...)` or `VectorSVS::Search(...)` based on the index type.
+4. Neither step takes a lock on the vector index itself. Whatever synchronization is needed must live inside the implementation.
+
+This matters because it means **concurrent `Search()` calls *must* be safe by themselves, without the caller doing anything special**. The reader pool can issue as many parallel searches as it has threads, and each of them lands straight on the index.
+
+#### 3.1.3 HNSW behavior (what works today)
+
+**Entry point: `VectorHNSW::Search` (`src/indexes/vector_hnsw.cc:320-361`)**
 
 ```cpp
+template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(…) {
-  auto perform_search = [&](absl::string_view query) { … 
-    CancelCondition cancel_condition(cancellation_token);
-    auto res = algo_->searchKnn((T *)query.data(), count, ef_runtime,
-                                filter.get(), &cancel_condition);
+  auto perform_search = [this, count, &filter, enable_partial_results,
+                         &ef_runtime, &cancellation_token]
+      (absl::string_view query) ABSL_NO_THREAD_SAFETY_ANALYSIS
+      -> absl::StatusOr<std::priority_queue<std::pair<T, hnswlib::labeltype>>> {
+    try {
+      CancelCondition cancel_condition(cancellation_token);
+      auto res = algo_->searchKnn((T *)query.data(), count, ef_runtime,
+                                  filter.get(), &cancel_condition);
+      …
+    } catch (…) { … }
+  };
+  …
+}
+```
+
+Observations:
+
+- **No `resize_mutex_` is acquired.** The lambda is annotated `ABSL_NO_THREAD_SAFETY_ANALYSIS`, i.e. the wrapper intentionally bypasses Abseil's lock checker. `algo_->searchKnn(...)` is called with zero synchronization from the valkey-search side.
+- This is safe because hnswlib's `searchKnn` is a `const` method and reads the graph with fine-grained internal locking only when strictly needed.
+
+**What hnswlib does internally to stay safe:**
+
+- `HierarchicalNSW::searchKnn` (upstream hnswlib `hnswalg.h`, `svs_integration_tests/hnsw/third_party/hnswlib/hnswalg.h:1271-1324` in the vendored copy) is `const`. It descends the graph from `enterpoint_node_`, at each hop reading a node's link list via `get_linklist(currObj, level)` and calling `fstdistfunc_(query, getDataByInternalId(cand), …)`.
+- Link lists and vector storage are bare memory (no per-hop locking during search). What keeps this safe under concurrent mutation:
+  - Per-node link-list locks: `std::vector<std::mutex> link_list_locks_` (`hnswalg.h:43`). `addPoint` / `markDelete` / graph-repair paths take `link_list_locks_[node]` before mutating that node's link list. Readers do not take these locks, but mutations are short — the write is a list overwrite, and readers that happen to traverse a node mid-write observe either the old or new list, not torn state (atomic pointer writes of pre-sized buffers).
+  - A label→internal-id table guarded by `label_lookup_lock` (`hnswalg.h:59`). Used by `addPoint` / `markDelete` / `getExternalLabel`. Readers on the search path consult it via `getExternalLabel(internalId)` after the graph traversal completes.
+  - A delete bit in each node's link-list header, tested by `isMarkedDeleted(internalId)` (`hnswalg.h:934-937`). Set with a per-node lock; reads are unlocked byte reads. A just-deleted node may still be traversed, but is filtered out of the result set.
+
+**In valkey-search terms:**
+- Multiple `VectorHNSW::Search` calls run in parallel with no serialization between them.
+- A `VectorHNSW::AddRecordImpl` running concurrently (also with no `resize_mutex_` contention — shared lock only, see §3.2) cannot corrupt a search. At worst a brand-new node becomes visible mid-traversal.
+- The only exclusive lock on `resize_mutex_` is taken by `ResizeIfFull` (`src/indexes/vector_hnsw.cc:244-276`). Writers take reader locks on `resize_mutex_` specifically to let the resize-writer block *everyone* when it needs to enlarge the backing arrays. Searches do **not** take that reader lock — the search path is genuinely unlocked.
+
+**Net effect:** on 8 reader cores, hnswlib scales to ~5× on our test (`svs_integration_tests/hnsw/test_02_concurrent_search.cc` reports 14k qps → 71k qps from N=1 to N=8).
+
+#### 3.1.4 SVS prototype behavior today
+
+**Entry point: `VectorSVS::Search` (`src/indexes/vector_svs.cc:459-610`)**
+
+The full path (abridged; comments removed for density):
+
+```cpp
+absl::StatusOr<std::vector<Neighbor>> VectorSVS<T>::Search(…) {
+  // 1. Record a total-search stopwatch for the Layer-1 histogram.
+  vmsdk::StopWatch total_search_timer;
+  Metrics::GetStats().svs_search_cnt.fetch_add(1, std::memory_order_relaxed);
+
+  auto perform_search = [this, count, &filter, &search_window_size,
+                         &cancellation_token](absl::string_view q) {
+    // 2. Auto-flush: if pending_buffer_ is non-empty, the search thread
+    //    becomes a *writer*, grabs an exclusive lock, and flushes.
+    bool needs_flush = false;
+    bool was_flushing = false;
+    { absl::ReaderMutexLock check_lock(&index_mutex_);
+      needs_flush   = !pending_buffer_.empty() && !buffer_flushing_;
+      was_flushing  = buffer_flushing_;
+    }
+    if (was_flushing) { Metrics::GetStats().svs_searches_during_flush_cnt.fetch_add(1, …); }
+    if (needs_flush) {
+      absl::MutexLock flush_lock(&index_mutex_);       // ← EXCLUSIVE LOCK
+      if (!pending_buffer_.empty()) {
+        VMSDK_RETURN_IF_ERROR(FlushBuffer());          // ← 500-1000 ms stall
+      }
+    }
+
+    // 3. Wait for the reader lock. When we were racing with FlushBuffer()
+    //    from step 2, this is the blackout window.
+    vmsdk::StopWatch lock_wait_timer;
+    absl::ReaderMutexLock lock(&index_mutex_);         // ← SHARED LOCK
+    auto lock_wait = lock_wait_timer.Duration();
+    Metrics::GetStats().svs_search_lock_wait_latency.SubmitSample(lock_wait);
+
+    // 4. Per-thread OMP pin. omp_set_num_threads is a thread-local ICV —
+    //    the value set during Create() on the main thread does NOT
+    //    propagate to reader-pool threads, so we re-apply it here.
+#ifdef _OPENMP
+    long long omp_threads = options::GetSVSOmpThreads().GetValue();
+    if (omp_threads > 0) { omp_set_num_threads((int)omp_threads); }
+#endif
+
+    // 5. The actual SVS call. Goes through GOMP_parallel internally,
+    //    even with a team size of 1.
+    vmsdk::StopWatch core_search_timer;
+    auto status = svs_index_->search(1, q.data(), k,
+                                      distances.data(), labels.data(),
+                                      params_ptr, svs_filter.get());
+    Metrics::GetStats().svs_search_core_latency.SubmitSample(
+        core_search_timer.Duration());
     …
   };
   …
 }
 ```
 
-No lock is taken here — `algo_->searchKnn` is read-only and safe for concurrent calls because hnswlib's graph traversal is immutable during search. The reader lock that *does* wrap this call is held at the `VectorBase` level (not shown).
+**Five structural differences vs. HNSW:**
 
-#### SVS prototype today (`src/indexes/vector_svs.cc:459-610`)
+1. **A search can become a writer.** If `pending_buffer_` is non-empty when a search arrives, that search thread grabs the exclusive lock and runs `FlushBuffer()` — a blocking call that takes ~500-1000 ms for a 10 K-vector batch at 1 M scale (observed in `INFO search_svs`, spec §3.2). During that window, all other concurrent searches on the same index block on the writer lock.
 
-```cpp
-absl::StatusOr<std::vector<Neighbor>> VectorSVS<T>::Search(…) {
-  // 1. Check if buffer needs flushing; possibly upgrade to exclusive lock.
-  bool needs_flush = false;
-  {
-    absl::ReaderMutexLock check_lock(&index_mutex_);
-    needs_flush = !pending_buffer_.empty() && !buffer_flushing_;
-  }
-  if (needs_flush) {
-    absl::MutexLock flush_lock(&index_mutex_);       // ← EXCLUSIVE lock
-    if (!pending_buffer_.empty()) {
-      VMSDK_RETURN_IF_ERROR(FlushBuffer());          // ← 0.5-1 s stall
-    }
-  }
-  absl::ReaderMutexLock lock(&index_mutex_);
+2. **The search holds a reader lock.** Every call wraps `svs_index_->search(...)` in `absl::ReaderMutexLock lock(&index_mutex_)`. Concurrent searches share the lock (they don't serialize on each other), but any concurrent writer blocks all of them.
 
-#ifdef _OPENMP
-  long long omp_threads = options::GetSVSOmpThreads().GetValue();
-  if (omp_threads > 0) omp_set_num_threads((int)omp_threads);   // pin to 1
-#endif
+3. **Per-call OMP re-pin.** `omp_set_num_threads(N)` is a per-thread ICV in libgomp. Setting it in `Create()` on the main thread does not carry over to reader-pool threads. We re-apply it on every search to make the pin stick. The default value is `1` (spec §3.10) — controllable via the `svs-omp-threads` module option.
 
-  auto status = svs_index_->search(1, query_data, k,
-                                   distances.data(), labels.data(),
-                                   params_ptr, svs_filter.get());
-  …
-}
-```
+4. **`svs_index_->search(...)` always dispatches through `GOMP_parallel`.** In the vendored `libsvs_runtime.so.0.2.0` this is unconditional — even with a team size of 1, every call pays the libgomp fork/join bookkeeping (~40-70 µs per call on our box, measured in `SVS_OMP_PERF_ANALYSIS.md`). The SVS runtime is nominally thread-safe (`search()` is `const noexcept` in SVS runtime header `svs/runtime/vamana_index.h:51-59`), but the throughput cost of the dispatch compounds at high concurrency.
 
-The SVS search path is much heavier than HNSW's:
+5. **Oversubscription at OMP > 1.** If the caller sets `omp_set_num_threads(N)` with N > 1 and valkey-search has R reader threads, the effective thread count is `N × R`. On 8 cores with R = 8 and N = 4, that's 32 threads competing for 8 cores — profiling shows kernel-space CPU rising from 2.7 % to 17.6 %, dominated by `native_queued_spin_lock_slowpath` (details in `SVS_OMP_PERF_ANALYSIS.md`). Today we avoid this by hard-pinning OMP = 1.
 
-- It may upgrade to an **exclusive** lock and run `FlushBuffer()` before searching, blocking every concurrent reader for the flush duration.
-- It re-applies `omp_set_num_threads(1)` on every search (see `src/indexes/vector_svs.cc:540-546`) because SVS's internal `GOMP_parallel` would otherwise oversubscribe the host's threads. Profiling showed OMP=8 raises kernel-space CPU from 2.7 % → 17.6 %, mostly in `native_queued_spin_lock_slowpath` (see `SVS_OMP_PERF_ANALYSIS.md`).
-- `svs_index_->search(…)` is already `const noexcept` in the SVS runtime (`include/svs/runtime/vamana_index.h:50-58`), i.e. nominally thread-safe, but it internally dispatches through `GOMP_parallel` for every call — a per-query fork/join even when no parallelism is wanted.
+#### 3.1.5 Observability (Layer 1 metrics exposed by `INFO search_svs`)
 
-#### Ask on new SVS runtime
+We added `INFO` fields (definitions in `src/valkey_search.cc:878-965`) so anyone running the prototype can see the cost directly:
 
-- Make `search()` safe for **many concurrent callers** with no internal oversubscription of OS threads. If parallelism is desired inside a single search, control it via a per-call parameter or a per-index configuration, not a global OMP setting.
-- Provide a build option **or** a runtime switch to run `search()` without dispatching through `GOMP_parallel` at all (serial path). Rationale: when valkey-search has many reader threads each issuing a search, intra-search parallelism is the *wrong* axis — it steals cores from sibling searches.
-- Make per-call thread behavior deterministic (no "fork a team of size N only if N>1" — we want the same code path for N=1 and N>N).
+| `INFO` key (section → field) | Meaning |
+|---|---|
+| `INFO search_svs` → `search_svs_search_count` | cumulative Search calls |
+| `INFO search_svs` → `search_svs_searches_during_flush` | searches that arrived while `buffer_flushing_ == true` |
+| `INFO search_svs` → `search_svs_search_blackout_us_total` | cumulative microseconds searches spent blocked on writer-held exclusive lock |
+| `INFO search_latency` → `search_svs_search_lock_wait_latency_usec` | HDR histogram of reader-lock acquisition time |
+| `INFO search_latency` → `search_svs_search_core_latency_usec` | HDR histogram of `svs_index_->search()` alone |
+| `INFO search_latency` → `search_svs_vector_index_search_latency_usec` | HDR histogram of the whole `Search()` (lock wait + core + post-processing) |
 
-#### Validation
+The gap between `search_core_latency` and `vector_index_search_latency` shows post-processing overhead (priority-queue building, result assembly). Non-zero `search_lock_wait_latency` indicates contention with writers — today, almost entirely from `FlushBuffer()`.
+
+#### 3.1.6 Ask on new SVS runtime
+
+Concretely, in order of importance to us:
+
+1. **Concurrent-safe `search()` without internal OS-thread fan-out.** The ideal: `svs_index_->search()` runs entirely on the calling thread, uses no libgomp, and is safe to call from any number of threads simultaneously. valkey-search already multithreads at the reader-pool level; intra-search parallelism is the wrong axis when every sibling search also wants a core.
+2. **A build option or a per-index config that turns off the `GOMP_parallel` dispatch on the search path.** If SVS must ship the parallel-search code path, fine — but let us opt out at build time (e.g. `-DSVS_ENABLE_OMP=OFF`) or per index (`VamanaIndex::SearchParams::threads = 1` with guaranteed-serial semantics). Today's `omp_set_num_threads(1)` workaround is brittle because it depends on a thread-local ICV we have to re-apply on every call.
+3. **Deterministic per-call thread behavior.** When `threads = 1`, the code path must be identical to `threads = 4` with only team size different — no "skip the parallel region entirely if N == 1" or "start extra helpers if N > 1." This way, correctness bugs don't hide behind OMP configuration.
+4. **Concurrent-safe with concurrent `add()` / `remove()` / `update()`.** Today we serialize all mutations with an exclusive lock because we don't know what the SVS graph layout looks like mid-insert. If SVS uses per-partition or per-label locking internally, expose a guarantee that `search()` can run concurrently with one mutating call.
+5. **Cancellation.** Our wrapper checks the cancel token after `svs_index_->search()` returns (`src/indexes/vector_svs.cc:567-572`) because SVS has no mid-traversal cancel hook. For long searches this wastes CPU on a query we're going to discard. A `SearchParams::cancel_callback` (equivalent of hnswlib's `BaseCancellationFunctor`) would let us kill an in-flight search on timeout.
+
+**Non-goals for SVS:** we do *not* need SVS to spawn its own threads, run a background search pool, or manage request queueing — that's valkey-search's job.
+
+#### 3.1.7 Validation tests
 
 Test pair **02** — concurrent search scaling:
-- [`svs_integration_tests/hnsw/test_02_concurrent_search.cc`](./svs_integration_tests/hnsw/test_02_concurrent_search.cc) — baseline. On 8 vCPU: ~14k qps at N=1, ~71k qps at N=8 (scale 5.1×).
-- [`svs_integration_tests/svs/test_02_concurrent_search.cc`](./svs_integration_tests/svs/test_02_concurrent_search.cc) — same scenario on SVS, run twice: once with `omp_set_num_threads(1)` and once with `4`. At OMP=1, scaling matches HNSW (~5×). At OMP=4, single-thread QPS collapses to ~3k — exactly the oversubscription the spec describes.
+- [`svs_integration_tests/hnsw/test_02_concurrent_search.cc`](./svs_integration_tests/hnsw/test_02_concurrent_search.cc) — baseline. Observed on 8 vCPU: ~14 k qps at N=1, ~71 k qps at N=8 (scale 5.1×).
+- [`svs_integration_tests/svs/test_02_concurrent_search.cc`](./svs_integration_tests/svs/test_02_concurrent_search.cc) — same scenario on SVS, run twice: once with `omp_set_num_threads(1)` and once with `4`. At OMP=1, scaling matches HNSW (≈ 4.9×). At OMP=4, single-thread QPS collapses to ~3 k (5× worse than OMP=1) and aggregate scaling is non-linear — exactly the oversubscription described in §3.1.4 point 5.
 
-Test pair **04** — search during add:
-- [`svs_integration_tests/hnsw/test_04_search_during_add.cc`](./svs_integration_tests/hnsw/test_04_search_during_add.cc) — baseline. Reader p99 stays within 10% when a writer runs.
-- [`svs_integration_tests/svs/test_04_search_during_add.cc`](./svs_integration_tests/svs/test_04_search_during_add.cc) — same scenario on SVS.
+Test pair **04** — search during add (demonstrates §3.1.4 point 1):
+- [`svs_integration_tests/hnsw/test_04_search_during_add.cc`](./svs_integration_tests/hnsw/test_04_search_during_add.cc) — baseline. Reader p99 stays within 10% of the no-writer case.
+- [`svs_integration_tests/svs/test_04_search_during_add.cc`](./svs_integration_tests/svs/test_04_search_during_add.cc) — same scenario on SVS. p99 spikes are observable but currently masked by the load-gen pattern; the real-world blackout is better seen through `INFO search_svs_search_blackout_us_total` under a mixed read/write workload.
+
+What "pass" looks like on the new SVS runtime:
+- test_02 at OMP=any runs without oversubscription — no collapse at high thread counts.
+- test_04 shows a stall-free p99 even while the writer thread is running.
+- `search_svs_search_blackout_us_total` stays near zero under mixed load.
 
 ---
 
@@ -175,8 +281,8 @@ absl::Status VectorHNSW<T>::AddRecordImpl(uint64_t internal_id,
 
 Two important properties:
 
-- **Shared lock**: concurrent `AddRecordImpl` calls don't serialize on each other. hnswlib internally per-label locks (`label_lookup_lock` / `link_list_locks_`) to protect the graph structure.
-- **Exclusive lock only on resize**: if `addPoint` throws "exceeds limit", the wrapper calls `ResizeIfFull()` which grabs a writer lock, doubles capacity, and retries. This happens O(log N) times per index lifetime.
+- **Shared lock**: concurrent `AddRecordImpl` calls don't serialize on each other. hnswlib uses per-label locks (`link_list_locks_[internal_id]` and the `label_lookup_lock` guarding the label→id map) to protect the graph structure.
+- **Exclusive lock only on resize**: if `addPoint` throws "exceeds limit", the wrapper calls `ResizeIfFull()` which grabs a writer lock, grows the backing arrays by a fixed `hnsw-block-size` (default 10 240, see `src/valkey_search_options.cc:75`), and retries. Resize is linear in N — happens every `block_size` inserts — but each one completes in milliseconds.
 
 #### SVS prototype today (`src/indexes/vector_svs.cc:230-274`)
 
@@ -201,7 +307,7 @@ absl::Status VectorSVS<T>::AddRecordImpl(uint64_t internal_id,
 
 Two reasons for the workaround (both root-causable to the SVS runtime):
 
-1. `svs_index_->add(1, &label, data)` is prohibitively slow per call (≈ 0.1 vec/s at 128-dim in our original measurements) because the SVS runtime treats every `add()` as a batch and spins up GOMP threads. So we batch 10 000 vectors ourselves and call `add(10000, …)` once per buffer-fill.
+1. Per-call `svs_index_->add(1, &label, data)` has high variance and a long tail (average ~260 µs but p99 > 2 ms at just 5 K vectors, see test pair 05; this grows substantially with N). In earlier measurements at 1 M scale with unfavourable parameters we saw sub-1-vec/s throughput. Batching 10 000 vectors and calling `add(10000, …)` once amortizes the per-call overhead.
 2. The buffer + flush is done under an **exclusive** lock because we can't safely mix `add()` with concurrent `search()` calls on the same index.
 
 Consequences: every 10 000th insert blocks every reader for ~0.5-1 s (the "flush blackout"). See `src/indexes/vector_svs.cc:277-338` for `FlushBuffer`.
@@ -333,7 +439,9 @@ Test pair **01** (see §3.3) exercises the modify path.
 virtual char* GetValueImpl(uint64_t internal_id) const = 0;
 ```
 
-Return a pointer to the stored raw vector bytes. Called during pre-filter evaluation, `DUMP`-style reads, and some cancellation paths. Returning the original FP32 bytes is fine; an approximate reconstruction from compression is also acceptable (the caller uses this for tie-breaking and display, not for correctness-critical distance computations).
+Return a pointer to the stored raw vector bytes. Called when valkey-search needs to hand back a vector to the client (`FT.SEARCH ... RETURN vector` in `src/query/search.cc:525-545`) and during a few internal paths.
+
+Ideal semantics: return exactly what was inserted (bit-identical FP32). For lossy compression (LVQ*, LeanVec) a best-effort reconstruction is still useful to us and preferable to not having the method at all — we'd rather return an approximate vector to the client than refuse the read — but if the SVS team can guarantee bit-identity for StorageKind::FP32, that's the preferred behavior.
 
 #### HNSW today (`src/indexes/vector_hnsw.h:92-95`)
 
@@ -368,7 +476,7 @@ Add **`reconstruct(size_t label, float* out)`** to `DynamicVamanaIndex`. Semanti
 - Safe to call concurrently with `search()` and `add()`.
 - O(1) or O(log N) ideally; not a full graph traversal.
 
-With `reconstruct` available, valkey-search can delete `raw_vectors_` entirely — halving the memory footprint of an SVS index at 1M+ scale.
+With `reconstruct` available, valkey-search can delete `raw_vectors_` entirely. Impact on memory: roughly halves the footprint for an uncompressed SVS index and is even larger savings proportionally for compressed indexes (because the LVQ4X8 graph itself is small, so the FP32 shadow dominates).
 
 #### Validation
 
@@ -494,7 +602,7 @@ absl::Status VectorSVS<T>::SaveIndexImpl(…) const {
 
 **Not implemented.** Every RDB save logs a warning and drops the SVS index.
 
-The SVS runtime already has `virtual Status save(std::ostream& out) const noexcept` and a static `load(...)` (see `include/svs/runtime/dynamic_vamana_index.h:68-75`). We just haven't wired them up to valkey-search's streaming RDB API. That's on us — but we'd like the SVS team to confirm the save/load round-trip is stable across runtime versions (i.e. a snapshot written by SVS 0.2 can be read by SVS 0.3).
+The SVS runtime already has `virtual Status save(std::ostream& out) const noexcept` and a static `load(...)` (see SVS runtime header `svs/runtime/dynamic_vamana_index.h:68-75`). We just haven't wired them up to valkey-search's streaming RDB API. That's on us — but we'd like the SVS team to confirm the save/load round-trip is stable across runtime versions (i.e. a snapshot written by SVS 0.2 can be read by SVS 0.3).
 
 #### Ask on new SVS runtime
 

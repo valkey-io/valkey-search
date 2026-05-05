@@ -14,6 +14,10 @@
 // Spec section: §3.2 AddRecordImpl — concurrent add under shared lock.
 //
 // Reproduction:
+//   (Assumes valkey-search is already built so libsvs_runtime.so and
+//   headers exist under .build-release/_deps/svs-src/. If not, see
+//   svs_integration_tests/README.md 'One-time setup'.)
+//
 //   ./build_test.sh hnsw/test_03_concurrent_add
 //   ./hnsw/test_03_concurrent_add
 //

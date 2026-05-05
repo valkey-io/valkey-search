@@ -67,6 +67,55 @@ cd svs_integration_tests
 Read `build_test.sh` — it's ~70 lines of `g++` invocation, no CMake,
 no hidden magic.
 
+## Full walkthrough: reproduce every test from a fresh checkout
+
+Start from the "One-time setup" section above (clone + build `libsearch.so`),
+then run this block verbatim. It takes ~2 minutes wall-clock on an 8-vCPU
+host.
+
+```bash
+cd svs_integration_tests
+
+# Build all 16 tests. Tests 07 and 08 on the SVS side will FAIL at link
+# time with 'undefined reference to svs::runtime::v0::dynamic_vamana_
+# {reconstruct,compute_distance}'. That is expected — the link error is
+# the ask (spec §3.5 and §3.6).
+./build_test.sh all
+
+# Run the HNSW baselines (all 8 should pass; these establish what
+# valkey-search gets today from hnswlib):
+./hnsw/test_01_call_pattern
+./hnsw/test_02_concurrent_search
+./hnsw/test_03_concurrent_add
+./hnsw/test_04_search_during_add
+./hnsw/test_05_incremental_add_latency
+./hnsw/test_06_save_load
+./hnsw/test_07_reconstruct
+./hnsw/test_08_compute_distance
+
+# Run the SVS twins (6 build, 2 failed at link above).
+# test_03 SEGFAULTs on SVS 0.2.0 — that's the signal for spec §3.2.
+# test_06 fails with 2/10 top-K match — the signal for spec §3.9.
+./svs/test_01_call_pattern
+./svs/test_02_concurrent_search
+./svs/test_03_concurrent_add        # expect SEGV on 0.2.0
+./svs/test_04_search_during_add
+./svs/test_05_incremental_add_latency
+./svs/test_06_save_load              # expect FAIL on 0.2.0
+# ./svs/test_07_reconstruct         # doesn't exist on 0.2.0 (link error)
+# ./svs/test_08_compute_distance    # doesn't exist on 0.2.0 (link error)
+```
+
+### Reproducing individual tests
+
+Every test file includes a `// Reproduction:` block in its header
+comment. If you want to run just one test (e.g. after changing the SVS
+runtime), open the `.cc` file in `hnsw/` or `svs/`, find the block, and
+follow the numbered steps. For tests that need the full repo clone +
+CMake build, the header gives the complete chain. For tests that assume
+`libsearch.so` is already built, the header gives just the
+`build_test.sh` + run line.
+
 ## Test index
 
 | # | Scenario | Spec section |

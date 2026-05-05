@@ -14,7 +14,7 @@ The HNSW implementation hits valkey-search's threading requirements naturally: r
 
 The SVS prototype cannot match this yet. Our wrapper takes an **exclusive mutex** on every mutation, buffers inserts in a 10 K-entry queue (`pending_buffer_`), and flushes the buffer inside the same lock — blocking searches for 0.5-1 s on each flush. It also keeps a full FP32 shadow copy of every vector (`raw_vectors_`) because the SVS runtime does not expose the retrieval/distance APIs we need. These workarounds exist because the current SVS runtime API and threading model don't support the access pattern valkey-search needs.
 
-This document walks through each `VectorBase` virtual method, shows how hnswlib supports it today, shows the SVS workaround, and states the concrete ask on the SVS runtime. Every code claim is cited with a file path and line range in `izaakk/valkey-search` (branch `svs-integration-spec`). Each method section ends with a pointer to a standalone C++ test in [`svs_integration_tests/`](./svs_integration_tests/) that the SVS team can run to validate their new implementation.
+This document walks through each `VectorBase` virtual method, shows how hnswlib supports it today, shows the SVS workaround, and states the concrete ask on the SVS runtime. Every code claim is cited with a file path and line range in `izaakk/valkey-search` (branch `svs-integration-spec`). Each method section ends with a pointer to a **pair** of standalone C++ tests in [`svs_integration_tests/`](./svs_integration_tests/): an `hnsw/test_0N_*.cc` baseline that runs against vendored upstream hnswlib, and a direct twin `svs/test_0N_*.cc` that runs the same scenario against `libsvs_runtime.so`. Read them side by side.
 
 ---
 
@@ -130,9 +130,13 @@ The SVS search path is much heavier than HNSW's:
 
 #### Validation
 
-[`svs_integration_tests/test_concurrent_search.cc`](./svs_integration_tests/test_concurrent_search.cc) — replays the hnswlib reader-pool pattern, then the SVS equivalent, and measures scaling from 1 → N threads. Reports both thread scaling and per-query latency.
+Test pair **02** — concurrent search scaling:
+- [`svs_integration_tests/hnsw/test_02_concurrent_search.cc`](./svs_integration_tests/hnsw/test_02_concurrent_search.cc) — baseline. On 8 vCPU: ~14k qps at N=1, ~71k qps at N=8 (scale 5.1×).
+- [`svs_integration_tests/svs/test_02_concurrent_search.cc`](./svs_integration_tests/svs/test_02_concurrent_search.cc) — same scenario on SVS, run twice: once with `omp_set_num_threads(1)` and once with `4`. At OMP=1, scaling matches HNSW (~5×). At OMP=4, single-thread QPS collapses to ~3k — exactly the oversubscription the spec describes.
 
-[`svs_integration_tests/test_search_during_add.cc`](./svs_integration_tests/test_search_during_add.cc) — a reader thread fires searches while a writer adds vectors; measures p99 reader latency during the add window.
+Test pair **04** — search during add:
+- [`svs_integration_tests/hnsw/test_04_search_during_add.cc`](./svs_integration_tests/hnsw/test_04_search_during_add.cc) — baseline. Reader p99 stays within 10% when a writer runs.
+- [`svs_integration_tests/svs/test_04_search_during_add.cc`](./svs_integration_tests/svs/test_04_search_during_add.cc) — same scenario on SVS.
 
 ---
 
@@ -212,11 +216,15 @@ If the per-vector latency target isn't achievable, a secondary ask is an **async
 
 #### Validation
 
-[`svs_integration_tests/test_incremental_add_latency.cc`](./svs_integration_tests/test_incremental_add_latency.cc) — per-vector add latency, single-threaded, N=1..10 000.
+Test pair **05** — per-vector add latency:
+- [`svs_integration_tests/hnsw/test_05_incremental_add_latency.cc`](./svs_integration_tests/hnsw/test_05_incremental_add_latency.cc) — baseline ~330 µs/vec at N=20k.
+- [`svs_integration_tests/svs/test_05_incremental_add_latency.cc`](./svs_integration_tests/svs/test_05_incremental_add_latency.cc) — ~260 µs avg / p99 >2 ms at N=5k (high variance).
 
-[`svs_integration_tests/test_concurrent_add.cc`](./svs_integration_tests/test_concurrent_add.cc) — N threads call `add()` with disjoint IDs; measures throughput scaling.
+Test pair **03** — concurrent add with disjoint IDs:
+- [`svs_integration_tests/hnsw/test_03_concurrent_add.cc`](./svs_integration_tests/hnsw/test_03_concurrent_add.cc) — baseline scales 2.5× at n=8.
+- [`svs_integration_tests/svs/test_03_concurrent_add.cc`](./svs_integration_tests/svs/test_03_concurrent_add.cc) — **SEGFAULTs on 0.2.0**; the crash is the ask.
 
-[`svs_integration_tests/test_search_during_add.cc`](./svs_integration_tests/test_search_during_add.cc) — measures p99 search latency while `add()` is running.
+Test pair **04** — search during add (see §3.1).
 
 ---
 
@@ -270,7 +278,9 @@ We force a flush before remove because `remove()` needs the vector to be in the 
 
 #### Validation
 
-[`svs_integration_tests/test_hnsw_call_pattern.cc`](./svs_integration_tests/test_hnsw_call_pattern.cc) — replays the valkey-search mutate sequence `add → remove → add → search`.
+Test pair **01** — basic call pattern `add → search → modify → remove → search`:
+- [`svs_integration_tests/hnsw/test_01_call_pattern.cc`](./svs_integration_tests/hnsw/test_01_call_pattern.cc)
+- [`svs_integration_tests/svs/test_01_call_pattern.cc`](./svs_integration_tests/svs/test_01_call_pattern.cc)
 
 ---
 
@@ -311,7 +321,7 @@ Same as `AddRecordImpl` + `RemoveRecordImpl`. If SVS provides a single `update(i
 
 #### Validation
 
-[`svs_integration_tests/test_hnsw_call_pattern.cc`](./svs_integration_tests/test_hnsw_call_pattern.cc) exercises the modify path.
+Test pair **01** (see §3.3) exercises the modify path.
 
 ---
 
@@ -362,7 +372,9 @@ With `reconstruct` available, valkey-search can delete `raw_vectors_` entirely �
 
 #### Validation
 
-[`svs_integration_tests/test_reconstruct.cc`](./svs_integration_tests/test_reconstruct.cc) — adds a known vector, calls `reconstruct(id)`, compares within quantization tolerance. **Fails to link on current SVS runtime; the link error is the ask.**
+Test pair **07** — reconstruct vector by label:
+- [`svs_integration_tests/hnsw/test_07_reconstruct.cc`](./svs_integration_tests/hnsw/test_07_reconstruct.cc) — baseline via `algo_->getDataByInternalId()`.
+- [`svs_integration_tests/svs/test_07_reconstruct.cc`](./svs_integration_tests/svs/test_07_reconstruct.cc) — **fails to link on 0.2.0** with `undefined reference to svs::runtime::v0::dynamic_vamana_reconstruct`. That link error is the ask.
 
 ---
 
@@ -422,7 +434,9 @@ This lets us drop both `raw_vectors_` and the hnswlib space-interface dependency
 
 #### Validation
 
-[`svs_integration_tests/test_compute_distance.cc`](./svs_integration_tests/test_compute_distance.cc) — adds a vector, calls `compute_distance(id, query)`, cross-checks with the distance returned by a top-1 `search()` on the same `(id, query)` pair. **Fails to link on current SVS runtime.**
+Test pair **08** — compute distance by label:
+- [`svs_integration_tests/hnsw/test_08_compute_distance.cc`](./svs_integration_tests/hnsw/test_08_compute_distance.cc) — baseline via `algo_->fstdistfunc_()`.
+- [`svs_integration_tests/svs/test_08_compute_distance.cc`](./svs_integration_tests/svs/test_08_compute_distance.cc) — **fails to link on 0.2.0** with `undefined reference to svs::runtime::v0::dynamic_vamana_compute_distance`. That link error is the ask.
 
 ---
 
@@ -489,7 +503,9 @@ The SVS runtime already has `virtual Status save(std::ostream& out) const noexce
 
 #### Validation
 
-[`svs_integration_tests/test_save_load.cc`](./svs_integration_tests/test_save_load.cc) — builds an index, serializes, reloads into a fresh index, re-searches; verifies top-K stability across the round-trip.
+Test pair **06** — save/load round-trip:
+- [`svs_integration_tests/hnsw/test_06_save_load.cc`](./svs_integration_tests/hnsw/test_06_save_load.cc) — baseline passes 10/10 top-K match.
+- [`svs_integration_tests/svs/test_06_save_load.cc`](./svs_integration_tests/svs/test_06_save_load.cc) — **FAILs on 0.2.0** with ~2/10 top-K match after reload, i.e. save and load both return OK but the reloaded index behaves differently. Surfacing this is the point.
 
 ---
 
@@ -537,7 +553,7 @@ Currently: `src/indexes/vector_svs.h` defines `static constexpr size_t kBufferSi
 
 If per-vector `add()` is fast enough (§3.2), we delete all of this. If not, the secondary ask is an **async `add()`** that the SVS runtime completes on a background thread.
 
-Companion test: [`svs_integration_tests/test_incremental_add_latency.cc`](./svs_integration_tests/test_incremental_add_latency.cc).
+Companion tests: [`hnsw/test_05_incremental_add_latency.cc`](./svs_integration_tests/hnsw/test_05_incremental_add_latency.cc) + [`svs/test_05_incremental_add_latency.cc`](./svs_integration_tests/svs/test_05_incremental_add_latency.cc).
 
 ### 4.2 Replace `raw_vectors_` with `reconstruct()` + `compute_distance()`
 
@@ -555,23 +571,24 @@ See `SVS_OMP_PERF_ANALYSIS.md` for the profiling data that motivated this. The r
 
 ## 5. Summary of asks
 
-| # | Ask | Motivation | Validating test |
+| # | Ask | Motivation | Test pair |
 |---|---|---|---|
-| 1 | Concurrent-safe `search()` with no OMP oversubscription | §3.1 | `test_concurrent_search.cc` |
-| 2 | Fast per-vector `add()` **or** async batch `add()` | §3.2 | `test_incremental_add_latency.cc`, `test_concurrent_add.cc` |
-| 3 | Concurrent `add()` / `remove()` alongside `search()` | §3.2, §3.3 | `test_search_during_add.cc` |
-| 4 | `reconstruct(label, float* out)` API | §3.5 | `test_reconstruct.cc` |
-| 5 | `compute_distance(label, query, float* out)` API | §3.6 | `test_compute_distance.cc` |
-| 6 | Version-stable save/load format | §3.9 | `test_save_load.cc` |
-| 7 | Per-index thread count via SVS API (not libgomp ICV) | §3.10 | `test_concurrent_search.cc` (with varied thread counts) |
+| 1 | Concurrent-safe `search()` with no OMP oversubscription | §3.1 | 02 |
+| 2 | Fast per-vector `add()` **or** async batch `add()` | §3.2 | 05 |
+| 3 | Thread-safe concurrent `add()` | §3.2 | 03 |
+| 4 | `add()` doesn't block concurrent searches | §3.1, §3.2 | 04 |
+| 5 | `reconstruct(label, float* out)` API | §3.5 | 07 |
+| 6 | `compute_distance(label, query, float* out)` API | §3.6 | 08 |
+| 7 | Version-stable save/load format | §3.9 | 06 |
+| 8 | Per-index thread count via SVS API (not libgomp ICV) | §3.10 | 02 |
 
-Validation pattern: every test first runs the **HNSW phase** (using hnswlib directly, replaying the exact sequence from `src/indexes/vector_hnsw.cc` as referenced above) to establish the baseline, then runs the **SVS phase** (against `libsvs_runtime.so`). The SVS phase is expected to fail (perf, correctness, or link) on the current 0.2.0 runtime and pass on the new runtime.
+Validation pattern: each scenario has an **`hnsw/test_0N_X.cc`** baseline (vendored upstream hnswlib) and an **`svs/test_0N_X.cc`** twin (against `libsvs_runtime.so`). Read them side by side. The SVS twin is expected to fail (perf, correctness, crash, or link error) on the current 0.2.0 runtime and pass on the new runtime — `svs_integration_tests/README.md` has the observed failure modes on 0.2.0.
 
 ---
 
 ## 6. How to use the tests
 
-Each test under `svs_integration_tests/` has a header comment with copy-pasteable reproduction steps. The general workflow:
+Each test under `svs_integration_tests/hnsw/` or `svs_integration_tests/svs/` has a header comment with copy-pasteable reproduction steps. The general workflow:
 
 ```bash
 git clone https://github.com/izaakk/valkey-search.git
@@ -579,11 +596,16 @@ cd valkey-search && git checkout svs-integration-spec
 cmake -S . -B .build-release -DCMAKE_BUILD_TYPE=Release -DENABLE_SVS=ON -G Ninja
 ninja -C .build-release libsearch.so      # downloads libsvs_runtime.so via FetchContent
 cd svs_integration_tests
-./build_test.sh test_concurrent_search
-./test_concurrent_search
+
+# Build and run one pair (example: concurrent search):
+./build_test.sh hnsw/test_02_concurrent_search && ./hnsw/test_02_concurrent_search
+./build_test.sh svs/test_02_concurrent_search  && ./svs/test_02_concurrent_search
+
+# Or build everything at once:
+./build_test.sh all
 ```
 
-Build details and expected output per test: [`svs_integration_tests/README.md`](./svs_integration_tests/README.md).
+Build details, the full test index, and observed failure modes on SVS 0.2.0: [`svs_integration_tests/README.md`](./svs_integration_tests/README.md).
 
 ---
 

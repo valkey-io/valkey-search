@@ -1174,7 +1174,9 @@ absl::Status query::SearchParameters::PreParseQueryString() {
     if (found == absl::string_view::npos) {
       break;
     }
-    // Check if this '=>' is preceded by '}' (query attributes closer).
+    // Check if this '=>' is preceded by a query attributes block
+    // ({$...}=>). We must not confuse a tag value like {2}=> with query
+    // attributes. Query attributes always start with '{$'.
     bool is_query_attr_delimiter = false;
     if (found > 0) {
       // Look backwards past whitespace for '}'.
@@ -1183,7 +1185,22 @@ absl::Status query::SearchParameters::PreParseQueryString() {
         --check_pos;
       }
       if (filter_expression[check_pos] == '}') {
-        is_query_attr_delimiter = true;
+        // Find the matching '{' by scanning backwards.
+        size_t brace_pos = check_pos;
+        int depth = 1;
+        while (brace_pos > 0 && depth > 0) {
+          --brace_pos;
+          if (filter_expression[brace_pos] == '}') {
+            ++depth;
+          } else if (filter_expression[brace_pos] == '{') {
+            --depth;
+          }
+        }
+        // Only treat as query attributes if the '{' is followed by '$'.
+        if (depth == 0 && brace_pos + 1 < filter_expression.size() &&
+            filter_expression[brace_pos + 1] == '$') {
+          is_query_attr_delimiter = true;
+        }
       }
     }
     if (!is_query_attr_delimiter) {

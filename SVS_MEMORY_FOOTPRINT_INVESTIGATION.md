@@ -417,13 +417,108 @@ N=100000 DIM=1536 ./measure_memory.sh      # 100K × 1536d
 
 ---
 
-## 9. Snapshot files (2026-05-06, initial run)
+## 9. Workflow order: backfill vs. VectorDBBench-style live ingest
 
-All raw data for this document is preserved in `/tmp/memory_experiment/`:
+All numbers in §2-§7 come from `measure_memory.sh`, which HSETs all vectors
+first and *then* calls `FT.CREATE`, so the module backfills against an
+already-populated keyspace. VectorDBBench does the opposite: it creates the
+index on an empty keyspace first, then sends HSETs — every HSET fires a
+keyspace notification that the module consumes and indexes live.
+
+We re-ran the same 100K × 768-d experiment with the VDBBench ordering
+([`measure_memory_vdbbench_order.sh`](../measure_memory_vdbbench_order.sh))
+to see whether the workflow affects steady-state memory. Snapshots land in
+`/tmp/memory_experiment_vdb/` so the two runs don't overwrite each other.
+
+### 9.1 Side-by-side RSS (stage 2, 100K × 768-d)
+
+| Config | Backfill-order `VmRSS` | VDB-order `VmRSS` | Δ |
+|---|---|---|---|
+| HNSW | 1,020.2 MiB | 709.4 MiB | −310.8 MiB (−30.5%) |
+| SVS FP32 | 2,190.3 MiB | 1,879.7 MiB | −310.6 MiB (−14.2%) |
+| SVS LVQ4X8 | 2,022.7 MiB | 1,697.7 MiB | −325.0 MiB (−16.0%) |
+
+Live ingest ends up **~310 MiB cheaper** across every algorithm. The savings
+are a constant offset, not proportional — so they're not a property of the
+index but of the path the bytes took on the way in.
+
+### 9.2 Logical memory is identical; the delta is all fragmentation
+
+`INFO memory` at stage 2 tells a much tamer story:
+
+| | HNSW | SVS FP32 | SVS LVQ4X8 |
+|---|---|---|---|
+| `used_memory` (backfill) | 696.9 MiB | 955.4 MiB | 955.5 MiB |
+| `used_memory` (VDB) | 682.0 MiB | 941.1 MiB | 941.1 MiB |
+| Δ `used_memory` | −14.9 MiB | −14.3 MiB | −14.4 MiB |
+
+`used_memory` — the bytes Valkey's allocator thinks are live — is within 15 MiB
+between the two orders. The data structures the module built are the same.
+
+The ~300 MiB delta shows up only in the `RSS` − `used_memory` gap:
+
+| | HNSW | SVS FP32 | SVS LVQ4X8 |
+|---|---|---|---|
+| `mem_fragmentation_bytes` (backfill) | 338 MiB | 1,294 MiB | 1,118 MiB |
+| `mem_fragmentation_bytes` (VDB) | 28 MiB | 983 MiB | 793 MiB |
+| `mem_fragmentation_ratio` (backfill) | 1.46 | 2.29 | 2.12 |
+| `mem_fragmentation_ratio` (VDB) | 1.04 | 2.00 | 1.80 |
+
+Backfill-order fragmentation is **10-12× higher on HNSW** and **~300 MiB
+higher on SVS**. That's exactly the RSS delta in §9.1.
+
+### 9.3 Why the backfill order fragments more
+
+Backfill-order has two distinct allocation phases:
+
+1. `HSET × N` populates the keyspace — Valkey core grows the heap with lots
+   of 3 KiB (one per 768-d FP32 vector) hash value allocations.
+2. `FT.CREATE` triggers backfill — the module reads those hashes in order,
+   allocates intern-store FP32 copies, builds graph nodes.
+
+Between phases the heap is packed with hash-value allocations. In phase 2
+the module requests new large allocations (intern-store slabs, HNSW
+node blocks, glibc arenas for worker threads) which don't fit in the
+existing freelist holes, so glibc grows the heap further. The pages
+freed by the allocator never get returned to the OS.
+
+In the VDBBench order, every HSET is immediately followed by the module
+creating its corresponding intern-store entry and graph node — the two
+allocations are co-temporal, interleaved rather than stratified, and live
+in the same arena pages. Less internal waste, lower RSS.
+
+### 9.4 Implications
+
+- **Steady-state memory is a workflow-dependent measurement.** The 1,020 MiB
+  vs. 709 MiB for HNSW isn't a bug in either run; they're both true "RSS at
+  steady state" numbers for the same 100K indexed vectors. The difference is
+  what the allocator was asked to do on the way there.
+- **`used_memory` is a more stable signal** than RSS across workflows.
+  `used_memory` tracks the byte-level footprint of the data; RSS tracks the
+  OS-visible cost of how fragmented the allocator got along the way.
+- **For customer-facing sizing estimates**, the VDB-order numbers are the
+  more realistic upper bound since customer ingestion is almost always live
+  (stream-to-index), not offline-bulk-then-reindex.
+- **For the `raw_vectors_` fix impact calculation** (§5), both orders give
+  the same ~14% reduction because the fix removes a fixed allocation
+  (the 293 MiB shadow copy) that exists in either workflow.
+- **`MEMORY PURGE` probably reclaims most of the fragmentation delta.**
+  We didn't run it here because we wanted the as-observed operator RSS, but
+  an operator who explicitly calls `MEMORY PURGE` after a large offline
+  rebuild should see both orders converge closer to the VDB-order numbers.
+
+Raw VDB-order snapshots live in `/tmp/memory_experiment_vdb/`.
+
+---
+
+## 10. Snapshot files (2026-05-06, initial run)
+
+All raw data for this document is preserved in `/tmp/memory_experiment/`
+(backfill order) and `/tmp/memory_experiment_vdb/` (VDB order):
 
 - `{hnsw,svs_fp32,svs_lvq4x8}_stage{0,1,2}_*.txt` — per-stage `INFO` / `FT.INFO` / `VmRSS` snapshots
-- `{hnsw,svs_fp32,svs_lvq4x8}_smaps.txt` — smaps-based heap-vs-mmap decomposition at stage 2
+- `{hnsw,svs_fp32,svs_lvq4x8}_smaps.txt` — smaps-based heap-vs-mmap decomposition at stage 2 (backfill run only)
 - `server.log` — valkey-server stderr across the run
 
-These are on a host, not in the repo. Re-run `measure_memory.sh` + `measure_smaps.sh`
-to regenerate.
+These are on a host, not in the repo. Re-run `measure_memory.sh` +
+`measure_smaps.sh` + `measure_memory_vdbbench_order.sh` to regenerate.

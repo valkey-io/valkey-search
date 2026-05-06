@@ -253,20 +253,115 @@ Details and trade-offs: see `SVS_INTEGRATION_SPEC.md §3.5`.
 
 ---
 
-## 7. Projection to 1M vectors
+## 7. Measured at 1M scale
 
-Scaling factor: 10×. All numbers scale roughly linearly with vector count
-for fixed dimension. Projected:
+Re-ran the same experiment at N=1,000,000. Raw vector data scales to
+2,929.7 MiB. Same dim (768), same index parameters.
 
-| Config | Today | After `raw_vectors_` drop | With intern-store drop |
+### 7.1 Stage-by-stage RSS (MiB)
+
+| Config | Stage 0 (empty) | Stage 1 (hashes) | Stage 2 (indexed) |
 |---|---|---|---|
-| HNSW | ~10.2 GiB | ~10.2 GiB | n/a (HNSW needs the intern store) |
-| SVS FP32 | ~21.9 GiB | ~19.0 GiB | ~16.1 GiB |
-| SVS LVQ4X8 | ~20.2 GiB | ~17.3 GiB | ~14.4 GiB |
+| HNSW | 20.6 | 3,228.4 | **10,299.3** |
+| SVS FP32 | 20.6 | 3,228.7 | **16,228.4** |
+| SVS LVQ4X8 | 20.6 | 3,228.5 | **14,456.3** |
 
-The 1 M-scale numbers are projections from the 100 K measurements; actual
-numbers may vary due to non-linear effects (allocator fragmentation, larger
-glibc arenas, etc.). We can re-run at 1 M scale to confirm if/when it matters.
+### 7.2 Deltas
+
+| Delta | HNSW | SVS FP32 | SVS LVQ4X8 |
+|---|---|---|---|
+| Stage 0 → 1 (Valkey hashes) | 3,207.8 MiB | 3,208.1 MiB | 3,207.9 MiB |
+| Stage 1 → 2 (module overhead) | 7,070.9 MiB | 12,999.7 MiB | 11,227.8 MiB |
+
+### 7.3 smaps decomposition at stage 2
+
+```
+HNSW:                                  virt_MB     rss_MB
+[heap] (glibc main arena)              6422.1     6421.2
+(anon, mmap)                           4469.1     3857.8
+(code + other)                          55             20
+                                                   ──────
+                                                   10299.3
+
+SVS FP32:                              virt_MB     rss_MB
+(anon, mmap)                          13202.0    10039.5
+[heap] (glibc main arena)              6187.2     6186.2
+(code + other)                          55             20
+                                                   ──────
+                                                   16245.7
+
+SVS LVQ4X8:                            virt_MB     rss_MB
+(anon, mmap)                          11683.9     8214.3
+[heap] (glibc main arena)              6266.7     6265.8
+(code + other)                          55             20
+                                                   ──────
+                                                   14500.1
+```
+
+### 7.4 Layer accounting at 1M
+
+| Layer | HNSW | SVS FP32 | SVS LVQ4X8 |
+|---|---|---|---|
+| Valkey-core hash values (on heap) | 3,158 MiB | 3,158 MiB | 3,158 MiB |
+| valkey-search intern store (on heap) | 2,930 MiB | 2,930 MiB | 2,930 MiB |
+| `raw_vectors_` redundant shadow (on heap, prototype only) | — | implicit in heap+mmap mix | implicit |
+| HNSW graph (heap + mmap) | ~4,191 MiB | — | — |
+| SVS graph + internal workspaces (mmap) | — | 10,040 MiB | 8,214 MiB |
+| Other (code, maps, arenas) | ~20 MiB | ~20 MiB | ~20 MiB |
+| **Total RSS** | **~10,299 MiB** | **~16,245 MiB** | **~14,500 MiB** |
+
+### 7.5 LVQ compression savings are more visible at 1M
+
+| Scale | SVS FP32 total | SVS LVQ4X8 total | Saved | As % of FP32 |
+|---|---|---|---|---|
+| 100K | 2,190 MiB | 2,023 MiB | 168 MiB | 7.6% |
+| 1M | 16,228 MiB | 14,456 MiB | **1,772 MiB** | **10.9%** |
+
+The per-vector savings are nearly identical (1.75 KB → 1.82 KB per vector),
+but the fractional saving grows because SVS's fixed-overhead portion (construction
+workspaces, caches) doesn't scale with N. At even larger scales the fraction would
+continue to grow.
+
+### 7.6 Surprising finding: SVS memory amplification
+
+At 1M scale, SVS's mmap footprint is substantially larger than the raw vector
+data would predict:
+
+| Metric | SVS FP32 | SVS LVQ4X8 |
+|---|---|---|
+| Raw vector data (FP32 or compressed) | 2,930 MiB FP32 | ~400 MiB LVQ4X8 |
+| Plus graph edges (GMD=32, 8B per edge × N) | ~245 MiB | ~245 MiB |
+| **Expected index-internal memory** | ~3,175 MiB | ~645 MiB |
+| **Actual mmap bucket** | **10,040 MiB** | **8,214 MiB** |
+| Amplification factor | **3.2×** | **12.7×** |
+
+SVS is holding 3-13× more memory internally than the stored graph contents
+justify. Possible causes (we have not confirmed which):
+
+- Construction scratch space not released after backfill.
+- Multiple internal copies for search-path cache locality.
+- LRU/prefetch buffers.
+- Per-node metadata beyond just the compressed bytes (re-quantization info,
+  LVQ rescale factors per block, etc.).
+- Default `blocksize_exp=30` (1 GB blocks) in `DynamicVamanaIndex::DynamicIndexParams`
+  leading to rounded-up allocations.
+
+Worth flagging to the SVS team: regardless of compression, SVS's per-index
+memory amplification is the single biggest lever for reducing operator RSS.
+Even if LVQ compresses the vectors 7×, the fact that SVS holds 12× that
+compressed size in other internal state means the operator-visible
+compression ratio is closer to 2×.
+
+### 7.7 Projected effect of the easy-win fix at 1M
+
+| Config | Today | After dropping `raw_vectors_` | Reduction |
+|---|---|---|---|
+| HNSW | 10,299 MiB | 10,299 MiB | 0 (no shadow to drop) |
+| SVS FP32 | 16,228 MiB | ~13,298 MiB | ~18% |
+| SVS LVQ4X8 | 14,456 MiB | ~11,526 MiB | ~20% |
+
+SVS LVQ4X8 drops from 14.5 GiB to ~11.5 GiB — **1.1× HNSW** instead of 1.4×.
+Still worse than HNSW, but much closer.
 
 ---
 

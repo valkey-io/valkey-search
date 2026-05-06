@@ -1,0 +1,334 @@
+# valkey-search Memory Footprint: Measured Breakdown
+
+**Purpose:** Replace back-of-envelope estimates with measured numbers for how
+much memory valkey-search uses across HNSW, SVS FP32, and SVS LVQ4X8, decomposed
+into the three logical layers (Valkey core, valkey-search module, index graph).
+
+**Scope:** This document is about the current `svs-iteration-0` prototype. It
+does **not** include the "drop `raw_vectors_`" fix proposed in
+`SVS_INTEGRATION_SPEC.md §3.5` — those numbers are measured after the fix
+separately below.
+
+**Reproducibility:** Experiment scripts live at the repo root as
+[`measure_memory.sh`](./measure_memory.sh) and
+[`measure_smaps.sh`](./measure_smaps.sh). Snapshots are in
+`/tmp/memory_experiment/` after running.
+
+---
+
+## 1. Experimental setup
+
+| Parameter | Value |
+|---|---|
+| Host | m7i.2xlarge (8 vCPU, 32 GB RAM) |
+| Valkey | `valkey-255.255.255-dev` (local build of `valkey-io/valkey`) |
+| Module | `libsearch.so` built from `izaakk/valkey-search:svs-integration-spec` with `-DENABLE_SVS=ON` |
+| SVS runtime | `libsvs_runtime.so.0.2.0` (FetchContent) |
+| Vectors | 100,000 × 768-dimension FP32 random |
+| Raw vector data size | 100,000 × 768 × 4 = **293.0 MiB** |
+| Index params | HNSW: `M=32, EF_CONSTRUCTION=128`; SVS: `GRAPH_MAX_DEGREE=32, CONSTRUCTION_WINDOW_SIZE=128` |
+| Distance metric | L2 |
+| Valkey config | `--save "" --appendonly no` (no persistence fork noise) |
+
+The experiment runs three configurations in sequence, each starting from a fresh
+server, then snapshots memory at three stages:
+
+- **Stage 0 — Empty server:** valkey-server + loaded module, no data, no index.
+  Establishes the baseline of "module code + runtime with nothing in it."
+- **Stage 1 — Hashes loaded, no index:** 100 K `HSET doc:N vec <bytes>`
+  operations executed. No `FT.CREATE` yet. Establishes the Valkey-core cost of
+  just storing the vectors in hashes.
+- **Stage 2 — Indexed:** `FT.CREATE idx ON HASH PREFIX 1 doc: SCHEMA vec VECTOR <algo> ...`
+  run, and backfill completed. Adds the valkey-search module cost on top of
+  stage 1.
+
+All measurements use `VmRSS` from `/proc/<pid>/status` as ground truth (actual
+resident memory). `INFO memory` is also captured and reported for comparison,
+with the caveat that `used_memory` only tracks Valkey-allocator allocations —
+SVS uses `mmap` directly and its memory does not show up there. `/proc/<pid>/smaps`
+decomposition is used to attribute RSS to heap vs. mmap regions.
+
+---
+
+## 2. Top-line results
+
+### 2.1 RSS at each stage
+
+| Config | Stage 0 (empty) | Stage 1 (hashes) | Stage 2 (indexed) |
+|---|---|---|---|
+| HNSW | 20.5 MiB | 341.4 MiB | **1,020.2 MiB** |
+| SVS FP32 | 20.5 MiB | 341.4 MiB | **2,190.3 MiB** |
+| SVS LVQ4X8 | 20.5 MiB | 341.4 MiB | **2,022.7 MiB** |
+
+### 2.2 Deltas
+
+| Delta | HNSW | SVS FP32 | SVS LVQ4X8 |
+|---|---|---|---|
+| **Stage 0 → Stage 1** (Valkey core cost of HSET'ing 100 K hashes) | 320.8 MiB | 320.8 MiB | 320.8 MiB |
+| **Stage 1 → Stage 2** (module cost of adding an index over the same data) | 678.8 MiB | 1,848.9 MiB | 1,681.4 MiB |
+
+### 2.3 Sanity checks
+
+- The 320.8 MiB Valkey-core cost for 100 K × 768 × 4 = 293.0 MiB of raw bytes
+  implies ~9.5% overhead for Valkey hash-object bookkeeping (listpack/hashtable
+  structure, key strings, object headers). Matches expectations.
+- `FT.INFO idx.user_indexed_memory` reports exactly 307,200,000 bytes = 293.0 MiB
+  in all three configs. That's the size of the valkey-search intern store for
+  the vector attribute (one FP32 copy of each vector). This is the same across
+  configs because interning is algorithm-agnostic.
+
+---
+
+## 3. Where the memory actually lives
+
+`INFO memory` / `used_memory` only counts allocations going through Valkey's
+allocator wrappers. SVS uses `mmap` extensively and is invisible to that counter.
+For a real decomposition we go to `/proc/<pid>/smaps` and bucket virtual memory
+regions by kind.
+
+At stage 2:
+
+### 3.1 HNSW
+
+```
+bucket                                 virt_MB     rss_MB
+[heap] (glibc main arena)               628.7      628.2
+(anon, mmap)                            970.2      371.0
+libsearch.so (code)                      19.9        9.7
+other .so (code)                         12.3        6.6
+valkey-server (code)                      3.2        2.7
+libsvs_runtime.so (code)                 16.5        1.0
+───────────────────────────────────────────────────────
+total RSS                                         1019.3
+```
+
+### 3.2 SVS FP32
+
+```
+bucket                                 virt_MB     rss_MB
+(anon, mmap)                           4597.2     1549.0
+[heap] (glibc main arena)               650.3      649.8
+libsearch.so (code)                      19.9        9.4
+other .so (code)                         12.3        6.4
+valkey-server (code)                      3.2        2.7
+libsvs_runtime.so (code)                 16.5        2.7
+───────────────────────────────────────────────────────
+total RSS                                         2220.1
+```
+
+### 3.3 SVS LVQ4X8
+
+```
+bucket                                 virt_MB     rss_MB
+(anon, mmap)                           4943.1     1347.8
+[heap] (glibc main arena)               649.6      649.1
+libsearch.so (code)                      19.9        9.4
+other .so (code)                         12.3        6.4
+libsvs_runtime.so (code)                 16.5        2.9
+valkey-server (code)                      3.2        2.7
+───────────────────────────────────────────────────────
+total RSS                                         2018.5
+```
+
+### 3.4 Observations
+
+- **Heap is almost identical across configs** (~628-650 MiB). The heap holds
+  Valkey-core hash data (~330 MiB) plus valkey-search's intern store (~290 MiB
+  for the FP32 copies of vectors) plus bookkeeping (~10 MiB of maps and
+  pointers). HNSW's graph lives on the heap too; SVS's does not.
+- **Anonymous mmap regions vary dramatically.** 371 MiB for HNSW, 1,549 MiB for
+  SVS FP32, 1,348 MiB for SVS LVQ4X8. These are allocations that happen outside
+  glibc's main arena — large chunks requested via `mmap`. The 371 MiB for HNSW
+  is largely glibc secondary arenas and per-thread arenas (normal for a
+  multi-threaded process); the SVS numbers include SVS's own graph/data
+  structures, which are substantial.
+- **SVS LVQ4X8 is only ~200 MiB smaller than SVS FP32** (1,348 vs 1,549 MiB in
+  the mmap region). Naively LVQ4X8 should save ~3× of 293 MiB ≈ 220 MiB on the
+  vector data alone — which is what we see. So LVQ4X8 really is compressing the
+  graph storage, but the compression savings are exactly offset by other
+  SVS-internal bookkeeping at this scale (construction workspaces, LRU caches,
+  graph edges at GMD=32).
+
+---
+
+## 4. Layer-by-layer accounting
+
+Combining §2 and §3, here's the decomposition each layer costs. All numbers in
+MiB, 100 K × 768-d FP32.
+
+| Layer | What it is | HNSW | SVS FP32 | SVS LVQ4X8 |
+|---|---|---|---|---|
+| **Valkey-core hashes** | `HSET doc:N vec <bytes>` stored in Valkey keyspace. Paid regardless of whether an index exists. | 320.8 | 320.8 | 320.8 |
+| **valkey-search intern store** (on heap) | One FP32 copy of each vector, held in a `FixedSizeAllocator` slab via `InternedStringPtr`. Kept alive by `tracked_vectors_`. Same for every index kind. | ~293 | ~293 | ~293 |
+| **HNSW graph payload** (heap + mmap) | hnswlib's per-node link lists + graph structure. Vector bytes are stored as *pointers* into the intern store (no copy in the graph itself). | ~386 | — | — |
+| **SVS graph payload** (mmap) | SVS's own FP32 or compressed vector storage + Vamana graph + internal workspaces. | — | ~1,549 | ~1,348 |
+| **`raw_vectors_`** (heap) | Prototype-only redundant FP32 copy. Same size as the intern store. | — | ~293 | ~293 |
+| **Other module overhead** (maps, pointers, thread pool, code, glibc per-thread arenas, etc.) | | ~20 | ~20 | ~20 |
+| **Total RSS** | | **~1,020** | **~2,190** | **~2,023** |
+
+### 4.1 Reading the numbers
+
+Three things to notice:
+
+1. **Valkey-core is 320 MiB whether an index exists or not.** It's a fixed
+   "cost of storing your vectors in Valkey," not something the index adds.
+   Any memory-efficiency comparison between algorithms should focus on the
+   incremental module cost on top of this.
+
+2. **HNSW adds ~700 MiB of module cost** for 100 K vectors. Most of that
+   (~293 MiB) is the intern store — a second FP32 copy of every vector, needed
+   so hnswlib's graph can point at stable addresses. The rest (~386 MiB) is
+   graph edges, glibc arena overhead, and miscellaneous module structures.
+
+3. **SVS adds ~1,680–1,850 MiB of module cost** for the same workload — **2.4×
+   to 2.7× the HNSW module cost.** Of that:
+   - ~293 MiB intern store (same as HNSW)
+   - ~293 MiB `raw_vectors_` redundant copy (prototype-only)
+   - ~1,000–1,250 MiB SVS-runtime-internal allocations (its own graph + vector
+     storage + workspaces)
+
+### 4.2 Why `used_memory` was misleading
+
+`INFO memory → used_memory` reports:
+
+| Config | `used_memory` reported |
+|---|---|
+| HNSW stage 2 | 696.9 MiB |
+| SVS FP32 stage 2 | 955.4 MiB |
+| SVS LVQ4X8 stage 2 | 955.5 MiB |
+
+SVS FP32 and SVS LVQ4X8 report identical `used_memory` even though the real RSS
+differs by 168 MiB. That's because SVS's allocations go through `mmap` (not the
+Valkey allocator wrapper), so `used_memory` only sees the valkey-search-owned
+part of the SVS footprint — the intern store + `raw_vectors_` + metadata,
+which is the same for FP32 and compressed. For any SVS memory analysis,
+**use VmRSS**, not `used_memory`.
+
+---
+
+## 5. Projected effect of the "drop `raw_vectors_`" fix
+
+Section §3.5 of the SVS Integration Spec proposes dropping the redundant
+`raw_vectors_` copy (pure valkey-search work, no SVS-runtime change required).
+Based on the measurements:
+
+| Config | Today | After dropping `raw_vectors_` | Reduction |
+|---|---|---|---|
+| HNSW | 1,020 MiB | 1,020 MiB | 0 (HNSW never had the shadow) |
+| SVS FP32 | 2,190 MiB | ~1,900 MiB | ~13% |
+| SVS LVQ4X8 | 2,023 MiB | ~1,730 MiB | ~14% |
+
+The fix moves SVS LVQ4X8 from "2× HNSW total RSS" to "1.7× HNSW total RSS." The
+intern store still exists and still costs ~293 MiB; that's the next (larger)
+optimization discussed in §3.5's roadmap.
+
+To get SVS LVQ4X8 actually below HNSW on memory would require dropping the
+intern store too — see the next section.
+
+---
+
+## 6. Why HNSW keeps the structural advantage
+
+After the easy-win fix, SVS LVQ4X8 is still ~1,730 MiB versus HNSW's 1,020 MiB —
+the intern store costs both the same, but SVS adds an additional ~700 MiB of
+SVS-runtime-internal structures (its own graph storage, even compressed). HNSW
+has no equivalent, because hnswlib stores graph edges plus 8-byte *pointers*
+into the intern store rather than keeping its own copy of the vectors.
+
+The only way to eliminate this gap is to drop the intern store for SVS indexes.
+That would require:
+
+- SVS to expose `reconstruct(label, float* out)` so valkey-search can serve
+  `FT.SEARCH ... RETURN vec` without the intern store.
+- SVS to expose `compute_distance(label, query, float* out)` so the pre-filter
+  path can also run without the intern store.
+- A user-facing policy decision about whether `FT.SEARCH ... RETURN vec` may
+  return reconstructed bytes (potentially differing from `HGET ... vec`).
+
+If all three happen, projected SVS LVQ4X8 total RSS drops from ~1,730 MiB to
+~1,440 MiB — below HNSW.  If only the first two happen and valkey-search
+defaults to KEEP-intern-store, memory stays at ~1,730 MiB.
+
+Details and trade-offs: see `SVS_INTEGRATION_SPEC.md §3.5`.
+
+---
+
+## 7. Projection to 1M vectors
+
+Scaling factor: 10×. All numbers scale roughly linearly with vector count
+for fixed dimension. Projected:
+
+| Config | Today | After `raw_vectors_` drop | With intern-store drop |
+|---|---|---|---|
+| HNSW | ~10.2 GiB | ~10.2 GiB | n/a (HNSW needs the intern store) |
+| SVS FP32 | ~21.9 GiB | ~19.0 GiB | ~16.1 GiB |
+| SVS LVQ4X8 | ~20.2 GiB | ~17.3 GiB | ~14.4 GiB |
+
+The 1 M-scale numbers are projections from the 100 K measurements; actual
+numbers may vary due to non-linear effects (allocator fragmentation, larger
+glibc arenas, etc.). We can re-run at 1 M scale to confirm if/when it matters.
+
+---
+
+## 8. Reproducing these measurements
+
+### 8.1 Prerequisites
+
+```
+# Clone and build as usual:
+git clone https://github.com/izaakk/valkey-search.git
+cd valkey-search && git checkout svs-integration-spec
+cmake -S . -B .build-release -DCMAKE_BUILD_TYPE=Release -DENABLE_SVS=ON -G Ninja
+ninja -C .build-release libsearch.so
+
+# Need valkey binary alongside:
+# (already assumed present at ../valkey/src/valkey-server in this repo layout)
+```
+
+### 8.2 Run
+
+```
+# Primary experiment: 9 snapshots (3 configs × 3 stages)
+./measure_memory.sh
+# ~3-5 minutes wall-clock
+
+# Follow-up: smaps decomposition per config
+./measure_smaps.sh
+# ~3-5 minutes wall-clock
+
+# Snapshots land in /tmp/memory_experiment/
+ls /tmp/memory_experiment/
+```
+
+### 8.3 Parse
+
+Snapshots are plain text. Key fields to grep:
+
+- `VmRSS:` in each stage file = authoritative total RSS
+- `used_memory:` = Valkey-allocator-tracked heap only (undercounts SVS)
+- `search_used_memory_bytes:` = valkey-search module's own tracked allocations
+- `user_indexed_memory:` in the `FT.INFO idx` block = intern store + vector
+  attribute size (always 293 MB at 100 K × 768d FP32 in our runs)
+
+The smaps files give the heap-vs-mmap split needed to attribute SVS-runtime
+internal memory.
+
+### 8.4 Varying the scale
+
+```
+N=1000000 DIM=768 ./measure_memory.sh      # 1M vectors
+N=100000 DIM=1536 ./measure_memory.sh      # 100K × 1536d
+```
+
+---
+
+## 9. Snapshot files (2026-05-06, initial run)
+
+All raw data for this document is preserved in `/tmp/memory_experiment/`:
+
+- `{hnsw,svs_fp32,svs_lvq4x8}_stage{0,1,2}_*.txt` — per-stage `INFO` / `FT.INFO` / `VmRSS` snapshots
+- `{hnsw,svs_fp32,svs_lvq4x8}_smaps.txt` — smaps-based heap-vs-mmap decomposition at stage 2
+- `server.log` — valkey-server stderr across the run
+
+These are on a host, not in the repo. Re-run `measure_memory.sh` + `measure_smaps.sh`
+to regenerate.

@@ -602,9 +602,10 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
       auto parsed = vmsdk::To<float>(vmsdk::ToStringView(score_record));
       // Use the parsed value if succeeded; Otherwise, we fall back to the
       // default score silently.
-      // TODO: Check what Redis Search does.
+      // Negative values are clamped to 0. The effective range of scores
+      // is [0, inf)
       if (parsed.ok()) {
-        document_score = parsed.value();
+        document_score = std::max(0.0f, parsed.value());
       }
     }
   }

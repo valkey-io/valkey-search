@@ -433,13 +433,7 @@ Test pair **01** (see §3.3) exercises the modify path.
 
 ### 3.5 `GetValueImpl()`
 
-> **Note on scope.** The ask on the SVS runtime for this method is
-> just: *"provide `reconstruct(label, float* out)`."* The interesting
-> question — whether valkey-search should drop its FP32 shadow and use
-> `reconstruct()` directly, or keep the shadow and ignore it — is a
-> **valkey-search** decision, not an SVS-team one. This section is
-> dedicated to that decision so the SVS team sees the context of how
-> their API will be consumed.
+> **Scope of the ask on SVS.** None in the first iteration. Shipping SVS integration with HNSW-comparable memory does **not** require any SVS-runtime change — the fix is entirely on the valkey-search side (drop `raw_vectors_`, route through the existing intern store). A future `reconstruct(label, float* out)` API would unlock further memory wins beyond HNSW parity; that's discussed at the end of this section as roadmap, not as a blocker.
 
 #### Contract
 
@@ -449,18 +443,47 @@ virtual char* GetValueImpl(uint64_t internal_id) const = 0;
 
 Return a pointer to the stored vector bytes. Called by `VectorBase::GetValue` (`src/indexes/vector_base.cc:272-290`), which then optionally denormalizes (for COSINE indexes, using the per-key magnitude in `tracked_metadata_by_key_`) and hands the result up the stack.
 
-#### HNSW today (`src/indexes/vector_hnsw.h:92-95`)
+#### Where vector bytes actually live
 
-```cpp
-char* GetValueImpl(uint64_t internal_id) const override
-    ABSL_NO_THREAD_SAFETY_ANALYSIS {
-  return algo_->getPoint(internal_id);
-}
-```
+When a client runs `HSET doc:42 vec <bytes>` and valkey-search has a matching `FT.CREATE` index, the bytes end up in several places. This table is important — the rest of the section refers back to it.
 
-hnswlib stores raw vectors inline in its graph node storage — returned bit-identical to what was inserted. Free.
+| Layer | Who owns it | Physical storage | Contents | Counts toward |
+|---|---|---|---|---|
+| Valkey hash field `doc:42 vec` | Valkey core | Valkey keyspace | exact bytes as inserted | Valkey core RSS |
+| valkey-search **intern store** | valkey-search module | `FixedSizeAllocator` slab, per-index (see `VectorBase::InternVector` at `src/indexes/vector_base.cc:151-165`) | exact bytes, a module-local copy of what we read out of the hash | module RSS |
+| `tracked_vectors_` (per-index) | HNSW or SVS subclass | `InternedStringPtr` (refcount + pointer into intern store) | just a handle — keeps the interned slab slot alive | module RSS (handle only, ~24 B per vector) |
+| HNSW graph payload | valkey-search's hnswlib fork at `third_party/hnswlib/` | `data_level0_memory_` slot per node stores a **raw `char*` pointer** into the intern store, not a copy (`third_party/hnswlib/hnswalg.h:1328-1329`) | same bytes as the intern store | module RSS (pointer only, 8 B per vector; plus ~200-400 B of graph edges per node) |
+| SVS Vamana graph payload | `libsvs_runtime.so` | SVS's internal structures | compressed (LVQ/LeanVec) or bit-exact copy (FP32 `StorageKind`) | module RSS |
+| SVS `raw_vectors_` (prototype only) | valkey-search module | `flat_hash_map<uint64_t, vector<char>>` | extra FP32 copy | module RSS |
 
-#### SVS prototype today (`src/indexes/vector_svs.cc:661-673`)
+**Why hnswlib can store pointers instead of copies.** The valkey-search fork of hnswlib was modified so `addPoint` writes a `const char*` (pointing at caller-owned bytes) into each graph node, rather than `memcpy`ing the bytes in. This is safe because the intern store is backed by a `FixedSizeAllocator` that gives stable addresses — the bytes a slot is born at are the bytes it dies at. Upstream hnswlib copies; our fork points. SVS, by contrast, has no equivalent API: every `svs_index_->add(...)` copies (and for compressed storage kinds, transforms) the input bytes into SVS-internal storage. This is by design — LVQ/LeanVec cannot "point at the user's FP32 bytes" because the bytes it searches against aren't FP32.
+
+#### Memory accounting — what "shared memory" really means
+
+There are two ways to account for memory. Both matter; operators care about the total, module developers care about the delta.
+
+**Accounting 1: total RSS the operator provisions for.** What `INFO memory` + `ps` will show. 1M × 768d × FP32 input, after the easy-win fix below:
+
+| Layer | HNSW | SVS FP32 | SVS LVQ4X8 |
+|---|---|---|---|
+| Valkey hash values (core, always present) | 3 GB | 3 GB | 3 GB |
+| Intern store (module) | 3 GB | 3 GB | 3 GB |
+| Graph payload | ~0.5 GB (pointers + edges) | ~3.5 GB (FP32 copy + edges) | ~0.9 GB (LVQ bytes + edges) |
+| **Total RSS** | **~6.5 GB** | **~9.5 GB** | **~6.9 GB** |
+
+The Valkey hash storage is absolutely real overhead — ~3 GB for every configuration, paid regardless of whether an index exists. HNSW doesn't escape it; SVS doesn't escape it. If the user's machine has to run this workload, they provision for >6 GB either way.
+
+**Accounting 2: incremental cost of adding the index.** Just module RSS, i.e. "what do I pay on top of the hash that already had to exist?"
+
+| Layer | HNSW | SVS FP32 | SVS LVQ4X8 |
+|---|---|---|---|
+| Intern store | 3 GB | 3 GB | 3 GB |
+| Graph payload | ~0.5 GB | ~3.5 GB | ~0.9 GB |
+| **Module overhead** | **~3.5 GB** | **~6.5 GB** | **~3.9 GB** |
+
+**What "HNSW uses shared memory" refers to** (the framing the Valkey team uses): inside our module, hnswlib's graph shares the intern-store bytes instead of duplicating them. Inside the module there is exactly one vector-data buffer for HNSW. This saves a *third* copy (hnswlib-internal graph memory), not the second (the intern store). Both HNSW and SVS-compressed pay the intern store cost.
+
+#### SVS prototype today — the redundancy (`src/indexes/vector_svs.cc:661-673`)
 
 ```cpp
 char* VectorSVS<T>::GetValueImpl(uint64_t internal_id) const {
@@ -471,103 +494,66 @@ char* VectorSVS<T>::GetValueImpl(uint64_t internal_id) const {
 }
 ```
 
-We keep `raw_vectors_` — a parallel `hash_map<uint64_t, std::vector<char>>` of every vector ever inserted, **uncompressed**. Needed today because the SVS 0.2.0 runtime cannot read a vector back out of the graph; disposable once `reconstruct()` exists.
+`raw_vectors_` is a per-vector `std::vector<char>` maintained in parallel to the intern store. It was added as a workaround against SVS 0.2.0 not exposing vector read-back — but the intern store (via `tracked_vectors_[id]`) already holds the exact bytes. `raw_vectors_` is a redundant third copy. At 1 M × 768d this costs an additional ~3 GB of module RSS.
 
-Memory cost at 1 M × 768-dim:
+#### HNSW today (`src/indexes/vector_hnsw.h:92-95`)
 
-| Component | Size |
-|---|---|
-| SVS graph + LVQ4X8 compressed vectors | ~1.5 GB |
-| `raw_vectors_` FP32 shadow | ~3 GB |
-| Total | ~4.5 GB |
-
-The shadow is **2×** the compressed index for LVQ4X8 — the dominant cost of an SVS index. The policy question is whether to keep paying it.
-
----
-
-#### The valkey-search policy question: keep the shadow, or drop it?
-
-Once SVS ships `reconstruct()` (see the "Ask on new SVS runtime" below), `GetValueImpl` has two viable implementations in valkey-search. This subsection walks through which valkey-search user-facing commands hit this path, which workflows care, and why we think this should be a user-configurable choice rather than a silent engineering decision.
-
-#### Commands that hit `GetValueImpl`
-
-The only valkey-search read paths that go through `GetValueImpl` are the ones where the index is asked to hand vector bytes back to a client:
-
-1. **`FT.SEARCH idx "..." RETURN <n> vector`** (`src/query/search.cc:525-548`). The canonical case. Example:
-   ```
-   FT.SEARCH idx "*=>[KNN 10 @vec $blob]" PARAMS 2 blob <binary>
-             RETURN 1 vec DIALECT 2
-   ```
-   Each top-k neighbor's `vec` bytes are serialized into the reply.
-2. **`FT.SEARCH idx "..."` with no `RETURN` clause**. Returns every indexed attribute, which pulls vector bytes through `GetValueImpl` for a schema that has `vec VECTOR ...`. Many casual users hit this without realizing.
-3. **`FT.AGGREGATE`** with a vector attribute projected (`LOAD`/`GROUPBY`/`APPLY` on the vector field). Less common.
-
-Commands that do **not** hit `GetValueImpl`:
-
-- **`FT.SEARCH idx "..." RETURN <n> __key`** — returns Redis keys only. This is the dominant mode for RAG/semantic-search clients: they read the vector back separately via `HGET`/`JSON.GET` against primary storage. Unaffected by this policy decision.
-- **`HGET key vec` / `JSON.GET key $.vec` / `DUMP key`** — primary KV/doc storage. Always exact bytes. Unaffected.
-- **Internal pre-filter `ComputeDistanceFromRecordImpl`** (`src/indexes/vector_base.cc:492-497`) — will switch to SVS `compute_distance()` (§3.6). Not user-visible.
-
-#### Workflows and whether they care about exact bytes
-
-| Workflow | Read path | Notices? |
-|---|---|---|
-| RAG / semantic search (majority) | `RETURN __key` → `HGET` | **No** — never touches `GetValueImpl` |
-| Debugging recall issues | `RETURN vec` | Mildly — reconstruction error blurs the signal, but they can cross-check with `HGET` |
-| ETL / read-modify-write cycles | `RETURN vec` → edit → `HSET` | **Yes** — error accumulates across iterations if they loop through the index read path |
-| Client-side re-ranking against returned vectors | `RETURN vec` → distance math | **Yes** — re-ranking on approximate bytes gives different ordering than on originals |
-| Duplicate detection / content-addressing | `RETURN vec` → hash / byte-compare | **Yes** — approximate bytes hash differently; breaks dedup invariants |
-| Backup & migration | `DUMP key` / `BGSAVE` | N/A — reads primary storage, bypasses the index |
-| Cross-API consistency (`FT.SEARCH ... RETURN vec` ↔ `HGET key vec`) | Both | **Yes** — today these agree for all index kinds; approximate returns would diverge |
-
-#### The consistency argument
-
-This is the part we think matters most to upstream reviewers.
-
-Whatever the user put in via `HSET doc:X vec <bytes>` is sitting in the primary hash value. `HGET doc:X vec`, `JSON.GET`, `DUMP` — all of those always return the original bytes, regardless of what the index does. The index is a **secondary** structure.
-
-Today, `FT.SEARCH ... RETURN vec` and `HGET key vec` are guaranteed to return the same bytes for the same logical vector. HNSW satisfies this trivially (stores bytes inline). FP32 SVS satisfies it (no lossy storage). LVQ/LeanVec SVS satisfies it **only because we keep `raw_vectors_`**. If we drop the shadow, the two API calls diverge: `FT.SEARCH` returns approximate bytes while `HGET` returns exact ones. Same logical vector, different answers depending on which command a client happens to use.
-
-There is no precedent in the Redis/RediSearch ecosystem for this kind of divergence. We'd be the first.
-
-#### Proposal: per-index user-configurable option
-
-We think the decision is a real trade-off with no universally-correct default, so we want to ship it as a knob rather than pick for everyone. Two options stay on the table for the upstream RFC:
-
-- **Option A — Keep the shadow for lossy storage kinds.** `GetValueImpl` returns exact bytes always. `raw_vectors_` persists for LVQ/LeanVec indexes (and is dropped for FP32). Preserves the `FT.SEARCH ↔ HGET` consistency; pays the ~2× memory cost for compression users.
-- **Option B — Drop the shadow, use `reconstruct()`.** `GetValueImpl` returns approximate bytes for lossy storage. `raw_vectors_` is deleted entirely. Halves memory for compression users; breaks the consistency guarantee.
-
-Neither is obviously right; the community should pick.
-
-Proposed surface (name bikesheddable):
-
-```
-FT.CREATE idx ... VECTOR SVS ...
-  COMPRESSION LVQ4X8
-  RAW_VECTOR_STORAGE KEEP | DROP
+```cpp
+char* GetValueImpl(uint64_t internal_id) const override
+    ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  return algo_->getPoint(internal_id);
+}
 ```
 
-- `KEEP` — valkey-search stores the FP32 shadow. `FT.SEARCH ... RETURN vec` returns exact bytes.
-- `DROP` — no shadow. `FT.SEARCH ... RETURN vec` returns reconstructed bytes for lossy compression.
+`algo_->getPoint()` returns the pointer hnswlib stored at insert time — a pointer into the intern store slab. No copy. Bit-exact by construction.
 
-Default: **pending community feedback.** Our current hypothesis is `KEEP` matches Valkey conventions better, but `DROP` is the pragmatic choice for an algorithm whose entire value prop is compression. We'll raise this explicitly in the upstream RFC.
+#### Iteration 1 fix: drop `raw_vectors_`, route `GetValueImpl` through the intern store
 
-For FP32 storage there's no trade-off — the option has no effect, and `raw_vectors_` is dropped unconditionally.
+Pure valkey-search work. No SVS-runtime change required. The intern store already holds the exact bytes, kept alive by `tracked_vectors_[id]`.
 
-#### Ask on new SVS runtime
+```cpp
+char* VectorSVS<T>::GetValueImpl(uint64_t internal_id) const {
+  absl::MutexLock lock(&tracked_vectors_mutex_);
+  auto it = tracked_vectors_.find(internal_id);
+  if (it == tracked_vectors_.end()) return nullptr;
+  // it->second is an InternedStringPtr; its bytes live in the intern store.
+  return const_cast<char*>(it->second->Str().data());
+}
+```
 
-Add **`reconstruct(size_t label, float* out)`** to `DynamicVamanaIndex`. This is the enabler for the policy choice above; the lossiness per `StorageKind` is whatever SVS already does internally — we don't need SVS to change it. Requirements:
+After this change:
 
-- Safe to call concurrently with `search()` and `add()`.
-- Thread-safe in the same sense as `search()` — no internal OS-thread fan-out per call.
-- O(1) or close to it — not a full graph traversal.
-- Fills `out[0..dim)` with FP32 values matching whatever SVS would use internally as the reconstructed approximation (for lossy kinds) or the stored vector (for FP32).
+- SVS gets the same memory model as HNSW: one valkey-search-owned copy per vector (in the intern store), plus the index's own graph payload.
+- `FT.SEARCH ... RETURN vec` returns **bit-exact** bytes regardless of `StorageKind`, because we never read from the compressed SVS graph.
+- `HGET doc:X vec` and `FT.SEARCH ... RETURN vec` agree. No consistency divergence.
+- `raw_vectors_` is deleted.
+- SVS-LVQ4X8 module overhead goes from ~6.9 GB → ~3.9 GB — parity with HNSW.
+
+For this iteration, **SVS is a latency/QPS win over HNSW at roughly equal memory.** The full "SVS compression saves memory" story is a separate, later iteration (below).
+
+The `ComputeDistanceFromRecordImpl` caller of `raw_vectors_` (§3.6) is handled separately.
+
+#### Roadmap — future iteration: dropping the intern store for SVS indexes
+
+Even after the Iteration 1 fix, SVS-LVQ4X8 doesn't beat HNSW on memory, because both still pay for the intern store (3 GB out of ~3.9 GB of SVS overhead). The compression benefit is hidden behind a copy we keep for reasons unrelated to SVS.
+
+To realize LVQ4X8's full ~7.5× memory advantage (graph shrinks from 3 GB FP32 to 0.4 GB compressed), we'd need to drop the intern-store copy too. That requires:
+
+1. **SVS exposes `reconstruct(label, float* out)` and `compute_distance(label, query, float*)`** so `GetValueImpl`, `IsVectorMatch`, and `ComputeDistanceFromRecord` can be served directly from the SVS graph without the intern store.
+2. **valkey-search gains a per-index "no intern store" mode** for SVS indexes where those APIs are available.
+3. **Accepting approximate `FT.SEARCH ... RETURN vec`** for compressed storage kinds, or gating this via a user-configurable option (`RAW_VECTOR_STORAGE KEEP|DROP` or similar).
+
+With that path, projected overhead for SVS-LVQ4X8 drops from ~3.9 GB to ~0.9 GB — **4× smaller than HNSW at the same vector count.**
+
+Out of scope for the first SVS integration PR. Raised here so the SVS team knows why `reconstruct()` is worth shipping even though it isn't blocking the integration.
+
+**Could we also drop the intern store for HNSW?** In principle, by having hnswlib point directly at Valkey-core hash memory instead of at the intern-store slab. Three blockers: Valkey hash values aren't guaranteed pointer-stable (listpack→hashtable conversion, resize rehashing); `DEL key` races with in-flight searches holding pointers; RDB load tears down and rebuilds memory. The intern store exists to provide the stable-pointer guarantee hnswlib relies on. Eliminating it for HNSW would require a different core-Valkey contract and is not on any roadmap.
 
 #### Validation
 
 Test pair **07** — reconstruct vector by label:
-- [`svs_integration_tests/hnsw/test_07_reconstruct.cc`](./svs_integration_tests/hnsw/test_07_reconstruct.cc) — baseline via `algo_->getDataByInternalId()`. Bit-exact round-trip.
-- [`svs_integration_tests/svs/test_07_reconstruct.cc`](./svs_integration_tests/svs/test_07_reconstruct.cc) — **fails to link on 0.2.0** with `undefined reference to svs::runtime::v0::dynamic_vamana_reconstruct`. The link error is the ask. On the new runtime, the test prints per-vector L2 reconstruction error so we can characterize the bound.
+- [`svs_integration_tests/hnsw/test_07_reconstruct.cc`](./svs_integration_tests/hnsw/test_07_reconstruct.cc) — baseline via `algo_->getDataByInternalId()`. Bit-exact round-trip via the intern-store pointer.
+- [`svs_integration_tests/svs/test_07_reconstruct.cc`](./svs_integration_tests/svs/test_07_reconstruct.cc) — currently fails to link (SVS 0.2.0 has no `reconstruct`). Once the intern-store-based `GetValueImpl` lands in valkey-search, this test becomes a direct regression check on the SVS runtime's own reconstruct API (if it ever ships); it's no longer on the critical path for shipping the integration.
 
 ---
 

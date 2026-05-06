@@ -46,6 +46,16 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 include_directories(${CMAKE_SOURCE_DIR})
 include_directories(${CMAKE_BINARY_DIR}/.deps/install/include)
 
+# Boost.Geometry (header-only) for R-tree spatial indexing
+find_path(BOOST_INCLUDE_DIR boost/geometry.hpp
+  HINTS ENV BOOST_ROOT /usr/include /usr/local/include)
+if(BOOST_INCLUDE_DIR)
+  message(STATUS "Boost headers found at: ${BOOST_INCLUDE_DIR}")
+  include_directories(SYSTEM ${BOOST_INCLUDE_DIR})
+else()
+  message(FATAL_ERROR "Boost.Geometry headers not found. Install libboost-dev or set BOOST_ROOT.")
+endif()
+
 include(valkey_search)
 
 add_subdirectory(vmsdk)

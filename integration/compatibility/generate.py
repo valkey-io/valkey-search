@@ -474,3 +474,38 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                     for wsk in ["", "WITHSORTKEYS"]:
                         for limit in ["LIMIT 0 5", "LIMIT 2 3", ""]:
                             self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY {sort_key} {direction} {return_keys} {limit} {wsk}")
+
+    def test_tag_escaped_special_chars(self, key_type, dialect):
+        """Compatibility test for escaped special characters in tag queries.
+        Ref: https://github.com/valkey-io/valkey-search/issues/454
+        """
+        self.setup_data("tag special chars", key_type)
+        # Single-tag queries
+        self.execute_command(["FT.SEARCH", f"{key_type}_idx1",
+                              r"@tags:{ a\}b }", "DIALECT", str(dialect)])
+        self.execute_command(["FT.SEARCH", f"{key_type}_idx1",
+                              r"@tags:{ a\|b }", "DIALECT", str(dialect)])
+        self.execute_command(["FT.SEARCH", f"{key_type}_idx1",
+                              r"@tags:{ tag-containing-\}-and-\} }",
+                              "DIALECT", str(dialect)])
+        self.execute_command(["FT.SEARCH", f"{key_type}_idx1",
+                              r"@tags:{ normal }", "DIALECT", str(dialect)])
+        # Multi-tag OR queries mixing escaped and normal tags.
+        # Use LIMIT 0 20 to return all results and avoid ordering
+        # differences between Redis and Valkey when results exceed
+        # the default limit of 10.
+        self.execute_command(["FT.SEARCH", f"{key_type}_idx1",
+                              r"@tags:{ a\}b | normal }",
+                              "LIMIT", "0", "20", "DIALECT", str(dialect)])
+        self.execute_command(["FT.SEARCH", f"{key_type}_idx1",
+                              r"@tags:{ a\|b | a\}b }",
+                              "LIMIT", "0", "20", "DIALECT", str(dialect)])
+        self.execute_command(["FT.SEARCH", f"{key_type}_idx1",
+                              r"@tags:{ normal | a\|b | a\}b }",
+                              "LIMIT", "0", "20", "DIALECT", str(dialect)])
+        self.execute_command(["FT.SEARCH", f"{key_type}_idx1",
+                              r"@tags:{ tag-containing-\}-and-\} | a\\b }",
+                              "LIMIT", "0", "20", "DIALECT", str(dialect)])
+        self.execute_command(["FT.SEARCH", f"{key_type}_idx1",
+                              r"@tags:{ a\}b | a\|b | tag-containing-\}-and-\} | a\\b | normal }",
+                              "LIMIT", "0", "20", "DIALECT", str(dialect)])

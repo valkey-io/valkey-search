@@ -257,7 +257,7 @@ TEST_F(ValueTest, timetest) {
   EXPECT_EQ(FuncMonthofyear(ts), Value(1));
 
   EXPECT_EQ(FuncTimefmt(ts, Value("%c")), Value("Fri Feb 14 20:30:15 2025"));
-
+  EXPECT_EQ(FuncTimefmt(ts, Value("")), Value(""));
   EXPECT_EQ(FuncParsetime(Value("Fri Feb 14 20:30:15 2025"), Value("%c")), ts);
 
   EXPECT_EQ(FuncMinute(ts), Value(1739565000));

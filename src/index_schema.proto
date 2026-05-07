@@ -25,7 +25,7 @@ message IndexSchema {
   repeated string subscribed_key_prefixes = 2;
   AttributeDataType attribute_data_type = 3;
   Language language = 4;
-  float score = 5;
+  optional float score = 5;
   repeated Attribute attributes = 6;
   Stats stats = 7;
   optional uint32 db_num = 8;

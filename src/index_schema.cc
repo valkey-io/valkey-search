@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -24,6 +25,7 @@
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
@@ -298,7 +300,8 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
       min_stem_size_(index_schema_proto.min_stem_size() > 0
                          ? index_schema_proto.min_stem_size()
                          : 4),
-      score_(index_schema_proto.score() > 0 ? index_schema_proto.score() : 1.0),
+      score_(index_schema_proto.has_score() > 0 ? index_schema_proto.score()
+                                                : 1.0),
       score_field_(index_schema_proto.has_score_field()
                        ? index_schema_proto.score_field()
                        : ""),
@@ -598,15 +601,16 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
     ValkeyModule_HashGet(key_obj.get(), VALKEYMODULE_HASH_CFIELDS,
                          score_field_.c_str(), &score_record, NULL);
     if (score_record) {
-      vmsdk::UniqueValkeyString score_str(score_record);
-      auto parsed = vmsdk::To<float>(vmsdk::ToStringView(score_record));
-      // Use the parsed value if succeeded; Otherwise, we fall back to the
-      // default score silently.
-      // Negative values are clamped to 0. The effective range of scores
-      // is [0, inf)
-      if (parsed.ok()) {
-        document_score = std::max(0.0f, parsed.value());
+      // Parse directly from the ValkeyModuleString's internal buffer (no copy).
+      // Use the parsed value if succeeded; otherwise, fall back to the default
+      // score silently. Raw value is stored without clamping. The scoring 
+      // algorithm decides how to handle values at query time. 
+      float value;
+      auto str_view = vmsdk::ToStringView(score_record);
+      if (absl::SimpleAtof(str_view, &value)) {
+        document_score = value;
       }
+      ValkeyModule_FreeString(nullptr, score_record);
     }
   }
 

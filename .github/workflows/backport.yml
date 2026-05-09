@@ -4,34 +4,37 @@ on:
     types: [closed, labeled]
 
 jobs:
+  filter:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    outputs:
+      branches: ${{ steps.extract.outputs.branches }}
+    steps:
+      - name: Extract backport branches
+        id: extract
+        run: |
+          BRANCHES=$(echo '${{ toJSON(github.event.pull_request.labels.*.name) }}' | \
+            jq -c '[.[] | select(startswith("backport/")) | ltrimstr("backport/")]')
+          echo "branches=${BRANCHES}" >> "$GITHUB_OUTPUT"
+
   backport:
-    if: github.event.pull_request.merged == true && contains(join(github.event.pull_request.labels.*.name, ','), 'backport/')
+    needs: filter
+    if: needs.filter.outputs.branches != '[]'
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        label: ${{ github.event.pull_request.labels.*.name }}
+        branch: ${{ fromJSON(needs.filter.outputs.branches) }}
     steps:
-      - name: Check if backport label
-        id: check
-        run: |
-          if [[ "${{ matrix.label }}" =~ ^backport/(.+)$ ]]; then
-            echo "branch=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
-            echo "should_run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "should_run=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Checkout
-        if: steps.check.outputs.should_run == 'true'
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Cherry-pick and create PR
-        if: steps.check.outputs.should_run == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TARGET_BRANCH: ${{ steps.check.outputs.branch }}
+          TARGET_BRANCH: ${{ matrix.branch }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
@@ -42,8 +45,8 @@ jobs:
 
           BACKPORT_BRANCH="backport/${PR_NUMBER}-to-${TARGET_BRANCH}"
 
-          git checkout "origin/${TARGET_BRANCH}"
-          git checkout -b "${BACKPORT_BRANCH}"
+          git fetch origin "${TARGET_BRANCH}"
+          git checkout -b "${BACKPORT_BRANCH}" "origin/${TARGET_BRANCH}"
 
           if git cherry-pick --signoff "${MERGE_SHA}"; then
             echo "Cherry-pick succeeded cleanly"

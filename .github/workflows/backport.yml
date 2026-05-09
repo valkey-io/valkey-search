@@ -1,0 +1,68 @@
+name: Backport
+on:
+  pull_request:
+    types: [closed, labeled]
+
+jobs:
+  backport:
+    if: github.event.pull_request.merged == true && contains(join(github.event.pull_request.labels.*.name, ','), 'backport/')
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        label: ${{ github.event.pull_request.labels.*.name }}
+    steps:
+      - name: Check if backport label
+        id: check
+        run: |
+          if [[ "${{ matrix.label }}" =~ ^backport/(.+)$ ]]; then
+            echo "branch=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        if: steps.check.outputs.should_run == 'true'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Cherry-pick and create PR
+        if: steps.check.outputs.should_run == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_BRANCH: ${{ steps.check.outputs.branch }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          BACKPORT_BRANCH="backport/${PR_NUMBER}-to-${TARGET_BRANCH}"
+
+          git checkout "origin/${TARGET_BRANCH}"
+          git checkout -b "${BACKPORT_BRANCH}"
+
+          if git cherry-pick --signoff "${MERGE_SHA}"; then
+            echo "Cherry-pick succeeded cleanly"
+          else
+            echo "Cherry-pick had conflicts — committing with markers"
+            git add -A
+            git commit --signoff --no-edit --allow-empty \
+              -m "backport #${PR_NUMBER} to ${TARGET_BRANCH} (CONFLICTS — needs manual resolution)"
+          fi
+
+          git push origin "${BACKPORT_BRANCH}"
+
+          gh pr create \
+            --base "${TARGET_BRANCH}" \
+            --head "${BACKPORT_BRANCH}" \
+            --title "[Backport ${TARGET_BRANCH}] ${PR_TITLE}" \
+            --assignee "${PR_AUTHOR}" \
+            --label "backport/${TARGET_BRANCH}" \
+            --body "Backport of #${PR_NUMBER} to \`${TARGET_BRANCH}\`.
+Original author: @${PR_AUTHOR}
+
+> ⚠️ If this cherry-pick had conflicts, look for conflict markers in the diff."

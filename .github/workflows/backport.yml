@@ -58,8 +58,15 @@ jobs:
 
           git checkout -b "${BACKPORT_BRANCH}" "origin/${TARGET_BRANCH}"
 
+          # Detect if merge commit (has 2+ parents) and use -m 1 accordingly
+          PARENT_COUNT=$(git cat-file -p "${MERGE_SHA}" | grep -c "^parent")
+          CHERRY_PICK_ARGS="--signoff"
+          if [ "${PARENT_COUNT}" -gt 1 ]; then
+            CHERRY_PICK_ARGS="--signoff -m 1"
+          fi
+
           CONFLICT_COUNT=0
-          if git cherry-pick --signoff "${MERGE_SHA}"; then
+          if git cherry-pick ${CHERRY_PICK_ARGS} "${MERGE_SHA}"; then
             echo "Cherry-pick succeeded cleanly"
           else
             CONFLICT_COUNT=$(git diff --name-only --diff-filter=U | wc -l)
@@ -69,12 +76,12 @@ jobs:
               -m "backport #${PR_NUMBER} to ${TARGET_BRANCH} (CONFLICTS — needs manual resolution)"
           fi
 
+          FILES_CHANGED=$(git diff --name-only "origin/${TARGET_BRANCH}" HEAD | wc -l)
+
           if ! git push origin "${BACKPORT_BRANCH}"; then
             echo "::error::Failed to push branch '${BACKPORT_BRANCH}'. Check permissions."
             exit 1
           fi
-
-          FILES_CHANGED=$(git diff --name-only "origin/${TARGET_BRANCH}" HEAD | wc -l)
 
           BODY="## Backport of #${PR_NUMBER} to \`${TARGET_BRANCH}\`
 

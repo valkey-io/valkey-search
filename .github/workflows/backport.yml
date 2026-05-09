@@ -59,13 +59,15 @@ jobs:
 
           git push origin "${BACKPORT_BRANCH}"
 
+          BODY="Backport of #${PR_NUMBER} to \`${TARGET_BRANCH}\`.
+          Original author: @${PR_AUTHOR}
+
+          > ⚠️ If this cherry-pick had conflicts, look for conflict markers in the diff."
+
           gh pr create \
             --base "${TARGET_BRANCH}" \
             --head "${BACKPORT_BRANCH}" \
             --title "[Backport ${TARGET_BRANCH}] ${PR_TITLE}" \
             --assignee "${PR_AUTHOR}" \
             --label "backport/${TARGET_BRANCH}" \
-            --body "Backport of #${PR_NUMBER} to \`${TARGET_BRANCH}\`.
-Original author: @${PR_AUTHOR}
-
-> ⚠️ If this cherry-pick had conflicts, look for conflict markers in the diff."
+            --body "${BODY}"

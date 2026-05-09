@@ -37,6 +37,7 @@ jobs:
           TARGET_BRANCH: ${{ matrix.branch }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
         run: |
@@ -45,29 +46,57 @@ jobs:
 
           BACKPORT_BRANCH="backport/${PR_NUMBER}-to-${TARGET_BRANCH}"
 
-          git fetch origin "${TARGET_BRANCH}"
+          if [ -z "${MERGE_SHA}" ]; then
+            echo "::error::No merge commit SHA found. PR may have been rebased-merged (unsupported)."
+            exit 1
+          fi
+
+          if ! git fetch origin "${TARGET_BRANCH}" 2>/dev/null; then
+            echo "::error::Branch '${TARGET_BRANCH}' does not exist on remote. Cannot backport."
+            exit 1
+          fi
+
           git checkout -b "${BACKPORT_BRANCH}" "origin/${TARGET_BRANCH}"
 
+          CONFLICT_COUNT=0
           if git cherry-pick --signoff "${MERGE_SHA}"; then
             echo "Cherry-pick succeeded cleanly"
           else
-            echo "Cherry-pick had conflicts — committing with markers"
+            CONFLICT_COUNT=$(git diff --name-only --diff-filter=U | wc -l)
+            echo "Cherry-pick had conflicts in ${CONFLICT_COUNT} file(s)"
             git add -A
             git commit --signoff --no-edit --allow-empty \
               -m "backport #${PR_NUMBER} to ${TARGET_BRANCH} (CONFLICTS — needs manual resolution)"
           fi
 
-          git push origin "${BACKPORT_BRANCH}"
+          if ! git push origin "${BACKPORT_BRANCH}"; then
+            echo "::error::Failed to push branch '${BACKPORT_BRANCH}'. Check permissions."
+            exit 1
+          fi
 
-          BODY="Backport of #${PR_NUMBER} to \`${TARGET_BRANCH}\`.
-          Original author: @${PR_AUTHOR}
+          FILES_CHANGED=$(git diff --name-only "origin/${TARGET_BRANCH}" HEAD | wc -l)
 
-          > ⚠️ If this cherry-pick had conflicts, look for conflict markers in the diff."
+          BODY="## Backport of #${PR_NUMBER} to \`${TARGET_BRANCH}\`
 
-          gh pr create \
+          **Original title:** ${PR_TITLE}
+          **Original author:** @${PR_AUTHOR}
+          **Files changed:** ${FILES_CHANGED}
+          **Conflicts:** ${CONFLICT_COUNT}
+
+          ### Original PR description
+
+          ${PR_BODY:-_No description provided._}
+
+          ---
+          > If conflicts > 0, look for conflict markers in the diff and resolve manually."
+
+          if ! gh pr create \
             --base "${TARGET_BRANCH}" \
             --head "${BACKPORT_BRANCH}" \
             --title "[Backport ${TARGET_BRANCH}] ${PR_TITLE}" \
             --assignee "${PR_AUTHOR}" \
             --label "backport/${TARGET_BRANCH}" \
-            --body "${BODY}"
+            --body "${BODY}"; then
+            echo "::error::Failed to create backport PR. A PR for this backport may already exist."
+            exit 1
+          fi

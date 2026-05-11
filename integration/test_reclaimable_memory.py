@@ -121,11 +121,12 @@ class TestReclaimableMemory(ValkeySearchTestCaseBase):
         initial_reclaimable = int(info_data["search_index_reclaimable_memory"])
         assert initial_reclaimable == 0
         
-        # Add vectors to both indexes
-        for idx_name in indexes:
+        # Add unique vectors to each index (different values so interning
+        # doesn't deduplicate across indexes)
+        for idx_num, idx_name in enumerate(indexes):
             for i in range(5):
                 key = f"{idx_name}:{i}"
-                vector = [float(i), float(i*2)]
+                vector = [float(i + idx_num * 100), float(i * 2 + idx_num * 100)]
                 # Convert vector to proper binary format (little-endian float32)
                 vector_bytes = struct.pack('<2f', *vector)
                 client.hset(key, "embedding", vector_bytes)

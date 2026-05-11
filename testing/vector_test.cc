@@ -30,6 +30,7 @@
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
+#include "src/metrics.h"
 #include "src/utils/cancel.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"

@@ -43,7 +43,7 @@ class VectorHNSW : public VectorBase {
       const data_model::VectorIndex& vector_index_proto,
       absl::string_view attribute_identifier,
       SupplementalContentChunkIter&& iter) ABSL_NO_THREAD_SAFETY_ANALYSIS;
-  ~VectorHNSW() override = default;
+  ~VectorHNSW() override;
   size_t GetDataTypeSize() const override { return sizeof(T); }
 
   const hnswlib::SpaceInterface<float>* GetSpace() const {
@@ -114,6 +114,7 @@ class VectorHNSW : public VectorBase {
   mutable absl::Mutex tracked_vectors_mutex_;
   absl::flat_hash_map<uint64_t, InternedStringPtr> tracked_vectors_
       ABSL_GUARDED_BY(tracked_vectors_mutex_);
+  uint64_t reclaimable_memory_contribution_{0};
 };
 
 }  // namespace valkey_search::indexes

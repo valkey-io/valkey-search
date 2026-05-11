@@ -79,6 +79,11 @@ std::optional<hnswlib::tableint> GetInternalIdDuringSearch(
 namespace valkey_search::indexes {
 
 template <typename T>
+VectorHNSW<T>::~VectorHNSW() {
+  Metrics::GetStats().reclaimable_memory -= reclaimable_memory_contribution_;
+}
+
+template <typename T>
 absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::Create(
     const data_model::VectorIndex &vector_index_proto,
     absl::string_view attribute_identifier,
@@ -155,6 +160,17 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
                                 vector_index_proto.initial_cap(), index.get()));
     // ef_runtime is not persisted in the index contents
     index->algo_->setEf(vector_index_proto.hnsw_algorithm().ef_runtime());
+    auto vector_size = vector_index_proto.dimension_count() * sizeof(T);
+    for (size_t i = 0; i < index->algo_->cur_element_count_; i++) {
+      if (index->algo_->isMarkedDeleted(i)) {
+        auto label = index->algo_->getExternalLabel(i);
+        auto it = index->tracked_vectors_.find(label);
+        if (it != index->tracked_vectors_.end() && it->second.RefCount() == 1) {
+          Metrics::GetStats().reclaimable_memory += vector_size;
+          index->reclaimable_memory_contribution_ += vector_size;
+        }
+      }
+    }
     return index;
   } catch (const std::exception &e) {
     ++Metrics::GetStats().hnsw_create_exceptions_cnt;
@@ -295,6 +311,15 @@ absl::Status VectorHNSW<T>::RemoveRecordImpl(uint64_t internal_id) {
     ++Metrics::GetStats().hnsw_remove_exceptions_cnt;
     return absl::InternalError(
         absl::StrCat("Error while removing a record: ", e.what()));
+  }
+  {
+    absl::MutexLock lock(&tracked_vectors_mutex_);
+    auto it = tracked_vectors_.find(internal_id);
+    if (it != tracked_vectors_.end() && it->second.RefCount() == 1) {
+      auto vector_size = dimensions_ * sizeof(T);
+      Metrics::GetStats().reclaimable_memory += vector_size;
+      reclaimable_memory_contribution_ += vector_size;
+    }
   }
   return absl::OkStatus();
 }

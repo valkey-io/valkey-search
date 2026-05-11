@@ -9,13 +9,12 @@
 #include <cmath>
 
 #include "gtest/gtest.h"
+#include "vmsdk/src/testing_infra/utils.h"
 
 namespace valkey_search::expr {
 
-class ValueTest : public testing::Test {
+class ValueTest : public vmsdk::ValkeyTest {
  protected:
-  void SetUp() override {}
-  void TearDown() override {}
   Value pos_inf = Value(std::numeric_limits<double>::infinity());
   Value neg_inf = Value(-std::numeric_limits<double>::infinity());
   Value pos_zero = Value(0.0);

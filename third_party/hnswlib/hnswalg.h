@@ -229,8 +229,10 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
   }
 
   inline char *getDataByInternalId(tableint internal_id) const {
-    auto data_ptr = (char **)(getDataPtrByInternalId(internal_id));
-    return *data_ptr;
+    char *result;
+    memcpy(&result, getDataPtrByInternalId(internal_id), sizeof(char *));
+    std::atomic_thread_fence(std::memory_order_acquire);
+    return result;
   }
 
   int getRandomLevel(double reverse_size) {
@@ -1094,8 +1096,9 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
   void updatePoint(const void *dataPoint, tableint internalId,
                    float updateNeighborProbability) {
     // update the feature vector associated with existing point with new vector
-    auto data_ptr = (const char **)(getDataPtrByInternalId(internalId));
-    *data_ptr = static_cast<const char *>(dataPoint);
+    const char *new_ptr = static_cast<const char *>(dataPoint);
+    std::atomic_thread_fence(std::memory_order_release);
+    memcpy(getDataPtrByInternalId(internalId), &new_ptr, sizeof(char *));
 
     int maxLevelCopy = maxlevel_;
     tableint entryPointCopy = enterpoint_node_;
@@ -1325,8 +1328,11 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 
     // Initialisation of the data and label
     memcpy(getExternalLabeLp(cur_c), &label, sizeof(labeltype));
-    auto data_ptr = (const char **)(getDataPtrByInternalId(cur_c));
-    *data_ptr = static_cast<const char *>(data_point);
+    {
+      const char *new_ptr = static_cast<const char *>(data_point);
+      std::atomic_thread_fence(std::memory_order_release);
+      memcpy(getDataPtrByInternalId(cur_c), &new_ptr, sizeof(char *));
+    }
 
     if (curlevel) {
       *reinterpret_cast<char **>((*linkLists_)[cur_c]) =

@@ -451,6 +451,18 @@ def validate_aggregate_complex_queries(client: Valkey):
         row = dict(zip(result[i][::2], result[i][1::2]))
         assert row[b'distinct_ratings'] == b'50'
 
+    # 10b. COUNT_DISTINCT without AS
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "3", "price", "rating", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "COUNT_DISTINCT", "1", "@rating"
+    )
+    assert result[0] == 2
+    for i in range(1, len(result)):
+        row = dict(zip(result[i][::2], result[i][1::2]))
+        assert row[b'COUNT_DISTINCT(@rating)'] == b'50'
+
     # 11. GROUPBY with STDDEV reducer
     result = client.execute_command(
         "FT.AGGREGATE", "products", "@price:[1 4]",

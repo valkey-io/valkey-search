@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <iostream>
 #include <iterator>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -64,6 +65,7 @@ struct FTCreateParameters {
   absl::string_view score_field;
   absl::string_view payload_field;
   bool skip_initial_scan{false};
+  std::optional<uint32_t> query_timeout_ms;
   std::vector<AttributeParameters> attributes;
   ExpectedPerIndexTextParameters per_index_text_params;
 };
@@ -133,6 +135,12 @@ TEST_P(FTCreateParserTest, ParseParams) {
               test_case.expected.attributes.size());
     EXPECT_EQ(index_schema_proto->skip_initial_scan(),
               test_case.expected.skip_initial_scan);
+    EXPECT_EQ(index_schema_proto->has_query_timeout_ms(),
+              test_case.expected.query_timeout_ms.has_value());
+    if (test_case.expected.query_timeout_ms.has_value()) {
+      EXPECT_EQ(index_schema_proto->query_timeout_ms(),
+                *test_case.expected.query_timeout_ms);
+    }
 
     // Verify schema-level text parameters if we have text fields
     bool has_text_fields = false;
@@ -321,6 +329,45 @@ INSTANTIATE_TEST_SUITE_P(
                               .attribute_alias = "hash_field11",
                               .indexer_type = indexes::IndexerType::kFlat,
                           }}},
+         },
+         {
+             .test_name = "happy_path_query_timeout",
+             .success = true,
+             .command_str =
+                 " idx1 on HASH PREFIX 1 doc: QUERY_TIMEOUT 1234 SCHEMA "
+                 "hash_field1 as hash_field11 vector hnsw 6 TYPE FLOAT32 DIM 3 "
+                 "DISTANCE_METRIC IP ",
+             .hnsw_parameters = {{
+                 {
+                     .dimensions = 3,
+                     .distance_metric = data_model::DISTANCE_METRIC_IP,
+                     .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
+                     .initial_cap = kDefaultInitialCap,
+                 },
+                 /* .m =*/kDefaultM,
+                 /* .ef_construction =*/kDefaultEFConstruction,
+                 /* .ef_runtime =*/kDefaultEFRuntime,
+             }},
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .prefixes = {"doc:"},
+                          .query_timeout_ms = 1234,
+                          .attributes = {{
+                              .identifier = "hash_field1",
+                              .attribute_alias = "hash_field11",
+                              .indexer_type = indexes::IndexerType::kHNSW,
+                          }}},
+         },
+         {
+             .test_name = "query_timeout_too_large",
+             .success = false,
+             .command_str =
+                 " idx1 on HASH PREFIX 1 doc: QUERY_TIMEOUT 60001 SCHEMA "
+                 "hash_field1 vector hnsw 6 TYPE FLOAT32 DIM 3 DISTANCE_METRIC "
+                 "IP ",
+             .expected_error_message =
+                 "QUERY_TIMEOUT must be a positive integer greater than 0 and "
+                 "cannot exceed 60000.",
          },
          {
              .test_name = "happy_path_hnsw_and_numeric",

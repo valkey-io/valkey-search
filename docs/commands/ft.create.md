@@ -14,6 +14,7 @@ FT.CREATE <index-name>
     [SCORE default_value]
     [LANGUAGE <language>]
     [SKIPINITIALSCAN]
+    [QUERY_TIMEOUT <timeout>]
     [MINSTEMSIZE <min_stem_size>]
     [WITHOFFSETS | NOOFFSETS]
     [NOSTOPWORDS | STOPWORDS <count> <word> word ...]
@@ -46,6 +47,8 @@ FT.CREATE <index-name>
 - `PUNCTUATION <punctuation>` (optional): A string of characters that define the separation points between words, in addition to whitespace characters (spaces, tabs, newlines, carriage returns, and control characters) which always break words. The default value is `,.<>{}[]"':;!@#$%^&\*()-+=~/\|?`.
 
 - `SKIPINITIALSCAN` (optional): If specified, this option skips the normal backfill operation for an index. If this option is specified, pre-existing keys which match the `PREFIX` clause will not be loaded into the index during a backfill operation. This clause has no effect on processing of key mutations _after_ an index is created, i.e., keys which are mutated after an index is created and satisfy the data type and `PREFIX` clause will be inserted into that index.
+
+- `QUERY_TIMEOUT <timeout>` (optional): Sets the default timeout in milliseconds for `FT.SEARCH` and `FT.AGGREGATE` requests on this index. A query-level `TIMEOUT` argument overrides this value.
 
 - `SCORE` (optional): The current implementation only allows the value to be 1.0. This parameter is accepted to make valkey-search more interoperable with RediSearch. (default: 1.0)
 

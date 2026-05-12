@@ -10,13 +10,14 @@
 #include <random>
 
 #include "gtest/gtest.h"
+#include "vmsdk/src/testing_infra/module.h"
 
 namespace valkey_search::expr {
 
 class ValueTest : public testing::Test {
  protected:
-  void SetUp() override {}
-  void TearDown() override {}
+  void SetUp() override { TestValkeyModule_Init(); }
+  void TearDown() override { TestValkeyModule_Teardown(); }
   Value pos_inf = Value(std::numeric_limits<double>::infinity());
   Value neg_inf = Value(-std::numeric_limits<double>::infinity());
   Value pos_zero = Value(0.0);
@@ -336,11 +337,12 @@ TEST_F(ValueTest, ArrayTypeChecking) {
   Value three_elem({Value(1.0), Value(2.0), Value(3.0)});
   EXPECT_EQ(three_elem.ArraySize(), 3);
 
-  // Test ArraySize() on scalar values (should return 0)
-  EXPECT_EQ(Value().ArraySize(), 0);
-  EXPECT_EQ(Value(true).ArraySize(), 0);
-  EXPECT_EQ(Value(42.0).ArraySize(), 0);
-  EXPECT_EQ(Value(std::string("test")).ArraySize(), 0);
+  // Test ArraySize() on scalar values (should CHECK-fail, so we just verify
+  // IsArray() is false)
+  EXPECT_FALSE(Value().IsArray());
+  EXPECT_FALSE(Value(true).IsArray());
+  EXPECT_FALSE(Value(42.0).IsArray());
+  EXPECT_FALSE(Value(std::string("test")).IsArray());
 
   // Test IsEmptyArray()
   EXPECT_TRUE(empty_vec.IsEmptyArray());
@@ -376,9 +378,9 @@ TEST_F(ValueTest, ArrayAccessors) {
   EXPECT_EQ(vec.GetArrayElement(1)->GetDouble(), 2.0);
   EXPECT_EQ(vec.GetArrayElement(2)->GetDouble(), 3.0);
 
-  // Test GetArrayElement() with out of bounds index (should throw)
-  EXPECT_THROW(vec.GetArrayElement(3), std::out_of_range);
-  EXPECT_THROW(vec.GetArrayElement(100), std::out_of_range);
+  // Test GetArrayElement() with out of bounds index (should return nullopt)
+  EXPECT_FALSE(vec.GetArrayElement(3).has_value());
+  EXPECT_FALSE(vec.GetArrayElement(100).has_value());
 
   // Test AsArray() on vector values
   auto opt_vec = vec.AsArray();
@@ -482,7 +484,7 @@ TEST_F(ValueTest, vector_arithmetic) {
   Value result8 = FuncAdd(vec1, vec3);
   ASSERT_TRUE(result8.IsNil());
   std::string error_msg = result8.GetNil().GetReason();
-  EXPECT_EQ(error_msg, "Length mismatch: vectors have lengths 3 and 2");
+  EXPECT_EQ(error_msg, "Length mismatch: arrays have lengths 3 and 2");
 }
 
 TEST_F(ValueTest, ArrayComparison_EqualArrays) {
@@ -713,7 +715,7 @@ TEST_F(ValueTest, FuncArrayLen_NotAArray) {
   Value result = FuncArrayLen(scalar);
   EXPECT_TRUE(result.IsNil());
   EXPECT_STREQ(result.GetNil().GetReason(),
-               "vectorlen: operand is not a vector");
+               "arraylen: operand is not an array");
 }
 
 TEST_F(ValueTest, FuncArrayAt_ValidIndex) {
@@ -743,7 +745,7 @@ TEST_F(ValueTest, FuncArrayAt_IndexOutOfBounds) {
   EXPECT_TRUE(result.IsNil());
   std::string reason = result.GetNil().GetReason();
   EXPECT_EQ(reason,
-            std::string("Index out of bounds: index 10, vector length 3"));
+            std::string("Index out of bounds: index 10, array length 3"));
 }
 
 TEST_F(ValueTest, FuncArrayAt_NegativeIndex) {
@@ -751,7 +753,7 @@ TEST_F(ValueTest, FuncArrayAt_NegativeIndex) {
   Value result = FuncArrayAt(vec, Value(-1.0));
   EXPECT_TRUE(result.IsNil());
   std::string reason = result.GetNil().GetReason();
-  EXPECT_EQ(reason, "Index out of bounds: index -1, vector length 3");
+  EXPECT_EQ(reason, "Index out of bounds: index -1, array length 3");
 }
 
 TEST_F(ValueTest, FuncArrayAt_NotAArray) {
@@ -759,7 +761,7 @@ TEST_F(ValueTest, FuncArrayAt_NotAArray) {
   Value result = FuncArrayAt(scalar, Value(0.0));
   EXPECT_TRUE(result.IsNil());
   EXPECT_STREQ(result.GetNil().GetReason(),
-               "vectorat: first operand is not a vector");
+               "arrayat: first operand is not an array");
 }
 
 TEST_F(ValueTest, FuncArrayAt_InvalidIndex) {
@@ -767,7 +769,7 @@ TEST_F(ValueTest, FuncArrayAt_InvalidIndex) {
   Value result = FuncArrayAt(vec, Value("not a number"));
   EXPECT_TRUE(result.IsNil());
   EXPECT_STREQ(result.GetNil().GetReason(),
-               "vectorat: index is not an integer");
+               "arrayat: index is not an integer");
 }
 
 TEST_F(ValueTest, FuncIsArray_Array) {
@@ -848,7 +850,7 @@ TEST_F(ValueTest, FuncFlatten_NotAArray) {
   Value result = FuncFlatten(scalar, Value(1.0));
   EXPECT_TRUE(result.IsNil());
   EXPECT_STREQ(result.GetNil().GetReason(),
-               "flatten: first operand is not a vector");
+               "flatten: first operand is not an array");
 }
 
 TEST_F(ValueTest, FuncFlatten_InvalidDepth) {

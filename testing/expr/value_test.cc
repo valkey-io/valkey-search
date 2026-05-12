@@ -11,10 +11,11 @@
 
 #include "gtest/gtest.h"
 #include "vmsdk/src/testing_infra/module.h"
+#include "vmsdk/src/testing_infra/utils.h"
 
 namespace valkey_search::expr {
 
-class ValueTest : public testing::Test {
+class ValueTest : public vmsdk::ValkeyTest {
  protected:
   void SetUp() override { TestValkeyModule_Init(); }
   void TearDown() override { TestValkeyModule_Teardown(); }
@@ -768,8 +769,7 @@ TEST_F(ValueTest, FuncArrayAt_InvalidIndex) {
   Value vec = Value({Value(1.0), Value(2.0), Value(3.0)});
   Value result = FuncArrayAt(vec, Value("not a number"));
   EXPECT_TRUE(result.IsNil());
-  EXPECT_STREQ(result.GetNil().GetReason(),
-               "arrayat: index is not an integer");
+  EXPECT_STREQ(result.GetNil().GetReason(), "arrayat: index is not an integer");
 }
 
 TEST_F(ValueTest, FuncIsArray_Array) {

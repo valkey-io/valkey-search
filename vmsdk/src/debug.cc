@@ -132,6 +132,16 @@ void PausePointList(ValkeyModuleCtx* ctx) {
 }
 
 //
+// Release all PausePoint waiters by clearing the map. Waiting threads will
+// see that their point no longer exists and return from PausePoint().
+// Must be called during shutdown before global destructors run.
+//
+void ClearAllPausePoints() {
+  absl::MutexLock lock(&pause_point_lock);
+  pause_point_waiters.clear();
+}
+
+//
 // Controlled Variable Machinery
 //
 absl::Mutex ControlledVariableLock;

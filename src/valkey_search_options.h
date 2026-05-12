@@ -142,5 +142,9 @@ config::Number& GetMutationWeightNumeric();
 /// Return the mutation weight for tag index types
 config::Number& GetMutationWeightTag();
 
+/// Return the recursion depth of the query string from FT.SEARCH and
+/// FT.AGGREGATE commands
+config::Number& GetQueryStringDepth();
+
 }  // namespace options
 }  // namespace valkey_search

@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -386,6 +387,13 @@ class IndexSchema : public KeyspaceEventSubscription,
   MakeReference(absl::string_view name, bool create) override;
   absl::StatusOr<expr::Value> GetParam(absl::string_view s) const override;
   bool UseFilterComparisonSemantics() const override { return true; }
+
+  // Returns attributes sorted by alias (map key) for deterministic ordering.
+  // Use this instead of iterating attributes_ directly in any serialization
+  // path (RDB, FT.INFO, protobuf).
+  std::vector<
+      std::reference_wrapper<const std::pair<const std::string, Attribute>>>
+  GetSortedAttributes() const;
 
  protected:
   IndexSchema(ValkeyModuleCtx *ctx,

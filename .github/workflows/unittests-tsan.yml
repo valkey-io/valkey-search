@@ -32,17 +32,29 @@ jobs:
     - name: Build Docker Image
       run: docker build -t presubmit-image -f .devcontainer/Dockerfile .
 
+    - name: Restore ccache
+      uses: actions/cache@v4
+      with:
+        path: .ccache
+        key: ccache-unittests-tsan-${{ github.ref }}-${{ github.sha }}
+        restore-keys: |
+          ccache-unittests-tsan-${{ github.ref }}-
+          ccache-unittests-tsan-
+
+
     - name: Run Tests TSAN
       id: test-run
       continue-on-error: true
       run: |
-        mkdir test-results
+        mkdir -p test-results .ccache
         docker run --privileged --rm \
           --mount type=bind,source="$(pwd)/test-results",target=/workspace/test-results \
           -v "$(pwd):/workspace" \
+          -e CCACHE_DIR=/workspace/.ccache \
+          -e CCACHE_MAXSIZE=1G \
           --user "ubuntu:ubuntu" \
           presubmit-image \
-          sudo ci/build_ubuntu.sh --run-tests --tsan --unittest-output=/workspace/test-results
+          sudo -E ci/build_ubuntu.sh --run-tests --tsan --unittest-output=/workspace/test-results
 
     - name: Update Test Results Permissions
       if: always()

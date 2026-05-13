@@ -114,19 +114,18 @@ void VectorHNSW<T>::TrackVector(uint64_t internal_id,
 template <typename T>
 bool VectorHNSW<T>::IsVectorMatch(uint64_t internal_id,
                                   const InternedStringPtr &vector) {
-  absl::MutexLock lock(&tracked_vectors_mutex_);
+  absl::ReaderMutexLock lock(&tracked_vectors_mutex_);
   auto it = tracked_vectors_.find(internal_id);
   if (it == tracked_vectors_.end()) {
     return false;
   }
-  return it->second->Str() == vector->Str();
+  return it->second == vector;
 }
 
-// UnTrackVector does not erase the entry in VectorHNSW because vectors are
-// never physically removed from the HNSW graph—only marked as deleted. When
-// a slot is later reused via allow_replace_deleted, TrackVector naturally
-// replaces the old entry via operator[] on the flat_hash_map, releasing the
-// old shared_ptr.
+// UnTrackVector is a no-op for HNSW because deleted nodes still participate
+// in graph routing. On key modification, the same internal_id is reused, so
+// TrackVector overwrites the map entry in-place (fixing the unbounded growth
+// the old deque had on repeated modifications).
 template <typename T>
 void VectorHNSW<T>::UnTrackVector(uint64_t internal_id) {}
 

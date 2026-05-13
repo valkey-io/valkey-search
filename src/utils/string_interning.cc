@@ -82,17 +82,19 @@ static_assert(sizeof(OutOfLineInternedString) ==
               "OutOfLineInternedString size must match InternedString size");
 
 void InternedString::DecrementRefCount() {
-  uint32_t prev = ref_count_.fetch_sub(1, std::memory_order_acq_rel);
-  if (prev > 1) return;
+  uint32_t prev = ref_count_.load(std::memory_order_acquire);
+  if (prev == 0) return;
   if (prev == 1) {
-    // 1->0 transition: undo our decrement and let Destructor handle it
-    // under the global mutex (it does its own fetch_sub with the lock held).
-    ref_count_.fetch_add(1, std::memory_order_relaxed);
     Destructor();
     return;
   }
-  // prev == 0: map erasure path, undo the underflow.
+  // Common case: ref_count > 1, decrement with single atomic op.
+  prev = ref_count_.fetch_sub(1, std::memory_order_acq_rel);
+  if (prev > 1) return;
+  // Race: someone else decremented to 1 before us, so we went 1->0.
+  // Undo and let Destructor handle it under the mutex.
   ref_count_.fetch_add(1, std::memory_order_relaxed);
+  Destructor();
 }
 
 InternedString* InternedString::Constructor(absl::string_view str,

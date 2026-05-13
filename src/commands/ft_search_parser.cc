@@ -226,6 +226,8 @@ vmsdk::KeyValueParser<SearchCommand> CreateSearchParser() {
                         GENERATE_FLAG_PARSER(SearchCommand, no_content));
   parser.AddParamParser(query::kWithSortKeysParam,
                         GENERATE_FLAG_PARSER(SearchCommand, with_sort_keys));
+  parser.AddParamParser(query::kWithScoresParam,
+                        GENERATE_FLAG_PARSER(SearchCommand, with_scores));
   parser.AddParamParser(query::kReturnParam, ConstructReturnParser());
   parser.AddParamParser(query::kSortByParam, ConstructSortByParser());
   parser.AddParamParser(query::kParamsParam, ConstructParamsParser());
@@ -235,6 +237,8 @@ vmsdk::KeyValueParser<SearchCommand> CreateSearchParser() {
                         GENERATE_FLAG_PARSER(SearchCommand, verbatim));
   parser.AddParamParser(query::kSlop,
                         GENERATE_VALUE_PARSER(SearchCommand, slop));
+  parser.AddParamParser(query::kScorer,
+                        GENERATE_VALUE_PARSER(SearchCommand, scorer));
 
   return parser;
 }
@@ -250,6 +254,12 @@ absl::Status SearchCommand::PostParseQueryString() {
     // Validate sortby field exists in the index schema
     VMSDK_RETURN_IF_ERROR(
         index_schema->GetIdentifier(sortby_parameter->field).status());
+  }
+
+  // For non-vector queries with WITHSCORES, set a default score_as if not
+  // already set by the vector query parsing path.
+  if (with_scores && IsNonVectorQuery() && !score_as) {
+    score_as = vmsdk::MakeUniqueValkeyString("__score");
   }
 
   return absl::OkStatus();

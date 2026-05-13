@@ -17,8 +17,8 @@ namespace valkey_search::expr {
 
 class ValueTest : public vmsdk::ValkeyTest {
  protected:
-  void SetUp() override { TestValkeyModule_Init(); }
-  void TearDown() override { TestValkeyModule_Teardown(); }
+  void SetUp() override { vmsdk::ValkeyTest::SetUp(); }
+  void TearDown() override { vmsdk::ValkeyTest::TearDown(); }
   Value pos_inf = Value(std::numeric_limits<double>::infinity());
   Value neg_inf = Value(-std::numeric_limits<double>::infinity());
   Value pos_zero = Value(0.0);
@@ -633,23 +633,26 @@ TEST_F(ValueTest, ArrayComparison_ArrayVsScalar) {
   // Array vs double
   EXPECT_EQ(Compare(vec, scalar_double), Ordering::kUNORDERED);
   EXPECT_EQ(Compare(scalar_double, vec), Ordering::kUNORDERED);
-  EXPECT_TRUE(vec == scalar_double);   // UNORDERED treated as equal by ==
-  EXPECT_FALSE(vec != scalar_double);  // UNORDERED not treated as != by !=
+  EXPECT_FALSE(vec == scalar_double);
+  EXPECT_TRUE(vec != scalar_double);
 
   // Array vs string
   EXPECT_EQ(Compare(vec, scalar_string), Ordering::kUNORDERED);
   EXPECT_EQ(Compare(scalar_string, vec), Ordering::kUNORDERED);
-  EXPECT_TRUE(vec == scalar_string);
+  EXPECT_FALSE(vec == scalar_string);
+  EXPECT_TRUE(vec != scalar_string);
 
   // Array vs bool
   EXPECT_EQ(Compare(vec, scalar_bool), Ordering::kUNORDERED);
   EXPECT_EQ(Compare(scalar_bool, vec), Ordering::kUNORDERED);
-  EXPECT_TRUE(vec == scalar_bool);
+  EXPECT_FALSE(vec == scalar_bool);
+  EXPECT_TRUE(vec != scalar_bool);
 
   // Array vs nil
   EXPECT_EQ(Compare(vec, scalar_nil), Ordering::kUNORDERED);
   EXPECT_EQ(Compare(scalar_nil, vec), Ordering::kUNORDERED);
-  EXPECT_TRUE(vec == scalar_nil);
+  EXPECT_FALSE(vec == scalar_nil);
+  EXPECT_TRUE(vec != scalar_nil);
 
   // Empty vector vs scalar
   Value empty_vec({});
@@ -715,8 +718,7 @@ TEST_F(ValueTest, FuncArrayLen_NotAArray) {
   Value scalar = Value(42.0);
   Value result = FuncArrayLen(scalar);
   EXPECT_TRUE(result.IsNil());
-  EXPECT_STREQ(result.GetNil().GetReason(),
-               "arraylen: operand is not an array");
+  EXPECT_EQ(result.GetNil().GetReason(), "arraylen: operand is not an array");
 }
 
 TEST_F(ValueTest, FuncArrayAt_ValidIndex) {
@@ -761,15 +763,29 @@ TEST_F(ValueTest, FuncArrayAt_NotAArray) {
   Value scalar = Value(42.0);
   Value result = FuncArrayAt(scalar, Value(0.0));
   EXPECT_TRUE(result.IsNil());
-  EXPECT_STREQ(result.GetNil().GetReason(),
-               "arrayat: first operand is not an array");
+  EXPECT_EQ(result.GetNil().GetReason(),
+            "arrayat: first operand is not an array");
 }
 
 TEST_F(ValueTest, FuncArrayAt_InvalidIndex) {
   Value vec = Value({Value(1.0), Value(2.0), Value(3.0)});
   Value result = FuncArrayAt(vec, Value("not a number"));
   EXPECT_TRUE(result.IsNil());
-  EXPECT_STREQ(result.GetNil().GetReason(), "arrayat: index is not an integer");
+  EXPECT_EQ(result.GetNil().GetReason(), "arrayat: index is not an integer");
+}
+
+TEST_F(ValueTest, FuncArrayAt_FractionalIndex) {
+  Value vec = Value({Value(1.0), Value(2.0), Value(3.0)});
+  Value result = FuncArrayAt(vec, Value(1.9));
+  EXPECT_TRUE(result.IsNil());
+  EXPECT_EQ(result.GetNil().GetReason(), "arrayat: index is not an integer");
+}
+
+TEST_F(ValueTest, FuncFlatten_FractionalDepth) {
+  Value vec = Value({Value({Value(1.0), Value(2.0)}), Value(3.0)});
+  Value result = FuncFlatten(vec, Value(0.5));
+  EXPECT_TRUE(result.IsNil());
+  EXPECT_EQ(result.GetNil().GetReason(), "flatten: depth is not an integer");
 }
 
 TEST_F(ValueTest, FuncIsArray_Array) {
@@ -849,15 +865,15 @@ TEST_F(ValueTest, FuncFlatten_NotAArray) {
   Value scalar = Value(42.0);
   Value result = FuncFlatten(scalar, Value(1.0));
   EXPECT_TRUE(result.IsNil());
-  EXPECT_STREQ(result.GetNil().GetReason(),
-               "flatten: first operand is not an array");
+  EXPECT_EQ(result.GetNil().GetReason(),
+            "flatten: first operand is not an array");
 }
 
 TEST_F(ValueTest, FuncFlatten_InvalidDepth) {
   Value vec = Value({Value(1.0), Value(2.0)});
   Value result = FuncFlatten(vec, Value("not a number"));
   EXPECT_TRUE(result.IsNil());
-  EXPECT_STREQ(result.GetNil().GetReason(), "flatten: depth is not an integer");
+  EXPECT_EQ(result.GetNil().GetReason(), "flatten: depth is not an integer");
 }
 
 // Nested vector construction tests

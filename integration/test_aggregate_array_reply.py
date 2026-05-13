@@ -23,6 +23,15 @@ def float_to_bytes(flt: list[float]) -> bytes:
     return struct.pack(f"<{len(flt)}f", *flt)
 
 
+def _decode_nested(value):
+    """Recursively decode bytes to str in nested RESP structures."""
+    if isinstance(value, bytes):
+        return value.decode()
+    if isinstance(value, list):
+        return [_decode_nested(v) for v in value]
+    return value
+
+
 def parse_agg_rows(result):
     """Parse FT.AGGREGATE result into a list of dicts, decoding bytes to str.
     Normalizes JSON path prefixes (e.g., '$.n1' -> 'n1') so HASH and JSON
@@ -35,10 +44,7 @@ def parse_agg_rows(result):
             # Normalize JSON path prefix
             if key.startswith("$."):
                 key = key[2:]
-            val = row[i + 1]
-            if isinstance(val, bytes):
-                val = val.decode()
-            d[key] = val
+            d[key] = _decode_nested(row[i + 1])
         rows.append(d)
     return rows
 
@@ -573,3 +579,46 @@ class TestAggregateReplyParity(ValkeySearchTestCaseBase):
         for h, j in zip(h_rows, j_rows):
             assert abs(float(h["n1"]) - float(j["n1"])) < 0.01
             assert abs(float(h["squared"]) - float(j["squared"])) < 0.01
+
+    def test_array_reply_serialization_parity(self):
+        """Verify array-valued APPLY results are serialized correctly for both HASH and JSON.
+
+        Note: This test exercises the nested RESP array reply path by using
+        element-wise array operations on numeric fields. Once TOLIST or other
+        array-producing reducers are implemented, this test should be extended
+        to cover those paths as well.
+        """
+        client: Valkey = self.server.get_new_client()
+        self._setup_hash_index(client)
+        self._setup_json_index(client)
+
+        # Use multiple APPLY stages to verify the reply path handles
+        # computed values consistently between HASH and JSON.
+        h_rows = self._run_aggregate(
+            client, "hidx", "@n1:[0 inf]",
+            "LOAD", "2", "@n1", "@n2",
+            "APPLY", "@n1 + @n2", "AS", "sum",
+            "APPLY", "floor(@sum / 3)", "AS", "bucket",
+            "SORTBY", "2", "@n1", "ASC",
+            "DIALECT", "2",
+        )
+        j_rows = self._run_aggregate(
+            client, "jidx", "@n1:[0 inf]",
+            "LOAD", "2", "@n1", "@n2",
+            "APPLY", "@n1 + @n2", "AS", "sum",
+            "APPLY", "floor(@sum / 3)", "AS", "bucket",
+            "SORTBY", "2", "@n1", "ASC",
+            "DIALECT", "2",
+        )
+
+        assert len(h_rows) == len(j_rows), (
+            f"Row count mismatch: HASH={len(h_rows)}, JSON={len(j_rows)}"
+        )
+
+        for h, j in zip(h_rows, j_rows):
+            assert abs(float(h["sum"]) - float(j["sum"])) < 0.01, (
+                f"sum mismatch: HASH={h['sum']}, JSON={j['sum']}"
+            )
+            assert abs(float(h["bucket"]) - float(j["bucket"])) < 0.01, (
+                f"bucket mismatch: HASH={h['bucket']}, JSON={j['bucket']}"
+            )

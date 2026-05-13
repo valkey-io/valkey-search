@@ -28,8 +28,8 @@ class Value {
   class Nil {
    public:
     Nil() : reason_("ctor") {}
-    explicit Nil(std::string reason) : reason_(reason) {}
-    const char* GetReason() const { return reason_.c_str(); }
+    explicit Nil(std::string reason) : reason_(std::move(reason)) {}
+    std::string GetReason() const { return reason_; }
 
    private:
     std::string reason_;
@@ -46,8 +46,10 @@ class Value {
   explicit Value(std::string&& s) : value_(std::move(s)) {}
 
   // Array constructors
-  explicit Value(const Array& vec) : value_(vec) {}
-  explicit Value(Array&& vec) : value_(std::move(vec)) {}
+  explicit Value(const Array& vec)
+      : value_(vec ? vec : std::make_shared<std::vector<Value>>()) {}
+  explicit Value(Array&& vec)
+      : value_(vec ? std::move(vec) : std::make_shared<std::vector<Value>>()) {}
   explicit Value(std::initializer_list<Value> elements)
       : value_(std::make_shared<std::vector<Value>>(elements)) {}
   explicit Value(std::vector<Value>&& vec)
@@ -92,6 +94,13 @@ class Value {
       return H::combine(std::move(h), 0);
     } else if (v.IsDouble()) {
       return H::combine(std::move(h), *v.AsDouble());
+    } else if (v.IsArray()) {
+      auto arr = v.GetArray();
+      h = H::combine(std::move(h), arr->size());
+      for (const auto& elem : *arr) {
+        h = H::combine(std::move(h), elem);
+      }
+      return h;
     } else {
       return H::combine(std::move(h), v.AsString());
     }
@@ -132,16 +141,14 @@ Value ApplyElementWise(const Value::Array vec1, const Value::Array vec2,
                        std::function<Value(const Value&, const Value&)> func);
 
 //
-// These orderings aren't IEEE compatible, but they match the legacy
+// Comparison operators: kUNORDERED values are not equal to anything.
 //
 static inline bool operator==(const Value& l, const Value& r) {
-  auto res = Compare(l, r);
-  return res == Ordering::kEQUAL || res == Ordering::kUNORDERED;
+  return Compare(l, r) == Ordering::kEQUAL;
 }
 
 static inline bool operator!=(const Value& l, const Value& r) {
-  auto res = Compare(l, r);
-  return res == Ordering::kLESS || res == Ordering::kGREATER;
+  return Compare(l, r) != Ordering::kEQUAL;
 }
 
 static inline bool operator<(const Value& l, const Value& r) {
@@ -150,7 +157,7 @@ static inline bool operator<(const Value& l, const Value& r) {
 
 static inline bool operator<=(const Value& l, const Value& r) {
   auto res = Compare(l, r);
-  return res != Ordering::kGREATER;
+  return res == Ordering::kLESS || res == Ordering::kEQUAL;
 }
 
 static inline bool operator>(const Value& l, const Value& r) {
@@ -159,7 +166,7 @@ static inline bool operator>(const Value& l, const Value& r) {
 
 static inline bool operator>=(const Value& l, const Value& r) {
   auto res = Compare(l, r);
-  return res != Ordering::kLESS;
+  return res == Ordering::kGREATER || res == Ordering::kEQUAL;
 }
 
 // Dyadic Numerical Functions

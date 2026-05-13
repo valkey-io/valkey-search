@@ -209,6 +209,9 @@ std::ostream& operator<<(std::ostream& os, const Value& v) {
 static Ordering CompareDoubles(double l, double r) {
   // -ffast-math doesn't handle compares correctly with infinities or nans, we
   // do it integer.
+  if (IsNan(l) && IsNan(r)) {
+    return Ordering::kEQUAL;
+  }
   if (IsNan(l) || IsNan(r)) {
     return Ordering::kUNORDERED;
   }
@@ -790,19 +793,20 @@ Value FuncArrayAt(const Value& arr, const Value& index) {
     return Value(Value::Nil("arrayat: first operand is not an array"));
   }
 
-  auto idx = index.AsInteger();
-  if (!idx) {
+  auto idx_double = index.AsDouble();
+  if (!idx_double || std::trunc(*idx_double) != *idx_double) {
     return Value(Value::Nil("arrayat: index is not an integer"));
   }
+  int64_t idx = static_cast<int64_t>(*idx_double);
 
   size_t arr_size = arr.ArraySize();
-  if (*idx < 0 || static_cast<size_t>(*idx) >= arr_size) {
-    std::string error = "Index out of bounds: index " + std::to_string(*idx) +
+  if (idx < 0 || static_cast<size_t>(idx) >= arr_size) {
+    std::string error = "Index out of bounds: index " + std::to_string(idx) +
                         ", array length " + std::to_string(arr_size);
     return Value(Value::Nil(error));
   }
 
-  return arr.GetArrayElement(static_cast<size_t>(*idx))
+  return arr.GetArrayElement(static_cast<size_t>(idx))
       .value_or(Value(Value::Nil("arrayat: could not get element")));
 }
 
@@ -813,12 +817,13 @@ Value FuncFlatten(const Value& arr, const Value& depth) {
     return Value(Value::Nil("flatten: first operand is not an array"));
   }
 
-  auto depth_int = depth.AsInteger();
-  if (!depth_int) {
+  auto depth_double = depth.AsDouble();
+  if (!depth_double || std::trunc(*depth_double) != *depth_double) {
     return Value(Value::Nil("flatten: depth is not an integer"));
   }
+  int64_t depth_int = static_cast<int64_t>(*depth_double);
 
-  if (*depth_int <= 0) {
+  if (depth_int <= 0) {
     return arr;
   }
 
@@ -826,10 +831,10 @@ Value FuncFlatten(const Value& arr, const Value& depth) {
   auto input_arr = arr.GetArray();
 
   for (const auto& elem : *input_arr) {
-    if (elem.IsArray() && *depth_int > 0) {
+    if (elem.IsArray() && depth_int > 0) {
       // Recursively flatten nested arrays
       Value flattened =
-          FuncFlatten(elem, Value(static_cast<double>(*depth_int - 1)));
+          FuncFlatten(elem, Value(static_cast<double>(depth_int - 1)));
       if (flattened.IsNil()) {
         return flattened;  // Propagate error
       }

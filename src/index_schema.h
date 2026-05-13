@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -20,6 +21,7 @@
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/blocking_counter.h"
 #include "absl/synchronization/mutex.h"
@@ -50,6 +52,12 @@ struct SearchParameters;
 namespace valkey_search {
 bool ShouldBlockClient(ValkeyModuleCtx *ctx, bool inside_multi_exec,
                        bool from_backfill);
+
+inline absl::Status GenerateIndexNotFoundError(uint32_t db_num,
+                                               absl::string_view name) {
+  return absl::NotFoundError(absl::StrFormat(
+      "Index with name '%s' not found in database %d", name, db_num));
+}
 
 using Key = InternedStringPtr;
 using MutationSequenceNumber = uint64_t;
@@ -246,6 +254,7 @@ class IndexSchema : public KeyspaceEventSubscription,
     return time_sliced_mutex_;
   }
   void MarkAsDestructing();
+  bool IsMarkedDestructing() { return is_destructing_; };
   void ProcessMultiQueue();
   void SubscribeToVectorExternalizer(absl::string_view attribute_identifier,
                                      indexes::VectorBase *vector_index);
@@ -365,6 +374,13 @@ class IndexSchema : public KeyspaceEventSubscription,
   const absl::flat_hash_map<std::string, Attribute> &GetAttributes() const {
     return attributes_;
   }
+
+  // Returns attributes sorted by alias (map key) for deterministic ordering.
+  // Use this instead of iterating attributes_ directly in any serialization
+  // path (RDB, FT.INFO, protobuf).
+  std::vector<
+      std::reference_wrapper<const std::pair<const std::string, Attribute>>>
+  GetSortedAttributes() const;
 
  protected:
   IndexSchema(ValkeyModuleCtx *ctx,

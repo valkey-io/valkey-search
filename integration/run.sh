@@ -147,6 +147,8 @@ print_environment_var "LOGS_DIR" "${LOGS_DIR}"
 rm -fr ${LOGS_DIR}
 mkdir -p ${LOGS_DIR}
 
+PYTEST_OUTPUT_LOG=${LOGS_DIR}/pytest_output.log
+
 function run_pytest() {
   zap valkey-server
   
@@ -158,13 +160,19 @@ function run_pytest() {
   fi
   
   LOG_INFO "Running: ${PYTHON_PATH} -m pytest ${FILTER_ARGS} ${CAPTURE_ARG} --cache-clear -v ${ROOT_DIR}/integration/"
-  ${PYTHON_PATH} -m pytest ${FILTER_ARGS} ${CAPTURE_ARG} --cache-clear -v ${ROOT_DIR}/integration/
-  RUN_SUCCESS=$?
+  # Capture pytest output to check for sanitizer errors
+  if [[ "$(uname)" == "Darwin" ]]; then
+    ${PYTHON_PATH} -m pytest ${FILTER_ARGS} ${CAPTURE_ARG} --color=yes --cache-clear -v ${ROOT_DIR}/integration/ 2>&1 | tee ${PYTEST_OUTPUT_LOG}
+    RUN_SUCCESS=${PIPESTATUS[0]}
+  else
+    script -q -e -c "${PYTHON_PATH} -m pytest ${FILTER_ARGS} ${CAPTURE_ARG} --cache-clear -v ${ROOT_DIR}/integration/" ${PYTEST_OUTPUT_LOG}
+    RUN_SUCCESS=$?
+  fi
 }
 
 function run_with_retries() {
   counter=1
-  retries=${INTEG_RETRIES}
+  retries=${INTEG_RETRIES:-1}
   if ((retries == 1)); then
     # Avoid the clutter and run it once.
     run_pytest
@@ -197,4 +205,6 @@ if [[ "${SAN_BUILD}" != "no" ]]; then
   # And now we can check the logs
   logfiles=$(find ${LOGS_DIR} -name "*.log")
   check_for_san_errors "${logfiles}"
+  # Check pytest output for sanitizer errors
+  check_for_san_errors "${PYTEST_OUTPUT_LOG}"
 fi

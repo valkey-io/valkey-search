@@ -87,6 +87,15 @@ static int OnSetStringConfig(const char *config_name, ValkeyModuleString *value,
   return VALKEYMODULE_OK;
 }
 
+static int OnGetBoolConfig(const char *config_name, void *priv_data) {
+  return OnGetConfig<bool>(config_name, priv_data);
+}
+
+static int OnSetBoolConfig(const char *config_name, int value, void *priv_data,
+                           ValkeyModuleString **err) {
+  return OnSetConfig<bool>(config_name, value, priv_data, err);
+}
+
 /// Convert `vector<string>` -> `vector<const char*>`
 /// IMPORTANT: `vec` must outlive the returned value
 std::vector<const char *> ToCharPtrPtrVec(const std::vector<std::string> &vec) {
@@ -282,11 +291,11 @@ Boolean::Boolean(std::string_view name, bool default_value)
 
 absl::Status Boolean::Register(ValkeyModuleCtx *ctx) {
   if (ValkeyModule_RegisterBoolConfig(ctx,
-                                      name_.data(),      // Name
-                                      default_value_,    // Default value
-                                      flags_,            // Flags
-                                      OnGetConfig<int>,  // Get callback
-                                      OnSetConfig<int>,  // Set callback
+                                      name_.data(),     // Name
+                                      default_value_,   // Default value
+                                      flags_,           // Flags
+                                      OnGetBoolConfig,  // Get callback
+                                      OnSetBoolConfig,  // Set callback
                                       nullptr,  // Apply callback (optional)
                                       this      // privdata
                                       ) != VALKEYMODULE_OK) {

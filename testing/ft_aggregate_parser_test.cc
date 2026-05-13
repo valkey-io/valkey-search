@@ -9,6 +9,7 @@
 #include <map>
 
 #include "gtest/gtest.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/testing_infra/utils.h"
 
 std::ostream &operator<<(std::ostream &os, ValkeyModuleString *s) {
@@ -280,6 +281,27 @@ TEST_F(AggregateTest, StageParserTest) {
   }
 }
 
+TEST_F(AggregateTest, EmptyApplyAndFilterExpressionsAreRejected) {
+  for (absl::string_view test_case :
+       {"FILTER ''", "FILTER ' '", "APPLY '' AS r", "APPLY ' ' AS r"}) {
+    auto argv = vmsdk::ToValkeyStringVector(test_case);
+    vmsdk::ArgsIterator itr(argv.data(), argv.size());
+
+    AggregateParameters params(0);
+    params.timeout_ms = 0;
+    params.parse_vars_.index_interface_ = &fake_index;
+
+    auto parser = CreateAggregateParser();
+    auto result = parser.Parse(params, itr);
+
+    EXPECT_FALSE(result.ok()) << "Parser unexpectedly accepted: " << test_case;
+
+    for (auto arg : argv) {
+      ValkeyModule_FreeString(nullptr, arg);
+    }
+  }
+}
+
 TEST_F(AggregateTest, GetSerializationRange_NoStages) {
   AggregateParameters params(0);
   auto range = params.GetSerializationRange();
@@ -361,6 +383,28 @@ TEST_F(AggregateTest, GetSerializationRange_OtherStagesBeforeLimit) {
 
   auto range = params.GetSerializationRange();
   EXPECT_EQ(range, query::SerializationRange::All());
+}
+
+TEST_F(AggregateTest, ExpressionDepthAtLimit) {
+  auto limit = options::GetQueryStringDepth().GetValue();
+  std::string deep_expr(limit - 1, '(');
+  deep_expr += "1";
+  deep_expr += std::string(limit - 1, ')');
+
+  AggregateParameters params(0);
+  EXPECT_TRUE(expr::Expression::Compile(params, deep_expr).ok());
+}
+
+TEST_F(AggregateTest, ExpressionDepthExceedsLimit) {
+  auto limit = options::GetQueryStringDepth().GetValue();
+  std::string deep_expr(limit, '(');
+  deep_expr += "1";
+  deep_expr += std::string(limit, ')');
+
+  AggregateParameters params(0);
+  auto result = expr::Expression::Compile(params, deep_expr);
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(absl::IsInvalidArgument(result.status()));
 }
 
 }  // namespace aggregate

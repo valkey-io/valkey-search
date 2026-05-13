@@ -12,6 +12,7 @@
 #include <absl/strings/ascii.h>
 #include <absl/strings/string_view.h>
 
+#include <atomic>
 #include <source_location>
 
 #include "vmsdk/src/status/status_macros.h"
@@ -20,6 +21,9 @@
 
 namespace vmsdk {
 namespace debug {
+
+// Fast check: if no pause points are registered, skip entirely
+extern std::atomic<int> pause_points_active;
 
 //
 // PausePoints are a tool to help with debugging of background processes.
@@ -34,10 +38,10 @@ namespace debug {
   vmsdk::debug::PausePoint(name, std::source_location::current())
 void PausePoint(absl::string_view point, std::source_location location);
 
-#define BACKGROUND_PAUSEPOINT(name) \
-  if (!vmsdk::IsMainThread()) {     \
-    PAUSEPOINT(name);               \
-  }                                 \
+#define BACKGROUND_PAUSEPOINT(name)                                        \
+  if (vmsdk::debug::pause_points_active.load(std::memory_order_relaxed)) { \
+    PAUSEPOINT(name);                                                      \
+  }
 //
 // This function is used by the control machinery (FT.DEBUG) to enable/disable
 // and test PausePoints.

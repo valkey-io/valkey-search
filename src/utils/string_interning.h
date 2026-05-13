@@ -54,12 +54,12 @@ class InternedString {
                                      Allocator *allocator);
   void Destructor();
   void IncrementRefCount() {
-    ref_count_.fetch_add(1, std::memory_order_seq_cst);
+    ref_count_.fetch_add(1, std::memory_order_relaxed);
   }
   void DecrementRefCount();
 
   uint32_t RefCount() const {
-    return ref_count_.load(std::memory_order_seq_cst);
+    return ref_count_.load(std::memory_order_relaxed);
   }
 
   //

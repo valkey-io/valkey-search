@@ -208,7 +208,7 @@ void ThreadPool::AwaitSuspensionCleared()
   }
 }
 
-void __attribute__((noinline)) ThreadPool::WorkerThread(std::shared_ptr<Thread> thread) {
+void ThreadPool::WorkerThread(std::shared_ptr<Thread> thread) {
   while (true) {
     absl::AnyInvocable<void()> task;
     {

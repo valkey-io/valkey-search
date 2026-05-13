@@ -7,13 +7,14 @@
 
 #include "vmsdk/src/debug.h"
 
-#include <atomic>
 #include <absl/base/no_destructor.h>
 #include <absl/container/btree_map.h>
 #include <absl/container/flat_hash_map.h>
 #include <absl/strings/ascii.h>
 #include <absl/synchronization/mutex.h>
 #include <pthread.h>
+
+#include <atomic>
 
 #include "module_config.h"
 #include "vmsdk/src/log.h"

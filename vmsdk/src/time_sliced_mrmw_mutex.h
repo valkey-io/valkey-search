@@ -8,6 +8,7 @@
 #ifndef VMSDK_SRC_MRMW_MUTEX_H_
 #define VMSDK_SRC_MRMW_MUTEX_H_
 
+#include <atomic>
 #include <cstdint>
 #include <optional>
 
@@ -61,6 +62,8 @@ class ABSL_LOCKABLE TimeSlicedMRMWMutex {
   };
   void ReaderLock(bool& may_prolong, bool ignore_time_quota)
       ABSL_SHARED_LOCK_FUNCTION() ABSL_LOCKS_EXCLUDED(mutex_);
+  void ReaderUnlock(bool may_prolong, bool ignore_time_quota)
+      ABSL_UNLOCK_FUNCTION();
   void WriterLock(bool& may_prolong, bool ignore_time_quota)
       ABSL_SHARED_LOCK_FUNCTION() ABSL_LOCKS_EXCLUDED(mutex_);
 
@@ -117,6 +120,10 @@ class ABSL_LOCKABLE TimeSlicedMRMWMutex {
   mutable absl::Mutex mutex_;
   Mode current_mode_ ABSL_GUARDED_BY(mutex_){Mode::kLockRead};
   int active_lock_count_ ABSL_GUARDED_BY(mutex_){0};
+  // Fast-path atomics to avoid mutex contention for pure-read workloads
+  std::atomic<int> atomic_active_readers_{0};
+  std::atomic<int> atomic_writer_waiters_{0};
+  std::atomic<int> atomic_mode_{0};  // 0 = kLockRead, 1 = kLockWrite
   vmsdk::StopWatch last_lock_acquired_ ABSL_GUARDED_BY(mutex_);
   absl::CondVar write_cond_var_ ABSL_GUARDED_BY(mutex_);
   absl::CondVar read_cond_var_ ABSL_GUARDED_BY(mutex_);
@@ -154,7 +161,7 @@ class ABSL_SCOPED_LOCKABLE ReaderMutexLock {
   ReaderMutexLock& operator=(ReaderMutexLock&&) = delete;
   void SetMayProlong();
   ~ReaderMutexLock() ABSL_UNLOCK_FUNCTION() {
-    mutex_->Unlock(may_prolong_, ignore_time_quota_);
+    mutex_->ReaderUnlock(may_prolong_, ignore_time_quota_);
     global_stats.read_time_microseconds +=
         absl::ToInt64Microseconds(timer_.Duration());
   }

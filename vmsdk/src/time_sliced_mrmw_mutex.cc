@@ -51,17 +51,40 @@ void TimeSlicedMRMWMutex::IncMayProlongCount() {
   ++may_prolong_count_;
 }
 
-void TimeSlicedMRMWMutex::ReaderLock(bool& may_prolong,
+// Debug counters for fast path tracking
+static std::atomic<uint64_t> fast_path_hits{0};
+static std::atomic<uint64_t> fast_path_misses{0};
+
+void __attribute__((noinline)) TimeSlicedMRMWMutex::ReaderLock(bool& may_prolong,
                                      bool ignore_time_quota) {
+  // Fast path: skip mutex entirely for pure-read workloads
+  if (ABSL_PREDICT_TRUE(!may_prolong && !ignore_time_quota)) {
+    atomic_active_readers_.fetch_add(1, std::memory_order_acquire);
+    if (ABSL_PREDICT_TRUE(
+        atomic_writer_waiters_.load(std::memory_order_acquire) == 0)) {
+      return;
+    }
+    // Writer appeared - undo and take slow path
+    atomic_active_readers_.fetch_sub(1, std::memory_order_release);
+  }
   Lock(Mode::kLockRead, may_prolong, ignore_time_quota);
 }
 
+uint64_t GetFastPathHits() { return fast_path_hits.load(); }
+uint64_t GetFastPathMisses() { return fast_path_misses.load(); }
+
 void TimeSlicedMRMWMutex::WriterLock(bool& may_prolong,
                                      bool ignore_time_quota) {
+  atomic_writer_waiters_.fetch_add(1, std::memory_order_release);
+  // Wait for fast-path readers to drain
+  while (atomic_active_readers_.load(std::memory_order_acquire) > 0) {
+    // Spin briefly - fast-path readers are short-lived
+  }
   Lock(Mode::kLockWrite, may_prolong, ignore_time_quota);
+  atomic_writer_waiters_.fetch_sub(1, std::memory_order_release);
 }
 
-void TimeSlicedMRMWMutex::Lock(Mode target_mode, bool& may_prolong,
+void __attribute__((noinline)) TimeSlicedMRMWMutex::Lock(Mode target_mode, bool& may_prolong,
                                bool ignore_time_quota) {
   absl::MutexLock lock(&mutex_);
   const Mode inverse_mode = GetInverseMode(target_mode);
@@ -83,6 +106,8 @@ void TimeSlicedMRMWMutex::Lock(Mode target_mode, bool& may_prolong,
   }
   last_lock_acquired_.Reset();
   ++active_lock_count_;
+  atomic_mode_.store(current_mode_ == Mode::kLockRead ? 0 : 1,
+                     std::memory_order_release);
 }
 
 void TimeSlicedMRMWMutex::Unlock(bool may_prolong, bool ignore_time_quota) {
@@ -103,6 +128,16 @@ void TimeSlicedMRMWMutex::Unlock(bool may_prolong, bool ignore_time_quota) {
   if (ShouldSwitch() && GetWaiters(GetInverseMode(current_mode_)) > 0) {
     InitSwitch();
   }
+}
+
+void TimeSlicedMRMWMutex::ReaderUnlock(bool may_prolong,
+                                       bool ignore_time_quota) {
+  // Fast path: if this was a fast-path lock
+  if (!may_prolong && !ignore_time_quota) {
+    atomic_active_readers_.fetch_sub(1, std::memory_order_release);
+    return;
+  }
+  Unlock(may_prolong, ignore_time_quota);
 }
 
 void TimeSlicedMRMWMutex::WaitSwitch(Mode target_mode) {
@@ -170,6 +205,8 @@ void TimeSlicedMRMWMutex::InitSwitch() {
   switch_wait_mode_ = target_mode;
   GetCondVar(target_mode).SignalAll();
   current_mode_ = target_mode;
+  atomic_mode_.store(current_mode_ == Mode::kLockRead ? 0 : 1,
+                     std::memory_order_release);
 }
 
 void TimeSlicedMRMWMutex::SwitchWithWait(Mode target_mode) {

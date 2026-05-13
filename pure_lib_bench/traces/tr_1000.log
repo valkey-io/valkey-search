@@ -1,0 +1,27 @@
+# tracing mmap >= 8 MiB anonymous regions
+
+MMAP 0x7bc810200000 size=528 MiB prot=0x3 flags=0x8022 total_live=528 MiB
+  #1 /home/ubuntu/projects/cee-valkey-svs/ScalableVectorSearch/bindings/cpp/build/libsvs_runtime.so.0(+0x1bd976) [0x7bc8657bd976]
+  #2 /home/ubuntu/projects/cee-valkey-svs/ScalableVectorSearch/bindings/cpp/build/libsvs_runtime.so.0(+0x1d88a0) [0x7bc8657d88a0]
+  #3 /home/ubuntu/projects/cee-valkey-svs/ScalableVectorSearch/bindings/cpp/build/libsvs_runtime.so.0(+0x1f007a) [0x7bc8657f007a]
+  #4 /home/ubuntu/projects/cee-valkey-svs/ScalableVectorSearch/bindings/cpp/build/libsvs_runtime.so.0(+0x1f2d49) [0x7bc8657f2d49]
+  #5 /home/ubuntu/projects/cee-valkey-svs/ScalableVectorSearch/bindings/cpp/build/libsvs_runtime.so.0(+0x1f439e) [0x7bc8657f439e]
+  #6 /home/ubuntu/projects/cee-valkey-svs/ScalableVectorSearch/bindings/cpp/build/libsvs_runtime.so.0(+0xba595) [0x7bc8656ba595]
+  #7 ./bench_svs(main+0x595) [0x5b02b5538ca5]
+  #8 /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7bc864e2a1ca]
+  #9 /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7bc864e2a28b]
+  #10 ./bench_svs(_start+0x25) [0x5b02b5539185]
+
+MMAP 0x7bc7ef200000 size=528 MiB prot=0x3 flags=0x8022 total_live=1056 MiB
+  #1 /home/ubuntu/projects/cee-valkey-svs/ScalableVectorSearch/bindings/cpp/build/libsvs_runtime.so.0(+0x1bd976) [0x7bc8657bd976]
+  #2 /home/ubuntu/projects/cee-valkey-svs/ScalableVectorSearch/bindings/cpp/build/libsvs_runtime.so.0(+0x1d88a0) [0x7bc8657d88a0]
+  #3 /home/ubuntu/projects/cee-valkey-svs/ScalableVectorSearch/bindings/cpp/build/libsvs_runtime.so.0(+0x1f0272) [0x7bc8657f0272]
+  #4 /home/ubuntu/projects/cee-valkey-svs/ScalableVectorSearch/bindings/cpp/build/libsvs_runtime.so.0(+0x1f2d49) [0x7bc8657f2d49]
+  #5 /home/ubuntu/projects/cee-valkey-svs/ScalableVectorSearch/bindings/cpp/build/libsvs_runtime.so.0(+0x1f439e) [0x7bc8657f439e]
+  #6 /home/ubuntu/projects/cee-valkey-svs/ScalableVectorSearch/bindings/cpp/build/libsvs_runtime.so.0(+0xba595) [0x7bc8656ba595]
+  #7 ./bench_svs(main+0x595) [0x5b02b5538ca5]
+  #8 /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7bc864e2a1ca]
+  #9 /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7bc864e2a28b]
+  #10 ./bench_svs(_start+0x25) [0x5b02b5539185]
+MUNMAP 0x7bc810200000 size=528 MiB total_live=528 MiB
+MUNMAP 0x7bc7ef200000 size=528 MiB total_live=0 MiB

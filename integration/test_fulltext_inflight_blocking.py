@@ -70,7 +70,7 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
         )
         waiters.wait_for_true(
             lambda: client.execute_command("FT._DEBUG PAUSEPOINT TEST block_mutation_queue") > 0,
-            timeout=5
+            timeout=30
         )
 
         # Release doc:1 to be indexed

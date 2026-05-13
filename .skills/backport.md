@@ -58,20 +58,19 @@ If `git cherry-pick` fails with conflicts:
    git diff --name-only --diff-filter=U
    ```
 
-2. Stage the conflicted files as-is (with conflict markers):
+2. Stage the conflicted files as-is (with conflict markers) and commit:
    ```bash
    git add .
-   git cherry-pick --continue
+   git commit -C CHERRY_PICK_HEAD --signoff
    ```
-   Use the default commit message. If `--continue` requires a clean merge, use:
-   ```bash
-   git commit --signoff -m "backport: <original title> (conflicts)" 
-   ```
+   This first commit intentionally includes the conflict markers so reviewers can see what conflicted.
 
 3. Flag the conflicts to the user clearly:
    - List each conflicted file
    - Show the conflict markers
    - Offer to resolve them in a follow-up commit on the same branch
+
+4. Resolve the conflicts in a second commit so the reviewer can see the resolution as a separate diff.
 
 ### 6. Push to fork
 
@@ -94,7 +93,7 @@ If the user asks to raise PRs, create them with:
 - **Title:** `Backporting <original PR title> (#<number>) to <branch>`
 - **Base:** the target release branch
 - **Body:**
-  ```
+  ```text
   <original PR description or summary>
 
   ---------

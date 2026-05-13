@@ -7,7 +7,7 @@ Find open PRs in valkey-io/valkey-search that haven't been updated in the last 3
 1. Use `gh` to list open PRs in `valkey-io/valkey-search` that were last updated more than 30 days ago:
 
 ```bash
-gh pr list --repo valkey-io/valkey-search --state open --json number,title,author,updatedAt,url --limit 100 | jq '[.[] | select(.updatedAt < (now - 2592000 | strftime("%Y-%m-%dT%H:%M:%SZ")))] | sort_by(.updatedAt) | .[] | "PR #\(.number) - \(.title)\n  Author: \(.author.login)\n  Last updated: \(.updatedAt)\n  URL: \(.url)\n"' -r
+gh pr list --repo valkey-io/valkey-search --state open --json number,title,author,updatedAt,url --limit 1000 | jq '[.[] | select(.updatedAt < (now - 2592000 | todate))] | sort_by(.updatedAt) | .[] | "PR #\(.number) - \(.title)\n  Author: \(.author.login)\n  Last updated: \(.updatedAt)\n  URL: \(.url)\n"' -r
 ```
 
 2. Present the results as a table showing:

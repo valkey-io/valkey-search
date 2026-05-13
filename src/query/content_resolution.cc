@@ -63,7 +63,7 @@ void ResolveContent(std::unique_ptr<SearchParameters> params) {
 
   query::ProcessNeighborsForReply(ctx.get(), attribute_data_type,
                                   params->search_result.neighbors, *params,
-                                  vector_identifier, params->sortby_parameter);
+                                  vector_identifier);
 
   // 5. Adjust search_result.total_count for removed neighbors
   size_t removed = original_size - params->search_result.neighbors.size();

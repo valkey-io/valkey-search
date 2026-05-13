@@ -32,6 +32,7 @@
 #include "src/coordinator/metadata_manager.h"
 #include "src/index_schema.h"
 #include "src/index_schema.pb.h"
+#include "src/metrics.h"
 #include "src/rdb_section.pb.h"
 #include "src/rdb_serialization.h"
 #include "src/valkey_search.h"
@@ -808,8 +809,13 @@ absl::Status SchemaManager::ShowIndexSchemas(ValkeyModuleCtx *ctx,
 
 static vmsdk::info_field::Integer number_of_indexes(
     "index_stats", "number_of_indexes",
-    vmsdk::info_field::IntegerBuilder().App().Computed([] {
-      return SchemaManager::Instance().GetNumberOfIndexSchemas();
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // Consider indexes pending RDB load
+      auto &stats = Metrics::GetStats();
+      return SchemaManager::Instance().GetNumberOfIndexSchemas() +
+             std::max(stats.rdb_restore_total_indexes.load() -
+                          stats.rdb_restore_completed_indexes.load(),
+                      uint64_t{0});
     }));
 static vmsdk::info_field::Integer number_of_attributes(
     "index_stats", "number_of_attributes",

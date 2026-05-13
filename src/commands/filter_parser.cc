@@ -414,6 +414,7 @@ absl::StatusOr<FilterParseResults> FilterParser::Parse() {
   VMSDK_ASSIGN_OR_RETURN(auto is_match_all_expression, IsMatchAllExpression());
   FilterParseResults results;
   if (is_match_all_expression) {
+    results.is_match_all = true;
     return results;
   }
   filter_identifiers_.clear();

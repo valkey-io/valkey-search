@@ -5,8 +5,11 @@ name: Slash Commands
 #   /reviewer <github-login>   — request a review from a specific user
 #   /resolves <issue-number>   — append "Resolves #N" to the PR body
 #   /rerun                     — re-run all failed CI jobs for this PR
+#   /duplicates                — find potential duplicate issues/PRs
 
 on:
+  issues:
+    types: [opened]
   issue_comment:
     types: [created]
   pull_request_target:
@@ -27,6 +30,92 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
+  # Auto-check for duplicates when an issue or PR is opened
+  check-duplicates:
+    if: github.event_name == 'issues' || github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const isPR = context.event_name === 'pull_request_target';
+            const current = isPR
+              ? context.payload.pull_request
+              : context.payload.issue;
+            const number = current.number;
+            const currentText = `${current.title} ${current.body || ''}`.toLowerCase();
+            const currentWords = new Set(
+              currentText.match(/\b[a-z][a-z0-9_]{2,}\b/g) || []
+            );
+            const stopWords = new Set([
+              'the', 'and', 'for', 'that', 'this', 'with', 'from', 'have',
+              'are', 'was', 'were', 'been', 'being', 'not', 'but', 'they',
+              'which', 'would', 'could', 'should', 'will', 'can', 'does',
+              'did', 'has', 'had', 'may', 'might', 'shall', 'its', 'our',
+              'your', 'his', 'her', 'their', 'what', 'when', 'where', 'how',
+              'who', 'whom', 'why', 'all', 'each', 'every', 'both', 'few',
+              'more', 'most', 'other', 'some', 'such', 'than', 'too', 'very',
+              'just', 'also', 'only', 'then', 'about', 'after', 'before',
+              'using', 'use', 'used', 'into', 'over', 'under', 'between',
+            ]);
+            const currentKeywords = new Set(
+              [...currentWords].filter(w => !stopWords.has(w))
+            );
+
+            if (currentKeywords.size < 3) return;
+
+            const allIssues = [];
+            let page = 1;
+            while (true) {
+              const { data } = await github.rest.issues.listForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'all',
+                per_page: 100,
+                page,
+              });
+              if (data.length === 0) break;
+              allIssues.push(...data);
+              if (data.length < 100) break;
+              page++;
+            }
+
+            const candidates = [];
+            for (const issue of allIssues) {
+              if (issue.number === number) continue;
+              const text = `${issue.title} ${issue.body || ''}`.toLowerCase();
+              const words = new Set(
+                (text.match(/\b[a-z][a-z0-9_]{2,}\b/g) || []).filter(w => !stopWords.has(w))
+              );
+              const overlap = [...currentKeywords].filter(w => words.has(w));
+              const score = currentKeywords.size > 0
+                ? overlap.length / currentKeywords.size
+                : 0;
+              if (score >= 0.3 && overlap.length >= 5) {
+                const type = issue.pull_request ? 'PR' : 'Issue';
+                const state = issue.state === 'open' ? '🟢 open' : '🔴 closed';
+                candidates.push({ issue, type, state, score, overlap });
+              }
+            }
+
+            if (candidates.length === 0) return;
+
+            candidates.sort((a, b) => b.score - a.score);
+            const top = candidates.slice(0, 5);
+            let comment = '🔍 **Potential duplicates found:**\n\n| # | Type | State | Title | Similarity |\n|---|------|-------|-------|------------|\n';
+            for (const c of top) {
+              const pct = Math.round(c.score * 100);
+              comment += `| #${c.issue.number} | ${c.type} | ${c.state} | ${c.issue.title} | ${pct}% |\n`;
+            }
+            comment += '\n<sub>Based on keyword overlap in the description. A maintainer should verify before closing as duplicate.</sub>';
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: number,
+              body: comment,
+            });
+
   # Handle all slash commands posted in PR/issue comments
   dispatch:
     if: github.event_name == 'issue_comment'
@@ -38,7 +127,95 @@ jobs:
             const body = context.payload.comment.body.trim();
             const commenter = context.payload.comment.user.login;
 
-            if (!/^\/(label|reviewer|resolves|rerun)\b/.test(body)) return;
+            if (!/^\/(label|reviewer|resolves|rerun|duplicates)\b/.test(body)) return;
+
+            // ── /duplicates ────────────────────────────────────────────────
+            if (/^\/duplicates\b/.test(body)) {
+              const { data: current } = await github.rest.issues.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+              });
+              const currentText = `${current.title} ${current.body || ''}`.toLowerCase();
+              const currentWords = new Set(
+                currentText.match(/\b[a-z][a-z0-9_]{2,}\b/g) || []
+              );
+              const stopWords = new Set([
+                'the', 'and', 'for', 'that', 'this', 'with', 'from', 'have',
+                'are', 'was', 'were', 'been', 'being', 'not', 'but', 'they',
+                'which', 'would', 'could', 'should', 'will', 'can', 'does',
+                'did', 'has', 'had', 'may', 'might', 'shall', 'its', 'our',
+                'your', 'his', 'her', 'their', 'what', 'when', 'where', 'how',
+                'who', 'whom', 'why', 'all', 'each', 'every', 'both', 'few',
+                'more', 'most', 'other', 'some', 'such', 'than', 'too', 'very',
+                'just', 'also', 'only', 'then', 'about', 'after', 'before',
+                'using', 'use', 'used', 'into', 'over', 'under', 'between',
+              ]);
+              const currentKeywords = new Set(
+                [...currentWords].filter(w => !stopWords.has(w))
+              );
+
+              const allIssues = [];
+              let page = 1;
+              while (true) {
+                const { data } = await github.rest.issues.listForRepo({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  state: 'all',
+                  per_page: 100,
+                  page,
+                });
+                if (data.length === 0) break;
+                allIssues.push(...data);
+                if (data.length < 100) break;
+                page++;
+              }
+
+              const candidates = [];
+              for (const issue of allIssues) {
+                if (issue.number === context.issue.number) continue;
+                const text = `${issue.title} ${issue.body || ''}`.toLowerCase();
+                const words = new Set(
+                  (text.match(/\b[a-z][a-z0-9_]{2,}\b/g) || []).filter(w => !stopWords.has(w))
+                );
+                const overlap = [...currentKeywords].filter(w => words.has(w));
+                const score = currentKeywords.size > 0
+                  ? overlap.length / currentKeywords.size
+                  : 0;
+                if (score >= 0.3 && overlap.length >= 5) {
+                  const type = issue.pull_request ? 'PR' : 'Issue';
+                  const state = issue.state === 'open' ? '🟢 open' : '🔴 closed';
+                  candidates.push({ issue, type, state, score, overlap });
+                }
+              }
+
+              if (candidates.length === 0) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  body: '🔍 **Duplicate check:** No potential duplicates found.',
+                });
+                return;
+              }
+
+              candidates.sort((a, b) => b.score - a.score);
+              const top = candidates.slice(0, 5);
+              let comment = '🔍 **Potential duplicates found:**\n\n| # | Type | State | Title | Similarity |\n|---|------|-------|-------|------------|\n';
+              for (const c of top) {
+                const pct = Math.round(c.score * 100);
+                comment += `| #${c.issue.number} | ${c.type} | ${c.state} | ${c.issue.title} | ${pct}% |\n`;
+              }
+              comment += '\n<sub>Based on keyword overlap in the description. A maintainer should verify before closing as duplicate.</sub>';
+
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: comment,
+              });
+              return;
+            }
             // ── /label <name> ──────────────────────────────────────────────
             // Fetch the repo's defined labels dynamically — no hardcoded list.
             const { data: repoLabels } = await github.rest.issues.listLabelsForRepo({

@@ -19,5 +19,9 @@ Create a markdown file in this directory with:
 | Skill | Description |
 |-------|-------------|
 | [stale-prs.md](stale-prs.md) | Find open PRs that haven't been updated in 30+ days |
-| [duplicate-issues.md](duplicate-issues.md) | Find potential duplicate issues by comparing against open issues |
-| [backport.md](backport.md) | Cherry-pick a merged PR/commit onto release branches via fork |
+
+## TODO
+
+- How to run integration tests
+- How to unit test
+- Build + load module on server

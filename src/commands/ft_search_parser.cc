@@ -237,8 +237,9 @@ vmsdk::KeyValueParser<SearchCommand> CreateSearchParser() {
                         GENERATE_FLAG_PARSER(SearchCommand, verbatim));
   parser.AddParamParser(query::kSlop,
                         GENERATE_VALUE_PARSER(SearchCommand, slop));
-  parser.AddParamParser(query::kScorer,
-                        GENERATE_VALUE_PARSER(SearchCommand, scorer));
+  parser.AddParamParser(
+      query::kScorer,
+      GENERATE_ENUM_PARSER(SearchCommand, scorer, *query::kScorerByStr));
 
   return parser;
 }
@@ -258,6 +259,9 @@ absl::Status SearchCommand::PostParseQueryString() {
 
   // For non-vector queries with WITHSCORES, set a default score_as if not
   // already set by the vector query parsing path.
+  // NOTE: score_as is not currently consumed by SerializeNonVectorNeighbors
+  // (which uses ReplyScoreTopLevel directly), but is retained for future use
+  // when scorer integration is implemented.
   if (with_scores && IsNonVectorQuery() && !score_as) {
     score_as = vmsdk::MakeUniqueValkeyString("__score");
   }

@@ -51,10 +51,10 @@ std::vector<char> NormalizeEmbedding(absl::string_view record, size_t type_size,
 struct Neighbor {
   InternedStringPtr external_id;
   float distance;
-  float score{0.0f};
+  float score;
   uint64_t sequence_number;
   std::optional<RecordsMap> attribute_contents;
-  Neighbor() : distance(0.0f), sequence_number(0) {}
+  Neighbor() : distance(0.0f), score(0.0f), sequence_number(0) {}
   Neighbor(const InternedStringPtr& external_id, float distance)
       : external_id(external_id),
         distance(distance),

@@ -39,7 +39,6 @@ struct SearchCommand : public QueryCommand {
   std::optional<query::SortByParameter> sortby;
   bool with_sort_keys{false};
   bool with_scores{false};
-  std::string scorer{"BM25STD"};
 };
 
 }  // namespace valkey_search

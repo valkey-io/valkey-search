@@ -368,9 +368,9 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> BasicReducerParser(
                            _ << "Missing Reducer argument " << i);
     auto arg_sv = vmsdk::ToStringView(arg);
     arg_texts.emplace_back(arg_sv);
-    VMSDK_ASSIGN_OR_RETURN(
-        auto expr, expr::Expression::Compile(parameters, arg_sv),
-        _ << " in GROUPBY stage");
+    VMSDK_ASSIGN_OR_RETURN(auto expr,
+                           expr::Expression::Compile(parameters, arg_sv),
+                           _ << " in GROUPBY stage");
     r->args_.emplace_back(std::move(expr));
   }
   if (itr.PopIfNextIgnoreCase(valkey_search::aggregate::kAsParam)) {
@@ -381,7 +381,8 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> BasicReducerParser(
     r->output_ =
         std::unique_ptr<Attribute>(dynamic_cast<Attribute*>(output.release()));
   } else {
-    // Workaround for memory allocator issue causing ostringstream to crash.
+    // TODO(https://github.com/valkey-io/valkey-search/issues/965): Workaround
+    // for memory allocator issue causing ostringstream to crash.
     // std::ostringstream os;
     // os << *r;
     // VMSDK_ASSIGN_OR_RETURN(auto output,

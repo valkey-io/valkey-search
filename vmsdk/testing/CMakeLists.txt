@@ -23,7 +23,7 @@ target_include_directories(vmsdk_core_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(vmsdk_core_test PRIVATE vmsdk_testing_common)
 finalize_test_flags(vmsdk_core_test)
 
-# 2. VMSDK Infra Test Suite - lightweight tests requiring only vmsdklib
+# 2. VMSDK Infra Test Suite - tests using vmsdklib, valkey_module, and vmsdk_testing_infra
 set(VMSDK_INFRA_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/concurrency_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/configuration_test.cc

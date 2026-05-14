@@ -39,7 +39,8 @@ extern std::atomic<int> pause_points_active;
 void PausePoint(absl::string_view point, std::source_location location);
 
 #define BACKGROUND_PAUSEPOINT(name)                                        \
-  if (vmsdk::debug::pause_points_active.load(std::memory_order_relaxed)) { \
+  if (vmsdk::debug::pause_points_active.load(std::memory_order_relaxed) && \
+      !vmsdk::IsMainThread()) {                                            \
     PAUSEPOINT(name);                                                      \
   }
 //

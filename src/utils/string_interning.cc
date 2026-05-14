@@ -82,17 +82,16 @@ static_assert(sizeof(OutOfLineInternedString) ==
               "OutOfLineInternedString size must match InternedString size");
 
 void InternedString::DecrementRefCount() {
+  // This case happens when erasing the entry in the map, which triggers
+  // a DecrementRefCount with ref_count already at 0. Just return.
   uint32_t prev = ref_count_.load(std::memory_order_acquire);
   if (prev == 0) return;
-  if (prev == 1) {
-    Destructor();
-    return;
-  }
-  // Common case: ref_count > 1, decrement with single atomic op.
+  // Atomically decrement. For the common case (prev > 1), we're done.
   prev = ref_count_.fetch_sub(1, std::memory_order_acq_rel);
   if (prev > 1) return;
-  // Race: someone else decremented to 1 before us, so we went 1->0.
-  // Undo and let Destructor handle it under the mutex.
+  // We did the 1->0 transition. Undo it and let Destructor handle removal
+  // from the map while holding the global mutex (Release() will re-attempt
+  // the decrement under the lock).
   ref_count_.fetch_add(1, std::memory_order_relaxed);
   Destructor();
 }

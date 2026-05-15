@@ -12,7 +12,6 @@
 #include <absl/strings/ascii.h>
 #include <absl/strings/string_view.h>
 
-#include <atomic>
 #include <source_location>
 
 #include "vmsdk/src/status/status_macros.h"

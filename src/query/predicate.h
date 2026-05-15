@@ -54,17 +54,22 @@ class NumericPredicate;
 
 struct EvaluationResult {
   bool matches;
+  float score{0.0f};
   std::unique_ptr<valkey_search::indexes::text::TextIterator> filter_iterator;
 
   // Constructor 1: For non-text predicates (no iterator)
   explicit EvaluationResult(bool result)
-      : matches(result), filter_iterator(nullptr) {}
+      : matches(result), score(result ? 1.0f : 0.0f), filter_iterator(nullptr) {}
 
   // Constructor 2: For text predicates (with iterator)
   EvaluationResult(
       bool result,
       std::unique_ptr<valkey_search::indexes::text::TextIterator> iterator)
-      : matches(result), filter_iterator(std::move(iterator)) {}
+      : matches(result), score(0.0f), filter_iterator(std::move(iterator)) {}
+
+  // Constructor 3: With explicit score
+  EvaluationResult(bool result, float score)
+      : matches(result), score(score), filter_iterator(nullptr) {}
 
   // Helper function to build EvaluationResult for text predicates
   EvaluationResult BuildTextEvaluationResult(

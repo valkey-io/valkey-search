@@ -86,6 +86,14 @@ bool PrefilterEvaluator::Evaluate(const query::Predicate &predicate,
   return res.matches;
 }
 
+query::EvaluationResult PrefilterEvaluator::EvaluateWithScore(
+    const query::Predicate &predicate, const InternedStringPtr &key) {
+  key_ = &key;
+  auto res = predicate.Evaluate(*this);
+  key_ = nullptr;
+  return res;
+}
+
 query::EvaluationResult PrefilterEvaluator::EvaluateTags(
     const query::TagPredicate &predicate) {
   bool case_sensitive = true;
@@ -267,8 +275,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply(
       knn_res.pop();
       continue;
     }
-    // Insert in desc order. Will need an update with score in the future
-    ret.emplace_back(Neighbor{vector_key.value(), ele.first});
+    ret.emplace_back(Neighbor{vector_key.value(), static_cast<float>(ele.first)});
     knn_res.pop();
   }
   // Reverse to obtain asc order of closest neighbors first.

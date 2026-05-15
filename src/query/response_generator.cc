@@ -444,6 +444,15 @@ void ProcessNeighborsForReply(
                        return !neighbor.attribute_contents.has_value();
                      }),
       neighbors.end());
+
+  // Re-sort by score after main-thread re-evaluation and drops.
+  if (!neighbors.empty() && !parameters.sortby_parameter.has_value()) {
+    std::stable_sort(neighbors.begin(), neighbors.end(),
+                     [](const indexes::Neighbor &a,
+                        const indexes::Neighbor &b) {
+                       return a.score > b.score;
+                     });
+  }
 }
 
 }  // namespace valkey_search::query

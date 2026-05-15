@@ -43,7 +43,7 @@ void PausePoint(absl::string_view point, std::source_location location);
 
 #define BACKGROUND_PAUSEPOINT(name)                                   \
   if (vmsdk::debug::pause_points_enabled && !vmsdk::IsMainThread()) { \
-    vmsdk::debug::PausePoint(name, std::source_location::current());  \
+    PAUSEPOINT(name);                                                 \
   }
 //
 // This function is used by the control machinery (FT.DEBUG) to enable/disable

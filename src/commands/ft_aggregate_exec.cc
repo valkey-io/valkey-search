@@ -368,7 +368,7 @@ class Quantile : public GroupBy::ReducerInstance {
   // Flush buffer: sort and merge into samples
   // Walk the existing sample list forward while merging
   // sorted buffer values in order.
-  void Flush() {
+  void Flush() const {
     if (buffer_.empty()) return;
 
     std::sort(buffer_.begin(), buffer_.end());
@@ -418,7 +418,7 @@ class Quantile : public GroupBy::ReducerInstance {
   // Compress samples to maintain space bounds.
   // Walks backward from the second-to-last sample so that merges
   // propagate toward the tail where error bounds are largest.
-  void Compress() {
+  void Compress() const {
     if (samples_.size() < 2) return;
 
     // Compute rank of the last sample (n - 1 - last.g)
@@ -448,7 +448,7 @@ class Quantile : public GroupBy::ReducerInstance {
   }
 
   // Query for quantile value
-  double Query(double q) {
+  double Query(double q) const {
     Flush();
 
     if (samples_.empty()) {
@@ -543,9 +543,8 @@ class Quantile : public GroupBy::ReducerInstance {
       return expr::Value();
     }
 
-    // Query for quantile (const_cast is safe because Flush only modifies
-    // mutable members)
-    double result = const_cast<Quantile*>(this)->Query(quantile_);
+    // Query for quantile
+    double result = Query(quantile_);
 
     if (std::isnan(result)) {
       return expr::Value();

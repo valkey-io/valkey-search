@@ -514,7 +514,9 @@ class Quantile : public GroupBy::ReducerInstance {
     if (has_error_) return;
 
     if (!quantile_initialized_) {
-      // Extract and validate quantile value from first record
+      // values[1] must be a constant — parser enforces this. Read once and
+      // freeze, allowing a field reference here would silently use the
+      // first record's value for the whole group.
       auto quantile_opt = values[1].AsDouble();
       if (!quantile_opt) {
         has_error_ = true;

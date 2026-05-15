@@ -911,12 +911,12 @@ struct IndexedContentTestCase {
   };
   struct TestNeighbor {
     std::string external_id;
-    float distance;
+    float score;
     std::optional<absl::flat_hash_map<std::string, std::string>>
         attribute_contents;
     indexes::Neighbor ToIndexesNeighbor() const {
       auto string_interned_external_id = StringInternStore::Intern(external_id);
-      auto result = indexes::Neighbor{string_interned_external_id, distance};
+      auto result = indexes::Neighbor{string_interned_external_id, score};
       if (attribute_contents.has_value()) {
         result.attribute_contents = RecordsMap();
         for (auto &attribute : *attribute_contents) {
@@ -931,7 +931,7 @@ struct IndexedContentTestCase {
     static TestNeighbor FromIndexesNeighbor(const indexes::Neighbor &neighbor) {
       TestNeighbor result;
       result.external_id = std::string(*neighbor.external_id);
-      result.distance = neighbor.distance;
+      result.score = neighbor.score;
       if (neighbor.attribute_contents.has_value()) {
         result.attribute_contents =
             absl::flat_hash_map<std::string, std::string>();
@@ -944,7 +944,7 @@ struct IndexedContentTestCase {
       return result;
     }
     bool operator==(const TestNeighbor &other) const {
-      if (external_id != other.external_id || distance != other.distance) {
+      if (external_id != other.external_id || score != other.score) {
         return false;
       }
       if (attribute_contents.has_value() !=
@@ -1108,10 +1108,10 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     .test_name = "no_return_attributes",
                     .input = {{{.external_id = "1",
-                                .distance = 0.1,
+                                .score = 0.1,
                                 .attribute_contents = std::nullopt}}},
                     .expected_output = {{{.external_id = "1",
-                                          .distance = 0.1,
+                                          .score = 0.1,
                                           .attribute_contents = std::nullopt}}},
                 },
                 {
@@ -1119,10 +1119,10 @@ INSTANTIATE_TEST_SUITE_P(
                     .return_attributes = {{.identifier = "1", .alias = "a1"},
                                           {.identifier = "2", .alias = "a2"}},
                     .input = {{{.external_id = "1",
-                                .distance = 0.1,
+                                .score = 0.1,
                                 .attribute_contents = std::nullopt}}},
                     .expected_output = {{{.external_id = "1",
-                                          .distance = 0.1,
+                                          .score = 0.1,
                                           .attribute_contents = std::nullopt}}},
                 },
                 {
@@ -1139,10 +1139,10 @@ INSTANTIATE_TEST_SUITE_P(
                             },
                         },
                     .input = {{{.external_id = "1",
-                                .distance = 0.1,
+                                .score = 0.1,
                                 .attribute_contents = std::nullopt}}},
                     .expected_output = {{{.external_id = "1",
-                                          .distance = 0.1,
+                                          .score = 0.1,
                                           .attribute_contents = std::nullopt}}},
                 },
                 {
@@ -1158,10 +1158,10 @@ INSTANTIATE_TEST_SUITE_P(
                             },
                         },
                     .input = {{{.external_id = "1",
-                                .distance = 0.1,
+                                .score = 0.1,
                                 .attribute_contents = std::nullopt}}},
                     .expected_output = {{{.external_id = "1",
-                                          .distance = 0.1,
+                                          .score = 0.1,
                                           .attribute_contents = std::nullopt}}},
                 },
                 {
@@ -1184,11 +1184,11 @@ INSTANTIATE_TEST_SUITE_P(
                             },
                         },
                     .input = {{{.external_id = "1",
-                                .distance = 0.1,
+                                .score = 0.1,
                                 .attribute_contents = std::nullopt}}},
                     .expected_output = {{{
                         .external_id = "1",
-                        .distance = 0.1,
+                        .score = 0.1,
                         .attribute_contents =
                             absl::flat_hash_map<std::string, std::string>{
                                 {"as1", "1"}, {"as2", "2, abc ,ABC    "}},
@@ -1214,11 +1214,11 @@ INSTANTIATE_TEST_SUITE_P(
                             },
                         },
                     .input = {{{.external_id = "1",
-                                .distance = 0.1,
+                                .score = 0.1,
                                 .attribute_contents = std::nullopt}}},
                     .expected_output = {{{
                         .external_id = "1",
-                        .distance = 0.1,
+                        .score = 0.1,
                         .attribute_contents =
                             absl::flat_hash_map<std::string, std::string>{
                                 {"as1", "1"}, {"as2", "2"}},
@@ -1244,11 +1244,11 @@ INSTANTIATE_TEST_SUITE_P(
                             },
                         },
                     .input = {{{.external_id = "1",
-                                .distance = 0.1,
+                                .score = 0.1,
                                 .attribute_contents = std::nullopt}}},
                     .expected_output = {{{
                         .external_id = "1",
-                        .distance = 0.1,
+                        .score = 0.1,
                         .attribute_contents =
                             absl::flat_hash_map<std::string, std::string>{
                                 {"as1", kTestVector0}, {"as2", kTestVector1}},
@@ -1274,11 +1274,11 @@ INSTANTIATE_TEST_SUITE_P(
                             },
                         },
                     .input = {{{.external_id = "1",
-                                .distance = 0.1,
+                                .score = 0.1,
                                 .attribute_contents = std::nullopt}}},
                     .expected_output = {{{
                         .external_id = "1",
-                        .distance = 0.1,
+                        .score = 0.1,
                         .attribute_contents =
                             absl::flat_hash_map<std::string, std::string>{
                                 {"as1", kTestVector0}, {"as2", kTestVector1}},
@@ -1311,23 +1311,23 @@ INSTANTIATE_TEST_SUITE_P(
                             },
                         },
                     .input = {{{.external_id = "1",
-                                .distance = 0.1,
+                                .score = 0.1,
                                 .attribute_contents = absl::flat_hash_map<
                                     std::string, std::string>{{"as1", "1"},
                                                               {"as2", "2"}}},
                                {.external_id = "2",
-                                .distance = 0.2,
+                                .score = 0.2,
                                 .attribute_contents = std::nullopt}}},
                     .expected_output =
                         {{{
                               .external_id = "1",
-                              .distance = 0.1,
+                              .score = 0.1,
                               .attribute_contents =
                                   absl::flat_hash_map<std::string, std::string>{
                                       {"as1", "1"}, {"as2", "2"}},
                           },
                           {.external_id = "2",
-                           .distance = 0.2,
+                           .score = 0.2,
                            .attribute_contents =
                                absl::flat_hash_map<std::string, std::string>{
                                    {"as1", "1"}, {"as2", "2"}}}}},
@@ -1352,21 +1352,21 @@ INSTANTIATE_TEST_SUITE_P(
                             },
                         },
                     .input = {{{.external_id = "1",
-                                .distance = 0.1,
+                                .score = 0.1,
                                 .attribute_contents = std::nullopt},
                                {.external_id = "2",
-                                .distance = 0.2,
+                                .score = 0.2,
                                 .attribute_contents = std::nullopt}}},
                     .expected_output =
                         {{{
                               .external_id = "1",
-                              .distance = 0.1,
+                              .score = 0.1,
                               .attribute_contents =
                                   absl::flat_hash_map<std::string, std::string>{
                                       {"as1", "1"}, {"as2", "2"}},
                           },
                           {.external_id = "2",
-                           .distance = 0.2,
+                           .score = 0.2,
                            .attribute_contents = std::nullopt}}},
                 },
             })),

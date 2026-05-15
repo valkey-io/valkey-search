@@ -176,7 +176,7 @@ indexes::Neighbor ToIndexesNeighbor(const NeighborTest &neighbor_test) {
   auto string_interned_external_id =
       StringInternStore::Intern(neighbor_test.external_id);
   indexes::Neighbor neighbor(string_interned_external_id,
-                             neighbor_test.distance);
+                             neighbor_test.score);
   if (neighbor_test.attribute_contents.has_value()) {
     std::optional<RecordsMap> attribute_contents;
     neighbor.attribute_contents.value() = RecordsMap();
@@ -197,7 +197,7 @@ indexes::Neighbor ToIndexesNeighbor(const NeighborTest &neighbor_test) {
 NeighborTest ToNeighborTest(const indexes::Neighbor &neighbor) {
   NeighborTest neighbor_test;
   neighbor_test.external_id = *neighbor.external_id;
-  neighbor_test.distance = neighbor.distance;
+  neighbor_test.score = neighbor.score;
   if (neighbor.attribute_contents.has_value()) {
     std::unordered_map<std::string, std::string> attribute_contents;
     for (const auto &attribute_content : neighbor.attribute_contents.value()) {

@@ -713,6 +713,10 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
         }
         borrowed.push_back(
             {BorrowedInternedStringPtr(key), 0.0f, weighted_score});
+        // Score from the text iterator if available
+        if (auto* text_iter = iterator->GetTextIterator()) {
+          borrowed.back().score = text_iter->GetScore();
+        }
         iterator->Next();
         if (parameters.cancellation_token->IsCancelled()) {
           break;

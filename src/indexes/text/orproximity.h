@@ -49,6 +49,16 @@ class OrProximityIterator : public TextIterator {
   FieldMaskPredicate CurrentFieldMask() const override;
   bool IsIteratorValid() const override;
 
+  // OR semantics: take the max score among active children on the current key.
+  float GetScore() const override {
+    float best = 0.0f;
+    for (size_t idx : current_key_indices_) {
+      float s = iters_[idx]->GetScore() * iters_[idx]->GetWeight();
+      if (s > best) best = s;
+    }
+    return best;
+  }
+
  private:
   absl::InlinedVector<std::unique_ptr<TextIterator>,
                       kProximityTermsInlineCapacity>

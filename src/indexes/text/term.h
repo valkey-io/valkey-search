@@ -69,10 +69,10 @@ class TermIterator : public TextIterator {
     }
     return current_key_ != nullptr;
   }
-  /* Implementation of APIs unique to TermIterator */
-  // It is possible to implement a `CurrentKeyIterVecIdx` API that returns the
-  // index of the vector of the posting iterator (provided on init) that matches
-  // the current position
+
+  // Stub scorer: returns 1.0 for any matched document.
+  // Will be replaced with real TF-IDF/BM25 when ingestion precomputes land.
+  float GetScore() const override { return DoneKeys() ? 0.0f : 1.0f; }
 
  private:
   const FieldMaskPredicate query_field_mask_;

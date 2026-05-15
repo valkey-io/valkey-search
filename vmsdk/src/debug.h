@@ -35,16 +35,20 @@ extern bool pause_points_enabled;
 // current thread. A unique label is provided to distinguish this pause point
 // with others.
 //
-#define PAUSEPOINT(name)                                             \
-  if (vmsdk::debug::pause_points_enabled) {                          \
-    vmsdk::debug::PausePoint(name, std::source_location::current()); \
-  }
+#define PAUSEPOINT(name)                                               \
+  do {                                                                 \
+    if (vmsdk::debug::pause_points_enabled) {                          \
+      vmsdk::debug::PausePoint(name, std::source_location::current()); \
+    }                                                                  \
+  } while (false)
 void PausePoint(absl::string_view point, std::source_location location);
 
-#define BACKGROUND_PAUSEPOINT(name)                                   \
-  if (vmsdk::debug::pause_points_enabled && !vmsdk::IsMainThread()) { \
-    PAUSEPOINT(name);                                                 \
-  }
+#define BACKGROUND_PAUSEPOINT(name)                                     \
+  do {                                                                  \
+    if (vmsdk::debug::pause_points_enabled && !vmsdk::IsMainThread()) { \
+      PAUSEPOINT(name);                                                 \
+    }                                                                   \
+  } while (false)
 //
 // This function is used by the control machinery (FT.DEBUG) to enable/disable
 // and test PausePoints.

@@ -54,3 +54,20 @@ add_library(scanner INTERFACE ${SRCS_SCANNER})
 target_include_directories(scanner INTERFACE ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(scanner INTERFACE absl::strings)
 target_link_libraries(scanner INTERFACE valkey_module)
+
+set(SRCS_HYPERLOGLOG ${CMAKE_CURRENT_LIST_DIR}/hyperloglog.c
+                     ${CMAKE_CURRENT_LIST_DIR}/hyperloglog.h)
+
+valkey_search_add_static_library(hyperloglog "${SRCS_HYPERLOGLOG}")
+target_include_directories(hyperloglog PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+
+set(SRCS_HYPERLOGLOG_COUNTER
+    ${CMAKE_CURRENT_LIST_DIR}/hyperloglog_counter.cc
+    ${CMAKE_CURRENT_LIST_DIR}/hyperloglog_counter.h)
+
+valkey_search_add_static_library(hyperloglog_counter
+                                 "${SRCS_HYPERLOGLOG_COUNTER}")
+target_include_directories(hyperloglog_counter
+                           PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(hyperloglog_counter PUBLIC hyperloglog)
+target_link_libraries(hyperloglog_counter PUBLIC expr)

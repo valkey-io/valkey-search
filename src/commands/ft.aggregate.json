@@ -240,6 +240,11 @@
                     "token": "COUNT_DISTINCT"
                   },
                   {
+                    "name": "COUNT_DISTINCTISH",
+                    "type": "pure-token",
+                    "token": "COUNT_DISTINCTISH"
+                  },
+                  {
                     "name": "SUM",
                     "type": "pure-token",
                     "token": "SUM"

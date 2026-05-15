@@ -14,8 +14,6 @@
 #include <absl/synchronization/mutex.h>
 #include <pthread.h>
 
-#include <atomic>
-
 #include "module_config.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/utils.h"
@@ -31,8 +29,8 @@ struct Waiter {
 };
 
 absl::flat_hash_map<std::string, std::vector<Waiter>> pause_point_waiters;
-// Fast check: if no pause points are registered, skip the mutex entirely
-std::atomic<int> pause_points_active{0};
+// Global flag: set to true when any pause point is registered.
+bool pause_points_enabled{false};
 
 static std::string ToString(const std::source_location& location) {
   std::string os;
@@ -47,10 +45,6 @@ static std::string ToString(const std::source_location& location) {
 
 void PausePoint(absl::string_view point, std::source_location location) {
   CHECK(!IsMainThread()) << "Pause point not allowed on main thread.";
-  // Fast path: if no pause points are active, skip entirely
-  if (pause_points_active.load(std::memory_order_relaxed) == 0) {
-    return;
-  }
   {
     absl::MutexLock lock(&pause_point_lock);
     auto it = pause_point_waiters.find(point);
@@ -93,13 +87,11 @@ void PausePointControl(absl::string_view point, bool enable) {
   if (enable) {
     if (!pause_point_waiters.contains(point)) {
       pause_point_waiters[point];
-      pause_points_active.fetch_add(1, std::memory_order_release);
+      pause_points_enabled = true;
     }
     CHECK(pause_point_waiters.contains(point));
   } else {
-    if (pause_point_waiters.erase(point)) {
-      pause_points_active.fetch_sub(1, std::memory_order_release);
-    }
+    pause_point_waiters.erase(point);
   }
 }
 
@@ -150,7 +142,9 @@ void PausePointList(ValkeyModuleCtx* ctx) {
 void ClearAllPausePoints() {
   absl::MutexLock lock(&pause_point_lock);
   pause_point_waiters.clear();
-  pause_points_active.store(0, std::memory_order_release);
+  // Note: pause_points_enabled stays true. No reason to reset it —
+  // it's only checked as a fast-path skip in production where no
+  // pause points are ever set.
 }
 
 //

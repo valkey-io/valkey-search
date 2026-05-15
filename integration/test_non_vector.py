@@ -8,7 +8,6 @@ import random
 from valkey.cluster import ValkeyCluster
 from valkey_search_test_case import ValkeySearchClusterTestCase
 import time
-import pytest
 
 """
 This file contains tests for non vector (numeric and tag) queries on Hash/JSON documents in Valkey Search - in CME / CMD.

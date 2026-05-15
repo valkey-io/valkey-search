@@ -300,11 +300,11 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
       min_stem_size_(index_schema_proto.min_stem_size() > 0
                          ? index_schema_proto.min_stem_size()
                          : 4),
-      score_(index_schema_proto.has_score() > 0 ? index_schema_proto.score()
-                                                : 1.0),
+      score_(index_schema_proto.has_score() ? index_schema_proto.score()
+                                            : kDefaultDocumentScore),
       score_field_(index_schema_proto.has_score_field()
-                       ? index_schema_proto.score_field()
-                       : ""),
+                       ? std::make_optional(index_schema_proto.score_field())
+                       : std::nullopt),
       mutations_thread_pool_(mutations_thread_pool),
       time_sliced_mutex_(CreateMrmwMutexOptions()) {
   ValkeyModule_SelectDb(detached_ctx_.get(), db_num_);
@@ -597,20 +597,17 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
   // Read the per-document score from SCORE_FIELD if configured
   float document_score = score_;
   if (key_obj && HasScoreField()) {
-    ValkeyModuleString *score_record = nullptr;
-    ValkeyModule_HashGet(key_obj.get(), VALKEYMODULE_HASH_CFIELDS,
-                         score_field_.c_str(), &score_record, NULL);
-    if (score_record) {
-      // Parse directly from the ValkeyModuleString's internal buffer (no copy).
-      // Use the parsed value if succeeded; otherwise, fall back to the default
-      // score silently. Raw value is stored without clamping. The scoring 
-      // algorithm decides how to handle values at query time. 
+    auto score_record = attribute_data_type_->GetRecord(
+        ctx, key_obj.get(), key_cstr, score_field_.value());
+    if (score_record.ok()) {
+      // Parse the value as a float. If it fails (non-numeric), fall back to
+      // the default score silently. Raw value is stored without clamping.
+      // The scoring algorithm decides how to handle values at query time.
       float value;
-      auto str_view = vmsdk::ToStringView(score_record);
-      if (absl::SimpleAtof(str_view, &value)) {
+      auto str_view = vmsdk::ToStringView(score_record.value().get());
+      if (absl::SimpleAtof(str_view, &value) && value == value) {  // NaN check
         document_score = value;
       }
-      ValkeyModule_FreeString(nullptr, score_record);
     }
   }
 
@@ -1136,11 +1133,11 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
     ValkeyModule_ReplyWithSimpleString(ctx, prefix.c_str());
   }
   ValkeyModule_ReplyWithSimpleString(ctx, "default_score");
-  ValkeyModule_ReplyWithCString(ctx, absl::StrCat(score_).c_str());
+  ValkeyModule_ReplyWithDouble(ctx, static_cast<double>(score_));
 
   ValkeyModule_ReplyWithSimpleString(ctx, "score_field");
   ValkeyModule_ReplyWithSimpleString(
-      ctx, score_field_.empty() ? "" : score_field_.c_str());
+      ctx, score_field_.has_value() ? score_field_.value().c_str() : "");
 
   ValkeyModule_ReplyWithSimpleString(ctx, "attributes");
   ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
@@ -1241,8 +1238,8 @@ std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
                                                    stop_words_.end());
   index_schema_proto->set_skip_initial_scan(skip_initial_scan_);
   index_schema_proto->set_score(score_);
-  if (!score_field_.empty()) {
-    index_schema_proto->set_score_field(score_field_);
+  if (score_field_.has_value()) {
+    index_schema_proto->set_score_field(score_field_.value());
   }
 
   auto stats = index_schema_proto->mutable_stats();

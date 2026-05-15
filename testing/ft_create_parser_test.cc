@@ -60,7 +60,7 @@ struct FTCreateParameters {
   data_model::AttributeDataType on_data_type{
       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH};
   std::vector<absl::string_view> prefixes;
-  float score{1.0};
+  float score{1.0f};
   absl::string_view score_field;
   absl::string_view payload_field;
   bool skip_initial_scan{false};
@@ -137,6 +137,10 @@ TEST_P(FTCreateParserTest, ParseParams) {
       EXPECT_TRUE(index_schema_proto->has_score_field());
       EXPECT_EQ(index_schema_proto->score_field(),
                 test_case.expected.score_field);
+    }
+    if (test_case.expected.score != 1.0f) {
+      EXPECT_TRUE(index_schema_proto->has_score());
+      EXPECT_FLOAT_EQ(index_schema_proto->score(), test_case.expected.score);
     }
 
     // Verify schema-level text parameters if we have text fields
@@ -705,6 +709,31 @@ INSTANTIATE_TEST_SUITE_P(
             .expected =
                 {.index_schema_name = "idx1",
                 .score_field = "my_score",
+                .attributes =
+                    {{
+                        .identifier = "hash_field1",
+                        .attribute_alias = "hash_field1",
+                        .indexer_type = indexes::IndexerType::kHNSW,
+                    }}},
+        },
+         {
+            .test_name = "score_preserved_with_skipinitialscan",
+            .success = true,
+            .command_str =
+                " idx1 SCORE 0.5 SKIPINITIALSCAN SCHEMA hash_field1 vector hnsw "
+                "6 TYPE FLOAT32 DIM 5 DISTANCE_METRIC IP ",
+            .hnsw_parameters =
+                {{
+                    {
+                        .dimensions = 5,
+                        .distance_metric = data_model::DISTANCE_METRIC_IP,
+                        .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
+                    },
+                }},
+            .expected =
+                {.index_schema_name = "idx1",
+                .score = 0.5,
+                .skip_initial_scan = true,
                 .attributes =
                     {{
                         .identifier = "hash_field1",

@@ -2567,7 +2567,7 @@ TEST_F(IndexSchemaScoreFieldTest, IngestsDocumentScoreFromScoreField) {
 
   // Verify the document score was stored
   vmsdk::ReaderMutexLock lock(&index_schema->GetTimeSlicedMutex());
-  EXPECT_FLOAT_EQ(index_schema->GetDocumentScore(key), 0.8);
+  EXPECT_FLOAT_EQ(index_schema->GetDocumentScore(key), 0.8f);
 }
 
 TEST_F(IndexSchemaScoreFieldTest, FallsBackToDefaultScoreWhenFieldMissing) {
@@ -2630,7 +2630,7 @@ TEST_F(IndexSchemaScoreFieldTest, FallsBackToDefaultScoreWhenFieldMissing) {
 
   // Should fall back to default score (0.5)
   vmsdk::ReaderMutexLock lock(&index_schema->GetTimeSlicedMutex());
-  EXPECT_FLOAT_EQ(index_schema->GetDocumentScore(key), 0.5);
+  EXPECT_FLOAT_EQ(index_schema->GetDocumentScore(key), 0.5f);
 }
 
 }  // namespace valkey_search

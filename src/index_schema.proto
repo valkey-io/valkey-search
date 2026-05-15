@@ -25,6 +25,10 @@ message IndexSchema {
   repeated string subscribed_key_prefixes = 2;
   AttributeDataType attribute_data_type = 3;
   Language language = 4;
+  // Default per-document score for the index, set via the SCORE parameter
+  // in FT.CREATE. Stored as float (32-bit). Note: Redis Search stores this
+  // as double (64-bit), so values with more than ~7 significant digits will
+  // round here. The valid range [0.0, 1.0] is unaffected by this precision.
   optional float score = 5;
   repeated Attribute attributes = 6;
   Stats stats = 7;

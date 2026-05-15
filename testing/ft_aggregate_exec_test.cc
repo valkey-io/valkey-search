@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <random>
 
 #include "gtest/gtest.h"
 #include "src/commands/ft_aggregate_parser.h"
@@ -461,20 +462,26 @@ TEST_F(AggregateExecTest, QuantileNegativeNumbersTest) {
 TEST_F(AggregateExecTest, QuantileCalculationCorrectnessProperty) {
   std::cerr << "QuantileCalculationCorrectnessProperty\n";
 
-  // Test with 100 iterations of random datasets
-  std::srand(42);  // Fixed seed for reproducibility
+  // Test with 100 iterations of random datasets.
+  // Use std::mt19937 with a fixed seed for cross-platform reproducibility:
+  // std::rand() is implementation-defined and produces different sequences
+  // on libstdc++ vs libc++ for the same seed.
+  std::mt19937 rng(42);
+  std::uniform_int_distribution<size_t> dist_n(1, 50);
+  std::uniform_int_distribution<int> dist_q(0, 100);
+  std::uniform_int_distribution<int> dist_val(-500, 499);
 
   for (int iteration = 0; iteration < 100; ++iteration) {
     // Generate random dataset size (1 to 50 values)
-    size_t n = 1 + (std::rand() % 50);
+    size_t n = dist_n(rng);
 
     // Generate random quantile (0.0 to 1.0)
-    double quantile = (std::rand() % 101) / 100.0;
+    double quantile = dist_q(rng) / 100.0;
 
     // Generate random values
     std::vector<double> values;
     for (size_t i = 0; i < n; ++i) {
-      values.push_back((std::rand() % 1000) - 500);  // Values from -500 to 499
+      values.push_back(dist_val(rng));  // Values from -500 to 499
     }
 
     // Create records
@@ -515,17 +522,18 @@ TEST_F(AggregateExecTest, QuantileRangeValidationProperty) {
   std::cerr << "QuantileRangeValidationProperty\n";
 
   // Test with 50 iterations of invalid quantile values
-  std::srand(43);  // Fixed seed for reproducibility
+  std::mt19937 rng(43);
+  std::uniform_int_distribution<int> dist_offset(0, 99);
 
   for (int iteration = 0; iteration < 50; ++iteration) {
     // Generate invalid quantile values (< 0 or > 1)
     double quantile;
     if (iteration % 2 == 0) {
       // Generate values less than 0
-      quantile = -1.0 - (std::rand() % 100) / 10.0;
+      quantile = -1.0 - dist_offset(rng) / 10.0;
     } else {
       // Generate values greater than 1
-      quantile = 1.1 + (std::rand() % 100) / 10.0;
+      quantile = 1.1 + dist_offset(rng) / 10.0;
     }
 
     // Create test records
@@ -556,14 +564,18 @@ TEST_F(AggregateExecTest, NilValueExclusionProperty) {
   std::cerr << "NilValueExclusionProperty\n";
 
   // Test with 100 iterations of datasets with random nil values
-  std::srand(44);  // Fixed seed for reproducibility
+  std::mt19937 rng(44);
+  std::uniform_int_distribution<size_t> dist_count(5, 30);
+  std::uniform_int_distribution<int> dist_q(0, 100);
+  std::uniform_int_distribution<int> dist_nil(0, 9);
+  std::uniform_int_distribution<int> dist_val(-500, 499);
 
   for (int iteration = 0; iteration < 100; ++iteration) {
     // Generate random dataset size (5 to 30 values)
-    size_t total_count = 5 + (std::rand() % 26);
+    size_t total_count = dist_count(rng);
 
     // Generate random quantile (0.0 to 1.0)
-    double quantile = (std::rand() % 101) / 100.0;
+    double quantile = dist_q(rng) / 100.0;
 
     // Generate random values with some nils
     std::vector<double> numeric_values;
@@ -573,10 +585,10 @@ TEST_F(AggregateExecTest, NilValueExclusionProperty) {
       auto rec = std::make_unique<Record>(2);
 
       // 30% chance of nil value
-      if (std::rand() % 10 < 3) {
+      if (dist_nil(rng) < 3) {
         rec->fields_[0] = expr::Value();  // nil
       } else {
-        double val = (std::rand() % 1000) - 500;
+        double val = dist_val(rng);
         rec->fields_[0] = expr::Value(val);
         numeric_values.push_back(val);
       }
@@ -621,14 +633,18 @@ TEST_F(AggregateExecTest, NonNumericValueHandlingProperty) {
   std::cerr << "NonNumericValueHandlingProperty\n";
 
   // Test with 50 iterations of datasets with non-numeric string values
-  std::srand(45);  // Fixed seed for reproducibility
+  std::mt19937 rng(45);
+  std::uniform_int_distribution<size_t> dist_count(5, 20);
+  std::uniform_int_distribution<int> dist_q(0, 100);
+  std::uniform_int_distribution<int> dist_type(0, 9);
+  std::uniform_int_distribution<int> dist_val(-500, 499);
 
   for (int iteration = 0; iteration < 50; ++iteration) {
     // Generate random dataset size (5 to 20 values)
-    size_t total_count = 5 + (std::rand() % 16);
+    size_t total_count = dist_count(rng);
 
     // Generate random quantile (0.0 to 1.0)
-    double quantile = (std::rand() % 101) / 100.0;
+    double quantile = dist_q(rng) / 100.0;
 
     // Generate random values with some non-numeric strings
     // Note: booleans are converted to 0/1 by AsDouble(), so they count as
@@ -639,10 +655,10 @@ TEST_F(AggregateExecTest, NonNumericValueHandlingProperty) {
     for (size_t i = 0; i < total_count; ++i) {
       auto rec = std::make_unique<Record>(2);
 
-      int value_type = std::rand() % 10;
+      int value_type = dist_type(rng);
       if (value_type < 7) {
         // 70% numeric values
-        double val = (std::rand() % 1000) - 500;
+        double val = dist_val(rng);
         rec->fields_[0] = expr::Value(val);
         numeric_values.push_back(val);
       } else {
@@ -761,17 +777,20 @@ TEST_F(AggregateExecTest, MultipleReducerIndependenceProperty) {
   std::cerr << "MultipleReducerIndependenceProperty\n";
 
   // Test with 100 iterations of random scenarios
-  std::srand(45);  // Fixed seed for reproducibility
+  std::mt19937 rng(45);
+  std::uniform_int_distribution<size_t> dist_n(5, 50);
+  std::uniform_int_distribution<int> dist_q(0, 80);
+  std::uniform_int_distribution<int> dist_val(-500, 499);
 
   int successful_iterations = 0;
   for (int iteration = 0; iteration < 100 && successful_iterations < 100;
        ++iteration) {
     // Generate random dataset size (5 to 50 values)
-    size_t n = 5 + (std::rand() % 46);
+    size_t n = dist_n(rng);
 
     // Generate two different random quantiles (avoid 0.0 and 1.0 for now)
-    double quantile1 = 0.1 + (std::rand() % 81) / 100.0;  // 0.1 to 0.9
-    double quantile2 = 0.1 + (std::rand() % 81) / 100.0;  // 0.1 to 0.9
+    double quantile1 = 0.1 + dist_q(rng) / 100.0;  // 0.1 to 0.9
+    double quantile2 = 0.1 + dist_q(rng) / 100.0;  // 0.1 to 0.9
 
     // Ensure quantiles are different enough
     if (std::abs(quantile1 - quantile2) < 0.05) {
@@ -781,7 +800,7 @@ TEST_F(AggregateExecTest, MultipleReducerIndependenceProperty) {
     // Generate random values
     std::vector<double> values;
     for (size_t i = 0; i < n; ++i) {
-      values.push_back((std::rand() % 1000) - 500);  // Values from -500 to 499
+      values.push_back(dist_val(rng));  // Values from -500 to 499
     }
 
     // Test: Multiple reducers on same property with different quantiles
@@ -871,33 +890,40 @@ TEST_F(AggregateExecTest, NumericPrecisionConsistencyProperty) {
   std::cerr << "NumericPrecisionConsistencyProperty\n";
 
   // Test with 100 iterations focusing on numeric precision edge cases
-  std::srand(46);  // Fixed seed for reproducibility
+  std::mt19937 rng(46);
+  std::uniform_int_distribution<size_t> dist_n(2, 30);
+  std::uniform_int_distribution<int> dist_q(0, 100);
+  std::uniform_int_distribution<int> dist_type(0, 9);
+  std::uniform_int_distribution<int> dist_small(0, 999);
+  std::uniform_int_distribution<int> dist_large(0, 999);
+  std::uniform_int_distribution<int> dist_decimal(0, 9999);
+  std::uniform_int_distribution<int> dist_regular(-500, 499);
 
   for (int iteration = 0; iteration < 100; ++iteration) {
     // Generate random dataset size (2 to 30 values)
-    size_t n = 2 + (std::rand() % 29);
+    size_t n = dist_n(rng);
 
     // Generate random quantile (0.0 to 1.0)
-    double quantile = (std::rand() % 101) / 100.0;
+    double quantile = dist_q(rng) / 100.0;
 
     // Generate values with various numeric characteristics
     std::vector<double> values;
     for (size_t i = 0; i < n; ++i) {
       double val;
-      int type = std::rand() % 10;
+      int type = dist_type(rng);
 
       if (type < 3) {
         // Very small numbers (testing precision near zero)
-        val = (std::rand() % 1000) / 1000000.0;  // 0.000001 to 0.001
+        val = dist_small(rng) / 1000000.0;  // 0.000001 to 0.001
       } else if (type < 6) {
         // Very large numbers (testing large value precision)
-        val = (std::rand() % 1000) * 1000000.0;  // Up to billions
+        val = dist_large(rng) * 1000000.0;  // Up to billions
       } else if (type < 8) {
         // Numbers with many decimal places
-        val = (std::rand() % 10000) / 1000.0;  // 0.000 to 9.999
+        val = dist_decimal(rng) / 1000.0;  // 0.000 to 9.999
       } else {
         // Regular numbers
-        val = (std::rand() % 1000) - 500.0;  // -500 to 499
+        val = dist_regular(rng);  // -500 to 499
       }
 
       values.push_back(val);

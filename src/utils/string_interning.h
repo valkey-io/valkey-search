@@ -102,67 +102,100 @@ static_assert(sizeof(InternedString) == 8,
 class InternedStringPtr {
  public:
   InternedStringPtr() = default;
-  InternedStringPtr(const InternedStringPtr &other) : impl_(other.impl_) {
-    if (impl_) {
-      impl_->IncrementRefCount();
+  InternedStringPtr(const InternedStringPtr &other)
+      : tagged_ptr_(other.tagged_ptr_) {
+    if (GetImpl() && !IsBorrowed()) {
+      GetImpl()->IncrementRefCount();
     }
   }
-  InternedStringPtr(InternedStringPtr &&other) noexcept : impl_(other.impl_) {
-    other.impl_ = nullptr;
+  InternedStringPtr(InternedStringPtr &&other) noexcept
+      : tagged_ptr_(other.tagged_ptr_) {
+    other.tagged_ptr_ = 0;
   }
   InternedStringPtr &operator=(const InternedStringPtr &other) {
     if (this != &other) {
-      if (impl_) {
-        impl_->DecrementRefCount();
+      if (GetImpl() && !IsBorrowed()) {
+        GetImpl()->DecrementRefCount();
       }
-      impl_ = other.impl_;
-      if (impl_) {
-        impl_->IncrementRefCount();
+      tagged_ptr_ = other.tagged_ptr_;
+      if (GetImpl() && !IsBorrowed()) {
+        GetImpl()->IncrementRefCount();
       }
     }
     return *this;
   }
   InternedStringPtr &operator=(InternedStringPtr &&other) noexcept {
     if (this != &other) {
-      if (impl_) {
-        impl_->DecrementRefCount();
+      if (GetImpl() && !IsBorrowed()) {
+        GetImpl()->DecrementRefCount();
       }
-      impl_ = other.impl_;
-      other.impl_ = nullptr;
+      tagged_ptr_ = other.tagged_ptr_;
+      other.tagged_ptr_ = 0;
     }
     return *this;
   }
 
   InternedStringPtr &operator=(void *other) noexcept {
     CHECK(!other);  // Only nullptr is allowed
-    if (impl_) {
-      impl_->DecrementRefCount();
+    if (GetImpl() && !IsBorrowed()) {
+      GetImpl()->DecrementRefCount();
     }
-    impl_ = nullptr;
+    tagged_ptr_ = 0;
     return *this;
   }
 
-  auto operator<=>(const InternedStringPtr &other) const = default;
-
-  size_t Hash() const { return absl::HashOf(impl_); }
-
-  InternedString &operator*() { return *impl_; }
-  InternedString *operator->() { return impl_; }
-  operator bool() const { return impl_ != nullptr; }
-  const InternedString &operator*() const { return *impl_; }
-  const InternedString *operator->() const { return impl_; }
-  ~InternedStringPtr() {
-    if (impl_) {
-      impl_->DecrementRefCount();
-    }
-    impl_ = nullptr;
+  auto operator<=>(const InternedStringPtr &other) const {
+    return GetImpl() <=> other.GetImpl();
+  }
+  bool operator==(const InternedStringPtr &other) const {
+    return GetImpl() == other.GetImpl();
   }
 
-  size_t RefCount() const { return impl_ ? impl_->RefCount() : 0; }
+  size_t Hash() const { return absl::HashOf(GetImpl()); }
+
+  InternedString &operator*() { return *GetImpl(); }
+  InternedString *operator->() { return GetImpl(); }
+  operator bool() const { return GetImpl() != nullptr; }
+  const InternedString &operator*() const { return *GetImpl(); }
+  const InternedString *operator->() const { return GetImpl(); }
+  ~InternedStringPtr() {
+    if (GetImpl() && !IsBorrowed()) {
+      GetImpl()->DecrementRefCount();
+    }
+    tagged_ptr_ = 0;
+  }
+
+  size_t RefCount() const { return GetImpl() ? GetImpl()->RefCount() : 0; }
+
+  // Create a non-owning (borrowed) pointer. The caller guarantees the
+  // underlying InternedString outlives this pointer. No ref counting occurs
+  // on copy or destroy. Safe under the reader lock during queries.
+  static InternedStringPtr Borrow(const InternedStringPtr &other) {
+    InternedStringPtr p;
+    p.tagged_ptr_ = reinterpret_cast<uintptr_t>(other.GetImpl()) | kBorrowedBit;
+    return p;
+  }
+
+  // Convert a borrowed pointer to an owning one (increments ref count).
+  // Must be called before the borrowed pointer escapes the reader lock scope.
+  void Materialize() {
+    if (GetImpl() && IsBorrowed()) {
+      GetImpl()->IncrementRefCount();
+      tagged_ptr_ &= ~kBorrowedBit;
+    }
+  }
 
  private:
-  InternedStringPtr(InternedString *impl) : impl_(impl) {}
-  InternedString *impl_{nullptr};
+  static constexpr uintptr_t kBorrowedBit = 1;
+
+  InternedString *GetImpl() const {
+    return reinterpret_cast<InternedString *>(tagged_ptr_ & ~kBorrowedBit);
+  }
+  bool IsBorrowed() const { return tagged_ptr_ & kBorrowedBit; }
+
+  InternedStringPtr(InternedString *impl)
+      : tagged_ptr_(reinterpret_cast<uintptr_t>(impl)) {}
+  uintptr_t tagged_ptr_{0};
   friend class StringInternStore;
 };
 

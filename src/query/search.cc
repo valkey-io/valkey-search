@@ -595,7 +595,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
       fetch_limited = true;
       return false;
     }
-    neighbors.emplace_back(indexes::Neighbor{key, 0.0f});
+    neighbors.emplace_back(
+        indexes::Neighbor{InternedStringPtr::Borrow(key), 0.0f});
     return true;
   };
   // Cannot skip evaluation if the query contains unsolved composed operations.
@@ -628,7 +629,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
           nonvector_results_fetched_limited_count.Increment();
           return neighbors;
         }
-        neighbors.emplace_back(indexes::Neighbor{key, 0.0f});
+        neighbors.emplace_back(
+            indexes::Neighbor{InternedStringPtr::Borrow(key), 0.0f});
         iterator->Next();
         if (parameters.cancellation_token->IsCancelled()) {
           return neighbors;
@@ -807,6 +809,10 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
   size_t total_count = result.size();
   parameters.search_result =
       SearchResult(total_count, std::move(result), parameters);
+  // Materialize borrowed pointers before releasing the reader lock.
+  for (auto &n : parameters.search_result.neighbors) {
+    n.external_id.Materialize();
+  }
   parameters.index_schema->PopulateIndexMutationSequenceNumbers(
       parameters.search_result.neighbors);
   return absl::OkStatus();

@@ -82,18 +82,29 @@ static_assert(sizeof(OutOfLineInternedString) ==
               "OutOfLineInternedString size must match InternedString size");
 
 void InternedString::DecrementRefCount() {
-  // This case happens when erasing the entry in the map, which triggers
-  // a DecrementRefCount with ref_count already at 0. Just return.
-  uint32_t prev = ref_count_.load(std::memory_order_acquire);
-  if (prev == 0) return;
-  // Atomically decrement. For the common case (prev > 1), we're done.
-  prev = ref_count_.fetch_sub(1, std::memory_order_acq_rel);
-  if (prev > 1) return;
-  // We did the 1->0 transition. Undo it and let Destructor handle removal
-  // from the map while holding the global mutex (Release() will re-attempt
-  // the decrement under the lock).
-  ref_count_.fetch_add(1, std::memory_order_relaxed);
-  Destructor();
+  bool completed;
+  // This is the hard case, because we need to ensure that the 1->0
+  // transition is done while holding the global mutex.
+  uint32_t current_value = ref_count_.load(std::memory_order_seq_cst);
+  do {
+    if (current_value == 0) {
+      // This case happens when erasing the entry in the map, which doesn't have
+      // an associated reference count, so we just return.
+      return;
+    }
+    if (current_value == 1) {
+      //
+      // This is the case we care about. Need to remove from map while holding
+      // the lock, Destructor will lock the mutex and then attempt the decrement
+      // again.
+      //
+      Destructor();
+      return;
+    }
+    // Do the real decrement, but if somebody else beat us, try again.
+    completed =
+        ref_count_.compare_exchange_strong(current_value, current_value - 1);
+  } while (!completed);
 }
 
 InternedString* InternedString::Constructor(absl::string_view str,
@@ -170,7 +181,7 @@ bool StringInternStore::Release(InternedString* str) {
   // Now that we have the lock, try our decrement to see if we really
   // want to destroy this entry.
   //
-  auto old_value = str->ref_count_.fetch_sub(1, std::memory_order_acq_rel);
+  auto old_value = str->ref_count_.fetch_sub(1, std::memory_order_seq_cst);
   if (old_value > 1) {
     //
     // Still referenced.

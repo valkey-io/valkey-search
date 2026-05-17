@@ -137,6 +137,7 @@ class MockValkeyModule {
   MOCK_METHOD(int, ScanKey,
               (ValkeyModuleKey * key, ValkeyModuleScanCursor *cursor,
                ValkeyModuleScanKeyCB fn, void *privdata));
+  MOCK_METHOD(size_t, ValueLength, (ValkeyModuleKey * key));
   MOCK_METHOD(ValkeyModuleScanCursor *, ScanCursorCreate, ());
   MOCK_METHOD(void, ScanCursorDestroy, (ValkeyModuleScanCursor * cursor));
   MOCK_METHOD(int, SubscribeToServerEvent,
@@ -739,6 +740,10 @@ inline int TestValkeyModule_ScanKey(ValkeyModuleKey *key,
                                     ValkeyModuleScanCursor *cursor,
                                     ValkeyModuleScanKeyCB fn, void *privdata) {
   return kMockValkeyModule->ScanKey(key, cursor, fn, privdata);
+}
+
+inline size_t TestValkeyModule_ValueLength(ValkeyModuleKey *key) {
+  return kMockValkeyModule->ValueLength(key);
 }
 
 inline ValkeyModuleScanCursor *TestValkeyModule_ScanCursorCreate() {
@@ -1527,6 +1532,7 @@ inline void TestValkeyModule_Init() {
   ValkeyModule_HashGet = &TestValkeyModule_HashGet;
   ValkeyModule_HashSet = &TestValkeyModule_HashSet;
   ValkeyModule_ScanKey = &TestValkeyModule_ScanKey;
+  ValkeyModule_ValueLength = &TestValkeyModule_ValueLength;
   ValkeyModule_ScanCursorCreate = &TestValkeyModule_ScanCursorCreate;
   ValkeyModule_ScanCursorDestroy = &TestValkeyModule_ScanCursorDestroy;
   ValkeyModule_CloseKey = &TestValkeyModule_CloseKey;

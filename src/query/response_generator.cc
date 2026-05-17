@@ -220,7 +220,7 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
   }
   auto key_str = vmsdk::MakeUniqueValkeyString(key);
   auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
-      ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
+      ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEXPIRE | VALKEYMODULE_READ);
   if (!key_obj) {
     return absl::NotFoundError("Key not found");
   }
@@ -315,7 +315,7 @@ absl::StatusOr<RecordsMap> GetContent(
   }
   auto key_str = vmsdk::MakeUniqueValkeyString(key);
   auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
-      ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
+      ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEXPIRE | VALKEYMODULE_READ);
   if (!key_obj) {
     return absl::NotFoundError("Key not found");
   }

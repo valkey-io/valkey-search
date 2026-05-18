@@ -11,6 +11,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_set.h"
@@ -23,6 +24,7 @@
 #include "src/indexes/index_base.h"
 #include "src/query/predicate.h"
 #include "src/rdb_serialization.h"
+#include "src/utils/inlined_priority_queue.h"
 #include "src/utils/patricia_tree.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -87,26 +89,40 @@ class Tag : public IndexBase {
     const InternedStringPtr& operator*() const override;
 
    private:
-    // Reference to the Patricia tree, held so we can construct the
-    // root iterator on demand (only when negation requires it).
+    using SetIter = PatriciaTreeIndex::SetType::const_iterator;
+
+    // A heap entry: current iterator position + end for one node's value set.
+    struct HeapEntry {
+      SetIter current;
+      SetIter end;
+      bool operator>(const HeapEntry& other) const {
+        return *current > *other.current;
+      }
+    };
+
+    static constexpr size_t kInlineCapacity = 8;
+
+    // Reference to the Patricia tree (for negated root iterator).
     const PatriciaTreeIndex& tree_;
 
-    // Full-tree root iterator used exclusively by the negated path.
-    // Only constructed by EnsureNegateRootIter() on first negated
-    // iteration — non-negated queries never create this.
+    // Min-heap of iterators across all matched nodes.
+    InlinedPriorityQueue<HeapEntry, kInlineCapacity> heap_;
+
+    // Current key being yielded.
+    InternedStringPtr current_key_;
+
+    // Negation support.
+    bool negate_;
+    absl::flat_hash_set<PatriciaNodeIndex*>& entries_;
     std::optional<PatriciaTreeIndex::PrefixSubTreeIterator> negate_root_iter_;
 
-    // The set of Patricia nodes matching the query tags. For non-negated
-    // queries, we iterate these directly. For negated queries, these are
-    // the nodes to *exclude* during the full-tree walk.
-    absl::flat_hash_set<PatriciaNodeIndex*>& entries_;
-
-    PatriciaNodeIndex* next_node_{nullptr};
-    InternedStringSet::const_iterator next_iter_;
+    // Untracked keys (iterated after all tracked keys).
     const InternedStringSet& untracked_keys_;
-    bool negate_;
     std::optional<InternedStringSet::const_iterator> untracked_keys_iter_;
-    void NextNegate();
+
+    void InitNonNegate();
+    void InitNegate();
+    void AdvanceToNextUniqueKey();
     void EnsureNegateRootIter();
   };
 

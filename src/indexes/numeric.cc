@@ -13,7 +13,6 @@
 #include <optional>
 #include <string>
 
-#include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -171,7 +170,7 @@ std::unique_ptr<Numeric::EntriesFetcher> Numeric::Search(
 
 bool Numeric::EntriesFetcherIterator::NextKeys(
     const Numeric::EntriesRange& range, BTreeNumericIndex::ConstIterator& iter,
-    std::optional<InternedStringSet::const_iterator>& keys_iter) {
+    std::optional<BTreeNumericIndex::SetType::const_iterator>& keys_iter) {
   while (iter != range.second) {
     if (!keys_iter.has_value()) {
       keys_iter = iter->second.begin();

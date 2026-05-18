@@ -18,9 +18,8 @@
 #include <string>
 #include <utility>
 
+#include "absl/container/btree_set.h"
 #include "absl/container/flat_hash_map.h"
-#include "absl/container/flat_hash_set.h"
-#include "absl/hash/hash.h"
 #include "absl/log/check.h"
 #include "absl/strings/ascii.h"
 #include "absl/strings/match.h"
@@ -28,25 +27,23 @@
 
 namespace valkey_search {
 
-template <typename T, typename Hasher = absl::Hash<T>,
-          typename Equaler = std::equal_to<T>>
+template <typename T, typename Compare = std::less<T>>
 class PatriciaNode {
  public:
   PatriciaNode() = default;
   absl::flat_hash_map<std::string,
-                      std::unique_ptr<PatriciaNode<T, Hasher, Equaler>>>
+                      std::unique_ptr<PatriciaNode<T, Compare>>>
       children;
   int64_t subtree_values_count = 0;
-  std::optional<absl::flat_hash_set<T, Hasher, Equaler>> value;
+  std::optional<absl::btree_set<T, Compare>> value;
   void PrintValue() {}
 };
 
-template <typename T, typename Hasher = absl::Hash<T>,
-          typename Equaler = std::equal_to<T>>
+template <typename T, typename Compare = std::less<T>>
 class PatriciaTree {
  public:
-  using SetType = absl::flat_hash_set<T, Hasher, Equaler>;
-  using PatriciaNodeType = PatriciaNode<T, Hasher, Equaler>;
+  using SetType = absl::btree_set<T, Compare>;
+  using PatriciaNodeType = PatriciaNode<T, Compare>;
   PatriciaTree(bool case_sensitive)
       : root_(std::make_unique<PatriciaNodeType>()),
         case_sensitive_(case_sensitive) {}
@@ -57,7 +54,8 @@ class PatriciaTree {
       node->subtree_values_count++;
       if (remaining_key.empty()) {
         if (!node->value.has_value()) {
-          node->value.emplace(std::move(SetType{value}));
+          node->value.emplace();
+          node->value.value().insert(value);
         } else {
           node->value.value().insert(value);
         }

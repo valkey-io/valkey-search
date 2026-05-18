@@ -259,9 +259,16 @@ Tag::EntriesFetcherIterator::EntriesFetcherIterator(
     absl::flat_hash_set<PatriciaNodeIndex*>& entries,
     const InternedStringSet& untracked_keys, bool negate)
     : tree_(tree),
+      negate_(negate),
       entries_(entries),
-      untracked_keys_(untracked_keys),
-      negate_(negate) {}
+      untracked_keys_(untracked_keys) {
+  if (negate_) {
+    InitNegate();
+  } else {
+    InitNonNegate();
+  }
+  AdvanceToNextUniqueKey();
+}
 
 void Tag::EntriesFetcherIterator::EnsureNegateRootIter() {
   if (!negate_root_iter_.has_value()) {
@@ -269,70 +276,81 @@ void Tag::EntriesFetcherIterator::EnsureNegateRootIter() {
   }
 }
 
-bool Tag::EntriesFetcherIterator::Done() const {
-  if (negate_) {
-    return negate_root_iter_.has_value() && negate_root_iter_->Done() &&
-           (untracked_keys_.empty() ||
-            (untracked_keys_iter_.has_value() &&
-             untracked_keys_iter_.value() == untracked_keys_.end()));
+void Tag::EntriesFetcherIterator::InitNonNegate() {
+  for (auto* node : entries_) {
+    if (node && node->value.has_value() && !node->value.value().empty()) {
+      heap_.push_back_unsorted(
+          HeapEntry{node->value.value().begin(), node->value.value().end()});
+    }
   }
-  return entries_.empty() && next_node_ == nullptr;
+  heap_.heapify();
 }
 
-void Tag::EntriesFetcherIterator::NextNegate() {
+void Tag::EntriesFetcherIterator::InitNegate() {
   EnsureNegateRootIter();
-  if (next_node_) {
-    ++next_iter_;
-    if (next_iter_ != next_node_->value.value().end()) {
-      return;
-    }
-    negate_root_iter_->Next();
-  }
   while (!negate_root_iter_->Done()) {
-    next_node_ = negate_root_iter_->Value();
-    if (next_node_ && !entries_.contains(next_node_) &&
-        next_node_->value.has_value() && !next_node_->value.value().empty()) {
-      next_iter_ = next_node_->value.value().begin();
-      return;
+    auto* node = negate_root_iter_->Value();
+    if (node && !entries_.contains(node) && node->value.has_value() &&
+        !node->value.value().empty()) {
+      heap_.push_back_unsorted(
+          HeapEntry{node->value.value().begin(), node->value.value().end()});
     }
     negate_root_iter_->Next();
   }
-  next_node_ = nullptr;
-  if (!untracked_keys_iter_.has_value()) {
-    untracked_keys_iter_ = untracked_keys_.begin();
-    return;
-  }
-  ++untracked_keys_iter_.value();
+  heap_.heapify();
 }
+
+void Tag::EntriesFetcherIterator::AdvanceToNextUniqueKey() {
+  // Skip duplicates: advance heap past all entries equal to current_key_.
+  while (!heap_.empty()) {
+    const auto& top = heap_.min();
+    if (current_key_ && *top.current == current_key_) {
+      // Duplicate — advance this iterator past it.
+      HeapEntry entry = top;
+      heap_.pop_min();
+      ++entry.current;
+      if (entry.current != entry.end) {
+        heap_.emplace(entry);
+      }
+    } else {
+      // New unique key found.
+      current_key_ = *top.current;
+      return;
+    }
+  }
+  // Heap exhausted — move to untracked keys (negated queries only).
+  if (negate_ && !untracked_keys_.empty()) {
+    if (!untracked_keys_iter_.has_value()) {
+      untracked_keys_iter_ = untracked_keys_.begin();
+    } else {
+      ++untracked_keys_iter_.value();
+    }
+    if (untracked_keys_iter_.value() != untracked_keys_.end()) {
+      current_key_ = *untracked_keys_iter_.value();
+      return;
+    }
+  }
+  current_key_ = {};
+}
+
+bool Tag::EntriesFetcherIterator::Done() const { return !current_key_; }
 
 void Tag::EntriesFetcherIterator::Next() {
-  if (negate_) {
-    NextNegate();
-    return;
-  }
-  if (next_node_) {
-    ++next_iter_;
-    if (next_iter_ != next_node_->value.value().end()) {
-      return;
+  if (!current_key_) return;
+  // Advance all heap entries that are on current_key_.
+  while (!heap_.empty() && *heap_.min().current == current_key_) {
+    HeapEntry entry = heap_.min();
+    heap_.pop_min();
+    ++entry.current;
+    if (entry.current != entry.end) {
+      heap_.emplace(entry);
     }
   }
-  while (!entries_.empty()) {
-    auto itr = entries_.begin();
-    next_node_ = *itr;
-    entries_.erase(itr);
-    if (next_node_->value.has_value() && !next_node_->value.value().empty()) {
-      next_iter_ = next_node_->value.value().begin();
-      return;
-    }
-  }
-  next_node_ = nullptr;
+  AdvanceToNextUniqueKey();
 }
 
 const InternedStringPtr& Tag::EntriesFetcherIterator::operator*() const {
-  if (negate_ && negate_root_iter_.has_value() && negate_root_iter_->Done()) {
-    return *untracked_keys_iter_.value();
-  }
-  return *next_iter_;
+  return current_key_;
 }
 
 // TODO: b/357027854 - Support Suffix/Infix Search
@@ -377,7 +395,6 @@ std::unique_ptr<Tag::EntriesFetcher> Tag::Search(
 std::unique_ptr<EntriesFetcherIteratorBase> Tag::EntriesFetcher::Begin() {
   auto itr = std::make_unique<EntriesFetcherIterator>(tree_, entries_,
                                                       untracked_keys_, negate_);
-  itr->Next();
   return itr;
 }
 

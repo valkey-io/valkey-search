@@ -15,9 +15,8 @@
 
 #include "absl/base/thread_annotations.h"
 #include "absl/container/btree_map.h"
-#include "absl/container/flat_hash_set.h"
+#include "absl/container/btree_set.h"
 #include "absl/functional/any_invocable.h"
-#include "absl/hash/hash.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -32,11 +31,10 @@
 
 namespace valkey_search::indexes {
 
-template <typename T, typename Hasher = absl::Hash<T>,
-          typename Equalizer = std::equal_to<T>>
+template <typename T, typename Compare = std::less<T>>
 class BTreeNumeric {
  public:
-  using SetType = absl::flat_hash_set<T, Hasher, Equalizer>;
+  using SetType = absl::btree_set<T, Compare>;
   using ConstIterator =
       typename absl::btree_map<double, SetType>::const_iterator;
 
@@ -137,13 +135,13 @@ class Numeric : public IndexBase {
     static bool NextKeys(
         const Numeric::EntriesRange& range,
         BTreeNumericIndex::ConstIterator& iter,
-        std::optional<InternedStringSet::const_iterator>& keys_iter);
+        std::optional<BTreeNumericIndex::SetType::const_iterator>& keys_iter);
     const EntriesRange& entries_range_;
     BTreeNumericIndex::ConstIterator entries_iter_;
-    std::optional<InternedStringSet::const_iterator> entry_keys_iter_;
+    std::optional<BTreeNumericIndex::SetType::const_iterator> entry_keys_iter_;
     const std::optional<EntriesRange>& additional_entries_range_;
     BTreeNumericIndex::ConstIterator additional_entries_iter_;
-    std::optional<InternedStringSet::const_iterator>
+    std::optional<BTreeNumericIndex::SetType::const_iterator>
         additional_entry_keys_iter_;
     const InternedStringSet* untracked_keys_;
     std::optional<InternedStringSet::const_iterator> untracked_keys_iter_;

@@ -95,7 +95,7 @@ std::shared_ptr<Client> ClientImpl::MakeInsecureClient(
 
 ClientImpl::ClientImpl(
     vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx,
-    absl::string_view address, std::unique_ptr<Coordinator::Stub> stub)
+    absl::string_view address, std::unique_ptr<Coordinator::StubInterface> stub)
     : detached_ctx_(std::move(detached_ctx)),
       address_(address),
       stub_(std::move(stub)) {}
@@ -166,6 +166,8 @@ void ClientImpl::SearchIndexPartition(
       [args_raw](grpc::Status s) mutable {
         GRPCSuspensionGuard guard(GRPCSuspender::Instance());
         auto args = std::unique_ptr<SearchIndexPartitionArgs>(args_raw);
+        const uint64_t response_bytes =
+            s.ok() ? args->response->ByteSizeLong() : 0;
         args->callback(s, *args->response);
         if (s.ok()) {
           Metrics::GetStats()
@@ -174,7 +176,7 @@ void ClientImpl::SearchIndexPartition(
               .coordinator_client_search_index_partition_success_latency
               .SubmitSample(std::move(args->latency_sample));
           Metrics::GetStats().coordinator_bytes_in.fetch_add(
-              args->response->ByteSizeLong(), std::memory_order_relaxed);
+              response_bytes, std::memory_order_relaxed);
         } else {
           Metrics::GetStats()
               .coordinator_client_search_index_partition_failure_cnt++;
@@ -215,11 +217,13 @@ void ClientImpl::InfoIndexPartition(
         }
         GRPCSuspensionGuard guard(GRPCSuspender::Instance());
         auto args = std::unique_ptr<InfoIndexPartitionArgs>(args_raw);
+        const uint64_t response_bytes =
+            s.ok() ? args->response.ByteSizeLong() : 0;
         args->callback(s, args->response);
         // (Optional) record metrics here
         if (s.ok()) {
           Metrics::GetStats().coordinator_bytes_in.fetch_add(
-              args->response.ByteSizeLong(), std::memory_order_relaxed);
+              response_bytes, std::memory_order_relaxed);
         }
       });
 }

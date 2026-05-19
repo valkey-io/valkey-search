@@ -102,8 +102,11 @@ bool OrProximityIterator::SeekForwardKey(const Key& target_key) {
 }
 
 bool OrProximityIterator::DonePositions() const {
+  CHECK(HasPositions())
+      << "DonePositions() called when HasPositions()=false";
   for (size_t idx : current_key_indices_) {
-    if (!iters_[idx]->DonePositions()) return false;
+    if (iters_[idx]->HasPositions() && !iters_[idx]->DonePositions())
+      return false;
   }
   return true;
 }
@@ -114,7 +117,7 @@ const PositionRange& OrProximityIterator::CurrentPosition() const {
 }
 
 void OrProximityIterator::InsertValidPositionIterator(size_t idx) {
-  if (!iters_[idx]->DonePositions()) {
+  if (iters_[idx]->HasPositions() && !iters_[idx]->DonePositions()) {
     pos_set_.emplace(iters_[idx]->CurrentPosition().start, idx);
   }
 }
@@ -165,7 +168,7 @@ bool OrProximityIterator::SeekForwardPosition(Position target_position) {
   }
   pos_set_.clear();
   for (size_t idx : current_key_indices_) {
-    if (!iters_[idx]->DonePositions()) {
+    if (iters_[idx]->HasPositions() && !iters_[idx]->DonePositions()) {
       // CRITICAL CRASH GUARD:
       // Only call SeekForward if the target is actually ahead.
       if (target_position > iters_[idx]->CurrentPosition().start) {

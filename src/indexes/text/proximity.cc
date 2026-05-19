@@ -176,13 +176,13 @@ bool ProximityIterator::SeekForwardKey(const Key& target_key) {
 }
 
 bool ProximityIterator::DonePositions() const {
-  if (skip_positional_checks_) return true;
-  if (iters_.empty()) return true;
-  // Only children with positions participate. If none have positions, done.
+  CHECK(!skip_positional_checks_)
+      << "DonePositions() called when HasPositions()=false";
+  if (active_pos_indices_.empty()) return true;
   for (size_t idx : active_pos_indices_) {
     if (iters_[idx]->DonePositions()) return true;
   }
-  return active_pos_indices_.empty();
+  return false;
 }
 
 const PositionRange& ProximityIterator::CurrentPosition() const {

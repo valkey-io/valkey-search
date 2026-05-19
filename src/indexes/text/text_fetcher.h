@@ -20,6 +20,7 @@ class TextFetcher : public indexes::EntriesFetcherIteratorBase {
   bool Done() const override;
   const Key& operator*() const override;
   void Next() override;
+  bool SeekForwardKey(const InternedStringPtr& target) override;
 
  private:
   std::unique_ptr<TextIterator> iter_;

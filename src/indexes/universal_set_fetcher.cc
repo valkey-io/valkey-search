@@ -39,4 +39,12 @@ const InternedStringPtr& UniversalSetFetcher::Iterator::operator*() const {
   return current_it_->first;
 }
 
+bool UniversalSetFetcher::Iterator::SeekForwardKey(
+    const InternedStringPtr& target) {
+  while (current_it_ != end_it_ && current_it_->first < target) {
+    ++current_it_;
+  }
+  return current_it_ != end_it_;
+}
+
 }  // namespace valkey_search::indexes

@@ -168,79 +168,99 @@ std::unique_ptr<Numeric::EntriesFetcher> Numeric::Search(
   return std::make_unique<Numeric::EntriesFetcher>(entries_range, size);
 }
 
-bool Numeric::EntriesFetcherIterator::NextKeys(
-    const Numeric::EntriesRange& range, BTreeNumericIndex::ConstIterator& iter,
-    std::optional<BTreeNumericIndex::SetType::const_iterator>& keys_iter) {
-  while (iter != range.second) {
-    if (!keys_iter.has_value()) {
-      keys_iter = iter->second.begin();
-    } else {
-      ++keys_iter.value();
-    }
-    if (keys_iter.value() != iter->second.end()) {
-      return true;
-    }
-    ++iter;
-    keys_iter = std::nullopt;
-  }
-  return false;
-}
-
 Numeric::EntriesFetcherIterator::EntriesFetcherIterator(
     const EntriesRange& entries_range,
     const std::optional<EntriesRange>& additional_entries_range,
     const InternedStringSet* untracked_keys)
-    : entries_range_(entries_range),
-      entries_iter_(entries_range_.first),
-      additional_entries_range_(additional_entries_range),
+    : negate_(additional_entries_range.has_value()),
       untracked_keys_(untracked_keys) {
-  if (additional_entries_range_.has_value()) {
-    additional_entries_iter_ = additional_entries_range_.value().first;
+  InitHeap(entries_range);
+  if (additional_entries_range.has_value()) {
+    InitHeap(additional_entries_range.value());
   }
+  heap_.heapify();
+  AdvanceToNext();
 }
 
-bool Numeric::EntriesFetcherIterator::Done() const {
-  return entries_iter_ == entries_range_.second &&
-         (!additional_entries_range_.has_value() ||
-          additional_entries_iter_ ==
-              additional_entries_range_.value().second) &&
-         (untracked_keys_ == nullptr ||
-          (untracked_keys_iter_.has_value() &&
-           untracked_keys_iter_ == untracked_keys_->end()));
-}
-
-void Numeric::EntriesFetcherIterator::Next() {
-  if (NextKeys(entries_range_, entries_iter_, entry_keys_iter_)) {
-    return;
-  }
-  if (additional_entries_range_.has_value() &&
-      NextKeys(additional_entries_range_.value(), additional_entries_iter_,
-               additional_entry_keys_iter_)) {
-    return;
-  }
-  if (untracked_keys_) {
-    if (untracked_keys_iter_.has_value()) {
-      ++untracked_keys_iter_.value();
-    } else {
-      untracked_keys_iter_ = untracked_keys_->begin();
+void Numeric::EntriesFetcherIterator::InitHeap(const EntriesRange& range) {
+  for (auto it = range.first; it != range.second; ++it) {
+    if (!it->second.empty()) {
+      heap_.push_back_unsorted(
+          HeapEntry{it->second.begin(), it->second.end()});
     }
   }
 }
 
+void Numeric::EntriesFetcherIterator::AdvanceToNext() {
+  // Skip duplicates (same key in multiple numeric buckets is impossible,
+  // but keep pattern consistent).
+  while (!heap_.empty()) {
+    const auto& top = heap_.min();
+    if (current_key_ && *top.current == current_key_) {
+      HeapEntry entry = top;
+      heap_.pop_min();
+      ++entry.current;
+      if (entry.current != entry.end) {
+        heap_.emplace(entry);
+      }
+    } else {
+      current_key_ = *top.current;
+      return;
+    }
+  }
+  // Heap exhausted — untracked keys for negate only.
+  if (negate_ && untracked_keys_ && !untracked_keys_->empty()) {
+    if (!untracked_keys_iter_.has_value()) {
+      untracked_keys_iter_ = untracked_keys_->begin();
+    } else {
+      ++untracked_keys_iter_.value();
+    }
+    if (untracked_keys_iter_.value() != untracked_keys_->end()) {
+      current_key_ = *untracked_keys_iter_.value();
+      return;
+    }
+  }
+  current_key_ = {};
+}
+
+bool Numeric::EntriesFetcherIterator::Done() const { return !current_key_; }
+
+void Numeric::EntriesFetcherIterator::Next() {
+  if (!current_key_) return;
+  // Advance all heap entries on current_key_.
+  while (!heap_.empty() && *heap_.min().current == current_key_) {
+    HeapEntry entry = heap_.min();
+    heap_.pop_min();
+    ++entry.current;
+    if (entry.current != entry.end) {
+      heap_.emplace(entry);
+    }
+  }
+  AdvanceToNext();
+}
+
 const InternedStringPtr& Numeric::EntriesFetcherIterator::operator*() const {
-  if (entries_iter_ != entries_range_.second) {
-    DCHECK(entry_keys_iter_ != entries_iter_->second.end());
-    return *entry_keys_iter_.value();
+  return current_key_;
+}
+
+bool Numeric::EntriesFetcherIterator::SeekForwardKey(
+    const InternedStringPtr& target) {
+  if (!current_key_) return false;
+  if (current_key_ >= target) return true;
+  // Drain heap entries behind target.
+  while (!heap_.empty() && *heap_.min().current < target) {
+    HeapEntry entry = heap_.min();
+    heap_.pop_min();
+    while (entry.current != entry.end && *entry.current < target) {
+      ++entry.current;
+    }
+    if (entry.current != entry.end) {
+      heap_.emplace(entry);
+    }
   }
-  if (additional_entries_range_.has_value() &&
-      additional_entries_iter_ != additional_entries_range_.value().second) {
-    DCHECK(additional_entry_keys_iter_ !=
-           additional_entries_iter_->second.end());
-    return *additional_entry_keys_iter_.value();
-  }
-  DCHECK(untracked_keys_ && untracked_keys_iter_.has_value() &&
-         untracked_keys_iter_ != untracked_keys_->end());
-  return *untracked_keys_iter_.value();
+  current_key_ = {};
+  AdvanceToNext();
+  return !Done();
 }
 
 size_t Numeric::EntriesFetcher::Size() const { return size_; }
@@ -248,7 +268,6 @@ size_t Numeric::EntriesFetcher::Size() const { return size_; }
 std::unique_ptr<EntriesFetcherIteratorBase> Numeric::EntriesFetcher::Begin() {
   auto itr = std::make_unique<EntriesFetcherIterator>(
       entries_range_, additional_entries_range_, untracked_keys_);
-  itr->Next();
   return itr;
 }
 

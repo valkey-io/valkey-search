@@ -87,6 +87,7 @@ class Tag : public IndexBase {
     bool Done() const override;
     void Next() override;
     const InternedStringPtr& operator*() const override;
+    bool SeekForwardKey(const InternedStringPtr& target) override;
 
    private:
     using SetIter = PatriciaTreeIndex::SetType::const_iterator;

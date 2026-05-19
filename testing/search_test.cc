@@ -83,6 +83,10 @@ class TestedNumericEntriesFetcherIterator
   bool Done() const override { return it_ == keys_.end(); }
   void Next() override { ++it_; }
   const InternedStringPtr &operator*() const override { return *it_; }
+  bool SeekForwardKey(const InternedStringPtr &target) override {
+    while (it_ != keys_.end() && *it_ < target) ++it_;
+    return it_ != keys_.end();
+  }
 
  private:
   std::vector<InternedStringPtr> keys_;

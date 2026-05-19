@@ -353,6 +353,26 @@ const InternedStringPtr& Tag::EntriesFetcherIterator::operator*() const {
   return current_key_;
 }
 
+bool Tag::EntriesFetcherIterator::SeekForwardKey(
+    const InternedStringPtr& target) {
+  if (!current_key_) return false;
+  if (current_key_ >= target) return true;
+  // Drain heap entries behind target.
+  while (!heap_.empty() && *heap_.min().current < target) {
+    HeapEntry entry = heap_.min();
+    heap_.pop_min();
+    while (entry.current != entry.end && *entry.current < target) {
+      ++entry.current;
+    }
+    if (entry.current != entry.end) {
+      heap_.emplace(entry);
+    }
+  }
+  current_key_ = {};
+  AdvanceToNextUniqueKey();
+  return !Done();
+}
+
 // TODO: b/357027854 - Support Suffix/Infix Search
 std::unique_ptr<Tag::EntriesFetcher> Tag::Search(
     const query::TagPredicate& predicate, bool negate) const {

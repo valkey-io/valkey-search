@@ -30,6 +30,7 @@ class UniversalSetFetcher : public EntriesFetcherBase {
     bool Done() const override;
     void Next() override;
     const InternedStringPtr& operator*() const override;
+    bool SeekForwardKey(const InternedStringPtr& target) override;
 
    private:
     IndexSchema::IndexKeyInfoMap::const_iterator current_it_;

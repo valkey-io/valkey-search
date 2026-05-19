@@ -85,6 +85,8 @@ class EntriesFetcherIteratorBase {
   virtual bool Done() const = 0;
   virtual void Next() = 0;
   virtual const InternedStringPtr& operator*() const = 0;
+  // Advance to the first key >= target. Returns true if such a key exists.
+  virtual bool SeekForwardKey(const InternedStringPtr& target) = 0;
   virtual ~EntriesFetcherIteratorBase() = default;
 };
 

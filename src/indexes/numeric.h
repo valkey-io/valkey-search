@@ -25,6 +25,7 @@
 #include "src/indexes/index_base.h"
 #include "src/query/predicate.h"
 #include "src/rdb_serialization.h"
+#include "src/utils/inlined_priority_queue.h"
 #include "src/utils/segment_tree.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -130,21 +131,26 @@ class Numeric : public IndexBase {
     bool Done() const override;
     void Next() override;
     const InternedStringPtr& operator*() const override;
+    bool SeekForwardKey(const InternedStringPtr& target) override;
 
    private:
-    static bool NextKeys(
-        const Numeric::EntriesRange& range,
-        BTreeNumericIndex::ConstIterator& iter,
-        std::optional<BTreeNumericIndex::SetType::const_iterator>& keys_iter);
-    const EntriesRange& entries_range_;
-    BTreeNumericIndex::ConstIterator entries_iter_;
-    std::optional<BTreeNumericIndex::SetType::const_iterator> entry_keys_iter_;
-    const std::optional<EntriesRange>& additional_entries_range_;
-    BTreeNumericIndex::ConstIterator additional_entries_iter_;
-    std::optional<BTreeNumericIndex::SetType::const_iterator>
-        additional_entry_keys_iter_;
+    using SetIter = BTreeNumericIndex::SetType::const_iterator;
+    struct HeapEntry {
+      SetIter current;
+      SetIter end;
+      bool operator>(const HeapEntry& other) const {
+        return *current > *other.current;
+      }
+    };
+
+    InlinedPriorityQueue<HeapEntry, 16> heap_;
+    InternedStringPtr current_key_;
+    bool negate_;
     const InternedStringSet* untracked_keys_;
     std::optional<InternedStringSet::const_iterator> untracked_keys_iter_;
+
+    void InitHeap(const EntriesRange& range);
+    void AdvanceToNext();
   };
 
   class EntriesFetcher : public EntriesFetcherBase {

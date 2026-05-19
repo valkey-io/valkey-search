@@ -188,7 +188,8 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
   return true;
 }
 
-void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
+TextIndexSchema::CommitResult TextIndexSchema::CommitKeyData(
+    const InternedStringPtr &key) {
   // Retrieve the key's staged data
   TokenPositions token_positions;
   {
@@ -196,7 +197,7 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
     auto node = in_progress_key_updates_.extract(key);
     // Exit early if the key contains no new text updates
     if (node.empty()) {
-      return;
+      return {};
     }
     token_positions = std::move(node.mapped());
   }
@@ -213,6 +214,10 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
 
   TextIndex key_index{with_suffix_trie_};
 
+  // Accumulate document length (total term frequency for this key)
+  uint32_t doc_len = 0;
+  uint32_t norm = 0;
+
   // Index the key's tokens
   for (auto &entry : token_positions) {
     const std::string &token = entry.first;
@@ -225,9 +230,14 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
 
     // Update metadata from PositionMap
     metadata_.total_positions += pos_map.size();
+    uint32_t token_freq = 0;
     for (const auto &[_, field_mask] : pos_map) {
-      metadata_.total_term_frequency += field_mask.CountSetFields();
+      uint32_t fields_count = field_mask.CountSetFields();
+      metadata_.total_term_frequency += fields_count;
+      token_freq += fields_count;
+      doc_len += fields_count;
     }
+    norm = std::max(norm, token_freq);
 
     // Create FlatPositionMap from PositionMap
     FlatPositionMap *flat_map =
@@ -284,6 +294,10 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
     std::lock_guard<std::mutex> per_key_guard(per_key_text_indexes_mutex_);
     per_key_text_indexes_.emplace(key, std::move(key_index));
   }
+
+  // Update total document length for avg_doc_len computation
+  metadata_.total_doc_len += doc_len;
+  return {doc_len, norm};
 }
 
 void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {

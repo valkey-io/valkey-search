@@ -69,7 +69,7 @@ void Postings::RemoveKey(const Key& key, TextIndexMetadata* metadata) {
 
   // Use member functions to get counts
   size_t position_count = flat_map->CountPositions();
-  size_t term_frequency = flat_map->CountTermFrequency();
+  size_t term_frequency = flat_map->GetTermFrequency();
 
   metadata->total_positions -= position_count;
   metadata->total_term_frequency -= term_frequency;
@@ -94,7 +94,7 @@ size_t Postings::GetPositionCount() const {
 size_t Postings::GetTotalTermFrequency() const {
   size_t total_frequency = 0;
   for (const auto& [key, flat_map] : key_to_positions_) {
-    total_frequency += flat_map->CountTermFrequency();
+    total_frequency += flat_map->GetTermFrequency();
   }
   return total_frequency;
 }

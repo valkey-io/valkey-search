@@ -641,6 +641,12 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
                                       MutatedAttributes &mutated_attributes,
                                       const Key &key) {
   if (text_index_schema_) {
+    // Decrement total_doc_len by the old document length before deleting
+    auto old_info_itr = index_key_info_.find(key);
+    if (old_info_itr != index_key_info_.end()) {
+      text_index_schema_->GetMetadata().total_doc_len -=
+          old_info_itr->second.doc_len;
+    }
     // Always clean up indexed words from all text attributes of the key up
     // front
     text_index_schema_->DeleteKeyData(key);
@@ -668,7 +674,11 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
   if (text_index_schema_) {
     // Text index structures operate at the schema-level so we commit the
     // updates to all Text attributes in one operation for efficiency
-    text_index_schema_->CommitKeyData(key);
+    auto result = text_index_schema_->CommitKeyData(key);
+    if (!all_deletes) {
+      index_key_info_[key].doc_len = result.doc_len;
+      index_key_info_[key].norm = result.norm;
+    }
   }
 }
 

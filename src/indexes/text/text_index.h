@@ -47,6 +47,8 @@ struct TextIndexMetadata {
   std::atomic<uint64_t> total_positions{0};
   std::atomic<uint64_t> num_unique_terms{0};
   std::atomic<uint64_t> total_term_frequency{0};
+  std::atomic<uint64_t> total_doc_len{
+      0};  // Sum of all doc_lens for avg_doc_len
 
   // Memory pools for text index components
   MemoryPool posting_memory_pool_{0};
@@ -96,7 +98,13 @@ class TextIndexSchema {
                                           absl::string_view data,
                                           size_t text_field_number, bool stem,
                                           bool suffix);
-  void CommitKeyData(const InternedStringPtr &key);
+  // Commits staged key data into the text index structures.
+  // Returns the document length and norm (max term frequency).
+  struct CommitResult {
+    uint32_t doc_len{0};
+    uint32_t norm{0};
+  };
+  CommitResult CommitKeyData(const InternedStringPtr &key);
   void DeleteKeyData(const InternedStringPtr &key);
 
   uint8_t AllocateTextFieldNumber() { return num_text_fields_++; }

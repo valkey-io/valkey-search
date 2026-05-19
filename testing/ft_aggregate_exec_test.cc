@@ -1029,5 +1029,43 @@ TEST_F(AggregateExecTest, QuantileStringNumericValueTest) {
   EXPECT_NEAR(result, 2.0, 1.0);
 }
 
+// Regression test for the Compress() zombie-parent bug.
+// Before the fix, each Compress() pass deleted at most one sample because
+// merged (g==0) samples were used as merge targets, reviving them.  After the
+// fix, a single pass must delete all consecutively-mergeable samples.
+TEST_F(AggregateExecTest, CompressBoundedSampleCount) {
+  std::cerr << "CompressBoundedSampleCount\n";
+
+  // Insert enough values to trigger many Flush()+Compress() cycles.
+  // With EPSILON=0.01 the GK bound is O((1/ε)·log(ε·N)) ≈ 700 samples for
+  // N=100 000.  The buggy implementation retained ~N samples; the fixed one
+  // must stay well below N.
+  const size_t kN = 100000;
+  // kDefaultBufferSize is 500; each flush triggers a compress.
+  // We drive inserts through the public ProcessRecord path via Execute().
+  // To keep the test self-contained we use a large single group.
+  RecordSet records(nullptr);
+  for (size_t i = 0; i < kN; ++i) {
+    auto rec = std::make_unique<Record>(2);
+    rec->fields_[0] = expr::Value(static_cast<double>(i));
+    rec->fields_[1] = expr::Value(1.0);  // single group key
+    records.emplace_back(std::move(rec));
+  }
+
+  auto param = MakeStages("groupby 1 @n2 reduce quantile 2 @n1 0.5");
+  EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+  EXPECT_EQ(records.size(), 1);
+  auto record = records.pop_front();
+
+  // The median of [0, N) is N/2.  Allow 1% relative error (EPSILON).
+  ASSERT_TRUE(record->fields_.at(2).IsDouble());
+  double result = *(record->fields_.at(2).AsDouble());
+  double expected = static_cast<double>(kN) / 2.0;
+  EXPECT_NEAR(result, expected, expected * 0.01)
+      << "Median of [0," << kN << ") should be within 1% of " << expected;
+
+  std::cerr << "CompressBoundedSampleCount passed, median=" << result << "\n";
+}
+
 }  // namespace aggregate
 }  // namespace valkey_search

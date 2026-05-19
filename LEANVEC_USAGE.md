@@ -8,27 +8,35 @@ often higher recall for high-dim embeddings (≥ 768d) than per-vector
 quantizers like LVQ.
 
 This guide covers (1) creating a LeanVec index, (2) verifying it
-trained correctly, and (3) benchmarking it head-to-head against HNSW
-and LVQ4X8 on the Cohere 1M dataset.
+trained correctly, and (3) recipes for benchmarking it. It is
+self-contained — no external scripts or files are required to follow
+the examples.
 
 ---
 
 ## 1. Prereqs
 
-- valkey-search-svs built on the `leanvec-support` branch (or any
-  branch that includes commit `48f6390`).
-- valkey-server running with the freshly-built `libsearch.so`.
-- Python deps: `redis numpy pyarrow polars`.
-
-Quick build + start:
+You need a `valkey-search` build that includes the LeanVec changes
+(this branch). Standard build flow:
 
 ```bash
-cd /home/ubuntu/projects/cee-valkey-svs
-ninja -C valkey-search-svs/.build-release libsearch.so
-LD_LIBRARY_PATH=$(pwd)/ScalableVectorSearch/bindings/cpp/build:$LD_LIBRARY_PATH \
-  valkey/src/valkey-server \
-  --loadmodule valkey-search-svs/.build-release/libsearch.so \
-  --port 6399 --daemonize yes --logfile /tmp/valkey.log
+# From the valkey-search repo root, with submodules / FetchContent populated:
+cmake -S . -B .build-release -DCMAKE_BUILD_TYPE=Release \
+      -DENABLE_SVS=ON -G Ninja
+ninja -C .build-release libsearch.so
+```
+
+Then start a `valkey-server` with `libsearch.so` loaded as a module
+and `libsvs_runtime.so` on the library path. The exact invocation
+depends on your environment; the only LeanVec-specific concern is
+that you're running a `libsearch.so` built from this branch.
+
+Verify the binary contains the expected symbol:
+
+```bash
+nm -DC .build-release/libsearch.so | grep -i TrainAndBuildLeanVec
+# expect:
+# ... W valkey_search::indexes::VectorSVS<float>::TrainAndBuildLeanVecIndex()
 ```
 
 ---
@@ -36,18 +44,22 @@ LD_LIBRARY_PATH=$(pwd)/ScalableVectorSearch/bindings/cpp/build:$LD_LIBRARY_PATH 
 ## 2. Creating a LeanVec index
 
 LeanVec adds three new compression types to the existing SVS
-`COMPRESSION` enum: `LEANVEC4X4`, `LEANVEC4X8`, `LEANVEC8X8`.
-The trailing digits mean (primary bits)X(secondary bits) — `LEANVEC4X8`
-uses 4-bit primary and 8-bit secondary representations.
+`COMPRESSION` enum:
+
+| Compression | Primary bits | Secondary (rerank) bits |
+|---|---|---|
+| `LEANVEC4X4` | 4 | 4 |
+| `LEANVEC4X8` | 4 | 8 |
+| `LEANVEC8X8` | 8 | 8 |
 
 Two new keywords are required when compression is one of `LEANVEC*`:
 
 | Keyword | Required? | Default | Meaning |
 |---|---|---|---|
-| `LEANVEC_DIMS <N>` | **yes** | — | Target reduced dimensionality. Must be < DIM. Typical: DIM/4 (e.g., 192 for 768-d). |
+| `LEANVEC_DIMS <N>` | **yes** | — | Target reduced dimensionality. Must be < `DIM`. Typical: `DIM / 4` (e.g., 192 for 768-d). |
 | `LEANVEC_TRAINING_THRESHOLD <N>` | optional | 10000 | Number of vectors to buffer before training matrices and constructing the index. |
 
-### Example: Cohere-style 768-d index with LEANVEC4X8
+### Example: 768-d index with LEANVEC4X8
 
 ```
 FT.CREATE myidx ON HASH PREFIX 1 doc: SCHEMA
@@ -61,7 +73,7 @@ FT.CREATE myidx ON HASH PREFIX 1 doc: SCHEMA
 ```
 
 The `12` after `SVS` is the count of args that follow (6 key-value
-pairs × 2 = 12). If you change the keyword set, update this number.
+pairs × 2 = 12). If you change the keyword set, update this count.
 
 ### Common errors at creation time
 
@@ -124,6 +136,9 @@ algorithm
 
 This is expected. Insert more vectors until the threshold is crossed.
 
+`Remove` and `Modify` return the same `FailedPreconditionError` while
+the index is in `state=training`. Wait until `state=ready` to mutate.
+
 ### Server log signposts
 
 Tailing the server log shows the full transition:
@@ -138,121 +153,144 @@ LeanVec index ready. Trained on 10000 vectors, ingested 10000 vectors. State=rea
 
 ## 4. Benchmarking LeanVec
 
-The benchmark scripts in this repo support all four algorithms head-to-head
-on the Cohere 1M dataset. To benchmark **only** LeanVec:
+You will use your own loader, tuner, and search-perf framework
+(VectorDBBench, ann-benchmarks, an internal harness, etc.). The
+notes below are LeanVec-specific gotchas to plug into whatever you
+already have.
 
-### Quick single-run benchmark (15 min)
+### 4.1 Loading the dataset
 
-```bash
-cd /home/ubuntu/projects/cee-valkey-svs
+Two things to be aware of when loading vectors into a LeanVec index:
 
-# 1. (Once per VM) acquire dataset — see SKILLS.md Step 2
-ls /tmp/vectordb_bench/dataset/cohere/cohere_medium_1m/shuffle_train.parquet \
-  || (echo "Run SKILLS.md Step 2 first" && exit 1)
+1. **Avoid Redis pipelining for the first 10K vectors.** SVS's
+   per-buffer flush is synchronous on the Redis main thread; pipelined
+   HSETs can deadlock when a flush takes seconds while the client has
+   N pipelined commands awaiting responses. Insert one HSET at a time
+   (each `r.hset(...)` waits for its response) at least until the
+   threshold is crossed. After `state=ready`, larger batches behave
+   normally because the per-flush latency is bounded.
 
-# 2. Start a clean server
-pkill -9 valkey-server 2>/dev/null; sleep 2
-LD_LIBRARY_PATH=$(pwd)/ScalableVectorSearch/bindings/cpp/build:$LD_LIBRARY_PATH \
-  valkey/src/valkey-server \
-  --loadmodule valkey-search-svs/.build-release/libsearch.so \
-  --port 6399 --daemonize yes --logfile /tmp/valkey.log
-sleep 2
+2. **Don't try to search before `state=ready`.** Your loader can keep
+   ingesting; just gate the benchmark phase on
+   `FT.INFO myidx | <find state field> == "ready"` (or simpler:
+   poll until `FT.SEARCH` stops returning the `Index is training`
+   error).
 
-# 3. Load Cohere 1M into a LeanVec index
-python3 load_cohere_simple.py \
-  --algorithm svs \
-  --compression LEANVEC4X8 \
-  --leanvec-dims 192 \
-  --flush-db
+A minimal loader pattern (Python, `redis-py`):
 
-# 4. Tune SEARCH_WINDOW_SIZE to ~95% recall
-python3 tune_recall.py --algorithm svs --num-queries 200
+```python
+import redis, numpy as np
 
-# 5. Pick the SWS from the table that's closest to 0.95 recall, then:
-python3 -m vectordb_bench.cli.vectordbbench valkeysearchsvs \
-  --host localhost --port 6399 \
-  --case-type Performance768D1M \
-  --graph-max-degree 64 --construction-window-size 128 \
-  --search-window-size <SWS> --alpha 1.0 \
-  --skip-load
+r = redis.Redis(host="localhost", port=6379, decode_responses=False)
+
+# Create index (LEANVEC4X8, dims=192)
+r.execute_command(
+    "FT.CREATE", "myidx", "ON", "HASH", "PREFIX", "1", "doc:",
+    "SCHEMA", "vec", "VECTOR", "SVS", "12",
+    "TYPE", "FLOAT32",
+    "DIM", "768",
+    "DISTANCE_METRIC", "COSINE",
+    "COMPRESSION", "LEANVEC4X8",
+    "LEANVEC_DIMS", "192",
+    "LEANVEC_TRAINING_THRESHOLD", "10000",
+)
+
+# Insert non-pipelined
+for i, v in enumerate(your_vectors):  # v: np.ndarray[float32, 768]
+    r.hset(f"doc:{i}", mapping={"vec": v.astype(np.float32).tobytes()})
 ```
 
-**Heads-up**: in our 2026-05-19 runs, LeanVec needed `SWS=500`
-(the sweep maximum) to reach ~95% recall, while LVQ4X8 hit it at
-`SWS=150`. If `tune_recall.py` shows recall still climbing at SWS=500,
-edit the sweep range in the script (line ~83) to add larger values
-([600, 800, 1000]) before picking.
+### 4.2 Tuning `SEARCH_WINDOW_SIZE`
 
-### Full 4-way comparison (~80 min)
+LeanVec uses a low-dimensional projected primary representation for
+graph traversal and full-precision rerank for the final top-K. The
+lossier primary search means **the search window must be wider than
+LVQ for comparable recall**.
 
-For the apples-to-apples HNSW vs SVS-NONE vs LVQ4X8 vs LEANVEC4X8 run:
+In practice, on a 768-d → 192-d LeanVec4X8 index hitting ~95% recall
+on a 1M-vector benchmark, `SEARCH_WINDOW_SIZE` typically lands
+**substantially higher than for LVQ4X8**. If your tuner sweeps
+`[50, 100, 150, 200, 250, 300, 400, 500]` and recall is still climbing
+at 500, extend the sweep upward (600, 800, 1000). Don't conclude
+LeanVec hit a recall ceiling without first widening the window.
 
-```bash
-bash VectorDBBench/run_all_benchmarks.sh 2>&1 | tee /tmp/run_4way.log
-python3 VectorDBBench/extract_4way_report.py
+You can override `SEARCH_WINDOW_SIZE` per-query at search time
+(no rebuild needed), e.g.:
+
+```
+FT.SEARCH myidx "*=>[KNN 100 @vec $q SEARCH_WINDOW_SIZE 500]" \
+  PARAMS 2 q <bytes> DIALECT 2
 ```
 
-The report writer produces a markdown summary table with recall, NDCG,
-peak QPS, P99 latency, load time, and **VmRSS at end of load + after
-benchmark** for each of the four algorithms.
+### 4.3 Measuring memory
 
-The runner script (`run_all_benchmarks.sh`), report generator
-(`extract_4way_report.py`), and complete runbook (`SKILLS.md`,
-`VECTORDBBENCH_SVS_BENCHMARK_RESULTS.md`) live one directory up at
-`/home/ubuntu/projects/cee-valkey-svs/` — outside this repo.
+`VmRSS` from `/proc/<pid>/status` is the right number to track. SVS
+allocates much of its working set via `mmap` (not the Valkey
+allocator), so `INFO memory used_memory` undercounts SVS by a large
+margin. Sample twice — once after load completes (and any auto-flush
+finishes), and once after the search workload — to capture both the
+steady-state index footprint and any search-time scratch growth.
+
+```bash
+PID=$(pgrep -f 'valkey-server.*:6379' | head -1)
+awk '/^VmRSS:/{print $2" kB"}' /proc/$PID/status
+```
+
+### 4.4 What to compare against
+
+Useful baselines on the same hardware and dataset:
+
+- **HNSW** at the same target recall — represents the algorithmic
+  alternative.
+- **SVS with no compression** (drop the `COMPRESSION` keyword) — shows
+  the per-vector cost of the FP32 SVS baseline before compression.
+- **SVS LVQ4X8** — the other compressed SVS variant. Typically faster
+  per query than LeanVec but with a different recall/memory profile.
+
+Tuning each algorithm to the **same target recall** (e.g., 95%) before
+comparing QPS / latency / RSS is the apples-to-apples way to read the
+results.
 
 ---
 
-## 5. Reference: existing 4-way result (Cohere 1M, 768d, COSINE)
-
-Run completed 2026-05-19, m7i.2xlarge:
-
-| Algorithm | Recall@100 | Peak QPS | P99 Latency | VmRSS (after load) | Tuned SWS/EF |
-|---|---|---|---|---|---|
-| HNSW M=32 | 94.24% | 303 | 4.70 ms | 7.36 GiB | EF=150 |
-| SVS NONE (FP32) | 94.29% | 346 | 3.90 ms | 13.49 GiB | SWS=150 |
-| SVS LVQ4X8 | 93.99% | 480 | 2.90 ms | 11.72 GiB | SWS=150 |
-| **SVS LEANVEC4X8 (dims=192)** | **94.68%** | 358 | 3.40 ms | **11.48 GiB** | SWS=500 |
-
-Full discussion (per-algorithm sections, methodology, observations) is
-in `/home/ubuntu/projects/cee-valkey-svs/VECTORDBBENCH_SVS_BENCHMARK_RESULTS.md`
-under "4-Way Comparison: HNSW vs SVS Variants (2026-05-19)".
-
----
-
-## 6. FAQ
+## 5. FAQ
 
 **Q: How do I pick `LEANVEC_DIMS`?**
-Common rule of thumb: `DIM / 4`. For 768-d Cohere we used 192. Smaller
-values save more memory but lose recall. Larger values approach LVQ in
-both memory and recall. For your data, sweep [DIM/8, DIM/4, DIM/2] at
-fixed SWS to find the recall plateau.
+Common rule of thumb: `DIM / 4`. For 768-d embeddings that's 192.
+Smaller values save more memory but lose recall. Larger values approach
+LVQ-like memory and recall behavior. For your own data, sweep
+`[DIM/8, DIM/4, DIM/2]` at fixed `SEARCH_WINDOW_SIZE` to find the
+recall plateau.
 
 **Q: When can I start querying?**
-Once `FT.INFO` shows `state=ready` (after the 10,000th HSET by default).
-Before that, `FT.SEARCH` errors with the training-state message above.
-There's no async polling API — just retry on the error.
+Once `FT.INFO` shows `state=ready` (after the
+`LEANVEC_TRAINING_THRESHOLD`-th HSET). Before that, `FT.SEARCH` errors
+with the training-state message. There's no async ready-notification
+API — just retry on the error or poll `FT.INFO`.
 
 **Q: Can I change `LEANVEC_DIMS` after creation?**
-No. The matrices are computed once and frozen with the index. To change
-it, drop and recreate.
+No. The projection matrices are computed once at the threshold and
+frozen with the index. To change it, drop and recreate.
 
 **Q: What if I have fewer than 10,000 vectors total?**
-Lower `LEANVEC_TRAINING_THRESHOLD` to your dataset size. There's a
-correctness floor — training on too few vectors produces poor
-projection matrices — but for development/testing values as low as
-100-1000 are fine.
+Lower `LEANVEC_TRAINING_THRESHOLD` to your dataset size. There is a
+quality floor — training on very few vectors produces poor projection
+matrices — but for development and testing values as low as 100-1000
+are fine.
 
 **Q: Does it persist across server restarts?**
-RDB persistence is **not yet implemented** for any SVS index (returns
-`UnimplementedError` on save/load). The index must be rebuilt on
-restart — this includes retraining LeanVec matrices.
+RDB persistence is **not yet implemented** for any SVS index (the save
+path returns `UnimplementedError`). The index must be rebuilt on
+restart, including retraining LeanVec matrices.
 
 **Q: How do I delete vectors during staging?**
-You can't. `Remove`/`Modify` return `FailedPreconditionError` while the
-index is in `state=training`. Insert until threshold; then use as normal.
+You can't. `Remove` and `Modify` return `FailedPreconditionError` while
+the index is in `state=training`. Insert until threshold, then use as
+normal.
 
 **Q: Where's the source for the train-then-build flow?**
 `src/indexes/vector_svs.cc` — function `TrainAndBuildLeanVecIndex()`.
-The train→build→add sequence matches SVS's own runtime test
-(SVS's `bindings/cpp/tests/runtime_test.cpp:342-365`).
+The train → build → add sequence matches what the SVS runtime's own
+C++ test does (in the SVS source tree:
+`bindings/cpp/tests/runtime_test.cpp`, around the
+`DynamicVamanaIndexLeanVec::build` call site).

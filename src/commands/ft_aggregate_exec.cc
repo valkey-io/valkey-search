@@ -418,6 +418,9 @@ class Quantile : public GroupBy::ReducerInstance {
   // Compress samples to maintain space bounds.
   // Walks backward from the second-to-last sample so that merges
   // propagate toward the tail where error bounds are largest.
+  // parent_idx tracks the nearest live (non-merged) sample to the right of
+  // the current position, preventing merged (g==0) zombie samples from being
+  // used as merge targets and silently absorbing subsequent merges.
   void Compress() const {
     if (samples_.size() < 2) return;
 
@@ -425,18 +428,23 @@ class Quantile : public GroupBy::ReducerInstance {
     double r =
         static_cast<double>(n_) - 1.0 - static_cast<double>(samples_.back().g);
 
-    // Walk backward from second-to-last to first
+    // Walk backward from second-to-last to first, always merging into the
+    // nearest live parent to the right.
+    size_t parent_idx = samples_.size() - 1;
     for (int i = static_cast<int>(samples_.size()) - 2; i >= 0; --i) {
       Sample& curr = samples_[i];
-      Sample& parent = samples_[i + 1];
+      Sample& parent = samples_[parent_idx];
       double g_curr = curr.g;
 
       if (curr.g + parent.g + parent.delta <=
           static_cast<size_t>(GetMaxVal(r))) {
-        // Merge curr into parent
+        // Merge curr into parent; parent_idx stays — keep accumulating into
+        // the same live sample.
         parent.g += curr.g;
-        // Mark for removal by setting g to 0
         curr.g = 0;
+      } else {
+        // curr survives; it becomes the new live parent for i-1.
+        parent_idx = static_cast<size_t>(i);
       }
       r -= g_curr;
     }

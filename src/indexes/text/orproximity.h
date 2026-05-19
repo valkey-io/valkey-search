@@ -47,6 +47,7 @@ class OrProximityIterator : public TextIterator {
   bool NextPosition() override;
   bool SeekForwardPosition(Position target_position) override;
   FieldMaskPredicate CurrentFieldMask() const override;
+  bool HasPositions() const override { return true; }
   bool IsIteratorValid() const override;
 
  private:

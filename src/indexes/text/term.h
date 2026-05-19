@@ -60,6 +60,7 @@ class TermIterator : public TextIterator {
   FieldMaskPredicate CurrentFieldMask() const override;
   // Returns true if iterator is at a valid state with current key, position,
   // and field.
+  bool HasPositions() const override { return require_positions_; }
   bool IsIteratorValid() const override {
     if (require_positions_) {
       return current_key_ && current_position_.has_value() &&

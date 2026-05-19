@@ -161,34 +161,6 @@ inline PredicateType EvaluateAsComposedPredicate(
 
 // Helper fn to identify if query is not fully solved after the entries fetcher
 // search, meaning it requires prefilter evaluation Prefiltering is needed when
-// query contains an AND with numeric or tag predicates.
-// It is also needed when negate is involved.
-inline bool IsUnsolvedQuery(QueryOperations query_operations,
-                            bool is_match_all) {
-  if (is_match_all) {
-    return false;
-  }
-  return query_operations & (QueryOperations::kContainsNumeric |
-                             QueryOperations::kContainsTag) &&
-             query_operations & QueryOperations::kContainsAnd ||
-         (query_operations & QueryOperations::kContainsNegate);
-}
-
-// Helper fn to identify if deduplication is needed.
-// (1) OR operations need deduplication.
-// (2) Any TAG operations need deduplication.
-// (3) Non-text negation needs deduplication (uses NegateEntriesFetcher)
-inline bool NeedsDeduplication(QueryOperations query_operations) {
-  bool has_or = query_operations & QueryOperations::kContainsOr;
-  bool has_tag = query_operations & QueryOperations::kContainsTag;
-  bool has_negate = query_operations & QueryOperations::kContainsNegate;
-  bool has_text = query_operations & QueryOperations::kContainsText;
-  // Text + negate doesn't need dedup (handled by prefilter evaluation)
-  if (has_text && has_negate) {
-    return false;
-  }
-  return has_or || has_tag || has_negate;
-}
 
 // Builds TextIterator for text predicates. Returns pair of iterator and
 // estimated size.
@@ -615,58 +587,20 @@ void EvaluatePrefilteredKeys(
                             absl::flat_hash_set<const char *> &)>
         appender,
     size_t max_keys, bool stop_on_fetch_limit) {
-  // If there was a union operation, we need to handle deduplication.
-  // This implementation skips deduplication (flat_hash_set usage) if not needed
-  // for performance.
-  bool needs_dedup =
-      NeedsDeduplication(parameters.filter_parse_results.query_operations);
+  // The iterator fully resolves the predicate — every emitted key satisfies
+  // all constraints. No deduplication needed (iterators emit unique keys).
+  // No per-key re-evaluation needed.
   absl::flat_hash_set<const char *> result_keys;
-  if (needs_dedup) {
-    result_keys.reserve(max_keys);
-  }
-  const std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema =
-      parameters.index_schema ? parameters.index_schema->GetTextIndexSchema()
-                              : nullptr;
   while (!entries_fetchers.empty()) {
     auto fetcher = std::move(entries_fetchers.front());
     entries_fetchers.pop();
     auto iterator = fetcher->Begin();
     while (!iterator->Done()) {
       const auto &key = **iterator;
-      // 1. Skip if already processed (only if dedup is needed)
-      if (needs_dedup && result_keys.contains(key->Str().data())) {
-        iterator->Next();
-        continue;
-      }
-#if 0  // OLD: per-key evaluation — to be replaced by iterator-level filtering
-      const valkey_search::indexes::text::TextIndex *text_index =
-          text_index_schema ? text_index_schema->GetPerKeyTextIndex(key, false)
-                            : nullptr;
-      indexes::PrefilterEvaluator key_evaluator(
-          text_index, parameters.filter_parse_results.query_operations);
-      BACKGROUND_PAUSEPOINT("search_prefilter_eval");
-      // 3. Evaluate predicate
-      if (key_evaluator.Evaluate(
-              *parameters.filter_parse_results.root_predicate, key)) {
-        bool result = appender(key, result_keys);
-        if (needs_dedup && result) {
-          result_keys.insert(key->Str().data());
-        }
-        // For non-vector queries that exceed the fetch limit, return early
-        if (stop_on_fetch_limit && !result) {
-          return;
-        }
-      }
-#else
-      // NEW: iterator already fully resolves the predicate — just emit.
       bool result = appender(key, result_keys);
-      if (needs_dedup && result) {
-        result_keys.insert(key->Str().data());
-      }
       if (stop_on_fetch_limit && !result) {
         return;
       }
-#endif
       iterator->Next();
       if (parameters.cancellation_token->IsCancelled()) {
         return;
@@ -853,34 +787,18 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
     return true;
   };
   // Cannot skip evaluation if the query contains unsolved composed operations.
-  bool requires_prefilter_evaluation =
-      IsUnsolvedQuery(parameters.filter_parse_results.query_operations,
-                      parameters.filter_parse_results.is_match_all);
-  if (!requires_prefilter_evaluation) {
-    bool needs_dedup =
-        NeedsDeduplication(parameters.filter_parse_results.query_operations);
-    absl::flat_hash_set<const char *> seen_keys;
-    if (needs_dedup) {
-      seen_keys.reserve(std::min(qualified_entries, static_cast<size_t>(5000)));
-    }
-    while (!entries_fetchers.empty()) {
-      auto fetcher = std::move(entries_fetchers.front());
-      entries_fetchers.pop();
-      auto iterator = fetcher->Begin();
-      while (!iterator->Done()) {
-        const auto &key = **iterator;
-        BACKGROUND_PAUSEPOINT("search_entries_fetcher");
-        if (needs_dedup) {
-          if (seen_keys.contains(key->Str().data())) {
-            iterator->Next();
-            continue;
-          }
-          seen_keys.insert(key->Str().data());
-        }
-        // Check if we've reached the limit
-        if (neighbors.size() >= max_keys) {
-          nonvector_results_fetched_limited_count.Increment();
-          return neighbors;
+  // Iterator fully resolves predicates — no dedup or re-evaluation needed.
+  while (!entries_fetchers.empty()) {
+    auto fetcher = std::move(entries_fetchers.front());
+    entries_fetchers.pop();
+    auto iterator = fetcher->Begin();
+    while (!iterator->Done()) {
+      const auto &key = **iterator;
+      BACKGROUND_PAUSEPOINT("search_entries_fetcher");
+      // Check if we've reached the limit
+      if (neighbors.size() >= max_keys) {
+        nonvector_results_fetched_limited_count.Increment();
+        return neighbors;
         }
         neighbors.emplace_back(indexes::Neighbor{key, 0.0f});
         iterator->Next();
@@ -890,14 +808,6 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
       }
     }
     return neighbors;
-  }
-  EvaluatePrefilteredKeys(parameters, entries_fetchers,
-                          std::move(results_appender), qualified_entries,
-                          /*stop_on_fetch_limit=*/true);
-  if (fetch_limited) {
-    nonvector_results_fetched_limited_count.Increment();
-  }
-  return neighbors;
 }
 
 absl::StatusOr<std::vector<indexes::Neighbor>> DoSearch(

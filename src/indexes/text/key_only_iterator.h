@@ -43,6 +43,7 @@ class KeyOnlyTextIterator : public TextIterator {
   bool NextPosition() override { return false; }
   bool SeekForwardPosition(Position) override { return false; }
   FieldMaskPredicate CurrentFieldMask() const override { return ~0ULL; }
+  bool HasPositions() const override { return false; }
   bool IsIteratorValid() const override { return !iter_->Done(); }
 
  private:
@@ -83,6 +84,7 @@ class ExcludeIterator : public TextIterator {
   bool NextPosition() override { return false; }
   bool SeekForwardPosition(Position) override { return false; }
   FieldMaskPredicate CurrentFieldMask() const override { return ~0ULL; }
+  bool HasPositions() const override { return false; }
   bool IsIteratorValid() const override { return !source_->DoneKeys(); }
 
  private:

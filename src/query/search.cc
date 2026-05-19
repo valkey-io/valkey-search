@@ -198,6 +198,23 @@ BuildLeafIterator(const SearchParameters &parameters,
   return {nullptr, 0};
 }
 
+// Wraps an iterator in ExcludeIterator(universal_set, iter).
+// Used for negate: emits all indexed keys EXCEPT those in the given iterator.
+std::pair<std::unique_ptr<indexes::text::TextIterator>, size_t>
+ExcludeFromUniversal(const SearchParameters &parameters,
+                     std::unique_ptr<indexes::text::TextIterator> to_exclude) {
+  auto universal_fetcher = std::make_unique<indexes::UniversalSetFetcher>(
+      parameters.index_schema.get());
+  size_t size = universal_fetcher->Size();
+  auto universal_iter = universal_fetcher->Begin();
+  auto universal_text_iter =
+      std::make_unique<indexes::text::KeyOnlyTextIterator>(
+          std::move(universal_iter), std::move(universal_fetcher));
+  return {std::make_unique<indexes::text::ExcludeIterator>(
+              std::move(universal_text_iter), std::move(to_exclude)),
+          size};
+}
+
 // Recursively build a TextIterator tree for any predicate.
 // negate=true means: build the COMPLEMENT of this predicate's result set.
 std::pair<std::unique_ptr<indexes::text::TextIterator>, size_t> BuildIterator(
@@ -212,16 +229,7 @@ std::pair<std::unique_ptr<indexes::text::TextIterator>, size_t> BuildIterator(
   // If negate=true, build the positive version and exclude from universal.
   if (negate) {
     auto [positive, _] = BuildIterator(parameters, predicate, false);
-    auto universal_fetcher = std::make_unique<indexes::UniversalSetFetcher>(
-        parameters.index_schema.get());
-    size_t size = universal_fetcher->Size();
-    auto universal_iter = universal_fetcher->Begin();
-    auto universal_text_iter =
-        std::make_unique<indexes::text::KeyOnlyTextIterator>(
-            std::move(universal_iter), std::move(universal_fetcher));
-    return {std::make_unique<indexes::text::ExcludeIterator>(
-                std::move(universal_text_iter), std::move(positive)),
-            size};
+    return ExcludeFromUniversal(parameters, std::move(positive));
   }
 
   // Leaf predicates.
@@ -302,7 +310,7 @@ std::pair<std::unique_ptr<indexes::text::TextIterator>, size_t> BuildIterator(
         iters;
     size_t total_size = 0;
     for (const auto &child : composed_predicate->GetChildren()) {
-      auto [iter, size] = BuildIterator(parameters, child.get(), false);
+      auto [iter, size] = BuildIterator(parameters, child.get(), negate);
       total_size += size;
       iters.push_back(std::move(iter));
     }
@@ -311,6 +319,7 @@ std::pair<std::unique_ptr<indexes::text::TextIterator>, size_t> BuildIterator(
             total_size};
   }
 }
+
 class IteratorFetcher : public indexes::EntriesFetcherBase {
  public:
   IteratorFetcher(

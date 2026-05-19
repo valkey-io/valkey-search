@@ -490,6 +490,138 @@ TEST_F(ClusterMapTest, GetShardBySlotTest) {
   EXPECT_EQ(cluster_map->GetShardBySlot(16384), nullptr);  // Invalid slot
 }
 
+// Regression test for an off-by-one in the previous lower_bound-based
+// implementation of GetTargetsForSlot. The previous version landed on the
+// NEXT range for interior slots and only rescued the iter==end() case via
+// iter--, so any interior slot in a non-last range returned an empty
+// target list. The end-bound check also treated end_slot as exclusive
+// (`slot >= end_slot`) but CLUSTER SLOTS reports it as inclusive. Both
+// classes of failure are covered below.
+TEST_F(ClusterMapTest, GetTargetsForSlotTest) {
+  auto ranges = CreateStandard3ShardConfig();  // 0-5460, 5461-10922, 10923-16383
+  auto cluster_map = CreateClusterMapWithConfig(ranges, primary_ids.at(0));
+  ASSERT_NE(cluster_map, nullptr);
+
+  // Range starts (worked even with previous logic via iter==end() rescue
+  // path for the last range, or by lower_bound returning the matching key
+  // for the others).
+  EXPECT_EQ(
+      cluster_map->GetTargetsForSlot(FanoutTargetMode::kRandom, false, 0)
+          .size(),
+      1u);
+  EXPECT_EQ(
+      cluster_map->GetTargetsForSlot(FanoutTargetMode::kRandom, false, 5461)
+          .size(),
+      1u);
+  EXPECT_EQ(
+      cluster_map->GetTargetsForSlot(FanoutTargetMode::kRandom, false, 10923)
+          .size(),
+      1u);
+
+  // Interior of non-last ranges (returned EMPTY before the fix).
+  EXPECT_EQ(
+      cluster_map->GetTargetsForSlot(FanoutTargetMode::kRandom, false, 172)
+          .size(),
+      1u)
+      << "Interior of FIRST range — was returning empty before fix";
+  EXPECT_EQ(
+      cluster_map->GetTargetsForSlot(FanoutTargetMode::kRandom, false, 9865)
+          .size(),
+      1u)
+      << "Interior of MIDDLE range — was returning empty before fix";
+
+  // Interior of LAST range (worked via iter==end() rescue path).
+  EXPECT_EQ(
+      cluster_map->GetTargetsForSlot(FanoutTargetMode::kRandom, false, 14371)
+          .size(),
+      1u);
+
+  // Range END slots (returned EMPTY before the fix because the previous
+  // check `slot >= end_slot` treated end as exclusive).
+  EXPECT_EQ(
+      cluster_map->GetTargetsForSlot(FanoutTargetMode::kRandom, false, 5460)
+          .size(),
+      1u)
+      << "End of FIRST range — was returning empty before fix";
+  EXPECT_EQ(
+      cluster_map->GetTargetsForSlot(FanoutTargetMode::kRandom, false, 10922)
+          .size(),
+      1u)
+      << "End of MIDDLE range — was returning empty before fix";
+  EXPECT_EQ(
+      cluster_map->GetTargetsForSlot(FanoutTargetMode::kRandom, false, 16383)
+          .size(),
+      1u)
+      << "End of LAST range — was returning empty before fix";
+
+  // Verify each slot maps to the expected shard via kPrimary mode.
+  auto check_shard = [&](uint16_t slot, const std::string& expected_shard_id) {
+    auto targets =
+        cluster_map->GetTargetsForSlot(FanoutTargetMode::kPrimary, false, slot);
+    ASSERT_EQ(targets.size(), 1u) << "no target for slot " << slot;
+    ASSERT_NE(targets[0].shard, nullptr);
+    EXPECT_EQ(targets[0].shard->shard_id, expected_shard_id)
+        << "slot " << slot << " expected on shard " << expected_shard_id;
+  };
+  check_shard(0, primary_ids.at(0));
+  check_shard(172, primary_ids.at(0));
+  check_shard(5460, primary_ids.at(0));
+  check_shard(5461, primary_ids.at(1));
+  check_shard(9865, primary_ids.at(1));
+  check_shard(10922, primary_ids.at(1));
+  check_shard(10923, primary_ids.at(2));
+  check_shard(14371, primary_ids.at(2));
+  check_shard(16383, primary_ids.at(2));
+}
+
+// Verify GetTargetsForSlot returns empty for slots that fall into a gap
+// between shard ranges (analogous to GetShardBySlot's SlotInGapTest below).
+TEST_F(ClusterMapTest, GetTargetsForSlotGapTest) {
+  std::vector<SlotRangeConfig> ranges = {
+      {.start_slot = 0,
+       .end_slot = 5000,
+       .primary = NodeConfig{"127.0.0.1", 6379, primary_ids.at(0), {}},
+       .replicas = {}},
+      {.start_slot = 10000,  // Gap from 5001-9999
+       .end_slot = 16383,
+       .primary = NodeConfig{"127.0.0.1", 6380, primary_ids.at(1), {}},
+       .replicas = {}}};
+  auto cluster_map = CreateClusterMapWithConfig(ranges, primary_ids.at(0));
+  ASSERT_NE(cluster_map, nullptr);
+
+  // Slots in defined ranges (including boundaries) should return a target.
+  EXPECT_EQ(
+      cluster_map->GetTargetsForSlot(FanoutTargetMode::kRandom, false, 0)
+          .size(),
+      1u);
+  EXPECT_EQ(
+      cluster_map->GetTargetsForSlot(FanoutTargetMode::kRandom, false, 5000)
+          .size(),
+      1u);
+  EXPECT_EQ(
+      cluster_map->GetTargetsForSlot(FanoutTargetMode::kRandom, false, 10000)
+          .size(),
+      1u);
+  EXPECT_EQ(
+      cluster_map->GetTargetsForSlot(FanoutTargetMode::kRandom, false, 16383)
+          .size(),
+      1u);
+
+  // Slots in the gap should return empty.
+  EXPECT_EQ(
+      cluster_map->GetTargetsForSlot(FanoutTargetMode::kRandom, false, 5001)
+          .size(),
+      0u);
+  EXPECT_EQ(
+      cluster_map->GetTargetsForSlot(FanoutTargetMode::kRandom, false, 7500)
+          .size(),
+      0u);
+  EXPECT_EQ(
+      cluster_map->GetTargetsForSlot(FanoutTargetMode::kRandom, false, 9999)
+          .size(),
+      0u);
+}
+
 TEST_F(ClusterMapTest, GetShardByIdTest) {
   std::vector<SlotRangeConfig> ranges = {
       {.start_slot = 0,

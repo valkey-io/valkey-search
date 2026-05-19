@@ -140,14 +140,23 @@ std::vector<NodeInfo> ClusterMap::GetTargetsForSlot(FanoutTargetMode mode,
   if (slot_to_shard_map_.empty()) {
     return {};
   }
-  auto iter = slot_to_shard_map_.lower_bound(slot);
-  if (iter == slot_to_shard_map_.end()) {
-    iter--;
+  // Find the first entry with start_slot > slot, then back up to the
+  // candidate range. Mirrors GetShardBySlot above. The previous
+  // lower_bound-based logic only handled the iter==end() case via iter--,
+  // missing all interior slots in non-last ranges (returned empty target
+  // list and surfaced as "No available nodes to execute the query" for
+  // FT.SEARCH on hashtag-pinned single-slot indexes whose hashtag's CRC16
+  // happened to land in any non-last shard's range).
+  auto iter = slot_to_shard_map_.upper_bound(slot);
+  if (iter == slot_to_shard_map_.begin()) {
+    return {};  // slot is before any range
   }
+  --iter;
   const ShardInfo* shard = iter->second.second;
   CHECK(shard);
-  if (slot < iter->first || slot >= iter->second.first) {
-    return {};  // Slot not in range means no shard has this slot.
+  // iter->second.first is end_slot (INCLUSIVE per CLUSTER SLOTS reply).
+  if (slot > iter->second.first) {
+    return {};  // slot is past end of this range (gap)
   }
 
   //

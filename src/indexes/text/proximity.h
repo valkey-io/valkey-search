@@ -52,9 +52,7 @@ class ProximityIterator : public TextIterator {
   ProximityIterator(absl::InlinedVector<std::unique_ptr<TextIterator>,
                                         kProximityTermsInlineCapacity>&& iters,
                     const std::optional<uint32_t> slop, const bool in_order,
-                    bool skip_positional_checks,
-                    std::vector<std::unique_ptr<TextIterator>> key_only_iters =
-                        {});
+                    bool skip_positional_checks);
   /* Implementation of TextIterator APIs */
   FieldMaskPredicate QueryFieldMask() const override;
   // Key-level iteration
@@ -105,7 +103,6 @@ class ProximityIterator : public TextIterator {
   bool skip_positional_checks_;
   // Key-only children (tag/numeric) — participate in FindCommonKey but not
   // position validation.
-  std::vector<std::unique_ptr<TextIterator>> key_only_iters_;
 
   struct ViolationInfo {
     // Iterator index to advance

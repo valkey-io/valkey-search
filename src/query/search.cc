@@ -166,11 +166,11 @@ inline PredicateType EvaluateAsComposedPredicate(
 std::pair<std::unique_ptr<indexes::text::TextIterator>, size_t>
 BuildLeafIterator(const SearchParameters &parameters,
                   const Predicate *predicate, bool negate) {
-  const bool is_vec_query = parameters.IsVectorQuery();
   if (predicate->GetType() == PredicateType::kText) {
     auto text_predicate = dynamic_cast<const TextPredicate *>(predicate);
     auto text_index = text_predicate->GetTextIndexSchema()->GetTextIndex();
     auto field_mask = text_predicate->GetFieldMask();
+    const bool is_vec_query = parameters.IsVectorQuery();
     size_t size = text_predicate->EstimateSize(is_vec_query);
     return {text_predicate->BuildTextIterator(text_index, field_mask, true),
             size};
@@ -244,13 +244,12 @@ std::pair<std::unique_ptr<indexes::text::TextIterator>, size_t> BuildIterator(
 
   if (is_and) {
     // AND: ProximityIterator for intersection.
-    // Text children go in iters_ (participate in positional checks).
-    // Non-text children go in key_only_iters_ (key intersection only).
+    // All children go in iters_. Positional checks only apply to children
+    // with HasPositions()=true (filtered by active_pos_indices_).
     // Negated children become ExcludeIterator wrappers.
     absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
                         indexes::text::kProximityTermsInlineCapacity>
-        text_iters;
-    std::vector<std::unique_ptr<indexes::text::TextIterator>> key_only_iters;
+        iters;
     std::vector<std::unique_ptr<indexes::text::TextIterator>> excluded_iters;
     size_t min_size = SIZE_MAX;
 
@@ -259,16 +258,10 @@ std::pair<std::unique_ptr<indexes::text::TextIterator>, size_t> BuildIterator(
         auto neg = dynamic_cast<const NegatePredicate *>(child.get());
         auto [iter, _] = BuildIterator(parameters, neg->GetPredicate(), false);
         excluded_iters.push_back(std::move(iter));
-      } else if (child->GetType() == PredicateType::kText ||
-                 child->GetType() == PredicateType::kComposedAnd ||
-                 child->GetType() == PredicateType::kComposedOr) {
-        auto [iter, size] = BuildIterator(parameters, child.get(), false);
-        min_size = std::min(min_size, size);
-        text_iters.push_back(std::move(iter));
       } else {
-        auto [iter, size] = BuildIterator(parameters, child.get(), false);
+        auto [iter, size] = BuildIterator(parameters, child.get(), negate);
         min_size = std::min(min_size, size);
-        key_only_iters.push_back(std::move(iter));
+        iters.push_back(std::move(iter));
       }
     }
 
@@ -276,27 +269,20 @@ std::pair<std::unique_ptr<indexes::text::TextIterator>, size_t> BuildIterator(
     bool inorder = composed_predicate->GetInorder();
     bool skip_positions = !slop.has_value() && !inorder;
 
-    if (text_iters.empty() && key_only_iters.empty()) {
+    if (iters.empty()) {
       // All children are negated — use universal set as base.
       auto universal_fetcher = std::make_unique<indexes::UniversalSetFetcher>(
           parameters.index_schema.get());
       auto universal_iter = universal_fetcher->Begin();
-      text_iters.push_back(
+      iters.push_back(
           std::make_unique<indexes::text::KeyOnlyTextIterator>(
               std::move(universal_iter), std::move(universal_fetcher)));
-      skip_positions = true;
-    } else if (text_iters.empty()) {
-      for (auto &it : key_only_iters) {
-        text_iters.push_back(std::move(it));
-      }
-      key_only_iters.clear();
       skip_positions = true;
     }
 
     std::unique_ptr<indexes::text::TextIterator> result =
         std::make_unique<indexes::text::ProximityIterator>(
-            std::move(text_iters), slop, inorder, skip_positions,
-            std::move(key_only_iters));
+            std::move(iters), slop, inorder, skip_positions);
 
     for (auto &ex : excluded_iters) {
       result = std::make_unique<indexes::text::ExcludeIterator>(

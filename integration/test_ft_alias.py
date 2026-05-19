@@ -749,12 +749,13 @@ class TestFTAliasNameBoundaries(ValkeySearchTestCaseBase):
 
     def test_aliasadd_empty_alias_name_accepted(self):
         """
-        FT.ALIASADD with an empty alias name is accepted by the server (no
-        validation at the command layer). This test documents current behaviour.
+        FT.ALIASADD with an empty alias name is accepted by the server, matching
+        RediSearch behaviour (verified against redis-stack-server v21020:
+        FT.ALIASADD "", FT.ALIASUPDATE "", and FT.ALIASDEL "" all return OK).
         """
         client = self.client
         assert client.execute_command(*CREATE_TAG_INDEX) == b"OK"
-        # Empty string is accepted — document the actual behaviour.
+        # Empty string is accepted — matches RediSearch.
         assert client.execute_command("FT.ALIASADD", "", INDEX_NAME) == b"OK"
         # The empty-string alias resolves via FT.INFO.
         assert client.execute_command("FT.INFO", "") is not None

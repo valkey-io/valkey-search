@@ -95,15 +95,6 @@ bool ProximityIterator::NextKey() {
     if (FindCommonKey()) {
       current_position_ = std::nullopt;
       current_field_mask_ = 0ULL;
-      // Compute which children have positions on this key.
-      active_pos_indices_.clear();
-      if (!skip_positional_checks_) {
-        for (size_t i = 0; i < iters_.size(); ++i) {
-          if (!iters_[i]->DonePositions()) {
-            active_pos_indices_.push_back(i);
-          }
-        }
-      }
       // 2) Skip positional checks if requested. Otherwise,
       // move to the next valid position combination across all text
       // iterators.
@@ -133,6 +124,15 @@ bool ProximityIterator::FindCommonKey() {
   // 2) If min == max, we found a common key
   if (min_key == max_key) {
     current_key_ = max_key;
+    // Compute which children have positions on this key.
+    active_pos_indices_.clear();
+    if (!skip_positional_checks_) {
+      for (size_t i = 0; i < iters_.size(); ++i) {
+        if (iters_[i]->HasPositions()) {
+          active_pos_indices_.push_back(i);
+        }
+      }
+    }
     return true;
   }
   // 3) Advance all iterators that are strictly behind the current max_key
@@ -158,14 +158,6 @@ bool ProximityIterator::SeekForwardKey(const Key& target_key) {
     if (FindCommonKey()) {
       current_position_ = std::nullopt;
       current_field_mask_ = 0ULL;
-      active_pos_indices_.clear();
-      if (!skip_positional_checks_) {
-        for (size_t i = 0; i < iters_.size(); ++i) {
-          if (!iters_[i]->DonePositions()) {
-            active_pos_indices_.push_back(i);
-          }
-        }
-      }
       if (skip_positional_checks_) {
         return true;
       } else if (NextPosition()) {

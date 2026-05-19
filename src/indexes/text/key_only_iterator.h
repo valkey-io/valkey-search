@@ -20,7 +20,7 @@ class KeyOnlyTextIterator : public TextIterator {
  public:
   KeyOnlyTextIterator(std::unique_ptr<indexes::EntriesFetcherIteratorBase> iter,
                       std::unique_ptr<indexes::EntriesFetcherBase> fetcher)
-      : iter_(std::move(iter)), fetcher_(std::move(fetcher)) {}
+      : fetcher_(std::move(fetcher)), iter_(std::move(iter)) {}
 
   FieldMaskPredicate QueryFieldMask() const override { return ~0ULL; }
 
@@ -37,8 +37,8 @@ class KeyOnlyTextIterator : public TextIterator {
   // No positions — always done.
   bool DonePositions() const override { return true; }
   const PositionRange& CurrentPosition() const override {
-    static PositionRange dummy{0, 0};
-    return dummy;
+    CHECK(false) << "CurrentPosition() called on key-only iterator";
+    __builtin_unreachable();
   }
   bool NextPosition() override { return false; }
   bool SeekForwardPosition(Position) override { return false; }
@@ -47,8 +47,8 @@ class KeyOnlyTextIterator : public TextIterator {
   bool IsIteratorValid() const override { return !iter_->Done(); }
 
  private:
-  std::unique_ptr<indexes::EntriesFetcherIteratorBase> iter_;
   std::unique_ptr<indexes::EntriesFetcherBase> fetcher_;  // keeps data alive
+  std::unique_ptr<indexes::EntriesFetcherIteratorBase> iter_;
 };
 
 // Emits keys from source that are NOT present in excluded.
@@ -78,8 +78,8 @@ class ExcludeIterator : public TextIterator {
   }
   bool DonePositions() const override { return true; }
   const PositionRange& CurrentPosition() const override {
-    static PositionRange dummy{0, 0};
-    return dummy;
+    CHECK(false) << "CurrentPosition() called on exclude iterator";
+    __builtin_unreachable();
   }
   bool NextPosition() override { return false; }
   bool SeekForwardPosition(Position) override { return false; }

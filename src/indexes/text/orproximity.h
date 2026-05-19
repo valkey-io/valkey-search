@@ -47,7 +47,14 @@ class OrProximityIterator : public TextIterator {
   bool NextPosition() override;
   bool SeekForwardPosition(Position target_position) override;
   FieldMaskPredicate CurrentFieldMask() const override;
-  bool HasPositions() const override { return true; }
+  // Dynamic: false if any non-positional child matched the current key
+  // (OR is satisfied without needing positions).
+  bool HasPositions() const override {
+    for (size_t idx : current_key_indices_) {
+      if (!iters_[idx]->HasPositions()) return false;
+    }
+    return !current_key_indices_.empty();
+  }
   bool IsIteratorValid() const override;
 
  private:

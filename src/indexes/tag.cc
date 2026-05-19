@@ -262,21 +262,7 @@ Tag::EntriesFetcherIterator::EntriesFetcherIterator(
       negate_(negate),
       entries_(entries),
       untracked_keys_(untracked_keys) {
-  if (negate_) {
-    InitNegate();
-  } else {
-    InitNonNegate();
-  }
-  AdvanceToNextUniqueKey();
-}
-
-void Tag::EntriesFetcherIterator::EnsureNegateRootIter() {
-  if (!negate_root_iter_.has_value()) {
-    negate_root_iter_.emplace(tree_.RootIterator());
-  }
-}
-
-void Tag::EntriesFetcherIterator::InitNonNegate() {
+  CHECK(!negate_) << "Negate handled by ExcludeIterator, not tag iterator";
   for (auto* node : entries_) {
     if (node && node->value.has_value() && !node->value.value().empty()) {
       heap_.push_back_unsorted(
@@ -284,22 +270,8 @@ void Tag::EntriesFetcherIterator::InitNonNegate() {
     }
   }
   heap_.heapify();
+  AdvanceToNextUniqueKey();
 }
-
-void Tag::EntriesFetcherIterator::InitNegate() {
-  EnsureNegateRootIter();
-  while (!negate_root_iter_->Done()) {
-    auto* node = negate_root_iter_->Value();
-    if (node && !entries_.contains(node) && node->value.has_value() &&
-        !node->value.value().empty()) {
-      heap_.push_back_unsorted(
-          HeapEntry{node->value.value().begin(), node->value.value().end()});
-    }
-    negate_root_iter_->Next();
-  }
-  heap_.heapify();
-}
-
 void Tag::EntriesFetcherIterator::AdvanceToNextUniqueKey() {
   // Skip duplicates: advance heap past all entries equal to current_key_.
   while (!heap_.empty()) {
@@ -315,18 +287,6 @@ void Tag::EntriesFetcherIterator::AdvanceToNextUniqueKey() {
     } else {
       // New unique key found.
       current_key_ = *top.current;
-      return;
-    }
-  }
-  // Heap exhausted — move to untracked keys (negated queries only).
-  if (negate_ && !untracked_keys_.empty()) {
-    if (!untracked_keys_iter_.has_value()) {
-      untracked_keys_iter_ = untracked_keys_.begin();
-    } else {
-      ++untracked_keys_iter_.value();
-    }
-    if (untracked_keys_iter_.value() != untracked_keys_.end()) {
-      current_key_ = *untracked_keys_iter_.value();
       return;
     }
   }

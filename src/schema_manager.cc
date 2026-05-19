@@ -869,7 +869,32 @@ void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx) {
                                 << " on FLUSHDB of DB " << selected_db;
         continue;
       }
-      // Aliases are managed by MetadataManager and reconciled cluster-wide.
+      // Re-install aliases pointing to this index from MetadataManager.
+      auto global_metadata =
+          coordinator::MetadataManager::Instance().GetGlobalMetadata();
+      auto alias_ns_it =
+          global_metadata->type_namespace_map().find(kAliasMetadataTypeName);
+      if (alias_ns_it != global_metadata->type_namespace_map().end()) {
+        for (const auto &[encoded_alias, alias_entry] :
+             alias_ns_it->second.entries()) {
+          if (!alias_entry.has_content()) continue;
+          coordinator::AliasEntry unpacked;
+          if (!alias_entry.content().UnpackTo(&unpacked)) continue;
+          if (unpacked.index_name() != name) continue;
+          auto obj_name = coordinator::ObjName::Decode(encoded_alias);
+          if (obj_name.GetDbNum() != static_cast<uint32_t>(selected_db))
+            continue;
+          auto alias_status = AddAliasInternal(
+              obj_name.GetDbNum(), obj_name.GetName(), unpacked.index_name());
+          if (!alias_status.ok() && !absl::IsAlreadyExists(alias_status)) {
+            VMSDK_LOG(WARNING, ctx)
+                << "Unable to reinstall alias '"
+                << vmsdk::config::RedactIfNeeded(obj_name.GetName())
+                << "' after FLUSHDB of DB " << selected_db << ": "
+                << alias_status;
+          }
+        }
+      }
     }
   }
 }

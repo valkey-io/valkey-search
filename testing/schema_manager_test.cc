@@ -1234,13 +1234,10 @@ TEST_F(SchemaManagerCoordinatorAliasTest, OnFlushDBEndedAliasesPurged) {
 
   SchemaManager::Instance().OnFlushDBEnded(&fake_ctx_);
 
-  // After flush: alias is gone from db_to_aliases_ (RemoveIndexSchemaInternal
-  // purges it), but MetadataManager still holds the entry.
-  EXPECT_EQ(SchemaManager::Instance()
-                .GetIndexSchema(kDb0, "flush_alias")
-                .status()
-                .code(),
-            absl::StatusCode::kNotFound);
+  // After flush: the index is recreated and aliases pointing to it are
+  // reinstalled from MetadataManager, so the alias resolves immediately.
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().GetIndexSchema(kDb0, "flush_alias"));
   // MetadataManager entry survives the flush.
   VMSDK_EXPECT_OK(coordinator::MetadataManager::Instance().GetEntryContent(
       kAliasMetadataTypeName, coordinator::ObjName(kDb0, "flush_alias")));

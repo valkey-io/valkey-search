@@ -130,6 +130,7 @@ constexpr int kDefaultSVSGraphMaxDegree{64};
 constexpr int kDefaultSVSConstructionWindowSize{128};
 constexpr int kDefaultSVSSearchWindowSize{10};
 constexpr float kDefaultSVSAlpha{1.2f};
+constexpr int kDefaultSVSLeanVecTrainingThreshold{10000};
 
 struct SVSParameters : public FTCreateVectorParameters {
   int graph_max_degree{kDefaultSVSGraphMaxDegree};
@@ -137,6 +138,9 @@ struct SVSParameters : public FTCreateVectorParameters {
   int search_window_size{kDefaultSVSSearchWindowSize};
   float alpha{kDefaultSVSAlpha};
   data_model::SVSCompressionType compression{data_model::SVS_COMPRESSION_NONE};
+  // Required (>0) when compression is one of LEANVEC*. Must be < dimensions.
+  int leanvec_dims{0};
+  int leanvec_training_threshold{kDefaultSVSLeanVecTrainingThreshold};
   absl::Status Verify() const;
   std::unique_ptr<data_model::VectorIndex> ToProto() const;
 };

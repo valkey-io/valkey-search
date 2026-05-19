@@ -49,6 +49,9 @@ constexpr absl::string_view kConstructionWindowSizeParam{
 constexpr absl::string_view kSearchWindowSizeParam{"SEARCH_WINDOW_SIZE"};
 constexpr absl::string_view kAlphaParam{"ALPHA"};
 constexpr absl::string_view kCompressionParam{"COMPRESSION"};
+constexpr absl::string_view kLeanVecDimsParam{"LEANVEC_DIMS"};
+constexpr absl::string_view kLeanVecTrainingThresholdParam{
+    "LEANVEC_TRAINING_THRESHOLD"};
 constexpr absl::string_view kDimensionsParam{"DIM"};
 constexpr absl::string_view kDistanceMetricParam{"DISTANCE_METRIC"};
 constexpr absl::string_view kDataTypeParam{"TYPE"};
@@ -232,6 +235,9 @@ const absl::NoDestructor<
         {"LVQ8", data_model::SVS_COMPRESSION_LVQ8},
         {"LVQ4X4", data_model::SVS_COMPRESSION_LVQ4X4},
         {"LVQ4X8", data_model::SVS_COMPRESSION_LVQ4X8},
+        {"LEANVEC4X4", data_model::SVS_COMPRESSION_LEANVEC4X4},
+        {"LEANVEC4X8", data_model::SVS_COMPRESSION_LEANVEC4X8},
+        {"LEANVEC8X8", data_model::SVS_COMPRESSION_LEANVEC8X8},
     });
 const absl::NoDestructor<
     absl::flat_hash_map<absl::string_view, data_model::AttributeDataType>>
@@ -386,6 +392,11 @@ vmsdk::KeyValueParser<SVSParameters> CreateSVSParser() {
   parser.AddParamParser(kCompressionParam,
                         GENERATE_ENUM_PARSER(SVSParameters, compression,
                                              *kSVSCompressionByStr));
+  parser.AddParamParser(kLeanVecDimsParam,
+                        GENERATE_VALUE_PARSER(SVSParameters, leanvec_dims));
+  parser.AddParamParser(
+      kLeanVecTrainingThresholdParam,
+      GENERATE_VALUE_PARSER(SVSParameters, leanvec_training_threshold));
   return parser;
 }
 absl::Status ParseVector(vmsdk::ArgsIterator &itr,
@@ -913,6 +924,27 @@ absl::Status SVSParameters::Verify() const {
   if (alpha <= 0.0f) {
     return absl::InvalidArgumentError("ALPHA must be positive.");
   }
+  bool is_leanvec =
+      (compression == data_model::SVS_COMPRESSION_LEANVEC4X4 ||
+       compression == data_model::SVS_COMPRESSION_LEANVEC4X8 ||
+       compression == data_model::SVS_COMPRESSION_LEANVEC8X8);
+  if (is_leanvec) {
+    if (leanvec_dims <= 0) {
+      return absl::InvalidArgumentError(
+          "LEANVEC_DIMS is required (>0) when COMPRESSION is LEANVEC*.");
+    }
+    if (static_cast<uint32_t>(leanvec_dims) >= dimensions) {
+      return absl::InvalidArgumentError(
+          "LEANVEC_DIMS must be less than DIM.");
+    }
+    if (leanvec_training_threshold < 1) {
+      return absl::InvalidArgumentError(
+          "LEANVEC_TRAINING_THRESHOLD must be at least 1.");
+    }
+  } else if (leanvec_dims > 0) {
+    return absl::InvalidArgumentError(
+        "LEANVEC_DIMS is only valid with LEANVEC* COMPRESSION.");
+  }
   return absl::OkStatus();
 }
 std::unique_ptr<data_model::VectorIndex> SVSParameters::ToProto() const {
@@ -924,6 +956,9 @@ std::unique_ptr<data_model::VectorIndex> SVSParameters::ToProto() const {
   svs_algorithm_proto->set_search_window_size(search_window_size);
   svs_algorithm_proto->set_alpha(alpha);
   svs_algorithm_proto->set_compression(compression);
+  svs_algorithm_proto->set_leanvec_dims(leanvec_dims);
+  svs_algorithm_proto->set_leanvec_training_threshold(
+      leanvec_training_threshold);
   vector_index_proto->set_allocated_svs_vamana_algorithm(
       svs_algorithm_proto.release());
   return vector_index_proto;

@@ -116,6 +116,9 @@ enum SVSCompressionType {
   SVS_COMPRESSION_LVQ8 = 3;
   SVS_COMPRESSION_LVQ4X4 = 4;
   SVS_COMPRESSION_LVQ4X8 = 5;
+  SVS_COMPRESSION_LEANVEC4X4 = 6;
+  SVS_COMPRESSION_LEANVEC4X8 = 7;
+  SVS_COMPRESSION_LEANVEC8X8 = 8;
 }
 
 message HNSWAlgorithm {
@@ -134,5 +137,11 @@ message SVSVamanaAlgorithm {
   uint32 search_window_size = 3;
   float alpha = 4;
   SVSCompressionType compression = 5;
+  // Required when compression is one of the LEANVEC* variants. Number of
+  // dimensions the LeanVec projection reduces to; must be < dim.
+  uint32 leanvec_dims = 6;
+  // Number of vectors to accumulate before training the LeanVec matrices
+  // and building the index. Only used for LEANVEC* compression.
+  uint32 leanvec_training_threshold = 7;
 }
 

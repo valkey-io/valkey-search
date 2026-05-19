@@ -30,11 +30,15 @@
 #include "src/attribute_data_type.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/vector_base.h"
+#include "src/metrics.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/cancel.h"
 #include "src/utils/string_interning.h"
+#include "src/valkey_search_options.h"
 #include "third_party/hnswlib/hnswlib.h"
+#include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
+#include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
@@ -71,6 +75,12 @@ svs::runtime::v0::StorageKind ToSVSStorageKind(
       return svs::runtime::v0::StorageKind::LVQ4x4;
     case data_model::SVS_COMPRESSION_LVQ4X8:
       return svs::runtime::v0::StorageKind::LVQ4x8;
+    case data_model::SVS_COMPRESSION_LEANVEC4X4:
+      return svs::runtime::v0::StorageKind::LeanVec4x4;
+    case data_model::SVS_COMPRESSION_LEANVEC4X8:
+      return svs::runtime::v0::StorageKind::LeanVec4x8;
+    case data_model::SVS_COMPRESSION_LEANVEC8X8:
+      return svs::runtime::v0::StorageKind::LeanVec8x8;
     default:
       return svs::runtime::v0::StorageKind::FP32;
   }
@@ -84,6 +94,9 @@ const char* CompressionTypeName(data_model::SVSCompressionType type) {
     case data_model::SVS_COMPRESSION_LVQ8: return "LVQ8";
     case data_model::SVS_COMPRESSION_LVQ4X4: return "LVQ4X4";
     case data_model::SVS_COMPRESSION_LVQ4X8: return "LVQ4X8";
+    case data_model::SVS_COMPRESSION_LEANVEC4X4: return "LEANVEC4X4";
+    case data_model::SVS_COMPRESSION_LEANVEC4X8: return "LEANVEC4X8";
+    case data_model::SVS_COMPRESSION_LEANVEC8X8: return "LEANVEC8X8";
     default: return "UNKNOWN";
   }
 }
@@ -102,8 +115,12 @@ VectorSVS<T>::VectorSVS(
 
 template <typename T>
 VectorSVS<T>::~VectorSVS() {
-  // Flush any remaining buffered vectors before cleanup
-  if (!pending_buffer_.empty()) {
+  // For non-LeanVec indexes, drain any pending buffer into the SVS graph.
+  // For LeanVec indexes still in kStaging (training never reached the
+  // threshold), there is no built SVS index to flush into; the buffer is
+  // simply discarded.
+  if (!pending_buffer_.empty() &&
+      index_state_ == SVSIndexState::kReady) {
     VMSDK_LOG(WARNING, nullptr)
         << "Destructor flushing " << pending_buffer_.size()
         << " remaining vectors";
@@ -118,6 +135,16 @@ VectorSVS<T>::~VectorSVS() {
           << "SVS destroy failed: " << status.message();
     }
     svs_index_ = nullptr;
+  }
+
+  if (leanvec_training_data_) {
+    auto status = svs::runtime::v0::LeanVecTrainingData::destroy(
+        leanvec_training_data_);
+    if (!status.ok()) {
+      VMSDK_LOG(WARNING, nullptr)
+          << "LeanVec training data destroy failed: " << status.message();
+    }
+    leanvec_training_data_ = nullptr;
   }
 }
 
@@ -146,6 +173,13 @@ absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::Create(
     if (svs_params.compression() != data_model::SVS_COMPRESSION_NONE) {
       config.compression = svs_params.compression();
     }
+    if (svs_params.leanvec_dims() > 0) {
+      config.leanvec_dims = svs_params.leanvec_dims();
+    }
+    if (svs_params.leanvec_training_threshold() > 0) {
+      config.leanvec_training_threshold =
+          svs_params.leanvec_training_threshold();
+    }
   }
 
   // SVS requires alpha <= 1.0 for MIP/Cosine distance metrics.
@@ -170,13 +204,37 @@ absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::Create(
   index->Init(vector_index_proto.dimension_count(),
               vector_index_proto.distance_metric(), index->space_);
 
-  // Pin OpenMP threads to 1 to prevent SVS from spawning uncontrolled thread
-  // pools that interfere with valkey-search's thread model.
+  // Configure OpenMP threads used by the SVS runtime. Controlled via the
+  // "--svs-omp-threads" module option. PoC default is 1 to avoid interference
+  // with valkey-search's own thread pools; setting it higher may reduce
+  // per-query latency at the cost of extra CPU per search. 0 means "don't
+  // touch" (use the library default / OMP_NUM_THREADS env var).
 #ifdef _OPENMP
-  omp_set_num_threads(1);
+  long long omp_threads = options::GetSVSOmpThreads().GetValue();
+  if (omp_threads > 0) {
+    omp_set_num_threads(static_cast<int>(omp_threads));
+  }
 #endif
 
-  // Build the SVS index immediately.
+  // For non-LeanVec compression types we can build an empty SVS index now
+  // and stream vectors in via add() / FlushBuffer(). LeanVec needs a
+  // training set first, so we defer the SVS build until the buffer reaches
+  // leanvec_training_threshold (see TrainAndBuildLeanVecIndex). During
+  // staging the index is fully usable from valkey's perspective except
+  // FT.SEARCH (and the few mutation operations that touch the SVS graph)
+  // which return FailedPreconditionError.
+  if (IsLeanVecCompression(config.compression)) {
+    index->index_state_ = SVSIndexState::kStaging;
+    VMSDK_LOG(NOTICE, nullptr)
+        << "Created SVS Vamana index in STAGING state (LeanVec): dim="
+        << vector_index_proto.dimension_count()
+        << " compression=" << CompressionTypeName(config.compression)
+        << " leanvec_dims=" << config.leanvec_dims
+        << " leanvec_training_threshold=" << config.leanvec_training_threshold;
+    return index;
+  }
+
+  // Build the SVS index immediately for non-LeanVec compression.
   auto svs_metric = ToSVSMetric(vector_index_proto.distance_metric());
 
   svs::runtime::v0::VamanaIndex::BuildParams build_params;
@@ -201,6 +259,8 @@ absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::Create(
     return absl::InternalError(
         absl::StrCat("Error building SVS Vamana index: ", status.message()));
   }
+
+  index->index_state_ = SVSIndexState::kReady;
 
   VMSDK_LOG(NOTICE, nullptr)
       << "Created SVS Vamana index with dim="
@@ -233,8 +293,20 @@ absl::Status VectorSVS<T>::AddRecordImpl(uint64_t internal_id,
     // reconstruct() or compute_distance(), so we keep a full FP32 copy.
     raw_vectors_[internal_id] = pending_buffer_.back().data;
 
-    // Check if buffer is full → trigger auto-flush
-    if (pending_buffer_.size() >= kBufferSize) {
+    // Bump global pending-buffer gauge. FlushBuffer() decrements by batch size.
+    Metrics::GetStats().svs_pending_buffer_vectors.fetch_add(
+        1, std::memory_order_relaxed);
+
+    // Check if buffer is full → trigger auto-flush.
+    // For LeanVec staging the threshold is leanvec_training_threshold;
+    // crossing it builds the index and ingests the buffer in one step.
+    // For non-LeanVec the threshold is the static kBufferSize.
+    if (index_state_ == SVSIndexState::kStaging) {
+      if (pending_buffer_.size() >=
+          build_config_.leanvec_training_threshold) {
+        VMSDK_RETURN_IF_ERROR(TrainAndBuildLeanVecIndex());
+      }
+    } else if (pending_buffer_.size() >= kBufferSize) {
       VMSDK_RETURN_IF_ERROR(FlushBuffer());
     }
 
@@ -242,11 +314,18 @@ absl::Status VectorSVS<T>::AddRecordImpl(uint64_t internal_id,
     return absl::OkStatus();
   } catch (const std::exception& e) {
     // Rollback: remove from buffer and raw_vectors if exception occurred
+    bool rolled_back_from_buffer = false;
     if (!pending_buffer_.empty() &&
         pending_buffer_.back().internal_id == internal_id) {
       pending_buffer_.pop_back();
+      rolled_back_from_buffer = true;
     }
     raw_vectors_.erase(internal_id);
+    // Undo the metric bump if the vector made it into the buffer.
+    if (rolled_back_from_buffer) {
+      Metrics::GetStats().svs_pending_buffer_vectors.fetch_sub(
+          1, std::memory_order_relaxed);
+    }
     return absl::InternalError(
         absl::StrCat("SVS add exception: ", e.what()));
   }
@@ -264,6 +343,7 @@ absl::Status VectorSVS<T>::FlushBuffer() {
   VMSDK_LOG(NOTICE, nullptr) << "Flushing " << batch_size << " vectors to SVS graph...";
 
   buffer_flushing_ = true;  // Block searches during flush
+  vmsdk::StopWatch flush_timer;
 
   try {
     // Prepare batch arrays for SVS API
@@ -292,6 +372,18 @@ absl::Status VectorSVS<T>::FlushBuffer() {
     pending_buffer_.clear();
     buffer_flushing_ = false;
 
+    // Record flush duration and counters. Sampling happens only on success
+    // so the histogram reflects healthy flushes.
+    auto flush_duration = flush_timer.Duration();
+    Metrics::GetStats().svs_flush_latency.SubmitSample(flush_duration);
+    Metrics::GetStats().svs_flush_cnt.fetch_add(1, std::memory_order_relaxed);
+    Metrics::GetStats().svs_flushed_vectors_cnt.fetch_add(
+        batch_size, std::memory_order_relaxed);
+    // pending_buffer_vectors is a gauge across all SVS indexes. We decrement
+    // by what we just flushed; AddRecordImpl increments on each enqueue.
+    Metrics::GetStats().svs_pending_buffer_vectors.fetch_sub(
+        batch_size, std::memory_order_relaxed);
+
     VMSDK_LOG(NOTICE, nullptr) << "Flush complete. SVS graph now has "
                                 << num_elements_ << " vectors.";
 
@@ -304,9 +396,139 @@ absl::Status VectorSVS<T>::FlushBuffer() {
 }
 
 template <typename T>
+absl::Status VectorSVS<T>::TrainAndBuildLeanVecIndex() {
+  // Caller (AddRecordImpl) holds index_mutex_ exclusively.
+  if (svs_index_ != nullptr) {
+    return absl::FailedPreconditionError(
+        "TrainAndBuildLeanVecIndex called when SVS index already exists");
+  }
+  if (pending_buffer_.empty()) {
+    return absl::FailedPreconditionError(
+        "TrainAndBuildLeanVecIndex called with empty pending buffer");
+  }
+
+  size_t n = pending_buffer_.size();
+  VMSDK_LOG(NOTICE, nullptr)
+      << "Training LeanVec on " << n << " buffered vectors (leanvec_dims="
+      << build_config_.leanvec_dims << ")";
+
+  vmsdk::StopWatch total_timer;
+  buffer_flushing_ = true;  // Block searches during build (search rejects in
+                            // staging anyway, but keep the gauge accurate).
+
+  try {
+    // 1. Flatten buffered vectors into [n × dim] contiguous FP32 for both
+    //    LeanVecTrainingData::build (which reads it) and the subsequent
+    //    DynamicVamanaIndex::add (which copies it into SVS storage).
+    std::vector<float> flat(n * dimensions_);
+    std::vector<size_t> labels(n);
+    for (size_t i = 0; i < n; ++i) {
+      labels[i] = static_cast<size_t>(pending_buffer_[i].internal_id);
+      const float* src =
+          reinterpret_cast<const float*>(pending_buffer_[i].data.data());
+      std::copy(src, src + dimensions_, flat.begin() + i * dimensions_);
+    }
+
+    // 2. Train LeanVec compression matrices.
+    auto train_status = svs::runtime::v0::LeanVecTrainingData::build(
+        &leanvec_training_data_,
+        static_cast<size_t>(dimensions_),
+        n,
+        flat.data(),
+        build_config_.leanvec_dims);
+    if (!train_status.ok()) {
+      buffer_flushing_ = false;
+      return absl::InternalError(absl::StrCat(
+          "LeanVec training failed: ", train_status.message()));
+    }
+
+    // 3. Build empty LeanVec-backed DynamicVamana index using the matrices.
+    auto svs_metric = ToSVSMetric(distance_metric_);
+    auto storage_kind = ToSVSStorageKind(build_config_.compression);
+
+    svs::runtime::v0::VamanaIndex::BuildParams build_params;
+    build_params.graph_max_degree = build_config_.graph_max_degree;
+    build_params.construction_window_size =
+        build_config_.construction_window_size;
+    build_params.alpha = build_config_.alpha;
+
+    svs::runtime::v0::VamanaIndex::SearchParams search_params;
+    search_params.search_window_size = build_config_.search_window_size;
+
+    auto build_status = svs::runtime::v0::DynamicVamanaIndexLeanVec::build(
+        &svs_index_,
+        static_cast<size_t>(dimensions_),
+        svs_metric,
+        storage_kind,
+        leanvec_training_data_,
+        build_params,
+        search_params);
+    if (!build_status.ok()) {
+      buffer_flushing_ = false;
+      // Drop the partially-trained matrices; caller can retry.
+      (void)svs::runtime::v0::LeanVecTrainingData::destroy(
+          leanvec_training_data_);
+      leanvec_training_data_ = nullptr;
+      return absl::InternalError(absl::StrCat(
+          "LeanVec index build failed: ", build_status.message()));
+    }
+
+    // 4. Ingest the buffered vectors as the first batch — exactly like
+    //    FlushBuffer does for non-LeanVec compression types. The SVS
+    //    runtime API requires this two-step train→build→add flow for
+    //    LeanVec; verified against bindings/cpp/tests/runtime_test.cpp.
+    auto add_status = svs_index_->add(n, labels.data(), flat.data());
+    if (!add_status.ok()) {
+      buffer_flushing_ = false;
+      return absl::InternalError(absl::StrCat(
+          "LeanVec initial add failed: ", add_status.message()));
+    }
+
+    // 5. Transition to ready. The training matrices are now owned by the
+    //    SVS index; we release our copy.
+    pending_buffer_.clear();
+    buffer_flushing_ = false;
+    index_state_ = SVSIndexState::kReady;
+    (void)svs::runtime::v0::LeanVecTrainingData::destroy(
+        leanvec_training_data_);
+    leanvec_training_data_ = nullptr;
+
+    auto duration = total_timer.Duration();
+    Metrics::GetStats().svs_flush_latency.SubmitSample(duration);
+    Metrics::GetStats().svs_flush_cnt.fetch_add(1,
+                                                std::memory_order_relaxed);
+    Metrics::GetStats().svs_flushed_vectors_cnt.fetch_add(
+        n, std::memory_order_relaxed);
+    Metrics::GetStats().svs_pending_buffer_vectors.fetch_sub(
+        n, std::memory_order_relaxed);
+
+    VMSDK_LOG(NOTICE, nullptr)
+        << "LeanVec index ready. Trained on " << n << " vectors, ingested "
+        << n << " vectors. State=ready.";
+    return absl::OkStatus();
+  } catch (const std::exception& e) {
+    buffer_flushing_ = false;
+    return absl::InternalError(
+        absl::StrCat("LeanVec train-and-build exception: ", e.what()));
+  }
+}
+
+template <typename T>
 absl::Status VectorSVS<T>::RemoveRecordImpl(uint64_t internal_id) {
   try {
     absl::MutexLock lock(&index_mutex_);
+
+    // During LeanVec staging there is no SVS graph yet; remove is rejected.
+    // Removes pre-training are extremely unusual and supporting them would
+    // require staying consistent with raw_vectors_ across the eventual
+    // train-and-build, which isn't worth the complexity.
+    if (index_state_ == SVSIndexState::kStaging) {
+      return absl::FailedPreconditionError(
+          absl::StrCat("Index is training (",
+                       pending_buffer_.size(), "/",
+                       build_config_.leanvec_training_threshold,
+                       " vectors); remove is unavailable until ready."));
+    }
 
     // Flush buffered vectors before removal (simplest approach for benchmarking)
     if (!pending_buffer_.empty()) {
@@ -341,6 +563,15 @@ absl::Status VectorSVS<T>::ModifyRecordImpl(uint64_t internal_id,
   // separate remove() + add() calls, so we need exclusive access.
   try {
     absl::MutexLock lock(&index_mutex_);
+
+    // Reject during LeanVec staging; same reasoning as RemoveRecordImpl.
+    if (index_state_ == SVSIndexState::kStaging) {
+      return absl::FailedPreconditionError(
+          absl::StrCat("Index is training (",
+                       pending_buffer_.size(), "/",
+                       build_config_.leanvec_training_threshold,
+                       " vectors); modify is unavailable until ready."));
+    }
 
     // Flush buffered vectors before modification (simplest approach for benchmarking)
     if (!pending_buffer_.empty()) {
@@ -434,6 +665,10 @@ absl::StatusOr<std::vector<Neighbor>> VectorSVS<T>::Search(
         dimensions_ * GetDataTypeSize(), ")."));
   }
 
+  // Start total-search timer. Captures lock-wait + core + post-processing.
+  vmsdk::StopWatch total_search_timer;
+  Metrics::GetStats().svs_search_cnt.fetch_add(1, std::memory_order_relaxed);
+
   auto perform_search =
       [this, count, &filter, &search_window_size,
        &cancellation_token](absl::string_view q)
@@ -442,9 +677,22 @@ absl::StatusOr<std::vector<Neighbor>> VectorSVS<T>::Search(
     try {
       // Auto-flush buffered vectors before searching (for benchmarking)
       bool needs_flush = false;
+      bool was_flushing = false;
       {
         absl::ReaderMutexLock check_lock(&index_mutex_);
+        // LeanVec indexes have no SVS graph until training fires; reject.
+        if (index_state_ == SVSIndexState::kStaging) {
+          return absl::FailedPreconditionError(absl::StrCat(
+              "Index is training (", pending_buffer_.size(), "/",
+              build_config_.leanvec_training_threshold,
+              " vectors); search is unavailable until ready."));
+        }
         needs_flush = !pending_buffer_.empty() && !buffer_flushing_;
+        was_flushing = buffer_flushing_;
+      }
+      if (was_flushing) {
+        Metrics::GetStats().svs_searches_during_flush_cnt.fetch_add(
+            1, std::memory_order_relaxed);
       }
 
       if (needs_flush) {
@@ -455,7 +703,14 @@ absl::StatusOr<std::vector<Neighbor>> VectorSVS<T>::Search(
         }
       }
 
+      // Measure lock wait time. If searches are backed up behind a writer
+      // (e.g. during FlushBuffer), this is where the blackout shows up.
+      vmsdk::StopWatch lock_wait_timer;
       absl::ReaderMutexLock lock(&index_mutex_);
+      auto lock_wait = lock_wait_timer.Duration();
+      Metrics::GetStats().svs_search_lock_wait_latency.SubmitSample(lock_wait);
+      Metrics::GetStats().svs_search_blackout_us_total.fetch_add(
+          absl::ToInt64Microseconds(lock_wait), std::memory_order_relaxed);
 
       if (num_elements_ == 0) {
         return std::priority_queue<std::pair<T, hnswlib::labeltype>>();
@@ -482,6 +737,21 @@ absl::StatusOr<std::vector<Neighbor>> VectorSVS<T>::Search(
         svs_filter = std::make_unique<SVSIDFilterAdapter>(filter.get());
       }
 
+      // Configure OpenMP thread count on this search thread. omp_set_num_threads
+      // sets a per-thread ICV, so setting it once on the main thread during
+      // index creation does not propagate to reader threads. We re-apply here
+      // so the config reflects on each reader thread. 0 = library default.
+#ifdef _OPENMP
+      {
+        long long omp_threads = options::GetSVSOmpThreads().GetValue();
+        if (omp_threads > 0) {
+          omp_set_num_threads(static_cast<int>(omp_threads));
+        }
+      }
+#endif
+
+      // Measure core SVS search time (isolated from lock wait and post-proc).
+      vmsdk::StopWatch core_search_timer;
       auto status = svs_index_->search(
           1,  // single query
           reinterpret_cast<const float*>(q.data()),
@@ -490,6 +760,8 @@ absl::StatusOr<std::vector<Neighbor>> VectorSVS<T>::Search(
           labels.data(),
           params_ptr,
           svs_filter.get());
+      Metrics::GetStats().svs_search_core_latency.SubmitSample(
+          core_search_timer.Duration());
 
       if (!status.ok()) {
         return absl::InternalError(
@@ -529,10 +801,16 @@ absl::StatusOr<std::vector<Neighbor>> VectorSVS<T>::Search(
         perform_search(absl::string_view(
             reinterpret_cast<const char*>(norm_record.data()),
             norm_record.size())));
-    return CreateReply(search_result);
+    auto reply = CreateReply(search_result);
+    Metrics::GetStats().svs_vector_index_search_latency.SubmitSample(
+        total_search_timer.Duration());
+    return reply;
   }
   VMSDK_ASSIGN_OR_RETURN(auto search_result, perform_search(query));
-  return CreateReply(search_result);
+  auto reply = CreateReply(search_result);
+  Metrics::GetStats().svs_vector_index_search_latency.SubmitSample(
+      total_search_timer.Duration());
+  return reply;
 }
 
 // --- Vector tracking ---
@@ -566,6 +844,16 @@ absl::StatusOr<std::pair<float, hnswlib::labeltype>>
 VectorSVS<T>::ComputeDistanceFromRecordImpl(
     uint64_t internal_id, absl::string_view query) const {
   absl::ReaderMutexLock lock(&index_mutex_);
+  // Pre-filter path. Reject during LeanVec staging to keep behavior
+  // consistent with Search() — both belong to the FT.SEARCH execution
+  // path and should fail uniformly until the index is ready.
+  if (index_state_ == SVSIndexState::kStaging) {
+    return absl::FailedPreconditionError(
+        absl::StrCat("Index is training (",
+                     pending_buffer_.size(), "/",
+                     build_config_.leanvec_training_threshold,
+                     " vectors); search is unavailable until ready."));
+  }
   auto it = raw_vectors_.find(internal_id);
   if (it == raw_vectors_.end()) {
     return absl::InternalError(
@@ -619,6 +907,9 @@ void VectorSVS<T>::ToProtoImpl(
   svs_algo_proto->set_search_window_size(build_config_.search_window_size);
   svs_algo_proto->set_alpha(build_config_.alpha);
   svs_algo_proto->set_compression(build_config_.compression);
+  svs_algo_proto->set_leanvec_dims(build_config_.leanvec_dims);
+  svs_algo_proto->set_leanvec_training_threshold(
+      build_config_.leanvec_training_threshold);
   vector_index_proto->set_allocated_svs_vamana_algorithm(
       svs_algo_proto.release());
 }
@@ -636,8 +927,24 @@ int VectorSVS<T>::RespondWithInfoImpl(ValkeyModuleCtx* ctx) const {
     ValkeyModule_ReplyWithSimpleString(ctx, "UNKNOWN");
   }
   ValkeyModule_ReplyWithSimpleString(ctx, "algorithm");
-  // 6 pairs: name, graph_max_degree, cws, sws, alpha, compression
-  ValkeyModule_ReplyWithArray(ctx, 12);
+
+  // Snapshot state under a read lock so we don't observe a transition
+  // mid-reply.
+  SVSIndexState state_snapshot;
+  size_t buffered_snapshot;
+  {
+    absl::ReaderMutexLock lock(&index_mutex_);
+    state_snapshot = index_state_;
+    buffered_snapshot = pending_buffer_.size();
+  }
+
+  bool is_leanvec = IsLeanVecCompression(build_config_.compression);
+  // Base pairs: name, graph_max_degree, cws, sws, alpha, compression, state.
+  // For LeanVec also: leanvec_dims, leanvec_training_threshold,
+  // training_progress.
+  int n_pairs = is_leanvec ? 10 : 7;
+  ValkeyModule_ReplyWithArray(ctx, n_pairs * 2);
+
   ValkeyModule_ReplyWithSimpleString(ctx, "name");
   ValkeyModule_ReplyWithSimpleString(
       ctx,
@@ -656,6 +963,23 @@ int VectorSVS<T>::RespondWithInfoImpl(ValkeyModuleCtx* ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "compression");
   ValkeyModule_ReplyWithSimpleString(
       ctx, CompressionTypeName(build_config_.compression));
+  ValkeyModule_ReplyWithSimpleString(ctx, "state");
+  ValkeyModule_ReplyWithSimpleString(
+      ctx, state_snapshot == SVSIndexState::kStaging ? "training" : "ready");
+
+  if (is_leanvec) {
+    ValkeyModule_ReplyWithSimpleString(ctx, "leanvec_dims");
+    ValkeyModule_ReplyWithLongLong(ctx, build_config_.leanvec_dims);
+    ValkeyModule_ReplyWithSimpleString(ctx, "leanvec_training_threshold");
+    ValkeyModule_ReplyWithLongLong(
+        ctx, build_config_.leanvec_training_threshold);
+    ValkeyModule_ReplyWithSimpleString(ctx, "training_progress");
+    // "buffered/threshold" string so it's grep-friendly in tests.
+    auto progress = absl::StrCat(buffered_snapshot, "/",
+                                  build_config_.leanvec_training_threshold);
+    ValkeyModule_ReplyWithStringBuffer(ctx, progress.c_str(),
+                                        progress.size());
+  }
 
   return 4;  // 4 top-level reply pairs: data_type + algorithm
 }

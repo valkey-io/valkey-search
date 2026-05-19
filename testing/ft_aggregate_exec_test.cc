@@ -357,7 +357,7 @@ TEST_F(AggregateExecTest, FirstValueReducerTest) {
       auto params = std::make_unique<AggregateParameters>(0);
       params->parse_vars_.index_interface_ = &fakeIndex;
       params->AddRecordAttribute("n1", "n1", indexes::IndexerType::kNumeric);
-      params->AddRecordAttribute("n2", "n1", indexes::IndexerType::kNumeric);
+      params->AddRecordAttribute("n2", "n2", indexes::IndexerType::kNumeric);
       auto parser = CreateAggregateParser();
       auto result = parser.Parse(*params, itr);
       EXPECT_FALSE(result.ok()) << tc.text_ << ": expected parse failure";
@@ -413,31 +413,27 @@ TEST_F(AggregateExecTest, FirstValueReducerEdgeCasesTest) {
     auto param =
         MakeStages("groupby 1 @n2 reduce first_value 4 @n1 BY @n2 ASC");
     RecordSet records(nullptr);
-    // rec with n2=1 (best ASC) has nil n1 — that nil should be returned.
+    // Same group key (n2=1.0) ties on the BY comparison, first-encountered
+    // wins, so r1's nil n1 must be preserved rather than overwritten by r2.
     auto r1 = std::make_unique<Record>(2);
     r1->fields_[0] = expr::Value();
     r1->fields_[1] = expr::Value(1.0);
     records.emplace_back(std::move(r1));
     auto r2 = std::make_unique<Record>(2);
     r2->fields_[0] = expr::Value(100.0);
-    r2->fields_[1] = expr::Value(5.0);
+    r2->fields_[1] = expr::Value(1.0);
     records.emplace_back(std::move(r2));
     EXPECT_TRUE(param->stages_[0]->Execute(records).ok());
-    ASSERT_EQ(records.size(), 2);
+    ASSERT_EQ(records.size(), 1);
     std::cerr << "Results:\n";
     for (auto& rec : records) {
       std::cerr << *rec << "\n";
     }
-    // Find the group with n2=1 and verify its result is nil.
-    bool found = false;
-    for (auto& rec : records) {
-      if (rec->fields_.at(1).IsDouble() &&
-          *rec->fields_.at(1).AsDouble() == 1.0) {
-        EXPECT_TRUE(rec->fields_.at(2).IsNil());
-        found = true;
-      }
-    }
-    EXPECT_TRUE(found);
+    // The single group (n2=1.0) should have its first_value result be nil.
+    auto& rec = records.front();
+    ASSERT_TRUE(rec->fields_.at(1).IsDouble());
+    EXPECT_EQ(*rec->fields_.at(1).AsDouble(), 1.0);
+    EXPECT_TRUE(rec->fields_.at(2).IsNil());
   }
 
   // Tie-breaking: first encountered record wins (ASC).

@@ -359,10 +359,16 @@ absl::Status SchemaManager::AddAliasInternal(uint32_t db_num,
 absl::Status SchemaManager::AddAlias(uint32_t db_num, absl::string_view alias,
                                      absl::string_view index_name) {
   if (coordinator_enabled_) {
-    if (coordinator::MetadataManager::Instance()
-            .GetEntryContent(kAliasMetadataTypeName,
-                             coordinator::ObjName(db_num, alias))
-            .ok()) {
+    auto existing =
+        coordinator::MetadataManager::Instance().GetEntryContent(
+            kAliasMetadataTypeName, coordinator::ObjName(db_num, alias));
+    if (existing.ok()) {
+      // Idempotent retry: alias already committed to this index.
+      coordinator::AliasEntry existing_entry;
+      if (existing->UnpackTo(&existing_entry) &&
+          existing_entry.index_name() == index_name) {
+        return absl::OkStatus();
+      }
       return absl::AlreadyExistsError("Alias already exists");
     }
     if (coordinator::MetadataManager::Instance()

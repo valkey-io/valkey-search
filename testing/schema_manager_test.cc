@@ -1166,8 +1166,18 @@ TEST_F(SchemaManagerCoordinatorAliasTest, OnAliasMetadataCallbackIdempotent) {
 TEST_F(SchemaManagerCoordinatorAliasTest, CoordAddAliasDuplicate) {
   VMSDK_EXPECT_OK(
       SchemaManager::Instance().AddAlias(kDb0, "dup_alias", kIndexName));
+  // Same alias pointing to the same index is idempotent (safe retry after a
+  // committed-but-unacknowledged ALIASADD).
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "dup_alias", kIndexName));
+}
+
+TEST_F(SchemaManagerCoordinatorAliasTest, CoordAddAliasDuplicateDifferentIndex) {
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "dup_alias", kIndexName));
+  // Same alias pointing to a *different* index is a genuine conflict.
   auto status =
-      SchemaManager::Instance().AddAlias(kDb0, "dup_alias", kIndexName);
+      SchemaManager::Instance().AddAlias(kDb0, "dup_alias", "other_index");
   EXPECT_EQ(status.code(), absl::StatusCode::kAlreadyExists);
 }
 

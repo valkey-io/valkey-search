@@ -137,6 +137,9 @@ absl::Status RDBChunkOutputStream::Close() {
 void RegisterRDBCallback(data_model::RDBSectionType type,
                          RDBSectionCallbacks callbacks) {
   vmsdk::VerifyMainThread();
+  DCHECK(!kRegisteredRDBSectionCallbacks.contains(type))
+      << "Duplicate RDB callback registration for type " << type
+      << "; previous registration will be silently overwritten";
   kRegisteredRDBSectionCallbacks[type] = std::move(callbacks);
 }
 void ClearRDBCallbacks() { kRegisteredRDBSectionCallbacks.clear(); }

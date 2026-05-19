@@ -181,9 +181,10 @@ INSTANTIATE_TEST_SUITE_P(
     });
 
 TEST_F(FTAliasAddTest, AlwaysReplicatesVerbatim_CoordinatorEnabled) {
-  VMSDK_EXPECT_OK(
-      const_cast<vmsdk::config::Boolean&>(options::GetUseCoordinator())
-          .SetValue(true));
+  auto& coordinator_flag =
+      const_cast<vmsdk::config::Boolean&>(options::GetUseCoordinator());
+  const bool original_coordinator_value = coordinator_flag.GetValue();
+  VMSDK_EXPECT_OK(coordinator_flag.SetValue(true));
 
   data_model::IndexSchema index_schema_proto;
   ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
@@ -204,12 +205,14 @@ TEST_F(FTAliasAddTest, AlwaysReplicatesVerbatim_CoordinatorEnabled) {
   for (auto* arg : argv) {
     TestValkeyModule_FreeString(&fake_ctx_, arg);
   }
+  VMSDK_EXPECT_OK(coordinator_flag.SetValue(original_coordinator_value));
 }
 
 TEST_F(FTAliasAddTest, AlwaysReplicatesVerbatim_CoordinatorDisabled) {
-  VMSDK_EXPECT_OK(
-      const_cast<vmsdk::config::Boolean&>(options::GetUseCoordinator())
-          .SetValue(false));
+  auto& coordinator_flag =
+      const_cast<vmsdk::config::Boolean&>(options::GetUseCoordinator());
+  const bool original_coordinator_value = coordinator_flag.GetValue();
+  VMSDK_EXPECT_OK(coordinator_flag.SetValue(false));
 
   data_model::IndexSchema index_schema_proto;
   ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
@@ -230,6 +233,7 @@ TEST_F(FTAliasAddTest, AlwaysReplicatesVerbatim_CoordinatorDisabled) {
   for (auto* arg : argv) {
     TestValkeyModule_FreeString(&fake_ctx_, arg);
   }
+  VMSDK_EXPECT_OK(coordinator_flag.SetValue(original_coordinator_value));
 }
 
 struct FTAliasDelTestCase {
@@ -324,9 +328,10 @@ INSTANTIATE_TEST_SUITE_P(
     });
 
 TEST_F(FTAliasDelTest, AlwaysReplicatesVerbatim_CoordinatorEnabled) {
-  VMSDK_EXPECT_OK(
-      const_cast<vmsdk::config::Boolean&>(options::GetUseCoordinator())
-          .SetValue(true));
+  auto& coordinator_flag =
+      const_cast<vmsdk::config::Boolean&>(options::GetUseCoordinator());
+  const bool original_coordinator_value = coordinator_flag.GetValue();
+  VMSDK_EXPECT_OK(coordinator_flag.SetValue(true));
 
   data_model::IndexSchema index_schema_proto;
   ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
@@ -343,12 +348,14 @@ TEST_F(FTAliasDelTest, AlwaysReplicatesVerbatim_CoordinatorEnabled) {
   argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "my_alias");
   VMSDK_EXPECT_OK(FTAliasDelCmd(&fake_ctx_, argv, 2));
   for (auto* arg : argv) TestValkeyModule_FreeString(&fake_ctx_, arg);
+  VMSDK_EXPECT_OK(coordinator_flag.SetValue(original_coordinator_value));
 }
 
 TEST_F(FTAliasDelTest, AlwaysReplicatesVerbatim_CoordinatorDisabled) {
-  VMSDK_EXPECT_OK(
-      const_cast<vmsdk::config::Boolean&>(options::GetUseCoordinator())
-          .SetValue(false));
+  auto& coordinator_flag =
+      const_cast<vmsdk::config::Boolean&>(options::GetUseCoordinator());
+  const bool original_coordinator_value = coordinator_flag.GetValue();
+  VMSDK_EXPECT_OK(coordinator_flag.SetValue(false));
 
   data_model::IndexSchema index_schema_proto;
   ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
@@ -366,6 +373,7 @@ TEST_F(FTAliasDelTest, AlwaysReplicatesVerbatim_CoordinatorDisabled) {
 
   VMSDK_EXPECT_OK(FTAliasDelCmd(&fake_ctx_, argv, 2));
   for (auto* arg : argv) TestValkeyModule_FreeString(&fake_ctx_, arg);
+  VMSDK_EXPECT_OK(coordinator_flag.SetValue(original_coordinator_value));
 }
 
 struct FTAliasUpdateTestCase {
@@ -542,9 +550,10 @@ INSTANTIATE_TEST_SUITE_P(
     });
 
 TEST_F(FTAliasUpdateTest, AlwaysReplicatesVerbatim_CoordinatorEnabled) {
-  VMSDK_EXPECT_OK(
-      const_cast<vmsdk::config::Boolean&>(options::GetUseCoordinator())
-          .SetValue(true));
+  auto& coordinator_flag =
+      const_cast<vmsdk::config::Boolean&>(options::GetUseCoordinator());
+  const bool original_coordinator_value = coordinator_flag.GetValue();
+  VMSDK_EXPECT_OK(coordinator_flag.SetValue(true));
 
   data_model::IndexSchema index_schema_proto;
   ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
@@ -560,12 +569,14 @@ TEST_F(FTAliasUpdateTest, AlwaysReplicatesVerbatim_CoordinatorEnabled) {
   argv[2] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_idx");
   VMSDK_EXPECT_OK(FTAliasUpdateCmd(&fake_ctx_, argv, 3));
   for (auto* arg : argv) TestValkeyModule_FreeString(&fake_ctx_, arg);
+  VMSDK_EXPECT_OK(coordinator_flag.SetValue(original_coordinator_value));
 }
 
 TEST_F(FTAliasUpdateTest, AlwaysReplicatesVerbatim_CoordinatorDisabled) {
-  VMSDK_EXPECT_OK(
-      const_cast<vmsdk::config::Boolean&>(options::GetUseCoordinator())
-          .SetValue(false));
+  auto& coordinator_flag =
+      const_cast<vmsdk::config::Boolean&>(options::GetUseCoordinator());
+  const bool original_coordinator_value = coordinator_flag.GetValue();
+  VMSDK_EXPECT_OK(coordinator_flag.SetValue(false));
 
   data_model::IndexSchema index_schema_proto;
   ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
@@ -581,6 +592,7 @@ TEST_F(FTAliasUpdateTest, AlwaysReplicatesVerbatim_CoordinatorDisabled) {
   argv[2] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_idx");
   VMSDK_EXPECT_OK(FTAliasUpdateCmd(&fake_ctx_, argv, 3));
   for (auto* arg : argv) TestValkeyModule_FreeString(&fake_ctx_, arg);
+  VMSDK_EXPECT_OK(coordinator_flag.SetValue(original_coordinator_value));
 }
 
 }  // namespace

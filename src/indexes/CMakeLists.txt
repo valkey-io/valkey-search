@@ -63,12 +63,7 @@ set(SRCS_UNIVERSAL_SET_FETCHER ${CMAKE_CURRENT_LIST_DIR}/universal_set_fetcher.c
 valkey_search_add_static_library(universal_set_fetcher "${SRCS_UNIVERSAL_SET_FETCHER}")
 target_link_libraries(universal_set_fetcher PUBLIC index_base)
 
-set(SRCS_COMPOSED_ITERATORS ${CMAKE_CURRENT_LIST_DIR}/composed_iterators.cc
-                             ${CMAKE_CURRENT_LIST_DIR}/composed_iterators.h)
 
-valkey_search_add_static_library(composed_iterators "${SRCS_COMPOSED_ITERATORS}")
-target_link_libraries(composed_iterators PUBLIC index_base)
-target_link_libraries(composed_iterators PUBLIC string_interning)
 
 set(SRCS_TAG ${CMAKE_CURRENT_LIST_DIR}/tag.cc ${CMAKE_CURRENT_LIST_DIR}/tag.h)
 

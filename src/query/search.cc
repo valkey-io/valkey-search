@@ -27,7 +27,6 @@
 #include "absl/strings/str_join.h"
 #include "src/attribute_data_type.h"
 #include "src/indexes/index_base.h"
-#include "src/indexes/composed_iterators.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
@@ -497,13 +496,6 @@ std::unique_ptr<indexes::text::TextIterator> BuildIterator(
   }
 }
 
-std::unique_ptr<indexes::EntriesFetcherIteratorBase> BuildIteratorTree(
-    const SearchParameters &parameters, const Predicate *predicate,
-    bool negate) {
-  auto text_iter = BuildIterator(parameters, predicate, negate);
-  return std::make_unique<indexes::text::TextFetcher>(std::move(text_iter));
-}
-
 // Wrapper that produces an EntriesFetcherBase from the iterator tree.
 // Estimate result set size from predicate tree (for planner decisions).
 size_t EstimatePredicateSize(const SearchParameters &parameters,
@@ -555,6 +547,7 @@ class ComposedIteratorFetcher : public indexes::EntriesFetcherBase {
       : iter_(std::move(iter)), size_(size) {}
   size_t Size() const override { return size_; }
   std::unique_ptr<indexes::EntriesFetcherIteratorBase> Begin() override {
+    CHECK(iter_ != nullptr) << "ComposedIteratorFetcher::Begin() called twice";
     return std::move(iter_);
   }
 
@@ -600,8 +593,10 @@ size_t EvaluateFilterAsPrimary(
       return size;
     }
   }
-  // Only use composed iterators for actual composed predicates.
-  auto iter = BuildIteratorTree(parameters, predicate, negate);
+  // Composed/negated predicates: build full iterator tree.
+  auto text_iter = BuildIterator(parameters, predicate, negate);
+  auto iter =
+      std::make_unique<indexes::text::TextFetcher>(std::move(text_iter));
   size_t size = EstimatePredicateSize(parameters, predicate, negate);
   entries_fetchers.push(
       std::make_unique<ComposedIteratorFetcher>(std::move(iter), size));

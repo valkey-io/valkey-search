@@ -92,8 +92,8 @@ class ExcludeIterator : public TextIterator {
   void SkipExcluded() {
     while (!source_->DoneKeys()) {
       if (excluded_->DoneKeys()) return;  // nothing left to exclude
-      excluded_->SeekForwardKey(source_->CurrentKey());
-      if (excluded_->DoneKeys()) return;
+      // Check if current source key is excluded.
+      if (!excluded_->SeekForwardKey(source_->CurrentKey())) return;
       if (excluded_->CurrentKey() == source_->CurrentKey()) {
         source_->NextKey();  // skip this key
       } else {

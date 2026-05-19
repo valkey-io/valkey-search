@@ -8,6 +8,7 @@
 #define VALKEYSEARCH_SRC_INDEXES_UNIVERSAL_SET_FETCHER_H_
 
 #include <memory>
+#include <vector>
 
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
@@ -33,8 +34,8 @@ class UniversalSetFetcher : public EntriesFetcherBase {
     bool SeekForwardKey(const InternedStringPtr& target) override;
 
    private:
-    IndexSchema::IndexKeyInfoMap::const_iterator current_it_;
-    IndexSchema::IndexKeyInfoMap::const_iterator end_it_;
+    std::vector<InternedStringPtr> sorted_keys_;
+    size_t current_idx_{0};
   };
 
   const IndexSchema* index_schema_;

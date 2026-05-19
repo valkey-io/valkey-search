@@ -95,6 +95,10 @@ class ProximityIterator : public TextIterator {
   absl::InlinedVector<std::pair<Position, size_t>,
                       kProximityTermsInlineCapacity>
       pos_with_idx_;
+  // Indices into iters_ of children that have positions on the current key.
+  // Children with DonePositions()=true are excluded from positional validation.
+  absl::InlinedVector<size_t, kProximityTermsInlineCapacity>
+      active_pos_indices_;
   // Flag used to skip positional checks. This is used when performing
   // an AND on text predicates without any positional constraints.
   bool skip_positional_checks_;

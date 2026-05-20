@@ -60,13 +60,19 @@ void OnShutdownCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
   // Clear all PausePoints so any waiting worker threads wake up and exit
   // their spin loops, then join all thread pools so every in-flight task
   // completes before we tear down index schemas.  This ordering matters:
-  //   1. ClearAllPausePoints  – unblocks workers stuck in PausePoint().
-  //   2. JoinAllThreadPools   – drains task queues and waits for every
-  //      worker thread to exit.
-  //   3. OnShutdownCallback   – removes all index schemas on the main
-  //      thread.
+  //   1. ClearAllPausePoints       – unblocks workers stuck in PausePoint().
+  //   2. JoinAllThreadPools        – drains task queues and waits for every
+  //                                  worker thread to exit.
+  //   3. DrainPendingMainCallbacks – frees any RunByMain() one-shots that
+  //                                  workers enqueued after passing the
+  //                                  IsShuttingDown() check; the event loop
+  //                                  won't run them now and they'd otherwise
+  //                                  leak.
+  //   4. OnShutdownCallback        – removes all index schemas on the main
+  //                                  thread.
   vmsdk::debug::ClearAllPausePoints();
   ValkeySearch::Instance().JoinAllThreadPools();
+  vmsdk::DrainPendingMainCallbacks();
   SchemaManager::Instance().OnShutdownCallback(ctx, eid, subevent, data);
 }
 

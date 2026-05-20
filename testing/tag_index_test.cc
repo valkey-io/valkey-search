@@ -63,7 +63,7 @@ TEST_F(TagIndexTest, AddRecordAndSearchTest) {
   auto parsed_tags = FilterParser::ParseQueryTags(filter_tag_string).value();
   query::TagPredicate predicate(index.get(), alias, identifier,
                                 filter_tag_string, parsed_tags);
-  auto entries_fetcher = index->Search(predicate, false);
+  auto entries_fetcher = index->Search(predicate, false, false);
   EXPECT_EQ(entries_fetcher->Size(), 1);
   EXPECT_THAT(Fetch(*entries_fetcher), testing::UnorderedElementsAre("key1"));
 }
@@ -79,7 +79,7 @@ TEST_F(TagIndexTest, RemoveRecordAndSearchTest) {
   auto parsed_tags = FilterParser::ParseQueryTags(filter_tag_string).value();
   query::TagPredicate predicate(index.get(), alias, identifier,
                                 filter_tag_string, parsed_tags);
-  auto entries_fetcher = index->Search(predicate, false);
+  auto entries_fetcher = index->Search(predicate, false, false);
 
   EXPECT_EQ(entries_fetcher->Size(), 0);
 }
@@ -94,7 +94,7 @@ TEST_F(TagIndexTest, ModifyRecordAndSearchTest) {
   auto parsed_tags = FilterParser::ParseQueryTags(filter_tag_string).value();
   query::TagPredicate predicate(index.get(), alias, identifier,
                                 filter_tag_string, parsed_tags);
-  auto entries_fetcher = index->Search(predicate, false);
+  auto entries_fetcher = index->Search(predicate, false, false);
 
   EXPECT_EQ(entries_fetcher->Size(), 1);
   EXPECT_THAT(Fetch(*entries_fetcher), testing::UnorderedElementsAre("key1"));
@@ -112,7 +112,7 @@ TEST_F(TagIndexTest, ModifyRecordWithEmptyString) {
   auto parsed_tags = FilterParser::ParseQueryTags(filter_tag_string).value();
   query::TagPredicate predicate(index.get(), alias, identifier,
                                 filter_tag_string, parsed_tags);
-  auto entries_fetcher = index->Search(predicate, false);
+  auto entries_fetcher = index->Search(predicate, false, false);
 
   EXPECT_EQ(entries_fetcher->Size(), 0);
   EXPECT_EQ(index->GetTrackedKeyCount(), 0);
@@ -149,7 +149,7 @@ TEST_F(TagIndexTest, PrefixSearchHappyTest) {
   auto entries_fetcher =
       index->Search(query::TagPredicate(index.get(), alias, identifier,
                                         filter_tag_string, parsed_tags),
-                    false);
+                    false, false);
   EXPECT_THAT(Fetch(*entries_fetcher),
               testing::UnorderedElementsAre("doc1", "doc2", "doc3", "doc4"));
 }
@@ -169,7 +169,7 @@ TEST_F(TagIndexTest, PrefixSearchCaseInsensitiveTest) {
   auto entries_fetcher =
       index->Search(query::TagPredicate(index.get(), alias, identifier,
                                         filter_tag_string, parsed_tags),
-                    false);
+                    false, false);
   EXPECT_THAT(Fetch(*entries_fetcher),
               testing::UnorderedElementsAre("doc1", "doc2", "doc3", "doc4"));
 }
@@ -202,7 +202,7 @@ TEST_F(TagIndexTest, PrefixSearchMinLengthSatisfiedTest) {
   auto entries_fetcher =
       index->Search(query::TagPredicate(index.get(), alias, identifier,
                                         filter_tag_string, parsed_tags),
-                    false);
+                    false, false);
   EXPECT_EQ(entries_fetcher->Size(), 2);
 }
 
@@ -228,7 +228,7 @@ TEST_F(TagIndexTest, NegativeSearchTest) {
   auto entries_fetcher =
       index->Search(query::TagPredicate(index.get(), alias, identifier,
                                         filter_tag_string, parsed_tags),
-                    true);
+                    true, false);
   EXPECT_THAT(
       Fetch(*entries_fetcher),
       testing::UnorderedElementsAre("doc1", "doc2", "doc3", "doc5", "doc6"));
@@ -248,7 +248,7 @@ TEST_F(TagIndexTest, DeletedKeysNegativeSearchTest) {
       query::TagPredicate(
           index.get(), alias, identifier, filter_tag_string,
           FilterParser::ParseQueryTags(filter_tag_string).value()),
-      true);
+      true, false);
   EXPECT_THAT(Fetch(*entries_fetcher),
               testing::UnorderedElementsAre("doc0", "doc1"));
 
@@ -259,7 +259,7 @@ TEST_F(TagIndexTest, DeletedKeysNegativeSearchTest) {
       query::TagPredicate(
           index.get(), alias, identifier, filter_tag_string,
           FilterParser::ParseQueryTags(filter_tag_string).value()),
-      true);
+      true, false);
   EXPECT_THAT(Fetch(*entries_fetcher), testing::UnorderedElementsAre("doc0"));
 }
 

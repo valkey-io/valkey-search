@@ -18,9 +18,9 @@ std::unique_ptr<EntriesFetcherIteratorBase> UniversalSetFetcher::Begin() {
 }
 
 UniversalSetFetcher::Iterator::Iterator(const IndexSchema* index_schema) {
-  const auto& index_key_info = index_schema->GetIndexKeyInfo();
-  current_it_ = index_key_info.begin();
-  end_it_ = index_key_info.end();
+  const auto& sorted_keys = index_schema->GetSortedKeys();
+  current_it_ = sorted_keys.begin();
+  end_it_ = sorted_keys.end();
 }
 
 bool UniversalSetFetcher::Iterator::Done() const {
@@ -32,13 +32,12 @@ void UniversalSetFetcher::Iterator::Next() {
 }
 
 const InternedStringPtr& UniversalSetFetcher::Iterator::operator*() const {
-  return current_it_->first;
+  return *current_it_;
 }
 
 bool UniversalSetFetcher::Iterator::SeekForwardKey(
     const InternedStringPtr& target) {
-  // btree_map iterates in sorted order — linear scan forward is correct.
-  while (current_it_ != end_it_ && current_it_->first < target) {
+  while (current_it_ != end_it_ && *current_it_ < target) {
     ++current_it_;
   }
   return current_it_ != end_it_;

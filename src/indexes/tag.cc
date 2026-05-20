@@ -7,6 +7,7 @@
 
 #include "src/indexes/tag.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -257,38 +258,56 @@ const absl::flat_hash_set<absl::string_view>* Tag::GetValue(
 Tag::EntriesFetcherIterator::EntriesFetcherIterator(
     const PatriciaTreeIndex& tree,
     absl::flat_hash_set<PatriciaNodeIndex*>& entries,
-    const InternedStringSet& untracked_keys, bool negate)
+    const InternedStringSet& untracked_keys, bool negate, bool sorted)
     : tree_(tree),
+      sorted_(sorted),
+      sorted_idx_(0),
       negate_(negate),
       entries_(entries),
       untracked_keys_(untracked_keys) {
   CHECK(!negate_) << "Negate handled by ExcludeIterator, not tag iterator";
-  for (auto* node : entries_) {
-    if (node && node->value.has_value() && !node->value.value().empty()) {
-      heap_.push_back_unsorted(
-          HeapEntry{node->value.value().begin(), node->value.value().end()});
-    }
-  }
-  heap_.heapify();
-  AdvanceToNextUniqueKey();
-}
-void Tag::EntriesFetcherIterator::AdvanceToNextUniqueKey() {
-  // Skip duplicates: advance heap past all entries equal to current_key_.
-  while (!heap_.empty()) {
-    const auto& top = heap_.min();
-    if (current_key_ && *top.current == current_key_) {
-      // Duplicate — advance this iterator past it.
-      HeapEntry entry = top;
-      heap_.pop_min();
-      ++entry.current;
-      if (entry.current != entry.end) {
-        heap_.emplace(entry);
+  if (sorted_) {
+    // Collect all keys, sort, deduplicate.
+    for (auto* node : entries_) {
+      if (node && node->value.has_value()) {
+        for (const auto& key : node->value.value()) {
+          sorted_keys_.push_back(key);
+        }
       }
-    } else {
-      // New unique key found.
-      current_key_ = *top.current;
+    }
+    std::sort(sorted_keys_.begin(), sorted_keys_.end());
+    sorted_keys_.erase(
+        std::unique(sorted_keys_.begin(), sorted_keys_.end()),
+        sorted_keys_.end());
+    if (!sorted_keys_.empty()) {
+      current_key_ = sorted_keys_[0];
+    }
+  } else {
+    nodes_iter_ = entries_.begin();
+    nodes_end_ = entries_.end();
+    LinearAdvance();
+  }
+}
+
+void Tag::EntriesFetcherIterator::LinearAdvance() {
+  if (keys_iter_.has_value()) {
+    ++keys_iter_.value();
+    if (keys_iter_.value() != keys_end_.value()) {
+      current_key_ = *keys_iter_.value();
       return;
     }
+    ++nodes_iter_;
+    keys_iter_ = std::nullopt;
+  }
+  while (nodes_iter_ != nodes_end_) {
+    auto* node = *nodes_iter_;
+    if (node && node->value.has_value() && !node->value.value().empty()) {
+      keys_iter_ = node->value.value().begin();
+      keys_end_ = node->value.value().end();
+      current_key_ = *keys_iter_.value();
+      return;
+    }
+    ++nodes_iter_;
   }
   current_key_ = {};
 }
@@ -297,16 +316,16 @@ bool Tag::EntriesFetcherIterator::Done() const { return !current_key_; }
 
 void Tag::EntriesFetcherIterator::Next() {
   if (!current_key_) return;
-  // Advance all heap entries that are on current_key_.
-  while (!heap_.empty() && *heap_.min().current == current_key_) {
-    HeapEntry entry = heap_.min();
-    heap_.pop_min();
-    ++entry.current;
-    if (entry.current != entry.end) {
-      heap_.emplace(entry);
+  if (sorted_) {
+    ++sorted_idx_;
+    if (sorted_idx_ < sorted_keys_.size()) {
+      current_key_ = sorted_keys_[sorted_idx_];
+    } else {
+      current_key_ = {};
     }
+  } else {
+    LinearAdvance();
   }
-  AdvanceToNextUniqueKey();
 }
 
 const InternedStringPtr& Tag::EntriesFetcherIterator::operator*() const {
@@ -315,27 +334,25 @@ const InternedStringPtr& Tag::EntriesFetcherIterator::operator*() const {
 
 bool Tag::EntriesFetcherIterator::SeekForwardKey(
     const InternedStringPtr& target) {
+  CHECK(sorted_) << "SeekForwardKey requires sorted mode";
   if (!current_key_) return false;
   if (current_key_ >= target) return true;
-  // Drain heap entries behind target.
-  while (!heap_.empty() && *heap_.min().current < target) {
-    HeapEntry entry = heap_.min();
-    heap_.pop_min();
-    while (entry.current != entry.end && *entry.current < target) {
-      ++entry.current;
-    }
-    if (entry.current != entry.end) {
-      heap_.emplace(entry);
-    }
+  auto it = std::lower_bound(sorted_keys_.begin() + sorted_idx_,
+                              sorted_keys_.end(), target);
+  if (it == sorted_keys_.end()) {
+    current_key_ = {};
+    sorted_idx_ = sorted_keys_.size();
+    return false;
   }
-  current_key_ = {};
-  AdvanceToNextUniqueKey();
-  return !Done();
+  sorted_idx_ = it - sorted_keys_.begin();
+  current_key_ = sorted_keys_[sorted_idx_];
+  return true;
 }
 
 // TODO: b/357027854 - Support Suffix/Infix Search
 std::unique_ptr<Tag::EntriesFetcher> Tag::Search(
-    const query::TagPredicate& predicate, bool negate) const {
+    const query::TagPredicate& predicate, bool negate, bool sorted) const {
+  CHECK(!negate) << "Negate handled by ExcludeIterator, not tag iterator";
   absl::flat_hash_set<PatriciaNodeIndex*> entries;
   size_t size = 0;
 
@@ -362,19 +379,14 @@ std::unique_ptr<Tag::EntriesFetcher> Tag::Search(
       }
     }
   }
-  if (negate) {
-    size = tracked_tags_by_keys_.size() > size
-               ? tracked_tags_by_keys_.size() - size
-               : tracked_tags_by_keys_.size();
-    size += untracked_keys_.size();
-  }
   return std::make_unique<Tag::EntriesFetcher>(tree_, entries, size, negate,
-                                               untracked_keys_);
+                                               sorted, untracked_keys_);
 }
 
 std::unique_ptr<EntriesFetcherIteratorBase> Tag::EntriesFetcher::Begin() {
   auto itr = std::make_unique<EntriesFetcherIterator>(tree_, entries_,
-                                                      untracked_keys_, negate_);
+                                                      untracked_keys_, negate_,
+                                                      sorted_);
   return itr;
 }
 

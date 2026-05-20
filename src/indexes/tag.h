@@ -24,7 +24,7 @@
 #include "src/indexes/index_base.h"
 #include "src/query/predicate.h"
 #include "src/rdb_serialization.h"
-#include "src/utils/inlined_priority_queue.h"
+#include <algorithm>
 #include "src/utils/patricia_tree.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -83,7 +83,7 @@ class Tag : public IndexBase {
     EntriesFetcherIterator(const PatriciaTreeIndex& tree,
                            absl::flat_hash_set<PatriciaNodeIndex*>& entries,
                            const InternedStringSet& untracked_keys,
-                           bool negate);
+                           bool negate, bool sorted);
     bool Done() const override;
     void Next() override;
     const InternedStringPtr& operator*() const override;
@@ -92,22 +92,22 @@ class Tag : public IndexBase {
    private:
     using SetIter = PatriciaTreeIndex::SetType::const_iterator;
 
-    // A heap entry: current iterator position + end for one node's value set.
-    struct HeapEntry {
-      SetIter current;
-      SetIter end;
-      bool operator>(const HeapEntry& other) const {
-        return *current > *other.current;
-      }
-    };
-
     static constexpr size_t kInlineCapacity = 8;
 
     // Reference to the Patricia tree.
     const PatriciaTreeIndex& tree_;
 
-    // Min-heap of iterators across all matched nodes.
-    InlinedPriorityQueue<HeapEntry, kInlineCapacity> heap_;
+    bool sorted_;
+
+    // Sorted mode: pre-sorted vector of all unique keys.
+    std::vector<InternedStringPtr> sorted_keys_;
+    size_t sorted_idx_;
+
+    // Unsorted mode: linear iteration across nodes.
+    absl::flat_hash_set<PatriciaNodeIndex*>::iterator nodes_iter_;
+    absl::flat_hash_set<PatriciaNodeIndex*>::iterator nodes_end_;
+    std::optional<SetIter> keys_iter_;
+    std::optional<SetIter> keys_end_;
 
     // Current key being yielded.
     InternedStringPtr current_key_;
@@ -119,18 +119,20 @@ class Tag : public IndexBase {
     const InternedStringSet& untracked_keys_;
     std::optional<InternedStringSet::const_iterator> untracked_keys_iter_;
 
-    void AdvanceToNextUniqueKey();
+    void LinearAdvance();
   };
 
   class EntriesFetcher : public EntriesFetcherBase {
    public:
     EntriesFetcher(const PatriciaTreeIndex& tree,
                    absl::flat_hash_set<PatriciaNodeIndex*> entries, size_t size,
-                   bool negate, const InternedStringSet& untracked_keys)
+                   bool negate, bool sorted,
+                   const InternedStringSet& untracked_keys)
         : tree_(tree),
           size_(size),
           entries_(entries),
           negate_(negate),
+          sorted_(sorted),
           untracked_keys_(untracked_keys){};
     size_t Size() const override;
     std::unique_ptr<EntriesFetcherIteratorBase> Begin() override;
@@ -140,12 +142,13 @@ class Tag : public IndexBase {
     size_t size_{0};
     absl::flat_hash_set<PatriciaNodeIndex*> entries_;
     bool negate_;
+    bool sorted_;
     const InternedStringSet& untracked_keys_;
   };
 
   virtual std::unique_ptr<EntriesFetcher> Search(
       const query::TagPredicate& predicate,
-      bool negate) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      bool negate, bool sorted) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
   char GetSeparator() const { return separator_; }
   bool IsCaseSensitive() const { return case_sensitive_; }
   static absl::StatusOr<absl::flat_hash_set<absl::string_view>> ParseSearchTags(

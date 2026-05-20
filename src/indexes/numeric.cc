@@ -7,6 +7,7 @@
 
 #include "src/indexes/numeric.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <limits>
 #include <memory>
@@ -131,31 +132,10 @@ const double* Numeric::GetValue(const InternedStringPtr& key) const {
 }
 
 std::unique_ptr<Numeric::EntriesFetcher> Numeric::Search(
-    const query::NumericPredicate& predicate, bool negate) const {
+    const query::NumericPredicate& predicate, bool negate, bool sorted) const {
+  CHECK(!negate) << "Negate handled by ExcludeIterator, not numeric iterator";
   EntriesRange entries_range;
   const auto& btree = index_->GetBtree();
-  if (negate) {
-    auto size =
-        index_->GetCount(std::numeric_limits<double>::lowest(),
-                         predicate.GetStart(), true,
-                         !predicate.IsStartInclusive()) +
-        index_->GetCount(predicate.GetEnd(), std::numeric_limits<double>::max(),
-                         !predicate.IsEndInclusive(), true);
-    entries_range.first = btree.begin();
-    entries_range.second = predicate.IsStartInclusive()
-                               ? btree.lower_bound(predicate.GetStart())
-                               : btree.upper_bound(predicate.GetStart());
-    EntriesRange additional_entries_range;
-    additional_entries_range.first =
-        predicate.IsEndInclusive() ? btree.upper_bound(predicate.GetEnd())
-                                   : btree.lower_bound(predicate.GetEnd());
-    ;
-    additional_entries_range.second = btree.end();
-    return std::make_unique<Numeric::EntriesFetcher>(
-        entries_range, size + untracked_keys_.size(), additional_entries_range,
-        &untracked_keys_);
-  }
-
   entries_range.first = predicate.IsStartInclusive()
                             ? btree.lower_bound(predicate.GetStart())
                             : btree.upper_bound(predicate.GetStart());
@@ -165,60 +145,65 @@ std::unique_ptr<Numeric::EntriesFetcher> Numeric::Search(
   size_t size = index_->GetCount(predicate.GetStart(), predicate.GetEnd(),
                                  predicate.IsStartInclusive(),
                                  predicate.IsEndInclusive());
-  return std::make_unique<Numeric::EntriesFetcher>(entries_range, size);
+  return std::make_unique<Numeric::EntriesFetcher>(entries_range, size, sorted);
 }
 
 Numeric::EntriesFetcherIterator::EntriesFetcherIterator(
     const EntriesRange& entries_range,
     const std::optional<EntriesRange>& additional_entries_range,
-    const InternedStringSet* untracked_keys)
-    : negate_(additional_entries_range.has_value()),
+    const InternedStringSet* untracked_keys, bool sorted)
+    : sorted_(sorted),
+      sorted_idx_(0),
+      entries_range_ptr_(&entries_range),
+      additional_entries_range_ptr_(&additional_entries_range),
+      in_additional_range_(false),
+      negate_(additional_entries_range.has_value()),
       untracked_keys_(untracked_keys) {
-  InitHeap(entries_range);
-  if (additional_entries_range.has_value()) {
-    InitHeap(additional_entries_range.value());
-  }
-  heap_.heapify();
-  AdvanceToNext();
-}
-
-void Numeric::EntriesFetcherIterator::InitHeap(const EntriesRange& range) {
-  for (auto it = range.first; it != range.second; ++it) {
-    if (!it->second.empty()) {
-      heap_.push_back_unsorted(
-          HeapEntry{it->second.begin(), it->second.end()});
-    }
-  }
-}
-
-void Numeric::EntriesFetcherIterator::AdvanceToNext() {
-  // Skip duplicates (same key in multiple numeric buckets is impossible,
-  // but keep pattern consistent).
-  while (!heap_.empty()) {
-    const auto& top = heap_.min();
-    if (current_key_ && *top.current == current_key_) {
-      HeapEntry entry = top;
-      heap_.pop_min();
-      ++entry.current;
-      if (entry.current != entry.end) {
-        heap_.emplace(entry);
+  if (sorted_) {
+    // Collect all keys into a vector and sort for pointer order.
+    for (auto it = entries_range.first; it != entries_range.second; ++it) {
+      for (const auto& key : it->second) {
+        sorted_keys_.push_back(key);
       }
+    }
+    std::sort(sorted_keys_.begin(), sorted_keys_.end());
+    if (!sorted_keys_.empty()) {
+      current_key_ = sorted_keys_[0];
+    }
+  } else {
+    bucket_iter_ = entries_range.first;
+    bucket_end_ = entries_range.second;
+    LinearAdvance();
+  }
+}
+
+void Numeric::EntriesFetcherIterator::LinearAdvance() {
+  if (keys_iter_.has_value()) {
+    ++keys_iter_.value();
+    if (keys_iter_.value() != bucket_iter_->second.end()) {
+      current_key_ = *keys_iter_.value();
+      return;
+    }
+    ++bucket_iter_;
+    keys_iter_ = std::nullopt;
+  }
+  while (bucket_iter_ == bucket_end_) {
+    if (!in_additional_range_ && additional_entries_range_ptr_->has_value()) {
+      in_additional_range_ = true;
+      bucket_iter_ = additional_entries_range_ptr_->value().first;
+      bucket_end_ = additional_entries_range_ptr_->value().second;
     } else {
-      current_key_ = *top.current;
+      current_key_ = {};
       return;
     }
   }
-  // Heap exhausted — untracked keys for negate only.
-  if (negate_ && untracked_keys_ && !untracked_keys_->empty()) {
-    if (!untracked_keys_iter_.has_value()) {
-      untracked_keys_iter_ = untracked_keys_->begin();
-    } else {
-      ++untracked_keys_iter_.value();
-    }
-    if (untracked_keys_iter_.value() != untracked_keys_->end()) {
-      current_key_ = *untracked_keys_iter_.value();
+  while (bucket_iter_ != bucket_end_) {
+    if (!bucket_iter_->second.empty()) {
+      keys_iter_ = bucket_iter_->second.begin();
+      current_key_ = *keys_iter_.value();
       return;
     }
+    ++bucket_iter_;
   }
   current_key_ = {};
 }
@@ -227,16 +212,16 @@ bool Numeric::EntriesFetcherIterator::Done() const { return !current_key_; }
 
 void Numeric::EntriesFetcherIterator::Next() {
   if (!current_key_) return;
-  // Advance all heap entries on current_key_.
-  while (!heap_.empty() && *heap_.min().current == current_key_) {
-    HeapEntry entry = heap_.min();
-    heap_.pop_min();
-    ++entry.current;
-    if (entry.current != entry.end) {
-      heap_.emplace(entry);
+  if (sorted_) {
+    ++sorted_idx_;
+    if (sorted_idx_ < sorted_keys_.size()) {
+      current_key_ = sorted_keys_[sorted_idx_];
+    } else {
+      current_key_ = {};
     }
+  } else {
+    LinearAdvance();
   }
-  AdvanceToNext();
 }
 
 const InternedStringPtr& Numeric::EntriesFetcherIterator::operator*() const {
@@ -245,29 +230,27 @@ const InternedStringPtr& Numeric::EntriesFetcherIterator::operator*() const {
 
 bool Numeric::EntriesFetcherIterator::SeekForwardKey(
     const InternedStringPtr& target) {
+  CHECK(sorted_) << "SeekForwardKey requires sorted mode";
   if (!current_key_) return false;
   if (current_key_ >= target) return true;
-  // Drain heap entries behind target.
-  while (!heap_.empty() && *heap_.min().current < target) {
-    HeapEntry entry = heap_.min();
-    heap_.pop_min();
-    while (entry.current != entry.end && *entry.current < target) {
-      ++entry.current;
-    }
-    if (entry.current != entry.end) {
-      heap_.emplace(entry);
-    }
+  // Binary search forward in sorted vector.
+  auto it = std::lower_bound(sorted_keys_.begin() + sorted_idx_,
+                              sorted_keys_.end(), target);
+  if (it == sorted_keys_.end()) {
+    current_key_ = {};
+    sorted_idx_ = sorted_keys_.size();
+    return false;
   }
-  current_key_ = {};
-  AdvanceToNext();
-  return !Done();
+  sorted_idx_ = it - sorted_keys_.begin();
+  current_key_ = sorted_keys_[sorted_idx_];
+  return true;
 }
 
 size_t Numeric::EntriesFetcher::Size() const { return size_; }
 
 std::unique_ptr<EntriesFetcherIteratorBase> Numeric::EntriesFetcher::Begin() {
   auto itr = std::make_unique<EntriesFetcherIterator>(
-      entries_range_, additional_entries_range_, untracked_keys_);
+      entries_range_, additional_entries_range_, untracked_keys_, sorted_);
   return itr;
 }
 

@@ -165,7 +165,7 @@ inline PredicateType EvaluateAsComposedPredicate(
 // Build a TextIterator for a leaf predicate.
 std::pair<std::unique_ptr<indexes::text::TextIterator>, size_t>
 BuildLeafIterator(const SearchParameters &parameters,
-                  const Predicate *predicate, bool negate) {
+                  const Predicate *predicate, bool negate, bool sorted) {
   if (predicate->GetType() == PredicateType::kText) {
     auto text_predicate = dynamic_cast<const TextPredicate *>(predicate);
     auto text_index = text_predicate->GetTextIndexSchema()->GetTextIndex();
@@ -177,7 +177,8 @@ BuildLeafIterator(const SearchParameters &parameters,
   }
   if (predicate->GetType() == PredicateType::kTag) {
     auto tag_predicate = dynamic_cast<const TagPredicate *>(predicate);
-    auto fetcher = tag_predicate->GetIndex()->Search(*tag_predicate, negate);
+    auto fetcher =
+        tag_predicate->GetIndex()->Search(*tag_predicate, negate, sorted);
     size_t size = fetcher->Size();
     auto iter = fetcher->Begin();
     return {std::make_unique<indexes::text::KeyOnlyTextIterator>(
@@ -187,7 +188,8 @@ BuildLeafIterator(const SearchParameters &parameters,
   if (predicate->GetType() == PredicateType::kNumeric) {
     auto numeric_predicate = dynamic_cast<const NumericPredicate *>(predicate);
     auto fetcher =
-        numeric_predicate->GetIndex()->Search(*numeric_predicate, negate);
+        numeric_predicate->GetIndex()->Search(*numeric_predicate, negate,
+                                              sorted);
     size_t size = fetcher->Size();
     auto iter = fetcher->Begin();
     return {std::make_unique<indexes::text::KeyOnlyTextIterator>(
@@ -217,25 +219,30 @@ ExcludeFromUniversal(const SearchParameters &parameters,
 
 // Recursively build a TextIterator tree for any predicate.
 // negate=true means: build the COMPLEMENT of this predicate's result set.
+// sorted=true means: emit keys in InternedStringPtr pointer order (needed for
+// AND intersection via SeekForwardKey).
 std::pair<std::unique_ptr<indexes::text::TextIterator>, size_t> BuildIterator(
     const SearchParameters &parameters, const Predicate *predicate,
-    bool negate) {
+    bool negate, bool sorted) {
   // Handle negate wrapper: just flip the flag.
   if (predicate->GetType() == PredicateType::kNegate) {
     auto negate_predicate = dynamic_cast<const NegatePredicate *>(predicate);
-    return BuildIterator(parameters, negate_predicate->GetPredicate(), !negate);
+    return BuildIterator(parameters, negate_predicate->GetPredicate(), !negate,
+                         sorted);
   }
 
   // If negate=true, build the positive version and exclude from universal.
+  // The positive iterator must be sorted because ExcludeIterator uses
+  // SeekForwardKey on it.
   if (negate) {
-    auto [positive, _] = BuildIterator(parameters, predicate, false);
+    auto [positive, _] = BuildIterator(parameters, predicate, false, true);
     return ExcludeFromUniversal(parameters, std::move(positive));
   }
 
   // Leaf predicates.
   if (predicate->GetType() != PredicateType::kComposedAnd &&
       predicate->GetType() != PredicateType::kComposedOr) {
-    return BuildLeafIterator(parameters, predicate, false);
+    return BuildLeafIterator(parameters, predicate, false, sorted);
   }
 
   // Composed predicates.
@@ -256,10 +263,12 @@ std::pair<std::unique_ptr<indexes::text::TextIterator>, size_t> BuildIterator(
     for (const auto &child : composed_predicate->GetChildren()) {
       if (child->GetType() == PredicateType::kNegate) {
         auto neg = dynamic_cast<const NegatePredicate *>(child.get());
-        auto [iter, _] = BuildIterator(parameters, neg->GetPredicate(), false);
+        auto [iter, _] =
+            BuildIterator(parameters, neg->GetPredicate(), false, true);
         excluded_iters.push_back(std::move(iter));
       } else {
-        auto [iter, size] = BuildIterator(parameters, child.get(), negate);
+        auto [iter, size] =
+            BuildIterator(parameters, child.get(), negate, true);
         min_size = std::min(min_size, size);
         iters.push_back(std::move(iter));
       }
@@ -296,7 +305,8 @@ std::pair<std::unique_ptr<indexes::text::TextIterator>, size_t> BuildIterator(
         iters;
     size_t total_size = 0;
     for (const auto &child : composed_predicate->GetChildren()) {
-      auto [iter, size] = BuildIterator(parameters, child.get(), negate);
+      auto [iter, size] =
+          BuildIterator(parameters, child.get(), negate, true);
       total_size += size;
       iters.push_back(std::move(iter));
     }
@@ -326,7 +336,7 @@ size_t EvaluateFilterAsPrimary(
     const SearchParameters &parameters, const Predicate *predicate,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     bool negate) {
-  auto [text_iter, size] = BuildIterator(parameters, predicate, negate);
+  auto [text_iter, size] = BuildIterator(parameters, predicate, negate, false);
   auto iter =
       std::make_unique<indexes::text::TextFetcher>(std::move(text_iter));
   entries_fetchers.push(

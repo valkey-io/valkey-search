@@ -48,7 +48,7 @@ TEST_F(NumericIndexTest, SimpleAddModifyRemove) {
 
   query::NumericPredicate predicate1(&index, attribute_alias, attribute_id, 1.0,
                                      true, 2.0, true);
-  auto fetcher = index.Search(predicate1, false);
+  auto fetcher = index.Search(predicate1, false, false);
   EXPECT_EQ(fetcher->Size(), 2);
   EXPECT_THAT(Fetch(*fetcher), testing::UnorderedElementsAre("key1", "key2"));
 
@@ -58,7 +58,7 @@ TEST_F(NumericIndexTest, SimpleAddModifyRemove) {
 
   auto predicate2 = query::NumericPredicate(
       &index, attribute_alias, attribute_id, 2.05, true, 2.2, true);
-  fetcher = index.Search(predicate2, false);
+  fetcher = index.Search(predicate2, false, false);
   EXPECT_EQ(fetcher->Size(), 1);
   EXPECT_THAT(Fetch(*fetcher), testing::UnorderedElementsAre("key2"));
 
@@ -70,7 +70,7 @@ TEST_F(NumericIndexTest, SimpleAddModifyRemove) {
   EXPECT_TRUE(index.RemoveRecord("key3").value());
   auto predicate3 = query::NumericPredicate(&index, attribute_alias,
                                             attribute_id, 2.5, true, 3.5, true);
-  fetcher = index.Search(predicate3, false);
+  fetcher = index.Search(predicate3, false, false);
   EXPECT_EQ(fetcher->Size(), 0);
   EXPECT_THAT(Fetch(*fetcher), testing::UnorderedElementsAre());
 
@@ -87,21 +87,21 @@ TEST_F(NumericIndexTest, SimpleAddModifyRemove1) {
   VMSDK_EXPECT_OK(index.AddRecord("key2", "2.0"));
   auto predicate = query::NumericPredicate(&index, "attribute1", "id1", 1.0,
                                            true, 2.1, true);
-  auto fetcher = index.Search(predicate, false);
+  auto fetcher = index.Search(predicate, false, false);
   EXPECT_EQ(fetcher->Size(), 2);
   EXPECT_THAT(Fetch(*fetcher), testing::UnorderedElementsAre("key1", "key2"));
   VMSDK_EXPECT_OK(index.ModifyRecord("key2", "2.1"));
 
   predicate = query::NumericPredicate(&index, "attribute1", "id1", 2.05, true,
                                       2.2, true);
-  fetcher = index.Search(predicate, false);
+  fetcher = index.Search(predicate, false, false);
   EXPECT_THAT(Fetch(*fetcher), testing::UnorderedElementsAre("key2"));
   VMSDK_EXPECT_OK(index.AddRecord("key3", "3.0"));
   VMSDK_EXPECT_OK(index.RemoveRecord("key3"));
 
   predicate = query::NumericPredicate(&index, "attribute1", "id1", 2.5, true,
                                       3.5, true);
-  fetcher = index.Search(predicate, false);
+  fetcher = index.Search(predicate, false, false);
   EXPECT_THAT(Fetch(*fetcher), testing::UnorderedElementsAre());
 }
 
@@ -109,12 +109,12 @@ TEST_F(NumericIndexTest, ModifyWithNonNumericString) {
   VMSDK_EXPECT_OK(index.AddRecord("key1", "1.5"));
   auto predicate = query::NumericPredicate(&index, "attribute1", "id1", 1.0,
                                            true, 2.1, true);
-  auto fetcher = index.Search(predicate, false);
+  auto fetcher = index.Search(predicate, false, false);
   EXPECT_EQ(fetcher->Size(), 1);
   EXPECT_THAT(Fetch(*fetcher), testing::UnorderedElementsAre("key1"));
   VMSDK_EXPECT_OK(index.ModifyRecord("key1", "abcde"));
 
-  fetcher = index.Search(predicate, false);
+  fetcher = index.Search(predicate, false, false);
   EXPECT_EQ(Fetch(*fetcher).size(), 0);
   EXPECT_EQ(index.GetTrackedKeyCount(), 0);
 }
@@ -132,34 +132,34 @@ TEST_F(NumericIndexTest, RangeSearchInclusiveExclusive) {
 
   query::NumericPredicate predicate(&index, attribute_alias, attribute_id, 1.0,
                                     true, 2.1, true);
-  auto fetcher = index.Search(predicate, false);
+  auto fetcher = index.Search(predicate, false, false);
   EXPECT_EQ(fetcher->Size(), 4);
   EXPECT_THAT(Fetch(*fetcher),
               testing::UnorderedElementsAre("key1", "key2", "key5", "key6"));
 
   predicate = query::NumericPredicate(&index, attribute_alias, attribute_id,
                                       1.0, false, 2.1, true);
-  fetcher = index.Search(predicate, false);
+  fetcher = index.Search(predicate, false, false);
   EXPECT_EQ(fetcher->Size(), 3);
   EXPECT_THAT(Fetch(*fetcher),
               testing::UnorderedElementsAre("key2", "key5", "key6"));
 
   predicate = query::NumericPredicate(&index, attribute_alias, attribute_id,
                                       1.0, false, 2.1, false);
-  fetcher = index.Search(predicate, false);
+  fetcher = index.Search(predicate, false, false);
   EXPECT_EQ(fetcher->Size(), 2);
   EXPECT_THAT(Fetch(*fetcher), testing::UnorderedElementsAre("key2", "key5"));
 
   predicate = query::NumericPredicate(&index, attribute_alias, attribute_id,
                                       1.0, false, 3.5, false);
-  fetcher = index.Search(predicate, false);
+  fetcher = index.Search(predicate, false, false);
   EXPECT_EQ(fetcher->Size(), 5);
   EXPECT_THAT(Fetch(*fetcher), testing::UnorderedElementsAre(
                                    "key2", "key3", "key4", "key5", "key6"));
 
   predicate = query::NumericPredicate(&index, attribute_alias, attribute_id,
                                       0.0, false, 2.1, false);
-  fetcher = index.Search(predicate, false);
+  fetcher = index.Search(predicate, false, false);
   EXPECT_EQ(fetcher->Size(), 3);
   EXPECT_THAT(Fetch(*fetcher),
               testing::UnorderedElementsAre("key1", "key2", "key5"));
@@ -174,37 +174,37 @@ TEST_F(NumericIndexTest, RangeSearchInclusiveExclusive1) {
   VMSDK_EXPECT_OK(index.AddRecord("key6", "9.0"));
   auto predicate = query::NumericPredicate(&index, "attribute1", "id1", 1.0,
                                            true, 3.0, true);
-  auto fetcher = index.Search(predicate, false);
+  auto fetcher = index.Search(predicate, false, false);
   EXPECT_EQ(fetcher->Size(), 3);
   EXPECT_THAT(Fetch(*fetcher),
               testing::UnorderedElementsAre("key1", "key2", "key3"));
 
   predicate = query::NumericPredicate(&index, "attribute1", "id1", 1.0, false,
                                       3.0, true);
-  fetcher = index.Search(predicate, false);
+  fetcher = index.Search(predicate, false, false);
   EXPECT_EQ(fetcher->Size(), 2);
   EXPECT_THAT(Fetch(*fetcher), testing::UnorderedElementsAre("key2", "key3"));
 
   predicate = query::NumericPredicate(&index, "attribute1", "id1", 1.0, true,
                                       3.0, false);
-  fetcher = index.Search(predicate, false);
+  fetcher = index.Search(predicate, false, false);
   EXPECT_EQ(fetcher->Size(), 2);
   EXPECT_THAT(Fetch(*fetcher), testing::UnorderedElementsAre("key1", "key2"));
 
   predicate = query::NumericPredicate(&index, "attribute1", "id1", 1.0, false,
                                       3.0, false);
-  fetcher = index.Search(predicate, false);
+  fetcher = index.Search(predicate, false, false);
   EXPECT_EQ(fetcher->Size(), 1);
   EXPECT_THAT(Fetch(*fetcher), testing::UnorderedElementsAre("key2"));
 
   predicate = query::NumericPredicate(&index, "attribute1", "id1", 2.0, true,
                                       4.0, true);
-  fetcher = index.Search(predicate, false);
+  fetcher = index.Search(predicate, false, false);
   EXPECT_EQ(fetcher->Size(), 2);
   EXPECT_THAT(Fetch(*fetcher), testing::UnorderedElementsAre("key2", "key3"));
   predicate = query::NumericPredicate(&index, "attribute1", "id1", 2.0, false,
                                       4.0, false);
-  fetcher = index.Search(predicate, false);
+  fetcher = index.Search(predicate, false, false);
   EXPECT_EQ(fetcher->Size(), 2);
   EXPECT_THAT(Fetch(*fetcher), testing::UnorderedElementsAre("key2", "key3"));
 }
@@ -218,55 +218,55 @@ TEST_F(NumericIndexTest, RangeSearchNegate) {
   VMSDK_EXPECT_OK(index.AddRecord("key6", "9.0"));
   auto predicate = query::NumericPredicate(&index, "attribute1", "id1", 1.0,
                                            true, 3.0, true);
-  auto fetcher = index.Search(predicate, true);
+  auto fetcher = index.Search(predicate, true, false);
   EXPECT_EQ(fetcher->Size(), 3);
   EXPECT_THAT(Fetch(*fetcher),
               testing::UnorderedElementsAre("key4", "key5", "key6"));
 
   predicate = query::NumericPredicate(&index, "attribute1", "id1", 1.0, false,
                                       3.0, false);
-  fetcher = index.Search(predicate, true);
+  fetcher = index.Search(predicate, true, false);
   EXPECT_EQ(fetcher->Size(), 5);
   EXPECT_THAT(Fetch(*fetcher), testing::UnorderedElementsAre(
                                    "key1", "key3", "key4", "key5", "key6"));
 
   predicate = query::NumericPredicate(&index, "attribute1", "id1", 1.0, false,
                                       3.0, true);
-  fetcher = index.Search(predicate, true);
+  fetcher = index.Search(predicate, true, false);
   EXPECT_EQ(fetcher->Size(), 4);
   EXPECT_THAT(Fetch(*fetcher),
               testing::UnorderedElementsAre("key1", "key4", "key5", "key6"));
 
   predicate = query::NumericPredicate(&index, "attribute1", "id1", 1.0, true,
                                       3.0, false);
-  fetcher = index.Search(predicate, true);
+  fetcher = index.Search(predicate, true, false);
   EXPECT_EQ(fetcher->Size(), 4);
   EXPECT_THAT(Fetch(*fetcher),
               testing::UnorderedElementsAre("key3", "key4", "key5", "key6"));
 
   predicate = query::NumericPredicate(&index, "attribute1", "id1", 2.0, true,
                                       4.0, true);
-  fetcher = index.Search(predicate, true);
+  fetcher = index.Search(predicate, true, false);
   EXPECT_EQ(fetcher->Size(), 4);
   EXPECT_THAT(Fetch(*fetcher),
               testing::UnorderedElementsAre("key1", "key4", "key5", "key6"));
   predicate = query::NumericPredicate(&index, "attribute1", "id1", 2.0, false,
                                       4.0, false);
-  fetcher = index.Search(predicate, true);
+  fetcher = index.Search(predicate, true, false);
   EXPECT_EQ(fetcher->Size(), 4);
   EXPECT_THAT(Fetch(*fetcher),
               testing::UnorderedElementsAre("key1", "key4", "key5", "key6"));
 
   predicate = query::NumericPredicate(&index, "attribute1", "id1", 2.0, false,
                                       4.0, true);
-  fetcher = index.Search(predicate, true);
+  fetcher = index.Search(predicate, true, false);
   EXPECT_EQ(fetcher->Size(), 4);
   EXPECT_THAT(Fetch(*fetcher),
               testing::UnorderedElementsAre("key1", "key4", "key5", "key6"));
 
   predicate = query::NumericPredicate(&index, "attribute1", "id1", 2.1, true,
                                       2.1, true);
-  fetcher = index.Search(predicate, true);
+  fetcher = index.Search(predicate, true, false);
   EXPECT_EQ(fetcher->Size(), 5);
   EXPECT_THAT(Fetch(*fetcher), testing::UnorderedElementsAre(
                                    "key1", "key3", "key4", "key5", "key6"));
@@ -274,7 +274,7 @@ TEST_F(NumericIndexTest, RangeSearchNegate) {
   VMSDK_EXPECT_OK(index.RemoveRecord("key6"));
   predicate = query::NumericPredicate(&index, "attribute1", "id1", 1.0, true,
                                       3.0, true);
-  fetcher = index.Search(predicate, true);
+  fetcher = index.Search(predicate, true, false);
   EXPECT_EQ(fetcher->Size(), 3);
   EXPECT_THAT(Fetch(*fetcher),
               testing::UnorderedElementsAre("key4", "key5", "key6"));
@@ -282,7 +282,7 @@ TEST_F(NumericIndexTest, RangeSearchNegate) {
   VMSDK_EXPECT_OK(index.AddRecord("key6", "9.0"));
   predicate = query::NumericPredicate(&index, "attribute1", "id1", 1.0, true,
                                       3.0, true);
-  fetcher = index.Search(predicate, true);
+  fetcher = index.Search(predicate, true, false);
   EXPECT_EQ(fetcher->Size(), 3);
   EXPECT_THAT(Fetch(*fetcher),
               testing::UnorderedElementsAre("key4", "key5", "key6"));
@@ -298,7 +298,7 @@ TEST_F(NumericIndexTest, DeletedKeysNegativeSearchTest) {
   auto entries_fetcher =
       index.Search(query::NumericPredicate(&index, "attribute1", "id1", 1.0,
                                            true, 3.0, true),
-                   true);
+                   true, false);
   EXPECT_THAT(Fetch(*entries_fetcher),
               testing::UnorderedElementsAre("doc0", "doc1"));
 

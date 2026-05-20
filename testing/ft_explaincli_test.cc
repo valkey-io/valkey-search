@@ -15,14 +15,21 @@ namespace valkey_search {
 
 namespace {
 
-class FTExplainCliTest : public ValkeySearchTest {};
+class FTExplainCliTest : public ValkeySearchTest {
+ protected:
+  std::vector<ValkeyModuleString *> cmd_argv_;
+  void TearDown() override {
+    for (auto *arg : cmd_argv_) {
+      TestValkeyModule_FreeString(&fake_ctx_, arg);
+    }
+    ValkeySearchTest::TearDown();
+  }
+};
 
 TEST_F(FTExplainCliTest, WrongNumberOfArguments) {
-  std::vector<ValkeyModuleString *> cmd_argv = {
-      ValkeyModule_CreateString(&fake_ctx_, "FT.EXPLAINCLI", 13),
-      ValkeyModule_CreateString(&fake_ctx_, "myindex", 7)};
-  auto status = FTExplainCliCmd(&fake_ctx_, cmd_argv.data(), cmd_argv.size());
-  // Should return error for too few arguments (argc < 3)
+  cmd_argv_ = {ValkeyModule_CreateString(&fake_ctx_, "FT.EXPLAINCLI", 13),
+               ValkeyModule_CreateString(&fake_ctx_, "myindex", 7)};
+  auto status = FTExplainCliCmd(&fake_ctx_, cmd_argv_.data(), cmd_argv_.size());
   EXPECT_FALSE(status.ok());
   EXPECT_TRUE(absl::IsInvalidArgument(status));
 }
@@ -30,25 +37,21 @@ TEST_F(FTExplainCliTest, WrongNumberOfArguments) {
 TEST_F(FTExplainCliTest, NonExistentIndex) {
   EXPECT_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
       .WillRepeatedly(testing::Return(0));
-  std::vector<ValkeyModuleString *> cmd_argv = {
-      ValkeyModule_CreateString(&fake_ctx_, "FT.EXPLAINCLI", 13),
-      ValkeyModule_CreateString(&fake_ctx_, "nonexistent", 11),
-      ValkeyModule_CreateString(&fake_ctx_, "hello", 5)};
-  auto status = FTExplainCliCmd(&fake_ctx_, cmd_argv.data(), cmd_argv.size());
-  // Should return error for non-existent index
+  cmd_argv_ = {ValkeyModule_CreateString(&fake_ctx_, "FT.EXPLAINCLI", 13),
+               ValkeyModule_CreateString(&fake_ctx_, "nonexistent", 11),
+               ValkeyModule_CreateString(&fake_ctx_, "hello", 5)};
+  auto status = FTExplainCliCmd(&fake_ctx_, cmd_argv_.data(), cmd_argv_.size());
   EXPECT_FALSE(status.ok());
 }
 
 TEST_F(FTExplainCliTest, UnknownArgument) {
   EXPECT_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
       .WillRepeatedly(testing::Return(0));
-  std::vector<ValkeyModuleString *> cmd_argv = {
-      ValkeyModule_CreateString(&fake_ctx_, "FT.EXPLAINCLI", 13),
-      ValkeyModule_CreateString(&fake_ctx_, "myindex", 7),
-      ValkeyModule_CreateString(&fake_ctx_, "hello", 5),
-      ValkeyModule_CreateString(&fake_ctx_, "BADARG", 6)};
-  auto status = FTExplainCliCmd(&fake_ctx_, cmd_argv.data(), cmd_argv.size());
-  // Should return error for unknown optional argument
+  cmd_argv_ = {ValkeyModule_CreateString(&fake_ctx_, "FT.EXPLAINCLI", 13),
+               ValkeyModule_CreateString(&fake_ctx_, "myindex", 7),
+               ValkeyModule_CreateString(&fake_ctx_, "hello", 5),
+               ValkeyModule_CreateString(&fake_ctx_, "BADARG", 6)};
+  auto status = FTExplainCliCmd(&fake_ctx_, cmd_argv_.data(), cmd_argv_.size());
   EXPECT_FALSE(status.ok());
   EXPECT_TRUE(absl::IsInvalidArgument(status));
 }

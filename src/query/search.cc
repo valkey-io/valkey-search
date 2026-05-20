@@ -356,6 +356,7 @@ void EvaluatePrefilteredKeys(
     auto iterator = fetcher->Begin();
     while (!iterator->Done()) {
       const auto &key = **iterator;
+      BACKGROUND_PAUSEPOINT("search_prefilter_eval");
       bool result = appender(key, result_keys);
       if (stop_on_fetch_limit && !result) {
         return;

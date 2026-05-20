@@ -103,7 +103,7 @@ class Tag : public IndexBase {
 
     static constexpr size_t kInlineCapacity = 8;
 
-    // Reference to the Patricia tree (for negated root iterator).
+    // Reference to the Patricia tree.
     const PatriciaTreeIndex& tree_;
 
     // Min-heap of iterators across all matched nodes.
@@ -112,19 +112,14 @@ class Tag : public IndexBase {
     // Current key being yielded.
     InternedStringPtr current_key_;
 
-    // Negation support.
     bool negate_;
     absl::flat_hash_set<PatriciaNodeIndex*>& entries_;
-    std::optional<PatriciaTreeIndex::PrefixSubTreeIterator> negate_root_iter_;
 
-    // Untracked keys (iterated after all tracked keys).
+    // Untracked keys (used by ingestion bookkeeping, not by iterator).
     const InternedStringSet& untracked_keys_;
     std::optional<InternedStringSet::const_iterator> untracked_keys_iter_;
 
-    void InitNonNegate();
-    void InitNegate();
     void AdvanceToNextUniqueKey();
-    void EnsureNegateRootIter();
   };
 
   class EntriesFetcher : public EntriesFetcherBase {

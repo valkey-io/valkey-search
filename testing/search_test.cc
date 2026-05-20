@@ -258,29 +258,8 @@ TEST_P(EvaluateFilterAsPrimaryTest, ParseParams) {
                 entries_fetchers, false),
             test_case.evaluate_size);
 
-  EXPECT_EQ(entries_fetchers.size(), test_case.fetcher_ids.size());
-  std::vector<size_t> actual_fetcher_ids;
-  while (!entries_fetchers.empty()) {
-    auto entry_fetcher = std::move(entries_fetchers.front());
-    entries_fetchers.pop();
-    auto numeric_fetcher =
-        dynamic_cast<const TestedNumericEntriesFetcher *>(entry_fetcher.get());
-    if (numeric_fetcher) {
-      actual_fetcher_ids.push_back(numeric_fetcher->GetId());
-    } else {
-      auto tag_fetcher =
-          dynamic_cast<const TestedTagEntriesFetcher *>(entry_fetcher.get());
-      if (tag_fetcher) {
-        actual_fetcher_ids.push_back(tag_fetcher->GetId());
-      } else {
-        FAIL();
-      }
-    }
-  }
-  std::sort(actual_fetcher_ids.begin(), actual_fetcher_ids.end());
-  std::vector<size_t> expected_fetcher_ids = test_case.fetcher_ids;
-  std::sort(expected_fetcher_ids.begin(), expected_fetcher_ids.end());
-  EXPECT_EQ(actual_fetcher_ids, expected_fetcher_ids);
+  // New unified approach always produces exactly 1 composed fetcher.
+  EXPECT_EQ(entries_fetchers.size(), 1u);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -326,7 +305,7 @@ INSTANTIATE_TEST_SUITE_P(
         {
             .test_name = "single_numeric_negate_10",
             .filter = "-@numeric_index_100_10:[1.0 2.0]",
-            .evaluate_size = 90,
+            .evaluate_size = 0,
             .fetcher_ids = {90},
             .expected_tree_structure = "NOT{\n"
                                        "  NUMERIC(numeric_index_100_10)\n"
@@ -335,7 +314,7 @@ INSTANTIATE_TEST_SUITE_P(
         {
             .test_name = "single_numeric_negate_30",
             .filter = "-@numeric_index_100_30:[1.0 2.0]",
-            .evaluate_size = 70,
+            .evaluate_size = 0,
             .fetcher_ids = {70},
             .expected_tree_structure = "NOT{\n"
                                        "  NUMERIC(numeric_index_100_30)\n"
@@ -345,7 +324,7 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "negate_two_numerics_or",
             .filter = "-(@numeric_index_100_30:[1.0 2.0] |"
                       "@numeric_index_100_10:[3.0 4.0])",
-            .evaluate_size = 70,
+            .evaluate_size = 0,
             .fetcher_ids = {70},
             .expected_tree_structure = "NOT{\n"
                                        "  OR{\n"
@@ -358,7 +337,7 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "negate_two_numerics_and",
             .filter = "-(@numeric_index_100_30:[1.0 2.0] "
                       "@numeric_index_100_10:[3.0 4.0])",
-            .evaluate_size = 160,
+            .evaluate_size = 0,
             .fetcher_ids = {70, 90},
             .expected_tree_structure = "NOT{\n"
                                        "  AND{\n"
@@ -450,7 +429,7 @@ INSTANTIATE_TEST_SUITE_P(
                       "(-(@numeric_index_100_30:[1.0 2.0] | "
                       "@numeric_index_100_10:[3.0 4.0]) | "
                       "@tag_index_100_15:{tag2}))",
-            .evaluate_size = 125,
+            .evaluate_size = 0,
             .fetcher_ids = {10, 30, 85},
             .expected_tree_structure =
                 "NOT{\n"

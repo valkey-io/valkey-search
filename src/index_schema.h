@@ -19,6 +19,7 @@
 
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
+#include "absl/container/btree_map.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_format.h"
@@ -90,7 +91,10 @@ class IndexSchema : public KeyspaceEventSubscription,
     MutationSequenceNumber mutation_sequence_number_{0};
   };
 
-  using IndexKeyInfoMap = absl::flat_hash_map<Key, IndexKeyInfo>;
+  // btree_map ensures keys are in InternedStringPtr pointer order — the same
+  // order used by all iterators (tag, numeric, text). This allows
+  // UniversalSetFetcher to iterate without copying or sorting.
+  using IndexKeyInfoMap = absl::btree_map<Key, IndexKeyInfo>;
 
   struct InfoIndexPartitionData {
     uint64_t num_docs;

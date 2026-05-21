@@ -565,36 +565,6 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
   return results;
 }
 
-// Trim a vector by erasing elements outside the serialization range.
-// Works on any vector type (Neighbor, BorrowedNeighbor, etc.).
-// Returns true if the vector was limited from the back (buffer limit applied).
-template <typename T>
-bool TrimVector(std::vector<T> &vec, const SerializationRange &range,
-                bool trim_offset) {
-  size_t max_needed = static_cast<size_t>(
-      range.end_index * options::GetSearchResultBufferMultiplier());
-  // Trim from front (apply offset)
-  if (trim_offset) {
-    if (range.start_index > 0 && range.start_index < vec.size()) {
-      vec.erase(vec.begin(), vec.begin() + range.start_index);
-      // After trimming from the front, we no longer have an offset.
-      // We only need (end_index - start_index) items.
-      size_t actual_count = range.end_index - range.start_index;
-      max_needed = static_cast<size_t>(
-          actual_count * options::GetSearchResultBufferMultiplier());
-    } else if (range.start_index >= vec.size()) {
-      vec.clear();
-      return false;
-    }
-  }
-  // Apply limiting with buffer
-  if (vec.size() > max_needed) {
-    vec.erase(vec.begin() + max_needed, vec.end());
-    return true;
-  }
-  return false;
-}
-
 absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
     const SearchParameters &parameters) {
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
@@ -758,16 +728,31 @@ SearchResult::SearchResult(size_t total_count,
       is_limited_with_buffer(false),
       is_offsetted(false) {
   if (ShouldReturnNoResults(parameters)) return;
-  // Trim the borrowed vector — trivially destructible, no atomic ops.
+  // Trim the borrowed vector — trivially destructible, no atomic ops on
+  // the discarded entries.
   if (!parameters.RequiresCompleteResults()) {
-    SerializationRange range =
-        ComputeSerializationRange(parameters, borrowed.size());
-    bool should_trim_offset = !ValkeySearch::Instance().IsCluster();
-    if (should_trim_offset) {
+    size_t start = std::min(borrowed.size(),
+                            static_cast<size_t>(parameters.limit.first_index));
+    size_t count = std::min(static_cast<size_t>(parameters.limit.number),
+                            borrowed.size());
+    size_t end = std::min(start + count, borrowed.size());
+    size_t max_needed = static_cast<size_t>(
+        end * options::GetSearchResultBufferMultiplier());
+    if (!ValkeySearch::Instance().IsCluster()) {
       this->is_offsetted = true;
+      if (start > 0 && start < borrowed.size()) {
+        borrowed.erase(borrowed.begin(), borrowed.begin() + start);
+        size_t actual_count = end - start;
+        max_needed = static_cast<size_t>(
+            actual_count * options::GetSearchResultBufferMultiplier());
+      } else if (start >= borrowed.size()) {
+        borrowed.clear();
+      }
     }
-    this->is_limited_with_buffer =
-        TrimVector(borrowed, range, should_trim_offset);
+    if (borrowed.size() > max_needed) {
+      this->is_limited_with_buffer = true;
+      borrowed.erase(borrowed.begin() + max_needed, borrowed.end());
+    }
   }
   // Materialize only the survivors into owning Neighbor vector.
   neighbors.reserve(borrowed.size());
@@ -776,23 +761,41 @@ SearchResult::SearchResult(size_t total_count,
   }
 }
 
-// Apply limiting in background thread if possible.
 void SearchResult::TrimResults(std::vector<indexes::Neighbor> &neighbors,
                                const SearchParameters &parameters,
                                bool trim_offset_in_background) {
+  // Use the existing complex logic from SearchResult::GetSerializationRange
   SerializationRange range = GetSerializationRange(parameters);
+  size_t max_needed = static_cast<size_t>(
+      range.end_index * options::GetSearchResultBufferMultiplier());
   // In standalone mode, we can optimize by trimming from front first.
   // In cluster mode on remote searches on individual shards, we cannot trim
   // from the front yet because each shard produces X results. However, the
   // coordinator (after merging) WILL trim from the front and back in the
   // background thread to avoid memory bloat with large offsets / limit counts
   // before returning to the main thread.
-  bool should_trim_offset =
-      !ValkeySearch::Instance().IsCluster() || trim_offset_in_background;
-  if (should_trim_offset) {
+  if (!ValkeySearch::Instance().IsCluster() || trim_offset_in_background) {
     this->is_offsetted = true;
+    // Trim from front (apply offset)
+    if (range.start_index > 0 && range.start_index < neighbors.size()) {
+      neighbors.erase(neighbors.begin(), neighbors.begin() + range.start_index);
+      // After trimming from the front, we no longer have an offset.
+      // We only need (end_index - start_index) items.
+      size_t actual_count = range.end_index - range.start_index;
+      max_needed = static_cast<size_t>(
+          actual_count * options::GetSearchResultBufferMultiplier());
+    } else if (range.start_index >= neighbors.size()) {
+      neighbors.clear();
+      return;
+    }
   }
-  this->is_limited_with_buffer = TrimVector(neighbors, range, should_trim_offset);
+  // If we don't need to limit, return early.
+  if (neighbors.size() <= max_needed) {
+    return;
+  }
+  // Apply limiting with buffer
+  this->is_limited_with_buffer = true;
+  neighbors.erase(neighbors.begin() + max_needed, neighbors.end());
 }
 
 // Determine the range of neighbors to serialize in the response.
@@ -820,16 +823,6 @@ SerializationRange SearchResult::GetSerializationRange(
   }
   size_t end_index = std::min(start_index + count, neighbors.size());
   // Return the range
-  return {start_index, end_index};
-}
-
-SerializationRange SearchResult::ComputeSerializationRange(
-    const SearchParameters &parameters, size_t total_count) {
-  size_t start_index =
-      std::min(total_count, static_cast<size_t>(parameters.limit.first_index));
-  size_t limit_count = static_cast<size_t>(parameters.limit.number);
-  size_t count = std::min(limit_count, total_count);
-  size_t end_index = std::min(start_index + count, total_count);
   return {start_index, end_index};
 }
 

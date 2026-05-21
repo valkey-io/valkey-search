@@ -124,10 +124,6 @@ struct SearchResult {
 
   SearchResult();
 
-  // Compute the serialization range without needing a SearchResult instance.
-  static SerializationRange ComputeSerializationRange(
-      const SearchParameters& parameters, size_t total_count);
-
  private:
   void TrimResults(std::vector<indexes::Neighbor>& neighbors,
                    const SearchParameters& parameters,

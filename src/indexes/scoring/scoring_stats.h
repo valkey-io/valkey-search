@@ -27,7 +27,7 @@ namespace valkey_search::indexes::scoring {
 //   document_score        - SCORE_FIELD | SCORE | 1.0
 //   term                  - surface term from the query leaf
 //   num_doc_contain_term  - dt, docs containing this term (index-wide)
-//   term_frequency        - doc-wide term frequency (§5.2)
+//   term_frequency        - doc-wide term frequency
 struct ScoringStats {
   virtual ~ScoringStats() = default;
 
@@ -51,16 +51,16 @@ struct Bm25StdStats : ScoringStats {
 };
 
 // TFIDF-specific inputs. Adds the fields TFIDF needs on top of the common
-// stats: the per-document `norm` divisor (§3.4) and the term's positional
-// offsets within the document (used for the SLOP penalty, §3.5).
+// stats: the per-document `norm` divisor and the term's positional
+// offsets within the document (used for the SLOP penalty).
 //
 // `positions` is a non-owning view; the underlying storage must outlive
 // the ScoringStats. Empty when SLOP is not being computed.
 //
 // Field semantics:
-//   norm       - max term frequency within the document (§3.4); 0 means
-//                the document has no TEXT fields, which forces the final
-//                score to 0 (§6 row 1)
+//   norm       - max term frequency within the document; 0 means the
+//                document has no TEXT fields, which forces the final
+//                score to 0
 //   positions  - positional offsets of `term` within the document, sorted
 //                ascending; empty when SLOP is not used
 struct TfidfStats : ScoringStats {

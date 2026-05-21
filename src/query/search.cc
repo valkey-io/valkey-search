@@ -595,7 +595,7 @@ bool TrimVector(std::vector<T> &vec, const SerializationRange &range,
   return false;
 }
 
-absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
+absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
     const SearchParameters &parameters) {
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
   size_t qualified_entries = 0;
@@ -677,42 +677,12 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
   if (fetch_limited) {
     nonvector_results_fetched_limited_count.Increment();
   }
-
-  // Trim the borrowed vector (trivially destructible — no atomic ops).
-  if (!parameters.RequiresCompleteResults() &&
-      !ShouldReturnNoResults(parameters)) {
-    SerializationRange range =
-        SearchResult::ComputeSerializationRange(parameters, borrowed.size());
-    TrimVector(borrowed, range, !ValkeySearch::Instance().IsCluster());
-  }
-
-  // Materialize only the survivors into owning Neighbor vector.
-  std::vector<indexes::Neighbor> neighbors;
-  neighbors.reserve(borrowed.size());
-  for (auto &b : borrowed) {
-    neighbors.emplace_back(b.key.Materialize(), b.distance);
-  }
-  return neighbors;
+  return borrowed;
 }
 
-absl::StatusOr<std::vector<indexes::Neighbor>> DoSearch(
+absl::StatusOr<std::vector<indexes::Neighbor>> DoSearchVector(
     const SearchParameters &parameters, SearchMode search_mode,
     vmsdk::ReaderMutexLock &lock) {
-  ++Metrics::GetStats().time_slice_queries;
-  // Handle OOM for search requests, defends against request
-  // coming from the coordinator
-  if (search_mode == SearchMode::kRemote) {
-    auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
-    auto ctx_flags = ValkeyModule_GetContextFlags(ctx.get());
-    if (ctx_flags & VALKEYMODULE_CTX_FLAGS_OOM) {
-      return absl::ResourceExhaustedError(kOOMMsg);
-    }
-  }
-  // Non-vector queries use BorrowedNeighbor internally for zero-cost
-  // collection, then return materialized Neighbors.
-  if (parameters.IsNonVectorQuery()) {
-    return SearchNonVectorQuery(parameters);
-  }
   VMSDK_ASSIGN_OR_RETURN(auto index, parameters.index_schema->GetIndex(
                                          parameters.attribute_alias));
   auto vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
@@ -781,6 +751,31 @@ SearchResult::SearchResult(size_t total_count,
   }
 }
 
+SearchResult::SearchResult(size_t total_count,
+                           std::vector<indexes::BorrowedNeighbor> borrowed,
+                           const SearchParameters &parameters)
+    : total_count(total_count),
+      is_limited_with_buffer(false),
+      is_offsetted(false) {
+  if (ShouldReturnNoResults(parameters)) return;
+  // Trim the borrowed vector — trivially destructible, no atomic ops.
+  if (!parameters.RequiresCompleteResults()) {
+    SerializationRange range =
+        ComputeSerializationRange(parameters, borrowed.size());
+    bool should_trim_offset = !ValkeySearch::Instance().IsCluster();
+    if (should_trim_offset) {
+      this->is_offsetted = true;
+    }
+    this->is_limited_with_buffer =
+        TrimVector(borrowed, range, should_trim_offset);
+  }
+  // Materialize only the survivors into owning Neighbor vector.
+  neighbors.reserve(borrowed.size());
+  for (auto &b : borrowed) {
+    neighbors.emplace_back(b.key.Materialize(), b.distance);
+  }
+}
+
 // Apply limiting in background thread if possible.
 void SearchResult::TrimResults(std::vector<indexes::Neighbor> &neighbors,
                                const SearchParameters &parameters,
@@ -841,13 +836,31 @@ SerializationRange SearchResult::ComputeSerializationRange(
 absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
   auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
   vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
-  absl::StatusOr<std::vector<indexes::Neighbor>> neighbors =
-      DoSearch(parameters, search_mode, lock);
-  VMSDK_ASSIGN_OR_RETURN(
-      auto result, MaybeAddIndexedContent(std::move(neighbors), parameters));
-  size_t total_count = result.size();
-  parameters.search_result =
-      SearchResult(total_count, std::move(result), parameters);
+  ++Metrics::GetStats().time_slice_queries;
+  // Handle OOM for search requests, defends against request
+  // coming from the coordinator
+  if (search_mode == SearchMode::kRemote) {
+    auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
+    auto ctx_flags = ValkeyModule_GetContextFlags(ctx.get());
+    if (ctx_flags & VALKEYMODULE_CTX_FLAGS_OOM) {
+      return absl::ResourceExhaustedError(kOOMMsg);
+    }
+  }
+  if (parameters.IsNonVectorQuery()) {
+    VMSDK_ASSIGN_OR_RETURN(auto borrowed, DoSearchNonVector(parameters));
+    size_t total_count = borrowed.size();
+    parameters.search_result =
+        SearchResult(total_count, std::move(borrowed), parameters);
+  } else {
+    VMSDK_ASSIGN_OR_RETURN(auto neighbors,
+                           DoSearchVector(parameters, search_mode, lock));
+    VMSDK_ASSIGN_OR_RETURN(
+        auto result,
+        MaybeAddIndexedContent(std::move(neighbors), parameters));
+    size_t total_count = result.size();
+    parameters.search_result =
+        SearchResult(total_count, std::move(result), parameters);
+  }
   parameters.index_schema->PopulateIndexMutationSequenceNumbers(
       parameters.search_result.neighbors);
   return absl::OkStatus();

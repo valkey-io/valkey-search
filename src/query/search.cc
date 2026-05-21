@@ -568,13 +568,6 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
 // Trim a vector by erasing elements outside the serialization range.
 // Works on any vector type (Neighbor, BorrowedNeighbor, etc.).
 // Returns true if the vector was limited from the back (buffer limit applied).
-//
-// In standalone mode, we trim from the front first (apply offset).
-// In cluster mode on remote searches on individual shards, we cannot trim
-// from the front yet because each shard produces X results. However, the
-// coordinator (after merging) WILL trim from the front and back in the
-// background thread to avoid memory bloat with large offsets / limit counts
-// before returning to the main thread.
 template <typename T>
 bool TrimVector(std::vector<T> &vec, const SerializationRange &range,
                 bool trim_offset) {
@@ -793,6 +786,12 @@ void SearchResult::TrimResults(std::vector<indexes::Neighbor> &neighbors,
                                const SearchParameters &parameters,
                                bool trim_offset_in_background) {
   SerializationRange range = GetSerializationRange(parameters);
+  // In standalone mode, we can optimize by trimming from front first.
+  // In cluster mode on remote searches on individual shards, we cannot trim
+  // from the front yet because each shard produces X results. However, the
+  // coordinator (after merging) WILL trim from the front and back in the
+  // background thread to avoid memory bloat with large offsets / limit counts
+  // before returning to the main thread.
   bool should_trim_offset =
       !ValkeySearch::Instance().IsCluster() || trim_offset_in_background;
   if (should_trim_offset) {

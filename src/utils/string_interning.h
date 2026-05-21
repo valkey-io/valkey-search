@@ -145,12 +145,7 @@ class InternedStringPtr {
     return *this;
   }
 
-  auto operator<=>(const InternedStringPtr &other) const {
-    return impl_ <=> other.impl_;
-  }
-  bool operator==(const InternedStringPtr &other) const {
-    return impl_ == other.impl_;
-  }
+  auto operator<=>(const InternedStringPtr &other) const = default;
 
   size_t Hash() const { return absl::HashOf(impl_); }
 
@@ -163,6 +158,7 @@ class InternedStringPtr {
     if (impl_) {
       impl_->DecrementRefCount();
     }
+    impl_ = nullptr;
   }
 
   size_t RefCount() const { return impl_ ? impl_->RefCount() : 0; }

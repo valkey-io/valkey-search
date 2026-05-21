@@ -53,14 +53,9 @@ struct DocInfo {
 //   doc:8    Only "rare" with doc_len=1; extreme-short-doc shape for
 //            length norm at dt=2.
 inline constexpr DocInfo kDocs[] = {
-    {1, 5, 1, 1, 0, 0},
-    {2, 6, 2, 1, 0, 0},
-    {3, 7, 3, 1, 0, 0},
-    {4, 9, 5, 1, 0, 0},
-    {5, 4, 4, 0, 0, 0},
-    {6, 4, 0, 1, 1, 1},
-    {7, 6, 2, 1, 0, 0},
-    {8, 1, 0, 0, 1, 0},
+    {1, 5, 1, 1, 0, 0}, {2, 6, 2, 1, 0, 0}, {3, 7, 3, 1, 0, 0},
+    {4, 9, 5, 1, 0, 0}, {5, 4, 4, 0, 0, 0}, {6, 4, 0, 1, 1, 1},
+    {7, 6, 2, 1, 0, 0}, {8, 1, 0, 0, 1, 0},
 };
 
 // Per-term Bm25StdStats builders. Each fills the index-wide constants

@@ -26,8 +26,16 @@ bool IsInf(double d) {
   static constexpr uint64_t kMantissaMask = 0x000FFFFFFFFFFFFFULL;
   uint64_t bits;
   std::memcpy(&bits, &d, sizeof(bits));
-  return (bits & kExponentMask) == kExponentMask &&
-         (bits & kMantissaMask) == 0;
+  return (bits & kExponentMask) == kExponentMask && (bits & kMantissaMask) == 0;
+}
+
+// std::isnan is unreliable under -ffadt-math
+bool IsNan(double d) {
+  static constexpr uint64_t kExponentMask = 0x7FF0000000000000ULL;
+  static constexpr uint64_t kMantissaMask = 0x000FFFFFFFFFFFFFULL;
+  uint64_t bits;
+  std::memcpy(&bits, &d, sizeof(bits));
+  return (bits & kExponentMask) == kExponentMask && (bits & kMantissaMask) != 0;
 }
 
 // IDF = ln(1 + (N - dt + 0.5) / (dt + 0.5)).
@@ -49,9 +57,8 @@ double Bm25StdScorer::ScoreLeaf(const ScoringStats& stats,
   // Empty / pathological index — nothing meaningful to score.
   if (bm25_stats->avg_doc_len <= 0.0) return 0.0;
 
-  const double idf = Idf(bm25_stats->total_docs,
-                         bm25_stats->num_doc_contain_term);
-  if (idf == 0.0) return 0.0;
+  const double idf =
+      Idf(bm25_stats->total_docs, bm25_stats->num_doc_contain_term);
 
   const double f = static_cast<double>(bm25_stats->term_frequency);
   const double dl = static_cast<double>(bm25_stats->doc_len);
@@ -60,13 +67,16 @@ double Bm25StdScorer::ScoreLeaf(const ScoringStats& stats,
   // bm25_leaf = leaf_weight * IDF * F*(k1+1) /
   //             (F + k1*(1 - b + b * dl/avgdl))
   const double numerator = f * (kK1 + 1.0);
-  const double denominator =
-      f + kK1 * (1.0 - kB + kB * dl / avgdl);
+  const double denominator = f + kK1 * (1.0 - kB + kB * dl / avgdl);
   return leaf_weight * idf * (numerator / denominator);
 }
 
-double Bm25StdScorer::ComposeDocumentScore(
-    double sum_of_terms, const ScoringStats& stats) const {
+double Bm25StdScorer::ComposeDocumentScore(double sum_of_terms,
+                                           const ScoringStats& stats) const {
+  // safe guard for nan values
+  if (IsNan(stats.document_score) || IsNan(sum_of_terms)) {
+    return 0.0;
+  }
   // Short-circuit on infinite document_score: the final score is
   // predetermined regardless of the per-leaf math, and
   // sum_of_terms * ±inf would otherwise yield NaN when sum_of_terms is

@@ -42,9 +42,7 @@ TEST(Bm25StdScorerTest, IdentityNameAndType) {
 }
 
 // One absolute-score reference against the corpus (doc:5 hello, F=4,
-// dl=4). Verified against Redis 7.4.7-oss. Failures here pinpoint the
-// scorer math; full per-doc score coverage lives in
-// scoring_session_test.cc.
+// dl=4).
 TEST(Bm25StdScorerTest, ScoreLeafCorpusReference) {
   Bm25StdScorer scorer;
   Bm25StdStats stats = test_data::StatsForHello(test_data::kDocs[4]);
@@ -94,10 +92,10 @@ TEST(Bm25StdScorerTest, IdfDifferentiatesByDt) {
 // hello despite doc:4 having a higher F.
 TEST(Bm25StdScorerTest, LengthNormalizationFavorsShorterDoc) {
   Bm25StdScorer scorer;
-  const double doc4 = scorer.ScoreLeaf(
-      test_data::StatsForHello(test_data::kDocs[3]), 1.0);
-  const double doc5 = scorer.ScoreLeaf(
-      test_data::StatsForHello(test_data::kDocs[4]), 1.0);
+  const double doc4 =
+      scorer.ScoreLeaf(test_data::StatsForHello(test_data::kDocs[3]), 1.0);
+  const double doc5 =
+      scorer.ScoreLeaf(test_data::StatsForHello(test_data::kDocs[4]), 1.0);
   EXPECT_GT(doc5, doc4);
 }
 

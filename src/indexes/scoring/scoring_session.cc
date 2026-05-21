@@ -25,8 +25,7 @@ ScoringSession::ScoringSession(const Scorer* scorer) : scorer_(scorer) {
 // Record one (query leaf, candidate document) match into the
 // innermost group scope. Computes the leaf's contribution via the
 // Scorer and adds it to that doc's running sum within the scope.
-void ScoringSession::RecordLeaf(const ScoringStats& stats,
-                                double leaf_weight) {
+void ScoringSession::RecordLeaf(const ScoringStats& stats, double leaf_weight) {
   CHECK(!group_stack_.empty());
 
   const double leaf_score = scorer_->ScoreLeaf(stats, leaf_weight);

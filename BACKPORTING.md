@@ -32,7 +32,7 @@ Each board must have a **"Status"** field with a **"To be backported"** option. 
 3. Set the PR's **Status** to **"To be backported"**.
 4. The agent picks it up on the next daily sweep.
 
-For an immediate on-demand backport (requires write access to `valkey-ci-agent`):
+For an immediate on-demand backport (instead of waiting for the daily sweep), the `manual-backport.yml` workflow can be triggered. Currently this requires write access to the `valkey-ci-agent` repo. A mechanism to allow individual projects to trigger manual backports directly is planned.
 
 ```bash
 gh workflow run manual-backport.yml \

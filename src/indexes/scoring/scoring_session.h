@@ -9,6 +9,7 @@
 #define VALKEYSEARCH_SRC_INDEXES_SCORING_SCORING_SESSION_H_
 
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
@@ -53,10 +54,11 @@ class ScoringSession {
 
   // Record one (query leaf, candidate document) match.
   //
-  // `stats` must remain alive until Rank() returns; the session stores
-  // a pointer to it for the eventual ComposeDocumentScore call. The
-  // doc-level fields in `stats` (e.g. document_score) must be invariant
-  // across all leaves recorded for the same `stats.doc_id`.
+  // The session takes its own copy of `stats` (via ScoringStats::Clone)
+  // for the eventual ComposeDocumentScore call, so the caller's
+  // instance need not outlive this call. The doc-level fields in
+  // `stats` (e.g. document_score) must be invariant across all leaves
+  // recorded for the same `stats.doc_id`.
   void RecordLeaf(const ScoringStats& stats, double leaf_weight);
 
   // Open a new group scope. RecordLeaf calls between EnterGroup() and
@@ -84,8 +86,9 @@ class ScoringSession {
   std::vector<absl::flat_hash_map<DocId, double>> group_stack_;
 
   // Per-doc ScoringStats remembered for the ComposeDocumentScore call
-  // at Rank() time. Pointer storage; lifetime managed by caller.
-  absl::flat_hash_map<DocId, const ScoringStats*> doc_stats_;
+  // at Rank() time. The session owns these copies so its lifetime is
+  // independent of the caller-supplied stats passed to RecordLeaf.
+  absl::flat_hash_map<DocId, std::unique_ptr<ScoringStats>> doc_stats_;
 };
 
 }  // namespace valkey_search::indexes::scoring

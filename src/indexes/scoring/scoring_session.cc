@@ -33,8 +33,12 @@ void ScoringSession::RecordLeaf(const ScoringStats& stats, double leaf_weight) {
 
   // Remember the stats for ComposeDocumentScore. First write wins;
   // subsequent records for the same doc must agree on doc-level fields
-  // (document_score, etc.), which is the caller's contract.
-  doc_stats_.try_emplace(stats.doc_id, &stats);
+  // (document_score, etc.), which is the caller's contract. The
+  // session owns the stored copy via Clone() so its lifetime is
+  // independent of the caller-supplied `stats`.
+  if (!doc_stats_.contains(stats.doc_id)) {
+    doc_stats_.emplace(stats.doc_id, stats.Clone());
+  }
 }
 
 // Push a fresh scope onto the group stack. Subsequent RecordLeaf

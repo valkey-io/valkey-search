@@ -48,9 +48,15 @@ add_library(intrusive_ref_count INTERFACE ${SRCS_INTRUSIVE_REF_COUNT})
 target_include_directories(intrusive_ref_count
                            INTERFACE ${CMAKE_CURRENT_LIST_DIR})
 
+set(SRCS_UTF8_ITERATOR ${CMAKE_CURRENT_LIST_DIR}/utf8_iterator.h)
+
+add_library(utf8_iterator INTERFACE ${SRCS_UTF8_ITERATOR})
+target_include_directories(utf8_iterator INTERFACE ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(utf8_iterator INTERFACE absl::strings)
+
 set(SRCS_SCANNER ${CMAKE_CURRENT_LIST_DIR}/scanner.h)
 
 add_library(scanner INTERFACE ${SRCS_SCANNER})
 target_include_directories(scanner INTERFACE ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(scanner INTERFACE absl::strings)
-target_link_libraries(scanner INTERFACE valkey_module)
+target_link_libraries(scanner INTERFACE utf8_iterator)

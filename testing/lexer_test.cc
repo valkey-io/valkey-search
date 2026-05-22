@@ -261,4 +261,25 @@ TEST_F(LexerTest, StemMappingsNoStemmingWhenDisabled) {
   EXPECT_TRUE(stem_mappings.empty());
 }
 
+// Custom PUNCTUATION may contain multi-byte characters (e.g. Arabic comma
+// ، U+060C, bytes 0xD8 0x8C). The lexer must treat the code point as a single
+// boundary, not split on each byte. Splitting on byte 0xD8 alone would also
+// shred every Arabic word, since all Arabic letters in U+0600..U+06FF start
+// with that lead byte.
+TEST_F(LexerTest, MultiBytePunctuation) {
+  lexer_ = CreateLexer("،", /*stop_words=*/{});
+  valkey_search::indexes::text::InProgressStemMap stem_mappings;
+  auto result = lexer_->Tokenize("hello،world", /*stemming_enabled=*/false,
+                                 /*min_stem_size=*/4, nullptr);
+  ASSERT_TRUE(result.ok());
+  std::vector<std::string> tokens(result->begin(), result->end());
+  EXPECT_EQ(tokens, std::vector<std::string>({"hello", "world"}));
+
+  result = lexer_->Tokenize("مرحبا بالعالم", /*stemming_enabled=*/false,
+                            /*min_stem_size=*/4, nullptr);
+  ASSERT_TRUE(result.ok());
+  tokens.assign(result->begin(), result->end());
+  EXPECT_EQ(tokens, std::vector<std::string>({"مرحبا", "بالعالم"}));
+}
+
 }  // namespace valkey_search::indexes::text

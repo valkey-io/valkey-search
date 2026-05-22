@@ -16,6 +16,7 @@
 #include "absl/status/statusor.h"
 #include "gtest/gtest.h"
 #include "src/index_schema.pb.h"
+#include "src/indexes/text/fuzzy.h"
 #include "src/indexes/text/invasive_ptr.h"
 #include "src/indexes/text/text_index.h"
 #include "src/utils/string_interning.h"
@@ -400,6 +401,39 @@ TEST_F(TextTest, StemmingBehavior) {
   }
 
   EXPECT_TRUE(has_tokens) << "Should create stemmed tokens";
+}
+
+// Fuzzy must decode UTF-8 across radix-tree edge boundaries. Two Arabic words
+// sharing only their first byte (0xD8) cause that byte to live on its own
+// edge, with the second byte of each word starting the next edge. A walker
+// that decodes per-edge sees two invalid bytes instead of one Arabic code
+// point and miscounts the edit distance.
+TEST_F(TextTest, FuzzySearchAcrossMultiByteEdgeSplit) {
+  AddRecordAndCommitKey(StringInternStore::Intern("doc:1"), "بالعالم");
+  AddRecordAndCommitKey(StringInternStore::Intern("doc:2"), "اختبار");
+
+  const auto& tree = text_index_schema_->GetTextIndex()->GetPrefix();
+  auto results = text::FuzzySearch::Search(tree, "بالعالم", /*max_distance=*/0,
+                                           /*max_words=*/100);
+  ASSERT_EQ(results.size(), 1u);
+  EXPECT_EQ(results[0].GetKey()->Str(), "doc:1");
+}
+
+// Edit distance is in code points, not bytes. "¡hola" and "hola" differ by
+// one inserted code point (¡ = U+00A1, 2 bytes). Distance 1 must match;
+// distance 0 must not.
+TEST_F(TextTest, FuzzySearchCodePointDistance) {
+  AddRecordAndCommitKey(StringInternStore::Intern("doc:1"), "¡hola");
+
+  const auto& tree = text_index_schema_->GetTextIndex()->GetPrefix();
+  auto exact = text::FuzzySearch::Search(tree, "hola", /*max_distance=*/0,
+                                         /*max_words=*/100);
+  EXPECT_EQ(exact.size(), 0u);
+
+  auto fuzzy = text::FuzzySearch::Search(tree, "hola", /*max_distance=*/1,
+                                         /*max_words=*/100);
+  ASSERT_EQ(fuzzy.size(), 1u);
+  EXPECT_EQ(fuzzy[0].GetKey()->Str(), "doc:1");
 }
 
 }  // namespace valkey_search::indexes

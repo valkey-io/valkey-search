@@ -29,6 +29,7 @@
 #include "src/indexes/text.h"
 #include "src/indexes/text/lexer.h"
 #include "src/query/predicate.h"
+#include "src/utils/utf8_iterator.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/status/status_macros.h"
 
@@ -531,8 +532,11 @@ absl::StatusOr<bool> FilterParser::HandleBackslashEscape(
     return true;
   }
   if (!IsEnd()) {
+    // Cast to unsigned char so high bytes don't sign-extend into the uint32_t
+    // code point passed to IsPunctuation.
     char next_ch = Peek();
-    if (next_ch == '\\' || lexer.IsPunctuation(next_ch)) {
+    if (next_ch == '\\' ||
+        lexer.IsPunctuation(static_cast<unsigned char>(next_ch))) {
       // If Double backslash, retain the double backslash
       // If Single backslash with punct on right, retain the char on right
       processed_content.push_back(next_ch);
@@ -576,13 +580,15 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
     if (!should_continue) {
       break;
     }
-    // Break to complete an exact phrase or start a new exact phrase.
-    char ch = Peek();
-    if (ch == '"') break;
-    if (ch == '\\') continue;  // Don't break on backslash
-    if (lexer.IsPunctuation(ch)) break;
-    processed_content.push_back(ch);
-    ++pos_;
+    {
+      utils::Utf8Iterator cp_it(expression_.substr(pos_));
+      auto [cp, byte_len] = cp_it.Next();
+      if (cp == '"') break;
+      if (cp == '\\') continue;  // Don't break on backslash
+      if (lexer.IsPunctuation(cp)) break;
+      processed_content.append(expression_.data() + pos_, byte_len);
+      pos_ += byte_len;
+    }
   }
   if (processed_content.empty()) {
     return FilterParser::TokenResult{nullptr, false};
@@ -680,11 +686,13 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
       }
     }
     if (ch == '\\') continue;  // Don't break on backslash
-    // Break on all punctuation characters.
-    if (lexer.IsPunctuation(ch)) break;
-    // Regular character
-    processed_content.push_back(ch);
-    ++pos_;
+    {
+      utils::Utf8Iterator cp_it(expression_.substr(pos_));
+      auto [cp, byte_len] = cp_it.Next();
+      if (lexer.IsPunctuation(cp)) break;
+      processed_content.append(expression_.data() + pos_, byte_len);
+      pos_ += byte_len;
+    }
   }
   lexer.NormalizeLowerCaseInPlace(processed_content);
   FieldMaskPredicate field_mask;

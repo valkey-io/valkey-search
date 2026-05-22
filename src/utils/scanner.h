@@ -10,48 +10,29 @@
 #include <absl/log/check.h>
 
 #include <cctype>
-#include <cuchar>
+#include <cstdint>
 #include <optional>
 
 #include "absl/strings/string_view.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
+#include "src/utils/utf8_iterator.h"
 
 namespace valkey_search {
 namespace utils {
 
 class Scanner {
  public:
-  using Char = u_int32_t;
+  using Char = uint32_t;
 
  private:
-  enum {
-    kStart1Mask = 0b10000000,
-    kStart1Value = 0b00000000,
-    kStart2Mask = 0b11100000,
+  // Encoding constants used only by PushBackUtf8 (encode path).
+  // The decode path is now handled entirely by Utf8Iterator.
+  enum : uint32_t {
     kStart2Value = 0b11000000,
-    kStart3Mask = 0b11110000,
     kStart3Value = 0b11100000,
-    kStart4Mask = 0b11111000,
     kStart4Value = 0b11110000,
-    kMoreMask = 0b11000000,
     kMoreValue = 0b10000000,
+    kMoreMask = 0b11000000,
   };
-
-  Char GetByte(size_t pos) const { return sv_[pos] & 0xFF; }
-
-  bool IsStart(size_t mask, size_t value) const {
-    return (GetByte(pos_) & mask) == value;
-  }
-
-  Char GetStart(size_t mask) { return GetByte(pos_++) & ~mask; }
-
-  bool IsMore(size_t pos) const {
-    return pos < sv_.size() && ((GetByte(pos) & kMoreMask) == kMoreValue);
-  }
-
-  Char GetMore(char32_t result) {
-    return (result << 6) | (GetByte(pos_++) & ~kMoreMask);
-  }
 
  public:
   Scanner(absl::string_view sv) : sv_(sv) {}
@@ -64,7 +45,7 @@ class Scanner {
     if (pos_ >= sv_.size()) {
       return kEOF;
     } else {
-      return GetByte(pos_) & 0xFF;
+      return static_cast<uint8_t>(sv_[pos_]);
     }
   }
 
@@ -72,7 +53,7 @@ class Scanner {
     if (pos_ >= sv_.size()) {
       return kEOF;
     } else {
-      return GetByte(pos_++) & 0xFF;
+      return static_cast<uint8_t>(sv_[pos_++]);
     }
   }
 
@@ -86,25 +67,21 @@ class Scanner {
     }
   }
 
+  // Decode and advance one UTF-8 code point. Delegates to Utf8Iterator which
+  // is the single source of truth for the decode algorithm.
+  // Utf8Iterator::Next() returns {cp, 1} for both valid ASCII and invalid
+  // bytes; only the latter has cp outside the ASCII range.
   Char NextUtf8() {
     if (pos_ >= sv_.size()) {
       return kEOF;
     }
-    if (IsStart(kStart1Mask, kStart1Value)) {
-      return GetStart(kStart1Mask);
-    } else if (IsStart(kStart2Mask, kStart2Value) && IsMore(pos_ + 1)) {
-      return GetMore(GetStart(kStart2Mask));
-    } else if (IsStart(kStart3Mask, kStart3Value) && IsMore(pos_ + 1) &&
-               IsMore(pos_ + 2)) {
-      return GetMore(GetMore(GetStart(kStart3Mask)));
-    } else if (IsStart(kStart4Mask, kStart4Value) && IsMore(pos_ + 1) &&
-               IsMore(pos_ + 2) && IsMore(pos_ + 3)) {
-      return GetMore(GetMore(GetMore(GetStart(kStart4Mask))));
+    Utf8Iterator it(sv_.substr(pos_));
+    auto [cp, byte_len] = it.Next();
+    pos_ += byte_len;
+    if (byte_len == 1 && !Utf8Iterator::IsAscii(cp)) {
+      invalid_utf_count_++;
     }
-    invalid_utf_count_++;
-    // std::cout << "Invalid utf8: " << std::hex << GetByte(pos_) << " position:
-    // " << pos_ << "\n";
-    return GetByte(pos_++) & 0xFF;
+    return cp;
   }
 
   Char PeekUtf8() {

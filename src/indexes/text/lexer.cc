@@ -16,6 +16,7 @@
 #include "libstemmer.h"
 #include "src/indexes/text/unicode_normalizer.h"
 #include "src/utils/scanner.h"
+#include "src/utils/utf8_iterator.h"
 
 namespace valkey_search::indexes::text {
 
@@ -25,23 +26,30 @@ bool IsWhitespace(unsigned char c) {
   return std::isspace(c) || std::iscntrl(c);
 }
 
-using PunctuationBitmap = std::bitset<256>;
+// Build PunctuationSet from the PUNCTUATION string. Iterates as code points
+// (not bytes) so multi-byte chars like U+060C are stored correctly.
+PunctuationSet BuildPunctuationSet(const std::string& punctuation) {
+  PunctuationSet result;
 
-PunctuationBitmap BuildPunctuationBitmap(const std::string& punctuation) {
-  PunctuationBitmap bitmap;
-  bitmap.reset();
-
-  for (int i = 0; i < 256; ++i) {
+  // ASCII whitespace and control characters are always word boundaries.
+  for (int i = 0; i < 128; ++i) {
     if (IsWhitespace(static_cast<unsigned char>(i))) {
-      bitmap.set(i);
+      result.ascii.set(i);
     }
   }
 
-  for (char c : punctuation) {
-    bitmap.set(static_cast<unsigned char>(c));
+  // Iterate the user-supplied punctuation as code points, not bytes.
+  utils::Utf8Iterator it(punctuation);
+  while (!it.Done()) {
+    auto [cp, byte_len] = it.Next();
+    if (utils::Utf8Iterator::IsAscii(cp)) {
+      result.ascii.set(cp);
+    } else {
+      result.non_ascii.insert(cp);
+    }
   }
 
-  return bitmap;
+  return result;
 }
 
 absl::flat_hash_set<std::string> BuildStopWordsSet(
@@ -79,7 +87,7 @@ thread_local absl::flat_hash_map<data_model::Language, StemmerPtr> stemmers_;
 Lexer::Lexer(data_model::Language language, const std::string& punctuation,
              const std::vector<std::string>& stop_words)
     : language_(language),
-      punct_bitmap_(BuildPunctuationBitmap(punctuation)),
+      punct_set_(BuildPunctuationSet(punctuation)),
       stop_words_set_(BuildStopWordsSet(stop_words)) {}
 
 absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
@@ -101,45 +109,50 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
   word.reserve(64);
   size_t pos = 0;
   while (pos < text.size()) {
-    // Skip leading punctuation, but check for backslash escape sequences
-    while (pos < text.size() && IsPunctuation(text[pos])) {
+    // Skip leading punctuation. Decode code points so multi-byte chars are
+    // never confused with ASCII punctuation.
+    while (pos < text.size()) {
       if (text[pos] == '\\' && pos + 1 < text.size()) {
-        // Backslash at start - let word building handle escape
-        break;
+        break;  // Let word-building handle escape
       }
-      pos++;
+      utils::Utf8Iterator peek_it(text.substr(pos));
+      auto [cp, byte_len] = peek_it.Next();
+      if (!IsPunctuation(cp)) break;
+      pos += byte_len;
     }
 
     word.clear();
 
-    // Build word, handling backslash escape sequences
+    // Build word. Decode code points so multi-byte chars are treated correctly
+    // by IsPunctuation (which handles both ASCII and non-ASCII via
+    // PunctuationSet).
     while (pos < text.size()) {
-      char ch = text[pos];
-      if (ch == '\\' && pos + 1 < text.size()) {
+      if (text[pos] == '\\' && pos + 1 < text.size()) {
         char next_ch = text[pos + 1];
         pos++;  // Consume the backslash
-        if (next_ch == '\\' || IsPunctuation(next_ch)) {
-          // Backslash escapes backslash or punctuation
-          word.push_back(text[pos++]);  // Keep the escaped character
+        if (next_ch == '\\' ||
+            IsPunctuation(static_cast<unsigned char>(next_ch))) {
+          // Backslash escapes backslash or ASCII punctuation
+          word.push_back(text[pos++]);
         } else {
           // Backslash before non-punctuation
           if (IsPunctuation('\\')) {
-            // Backslash is punctuation → end token (Standard Unicode
-            // segmentation)
+            // Backslash itself is configured as punctuation → end token
             break;
           } else {
-            // Backslash not punctuation → keep letter
             word.push_back(text[pos++]);
           }
         }
-      } else if (IsPunctuation(ch)) {
-        // Regular punctuation - end of word
-        break;
-      } else {
-        // Regular character
-        word.push_back(ch);
-        pos++;
+        continue;
       }
+
+      utils::Utf8Iterator cp_it(text.substr(pos));
+      auto [cp, byte_len] = cp_it.Next();
+      if (IsPunctuation(cp)) {
+        break;
+      }
+      word.append(text.data() + pos, byte_len);
+      pos += byte_len;
     }
 
     if (!word.empty()) {
@@ -200,7 +213,12 @@ void Lexer::NormalizeLowerCaseInPlace(std::string& str) const {
 
 std::string_view Lexer::DoStemming(absl::string_view word, sb_stemmer* stemmer,
                                    uint32_t min_stem_size) const {
-  if (word.empty() || word.length() < min_stem_size) {
+  if (word.empty()) {
+    return word;
+  }
+  // min_stem_size is a code point count, not byte count. "été" = 3 cps, 5
+  // bytes.
+  if (utils::Utf8Iterator::CodePointCount(word) < min_stem_size) {
     return word;
   }
   CHECK(stemmer) << "Stemmer is not initialized";

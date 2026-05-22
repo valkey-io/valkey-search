@@ -18,7 +18,7 @@ The following are explicitly **not** goals of Valkey Search compatibility with R
 
 **Error message text parity.** The exact wording of error strings returned to clients is not guaranteed to match Redisearch. The _semantic_ error conditions — that is, which operations fail and under what circumstances — are expected to align where command and query compatibility applies, but the human-readable text of error responses may differ.
 
-**Security Architecture** Valkey Search security architecture is somewhat more restrictive than Redisearch. Valkey Search enforces a user's ACL keyspace restrictions on query operations (FT.SEARCH, FT.AGGREGATE), while Redisearch does not.
+**Security Architecture.** Valkey Search security architecture is somewhat more restrictive than Redisearch. Valkey Search enforces a user's ACL keyspace restrictions on query operations (FT.SEARCH, FT.AGGREGATE), while Redisearch does not.
 
 ## Expected Compatibility
 
@@ -130,7 +130,7 @@ This step applies only to deployments running with cluster mode enabled (CME). I
 
 Two related classes of dependency need to be audited out of the application and its surrounding tooling.
 
-The first is any code path that inspects the textual content of error replies — for example, matching on specific substrings returned by a failed `FT.SEARCH`, branching on the wording of a schema validation error, or using regular expressions against error strings to decide how to react. Error message text is not part of the compatibility contract (see _Non-Goals_ above); the semantic error condition is expected to align, but the wording may not. Rework these paths to branch on the type of operation and on structured signals (command, return code, context) rather than on error string contents.
+The first is any code path that inspects the textual content of error replies — for example, matching on specific substrings returned by a failed command, branching on the wording of a schema validation error, or using regular expressions against error strings to decide how to react. Error message text is not part of the compatibility contract (see _Non-Goals_ above); the semantic error condition is expected to align, but the wording may not. Rework these paths to branch on the type of operation and on structured signals (command, return code, context) rather than on error string contents.
 
 The second is any dependency on log messages — not only on specific log text, but on the _existence_ of particular log entries at all. Code or tooling that waits for a specific log line to appear, counts occurrences of a phrase, or treats the absence of a message as a signal is relying on a surface that Valkey Search does not preserve from Redisearch. A given Redisearch log event may be absent from Valkey Search entirely, emitted at a different severity, or emitted under different conditions. Remove these dependencies and replace them, where possible, with signals drawn from commands, metrics, or application-level observability.
 
@@ -150,14 +150,14 @@ If ACL keyspace restrictions are used, these should be reviewed as Valkey Search
 
 ## Compatibility Defects
 
-Valkey Search follows the rules of [SemVer](https://semver.org) which governs the range of permitted changes in behavior from release to release. These rules would normally prohibit the ability to correct compatibility defects (bugs) in a minor or patch release. An exception to the SemVer rules is made for defects which are judged to be unusable, in other words if the defective behavior renders the feature unusable, then the rules of SemVer do no apply as there isn't any valid user base to protect.
+Valkey Search follows the rules of [SemVer](https://semver.org) which governs the range of permitted changes in behavior from release to release. These rules would normally prohibit the ability to correct compatibility defects (bugs) in a minor or patch release. An exception to the SemVer rules is made for defects which are judged to be unusable, in other words if the defective behavior renders the feature unusable, then the rules of SemVer do not apply as there isn't any valid user base to protect.
 
 Valkey Search provides an opt-in mechanism to enable the correction of compatibility bugs in minor and/or patch releases without violating the SemVer rules.
-A fix for a compatibility bug released in a minor or patch release selectively provides both the old (incompatible) behavior as well as the new (compatible) behavior. The selection is controlled by the configurable `search.emulate-release` which is set to a specific release identifier and governs the behavior. For example, if a compatibility bug is fixed in release 1.2.2 then setting `search.emulate-release` to `1.2.1` or smaller would enable the old behavior, but setting it to `1.2.2` or larger would enable the compatible behavior. The default value for `search.emulate-release` is set to the current major release (X.0.0 currently) which honors SemVer rules if there is no opt-in.
+A fix for a compatibility bug released in a minor or patch release selectively provides both the old (incompatible) behavior as well as the new (compatible) behavior. The selection is controlled by the configurable `search.emulate-release` which is set to a specific release identifier and governs the behavior. For example, if a compatibility bug is fixed in release 1.2.2 then setting `search.emulate-release` to `1.2.1` or smaller would enable the old behavior, but setting it to `1.2.2` or larger would enable the compatible behavior. The default value for `search.emulate-release` is set to the current major release (1.0.0 currently) which honors SemVer rules if there is no opt-in across subsequent minor and/or patch releases.
 
-The old (non-compatible) behavior will be preserved for at least one additional major release. If a bug was fixed in 1.x.x, then the 2.y.y will support emulating the 1.x.x release. However support in the 3.z.z release or later releases is not ensured.
+It may be judged that a compatibility defect cannot reasonably be fixed while preserving the old behavior. In this case, the fix cannot be made until the next major release and will ignore the `search.emulate-release` mechanism. In other words, fixes made under this clause cannot be undone using the `search.emulate-release` override.
 
-It may be judged that a compatibility defect cannot reasonably be fixed while preserving the old behavior. In this case, the fix cannot be made until the next major release and will ignore the `search.emulate-release` mechanism.
+When feasible the old (non-compatible) behavior will be preserved for _at least_ one additional major release. If a bug was fixed in 1.x.x, then the 2.y.y will support emulating the 1.x.x release. However support in the 3. release or later releases is not ensured. Similar to the above clause, if retaining the parallel behavior becomes unreasonable to support, then it can be removed on the next major version.
 
 ### Known Compatibility Defect Corrections
 

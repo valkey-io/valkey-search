@@ -637,6 +637,7 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
     // mutation records.
     absl::MutexLock lock(&mutated_records_mutex_);
     index_key_info_.erase(key);
+    sorted_keys_.erase(key);
   }
   if (text_index_schema_) {
     // Text index structures operate at the schema-level so we commit the
@@ -1967,6 +1968,7 @@ IndexSchema::ConsumeTrackedMutatedAttribute(const Key &key, bool first_time) {
     } else {
       index_key_info_[key].mutation_sequence_number_ =
           itr->second.sequence_number;
+      sorted_keys_.insert(key);
       // Track entry is now first consumed
       auto mutated_attributes = std::move(itr->second.attributes.value());
       itr->second.attributes = std::nullopt;

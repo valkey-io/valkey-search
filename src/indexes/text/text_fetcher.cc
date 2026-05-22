@@ -18,4 +18,8 @@ const Key& TextFetcher::operator*() const { return iter_->CurrentKey(); }
 
 void TextFetcher::Next() { iter_->NextKey(); }
 
+bool TextFetcher::SeekForwardKey(const InternedStringPtr& target) {
+  return iter_->SeekForwardKey(target);
+}
+
 }  // namespace valkey_search::indexes::text

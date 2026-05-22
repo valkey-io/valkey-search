@@ -15,9 +15,10 @@
 
 #include "absl/base/thread_annotations.h"
 #include "absl/container/btree_map.h"
+#include "absl/container/btree_map.h"
 #include "absl/container/flat_hash_set.h"
-#include "absl/functional/any_invocable.h"
 #include "absl/hash/hash.h"
+#include "absl/functional/any_invocable.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -26,6 +27,8 @@
 #include "src/indexes/index_base.h"
 #include "src/query/predicate.h"
 #include "src/rdb_serialization.h"
+#include <algorithm>
+#include <vector>
 #include "src/utils/segment_tree.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -128,35 +131,46 @@ class Numeric : public IndexBase {
     EntriesFetcherIterator(
         const EntriesRange& entries_range,
         const std::optional<EntriesRange>& additional_entries_range,
-        const InternedStringSet* untracked_keys);
+        const InternedStringSet* untracked_keys, bool sorted);
     bool Done() const override;
     void Next() override;
     const InternedStringPtr& operator*() const override;
+    bool SeekForwardKey(const InternedStringPtr& target) override;
 
    private:
-    static bool NextKeys(
-        const Numeric::EntriesRange& range,
-        BTreeNumericIndex::ConstIterator& iter,
-        std::optional<InternedStringSet::const_iterator>& keys_iter);
-    const EntriesRange& entries_range_;
-    BTreeNumericIndex::ConstIterator entries_iter_;
-    std::optional<InternedStringSet::const_iterator> entry_keys_iter_;
-    const std::optional<EntriesRange>& additional_entries_range_;
-    BTreeNumericIndex::ConstIterator additional_entries_iter_;
-    std::optional<InternedStringSet::const_iterator>
-        additional_entry_keys_iter_;
+    using SetIter = BTreeNumericIndex::SetType::const_iterator;
+
+    bool sorted_;
+
+    // Sorted mode: pre-sorted vector of all keys.
+    std::vector<InternedStringPtr> sorted_keys_;
+    size_t sorted_idx_;
+
+    // Unsorted mode: linear iteration across buckets.
+    const EntriesRange* entries_range_ptr_;
+    const std::optional<EntriesRange>* additional_entries_range_ptr_;
+    BTreeNumericIndex::ConstIterator bucket_iter_;
+    BTreeNumericIndex::ConstIterator bucket_end_;
+    std::optional<SetIter> keys_iter_;
+    bool in_additional_range_;
+
+    InternedStringPtr current_key_;
+    bool negate_;
     const InternedStringSet* untracked_keys_;
     std::optional<InternedStringSet::const_iterator> untracked_keys_iter_;
+
+    void LinearAdvance();
   };
 
   class EntriesFetcher : public EntriesFetcherBase {
    public:
     EntriesFetcher(
-        const EntriesRange& entries_range, size_t size,
+        const EntriesRange& entries_range, size_t size, bool sorted,
         std::optional<EntriesRange> additional_entries_range = std::nullopt,
         const InternedStringSet* untracked_keys = nullptr)
         : entries_range_(entries_range),
           size_(size),
+          sorted_(sorted),
           additional_entries_range_(additional_entries_range),
           untracked_keys_(untracked_keys) {}
     size_t Size() const override;
@@ -165,13 +179,14 @@ class Numeric : public IndexBase {
    private:
     EntriesRange entries_range_;
     size_t size_{0};
+    bool sorted_;
     std::optional<EntriesRange> additional_entries_range_;
     const InternedStringSet* untracked_keys_;
   };
 
   virtual std::unique_ptr<EntriesFetcher> Search(
       const query::NumericPredicate& predicate,
-      bool negate) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      bool negate, bool sorted) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
  private:
   mutable absl::Mutex index_mutex_;

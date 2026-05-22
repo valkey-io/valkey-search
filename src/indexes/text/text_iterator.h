@@ -102,6 +102,8 @@ class TextIterator {
   virtual FieldMaskPredicate CurrentFieldMask() const = 0;
   // Returns true if iterator is at a valid state (has current key, position,
   // and field)
+  // Returns true if this iterator provides positional data.
+  virtual bool HasPositions() const = 0;
   virtual bool IsIteratorValid() const = 0;
 };
 

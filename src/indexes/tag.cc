@@ -7,6 +7,7 @@
 
 #include "src/indexes/tag.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -257,87 +258,101 @@ const absl::flat_hash_set<absl::string_view>* Tag::GetValue(
 Tag::EntriesFetcherIterator::EntriesFetcherIterator(
     const PatriciaTreeIndex& tree,
     absl::flat_hash_set<PatriciaNodeIndex*>& entries,
-    const InternedStringSet& untracked_keys, bool negate)
+    const InternedStringSet& untracked_keys, bool negate, bool sorted)
     : tree_(tree),
+      sorted_(sorted),
+      sorted_idx_(0),
+      negate_(negate),
       entries_(entries),
-      untracked_keys_(untracked_keys),
-      negate_(negate) {}
-
-void Tag::EntriesFetcherIterator::EnsureNegateRootIter() {
-  if (!negate_root_iter_.has_value()) {
-    negate_root_iter_.emplace(tree_.RootIterator());
+      untracked_keys_(untracked_keys) {
+  CHECK(!negate_) << "Negate handled by ExcludeIterator, not tag iterator";
+  if (sorted_) {
+    // Collect all keys, sort, deduplicate.
+    for (auto* node : entries_) {
+      if (node && node->value.has_value()) {
+        for (const auto& key : node->value.value()) {
+          sorted_keys_.push_back(key);
+        }
+      }
+    }
+    std::sort(sorted_keys_.begin(), sorted_keys_.end());
+    sorted_keys_.erase(
+        std::unique(sorted_keys_.begin(), sorted_keys_.end()),
+        sorted_keys_.end());
+    if (!sorted_keys_.empty()) {
+      current_key_ = sorted_keys_[0];
+    }
+  } else {
+    nodes_iter_ = entries_.begin();
+    nodes_end_ = entries_.end();
+    LinearAdvance();
   }
 }
 
-bool Tag::EntriesFetcherIterator::Done() const {
-  if (negate_) {
-    return negate_root_iter_.has_value() && negate_root_iter_->Done() &&
-           (untracked_keys_.empty() ||
-            (untracked_keys_iter_.has_value() &&
-             untracked_keys_iter_.value() == untracked_keys_.end()));
-  }
-  return entries_.empty() && next_node_ == nullptr;
-}
-
-void Tag::EntriesFetcherIterator::NextNegate() {
-  EnsureNegateRootIter();
-  if (next_node_) {
-    ++next_iter_;
-    if (next_iter_ != next_node_->value.value().end()) {
+void Tag::EntriesFetcherIterator::LinearAdvance() {
+  if (keys_iter_.has_value()) {
+    ++keys_iter_.value();
+    if (keys_iter_.value() != keys_end_.value()) {
+      current_key_ = *keys_iter_.value();
       return;
     }
-    negate_root_iter_->Next();
+    ++nodes_iter_;
+    keys_iter_ = std::nullopt;
   }
-  while (!negate_root_iter_->Done()) {
-    next_node_ = negate_root_iter_->Value();
-    if (next_node_ && !entries_.contains(next_node_) &&
-        next_node_->value.has_value() && !next_node_->value.value().empty()) {
-      next_iter_ = next_node_->value.value().begin();
+  while (nodes_iter_ != nodes_end_) {
+    auto* node = *nodes_iter_;
+    if (node && node->value.has_value() && !node->value.value().empty()) {
+      keys_iter_ = node->value.value().begin();
+      keys_end_ = node->value.value().end();
+      current_key_ = *keys_iter_.value();
       return;
     }
-    negate_root_iter_->Next();
+    ++nodes_iter_;
   }
-  next_node_ = nullptr;
-  if (!untracked_keys_iter_.has_value()) {
-    untracked_keys_iter_ = untracked_keys_.begin();
-    return;
-  }
-  ++untracked_keys_iter_.value();
+  current_key_ = {};
 }
+
+bool Tag::EntriesFetcherIterator::Done() const { return !current_key_; }
 
 void Tag::EntriesFetcherIterator::Next() {
-  if (negate_) {
-    NextNegate();
-    return;
-  }
-  if (next_node_) {
-    ++next_iter_;
-    if (next_iter_ != next_node_->value.value().end()) {
-      return;
+  if (!current_key_) return;
+  if (sorted_) {
+    ++sorted_idx_;
+    if (sorted_idx_ < sorted_keys_.size()) {
+      current_key_ = sorted_keys_[sorted_idx_];
+    } else {
+      current_key_ = {};
     }
+  } else {
+    LinearAdvance();
   }
-  while (!entries_.empty()) {
-    auto itr = entries_.begin();
-    next_node_ = *itr;
-    entries_.erase(itr);
-    if (next_node_->value.has_value() && !next_node_->value.value().empty()) {
-      next_iter_ = next_node_->value.value().begin();
-      return;
-    }
-  }
-  next_node_ = nullptr;
 }
 
 const InternedStringPtr& Tag::EntriesFetcherIterator::operator*() const {
-  if (negate_ && negate_root_iter_.has_value() && negate_root_iter_->Done()) {
-    return *untracked_keys_iter_.value();
+  return current_key_;
+}
+
+bool Tag::EntriesFetcherIterator::SeekForwardKey(
+    const InternedStringPtr& target) {
+  CHECK(sorted_) << "SeekForwardKey requires sorted mode";
+  if (!current_key_) return false;
+  if (current_key_ >= target) return true;
+  auto it = std::lower_bound(sorted_keys_.begin() + sorted_idx_,
+                              sorted_keys_.end(), target);
+  if (it == sorted_keys_.end()) {
+    current_key_ = {};
+    sorted_idx_ = sorted_keys_.size();
+    return false;
   }
-  return *next_iter_;
+  sorted_idx_ = it - sorted_keys_.begin();
+  current_key_ = sorted_keys_[sorted_idx_];
+  return true;
 }
 
 // TODO: b/357027854 - Support Suffix/Infix Search
 std::unique_ptr<Tag::EntriesFetcher> Tag::Search(
-    const query::TagPredicate& predicate, bool negate) const {
+    const query::TagPredicate& predicate, bool negate, bool sorted) const {
+  CHECK(!negate) << "Negate handled by ExcludeIterator, not tag iterator";
   absl::flat_hash_set<PatriciaNodeIndex*> entries;
   size_t size = 0;
 
@@ -364,20 +379,14 @@ std::unique_ptr<Tag::EntriesFetcher> Tag::Search(
       }
     }
   }
-  if (negate) {
-    size = tracked_tags_by_keys_.size() > size
-               ? tracked_tags_by_keys_.size() - size
-               : tracked_tags_by_keys_.size();
-    size += untracked_keys_.size();
-  }
   return std::make_unique<Tag::EntriesFetcher>(tree_, entries, size, negate,
-                                               untracked_keys_);
+                                               sorted, untracked_keys_);
 }
 
 std::unique_ptr<EntriesFetcherIteratorBase> Tag::EntriesFetcher::Begin() {
   auto itr = std::make_unique<EntriesFetcherIterator>(tree_, entries_,
-                                                      untracked_keys_, negate_);
-  itr->Next();
+                                                      untracked_keys_, negate_,
+                                                      sorted_);
   return itr;
 }
 

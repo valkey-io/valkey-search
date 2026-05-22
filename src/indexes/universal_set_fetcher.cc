@@ -17,12 +17,10 @@ std::unique_ptr<EntriesFetcherIteratorBase> UniversalSetFetcher::Begin() {
   return std::make_unique<Iterator>(index_schema_);
 }
 
-// --- Iterator Implementation ---
-
 UniversalSetFetcher::Iterator::Iterator(const IndexSchema* index_schema) {
-  const auto& index_key_info = index_schema->GetIndexKeyInfo();
-  current_it_ = index_key_info.begin();
-  end_it_ = index_key_info.end();
+  const auto& sorted_keys = index_schema->GetSortedKeys();
+  current_it_ = sorted_keys.begin();
+  end_it_ = sorted_keys.end();
 }
 
 bool UniversalSetFetcher::Iterator::Done() const {
@@ -30,13 +28,19 @@ bool UniversalSetFetcher::Iterator::Done() const {
 }
 
 void UniversalSetFetcher::Iterator::Next() {
-  if (current_it_ != end_it_) {
-    ++current_it_;
-  }
+  if (current_it_ != end_it_) ++current_it_;
 }
 
 const InternedStringPtr& UniversalSetFetcher::Iterator::operator*() const {
-  return current_it_->first;
+  return *current_it_;
+}
+
+bool UniversalSetFetcher::Iterator::SeekForwardKey(
+    const InternedStringPtr& target) {
+  while (current_it_ != end_it_ && *current_it_ < target) {
+    ++current_it_;
+  }
+  return current_it_ != end_it_;
 }
 
 }  // namespace valkey_search::indexes

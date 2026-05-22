@@ -11,6 +11,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_set.h"
@@ -23,6 +24,7 @@
 #include "src/indexes/index_base.h"
 #include "src/query/predicate.h"
 #include "src/rdb_serialization.h"
+#include <algorithm>
 #include "src/utils/patricia_tree.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -81,44 +83,56 @@ class Tag : public IndexBase {
     EntriesFetcherIterator(const PatriciaTreeIndex& tree,
                            absl::flat_hash_set<PatriciaNodeIndex*>& entries,
                            const InternedStringSet& untracked_keys,
-                           bool negate);
+                           bool negate, bool sorted);
     bool Done() const override;
     void Next() override;
     const InternedStringPtr& operator*() const override;
+    bool SeekForwardKey(const InternedStringPtr& target) override;
 
    private:
-    // Reference to the Patricia tree, held so we can construct the
-    // root iterator on demand (only when negation requires it).
+    using SetIter = PatriciaTreeIndex::SetType::const_iterator;
+
+    static constexpr size_t kInlineCapacity = 8;
+
+    // Reference to the Patricia tree.
     const PatriciaTreeIndex& tree_;
 
-    // Full-tree root iterator used exclusively by the negated path.
-    // Only constructed by EnsureNegateRootIter() on first negated
-    // iteration — non-negated queries never create this.
-    std::optional<PatriciaTreeIndex::PrefixSubTreeIterator> negate_root_iter_;
+    bool sorted_;
 
-    // The set of Patricia nodes matching the query tags. For non-negated
-    // queries, we iterate these directly. For negated queries, these are
-    // the nodes to *exclude* during the full-tree walk.
+    // Sorted mode: pre-sorted vector of all unique keys.
+    std::vector<InternedStringPtr> sorted_keys_;
+    size_t sorted_idx_;
+
+    // Unsorted mode: linear iteration across nodes.
+    absl::flat_hash_set<PatriciaNodeIndex*>::iterator nodes_iter_;
+    absl::flat_hash_set<PatriciaNodeIndex*>::iterator nodes_end_;
+    std::optional<SetIter> keys_iter_;
+    std::optional<SetIter> keys_end_;
+
+    // Current key being yielded.
+    InternedStringPtr current_key_;
+
+    bool negate_;
     absl::flat_hash_set<PatriciaNodeIndex*>& entries_;
 
-    PatriciaNodeIndex* next_node_{nullptr};
-    InternedStringSet::const_iterator next_iter_;
+    // Untracked keys (used by ingestion bookkeeping, not by iterator).
     const InternedStringSet& untracked_keys_;
-    bool negate_;
     std::optional<InternedStringSet::const_iterator> untracked_keys_iter_;
-    void NextNegate();
-    void EnsureNegateRootIter();
+
+    void LinearAdvance();
   };
 
   class EntriesFetcher : public EntriesFetcherBase {
    public:
     EntriesFetcher(const PatriciaTreeIndex& tree,
                    absl::flat_hash_set<PatriciaNodeIndex*> entries, size_t size,
-                   bool negate, const InternedStringSet& untracked_keys)
+                   bool negate, bool sorted,
+                   const InternedStringSet& untracked_keys)
         : tree_(tree),
           size_(size),
           entries_(entries),
           negate_(negate),
+          sorted_(sorted),
           untracked_keys_(untracked_keys){};
     size_t Size() const override;
     std::unique_ptr<EntriesFetcherIteratorBase> Begin() override;
@@ -128,12 +142,13 @@ class Tag : public IndexBase {
     size_t size_{0};
     absl::flat_hash_set<PatriciaNodeIndex*> entries_;
     bool negate_;
+    bool sorted_;
     const InternedStringSet& untracked_keys_;
   };
 
   virtual std::unique_ptr<EntriesFetcher> Search(
       const query::TagPredicate& predicate,
-      bool negate) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      bool negate, bool sorted) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
   char GetSeparator() const { return separator_; }
   bool IsCaseSensitive() const { return case_sensitive_; }
   static absl::StatusOr<absl::flat_hash_set<absl::string_view>> ParseSearchTags(

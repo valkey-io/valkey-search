@@ -7,13 +7,13 @@
 
 #include "src/indexes/numeric.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <limits>
 #include <memory>
 #include <optional>
 #include <string>
 
-#include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -132,31 +132,10 @@ const double* Numeric::GetValue(const InternedStringPtr& key) const {
 }
 
 std::unique_ptr<Numeric::EntriesFetcher> Numeric::Search(
-    const query::NumericPredicate& predicate, bool negate) const {
+    const query::NumericPredicate& predicate, bool negate, bool sorted) const {
+  CHECK(!negate) << "Negate handled by ExcludeIterator, not numeric iterator";
   EntriesRange entries_range;
   const auto& btree = index_->GetBtree();
-  if (negate) {
-    auto size =
-        index_->GetCount(std::numeric_limits<double>::lowest(),
-                         predicate.GetStart(), true,
-                         !predicate.IsStartInclusive()) +
-        index_->GetCount(predicate.GetEnd(), std::numeric_limits<double>::max(),
-                         !predicate.IsEndInclusive(), true);
-    entries_range.first = btree.begin();
-    entries_range.second = predicate.IsStartInclusive()
-                               ? btree.lower_bound(predicate.GetStart())
-                               : btree.upper_bound(predicate.GetStart());
-    EntriesRange additional_entries_range;
-    additional_entries_range.first =
-        predicate.IsEndInclusive() ? btree.upper_bound(predicate.GetEnd())
-                                   : btree.lower_bound(predicate.GetEnd());
-    ;
-    additional_entries_range.second = btree.end();
-    return std::make_unique<Numeric::EntriesFetcher>(
-        entries_range, size + untracked_keys_.size(), additional_entries_range,
-        &untracked_keys_);
-  }
-
   entries_range.first = predicate.IsStartInclusive()
                             ? btree.lower_bound(predicate.GetStart())
                             : btree.upper_bound(predicate.GetStart());
@@ -166,90 +145,112 @@ std::unique_ptr<Numeric::EntriesFetcher> Numeric::Search(
   size_t size = index_->GetCount(predicate.GetStart(), predicate.GetEnd(),
                                  predicate.IsStartInclusive(),
                                  predicate.IsEndInclusive());
-  return std::make_unique<Numeric::EntriesFetcher>(entries_range, size);
-}
-
-bool Numeric::EntriesFetcherIterator::NextKeys(
-    const Numeric::EntriesRange& range, BTreeNumericIndex::ConstIterator& iter,
-    std::optional<InternedStringSet::const_iterator>& keys_iter) {
-  while (iter != range.second) {
-    if (!keys_iter.has_value()) {
-      keys_iter = iter->second.begin();
-    } else {
-      ++keys_iter.value();
-    }
-    if (keys_iter.value() != iter->second.end()) {
-      return true;
-    }
-    ++iter;
-    keys_iter = std::nullopt;
-  }
-  return false;
+  return std::make_unique<Numeric::EntriesFetcher>(entries_range, size, sorted);
 }
 
 Numeric::EntriesFetcherIterator::EntriesFetcherIterator(
     const EntriesRange& entries_range,
     const std::optional<EntriesRange>& additional_entries_range,
-    const InternedStringSet* untracked_keys)
-    : entries_range_(entries_range),
-      entries_iter_(entries_range_.first),
-      additional_entries_range_(additional_entries_range),
+    const InternedStringSet* untracked_keys, bool sorted)
+    : sorted_(sorted),
+      sorted_idx_(0),
+      entries_range_ptr_(&entries_range),
+      additional_entries_range_ptr_(&additional_entries_range),
+      in_additional_range_(false),
+      negate_(additional_entries_range.has_value()),
       untracked_keys_(untracked_keys) {
-  if (additional_entries_range_.has_value()) {
-    additional_entries_iter_ = additional_entries_range_.value().first;
+  if (sorted_) {
+    // Collect all keys into a vector and sort for pointer order.
+    for (auto it = entries_range.first; it != entries_range.second; ++it) {
+      for (const auto& key : it->second) {
+        sorted_keys_.push_back(key);
+      }
+    }
+    std::sort(sorted_keys_.begin(), sorted_keys_.end());
+    if (!sorted_keys_.empty()) {
+      current_key_ = sorted_keys_[0];
+    }
+  } else {
+    bucket_iter_ = entries_range.first;
+    bucket_end_ = entries_range.second;
+    LinearAdvance();
   }
 }
 
-bool Numeric::EntriesFetcherIterator::Done() const {
-  return entries_iter_ == entries_range_.second &&
-         (!additional_entries_range_.has_value() ||
-          additional_entries_iter_ ==
-              additional_entries_range_.value().second) &&
-         (untracked_keys_ == nullptr ||
-          (untracked_keys_iter_.has_value() &&
-           untracked_keys_iter_ == untracked_keys_->end()));
+void Numeric::EntriesFetcherIterator::LinearAdvance() {
+  if (keys_iter_.has_value()) {
+    ++keys_iter_.value();
+    if (keys_iter_.value() != bucket_iter_->second.end()) {
+      current_key_ = *keys_iter_.value();
+      return;
+    }
+    ++bucket_iter_;
+    keys_iter_ = std::nullopt;
+  }
+  while (bucket_iter_ == bucket_end_) {
+    if (!in_additional_range_ && additional_entries_range_ptr_->has_value()) {
+      in_additional_range_ = true;
+      bucket_iter_ = additional_entries_range_ptr_->value().first;
+      bucket_end_ = additional_entries_range_ptr_->value().second;
+    } else {
+      current_key_ = {};
+      return;
+    }
+  }
+  while (bucket_iter_ != bucket_end_) {
+    if (!bucket_iter_->second.empty()) {
+      keys_iter_ = bucket_iter_->second.begin();
+      current_key_ = *keys_iter_.value();
+      return;
+    }
+    ++bucket_iter_;
+  }
+  current_key_ = {};
 }
+
+bool Numeric::EntriesFetcherIterator::Done() const { return !current_key_; }
 
 void Numeric::EntriesFetcherIterator::Next() {
-  if (NextKeys(entries_range_, entries_iter_, entry_keys_iter_)) {
-    return;
-  }
-  if (additional_entries_range_.has_value() &&
-      NextKeys(additional_entries_range_.value(), additional_entries_iter_,
-               additional_entry_keys_iter_)) {
-    return;
-  }
-  if (untracked_keys_) {
-    if (untracked_keys_iter_.has_value()) {
-      ++untracked_keys_iter_.value();
+  if (!current_key_) return;
+  if (sorted_) {
+    ++sorted_idx_;
+    if (sorted_idx_ < sorted_keys_.size()) {
+      current_key_ = sorted_keys_[sorted_idx_];
     } else {
-      untracked_keys_iter_ = untracked_keys_->begin();
+      current_key_ = {};
     }
+  } else {
+    LinearAdvance();
   }
 }
 
 const InternedStringPtr& Numeric::EntriesFetcherIterator::operator*() const {
-  if (entries_iter_ != entries_range_.second) {
-    DCHECK(entry_keys_iter_ != entries_iter_->second.end());
-    return *entry_keys_iter_.value();
+  return current_key_;
+}
+
+bool Numeric::EntriesFetcherIterator::SeekForwardKey(
+    const InternedStringPtr& target) {
+  CHECK(sorted_) << "SeekForwardKey requires sorted mode";
+  if (!current_key_) return false;
+  if (current_key_ >= target) return true;
+  // Binary search forward in sorted vector.
+  auto it = std::lower_bound(sorted_keys_.begin() + sorted_idx_,
+                              sorted_keys_.end(), target);
+  if (it == sorted_keys_.end()) {
+    current_key_ = {};
+    sorted_idx_ = sorted_keys_.size();
+    return false;
   }
-  if (additional_entries_range_.has_value() &&
-      additional_entries_iter_ != additional_entries_range_.value().second) {
-    DCHECK(additional_entry_keys_iter_ !=
-           additional_entries_iter_->second.end());
-    return *additional_entry_keys_iter_.value();
-  }
-  DCHECK(untracked_keys_ && untracked_keys_iter_.has_value() &&
-         untracked_keys_iter_ != untracked_keys_->end());
-  return *untracked_keys_iter_.value();
+  sorted_idx_ = it - sorted_keys_.begin();
+  current_key_ = sorted_keys_[sorted_idx_];
+  return true;
 }
 
 size_t Numeric::EntriesFetcher::Size() const { return size_; }
 
 std::unique_ptr<EntriesFetcherIteratorBase> Numeric::EntriesFetcher::Begin() {
   auto itr = std::make_unique<EntriesFetcherIterator>(
-      entries_range_, additional_entries_range_, untracked_keys_);
-  itr->Next();
+      entries_range_, additional_entries_range_, untracked_keys_, sorted_);
   return itr;
 }
 

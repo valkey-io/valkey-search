@@ -8,6 +8,9 @@
 #ifndef _VALKEY_SEARCH_INDEXES_TEXT_PHRASE_H_
 #define _VALKEY_SEARCH_INDEXES_TEXT_PHRASE_H_
 
+#include <memory>
+#include <vector>
+
 #include "absl/container/inlined_vector.h"
 #include "src/indexes/text.h"
 #include "src/indexes/text/text_iterator.h"
@@ -65,6 +68,7 @@ class ProximityIterator : public TextIterator {
   FieldMaskPredicate CurrentFieldMask() const override;
   // Returns true if iterator is at a valid state with current key, position,
   // and field.
+  bool HasPositions() const override { return !skip_positional_checks_; }
   bool IsIteratorValid() const override {
     if (skip_positional_checks_) {
       return current_key_;
@@ -90,9 +94,15 @@ class ProximityIterator : public TextIterator {
   absl::InlinedVector<std::pair<Position, size_t>,
                       kProximityTermsInlineCapacity>
       pos_with_idx_;
+  // Indices into iters_ of children that have positions on the current key.
+  // Children with DonePositions()=true are excluded from positional validation.
+  absl::InlinedVector<size_t, kProximityTermsInlineCapacity>
+      active_pos_indices_;
   // Flag used to skip positional checks. This is used when performing
   // an AND on text predicates without any positional constraints.
   bool skip_positional_checks_;
+  // Key-only children (tag/numeric) — participate in FindCommonKey but not
+  // position validation.
 
   struct ViolationInfo {
     // Iterator index to advance

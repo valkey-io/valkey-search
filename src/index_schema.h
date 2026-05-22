@@ -19,6 +19,7 @@
 
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
+#include "absl/container/btree_set.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_format.h"
@@ -91,6 +92,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   };
 
   using IndexKeyInfoMap = absl::flat_hash_map<Key, IndexKeyInfo>;
+  using SortedKeySet = absl::btree_set<Key>;
 
   struct InfoIndexPartitionData {
     uint64_t num_docs;
@@ -316,6 +318,11 @@ class IndexSchema : public KeyspaceEventSubscription,
     return index_key_info_.size();
   }
 
+  const SortedKeySet &GetSortedKeys() const
+      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
+    return sorted_keys_;
+  }
+
   // Unit test only
   void SetDbMutationSequenceNumber(const Key &key,
                                    MutationSequenceNumber sequence_number) {
@@ -326,6 +333,7 @@ class IndexSchema : public KeyspaceEventSubscription,
                                       MutationSequenceNumber sequence_number)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(time_sliced_mutex_) {
     index_key_info_[key].mutation_sequence_number_ = sequence_number;
+    sorted_keys_.insert(key);
   }
 
   /**
@@ -431,6 +439,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   // the corresponding time slice mutex phases. Within the write phase,
   // exclusion is provided by mutated_records_mutex_.
   IndexKeyInfoMap index_key_info_ ABSL_GUARDED_BY(time_sliced_mutex_);
+  SortedKeySet sorted_keys_ ABSL_GUARDED_BY(time_sliced_mutex_);
 
   struct BackfillJob {
     BackfillJob() = delete;

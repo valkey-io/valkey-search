@@ -9,6 +9,7 @@
 #define VALKEYSEARCH_SRC_INDEXES_SCORING_SCORING_STATS_H_
 
 #include <cstdint>
+#include <memory>
 
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
@@ -31,6 +32,13 @@ namespace valkey_search::indexes::scoring {
 struct ScoringStats {
   virtual ~ScoringStats() = default;
 
+  // Polymorphic deep copy. ScoringSession uses this to take an owned
+  // copy of caller-supplied stats so its lifetime is independent of
+  // the original.
+  virtual std::unique_ptr<ScoringStats> Clone() const {
+    return std::make_unique<ScoringStats>(*this);
+  }
+
   uint64_t total_docs = 0;
   uint64_t doc_id = 0;
   double document_score = 1.0;
@@ -46,6 +54,10 @@ struct ScoringStats {
 //   avg_doc_len  - index-wide average indexed-terms per document
 //   doc_len      - total indexed terms in this document
 struct Bm25StdStats : ScoringStats {
+  std::unique_ptr<ScoringStats> Clone() const override {
+    return std::make_unique<Bm25StdStats>(*this);
+  }
+
   double avg_doc_len = 0.0;
   uint32_t doc_len = 0;
 };
@@ -64,6 +76,10 @@ struct Bm25StdStats : ScoringStats {
 //   positions  - positional offsets of `term` within the document, sorted
 //                ascending; empty when SLOP is not used
 struct TfidfStats : ScoringStats {
+  std::unique_ptr<ScoringStats> Clone() const override {
+    return std::make_unique<TfidfStats>(*this);
+  }
+
   uint32_t norm = 0;
   absl::Span<const uint32_t> positions;
 };

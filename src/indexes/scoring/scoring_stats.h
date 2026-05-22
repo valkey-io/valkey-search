@@ -10,8 +10,8 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 
-#include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 
 namespace valkey_search::indexes::scoring {
@@ -42,7 +42,7 @@ struct ScoringStats {
   uint64_t total_docs = 0;
   uint64_t doc_id = 0;
   double document_score = 1.0;
-  absl::string_view term;
+  std::string term;
   uint64_t num_doc_contain_term = 0;
   uint32_t term_frequency = 0;
 };

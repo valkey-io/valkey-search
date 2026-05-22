@@ -575,14 +575,21 @@ from util import waiters
 def _restart_and_wait(test_case, index_name):
     """Save, restart the server, and wait until the index is ready."""
     test_case.client.execute_command("save")
-    os.environ["SKIPLOGCLEAN"] = "1"
-    test_case.server.restart(remove_rdb=False)
-    test_case.client.ping()
-    # Wait until the index has finished loading/backfilling before querying.
-    waiters.wait_for_true(
-        lambda: test_case.client.execute_command("FT.INFO", index_name) is not None,
-        timeout=30,
-    )
+    old_skiplogclean = os.environ.get("SKIPLOGCLEAN")
+    try:
+        os.environ["SKIPLOGCLEAN"] = "1"
+        test_case.server.restart(remove_rdb=False)
+        test_case.client.ping()
+        # Wait until the index has finished loading/backfilling before querying.
+        waiters.wait_for_true(
+            lambda: test_case.client.execute_command("FT.INFO", index_name) is not None,
+            timeout=30,
+        )
+    finally:
+        if old_skiplogclean is None:
+            os.environ.pop("SKIPLOGCLEAN", None)
+        else:
+            os.environ["SKIPLOGCLEAN"] = old_skiplogclean
 
 
 class TestFTAliasRDBPersistence(ValkeySearchTestCaseDebugMode):

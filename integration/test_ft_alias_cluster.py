@@ -120,15 +120,17 @@ class TestFTAliasClusterPropagation(ValkeySearchClusterTestCase):
         node1 = self.new_client_for_primary(1)
 
         assert node0.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        assert node0.execute_command(*CREATE_TAG_INDEX_2) == b"OK"
         self._wait_for_index_on_all_nodes(INDEX_NAME)
+        self._wait_for_index_on_all_nodes(INDEX_NAME_2)
 
         assert node0.execute_command(
             "FT.ALIASADD", ALIAS_NAME, INDEX_NAME
         ) == b"OK"
 
-        # Second add on a different node must fail.
+        # Second add pointing to a different index must fail.
         with pytest.raises(ResponseError) as exc_info:
-            node1.execute_command("FT.ALIASADD", ALIAS_NAME, INDEX_NAME)
+            node1.execute_command("FT.ALIASADD", ALIAS_NAME, INDEX_NAME_2)
         assert "Alias already exists" in str(exc_info.value)
 
     # ------------------------------------------------------------------
@@ -263,6 +265,22 @@ class TestFTAliasClusterPropagation(ValkeySearchClusterTestCase):
         assert node0.execute_command(
             "FT.ALIASADD", ALIAS_NAME, INDEX_NAME
         ) == b"OK"
+
+        # Poll until alias search returns results on all primaries.
+        def _alias_search_ready():
+            for node in self._all_primaries():
+                try:
+                    result = node.execute_command(
+                        "FT.SEARCH", ALIAS_NAME, "@category:{books}"
+                    )
+                    if result[0] < 1:
+                        return False
+                except Exception:
+                    return False
+            return True
+
+        from valkeytestframework.util import waiters as _waiters
+        _waiters.wait_for_true(_alias_search_ready, timeout=15)
 
         for node in self._all_primaries():
             result = node.execute_command(

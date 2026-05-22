@@ -520,6 +520,22 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
                 f"Alias management command failed during cluster replay — subsequent search results will be wrong. "
                 f"cmd={expected['cmd']} error={e}"
             ) from e
+
+        # Wait for alias to be visible on all primaries before returning.
+        cmd = expected["cmd"]
+        if len(cmd) >= 2 and cmd[0].upper() in ("FT.ALIASADD", "FT.ALIASUPDATE"):
+            alias_name = cmd[1]
+            def _alias_visible_on_all():
+                for i in range(test_case.CLUSTER_SIZE):
+                    try:
+                        test_case.new_client_for_primary(i).execute_command(
+                            "FT.INFO", alias_name
+                        )
+                    except valkey.ResponseError:
+                        return False
+                return True
+            waiters.wait_for_true(_alias_visible_on_all, timeout=15)
+
         return data_set
 
     result = {}

@@ -146,5 +146,20 @@ config::Number& GetMutationWeightTag();
 /// FT.AGGREGATE commands
 config::Number& GetQueryStringDepth();
 
+/// Return the configuration entry that controls compatibility-bug emulation.
+/// See COMPATIBILITY.md for the semantics.
+config::Version& GetEmulateRelease();
+
+/// Return true if search.emulate-release >= version. Use this at sites that
+/// gate the compatible vs legacy behavior of a fix described in
+/// COMPATIBILITY.md.
+bool EnabledInVersion(vmsdk::ValkeyVersion version);
+
+/// Convenience overload — the constexpr ValkeyVersion ctor lets the compiler
+/// fold the comparand at every call site.
+inline bool EnabledInVersion(int major, int minor, int patch) {
+  return EnabledInVersion(vmsdk::ValkeyVersion(major, minor, patch));
+}
+
 }  // namespace options
 }  // namespace valkey_search

@@ -10,7 +10,9 @@
 
 #include "absl/log/check.h"
 #include "absl/strings/ascii.h"
+#include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_format.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -57,8 +59,6 @@ static int OnSetConfig(const char *config_name, T value, void *priv_data,
     }
     return VALKEYMODULE_ERR;
   }
-
-  entry->NotifyChanged();
   return VALKEYMODULE_OK;
 }
 
@@ -137,7 +137,7 @@ absl::Status ModuleConfigManager::ParseAndLoadArgv(ValkeyModuleCtx *ctx,
                                                    ValkeyModuleString **argv,
                                                    int argc) {
   // reset the debug mode to "false".
-  debug_mode->SetValueOrLog(false, LogLevel::kWarning);
+  CHECK(debug_mode->SetValueOrLog(false, LogLevel::kWarning).ok());
   vmsdk::ArgsIterator iter{argv, argc};
   while (iter.HasNext()) {
     VMSDK_ASSIGN_OR_RETURN(auto key, iter.Get());
@@ -221,8 +221,7 @@ absl::Status Number::FromString(std::string_view value) {
     return absl::InvalidArgumentError(
         absl::StrFormat("Failed to convert '%s' into a number", value));
   }
-  SetValueOrLog(default_value_, WARNING);
-  return absl::OkStatus();
+  return SetValueOrLog(default_value_, WARNING);
 }
 
 Enum::Enum(std::string_view name, int default_value,
@@ -280,8 +279,7 @@ absl::Status Enum::FromString(std::string_view value) {
   default_value_ = values_[enumerator_index];
 
   // update the current value, skip the validation as we just did that
-  SetValueOrLog(default_value_, WARNING);
-  return absl::OkStatus();
+  return SetValueOrLog(default_value_, WARNING);
 }
 
 Boolean::Boolean(std::string_view name, bool default_value)
@@ -310,16 +308,15 @@ absl::Status Boolean::FromString(std::string_view value) {
   if (value_lowercase == "yes" || value_lowercase == "on" ||
       value_lowercase == "true") {
     default_value_ = true;
-    SetValueOrLog(default_value_, WARNING);
+    return SetValueOrLog(default_value_, WARNING);
   } else if (value_lowercase == "no" || value_lowercase == "off" ||
              value_lowercase == "false") {
     default_value_ = false;
-    SetValueOrLog(default_value_, WARNING);
+    return SetValueOrLog(default_value_, WARNING);
   } else {
     return absl::InvalidArgumentError(
         absl::StrFormat("Invalid boolean value: '%s'", value));
   }
-  return absl::OkStatus();
 }
 
 String::String(std::string_view name, std::string_view default_value)
@@ -346,13 +343,87 @@ absl::Status String::FromString(std::string_view value) {
     return absl::InvalidArgumentError("Invalid string value: null");
   }
   default_ = value.data();
-  SetValueOrLog(default_, WARNING);
-  return absl::OkStatus();
+  return SetValueOrLog(default_, WARNING);
 }
 /// Get method to fetch the `hide_user_data_config`
 vmsdk::config::Boolean &GetHideUserDataFromLog() {
   return dynamic_cast<vmsdk::config::Boolean &>(*hide_user_data_config);
 }
+
+absl::StatusOr<double> ConfigTraits<double>::Parse(absl::string_view text) {
+  double value;
+  if (!absl::SimpleAtod(text, &value)) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Invalid double value: '", text, "'"));
+  }
+  return value;
+}
+
+std::string ConfigTraits<double>::Format(double value) {
+  return absl::StrFormat("%g", value);
+}
+
+absl::StatusOr<vmsdk::ValkeyVersion> ConfigTraits<vmsdk::ValkeyVersion>::Parse(
+    absl::string_view text) {
+  return vmsdk::ValkeyVersion::FromString(text);
+}
+
+std::string ConfigTraits<vmsdk::ValkeyVersion>::Format(
+    const vmsdk::ValkeyVersion &value) {
+  return value.ToString();
+}
+
+namespace {
+template <typename T>
+ValkeyModuleString *OnGetTypedConfig(const char *config_name, void *priv_data) {
+  auto entry = static_cast<TypedConfig<T> *>(priv_data);
+  CHECK(entry) << "null private data";
+  return entry->GetCachedValkeyString();
+}
+
+template <typename T>
+int OnSetTypedConfig(const char *config_name, ValkeyModuleString *value,
+                     void *priv_data, ValkeyModuleString **err) {
+  auto entry = static_cast<TypedConfig<T> *>(priv_data);
+  CHECK(entry) << "null private data";
+  auto sv = vmsdk::ToStringView(value);
+  auto parsed = ConfigTraits<T>::Parse(sv);
+  if (!parsed.ok()) {
+    if (err) {
+      *err = ValkeyModule_CreateStringPrintf(nullptr, "%s",
+                                             parsed.status().message().data());
+    }
+    return VALKEYMODULE_ERR;
+  }
+  auto res = entry->SetValue(*parsed);  // Calls "Validate" internally
+  if (!res.ok()) {
+    if (err) {
+      *err =
+          ValkeyModule_CreateStringPrintf(nullptr, "%s", res.message().data());
+    }
+    return VALKEYMODULE_ERR;
+  }
+  entry->NotifyChanged();
+  return VALKEYMODULE_OK;
+}
+}  // namespace
+
+template <typename T>
+absl::Status TypedConfig<T>::Register(ValkeyModuleCtx *ctx) {
+  std::string default_text = ConfigTraits<T>::Format(this->default_value_);
+  if (ValkeyModule_RegisterStringConfig(
+          ctx, this->name_.data(), default_text.c_str(), this->flags_,
+          OnGetTypedConfig<T>, OnSetTypedConfig<T>, nullptr,
+          this) != VALKEYMODULE_OK) {
+    return absl::InternalError(absl::StrCat(
+        "Failed to register typed configuration entry: ", this->name_));
+  }
+  return absl::OkStatus();
+}
+
+template absl::Status TypedConfig<double>::Register(ValkeyModuleCtx *);
+template absl::Status TypedConfig<vmsdk::ValkeyVersion>::Register(
+    ValkeyModuleCtx *);
 
 absl::Status ModuleConfigManager::ListAllConfigs(
     ValkeyModuleCtx *ctx, bool verbose, const std::string &filter) const {
@@ -458,6 +529,35 @@ absl::Status ModuleConfigManager::ListAllConfigs(
       ValkeyModule_ReplyWithCString(ctx, "N/A");
       ValkeyModule_ReplyWithCString(ctx, "current_value");
       ValkeyModule_ReplyWithLongLong(ctx, enm->GetValue());
+      field_count += 10;
+    } else if (auto *dbl = dynamic_cast<Double *>(entry)) {
+      ValkeyModule_ReplyWithCString(ctx, "type");
+      ValkeyModule_ReplyWithCString(ctx, "Double");
+      ValkeyModule_ReplyWithCString(ctx, "default");
+      ValkeyModule_ReplyWithCString(
+          ctx, ConfigTraits<double>::Format(dbl->GetDefaultValue()).c_str());
+      ValkeyModule_ReplyWithCString(ctx, "min");
+      ValkeyModule_ReplyWithCString(
+          ctx, ConfigTraits<double>::Format(dbl->GetMinValue()).c_str());
+      ValkeyModule_ReplyWithCString(ctx, "max");
+      ValkeyModule_ReplyWithCString(
+          ctx, ConfigTraits<double>::Format(dbl->GetMaxValue()).c_str());
+      ValkeyModule_ReplyWithCString(ctx, "current_value");
+      ValkeyModule_ReplyWithCString(
+          ctx, ConfigTraits<double>::Format(dbl->GetValue()).c_str());
+      field_count += 10;
+    } else if (auto *ver = dynamic_cast<Version *>(entry)) {
+      ValkeyModule_ReplyWithCString(ctx, "type");
+      ValkeyModule_ReplyWithCString(ctx, "Version");
+      ValkeyModule_ReplyWithCString(ctx, "default");
+      ValkeyModule_ReplyWithCString(ctx,
+                                    ver->GetDefaultValue().ToString().c_str());
+      ValkeyModule_ReplyWithCString(ctx, "min");
+      ValkeyModule_ReplyWithCString(ctx, ver->GetMinValue().ToString().c_str());
+      ValkeyModule_ReplyWithCString(ctx, "max");
+      ValkeyModule_ReplyWithCString(ctx, ver->GetMaxValue().ToString().c_str());
+      ValkeyModule_ReplyWithCString(ctx, "current_value");
+      ValkeyModule_ReplyWithCString(ctx, ver->GetValue().ToString().c_str());
       field_count += 10;
     }
 

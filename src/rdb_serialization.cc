@@ -9,7 +9,6 @@
 
 #include <cstddef>
 #include <cstdlib>
-#include <vector>
 
 #include "absl/log/check.h"
 #include "absl/status/status.h"
@@ -138,8 +137,7 @@ void RegisterRDBCallback(data_model::RDBSectionType type,
                          RDBSectionCallbacks callbacks) {
   vmsdk::VerifyMainThread();
   DCHECK(!kRegisteredRDBSectionCallbacks.contains(type))
-      << "Duplicate RDB callback registration for type " << type
-      << "; previous registration will be silently overwritten";
+      << "Duplicate RDB callback registration detected for type " << type;
   kRegisteredRDBSectionCallbacks[type] = std::move(callbacks);
 }
 void ClearRDBCallbacks() { kRegisteredRDBSectionCallbacks.clear(); }

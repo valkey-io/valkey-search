@@ -1,26 +1,30 @@
 name: unittests-tsan
 
 on:
-  pull_request: # This triggers the workflow for pull requests
-    branches:
-      - main    # Run tests for pull requests targeting the "main" branch
-      - '1.0'
-      - '1.1'
-      - '1.2'
+  pull_request:
   push:
-    branches:
-      - main    # Optional: Run tests for direct pushes to "main"
-      - '1.0'
-      - '1.1'
-      - '1.2'
-  workflow_dispatch: # allow manual triggering
+  workflow_dispatch:
 
 concurrency:
   group: unittests-tsan-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  check-branch:
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.check.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: check
+        run: |
+          if grep -qx "${{ github.ref_name }}" .github/release-branches.txt; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
   cmake-tests:
+    needs: check-branch
+    if: needs.check-branch.outputs.should_run == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -44,7 +48,6 @@ jobs:
         restore-keys: |
           ccache-unittests-tsan-${{ github.ref }}-
           ccache-unittests-tsan-
-
 
     - name: Run Tests TSAN
       id: test-run

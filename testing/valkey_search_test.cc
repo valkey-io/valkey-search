@@ -27,9 +27,9 @@
 #include "testing/common.h"
 #include "testing/coordinator/common.h"
 #include "valkey_search_options.h"
+#include "vmsdk/src/info.h"
 #include "vmsdk/src/memory_allocation_overrides.h"
 #include "vmsdk/src/module.h"
-#include "vmsdk/src/info.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
 #include "vmsdk/src/thread_pool.h"
@@ -618,18 +618,16 @@ class CompatibilityFixPathTest
 TEST_P(CompatibilityFixPathTest, SelectsPathFromEmulateRelease) {
   SetEmulateRelease(GetParam().emulate_release);
   char result = VALKEY_SEARCH_COMPATIBILITY_FIX(
-      1, 1, 0, "compat_test_path_selection",
-      [] { return 'F'; },
+      1, 1, 0, "compat_test_path_selection", [] { return 'F'; },
       [] { return 'O'; });
   EXPECT_EQ(result, GetParam().expected);
 }
 
 INSTANTIATE_TEST_SUITE_P(
     EmulateRelease, CompatibilityFixPathTest,
-    ::testing::Values(
-        CompatibilityFixPathCase{"below_fix", {1, 0, 0}, 'O'},
-        CompatibilityFixPathCase{"equals_fix", {1, 1, 0}, 'F'},
-        CompatibilityFixPathCase{"above_fix", {1, 2, 0}, 'F'}),
+    ::testing::Values(CompatibilityFixPathCase{"below_fix", {1, 0, 0}, 'O'},
+                      CompatibilityFixPathCase{"equals_fix", {1, 1, 0}, 'F'},
+                      CompatibilityFixPathCase{"above_fix", {1, 2, 0}, 'F'}),
     [](const ::testing::TestParamInfo<CompatibilityFixPathCase>& info) {
       return info.param.name;
     });
@@ -639,8 +637,7 @@ TEST_F(CompatibilityFixTest, SupportsVoidReturn) {
   int fixed_calls = 0;
   int old_calls = 0;
   VALKEY_SEARCH_COMPATIBILITY_FIX(
-      1, 1, 0, "test_void_return",
-      [&] { ++fixed_calls; },
+      1, 1, 0, "test_void_return", [&] { ++fixed_calls; },
       [&] { ++old_calls; });
   EXPECT_EQ(fixed_calls, 0);
   EXPECT_EQ(old_calls, 1);
@@ -651,9 +648,7 @@ TEST_F(CompatibilityFixTest, OldPathIncrementsLabelInfoField) {
 
   for (int i = 0; i < 3; ++i) {
     VALKEY_SEARCH_COMPATIBILITY_FIX(
-        1, 1, 0, "test_label_increments",
-        [&] { return 0; },
-        [&] { return 0; });
+        1, 1, 0, "test_label_increments", [&] { return 0; }, [&] { return 0; });
   }
 
   EXPECT_THAT(DumpCompatibilitySection(),
@@ -665,16 +660,14 @@ TEST_F(CompatibilityFixTest, FixedPathDoesNotIncrementCounter) {
 
   for (int i = 0; i < 3; ++i) {
     VALKEY_SEARCH_COMPATIBILITY_FIX(
-        1, 1, 0, "test_label_no_increment",
-        [&] { return 0; },
+        1, 1, 0, "test_label_no_increment", [&] { return 0; },
         [&] { return 0; });
   }
 
   // The counter is initialized on first macro invocation regardless of which
   // path runs, but the fixed path must not increment it.
-  EXPECT_THAT(
-      DumpCompatibilitySection(),
-      ::testing::HasSubstr("compatibility-test_label_no_increment: 0"));
+  EXPECT_THAT(DumpCompatibilitySection(),
+              ::testing::HasSubstr("compatibility-test_label_no_increment: 0"));
 }
 
 class MockPthreadAtfork {

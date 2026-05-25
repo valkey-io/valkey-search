@@ -411,8 +411,8 @@ class TypedConfig : public ConfigBase<T> {
   // after SetValueImpl clears it.
   ValkeyModuleString *GetCachedValkeyString() const {
     if (!cached_string_valkey_) {
-      cached_string_valkey_ =
-          vmsdk::MakeUniqueValkeyString(ConfigTraits<T>::Format(current_value_));
+      cached_string_valkey_ = vmsdk::MakeUniqueValkeyString(
+          ConfigTraits<T>::Format(current_value_));
     }
     return cached_string_valkey_.get();
   }

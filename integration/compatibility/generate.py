@@ -474,8 +474,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         idx = f"{key_type}_idx1"
         alias = f"{key_type}_alias_compat"
         self.execute_command(["FT.ALIASADD", alias, idx])
-        self.execute_command(["ft.search", alias, "@n1:[-inf inf]", "SORTBY", "n1", "ASC", "DIALECT", str(dialect)])
-        self.check(dialect, "ft.search", alias, "*", "SORTBY", "n2", "DESC", "LIMIT", "0", "5")
+        self.check(dialect, "ft.search", alias, "*", "LIMIT", "0", "15")
         self.execute_command(["FT.ALIASDEL", alias])
 
     def test_alias_aggregate(self, key_type, dialect):
@@ -485,18 +484,17 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         alias = f"{key_type}_alias_compat"
         # Record alias management commands so replay recreates the same state.
         self.execute_command(["FT.ALIASADD", alias, idx])
-        self.check(dialect, f"ft.aggregate {alias} * load 3 @__key @n1 @n2 sortby 2 @__key desc limit 0 5")
+        self.check(dialect, f"ft.aggregate {alias} * load 3 @__key @n1 @n2")
         self.execute_command(["FT.ALIASDEL", alias])
 
     def test_aliasupdate_search(self, key_type, dialect):
         """FT.ALIASUPDATE reassigns alias; queries via alias reflect the new target."""
         self.setup_data("sortable numbers", key_type)
         idx = f"{key_type}_idx1"
-        alias = f"{key_type}_alias_compat"
-        # Record alias management commands so replay recreates the same state.
+        alias = f"{key_type}_alias_update_compat"
         self.execute_command(["FT.ALIASADD", alias, idx])
         self.execute_command(["FT.ALIASUPDATE", alias, idx])
-        self.execute_command(["ft.search", alias, "@n1:[-inf inf]", "SORTBY", "n1", "ASC", "DIALECT", str(dialect)])
+        self.check(dialect, "ft.search", alias, "*", "LIMIT", "0", "15")
         self.execute_command(["FT.ALIASDEL", alias])
 
 

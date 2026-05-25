@@ -647,35 +647,34 @@ TEST_F(CompatibilityFixTest, SupportsVoidReturn) {
 }
 
 TEST_F(CompatibilityFixTest, OldPathIncrementsLabelInfoField) {
-  constexpr const char* kLabel = "test_label_increments";
   SetEmulateRelease({1, 0, 0});
 
   for (int i = 0; i < 3; ++i) {
     VALKEY_SEARCH_COMPATIBILITY_FIX(
-        1, 1, 0, kLabel,
+        1, 1, 0, "test_label_increments",
         [&] { return 0; },
         [&] { return 0; });
   }
 
   EXPECT_THAT(DumpCompatibilitySection(),
-              ::testing::HasSubstr(std::string(kLabel) + ": 3"));
+              ::testing::HasSubstr("compatibility-test_label_increments: 3"));
 }
 
 TEST_F(CompatibilityFixTest, FixedPathDoesNotIncrementCounter) {
-  constexpr const char* kLabel = "test_label_no_increment";
   SetEmulateRelease({1, 1, 0});
 
   for (int i = 0; i < 3; ++i) {
     VALKEY_SEARCH_COMPATIBILITY_FIX(
-        1, 1, 0, kLabel,
+        1, 1, 0, "test_label_no_increment",
         [&] { return 0; },
         [&] { return 0; });
   }
 
   // The counter is initialized on first macro invocation regardless of which
   // path runs, but the fixed path must not increment it.
-  EXPECT_THAT(DumpCompatibilitySection(),
-              ::testing::HasSubstr(std::string(kLabel) + ": 0"));
+  EXPECT_THAT(
+      DumpCompatibilitySection(),
+      ::testing::HasSubstr("compatibility-test_label_no_increment: 0"));
 }
 
 class MockPthreadAtfork {

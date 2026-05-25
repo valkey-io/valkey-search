@@ -430,6 +430,10 @@ absl::Status SchemaManager::RemoveAlias(uint32_t db_num,
 absl::Status SchemaManager::UpdateAliasInternal(uint32_t db_num,
                                                 absl::string_view alias,
                                                 absl::string_view index_name) {
+  if (alias != index_name && LookupInternal(db_num, alias).ok()) {
+    return absl::AlreadyExistsError(
+        "Alias collides with existing index name");
+  }
   // Use find() to avoid default-inserting an empty map for db_num.
   auto db_alias_it = db_to_aliases_.find(db_num);
   if (db_alias_it != db_to_aliases_.end() &&
@@ -463,6 +467,17 @@ absl::Status SchemaManager::UpdateAlias(uint32_t db_num,
             .ok()) {
       return absl::InvalidArgumentError(
           "Unknown index name or name is an alias");
+    }
+    // Reject alias that collides with an existing index name (unless it is
+    // the same index the alias points to — self-referential alias is
+    // permitted to match RediSearch behavior).
+    if (alias != index_name &&
+        coordinator::MetadataManager::Instance()
+            .GetEntryContent(kSchemaManagerMetadataTypeName,
+                             coordinator::ObjName(db_num, alias))
+            .ok()) {
+      return absl::AlreadyExistsError(
+          "Alias collides with existing index name");
     }
     // Verify the target index exists.
     {

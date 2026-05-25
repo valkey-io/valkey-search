@@ -667,17 +667,17 @@ class TestFTAliasNameCollision(ValkeySearchTestCaseBase):
         assert idx is not None
         assert info[idx + 1] == INDEX_NAME.encode()
 
-    def test_aliasupdate_name_same_as_existing_index_succeeds(self):
+    def test_aliasupdate_name_same_as_existing_index_rejected(self):
         """
-        ALIASUPDATE with an alias name that matches a real index also succeeds.
-        Same shadowing behaviour as ALIASADD — the real index remains reachable.
+        Unlike ALIASADD, ALIASUPDATE rejects an alias name that matches a real
+        index. Matches RediSearch behaviour.
         """
         client = self.client
         assert client.execute_command(*CREATE_TAG_INDEX) == b"OK"
         assert client.execute_command(*CREATE_TAG_INDEX_2) == b"OK"
-        assert (
-            client.execute_command("FT.ALIASUPDATE", INDEX_NAME, INDEX_NAME_2) == b"OK"
-        )
+        with pytest.raises(ResponseError):
+            client.execute_command("FT.ALIASUPDATE", INDEX_NAME, INDEX_NAME_2)
+        # Real index still resolves directly.
         info = list(client.execute_command("FT.INFO", INDEX_NAME))
         idx = next((i for i, v in enumerate(info) if v == b"index_name"), None)
         assert idx is not None

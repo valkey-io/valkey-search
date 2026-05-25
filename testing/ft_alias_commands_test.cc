@@ -56,6 +56,32 @@ constexpr absl::string_view kTestIndexSchemaPbtxt = R"(
   }
 )";
 
+// Second index proto used in collision tests.
+constexpr absl::string_view kSecondIndexSchemaPbtxt = R"(
+  name: "test_idx2"
+  db_num: 0
+  subscribed_key_prefixes: "prefix_2"
+  attribute_data_type: ATTRIBUTE_DATA_TYPE_HASH
+  attributes: {
+    alias: "test_attribute_2"
+    identifier: "test_identifier_2"
+    index: {
+      vector_index: {
+        dimension_count: 10
+        normalize: true
+        distance_metric: DISTANCE_METRIC_COSINE
+        vector_data_type: VECTOR_DATA_TYPE_FLOAT32
+        initial_cap: 100
+        hnsw_algorithm {
+          m: 240
+          ef_construction: 400
+          ef_runtime: 30
+        }
+      }
+    }
+  }
+)";
+
 struct FTAliasAddTestCase {
   std::string test_name;
   std::vector<std::string> argv;
@@ -236,6 +262,37 @@ TEST_F(FTAliasAddTest, AlwaysReplicatesVerbatim_CoordinatorDisabled) {
   VMSDK_EXPECT_OK(coordinator_flag.SetValue(original_coordinator_value));
 }
 
+TEST_F(FTAliasAddTest, AliasCollidesWithExistingIndexName) {
+  vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 5);
+  SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+      &fake_ctx_, []() {}, &mutations_thread_pool, false));
+
+  data_model::IndexSchema index_schema_proto;
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
+      std::string(kTestIndexSchemaPbtxt), &index_schema_proto));
+  VMSDK_EXPECT_OK(SchemaManager::Instance().CreateIndexSchema(
+      &fake_ctx_, index_schema_proto));
+
+  data_model::IndexSchema second_proto;
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
+      std::string(kSecondIndexSchemaPbtxt), &second_proto));
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().CreateIndexSchema(&fake_ctx_, second_proto));
+
+  // FT.ALIASADD permits an alias name that matches a different existing index;
+  // direct index lookup wins so the alias is shadowed. Matches RediSearch.
+  ValkeyModuleString* argv[3];
+  argv[0] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.ALIASADD");
+  argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_idx2");
+  argv[2] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_idx");
+
+  EXPECT_EQ(FTAliasAddCmd(&fake_ctx_, argv, 3).code(), absl::StatusCode::kOk);
+
+  for (auto* arg : argv) {
+    TestValkeyModule_FreeString(&fake_ctx_, arg);
+  }
+}
+
 struct FTAliasDelTestCase {
   std::string test_name;
   std::vector<std::string> argv;
@@ -386,32 +443,6 @@ struct FTAliasUpdateTestCase {
   std::optional<std::string> second_index_pbtxt;
   absl::StatusCode return_code;
 };
-
-// Second index proto used in update tests.
-constexpr absl::string_view kSecondIndexSchemaPbtxt = R"(
-  name: "test_idx2"
-  db_num: 0
-  subscribed_key_prefixes: "prefix_2"
-  attribute_data_type: ATTRIBUTE_DATA_TYPE_HASH
-  attributes: {
-    alias: "test_attribute_2"
-    identifier: "test_identifier_2"
-    index: {
-      vector_index: {
-        dimension_count: 10
-        normalize: true
-        distance_metric: DISTANCE_METRIC_COSINE
-        vector_data_type: VECTOR_DATA_TYPE_FLOAT32
-        initial_cap: 100
-        hnsw_algorithm {
-          m: 240
-          ef_construction: 400
-          ef_runtime: 30
-        }
-      }
-    }
-  }
-)";
 
 class FTAliasUpdateTest
     : public ValkeySearchTestWithParam<FTAliasUpdateTestCase> {};
@@ -593,6 +624,59 @@ TEST_F(FTAliasUpdateTest, AlwaysReplicatesVerbatim_CoordinatorDisabled) {
   VMSDK_EXPECT_OK(FTAliasUpdateCmd(&fake_ctx_, argv, 3));
   for (auto* arg : argv) TestValkeyModule_FreeString(&fake_ctx_, arg);
   VMSDK_EXPECT_OK(coordinator_flag.SetValue(original_coordinator_value));
+}
+
+TEST_F(FTAliasUpdateTest, AliasCollidesWithExistingIndexName) {
+  vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 5);
+  SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+      &fake_ctx_, []() {}, &mutations_thread_pool, false));
+
+  data_model::IndexSchema index_schema_proto;
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
+      std::string(kTestIndexSchemaPbtxt), &index_schema_proto));
+  VMSDK_EXPECT_OK(SchemaManager::Instance().CreateIndexSchema(
+      &fake_ctx_, index_schema_proto));
+
+  data_model::IndexSchema second_proto;
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
+      std::string(kSecondIndexSchemaPbtxt), &second_proto));
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().CreateIndexSchema(&fake_ctx_, second_proto));
+
+  ValkeyModuleString* argv[3];
+  argv[0] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.ALIASUPDATE");
+  argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_idx2");
+  argv[2] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_idx");
+
+  EXPECT_EQ(FTAliasUpdateCmd(&fake_ctx_, argv, 3).code(),
+            absl::StatusCode::kAlreadyExists);
+
+  for (auto* arg : argv) {
+    TestValkeyModule_FreeString(&fake_ctx_, arg);
+  }
+}
+
+TEST_F(FTAliasUpdateTest, SelfReferentialAliasPermitted) {
+  vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 5);
+  SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+      &fake_ctx_, []() {}, &mutations_thread_pool, false));
+
+  data_model::IndexSchema index_schema_proto;
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
+      std::string(kTestIndexSchemaPbtxt), &index_schema_proto));
+  VMSDK_EXPECT_OK(SchemaManager::Instance().CreateIndexSchema(
+      &fake_ctx_, index_schema_proto));
+
+  ValkeyModuleString* argv[3];
+  argv[0] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.ALIASUPDATE");
+  argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_idx");
+  argv[2] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_idx");
+
+  VMSDK_EXPECT_OK(FTAliasUpdateCmd(&fake_ctx_, argv, 3));
+
+  for (auto* arg : argv) {
+    TestValkeyModule_FreeString(&fake_ctx_, arg);
+  }
 }
 
 }  // namespace

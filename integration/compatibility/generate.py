@@ -525,3 +525,17 @@ class TestAliasCompatibility(BaseCompatibilityTest):
             "GROUPBY", "1", "@category",
             "REDUCE", "COUNT", "0", "AS", "count",
         ])
+
+    def test_aliasadd_collides_with_existing_index(self, key_type):
+        """FT.ALIASADD where alias name matches a different existing index."""
+        self.client.execute_command(
+            "FT.CREATE", "second_idx", "ON", "HASH", "PREFIX", "1", "bdoc:",
+            "SCHEMA", "val", "NUMERIC")
+        self.execute_command(["FT.ALIASADD", "second_idx", "hash_idx1"])
+
+    def test_aliasupdate_collides_with_existing_index(self, key_type):
+        """FT.ALIASUPDATE where alias name matches a different existing index."""
+        self.client.execute_command(
+            "FT.CREATE", "second_idx", "ON", "HASH", "PREFIX", "1", "bdoc:",
+            "SCHEMA", "val", "NUMERIC")
+        self.execute_command(["FT.ALIASUPDATE", "second_idx", "hash_idx1"])

@@ -325,6 +325,8 @@ Adds an alias to an existing index. The alias can then be used in place of the i
 
 An alias cannot point to another alias. Multiple aliases may point to the same index.
 
+> **Note:** `FT.ALIASADD` permits an alias whose name matches an existing index. Direct index lookup takes priority, so the alias is shadowed and unreachable until the index is dropped. This matches RediSearch.
+
 **RESPONSE** OK or error.
 
 ## FT.ALIASDEL
@@ -349,5 +351,7 @@ Adds or updates an alias. If the alias does not exist it is created (equivalent 
 
 - **\<alias\>** (required): The alias name to create or update.
 - **\<index-name\>** (required): The name of an existing index to associate with the alias.
+
+> **Note:** Unlike `FT.ALIASADD`, `FT.ALIASUPDATE` rejects an alias whose name matches an existing index. This matches RediSearch.
 
 **RESPONSE** OK or error.

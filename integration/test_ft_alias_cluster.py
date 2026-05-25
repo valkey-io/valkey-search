@@ -273,9 +273,11 @@ class TestFTAliasClusterPropagation(ValkeySearchClusterTestCase):
                     result = node.execute_command(
                         "FT.SEARCH", ALIAS_NAME, "@category:{books}"
                     )
-                    if result[0] < 1:
-                        return False
-                except Exception:
+                except ResponseError:
+                    # Alias may not yet be resolvable on this node; keep
+                    # polling. Any other exception should surface.
+                    return False
+                if result[0] < 1:
                     return False
             return True
 

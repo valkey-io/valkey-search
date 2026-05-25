@@ -12,6 +12,7 @@ suite does not exercise vector queries in the text schema.
 import struct
 
 from valkey.client import Valkey
+from utils import IndexingTestHelper
 from valkey_search_test_case import ValkeySearchTestCaseBase
 from valkeytestframework.conftest import resource_port_tracker
 
@@ -35,6 +36,8 @@ class TestFTSearchInfields(ValkeySearchTestCaseBase):
                                "emb", struct.pack("2f", 1.0, 0.0))
         client.execute_command("HSET", "vec:2", "title", "world",
                                "emb", struct.pack("2f", 0.0, 1.0))
+
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "vec_idx")
 
         query_vec = struct.pack("2f", 1.0, 0.0)
         result = client.execute_command(

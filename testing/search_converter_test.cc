@@ -12,9 +12,11 @@
 #include <string>
 
 #include "absl/container/flat_hash_set.h"
+#include "absl/status/status.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "src/coordinator/coordinator.pb.h"
+#include "src/index_schema.h"
 #include "src/query/search.h"
 #include "testing/common.h"
 #include "vmsdk/src/testing_infra/utils.h"
@@ -35,7 +37,8 @@ absl::flat_hash_set<std::string> SerializeAndReadBackInfields(
 
   auto request = ParametersToGRPCSearchRequest(params);
   auto decoded = InfieldsFromGRPC(*request);
-  return decoded.value_or(absl::flat_hash_set<std::string>{});
+  EXPECT_TRUE(decoded.ok());
+  return decoded->value_or(absl::flat_hash_set<std::string>{});
 }
 
 TEST_F(SearchConverterInfieldsTest, SerializeSingleField) {
@@ -50,7 +53,9 @@ TEST_F(SearchConverterInfieldsTest, UnsetIsNotSerialized) {
 
   auto request = ParametersToGRPCSearchRequest(params);
   EXPECT_EQ(request->infields_size(), 0);
-  EXPECT_FALSE(InfieldsFromGRPC(*request).has_value());
+  auto result = InfieldsFromGRPC(*request);
+  ASSERT_TRUE(result.ok());
+  EXPECT_FALSE(result->has_value());
 }
 
 // An engaged-but-empty set collapses to the same wire bytes as unset. This is
@@ -62,7 +67,9 @@ TEST_F(SearchConverterInfieldsTest, EngagedEmptyCollapsesToUnset) {
 
   auto request = ParametersToGRPCSearchRequest(params);
   EXPECT_EQ(request->infields_size(), 0);
-  EXPECT_FALSE(InfieldsFromGRPC(*request).has_value());
+  auto result = InfieldsFromGRPC(*request);
+  ASSERT_TRUE(result.ok());
+  EXPECT_FALSE(result->has_value());
 }
 
 TEST_F(SearchConverterInfieldsTest, WireRoundTrip) {
@@ -79,6 +86,16 @@ TEST_F(SearchConverterInfieldsTest, WireRoundTrip) {
   absl::flat_hash_set<std::string> deserialized(parsed.infields().begin(),
                                                 parsed.infields().end());
   EXPECT_EQ(deserialized, *params.infields);
+}
+
+TEST_F(SearchConverterInfieldsTest, ExceedsMaxFieldsReturnsError) {
+  coordinator::SearchIndexPartitionRequest request;
+  for (size_t i = 0; i <= kMaxTextFieldsCount; ++i) {
+    request.add_infields("field_" + std::to_string(i));
+  }
+  auto result = InfieldsFromGRPC(request);
+  EXPECT_FALSE(result.ok());
+  EXPECT_EQ(result.status().code(), absl::StatusCode::kInvalidArgument);
 }
 
 }  // namespace

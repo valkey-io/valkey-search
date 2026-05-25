@@ -36,6 +36,10 @@ namespace valkey_search {
 
 void TextParsingOptions::PrecomputeInfieldsMasks(
     const IndexSchema& index_schema) {
+  infields_identifiers.clear();
+  infields_suffix_identifiers.clear();
+  infields_field_mask = 0;
+  infields_suffix_field_mask = 0;
   if (!infields || infields->empty()) {
     return;
   }

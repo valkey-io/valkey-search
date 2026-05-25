@@ -6,7 +6,9 @@
  */
 #pragma once
 
+#include "vmsdk/src/info.h"
 #include "vmsdk/src/module_config.h"
+#include "vmsdk/src/utils.h"
 
 namespace valkey_search {
 namespace options {
@@ -163,3 +165,38 @@ inline bool EnabledInVersion(int major, int minor, int patch) {
 
 }  // namespace options
 }  // namespace valkey_search
+
+// Compatibility-defect fix gate. See COMPATIBILITY.md ("Compatibility
+// Defects"). Selects between the corrected and legacy implementations of a
+// compatibility-bug fix based on the runtime value of search.emulate-release:
+//
+//   * emulate-release >= major.minor.patch  -> run `fixed_fn()`
+//   * otherwise                             -> run `old_fn()` and bump the
+//                                              per-site INFO counter named
+//                                              `label`.
+//
+// Both callables must be nullary and return the same type (void is allowed).
+// `label` is the INFO field name under the "compatibility" section; the
+// counter is constructed lazily on the first macro invocation (regardless of
+// path) and only incremented when the legacy branch runs.
+//
+// Usage:
+//   auto result = VALKEY_SEARCH_COMPATIBILITY_FIX(
+//       1, 2, 2, "ft_search_attr_order_pre_1_2_2",
+//       [&] { return new_path(args); },
+//       [&] { return old_path(args); });
+#define VALKEY_SEARCH_COMPATIBILITY_FIX(major, minor, patch, label, fixed_fn, \
+                                        old_fn)                               \
+  ([&]() {                                                                    \
+    static constexpr ::vmsdk::ValkeyVersion kVsCompatFixVersion{(major),      \
+                                                                (minor),      \
+                                                                (patch)};     \
+    static ::vmsdk::info_field::Integer kVsCompatFixCounter{                  \
+        "compatibility", (label),                                             \
+        ::vmsdk::info_field::IntegerBuilder().App()};                         \
+    if (::valkey_search::options::EnabledInVersion(kVsCompatFixVersion)) {    \
+      return (fixed_fn)();                                                    \
+    }                                                                         \
+    kVsCompatFixCounter.Increment();                                          \
+    return (old_fn)();                                                        \
+  })()

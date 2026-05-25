@@ -720,6 +720,51 @@ HARD_STR_FILTER_EXPRS = {
     "filter str contains upper": "contains(upper(@s1), 'PHA')",
 }
 
+# Filter expressions exercising missing-field behavior inside boolean
+# compositions. FILTER_DOCS deliberately leaves `status`, `rating`, and
+# `category` missing in some rows. These expressions probe how each engine
+# handles a nil operand inside && / || / negation / relational comparisons.
+#
+# The "key" missing-status row is R8 (status absent, price=500). The
+# constants in each expression are chosen so that on R8 the *other*
+# branch evaluates to:
+#   - TRUE for `&&` (so the AND's outcome depends on the nil branch)
+#   - FALSE for `||` (so the OR's outcome depends on the nil branch)
+# That isolates the nil-handling decision to a single observable row.
+#
+# Mirrored ("nil left" / "nil right") variants of each shape detect any
+# short-circuit-ordering difference between the engines.
+MISSING_FIELD_FILTER_EXPRS = {
+    # AND with `==` against a missing status; right branch TRUE on R8.
+    # VK admits R8 (Nil=='active' yields true under filter ==); RL likely
+    # rejects R8. The expression isolates concern #1.
+    "filter and eq nil left":    "@status=='active' && @price>200",
+    "filter and eq nil right":   "@price>200 && @status=='active'",
+    # OR with `==` against a missing status; right branch FALSE on R8.
+    "filter or eq nil left":     "@status=='active' || @price<=200",
+    "filter or eq nil right":    "@price<=200 || @status=='active'",
+    # Same shapes with FILTER `!=` (concern #2). Filter semantics make
+    # `Nil != 'active'` true; APPLY semantics would make it false.
+    "filter and ne nil left":    "@status!='active' && @price>200",
+    "filter or ne nil left":     "@status!='active' || @price<=200",
+    # Both branches reference a missing field. R6 is missing category,
+    # R8 is missing status -- different rows hit the nil branch in each
+    # operand, so engine disagreement can show on either row.
+    "filter and missing both":   "@status=='active' && @category=='food'",
+    "filter or missing both":    "@status=='active' || @category=='food'",
+    # Relational on a missing status (concern #3). Right branch TRUE on
+    # R8 so the AND's result is determined by relop-on-nil semantics.
+    "filter and relop nil left": "@status<'b' && @price>200",
+    # Idiomatic "safe" patterns users would write to dodge nil. Both
+    # engines should agree here; if either diverges that's a regression.
+    "filter exists guard":       "exists(@status) && @status=='active'",
+    "filter not exists or eq":   "!exists(@status) || @status=='active'",
+    # Negation of equality on nil exercises the `!(==)` vs `!=` duality
+    # (concern #2 + #4). Under VK both `!(Nil=='active')` and
+    # `Nil!='active'` are TRUE; under classic semantics one would be FALSE.
+    "filter neg of eq":          "!(@status=='active')",
+}
+
 FILTER_DATASETS = {
     "filter base":               None,
     "filter tag eq":             "@status=='active'",
@@ -732,6 +777,7 @@ FILTER_DATASETS = {
     "filter strlen numeric":     "strlen(@price)>=3",
     "filter startswith numeric": "startswith(@price,'1')",
     "filter contains text":      "contains(@title,'slow')",
+    **MISSING_FIELD_FILTER_EXPRS,
     **HARD_NUM_FILTER_EXPRS,
     **HARD_STR_FILTER_EXPRS,
 }

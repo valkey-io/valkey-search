@@ -1,6 +1,11 @@
 import pytest
 from .generate import BaseCompatibilityTest
-from .data_sets import load_data, HARD_NUM_FILTER_EXPRS, HARD_STR_FILTER_EXPRS
+from .data_sets import (
+    load_data,
+    HARD_NUM_FILTER_EXPRS,
+    HARD_STR_FILTER_EXPRS,
+    MISSING_FIELD_FILTER_EXPRS,
+)
 
 @pytest.mark.parametrize("dialect", [2])
 @pytest.mark.parametrize("key_type", ["hash", "json"])
@@ -156,3 +161,16 @@ class TestFilterCompatibility(BaseCompatibilityTest):
     def test_filter_hard_strings(self, key_type, dialect, dataset):
         self.setup_data(dataset, key_type)
         self._run_hard_strings_queries(key_type, dialect)
+
+    # Table-driven tests exercising missing-field behavior inside boolean
+    # compositions (&&, ||, negation, relational). Uses the FILTER_DOCS
+    # data set, which has rows with missing `status`, `category`, and
+    # `rating` fields, so each expression's nil branch actually fires on
+    # at least one document.
+    @pytest.mark.parametrize(
+        "dataset", sorted(MISSING_FIELD_FILTER_EXPRS.keys()),
+        ids=lambda d: d.replace(" ", "_"),
+    )
+    def test_filter_missing_field_composition(self, key_type, dialect, dataset):
+        self.setup_data(dataset, key_type)
+        self._run_filter_queries(key_type, dialect)

@@ -25,7 +25,6 @@
 #include "src/query/predicate.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
-#include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
@@ -44,17 +43,15 @@ void SortByToGRPC(const std::optional<query::SortByParameter>& sortby,
                        : coordinator::SORT_ORDER_DESCENDING);
 }
 
-std::optional<absl::flat_hash_set<std::string>> InfieldsFromGRPC(
-    const SearchIndexPartitionRequest& request) {
+absl::StatusOr<std::optional<absl::flat_hash_set<std::string>>>
+InfieldsFromGRPC(const SearchIndexPartitionRequest& request) {
   if (request.infields().empty()) {
     return std::nullopt;
   }
   if (static_cast<size_t>(request.infields().size()) > kMaxTextFieldsCount) {
-    VMSDK_LOG(WARNING, nullptr)
-        << "INFIELDS count (" << request.infields().size()
-        << ") exceeds maximum supported (" << kMaxTextFieldsCount
-        << "), ignoring INFIELDS";
-    return std::nullopt;
+    return absl::InvalidArgumentError(absl::StrCat(
+        "INFIELDS count (", request.infields().size(),
+        ") exceeds maximum supported (", kMaxTextFieldsCount, ")"));
   }
   absl::flat_hash_set<std::string> infields;
   infields.reserve(request.infields().size());
@@ -274,7 +271,7 @@ absl::Status GRPCSearchRequestToParameters(
   parameters->filter_parse_results.query_operations =
       static_cast<QueryOperations>(request.query_operations());
   parameters->sortby_parameter = SortByFromGRPC(request);
-  parameters->infields = InfieldsFromGRPC(request);
+  VMSDK_ASSIGN_OR_RETURN(parameters->infields, InfieldsFromGRPC(request));
   return absl::OkStatus();
 }
 

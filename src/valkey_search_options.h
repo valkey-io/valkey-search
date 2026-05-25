@@ -176,15 +176,18 @@ inline bool EnabledInVersion(int major, int minor, int patch) {
 //                                              `label`.
 //
 // Both callables must be nullary and return the same type (void is allowed).
-// `label` is the INFO field name under the "compatibility" section; the
-// counter is constructed lazily on the first macro invocation (regardless of
-// path) and only incremented when the legacy branch runs.
+// `label` must be a string literal; the INFO field is registered under the
+// "compatibility" section with the name `"compatibility-" + label`, so every
+// metric emitted by this macro shares a common prefix. The counter is
+// constructed lazily on the first macro invocation (regardless of path) and
+// only incremented when the legacy branch runs.
 //
 // Usage:
 //   auto result = VALKEY_SEARCH_COMPATIBILITY_FIX(
 //       1, 2, 2, "ft_search_attr_order_pre_1_2_2",
 //       [&] { return new_path(args); },
 //       [&] { return old_path(args); });
+//   // Surfaces as: compatibility:compatibility-ft_search_attr_order_pre_1_2_2
 #define VALKEY_SEARCH_COMPATIBILITY_FIX(major, minor, patch, label, fixed_fn, \
                                         old_fn)                               \
   ([&]() {                                                                    \
@@ -192,7 +195,7 @@ inline bool EnabledInVersion(int major, int minor, int patch) {
                                                                 (minor),      \
                                                                 (patch)};     \
     static ::vmsdk::info_field::Integer kVsCompatFixCounter{                  \
-        "compatibility", (label),                                             \
+        "compatibility", "compatibility-" label,                              \
         ::vmsdk::info_field::IntegerBuilder().App()};                         \
     if (::valkey_search::options::EnabledInVersion(kVsCompatFixVersion)) {    \
       return (fixed_fn)();                                                    \

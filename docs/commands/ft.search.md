@@ -24,7 +24,7 @@ FT.SEARCH <index> <query>
 - `CONSISTENT` (Optional): If specified, the command is terminated with an error if the cluster is in an inconsistent state. This is the default.
 - `DIALECT <dialect>` (optional): Specifies your dialect. The only supported dialect is 2.
 - `INCONSISTENT` (Optional): If specified, the command will generate a best-effort reply if the cluster remains inconsistent within the timeout interval.
-- `INFIELDS <count> <field> [<field> ...]` (optional): Restricts full-text query term matching to the specified indexed TEXT fields. Non-existent or non-TEXT fields are silently ignored. If `count` is 0, INFIELDS is treated as a no-op.
+- `INFIELDS <count> <field> [<field> ...]` (optional): Restricts full-text query term matching to the specified indexed TEXT fields. Non-existent or non-TEXT fields are silently ignored. If `count` is 0, INFIELDS is treated as a no-op. Note: INFIELDS only affects full-text term matching and is a no-op for pure vector KNN queries (i.e., when the query is purely KNN-based with no text term filtering).
 - `LIMIT <offset> <count>` (optional): Lets you choose a portion of the result. The first `<offset>` keys are skipped and only a maximum of `<count>` keys are included. The default is LIMIT 0 10, which returns at most 10 keys.
 - `NOCONTENT` (optional): When present, only the resulting key names are returned, no key values are included.
 - `PARAMS <count> <name> <value> [<name> <value> ...]` (optional): `count` is of the number of arguments, i.e., twice the number of value/name pairs. [Search - query language](../topics/search-query.md) for details.

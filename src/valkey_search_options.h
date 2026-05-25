@@ -191,9 +191,8 @@ inline bool EnabledInVersion(int major, int minor, int patch) {
 #define VALKEY_SEARCH_COMPATIBILITY_FIX(major, minor, patch, label, fixed_fn, \
                                         old_fn)                               \
   ([&]() {                                                                    \
-    static constexpr ::vmsdk::ValkeyVersion kVsCompatFixVersion{(major),      \
-                                                                (minor),      \
-                                                                (patch)};     \
+    static constexpr ::vmsdk::ValkeyVersion kVsCompatFixVersion{              \
+        (major), (minor), (patch)};                                           \
     static ::vmsdk::info_field::Integer kVsCompatFixCounter{                  \
         "compatibility", "compatibility-" label,                              \
         ::vmsdk::info_field::IntegerBuilder().App()};                         \

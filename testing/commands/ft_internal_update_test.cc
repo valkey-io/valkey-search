@@ -94,9 +94,8 @@ TEST_F(FTInternalUpdateTest, FourArgDefaultsToIndexSchema) {
   }
 }
 
-// 5-arg call with a trailing keyword but no value is accepted (the unpaired
-// keyword is silently ignored). Verify by checking we get a parse error (not a
-// CHECK abort) with invalid metadata — proving the arg count check passed.
+// 5-arg call with a trailing keyword but no value is rejected because the
+// optional arguments do not form complete key/value pairs.
 TEST_F(FTInternalUpdateTest, FiveArgTrailingKeywordIgnored) {
   EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))
       .WillRepeatedly(testing::Return(0));
@@ -109,12 +108,12 @@ TEST_F(FTInternalUpdateTest, FiveArgTrailingKeywordIgnored) {
   argv[3] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "invalid");
   argv[4] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "TYPE");
 
-  // Should return a parse error, not abort — 5 args is valid (trailing
-  // keyword without value is silently ignored).
+  // Should return an error because optional args count is odd (not key/value
+  // pairs).
   auto status = FTInternalUpdateCmd(&fake_ctx_, argv, 5);
   EXPECT_FALSE(status.ok());
   EXPECT_THAT(status.message(),
-              testing::HasSubstr("Failed to parse GlobalMetadataEntry"));
+              testing::HasSubstr("malformed optional arguments"));
 
   for (int i = 0; i < 5; i++) {
     TestValkeyModule_FreeString(&fake_ctx_, argv[i]);

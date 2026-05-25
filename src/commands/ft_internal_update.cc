@@ -58,6 +58,19 @@ absl::Status FTInternalUpdateCmd(ValkeyModuleCtx *ctx,
   CHECK(argc >= kFTInternalUpdateMinArgCount)
       << "FT.INTERNAL_UPDATE called with wrong argument count: " << argc;
 
+  auto id_view = vmsdk::ToStringView(argv[1]);
+  std::string id(id_view);
+
+  // Validate that optional arguments (argv[4..argc-1]) form complete
+  // key/value pairs.
+  if ((argc - kFTInternalUpdateMinArgCount) % 2 != 0) {
+    VMSDK_RETURN_IF_ERROR(HandleInternalUpdateFailure(
+        ctx, "optional arguments parse", id,
+        absl::InvalidArgumentError(
+            "FT.INTERNAL_UPDATE called with malformed optional arguments: "
+            "expected key/value pairs")));
+  }
+
   // Parse keyword/value pairs from argv[4..argc-1].
   // Recognized keywords: TYPE (metadata type name).
   // Unrecognized keywords are silently ignored for forward compatibility.
@@ -68,9 +81,6 @@ absl::Status FTInternalUpdateCmd(ValkeyModuleCtx *ctx,
       type_name = vmsdk::ToStringView(argv[i + 1]);
     }
   }
-
-  auto id_view = vmsdk::ToStringView(argv[1]);
-  std::string id(id_view);
 
   auto metadata_view = vmsdk::ToStringView(argv[2]);
   coordinator::GlobalMetadataEntry metadata_entry;

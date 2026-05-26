@@ -37,7 +37,7 @@ FT.SEARCH <index> <query>
 - `TIMEOUT <timeout>` (optional): Lets you set a timeout value for the search command. This must be an integer in milliseconds.
 - `WITHSORTKEYS` (Optional): If `SORTBY` is specified then enabling this option augments the output with the value of the field used for sorting.
 - `WITHSCORES` (Optional): If present, results are augmented with the relative internal score of each document.
-- `SCORER <scorer>` (Optional): If specified uses a user-provided or a built in scoring function.
+- `SCORER <scorer>` (Optional): If present, uses a specific scoring function or the default scoring function.
 
 Response
 

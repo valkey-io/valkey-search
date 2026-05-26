@@ -49,10 +49,10 @@ struct MultiFtInfoTestCase {
 class FTInfoTest : public ValkeySearchTestWithParam<MultiFtInfoTestCase> {};
 
 TEST_P(FTInfoTest, FTInfoTests) {
-  const MultiFtInfoTestCase& test_cases = GetParam();
+  const MultiFtInfoTestCase &test_cases = GetParam();
 
   for (bool use_thread_pool : {true, false}) {
-    for (const auto& test_case : test_cases.test_cases) {
+    for (const auto &test_case : test_cases.test_cases) {
       fake_ctx_ = ValkeyModuleCtx{};
       // Set up the data structures for the test case.
       vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 5);
@@ -74,7 +74,7 @@ TEST_P(FTInfoTest, FTInfoTests) {
       }
 
       // Run the command.
-      std::vector<ValkeyModuleString*> cmd_argv;
+      std::vector<ValkeyModuleString *> cmd_argv;
       std::transform(test_case.argv.begin(), test_case.argv.end(),
                      std::back_inserter(cmd_argv), [&](std::string val) {
                        return TestValkeyModule_CreateStringPrintf(
@@ -135,9 +135,10 @@ INSTANTIATE_TEST_SUITE_P(
                         .expect_return_failure = false,
                         .expected_output =
                             "*28\r\n+index_name\r\n+test_name\r\n+index_"
-                            "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
-                            "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
-                            "1\r\n1\r\n+attributes\r\n*1\r\n*10\r\n+"
+                            "definition\r\n*8\r\n+key_type\r\n+HASH\r\n+"
+                            "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n"
+                            "1\r\n+score_field\r\n+\r\n+"
+                            "attributes\r\n*1\r\n*10\r\n+"
                             "identifier\r\n+test_identifier_1\r\n+"
                             "attribute\r\n+test_attribute_1\r\n+user_indexed_"
                             "memory\r\n:0\r\n+type\r\n+VECTOR\r\n+index\r\n*"
@@ -191,9 +192,10 @@ INSTANTIATE_TEST_SUITE_P(
                         .expect_return_failure = false,
                         .expected_output =
                             "*28\r\n+index_name\r\n+test_name\r\n+index_"
-                            "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
-                            "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
-                            "1\r\n1\r\n+attributes\r\n*1\r\n*10\r\n+"
+                            "definition\r\n*8\r\n+key_type\r\n+HASH\r\n+"
+                            "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n"
+                            "1\r\n+score_field\r\n+\r\n+"
+                            "attributes\r\n*1\r\n*10\r\n+"
                             "identifier\r\n+test_identifier_1\r\n+"
                             "attribute\r\n+test_attribute_1\r\n+user_indexed_"
                             "memory\r\n:0\r\n+type\r\n+VECTOR\r\n+index\r\n*"
@@ -239,9 +241,10 @@ INSTANTIATE_TEST_SUITE_P(
                         .expect_return_failure = false,
                         .expected_output =
                             "*28\r\n+index_name\r\n+test_name\r\n+index_"
-                            "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
-                            "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
-                            "1\r\n1\r\n+attributes\r\n*1\r\n*14\r\n+"
+                            "definition\r\n*8\r\n+key_type\r\n+HASH\r\n+"
+                            "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n"
+                            "1\r\n+score_field\r\n+\r\n+"
+                            "attributes\r\n*1\r\n*14\r\n+"
                             "identifier\r\n+test_identifier_1\r\n+"
                             "attribute\r\n+test_attribute_1\r\n+user_indexed_"
                             "memory\r\n:0\r\n+type\r\n+TAG\r\n+SEPARATOR\r\n+@"
@@ -283,9 +286,10 @@ INSTANTIATE_TEST_SUITE_P(
                         .expect_return_failure = false,
                         .expected_output =
                             "*28\r\n+index_name\r\n+test_name\r\n+index_"
-                            "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
-                            "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
-                            "1\r\n1\r\n+attributes\r\n*1\r\n*14\r\n+"
+                            "definition\r\n*8\r\n+key_type\r\n+HASH\r\n+"
+                            "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n"
+                            "1\r\n+score_field\r\n+\r\n+"
+                            "attributes\r\n*1\r\n*14\r\n+"
                             "identifier\r\n+test_identifier_1\r\n+"
                             "attribute\r\n+test_attribute_1\r\n+user_indexed_"
                             "memory\r\n:0\r\n+type\r\n+TAG\r\n+SEPARATOR\r\n+@"
@@ -324,9 +328,10 @@ INSTANTIATE_TEST_SUITE_P(
                         .expect_return_failure = false,
                         .expected_output =
                             "*28\r\n+index_name\r\n+test_name\r\n+index_"
-                            "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
-                            "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
-                            "1\r\n1\r\n+attributes\r\n*1\r\n*10\r\n+"
+                            "definition\r\n*8\r\n+key_type\r\n+HASH\r\n+"
+                            "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n"
+                            "1\r\n+score_field\r\n+\r\n+"
+                            "attributes\r\n*1\r\n*10\r\n+"
                             "identifier\r\n+test_identifier_1\r\n+"
                             "attribute\r\n+test_attribute_1\r\n+user_indexed_"
                             "memory\r\n:0\r\n+type\r\n+NUMERIC\r\n+size\r\n$"
@@ -393,9 +398,10 @@ INSTANTIATE_TEST_SUITE_P(
                      .expect_return_failure = false,
                      .expected_output =
                          "*36\r\n+index_name\r\n+test_name\r\n+index_"
-                         "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
-                         "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
-                         "1\r\n1\r\n+attributes\r\n*1\r\n*14\r\n+"
+                         "definition\r\n*8\r\n+key_type\r\n+HASH\r\n+"
+                         "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n"
+                         "1\r\n+score_field\r\n+\r\n+attributes\r\n*"
+                         "1\r\n*14\r\n+"
                          "identifier\r\n+test_identifier_1\r\n+attribute\r\n+"
                          "test_attribute_1\r\n+user_indexed_memory\r\n:0\r\n+"
                          "type\r\n+TEXT\r\n+WITH_SUFFIX_TRIE\r\n+0\r\n+NO_"
@@ -445,9 +451,10 @@ INSTANTIATE_TEST_SUITE_P(
                      .expect_return_failure = false,
                      .expected_output =
                          "*36\r\n+index_name\r\n+test_name\r\n+index_"
-                         "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
-                         "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
-                         "1\r\n1\r\n+attributes\r\n*1\r\n*14\r\n+"
+                         "definition\r\n*8\r\n+key_type\r\n+HASH\r\n+"
+                         "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n"
+                         "1\r\n+score_field\r\n+\r\n+attributes\r\n*"
+                         "1\r\n*14\r\n+"
                          "identifier\r\n+test_identifier_1\r\n+attribute\r\n+"
                          "test_attribute_1\r\n+user_indexed_memory\r\n:0\r\n+"
                          "type\r\n+TEXT\r\n+WITH_SUFFIX_TRIE\r\n+1\r\n+NO_"
@@ -502,7 +509,7 @@ INSTANTIATE_TEST_SUITE_P(
                 },
         },
     }),
-    [](const TestParamInfo<MultiFtInfoTestCase>& info) {
+    [](const TestParamInfo<MultiFtInfoTestCase> &info) {
       return info.param.test_name;
     });
 

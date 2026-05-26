@@ -82,8 +82,6 @@ static int OnSetStringConfig(const char *config_name, ValkeyModuleString *value,
     }
     return VALKEYMODULE_ERR;
   }
-
-  entry->NotifyChanged();
   return VALKEYMODULE_OK;
 }
 
@@ -403,7 +401,6 @@ int OnSetTypedConfig(const char *config_name, ValkeyModuleString *value,
     }
     return VALKEYMODULE_ERR;
   }
-  entry->NotifyChanged();
   return VALKEYMODULE_OK;
 }
 }  // namespace

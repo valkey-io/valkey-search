@@ -32,17 +32,16 @@ namespace valkey_search::indexes::scoring {
 class Bm25StdScorer : public Scorer {
  public:
   static constexpr std::string_view kName = "BM25STD";
-  static constexpr double kK1 = 1.2;
-  static constexpr double kB = 0.75;
+  static constexpr float kK1 = 1.2f;
+  static constexpr float kB = 0.75f;
 
   std::string_view Name() const override { return kName; }
   ScorerType Type() const override { return ScorerType::kBm25Std; }
 
-  double ScoreLeaf(const ScoringStats& stats,
-                   double leaf_weight) const override;
+  float ScoreLeaf(const ScoringStats& stats, float leaf_weight) const override;
 
-  double ComposeDocumentScore(double sum_of_terms,
-                              const ScoringStats& stats) const override;
+  float ComposeDocumentScore(float sum_of_terms,
+                             const ScoringStats& stats) const override;
 };
 
 }  // namespace valkey_search::indexes::scoring

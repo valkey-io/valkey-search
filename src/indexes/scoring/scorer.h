@@ -59,22 +59,22 @@ class Scorer {
 
   // Per-leaf contribution for one (query leaf, candidate document) match.
   // `leaf_weight` comes from the leaf's =>{$weight:N}; default 1.0.
-  virtual double ScoreLeaf(const ScoringStats& stats,
-                           double leaf_weight) const = 0;
+  virtual float ScoreLeaf(const ScoringStats& stats,
+                          float leaf_weight) const = 0;
 
   // Final composition: takes the accumulated sum of leaf + group
   // contributions for one document and applies algorithm-specific
   // post-processing (e.g. document_score multiplier; norm / slop
   // divisors for TFIDF).
-  virtual double ComposeDocumentScore(double sum_of_terms,
-                                      const ScoringStats& stats) const = 0;
+  virtual float ComposeDocumentScore(float sum_of_terms,
+                                     const ScoringStats& stats) const = 0;
 
   // Combine an internal node's children:
   //   group_weight * sum(child_scores)
   // Identical for every algorithm, so the base class implements this
   // non-virtually.
-  double CombineGroup(absl::Span<const double> child_scores,
-                      double group_weight) const;
+  float CombineGroup(absl::Span<const float> child_scores,
+                     float group_weight) const;
 };
 
 }  // namespace valkey_search::indexes::scoring

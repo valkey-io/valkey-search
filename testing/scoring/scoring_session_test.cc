@@ -22,7 +22,7 @@ namespace {
 
 using ::testing::ElementsAre;
 
-constexpr double kFloatTolerance = 1e-4;
+constexpr float kFloatTolerance = 1e-4f;
 
 // Extract the doc_id sequence from a Rank() result for ranking
 // assertions that don't care about absolute scores.
@@ -35,12 +35,12 @@ std::vector<DocId> RankOrder(const std::vector<RankedDoc>& ranked) {
 
 // Find the score for a specific doc_id in a Rank() result. Asserts the
 // doc is present.
-double ScoreFor(const std::vector<RankedDoc>& ranked, DocId id) {
+float ScoreFor(const std::vector<RankedDoc>& ranked, DocId id) {
   for (const auto& r : ranked) {
     if (r.doc_id == id) return r.score;
   }
   ADD_FAILURE() << "doc_id " << id << " not in ranked results";
-  return 0.0;
+  return 0.0f;
 }
 
 // Build a vector of Bm25StdStats for every doc in kDocs that has a
@@ -66,16 +66,16 @@ TEST(ScoringSessionTest, SingleLeafHelloRankOrder) {
   Bm25StdScorer scorer;
   ScoringSession session(&scorer);
   auto stats = BuildStatsForTerm(test_data::StatsForHello);
-  for (const auto& s : stats) session.RecordLeaf(s, 1.0);
+  for (const auto& s : stats) session.RecordLeaf(s, 1.0f);
 
   auto ranked = session.Rank();
   EXPECT_THAT(RankOrder(ranked), ElementsAre(5, 4, 3, 2, 7, 1));
-  EXPECT_NEAR(ScoreFor(ranked, 5), 0.574385, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 4), 0.523122, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 3), 0.477286, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 2), 0.430172, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 7), 0.430172, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 1), 0.331888, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 5), 0.574385f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 4), 0.523122f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 3), 0.477286f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 2), 0.430172f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 7), 0.430172f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 1), 0.331888f, kFloatTolerance);
 }
 
 // Implicit AND `hello world`: only docs that contain both terms are
@@ -96,17 +96,17 @@ TEST(ScoringSessionTest, MultiLeafHelloWorld) {
     }
   }
   for (size_t i = 0; i < hello_stats.size(); ++i) {
-    session.RecordLeaf(hello_stats[i], 1.0);
-    session.RecordLeaf(world_stats[i], 1.0);
+    session.RecordLeaf(hello_stats[i], 1.0f);
+    session.RecordLeaf(world_stats[i], 1.0f);
   }
 
   auto ranked = session.Rank();
   EXPECT_THAT(RankOrder(ranked), ElementsAre(4, 3, 2, 7, 1));
-  EXPECT_NEAR(ScoreFor(ranked, 4), 0.774956, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 3), 0.763658, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 2), 0.737626, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 7), 0.737626, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 1), 0.663776, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 4), 0.774956f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 3), 0.763658f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 2), 0.737626f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 7), 0.737626f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 1), 0.663776f, kFloatTolerance);
 }
 
 // Leaf weight scales every contribution linearly. `(hello)=>{$weight:5}`
@@ -115,16 +115,16 @@ TEST(ScoringSessionTest, LeafWeightScalesScore) {
   Bm25StdScorer scorer;
   ScoringSession session(&scorer);
   auto stats = BuildStatsForTerm(test_data::StatsForHello);
-  for (const auto& s : stats) session.RecordLeaf(s, 5.0);
+  for (const auto& s : stats) session.RecordLeaf(s, 5.0f);
 
   auto ranked = session.Rank();
   EXPECT_THAT(RankOrder(ranked), ElementsAre(5, 4, 3, 2, 7, 1));
-  EXPECT_NEAR(ScoreFor(ranked, 5), 2.871923, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 4), 2.615608, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 3), 2.386431, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 2), 2.150861, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 7), 2.150861, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 1), 1.659439, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 5), 2.871923f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 4), 2.615608f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 3), 2.386431f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 2), 2.150861f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 7), 2.150861f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 1), 1.659439f, kFloatTolerance);
 }
 
 // `((hello)=>{$weight:4} (world)=>{$weight:3})=>{$weight:2}` — outer
@@ -147,18 +147,18 @@ TEST(ScoringSessionTest, NestedGroupsLayeredWeights) {
 
   session.EnterGroup();
   for (size_t i = 0; i < hello_stats.size(); ++i) {
-    session.RecordLeaf(hello_stats[i], 4.0);
-    session.RecordLeaf(world_stats[i], 3.0);
+    session.RecordLeaf(hello_stats[i], 4.0f);
+    session.RecordLeaf(world_stats[i], 3.0f);
   }
-  session.ExitGroup(2.0);
+  session.ExitGroup(2.0f);
 
   auto ranked = session.Rank();
   EXPECT_THAT(RankOrder(ranked), ElementsAre(4, 3, 2, 7, 1));
-  EXPECT_NEAR(ScoreFor(ranked, 4), 5.695980, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 3), 5.536520, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 2), 5.286103, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 7), 5.286103, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 1), 4.646429, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 4), 5.695980f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 3), 5.536520f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 2), 5.286103f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 7), 5.286103f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 1), 4.646429f, kFloatTolerance);
 }
 
 // `(hello world) | rare` — OR at the top, two distinct admission paths.
@@ -179,24 +179,24 @@ TEST(ScoringSessionTest, OrAtTopMixedAdmissionPaths) {
     const bool and_branch = doc.f_hello > 0 && doc.f_world > 0;
     if (rare_branch) {
       all_stats.push_back(test_data::StatsForRare(doc));
-      session.RecordLeaf(all_stats.back(), 1.0);
+      session.RecordLeaf(all_stats.back(), 1.0f);
     } else if (and_branch) {
       all_stats.push_back(test_data::StatsForHello(doc));
-      session.RecordLeaf(all_stats.back(), 1.0);
+      session.RecordLeaf(all_stats.back(), 1.0f);
       all_stats.push_back(test_data::StatsForWorld(doc));
-      session.RecordLeaf(all_stats.back(), 1.0);
+      session.RecordLeaf(all_stats.back(), 1.0f);
     }
   }
 
   auto ranked = session.Rank();
   EXPECT_THAT(RankOrder(ranked), ElementsAre(8, 6, 4, 3, 2, 7, 1));
-  EXPECT_NEAR(ScoreFor(ranked, 8), 1.915183, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 6), 1.419164, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 4), 0.774956, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 3), 0.763658, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 2), 0.737626, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 7), 0.737626, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 1), 0.663776, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 8), 1.915183f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 6), 1.419164f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 4), 0.774956f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 3), 0.763658f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 2), 0.737626f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 7), 0.737626f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 1), 0.663776f, kFloatTolerance);
 }
 
 // `hello (world | rare)` — AND of leaf + OR group. None of the
@@ -213,27 +213,27 @@ TEST(ScoringSessionTest, AndOfLeafAndOrGroup) {
     const bool or_match = doc.f_world > 0 || doc.f_rare > 0;
     if (doc.f_hello > 0 && or_match) {
       all_stats.push_back(test_data::StatsForHello(doc));
-      session.RecordLeaf(all_stats.back(), 1.0);
+      session.RecordLeaf(all_stats.back(), 1.0f);
       session.EnterGroup();
       if (doc.f_world > 0) {
         all_stats.push_back(test_data::StatsForWorld(doc));
-        session.RecordLeaf(all_stats.back(), 1.0);
+        session.RecordLeaf(all_stats.back(), 1.0f);
       }
       if (doc.f_rare > 0) {
         all_stats.push_back(test_data::StatsForRare(doc));
-        session.RecordLeaf(all_stats.back(), 1.0);
+        session.RecordLeaf(all_stats.back(), 1.0f);
       }
-      session.ExitGroup(1.0);
+      session.ExitGroup(1.0f);
     }
   }
 
   auto ranked = session.Rank();
   EXPECT_THAT(RankOrder(ranked), ElementsAre(4, 3, 2, 7, 1));
-  EXPECT_NEAR(ScoreFor(ranked, 4), 0.774956, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 3), 0.763658, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 2), 0.737626, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 7), 0.737626, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 1), 0.663776, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 4), 0.774956f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 3), 0.763658f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 2), 0.737626f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 7), 0.737626f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 1), 0.663776f, kFloatTolerance);
 }
 
 // `((hello)=>{$weight:4} | (rare)=>{$weight:2})=>{$weight:3}` — the
@@ -255,25 +255,25 @@ TEST(ScoringSessionTest, PerLeafWeightInsideOrWithGroupWeight) {
     session.EnterGroup();
     if (doc.f_hello > 0) {
       all_stats.push_back(test_data::StatsForHello(doc));
-      session.RecordLeaf(all_stats.back(), 4.0);
+      session.RecordLeaf(all_stats.back(), 4.0f);
     }
     if (doc.f_rare > 0) {
       all_stats.push_back(test_data::StatsForRare(doc));
-      session.RecordLeaf(all_stats.back(), 2.0);
+      session.RecordLeaf(all_stats.back(), 2.0f);
     }
-    session.ExitGroup(3.0);
+    session.ExitGroup(3.0f);
   }
 
   auto ranked = session.Rank();
   EXPECT_THAT(RankOrder(ranked), ElementsAre(8, 6, 5, 4, 3, 2, 7, 1));
-  EXPECT_NEAR(ScoreFor(ranked, 8), 11.491096, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 6), 8.514985, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 5), 6.892615, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 4), 6.277460, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 3), 5.727435, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 2), 5.162066, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 7), 5.162066, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 1), 3.982653, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 8), 11.491096f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 6), 8.514985f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 5), 6.892615f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 4), 6.277460f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 3), 5.727435f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 2), 5.162066f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 7), 5.162066f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, 1), 3.982653f, kFloatTolerance);
 }
 
 // Empty result: no leaves recorded, Rank() returns an empty vector.
@@ -290,7 +290,7 @@ TEST(ScoringSessionTest, TiesBrokenByDocIdAscending) {
   Bm25StdScorer scorer;
   ScoringSession session(&scorer);
   auto stats = BuildStatsForTerm(test_data::StatsForHello);
-  for (const auto& s : stats) session.RecordLeaf(s, 1.0);
+  for (const auto& s : stats) session.RecordLeaf(s, 1.0f);
 
   auto ranked = session.Rank();
   // Find the positions of doc:2 and doc:7 in the ranking.
@@ -302,7 +302,7 @@ TEST(ScoringSessionTest, TiesBrokenByDocIdAscending) {
   ASSERT_NE(pos2, -1);
   ASSERT_NE(pos7, -1);
   EXPECT_LT(pos2, pos7);
-  EXPECT_DOUBLE_EQ(ranked[pos2].score, ranked[pos7].score);
+  EXPECT_FLOAT_EQ(ranked[pos2].score, ranked[pos7].score);
 }
 
 // ---- Death tests: contract violations ----
@@ -312,13 +312,13 @@ TEST(ScoringSessionDeathTest, RecordLeafAfterRankCrashes) {
   ScoringSession session(&scorer);
   (void)session.Rank();
   Bm25StdStats stats = test_data::StatsForHello(test_data::kDocs[0]);
-  EXPECT_DEATH(session.RecordLeaf(stats, 1.0), "");
+  EXPECT_DEATH(session.RecordLeaf(stats, 1.0f), "");
 }
 
 TEST(ScoringSessionDeathTest, ExitGroupWithoutEnterCrashes) {
   Bm25StdScorer scorer;
   ScoringSession session(&scorer);
-  EXPECT_DEATH(session.ExitGroup(1.0), "");
+  EXPECT_DEATH(session.ExitGroup(1.0f), "");
 }
 
 TEST(ScoringSessionDeathTest, RankWithUnbalancedStackCrashes) {

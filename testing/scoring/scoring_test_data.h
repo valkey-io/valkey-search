@@ -16,13 +16,13 @@
 namespace valkey_search::indexes::scoring::test_data {
 
 // Index-wide constants for the corpus below.
-inline constexpr uint64_t kTotalDocs = 8;
+inline constexpr uint32_t kTotalDocs = 8;
 // total_doc_len = 5+6+7+9+4+4+6+1 = 42; avg = 42 / 8 = 5.25.
-inline constexpr double kAvgDocLen = 5.25;
-inline constexpr uint64_t kDtHello = 6;
-inline constexpr uint64_t kDtWorld = 6;
-inline constexpr uint64_t kDtRare = 2;
-inline constexpr uint64_t kDtUnique = 1;
+inline constexpr float kAvgDocLen = 5.25f;
+inline constexpr uint32_t kDtHello = 6;
+inline constexpr uint32_t kDtWorld = 6;
+inline constexpr uint32_t kDtRare = 2;
+inline constexpr uint32_t kDtUnique = 1;
 
 // Per-document fixed inputs. f_<term> is the doc-wide term frequency
 // for that term in this doc; 0 means the term is absent.

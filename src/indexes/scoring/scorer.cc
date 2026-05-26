@@ -11,10 +11,10 @@
 
 namespace valkey_search::indexes::scoring {
 
-double Scorer::CombineGroup(absl::Span<const double> child_scores,
-                            double group_weight) const {
-  double sum = 0.0;
-  for (double s : child_scores) sum += s;
+float Scorer::CombineGroup(absl::Span<const float> child_scores,
+                           float group_weight) const {
+  float sum = 0.0f;
+  for (float s : child_scores) sum += s;
   return group_weight * sum;
 }
 

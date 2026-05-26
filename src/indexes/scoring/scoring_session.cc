@@ -25,10 +25,10 @@ ScoringSession::ScoringSession(const Scorer* scorer) : scorer_(scorer) {
 // Record one (query leaf, candidate document) match into the
 // innermost group scope. Computes the leaf's contribution via the
 // Scorer and adds it to that doc's running sum within the scope.
-void ScoringSession::RecordLeaf(const ScoringStats& stats, double leaf_weight) {
+void ScoringSession::RecordLeaf(const ScoringStats& stats, float leaf_weight) {
   CHECK(!group_stack_.empty());
 
-  const double leaf_score = scorer_->ScoreLeaf(stats, leaf_weight);
+  const float leaf_score = scorer_->ScoreLeaf(stats, leaf_weight);
   group_stack_.back()[stats.doc_id] += leaf_score;
 
   // Remember the stats for ComposeDocumentScore. First write wins;
@@ -53,7 +53,7 @@ void ScoringSession::EnterGroup() {
 // scaling each per-doc partial by group_weight first. This is what
 // makes layered weights compose multiplicatively across nested
 // groups.
-void ScoringSession::ExitGroup(double group_weight) {
+void ScoringSession::ExitGroup(float group_weight) {
   CHECK_GE(group_stack_.size(), 2u);
 
   auto inner = std::move(group_stack_.back());
@@ -81,7 +81,7 @@ std::vector<RankedDoc> ScoringSession::Rank() {
   for (const auto& [doc_id, sum] : root) {
     auto stats_it = doc_stats_.find(doc_id);
     CHECK(stats_it != doc_stats_.end());
-    const double final_score =
+    const float final_score =
         scorer_->ComposeDocumentScore(sum, *stats_it->second);
     results.push_back({doc_id, final_score});
   }

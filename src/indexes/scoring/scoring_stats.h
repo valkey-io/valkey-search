@@ -39,11 +39,11 @@ struct ScoringStats {
     return std::make_unique<ScoringStats>(*this);
   }
 
-  uint64_t total_docs = 0;
+  uint32_t total_docs = 0;
   uint64_t doc_id = 0;
-  double document_score = 1.0;
+  float document_score = 1.0f;
   std::string term;
-  uint64_t num_doc_contain_term = 0;
+  uint32_t num_doc_contain_term = 0;
   uint32_t term_frequency = 0;
 };
 
@@ -58,7 +58,7 @@ struct Bm25StdStats : ScoringStats {
     return std::make_unique<Bm25StdStats>(*this);
   }
 
-  double avg_doc_len = 0.0;
+  float avg_doc_len = 0.0f;
   uint32_t doc_len = 0;
 };
 

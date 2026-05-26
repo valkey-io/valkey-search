@@ -25,7 +25,7 @@ using DocId = uint64_t;
 
 struct RankedDoc {
   DocId doc_id;
-  double score;
+  float score;
 };
 
 // Per-query collector and ranker. One ScoringSession is created per
@@ -59,14 +59,14 @@ class ScoringSession {
   // instance need not outlive this call. The doc-level fields in
   // `stats` (e.g. document_score) must be invariant across all leaves
   // recorded for the same `stats.doc_id`.
-  void RecordLeaf(const ScoringStats& stats, double leaf_weight);
+  void RecordLeaf(const ScoringStats& stats, float leaf_weight);
 
   // Open a new group scope. RecordLeaf calls between EnterGroup() and
   // its matching ExitGroup(w) are accumulated independently; on
   // ExitGroup the per-doc sums are multiplied by w and merged into
   // the enclosing scope. Calls must be balanced.
   void EnterGroup();
-  void ExitGroup(double group_weight);
+  void ExitGroup(float group_weight);
 
   // Compute final scores via Scorer::ComposeDocumentScore and return
   // every candidate document sorted by score descending. Tied scores
@@ -83,7 +83,7 @@ class ScoringSession {
   // applying the group weight and merging into the parent scope. After
   // a balanced sequence of calls, only the root scope remains and
   // holds the final per-doc sums passed to ComposeDocumentScore.
-  std::vector<absl::flat_hash_map<DocId, double>> group_stack_;
+  std::vector<absl::flat_hash_map<DocId, float>> group_stack_;
 
   // Per-doc ScoringStats remembered for the ComposeDocumentScore call
   // at Rank() time. The session owns these copies so its lifetime is

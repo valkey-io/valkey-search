@@ -18,13 +18,13 @@
 namespace valkey_search::indexes::scoring {
 namespace {
 
-constexpr double kFloatTolerance = 1e-4;
+constexpr float kFloatTolerance = 1e-4f;
 
 // Ad-hoc Bm25StdStats builder for edge-case inputs that the shared
 // corpus in scoring_test_data.h cannot express (N=0, dt>N).
-Bm25StdStats MakeStats(uint64_t total_docs, double avg_doc_len,
-                       uint64_t num_doc_contain_term, uint32_t term_frequency,
-                       uint32_t doc_len, double document_score = 1.0) {
+Bm25StdStats MakeStats(uint32_t total_docs, float avg_doc_len,
+                       uint32_t num_doc_contain_term, uint32_t term_frequency,
+                       uint32_t doc_len, float document_score = 1.0f) {
   Bm25StdStats s;
   s.total_docs = total_docs;
   s.avg_doc_len = avg_doc_len;
@@ -46,15 +46,15 @@ TEST(Bm25StdScorerTest, IdentityNameAndType) {
 TEST(Bm25StdScorerTest, ScoreLeafCorpusReference) {
   Bm25StdScorer scorer;
   Bm25StdStats stats = test_data::StatsForHello(test_data::kDocs[4]);
-  EXPECT_NEAR(scorer.ScoreLeaf(stats, 1.0), 0.574385, kFloatTolerance);
+  EXPECT_NEAR(scorer.ScoreLeaf(stats, 1.0f), 0.574385f, kFloatTolerance);
 }
 
 TEST(Bm25StdScorerTest, ScoreLeafLeafWeightScalesLinearly) {
   Bm25StdScorer scorer;
   Bm25StdStats stats = test_data::StatsForHello(test_data::kDocs[0]);
-  const double base = scorer.ScoreLeaf(stats, 1.0);
-  EXPECT_NEAR(scorer.ScoreLeaf(stats, 5.0), 5.0 * base, kFloatTolerance);
-  EXPECT_EQ(scorer.ScoreLeaf(stats, 0.0), 0.0);
+  const float base = scorer.ScoreLeaf(stats, 1.0f);
+  EXPECT_NEAR(scorer.ScoreLeaf(stats, 5.0f), 5.0f * base, kFloatTolerance);
+  EXPECT_EQ(scorer.ScoreLeaf(stats, 0.0f), 0.0f);
 }
 
 // Term absent from this doc (F=0): contributes 0.
@@ -62,28 +62,28 @@ TEST(Bm25StdScorerTest, ScoreLeafZeroFrequencyReturnsZero) {
   Bm25StdScorer scorer;
   Bm25StdStats stats = test_data::StatsForWorld(test_data::kDocs[4]);
   ASSERT_EQ(stats.term_frequency, 0u);
-  EXPECT_EQ(scorer.ScoreLeaf(stats, 1.0), 0.0);
+  EXPECT_EQ(scorer.ScoreLeaf(stats, 1.0f), 0.0f);
 }
 
 // Empty index (N=0, avg_doc_len=0): ScoreLeaf returns 0 instead of
 // dividing by zero.
 TEST(Bm25StdScorerTest, ScoreLeafEmptyIndexReturnsZero) {
   Bm25StdScorer scorer;
-  Bm25StdStats stats = MakeStats(/*N=*/0, /*avg_doc_len=*/0.0,
+  Bm25StdStats stats = MakeStats(/*N=*/0, /*avg_doc_len=*/0.0f,
                                  /*dt=*/0, /*F=*/0, /*doc_len=*/0);
-  EXPECT_EQ(scorer.ScoreLeaf(stats, 1.0), 0.0);
+  EXPECT_EQ(scorer.ScoreLeaf(stats, 1.0f), 0.0f);
 }
 
 // IDF axis: rarer terms (lower dt) score higher than common ones at
 // matched-once-per-doc inputs.
 TEST(Bm25StdScorerTest, IdfDifferentiatesByDt) {
   Bm25StdScorer scorer;
-  const double hello = scorer.ScoreLeaf(
-      test_data::StatsForHello(test_data::kDocs[0]), 1.0);  // dt=6
-  const double rare = scorer.ScoreLeaf(
-      test_data::StatsForRare(test_data::kDocs[5]), 1.0);  // dt=2
-  const double unique = scorer.ScoreLeaf(
-      test_data::StatsForUnique(test_data::kDocs[5]), 1.0);  // dt=1
+  const float hello = scorer.ScoreLeaf(
+      test_data::StatsForHello(test_data::kDocs[0]), 1.0f);  // dt=6
+  const float rare = scorer.ScoreLeaf(
+      test_data::StatsForRare(test_data::kDocs[5]), 1.0f);  // dt=2
+  const float unique = scorer.ScoreLeaf(
+      test_data::StatsForUnique(test_data::kDocs[5]), 1.0f);  // dt=1
   EXPECT_GT(rare, hello);
   EXPECT_GT(unique, rare);
 }
@@ -92,18 +92,18 @@ TEST(Bm25StdScorerTest, IdfDifferentiatesByDt) {
 // hello despite doc:4 having a higher F.
 TEST(Bm25StdScorerTest, LengthNormalizationFavorsShorterDoc) {
   Bm25StdScorer scorer;
-  const double doc4 =
-      scorer.ScoreLeaf(test_data::StatsForHello(test_data::kDocs[3]), 1.0);
-  const double doc5 =
-      scorer.ScoreLeaf(test_data::StatsForHello(test_data::kDocs[4]), 1.0);
+  const float doc4 =
+      scorer.ScoreLeaf(test_data::StatsForHello(test_data::kDocs[3]), 1.0f);
+  const float doc5 =
+      scorer.ScoreLeaf(test_data::StatsForHello(test_data::kDocs[4]), 1.0f);
   EXPECT_GT(doc5, doc4);
 }
 
 TEST(Bm25StdScorerDeathTest, DtGreaterThanNCrashes) {
   Bm25StdScorer scorer;
-  Bm25StdStats stats = MakeStats(/*N=*/2, /*avg_doc_len=*/10.0,
+  Bm25StdStats stats = MakeStats(/*N=*/2, /*avg_doc_len=*/10.0f,
                                  /*dt=*/3, /*F=*/1, /*doc_len=*/10);
-  EXPECT_DEATH(scorer.ScoreLeaf(stats, 1.0), "");
+  EXPECT_DEATH(scorer.ScoreLeaf(stats, 1.0f), "");
 }
 
 TEST(Bm25StdScorerDeathTest, WrongStatsSubtypeCrashes) {
@@ -112,14 +112,14 @@ TEST(Bm25StdScorerDeathTest, WrongStatsSubtypeCrashes) {
   base_stats.total_docs = 10;
   base_stats.num_doc_contain_term = 1;
   base_stats.term_frequency = 1;
-  EXPECT_DEATH(scorer.ScoreLeaf(base_stats, 1.0), "");
+  EXPECT_DEATH(scorer.ScoreLeaf(base_stats, 1.0f), "");
 }
 
 TEST(Bm25StdScorerTest, ComposeMultipliesByDocumentScore) {
   Bm25StdScorer scorer;
   Bm25StdStats stats = test_data::StatsForHello(test_data::kDocs[0]);
-  stats.document_score = 0.7;
-  EXPECT_NEAR(scorer.ComposeDocumentScore(0.5, stats), 0.5 * 0.7,
+  stats.document_score = 0.7f;
+  EXPECT_NEAR(scorer.ComposeDocumentScore(0.5f, stats), 0.5f * 0.7f,
               kFloatTolerance);
 }
 
@@ -128,24 +128,24 @@ TEST(Bm25StdScorerTest, ComposeMultipliesByDocumentScore) {
 // check; this test guards both signs of the IsInf path.
 TEST(Bm25StdScorerTest, ComposeInfinityShortCircuits) {
   Bm25StdScorer scorer;
-  const double kInf = std::numeric_limits<double>::infinity();
+  const float kInf = std::numeric_limits<float>::infinity();
   Bm25StdStats stats = test_data::StatsForHello(test_data::kDocs[0]);
   stats.document_score = kInf;
-  EXPECT_EQ(scorer.ComposeDocumentScore(0.5, stats), kInf);
+  EXPECT_EQ(scorer.ComposeDocumentScore(0.5f, stats), kInf);
   stats.document_score = -kInf;
-  EXPECT_EQ(scorer.ComposeDocumentScore(0.5, stats), -kInf);
+  EXPECT_EQ(scorer.ComposeDocumentScore(0.5f, stats), -kInf);
 }
 
 TEST(Bm25StdScorerTest, CombineGroupAppliesWeight) {
   Bm25StdScorer scorer;
-  std::vector<double> children = {1.0, 2.0, 3.0};
-  EXPECT_NEAR(scorer.CombineGroup(children, /*group_weight=*/2.0), 12.0,
+  std::vector<float> children = {1.0f, 2.0f, 3.0f};
+  EXPECT_NEAR(scorer.CombineGroup(children, /*group_weight=*/2.0f), 12.0f,
               kFloatTolerance);
 }
 
 TEST(Bm25StdScorerTest, CombineGroupEmptyChildrenIsZero) {
   Bm25StdScorer scorer;
-  EXPECT_EQ(scorer.CombineGroup({}, 5.0), 0.0);
+  EXPECT_EQ(scorer.CombineGroup({}, 5.0f), 0.0f);
 }
 
 }  // namespace

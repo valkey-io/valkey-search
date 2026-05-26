@@ -42,15 +42,15 @@ constexpr absl::string_view kUseCoordinator = "--use-coordinator";
 template <typename T>
 static T OnGetConfig(const char *config_name, void *priv_data) {
   auto entry = static_cast<ConfigBase<T> *>(priv_data);
-  CHECK(entry) << "null private data for Boolean configuration entry.";
-  return static_cast<int>(entry->GetValue());
+  CHECK(entry) << "null private data for config: " << config_name;
+  return entry->GetValue();
 }
 
 template <typename T>
 static int OnSetConfig(const char *config_name, T value, void *priv_data,
                        ValkeyModuleString **err) {
   auto entry = static_cast<ConfigBase<T> *>(priv_data);
-  CHECK(entry) << "null private data for configuration Number entry.";
+  CHECK(entry) << "null private data for config: " << config_name;
   auto res = entry->SetValue(value);  // Calls "Validate" internally
   if (!res.ok()) {
     if (err) {
@@ -65,16 +65,16 @@ static int OnSetConfig(const char *config_name, T value, void *priv_data,
 static ValkeyModuleString *OnGetStringConfig(const char *config_name,
                                              void *priv_data) {
   auto entry = static_cast<String *>(priv_data);
-  CHECK(entry) << "null private data";
+  CHECK(entry) << "null private data for config: " << config_name;
   return entry->GetCachedValkeyString();
 }
 
 static int OnSetStringConfig(const char *config_name, ValkeyModuleString *value,
                              void *priv_data, ValkeyModuleString **err) {
   auto entry = static_cast<String *>(priv_data);
-  CHECK(entry) << "null private data";
+  CHECK(entry) << "null private data for config: " << config_name;
   auto sv = vmsdk::ToStringView(value);
-  auto res = entry->SetValue(sv.data());  // Calls "Validate" internally
+  auto res = entry->SetValue(std::string(sv));  // Calls "Validate" internally
   if (!res.ok()) {
     if (err) {
       *err =
@@ -375,7 +375,7 @@ namespace {
 template <typename T>
 ValkeyModuleString *OnGetTypedConfig(const char *config_name, void *priv_data) {
   auto entry = static_cast<TypedConfig<T> *>(priv_data);
-  CHECK(entry) << "null private data";
+  CHECK(entry) << "null private data for config: " << config_name;
   return entry->GetCachedValkeyString();
 }
 
@@ -383,7 +383,7 @@ template <typename T>
 int OnSetTypedConfig(const char *config_name, ValkeyModuleString *value,
                      void *priv_data, ValkeyModuleString **err) {
   auto entry = static_cast<TypedConfig<T> *>(priv_data);
-  CHECK(entry) << "null private data";
+  CHECK(entry) << "null private data for config: " << config_name;
   auto sv = vmsdk::ToStringView(value);
   auto parsed = ConfigTraits<T>::Parse(sv);
   if (!parsed.ok()) {

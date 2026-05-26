@@ -43,6 +43,7 @@ enum class QueryOperations : uint64_t {
   kContainsTextPrefix = 1 << 9,
   kContainsTextSuffix = 1 << 10,
   kContainsTextFuzzy = 1 << 11,
+  kContainsGeo = 1 << 12,
 };
 
 inline QueryOperations operator|(QueryOperations a, QueryOperations b) {
@@ -117,6 +118,8 @@ class FilterParser {
   absl::StatusOr<ParseResult> ParseExpression(uint32_t level);
   absl::StatusOr<std::unique_ptr<query::NumericPredicate>>
   ParseNumericPredicate(const std::string& attribute_alias);
+  absl::StatusOr<std::unique_ptr<query::GeoPredicate>> ParseGeoPredicate(
+      const std::string& attribute_alias);
   absl::StatusOr<std::unique_ptr<query::TagPredicate>> ParseTagPredicate(
       const std::string& attribute_alias);
   absl::StatusOr<std::unique_ptr<query::TextPredicate>> ParseTextPredicate(

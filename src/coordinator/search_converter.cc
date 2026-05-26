@@ -364,6 +364,14 @@ std::unique_ptr<Predicate> PredicateToGRPCPredicate(
       }
       return nullptr;
     }
+    case query::PredicateType::kGeo: {
+      // GEO predicates are not yet plumbed through the coordinator's gRPC
+      // schema; cluster-mode geo fanout requires a Geo predicate proto that
+      // doesn't exist yet. Standalone (non-coordinator) queries do not use
+      // this conversion path. Return nullptr to surface the gap loudly at
+      // the caller rather than silently mutating semantics.
+      return nullptr;
+    }
     case query::PredicateType::kNone: {
       return nullptr;
     }

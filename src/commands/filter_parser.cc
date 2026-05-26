@@ -23,12 +23,14 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "src/index_schema.h"
+#include "src/indexes/geo.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
 #include "src/indexes/text/lexer.h"
 #include "src/query/predicate.h"
+#include "src/utils/geohash.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/status/status_macros.h"
 
@@ -158,6 +160,11 @@ std::string PrintPredicateTree(const query::Predicate* predicate, int indent) {
           indent_str + "NUMERIC(" + std::string(numeric->GetAlias()) + ")\n";
       break;
     }
+    case query::PredicateType::kGeo: {
+      const auto* geo = static_cast<const query::GeoPredicate*>(predicate);
+      result += indent_str + "GEO(" + std::string(geo->GetAlias()) + ")\n";
+      break;
+    }
     case query::PredicateType::kTag: {
       const auto* tag = static_cast<const query::TagPredicate*>(predicate);
       result += indent_str + "TAG(" + std::string(tag->GetAlias()) + ")\n";
@@ -280,6 +287,73 @@ absl::StatusOr<double> FilterParser::ParseNumber() {
   }
   return absl::InvalidArgumentError(
       absl::StrCat("Invalid number: ", number_str));
+}
+
+namespace {
+
+// Distance unit -> meters per unit. Matches valkey-core's GEO* unit table.
+absl::StatusOr<double> ParseDistanceUnit(absl::string_view unit) {
+  std::string u = absl::AsciiStrToLower(unit);
+  if (u == "m") return 1.0;
+  if (u == "km") return 1000.0;
+  if (u == "mi") return 1609.34;
+  if (u == "ft") return 0.3048;
+  return absl::InvalidArgumentError(
+      absl::StrCat("Unknown distance unit `", unit, "`"));
+}
+
+}  // namespace
+
+absl::StatusOr<std::unique_ptr<query::GeoPredicate>>
+FilterParser::ParseGeoPredicate(const std::string& attribute_alias) {
+  auto index = index_schema_.GetIndex(attribute_alias);
+  if (!index.ok() ||
+      index.value()->GetIndexerType() != indexes::IndexerType::kGeo) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "`", attribute_alias, "` is not indexed as a geo field"));
+  }
+  auto identifier = index_schema_.GetIdentifier(attribute_alias).value();
+  filter_identifiers_.insert(identifier);
+
+  // Syntax: [lon lat radius unit]
+  VMSDK_ASSIGN_OR_RETURN(double lon, ParseNumber());
+  VMSDK_ASSIGN_OR_RETURN(double lat, ParseNumber());
+  VMSDK_ASSIGN_OR_RETURN(double radius, ParseNumber());
+
+  if (lon < geohash::kLonMin || lon > geohash::kLonMax) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Geo longitude out of range: ", lon));
+  }
+  if (lat < geohash::kLatMin || lat > geohash::kLatMax) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Geo latitude out of range: ", lat,
+                     " (supported range is [-85.05, 85.05])"));
+  }
+  if (radius <= 0) {
+    return absl::InvalidArgumentError("Geo radius must be > 0");
+  }
+
+  SkipWhitespace();
+  std::string unit_str;
+  while (!IsEnd() && std::isalpha(static_cast<unsigned char>(Peek()))) {
+    unit_str.push_back(expression_[pos_++]);
+  }
+  if (unit_str.empty()) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Missing distance unit at position ", pos_));
+  }
+  VMSDK_ASSIGN_OR_RETURN(double conversion, ParseDistanceUnit(unit_str));
+
+  if (!Match(']')) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Expected `]` got `", expression_.substr(pos_, 1),
+        "`. Position: ", pos_));
+  }
+
+  auto geo_index = dynamic_cast<const indexes::Geo*>(index.value().get());
+  query_operations_ |= QueryOperations::kContainsGeo;
+  return std::make_unique<query::GeoPredicate>(
+      geo_index, attribute_alias, identifier, lon, lat, radius, conversion);
 }
 
 absl::StatusOr<std::unique_ptr<query::NumericPredicate>>
@@ -1000,7 +1074,25 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
         field_name = parsed_field;
         if (Match('[')) {
           node_count_++;
-          VMSDK_ASSIGN_OR_RETURN(predicate, ParseNumericPredicate(*field_name));
+          // The same `[...]` syntax is shared by NUMERIC and GEO fields;
+          // route on the resolved index type.
+          auto index_for_dispatch = index_schema_.GetIndex(*field_name);
+          if (index_for_dispatch.ok() &&
+              index_for_dispatch.value()->GetIndexerType() ==
+                  indexes::IndexerType::kGeo) {
+            // Negated geo predicates would require enumerating the
+            // complement of the geohash cover plus the untracked-key set,
+            // which the current EntriesFetcher does not implement. Reject
+            // at parse time to avoid surfacing as a runtime crash.
+            if (negate) {
+              return absl::InvalidArgumentError(
+                  "Negated geo predicates are not supported");
+            }
+            VMSDK_ASSIGN_OR_RETURN(predicate, ParseGeoPredicate(*field_name));
+          } else {
+            VMSDK_ASSIGN_OR_RETURN(predicate,
+                                   ParseNumericPredicate(*field_name));
+          }
           non_text = true;
         } else if (Match('{')) {
           node_count_++;

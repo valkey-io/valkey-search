@@ -16,6 +16,7 @@
 #include "absl/strings/match.h"
 #include "absl/strings/string_view.h"
 #include "src/commands/filter_parser.h"
+#include "src/indexes/geo.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
@@ -26,6 +27,7 @@
 #include "src/indexes/text/text_index.h"
 #include "src/indexes/text/text_iterator.h"
 #include "src/indexes/vector_base.h"
+#include "src/utils/geohash.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -333,6 +335,29 @@ EvaluationResult NumericPredicate::Evaluate(const double *value) const {
         (*value < end_)) ||
        (is_inclusive_end_ && *value == end_));
   return EvaluationResult(matches);
+}
+
+GeoPredicate::GeoPredicate(const indexes::Geo *index, absl::string_view alias,
+                           absl::string_view identifier, double lon, double lat,
+                           double radius, double unit_conversion_meters)
+    : Predicate(PredicateType::kGeo),
+      index_(index),
+      alias_(alias),
+      identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
+      lon_(lon),
+      lat_(lat),
+      radius_(radius),
+      unit_conversion_meters_(unit_conversion_meters) {}
+
+EvaluationResult GeoPredicate::Evaluate(Evaluator &evaluator) const {
+  return evaluator.EvaluateGeo(*this);
+}
+
+EvaluationResult GeoPredicate::Evaluate(double lon, double lat) const {
+  double distance = 0;
+  bool inside = valkey_search::geohash::DistanceIfInRadius(
+      lon_, lat_, lon, lat, radius_ * unit_conversion_meters_, &distance);
+  return EvaluationResult(inside);
 }
 
 TagPredicate::TagPredicate(const indexes::Tag *index, absl::string_view alias,

@@ -57,6 +57,18 @@ target_link_libraries(numeric PUBLIC segment_tree)
 target_link_libraries(numeric PUBLIC string_interning)
 target_link_libraries(numeric PUBLIC valkey_module)
 
+set(SRCS_GEO ${CMAKE_CURRENT_LIST_DIR}/geo.cc
+             ${CMAKE_CURRENT_LIST_DIR}/geo.h)
+
+valkey_search_add_static_library(geo "${SRCS_GEO}")
+target_include_directories(geo PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(geo PUBLIC index_base)
+target_link_libraries(geo PUBLIC rdb_serialization)
+target_link_libraries(geo PUBLIC predicate_header)
+target_link_libraries(geo PUBLIC geohash)
+target_link_libraries(geo PUBLIC string_interning)
+target_link_libraries(geo PUBLIC valkey_module)
+
 set(SRCS_UNIVERSAL_SET_FETCHER ${CMAKE_CURRENT_LIST_DIR}/universal_set_fetcher.cc
                                ${CMAKE_CURRENT_LIST_DIR}/universal_set_fetcher.h)
 

@@ -36,6 +36,7 @@
 #include "absl/synchronization/mutex.h"
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"
+#include "src/indexes/geo.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
@@ -97,6 +98,14 @@ query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(
   CHECK(key_);
   auto value = predicate.GetIndex()->GetValue(*key_);
   return predicate.Evaluate(value);
+}
+
+query::EvaluationResult PrefilterEvaluator::EvaluateGeo(
+    const query::GeoPredicate &predicate) {
+  CHECK(key_);
+  auto lonlat = predicate.GetIndex()->GetLonLat(*key_);
+  if (!lonlat.has_value()) return query::EvaluationResult(false);
+  return predicate.Evaluate((*lonlat)[0], (*lonlat)[1]);
 }
 
 query::EvaluationResult PrefilterEvaluator::EvaluateText(

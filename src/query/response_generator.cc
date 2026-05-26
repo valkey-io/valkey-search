@@ -20,6 +20,7 @@
 #include "absl/strings/string_view.h"
 #include "src/attribute_data_type.h"
 #include "src/commands/ft_search_parser.h"
+#include "src/indexes/geo.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
 #include "src/indexes/text/text_index.h"
@@ -132,6 +133,21 @@ class PredicateEvaluator : public query::Evaluator {
       return EvaluationResult(false);
     }
     return predicate.Evaluate(&out_numeric.value());
+  }
+
+  EvaluationResult EvaluateGeo(
+      const query::GeoPredicate &predicate) override {
+    auto identifier = predicate.GetRetainedIdentifier();
+    auto it = records_.find(vmsdk::ToStringView(identifier.get()));
+    if (it == records_.end()) {
+      return EvaluationResult(false);
+    }
+    auto lonlat = indexes::Geo::ParseLonLat(
+        vmsdk::ToStringView(it->second.value.get()));
+    if (!lonlat.has_value()) {
+      return EvaluationResult(false);
+    }
+    return predicate.Evaluate((*lonlat)[0], (*lonlat)[1]);
   }
 
   EvaluationResult EvaluateText(const query::TextPredicate &predicate,

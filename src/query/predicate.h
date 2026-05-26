@@ -23,6 +23,7 @@ namespace valkey_search::indexes {
 class Text;
 class Numeric;
 class Tag;
+class Geo;
 class EntriesFetcherBase;
 }  // namespace valkey_search::indexes
 
@@ -45,12 +46,14 @@ enum class PredicateType {
   kComposedOr,
   kNegate,
   kText,
+  kGeo,
   kNone
 };
 
 class TextPredicate;
 class TagPredicate;
 class NumericPredicate;
+class GeoPredicate;
 
 struct EvaluationResult {
   bool matches;
@@ -82,6 +85,7 @@ class Evaluator {
   virtual EvaluationResult EvaluateTags(const TagPredicate& predicate) = 0;
   virtual EvaluationResult EvaluateNumeric(
       const NumericPredicate& predicate) = 0;
+  virtual EvaluationResult EvaluateGeo(const GeoPredicate& predicate) = 0;
   // Access target key for proximity validation (only for Text)
   virtual const InternedStringPtr& GetTargetKey() const = 0;
   virtual bool IsPrefilterEvaluator() const { return false; }
@@ -149,6 +153,41 @@ class NumericPredicate : public Predicate {
   bool is_inclusive_start_;
   double end_;
   bool is_inclusive_end_;
+};
+
+class GeoPredicate : public Predicate {
+ public:
+  // radius is expressed in `unit_conversion_meters` units; the absolute
+  // distance in meters is radius * unit_conversion_meters. This matches
+  // valkey-core's GeoShape{conversion, radius} convention.
+  GeoPredicate(const indexes::Geo* index, absl::string_view alias,
+               absl::string_view identifier, double lon, double lat,
+               double radius, double unit_conversion_meters);
+  const indexes::Geo* GetIndex() const { return index_; }
+  absl::string_view GetAlias() const { return alias_; }
+  absl::string_view GetIdentifier() const {
+    return vmsdk::ToStringView(identifier_.get());
+  }
+  vmsdk::UniqueValkeyString GetRetainedIdentifier() const {
+    return vmsdk::RetainUniqueValkeyString(identifier_.get());
+  }
+  double GetLon() const { return lon_; }
+  double GetLat() const { return lat_; }
+  double GetRadius() const { return radius_; }
+  double GetUnitConversionMeters() const { return unit_conversion_meters_; }
+
+  EvaluationResult Evaluate(Evaluator& evaluator) const override;
+  // Direct point test against a (lon, lat) candidate.
+  EvaluationResult Evaluate(double lon, double lat) const;
+
+ private:
+  const indexes::Geo* index_;
+  std::string alias_;
+  vmsdk::UniqueValkeyString identifier_;
+  double lon_;
+  double lat_;
+  double radius_;
+  double unit_conversion_meters_;
 };
 
 class TagPredicate : public Predicate {

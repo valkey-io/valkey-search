@@ -18,6 +18,126 @@ TEXT_SCHEMA = {
     'numeric': ['price']
 }
 
+# Geo data: a small fixture of well-known points used to drive the
+# compat tests in generate_geo.py. Each row carries:
+#   - a GEO point (loc, "lon,lat")
+#   - a TAG (continent)
+#   - a NUMERIC (rating, 1..5)
+#   - a TEXT description (shared vocab so proximity / SLOP / INORDER
+#     queries are meaningful)
+# Latitudes are inside ±85.05 to satisfy both Redis Search and
+# valkey-search's Mercator strip.
+#
+# Description vocab is intentionally curated:
+#   word 0: capital | coastal | mountain
+#   word 1: city                 (always; lets SLOP queries anchor)
+#   word 2: tech | finance | film | culture
+#   word 3: hub                  (always)
+# This means a query like "capital city hub" hits every "capital ..." doc,
+# "coastal hub" SLOP=2 hits every "coastal city ... hub" doc, etc.
+GEO_POINTS = [
+    # (name, lon, lat, continent, description, rating)
+    ("sf",        -122.4194,  37.7749, "north_america", "coastal city tech hub",    5),
+    ("la",        -118.2437,  34.0522, "north_america", "coastal city film hub",    4),
+    ("nyc",        -74.0060,  40.7128, "north_america", "coastal city finance hub", 5),
+    ("seattle",   -122.3321,  47.6062, "north_america", "coastal city tech hub",    4),
+    ("denver",    -104.9903,  39.7392, "north_america", "mountain city culture hub",3),
+    ("miami",      -80.1918,  25.7617, "north_america", "coastal city culture hub", 3),
+    ("toronto",    -79.3832,  43.6532, "north_america", "mountain city finance hub",4),
+    ("mexico",     -99.1332,  19.4326, "north_america", "capital city culture hub", 4),
+    ("london",      -0.1278,  51.5074, "europe",        "capital city finance hub", 5),
+    ("paris",        2.3522,  48.8566, "europe",        "capital city culture hub", 5),
+    ("berlin",      13.4050,  52.5200, "europe",        "capital city culture hub", 4),
+    ("madrid",      -3.7038,  40.4168, "europe",        "capital city culture hub", 3),
+    ("rome",        12.4964,  41.9028, "europe",        "capital city culture hub", 4),
+    ("moscow",      37.6173,  55.7558, "europe",        "capital city finance hub", 3),
+    ("athens",      23.7275,  37.9838, "europe",        "capital city culture hub", 2),
+    ("tokyo",      139.6917,  35.6895, "asia",          "capital city tech hub",    5),
+    ("beijing",    116.4074,  39.9042, "asia",          "capital city finance hub", 4),
+    ("shanghai",   121.4737,  31.2304, "asia",          "coastal city finance hub", 4),
+    ("singapore",  103.8198,   1.3521, "asia",          "coastal city finance hub", 5),
+    ("delhi",       77.2090,  28.6139, "asia",          "capital city culture hub", 3),
+    ("dubai",       55.2708,  25.2048, "asia",          "coastal city finance hub", 4),
+    ("sydney",     151.2093, -33.8688, "oceania",       "coastal city finance hub", 4),
+    ("auckland",   174.7633, -36.8485, "oceania",       "coastal city culture hub", 3),
+    ("cairo",       31.2357,  30.0444, "africa",        "capital city culture hub", 2),
+    ("lagos",        3.3792,   6.5244, "africa",        "coastal city finance hub", 2),
+    ("nairobi",     36.8219,  -1.2921, "africa",        "capital city culture hub", 2),
+    ("capetown",    18.4241, -33.9249, "africa",        "coastal city culture hub", 3),
+    ("rio",        -43.1729, -22.9068, "south_america", "coastal city culture hub", 3),
+    ("buenos",     -58.3816, -34.6037, "south_america", "capital city culture hub", 3),
+    ("lima",       -77.0428, -12.0464, "south_america", "capital city culture hub", 2),
+]
+
+GEO_DATASETS = {
+    "world cities": {
+        "schema": {
+            "geo": ["loc"],
+            "tag": ["continent"],
+            "numeric": ["rating"],
+            "text": ["description"],
+        },
+        "points": GEO_POINTS,
+    },
+}
+
+def compute_geo_data_sets(dataset_name):
+    """Build CREATE + SETS commands for a geo dataset.
+
+    Mirrors compute_text_data_sets shape: returns
+        { dataset_name: { CREATES_KEY(kt): [...], SETS_KEY(kt): [(key, fields)] } }
+    keyed by "hash"/"json".
+    """
+    if dataset_name not in GEO_DATASETS:
+        raise ValueError(
+            f"Unknown geo dataset: {dataset_name}. Available: {list(GEO_DATASETS.keys())}"
+        )
+    cfg = GEO_DATASETS[dataset_name]
+    geo_fields = cfg["schema"].get("geo", [])
+    tag_fields = cfg["schema"].get("tag", [])
+    numeric_fields = cfg["schema"].get("numeric", [])
+    text_fields = cfg["schema"].get("text", [])
+    points = cfg["points"]
+
+    create_cmd_tmpl = {
+        "hash": "FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: SCHEMA {}",
+        "json": "FT.CREATE json_idx1 ON JSON PREFIX 1 json: SCHEMA {}",
+    }
+    hash_parts, json_parts = [], []
+    for f in geo_fields:
+        hash_parts.append(f"{f} GEO")
+        json_parts.append(f"$.{f} AS {f} GEO")
+    for f in tag_fields:
+        hash_parts.append(f"{f} TAG")
+        json_parts.append(f"$.{f} AS {f} TAG")
+    for f in numeric_fields:
+        hash_parts.append(f"{f} NUMERIC")
+        json_parts.append(f"$.{f} AS {f} NUMERIC")
+    # Match compute_text_data_sets's text-field flags so proximity/SLOP
+    # behavior is consistent with the existing text compat suite.
+    for f in text_fields:
+        hash_parts.append(f"{f} TEXT WITHSUFFIXTRIE NOSTEM")
+        json_parts.append(f"$.{f} AS {f} TEXT WITHSUFFIXTRIE NOSTEM")
+    hash_schema = " ".join(hash_parts)
+    json_schema = " ".join(json_parts)
+
+    data = {dataset_name: {}}
+    for kt in ["hash", "json"]:
+        schema = hash_schema if kt == "hash" else json_schema
+        data[dataset_name][CREATES_KEY(kt)] = [create_cmd_tmpl[kt].format(schema)]
+        docs = []
+        for (name, lon, lat, cont, desc, rating) in points:
+            fields = {
+                "loc": f"{lon},{lat}",
+                "continent": cont,
+                "rating": rating,
+                "description": desc,
+            }
+            docs.append((f"{kt}:{name}", fields))
+        data[dataset_name][SETS_KEY(kt)] = docs
+    return data
+
+
 TEXT_DATASETS = {
     'pure text': {
         'schema': TEXT_SCHEMA,
@@ -504,13 +624,20 @@ def compute_text_data_sets(dataset_name, seed=123):
 def load_data(client, data_set, key_type, data_source=None):
     # Auto-detect data source based on data_set name
     if data_source is None:
-        data_source = "text" if data_set in TEXT_DATASETS else "vector"
+        if data_set in TEXT_DATASETS:
+            data_source = "text"
+        elif data_set in GEO_DATASETS:
+            data_source = "geo"
+        else:
+            data_source = "vector"
 
     match data_source:
         case "vector":
             data = compute_data_sets()
         case "text":
             data = compute_text_data_sets(data_set)
+        case "geo":
+            data = compute_geo_data_sets(data_set)
         case _:
             raise ValueError(f"Unknown data source: {data_source}")
     load_list = data[data_set][SETS_KEY(key_type)]

@@ -287,6 +287,8 @@ class PrefilterEvaluator : public query::Evaluator {
       const query::TagPredicate& predicate) override;
   query::EvaluationResult EvaluateNumeric(
       const query::NumericPredicate& predicate) override;
+  query::EvaluationResult EvaluateGeo(
+      const query::GeoPredicate& predicate) override;
   query::EvaluationResult EvaluateText(const query::TextPredicate& predicate,
                                        bool require_positions) override;
   const valkey_search::indexes::text::TextIndex* text_index_;

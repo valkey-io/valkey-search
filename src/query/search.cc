@@ -26,6 +26,7 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "src/attribute_data_type.h"
+#include "src/indexes/geo.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
@@ -165,11 +166,12 @@ inline PredicateType EvaluateAsComposedPredicate(
 
 // Helper fn to identify if query is not fully solved after the entries fetcher
 // search, meaning it requires prefilter evaluation Prefiltering is needed when
-// query contains an AND with numeric or tag predicates.
+// query contains an AND with numeric, tag, or geo predicates.
 // It is also needed when negate is involved.
 inline bool IsUnsolvedQuery(QueryOperations query_operations) {
   return query_operations & (QueryOperations::kContainsNumeric |
-                             QueryOperations::kContainsTag) &&
+                             QueryOperations::kContainsTag |
+                             QueryOperations::kContainsGeo) &&
              query_operations & QueryOperations::kContainsAnd ||
          (query_operations & QueryOperations::kContainsNegate);
 }
@@ -334,6 +336,19 @@ size_t EvaluateFilterAsPrimary(
     auto numeric_predicate = dynamic_cast<const NumericPredicate *>(predicate);
     auto fetcher =
         numeric_predicate->GetIndex()->Search(*numeric_predicate, negate);
+    size_t size = fetcher->Size();
+    entries_fetchers.push(std::move(fetcher));
+    return size;
+  }
+  if (predicate->GetType() == PredicateType::kGeo) {
+    // Negated geo predicates are rejected at parse time
+    // (filter_parser.cc::ParseExpression). The runtime negate flag here is
+    // never expected to be true for a geo predicate; if it ever is, the
+    // safest fallback is to use the positive fetcher rather than crash —
+    // upstream evaluators will produce a wrong (subset) result, but the
+    // server stays up. The parse-time guard is the real fix.
+    auto geo_predicate = dynamic_cast<const GeoPredicate *>(predicate);
+    auto fetcher = geo_predicate->GetIndex()->Search(*geo_predicate);
     size_t size = fetcher->Size();
     entries_fetchers.push(std::move(fetcher));
     return size;

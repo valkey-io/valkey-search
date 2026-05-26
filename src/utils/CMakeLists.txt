@@ -1,3 +1,9 @@
+set(SRCS_GEOHASH ${CMAKE_CURRENT_LIST_DIR}/geohash.cc
+                 ${CMAKE_CURRENT_LIST_DIR}/geohash.h)
+
+valkey_search_add_static_library(geohash "${SRCS_GEOHASH}")
+target_include_directories(geohash PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+
 set(SRCS_PATRICIA_TREE ${CMAKE_CURRENT_LIST_DIR}/patricia_tree.h)
 
 add_library(patricia_tree INTERFACE ${SRCS_PATRICIA_TREE})

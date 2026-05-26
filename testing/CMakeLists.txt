@@ -58,7 +58,8 @@ set(COMMANDS_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/ft_info_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_create_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/commands/ft_internal_update_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/filter_test.cc)
+    ${CMAKE_CURRENT_LIST_DIR}/filter_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/geo_parser_test.cc)
 
 add_executable(commands_test ${COMMANDS_TEST_SOURCES})
 target_include_directories(commands_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})

@@ -381,6 +381,17 @@ absl::Status ParseNumeric(vmsdk::ArgsIterator &itr,
   index_proto.set_allocated_numeric_index(numeric_index_proto.release());
   return absl::OkStatus();
 }
+
+absl::Status ParseGeo(vmsdk::ArgsIterator & /*itr*/,
+                      data_model::Index &index_proto,
+                      absl::string_view /*attribute_identifier*/) {
+  // GEO has no field-specific options in this revision. The deferred
+  // GEOSHAPE / OPTIMIZED_FOR options from rfc/geospatial.md belong to a
+  // separate field type.
+  auto geo_index_proto = std::make_unique<data_model::GeoIndex>();
+  index_proto.set_allocated_geo_index(geo_index_proto.release());
+  return absl::OkStatus();
+}
 vmsdk::KeyValueParser<FTCreateTagParameters> CreateTagParser() {
   vmsdk::KeyValueParser<FTCreateTagParameters> parser;
   parser.AddParamParser(
@@ -557,6 +568,9 @@ absl::StatusOr<data_model::Attribute *> ParseAttributeArgs(
     case indexes::IndexerType::kNumeric:
       VMSDK_RETURN_IF_ERROR(
           ParseNumeric(itr, *index_proto, attribute_identifier));
+      break;
+    case indexes::IndexerType::kGeo:
+      VMSDK_RETURN_IF_ERROR(ParseGeo(itr, *index_proto, attribute_identifier));
       break;
     case indexes::IndexerType::kText:
       VMSDK_RETURN_IF_ERROR(ParseText(itr, *index_proto, schema_text_defaults));

@@ -34,6 +34,7 @@
 #include "src/attribute.h"
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"
+#include "src/indexes/geo.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
@@ -140,6 +141,9 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
     }
     case data_model::Index::IndexTypeCase::kNumericIndex: {
       return std::make_shared<indexes::Numeric>(index.numeric_index());
+    }
+    case data_model::Index::IndexTypeCase::kGeoIndex: {
+      return std::make_shared<indexes::Geo>(index.geo_index());
     }
     case data_model::Index::IndexTypeCase::kTextIndex: {
       // Create the TextIndexSchema if this is the first Text index we're seeing
@@ -664,6 +668,9 @@ void IndexSchema::ProcessAttributeMutation(
           break;
         case indexes::IndexerType::kText:
           Metrics::GetStats().ingest_field_text++;
+          break;
+        case indexes::IndexerType::kGeo:
+          Metrics::GetStats().ingest_field_geo++;
           break;
         default:
           // Shouldn't happen

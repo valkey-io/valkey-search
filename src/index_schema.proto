@@ -63,10 +63,13 @@ message Index {
     NumericIndex numeric_index = 2;
     TagIndex tag_index = 3;
     TextIndex text_index = 4;
+    GeoIndex geo_index = 5;
   }
 }
 
 message NumericIndex {}
+
+message GeoIndex {}
 
 message TagIndex {
   string separator = 1;

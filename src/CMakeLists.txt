@@ -119,6 +119,7 @@ target_link_libraries(index_schema PUBLIC rdb_serialization)
 target_link_libraries(index_schema PUBLIC vector_externalizer)
 target_link_libraries(index_schema PUBLIC index_base)
 target_link_libraries(index_schema PUBLIC numeric)
+target_link_libraries(index_schema PUBLIC geo)
 target_link_libraries(index_schema PUBLIC tag)
 target_link_libraries(index_schema PUBLIC text)
 

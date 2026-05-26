@@ -24,6 +24,7 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "src/attribute_data_type.h"
+#include "src/index_schema.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/vector_base.h"
@@ -74,6 +75,7 @@ constexpr int kMaxNumericFieldLen{256};
 constexpr int kTimeoutMs{50000};
 constexpr int kMinTimeoutMs{1};
 constexpr int kMaxTimeoutMs{60000};
+constexpr size_t kMaxTextFieldsCount{64};
 
 constexpr absl::string_view kMaxPrefixesConfig{"max-prefixes"};
 constexpr absl::string_view kMaxTagFieldLenConfig{"max-tag-field-length"};
@@ -283,21 +285,26 @@ absl::Status ParseLanguage(vmsdk::ArgsIterator &itr,
 }
 absl::Status ParseScore(vmsdk::ArgsIterator &itr,
                         data_model::IndexSchema &index_schema_proto) {
-  float score{1.0};
+  float score{IndexSchema::kDefaultDocumentScore};
   VMSDK_ASSIGN_OR_RETURN(auto res,
                          vmsdk::ParseParam(kScoreParam, false, itr, score));
-  if (res && score != 1.0) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("`", kScoreParam, "` parameter with a value `", score,
-                     "` is not supported. The only supported value is `1.0`"));
-  }
-  VMSDK_ASSIGN_OR_RETURN(res,
-                         vmsdk::IsParamKeyMatch(kScoreFieldParam, false, itr));
   if (res) {
-    return absl::InvalidArgumentError(
-        NotSupportedParamErrorMsg(kScoreFieldParam));
+    if (score < 0.0 || score > 1.0) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("`", kScoreParam, "` parameter with a value `", score,
+                       "` is not supported. The value must be between "
+                       "0.0 and 1.0"));
+    }
+    index_schema_proto.set_score(score);
   }
-  index_schema_proto.set_score(score);
+  // Parse SCORE_FIELD: the name of the document field whose numeric value
+  // is used as the document's custom score. Only one per index.
+  std::string score_field;
+  VMSDK_ASSIGN_OR_RETURN(
+      res, vmsdk::ParseParam(kScoreFieldParam, false, itr, score_field));
+  if (res) {
+    index_schema_proto.set_score_field(score_field);
+  }
   return absl::OkStatus();
 }
 vmsdk::KeyValueParser<HNSWParameters> CreateHNSWParser() {
@@ -533,6 +540,18 @@ absl::StatusOr<indexes::IndexerType> ParseIndexerType(
                              index_type_str, *indexes::kIndexerTypeByStr));
   return index_type;
 }
+
+absl::Status ValidateAttributeAlias(absl::string_view alias) {
+  for (const char ch : alias) {
+    if (kDefaultPunctuation.find(ch) != absl::string_view::npos) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Attribute alias `", alias, "` contains invalid character `",
+          std::string(1, ch), "`"));
+    }
+  }
+  return absl::OkStatus();
+}
+
 absl::StatusOr<data_model::Attribute *> ParseAttributeArgs(
     vmsdk::ArgsIterator &itr, absl::string_view attribute_identifier,
     data_model::IndexSchema &index_schema_proto,
@@ -545,6 +564,7 @@ absl::StatusOr<data_model::Attribute *> ParseAttributeArgs(
   if (!res) {
     attribute_proto->set_alias(attribute_proto->identifier());
   }
+  VMSDK_RETURN_IF_ERROR(ValidateAttributeAlias(attribute_proto->alias()));
   VMSDK_ASSIGN_OR_RETURN(auto index_type, ParseIndexerType(itr));
   auto index_proto = std::make_unique<data_model::Index>();
   switch (index_type) {
@@ -711,6 +731,7 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
         "Index schema must have at least one attribute");
   }
   std::set<absl::string_view> identifier_names;
+  size_t text_fields_count = 0;
   while (itr.HasNext()) {
     absl::string_view attribute_identifier;
     VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, attribute_identifier));
@@ -729,6 +750,14 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
         identifier_names.size() + 1, std::nullopt, max_attributes_value))
         << "The maximum number of attributes cannot exceed "
         << max_attributes_value << ".";
+    if (attribute->index().index_type_case() ==
+        data_model::Index::IndexTypeCase::kTextIndex) {
+      VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(
+          text_fields_count + 1, std::nullopt, kMaxTextFieldsCount))
+          << "The maximum number of text fields cannot exceed "
+          << kMaxTextFieldsCount << ".";
+      ++text_fields_count;
+    }
 
     identifier_names.insert(attribute->identifier());
   }

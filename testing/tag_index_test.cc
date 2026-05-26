@@ -179,23 +179,12 @@ TEST_F(TagIndexTest, PrefixSearchInvalidTagTest) {
   EXPECT_EQ(status.status().code(), absl::StatusCode::kInvalidArgument);
 }
 
-TEST_F(TagIndexTest, PrefixSearchMinLengthNotSatisfiedTest) {
-  EXPECT_TRUE(index->AddRecord("doc1", "disagree").value());
-  EXPECT_TRUE(index->AddRecord("doc2", "disappear").value());
-
-  // No results because the prefix length is less than 2.
-
+TEST_F(TagIndexTest, PrefixSearchMinLengthNotSatisfiedReturnsError) {
   // Parsing filter string from query: uses '|' separator (query language OR
   // syntax)
   std::string filter_tag_string = "d*";
-  auto parsed_tags = FilterParser::ParseQueryTags(filter_tag_string).value();
-  EXPECT_TRUE(parsed_tags.empty());
-
-  auto entries_fetcher =
-      index->Search(query::TagPredicate(index.get(), alias, identifier,
-                                        filter_tag_string, parsed_tags),
-                    false);
-  EXPECT_EQ(entries_fetcher->Size(), 0);
+  auto parsed_tags = FilterParser::ParseQueryTags(filter_tag_string);
+  EXPECT_EQ(parsed_tags.status().code(), absl::StatusCode::kInvalidArgument);
 }
 
 TEST_F(TagIndexTest, PrefixSearchMinLengthSatisfiedTest) {
@@ -402,6 +391,16 @@ TEST_F(TagIndexTest, ParseSearchTagsWhitespaceOnlyTag) {
   // Whitespace-only tags should be ignored
   auto result = ParseAndUnescapeTags("a|   |b", '|');
   EXPECT_THAT(result, testing::UnorderedElementsAre("a", "b"));
+}
+
+TEST_F(TagIndexTest, ParseSearchTagsSingleCharacterPrefixReturnsError) {
+  auto result = indexes::Tag::ParseSearchTags("b*", '|');
+  EXPECT_EQ(result.status().code(), absl::StatusCode::kInvalidArgument);
+}
+
+TEST_F(TagIndexTest, ParseSearchTagsWildcardOnlyReturnsError) {
+  auto result = indexes::Tag::ParseSearchTags("*", '|');
+  EXPECT_EQ(result.status().code(), absl::StatusCode::kInvalidArgument);
 }
 
 TEST_F(TagIndexTest, ParseSearchTagsTrailingBackslash) {

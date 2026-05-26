@@ -8,6 +8,14 @@ project(
   LANGUAGES C CXX)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake/Modules/")
 
+# Use ccache to speed up incremental builds if available
+find_program(CCACHE_FOUND ccache)
+if(CCACHE_FOUND)
+  message(STATUS "Using ccache: ${CCACHE_FOUND}")
+  set(CMAKE_C_COMPILER_LAUNCHER ccache)
+  set(CMAKE_CXX_COMPILER_LAUNCHER ccache)
+endif()
+
 # This project can only compile macOS / Linux, we can use the UNIX predefined
 # variable to test this
 if(NOT UNIX)
@@ -15,7 +23,7 @@ if(NOT UNIX)
 endif()
 
 # Options
-option(BUILD_TESTS "Build valkey-search tests" ON)
+option(BUILD_UNIT_TESTS "Build valkey-search unit tests" ON)
 option(WITH_SUBMODULES_SYSTEM "Use system submodules" OFF)
 
 set(SAN_BUILD
@@ -52,7 +60,7 @@ add_subdirectory(vmsdk)
 add_subdirectory(third_party)
 add_subdirectory(src)
 
-if(BUILD_TESTS)
+if(BUILD_UNIT_TESTS)
   message(STATUS "Building tests")
   add_subdirectory(testing)
 endif()

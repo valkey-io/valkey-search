@@ -531,7 +531,7 @@ TEST_F(ValkeySearchTest, Info) {
       "700\ningest_total_failures: 800\n"
       "index_stats\nnumber_of_indexes: 1\nnumber_of_attributes: "
       "1\ntotal_indexed_documents: 4\n"
-      "total_active_write_threads: 5\ntotal_indexing_time: 0\n"
+      "total_active_write_threads: 5\n"
       "indexing\nbackground_indexing_status: 'IN_PROGRESS'\n"
       "memory\nused_memory_bytes: 18408\nused_memory_human: '17.98KiB'\n");
 #endif

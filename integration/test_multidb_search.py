@@ -10,7 +10,7 @@ from valkey_search_test_case import (
 from valkeytestframework.conftest import resource_port_tracker
 from valkeytestframework.util import waiters
 from indexes import Index, Text, Tag, Numeric, Vector, float_to_bytes
-
+import time
 
 def verify_common_keys_results(clients, num_dbs, key_names, index):
     """Verify search isolation across all DBs for text, numeric, tag, and vector searches."""
@@ -369,10 +369,15 @@ class TestMultiDBCME(ValkeySearchClusterTestCaseDebugMode):
             node_client.execute_command('CLUSTER SETSLOT', slot, 'NODE', dest_id)
         
         # Verify isolation on destination shard
-        dest_clients = {}
+        dest_clients = create_clients(num_dbs, self.get_primary(0).create_from_server)
+
+        # Wait for destination node's search index to finish indexing migrated keys.
         for db_num in range(num_dbs):
-            client = self.get_primary(0).connect()
-            client.select(db_num)
-            dest_clients[db_num] = client
-        
+            waiters.wait_for_equal(
+                lambda db=db_num: index.info(dest_clients[db]).num_docs,
+                len(key_names),
+                timeout=10
+            )
+        # Wait longer than cluster map expiration (250ms default) plus some buffer
+        time.sleep(1)
         verify_common_keys_results(dest_clients, num_dbs, key_names, index)

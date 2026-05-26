@@ -1,5 +1,27 @@
-To generate the compatibility suite, cd to this directory and enter:
+To regenerate both compatibility pickle answer files, from the repo root run:
 
-pytest generate.py
+    ./integration/compatibility/regenerate.sh
 
-The current handling of the docker instance is flaky, sometimes it needs to be manually killed.
+Or, to regenerate just one, cd to this directory and run pytest directly:
+
+    pytest generate.py        # produces aggregate-answers.pickle.gz
+    pytest generate_text.py   # produces text-search-answers.pickle.gz
+
+Both forms require Docker. The generators spin up redis/redis-stack-server on
+port 6380 to capture reference answers; the docker handling is sometimes flaky
+and may need to be killed manually between runs.
+
+Each pickle stores a SHA256 of every .py file in this directory. The
+compatibility integration test (integration/compatibility_test.py) verifies
+that hash on load and fails if it does not match the current sources -- this
+forces a regeneration whenever generate.py, generate_text.py, data_sets.py,
+text_query_builder.py, or any other source here is edited.
+
+To add a new generator: create generate_xxx.py (subclass BaseCompatibilityTest
+with its own ANSWER_FILE_NAME) and add an entry to the GENERATORS list in
+__init__.py. regenerate.sh and compatibility_test.py both read from that list.
+
+To bypass the hash check (e.g. when generating a small pickle locally for
+quick iteration), set:
+
+    SKIP_COMPATIBILITY_HASH_CHECK=1

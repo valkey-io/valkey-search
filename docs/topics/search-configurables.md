@@ -28,6 +28,7 @@ The search module uses the Valkey configuration mechanism. Thus each of the name
 | search.local-fanout-queue-wait-threshold      | Number  |               | Queue wait threshold in milliseconds for preferring local node in fanout operations                                               |
 | search.thread-pool-wait-time-samples          | Number  |               | Sample queue size for thread pool wait time tracking                                                                              |
 | search.max-term-expansions                    | Number  |               | Maximum number of words to search in text operations (prefix, suffix, fuzzy) to limit memory usage                                |
+| search.tag-min-prefix-length                  | Number  |               | Minimum number of characters required before trailing `*` in TAG wildcard queries (length excludes `*`)                          |
 | search.search-result-buffer-multiplier        | String  |               | Multiplier for search result buffer size allocation                                                                               |
 | search.drain-mutation-queue-on-save           | Boolean |               | Drain the mutation queue before RDB save                                                                                          |
 | search.query-string-depth                     | Number  |               | Controls the depth of the query string parsing from the FT.SEARCH cmd                                                             |

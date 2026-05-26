@@ -36,20 +36,6 @@ namespace valkey_search {
 
 namespace options {
 
-/// Register the "--query-string-depth" flag. Controls the depth of the query
-/// string parsing from the FT.SEARCH cmd.
-constexpr absl::string_view kQueryStringDepthConfig{"query-string-depth"};
-constexpr uint32_t kDefaultQueryStringDepth{1000};
-constexpr uint32_t kMinimumQueryStringDepth{1};
-static auto query_string_depth =
-    config::NumberBuilder(kQueryStringDepthConfig,   // name
-                          kDefaultQueryStringDepth,  // default size
-                          kMinimumQueryStringDepth,  // min size
-                          UINT_MAX)                  // max size
-        .WithValidationCallback(CHECK_RANGE(kMinimumQueryStringDepth, UINT_MAX,
-                                            kQueryStringDepthConfig))
-        .Build();
-
 /// Register the "query-string-terms-count" flag. Controls the size of the
 /// query string parsing from the FT.SEARCH cmd. The number of nodes in the
 /// predicate tree.
@@ -65,10 +51,6 @@ static auto query_terms_count =
         .WithValidationCallback(
             CHECK_RANGE(1, kMaxQueryTermsCount, kQueryStringTermsCountConfig))
         .Build();
-
-vmsdk::config::Number& GetQueryStringDepth() {
-  return dynamic_cast<vmsdk::config::Number&>(*query_string_depth);
-}
 
 vmsdk::config::Number& GetQueryStringTermsCount() {
   return dynamic_cast<vmsdk::config::Number&>(*query_terms_count);
@@ -432,6 +414,7 @@ absl::StatusOr<FilterParseResults> FilterParser::Parse() {
   VMSDK_ASSIGN_OR_RETURN(auto is_match_all_expression, IsMatchAllExpression());
   FilterParseResults results;
   if (is_match_all_expression) {
+    results.is_match_all = true;
     return results;
   }
   filter_identifiers_.clear();

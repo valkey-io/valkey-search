@@ -247,6 +247,24 @@ TEST_F(SchemaManagerTest, TestOnFlushDB) {
   }
 }
 
+TEST_F(SchemaManagerTest, TestOnShutdownCallback) {
+  for (bool coordinator_enabled : {true, false}) {
+    if (coordinator_enabled) {
+      coordinator::MetadataManager::InitInstance(
+          std::move(test_metadata_manager_));
+    }
+    SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+        &fake_ctx_, []() {}, nullptr, coordinator_enabled));
+    VMSDK_EXPECT_OK(SchemaManager::Instance()
+                        .CreateIndexSchema(&fake_ctx_, test_index_schema_proto_)
+                        .status());
+    EXPECT_EQ(SchemaManager::Instance().GetNumberOfIndexSchemas(), 1);
+    ValkeyModuleEvent eid;
+    SchemaManager::Instance().OnShutdownCallback(&fake_ctx_, eid, 0, nullptr);
+    EXPECT_EQ(SchemaManager::Instance().GetNumberOfIndexSchemas(), 0);
+  }
+}
+
 TEST_F(SchemaManagerTest, TestSaveIndexesBeforeRDB) {
   ON_CALL(*kMockValkeyModule, GetContextFromIO(testing::_))
       .WillByDefault(testing::Return(&fake_ctx_));

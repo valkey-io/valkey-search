@@ -1098,6 +1098,11 @@ inline int TestValkeyModule_GetContextFlags(ValkeyModuleCtx *ctx) {
   return kMockValkeyModule->GetContextFlags(ctx);
 }
 
+inline void TestValkeyModule_Yield(ValkeyModuleCtx *ctx, int flags,
+                                   const char *busy_reply) {
+  // No-op: in tests there is no server to yield to.
+}
+
 inline uint64_t TestValkeyModule_LoadUnsigned(ValkeyModuleIO *io) {
   return kMockValkeyModule->LoadUnsigned(io);
 }
@@ -1569,6 +1574,7 @@ inline void TestValkeyModule_Init() {
   ValkeyModule_GetClusterInfo = &TestValkeyModule_GetClusterInfo;
   ValkeyModule_GetMyShardID = &TestValkeyModule_GetMyShardID;
   ValkeyModule_GetContextFlags = &TestValkeyModule_GetContextFlags;
+  ValkeyModule_Yield = &TestValkeyModule_Yield;
   ValkeyModule_LoadUnsigned = &TestValkeyModule_LoadUnsigned;
   ValkeyModule_LoadSigned = &TestValkeyModule_LoadSigned;
   ValkeyModule_LoadDouble = &TestValkeyModule_LoadDouble;

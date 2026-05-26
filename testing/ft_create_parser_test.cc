@@ -60,7 +60,7 @@ struct FTCreateParameters {
   data_model::AttributeDataType on_data_type{
       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH};
   std::vector<absl::string_view> prefixes;
-  float score{1.0};
+  float score{1.0f};
   absl::string_view score_field;
   absl::string_view payload_field;
   bool skip_initial_scan{false};
@@ -73,6 +73,7 @@ struct FTCreateParserTestCase {
   bool success{false};
   absl::string_view command_str;
   bool too_many_attributes{false};
+  int text_field_count{0};
   std::vector<HNSWParameters> hnsw_parameters;
   std::vector<FlatParameters> flat_parameters;
   std::vector<FTCreateTagParameters> tag_parameters;
@@ -97,6 +98,13 @@ void VerifyVectorParams(const data_model::VectorIndex &vector_index_proto,
 TEST_P(FTCreateParserTest, ParseParams) {
   const FTCreateParserTestCase &test_case = GetParam();
   auto command_str = std::string(test_case.command_str);
+  if (test_case.text_field_count > 0) {
+    command_str = "idx1 on HASH SCHEMA";
+    for (int i = 0; i < test_case.text_field_count; ++i) {
+      absl::StrAppend(&command_str, " text_field", std::to_string(i + 1),
+                      " TEXT");
+    }
+  }
   if (test_case.too_many_attributes) {
     for (int i = 0; i < 10000; ++i) {
       absl::StrAppend(&command_str, " hash_field", std::to_string(i + 2),
@@ -125,6 +133,15 @@ TEST_P(FTCreateParserTest, ParseParams) {
               test_case.expected.attributes.size());
     EXPECT_EQ(index_schema_proto->skip_initial_scan(),
               test_case.expected.skip_initial_scan);
+    if (!test_case.expected.score_field.empty()) {
+      EXPECT_TRUE(index_schema_proto->has_score_field());
+      EXPECT_EQ(index_schema_proto->score_field(),
+                test_case.expected.score_field);
+    }
+    if (test_case.expected.score != 1.0f) {
+      EXPECT_TRUE(index_schema_proto->has_score());
+      EXPECT_FLOAT_EQ(index_schema_proto->score(), test_case.expected.score);
+    }
 
     // Verify schema-level text parameters if we have text fields
     bool has_text_fields = false;
@@ -676,6 +693,55 @@ INSTANTIATE_TEST_SUITE_P(
                           }}},
          },
          {
+            .test_name = "score_field_supported",
+            .success = true,
+            .command_str =
+                " idx1 SCORE_FIELD my_score SCHEMA hash_field1 vector hnsw "
+                "6 TYPE FLOAT32 DIM 5 DISTANCE_METRIC IP ",
+            .hnsw_parameters =
+                {{
+                    {
+                        .dimensions = 5,
+                        .distance_metric = data_model::DISTANCE_METRIC_IP,
+                        .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
+                    },
+                }},
+            .expected =
+                {.index_schema_name = "idx1",
+                .score_field = "my_score",
+                .attributes =
+                    {{
+                        .identifier = "hash_field1",
+                        .attribute_alias = "hash_field1",
+                        .indexer_type = indexes::IndexerType::kHNSW,
+                    }}},
+        },
+         {
+            .test_name = "score_preserved_with_skipinitialscan",
+            .success = true,
+            .command_str =
+                " idx1 SCORE 0.5 SKIPINITIALSCAN SCHEMA hash_field1 vector hnsw "
+                "6 TYPE FLOAT32 DIM 5 DISTANCE_METRIC IP ",
+            .hnsw_parameters =
+                {{
+                    {
+                        .dimensions = 5,
+                        .distance_metric = data_model::DISTANCE_METRIC_IP,
+                        .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
+                    },
+                }},
+            .expected =
+                {.index_schema_name = "idx1",
+                .score = 0.5,
+                .skip_initial_scan = true,
+                .attributes =
+                    {{
+                        .identifier = "hash_field1",
+                        .attribute_alias = "hash_field1",
+                        .indexer_type = indexes::IndexerType::kHNSW,
+                    }}},
+        },
+         {
              .test_name = "invalid_separator",
              .success = false,
              .command_str =
@@ -803,6 +869,96 @@ INSTANTIATE_TEST_SUITE_P(
              .expected_error_message =
                  "Invalid field type for field `hash_field1`: Unknown argument "
                  "`asa`",
+         },
+         {
+             .test_name = "invalid_alias_with_closing_bracket",
+             .success = false,
+             .command_str =
+                 "idx1 on HASH SChema hash_field1 as hash_field]1 numeric",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Attribute alias "
+                 "`hash_field]1` contains invalid character `]`",
+         },
+         {
+             .test_name = "invalid_alias_with_closing_brace",
+             .success = false,
+             .command_str =
+                 "idx1 on HASH SChema hash_field1 as hash_field}1 numeric",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Attribute alias "
+                 "`hash_field}1` contains invalid character `}`",
+         },
+         {
+             .test_name = "invalid_alias_with_opening_brace",
+             .success = false,
+             .command_str =
+                 "idx1 on HASH SChema hash_field1 as hash_field{1 numeric",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Attribute alias "
+                 "`hash_field{1` contains invalid character `{`",
+         },
+         {
+             .test_name = "invalid_alias_with_opening_bracket",
+             .success = false,
+             .command_str =
+                 "idx1 on HASH SChema hash_field1 as hash_field[1 numeric",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Attribute alias "
+                 "`hash_field[1` contains invalid character `[`",
+         },
+         {
+             .test_name = "invalid_alias_with_colon",
+             .success = false,
+             .command_str =
+                 "idx1 on HASH SChema hash_field1 as hash_field:1 numeric",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Attribute alias "
+                 "`hash_field:1` contains invalid character `:`",
+         },
+         {
+             .test_name = "invalid_alias_with_semicolon",
+             .success = false,
+             .command_str =
+                 "idx1 on HASH SChema hash_field1 as hash_field;1 numeric",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Attribute alias "
+                 "`hash_field;1` contains invalid character `;`",
+         },
+         {
+             .test_name = "invalid_alias_with_dollar_sign",
+             .success = false,
+             .command_str =
+                 "idx1 on HASH SChema hash_field1 as hash_field$1 numeric",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Attribute alias "
+                 "`hash_field$1` contains invalid character `$`",
+         },
+         {
+             .test_name = "invalid_alias_with_comma",
+             .success = false,
+             .command_str =
+                 "idx1 on HASH SChema hash_field1 as hash_field,1 numeric",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Attribute alias "
+                 "`hash_field,1` contains invalid character `,`",
+         },
+         {
+             .test_name = "invalid_alias_with_exclamation_mark",
+             .success = false,
+             .command_str =
+                 "idx1 on HASH SChema hash_field1 as hash_field!1 numeric",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Attribute alias "
+                 "`hash_field!1` contains invalid character `!`",
+         },
+         {
+             .test_name = "invalid_alias_with_dash",
+             .success = false,
+             .command_str =
+                 "idx1 on HASH SChema hash_field1 as hash-field1 numeric",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Attribute alias "
+                 "`hash-field1` contains invalid character `-`",
          },
          {.test_name = "invalid_negative_prefix_cnt",
           .success = false,
@@ -993,18 +1149,20 @@ INSTANTIATE_TEST_SUITE_P(
                  " idx1 SCORE 2 SChema hash_field1 vector hnsw 6 TYPE "
                  "FLOAT321 DIM 5 DISTANCE_METRIC IP ",
              .expected_error_message = "`SCORE` parameter with a value `2` is "
-                                       "not supported. The only "
-                                       "supported value is `1.0`",
-         },
+                          "not supported. The value must be between "
+                          "0.0 and 1.0",
+         }, 
          {
-             .test_name = "unexpected_score_field",
-             .success = false,
-             .command_str =
-                 " idx1 SCORE_FIELD SChema hash_field1 vector hnsw 6 TYPE "
-                 "FLOAT321 DIM 5 DISTANCE_METRIC IP ",
-             .expected_error_message =
-                 "The parameter `SCORE_FIELD` is not supported",
-         },
+            .test_name = "invalid_negative_score_parameter_value",
+            .success = false,
+            .command_str =
+                " idx1 SCORE -0.5 SChema hash_field1 vector hnsw 6 TYPE "
+                "FLOAT32 DIM 5 DISTANCE_METRIC IP ",
+            .expected_error_message =
+                "`SCORE` parameter with a value `-0.5` is "
+                "not supported. The value must be between "
+                "0.0 and 1.0",
+        },
          {
              .test_name = "invalid_parameter_before_schema",
              .success = false,
@@ -1627,6 +1785,15 @@ INSTANTIATE_TEST_SUITE_P(
              .success = false,
              .command_str = "idx1 on HASH SCHEMA text_field TEXT UNKNOWN_PARAM value",
              .expected_error_message = "Invalid field type for field `UNKNOWN_PARAM`: Unknown argument `value`",
+         },
+         {
+             .test_name = "invalid_text_fields_above_64",
+             .success = false,
+             .command_str = "",
+             .text_field_count = 65,
+             .expected_error_message =
+                 "Invalid range: Value above maximum; The maximum number of "
+                 "text fields cannot exceed 64.",
          },
          {
              .test_name = "text_case_insensitive_parameters",

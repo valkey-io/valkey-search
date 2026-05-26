@@ -195,7 +195,7 @@ class TextPredicate : public Predicate {
   virtual std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const std::shared_ptr<indexes::text::TextIndex>& text_index,
       FieldMaskPredicate field_mask, bool require_positions) const = 0;
-  virtual size_t EstimateSize() const = 0;
+  virtual size_t EstimateSize(bool is_vec_query) const = 0;
 };
 
 class TermPredicate : public TextPredicate {
@@ -219,7 +219,7 @@ class TermPredicate : public TextPredicate {
       FieldMaskPredicate field_mask, bool require_positions) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   bool IsExact() const { return exact_; }
-  size_t EstimateSize() const override;
+  size_t EstimateSize(bool is_vec_query) const override;
 
  private:
   std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
@@ -248,7 +248,7 @@ class PrefixPredicate : public TextPredicate {
       const std::shared_ptr<indexes::text::TextIndex>& text_index,
       FieldMaskPredicate field_mask, bool require_positions) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
-  size_t EstimateSize() const override;
+  size_t EstimateSize(bool is_vec_query) const override;
 
  private:
   std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
@@ -276,7 +276,7 @@ class SuffixPredicate : public TextPredicate {
       const std::shared_ptr<indexes::text::TextIndex>& text_index,
       FieldMaskPredicate field_mask, bool require_positions) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
-  size_t EstimateSize() const override;
+  size_t EstimateSize(bool is_vec_query) const override;
 
  private:
   std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
@@ -304,7 +304,7 @@ class InfixPredicate : public TextPredicate {
       const std::shared_ptr<indexes::text::TextIndex>& text_index,
       FieldMaskPredicate field_mask, bool require_positions) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
-  size_t EstimateSize() const override;
+  size_t EstimateSize(bool is_vec_query) const override;
 
  private:
   std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
@@ -333,7 +333,7 @@ class FuzzyPredicate : public TextPredicate {
       const std::shared_ptr<indexes::text::TextIndex>& text_index,
       FieldMaskPredicate field_mask, bool require_positions) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
-  size_t EstimateSize() const override;
+  size_t EstimateSize(bool is_vec_query) const override;
 
  private:
   std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;

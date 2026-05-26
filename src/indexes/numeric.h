@@ -116,6 +116,8 @@ class Numeric : public IndexBase {
 
   std::unique_ptr<data_model::Index> ToProto() const override;
 
+  uint32_t GetMutationWeight() const override;
+
   const double* GetValue(const InternedStringPtr& key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
   using BTreeNumericIndex = BTreeNumeric<InternedStringPtr>;

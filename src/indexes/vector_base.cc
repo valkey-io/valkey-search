@@ -42,6 +42,7 @@
 #include "src/query/predicate.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
+#include "src/valkey_search_options.h"
 #include "src/vector_externalizer.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "third_party/hnswlib/space_ip.h"
@@ -467,11 +468,11 @@ absl::Status VectorBase::LoadTrackedKeys(
           .magnitude = tracked_key_metadata.magnitude()}});
     key_by_internal_id_.insert(
         {tracked_key_metadata.internal_id(), interned_key});
-    inc_id_ = std::max(
-        inc_id_, static_cast<uint64_t>(tracked_key_metadata.internal_id()));
     ExternalizeVector(ctx, attribute_data_type, tracked_key_metadata.key(),
                       attribute_identifier_);
   }
+  // Use max label from label_lookup_
+  inc_id_ = GetMaxInternalLabel();
   ++inc_id_;
   return absl::OkStatus();
 }
@@ -487,6 +488,10 @@ std::unique_ptr<data_model::Index> VectorBase::ToProto() const {
   ToProtoImpl(vector_index.get());
   index_proto->set_allocated_vector_index(vector_index.release());
   return index_proto;
+}
+
+uint32_t VectorBase::GetMutationWeight() const {
+  return options::GetMutationWeightVector().GetValue();
 }
 
 absl::StatusOr<std::pair<float, hnswlib::labeltype>>

@@ -56,6 +56,12 @@ const config::Boolean& GetSkipCorruptedInternalUpdateEntries();
 /// Return the log level
 config::Enum& GetLogLevel();
 
+/// Return the configuration entry for HNSW allow_replace_deleted flag
+const config::Boolean& GetHNSWAllowReplaceDeleted();
+
+/// Return a mutable reference for testing
+config::Boolean& GetHNSWAllowReplaceDeletedMutable();
+
 /// Reset the state of the options (mainly needed for testing)
 absl::Status Reset();
 
@@ -85,6 +91,9 @@ config::Number& GetThreadPoolWaitTimeSamples();
 /// suffix, fuzzy)
 config::Number& GetMaxTermExpansions();
 
+/// Return the minimum TAG prefix length for wildcard queries (excluding '*')
+config::Number& GetTagMinPrefixLength();
+
 /// Return the search result buffer multiplier value
 double GetSearchResultBufferMultiplier();
 
@@ -103,6 +112,9 @@ config::Number& GetFanoutDataUniformity();
 /// Return the minimum index size for applying fanout uniformity logic
 config::Number& GetFanoutUniformityMinIndexSize();
 
+/// Return the configuration entry for max mutation queue size during restore
+config::Number& GetMaxMutationQueueSizeOnRestore();
+
 /// Return the configuration entry for RDB write v2
 const config::Boolean& GetRdbWriteV2();
 
@@ -114,8 +126,25 @@ config::Number& GetAsyncFanoutThreshold();
 
 /// Return the pool size for per-word Postings bucket mutexes
 config::Number& GetRaxTargetMutexPoolSize();
+
 /// Return the maximum number of keys to accumulate before content fetching
 config::Number& GetMaxNonVectorSearchResultsFetched();
+
+/// Return the mutation weight for vector index types
+config::Number& GetMutationWeightVector();
+
+/// Return the mutation weight for text index types
+config::Number& GetMutationWeightText();
+
+/// Return the mutation weight for numeric index types
+config::Number& GetMutationWeightNumeric();
+
+/// Return the mutation weight for tag index types
+config::Number& GetMutationWeightTag();
+
+/// Return the recursion depth of the query string from FT.SEARCH and
+/// FT.AGGREGATE commands
+config::Number& GetQueryStringDepth();
 
 }  // namespace options
 }  // namespace valkey_search

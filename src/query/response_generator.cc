@@ -27,6 +27,7 @@
 #include "src/metrics.h"
 #include "src/query/predicate.h"
 #include "src/query/search.h"
+#include "src/valkey_search.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -166,18 +167,15 @@ bool VerifyFilter(const query::SearchParameters &parameters,
   // For text predicates, evaluate using the text index instead of raw data.
   if (parameters.index_schema &&
       parameters.index_schema->GetTextIndexSchema()) {
-    // TODO: Wait for any in-flight indexing operations to complete before
-    // acquiring the lock, ensuring we evaluate against the latest index state.
-    return parameters.index_schema->GetTextIndexSchema()->WithPerKeyTextIndexes(
-        [&](const auto &per_key_indexes) {
-          PredicateEvaluator evaluator(
-              records,
-              valkey_search::indexes::text::TextIndexSchema::LookupTextIndex(
-                  per_key_indexes, n.external_id),
-              n.external_id, parameters.filter_parse_results.query_operations);
-          EvaluationResult result = predicate->Evaluate(evaluator);
-          return result.matches;
-        });
+    const indexes::text::TextIndex *text_index =
+        parameters.index_schema->GetTextIndexSchema()->GetPerKeyTextIndex(
+            n.external_id, true);
+
+    PredicateEvaluator evaluator(
+        records, text_index, n.external_id,
+        parameters.filter_parse_results.query_operations);
+    EvaluationResult result = predicate->Evaluate(evaluator);
+    return result.matches;
   }
   PredicateEvaluator evaluator(
       records, parameters.filter_parse_results.query_operations);
@@ -185,12 +183,23 @@ bool VerifyFilter(const query::SearchParameters &parameters,
   return result.matches;
 }
 
+// Check if this node owns the slot for the given key in cluster mode
+bool CheckSlotOwnership(ValkeyModuleCtx *ctx, absl::string_view key) {
+  // In standalone mode, we own all keys.
+  if (!ValkeySearch::Instance().IsCluster()) {
+    return true;
+  }
+  auto cluster_map = ValkeySearch::Instance().GetOrRefreshClusterMap(ctx);
+  auto key_str = vmsdk::MakeUniqueValkeyString(key);
+  unsigned int slot = ValkeyModule_ClusterKeySlot(key_str.get());
+  return cluster_map->IOwnSlot(static_cast<uint16_t>(slot));
+}
+
 absl::StatusOr<RecordsMap> GetContentNoReturnJson(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
     const query::SearchParameters &parameters,
     const indexes::Neighbor &neighbor,
-    const std::optional<std::string> &vector_identifier,
-    const std::optional<query::SortByParameter> &sortby_parameter) {
+    const std::optional<std::string> &vector_identifier) {
   auto key = neighbor.external_id->Str();
   absl::flat_hash_set<absl::string_view> identifiers;
   identifiers.insert(kJsonRootElementQuery);
@@ -201,11 +210,12 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
   vmsdk::ValkeySelectDbGuard select_db_guard(ctx, parameters.db_num);
   // Resolve sortby field to actual identifier (e.g., "n1" -> "$.n1" for JSON)
   std::string sortby_identifier;
-  if (sortby_parameter.has_value()) {
-    auto schema_identifier =
-        parameters.index_schema->GetIdentifier(sortby_parameter->field);
-    sortby_identifier =
-        schema_identifier.ok() ? *schema_identifier : sortby_parameter->field;
+  if (parameters.sortby_parameter.has_value()) {
+    auto schema_identifier = parameters.index_schema->GetIdentifier(
+        parameters.sortby_parameter->field);
+    sortby_identifier = schema_identifier.ok()
+                            ? *schema_identifier
+                            : parameters.sortby_parameter->field;
     identifiers.insert(sortby_identifier);
   }
   auto key_str = vmsdk::MakeUniqueValkeyString(key);
@@ -224,15 +234,15 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
   if (parameters.filter_parse_results.filter_identifiers.empty()) {
     // When returning early, we need to rename the sortby field from the
     // resolved identifier (e.g., "$.n1") back to the alias (e.g., "n1")
-    if (sortby_parameter.has_value() &&
-        sortby_identifier != sortby_parameter->field) {
+    if (parameters.sortby_parameter.has_value() &&
+        sortby_identifier != parameters.sortby_parameter->field) {
       auto itr = content.find(sortby_identifier);
       if (itr != content.end()) {
         auto value = std::move(itr->second);
         content.erase(itr);
-        content.emplace(sortby_parameter->field,
+        content.emplace(parameters.sortby_parameter->field,
                         RecordsMapValue(vmsdk::MakeUniqueValkeyString(
-                                            sortby_parameter->field),
+                                            parameters.sortby_parameter->field),
                                         std::move(value.value)));
       }
     }
@@ -250,15 +260,16 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
           kJsonRootElementQueryPtr.get(),
           std::move(content.find(kJsonRootElementQuery)->second.value)));
 
-  if (sortby_parameter.has_value()) {
+  if (parameters.sortby_parameter.has_value()) {
     auto itr = content.find(sortby_identifier);
     if (itr != content.end()) {
       // Use the alias (sortby_parameter->field) as the key in the response,
       // not the resolved identifier
-      return_content.emplace(sortby_parameter->field,
-                             RecordsMapValue(vmsdk::MakeUniqueValkeyString(
-                                                 sortby_parameter->field),
-                                             std::move(itr->second.value)));
+      return_content.emplace(
+          parameters.sortby_parameter->field,
+          RecordsMapValue(
+              vmsdk::MakeUniqueValkeyString(parameters.sortby_parameter->field),
+              std::move(itr->second.value)));
     }
   }
   return return_content;
@@ -268,15 +279,13 @@ absl::StatusOr<RecordsMap> GetContent(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
     const query::SearchParameters &parameters,
     const indexes::Neighbor &neighbor,
-    const std::optional<std::string> &vector_identifier,
-    const std::optional<query::SortByParameter> &sortby_parameter) {
+    const std::optional<std::string> &vector_identifier) {
   auto key = neighbor.external_id->Str();
   if (attribute_data_type.ToProto() ==
           data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON &&
       parameters.return_attributes.empty()) {
     return GetContentNoReturnJson(ctx, attribute_data_type, parameters,
-                                  neighbor, vector_identifier,
-                                  sortby_parameter);
+                                  neighbor, vector_identifier);
   }
   absl::flat_hash_set<absl::string_view> identifiers;
   for (const auto &return_attribute : parameters.return_attributes) {
@@ -293,11 +302,12 @@ absl::StatusOr<RecordsMap> GetContent(
   // when return_attributes is specified, because when return_attributes is
   // empty, all fields are fetched anyway.
   std::string sortby_identifier;
-  if (sortby_parameter.has_value()) {
-    auto schema_identifier =
-        parameters.index_schema->GetIdentifier(sortby_parameter->field);
-    sortby_identifier =
-        schema_identifier.ok() ? *schema_identifier : sortby_parameter->field;
+  if (parameters.sortby_parameter.has_value()) {
+    auto schema_identifier = parameters.index_schema->GetIdentifier(
+        parameters.sortby_parameter->field);
+    sortby_identifier = schema_identifier.ok()
+                            ? *schema_identifier
+                            : parameters.sortby_parameter->field;
     // Only add sortby to identifiers when return_attributes is not empty
     if (!parameters.return_attributes.empty()) {
       identifiers.insert(sortby_identifier);
@@ -342,13 +352,13 @@ absl::StatusOr<RecordsMap> GetContent(
 
   // Add sortby field to return_content for sorting, even when return_attributes
   // is not empty. Use the alias (sortby_parameter->field) as the key.
-  if (sortby_parameter.has_value()) {
+  if (parameters.sortby_parameter.has_value()) {
     auto itr = content.find(sortby_identifier);
     if (itr != content.end()) {
       return_content.emplace(
-          sortby_parameter->field,
+          parameters.sortby_parameter->field,
           RecordsMapValue(
-              vmsdk::MakeUniqueValkeyString(sortby_parameter->field),
+              vmsdk::MakeUniqueValkeyString(parameters.sortby_parameter->field),
               vmsdk::RetainUniqueValkeyString(itr->second.value.get())));
     }
   }
@@ -364,20 +374,26 @@ void ProcessNeighborsForReply(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
     std::vector<indexes::Neighbor> &neighbors,
     const query::SearchParameters &parameters,
-    const std::optional<std::string> &vector_identifier,
-    const std::optional<query::SortByParameter> &sortby_parameter) {
+    const std::optional<std::string> &vector_identifier) {
   const auto max_content_size =
       options::GetMaxSearchResultRecordSize().GetValue();
   const auto max_content_fields =
       options::GetMaxSearchResultFieldsCount().GetValue();
   for (auto &neighbor : neighbors) {
-    // neighbors which were added from remote nodes already have attribute
-    // content
+    // Remote neighbors (from fanout) always have attribute_contents populated,
+    // so they skip this entire block. Only local neighbors without content
+    // reach the slot ownership check below.
     if (neighbor.attribute_contents.has_value()) {
       continue;
     }
+    // Check slot ownership for local neighbors before fetching content.
+    // Remote neighbors are never checked since they always have content.
+    if (!CheckSlotOwnership(ctx, neighbor.external_id->Str())) {
+      // Skip this neighbor - we don't own its slot.
+      continue;
+    }
     auto content = GetContent(ctx, attribute_data_type, parameters, neighbor,
-                              vector_identifier, sortby_parameter);
+                              vector_identifier);
     if (!content.ok()) {
       continue;
     }

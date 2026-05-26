@@ -65,23 +65,7 @@ def run_pausepoint_reset(type, node0, node1):
 
 class TestFTDropindexConsistency(ValkeySearchClusterTestCaseDebugMode):
 
-    def test_dropindex_success(self):
-        cluster: ValkeyCluster = self.new_cluster_client()
-        node0: Valkey = self.new_client_for_primary(0)
-        index_name = "index1"
-
-        assert node0.execute_command(
-            "FT.CREATE", index_name,
-            "ON", "HASH",
-            "PREFIX", "1", "doc:",
-            "SCHEMA", "price", "NUMERIC"
-        ) == b"OK"
-
-        assert node0.execute_command(
-            "FT.DROPINDEX", index_name
-        ) == b"OK"
-
-    def test_duplicate_dropindex(self):
+    def test_dropindex(self):
         cluster: ValkeyCluster = self.new_cluster_client()
         node0: Valkey = self.new_client_for_primary(0)
         index_name = "index1"

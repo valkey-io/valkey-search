@@ -21,6 +21,7 @@
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
+#include "absl/time/clock.h"
 #include "absl/time/time.h"
 #include "src/attribute_data_type.h"
 #include "src/coordinator/client_pool.h"
@@ -325,6 +326,47 @@ static vmsdk::info_field::Integer rdb_save_failure_cnt(
       return Metrics::GetStats().rdb_save_failure_cnt;
     }));
 
+static vmsdk::info_field::Integer rdb_restore_in_progress(
+    "rdb", "rdb_restore_in_progress",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().rdb_restore_in_progress ? 1 : 0;
+    }));
+
+static vmsdk::info_field::Float rdb_indexes_restored_percent(
+    "rdb", "rdb_indexes_restored_percent",
+    vmsdk::info_field::FloatBuilder().Dev().Computed([]() -> double {
+      auto completed = Metrics::GetStats().rdb_restore_completed_indexes.load();
+      auto total = Metrics::GetStats().rdb_restore_total_indexes.load();
+      if (total == 0) return 100.0;
+      return (completed * 100.0) / total;
+    }));
+
+static vmsdk::info_field::Float rdb_current_index_keys_restored_percent(
+    "rdb", "rdb_current_index_keys_restored_percent",
+    vmsdk::info_field::FloatBuilder().Dev().Computed([]() -> double {
+      auto total =
+          Metrics::GetStats().rdb_restore_current_index_keys_total.load();
+      auto loaded =
+          Metrics::GetStats().rdb_restore_current_index_keys_loaded.load();
+      if (total == 0) return 100.0;
+      return (loaded * 100.0) / total;
+    }));
+
+static vmsdk::info_field::Integer rdb_restore_backpressure_wait_cycles(
+    "rdb", "rdb_restore_backpressure_wait_cycles",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().rdb_restore_backpressure_wait_cycles;
+    }));
+
+static vmsdk::info_field::Integer rdb_last_restore_aux_load_duration_ms(
+    "rdb", "rdb_last_restore_aux_load_duration_ms",
+    vmsdk::info_field::IntegerBuilder()
+        .Dev()
+        .Units(vmsdk::info_field::Units::kMilliSeconds)
+        .Computed([]() -> long long {
+          return Metrics::GetStats().rdb_last_restore_aux_load_duration_ms;
+        }));
+
 static vmsdk::info_field::Integer ft_internal_update_parse_failures_cnt(
     "coordinator", "ft_internal_update_parse_failures_cnt",
     vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
@@ -385,8 +427,8 @@ static vmsdk::info_field::Integer inline_filtering_requests_count(
       return Metrics::GetStats().query_inline_filtering_requests_cnt;
     }));
 
-static vmsdk::info_field::Integer query_prefiltering_requests_cnt(
-    "query", "query_prefiltering_requests_cnt",
+static vmsdk::info_field::Integer prefiltering_requests_count(
+    "query", "prefiltering_requests_count",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
       return Metrics::GetStats().query_prefiltering_requests_cnt;
     }));
@@ -1125,7 +1167,7 @@ absl::Status ValkeySearch::Startup(ValkeyModuleCtx *ctx) {
       options::GetThreadPoolWaitTimeSamples().GetValue());
   writer_thread_pool_->StartWorkers();
   utility_thread_pool_ = std::make_unique<vmsdk::ThreadPool>(
-      "utility-worker-", options::GetUtilityThreadCount().GetValue(),
+      "util-worker-", options::GetUtilityThreadCount().GetValue(),
       options::GetThreadPoolWaitTimeSamples().GetValue());
   utility_thread_pool_->StartWorkers();
 

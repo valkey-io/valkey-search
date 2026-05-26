@@ -2383,7 +2383,7 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         
         def get_metrics():
             info = client.info("search")
-            return (int(info.get("search_query_prefiltering_requests_cnt", 0)),
+            return (int(info.get("search_prefiltering_requests_count", 0)),
                     int(info.get("search_inline_filtering_requests_count", 0)))
         
         # Test 1: TERM "rare" (1 doc) → should pre-filter

@@ -2,12 +2,27 @@
 Utility functions and helper classes for Valkey Search integration tests.
 """
 
+import functools
 import threading
+import time
 from typing import Dict, Any, Optional
 from valkey.client import Valkey
 from valkey import ResponseError
 from ft_info_parser import FTInfoParser
 from valkeytestframework.util import waiters
+
+
+def wait_for_background_tasks(seconds=10):
+    """Decorator that adds a sleep after the test body to let runByMain tasks
+    complete before the fixture teardown shuts down the server."""
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            result = func(*args, **kwargs)
+            time.sleep(seconds)
+            return result
+        return wrapper
+    return decorator
 
 def run_in_thread(func):
     """Run func in thread, return (thread, result, error) for later inspection."""
@@ -43,6 +58,13 @@ def find_local_key(client: Valkey, prefix: str = "key:") -> str:
                     return key
     raise RuntimeError(f"No key found for node on port {node_port}")
 
+def wait_for_pausepoint(client, pausepoint_name, timeout=10):
+    """Wait for a pausepoint to be hit by at least one thread."""
+    waiters.wait_for_true(
+        lambda: client.execute_command("FT._DEBUG", "PAUSEPOINT", "TEST", pausepoint_name) > 0,
+        timeout=timeout
+    )
+    return True
 
 class IndexingTestHelper:
     """Helper class containing common functions for testing indexing operations."""

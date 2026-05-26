@@ -14,6 +14,7 @@
 
 #include "absl/strings/str_cat.h"
 #include "src/utils/scanner.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -24,6 +25,8 @@ namespace valkey_search {
 namespace expr {
 
 using ExprPtr = std::unique_ptr<Expression>;
+constexpr absl::string_view kInvalidOrMissingExpression{
+    "Invalid or missing expression"};
 
 struct Constant : Expression {
   Constant(std::string constant) : constant_(std::move(constant)) {}
@@ -280,7 +283,14 @@ bool IsIdentifierChar(int c) {
   return c != EOF && (std::isalnum(c) || c == '_');
 }
 
+struct DepthGuard {
+  int& depth;
+  DepthGuard(int& d) : depth(d) { ++depth; }
+  ~DepthGuard() { --depth; }
+};
+
 struct Compiler {
+  int depth_ = 0;
   utils::Scanner s_;
   Compiler(absl::string_view sv) : s_(sv) {}
 
@@ -345,10 +355,17 @@ struct Compiler {
   absl::StatusOr<ExprPtr> Invert(CompileContext& ctx) {
     CHECK(s_.PopByte('!'));
     VMSDK_ASSIGN_OR_RETURN(auto expr, Primary(ctx));
+    if (!expr) {
+      return absl::InvalidArgumentError(kInvalidOrMissingExpression);
+    }
     return std::make_unique<Not>(std::move(expr));
   }
 
   absl::StatusOr<ExprPtr> Primary(CompileContext& ctx) {
+    DepthGuard guard(depth_);
+    if (depth_ > options::GetQueryStringDepth().GetValue()) {
+      return absl::InvalidArgumentError("Expression too complex");
+    }
     s_.SkipWhiteSpace();
     DBG << "Primary: '" << s_.GetUnscanned() << "'\n";
     switch (s_.PeekByte()) {
@@ -514,6 +531,9 @@ struct Compiler {
 
   absl::StatusOr<ExprPtr> Compile(CompileContext& ctx) {
     VMSDK_ASSIGN_OR_RETURN(auto result, ParseExpression(ctx));
+    if (!result) {
+      return absl::InvalidArgumentError(kInvalidOrMissingExpression);
+    }
     if (s_.SkipWhiteSpacePeekByte() != EOF) {
       return absl::InvalidArgumentError(absl::StrCat(
           "Extra characters at or near position ", s_.GetPosition()));

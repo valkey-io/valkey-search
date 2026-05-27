@@ -710,14 +710,29 @@ config::Number& GetMutationWeightTag() {
 /// Register the "emulate-release" flag (see COMPATIBILITY.md).
 /// Default: current major.0.0 (SemVer-preserving when no opt-in).
 /// Min:     1.0.0 (oldest release whose behavior we can emulate).
-/// Max:     the running module version (can't emulate the future).
+/// Max:     normally pinned to the running module version (can't emulate the
+///          future), but the upper bound is lifted while `debug-mode` is on so
+///          tests/dev sessions can pin to an unreleased version. The configured
+///          max stays at logical infinity for the type; the runtime check below
+///          enforces the production ceiling.
 constexpr absl::string_view kEmulateReleaseConfig{"emulate-release"};
 constexpr vmsdk::ValkeyVersion kEmulateReleaseMin{1, 0, 0};
+constexpr vmsdk::ValkeyVersion kEmulateReleaseMaxInfinity{0xFFFF, 0xFF, 0xFF};
+
+static absl::Status ValidateEmulateRelease(vmsdk::ValkeyVersion v) {
+  if (!config::IsDebugModeEnabled() && v > kModuleVersion) {
+    return absl::OutOfRangeError(absl::StrFormat(
+        "%s must be <= %s unless %s is enabled", kEmulateReleaseConfig,
+        kModuleVersion.ToString(), config::kDebugMode));
+  }
+  return absl::OkStatus();
+}
 
 static auto emulate_release_config =
     config::VersionBuilder(kEmulateReleaseConfig,
                            vmsdk::ValkeyVersion(kModuleVersion.Major(), 0, 0),
-                           kEmulateReleaseMin, kModuleVersion)
+                           kEmulateReleaseMin, kEmulateReleaseMaxInfinity)
+        .WithValidationCallback(ValidateEmulateRelease)
         .Build();
 
 config::Version& GetEmulateRelease() {

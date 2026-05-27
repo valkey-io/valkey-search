@@ -565,6 +565,42 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
   return results;
 }
 
+// Computes the weighted score for a predicate tree where the document is known
+// to match. For AND predicates, all children match so we sum their weighted
+// contributions. For OR predicates, we use the predicate's own weight (since we
+// don't know which branch matched without re-evaluation). For leaf predicates,
+// the contribution is 1.0 * weight.
+float ComputeMatchedPredicateScore(const Predicate *predicate) {
+  if (!predicate) {
+    return 0.0f;
+  }
+  switch (predicate->GetType()) {
+    case PredicateType::kComposedAnd: {
+      auto composed = dynamic_cast<const ComposedPredicate *>(predicate);
+      float score = 0.0f;
+      for (const auto &child : composed->GetChildren()) {
+        score += ComputeMatchedPredicateScore(child.get());
+      }
+      // Apply the composed predicate's own weight as a multiplier
+      return score * predicate->GetWeight();
+    }
+    case PredicateType::kComposedOr: {
+      // Use the predicate's own weight as the contribution
+      return 1.0f * predicate->GetWeight();
+    }
+    case PredicateType::kNegate: {
+      // Negation is a filter, not a scoring clause.
+      return 0.0f;
+    }
+    case PredicateType::kTag:
+    case PredicateType::kNumeric:
+    case PredicateType::kText:
+      return 1.0f * predicate->GetWeight();
+    default:
+      return 0.0f;
+  }
+}
+
 absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
     const SearchParameters &parameters) {
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
@@ -580,6 +616,14 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
         entries_fetchers, false);
   }
 
+  // Compute the weighted score for matching documents
+  float weighted_score = 0.0f;
+  if (!parameters.filter_parse_results.is_match_all &&
+      parameters.filter_parse_results.root_predicate) {
+    weighted_score = ComputeMatchedPredicateScore(
+        parameters.filter_parse_results.root_predicate.get());
+  }
+
   // Get the config for maximum number of keys to accumulate before content
   // fetching
   const size_t max_keys = static_cast<size_t>(
@@ -588,14 +632,14 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
   neighbors.reserve(std::min(qualified_entries, static_cast<size_t>(5000)));
   bool fetch_limited = false;
   auto results_appender =
-      [&neighbors, &parameters, max_keys, &fetch_limited](
+      [&neighbors, &parameters, max_keys, &fetch_limited, weighted_score](
           const InternedStringPtr &key,
           absl::flat_hash_set<const char *> &top_keys) -> bool {
     if (neighbors.size() >= max_keys) {
       fetch_limited = true;
       return false;
     }
-    neighbors.emplace_back(indexes::Neighbor{key, 0.0f});
+    neighbors.emplace_back(indexes::Neighbor{key, weighted_score});
     return true;
   };
   // Cannot skip evaluation if the query contains unsolved composed operations.
@@ -628,7 +672,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
           nonvector_results_fetched_limited_count.Increment();
           return neighbors;
         }
-        neighbors.emplace_back(indexes::Neighbor{key, 0.0f});
+        neighbors.emplace_back(indexes::Neighbor{key, weighted_score});
         iterator->Next();
         if (parameters.cancellation_token->IsCancelled()) {
           return neighbors;
@@ -1003,6 +1047,28 @@ absl::Status ParseKNN(query::SearchParameters &parameters,
 }
 
 //
+// Scans for the vector filter delimiter `=>` that is followed by `[` (after
+// optional whitespace). This distinguishes the vector KNN delimiter from QMA
+// blocks which use `=> {`.
+//
+size_t FindVectorDelimiter(absl::string_view expr) {
+  size_t pos = 0;
+  while ((pos = expr.find(kVectorFilterDelimiter, pos)) !=
+         absl::string_view::npos) {
+    // Skip whitespace after =>
+    size_t after = pos + kVectorFilterDelimiter.size();
+    while (after < expr.size() && std::isspace(expr[after])) {
+      after++;
+    }
+    if (after < expr.size() && expr[after] == '[') {
+      return pos;  // This is the vector delimiter
+    }
+    pos += kVectorFilterDelimiter.size();  // Continue searching
+  }
+  return absl::string_view::npos;  // No vector delimiter found
+}
+
+//
 // We don't have values for the $ substitution yet. so we break the parsing into
 // two pieces
 //
@@ -1017,7 +1083,7 @@ absl::Status query::SearchParameters::PreParseQueryString() {
   VMSDK_LOG(DEBUG, nullptr)
       << "Query: '" << vmsdk::config::RedactIfNeeded(parse_vars.query_string)
       << "'";
-  auto pos = filter_expression.find(kVectorFilterDelimiter);
+  auto pos = FindVectorDelimiter(filter_expression);
   absl::string_view pre_filter;
   absl::string_view vector_filter;
   // If the delimiter is not found (ie - non vector query), treat the whole

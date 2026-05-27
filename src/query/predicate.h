@@ -105,9 +105,12 @@ class Predicate {
   virtual EvaluationResult Evaluate(Evaluator& evaluator) const = 0;
   virtual ~Predicate() = default;
   PredicateType GetType() const { return type_; }
+  float GetWeight() const { return weight_; }
+  void SetWeight(float weight) { weight_ = weight; }
 
  private:
   PredicateType type_;
+  float weight_{1.0f};
 };
 
 class NegatePredicate : public Predicate {

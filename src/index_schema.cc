@@ -188,6 +188,7 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
               return index;
             }
             case data_model::VECTOR_DATA_TYPE_BFLOAT16: {
+              VMSDK_RETURN_IF_ERROR(indexes::CheckSimsimdBf16Capability());
               VMSDK_ASSIGN_OR_RETURN(
                   auto index,
                   (iter.has_value())
@@ -243,6 +244,7 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
               return index;
             }
             case data_model::VECTOR_DATA_TYPE_BFLOAT16: {
+              VMSDK_RETURN_IF_ERROR(indexes::CheckSimsimdBf16Capability());
               VMSDK_ASSIGN_OR_RETURN(
                   auto index,
                   (iter.has_value())
@@ -2134,13 +2136,22 @@ absl::StatusOr<vmsdk::ValkeyVersion> IndexSchema::GetMinVersion(
         "calculation");
   }
   bool has_text_index = false;
+  bool has_low_precision_vector = false;
   for (const auto &attr : unpacked->attributes()) {
     if (attr.index().has_text_index()) {
       has_text_index = true;
-      break;
+    }
+    if (attr.index().has_vector_index()) {
+      const auto dt = attr.index().vector_index().vector_data_type();
+      if (dt == data_model::VECTOR_DATA_TYPE_FLOAT16 ||
+          dt == data_model::VECTOR_DATA_TYPE_BFLOAT16) {
+        has_low_precision_vector = true;
+      }
     }
   }
-  if (has_text_index) {
+  if (has_low_precision_vector) {
+    return kRelease13;
+  } else if (has_text_index) {
     return kRelease12;
   } else if (unpacked->has_db_num() && unpacked->db_num() != 0) {
     return kRelease11;

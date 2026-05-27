@@ -13,7 +13,7 @@
 //
 // Set the module version to the current release
 //
-constexpr auto kModuleVersion = vmsdk::ValkeyVersion(1, 2, 0);
+constexpr auto kModuleVersion = vmsdk::ValkeyVersion(1, 3, 0);
 
 /* The release stage is used in order to provide release status information.
  * In unstable branch the status is always "dev".
@@ -97,6 +97,14 @@ constexpr vmsdk::ValkeyVersion kRelease11(1, 1, 0);
 // Release 1.2, added support for full text search.
 //
 constexpr vmsdk::ValkeyVersion kRelease12(1, 2, 0);
+
+//
+// Release 1.3, added support for low-precision vector storage types
+// (FLOAT16 and BFLOAT16). Index schemas that use either type stamp this
+// minimum version so older modules refuse to load them rather than
+// misinterpret 2-byte vector data as FLOAT32.
+//
+constexpr vmsdk::ValkeyVersion kRelease13(1, 3, 0);
 
 }  // namespace valkey_search
 

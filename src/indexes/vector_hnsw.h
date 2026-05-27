@@ -12,6 +12,7 @@
 #include <deque>
 #include <memory>
 #include <optional>
+#include <type_traits>
 #include <utility>
 
 #include "absl/base/thread_annotations.h"

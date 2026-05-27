@@ -645,6 +645,33 @@ template void VectorBase::Init<bfloat16>(
 
 template absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply<float>(
     std::priority_queue<std::pair<float, hnswlib::labeltype>> &knn_res);
+
+absl::Status CheckSimsimdBf16Capability() {
+#if defined(__SSE2__) || defined(__AVX512F__) || \
+    defined(__ARM_BF16_FORMAT_ALTERNATIVE__)
+  // This predicate mirrors third_party/simsimd/c/lib.c's SIMSIMD_NATIVE_BF16
+  // selection. When NATIVE_BF16 is 1, simsimd_bf16_t is a native bf16-like
+  // typedef (e.g. _Float16 on x86) and the serial fallback path
+  // (simsimd_l2sq_bf16_serial / simsimd_dot_bf16_serial) misinterprets the
+  // stored bits. The runtime CPU must therefore advertise at least one
+  // SIMD-targeted dispatch (haswell/genoa/sapphire on x86, neon_bf16/
+  // sve_bf16 on ARM) that loads raw 16-bit words and converts via shifts.
+  const bool has_simd_safe_bf16_path =
+      simsimd_uses_haswell() || simsimd_uses_genoa() ||
+      simsimd_uses_sapphire() || simsimd_uses_neon_bf16() ||
+      simsimd_uses_sve_bf16();
+  if (!has_simd_safe_bf16_path) {
+    return absl::FailedPreconditionError(
+        "BFLOAT16 indexes require a SIMD-targeted BF16 path "
+        "(Haswell/Genoa/Sapphire on x86, NEON-BF16/SVE-BF16 on ARM). "
+        "simsimd's serial BF16 fallback is unsafe under the current build "
+        "(SIMSIMD_NATIVE_BF16=1 in third_party/simsimd/c/lib.c). Either "
+        "run on a newer CPU or rebuild with SIMSIMD_NATIVE_BF16=0.");
+  }
+#endif
+  return absl::OkStatus();
+}
+
 }  // namespace indexes
 
 }  // namespace valkey_search

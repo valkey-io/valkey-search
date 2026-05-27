@@ -50,6 +50,18 @@ std::vector<char> NormalizeEmbedding(absl::string_view record,
                                      data_model::VectorDataType data_type,
                                      float* magnitude = nullptr);
 
+// Verify the running CPU exposes a SIMD-targeted BF16 path required by the
+// current simsimd build. Returns OkStatus when:
+//   - This build of simsimd does not enable native BF16 (the serial path is
+//     then bit-correct), or
+//   - The CPU advertises Haswell/Genoa/Sapphire on x86, or NEON-BF16/SVE-BF16
+//     on ARM.
+// Otherwise returns FailedPreconditionError; callers should refuse to create
+// or load a BFLOAT16 index on this host. Called at index-create / RDB-load
+// time rather than module load so that nodes lacking a SIMD BF16 path can
+// still serve FLOAT32 and FLOAT16 indexes.
+absl::Status CheckSimsimdBf16Capability();
+
 struct Neighbor {
   InternedStringPtr external_id;
   float distance;

@@ -21,8 +21,10 @@
 // dispatch win.
 #if defined(__APPLE__)
 #define SIMSIMD_NATIVE_BF16 0
-#else
+#elif defined(__SSE2__) || defined(__AVX512F__) || defined(__ARM_BF16_FORMAT_ALTERNATIVE__)
 #define SIMSIMD_NATIVE_BF16 1
+#else
+#define SIMSIMD_NATIVE_BF16 0
 #endif
 
 /*  Depending on the Operating System, the following intrinsics are available

@@ -467,10 +467,13 @@ FilterParser::ParseVectorRangePredicate(const std::string& attribute_alias) {
       if (IsEnd() || Peek() == ']') {
         return absl::InvalidArgumentError("EF_RUNTIME argument is missing");
       }
-      // Consume the EF_RUNTIME value (stored for later resolution)
+      // EF_RUNTIME is not yet supported for VECTOR_RANGE queries.
+      std::string ef_value;
       while (!IsEnd() && !std::isspace(Peek()) && Peek() != ']') {
-        ++pos_;
+        ef_value += expression_[pos_++];
       }
+      return absl::UnimplementedError(
+          "EF_RUNTIME is not supported for VECTOR_RANGE queries");
     } else if (MatchInsensitive("AS")) {
       SkipWhitespace();
       if (IsEnd() || Peek() == ']') {

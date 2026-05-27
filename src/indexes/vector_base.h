@@ -178,9 +178,30 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
                                  std::optional<float>& magnitude);
   virtual uint64_t GetMaxInternalLabel() const { return 0; }
   virtual size_t GetLabelCount() const { return 0; }
+
+  // Returns the distance and internal label for the given key, or an error if
+  // the key is not tracked. Used by AddPrefilteredKey and PrefilterEvaluator.
+  // Prefer IsWithinVectorRange for callers that only need a pass/fail check.
   absl::StatusOr<std::pair<float, hnswlib::labeltype>>
   ComputeDistanceFromRecord(const InternedStringPtr& key,
                             absl::string_view query) const;
+
+  // Returns the distance from the stored vector for `key` to `query` if the
+  // distance is <= `radius`; returns std::nullopt if outside the radius;
+  // returns an error if the key is not tracked in this index.
+  absl::StatusOr<std::optional<float>> IsWithinVectorRange(
+      const InternedStringPtr &key, absl::string_view query,
+      float radius) const {
+    auto result = ComputeDistanceFromRecord(key, query);
+    if (!result.ok()) {
+      return result.status();
+    }
+    float distance = result->first;
+    if (distance > radius) {
+      return std::nullopt;
+    }
+    return distance;
+  }
 
  protected:
   VectorBase(IndexerType indexer_type, int dimensions,
@@ -291,9 +312,9 @@ class PrefilterEvaluator : public query::Evaluator {
   bool IsPrefilterEvaluator() const override { return true; }
 
   // Returns the distance computed during the last EvaluateVectorRange call.
-  // Only valid after a successful Evaluate that included a VectorRange
-  // predicate.
-  float GetLastVectorRangeDistance() const {
+  // Returns std::nullopt if no VectorRange predicate was evaluated (e.g., the
+  // match came from a non-vector branch in an OR expression).
+  std::optional<float> GetLastVectorRangeDistance() const {
     return last_vector_range_distance_;
   }
 
@@ -309,7 +330,7 @@ class PrefilterEvaluator : public query::Evaluator {
   const valkey_search::indexes::text::TextIndex* text_index_;
   const InternedStringPtr* key_{nullptr};
   const valkey_search::IndexSchema* index_schema_{nullptr};
-  float last_vector_range_distance_{0.0f};
+  std::optional<float> last_vector_range_distance_;
 };
 
 }  // namespace valkey_search::indexes

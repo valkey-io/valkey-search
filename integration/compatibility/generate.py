@@ -203,7 +203,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.checkall(dialect, f"ft.search {key_type}_idx1 *")
         self.checkall(dialect, f"ft.search {key_type}_idx1 * limit 0 5")
     
-@pytest.mark.parametrize("algo", ["flat", "hnsw"])
+    @pytest.mark.parametrize("algo", ["flat", "hnsw"])
     @pytest.mark.parametrize("metric", ["l2", "ip", "cosine"])
     def test_vector_distance(self, key_type, dialect, algo, metric):
         self.setup_data(f"vector data {metric} {algo}", key_type)

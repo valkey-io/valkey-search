@@ -174,9 +174,12 @@ struct SearchParameters {
   uint64_t timeout_ms{0};
   bool no_content{false};
   FilterParseResults filter_parse_results;
-  // Vector range predicates found during filter parsing, stored for
-  // post-parse resolution of PARAMS and dimension validation.
-  std::vector<query::VectorRangePredicate*> vector_range_predicates;
+  // Non-owning pointers to VectorRangePredicate nodes found during filter
+  // parsing. The pointed-to objects are owned by filter_parse_results (via the
+  // predicate tree rooted at root_predicate). These pointers are valid only
+  // during PostParseVectorRangeParameters; they are cleared at the end of that
+  // call to prevent dangling references. Do not access after parsing completes.
+  std::vector<query::VectorRangePredicate *> vector_range_predicates;
   std::vector<ReturnAttribute> return_attributes;
   bool inorder{false};
   std::optional<uint32_t> slop;

@@ -643,8 +643,11 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
           fetch_limited = true;
           break;
         }
-        // Use the distance computed during evaluation.
-        float distance = key_evaluator.GetLastVectorRangeDistance();
+        // Use the distance computed during evaluation. If the match came from
+        // a non-vector branch (e.g., OR short-circuit), distance is unset and
+        // we record 0.0 as a sentinel.
+        float distance =
+            key_evaluator.GetLastVectorRangeDistance().value_or(0.0f);
         neighbors.emplace_back(indexes::Neighbor{key, distance});
         if (needs_dedup) {
           result_keys.insert(key->Str().data());

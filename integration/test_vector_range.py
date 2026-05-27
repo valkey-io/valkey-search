@@ -21,7 +21,7 @@ def float_to_bytes(floats):
 
 def l2_distance(a, b):
     """Compute L2 (squared Euclidean) distance between two float lists."""
-    return sum((x - y) ** 2 for x, y in zip(a, b))
+    return sum((x - y) ** 2 for x, y in zip(a, b, strict=True))
 
 
 def parse_result_keys(result):

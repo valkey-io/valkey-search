@@ -258,8 +258,8 @@ def compare_row(l, r, key_type):
             if len(l_filtered[lks[i]]) != len(r_filtered[rks[i]]):
                 print("mismatch vector field length: ", l_filtered[lks[i]], " ", r_filtered[rks[i]])
                 return False
-            for i in range(l_filtered[lks[i]]):
-                if not compare_number_eq(l_filtered[lks[i]][i], r_filtered[rks[i]][i]):
+            for j in range(len(l_filtered[lks[i]])):
+                if not compare_number_eq(l_filtered[lks[i]][j], r_filtered[rks[i]][j]):
                     print("mismatch vector field value: ", l_filtered[lks[i]], " ", r_filtered[rks[i]])
                     return False
         elif lks[i] == b'$' and rks[i] == b'$':

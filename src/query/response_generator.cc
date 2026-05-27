@@ -86,17 +86,23 @@ namespace valkey_search::query {
 class PredicateEvaluator : public query::Evaluator {
  public:
   PredicateEvaluator(const RecordsMap &records,
-                     QueryOperations query_operations)
-      : Evaluator(query_operations), records_(records), text_index_(nullptr) {}
+                     QueryOperations query_operations,
+                     const valkey_search::IndexSchema *index_schema = nullptr)
+      : Evaluator(query_operations),
+        records_(records),
+        text_index_(nullptr),
+        index_schema_(index_schema) {}
 
   PredicateEvaluator(const RecordsMap &records,
                      const valkey_search::indexes::text::TextIndex *text_index,
                      InternedStringPtr target_key,
-                     QueryOperations query_operations)
+                     QueryOperations query_operations,
+                     const valkey_search::IndexSchema *index_schema = nullptr)
       : Evaluator(query_operations),
         records_(records),
         text_index_(text_index),
-        target_key_(target_key) {}
+        target_key_(target_key),
+        index_schema_(index_schema) {}
 
   const InternedStringPtr &GetTargetKey() const override { return target_key_; }
 
@@ -145,17 +151,36 @@ class PredicateEvaluator : public query::Evaluator {
   }
 
   EvaluationResult EvaluateVectorRange(
-      const query::VectorRangePredicate & /*predicate*/) override {
-    // Vector range predicates are fully evaluated during the search phase.
-    // During content resolution re-verification, we pass through since the
-    // distance check was already performed.
-    return EvaluationResult(true);
+      const query::VectorRangePredicate &predicate) override {
+    if (!index_schema_) {
+      // No index schema available — cannot re-verify; pass through.
+      return EvaluationResult(true);
+    }
+    auto resolved_query = predicate.GetResolvedQuery();
+    if (resolved_query.empty()) {
+      return EvaluationResult(false);
+    }
+    auto index = index_schema_->GetIndex(predicate.GetAlias());
+    if (!index.ok()) {
+      return EvaluationResult(false);
+    }
+    auto *vector_index = dynamic_cast<indexes::VectorBase *>(index->get());
+    if (!vector_index) {
+      return EvaluationResult(false);
+    }
+    auto distance_result = vector_index->IsWithinVectorRange(
+        target_key_, resolved_query, predicate.GetRadius());
+    if (!distance_result.ok()) {
+      return EvaluationResult(false);
+    }
+    return EvaluationResult(distance_result->has_value());
   }
 
  private:
   const RecordsMap &records_;
   const valkey_search::indexes::text::TextIndex *text_index_ = nullptr;
   InternedStringPtr target_key_;
+  const valkey_search::IndexSchema *index_schema_ = nullptr;
 };
 
 DEV_INTEGER_COUNTER(query, predicate_revalidation);
@@ -181,12 +206,14 @@ bool VerifyFilter(const query::SearchParameters &parameters,
 
     PredicateEvaluator evaluator(
         records, text_index, n.external_id,
-        parameters.filter_parse_results.query_operations);
+        parameters.filter_parse_results.query_operations,
+        parameters.index_schema.get());
     EvaluationResult result = predicate->Evaluate(evaluator);
     return result.matches;
   }
-  PredicateEvaluator evaluator(
-      records, parameters.filter_parse_results.query_operations);
+  PredicateEvaluator evaluator(records,
+                               parameters.filter_parse_results.query_operations,
+                               parameters.index_schema.get());
   EvaluationResult result = predicate->Evaluate(evaluator);
   return result.matches;
 }

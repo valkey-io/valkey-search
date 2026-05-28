@@ -561,11 +561,11 @@ class TestAnswersCMD(ValkeySearchTestCaseDebugMode):
         # validator caps it at the current kModuleVersion; the cap is lifted
         # while search.debug-mode is on (set at module load by the
         # *DebugMode base class), so the infinity value below is accepted.
-        try:
-            client.execute_command(
-                "CONFIG", "SET", "search.emulate-release", "65535.255.255")
-        except valkey.ResponseError as e:
-            print(f"Warning: failed to set search.emulate-release: {e}")
+        # Failure here means none of the compatibility fixes will run during
+        # the test, which would silently produce a misleading baseline-style
+        # failure mode — fail loudly instead.
+        client.execute_command(
+            "CONFIG", "SET", "search.emulate-release", "65535.255.255")
         for i in range(len(answers)):
             data_set = do_answer(client, answers[i], data_set)
 
@@ -626,14 +626,11 @@ class TestAnswersCME(ValkeySearchClusterTestCaseDebugMode):
         cluster_client = self.new_cluster_client()
         # Pin VK to the most-compatible behavior on every primary in the
         # cluster (see TestAnswersCMD comment above). debug-mode is enabled
-        # at module load by the *DebugMode base class.
+        # at module load by the *DebugMode base class. Fail loudly on error
+        # so a misconfigured fixture can't produce a silent baseline run.
         for rg in self.replication_groups:
-            try:
-                rg.primary.client.execute_command(
-                    "CONFIG", "SET", "search.emulate-release",
-                    "65535.255.255")
-            except (valkey.ResponseError, AttributeError) as e:
-                print(f"Warning: failed to set search.emulate-release on primary: {e}")
+            rg.primary.client.execute_command(
+                "CONFIG", "SET", "search.emulate-release", "65535.255.255")
 
         for expected in answers:
             data_set = do_answer_cluster(

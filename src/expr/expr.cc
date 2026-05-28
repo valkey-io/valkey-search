@@ -551,8 +551,14 @@ struct Compiler {
   }
   // `^` is right-associative in Redisearch: `a^b^c` == `a^(b^c)`. DoDyadic
   // would produce a left-fold (`(a^b)^c`), so recurse into PowOp for the rhs
-  // instead.
+  // instead. Each recursion grows the C++ stack, so this level must guard the
+  // depth counter itself — Primary's DepthGuard releases on every return and
+  // would otherwise let `a^b^c^…^z` bypass search.query-string-depth.
   absl::StatusOr<ExprPtr> PowOp(CompileContext& ctx) {
+    DepthGuard guard(depth_);
+    if (depth_ > options::GetQueryStringDepth().GetValue()) {
+      return absl::InvalidArgumentError("Expression too complex");
+    }
     VMSDK_ASSIGN_OR_RETURN(auto lvalue, Primary(ctx));
     if (!lvalue) {
       return nullptr;

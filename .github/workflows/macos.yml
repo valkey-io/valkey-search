@@ -10,23 +10,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check-branch:
-    runs-on: ubuntu-latest
-    outputs:
-      should_run: ${{ steps.check.outputs.run }}
-    steps:
-      - uses: actions/checkout@v4
-      - id: check
-        env:
-          BRANCH: ${{ github.base_ref || github.ref_name }}
-        run: |
-          if grep -qxF "$BRANCH" .github/release-branches.txt; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          fi
-
   cmake-tests-macos:
-    needs: check-branch
-    if: needs.check-branch.outputs.should_run == 'true'
     runs-on: macos-latest
 
     steps:
@@ -34,6 +18,16 @@ jobs:
     - name: Checkout Code
       uses: actions/checkout@v3
 
+    - name: Verify Branch
+      id: verify
+      env:
+        BRANCH: ${{ github.base_ref || github.ref_name }}
+      run: |
+        if grep -qxF "$BRANCH" .github/release-branches.txt; then
+          echo "run=true" >> "$GITHUB_OUTPUT"
+        fi
+
     # Set up Docker to build and run the container
     - name: Build Code
+      if: steps.verify.outputs.run == 'true'
       run: ./build.sh

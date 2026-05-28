@@ -676,8 +676,11 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
     // updates to all Text attributes in one operation for efficiency
     auto result = text_index_schema_->CommitKeyData(key);
     if (!all_deletes) {
-      index_key_info_[key].doc_len = result.doc_len;
-      index_key_info_[key].norm = result.norm;
+      auto info_itr = index_key_info_.find(key);
+      if (info_itr != index_key_info_.end()) {
+        info_itr->second.doc_len = result.doc_len;
+        info_itr->second.norm = result.norm;
+      }
     }
   }
 }

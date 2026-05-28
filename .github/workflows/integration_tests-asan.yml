@@ -19,26 +19,19 @@ jobs:
       uses: actions/checkout@v3
 
     - name: Verify Branch
-      id: verify
       env:
         BRANCH: ${{ github.base_ref || github.ref_name }}
-      run: |
-        if grep -qxF "$BRANCH" .github/release-branches.txt; then
-          echo "run=true" >> "$GITHUB_OUTPUT"
-        fi
+      run: grep -qxF "$BRANCH" .github/release-branches.txt
 
     # Set up Docker to build and run the container
     - name: Set up Docker
-      if: steps.verify.outputs.run == 'true'
       uses: docker/setup-buildx-action@v2
 
     # Build the Docker image from the Dockerfile in your repo
     - name: Build Docker Image
-      if: steps.verify.outputs.run == 'true'
       run: docker build -t presubmit-image -f .devcontainer/Dockerfile .
 
     - name: Restore ccache
-      if: steps.verify.outputs.run == 'true'
       uses: actions/cache@v4
       with:
         path: .ccache
@@ -49,7 +42,6 @@ jobs:
 
 
     - name: Run Integration Tests
-      if: steps.verify.outputs.run == 'true'
       id: test-run
       timeout-minutes: 140
       continue-on-error: true
@@ -65,18 +57,18 @@ jobs:
           sudo -E ci/build_ubuntu.sh --run-integration-tests --asan --integration-output=/workspace/test-results
 
     - name: Update Test Results Permissions
-      if: always() && steps.verify.outputs.run == 'true'
+      if: always()
       run: sudo chmod -R 755 test-results
 
     # Upload test results as artifacts
     - name: Upload Test Results
       uses: actions/upload-artifact@v4
-      if: always() && steps.verify.outputs.run == 'true'
+      if: always()
       with:
         name: integration-test-results
         path: test-results
 
     # Fail the job if tests failed
     - name: Check Test Results
-      if: steps.verify.outputs.run == 'true' && steps.test-run.outcome == 'failure'
+      if: steps.test-run.outcome == 'failure'
       run: exit 1

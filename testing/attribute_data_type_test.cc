@@ -203,7 +203,7 @@ TEST_P(HashAttributeDataTypeTest, HashFetchAllRecords) {
           auto it = test_case.expected_records_map.find(field);
           if (it != test_case.expected_records_map.end()) {
             values.push_back(vmsdk::MakeUniqueValkeyString(it->second));
-            *value_out = values.back().get();
+            *value_out = values.back().release();
           } else {
             *value_out = nullptr;
           }

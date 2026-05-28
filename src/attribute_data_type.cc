@@ -127,7 +127,7 @@ RecordsMap HashAttributeDataType::FetchSpecificFields(
       auto field_view = vmsdk::ToStringView(field_str.get());
       content.emplace(field_view,
                       RecordsMapValue(std::move(field_str),
-                                      vmsdk::RetainUniqueValkeyString(value)));
+                                      vmsdk::UniqueValkeyString(value)));
     }
   }
   return content;

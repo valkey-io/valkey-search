@@ -710,58 +710,38 @@ SearchResult::SearchResult(size_t total_count,
       is_limited_with_buffer(false),
       is_offsetted(false) {
   this->neighbors = std::move(neighbors);
-  InitNeighbors(parameters, trim_offset_in_background);
-}
-
-SearchResult::SearchResult(size_t total_count,
-                           std::vector<indexes::BorrowedNeighbor> borrowed,
-                           const SearchParameters &parameters)
-    : total_count(total_count),
-      is_limited_with_buffer(false),
-      is_offsetted(false) {
-  // Cap materialization to what TrimResults will keep — avoids unnecessary
-  // ref counting on entries that will be immediately discarded.
-  size_t max_materialize = borrowed.size();
-  if (!parameters.RequiresCompleteResults()) {
-    size_t limit_end;
-    if (!ValkeySearch::Instance().IsCluster()) {
-      // Standalone: TrimResults trims front (offset) + back (limit).
-      limit_end = parameters.limit.first_index + parameters.limit.number;
-    } else {
-      // Cluster: TrimResults only trims back (offset deferred to coordinator).
-      limit_end = parameters.limit.number;
-    }
-    limit_end = std::min(limit_end, static_cast<size_t>(borrowed.size()));
-    max_materialize =
-        std::min(static_cast<size_t>(
-                     limit_end * options::GetSearchResultBufferMultiplier()),
-                 borrowed.size());
-  }
-  neighbors.reserve(max_materialize);
-  for (size_t i = 0; i < max_materialize; ++i) {
-    neighbors.emplace_back(borrowed[i].key.Materialize(), borrowed[i].distance);
-  }
-  InitNeighbors(parameters, false);
-}
-
-void SearchResult::InitNeighbors(const SearchParameters &parameters,
-                                 bool trim_offset_in_background) {
-  // Clear neighbors if no results should be returned
   if (ShouldReturnNoResults(parameters)) {
     this->neighbors.clear();
     return;
   }
-  // Check if the command needs all results (e.g. for sorting). Trim otherwise.
   if (!parameters.RequiresCompleteResults()) {
     TrimResults(this->neighbors, parameters, trim_offset_in_background);
   }
 }
 
-void SearchResult::TrimResults(std::vector<indexes::Neighbor> &neighbors,
+SearchResult::SearchResult(size_t total_count,
+                           std::vector<indexes::BorrowedNeighbor> borrowed,
+                           const SearchParameters &parameters,
+                           bool trim_offset_in_background)
+    : total_count(total_count),
+      is_limited_with_buffer(false),
+      is_offsetted(false) {
+  if (ShouldReturnNoResults(parameters)) return;
+  if (!parameters.RequiresCompleteResults()) {
+    TrimResults(borrowed, parameters, trim_offset_in_background);
+  }
+  // Materialize only the survivors into owning Neighbor vector.
+  neighbors.reserve(borrowed.size());
+  for (auto &b : borrowed) {
+    neighbors.emplace_back(b.key.Materialize(), b.distance);
+  }
+}
+
+template <typename T>
+void SearchResult::TrimResults(std::vector<T> &vec,
                                const SearchParameters &parameters,
                                bool trim_offset_in_background) {
-  // Use the existing complex logic from SearchResult::GetSerializationRange
-  SerializationRange range = GetSerializationRange(parameters);
+  SerializationRange range = GetSerializationRange(parameters, vec.size());
   size_t max_needed = static_cast<size_t>(
       range.end_index * options::GetSearchResultBufferMultiplier());
   // In standalone mode, we can optimize by trimming from front first.
@@ -773,31 +753,33 @@ void SearchResult::TrimResults(std::vector<indexes::Neighbor> &neighbors,
   if (!ValkeySearch::Instance().IsCluster() || trim_offset_in_background) {
     this->is_offsetted = true;
     // Trim from front (apply offset)
-    if (range.start_index > 0 && range.start_index < neighbors.size()) {
-      neighbors.erase(neighbors.begin(), neighbors.begin() + range.start_index);
+    if (range.start_index > 0 && range.start_index < vec.size()) {
+      vec.erase(vec.begin(), vec.begin() + range.start_index);
       // After trimming from the front, we no longer have an offset.
       // We only need (end_index - start_index) items.
       size_t actual_count = range.end_index - range.start_index;
       max_needed = static_cast<size_t>(
           actual_count * options::GetSearchResultBufferMultiplier());
-    } else if (range.start_index >= neighbors.size()) {
-      neighbors.clear();
+    } else if (range.start_index >= vec.size()) {
+      vec.clear();
       return;
     }
   }
   // If we don't need to limit, return early.
-  if (neighbors.size() <= max_needed) {
+  if (vec.size() <= max_needed) {
     return;
   }
   // Apply limiting with buffer
   this->is_limited_with_buffer = true;
-  neighbors.erase(neighbors.begin() + max_needed, neighbors.end());
+  vec.erase(vec.begin() + max_needed, vec.end());
 }
 
 // Determine the range of neighbors to serialize in the response.
 SerializationRange SearchResult::GetSerializationRange(
-    const SearchParameters &parameters) const {
+    const SearchParameters &parameters,
+    std::optional<size_t> override_size) const {
   CHECK(!ShouldReturnNoResults(parameters));
+  size_t sz = override_size.value_or(neighbors.size());
   // Determine start_index
   size_t start_index = 0;
   // If we have already offsetted, start_index is 0.
@@ -805,20 +787,18 @@ SerializationRange SearchResult::GetSerializationRange(
     if (parameters.IsVectorQuery()) {
       CHECK_GT(parameters.k, parameters.limit.first_index);
     }
-    start_index = std::min(neighbors.size(),
-                           static_cast<size_t>(parameters.limit.first_index));
+    start_index =
+        std::min(sz, static_cast<size_t>(parameters.limit.first_index));
   }
   // Determine end_index logic
   size_t limit_count = static_cast<size_t>(parameters.limit.number);
   size_t count;
   if (parameters.IsNonVectorQuery()) {
-    count = std::min(limit_count, neighbors.size());
+    count = std::min(limit_count, sz);
   } else {
-    count = std::min(
-        {static_cast<size_t>(parameters.k), limit_count, neighbors.size()});
+    count = std::min({static_cast<size_t>(parameters.k), limit_count, sz});
   }
-  size_t end_index = std::min(start_index + count, neighbors.size());
-  // Return the range
+  size_t end_index = std::min(start_index + count, sz);
   return {start_index, end_index};
 }
 

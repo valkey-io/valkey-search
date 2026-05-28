@@ -709,16 +709,8 @@ SearchResult::SearchResult(size_t total_count,
     : total_count(total_count),
       is_limited_with_buffer(false),
       is_offsetted(false) {
-  // Clear neighbors if no results should be returned
-  if (ShouldReturnNoResults(parameters)) {
-    this->neighbors.clear();
-    return;
-  }
   this->neighbors = std::move(neighbors);
-  // Check if the command needs all results (e.g. for sorting). Trim otherwise.
-  if (!parameters.RequiresCompleteResults()) {
-    TrimResults(this->neighbors, parameters, trim_offset_in_background);
-  }
+  InitNeighbors(parameters, trim_offset_in_background);
 }
 
 SearchResult::SearchResult(size_t total_count,
@@ -727,37 +719,41 @@ SearchResult::SearchResult(size_t total_count,
     : total_count(total_count),
       is_limited_with_buffer(false),
       is_offsetted(false) {
-  if (ShouldReturnNoResults(parameters)) return;
-  // Trim the borrowed vector — trivially destructible, no atomic ops on
-  // the discarded entries.
+  // Cap materialization to what TrimResults will keep — avoids unnecessary
+  // ref counting on entries that will be immediately discarded.
+  size_t max_materialize = borrowed.size();
   if (!parameters.RequiresCompleteResults()) {
-    size_t start = std::min(borrowed.size(),
-                            static_cast<size_t>(parameters.limit.first_index));
-    size_t count = std::min(static_cast<size_t>(parameters.limit.number),
-                            borrowed.size());
-    size_t end = std::min(start + count, borrowed.size());
-    size_t max_needed = static_cast<size_t>(
-        end * options::GetSearchResultBufferMultiplier());
+    size_t limit_end;
     if (!ValkeySearch::Instance().IsCluster()) {
-      this->is_offsetted = true;
-      if (start > 0 && start < borrowed.size()) {
-        borrowed.erase(borrowed.begin(), borrowed.begin() + start);
-        size_t actual_count = end - start;
-        max_needed = static_cast<size_t>(
-            actual_count * options::GetSearchResultBufferMultiplier());
-      } else if (start >= borrowed.size()) {
-        borrowed.clear();
-      }
+      // Standalone: TrimResults trims front (offset) + back (limit).
+      limit_end = parameters.limit.first_index + parameters.limit.number;
+    } else {
+      // Cluster: TrimResults only trims back (offset deferred to coordinator).
+      limit_end = parameters.limit.number;
     }
-    if (borrowed.size() > max_needed) {
-      this->is_limited_with_buffer = true;
-      borrowed.erase(borrowed.begin() + max_needed, borrowed.end());
-    }
+    limit_end = std::min(limit_end, static_cast<size_t>(borrowed.size()));
+    max_materialize =
+        std::min(static_cast<size_t>(
+                     limit_end * options::GetSearchResultBufferMultiplier()),
+                 borrowed.size());
   }
-  // Materialize only the survivors into owning Neighbor vector.
-  neighbors.reserve(borrowed.size());
-  for (auto &b : borrowed) {
-    neighbors.emplace_back(b.key.Materialize(), b.distance);
+  neighbors.reserve(max_materialize);
+  for (size_t i = 0; i < max_materialize; ++i) {
+    neighbors.emplace_back(borrowed[i].key.Materialize(), borrowed[i].distance);
+  }
+  InitNeighbors(parameters, false);
+}
+
+void SearchResult::InitNeighbors(const SearchParameters &parameters,
+                                 bool trim_offset_in_background) {
+  // Clear neighbors if no results should be returned
+  if (ShouldReturnNoResults(parameters)) {
+    this->neighbors.clear();
+    return;
+  }
+  // Check if the command needs all results (e.g. for sorting). Trim otherwise.
+  if (!parameters.RequiresCompleteResults()) {
+    TrimResults(this->neighbors, parameters, trim_offset_in_background);
   }
 }
 
@@ -848,8 +844,7 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
     VMSDK_ASSIGN_OR_RETURN(auto neighbors,
                            DoSearchVector(parameters, search_mode, lock));
     VMSDK_ASSIGN_OR_RETURN(
-        auto result,
-        MaybeAddIndexedContent(std::move(neighbors), parameters));
+        auto result, MaybeAddIndexedContent(std::move(neighbors), parameters));
     size_t total_count = result.size();
     parameters.search_result =
         SearchResult(total_count, std::move(result), parameters);

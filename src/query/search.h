@@ -125,6 +125,8 @@ struct SearchResult {
   SearchResult();
 
  private:
+  void InitNeighbors(const SearchParameters& parameters,
+                     bool trim_offset_in_background);
   void TrimResults(std::vector<indexes::Neighbor>& neighbors,
                    const SearchParameters& parameters,
                    bool trim_offset_in_background);

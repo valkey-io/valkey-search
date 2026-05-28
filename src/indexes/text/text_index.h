@@ -116,6 +116,17 @@ class TextIndexSchema {
   // Access to metadata for memory pool usage
   TextIndexMetadata &GetMetadata() { return metadata_; }
 
+  uint32_t GetKeyDocLen(const InternedStringPtr &key) const {
+    std::lock_guard<std::mutex> guard(per_key_text_indexes_mutex_);
+    auto itr = per_key_scoring_info_.find(key);
+    return itr != per_key_scoring_info_.end() ? itr->second.doc_len : 0;
+  }
+  uint32_t GetKeyNorm(const InternedStringPtr &key) const {
+    std::lock_guard<std::mutex> guard(per_key_text_indexes_mutex_);
+    auto itr = per_key_scoring_info_.find(key);
+    return itr != per_key_scoring_info_.end() ? itr->second.norm : 0;
+  }
+
   // Access stem tree for word expansion during search
   const Rax &GetStemTree() const { return stem_tree_; }
 
@@ -177,8 +188,16 @@ class TextIndexSchema {
   //
   absl::node_hash_map<Key, TextIndex> per_key_text_indexes_;
 
-  // Prevent concurrent mutations to per-key text index map
-  std::mutex per_key_text_indexes_mutex_;
+  // Per-key scoring metadata (doc_len and norm), populated alongside
+  // per_key_text_indexes_ during CommitKeyData/DeleteKeyData.
+  struct KeyScoringInfo {
+    uint32_t doc_len{0};
+    uint32_t norm{0};
+  };
+  absl::node_hash_map<Key, KeyScoringInfo> per_key_scoring_info_;
+
+  // Prevent concurrent mutations to per-key text index map and scoring info
+  mutable std::mutex per_key_text_indexes_mutex_;
 
   Lexer lexer_;
 

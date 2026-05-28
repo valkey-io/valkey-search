@@ -125,8 +125,7 @@ TEST_F(TextIndexSchemaTest, TotalDocLenDecrementsOnDelete) {
   EXPECT_EQ(doc_len, 3);
   EXPECT_EQ(schema->GetMetadata().total_doc_len.load(), 3);
 
-  // Simulate what SyncProcessMutation does: decrement then delete
-  schema->GetMetadata().total_doc_len -= doc_len;
+  // DeleteKeyData decrements total_doc_len internally
   schema->DeleteKeyData(key1);
   EXPECT_EQ(schema->GetMetadata().total_doc_len.load(), 0);
 }

@@ -289,25 +289,29 @@ TextIndexSchema::CommitResult TextIndexSchema::CommitKeyData(
     }
   }
 
-  // Map the key to the newly created per-key index
+  // Map the key to the newly created per-key index and scoring info
   {
     std::lock_guard<std::mutex> per_key_guard(per_key_text_indexes_mutex_);
     per_key_text_indexes_.emplace(key, std::move(key_index));
+    per_key_scoring_info_[key] = {doc_len, norm};
+    metadata_.total_doc_len += doc_len;
   }
 
-  // Update total document length for avg_doc_len computation
-  metadata_.total_doc_len += doc_len;
   return {doc_len, norm};
 }
 
 void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
-  // Extract the per-key index
+  // Extract the per-key index and scoring info
   absl::node_hash_map<Key, TextIndex>::node_type node;
   {
     std::lock_guard<std::mutex> per_key_guard(per_key_text_indexes_mutex_);
     node = per_key_text_indexes_.extract(key);
     if (node.empty()) {
       return;
+    }
+    auto scoring_node = per_key_scoring_info_.extract(key);
+    if (!scoring_node.empty()) {
+      metadata_.total_doc_len -= scoring_node.mapped().doc_len;
     }
   }
   TextIndex &key_index = node.mapped();

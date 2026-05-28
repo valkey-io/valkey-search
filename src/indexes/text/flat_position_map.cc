@@ -18,7 +18,7 @@
 namespace {
 
 // Read fixed-length unsigned int (little-endian) helper
-inline uint32_t ReadVarUint(const char *ptr, uint8_t num_bytes) {
+inline uint32_t ReadVarUint(const char* ptr, uint8_t num_bytes) {
   uint32_t value = 0;
   for (uint8_t i = 0; i < num_bytes; ++i) {
     value |= (static_cast<uint32_t>(static_cast<uint8_t>(ptr[i])) << (i * 8));
@@ -60,7 +60,7 @@ inline char C(uint8_t v) { return static_cast<char>(v); }
 // Encoding scheme: bit 7 = 1 (continue), bit 7 = 0 (end/last byte)
 template <typename T>
 static inline void EncodeValue(
-    absl::InlinedVector<char, kPartitionSize> &buffer, T value,
+    absl::InlinedVector<char, kPartitionSize>& buffer, T value,
     bool is_position) {
   __uint128_t v = (U128(value) << 1) | __uint128_t(is_position);
 
@@ -79,7 +79,7 @@ static inline void EncodeValue(
 // Decode: big-endian, continuation bytes bit 7=1, last byte bit 7=0
 // Returns pair of (decoded_value, is_position)
 template <typename T>
-static inline std::pair<T, bool> DecodeValue(const char *&ptr) {
+static inline std::pair<T, bool> DecodeValue(const char*& ptr) {
   // Read first byte (should not be terminator)
   CHECK(U8(*ptr) != kTerminatorByte) << "Attempted to decode terminator byte";
 
@@ -104,8 +104,8 @@ static inline std::pair<T, bool> DecodeValue(const char *&ptr) {
 //=============================================================================
 
 // Static factory and destroyer
-FlatPositionMap *FlatPositionMap::Create(
-    const absl::btree_map<Position, FieldMask> &position_map,
+FlatPositionMap* FlatPositionMap::Create(
+    const absl::btree_map<Position, FieldMask>& position_map,
     size_t num_text_fields) {
   CHECK(!position_map.empty())
       << "Cannot create FlatPositionMap from empty position_map";
@@ -129,7 +129,7 @@ FlatPositionMap *FlatPositionMap::Create(
   bool is_partition_start = true;
 
   // Encode: [field_mask (if changed)][position]...
-  for (const auto &[pos, field_mask] : position_map) {
+  for (const auto& [pos, field_mask] : position_map) {
     // Check for new partition boundary
     if (position_data.size() >=
             (partition_byte_offsets.size() + 1) * kPartitionSize &&
@@ -174,8 +174,8 @@ FlatPositionMap *FlatPositionMap::Create(
   size_t total_size = sizeof(FlatPositionMap) + data_size;
 
   // Allocate single block: [FlatPositionMap | data...]
-  void *mem = operator new(total_size);
-  auto *map = new (mem) FlatPositionMap();
+  void* mem = operator new(total_size);
+  auto* map = new (mem) FlatPositionMap();
 
   // Initialize header fields
   map->header_scheme_ = 0;
@@ -185,7 +185,7 @@ FlatPositionMap *FlatPositionMap::Create(
   map->unused_ = 0;
 
   // Write data immediately after struct
-  char *p = map->data();
+  char* p = map->data();
 
   // Write pre-computed term frequency first (4 bytes, little-endian)
   std::memcpy(p, &term_frequency, kTermFrequencyBytes);
@@ -208,7 +208,7 @@ FlatPositionMap *FlatPositionMap::Create(
   return map;
 }
 
-void FlatPositionMap::Destroy(FlatPositionMap *map) {
+void FlatPositionMap::Destroy(FlatPositionMap* map) {
   if (!map) return;
   map->~FlatPositionMap();
   operator delete(map);
@@ -226,7 +226,7 @@ uint8_t FlatPositionMap::BytesNeeded(uint32_t value) {
 }
 
 std::pair<uint32_t, uint32_t> FlatPositionMap::ReadCounts(
-    const char *&p) const {
+    const char*& p) const {
   uint32_t num_positions = ReadVarUint(p, pos_bytes_ + 1);
   p += pos_bytes_ + 1;
   uint32_t num_partitions = ReadVarUint(p, part_bytes_ + 1);
@@ -234,7 +234,7 @@ std::pair<uint32_t, uint32_t> FlatPositionMap::ReadCounts(
   return {num_positions, num_partitions};
 }
 
-void FlatPositionMap::WriteCounts(char *&p, uint32_t num_positions,
+void FlatPositionMap::WriteCounts(char*& p, uint32_t num_positions,
                                   uint32_t num_partitions) const {
   std::memcpy(p, &num_positions, pos_bytes_ + 1);
   p += pos_bytes_ + 1;
@@ -246,7 +246,7 @@ void FlatPositionMap::WriteCounts(char *&p, uint32_t num_positions,
 // Iterator Implementation
 //=============================================================================
 
-PositionIterator::PositionIterator(const FlatPositionMap &flat_map)
+PositionIterator::PositionIterator(const FlatPositionMap& flat_map)
     : flat_map_(flat_map.data() + kTermFrequencyBytes),
       current_ptr_(nullptr),
       data_start_(nullptr),
@@ -259,7 +259,7 @@ PositionIterator::PositionIterator(const FlatPositionMap &flat_map)
   CHECK(flat_map_)
       << "Cannot create PositionIterator from null FlatPositionMap";
 
-  const char *p = flat_map_;
+  const char* p = flat_map_;
   auto [num_positions, num_partitions] = flat_map.ReadCounts(p);
   CHECK(num_positions > 0)
       << "Cannot create PositionIterator from FlatPositionMap with 0 positions";
@@ -296,7 +296,7 @@ void PositionIterator::NextPosition() {
 
     // Load next partition offset (or UINT32_MAX if no more partitions)
     if (current_partition_idx_ < num_partitions_) {
-      const char *partition_map = flat_map_ + header_size_;
+      const char* partition_map = flat_map_ + header_size_;
       next_partition_offset_ = ReadVarUint(
           partition_map + (current_partition_idx_ * kPartitionDeltaBytes * 2),
           kPartitionDeltaBytes);
@@ -321,7 +321,7 @@ void PositionIterator::NextPosition() {
 }
 
 // Binary search to find partition index before target position
-uint32_t PositionIterator::FindPartitionForTarget(const char *partition_map,
+uint32_t PositionIterator::FindPartitionForTarget(const char* partition_map,
                                                   uint32_t num_partitions,
                                                   Position target) {
   uint32_t left = 0, right = num_partitions;
@@ -359,7 +359,7 @@ bool PositionIterator::SkipForwardPosition(Position target) {
 
   // Jump to partition if beneficial
   if (IsValid() && num_partitions_) {
-    const char *partition_map = flat_map_ + header_size_;
+    const char* partition_map = flat_map_ + header_size_;
     uint32_t partition_idx =
         FindPartitionForTarget(partition_map, num_partitions_, target);
 
@@ -400,13 +400,13 @@ uint64_t PositionIterator::GetFieldMask() const { return current_field_mask_; }
 //=============================================================================
 
 uint32_t FlatPositionMap::CountPositions() const {
-  const char *p = data() + kTermFrequencyBytes;  // Skip pre-computed TF
+  const char* p = data() + kTermFrequencyBytes;  // Skip pre-computed TF
   auto [num_positions, _] = ReadCounts(p);
   return num_positions;
 }
 
 uint32_t FlatPositionMap::GetNumPartitions() const {
-  const char *p = data() + kTermFrequencyBytes;  // Skip pre-computed TF
+  const char* p = data() + kTermFrequencyBytes;  // Skip pre-computed TF
   auto [_, num_partitions] = ReadCounts(p);
   return num_partitions;
 }
@@ -418,9 +418,9 @@ size_t FlatPositionMap::GetTermFrequency() const {
 }
 
 size_t FlatPositionMap::ComputeTermFrequency(
-    const absl::btree_map<Position, FieldMask> &position_map) {
+    const absl::btree_map<Position, FieldMask>& position_map) {
   size_t total_frequency = 0;
-  for (const auto &[pos, field_mask] : position_map) {
+  for (const auto& [pos, field_mask] : position_map) {
     total_frequency += __builtin_popcountll(field_mask.GetMask());
   }
   return total_frequency;

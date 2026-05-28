@@ -91,8 +91,6 @@ class IndexSchema : public KeyspaceEventSubscription,
   struct IndexKeyInfo {
     MutationSequenceNumber mutation_sequence_number_{0};
     float document_score{kDefaultDocumentScore};
-    uint32_t doc_len{0};  // Total indexed terms in this document
-    uint32_t norm{0};     // Max term frequency of any word in this document
   };
 
   using IndexKeyInfoMap = absl::flat_hash_map<Key, IndexKeyInfo>;
@@ -198,20 +196,18 @@ class IndexSchema : public KeyspaceEventSubscription,
 
   uint32_t GetDocumentLength(const Key &key) const
       ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
-    auto itr = index_key_info_.find(key);
-    if (itr == index_key_info_.end()) {
+    if (!text_index_schema_) {
       return 0;
     }
-    return itr->second.doc_len;
+    return text_index_schema_->GetKeyDocLen(key);
   }
 
   uint32_t GetDocumentNorm(const Key &key) const
       ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
-    auto itr = index_key_info_.find(key);
-    if (itr == index_key_info_.end()) {
+    if (!text_index_schema_) {
       return 0;
     }
-    return itr->second.norm;
+    return text_index_schema_->GetKeyNorm(key);
   }
 
   uint64_t GetTotalDocumentLength() const

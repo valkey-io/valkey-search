@@ -68,9 +68,7 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
       content = true;
       VMSDK_ASSIGN_OR_RETURN(auto indexer, params.index_schema->GetIndex(load));
       auto indexer_type = indexer->GetIndexerType();
-      if (indexer_type == indexes::IndexerType::kVector ||
-          indexer_type == indexes::IndexerType::kHNSW ||
-          indexer_type == indexes::IndexerType::kFlat) {
+      if (indexer->IsVectorIndex()) {
         return absl::InvalidArgumentError(absl::StrCat(
             "Loading of vector fields is not supported (field `", load, "`)"));
       }

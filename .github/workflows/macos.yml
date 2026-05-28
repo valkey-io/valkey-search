@@ -10,27 +10,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check-branch:
-    runs-on: ubuntu-latest
-    outputs:
-      should_run: ${{ steps.check.outputs.run }}
-    steps:
-      - uses: actions/checkout@v4
-      - id: check
-        run: |
-          if grep -qx "${{ github.ref_name }}" .github/release-branches.txt; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          fi
-
   cmake-tests-macos:
-    needs: check-branch
-    if: needs.check-branch.outputs.should_run == 'true'
     runs-on: macos-latest
 
     steps:
     # Checkout the code from the repository
     - name: Checkout Code
       uses: actions/checkout@v3
+
+    - name: Verify Branch
+      run: grep -qxF "${{ github.base_ref || github.ref_name }}" .github/release-branches.txt
 
     # Set up Docker to build and run the container
     - name: Build Code

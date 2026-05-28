@@ -179,7 +179,7 @@ struct SearchParameters {
   // predicate tree rooted at root_predicate). These pointers are valid only
   // during PostParseVectorRangeParameters; they are cleared at the end of that
   // call to prevent dangling references. Do not access after parsing completes.
-  std::vector<query::VectorRangePredicate *> vector_range_predicates;
+  std::vector<query::VectorRangePredicate*> vector_range_predicates;
   std::vector<ReturnAttribute> return_attributes;
   bool inorder{false};
   std::optional<uint32_t> slop;

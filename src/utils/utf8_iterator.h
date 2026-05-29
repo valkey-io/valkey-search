@@ -42,8 +42,9 @@ class Utf8Iterator {
   // UTF-8 byte patterns:
   //   0xxxxxxx              (0x00..0x7F)  → 1 byte,  U+0000..U+007F  (ASCII)
   //   110xxxxx 10xxxxxx     (0xC2..0xDF)  → 2 bytes, U+0080..U+07FF
-  //   1110xxxx 10xxxxxx×2   (0xE0..0xEF)  → 3 bytes, U+0800..U+FFFF \ surrogates
-  //   11110xxx 10xxxxxx×3   (0xF0..0xF4)  → 4 bytes, U+10000..U+10FFFF
+  //   1110xxxx 10xxxxxx×2   (0xE0..0xEF)  → 3 bytes, U+0800..U+FFFF
+  //   \ surrogates 11110xxx 10xxxxxx×3   (0xF0..0xF4)  → 4 bytes,
+  //   U+10000..U+10FFFF
   Result Next() {
     uint8_t b0 = static_cast<uint8_t>(text_[pos_]);
 

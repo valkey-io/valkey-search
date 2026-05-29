@@ -35,12 +35,15 @@ class Utf8Iterator {
 
   // Decode and advance past one code point. Must only be called when !Done().
   //
-  // UTF-8 byte patterns (RFC 3629):
+  // Rejects RFC 3629 violations: overlong encodings, surrogate code points
+  // (U+D800..U+DFFF), and code points > U+10FFFF. Invalid sequences advance
+  // one byte and return the raw lead byte with byte_len=1.
+  //
+  // UTF-8 byte patterns:
   //   0xxxxxxx              (0x00..0x7F)  → 1 byte,  U+0000..U+007F  (ASCII)
-  //   110xxxxx 10xxxxxx     (0xC0..0xDF)  → 2 bytes, U+0080..U+07FF
-  //   1110xxxx 10xxxxxx×2   (0xE0..0xEF)  → 3 bytes, U+0800..U+FFFF
-  //   11110xxx 10xxxxxx×3   (0xF0..0xF7)  → 4 bytes, U+10000..U+10FFFF
-  //   10xxxxxx              continuation byte — invalid as a start byte
+  //   110xxxxx 10xxxxxx     (0xC2..0xDF)  → 2 bytes, U+0080..U+07FF
+  //   1110xxxx 10xxxxxx×2   (0xE0..0xEF)  → 3 bytes, U+0800..U+FFFF \ surrogates
+  //   11110xxx 10xxxxxx×3   (0xF0..0xF4)  → 4 bytes, U+10000..U+10FFFF
   Result Next() {
     uint8_t b0 = static_cast<uint8_t>(text_[pos_]);
 
@@ -53,8 +56,11 @@ class Utf8Iterator {
     if ((b0 & 0xE0) == 0xC0 && pos_ + 1 < text_.size()) {
       uint8_t b1 = static_cast<uint8_t>(text_[pos_ + 1]);
       if ((b1 & 0xC0) == 0x80) {
-        pos_ += 2;
-        return {static_cast<uint32_t>((b0 & 0x1F) << 6 | (b1 & 0x3F)), 2};
+        uint32_t cp = ((b0 & 0x1F) << 6) | (b1 & 0x3F);
+        if (cp >= 0x80) {
+          pos_ += 2;
+          return {cp, 2};
+        }
       }
     }
 
@@ -63,10 +69,11 @@ class Utf8Iterator {
       uint8_t b1 = static_cast<uint8_t>(text_[pos_ + 1]);
       uint8_t b2 = static_cast<uint8_t>(text_[pos_ + 2]);
       if ((b1 & 0xC0) == 0x80 && (b2 & 0xC0) == 0x80) {
-        pos_ += 3;
-        return {static_cast<uint32_t>((b0 & 0x0F) << 12 | (b1 & 0x3F) << 6 |
-                                      (b2 & 0x3F)),
-                3};
+        uint32_t cp = ((b0 & 0x0F) << 12) | ((b1 & 0x3F) << 6) | (b2 & 0x3F);
+        if (cp >= 0x800 && (cp < 0xD800 || cp > 0xDFFF)) {
+          pos_ += 3;
+          return {cp, 3};
+        }
       }
     }
 
@@ -76,10 +83,12 @@ class Utf8Iterator {
       uint8_t b2 = static_cast<uint8_t>(text_[pos_ + 2]);
       uint8_t b3 = static_cast<uint8_t>(text_[pos_ + 3]);
       if ((b1 & 0xC0) == 0x80 && (b2 & 0xC0) == 0x80 && (b3 & 0xC0) == 0x80) {
-        pos_ += 4;
-        return {static_cast<uint32_t>((b0 & 0x07) << 18 | (b1 & 0x3F) << 12 |
-                                      (b2 & 0x3F) << 6 | (b3 & 0x3F)),
-                4};
+        uint32_t cp = ((b0 & 0x07) << 18) | ((b1 & 0x3F) << 12) |
+                      ((b2 & 0x3F) << 6) | (b3 & 0x3F);
+        if (cp >= 0x10000 && cp <= 0x10FFFF) {
+          pos_ += 4;
+          return {cp, 4};
+        }
       }
     }
 

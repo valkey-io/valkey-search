@@ -128,19 +128,18 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
     // PunctuationSet).
     while (pos < text.size()) {
       if (text[pos] == '\\' && pos + 1 < text.size()) {
-        char next_ch = text[pos + 1];
         pos++;  // Consume the backslash
-        if (next_ch == '\\' ||
-            IsPunctuation(static_cast<unsigned char>(next_ch))) {
-          // Backslash escapes backslash or ASCII punctuation
-          word.push_back(text[pos++]);
+        utils::Utf8Iterator esc_it(text.substr(pos));
+        auto [next_cp, next_byte_len] = esc_it.Next();
+        if (next_cp == '\\' || IsPunctuation(next_cp)) {
+          word.append(text.data() + pos, next_byte_len);
+          pos += next_byte_len;
         } else {
-          // Backslash before non-punctuation
           if (IsPunctuation('\\')) {
-            // Backslash itself is configured as punctuation → end token
             break;
           } else {
-            word.push_back(text[pos++]);
+            word.append(text.data() + pos, next_byte_len);
+            pos += next_byte_len;
           }
         }
         continue;

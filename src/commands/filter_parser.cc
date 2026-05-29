@@ -532,15 +532,13 @@ absl::StatusOr<bool> FilterParser::HandleBackslashEscape(
     return true;
   }
   if (!IsEnd()) {
-    // Cast to unsigned char so high bytes don't sign-extend into the uint32_t
-    // code point passed to IsPunctuation.
-    char next_ch = Peek();
-    if (next_ch == '\\' ||
-        lexer.IsPunctuation(static_cast<unsigned char>(next_ch))) {
+    utils::Utf8Iterator cp_it(expression_.substr(pos_));
+    auto [cp, byte_len] = cp_it.Next();
+    if (cp == '\\' || lexer.IsPunctuation(cp)) {
       // If Double backslash, retain the double backslash
       // If Single backslash with punct on right, retain the char on right
-      processed_content.push_back(next_ch);
-      ++pos_;
+      processed_content.append(expression_.data() + pos_, byte_len);
+      pos_ += byte_len;
       // Continue parsing the same token.
       return true;
     } else {
@@ -551,8 +549,8 @@ absl::StatusOr<bool> FilterParser::HandleBackslashEscape(
         return false;
       } else {
         // Backslash not punctuation → keep letter, continue
-        processed_content.push_back(next_ch);
-        ++pos_;
+        processed_content.append(expression_.data() + pos_, byte_len);
+        pos_ += byte_len;
         return true;
       }
     }

@@ -307,152 +307,58 @@ Ordering Compare(const Value& l, const Value& r) {
   return CompareStrings(l.AsStringView(), r.AsStringView());
 }
 
-// Vector operation helper functions
-Value ApplyToElements(const Value::Array arr,
-                      std::function<Value(const Value&)> func) {
-  auto result = std::make_shared<std::vector<Value>>();
-  result->reserve(arr->size());
-
-  for (size_t i = 0; i < arr->size(); ++i) {
-    Value elem_result = func((*arr)[i]);
-    result->push_back(std::move(elem_result));
-  }
-
-  return Value(result);
-}
-
-Value ApplyWithScalar(const Value::Array arr, const Value& scalar,
-                      std::function<Value(const Value&, const Value&)> func,
-                      bool scalar_on_left) {
-  auto result = std::make_shared<std::vector<Value>>();
-  result->reserve(arr->size());
-
-  for (size_t i = 0; i < arr->size(); ++i) {
-    Value elem_result =
-        scalar_on_left ? func(scalar, (*arr)[i]) : func((*arr)[i], scalar);
-    result->push_back(std::move(elem_result));
-  }
-
-  return Value(result);
-}
-
-Value ApplyElementWise(const Value::Array arr1, const Value::Array arr2,
-                       std::function<Value(const Value&, const Value&)> func) {
-  if (arr1->size() != arr2->size()) {
-    std::string error_msg = "Length mismatch: arrays have lengths " +
-                            std::to_string(arr1->size()) + " and " +
-                            std::to_string(arr2->size());
-    return Value(Value::Nil(error_msg));
-  }
-
-  auto result = std::make_shared<std::vector<Value>>();
-  result->reserve(arr1->size());
-
-  for (size_t i = 0; i < arr1->size(); ++i) {
-    Value elem_result = func((*arr1)[i], (*arr2)[i]);
-    result->push_back(std::move(elem_result));
-  }
-
-  return Value(result);
-}
-
 Value FuncAdd(const Value& l, const Value& r) {
-  if (!l.IsArray() && !r.IsArray()) {
-    auto lv = l.AsDouble();
-    auto rv = r.AsDouble();
-    if (lv && rv) {
-      return Value(lv.value() + rv.value());
-    } else {
-      return Value(Value::Nil("Add requires numeric operands"));
-    }
+  auto lv = l.AsDouble();
+  auto rv = r.AsDouble();
+  if (lv && rv) {
+    return Value(lv.value() + rv.value());
+  } else {
+    return Value(Value::Nil("Could not convert value to a number"));
   }
-  if (l.IsArray() && !r.IsArray()) {
-    return ApplyWithScalar(l.GetArray(), r, FuncAdd, false);
-  }
-  if (!l.IsArray() && r.IsArray()) {
-    return ApplyWithScalar(r.GetArray(), l, FuncAdd, true);
-  }
-  return ApplyElementWise(l.GetArray(), r.GetArray(), FuncAdd);
 }
 
 Value FuncSub(const Value& l, const Value& r) {
-  if (!l.IsArray() && !r.IsArray()) {
-    auto lv = l.AsDouble();
-    auto rv = r.AsDouble();
-    if (lv && rv) {
-      return Value(lv.value() - rv.value());
-    } else {
-      return Value(Value::Nil("Subtract requires numeric operands"));
-    }
+  auto lv = l.AsDouble();
+  auto rv = r.AsDouble();
+  if (lv && rv) {
+    return Value(lv.value() - rv.value());
+  } else {
+    return Value(Value::Nil("Could not convert value to a number"));
   }
-  if (l.IsArray() && !r.IsArray()) {
-    return ApplyWithScalar(l.GetArray(), r, FuncSub, false);
-  }
-  if (!l.IsArray() && r.IsArray()) {
-    return ApplyWithScalar(r.GetArray(), l, FuncSub, true);
-  }
-  return ApplyElementWise(l.GetArray(), r.GetArray(), FuncSub);
 }
 
 Value FuncMul(const Value& l, const Value& r) {
-  if (!l.IsArray() && !r.IsArray()) {
-    auto lv = l.AsDouble();
-    auto rv = r.AsDouble();
-    if (lv && rv) {
-      return Value(lv.value() * rv.value());
-    } else {
-      return Value(Value::Nil("Multiply requires numeric operands"));
-    }
+  auto lv = l.AsDouble();
+  auto rv = r.AsDouble();
+  if (lv && rv) {
+    return Value(lv.value() * rv.value());
+  } else {
+    return Value(Value::Nil("Could not convert value to a number"));
   }
-  if (l.IsArray() && !r.IsArray()) {
-    return ApplyWithScalar(l.GetArray(), r, FuncMul, false);
-  }
-  if (!l.IsArray() && r.IsArray()) {
-    return ApplyWithScalar(r.GetArray(), l, FuncMul, true);
-  }
-  return ApplyElementWise(l.GetArray(), r.GetArray(), FuncMul);
 }
 
 Value FuncDiv(const Value& l, const Value& r) {
-  if (!l.IsArray() && !r.IsArray()) {
-    auto lv = l.AsDouble();
-    auto rv = r.AsDouble();
-    if (lv && rv) {
-      if (rv.value() == 0) {
-        return Value(std::nan(""));
-      } else {
-        return Value(lv.value() / rv.value());
-      }
+  auto lv = l.AsDouble();
+  auto rv = r.AsDouble();
+  if (lv && rv) {
+    if (rv.value() == 0) {
+      return Value(std::nan(""));
     } else {
-      return Value(Value::Nil("Divide requires numeric operands"));
+      return Value(lv.value() / rv.value());
     }
+  } else {
+    return Value(Value::Nil("Could not convert value to a number"));
   }
-  if (l.IsArray() && !r.IsArray()) {
-    return ApplyWithScalar(l.GetArray(), r, FuncDiv, false);
-  }
-  if (!l.IsArray() && r.IsArray()) {
-    return ApplyWithScalar(r.GetArray(), l, FuncDiv, true);
-  }
-  return ApplyElementWise(l.GetArray(), r.GetArray(), FuncDiv);
 }
 
 Value FuncPower(const Value& l, const Value& r) {
-  if (!l.IsArray() && !r.IsArray()) {
-    auto lv = l.AsDouble();
-    auto rv = r.AsDouble();
-    if (lv && rv) {
-      return Value(std::pow(lv.value(), rv.value()));
-    } else {
-      return Value(Value::Nil("Power requires numeric operands"));
-    }
+  auto lv = l.AsDouble();
+  auto rv = r.AsDouble();
+  if (lv && rv) {
+    return Value(std::pow(lv.value(), rv.value()));
+  } else {
+    return Value(Value::Nil("Could not convert value to a number"));
   }
-  if (l.IsArray() && !r.IsArray()) {
-    return ApplyWithScalar(l.GetArray(), r, FuncPower, false);
-  }
-  if (!l.IsArray() && r.IsArray()) {
-    return ApplyWithScalar(r.GetArray(), l, FuncPower, true);
-  }
-  return ApplyElementWise(l.GetArray(), r.GetArray(), FuncPower);
 }
 
 Value FuncLt(const Value& l, const Value& r) { return Value(l < r); }
@@ -492,101 +398,71 @@ Value FuncLand(const Value& l, const Value& r) {
 }
 
 Value FuncFloor(const Value& o) {
-  if (o.IsArray()) {
-    return ApplyToElements(o.GetArray(), FuncFloor);
-  }
   auto d = o.AsDouble();
   if (!d) {
-    return Value(Value::Nil("floor couldn't convert to a double"));
+    return Value(std::nan(""));
   }
   return Value(std::floor(*d));
 }
 
 Value FuncCeil(const Value& o) {
-  if (o.IsArray()) {
-    return ApplyToElements(o.GetArray(), FuncCeil);
-  }
   auto d = o.AsDouble();
   if (!d) {
-    return Value(Value::Nil("ceil couldn't convert to a double"));
+    return Value(std::nan(""));
   }
   return Value(std::ceil(*d));
 }
 
 Value FuncAbs(const Value& o) {
-  if (o.IsArray()) {
-    return ApplyToElements(o.GetArray(), FuncAbs);
-  }
   auto d = o.AsDouble();
   if (!d) {
-    return Value(Value::Nil("abs couldn't convert to a double"));
+    return Value(std::nan(""));
   }
   return Value(std::abs(*d));
 }
 
 Value FuncLog(const Value& o) {
-  if (o.IsArray()) {
-    return ApplyToElements(o.GetArray(), FuncLog);
-  }
   auto d = o.AsDouble();
   if (!d) {
-    return Value(Value::Nil("log couldn't convert to a double"));
+    return Value(std::nan(""));
   }
   return Value(std::log(*d));
 }
 
 Value FuncLog2(const Value& o) {
-  if (o.IsArray()) {
-    return ApplyToElements(o.GetArray(), FuncLog2);
-  }
   auto d = o.AsDouble();
   if (!d) {
-    return Value(Value::Nil("log2 couldn't convert to a double"));
+    return Value(std::nan(""));
   }
   return Value(std::log2(*d));
 }
 
 Value FuncExp(const Value& o) {
-  if (o.IsArray()) {
-    return ApplyToElements(o.GetArray(), FuncExp);
-  }
   auto d = o.AsDouble();
   if (!d) {
-    return Value(Value::Nil("exp couldn't convert to a double"));
+    return Value(std::nan(""));
   }
   return Value(std::exp(*d));
 }
 
 Value FuncSqrt(const Value& o) {
-  if (o.IsArray()) {
-    return ApplyToElements(o.GetArray(), FuncSqrt);
-  }
   auto d = o.AsDouble();
   if (!d) {
-    return Value(Value::Nil("sqrt couldn't convert to a double"));
+    return Value(std::nan(""));
   }
   return Value(std::sqrt(*d));
 }
 
 Value FuncStrlen(const Value& o) {
   if (o.IsArray()) {
-    return ApplyToElements(o.GetArray(), FuncStrlen);
+    return Value();
   }
   return Value(double(o.AsStringView().size()));
 }
 
 Value FuncStartswith(const Value& l, const Value& r) {
-  bool l_is_vec = l.IsArray();
-  bool r_is_vec = r.IsArray();
-
-  if (l_is_vec && !r_is_vec) {
-    return ApplyWithScalar(l.GetArray(), r, FuncStartswith, false);
-  }
-  if (!l_is_vec && r_is_vec) {
-    return ApplyWithScalar(r.GetArray(), l, FuncStartswith, true);
-  }
-  if (l_is_vec && r_is_vec) {
-    return ApplyElementWise(l.GetArray(), r.GetArray(), FuncStartswith);
+  if (l.IsArray() || r.IsArray()) {
+    return Value();
   }
   auto ls = l.AsStringView();
   auto rs = r.AsStringView();
@@ -598,19 +474,8 @@ Value FuncStartswith(const Value& l, const Value& r) {
 }
 
 Value FuncContains(const Value& l, const Value& r) {
-  bool l_is_vec = l.IsArray();
-  bool r_is_vec = r.IsArray();
-
-  if (l_is_vec && !r_is_vec) {
-    return ApplyWithScalar(l.GetArray(), r, FuncContains, false);
-  }
-
-  if (!l_is_vec && r_is_vec) {
-    return ApplyWithScalar(r.GetArray(), l, FuncContains, true);
-  }
-
-  if (l_is_vec && r_is_vec) {
-    return ApplyElementWise(l.GetArray(), r.GetArray(), FuncContains);
+  if (l.IsArray() || r.IsArray()) {
+    return Value();
   }
 
   auto ls = l.AsStringView();
@@ -630,7 +495,7 @@ Value FuncContains(const Value& l, const Value& r) {
 
 Value FuncSubstr(const Value& l, const Value& m, const Value& r) {
   if (l.IsArray() || m.IsArray() || r.IsArray()) {
-    return Value(Value::Nil("SUBSTR does not accept lists as parameters"));
+    return Value(Value::Nil("Invalid type for substr. Expected string"));
   }
 
   auto ls = l.AsStringView();
@@ -659,7 +524,7 @@ Value FuncSubstr(const Value& l, const Value& m, const Value& r) {
 
 Value FuncLower(const Value& o) {
   if (o.IsArray()) {
-    return ApplyToElements(o.GetArray(), FuncLower);
+    return Value();
   }
   auto os = o.AsStringView();
   std::string result;
@@ -677,7 +542,7 @@ Value FuncLower(const Value& o) {
 
 Value FuncUpper(const Value& o) {
   if (o.IsArray()) {
-    return ApplyToElements(o.GetArray(), FuncUpper);
+    return Value();
   }
   auto os = o.AsStringView();
   std::string result;

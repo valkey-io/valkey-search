@@ -421,71 +421,53 @@ TEST_F(ValueTest, ArrayAccessors) {
 }
 
 TEST_F(ValueTest, vector_arithmetic) {
-  // Test vector-scalar addition
+  // Redis compatibility: arithmetic on arrays returns error
+  // "Could not convert value to a number"
   Value vec1({Value(1.0), Value(2.0), Value(3.0)});
   Value scalar(5.0);
+
+  // Test vector-scalar addition returns error (matches Redis)
   Value result1 = FuncAdd(vec1, scalar);
-  ASSERT_TRUE(result1.IsArray());
-  EXPECT_EQ(result1.ArraySize(), 3);
-  EXPECT_EQ(result1.GetArrayElement(0)->GetDouble(), 6.0);
-  EXPECT_EQ(result1.GetArrayElement(1)->GetDouble(), 7.0);
-  EXPECT_EQ(result1.GetArrayElement(2)->GetDouble(), 8.0);
+  ASSERT_TRUE(result1.IsNil());
+  EXPECT_EQ(result1.GetNil().GetReason(),
+            "Could not convert value to a number");
 
-  // Test scalar-vector addition
+  // Test scalar-vector addition returns error (matches Redis)
   Value result2 = FuncAdd(scalar, vec1);
-  ASSERT_TRUE(result2.IsArray());
-  EXPECT_EQ(result2.ArraySize(), 3);
-  EXPECT_EQ(result2.GetArrayElement(0)->GetDouble(), 6.0);
-  EXPECT_EQ(result2.GetArrayElement(1)->GetDouble(), 7.0);
-  EXPECT_EQ(result2.GetArrayElement(2)->GetDouble(), 8.0);
+  ASSERT_TRUE(result2.IsNil());
+  EXPECT_EQ(result2.GetNil().GetReason(),
+            "Could not convert value to a number");
 
-  // Test vector-vector addition
+  // Test vector-vector addition returns error (matches Redis)
   Value vec2({Value(10.0), Value(20.0), Value(30.0)});
   Value result3 = FuncAdd(vec1, vec2);
-  ASSERT_TRUE(result3.IsArray());
-  EXPECT_EQ(result3.ArraySize(), 3);
-  EXPECT_EQ(result3.GetArrayElement(0)->GetDouble(), 11.0);
-  EXPECT_EQ(result3.GetArrayElement(1)->GetDouble(), 22.0);
-  EXPECT_EQ(result3.GetArrayElement(2)->GetDouble(), 33.0);
+  ASSERT_TRUE(result3.IsNil());
+  EXPECT_EQ(result3.GetNil().GetReason(),
+            "Could not convert value to a number");
 
-  // Test vector-scalar subtraction
+  // Test vector-scalar subtraction returns error
   Value result4 = FuncSub(vec1, Value(1.0));
-  ASSERT_TRUE(result4.IsArray());
-  EXPECT_EQ(result4.ArraySize(), 3);
-  EXPECT_EQ(result4.GetArrayElement(0)->GetDouble(), 0.0);
-  EXPECT_EQ(result4.GetArrayElement(1)->GetDouble(), 1.0);
-  EXPECT_EQ(result4.GetArrayElement(2)->GetDouble(), 2.0);
+  ASSERT_TRUE(result4.IsNil());
+  EXPECT_EQ(result4.GetNil().GetReason(),
+            "Could not convert value to a number");
 
-  // Test vector-scalar multiplication
+  // Test vector-scalar multiplication returns error
   Value result5 = FuncMul(vec1, Value(2.0));
-  ASSERT_TRUE(result5.IsArray());
-  EXPECT_EQ(result5.ArraySize(), 3);
-  EXPECT_EQ(result5.GetArrayElement(0)->GetDouble(), 2.0);
-  EXPECT_EQ(result5.GetArrayElement(1)->GetDouble(), 4.0);
-  EXPECT_EQ(result5.GetArrayElement(2)->GetDouble(), 6.0);
+  ASSERT_TRUE(result5.IsNil());
+  EXPECT_EQ(result5.GetNil().GetReason(),
+            "Could not convert value to a number");
 
-  // Test vector-scalar division
+  // Test vector-scalar division returns error
   Value result6 = FuncDiv(vec1, Value(2.0));
-  ASSERT_TRUE(result6.IsArray());
-  EXPECT_EQ(result6.ArraySize(), 3);
-  EXPECT_EQ(result6.GetArrayElement(0)->GetDouble(), 0.5);
-  EXPECT_EQ(result6.GetArrayElement(1)->GetDouble(), 1.0);
-  EXPECT_EQ(result6.GetArrayElement(2)->GetDouble(), 1.5);
+  ASSERT_TRUE(result6.IsNil());
+  EXPECT_EQ(result6.GetNil().GetReason(),
+            "Could not convert value to a number");
 
-  // Test vector-scalar power
+  // Test vector-scalar power returns error
   Value result7 = FuncPower(vec1, Value(2.0));
-  ASSERT_TRUE(result7.IsArray());
-  EXPECT_EQ(result7.ArraySize(), 3);
-  EXPECT_EQ(result7.GetArrayElement(0)->GetDouble(), 1.0);
-  EXPECT_EQ(result7.GetArrayElement(1)->GetDouble(), 4.0);
-  EXPECT_EQ(result7.GetArrayElement(2)->GetDouble(), 9.0);
-
-  // Test length mismatch error
-  Value vec3({Value(1.0), Value(2.0)});
-  Value result8 = FuncAdd(vec1, vec3);
-  ASSERT_TRUE(result8.IsNil());
-  std::string error_msg = result8.GetNil().GetReason();
-  EXPECT_EQ(error_msg, "Length mismatch: arrays have lengths 3 and 2");
+  ASSERT_TRUE(result7.IsNil());
+  EXPECT_EQ(result7.GetNil().GetReason(),
+            "Could not convert value to a number");
 }
 
 TEST_F(ValueTest, ArrayComparison_EqualArrays) {
@@ -1022,113 +1004,50 @@ TEST_F(ValueTest, NestedArray_EmptyInnerArrays) {
 // Operations on nested vectors tests
 
 TEST_F(ValueTest, NestedArray_ScalarFunctionRecursiveApplication) {
-  // Test that scalar functions recursively apply to nested elements
-  // Create nested vector of strings: [["HELLO", "WORLD"], ["FOO", "BAR"]]
+  // Redis compatibility: lower/upper on arrays returns nil
   Value nested =
       Value({Value({Value(std::string("HELLO")), Value(std::string("WORLD"))}),
              Value({Value(std::string("FOO")), Value(std::string("BAR"))})});
 
-  // Apply FuncLower - should recursively lowercase all strings
   Value result = FuncLower(nested);
+  EXPECT_TRUE(result.IsNil());
 
-  EXPECT_TRUE(result.IsArray());
-  EXPECT_EQ(result.ArraySize(), 2);
-
-  // Verify first inner vector
-  Value inner1 = result.GetArrayElement(0).value();
-  EXPECT_TRUE(inner1.IsArray());
-  EXPECT_EQ(inner1.ArraySize(), 2);
-  EXPECT_EQ(inner1.GetArrayElement(0)->AsString(), "hello");
-  EXPECT_EQ(inner1.GetArrayElement(1)->AsString(), "world");
-
-  // Verify second inner vector
-  Value inner2 = result.GetArrayElement(1).value();
-  EXPECT_TRUE(inner2.IsArray());
-  EXPECT_EQ(inner2.ArraySize(), 2);
-  EXPECT_EQ(inner2.GetArrayElement(0)->AsString(), "foo");
-  EXPECT_EQ(inner2.GetArrayElement(1)->AsString(), "bar");
+  Value result2 = FuncUpper(nested);
+  EXPECT_TRUE(result2.IsNil());
 }
 
 TEST_F(ValueTest, NestedArray_MathFunctionRecursiveApplication) {
-  // Test that math functions recursively apply to nested elements
-  // Create nested vector: [[1.5, 2.7], [3.2, 4.9]]
+  // Redis compatibility: math functions on arrays return nan
   Value nested =
       Value({Value({Value(1.5), Value(2.7)}), Value({Value(3.2), Value(4.9)})});
 
-  // Apply FuncFloor - should recursively floor all numbers
   Value result = FuncFloor(nested);
+  EXPECT_TRUE(result.IsDouble());
+  EXPECT_EQ(result, Value(std::nan("")));
 
-  EXPECT_TRUE(result.IsArray());
-  EXPECT_EQ(result.ArraySize(), 2);
-
-  // Verify first inner vector
-  Value inner1 = result.GetArrayElement(0).value();
-  EXPECT_TRUE(inner1.IsArray());
-  EXPECT_EQ(inner1.ArraySize(), 2);
-  EXPECT_EQ(inner1.GetArrayElement(0)->GetDouble(), 1.0);
-  EXPECT_EQ(inner1.GetArrayElement(1)->GetDouble(), 2.0);
-
-  // Verify second inner vector
-  Value inner2 = result.GetArrayElement(1).value();
-  EXPECT_TRUE(inner2.IsArray());
-  EXPECT_EQ(inner2.ArraySize(), 2);
-  EXPECT_EQ(inner2.GetArrayElement(0)->GetDouble(), 3.0);
-  EXPECT_EQ(inner2.GetArrayElement(1)->GetDouble(), 4.0);
+  Value result2 = FuncCeil(nested);
+  EXPECT_TRUE(result2.IsDouble());
+  EXPECT_EQ(result2, Value(std::nan("")));
 }
 
 TEST_F(ValueTest, NestedArray_ThreeLevelRecursiveApplication) {
-  // Test recursive application on 3-level nested vector
-  // Create: [[[1.1, 2.2]], [[3.3, 4.4]]]
+  // Redis compatibility: math functions on nested arrays return nan
   Value nested = Value({Value({Value({Value(1.1), Value(2.2)})}),
                         Value({Value({Value(3.3), Value(4.4)})})});
 
-  // Apply FuncCeil - should recursively ceil all numbers
   Value result = FuncCeil(nested);
-
-  EXPECT_TRUE(result.IsArray());
-  EXPECT_EQ(result.ArraySize(), 2);
-
-  // Navigate to innermost vectors and verify
-  Value level2_1 = result.GetArrayElement(0).value();
-  EXPECT_TRUE(level2_1.IsArray());
-  Value level3_1 = level2_1.GetArrayElement(0).value();
-  EXPECT_TRUE(level3_1.IsArray());
-  EXPECT_EQ(level3_1.GetArrayElement(0)->GetDouble(), 2.0);
-  EXPECT_EQ(level3_1.GetArrayElement(1)->GetDouble(), 3.0);
-
-  Value level2_2 = result.GetArrayElement(1).value();
-  EXPECT_TRUE(level2_2.IsArray());
-  Value level3_2 = level2_2.GetArrayElement(0).value();
-  EXPECT_TRUE(level3_2.IsArray());
-  EXPECT_EQ(level3_2.GetArrayElement(0)->GetDouble(), 4.0);
-  EXPECT_EQ(level3_2.GetArrayElement(1)->GetDouble(), 5.0);
+  EXPECT_TRUE(result.IsDouble());
+  EXPECT_EQ(result, Value(std::nan("")));
 }
 
 TEST_F(ValueTest, NestedArray_ArithmeticWithScalar) {
-  // Test arithmetic operations on nested vectors with scalar
-  // Create nested vector: [[1, 2], [3, 4]]
+  // Redis compatibility: arithmetic on nested arrays returns error
   Value nested =
       Value({Value({Value(1.0), Value(2.0)}), Value({Value(3.0), Value(4.0)})});
 
-  // Add scalar to nested vector
   Value result = FuncAdd(nested, Value(10.0));
-
-  EXPECT_TRUE(result.IsArray());
-  EXPECT_EQ(result.ArraySize(), 2);
-
-  // Verify first inner vector
-  Value inner1 = result.GetArrayElement(0).value();
-  EXPECT_TRUE(inner1.IsArray());
-  EXPECT_EQ(inner1.ArraySize(), 2);
-  EXPECT_EQ(inner1.GetArrayElement(0)->GetDouble(), 11.0);
-  EXPECT_EQ(inner1.GetArrayElement(1)->GetDouble(), 12.0);
-
-  // Verify second inner vector
-  Value inner2 = result.GetArrayElement(1).value();
-  EXPECT_TRUE(inner2.IsArray());
-  EXPECT_EQ(inner2.ArraySize(), 2);
-  EXPECT_EQ(inner2.GetArrayElement(0)->GetDouble(), 13.0);
-  EXPECT_EQ(inner2.GetArrayElement(1)->GetDouble(), 14.0);
+  ASSERT_TRUE(result.IsNil());
+  EXPECT_EQ(result.GetNil().GetReason(), "Could not convert value to a number");
 }
 
 TEST_F(ValueTest, NestedArray_ElementAccess) {

@@ -7,7 +7,6 @@
 #ifndef VALKEYSEARCH_EXPR_VALUE_H
 #define VALKEYSEARCH_EXPR_VALUE_H
 
-#include <functional>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -130,15 +129,6 @@ static inline std::ostream& operator<<(std::ostream& os, Ordering o) {
 }
 
 Ordering Compare(const Value& l, const Value& r);
-
-// Array operation helper functions
-Value ApplyToElements(const Value::Array vec,
-                      std::function<Value(const Value&)> func);
-Value ApplyWithScalar(const Value::Array vec, const Value& scalar,
-                      std::function<Value(const Value&, const Value&)> func,
-                      bool scalar_on_left);
-Value ApplyElementWise(const Value::Array vec1, const Value::Array vec2,
-                       std::function<Value(const Value&, const Value&)> func);
 
 //
 // Comparison operators: kUNORDERED values are not equal to anything.

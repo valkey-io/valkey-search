@@ -229,10 +229,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
   }
 
   inline char *getDataByInternalId(tableint internal_id) const {
-    char *result;
-    memcpy(&result, getDataPtrByInternalId(internal_id), sizeof(char *));
-    std::atomic_thread_fence(std::memory_order_acquire);
-    return result;
+    auto data_ptr = (char **)(getDataPtrByInternalId(internal_id));
+    return *data_ptr;
   }
 
   int getRandomLevel(double reverse_size) {

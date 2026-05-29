@@ -24,6 +24,7 @@
 #include "src/indexes/index_base.h"
 #include "src/query/predicate.h"
 #include "src/utils/patricia_tree.h"
+#include "src/utils/scanner.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -43,6 +44,11 @@ Tag::Tag(const data_model::TagIndex& tag_index_proto)
 
 absl::StatusOr<bool> Tag::AddRecord(const InternedStringPtr& key,
                                     absl::string_view data) {
+  if (!utils::IsValidUtf8(data)) {
+    absl::MutexLock lock(&index_mutex_);
+    untracked_keys_.insert(key);
+    return false;
+  }
   auto interned_data = StringInternStore::Intern(data);
   auto parsed_tags = ParseRecordTags(*interned_data, separator_);
   absl::MutexLock lock(&index_mutex_);
@@ -146,6 +152,11 @@ absl::flat_hash_set<absl::string_view> Tag::ParseRecordTags(
 absl::StatusOr<bool> Tag::ModifyRecord(const InternedStringPtr& key,
                                        absl::string_view data) {
   // TODO: implement operator [] in patricia_tree.
+  if (!utils::IsValidUtf8(data)) {
+    [[maybe_unused]] auto res =
+        RemoveRecord(key, indexes::DeletionType::kIdentifier);
+    return false;
+  }
   auto interned_data = StringInternStore::Intern(data);
   auto new_parsed_tags = ParseRecordTags(*interned_data, separator_);
   if (new_parsed_tags.empty()) {

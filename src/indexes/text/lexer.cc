@@ -175,19 +175,7 @@ sb_stemmer* Lexer::GetStemmer() const {
 
 // UTF-8 validation using Scanner
 bool Lexer::IsValidUtf8(absl::string_view text) const {
-  valkey_search::utils::Scanner scanner(text);
-
-  // Try to parse each UTF-8 character - Scanner counts invalid sequences
-  while (scanner.GetPosition() < text.size()) {
-    valkey_search::utils::Scanner::Char ch = scanner.NextUtf8();
-    if (ch == valkey_search::utils::Scanner::kEOF) {
-      break;
-    }
-  }
-
-  // If any invalid UTF-8 sequences were encountered, text is invalid
-  return scanner.GetInvalidUtf8Count() == 0 &&
-         scanner.GetPosition() == text.size();
+  return valkey_search::utils::IsValidUtf8(text);
 }
 
 void Lexer::NormalizeLowerCaseInPlace(std::string& str) const {

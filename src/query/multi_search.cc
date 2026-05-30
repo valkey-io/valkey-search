@@ -17,7 +17,7 @@
 #include "absl/status/status.h"
 #include "absl/synchronization/mutex.h"
 #include "src/commands/ft_aggregate_parser.h"  // for ~AggregateParameters
-#include "src/expr/expr.h"                      // for ~Expression
+#include "src/expr/expr.h"                     // for ~Expression
 #include "src/query/search.h"
 #include "vmsdk/src/thread_pool.h"
 
@@ -32,7 +32,6 @@ std::unique_ptr<MultiSearchParameters> MakeMultiSearchParameters() {
   // requires AggregateParameters to be complete. Construct via new instead.
   return std::unique_ptr<MultiSearchParameters>(new MultiSearchParameters());
 }
-
 
 void MultiArmShim::QueryCompleteBackground(
     std::unique_ptr<SearchParameters> self) {
@@ -59,8 +58,7 @@ void MultiArmShim::QueryCompleteMainThread(
 
 MultiSearchTracker::MultiSearchTracker(
     std::unique_ptr<MultiSearchParameters> params)
-    : parameters_(std::move(params)),
-      outstanding_(parameters_->arms.size()) {
+    : parameters_(std::move(params)), outstanding_(parameters_->arms.size()) {
   // SearchResult is move-only; resize() default-constructs each slot.
   parameters_->per_arm_results.resize(parameters_->arms.size());
 }
@@ -94,8 +92,8 @@ void MultiSearchTracker::OnArmComplete(
   }
 }
 
-void MultiSearchTracker::SetOuterReaderLock(
-    vmsdk::TimeSlicedMRMWMutex* mutex, bool may_prolong) {
+void MultiSearchTracker::SetOuterReaderLock(vmsdk::TimeSlicedMRMWMutex* mutex,
+                                            bool may_prolong) {
   absl::MutexLock lock(&mu_);
   outer_mutex_ = mutex;
   outer_may_prolong_ = may_prolong;
@@ -179,7 +177,7 @@ absl::Status PerformMultiSearchLocalAsync(
   if (parameters->index_schema != nullptr) {
     index_mutex = &parameters->index_schema->GetTimeSlicedMutex();
     index_mutex->ReaderLock(index_mutex_may_prolong,
-                             /*ignore_time_quota=*/false);
+                            /*ignore_time_quota=*/false);
   }
   auto tracker = std::make_shared<MultiSearchTracker>(std::move(parameters));
   if (index_mutex != nullptr) {

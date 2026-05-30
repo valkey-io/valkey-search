@@ -87,14 +87,13 @@ std::vector<indexes::Neighbor> AssembleResult(
       n.attribute_contents.emplace();
       for (const auto& [identifier, value] :
            *entry.representative->attribute_contents) {
-        auto id_str =
-            vmsdk::MakeUniqueValkeyString(vmsdk::ToStringView(value.GetIdentifier()));
-        auto val_str =
-            vmsdk::MakeUniqueValkeyString(vmsdk::ToStringView(value.value.get()));
+        auto id_str = vmsdk::MakeUniqueValkeyString(
+            vmsdk::ToStringView(value.GetIdentifier()));
+        auto val_str = vmsdk::MakeUniqueValkeyString(
+            vmsdk::ToStringView(value.value.get()));
         auto id_view = vmsdk::ToStringView(id_str.get());
         n.attribute_contents->emplace(
-            id_view,
-            RecordsMapValue(std::move(id_str), std::move(val_str)));
+            id_view, RecordsMapValue(std::move(id_str), std::move(val_str)));
       }
     }
     // Attach per-arm aliases.
@@ -145,7 +144,7 @@ std::vector<indexes::Neighbor> FuseRRF(std::vector<ArmInput> arms) {
         it->second.per_arm_distance.assign(arms.size(), std::nullopt);
       }
       it->second.score += 1.0 / (static_cast<double>(arm.rrf_constant) +
-                                  static_cast<double>(rank + 1));
+                                 static_cast<double>(rank + 1));
       it->second.per_arm_distance[arm_i] = static_cast<double>(n.distance);
     }
   }

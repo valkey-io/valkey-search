@@ -10,14 +10,13 @@
 #include <memory>
 #include <vector>
 
-#include "src/query/multi_search.h"  // for ExecuteCommand<MultiSearchParameters>
-
 #include "fanout.h"
 #include "ft_create_parser.h"
 #include "src/acl.h"
 #include "src/commands/ft_search.h"
 #include "src/metrics.h"
 #include "src/query/fanout.h"
+#include "src/query/multi_search.h"  // for ExecuteCommand<MultiSearchParameters>
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
@@ -197,8 +196,8 @@ absl::Status QueryCommand::ParseAfterIndex(QueryCommand &cmd,
   return absl::OkStatus();
 }
 
-absl::Status QueryCommand::ExecuteSyncLocal(
-    ValkeyModuleCtx *ctx, std::unique_ptr<QueryCommand> cmd) {
+absl::Status QueryCommand::ExecuteSyncLocal(ValkeyModuleCtx *ctx,
+                                            std::unique_ptr<QueryCommand> cmd) {
   VMSDK_RETURN_IF_ERROR(query::Search(*cmd, query::SearchMode::kLocal));
   if (!cmd->search_result.status.ok()) {
     ValkeyModule_ReplyWithError(ctx,
@@ -206,8 +205,7 @@ absl::Status QueryCommand::ExecuteSyncLocal(
     ++Metrics::GetStats().query_failed_requests_cnt;
     return absl::OkStatus();
   }
-  if (!cmd->enable_partial_results &&
-      cmd->cancellation_token->IsCancelled()) {
+  if (!cmd->enable_partial_results && cmd->cancellation_token->IsCancelled()) {
     ValkeyModule_ReplyWithError(ctx,
                                 "Search operation cancelled due to timeout");
     ++Metrics::GetStats().query_failed_requests_cnt;
@@ -221,11 +219,11 @@ absl::Status QueryCommand::ExecuteSyncLocal(
   return absl::OkStatus();
 }
 
-absl::Status QueryCommand::DispatchLocalAsync(
-    ValkeyModuleCtx *ctx, std::unique_ptr<QueryCommand> cmd,
-    vmsdk::ThreadPool *pool) {
+absl::Status QueryCommand::DispatchLocalAsync(ValkeyModuleCtx *ctx,
+                                              std::unique_ptr<QueryCommand> cmd,
+                                              vmsdk::ThreadPool *pool) {
   cmd->blocked_client = vmsdk::BlockedClient(ctx, async::Reply, async::Timeout,
-                                              async::Free, cmd->timeout_ms);
+                                             async::Free, cmd->timeout_ms);
   cmd->blocked_client->MeasureTimeStart();
   return query::SearchAsync(std::move(cmd), pool, query::SearchMode::kLocal);
 }
@@ -235,11 +233,10 @@ absl::Status QueryCommand::DispatchFanoutAsync(
     std::vector<vmsdk::cluster_map::NodeInfo> &search_targets,
     coordinator::ClientPool *client_pool, vmsdk::ThreadPool *pool) {
   cmd->blocked_client = vmsdk::BlockedClient(ctx, async::Reply, async::Timeout,
-                                              async::Free, cmd->timeout_ms);
+                                             async::Free, cmd->timeout_ms);
   cmd->blocked_client->MeasureTimeStart();
-  return query::fanout::PerformSearchFanoutAsync(ctx, search_targets,
-                                                  client_pool, std::move(cmd),
-                                                  pool);
+  return query::fanout::PerformSearchFanoutAsync(
+      ctx, search_targets, client_pool, std::move(cmd), pool);
 }
 
 absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,

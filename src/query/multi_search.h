@@ -24,13 +24,13 @@
 #include "src/coordinator/coordinator.pb.h"
 #include "src/index_schema.h"
 #include "src/query/search.h"
-#include "vmsdk/src/time_sliced_mrmw_mutex.h"
 #include "src/utils/cancel.h"
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/cluster_map.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/thread_pool.h"
+#include "vmsdk/src/time_sliced_mrmw_mutex.h"
 
 // Forward declarations to avoid circular include with ft_aggregate_parser.h.
 namespace valkey_search::aggregate {
@@ -113,7 +113,7 @@ struct MultiSearchParameters {
 
   // ----- runtime state -----
   std::vector<SearchResult> per_arm_results;  // populated by MultiSearchTracker
-  SearchResult search_result;                  // fused result
+  SearchResult search_result;                 // fused result
   // Keeps per-arm SearchParameters (and, transitively, their local-responder
   // chains) alive until the reply is sent. The per-arm Neighbor entries may
   // hold string_view keys that point into these objects, so they must outlive
@@ -178,7 +178,7 @@ class MultiSearchTracker
   // SearchParameters in arm_owners_ (mirrors local_responder_ retention), and
   // decrements the outstanding count. When the count hits zero, calls
   // Finalize().
-  void OnArmComplete(size_t arm_index, SearchResult&& result,
+  void OnArmComplete(size_t arm_index, SearchResult &&result,
                      std::unique_ptr<SearchParameters> arm_self);
 
   // Outer reader lock that spans every arm of this multi-arm search. Set by
@@ -189,8 +189,7 @@ class MultiSearchTracker
   // outer lock is held, the time-sliced mutex stays in read mode, so a
   // pending writer (mutation) cannot switch in between two arms' independent
   // ReaderMutexLock acquisitions inside their respective Search() calls.
-  void SetOuterReaderLock(vmsdk::TimeSlicedMRMWMutex* mutex,
-                          bool may_prolong);
+  void SetOuterReaderLock(vmsdk::TimeSlicedMRMWMutex *mutex, bool may_prolong);
 
  private:
   void Finalize();
@@ -203,7 +202,7 @@ class MultiSearchTracker
       ABSL_GUARDED_BY(mu_);
   std::atomic_bool any_arm_failed_{false};
   absl::Status first_error_ ABSL_GUARDED_BY(mu_);
-  vmsdk::TimeSlicedMRMWMutex* outer_mutex_ ABSL_GUARDED_BY(mu_){nullptr};
+  vmsdk::TimeSlicedMRMWMutex *outer_mutex_ ABSL_GUARDED_BY(mu_){nullptr};
   bool outer_may_prolong_ ABSL_GUARDED_BY(mu_){false};
 };
 
@@ -213,7 +212,7 @@ class MultiSearchTracker
 // parameters->on_all_arms_complete.
 absl::Status PerformMultiSearchLocalAsync(
     std::unique_ptr<MultiSearchParameters> parameters,
-    vmsdk::ThreadPool* reader_pool);
+    vmsdk::ThreadPool *reader_pool);
 
 }  // namespace valkey_search::query
 

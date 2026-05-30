@@ -70,8 +70,7 @@ class CombineFunctionContext : public expr::Expression::CompileContext {
     return std::make_unique<ArmScoreRef>(it->second, std::string(s));
   }
 
-  absl::StatusOr<expr::Value> GetParam(
-      absl::string_view /*s*/) const override {
+  absl::StatusOr<expr::Value> GetParam(absl::string_view /*s*/) const override {
     return absl::InvalidArgumentError(
         "PARAMS are not available inside COMBINE FUNCTION");
   }

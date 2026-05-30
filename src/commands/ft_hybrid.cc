@@ -55,11 +55,10 @@ std::vector<indexes::Neighbor> BuildFusedNeighbors(
     in.rrf_constant = params.fusion.rrf_constant;
     in.window = params.fusion.window;
     if (params.fusion.method == FusionConfig::Method::kLinear) {
-      in.weight = (i == 0)
-                      ? (params.fusion.alpha.has_value() ? *params.fusion.alpha
-                                                          : 0.5)
-                      : (params.fusion.beta.has_value() ? *params.fusion.beta
-                                                         : 0.5);
+      in.weight =
+          (i == 0)
+              ? (params.fusion.alpha.has_value() ? *params.fusion.alpha : 0.5)
+              : (params.fusion.beta.has_value() ? *params.fusion.beta : 0.5);
     }
     arm_inputs.push_back(std::move(in));
   }
@@ -217,9 +216,9 @@ void ResolveFusedContentInline(ValkeyModuleCtx *ctx,
   FusedResolver resolver;
   resolver.index_schema = params.index_schema;
   resolver.db_num = params.db_num;
-  query::ProcessNeighborsForReply(
-      ctx, params.index_schema->GetAttributeDataType(), fused, resolver,
-      std::nullopt);
+  query::ProcessNeighborsForReply(ctx,
+                                  params.index_schema->GetAttributeDataType(),
+                                  fused, resolver, std::nullopt);
   RestoreAliases(fused, saved);
 }
 
@@ -239,8 +238,7 @@ int ReplyMulti(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     return ValkeyModule_ReplyWithError(
         ctx, params->search_result.status.message().data());
   }
-  if (!params->enable_partial_results &&
-      params->cancellation_token &&
+  if (!params->enable_partial_results && params->cancellation_token &&
       params->cancellation_token->IsCancelled()) {
     ++Metrics::GetStats().query_failed_requests_cnt;
     return ValkeyModule_ReplyWithError(
@@ -254,8 +252,8 @@ int ReplyMulti(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
 }
 
 int TimeoutMulti(ValkeyModuleCtx *ctx,
-                  [[maybe_unused]] ValkeyModuleString **argv,
-                  [[maybe_unused]] int argc) {
+                 [[maybe_unused]] ValkeyModuleString **argv,
+                 [[maybe_unused]] int argc) {
   return ValkeyModule_ReplyWithError(
       ctx, "Search operation cancelled due to timeout");
 }
@@ -274,8 +272,8 @@ void FreeMulti([[maybe_unused]] ValkeyModuleCtx *ctx, void *privdata) {
 
 namespace query {
 
-absl::Status MultiSearchParameters::ParseAfterIndex(
-    MultiSearchParameters &cmd, vmsdk::ArgsIterator &itr) {
+absl::Status MultiSearchParameters::ParseAfterIndex(MultiSearchParameters &cmd,
+                                                    vmsdk::ArgsIterator &itr) {
   return ParseFtHybridCommand(cmd, itr);
 }
 
@@ -314,9 +312,9 @@ absl::Status MultiSearchParameters::ExecuteSyncLocal(
 absl::Status MultiSearchParameters::DispatchLocalAsync(
     ValkeyModuleCtx *ctx, std::unique_ptr<MultiSearchParameters> cmd,
     vmsdk::ThreadPool *pool) {
-  cmd->blocked_client = vmsdk::BlockedClient(
-      ctx, async::ReplyMulti, async::TimeoutMulti, async::FreeMulti,
-      cmd->timeout_ms);
+  cmd->blocked_client =
+      vmsdk::BlockedClient(ctx, async::ReplyMulti, async::TimeoutMulti,
+                           async::FreeMulti, cmd->timeout_ms);
   cmd->blocked_client->MeasureTimeStart();
   // When the meta-tracker finishes assembling per_arm_results, fuse the arms
   // and run a SINGLE atomic content resolution (mutation check + populate)
@@ -333,9 +331,9 @@ absl::Status MultiSearchParameters::DispatchFanoutAsync(
     ValkeyModuleCtx *ctx, std::unique_ptr<MultiSearchParameters> cmd,
     std::vector<vmsdk::cluster_map::NodeInfo> &search_targets,
     coordinator::ClientPool *client_pool, vmsdk::ThreadPool *pool) {
-  cmd->blocked_client = vmsdk::BlockedClient(
-      ctx, async::ReplyMulti, async::TimeoutMulti, async::FreeMulti,
-      cmd->timeout_ms);
+  cmd->blocked_client =
+      vmsdk::BlockedClient(ctx, async::ReplyMulti, async::TimeoutMulti,
+                           async::FreeMulti, cmd->timeout_ms);
   cmd->blocked_client->MeasureTimeStart();
   // Cluster path: each shard already performed its own content fetch (the
   // coordinator cannot read keys it does not own). Per-shard atomicity across

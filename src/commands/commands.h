@@ -93,9 +93,10 @@ absl::Status FTInternalUpdateCmd(ValkeyModuleCtx *ctx,
 
 // Generic dispatch entry shared by FT.SEARCH, FT.AGGREGATE, FT.HYBRID. The
 // `Cmd` type must satisfy the duck-typed contract documented in commands.cc:
-//   - Field access: index_schema_name, db_num, index_schema, cancellation_token,
-//     timeout_ms, enable_partial_results, local_only, index_fingerprint_version,
-//     slot_fingerprint, blocked_client.
+//   - Field access: index_schema_name, db_num, index_schema,
+//   cancellation_token,
+//     timeout_ms, enable_partial_results, local_only,
+//     index_fingerprint_version, slot_fingerprint, blocked_client.
 //   - Static methods:
 //       static absl::Status Cmd::ParseAfterIndex(Cmd&, vmsdk::ArgsIterator&);
 //       static absl::Status Cmd::ExecuteSyncLocal(ValkeyModuleCtx*,

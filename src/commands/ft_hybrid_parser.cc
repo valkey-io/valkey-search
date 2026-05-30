@@ -112,7 +112,7 @@ void InitArmFromEnvelope(MultiSearchParameters &env, MultiArmShim &arm) {
 // the iterator rather than materializing into local std::string objects
 // (which would dangle).
 absl::Status ParseSearchClause(MultiSearchParameters &env,
-                                vmsdk::ArgsIterator &itr) {
+                               vmsdk::ArgsIterator &itr) {
   if (!itr.PopIfNextIgnoreCase(kSearchKw)) {
     return absl::InvalidArgumentError("FT.HYBRID requires SEARCH clause");
   }
@@ -152,8 +152,8 @@ absl::Status ParseSearchClause(MultiSearchParameters &env,
       return absl::InvalidArgumentError(
           "NOCONTENT is not supported by FT.HYBRID");
     } else {
-      return absl::InvalidArgumentError(absl::StrCat(
-          "Unexpected token in SEARCH clause: `", next, "`"));
+      return absl::InvalidArgumentError(
+          absl::StrCat("Unexpected token in SEARCH clause: `", next, "`"));
     }
   }
   env.arms.push_back(std::move(arm));
@@ -165,8 +165,7 @@ absl::Status ParseSearchClause(MultiSearchParameters &env,
 //                              | RANGE <count> RADIUS <r> [EPSILON <e>])
 //           [YIELD_SCORE_AS name]
 absl::Status ParseVsimClause(MultiSearchParameters &env,
-                              vmsdk::ArgsIterator &itr,
-                              bool *vsim_uses_range) {
+                             vmsdk::ArgsIterator &itr, bool *vsim_uses_range) {
   *vsim_uses_range = false;
   if (!itr.PopIfNextIgnoreCase(kVsimKw)) {
     return absl::InvalidArgumentError("FT.HYBRID requires VSIM clause");
@@ -263,8 +262,8 @@ absl::Status ParseVsimClause(MultiSearchParameters &env,
       return absl::InvalidArgumentError("VSIM RANGE requires RADIUS");
     }
   } else {
-    return absl::InvalidArgumentError(absl::StrCat(
-        "VSIM expects KNN or RANGE, got `", mode_sv, "`"));
+    return absl::InvalidArgumentError(
+        absl::StrCat("VSIM expects KNN or RANGE, got `", mode_sv, "`"));
   }
 
   // VSIM-scoped tail subclauses (top-level YIELD_SCORE_AS for VSIM).
@@ -301,7 +300,7 @@ absl::Status ParseVsimClause(MultiSearchParameters &env,
 // COMBINE [RRF <count> [CONSTANT n] [WINDOW n] [YIELD_SCORE_AS name]]
 //        | [LINEAR <count> ALPHA <a> BETA <b> [WINDOW n] [YIELD_SCORE_AS name]]
 absl::Status ParseCombineClause(MultiSearchParameters &env,
-                                 vmsdk::ArgsIterator &itr) {
+                                vmsdk::ArgsIterator &itr) {
   VMSDK_ASSIGN_OR_RETURN(auto method_sv, itr.GetStringView());
   itr.Next();
   uint32_t inner_count = 0;
@@ -310,9 +309,8 @@ absl::Status ParseCombineClause(MultiSearchParameters &env,
   if (!inner_itr_or.ok() && inner_count > 0) {
     return inner_itr_or.status();
   }
-  vmsdk::ArgsIterator inner_itr = inner_count > 0
-                                       ? inner_itr_or.value()
-                                       : vmsdk::ArgsIterator(nullptr, 0);
+  vmsdk::ArgsIterator inner_itr =
+      inner_count > 0 ? inner_itr_or.value() : vmsdk::ArgsIterator(nullptr, 0);
   itr.Next(inner_count);
   bool saw_alpha = false;
   bool saw_beta = false;
@@ -324,9 +322,9 @@ absl::Status ParseCombineClause(MultiSearchParameters &env,
   } else if (absl::EqualsIgnoreCase(method_sv, kFunctionKw)) {
     env.fusion.method = FusionConfig::Method::kFunction;
   } else {
-    return absl::InvalidArgumentError(absl::StrCat(
-        "COMBINE method must be RRF, LINEAR, or FUNCTION, got `", method_sv,
-        "`"));
+    return absl::InvalidArgumentError(
+        absl::StrCat("COMBINE method must be RRF, LINEAR, or FUNCTION, got `",
+                     method_sv, "`"));
   }
   bool saw_expr = false;
   while (inner_itr.HasNext()) {
@@ -453,11 +451,11 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
     // setup at ft_aggregate.cc:94-97. Without this, MakeReference fails when
     // any APPLY/FILTER/SORTBY references @<score_alias>.
     CHECK_EQ(env.agg->AddRecordAttribute("__key", "__key",
-                                          indexes::IndexerType::kNone),
+                                         indexes::IndexerType::kNone),
              0u);
     auto score_sv = vmsdk::ToStringView(env.agg->score_as.get());
     CHECK_EQ(env.agg->AddRecordAttribute(score_sv, score_sv,
-                                          indexes::IndexerType::kNone),
+                                         indexes::IndexerType::kNone),
              1u);
   }
   // The aggregate parser uses parse_vars_.index_interface_ during expression
@@ -534,9 +532,9 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
     }
     if (itr.Position() == before) {
       // Aggregate parser didn't recognize the leading keyword; surface error.
-      return absl::InvalidArgumentError(absl::StrCat(
-          "Unexpected token at position ", itr.Position() + 1, ": `",
-          next_or.value(), "`"));
+      return absl::InvalidArgumentError(
+          absl::StrCat("Unexpected token at position ", itr.Position() + 1,
+                       ": `", next_or.value(), "`"));
     }
   }
 
@@ -559,12 +557,11 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
     if (arm->parse_vars.query_string.empty() && arm->IsVectorQuery()) {
       // Resolve the vector field is actually a vector index.
       VMSDK_ASSIGN_OR_RETURN(auto index,
-                              arm->index_schema->GetIndex(arm->attribute_alias));
+                             arm->index_schema->GetIndex(arm->attribute_alias));
       if (index->GetIndexerType() != indexes::IndexerType::kHNSW &&
           index->GetIndexerType() != indexes::IndexerType::kFlat) {
         return absl::InvalidArgumentError(absl::StrCat(
-            "Index field `", arm->attribute_alias,
-            "` is not a Vector index"));
+            "Index field `", arm->attribute_alias, "` is not a Vector index"));
       }
       // Substitute $name from shared params map.
       auto param_name = arm->parse_vars.query_vector_string;
@@ -600,8 +597,7 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
   // After per-arm parse: VSIM RANGE is parsed for shape but not yet
   // executable.
   if (vsim_uses_range) {
-    return absl::UnimplementedError(
-        "VSIM RANGE is not yet supported; use KNN");
+    return absl::UnimplementedError("VSIM RANGE is not yet supported; use KNN");
   }
   return absl::OkStatus();
 }

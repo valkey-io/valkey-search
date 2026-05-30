@@ -222,19 +222,18 @@ TEST_F(MRMWMutexTest, VerifyMayProlong) {
   absl::Notification may_prolong_release_notification;
   const size_t read_tasks = 40;
   absl::BlockingCounter blocking_refcount(read_tasks);
-  std::atomic<bool> run_write;
-  std::atomic<bool> in_prolong_read;
+  std::atomic<bool> run_write{false};
+  std::atomic<bool> in_prolong_read{false};
   thread_pool.Schedule(
       [&mrmw_mutex, &may_prolong_notification,
        &read_tasks_completed_notification, &in_prolong_read,
-       &may_prolong_release_notification, &options]() {
+       &may_prolong_release_notification]() {
         {
           ReaderMutexLock lock(&mrmw_mutex, true);
           in_prolong_read = true;
           may_prolong_notification.Notify();
-          absl::SleepFor(options.read_quota_duration * 2);
+          read_tasks_completed_notification.WaitForNotification();
         }
-        read_tasks_completed_notification.WaitForNotification();
         in_prolong_read = false;
         may_prolong_release_notification.Notify();
       },

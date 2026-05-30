@@ -16,6 +16,7 @@
 #include "absl/strings/string_view.h"
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
+#include "google/protobuf/arena.h"
 #include "grpc/grpc.h"
 #include "grpcpp/channel.h"
 #include "grpcpp/client_context.h"
@@ -142,11 +143,15 @@ void ClientImpl::SearchIndexPartition(
   struct SearchIndexPartitionArgs {
     ::grpc::ClientContext context;
     std::unique_ptr<SearchIndexPartitionRequest> request;
-    SearchIndexPartitionResponse response;
+    google::protobuf::Arena arena;
+    SearchIndexPartitionResponse* response;
     SearchIndexPartitionCallback callback;
     std::unique_ptr<vmsdk::StopWatch> latency_sample;
   };
   auto args = std::make_unique<SearchIndexPartitionArgs>();
+  args->response =
+      google::protobuf::Arena::Create<SearchIndexPartitionResponse>(
+          &args->arena);
   args->context.set_deadline(absl::ToChronoTime(
       absl::Now() + absl::Seconds(query_connection_timeout->GetValue())));
   args->callback = std::move(done);
@@ -156,12 +161,12 @@ void ClientImpl::SearchIndexPartition(
   Metrics::GetStats().coordinator_bytes_out.fetch_add(
       args_raw->request->ByteSizeLong(), std::memory_order_relaxed);
   stub_->async()->SearchIndexPartition(
-      &args_raw->context, args_raw->request.get(), &args_raw->response,
+      &args_raw->context, args_raw->request.get(), args_raw->response,
       // std::function is not move-only.
       [args_raw](grpc::Status s) mutable {
         GRPCSuspensionGuard guard(GRPCSuspender::Instance());
         auto args = std::unique_ptr<SearchIndexPartitionArgs>(args_raw);
-        args->callback(s, args->response);
+        args->callback(s, *args->response);
         if (s.ok()) {
           Metrics::GetStats()
               .coordinator_client_search_index_partition_success_cnt++;
@@ -169,7 +174,7 @@ void ClientImpl::SearchIndexPartition(
               .coordinator_client_search_index_partition_success_latency
               .SubmitSample(std::move(args->latency_sample));
           Metrics::GetStats().coordinator_bytes_in.fetch_add(
-              args->response.ByteSizeLong(), std::memory_order_relaxed);
+              args->response->ByteSizeLong(), std::memory_order_relaxed);
         } else {
           Metrics::GetStats()
               .coordinator_client_search_index_partition_failure_cnt++;

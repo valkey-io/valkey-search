@@ -29,6 +29,8 @@ struct Waiter {
 };
 
 absl::flat_hash_map<std::string, std::vector<Waiter>> pause_point_waiters;
+// Global flag: set to true when any pause point is registered.
+bool pause_points_enabled{false};
 
 static std::string ToString(const std::source_location& location) {
   std::string os;
@@ -85,6 +87,7 @@ void PausePointControl(absl::string_view point, bool enable) {
   if (enable) {
     if (!pause_point_waiters.contains(point)) {
       pause_point_waiters[point];
+      pause_points_enabled = true;
     }
     CHECK(pause_point_waiters.contains(point));
   } else {
@@ -139,6 +142,9 @@ void PausePointList(ValkeyModuleCtx* ctx) {
 void ClearAllPausePoints() {
   absl::MutexLock lock(&pause_point_lock);
   pause_point_waiters.clear();
+  // Note: pause_points_enabled stays true. No reason to reset it —
+  // it's only checked as a fast-path skip in production where no
+  // pause points are ever set.
 }
 
 //

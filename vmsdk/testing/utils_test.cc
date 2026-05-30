@@ -8,6 +8,7 @@
 #include "vmsdk/src/utils.h"
 
 #include <iomanip>
+#include <memory>
 #include <string>
 
 #include "absl/synchronization/blocking_counter.h"
@@ -64,6 +65,36 @@ TEST_F(UtilsTest, RunByMainWhileInMain) {
   });
   blocking_refcount.Wait();
   EXPECT_TRUE(run);
+}
+
+// Simulates the shutdown race: a worker enqueues a RunByMain() callback, the
+// event loop never invokes it, and DrainPendingMainCallbacks() must free the
+// captured state. We detect the free via a tracker captured by shared_ptr —
+// when the AnyInvocable is deleted, the tracker's use_count drops to 1.
+TEST_F(UtilsTest, DrainPendingMainCallbacksFreesUninvokedCallback) {
+  absl::BlockingCounter enqueued(1);
+  ThreadPool thread_pool("test-pool", 1);
+  thread_pool.StartWorkers();
+  EXPECT_CALL(*kMockValkeyModule, EventLoopAddOneShot(testing::_, testing::_))
+      .WillOnce([&](ValkeyModuleEventLoopOneShotFunc, void*) {
+        enqueued.DecrementCount();
+        return 0;
+      });
+  auto tracker = std::make_shared<int>(0);
+  EXPECT_EQ(tracker.use_count(), 1);
+  EXPECT_TRUE(thread_pool.Schedule(
+      [&, tracker]() { RunByMain([tracker] { (void)tracker; }); },
+      ThreadPool::Priority::kLow));
+  enqueued.Wait();
+  thread_pool.JoinWorkers();
+  // The lambda captured `tracker` by value, so use_count includes the copy
+  // held inside the queued AnyInvocable.
+  EXPECT_EQ(tracker.use_count(), 2);
+  DrainPendingMainCallbacks();
+  EXPECT_EQ(tracker.use_count(), 1);
+  // Idempotent: draining again on an empty set is a no-op.
+  DrainPendingMainCallbacks();
+  EXPECT_EQ(tracker.use_count(), 1);
 }
 
 TEST_F(UtilsTest, ParseTag) {

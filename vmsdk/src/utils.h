@@ -58,6 +58,13 @@ inline void VerifyMainThread() { CHECK(IsMainThread()); }
 void MarkAsShuttingDown();
 bool IsShuttingDown();
 
+// Free any RunByMain() callbacks that were enqueued to the event loop but
+// never invoked (e.g., because shutdown began after a worker thread had
+// already passed the IsShuttingDown() check in RunByMain). Must be called on
+// the main thread after MarkAsShuttingDown() and after every thread that can
+// call RunByMain() has been joined, so no new callbacks can race in.
+void DrainPendingMainCallbacks();
+
 // MainThreadAccessGuard ensures that all access to the underlying data
 // structure is done on the main thread.
 template <typename T>

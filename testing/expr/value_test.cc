@@ -336,7 +336,7 @@ TEST_F(ValueTest, CompatibilityFixGates) {
         << "fix: non-empty truthy";
   }
 
-  // --- numeric_unary_nan_on_unparseable ---------------------------------
+  // --- numeric_unary_nan_on_unparsable ---------------------------------
   // abs("a"): legacy → Nil; fix → NaN.
   // std::isnan is unreliable under -ffast-math, so do a bit-pattern check
   // (same approach as the IsNan helper in value.cc).

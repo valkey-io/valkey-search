@@ -365,7 +365,7 @@ static Value NumericUnaryNil(const Value& o, const char* fname) {
     return Value(Value::Nil(fname));
   }
   return VALKEY_SEARCH_COMPATIBILITY_FIX(
-      1, 2, 1, "numeric_unary_nan_on_unparseable",
+      1, 2, 1, "numeric_unary_nan_on_unparsable",
       [&] { return Value(std::nan("")); },        // new: NaN propagation
       [&] { return Value(Value::Nil(fname)); });  // legacy: Nil
 }

@@ -13,8 +13,16 @@ CLUSTER_ANSWER_FILES = [g["answers"] for g in GENERATORS if g["cluster"]]
 TEST_MARKER = "*" * 100
 from valkey_search_test_case import (
     ValkeySearchClusterTestCase,
+    ValkeySearchClusterTestCaseDebugMode,
     ValkeySearchTestCaseBase,
+    ValkeySearchTestCaseDebugMode,
 )
+
+# The compatibility answers are captured from RediSearch, which always honors
+# the FT.AGGREGATE LOAD ... AS clause and JSON-path loads. Those are gated in
+# valkey-search behind search.emulate-release (see COMPATIBILITY.md), so the
+# replay must opt into the fixed behavior to match the captured answers.
+COMPAT_EMULATE_RELEASE = "1.2.1"
 from valkeytestframework.conftest import resource_port_tracker
 from utils import IndexingTestHelper
 from valkeytestframework.util import waiters
@@ -537,7 +545,7 @@ def _load_answers_with_hash_check(answer_file_name):
     return answers
 
 
-class TestAnswersCMD(ValkeySearchTestCaseBase):
+class TestAnswersCMD(ValkeySearchTestCaseDebugMode):
     @pytest.mark.parametrize("answers", ALL_ANSWER_FILES)
     def test_answers(self, answers):
         global client, data_set
@@ -554,6 +562,9 @@ class TestAnswersCMD(ValkeySearchTestCaseBase):
 
         data_set = None
         client = self.server.get_new_client()
+        client.execute_command(
+            "CONFIG", "SET", "search.emulate-release", COMPAT_EMULATE_RELEASE
+        )
         for i in range(len(answers)):
             data_set = do_answer(client, answers[i], data_set)
 
@@ -596,7 +607,7 @@ class TestAnswersCMD(ValkeySearchTestCaseBase):
     '''
 
 # TODO: fix cluster mode test failures
-class TestAnswersCME(ValkeySearchClusterTestCase):
+class TestAnswersCME(ValkeySearchClusterTestCaseDebugMode):
     @pytest.mark.parametrize("answers", CLUSTER_ANSWER_FILES)
     def test_answers(self, answers):
         global correct_answers, wrong_answers, failed_tests, passed_tests
@@ -612,6 +623,10 @@ class TestAnswersCME(ValkeySearchClusterTestCase):
 
         data_set = None
         cluster_client = self.new_cluster_client()
+        for primary in self.get_all_primary_clients():
+            primary.execute_command(
+                "CONFIG", "SET", "search.emulate-release", COMPAT_EMULATE_RELEASE
+            )
 
         for expected in answers:
             data_set = do_answer_cluster(

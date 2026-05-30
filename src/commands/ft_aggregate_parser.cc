@@ -10,6 +10,7 @@
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
@@ -46,22 +47,79 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
         itr.Next();
         if (vmsdk::ToStringView(count_string) == "*") {
           parameters.loadall_ = true;
-        } else {
-          uint32_t cnt{0};
-          VMSDK_ASSIGN_OR_RETURN(cnt, vmsdk::To<uint32_t>(count_string));
-          for (uint32_t i = 0; i < cnt; ++i) {
-            std::string load;
-            VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, load));
-            if (load.empty() || load == "@") {
-              return absl::InvalidArgumentError(
-                  "Empty argument in LOAD clause not allowed");
-            }
-            if (load[0] == '@') {
-              parameters.loads_.emplace_back(load.substr(1));
-            } else {
-              parameters.loads_.emplace_back(std::move(load));
+          return absl::OkStatus();
+        }
+        uint32_t cnt{0};
+        VMSDK_ASSIGN_OR_RETURN(cnt, vmsdk::To<uint32_t>(count_string));
+        // `cnt` is a token budget. Each LOAD entry is a field/path, optionally
+        // followed by `AS <alias>`; the `AS` keyword and its alias count
+        // against the budget (matching RediSearch).
+        uint32_t consumed = 0;
+        while (consumed < cnt) {
+          std::string load;
+          VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, load));
+          ++consumed;
+          if (load.empty() || load == "@") {
+            return absl::InvalidArgumentError(
+                "Empty argument in LOAD clause not allowed");
+          }
+          std::string identifier = load[0] == '@' ? load.substr(1) : load;
+          std::string alias = identifier;
+          // Honoring `AS <alias>` in the LOAD clause is a compatibility fix
+          // introduced in 1.2.1. Older emulated releases treat `AS` as just
+          // another field name (the legacy behavior preserved below).
+          absl::Status as_status = VALKEY_SEARCH_COMPATIBILITY_FIX(
+              1, 2, 1, "ft_aggregate_load_as",
+              [&]() -> absl::Status {
+                // If the entry is a schema identifier (e.g. a JSON path) rather
+                // than an alias, resolve it to the alias so it can be fetched.
+                // With no AS clause the default output name then remains the
+                // identifier, matching how single-field loads already behave.
+                auto &index = *parameters.parse_vars_.index_interface_;
+                if (!index.GetFieldType(identifier).ok()) {
+                  if (auto resolved = index.GetAlias(identifier);
+                      resolved.ok()) {
+                    identifier = *std::move(resolved);
+                    alias = identifier;
+                  }
+                }
+                if (consumed < cnt && itr.PopIfNextIgnoreCase(kAsParam)) {
+                  ++consumed;
+                  std::string rename;
+                  if (consumed >= cnt) {
+                    return absl::InvalidArgumentError(
+                        "`AS` argument to LOAD clause is missing/invalid");
+                  }
+                  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, rename));
+                  ++consumed;
+                  if (rename.empty()) {
+                    return absl::InvalidArgumentError(
+                        "`AS` argument to LOAD clause is missing/invalid");
+                  }
+                  alias = std::move(rename);
+                }
+                return absl::OkStatus();
+              },
+              []() -> absl::Status { return absl::OkStatus(); });
+          VMSDK_RETURN_IF_ERROR(as_status);
+          if (alias != identifier) {
+            // LOAD precedes APPLY/SORTBY/FILTER in the command, so register
+            // the rename now to make `@alias` resolvable in those later
+            // stages. Entries that can't be resolved against the index here
+            // (e.g. __key, the score field) are renamed afterwards in
+            // ManipulateReturnsClause.
+            auto ref = parameters.MakeReference(identifier, false);
+            if (ref.ok()) {
+              if (auto *attr = dynamic_cast<Attribute *>(ref->get())) {
+                parameters.record_info_by_index_[attr->record_index_]
+                    .output_name_ = alias;
+                parameters.record_indexes_by_alias_.emplace(
+                    alias, attr->record_index_);
+              }
             }
           }
+          parameters.loads_.emplace_back(LoadField{
+              .identifier = std::move(identifier), .alias = std::move(alias)});
         }
         return absl::OkStatus();
       });

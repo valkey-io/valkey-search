@@ -163,6 +163,6 @@ When feasible the old (non-compatible) behavior will be preserved for _at least_
 
 A list of the compatibility issues that have been fixed.
 
-| Release            | Description |
-| ------------------ | ----------- |
-| under construction | n/a         |
+| Release | Description |
+| ------- | ----------- |
+| 1.2.1   | `FT.AGGREGATE` `LOAD` honors the `AS <alias>` rename clause and accepts a JSON path as the loaded field. Emulating `1.2.0` or earlier treats `AS` as an ordinary field name and rejects JSON paths. Counter: `search_compatibility-ft_aggregate_load_as`. |

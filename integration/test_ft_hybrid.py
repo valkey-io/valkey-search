@@ -659,3 +659,354 @@ class TestFtHybridAtomicValidation(ValkeySearchTestCaseDebugMode):
         # doc:1 no longer matches "hello" after the mutation; fused result is
         # empty for the SEARCH arm, leaving only the VSIM match for doc:1.
         assert isinstance(search_res[0], list)
+
+
+# =============================================================================
+# Parallel-arm execution + per-arm consistency under concurrent mutations.
+#
+# Property the implementation must hold (per the local-mode atomic-validation
+# design): the two arms of FT.HYBRID run in parallel under reader locks on the
+# same time-sliced index mutex, so a writer (mutation) cannot interleave
+# between them. The fused output is therefore consistent across arms — for any
+# document, the per-arm score aliases reflect the SAME pre-mutation index
+# snapshot, so the doc is either contributed by BOTH arms (both aliases
+# present) or by NEITHER (doc absent from the fused result). It is never the
+# case that doc X has only @s (search alias) without @v (vsim alias) or vice
+# versa due to a mid-flight mutation.
+# =============================================================================
+class TestFtHybridParallelArmConsistency(ValkeySearchTestCaseDebugMode):
+    INDEX = "idx"
+
+    def append_startup_args(self, args: dict[str, str]) -> dict[str, str]:
+        args = super().append_startup_args(args)
+        # ≥ 2 reader threads so the two arms can genuinely run in parallel
+        # (true overlapping reader-lock hold times). With 1 thread the arms
+        # would serialize and a writer could squeeze between them.
+        args["search.reader-threads"] = "4"
+        # ≥ 2 writer threads so the pause-pointed mutation doesn't starve
+        # the rest of the writer pool.
+        args["search.writer-threads"] = "2"
+        return args
+
+    def _setup_index(self, client: Valkey, n: int = 10) -> bytes:
+        client.execute_command(
+            "FT.CREATE", self.INDEX, "ON", "HASH", "PREFIX", "1", "doc:",
+            "SCHEMA",
+            "title", "TEXT",
+            "vec", "VECTOR", "HNSW", "6",
+            "TYPE", "FLOAT32", "DIM", "4", "DISTANCE_METRIC", "L2",
+        )
+        q = _vec(1.0, 2.0, 3.0, 4.0)
+        for i in range(1, n + 1):
+            client.execute_command(
+                "HSET", f"doc:{i}",
+                "title", "hello world",
+                "vec", _vec(float(i), float(i), float(i), float(i)))
+        IndexingTestHelper.is_indexing_complete_on_node(client, self.INDEX)
+        return q
+
+    @staticmethod
+    def _rec_to_dict(rec):
+        return {bytes(rec[i]): rec[i + 1] for i in range(0, len(rec), 2)}
+
+    # -------- TEST 1 : both arms execute concurrently (observable proof) -----
+    def test_both_arms_execute_in_parallel(self):
+        """Both arms hit `background_search_completing` (the pausepoint at the
+        tail of every per-arm SearchAsync background callback) at the same
+        time. Two waiters at that pausepoint while one FT.HYBRID is in flight
+        proves the arms ran concurrently rather than serialized on a single
+        reader thread."""
+        client: Valkey = self.server.get_new_client()
+        q = self._setup_index(client, n=3)
+        client.execute_command(
+            "FT._DEBUG", "PAUSEPOINT", "SET", "background_search_completing")
+        thread, res, err = run_in_thread(
+            lambda: self.server.get_new_client().execute_command(
+                "FT.HYBRID", self.INDEX,
+                "SEARCH", "@title:hello",
+                "VSIM", "@vec", "$q", "KNN", "2", "K", "3",
+                "PARAMS", "2", "q", q))
+        # Both arms must reach the pausepoint and park there together.
+        waiters.wait_for_true(
+            lambda: client.execute_command(
+                "FT._DEBUG", "PAUSEPOINT", "TEST",
+                "background_search_completing") == 2,
+            timeout=5)
+        client.execute_command(
+            "FT._DEBUG", "PAUSEPOINT", "RESET",
+            "background_search_completing")
+        thread.join()
+        assert err[0] is None
+        assert isinstance(res[0], list)
+
+    # -------- TEST 2 : doc present in both arms or neither (deterministic) ---
+    def test_doc_in_both_arms_or_neither_under_mutation(self):
+        """Deterministic atomicity probe. doc:1 matches both arms. We queue a
+        mutation that makes it no longer match SEARCH, but stall the mutation
+        processor so the mutation cannot apply while the arms are running.
+
+        Outcome on the fused list:
+          * Both arms saw the *pre-mutation* index (mutation parked) and both
+            found doc:1, so the fused row carries BOTH per-arm aliases (@s, @v).
+          * The post-fusion contention check (FusedResolver) observes the
+            pending mutation, re-queues onto the mutation pipeline, the
+            mutation applies once we release the pausepoint, and the final
+            content fetch returns the post-mutation HASH content.
+
+        The asserted invariant is the strong one the user asked for: doc:1 is
+        in BOTH arms (both aliases set) or NEITHER (absent from result). It is
+        never the case that exactly one of @s / @v is present."""
+        client: Valkey = self.server.get_new_client()
+        q = self._setup_index(client, n=1)  # only doc:1, matched by both arms
+
+        # Pause mutation processing → any HSET queues but does not apply.
+        client.execute_command(
+            "FT._DEBUG", "PAUSEPOINT", "SET", "mutation_processing")
+        mut_thread, _, mut_err = run_in_thread(
+            lambda: self.server.get_new_client().execute_command(
+                "HSET", "doc:1", "title", "goodbye",
+                "vec", _vec(99.0, 99.0, 99.0, 99.0)))
+        waiters.wait_for_true(
+            lambda: client.execute_command(
+                "FT._DEBUG", "PAUSEPOINT", "TEST", "mutation_processing")
+            >= 1,
+            timeout=5)
+
+        # Issue FT.HYBRID — both arms run against the still-pre-mutation index.
+        hyb_thread, res, err = run_in_thread(
+            lambda: self.server.get_new_client().execute_command(
+                "FT.HYBRID", self.INDEX,
+                "SEARCH", "@title:hello", "YIELD_SCORE_AS", "s",
+                "VSIM", "@vec", "$q", "KNN", "4", "K", "5",
+                "YIELD_SCORE_AS", "v",
+                "PARAMS", "2", "q", q))
+        # Release the mutation; both the parked HSET AND the FT.HYBRID's
+        # post-fusion contention check unblock; the resolver re-runs once the
+        # mutation applies and replies with post-mutation content.
+        client.execute_command(
+            "FT._DEBUG", "PAUSEPOINT", "RESET", "mutation_processing")
+        mut_thread.join()
+        hyb_thread.join()
+        assert mut_err[0] is None
+        assert err[0] is None
+        assert isinstance(res[0], list)
+
+        # doc:1 must be either absent OR carry BOTH per-arm aliases — never
+        # exactly one.
+        rows = [self._rec_to_dict(r) for r in res[0][1:]]
+        doc1 = next((r for r in rows
+                     if r.get(b"__key") == b"doc:1"
+                     or b"doc:1" in r.values()), None)
+        if doc1 is None:
+            # Acceptable: mutation made it ineligible and the resolver dropped
+            # it during content fetch.
+            return
+        assert (b"s" in doc1) == (b"v" in doc1), \
+            f"split-arm violation: doc:1 = {doc1}"
+
+    # -------- TEST 3 : stress probe — no split-arm result under concurrent
+    #                   mutations across many trials --------
+    def test_concurrent_mutations_never_split_arms(self):
+        """The "both arms or neither" guarantee is a *per-query atomicity*
+        property: within a single FT.HYBRID execution both arms must observe
+        the SAME index snapshot, so a key cannot be in one arm's result and
+        absent from the other's because a writer slipped in between them. (A
+        doc that legitimately stopped matching SEARCH after a real content
+        change would land in just the VSIM arm — that's correct semantics,
+        not a split-arm violation.)
+
+        To probe atomicity in isolation, the mutator REFRESHES each doc in
+        place with the same values it already holds: this exercises the
+        mutation pipeline (writer lock + index remove/re-add) without ever
+        changing the doc's match status for either arm. Every doc matches
+        both arms throughout the run, so any split-arm row is by construction
+        caused by a writer time-slicing between the two arms' inner reader
+        locks — the bug the outer reader lock in PerformMultiSearchLocalAsync
+        is designed to prevent."""
+        import random
+        import threading
+        import time
+
+        client: Valkey = self.server.get_new_client()
+        N = 20
+        q = self._setup_index(client, n=N)
+
+        stop = threading.Event()
+        # Original per-doc vectors (must match what _setup_index seeded so
+        # the refresh truly is a no-op for matching purposes).
+        original_vec = {
+            i: _vec(float(i), float(i), float(i), float(i))
+            for i in range(1, N + 1)
+        }
+
+        def mutator():
+            w = self.server.get_new_client()
+            while not stop.is_set():
+                i = random.randint(1, N)
+                # Re-HSET with the same matching values. Writer lock taken,
+                # index entries cycled, but matchability for both arms is
+                # invariant.
+                w.execute_command(
+                    "HSET", f"doc:{i}",
+                    "title", "hello world",
+                    "vec", original_vec[i])
+
+        threads = [threading.Thread(target=mutator) for _ in range(3)]
+        for t in threads:
+            t.start()
+        try:
+            split_arm_rows = []
+            for _ in range(80):
+                res = client.execute_command(
+                    "FT.HYBRID", self.INDEX,
+                    "SEARCH", "@title:hello", "YIELD_SCORE_AS", "s",
+                    "VSIM", "@vec", "$q", "KNN", "4", "K", str(N),
+                    "YIELD_SCORE_AS", "v",
+                    "PARAMS", "2", "q", q)
+                for rec in res[1:]:
+                    d = self._rec_to_dict(rec)
+                    if (b"s" in d) != (b"v" in d):
+                        split_arm_rows.append(d)
+                time.sleep(0.005)
+        finally:
+            stop.set()
+            for t in threads:
+                t.join(timeout=5)
+        assert not split_arm_rows, (
+            f"split-arm rows observed under refresh-only mutations "
+            f"(only one of @s/@v present): "
+            f"{split_arm_rows[:5]}"
+            f" (+{len(split_arm_rows)-5} more)"
+            if len(split_arm_rows) > 5 else f"split-arm rows: {split_arm_rows}")
+
+
+# =============================================================================
+# Cluster mode: each arm must return its complete per-shard contributions back
+# to the coordinator so the COMBINE FUNCTION evaluates over the full
+# cross-shard merged set (not over a per-shard prefix).
+# =============================================================================
+class TestFtHybridClusterFunctionMerge(ValkeySearchClusterTestCase):
+    INDEX = "idx"
+
+    def _setup(self, n_docs: int = 30):
+        cluster: ValkeyCluster = self.new_cluster_client()
+        client: Valkey = self.new_client_for_primary(0)
+        client.execute_command(
+            "FT.CREATE", self.INDEX, "ON", "HASH", "PREFIX", "1", "doc:",
+            "SCHEMA",
+            "title", "TEXT",
+            "vec", "VECTOR", "HNSW", "6",
+            "TYPE", "FLOAT32", "DIM", "4", "DISTANCE_METRIC", "L2",
+        )
+        import time
+        # Seed docs with deterministic, distinct vectors. Pattern chosen so
+        # all L2 distances from q=[1,2,3,4] are unique (the simple [i,i,i,i]
+        # pattern produces a symmetric 4i²-20i+30 that collides docs 1<->4
+        # and 2<->3, etc.). [i,0,0,0] gives strictly monotonic (i-1)²+29 →
+        # all distinct.
+        for i in range(1, n_docs + 1):
+            cluster.hset(
+                f"doc:{i}",
+                mapping={
+                    "title": "hello",
+                    "vec": _vec(float(i), 0.0, 0.0, 0.0),
+                },
+            )
+        time.sleep(1)
+        return cluster, client
+
+    @staticmethod
+    def _rec_to_dict(rec):
+        return {bytes(rec[i]): rec[i + 1] for i in range(0, len(rec), 2)}
+
+    def test_function_merges_all_per_shard_arm_results(self):
+        """Cluster fanout with COMBINE FUNCTION. Each shard runs both arms
+        independently and returns BOTH arms' results to the coordinator; the
+        coordinator merges the per-arm result sets across shards and evaluates
+        the user expression `@s*10 + @v` over each unioned document.
+
+        We verify three things:
+          1. The total fused count equals the cluster-wide union size (every
+             doc matches the SEARCH arm; with K large enough every doc also
+             reaches the VSIM arm) — proves the per-shard limits did not
+             truncate either arm.
+          2. Every returned doc carries BOTH @s and @v (proves both arms'
+             per-shard results were returned to the coordinator, not just
+             one).
+          3. The fused score h equals f(@s, @v) read back from the per-arm
+             aliases (proves the FUNCTION ran on the merged set with both
+             arms' scores bound)."""
+        n_docs = 30
+        _, client = self._setup(n_docs=n_docs)
+        # SEARCH arm: every doc (text). VSIM arm: K large enough to cover
+        # every doc across the cluster so the union = all docs.
+        q = _vec(1.0, 2.0, 3.0, 4.0)
+        result = client.execute_command(
+            "FT.HYBRID", self.INDEX,
+            "SEARCH", "@title:hello", "YIELD_SCORE_AS", "s",
+            "VSIM", "@vec", "$q", "KNN", "4", "K", str(n_docs * 4),
+            "YIELD_SCORE_AS", "v",
+            "COMBINE", "FUNCTION", "4", "EXPR", "@s * 10 + @v",
+            "YIELD_SCORE_AS", "h",
+            # Large WINDOW disables fusion truncation.
+            "LIMIT", "0", str(n_docs),
+            "PARAMS", "2", "q", q,
+        )
+        assert isinstance(result, list)
+        # (1) Every shard's contribution to both arms reached the coordinator
+        #     and was merged into the union.
+        assert result[0] == n_docs, (
+            f"expected {n_docs} merged docs (full cross-shard union); "
+            f"got {result[0]} — a missing arm or truncated per-shard return "
+            f"would shrink this count")
+        # (2)+(3) Each returned doc has both per-arm aliases, and the
+        # FUNCTION value equals the expression applied to them.
+        seen = set()
+        for rec in result[1:]:
+            d = self._rec_to_dict(rec)
+            assert b"s" in d and b"v" in d and b"h" in d, \
+                f"missing per-arm or fused alias on cluster-fused row: {d}"
+            s = float(d[b"s"])
+            v = float(d[b"v"])
+            h = float(d[b"h"])
+            assert abs(h - (s * 10.0 + v)) < 1e-2, \
+                f"FUNCTION did not evaluate over both arm scores: " \
+                f"h={h} s={s} v={v}"
+            seen.add((round(s, 4), round(v, 4)))
+        # All n_docs rows are distinct (distinct per-arm score pairs) —
+        # a per-shard short-circuit that returned only one shard's slice
+        # would collapse this set.
+        assert len(seen) == n_docs, \
+            f"expected {n_docs} distinct (s,v) pairs across shards; " \
+            f"saw {len(seen)} — likely missing per-shard contributions"
+
+    def test_function_per_arm_scores_distinct_across_shards(self):
+        """Strong probe that per-arm scores from EVERY shard reach the
+        coordinator. We seed N=30 docs with strictly monotonic vector
+        magnitudes; the VSIM distances from $q form a strictly increasing
+        sequence. A coordinator that merged only one shard's arm output would
+        miss ~2/3 of the distance values. Verify all are present."""
+        n_docs = 30
+        _, client = self._setup(n_docs=n_docs)
+        q = _vec(0.0, 0.0, 0.0, 0.0)
+        result = client.execute_command(
+            "FT.HYBRID", self.INDEX,
+            "SEARCH", "@title:hello", "YIELD_SCORE_AS", "s",
+            "VSIM", "@vec", "$q", "KNN", "4", "K", str(n_docs * 4),
+            "YIELD_SCORE_AS", "v",
+            "COMBINE", "FUNCTION", "4", "EXPR", "@v",
+            "YIELD_SCORE_AS", "h",
+            "LIMIT", "0", str(n_docs),
+            "PARAMS", "2", "q", q,
+        )
+        assert result[0] == n_docs
+        v_values = []
+        for rec in result[1:]:
+            d = self._rec_to_dict(rec)
+            assert b"v" in d, f"missing @v on cluster row: {d}"
+            v_values.append(float(d[b"v"]))
+        # 30 distinct distances → every doc's per-arm score reached the
+        # coordinator and survived the merge.
+        assert len(set(round(x, 4) for x in v_values)) == n_docs, \
+            f"expected {n_docs} distinct VSIM distances across shards, " \
+            f"got {len(set(round(x, 4) for x in v_values))}"

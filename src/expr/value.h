@@ -55,8 +55,8 @@ class Value {
   std::optional<bool> AsBool() const;
   std::optional<double> AsDouble() const;
   std::optional<int64_t> AsInteger() const;
-  absl::string_view AsStringView() const;
-  std::string AsString() const;
+  std::optional<absl::string_view> AsStringView() const;
+  std::optional<std::string> AsString() const;
 
   bool IsTrue() const {
     auto r = AsBool();
@@ -72,7 +72,8 @@ class Value {
     } else if (v.IsDouble()) {
       return H::combine(std::move(h), *v.AsDouble());
     } else {
-      return H::combine(std::move(h), v.AsString());
+      // Bool or String — AsString cannot return nullopt for these.
+      return H::combine(std::move(h), *v.AsString());
     }
   }
 

@@ -9,12 +9,35 @@
 #include <cmath>
 
 #include "gtest/gtest.h"
+#include "src/valkey_search_options.h"
+#include "src/version.h"
 #include "vmsdk/src/testing_infra/utils.h"
 
 namespace valkey_search::expr {
 
 class ValueTest : public vmsdk::ValkeyTest {
  protected:
+  // Pin emulate-release to the current module version for the duration of
+  // each test, so VALKEY_SEARCH_COMPATIBILITY_FIX sites run the fixed
+  // branch. Tests that want to exercise the legacy branch should override
+  // by calling options::GetEmulateRelease().SetValue() inline.
+  void SetUp() override {
+    vmsdk::ValkeyTest::SetUp();
+    saved_emulate_release_ = options::GetEmulateRelease().GetValue();
+    // Pin to the current module version — the upper bound the validator
+    // accepts without debug-mode — so every COMPATIBILITY_FIX site runs
+    // the fixed branch.
+    auto ok = options::GetEmulateRelease().SetValue(kModuleVersion);
+    ASSERT_TRUE(ok.ok()) << ok.message();
+  }
+  void TearDown() override {
+    auto ok = options::GetEmulateRelease().SetValue(saved_emulate_release_);
+    ASSERT_TRUE(ok.ok()) << ok.message();
+    vmsdk::ValkeyTest::TearDown();
+  }
+
+  vmsdk::ValkeyVersion saved_emulate_release_{0};
+
   Value pos_inf = Value(std::numeric_limits<double>::infinity());
   Value neg_inf = Value(-std::numeric_limits<double>::infinity());
   Value pos_zero = Value(0.0);
@@ -262,6 +285,10 @@ TEST_F(ValueTest, timetest) {
   EXPECT_EQ(FuncMinute(ts), Value(1739565000));
   EXPECT_EQ(FuncHour(ts), Value(1739563200));
   EXPECT_EQ(FuncDay(ts), Value(1739491200));
-  EXPECT_EQ(FuncMonth(ts), Value(1738281600));
+  // 1738368000 == Sat Feb 1 2025 00:00:00 UTC: first day of the month
+  // containing ts. The previous expectation (1738281600 == Jan 31 2025)
+  // codified an off-by-one-day bug in FuncMonth (tm_mday=0 meant 'day 0'
+  // which mktime rolls back to the last day of the previous month).
+  EXPECT_EQ(FuncMonth(ts), Value(1738368000));
 }
 }  // namespace valkey_search::expr

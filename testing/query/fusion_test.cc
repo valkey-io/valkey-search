@@ -286,13 +286,13 @@ TEST_F(FuseFunctionTest, ScoreFnReceivesAllArmScores) {
   arms.push_back({.neighbors = &arm0, .window = 0});
   arms.push_back({.neighbors = &arm1, .window = 0});
   // Verify via the resulting fused scores: combined = arm0*10 + arm1.
-  auto fused = FuseFunction(
-      std::move(arms),
-      [](const std::vector<std::optional<double>>& s) -> double {
-        double a = s[0].has_value() ? *s[0] : 0.0;
-        double b = s[1].has_value() ? *s[1] : 0.0;
-        return a * 10.0 + b;
-      });
+  auto fused =
+      FuseFunction(std::move(arms),
+                   [](const std::vector<std::optional<double>>& s) -> double {
+                     double a = s[0].has_value() ? *s[0] : 0.0;
+                     double b = s[1].has_value() ? *s[1] : 0.0;
+                     return a * 10.0 + b;
+                   });
   ASSERT_EQ(fused.size(), 3u);
   // doc:1 in both arms: 0.5*10 + 0.2 = 5.2
   EXPECT_NEAR(Find(fused, "doc:1")->distance, 5.2, 1e-5);
@@ -312,12 +312,13 @@ TEST_F(FuseFunctionTest, AbsentArmScoreIsNullopt) {
   std::vector<ArmInput> arms;
   arms.push_back({.neighbors = &arm0, .window = 0});
   arms.push_back({.neighbors = &arm1, .window = 0});
-  auto fused = FuseFunction(
-      std::move(arms),
-      [](const std::vector<std::optional<double>>& s) -> double {
-        // Return 1.0 if BOTH arms present, else 0.0 — lets us assert presence.
-        return (s[0].has_value() && s[1].has_value()) ? 1.0 : 0.0;
-      });
+  auto fused =
+      FuseFunction(std::move(arms),
+                   [](const std::vector<std::optional<double>>& s) -> double {
+                     // Return 1.0 if BOTH arms present, else 0.0 — lets us
+                     // assert presence.
+                     return (s[0].has_value() && s[1].has_value()) ? 1.0 : 0.0;
+                   });
   ASSERT_EQ(fused.size(), 2u);
   // Neither doc appears in both arms, so both score 0.
   EXPECT_NEAR(Find(fused, "doc:1")->distance, 0.0, 1e-9);
@@ -328,17 +329,15 @@ TEST_F(FuseFunctionTest, ScoreAliasesStillPropagated) {
   auto arm0 = Vec(N("doc:1", 0.5f));
   auto arm1 = Vec(N("doc:1", 0.2f));
   std::vector<ArmInput> arms;
-  arms.push_back({.neighbors = &arm0,
-                  .score_alias = std::string("s"),
-                  .window = 0});
-  arms.push_back({.neighbors = &arm1,
-                  .score_alias = std::string("v"),
-                  .window = 0});
-  auto fused = FuseFunction(
-      std::move(arms),
-      [](const std::vector<std::optional<double>>& s) -> double {
-        return *s[0] + *s[1];
-      });
+  arms.push_back(
+      {.neighbors = &arm0, .score_alias = std::string("s"), .window = 0});
+  arms.push_back(
+      {.neighbors = &arm1, .score_alias = std::string("v"), .window = 0});
+  auto fused =
+      FuseFunction(std::move(arms),
+                   [](const std::vector<std::optional<double>>& s) -> double {
+                     return *s[0] + *s[1];
+                   });
   ASSERT_EQ(fused.size(), 1u);
   const auto* doc1 = Find(fused, "doc:1");
   ASSERT_NE(doc1, nullptr);

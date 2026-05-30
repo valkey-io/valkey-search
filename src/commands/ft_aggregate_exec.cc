@@ -419,10 +419,10 @@ TEST_COUNTER(ForceTimeoutAggregateCancels);
 DEV_INTEGER_COUNTER(agg_stats, agg_input_records);
 DEV_INTEGER_COUNTER(agg_stats, agg_output_records);
 
-bool ReplyWithValue(ValkeyModuleCtx *ctx,
+bool ReplyWithValue(ValkeyModuleCtx* ctx,
                     data_model::AttributeDataType data_type,
                     std::string_view name, indexes::IndexerType indexer_type,
-                    const expr::Value &value, int dialect) {
+                    const expr::Value& value, int dialect) {
   if (value.IsNil()) {
     return false;
   }
@@ -470,8 +470,8 @@ bool ReplyWithValue(ValkeyModuleCtx *ctx,
 
 // Process the query setup for vector vs non-vector queries and set up indices
 absl::StatusOr<std::pair<size_t, size_t>> ProcessNeighborsForProcessing(
-    ValkeyModuleCtx *ctx, std::vector<indexes::Neighbor> &neighbors,
-    AggregateParameters &parameters) {
+    ValkeyModuleCtx* ctx, std::vector<indexes::Neighbor>& neighbors,
+    AggregateParameters& parameters) {
   size_t key_index = 0, scores_index = 0;
 
   std::optional<std::string> vector_identifier;
@@ -527,11 +527,11 @@ absl::StatusOr<expr::Value> ProcessFieldValue(
 
 // Create records from neighbors and populate their fields
 absl::Status CreateRecordsFromNeighbors(
-    std::vector<indexes::Neighbor> &neighbors, AggregateParameters &parameters,
-    size_t key_index, size_t scores_index, RecordSet &records) {
+    std::vector<indexes::Neighbor>& neighbors, AggregateParameters& parameters,
+    size_t key_index, size_t scores_index, RecordSet& records) {
   auto data_type = parameters.index_schema->GetAttributeDataType().ToProto();
 
-  for (auto &n : neighbors) {
+  for (auto& n : neighbors) {
     auto rec =
         std::make_unique<Record>(parameters.record_indexes_by_alias_.size());
 
@@ -546,7 +546,7 @@ absl::Status CreateRecordsFromNeighbors(
     if (n.attribute_contents.has_value() && !parameters.no_content) {
       bool should_drop_record = false;
 
-      for (auto &[name, records_map_value] : *n.attribute_contents) {
+      for (auto& [name, records_map_value] : *n.attribute_contents) {
         auto value = vmsdk::ToStringView(records_map_value.value.get());
         std::optional<size_t> record_index;
 
@@ -594,10 +594,10 @@ absl::Status CreateRecordsFromNeighbors(
 }
 
 // Execute all aggregation stages on the record set
-absl::Status ExecuteAggregationStages(AggregateParameters &parameters,
-                                      RecordSet &records) {
+absl::Status ExecuteAggregationStages(AggregateParameters& parameters,
+                                      RecordSet& records) {
   agg_input_records.Increment(records.size());
-  for (auto &stage : parameters.stages_) {
+  for (auto& stage : parameters.stages_) {
     if (parameters.cancellation_token->IsCancelled() ||
         ForceTimeoutAggregate.GetValue()) {
       ForceTimeoutAggregateCancels.Increment(1);
@@ -611,9 +611,9 @@ absl::Status ExecuteAggregationStages(AggregateParameters &parameters,
 }
 
 // Generate the final response from processed records
-absl::Status GenerateResponse(ValkeyModuleCtx *ctx,
-                              AggregateParameters &parameters,
-                              RecordSet &records) {
+absl::Status GenerateResponse(ValkeyModuleCtx* ctx,
+                              AggregateParameters& parameters,
+                              RecordSet& records) {
   ValkeyModule_ReplyWithArray(ctx, 1 + records.size());
   ValkeyModule_ReplyWithLongLong(ctx, static_cast<long long>(records.size()));
 
@@ -634,7 +634,7 @@ absl::Status GenerateResponse(ValkeyModuleCtx *ctx,
       }
     }
 
-    for (const auto &[name, value] : rec->extra_fields_) {
+    for (const auto& [name, value] : rec->extra_fields_) {
       if (ReplyWithValue(
               ctx, parameters.index_schema->GetAttributeDataType().ToProto(),
               name, indexes::IndexerType::kNone, value, parameters.dialect)) {
@@ -648,9 +648,9 @@ absl::Status GenerateResponse(ValkeyModuleCtx *ctx,
   return absl::OkStatus();
 }
 
-absl::Status RunAggregatePipeline(ValkeyModuleCtx *ctx,
-                                  std::vector<indexes::Neighbor> &neighbors,
-                                  AggregateParameters &parameters) {
+absl::Status RunAggregatePipeline(ValkeyModuleCtx* ctx,
+                                  std::vector<indexes::Neighbor>& neighbors,
+                                  AggregateParameters& parameters) {
   // 1. Process query setup and get key/score indices
   VMSDK_ASSIGN_OR_RETURN(
       auto indices, ProcessNeighborsForProcessing(ctx, neighbors, parameters));

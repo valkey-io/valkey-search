@@ -225,9 +225,9 @@ struct SearchPartitionResultsTracker {
     }
     parameters->search_result.status = status;
     // Silent mode: hand this arm's merged result to the meta-tracker rather
-    // than unblocking a client. Move the result and the per-arm SearchParameters
-    // out so the meta-tracker can retain them (the neighbors may hold
-    // string_view keys into the local-responder chain).
+    // than unblocking a client. Move the result and the per-arm
+    // SearchParameters out so the meta-tracker can retain them (the neighbors
+    // may hold string_view keys into the local-responder chain).
     if (meta_tracker_ != nullptr) {
       auto meta = std::move(meta_tracker_);
       size_t arm_index = arm_index_;
@@ -567,8 +567,7 @@ absl::Status PerformMultiSearchFanoutAsync(
 
   // Move arms out and build the meta-tracker (keeps per_arm_results sized to
   // num_arms).
-  std::vector<std::unique_ptr<MultiArmShim>> arms =
-      std::move(parameters->arms);
+  std::vector<std::unique_ptr<MultiArmShim>> arms = std::move(parameters->arms);
   parameters->arms.clear();
   parameters->arms.resize(num_arms);
   auto meta_tracker =
@@ -630,8 +629,7 @@ absl::Status PerformMultiSearchFanoutAsync(
           *arm_requests[i], nullptr, local_parameters.get()));
       local_parameters->tracker = per_arm_trackers[i];
       VMSDK_RETURN_IF_ERROR(query::SearchAsync(std::move(local_parameters),
-                                               thread_pool,
-                                               SearchMode::kLocal))
+                                               thread_pool, SearchMode::kLocal))
           << "Failed to handle FT.HYBRID arm locally during fan-out";
     }
   }

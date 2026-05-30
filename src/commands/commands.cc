@@ -10,6 +10,8 @@
 #include <memory>
 #include <vector>
 
+#include "src/query/multi_search.h"  // for ExecuteCommand<MultiSearchParameters>
+
 #include "fanout.h"
 #include "ft_create_parser.h"
 #include "src/acl.h"
@@ -81,16 +83,16 @@ void Free([[maybe_unused]] ValkeyModuleCtx *ctx, void *privdata) {
 CONTROLLED_BOOLEAN(ForceReplicasOnly, false);
 DEV_INTEGER_COUNTER(stats, single_slot_queries);
 
-std::vector<vmsdk::cluster_map::NodeInfo> ComputeSearchTargets(
-    ValkeyModuleCtx *ctx, const QueryCommand &parameters) {
-  auto mode = /* !vmsdk::IsReadOnly(ctx) ? query::fanout::kPrimaries ? */
-      ForceReplicasOnly.GetValue()
-          ? vmsdk::cluster_map::FanoutTargetMode::kOneReplicaPerShard
-          : vmsdk::cluster_map::FanoutTargetMode::kRandom;
-
-  // refresh cluster map if needed
+// Duck-typed over Cmd: only requires a `index_schema_name` member. Used by
+// ExecuteCommand<Cmd>; declared before that template so its body is visible
+// at the template's point of instantiation.
+template <typename Cmd>
+std::vector<vmsdk::cluster_map::NodeInfo> ComputeSearchTargetsT(
+    ValkeyModuleCtx *ctx, const Cmd &parameters) {
+  auto mode = ForceReplicasOnly.GetValue()
+                  ? vmsdk::cluster_map::FanoutTargetMode::kOneReplicaPerShard
+                  : vmsdk::cluster_map::FanoutTargetMode::kRandom;
   auto cluster_map = ValkeySearch::Instance().GetOrRefreshClusterMap(ctx);
-
   if (vmsdk::ParseHashTag(parameters.index_schema_name).has_value()) {
     auto key = vmsdk::MakeUniqueValkeyString(parameters.index_schema_name);
     auto this_slot = ValkeyModule_ClusterKeySlot(key.get());
@@ -105,12 +107,12 @@ std::vector<vmsdk::cluster_map::NodeInfo> ComputeSearchTargets(
 
 CONTROLLED_BOOLEAN(ForceInvalidIndexFingerprint, false);
 
-//
-// Common Class for FT.SEARCH and FT.AGGREGATE command
-//
-absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
-                                   ValkeyModuleString **argv, int argc,
-                                   std::unique_ptr<QueryCommand> parameters) {
+// Generic dispatch shared by FT.SEARCH, FT.AGGREGATE, FT.HYBRID. Cmd-specific
+// behavior lives in the static hooks: Cmd::ParseAfterIndex, ExecuteSyncLocal,
+// DispatchLocalAsync, DispatchFanoutAsync.
+template <typename Cmd>
+absl::Status ExecuteCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
+                            int argc, std::unique_ptr<Cmd> parameters) {
   auto status = [&]() -> absl::Status {
     auto &schema_manager = SchemaManager::Instance();
     vmsdk::ArgsIterator itr{argv + 1, argc - 1};
@@ -124,10 +126,7 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
     VMSDK_ASSIGN_OR_RETURN(
         parameters->index_schema,
         schema_manager.GetIndexSchema(db_num, parameters->index_schema_name));
-    VMSDK_RETURN_IF_ERROR(
-        vmsdk::ParseParamValue(itr, parameters->parse_vars.query_string));
-    VMSDK_RETURN_IF_ERROR(parameters->ParseCommand(itr));
-    parameters->parse_vars.ClearAtEndOfParse();
+    VMSDK_RETURN_IF_ERROR(Cmd::ParseAfterIndex(*parameters, itr));
     parameters->cancellation_token =
         cancel::Make(parameters->timeout_ms, nullptr);
     VMSDK_RETURN_IF_ERROR(
@@ -148,43 +147,16 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
 
     if (ABSL_PREDICT_FALSE(!ValkeySearch::Instance().SupportParallelQueries() ||
                            inside_multi_exec)) {
-      VMSDK_RETURN_IF_ERROR(
-          query::Search(*parameters, query::SearchMode::kLocal));
-      // Check if operation failed first to get the actual error message
-      if (!parameters->search_result.status.ok()) {
-        ValkeyModule_ReplyWithError(
-            ctx, parameters->search_result.status.message().data());
-        ++Metrics::GetStats().query_failed_requests_cnt;
-        return absl::OkStatus();
-      }
-      // Check if operation was cancelled and partial results are disabled.
-      if (!parameters->enable_partial_results &&
-          parameters->cancellation_token->IsCancelled()) {
-        ValkeyModule_ReplyWithError(
-            ctx, "Search operation cancelled due to timeout");
-        ++Metrics::GetStats().query_failed_requests_cnt;
-        return absl::OkStatus();
-      }
-      parameters->SendReply(ctx, parameters->search_result);
-      ValkeySearch::Instance().ScheduleSearchResultCleanup(
-          [neighbors =
-               std::move(parameters->search_result.neighbors)]() mutable {
-            // neighbors destructor runs automatically when lambda completes
-          });
-      return absl::OkStatus();
+      return Cmd::ExecuteSyncLocal(ctx, std::move(parameters));
     }
 
     std::vector<vmsdk::cluster_map::NodeInfo> search_targets;
     if (do_fanout) {
-      search_targets = ComputeSearchTargets(ctx, *parameters);
+      search_targets = ComputeSearchTargetsT(ctx, *parameters);
       if (search_targets.empty()) {
         return absl::InternalError("No available nodes to execute the query");
       }
     }
-
-    parameters->blocked_client = vmsdk::BlockedClient(
-        ctx, async::Reply, async::Timeout, async::Free, parameters->timeout_ms);
-    parameters->blocked_client->MeasureTimeStart();
 
     if (do_fanout) {
       // get index fingerprint and version
@@ -193,28 +165,97 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
         parameters->index_fingerprint_version.set_fingerprint(404);
         parameters->index_fingerprint_version.set_version(404);
       } else {
-        // get fingerprint/version from IndexSchema
         parameters->index_fingerprint_version.set_fingerprint(
             parameters->index_schema->GetFingerprint());
         parameters->index_fingerprint_version.set_version(
             parameters->index_schema->GetVersion());
       }
 
-      return query::fanout::PerformSearchFanoutAsync(
-          ctx, search_targets,
+      return Cmd::DispatchFanoutAsync(
+          ctx, std::move(parameters), search_targets,
           ValkeySearch::Instance().GetCoordinatorClientPool(),
-          std::move(parameters),
           ValkeySearch::Instance().GetReaderThreadPool());
     }
-    return query::SearchAsync(std::move(parameters),
-                              ValkeySearch::Instance().GetReaderThreadPool(),
-                              query::SearchMode::kLocal);
+    return Cmd::DispatchLocalAsync(
+        ctx, std::move(parameters),
+        ValkeySearch::Instance().GetReaderThreadPool());
   }();
   if (!status.ok()) {
     ++Metrics::GetStats().query_failed_requests_cnt;
   }
   return status;
 }
+
+// ----- Static hooks on QueryCommand consumed by ExecuteCommand -----
+
+absl::Status QueryCommand::ParseAfterIndex(QueryCommand &cmd,
+                                           vmsdk::ArgsIterator &itr) {
+  VMSDK_RETURN_IF_ERROR(
+      vmsdk::ParseParamValue(itr, cmd.parse_vars.query_string));
+  VMSDK_RETURN_IF_ERROR(cmd.ParseCommand(itr));
+  cmd.parse_vars.ClearAtEndOfParse();
+  return absl::OkStatus();
+}
+
+absl::Status QueryCommand::ExecuteSyncLocal(
+    ValkeyModuleCtx *ctx, std::unique_ptr<QueryCommand> cmd) {
+  VMSDK_RETURN_IF_ERROR(query::Search(*cmd, query::SearchMode::kLocal));
+  if (!cmd->search_result.status.ok()) {
+    ValkeyModule_ReplyWithError(ctx,
+                                cmd->search_result.status.message().data());
+    ++Metrics::GetStats().query_failed_requests_cnt;
+    return absl::OkStatus();
+  }
+  if (!cmd->enable_partial_results &&
+      cmd->cancellation_token->IsCancelled()) {
+    ValkeyModule_ReplyWithError(ctx,
+                                "Search operation cancelled due to timeout");
+    ++Metrics::GetStats().query_failed_requests_cnt;
+    return absl::OkStatus();
+  }
+  cmd->SendReply(ctx, cmd->search_result);
+  ValkeySearch::Instance().ScheduleSearchResultCleanup(
+      [neighbors = std::move(cmd->search_result.neighbors)]() mutable {
+        // destructor runs when lambda completes
+      });
+  return absl::OkStatus();
+}
+
+absl::Status QueryCommand::DispatchLocalAsync(
+    ValkeyModuleCtx *ctx, std::unique_ptr<QueryCommand> cmd,
+    vmsdk::ThreadPool *pool) {
+  cmd->blocked_client = vmsdk::BlockedClient(ctx, async::Reply, async::Timeout,
+                                              async::Free, cmd->timeout_ms);
+  cmd->blocked_client->MeasureTimeStart();
+  return query::SearchAsync(std::move(cmd), pool, query::SearchMode::kLocal);
+}
+
+absl::Status QueryCommand::DispatchFanoutAsync(
+    ValkeyModuleCtx *ctx, std::unique_ptr<QueryCommand> cmd,
+    std::vector<vmsdk::cluster_map::NodeInfo> &search_targets,
+    coordinator::ClientPool *client_pool, vmsdk::ThreadPool *pool) {
+  cmd->blocked_client = vmsdk::BlockedClient(ctx, async::Reply, async::Timeout,
+                                              async::Free, cmd->timeout_ms);
+  cmd->blocked_client->MeasureTimeStart();
+  return query::fanout::PerformSearchFanoutAsync(ctx, search_targets,
+                                                  client_pool, std::move(cmd),
+                                                  pool);
+}
+
+absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
+                                   ValkeyModuleString **argv, int argc,
+                                   std::unique_ptr<QueryCommand> parameters) {
+  return ExecuteCommand<QueryCommand>(ctx, argv, argc, std::move(parameters));
+}
+
+// Explicit instantiations for the two Cmd types we ship: QueryCommand
+// (FT.SEARCH, FT.AGGREGATE) and MultiSearchParameters (FT.HYBRID).
+template absl::Status ExecuteCommand<QueryCommand>(
+    ValkeyModuleCtx *, ValkeyModuleString **, int,
+    std::unique_ptr<QueryCommand>);
+template absl::Status ExecuteCommand<query::MultiSearchParameters>(
+    ValkeyModuleCtx *, ValkeyModuleString **, int,
+    std::unique_ptr<query::MultiSearchParameters>);
 
 void QueryCommand::QueryCompleteImpl(
     std::unique_ptr<SearchParameters> parameters) {

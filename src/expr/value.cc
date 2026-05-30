@@ -512,6 +512,10 @@ Value FuncTimefmt(const Value& ts, const Value& fmt) {
   if (!timestampd) {
     return Value(Value::Nil("timefmt: timestamp was not a number"));
   }
+  auto fmtstr = fmt.AsStringView();
+  if (fmtstr.empty()) {
+    return Value("");
+  }
   struct tm tm;
   time_t timestamp = (time_t)*timestampd;
   ::gmtime_r(&timestamp, &tm);

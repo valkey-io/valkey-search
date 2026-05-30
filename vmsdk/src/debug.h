@@ -21,6 +21,11 @@
 namespace vmsdk {
 namespace debug {
 
+// Global flag: set to true when any pause point is registered via FT._DEBUG.
+// Non-atomic — only written by the main thread during FT._DEBUG commands.
+// Checked inline by PAUSEPOINT/BACKGROUND_PAUSEPOINT macros for fast skip.
+extern bool pause_points_enabled;
+
 //
 // PausePoints are a tool to help with debugging of background processes.
 //
@@ -30,14 +35,20 @@ namespace debug {
 // current thread. A unique label is provided to distinguish this pause point
 // with others.
 //
-#define PAUSEPOINT(name) \
-  vmsdk::debug::PausePoint(name, std::source_location::current())
+#define PAUSEPOINT(name)                                               \
+  do {                                                                 \
+    if (vmsdk::debug::pause_points_enabled) {                          \
+      vmsdk::debug::PausePoint(name, std::source_location::current()); \
+    }                                                                  \
+  } while (false)
 void PausePoint(absl::string_view point, std::source_location location);
 
-#define BACKGROUND_PAUSEPOINT(name) \
-  if (!vmsdk::IsMainThread()) {     \
-    PAUSEPOINT(name);               \
-  }                                 \
+#define BACKGROUND_PAUSEPOINT(name)                                     \
+  do {                                                                  \
+    if (vmsdk::debug::pause_points_enabled && !vmsdk::IsMainThread()) { \
+      PAUSEPOINT(name);                                                 \
+    }                                                                   \
+  } while (false)
 //
 // This function is used by the control machinery (FT.DEBUG) to enable/disable
 // and test PausePoints.

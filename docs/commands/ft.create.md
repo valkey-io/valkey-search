@@ -12,6 +12,7 @@ FT.CREATE <index-name>
     [ON HASH | ON JSON]
     [PREFIX <count> <prefix> [<prefix>...]]
     [SCORE default_value]
+    [SCORE_FIELD <field_name>]
     [LANGUAGE <language>]
     [SKIPINITIALSCAN]
     [MINSTEMSIZE <min_stem_size>]
@@ -47,7 +48,9 @@ FT.CREATE <index-name>
 
 - `SKIPINITIALSCAN` (optional): If specified, this option skips the normal backfill operation for an index. If this option is specified, pre-existing keys which match the `PREFIX` clause will not be loaded into the index during a backfill operation. This clause has no effect on processing of key mutations _after_ an index is created, i.e., keys which are mutated after an index is created and satisfy the data type and `PREFIX` clause will be inserted into that index.
 
-- `SCORE` (optional): The current implementation only allows the value to be 1.0. This parameter is accepted to make valkey-search more interoperable with RediSearch. (default: 1.0)
+- `SCORE` (optional): Sets the default document score used for text search ranking. The value must be between 0.0 and 1.0. When `SCORE_FIELD` is configured, this value is used as the fallback if a document's score field is missing or cannot be parsed. (default: 1.0)
+
+- `SCORE_FIELD <field_name>` (optional): Specifies the name of a hash field whose numeric value is used as the per-document score. When configured, the value of this field is read during ingestion and stored as the document's relevance score for text search ranking. If the field is missing or cannot be parsed as a valid number, the index-level `SCORE` default is used. The raw value is stored without clamping; the scoring algorithm determines how to handle values at query time.
 
 ## Field types
 

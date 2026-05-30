@@ -11,11 +11,13 @@
 #include <string>
 #include <utility>
 
+#include "absl/container/flat_hash_set.h"
 #include "absl/functional/any_invocable.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
+#include "absl/synchronization/mutex.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -24,8 +26,20 @@ namespace {
 static bool set_main_thread = false;
 thread_local static bool is_main_thread = false;
 
+// Tracks every RunByMain() callback that has been allocated and handed to
+// ValkeyModule_EventLoopAddOneShot() but not yet invoked. RunAnyInvocable()
+// removes its own entry before deleting. DrainPendingMainCallbacks() deletes
+// whatever is still here at shutdown.
+absl::Mutex outstanding_callbacks_mu;
+absl::flat_hash_set<absl::AnyInvocable<void()> *> outstanding_callbacks
+    ABSL_GUARDED_BY(outstanding_callbacks_mu);
+
 void RunAnyInvocable(void *invocable) {
   absl::AnyInvocable<void()> *fn = (absl::AnyInvocable<void()> *)invocable;
+  {
+    absl::MutexLock lock(&outstanding_callbacks_mu);
+    outstanding_callbacks.erase(fn);
+  }
   (*fn)();
   delete fn;
 }
@@ -88,7 +102,24 @@ int RunByMain(absl::AnyInvocable<void()> fn, bool force_async) {
     return VALKEYMODULE_OK;
   }
   auto call_by_main = new absl::AnyInvocable<void()>(std::move(fn));
+  // Register the pointer *before* enqueueing so the drain path at shutdown
+  // can free it if the event loop never processes it. Once
+  // EventLoopAddOneShot succeeds, ownership is conceptually shared: whoever
+  // gets there first (RunAnyInvocable or DrainPendingMainCallbacks) removes
+  // the entry and deletes the object.
+  {
+    absl::MutexLock lock(&outstanding_callbacks_mu);
+    outstanding_callbacks.insert(call_by_main);
+  }
   return ValkeyModule_EventLoopAddOneShot(RunAnyInvocable, call_by_main);
+}
+
+void DrainPendingMainCallbacks() {
+  absl::MutexLock lock(&outstanding_callbacks_mu);
+  for (absl::AnyInvocable<void()> *fn : outstanding_callbacks) {
+    delete fn;
+  }
+  outstanding_callbacks.clear();
 }
 
 std::string WrongArity(absl::string_view cmd) {

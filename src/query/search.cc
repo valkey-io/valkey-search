@@ -798,8 +798,7 @@ SerializationRange SearchResult::GetSerializationRange(
 }
 
 absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
-  auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
-  vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
+  vmsdk::ReaderMutexLock lock(&parameters.index_schema->GetTimeSlicedMutex());
   absl::StatusOr<std::vector<indexes::Neighbor>> neighbors =
       DoSearch(parameters, search_mode, lock);
   VMSDK_ASSIGN_OR_RETURN(

@@ -22,25 +22,37 @@ def wait_for_background_tasks(timeout=30):
     exit under ASAN.
 
     The count is published by the server as the developer-visible INFO field
-    `search_async_queries_in_flight`. A busy wait (polling) is sufficient."""
+    `search_async_queries_in_flight`. A busy wait (polling) is sufficient. In
+    cluster mode a query fans out across nodes, so every node is drained."""
     def decorator(func):
         @functools.wraps(func)
         def wrapper(self, *args, **kwargs):
             result = func(self, *args, **kwargs)
-            # The in-flight counter is a developer-visible INFO field.
-            self.client.execute_command(
-                "CONFIG SET search.info-developer-visible yes"
-            )
-            waiters.wait_for_equal(
-                lambda: int(
-                    self.client.info("SEARCH")["search_async_queries_in_flight"]
-                ),
-                0,
-                timeout=timeout,
-            )
+            wait_for_async_queries_drained(self, timeout=timeout)
             return result
         return wrapper
     return decorator
+
+
+def wait_for_async_queries_drained(test_case, timeout=30):
+    """Busy-wait until every server node reports zero in-flight asynchronous
+    query operations (the developer-visible INFO field
+    `search_async_queries_in_flight`), so the system is idle before the fixture
+    teardown shuts the servers down. Works for both single-node and cluster
+    test cases (a fanned-out query may be in flight on several nodes)."""
+    nodes = getattr(test_case, "nodes", None)
+    clients = [node.client for node in nodes] if nodes else [test_case.client]
+    # The in-flight counter is a developer-visible INFO field.
+    for client in clients:
+        client.execute_command("CONFIG SET search.info-developer-visible yes")
+    for client in clients:
+        waiters.wait_for_equal(
+            lambda c=client: int(
+                c.info("SEARCH")["search_async_queries_in_flight"]
+            ),
+            0,
+            timeout=timeout,
+        )
 
 def run_in_thread(func):
     """Run func in thread, return (thread, result, error) for later inspection."""

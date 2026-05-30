@@ -8,6 +8,8 @@
 #include "src/query/multi_search.h"
 
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <memory>
 #include <utility>
 
@@ -92,6 +94,27 @@ void MultiSearchTracker::OnArmComplete(
   }
 }
 
+void MultiSearchTracker::SetOuterReaderLock(
+    vmsdk::TimeSlicedMRMWMutex* mutex, bool may_prolong) {
+  absl::MutexLock lock(&mu_);
+  outer_mutex_ = mutex;
+  outer_may_prolong_ = may_prolong;
+}
+
+void MultiSearchTracker::ReleaseOuterReaderLock() {
+  vmsdk::TimeSlicedMRMWMutex* mutex = nullptr;
+  bool may_prolong = false;
+  {
+    absl::MutexLock lock(&mu_);
+    mutex = outer_mutex_;
+    may_prolong = outer_may_prolong_;
+    outer_mutex_ = nullptr;
+  }
+  if (mutex != nullptr) {
+    mutex->Unlock(may_prolong, /*ignore_time_quota=*/false);
+  }
+}
+
 void MultiSearchTracker::Finalize() {
   std::unique_ptr<MultiSearchParameters> params;
   {
@@ -108,6 +131,12 @@ void MultiSearchTracker::Finalize() {
   if (any_arm_failed_.load() && !params->enable_partial_results) {
     params->search_result.status = first_error_;
   }
+  // Release the outer reader lock — every arm has observed a consistent index
+  // snapshot by this point, so writers may now switch in. (Done BEFORE the
+  // user-supplied completion so a slow aggregate pipeline doesn't starve
+  // writers; the post-fusion ResolveContent acquires its own short-lived
+  // contention check independently.)
+  ReleaseOuterReaderLock();
   // Hand off to the user-supplied completion. Production code (Phase 4) runs
   // fusion + the aggregate pipeline + unblocks the client. Tests inspect
   // per_arm_results from inside this callback.
@@ -137,7 +166,25 @@ absl::Status PerformMultiSearchLocalAsync(
   std::vector<std::unique_ptr<MultiArmShim>> arms = std::move(parameters->arms);
   parameters->arms.clear();
   parameters->arms.resize(arm_count);  // keep size() == N for tracker init
+  // Acquire ONE reader lock on the index's time-sliced mutex BEFORE
+  // scheduling any arm. Each arm's own Search() will additionally take its
+  // own reader lock (recursive readers are fine — the mutex just counts), but
+  // this outer lock is what guarantees the mutex stays in read mode for the
+  // entire multi-arm operation. Without it, a writer could time-slice in
+  // between arm A releasing its inner lock and arm B acquiring its own,
+  // producing the "split-arm" inconsistency the user prohibited.
+  // Released in MultiSearchTracker::Finalize after every arm has reported.
+  vmsdk::TimeSlicedMRMWMutex* index_mutex = nullptr;
+  bool index_mutex_may_prolong = false;
+  if (parameters->index_schema != nullptr) {
+    index_mutex = &parameters->index_schema->GetTimeSlicedMutex();
+    index_mutex->ReaderLock(index_mutex_may_prolong,
+                             /*ignore_time_quota=*/false);
+  }
   auto tracker = std::make_shared<MultiSearchTracker>(std::move(parameters));
+  if (index_mutex != nullptr) {
+    tracker->SetOuterReaderLock(index_mutex, index_mutex_may_prolong);
+  }
 
   for (size_t i = 0; i < arm_count; ++i) {
     arms[i]->tracker = tracker;
@@ -149,6 +196,12 @@ absl::Status PerformMultiSearchLocalAsync(
     // GetContentProcessing() returns kNoContent and the arm completes on the
     // background thread without a per-arm ResolveContent.
     arms[i]->no_content = true;
+    // Uncap each arm pre-fusion: fusion needs the full per-arm match set so
+    // a doc matched by both arms is contributed by both (the "both arms or
+    // neither" guarantee — see TestFtHybridParallelArmConsistency). The
+    // aggregate-pipeline LIMIT (post-fusion) bounds the final reply size.
+    arms[i]->limit.first_index = 0;
+    arms[i]->limit.number = std::numeric_limits<uint64_t>::max();
     auto status =
         SearchAsync(std::move(arms[i]), reader_pool, SearchMode::kLocal);
     if (!status.ok()) {

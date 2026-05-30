@@ -15,6 +15,7 @@
 #include "absl/status/status.h"
 #include "absl/synchronization/mutex.h"
 #include "src/commands/ft_aggregate_parser.h"  // for ~AggregateParameters
+#include "src/expr/expr.h"                      // for ~Expression
 #include "src/query/search.h"
 #include "vmsdk/src/thread_pool.h"
 
@@ -96,6 +97,13 @@ void MultiSearchTracker::Finalize() {
   {
     absl::MutexLock lock(&mu_);
     params = std::move(parameters_);
+    // Transfer arm ownership into the envelope so the per-arm SearchParameters
+    // (and their local-responder chains) outlive the async reply path. The
+    // per-arm Neighbor entries may hold string_view keys into these objects.
+    for (auto& owner : arm_owners_) {
+      params->retained_arm_owners.push_back(std::move(owner));
+    }
+    arm_owners_.clear();
   }
   if (any_arm_failed_.load() && !params->enable_partial_results) {
     params->search_result.status = first_error_;
@@ -115,6 +123,12 @@ absl::Status PerformMultiSearchLocalAsync(
   CHECK(parameters);
   CHECK(!parameters->arms.empty()) << "MultiSearchParameters with no arms";
 
+  // Capture the now-populated envelope cancellation_token before moving
+  // parameters into the tracker. ExecuteCommand sets the envelope token AFTER
+  // ParseAfterIndex returns, so the arms parsed during ParseFtHybridCommand
+  // observed a null token; this is the first opportunity to fix that up
+  // before any arm executes.
+  cancel::Token shared_token = parameters->cancellation_token;
   // Move arms out of parameters before constructing the tracker. After this
   // point, parameters->arms is left at the same size (tracker reads
   // parameters_->arms.size() to size per_arm_results) but the unique_ptrs
@@ -128,6 +142,13 @@ absl::Status PerformMultiSearchLocalAsync(
   for (size_t i = 0; i < arm_count; ++i) {
     arms[i]->tracker = tracker;
     arms[i]->arm_index = i;
+    arms[i]->cancellation_token = shared_token;
+    // Run the index search only; the database content fetch + mutation check
+    // is deferred until after fusion so the multi-arm result is validated
+    // atomically as a unit (see FuseThenResolveLocal). With no_content set,
+    // GetContentProcessing() returns kNoContent and the arm completes on the
+    // background thread without a per-arm ResolveContent.
+    arms[i]->no_content = true;
     auto status =
         SearchAsync(std::move(arms[i]), reader_pool, SearchMode::kLocal);
     if (!status.ok()) {

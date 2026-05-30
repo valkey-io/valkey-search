@@ -24,6 +24,7 @@
 #include "src/coordinator/coordinator.pb.h"
 #include "src/index_schema.h"
 #include "src/query/search.h"
+#include "vmsdk/src/time_sliced_mrmw_mutex.h"
 #include "src/utils/cancel.h"
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/cluster_map.h"
@@ -180,8 +181,20 @@ class MultiSearchTracker
   void OnArmComplete(size_t arm_index, SearchResult&& result,
                      std::unique_ptr<SearchParameters> arm_self);
 
+  // Outer reader lock that spans every arm of this multi-arm search. Set by
+  // PerformMultiSearchLocalAsync immediately after acquiring the index's
+  // time-sliced mutex in reader mode; released when Finalize completes (i.e.
+  // after all arms have observed a consistent pre-mutation index snapshot).
+  // This is the per-arm "both arms or neither" guarantee: as long as this
+  // outer lock is held, the time-sliced mutex stays in read mode, so a
+  // pending writer (mutation) cannot switch in between two arms' independent
+  // ReaderMutexLock acquisitions inside their respective Search() calls.
+  void SetOuterReaderLock(vmsdk::TimeSlicedMRMWMutex* mutex,
+                          bool may_prolong);
+
  private:
   void Finalize();
+  void ReleaseOuterReaderLock();
 
   absl::Mutex mu_;
   std::unique_ptr<MultiSearchParameters> parameters_ ABSL_GUARDED_BY(mu_);
@@ -190,6 +203,8 @@ class MultiSearchTracker
       ABSL_GUARDED_BY(mu_);
   std::atomic_bool any_arm_failed_{false};
   absl::Status first_error_ ABSL_GUARDED_BY(mu_);
+  vmsdk::TimeSlicedMRMWMutex* outer_mutex_ ABSL_GUARDED_BY(mu_){nullptr};
+  bool outer_may_prolong_ ABSL_GUARDED_BY(mu_){false};
 };
 
 // Schedules each arm onto the reader thread pool. Each arm carries a

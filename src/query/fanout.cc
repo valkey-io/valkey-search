@@ -10,7 +10,9 @@
 #include <netinet/in.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -547,13 +549,15 @@ absl::Status PerformMultiSearchFanoutAsync(
     }
     req->mutable_limit()->set_first_index(0);
     req->mutable_limit()->set_number(per_shard_limit);
-    // Also widen the COORDINATOR-side arm limit. The per-arm
-    // SearchPartitionResultsTracker trims its merged result to arm.limit
-    // (times a buffer multiplier) unless RequiresCompleteResults() — and for a
-    // bare non-vector/vector arm that gate is false. Leaving the default
-    // limit (10) would drop fusion candidates before they reach FuseAndReply.
+    // Widen the COORDINATOR-side arm limit to effectively unlimited. The
+    // per-arm SearchPartitionResultsTracker trims its merged-across-shards
+    // result to arm.limit (times a buffer multiplier); leaving it bounded
+    // would drop union members that came from later shards. The fusion
+    // window caps fusion-stage participants; the aggregate-pipeline LIMIT
+    // caps the final reply size. (See TestFtHybridClusterFunctionMerge —
+    // "all of each arm's results reach the coordinator and merge".)
     arm.limit.first_index = 0;
-    arm.limit.number = per_shard_limit;
+    arm.limit.number = std::numeric_limits<uint64_t>::max();
     arm_requests.push_back(std::move(req));
   }
 

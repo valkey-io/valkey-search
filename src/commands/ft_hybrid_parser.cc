@@ -316,6 +316,7 @@ absl::Status ParseCombineClause(MultiSearchParameters &env,
   itr.Next(inner_count);
   bool saw_alpha = false;
   bool saw_beta = false;
+  bool saw_window = false;
   if (absl::EqualsIgnoreCase(method_sv, kRrfKw)) {
     env.fusion.method = FusionConfig::Method::kRRF;
   } else if (absl::EqualsIgnoreCase(method_sv, kLinearKw)) {
@@ -339,6 +340,7 @@ absl::Status ParseCombineClause(MultiSearchParameters &env,
       uint32_t v = 0;
       VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(inner_itr, v));
       env.fusion.window = v;
+      saw_window = true;
     } else if (absl::EqualsIgnoreCase(kw, kAlphaKw)) {
       double v = 0;
       VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(inner_itr, v));
@@ -391,6 +393,14 @@ absl::Status ParseCombineClause(MultiSearchParameters &env,
   }
   if (env.fusion.method == FusionConfig::Method::kFunction && !saw_expr) {
     return absl::InvalidArgumentError("COMBINE FUNCTION requires EXPR");
+  }
+  // For COMBINE FUNCTION, the user expression is computed per document and
+  // typically expected to see EVERY matching candidate (not the RRF/LINEAR
+  // top-window slice). If the caller did not set WINDOW explicitly, default
+  // to unlimited so the fusion stage does not silently drop docs the user
+  // expected the function to score.
+  if (env.fusion.method == FusionConfig::Method::kFunction && !saw_window) {
+    env.fusion.window = 0;
   }
   return absl::OkStatus();
 }

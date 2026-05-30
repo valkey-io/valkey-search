@@ -11,7 +11,7 @@ from typing import Any, Union
 from valkeytestframework.util import waiters
 import threading
 import time
-from utils import wait_for_pausepoint
+from utils import wait_for_pausepoint, wait_for_background_tasks
 
 def canceller(client, client_id):
     my_id = client.execute_command("client id")
@@ -155,6 +155,7 @@ def run_pausepoint_timeout_test(self, pausepoint_name, setup_fn, search_cmd):
 
 class TestCancelCMD(ValkeySearchTestCaseDebugMode):
 
+    @wait_for_background_tasks()
     def test_timeoutCMD(self):
         """
         Test CMD timeout logic

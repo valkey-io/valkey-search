@@ -26,6 +26,21 @@
 #include "vmsdk/src/utils.h"
 
 namespace valkey_search {
+
+// Number of in-flight query operations (FT.SEARCH / FT.AGGREGATE), reported as
+// the count of currently-live SearchParameters objects. A SearchParameters is
+// alive for the whole duration of a (possibly asynchronous) query - while
+// queued on the reader thread pool, awaiting main-thread completion, or pending
+// background cleanup - and holds the shared_ptr to the IndexSchema it queries.
+// Exposed as a developer-visible INFO field (search_async_queries_in_flight) so
+// tests can wait for the system to become idle before shutting the server down,
+// avoiding spurious leak reports from in-flight query state at process exit.
+static vmsdk::info_field::Integer async_queries_in_flight(
+    "query", "async_queries_in_flight",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return query::GetSearchParametersInFlight();
+    }));
+
 namespace async {
 
 struct Result {

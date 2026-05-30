@@ -4,7 +4,6 @@ Utility functions and helper classes for Valkey Search integration tests.
 
 import functools
 import threading
-import time
 from typing import Dict, Any, Optional
 from valkey.client import Valkey
 from valkey import ResponseError
@@ -12,14 +11,33 @@ from ft_info_parser import FTInfoParser
 from valkeytestframework.util import waiters
 
 
-def wait_for_background_tasks(seconds=10):
-    """Decorator that adds a sleep after the test body to let runByMain tasks
-    complete before the fixture teardown shuts down the server."""
+def wait_for_background_tasks(timeout=30):
+    """Decorator that, after the test body runs, waits until the server reports
+    zero in-flight asynchronous query operations before returning.
+
+    This ensures the system is idle before the fixture teardown shuts the server
+    down. Otherwise an async query that is still completing (e.g. a search whose
+    background worker has not yet finished) would leak its state - including the
+    shared_ptr to the index it references - and be reported as a leak at process
+    exit under ASAN.
+
+    The count is published by the server as the developer-visible INFO field
+    `search_async_queries_in_flight`. A busy wait (polling) is sufficient."""
     def decorator(func):
         @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            result = func(*args, **kwargs)
-            time.sleep(seconds)
+        def wrapper(self, *args, **kwargs):
+            result = func(self, *args, **kwargs)
+            # The in-flight counter is a developer-visible INFO field.
+            self.client.execute_command(
+                "CONFIG SET search.info-developer-visible yes"
+            )
+            waiters.wait_for_equal(
+                lambda: int(
+                    self.client.info("SEARCH")["search_async_queries_in_flight"]
+                ),
+                0,
+                timeout=timeout,
+            )
             return result
         return wrapper
     return decorator

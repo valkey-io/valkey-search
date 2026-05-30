@@ -13,6 +13,7 @@
 
 #include "absl/status/status.h"
 #include "src/coordinator/client_pool.h"
+#include "src/query/multi_search.h"
 #include "src/query/search.h"
 #include "vmsdk/src/cluster_map.h"
 #include "vmsdk/src/thread_pool.h"
@@ -25,6 +26,18 @@ absl::Status PerformSearchFanoutAsync(
     std::vector<vmsdk::cluster_map::NodeInfo>& search_targets,
     coordinator::ClientPool* coordinator_client_pool,
     std::unique_ptr<query::SearchParameters> parameters,
+    vmsdk::ThreadPool* thread_pool);
+
+// Cluster fanout for FT.HYBRID multi-arm search. Sends ONE
+// MultiSearchIndexPartition RPC per shard carrying every arm's
+// SearchIndexPartitionRequest, demuxes per-arm responses into per-arm result
+// trackers, and triggers the MultiSearchTracker when all arms have completed
+// across all shards.
+absl::Status PerformMultiSearchFanoutAsync(
+    ValkeyModuleCtx* ctx,
+    std::vector<vmsdk::cluster_map::NodeInfo>& search_targets,
+    coordinator::ClientPool* coordinator_client_pool,
+    std::unique_ptr<query::MultiSearchParameters> parameters,
     vmsdk::ThreadPool* thread_pool);
 
 // Utility function to check if system is under low utilization

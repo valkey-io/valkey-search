@@ -1,0 +1,228 @@
+{
+  "FT.HYBRID": {
+    "acl_categories": [
+      "READ",
+      "SLOW",
+      "SEARCH"
+    ],
+    "history": [
+      [
+        "8.4.4",
+        "Hybrid search combining text/filter and vector arms"
+      ]
+    ],
+    "summary": "Performs hybrid search combining a text/filter arm with a vector arm, fuses results via RRF or LINEAR, and feeds the fused list through the FT.AGGREGATE post-pipeline.",
+    "complexity": "O(N+M) where N is the complexity of the SEARCH arm and M is the complexity of the VSIM arm.",
+    "arguments": [
+      {
+        "key_spec_index": 0,
+        "name": "index",
+        "type": "key"
+      },
+      {
+        "name": "search_clause",
+        "type": "block",
+        "arguments": [
+          {
+            "name": "search_token",
+            "type": "pure-token",
+            "token": "SEARCH"
+          },
+          {
+            "name": "query",
+            "type": "string"
+          },
+          {
+            "name": "scorer",
+            "type": "block",
+            "optional": true,
+            "arguments": [
+              {
+                "name": "scorer_token",
+                "type": "pure-token",
+                "token": "SCORER"
+              },
+              {
+                "name": "scorer_name",
+                "type": "string"
+              }
+            ]
+          },
+          {
+            "name": "search_yield_score_as",
+            "type": "block",
+            "optional": true,
+            "arguments": [
+              {
+                "name": "yield_token",
+                "type": "pure-token",
+                "token": "YIELD_SCORE_AS"
+              },
+              {
+                "name": "search_score_alias",
+                "type": "string"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "vsim_clause",
+        "type": "block",
+        "arguments": [
+          {
+            "name": "vsim_token",
+            "type": "pure-token",
+            "token": "VSIM"
+          },
+          {
+            "name": "vector_field",
+            "type": "string"
+          },
+          {
+            "name": "vector_param",
+            "type": "string"
+          },
+          {
+            "name": "vsim_mode",
+            "type": "oneof",
+            "arguments": [
+              {
+                "name": "knn_block",
+                "type": "block",
+                "arguments": [
+                  {
+                    "name": "knn_token",
+                    "type": "pure-token",
+                    "token": "KNN"
+                  },
+                  {
+                    "name": "knn_count",
+                    "type": "integer"
+                  },
+                  {
+                    "name": "k_token",
+                    "type": "pure-token",
+                    "token": "K"
+                  },
+                  {
+                    "name": "k_value",
+                    "type": "integer"
+                  }
+                ]
+              },
+              {
+                "name": "range_block",
+                "type": "block",
+                "arguments": [
+                  {
+                    "name": "range_token",
+                    "type": "pure-token",
+                    "token": "RANGE"
+                  },
+                  {
+                    "name": "range_count",
+                    "type": "integer"
+                  },
+                  {
+                    "name": "radius_token",
+                    "type": "pure-token",
+                    "token": "RADIUS"
+                  },
+                  {
+                    "name": "radius_value",
+                    "type": "double"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "combine_clause",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "combine_token",
+            "type": "pure-token",
+            "token": "COMBINE"
+          },
+          {
+            "name": "combine_method",
+            "type": "string"
+          },
+          {
+            "name": "combine_count",
+            "type": "integer"
+          }
+        ]
+      },
+      {
+        "name": "policy_block",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "policy_token",
+            "type": "pure-token",
+            "token": "POLICY"
+          },
+          {
+            "name": "policy_value",
+            "type": "string"
+          }
+        ]
+      },
+      {
+        "name": "load_block",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "load_token",
+            "type": "pure-token",
+            "token": "LOAD"
+          },
+          {
+            "name": "load_count",
+            "type": "string"
+          }
+        ]
+      },
+      {
+        "name": "params_block",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "params_token",
+            "type": "pure-token",
+            "token": "PARAMS"
+          },
+          {
+            "name": "params_count",
+            "type": "integer"
+          }
+        ]
+      },
+      {
+        "name": "timeout_block",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "timeout_token",
+            "type": "pure-token",
+            "token": "TIMEOUT"
+          },
+          {
+            "name": "timeout_ms",
+            "type": "integer"
+          }
+        ]
+      }
+    ]
+  }
+}

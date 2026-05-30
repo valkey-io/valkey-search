@@ -20,11 +20,14 @@
 #include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
 #include "absl/synchronization/mutex.h"
+#include "src/coordinator/client_pool.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/index_schema.h"
 #include "src/query/search.h"
 #include "src/utils/cancel.h"
 #include "vmsdk/src/blocked_client.h"
+#include "vmsdk/src/cluster_map.h"
+#include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/thread_pool.h"
 
@@ -32,14 +35,20 @@
 namespace valkey_search::aggregate {
 struct AggregateParameters;
 }  // namespace valkey_search::aggregate
+namespace valkey_search::expr {
+class Expression;
+}  // namespace valkey_search::expr
 
 namespace valkey_search::query {
 
-// Configuration for the COMBINE fusion stage (RRF or LINEAR). Populated by the
-// FT.HYBRID parser; consumed by `query::fusion::FuseRRF` / `FuseLinear` in
-// Phase 4.
+// Configuration for the COMBINE fusion stage. Populated by the FT.HYBRID
+// parser; consumed by `query::fusion::Fuse*` in ft_hybrid.cc.
+//   kRRF      — reciprocal rank fusion (default).
+//   kLinear   — weighted linear combination of per-arm normalized scores.
+//   kFunction — user-defined expression over the per-arm scores (the compiled
+//               expression lives on MultiSearchParameters::combine_function).
 struct FusionConfig {
-  enum class Method { kRRF, kLinear };
+  enum class Method { kRRF, kLinear, kFunction };
   Method method = Method::kRRF;
   uint32_t rrf_constant = 60;
   uint32_t window = 20;
@@ -93,6 +102,10 @@ struct MultiSearchParameters {
 
   // ----- fusion + post-pipeline -----
   FusionConfig fusion;
+  // Compiled COMBINE FUNCTION expression (null unless fusion.method ==
+  // kFunction). Compiled by the FT.HYBRID parser against the per-arm score
+  // aliases; evaluated per fused document in BuildFusedNeighbors.
+  std::unique_ptr<expr::Expression> combine_function;
   // Aggregate post-pipeline state (populated by the FT.HYBRID parser in Phase
   // 4). Fed the fused neighbor list via aggregate::RunAggregatePipeline.
   std::unique_ptr<aggregate::AggregateParameters> agg;
@@ -100,6 +113,12 @@ struct MultiSearchParameters {
   // ----- runtime state -----
   std::vector<SearchResult> per_arm_results;  // populated by MultiSearchTracker
   SearchResult search_result;                  // fused result
+  // Keeps per-arm SearchParameters (and, transitively, their local-responder
+  // chains) alive until the reply is sent. The per-arm Neighbor entries may
+  // hold string_view keys that point into these objects, so they must outlive
+  // FuseAndReply. MultiSearchTracker::Finalize moves its arm_owners_ here
+  // before handing the envelope to on_all_arms_complete.
+  std::vector<std::unique_ptr<SearchParameters>> retained_arm_owners;
 
   // Invoked exactly once from MultiSearchTracker::Finalize after all arms
   // complete. Owns *this and is responsible for fusing per_arm_results,
@@ -112,6 +131,19 @@ struct MultiSearchParameters {
   // forward-declared AggregateParameters) doesn't need to be visible at every
   // include site of this header.
   virtual ~MultiSearchParameters();
+
+  // ----- Hooks consumed by ExecuteCommand<MultiSearchParameters> -----
+  static absl::Status ParseAfterIndex(MultiSearchParameters &cmd,
+                                      vmsdk::ArgsIterator &itr);
+  static absl::Status ExecuteSyncLocal(
+      ValkeyModuleCtx *ctx, std::unique_ptr<MultiSearchParameters> cmd);
+  static absl::Status DispatchLocalAsync(
+      ValkeyModuleCtx *ctx, std::unique_ptr<MultiSearchParameters> cmd,
+      vmsdk::ThreadPool *pool);
+  static absl::Status DispatchFanoutAsync(
+      ValkeyModuleCtx *ctx, std::unique_ptr<MultiSearchParameters> cmd,
+      std::vector<vmsdk::cluster_map::NodeInfo> &search_targets,
+      coordinator::ClientPool *client_pool, vmsdk::ThreadPool *pool);
 
  protected:
   // Constructor is protected so callers go through the Make() factory below;
@@ -126,6 +158,12 @@ struct MultiSearchParameters {
 // destructor of the embedded `agg` member can be instantiated in
 // multi_search.cc (where AggregateParameters is complete).
 std::unique_ptr<MultiSearchParameters> MakeMultiSearchParameters();
+
+// Parses everything after `FT.HYBRID <index>`: SEARCH ... VSIM ... [COMBINE
+// ...] ... aggregate-suffix. Defined in src/commands/ft_hybrid_parser.cc to
+// avoid pulling the FT.HYBRID grammar into the query library.
+absl::Status ParseFtHybridCommand(MultiSearchParameters &params,
+                                  vmsdk::ArgsIterator &itr);
 
 // Coordinates per-arm completion. Holds the MultiSearchParameters until all
 // arms have reported, then invokes parameters->on_all_arms_complete.

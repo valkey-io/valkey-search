@@ -108,7 +108,7 @@ std::optional<bool> Value::AsBool() const {
   return VALKEY_SEARCH_COMPATIBILITY_FIX(
       1, 2, 1, "asbool_string_truthy",
       [&] { return !sv.empty(); },  // new: JS-style truthiness
-      [&] { return false; });        // legacy: always false
+      [&] { return false; });       // legacy: always false
 }
 
 std::optional<double> Value::AsDouble() const {
@@ -366,7 +366,7 @@ static Value NumericUnaryNil(const Value& o, const char* fname) {
   }
   return VALKEY_SEARCH_COMPATIBILITY_FIX(
       1, 2, 1, "numeric_unary_nan_on_unparseable",
-      [&] { return Value(std::nan("")); },  // new: NaN propagation
+      [&] { return Value(std::nan("")); },        // new: NaN propagation
       [&] { return Value(Value::Nil(fname)); });  // legacy: Nil
 }
 
@@ -500,11 +500,9 @@ Value FuncLower(const Value& o) {
   // 1.2.1 fix: refuse non-string inputs (matches Redisearch — lower(0) → Nil).
   // Pre-1.2.1: passed numeric/bool through via AsStringView, returning
   // their string form unchanged.
-  if (!o.IsString() &&
-      VALKEY_SEARCH_COMPATIBILITY_FIX(
-          1, 2, 1, "lower_non_string_to_nil",
-          [] { return true; },
-          [] { return false; })) {
+  if (!o.IsString() && VALKEY_SEARCH_COMPATIBILITY_FIX(
+                           1, 2, 1, "lower_non_string_to_nil",
+                           [] { return true; }, [] { return false; })) {
     return Value(Value::Nil("lower: operand is not a string"));
   }
   auto os = o.AsStringView();
@@ -526,11 +524,9 @@ Value FuncLower(const Value& o) {
 
 Value FuncUpper(const Value& o) {
   // See FuncLower above for rationale.
-  if (!o.IsString() &&
-      VALKEY_SEARCH_COMPATIBILITY_FIX(
-          1, 2, 1, "upper_non_string_to_nil",
-          [] { return true; },
-          [] { return false; })) {
+  if (!o.IsString() && VALKEY_SEARCH_COMPATIBILITY_FIX(
+                           1, 2, 1, "upper_non_string_to_nil",
+                           [] { return true; }, [] { return false; })) {
     return Value(Value::Nil("upper: operand is not a string"));
   }
   auto os = o.AsStringView();
@@ -556,8 +552,7 @@ Value FuncUpper(const Value& o) {
 // legacy path. Single counter for all date functions.
 static bool DateNegativeTsReturnsNil() {
   return VALKEY_SEARCH_COMPATIBILITY_FIX(
-      1, 2, 1, "date_fn_negative_ts_to_nil",
-      [] { return true; },
+      1, 2, 1, "date_fn_negative_ts_to_nil", [] { return true; },
       [] { return false; });
 }
 
@@ -579,22 +574,22 @@ Value FuncConcat(const absl::InlinedVector<Value, 4>& values) {
 // is always-on UB hardening — restoring it under emulate-release would
 // re-introduce UB at the (time_t) cast / gmtime_r partial-write on
 // overflow.
-#define TIME_FUNCTION(funcname, field, adjustment)                  \
-  Value funcname(const Value& timestamp) {                          \
-    auto ts = timestamp.AsDouble();                                 \
-    if (!ts) {                                                      \
-      return Value(Value::Nil("timestamp not a number"));           \
-    }                                                               \
-    if (IsNan(*ts) || IsInf(*ts)) {                                 \
-      return Value(Value::Nil("timestamp is not finite"));          \
-    }                                                               \
-    if (*ts < 0 && DateNegativeTsReturnsNil()) {                    \
-      return Value(Value::Nil("timestamp is before the epoch"));    \
-    }                                                               \
-    time_t time = (time_t) * ts;                                    \
-    struct ::tm tm;                                                 \
-    gmtime_r(&time, &tm);                                           \
-    return Value(double(tm.field + (adjustment)));                  \
+#define TIME_FUNCTION(funcname, field, adjustment)               \
+  Value funcname(const Value& timestamp) {                       \
+    auto ts = timestamp.AsDouble();                              \
+    if (!ts) {                                                   \
+      return Value(Value::Nil("timestamp not a number"));        \
+    }                                                            \
+    if (IsNan(*ts) || IsInf(*ts)) {                              \
+      return Value(Value::Nil("timestamp is not finite"));       \
+    }                                                            \
+    if (*ts < 0 && DateNegativeTsReturnsNil()) {                 \
+      return Value(Value::Nil("timestamp is before the epoch")); \
+    }                                                            \
+    time_t time = (time_t) * ts;                                 \
+    struct ::tm tm;                                              \
+    gmtime_r(&time, &tm);                                        \
+    return Value(double(tm.field + (adjustment)));               \
   }
 
 TIME_FUNCTION(FuncDayofmonth, tm_mday, 0)
@@ -682,8 +677,7 @@ Value FuncParsetime(const Value& str, const Value& fmt) {
     // line up with how Redisearch handles _successful_ no-op parses, but
     // differs for failed parses.
     if (VALKEY_SEARCH_COMPATIBILITY_FIX(
-            1, 2, 1, "parsetime_format_mismatch_to_nil",
-            [] { return true; },
+            1, 2, 1, "parsetime_format_mismatch_to_nil", [] { return true; },
             [] { return false; })) {
       return Value(Value::Nil("parsetime: format mismatch"));
     }
@@ -717,8 +711,8 @@ Value FuncMonth(const Value& o) {
   // previous month — off by 86400 seconds.
   tm.tm_mday = VALKEY_SEARCH_COMPATIBILITY_FIX(
       1, 2, 1, "month_mday_off_by_one",
-      [] { return 1; },  // new: first of the month
-      [] { return 0; }); // legacy: rolled back one day
+      [] { return 1; },   // new: first of the month
+      [] { return 0; });  // legacy: rolled back one day
   return Value(double(::mktime(&tm)));
 }
 
@@ -747,20 +741,17 @@ static Value RoundToPeriod(const Value& o, double period, const char* notnum,
 }
 
 Value FuncDay(const Value& o) {
-  return RoundToPeriod(o, 86400.0,
-                       "day: timestamp not a number",
+  return RoundToPeriod(o, 86400.0, "day: timestamp not a number",
                        "day: timestamp is not finite",
                        "day: timestamp is before the epoch");
 }
 Value FuncHour(const Value& o) {
-  return RoundToPeriod(o, 3600.0,
-                       "hour: timestamp not a number",
+  return RoundToPeriod(o, 3600.0, "hour: timestamp not a number",
                        "hour: timestamp is not finite",
                        "hour: timestamp is before the epoch");
 }
 Value FuncMinute(const Value& o) {
-  return RoundToPeriod(o, 60.0,
-                       "minute: timestamp not a number",
+  return RoundToPeriod(o, 60.0, "minute: timestamp not a number",
                        "minute: timestamp is not finite",
                        "minute: timestamp is before the epoch");
 }

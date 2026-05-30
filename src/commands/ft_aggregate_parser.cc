@@ -216,7 +216,8 @@ ConstructGroupByParser() {
                                  _ << "Missing Reducer name");
           auto uc_name =
               expr::FuncUpper(expr::Value(vmsdk::ToStringView(name)));
-          auto reducer_itr = GroupBy::reducerTable.find(*uc_name.AsStringView());
+          auto reducer_itr =
+              GroupBy::reducerTable.find(*uc_name.AsStringView());
           if (reducer_itr == GroupBy::reducerTable.end()) {
             return absl::NotFoundError(absl::StrCat("reducer function `",
                                                     vmsdk::ToStringView(name),

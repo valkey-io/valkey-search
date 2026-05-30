@@ -112,8 +112,7 @@ vmsdk::module::Options options = {
                     valkey_search::kSearchCmdPermissions),
                 .flags = {vmsdk::module::kReadOnlyFlag,
                           vmsdk::module::kDenyOOMFlag},
-                .cmd_func =
-                    &vmsdk::CreateCommand<valkey_search::FTHybridCmd>,
+                .cmd_func = &vmsdk::CreateCommand<valkey_search::FTHybridCmd>,
             },
         },
     .on_load =

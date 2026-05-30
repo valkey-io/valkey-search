@@ -47,13 +47,12 @@ TEST(MultiSearchTrackerTest, FinalizeCalledAfterAllArmsComplete) {
   auto params = MakeParams(2);
   bool finalize_called = false;
   std::vector<size_t> per_arm_neighbor_counts;
-  params->on_all_arms_complete =
-      [&](std::unique_ptr<MultiSearchParameters> p) {
-        finalize_called = true;
-        for (auto& result : p->per_arm_results) {
-          per_arm_neighbor_counts.push_back(result.neighbors.size());
-        }
-      };
+  params->on_all_arms_complete = [&](std::unique_ptr<MultiSearchParameters> p) {
+    finalize_called = true;
+    for (auto& result : p->per_arm_results) {
+      per_arm_neighbor_counts.push_back(result.neighbors.size());
+    }
+  };
 
   // Reset arms vector to size N (PerformMultiSearchLocalAsync's pattern); we
   // are bypassing dispatch and constructing the tracker directly.
@@ -79,11 +78,10 @@ TEST(MultiSearchTrackerTest, ArmErrorPropagatedAsSearchResultStatus) {
   absl::Status final_status = absl::OkStatus();
   // enable_partial_results is false by default; first arm error should
   // surface as the fused result's status.
-  params->on_all_arms_complete =
-      [&](std::unique_ptr<MultiSearchParameters> p) {
-        finalize_called = true;
-        final_status = p->search_result.status;
-      };
+  params->on_all_arms_complete = [&](std::unique_ptr<MultiSearchParameters> p) {
+    finalize_called = true;
+    final_status = p->search_result.status;
+  };
   auto arms = std::move(params->arms);
   params->arms.clear();
   params->arms.resize(arms.size());
@@ -107,12 +105,11 @@ TEST(MultiSearchTrackerTest, PartialResultsModePreservesSurvivingArms) {
   bool finalize_called = false;
   size_t arm0_count = 0;
   size_t arm1_count = 0;
-  params->on_all_arms_complete =
-      [&](std::unique_ptr<MultiSearchParameters> p) {
-        finalize_called = true;
-        arm0_count = p->per_arm_results[0].neighbors.size();
-        arm1_count = p->per_arm_results[1].neighbors.size();
-      };
+  params->on_all_arms_complete = [&](std::unique_ptr<MultiSearchParameters> p) {
+    finalize_called = true;
+    arm0_count = p->per_arm_results[0].neighbors.size();
+    arm1_count = p->per_arm_results[1].neighbors.size();
+  };
   auto arms = std::move(params->arms);
   params->arms.clear();
   params->arms.resize(arms.size());
@@ -135,14 +132,13 @@ TEST(MultiSearchTrackerTest, ConcurrentCompletions) {
   constexpr size_t kArmCount = 8;
   auto params = MakeParams(kArmCount);
   std::atomic<int> finalize_count{0};
-  params->on_all_arms_complete =
-      [&](std::unique_ptr<MultiSearchParameters> p) {
-        finalize_count.fetch_add(1, std::memory_order_relaxed);
-        EXPECT_EQ(p->per_arm_results.size(), kArmCount);
-        for (size_t i = 0; i < kArmCount; ++i) {
-          EXPECT_EQ(p->per_arm_results[i].neighbors.size(), 1u);
-        }
-      };
+  params->on_all_arms_complete = [&](std::unique_ptr<MultiSearchParameters> p) {
+    finalize_count.fetch_add(1, std::memory_order_relaxed);
+    EXPECT_EQ(p->per_arm_results.size(), kArmCount);
+    for (size_t i = 0; i < kArmCount; ++i) {
+      EXPECT_EQ(p->per_arm_results[i].neighbors.size(), 1u);
+    }
+  };
   auto arms = std::move(params->arms);
   params->arms.clear();
   params->arms.resize(arms.size());

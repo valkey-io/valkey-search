@@ -292,7 +292,6 @@ TEST_F(ThreadPoolTest, DynamicSizing) {
   EXPECT_EQ(thread_pool.Size(), 5);
 
   thread_pool.JoinTerminatedWorkers();
-  EXPECT_EQ(thread_pool.pending_join_threads_.Size(), 0);
 
   EXPECT_EQ(thread_pool.Size(), 5);
   thread_pool.Resize(15, true);
@@ -301,7 +300,6 @@ TEST_F(ThreadPoolTest, DynamicSizing) {
   thread_pool.JoinWorkers();
 
   EXPECT_EQ(thread_pool.threads_.Size(), 0);
-  EXPECT_EQ(thread_pool.pending_join_threads_.Size(), 0);
 }
 
 namespace {

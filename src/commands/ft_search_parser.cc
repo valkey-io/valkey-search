@@ -54,6 +54,38 @@ vmsdk::config::Number &GetMaxKnn() {
 
 namespace {
 
+using ParamMap = query::SearchParameters::ParseTimeVariables::ParamValue;
+
+absl::Status VerifyAllParametersUsed(
+    absl::flat_hash_map<absl::string_view, ParamMap> &params) {
+  while (!params.empty()) {
+    auto begin = params.begin();
+    if (begin->second.first == 0) {
+      return absl::NotFoundError(
+          absl::StrCat("Parameter `", begin->first, "` not used."));
+    }
+    params.erase(begin);
+  }
+  return absl::OkStatus();
+}
+
+absl::Status InsertParam(
+    absl::flat_hash_map<absl::string_view, ParamMap> &target_params,
+    const absl::flat_hash_map<absl::string_view, ParamMap> &other_params,
+    absl::string_view key, absl::string_view value) {
+  if (other_params.contains(key)) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Parameter ", key, " is already defined."));
+  }
+  auto [_, inserted] = target_params.insert(std::make_pair(
+      key, query::SearchParameters::ParseTimeVariables::ParamValue{0, value}));
+  if (!inserted) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Parameter ", key, " is already defined."));
+  }
+  return absl::OkStatus();
+}
+
 absl::Status Verify(query::SearchParameters &parameters) {
   // Only verify the vector KNN parameters for vector based queries.
   if (!parameters.IsNonVectorQuery()) {
@@ -88,14 +120,8 @@ absl::Status Verify(query::SearchParameters &parameters) {
   }
 
   // Validate all parameters used, nuke the map to avoid dangling pointers
-  while (!parameters.parse_vars.params.empty()) {
-    auto begin = parameters.parse_vars.params.begin();
-    if (begin->second.first == 0) {
-      return absl::NotFoundError(
-          absl::StrCat("Parameter `", begin->first, "` not used."));
-    }
-    parameters.parse_vars.params.erase(begin);
-  }
+  VMSDK_RETURN_IF_ERROR(VerifyAllParametersUsed(parameters.parse_vars.params));
+  VMSDK_RETURN_IF_ERROR(VerifyAllParametersUsed(parameters.parse_vars.jparams));
   return absl::OkStatus();
 }
 
@@ -126,12 +152,34 @@ std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructParamsParser() {
           itr.Next();
           absl::string_view key = vmsdk::ToStringView(key_str);
           absl::string_view value = vmsdk::ToStringView(value_str);
-          auto [_, inserted] = parameters.parse_vars.params.insert(
-              std::make_pair(key, std::make_pair(0, value)));
-          if (!inserted) {
-            return absl::InvalidArgumentError(
-                absl::StrCat("Parameter ", key, " is already defined."));
-          }
+          VMSDK_RETURN_IF_ERROR(InsertParam(parameters.parse_vars.params,
+                                            parameters.parse_vars.jparams, key,
+                                            value));
+          count -= 2;
+        }
+        return absl::OkStatus();
+      });
+}
+
+std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructJParamsParser() {
+  return std::make_unique<vmsdk::ParamParser<SearchCommand>>(
+      [](SearchCommand &parameters, vmsdk::ArgsIterator &itr) -> absl::Status {
+        unsigned count{0};
+        VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, count));
+        if (count & 1) {
+          return absl::InvalidArgumentError(
+              "Parameter count must be an even number.");
+        }
+        while (count > 0) {
+          VMSDK_ASSIGN_OR_RETURN(auto key_str, itr.Get());
+          itr.Next();
+          VMSDK_ASSIGN_OR_RETURN(auto value_str, itr.Get());
+          itr.Next();
+          absl::string_view key = vmsdk::ToStringView(key_str);
+          absl::string_view value = vmsdk::ToStringView(value_str);
+          VMSDK_RETURN_IF_ERROR(InsertParam(parameters.parse_vars.jparams,
+                                            parameters.parse_vars.params, key,
+                                            value));
           count -= 2;
         }
         return absl::OkStatus();
@@ -229,6 +277,7 @@ vmsdk::KeyValueParser<SearchCommand> CreateSearchParser() {
   parser.AddParamParser(query::kReturnParam, ConstructReturnParser());
   parser.AddParamParser(query::kSortByParam, ConstructSortByParser());
   parser.AddParamParser(query::kParamsParam, ConstructParamsParser());
+  parser.AddParamParser(query::kJParamsParam, ConstructJParamsParser());
   parser.AddParamParser(query::kInorder,
                         GENERATE_FLAG_PARSER(SearchCommand, inorder));
   parser.AddParamParser(query::kVerbatim,
@@ -256,48 +305,7 @@ absl::Status SearchCommand::PostParseQueryString() {
 }
 
 absl::Status VerifyQueryString(query::SearchParameters &parameters) {
-  // Only verify the vector KNN parameters for vector based queries.
-  if (!parameters.IsNonVectorQuery()) {
-    if (parameters.query.empty()) {
-      return absl::InvalidArgumentError("Invalid Query Syntax");
-    }
-    if (parameters.ef.has_value()) {
-      auto max_ef_runtime_value = options::GetMaxEfRuntime().GetValue();
-      VMSDK_RETURN_IF_ERROR(
-          vmsdk::VerifyRange(parameters.ef.value(), 1, max_ef_runtime_value))
-          << "`EF_RUNTIME` must be a positive integer greater than 0 and "
-             "cannot "
-             "exceed "
-          << max_ef_runtime_value << ".";
-    }
-    auto max_knn_value = options::GetMaxKnn().GetValue();
-    VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(parameters.k, 1, max_knn_value))
-        << "KNN parameter must be a positive integer greater than 0 and cannot "
-           "exceed "
-        << max_knn_value << ".";
-  }
-  if (parameters.timeout_ms > query::kMaxTimeoutMs) {
-    return absl::InvalidArgumentError(
-        absl::StrCat(query::kTimeoutParam,
-                     " must be a positive integer greater than 0 and "
-                     "cannot exceed ",
-                     query::kMaxTimeoutMs, "."));
-  }
-  if (parameters.dialect < 2 || parameters.dialect > 4) {
-    return absl::InvalidArgumentError(
-        "DIALECT requires a non negative integer >=2 and <= 4");
-  }
-
-  // Validate all parameters used, nuke the map to avoid dangling pointers
-  while (!parameters.parse_vars.params.empty()) {
-    auto begin = parameters.parse_vars.params.begin();
-    if (begin->second.first == 0) {
-      return absl::NotFoundError(
-          absl::StrCat("Parameter `", begin->first, "` not used."));
-    }
-    parameters.parse_vars.params.erase(begin);
-  }
-  return absl::OkStatus();
+  return Verify(parameters);
 }
 
 absl::Status SearchCommand::ParseCommand(vmsdk::ArgsIterator &itr) {

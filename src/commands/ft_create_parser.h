@@ -19,6 +19,7 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "src/index_schema.pb.h"
+#include "src/indexes/text/stop_words.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -28,12 +29,6 @@ static constexpr absl::string_view kDefaultPunctuation =
     ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|?";
 static constexpr uint32_t kDefaultMinStemSize = 4;
 
-// Default stop words set
-const std::vector<std::string> kDefaultStopWords{
-    "a",    "is",   "the", "an",   "and",  "are",   "as",   "at",    "be",
-    "but",  "by",   "for", "if",   "in",   "into",  "it",   "no",    "not",
-    "of",   "on",   "or",  "such", "that", "their", "then", "there", "these",
-    "they", "this", "to",  "was",  "will", "with"};
 
 struct FTCreateTagParameters {
   absl::string_view separator{","};
@@ -58,7 +53,8 @@ struct PerIndexTextParams {
   std::string punctuation{kDefaultPunctuation};
   bool with_offsets{true};
   bool no_stem{false};
-  std::vector<std::string> stop_words{kDefaultStopWords};
+  std::vector<std::string> stop_words;
+  bool use_default_stop_words{true};
   data_model::Language language{data_model::LANGUAGE_ENGLISH};
   int min_stem_size{4};
 };

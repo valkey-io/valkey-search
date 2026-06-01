@@ -187,5 +187,5 @@ target_link_libraries(scoring_test PRIVATE testing_common_base)
 target_link_libraries(scoring_test PRIVATE scoring)
 finalize_test_flags(scoring_test)
 
-# 8. Expr Test Suite
+# 9. Expr Test Suite
 add_subdirectory(expr)

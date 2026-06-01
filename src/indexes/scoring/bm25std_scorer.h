@@ -15,20 +15,13 @@
 
 namespace valkey_search::indexes::scoring {
 
-// Standard Okapi BM25 scorer ("BM25STD"). Per-leaf and per-document
-// math:
+// Standard Okapi BM25 ("BM25STD"). k1=1.2, b=0.75.
 //
 //   IDF       = ln(1 + (N - dt + 0.5) / (dt + 0.5))
 //   bm25_leaf = leaf_weight * IDF *
 //               F * (k1 + 1) /
 //               (F + k1 * (1 - b + b * doc_len / avg_doc_len))
 //   final     = sum_of_leaves * document_score
-//
-// k1 = 1.2, b = 0.75 — aligned with Redis 8.6 / OpenSearch / Wikipedia
-// standard.
-//
-// Expects Bm25StdStats as the ScoringStats subtype. Mismatched subtypes
-// trigger a DCHECK in debug builds.
 class Bm25StdScorer : public Scorer {
  public:
   static constexpr std::string_view kName = "BM25STD";

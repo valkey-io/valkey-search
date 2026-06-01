@@ -20,8 +20,7 @@ namespace {
 
 constexpr float kFloatTolerance = 1e-4f;
 
-// Ad-hoc Bm25StdStats builder for edge-case inputs that the shared
-// corpus in scoring_test_data.h cannot express (N=0, dt>N).
+// Ad-hoc builder for edge cases the shared corpus can't express (N=0, dt>N).
 Bm25StdStats MakeStats(uint32_t total_docs, float avg_doc_len,
                        uint32_t num_doc_contain_term, uint32_t term_frequency,
                        uint32_t doc_len, float document_score = 1.0f) {
@@ -41,8 +40,6 @@ TEST(Bm25StdScorerTest, IdentityNameAndType) {
   EXPECT_EQ(scorer.Type(), ScorerType::kBm25Std);
 }
 
-// One absolute-score reference against the corpus (doc:5 hello, F=4,
-// dl=4).
 TEST(Bm25StdScorerTest, ScoreLeafCorpusReference) {
   Bm25StdScorer scorer;
   Bm25StdStats stats = test_data::StatsForHello(test_data::kDocs[4]);
@@ -57,7 +54,6 @@ TEST(Bm25StdScorerTest, ScoreLeafLeafWeightScalesLinearly) {
   EXPECT_EQ(scorer.ScoreLeaf(stats, 0.0f), 0.0f);
 }
 
-// Term absent from this doc (F=0): contributes 0.
 TEST(Bm25StdScorerTest, ScoreLeafZeroFrequencyReturnsZero) {
   Bm25StdScorer scorer;
   Bm25StdStats stats = test_data::StatsForWorld(test_data::kDocs[4]);
@@ -65,8 +61,6 @@ TEST(Bm25StdScorerTest, ScoreLeafZeroFrequencyReturnsZero) {
   EXPECT_EQ(scorer.ScoreLeaf(stats, 1.0f), 0.0f);
 }
 
-// Empty index (N=0, avg_doc_len=0): ScoreLeaf returns 0 instead of
-// dividing by zero.
 TEST(Bm25StdScorerTest, ScoreLeafEmptyIndexReturnsZero) {
   Bm25StdScorer scorer;
   Bm25StdStats stats = MakeStats(/*N=*/0, /*avg_doc_len=*/0.0f,
@@ -74,22 +68,18 @@ TEST(Bm25StdScorerTest, ScoreLeafEmptyIndexReturnsZero) {
   EXPECT_EQ(scorer.ScoreLeaf(stats, 1.0f), 0.0f);
 }
 
-// IDF axis: rarer terms (lower dt) score higher than common ones at
-// matched-once-per-doc inputs.
 TEST(Bm25StdScorerTest, IdfDifferentiatesByDt) {
   Bm25StdScorer scorer;
   const float hello = scorer.ScoreLeaf(
-      test_data::StatsForHello(test_data::kDocs[0]), 1.0f);  // dt=6
+      test_data::StatsForHello(test_data::kDocs[0]), 1.0f);
   const float rare = scorer.ScoreLeaf(
-      test_data::StatsForRare(test_data::kDocs[5]), 1.0f);  // dt=2
+      test_data::StatsForRare(test_data::kDocs[5]), 1.0f);
   const float unique = scorer.ScoreLeaf(
-      test_data::StatsForUnique(test_data::kDocs[5]), 1.0f);  // dt=1
+      test_data::StatsForUnique(test_data::kDocs[5]), 1.0f);
   EXPECT_GT(rare, hello);
   EXPECT_GT(unique, rare);
 }
 
-// Length-norm axis: doc:5 (F=4, dl=4) outranks doc:4 (F=5, dl=9) on
-// hello despite doc:4 having a higher F.
 TEST(Bm25StdScorerTest, LengthNormalizationFavorsShorterDoc) {
   Bm25StdScorer scorer;
   const float doc4 =
@@ -123,9 +113,8 @@ TEST(Bm25StdScorerTest, ComposeMultipliesByDocumentScore) {
               kFloatTolerance);
 }
 
-// Infinite document_score short-circuits to itself. std::isinf is
-// unreliable under -ffast-math, so the scorer uses a bit-pattern
-// check; this test guards both signs of the IsInf path.
+// Guards both signs of the bit-pattern IsInf path (std::isinf is unreliable
+// under -ffast-math).
 TEST(Bm25StdScorerTest, ComposeInfinityShortCircuits) {
   Bm25StdScorer scorer;
   const float kInf = std::numeric_limits<float>::infinity();

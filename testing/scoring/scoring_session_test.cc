@@ -15,8 +15,6 @@
 #include "src/indexes/scoring/scoring_stats.h"
 #include "testing/scoring/scoring_test_data.h"
 
-// Tests for ScoringSession driven against the shared 8-doc corpus in
-// testing/scoring/scoring_test_data.h.
 namespace valkey_search::indexes::scoring {
 namespace {
 
@@ -24,8 +22,6 @@ using ::testing::ElementsAre;
 
 constexpr float kFloatTolerance = 1e-4f;
 
-// Extract the doc_id sequence from a Rank() result for ranking
-// assertions that don't care about absolute scores.
 std::vector<DocId> RankOrder(const std::vector<RankedDoc>& ranked) {
   std::vector<DocId> ids;
   ids.reserve(ranked.size());
@@ -33,8 +29,6 @@ std::vector<DocId> RankOrder(const std::vector<RankedDoc>& ranked) {
   return ids;
 }
 
-// Find the score for a specific doc_id in a Rank() result. Asserts the
-// doc is present.
 float ScoreFor(const std::vector<RankedDoc>& ranked, DocId id) {
   for (const auto& r : ranked) {
     if (r.doc_id == id) return r.score;
@@ -43,9 +37,6 @@ float ScoreFor(const std::vector<RankedDoc>& ranked, DocId id) {
   return 0.0f;
 }
 
-// Build a vector of Bm25StdStats for every doc in kDocs that has a
-// non-zero frequency for the named term. The vector is reserved up
-// front so pointers handed to RecordLeaf remain valid.
 template <typename Builder>
 std::vector<Bm25StdStats> BuildStatsForTerm(Builder builder) {
   std::vector<Bm25StdStats> out;
@@ -57,11 +48,6 @@ std::vector<Bm25StdStats> BuildStatsForTerm(Builder builder) {
   return out;
 }
 
-// ---- Normal-path tests ----
-
-// Single-leaf "hello" query: rank by length-normalized TF across
-// docs that contain "hello" at least once. Verifies rank order AND
-// absolute scores (Redis-verified).
 TEST(ScoringSessionTest, SingleLeafHelloRankOrder) {
   Bm25StdScorer scorer;
   ScoringSession session(&scorer);
@@ -78,14 +64,11 @@ TEST(ScoringSessionTest, SingleLeafHelloRankOrder) {
   EXPECT_NEAR(ScoreFor(ranked, 1), 0.331888f, kFloatTolerance);
 }
 
-// Implicit AND `hello world`: only docs that contain both terms are
-// admitted. Each admitted doc is scored on both leaves; the session
-// accumulates per-doc.
+// Implicit AND `hello world`: only docs containing both terms are admitted.
 TEST(ScoringSessionTest, MultiLeafHelloWorld) {
   Bm25StdScorer scorer;
   ScoringSession session(&scorer);
 
-  // Admission filter: docs that have BOTH hello and world present.
   std::vector<Bm25StdStats> hello_stats, world_stats;
   hello_stats.reserve(std::size(test_data::kDocs));
   world_stats.reserve(std::size(test_data::kDocs));
@@ -109,8 +92,7 @@ TEST(ScoringSessionTest, MultiLeafHelloWorld) {
   EXPECT_NEAR(ScoreFor(ranked, 1), 0.663776f, kFloatTolerance);
 }
 
-// Leaf weight scales every contribution linearly. `(hello)=>{$weight:5}`
-// must produce exactly 5x the single-leaf hello score, same ranking.
+// `(hello)=>{$weight:5}` must produce exactly 5x the single-leaf score.
 TEST(ScoringSessionTest, LeafWeightScalesScore) {
   Bm25StdScorer scorer;
   ScoringSession session(&scorer);
@@ -127,10 +109,8 @@ TEST(ScoringSessionTest, LeafWeightScalesScore) {
   EXPECT_NEAR(ScoreFor(ranked, 1), 1.659439f, kFloatTolerance);
 }
 
-// `((hello)=>{$weight:4} (world)=>{$weight:3})=>{$weight:2}` — outer
-// group weight composes multiplicatively over per-leaf weights:
+// `((hello)=>{$weight:4} (world)=>{$weight:3})=>{$weight:2}`:
 //   final = 2 * (4*hello + 3*world)
-// Drives EnterGroup / ExitGroup once around two weighted leaves.
 TEST(ScoringSessionTest, NestedGroupsLayeredWeights) {
   Bm25StdScorer scorer;
   ScoringSession session(&scorer);
@@ -161,16 +141,12 @@ TEST(ScoringSessionTest, NestedGroupsLayeredWeights) {
   EXPECT_NEAR(ScoreFor(ranked, 1), 4.646429f, kFloatTolerance);
 }
 
-// `(hello world) | rare` — OR at the top, two distinct admission paths.
-// Each doc is scored only on the leaves matched on the path that
-// admitted it. doc:6 has `world` but enters via `rare`, so its `world`
-// token contributes nothing.
+// `(hello world) | rare`: doc:6 has `world` but enters via `rare`, so its
+// `world` token contributes nothing.
 TEST(ScoringSessionTest, OrAtTopMixedAdmissionPaths) {
   Bm25StdScorer scorer;
   ScoringSession session(&scorer);
 
-  // Persistent storage for the stats. Reserve up front so RecordLeaf's
-  // pointer stays valid across pushes.
   std::vector<Bm25StdStats> all_stats;
   all_stats.reserve(2 * std::size(test_data::kDocs));
 
@@ -199,9 +175,8 @@ TEST(ScoringSessionTest, OrAtTopMixedAdmissionPaths) {
   EXPECT_NEAR(ScoreFor(ranked, 1), 0.663776f, kFloatTolerance);
 }
 
-// `hello (world | rare)` — AND of leaf + OR group. None of the
-// admitted docs (1-4, 7) contain `rare`, so the OR group contributes
-// only `world`. Final scores match plain `hello world`.
+// `hello (world | rare)`: admitted docs (1-4, 7) have no `rare`, so the
+// OR group reduces to `world` and final scores match plain `hello world`.
 TEST(ScoringSessionTest, AndOfLeafAndOrGroup) {
   Bm25StdScorer scorer;
   ScoringSession session(&scorer);
@@ -236,13 +211,8 @@ TEST(ScoringSessionTest, AndOfLeafAndOrGroup) {
   EXPECT_NEAR(ScoreFor(ranked, 1), 0.663776f, kFloatTolerance);
 }
 
-// `((hello)=>{$weight:4} | (rare)=>{$weight:2})=>{$weight:3}` — the
-// only test that exercises both per-leaf weights and an outer group
-// weight in composition. Each admitted doc is scored on whichever
-// leaves matched, weighted accordingly:
+// `((hello)=>{$weight:4} | (rare)=>{$weight:2})=>{$weight:3}`:
 //   final = 3 * (4*hello if matched + 2*rare if matched)
-// doc:6 has `world` but `world` is not in the query, so it isn't
-// scored. doc:8 (rare-only) ranks highest because rare's IDF dominates.
 TEST(ScoringSessionTest, PerLeafWeightInsideOrWithGroupWeight) {
   Bm25StdScorer scorer;
   ScoringSession session(&scorer);
@@ -276,7 +246,6 @@ TEST(ScoringSessionTest, PerLeafWeightInsideOrWithGroupWeight) {
   EXPECT_NEAR(ScoreFor(ranked, 1), 3.982653f, kFloatTolerance);
 }
 
-// Empty result: no leaves recorded, Rank() returns an empty vector.
 TEST(ScoringSessionTest, NonExistentTermEmpty) {
   Bm25StdScorer scorer;
   ScoringSession session(&scorer);
@@ -284,8 +253,7 @@ TEST(ScoringSessionTest, NonExistentTermEmpty) {
   EXPECT_TRUE(ranked.empty());
 }
 
-// Docs with byte-identical scoring inputs (doc:2 vs doc:7 on `hello`)
-// must be tie-broken by doc_id ascending.
+// doc:2 and doc:7 have byte-identical inputs on `hello`; tie-break by doc_id.
 TEST(ScoringSessionTest, TiesBrokenByDocIdAscending) {
   Bm25StdScorer scorer;
   ScoringSession session(&scorer);
@@ -293,7 +261,6 @@ TEST(ScoringSessionTest, TiesBrokenByDocIdAscending) {
   for (const auto& s : stats) session.RecordLeaf(s, 1.0f);
 
   auto ranked = session.Rank();
-  // Find the positions of doc:2 and doc:7 in the ranking.
   int pos2 = -1, pos7 = -1;
   for (size_t i = 0; i < ranked.size(); ++i) {
     if (ranked[i].doc_id == 2) pos2 = static_cast<int>(i);
@@ -304,8 +271,6 @@ TEST(ScoringSessionTest, TiesBrokenByDocIdAscending) {
   EXPECT_LT(pos2, pos7);
   EXPECT_FLOAT_EQ(ranked[pos2].score, ranked[pos7].score);
 }
-
-// ---- Death tests: contract violations ----
 
 TEST(ScoringSessionDeathTest, RecordLeafAfterRankCrashes) {
   Bm25StdScorer scorer;

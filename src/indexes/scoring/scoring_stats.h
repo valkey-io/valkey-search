@@ -16,25 +16,9 @@
 
 namespace valkey_search::indexes::scoring {
 
-// Inputs common to every scoring algorithm. Populated for one
-// (query term, candidate document) pair during result collection.
-//
-// Concrete algorithms derive from this and add their algorithm-specific
-// fields (e.g. Bm25StdStats adds doc_len / avg_doc_len).
-//
-// Field semantics:
-//   total_docs            - N, total documents in the index
-//   doc_id                - candidate document id
-//   document_score        - SCORE_FIELD | SCORE | 1.0
-//   term                  - surface term from the query leaf
-//   num_doc_contain_term  - dt, docs containing this term (index-wide)
-//   term_frequency        - doc-wide term frequency
 struct ScoringStats {
   virtual ~ScoringStats() = default;
 
-  // Polymorphic deep copy. ScoringSession uses this to take an owned
-  // copy of caller-supplied stats so its lifetime is independent of
-  // the original.
   virtual std::unique_ptr<ScoringStats> Clone() const {
     return std::make_unique<ScoringStats>(*this);
   }
@@ -47,12 +31,6 @@ struct ScoringStats {
   uint32_t term_frequency = 0;
 };
 
-// BM25STD-specific inputs. Adds only the fields BM25STD needs on top of
-// the common stats.
-//
-// Field semantics:
-//   avg_doc_len  - index-wide average indexed-terms per document
-//   doc_len      - total indexed terms in this document
 struct Bm25StdStats : ScoringStats {
   std::unique_ptr<ScoringStats> Clone() const override {
     return std::make_unique<Bm25StdStats>(*this);
@@ -62,19 +40,8 @@ struct Bm25StdStats : ScoringStats {
   uint32_t doc_len = 0;
 };
 
-// TFIDF-specific inputs. Adds the fields TFIDF needs on top of the common
-// stats: the per-document `norm` divisor and the term's positional
-// offsets within the document (used for the SLOP penalty).
-//
-// `positions` is a non-owning view; the underlying storage must outlive
-// the ScoringStats. Empty when SLOP is not being computed.
-//
-// Field semantics:
-//   norm       - max term frequency within the document; 0 means the
-//                document has no TEXT fields, which forces the final
-//                score to 0
-//   positions  - positional offsets of `term` within the document, sorted
-//                ascending; empty when SLOP is not used
+// `positions` is a non-owning view; storage must outlive the stats.
+// `norm` of 0 means the document has no TEXT fields and forces score to 0.
 struct TfidfStats : ScoringStats {
   std::unique_ptr<ScoringStats> Clone() const override {
     return std::make_unique<TfidfStats>(*this);

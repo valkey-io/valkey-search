@@ -2,7 +2,7 @@
 
 Honoring `AS <alias>` in the LOAD clause (and accepting a JSON path as the
 loaded field) is a compatibility fix gated behind `search.emulate-release`
->= 1.2.1 (see COMPATIBILITY.md). These tests run under debug-mode so the
+>= 1.3 (see COMPATIBILITY.md). These tests run under debug-mode so the
 emulate-release ceiling can be lifted to the (as yet unreleased) fix version.
 """
 
@@ -12,7 +12,7 @@ from valkey.client import Valkey
 from valkey_search_test_case import ValkeySearchTestCaseDebugMode
 from valkeytestframework.conftest import resource_port_tracker
 
-FIX_RELEASE = "1.2.1"
+FIX_RELEASE = "1.3.0"
 LEGACY_RELEASE = "1.0.0"
 
 
@@ -41,16 +41,17 @@ class TestAggregateLoadAs(ValkeySearchTestCaseDebugMode):
     def _make_hash(self, client):
         client.execute_command(
             "FT.CREATE", "idx_hash", "ON", "HASH", "PREFIX", "1", "h:",
-            "SCHEMA", "price", "NUMERIC", "cat", "TAG",
+            "SCHEMA", "price", "NUMERIC", "qty", "NUMERIC", "cat", "TAG",
         )
-        client.execute_command("HSET", "h:1", "price", "10", "cat", "a")
+        client.execute_command("HSET", "h:1", "price", "10", "qty", "5", "cat", "a")
 
     def _make_json(self, client):
         client.execute_command(
             "FT.CREATE", "idx_json", "ON", "JSON", "PREFIX", "1", "j:",
             "SCHEMA", "$.price", "AS", "price", "NUMERIC",
+            "$.qty", "AS", "qty", "NUMERIC",
         )
-        client.execute_command("JSON.SET", "j:1", "$", '{"price":10}')
+        client.execute_command("JSON.SET", "j:1", "$", '{"price":10,"qty":5}')
 
     def test_load_as_hash(self):
         """LOAD ... AS renames the emitted field for a HASH key."""
@@ -140,3 +141,46 @@ class TestAggregateLoadAs(ValkeySearchTestCaseDebugMode):
                 "FT.AGGREGATE", "idx_json", "@price:[-inf inf]",
                 "LOAD", "3", "$.price", "AS", "cost",
             )
+
+    def test_rename_hides_declared_attribute(self):
+        """A rename can shadow a declared attribute: `@price AS qty` makes the
+        name `qty` resolve to price's value, not the schema's qty."""
+        for make, idx in ((self._make_hash, "idx_hash"), (self._make_json, "idx_json")):
+            client = self._client()
+            client.execute_command("FLUSHALL", "SYNC")
+            make(client)
+            reply = client.execute_command(
+                "FT.AGGREGATE", idx, "@price:[-inf inf]",
+                "LOAD", "3", "@price", "AS", "qty",
+                "APPLY", "@qty+100", "AS", "r",
+            )
+            result = rows(reply)
+            assert len(result) == 1
+            # qty == price's value (10), NOT the schema qty (5); r == 110.
+            assert result[0] == {"qty": b"10", "r": b"110"}
+
+    def test_two_renames_same_alias_errors(self):
+        """Intentionally stricter than RediSearch (which keeps the first and
+        drops the rest): two LOAD ... AS renames to the same alias are a
+        syntax error."""
+        for make, idx in ((self._make_hash, "idx_hash"), (self._make_json, "idx_json")):
+            client = self._client()
+            client.execute_command("FLUSHALL", "SYNC")
+            make(client)
+            with pytest.raises(valkey.exceptions.ResponseError, match="Duplicate"):
+                client.execute_command(
+                    "FT.AGGREGATE", idx, "@price:[-inf inf]",
+                    "LOAD", "6", "@price", "AS", "x", "@qty", "AS", "x",
+                )
+
+    def test_rename_key_field(self):
+        """`__key` may be renamed via AS, and the alias is usable downstream."""
+        client = self._client()
+        self._make_hash(client)
+        reply = client.execute_command(
+            "FT.AGGREGATE", "idx_hash", "@price:[-inf inf]",
+            "LOAD", "3", "@__key", "AS", "mykey",
+        )
+        result = rows(reply)
+        assert len(result) == 1
+        assert result[0] == {"mykey": b"h:1"}

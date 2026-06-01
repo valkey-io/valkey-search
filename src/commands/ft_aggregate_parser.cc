@@ -6,9 +6,11 @@
 
 #include "src/commands/ft_aggregate_parser.h"
 
+#include "absl/container/flat_hash_set.h"
 #include "absl/container/inlined_vector.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/command_parser.h"
@@ -55,6 +57,9 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
         // followed by `AS <alias>`; the `AS` keyword and its alias count
         // against the budget (matching RediSearch).
         uint32_t consumed = 0;
+        // Output names already assigned by an `AS` rename in this clause. Two
+        // renames targeting the same alias are rejected (see below).
+        absl::flat_hash_set<std::string> renamed_aliases;
         while (consumed < cnt) {
           std::string load;
           VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, load));
@@ -66,10 +71,10 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
           std::string identifier = load[0] == '@' ? load.substr(1) : load;
           std::string alias = identifier;
           // Honoring `AS <alias>` in the LOAD clause is a compatibility fix
-          // introduced in 1.2.1. Older emulated releases treat `AS` as just
+          // introduced in 1.3. Older emulated releases treat `AS` as just
           // another field name (the legacy behavior preserved below).
           absl::Status as_status = VALKEY_SEARCH_COMPATIBILITY_FIX(
-              1, 2, 1, "ft_aggregate_load_as",
+              1, 3, 0, "ft_aggregate_load_as",
               [&]() -> absl::Status {
                 // If the entry is a schema identifier (e.g. a JSON path) rather
                 // than an alias, resolve it to the alias so it can be fetched.
@@ -103,6 +108,13 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
               []() -> absl::Status { return absl::OkStatus(); });
           VMSDK_RETURN_IF_ERROR(as_status);
           if (alias != identifier) {
+            if (!renamed_aliases.insert(alias).second) {
+              // Intentionally stricter than RediSearch (which keeps the first
+              // and silently drops the rest): reject two LOAD ... AS renames
+              // that target the same alias.
+              return absl::InvalidArgumentError(absl::StrCat(
+                  "Duplicate `AS` alias `", alias, "` in LOAD clause"));
+            }
             // LOAD precedes APPLY/SORTBY/FILTER in the command, so register
             // the rename now to make `@alias` resolvable in those later
             // stages. Entries that can't be resolved against the index here

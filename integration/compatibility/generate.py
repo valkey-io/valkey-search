@@ -307,9 +307,10 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.check(dialect,
             f"ft.aggregate {key_type}_idx1 * load 5 @__key @n1 @n2 as b apply @n1+@b as total"
         )
-        # Rename a tag field and use it in a string APPLY.
+        # Rename a tag field and use it in a string APPLY. No spaces in the
+        # expression so the whitespace-split in check() keeps it one token.
         self.check(dialect,
-            f'ft.aggregate {key_type}_idx1 * load 4 @__key @t1 as tag1 apply contains(@tag1, "a") as has_a'
+            f'ft.aggregate {key_type}_idx1 * load 4 @__key @t1 as tag1 apply contains(@tag1,"one") as has_one'
         )
 
     def test_aggregate_load_rename_json_path(self, key_type, dialect):

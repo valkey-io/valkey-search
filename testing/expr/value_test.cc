@@ -421,53 +421,45 @@ TEST_F(ValueTest, ArrayAccessors) {
 }
 
 TEST_F(ValueTest, vector_arithmetic) {
-  // Redis compatibility: arithmetic on arrays returns error
-  // "Could not convert value to a number"
+  // Arithmetic on arrays returns Nil with per-function error messages
   Value vec1({Value(1.0), Value(2.0), Value(3.0)});
   Value scalar(5.0);
 
-  // Test vector-scalar addition returns error (matches Redis)
+  // Test vector-scalar addition returns error
   Value result1 = FuncAdd(vec1, scalar);
   ASSERT_TRUE(result1.IsNil());
-  EXPECT_EQ(result1.GetNil().GetReason(),
-            "Could not convert value to a number");
+  EXPECT_EQ(result1.GetNil().GetReason(), "Add requires numeric operands");
 
-  // Test scalar-vector addition returns error (matches Redis)
+  // Test scalar-vector addition returns error
   Value result2 = FuncAdd(scalar, vec1);
   ASSERT_TRUE(result2.IsNil());
-  EXPECT_EQ(result2.GetNil().GetReason(),
-            "Could not convert value to a number");
+  EXPECT_EQ(result2.GetNil().GetReason(), "Add requires numeric operands");
 
-  // Test vector-vector addition returns error (matches Redis)
+  // Test vector-vector addition returns error
   Value vec2({Value(10.0), Value(20.0), Value(30.0)});
   Value result3 = FuncAdd(vec1, vec2);
   ASSERT_TRUE(result3.IsNil());
-  EXPECT_EQ(result3.GetNil().GetReason(),
-            "Could not convert value to a number");
+  EXPECT_EQ(result3.GetNil().GetReason(), "Add requires numeric operands");
 
   // Test vector-scalar subtraction returns error
   Value result4 = FuncSub(vec1, Value(1.0));
   ASSERT_TRUE(result4.IsNil());
-  EXPECT_EQ(result4.GetNil().GetReason(),
-            "Could not convert value to a number");
+  EXPECT_EQ(result4.GetNil().GetReason(), "Subtract requires numeric operands");
 
   // Test vector-scalar multiplication returns error
   Value result5 = FuncMul(vec1, Value(2.0));
   ASSERT_TRUE(result5.IsNil());
-  EXPECT_EQ(result5.GetNil().GetReason(),
-            "Could not convert value to a number");
+  EXPECT_EQ(result5.GetNil().GetReason(), "Multiply requires numeric operands");
 
   // Test vector-scalar division returns error
   Value result6 = FuncDiv(vec1, Value(2.0));
   ASSERT_TRUE(result6.IsNil());
-  EXPECT_EQ(result6.GetNil().GetReason(),
-            "Could not convert value to a number");
+  EXPECT_EQ(result6.GetNil().GetReason(), "Divide requires numeric operands");
 
   // Test vector-scalar power returns error
   Value result7 = FuncPower(vec1, Value(2.0));
   ASSERT_TRUE(result7.IsNil());
-  EXPECT_EQ(result7.GetNil().GetReason(),
-            "Could not convert value to a number");
+  EXPECT_EQ(result7.GetNil().GetReason(), "Power requires numeric operands");
 }
 
 TEST_F(ValueTest, ArrayComparison_EqualArrays) {
@@ -839,37 +831,37 @@ TEST_F(ValueTest, NestedArray_ScalarFunctionRecursiveApplication) {
 }
 
 TEST_F(ValueTest, NestedArray_MathFunctionRecursiveApplication) {
-  // Redis compatibility: math functions on arrays return nan
+  // Math functions on arrays return Nil (can't convert to double)
   Value nested =
       Value({Value({Value(1.5), Value(2.7)}), Value({Value(3.2), Value(4.9)})});
 
   Value result = FuncFloor(nested);
-  EXPECT_TRUE(result.IsDouble());
-  EXPECT_EQ(result, Value(std::nan("")));
+  EXPECT_TRUE(result.IsNil());
+  EXPECT_EQ(result.GetNil().GetReason(), "floor couldn't convert to a double");
 
   Value result2 = FuncCeil(nested);
-  EXPECT_TRUE(result2.IsDouble());
-  EXPECT_EQ(result2, Value(std::nan("")));
+  EXPECT_TRUE(result2.IsNil());
+  EXPECT_EQ(result2.GetNil().GetReason(), "ceil couldn't convert to a double");
 }
 
 TEST_F(ValueTest, NestedArray_ThreeLevelRecursiveApplication) {
-  // Redis compatibility: math functions on nested arrays return nan
+  // Math functions on nested arrays return Nil (can't convert to double)
   Value nested = Value({Value({Value({Value(1.1), Value(2.2)})}),
                         Value({Value({Value(3.3), Value(4.4)})})});
 
   Value result = FuncCeil(nested);
-  EXPECT_TRUE(result.IsDouble());
-  EXPECT_EQ(result, Value(std::nan("")));
+  EXPECT_TRUE(result.IsNil());
+  EXPECT_EQ(result.GetNil().GetReason(), "ceil couldn't convert to a double");
 }
 
 TEST_F(ValueTest, NestedArray_ArithmeticWithScalar) {
-  // Redis compatibility: arithmetic on nested arrays returns error
+  // Arithmetic on nested arrays returns Nil
   Value nested =
       Value({Value({Value(1.0), Value(2.0)}), Value({Value(3.0), Value(4.0)})});
 
   Value result = FuncAdd(nested, Value(10.0));
   ASSERT_TRUE(result.IsNil());
-  EXPECT_EQ(result.GetNil().GetReason(), "Could not convert value to a number");
+  EXPECT_EQ(result.GetNil().GetReason(), "Add requires numeric operands");
 }
 
 TEST_F(ValueTest, NestedArray_ElementAccess) {

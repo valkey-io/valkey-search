@@ -209,9 +209,6 @@ std::ostream& operator<<(std::ostream& os, const Value& v) {
 static Ordering CompareDoubles(double l, double r) {
   // -ffast-math doesn't handle compares correctly with infinities or nans, we
   // do it integer.
-  if (IsNan(l) && IsNan(r)) {
-    return Ordering::kEQUAL;
-  }
   if (IsNan(l) || IsNan(r)) {
     return Ordering::kUNORDERED;
   }
@@ -313,7 +310,7 @@ Value FuncAdd(const Value& l, const Value& r) {
   if (lv && rv) {
     return Value(lv.value() + rv.value());
   } else {
-    return Value(Value::Nil("Could not convert value to a number"));
+    return Value(Value::Nil("Add requires numeric operands"));
   }
 }
 
@@ -323,7 +320,7 @@ Value FuncSub(const Value& l, const Value& r) {
   if (lv && rv) {
     return Value(lv.value() - rv.value());
   } else {
-    return Value(Value::Nil("Could not convert value to a number"));
+    return Value(Value::Nil("Subtract requires numeric operands"));
   }
 }
 
@@ -333,7 +330,7 @@ Value FuncMul(const Value& l, const Value& r) {
   if (lv && rv) {
     return Value(lv.value() * rv.value());
   } else {
-    return Value(Value::Nil("Could not convert value to a number"));
+    return Value(Value::Nil("Multiply requires numeric operands"));
   }
 }
 
@@ -347,7 +344,7 @@ Value FuncDiv(const Value& l, const Value& r) {
       return Value(lv.value() / rv.value());
     }
   } else {
-    return Value(Value::Nil("Could not convert value to a number"));
+    return Value(Value::Nil("Divide requires numeric operands"));
   }
 }
 
@@ -357,7 +354,7 @@ Value FuncPower(const Value& l, const Value& r) {
   if (lv && rv) {
     return Value(std::pow(lv.value(), rv.value()));
   } else {
-    return Value(Value::Nil("Could not convert value to a number"));
+    return Value(Value::Nil("Power requires numeric operands"));
   }
 }
 
@@ -400,7 +397,7 @@ Value FuncLand(const Value& l, const Value& r) {
 Value FuncFloor(const Value& o) {
   auto d = o.AsDouble();
   if (!d) {
-    return Value(std::nan(""));
+    return Value(Value::Nil("floor couldn't convert to a double"));
   }
   return Value(std::floor(*d));
 }
@@ -408,7 +405,7 @@ Value FuncFloor(const Value& o) {
 Value FuncCeil(const Value& o) {
   auto d = o.AsDouble();
   if (!d) {
-    return Value(std::nan(""));
+    return Value(Value::Nil("ceil couldn't convert to a double"));
   }
   return Value(std::ceil(*d));
 }
@@ -416,7 +413,7 @@ Value FuncCeil(const Value& o) {
 Value FuncAbs(const Value& o) {
   auto d = o.AsDouble();
   if (!d) {
-    return Value(std::nan(""));
+    return Value(Value::Nil("abs couldn't convert to a double"));
   }
   return Value(std::abs(*d));
 }
@@ -424,7 +421,7 @@ Value FuncAbs(const Value& o) {
 Value FuncLog(const Value& o) {
   auto d = o.AsDouble();
   if (!d) {
-    return Value(std::nan(""));
+    return Value(Value::Nil("log couldn't convert to a double"));
   }
   return Value(std::log(*d));
 }
@@ -432,7 +429,7 @@ Value FuncLog(const Value& o) {
 Value FuncLog2(const Value& o) {
   auto d = o.AsDouble();
   if (!d) {
-    return Value(std::nan(""));
+    return Value(Value::Nil("log2 couldn't convert to a double"));
   }
   return Value(std::log2(*d));
 }
@@ -440,7 +437,7 @@ Value FuncLog2(const Value& o) {
 Value FuncExp(const Value& o) {
   auto d = o.AsDouble();
   if (!d) {
-    return Value(std::nan(""));
+    return Value(Value::Nil("exp couldn't convert to a double"));
   }
   return Value(std::exp(*d));
 }
@@ -448,7 +445,7 @@ Value FuncExp(const Value& o) {
 Value FuncSqrt(const Value& o) {
   auto d = o.AsDouble();
   if (!d) {
-    return Value(std::nan(""));
+    return Value(Value::Nil("sqrt couldn't convert to a double"));
   }
   return Value(std::sqrt(*d));
 }

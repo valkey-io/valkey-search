@@ -66,24 +66,6 @@ using RDBLoadFunc = void *(*)(ValkeyModuleIO *, int);
 using FreeFunc = void (*)(void *);
 using FieldMaskPredicate = uint64_t;
 
-struct AttributeInfo {
-  explicit AttributeInfo(uint16_t pos, uint64_t size)
-      : position_(pos), size_(size) {}
-  ~AttributeInfo() = default;
-
-  inline uint16_t GetPosition() const {
-    return static_cast<uint16_t>(position_);
-  }
-  inline void SetPosition(uint16_t pos) { position_ = pos; }
-  inline uint64_t GetSize() const { return size_; }
-  inline void SetSize(uint64_t size) { size_ = size; }
-
- private:
-  // Attribute position within the IndexSchema::attribute_size_vec_ property.
-  uint64_t position_ : 16;
-  uint64_t size_ : 48;
-};
-
 class IndexSchema : public KeyspaceEventSubscription,
                     public std::enable_shared_from_this<IndexSchema> {
  public:
@@ -302,11 +284,6 @@ class IndexSchema : public KeyspaceEventSubscription,
                                   vmsdk::ArgsIterator &itr);
   struct DbKeyInfo {
     MutationSequenceNumber mutation_sequence_number_{0};
-    std::vector<AttributeInfo> attr_info_vec_;
-
-    inline std::vector<AttributeInfo> &GetAttributeInfoVec() {
-      return attr_info_vec_;
-    }
   };
 
   MutationSequenceNumber GetDbMutationSequenceNumber(const Key &key) const {
@@ -416,6 +393,15 @@ class IndexSchema : public KeyspaceEventSubscription,
   void IncrementOccupiedCount(uint16_t pos) ABSL_LOCKS_EXCLUDED(schema_mutex_);
   void DecrementOccupiedCount(uint16_t pos) ABSL_LOCKS_EXCLUDED(schema_mutex_);
 
+  // Per-attribute byte-size accounting. Slot helpers (OccupySlot /
+  // ResizeSlot / VacateSlot) call these so `attributes_indexed_data_size_`
+  // tracks the live total of indexed user-data bytes per attribute. Reads
+  // by FT.INFO / GetSize go through schema_mutex_'s reader lock.
+  void IncrementAttrSize(uint16_t pos, size_t bytes)
+      ABSL_LOCKS_EXCLUDED(schema_mutex_);
+  void DecrementAttrSize(uint16_t pos, size_t bytes)
+      ABSL_LOCKS_EXCLUDED(schema_mutex_);
+
   // Single-pass iteration over every key in `index_key_info_`. Replaces
   // per-attribute ForEachTrackedKey + ForEachUnTrackedKey loops in
   // ValidateIndex / OnLoadingEnded — callers branch on `IsOccupied(slot)`
@@ -448,23 +434,14 @@ class IndexSchema : public KeyspaceEventSubscription,
   /**
    * @brief Computes the total size of attributes, optionally filtered by
    * indexer type.
+   *
+   * Takes schema_mutex_ briefly under reader access (slot helpers in
+   * worker threads write attributes_indexed_data_size_ as records are
+   * added / resized / removed).
    */
-  inline uint64_t GetSize(std::optional<indexes::IndexerType>
-                              indexer_type_filter = std::nullopt) const {
-    if (!indexer_type_filter.has_value()) {
-      // No filter
-      return std::accumulate(attributes_indexed_data_size_.begin(),
-                             attributes_indexed_data_size_.end(), 0);
-    }
-
-    uint64_t total_size{0};
-    for (const auto &[_, attr] : attributes_) {
-      if (attr.GetIndex()->GetIndexerType() == indexer_type_filter.value()) {
-        total_size += attributes_indexed_data_size_[attr.GetPosition()];
-      }
-    }
-    return total_size;
-  }
+  uint64_t GetSize(std::optional<indexes::IndexerType> indexer_type_filter =
+                       std::nullopt) const
+      ABSL_LOCKS_EXCLUDED(schema_mutex_);
   /**
    * @brief Returns the total size of attributes matching the specified filter.
    *
@@ -475,18 +452,8 @@ class IndexSchema : public KeyspaceEventSubscription,
    * @return The total size of matching attributes, or 0 if no attributes match
    *         the filter.
    */
-  inline uint64_t GetSize(absl::string_view attribute_alias_filter = "") const {
-    if (attribute_alias_filter.empty()) {
-      return GetSize(std::nullopt);
-    }
-
-    for (const auto &[_, attr] : attributes_) {
-      if (attr.GetAlias() == attribute_alias_filter) {
-        return attributes_indexed_data_size_[attr.GetPosition()];
-      }
-    }
-    return 0;
-  }
+  uint64_t GetSize(absl::string_view attribute_alias_filter = "") const
+      ABSL_LOCKS_EXCLUDED(schema_mutex_);
 
   const absl::flat_hash_map<std::string, Attribute> &GetAttributes() const {
     return attributes_;
@@ -535,7 +502,12 @@ class IndexSchema : public KeyspaceEventSubscription,
   bool skip_initial_scan_{false};
 
   vmsdk::ThreadPool *mutations_thread_pool_{nullptr};
-  std::vector<uint64_t> attributes_indexed_data_size_;
+  // Per-attribute live byte total. Written by the slot helpers
+  // (OccupySlot/ResizeSlot/VacateSlot, in worker threads via
+  // Increment/DecrementAttrSize); read by FT.INFO via GetSize. Sized by
+  // AddIndex and stable thereafter except via the size helpers.
+  std::vector<uint64_t> attributes_indexed_data_size_
+      ABSL_GUARDED_BY(schema_mutex_);
 
   InternedStringHashMap<DocumentMutation> tracked_mutated_records_
       ABSL_GUARDED_BY(mutated_records_mutex_);

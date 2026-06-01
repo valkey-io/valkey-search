@@ -905,60 +905,20 @@ MutationSequenceNumber IndexSchema::UpdateDbInfoKey(
   MutationSequenceNumber this_mutation = ++schema_mutation_sequence_number_;
   auto &dbkeyinfo_map = db_key_info_.Get();
 
-  // When mutating (does not matter
-  auto iter = dbkeyinfo_map.find(interned_key);
-  if (iter != dbkeyinfo_map.end()) {
-    // Remove this key size(s) from the index tracked size array.
-    for (const auto &attr_info : iter->second.GetAttributeInfoVec()) {
-      CHECK(attr_info.GetPosition() < attributes_indexed_data_size_.size());
-      attributes_indexed_data_size_[attr_info.GetPosition()] -=
-          attr_info.GetSize();
-    }
-  }
-
   if (is_delete) {
     dbkeyinfo_map.erase(interned_key);
     stats_.document_cnt = dbkeyinfo_map.size();
     return this_mutation;
   }
 
+  // Per-attribute byte accounting is owned by the slot helpers — see
+  // OccupySlot/ResizeSlot/VacateSlot in index_base.cc, which read/write
+  // `attributes_indexed_data_size_` via Increment/DecrementAttrSize as
+  // slots are filled/resized/emptied. This function only refreshes the
+  // mutation sequence number on the main-thread DbKeyInfo entry.
   auto &dbkeyinfo = dbkeyinfo_map[interned_key];
   dbkeyinfo.mutation_sequence_number_ = this_mutation;
   stats_.document_cnt = dbkeyinfo_map.size();
-
-  auto &attr_info_vec = dbkeyinfo.GetAttributeInfoVec();
-  // Clear the array, we will re-use it.
-  attr_info_vec.clear();
-
-  // Go over the mutated attributes and increment the global size
-  // array
-  for (const auto &mutated_attr : mutated_attributes) {
-    // We should accept here the alias
-    auto res = GetAttributePositionByAlias(mutated_attr.first);
-    if (!res.ok()) {
-      // No such alias? try to see if we got an identifier instead
-      res = GetAttributePositionByIdentifier(mutated_attr.first);
-    }
-    CHECK(res.ok()) << "Index: [" << vmsdk::config::RedactIfNeeded(GetName())
-                    << "]: could not find attribute position for alias: "
-                    << vmsdk::config::RedactIfNeeded(mutated_attr.first);
-    CHECK(res.value() < attributes_indexed_data_size_.size())
-        << "Invalid attribute position found";
-
-    const auto &attr_pos = res.value();
-    size_t data_len{0};
-    if (mutated_attr.second.data) {
-      // If data is present, the operation is either INSERT or UPDATE.
-      // Otherwise, the field has been deleted and is treated as having size
-      // 0.
-      data_len = vmsdk::ToStringView(mutated_attr.second.data.get()).length();
-      attr_info_vec.emplace_back(attr_pos, data_len);
-    }
-    // update the global tracking array
-    attributes_indexed_data_size_[attr_pos] += data_len;
-  }
-
-  attr_info_vec.shrink_to_fit();
   return this_mutation;
 }
 
@@ -1021,7 +981,14 @@ void IndexSchema::DestroyKeyAttrValueLocked(const Key &key) {
     if (indexes::IsOccupied(slot)) {
       // Safety net — the normal RemoveRecord(kRecord) path should have
       // already vacated each occupied slot. Defer to the owning index to
-      // remove from its aux structure and free any heap state.
+      // remove from its aux structure and free any heap state, then
+      // subtract this slot's bytes from the per-attribute total (the
+      // VacateSlot it didn't go through would have done so).
+      const size_t old_len =
+          reinterpret_cast<const indexes::SlotBase *>(slot.storage)
+              ->user_data_len;
+      CHECK_GE(attributes_indexed_data_size_[i], old_len);
+      attributes_indexed_data_size_[i] -= old_len;
       auto attr_itr = std::find_if(
           attributes_.begin(), attributes_.end(),
           [i](const auto &kv) { return kv.second.GetPosition() == i; });
@@ -1152,6 +1119,49 @@ void IndexSchema::IncrementOccupiedCount(uint16_t pos) {
 void IndexSchema::DecrementOccupiedCount(uint16_t pos) {
   absl::MutexLock lock(&schema_mutex_);
   --occupied_count_[pos];
+}
+
+void IndexSchema::IncrementAttrSize(uint16_t pos, size_t bytes) {
+  absl::MutexLock lock(&schema_mutex_);
+  attributes_indexed_data_size_[pos] += bytes;
+}
+
+void IndexSchema::DecrementAttrSize(uint16_t pos, size_t bytes) {
+  absl::MutexLock lock(&schema_mutex_);
+  // CHECK rather than saturate — a slot underflowing would mean the helpers
+  // double-counted or skipped an Add.
+  CHECK_GE(attributes_indexed_data_size_[pos], bytes);
+  attributes_indexed_data_size_[pos] -= bytes;
+}
+
+uint64_t IndexSchema::GetSize(
+    std::optional<indexes::IndexerType> indexer_type_filter) const {
+  absl::ReaderMutexLock lock(&schema_mutex_);
+  if (!indexer_type_filter.has_value()) {
+    return std::accumulate(attributes_indexed_data_size_.begin(),
+                           attributes_indexed_data_size_.end(),
+                           static_cast<uint64_t>(0));
+  }
+  uint64_t total_size = 0;
+  for (const auto &[_, attr] : attributes_) {
+    if (attr.GetIndex()->GetIndexerType() == indexer_type_filter.value()) {
+      total_size += attributes_indexed_data_size_[attr.GetPosition()];
+    }
+  }
+  return total_size;
+}
+
+uint64_t IndexSchema::GetSize(absl::string_view attribute_alias_filter) const {
+  if (attribute_alias_filter.empty()) {
+    return GetSize(std::nullopt);
+  }
+  absl::ReaderMutexLock lock(&schema_mutex_);
+  for (const auto &[_, attr] : attributes_) {
+    if (attr.GetAlias() == attribute_alias_filter) {
+      return attributes_indexed_data_size_[attr.GetPosition()];
+    }
+  }
+  return 0;
 }
 
 absl::Status IndexSchema::ForEachKey(

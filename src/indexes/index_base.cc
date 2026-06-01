@@ -80,9 +80,7 @@ std::byte* TypedIndex<Derived, SlotT>::OccupySlot(
   // placement-new of SlotT{base{1, data_len}, ...payload...}.
   reinterpret_cast<Missing*>(slot.storage)->~Missing();
   schema_->IncrementOccupiedCount(pos_);
-  // user_data_len is set when the caller placement-news the SlotT; no need
-  // to write SlotBase here. Just hand back the storage pointer.
-  (void)data_len;  // size accounting moves to slot helpers in a later chunk.
+  schema_->IncrementAttrSize(pos_, data_len);
   return slot.storage;
 }
 
@@ -95,7 +93,13 @@ void TypedIndex<Derived, SlotT>::ResizeSlot(const InternedStringPtr& key,
   Slot& slot = kav->slots[pos_];
   CHECK(IsOccupied(slot)) << "ResizeSlot called on empty slot";
   auto* base = reinterpret_cast<SlotBase*>(slot.storage);
+  const size_t old_len = base->user_data_len;
   base->user_data_len = static_cast<uint32_t>(new_len);
+  if (new_len > old_len) {
+    schema_->IncrementAttrSize(pos_, new_len - old_len);
+  } else if (old_len > new_len) {
+    schema_->DecrementAttrSize(pos_, old_len - new_len);
+  }
 }
 
 template <typename Derived, typename SlotT>
@@ -106,10 +110,15 @@ void TypedIndex<Derived, SlotT>::VacateSlot(const InternedStringPtr& key,
   CHECK(kav != nullptr);
   Slot& slot = kav->slots[pos_];
   CHECK(IsOccupied(slot)) << "VacateSlot called on empty slot";
-  // SlotBase header is still readable at offset 0. The caller has invoked
-  // DestructTyped (or otherwise released the SlotT's heap state); we now
-  // overwrite the bytes with a fresh empty Missing and optionally link.
+  // Read the stored size from SlotBase before overwriting with Missing —
+  // this is what the helper subtracts from the per-attribute byte total.
+  const size_t old_len =
+      reinterpret_cast<const SlotBase*>(slot.storage)->user_data_len;
+  // The caller has invoked DestructTyped (or otherwise released the SlotT's
+  // heap state); we now overwrite the bytes with a fresh empty Missing and
+  // optionally link.
   schema_->DecrementOccupiedCount(pos_);
+  schema_->DecrementAttrSize(pos_, old_len);
   new (slot.storage) Missing{};
   if (relink) {
     schema_->LinkMissing(pos_, key);

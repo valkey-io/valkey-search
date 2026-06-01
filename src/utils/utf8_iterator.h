@@ -132,11 +132,13 @@ class Utf8Iterator {
 
   // Bytes expected for a UTF-8 sequence given its lead byte. An invalid lead
   // returns 1 (consistent with the advance-1 fallback behavior).
+  // Note: only 0xF0..0xF4 are valid 4-byte leads (U+10000..U+10FFFF);
+  // 0xF5..0xF7 would encode code points > U+10FFFF and are invalid.
   static uint8_t ExpectedLen(uint8_t b0) {
     if (b0 < 0x80) return 1;
     if ((b0 & 0xE0) == 0xC0) return 2;
     if ((b0 & 0xF0) == 0xE0) return 3;
-    if ((b0 & 0xF8) == 0xF0) return 4;
+    if ((b0 & 0xF8) == 0xF0 && b0 <= 0xF4) return 4;
     return 1;
   }
 

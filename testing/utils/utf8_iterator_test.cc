@@ -460,18 +460,21 @@ TEST_F(Utf8IteratorTest, ExpectedLenThreeByte) {
 }
 
 TEST_F(Utf8IteratorTest, ExpectedLenFourByte) {
-  // 0xF0..0xF7
-  for (int i = 0xF0; i <= 0xF7; ++i) {
+  // Only 0xF0..0xF4 are valid 4-byte leads (U+10000..U+10FFFF).
+  // 0xF5..0xF7 encode code points > U+10FFFF and are invalid.
+  for (int i = 0xF0; i <= 0xF4; ++i) {
     EXPECT_EQ(4u, Utf8Iterator::ExpectedLen(static_cast<uint8_t>(i)));
   }
 }
 
 TEST_F(Utf8IteratorTest, ExpectedLenContinuationAndInvalidReturnOne) {
-  // 0x80..0xBF (continuation bytes) and 0xF8..0xFF (invalid leads) → 1
+  // 0x80..0xBF (continuation bytes) → 1
   for (int i = 0x80; i <= 0xBF; ++i) {
     EXPECT_EQ(1u, Utf8Iterator::ExpectedLen(static_cast<uint8_t>(i)));
   }
-  for (int i = 0xF8; i <= 0xFF; ++i) {
+  // 0xF5..0xFF: 0xF5..0xF7 encode > U+10FFFF (invalid), 0xF8..0xFF are
+  // always invalid UTF-8 lead bytes. All return 1.
+  for (int i = 0xF5; i <= 0xFF; ++i) {
     EXPECT_EQ(1u, Utf8Iterator::ExpectedLen(static_cast<uint8_t>(i)));
   }
 }

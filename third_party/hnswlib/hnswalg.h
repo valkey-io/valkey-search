@@ -143,12 +143,13 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     update_probability_generator_.seed(random_seed + 1);
 
     size_links_level0_ = maxM0_ * sizeof(tableint) + sizeof(linklistsizeint);
+    offsetData_ =
+        (size_links_level0_ + alignof(char *) - 1) & ~(alignof(char *) - 1);
     size_data_per_element_ =
-        size_links_level0_ + sizeof(char *) + sizeof(labeltype);
+        offsetData_ + sizeof(char *) + sizeof(labeltype);
     serialize_size_data_per_element_ =
         size_links_level0_ + vector_size_ + sizeof(labeltype);
-    offsetData_ = size_links_level0_;
-    label_offset_ = size_links_level0_ + sizeof(char *);
+    label_offset_ = offsetData_ + sizeof(char *);
     offsetLevel0_ = 0;
 
     data_level0_memory_ = std::make_unique<ChunkedArray>(
@@ -845,9 +846,11 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     size_links_level0_ = maxM0_ * sizeof(tableint) + sizeof(linklistsizeint);
 
     vector_size_ = s->get_data_size();
+    offsetData_ =
+        (size_links_level0_ + alignof(char *) - 1) & ~(alignof(char *) - 1);
     size_data_per_element_ =
-        size_links_level0_ + sizeof(char *) + sizeof(labeltype);
-    label_offset_ = size_links_level0_ + sizeof(char *);
+        offsetData_ + sizeof(char *) + sizeof(labeltype);
+    label_offset_ = offsetData_ + sizeof(char *);
 
     fstdistfunc_ = s->get_dist_func();
     dist_func_param_ = s->get_dist_func_param();
@@ -1094,9 +1097,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
   void updatePoint(const void *dataPoint, tableint internalId,
                    float updateNeighborProbability) {
     // update the feature vector associated with existing point with new vector
-    const char *new_ptr = static_cast<const char *>(dataPoint);
-    std::atomic_thread_fence(std::memory_order_release);
-    memcpy(getDataPtrByInternalId(internalId), &new_ptr, sizeof(char *));
+    auto data_ptr = (const char **)(getDataPtrByInternalId(internalId));
+    *data_ptr = static_cast<const char *>(dataPoint);
 
     int maxLevelCopy = maxlevel_;
     tableint entryPointCopy = enterpoint_node_;
@@ -1326,11 +1328,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 
     // Initialisation of the data and label
     memcpy(getExternalLabeLp(cur_c), &label, sizeof(labeltype));
-    {
-      const char *new_ptr = static_cast<const char *>(data_point);
-      std::atomic_thread_fence(std::memory_order_release);
-      memcpy(getDataPtrByInternalId(cur_c), &new_ptr, sizeof(char *));
-    }
+    auto data_ptr = (const char **)(getDataPtrByInternalId(cur_c));
+    *data_ptr = static_cast<const char *>(data_point);
 
     if (curlevel) {
       *reinterpret_cast<char **>((*linkLists_)[cur_c]) =

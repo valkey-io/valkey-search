@@ -98,6 +98,11 @@ constexpr vmsdk::ValkeyVersion kRelease11(1, 1, 0);
 //
 constexpr vmsdk::ValkeyVersion kRelease12(1, 2, 0);
 
+//
+// Release 1.4, added support for multi-language full text search.
+//
+constexpr vmsdk::ValkeyVersion kRelease14(1, 4, 0);
+
 }  // namespace valkey_search
 
 #endif

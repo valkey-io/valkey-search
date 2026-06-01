@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <new>
 #include <string>
 #include <utility>
 
@@ -21,7 +22,9 @@
 #include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
+#include "src/index_schema.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/key_attr_value.h"
 #include "src/query/predicate.h"
 #include "src/utils/patricia_tree.h"
 #include "src/utils/string_interning.h"
@@ -35,8 +38,27 @@ static bool IsValidPrefix(absl::string_view str) {
          str[str.length() - 2] != '*';
 }
 
+namespace {
+// Slot accessors — caller responsible for locking discipline.
+const TagSlot* TryGetSlot(const IndexSchema* schema, uint16_t pos,
+                          const InternedStringPtr& key) {
+  if (schema == nullptr) {
+    return nullptr;
+  }
+  const KeyAttrValue* kav = schema->FindKAV(key);
+  if (kav == nullptr) {
+    return nullptr;
+  }
+  const Slot& slot = kav->slots[pos];
+  if (!IsOccupied(slot)) {
+    return nullptr;
+  }
+  return std::launder(reinterpret_cast<const TagSlot*>(slot.storage));
+}
+}  // namespace
+
 Tag::Tag(const data_model::TagIndex& tag_index_proto)
-    : IndexBase(IndexerType::kTag),
+    : TypedIndex<Tag, TagSlot>(IndexerType::kTag),
       separator_(tag_index_proto.separator()[0]),
       case_sensitive_(tag_index_proto.case_sensitive()),
       tree_(case_sensitive_) {}
@@ -46,18 +68,27 @@ absl::StatusOr<bool> Tag::AddRecord(const InternedStringPtr& key,
   auto interned_data = StringInternStore::Intern(data);
   auto parsed_tags = ParseRecordTags(*interned_data, separator_);
   absl::MutexLock lock(&index_mutex_);
+  // Defensive: production callers (ProcessAttributeMutation) dispatch through
+  // IsTracked → ModifyRecord; tests can hit AddRecord on an already-occupied
+  // slot, so report AlreadyExists rather than CHECK-failing in OccupySlot.
+  if (KeyAttrValue* kav = schema_->FindKAV(key);
+      kav != nullptr && IsOccupied(kav->slots[pos_])) {
+    return absl::AlreadyExistsError(
+        absl::StrCat("Key already exists in tag index: ", key->Str()));
+  }
   if (parsed_tags.empty()) {
-    untracked_keys_.insert(key);
+    if (!schema_->IsLinked(pos_, key)) {
+      schema_->LinkMissing(pos_, key);
+    }
     return false;
   }
-  auto [_, succ] = tracked_tags_by_keys_.insert(
-      {key, TagInfo{.raw_tag_string = std::move(interned_data),
-                    .tags = parsed_tags}});
-  if (!succ) {
-    return absl::AlreadyExistsError(
-        absl::StrCat("Key `", key->Str(), "` already exists"));
-  }
-  untracked_keys_.erase(key);
+  // Heap-allocate the TagInfo; the slot owns it.
+  auto* info = new TagInfo{.raw_tag_string = std::move(interned_data),
+                           .tags = parsed_tags};
+  std::byte* storage = OccupySlot(key, data.size());
+  new (storage) TagSlot{
+      {/*occupied=*/1u, /*user_data_len=*/static_cast<uint32_t>(data.size())},
+      info};
   for (const auto& tag : parsed_tags) {
     tree_.AddKeyValue(tag, key);
   }
@@ -69,7 +100,6 @@ std::string Tag::UnescapeTag(absl::string_view tag) {
   result.reserve(tag.size());
   for (size_t i = 0; i < tag.size(); ++i) {
     if (tag[i] == '\\' && i + 1 < tag.size()) {
-      // Escape sequence: consume next character literally
       result += tag[++i];
     } else {
       result += tag[i];
@@ -81,12 +111,10 @@ std::string Tag::UnescapeTag(absl::string_view tag) {
 absl::StatusOr<absl::flat_hash_set<absl::string_view>> Tag::ParseSearchTags(
     absl::string_view data, char separator) {
   absl::flat_hash_set<absl::string_view> parsed_tags;
-
-  // Helper: validate and insert a single tag (handles prefix wildcards)
   auto InsertTag = [&](absl::string_view raw) -> absl::Status {
     auto tag = absl::StripAsciiWhitespace(raw);
     if (tag.empty()) {
-      return absl::OkStatus();  // Empty tags are silently ignored
+      return absl::OkStatus();
     }
     if (tag.back() == '*') {
       if (!IsValidPrefix(tag)) {
@@ -95,8 +123,6 @@ absl::StatusOr<absl::flat_hash_set<absl::string_view>> Tag::ParseSearchTags(
       }
       const auto min_prefix_length =
           options::GetTagMinPrefixLength().GetValue();
-
-      // Prefix tags shorter than min length are rejected.
       if (tag.length() <= min_prefix_length) {
         return absl::InvalidArgumentError(absl::StrCat(
             "Tag string `", tag, "` is too short for prefix wildcard."));
@@ -108,26 +134,16 @@ absl::StatusOr<absl::flat_hash_set<absl::string_view>> Tag::ParseSearchTags(
     return absl::OkStatus();
   };
 
-  // Parse respecting escape sequences:
-  // - \<separator> is NOT a real separator
-  // - \\ is an escaped backslash (not an escape prefix)
-  // - Unescaped separator splits tags
-  // Returns string_view positions; unescaping happens later at TagPredicate.
   size_t tag_start = 0;
   for (size_t i = 0; i < data.size(); ++i) {
     if (data[i] == '\\' && i + 1 < data.size()) {
-      // Skip escaped character
       ++i;
     } else if (data[i] == separator) {
-      // Unescaped separator: extract tag
       VMSDK_RETURN_IF_ERROR(InsertTag(data.substr(tag_start, i - tag_start)));
       tag_start = i + 1;
     }
   }
-
-  // Handle the last tag (after final separator or if no separator)
   VMSDK_RETURN_IF_ERROR(InsertTag(data.substr(tag_start)));
-
   return parsed_tags;
 }
 
@@ -145,7 +161,6 @@ absl::flat_hash_set<absl::string_view> Tag::ParseRecordTags(
 
 absl::StatusOr<bool> Tag::ModifyRecord(const InternedStringPtr& key,
                                        absl::string_view data) {
-  // TODO: implement operator [] in patricia_tree.
   auto interned_data = StringInternStore::Intern(data);
   auto new_parsed_tags = ParseRecordTags(*interned_data, separator_);
   if (new_parsed_tags.empty()) {
@@ -154,13 +169,14 @@ absl::StatusOr<bool> Tag::ModifyRecord(const InternedStringPtr& key,
     return false;
   }
   absl::MutexLock lock(&index_mutex_);
-
-  auto it = tracked_tags_by_keys_.find(key);
-  if (it == tracked_tags_by_keys_.end()) {
+  KeyAttrValue* kav = schema_->FindKAV(key);
+  if (kav == nullptr || !IsOccupied(kav->slots[pos_])) {
     return absl::NotFoundError(
-        absl::StrCat("Key `", key->Str(), "` not found"));
+        absl::StrCat("Key not tracked in tag index: ", key->Str()));
   }
-  auto& tag_info = it->second;
+  Slot& slot = kav->slots[pos_];
+  TagSlot& tslot = SlotAs(slot.storage);
+  TagInfo& tag_info = *tslot.info;
 
   // insert new tags that are not present in the old tags.
   for (const auto& tag : new_parsed_tags) {
@@ -168,39 +184,60 @@ absl::StatusOr<bool> Tag::ModifyRecord(const InternedStringPtr& key,
       tree_.AddKeyValue(tag, key);
     }
   }
-
   // remove old tags that are not present in the new tags.
   for (const auto& tag : tag_info.tags) {
     if (!new_parsed_tags.contains(tag)) {
       tree_.Remove(tag, key);
     }
   }
-
   tag_info.tags = new_parsed_tags;
   tag_info.raw_tag_string = std::move(interned_data);
+  if (tslot.user_data_len != data.size()) {
+    ResizeSlot(key, data.size());
+  }
   return true;
 }
 
 absl::StatusOr<bool> Tag::RemoveRecord(const InternedStringPtr& key,
                                        DeletionType deletion_type) {
   absl::MutexLock lock(&index_mutex_);
-  if (deletion_type == DeletionType::kRecord) {
-    // If key is DELETED, remove it from untracked_keys_.
-    untracked_keys_.erase(key);
-  } else {
-    // If key doesn't have TAG but exists, insert it to untracked_keys_.
-    untracked_keys_.insert(key);
-  }
-  auto it = tracked_tags_by_keys_.find(key);
-  if (it == tracked_tags_by_keys_.end()) {
+  KeyAttrValue* kav = schema_->FindKAV(key);
+  if (kav == nullptr) {
     return false;
   }
-  auto& tag_info = it->second;
-  for (const auto& tag : tag_info.tags) {
+  Slot& slot = kav->slots[pos_];
+  if (IsOccupied(slot)) {
+    TagSlot& tslot = SlotAs(slot.storage);
+    TagInfo* info = tslot.info;
+    for (const auto& tag : info->tags) {
+      tree_.Remove(tag, key);
+    }
+    delete info;
+    VacateSlot(key, /*relink=*/deletion_type != DeletionType::kRecord);
+    return true;
+  }
+  // Empty slot — link or unlink as appropriate.
+  if (deletion_type == DeletionType::kRecord) {
+    if (schema_->IsLinked(pos_, key)) {
+      schema_->UnlinkMissing(pos_, key);
+    }
+  } else {
+    if (!schema_->IsLinked(pos_, key)) {
+      schema_->LinkMissing(pos_, key);
+    }
+  }
+  return false;
+}
+
+void Tag::DestructTyped(const InternedStringPtr& key, TagSlot& slot) {
+  // Safety-net path (DestroyKeyAttrValue found an occupied slot). Remove
+  // this key's tags from the patricia tree, then free the TagInfo*.
+  absl::MutexLock lock(&index_mutex_);
+  TagInfo* info = slot.info;
+  for (const auto& tag : info->tags) {
     tree_.Remove(tag, key);
   }
-  tracked_tags_by_keys_.erase(it);
-  return true;
+  delete info;
 }
 
 int Tag::RespondWithInfo(ValkeyModuleCtx* ctx) const {
@@ -215,7 +252,7 @@ int Tag::RespondWithInfo(ValkeyModuleCtx* ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "size");
   absl::MutexLock lock(&index_mutex_);
   ValkeyModule_ReplyWithCString(
-      ctx, std::to_string(tracked_tags_by_keys_.size()).c_str());
+      ctx, std::to_string(schema_->OccupiedCount(pos_)).c_str());
   return num_replies;
 }
 
@@ -233,35 +270,31 @@ uint32_t Tag::GetMutationWeight() const {
 }
 
 InternedStringPtr Tag::GetRawValue(const InternedStringPtr& key) const {
-  // Note that the Tag index is not mutated while the time sliced mutex is
-  // in a read mode and therefor it is safe to skip lock acquiring.
-  if (auto it = tracked_tags_by_keys_.find(key);
-      it != tracked_tags_by_keys_.end()) {
-    return it->second.raw_tag_string;
-  }
-  return {};
+  const TagSlot* tslot = TryGetSlot(schema_, pos_, key);
+  return tslot == nullptr ? InternedStringPtr{} : tslot->info->raw_tag_string;
 }
 
 const absl::flat_hash_set<absl::string_view>* Tag::GetValue(
     const InternedStringPtr& key, bool& case_sensitive) const {
-  // Note that the Tag index is not mutated while the time sliced mutex is
-  // in a read mode and therefor it is safe to skip lock acquiring.
-  if (auto it = tracked_tags_by_keys_.find(key);
-      it != tracked_tags_by_keys_.end()) {
-    case_sensitive = case_sensitive_;
-    return &it->second.tags;
+  const TagSlot* tslot = TryGetSlot(schema_, pos_, key);
+  if (tslot == nullptr) {
+    return nullptr;
   }
-  return nullptr;
+  case_sensitive = case_sensitive_;
+  return &tslot->info->tags;
 }
 
 Tag::EntriesFetcherIterator::EntriesFetcherIterator(
     const PatriciaTreeIndex& tree,
     absl::flat_hash_set<PatriciaNodeIndex*>& entries,
-    const InternedStringSet& untracked_keys, bool negate)
+    const IndexSchema* schema_for_missing, uint16_t pos, bool negate)
     : tree_(tree),
       entries_(entries),
-      untracked_keys_(untracked_keys),
+      schema_for_missing_(schema_for_missing),
+      pos_(pos),
       negate_(negate) {}
+
+Tag::EntriesFetcherIterator::~EntriesFetcherIterator() = default;
 
 void Tag::EntriesFetcherIterator::EnsureNegateRootIter() {
   if (!negate_root_iter_.has_value()) {
@@ -271,10 +304,16 @@ void Tag::EntriesFetcherIterator::EnsureNegateRootIter() {
 
 bool Tag::EntriesFetcherIterator::Done() const {
   if (negate_) {
-    return negate_root_iter_.has_value() && negate_root_iter_->Done() &&
-           (untracked_keys_.empty() ||
-            (untracked_keys_iter_.has_value() &&
-             untracked_keys_iter_.value() == untracked_keys_.end()));
+    const bool tree_done =
+        negate_root_iter_.has_value() && negate_root_iter_->Done();
+    if (!tree_done) {
+      return false;
+    }
+    if (schema_for_missing_ == nullptr) {
+      return true;
+    }
+    return missing_started_ &&
+           (missing_iter_ == nullptr || missing_iter_->Done());
   }
   return entries_.empty() && next_node_ == nullptr;
 }
@@ -298,11 +337,16 @@ void Tag::EntriesFetcherIterator::NextNegate() {
     negate_root_iter_->Next();
   }
   next_node_ = nullptr;
-  if (!untracked_keys_iter_.has_value()) {
-    untracked_keys_iter_ = untracked_keys_.begin();
+  if (schema_for_missing_ == nullptr) {
     return;
   }
-  ++untracked_keys_iter_.value();
+  if (!missing_started_) {
+    missing_iter_ = std::make_unique<MissingListIterator>(
+        MissingListBegin(schema_for_missing_, pos_));
+    missing_started_ = true;
+  } else if (missing_iter_ != nullptr && !missing_iter_->Done()) {
+    missing_iter_->Next();
+  }
 }
 
 void Tag::EntriesFetcherIterator::Next() {
@@ -330,7 +374,8 @@ void Tag::EntriesFetcherIterator::Next() {
 
 const InternedStringPtr& Tag::EntriesFetcherIterator::operator*() const {
   if (negate_ && negate_root_iter_.has_value() && negate_root_iter_->Done()) {
-    return *untracked_keys_iter_.value();
+    DCHECK(missing_iter_ != nullptr && !missing_iter_->Done());
+    return missing_iter_->Key();
   }
   return *next_iter_;
 }
@@ -354,7 +399,6 @@ std::unique_ptr<Tag::EntriesFetcher> Tag::Search(
         }
       }
     } else {
-      // exact search
       PatriciaNodeIndex* node = tree_.ExactMatcher(tag);
       if (node != nullptr) {
         auto res = entries.insert(node);
@@ -365,18 +409,17 @@ std::unique_ptr<Tag::EntriesFetcher> Tag::Search(
     }
   }
   if (negate) {
-    size = tracked_tags_by_keys_.size() > size
-               ? tracked_tags_by_keys_.size() - size
-               : tracked_tags_by_keys_.size();
-    size += untracked_keys_.size();
+    const size_t tracked = schema_->OccupiedCount(pos_);
+    size = tracked > size ? tracked - size : tracked;
+    size += schema_->MissingListAt(pos_).size;
   }
   return std::make_unique<Tag::EntriesFetcher>(tree_, entries, size, negate,
-                                               untracked_keys_);
+                                                schema_, pos_);
 }
 
 std::unique_ptr<EntriesFetcherIteratorBase> Tag::EntriesFetcher::Begin() {
-  auto itr = std::make_unique<EntriesFetcherIterator>(tree_, entries_,
-                                                      untracked_keys_, negate_);
+  auto itr = std::make_unique<EntriesFetcherIterator>(
+      tree_, entries_, schema_for_missing_, pos_, negate_);
   itr->Next();
   return itr;
 }
@@ -385,44 +428,52 @@ size_t Tag::EntriesFetcher::Size() const { return size_; }
 
 size_t Tag::GetTrackedKeyCount() const {
   absl::MutexLock lock(&index_mutex_);
-  return tracked_tags_by_keys_.size();
+  return schema_->OccupiedCount(pos_);
 }
 
 size_t Tag::GetUnTrackedKeyCount() const {
   absl::MutexLock lock(&index_mutex_);
-  return untracked_keys_.size();
+  return schema_->MissingListAt(pos_).size;
 }
 
 bool Tag::IsTracked(const InternedStringPtr& key) const {
   absl::MutexLock lock(&index_mutex_);
-  return tracked_tags_by_keys_.contains(key);
+  const KeyAttrValue* kav = schema_->FindKAV(key);
+  return kav != nullptr && IsOccupied(kav->slots[pos_]);
 }
 
 bool Tag::IsUnTracked(const InternedStringPtr& key) const {
   absl::MutexLock lock(&index_mutex_);
-  return untracked_keys_.contains(key);
+  const KeyAttrValue* kav = schema_->FindKAV(key);
+  return kav != nullptr && !IsOccupied(kav->slots[pos_]);
 }
 
 void Tag::UnTrack(const InternedStringPtr& key) {
   absl::MutexLock lock(&index_mutex_);
-  CHECK(!tracked_tags_by_keys_.contains(key));
-  untracked_keys_.insert(key);
+  const KeyAttrValue* kav = schema_->FindKAV(key);
+  CHECK(kav != nullptr);
+  CHECK(!IsOccupied(kav->slots[pos_]));
+  if (!schema_->IsLinked(pos_, key)) {
+    schema_->LinkMissing(pos_, key);
+  }
 }
 
 absl::Status Tag::ForEachTrackedKey(
     absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn) const {
-  absl::MutexLock lock(&index_mutex_);
-  for (const auto& [key, _] : tracked_tags_by_keys_) {
-    VMSDK_RETURN_IF_ERROR(fn(key));
-  }
-  return absl::OkStatus();
+  return schema_->ForEachKey(
+      [&](const InternedStringPtr& key, const KeyAttrValue& kav) {
+        if (IsOccupied(kav.slots[pos_])) {
+          return fn(key);
+        }
+        return absl::OkStatus();
+      });
 }
 
 absl::Status Tag::ForEachUnTrackedKey(
     absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn) const {
   absl::MutexLock lock(&index_mutex_);
-  for (const auto& key : untracked_keys_) {
-    VMSDK_RETURN_IF_ERROR(fn(key));
+  for (auto it = MissingListBegin(schema_, pos_); !it.Done(); it.Next()) {
+    VMSDK_RETURN_IF_ERROR(fn(it.Key()));
   }
   return absl::OkStatus();
 }

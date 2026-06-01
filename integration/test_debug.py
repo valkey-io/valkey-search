@@ -76,6 +76,11 @@ class TestFtDebugCommand(ValkeySearchTestCaseDebugMode):
         assert inline == {'Count': 10, 'Bytes': 140, 'AvgSize': b'14', 'Allocated': 320, 'AvgAllocated': b'32', 'Utilization': 43}
         assert outofline == {'Count': 10, 'Bytes': 120, 'AvgSize': b'12', 'Allocated': 280, 'AvgAllocated': b'28', 'Utilization': 42}
         assert byref[-1] == {'Count': 10, 'Bytes': 120, 'AvgSize': b'12', 'Allocated': 280, 'AvgAllocated': b'28', 'Utilization': 42}
-        assert byref[6] == {'Count': 10, 'Bytes': 140, 'AvgSize': b'14', 'Allocated': 320, 'AvgAllocated': b'32', 'Utilization': 43}
+        # Refcount dropped from 6 to 5 in the KeyAttrValue refactor: each key
+        # used to be referenced by its per-index tracked_keys_/untracked_keys_
+        # container PLUS the schema's index_key_info_ map. After the refactor
+        # the per-index containers are gone and only the shared KAV map +
+        # downstream structures (HNSW key_by_internal_id_, etc.) hold a ref.
+        assert byref[5] == {'Count': 10, 'Bytes': 140, 'AvgSize': b'14', 'Allocated': 320, 'AvgAllocated': b'32', 'Utilization': 43}
         assert bysize[-12] == {'Count': 10, 'Bytes': 120, 'AvgSize': b'12', 'Allocated': 280, 'AvgAllocated': b'28', 'Utilization': 42}
         assert bysize[14] == {'Count': 10, 'Bytes': 140, 'AvgSize': b'14', 'Allocated': 320, 'AvgAllocated': b'32', 'Utilization': 43}

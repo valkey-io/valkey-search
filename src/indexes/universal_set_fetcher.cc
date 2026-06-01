@@ -10,33 +10,41 @@
 
 namespace valkey_search::indexes {
 
-UniversalSetFetcher::UniversalSetFetcher(const IndexSchema* index_schema)
-    : index_schema_(index_schema), size_(index_schema->GetIndexKeyInfoSize()) {}
+UniversalSetFetcher::UniversalSetFetcher(const IndexSchema* index_schema) {
+  // Snapshot key list under schema_mutex_'s reader lock (ForEachKey acquires
+  // it internally). Holding raw map iterators across the read phase would be
+  // unsafe — a snapshot is robust and the cost is negligible vs. the
+  // downstream query work.
+  keys_.reserve(index_schema->GetIndexKeyInfoSize());
+  (void)index_schema->ForEachKey(
+      [this](const InternedStringPtr& key, const KeyAttrValue& /*kav*/) {
+        keys_.push_back(key);
+        return absl::OkStatus();
+      });
+}
 
 std::unique_ptr<EntriesFetcherIteratorBase> UniversalSetFetcher::Begin() {
-  return std::make_unique<Iterator>(index_schema_);
+  return std::make_unique<Iterator>(&keys_);
 }
 
 // --- Iterator Implementation ---
 
-UniversalSetFetcher::Iterator::Iterator(const IndexSchema* index_schema) {
-  const auto& index_key_info = index_schema->GetIndexKeyInfo();
-  current_it_ = index_key_info.begin();
-  end_it_ = index_key_info.end();
-}
+UniversalSetFetcher::Iterator::Iterator(
+    const std::vector<InternedStringPtr>* keys)
+    : keys_(keys) {}
 
 bool UniversalSetFetcher::Iterator::Done() const {
-  return current_it_ == end_it_;
+  return i_ >= keys_->size();
 }
 
 void UniversalSetFetcher::Iterator::Next() {
-  if (current_it_ != end_it_) {
-    ++current_it_;
+  if (i_ < keys_->size()) {
+    ++i_;
   }
 }
 
 const InternedStringPtr& UniversalSetFetcher::Iterator::operator*() const {
-  return current_it_->first;
+  return (*keys_)[i_];
 }
 
 }  // namespace valkey_search::indexes

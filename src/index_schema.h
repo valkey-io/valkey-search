@@ -31,6 +31,7 @@
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/key_attr_value.h"
 #include "src/indexes/text/text_index.h"
 #include "src/indexes/vector_base.h"
 #include "src/keyspace_event_manager.h"
@@ -88,12 +89,19 @@ class IndexSchema : public KeyspaceEventSubscription,
  public:
   static constexpr float kDefaultDocumentScore = 1.0f;
 
-  struct IndexKeyInfo {
-    MutationSequenceNumber mutation_sequence_number_{0};
-    float document_score{kDefaultDocumentScore};
-  };
+  // Per-key state is now a KeyAttrValue (heap-allocated FAM struct), owned by
+  // a unique_ptr in the map. The KAV header carries mutation_sequence_number
+  // (`seq`) and document_score; each declared attribute owns one of the N
+  // 16-byte slots in the trailing block.
+  using IndexKeyInfoMap = absl::flat_hash_map<Key, indexes::KeyAttrValuePtr>;
 
-  using IndexKeyInfoMap = absl::flat_hash_map<Key, IndexKeyInfo>;
+  // Per-attribute "missing keys" anchor (replaces each derived index's
+  // untracked_keys_ set). Guarded by the owning index's index_mutex_.
+  struct MissingList {
+    InternedStringPtr head;
+    InternedStringPtr tail;
+    size_t size{0};
+  };
 
   struct InfoIndexPartitionData {
     uint64_t num_docs;
@@ -188,7 +196,7 @@ class IndexSchema : public KeyspaceEventSubscription,
     if (itr == index_key_info_.end()) {
       return score_;
     }
-    return itr->second.document_score;
+    return itr->second->document_score;
   }
 
   void CreateTextIndexSchema() {
@@ -301,19 +309,6 @@ class IndexSchema : public KeyspaceEventSubscription,
     }
   };
 
-  // REQUIRES: time_sliced_mutex_ held in read phase
-  void PopulateIndexMutationSequenceNumbers(
-      std::vector<indexes::Neighbor> &neighbors) const
-      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
-    for (auto &n : neighbors) {
-      auto itr = index_key_info_.find(n.external_id);
-      CHECK(itr != index_key_info_.end())
-          << "Key not found: "
-          << vmsdk::config::RedactIfNeeded(n.external_id->Str());
-      n.sequence_number = itr->second.mutation_sequence_number_;
-    }
-  }
-
   MutationSequenceNumber GetDbMutationSequenceNumber(const Key &key) const {
     vmsdk::VerifyMainThread();
     auto itr = db_key_info_.Get().find(key);
@@ -322,17 +317,49 @@ class IndexSchema : public KeyspaceEventSubscription,
     return itr->second.mutation_sequence_number_;
   }
 
-  // Accessor for global key map (for negation queries)
-  // REQUIRES: time_sliced_mutex_ held in read phase
-  const IndexKeyInfoMap &GetIndexKeyInfo() const
-      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
-    return index_key_info_;
+  // Returns the number of keys in the schema's index_key_info_ map. Takes
+  // schema_mutex_ briefly under reader access.
+  size_t GetIndexKeyInfoSize() const ABSL_LOCKS_EXCLUDED(schema_mutex_);
+
+  // Runs `fn(kav)` under schema_mutex_'s reader lock with `kav` pointing at
+  // this key's KeyAttrValue, or nullptr if no such key. Replaces the unsafe
+  // pattern `auto& m = GetIndexKeyInfo(); auto itr = m.find(key); ...`. The
+  // KAV pointer is stable for the call duration; the underlying buffer
+  // outlives this call as long as the schema does. Use the mutating helpers
+  // (LinkMissing/UnlinkMissing/EnsureKeyAttrValue/...) to change KAV state;
+  // do NOT mutate through the pointer here.
+  template <typename Fn>
+  auto WithKAV(const Key &key, Fn &&fn) const
+      ABSL_LOCKS_EXCLUDED(schema_mutex_) {
+    absl::ReaderMutexLock lock(&schema_mutex_);
+    auto itr = index_key_info_.find(key);
+    return fn(itr != index_key_info_.end() ? itr->second.get() : nullptr);
   }
 
-  // REQUIRES: time_sliced_mutex_ held in read phase
-  size_t GetIndexKeyInfoSize() const
-      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
-    return index_key_info_.size();
+  // Returns a heap-stable pointer to this key's KAV, or nullptr if absent.
+  // Briefly takes schema_mutex_ for the lookup. The returned pointer remains
+  // valid as long as the caller's per-key serialization invariant holds (the
+  // only path that frees the KAV is DestroyKeyAttrValue for the same key,
+  // and per-key mutation serialization prevents that running concurrently).
+  // Intended for slot helpers (ResizeSlot/VacateSlot/derived AddRecord
+  // defensive lookups) that need to peek/mutate the SlotT payload of an
+  // occupied slot belonging to the calling thread's pos.
+  indexes::KeyAttrValue *FindKAV(const Key &key) const
+      ABSL_LOCKS_EXCLUDED(schema_mutex_);
+
+  // REQUIRES: time_sliced_mutex_ held in read phase (no concurrent writers
+  // touching index_key_info_). Briefly locks schema_mutex_ per neighbor.
+  void PopulateIndexMutationSequenceNumbers(
+      std::vector<indexes::Neighbor> &neighbors) const
+      ABSL_LOCKS_EXCLUDED(schema_mutex_) {
+    for (auto &n : neighbors) {
+      WithKAV(n.external_id, [&](const indexes::KeyAttrValue *kav) {
+        CHECK(kav != nullptr)
+            << "Key not found: "
+            << vmsdk::config::RedactIfNeeded(n.external_id->Str());
+        n.sequence_number = kav->seq;
+      });
+    }
   }
 
   // Unit test only
@@ -343,9 +370,80 @@ class IndexSchema : public KeyspaceEventSubscription,
   // Unit test only
   void SetIndexMutationSequenceNumber(const Key &key,
                                       MutationSequenceNumber sequence_number)
-      ABSL_EXCLUSIVE_LOCKS_REQUIRED(time_sliced_mutex_) {
-    index_key_info_[key].mutation_sequence_number_ = sequence_number;
+      ABSL_LOCKS_EXCLUDED(schema_mutex_) {
+    absl::MutexLock lock(&schema_mutex_);
+    EnsureKeyAttrValueLocked(key).seq = sequence_number;
   }
+
+  // ---- Slot-based per-key state lifecycle (KeyAttrValue refactor) ----
+  //
+  // All helpers below take `schema_mutex_` internally. The schema's
+  // `time_sliced_mutex_` is a multi-writer mutex in the write phase, so it
+  // does NOT serialize concurrent writers — every site touching the shared
+  // `index_key_info_` map / `missing_lists_` / `occupied_count_` must go
+  // through these helpers (which acquire schema_mutex_) instead of poking
+  // the fields directly.
+
+  // Returns the KeyAttrValue for `key`, allocating an empty one (all slots
+  // empty, all unlinked) and inserting it into `index_key_info_` if absent.
+  // Caller writes header fields (`seq`, `document_score`) directly. Slot
+  // contents remain the caller's responsibility.
+  indexes::KeyAttrValue &EnsureKeyAttrValue(const Key &key)
+      ABSL_LOCKS_EXCLUDED(schema_mutex_);
+
+  // Tears down a KeyAttrValue and erases it from `index_key_info_`. Walks
+  // all N slots: invokes the owning index's `DestructSlot` for any still-
+  // occupied slot; for any empty-and-linked slot, unlinks from the missing
+  // list; runs `~Missing()` on each empty slot; then erases the map entry.
+  void DestroyKeyAttrValue(const Key &key) ABSL_LOCKS_EXCLUDED(schema_mutex_);
+
+  // Per-attribute missing-list helpers. Take schema_mutex_ internally.
+  void LinkMissing(uint16_t pos, const InternedStringPtr &key)
+      ABSL_LOCKS_EXCLUDED(schema_mutex_);
+  void UnlinkMissing(uint16_t pos, const InternedStringPtr &key)
+      ABSL_LOCKS_EXCLUDED(schema_mutex_);
+  // True iff `key`'s slot at `pos` is currently in `missing_lists_[pos]`.
+  // Equivalent to `(slot.missing.prev != null) || (head == key)`.
+  bool IsLinked(uint16_t pos, const InternedStringPtr &key) const
+      ABSL_LOCKS_EXCLUDED(schema_mutex_);
+
+  // Read accessors. MissingListAt returns a snapshot (head/tail/size) by
+  // value under schema_mutex_'s reader lock; do NOT cache the pointers
+  // across other schema operations.
+  MissingList MissingListAt(uint16_t pos) const
+      ABSL_LOCKS_EXCLUDED(schema_mutex_);
+  size_t OccupiedCount(uint16_t pos) const ABSL_LOCKS_EXCLUDED(schema_mutex_);
+  void IncrementOccupiedCount(uint16_t pos) ABSL_LOCKS_EXCLUDED(schema_mutex_);
+  void DecrementOccupiedCount(uint16_t pos) ABSL_LOCKS_EXCLUDED(schema_mutex_);
+
+  // Single-pass iteration over every key in `index_key_info_`. Replaces
+  // per-attribute ForEachTrackedKey + ForEachUnTrackedKey loops in
+  // ValidateIndex / OnLoadingEnded — callers branch on `IsOccupied(slot)`
+  // themselves. Takes schema_mutex_ reader for the duration; `fn` must
+  // not call other schema mutators (would self-deadlock).
+  absl::Status ForEachKey(
+      absl::AnyInvocable<absl::Status(const Key &, indexes::KeyAttrValue &)>
+          fn) ABSL_LOCKS_EXCLUDED(schema_mutex_);
+  absl::Status ForEachKey(
+      absl::AnyInvocable<absl::Status(const Key &,
+                                      const indexes::KeyAttrValue &)>
+          fn) const ABSL_LOCKS_EXCLUDED(schema_mutex_);
+
+ private:
+  // The Locked variant runs under an already-held schema_mutex_ writer lock.
+  // Public EnsureKeyAttrValue / DestroyKeyAttrValue are thin wrappers.
+  indexes::KeyAttrValue &EnsureKeyAttrValueLocked(const Key &key)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(schema_mutex_);
+  void DestroyKeyAttrValueLocked(const Key &key)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(schema_mutex_);
+  void LinkMissingLocked(uint16_t pos, const InternedStringPtr &key)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(schema_mutex_);
+  void UnlinkMissingLocked(uint16_t pos, const InternedStringPtr &key)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(schema_mutex_);
+  bool IsLinkedLocked(uint16_t pos, const InternedStringPtr &key) const
+      ABSL_SHARED_LOCKS_REQUIRED(schema_mutex_);
+
+ public:
 
   /**
    * @brief Computes the total size of attributes, optionally filtered by
@@ -448,10 +546,21 @@ class IndexSchema : public KeyspaceEventSubscription,
   vmsdk::MainThreadAccessGuard<absl::flat_hash_map<Key, DbKeyInfo>>
       db_key_info_;  // Mainthread.
 
-  // For proper sequencing and thread-safety, we separate reads/writes into
-  // the corresponding time slice mutex phases. Within the write phase,
-  // exclusion is provided by mutated_records_mutex_.
-  IndexKeyInfoMap index_key_info_ ABSL_GUARDED_BY(time_sliced_mutex_);
+  // Schema-level mutex for state shared across attribute positions:
+  // `index_key_info_`, the missing-list anchors, the occupied counts, and the
+  // Missing{} payload bytes of empty slots (which LinkMissing/UnlinkMissing
+  // splice across keys). NOTE: `time_sliced_mutex_` is a multi-writer mutex
+  // in its write phase, so it does NOT serialize concurrent workers — they
+  // all hit this mutex when touching shared state. Lock order: each derived
+  // index's `index_mutex_` (outer) → `schema_mutex_` (inner).
+  mutable absl::Mutex schema_mutex_;
+  IndexKeyInfoMap index_key_info_ ABSL_GUARDED_BY(schema_mutex_);
+  // Per-attribute missing-list anchors and occupied-slot counts. Sized once
+  // by AddIndex to match attribute count, then stable. Guarded by
+  // schema_mutex_ for the same reason as index_key_info_ (cross-worker
+  // writes from neighbor splicing).
+  std::vector<MissingList> missing_lists_ ABSL_GUARDED_BY(schema_mutex_);
+  std::vector<size_t> occupied_count_ ABSL_GUARDED_BY(schema_mutex_);
 
   struct BackfillJob {
     BackfillJob() = delete;

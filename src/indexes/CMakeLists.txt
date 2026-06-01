@@ -1,13 +1,32 @@
 valkey_search_create_proto_library("src/index_schema.proto"
                                    "index_schema_cc_proto")
 
-add_library(index_base INTERFACE ${SRCS_INDEX_BASE})
-target_include_directories(index_base INTERFACE ${CMAKE_CURRENT_LIST_DIR})
-target_link_libraries(index_base INTERFACE index_schema_cc_proto)
-target_link_libraries(index_base INTERFACE rdb_serialization)
-target_link_libraries(index_base INTERFACE string_interning)
-target_link_libraries(index_base INTERFACE vmsdklib)
-target_link_libraries(index_base INTERFACE valkey_module)
+set(SRCS_KEY_ATTR_VALUE ${CMAKE_CURRENT_LIST_DIR}/key_attr_value.cc
+                        ${CMAKE_CURRENT_LIST_DIR}/key_attr_value.h)
+
+valkey_search_add_static_library(key_attr_value "${SRCS_KEY_ATTR_VALUE}")
+target_include_directories(key_attr_value PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(key_attr_value PUBLIC string_interning)
+target_link_libraries(key_attr_value PUBLIC vmsdklib)
+
+# index_base.cc holds the bodies of MissingListIterator, MissingListBegin
+# and TypedIndex<Derived, SlotT>::OccupySlot / ResizeSlot / VacateSlot, plus
+# the explicit-instantiations for each concrete (Derived, SlotT) pair. These
+# bodies need IndexSchema's full type (which itself includes index_base.h),
+# so they can't live inline in index_base.h — defining them here breaks the
+# cycle. Derived index .cc files call OccupySlot/etc. directly and the
+# linker resolves them against this library.
+set(SRCS_INDEX_BASE ${CMAKE_CURRENT_LIST_DIR}/index_base.cc
+                    ${CMAKE_CURRENT_LIST_DIR}/index_base.h)
+
+valkey_search_add_static_library(index_base "${SRCS_INDEX_BASE}")
+target_include_directories(index_base PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(index_base PUBLIC index_schema_cc_proto)
+target_link_libraries(index_base PUBLIC key_attr_value)
+target_link_libraries(index_base PUBLIC rdb_serialization)
+target_link_libraries(index_base PUBLIC string_interning)
+target_link_libraries(index_base PUBLIC vmsdklib)
+target_link_libraries(index_base PUBLIC valkey_module)
 
 set(SRCS_VECTOR_BASE ${CMAKE_CURRENT_LIST_DIR}/vector_base.cc
                      ${CMAKE_CURRENT_LIST_DIR}/vector_base.h)
@@ -127,4 +146,4 @@ target_link_libraries(text PUBLIC string_interning)
 target_link_libraries(text PUBLIC valkey_module)
 target_link_libraries(text PUBLIC snowball)
 target_link_libraries(text PUBLIC scanner)
-target_link_libraries(text PUBLIC icu) 
+target_link_libraries(text PUBLIC icu)

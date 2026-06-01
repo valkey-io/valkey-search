@@ -49,30 +49,82 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
+
+class MockIndexSchema;  // forward-declared; defined below
+
+namespace internal {
+// Lazily creates a single-attribute MockIndexSchema and registers `index`
+// in it at slot 0 if `*holder` is null AND `index` is not already bound to
+// some other schema. Idempotent; no-op when `index->IsBound()` (e.g. the
+// test itself has already called IndexSchema::AddIndex on it).
+void BindIndexToTestSchema(indexes::IndexBase* index,
+                           std::shared_ptr<MockIndexSchema>* holder);
+}  // namespace internal
+
+// Test-only helper for fixtures that construct an IndexBase outside of
+// IndexTeser (e.g. text_test.cc). Creates a single-attribute MockIndexSchema
+// and binds `index` to it. The returned shared_ptr must out-live `index` —
+// hold it as a fixture member.
+std::shared_ptr<MockIndexSchema> BindIndexToFreshTestSchema(
+    indexes::IndexBase* index);
+
+namespace internal {
+
+// Acquires the writer lock on the schema's time-sliced mutex and ensures a
+// KeyAttrValue exists for `key`. Used by IndexTeser to mirror the production
+// `ProcessAttributeMutation` invariant that the KAV is constructed before
+// derived AddRecord/ModifyRecord/RemoveRecord runs.
+void EnsureKavForTest(indexes::IndexBase* index, const InternedStringPtr& key);
+
+// Acquires the writer lock on the schema's time-sliced mutex AND, after the
+// derived RemoveRecord runs, tears down the KAV when all slots are empty —
+// matching the production all_deletes branch of SyncProcessMutation.
+void MaybeDestroyKavAfterRemove(indexes::IndexBase* index,
+                                const InternedStringPtr& key);
+}  // namespace internal
+
 template <typename T, typename K>
 class IndexTeser : public T {
  public:
   explicit IndexTeser(K proto) : T(K(proto)) {}
   absl::StatusOr<bool> AddRecord(absl::string_view key,
                                  absl::string_view data) {
+    internal::BindIndexToTestSchema(this, &teser_schema_);
     auto interned_key = StringInternStore::Intern(key);
+    internal::EnsureKavForTest(this, interned_key);
     return T::AddRecord(interned_key, data);
   }
   absl::StatusOr<bool> RemoveRecord(
       absl::string_view key,
       indexes::DeletionType deletion_type = indexes::DeletionType::kNone) {
+    internal::BindIndexToTestSchema(this, &teser_schema_);
     auto interned_key = StringInternStore::Intern(key);
-    return T::RemoveRecord(interned_key, deletion_type);
+    // Mirror production: EnsureKeyAttrValue runs before the dispatch so
+    // RemoveRecord can do per-slot missing-list bookkeeping even on a key
+    // first seen via a removal notification.
+    internal::EnsureKavForTest(this, interned_key);
+    auto res = T::RemoveRecord(interned_key, deletion_type);
+    if (deletion_type == indexes::DeletionType::kRecord) {
+      internal::MaybeDestroyKavAfterRemove(this, interned_key);
+    }
+    return res;
   }
   absl::StatusOr<bool> ModifyRecord(absl::string_view key,
                                     absl::string_view data) {
+    internal::BindIndexToTestSchema(this, &teser_schema_);
     auto interned_key = StringInternStore::Intern(key);
+    internal::EnsureKavForTest(this, interned_key);
     return T::ModifyRecord(interned_key, data);
   }
   bool IsTracked(absl::string_view key) const {
+    internal::BindIndexToTestSchema(const_cast<IndexTeser*>(this),
+                                     &teser_schema_);
     auto interned_key = StringInternStore::Intern(key);
     return T::IsTracked(interned_key);
   }
+
+ private:
+  mutable std::shared_ptr<MockIndexSchema> teser_schema_;
 };
 
 class MockIndex : public indexes::IndexBase {

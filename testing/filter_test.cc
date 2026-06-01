@@ -37,21 +37,19 @@ struct FilterTestCase {
 class FilterTest : public ValkeySearchTestWithParam<FilterTestCase> {};
 
 void InitIndexSchema(MockIndexSchema *index_schema) {
+  // After the KeyAttrValue refactor, per-key state lives in the schema's
+  // index_key_info_ and each KeyAttrValue is allocated with exactly N slots
+  // for the schema's N attributes at the moment of its construction. If we
+  // call AddIndex AFTER any AddRecord on a previously-added index, the older
+  // KAVs have too few slots — subsequent slot accesses read past the buffer.
+  // So: register EVERY index first, then add records.
   data_model::NumericIndex numeric_index_proto;
-
   auto numeric_index_1_5 =
       std::make_shared<IndexTeser<indexes::Numeric, data_model::NumericIndex>>(
           numeric_index_proto);
-
   auto numeric_index_2_0 =
       std::make_shared<IndexTeser<indexes::Numeric, data_model::NumericIndex>>(
           numeric_index_proto);
-  VMSDK_EXPECT_OK(numeric_index_1_5->AddRecord("key1", "1.5"));
-  VMSDK_EXPECT_OK(numeric_index_2_0->AddRecord("key1", "2.0"));
-  VMSDK_EXPECT_OK(index_schema->AddIndex("num_field_1.5", "num_field_1.5",
-                                         numeric_index_1_5));
-  VMSDK_EXPECT_OK(index_schema->AddIndex("num_field_2.0", "num_field_2.0",
-                                         numeric_index_2_0));
 
   data_model::TagIndex tag_index_proto;
   tag_index_proto.set_separator(",");
@@ -59,28 +57,12 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
   auto tag_index_1 =
       std::make_shared<IndexTeser<indexes::Tag, data_model::TagIndex>>(
           tag_index_proto);
-  VMSDK_EXPECT_OK(tag_index_1->AddRecord("key1", "tag1"));
-  // Add records with literal special characters for escape testing
-  // key_pipe has tag "a|b" (literal pipe in the stored value)
-  VMSDK_EXPECT_OK(tag_index_1->AddRecord("key_pipe", "a|b"));
-  // key_backslash_pipe has tag "a\|b" (backslash + pipe)
-  VMSDK_EXPECT_OK(tag_index_1->AddRecord("key_backslash_pipe", R"(a\|b)"));
-  // key_backslash has tag "a\" (trailing backslash)
-  VMSDK_EXPECT_OK(tag_index_1->AddRecord("key_backslash", R"(a\)"));
-  VMSDK_EXPECT_OK(
-      index_schema->AddIndex("tag_field_1", "tag_field_1", tag_index_1));
   auto tag_index_1_2 =
       std::make_shared<IndexTeser<indexes::Tag, data_model::TagIndex>>(
           tag_index_proto);
-  VMSDK_EXPECT_OK(tag_index_1_2->AddRecord("key1", "tag2,tag1"));
-  VMSDK_EXPECT_OK(
-      index_schema->AddIndex("tag_field_1_2", "tag_field_1_2", tag_index_1_2));
   auto tag_index_with_space =
       std::make_shared<IndexTeser<indexes::Tag, data_model::TagIndex>>(
           tag_index_proto);
-  VMSDK_EXPECT_OK(tag_index_with_space->AddRecord("key1", "tag 1 ,tag 2"));
-  VMSDK_EXPECT_OK(index_schema->AddIndex(
-      "tag_field_with_space", "tag_field_with_space", tag_index_with_space));
 
   data_model::TagIndex tag_case_insensitive_proto;
   tag_case_insensitive_proto.set_separator("@");
@@ -88,10 +70,6 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
   auto tag_field_case_insensitive =
       std::make_shared<IndexTeser<indexes::Tag, data_model::TagIndex>>(
           tag_case_insensitive_proto);
-  VMSDK_EXPECT_OK(tag_field_case_insensitive->AddRecord("key1", "tag1"));
-  VMSDK_EXPECT_OK(index_schema->AddIndex("tag_field_case_insensitive",
-                                         "tag_field_case_insensitive",
-                                         tag_field_case_insensitive));
 
   index_schema->CreateTextIndexSchema();
   auto text_index_schema = index_schema->GetTextIndexSchema();
@@ -104,17 +82,45 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
   auto text_index_2 =
       std::make_shared<indexes::Text>(text_index_proto2, text_index_schema);
 
+  // ---- Phase 1: register every index in this schema ----
+  VMSDK_EXPECT_OK(index_schema->AddIndex("num_field_1.5", "num_field_1.5",
+                                         numeric_index_1_5));
+  VMSDK_EXPECT_OK(index_schema->AddIndex("num_field_2.0", "num_field_2.0",
+                                         numeric_index_2_0));
+  VMSDK_EXPECT_OK(
+      index_schema->AddIndex("tag_field_1", "tag_field_1", tag_index_1));
+  VMSDK_EXPECT_OK(
+      index_schema->AddIndex("tag_field_1_2", "tag_field_1_2", tag_index_1_2));
+  VMSDK_EXPECT_OK(index_schema->AddIndex(
+      "tag_field_with_space", "tag_field_with_space", tag_index_with_space));
+  VMSDK_EXPECT_OK(index_schema->AddIndex("tag_field_case_insensitive",
+                                         "tag_field_case_insensitive",
+                                         tag_field_case_insensitive));
   VMSDK_EXPECT_OK(
       index_schema->AddIndex("text_field1", "text_field1", text_index_1));
   VMSDK_EXPECT_OK(
       index_schema->AddIndex("text_field2", "text_field2", text_index_2));
+
+  // ---- Phase 2: add records (now that the attribute count is final) ----
+  VMSDK_EXPECT_OK(numeric_index_1_5->AddRecord("key1", "1.5"));
+  VMSDK_EXPECT_OK(numeric_index_2_0->AddRecord("key1", "2.0"));
+  VMSDK_EXPECT_OK(tag_index_1->AddRecord("key1", "tag1"));
+  // Add records with literal special characters for escape testing
+  // key_pipe has tag "a|b" (literal pipe in the stored value)
+  VMSDK_EXPECT_OK(tag_index_1->AddRecord("key_pipe", "a|b"));
+  // key_backslash_pipe has tag "a\|b" (backslash + pipe)
+  VMSDK_EXPECT_OK(tag_index_1->AddRecord("key_backslash_pipe", R"(a\|b)"));
+  // key_backslash has tag "a\" (trailing backslash)
+  VMSDK_EXPECT_OK(tag_index_1->AddRecord("key_backslash", R"(a\)"));
+  VMSDK_EXPECT_OK(tag_index_1_2->AddRecord("key1", "tag2,tag1"));
+  VMSDK_EXPECT_OK(tag_index_with_space->AddRecord("key1", "tag 1 ,tag 2"));
+  VMSDK_EXPECT_OK(tag_field_case_insensitive->AddRecord("key1", "tag1"));
 
   // Add TEXT data for basic tests (exact_term, exact_prefix, proximity, etc.)
   auto key1 = StringInternStore::Intern("key1");
   std::string test_data = "word hello my name is hello how are you doing?";
   VMSDK_EXPECT_OK(text_index_1->AddRecord(key1, test_data));
   VMSDK_EXPECT_OK(text_index_2->AddRecord(key1, test_data));
-
   text_index_schema->CommitKeyData(key1);
 }
 

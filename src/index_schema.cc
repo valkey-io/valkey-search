@@ -348,6 +348,36 @@ IndexSchema::~IndexSchema() {
   if (!is_destructing_) {
     MarkAsDestructing();
   }
+
+  // Tear down every KeyAttrValue before the map is destroyed — the KAV is a
+  // POD with no destructor; its slots' Missings (and any still-occupied
+  // SlotTs) must be wound down explicitly here.
+  //
+  // We deliberately do NOT call UnlinkMissing during this walk. The
+  // missing_lists_ / neighbor prev-next links are being torn down wholesale,
+  // so per-slot unlink is wasted work — every KAV's empty-slot bytes get
+  // dropped a moment later by unique_ptr anyway. We only need to release the
+  // InternedStringPtr refcounts in each Missing and free any heap state
+  // owned by occupied slots.
+  // schema_mutex_ is taken exclusively in case any straggler worker is still
+  // touching this schema; in steady-state this is uncontended.
+  absl::MutexLock state_lock(&schema_mutex_);
+  const uint16_t num_slots = static_cast<uint16_t>(missing_lists_.size());
+  for (auto &entry : index_key_info_) {
+    for (uint16_t i = 0; i < num_slots; ++i) {
+      indexes::Slot &slot = entry.second->slots[i];
+      if (indexes::IsOccupied(slot)) {
+        auto attr_itr = std::find_if(
+            attributes_.begin(), attributes_.end(),
+            [i](const auto &kv) { return kv.second.GetPosition() == i; });
+        if (attr_itr != attributes_.end()) {
+          attr_itr->second.GetIndex()->DestructSlot(entry.first, slot.storage);
+        }
+      } else {
+        reinterpret_cast<indexes::Missing *>(slot.storage)->~Missing();
+      }
+    }
+  }
 }
 
 absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexSchema::GetIndex(
@@ -473,6 +503,19 @@ absl::StatusOr<vmsdk::UniqueValkeyString> IndexSchema::DefaultReplyScoreAs(
 absl::Status IndexSchema::AddIndex(absl::string_view attribute_alias,
                                    absl::string_view identifier,
                                    std::shared_ptr<indexes::IndexBase> index) {
+  // Mutates schema-level state (missing_lists_, occupied_count_); also reads
+  // index_key_info_ for the AddIndex-after-AddRecord invariant CHECK.
+  absl::MutexLock lock(&schema_mutex_);
+  // Each KeyAttrValue is sized to the schema's attribute count at the moment
+  // of its construction (via EnsureKeyAttrValue). Growing the attribute count
+  // after a KAV exists leaves earlier KAVs short by a slot, and any later
+  // access to the new attribute's slot reads off the end of the buffer.
+  // FT.CREATE registers every attribute before ingestion begins, so this
+  // invariant holds in production; this CHECK guards against test fixtures
+  // or future ALTER paths that violate the order.
+  CHECK(index_key_info_.empty())
+      << "AddIndex called after KeyAttrValues exist — register every "
+         "attribute before adding records (alias=" << attribute_alias << ")";
   auto [_, res] = attributes_.insert(
       {std::string(attribute_alias),
        Attribute{attribute_alias, identifier, index,
@@ -484,8 +527,15 @@ absl::Status IndexSchema::AddIndex(absl::string_view attribute_alias,
   }
 
   attributes_indexed_data_size_.emplace_back(0);
+  missing_lists_.emplace_back();
+  occupied_count_.emplace_back(0);
   identifier_to_alias_.insert(
       {std::string(identifier), std::string(attribute_alias)});
+  // Bind this index to its assigned slot position so slot-based code paths
+  // (KeyAttrValue refactor) can locate the schema's missing list / size
+  // counter / occupied count for this attribute.
+  index->BindSlot(this,
+                  static_cast<uint16_t>(missing_lists_.size() - 1));
   // Update schema level Text information for default field searches
   // without any field specifier.
   UpdateTextFieldMasksForIndex(std::string(identifier), index.get());
@@ -652,9 +702,10 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
   }
   if (all_deletes) {
     // If all attributes are deletes, we can remove the key from the tracked
-    // mutation records.
+    // mutation records. DestroyKeyAttrValue acquires schema_mutex_
+    // internally and is a no-op when the key isn't present.
     absl::MutexLock lock(&mutated_records_mutex_);
-    index_key_info_.erase(key);
+    DestroyKeyAttrValue(key);
   }
   if (text_index_schema_) {
     // Text index structures operate at the schema-level so we commit the
@@ -879,6 +930,224 @@ MutationSequenceNumber IndexSchema::UpdateDbInfoKey(
   return this_mutation;
 }
 
+// ---- KeyAttrValue lifecycle + per-attribute missing list helpers ----
+//
+// Public entry points take `schema_mutex_` exclusively (the underlying state
+// is shared across all attribute positions, not per-pos); the `*Locked`
+// variants run the same body with the lock already held so we can compose
+// multi-step operations (e.g. DestroyKeyAttrValueLocked → UnlinkMissingLocked
+// → ~Missing).
+
+size_t IndexSchema::GetIndexKeyInfoSize() const {
+  absl::ReaderMutexLock lock(&schema_mutex_);
+  return index_key_info_.size();
+}
+
+indexes::KeyAttrValue *IndexSchema::FindKAV(const Key &key) const {
+  absl::ReaderMutexLock lock(&schema_mutex_);
+  auto itr = index_key_info_.find(key);
+  return itr != index_key_info_.end() ? itr->second.get() : nullptr;
+}
+
+indexes::KeyAttrValue &IndexSchema::EnsureKeyAttrValueLocked(const Key &key) {
+  auto itr = index_key_info_.find(key);
+  if (itr != index_key_info_.end()) {
+    return *itr->second;
+  }
+  const uint16_t num_slots = static_cast<uint16_t>(missing_lists_.size());
+  indexes::KeyAttrValue *raw = indexes::KeyAttrValue::Allocate(num_slots);
+  // Initialize header — KAV is a POD; no constructor ran.
+  raw->seq = 0;
+  raw->document_score = indexes::KeyAttrValue::kDefaultDocumentScore;
+  raw->reserved = 0;
+  // Initialize each slot as empty/unlinked: placement-new a default Missing.
+  // Slots stay unlinked until OccupySlot/RemoveRecord(kNone) on the empty
+  // branch consults IsLinked and links via LinkMissing.
+  for (uint16_t i = 0; i < num_slots; ++i) {
+    new (raw->slots[i].storage) indexes::Missing{};
+  }
+  indexes::KeyAttrValuePtr owner(raw);
+  auto [it, inserted] = index_key_info_.emplace(key, std::move(owner));
+  CHECK(inserted);
+  return *it->second;
+}
+
+indexes::KeyAttrValue &IndexSchema::EnsureKeyAttrValue(const Key &key) {
+  absl::MutexLock lock(&schema_mutex_);
+  return EnsureKeyAttrValueLocked(key);
+}
+
+void IndexSchema::DestroyKeyAttrValueLocked(const Key &key) {
+  auto map_itr = index_key_info_.find(key);
+  if (map_itr == index_key_info_.end()) {
+    return;
+  }
+  indexes::KeyAttrValue &kav = *map_itr->second;
+  const uint16_t num_slots = static_cast<uint16_t>(missing_lists_.size());
+  for (uint16_t i = 0; i < num_slots; ++i) {
+    indexes::Slot &slot = kav.slots[i];
+    if (indexes::IsOccupied(slot)) {
+      // Safety net — the normal RemoveRecord(kRecord) path should have
+      // already vacated each occupied slot. Defer to the owning index to
+      // remove from its aux structure and free any heap state.
+      auto attr_itr = std::find_if(
+          attributes_.begin(), attributes_.end(),
+          [i](const auto &kv) { return kv.second.GetPosition() == i; });
+      CHECK(attr_itr != attributes_.end());
+      attr_itr->second.GetIndex()->DestructSlot(key, slot.storage);
+    } else {
+      if (IsLinkedLocked(i, key)) {
+        UnlinkMissingLocked(i, key);
+      }
+      reinterpret_cast<indexes::Missing *>(slot.storage)->~Missing();
+    }
+  }
+  index_key_info_.erase(map_itr);
+}
+
+void IndexSchema::DestroyKeyAttrValue(const Key &key) {
+  absl::MutexLock lock(&schema_mutex_);
+  DestroyKeyAttrValueLocked(key);
+}
+
+bool IndexSchema::IsLinkedLocked(uint16_t pos,
+                                 const InternedStringPtr &key) const {
+  auto itr = index_key_info_.find(key);
+  if (itr == index_key_info_.end()) {
+    return false;
+  }
+  const auto &slot = itr->second->slots[pos];
+  CHECK(!indexes::IsOccupied(slot)) << "IsLinked only valid for empty slots";
+  const auto &missing =
+      *reinterpret_cast<const indexes::Missing *>(slot.storage);
+  if (missing.prev) {
+    return true;  // anywhere but head
+  }
+  // prev == null ⇒ either this key is the head, or it is not in the list.
+  return missing_lists_[pos].head == key;
+}
+
+bool IndexSchema::IsLinked(uint16_t pos, const InternedStringPtr &key) const {
+  absl::ReaderMutexLock lock(&schema_mutex_);
+  return IsLinkedLocked(pos, key);
+}
+
+void IndexSchema::LinkMissingLocked(uint16_t pos,
+                                    const InternedStringPtr &key) {
+  auto itr = index_key_info_.find(key);
+  CHECK(itr != index_key_info_.end());
+  auto &slot = itr->second->slots[pos];
+  CHECK(!indexes::IsOccupied(slot));
+  auto &missing = *reinterpret_cast<indexes::Missing *>(slot.storage);
+  auto &list = missing_lists_[pos];
+  // Append to tail to preserve insertion order.
+  missing.prev = list.tail;
+  missing.next = InternedStringPtr{};  // null
+  if (list.tail) {
+    auto tail_itr = index_key_info_.find(list.tail);
+    CHECK(tail_itr != index_key_info_.end());
+    auto &tail_slot = tail_itr->second->slots[pos];
+    CHECK(!indexes::IsOccupied(tail_slot));
+    auto &tail_missing =
+        *reinterpret_cast<indexes::Missing *>(tail_slot.storage);
+    tail_missing.next = key;
+  } else {
+    list.head = key;
+  }
+  list.tail = key;
+  ++list.size;
+}
+
+void IndexSchema::LinkMissing(uint16_t pos, const InternedStringPtr &key) {
+  absl::MutexLock lock(&schema_mutex_);
+  LinkMissingLocked(pos, key);
+}
+
+void IndexSchema::UnlinkMissingLocked(uint16_t pos,
+                                      const InternedStringPtr &key) {
+  auto itr = index_key_info_.find(key);
+  CHECK(itr != index_key_info_.end());
+  auto &slot = itr->second->slots[pos];
+  CHECK(!indexes::IsOccupied(slot));
+  auto &missing = *reinterpret_cast<indexes::Missing *>(slot.storage);
+  auto &list = missing_lists_[pos];
+
+  if (missing.prev) {
+    auto prev_itr = index_key_info_.find(missing.prev);
+    CHECK(prev_itr != index_key_info_.end());
+    auto &prev_slot = prev_itr->second->slots[pos];
+    CHECK(!indexes::IsOccupied(prev_slot));
+    reinterpret_cast<indexes::Missing *>(prev_slot.storage)->next =
+        missing.next;
+  } else {
+    list.head = missing.next;
+  }
+  if (missing.next) {
+    auto next_itr = index_key_info_.find(missing.next);
+    CHECK(next_itr != index_key_info_.end());
+    auto &next_slot = next_itr->second->slots[pos];
+    CHECK(!indexes::IsOccupied(next_slot));
+    reinterpret_cast<indexes::Missing *>(next_slot.storage)->prev =
+        missing.prev;
+  } else {
+    list.tail = missing.prev;
+  }
+  missing.prev = InternedStringPtr{};
+  missing.next = InternedStringPtr{};
+  --list.size;
+}
+
+void IndexSchema::UnlinkMissing(uint16_t pos, const InternedStringPtr &key) {
+  absl::MutexLock lock(&schema_mutex_);
+  UnlinkMissingLocked(pos, key);
+}
+
+IndexSchema::MissingList IndexSchema::MissingListAt(uint16_t pos) const {
+  absl::ReaderMutexLock lock(&schema_mutex_);
+  return missing_lists_[pos];
+}
+
+size_t IndexSchema::OccupiedCount(uint16_t pos) const {
+  absl::ReaderMutexLock lock(&schema_mutex_);
+  return occupied_count_[pos];
+}
+
+void IndexSchema::IncrementOccupiedCount(uint16_t pos) {
+  absl::MutexLock lock(&schema_mutex_);
+  ++occupied_count_[pos];
+}
+
+void IndexSchema::DecrementOccupiedCount(uint16_t pos) {
+  absl::MutexLock lock(&schema_mutex_);
+  --occupied_count_[pos];
+}
+
+absl::Status IndexSchema::ForEachKey(
+    absl::AnyInvocable<absl::Status(const Key &, indexes::KeyAttrValue &)> fn) {
+  absl::ReaderMutexLock lock(&schema_mutex_);
+  for (auto &entry : index_key_info_) {
+    auto status = fn(entry.first, *entry.second);
+    if (!status.ok()) {
+      return status;
+    }
+  }
+  return absl::OkStatus();
+}
+
+absl::Status IndexSchema::ForEachKey(
+    absl::AnyInvocable<absl::Status(const Key &,
+                                    const indexes::KeyAttrValue &)>
+        fn) const {
+  absl::ReaderMutexLock lock(&schema_mutex_);
+  for (const auto &entry : index_key_info_) {
+    auto status = fn(entry.first, *entry.second);
+    if (!status.ok()) {
+      return status;
+    }
+  }
+  return absl::OkStatus();
+}
+
 void IndexSchema::ProcessMutation(ValkeyModuleCtx *ctx,
                                   MutatedAttributes &mutated_attributes,
                                   const Key &interned_key, bool from_backfill,
@@ -889,7 +1158,7 @@ void IndexSchema::ProcessMutation(ValkeyModuleCtx *ctx,
   if (ABSL_PREDICT_FALSE(!mutations_thread_pool_ ||
                          mutations_thread_pool_->Size() == 0)) {
     vmsdk::WriterMutexLock lock(&time_sliced_mutex_);
-    index_key_info_[interned_key].document_score = document_score;
+    EnsureKeyAttrValue(interned_key).document_score = document_score;
     SyncProcessMutation(ctx, mutated_attributes, interned_key);
     return;
   }
@@ -1400,25 +1669,32 @@ absl::Status IndexSchema::ValidateIndex() const {
     auto larger_name = (cnt > oracle_key_count) ? name : oracle_name;
     auto smaller_index = (cnt > oracle_key_count) ? oracle_index : idx;
     auto smaller_name = (cnt > oracle_key_count) ? oracle_name : name;
-    auto key_check = [&](const Key &key) {
-      if (!smaller_index->IsTracked(key) && !smaller_index->IsUnTracked(key)) {
-        VMSDK_LOG(WARNING, nullptr)
-            << "Key found in " << vmsdk::config::RedactIfNeeded(larger_name)
-            << " not found in " << vmsdk::config::RedactIfNeeded(smaller_name)
-            << ": " << vmsdk::config::RedactIfNeeded(key->Str());
-        status = absl::InternalError(
-            absl::StrCat("Key found in ", larger_name, " not found in ",
-                         smaller_name, ": ", key->Str()));
-      }
-      return absl::OkStatus();
-    };
-    auto status1 = larger_index->ForEachTrackedKey(key_check);
+    // After the KeyAttrValue refactor every non-vector index sees the same
+    // set of keys (the schema-wide `index_key_info_`), so we can do one walk
+    // over the schema instead of two per-attribute walks. The larger/smaller
+    // labelling above survives in the warning text; the membership check
+    // collapses to "is this key known to the smaller index" which, post-
+    // refactor, is equivalent to "is this key in `index_key_info_`" — true by
+    // construction for the keys we visit. The walk still surfaces vector vs.
+    // non-vector divergences via the per-attribute count check below.
+    auto status1 = ForEachKey(
+        [&](const Key &key, const indexes::KeyAttrValue & /*kav*/) {
+          if (!smaller_index->IsTracked(key) &&
+              !smaller_index->IsUnTracked(key)) {
+            VMSDK_LOG(WARNING, nullptr)
+                << "Key found in "
+                << vmsdk::config::RedactIfNeeded(larger_name)
+                << " not found in "
+                << vmsdk::config::RedactIfNeeded(smaller_name) << ": "
+                << vmsdk::config::RedactIfNeeded(key->Str());
+            status = absl::InternalError(
+                absl::StrCat("Key found in ", larger_name, " not found in ",
+                             smaller_name, ": ", key->Str()));
+          }
+          return absl::OkStatus();
+        });
     if (!status1.ok()) {
       status = status1;
-    }
-    auto status2 = larger_index->ForEachUnTrackedKey(key_check);
-    if (!status2.ok()) {
-      status = status2;
     }
   }
   return status;
@@ -1769,35 +2045,33 @@ void IndexSchema::OnLoadingEnded(ValkeyModuleCtx *ctx) {
     return;
   }
   // Clean up any potentially stale index entries that can arise from
-  // pending record deletions being lost during RDB save.
+  // pending record deletions being lost during RDB save. After the
+  // KeyAttrValue refactor each key lives once in `index_key_info_` regardless
+  // of attribute count, so one walk is enough — for each missing key we queue
+  // a kRecord deletion against every attribute that this schema declares
+  // (matching the old per-attribute loop's result set).
   vmsdk::StopWatch stop_watch;
   ValkeyModule_SelectDb(ctx, db_num_);  // Make sure we are in the right DB.
   absl::flat_hash_map<std::string, MutatedAttributes> deletion_attributes;
-  for (const auto &attribute : attributes_) {
-    const auto &index = attribute.second.GetIndex();
-    std::vector<std::string> to_delete;
-    uint64_t key_size = 0;
-    uint64_t stale_entries = 0;
-    auto status = index->ForEachTrackedKey([ctx, &deletion_attributes,
-                                            &key_size, &attribute,
-                                            &stale_entries](const Key &key) {
-      auto r_str = vmsdk::MakeUniqueValkeyString(*key);
-      if (!ValkeyModule_KeyExists(ctx, r_str.get())) {
-        deletion_attributes[std::string(*key)][attribute.second.GetAlias()] = {
-            nullptr, indexes::DeletionType::kRecord};
-        stale_entries++;
-      }
-      key_size++;
-      return absl::OkStatus();
-    });
-    VMSDK_LOG(DEBUG, ctx) << "Deleting " << stale_entries
-                          << " stale entries of " << key_size
-                          << " total keys for {Index: "
-                          << vmsdk::config::RedactIfNeeded(name_)
-                          << ", Attribute: "
-                          << vmsdk::config::RedactIfNeeded(attribute.first)
-                          << "}";
-  }
+  uint64_t key_size = 0;
+  uint64_t stale_entries = 0;
+  [[maybe_unused]] auto status = ForEachKey(
+      [&](const Key &key, const indexes::KeyAttrValue & /*kav*/) {
+        ++key_size;
+        auto r_str = vmsdk::MakeUniqueValkeyString(*key);
+        if (!ValkeyModule_KeyExists(ctx, r_str.get())) {
+          auto &attrs = deletion_attributes[std::string(*key)];
+          for (const auto &attribute : attributes_) {
+            attrs[attribute.second.GetAlias()] = {
+                nullptr, indexes::DeletionType::kRecord};
+          }
+          ++stale_entries;
+        }
+        return absl::OkStatus();
+      });
+  VMSDK_LOG(DEBUG, ctx) << "Deleting " << stale_entries << " stale entries of "
+                        << key_size << " total keys for {Index: "
+                        << vmsdk::config::RedactIfNeeded(name_) << "}";
   VMSDK_LOG(NOTICE, ctx) << "Deleting " << deletion_attributes.size()
                          << " stale entries for {Index: "
                          << vmsdk::config::RedactIfNeeded(name_) << "}";
@@ -1949,12 +2223,20 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx, const Key &key,
 
 void IndexSchema::MarkAsDestructing() {
   absl::MutexLock lock(&mutated_records_mutex_);
-  auto status = keyspace_event_manager_->RemoveSubscription(this);
-  if (!status.ok()) {
-    VMSDK_LOG(WARNING, detached_ctx_.get())
-        << "Failed to remove keyspace event subscription for index "
-           "schema "
-        << vmsdk::config::RedactIfNeeded(name_) << ": " << status.message();
+  // Only attempt to unsubscribe if we were ever subscribed. This makes the
+  // path robust to lightweight test fixtures that construct an IndexSchema
+  // without calling Init() (no subscription registered) — emitting a
+  // "subscription not found" warning would route through VMSDK_LOG and crash
+  // if the mock Valkey module has already been torn down.
+  if (keyspace_event_manager_ != nullptr &&
+      keyspace_event_manager_->HasSubscription(this)) {
+    auto status = keyspace_event_manager_->RemoveSubscription(this);
+    if (!status.ok()) {
+      VMSDK_LOG(WARNING, detached_ctx_.get())
+          << "Failed to remove keyspace event subscription for index "
+             "schema "
+          << vmsdk::config::RedactIfNeeded(name_) << ": " << status.message();
+    }
   }
 
   // Send error response to any waiting queries
@@ -1968,7 +2250,12 @@ void IndexSchema::MarkAsDestructing() {
     }
   }
 
-  backfill_job_.Get()->MarkScanAsDone();
+  // The backfill job is created by Init(); guard against the rare path where
+  // the schema is torn down without Init having succeeded (lightweight test
+  // fixtures that bypass it). Production always reaches here with a value.
+  if (backfill_job_.Get().has_value()) {
+    backfill_job_.Get()->MarkScanAsDone();
+  }
   tracked_mutated_records_.clear();
   is_destructing_ = true;
 }
@@ -1992,9 +2279,9 @@ IndexSchema::ConsumeTrackedMutatedAttribute(const Key &key, bool first_time) {
       tracked_mutated_records_.erase(itr);
       // Will notify after releasing lock
     } else {
-      auto &key_info = index_key_info_[key];
-      key_info.mutation_sequence_number_ = itr->second.sequence_number;
-      key_info.document_score = itr->second.document_score;
+      auto &kav = EnsureKeyAttrValue(key);
+      kav.seq = itr->second.sequence_number;
+      kav.document_score = itr->second.document_score;
       // Track entry is now first consumed
       auto mutated_attributes = std::move(itr->second.attributes.value());
       itr->second.attributes = std::nullopt;

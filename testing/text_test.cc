@@ -18,6 +18,8 @@
 #include "src/index_schema.pb.h"
 #include "src/indexes/text/invasive_ptr.h"
 #include "src/indexes/text/text_index.h"
+#include "testing/common.h"
+#include "vmsdk/src/testing_infra/utils.h"
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
 
@@ -39,9 +41,10 @@ struct TextIndexTestCase {
   std::string description;
 };
 
-class TextTest : public ::testing::Test {
+class TextTest : public vmsdk::ValkeyTest {
  protected:
   void SetUp() override {
+    vmsdk::ValkeyTest::SetUp();
     // Create default text index schema for testing
     std::vector<std::string> empty_stop_words;
     text_index_schema_ = std::make_shared<text::TextIndexSchema>(
@@ -58,9 +61,20 @@ class TextTest : public ::testing::Test {
     // Create Text instance
     text_index_ =
         std::make_unique<Text>(*text_index_proto_, text_index_schema_);
+    text_index_test_schema_ = BindIndexToFreshTestSchema(text_index_.get());
 
     // Default configuration
     stemming_enabled_ = true;
+  }
+
+  void TearDown() override {
+    // Destroy auto-created test schemas while the MockValkeyModule mock is
+    // still alive — ~IndexSchema::MarkAsDestructing emits a VMSDK_LOG that
+    // routes through the mock; ValkeyTest::TearDown deletes the mock.
+    ad_hoc_text_index_test_schemas_.clear();
+    text_index_test_schema_.reset();
+    text_index_.reset();
+    vmsdk::ValkeyTest::TearDown();
   }
 
   // Helper to create custom schema with specific settings
@@ -153,6 +167,13 @@ class TextTest : public ::testing::Test {
   std::shared_ptr<text::TextIndexSchema> text_index_schema_;
   std::unique_ptr<data_model::TextIndex> text_index_proto_;
   std::unique_ptr<Text> text_index_;
+  // Holds the per-Text test-only schema that BindIndexToFreshTestSchema
+  // created so its lifetime exceeds text_index_.
+  std::shared_ptr<MockIndexSchema> text_index_test_schema_;
+  // Holds the schemas for any local Text instances created mid-test (the
+  // parameterized path rebuilds text_index_ for custom schema cases).
+  std::vector<std::shared_ptr<MockIndexSchema>>
+      ad_hoc_text_index_test_schemas_;
   bool stemming_enabled_;
 };
 
@@ -173,6 +194,8 @@ TEST_P(TextIndexParameterizedTest, ValidateIndexStructure) {
                                        test_case.with_offsets);
     text_index_proto_->set_no_stem(!test_case.stemming_enabled);
     text_index_ = std::make_unique<Text>(*text_index_proto_, active_schema);
+    ad_hoc_text_index_test_schemas_.push_back(
+        BindIndexToFreshTestSchema(text_index_.get()));
   }
 
   auto key = StringInternStore::Intern("test_key");
@@ -376,6 +399,7 @@ TEST_F(TextTest, StemmingBehavior) {
   stem_proto.set_no_stem(false);  // Enable stemming
 
   auto stem_text_index = std::make_unique<Text>(stem_proto, stemming_schema);
+  auto stem_test_schema = BindIndexToFreshTestSchema(stem_text_index.get());
 
   auto key = StringInternStore::Intern("stem_key");
   std::string data = "running runs runner";

@@ -1448,19 +1448,7 @@ TEST_F(IndexSchemaRDBTest, LoadEndedDeletesOrphanedKeys) {
   mutations_thread_pool.StartWorkers();
   for (bool use_thread_pool : {true, false}) {
     auto mock_index = std::make_shared<MockIndex>();
-    absl::flat_hash_map<std::string, uint64_t> keys_in_index = {
-        {"key1", 1}, {"key2", 2}, {"key3", 3}};
-    EXPECT_CALL(*mock_index, ForEachTrackedKey(testing::_))
-        .WillOnce(
-            [&keys_in_index](
-                absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn)
-                -> absl::Status {
-              for (const auto &[key, internal_id] : keys_in_index) {
-                InternedStringPtr interned_key = StringInternStore::Intern(key);
-                VMSDK_RETURN_IF_ERROR(fn(interned_key));
-              }
-              return absl::OkStatus();
-            });
+    std::vector<std::string> keys_in_index = {"key1", "key2", "key3"};
 
     std::vector<absl::string_view> key_prefixes = {"prefix1", "prefix2"};
     std::string index_schema_name_str("index_schema_name");
@@ -1469,10 +1457,20 @@ TEST_F(IndexSchemaRDBTest, LoadEndedDeletesOrphanedKeys) {
                             &fake_ctx_, index_schema_name_str, key_prefixes,
                             std::make_unique<HashAttributeDataType>(),
                             use_thread_pool ? &mutations_thread_pool : nullptr)
-                            .value();
+                        .value();
 
     VMSDK_EXPECT_OK(
         index_schema->AddIndex("attribute", "identifier", mock_index));
+    // After the KeyAttrValue refactor OnLoadingEnded iterates the schema's
+    // `index_key_info_` instead of the per-index ForEachTrackedKey list.
+    // Populate the schema directly so the stale-key sweep can find them.
+    {
+      vmsdk::WriterMutexLock lock(&index_schema->GetTimeSlicedMutex());
+      for (const auto &key : keys_in_index) {
+        InternedStringPtr interned_key = StringInternStore::Intern(key);
+        index_schema->EnsureKeyAttrValue(interned_key);
+      }
+    }
     EXPECT_CALL(*kMockValkeyModule, SelectDb(testing::_, testing::_))
         .WillRepeatedly(Return(1));  // So backfill job can be created.
     EXPECT_CALL(*kMockValkeyModule, SelectDb(&fake_ctx_, 0))

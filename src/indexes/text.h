@@ -19,11 +19,13 @@ constexpr size_t kProximityTermsInlineCapacity = 64;
 
 #include "absl/base/thread_annotations.h"
 #include "absl/functional/any_invocable.h"
+#include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/key_attr_value.h"
 #include "src/indexes/text/posting.h"
 #include "src/indexes/text/text_fetcher.h"
 #include "src/indexes/text/text_index.h"
@@ -33,11 +35,21 @@ constexpr size_t kProximityTermsInlineCapacity = 64;
 
 namespace valkey_search::indexes {
 
+// Per-slot payload for the Text index. Just SlotBase — no per-key payload is
+// stored here; all text state lives in the shared TextIndexSchema. The slot
+// merely tracks presence/absence so IsTracked/IsUnTracked/missing-list work.
+struct TextSlot : SlotBase {};
+
+static_assert(sizeof(TextSlot) == sizeof(SlotBase));
+static_assert(sizeof(TextSlot) <= 16);
+
 /**
  * Text per-field index implementation for full-text search functionality.
  */
-class Text : public IndexBase {
+class Text : public TypedIndex<Text, TextSlot> {
  public:
+  using SlotT = TextSlot;
+
   explicit Text(const data_model::TextIndex& text_index_proto,
                 std::shared_ptr<text::TextIndexSchema> text_index_schema);
 
@@ -63,47 +75,32 @@ class Text : public IndexBase {
     return absl::OkStatus();
   }
 
-  inline absl::Status ForEachTrackedKey(
+  absl::Status ForEachTrackedKey(
       absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
-      const override {
-    absl::MutexLock lock(&index_mutex_);
-    for (const auto& key : tracked_keys_) {
-      VMSDK_RETURN_IF_ERROR(fn(key));
-    }
-    return absl::OkStatus();
-  }
+      const override ABSL_LOCKS_EXCLUDED(index_mutex_);
 
-  size_t GetUnTrackedKeyCount() const override {
-    absl::MutexLock lock(&index_mutex_);
-    return untracked_keys_.size();
-  }
+  size_t GetUnTrackedKeyCount() const override ABSL_LOCKS_EXCLUDED(index_mutex_);
 
-  bool IsUnTracked(const InternedStringPtr& key) const override {
-    absl::MutexLock lock(&index_mutex_);
-    return untracked_keys_.contains(key);
-  }
+  bool IsUnTracked(const InternedStringPtr& key) const override
+      ABSL_LOCKS_EXCLUDED(index_mutex_);
 
   void UnTrack(const InternedStringPtr& key) override
-      ABSL_LOCKS_EXCLUDED(index_mutex_) {
-    CHECK(!IsTracked(key));
-    absl::MutexLock lock(&index_mutex_);
-    untracked_keys_.insert(key);
-  }
+      ABSL_LOCKS_EXCLUDED(index_mutex_);
 
   absl::Status ForEachUnTrackedKey(
       absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
-      const override {
-    absl::MutexLock lock(&index_mutex_);
-    for (const auto& key : untracked_keys_) {
-      VMSDK_RETURN_IF_ERROR(fn(key));
-    }
-    return absl::OkStatus();
-  }
+      const override ABSL_LOCKS_EXCLUDED(index_mutex_);
 
-  size_t GetTrackedKeyCount() const override;
+  size_t GetTrackedKeyCount() const override ABSL_LOCKS_EXCLUDED(index_mutex_);
   std::unique_ptr<data_model::Index> ToProto() const override;
 
   uint32_t GetMutationWeight() const override;
+
+  // Whole-key delete safety net (TypedIndex CRTP). TextSlot has no payload,
+  // and the text aux state has already been removed from TextIndexSchema by
+  // the time DestroyKeyAttrValue runs. So this is a no-op.
+  void DestructTyped(const InternedStringPtr& /*key*/,
+                     TextSlot& /*slot*/) override {}
 
   InternedStringPtr GetRawValue(const InternedStringPtr& key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
@@ -146,16 +143,9 @@ class Text : public IndexBase {
   // Reference to the shared text index schema
   std::shared_ptr<text::TextIndexSchema> text_index_schema_;
 
-  InternedStringSet untracked_keys_;
-
-  // currently used for FT.INFO metrics only
-  InternedStringSet tracked_keys_;
-
   bool with_suffix_trie_;
   bool no_stem_;
   double weight_;
-
-  // TODO: Map to track which keys are indexed and their raw data
 
   mutable absl::Mutex index_mutex_;
 };

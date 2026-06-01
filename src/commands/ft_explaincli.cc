@@ -77,12 +77,14 @@ absl::Status FTExplainCliCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     return absl::OkStatus();
   }
   // Generate the predicate tree explanation
-  std::string explanation;
-  if (parse_results->root_predicate) {
-    explanation = PrintPredicateTree(parse_results->root_predicate.get());
-  } else {
-    explanation = "No predicate tree (empty or match-all query)";
+  if (!parse_results->root_predicate) {
+    const char *msg = parse_results->is_match_all ? "WILDCARD" : "EMPTY";
+    ValkeyModule_ReplyWithArray(ctx, 1);
+    ValkeyModule_ReplyWithStringBuffer(ctx, msg, strlen(msg));
+    return absl::OkStatus();
   }
+  std::string explanation =
+      PrintPredicateTree(parse_results->root_predicate.get());
   // Stream lines directly using a postponed-length array
   ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
   size_t line_count = 0;

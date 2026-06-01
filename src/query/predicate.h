@@ -105,6 +105,9 @@ class Predicate {
   virtual EvaluationResult Evaluate(Evaluator& evaluator) const = 0;
   virtual ~Predicate() = default;
   PredicateType GetType() const { return type_; }
+  // Returns a human-readable description of this predicate node for
+  // FT.EXPLAINCLI output.
+  virtual std::string Describe() const = 0;
 
  private:
   PredicateType type_;
@@ -116,6 +119,7 @@ class NegatePredicate : public Predicate {
       : Predicate(PredicateType::kNegate), predicate_(std::move(predicate)) {}
   EvaluationResult Evaluate(Evaluator& evaluator) const override;
   const Predicate* GetPredicate() const { return predicate_.get(); }
+  std::string Describe() const override { return "NOT"; }
 
  private:
   std::unique_ptr<Predicate> predicate_;
@@ -140,6 +144,7 @@ class NumericPredicate : public Predicate {
   bool IsEndInclusive() const { return is_inclusive_end_; }
   EvaluationResult Evaluate(Evaluator& evaluator) const override;
   EvaluationResult Evaluate(const double* value) const;
+  std::string Describe() const override { return "NUMERIC(" + alias_ + ")"; }
 
  private:
   const indexes::Numeric* index_;
@@ -170,6 +175,7 @@ class TagPredicate : public Predicate {
   }
   const std::string& GetTagString() const { return raw_tag_string_; }
   const absl::flat_hash_set<std::string>& GetTags() const { return tags_; }
+  std::string Describe() const override { return "TAG(" + alias_ + ")"; }
 
  private:
   const indexes::Tag* index_;
@@ -208,6 +214,11 @@ class TextPredicate : public Predicate {
   // Not serialized or sent over the network. Set during query parsing in
   // FilterParser; nullopt indicates a default (all text fields) search.
   std::optional<std::string> field_name_;
+
+ protected:
+  std::string FieldInfo() const {
+    return field_name_.has_value() ? "field=" + field_name_.value() : "field=*";
+  }
 };
 
 class TermPredicate : public TextPredicate {
@@ -232,6 +243,9 @@ class TermPredicate : public TextPredicate {
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   bool IsExact() const { return exact_; }
   size_t EstimateSize(bool is_vec_query) const override;
+  std::string Describe() const override {
+    return "TEXT-TERM(\"" + term_ + "\", " + FieldInfo() + ")";
+  }
 
  private:
   std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
@@ -261,6 +275,9 @@ class PrefixPredicate : public TextPredicate {
       FieldMaskPredicate field_mask, bool require_positions) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   size_t EstimateSize(bool is_vec_query) const override;
+  std::string Describe() const override {
+    return "TEXT-PREFIX(\"" + term_ + "\", " + FieldInfo() + ")";
+  }
 
  private:
   std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
@@ -289,6 +306,9 @@ class SuffixPredicate : public TextPredicate {
       FieldMaskPredicate field_mask, bool require_positions) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   size_t EstimateSize(bool is_vec_query) const override;
+  std::string Describe() const override {
+    return "TEXT-SUFFIX(\"" + term_ + "\", " + FieldInfo() + ")";
+  }
 
  private:
   std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
@@ -317,6 +337,9 @@ class InfixPredicate : public TextPredicate {
       FieldMaskPredicate field_mask, bool require_positions) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   size_t EstimateSize(bool is_vec_query) const override;
+  std::string Describe() const override {
+    return "TEXT-INFIX(\"" + term_ + "\", " + FieldInfo() + ")";
+  }
 
  private:
   std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
@@ -346,6 +369,11 @@ class FuzzyPredicate : public TextPredicate {
       FieldMaskPredicate field_mask, bool require_positions) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   size_t EstimateSize(bool is_vec_query) const override;
+  std::string Describe() const override {
+    return "TEXT-FUZZY(\"" + term_ +
+           "\", distance=" + std::to_string(distance_) + ", " + FieldInfo() +
+           ")";
+  }
 
  private:
   std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
@@ -380,6 +408,13 @@ class ComposedPredicate : public Predicate {
   // Release children (transfer ownership of children)
   std::vector<std::unique_ptr<Predicate>> ReleaseChildren() {
     return std::move(children_);
+  }
+  std::string Describe() const override {
+    if (GetType() == PredicateType::kComposedOr) return "OR";
+    if (!slop_.has_value() && !inorder_) return "AND";
+    return "AND(slop=" +
+           (slop_.has_value() ? std::to_string(slop_.value()) : "none") +
+           ", inorder=" + (inorder_ ? "true" : "false") + ")";
   }
 
  private:

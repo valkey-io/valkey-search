@@ -5,6 +5,7 @@
 - [`FT.INFO`](#ftinfo)
 - [`FT._LIST`](#ft_list)
 - [`FT.SEARCH`](#ftsearch)
+- [`FT.EXPLAINCLI`](#ftexplaincli)
 
 #
 
@@ -308,3 +309,38 @@ The following query will return all books with "comedy" or "horror" genre (OR) p
 The following query will return all books that either don't have a genre field, or have a genre field not equal to "comedy", that are published between 2015 and 2024:
 
 `-@genre:[comedy] @year:[2015 2024]`
+
+
+---
+
+## FT.EXPLAINCLI
+
+The `FT.EXPLAINCLI` command parses a query and returns a human-readable representation of the query execution plan as an array of strings (one per line). This is useful for debugging and understanding how a query is interpreted.
+
+```bash
+FT.EXPLAINCLI <index> <query> [VERBATIM] [INORDER] [SLOP <slop>]
+```
+
+- **\<index\>** (required): The name of the index to query against.
+
+- **\<query\>** (required): The query string to explain, using the same syntax as `FT.SEARCH`.
+
+- **VERBATIM** (optional): If specified, the query terms are not stemmed or otherwise processed.
+
+- **INORDER** (optional): Requires that query terms appear in the same order as specified. Requires the index to support offsets.
+
+- **SLOP \<slop\>** (optional): Allows up to `<slop>` intervening terms between query terms. Requires the index to support offsets.
+
+### Example
+
+```bash
+> FT.EXPLAINCLI myindex "@title:hello @genre:{comedy|horror}"
+1) "AND{"
+2) "  TEXT-TERM(\"hello\", field=title)"
+3) "  TAG(genre)"
+4) "}"
+```
+
+### Reply
+
+An array of bulk strings, each representing one line of the indented predicate tree. Compound predicates (AND, OR, NOT) show their children indented beneath them.

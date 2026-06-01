@@ -157,12 +157,16 @@ A fix for a compatibility bug released in a minor or patch release selectively p
 
 It may be judged that a compatibility defect cannot reasonably be fixed while preserving the old behavior. In this case, the fix cannot be made until the next major release and will ignore the `search.emulate-release` mechanism. In other words, fixes made under this clause cannot be undone using the `search.emulate-release` override.
 
-When feasible the old (non-compatible) behavior will be preserved for _at least_ one additional major release. If a bug was fixed in 1.x.x, then the 2.y.y will support emulating the 1.x.x release. However support in the 3. release or later releases is not ensured. Similar to the above clause, if retaining the parallel behavior becomes unreasonable to support, then it can be removed on the next major version.
+### Sunsetting of Incompatible Behavior
+
+When feasible the old (non-compatible) behavior will be preserved for _at least_ one additional major release. If a bug was fixed in 1.x.x, then the 2.y.y will support emulating the 1.x.x release. However support in the 3. release or later releases is not ensured. Similar to the above clause, if retaining the parallel behavior becomes unreasonable to support, then it can be removed on the next major version (see the release notes for that release).
+
+To ease application migration, incompatible behavior controlled by `search.emulate-release` is tracked by INFO fields. These fields count the number of uses of incompatible behavior by an application.
 
 ### Known Compatibility Defect Corrections
 
 A list of the compatibility issues that have been fixed.
 
-| Release            | Description |
-| ------------------ | ----------- |
-| under construction | n/a         |
+| Release            | INFO field | Old Behavior | New Behavior |
+| ------------------ | ---------- | ------------ | ------------ |
+| under construction | n/a        | ---          | ---          |

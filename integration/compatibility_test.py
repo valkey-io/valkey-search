@@ -18,11 +18,11 @@ from valkey_search_test_case import (
     ValkeySearchTestCaseDebugMode,
 )
 
-# The compatibility answers are captured from RediSearch, which always honors
-# the FT.AGGREGATE LOAD ... AS clause and JSON-path loads. Those are gated in
-# valkey-search behind search.emulate-release (see COMPATIBILITY.md), so the
-# replay must opt into the fixed behavior to match the captured answers.
-COMPAT_EMULATE_RELEASE = "1.2.1"
+# The compatibility answers are captured from RediSearch, which always behaves
+# the "fixed" way for every emulate-release-gated compatibility fix. Pin the
+# replay to the maximum release so all such fixes are enabled regardless of the
+# version each was introduced in (debug-mode lifts the emulate-release ceiling).
+COMPAT_EMULATE_RELEASE = "65535.255.255"
 from valkeytestframework.conftest import resource_port_tracker
 from utils import IndexingTestHelper
 from valkeytestframework.util import waiters

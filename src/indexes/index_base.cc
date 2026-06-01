@@ -23,6 +23,7 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
+#include "src/indexes/vector_base.h"
 #include "src/utils/string_interning.h"
 
 namespace valkey_search::indexes {
@@ -123,5 +124,6 @@ void TypedIndex<Derived, SlotT>::VacateSlot(const InternedStringPtr& key,
 template class TypedIndex<Numeric, NumericSlot>;
 template class TypedIndex<Tag, TagSlot>;
 template class TypedIndex<Text, TextSlot>;
+template class TypedIndex<VectorBase, VectorSlot>;
 
 }  // namespace valkey_search::indexes

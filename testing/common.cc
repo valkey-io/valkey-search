@@ -106,6 +106,31 @@ std::shared_ptr<MockIndexSchema> BindIndexToFreshTestSchema(
   return schema;
 }
 
+std::shared_ptr<MockIndexSchema> BindOwnedIndexToFreshTestSchema(
+    std::shared_ptr<indexes::IndexBase> index) {
+  if (index->IsBound()) {
+    return nullptr;
+  }
+  static std::atomic<int> teser_counter{0};
+  if (!KeyspaceEventManager::HasInstance()) {
+    KeyspaceEventManager::InitInstance(
+        std::make_unique<TestableKeyspaceEventManager>());
+  }
+  data_model::IndexSchema proto;
+  proto.set_name(absl::StrCat(
+      "__teser_owned_schema_",
+      teser_counter.fetch_add(1, std::memory_order_relaxed)));
+  auto schema = std::make_shared<MockIndexSchema>(
+      static_cast<ValkeyModuleCtx*>(nullptr), proto,
+      std::make_unique<HashAttributeDataType>(),
+      /*mutations_thread_pool=*/nullptr);
+  // OWNING: schema keeps `index` alive for the schema's whole lifetime, so
+  // thread-local schemas in vector tests don't end up with a dangling
+  // IndexBase* after the test's local owner goes out of scope.
+  CHECK_OK(schema->AddIndex("attr", "attr", std::move(index)));
+  return schema;
+}
+
 std::vector<std::vector<float>> DeterministicallyGenerateVectors(
     int size, int dimensions, float max_value) {
   std::vector<std::vector<float>> result(size, std::vector<float>(dimensions));

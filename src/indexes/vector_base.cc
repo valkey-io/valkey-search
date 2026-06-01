@@ -35,8 +35,10 @@
 #include "absl/strings/strip.h"
 #include "absl/synchronization/mutex.h"
 #include "src/attribute_data_type.h"
+#include "src/index_schema.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/key_attr_value.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/query/predicate.h"
@@ -170,42 +172,71 @@ absl::StatusOr<bool> VectorBase::AddRecord(const InternedStringPtr &key,
   std::optional<float> magnitude;
   auto interned_vector = InternVector(record, magnitude);
   if (!interned_vector) {
+    // Unparseable input. If the slot is currently empty link it into the
+    // missing list (covers brand-new-key first-notification); if it's
+    // already occupied with a previously-tracked vector, leave the existing
+    // tracking alone — pre-refactor AddRecord on bad data was always a
+    // skip/no-op, never a teardown.
+    KeyAttrValue *kav = schema_->FindKAV(key);
+    if (kav == nullptr || !IsOccupied(kav->slots[pos_])) {
+      if (!schema_->IsLinked(pos_, key)) {
+        schema_->LinkMissing(pos_, key);
+      }
+    }
     return false;
   }
-  VMSDK_ASSIGN_OR_RETURN(
-      auto internal_id,
-      TrackKey(key, magnitude.value_or(kDefaultMagnitude), interned_vector));
+  // Valid input on an already-occupied slot means the caller dispatched to
+  // AddRecord when ModifyRecord was expected. Match the pre-refactor
+  // TrackKey behavior of returning a non-ok status (which propagates as
+  // ExpectedResults::kError in the vector tests).
+  if (KeyAttrValue *kav = schema_->FindKAV(key);
+      kav != nullptr && IsOccupied(kav->slots[pos_])) {
+    return absl::AlreadyExistsError(
+        absl::StrCat("Key already exists in vector index: ", key->Str()));
+  }
+  uint64_t internal_id;
+  {
+    absl::WriterMutexLock lock(&key_to_metadata_mutex_);
+    internal_id = inc_id_++;
+    key_by_internal_id_.insert({internal_id, key});
+    TrackVector(internal_id, interned_vector);  // virtual to subclass
+  }
+  // Reserve the slot before calling AddRecordImpl: if the subclass's index
+  // insertion fails we need to undo via the same VacateSlot path the normal
+  // remove would take.
+  std::byte *storage = OccupySlot(key, record.size());
+  // Packed struct — initialize with an aggregate that the compiler emits as
+  // unaligned stores.
+  new (storage) VectorSlot{
+      {/*occupied=*/1u, /*user_data_len=*/static_cast<uint32_t>(record.size())},
+      internal_id,
+      magnitude.value_or(kDefaultMagnitude)};
   absl::Status add_result = AddRecordImpl(internal_id, interned_vector->Str());
   if (!add_result.ok()) {
-    auto untrack_result = UnTrackKey(key);
-    if (!untrack_result.ok()) {
-      VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
-          << "While processing error for AddRecord, encountered error in "
-             "UntrackKey: "
-          << untrack_result.status().message();
+    {
+      absl::WriterMutexLock lock(&key_to_metadata_mutex_);
+      key_by_internal_id_.erase(internal_id);
+      UnTrackVector(internal_id);
     }
+    VacateSlot(key, /*relink=*/false);
     return add_result;
   }
   return true;
 }
 
-absl::StatusOr<uint64_t> VectorBase::GetInternalId(
+absl::StatusOr<uint64_t> VectorBase::GetInternalIdFromSlot(
     const InternedStringPtr &key) const {
-  absl::ReaderMutexLock lock(&key_to_metadata_mutex_);
-  auto it = tracked_metadata_by_key_.find(key);
-  if (it == tracked_metadata_by_key_.end()) {
+  KeyAttrValue *kav = schema_->FindKAV(key);
+  if (kav == nullptr || !IsOccupied(kav->slots[pos_])) {
     return absl::InvalidArgumentError("Record was not found");
   }
-  return it->second.internal_id;
-}
-
-absl::StatusOr<uint64_t> VectorBase::GetInternalIdDuringSearch(
-    const InternedStringPtr &key) const {
-  auto it = tracked_metadata_by_key_.find(key);
-  if (it == tracked_metadata_by_key_.end()) {
-    return absl::InvalidArgumentError("Record was not found");
-  }
-  return it->second.internal_id;
+  // The packed VectorSlot puts internal_id at unaligned offset 4 — memcpy
+  // out so we don't UB-read on platforms without unaligned-access support.
+  uint64_t internal_id;
+  std::memcpy(&internal_id,
+              kav->slots[pos_].storage + offsetof(VectorSlot, internal_id),
+              sizeof(internal_id));
+  return internal_id;
 }
 
 absl::StatusOr<InternedStringPtr> VectorBase::GetKeyDuringSearch(
@@ -219,8 +250,8 @@ absl::StatusOr<InternedStringPtr> VectorBase::GetKeyDuringSearch(
 
 absl::StatusOr<bool> VectorBase::ModifyRecord(const InternedStringPtr &key,
                                               absl::string_view record) {
-  // VectorExternalizer tracks added entries. We need to untrack mutations which
-  // are processed as modified records.
+  // VectorExternalizer tracks added entries. We need to untrack mutations
+  // which are processed as modified records.
   std::optional<float> magnitude;
   auto interned_vector = InternVector(record, magnitude);
   if (!interned_vector) {
@@ -228,23 +259,46 @@ absl::StatusOr<bool> VectorBase::ModifyRecord(const InternedStringPtr &key,
         RemoveRecord(key, indexes::DeletionType::kRecord);
     return false;
   }
-  VMSDK_ASSIGN_OR_RETURN(auto internal_id, GetInternalId(key));
-  VMSDK_ASSIGN_OR_RETURN(
-      bool res, UpdateMetadata(key, magnitude.value_or(kDefaultMagnitude),
-                               interned_vector));
-  if (!res) {
-    return false;
+  // Fetch the existing internal_id from the slot. Also acquire a writer lock
+  // on key_to_metadata_mutex_ so the magnitude update and TrackVector are
+  // serialized against concurrent removes.
+  KeyAttrValue *kav = schema_->FindKAV(key);
+  if (kav == nullptr || !IsOccupied(kav->slots[pos_])) {
+    return absl::NotFoundError(
+        absl::StrCat("Key not tracked in vector index: ", key->Str()));
   }
-
+  uint64_t internal_id;
+  std::memcpy(&internal_id,
+              kav->slots[pos_].storage + offsetof(VectorSlot, internal_id),
+              sizeof(internal_id));
+  const float new_magnitude = magnitude.value_or(kDefaultMagnitude);
+  {
+    absl::WriterMutexLock lock(&key_to_metadata_mutex_);
+    if (IsVectorMatch(internal_id, interned_vector)) {
+      // Same vector — rewrite the magnitude in the slot, no algorithm update.
+      std::memcpy(kav->slots[pos_].storage + offsetof(VectorSlot, magnitude),
+                  &new_magnitude, sizeof(new_magnitude));
+      return false;
+    }
+    TrackVector(internal_id, interned_vector);
+    std::memcpy(kav->slots[pos_].storage + offsetof(VectorSlot, magnitude),
+                &new_magnitude, sizeof(new_magnitude));
+  }
+  if (auto base = reinterpret_cast<SlotBase *>(kav->slots[pos_].storage);
+      base->user_data_len != record.size()) {
+    ResizeSlot(key, record.size());
+  }
   auto modify_result = ModifyRecordImpl(internal_id, interned_vector->Str());
   if (!modify_result.ok()) {
-    auto untrack_result = UnTrackKey(key);
-    if (!untrack_result.ok()) {
-      VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
-          << "While processing error for ModifyRecord, encountered error "
-             "in UntrackKey: "
-          << untrack_result.status().message();
+    // Roll back: delete the key entirely (matches the previous behavior of
+    // UnTrackKey on ModifyRecord failure).
+    {
+      absl::WriterMutexLock lock(&key_to_metadata_mutex_);
+      key_by_internal_id_.erase(internal_id);
+      UnTrackVector(internal_id);
     }
+    VacateSlot(key, /*relink=*/false);
+    return modify_result;
   }
   return true;
 }
@@ -272,18 +326,26 @@ absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply(
 
 absl::StatusOr<std::vector<char>> VectorBase::GetValue(
     const InternedStringPtr &key) const {
-  auto it = tracked_metadata_by_key_.find(key);
-  if (it == tracked_metadata_by_key_.end()) {
+  KeyAttrValue *kav = schema_->FindKAV(key);
+  if (kav == nullptr || !IsOccupied(kav->slots[pos_])) {
     return absl::NotFoundError("Record was not found");
   }
+  uint64_t internal_id;
+  float magnitude;
+  std::memcpy(&internal_id,
+              kav->slots[pos_].storage + offsetof(VectorSlot, internal_id),
+              sizeof(internal_id));
+  std::memcpy(&magnitude,
+              kav->slots[pos_].storage + offsetof(VectorSlot, magnitude),
+              sizeof(magnitude));
   std::vector<char> result;
-  char *value = GetValueImpl(it->second.internal_id);
+  char *value = GetValueImpl(internal_id);
   if (normalize_) {
-    if (it->second.magnitude < 0) {
+    if (magnitude < 0) {
       return absl::InternalError("Magnitude is not initialized");
     }
     result = DenormalizeVector(absl::string_view(value, GetVectorDataSize()),
-                               GetDataTypeSize(), it->second.magnitude);
+                               GetDataTypeSize(), magnitude);
   } else {
     result.assign(value, value + GetVectorDataSize());
   }
@@ -291,37 +353,65 @@ absl::StatusOr<std::vector<char>> VectorBase::GetValue(
 }
 
 absl::StatusOr<bool> VectorBase::RemoveRecord(
-    const InternedStringPtr &key,
-    [[maybe_unused]] indexes::DeletionType deletion_type) {
-  VMSDK_ASSIGN_OR_RETURN(auto res, UnTrackKey(key));
-  if (!res.has_value()) {
+    const InternedStringPtr &key, indexes::DeletionType deletion_type) {
+  if (key->Str().empty()) {
     return false;
   }
-  VMSDK_RETURN_IF_ERROR(RemoveRecordImpl(res.value()));
-  return true;
+  KeyAttrValue *kav = schema_->FindKAV(key);
+  if (kav == nullptr) {
+    return false;
+  }
+  Slot &slot = kav->slots[pos_];
+  if (IsOccupied(slot)) {
+    uint64_t internal_id;
+    std::memcpy(&internal_id, slot.storage + offsetof(VectorSlot, internal_id),
+                sizeof(internal_id));
+    {
+      absl::WriterMutexLock lock(&key_to_metadata_mutex_);
+      key_by_internal_id_.erase(internal_id);
+      UnTrackVector(internal_id);
+    }
+    VacateSlot(key, /*relink=*/deletion_type != DeletionType::kRecord);
+    VMSDK_RETURN_IF_ERROR(RemoveRecordImpl(internal_id));
+    return true;
+  }
+  // Slot already empty. Mirror the link/unlink semantics used by the other
+  // indexes so kNone-on-empty links the key into the missing list (covers
+  // brand-new-key first-notification with no vector value).
+  if (deletion_type == DeletionType::kRecord) {
+    if (schema_->IsLinked(pos_, key)) {
+      schema_->UnlinkMissing(pos_, key);
+    }
+  } else {
+    if (!schema_->IsLinked(pos_, key)) {
+      schema_->LinkMissing(pos_, key);
+    }
+  }
+  return false;
 }
 
-absl::StatusOr<std::optional<uint64_t>> VectorBase::UnTrackKey(
-    const InternedStringPtr &key) {
-  if (key->Str().empty()) {
-    return std::nullopt;
+void VectorBase::DestructTyped(const InternedStringPtr &key, VectorSlot &slot) {
+  // Safety-net path (DestroyKeyAttrValue found an occupied slot at whole-key
+  // delete time). Tear down the algorithm-side state; the caller overwrites
+  // the slot bytes with a fresh Missing.
+  uint64_t internal_id;
+  std::memcpy(&internal_id,
+              reinterpret_cast<std::byte *>(&slot) +
+                  offsetof(VectorSlot, internal_id),
+              sizeof(internal_id));
+  {
+    absl::WriterMutexLock lock(&key_to_metadata_mutex_);
+    key_by_internal_id_.erase(internal_id);
+    UnTrackVector(internal_id);
   }
-  absl::WriterMutexLock lock(&key_to_metadata_mutex_);
-  auto it = tracked_metadata_by_key_.find(key);
-  if (it == tracked_metadata_by_key_.end()) {
-    return std::nullopt;
+  // Best-effort remove from the algorithm — DestroyKeyAttrValue should not
+  // be called while the algorithm has an active query, so this is safe.
+  auto status = RemoveRecordImpl(internal_id);
+  if (!status.ok()) {
+    VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
+        << "DestructTyped: RemoveRecordImpl failed for " << key->Str() << ": "
+        << status.message();
   }
-  auto id = it->second.internal_id;
-  UnTrackVector(id);
-  tracked_metadata_by_key_.erase(it);
-  auto key_by_internal_id_it = key_by_internal_id_.find(id);
-  if (key_by_internal_id_it == key_by_internal_id_.end()) {
-    return absl::InvalidArgumentError(
-        "Error while untracking key - key was not found in key_by_internal_id_ "
-        "but in internal_by_key_");
-  }
-  key_by_internal_id_.erase(key_by_internal_id_it);
-  return id;
 }
 
 char *VectorBase::TrackVector(uint64_t internal_id, char *vector, size_t len) {
@@ -329,52 +419,6 @@ char *VectorBase::TrackVector(uint64_t internal_id, char *vector, size_t len) {
       absl::string_view(vector, len), vector_allocator_.get());
   TrackVector(internal_id, interned_vector);
   return (char *)interned_vector->Str().data();
-}
-
-absl::StatusOr<uint64_t> VectorBase::TrackKey(const InternedStringPtr &key,
-                                              float magnitude,
-                                              const InternedStringPtr &vector) {
-  if (key->Str().empty()) {
-    return absl::InvalidArgumentError("key can't be empty");
-  }
-  absl::WriterMutexLock lock(&key_to_metadata_mutex_);
-  auto id = inc_id_++;
-  auto [_, succ] = tracked_metadata_by_key_.insert(
-      {key, {.internal_id = id, .magnitude = magnitude}});
-
-  if (!succ) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Embedding id already exists: ", key->Str()));
-  }
-  TrackVector(id, vector);
-  key_by_internal_id_.insert({id, key});
-  return id;
-}
-// Return an error if the key is empty or not being tracked.
-// Return false if the tracked vector matches the input vector.
-// Otherwise, track the new vector and return true.
-absl::StatusOr<bool> VectorBase::UpdateMetadata(
-    const InternedStringPtr &key, float magnitude,
-    const InternedStringPtr &vector) {
-  if (key->Str().empty()) {
-    return absl::InvalidArgumentError("key can't be empty");
-  }
-  uint64_t internal_id;
-  {
-    absl::WriterMutexLock lock(&key_to_metadata_mutex_);
-    auto it = tracked_metadata_by_key_.find(key);
-    if (it == tracked_metadata_by_key_.end()) {
-      return absl::InvalidArgumentError(
-          absl::StrCat("Embedding id not found: ", key->Str()));
-    }
-    it->second.magnitude = magnitude;
-    internal_id = it->second.internal_id;
-  }
-  if (IsVectorMatch(internal_id, vector)) {
-    return false;
-  }
-  TrackVector(internal_id, vector);
-  return true;
 }
 
 int VectorBase::RespondWithInfo(ValkeyModuleCtx *ctx) const {
@@ -391,11 +435,8 @@ int VectorBase::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(
       ctx, LookupKeyByValue(*kDistanceMetricByStr, distance_metric_).data());
   ValkeyModule_ReplyWithSimpleString(ctx, "size");
-  {
-    absl::MutexLock lock(&key_to_metadata_mutex_);
-    ValkeyModule_ReplyWithCString(
-        ctx, std::to_string(key_by_internal_id_.size()).c_str());
-  }
+  ValkeyModule_ReplyWithCString(
+      ctx, std::to_string(schema_->OccupiedCount(pos_)).c_str());
   int array_len = 8;
   array_len += RespondWithInfoImpl(ctx);
   ValkeyModule_ReplySetArrayLength(ctx, array_len);
@@ -410,18 +451,40 @@ absl::Status VectorBase::SaveIndex(RDBChunkOutputStream chunked_out) const {
 
 absl::Status VectorBase::SaveTrackedKeys(
     RDBChunkOutputStream chunked_out) const {
-  absl::ReaderMutexLock lock(&key_to_metadata_mutex_);
-  for (const auto &[key, metadata] : tracked_metadata_by_key_) {
-    data_model::TrackedKeyMetadata metadata_pb;
-    metadata_pb.set_key(key->Str());
-    metadata_pb.set_internal_id(metadata.internal_id);
-    metadata_pb.set_magnitude(metadata.magnitude);
-    auto metadata_pb_str = metadata_pb.SerializeAsString();
-    VMSDK_RETURN_IF_ERROR(
-        chunked_out.SaveChunk(metadata_pb_str.data(), metadata_pb_str.size()))
-        << "Error saving key_by_internal_id_ entry";
+  // No schema bound → no keys to save (e.g. an empty index saved before
+  // being attached to a schema, as some tests do).
+  if (schema_ == nullptr) {
+    return absl::OkStatus();
   }
-  return absl::OkStatus();
+  // Walk every key in the schema; the ones with an occupied slot at this
+  // index's pos belong to this vector index. Each slot carries the
+  // internal_id and magnitude we need for the proto.
+  absl::ReaderMutexLock lock(&key_to_metadata_mutex_);
+  return schema_->ForEachKey(
+      [&](const InternedStringPtr &key, const KeyAttrValue &kav)
+          -> absl::Status {
+        const Slot &slot = kav.slots[pos_];
+        if (!IsOccupied(slot)) {
+          return absl::OkStatus();
+        }
+        uint64_t internal_id;
+        float magnitude;
+        std::memcpy(&internal_id,
+                    slot.storage + offsetof(VectorSlot, internal_id),
+                    sizeof(internal_id));
+        std::memcpy(&magnitude,
+                    slot.storage + offsetof(VectorSlot, magnitude),
+                    sizeof(magnitude));
+        data_model::TrackedKeyMetadata metadata_pb;
+        metadata_pb.set_key(key->Str());
+        metadata_pb.set_internal_id(internal_id);
+        metadata_pb.set_magnitude(magnitude);
+        auto metadata_pb_str = metadata_pb.SerializeAsString();
+        VMSDK_RETURN_IF_ERROR(chunked_out.SaveChunk(metadata_pb_str.data(),
+                                                    metadata_pb_str.size()))
+            << "Error saving key_by_internal_id_ entry";
+        return absl::OkStatus();
+      });
 }
 
 void VectorBase::ExternalizeVector(ValkeyModuleCtx *ctx,
@@ -462,12 +525,19 @@ absl::Status VectorBase::LoadTrackedKeys(
       return absl::InvalidArgumentError("Error parsing metadata from proto");
     }
     auto interned_key = StringInternStore::Intern(tracked_key_metadata.key());
-    tracked_metadata_by_key_.insert(
-        {interned_key,
-         {.internal_id = tracked_key_metadata.internal_id(),
-          .magnitude = tracked_key_metadata.magnitude()}});
-    key_by_internal_id_.insert(
-        {tracked_key_metadata.internal_id(), interned_key});
+    const uint64_t internal_id = tracked_key_metadata.internal_id();
+    const float magnitude = tracked_key_metadata.magnitude();
+    key_by_internal_id_.insert({internal_id, interned_key});
+    // Populate this key's KAV slot for this index's pos. OccupySlot handles
+    // EnsureKeyAttrValue + slot bookkeeping; the placement-new below writes
+    // the {internal_id, magnitude} payload.
+    std::byte *storage =
+        OccupySlot(interned_key, /*data_len=*/GetVectorDataSize());
+    new (storage) VectorSlot{
+        {/*occupied=*/1u,
+         /*user_data_len=*/static_cast<uint32_t>(GetVectorDataSize())},
+        internal_id,
+        magnitude};
     ExternalizeVector(ctx, attribute_data_type, tracked_key_metadata.key(),
                       attribute_identifier_);
   }
@@ -478,7 +548,6 @@ absl::Status VectorBase::LoadTrackedKeys(
 }
 
 std::unique_ptr<data_model::Index> VectorBase::ToProto() const {
-  absl::ReaderMutexLock lock(&key_to_metadata_mutex_);
   auto index_proto = std::make_unique<data_model::Index>();
   auto vector_index = std::make_unique<data_model::VectorIndex>();
   vector_index->set_normalize(normalize_);
@@ -546,35 +615,48 @@ vmsdk::UniqueValkeyString VectorBase::NormalizeStringRecord(
 }
 
 size_t VectorBase::GetTrackedKeyCount() const {
-  absl::ReaderMutexLock lock(&key_to_metadata_mutex_);
-  return key_by_internal_id_.size();
+  return schema_->OccupiedCount(pos_);
 }
 
-size_t VectorBase::GetUnTrackedKeyCount() const { return 0; }
+size_t VectorBase::GetUnTrackedKeyCount() const {
+  return schema_->MissingListAt(pos_).size;
+}
 
 bool VectorBase::IsTracked(const InternedStringPtr &key) const {
-  absl::ReaderMutexLock lock(&key_to_metadata_mutex_);
-  auto it = tracked_metadata_by_key_.find(key);
-  return (it != tracked_metadata_by_key_.end());
+  const KeyAttrValue *kav = schema_->FindKAV(key);
+  return kav != nullptr && IsOccupied(kav->slots[pos_]);
 }
 
 bool VectorBase::IsUnTracked(const InternedStringPtr &key) const {
-  return false;
+  const KeyAttrValue *kav = schema_->FindKAV(key);
+  return kav != nullptr && !IsOccupied(kav->slots[pos_]);
 }
 
-void VectorBase::UnTrack(const InternedStringPtr &key) {}
+void VectorBase::UnTrack(const InternedStringPtr &key) {
+  const KeyAttrValue *kav = schema_->FindKAV(key);
+  CHECK(kav != nullptr);
+  CHECK(!IsOccupied(kav->slots[pos_]));
+  if (!schema_->IsLinked(pos_, key)) {
+    schema_->LinkMissing(pos_, key);
+  }
+}
 
 absl::Status VectorBase::ForEachTrackedKey(
     absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const {
-  absl::MutexLock lock(&key_to_metadata_mutex_);
-  for (const auto &[key, _] : tracked_metadata_by_key_) {
-    VMSDK_RETURN_IF_ERROR(fn(key));
-  }
-  return absl::OkStatus();
+  return schema_->ForEachKey(
+      [&](const InternedStringPtr &key, const KeyAttrValue &kav) {
+        if (IsOccupied(kav.slots[pos_])) {
+          return fn(key);
+        }
+        return absl::OkStatus();
+      });
 }
 
 absl::Status VectorBase::ForEachUnTrackedKey(
     absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const {
+  for (auto it = MissingListBegin(schema_, pos_); !it.Done(); it.Next()) {
+    VMSDK_RETURN_IF_ERROR(fn(it.Key()));
+  }
   return absl::OkStatus();
 }
 

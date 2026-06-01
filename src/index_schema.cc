@@ -503,19 +503,51 @@ absl::StatusOr<vmsdk::UniqueValkeyString> IndexSchema::DefaultReplyScoreAs(
 absl::Status IndexSchema::AddIndex(absl::string_view attribute_alias,
                                    absl::string_view identifier,
                                    std::shared_ptr<indexes::IndexBase> index) {
-  // Mutates schema-level state (missing_lists_, occupied_count_); also reads
-  // index_key_info_ for the AddIndex-after-AddRecord invariant CHECK.
+  // Mutates schema-level state (missing_lists_, occupied_count_) plus,
+  // when KAVs already exist, the slot arrays of every KAV (we grow each
+  // KAV by one slot so the new attribute's pos is in-range).
   absl::MutexLock lock(&schema_mutex_);
-  // Each KeyAttrValue is sized to the schema's attribute count at the moment
-  // of its construction (via EnsureKeyAttrValue). Growing the attribute count
-  // after a KAV exists leaves earlier KAVs short by a slot, and any later
-  // access to the new attribute's slot reads off the end of the buffer.
-  // FT.CREATE registers every attribute before ingestion begins, so this
-  // invariant holds in production; this CHECK guards against test fixtures
-  // or future ALTER paths that violate the order.
-  CHECK(index_key_info_.empty())
-      << "AddIndex called after KeyAttrValues exist — register every "
-         "attribute before adding records (alias=" << attribute_alias << ")";
+  // Grow every existing KeyAttrValue by one slot. Each KAV is sized to the
+  // schema's attribute count at the moment of its construction; if a later
+  // AddIndex pushed the count up without growing existing KAVs, every
+  // access at the new attribute's pos would read past the buffer. In
+  // production this never matters (FT.CREATE registers every attribute
+  // before ingestion), but RDB load interleaves AddIndex with
+  // LoadTrackedKeys per attribute, and future FT.ALTER paths would also
+  // need this. The grow: allocate a new KAV with N+1 slots, move-construct
+  // empty Missing slots (so InternedStringPtr refcounts transfer) and
+  // memcpy occupied slots (POD payload), then placement-new an empty
+  // Missing into the new tail slot.
+  if (!index_key_info_.empty()) {
+    const uint16_t old_num_slots =
+        static_cast<uint16_t>(missing_lists_.size());
+    const uint16_t new_num_slots = old_num_slots + 1;
+    for (auto &entry : index_key_info_) {
+      indexes::KeyAttrValue *old_kav = entry.second.get();
+      indexes::KeyAttrValue *new_kav =
+          indexes::KeyAttrValue::Allocate(new_num_slots);
+      new_kav->seq = old_kav->seq;
+      new_kav->document_score = old_kav->document_score;
+      new_kav->reserved = old_kav->reserved;
+      for (uint16_t i = 0; i < old_num_slots; ++i) {
+        indexes::Slot &old_slot = old_kav->slots[i];
+        indexes::Slot &new_slot = new_kav->slots[i];
+        if (indexes::IsOccupied(old_slot)) {
+          // Occupied slot payload is POD (NumericSlot/TagSlot/TextSlot/
+          // VectorSlot — pointers and primitives only). Bit-copy is safe;
+          // ownership of any pointed-to heap state transfers to the new KAV.
+          std::memcpy(new_slot.storage, old_slot.storage, sizeof(indexes::Slot));
+        } else {
+          auto *old_missing =
+              reinterpret_cast<indexes::Missing *>(old_slot.storage);
+          new (new_slot.storage) indexes::Missing{std::move(*old_missing)};
+          old_missing->~Missing();
+        }
+      }
+      new (new_kav->slots[old_num_slots].storage) indexes::Missing{};
+      entry.second.reset(new_kav);
+    }
+  }
   auto [_, res] = attributes_.insert(
       {std::string(attribute_alias),
        Attribute{attribute_alias, identifier, index,
@@ -2228,7 +2260,13 @@ void IndexSchema::MarkAsDestructing() {
   // without calling Init() (no subscription registered) — emitting a
   // "subscription not found" warning would route through VMSDK_LOG and crash
   // if the mock Valkey module has already been torn down.
+  // Also verify that the singleton we captured at ctor is still the live
+  // KeyspaceEventManager — test fixtures can tear down the singleton
+  // (KeyspaceEventManager::InitInstance(nullptr)) before our destructor runs,
+  // leaving keyspace_event_manager_ dangling.
   if (keyspace_event_manager_ != nullptr &&
+      KeyspaceEventManager::HasInstance() &&
+      &KeyspaceEventManager::Instance() == keyspace_event_manager_ &&
       keyspace_event_manager_->HasSubscription(this)) {
     auto status = keyspace_event_manager_->RemoveSubscription(this);
     if (!status.ok()) {

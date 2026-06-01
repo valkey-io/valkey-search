@@ -1213,6 +1213,10 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
                             std::make_unique<HashAttributeDataType>(), nullptr)
                             .value();
 
+    // Register every index BEFORE any record-driven KAV is created.
+    // KeyAttrValues are sized to the schema's attribute count at the moment
+    // of their first EnsureKeyAttrValue call; growing the count afterward
+    // would leave earlier KAVs short by a slot (CHECK-failure in AddIndex).
     auto hnsw_index =
         indexes::VectorHNSW<float>::Create(
             CreateHNSWVectorIndexProto(dimensions, distance_metric, initial_cap,
@@ -1222,19 +1226,6 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
             .value();
     VMSDK_EXPECT_OK(index_schema->AddIndex("hnsw_attribute", "hnsw_identifier",
                                            hnsw_index));
-    auto itr = index_schema->attributes_.find("hnsw_attribute");
-
-    EXPECT_FALSE(itr == index_schema->attributes_.end());
-    auto vectors = DeterministicallyGenerateVectors(10, dimensions, 2);
-    for (size_t i = 0; i < vectors.size(); ++i) {
-      vmsdk::UniqueValkeyString data =
-          vmsdk::MakeUniqueValkeyString(absl::string_view(
-              (char *)&vectors[i][0], dimensions * sizeof(float)));
-      auto interned_key = StringInternStore::Intern("key" + std::to_string(i));
-      index_schema->ProcessAttributeMutation(&fake_ctx_, itr->second,
-                                             interned_key, std::move(data),
-                                             indexes::DeletionType::kNone);
-    }
 
     auto flat_index =
         indexes::VectorFlat<float>::Create(
@@ -1246,17 +1237,28 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
     VMSDK_EXPECT_OK(index_schema->AddIndex("flat_attribute", "flat_identifier",
                                            flat_index));
 
-    // Add numeric index
     auto numeric_index =
         std::make_shared<indexes::Numeric>(CreateNumericIndexProto());
     VMSDK_EXPECT_OK(index_schema->AddIndex(
         "numeric_attribute", "numeric_identifier", numeric_index));
 
-    // Add tag index
     auto tag_index =
         std::make_shared<indexes::Tag>(CreateTagIndexProto(",", false));
     VMSDK_EXPECT_OK(
         index_schema->AddIndex("tag_attribute", "tag_identifier", tag_index));
+
+    auto itr = index_schema->attributes_.find("hnsw_attribute");
+    EXPECT_FALSE(itr == index_schema->attributes_.end());
+    auto vectors = DeterministicallyGenerateVectors(10, dimensions, 2);
+    for (size_t i = 0; i < vectors.size(); ++i) {
+      vmsdk::UniqueValkeyString data =
+          vmsdk::MakeUniqueValkeyString(absl::string_view(
+              (char *)&vectors[i][0], dimensions * sizeof(float)));
+      auto interned_key = StringInternStore::Intern("key" + std::to_string(i));
+      index_schema->ProcessAttributeMutation(&fake_ctx_, itr->second,
+                                             interned_key, std::move(data),
+                                             indexes::DeletionType::kNone);
+    }
 
     VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream));
   }

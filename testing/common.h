@@ -68,6 +68,13 @@ void BindIndexToTestSchema(indexes::IndexBase* index,
 std::shared_ptr<MockIndexSchema> BindIndexToFreshTestSchema(
     indexes::IndexBase* index);
 
+// Same but the schema takes shared ownership of `index`. Use this when the
+// caller's shared_ptr to `index` may go out of scope before the test schema
+// (e.g. the vector tests' thread-local schema list); the schema keeps the
+// IndexBase alive so its destructor doesn't dereference a dangling pointer.
+std::shared_ptr<MockIndexSchema> BindOwnedIndexToFreshTestSchema(
+    std::shared_ptr<indexes::IndexBase> index);
+
 namespace internal {
 
 // Acquires the writer lock on the schema's time-sliced mutex and ensures a

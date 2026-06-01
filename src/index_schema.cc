@@ -2116,6 +2116,10 @@ absl::StatusOr<vmsdk::ValkeyVersion> IndexSchema::GetMinVersion(
     }
   }
   if (has_text_index) {
+    if (unpacked->language() != data_model::LANGUAGE_UNSPECIFIED &&
+        unpacked->language() != data_model::LANGUAGE_ENGLISH) {
+      return kRelease14;
+    }
     return kRelease12;
   } else if (unpacked->has_db_num() && unpacked->db_num() != 0) {
     return kRelease11;

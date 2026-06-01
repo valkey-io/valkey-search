@@ -3,10 +3,11 @@ set(SRCS_PATRICIA_TREE ${CMAKE_CURRENT_LIST_DIR}/patricia_tree.h)
 add_library(patricia_tree INTERFACE ${SRCS_PATRICIA_TREE})
 target_include_directories(patricia_tree INTERFACE ${CMAKE_CURRENT_LIST_DIR})
 
-set(SRCS_SEGMENT_TREE ${CMAKE_CURRENT_LIST_DIR}/segment_tree.h)
+set(SRCS_NUMERIC_BTREE ${CMAKE_CURRENT_LIST_DIR}/numeric_btree.h)
 
-add_library(segment_tree INTERFACE ${SRCS_SEGMENT_TREE})
-target_include_directories(segment_tree INTERFACE ${CMAKE_CURRENT_LIST_DIR})
+add_library(numeric_btree INTERFACE ${SRCS_NUMERIC_BTREE})
+target_include_directories(numeric_btree INTERFACE ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(numeric_btree INTERFACE string_interning)
 
 set(SRCS_STRING_INTERNING ${CMAKE_CURRENT_LIST_DIR}/string_interning.cc
                           ${CMAKE_CURRENT_LIST_DIR}/string_interning.h)

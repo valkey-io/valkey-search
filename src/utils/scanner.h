@@ -76,12 +76,12 @@ class Scanner {
       return kEOF;
     }
     Utf8Iterator it(sv_.substr(pos_));
-    auto [cp, byte_len] = it.Next();
-    pos_ += byte_len;
-    if (byte_len == 1 && !Utf8Iterator::IsAscii(cp)) {
+    it.Next();
+    pos_ += it.byte_len();
+    if (it.byte_len() == 1 && !Utf8Iterator::IsAscii(it.codepoint())) {
       invalid_utf_count_++;
     }
-    return cp;
+    return it.codepoint();
   }
 
   Char PeekUtf8() {

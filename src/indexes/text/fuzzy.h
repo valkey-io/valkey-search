@@ -37,8 +37,8 @@ struct FuzzySearch {
     absl::InlinedVector<uint32_t, 32> pattern_cps;
     {
       utils::Utf8Iterator it(pattern);
-      while (!it.Done()) {
-        pattern_cps.push_back(it.Next().codepoint);
+      while (it.Next()) {
+        pattern_cps.push_back(it.codepoint());
       }
     }
     size_t pattern_len = pattern_cps.size();
@@ -123,8 +123,9 @@ struct FuzzySearch {
         }
         utils::Utf8Iterator cp_it(
             absl::string_view(new_word.data() + edge_dp_byte_pos, need));
-        auto [tree_cp, tree_byte_len] = cp_it.Next();
-        edge_dp_byte_pos += tree_byte_len;
+        cp_it.Next();
+        uint32_t tree_cp = cp_it.codepoint();
+        edge_dp_byte_pos += cp_it.byte_len();
         ++edge_word_cp_count;
 
         // curr[0] = cost of deleting all code points of new_word so far.

@@ -533,12 +533,12 @@ absl::StatusOr<bool> FilterParser::HandleBackslashEscape(
   }
   if (!IsEnd()) {
     utils::Utf8Iterator cp_it(expression_.substr(pos_));
-    auto [cp, byte_len] = cp_it.Next();
-    if (cp == '\\' || lexer.IsPunctuation(cp)) {
+    cp_it.Next();
+    if (cp_it.codepoint() == '\\' || lexer.IsPunctuation(cp_it.codepoint())) {
       // If Double backslash, retain the double backslash
       // If Single backslash with punct on right, retain the char on right
-      processed_content.append(expression_.data() + pos_, byte_len);
-      pos_ += byte_len;
+      processed_content.append(expression_.data() + pos_, cp_it.byte_len());
+      pos_ += cp_it.byte_len();
       // Continue parsing the same token.
       return true;
     } else {
@@ -549,8 +549,8 @@ absl::StatusOr<bool> FilterParser::HandleBackslashEscape(
         return false;
       } else {
         // Backslash not punctuation → keep letter, continue
-        processed_content.append(expression_.data() + pos_, byte_len);
-        pos_ += byte_len;
+        processed_content.append(expression_.data() + pos_, cp_it.byte_len());
+        pos_ += cp_it.byte_len();
         return true;
       }
     }
@@ -580,12 +580,12 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
     }
     {
       utils::Utf8Iterator cp_it(expression_.substr(pos_));
-      auto [cp, byte_len] = cp_it.Next();
-      if (cp == '"') break;
-      if (cp == '\\') continue;  // Don't break on backslash
-      if (lexer.IsPunctuation(cp)) break;
-      processed_content.append(expression_.data() + pos_, byte_len);
-      pos_ += byte_len;
+      cp_it.Next();
+      if (cp_it.codepoint() == '"') break;
+      if (cp_it.codepoint() == '\\') continue;  // Don't break on backslash
+      if (lexer.IsPunctuation(cp_it.codepoint())) break;
+      processed_content.append(expression_.data() + pos_, cp_it.byte_len());
+      pos_ += cp_it.byte_len();
     }
   }
   if (processed_content.empty()) {
@@ -686,10 +686,10 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     if (ch == '\\') continue;  // Don't break on backslash
     {
       utils::Utf8Iterator cp_it(expression_.substr(pos_));
-      auto [cp, byte_len] = cp_it.Next();
-      if (lexer.IsPunctuation(cp)) break;
-      processed_content.append(expression_.data() + pos_, byte_len);
-      pos_ += byte_len;
+      cp_it.Next();
+      if (lexer.IsPunctuation(cp_it.codepoint())) break;
+      processed_content.append(expression_.data() + pos_, cp_it.byte_len());
+      pos_ += cp_it.byte_len();
     }
   }
   lexer.NormalizeLowerCaseInPlace(processed_content);

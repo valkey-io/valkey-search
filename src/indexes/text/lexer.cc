@@ -40,12 +40,11 @@ PunctuationSet BuildPunctuationSet(const std::string& punctuation) {
 
   // Iterate the user-supplied punctuation as code points, not bytes.
   utils::Utf8Iterator it(punctuation);
-  while (!it.Done()) {
-    auto [cp, byte_len] = it.Next();
-    if (utils::Utf8Iterator::IsAscii(cp)) {
-      result.ascii.set(cp);
+  while (it.Next()) {
+    if (utils::Utf8Iterator::IsAscii(it.codepoint())) {
+      result.ascii.set(it.codepoint());
     } else {
-      result.non_ascii.insert(cp);
+      result.non_ascii.insert(it.codepoint());
     }
   }
 
@@ -116,9 +115,9 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
         break;  // Let word-building handle escape
       }
       utils::Utf8Iterator peek_it(text.substr(pos));
-      auto [cp, byte_len] = peek_it.Next();
-      if (!IsPunctuation(cp)) break;
-      pos += byte_len;
+      peek_it.Next();
+      if (!IsPunctuation(peek_it.codepoint())) break;
+      pos += peek_it.byte_len();
     }
 
     word.clear();
@@ -130,28 +129,28 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
       if (text[pos] == '\\' && pos + 1 < text.size()) {
         pos++;  // Consume the backslash
         utils::Utf8Iterator esc_it(text.substr(pos));
-        auto [next_cp, next_byte_len] = esc_it.Next();
-        if (next_cp == '\\' || IsPunctuation(next_cp)) {
-          word.append(text.data() + pos, next_byte_len);
-          pos += next_byte_len;
+        esc_it.Next();
+        if (esc_it.codepoint() == '\\' || IsPunctuation(esc_it.codepoint())) {
+          word.append(text.data() + pos, esc_it.byte_len());
+          pos += esc_it.byte_len();
         } else {
           if (IsPunctuation('\\')) {
             break;
           } else {
-            word.append(text.data() + pos, next_byte_len);
-            pos += next_byte_len;
+            word.append(text.data() + pos, esc_it.byte_len());
+            pos += esc_it.byte_len();
           }
         }
         continue;
       }
 
       utils::Utf8Iterator cp_it(text.substr(pos));
-      auto [cp, byte_len] = cp_it.Next();
-      if (IsPunctuation(cp)) {
+      cp_it.Next();
+      if (IsPunctuation(cp_it.codepoint())) {
         break;
       }
-      word.append(text.data() + pos, byte_len);
-      pos += byte_len;
+      word.append(text.data() + pos, cp_it.byte_len());
+      pos += cp_it.byte_len();
     }
 
     if (!word.empty()) {

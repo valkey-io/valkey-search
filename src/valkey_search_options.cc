@@ -31,6 +31,7 @@
 #include "valkey_search.h"
 #include "vmsdk/src/concurrency.h"
 #include "vmsdk/src/module_config.h"
+#include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/thread_pool.h"
 
 namespace valkey_search {

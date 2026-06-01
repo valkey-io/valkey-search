@@ -343,13 +343,13 @@ TEST_F(Utf8IteratorTest, ByteFF_IsInvalid) {
   } while (0)
 
 TEST_F(Utf8IteratorTest, MixedAsciiAndTwoByte) {
-  // "café" = c a f 0xC3 0xA9
-  std::string s = "caf\xC3\xA9";
+  // "abc" + U+00E9 é — three ASCII bytes followed by a 2-byte code point
+  std::string s = "abc\xC3\xA9";
   auto v = DecodeWithLen(s);
   ASSERT_EQ(4u, v.size());
-  EXPECT_CP(v, 0, 'c', 1);
-  EXPECT_CP(v, 1, 'a', 1);
-  EXPECT_CP(v, 2, 'f', 1);
+  EXPECT_CP(v, 0, 'a', 1);
+  EXPECT_CP(v, 1, 'b', 1);
+  EXPECT_CP(v, 2, 'c', 1);
   EXPECT_CP(v, 3, 0x00E9u, 2);
 }
 

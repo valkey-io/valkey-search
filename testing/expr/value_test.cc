@@ -680,184 +680,6 @@ TEST_F(ValueTest, ArraySerializationTest) {
   EXPECT_TRUE(vec3.GetArrayElement(2)->IsBool());
 }
 
-// Array-specific function tests
-
-TEST_F(ValueTest, FuncArrayLen_ValidArray) {
-  Value vec = Value({Value(1.0), Value(2.0), Value(3.0)});
-  Value result = FuncArrayLen(vec);
-  EXPECT_TRUE(result.IsDouble());
-  EXPECT_EQ(result.GetDouble(), 3.0);
-}
-
-TEST_F(ValueTest, FuncArrayLen_EmptyArray) {
-  Value vec = Value(std::vector<Value>{});
-  Value result = FuncArrayLen(vec);
-  EXPECT_TRUE(result.IsDouble());
-  EXPECT_EQ(result.GetDouble(), 0.0);
-}
-
-TEST_F(ValueTest, FuncArrayLen_NotAArray) {
-  Value scalar = Value(42.0);
-  Value result = FuncArrayLen(scalar);
-  EXPECT_TRUE(result.IsNil());
-  EXPECT_EQ(result.GetNil().GetReason(), "arraylen: operand is not an array");
-}
-
-TEST_F(ValueTest, FuncArrayAt_ValidIndex) {
-  Value vec = Value({Value(10.0), Value(20.0), Value(30.0)});
-  Value result = FuncArrayAt(vec, Value(1.0));
-  EXPECT_TRUE(result.IsDouble());
-  EXPECT_EQ(result.GetDouble(), 20.0);
-}
-
-TEST_F(ValueTest, FuncArrayAt_FirstElement) {
-  Value vec = Value({Value("first"), Value("second"), Value("third")});
-  Value result = FuncArrayAt(vec, Value(0.0));
-  EXPECT_TRUE(result.IsString());
-  EXPECT_EQ(result.AsString(), "first");
-}
-
-TEST_F(ValueTest, FuncArrayAt_LastElement) {
-  Value vec = Value({Value(1.0), Value(2.0), Value(3.0)});
-  Value result = FuncArrayAt(vec, Value(2.0));
-  EXPECT_TRUE(result.IsDouble());
-  EXPECT_EQ(result.GetDouble(), 3.0);
-}
-
-TEST_F(ValueTest, FuncArrayAt_IndexOutOfBounds) {
-  Value vec = Value({Value(1.0), Value(2.0), Value(3.0)});
-  Value result = FuncArrayAt(vec, Value(10.0));
-  EXPECT_TRUE(result.IsNil());
-  std::string reason = result.GetNil().GetReason();
-  EXPECT_EQ(reason,
-            std::string("Index out of bounds: index 10, array length 3"));
-}
-
-TEST_F(ValueTest, FuncArrayAt_NegativeIndex) {
-  Value vec = Value({Value(1.0), Value(2.0), Value(3.0)});
-  Value result = FuncArrayAt(vec, Value(-1.0));
-  EXPECT_TRUE(result.IsNil());
-  std::string reason = result.GetNil().GetReason();
-  EXPECT_EQ(reason, "Index out of bounds: index -1, array length 3");
-}
-
-TEST_F(ValueTest, FuncArrayAt_NotAArray) {
-  Value scalar = Value(42.0);
-  Value result = FuncArrayAt(scalar, Value(0.0));
-  EXPECT_TRUE(result.IsNil());
-  EXPECT_EQ(result.GetNil().GetReason(),
-            "arrayat: first operand is not an array");
-}
-
-TEST_F(ValueTest, FuncArrayAt_InvalidIndex) {
-  Value vec = Value({Value(1.0), Value(2.0), Value(3.0)});
-  Value result = FuncArrayAt(vec, Value("not a number"));
-  EXPECT_TRUE(result.IsNil());
-  EXPECT_EQ(result.GetNil().GetReason(), "arrayat: index is not an integer");
-}
-
-TEST_F(ValueTest, FuncArrayAt_FractionalIndex) {
-  Value vec = Value({Value(1.0), Value(2.0), Value(3.0)});
-  Value result = FuncArrayAt(vec, Value(1.9));
-  EXPECT_TRUE(result.IsNil());
-  EXPECT_EQ(result.GetNil().GetReason(), "arrayat: index is not an integer");
-}
-
-TEST_F(ValueTest, FuncFlatten_FractionalDepth) {
-  Value vec = Value({Value({Value(1.0), Value(2.0)}), Value(3.0)});
-  Value result = FuncFlatten(vec, Value(0.5));
-  EXPECT_TRUE(result.IsNil());
-  EXPECT_EQ(result.GetNil().GetReason(), "flatten: depth is not an integer");
-}
-
-TEST_F(ValueTest, FuncIsArray_Array) {
-  Value vec = Value({Value(1.0), Value(2.0)});
-  Value result = FuncIsArray(vec);
-  EXPECT_TRUE(result.IsBool());
-  EXPECT_TRUE(result.GetBool());
-}
-
-TEST_F(ValueTest, FuncIsArray_EmptyArray) {
-  Value vec = Value(std::vector<Value>{});
-  Value result = FuncIsArray(vec);
-  EXPECT_TRUE(result.IsBool());
-  EXPECT_TRUE(result.GetBool());
-}
-
-TEST_F(ValueTest, FuncIsArray_Scalar) {
-  Value scalar = Value(42.0);
-  Value result = FuncIsArray(scalar);
-  EXPECT_TRUE(result.IsBool());
-  EXPECT_FALSE(result.GetBool());
-}
-
-TEST_F(ValueTest, FuncIsArray_String) {
-  Value str = Value("hello");
-  Value result = FuncIsArray(str);
-  EXPECT_TRUE(result.IsBool());
-  EXPECT_FALSE(result.GetBool());
-}
-
-TEST_F(ValueTest, FuncFlatten_SingleLevel) {
-  Value nested =
-      Value({Value({Value(1.0), Value(2.0)}), Value({Value(3.0), Value(4.0)})});
-  Value result = FuncFlatten(nested, Value(1.0));
-  EXPECT_TRUE(result.IsArray());
-  EXPECT_EQ(result.ArraySize(), 4);
-  EXPECT_EQ(result.GetArrayElement(0)->GetDouble(), 1.0);
-  EXPECT_EQ(result.GetArrayElement(1)->GetDouble(), 2.0);
-  EXPECT_EQ(result.GetArrayElement(2)->GetDouble(), 3.0);
-  EXPECT_EQ(result.GetArrayElement(3)->GetDouble(), 4.0);
-}
-
-TEST_F(ValueTest, FuncFlatten_MultiLevel) {
-  Value nested =
-      Value({Value({Value({Value(1.0), Value(2.0)}), Value(3.0)}), Value(4.0)});
-  Value result = FuncFlatten(nested, Value(2.0));
-  EXPECT_TRUE(result.IsArray());
-  EXPECT_EQ(result.ArraySize(), 4);
-  EXPECT_EQ(result.GetArrayElement(0)->GetDouble(), 1.0);
-  EXPECT_EQ(result.GetArrayElement(1)->GetDouble(), 2.0);
-  EXPECT_EQ(result.GetArrayElement(2)->GetDouble(), 3.0);
-  EXPECT_EQ(result.GetArrayElement(3)->GetDouble(), 4.0);
-}
-
-TEST_F(ValueTest, FuncFlatten_DepthZero) {
-  Value nested = Value({Value({Value(1.0), Value(2.0)}), Value(3.0)});
-  Value result = FuncFlatten(nested, Value(0.0));
-  EXPECT_TRUE(result.IsArray());
-  EXPECT_EQ(result.ArraySize(), 2);
-  EXPECT_TRUE(result.GetArrayElement(0)->IsArray());
-  EXPECT_EQ(result.GetArrayElement(1)->GetDouble(), 3.0);
-}
-
-TEST_F(ValueTest, FuncFlatten_MixedScalarsAndArrays) {
-  Value mixed =
-      Value({Value(1.0), Value({Value(2.0), Value(3.0)}), Value(4.0)});
-  Value result = FuncFlatten(mixed, Value(1.0));
-  EXPECT_TRUE(result.IsArray());
-  EXPECT_EQ(result.ArraySize(), 4);
-  EXPECT_EQ(result.GetArrayElement(0)->GetDouble(), 1.0);
-  EXPECT_EQ(result.GetArrayElement(1)->GetDouble(), 2.0);
-  EXPECT_EQ(result.GetArrayElement(2)->GetDouble(), 3.0);
-  EXPECT_EQ(result.GetArrayElement(3)->GetDouble(), 4.0);
-}
-
-TEST_F(ValueTest, FuncFlatten_NotAArray) {
-  Value scalar = Value(42.0);
-  Value result = FuncFlatten(scalar, Value(1.0));
-  EXPECT_TRUE(result.IsNil());
-  EXPECT_EQ(result.GetNil().GetReason(),
-            "flatten: first operand is not an array");
-}
-
-TEST_F(ValueTest, FuncFlatten_InvalidDepth) {
-  Value vec = Value({Value(1.0), Value(2.0)});
-  Value result = FuncFlatten(vec, Value("not a number"));
-  EXPECT_TRUE(result.IsNil());
-  EXPECT_EQ(result.GetNil().GetReason(), "flatten: depth is not an integer");
-}
-
 // Nested vector construction tests
 
 TEST_F(ValueTest, NestedArray_TwoLevels) {
@@ -1066,39 +888,24 @@ TEST_F(ValueTest, NestedArray_ElementAccess) {
   Value elem = row2.GetArrayElement(1).value();
   EXPECT_TRUE(elem.IsDouble());
   EXPECT_EQ(elem.GetDouble(), 5.0);
-
-  // Test FuncArrayAt on nested structure
-  Value row2_via_func = FuncArrayAt(nested, Value(1.0));
-  EXPECT_TRUE(row2_via_func.IsArray());
-  EXPECT_EQ(row2_via_func.ArraySize(), 3);
-
-  Value elem_via_func = FuncArrayAt(row2_via_func, Value(1.0));
-  EXPECT_TRUE(elem_via_func.IsDouble());
-  EXPECT_EQ(elem_via_func.GetDouble(), 5.0);
 }
 
 TEST_F(ValueTest, NestedArray_ArrayLenOnNestedStructure) {
-  // Test FuncArrayLen on nested vectors
+  // Test ArraySize on nested vectors
   // Create: [[1, 2], [3, 4, 5]]
   Value nested = Value({Value({Value(1.0), Value(2.0)}),
                         Value({Value(3.0), Value(4.0), Value(5.0)})});
 
   // Get length of outer vector
-  Value outer_len = FuncArrayLen(nested);
-  EXPECT_TRUE(outer_len.IsDouble());
-  EXPECT_EQ(outer_len.GetDouble(), 2.0);
+  EXPECT_EQ(nested.ArraySize(), 2);
 
   // Get length of first inner vector
   Value inner1 = nested.GetArrayElement(0).value();
-  Value inner1_len = FuncArrayLen(inner1);
-  EXPECT_TRUE(inner1_len.IsDouble());
-  EXPECT_EQ(inner1_len.GetDouble(), 2.0);
+  EXPECT_EQ(inner1.ArraySize(), 2);
 
   // Get length of second inner vector
   Value inner2 = nested.GetArrayElement(1).value();
-  Value inner2_len = FuncArrayLen(inner2);
-  EXPECT_TRUE(inner2_len.IsDouble());
-  EXPECT_EQ(inner2_len.GetDouble(), 3.0);
+  EXPECT_EQ(inner2.ArraySize(), 3);
 }
 
 TEST_F(ValueTest, NestedArray_MixedTypesRecursive) {

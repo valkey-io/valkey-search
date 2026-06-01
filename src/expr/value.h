@@ -207,12 +207,6 @@ Value FuncDayofyear(const Value& t);
 Value FuncYear(const Value& t);
 Value FuncMonthofyear(const Value& t);
 
-// Array-specific functions
-Value FuncArrayLen(const Value& vec);
-Value FuncArrayAt(const Value& vec, const Value& index);
-Value FuncIsArray(const Value& val);
-Value FuncFlatten(const Value& vec, const Value& depth);
-
 }  // namespace expr
 }  // namespace valkey_search
 

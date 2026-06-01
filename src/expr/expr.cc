@@ -220,11 +220,6 @@ static std::map<std::string, FunctionTableEntry> function_table{
 
     {"timefmt", {1, 2, &ProxyTimefmt}},
     {"parsetime", {1, 2, &ProxyParsetime}},
-
-    {"arraylen", {1, 1, &MonadicFunctionProxy<FuncArrayLen>}},
-    {"arrayat", {2, 2, &DyadicFunctionProxy<FuncArrayAt>}},
-    {"isarray", {1, 1, &MonadicFunctionProxy<FuncIsArray>}},
-    {"flatten", {2, 2, &DyadicFunctionProxy<FuncFlatten>}},
 };
 
 absl::StatusOr<Func> FunctionCall::LookUpAndValidate(

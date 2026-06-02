@@ -38,6 +38,13 @@ TEST_F(ConfigTest, registration) {
   vmsdk::config::Number number("number", 42, 0, 1024);
   vmsdk::config::Boolean boolean("boolean", true);
 
+  // Expect hide-user-data-from-log to be registered (it's auto-registered by
+  // the system)
+  EXPECT_CALL(*kMockValkeyModule,
+              RegisterBoolConfig(&fake_ctx, StrEq("hide-user-data-from-log"),
+                                 Eq(1), _, _, _, _, _))
+      .Times(testing::AtLeast(1));
+
   // 2 integer registration
   EXPECT_CALL(*kMockValkeyModule,
               RegisterNumericConfig(&fake_ctx, StrEq("number"), Eq(42), _,

@@ -7,6 +7,7 @@
 #include "src/indexes/text/lexer.h"
 
 #include <memory>
+#include <vector>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
@@ -83,15 +84,21 @@ Lexer::Lexer(data_model::Language language, const std::string& punctuation,
 
 absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
     absl::string_view text, bool stemming_enabled, uint32_t min_stem_size,
-    absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>*
-        stem_mappings) const {
+    InProgressStemMap* stem_mappings) const {
+  if (stemming_enabled) {
+    CHECK(stem_mappings) << "stem_mappings must not be null";
+  }
   if (!IsValidUtf8(text)) {
     return absl::InvalidArgumentError("Invalid UTF-8");
   }
 
   // Get or create the thread-local stemmer for this lexer's language
   sb_stemmer* stemmer = stemming_enabled ? GetStemmer() : nullptr;
+  // Deque grows by adding new blocks—avoids the cost of copying
+  // existing elements during reallocation.
   std::vector<std::string> tokens;
+  std::string word;
+  word.reserve(64);
   size_t pos = 0;
   while (pos < text.size()) {
     // Skip leading punctuation, but check for backslash escape sequences
@@ -103,8 +110,7 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
       pos++;
     }
 
-    size_t word_start = pos;
-    std::string word_buffer;
+    word.clear();
 
     // Build word, handling backslash escape sequences
     while (pos < text.size()) {
@@ -114,7 +120,7 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
         pos++;  // Consume the backslash
         if (next_ch == '\\' || IsPunctuation(next_ch)) {
           // Backslash escapes backslash or punctuation
-          word_buffer.push_back(text[pos++]);  // Keep the escaped character
+          word.push_back(text[pos++]);  // Keep the escaped character
         } else {
           // Backslash before non-punctuation
           if (IsPunctuation('\\')) {
@@ -123,7 +129,7 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
             break;
           } else {
             // Backslash not punctuation → keep letter
-            word_buffer.push_back(text[pos++]);
+            word.push_back(text[pos++]);
           }
         }
       } else if (IsPunctuation(ch)) {
@@ -131,26 +137,23 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
         break;
       } else {
         // Regular character
-        word_buffer.push_back(ch);
+        word.push_back(ch);
         pos++;
       }
     }
 
-    if (!word_buffer.empty()) {
-      std::string word = NormalizeLowerCase(word_buffer);
+    if (!word.empty()) {
+      NormalizeLowerCaseInPlace(word);
 
       if (IsStopWord(word)) {
         continue;  // Skip stop words
       }
 
       if (stemming_enabled) {
-        std::string stemmed_word = StemWord(word, stemmer, min_stem_size);
-        if (word != stemmed_word) {
-          CHECK(stem_mappings) << "stem_mappings must not be null";
-          (*stem_mappings)[stemmed_word].insert(word);
-        }
+        UpdateStemMap(word, stemmer, min_stem_size, *stem_mappings);
       }
       tokens.push_back(std::move(word));
+      word.clear();
     }
   }
 
@@ -170,26 +173,6 @@ sb_stemmer* Lexer::GetStemmer() const {
   return it->second.get();
 }
 
-std::string Lexer::StemWord(const std::string& word, sb_stemmer* stemmer,
-                            uint32_t min_stem_size) const {
-  if (word.empty() || word.length() < min_stem_size) {
-    return word;
-  }
-
-  CHECK(stemmer) << "Stemmer is not initialized";
-
-  const sb_symbol* stemmed = sb_stemmer_stem(
-      stemmer, reinterpret_cast<const sb_symbol*>(word.c_str()), word.length());
-
-  CHECK(stemmed) << "Stemming failed";
-
-  int stemmed_length = sb_stemmer_length(stemmer);
-  CHECK(stemmed_length > 0 && stemmed_length <= word.length())
-      << "Stemming failed";
-
-  return std::string(reinterpret_cast<const char*>(stemmed), stemmed_length);
-}
-
 // UTF-8 validation using Scanner
 bool Lexer::IsValidUtf8(absl::string_view text) const {
   valkey_search::utils::Scanner scanner(text);
@@ -207,9 +190,54 @@ bool Lexer::IsValidUtf8(absl::string_view text) const {
          scanner.GetPosition() == text.size();
 }
 
-std::string Lexer::NormalizeLowerCase(absl::string_view str) const {
-  return absl::c_all_of(str, absl::ascii_isascii)
-             ? absl::AsciiStrToLower(str)
-             : UnicodeNormalizer::CaseFold(str);
+void Lexer::NormalizeLowerCaseInPlace(std::string& str) const {
+  if (absl::c_all_of(str, absl::ascii_isascii)) {
+    absl::AsciiStrToLower(&str);
+  } else {
+    UnicodeNormalizer::CaseFoldInPlace(str);
+  }
+}
+
+std::string_view Lexer::DoStemming(absl::string_view word, sb_stemmer* stemmer,
+                                   uint32_t min_stem_size) const {
+  if (word.empty() || word.length() < min_stem_size) {
+    return word;
+  }
+  CHECK(stemmer) << "Stemmer is not initialized";
+  const sb_symbol* stemmed = sb_stemmer_stem(
+      stemmer, reinterpret_cast<const sb_symbol*>(word.data()), word.length());
+  CHECK(stemmed) << "Stemming failed";
+  int stemmed_length = sb_stemmer_length(stemmer);
+  CHECK(stemmed_length > 0) << "Stemming failed";
+  return std::string_view(reinterpret_cast<const char*>(stemmed),
+                          stemmed_length);
+}
+
+void Lexer::StemWordInPlace(std::string& word, sb_stemmer* stemmer,
+                            uint32_t min_stem_size) const {
+  std::string_view stemmed_view = DoStemming(word, stemmer, min_stem_size);
+  if (stemmed_view != word) {
+    word.assign(stemmed_view);
+  }
+}
+
+void Lexer::UpdateStemMap(absl::string_view original_word, sb_stemmer* stemmer,
+                          uint32_t min_stem_size,
+                          InProgressStemMap& stem_mappings) const {
+  std::string_view stemmed_view =
+      DoStemming(original_word, stemmer, min_stem_size);
+  if (stemmed_view != original_word) {
+    auto it = stem_mappings.find(stemmed_view);
+    if (it == stem_mappings.end()) {
+      // New Stem Root: create a new map entry
+      it = stem_mappings.try_emplace(std::string(stemmed_view)).first;
+    }
+    // Add original word to the list of variants for this stem root
+    auto& variants = it->second;
+    if (std::find(variants.begin(), variants.end(), original_word) ==
+        variants.end()) {
+      variants.emplace_back(original_word);
+    }
+  }
 }
 }  // namespace valkey_search::indexes::text

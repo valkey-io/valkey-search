@@ -8,7 +8,6 @@
 #ifndef VALKEYSEARCH_SRC_INDEXES_NUMERIC_H_
 #define VALKEYSEARCH_SRC_INDEXES_NUMERIC_H_
 #include <cstddef>
-#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -105,6 +104,9 @@ class Numeric : public IndexBase {
       ABSL_LOCKS_EXCLUDED(index_mutex_);
   bool IsUnTracked(const InternedStringPtr& key) const override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
+  void UnTrack(const InternedStringPtr& key) override
+      ABSL_LOCKS_EXCLUDED(index_mutex_);
+
   absl::Status ForEachTrackedKey(
       absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
       const override ABSL_LOCKS_EXCLUDED(index_mutex_);
@@ -113,6 +115,8 @@ class Numeric : public IndexBase {
       const override ABSL_LOCKS_EXCLUDED(index_mutex_);
 
   std::unique_ptr<data_model::Index> ToProto() const override;
+
+  uint32_t GetMutationWeight() const override;
 
   const double* GetValue(const InternedStringPtr& key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;

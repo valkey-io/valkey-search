@@ -9,6 +9,7 @@
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "debug.h"
 #include "ft_search_parser.h"
 #include "src/commands/commands.h"
 #include "src/commands/ft_aggregate_exec.h"
@@ -21,6 +22,8 @@
 namespace valkey_search {
 namespace aggregate {
 
+CONTROLLED_BOOLEAN(ForceTimeoutAggregate, false);
+TEST_COUNTER(ForceTimeoutAggregateCancels);
 DEV_INTEGER_COUNTER(agg_stats, agg_input_records);
 DEV_INTEGER_COUNTER(agg_stats, agg_output_records);
 
@@ -109,8 +112,10 @@ absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator &itr) {
     return absl::InvalidArgumentError("Only Dialects 2, 3 and 4 are supported");
   }
 
-  limit.number = std::numeric_limits<uint64_t>::max();  // Override default of
-                                                        // 10 from search
+  // Set limit parameters based on GetSerializationRange logic
+  auto range = GetSerializationRange();
+  limit.first_index = range.start_index;
+  limit.number = range.end_index - range.start_index;
 
   VMSDK_RETURN_IF_ERROR(PostParseQueryString());
   VMSDK_RETURN_IF_ERROR(VerifyQueryString(*this));
@@ -174,37 +179,25 @@ absl::StatusOr<std::pair<size_t, size_t>> ProcessNeighborsForProcessing(
     AggregateParameters &parameters) {
   size_t key_index = 0, scores_index = 0;
 
-  if (parameters.IsVectorQuery()) {
-    auto vector_identifier =
-        parameters.index_schema->GetIdentifier(parameters.attribute_alias);
-    if (!vector_identifier.ok()) {
-      ++Metrics::GetStats().query_failed_requests_cnt;
-      return vector_identifier.status();
-    }
+  std::optional<std::string> vector_identifier;
 
-    query::ProcessNeighborsForReply(
-        ctx, parameters.index_schema->GetAttributeDataType(), neighbors,
-        parameters, vector_identifier.value());
-
-    if (parameters.load_key) {
-      key_index = parameters.AddRecordAttribute("__key", "__key",
-                                                indexes::IndexerType::kNone);
-    }
-    if (parameters.IsVectorQuery()) {
-      auto score_sv = vmsdk::ToStringView(parameters.score_as.get());
-      scores_index = parameters.AddRecordAttribute(score_sv, score_sv,
-                                                   indexes::IndexerType::kNone);
-    }
-  } else {
-    query::ProcessNeighborsForReply(
-        ctx, parameters.index_schema->GetAttributeDataType(), neighbors,
-        parameters, std::nullopt);
-
-    if (parameters.load_key) {
-      key_index = parameters.AddRecordAttribute("__key", "__key",
-                                                indexes::IndexerType::kNone);
-    }
+  if (parameters.load_key) {
+    key_index = parameters.AddRecordAttribute("__key", "__key",
+                                              indexes::IndexerType::kNone);
   }
+  if (parameters.IsVectorQuery()) {
+    VMSDK_ASSIGN_OR_RETURN(
+        vector_identifier,
+        parameters.index_schema->GetIdentifier(parameters.attribute_alias));
+
+    auto score_sv = vmsdk::ToStringView(parameters.score_as.get());
+    scores_index = parameters.AddRecordAttribute(score_sv, score_sv,
+                                                 indexes::IndexerType::kNone);
+  }
+
+  query::ProcessNeighborsForReply(
+      ctx, parameters.index_schema->GetAttributeDataType(), neighbors,
+      parameters, vector_identifier);
 
   return std::make_pair(key_index, scores_index);
 }
@@ -319,7 +312,14 @@ absl::Status ExecuteAggregationStages(AggregateParameters &parameters,
                                       RecordSet &records) {
   agg_input_records.Increment(records.size());
   for (auto &stage : parameters.stages_) {
-    // Todo Check for timeout
+    // Check for timeout
+    if (parameters.cancellation_token->IsCancelled() ||
+        // Testing purpose only
+        ForceTimeoutAggregate.GetValue()) {
+      ForceTimeoutAggregateCancels.Increment(1);
+      return absl::CancelledError(
+          "Aggregate operation cancelled due to timeout");
+    }
     VMSDK_RETURN_IF_ERROR(stage->Execute(records));
   }
   agg_output_records.Increment(records.size());
@@ -388,16 +388,25 @@ absl::Status SendReplyInner(ValkeyModuleCtx *ctx,
   return absl::OkStatus();
 }
 
-// TODO: Implement the correct logic to detect if the FT.AGGREGATE query has a
-// clause (e.g. sorting) that requires all neighbors to be returned for the
-// correct search result.
+// Returns whether the entire search results are needed to be able to form the
+// aggregated response.
 bool AggregateParameters::RequiresCompleteResults() const {
+  return GetSerializationRange() == query::SerializationRange::All();
+}
+
+// Determine the serialization range required based on the stages in the
+// aggregation. This is only used in construction of the aggregate command to
+// set limit params. These params will be used later on in the SearchResult.
+query::SerializationRange AggregateParameters::GetSerializationRange() const {
   for (const auto &stage : stages_) {
-    if (dynamic_cast<const SortBy *>(stage.get()) != nullptr) {
-      return true;
+    auto stage_range = stage->GetSerializationRange();
+    // Use the first limit.
+    if (stage_range) {
+      return *stage_range;
     }
   }
-  return false;
+  // Fallback to no limit
+  return query::SerializationRange::All();
 }
 
 void AggregateParameters::SendReply(ValkeyModuleCtx *ctx,

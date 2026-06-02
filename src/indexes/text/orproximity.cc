@@ -4,13 +4,11 @@ namespace valkey_search::indexes::text {
 
 OrProximityIterator::OrProximityIterator(
     absl::InlinedVector<std::unique_ptr<TextIterator>,
-                        kProximityTermsInlineCapacity>&& iters,
-    const InternedStringSet* untracked_keys)
+                        kProximityTermsInlineCapacity>&& iters)
     : iters_(std::move(iters)),
       current_key_(),
       current_position_(std::nullopt),
       current_field_mask_(0ULL),
-      untracked_keys_(untracked_keys),
       key_set_(),
       current_key_indices_(),
       pos_set_(),

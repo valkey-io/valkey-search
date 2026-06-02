@@ -25,6 +25,8 @@
 
 namespace valkey_search::coordinator {
 
+struct RemoteResponderSearch;
+
 class Service final : public Coordinator::CallbackService {
  public:
   Service(vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx,
@@ -62,17 +64,11 @@ class Service final : public Coordinator::CallbackService {
       const IndexFingerprintVersion& expected_fingerprint_version,
       const std::shared_ptr<IndexSchema>& schema);
 
-  query::SearchResponseCallback MakeSearchCallback(
-      SearchIndexPartitionResponse* response, grpc::ServerUnaryReactor* reactor,
-      std::unique_ptr<vmsdk::StopWatch> latency_sample,
-      std::optional<query::SortByParameter> sortby_parameter = std::nullopt);
-
   void EnqueueSearchRequest(
-      std::unique_ptr<query::SearchParameters> vector_search_parameters,
+      std::unique_ptr<RemoteResponderSearch> vector_search_parameters,
       vmsdk::ThreadPool* reader_thread_pool, ValkeyModuleCtx* detached_ctx,
       SearchIndexPartitionResponse* response, grpc::ServerUnaryReactor* reactor,
-      std::unique_ptr<vmsdk::StopWatch> latency_sample,
-      std::optional<query::SortByParameter> sortby_parameter = std::nullopt);
+      std::unique_ptr<vmsdk::StopWatch> latency_sample);
 
   vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx_;
   vmsdk::ThreadPool* reader_thread_pool_;

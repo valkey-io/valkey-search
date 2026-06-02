@@ -27,9 +27,7 @@ absl::Status HandleInternalUpdateFailure(
 
   VMSDK_LOG(WARNING, ctx) << "CRITICAL: " << operation_type
                           << " failed in FT.INTERNAL_UPDATE. "
-                          << "Index ID: " << id;
-
-  VMSDK_LOG(WARNING, ctx) << "Error: " << error_status.message();
+                          << "Index ID: " << vmsdk::config::RedactIfNeeded(id);
 
   if (operation_type.find("parse") != std::string::npos) {
     Metrics::GetStats().ft_internal_update_parse_failures_cnt++;

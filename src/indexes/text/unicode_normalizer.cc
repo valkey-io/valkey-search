@@ -19,12 +19,11 @@
 
 namespace valkey_search::indexes::text {
 
-std::string UnicodeNormalizer::CaseFold(absl::string_view text) {
-  icu::UnicodeString input = icu::UnicodeString::fromUTF8(text);
-  icu::UnicodeString folded = input.foldCase();
-
-  std::string result;
-  folded.toUTF8String(result);
-  return result;
+void UnicodeNormalizer::CaseFoldInPlace(std::string& str) {
+  icu::UnicodeString input = icu::UnicodeString::fromUTF8(str);
+  input.foldCase();
+  // Clear the original string and let ICU export directly into it
+  str.clear();
+  input.toUTF8String(str);
 }
 }  // namespace valkey_search::indexes::text

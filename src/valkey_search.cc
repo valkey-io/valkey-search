@@ -21,6 +21,7 @@
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
+#include "absl/time/clock.h"
 #include "absl/time/time.h"
 #include "src/attribute_data_type.h"
 #include "src/coordinator/client_pool.h"
@@ -103,19 +104,6 @@ static vmsdk::info_field::Integer used_memory(
         .App()
         .Computed(vmsdk::GetUsedMemoryCnt)
         .CrashSafe());
-
-static vmsdk::info_field::Integer used_text_memory_bytes(
-    "memory", "used_text_memory_bytes",
-    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> uint64_t {
-      return SchemaManager::Instance().GetTotalTextMemoryUsage();
-    }));
-
-static vmsdk::info_field::Integer used_text_memory_human(
-    "memory", "used_text_memory_human",
-    vmsdk::info_field::IntegerBuilder().SIBytes().Dev().Computed(
-        []() -> uint64_t {
-          return SchemaManager::Instance().GetTotalTextMemoryUsage();
-        }));
 
 static vmsdk::info_field::Integer reclaimable_memory(
     "memory", "index_reclaimable_memory",
@@ -338,6 +326,47 @@ static vmsdk::info_field::Integer rdb_save_failure_cnt(
       return Metrics::GetStats().rdb_save_failure_cnt;
     }));
 
+static vmsdk::info_field::Integer rdb_restore_in_progress(
+    "rdb", "rdb_restore_in_progress",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().rdb_restore_in_progress ? 1 : 0;
+    }));
+
+static vmsdk::info_field::Float rdb_indexes_restored_percent(
+    "rdb", "rdb_indexes_restored_percent",
+    vmsdk::info_field::FloatBuilder().Dev().Computed([]() -> double {
+      auto completed = Metrics::GetStats().rdb_restore_completed_indexes.load();
+      auto total = Metrics::GetStats().rdb_restore_total_indexes.load();
+      if (total == 0) return 100.0;
+      return (completed * 100.0) / total;
+    }));
+
+static vmsdk::info_field::Float rdb_current_index_keys_restored_percent(
+    "rdb", "rdb_current_index_keys_restored_percent",
+    vmsdk::info_field::FloatBuilder().Dev().Computed([]() -> double {
+      auto total =
+          Metrics::GetStats().rdb_restore_current_index_keys_total.load();
+      auto loaded =
+          Metrics::GetStats().rdb_restore_current_index_keys_loaded.load();
+      if (total == 0) return 100.0;
+      return (loaded * 100.0) / total;
+    }));
+
+static vmsdk::info_field::Integer rdb_restore_backpressure_wait_cycles(
+    "rdb", "rdb_restore_backpressure_wait_cycles",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().rdb_restore_backpressure_wait_cycles;
+    }));
+
+static vmsdk::info_field::Integer rdb_last_restore_aux_load_duration_ms(
+    "rdb", "rdb_last_restore_aux_load_duration_ms",
+    vmsdk::info_field::IntegerBuilder()
+        .Dev()
+        .Units(vmsdk::info_field::Units::kMilliSeconds)
+        .Computed([]() -> long long {
+          return Metrics::GetStats().rdb_last_restore_aux_load_duration_ms;
+        }));
+
 static vmsdk::info_field::Integer ft_internal_update_parse_failures_cnt(
     "coordinator", "ft_internal_update_parse_failures_cnt",
     vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
@@ -398,8 +427,8 @@ static vmsdk::info_field::Integer inline_filtering_requests_count(
       return Metrics::GetStats().query_inline_filtering_requests_cnt;
     }));
 
-static vmsdk::info_field::Integer query_prefiltering_requests_cnt(
-    "query", "query_prefiltering_requests_cnt",
+static vmsdk::info_field::Integer prefiltering_requests_count(
+    "query", "prefiltering_requests_count",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
       return Metrics::GetStats().query_prefiltering_requests_cnt;
     }));
@@ -669,7 +698,7 @@ static vmsdk::info_field::Integer
     coordinator_metadata_reconciliation_completed_count(
         "coordinator", "coordinator_metadata_reconciliation_completed_count",
         vmsdk::info_field::IntegerBuilder()
-            .App()
+            .Dev()
             .Computed([]() -> int64_t {
               // prevent failure in unit tests
               if (!coordinator::MetadataManager::IsInitialized()) {
@@ -862,32 +891,32 @@ static vmsdk::info_field::String flat_vector_index_search_latency_usec(
 
 static vmsdk::info_field::Integer info_fanout_retry_count(
     "fanout", "info_fanout_retry_count",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().info_fanout_retry_cnt;
     }));
 
 static vmsdk::info_field::Integer info_fanout_fail_count(
     "fanout", "info_fanout_fail_count",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().info_fanout_fail_cnt;
     }));
 
 static vmsdk::info_field::Integer pause_handle_cluster_message_round_cnt(
     "fanout", "pause_handle_cluster_message_round_count",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().pause_handle_cluster_message_round_cnt;
     }));
 
-static vmsdk::info_field::Integer fulltext_query_blocked_count(
-    "query", "fulltext_query_blocked_count",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
-      return Metrics::GetStats().fulltext_query_blocked_cnt;
+static vmsdk::info_field::Integer text_query_blocked_count(
+    "query", "text_query_blocked_count",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().text_query_blocked_cnt;
     }));
 
-static vmsdk::info_field::Integer fulltext_query_retry_count(
-    "query", "fulltext_query_retry_count",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
-      return Metrics::GetStats().fulltext_query_retry_cnt;
+static vmsdk::info_field::Integer text_query_retry_count(
+    "query", "text_query_retry_count",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().text_query_retry_cnt;
     }));
 
 #ifdef DEBUG_INFO
@@ -963,7 +992,7 @@ static vmsdk::info_field::Integer &remove_subscription_skipped_count =
 static vmsdk::info_field::Integer string_interning_memory_bytes(
     "string_interning", "string_interning_memory_bytes",
     vmsdk::info_field::IntegerBuilder()
-        .App()
+        .Dev()
         .Computed(StringInternStore::GetMemoryUsage)
         .CrashSafe());
 
@@ -971,7 +1000,7 @@ static vmsdk::info_field::Integer string_interning_memory_human(
     "string_interning", "string_interning_memory_human",
     vmsdk::info_field::IntegerBuilder()
         .SIBytes()
-        .App()
+        .Dev()
         .Computed(StringInternStore::GetMemoryUsage)
         .CrashSafe());
 
@@ -1138,7 +1167,7 @@ absl::Status ValkeySearch::Startup(ValkeyModuleCtx *ctx) {
       options::GetThreadPoolWaitTimeSamples().GetValue());
   writer_thread_pool_->StartWorkers();
   utility_thread_pool_ = std::make_unique<vmsdk::ThreadPool>(
-      "utility-worker-", options::GetUtilityThreadCount().GetValue(),
+      "util-worker-", options::GetUtilityThreadCount().GetValue(),
       options::GetThreadPoolWaitTimeSamples().GetValue());
   utility_thread_pool_->StartWorkers();
 

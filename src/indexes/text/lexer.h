@@ -28,7 +28,9 @@ Tokenization Pipeline:
 #include <string>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
+#include "absl/container/inlined_vector.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "src/index_schema.pb.h"
@@ -37,6 +39,15 @@ struct sb_stemmer;
 
 namespace valkey_search::indexes::text {
 
+// Inline capacity for per-document stem mapping
+constexpr size_t kInProgressStemVariantsInlineCapacity = 4;
+
+// Per-document stem mappings: stemmed_word -> list of original words that stem
+// to it
+using InProgressStemMap = absl::flat_hash_map<
+    std::string,
+    absl::InlinedVector<std::string, kInProgressStemVariantsInlineCapacity>>;
+
 struct Lexer {
   Lexer(data_model::Language language, const std::string& punctuation,
         const std::vector<std::string>& stop_words);
@@ -44,20 +55,22 @@ struct Lexer {
 
   absl::StatusOr<std::vector<std::string>> Tokenize(
       absl::string_view text, bool stemming_enabled, uint32_t min_stem_size,
-      absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>*
-          stem_mappings = nullptr) const;
+      InProgressStemMap* stem_mappings = nullptr) const;
 
-  std::string StemWord(const std::string& word, sb_stemmer* stemmer,
-                       uint32_t min_stem_size = 0) const;
   bool IsPunctuation(char c) const {
     return punct_bitmap_[static_cast<unsigned char>(c)];
   }
 
-  bool IsStopWord(const std::string& lowercase_word) const {
+  bool IsStopWord(absl::string_view lowercase_word) const {
     return stop_words_set_.contains(lowercase_word);
   }
   sb_stemmer* GetStemmer() const;
-  std::string NormalizeLowerCase(absl::string_view str) const;
+  void NormalizeLowerCaseInPlace(std::string& str) const;
+  void StemWordInPlace(std::string& word, sb_stemmer* stemmer,
+                       uint32_t min_stem_size = 0) const;
+  void UpdateStemMap(absl::string_view original_word, sb_stemmer* stemmer,
+                     uint32_t min_stem_size,
+                     InProgressStemMap& stem_mappings) const;
 
  private:
   data_model::Language language_;
@@ -66,6 +79,9 @@ struct Lexer {
 
   // UTF-8 processing helpers
   bool IsValidUtf8(absl::string_view text) const;
+  // Common stemming logic
+  std::string_view DoStemming(absl::string_view word, sb_stemmer* stemmer,
+                              uint32_t min_stem_size) const;
 };
 
 }  // namespace valkey_search::indexes::text

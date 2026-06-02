@@ -131,6 +131,18 @@ class Tag(Field):
     def make_value(self, row: int, column: int, type: KeyDataType) -> Union[str, bytes, float, list[float]]:
         return f"Tag:{row}:{column}"
 
+
+class Text(Field):
+    def __init__(self, name: str, alias: Union[str, None] = None):
+        super().__init__(name, alias)
+
+    def create(self, data_type: KeyDataType):
+        return super().create(data_type) + ["TEXT"]
+
+    def make_value(self, row: int, column: int, type: KeyDataType) -> Union[str, bytes, float, list[float]]:
+        return f"Text:{row}:{column}"
+
+
 class Index:
     def __init__(
         self,

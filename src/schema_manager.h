@@ -74,7 +74,6 @@ class SchemaManager {
   uint64_t GetCorpusNumTextItems() const;
 
   uint64_t GetTotalIndexedDocuments() const;
-  uint64_t GetTotalTextMemoryUsage() const;
 
   bool IsIndexingInProgress() const;
   IndexSchema::Stats::ResultCnt<uint64_t> AccumulateIndexSchemaResults(
@@ -101,6 +100,9 @@ class SchemaManager {
 
   void OnServerCronCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                             uint64_t subevent, void *data);
+  void OnShutdownCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
+                          uint64_t subevent, void *data)
+      ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
 
   void PopulateFingerprintVersionFromMetadata(uint32_t db_num,
                                               absl::string_view name,

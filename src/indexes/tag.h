@@ -8,7 +8,6 @@
 #ifndef VALKEYSEARCH_SRC_INDEXES_TAG_H_
 #define VALKEYSEARCH_SRC_INDEXES_TAG_H_
 #include <cstddef>
-#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -56,6 +55,8 @@ class Tag : public IndexBase {
       ABSL_LOCKS_EXCLUDED(index_mutex_);
   bool IsUnTracked(const InternedStringPtr& key) const override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
+  void UnTrack(const InternedStringPtr& key) override
+      ABSL_LOCKS_EXCLUDED(index_mutex_);
   absl::Status ForEachTrackedKey(
       absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
       const override ABSL_LOCKS_EXCLUDED(index_mutex_);
@@ -63,6 +64,8 @@ class Tag : public IndexBase {
       absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
       const override ABSL_LOCKS_EXCLUDED(index_mutex_);
   std::unique_ptr<data_model::Index> ToProto() const override;
+
+  uint32_t GetMutationWeight() const override;
 
   InternedStringPtr GetRawValue(const InternedStringPtr& key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
@@ -84,14 +87,27 @@ class Tag : public IndexBase {
     const InternedStringPtr& operator*() const override;
 
    private:
-    PatriciaTreeIndex::PrefixSubTreeIterator tree_iter_;
+    // Reference to the Patricia tree, held so we can construct the
+    // root iterator on demand (only when negation requires it).
+    const PatriciaTreeIndex& tree_;
+
+    // Full-tree root iterator used exclusively by the negated path.
+    // Only constructed by EnsureNegateRootIter() on first negated
+    // iteration — non-negated queries never create this.
+    std::optional<PatriciaTreeIndex::PrefixSubTreeIterator> negate_root_iter_;
+
+    // The set of Patricia nodes matching the query tags. For non-negated
+    // queries, we iterate these directly. For negated queries, these are
+    // the nodes to *exclude* during the full-tree walk.
     absl::flat_hash_set<PatriciaNodeIndex*>& entries_;
+
     PatriciaNodeIndex* next_node_{nullptr};
     InternedStringSet::const_iterator next_iter_;
     const InternedStringSet& untracked_keys_;
     bool negate_;
     std::optional<InternedStringSet::const_iterator> untracked_keys_iter_;
     void NextNegate();
+    void EnsureNegateRootIter();
   };
 
   class EntriesFetcher : public EntriesFetcherBase {

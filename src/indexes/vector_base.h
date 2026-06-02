@@ -11,7 +11,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <deque>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -142,6 +141,8 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
                                const AttributeDataType* attribute_data_type,
                                SupplementalContentChunkIter&& iter);
 
+  uint32_t GetMutationWeight() const override;
+
   size_t GetTrackedKeyCount() const override
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   size_t GetUnTrackedKeyCount() const override
@@ -149,6 +150,7 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   bool IsTracked(const InternedStringPtr& key) const override
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   bool IsUnTracked(const InternedStringPtr& key) const override;
+  void UnTrack(const InternedStringPtr& key) override;
   absl::Status ForEachTrackedKey(
       absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
       const override ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
@@ -173,6 +175,8 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   char* TrackVector(uint64_t internal_id, char* vector, size_t len) override;
   InternedStringPtr InternVector(absl::string_view record,
                                  std::optional<float>& magnitude);
+  virtual uint64_t GetMaxInternalLabel() const { return 0; }
+  virtual size_t GetLabelCount() const { return 0; }
 
  protected:
   VectorBase(IndexerType indexer_type, int dimensions,

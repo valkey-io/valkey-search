@@ -48,10 +48,11 @@ class TestAggregateMetrics(ValkeySearchTestCaseBase):
         client.execute_command("FT.AGGREGATE", "products", "@rating:[-inf inf]", "LIMIT", "0", "5")
         info = client.info("SEARCH")
         assert int(info["search_agg_limit_stages"]) == initial_limit + 1
-        assert int(info["search_agg_limit_input_records"]) == initial_limit_input + 20
+        assert int(info["search_agg_limit_input_records"]) == initial_limit_input + 7
         assert int(info["search_agg_limit_output_records"]) == initial_limit_output + 5
-        assert int(info["search_agg_input_records"]) == initial_input_records + 20
+        assert int(info["search_agg_input_records"]) == initial_input_records + 7
         assert int(info["search_agg_output_records"]) == initial_output_records + 5
+        initial_limit = int(info["search_agg_limit_stages"])
         initial_limit_input = int(info["search_agg_limit_input_records"])
         initial_limit_output = int(info["search_agg_limit_output_records"])
         initial_input_records = int(info["search_agg_input_records"])
@@ -87,7 +88,24 @@ class TestAggregateMetrics(ValkeySearchTestCaseBase):
         assert int(info["search_agg_output_records"]) == initial_output_records + 20
         initial_input_records = int(info["search_agg_input_records"])
         initial_output_records = int(info["search_agg_output_records"])
+        initial_sortby = int(info["search_agg_sort_by_stages"])
         
+        # Test SORTBY stage with default max (should limit to 10)
+        client.execute_command("FT.AGGREGATE", "products", "@rating:[-inf inf]", "SORTBY", "1", "@category", "LIMIT", "0", "5")
+        info = client.info("SEARCH")
+        assert int(info["search_agg_sort_by_stages"]) == initial_sortby + 1
+        assert int(info["search_agg_limit_stages"]) == initial_limit + 1
+        assert int(info["search_agg_limit_input_records"]) == initial_limit_input + 10  # SORTBY limits to 10
+        assert int(info["search_agg_limit_output_records"]) == initial_limit_output + 5
+        assert int(info["search_agg_input_records"]) == initial_input_records + 20
+        assert int(info["search_agg_output_records"]) == initial_output_records + 5
+        initial_limit = int(info["search_agg_limit_stages"])
+        initial_limit_input = int(info["search_agg_limit_input_records"])
+        initial_limit_output = int(info["search_agg_limit_output_records"])
+        initial_input_records = int(info["search_agg_input_records"])
+        initial_output_records = int(info["search_agg_output_records"])
+        initial_sortby = int(info["search_agg_sort_by_stages"])
+
         # Test FILTER stage
         client.execute_command("FT.AGGREGATE", "products", "@rating:[-inf inf]", "load", "1", "price", "FILTER", "@price >= 150")
         info = client.info("SEARCH")

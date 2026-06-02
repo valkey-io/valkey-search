@@ -26,6 +26,13 @@ static auto debug_mode = BooleanBuilder(kDebugMode, true).Hidden().Build();
 
 bool IsDebugModeEnabled() { return debug_mode->GetValue(); }
 
+/// Controls the verbose logging flag
+static auto hide_user_data_config = BooleanBuilder(kHideUserDataFromLog, true)
+                                        .Dev()  // can only be set in debug mode
+                                        .Build();
+
+bool ShouldHideUserDataFromLog() { return hide_user_data_config->GetValue(); }
+
 namespace {
 
 constexpr absl::string_view kUseCoordinator = "--use-coordinator";
@@ -80,6 +87,15 @@ static int OnSetStringConfig(const char *config_name, ValkeyModuleString *value,
   return VALKEYMODULE_OK;
 }
 
+static int OnGetBoolConfig(const char *config_name, void *priv_data) {
+  return OnGetConfig<bool>(config_name, priv_data);
+}
+
+static int OnSetBoolConfig(const char *config_name, int value, void *priv_data,
+                           ValkeyModuleString **err) {
+  return OnSetConfig<bool>(config_name, value, priv_data, err);
+}
+
 /// Convert `vector<string>` -> `vector<const char*>`
 /// IMPORTANT: `vec` must outlive the returned value
 std::vector<const char *> ToCharPtrPtrVec(const std::vector<std::string> &vec) {
@@ -98,7 +114,9 @@ ModuleConfigManager &ModuleConfigManager::Instance() {
 }
 
 void ModuleConfigManager::RegisterConfig(Registerable *config_item) {
-  entries_.insert({std::string{config_item->GetName()}, config_item});
+  auto [it, inserted] =
+      entries_.insert({std::string{config_item->GetName()}, config_item});
+  CHECK(inserted) << "Duplicate config entry: " << config_item->GetName();
 }
 
 void ModuleConfigManager::UnregisterConfig(Registerable *config_item) {
@@ -273,11 +291,11 @@ Boolean::Boolean(std::string_view name, bool default_value)
 
 absl::Status Boolean::Register(ValkeyModuleCtx *ctx) {
   if (ValkeyModule_RegisterBoolConfig(ctx,
-                                      name_.data(),      // Name
-                                      default_value_,    // Default value
-                                      flags_,            // Flags
-                                      OnGetConfig<int>,  // Get callback
-                                      OnSetConfig<int>,  // Set callback
+                                      name_.data(),     // Name
+                                      default_value_,   // Default value
+                                      flags_,           // Flags
+                                      OnGetBoolConfig,  // Get callback
+                                      OnSetBoolConfig,  // Set callback
                                       nullptr,  // Apply callback (optional)
                                       this      // privdata
                                       ) != VALKEYMODULE_OK) {
@@ -330,6 +348,10 @@ absl::Status String::FromString(std::string_view value) {
   default_ = value.data();
   SetValueOrLog(default_, WARNING);
   return absl::OkStatus();
+}
+/// Get method to fetch the `hide_user_data_config`
+vmsdk::config::Boolean &GetHideUserDataFromLog() {
+  return dynamic_cast<vmsdk::config::Boolean &>(*hide_user_data_config);
 }
 
 absl::Status ModuleConfigManager::ListAllConfigs(

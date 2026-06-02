@@ -47,9 +47,9 @@ query planning.
 
 namespace valkey_search::indexes::text {
 
-// Stem tree target: maps stem root to set of parent words that stem to it
+// Stem tree target: maps stem root to list of parent words that stem to it.
 // Example: "happi" → {"happy", "happiness", "happily"}
-using StemParents = absl::flat_hash_set<std::string>;
+using StemParents = std::vector<std::string>;
 
 class Rax {
  public:
@@ -90,15 +90,22 @@ class Rax {
   // itself.
   //
   void MutateTarget(absl::string_view word,
-                    absl::FunctionRef<void *(void *)> mutate);
+                    absl::FunctionRef<void *(void *)> mutate,
+                    item_count_op op = NONE);
+
+  // Searches for word and returns its target, or nullptr if not found.
+  void *FindTarget(absl::string_view word) const;
+
+  // Searches for word and returns its Postings target as InvasivePtr.
+  // Returns empty InvasivePtr if word not found.
+  InvasivePtr<Postings> FindPostingsTarget(absl::string_view word) const;
 
   // Get the total number of unique words in the RadixTree (i.e. total number of
   // entries).
   size_t GetTotalUniqueWordCount() const;
 
-  // Get the number of words that have the specified prefix in O(len(prefix))
-  // time.
-  size_t GetWordCount(absl::string_view prefix) const;
+  // Get the number of items tracked for the sub-tree at the prefix.
+  size_t GetSubtreeItemCount(absl::string_view prefix) const;
 
   // Get the length of the longest word in the RadixTree, this can be used to
   // pre-size arrays and strings that are used when iterating on this RadixTree.

@@ -32,6 +32,7 @@
 #include "src/coordinator/metadata_manager.h"
 #include "src/index_schema.h"
 #include "src/index_schema.pb.h"
+#include "src/metrics.h"
 #include "src/rdb_section.pb.h"
 #include "src/rdb_serialization.h"
 #include "src/valkey_search.h"
@@ -141,12 +142,6 @@ SchemaManager::SchemaManager(
   }
 }
 
-absl::Status GenerateIndexNotFoundError(uint32_t db_num,
-                                        absl::string_view name) {
-  return absl::NotFoundError(absl::StrFormat(
-      "Index with name '%s' not found in database %d", name, db_num));
-}
-
 absl::Status GenerateIndexAlreadyExistsError(uint32_t db_num,
                                              absl::string_view name) {
   return absl::AlreadyExistsError(
@@ -157,11 +152,13 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> SchemaManager::LookupInternal(
     uint32_t db_num, absl::string_view name) const {
   auto db_itr = db_to_index_schemas_.find(db_num);
   if (db_itr == db_to_index_schemas_.end()) {
-    return absl::NotFoundError(absl::StrCat("Index schema not found: ", name));
+    return absl::NotFoundError(absl::StrCat(
+        "Index schema not found: ", vmsdk::config::RedactIfNeeded(name)));
   }
   auto name_itr = db_itr->second.find(name);
   if (name_itr == db_itr->second.end()) {
-    return absl::NotFoundError(absl::StrCat("Index schema not found: ", name));
+    return absl::NotFoundError(absl::StrCat(
+        "Index schema not found: ", vmsdk::config::RedactIfNeeded(name)));
   }
   return name_itr->second;
 }
@@ -463,18 +460,6 @@ uint64_t SchemaManager::GetTotalIndexedDocuments() const {
   }
   return num_hash_keys;
 }
-uint64_t SchemaManager::GetTotalTextMemoryUsage() const {
-  absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  uint64_t total = 0;
-  for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
-    for (const auto &[name, schema] : schema_map) {
-      if (schema->GetTextIndexSchema()) {
-        total += schema->GetTextIndexSchema()->GetTotalTextIndexMemoryUsage();
-      }
-    }
-  }
-  return total;
-}
 bool SchemaManager::IsIndexingInProgress() const {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
@@ -512,28 +497,37 @@ void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx) {
   }
 
   auto to_delete = GetIndexSchemasInDBInternal(selected_db);
+  VMSDK_LOG(NOTICE, ctx) << "Deleting index schema on FLUSHDB of DB "
+                         << selected_db;
+  absl::once_flag log_recreate_once;
   for (const auto &name : to_delete) {
-    VMSDK_LOG(NOTICE, ctx) << "Deleting index schema " << name
-                           << " on FLUSHDB of DB " << selected_db;
+    VMSDK_LOG(DEBUG, ctx) << "Deleting index schema "
+                          << vmsdk::config::RedactIfNeeded(name)
+                          << " on FLUSHDB of DB " << selected_db;
     auto old_schema = RemoveIndexSchemaInternal(selected_db, name);
     if (!old_schema.ok()) {
-      VMSDK_LOG(WARNING, ctx)
-          << "Unable to delete index schema " << name << " on FLUSHDB of DB "
-          << selected_db << ": " << old_schema.status().message();
+      VMSDK_LOG(WARNING, ctx) << "Unable to delete index schema "
+                              << vmsdk::config::RedactIfNeeded(name)
+                              << " on FLUSHDB of DB " << selected_db;
       continue;
     }
     if (coordinator_enabled_) {
       // In coordinated mode - we recreate the indices, since they are a
       // cluster-level construct, not a node-level construct. To delete,
       // FT.DROPINDEX must be done explicitly.
+      absl::call_once(log_recreate_once, [&]() {
+        VMSDK_LOG(NOTICE, ctx)
+            << "Recreating index schema on FLUSHDB of DB " << selected_db;
+      });
       auto to_add = old_schema.value()->ToProto();
-      VMSDK_LOG(NOTICE, ctx) << "Recreating index schema " << name
-                             << " on FLUSHDB of DB " << selected_db;
+      VMSDK_LOG(DEBUG, ctx)
+          << "Recreating index schema " << vmsdk::config::RedactIfNeeded(name)
+          << " on FLUSHDB of DB " << selected_db;
       auto add_status = CreateIndexSchemaInternal(ctx, *to_add);
       if (!add_status.ok()) {
-        VMSDK_LOG(WARNING, ctx) << "Unable to recreate index schema " << name
-                                << " on FLUSHDB of DB " << selected_db << ": "
-                                << add_status.message();
+        VMSDK_LOG(WARNING, ctx) << "Unable to recreate index schema "
+                                << vmsdk::config::RedactIfNeeded(name)
+                                << " on FLUSHDB of DB " << selected_db;
         continue;
       }
     }
@@ -589,8 +583,7 @@ void SchemaManager::OnLoadingEnded(ValkeyModuleCtx *ctx) {
     auto status = RemoveAll();
     if (!status.ok()) {
       VMSDK_LOG(WARNING, ctx) << "Failed to remove contents of existing "
-                                 "schemas on loading end: "
-                              << status.message();
+                                 "schemas on loading end.";
     }
     db_to_index_schemas_ = staged_db_to_index_schemas_.Get();
     staged_db_to_index_schemas_ = absl::flat_hash_map<
@@ -683,18 +676,12 @@ absl::Status SchemaManager::LoadIndex(
   uint32_t db_num = index_schema->GetDBNum();
   const std::string &name = index_schema->GetName();
 
-  // Select the DB number in the context for subsequent usage.
-  if (ValkeyModule_SelectDb(ctx, db_num) != VALKEYMODULE_OK) {
-    return absl::InternalError(
-        absl::StrFormat("Unable to select DB %d for loading of index schema %s",
-                        db_num, name.c_str()));
-  }
-
   // In diskless load scenarios, we stage the index to allow serving from
   // the existing index schemas. The loading ended callback will swap these
   // atomically.
   if (staging_indices_due_to_repl_load_.Get()) {
-    VMSDK_LOG(NOTICE, ctx) << "Staging index from RDB: " << name << " (in db "
+    VMSDK_LOG(NOTICE, ctx) << "Staging index from RDB: "
+                           << vmsdk::config::RedactIfNeeded(name) << " (in db "
                            << db_num << ")";
     staged_db_to_index_schemas_.Get()[db_num][name] = std::move(index_schema);
     return absl::OkStatus();
@@ -705,22 +692,26 @@ absl::Status SchemaManager::LoadIndex(
   // happens for example when a module triggers RDB load on a running
   // server. In this case, we may have existing indices when we load the DB.
   VMSDK_LOG(NOTICE, detached_ctx_.get())
-      << "Loading index from RDB: " << name << " (in db " << db_num << ")";
+      << "Loading index from RDB: " << vmsdk::config::RedactIfNeeded(name)
+      << " (in db " << db_num << ")";
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   auto remove_existing_status = RemoveIndexSchemaInternal(db_num, name);
   if (remove_existing_status.ok()) {
     ValkeyModule_Log(detached_ctx_.get(), VALKEYMODULE_LOGLEVEL_NOTICE,
                      "Deleted existing index from RDB for: %s (in db %d)",
-                     name.c_str(), db_num);
+                     vmsdk::config::RedactIfNeeded(name).data(), db_num);
   } else if (!absl::IsNotFound(remove_existing_status.status())) {
     ValkeyModule_Log(detached_ctx_.get(), VALKEYMODULE_LOGLEVEL_WARNING,
                      "Failed to delete existing index from RDB for: %s (in db "
-                     "%d): %s",
-                     name.c_str(), db_num,
-                     remove_existing_status.status().message().data());
+                     "%d)",
+                     vmsdk::config::RedactIfNeeded(name).data(), db_num);
   }
 
   db_to_index_schemas_[db_num][name] = std::move(index_schema);
+
+  // Increment completed index counter for restore progress tracking
+  Metrics::GetStats().rdb_restore_completed_indexes++;
+
   return absl::OkStatus();
 }
 
@@ -750,6 +741,23 @@ void SchemaManager::OnServerCronCallback(ValkeyModuleCtx *ctx,
                                          [[maybe_unused]] void *data) {
   SchemaManager::Instance().PerformBackfill(
       ctx, options::GetBackfillBatchSize().GetValue());
+}
+
+void SchemaManager::OnShutdownCallback(ValkeyModuleCtx *ctx,
+                                       [[maybe_unused]] ValkeyModuleEvent eid,
+                                       [[maybe_unused]] uint64_t subevent,
+                                       [[maybe_unused]] void *data) {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  if (db_to_index_schemas_.empty()) {
+    return;
+  }
+  VMSDK_LOG(NOTICE, ctx) << "Deleting all index schemas on SHUTDOWN event";
+  auto status = RemoveAll();
+  if (!status.ok()) {
+    VMSDK_LOG(WARNING, ctx)
+        << "Failed to delete all index schemas on SHUTDOWN event: "
+        << status.message();
+  }
 }
 
 void SchemaManager::PopulateFingerprintVersionFromMetadata(
@@ -790,8 +798,9 @@ absl::Status SchemaManager::ShowIndexSchemas(ValkeyModuleCtx *ctx,
     ValkeyModule_ReplyWithArray(ctx, inner_map.size());
     for (const auto &[name, schema] : inner_map) {
       auto proto = schema->ToProto()->DebugString();
-      VMSDK_LOG(NOTICE, ctx)
-          << "Index Schema in DB " << db_num << ": " << name << " " << proto;
+      VMSDK_LOG(DEBUG, ctx) << "Index Schema in DB " << db_num << ": "
+                            << vmsdk::config::RedactIfNeeded(name) << " "
+                            << vmsdk::config::RedactIfNeeded(proto);
       ValkeyModule_ReplyWithStringBuffer(ctx, proto.data(), proto.size());
     }
   }
@@ -800,8 +809,13 @@ absl::Status SchemaManager::ShowIndexSchemas(ValkeyModuleCtx *ctx,
 
 static vmsdk::info_field::Integer number_of_indexes(
     "index_stats", "number_of_indexes",
-    vmsdk::info_field::IntegerBuilder().App().Computed([] {
-      return SchemaManager::Instance().GetNumberOfIndexSchemas();
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // Consider indexes pending RDB load
+      auto &stats = Metrics::GetStats();
+      return SchemaManager::Instance().GetNumberOfIndexSchemas() +
+             std::max(stats.rdb_restore_total_indexes.load() -
+                          stats.rdb_restore_completed_indexes.load(),
+                      uint64_t{0});
     }));
 static vmsdk::info_field::Integer number_of_attributes(
     "index_stats", "number_of_attributes",
@@ -839,22 +853,6 @@ static vmsdk::info_field::Integer total_indexed_documents(
     vmsdk::info_field::IntegerBuilder().App().Computed([] {
       return SchemaManager::Instance().GetTotalIndexedDocuments();
     }));
-static vmsdk::info_field::Integer active_indexes(
-    "index_stats", "number_of_active_indexes",
-    vmsdk::info_field::IntegerBuilder().App().Computed([] {
-      return SchemaManager::Instance().GetNumberOfIndexSchemas();
-    }));
-static vmsdk::info_field::Integer active_indexes_running_queries(
-    "index_stats", "number_of_active_indexes_running_queries",
-    vmsdk::info_field::IntegerBuilder().App().Computed([] {
-      // TODO: need to implement active query tracking
-      return 0;
-    }));
-static vmsdk::info_field::Integer active_indexes_indexing(
-    "index_stats", "number_of_active_indexes_indexing",
-    vmsdk::info_field::IntegerBuilder().App().Computed([] {
-      return SchemaManager::Instance().IsIndexingInProgress() ? 1 : 0;
-    }));
 static vmsdk::info_field::Integer total_active_write_threads(
     "index_stats", "total_active_write_threads",
     vmsdk::info_field::IntegerBuilder().App().Computed([] {
@@ -865,12 +863,6 @@ static vmsdk::info_field::Integer total_active_write_threads(
                                                  : writer_thread_pool->Size();
       }
       return (unsigned long)0;
-    }));
-static vmsdk::info_field::Integer total_indexing_time(
-    "index_stats", "total_indexing_time",
-    vmsdk::info_field::IntegerBuilder().App().Computed([] {
-      // TODO: need to implement indexing time tracking
-      return 0;
     }));
 
 }  // namespace valkey_search

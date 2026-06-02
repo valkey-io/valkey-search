@@ -39,13 +39,21 @@ class PostingTest : public ValkeySearchTest {
       size_t num_fields = 5) {
     PositionMap pos_map;
     for (const auto& [pos, field_indices] : pos_fields_pairs) {
-      auto field_mask = FieldMask::Create(num_fields);
+      FieldMask field_mask(num_fields);
       for (size_t field_idx : field_indices) {
-        field_mask->SetField(field_idx);
+        field_mask.SetField(field_idx);
       }
-      pos_map[pos] = std::move(field_mask);
+      pos_map[pos] = field_mask;
     }
     return pos_map;
+  }
+
+  // Helper to insert key with PositionMap, creating FlatPositionMap internally
+  void InsertKeyWithPositionMap(const InternedStringPtr& key,
+                                PositionMap&& pos_map, size_t num_fields = 5) {
+    // Create FlatPositionMap from PositionMap
+    FlatPositionMap* flat_map = FlatPositionMap::Create(pos_map, num_fields);
+    postings_->InsertKey(key, flat_map);
   }
 };
 
@@ -57,18 +65,15 @@ TEST_F(PostingTest, InsertionCounters) {
   EXPECT_EQ(postings_->GetTotalTermFrequency(), 0);
 
   // Single key, single position, single field
-  postings_->InsertKey(InternKey("doc1"), CreatePositionMap({{10, {0}}}),
-                       metadata_.get(), 5);
+  InsertKeyWithPositionMap(InternKey("doc1"), CreatePositionMap({{10, {0}}}));
   EXPECT_FALSE(postings_->IsEmpty());
   EXPECT_EQ(postings_->GetKeyCount(), 1);
   EXPECT_EQ(postings_->GetPositionCount(), 1);
   EXPECT_EQ(postings_->GetTotalTermFrequency(), 1);
 
   // Multiple keys
-  postings_->InsertKey(InternKey("doc2"), CreatePositionMap({{20, {1}}}),
-                       metadata_.get(), 5);
-  postings_->InsertKey(InternKey("doc3"), CreatePositionMap({{30, {2}}}),
-                       metadata_.get(), 5);
+  InsertKeyWithPositionMap(InternKey("doc2"), CreatePositionMap({{20, {1}}}));
+  InsertKeyWithPositionMap(InternKey("doc3"), CreatePositionMap({{30, {2}}}));
   EXPECT_EQ(postings_->GetKeyCount(), 3);
   EXPECT_EQ(postings_->GetPositionCount(), 3);
   EXPECT_EQ(postings_->GetTotalTermFrequency(), 3);
@@ -76,17 +81,16 @@ TEST_F(PostingTest, InsertionCounters) {
   // Single key with multiple positions
   postings_ = std::make_unique<Postings>();
   metadata_ = std::make_unique<TextIndexMetadata>();
-  postings_->InsertKey(InternKey("doc1"),
-                       CreatePositionMap({{10, {0}}, {20, {0}}, {30, {1}}}),
-                       metadata_.get(), 5);
+  InsertKeyWithPositionMap(
+      InternKey("doc1"), CreatePositionMap({{10, {0}}, {20, {0}}, {30, {1}}}));
   EXPECT_EQ(postings_->GetKeyCount(), 1);
   EXPECT_EQ(postings_->GetPositionCount(), 3);
   EXPECT_EQ(postings_->GetTotalTermFrequency(), 3);
 
   // Multiple fields at same position
   postings_ = std::make_unique<Postings>();
-  postings_->InsertKey(InternKey("doc1"), CreatePositionMap({{10, {0, 2}}}),
-                       metadata_.get(), 5);
+  InsertKeyWithPositionMap(InternKey("doc1"),
+                           CreatePositionMap({{10, {0, 2}}}));
   EXPECT_EQ(postings_->GetKeyCount(), 1);
   EXPECT_EQ(postings_->GetPositionCount(), 1);
   EXPECT_EQ(postings_->GetTotalTermFrequency(),
@@ -94,10 +98,8 @@ TEST_F(PostingTest, InsertionCounters) {
 }
 
 TEST_F(PostingTest, RemoveKey) {
-  postings_->InsertKey(InternKey("doc1"), CreatePositionMap({{10, {0}}}),
-                       metadata_.get(), 5);
-  postings_->InsertKey(InternKey("doc2"), CreatePositionMap({{20, {1}}}),
-                       metadata_.get(), 5);
+  InsertKeyWithPositionMap(InternKey("doc1"), CreatePositionMap({{10, {0}}}));
+  InsertKeyWithPositionMap(InternKey("doc2"), CreatePositionMap({{20, {1}}}));
 
   EXPECT_EQ(postings_->GetKeyCount(), 2);
 
@@ -114,12 +116,9 @@ TEST_F(PostingTest, RemoveKey) {
 
 TEST_F(PostingTest, KeyIteratorBasic) {
   // Add some test data
-  postings_->InsertKey(InternKey("doc1"), CreatePositionMap({{10, {0}}}),
-                       metadata_.get(), 5);
-  postings_->InsertKey(InternKey("doc2"), CreatePositionMap({{20, {1}}}),
-                       metadata_.get(), 5);
-  postings_->InsertKey(InternKey("doc3"), CreatePositionMap({{30, {2}}}),
-                       metadata_.get(), 5);
+  InsertKeyWithPositionMap(InternKey("doc1"), CreatePositionMap({{10, {0}}}));
+  InsertKeyWithPositionMap(InternKey("doc2"), CreatePositionMap({{20, {1}}}));
+  InsertKeyWithPositionMap(InternKey("doc3"), CreatePositionMap({{30, {2}}}));
 
   // Test key iteration - collect all keys
   auto key_iter = postings_->GetKeyIterator();
@@ -140,12 +139,9 @@ TEST_F(PostingTest, KeyIteratorBasic) {
 
 TEST_F(PostingTest, KeyIteratorSkipForward) {
   // Add test data
-  postings_->InsertKey(InternKey("doc1"), CreatePositionMap({{10, {0}}}),
-                       metadata_.get(), 5);
-  postings_->InsertKey(InternKey("doc3"), CreatePositionMap({{20, {1}}}),
-                       metadata_.get(), 5);
-  postings_->InsertKey(InternKey("doc5"), CreatePositionMap({{30, {2}}}),
-                       metadata_.get(), 5);
+  InsertKeyWithPositionMap(InternKey("doc1"), CreatePositionMap({{10, {0}}}));
+  InsertKeyWithPositionMap(InternKey("doc3"), CreatePositionMap({{20, {1}}}));
+  InsertKeyWithPositionMap(InternKey("doc5"), CreatePositionMap({{30, {2}}}));
 
   auto key_iter = postings_->GetKeyIterator();
 
@@ -169,9 +165,8 @@ TEST_F(PostingTest, KeyIteratorSkipForward) {
 
 TEST_F(PostingTest, PositionIteratorBasic) {
   // Add test data with multiple positions for one key
-  postings_->InsertKey(InternKey("doc1"),
-                       CreatePositionMap({{10, {0}}, {20, {1}}, {30, {2}}}),
-                       metadata_.get(), 5);
+  InsertKeyWithPositionMap(
+      InternKey("doc1"), CreatePositionMap({{10, {0}}, {20, {1}}, {30, {2}}}));
 
   // Get key iterator and position iterator
   auto key_iter = postings_->GetKeyIterator();
@@ -201,9 +196,8 @@ TEST_F(PostingTest, PositionIteratorBasic) {
 
 TEST_F(PostingTest, PositionIteratorSkipForward) {
   // Add test data with gaps in positions
-  postings_->InsertKey(InternKey("doc1"),
-                       CreatePositionMap({{10, {0}}, {30, {1}}, {50, {2}}}),
-                       metadata_.get(), 5);
+  InsertKeyWithPositionMap(
+      InternKey("doc1"), CreatePositionMap({{10, {0}}, {30, {1}}, {50, {2}}}));
 
   auto key_iter = postings_->GetKeyIterator();
   auto pos_iter = key_iter.GetPositionIterator();
@@ -226,9 +220,8 @@ TEST_F(PostingTest, PositionIteratorSkipForward) {
 
 TEST_F(PostingTest, IteratorWithMultipleFields) {
   // Test position with multiple fields set
-  postings_->InsertKey(InternKey("doc1"),
-                       CreatePositionMap({{10, {0, 2}}, {20, {1}}}),
-                       metadata_.get(), 5);
+  InsertKeyWithPositionMap(InternKey("doc1"),
+                           CreatePositionMap({{10, {0, 2}}, {20, {1}}}));
 
   auto key_iter = postings_->GetKeyIterator();
   auto pos_iter = key_iter.GetPositionIterator();
@@ -250,8 +243,7 @@ TEST_F(PostingTest, EmptyPostingIterators) {
   EXPECT_FALSE(key_iter.IsValid());
 
   // Test position iterator behavior: add one position, then advance past it
-  postings_->InsertKey(InternKey("doc1"), CreatePositionMap({{10, {0}}}),
-                       metadata_.get(), 5);
+  InsertKeyWithPositionMap(InternKey("doc1"), CreatePositionMap({{10, {0}}}));
 
   auto valid_key_iter = postings_->GetKeyIterator();
   EXPECT_TRUE(valid_key_iter.IsValid());
@@ -267,11 +259,10 @@ TEST_F(PostingTest, EmptyPostingIterators) {
 
 TEST_F(PostingTest, ContainsFieldsCheck) {
   // Test basic field containment functionality
-  postings_->InsertKey(InternKey("doc1"), CreatePositionMap({{10, {0}}}),
-                       metadata_.get(), 5);
+  InsertKeyWithPositionMap(InternKey("doc1"), CreatePositionMap({{10, {0}}}));
 
-  auto field_mask = FieldMask::Create(5);
-  field_mask->SetField(0);
+  FieldMask field_mask(5);
+  field_mask.SetField(0);
 
   auto key_iter = postings_->GetKeyIterator();
 
@@ -281,12 +272,12 @@ TEST_F(PostingTest, ContainsFieldsCheck) {
   // Iterator should be valid and contain the field we inserted
   EXPECT_TRUE(key_iter.IsValid());
   EXPECT_EQ(key_iter.GetKey()->Str(), "doc1");
-  EXPECT_TRUE(key_iter.ContainsFields(field_mask->AsUint64()));
+  EXPECT_TRUE(key_iter.ContainsFields(field_mask.GetMask()));
 
   // Test that it doesn't contain fields that weren't set
-  auto field_mask_2 = FieldMask::Create(5);
-  field_mask_2->SetField(1);
-  EXPECT_FALSE(key_iter.ContainsFields(field_mask_2->AsUint64()));
+  FieldMask field_mask_2(5);
+  field_mask_2.SetField(1);
+  EXPECT_FALSE(key_iter.ContainsFields(field_mask_2.GetMask()));
 }
 
 TEST_F(PostingTest, LargeScaleOperations) {
@@ -303,19 +294,19 @@ TEST_F(PostingTest, LargeScaleOperations) {
       Position pos = std::rand() % 10000;
       if (pos_map.count(pos)) continue;  // Skip duplicates within same doc
 
-      auto field_mask = FieldMask::Create(5);
+      FieldMask field_mask(5);
       int num_fields = 1 + (std::rand() % 5);  // 1-5 fields per position
       for (int f = 0; f < num_fields; ++f) {
-        field_mask->SetField(std::rand() % 5);
+        field_mask.SetField(std::rand() % 5);
       }
 
-      total_term_frequency += field_mask->CountSetFields();
-      pos_map[pos] = std::move(field_mask);
+      total_term_frequency += field_mask.CountSetFields();
+      pos_map[pos] = field_mask;
     }
 
     total_positions += pos_map.size();
-    postings_->InsertKey(InternKey("doc" + std::to_string(doc)),
-                         std::move(pos_map), metadata_.get(), 5);
+    InsertKeyWithPositionMap(InternKey("doc" + std::to_string(doc)),
+                             std::move(pos_map));
   }
 
   EXPECT_EQ(postings_->GetKeyCount(), 100);
@@ -334,15 +325,12 @@ TEST_F(PostingTest, LargeScaleOperations) {
 }
 
 TEST_F(PostingTest, FieldMaskImplementations) {
-  postings_->InsertKey(InternKey("doc1"),
-                       CreatePositionMap({{10, {0}}, {20, {0}}}, 1),
-                       metadata_.get(), 1);
-  postings_->InsertKey(InternKey("doc2"),
-                       CreatePositionMap({{15, {0, 2}}, {25, {1, 3}}}, 5),
-                       metadata_.get(), 5);
-  postings_->InsertKey(InternKey("doc3"),
-                       CreatePositionMap({{30, {0, 8}}, {40, {5}}}, 9),
-                       metadata_.get(), 9);
+  InsertKeyWithPositionMap(InternKey("doc1"),
+                           CreatePositionMap({{10, {0}}, {20, {0}}}, 1), 1);
+  InsertKeyWithPositionMap(
+      InternKey("doc2"), CreatePositionMap({{15, {0, 2}}, {25, {1, 3}}}, 5), 5);
+  InsertKeyWithPositionMap(InternKey("doc3"),
+                           CreatePositionMap({{30, {0, 8}}, {40, {5}}}, 9), 9);
 
   EXPECT_EQ(postings_->GetTotalTermFrequency(), 9);  // 2 + 4 + 3
 

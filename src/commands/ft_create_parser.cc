@@ -24,6 +24,7 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "src/attribute_data_type.h"
+#include "src/index_schema.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/vector_base.h"
@@ -57,6 +58,7 @@ const absl::string_view kSeparatorParam{"SEPARATOR"};
 const absl::string_view kCaseSensitiveParam{"CASESENSITIVE"};
 const absl::string_view kScoreParam{"SCORE"};
 constexpr absl::string_view kSchemaParam{"SCHEMA"};
+constexpr absl::string_view kSkipInitialScan("SKIPINITIALSCAN");
 constexpr size_t kDefaultAttributesCountLimit{1000};
 constexpr int kDefaultDimensionsCountLimit{32768};
 constexpr int kDefaultPrefixesCountLimit{8};
@@ -65,14 +67,15 @@ constexpr int kDefaultNumericFieldLenLimit{128};
 constexpr size_t kMaxAttributesCount{10000};
 constexpr int kMaxDimensionsCount{64000};
 constexpr int kMaxM{2000000};
-constexpr int kMaxEfConstruction{4096};
-constexpr int kMaxEfRuntime{4096};
+constexpr int kMaxEfConstruction{1000000};
+constexpr int kMaxEfRuntime{1000000};
 constexpr int kMaxPrefixesCount{16};
 constexpr int kMaxTagFieldLen{10000};
 constexpr int kMaxNumericFieldLen{256};
 constexpr int kTimeoutMs{50000};
 constexpr int kMinTimeoutMs{1};
 constexpr int kMaxTimeoutMs{60000};
+constexpr size_t kMaxTextFieldsCount{64};
 
 constexpr absl::string_view kMaxPrefixesConfig{"max-prefixes"};
 constexpr absl::string_view kMaxTagFieldLenConfig{"max-tag-field-length"};
@@ -217,12 +220,18 @@ const absl::NoDestructor<
     kOnDataTypeByStr({{"HASH", data_model::ATTRIBUTE_DATA_TYPE_HASH},
                       {"JSON", data_model::ATTRIBUTE_DATA_TYPE_JSON}});
 absl::Status ParsePrefixes(vmsdk::ArgsIterator &itr,
-                           data_model::IndexSchema &index_schema_proto) {
+                           data_model::IndexSchema &index_schema_proto,
+                           std::optional<absl::string_view> index_hash_tag) {
   uint32_t prefixes_cnt{0};
   VMSDK_ASSIGN_OR_RETURN(
       auto res, vmsdk::ParseParam(kPrefixParam, false, itr, prefixes_cnt));
   if (!res) {
-    return absl::OkStatus();
+    if (index_hash_tag.has_value()) {
+      return absl::InvalidArgumentError(
+          "PREFIX parameter is required for hash-tagged indexes");
+    } else {
+      return absl::OkStatus();
+    }
   }
   if (prefixes_cnt > (uint32_t)itr.DistanceEnd()) {
     return absl::InvalidArgumentError(
@@ -235,9 +244,18 @@ absl::Status ParsePrefixes(vmsdk::ArgsIterator &itr,
       vmsdk::VerifyRange(prefixes_cnt, std::nullopt, max_prefixes))
       << "Number of prefixes (" << prefixes_cnt
       << ") exceeds the maximum allowed (" << max_prefixes << ")";
+  //
+  // Parse prefixes and ensure they match the index hash tag constraints
+  //
   for (uint32_t i = 0; i < prefixes_cnt; ++i) {
     VMSDK_ASSIGN_OR_RETURN(auto itr_arg, itr.Get());
-    if (vmsdk::ParseHashTag(vmsdk::ToStringView(itr_arg))) {
+    auto this_tag = vmsdk::ParseHashTag(vmsdk::ToStringView(itr_arg));
+    if (index_hash_tag.has_value()) {
+      if (!this_tag.has_value() || this_tag.value() != index_hash_tag.value()) {
+        return absl::InvalidArgumentError(
+            "All PREFIX arguments must contain the same hash tag as the index");
+      }
+    } else if (this_tag.has_value()) {
       return absl::InvalidArgumentError(
           "PREFIX argument(s) must not contain a hash tag");
     }
@@ -267,21 +285,26 @@ absl::Status ParseLanguage(vmsdk::ArgsIterator &itr,
 }
 absl::Status ParseScore(vmsdk::ArgsIterator &itr,
                         data_model::IndexSchema &index_schema_proto) {
-  float score{1.0};
+  float score{IndexSchema::kDefaultDocumentScore};
   VMSDK_ASSIGN_OR_RETURN(auto res,
                          vmsdk::ParseParam(kScoreParam, false, itr, score));
-  if (res && score != 1.0) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("`", kScoreParam, "` parameter with a value `", score,
-                     "` is not supported. The only supported value is `1.0`"));
-  }
-  VMSDK_ASSIGN_OR_RETURN(res,
-                         vmsdk::IsParamKeyMatch(kScoreFieldParam, false, itr));
   if (res) {
-    return absl::InvalidArgumentError(
-        NotSupportedParamErrorMsg(kScoreFieldParam));
+    if (score < 0.0 || score > 1.0) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("`", kScoreParam, "` parameter with a value `", score,
+                       "` is not supported. The value must be between "
+                       "0.0 and 1.0"));
+    }
+    index_schema_proto.set_score(score);
   }
-  index_schema_proto.set_score(score);
+  // Parse SCORE_FIELD: the name of the document field whose numeric value
+  // is used as the document's custom score. Only one per index.
+  std::string score_field;
+  VMSDK_ASSIGN_OR_RETURN(
+      res, vmsdk::ParseParam(kScoreFieldParam, false, itr, score_field));
+  if (res) {
+    index_schema_proto.set_score_field(score_field);
+  }
   return absl::OkStatus();
 }
 vmsdk::KeyValueParser<HNSWParameters> CreateHNSWParser() {
@@ -517,6 +540,18 @@ absl::StatusOr<indexes::IndexerType> ParseIndexerType(
                              index_type_str, *indexes::kIndexerTypeByStr));
   return index_type;
 }
+
+absl::Status ValidateAttributeAlias(absl::string_view alias) {
+  for (const char ch : alias) {
+    if (kDefaultPunctuation.find(ch) != absl::string_view::npos) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Attribute alias `", alias, "` contains invalid character `",
+          std::string(1, ch), "`"));
+    }
+  }
+  return absl::OkStatus();
+}
+
 absl::StatusOr<data_model::Attribute *> ParseAttributeArgs(
     vmsdk::ArgsIterator &itr, absl::string_view attribute_identifier,
     data_model::IndexSchema &index_schema_proto,
@@ -529,6 +564,7 @@ absl::StatusOr<data_model::Attribute *> ParseAttributeArgs(
   if (!res) {
     attribute_proto->set_alias(attribute_proto->identifier());
   }
+  VMSDK_RETURN_IF_ERROR(ValidateAttributeAlias(attribute_proto->alias()));
   VMSDK_ASSIGN_OR_RETURN(auto index_type, ParseIndexerType(itr));
   auto index_proto = std::make_unique<data_model::Index>();
   switch (index_type) {
@@ -594,9 +630,6 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
   vmsdk::ArgsIterator itr{argv, argc};
   VMSDK_RETURN_IF_ERROR(
       vmsdk::ParseParamValue(itr, *index_schema_proto.mutable_name()));
-  if (vmsdk::ParseHashTag(index_schema_proto.name())) {
-    return absl::InvalidArgumentError("Index name must not contain a hash tag");
-  }
   data_model::AttributeDataType on_data_type{
       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH};
   VMSDK_ASSIGN_OR_RETURN(auto res, ParseParam(kOnParam, false, itr,
@@ -606,7 +639,9 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
     return absl::InvalidArgumentError("JSON module is not loaded.");
   }
   index_schema_proto.set_attribute_data_type(on_data_type);
-  VMSDK_RETURN_IF_ERROR(ParsePrefixes(itr, index_schema_proto));
+  VMSDK_RETURN_IF_ERROR(ParsePrefixes(
+      itr, index_schema_proto, vmsdk::ParseHashTag(index_schema_proto.name())));
+
   VMSDK_ASSIGN_OR_RETURN(res, vmsdk::IsParamKeyMatch(kFilterParam, false, itr));
   if (res) {
     return absl::InvalidArgumentError(NotSupportedParamErrorMsg(kFilterParam));
@@ -642,6 +677,12 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
 
     // Try LANGUAGE parameter
     VMSDK_RETURN_IF_ERROR(ParseLanguage(itr, index_schema_proto));
+
+    VMSDK_ASSIGN_OR_RETURN(
+        res, vmsdk::IsParamKeyMatch(kSkipInitialScan, false, itr));
+    if (res) {
+      index_schema_proto.set_skip_initial_scan(true);
+    }
 
     // Try unsupported field parameters
     VMSDK_ASSIGN_OR_RETURN(
@@ -690,6 +731,7 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
         "Index schema must have at least one attribute");
   }
   std::set<absl::string_view> identifier_names;
+  size_t text_fields_count = 0;
   while (itr.HasNext()) {
     absl::string_view attribute_identifier;
     VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, attribute_identifier));
@@ -708,6 +750,14 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
         identifier_names.size() + 1, std::nullopt, max_attributes_value))
         << "The maximum number of attributes cannot exceed "
         << max_attributes_value << ".";
+    if (attribute->index().index_type_case() ==
+        data_model::Index::IndexTypeCase::kTextIndex) {
+      VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(
+          text_fields_count + 1, std::nullopt, kMaxTextFieldsCount))
+          << "The maximum number of text fields cannot exceed "
+          << kMaxTextFieldsCount << ".";
+      ++text_fields_count;
+    }
 
     identifier_names.insert(attribute->identifier());
   }

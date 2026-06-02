@@ -14,7 +14,6 @@
 #include <vector>
 
 #include "absl/container/flat_hash_set.h"
-#include "absl/container/inlined_vector.h"
 #include "absl/strings/string_view.h"
 #include "src/indexes/text/text_iterator.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -185,8 +184,7 @@ using FieldMaskPredicate = uint64_t;
 class TextPredicate : public Predicate {
  public:
   TextPredicate() : Predicate(PredicateType::kText) {}
-  virtual ~TextPredicate() = default;
-  virtual EvaluationResult Evaluate(Evaluator& evaluator) const = 0;
+  ~TextPredicate() override = default;
   // Evaluate against per-key TextIndex
   virtual EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
@@ -194,10 +192,10 @@ class TextPredicate : public Predicate {
   virtual std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema()
       const = 0;
   virtual const FieldMaskPredicate GetFieldMask() const = 0;
-  virtual void* Search(bool negate) const;
   virtual std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
-      const void* fetcher) const = 0;
-  virtual size_t EstimateSize() const = 0;
+      const std::shared_ptr<indexes::text::TextIndex>& text_index,
+      FieldMaskPredicate field_mask, bool require_positions) const = 0;
+  virtual size_t EstimateSize(bool is_vec_query) const = 0;
 };
 
 class TermPredicate : public TextPredicate {
@@ -217,10 +215,11 @@ class TermPredicate : public TextPredicate {
       const InternedStringPtr& target_key,
       bool require_positions) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
-      const void* fetcher) const override;
+      const std::shared_ptr<indexes::text::TextIndex>& text_index,
+      FieldMaskPredicate field_mask, bool require_positions) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   bool IsExact() const { return exact_; }
-  size_t EstimateSize() const override;
+  size_t EstimateSize(bool is_vec_query) const override;
 
  private:
   std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
@@ -246,9 +245,10 @@ class PrefixPredicate : public TextPredicate {
       const InternedStringPtr& target_key,
       bool require_positions) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
-      const void* fetcher) const override;
+      const std::shared_ptr<indexes::text::TextIndex>& text_index,
+      FieldMaskPredicate field_mask, bool require_positions) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
-  size_t EstimateSize() const override;
+  size_t EstimateSize(bool is_vec_query) const override;
 
  private:
   std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
@@ -273,9 +273,10 @@ class SuffixPredicate : public TextPredicate {
       const InternedStringPtr& target_key,
       bool require_positions) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
-      const void* fetcher) const override;
+      const std::shared_ptr<indexes::text::TextIndex>& text_index,
+      FieldMaskPredicate field_mask, bool require_positions) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
-  size_t EstimateSize() const override;
+  size_t EstimateSize(bool is_vec_query) const override;
 
  private:
   std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
@@ -300,9 +301,10 @@ class InfixPredicate : public TextPredicate {
       const InternedStringPtr& target_key,
       bool require_positions) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
-      const void* fetcher) const override;
+      const std::shared_ptr<indexes::text::TextIndex>& text_index,
+      FieldMaskPredicate field_mask, bool require_positions) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
-  size_t EstimateSize() const override;
+  size_t EstimateSize(bool is_vec_query) const override;
 
  private:
   std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
@@ -328,9 +330,10 @@ class FuzzyPredicate : public TextPredicate {
       const InternedStringPtr& target_key,
       bool require_positions) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
-      const void* fetcher) const override;
+      const std::shared_ptr<indexes::text::TextIndex>& text_index,
+      FieldMaskPredicate field_mask, bool require_positions) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
-  size_t EstimateSize() const override;
+  size_t EstimateSize(bool is_vec_query) const override;
 
  private:
   std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
@@ -350,6 +353,8 @@ class ComposedPredicate : public Predicate {
                     bool inorder = false);
 
   EvaluationResult Evaluate(Evaluator& evaluator) const override;
+  EvaluationResult EvaluateWithContext(Evaluator& evaluator,
+                                       bool from_or) const;
   std::optional<uint32_t> GetSlop() const { return slop_; }
   bool GetInorder() const { return inorder_; }
 

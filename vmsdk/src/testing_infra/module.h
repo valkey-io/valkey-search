@@ -91,6 +91,7 @@ class MockValkeyModule {
               (ValkeyModuleKey * key, ValkeyModuleString *field,
                ValkeyModuleHashExternCB fn, void *privdata));
   MOCK_METHOD(int, GetApi, (const char *name, void *func));
+  MOCK_METHOD(mstime_t, GetExpire, (ValkeyModuleKey * key));
   MOCK_METHOD(int, HashGet,
               (ValkeyModuleKey * key, int flags, const char *field,
                int *exists_out, void *terminating_null));
@@ -691,6 +692,10 @@ inline int TestValkeyModule_GetApi(const char *name, void *func) {
   return kMockValkeyModule->GetApi(name, func);
 }
 
+inline mstime_t TestValkeyModule_GetExpire(ValkeyModuleKey *key) {
+  return kMockValkeyModule->GetExpire(key);
+}
+
 inline int TestValkeyModule_HashGet(ValkeyModuleKey *key, int flags, ...) {
   va_list args;
   va_start(args, flags);
@@ -1091,6 +1096,11 @@ inline const char *TestValkeyModule_GetMyShardID() {
 
 inline int TestValkeyModule_GetContextFlags(ValkeyModuleCtx *ctx) {
   return kMockValkeyModule->GetContextFlags(ctx);
+}
+
+inline void TestValkeyModule_Yield(ValkeyModuleCtx *ctx, int flags,
+                                   const char *busy_reply) {
+  // No-op: in tests there is no server to yield to.
 }
 
 inline uint64_t TestValkeyModule_LoadUnsigned(ValkeyModuleIO *io) {
@@ -1513,6 +1523,7 @@ inline void TestValkeyModule_Init() {
   ValkeyModule_OpenKey = &TestValkeyModule_OpenKey;
   ValkeyModule_HashExternalize = &TestValkeyModule_HashExternalize;
   ValkeyModule_GetApi = &TestValkeyModule_GetApi;
+  ValkeyModule_GetExpire = &TestValkeyModule_GetExpire;
   ValkeyModule_HashGet = &TestValkeyModule_HashGet;
   ValkeyModule_HashSet = &TestValkeyModule_HashSet;
   ValkeyModule_ScanKey = &TestValkeyModule_ScanKey;
@@ -1563,6 +1574,7 @@ inline void TestValkeyModule_Init() {
   ValkeyModule_GetClusterInfo = &TestValkeyModule_GetClusterInfo;
   ValkeyModule_GetMyShardID = &TestValkeyModule_GetMyShardID;
   ValkeyModule_GetContextFlags = &TestValkeyModule_GetContextFlags;
+  ValkeyModule_Yield = &TestValkeyModule_Yield;
   ValkeyModule_LoadUnsigned = &TestValkeyModule_LoadUnsigned;
   ValkeyModule_LoadSigned = &TestValkeyModule_LoadSigned;
   ValkeyModule_LoadDouble = &TestValkeyModule_LoadDouble;

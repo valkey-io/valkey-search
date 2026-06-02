@@ -8,12 +8,11 @@
 #ifndef _VALKEY_SEARCH_INDEXES_TEXT_TERM_H_
 #define _VALKEY_SEARCH_INDEXES_TEXT_TERM_H_
 
-#include <vector>
-
 #include "absl/container/inlined_vector.h"
 #include "src/indexes/text.h"
 #include "src/indexes/text/flat_position_map.h"
 #include "src/indexes/text/text_iterator.h"
+#include "src/utils/inlined_priority_queue.h"
 
 namespace valkey_search::indexes::text {
 
@@ -44,8 +43,7 @@ class TermIterator : public TextIterator {
   TermIterator(
       absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>&&
           key_iterators,
-      const FieldMaskPredicate query_field_mask,
-      const InternedStringSet* untracked_keys, const bool require_positions,
+      const FieldMaskPredicate query_field_mask, const bool require_positions,
       const FieldMaskPredicate stem_field_mask = 0, bool has_original = false);
   /* Implementation of TextIterator APIs */
   FieldMaskPredicate QueryFieldMask() const override;
@@ -84,10 +82,32 @@ class TermIterator : public TextIterator {
   Key current_key_;
   std::optional<PositionRange> current_position_;
   FieldMaskPredicate current_field_mask_;
-  const InternedStringSet* untracked_keys_;
   const bool require_positions_;
-  const bool has_original_;  // True if first iterator is for original word
+  const bool has_original_;
+
+  // Pending queue: heap of valid iterators not currently being processed.
+  // Provides O(1) access to the minimum key and O(log K) extraction.
+  valkey_search::InlinedPriorityQueue<std::pair<Key, size_t>,
+                                      kWordExpansionInlineCapacity>
+      key_set_;
+  // Pending queue: heap of valid iterators not currently being processed.
+  // Provides O(1) access to the minimum position and O(log K) extraction.
+  valkey_search::InlinedPriorityQueue<std::pair<uint32_t, size_t>,
+                                      kWordExpansionInlineCapacity>
+      pos_set_;
+  // Indices of iterators at current_key_ (active, not in key_set_)
+  absl::InlinedVector<size_t, kWordExpansionInlineCapacity>
+      current_key_indices_;
+  // Indices of iterators at current_position_ (active, not in pos_set_)
+  absl::InlinedVector<size_t, kWordExpansionInlineCapacity>
+      current_pos_indices_;
+
   bool FindMinimumValidKey();
+  void InsertValidKeyIterator(size_t idx);
+  bool FindMinimumValidPosition();
+  void InsertValidPositionIterator(size_t idx);
+  void ClearKeyState();
+  void ClearPositionState();
 };
 
 }  // namespace valkey_search::indexes::text

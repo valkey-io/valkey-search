@@ -12,23 +12,17 @@
 
 #include "fanout.h"
 #include "ft_create_parser.h"
-#include "ft_search_parser.h"
 #include "src/acl.h"
 #include "src/commands/ft_search.h"
-#include "src/coordinator/metadata_manager.h"
 #include "src/metrics.h"
 #include "src/query/fanout.h"
-#include "src/query/inflight_retry.h"
-#include "src/query/response_generator.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
-#include "valkey_search_options.h"
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/cluster_map.h"
 #include "vmsdk/src/debug.h"
-#include "vmsdk/src/log.h"
-#include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/info.h"
 #include "vmsdk/src/utils.h"
 
 namespace valkey_search {
@@ -36,40 +30,8 @@ namespace async {
 
 struct Result {
   cancel::Token cancellation_token;
-  absl::StatusOr<query::SearchResult> search_result;
+  absl::Status status;
   std::unique_ptr<QueryCommand> parameters;
-};
-
-// SearchParameters subclass for initiator (client command) searches.
-// Handles in-flight retry completion by releasing the result to the blocked
-// client.
-class InitiatorSearch : public query::SearchParameters {
- public:
-  vmsdk::BlockedClient blocked_client;
-  std::unique_ptr<Result> result;
-  InitiatorSearch(vmsdk::BlockedClient &&bc, std::unique_ptr<Result> &&res)
-      : query::SearchParameters(0, nullptr, res->parameters->db_num),
-        blocked_client(std::move(bc)),
-        result(std::move(res)) {}
-
-  const char *GetDesc() const override { return "initiator"; }
-
-  query::SearchParameters &GetParameters() override {
-    return *result->parameters;
-  }
-
-  std::vector<indexes::Neighbor> &GetNeighbors() override {
-    return result->search_result->neighbors;
-  }
-
-  void OnComplete(std::vector<indexes::Neighbor> &neighbors) override {
-    blocked_client.SetReplyPrivateData(result.release());
-  }
-
-  void OnCancelled() override {
-    // Let Reply callback handle the cancellation
-    blocked_client.SetReplyPrivateData(result.release());
-  }
 };
 
 int Timeout(ValkeyModuleCtx *ctx, [[maybe_unused]] ValkeyModuleString **argv,
@@ -79,39 +41,68 @@ int Timeout(ValkeyModuleCtx *ctx, [[maybe_unused]] ValkeyModuleString **argv,
 }
 
 int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
-  auto *res =
-      static_cast<Result *>(ValkeyModule_GetBlockedClientPrivateData(ctx));
-  CHECK(res != nullptr);
+  auto *parameters = static_cast<QueryCommand *>(
+      ValkeyModule_GetBlockedClientPrivateData(ctx));
+  CHECK(parameters != nullptr);
 
+  // Check if operation failed first to get the actual error message
+  if (!parameters->search_result.status.ok()) {
+    ++Metrics::GetStats().query_failed_requests_cnt;
+    return ValkeyModule_ReplyWithError(
+        ctx, parameters->search_result.status.message().data());
+  }
   // Check if operation was cancelled and partial results are disabled
-  if (!res->parameters->enable_partial_results &&
-      res->parameters->cancellation_token->IsCancelled()) {
+  if (!parameters->enable_partial_results &&
+      parameters->cancellation_token->IsCancelled()) {
     ++Metrics::GetStats().query_failed_requests_cnt;
     return ValkeyModule_ReplyWithError(
         ctx, "Search operation cancelled due to timeout");
   }
-
-  if (!res->search_result.ok()) {
-    ++Metrics::GetStats().query_failed_requests_cnt;
-    return ValkeyModule_ReplyWithError(
-        ctx, res->search_result.status().message().data());
-  }
-  res->parameters->SendReply(ctx, res->search_result.value());
+  parameters->SendReply(ctx, parameters->search_result);
   return VALKEYMODULE_OK;
 }
 
 void Free([[maybe_unused]] ValkeyModuleCtx *ctx, void *privdata) {
-  auto *result = static_cast<Result *>(privdata);
-  // Some things in the Result can only be cleaned up on the main thread.
+  auto *parameters = static_cast<QueryCommand *>(privdata);
+  // Some things can only be cleaned up on the main thread.
   // We need to do this here.
-  result->parameters->index_schema = nullptr;
+  parameters->index_schema = nullptr;
+  // return_attributes holds ValkeyModuleStrings retained from client argv.
+  // Must be freed here (main thread) to avoid racing with freeClientArgv().
+  parameters->return_attributes.clear();
+  // Cleanup of score_as
+  parameters->score_as = nullptr;
   ValkeySearch::Instance().ScheduleSearchResultCleanup(
-      [result]() { delete result; });
+      [parameters]() { delete parameters; });
 }
 
 }  // namespace async
 
 CONTROLLED_BOOLEAN(ForceReplicasOnly, false);
+DEV_INTEGER_COUNTER(stats, single_slot_queries);
+
+std::vector<vmsdk::cluster_map::NodeInfo> ComputeSearchTargets(
+    ValkeyModuleCtx *ctx, const QueryCommand &parameters) {
+  auto mode = /* !vmsdk::IsReadOnly(ctx) ? query::fanout::kPrimaries ? */
+      ForceReplicasOnly.GetValue()
+          ? vmsdk::cluster_map::FanoutTargetMode::kOneReplicaPerShard
+          : vmsdk::cluster_map::FanoutTargetMode::kRandom;
+
+  // refresh cluster map if needed
+  auto cluster_map = ValkeySearch::Instance().GetOrRefreshClusterMap(ctx);
+
+  if (vmsdk::ParseHashTag(parameters.index_schema_name).has_value()) {
+    auto key = vmsdk::MakeUniqueValkeyString(parameters.index_schema_name);
+    auto this_slot = ValkeyModule_ClusterKeySlot(key.get());
+    single_slot_queries.Increment();
+    return cluster_map->GetTargetsForSlot(
+        mode, query::fanout::IsSystemUnderLowUtilization(), this_slot);
+  } else {
+    return cluster_map->GetTargets(
+        mode, query::fanout::IsSystemUnderLowUtilization());
+  }
+}
+
 CONTROLLED_BOOLEAN(ForceInvalidIndexFingerprint, false);
 
 //
@@ -146,11 +137,27 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
     parameters->index_schema->ProcessMultiQueue();
 
     const bool inside_multi_exec = vmsdk::MultiOrLua(ctx);
+    const bool do_fanout = ValkeySearch::Instance().UsingCoordinator() &&
+                           ValkeySearch::Instance().IsCluster() &&
+                           !parameters->local_only;
+
+    if (ABSL_PREDICT_FALSE(inside_multi_exec && do_fanout)) {
+      return absl::InvalidArgumentError(
+          "MULTI/EXEC or Lua script are not supported in CME mode.");
+    }
+
     if (ABSL_PREDICT_FALSE(!ValkeySearch::Instance().SupportParallelQueries() ||
                            inside_multi_exec)) {
-      VMSDK_ASSIGN_OR_RETURN(
-          auto search_result,
+      VMSDK_RETURN_IF_ERROR(
           query::Search(*parameters, query::SearchMode::kLocal));
+      // Check if operation failed first to get the actual error message
+      if (!parameters->search_result.status.ok()) {
+        ValkeyModule_ReplyWithError(
+            ctx, parameters->search_result.status.message().data());
+        ++Metrics::GetStats().query_failed_requests_cnt;
+        return absl::OkStatus();
+      }
+      // Check if operation was cancelled and partial results are disabled.
       if (!parameters->enable_partial_results &&
           parameters->cancellation_token->IsCancelled()) {
         ValkeyModule_ReplyWithError(
@@ -158,54 +165,28 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
         ++Metrics::GetStats().query_failed_requests_cnt;
         return absl::OkStatus();
       }
-      parameters->SendReply(ctx, search_result);
+      parameters->SendReply(ctx, parameters->search_result);
       ValkeySearch::Instance().ScheduleSearchResultCleanup(
-          [neighbors = std::move(search_result.neighbors)]() mutable {
+          [neighbors =
+               std::move(parameters->search_result.neighbors)]() mutable {
             // neighbors destructor runs automatically when lambda completes
           });
       return absl::OkStatus();
     }
 
-    vmsdk::BlockedClient blocked_client(ctx, async::Reply, async::Timeout,
-                                        async::Free, parameters->timeout_ms);
-    blocked_client.MeasureTimeStart();
-    auto on_done_callback = [blocked_client = std::move(blocked_client)](
-                                auto &search_result, auto parameters) mutable {
-      std::unique_ptr<QueryCommand> upcast_parameters(
-          dynamic_cast<QueryCommand *>(parameters.release()));
-      CHECK(upcast_parameters != nullptr);
-      auto result = std::make_unique<async::Result>(async::Result{
-          .search_result = std::move(search_result),
-          .parameters = std::move(upcast_parameters),
-      });
-
-      // Text predicate evaluation requires main thread to ensure text indexes
-      // reflect current keyspace. Block if result keys have in-flight
-      // mutations.
-      if (result->search_result.ok() && !result->parameters->no_content &&
-          query::QueryHasTextPredicate(*result->parameters)) {
-        auto initiator_search = std::make_unique<async::InitiatorSearch>(
-            std::move(blocked_client), std::move(result));
-        auto retry_ctx = std::make_shared<query::InFlightRetryContext>(
-            std::move(initiator_search));
-        retry_ctx->ScheduleOnMainThread();
-        return;
+    std::vector<vmsdk::cluster_map::NodeInfo> search_targets;
+    if (do_fanout) {
+      search_targets = ComputeSearchTargets(ctx, *parameters);
+      if (search_targets.empty()) {
+        return absl::InternalError("No available nodes to execute the query");
       }
+    }
 
-      blocked_client.SetReplyPrivateData(result.release());
-    };
+    parameters->blocked_client = vmsdk::BlockedClient(
+        ctx, async::Reply, async::Timeout, async::Free, parameters->timeout_ms);
+    parameters->blocked_client->MeasureTimeStart();
 
-    if (ValkeySearch::Instance().UsingCoordinator() &&
-        ValkeySearch::Instance().IsCluster() && !parameters->local_only) {
-      auto mode = /* !vmsdk::IsReadOnly(ctx) ? query::fanout::kPrimaries ? */
-          ForceReplicasOnly.GetValue()
-              ? vmsdk::cluster_map::FanoutTargetMode::kOneReplicaPerShard
-              : vmsdk::cluster_map::FanoutTargetMode::kRandom;
-      // refresh cluster map if needed
-      auto search_targets =
-          ValkeySearch::Instance().GetOrRefreshClusterMap(ctx)->GetTargets(
-              mode, query::fanout::IsSystemUnderLowUtilization());
-
+    if (do_fanout) {
       // get index fingerprint and version
       if (ForceInvalidIndexFingerprint.GetValue()) {
         // test only: simulate invalid index fingerprint and version
@@ -219,26 +200,38 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
             parameters->index_schema->GetVersion());
       }
 
-      // Extract sortby parameter if this is a SearchCommand
-      std::optional<query::SortByParameter> sortby_param = std::nullopt;
-      if (auto *search_cmd = dynamic_cast<SearchCommand *>(parameters.get())) {
-        sortby_param = search_cmd->sortby;
-      }
-
       return query::fanout::PerformSearchFanoutAsync(
           ctx, search_targets,
           ValkeySearch::Instance().GetCoordinatorClientPool(),
-          std::move(parameters), ValkeySearch::Instance().GetReaderThreadPool(),
-          std::move(on_done_callback), sortby_param);
+          std::move(parameters),
+          ValkeySearch::Instance().GetReaderThreadPool());
     }
-    return query::SearchAsync(
-        std::move(parameters), ValkeySearch::Instance().GetReaderThreadPool(),
-        std::move(on_done_callback), query::SearchMode::kLocal);
+    return query::SearchAsync(std::move(parameters),
+                              ValkeySearch::Instance().GetReaderThreadPool(),
+                              query::SearchMode::kLocal);
   }();
   if (!status.ok()) {
     ++Metrics::GetStats().query_failed_requests_cnt;
   }
   return status;
+}
+
+void QueryCommand::QueryCompleteImpl(
+    std::unique_ptr<SearchParameters> parameters) {
+  blocked_client->SetReplyPrivateData(parameters.release());
+  blocked_client->UnblockClient();
+}
+
+void QueryCommand::QueryCompleteBackground(
+    std::unique_ptr<SearchParameters> parameters) {
+  CHECK(!vmsdk::IsMainThread());
+  QueryCompleteImpl(std::move(parameters));
+}
+
+void QueryCommand::QueryCompleteMainThread(
+    std::unique_ptr<SearchParameters> parameters) {
+  CHECK(vmsdk::IsMainThread());
+  QueryCompleteImpl(std::move(parameters));
 }
 
 }  // namespace valkey_search

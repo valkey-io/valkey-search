@@ -9,6 +9,7 @@
 #include <map>
 
 #include "gtest/gtest.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/testing_infra/utils.h"
 
 std::ostream &operator<<(std::ostream &os, ValkeyModuleString *s) {
@@ -35,7 +36,7 @@ struct FakeIndexInterface : public IndexInterface {
   absl::StatusOr<std::string> GetIdentifier(
       absl::string_view alias) const override {
     std::cout << "Fake get identifier for " << alias << "\n";
-    VMSDK_ASSIGN_OR_RETURN(auto type, GetFieldType(alias));
+    VMSDK_ASSIGN_OR_RETURN([[maybe_unused]] auto type, GetFieldType(alias));
     return std::string(alias);
   }
   absl::StatusOr<std::string> GetAlias(
@@ -112,12 +113,18 @@ static struct SlopTestValue {
               {"SLOP 0", 0},      {"SLOP 1", 1},
               {"SLOP 10", 10},    {"SLOP fred", std::nullopt}};
 
+static struct VerbatimTestValue {
+  std::string text_;
+  bool value_;
+} VerbatimCases[]{{"", false}, {"VERBATIM", true}};
+
 static void DoPrefaceTestCase(FakeIndexInterface *fake_index, std::string test,
                               TimeoutTestValue timeout_test,
                               DialectTestValue dialect_test,
                               LoadsTestValue loads_test,
                               InorderTestValue inorder_test,
-                              SlopTestValue slop_test) {
+                              SlopTestValue slop_test,
+                              VerbatimTestValue verbatim_test) {
   std::cerr << "Running test: '" << test << "'\n";
   auto argv = vmsdk::ToValkeyStringVector(test);
   vmsdk::ArgsIterator itr(argv.data(), argv.size());
@@ -147,6 +154,7 @@ static void DoPrefaceTestCase(FakeIndexInterface *fake_index, std::string test,
     }
     EXPECT_EQ(params.inorder, inorder_test.value_);
     EXPECT_EQ(params.slop, slop_test.value_);
+    EXPECT_EQ(params.verbatim, verbatim_test.value_);
   } else {
     if (!timeout_test.value_) {
       EXPECT_EQ(params.timeout_ms, query::kTimeoutMS);
@@ -167,11 +175,15 @@ TEST_F(AggregateTest, PrefaceParserTest) {
       for (const auto &loads_test : LoadCases) {
         for (const auto &inorder_test : InorderCases) {
           for (const auto &slop_test : SlopCases) {
-            std::string test = timeout_test.text_ + " " + dialect_test.text_ +
-                               " " + loads_test.text_ + " " +
-                               inorder_test.text_ + " " + slop_test.text_;
-            DoPrefaceTestCase(&fake_index, test, timeout_test, dialect_test,
-                              loads_test, inorder_test, slop_test);
+            for (const auto &verbatim_test : VerbatimCases) {
+              std::string test = timeout_test.text_ + " " + dialect_test.text_ +
+                                 " " + loads_test.text_ + " " +
+                                 inorder_test.text_ + " " + slop_test.text_ +
+                                 " " + verbatim_test.text_;
+              DoPrefaceTestCase(&fake_index, test, timeout_test, dialect_test,
+                                loads_test, inorder_test, slop_test,
+                                verbatim_test);
+            }
           }
         }
       }
@@ -267,6 +279,132 @@ TEST_F(AggregateTest, StageParserTest) {
       }
     }
   }
+}
+
+TEST_F(AggregateTest, EmptyApplyAndFilterExpressionsAreRejected) {
+  for (absl::string_view test_case :
+       {"FILTER ''", "FILTER ' '", "APPLY '' AS r", "APPLY ' ' AS r"}) {
+    auto argv = vmsdk::ToValkeyStringVector(test_case);
+    vmsdk::ArgsIterator itr(argv.data(), argv.size());
+
+    AggregateParameters params(0);
+    params.timeout_ms = 0;
+    params.parse_vars_.index_interface_ = &fake_index;
+
+    auto parser = CreateAggregateParser();
+    auto result = parser.Parse(params, itr);
+
+    EXPECT_FALSE(result.ok()) << "Parser unexpectedly accepted: " << test_case;
+
+    for (auto arg : argv) {
+      ValkeyModule_FreeString(nullptr, arg);
+    }
+  }
+}
+
+TEST_F(AggregateTest, GetSerializationRange_NoStages) {
+  AggregateParameters params(0);
+  auto range = params.GetSerializationRange();
+  EXPECT_EQ(range, query::SerializationRange::All());
+}
+
+TEST_F(AggregateTest, GetSerializationRange_WithLimitStage) {
+  AggregateParameters params(0);
+  auto limit = std::make_unique<Limit>();
+  limit->offset_ = 10;
+  limit->limit_ = 20;
+  params.stages_.push_back(std::move(limit));
+
+  auto range = params.GetSerializationRange();
+  EXPECT_EQ(range.start_index, 10u);
+  EXPECT_EQ(range.end_index, 30u);
+}
+
+TEST_F(AggregateTest, GetSerializationRange_WithApplyStage) {
+  AggregateParameters params(0);
+  auto apply = std::make_unique<Apply>();
+  params.stages_.push_back(std::move(apply));
+
+  auto range = params.GetSerializationRange();
+  EXPECT_EQ(range, query::SerializationRange::All());
+}
+
+TEST_F(AggregateTest, GetSerializationRange_WithFilterStage) {
+  AggregateParameters params(0);
+  auto filter = std::make_unique<Filter>();
+  params.stages_.push_back(std::move(filter));
+
+  auto range = params.GetSerializationRange();
+  EXPECT_EQ(range, query::SerializationRange::All());
+}
+
+TEST_F(AggregateTest, GetSerializationRange_WithSortByStage) {
+  AggregateParameters params(0);
+  auto sortby = std::make_unique<SortBy>();
+  params.stages_.push_back(std::move(sortby));
+
+  auto range = params.GetSerializationRange();
+  EXPECT_EQ(range, query::SerializationRange::All());
+}
+
+TEST_F(AggregateTest, GetSerializationRange_WithGroupByStage) {
+  AggregateParameters params(0);
+  auto groupby = std::make_unique<GroupBy>();
+  params.stages_.push_back(std::move(groupby));
+
+  auto range = params.GetSerializationRange();
+  EXPECT_EQ(range, query::SerializationRange::All());
+}
+
+TEST_F(AggregateTest, GetSerializationRange_LimitBeforeOtherStages) {
+  AggregateParameters params(0);
+  auto limit = std::make_unique<Limit>();
+  limit->offset_ = 5;
+  limit->limit_ = 15;
+  params.stages_.push_back(std::move(limit));
+
+  auto filter = std::make_unique<Filter>();
+  params.stages_.push_back(std::move(filter));
+
+  auto range = params.GetSerializationRange();
+  EXPECT_EQ(range.start_index, 5u);
+  EXPECT_EQ(range.end_index, 20u);
+}
+
+TEST_F(AggregateTest, GetSerializationRange_OtherStagesBeforeLimit) {
+  AggregateParameters params(0);
+  auto filter = std::make_unique<Filter>();
+  params.stages_.push_back(std::move(filter));
+
+  auto limit = std::make_unique<Limit>();
+  limit->offset_ = 0;
+  limit->limit_ = 100;
+  params.stages_.push_back(std::move(limit));
+
+  auto range = params.GetSerializationRange();
+  EXPECT_EQ(range, query::SerializationRange::All());
+}
+
+TEST_F(AggregateTest, ExpressionDepthAtLimit) {
+  auto limit = options::GetQueryStringDepth().GetValue();
+  std::string deep_expr(limit - 1, '(');
+  deep_expr += "1";
+  deep_expr += std::string(limit - 1, ')');
+
+  AggregateParameters params(0);
+  EXPECT_TRUE(expr::Expression::Compile(params, deep_expr).ok());
+}
+
+TEST_F(AggregateTest, ExpressionDepthExceedsLimit) {
+  auto limit = options::GetQueryStringDepth().GetValue();
+  std::string deep_expr(limit, '(');
+  deep_expr += "1";
+  deep_expr += std::string(limit, ')');
+
+  AggregateParameters params(0);
+  auto result = expr::Expression::Compile(params, deep_expr);
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(absl::IsInvalidArgument(result.status()));
 }
 
 }  // namespace aggregate

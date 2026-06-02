@@ -14,7 +14,6 @@
 #include "absl/strings/string_view.h"
 #include "absl/strings/str_cat.h"
 #include "grpcpp/support/status.h"
-#include "src/coordinator/coordinator.pb.h"
 
 namespace valkey_search {
 inline grpc::Status ToGrpcStatus(const absl::Status& status) {
@@ -24,6 +23,15 @@ inline grpc::Status ToGrpcStatus(const absl::Status& status) {
   return {static_cast<grpc::StatusCode>(status.code()),
           std::string(status.message())};
 }
+
+inline absl::Status ToAbslStatus(const grpc::Status& status) {
+  if (status.ok()) {
+    return absl::OkStatus();
+  }
+  return {absl::StatusCode(status.error_code()),
+          std::string(status.error_message())};
+}
+
 namespace coordinator {
 // This offset results in 26673 for Valkey default port 6379 - which is COORD
 // on a telephone keypad.

@@ -57,14 +57,15 @@ minimal state overhead, maintaining cumulative position for delta decoding.
 
 #include <cstddef>
 #include <cstdint>
-#include <map>
 #include <memory>
+
+#include "absl/container/btree_map.h"
 
 namespace valkey_search::indexes::text {
 
 // Forward declarations to avoid circular dependency
 using Position = uint32_t;
-class FieldMask;
+struct FieldMask;
 
 // FlatPositionMap is a compact byte array representation
 // Layout: [Bitfield Header][Optional Partition Map][Position/Field Data]
@@ -72,7 +73,7 @@ class FlatPositionMap {
  public:
   // Factory: allocates single block [FlatPositionMap | data...]
   static FlatPositionMap* Create(
-      const std::map<Position, std::unique_ptr<FieldMask>>& position_map,
+      const absl::btree_map<Position, FieldMask>& position_map,
       size_t num_text_fields);
 
   // Destructor: frees the allocated memory
@@ -140,8 +141,7 @@ class PositionIterator {
   size_t header_size_;              // Size of variable-length header
   uint64_t current_field_mask_;     // Bit mask of fields at current position
 
-  // Private static helper functions for decoding and navigation
-  static uint32_t ReadVarUint(const char* ptr, uint8_t num_bytes);
+  // Private static helper function for navigation
   static uint32_t FindPartitionForTarget(const char* partition_map,
                                          uint32_t num_partitions,
                                          Position target);

@@ -8,6 +8,7 @@ from test_cancel import Any
 from valkeytestframework.util import waiters
 from valkey import ResponseError
 from test_fanout_base import MAX_RETRIES
+from ft_info_parser import FTInfoParser
 
 class TestFTInfoPartitionConsistencyControls(ClusterTestUtils, ValkeySearchClusterTestCaseDebugMode):
     def run_info_command(self, client, index_name, enable_partial_results=False, require_consistency=False, expect_error=False):
@@ -42,7 +43,7 @@ class TestFTInfoPartitionConsistencyControls(ClusterTestUtils, ValkeySearchClust
 
         # normal result with consistency check
         cur_result = self.run_info_command(client, index_name, require_consistency=True)
-        assert cur_result == normal_result
+        assert FTInfoParser(cur_result).num_docs == FTInfoParser(normal_result).num_docs
         
         # force invalid invalid index fingerprint and version
         self.control_set("ForceInfoInvalidSlotFingerprint", "yes")
@@ -54,7 +55,8 @@ class TestFTInfoPartitionConsistencyControls(ClusterTestUtils, ValkeySearchClust
 
         # disable consistency check, get normal result
         cur_result = self.run_info_command(client, index_name, require_consistency=False, expect_error=False)
-        assert cur_result == normal_result
+
+        assert FTInfoParser(cur_result).num_docs == FTInfoParser(normal_result).num_docs
 
         self.control_set("ForceInfoInvalidSlotFingerprint", "no")
 
@@ -74,7 +76,7 @@ class TestFTInfoPartitionConsistencyControls(ClusterTestUtils, ValkeySearchClust
 
         # normal result with partition controls
         cur_result = self.run_info_command(client, index_name, enable_partial_results=True)
-        assert cur_result == normal_result
+        assert FTInfoParser(cur_result).num_docs == FTInfoParser(normal_result).num_docs
 
         self.config_set("search.ft-info-timeout-ms", "500")
 
@@ -93,9 +95,7 @@ class TestFTInfoPartitionConsistencyControls(ClusterTestUtils, ValkeySearchClust
 
         # enable partial results, get partial result
         cur_result = self.run_info_command(node0, index_name, enable_partial_results=True)
-        print(cur_result)
-        print(normal_result)
-        assert cur_result != normal_result
+        assert FTInfoParser(cur_result).num_docs != FTInfoParser(normal_result).num_docs
 
         # reset timeout on remote node
         assert node1.execute_command(

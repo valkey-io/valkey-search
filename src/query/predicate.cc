@@ -22,10 +22,12 @@
 #include "src/indexes/text/fuzzy.h"
 #include "src/indexes/text/orproximity.h"
 #include "src/indexes/text/proximity.h"
+#include "src/indexes/text/term.h"
 #include "src/indexes/text/text_index.h"
 #include "src/indexes/text/text_iterator.h"
 #include "src/indexes/vector_base.h"
 #include "src/valkey_search_options.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 
@@ -42,17 +44,16 @@ EvaluationResult BuildTextEvaluationResult(
   if (!iterator->IsIteratorValid()) {
     return EvaluationResult(false);
   }
-  return EvaluationResult(true, std::move(iterator));
+  return {true, std::move(iterator)};
 }
 
 TermPredicate::TermPredicate(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-    FieldMaskPredicate field_mask, std::string term, bool exact_)
-    : TextPredicate(),
-      text_index_schema_(text_index_schema),
+    FieldMaskPredicate field_mask, std::string term, bool exact)
+    : text_index_schema_(text_index_schema),
       field_mask_(field_mask),
       term_(term),
-      exact_(exact_) {}
+      exact_(exact) {}
 
 EvaluationResult TermPredicate::Evaluate(Evaluator &evaluator) const {
   return evaluator.EvaluateText(*this, false);
@@ -99,6 +100,7 @@ EvaluationResult TermPredicate::Evaluate(
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
   // Search for the original word - may or may not exist in corpus
+  BACKGROUND_PAUSEPOINT("search_term_predicate");
   bool found_original = TryAddWordKeyIteratorForPrefilter(
       text_index, term_, target_key, field_mask, require_positions,
       key_iterators);
@@ -127,26 +129,24 @@ EvaluationResult TermPredicate::Evaluate(
     }
     // Search for stem variants - these should all exist from ingestion
     for (const auto &variant : stem_variants) {
-      bool found = TryAddWordKeyIteratorForPrefilter(
-          text_index, variant, target_key, stem_field_mask, require_positions,
-          key_iterators);
-      CHECK(found) << "Word in stem tree not found in index - ingestion issue";
+      TryAddWordKeyIteratorForPrefilter(text_index, variant, target_key,
+                                        stem_field_mask, require_positions,
+                                        key_iterators);
     }
   }
   if (key_iterators.empty()) {
     return EvaluationResult(false);
   }
   auto iterator = std::make_unique<indexes::text::TermIterator>(
-      std::move(key_iterators), field_mask, nullptr, require_positions,
-      stem_field_mask, found_original);
+      std::move(key_iterators), field_mask, require_positions, stem_field_mask,
+      found_original);
   return BuildTextEvaluationResult(std::move(iterator));
 }
 
 PrefixPredicate::PrefixPredicate(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
     FieldMaskPredicate field_mask, std::string term)
-    : TextPredicate(),
-      text_index_schema_(text_index_schema),
+    : text_index_schema_(text_index_schema),
       field_mask_(field_mask),
       term_(term) {}
 
@@ -167,6 +167,7 @@ EvaluationResult PrefixPredicate::Evaluate(
   uint32_t max_words = options::GetMaxTermExpansions().GetValue();
   uint32_t word_count = 0;
   while (!word_iter.Done() && word_count < max_words) {
+    BACKGROUND_PAUSEPOINT("search_prefix_predicate");
     std::string_view word = word_iter.GetWord();
     auto postings = word_iter.GetPostingsTarget();
     if (postings) {
@@ -187,15 +188,14 @@ EvaluationResult PrefixPredicate::Evaluate(
     return EvaluationResult(true);
   }
   auto iterator = std::make_unique<indexes::text::TermIterator>(
-      std::move(key_iterators), field_mask, nullptr, require_positions);
+      std::move(key_iterators), field_mask, require_positions);
   return BuildTextEvaluationResult(std::move(iterator));
 }
 
 SuffixPredicate::SuffixPredicate(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
     FieldMaskPredicate field_mask, std::string term)
-    : TextPredicate(),
-      text_index_schema_(text_index_schema),
+    : text_index_schema_(text_index_schema),
       field_mask_(field_mask),
       term_(term) {}
 
@@ -221,8 +221,11 @@ EvaluationResult SuffixPredicate::Evaluate(
   uint32_t max_words = options::GetMaxTermExpansions().GetValue();
   uint32_t word_count = 0;
   while (!word_iter.Done() && word_count < max_words) {
+    BACKGROUND_PAUSEPOINT("search_suffix_expansion");
     std::string_view word = word_iter.GetWord();
-    if (!word.starts_with(reversed_term)) break;
+    if (!word.starts_with(reversed_term)) {
+      break;
+    }
     auto postings = word_iter.GetPostingsTarget();
     if (postings) {
       auto key_iter = postings->GetKeyIterator();
@@ -242,15 +245,14 @@ EvaluationResult SuffixPredicate::Evaluate(
     return EvaluationResult(true);
   }
   auto iterator = std::make_unique<indexes::text::TermIterator>(
-      std::move(key_iterators), field_mask, nullptr, require_positions);
+      std::move(key_iterators), field_mask, require_positions);
   return BuildTextEvaluationResult(std::move(iterator));
 }
 
 InfixPredicate::InfixPredicate(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
     FieldMaskPredicate field_mask, std::string term)
-    : TextPredicate(),
-      text_index_schema_(text_index_schema),
+    : text_index_schema_(text_index_schema),
       field_mask_(field_mask),
       term_(term) {}
 
@@ -269,8 +271,7 @@ EvaluationResult InfixPredicate::Evaluate(
 FuzzyPredicate::FuzzyPredicate(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
     FieldMaskPredicate field_mask, std::string term, uint32_t distance)
-    : TextPredicate(),
-      text_index_schema_(text_index_schema),
+    : text_index_schema_(text_index_schema),
       field_mask_(field_mask),
       term_(term),
       distance_(distance) {}
@@ -293,6 +294,7 @@ EvaluationResult FuzzyPredicate::Evaluate(
                       indexes::text::kWordExpansionInlineCapacity>
       filtered_key_iterators;
   for (auto &key_iter : key_iters) {
+    BACKGROUND_PAUSEPOINT("search_fuzzy_search");
     if (key_iter.SkipForwardKey(target_key) &&
         key_iter.ContainsFields(field_mask)) {
       filtered_key_iterators.emplace_back(std::move(key_iter));
@@ -305,8 +307,7 @@ EvaluationResult FuzzyPredicate::Evaluate(
     return EvaluationResult(true);
   }
   auto iterator = std::make_unique<indexes::text::TermIterator>(
-      std::move(filtered_key_iterators), field_mask, nullptr,
-      require_positions);
+      std::move(filtered_key_iterators), field_mask, require_positions);
   return BuildTextEvaluationResult(std::move(iterator));
 }
 
@@ -407,11 +408,16 @@ void ComposedPredicate::AddChild(std::unique_ptr<Predicate> child) {
 }
 // Helper to evaluate text predicates with conditional position requirements
 EvaluationResult EvaluatePredicate(const Predicate *predicate,
-                                   Evaluator &evaluator,
-                                   bool require_positions) {
+                                   Evaluator &evaluator, bool require_positions,
+                                   bool from_or = false) {
   if (predicate->GetType() == PredicateType::kText) {
     return evaluator.EvaluateText(
         *static_cast<const TextPredicate *>(predicate), require_positions);
+  }
+  if (predicate->GetType() == PredicateType::kComposedAnd) {
+    // Pass down the from_or flag to nested AND
+    return static_cast<const ComposedPredicate *>(predicate)
+        ->EvaluateWithContext(evaluator, from_or);
   }
   return predicate->Evaluate(evaluator);
 }
@@ -421,6 +427,11 @@ EvaluationResult EvaluatePredicate(const Predicate *predicate,
 // ProximityIterator to validate term positions meet distance and order
 // requirements.
 EvaluationResult ComposedPredicate::Evaluate(Evaluator &evaluator) const {
+  return EvaluateWithContext(evaluator, false);
+}
+
+EvaluationResult ComposedPredicate::EvaluateWithContext(Evaluator &evaluator,
+                                                        bool from_or) const {
   // Determine if children need to return positions for proximity checks.
   bool require_positions = slop_.has_value() || inorder_;
   // Handle AND logic
@@ -433,15 +444,21 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator &evaluator) const {
     for (const auto &child : children_) {
       // In AND: skip text children when in prefilter evaluation because text in
       // AND is fully (recursively) resolved in the entries fetcher layer
-      // already. UNLESS query contains negation.
+      // already. The only cases where this is not true are:
+      // 1) when an AND predicate contains an OR which has some other non text
+      // children and an AND child containing text. This is not solved in
+      // entries fetcher yet.
+      // 2) when the query has negation on text. Currently, a universal set is
+      // used in the entries fetcher layer for text+negate queries.
       if (evaluator.IsPrefilterEvaluator() &&
-          child->GetType() == PredicateType::kText &&
+          child->GetType() == PredicateType::kText && !from_or &&
           !(evaluator.GetQueryOperations() &
             QueryOperations::kContainsNegate)) {
         continue;
       }
+      BACKGROUND_PAUSEPOINT("search_composed_predicate");
       EvaluationResult result =
-          EvaluatePredicate(child.get(), evaluator, require_positions);
+          EvaluatePredicate(child.get(), evaluator, require_positions, from_or);
       // Short-circuit on first false
       if (!result.matches) {
         return EvaluationResult(false);
@@ -465,22 +482,22 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator &evaluator) const {
       // Create ProximityIterator to check proximity
       auto proximity_iterator =
           std::make_unique<indexes::text::ProximityIterator>(
-              std::move(iterators), slop_, inorder_, nullptr, false);
+              std::move(iterators), slop_, inorder_, false);
       // Check if any valid proximity matches exist
       if (!proximity_iterator->IsIteratorValid()) {
         return EvaluationResult(false);
       }
       // Validate against original target key from evaluator
-      auto target_key = evaluator.GetTargetKey();
+      const auto &target_key = evaluator.GetTargetKey();
       if (target_key && proximity_iterator->CurrentKey() != target_key) {
         return EvaluationResult(false);
       }
       // Return the proximity iterator for potential nested use.
-      return EvaluationResult(true, std::move(proximity_iterator));
+      return {true, std::move(proximity_iterator)};
     }
     // Propagate the filter iterator from the one child exists
     else if (childrenWithPositions == 1) {
-      return EvaluationResult(true, std::move(iterators[0]));
+      return {true, std::move(iterators[0])};
     }
     // All matched, but none have position. non-proximity case
     return EvaluationResult(true);
@@ -491,7 +508,7 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator &evaluator) const {
                           indexes::text::kProximityTermsInlineCapacity>();
   for (const auto &child : children_) {
     EvaluationResult result =
-        EvaluatePredicate(child.get(), evaluator, require_positions);
+        EvaluatePredicate(child.get(), evaluator, require_positions, true);
     // Short-circuit if any matches and positions not required.
     if (result.matches && !require_positions) {
       return EvaluationResult(true);
@@ -509,7 +526,7 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator &evaluator) const {
   // In case positional awareness is required, use a OrProximityIterator.
   auto or_proximity_iterator =
       std::make_unique<indexes::text::OrProximityIterator>(
-          std::move(filter_iterators), nullptr);
+          std::move(filter_iterators));
   // Check if any valid matches exist
   if (!or_proximity_iterator->IsIteratorValid()) {
     return EvaluationResult(false);
@@ -520,7 +537,7 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator &evaluator) const {
     return EvaluationResult(false);
   }
   // Return the OR proximity iterator for potential nested scenarios.
-  return EvaluationResult(true, std::move(or_proximity_iterator));
+  return {true, std::move(or_proximity_iterator)};
 }
 
 }  // namespace valkey_search::query

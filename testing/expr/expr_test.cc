@@ -12,6 +12,7 @@
 #include "absl/container/flat_hash_map.h"
 #include "gtest/gtest.h"
 #include "src/expr/value.h"
+#include "vmsdk/src/testing_infra/utils.h"
 
 namespace valkey_search {
 namespace expr {
@@ -20,7 +21,7 @@ struct Record : public Expression::Record {
   std::map<std::string, Value> attrs;
 };
 
-class ExprTest : public testing::Test {
+class ExprTest : public vmsdk::ValkeyTest {
  protected:
   struct Ref : public Expression::AttributeReference {
     Ref(const absl::string_view s) : name_(s) {}
@@ -65,11 +66,11 @@ class ExprTest : public testing::Test {
   std::unique_ptr<Record> record_;
 
   void SetUp() override {
+    vmsdk::ValkeyTest::SetUp();
     record_ = std::make_unique<Record>();
     record_->attrs["one"] = Value(1.0);
     record_->attrs["two"] = Value(2.0);
   }
-  void TearDown() override {}
 };
 
 TEST_F(ExprTest, TypesTest) {
@@ -172,6 +173,22 @@ TEST_F(ExprTest, TypesTest) {
       std::cout << "Failed to compile:" << e.status() << "\n";
       EXPECT_FALSE(c.second);
     }
+  }
+}
+
+TEST_F(ExprTest, EmptyExpressionIsRejected) {
+  for (absl::string_view expr : {"", " "}) {
+    auto compiled = Expression::Compile(cc, expr);
+    EXPECT_FALSE(compiled.ok())
+        << "Expression unexpectedly compiled: '" << expr << "'";
+  }
+}
+
+TEST_F(ExprTest, NotOperatorRequiresOperand) {
+  for (absl::string_view expr : {"!", "! ", "!()"}) {
+    auto compiled = Expression::Compile(cc, expr);
+    EXPECT_FALSE(compiled.ok())
+        << "Expression unexpectedly compiled: '" << expr << "'";
   }
 }
 

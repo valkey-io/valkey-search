@@ -20,11 +20,12 @@ class UnicodeNormalizer {
   /// Initialize ICU for module-wide usage (call once at module startup)
   static void Initialize();
 
-  /// Basic case folding for case-insensitive search
-  /// Currently implemented using ICU UnicodeString::foldCase()
-  /// @param text Input text to fold
-  /// @return Case-folded text string
-  static std::string CaseFold(absl::string_view text);
+  /// Performs Unicode case folding in-place on an existing string.
+  /// Minimizes heap allocations by reusing the provided string's buffer.
+  /// This is preferred for high-throughput tokenization loops.
+  /// @param str The string to be modified; its capacity is reused while its
+  /// content is replaced with the folded version.
+  static void CaseFoldInPlace(std::string& str);
 
   // Planned multi-language support APIs (ICU-backed, not implemented yet)
   // These show reviewers exactly which ICU functionality we will use

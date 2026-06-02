@@ -15,7 +15,6 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <deque>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -40,7 +39,6 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
-#include "src/indexes/text.h"
 #include "src/query/predicate.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
@@ -470,11 +468,11 @@ absl::Status VectorBase::LoadTrackedKeys(
           .magnitude = tracked_key_metadata.magnitude()}});
     key_by_internal_id_.insert(
         {tracked_key_metadata.internal_id(), interned_key});
-    inc_id_ = std::max(
-        inc_id_, static_cast<uint64_t>(tracked_key_metadata.internal_id()));
     ExternalizeVector(ctx, attribute_data_type, tracked_key_metadata.key(),
                       attribute_identifier_);
   }
+  // Use max label from label_lookup_
+  inc_id_ = GetMaxInternalLabel();
   ++inc_id_;
   return absl::OkStatus();
 }
@@ -490,6 +488,10 @@ std::unique_ptr<data_model::Index> VectorBase::ToProto() const {
   ToProtoImpl(vector_index.get());
   index_proto->set_allocated_vector_index(vector_index.release());
   return index_proto;
+}
+
+uint32_t VectorBase::GetMutationWeight() const {
+  return options::GetMutationWeightVector().GetValue();
 }
 
 absl::StatusOr<std::pair<float, hnswlib::labeltype>>
@@ -559,6 +561,8 @@ bool VectorBase::IsTracked(const InternedStringPtr &key) const {
 bool VectorBase::IsUnTracked(const InternedStringPtr &key) const {
   return false;
 }
+
+void VectorBase::UnTrack(const InternedStringPtr &key) {}
 
 absl::Status VectorBase::ForEachTrackedKey(
     absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const {

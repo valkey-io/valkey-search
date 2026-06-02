@@ -9,7 +9,6 @@
 #define VALKEYSEARCH_SRC_INDEXES_INDEX_BASE_H
 
 #include <cstddef>
-#include <cstdint>
 #include <memory>
 
 #include "absl/base/no_destructor.h"
@@ -63,6 +62,7 @@ class IndexBase {
   virtual size_t GetUnTrackedKeyCount() const = 0;
   virtual bool IsTracked(const InternedStringPtr& key) const = 0;
   virtual bool IsUnTracked(const InternedStringPtr& key) const = 0;
+  virtual void UnTrack(const InternedStringPtr& key) = 0;
   virtual absl::Status ForEachTrackedKey(
       absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn) const = 0;
   virtual absl::Status ForEachUnTrackedKey(
@@ -72,6 +72,9 @@ class IndexBase {
       vmsdk::UniqueValkeyString input) const {
     return input;
   }
+
+  /// Returns the mutation weight for this index type
+  virtual uint32_t GetMutationWeight() const = 0;
 
  private:
   IndexerType indexer_type_{IndexerType::kNone};

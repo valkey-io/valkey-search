@@ -301,12 +301,12 @@ class FTInfoParser:
     @property
     def num_unique_terms(self) -> Optional[int]:
         """Get the number of unique terms in the text index."""
-        return self.parsed_data.get("num_unique_terms")
+        return self.parsed_data.get("num_terms")
 
     @property
     def num_total_terms(self) -> Optional[int]:
         """Get the total frequency of all terms across all documents."""
-        return self.parsed_data.get("num_total_terms")
+        return self.parsed_data.get("total_term_occurrences")
 
     @property
     def posting_sz_bytes(self) -> Optional[int]:

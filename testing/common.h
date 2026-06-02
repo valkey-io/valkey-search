@@ -100,6 +100,7 @@ class MockIndex : public indexes::IndexBase {
               (const, override));
   MOCK_METHOD(bool, IsUnTracked, (const InternedStringPtr& key),
               (const, override));
+  MOCK_METHOD(void, UnTrack, (const InternedStringPtr& key), (override));
   MOCK_METHOD(
       (absl::Status), ForEachTrackedKey,
       (absl::AnyInvocable<absl::Status(const InternedStringPtr& key)> fn),
@@ -108,6 +109,7 @@ class MockIndex : public indexes::IndexBase {
       (absl::Status), ForEachUnTrackedKey,
       (absl::AnyInvocable<absl::Status(const InternedStringPtr& key)> fn),
       (const, override));
+  MOCK_METHOD(uint32_t, GetMutationWeight, (), (const, override));
 };
 
 class MockKeyspaceEventSubscription : public KeyspaceEventSubscription {
@@ -230,7 +232,8 @@ class MockIndexSchema : public IndexSchema {
       vmsdk::ThreadPool* mutations_thread_pool,
       data_model::Language language = data_model::Language::LANGUAGE_ENGLISH,
       std::string punctuation = ".", bool with_offsets = true,
-      const std::vector<std::string>& stop_words = {}) {
+      const std::vector<std::string>& stop_words = {}, float score = 1.0,
+      const std::string& score_field = "") {
     data_model::IndexSchema index_schema_proto;
     index_schema_proto.set_name(std::string(key));
     index_schema_proto.mutable_subscribed_key_prefixes()->Add(
@@ -240,6 +243,10 @@ class MockIndexSchema : public IndexSchema {
     index_schema_proto.set_with_offsets(with_offsets);
     index_schema_proto.mutable_stop_words()->Add(stop_words.begin(),
                                                  stop_words.end());
+    index_schema_proto.set_score(score);
+    if (!score_field.empty()) {
+      index_schema_proto.set_score_field(score_field);
+    }
     // NOLINTNEXTLINE
     auto res = std::shared_ptr<MockIndexSchema>(new MockIndexSchema(
         ctx, index_schema_proto, std::move(attribute_data_type),
@@ -461,6 +468,23 @@ void WaitWorkerTasksAreCompleted(vmsdk::ThreadPool& mutations_thread_pool);
 
 inline auto VectorToStr = [](const std::vector<float>& v) {
   return absl::string_view((char*)v.data(), v.size() * sizeof(float));
+};
+
+class UnitTestSearchParameters : public query::SearchParameters {
+ public:
+  UnitTestSearchParameters() {
+    timeout_ms = 10000;
+    db_num = 0;
+    cancellation_token = cancel::Make(timeout_ms, nullptr);
+  }
+  void QueryCompleteBackground(
+      std::unique_ptr<SearchParameters> self) override {
+    CHECK(false);
+  }
+  void QueryCompleteMainThread(
+      std::unique_ptr<SearchParameters> self) override {
+    CHECK(false);
+  }
 };
 
 }  // namespace valkey_search

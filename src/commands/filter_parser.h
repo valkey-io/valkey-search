@@ -15,7 +15,6 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "src/index_schema.h"
-#include "src/indexes/tag.h"
 #include "src/indexes/text/lexer.h"
 #include "src/query/predicate.h"
 #include "vmsdk/src/module_config.h"
@@ -63,6 +62,7 @@ struct FilterParseResults {
   std::unique_ptr<query::Predicate> root_predicate;
   absl::flat_hash_set<std::string> filter_identifiers;
   QueryOperations query_operations = QueryOperations::kNone;
+  bool is_match_all = false;
 };
 class FilterParser {
  public:
@@ -101,8 +101,8 @@ class FilterParser {
   absl::Status SetupTextFieldConfiguration(
       FieldMaskPredicate& field_mask,
       const std::optional<std::string>& field_name, bool with_suffix);
-  absl::StatusOr<std::unique_ptr<query::Predicate>> ParseTextTokens(
-      const std::optional<std::string>& field_for_default);
+  absl::StatusOr<std::optional<std::unique_ptr<query::Predicate>>>
+  ParseTextTokens(const std::optional<std::string>& field_for_default);
   absl::StatusOr<bool> IsMatchAllExpression();
 
   // Struct to hold parsing state including predicate, bracket counter, and

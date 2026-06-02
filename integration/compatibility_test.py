@@ -5,13 +5,19 @@ from operator import itemgetter
 from itertools import chain, combinations
 import pickle
 import compatibility
-from compatibility.data_sets import * 
+from compatibility import GENERATORS, compute_sources_hash
+from compatibility.data_sets import *
+
+ALL_ANSWER_FILES = [g["answers"] for g in GENERATORS]
+CLUSTER_ANSWER_FILES = [g["answers"] for g in GENERATORS if g["cluster"]]
 TEST_MARKER = "*" * 100
 from valkey_search_test_case import (
     ValkeySearchClusterTestCase,
     ValkeySearchTestCaseBase,
 )
 from valkeytestframework.conftest import resource_port_tracker
+from utils import IndexingTestHelper
+from valkeytestframework.util import waiters
 
 encoder = lambda x: x.encode() if not isinstance(x, bytes) else x
 
@@ -381,14 +387,26 @@ def mark_as_failed(testname):
 
 def do_answer(client, expected, data_set):
     global correct_answers, failed_tests, passed_tests
-    if (expected['data_set_name'], expected['key_type']) != data_set:
+    if (expected['data_set_name'], expected['key_type'], expected.get('schema_type')) != data_set:
         print("Loading data set:", expected['data_set_name'], "key type:", expected['key_type'])
         client.execute_command("FLUSHALL SYNC")
-        load_data(client, expected['data_set_name'], expected['key_type'])
-        data_set = (expected['data_set_name'], expected['key_type'])
+        load_data(client, expected['data_set_name'], expected['key_type'], schema_type=expected.get('schema_type', 'default'))
+        waiters.wait_for_true(lambda: IndexingTestHelper.is_indexing_complete_on_node(client, f"{expected['key_type']}_idx1"))
+        data_set = (expected['data_set_name'], expected['key_type'], expected.get("schema_type"))
+
+    # for the excluded queries with known difference
+    # just run in valkey to make sure they do not crash
+    if expected.get('excluded'):
+        try:
+            print(f"Running excluded query (no-crash check): {expected['cmd']}")
+            client.execute_command(*expected['cmd'])
+            print(f"Excluded query completed without crash")
+        except Exception as e:
+            print(f"Excluded query raised: {e} for cmd {expected['cmd']}")
+        return data_set
 
     # Set Valkey-specific config for inorder tests
-    if 'inorder' in expected['testname'] or 'slop' in expected['testname']:
+    if 'inorder' in expected['testname']:
         try:
             client.execute_command("CONFIG", "SET", "search.proximity-inorder-compat-mode", "yes")
             print(f"✓ Set Valkey compat mode for test: {expected['testname']}")
@@ -476,8 +494,51 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
 
     return data_set
 
+def _load_answers_with_hash_check(answer_file_name):
+    """Load a compatibility pickle answer file and verify its sources hash.
+
+    Set SKIP_COMPATIBILITY_HASH_CHECK=1 to bypass the hash check (useful when
+    manually generating a small pickle for local testing).
+    """
+    pickle_path = os.path.join(
+        os.getenv("ROOT_DIR"), "integration/compatibility", answer_file_name
+    )
+    with gzip.open(pickle_path, "rb") as f:
+        payload = pickle.load(f)
+
+    if isinstance(payload, dict) and "answers" in payload:
+        stored_hash = payload.get("sources_hash")
+        answers = payload["answers"]
+    else:
+        stored_hash = None
+        answers = payload
+
+    if os.getenv("SKIP_COMPATIBILITY_HASH_CHECK") == "1":
+        print(f"SKIP_COMPATIBILITY_HASH_CHECK=1; skipping hash check for {answer_file_name}")
+        return answers
+
+    current_hash = compute_sources_hash()
+    if stored_hash != current_hash:
+        pytest.fail(
+            f"\nCompatibility pickle file '{answer_file_name}' is stale.\n"
+            f"  Stored hash:  {stored_hash}\n"
+            f"  Current hash: {current_hash}\n"
+            f"\n"
+            f"Python sources in integration/compatibility/ have changed since\n"
+            f"the pickle was generated. Regenerate with:\n"
+            f"\n"
+            f"  ./integration/compatibility/regenerate.sh\n"
+            f"\n"
+            f"Then commit the updated pickle file. To bypass this check (e.g.\n"
+            f"when manually generating a small pickle for local testing), set\n"
+            f"the env variable SKIP_COMPATIBILITY_HASH_CHECK=1.\n",
+            pytrace=False,
+        )
+    return answers
+
+
 class TestAnswersCMD(ValkeySearchTestCaseBase):
-    @pytest.mark.parametrize("answers", ["aggregate-answers.pickle.gz", "text-search-answers.pickle.gz"])
+    @pytest.mark.parametrize("answers", ALL_ANSWER_FILES)
     def test_answers(self, answers):
         global client, data_set
         global correct_answers, failed_tests, passed_tests
@@ -489,14 +550,15 @@ class TestAnswersCMD(ValkeySearchTestCaseBase):
         passed_tests = {}
 
         print("Running test_answers with answers file:", answers)
-        with gzip.open(os.getenv("ROOT_DIR") + "/integration/compatibility/" + answers, "rb") as answer_file:
-            answers = pickle.load(answer_file)
+        answers = _load_answers_with_hash_check(answers)
 
         data_set = None
+        client = self.server.get_new_client()
         for i in range(len(answers)):
-            data_set = do_answer(self.server.get_new_client(), answers[i], data_set)
+            data_set = do_answer(client, answers[i], data_set)
 
-        if correct_answers != len(answers):
+        expected_count = sum(1 for a in answers if not a.get('excluded'))
+        if correct_answers != expected_count:
             print(f"Correct answers: {correct_answers} out of {len(answers)}")
             if len(failed_tests) != 0:
                 print(">>>>>>>>> Failed Tests <<<<<<<<<")
@@ -535,7 +597,7 @@ class TestAnswersCMD(ValkeySearchTestCaseBase):
 
 # TODO: fix cluster mode test failures
 class TestAnswersCME(ValkeySearchClusterTestCase):
-    @pytest.mark.parametrize("answers", ["aggregate-answers.pickle.gz"])
+    @pytest.mark.parametrize("answers", CLUSTER_ANSWER_FILES)
     def test_answers(self, answers):
         global correct_answers, wrong_answers, failed_tests, passed_tests
 
@@ -546,11 +608,7 @@ class TestAnswersCME(ValkeySearchClusterTestCase):
 
         print("Running CLUSTER test_answers with answers file:", answers)
 
-        with gzip.open(
-            os.getenv("ROOT_DIR") + "/integration/compatibility/" + answers,
-            "rb",
-        ) as answer_file:
-            answers = pickle.load(answer_file)
+        answers = _load_answers_with_hash_check(answers)
 
         data_set = None
         cluster_client = self.new_cluster_client()

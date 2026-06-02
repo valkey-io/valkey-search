@@ -98,6 +98,11 @@ void ClusterInfoFanoutOperation::OnResponse(
   } else if (current_state == "ready" && state_.empty()) {
     state_ = current_state;
   }
+  for (const auto& attr : resp.attributes()) {
+    auto& data = attribute_data_[attr.alias()];
+    data.identifier = attr.identifier();
+    data.user_indexed_memory += attr.user_indexed_memory();
+  }
 }
 
 std::pair<grpc::Status, coordinator::InfoIndexPartitionResponse>
@@ -127,7 +132,7 @@ int ClusterInfoFanoutOperation::GenerateReply(ValkeyModuleCtx* ctx,
       !inconsistent_state_error_nodes.empty()) {
     return FanoutOperationBase::GenerateErrorReply(ctx);
   }
-  ValkeyModule_ReplyWithArray(ctx, 12);
+  ValkeyModule_ReplyWithArray(ctx, 14);
   ValkeyModule_ReplyWithSimpleString(ctx, "mode");
   ValkeyModule_ReplyWithSimpleString(ctx, "cluster");
   ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
@@ -142,6 +147,17 @@ int ClusterInfoFanoutOperation::GenerateReply(ValkeyModuleCtx* ctx,
       ctx, std::to_string(backfill_complete_percent_min_).c_str());
   ValkeyModule_ReplyWithSimpleString(ctx, "state");
   ValkeyModule_ReplyWithSimpleString(ctx, state_.c_str());
+  ValkeyModule_ReplyWithSimpleString(ctx, "attributes");
+  ValkeyModule_ReplyWithArray(ctx, attribute_data_.size());
+  for (const auto& [alias, data] : attribute_data_) {
+    ValkeyModule_ReplyWithArray(ctx, 6);
+    ValkeyModule_ReplyWithSimpleString(ctx, "identifier");
+    ValkeyModule_ReplyWithSimpleString(ctx, data.identifier.c_str());
+    ValkeyModule_ReplyWithSimpleString(ctx, "attribute");
+    ValkeyModule_ReplyWithSimpleString(ctx, alias.c_str());
+    ValkeyModule_ReplyWithSimpleString(ctx, "user_indexed_memory");
+    ValkeyModule_ReplyWithLongLong(ctx, data.user_indexed_memory);
+  }
   return VALKEYMODULE_OK;
 }
 
@@ -151,6 +167,7 @@ void ClusterInfoFanoutOperation::ResetForRetry() {
   backfill_complete_percent_min_ = 0.0f;
   backfill_in_progress_ = false;
   state_ = "";
+  attribute_data_.clear();
 }
 
 // retry condition: (1) inconsistent state (2) network error (3) index name

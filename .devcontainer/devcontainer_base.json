@@ -1,0 +1,34 @@
+{
+  "name": "ValkeySearch Development Environment",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".",
+    "args": {
+      "USER_UID": "1000",
+      "USER_NAME": "ubuntu",
+      "USER_GID": "1000",
+      "USER_GNAME": "ubuntu"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "bazel.buildifierFixOnFormat": true
+      },
+      "extensions": [
+        "ms-vscode.cpptools",
+        "llvm-vs-code-extensions.vscode-clangd",
+        "xaver.clang-format",
+        "ms-vscode-remote.remote-containers",
+        "ms-vscode-remote.remote-ssh",
+        "ms-vscode-remote.remote-ssh-edit",
+        "ms-vscode.remote-explorer",
+        "ms-azuretools.vscode-docker",
+        "ms-vscode.cmake-tools",
+        "ms-python.python"
+      ]
+    }
+  },
+  "remoteUser": "ubuntu",
+  "postCreateCommand": "export USER=ubuntu && ./ci/entrypoint.sh && /bin/bash"
+}

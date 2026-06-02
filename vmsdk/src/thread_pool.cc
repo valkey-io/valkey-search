@@ -1,0 +1,487 @@
+/*
+ * Copyright (c) 2025, valkey-search contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
+ *
+ */
+
+#include "vmsdk/src/thread_pool.h"
+
+#include <algorithm>
+#include <chrono>
+#include <cstddef>
+#include <memory>
+#include <numeric>
+#include <ranges>
+#include <string>
+#include <utility>
+
+#include "absl/base/thread_annotations.h"
+#include "absl/functional/any_invocable.h"
+#include "absl/log/check.h"
+#include "absl/status/status.h"
+#include "absl/strings/str_join.h"
+#include "absl/synchronization/blocking_counter.h"
+#include "absl/synchronization/mutex.h"
+#include "absl/time/clock.h"
+#include "absl/time/time.h"
+#include "status/status_macros.h"
+#include "vmsdk/src/log.h"
+#include "vmsdk/src/module_config.h"
+
+namespace {
+
+class ThreadRunContext {
+ public:
+  ThreadRunContext(vmsdk::ThreadPool *pool,
+                   std::shared_ptr<vmsdk::ThreadPool::Thread> thread)
+      : pool_{pool}, thread_{thread} {}
+
+  vmsdk::ThreadPool *GetPool() { return pool_; }
+  std::shared_ptr<vmsdk::ThreadPool::Thread> GetThread() { return thread_; }
+
+ private:
+  vmsdk::ThreadPool *pool_ = nullptr;
+  std::shared_ptr<vmsdk::ThreadPool::Thread> thread_ = nullptr;
+};
+
+void *RunWorkerThread(void *arg) {
+  ThreadRunContext *ctx = static_cast<ThreadRunContext *>(arg);
+  ctx->GetThread()->InitThreadMonitor();
+  ctx->GetPool()->WorkerThread(ctx->GetThread());
+  delete ctx;  // shallow delete
+  return nullptr;
+}
+}  // namespace
+
+namespace vmsdk {
+
+ThreadPool::ThreadPool(const std::string &name_prefix, size_t num_threads,
+                       size_t sample_queue_size)
+    : initial_thread_count_(num_threads),
+      priority_tasks_(static_cast<int>(ThreadPool::Priority::kMax) + 1),
+      name_prefix_(name_prefix),
+      sample_queue_size_(sample_queue_size),
+      wait_time_samples_(sample_queue_size, 0.0) {}
+
+void ThreadPool::StartWorkers() {
+  CHECK(!started_);
+  started_ = true;
+  IncrThreadCountBy(initial_thread_count_);
+}
+
+absl::StatusOr<double> ThreadPool::GetAvgCPUPercentage() {
+  std::vector<double> cpu_results;
+  absl::Status err = absl::OkStatus();
+  threads_.ForEach([&cpu_results, &err, this](auto thread) {
+    if (!err.ok()) {
+      return;
+    }
+    auto status = thread->GetThreadCPUPercentage();
+    if (!status.ok()) {
+      if (!absl::IsUnavailable(status.status())) {
+        // Only if the error is not related to unavailable result,
+        // we return the error. Otherwise we continue to accumulate results.
+        err = status.status();
+      }
+      return;
+    }
+    cpu_results.push_back(status.value());
+  });
+  VMSDK_RETURN_IF_ERROR(err);
+  double sum_all_cpus =
+      std::accumulate(cpu_results.begin(), cpu_results.end(), 0.0);
+  if (cpu_results.empty()) {
+    return sum_all_cpus;
+  }
+  return sum_all_cpus / cpu_results.size();
+}
+
+absl::StatusOr<double> ThreadPool::GetRecentQueueWaitTime() {
+  return recent_avg_wait_time_.load();
+}
+
+bool ThreadPool::Schedule(absl::AnyInvocable<void()> task, Priority priority) {
+  absl::MutexLock lock(&queue_mutex_);
+  if (stop_mode_.has_value()) {
+    return false;
+  }
+  auto &tasks_queue = GetPriorityTasksQueue(priority);
+  tasks_queue.emplace(std::move(task));
+  condition_.Signal();
+  return true;
+}
+
+absl::Status ThreadPool::MarkForStop(StopMode stop_mode) {
+  absl::MutexLock lock(&queue_mutex_);
+  if (stop_mode_ == stop_mode) {
+    return absl::OkStatus();
+  }
+  if (stop_mode_ == StopMode::kAbrupt && stop_mode == StopMode::kGraceful) {
+    return absl::InvalidArgumentError(
+        "Cannot set stop mode to kGraceful after kAbrupt mode was set");
+  }
+  stop_mode_ = stop_mode;
+  suspend_workers_ = false;
+  condition_.SignalAll();
+  return absl::OkStatus();
+}
+
+ThreadPool::~ThreadPool() { JoinWorkers(); }
+
+void ThreadPool::JoinWorkers() {
+  {
+    absl::MutexLock lock(&queue_mutex_);
+    if (!stop_mode_.has_value()) {
+      stop_mode_ = StopMode::kGraceful;
+      condition_.SignalAll();
+    }
+    suspend_workers_ = false;
+  }
+
+  // Wait up to 5s for every worker in threads_ to flag itself joinable.
+  const absl::Time deadline = absl::Now() + absl::Seconds(5);
+  auto count_unjoinable = [this]() {
+    return threads_.CountIf(
+        [](const std::shared_ptr<Thread> &t) { return !t->IsJoinable(); });
+  };
+  while (count_unjoinable() > 0 && absl::Now() < deadline) {
+    absl::SleepFor(absl::Milliseconds(10));
+  }
+  if (count_unjoinable() > 0) {
+    std::vector<std::string> hung;
+    threads_.ForEach([&hung](const std::shared_ptr<Thread> &t) {
+      if (!t->IsJoinable()) {
+        hung.push_back(t->name);
+      }
+    });
+    VMSDK_LOG(WARNING, nullptr)
+        << "ThreadPool shutdown timed out after 5s waiting for workers to exit;"
+        << " hung threads: " << absl::StrJoin(hung, ", ");
+    CHECK(false) << "ThreadPool shutdown timeout: " << hung.size()
+                 << " worker(s) did not become joinable within 5s";
+  }
+  started_ = false;
+  JoinTerminatedWorkers();
+  CHECK(threads_.IsEmpty())
+      << "threads_ not empty after JoinTerminatedWorkers in JoinWorkers";
+}
+
+void ThreadPool::JoinTerminatedWorkers() {
+  while (true) {
+    auto thread = threads_.PopIf(
+        [](const std::shared_ptr<Thread> &t) { return t->IsJoinable(); });
+    if (!thread.has_value()) {
+      break;
+    }
+    // pthread_join intentionally runs with no ThreadSafeVector mutex held.
+    pthread_join((*thread)->thread_id, nullptr);
+  }
+}
+
+absl::Status ThreadPool::SuspendWorkers() {
+  absl::MutexLock lock(&suspend_resume_mutex_);
+  DCHECK(!blocking_refcount_);
+  {
+    absl::MutexLock lock(&queue_mutex_);
+    if (!started_) {
+      return absl::InvalidArgumentError("Thread pool is not started");
+    }
+    if (stop_mode_.has_value()) {
+      return absl::InvalidArgumentError(
+          "Cannot suspend workers after the thread pool is marked for stop");
+    }
+    if (suspend_workers_) {
+      return absl::InvalidArgumentError("Thread pool is already suspended");
+    }
+    suspend_workers_ = true;
+    blocking_refcount_ =
+        std::make_unique<absl::BlockingCounter>(threads_.Size());
+    condition_.SignalAll();
+  }
+  blocking_refcount_->Wait();
+  blocking_refcount_ = nullptr;
+  return absl::OkStatus();
+}
+
+absl::Status ThreadPool::ResumeWorkers() {
+  absl::MutexLock lock(&suspend_resume_mutex_);
+  DCHECK(!blocking_refcount_);
+  {
+    absl::MutexLock lock(&queue_mutex_);
+    if (stop_mode_.has_value()) {
+      return absl::InvalidArgumentError(
+          "Cannot resume workers after the thread pool is marked for stop");
+    }
+    if (!suspend_workers_) {
+      return absl::InvalidArgumentError("Thread pool is not suspended");
+    }
+    suspend_workers_ = false;
+    blocking_refcount_ =
+        std::make_unique<absl::BlockingCounter>(threads_.Size());
+  }
+
+  blocking_refcount_->Wait();
+  blocking_refcount_ = nullptr;
+  return absl::OkStatus();
+}
+
+bool SuspendResumeReady(bool *suspend_workers) { return !(*suspend_workers); }
+
+void ThreadPool::AwaitSuspensionCleared()
+    ABSL_EXCLUSIVE_LOCKS_REQUIRED(queue_mutex_) {
+  if (!suspend_workers_) {
+    return;
+  }
+  blocking_refcount_->DecrementCount();
+  queue_mutex_.Await(absl::Condition(SuspendResumeReady, &suspend_workers_));
+  if (blocking_refcount_) {
+    blocking_refcount_->DecrementCount();
+  }
+}
+
+void ThreadPool::WorkerThread(std::shared_ptr<Thread> thread) {
+  while (true) {
+    absl::AnyInvocable<void()> task;
+    {
+      absl::MutexLock lock(&queue_mutex_);
+      AwaitSuspensionCleared();
+      auto condition = absl::Condition(this, &ThreadPool::QueueReady);
+      while (!condition.Eval()) {
+        condition_.WaitWithTimeout(&queue_mutex_, absl::Seconds(1));
+        if (thread->IsShutdown()) {
+          thread->MarkJoinable();
+          return;
+        }
+      }
+      if (stop_mode_.has_value() &&
+          (stop_mode_.value() == StopMode::kAbrupt ||
+           std::all_of(priority_tasks_.begin(), priority_tasks_.end(),
+                       [](const auto &tasks) { return tasks.empty(); }))) {
+        thread->MarkJoinable();
+        return;
+      }
+      if (suspend_workers_) {
+        continue;
+      }
+
+      // Use the new fairness-aware task selection
+      auto optional_task = TryGetNextTask();
+      if (!optional_task.has_value()) {
+        continue;  // No tasks available, go back to waiting
+      }
+      task = std::move(*optional_task);
+    }
+    task();
+  }
+}
+
+size_t ThreadPool::QueueSize() const {
+  absl::MutexLock lock(&queue_mutex_);
+  return std::accumulate(
+      priority_tasks_.begin(), priority_tasks_.end(), 0,
+      [](size_t sum, const auto &tasks) { return sum + tasks.size(); });
+}
+
+void ThreadPool::IncrThreadCountBy(size_t count) {
+  for (size_t i = 0; i < count; ++i) {
+    std::shared_ptr<Thread> thread_ptr = std::make_shared<Thread>();
+    ThreadRunContext *context = new ThreadRunContext{this, thread_ptr};
+    pthread_create(&thread_ptr->thread_id, nullptr, RunWorkerThread, context);
+    size_t thread_num = threads_.Size();
+    thread_ptr->name = name_prefix_ + std::to_string(thread_num);
+#ifndef __APPLE__
+    pthread_setname_np(thread_ptr->thread_id, thread_ptr->name.c_str());
+#endif
+    threads_.Add(thread_ptr);
+  }
+}
+
+void ThreadPool::DecrThreadCountBy(size_t count, bool sync) {
+  // Don't pop: leave the targeted threads in threads_ so JoinTerminatedWorkers
+  // can reap them via the joinable_flag once they actually exit. We pick the
+  // *last* `count` threads that are still active (not already shutdown).
+  std::vector<std::shared_ptr<Thread>> targets;
+  threads_.ForEach([&targets](const std::shared_ptr<Thread> &t) {
+    if (!t->IsShutdown()) {
+      targets.push_back(t);
+    }
+  });
+  if (targets.size() > count) {
+    targets.erase(targets.begin(), targets.end() - count);
+  }
+  for (const auto &thread : targets) {
+    thread->Shutdown();
+  }
+  // Wake idle workers so they observe shutdown_flag without waiting 1s.
+  {
+    absl::MutexLock lock(&queue_mutex_);
+    condition_.SignalAll();
+  }
+  if (sync) {
+    for (const auto &thread : targets) {
+      while (!thread->IsJoinable()) {
+        absl::SleepFor(absl::Milliseconds(1));
+      }
+    }
+    JoinTerminatedWorkers();
+  }
+}
+
+size_t ThreadPool::Size() const {
+  return threads_.CountIf([](const std::shared_ptr<Thread> &t) {
+    return !t->IsShutdown() && !t->IsJoinable();
+  });
+}
+
+void ThreadPool::Resize(size_t count, bool wait_for_resize) {
+  size_t current_size = Size();
+  if (count == current_size) {
+    return;
+  } else if (count > current_size) {
+    // We need to add more threads
+    IncrThreadCountBy(count - current_size);
+  } else {
+    // Shutdown "current_size - count" threads
+    DecrThreadCountBy(current_size - count, wait_for_resize);
+  }
+}
+
+void ThreadPool::SetHighPriorityWeight(int weight) {
+  // Clamp weight to valid range [0, 100]
+  weight = std::max(0, std::min(100, weight));
+  high_priority_weight_.store(weight, std::memory_order_relaxed);
+
+  // Pre-compute pattern for efficiency
+  if (weight == 0) {
+    pattern_length_.store(1, std::memory_order_relaxed);
+    high_ratio_.store(0, std::memory_order_relaxed);
+  } else if (weight == 100) {
+    pattern_length_.store(1, std::memory_order_relaxed);
+    high_ratio_.store(1, std::memory_order_relaxed);
+  } else {
+    int low_weight = 100 - weight;
+    int gcd_val = std::gcd(weight, low_weight);
+    int high_ratio = weight / gcd_val;
+    int pattern_len = high_ratio + (low_weight / gcd_val);
+
+    pattern_length_.store(pattern_len, std::memory_order_relaxed);
+    high_ratio_.store(high_ratio, std::memory_order_relaxed);
+  }
+}
+
+int ThreadPool::GetHighPriorityWeight() const {
+  return high_priority_weight_.load(std::memory_order_relaxed);
+}
+
+void ThreadPool::AddWaitTimeSample(
+    std::chrono::steady_clock::time_point enqueue_time) {
+  double wait_time_ms = std::chrono::duration_cast<std::chrono::microseconds>(
+                            std::chrono::steady_clock::now() - enqueue_time)
+                            .count() /
+                        1000.0;
+
+  double old_sample = (current_sample_count_ >= sample_queue_size_)
+                          ? wait_time_samples_[sample_index_]
+                          : 0.0;
+
+  wait_time_samples_[sample_index_] = wait_time_ms;
+
+  double current_avg = recent_avg_wait_time_.load();
+  double new_avg;
+
+  if (current_sample_count_ < sample_queue_size_) {
+    current_sample_count_++;
+    // Adding a new sample - use cumulative average formula
+    size_t safe_count = std::max(current_sample_count_, size_t{1});
+    new_avg = (current_avg * (safe_count - 1) + wait_time_ms) / safe_count;
+  } else {
+    // Replacing an old sample - use rolling average formula
+    new_avg = current_avg + (wait_time_ms - old_sample) / sample_queue_size_;
+  }
+
+  recent_avg_wait_time_.store(new_avg);
+
+  sample_index_ = (sample_index_ + 1) % sample_queue_size_;
+}
+
+void ThreadPool::ClearWaitTimeSamples() {
+  current_sample_count_ = 0;
+  sample_index_ = 0;
+  recent_avg_wait_time_.store(0.0);
+}
+
+void ThreadPool::ResizeSampleQueue(size_t new_size) {
+  absl::MutexLock lock(&queue_mutex_);
+  sample_queue_size_ = new_size;
+  wait_time_samples_.resize(new_size, 0.0);
+  ClearWaitTimeSamples();
+}
+
+std::optional<absl::AnyInvocable<void()>> ThreadPool::TryGetNextTask() {
+  // Clear samples when all queues are empty
+  bool all_empty = std::all_of(priority_tasks_.begin(), priority_tasks_.end(),
+                               [](const auto &queue) { return queue.empty(); });
+  if (all_empty) {
+    ClearWaitTimeSamples();
+    return std::nullopt;
+  }
+
+  // Check for kMax priority first - always takes precedence
+  if (!GetPriorityTasksQueue(Priority::kMax).empty()) {
+    auto &max_queue = GetPriorityTasksQueue(Priority::kMax);
+    auto task_with_time = std::move(max_queue.front());
+    max_queue.pop();
+
+    AddWaitTimeSample(task_with_time.enqueue_time);
+
+    return std::move(task_with_time.task);
+  }
+
+  // No kMax tasks - apply fairness between kHigh and kLow
+  bool high_has_tasks = !GetPriorityTasksQueue(Priority::kHigh).empty();
+  bool low_has_tasks = !GetPriorityTasksQueue(Priority::kLow).empty();
+
+  if (!high_has_tasks && !low_has_tasks) {
+    ClearWaitTimeSamples();
+    return std::nullopt;  // No tasks available
+  }
+
+  Priority selected_priority;
+  if (!high_has_tasks) {
+    selected_priority = Priority::kLow;
+  } else if (!low_has_tasks) {
+    selected_priority = Priority::kHigh;
+  } else {
+    // Both have tasks - use pattern-based weighted round robin
+    int high_weight = high_priority_weight_.load(std::memory_order_relaxed);
+
+    if (high_weight == 0) {
+      selected_priority = Priority::kLow;
+    } else if (high_weight == 100) {
+      selected_priority = Priority::kHigh;
+    } else {
+      // Only increment counter when we need fairness calculation
+      uint32_t counter_val =
+          fairness_counter_.fetch_add(1, std::memory_order_relaxed);
+
+      // Use pre-computed pattern values for better performance
+      int high_ratio = high_ratio_.load(std::memory_order_relaxed);
+      int pattern_length = pattern_length_.load(std::memory_order_relaxed);
+
+      int position_in_pattern = counter_val % pattern_length;
+      selected_priority =
+          (position_in_pattern < high_ratio) ? Priority::kHigh : Priority::kLow;
+    }
+  }
+
+  auto &selected_queue = GetPriorityTasksQueue(selected_priority);
+  auto task_with_time = std::move(selected_queue.front());
+  selected_queue.pop();
+
+  AddWaitTimeSample(task_with_time.enqueue_time);
+
+  return std::move(task_with_time.task);
+}
+
+}  // namespace vmsdk

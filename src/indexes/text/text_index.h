@@ -1,0 +1,246 @@
+/*
+ * Copyright (c) 2025, valkey-search contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
+ *
+ */
+
+#ifndef VALKEY_SEARCH_INDEXES_TEXT_INDEX_H_
+#define VALKEY_SEARCH_INDEXES_TEXT_INDEX_H_
+
+#include <atomic>
+#include <bitset>
+#include <cctype>
+#include <memory>
+#include <optional>
+
+#include "absl/base/thread_annotations.h"
+#include "absl/container/btree_map.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
+#include "absl/container/node_hash_map.h"
+#include "absl/functional/function_ref.h"
+#include "absl/strings/string_view.h"
+#include "absl/synchronization/mutex.h"
+#include "src/index_schema.pb.h"
+#include "src/indexes/text/invasive_ptr.h"
+#include "src/indexes/text/lexer.h"
+#include "src/indexes/text/posting.h"
+#include "src/indexes/text/rax_target_mutex_pool.h"
+#include "src/indexes/text/rax_wrapper.h"
+
+struct sb_stemmer;
+
+namespace valkey_search::indexes::text {
+
+// Inline capacity for stem variants extracted from stem tree
+constexpr size_t kStemVariantsInlineCapacity = 20;
+
+// token -> (PositionMap, suffix support)
+using TokenPositions =
+    absl::flat_hash_map<std::string, std::pair<PositionMap, bool>>;
+
+class TextIndexSchema;
+
+// FT.INFO counters for text info fields and memory pools
+struct TextIndexMetadata {
+  std::atomic<uint64_t> total_positions{0};
+  std::atomic<uint64_t> num_unique_terms{0};
+  std::atomic<uint64_t> total_term_frequency{0};
+
+  // Memory pools for text index components
+  MemoryPool posting_memory_pool_{0};
+  MemoryPool radix_memory_pool_{0};
+  MemoryPool text_index_memory_pool_{0};
+};
+
+class TextIndex {
+  //
+  // The main query data structure maps Words into Postings objects. This
+  // is always done with a prefix tree. Optionally, a suffix tree can also be
+  // maintained. But in any case for the same word the two trees must point to
+  // the same Postings object, which is owned by this pair of trees. Plus,
+  // updates to these two trees need to be atomic when viewed externally. The
+  // locking provided by the RadixTree object is NOT quite sufficient to
+  // guarantee that the two trees are always in lock step. thus this object
+  // becomes responsible for cross-tree locking issues. Multiple locking
+  // strategies are possible. TBD (a shared-ed word lock table should work well)
+  //
+
+ public:
+  explicit TextIndex(bool suffix);
+  Rax &GetPrefix();
+  const Rax &GetPrefix() const;
+  std::optional<std::reference_wrapper<Rax>> GetSuffix();
+  std::optional<std::reference_wrapper<const Rax>> GetSuffix() const;
+
+  // Applies target mutation to both prefix tree for |word| and, if the index
+  // has a suffix tree, to the suffix tree for reverse(word).
+  void MutateTarget(
+      absl::string_view word, const InvasivePtr<Postings> &target,
+      const std::optional<std::string> &reverse_word = std::nullopt,
+      item_count_op op = NONE);
+
+ private:
+  Rax prefix_tree_;
+  std::unique_ptr<Rax> suffix_tree_;
+};
+
+class TextIndexSchema {
+ public:
+  TextIndexSchema(data_model::Language language, const std::string &punctuation,
+                  bool with_offsets, const std::vector<std::string> &stop_words,
+                  uint32_t min_stem_size);
+
+  absl::StatusOr<bool> StageAttributeData(const InternedStringPtr &key,
+                                          absl::string_view data,
+                                          size_t text_field_number, bool stem,
+                                          bool suffix);
+  void CommitKeyData(const InternedStringPtr &key);
+  void DeleteKeyData(const InternedStringPtr &key);
+
+  uint8_t AllocateTextFieldNumber() { return num_text_fields_++; }
+  bool HasTextOffsets() const { return with_offsets_; }
+  uint8_t GetNumTextFields() const { return num_text_fields_; }
+  std::shared_ptr<TextIndex> GetTextIndex() const { return text_index_; }
+  Lexer GetLexer() const { return lexer_; }
+
+  // Access to metadata for memory pool usage
+  TextIndexMetadata &GetMetadata() { return metadata_; }
+
+  // Access stem tree for word expansion during search
+  const Rax &GetStemTree() const { return stem_tree_; }
+
+  // Get stem root and all stem parents for a search term
+  std::string GetAllStemVariants(
+      absl::string_view search_term,
+      absl::InlinedVector<absl::string_view, kStemVariantsInlineCapacity>
+          &words_to_search,
+      uint64_t stem_enabled_mask, bool lock_needed);
+
+  // Get the minimum stem size across all fields
+  uint32_t GetMinStemSize() const { return min_stem_size_; }
+
+  // Schema-level stem field mask (mirrored from
+  // IndexSchema::stem_text_field_mask_)
+  void SetStemTextFieldMask(uint64_t mask) { stem_text_field_mask_ = mask; }
+  uint64_t GetStemTextFieldMask() const { return stem_text_field_mask_; }
+
+  // Enable suffix trie.
+  void EnableSuffix() {
+    with_suffix_trie_ = true;
+    text_index_ = std::make_shared<TextIndex>(true);
+  }
+
+ private:
+  uint8_t num_text_fields_ = 0;
+
+  // Each schema instance has its own metadata with memory pools
+  TextIndexMetadata metadata_;
+
+  //
+  // This is the main index of all Text fields in this index schema
+  //
+  std::shared_ptr<TextIndex> text_index_ = std::make_shared<TextIndex>(false);
+
+  // Guards rax tree structural changes during concurrent writes.
+  // Used exclusively by CommitKeyData/DeleteKeyData when inserting or removing
+  // tree nodes.
+  mutable absl::Mutex text_index_mutex_;
+
+  //
+  // Stem tree: maps stem roots to their parent words
+  // Example: "happi" → {"happy", "happiness", "happily"}
+  //
+  Rax stem_tree_;
+
+  // Guards structural changes to stem_tree_.
+  mutable absl::Mutex stem_tree_mutex_;
+
+  // Per-word bucket locks for concurrent Rax target updates.
+  RaxTargetMutexPool rax_target_mutex_pool_;
+
+  //
+  // To support the Delete record and the post-filtering case, there is a
+  // separate table of postings that are indexed by Key.
+  //
+  // This object must also ensure that updates of this object are multi-thread
+  // safe.
+  //
+  absl::node_hash_map<Key, TextIndex> per_key_text_indexes_;
+
+  // Prevent concurrent mutations to per-key text index map
+  std::mutex per_key_text_indexes_mutex_;
+
+  Lexer lexer_;
+
+  // Key updates are fanned out to each attribute's IndexBase object. Since text
+  // indexing operates at the schema-level, any new text data to insert for a
+  // key is accumulated across all attributes here and committed into the text
+  // index structures at the end for efficiency.
+  absl::node_hash_map<Key, TokenPositions> in_progress_key_updates_;
+
+  // Prevent concurrent mutations to in-progress key updates map
+  std::mutex in_progress_key_updates_mutex_;
+
+  // Temporary storage for stem mappings during indexing
+  // Maps key -> (stemmed_word -> list of original words that stem to it)
+  absl::node_hash_map<Key, InProgressStemMap> in_progress_stem_mappings_;
+
+  // Prevent concurrent mutations to in-progress stem mappings map
+  std::mutex in_progress_stem_mappings_mutex_;
+
+  // Whether to store position offsets for phrase queries
+  bool with_offsets_ = false;
+
+  // True if any text attributes of the schema have suffix search enabled.
+  bool with_suffix_trie_ = false;
+
+  // Minimum word length for stemming (schema-level configuration)
+  uint32_t min_stem_size_;
+
+  // Schema-level stem field mask (mirrored from
+  // IndexSchema::stem_text_field_mask_)
+  uint64_t stem_text_field_mask_ = 0;
+
+  // We track subtree items if the index has a HNSW field to enable filtering
+  // planning decisions with prefix/suffix text filtering.
+  bool track_subtree_item_counts_ = false;
+
+ public:
+  // FT.INFO stats for text index
+  uint64_t GetTotalPositions() const;
+  uint64_t GetNumUniqueTerms() const;
+  uint64_t GetTotalTermFrequency() const;
+  // TODO: Implement the following APIs when we want granular memory metrics for
+  // text index components
+  uint64_t GetPostingsMemoryUsage() const;
+  uint64_t GetRadixTreeMemoryUsage() const;
+  uint64_t GetPositionMemoryUsage() const;
+  uint64_t GetTotalTextIndexMemoryUsage() const;
+
+  // Total number of keys with text fields indexed in this schema.
+  // No locking needed because only called from read phase.
+  size_t GetTrackedKeyCount() const { return per_key_text_indexes_.size(); }
+
+  // Locking-enabled version of GetTrackedKeyCount.
+  size_t GetTrackedKeyCount(bool lock) {
+    std::optional<std::lock_guard<std::mutex>> per_key_guard;
+    if (lock) per_key_guard.emplace(per_key_text_indexes_mutex_);
+    return GetTrackedKeyCount();
+  }
+
+  // Helper function to lookup text index for a key.
+  // Locking needs to be true if called outside of read phase of time sliced
+  // mutex.
+  const TextIndex *GetPerKeyTextIndex(const Key &key, bool lock);
+
+  // TODO: remove this because we'll always track the counts once it's optimized
+  bool TrackSubtreeItemsCountEnabled() const {
+    return track_subtree_item_counts_;
+  }
+};
+
+}  // namespace valkey_search::indexes::text
+
+#endif

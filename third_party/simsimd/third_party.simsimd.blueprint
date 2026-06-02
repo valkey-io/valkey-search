@@ -1,0 +1,19 @@
+include "devtools/blueprint/bluze/public/bluze.ncl";
+include bytes "third_party/simsimd/bluze.textproto" as textproto;
+
+// See go/bluze/guide before editing. To check the generated final blueprint run
+// rncl third_party/simsimd/third_party.simsimd.blueprint printproto blueprint_file
+
+blueprint_file = ::bluze::BlueprintFile(
+  textproto,
+
+  project_name = "third_party.simsimd",
+  teams_product_id = 12217812178,
+  tech_lead = ["sumish", "yairg", "jkmurphy"],
+  dev_mailing_list = "cloud-redis-team@google.com",
+  mdb_groups = ["third-party-tap-forge"],
+  buganizer_component_ids = [1288886],
+  metadata_path = "//depot/google3/third_party/simsimd/METADATA",
+
+// Customize your blueprint here: go/blueprint/howto-write.
+);

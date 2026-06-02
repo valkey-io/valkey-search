@@ -1,0 +1,83 @@
+{
+  "FT.INFO": {
+    "acl_categories": [
+      "READ",
+      "FAST",
+      "SEARCH"
+    ],
+    "history": [
+      [
+        "1.2.0", 
+        "Added Text Indexing and Search support"
+      ]
+    ],
+    "arguments": [
+      {
+        "key_spec_index": 0,
+        "name": "index-name",
+        "type": "key"
+      },
+      {
+        "name": "scope",
+        "type": "oneof",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "LOCAL",
+            "type": "pure-token",
+            "token": "LOCAL"
+          },
+          {
+            "name": "PRIMARY",
+            "type": "pure-token",
+            "token": "PRIMARY"
+          },
+          {
+            "name": "CLUSTER",
+            "type": "pure-token",
+            "token": "CLUSTER"
+          }
+        ]
+      },
+      {
+        "name": "shard-policy",
+        "type": "oneof",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "ALLSHARDS",
+            "type": "pure-token",
+            "token": "ALLSHARDS"
+          },
+          {
+            "name": "SOMESHARDS",
+            "type": "pure-token",
+            "token": "SOMESHARDS"
+          }
+        ]
+      },
+      {
+        "name": "consistency",
+        "type": "oneof",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "CONSISTENT",
+            "type": "pure-token",
+            "token": "CONSISTENT"
+          },
+          {
+            "name": "INCONSISTENT",
+            "type": "pure-token",
+            "token": "INCONSISTENT"
+          }
+        ]
+      }
+    ],
+    "arity": -2,
+    "complexity": "O(1)",
+    "group": "search",
+    "module_since": "1.0.0",
+    "summary": "Detailed information about the specified index is returned"
+  }
+}

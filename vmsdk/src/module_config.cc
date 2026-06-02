@@ -1,0 +1,476 @@
+/*
+ * Copyright (c) 2025, valkey-search contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
+ *
+ */
+#include "vmsdk/src/module_config.h"
+
+#include <absl/base/no_destructor.h>
+
+#include "absl/log/check.h"
+#include "absl/strings/ascii.h"
+#include "absl/strings/str_cat.h"
+#include "vmsdk/src/command_parser.h"
+#include "vmsdk/src/log.h"
+#include "vmsdk/src/status/status_macros.h"
+
+namespace vmsdk {
+namespace config {
+
+/// Controls the modules debug mode flag. We set it here to "true" to allow
+/// Valkey to load the configurations first time when the module loaded. Once
+/// this is done, we set it back to false. If the user passes "--debug-mode yes"
+/// we will change it back to "true".
+static auto debug_mode = BooleanBuilder(kDebugMode, true).Hidden().Build();
+
+bool IsDebugModeEnabled() { return debug_mode->GetValue(); }
+
+/// Controls the verbose logging flag
+static auto hide_user_data_config = BooleanBuilder(kHideUserDataFromLog, true)
+                                        .Dev()  // can only be set in debug mode
+                                        .Build();
+
+bool ShouldHideUserDataFromLog() { return hide_user_data_config->GetValue(); }
+
+namespace {
+
+constexpr absl::string_view kUseCoordinator = "--use-coordinator";
+
+template <typename T>
+static T OnGetConfig(const char *config_name, void *priv_data) {
+  auto entry = static_cast<ConfigBase<T> *>(priv_data);
+  CHECK(entry) << "null private data for Boolean configuration entry.";
+  return static_cast<int>(entry->GetValue());
+}
+
+template <typename T>
+static int OnSetConfig(const char *config_name, T value, void *priv_data,
+                       ValkeyModuleString **err) {
+  auto entry = static_cast<ConfigBase<T> *>(priv_data);
+  CHECK(entry) << "null private data for configuration Number entry.";
+  auto res = entry->SetValue(value);  // Calls "Validate" internally
+  if (!res.ok()) {
+    if (err) {
+      *err =
+          ValkeyModule_CreateStringPrintf(nullptr, "%s", res.message().data());
+    }
+    return VALKEYMODULE_ERR;
+  }
+
+  entry->NotifyChanged();
+  return VALKEYMODULE_OK;
+}
+
+static ValkeyModuleString *OnGetStringConfig(const char *config_name,
+                                             void *priv_data) {
+  auto entry = static_cast<String *>(priv_data);
+  CHECK(entry) << "null private data";
+  return entry->GetCachedValkeyString();
+}
+
+static int OnSetStringConfig(const char *config_name, ValkeyModuleString *value,
+                             void *priv_data, ValkeyModuleString **err) {
+  auto entry = static_cast<String *>(priv_data);
+  CHECK(entry) << "null private data";
+  auto sv = vmsdk::ToStringView(value);
+  auto res = entry->SetValue(sv.data());  // Calls "Validate" internally
+  if (!res.ok()) {
+    if (err) {
+      *err =
+          ValkeyModule_CreateStringPrintf(nullptr, "%s", res.message().data());
+    }
+    return VALKEYMODULE_ERR;
+  }
+
+  entry->NotifyChanged();
+  return VALKEYMODULE_OK;
+}
+
+static int OnGetBoolConfig(const char *config_name, void *priv_data) {
+  return OnGetConfig<bool>(config_name, priv_data);
+}
+
+static int OnSetBoolConfig(const char *config_name, int value, void *priv_data,
+                           ValkeyModuleString **err) {
+  return OnSetConfig<bool>(config_name, value, priv_data, err);
+}
+
+/// Convert `vector<string>` -> `vector<const char*>`
+/// IMPORTANT: `vec` must outlive the returned value
+std::vector<const char *> ToCharPtrPtrVec(const std::vector<std::string> &vec) {
+  std::vector<const char *> arrptr;
+  arrptr.reserve(vec.size());
+  for (const auto &item : vec) {
+    arrptr.push_back(item.c_str());
+  }
+  return arrptr;
+}
+}  // namespace
+
+ModuleConfigManager &ModuleConfigManager::Instance() {
+  static ModuleConfigManager module_config_manager;
+  return module_config_manager;
+}
+
+void ModuleConfigManager::RegisterConfig(Registerable *config_item) {
+  auto [it, inserted] =
+      entries_.insert({std::string{config_item->GetName()}, config_item});
+  CHECK(inserted) << "Duplicate config entry: " << config_item->GetName();
+}
+
+void ModuleConfigManager::UnregisterConfig(Registerable *config_item) {
+  entries_.erase(config_item->GetName());
+}
+
+absl::Status ModuleConfigManager::Init(ValkeyModuleCtx *ctx) {
+  for (const auto &[_, entry] : entries_) {
+    if (entry->IsHidden()) {
+      continue;
+    }
+    VMSDK_RETURN_IF_ERROR(entry->Register(ctx));
+  }
+  return absl::OkStatus();
+}
+
+absl::Status ModuleConfigManager::ParseAndLoadArgv(ValkeyModuleCtx *ctx,
+                                                   ValkeyModuleString **argv,
+                                                   int argc) {
+  // reset the debug mode to "false".
+  debug_mode->SetValueOrLog(false, LogLevel::kWarning);
+  vmsdk::ArgsIterator iter{argv, argc};
+  while (iter.HasNext()) {
+    VMSDK_ASSIGN_OR_RETURN(auto key, iter.Get());
+    auto sv_key = vmsdk::ToStringView(key);
+    iter.Next();  // skip the key
+
+    absl::string_view sv_val;
+    if (sv_key == kUseCoordinator) {
+      // All keys must accept values. Unless it is `--use-coordinator` (we
+      // keep this option for backward compatibility)
+      sv_val = "yes";
+      VMSDK_RETURN_IF_ERROR(UpdateConfigFromKeyVal(ctx, sv_key, sv_val));
+    } else {
+      // Read the value
+      if (!iter.HasNext()) {
+        return absl::NotFoundError(absl::StrFormat(
+            "Command line argument `%s` is missing a value", sv_key));
+      }
+      VMSDK_ASSIGN_OR_RETURN(auto val, iter.Get());
+      iter.Next();  // skip the value
+
+      sv_val = vmsdk::ToStringView(val);
+      VMSDK_RETURN_IF_ERROR(UpdateConfigFromKeyVal(ctx, sv_key, sv_val));
+    }
+  }
+  return absl::OkStatus();
+}
+
+absl::Status ModuleConfigManager::UpdateConfigFromKeyVal(
+    ValkeyModuleCtx *ctx, std::string_view key, std::string_view value) {
+  if (!key.starts_with("--")) {
+    return absl::InvalidArgumentError(absl::StrFormat(
+        "Command line argument: '%s' must start with '--'", key));
+  }
+
+  // Locate the configuration entry that matches this switch
+  // remove the "--"
+  key = key.substr(2);
+  auto where = entries_.find(key);
+
+  if (where == entries_.end()) {
+    return absl::UnknownError(
+        absl::StrFormat("Unknown command line argument: `%s`", key));
+  }
+  // update the configuration entry
+  VMSDK_LOG(NOTICE, ctx) << "Parsed command line argument: " << key << " -> "
+                         << value;
+  VMSDK_RETURN_IF_ERROR(where->second->FromString(value));
+  return absl::OkStatus();
+}
+
+Number::Number(std::string_view name, int64_t default_value, int64_t min_value,
+               int64_t max_value)
+    : ConfigBase(name),
+      default_value_(default_value),
+      min_value_(min_value),
+      max_value_(max_value),
+      current_value_(default_value) {}
+
+absl::Status Number::Register(ValkeyModuleCtx *ctx) {
+  if (ValkeyModule_RegisterNumericConfig(
+          ctx,
+          name_.data(),            // Name
+          default_value_,          // Default value
+          flags_,                  // Flags
+          min_value_,              // Minimum value
+          max_value_,              // Maximum value
+          OnGetConfig<long long>,  // Get callback
+          OnSetConfig<long long>,  // Set callback
+          nullptr,                 // Apply callback (optional)
+          this                     // privdata
+          ) != VALKEYMODULE_OK) {
+    return absl::InternalError(absl::StrCat(
+        "Failed to register numeric configuration entry: ", name_));
+  }
+  return absl::OkStatus();
+}
+
+absl::Status Number::FromString(std::string_view value) {
+  if (!absl::SimpleAtoi(value, &default_value_)) {
+    return absl::InvalidArgumentError(
+        absl::StrFormat("Failed to convert '%s' into a number", value));
+  }
+  SetValueOrLog(default_value_, WARNING);
+  return absl::OkStatus();
+}
+
+Enum::Enum(std::string_view name, int default_value,
+           const std::vector<std::string_view> &names,
+           const std::vector<int> &values)
+    : ConfigBase(name),
+      default_value_(default_value),
+      values_(values),
+      current_value_(default_value) {
+  // Convert all names into lower-case
+  names_.reserve(names.size());
+  for (auto name : names) {
+    auto lower_case_name = absl::AsciiStrToLower(name);
+    names_.push_back(lower_case_name);
+  }
+
+  // Validate the values
+  CHECK(values_.size() == names_.size());
+  CHECK(std::find_if(values_.begin(), values_.end(), [&default_value](int v) {
+          return default_value == v;
+        }) != values_.end());
+}
+
+absl::Status Enum::Register(ValkeyModuleCtx *ctx) {
+  auto names_array = ToCharPtrPtrVec(names_);
+  if (ValkeyModule_RegisterEnumConfig(ctx,
+                                      name_.data(),        // Name
+                                      default_value_,      // Default value
+                                      flags_,              // Flags
+                                      names_array.data(),  // enumerator names
+                                      values_.data(),      // enumerator values
+                                      names_.size(),  // number of enumerators
+                                      OnGetConfig<int>,  // Get callback
+                                      OnSetConfig<int>,  // Set callback
+                                      nullptr,  // Apply callback (optional)
+                                      this      // privdata
+                                      ) != VALKEYMODULE_OK) {
+    return absl::InternalError(absl::StrCat(
+        "Failed to register enumerator configuration entry: ", name_));
+  }
+  return absl::OkStatus();
+}
+
+absl::Status Enum::FromString(std::string_view value) {
+  auto where = std::find_if(
+      names_.begin(), names_.end(), [&value](const std::string &name) {
+        return value == name || absl::AsciiStrToLower(value) == name;
+      });
+  if (where == names_.end()) {
+    return absl::InvalidArgumentError(
+        absl::StrFormat("Invalid enum value: '%s'", value));
+  }
+
+  size_t enumerator_index = std::distance(names_.begin(), where);
+  default_value_ = values_[enumerator_index];
+
+  // update the current value, skip the validation as we just did that
+  SetValueOrLog(default_value_, WARNING);
+  return absl::OkStatus();
+}
+
+Boolean::Boolean(std::string_view name, bool default_value)
+    : ConfigBase(name),
+      default_value_(default_value),
+      current_value_(default_value) {}
+
+absl::Status Boolean::Register(ValkeyModuleCtx *ctx) {
+  if (ValkeyModule_RegisterBoolConfig(ctx,
+                                      name_.data(),     // Name
+                                      default_value_,   // Default value
+                                      flags_,           // Flags
+                                      OnGetBoolConfig,  // Get callback
+                                      OnSetBoolConfig,  // Set callback
+                                      nullptr,  // Apply callback (optional)
+                                      this      // privdata
+                                      ) != VALKEYMODULE_OK) {
+    return absl::InternalError(absl::StrCat(
+        "Failed to register boolean configuration entry: ", name_));
+  }
+  return absl::OkStatus();
+}
+
+absl::Status Boolean::FromString(std::string_view value) {
+  auto value_lowercase = absl::AsciiStrToLower(value);
+  if (value_lowercase == "yes" || value_lowercase == "on" ||
+      value_lowercase == "true") {
+    default_value_ = true;
+    SetValueOrLog(default_value_, WARNING);
+  } else if (value_lowercase == "no" || value_lowercase == "off" ||
+             value_lowercase == "false") {
+    default_value_ = false;
+    SetValueOrLog(default_value_, WARNING);
+  } else {
+    return absl::InvalidArgumentError(
+        absl::StrFormat("Invalid boolean value: '%s'", value));
+  }
+  return absl::OkStatus();
+}
+
+String::String(std::string_view name, std::string_view default_value)
+    : ConfigBase(name), value_(default_value) {}
+
+absl::Status String::Register(ValkeyModuleCtx *ctx) {
+  if (ValkeyModule_RegisterStringConfig(ctx,
+                                        name_.data(),       // Name
+                                        value_.c_str(),     // Default value
+                                        flags_,             // Flags
+                                        OnGetStringConfig,  // Get callback
+                                        OnSetStringConfig,  // Set callback
+                                        nullptr,  // Apply callback (optional)
+                                        this      // privdata
+                                        ) != VALKEYMODULE_OK) {
+    return absl::InternalError(
+        absl::StrCat("Failed to register String configuration entry: ", name_));
+  }
+  return absl::OkStatus();
+}
+
+absl::Status String::FromString(std::string_view value) {
+  if (value.data() == nullptr) {
+    return absl::InvalidArgumentError("Invalid string value: null");
+  }
+  default_ = value.data();
+  SetValueOrLog(default_, WARNING);
+  return absl::OkStatus();
+}
+/// Get method to fetch the `hide_user_data_config`
+vmsdk::config::Boolean &GetHideUserDataFromLog() {
+  return dynamic_cast<vmsdk::config::Boolean &>(*hide_user_data_config);
+}
+
+absl::Status ModuleConfigManager::ListAllConfigs(
+    ValkeyModuleCtx *ctx, bool verbose, const std::string &filter) const {
+  // Create a sorted vector of config entries for consistent output
+  std::vector<std::pair<std::string, Registerable *>> sorted_entries(
+      entries_.begin(), entries_.end());
+  std::sort(sorted_entries.begin(), sorted_entries.end());
+
+  // Helper lambda to check if entry matches filter
+  auto matches_filter = [](Registerable *entry,
+                           const std::string &filter) -> bool {
+    if (filter.empty()) return true;
+
+    if (filter == "APP") {
+      return !entry->IsHidden() && !entry->IsDeveloperConfig();
+    } else if (filter == "DEV") {
+      return entry->IsDeveloperConfig();
+    } else if (filter == "HIDDEN") {
+      return entry->IsHidden();
+    }
+    return false;
+  };
+  // Filter entries
+  std::vector<std::pair<std::string, Registerable *>> filtered_entries;
+  for (const auto &entry : sorted_entries) {
+    if (matches_filter(entry.second, filter)) {
+      filtered_entries.push_back(entry);
+    }
+  }
+
+  // Default (non-verbose) mode: return config names only
+  if (!verbose) {
+    ValkeyModule_ReplyWithArray(ctx, filtered_entries.size());
+    for (const auto &[name, entry] : filtered_entries) {
+      ValkeyModule_ReplyWithCString(ctx, name.data());
+    }
+    return absl::OkStatus();
+  }
+
+  // Verbose mode: return detailed config information
+  ValkeyModule_ReplyWithArray(ctx, filtered_entries.size());
+  for (const auto &[name, entry] : filtered_entries) {
+    // Each config entry is an array of key-value pairs
+    ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_LEN);
+    long long field_count = 0;
+
+    // Common fields
+    ValkeyModule_ReplyWithCString(ctx, "name");
+    ValkeyModule_ReplyWithCString(ctx, name.data());
+    field_count += 2;
+
+    // Determine type and visibility
+    std::string visibility = entry->IsHidden()            ? "HIDDEN"
+                             : entry->IsDeveloperConfig() ? "DEV"
+                                                          : "APP";
+
+    if (auto *num = dynamic_cast<Number *>(entry)) {
+      ValkeyModule_ReplyWithCString(ctx, "type");
+      ValkeyModule_ReplyWithCString(ctx, "Number");
+      ValkeyModule_ReplyWithCString(ctx, "default");
+      ValkeyModule_ReplyWithLongLong(ctx, num->GetDefaultValue());
+      ValkeyModule_ReplyWithCString(ctx, "min");
+      ValkeyModule_ReplyWithLongLong(ctx, num->GetMinValue());
+      ValkeyModule_ReplyWithCString(ctx, "max");
+      ValkeyModule_ReplyWithLongLong(ctx, num->GetMaxValue());
+      ValkeyModule_ReplyWithCString(ctx, "current_value");
+      ValkeyModule_ReplyWithLongLong(ctx, num->GetValue());
+      field_count += 10;
+    } else if (auto *boolean = dynamic_cast<Boolean *>(entry)) {
+      ValkeyModule_ReplyWithCString(ctx, "type");
+      ValkeyModule_ReplyWithCString(ctx, "Boolean");
+      ValkeyModule_ReplyWithCString(ctx, "default");
+      ValkeyModule_ReplyWithCString(
+          ctx, boolean->GetDefaultValue() ? "true" : "false");
+      ValkeyModule_ReplyWithCString(ctx, "min");
+      ValkeyModule_ReplyWithCString(ctx, "N/A");
+      ValkeyModule_ReplyWithCString(ctx, "max");
+      ValkeyModule_ReplyWithCString(ctx, "N/A");
+      ValkeyModule_ReplyWithCString(ctx, "current_value");
+      ValkeyModule_ReplyWithCString(ctx,
+                                    boolean->GetValue() ? "true" : "false");
+      field_count += 10;
+    } else if (auto *str = dynamic_cast<String *>(entry)) {
+      ValkeyModule_ReplyWithCString(ctx, "type");
+      ValkeyModule_ReplyWithCString(ctx, "String");
+      ValkeyModule_ReplyWithCString(ctx, "default");
+      ValkeyModule_ReplyWithCString(ctx, str->GetDefaultValue().c_str());
+      ValkeyModule_ReplyWithCString(ctx, "min");
+      ValkeyModule_ReplyWithCString(ctx, "N/A");
+      ValkeyModule_ReplyWithCString(ctx, "max");
+      ValkeyModule_ReplyWithCString(ctx, "N/A");
+      ValkeyModule_ReplyWithCString(ctx, "current_value");
+      ValkeyModule_ReplyWithCString(ctx, str->GetValue().c_str());
+      field_count += 10;
+    } else if (auto *enm = dynamic_cast<Enum *>(entry)) {
+      ValkeyModule_ReplyWithCString(ctx, "type");
+      ValkeyModule_ReplyWithCString(ctx, "Enum");
+      ValkeyModule_ReplyWithCString(ctx, "default");
+      ValkeyModule_ReplyWithLongLong(ctx, enm->GetDefaultValue());
+      ValkeyModule_ReplyWithCString(ctx, "min");
+      ValkeyModule_ReplyWithCString(ctx, "N/A");
+      ValkeyModule_ReplyWithCString(ctx, "max");
+      ValkeyModule_ReplyWithCString(ctx, "N/A");
+      ValkeyModule_ReplyWithCString(ctx, "current_value");
+      ValkeyModule_ReplyWithLongLong(ctx, enm->GetValue());
+      field_count += 10;
+    }
+
+    ValkeyModule_ReplyWithCString(ctx, "visibility");
+    ValkeyModule_ReplyWithCString(ctx, visibility.c_str());
+    field_count += 2;
+
+    // Set the actual array length
+    ValkeyModule_ReplySetArrayLength(ctx, field_count);
+  }
+
+  return absl::OkStatus();
+}
+
+}  // namespace config
+}  // namespace vmsdk

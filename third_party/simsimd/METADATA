@@ -1,0 +1,24 @@
+# go/google3metadata
+# proto-file: devtools/metadata/metadata.proto
+# proto-message: MetaData
+
+name: "simsimd"
+description:
+  "Simsimd provides SIMD-accelerated vector similarity, distance functions, and"
+  " dot products."
+
+third_party {
+  type: PACKAGE
+  identifier: {
+    type: "Git"
+    value: "https://github.com/ashvardanian/SimSIMD"
+    primary_source: true
+    version: "5.0.1"
+  }
+  last_upgrade_date { year: 2024 month: 8 day: 28 }
+}
+presubmit: {
+  check_tests: {
+    project: "third_party.simsimd"
+  }
+}

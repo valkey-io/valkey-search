@@ -1,0 +1,11 @@
+{
+global:
+  *;
+local:
+  __wrap_*;
+  __real_*;
+  _Znwm*;
+  _Znam*;
+  _ZdlPv*;
+  _ZdaPv*;
+};

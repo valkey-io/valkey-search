@@ -1,0 +1,3 @@
+valkey==6.0.2
+absl-py==2.1.0
+numpy==2.2.2

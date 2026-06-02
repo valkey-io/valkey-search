@@ -27,6 +27,7 @@
 #include "src/index_schema.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
+#include "src/version.h"
 #include "src/indexes/vector_base.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/module_config.h"
@@ -214,7 +215,18 @@ static auto default_timeout_ms =
 
 const absl::NoDestructor<
     absl::flat_hash_map<absl::string_view, data_model::Language>>
-    kLanguageByStr({{"ENGLISH", data_model::LANGUAGE_ENGLISH}});
+    kLanguageByStr({{"ENGLISH", data_model::LANGUAGE_ENGLISH},
+                    {"FRENCH", data_model::LANGUAGE_FRENCH},
+                    {"GERMAN", data_model::LANGUAGE_GERMAN},
+                    {"SPANISH", data_model::LANGUAGE_SPANISH},
+                    {"ITALIAN", data_model::LANGUAGE_ITALIAN},
+                    {"PORTUGUESE", data_model::LANGUAGE_PORTUGUESE},
+                    {"RUSSIAN", data_model::LANGUAGE_RUSSIAN},
+                    {"SWEDISH", data_model::LANGUAGE_SWEDISH},
+                    {"TURKISH", data_model::LANGUAGE_TURKISH},
+                    {"DUTCH", data_model::LANGUAGE_DUTCH},
+                    {"INDONESIAN", data_model::LANGUAGE_INDONESIAN},
+                    {"ARABIC", data_model::LANGUAGE_ARABIC}});
 const absl::NoDestructor<
     absl::flat_hash_map<absl::string_view, data_model::AttributeDataType>>
     kOnDataTypeByStr({{"HASH", data_model::ATTRIBUTE_DATA_TYPE_HASH},
@@ -278,6 +290,14 @@ absl::Status ParseLanguage(vmsdk::ArgsIterator &itr,
   if (res) {
     return absl::InvalidArgumentError(
         NotSupportedParamErrorMsg(kLanguageFieldParam));
+  }
+
+  if (language != data_model::LANGUAGE_ENGLISH &&
+      language != data_model::LANGUAGE_UNSPECIFIED &&
+      kModuleVersion < kRelease14) {
+    return absl::InvalidArgumentError(
+        "Non-English text indexes require valkey-search version 1.4 or "
+        "later");
   }
 
   index_schema_proto.set_language(language);

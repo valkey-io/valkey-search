@@ -17,6 +17,7 @@
 #include "src/indexes/index_base.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search_options.h"
+#include "src/version.h"
 #include "testing/common.h"
 #include "vmsdk/src/module.h"
 #include "vmsdk/src/testing_infra/module.h"
@@ -510,6 +511,63 @@ TEST_F(FTCreateTest, ReplicationBehaviorCoordinatorDisabled) {
       "FT.CREATE", "test_idx", "schema", "vec", "vector",          "FLAT", "6",
       "TYPE",      "FLOAT32",  "DIM",    "3",   "DISTANCE_METRIC", "IP"};
   ExecuteFTCreateCommand(&fake_ctx_, argv);
+}
+
+// Non-English languages should be rejected when kModuleVersion < kRelease14,
+// and allowed when kModuleVersion >= kRelease14.
+TEST_F(FTCreateTest, NonEnglishLanguageVersionGate) {
+  std::vector<std::string> non_english_languages = {
+      "FRENCH",  "GERMAN",     "SPANISH", "ITALIAN",
+      "PORTUGUESE", "RUSSIAN", "SWEDISH", "TURKISH",
+      "DUTCH",   "INDONESIAN", "ARABIC"};
+
+  for (const auto& lang : non_english_languages) {
+    std::vector<std::string> argv = {"FT.CREATE", "test_idx_" + lang,
+                                     "LANGUAGE",  lang,
+                                     "schema",    "title",
+                                     "text"};
+    if (kModuleVersion < kRelease14) {
+      ExecuteFTCreateCommand(
+          &fake_ctx_, argv, VALKEYMODULE_OK,
+          "-Non-English text indexes require valkey-search version 1.4 or "
+          "later\r\n");
+    } else {
+      ExecuteFTCreateCommand(&fake_ctx_, argv, VALKEYMODULE_OK, "+OK\r\n");
+      VMSDK_EXPECT_OK(SchemaManager::Instance().RemoveIndexSchema(
+          0, "test_idx_" + lang));
+    }
+  }
+}
+
+// English language should always be allowed
+TEST_F(FTCreateTest, EnglishLanguageAllowed) {
+  std::vector<std::string> argv = {"FT.CREATE", "test_idx_english",
+                                   "LANGUAGE",  "ENGLISH",
+                                   "schema",    "title",
+                                   "text"};
+  ExecuteFTCreateCommand(&fake_ctx_, argv, VALKEYMODULE_OK, "+OK\r\n");
+  VMSDK_EXPECT_OK(SchemaManager::Instance().RemoveIndexSchema(
+      0, "test_idx_english"));
+}
+
+// Default language (no LANGUAGE param) should always be allowed
+TEST_F(FTCreateTest, DefaultLanguageAllowed) {
+  std::vector<std::string> argv = {"FT.CREATE", "test_idx_default", "schema",
+                                   "title", "text"};
+  ExecuteFTCreateCommand(&fake_ctx_, argv, VALKEYMODULE_OK, "+OK\r\n");
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().RemoveIndexSchema(0, "test_idx_default"));
+}
+
+// Unknown language should still give the "Unknown argument" error
+TEST_F(FTCreateTest, UnknownLanguageRejected) {
+  std::vector<std::string> argv = {"FT.CREATE",    "test_idx_unknown",
+                                   "LANGUAGE",     "KLINGON",
+                                   "schema",       "title",
+                                   "text"};
+  ExecuteFTCreateCommand(
+      &fake_ctx_, argv, VALKEYMODULE_OK,
+      "-Bad arguments for LANGUAGE: Unknown argument `KLINGON`\r\n");
 }
 
 }  // namespace

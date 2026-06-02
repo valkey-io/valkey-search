@@ -66,7 +66,7 @@ jobs:
 
             const allIssues = [];
             let page = 1;
-            while (true) {
+            while (page <= 10) {
               const { data } = await github.rest.issues.listForRepo({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -105,7 +105,8 @@ jobs:
             let comment = '🔍 **Potential duplicates found:**\n\n| # | Type | State | Title | Similarity |\n|---|------|-------|-------|------------|\n';
             for (const c of top) {
               const pct = Math.round(c.score * 100);
-              comment += `| #${c.issue.number} | ${c.type} | ${c.state} | ${c.issue.title} | ${pct}% |\n`;
+              const safeTitle = c.issue.title.replace(/\|/g, '\\|').replace(/[\r\n]+/g, ' ');
+              comment += `| #${c.issue.number} | ${c.type} | ${c.state} | ${safeTitle} | ${pct}% |\n`;
             }
             comment += '\n<sub>Based on keyword overlap in the description. A maintainer should verify before closing as duplicate.</sub>';
 
@@ -155,9 +156,19 @@ jobs:
                 [...currentWords].filter(w => !stopWords.has(w))
               );
 
+              if (currentKeywords.size < 3) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  body: '🔍 **Duplicate check:** Not enough keywords in title/body to search for duplicates.',
+                });
+                return;
+              }
+
               const allIssues = [];
               let page = 1;
-              while (true) {
+              while (page <= 10) {
                 const { data } = await github.rest.issues.listForRepo({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
@@ -204,7 +215,8 @@ jobs:
               let comment = '🔍 **Potential duplicates found:**\n\n| # | Type | State | Title | Similarity |\n|---|------|-------|-------|------------|\n';
               for (const c of top) {
                 const pct = Math.round(c.score * 100);
-                comment += `| #${c.issue.number} | ${c.type} | ${c.state} | ${c.issue.title} | ${pct}% |\n`;
+                const safeTitle = c.issue.title.replace(/\|/g, '\\|').replace(/[\r\n]+/g, ' ');
+                comment += `| #${c.issue.number} | ${c.type} | ${c.state} | ${safeTitle} | ${pct}% |\n`;
               }
               comment += '\n<sub>Based on keyword overlap in the description. A maintainer should verify before closing as duplicate.</sub>';
 

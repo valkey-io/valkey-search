@@ -105,9 +105,9 @@ class VectorSVS : public VectorBase {
   absl::StatusOr<std::pair<float, hnswlib::labeltype>>
   ComputeDistanceFromRecordImpl(uint64_t internal_id,
                                 absl::string_view query) const override
-      ABSL_LOCKS_EXCLUDED(index_mutex_);
+      ABSL_LOCKS_EXCLUDED(index_mutex_, tracked_vectors_mutex_);
   char* GetValueImpl(uint64_t internal_id) const override
-      ABSL_LOCKS_EXCLUDED(index_mutex_);
+      ABSL_LOCKS_EXCLUDED(tracked_vectors_mutex_);
   void TrackVector(uint64_t internal_id,
                    const InternedStringPtr& vector) override
       ABSL_LOCKS_EXCLUDED(tracked_vectors_mutex_);
@@ -153,10 +153,6 @@ class VectorSVS : public VectorBase {
   mutable absl::Mutex tracked_vectors_mutex_;
   absl::flat_hash_map<uint64_t, InternedStringPtr> tracked_vectors_
       ABSL_GUARDED_BY(tracked_vectors_mutex_);
-
-  // Store raw vector data for retrieval and distance computation
-  absl::flat_hash_map<uint64_t, std::vector<char>> raw_vectors_
-      ABSL_GUARDED_BY(index_mutex_);
 
   // Space interface for distance computation in pre-filter path
   std::unique_ptr<hnswlib::SpaceInterface<T>> space_;

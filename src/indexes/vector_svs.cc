@@ -288,12 +288,6 @@ absl::Status VectorSVS<T>::AddRecordImpl(uint64_t internal_id,
         .data = std::vector<char>(record.begin(), record.end())
     });
 
-    // Store raw vector data for retrieval and distance computation during buffering.
-    // This is a temporary measure for Iteration 0: SVS does not yet expose
-    // reconstruct() or compute_distance(), so we keep a full FP32 copy.
-    raw_vectors_[internal_id] = pending_buffer_.back().data;
-
-    // Bump global pending-buffer gauge. FlushBuffer() decrements by batch size.
     Metrics::GetStats().svs_pending_buffer_vectors.fetch_add(
         1, std::memory_order_relaxed);
 
@@ -313,16 +307,9 @@ absl::Status VectorSVS<T>::AddRecordImpl(uint64_t internal_id,
     ++num_elements_;
     return absl::OkStatus();
   } catch (const std::exception& e) {
-    // Rollback: remove from buffer and raw_vectors if exception occurred
-    bool rolled_back_from_buffer = false;
     if (!pending_buffer_.empty() &&
         pending_buffer_.back().internal_id == internal_id) {
       pending_buffer_.pop_back();
-      rolled_back_from_buffer = true;
-    }
-    raw_vectors_.erase(internal_id);
-    // Undo the metric bump if the vector made it into the buffer.
-    if (rolled_back_from_buffer) {
       Metrics::GetStats().svs_pending_buffer_vectors.fetch_sub(
           1, std::memory_order_relaxed);
     }
@@ -519,9 +506,6 @@ absl::Status VectorSVS<T>::RemoveRecordImpl(uint64_t internal_id) {
     absl::MutexLock lock(&index_mutex_);
 
     // During LeanVec staging there is no SVS graph yet; remove is rejected.
-    // Removes pre-training are extremely unusual and supporting them would
-    // require staying consistent with raw_vectors_ across the eventual
-    // train-and-build, which isn't worth the complexity.
     if (index_state_ == SVSIndexState::kStaging) {
       return absl::FailedPreconditionError(
           absl::StrCat("Index is training (",
@@ -543,7 +527,6 @@ absl::Status VectorSVS<T>::RemoveRecordImpl(uint64_t internal_id) {
           absl::StrCat("SVS remove failed: ", status.message()));
     }
 
-    raw_vectors_.erase(internal_id);
     if (num_elements_ > 0) {
       --num_elements_;
     }
@@ -557,14 +540,9 @@ absl::Status VectorSVS<T>::RemoveRecordImpl(uint64_t internal_id) {
 template <typename T>
 absl::Status VectorSVS<T>::ModifyRecordImpl(uint64_t internal_id,
                                              absl::string_view record) {
-  // Atomic modify: hold a single exclusive lock for remove + add to prevent
-  // a gap where the vector is absent from the index. HNSW uses a reader lock
-  // because hnswlib handles markDelete + addPoint atomically. SVS requires
-  // separate remove() + add() calls, so we need exclusive access.
   try {
     absl::MutexLock lock(&index_mutex_);
 
-    // Reject during LeanVec staging; same reasoning as RemoveRecordImpl.
     if (index_state_ == SVSIndexState::kStaging) {
       return absl::FailedPreconditionError(
           absl::StrCat("Index is training (",
@@ -573,57 +551,23 @@ absl::Status VectorSVS<T>::ModifyRecordImpl(uint64_t internal_id,
                        " vectors); modify is unavailable until ready."));
     }
 
-    // Flush buffered vectors before modification (simplest approach for benchmarking)
     if (!pending_buffer_.empty()) {
       VMSDK_RETURN_IF_ERROR(FlushBuffer());
-    }
-
-    // Save old vector for rollback in case add() fails after remove().
-    auto old_it = raw_vectors_.find(internal_id);
-    std::vector<char> old_raw;
-    if (old_it != raw_vectors_.end()) {
-      old_raw = std::move(old_it->second);
     }
 
     size_t label = static_cast<size_t>(internal_id);
     auto remove_status = svs_index_->remove(1, &label);
     if (!remove_status.ok()) {
-      // Restore old raw vector (it was moved out).
-      if (!old_raw.empty()) {
-        raw_vectors_[internal_id] = std::move(old_raw);
-      }
       return absl::InternalError(
           absl::StrCat("SVS remove (modify) failed: ",
                        remove_status.message()));
     }
 
-    raw_vectors_[internal_id] =
-        std::vector<char>(record.begin(), record.end());
-
     auto add_status = svs_index_->add(
         1, &label, reinterpret_cast<const float*>(record.data()));
     if (!add_status.ok()) {
-      // Rollback: restore old vector and re-add to SVS index.
-      if (!old_raw.empty()) {
-        raw_vectors_[internal_id] = std::move(old_raw);
-        auto restore_status = svs_index_->add(
-            1, &label,
-            reinterpret_cast<const float*>(
-                raw_vectors_[internal_id].data()));
-        if (!restore_status.ok()) {
-          // Failed to restore — vector is lost from SVS graph.
-          // Erase raw_vectors_ entry to stay consistent with graph.
-          raw_vectors_.erase(internal_id);
-          if (num_elements_ > 0) {
-            --num_elements_;
-          }
-        }
-      } else {
-        // No old vector to restore — just clean up.
-        raw_vectors_.erase(internal_id);
-        if (num_elements_ > 0) {
-          --num_elements_;
-        }
+      if (num_elements_ > 0) {
+        --num_elements_;
       }
       return absl::InternalError(
           absl::StrCat("SVS add (modify) failed: ",
@@ -843,29 +787,36 @@ template <typename T>
 absl::StatusOr<std::pair<float, hnswlib::labeltype>>
 VectorSVS<T>::ComputeDistanceFromRecordImpl(
     uint64_t internal_id, absl::string_view query) const {
-  absl::ReaderMutexLock lock(&index_mutex_);
-  // Pre-filter path. Reject during LeanVec staging to keep behavior
-  // consistent with Search() — both belong to the FT.SEARCH execution
-  // path and should fail uniformly until the index is ready.
-  if (index_state_ == SVSIndexState::kStaging) {
-    return absl::FailedPreconditionError(
-        absl::StrCat("Index is training (",
-                     pending_buffer_.size(), "/",
-                     build_config_.leanvec_training_threshold,
-                     " vectors); search is unavailable until ready."));
+  {
+    absl::ReaderMutexLock lock(&index_mutex_);
+    if (index_state_ == SVSIndexState::kStaging) {
+      return absl::FailedPreconditionError(
+          absl::StrCat("Index is training (",
+                       pending_buffer_.size(), "/",
+                       build_config_.leanvec_training_threshold,
+                       " vectors); search is unavailable until ready."));
+    }
+    float dist = 0.0f;
+    auto status = svs_index_->get_distance(
+        static_cast<size_t>(internal_id),
+        reinterpret_cast<const float*>(query.data()),
+        &dist);
+    if (status.ok()) {
+      return std::pair<float, hnswlib::labeltype>{dist, internal_id};
+    }
   }
-  auto it = raw_vectors_.find(internal_id);
-  if (it == raw_vectors_.end()) {
+
+  // Fallback: vector is in pending_buffer_ (not yet flushed to SVS graph).
+  absl::ReaderMutexLock lock(&tracked_vectors_mutex_);
+  auto it = tracked_vectors_.find(internal_id);
+  if (it == tracked_vectors_.end()) {
     return absl::InternalError(
         absl::StrCat("Couldn't find internal id: ", internal_id));
   }
 
-  // Use the hnswlib space interface for distance computation.
-  // This is a temporary measure for Iteration 0: SVS does not yet expose
-  // compute_distance(). We compute on the raw FP32 copy instead.
   auto dist = space_->get_dist_func()(
       reinterpret_cast<const T*>(query.data()),
-      reinterpret_cast<const T*>(it->second.data()),
+      reinterpret_cast<const T*>(it->second->Str().data()),
       space_->get_dist_func_param());
 
   return std::pair<float, hnswlib::labeltype>{dist, internal_id};
@@ -873,17 +824,12 @@ VectorSVS<T>::ComputeDistanceFromRecordImpl(
 
 template <typename T>
 char* VectorSVS<T>::GetValueImpl(uint64_t internal_id) const {
-  absl::ReaderMutexLock lock(&index_mutex_);
-  auto it = raw_vectors_.find(internal_id);
-  if (it == raw_vectors_.end()) {
+  absl::ReaderMutexLock lock(&tracked_vectors_mutex_);
+  auto it = tracked_vectors_.find(internal_id);
+  if (it == tracked_vectors_.end()) {
     return nullptr;
   }
-  // Safety: the returned pointer into raw_vectors_ outlives the reader lock
-  // held here. This is safe because the caller (VectorBase::GetValue) executes
-  // during the read time-slice of IndexSchema's TimeSlicedMRMWMutex, which
-  // blocks all writer threads (mutations). The pointer remains valid until the
-  // read time-slice ends. Do NOT use this pointer outside that context.
-  return const_cast<char*>(it->second.data());
+  return const_cast<char*>(it->second->Str().data());
 }
 
 // --- Serialization ---

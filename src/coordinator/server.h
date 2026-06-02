@@ -12,6 +12,7 @@
 #include <memory>
 #include <utility>
 
+#include "absl/functional/any_invocable.h"
 #include "grpcpp/server.h"
 #include "grpcpp/server_context.h"
 #include "grpcpp/support/server_callback.h"
@@ -26,6 +27,12 @@
 namespace valkey_search::coordinator {
 
 struct RemoteResponderSearch;
+
+// Callback invoked by SearchOneArm when one arm has completed (success or
+// failure). The caller is responsible for finishing whatever wraps the
+// operation (the gRPC reactor for single-arm, the multi-arm completion
+// counter for multi-arm).
+using ArmCompletionCallback = absl::AnyInvocable<void(grpc::Status)>;
 
 class Service final : public Coordinator::CallbackService {
  public:
@@ -51,6 +58,11 @@ class Service final : public Coordinator::CallbackService {
       const SearchIndexPartitionRequest* request,
       SearchIndexPartitionResponse* response) override;
 
+  grpc::ServerUnaryReactor* MultiSearchIndexPartition(
+      grpc::CallbackServerContext* context,
+      const MultiSearchIndexPartitionRequest* request,
+      MultiSearchIndexPartitionResponse* response) override;
+
   grpc::ServerUnaryReactor* InfoIndexPartition(
       grpc::CallbackServerContext* context,
       const InfoIndexPartitionRequest* request,
@@ -64,11 +76,21 @@ class Service final : public Coordinator::CallbackService {
       const IndexFingerprintVersion& expected_fingerprint_version,
       const std::shared_ptr<IndexSchema>& schema);
 
+  // Runs a single-arm search asynchronously. On completion, fills `response`
+  // and invokes `on_done`. `on_done` is responsible for finishing whatever
+  // wraps the operation (the gRPC reactor for single-arm, the multi-arm
+  // completion counter for multi-arm).
+  void SearchOneArm(grpc::CallbackServerContext* context,
+                    const SearchIndexPartitionRequest& request,
+                    SearchIndexPartitionResponse* response,
+                    ArmCompletionCallback on_done);
+
   void EnqueueSearchRequest(
       std::unique_ptr<RemoteResponderSearch> vector_search_parameters,
       vmsdk::ThreadPool* reader_thread_pool, ValkeyModuleCtx* detached_ctx,
-      SearchIndexPartitionResponse* response, grpc::ServerUnaryReactor* reactor,
-      std::unique_ptr<vmsdk::StopWatch> latency_sample);
+      SearchIndexPartitionResponse* response,
+      std::unique_ptr<vmsdk::StopWatch> latency_sample,
+      ArmCompletionCallback on_done);
 
   vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx_;
   vmsdk::ThreadPool* reader_thread_pool_;

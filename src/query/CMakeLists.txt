@@ -57,6 +57,7 @@ target_link_libraries(content_resolution PUBLIC search_header)
 target_link_libraries(content_resolution PUBLIC response_generator)
 target_link_libraries(content_resolution PUBLIC metrics)
 target_link_libraries(content_resolution PUBLIC vmsdklib)
+target_link_libraries(content_resolution PUBLIC vector_base)
 
 set(SRCS_FANOUT ${CMAKE_CURRENT_LIST_DIR}/fanout.cc
                 ${CMAKE_CURRENT_LIST_DIR}/fanout.h

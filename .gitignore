@@ -21,3 +21,4 @@ venv/
 env/
 .venv/
 .env/
+.build_log

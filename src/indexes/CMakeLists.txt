@@ -1,6 +1,14 @@
 valkey_search_create_proto_library("src/index_schema.proto"
                                    "index_schema_cc_proto")
 
+set(SRCS_SCORING
+    ${CMAKE_CURRENT_LIST_DIR}/scoring/slop_calculator.h
+    ${CMAKE_CURRENT_LIST_DIR}/scoring/slop_calculator.cc)
+
+valkey_search_add_static_library(scoring "${SRCS_SCORING}")
+target_include_directories(scoring PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(scoring PUBLIC vmsdklib)
+
 add_library(index_base INTERFACE ${SRCS_INDEX_BASE})
 target_include_directories(index_base INTERFACE ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(index_base INTERFACE index_schema_cc_proto)

@@ -17,6 +17,7 @@
 #include "src/index_schema.h"
 #include "src/indexes/text/lexer.h"
 #include "src/query/predicate.h"
+#include "src/utils/utf8_iterator.h"
 #include "vmsdk/src/module_config.h"
 
 namespace valkey_search {
@@ -125,6 +126,27 @@ class FilterParser {
   void SkipWhitespace();
 
   char Peek() const { return expression_[pos_]; }
+
+  struct DecodedCodepoint {
+    uint32_t codepoint;
+    uint8_t byte_len;
+  };
+
+  // Decodes the UTF-8 code point at the current position without advancing.
+  // ASCII fast path avoids constructing a Utf8Iterator for the common case.
+  // Returns {0, 0} at end-of-input.
+  DecodedCodepoint PeekCodepoint() const {
+    if (IsEnd()) return {0, 0};
+    uint8_t b0 = static_cast<uint8_t>(expression_[pos_]);
+    if (b0 < 0x80) return {b0, 1};
+    utils::Utf8Iterator it(expression_.substr(pos_));
+    it.Next();
+    return {it.codepoint(), it.byte_len()};
+  }
+
+  // Advance pos_ by byte_len bytes — typically the byte_len returned by a
+  // preceding PeekCodepoint().
+  void Advance(uint8_t byte_len) { pos_ += byte_len; }
 
   bool IsEnd() const { return pos_ >= expression_.length(); }
   bool Match(char expected, bool skip_whitespace = true);

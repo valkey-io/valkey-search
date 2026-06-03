@@ -29,7 +29,6 @@
 #include "src/indexes/text.h"
 #include "src/indexes/text/lexer.h"
 #include "src/query/predicate.h"
-#include "src/utils/utf8_iterator.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/status/status_macros.h"
 
@@ -532,13 +531,12 @@ absl::StatusOr<bool> FilterParser::HandleBackslashEscape(
     return true;
   }
   if (!IsEnd()) {
-    utils::Utf8Iterator cp_it(expression_.substr(pos_));
-    cp_it.Next();
-    if (cp_it.codepoint() == '\\' || lexer.IsPunctuation(cp_it.codepoint())) {
+    auto [cp, byte_len] = PeekCodepoint();
+    if (cp == '\\' || lexer.IsPunctuation(cp)) {
       // If Double backslash, retain the double backslash
       // If Single backslash with punct on right, retain the char on right
-      processed_content.append(expression_.data() + pos_, cp_it.byte_len());
-      pos_ += cp_it.byte_len();
+      processed_content.append(expression_.data() + pos_, byte_len);
+      Advance(byte_len);
       // Continue parsing the same token.
       return true;
     } else {
@@ -549,8 +547,8 @@ absl::StatusOr<bool> FilterParser::HandleBackslashEscape(
         return false;
       } else {
         // Backslash not punctuation → keep letter, continue
-        processed_content.append(expression_.data() + pos_, cp_it.byte_len());
-        pos_ += cp_it.byte_len();
+        processed_content.append(expression_.data() + pos_, byte_len);
+        Advance(byte_len);
         return true;
       }
     }
@@ -579,13 +577,12 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
       break;
     }
     {
-      utils::Utf8Iterator cp_it(expression_.substr(pos_));
-      cp_it.Next();
-      if (cp_it.codepoint() == '"') break;
-      if (cp_it.codepoint() == '\\') continue;  // Don't break on backslash
-      if (lexer.IsPunctuation(cp_it.codepoint())) break;
-      processed_content.append(expression_.data() + pos_, cp_it.byte_len());
-      pos_ += cp_it.byte_len();
+      auto [cp, byte_len] = PeekCodepoint();
+      if (cp == '"') break;
+      if (cp == '\\') continue;  // Don't break on backslash
+      if (lexer.IsPunctuation(cp)) break;
+      processed_content.append(expression_.data() + pos_, byte_len);
+      Advance(byte_len);
     }
   }
   if (processed_content.empty()) {
@@ -685,11 +682,10 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     }
     if (ch == '\\') continue;  // Don't break on backslash
     {
-      utils::Utf8Iterator cp_it(expression_.substr(pos_));
-      cp_it.Next();
-      if (lexer.IsPunctuation(cp_it.codepoint())) break;
-      processed_content.append(expression_.data() + pos_, cp_it.byte_len());
-      pos_ += cp_it.byte_len();
+      auto [cp, byte_len] = PeekCodepoint();
+      if (lexer.IsPunctuation(cp)) break;
+      processed_content.append(expression_.data() + pos_, byte_len);
+      Advance(byte_len);
     }
   }
   lexer.NormalizeLowerCaseInPlace(processed_content);
@@ -841,9 +837,13 @@ FilterParser::ParseTextTokens(
       break;
     }
     // If this happens, we are either done (at the end of the prefilter string)
-    // or were on a punctuation character which should be consumed.
+    // or were on a punctuation character which should be consumed. Advance by
+    // the full code point's byte length so multi-byte punctuation (e.g. Arabic
+    // ، U+060C) is consumed atomically — advancing 1 byte would split the
+    // sequence and feed an orphan continuation byte to the next iteration.
     if (token_start == pos_) {
-      ++pos_;
+      auto [cp, byte_len] = PeekCodepoint();
+      Advance(byte_len ? byte_len : 1);
     }
   }
   std::unique_ptr<query::Predicate> pred;

@@ -558,7 +558,7 @@ TEST_P(ResponseGeneratorDbParamTest, ProcessNeighborsForReplySelectsCorrectDB) {
        .alias = vmsdk::MakeUniqueValkeyString("field")});
   parameters.attribute_alias = "attr";
 
-  std::vector<indexes::Neighbor> neighbors;
+  std::deque<indexes::Neighbor> neighbors;
   auto external_id = StringInternStore::Intern("key");
   neighbors.push_back(indexes::Neighbor(external_id, 0));
 
@@ -600,7 +600,7 @@ TEST_P(ResponseGeneratorDbParamTest, ProcessNeighborsForReplyNoContent) {
   parameters.no_content = true;
   parameters.attribute_alias = "attr";
 
-  std::vector<indexes::Neighbor> neighbors;
+  std::deque<indexes::Neighbor> neighbors;
   auto external_id = StringInternStore::Intern("key");
   neighbors.push_back(indexes::Neighbor(external_id, 0));
 

@@ -43,11 +43,14 @@ SlopPosition MinGap(const std::vector<SlopPosition>& left,
 
 // floor(sqrt(n)) computed in integer space. Avoids depending on the exact
 // rounding of std::sqrt under -ffast-math: seed from a double then correct.
+// Comparisons use division rather than squaring so they cannot overflow even
+// when n is near UINT64_MAX (where (x+1)*(x+1) would wrap).
 uint32_t IntSqrt(uint64_t n) {
   if (n == 0) return 0;
   uint64_t x = static_cast<uint64_t>(std::sqrt(static_cast<double>(n)));
-  while (x * x > n) --x;
-  while ((x + 1) * (x + 1) <= n) ++x;
+  if (x == 0) x = 1;  // guard against a rounded-down seed before dividing by x
+  while (x > n / x) --x;             // x*x > n
+  while (n / (x + 1) >= x + 1) ++x;  // (x+1)*(x+1) <= n
   return static_cast<uint32_t>(x);
 }
 
@@ -99,7 +102,14 @@ uint32_t SlopCalculator::Finalize() {
   uint64_t sum_squares = 0;
   for (size_t i = 0; i + 1 < anchors_.size(); ++i) {
     uint64_t gap = MinGap(anchors_[i], anchors_[i + 1]);
-    sum_squares += gap * gap;
+    // Saturate rather than wrap: positions are uint32_t and the anchor count
+    // is bounded only by the query-terms limit, so the sum of squared gaps
+    // can in theory exceed uint64_t. A saturated sum still yields a large,
+    // monotonic slop, which is the correct ranking signal.
+    uint64_t term = gap * gap;
+    sum_squares = (sum_squares > std::numeric_limits<uint64_t>::max() - term)
+                      ? std::numeric_limits<uint64_t>::max()
+                      : sum_squares + term;
   }
   // The min-1 guard is applied only here, to the final slop, to avoid a
   // divide-by-zero when slop later divides the TFIDF numerator.

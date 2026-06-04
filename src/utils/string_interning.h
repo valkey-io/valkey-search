@@ -200,7 +200,7 @@ class BorrowedInternedStringPtr {
   absl::string_view Str() const { return ptr_->Str(); }
   const InternedString *operator->() const { return ptr_; }
   const InternedString &operator*() const { return *ptr_; }
-  operator bool() const { return ptr_ != nullptr; }
+  explicit operator bool() const { return ptr_ != nullptr; }
 
   // Convert to an owning pointer (increments ref count).
   InternedStringPtr Materialize() const {
@@ -213,9 +213,7 @@ class BorrowedInternedStringPtr {
   auto operator<=>(const BorrowedInternedStringPtr &other) const {
     return ptr_ <=> other.ptr_;
   }
-  bool operator==(const BorrowedInternedStringPtr &other) const {
-    return ptr_ == other.ptr_;
-  }
+  bool operator==(const BorrowedInternedStringPtr &other) const = default;
   size_t Hash() const { return absl::HashOf(ptr_); }
 
  private:

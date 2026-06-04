@@ -215,8 +215,8 @@ std::string_view Lexer::DoStemming(absl::string_view word, sb_stemmer* stemmer,
     return word;
   }
   // min_stem_size is a code point count, not byte count. "été" = 3 cps, 5
-  // bytes.
-  if (utils::Utf8Iterator::CodePointCount(word) < min_stem_size) {
+  // bytes. Early-exit at min_stem_size avoids scanning long words fully.
+  if (!utils::Utf8Iterator::AtLeastNCodepoints(word, min_stem_size)) {
     return word;
   }
   CHECK(stemmer) << "Stemmer is not initialized";

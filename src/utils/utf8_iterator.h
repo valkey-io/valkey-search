@@ -130,6 +130,28 @@ class Utf8Iterator {
     return count;
   }
 
+  // Returns true iff text contains at least n code points. Exits as soon as
+  // n is reached, so much cheaper than `CodePointCount(text) >= n` when the
+  // answer is "yes" — only the first n code points are examined.
+  //
+  // Uses the UTF-8 invariant: every code point contributes exactly one
+  // non-continuation byte (an ASCII byte or a lead byte). Continuation bytes
+  // match (b & 0xC0) == 0x80 and are skipped. For ASCII-only input this is a
+  // simple byte count.
+  //
+  // Pre-condition (same as Next()): the input must be valid UTF-8.
+  static bool AtLeastNCodepoints(absl::string_view text, size_t n) {
+    if (n == 0) return true;
+    size_t count = 0;
+    for (size_t i = 0; i < text.size(); ++i) {
+      uint8_t b = static_cast<uint8_t>(text[i]);
+      if ((b & 0xC0) != 0x80) {
+        if (++count >= n) return true;
+      }
+    }
+    return false;
+  }
+
   // Bytes expected for a UTF-8 sequence given its lead byte. An invalid lead
   // returns 1 (consistent with the advance-1 fallback behavior).
   // Note: only 0xF0..0xF4 are valid 4-byte leads (U+10000..U+10FFFF);

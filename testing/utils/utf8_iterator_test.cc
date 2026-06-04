@@ -436,6 +436,63 @@ TEST_F(Utf8IteratorTest, CodePointCountInvalidBytesEachCountAsOne) {
   EXPECT_EQ(3u, Utf8Iterator::CodePointCount("\x80\xFF\xFE"));
 }
 
+// ── AtLeastNCodepoints
+// ────────────────────────────────────────────────────────
+
+TEST_F(Utf8IteratorTest, AtLeastNCodepointsZeroAlwaysTrue) {
+  EXPECT_TRUE(Utf8Iterator::AtLeastNCodepoints("", 0));
+  EXPECT_TRUE(Utf8Iterator::AtLeastNCodepoints("hello", 0));
+  EXPECT_TRUE(Utf8Iterator::AtLeastNCodepoints("\xC3\xA9", 0));
+}
+
+TEST_F(Utf8IteratorTest, AtLeastNCodepointsEmptyStringFalseForPositiveN) {
+  EXPECT_FALSE(Utf8Iterator::AtLeastNCodepoints("", 1));
+  EXPECT_FALSE(Utf8Iterator::AtLeastNCodepoints("", 100));
+}
+
+TEST_F(Utf8IteratorTest, AtLeastNCodepointsAsciiExactBoundary) {
+  // "abc" has exactly 3 code points
+  EXPECT_TRUE(Utf8Iterator::AtLeastNCodepoints("abc", 3));
+  EXPECT_TRUE(Utf8Iterator::AtLeastNCodepoints("abc", 2));
+  EXPECT_TRUE(Utf8Iterator::AtLeastNCodepoints("abc", 1));
+  EXPECT_FALSE(Utf8Iterator::AtLeastNCodepoints("abc", 4));
+  EXPECT_FALSE(Utf8Iterator::AtLeastNCodepoints("abc", 1000));
+}
+
+TEST_F(Utf8IteratorTest, AtLeastNCodepointsMultiByteExactBoundary) {
+  // "été" = 3 code points, 5 bytes. Byte count would say >=5, codepoint
+  // count says >=3 only.
+  std::string s = "\xC3\xA9t\xC3\xA9";
+  EXPECT_TRUE(Utf8Iterator::AtLeastNCodepoints(s, 3));
+  EXPECT_TRUE(Utf8Iterator::AtLeastNCodepoints(s, 2));
+  EXPECT_TRUE(Utf8Iterator::AtLeastNCodepoints(s, 1));
+  EXPECT_FALSE(Utf8Iterator::AtLeastNCodepoints(s, 4));
+  EXPECT_FALSE(Utf8Iterator::AtLeastNCodepoints(s, 5));
+}
+
+TEST_F(Utf8IteratorTest, AtLeastNCodepointsAgreesWithCodePointCount) {
+  // For valid UTF-8 (the precondition for both functions),
+  // AtLeastNCodepoints(s, n) must equal (CodePointCount(s) >= n) for all n.
+  const std::string cases[] = {
+      "",
+      "a",
+      "hello world",
+      "\xC3\xA9",                 // é, 2 bytes / 1 cp
+      "\xC3\xA9t\xC3\xA9",        // été, 5 bytes / 3 cps
+      "\xE2\x82\xAC",             // €, 3 bytes / 1 cp
+      "\xF0\x90\x80\x80",         // U+10000, 4 bytes / 1 cp
+      "abc\xC3\xA9\xE2\x82\xAC",  // mixed 1/2/3-byte
+  };
+  for (const auto& s : cases) {
+    size_t cp_count = Utf8Iterator::CodePointCount(s);
+    for (size_t n = 0; n <= cp_count + 2; ++n) {
+      EXPECT_EQ(cp_count >= n, Utf8Iterator::AtLeastNCodepoints(s, n))
+          << "input.size=" << s.size() << " cp_count=" << cp_count
+          << " n=" << n;
+    }
+  }
+}
+
 // ── ExpectedLen
 // ───────────────────────────────────────────────────────────────
 

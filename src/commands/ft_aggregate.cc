@@ -248,7 +248,7 @@ absl::Status CreateRecordsFromNeighbors(
 
     // Set score field for vector queries
     if (parameters.IsVectorQuery()) {
-      rec->fields_.at(scores_index) = expr::Value(n.distance);
+      rec->fields_.at(scores_index) = expr::Value(n.score);
     }
 
     // Process attribute contents

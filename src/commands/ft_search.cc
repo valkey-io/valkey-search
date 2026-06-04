@@ -66,7 +66,16 @@ void SendReplyNoContent(ValkeyModuleCtx *ctx,
 void ReplyScore(ValkeyModuleCtx *ctx, ValkeyModuleString &score_as,
                 const indexes::Neighbor &neighbor) {
   ValkeyModule_ReplyWithString(ctx, &score_as);
-  auto score_value = absl::StrFormat("%.12g", neighbor.distance);
+  auto score_value = absl::StrFormat("%.12g", neighbor.score);
+  ValkeyModule_ReplyWithString(
+      ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
+}
+
+// Reply with just the score value as a top-level element (Redis WITHSCORES
+// format: score appears between document ID and attributes array).
+void ReplyScoreTopLevel(ValkeyModuleCtx *ctx,
+                        const indexes::Neighbor &neighbor) {
+  auto score_value = absl::StrFormat("%.12g", neighbor.score);
   ValkeyModule_ReplyWithString(
       ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
 }
@@ -140,15 +149,27 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
   const auto &neighbors = search_result.neighbors;
   auto range = search_result.GetSerializationRange(command);
 
-  // When with_sort_keys is true, we add an extra element per result (the sort
-  // key)
-  size_t elements_per_result = command.with_sort_keys ? 3 : 2;
+  // Each result has: doc_id [+ score if WITHSCORES] [+ sort_key if
+  // WITHSORTKEYS] + attributes array
+  size_t elements_per_result = 2;
+  if (command.with_scores) {
+    ++elements_per_result;
+  }
+  if (command.with_sort_keys) {
+    ++elements_per_result;
+  }
+
   ValkeyModule_ReplyWithArray(ctx, elements_per_result * range.count() + 1);
   ReplyAvailNeighbors(ctx, search_result, command);
   for (size_t i = range.start_index; i < range.end_index; ++i) {
     // Document ID
     ValkeyModule_ReplyWithString(
         ctx, vmsdk::MakeUniqueValkeyString(*neighbors[i].external_id).get());
+
+    // Score as top-level element when WITHSCORES is specified
+    if (command.with_scores) {
+      ReplyScoreTopLevel(ctx, neighbors[i]);
+    }
 
     // Sort key value (prefixed with #) when WITHSORTKEYS is specified
     if (command.with_sort_keys) {

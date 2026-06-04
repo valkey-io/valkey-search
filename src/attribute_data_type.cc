@@ -106,12 +106,46 @@ absl::StatusOr<RecordsMap> HashAttributeDataType::FetchAllRecords(
     return absl::NotFoundError(absl::StrCat("No such record with identifier: `",
                                             vector_identifier, "`"));
   }
+  if (!identifiers.empty()) {
+    size_t hash_len = RedisModule_ValueLength(key_obj.get());
+    if (identifiers.size() <= hash_len / 2) {
+      return FetchSpecificFields(key_obj.get(), identifiers);
+    }
+  }
+  return FetchAllFields(key_obj.get(), identifiers);
+}
+
+RecordsMap HashAttributeDataType::FetchAllFields(
+    RedisModuleKey *open_key,
+    const absl::flat_hash_set<absl::string_view> &identifiers) const {
   vmsdk::UniqueRedisScanCursor cursor = vmsdk::MakeUniqueRedisScanCursor();
   HashScanCallbackData callback_data{identifiers};
-  while (RedisModule_ScanKey(key_obj.get(), cursor.get(), HashScanCallback,
+  while (RedisModule_ScanKey(open_key, cursor.get(), HashScanCallback,
                              &callback_data)) {
   }
   return std::move(callback_data.key_value_content);
+}
+
+// Fetch only the requested fields by name using HashGet, avoiding a full scan.
+// This is faster than scanning when the hash has many more fields than
+// requested. Fields that don't exist in the hash are silently skipped.
+RecordsMap HashAttributeDataType::FetchSpecificFields(
+    RedisModuleKey *open_key,
+    const absl::flat_hash_set<absl::string_view> &identifiers) const {
+  RecordsMap content;
+  for (const auto &id : identifiers) {
+    RedisModuleString *value = nullptr;
+    RedisModule_HashGet(open_key, REDISMODULE_HASH_CFIELDS, id.data(), &value,
+                        nullptr);
+    if (value) {
+      auto field_str = vmsdk::MakeUniqueRedisString(id);
+      auto field_view = vmsdk::ToStringView(field_str.get());
+      content.emplace(field_view,
+                      RecordsMapValue(std::move(field_str),
+                                      vmsdk::UniqueRedisString(value)));
+    }
+  }
+  return content;
 }
 
 absl::string_view TrimBrackets(absl::string_view record) {

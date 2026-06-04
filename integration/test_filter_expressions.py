@@ -948,3 +948,103 @@ class TestFilterExpressions(ValkeySearchTestCaseBase):
         assert result[0] >= 1
         keys = set(result[i].decode('utf-8') for i in range(1, len(result)))
         assert "item:9" in keys
+
+    # =====================================================================
+    # CONTENT FETCH - RETURN clause field access paths
+    # =====================================================================
+
+    def test_content_fetch_specific_and_all_fields(self):
+        """
+        Test that content fetch works correctly for both the HashGet path
+        (RETURN fewer than half the hash fields) and the scan path (RETURN
+        more than half the fields, or no RETURN clause).
+        Exercises FetchSpecificFields and FetchAllFields.
+        """
+        client: Valkey = self.server.get_new_client()
+
+        # Create index with a single vector field. Documents also carry 10
+        # non-indexed content fields, so each hash has 11 fields in total and
+        # RETURN of up to 5 fields uses the HashGet path (5 <= 11/2).
+        assert client.execute_command(
+            "FT.CREATE", "content_fetch_idx",
+            "ON", "HASH",
+            "PREFIX", "1", "doc:",
+            "SCHEMA",
+            "embedding", "VECTOR", "FLAT", "6",
+            "TYPE", "FLOAT32",
+            "DIM", "3",
+            "DISTANCE_METRIC", "L2"
+        ) == b"OK"
+
+        vectors = {
+            "doc:1": struct.pack('3f', 1.0, 0.0, 0.0),
+            "doc:2": struct.pack('3f', 0.0, 1.0, 0.0),
+            "doc:3": struct.pack('3f', 0.0, 0.0, 1.0),
+        }
+        for doc_id, (key, vec) in enumerate(vectors.items(), start=1):
+            args = []
+            for i in range(1, 11):
+                args.extend([f"f{i}", f"value{i}_doc{doc_id}"])
+            args.extend(["embedding", vec])
+            assert client.execute_command("HSET", key, *args) == 11
+
+        # Query vector closest to doc:1, so KNN 1 returns exactly doc:1
+        query_vec = struct.pack('3f', 0.9, 0.1, 0.0)
+
+        # Path 1: FetchSpecificFields - RETURN 2 fields (2 <= 11/2=5)
+        result = client.execute_command(
+            "FT.SEARCH", "content_fetch_idx",
+            "*=>[KNN 1 @embedding $vec]",
+            "PARAMS", "2", "vec", query_vec,
+            "RETURN", "2", "f1", "f2"
+        )
+        assert result[0] == 1
+        assert result[1] == b"doc:1"
+        doc_fields = dict(zip(result[2][::2], result[2][1::2]))
+        assert doc_fields == {b"f1": b"value1_doc1", b"f2": b"value2_doc1"}
+
+        # Path 1b: RETURN 1 field
+        result = client.execute_command(
+            "FT.SEARCH", "content_fetch_idx",
+            "*=>[KNN 1 @embedding $vec]",
+            "PARAMS", "2", "vec", query_vec,
+            "RETURN", "1", "f5"
+        )
+        assert result[0] == 1
+        assert result[2] == [b"f5", b"value5_doc1"]
+
+        # Path 2: FetchAllFields (scan) - RETURN 8 fields (8 > 11/2=5)
+        ret_fields = [f"f{i}" for i in range(1, 9)]
+        result = client.execute_command(
+            "FT.SEARCH", "content_fetch_idx",
+            "*=>[KNN 1 @embedding $vec]",
+            "PARAMS", "2", "vec", query_vec,
+            "RETURN", "8", *ret_fields
+        )
+        assert result[0] == 1
+        doc_fields = dict(zip(result[2][::2], result[2][1::2]))
+        for i in range(1, 9):
+            assert doc_fields[f"f{i}".encode()] == f"value{i}_doc1".encode()
+
+        # Path 3: FetchAllFields (scan) - no RETURN clause (all fields). The
+        # reply also carries the score and the raw vector, so only verify the
+        # content fields.
+        result = client.execute_command(
+            "FT.SEARCH", "content_fetch_idx",
+            "*=>[KNN 1 @embedding $vec]",
+            "PARAMS", "2", "vec", query_vec
+        )
+        assert result[0] == 1
+        doc_fields = dict(zip(result[2][::2], result[2][1::2]))
+        for i in range(1, 11):
+            assert doc_fields[f"f{i}".encode()] == f"value{i}_doc1".encode()
+
+        # Path 1c: RETURN non-existent field (should be empty)
+        result = client.execute_command(
+            "FT.SEARCH", "content_fetch_idx",
+            "*=>[KNN 1 @embedding $vec]",
+            "PARAMS", "2", "vec", query_vec,
+            "RETURN", "1", "nonexistent"
+        )
+        assert result[0] == 1
+        assert result[2] == []

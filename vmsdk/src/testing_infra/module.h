@@ -155,6 +155,7 @@ class MockRedisModule {
   MOCK_METHOD(int, ScanKey,
               (RedisModuleKey * key, RedisModuleScanCursor *cursor,
                RedisModuleScanKeyCB fn, void *privdata));
+  MOCK_METHOD(size_t, ValueLength, (RedisModuleKey * key));
   MOCK_METHOD(RedisModuleScanCursor *, ScanCursorCreate, ());
   MOCK_METHOD(void, ScanCursorDestroy, (RedisModuleScanCursor * cursor));
   MOCK_METHOD(int, SubscribeToServerEvent,
@@ -722,6 +723,10 @@ inline int TestRedisModule_ScanKey(RedisModuleKey *key,
                                    RedisModuleScanCursor *cursor,
                                    RedisModuleScanKeyCB fn, void *privdata) {
   return kMockRedisModule->ScanKey(key, cursor, fn, privdata);
+}
+
+inline size_t TestRedisModule_ValueLength(RedisModuleKey *key) {
+  return kMockRedisModule->ValueLength(key);
 }
 
 inline RedisModuleScanCursor *TestRedisModule_ScanCursorCreate() {
@@ -1455,6 +1460,7 @@ inline void TestRedisModule_Init() {
   RedisModule_HashGet = &TestRedisModule_HashGet;
   RedisModule_HashSet = &TestRedisModule_HashSet;
   RedisModule_ScanKey = &TestRedisModule_ScanKey;
+  RedisModule_ValueLength = &TestRedisModule_ValueLength;
   RedisModule_ScanCursorCreate = &TestRedisModule_ScanCursorCreate;
   RedisModule_ScanCursorDestroy = &TestRedisModule_ScanCursorDestroy;
   RedisModule_CloseKey = &TestRedisModule_CloseKey;

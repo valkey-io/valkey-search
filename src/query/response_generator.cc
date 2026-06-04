@@ -137,8 +137,11 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
   }
   vmsdk::ValkeySelectDbGuard select_db_guard(ctx, parameters.db_num);
   auto key_str = vmsdk::MakeUniqueValkeyString(key);
+  // NOEXPIRE prevents lazy expiry deletion which could cause
+  // server.also_propagate.numops == 0 crash. The key handle is reused
+  // by FetchAllRecords to avoid a redundant second open.
   auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
-      ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
+      ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEXPIRE | VALKEYMODULE_READ);
   if (!key_obj) {
     return absl::NotFoundError("Key not found");
   }
@@ -189,8 +192,11 @@ absl::StatusOr<RecordsMap> GetContent(
   }
   vmsdk::ValkeySelectDbGuard select_db_guard(ctx, parameters.db_num);
   auto key_str = vmsdk::MakeUniqueValkeyString(key);
+  // NOEXPIRE prevents lazy expiry deletion which could cause
+  // server.also_propagate.numops == 0 crash. The key handle is reused
+  // by FetchAllRecords to avoid a redundant second open.
   auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
-      ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
+      ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEXPIRE | VALKEYMODULE_READ);
   if (!key_obj) {
     return absl::NotFoundError("Key not found");
   }

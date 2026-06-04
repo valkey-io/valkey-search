@@ -101,6 +101,14 @@ class HashAttributeDataType : public AttributeDataType {
     return ValkeyModule_KeyType(key) == VALKEYMODULE_KEYTYPE_HASH;
   }
   bool RecordsProvidedAsString() const override { return false; }
+
+ private:
+  RecordsMap FetchAllFields(
+      ValkeyModuleKey *open_key,
+      const absl::flat_hash_set<absl::string_view> &identifiers) const;
+  RecordsMap FetchSpecificFields(
+      ValkeyModuleKey *open_key,
+      const absl::flat_hash_set<absl::string_view> &identifiers) const;
 };
 
 inline constexpr absl::string_view kJsonCmd = "JSON.GET";

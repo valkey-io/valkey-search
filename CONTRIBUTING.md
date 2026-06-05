@@ -57,7 +57,7 @@ larger feature work — should **not** start as a pull request. Instead:
 1. Open an issue describing exactly what you want to accomplish and why. Use cases are
    important for proposals to be accepted.
 2. Discuss the proposal with the community, including at one of the regular project
-   meetings, to build consensus on the approach before substantial implementation work
+   [meetings](https://zoom-lfx.platform.linuxfoundation.org/meetings/valkey?view=week), to build consensus on the approach before substantial implementation work
    begins.
 
 This avoids spending time writing code for a change that may not be a conceptual fit.

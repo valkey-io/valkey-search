@@ -213,7 +213,8 @@ jobs:
 
             if (!Array.isArray(duplicates) || duplicates.length === 0) return;
 
-            const top = duplicates.filter(d => d.confidence >= 70).slice(0, 5);
+            const candidateNumbers = new Set(candidates.map(c => c.issue.number));
+            const top = duplicates.filter(d => d.confidence >= 70 && candidateNumbers.has(d.number)).slice(0, 5);
             if (top.length === 0) return;
 
             // --- Step 7: Post comment ---
@@ -430,7 +431,8 @@ jobs:
 
               if (!Array.isArray(duplicates) || duplicates.length === 0) return;
 
-              const top = duplicates.filter(d => d.confidence >= 70).slice(0, 5);
+              const candidateNumbers = new Set(candidates.map(c => c.issue.number));
+              const top = duplicates.filter(d => d.confidence >= 70 && candidateNumbers.has(d.number)).slice(0, 5);
               if (top.length === 0) return;
 
               let comment = '🔍 **Potential duplicates detected:**\n\n| # | Confidence | Reason |\n|---|------------|--------|\n';

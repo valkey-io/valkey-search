@@ -110,7 +110,11 @@ jobs:
               page++;
             }
 
-            const others = allIssues.filter(i => i.number !== number);
+            const others = allIssues.filter(i => {
+              if (i.number === number) return false;
+              if (i.pull_request && i.state === 'closed') return false;
+              return true;
+            });
             if (others.length === 0) return;
 
             // --- Step 3: Embed the new issue ---
@@ -319,7 +323,11 @@ jobs:
                 page++;
               }
 
-              const others = allIssues.filter(i => i.number !== context.issue.number);
+              const others = allIssues.filter(i => {
+                if (i.number === context.issue.number) return false;
+                if (i.pull_request && i.state === 'closed') return false;
+                return true;
+              });
               if (others.length === 0) return;
 
               const newText = title + ' ' + issueBody;

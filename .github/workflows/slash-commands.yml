@@ -83,7 +83,7 @@ jobs:
             }
 
             // --- Step 1: Get new issue/PR details ---
-            const isPR = context.event_name === 'pull_request_target';
+            const isPR = context.eventName === 'pull_request_target';
             const current = isPR
               ? context.payload.pull_request
               : context.payload.issue;

@@ -18,6 +18,7 @@ on:
 permissions:
   actions: write
   issues: write
+  models: read
   pull-requests: write
 
 jobs:

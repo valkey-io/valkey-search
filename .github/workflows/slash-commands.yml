@@ -69,7 +69,7 @@ jobs:
             const others = allIssues
               .filter(i => i.number !== number)
               .map(i => {
-                const snippet = (i.body || '').slice(0, 150).replace(/\n/g, ' ');
+                const snippet = (i.body || '').slice(0, 1000).replace(/\n/g, ' ');
                 return `#${i.number} [${i.pull_request ? 'PR' : 'Issue'}] [${i.state}]: ${i.title}\n  ${snippet}`;
               })
               .join('\n');
@@ -209,7 +209,7 @@ jobs:
               const others = allIssues
                 .filter(i => i.number !== context.issue.number)
                 .map(i => {
-                  const snippet = (i.body || '').slice(0, 150).replace(/\n/g, ' ');
+                  const snippet = (i.body || '').slice(0, 1000).replace(/\n/g, ' ');
                   return `#${i.number} [${i.pull_request ? 'PR' : 'Issue'}] [${i.state}]: ${i.title}\n  ${snippet}`;
                 })
                 .join('\n');

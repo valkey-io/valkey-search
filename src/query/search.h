@@ -17,10 +17,13 @@
 #include <utility>
 #include <vector>
 
+#include "absl/base/no_destructor.h"
+#include "absl/container/flat_hash_map.h"
 #include "absl/functional/any_invocable.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
 #include "src/commands/filter_parser.h"
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
@@ -69,10 +72,33 @@ constexpr absl::string_view kSomeShards{"SOMESHARDS"};
 constexpr absl::string_view kConsistent{"CONSISTENT"};
 constexpr absl::string_view kInconsistent{"INCONSISTENT"};
 constexpr absl::string_view kWithSortKeysParam{"WITHSORTKEYS"};
+constexpr absl::string_view kWithScoresParam{"WITHSCORES"};
 constexpr absl::string_view kVectorFilterDelimiter{"=>"};
 constexpr absl::string_view kSlop{"SLOP"};
+constexpr absl::string_view kScorer{"SCORER"};
 constexpr absl::string_view kInorder{"INORDER"};
 constexpr absl::string_view kVerbatim{"VERBATIM"};
+
+enum class Scorer {
+  kBM25STD,
+  kTFIDF,
+};
+
+inline absl::string_view ScorerToString(Scorer scorer) {
+  switch (scorer) {
+    case Scorer::kBM25STD:
+      return "BM25STD";
+    case Scorer::kTFIDF:
+      return "TFIDF";
+  }
+  return "BM25STD";
+}
+
+const absl::NoDestructor<absl::flat_hash_map<absl::string_view, Scorer>>
+    kScorerByStr({
+        {"BM25STD", Scorer::kBM25STD},
+        {"TFIDF", Scorer::kTFIDF},
+    });
 
 struct LimitParameter {
   uint64_t first_index{0};
@@ -214,6 +240,9 @@ struct SearchParameters {
   bool inorder{false};
   std::optional<uint32_t> slop;
   bool verbatim{false};
+  // TODO: Scorer is currently a placeholder. The selected scoring function is
+  // not yet invoked; non-vector queries will report a score of 0.0.
+  Scorer scorer{Scorer::kBM25STD};
   coordinator::IndexFingerprintVersion index_fingerprint_version;
   uint64_t slot_fingerprint;
   SearchResult search_result;

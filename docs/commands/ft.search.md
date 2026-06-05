@@ -13,8 +13,10 @@ FT.SEARCH <index> <query>
   [SLOP <slop>]
   [SORTBY <field> [ ASC | DESC]]
   [TIMEOUT <timeout>]
+  [SCORER <scorer>] 
   [VERBATIM]
   [WITHSORTKEYS]
+  [WITHSCORES]
 ```
 
 - `<index>` (required): This index name you want to query.
@@ -34,6 +36,8 @@ FT.SEARCH <index> <query>
 - `SORTBY <field> [ASC | DESC]` (Optional): If present, results are sorted according the value of the specified field and the optional sort-direction instruction. By default, vector results are sorted in distance order and non-vector results are not sorted in any particular order. Sorting is applied before the `LIMIT` clause is applied.
 - `TIMEOUT <timeout>` (optional): Lets you set a timeout value for the search command. This must be an integer in milliseconds.
 - `WITHSORTKEYS` (Optional): If `SORTBY` is specified then enabling this option augments the output with the value of the field used for sorting.
+- `WITHSCORES` (Optional): If present, results are augmented with the relative internal score of each document.
+- `SCORER <scorer>` (Optional): If present, uses a specific scoring function or the default scoring function.
 
 Response
 

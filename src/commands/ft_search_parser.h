@@ -40,6 +40,7 @@ struct SearchCommand : public QueryCommand {
   query::SerializationRange GetSerializationRange() const;
 
   bool with_sort_keys{false};
+  bool with_scores{false};
 };
 
 }  // namespace valkey_search

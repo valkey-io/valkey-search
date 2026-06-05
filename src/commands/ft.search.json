@@ -7,7 +7,7 @@
     ],
     "history": [
       [
-        "1.2.0", 
+        "1.2.0",
         "Added Text Indexing and Search support"
       ]
     ],
@@ -195,6 +195,22 @@
         ]
       },
       {
+        "name": "SCORER",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "scorer_token",
+            "type": "pure-token",
+            "token": "SCORER"
+          },
+          {
+            "name": "scorer",
+            "type": "string"
+          }
+        ]
+      },
+      {
         "name": "SORTBY",
         "type": "block",
         "optional": true,
@@ -254,6 +270,12 @@
         "type": "pure-token",
         "optional": true,
         "token": "WITHSORTKEYS"
+      },
+      {
+        "name": "WITHSCORES",
+        "type": "pure-token",
+        "optional": true,
+        "token": "WITHSCORES"
       }
     ],
     "arity": -3,

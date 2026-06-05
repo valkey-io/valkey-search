@@ -639,7 +639,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
       fetch_limited = true;
       return false;
     }
-    neighbors.emplace_back(indexes::Neighbor{key, weighted_score});
+    neighbors.emplace_back(indexes::Neighbor{key, 0.0f, weighted_score});
     return true;
   };
   // Cannot skip evaluation if the query contains unsolved composed operations.
@@ -672,7 +672,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
           nonvector_results_fetched_limited_count.Increment();
           return neighbors;
         }
-        neighbors.emplace_back(indexes::Neighbor{key, weighted_score});
+        neighbors.emplace_back(indexes::Neighbor{key, 0.0f, weighted_score});
         iterator->Next();
         if (parameters.cancellation_token->IsCancelled()) {
           return neighbors;

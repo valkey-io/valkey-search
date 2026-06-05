@@ -170,6 +170,8 @@ std::string Value::AsString() const {
     return std::string(*result);
   } else if (auto result = std::get_if<std::string>(&value_)) {
     return *result;
+  } else if (auto result = std::get_if<Value::Array>(&value_)) {
+    return "";
   } else {
     CHECK(false);
   }
@@ -274,11 +276,8 @@ Ordering Compare(const Value& l, const Value& r) {
 
     // Compare element-by-element until mismatch found
     size_t min_size = std::min(lvec->size(), rvec->size());
-    for (size_t i = 0; i < min_size; ++i) {
-      Ordering cmp = Compare((*lvec)[i], (*rvec)[i]);
-      if (cmp != Ordering::kEQUAL) {
-        return cmp;
-      }
+    if(min_size > 0) {
+      return Compare((*lvec)[0], (*rvec)[0]);
     }
 
     // All elements equal, compare by length
@@ -290,7 +289,7 @@ Ordering Compare(const Value& l, const Value& r) {
     return Ordering::kEQUAL;
   } else if (l.IsArray() || r.IsArray()) {
     // Array vs scalar
-    return Ordering::kUNORDERED;
+    return CompareStrings(l.AsString(), r.AsString());
   }
 
   // Need to handle non-equivalent types.

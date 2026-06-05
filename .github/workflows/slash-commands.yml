@@ -18,7 +18,6 @@ on:
 permissions:
   actions: write
   issues: write
-  models: read
   pull-requests: write
 
 jobs:
@@ -69,7 +68,10 @@ jobs:
 
             const others = allIssues
               .filter(i => i.number !== number)
-              .map(i => `#${i.number} [${i.pull_request ? 'PR' : 'Issue'}] [${i.state}]: ${i.title}`)
+              .map(i => {
+                const snippet = (i.body || '').slice(0, 150).replace(/\n/g, ' ');
+                return `#${i.number} [${i.pull_request ? 'PR' : 'Issue'}] [${i.state}]: ${i.title}\n  ${snippet}`;
+              })
               .join('\n');
 
             if (!others) return;
@@ -204,7 +206,10 @@ Respond ONLY with a JSON array of objects: [{"number": N, "confidence": N, "reas
 
               const others = allIssues
                 .filter(i => i.number !== context.issue.number)
-                .map(i => `#${i.number} [${i.pull_request ? 'PR' : 'Issue'}] [${i.state}]: ${i.title}`)
+                .map(i => {
+                  const snippet = (i.body || '').slice(0, 150).replace(/\n/g, ' ');
+                  return `#${i.number} [${i.pull_request ? 'PR' : 'Issue'}] [${i.state}]: ${i.title}\n  ${snippet}`;
+                })
                 .join('\n');
 
               if (!others) return;

@@ -132,6 +132,7 @@ const config::Boolean& GetRdbReadV2();
 /// Return the threshold for async fanout operations
 config::Number& GetAsyncFanoutThreshold();
 
+<<<<<<< HEAD
 /// Return the pool size for per-word Postings bucket mutexes
 config::Number& GetRaxTargetMutexPoolSize();
 
@@ -168,6 +169,9 @@ bool EnabledInVersion(vmsdk::ValkeyVersion version);
 inline bool EnabledInVersion(int major, int minor, int patch) {
   return EnabledInVersion(vmsdk::ValkeyVersion(major, minor, patch));
 }
+
+/// Return the configuration entry for SVS OpenMP thread count
+config::Number& GetSVSOmpThreads();
 
 }  // namespace options
 }  // namespace valkey_search

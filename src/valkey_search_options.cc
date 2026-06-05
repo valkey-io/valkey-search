@@ -648,6 +648,7 @@ vmsdk::config::Number& GetAsyncFanoutThreshold() {
   return dynamic_cast<vmsdk::config::Number&>(*async_fanout_threshold);
 }
 
+<<<<<<< HEAD
 config::Number& GetRaxTargetMutexPoolSize() {
   return dynamic_cast<config::Number&>(*rax_target_mutex_pool_size);
 }
@@ -758,6 +759,18 @@ config::Version& GetEmulateRelease() {
 
 bool EnabledInVersion(vmsdk::ValkeyVersion version) {
   return GetEmulateRelease().GetValue() >= version;
+}
+
+static auto svs_omp_threads =
+    vmsdk::config::NumberBuilder(
+        "svs-omp-threads",  // name
+        1,                  // default: single thread (avoid interference)
+        0,                  // min: 0 means "don't set" (use OMP_NUM_THREADS)
+        256)                // max
+        .Build();
+
+vmsdk::config::Number& GetSVSOmpThreads() {
+  return dynamic_cast<vmsdk::config::Number&>(*svs_omp_threads);
 }
 
 }  // namespace options

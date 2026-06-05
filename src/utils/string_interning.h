@@ -14,7 +14,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
-#include <utility>
 #include <type_traits>
 
 #include "absl/base/thread_annotations.h"

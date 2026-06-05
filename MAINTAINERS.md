@@ -2,7 +2,7 @@
 
 The current list of maintainers is:
 
-| Maintainer       | Company | Github ID       |
+| Maintainer       | Company | GitHub ID       |
 | ---------------- | ------- | --------------- |
 | Yair Gottdenker  | GCP     | yairgott        |
 | Jacob Murphy     | GCP     | murphyjacob4    |
@@ -11,8 +11,8 @@ The current list of maintainers is:
 
 The current list of committers is:
 
-| Committer        | Company | Github ID       |
-| ---------------- | ------- | --------------- |
-| Brennan Cathcart | AWS     | BCathcart       |
+| Committer        | Company | Github ID |
+| ---------------- | ------- | --------- |
+| Brennan Cathcart | AWS     | BCathcart |
 
 The search project is actively looking for more maintainers and committers -- developers that make significant and sustained contributions to the project will be considered.

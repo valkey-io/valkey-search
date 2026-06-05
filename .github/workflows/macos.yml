@@ -3,6 +3,8 @@ name: unittests-macos
 on:
   pull_request:
   push:
+    branches:
+      - multi-language-support
   workflow_dispatch:
 
 concurrency:

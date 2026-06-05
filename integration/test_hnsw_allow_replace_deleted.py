@@ -117,3 +117,74 @@ class TestHNSWAllowReplaceDeleted(ValkeySearchTestCaseDebugMode):
 
         # Cleanup
         client.execute_command("FT.DROPINDEX", "test_rdb_idx")
+
+class TestReplaceDeletedOnLoad(ValkeySearchTestCaseDebugMode):
+    """
+    Test that deleted element slots are reusable after RDB load.
+    """
+
+    def append_startup_args(self, args):
+        args["search.hnsw-allow-replace-deleted"] = "yes"
+        return args
+
+    def test_index_add_after_rdb_load_with_deleted_elements(self):
+        """
+        When allow_replace_deleted is enabled, deleted element slots should be
+        reusable after RDB load. This verifies that the deleted_elements set is
+        correctly populated during LoadIndex so that new inserts can reclaim
+        deleted slots when the index is at capacity.
+        """
+        client: Valkey = self.server.get_new_client()
+
+        # Create HNSW index with small INITIAL_CAP to hit capacity quickly
+        hnsw_index = Index(
+            "idx",
+            [Vector("vector", 4, type="HNSW", distance="L2", initialcap=4)],
+            prefixes=["doc:"]
+        )
+        hnsw_index.create(client)
+
+        # Fill the index to capacity
+        for i in range(4):
+            vec = struct.pack('<4f', *[float(i) + 0.1 * d for d in range(4)])
+            client.hset(f"doc:{i}", mapping={"vector": vec})
+
+        # Delete some vectors so num_deleted_ > 0 after reload
+        for i in range(2):
+            client.delete(f"doc:{i}")
+
+        # Verify KNN search returns 2 indexes after delete
+        query_vec = struct.pack('<4f', *[100.0, 100.1, 100.2, 100.3])
+        search_result = client.execute_command(
+            "FT.SEARCH", "idx",
+            "*=>[KNN 2 @vector $q]",
+            "PARAMS", "2", "q", query_vec,
+        )
+        assert search_result[0] == 2, \
+            f"KNN search after delete returned {search_result[0]}, expected 2"
+
+        # RDB save + reload
+        client.execute_command("SAVE")
+        self.server.restart(remove_rdb=False)
+        client = self.server.get_new_client()
+
+        waiters.wait_for_true(
+            lambda: hnsw_index.backfill_complete(client), timeout=30
+        )
+
+        # Add new vectors — these should reuse deleted slots
+        for i in range(2):
+            vec = struct.pack('<4f', *[200.0 + i + 0.1 * d for d in range(4)])
+            client.hset(f"doc:new{i}", mapping={"vector": vec})
+
+        # Verify KNN search returns expected results
+        query_vec = struct.pack('<4f', *[100.0, 100.1, 100.2, 100.3])
+        search_result = client.execute_command(
+            "FT.SEARCH", "idx",
+            "*=>[KNN 4 @vector $q]",
+            "PARAMS", "2", "q", query_vec,
+        )
+        assert search_result[0] == 4, \
+            f"KNN search returned {search_result[0]}, expected 4"
+
+        client.execute_command("FT.DROPINDEX", "idx")

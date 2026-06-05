@@ -15,7 +15,7 @@ TSC interaction should be the exception (for example, escalation of an unresolve
 ## Roles
 
 * **Committers** are individuals with write access to the code within this repository.
-* **Maintainers** are individuals with full access to the repository who own its governance.
+* **Maintainers** are individuals with full access to the repository and own the project's management.
 
 Both maintainers and committers are listed in [MAINTAINERS.md](MAINTAINERS.md).
 

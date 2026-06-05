@@ -473,8 +473,8 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> FirstValueReducerParser(
   uint32_t cnt{0};
   VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, cnt));
   if (cnt != 1 && cnt != 3 && cnt != 4) {
-    return absl::OutOfRangeError(absl::StrCat(
-        "incorrect number of arguments (", cnt, ") to reducer ", name));
+    return absl::OutOfRangeError(absl::StrCat("incorrect number of arguments (",
+                                              cnt, ") to reducer ", name));
   }
 
   // arg 0: the field whose value to return.

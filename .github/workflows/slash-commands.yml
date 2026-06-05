@@ -36,10 +36,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/github-script@v7
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           script: |
+            const token = core.getInput('github-token');
             const isPR = context.event_name === 'pull_request_target';
             const current = isPR
               ? context.payload.pull_request
@@ -76,30 +75,33 @@ jobs:
 
             if (!others) return;
 
-            const prompt = `You are a duplicate detector for a GitHub repository (valkey-io/valkey-search).
-
-A new ${isPR ? 'PR' : 'issue'} has been filed:
-
-TITLE: ${title}
-BODY: ${body}
-
-Below is a list of all existing issues and PRs. Identify the top duplicates (same underlying bug, feature request, or change). Only include results where you are confident they are duplicates or very closely related.
-
-EXISTING:
-${others}
-
-Respond ONLY with a JSON array of objects: [{"number": N, "confidence": N, "reason": "one sentence"}]
-- confidence is 0-100
-- Only include items with confidence >= 70
-- Maximum 5 items
-- If nothing is a duplicate, respond with []`;
+            const type = isPR ? 'PR' : 'issue';
+            const prompt = [
+              'You are a duplicate detector for a GitHub repository (valkey-io/valkey-search).',
+              '',
+              'A new ' + type + ' has been filed:',
+              '',
+              'TITLE: ' + title,
+              'BODY: ' + body,
+              '',
+              'Below is a list of all existing issues and PRs. Identify the top duplicates (same underlying bug, feature request, or change). Only include results where you are confident they are duplicates or very closely related.',
+              '',
+              'EXISTING:',
+              others,
+              '',
+              'Respond ONLY with a JSON array of objects: [{"number": N, "confidence": N, "reason": "one sentence"}]',
+              '- confidence is 0-100',
+              '- Only include items with confidence >= 70',
+              '- Maximum 5 items',
+              '- If nothing is a duplicate, respond with []',
+            ].join('\n');
 
             const response = await fetch(
               'https://models.github.ai/inference/chat/completions',
               {
                 method: 'POST',
                 headers: {
-                  'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`,
+                  'Authorization': `Bearer ${token}`,
                   'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
@@ -159,10 +161,9 @@ Respond ONLY with a JSON array of objects: [{"number": N, "confidence": N, "reas
     runs-on: ubuntu-latest
     steps:
       - uses: actions/github-script@v7
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           script: |
+            const token = core.getInput('github-token');
             const body = context.payload.comment.body.trim();
             const commenter = context.payload.comment.user.login;
 
@@ -214,30 +215,33 @@ Respond ONLY with a JSON array of objects: [{"number": N, "confidence": N, "reas
 
               if (!others) return;
 
-              const prompt = `You are a duplicate detector for a GitHub repository (valkey-io/valkey-search).
-
-A ${current.pull_request ? 'PR' : 'issue'} is being checked:
-
-TITLE: ${title}
-BODY: ${issueBody}
-
-Below is a list of all existing issues and PRs. Identify the top duplicates (same underlying bug, feature request, or change). Only include results where you are confident they are duplicates or very closely related.
-
-EXISTING:
-${others}
-
-Respond ONLY with a JSON array of objects: [{"number": N, "confidence": N, "reason": "one sentence"}]
-- confidence is 0-100
-- Only include items with confidence >= 70
-- Maximum 5 items
-- If nothing is a duplicate, respond with []`;
+              const type = current.pull_request ? 'PR' : 'issue';
+              const prompt = [
+                'You are a duplicate detector for a GitHub repository (valkey-io/valkey-search).',
+                '',
+                'A ' + type + ' is being checked:',
+                '',
+                'TITLE: ' + title,
+                'BODY: ' + issueBody,
+                '',
+                'Below is a list of all existing issues and PRs. Identify the top duplicates (same underlying bug, feature request, or change). Only include results where you are confident they are duplicates or very closely related.',
+                '',
+                'EXISTING:',
+                others,
+                '',
+                'Respond ONLY with a JSON array of objects: [{"number": N, "confidence": N, "reason": "one sentence"}]',
+                '- confidence is 0-100',
+                '- Only include items with confidence >= 70',
+                '- Maximum 5 items',
+                '- If nothing is a duplicate, respond with []',
+              ].join('\n');
 
               const response = await fetch(
                 'https://models.github.ai/inference/chat/completions',
                 {
                   method: 'POST',
                   headers: {
-                    'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`,
+                    'Authorization': `Bearer ${token}`,
                     'Content-Type': 'application/json',
                   },
                   body: JSON.stringify({

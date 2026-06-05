@@ -1057,15 +1057,14 @@ TEST_F(BagOfInternedStringPtrsTest, ReservePicksCorrectMode) {
         Case{2, Mode::kArray4, Mode::kArray4},
         Case{4, Mode::kArray4, Mode::kArray4},
         Case{5, Mode::kArray8, Mode::kArray8},
-        Case{8, Mode::kArray8, Mode::kArray8},
-        Case{9, Mode::kSet, Mode::kSet},
+        Case{8, Mode::kArray8, Mode::kArray8}, Case{9, Mode::kSet, Mode::kSet},
         Case{20, Mode::kSet, Mode::kSet}}) {
     BagOfInternedStringPtrs bag;
     bag.reserve(c.n);
     EXPECT_EQ(bag.TestModeForTesting(), c.expected_after_reserve)
         << "n=" << c.n;
-    auto keys = MakeKeys(static_cast<int>(c.n),
-                         "rsv_" + std::to_string(c.n) + "_");
+    auto keys =
+        MakeKeys(static_cast<int>(c.n), "rsv_" + std::to_string(c.n) + "_");
     for (const auto& k : keys) {
       bag.insert(k);
     }

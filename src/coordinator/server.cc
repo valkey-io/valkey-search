@@ -99,7 +99,8 @@ void SerializeNeighbors(SearchIndexPartitionResponse* response,
   for (const auto& neighbor : neighbors) {
     auto* neighbor_proto = response->add_neighbors();
     neighbor_proto->set_key(std::move(*neighbor.external_id));
-    neighbor_proto->set_score(neighbor.distance);
+    neighbor_proto->set_score(neighbor.score);
+    neighbor_proto->set_distance(neighbor.distance);
     if (neighbor.attribute_contents) {
       const auto& attribute_contents = neighbor.attribute_contents.value();
       for (const auto& [identifier, record] : attribute_contents) {

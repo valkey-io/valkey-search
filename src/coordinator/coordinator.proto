@@ -150,6 +150,7 @@ message NeighborEntry {
   string key = 1;
   float score = 2;
   repeated AttributeContentEntry attribute_contents = 3;
+  float distance = 4;
 }
 
 message SearchIndexPartitionResponse {

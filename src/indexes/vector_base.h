@@ -51,33 +51,49 @@ std::vector<char> NormalizeEmbedding(absl::string_view record, size_t type_size,
 struct BorrowedNeighbor {
   BorrowedInternedStringPtr key;
   float distance;
+  float score;
 };
 static_assert(std::is_trivially_destructible_v<BorrowedNeighbor>,
               "BorrowedNeighbor must be trivially destructible");
 
+// Default score value used when no scorer has been applied yet.
+inline constexpr float kDefaultScore = 0.0f;
+
 struct Neighbor {
   InternedStringPtr external_id;
   float distance;
+  float score;
   uint64_t sequence_number;
   std::optional<RecordsMap> attribute_contents;
-  Neighbor() : distance(0.0f), sequence_number(0) {}
+  Neighbor() : distance(0.0f), score(kDefaultScore), sequence_number(0) {}
   Neighbor(const InternedStringPtr& external_id, float distance)
-      : external_id(external_id), distance(distance), sequence_number(0) {}
+      : external_id(external_id),
+        distance(distance),
+        score(distance),
+        sequence_number(0) {}
+  Neighbor(const InternedStringPtr& external_id, float distance, float score)
+      : external_id(external_id),
+        distance(distance),
+        score(score),
+        sequence_number(0) {}
   Neighbor(const InternedStringPtr& external_id, float distance,
            std::optional<RecordsMap>&& attribute_contents)
       : external_id(external_id),
         distance(distance),
+        score(distance),
         sequence_number(0),
         attribute_contents(std::move(attribute_contents)) {}
   Neighbor(Neighbor&& other) noexcept
       : external_id(std::move(other.external_id)),
         distance(other.distance),
+        score(other.score),
         sequence_number(other.sequence_number),
         attribute_contents(std::move(other.attribute_contents)) {}
   Neighbor& operator=(Neighbor&& other) noexcept {
     if (this != &other) {
       external_id = std::move(other.external_id);
       distance = other.distance;
+      score = other.score;
       sequence_number = other.sequence_number;
       attribute_contents = std::move(other.attribute_contents);
     }
@@ -85,7 +101,7 @@ struct Neighbor {
   }
   friend std::ostream& operator<<(std::ostream& os, const Neighbor& n) {
     os << "Key: " << n.external_id->Str() << " Dist: " << n.distance
-       << " Seq: " << n.sequence_number;
+       << " Score: " << n.score << " Seq: " << n.sequence_number;
     if (n.attribute_contents.has_value()) {
       os << ' ' << *n.attribute_contents;
     } else {

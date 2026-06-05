@@ -634,7 +634,7 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
       fetch_limited = true;
       return false;
     }
-    borrowed.push_back({BorrowedInternedStringPtr(key), 0.0f});
+    borrowed.push_back({BorrowedInternedStringPtr(key), 0.0f, indexes::kDefaultScore});
     return true;
   };
   // Cannot skip evaluation if the query contains unsolved composed operations.
@@ -667,7 +667,7 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
           nonvector_results_fetched_limited_count.Increment();
           break;
         }
-        borrowed.push_back({BorrowedInternedStringPtr(key), 0.0f});
+        borrowed.push_back({BorrowedInternedStringPtr(key), 0.0f, indexes::kDefaultScore});
         iterator->Next();
         if (parameters.cancellation_token->IsCancelled()) {
           break;

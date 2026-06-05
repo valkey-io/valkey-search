@@ -80,6 +80,9 @@ struct FTSearchParserTestCase {
   query::SortOrder sortby_order{query::SortOrder::kAscending};
   bool sortby_enabled{false};
   bool with_sort_keys{false};
+  // WITHSCORES and SCORER test fields
+  bool with_scores{false};
+  query::Scorer scorer{query::Scorer::kBM25STD};
 };
 
 class FTSearchParserTest
@@ -299,10 +302,12 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
     EXPECT_EQ(search_params.value()->verbatim, test_case.verbatim);
     EXPECT_EQ(search_params.value()->inorder, test_case.inorder);
     EXPECT_EQ(search_params.value()->slop, test_case.slop);
+    EXPECT_EQ(search_params.value()->scorer, test_case.scorer);
     // Validate SORTBY parameters
     EXPECT_EQ(search_params.value()->sortby_parameter.has_value(),
               test_case.sortby_enabled);
     EXPECT_EQ(search_params.value()->with_sort_keys, test_case.with_sort_keys);
+    EXPECT_EQ(search_params.value()->with_scores, test_case.with_scores);
     if (test_case.sortby_enabled) {
       EXPECT_EQ(search_params.value()->sortby_parameter->field,
                 test_case.sortby_field);
@@ -961,6 +966,66 @@ INSTANTIATE_TEST_SUITE_P(
             .expected_error_message =
                 "Error parsing value for the parameter `SLOP`",
             .search_parameters_str = "SLOP -100",
+        },
+        // WITHSCORES parameter tests
+        {
+            .test_name = "withscores_vector_query",
+            .success = true,
+            .params_str = " PARAMS 2",
+            .filter_str = "* =>[KNN 5 @vec $BLOB]",
+            .k = 5,
+            .search_parameters_str = "WITHSCORES",
+            .with_scores = true,
+        },
+        {
+            .test_name = "withscores_non_vector_query",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str = "WITHSCORES",
+            .vector_query = false,
+            .with_scores = true,
+        },
+        // SCORER parameter tests
+        {
+            .test_name = "scorer_vector_query",
+            .success = true,
+            .params_str = " PARAMS 2",
+            .filter_str = "* =>[KNN 5 @vec $BLOB]",
+            .k = 5,
+            .search_parameters_str = "SCORER BM25STD",
+            .scorer = query::Scorer::kBM25STD,
+        },
+        {
+            .test_name = "scorer_non_vector_query",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str = "SCORER TFIDF",
+            .vector_query = false,
+            .scorer = query::Scorer::kTFIDF,
+        },
+        {
+            .test_name = "withscores_and_scorer_combined",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str = "WITHSCORES SCORER TFIDF",
+            .vector_query = false,
+            .with_scores = true,
+            .scorer = query::Scorer::kTFIDF,
         },
         // SORTBY tests
         {

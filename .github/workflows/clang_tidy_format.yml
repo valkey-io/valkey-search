@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - fulltext
+      - multi-language-support
     paths:
       - 'src/**'
       - 'testing/**'

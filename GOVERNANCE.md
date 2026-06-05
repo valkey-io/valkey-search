@@ -6,8 +6,8 @@ Contributors familiar with the core project should find the roles, decision-maki
 
 ## Relationship to the Valkey project
 
-Because Valkey Search is a sub-project under the Valkey-io organization, the Valkey Technical Steering Committee (TSC) holds ultimate authority over it.
-The TSC may, at its discretion, overrule decisions made within this project, although — consistent with the core governance document — it shall show restraint in doing so.
+Valkey Search is a sub-project within the Valkey project which is managed by the Valkey Technical Steering Committee (TSC).
+The TSC has delegated management of this subproject to the provided list of maintainers. The TSC reserves the ability to overrule decisions made within this project, although they shall show restraint in doing so.
 
 Our explicit goal is for Valkey Search to be **self-governing and self-contained**: day-to-day technical and project decisions should be made by this project's own maintainers, without requiring TSC involvement.
 TSC interaction should be the exception (for example, escalation of an unresolved dispute or a change in the project's relationship to the broader Valkey organization), not part of the normal flow of development.

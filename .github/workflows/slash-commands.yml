@@ -197,6 +197,7 @@ jobs:
             }
 
             const chatData = await chatRes.json();
+            if (!chatData.choices || !chatData.choices[0]) return;
             const content = chatData.choices[0].message.content.trim();
 
             let duplicates;
@@ -415,6 +416,7 @@ jobs:
               }
 
               const chatData = await chatRes.json();
+              if (!chatData.choices || !chatData.choices[0]) return;
               const content = chatData.choices[0].message.content.trim();
 
               let duplicates;

@@ -161,7 +161,8 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
     if (ABSL_PREDICT_FALSE(inside_multi_exec && do_fanout) &&
         !IsSingleSlotQueryRoutedToLocalNode(ctx, *parameters)) {
       return absl::InvalidArgumentError(
-          "MULTI/EXEC or Lua script are not supported in CME mode.");
+          "MULTI/EXEC or Lua script are not supported in CME mode unless the "
+          "query targets a single-slot index on the local node.");
     }
 
     if (ABSL_PREDICT_FALSE(!ValkeySearch::Instance().SupportParallelQueries() ||

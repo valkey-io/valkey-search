@@ -114,15 +114,21 @@ struct SearchResult {
   SearchResult(size_t total_count, std::vector<indexes::Neighbor> neighbors,
                const SearchParameters& parameters,
                bool trim_offset_in_background = false);
+  // Constructor for borrowed results — trims then materializes survivors.
+  SearchResult(size_t total_count,
+               std::vector<indexes::BorrowedNeighbor> borrowed,
+               const SearchParameters& parameters,
+               bool trim_offset_in_background = false);
   // Get the range of neighbors to serialize in response.
   SerializationRange GetSerializationRange(
-      const SearchParameters& parameters) const;
+      const SearchParameters& parameters,
+      std::optional<size_t> override_size = std::nullopt) const;
 
   SearchResult();
 
  private:
-  void TrimResults(std::vector<indexes::Neighbor>& neighbors,
-                   const SearchParameters& parameters,
+  template <typename T>
+  void TrimResults(std::vector<T>& vec, const SearchParameters& parameters,
                    bool trim_offset_in_background);
 };
 

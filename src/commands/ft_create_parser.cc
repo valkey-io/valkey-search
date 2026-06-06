@@ -24,6 +24,7 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "src/attribute_data_type.h"
+#include "src/index_schema.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/vector_base.h"
@@ -284,21 +285,26 @@ absl::Status ParseLanguage(vmsdk::ArgsIterator &itr,
 }
 absl::Status ParseScore(vmsdk::ArgsIterator &itr,
                         data_model::IndexSchema &index_schema_proto) {
-  float score{1.0};
+  float score{IndexSchema::kDefaultDocumentScore};
   VMSDK_ASSIGN_OR_RETURN(auto res,
                          vmsdk::ParseParam(kScoreParam, false, itr, score));
-  if (res && score != 1.0) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("`", kScoreParam, "` parameter with a value `", score,
-                     "` is not supported. The only supported value is `1.0`"));
-  }
-  VMSDK_ASSIGN_OR_RETURN(res,
-                         vmsdk::IsParamKeyMatch(kScoreFieldParam, false, itr));
   if (res) {
-    return absl::InvalidArgumentError(
-        NotSupportedParamErrorMsg(kScoreFieldParam));
+    if (score < 0.0 || score > 1.0) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("`", kScoreParam, "` parameter with a value `", score,
+                       "` is not supported. The value must be between "
+                       "0.0 and 1.0"));
+    }
+    index_schema_proto.set_score(score);
   }
-  index_schema_proto.set_score(score);
+  // Parse SCORE_FIELD: the name of the document field whose numeric value
+  // is used as the document's custom score. Only one per index.
+  std::string score_field;
+  VMSDK_ASSIGN_OR_RETURN(
+      res, vmsdk::ParseParam(kScoreFieldParam, false, itr, score_field));
+  if (res) {
+    index_schema_proto.set_score_field(score_field);
+  }
   return absl::OkStatus();
 }
 vmsdk::KeyValueParser<HNSWParameters> CreateHNSWParser() {

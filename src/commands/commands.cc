@@ -81,6 +81,22 @@ void Free([[maybe_unused]] ValkeyModuleCtx *ctx, void *privdata) {
 CONTROLLED_BOOLEAN(ForceReplicasOnly, false);
 DEV_INTEGER_COUNTER(stats, single_slot_queries);
 
+bool IsSingleSlotQueryRoutedToLocalNode(ValkeyModuleCtx *ctx,
+                                        const QueryCommand &parameters) {
+  if (!parameters.index_schema) {
+    return false;
+  }
+
+  const auto &single_slot_number =
+      parameters.index_schema->GetSingleSlotNumber();
+  if (!single_slot_number.has_value()) {
+    return false;
+  }
+
+  const auto cluster_map = ValkeySearch::Instance().GetOrRefreshClusterMap(ctx);
+  return cluster_map && cluster_map->IOwnSlot(*single_slot_number);
+}
+
 std::vector<vmsdk::cluster_map::NodeInfo> ComputeSearchTargets(
     ValkeyModuleCtx *ctx, const QueryCommand &parameters) {
   auto mode = /* !vmsdk::IsReadOnly(ctx) ? query::fanout::kPrimaries ? */
@@ -91,12 +107,13 @@ std::vector<vmsdk::cluster_map::NodeInfo> ComputeSearchTargets(
   // refresh cluster map if needed
   auto cluster_map = ValkeySearch::Instance().GetOrRefreshClusterMap(ctx);
 
-  if (vmsdk::ParseHashTag(parameters.index_schema_name).has_value()) {
-    auto key = vmsdk::MakeUniqueValkeyString(parameters.index_schema_name);
-    auto this_slot = ValkeyModule_ClusterKeySlot(key.get());
+  const auto &single_slot_number =
+      parameters.index_schema->GetSingleSlotNumber();
+  if (single_slot_number.has_value()) {
     single_slot_queries.Increment();
     return cluster_map->GetTargetsForSlot(
-        mode, query::fanout::IsSystemUnderLowUtilization(), this_slot);
+        mode, query::fanout::IsSystemUnderLowUtilization(),
+        *single_slot_number);
   } else {
     return cluster_map->GetTargets(
         mode, query::fanout::IsSystemUnderLowUtilization());
@@ -141,7 +158,8 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
                            ValkeySearch::Instance().IsCluster() &&
                            !parameters->local_only;
 
-    if (ABSL_PREDICT_FALSE(inside_multi_exec && do_fanout)) {
+    if (ABSL_PREDICT_FALSE(inside_multi_exec && do_fanout) &&
+        !IsSingleSlotQueryRoutedToLocalNode(ctx, *parameters)) {
       return absl::InvalidArgumentError(
           "MULTI/EXEC or Lua script are not supported in CME mode.");
     }

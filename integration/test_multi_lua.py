@@ -17,7 +17,7 @@ from indexes import *
 INDEX = "idx"
 OK = b"OK"
 QUEUED = b"QUEUED"
-FANOUT_NOT_SUPPORTED_ERR = "MULTI/EXEC or Lua script are not supported in CME mode"
+FANOUT_NOT_SUPPORTED_ERR = "MULTI/EXEC or Lua script are not supported in CME mode unless the query targets a single-slot index on the local node."
 
 
 def _lua_call(cmd: str, *args: str) -> str:

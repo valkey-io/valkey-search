@@ -29,6 +29,7 @@ target_link_libraries(commands PUBLIC vector_base)
 target_link_libraries(commands PUBLIC fanout)
 target_link_libraries(commands PUBLIC response_generator)
 target_link_libraries(commands PUBLIC search)
+target_link_libraries(commands PUBLIC re2::re2)
 target_link_libraries(commands PUBLIC vmsdklib)
 target_link_libraries(commands PUBLIC valkey_module)
 

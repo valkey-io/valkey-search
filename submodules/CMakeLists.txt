@@ -19,6 +19,7 @@ file(MAKE_DIRECTORY "${MODULES_DIR}")
 set(MODULE_HIGHWAYHASH "highwayhash")
 set(MODULE_GRPC "grpc")
 set(MODULE_GOOGLE_TEST "googletest")
+set(MODULE_RE2 "re2")
 
 string(TOLOWER "$ENV{SAN_BUILD}" SAN_BUILD_LOWER)
 if("${SAN_BUILD_LOWER}" STREQUAL "no")
@@ -200,6 +201,10 @@ else()
     ${MODULE_GOOGLE_TEST} "https://github.com/google/googletest.git" "main"
     "${MODULES_DIR}/googletest/build-release")
 
+  checkout_submodule_branch(${MODULE_RE2} "https://github.com/google/re2.git"
+                            "2025-11-05"
+                            "${MODULES_DIR}/re2/build-release")
+
   if("${SAN_BUILD_LOWER}" STREQUAL "no")
   
     checkout_submodule_branch(
@@ -224,6 +229,11 @@ else()
   )
 
   set(GOOGLE_TEST_CMAKE_ARGS ${MODULES_COMMON_CMAKE_ARGS})
+  set(RE2_CMAKE_ARGS
+      ${MODULES_COMMON_CMAKE_ARGS}
+      -DRE2_BUILD_TESTING=OFF
+      -DBUILD_SHARED_LIBS=OFF
+  )
   set(GRPC_CMAKE_ARGS
       ${MODULES_COMMON_CMAKE_ARGS}
       -DSKIP_INSTALL_ALL=ON
@@ -237,6 +247,10 @@ else()
                   "${MODULES_INSTALL_PREFIX}/include/gtest/gtest.h")
   build_submodule(${MODULE_GRPC} "${GRPC_CMAKE_ARGS}"
                   "${MODULES_INSTALL_PREFIX}/include/absl/base/options.h")
+  list(APPEND RE2_CMAKE_ARGS
+       "-Dabsl_DIR=${MODULES_INSTALL_PREFIX}/lib/cmake/absl")
+  build_submodule(${MODULE_RE2} "${RE2_CMAKE_ARGS}"
+                  "${MODULES_INSTALL_PREFIX}/include/re2/re2.h")
   
   if("${SAN_BUILD_LOWER}" STREQUAL "no")
     build_submodule(${MODULE_BENCHMARK} "${BENCHMARK_CMAKE_ARGS}"
@@ -260,6 +274,7 @@ else()
   update_cmake_prefix("GTest" __CMAKE_PREFIX_PATH)
   update_cmake_prefix("grpc" __CMAKE_PREFIX_PATH)
   update_cmake_prefix("protobuf" __CMAKE_PREFIX_PATH)
+  update_cmake_prefix("re2" __CMAKE_PREFIX_PATH)
   update_cmake_prefix("utf8_range" __CMAKE_PREFIX_PATH)
   
   if("${SAN_BUILD_LOWER}" STREQUAL "no")

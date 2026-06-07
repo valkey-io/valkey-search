@@ -147,10 +147,12 @@ CLUSTER: An array of key value pairs
 ## FT.\_LIST
 
 ```
-FT._LIST
+FT._LIST [REGEX <pattern>]
 ```
 
 Lists the currently defined indexes.
+
+- **REGEX \<pattern\>** (optional): Returns only index names matching the regular expression.
 
 **RESPONSE**
 

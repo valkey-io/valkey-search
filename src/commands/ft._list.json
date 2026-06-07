@@ -6,11 +6,28 @@
       "READ",
       "SEARCH"
     ],
-    "arguments": [],
-    "arity": 1,
+    "arguments": [
+      {
+        "name": "regex-filter",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "regex_token",
+            "type": "pure-token",
+            "token": "REGEX"
+          },
+          {
+            "name": "pattern",
+            "type": "string"
+          }
+        ]
+      }
+    ],
+    "arity": -1,
     "complexity": "O(1)",
     "group": "search",
     "module_since": "1.0.0",
-    "summary": "Lists the currently defined indexes"
+    "summary": "Lists the currently defined indexes, optionally filtered by a regular expression"
   }
 }

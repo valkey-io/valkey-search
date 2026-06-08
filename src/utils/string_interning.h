@@ -11,6 +11,7 @@
 #include <absl/container/btree_map.h>
 
 #include <cstddef>
+#include <type_traits>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
@@ -27,6 +28,7 @@ namespace valkey_search {
 
 class InternedStringImpl;
 class InternedStringPtr;
+class BorrowedInternedStringPtr;
 
 //
 // An interned string. This is a reference-counted object of variable size.
@@ -50,6 +52,7 @@ class InternedString {
   ~InternedString() = default;
 
   friend class InternedStringPtr;
+  friend class BorrowedInternedStringPtr;
   static InternedString *Constructor(absl::string_view str,
                                      Allocator *allocator);
   void Destructor();
@@ -160,11 +163,66 @@ class InternedStringPtr {
 
   size_t RefCount() const { return impl_ ? impl_->RefCount() : 0; }
 
+  // Access the raw pointer (used by BorrowedInternedStringPtr).
+  const InternedString *RawPtr() const { return impl_; }
+
  private:
   InternedStringPtr(InternedString *impl) : impl_(impl) {}
   InternedString *impl_{nullptr};
   friend class StringInternStore;
+  friend class BorrowedInternedStringPtr;
 };
+
+//
+// A non-owning (borrowed) pointer to an InternedString. This class is
+// trivially destructible — destroying a vector of these is a no-op.
+//
+// Safety contract: The caller MUST guarantee that the underlying
+// InternedString outlives this pointer. Typically this means the reader lock
+// that protects the index must be held for the lifetime of all
+// BorrowedInternedStringPtr instances.
+//
+// Call Materialize() to convert to an owning InternedStringPtr (increments
+// ref count) before releasing the lock.
+//
+class BorrowedInternedStringPtr {
+ public:
+  BorrowedInternedStringPtr() = default;
+  explicit BorrowedInternedStringPtr(const InternedStringPtr &owned)
+      : ptr_(owned.RawPtr()) {}
+
+  // Trivially copyable, trivially destructible — no ref counting.
+  BorrowedInternedStringPtr(const BorrowedInternedStringPtr &) = default;
+  BorrowedInternedStringPtr &operator=(const BorrowedInternedStringPtr &) =
+      default;
+  ~BorrowedInternedStringPtr() = default;
+
+  absl::string_view Str() const { return ptr_->Str(); }
+  const InternedString *operator->() const { return ptr_; }
+  const InternedString &operator*() const { return *ptr_; }
+  explicit operator bool() const { return ptr_ != nullptr; }
+
+  // Convert to an owning pointer (increments ref count).
+  InternedStringPtr Materialize() const {
+    if (ptr_) {
+      const_cast<InternedString *>(ptr_)->IncrementRefCount();
+    }
+    return InternedStringPtr(const_cast<InternedString *>(ptr_));
+  }
+
+  auto operator<=>(const BorrowedInternedStringPtr &other) const {
+    return ptr_ <=> other.ptr_;
+  }
+  bool operator==(const BorrowedInternedStringPtr &other) const = default;
+  size_t Hash() const { return absl::HashOf(ptr_); }
+
+ private:
+  const InternedString *ptr_{nullptr};
+  friend class InternedStringPtr;
+};
+
+static_assert(std::is_trivially_destructible_v<BorrowedInternedStringPtr>,
+              "BorrowedInternedStringPtr must be trivially destructible");
 
 inline std::ostream &operator<<(std::ostream &os,
                                 const InternedStringPtr &str) {

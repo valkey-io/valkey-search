@@ -323,6 +323,162 @@ def validate_aggregate_queries(client: Valkey):
         with pytest.raises(ResponseError, match=r"Invalid or missing expression"):
             client.execute_command(*command)
 
+def validate_random_sample_queries(client: Valkey):
+    """
+        Test FT.AGGREGATE with RANDOM_SAMPLE reducer.
+    """
+    # 1. Basic RANDOM_SAMPLE functionality
+    # Use APPLY to create a constant field for grouping all records together
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "1", "price",
+        "APPLY", "1", "AS", "all",
+        "GROUPBY", "1", "@all",
+        "REDUCE", "RANDOM_SAMPLE", "2", "@price", "5", "AS", "sample"
+    )
+    assert result[0] == 1
+    # Result should have a sample field with an array
+    row = dict(zip(result[1][::2], result[1][1::2]))
+    assert b'sample' in row
+    # Sample should be an array (list in Python)
+    sample = row[b'sample']
+    assert isinstance(sample, list)
+    assert len(sample) <= 5  # Should have at most 5 elements
+    
+    # 2. RANDOM_SAMPLE with various sample sizes
+    # Sample size smaller than group size
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 100]",
+        "LOAD", "1", "price",
+        "APPLY", "1", "AS", "all",
+        "GROUPBY", "1", "@all",
+        "REDUCE", "RANDOM_SAMPLE", "2", "@price", "10", "AS", "sample"
+    )
+    assert result[0] == 1
+    row = dict(zip(result[1][::2], result[1][1::2]))
+    sample = row[b'sample']
+    assert isinstance(sample, list)
+    assert len(sample) == 10  # Should have exactly 10 elements
+    
+    # Sample size larger than group size
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 5]",
+        "LOAD", "1", "price",
+        "APPLY", "1", "AS", "all",
+        "GROUPBY", "1", "@all",
+        "REDUCE", "RANDOM_SAMPLE", "2", "@price", "100", "AS", "sample"
+    )
+    assert result[0] == 1
+    row = dict(zip(result[1][::2], result[1][1::2]))
+    sample = row[b'sample']
+    assert isinstance(sample, list)
+    assert len(sample) == 5  # Should have all 5 elements
+    
+    # Sample size = 0 (empty array)
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 100]",
+        "LOAD", "1", "price",
+        "APPLY", "1", "AS", "all",
+        "GROUPBY", "1", "@all",
+        "REDUCE", "RANDOM_SAMPLE", "2", "@price", "0", "AS", "sample"
+    )
+    assert result[0] == 1
+    row = dict(zip(result[1][::2], result[1][1::2]))
+    sample = row[b'sample']
+    assert isinstance(sample, list)
+    assert len(sample) == 0  # Should be empty
+    
+    # 3. Multiple RANDOM_SAMPLE reducers in same query
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 100]",
+        "LOAD", "2", "price", "rating",
+        "APPLY", "1", "AS", "all",
+        "GROUPBY", "1", "@all",
+        "REDUCE", "RANDOM_SAMPLE", "2", "@price", "5", "AS", "price_sample",
+        "REDUCE", "RANDOM_SAMPLE", "2", "@rating", "5", "AS", "rating_sample"
+    )
+    assert result[0] == 1
+    row = dict(zip(result[1][::2], result[1][1::2]))
+    assert b'price_sample' in row
+    assert b'rating_sample' in row
+    price_sample = row[b'price_sample']
+    rating_sample = row[b'rating_sample']
+    assert isinstance(price_sample, list)
+    assert isinstance(rating_sample, list)
+    assert len(price_sample) == 5
+    assert len(rating_sample) == 5
+    # Samples should be independent (different values)
+    assert price_sample != rating_sample
+    
+    # 4. RANDOM_SAMPLE with GROUPBY operations
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "2", "price", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "RANDOM_SAMPLE", "2", "@price", "10", "AS", "sample"
+    )
+    assert result[0] == 2  # Two categories: electronics and books
+    for i in range(1, len(result)):
+        row = dict(zip(result[i][::2], result[i][1::2]))
+        assert b'category' in row
+        assert b'sample' in row
+        sample = row[b'sample']
+        assert isinstance(sample, list)
+        assert len(sample) == 10  # Each group should have 10 samples
+    
+    # 5. RANDOM_SAMPLE with numeric fields
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 100]",
+        "LOAD", "1", "price",
+        "APPLY", "1", "AS", "all",
+        "GROUPBY", "1", "@all",
+        "REDUCE", "RANDOM_SAMPLE", "2", "@price", "5", "AS", "sample"
+    )
+    assert result[0] == 1
+    row = dict(zip(result[1][::2], result[1][1::2]))
+    sample = row[b'sample']
+    assert isinstance(sample, list)
+    # All values should be numeric strings
+    for val in sample:
+        assert isinstance(val, bytes)
+        float(val)  # Should be convertible to float
+    
+    # 6. RANDOM_SAMPLE with string fields
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 100]",
+        "LOAD", "1", "category",
+        "APPLY", "1", "AS", "all",
+        "GROUPBY", "1", "@all",
+        "REDUCE", "RANDOM_SAMPLE", "2", "@category", "5", "AS", "sample"
+    )
+    assert result[0] == 1
+    row = dict(zip(result[1][::2], result[1][1::2]))
+    sample = row[b'sample']
+    assert isinstance(sample, list)
+    # All values should be strings
+    for val in sample:
+        assert isinstance(val, bytes)
+        assert val in [b'electronics', b'books']
+    
+    # 7. RANDOM_SAMPLE with mixed-type fields (numeric and string in same property)
+    # This tests that RANDOM_SAMPLE handles different types correctly
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 100]",
+        "LOAD", "2", "price", "rating",
+        "APPLY", "1", "AS", "all",
+        "GROUPBY", "1", "@all",
+        "REDUCE", "RANDOM_SAMPLE", "2", "@price", "3", "AS", "price_sample",
+        "REDUCE", "RANDOM_SAMPLE", "2", "@rating", "3", "AS", "rating_sample"
+    )
+    assert result[0] == 1
+    row = dict(zip(result[1][::2], result[1][1::2]))
+    price_sample = row[b'price_sample']
+    rating_sample = row[b'rating_sample']
+    assert isinstance(price_sample, list)
+    assert isinstance(rating_sample, list)
+    assert len(price_sample) == 3
+    assert len(rating_sample) == 3
+
 def validate_aggregate_complex_queries(client: Valkey):
     """
         Test complex FT.AGGREGATE queries with numeric and tag.
@@ -567,6 +723,8 @@ class TestNonVector(ValkeySearchTestCaseBase):
         for doc in json_docs:
             assert client.execute_command(*doc) == b"OK"
         validate_aggregate_complex_queries(client)
+        # Test RANDOM_SAMPLE functionality
+        validate_random_sample_queries(client)
 
     def test_uningested_multi_field(self):
         """
@@ -637,6 +795,8 @@ class TestNonVectorCluster(ValkeySearchClusterTestCase):
         for doc in aggregate_complex_json_docs:
             assert cluster_client.execute_command(*doc) == b"OK"
         validate_aggregate_complex_queries(cluster_client)
+        # Test RANDOM_SAMPLE functionality in cluster mode
+        validate_random_sample_queries(cluster_client)
     
     def test_max_search_keys_fetch_limited(self):
         """

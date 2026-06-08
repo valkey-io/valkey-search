@@ -263,6 +263,11 @@
                     "name": "STDDEV",
                     "type": "pure-token",
                     "token": "STDDEV"
+                  },
+                  {
+                    "name": "RANDOM_SAMPLE",
+                    "type": "pure-token",
+                    "token": "RANDOM_SAMPLE"
                   }
                 ]
               },

@@ -8,8 +8,10 @@
 #include "src/indexes/numeric.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <memory>
+#include <new>
 #include <optional>
 #include <string>
 
@@ -21,7 +23,9 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
+#include "src/index_schema.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/key_attr_value.h"
 #include "src/query/predicate.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
@@ -36,10 +40,29 @@ std::optional<double> ParseNumber(absl::string_view data) {
   }
   return value;
 }
+
+// Helpers that read the SlotT through the schema for `pos`. Caller holds
+// the appropriate lock (index_mutex_ for writes, read-epoch invariant for
+// reads).
+const NumericSlot* TryGetSlot(const IndexSchema* schema, uint16_t pos,
+                              const InternedStringPtr& key) {
+  if (schema == nullptr) {
+    return nullptr;
+  }
+  const KeyAttrValue* kav = schema->FindKAV(key);
+  if (kav == nullptr) {
+    return nullptr;
+  }
+  const Slot& slot = kav->slots[pos];
+  if (!IsOccupied(slot)) {
+    return nullptr;
+  }
+  return std::launder(reinterpret_cast<const NumericSlot*>(slot.storage));
+}
 }  // namespace
 
 Numeric::Numeric(const data_model::NumericIndex& numeric_index_proto)
-    : IndexBase(IndexerType::kNumeric) {
+    : TypedIndex<Numeric, NumericSlot>(IndexerType::kNumeric) {
   index_ = std::make_unique<BTreeNumericIndex>();
 }
 
@@ -47,16 +70,28 @@ absl::StatusOr<bool> Numeric::AddRecord(const InternedStringPtr& key,
                                         absl::string_view data) {
   auto value = ParseNumber(data);
   absl::MutexLock lock(&index_mutex_);
+  // Defensive: production callers (ProcessAttributeMutation) dispatch through
+  // IsTracked → ModifyRecord; tests can hit AddRecord on an already-occupied
+  // slot, so report AlreadyExists rather than CHECK-failing in OccupySlot.
+  if (KeyAttrValue* kav = schema_->FindKAV(key);
+      kav != nullptr && IsOccupied(kav->slots[pos_])) {
+    return absl::AlreadyExistsError(
+        absl::StrCat("Key already exists in numeric index: ", key->Str()));
+  }
   if (!value.has_value()) {
-    untracked_keys_.insert(key);
+    // Unparseable input: slot stays empty, but the key has no numeric value,
+    // so it belongs in the missing list. Link if not already linked.
+    if (!schema_->IsLinked(pos_, key)) {
+      schema_->LinkMissing(pos_, key);
+    }
     return false;
   }
-  auto [_, succ] = tracked_keys_.insert({key, *value});
-  if (!succ) {
-    return absl::AlreadyExistsError(
-        absl::StrCat("Key `", key->Str(), "` already exists"));
-  }
-  untracked_keys_.erase(key);
+  // OccupySlot consumes the empty Missing and bumps the occupied count.
+  // We placement-new the NumericSlot on top, with the SlotBase header set.
+  std::byte* storage = OccupySlot(key, data.size());
+  new (storage) NumericSlot{
+      {/*occupied=*/1u, /*user_data_len=*/static_cast<uint32_t>(data.size())},
+      *value};
   index_->Add(key, *value);
   return true;
 }
@@ -70,35 +105,59 @@ absl::StatusOr<bool> Numeric::ModifyRecord(const InternedStringPtr& key,
     return false;
   }
   absl::MutexLock lock(&index_mutex_);
-  auto it = tracked_keys_.find(key);
-  if (it == tracked_keys_.end()) {
+  KeyAttrValue* kav = schema_->FindKAV(key);
+  if (kav == nullptr || !IsOccupied(kav->slots[pos_])) {
     return absl::NotFoundError(
-        absl::StrCat("Key `", key->Str(), "` not found"));
+        absl::StrCat("Key not tracked in numeric index: ", key->Str()));
   }
-
-  index_->Modify(it->first, it->second, *value);
-  it->second = *value;
+  Slot& slot = kav->slots[pos_];
+  NumericSlot& nslot = SlotAs(slot.storage);
+  index_->Modify(key, nslot.value, *value);
+  nslot.value = *value;
+  if (nslot.user_data_len != data.size()) {
+    ResizeSlot(key, data.size());
+  }
   return true;
 }
 
 absl::StatusOr<bool> Numeric::RemoveRecord(const InternedStringPtr& key,
                                            DeletionType deletion_type) {
   absl::MutexLock lock(&index_mutex_);
-  if (deletion_type == DeletionType::kRecord) {
-    // If key is DELETED, remove it from untracked_keys_.
-    untracked_keys_.erase(key);
-  } else {
-    // If key doesn't have NUMERIC but exists, insert it to untracked_keys_.
-    untracked_keys_.insert(key);
-  }
-  auto it = tracked_keys_.find(key);
-  if (it == tracked_keys_.end()) {
+  KeyAttrValue* kav = schema_->FindKAV(key);
+  if (kav == nullptr) {
     return false;
   }
+  Slot& slot = kav->slots[pos_];
+  if (IsOccupied(slot)) {
+    NumericSlot& nslot = SlotAs(slot.storage);
+    index_->Remove(key, nslot.value);
+    // VacateSlot overwrites the bytes with a fresh Missing. For kRecord
+    // (whole-key delete) we don't relink — the KAV is about to be freed.
+    VacateSlot(key, /*relink=*/deletion_type != DeletionType::kRecord);
+    return true;
+  }
+  // Slot already empty. For kIdentifier/kNone, ensure it's linked into the
+  // missing list (covers brand-new-key first-notification). For kRecord,
+  // ensure it's unlinked (caller will free the KAV next).
+  if (deletion_type == DeletionType::kRecord) {
+    if (schema_->IsLinked(pos_, key)) {
+      schema_->UnlinkMissing(pos_, key);
+    }
+  } else {
+    if (!schema_->IsLinked(pos_, key)) {
+      schema_->LinkMissing(pos_, key);
+    }
+  }
+  return false;
+}
 
-  index_->Remove(it->first, it->second);
-  tracked_keys_.erase(it);
-  return true;
+void Numeric::DestructTyped(const InternedStringPtr& key, NumericSlot& slot) {
+  // Whole-key delete safety net (DestroyKeyAttrValue path). Remove this key
+  // from the btree/segment tree using the slot's stored value. The slot's
+  // bytes are overwritten by the caller (DestroyKeyAttrValue runs the
+  // Missing destructor afterward) so we don't need to touch them.
+  absl::MutexLock lock(&index_mutex_);
+  index_->Remove(key, slot.value);
 }
 
 int Numeric::RespondWithInfo(ValkeyModuleCtx* ctx) const {
@@ -106,8 +165,8 @@ int Numeric::RespondWithInfo(ValkeyModuleCtx* ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "NUMERIC");
   ValkeyModule_ReplyWithSimpleString(ctx, "size");
   absl::MutexLock lock(&index_mutex_);
-  ValkeyModule_ReplyWithCString(ctx,
-                                std::to_string(tracked_keys_.size()).c_str());
+  ValkeyModule_ReplyWithCString(
+      ctx, std::to_string(schema_->OccupiedCount(pos_)).c_str());
   return 4;
 }
 
@@ -123,12 +182,10 @@ uint32_t Numeric::GetMutationWeight() const {
 }
 
 const double* Numeric::GetValue(const InternedStringPtr& key) const {
-  // Note that the Numeric index is not mutated while the time sliced mutex is
-  // in a read mode and therefor it is safe to skip lock acquiring.
-  if (auto it = tracked_keys_.find(key); it != tracked_keys_.end()) {
-    return &it->second;
-  }
-  return nullptr;
+  // Note: Numeric is not mutated while time_sliced_mutex_ is in read mode,
+  // so it's safe to skip lock acquisition here.
+  const NumericSlot* nslot = TryGetSlot(schema_, pos_, key);
+  return nslot == nullptr ? nullptr : &nslot->value;
 }
 
 std::unique_ptr<Numeric::EntriesFetcher> Numeric::Search(
@@ -150,11 +207,11 @@ std::unique_ptr<Numeric::EntriesFetcher> Numeric::Search(
     additional_entries_range.first =
         predicate.IsEndInclusive() ? btree.upper_bound(predicate.GetEnd())
                                    : btree.lower_bound(predicate.GetEnd());
-    ;
     additional_entries_range.second = btree.end();
+    const size_t missing_size = schema_->MissingListAt(pos_).size;
     return std::make_unique<Numeric::EntriesFetcher>(
-        entries_range, size + untracked_keys_.size(), additional_entries_range,
-        &untracked_keys_);
+        entries_range, size + missing_size, additional_entries_range, schema_,
+        pos_);
   }
 
   entries_range.first = predicate.IsStartInclusive()
@@ -190,24 +247,32 @@ bool Numeric::EntriesFetcherIterator::NextKeys(
 Numeric::EntriesFetcherIterator::EntriesFetcherIterator(
     const EntriesRange& entries_range,
     const std::optional<EntriesRange>& additional_entries_range,
-    const InternedStringSet* untracked_keys)
+    const IndexSchema* schema_for_missing, uint16_t pos)
     : entries_range_(entries_range),
       entries_iter_(entries_range_.first),
       additional_entries_range_(additional_entries_range),
-      untracked_keys_(untracked_keys) {
+      schema_for_missing_(schema_for_missing),
+      pos_(pos) {
   if (additional_entries_range_.has_value()) {
     additional_entries_iter_ = additional_entries_range_.value().first;
   }
 }
 
+Numeric::EntriesFetcherIterator::~EntriesFetcherIterator() = default;
+
 bool Numeric::EntriesFetcherIterator::Done() const {
-  return entries_iter_ == entries_range_.second &&
-         (!additional_entries_range_.has_value() ||
-          additional_entries_iter_ ==
-              additional_entries_range_.value().second) &&
-         (untracked_keys_ == nullptr ||
-          (untracked_keys_iter_.has_value() &&
-           untracked_keys_iter_ == untracked_keys_->end()));
+  const bool btree_done =
+      entries_iter_ == entries_range_.second &&
+      (!additional_entries_range_.has_value() ||
+       additional_entries_iter_ == additional_entries_range_.value().second);
+  if (!btree_done) {
+    return false;
+  }
+  if (schema_for_missing_ == nullptr) {
+    return true;
+  }
+  // Missing-list portion: not done until we've started it AND walked off.
+  return missing_started_ && (missing_iter_ == nullptr || missing_iter_->Done());
 }
 
 void Numeric::EntriesFetcherIterator::Next() {
@@ -219,11 +284,13 @@ void Numeric::EntriesFetcherIterator::Next() {
                additional_entry_keys_iter_)) {
     return;
   }
-  if (untracked_keys_) {
-    if (untracked_keys_iter_.has_value()) {
-      ++untracked_keys_iter_.value();
-    } else {
-      untracked_keys_iter_ = untracked_keys_->begin();
+  if (schema_for_missing_ != nullptr) {
+    if (!missing_started_) {
+      missing_iter_ = std::make_unique<MissingListIterator>(
+          MissingListBegin(schema_for_missing_, pos_));
+      missing_started_ = true;
+    } else if (missing_iter_ != nullptr && !missing_iter_->Done()) {
+      missing_iter_->Next();
     }
   }
 }
@@ -239,60 +306,70 @@ const InternedStringPtr& Numeric::EntriesFetcherIterator::operator*() const {
            additional_entries_iter_->second.end());
     return *additional_entry_keys_iter_.value();
   }
-  DCHECK(untracked_keys_ && untracked_keys_iter_.has_value() &&
-         untracked_keys_iter_ != untracked_keys_->end());
-  return *untracked_keys_iter_.value();
+  DCHECK(missing_iter_ != nullptr && !missing_iter_->Done());
+  return missing_iter_->Key();
 }
 
 size_t Numeric::EntriesFetcher::Size() const { return size_; }
 
 std::unique_ptr<EntriesFetcherIteratorBase> Numeric::EntriesFetcher::Begin() {
   auto itr = std::make_unique<EntriesFetcherIterator>(
-      entries_range_, additional_entries_range_, untracked_keys_);
+      entries_range_, additional_entries_range_, schema_for_missing_, pos_);
   itr->Next();
   return itr;
 }
 
 size_t Numeric::GetTrackedKeyCount() const {
   absl::MutexLock lock(&index_mutex_);
-  return tracked_keys_.size();
+  return schema_->OccupiedCount(pos_);
 }
 
 size_t Numeric::GetUnTrackedKeyCount() const {
   absl::MutexLock lock(&index_mutex_);
-  return untracked_keys_.size();
+  return schema_->MissingListAt(pos_).size;
 }
 
 bool Numeric::IsTracked(const InternedStringPtr& key) const {
   absl::MutexLock lock(&index_mutex_);
-  return tracked_keys_.contains(key);
+  const KeyAttrValue* kav = schema_->FindKAV(key);
+  return kav != nullptr && IsOccupied(kav->slots[pos_]);
 }
 
 bool Numeric::IsUnTracked(const InternedStringPtr& key) const {
   absl::MutexLock lock(&index_mutex_);
-  return untracked_keys_.contains(key);
+  const KeyAttrValue* kav = schema_->FindKAV(key);
+  return kav != nullptr && !IsOccupied(kav->slots[pos_]);
 }
 
 void Numeric::UnTrack(const InternedStringPtr& key) {
   absl::MutexLock lock(&index_mutex_);
-  CHECK(!tracked_keys_.contains(key));
-  untracked_keys_.insert(key);
+  const KeyAttrValue* kav = schema_->FindKAV(key);
+  CHECK(kav != nullptr);
+  CHECK(!IsOccupied(kav->slots[pos_]));
+  if (!schema_->IsLinked(pos_, key)) {
+    schema_->LinkMissing(pos_, key);
+  }
 }
 
 absl::Status Numeric::ForEachTrackedKey(
     absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn) const {
-  absl::MutexLock lock(&index_mutex_);
-  for (const auto& [key, _] : tracked_keys_) {
-    VMSDK_RETURN_IF_ERROR(fn(key));
-  }
-  return absl::OkStatus();
+  // schema_->ForEachKey takes schema_mutex_ reader for the duration; the
+  // index's own index_mutex_ isn't needed (the slot's occupied bit is KAV
+  // state, not index-specific aux structure state).
+  return schema_->ForEachKey(
+      [&](const InternedStringPtr& key, const KeyAttrValue& kav) {
+        if (IsOccupied(kav.slots[pos_])) {
+          return fn(key);
+        }
+        return absl::OkStatus();
+      });
 }
 
 absl::Status Numeric::ForEachUnTrackedKey(
     absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn) const {
   absl::MutexLock lock(&index_mutex_);
-  for (const auto& key : untracked_keys_) {
-    VMSDK_RETURN_IF_ERROR(fn(key));
+  for (auto it = MissingListBegin(schema_, pos_); !it.Done(); it.Next()) {
+    VMSDK_RETURN_IF_ERROR(fn(it.Key()));
   }
   return absl::OkStatus();
 }

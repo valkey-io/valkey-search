@@ -62,6 +62,10 @@ class KeyspaceEventManager {
   }
   static void InitInstance(std::unique_ptr<KeyspaceEventManager> instance);
   static KeyspaceEventManager &Instance();
+  // True iff InitInstance was called with a non-null instance (and not later
+  // reset with nullptr). Test-only helper for fixtures that may construct
+  // IndexSchema objects without going through ValkeySearchTest::SetUp.
+  static bool HasInstance();
 
  private:
   absl::Status StartValkeySubscriptionIfNeeded(ValkeyModuleCtx *ctx, int types);

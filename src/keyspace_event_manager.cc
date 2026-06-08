@@ -28,6 +28,9 @@ static absl::NoDestructor<std::unique_ptr<KeyspaceEventManager>>
 KeyspaceEventManager &KeyspaceEventManager::Instance() {
   return **keyspace_event_manager_instance;
 }
+bool KeyspaceEventManager::HasInstance() {
+  return static_cast<bool>(*keyspace_event_manager_instance);
+}
 void KeyspaceEventManager::InitInstance(
     std::unique_ptr<KeyspaceEventManager> instance) {
   *keyspace_event_manager_instance = std::move(instance);

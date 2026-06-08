@@ -8,6 +8,7 @@
 #include "testing/common.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -18,7 +19,9 @@
 #include <variant>
 #include <vector>
 
+#include "absl/log/check.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/blocking_counter.h"
 #include "absl/synchronization/mutex.h"
@@ -38,6 +41,95 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
+
+namespace internal {
+
+void BindIndexToTestSchema(indexes::IndexBase* index,
+                           std::shared_ptr<MockIndexSchema>* holder) {
+  if (index->IsBound()) {
+    return;  // already bound — IndexSchema::AddIndex called by the test
+  }
+  if (*holder != nullptr) {
+    return;  // already auto-bound; second call from another method
+  }
+  static std::atomic<int> teser_counter{0};
+  // Construct a minimal MockIndexSchema directly, skipping `Init()` (which
+  // tries to register a keyspace-event subscription we don't need). The
+  // IndexSchema ctor still dereferences KeyspaceEventManager::Instance() via
+  // its member initializer list and ~IndexSchema → MarkAsDestructing calls
+  // RemoveSubscription on it, so the singleton must exist. Lazily install a
+  // TestableKeyspaceEventManager if one hasn't been set up by the fixture's
+  // base class (ValkeySearchTest sets it up; the lighter ValkeyTest base does
+  // not, which is the case for numeric/tag/text index unit tests).
+  if (!KeyspaceEventManager::HasInstance()) {
+    KeyspaceEventManager::InitInstance(
+        std::make_unique<TestableKeyspaceEventManager>());
+  }
+  data_model::IndexSchema proto;
+  proto.set_name(absl::StrCat(
+      "__teser_schema_",
+      teser_counter.fetch_add(1, std::memory_order_relaxed)));
+  auto schema = std::make_shared<MockIndexSchema>(
+      static_cast<ValkeyModuleCtx*>(nullptr), proto,
+      std::make_unique<HashAttributeDataType>(),
+      /*mutations_thread_pool=*/nullptr);
+  *holder = std::move(schema);
+  // Non-owning shared_ptr: the IndexBase is owned by the test fixture; the
+  // schema must not delete it on destruction.
+  std::shared_ptr<indexes::IndexBase> non_owning(
+      index, [](indexes::IndexBase*) {});
+  auto add_status = (*holder)->AddIndex("attr", "attr", non_owning);
+  CHECK(add_status.ok()) << add_status;
+}
+
+void EnsureKavForTest(indexes::IndexBase* index,
+                      const InternedStringPtr& key) {
+  CHECK(index->IsBound()) << "Index must be bound before EnsureKavForTest";
+  vmsdk::WriterMutexLock lock(&index->GetSchema()->GetTimeSlicedMutex());
+  index->GetSchema()->EnsureKeyAttrValue(key);
+}
+
+void MaybeDestroyKavAfterRemove(indexes::IndexBase* /*index*/,
+                                const InternedStringPtr& /*key*/) {
+  // Tests rarely use DeletionType::kRecord; the empty KAV remains in the map
+  // until schema teardown. Slot bits read empty so subsequent queries skip it.
+  // If a specific test ever needs strict erase semantics, call
+  // schema->DestroyKeyAttrValue + erase under the writer lock here.
+}
+
+}  // namespace internal
+
+std::shared_ptr<MockIndexSchema> BindIndexToFreshTestSchema(
+    indexes::IndexBase* index) {
+  std::shared_ptr<MockIndexSchema> schema;
+  internal::BindIndexToTestSchema(index, &schema);
+  return schema;
+}
+
+std::shared_ptr<MockIndexSchema> BindOwnedIndexToFreshTestSchema(
+    std::shared_ptr<indexes::IndexBase> index) {
+  if (index->IsBound()) {
+    return nullptr;
+  }
+  static std::atomic<int> teser_counter{0};
+  if (!KeyspaceEventManager::HasInstance()) {
+    KeyspaceEventManager::InitInstance(
+        std::make_unique<TestableKeyspaceEventManager>());
+  }
+  data_model::IndexSchema proto;
+  proto.set_name(absl::StrCat(
+      "__teser_owned_schema_",
+      teser_counter.fetch_add(1, std::memory_order_relaxed)));
+  auto schema = std::make_shared<MockIndexSchema>(
+      static_cast<ValkeyModuleCtx*>(nullptr), proto,
+      std::make_unique<HashAttributeDataType>(),
+      /*mutations_thread_pool=*/nullptr);
+  // OWNING: schema keeps `index` alive for the schema's whole lifetime, so
+  // thread-local schemas in vector tests don't end up with a dangling
+  // IndexBase* after the test's local owner goes out of scope.
+  CHECK_OK(schema->AddIndex("attr", "attr", std::move(index)));
+  return schema;
+}
 
 std::vector<std::vector<float>> DeterministicallyGenerateVectors(
     int size, int dimensions, float max_value) {

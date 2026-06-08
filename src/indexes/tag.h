@@ -8,6 +8,7 @@
 #ifndef VALKEYSEARCH_SRC_INDEXES_TAG_H_
 #define VALKEYSEARCH_SRC_INDEXES_TAG_H_
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -21,6 +22,7 @@
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/key_attr_value.h"
 #include "src/query/predicate.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/patricia_tree.h"
@@ -29,8 +31,28 @@
 
 namespace valkey_search::indexes {
 
-class Tag : public IndexBase {
+// MissingListIterator is declared in index_base.h (above #include).
+
+// Per-key tag bookkeeping. Heap-allocated; pointed to by TagSlot::info.
+// Owned by the slot — DestructTyped frees it on whole-key delete.
+struct TagInfo {
+  InternedStringPtr raw_tag_string;
+  absl::flat_hash_set<absl::string_view> tags;
+};
+
+// Per-slot payload for the Tag index. SlotBase (4B) + padding (4B) +
+// TagInfo* (8B) = 16B total, naturally aligned.
+struct TagSlot : SlotBase {
+  TagInfo* info;
+};
+
+static_assert(sizeof(TagSlot) == 16, "TagSlot must fit exactly in a 16-byte Slot");
+static_assert(alignof(TagSlot) == 8, "TagSlot must be 8-byte aligned");
+
+class Tag : public TypedIndex<Tag, TagSlot> {
  public:
+  using SlotT = TagSlot;
+
   explicit Tag(const data_model::TagIndex& tag_index_proto);
   absl::StatusOr<bool> AddRecord(const InternedStringPtr& key,
                                  absl::string_view data) override
@@ -67,6 +89,11 @@ class Tag : public IndexBase {
 
   uint32_t GetMutationWeight() const override;
 
+  // Whole-key delete safety net (TypedIndex CRTP). Removes this key's tags
+  // from the patricia tree and deletes the TagInfo* held by the slot.
+  void DestructTyped(const InternedStringPtr& key, TagSlot& slot) override
+      ABSL_LOCKS_EXCLUDED(index_mutex_);
+
   InternedStringPtr GetRawValue(const InternedStringPtr& key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
@@ -80,32 +107,24 @@ class Tag : public IndexBase {
    public:
     EntriesFetcherIterator(const PatriciaTreeIndex& tree,
                            absl::flat_hash_set<PatriciaNodeIndex*>& entries,
-                           const InternedStringSet& untracked_keys,
+                           const IndexSchema* schema_for_missing, uint16_t pos,
                            bool negate);
+    ~EntriesFetcherIterator() override;
     bool Done() const override;
     void Next() override;
     const InternedStringPtr& operator*() const override;
 
    private:
-    // Reference to the Patricia tree, held so we can construct the
-    // root iterator on demand (only when negation requires it).
     const PatriciaTreeIndex& tree_;
-
-    // Full-tree root iterator used exclusively by the negated path.
-    // Only constructed by EnsureNegateRootIter() on first negated
-    // iteration — non-negated queries never create this.
     std::optional<PatriciaTreeIndex::PrefixSubTreeIterator> negate_root_iter_;
-
-    // The set of Patricia nodes matching the query tags. For non-negated
-    // queries, we iterate these directly. For negated queries, these are
-    // the nodes to *exclude* during the full-tree walk.
     absl::flat_hash_set<PatriciaNodeIndex*>& entries_;
-
     PatriciaNodeIndex* next_node_{nullptr};
     InternedStringSet::const_iterator next_iter_;
-    const InternedStringSet& untracked_keys_;
+    const IndexSchema* schema_for_missing_;
+    uint16_t pos_;
     bool negate_;
-    std::optional<InternedStringSet::const_iterator> untracked_keys_iter_;
+    std::unique_ptr<MissingListIterator> missing_iter_;
+    bool missing_started_{false};
     void NextNegate();
     void EnsureNegateRootIter();
   };
@@ -114,12 +133,14 @@ class Tag : public IndexBase {
    public:
     EntriesFetcher(const PatriciaTreeIndex& tree,
                    absl::flat_hash_set<PatriciaNodeIndex*> entries, size_t size,
-                   bool negate, const InternedStringSet& untracked_keys)
+                   bool negate, const IndexSchema* schema_for_missing,
+                   uint16_t pos)
         : tree_(tree),
           size_(size),
           entries_(entries),
           negate_(negate),
-          untracked_keys_(untracked_keys){};
+          schema_for_missing_(schema_for_missing),
+          pos_(pos) {}
     size_t Size() const override;
     std::unique_ptr<EntriesFetcherIteratorBase> Begin() override;
 
@@ -128,7 +149,8 @@ class Tag : public IndexBase {
     size_t size_{0};
     absl::flat_hash_set<PatriciaNodeIndex*> entries_;
     bool negate_;
-    const InternedStringSet& untracked_keys_;
+    const IndexSchema* schema_for_missing_;
+    uint16_t pos_;
   };
 
   virtual std::unique_ptr<EntriesFetcher> Search(
@@ -140,20 +162,10 @@ class Tag : public IndexBase {
       absl::string_view data, char separator);
   static absl::flat_hash_set<absl::string_view> ParseRecordTags(
       absl::string_view data, char separator);
-  // Unescape a tag string (e.g. escaped pipe becomes literal pipe)
   static std::string UnescapeTag(absl::string_view tag);
 
  private:
   mutable absl::Mutex index_mutex_;
-  struct TagInfo {
-    InternedStringPtr raw_tag_string;
-    absl::flat_hash_set<absl::string_view> tags;
-  };
-  // Map of tracked keys to their tags.
-  InternedStringHashMap<TagInfo> tracked_tags_by_keys_
-      ABSL_GUARDED_BY(index_mutex_);
-  // untracked and tracked_ keys are mutually exclusive.
-  InternedStringSet untracked_keys_ ABSL_GUARDED_BY(index_mutex_);
   const char separator_;
   const bool case_sensitive_;
   PatriciaTreeIndex tree_ ABSL_GUARDED_BY(index_mutex_);

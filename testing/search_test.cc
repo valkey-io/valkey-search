@@ -136,9 +136,10 @@ class TestedTagEntriesFetcher : public indexes::Tag::EntriesFetcher {
   TestedTagEntriesFetcher(
       size_t size, PatriciaTree<InternedStringPtr> &tree,
       absl::flat_hash_set<PatriciaNode<InternedStringPtr> *> &entries,
-      bool negate, InternedStringSet &untracked_keys)
+      bool negate, InternedStringSet & /*unused*/)
       : indexes::Tag::EntriesFetcher(tree, entries, size, negate,
-                                     untracked_keys),
+                                     /*schema_for_missing=*/nullptr,
+                                     /*pos=*/0),
         size_(size) {}
 
   size_t Size() const override { return size_; }
@@ -960,57 +961,58 @@ TEST_P(IndexedContentTest, MaybeAddIndexedContentTest) {
   auto index_schema = CreateIndexSchema("test_schema").value();
   auto distance_metric = std::get<0>(GetParam());
   auto test_case = std::get<1>(GetParam());
+  // After the KeyAttrValue refactor each KAV is sized to the schema's
+  // attribute count AT CREATION TIME. Calling AddIndex AFTER any AddRecord
+  // leaves earlier KAVs short by one slot and slot accesses overflow into
+  // adjacent allocations. So: register every index first, then add records.
+  std::vector<std::shared_ptr<indexes::IndexBase>> index_bases;
+  index_bases.reserve(test_case.indexes.size());
   for (auto &index : test_case.indexes) {
     std::shared_ptr<indexes::IndexBase> index_base;
     switch (index.indexer_type) {
       case IndexerType::kHNSW: {
         data_model::VectorIndex vector_index_proto = CreateHNSWVectorIndexProto(
             kVectorDimensions, distance_metric, 1000, 10, 300, 30);
-        auto vector_index =
+        index_base =
             indexes::VectorHNSW<float>::Create(
                 vector_index_proto, "attribute_identifier_1",
                 data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
                 .value();
-        VMSDK_EXPECT_OK(index_schema->AddIndex(
-            index.attribute_alias, index.attribute_identifier, vector_index));
-        index_base = vector_index;
         break;
       }
       case IndexerType::kFlat: {
         data_model::VectorIndex vector_index_proto = CreateFlatVectorIndexProto(
             kVectorDimensions, distance_metric, 1000, 250);
-        auto flat_index =
+        index_base =
             indexes::VectorFlat<float>::Create(
                 vector_index_proto, "attribute_identifier_1",
                 data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
                 .value();
-        VMSDK_EXPECT_OK(index_schema->AddIndex(
-            index.attribute_alias, index.attribute_identifier, flat_index));
-        index_base = flat_index;
         break;
       }
       case IndexerType::kTag: {
         data_model::TagIndex tag_index_proto;
         tag_index_proto.set_separator(",");
         tag_index_proto.set_case_sensitive(false);
-        auto tag_index = std::make_shared<indexes::Tag>(tag_index_proto);
-        VMSDK_EXPECT_OK(index_schema->AddIndex(
-            index.attribute_alias, index.attribute_identifier, tag_index));
-        index_base = tag_index;
+        index_base = std::make_shared<indexes::Tag>(tag_index_proto);
         break;
       }
       case IndexerType::kNumeric: {
         data_model::NumericIndex numeric_index_proto;
-        auto numeric_index =
-            std::make_shared<indexes::Numeric>(numeric_index_proto);
-        VMSDK_EXPECT_OK(index_schema->AddIndex(
-            index.attribute_alias, index.attribute_identifier, numeric_index));
-        index_base = numeric_index;
+        index_base = std::make_shared<indexes::Numeric>(numeric_index_proto);
         break;
       }
       default:
         CHECK(false);
     }
+    VMSDK_EXPECT_OK(index_schema->AddIndex(
+        index.attribute_alias, index.attribute_identifier, index_base));
+    index_bases.push_back(std::move(index_base));
+  }
+  // Now that every attribute is registered, populate records.
+  for (size_t i = 0; i < test_case.indexes.size(); ++i) {
+    auto &index = test_case.indexes[i];
+    auto &index_base = index_bases[i];
     for (auto &content : index.contents) {
       auto key = StringInternStore::Intern(content.first);
       auto value = content.second;

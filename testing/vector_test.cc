@@ -130,8 +130,23 @@ void VerifyResult(const absl::StatusOr<bool>& res,
   }
 }
 
-void VerifyAdd(IndexBase* index, const std::vector<std::vector<float>>& vectors,
-               int i, ExpectedResults expected_result) {
+// Lazily binds `index` to a fresh test schema if it isn't already bound. The
+// schema takes shared ownership so the IndexBase stays alive at least as
+// long as the schema — tests own their indices on the stack but the schema
+// outlives the test body via a thread-local list, so non-owning binding
+// would dangle. The slot-based AddRecord path requires schema_ to be set.
+inline void EnsureVectorBound(std::shared_ptr<indexes::IndexBase> index) {
+  if (index->IsBound()) {
+    return;
+  }
+  static thread_local std::vector<std::shared_ptr<MockIndexSchema>> schemas;
+  schemas.push_back(BindOwnedIndexToFreshTestSchema(std::move(index)));
+}
+
+void VerifyAdd(std::shared_ptr<IndexBase> index,
+               const std::vector<std::vector<float>>& vectors, int i,
+               ExpectedResults expected_result) {
+  EnsureVectorBound(index);
   auto id = IndexToKey(i);
   absl::string_view vector = VectorToStr(vectors[i]);
   bool alreadyExist = index->IsTracked(id);
@@ -144,8 +159,10 @@ void VerifyAdd(IndexBase* index, const std::vector<std::vector<float>>& vectors,
   VerifyResult(res, expected_result);
 }
 
-void VerifyModify(IndexBase* index, const std::vector<float>& vector, int i,
+void VerifyModify(std::shared_ptr<IndexBase> index,
+                  const std::vector<float>& vector, int i,
                   ExpectedResults expected_result, bool expected_tracked) {
+  EnsureVectorBound(index);
   auto id = IndexToKey(i);
   absl::string_view vector_str = VectorToStr(vector);
   auto res = index->ModifyRecord(id, vector_str);
@@ -153,7 +170,7 @@ void VerifyModify(IndexBase* index, const std::vector<float>& vector, int i,
   VerifyResult(res, expected_result);
 }
 template <typename T>
-void TestIndex(T* index, int dimensions, int vector_size) {
+void TestIndex(std::shared_ptr<T> index, int dimensions, int vector_size) {
   auto vectors =
       DeterministicallyGenerateVectors(vector_size, dimensions, 10.0);
   for (size_t i = 0; i < vectors.size(); ++i) {
@@ -285,7 +302,7 @@ TEST_F(VectorIndexTest, BasicHNSW) {
                                    kM, kEFConstruction, kEFRuntime),
         "attribute_identifier_1",
         data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
-    TestIndex<VectorHNSW<float>>(index->get(), kDimensions, 100);
+    TestIndex<VectorHNSW<float>>(*index, kDimensions, 100);
   }
 }
 
@@ -297,7 +314,7 @@ TEST_F(VectorIndexTest, BasicFlat) {
                                    kBlockSize),
         "attribute_identifier_1",
         data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
-    TestIndex<VectorFlat<float>>(index->get(), kDimensions, 100);
+    TestIndex<VectorFlat<float>>(*index, kDimensions, 100);
   }
 }
 
@@ -317,7 +334,7 @@ TEST_F(VectorIndexTest, ResizeHNSW) ABSL_NO_THREAD_SAFETY_ANALYSIS {
         initial_cap + block_size + 100, kDimensions, 10.0);
 
     for (size_t i = 0; i < vectors.size(); ++i) {
-      VerifyAdd(index->get(), vectors, i, ExpectedResults::kSuccess);
+      VerifyAdd(*index, vectors, i, ExpectedResults::kSuccess);
     }
     EXPECT_EQ(index.value()->GetCapacity(), initial_cap + 2 * block_size);
     /*
@@ -327,7 +344,7 @@ TEST_F(VectorIndexTest, ResizeHNSW) ABSL_NO_THREAD_SAFETY_ANALYSIS {
       EXPECT_FALSE(index.value()->IsTracked(IndexToKey(i)));
     }
     for (size_t i = 0; i < vectors.size(); ++i) {
-      VerifyAdd(index->get(), vectors, i, ExpectedResults::kSuccess);
+      VerifyAdd(*index, vectors, i, ExpectedResults::kSuccess);
     }
 
     EXPECT_EQ(index.value()->GetCapacity(), initial_cap + 3 * block_size);
@@ -348,7 +365,7 @@ TEST_F(VectorIndexTest, ResizeFlat) ABSL_NO_THREAD_SAFETY_ANALYSIS {
         initial_cap + kBlockSize + 100, kDimensions, 10.0);
     EXPECT_EQ(index.value()->GetCapacity(), initial_cap);
     for (size_t i = 0; i < vectors.size(); ++i) {
-      VerifyAdd(index->get(), vectors, i, ExpectedResults::kSuccess);
+      VerifyAdd(*index, vectors, i, ExpectedResults::kSuccess);
     }
     EXPECT_EQ(index.value()->GetCapacity(), initial_cap + 2 * kBlockSize);
     for (size_t i = 0; i < vectors.size(); ++i) {
@@ -357,7 +374,7 @@ TEST_F(VectorIndexTest, ResizeFlat) ABSL_NO_THREAD_SAFETY_ANALYSIS {
       EXPECT_FALSE(index.value()->IsTracked(IndexToKey(i)));
     }
     for (size_t i = 0; i < vectors.size(); ++i) {
-      VerifyAdd(index->get(), vectors, i, ExpectedResults::kSuccess);
+      VerifyAdd(*index, vectors, i, ExpectedResults::kSuccess);
     }
     EXPECT_EQ(index.value()->GetCapacity(), initial_cap + 2 * kBlockSize);
   }
@@ -396,7 +413,7 @@ TEST_F(VectorIndexTest, EfRuntimeRecall) {
         data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
     auto vectors = DeterministicallyGenerateVectors(1000, kDimensions, 2.2);
     for (size_t i = 0; i < vectors.size(); ++i) {
-      VerifyAdd(index_hnsw->get(), vectors, i, ExpectedResults::kSuccess);
+      VerifyAdd(*index_hnsw, vectors, i, ExpectedResults::kSuccess);
     }
 
     auto index_flat = VectorFlat<float>::Create(
@@ -405,7 +422,7 @@ TEST_F(VectorIndexTest, EfRuntimeRecall) {
         "attribute_identifier_1",
         data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
     for (size_t i = 0; i < vectors.size(); ++i) {
-      VerifyAdd(index_flat->get(), vectors, i, ExpectedResults::kSuccess);
+      VerifyAdd(*index_flat, vectors, i, ExpectedResults::kSuccess);
     }
     uint64_t k = 10;
     auto no_ef_runtime_recall = CalcRecall(index_flat->get(), index_hnsw->get(),
@@ -436,7 +453,7 @@ TEST_F(VectorIndexTest, SaveAndLoadHnsw) {
         data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
     VMSDK_EXPECT_OK(index_flat);
     for (size_t i = 0; i < vectors.size(); ++i) {
-      VerifyAdd(index_flat->get(), vectors, i, ExpectedResults::kSuccess);
+      VerifyAdd(*index_flat, vectors, i, ExpectedResults::kSuccess);
     }
 
     data_model::VectorIndex hnsw_proto =
@@ -463,12 +480,13 @@ TEST_F(VectorIndexTest, SaveAndLoadHnsw) {
           &fake_ctx_, &hash_attribute_data_type_, hnsw_proto,
           "attribute_identifier_3", SupplementalContentChunkIter(&rdb));
       VMSDK_EXPECT_OK(loaded_index_hnsw);
+      EnsureVectorBound(*loaded_index_hnsw);
       VMSDK_EXPECT_OK(
           (*loaded_index_hnsw)
               ->LoadTrackedKeys(&fake_ctx_, &hash_attribute_data_type_,
                                 SupplementalContentChunkIter(&rdb)));
       for (size_t i = 0; i < vectors.size(); ++i) {
-        VerifyAdd(loaded_index_hnsw->get(), vectors, i,
+        VerifyAdd(*loaded_index_hnsw, vectors, i,
                   ExpectedResults::kSuccess);
       }
       auto default_ef_runtime_recall =
@@ -488,6 +506,7 @@ TEST_F(VectorIndexTest, SaveAndLoadHnsw) {
           &fake_ctx_, &hash_attribute_data_type_, hnsw_proto,
           "attribute_identifier_4", SupplementalContentChunkIter(&rdb));
       VMSDK_EXPECT_OK(loaded_index_hnsw);
+      EnsureVectorBound(*loaded_index_hnsw);
       VMSDK_EXPECT_OK(
           (*loaded_index_hnsw)
               ->LoadTrackedKeys(&fake_ctx_, &hash_attribute_data_type_,
@@ -512,7 +531,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   VMSDK_EXPECT_OK(index);
   auto vectors = DeterministicallyGenerateVectors(10, kDimensions, 10.0);
   for (size_t i = 0; i < vectors.size(); ++i) {
-    VerifyAdd(index->get(), vectors, i, ExpectedResults::kSuccess);
+    VerifyAdd(*index, vectors, i, ExpectedResults::kSuccess);
   }
   VectorBase* base = index->get();
   EXPECT_EQ(base->GetMaxInternalLabel(), 9u);
@@ -571,11 +590,12 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
           "attribute_identifier_2", SupplementalContentChunkIter(&rdb));
       VMSDK_EXPECT_OK(index_pr);
       auto index = std::move(index_pr.value());
+      EnsureVectorBound(index);
       VMSDK_EXPECT_OK(
           index->LoadTrackedKeys(&fake_ctx_, &hash_attribute_data_type_,
                                  SupplementalContentChunkIter(&rdb)));
       for (size_t i = 0; i < vectors.size(); ++i) {
-        VerifyAdd(index.get(), vectors, i, ExpectedResults::kSuccess);
+        VerifyAdd(index, vectors, i, ExpectedResults::kSuccess);
       }
       for (const auto& search_vector : search_vectors) {
         absl::string_view vector = VectorToStr(search_vector);
@@ -595,6 +615,7 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
           "attribute_identifier_3", SupplementalContentChunkIter(&rdb));
       VMSDK_EXPECT_OK(index_pr);
       auto index = std::move(index_pr.value());
+      EnsureVectorBound(index);
       VMSDK_EXPECT_OK(
           index->LoadTrackedKeys(&fake_ctx_, &hash_attribute_data_type_,
                                  SupplementalContentChunkIter(&rdb)));
@@ -607,7 +628,7 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
 
       // Re-insert the vectors
       for (size_t i = 0; i < vectors.size(); ++i) {
-        VerifyModify(index.get(), vectors[i], i, ExpectedResults::kSkipped,
+        VerifyModify(index, vectors[i], i, ExpectedResults::kSkipped,
                      true);
       }
     }

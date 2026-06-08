@@ -128,7 +128,22 @@ absl::string_view LookupKeyByValue(
   }
 }
 
-class VectorBase : public IndexBase, public hnswlib::VectorTracker {
+// Per-slot payload for vector indexes. PACKED so all of {SlotBase,
+// internal_id, magnitude} fit in 16 bytes: SlotBase occupies offset 0–3
+// (occupied bit + user_data_len), `internal_id` sits at the unaligned
+// offset 4, and `magnitude` lands at offset 12. Reads/writes of
+// `internal_id` go through memcpy because of the unaligned offset.
+struct __attribute__((packed, aligned(8))) VectorSlot : SlotBase {
+  uint64_t internal_id;
+  float magnitude;
+};
+
+static_assert(sizeof(VectorSlot) == 16,
+              "VectorSlot must fit exactly in a 16-byte Slot");
+static_assert(alignof(VectorSlot) == 8, "VectorSlot must be 8-byte aligned");
+
+class VectorBase : public TypedIndex<VectorBase, VectorSlot>,
+                   public hnswlib::VectorTracker {
  public:
   absl::StatusOr<bool> AddRecord(const InternedStringPtr& key,
                                  absl::string_view record) override
@@ -169,6 +184,13 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
 
   absl::StatusOr<InternedStringPtr> GetKeyDuringSearch(
       uint64_t internal_id) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
+
+  // Whole-key-delete safety net invoked by IndexSchema::DestroyKeyAttrValue
+  // for any still-occupied slot. Removes this key from the algorithm's
+  // index and the internal-id reverse map.
+  void DestructTyped(const InternedStringPtr& key, VectorSlot& slot) override
+      ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
+
   bool AddPrefilteredKey(
       absl::string_view query, uint64_t count, const InternedStringPtr& key,
       std::priority_queue<std::pair<float, hnswlib::labeltype>>& results,
@@ -191,7 +213,7 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   VectorBase(IndexerType indexer_type, int dimensions,
              data_model::AttributeDataType attribute_data_type,
              absl::string_view attribute_identifier)
-      : IndexBase(indexer_type),
+      : TypedIndex<VectorBase, VectorSlot>(indexer_type),
         dimensions_(dimensions),
         attribute_identifier_(attribute_identifier),
         attribute_data_type_(attribute_data_type)
@@ -246,32 +268,24 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   virtual void UnTrackVector(uint64_t internal_id) = 0;
 
  private:
-  absl::StatusOr<uint64_t> TrackKey(const InternedStringPtr& key,
-                                    float magnitude,
-                                    const InternedStringPtr& vector)
-      ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
-  absl::StatusOr<std::optional<uint64_t>> UnTrackKey(
-      const InternedStringPtr& key) ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
-  absl::StatusOr<bool> UpdateMetadata(const InternedStringPtr& key,
-                                      float magnitude,
-                                      const InternedStringPtr& vector)
-      ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
-  absl::StatusOr<uint64_t> GetInternalId(const InternedStringPtr& key) const
-      ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
+  // Reads internal_id from this key's occupied slot. Returns NotFound if the
+  // key is absent or the slot is empty. The packed VectorSlot puts
+  // internal_id at the unaligned offset 4, so callers must go through this
+  // helper (which uses memcpy) instead of dereferencing the field directly.
+  absl::StatusOr<uint64_t> GetInternalIdFromSlot(
+      const InternedStringPtr& key) const;
+  absl::StatusOr<uint64_t> GetInternalId(const InternedStringPtr& key) const {
+    return GetInternalIdFromSlot(key);
+  }
   absl::StatusOr<uint64_t> GetInternalIdDuringSearch(
-      const InternedStringPtr& key) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      const InternedStringPtr& key) const ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    return GetInternalIdFromSlot(key);
+  }
+  // Reverse map from algorithm-assigned internal_id back to the user key.
+  // Kept (the algorithm only has the internal_id during search) — the
+  // forward direction (key → {internal_id, magnitude}) now lives in the
+  // schema's KeyAttrValue slot for this index's pos.
   absl::flat_hash_map<uint64_t, InternedStringPtr> key_by_internal_id_
-      ABSL_GUARDED_BY(key_to_metadata_mutex_);
-  struct TrackedKeyMetadata {
-    uint64_t internal_id;
-    // If normalize_ is false, this will be -1.0f. Otherwise, it will be the
-    // magnitude of the vector. If the magnitude is not initialized, it will be
-    // -inf (this is an intermediate state during backfill when transitioning
-    // from the old RDB format that didn't include magnitudes).
-    float magnitude;
-  };
-
-  InternedStringHashMap<TrackedKeyMetadata> tracked_metadata_by_key_
       ABSL_GUARDED_BY(key_to_metadata_mutex_);
   uint64_t inc_id_ ABSL_GUARDED_BY(key_to_metadata_mutex_){0};
   mutable absl::Mutex key_to_metadata_mutex_;

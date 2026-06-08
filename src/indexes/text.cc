@@ -7,11 +7,16 @@
 
 #include "src/indexes/text.h"
 
+#include <cstdint>
+#include <new>
+
 #include "absl/container/inlined_vector.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
+#include "src/index_schema.h"
 #include "src/index_schema.pb.h"
+#include "src/indexes/key_attr_value.h"
 #include "src/indexes/text/fuzzy.h"
 #include "src/indexes/text/term.h"
 #include "src/valkey_search_options.h"
@@ -20,9 +25,9 @@ namespace valkey_search::indexes {
 
 Text::Text(const data_model::TextIndex &text_index_proto,
            std::shared_ptr<text::TextIndexSchema> text_index_schema)
-    : IndexBase(IndexerType::kText),
-      text_index_schema_(text_index_schema),
+    : TypedIndex<Text, TextSlot>(IndexerType::kText),
       text_field_number_(text_index_schema->AllocateTextFieldNumber()),
+      text_index_schema_(text_index_schema),
       with_suffix_trie_(text_index_proto.with_suffix_trie()),
       no_stem_(text_index_proto.no_stem()),
       weight_(text_index_proto.weight()) {
@@ -40,14 +45,13 @@ absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr &key,
 
   absl::MutexLock lock(&index_mutex_);
   if (result.ok() && *result) {
-    auto [_, succ] = tracked_keys_.insert(key);
-    if (!succ) {
-      return absl::AlreadyExistsError(
-          absl::StrCat("Key `", key->Str(), "` already exists"));
-    }
-    untracked_keys_.erase(key);
+    std::byte *storage = OccupySlot(key, data.size());
+    new (storage) TextSlot{
+        {/*occupied=*/1u, /*user_data_len=*/static_cast<uint32_t>(data.size())}};
   } else {
-    untracked_keys_.insert(key);
+    if (!schema_->IsLinked(pos_, key)) {
+      schema_->LinkMissing(pos_, key);
+    }
   }
   return result;
 }
@@ -55,20 +59,27 @@ absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr &key,
 absl::StatusOr<bool> Text::RemoveRecord(const InternedStringPtr &key,
                                         DeletionType deletion_type) {
   // The old key value has already been removed from the index by a call to
-  // TextIndexSchema::DeleteKey(), so there is no need to touch the index
-  // structures here
+  // TextIndexSchema::DeleteKey() at this point.
   absl::MutexLock lock(&index_mutex_);
-  if (deletion_type == DeletionType::kRecord) {
-    untracked_keys_.erase(key);
-  } else {
-    untracked_keys_.insert(key);
-  }
-  auto it = tracked_keys_.find(key);
-  if (it == tracked_keys_.end()) {
+  KeyAttrValue *kav = schema_->FindKAV(key);
+  if (kav == nullptr) {
     return false;
   }
-  tracked_keys_.erase(key);
-  return true;
+  Slot &slot = kav->slots[pos_];
+  if (IsOccupied(slot)) {
+    VacateSlot(key, /*relink=*/deletion_type != DeletionType::kRecord);
+    return true;
+  }
+  if (deletion_type == DeletionType::kRecord) {
+    if (schema_->IsLinked(pos_, key)) {
+      schema_->UnlinkMissing(pos_, key);
+    }
+  } else {
+    if (!schema_->IsLinked(pos_, key)) {
+      schema_->LinkMissing(pos_, key);
+    }
+  }
+  return false;
 }
 
 absl::StatusOr<bool> Text::ModifyRecord(const InternedStringPtr &key,
@@ -80,16 +91,22 @@ absl::StatusOr<bool> Text::ModifyRecord(const InternedStringPtr &key,
       key, data, text_field_number_, !no_stem_, with_suffix_trie_);
 
   absl::MutexLock lock(&index_mutex_);
+  KeyAttrValue *kav = schema_->FindKAV(key);
+  CHECK(kav != nullptr);
+  Slot &slot = kav->slots[pos_];
   if (!result.ok() || !*result) {
-    tracked_keys_.erase(key);
-    untracked_keys_.insert(key);
+    if (IsOccupied(slot)) {
+      VacateSlot(key, /*relink=*/true);
+    } else if (!schema_->IsLinked(pos_, key)) {
+      schema_->LinkMissing(pos_, key);
+    }
     return false;
   }
-  auto it = tracked_keys_.find(key);
-  if (it == tracked_keys_.end()) {
+  if (!IsOccupied(slot)) {
     return absl::NotFoundError(
         absl::StrCat("Key `", key->Str(), "` not found"));
   }
+  ResizeSlot(key, data.size());
   return true;
 }
 
@@ -108,13 +125,54 @@ int Text::RespondWithInfo(ValkeyModuleCtx *ctx) const {
 
 bool Text::IsTracked(const InternedStringPtr &key) const {
   absl::MutexLock lock(&index_mutex_);
-  return tracked_keys_.contains(key);
+  const KeyAttrValue *kav = schema_->FindKAV(key);
+  return kav != nullptr && IsOccupied(kav->slots[pos_]);
+}
+
+bool Text::IsUnTracked(const InternedStringPtr &key) const {
+  absl::MutexLock lock(&index_mutex_);
+  const KeyAttrValue *kav = schema_->FindKAV(key);
+  return kav != nullptr && !IsOccupied(kav->slots[pos_]);
+}
+
+void Text::UnTrack(const InternedStringPtr &key) {
+  absl::MutexLock lock(&index_mutex_);
+  const KeyAttrValue *kav = schema_->FindKAV(key);
+  CHECK(kav != nullptr);
+  CHECK(!IsOccupied(kav->slots[pos_]));
+  if (!schema_->IsLinked(pos_, key)) {
+    schema_->LinkMissing(pos_, key);
+  }
 }
 
 size_t Text::GetTrackedKeyCount() const {
-  // keep track of number of keys indexed for this attribute
   absl::MutexLock lock(&index_mutex_);
-  return tracked_keys_.size();
+  return schema_->OccupiedCount(pos_);
+}
+
+size_t Text::GetUnTrackedKeyCount() const {
+  absl::MutexLock lock(&index_mutex_);
+  return schema_->MissingListAt(pos_).size;
+}
+
+absl::Status Text::ForEachTrackedKey(
+    absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const {
+  return schema_->ForEachKey(
+      [&](const InternedStringPtr &key, const KeyAttrValue &kav) {
+        if (IsOccupied(kav.slots[pos_])) {
+          return fn(key);
+        }
+        return absl::OkStatus();
+      });
+}
+
+absl::Status Text::ForEachUnTrackedKey(
+    absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const {
+  absl::MutexLock lock(&index_mutex_);
+  for (auto it = MissingListBegin(schema_, pos_); !it.Done(); it.Next()) {
+    VMSDK_RETURN_IF_ERROR(fn(it.Key()));
+  }
+  return absl::OkStatus();
 }
 
 std::unique_ptr<data_model::Index> Text::ToProto() const {

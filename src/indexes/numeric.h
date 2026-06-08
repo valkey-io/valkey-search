@@ -8,6 +8,7 @@
 #ifndef VALKEYSEARCH_SRC_INDEXES_NUMERIC_H_
 #define VALKEYSEARCH_SRC_INDEXES_NUMERIC_H_
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -24,6 +25,7 @@
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/key_attr_value.h"
 #include "src/query/predicate.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/segment_tree.h"
@@ -31,6 +33,8 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
+
+// MissingListIterator is declared in index_base.h (above #include).
 
 template <typename T, typename Hasher = absl::Hash<T>,
           typename Equalizer = std::equal_to<T>>
@@ -78,8 +82,22 @@ class BTreeNumeric {
   utils::SegmentTree segment_tree_;
 };
 
-class Numeric : public IndexBase {
+// Per-slot payload for the Numeric index. SlotBase is 4 bytes; the compiler
+// inserts 4 bytes of padding so `value` is 8-byte aligned and the total slot
+// size is the canonical 16 bytes. NOT packed — naturally-aligned access to
+// `value` is the common case at query time.
+struct NumericSlot : SlotBase {
+  double value;
+};
+
+static_assert(sizeof(NumericSlot) == 16,
+              "NumericSlot must fit exactly in a 16-byte Slot");
+static_assert(alignof(NumericSlot) == 8, "NumericSlot must be 8-byte aligned");
+
+class Numeric : public TypedIndex<Numeric, NumericSlot> {
  public:
+  using SlotT = NumericSlot;
+
   explicit Numeric(const data_model::NumericIndex& numeric_index_proto);
   absl::StatusOr<bool> AddRecord(const InternedStringPtr& key,
                                  absl::string_view data) override
@@ -114,21 +132,34 @@ class Numeric : public IndexBase {
       absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
       const override ABSL_LOCKS_EXCLUDED(index_mutex_);
 
+  // Slot teardown for whole-key delete (TypedIndex CRTP). Removes this
+  // index's value from the btree/segment tree using the SlotT's stored
+  // value. Does NOT touch slot bytes — VacateSlot overwrites them.
+  void DestructTyped(const InternedStringPtr& key, NumericSlot& slot) override
+      ABSL_LOCKS_EXCLUDED(index_mutex_);
+
   std::unique_ptr<data_model::Index> ToProto() const override;
 
   uint32_t GetMutationWeight() const override;
 
+  // Returns a pointer to this key's stored numeric value if currently tracked,
+  // else nullptr. Reads the slot bytes via SlotAs; lock-free under the read
+  // epoch (the Numeric index is not mutated while time_sliced_mutex_ is in
+  // read mode — see numeric.cc).
   const double* GetValue(const InternedStringPtr& key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
+
   using BTreeNumericIndex = BTreeNumeric<InternedStringPtr>;
   using EntriesRange = std::pair<BTreeNumericIndex::ConstIterator,
                                  BTreeNumericIndex::ConstIterator>;
+
   class EntriesFetcherIterator : public EntriesFetcherIteratorBase {
    public:
     EntriesFetcherIterator(
         const EntriesRange& entries_range,
         const std::optional<EntriesRange>& additional_entries_range,
-        const InternedStringSet* untracked_keys);
+        const IndexSchema* schema_for_missing, uint16_t pos);
+    ~EntriesFetcherIterator() override;
     bool Done() const override;
     void Next() override;
     const InternedStringPtr& operator*() const override;
@@ -145,8 +176,14 @@ class Numeric : public IndexBase {
     BTreeNumericIndex::ConstIterator additional_entries_iter_;
     std::optional<InternedStringSet::const_iterator>
         additional_entry_keys_iter_;
-    const InternedStringSet* untracked_keys_;
-    std::optional<InternedStringSet::const_iterator> untracked_keys_iter_;
+    // For negation queries, after the btree ranges are exhausted, walk the
+    // per-attribute missing list. Both nullptrs when the fetcher is not a
+    // negation. `missing_iter_` is heap-allocated to keep MissingListIterator
+    // a complete type only in the .cc.
+    const IndexSchema* schema_for_missing_{nullptr};
+    uint16_t pos_{0};
+    std::unique_ptr<MissingListIterator> missing_iter_;
+    bool missing_started_{false};
   };
 
   class EntriesFetcher : public EntriesFetcherBase {
@@ -154,11 +191,12 @@ class Numeric : public IndexBase {
     EntriesFetcher(
         const EntriesRange& entries_range, size_t size,
         std::optional<EntriesRange> additional_entries_range = std::nullopt,
-        const InternedStringSet* untracked_keys = nullptr)
+        const IndexSchema* schema_for_missing = nullptr, uint16_t pos = 0)
         : entries_range_(entries_range),
           size_(size),
           additional_entries_range_(additional_entries_range),
-          untracked_keys_(untracked_keys) {}
+          schema_for_missing_(schema_for_missing),
+          pos_(pos) {}
     size_t Size() const override;
     std::unique_ptr<EntriesFetcherIteratorBase> Begin() override;
 
@@ -166,7 +204,8 @@ class Numeric : public IndexBase {
     EntriesRange entries_range_;
     size_t size_{0};
     std::optional<EntriesRange> additional_entries_range_;
-    const InternedStringSet* untracked_keys_;
+    const IndexSchema* schema_for_missing_{nullptr};
+    uint16_t pos_{0};
   };
 
   virtual std::unique_ptr<EntriesFetcher> Search(
@@ -175,9 +214,6 @@ class Numeric : public IndexBase {
 
  private:
   mutable absl::Mutex index_mutex_;
-  InternedStringHashMap<double> tracked_keys_ ABSL_GUARDED_BY(index_mutex_);
-  // untracked keys is needed to support negate filtering
-  InternedStringSet untracked_keys_ ABSL_GUARDED_BY(index_mutex_);
   std::unique_ptr<BTreeNumericIndex> index_ ABSL_GUARDED_BY(index_mutex_);
 };
 }  // namespace valkey_search::indexes

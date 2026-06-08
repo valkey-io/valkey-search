@@ -8,6 +8,7 @@
 #define VALKEYSEARCH_SRC_INDEXES_UNIVERSAL_SET_FETCHER_H_
 
 #include <memory>
+#include <vector>
 
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
@@ -19,25 +20,27 @@ class UniversalSetFetcher : public EntriesFetcherBase {
  public:
   explicit UniversalSetFetcher(const IndexSchema* index_schema);
 
-  size_t Size() const override { return size_; }
+  size_t Size() const override { return keys_.size(); }
   std::unique_ptr<EntriesFetcherIteratorBase> Begin() override;
 
  private:
   class Iterator : public EntriesFetcherIteratorBase {
    public:
-    explicit Iterator(const IndexSchema* index_schema);
+    explicit Iterator(const std::vector<InternedStringPtr>* keys);
 
     bool Done() const override;
     void Next() override;
     const InternedStringPtr& operator*() const override;
 
    private:
-    IndexSchema::IndexKeyInfoMap::const_iterator current_it_;
-    IndexSchema::IndexKeyInfoMap::const_iterator end_it_;
+    const std::vector<InternedStringPtr>* keys_;
+    size_t i_{0};
   };
 
-  const IndexSchema* index_schema_;
-  size_t size_;
+  // Snapshot of keys taken at construction under schema_mutex_'s reader lock.
+  // We keep refs (InternedStringPtr is shared-ptr-like) so subsequent
+  // mutations on the schema don't affect iteration.
+  std::vector<InternedStringPtr> keys_;
 };
 
 }  // namespace valkey_search::indexes

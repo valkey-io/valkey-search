@@ -55,8 +55,10 @@ absl::Status HandleInternalUpdateFailure(
 
 absl::Status FTInternalUpdateCmd(ValkeyModuleCtx *ctx,
                                  ValkeyModuleString **argv, int argc) {
-  CHECK(argc >= kFTInternalUpdateMinArgCount)
-      << "FT.INTERNAL_UPDATE called with wrong argument count: " << argc;
+  if (argc < kFTInternalUpdateMinArgCount) {
+    return absl::InvalidArgumentError(
+        "FT.INTERNAL_UPDATE called with wrong argument count");
+  }
 
   auto id_view = vmsdk::ToStringView(argv[1]);
   std::string id(id_view);

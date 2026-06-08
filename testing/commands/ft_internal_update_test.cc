@@ -19,9 +19,10 @@ TEST_F(FTInternalUpdateTest, WrongArguments) {
       TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.INTERNAL_UPDATE");
   argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_id");
 
-  EXPECT_DEATH(
-      [[maybe_unused]] auto res = FTInternalUpdateCmd(&fake_ctx_, argv, 2),
-      "FT.INTERNAL_UPDATE called with wrong argument count: 2");
+  auto status = FTInternalUpdateCmd(&fake_ctx_, argv, 2);
+  EXPECT_FALSE(status.ok());
+  EXPECT_THAT(status.message(),
+              testing::HasSubstr("wrong argument count"));
 
   TestValkeyModule_FreeString(&fake_ctx_, argv[0]);
   TestValkeyModule_FreeString(&fake_ctx_, argv[1]);

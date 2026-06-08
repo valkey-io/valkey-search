@@ -56,6 +56,20 @@ class VectorFlat : public VectorBase {
       ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_) {
     return algo_->data_->getCapacity();
   }
+  size_t GetCurrentElementCount() const
+      ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_) {
+    return algo_->cur_element_count_;
+  }
+  size_t GetChunkCount() const ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_) {
+    return algo_->data_->getChunkCount();
+  }
+  size_t GetElementsPerChunk() const
+      ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_) {
+    return algo_->data_->getElementsPerChunk();
+  }
+  absl::Mutex& GetResizeMutex() const ABSL_LOCK_RETURNED(resize_mutex_) {
+    return resize_mutex_;
+  }
   absl::StatusOr<std::vector<Neighbor>> Search(
       absl::string_view query, uint64_t count,
       cancel::Token& cancellation_token,

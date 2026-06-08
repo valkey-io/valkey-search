@@ -56,6 +56,7 @@ set(COMMANDS_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/ft_dropindex_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_list_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_info_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/ft_debug_indexstats_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_create_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/commands/ft_internal_update_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/filter_test.cc)

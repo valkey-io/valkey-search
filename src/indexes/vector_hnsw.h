@@ -13,6 +13,7 @@
 #include <memory>
 #include <optional>
 #include <utility>
+#include <vector>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/status/status.h"
@@ -63,6 +64,47 @@ class VectorHNSW : public VectorBase {
   }
   size_t GetEfRuntime() const ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_) {
     return algo_->ef_;
+  }
+  size_t GetCurrentElementCount() const
+      ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_) {
+    return algo_->cur_element_count_;
+  }
+  size_t GetDeletedCount() const ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_) {
+    return algo_->num_deleted_;
+  }
+  size_t GetChunkCount() const ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_) {
+    return algo_->data_level0_memory_->getChunkCount();
+  }
+  size_t GetElementsPerChunk() const
+      ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_) {
+    return algo_->data_level0_memory_->getElementsPerChunk();
+  }
+  // Returns histogram of out-degrees at level 0 for live (non-deleted) nodes.
+  // Result has 2*M+1 buckets; bucket[i] = number of live nodes with i links.
+  std::vector<size_t> GetLevel0OutDegreeHistogram() const
+      ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_) {
+    const size_t num_buckets = algo_->maxM0_ + 1;
+    std::vector<size_t> hist(num_buckets, 0);
+    const size_t cur = algo_->cur_element_count_;
+    for (size_t i = 0; i < cur; ++i) {
+      if (algo_->isMarkedDeleted(static_cast<hnswlib::tableint>(i))) {
+        continue;
+      }
+      auto* ll = algo_->get_linklist0(static_cast<hnswlib::tableint>(i));
+      size_t links = algo_->getListCount(ll);
+      if (links >= num_buckets) {
+        links = num_buckets - 1;
+      }
+      hist[links]++;
+    }
+    return hist;
+  }
+  // Number of distinct levels (max_level + 1, or 0 if empty).
+  int GetNumLayers() const ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_) {
+    return algo_->cur_element_count_ == 0 ? 0 : algo_->maxlevel_ + 1;
+  }
+  absl::Mutex& GetResizeMutex() const ABSL_LOCK_RETURNED(resize_mutex_) {
+    return resize_mutex_;
   }
 
   absl::StatusOr<std::vector<Neighbor>> Search(

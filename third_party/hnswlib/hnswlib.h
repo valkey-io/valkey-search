@@ -268,6 +268,12 @@ class ChunkedArray {
 
   size_t getCapacity() const { return element_count_; }
 
+  size_t getChunkCount() const {
+    return (element_count_ + elements_per_chunk_ - 1) / elements_per_chunk_;
+  }
+
+  size_t getElementsPerChunk() const { return elements_per_chunk_; }
+
   size_t getSizePerElement() const { return element_byte_size_; }
 
   size_t getSizePerChunk() const {

@@ -51,6 +51,15 @@ std::vector<char> NormalizeEmbedding(absl::string_view record, size_t type_size,
 // Default score value used when no scorer has been applied yet.
 inline constexpr float kDefaultScore = 0.0f;
 
+// Lightweight result entry used during non-vector search collection.
+// Trivially destructible — destroying a vector of 10K of these is a no-op.
+struct BorrowedNeighbor {
+  BorrowedInternedStringPtr key;
+  float distance;
+};
+static_assert(std::is_trivially_destructible_v<BorrowedNeighbor>,
+              "BorrowedNeighbor must be trivially destructible");
+
 struct Neighbor {
   InternedStringPtr external_id;
   float distance;

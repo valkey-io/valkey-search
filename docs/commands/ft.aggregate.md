@@ -92,3 +92,4 @@ The following reducer functions are available. The reducer functions that take a
 | MAX 1 <expression>            | The largest numerical values of the expression.                                                                                    |
 | AVG 1 <expression>            | The numerical average of the values of the expression.                                                                             |
 | STDDEV 1 <expression>         | The standard deviation the values of the expression.                                                                               |
+| RANDOM_SAMPLE 2 <expression> <sample_size> | A random sample of values from the expression using reservoir sampling. Returns an array of up to sample_size elements.   |

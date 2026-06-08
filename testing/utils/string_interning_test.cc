@@ -134,6 +134,69 @@ INSTANTIATE_TEST_SUITE_P(StringInterningTests, StringInterningTest,
                            return std::to_string(info.param);
                          });
 
+class BorrowedInternedStringPtrTest : public vmsdk::ValkeyTest {};
+
+TEST_F(BorrowedInternedStringPtrTest, BasicBorrowAndAccess) {
+  auto owned = StringInternStore::Intern("borrowed_test");
+  EXPECT_EQ(owned.RefCount(), 1);
+
+  BorrowedInternedStringPtr borrowed(owned);
+  // Borrowing does not increment ref count.
+  EXPECT_EQ(owned.RefCount(), 1);
+  EXPECT_EQ(borrowed.Str(), "borrowed_test");
+  EXPECT_TRUE(borrowed);
+}
+
+TEST_F(BorrowedInternedStringPtrTest, CopyDoesNotRefCount) {
+  auto owned = StringInternStore::Intern("copy_test");
+  BorrowedInternedStringPtr b1(owned);
+  BorrowedInternedStringPtr b2 = b1;
+  BorrowedInternedStringPtr b3;
+  b3 = b2;
+  // Three borrowed copies, ref count still 1.
+  EXPECT_EQ(owned.RefCount(), 1);
+  EXPECT_EQ(b1.Str(), "copy_test");
+  EXPECT_EQ(b2.Str(), "copy_test");
+  EXPECT_EQ(b3.Str(), "copy_test");
+}
+
+TEST_F(BorrowedInternedStringPtrTest, DestroyDoesNotDecrementRefCount) {
+  auto owned = StringInternStore::Intern("destroy_test");
+  {
+    BorrowedInternedStringPtr borrowed(owned);
+    EXPECT_EQ(owned.RefCount(), 1);
+  }
+  // After borrowed goes out of scope, ref count unchanged.
+  EXPECT_EQ(owned.RefCount(), 1);
+  EXPECT_EQ(owned->Str(), "destroy_test");
+}
+
+TEST_F(BorrowedInternedStringPtrTest, MaterializeIncrementsRefCount) {
+  auto owned = StringInternStore::Intern("materialize_test");
+  EXPECT_EQ(owned.RefCount(), 1);
+
+  BorrowedInternedStringPtr borrowed(owned);
+  InternedStringPtr materialized = borrowed.Materialize();
+
+  EXPECT_EQ(owned.RefCount(), 2);
+  EXPECT_EQ(materialized->Str(), "materialize_test");
+  EXPECT_EQ(materialized, owned);
+}
+
+TEST_F(BorrowedInternedStringPtrTest, MaterializedPtrKeepsStringAlive) {
+  InternedStringPtr materialized;
+  {
+    auto owned = StringInternStore::Intern("lifetime_test");
+    BorrowedInternedStringPtr borrowed(owned);
+    materialized = borrowed.Materialize();
+    EXPECT_EQ(owned.RefCount(), 2);
+  }
+  // Original owned is gone, but materialized keeps it alive.
+  EXPECT_EQ(materialized.RefCount(), 1);
+  EXPECT_EQ(materialized->Str(), "lifetime_test");
+  EXPECT_EQ(StringInternStore::Instance().UniqueStrings(), 1);
+}
+
 class StringInterningMultithreadTest : public vmsdk::ValkeyTest {};
 
 TEST_F(StringInterningMultithreadTest, Simple) {

@@ -19,7 +19,7 @@
         "arity": 3,
         "complexity": "O(1)",
         "group": "search",
-        "module_since": "1.0.0",
+        "module_since": "1.3.0",
         "summary": "Add an alias to an existing index"
     }
 }

@@ -504,9 +504,9 @@ TEST_F(ClusterMapTest, GetTargetsForSlotTest) {
     int shard;  // index into primary_ids
   };
   const std::vector<Case> cases = {
-      {0, 0},      {2730, 0},   {5460, 0},   // first range: start/middle/end
-      {5461, 1},   {8191, 1},   {10922, 1},  // middle range: start/middle/end
-      {10923, 2},  {13653, 2},  {16383, 2},  // last range: start/middle/end
+      {0, 0},     {2730, 0},  {5460, 0},   // first range: start/middle/end
+      {5461, 1},  {8191, 1},  {10922, 1},  // middle range: start/middle/end
+      {10923, 2}, {13653, 2}, {16383, 2},  // last range: start/middle/end
   };
   for (const auto& c : cases) {
     auto targets = cluster_map->GetTargetsForSlot(FanoutTargetMode::kPrimary,
@@ -537,10 +537,10 @@ TEST_F(ClusterMapTest, GetTargetsForSlotGapTest) {
   ASSERT_NE(cluster_map, nullptr);
 
   // Slots inside a covered range resolve; slots in the gap do not.
-  EXPECT_EQ(cluster_map
-                ->GetTargetsForSlot(FanoutTargetMode::kPrimary, false, 5000)
-                .size(),
-            1u);
+  EXPECT_EQ(
+      cluster_map->GetTargetsForSlot(FanoutTargetMode::kPrimary, false, 5000)
+          .size(),
+      1u);
   EXPECT_TRUE(
       cluster_map->GetTargetsForSlot(FanoutTargetMode::kPrimary, false, 5001)
           .empty());
@@ -550,10 +550,10 @@ TEST_F(ClusterMapTest, GetTargetsForSlotGapTest) {
   EXPECT_TRUE(
       cluster_map->GetTargetsForSlot(FanoutTargetMode::kPrimary, false, 9999)
           .empty());
-  EXPECT_EQ(cluster_map
-                ->GetTargetsForSlot(FanoutTargetMode::kPrimary, false, 10000)
-                .size(),
-            1u);
+  EXPECT_EQ(
+      cluster_map->GetTargetsForSlot(FanoutTargetMode::kPrimary, false, 10000)
+          .size(),
+      1u);
 }
 
 TEST_F(ClusterMapTest, GetShardByIdTest) {

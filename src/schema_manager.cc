@@ -955,19 +955,14 @@ void SchemaManager::OnSwapDB(ValkeyModuleSwapDbInfo *swap_db_info) {
     schema.second->OnSwapDB(swap_db_info);
   }
   // Swap alias maps in lockstep with index schemas.
-  // Use find() + conditional insert to avoid polluting db_to_aliases_ with
-  // empty maps for DBs that have no aliases.
-  auto swap_aliases = [this](uint32_t a, uint32_t b) {
+  {
+    uint32_t a = swap_db_info->dbnum_first;
+    uint32_t b = swap_db_info->dbnum_second;
     auto it_a = db_to_aliases_.find(a);
     auto it_b = db_to_aliases_.find(b);
     bool has_a = it_a != db_to_aliases_.end();
     bool has_b = it_b != db_to_aliases_.end();
-    if (!has_a && !has_b) return;
     if (has_a && !has_b) {
-      // Extract the inner map into a local before calling emplace: emplace may
-      // trigger a rehash of db_to_aliases_, which would move all existing
-      // elements to a new backing array and invalidate it_a. Extracting first
-      // ensures the value lives on the stack and is safe across the rehash.
       auto inner = std::move(it_a->second);
       db_to_aliases_.emplace(b, std::move(inner));
       db_to_aliases_.erase(a);
@@ -975,18 +970,18 @@ void SchemaManager::OnSwapDB(ValkeyModuleSwapDbInfo *swap_db_info) {
       auto inner = std::move(it_b->second);
       db_to_aliases_.emplace(a, std::move(inner));
       db_to_aliases_.erase(b);
-    } else {
+    } else if (has_a && has_b) {
       std::swap(it_a->second, it_b->second);
     }
-  };
-  swap_aliases(swap_db_info->dbnum_first, swap_db_info->dbnum_second);
+  }
   // Swap reverse alias maps in lockstep with forward alias maps.
-  auto swap_rev_aliases = [this](uint32_t a, uint32_t b) {
+  {
+    uint32_t a = swap_db_info->dbnum_first;
+    uint32_t b = swap_db_info->dbnum_second;
     auto it_a = db_to_index_to_aliases_.find(a);
     auto it_b = db_to_index_to_aliases_.find(b);
     bool has_a = it_a != db_to_index_to_aliases_.end();
     bool has_b = it_b != db_to_index_to_aliases_.end();
-    if (!has_a && !has_b) return;
     if (has_a && !has_b) {
       auto inner = std::move(it_a->second);
       db_to_index_to_aliases_.emplace(b, std::move(inner));
@@ -995,11 +990,10 @@ void SchemaManager::OnSwapDB(ValkeyModuleSwapDbInfo *swap_db_info) {
       auto inner = std::move(it_b->second);
       db_to_index_to_aliases_.emplace(a, std::move(inner));
       db_to_index_to_aliases_.erase(b);
-    } else {
+    } else if (has_a && has_b) {
       std::swap(it_a->second, it_b->second);
     }
-  };
-  swap_rev_aliases(swap_db_info->dbnum_first, swap_db_info->dbnum_second);
+  }
 }
 
 void SchemaManager::OnReplicationLoadStart(ValkeyModuleCtx *ctx) {

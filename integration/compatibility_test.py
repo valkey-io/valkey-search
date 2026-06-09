@@ -421,21 +421,6 @@ def do_answer(client, expected, data_set):
         waiters.wait_for_true(lambda: IndexingTestHelper.is_indexing_complete_on_node(client, index_to_wait))
         data_set = (expected['data_set_name'], expected['key_type'], expected.get("schema_type"))
 
-    # Alias management commands (ALIASADD/ALIASDEL/ALIASUPDATE) are recorded inline
-    # so that replay recreates the same alias state before the search commands that
-    # depend on it.  Execute them and verify they succeed, but don't count them as
-    # test answers in the pass/fail tally.
-    if _is_alias_management_cmd(expected['cmd']):
-        try:
-            client.execute_command(*expected['cmd'])
-            print(f"Alias setup: {expected['cmd']}")
-        except valkey.ResponseError as e:
-            raise AssertionError(
-                f"Alias management command failed during replay — subsequent search results will be wrong. "
-                f"cmd={expected['cmd']} error={e}"
-            ) from e
-        return data_set
-
     # Excluded entries have known result differences (e.g. parsing divergence in
     # generate_text.py). Run them for crash-check only — don't count in tally.
     if expected.get('excluded'):
@@ -515,6 +500,7 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
             primary0 = test_case.new_client_for_primary(0)
             primary0.execute_command(*expected["cmd"])
             print(f"Alias setup (cluster): {expected['cmd']}")
+            mark_as_passed(expected.get('testname', f"alias_cmd_{expected['cmd'][0]}"))
         except valkey.ResponseError as e:
             raise AssertionError(
                 f"Alias management command failed during cluster replay — subsequent search results will be wrong. "
@@ -587,7 +573,7 @@ class TestAnswersCMD(ValkeySearchTestCaseBase):
         for i in range(len(answers)):
             data_set = do_answer(client, answers[i], data_set)
 
-        expected_count = sum(1 for a in answers if not a.get('excluded') and not _is_alias_management_cmd(a.get('cmd', [])))
+        expected_count = sum(1 for a in answers if not a.get('excluded'))
         if correct_answers != expected_count:
             print(f"Correct answers: {correct_answers} out of {len(answers)}")
             if len(failed_tests) != 0:
@@ -657,7 +643,7 @@ class TestAnswersCME(ValkeySearchClusterTestCase):
 
         expected_count = sum(
             1 for a in answers
-            if not _is_alias_management_cmd(a.get('cmd', []))
+            if not a.get('excluded')
         )
         if correct_answers != expected_count:
             print(f"Correct answers: {correct_answers} out of {expected_count} (total entries: {len(answers)})")

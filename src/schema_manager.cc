@@ -379,6 +379,9 @@ absl::Status SchemaManager::AddAliasInternal(uint32_t db_num,
 
 absl::Status SchemaManager::AddAlias(uint32_t db_num, absl::string_view alias,
                                      absl::string_view index_name) {
+  if (alias.find('\0') != absl::string_view::npos) {
+    return absl::InvalidArgumentError("Alias name must not contain null bytes");
+  }
   if (coordinator_enabled_) {
     auto existing =
         coordinator::MetadataManager::Instance().GetEntryContent(
@@ -477,6 +480,9 @@ absl::Status SchemaManager::UpdateAliasInternal(uint32_t db_num,
 absl::Status SchemaManager::UpdateAlias(uint32_t db_num,
                                         absl::string_view alias,
                                         absl::string_view index_name) {
+  if (alias.find('\0') != absl::string_view::npos) {
+    return absl::InvalidArgumentError("Alias name must not contain null bytes");
+  }
   if (coordinator_enabled_) {
     if (coordinator::MetadataManager::Instance()
             .GetEntryContent(kAliasMetadataTypeName,

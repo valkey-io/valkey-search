@@ -33,10 +33,11 @@
 namespace valkey_search::indexes {
 
 template <typename T, typename Hasher = absl::Hash<T>,
-          typename Equalizer = std::equal_to<T>>
+          typename Equalizer = std::equal_to<T>,
+          typename SetType_ = absl::flat_hash_set<T, Hasher, Equalizer>>
 class BTreeNumeric {
  public:
-  using SetType = absl::flat_hash_set<T, Hasher, Equalizer>;
+  using SetType = SetType_;
   using ConstIterator =
       typename absl::btree_map<double, SetType>::const_iterator;
 
@@ -120,7 +121,10 @@ class Numeric : public IndexBase {
 
   const double* GetValue(const InternedStringPtr& key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
-  using BTreeNumericIndex = BTreeNumeric<InternedStringPtr>;
+  using BTreeNumericIndex =
+      BTreeNumeric<InternedStringPtr, absl::Hash<InternedStringPtr>,
+                   std::equal_to<InternedStringPtr>, BagOfInternedStringPtrs>;
+  using KeySet = BagOfInternedStringPtrs;
   using EntriesRange = std::pair<BTreeNumericIndex::ConstIterator,
                                  BTreeNumericIndex::ConstIterator>;
   class EntriesFetcherIterator : public EntriesFetcherIteratorBase {
@@ -128,25 +132,23 @@ class Numeric : public IndexBase {
     EntriesFetcherIterator(
         const EntriesRange& entries_range,
         const std::optional<EntriesRange>& additional_entries_range,
-        const InternedStringSet* untracked_keys);
+        const KeySet* untracked_keys);
     bool Done() const override;
     void Next() override;
     const InternedStringPtr& operator*() const override;
 
    private:
-    static bool NextKeys(
-        const Numeric::EntriesRange& range,
-        BTreeNumericIndex::ConstIterator& iter,
-        std::optional<InternedStringSet::const_iterator>& keys_iter);
+    static bool NextKeys(const Numeric::EntriesRange& range,
+                         BTreeNumericIndex::ConstIterator& iter,
+                         std::optional<KeySet::const_iterator>& keys_iter);
     const EntriesRange& entries_range_;
     BTreeNumericIndex::ConstIterator entries_iter_;
-    std::optional<InternedStringSet::const_iterator> entry_keys_iter_;
+    std::optional<KeySet::const_iterator> entry_keys_iter_;
     const std::optional<EntriesRange>& additional_entries_range_;
     BTreeNumericIndex::ConstIterator additional_entries_iter_;
-    std::optional<InternedStringSet::const_iterator>
-        additional_entry_keys_iter_;
-    const InternedStringSet* untracked_keys_;
-    std::optional<InternedStringSet::const_iterator> untracked_keys_iter_;
+    std::optional<KeySet::const_iterator> additional_entry_keys_iter_;
+    const KeySet* untracked_keys_;
+    std::optional<KeySet::const_iterator> untracked_keys_iter_;
   };
 
   class EntriesFetcher : public EntriesFetcherBase {
@@ -154,7 +156,7 @@ class Numeric : public IndexBase {
     EntriesFetcher(
         const EntriesRange& entries_range, size_t size,
         std::optional<EntriesRange> additional_entries_range = std::nullopt,
-        const InternedStringSet* untracked_keys = nullptr)
+        const KeySet* untracked_keys = nullptr)
         : entries_range_(entries_range),
           size_(size),
           additional_entries_range_(additional_entries_range),
@@ -166,7 +168,7 @@ class Numeric : public IndexBase {
     EntriesRange entries_range_;
     size_t size_{0};
     std::optional<EntriesRange> additional_entries_range_;
-    const InternedStringSet* untracked_keys_;
+    const KeySet* untracked_keys_;
   };
 
   virtual std::unique_ptr<EntriesFetcher> Search(
@@ -177,7 +179,7 @@ class Numeric : public IndexBase {
   mutable absl::Mutex index_mutex_;
   InternedStringHashMap<double> tracked_keys_ ABSL_GUARDED_BY(index_mutex_);
   // untracked keys is needed to support negate filtering
-  InternedStringSet untracked_keys_ ABSL_GUARDED_BY(index_mutex_);
+  KeySet untracked_keys_ ABSL_GUARDED_BY(index_mutex_);
   std::unique_ptr<BTreeNumericIndex> index_ ABSL_GUARDED_BY(index_mutex_);
 };
 }  // namespace valkey_search::indexes

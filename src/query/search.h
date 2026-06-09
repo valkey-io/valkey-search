@@ -345,5 +345,14 @@ bool QueryHasTextPredicate(const SearchParameters& parameters);
 // Check if no results should be returned based on limit parameters
 bool ShouldReturnNoResults(const SearchParameters& parameters);
 
+// Scans for the vector filter delimiter `=>` that is followed by `[` (after
+// optional whitespace). Returns the position of `=>` or npos if not found.
+// Exposed for testing.
+size_t FindVectorDelimiter(absl::string_view expr);
+
+// Computes the weighted score for a predicate tree where the document is known
+// to match. Exposed for testing.
+float ComputeMatchedPredicateScore(const Predicate* predicate);
+
 }  // namespace valkey_search::query
 #endif  // VALKEYSEARCH_SRC_QUERY_SEARCH_H_

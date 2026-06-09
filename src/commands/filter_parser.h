@@ -142,6 +142,8 @@ class FilterParser {
       bool not_rightmost_bracket);
   void FlagNestedComposedPredicate(
       std::unique_ptr<query::Predicate>& predicate);
+  // Parses a QMA block after `=> {`. Returns the weight value on success.
+  absl::StatusOr<double> ParseQMABlock();
 };
 
 // Helper function to print predicate tree structure using DFS

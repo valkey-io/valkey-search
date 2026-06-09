@@ -51,6 +51,7 @@ std::vector<char> NormalizeEmbedding(absl::string_view record, size_t type_size,
 struct BorrowedNeighbor {
   BorrowedInternedStringPtr key;
   float distance;
+  float score;
 };
 static_assert(std::is_trivially_destructible_v<BorrowedNeighbor>,
               "BorrowedNeighbor must be trivially destructible");
@@ -58,11 +59,17 @@ static_assert(std::is_trivially_destructible_v<BorrowedNeighbor>,
 struct Neighbor {
   InternedStringPtr external_id;
   float distance;
+  float score{0.0f};
   uint64_t sequence_number;
   std::optional<RecordsMap> attribute_contents;
   Neighbor() : distance(0.0f), sequence_number(0) {}
   Neighbor(const InternedStringPtr& external_id, float distance)
       : external_id(external_id), distance(distance), sequence_number(0) {}
+  Neighbor(const InternedStringPtr& external_id, float distance, float score)
+      : external_id(external_id),
+        distance(distance),
+        score(score),
+        sequence_number(0) {}
   Neighbor(const InternedStringPtr& external_id, float distance,
            std::optional<RecordsMap>&& attribute_contents)
       : external_id(external_id),
@@ -72,12 +79,14 @@ struct Neighbor {
   Neighbor(Neighbor&& other) noexcept
       : external_id(std::move(other.external_id)),
         distance(other.distance),
+        score(other.score),
         sequence_number(other.sequence_number),
         attribute_contents(std::move(other.attribute_contents)) {}
   Neighbor& operator=(Neighbor&& other) noexcept {
     if (this != &other) {
       external_id = std::move(other.external_id);
       distance = other.distance;
+      score = other.score;
       sequence_number = other.sequence_number;
       attribute_contents = std::move(other.attribute_contents);
     }

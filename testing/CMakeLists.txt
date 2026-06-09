@@ -58,7 +58,8 @@ set(COMMANDS_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/ft_info_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_create_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/commands/ft_internal_update_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/filter_test.cc)
+    ${CMAKE_CURRENT_LIST_DIR}/filter_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/qma_weight_parser_test.cc)
 
 add_executable(commands_test ${COMMANDS_TEST_SOURCES})
 target_include_directories(commands_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
@@ -112,6 +113,8 @@ finalize_test_flags(core_test)
 # 1. Query Test Suite - consolidates query and search related tests
 set(QUERY_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/search_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/find_vector_delimiter_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/weight_score_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/query/response_generator_test.cc)
 
 add_executable(query_test ${QUERY_TEST_SOURCES})

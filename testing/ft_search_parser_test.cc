@@ -715,10 +715,11 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "invalid_vector_parameters_1",
             .success = false,
             .params_str = " PARAMS 2",
+            // `=>ss[` is not a vector delimiter (non-whitespace between => and
+            // [), so the whole string is treated as a pre-filter expression,
+            // which fails to parse.
             .filter_str = "(*)=>ss[KNN 10 @vec $BLOB]",
-            .expected_error_message =
-                "Error parsing vector similarity parameters: `ss[KNN 10 @vec "
-                "$BLOB]`. Expecting '[' got 's'",
+            .expected_error_message = "Invalid filter expression:",
         },
         {
             .test_name = "invalid_vector_parameters_2",

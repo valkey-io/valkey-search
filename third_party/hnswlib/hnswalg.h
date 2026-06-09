@@ -847,8 +847,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 
     vector_size_ = s->get_data_size();
     size_data_per_element_ =
-        size_links_level0_ + sizeof(char *) + sizeof(labeltype);
-    label_offset_ = size_links_level0_ + sizeof(char *);
+        offsetData_ + sizeof(char *) + sizeof(labeltype);
+    label_offset_ = offsetData_ + sizeof(char *);
 
     fstdistfunc_ = s->get_dist_func();
     dist_func_param_ = s->get_dist_func_param();

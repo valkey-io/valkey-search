@@ -3,6 +3,7 @@
 import pytest
 from valkey import ResponseError
 from valkey.client import Valkey
+from ft_info_parser import FTInfoParser
 from valkey_search_test_case import ValkeySearchTestCaseBase
 from valkeytestframework.conftest import resource_port_tracker
 
@@ -346,15 +347,7 @@ class TestFTAliasFlushDB(ValkeySearchTestCaseBase):
 def _get_aliases_from_info(client, name):
     """Extract the aliases list from FT.INFO response for the given name."""
     info = client.execute_command("FT.INFO", name)
-    info_list = list(info)
-    idx = next(
-        (i for i, v in enumerate(info_list) if v == b"aliases"), None
-    )
-    assert idx is not None, "FT.INFO response missing 'aliases' field"
-    aliases = info_list[idx + 1]
-    if aliases is None:
-        return []
-    return sorted(aliases) if isinstance(aliases, list) else sorted(list(aliases))
+    return FTInfoParser(info).aliases
 
 
 class TestFTInfoAliases(ValkeySearchTestCaseBase):
@@ -373,7 +366,7 @@ class TestFTInfoAliases(ValkeySearchTestCaseBase):
         assert client.execute_command(*CREATE_TAG_INDEX) == b"OK"
         assert client.execute_command("FT.ALIASADD", ALIAS_NAME, INDEX_NAME) == b"OK"
         aliases = _get_aliases_from_info(client, INDEX_NAME)
-        assert aliases == [ALIAS_NAME.encode()]
+        assert aliases == [ALIAS_NAME]
 
     def test_info_multiple_aliases_sorted(self):
         """FT.INFO reports multiple aliases in sorted order."""
@@ -382,7 +375,7 @@ class TestFTInfoAliases(ValkeySearchTestCaseBase):
         assert client.execute_command("FT.ALIASADD", "z_alias", INDEX_NAME) == b"OK"
         assert client.execute_command("FT.ALIASADD", "a_alias", INDEX_NAME) == b"OK"
         aliases = _get_aliases_from_info(client, INDEX_NAME)
-        assert aliases == [b"a_alias", b"z_alias"]
+        assert aliases == ["a_alias", "z_alias"]
 
     def test_info_via_alias_shows_aliases(self):
         """FT.INFO queried via alias still reports the aliases of the real index."""
@@ -390,7 +383,7 @@ class TestFTInfoAliases(ValkeySearchTestCaseBase):
         assert client.execute_command(*CREATE_TAG_INDEX) == b"OK"
         assert client.execute_command("FT.ALIASADD", ALIAS_NAME, INDEX_NAME) == b"OK"
         aliases = _get_aliases_from_info(client, ALIAS_NAME)
-        assert aliases == [ALIAS_NAME.encode()]
+        assert aliases == [ALIAS_NAME]
 
     def test_info_alias_removed_after_aliasdel(self):
         """After ALIASDEL, FT.INFO no longer reports the deleted alias."""
@@ -414,7 +407,7 @@ class TestFTInfoAliases(ValkeySearchTestCaseBase):
         assert aliases_idx1 == []
         # INDEX_NAME_2 should have the alias
         aliases_idx2 = _get_aliases_from_info(client, INDEX_NAME_2)
-        assert aliases_idx2 == [ALIAS_NAME.encode()]
+        assert aliases_idx2 == [ALIAS_NAME]
 
 class TestFTAliasWrongArity(ValkeySearchTestCaseBase):
     """Tests that alias commands reject wrong argument counts."""

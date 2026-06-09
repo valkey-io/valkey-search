@@ -56,6 +56,7 @@ inline constexpr float kDefaultScore = 0.0f;
 struct BorrowedNeighbor {
   BorrowedInternedStringPtr key;
   float distance;
+  float score;
 };
 static_assert(std::is_trivially_destructible_v<BorrowedNeighbor>,
               "BorrowedNeighbor must be trivially destructible");

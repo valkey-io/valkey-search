@@ -94,9 +94,8 @@ TEST_F(FTInternalUpdateTest, FourArgDefaultsToIndexSchema) {
   }
 }
 
-// 5-arg call with a trailing keyword but no value is rejected because the
-// optional arguments do not form complete key/value pairs.
-TEST_F(FTInternalUpdateTest, FiveArgTrailingKeywordIgnored) {
+// 5-arg call with a trailing keyword but no count is rejected.
+TEST_F(FTInternalUpdateTest, FiveArgTrailingKeywordNoCount) {
   EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))
       .WillRepeatedly(testing::Return(0));
 
@@ -108,41 +107,40 @@ TEST_F(FTInternalUpdateTest, FiveArgTrailingKeywordIgnored) {
   argv[3] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "invalid");
   argv[4] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "TYPE");
 
-  // Should return an error because optional args count is odd (not key/value
-  // pairs).
+  // Should return an error because keyword has no arg count following it.
   auto status = FTInternalUpdateCmd(&fake_ctx_, argv, 5);
   EXPECT_FALSE(status.ok());
-  EXPECT_THAT(status.message(),
-              testing::HasSubstr("malformed optional arguments"));
+  EXPECT_THAT(status.message(), testing::HasSubstr("missing arg count"));
 
   for (int i = 0; i < 5; i++) {
     TestValkeyModule_FreeString(&fake_ctx_, argv[i]);
   }
 }
 
-// 6-arg call with TYPE keyword sets the type name correctly.
-// Verify by checking we get a parse error (not a CHECK abort) with invalid
+// 7-arg call with TYPE keyword in keyword/count/args format.
+// Verify by checking we get a parse error (not a crash) with invalid
 // metadata — proving the arg count check and keyword parsing passed.
-TEST_F(FTInternalUpdateTest, SixArgWithTypeKeyword) {
+TEST_F(FTInternalUpdateTest, SevenArgWithTypeKeyword) {
   EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))
       .WillRepeatedly(testing::Return(0));
 
-  ValkeyModuleString* argv[6];
+  ValkeyModuleString* argv[7];
   argv[0] =
       TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.INTERNAL_UPDATE");
   argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_id");
   argv[2] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "invalid");
   argv[3] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "invalid");
   argv[4] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "TYPE");
-  argv[5] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "vs_alias");
+  argv[5] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "1");
+  argv[6] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "vs_alias");
 
-  // Should return a parse error, not abort — 6 args with TYPE keyword is valid.
-  auto status = FTInternalUpdateCmd(&fake_ctx_, argv, 6);
+  // Should return a parse error, not abort — 7 args with TYPE keyword is valid.
+  auto status = FTInternalUpdateCmd(&fake_ctx_, argv, 7);
   EXPECT_FALSE(status.ok());
   EXPECT_THAT(status.message(),
               testing::HasSubstr("Failed to parse GlobalMetadataEntry"));
 
-  for (int i = 0; i < 6; i++) {
+  for (int i = 0; i < 7; i++) {
     TestValkeyModule_FreeString(&fake_ctx_, argv[i]);
   }
 }
@@ -152,25 +150,27 @@ TEST_F(FTInternalUpdateTest, UnknownKeywordSilentlyIgnored) {
   EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))
       .WillRepeatedly(testing::Return(0));
 
-  ValkeyModuleString* argv[8];
+  ValkeyModuleString* argv[10];
   argv[0] =
       TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.INTERNAL_UPDATE");
   argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_id");
   argv[2] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "invalid");
   argv[3] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "invalid");
   argv[4] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FUTURE_FIELD");
-  argv[5] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "some_value");
-  argv[6] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "TYPE");
-  argv[7] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "vs_alias");
+  argv[5] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "1");
+  argv[6] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "some_value");
+  argv[7] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "TYPE");
+  argv[8] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "1");
+  argv[9] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "vs_alias");
 
   // Should return a parse error (invalid metadata), not abort — unknown
-  // keywords are silently skipped.
-  auto status = FTInternalUpdateCmd(&fake_ctx_, argv, 8);
+  // keywords are silently skipped using their declared arg count.
+  auto status = FTInternalUpdateCmd(&fake_ctx_, argv, 10);
   EXPECT_FALSE(status.ok());
   EXPECT_THAT(status.message(),
               testing::HasSubstr("Failed to parse GlobalMetadataEntry"));
 
-  for (int i = 0; i < 8; i++) {
+  for (int i = 0; i < 10; i++) {
     TestValkeyModule_FreeString(&fake_ctx_, argv[i]);
   }
 }

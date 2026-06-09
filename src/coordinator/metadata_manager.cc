@@ -974,9 +974,9 @@ absl::Status MetadataManager::CallFTInternalUpdateForReconciliation(
   ValkeyModuleCtx *safe_context = detached_ctx_.get();
 
   reply = ValkeyModule_Call(
-      safe_context, "FT.INTERNAL_UPDATE", "!Kcbbcc", id.c_str(),
+      safe_context, "FT.INTERNAL_UPDATE", "!Kcbbccc", id.c_str(),
       metadata_binary.data(), metadata_binary.size(), header_binary.data(),
-      header_binary.size(), "TYPE", type_name_str.c_str());
+      header_binary.size(), "TYPE", "1", type_name_str.c_str());
 
   if (reply == nullptr ||
       ValkeyModule_CallReplyType(reply) == VALKEYMODULE_REPLY_ERROR) {
@@ -997,22 +997,13 @@ void MetadataManager::ReplicateFTInternalUpdate(
   entry.SerializeToString(&metadata_binary);
   header.SerializeToString(&header_binary);
 
-  // Omit TYPE for the default type to preserve argc=4 wire format for old
-  // replicas during rolling upgrades; non-default types still emit TYPE.
-  if (type_name == kSchemaManagerMetadataTypeName) {
-    ValkeyModule_Replicate(detached_ctx_.get(), "FT.INTERNAL_UPDATE", "cbb",
-                           std::string(encoded_id).c_str(),
-                           metadata_binary.data(), metadata_binary.size(),
-                           header_binary.data(), header_binary.size());
-  } else {
-    std::string type_name_str(type_name);
-    // Replicate FT.INTERNAL_UPDATE to replicas for AOF consistency
-    ValkeyModule_Replicate(detached_ctx_.get(), "FT.INTERNAL_UPDATE", "cbbcc",
-                           std::string(encoded_id).c_str(),
-                           metadata_binary.data(), metadata_binary.size(),
-                           header_binary.data(), header_binary.size(), "TYPE",
-                           type_name_str.c_str());
-  }
+  // Always emit TYPE keyword for consistency
+  std::string type_name_str(type_name);
+  ValkeyModule_Replicate(detached_ctx_.get(), "FT.INTERNAL_UPDATE", "cbbccc",
+                         std::string(encoded_id).c_str(),
+                         metadata_binary.data(), metadata_binary.size(),
+                         header_binary.data(), header_binary.size(), "TYPE",
+                         "1", type_name_str.c_str());
 }
 
 }  // namespace valkey_search::coordinator

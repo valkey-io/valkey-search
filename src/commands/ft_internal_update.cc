@@ -5,6 +5,7 @@
  *
  */
 
+#include "absl/strings/numbers.h"
 #include "src/commands/commands.h"
 #include "src/coordinator/metadata_manager.h"
 #include "src/index_schema.pb.h"
@@ -63,25 +64,45 @@ absl::Status FTInternalUpdateCmd(ValkeyModuleCtx *ctx,
   auto id_view = vmsdk::ToStringView(argv[1]);
   std::string id(id_view);
 
-  // Validate that optional arguments (argv[4..argc-1]) form complete
-  // key/value pairs.
-  if ((argc - kFTInternalUpdateMinArgCount) % 2 != 0) {
-    VMSDK_RETURN_IF_ERROR(HandleInternalUpdateFailure(
-        ctx, "optional arguments parse", id,
-        absl::InvalidArgumentError(
-            "FT.INTERNAL_UPDATE called with malformed optional arguments: "
-            "expected key/value pairs")));
-  }
-
-  // Parse keyword/value pairs from argv[4..argc-1].
-  // Recognized keywords: TYPE (metadata type name).
-  // Unrecognized keywords are silently ignored for forward compatibility.
+  // Parse optional arguments (argv[4..argc-1]) using keyword/count/args
+  // format: KEYWORD <arg_count> <arg1> ... <argN>.
+  // Unrecognized keywords are silently skipped (using their declared count)
+  // for forward compatibility.
   absl::string_view type_name = kSchemaManagerMetadataTypeName;
-  for (int i = 4; i + 1 < argc; i += 2) {
+  for (int i = kFTInternalUpdateMinArgCount; i < argc;) {
     auto key = vmsdk::ToStringView(argv[i]);
-    if (key == "TYPE") {
-      type_name = vmsdk::ToStringView(argv[i + 1]);
+    i++;
+    if (i >= argc) {
+      VMSDK_RETURN_IF_ERROR(HandleInternalUpdateFailure(
+          ctx, "optional arguments parse", id,
+          absl::InvalidArgumentError("FT.INTERNAL_UPDATE: keyword '" +
+                                     std::string(key) +
+                                     "' missing arg count")));
+      break;
     }
+    auto count_str = vmsdk::ToStringView(argv[i]);
+    int arg_count = 0;
+    if (!absl::SimpleAtoi(count_str, &arg_count) || arg_count < 0) {
+      VMSDK_RETURN_IF_ERROR(HandleInternalUpdateFailure(
+          ctx, "optional arguments parse", id,
+          absl::InvalidArgumentError(
+              "FT.INTERNAL_UPDATE: invalid arg count for keyword '" +
+              std::string(key) + "'")));
+      break;
+    }
+    i++;
+    if (i + arg_count > argc) {
+      VMSDK_RETURN_IF_ERROR(HandleInternalUpdateFailure(
+          ctx, "optional arguments parse", id,
+          absl::InvalidArgumentError(
+              "FT.INTERNAL_UPDATE: not enough args for keyword '" +
+              std::string(key) + "'")));
+      break;
+    }
+    if (key == "TYPE" && arg_count >= 1) {
+      type_name = vmsdk::ToStringView(argv[i]);
+    }
+    i += arg_count;
   }
 
   auto metadata_view = vmsdk::ToStringView(argv[2]);

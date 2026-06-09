@@ -238,6 +238,11 @@ class MockValkeyModule {
                const char *arg1, const char *arg2, size_t arg2_len,
                const char *arg3, size_t arg3_len, const char *arg4,
                const char *arg5));
+  MOCK_METHOD(ValkeyModuleCallReply *, Call,
+              (ValkeyModuleCtx * ctx, const char *cmd, const char *fmt,
+               const char *arg1, const char *arg2, size_t arg2_len,
+               const char *arg3, size_t arg3_len, const char *arg4,
+               const char *arg5, const char *arg6));
   MOCK_METHOD(void *, GetSharedAPI, (ValkeyModuleCtx * ctx, const char *arg1));
   MOCK_METHOD(ValkeyModuleCallReply *, Call,
               (ValkeyModuleCtx * ctx, const char *cmd, const char *fmt,
@@ -1334,7 +1339,7 @@ inline ValkeyModuleCallReply *TestValkeyModule_Call(ValkeyModuleCtx *ctx,
         kMockValkeyModule->Call(ctx, cmdname, fmt, arg1, arg2->data.c_str());
     return ret;
   }
-  if (format == "!Kcbbcc") {
+  if (format == "!Kcbbccc") {
     const char *arg1 = va_arg(args, const char *);
     const char *arg2 = va_arg(args, const char *);
     size_t arg2_len = va_arg(args, size_t);
@@ -1342,8 +1347,10 @@ inline ValkeyModuleCallReply *TestValkeyModule_Call(ValkeyModuleCtx *ctx,
     size_t arg3_len = va_arg(args, size_t);
     const char *arg4 = va_arg(args, const char *);
     const char *arg5 = va_arg(args, const char *);
+    const char *arg6 = va_arg(args, const char *);
     auto ret = kMockValkeyModule->Call(ctx, cmdname, fmt, arg1, arg2, arg2_len,
-                                       arg3, arg3_len, arg4, arg5);
+                                       arg3, arg3_len, arg4, arg5, arg6);
+    va_end(args);
     return ret;
   }
   CHECK(false && "Unsupported format specifier");

@@ -527,8 +527,9 @@ class MetadataManagerReconciliationTest
         .WillByDefault(testing::Return());
     ON_CALL(*kMockValkeyModule,
             Call(testing::_, testing::StrEq("FT.INTERNAL_UPDATE"),
-                 testing::StrEq("!Kcbbcc"), testing::_, testing::_, testing::_,
-                 testing::_, testing::_, testing::StrEq("TYPE"), testing::_))
+                 testing::StrEq("!Kcbbccc"), testing::_, testing::_, testing::_,
+                 testing::_, testing::_, testing::StrEq("TYPE"),
+                 testing::StrEq("1"), testing::_))
         .WillByDefault(testing::Return(
             reinterpret_cast<ValkeyModuleCallReply*>(0xBEEF0002)));
 
@@ -671,11 +672,11 @@ TEST_P(MetadataManagerReconciliationTest, TestReconciliation) {
   }
 
   if (!test_case.expected_callbacks.empty() && !expect_failure) {
-    EXPECT_CALL(
-        *kMockValkeyModule,
-        Call(testing::_, testing::StrEq("FT.INTERNAL_UPDATE"),
-             testing::StrEq("!Kcbbcc"), testing::_, testing::_, testing::_,
-             testing::_, testing::_, testing::StrEq("TYPE"), testing::_))
+    EXPECT_CALL(*kMockValkeyModule,
+                Call(testing::_, testing::StrEq("FT.INTERNAL_UPDATE"),
+                     testing::StrEq("!Kcbbccc"), testing::_, testing::_,
+                     testing::_, testing::_, testing::_, testing::StrEq("TYPE"),
+                     testing::StrEq("1"), testing::_))
         .Times(test_case.expected_callbacks.size())
         .WillRepeatedly(testing::Return(
             reinterpret_cast<ValkeyModuleCallReply*>(0xDEADBEEF)));
@@ -1657,8 +1658,9 @@ class MetadataManagerTest : public vmsdk::ValkeyTest {
         .WillByDefault(testing::Return());
     ON_CALL(*kMockValkeyModule,
             Call(testing::_, testing::StrEq("FT.INTERNAL_UPDATE"),
-                 testing::StrEq("!Kcbbcc"), testing::_, testing::_, testing::_,
-                 testing::_, testing::_, testing::StrEq("TYPE"), testing::_))
+                 testing::StrEq("!Kcbbccc"), testing::_, testing::_, testing::_,
+                 testing::_, testing::_, testing::StrEq("TYPE"),
+                 testing::StrEq("1"), testing::_))
         .WillByDefault(testing::Return(
             reinterpret_cast<ValkeyModuleCallReply*>(0xDEADBEEF)));
     ON_CALL(*kMockValkeyModule, CallReplyType(testing::_))
@@ -2019,9 +2021,9 @@ TEST_F(MetadataManagerTimestampTest,
 
   EXPECT_CALL(*kMockValkeyModule,
               Call(testing::_, testing::StrEq("FT.INTERNAL_UPDATE"),
-                   testing::StrEq("!Kcbbcc"), testing::_, testing::_,
+                   testing::StrEq("!Kcbbccc"), testing::_, testing::_,
                    testing::_, testing::_, testing::_,
-                   testing::StrEq("TYPE"), testing::_))
+                   testing::StrEq("TYPE"), testing::StrEq("1"), testing::_))
       .WillOnce(testing::Return(nullptr));
 
   // Reconciliation should fail due to FT.INTERNAL_UPDATE failure
@@ -2203,19 +2205,20 @@ TEST_F(MetadataManagerTest, ReconcileMetadataForwardsTypeNamePerEntry) {
   alias_entry.mutable_content()->set_value("alias_content");
 
   // Expect exactly two FT.INTERNAL_UPDATE calls. The keyword/value pair
-  // "TYPE" <type_name> (argv[5..6], format chars 'cc' at positions 5-6 in
-  // "!Kcbbcc") must carry the type_name of the entry being replicated. We
-  // capture all calls and verify the type_names seen.
+  // "TYPE" "1" <type_name> (keyword/count/args format in "!Kcbbccc") must
+  // carry the type_name of the entry being replicated. We capture all calls
+  // and verify the type_names seen.
   std::vector<std::string> seen_type_names;
-  EXPECT_CALL(
-      *kMockValkeyModule,
-      Call(testing::_, testing::StrEq("FT.INTERNAL_UPDATE"),
-           testing::StrEq("!Kcbbcc"), testing::_, testing::_, testing::_,
-           testing::_, testing::_, testing::StrEq("TYPE"), testing::_))
+  EXPECT_CALL(*kMockValkeyModule,
+              Call(testing::_, testing::StrEq("FT.INTERNAL_UPDATE"),
+                   testing::StrEq("!Kcbbccc"), testing::_, testing::_,
+                   testing::_, testing::_, testing::_, testing::StrEq("TYPE"),
+                   testing::StrEq("1"), testing::_))
       .Times(2)
       .WillRepeatedly([&](ValkeyModuleCtx*, const char*, const char*,
                           const char* /*id*/, const char* /*meta*/, size_t,
                           const char* /*hdr*/, size_t, const char* /*keyword*/,
+                          const char* /*count*/,
                           const char* type_name) -> ValkeyModuleCallReply* {
         seen_type_names.emplace_back(type_name);
         return reinterpret_cast<ValkeyModuleCallReply*>(0xDEADBEEF);

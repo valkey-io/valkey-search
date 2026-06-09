@@ -13,7 +13,7 @@
 #   DIM           — dimensions (default: 768)
 #   PORT          — server port (default: 6399)
 #   LOGDIR        — output directory for snapshots (default: /tmp/mem_measure)
-#   ALGO          — algorithm config: svs_fp32 | svs_lvq4x8 | hnsw (default: svs_fp32)
+#   ALGO          — algorithm config: svs_fp32 | svs_lvq4x8 | svs_leanvec4x4 | svs_leanvec4x8 | svs_leanvec8x8 | hnsw (default: svs_fp32)
 
 set -o pipefail
 
@@ -84,20 +84,31 @@ snapshot() {
 }
 
 load_hashes() {
-  echo "  [load_hashes N=$N DIM=$DIM]"
+  echo "  [load_hashes N=$N DIM=$DIM algo=$ALGO]"
   "$PYTHON" - <<PYEOF
 import redis, numpy as np
 r = redis.Redis(port=$PORT, decode_responses=False)
 np.random.seed(1)
+algo = "$ALGO"
+is_leanvec = algo.startswith("svs_leanvec")
+threshold = 10000
 batch = 1000
+if is_leanvec:
+    for i in range(min($N, threshold)):
+        v = np.random.rand($DIM).astype(np.float32).tobytes()
+        r.hset(f"doc:{i}", "vec", v)
+    start = threshold
+    print(f"  loaded {min($N, threshold)} hashes (non-pipelined, LeanVec training)")
+else:
+    start = 0
 pipe = r.pipeline(transaction=False)
-for i in range($N):
+for i in range(start, $N):
     v = np.random.rand($DIM).astype(np.float32).tobytes()
     pipe.hset(f"doc:{i}", "vec", v)
     if (i+1) % batch == 0:
         pipe.execute()
 pipe.execute()
-print(f"  loaded {$N} hashes")
+print(f"  loaded {$N} hashes total")
 PYEOF
 }
 
@@ -109,28 +120,34 @@ create_index() {
         vec VECTOR HNSW 10 TYPE FLOAT32 DIM "$DIM" \
         DISTANCE_METRIC L2 M 32 EF_CONSTRUCTION 128 > /dev/null
       ;;
-    svs_fp32)
+    svs_*)
+      local args=(TYPE FLOAT32 DIM "$DIM" DISTANCE_METRIC L2
+                  GRAPH_MAX_DEGREE 32 CONSTRUCTION_WINDOW_SIZE 128
+                  SEARCH_WINDOW_SIZE 50)
+      case "$ALGO" in
+        svs_fp32) ;;
+        svs_lvq4x8) args+=(COMPRESSION LVQ4X8) ;;
+        svs_leanvec*)
+          local comp="${ALGO#svs_leanvec}"
+          args+=(COMPRESSION "LEANVEC${comp^^}"
+                 LEANVEC_DIMS "$((DIM / 4))"
+                 LEANVEC_TRAINING_THRESHOLD 10000) ;;
+        *) echo "Unknown SVS variant: $ALGO"; exit 1 ;;
+      esac
       "$VALKEY_CLI" -p "$PORT" FT.CREATE idx ON HASH PREFIX 1 doc: SCHEMA \
-        vec VECTOR SVS 12 TYPE FLOAT32 DIM "$DIM" \
-        DISTANCE_METRIC L2 GRAPH_MAX_DEGREE 32 \
-        CONSTRUCTION_WINDOW_SIZE 128 SEARCH_WINDOW_SIZE 50 > /dev/null
-      ;;
-    svs_lvq4x8)
-      "$VALKEY_CLI" -p "$PORT" FT.CREATE idx ON HASH PREFIX 1 doc: SCHEMA \
-        vec VECTOR SVS 14 TYPE FLOAT32 DIM "$DIM" \
-        DISTANCE_METRIC L2 GRAPH_MAX_DEGREE 32 \
-        CONSTRUCTION_WINDOW_SIZE 128 SEARCH_WINDOW_SIZE 50 \
-        COMPRESSION LVQ4X8 > /dev/null
+        vec VECTOR SVS "${#args[@]}" "${args[@]}" > /dev/null
       ;;
     *)
       echo "Unknown ALGO=$ALGO"; exit 1 ;;
   esac
 
-  # Wait for backfill to complete
-  for _ in $(seq 1 600); do
-    local indexing
-    indexing=$("$VALKEY_CLI" -p "$PORT" INFO 2>/dev/null | grep -oP "search_number_of_active_indexes_indexing:\K[0-9]+" || echo "0")
-    if [ "${indexing:-0}" = "0" ]; then
+  # Wait for backfill/training to complete
+  for _ in $(seq 1 1800); do
+    local backfill
+    backfill=$("$VALKEY_CLI" -p "$PORT" FT.INFO idx 2>/dev/null | awk '/^backfill_in_progress$/{getline; print; exit}' || true)
+    local state
+    state=$("$VALKEY_CLI" -p "$PORT" FT.INFO idx 2>/dev/null | awk '/^state$/{getline; print; exit}' || true)
+    if [ "$backfill" = "0" ] && [ "$state" = "ready" ]; then
       sleep 2
       return 0
     fi

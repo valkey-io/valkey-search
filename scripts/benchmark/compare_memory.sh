@@ -85,7 +85,7 @@ run_measurement() {
   local label="$1"    # e.g. "before" or "after"
   local module="$2"   # path to libsearch.so
   local svs_lib="$3"  # directory with libsvs_runtime.so
-  local algo="$4"     # svs_fp32 | svs_lvq4x8
+  local algo="$4"     # hnsw | svs_fp32 | svs_lvq4x8 | svs_leanvec*
   local valkey_server="$5"
   local valkey_cli="$6"
   local outdir="$WORKDIR/results_${label}"
@@ -115,37 +115,59 @@ run_measurement() {
 import redis, numpy as np
 r = redis.Redis(port=$PORT, decode_responses=False)
 np.random.seed(1)
+algo = "$algo"
+is_leanvec = algo.startswith("svs_leanvec")
+threshold = 10000
+batch = 1000
+if is_leanvec:
+    for i in range(min($N, threshold)):
+        v = np.random.rand($DIM).astype(np.float32).tobytes()
+        r.hset(f"doc:{i}", "vec", v)
+    start = threshold
+    print(f"  [${label}/${algo}] loaded {min($N, threshold)} hashes (non-pipelined, LeanVec training)")
+else:
+    start = 0
 pipe = r.pipeline(transaction=False)
-for i in range($N):
+for i in range(start, $N):
     v = np.random.rand($DIM).astype(np.float32).tobytes()
     pipe.hset(f"doc:{i}", "vec", v)
-    if (i+1) % 1000 == 0: pipe.execute()
+    if (i+1) % batch == 0: pipe.execute()
 pipe.execute()
-print(f"  [${label}/${algo}] loaded {$N} hashes")
+print(f"  [${label}/${algo}] loaded {$N} hashes total")
 PYEOF
 
   # Create index
   case "$algo" in
-    svs_fp32)
+    hnsw)
       "$valkey_cli" -p "$PORT" FT.CREATE idx ON HASH PREFIX 1 doc: SCHEMA \
-        vec VECTOR SVS 12 TYPE FLOAT32 DIM "$DIM" \
-        DISTANCE_METRIC L2 GRAPH_MAX_DEGREE 32 \
-        CONSTRUCTION_WINDOW_SIZE 128 SEARCH_WINDOW_SIZE 50 > /dev/null
+        vec VECTOR HNSW 10 TYPE FLOAT32 DIM "$DIM" \
+        DISTANCE_METRIC L2 M 16 EF_CONSTRUCTION 128 > /dev/null
       ;;
-    svs_lvq4x8)
+    svs_*)
+      local args=(TYPE FLOAT32 DIM "$DIM" DISTANCE_METRIC L2
+                  GRAPH_MAX_DEGREE 32 CONSTRUCTION_WINDOW_SIZE 128
+                  SEARCH_WINDOW_SIZE 50)
+      case "$algo" in
+        svs_fp32) ;;
+        svs_lvq4x8) args+=(COMPRESSION LVQ4X8) ;;
+        svs_leanvec*)
+          local comp="${algo#svs_leanvec}"
+          args+=(COMPRESSION "LEANVEC${comp^^}"
+                 LEANVEC_DIMS "$((DIM / 4))"
+                 LEANVEC_TRAINING_THRESHOLD 10000) ;;
+      esac
       "$valkey_cli" -p "$PORT" FT.CREATE idx ON HASH PREFIX 1 doc: SCHEMA \
-        vec VECTOR SVS 14 TYPE FLOAT32 DIM "$DIM" \
-        DISTANCE_METRIC L2 GRAPH_MAX_DEGREE 32 \
-        CONSTRUCTION_WINDOW_SIZE 128 SEARCH_WINDOW_SIZE 50 \
-        COMPRESSION LVQ4X8 > /dev/null
+        vec VECTOR SVS "${#args[@]}" "${args[@]}" > /dev/null
       ;;
   esac
 
-  # Wait for backfill
-  for _ in $(seq 1 600); do
+  # Wait for backfill/training to complete
+  for _ in $(seq 1 1800); do
+    local backfill
+    backfill=$("$valkey_cli" -p "$PORT" FT.INFO idx 2>/dev/null | awk '/^backfill_in_progress$/{getline; print; exit}' || true)
     local state
-    state=$("$valkey_cli" -p "$PORT" FT.INFO idx 2>/dev/null | awk '/^state$/{getline; print}' || true)
-    if [ "$state" = "ready" ]; then
+    state=$("$valkey_cli" -p "$PORT" FT.INFO idx 2>/dev/null | awk '/^state$/{getline; print; exit}' || true)
+    if [ "$backfill" = "0" ] && [ "$state" = "ready" ]; then
       sleep 2
       break
     fi
@@ -282,7 +304,7 @@ echo "[4/5] Running measurements..."
 rm -f "$WORKDIR/results.csv"
 echo "label,algo,vmrss_kb,used_memory_bytes" > "$WORKDIR/results.csv"
 
-for algo in svs_fp32 svs_lvq4x8; do
+for algo in hnsw svs_fp32 svs_lvq4x8 svs_leanvec4x4 svs_leanvec4x8 svs_leanvec8x8; do
   echo ""
   echo "  --- BEFORE ($BEFORE_REF) / $algo ---"
   run_measurement "before" "$BEFORE_BUILD/libsearch.so" "$SVS_LIB_BEFORE" "$algo" "$VALKEY_SERVER" "$VALKEY_CLI"
@@ -296,14 +318,15 @@ done
 echo ""
 echo "[5/5] Comparison (VmRSS is the authoritative metric):"
 echo ""
-printf "%-12s | %12s | %12s | %10s | %16s | %16s | %10s\n" \
+printf "%-16s | %12s | %12s | %10s | %16s | %16s | %10s\n" \
   "Config" "Before VmRSS" "After VmRSS" "RSS Delta" "Before used_mem" "After used_mem" "heap Delta"
-printf "%-12s-+-%12s-+-%12s-+-%10s-+-%16s-+-%16s-+-%10s\n" \
-  "------------" "------------" "------------" "----------" "----------------" "----------------" "----------"
+printf "%-16s-+-%12s-+-%12s-+-%10s-+-%16s-+-%16s-+-%10s\n" \
+  "----------------" "------------" "------------" "----------" "----------------" "----------------" "----------"
 
 PASS=true
+declare -A AFTER_RSS_KB_MAP
 
-for algo in svs_fp32 svs_lvq4x8; do
+for algo in hnsw svs_fp32 svs_lvq4x8 svs_leanvec4x4 svs_leanvec4x8 svs_leanvec8x8; do
   B_LINE=$(grep "^before,${algo}," "$WORKDIR/results.csv" | tail -1)
   A_LINE=$(grep "^after,${algo}," "$WORKDIR/results.csv" | tail -1)
 
@@ -311,6 +334,8 @@ for algo in svs_fp32 svs_lvq4x8; do
   A_RSS_KB=$(echo "$A_LINE" | cut -d, -f3)
   B_USED=$(echo "$B_LINE" | cut -d, -f4)
   A_USED=$(echo "$A_LINE" | cut -d, -f4)
+
+  AFTER_RSS_KB_MAP["$algo"]="$A_RSS_KB"
 
   DELTA_RSS_MIB=$(( (A_RSS_KB - B_RSS_KB) / 1024 ))
   DELTA_USED_MIB=$(( (A_USED - B_USED) / 1048576 ))
@@ -320,23 +345,43 @@ for algo in svs_fp32 svs_lvq4x8; do
   B_USED_MIB=$((B_USED / 1048576))
   A_USED_MIB=$((A_USED / 1048576))
 
-  printf "%-12s | %9s MiB | %9s MiB | %7s MiB | %13s MiB | %13s MiB | %7s MiB\n" \
+  printf "%-16s | %9s MiB | %9s MiB | %7s MiB | %13s MiB | %13s MiB | %7s MiB\n" \
     "$algo" "$B_RSS_MIB" "$A_RSS_MIB" "$DELTA_RSS_MIB" \
     "$B_USED_MIB" "$A_USED_MIB" "$DELTA_USED_MIB"
 
-  # Sanity gate: expect at least 250 MiB RSS reduction at 100K×768d
-  if [ "$DELTA_RSS_MIB" -gt -250 ]; then
+  # Sanity gate: expect at least 250 MiB RSS reduction for SVS configs
+  # HNSW is a reference baseline — no expected reduction between builds
+  if [ "$algo" != "hnsw" ] && [ "$DELTA_RSS_MIB" -gt -250 ]; then
     echo "  WARNING: $algo VmRSS reduction ($DELTA_RSS_MIB MiB) is less than expected (-250 MiB)"
     PASS=false
   fi
 done
+
+# Ordering check: expect HNSW <= LEANVEC4X4 <= LEANVEC4X8 <= LEANVEC8X8 <= LVQ4X8 <= SVS_FP32
+echo ""
+echo "Ordering check (after-build RSS):"
+EXPECTED_ORDER=(hnsw svs_leanvec4x4 svs_leanvec4x8 svs_leanvec8x8 svs_lvq4x8 svs_fp32)
+prev_algo=""
+prev_rss=0
+for algo in "${EXPECTED_ORDER[@]}"; do
+  rss="${AFTER_RSS_KB_MAP[$algo]:-0}"
+  if [ "$prev_algo" != "" ] && [ "$rss" -lt "$prev_rss" ]; then
+    echo "  WARNING: $algo (${rss} KB) < $prev_algo (${prev_rss} KB) — unexpected ordering"
+    PASS=false
+  fi
+  prev_algo="$algo"
+  prev_rss="$rss"
+done
+if [ "$PASS" = true ]; then
+  echo "  OK: RSS ordering matches expected progression"
+fi
 
 echo ""
 echo "Smaps reports:"
 ls "$WORKDIR"/results_*/*_smaps.txt 2>/dev/null
 echo ""
 echo "Heap breakdown (before vs after):"
-for algo in svs_fp32 svs_lvq4x8; do
+for algo in hnsw svs_fp32 svs_lvq4x8 svs_leanvec4x4 svs_leanvec4x8 svs_leanvec8x8; do
   echo "  --- $algo ---"
   echo "  BEFORE heap:"
   grep "heap" "$WORKDIR/results_before/${algo}_smaps.txt" 2>/dev/null || echo "    (not found)"

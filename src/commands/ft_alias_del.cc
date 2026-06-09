@@ -26,26 +26,33 @@ absl::Status FTAliasDelCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   }
   auto alias = vmsdk::ToStringView(argv[1]);
 
+  // Reject early if inside MULTI/EXEC in CME mode to avoid local mutation
+  // without fanout.
+  const bool inside_multi_exec = vmsdk::MultiOrLua(ctx);
+  if (ABSL_PREDICT_FALSE(inside_multi_exec &&
+                         ValkeySearch::Instance().IsCluster() &&
+                         ValkeySearch::Instance().UsingCoordinator())) {
+    return absl::InvalidArgumentError(
+        "MULTI/EXEC or Lua script are not supported in CME mode.");
+  }
+
   VMSDK_RETURN_IF_ERROR(SchemaManager::Instance().RemoveAlias(
       ValkeyModule_GetSelectedDb(ctx), alias));
 
   // Cluster consistency check — wait for alias deletion to propagate.
   const bool is_loading =
       ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_LOADING;
-  const bool inside_multi_exec = vmsdk::MultiOrLua(ctx);
   if (ValkeySearch::Instance().IsCluster() &&
-      ValkeySearch::Instance().UsingCoordinator() && !is_loading &&
-      !inside_multi_exec) {
-    unsigned timeout_ms = options::GetFTInfoTimeoutMs().GetValue();
-    auto op = new AliasRemovedConsistencyCheckFanoutOperation(
-        ValkeyModule_GetSelectedDb(ctx), std::string(alias), timeout_ms);
-    op->StartOperation(ctx);
-  } else {
-    if (is_loading || inside_multi_exec) {
-      VMSDK_LOG(NOTICE, nullptr) << "The server is loading AOF or inside "
-                                    "multi/exec or lua script, skip "
-                                    "fanout operation";
+      ValkeySearch::Instance().UsingCoordinator()) {
+    if (!is_loading) {
+      unsigned timeout_ms = options::GetFTInfoTimeoutMs().GetValue();
+      auto op = new AliasRemovedConsistencyCheckFanoutOperation(
+          ValkeyModule_GetSelectedDb(ctx), std::string(alias), timeout_ms);
+      op->StartOperation(ctx);
+    } else {
+      ValkeyModule_ReplyWithSimpleString(ctx, "OK");
     }
+  } else {
     ValkeyModule_ReplyWithSimpleString(ctx, "OK");
   }
 

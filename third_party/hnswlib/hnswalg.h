@@ -860,10 +860,10 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       VMSDK_ASSIGN_OR_RETURN(auto chunk, input.LoadChunk());
       memcpy((*data_level0_memory_)[i], chunk->data(), size_links_level0_);
       labeltype id;
-      memcpy((char *)&id, chunk->data() + offsetData_ + vector_size_,
+      memcpy((char *)&id, chunk->data() + size_links_level0_ + vector_size_,
              sizeof(labeltype));
       *(char **)((*data_level0_memory_)[i] + offsetData_) =
-          vector_tracker->TrackVector(id, chunk->data() + offsetData_,
+          vector_tracker->TrackVector(id, chunk->data() + size_links_level0_,
                                       vector_size_);
       memcpy((*data_level0_memory_)[i] + label_offset_, (char *)&id,
              sizeof(labeltype));

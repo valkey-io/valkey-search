@@ -179,6 +179,13 @@ class SchemaManager {
   void RemoveFromReverseAliasMap(uint32_t db_num, absl::string_view index_name,
                                  absl::string_view alias)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
+  // Consolidated helpers that update both forward and reverse alias maps.
+  void InsertAliasMaps(uint32_t db_num, absl::string_view alias,
+                       absl::string_view index_name)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
+  void EraseAliasMaps(uint32_t db_num, absl::string_view alias,
+                      absl::string_view index_name)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
 
   absl::Status CreateIndexSchemaInternal(
       ValkeyModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto)

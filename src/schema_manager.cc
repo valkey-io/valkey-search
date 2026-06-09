@@ -315,8 +315,12 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> SchemaManager::GetIndexSchema(
 void SchemaManager::AddToReverseAliasMap(uint32_t db_num,
                                          absl::string_view index_name,
                                          absl::string_view alias) {
-  db_to_index_to_aliases_[db_num][std::string(index_name)].insert(
-      std::string(alias));
+  auto [unused, inserted] =
+      db_to_index_to_aliases_[db_num][std::string(index_name)].insert(
+          std::string(alias));
+  CHECK(inserted) << "Alias '" << alias
+                  << "' already in reverse map for index '" << index_name
+                  << "' in db " << db_num;
 }
 
 void SchemaManager::RemoveFromReverseAliasMap(uint32_t db_num,
@@ -332,6 +336,24 @@ void SchemaManager::RemoveFromReverseAliasMap(uint32_t db_num,
   }
   if (rev_db_it->second.empty()) {
     db_to_index_to_aliases_.erase(rev_db_it);
+  }
+}
+
+void SchemaManager::InsertAliasMaps(uint32_t db_num, absl::string_view alias,
+                                    absl::string_view index_name) {
+  db_to_aliases_[db_num][std::string(alias)] = std::string(index_name);
+  AddToReverseAliasMap(db_num, index_name, alias);
+}
+
+void SchemaManager::EraseAliasMaps(uint32_t db_num, absl::string_view alias,
+                                   absl::string_view index_name) {
+  RemoveFromReverseAliasMap(db_num, index_name, alias);
+  auto db_alias_it = db_to_aliases_.find(db_num);
+  if (db_alias_it != db_to_aliases_.end()) {
+    db_alias_it->second.erase(alias);
+    if (db_alias_it->second.empty()) {
+      db_to_aliases_.erase(db_alias_it);
+    }
   }
 }
 
@@ -351,8 +373,7 @@ absl::Status SchemaManager::AddAliasInternal(uint32_t db_num,
   if (!LookupInternal(db_num, index_name).ok()) {
     return GenerateIndexNotFoundError(db_num, index_name);
   }
-  db_to_aliases_[db_num][std::string(alias)] = std::string(index_name);
-  AddToReverseAliasMap(db_num, index_name, alias);
+  InsertAliasMaps(db_num, alias, index_name);
   return absl::OkStatus();
 }
 
@@ -403,13 +424,10 @@ absl::Status SchemaManager::RemoveAliasInternal(uint32_t db_num,
   auto db_alias_it = db_to_aliases_.find(db_num);
   if (db_alias_it == db_to_aliases_.end() ||
       !db_alias_it->second.contains(alias)) {
-    // Matches RediSearch error message for unknown alias.
     return absl::NotFoundError("Alias does not exist");
   }
-  // Remove from reverse map before erasing from forward map.
   auto alias_it = db_alias_it->second.find(alias);
-  RemoveFromReverseAliasMap(db_num, alias_it->second, alias);
-  db_alias_it->second.erase(alias_it);
+  EraseAliasMaps(db_num, alias, alias_it->second);
   return absl::OkStatus();
 }
 
@@ -452,8 +470,7 @@ absl::Status SchemaManager::UpdateAliasInternal(uint32_t db_num,
   }
   // ALIASUPDATE is an upsert: creates the alias if absent, reassigns if
   // present.
-  db_to_aliases_[db_num][std::string(alias)] = std::string(index_name);
-  AddToReverseAliasMap(db_num, index_name, alias);
+  InsertAliasMaps(db_num, alias, index_name);
   return absl::OkStatus();
 }
 
@@ -732,8 +749,7 @@ absl::Status SchemaManager::OnAliasMetadataCallback(
         << "; alias will be installed on next reconciliation";
     return absl::OkStatus();
   }
-  db_to_aliases_[db_num][alias] = index_name;
-  AddToReverseAliasMap(db_num, index_name, alias);
+  InsertAliasMaps(db_num, alias, index_name);
   return absl::OkStatus();
 }
 
@@ -1136,8 +1152,7 @@ absl::Status SchemaManager::LoadAliasMap(
   // is missing, GetIndexSchema will return not-found naturally. This removes
   // the ordering dependency between INDEX_SCHEMA and GLOBAL_METADATA sections.
   for (const auto &entry : alias_map_proto.entries()) {
-    db_to_aliases_[entry.db_num()][entry.alias()] = entry.index_name();
-    AddToReverseAliasMap(entry.db_num(), entry.index_name(), entry.alias());
+    InsertAliasMaps(entry.db_num(), entry.alias(), entry.index_name());
   }
   return absl::OkStatus();
 }

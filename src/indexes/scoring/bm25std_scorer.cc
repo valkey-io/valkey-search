@@ -18,15 +18,6 @@ namespace valkey_search::indexes::scoring {
 
 namespace {
 
-// std::isinf is unreliable under -ffast-math; detect by IEEE 754 bits.
-bool IsInf(float f) {
-  static constexpr uint32_t kExponentMask = 0x7F800000U;
-  static constexpr uint32_t kMantissaMask = 0x007FFFFFU;
-  uint32_t bits;
-  std::memcpy(&bits, &f, sizeof(bits));
-  return (bits & kExponentMask) == kExponentMask && (bits & kMantissaMask) == 0;
-}
-
 float Idf(uint32_t total_docs, uint32_t num_doc_contain_term) {
   CHECK_LE(num_doc_contain_term, total_docs);
   const float n = static_cast<float>(total_docs);

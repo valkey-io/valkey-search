@@ -15,6 +15,10 @@
 
 namespace valkey_search::indexes::scoring {
 
+// std::isinf is unreliable under -ffast-math (which this code is built with);
+// detect ±inf by IEEE 754 bit pattern instead.
+bool IsInf(float f);
+
 enum class ScorerType {
   kBm25Std,
   kTfidf,

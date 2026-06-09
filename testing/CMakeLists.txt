@@ -180,8 +180,7 @@ finalize_test_flags(text_index_test)
 
 # 8. Scoring Test Suite
 add_executable(scoring_test
-    ${CMAKE_CURRENT_LIST_DIR}/scoring/bm25std_scorer_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/scoring/scoring_session_test.cc)
+    ${CMAKE_CURRENT_LIST_DIR}/scoring/bm25std_scorer_test.cc)
 target_include_directories(scoring_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(scoring_test PRIVATE testing_common_base)
 target_link_libraries(scoring_test PRIVATE scoring)

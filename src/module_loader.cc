@@ -79,6 +79,15 @@ vmsdk::module::Options options = {
                     &vmsdk::CreateCommand<valkey_search::FTAliasUpdateCmd>,
             },
             {
+                .cmd_name = valkey_search::kAliasListCommand,
+                .permissions = ACLPermissionFormatter(
+                    valkey_search::kAliasListCmdPermissions),
+                .flags = {vmsdk::module::kReadOnlyFlag,
+                          vmsdk::module::kFastFlag},
+                .cmd_func =
+                    &vmsdk::CreateCommand<valkey_search::FTAliasListCmd>,
+            },
+            {
                 .cmd_name = valkey_search::kInfoCommand,
                 .permissions =
                     ACLPermissionFormatter(valkey_search::kInfoCmdPermissions),

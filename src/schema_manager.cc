@@ -383,9 +383,8 @@ absl::Status SchemaManager::AddAlias(uint32_t db_num, absl::string_view alias,
     return absl::InvalidArgumentError("Alias name must not contain null bytes");
   }
   if (coordinator_enabled_) {
-    auto existing =
-        coordinator::MetadataManager::Instance().GetEntryContent(
-            kAliasMetadataTypeName, coordinator::ObjName(db_num, alias));
+    auto existing = coordinator::MetadataManager::Instance().GetEntryContent(
+        kAliasMetadataTypeName, coordinator::ObjName(db_num, alias));
     if (existing.ok()) {
       // Idempotent retry: alias already committed to this index.
       coordinator::AliasEntry existing_entry;
@@ -452,8 +451,7 @@ absl::Status SchemaManager::UpdateAliasInternal(uint32_t db_num,
                                                 absl::string_view alias,
                                                 absl::string_view index_name) {
   if (alias != index_name && LookupInternal(db_num, alias).ok()) {
-    return absl::AlreadyExistsError(
-        "Alias collides with existing index name");
+    return absl::AlreadyExistsError("Alias collides with existing index name");
   }
   // Use find() to avoid default-inserting an empty map for db_num.
   auto db_alias_it = db_to_aliases_.find(db_num);
@@ -638,6 +636,20 @@ std::vector<std::string> SchemaManager::GetAliasesForIndex(
     auto rev_idx_it = rev_db_it->second.find(index_name);
     if (rev_idx_it != rev_db_it->second.end()) {
       result.assign(rev_idx_it->second.begin(), rev_idx_it->second.end());
+    }
+  }
+  std::sort(result.begin(), result.end());
+  return result;
+}
+
+std::vector<std::pair<std::string, std::string>> SchemaManager::GetAllAliases(
+    uint32_t db_num) const {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  std::vector<std::pair<std::string, std::string>> result;
+  auto db_alias_it = db_to_aliases_.find(db_num);
+  if (db_alias_it != db_to_aliases_.end()) {
+    for (const auto &[alias, index_name] : db_alias_it->second) {
+      result.emplace_back(alias, index_name);
     }
   }
   std::sort(result.begin(), result.end());

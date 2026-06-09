@@ -1,0 +1,15 @@
+{
+    "FT.ALIASLIST": {
+        "acl_categories": [
+            "FAST",
+            "READ",
+            "SEARCH"
+        ],
+        "arguments": [],
+        "arity": 1,
+        "complexity": "O(N) where N is the number of aliases",
+        "group": "search",
+        "module_since": "1.3.0",
+        "summary": "List all aliases in the current database"
+    }
+}

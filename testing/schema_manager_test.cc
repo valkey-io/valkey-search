@@ -1172,7 +1172,8 @@ TEST_F(SchemaManagerCoordinatorAliasTest, CoordAddAliasDuplicate) {
       SchemaManager::Instance().AddAlias(kDb0, "dup_alias", kIndexName));
 }
 
-TEST_F(SchemaManagerCoordinatorAliasTest, CoordAddAliasDuplicateDifferentIndex) {
+TEST_F(SchemaManagerCoordinatorAliasTest,
+       CoordAddAliasDuplicateDifferentIndex) {
   VMSDK_EXPECT_OK(
       SchemaManager::Instance().AddAlias(kDb0, "dup_alias", kIndexName));
   // Same alias pointing to a *different* index is a genuine conflict.

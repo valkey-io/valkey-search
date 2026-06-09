@@ -75,6 +75,9 @@ class SchemaManager {
   std::vector<std::string> GetAliasesForIndex(
       uint32_t db_num, absl::string_view index_name) const
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
+  // Returns all alias→index_name mappings for the given DB, sorted by alias.
+  std::vector<std::pair<std::string, std::string>> GetAllAliases(
+      uint32_t db_num) const ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
   // TODO Investigate storing aggregated counters to optimize stats
   // generation.
   uint64_t GetNumberOfIndexSchemas() const;

@@ -319,3 +319,46 @@ class TestFTAliasClusterPropagation(ValkeySearchClusterTestCase):
         with pytest.raises(ResponseError) as exc_info:
             node0.execute_command("FT.ALIASDEL", "no_such_alias")
         assert "Alias does not exist" in str(exc_info.value)
+
+    def test_aliasadd_nonexistent_index_cluster(self):
+        """FT.ALIASADD for a non-existent index returns an error in cluster mode."""
+        node0 = self.new_client_for_primary(0)
+        with pytest.raises(ResponseError) as exc_info:
+            node0.execute_command("FT.ALIASADD", ALIAS_NAME, "no_such_index")
+        assert "no_such_index" in str(exc_info.value)
+
+    def test_aliasadd_alias_to_alias_cluster(self):
+        """FT.ALIASADD pointing to an existing alias returns an error in cluster mode."""
+        node0 = self.new_client_for_primary(0)
+        assert node0.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        self._wait_for_index_on_all_nodes(INDEX_NAME)
+
+        assert node0.execute_command(
+            "FT.ALIASADD", ALIAS_NAME, INDEX_NAME
+        ) == b"OK"
+        with pytest.raises(ResponseError) as exc_info:
+            node0.execute_command("FT.ALIASADD", "alias2", ALIAS_NAME)
+        assert "Unknown index name or name is an alias" in str(exc_info.value)
+
+    def test_aliasupdate_nonexistent_index_cluster(self):
+        """FT.ALIASUPDATE for a non-existent index returns an error in cluster mode."""
+        node0 = self.new_client_for_primary(0)
+        with pytest.raises(ResponseError) as exc_info:
+            node0.execute_command(
+                "FT.ALIASUPDATE", ALIAS_NAME, "no_such_index"
+            )
+        assert "no_such_index" in str(exc_info.value)
+
+    def test_aliasupdate_collides_with_index_name_cluster(self):
+        """FT.ALIASUPDATE rejects alias that shadows an existing index in cluster."""
+        node0 = self.new_client_for_primary(0)
+        assert node0.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        assert node0.execute_command(*CREATE_TAG_INDEX_2) == b"OK"
+        self._wait_for_index_on_all_nodes(INDEX_NAME)
+        self._wait_for_index_on_all_nodes(INDEX_NAME_2)
+
+        with pytest.raises(ResponseError) as exc_info:
+            node0.execute_command(
+                "FT.ALIASUPDATE", INDEX_NAME, INDEX_NAME_2
+            )
+        assert "Alias collides with existing index name" in str(exc_info.value)

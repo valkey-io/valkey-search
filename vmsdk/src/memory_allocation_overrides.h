@@ -142,9 +142,9 @@ struct RawSystemAllocator {
     return static_cast<T*>(__real_malloc(n * sizeof(T)));
   }
   // NOLINTNEXTLINE
-  void deallocate(T* p, std::size_t) {
+  void deallocate(T* p, std::size_t n) {
     if constexpr (!std::is_same_v<Tag, DisableRawSystemAllocatorReporting>) {
-      ReportFreeMemorySize(sizeof(T));
+      ReportFreeMemorySize(n * sizeof(T));
     }
     __real_free(p);
   }

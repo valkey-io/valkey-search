@@ -397,7 +397,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                      .expect_return_failure = false,
                      .expected_output =
-                         "*36\r\n+index_name\r\n+test_name\r\n+index_"
+                         "*44\r\n+index_name\r\n+test_name\r\n+index_"
                          "definition\r\n*8\r\n+key_type\r\n+HASH\r\n+"
                          "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n"
                          "1\r\n+score_field\r\n+\r\n+attributes\r\n*"
@@ -409,6 +409,10 @@ INSTANTIATE_TEST_SUITE_P(
                          "num_records\r\n:"
                          "0\r\n+total_term_occurrences\r\n:0\r\n+num_terms\r\n:"
                          "0\r\n+"
+                         "text_postings_memory_bytes\r\n:0\r\n+"
+                         "text_position_memory_bytes\r\n:0\r\n+"
+                         "text_rax_tree_memory_bytes\r\n:0\r\n+"
+                         "text_index_total_memory_bytes\r\n:0\r\n+"
                          "hash_indexing_failures\r\n$1\r\n0\r\n+backfill_in_"
                          "progress\r\n$1\r\n0\r\n+backfill_complete_"
                          "percent\r\n$8\r\n1.000000\r\n+mutation_queue_"
@@ -450,7 +454,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                      .expect_return_failure = false,
                      .expected_output =
-                         "*36\r\n+index_name\r\n+test_name\r\n+index_"
+                         "*44\r\n+index_name\r\n+test_name\r\n+index_"
                          "definition\r\n*8\r\n+key_type\r\n+HASH\r\n+"
                          "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n"
                          "1\r\n+score_field\r\n+\r\n+attributes\r\n*"
@@ -462,6 +466,10 @@ INSTANTIATE_TEST_SUITE_P(
                          "num_records\r\n:"
                          "0\r\n+total_term_occurrences\r\n:0\r\n+num_terms\r\n:"
                          "0\r\n+"
+                         "text_postings_memory_bytes\r\n:0\r\n+"
+                         "text_position_memory_bytes\r\n:0\r\n+"
+                         "text_rax_tree_memory_bytes\r\n:0\r\n+"
+                         "text_index_total_memory_bytes\r\n:0\r\n+"
                          "hash_indexing_failures\r\n$1\r\n0\r\n+backfill_in_"
                          "progress\r\n$1\r\n0\r\n+backfill_complete_"
                          "percent\r\n$8\r\n1.000000\r\n+mutation_queue_"

@@ -14,6 +14,7 @@
 #include "absl/log/check.h"
 #include "src/index_schema.h"
 #include "src/indexes/text/flat_position_map.h"
+#include "vmsdk/src/memory_tracker.h"
 
 namespace valkey_search::indexes::text {
 
@@ -61,7 +62,8 @@ void Postings::InsertKey(const Key& key, FlatPositionMap* flat_map) {
 }
 
 // Remove a document key and all its positions
-void Postings::RemoveKey(const Key& key, TextIndexMetadata* metadata) {
+void Postings::RemoveKey(const Key& key, TextIndexMetadata* metadata,
+                         MemoryPool* position_pool) {
   auto node = key_to_positions_.extract(key);
   if (node.empty()) return;
 
@@ -75,7 +77,12 @@ void Postings::RemoveKey(const Key& key, TextIndexMetadata* metadata) {
   metadata->total_term_frequency -= term_frequency;
 
   // Destroy and remove from map
-  FlatPositionMap::Destroy(flat_map);
+  if (position_pool) {
+    IsolatedMemoryScope pos_scope(*position_pool);
+    FlatPositionMap::Destroy(flat_map);
+  } else {
+    FlatPositionMap::Destroy(flat_map);
+  }
 }
 
 // Get total number of document keys

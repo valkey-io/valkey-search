@@ -493,7 +493,7 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
 
         data_set = next_data_set
 
-    # Replay alias setup commands without counting them in the pass/fail tally.
+    # Replay alias commands via primary 0 (can't be slot-routed by cluster client).
     if _is_alias_management_cmd(expected["cmd"]):
         try:
             # Route to primary 0 — cluster client can't slot FT.ALIAS* commands.

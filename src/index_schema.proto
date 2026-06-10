@@ -121,6 +121,11 @@ enum SVSCompressionType {
   SVS_COMPRESSION_LEANVEC8X8 = 8;
 }
 
+enum RawVectorStorage {
+  RAW_VECTOR_STORAGE_KEEP = 0;
+  RAW_VECTOR_STORAGE_DROP = 1;
+}
+
 message HNSWAlgorithm {
   uint32 m = 1;
   uint32 ef_construction = 2;
@@ -143,5 +148,8 @@ message SVSVamanaAlgorithm {
   // Number of vectors to accumulate before training the LeanVec matrices
   // and building the index. Only used for LEANVEC* compression.
   uint32 leanvec_training_threshold = 7;
+  // KEEP (default): retain intern store for exact vector retrieval.
+  // DROP: skip intern store, use SVS native reconstruct/get_distance APIs.
+  RawVectorStorage raw_vector_storage = 8;
 }
 

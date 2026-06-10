@@ -52,6 +52,7 @@ constexpr absl::string_view kCompressionParam{"COMPRESSION"};
 constexpr absl::string_view kLeanVecDimsParam{"LEANVEC_DIMS"};
 constexpr absl::string_view kLeanVecTrainingThresholdParam{
     "LEANVEC_TRAINING_THRESHOLD"};
+constexpr absl::string_view kRawVectorStorageParam{"RAW_VECTOR_STORAGE"};
 constexpr absl::string_view kDimensionsParam{"DIM"};
 constexpr absl::string_view kDistanceMetricParam{"DISTANCE_METRIC"};
 constexpr absl::string_view kDataTypeParam{"TYPE"};
@@ -240,6 +241,12 @@ const absl::NoDestructor<
         {"LEANVEC8X8", data_model::SVS_COMPRESSION_LEANVEC8X8},
     });
 const absl::NoDestructor<
+    absl::flat_hash_map<absl::string_view, data_model::RawVectorStorage>>
+    kRawVectorStorageByStr({
+        {"KEEP", data_model::RAW_VECTOR_STORAGE_KEEP},
+        {"DROP", data_model::RAW_VECTOR_STORAGE_DROP},
+    });
+const absl::NoDestructor<
     absl::flat_hash_map<absl::string_view, data_model::AttributeDataType>>
     kOnDataTypeByStr({{"HASH", data_model::ATTRIBUTE_DATA_TYPE_HASH},
                       {"JSON", data_model::ATTRIBUTE_DATA_TYPE_JSON}});
@@ -397,6 +404,10 @@ vmsdk::KeyValueParser<SVSParameters> CreateSVSParser() {
   parser.AddParamParser(
       kLeanVecTrainingThresholdParam,
       GENERATE_VALUE_PARSER(SVSParameters, leanvec_training_threshold));
+  parser.AddParamParser(
+      kRawVectorStorageParam,
+      GENERATE_ENUM_PARSER(SVSParameters, raw_vector_storage,
+                           *kRawVectorStorageByStr));
   return parser;
 }
 absl::Status ParseVector(vmsdk::ArgsIterator &itr,
@@ -959,6 +970,7 @@ std::unique_ptr<data_model::VectorIndex> SVSParameters::ToProto() const {
   svs_algorithm_proto->set_leanvec_dims(leanvec_dims);
   svs_algorithm_proto->set_leanvec_training_threshold(
       leanvec_training_threshold);
+  svs_algorithm_proto->set_raw_vector_storage(raw_vector_storage);
   vector_index_proto->set_allocated_svs_vamana_algorithm(
       svs_algorithm_proto.release());
   return vector_index_proto;

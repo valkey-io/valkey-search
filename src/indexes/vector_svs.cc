@@ -180,6 +180,10 @@ absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::Create(
       config.leanvec_training_threshold =
           svs_params.leanvec_training_threshold();
     }
+    if (svs_params.raw_vector_storage() ==
+        data_model::RAW_VECTOR_STORAGE_DROP) {
+      config.drop_intern_store = true;
+    }
   }
 
   // SVS requires alpha <= 1.0 for MIP/Cosine distance metrics.
@@ -762,6 +766,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorSVS<T>::Search(
 template <typename T>
 void VectorSVS<T>::TrackVector(uint64_t internal_id,
                                 const InternedStringPtr& vector) {
+  if (build_config_.drop_intern_store) return;
   absl::MutexLock lock(&tracked_vectors_mutex_);
   tracked_vectors_[internal_id] = vector;
 }
@@ -769,6 +774,23 @@ void VectorSVS<T>::TrackVector(uint64_t internal_id,
 template <typename T>
 bool VectorSVS<T>::IsVectorMatch(uint64_t internal_id,
                                   const InternedStringPtr& vector) {
+  if (build_config_.drop_intern_store) {
+    absl::ReaderMutexLock lock(&index_mutex_);
+    if (index_state_ != SVSIndexState::kReady || svs_index_ == nullptr) {
+      for (const auto& p : pending_buffer_) {
+        if (p.internal_id == internal_id) {
+          return absl::string_view(p.data.data(), p.data.size()) ==
+                 vector->Str();
+        }
+      }
+      return false;
+    }
+    float dist = 0.0f;
+    auto status = svs_index_->get_distance(
+        static_cast<size_t>(internal_id),
+        reinterpret_cast<const float*>(vector->Str().data()), &dist);
+    return status.ok() && dist == 0.0f;
+  }
   absl::MutexLock lock(&tracked_vectors_mutex_);
   auto it = tracked_vectors_.find(internal_id);
   if (it == tracked_vectors_.end()) {
@@ -779,6 +801,7 @@ bool VectorSVS<T>::IsVectorMatch(uint64_t internal_id,
 
 template <typename T>
 void VectorSVS<T>::UnTrackVector(uint64_t internal_id) {
+  if (build_config_.drop_intern_store) return;
   absl::MutexLock lock(&tracked_vectors_mutex_);
   tracked_vectors_.erase(internal_id);
 }
@@ -807,6 +830,21 @@ VectorSVS<T>::ComputeDistanceFromRecordImpl(
   }
 
   // Fallback: vector is in pending_buffer_ (not yet flushed to SVS graph).
+  if (build_config_.drop_intern_store) {
+    absl::ReaderMutexLock lock(&index_mutex_);
+    for (const auto& p : pending_buffer_) {
+      if (p.internal_id == internal_id) {
+        auto dist = space_->get_dist_func()(
+            reinterpret_cast<const T*>(query.data()),
+            reinterpret_cast<const T*>(p.data.data()),
+            space_->get_dist_func_param());
+        return std::pair<float, hnswlib::labeltype>{dist, internal_id};
+      }
+    }
+    return absl::InternalError(
+        absl::StrCat("Couldn't find internal id: ", internal_id));
+  }
+
   absl::ReaderMutexLock lock(&tracked_vectors_mutex_);
   auto it = tracked_vectors_.find(internal_id);
   if (it == tracked_vectors_.end()) {
@@ -824,6 +862,23 @@ VectorSVS<T>::ComputeDistanceFromRecordImpl(
 
 template <typename T>
 char* VectorSVS<T>::GetValueImpl(uint64_t internal_id) const {
+  if (build_config_.drop_intern_store) {
+    thread_local std::vector<float> tl_buffer;
+    tl_buffer.resize(dimensions_);
+    absl::ReaderMutexLock lock(&index_mutex_);
+    if (index_state_ != SVSIndexState::kReady || svs_index_ == nullptr) {
+      for (const auto& p : pending_buffer_) {
+        if (p.internal_id == internal_id) {
+          return const_cast<char*>(p.data.data());
+        }
+      }
+      return nullptr;
+    }
+    size_t id = static_cast<size_t>(internal_id);
+    auto status = svs_index_->reconstruct_at(1, &id, tl_buffer.data());
+    if (!status.ok()) return nullptr;
+    return reinterpret_cast<char*>(tl_buffer.data());
+  }
   absl::ReaderMutexLock lock(&tracked_vectors_mutex_);
   auto it = tracked_vectors_.find(internal_id);
   if (it == tracked_vectors_.end()) {
@@ -856,6 +911,9 @@ void VectorSVS<T>::ToProtoImpl(
   svs_algo_proto->set_leanvec_dims(build_config_.leanvec_dims);
   svs_algo_proto->set_leanvec_training_threshold(
       build_config_.leanvec_training_threshold);
+  svs_algo_proto->set_raw_vector_storage(
+      build_config_.drop_intern_store ? data_model::RAW_VECTOR_STORAGE_DROP
+                                      : data_model::RAW_VECTOR_STORAGE_KEEP);
   vector_index_proto->set_allocated_svs_vamana_algorithm(
       svs_algo_proto.release());
 }
@@ -885,10 +943,11 @@ int VectorSVS<T>::RespondWithInfoImpl(ValkeyModuleCtx* ctx) const {
   }
 
   bool is_leanvec = IsLeanVecCompression(build_config_.compression);
-  // Base pairs: name, graph_max_degree, cws, sws, alpha, compression, state.
+  // Base pairs: name, graph_max_degree, cws, sws, alpha, compression, state,
+  // raw_vector_storage.
   // For LeanVec also: leanvec_dims, leanvec_training_threshold,
   // training_progress.
-  int n_pairs = is_leanvec ? 10 : 7;
+  int n_pairs = is_leanvec ? 11 : 8;
   ValkeyModule_ReplyWithArray(ctx, n_pairs * 2);
 
   ValkeyModule_ReplyWithSimpleString(ctx, "name");
@@ -912,6 +971,9 @@ int VectorSVS<T>::RespondWithInfoImpl(ValkeyModuleCtx* ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "state");
   ValkeyModule_ReplyWithSimpleString(
       ctx, state_snapshot == SVSIndexState::kStaging ? "training" : "ready");
+  ValkeyModule_ReplyWithSimpleString(ctx, "raw_vector_storage");
+  ValkeyModule_ReplyWithSimpleString(
+      ctx, build_config_.drop_intern_store ? "DROP" : "KEEP");
 
   if (is_leanvec) {
     ValkeyModule_ReplyWithSimpleString(ctx, "leanvec_dims");

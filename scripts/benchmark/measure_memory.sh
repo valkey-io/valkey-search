@@ -14,6 +14,7 @@
 #   PORT          — server port (default: 6399)
 #   LOGDIR        — output directory for snapshots (default: /tmp/mem_measure)
 #   ALGO          — algorithm config: svs_fp32 | svs_lvq4x8 | svs_leanvec4x4 | svs_leanvec4x8 | svs_leanvec8x8 | hnsw (default: svs_fp32)
+#   RAW_STORAGE   — KEEP or DROP (default: KEEP); only applies to SVS algorithms
 
 set -o pipefail
 
@@ -26,6 +27,7 @@ set -o pipefail
 : "${PORT:=6399}"
 : "${LOGDIR:=/tmp/mem_measure}"
 : "${ALGO:=svs_fp32}"
+: "${RAW_STORAGE:=KEEP}"
 : "${PYTHON:=python3}"
 
 mkdir -p "$LOGDIR"
@@ -134,6 +136,9 @@ create_index() {
                  LEANVEC_TRAINING_THRESHOLD 10000) ;;
         *) echo "Unknown SVS variant: $ALGO"; exit 1 ;;
       esac
+      if [ "$RAW_STORAGE" = "DROP" ]; then
+        args+=(RAW_VECTOR_STORAGE DROP)
+      fi
       "$VALKEY_CLI" -p "$PORT" FT.CREATE idx ON HASH PREFIX 1 doc: SCHEMA \
         vec VECTOR SVS "${#args[@]}" "${args[@]}" > /dev/null
       ;;

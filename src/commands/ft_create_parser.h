@@ -141,6 +141,8 @@ struct SVSParameters : public FTCreateVectorParameters {
   // Required (>0) when compression is one of LEANVEC*. Must be < dimensions.
   int leanvec_dims{0};
   int leanvec_training_threshold{kDefaultSVSLeanVecTrainingThreshold};
+  data_model::RawVectorStorage raw_vector_storage{
+      data_model::RAW_VECTOR_STORAGE_KEEP};
   absl::Status Verify() const;
   std::unique_ptr<data_model::VectorIndex> ToProto() const;
 };

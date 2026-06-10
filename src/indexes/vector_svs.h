@@ -55,6 +55,9 @@ struct SVSBuildConfig {
   // LeanVec-only: number of vectors to accumulate before training matrices
   // and constructing the index. Default 10000.
   size_t leanvec_training_threshold = 10000;
+  // When true, skip the intern store and use SVS native APIs for vector
+  // retrieval and distance computation.
+  bool drop_intern_store = false;
 };
 
 // True when the compression type uses LeanVec, which requires a training

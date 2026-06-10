@@ -62,7 +62,7 @@ namespace valkey_search::query {
 namespace {
 // Process-global count of live SearchParameters objects. See
 // GetSearchParametersInFlight() in the header for the rationale.
-std::atomic<int64_t>& SearchParametersInFlightCounter() {
+std::atomic<int64_t> &SearchParametersInFlightCounter() {
   static std::atomic<int64_t> counter{0};
   return counter;
 }
@@ -77,11 +77,11 @@ SearchParametersInFlightGuard::SearchParametersInFlightGuard() {
   SearchParametersInFlightCounter().fetch_add(1, std::memory_order_relaxed);
 }
 SearchParametersInFlightGuard::SearchParametersInFlightGuard(
-    const SearchParametersInFlightGuard&) {
+    const SearchParametersInFlightGuard &) {
   SearchParametersInFlightCounter().fetch_add(1, std::memory_order_relaxed);
 }
 SearchParametersInFlightGuard::SearchParametersInFlightGuard(
-    SearchParametersInFlightGuard&&) noexcept {
+    SearchParametersInFlightGuard &&) noexcept {
   SearchParametersInFlightCounter().fetch_add(1, std::memory_order_relaxed);
 }
 SearchParametersInFlightGuard::~SearchParametersInFlightGuard() {

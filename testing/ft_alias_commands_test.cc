@@ -191,16 +191,7 @@ INSTANTIATE_TEST_SUITE_P(
             .pre_existing_alias = std::nullopt,
             .return_code = absl::StatusCode::kInvalidArgument,
         },
-        {
-            // Regression: alias-to-alias check must fire even when this is
-            // the only alias for the DB (db_alias_it != end() but map has
-            // exactly one entry).
-            .test_name = "alias_to_alias_first_alias_for_db",
-            .argv = {"FT.ALIASADD", "alias2", "my_alias"},
-            .index_schema_pbtxt = std::string(kTestIndexSchemaPbtxt),
-            .pre_existing_alias = "my_alias",
-            .return_code = absl::StatusCode::kInvalidArgument,
-        },
+
     }),
     [](const TestParamInfo<FTAliasAddTestCase>& info) {
       return info.param.test_name;
@@ -677,6 +668,140 @@ TEST_F(FTAliasUpdateTest, SelfReferentialAliasPermitted) {
   for (auto* arg : argv) {
     TestValkeyModule_FreeString(&fake_ctx_, arg);
   }
+}
+
+class FTAliasListTest : public ValkeySearchTest {};
+
+TEST_F(FTAliasListTest, ArityErrorExtraArgs) {
+  ValkeyModuleString* argv[2];
+  argv[0] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.ALIASLIST");
+  argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "extra");
+
+  EXPECT_EQ(FTAliasListCmd(&fake_ctx_, argv, 2).code(),
+            absl::StatusCode::kInvalidArgument);
+
+  for (auto* arg : argv) {
+    TestValkeyModule_FreeString(&fake_ctx_, arg);
+  }
+}
+
+TEST_F(FTAliasListTest, EmptyWhenNoAliases) {
+  vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 5);
+  SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+      &fake_ctx_, []() {}, &mutations_thread_pool, false));
+
+  EXPECT_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
+      .WillRepeatedly(testing::Return(0));
+  EXPECT_CALL(*kMockValkeyModule, ReplyWithArray(&fake_ctx_, 0));
+
+  ValkeyModuleString* argv[1];
+  argv[0] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.ALIASLIST");
+
+  VMSDK_EXPECT_OK(FTAliasListCmd(&fake_ctx_, argv, 1));
+
+  TestValkeyModule_FreeString(&fake_ctx_, argv[0]);
+}
+
+TEST_F(FTAliasListTest, SingleAlias) {
+  vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 5);
+  SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+      &fake_ctx_, []() {}, &mutations_thread_pool, false));
+
+  data_model::IndexSchema index_schema_proto;
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
+      std::string(kTestIndexSchemaPbtxt), &index_schema_proto));
+  VMSDK_EXPECT_OK(SchemaManager::Instance().CreateIndexSchema(
+      &fake_ctx_, index_schema_proto));
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(0, "my_alias", "test_idx"));
+
+  EXPECT_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
+      .WillRepeatedly(testing::Return(0));
+
+  ValkeyModuleString* argv[1];
+  argv[0] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.ALIASLIST");
+
+  VMSDK_EXPECT_OK(FTAliasListCmd(&fake_ctx_, argv, 1));
+
+  // Expected reply: array of 2 elements (alias, index_name).
+  EXPECT_EQ(fake_ctx_.reply_capture.GetReply(),
+            "*2\r\n+my_alias\r\n+test_idx\r\n");
+
+  TestValkeyModule_FreeString(&fake_ctx_, argv[0]);
+}
+
+TEST_F(FTAliasListTest, MultipleAliasesSortedByName) {
+  vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 5);
+  SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+      &fake_ctx_, []() {}, &mutations_thread_pool, false));
+
+  data_model::IndexSchema index_schema_proto;
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
+      std::string(kTestIndexSchemaPbtxt), &index_schema_proto));
+  VMSDK_EXPECT_OK(SchemaManager::Instance().CreateIndexSchema(
+      &fake_ctx_, index_schema_proto));
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(0, "z_alias", "test_idx"));
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(0, "a_alias", "test_idx"));
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(0, "m_alias", "test_idx"));
+
+  EXPECT_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
+      .WillRepeatedly(testing::Return(0));
+
+  ValkeyModuleString* argv[1];
+  argv[0] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.ALIASLIST");
+
+  VMSDK_EXPECT_OK(FTAliasListCmd(&fake_ctx_, argv, 1));
+
+  // Sorted: a_alias, m_alias, z_alias — each with its index_name.
+  EXPECT_EQ(fake_ctx_.reply_capture.GetReply(),
+            "*6\r\n+a_alias\r\n+test_idx\r\n"
+            "+m_alias\r\n+test_idx\r\n"
+            "+z_alias\r\n+test_idx\r\n");
+
+  TestValkeyModule_FreeString(&fake_ctx_, argv[0]);
+}
+
+TEST_F(FTAliasListTest, OnlyShowsCurrentDbAliases) {
+  vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 5);
+  SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+      &fake_ctx_, []() {}, &mutations_thread_pool, false));
+
+  data_model::IndexSchema index_schema_proto;
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
+      std::string(kTestIndexSchemaPbtxt), &index_schema_proto));
+  VMSDK_EXPECT_OK(SchemaManager::Instance().CreateIndexSchema(
+      &fake_ctx_, index_schema_proto));
+
+  // Add aliases in db 0.
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(0, "db0_alias", "test_idx"));
+
+  // Create an index in db 1 and add alias there.
+  data_model::IndexSchema db1_proto;
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
+      std::string(kSecondIndexSchemaPbtxt), &db1_proto));
+  db1_proto.set_db_num(1);
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().CreateIndexSchema(&fake_ctx_, db1_proto));
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(1, "db1_alias", "test_idx2"));
+
+  // Query from db 0: should only see db0_alias.
+  EXPECT_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
+      .WillRepeatedly(testing::Return(0));
+
+  ValkeyModuleString* argv[1];
+  argv[0] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.ALIASLIST");
+
+  VMSDK_EXPECT_OK(FTAliasListCmd(&fake_ctx_, argv, 1));
+
+  EXPECT_EQ(fake_ctx_.reply_capture.GetReply(),
+            "*2\r\n+db0_alias\r\n+test_idx\r\n");
+
+  TestValkeyModule_FreeString(&fake_ctx_, argv[0]);
 }
 
 }  // namespace

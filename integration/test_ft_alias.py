@@ -776,3 +776,185 @@ class TestFTAliasNameBoundaries(ValkeySearchTestCaseBase):
         assert client.execute_command("FT.ALIASADD", long_alias, INDEX_NAME) == b"OK"
         assert client.execute_command("FT.INFO", long_alias) is not None
         assert client.execute_command("FT.ALIASDEL", long_alias) == b"OK"
+
+
+class TestFTAliasList(ValkeySearchTestCaseBase):
+    """Tests for FT.ALIASLIST."""
+
+    def test_aliaslist_empty_no_indexes(self):
+        """FT.ALIASLIST returns an empty list when no indexes exist."""
+        client = self.client
+        result = client.execute_command("FT.ALIASLIST")
+        assert result == []
+
+    def test_aliaslist_empty_with_index_no_aliases(self):
+        """FT.ALIASLIST returns an empty list when indexes exist but no aliases."""
+        client = self.client
+        assert client.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        result = client.execute_command("FT.ALIASLIST")
+        assert result == []
+
+    def test_aliaslist_single_alias(self):
+        """FT.ALIASLIST returns the single alias and its target index."""
+        client = self.client
+        assert client.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        assert client.execute_command("FT.ALIASADD", ALIAS_NAME, INDEX_NAME) == b"OK"
+        result = client.execute_command("FT.ALIASLIST")
+        # Flat list: [alias, index_name]
+        assert result == [ALIAS_NAME.encode(), INDEX_NAME.encode()]
+
+    def test_aliaslist_multiple_aliases_sorted(self):
+        """FT.ALIASLIST returns aliases sorted alphabetically."""
+        client = self.client
+        assert client.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        assert client.execute_command("FT.ALIASADD", "z_alias", INDEX_NAME) == b"OK"
+        assert client.execute_command("FT.ALIASADD", "a_alias", INDEX_NAME) == b"OK"
+        assert client.execute_command("FT.ALIASADD", "m_alias", INDEX_NAME) == b"OK"
+        result = client.execute_command("FT.ALIASLIST")
+        assert result == [
+            b"a_alias", INDEX_NAME.encode(),
+            b"m_alias", INDEX_NAME.encode(),
+            b"z_alias", INDEX_NAME.encode(),
+        ]
+
+    def test_aliaslist_multiple_indexes(self):
+        """FT.ALIASLIST shows aliases across multiple indexes, sorted by alias."""
+        client = self.client
+        assert client.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        assert client.execute_command(*CREATE_TAG_INDEX_2) == b"OK"
+        assert client.execute_command("FT.ALIASADD", "beta", INDEX_NAME) == b"OK"
+        assert client.execute_command("FT.ALIASADD", "alpha", INDEX_NAME_2) == b"OK"
+        result = client.execute_command("FT.ALIASLIST")
+        assert result == [
+            b"alpha", INDEX_NAME_2.encode(),
+            b"beta", INDEX_NAME.encode(),
+        ]
+
+    def test_aliaslist_reflects_aliasdel(self):
+        """FT.ALIASLIST no longer shows an alias after FT.ALIASDEL."""
+        client = self.client
+        assert client.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        assert client.execute_command("FT.ALIASADD", "alias_a", INDEX_NAME) == b"OK"
+        assert client.execute_command("FT.ALIASADD", "alias_b", INDEX_NAME) == b"OK"
+        assert client.execute_command("FT.ALIASDEL", "alias_a") == b"OK"
+        result = client.execute_command("FT.ALIASLIST")
+        assert result == [b"alias_b", INDEX_NAME.encode()]
+
+    def test_aliaslist_reflects_aliasupdate(self):
+        """FT.ALIASLIST reflects the new target after FT.ALIASUPDATE."""
+        client = self.client
+        assert client.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        assert client.execute_command(*CREATE_TAG_INDEX_2) == b"OK"
+        assert client.execute_command("FT.ALIASADD", ALIAS_NAME, INDEX_NAME) == b"OK"
+        assert client.execute_command("FT.ALIASUPDATE", ALIAS_NAME, INDEX_NAME_2) == b"OK"
+        result = client.execute_command("FT.ALIASLIST")
+        assert result == [ALIAS_NAME.encode(), INDEX_NAME_2.encode()]
+
+    def test_aliaslist_empty_after_dropindex(self):
+        """FT.ALIASLIST is empty after the target index is dropped."""
+        client = self.client
+        assert client.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        assert client.execute_command("FT.ALIASADD", ALIAS_NAME, INDEX_NAME) == b"OK"
+        assert client.execute_command("FT.DROPINDEX", INDEX_NAME) == b"OK"
+        result = client.execute_command("FT.ALIASLIST")
+        assert result == []
+
+    def test_aliaslist_dropindex_only_removes_its_aliases(self):
+        """Dropping one index only removes aliases pointing to it from ALIASLIST."""
+        client = self.client
+        assert client.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        assert client.execute_command(*CREATE_TAG_INDEX_2) == b"OK"
+        assert client.execute_command("FT.ALIASADD", "alias_idx1", INDEX_NAME) == b"OK"
+        assert client.execute_command("FT.ALIASADD", "alias_idx2", INDEX_NAME_2) == b"OK"
+        assert client.execute_command("FT.DROPINDEX", INDEX_NAME) == b"OK"
+        result = client.execute_command("FT.ALIASLIST")
+        assert result == [b"alias_idx2", INDEX_NAME_2.encode()]
+
+    def test_aliaslist_wrong_arity(self):
+        """FT.ALIASLIST with extra arguments returns a wrong-arity error."""
+        client = self.client
+        with pytest.raises(ResponseError):
+            client.execute_command("FT.ALIASLIST", "extra_arg")
+
+    def test_aliaslist_per_db_isolation(self):
+        """FT.ALIASLIST only shows aliases for the current database."""
+        client = self.client
+        # db 0: create index + alias
+        assert client.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        assert client.execute_command("FT.ALIASADD", "db0_alias", INDEX_NAME) == b"OK"
+
+        # db 1: create index + alias
+        client.execute_command("SELECT", "1")
+        try:
+            assert client.execute_command(*CREATE_TAG_INDEX_2) == b"OK"
+            assert client.execute_command("FT.ALIASADD", "db1_alias", INDEX_NAME_2) == b"OK"
+            # FT.ALIASLIST in db 1 should only show db1_alias
+            result = client.execute_command("FT.ALIASLIST")
+            assert result == [b"db1_alias", INDEX_NAME_2.encode()]
+        finally:
+            client.execute_command("SELECT", "0")
+
+        # FT.ALIASLIST in db 0 should only show db0_alias
+        result = client.execute_command("FT.ALIASLIST")
+        assert result == [b"db0_alias", INDEX_NAME.encode()]
+
+    def test_aliaslist_empty_after_flushdb(self):
+        """FT.ALIASLIST is empty after FLUSHDB removes the index."""
+        client = self.client
+        assert client.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        assert client.execute_command("FT.ALIASADD", ALIAS_NAME, INDEX_NAME) == b"OK"
+        client.execute_command("FLUSHDB")
+        result = client.execute_command("FT.ALIASLIST")
+        assert result == []
+
+    def test_aliaslist_after_swapdb(self):
+        """FT.ALIASLIST reflects alias movement after SWAPDB."""
+        client = self.client
+        # db 0: alias
+        assert client.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        assert client.execute_command("FT.ALIASADD", "swap_alias", INDEX_NAME) == b"OK"
+
+        client.execute_command("SWAPDB", "0", "1")
+
+        # db 0 should now be empty
+        result = client.execute_command("FT.ALIASLIST")
+        assert result == []
+
+        # db 1 should have the alias
+        client.execute_command("SELECT", "1")
+        try:
+            result = client.execute_command("FT.ALIASLIST")
+            assert result == [b"swap_alias", INDEX_NAME.encode()]
+        finally:
+            client.execute_command("SELECT", "0")
+
+
+class TestFTAliasListRDBPersistence(ValkeySearchTestCaseDebugMode):
+    """Tests that FT.ALIASLIST survives a SAVE + server restart cycle."""
+
+    def test_aliaslist_survives_save_restore(self):
+        """Aliases shown by FT.ALIASLIST persist after save/restore."""
+        client = self.client
+        assert client.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        assert client.execute_command("FT.ALIASADD", "persist_a", INDEX_NAME) == b"OK"
+        assert client.execute_command("FT.ALIASADD", "persist_b", INDEX_NAME) == b"OK"
+
+        _restart_and_wait(self, INDEX_NAME)
+
+        result = client.execute_command("FT.ALIASLIST")
+        assert result == [
+            b"persist_a", INDEX_NAME.encode(),
+            b"persist_b", INDEX_NAME.encode(),
+        ]
+
+    def test_aliaslist_deleted_alias_not_restored(self):
+        """A deleted alias does not reappear in FT.ALIASLIST after restart."""
+        client = self.client
+        assert client.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        assert client.execute_command("FT.ALIASADD", "temp_alias", INDEX_NAME) == b"OK"
+        assert client.execute_command("FT.ALIASDEL", "temp_alias") == b"OK"
+
+        _restart_and_wait(self, INDEX_NAME)
+
+        result = client.execute_command("FT.ALIASLIST")
+        assert result == []

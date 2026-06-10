@@ -362,3 +362,117 @@ class TestFTAliasClusterPropagation(ValkeySearchClusterTestCase):
                 "FT.ALIASUPDATE", INDEX_NAME, INDEX_NAME_2
             )
         assert "Alias collides with existing index name" in str(exc_info.value)
+
+    # ------------------------------------------------------------------
+    # FT.ALIASLIST cluster tests
+    # ------------------------------------------------------------------
+
+    def test_aliaslist_empty_cluster(self):
+        """FT.ALIASLIST returns empty list when no aliases exist in cluster."""
+        node0 = self.new_client_for_primary(0)
+        result = node0.execute_command("FT.ALIASLIST")
+        assert result == []
+
+    def test_aliaslist_visible_on_all_nodes(self):
+        """FT.ALIASLIST shows the alias on all nodes after ALIASADD."""
+        node0 = self.new_client_for_primary(0)
+        assert node0.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        self._wait_for_index_on_all_nodes(INDEX_NAME)
+
+        assert node0.execute_command(
+            "FT.ALIASADD", ALIAS_NAME, INDEX_NAME
+        ) == b"OK"
+
+        for node in self._all_primaries():
+            result = node.execute_command("FT.ALIASLIST")
+            assert result == [ALIAS_NAME.encode(), INDEX_NAME.encode()], (
+                f"Expected alias list to contain {ALIAS_NAME} -> {INDEX_NAME}"
+            )
+
+    def test_aliaslist_multiple_aliases_cluster(self):
+        """FT.ALIASLIST returns multiple aliases sorted on all nodes."""
+        node0 = self.new_client_for_primary(0)
+        assert node0.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        self._wait_for_index_on_all_nodes(INDEX_NAME)
+
+        assert node0.execute_command(
+            "FT.ALIASADD", "z_alias", INDEX_NAME
+        ) == b"OK"
+        assert node0.execute_command(
+            "FT.ALIASADD", "a_alias", INDEX_NAME
+        ) == b"OK"
+
+        expected = [
+            b"a_alias", INDEX_NAME.encode(),
+            b"z_alias", INDEX_NAME.encode(),
+        ]
+        for node in self._all_primaries():
+            result = node.execute_command("FT.ALIASLIST")
+            assert result == expected
+
+    def test_aliaslist_reflects_aliasdel_cluster(self):
+        """FT.ALIASLIST no longer shows a deleted alias on all nodes."""
+        node0 = self.new_client_for_primary(0)
+        assert node0.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        self._wait_for_index_on_all_nodes(INDEX_NAME)
+
+        assert node0.execute_command(
+            "FT.ALIASADD", ALIAS_NAME, INDEX_NAME
+        ) == b"OK"
+        assert node0.execute_command("FT.ALIASDEL", ALIAS_NAME) == b"OK"
+
+        for node in self._all_primaries():
+            result = node.execute_command("FT.ALIASLIST")
+            assert result == []
+
+    def test_aliaslist_reflects_aliasupdate_cluster(self):
+        """FT.ALIASLIST shows updated target index on all nodes."""
+        node0 = self.new_client_for_primary(0)
+        assert node0.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        assert node0.execute_command(*CREATE_TAG_INDEX_2) == b"OK"
+        self._wait_for_index_on_all_nodes(INDEX_NAME)
+        self._wait_for_index_on_all_nodes(INDEX_NAME_2)
+
+        assert node0.execute_command(
+            "FT.ALIASADD", ALIAS_NAME, INDEX_NAME
+        ) == b"OK"
+        assert node0.execute_command(
+            "FT.ALIASUPDATE", ALIAS_NAME, INDEX_NAME_2
+        ) == b"OK"
+
+        expected = [ALIAS_NAME.encode(), INDEX_NAME_2.encode()]
+        for node in self._all_primaries():
+            result = node.execute_command("FT.ALIASLIST")
+            assert result == expected
+
+    def test_aliaslist_empty_after_dropindex_cluster(self):
+        """FT.ALIASLIST is empty on all nodes after index is dropped."""
+        node0 = self.new_client_for_primary(0)
+        assert node0.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        self._wait_for_index_on_all_nodes(INDEX_NAME)
+
+        assert node0.execute_command(
+            "FT.ALIASADD", ALIAS_NAME, INDEX_NAME
+        ) == b"OK"
+        assert node0.execute_command("FT.DROPINDEX", INDEX_NAME) == b"OK"
+
+        # Poll until alias list is empty on all nodes.
+        def _aliaslist_empty():
+            for node in self._all_primaries():
+                if node.execute_command("FT.ALIASLIST") != []:
+                    return False
+            return True
+
+        _wait_for_alias_on_all_nodes(
+            self._all_primaries(), ALIAS_NAME, expect_present=False
+        )
+
+        for node in self._all_primaries():
+            result = node.execute_command("FT.ALIASLIST")
+            assert result == []
+
+    def test_aliaslist_wrong_arity_cluster(self):
+        """FT.ALIASLIST with extra args returns an error in cluster mode."""
+        node0 = self.new_client_for_primary(0)
+        with pytest.raises(ResponseError):
+            node0.execute_command("FT.ALIASLIST", "extra")

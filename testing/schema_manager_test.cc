@@ -1647,4 +1647,152 @@ TEST_F(SchemaManagerAliasTest, ReverseMapConsistentAfterLoad) {
               testing::UnorderedElementsAre("load_rev_a", "load_rev_b"));
 }
 
+// ---- GetAllAliases tests ----
+
+// GetAllAliases returns empty when no aliases exist.
+TEST_F(SchemaManagerAliasTest, GetAllAliasesEmptyByDefault) {
+  auto all = SchemaManager::Instance().GetAllAliases(kDb0);
+  EXPECT_THAT(all, testing::IsEmpty());
+}
+
+// GetAllAliases returns aliases sorted by alias name.
+TEST_F(SchemaManagerAliasTest, GetAllAliasesSortedByAliasName) {
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "z_alias", kIndexName));
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "a_alias", kIndexName));
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "m_alias", kIndexName));
+
+  auto all = SchemaManager::Instance().GetAllAliases(kDb0);
+  ASSERT_EQ(all.size(), 3);
+  EXPECT_EQ(all[0].first, "a_alias");
+  EXPECT_EQ(all[0].second, kIndexName);
+  EXPECT_EQ(all[1].first, "m_alias");
+  EXPECT_EQ(all[1].second, kIndexName);
+  EXPECT_EQ(all[2].first, "z_alias");
+  EXPECT_EQ(all[2].second, kIndexName);
+}
+
+// GetAllAliases includes aliases across multiple indexes.
+TEST_F(SchemaManagerAliasTest, GetAllAliasesMultipleIndexes) {
+  // Create a second index.
+  std::string proto_str2 = R"(
+      name: "test_key2"
+      db_num: 0
+      subscribed_key_prefixes: "prefix_2"
+      attribute_data_type: ATTRIBUTE_DATA_TYPE_HASH
+      attributes: {
+        alias: "test_attribute_2"
+        identifier: "test_identifier_2"
+        index: {
+          vector_index: {
+            dimension_count: 10
+            normalize: true
+            distance_metric: DISTANCE_METRIC_COSINE
+            vector_data_type: VECTOR_DATA_TYPE_FLOAT32
+            initial_cap: 100
+            hnsw_algorithm { m: 240 ef_construction: 400 ef_runtime: 30 }
+          }
+        }
+      }
+    )";
+  data_model::IndexSchema proto2;
+  ASSERT_TRUE(
+      google::protobuf::TextFormat::ParseFromString(proto_str2, &proto2));
+  ASSERT_TRUE(
+      SchemaManager::Instance().CreateIndexSchema(&fake_ctx_, proto2).ok());
+
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "beta", kIndexName));
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "alpha", "test_key2"));
+
+  auto all = SchemaManager::Instance().GetAllAliases(kDb0);
+  ASSERT_EQ(all.size(), 2);
+  EXPECT_EQ(all[0].first, "alpha");
+  EXPECT_EQ(all[0].second, "test_key2");
+  EXPECT_EQ(all[1].first, "beta");
+  EXPECT_EQ(all[1].second, kIndexName);
+}
+
+// GetAllAliases is isolated per DB.
+TEST_F(SchemaManagerAliasTest, GetAllAliasesPerDbIsolation) {
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "db0_alias", kIndexName));
+
+  // db 1 has no aliases.
+  auto all_db1 = SchemaManager::Instance().GetAllAliases(kDb1);
+  EXPECT_THAT(all_db1, testing::IsEmpty());
+
+  // db 0 has one alias.
+  auto all_db0 = SchemaManager::Instance().GetAllAliases(kDb0);
+  ASSERT_EQ(all_db0.size(), 1);
+  EXPECT_EQ(all_db0[0].first, "db0_alias");
+}
+
+// GetAllAliases reflects removal.
+TEST_F(SchemaManagerAliasTest, GetAllAliasesReflectsRemoval) {
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "alias_a", kIndexName));
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "alias_b", kIndexName));
+  VMSDK_EXPECT_OK(SchemaManager::Instance().RemoveAlias(kDb0, "alias_a"));
+
+  auto all = SchemaManager::Instance().GetAllAliases(kDb0);
+  ASSERT_EQ(all.size(), 1);
+  EXPECT_EQ(all[0].first, "alias_b");
+}
+
+// GetAllAliases reflects update (target changes).
+TEST_F(SchemaManagerAliasTest, GetAllAliasesReflectsUpdate) {
+  // Create a second index.
+  std::string proto_str2 = R"(
+      name: "test_key2"
+      db_num: 0
+      subscribed_key_prefixes: "prefix_2"
+      attribute_data_type: ATTRIBUTE_DATA_TYPE_HASH
+      attributes: {
+        alias: "test_attribute_2"
+        identifier: "test_identifier_2"
+        index: {
+          vector_index: {
+            dimension_count: 10
+            normalize: true
+            distance_metric: DISTANCE_METRIC_COSINE
+            vector_data_type: VECTOR_DATA_TYPE_FLOAT32
+            initial_cap: 100
+            hnsw_algorithm { m: 240 ef_construction: 400 ef_runtime: 30 }
+          }
+        }
+      }
+    )";
+  data_model::IndexSchema proto2;
+  ASSERT_TRUE(
+      google::protobuf::TextFormat::ParseFromString(proto_str2, &proto2));
+  ASSERT_TRUE(
+      SchemaManager::Instance().CreateIndexSchema(&fake_ctx_, proto2).ok());
+
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "my_alias", kIndexName));
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().UpdateAlias(kDb0, "my_alias", "test_key2"));
+
+  auto all = SchemaManager::Instance().GetAllAliases(kDb0);
+  ASSERT_EQ(all.size(), 1);
+  EXPECT_EQ(all[0].first, "my_alias");
+  EXPECT_EQ(all[0].second, "test_key2");
+}
+
+// GetAllAliases is empty after index drop.
+TEST_F(SchemaManagerAliasTest, GetAllAliasesEmptyAfterIndexDrop) {
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDb0, "drop_all_alias", kIndexName));
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().RemoveIndexSchema(kDb0, kIndexName));
+
+  auto all = SchemaManager::Instance().GetAllAliases(kDb0);
+  EXPECT_THAT(all, testing::IsEmpty());
+}
+
 }  // namespace valkey_search

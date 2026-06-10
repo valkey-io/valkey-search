@@ -975,6 +975,9 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
       }
       VMSDK_ASSIGN_OR_RETURN(auto sub_result, ParseExpression(level));
       predicate = std::move(sub_result.prev_predicate);
+      if (!predicate) {
+        return absl::InvalidArgumentError("Missing OR term");
+      }
       if (result.prev_predicate) {
         node_count_++;
       } else {

@@ -1781,6 +1781,50 @@ TEST_F(IndexSchemaFriendTest, MutatedAttributesSanity) {
   EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 0);
 }
 
+// Regression test for a pre-existing crash in InTrackedMutationRecords.
+//
+// DocumentMutation::attributes is std::optional<flat_hash_map<...>>.
+// ConsumeTrackedMutatedAttribute, after extracting the attribute map, sets
+// `attributes = std::nullopt` but leaves the entry in tracked_mutated_records_
+// (it only erases the entry when there was nothing to consume). A subsequent
+// call to InTrackedMutationRecords(key, identifier) on that same key would
+// then dereference the disengaged optional via `attributes->find(...)`, which
+// is UB. Under ASAN the bad dereference trips absl's SwissTable iterator
+// generation guard and crashes the server (observed in CI as a SIGSEGV from
+// the backfill scan path during a fulltext test).
+//
+// Repro: track a mutation, consume it (disengaging `attributes` while leaving
+// the entry in the map), then call InTrackedMutationRecords. With the fix it
+// returns false cleanly; without the fix it crashes under ASAN.
+TEST_F(IndexSchemaFriendTest, InTrackedMutationRecordsAfterConsumeNoCrash) {
+  absl::string_view data_ptr;
+  auto mutated_attributes =
+      CreateMutatedAttributes(attribute_identifier, data_ptr);
+  EXPECT_TRUE(index_schema->TrackMutatedRecord(
+      nullptr, key, std::move(mutated_attributes), 0, false, false, false));
+  EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 1u);
+
+  // Consume the mutation. Because attributes was engaged, the entry stays in
+  // the map with attributes = std::nullopt (see index_schema.cc:1997-2008).
+  auto consumed = index_schema->ConsumeTrackedMutatedAttribute(key, true);
+  EXPECT_TRUE(consumed.has_value());
+  EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 1u);
+
+  // Verify our reading of the state: entry present, attributes disengaged.
+  {
+    absl::MutexLock lock(&index_schema->mutated_records_mutex_);
+    auto itr = index_schema->tracked_mutated_records_.find(key);
+    ASSERT_NE(itr, index_schema->tracked_mutated_records_.end());
+    EXPECT_FALSE(itr->second.attributes.has_value());
+  }
+
+  // The crash: without the fix this dereferences a disengaged optional.
+  // Expected behavior with the fix: returns false (no pending mutation for
+  // this (key, identifier) pair after the consume drained it).
+  EXPECT_FALSE(
+      index_schema->InTrackedMutationRecords(key, attribute_identifier));
+}
+
 TEST_F(IndexSchemaFriendTest, MutatedAttributes) {
   auto tester = [this](absl::string_view data_ptr,
                        absl::string_view track_before_consumption_data_ptr,

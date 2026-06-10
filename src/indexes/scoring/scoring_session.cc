@@ -24,9 +24,7 @@ void ScoringSession::RecordLeaf(const ScoringStats& stats, float leaf_weight) {
   const float leaf_score = scorer_->ScoreLeaf(stats, leaf_weight);
   group_stack_.back()[stats.doc_id] += leaf_score;
 
-  if (!doc_stats_.contains(stats.doc_id)) {
-    doc_stats_.emplace(stats.doc_id, stats.Clone());
-  }
+  doc_score_.try_emplace(stats.doc_id, stats.document_score);
 }
 
 void ScoringSession::EnterGroup() {
@@ -55,13 +53,12 @@ std::vector<RankedDoc> ScoringSession::Rank() {
   std::vector<RankedDoc> results;
   results.reserve(root.size());
   for (const auto& [doc_id, sum] : root) {
-    auto stats_it = doc_stats_.find(doc_id);
-    CHECK(stats_it != doc_stats_.end());
-    const float final_score =
-        scorer_->ComposeDocumentScore(sum, *stats_it->second);
+    auto it = doc_score_.find(doc_id);
+    CHECK(it != doc_score_.end());
+    const float final_score = scorer_->ComposeDocumentScore(sum, it->second);
     results.push_back({doc_id, final_score});
   }
-  doc_stats_.clear();
+  doc_score_.clear();
 
   std::sort(results.begin(), results.end(),
             [](const RankedDoc& a, const RankedDoc& b) {

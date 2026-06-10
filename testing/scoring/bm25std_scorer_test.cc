@@ -138,20 +138,15 @@ TEST(Bm25StdScorerDeathTest, WrongStatsSubtypeCrashes) {
 
 TEST(Bm25StdScorerTest, ComposeMultipliesByDocumentScore) {
   Bm25StdScorer scorer;
-  Bm25StdStats stats = test_data::StatsForHello(test_data::kDocs[0]);
-  stats.document_score = 0.7f;
-  EXPECT_NEAR(scorer.ComposeDocumentScore(0.5f, stats), 0.5f * 0.7f,
-              kFloatTolerance);
+  EXPECT_NEAR(scorer.ComposeDocumentScore(0.5f, /*document_score=*/0.7f),
+              0.5f * 0.7f, kFloatTolerance);
 }
 
 TEST(Bm25StdScorerTest, ComposeInfinityShortCircuits) {
   Bm25StdScorer scorer;
   const float kInf = std::numeric_limits<float>::infinity();
-  Bm25StdStats stats = test_data::StatsForHello(test_data::kDocs[0]);
-  stats.document_score = kInf;
-  EXPECT_EQ(scorer.ComposeDocumentScore(0.5f, stats), kInf);
-  stats.document_score = -kInf;
-  EXPECT_EQ(scorer.ComposeDocumentScore(0.5f, stats), -kInf);
+  EXPECT_EQ(scorer.ComposeDocumentScore(0.5f, kInf), kInf);
+  EXPECT_EQ(scorer.ComposeDocumentScore(0.5f, -kInf), -kInf);
 }
 
 TEST(Bm25StdScorerTest, CombineGroupAppliesWeight) {

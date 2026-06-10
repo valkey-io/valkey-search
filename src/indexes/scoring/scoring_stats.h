@@ -9,7 +9,6 @@
 #define VALKEYSEARCH_SRC_INDEXES_SCORING_SCORING_STATS_H_
 
 #include <cstdint>
-#include <memory>
 #include <string>
 
 #include "absl/types/span.h"
@@ -18,10 +17,6 @@ namespace valkey_search::indexes::scoring {
 
 struct ScoringStats {
   virtual ~ScoringStats() = default;
-
-  virtual std::unique_ptr<ScoringStats> Clone() const {
-    return std::make_unique<ScoringStats>(*this);
-  }
 
   uint32_t total_docs = 0;
   uint64_t doc_id = 0;
@@ -32,10 +27,6 @@ struct ScoringStats {
 };
 
 struct Bm25StdStats : ScoringStats {
-  std::unique_ptr<ScoringStats> Clone() const override {
-    return std::make_unique<Bm25StdStats>(*this);
-  }
-
   float avg_doc_len = 0.0f;
   uint32_t doc_len = 0;
 };
@@ -43,10 +34,6 @@ struct Bm25StdStats : ScoringStats {
 // `positions` is a non-owning view; storage must outlive the stats.
 // `norm` of 0 means the document has no TEXT fields and forces score to 0.
 struct TfidfStats : ScoringStats {
-  std::unique_ptr<ScoringStats> Clone() const override {
-    return std::make_unique<TfidfStats>(*this);
-  }
-
   uint32_t norm = 0;
   absl::Span<const uint32_t> positions;
 };

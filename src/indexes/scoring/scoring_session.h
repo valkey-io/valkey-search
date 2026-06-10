@@ -9,7 +9,6 @@
 #define VALKEYSEARCH_SRC_INDEXES_SCORING_SCORING_SESSION_H_
 
 #include <cstdint>
-#include <memory>
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
@@ -56,7 +55,7 @@ class ScoringSession {
 
   std::vector<absl::flat_hash_map<DocId, float>> group_stack_;
 
-  absl::flat_hash_map<DocId, std::unique_ptr<ScoringStats>> doc_stats_;
+  absl::flat_hash_map<DocId, float> doc_score_;
 };
 
 }  // namespace valkey_search::indexes::scoring

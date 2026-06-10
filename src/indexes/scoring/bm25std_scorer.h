@@ -34,7 +34,7 @@ class Bm25StdScorer : public Scorer {
   float ScoreLeaf(const ScoringStats& stats, float leaf_weight) const override;
 
   float ComposeDocumentScore(float sum_of_terms,
-                             const ScoringStats& stats) const override;
+                             float document_score) const override;
 };
 
 }  // namespace valkey_search::indexes::scoring

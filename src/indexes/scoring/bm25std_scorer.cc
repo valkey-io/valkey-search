@@ -47,12 +47,12 @@ float Bm25StdScorer::ScoreLeaf(const ScoringStats& stats,
 }
 
 float Bm25StdScorer::ComposeDocumentScore(float sum_of_terms,
-                                          const ScoringStats& stats) const {
+                                          float document_score) const {
   // Avoid 0 * inf -> NaN; propagate ±inf as the final score.
-  if (IsInf(stats.document_score)) {
-    return stats.document_score;
+  if (IsInf(document_score)) {
+    return document_score;
   }
-  return sum_of_terms * stats.document_score;
+  return sum_of_terms * document_score;
 }
 
 }  // namespace valkey_search::indexes::scoring

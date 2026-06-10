@@ -26,7 +26,7 @@ enum class ScorerType {
 
 // Stateless, thread-safe scoring algorithm. Per-query state lives in
 // ScoringSession. Concrete scorers expect a specific ScoringStats
-// subtype and DCHECK the contract.
+// subtype and CHECK the contract.
 class Scorer {
  public:
   virtual ~Scorer() = default;
@@ -38,7 +38,7 @@ class Scorer {
                           float leaf_weight) const = 0;
 
   virtual float ComposeDocumentScore(float sum_of_terms,
-                                     const ScoringStats& stats) const = 0;
+                                     float document_score) const = 0;
 
   float CombineGroup(absl::Span<const float> child_scores,
                      float group_weight) const;

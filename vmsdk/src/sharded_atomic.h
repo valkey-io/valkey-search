@@ -116,10 +116,10 @@ class ShardedAtomic {
                                    DisableRawSystemAllocatorReporting>>
         nodes_ ABSL_GUARDED_BY(mutex_);
     // Carries over the value of threads that have exited. A ThreadLocalNode can
-    // hold a non-zero value at exit when an increment and its matching decrement
-    // happen on different threads (e.g. memory allocated on a worker thread and
-    // freed on the main thread); discarding it would make the reported total
-    // memory inaccurate.
+    // hold a non-zero value at exit when an increment and its matching
+    // decrement happen on different threads (e.g. memory allocated on a worker
+    // thread and freed on the main thread); discarding it would make the
+    // reported total memory inaccurate.
     std::atomic<T> retired_total_{0};
   };
 

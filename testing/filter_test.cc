@@ -1627,6 +1627,25 @@ INSTANTIATE_TEST_SUITE_P(
             .create_success = false,
             .create_expected_error_message = "Missing OR term",
         },
+        {
+            .test_name = "or_with_missing_right_operand_trailing_pipe",
+            .filter = "@num_field_1.5:[1.0 2.0]|",
+            .create_success = false,
+            .create_expected_error_message = "Missing OR term",
+        },
+        {
+            .test_name = "or_with_missing_right_operand_trailing_pipe_space",
+            .filter = "@num_field_1.5:[1.0 2.0] |",
+            .create_success = false,
+            .create_expected_error_message = "Missing OR term",
+        },
+        {
+            .test_name =
+                "or_with_missing_right_operand_trailing_pipe_in_parens",
+            .filter = "(@num_field_1.5:[1.0 2.0]|)",
+            .create_success = false,
+            .create_expected_error_message = "Missing OR term",
+        },
         // =================================================================
         // Tests for escaped pipe separator in tag values
         // =================================================================

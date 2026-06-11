@@ -828,6 +828,14 @@ absl::Status HNSWParameters::Verify() const {
       << max_ef_runtime_value << ".";
   return absl::OkStatus();
 }
+absl::Status FlatParameters::Verify() const {
+  VMSDK_RETURN_IF_ERROR(FTCreateVectorParameters::Verify());
+  if (block_size == 0) {
+    return absl::InvalidArgumentError(
+        "BLOCK_SIZE must be a positive integer greater than 0.");
+  }
+  return absl::OkStatus();
+}
 std::unique_ptr<data_model::VectorIndex> FlatParameters::ToProto() const {
   auto vector_index_proto = FTCreateVectorParameters::ToProto();
   auto flat_algorithm_proto = std::make_unique<data_model::FlatAlgorithm>();

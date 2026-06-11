@@ -861,6 +861,16 @@ INSTANTIATE_TEST_SUITE_P(
                  "integer greater than 0 and cannot exceed 1000000.",
          },
          {
+             .test_name = "invalid_block_size_zero",
+             .success = false,
+             .command_str = "idx1 SChema hash_field1 as "
+                            "hash_field11 vector flat 10 TYPE  FLOAT32 DIM 3 "
+                            "DISTANCE_METRIC IP INITIAL_CAP 15000 BLOCK_SIZE 0",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: BLOCK_SIZE must "
+                 "be a positive integer greater than 0.",
+         },
+         {
              .test_name = "invalid_as",
              .success = false,
              .command_str = "idx1 SChema hash_field1 asa "

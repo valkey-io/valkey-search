@@ -10,18 +10,37 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Silently skip (rather than fail) on non-release branches, for both push
+  # and pull_request events. The allowed branches are listed in
+  # .github/release-branches.txt. A job whose `if` is false is reported as
+  # skipped, so feature-branch pushes no longer show up as failed checks.
+  check-branch:
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v3
+    - name: Verify Branch
+      id: check
+      env:
+        BRANCH: ${{ github.base_ref || github.ref_name }}
+      run: |
+        if grep -qxF "$BRANCH" .github/release-branches.txt; then
+          echo "should_run=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "should_run=false" >> "$GITHUB_OUTPUT"
+        fi
+
   cmake-tests:
+    needs: check-branch
+    if: needs.check-branch.outputs.should_run == 'true'
     runs-on: ubuntu-latest
 
     steps:
     # Checkout the code from the repository
     - name: Checkout Code
       uses: actions/checkout@v3
-
-    - name: Verify Branch
-      env:
-        BRANCH: ${{ github.base_ref || github.ref_name }}
-      run: grep -qxF "$BRANCH" .github/release-branches.txt
 
     # Set up Docker to build and run the container
     - name: Set up Docker

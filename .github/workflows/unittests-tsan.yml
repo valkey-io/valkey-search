@@ -2,7 +2,13 @@ name: unittests-tsan
 
 on:
   pull_request:
+    branches:
+      - main
+      - "[0-9].[0-9]"
   push:
+    branches:
+      - main
+      - "[0-9].[0-9]"
   workflow_dispatch:
 
 concurrency:
@@ -10,27 +16,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check-branch:
-    runs-on: ubuntu-latest
-    outputs:
-      should_run: ${{ steps.check.outputs.should_run }}
-    steps:
-    - name: Checkout Code
-      uses: actions/checkout@v3
-    - name: Verify Branch
-      id: check
-      env:
-        BRANCH: ${{ github.base_ref || github.ref_name }}
-      run: |
-        if grep -qxF "$BRANCH" .github/release-branches.txt; then
-          echo "should_run=true" >> "$GITHUB_OUTPUT"
-        else
-          echo "should_run=false" >> "$GITHUB_OUTPUT"
-        fi
-
   cmake-tests:
-    needs: check-branch
-    if: needs.check-branch.outputs.should_run == 'true'
     runs-on: ubuntu-latest
 
     steps:

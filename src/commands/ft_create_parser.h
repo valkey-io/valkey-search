@@ -93,6 +93,10 @@ vmsdk::config::Number& GetMaxVectorAttributes();
 /// Return the maximum number of dimensions allowed for vector indices.
 vmsdk::config::Number& GetMaxDimensions();
 
+/// Return the fraction (percent) of system memory a single vector-index
+/// preallocation may consume.
+vmsdk::config::Number& GetVectorPreallocMemoryRatio();
+
 /// Return the maximum M parameter value allowed for HNSW algorithm.
 vmsdk::config::Number& GetMaxM();
 

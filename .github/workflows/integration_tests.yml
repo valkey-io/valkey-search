@@ -2,7 +2,19 @@ name: Integration tests
 
 on:
   pull_request:
+    branches:
+      - main
+      - "[0-9].[0-9]"
+    paths-ignore:
+      - '**/*.md'
+      - '**/00-RELEASENOTES'
   push:
+    branches:
+      - main
+      - "[0-9].[0-9]"
+    paths-ignore:
+      - '**/*.md'
+      - '**/00-RELEASENOTES'
   workflow_dispatch:
 
 concurrency:
@@ -17,11 +29,6 @@ jobs:
     # Checkout the code from the repository
     - name: Checkout Code
       uses: actions/checkout@v3
-
-    - name: Verify Branch
-      env:
-        BRANCH: ${{ github.base_ref || github.ref_name }}
-      run: grep -qxF "$BRANCH" .github/release-branches.txt
 
     # Set up Docker to build and run the container
     - name: Set up Docker

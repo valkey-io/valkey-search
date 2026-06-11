@@ -311,10 +311,27 @@ def compare_results(expected, results):
         print(TEST_MARKER)
         return False
 
-    # Alias mutation commands (ALIASADD/ALIASDEL/ALIASUPDATE) return a simple
-    # value (b'OK') rather than a result list, check the command, not the
-    # result type, so the intent is explicit.
-    if _is_alias_management_cmd(cmd):
+    # Alias mutation commands return b'OK', not a result list.
+    if _is_simple_compare_cmd(cmd):
+        # FT.INFO contains dynamic values (memory, timing), just verify both
+        # succeed with the same index name, or both return the same error.
+        if cmd[0].upper() == "FT.INFO":
+            exp = expected["result"]
+            act = results["result"]
+            # Both errors -> compare error text
+            if isinstance(exp, Exception) and isinstance(act, Exception):
+                return str(exp) == str(act)
+            # One error, one success -> mismatch
+            if isinstance(exp, Exception) or isinstance(act, Exception):
+                print(f"FT.INFO mismatch: expected={exp!r} got={act!r}")
+                return False
+            # Both lists - compare index name (first element)
+            if isinstance(exp, list) and isinstance(act, list) and len(exp) > 0 and len(act) > 0:
+                if exp[0] != act[0]:
+                    print(f"FT.INFO index name mismatch: expected={exp[0]!r} got={act[0]!r}")
+                    return False
+                return True
+            return exp == act
         match = expected["result"] == results["result"]
         if not match:
             print(f"Simple result mismatch: expected={expected['result']!r} got={results['result']!r}")
@@ -390,11 +407,17 @@ def mark_as_failed(testname):
     wrong_answers += 1
     assert not StopOnFailure, "Test failed, stopping execution"
 
-_ALIAS_VERBS = {"FT.ALIASADD", "FT.ALIASDEL", "FT.ALIASUPDATE"}
+_SIMPLE_COMPARE_CMDS = {"FT.ALIASADD", "FT.ALIASDEL", "FT.ALIASUPDATE", "FT.INFO"}
 
-def _is_alias_management_cmd(cmd):
-    """Return True if cmd is an alias management command (not a search/aggregate)."""
-    return cmd and cmd[0].upper() in _ALIAS_VERBS
+def _is_simple_compare_cmd(cmd):
+    """Return True if cmd should use direct equality comparison (not search/aggregate unpacking)."""
+    return cmd and cmd[0].upper() in _SIMPLE_COMPARE_CMDS
+
+_ALIAS_MUTATION_VERBS = {"FT.ALIASADD", "FT.ALIASDEL", "FT.ALIASUPDATE"}
+
+def _is_alias_mutation_cmd(cmd):
+    """Return True if cmd is an alias mutation command (needs cluster routing)."""
+    return cmd and cmd[0].upper() in _ALIAS_MUTATION_VERBS
 
 def _first_index_name(data_set_name, key_type):
     """Return the first index name created by a dataset's CREATES_KEY commands."""
@@ -494,7 +517,7 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
         data_set = next_data_set
 
     # Replay alias commands via primary 0 (can't be slot-routed by cluster client).
-    if _is_alias_management_cmd(expected["cmd"]):
+    if _is_alias_mutation_cmd(expected["cmd"]):
         try:
             # Route to primary 0 — cluster client can't slot FT.ALIAS* commands.
             primary0 = test_case.new_client_for_primary(0)

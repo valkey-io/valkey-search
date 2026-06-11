@@ -8,7 +8,6 @@ on:
     paths-ignore:
       - '**/*.md'
       - '**/00-RELEASENOTES'
-      - '**/COPYING'
   push:
     branches:
       - main
@@ -16,7 +15,6 @@ on:
     paths-ignore:
       - '**/*.md'
       - '**/00-RELEASENOTES'
-      - '**/COPYING'
   workflow_dispatch:
 
 concurrency:

@@ -613,6 +613,45 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
     }
   }
 }
+
+// verify reclaimable_memory is correctly synchronized and writes are not lost
+// lost writes can lead to negative integer underflow issue
+TEST_F(VectorIndexTest, ReclaimableMemoryRaceDoesNotReturnToBaseline)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  constexpr int kThreads = 8;
+  constexpr int kIters = 50000;
+  hnswlib::L2Space l2_space{kDimensions};
+  hnswlib::HierarchicalNSW<float> algo(&l2_space, /*max_elements=*/kThreads, kM,
+                                       kEFConstruction, /*random_seed=*/100,
+                                       /*allow_replace_deleted=*/false);
+  std::vector<float> v(kDimensions, 1.0f);
+  for (int t = 0; t < kThreads; ++t) {
+    algo.addPoint(v.data(), t);  // one element owned per thread
+  }
+
+  const int64_t baseline =
+      static_cast<int64_t>(Metrics::GetStats().reclaimable_memory);
+
+  std::vector<std::thread> threads;
+  threads.reserve(kThreads);
+  for (int t = 0; t < kThreads; ++t) {
+    threads.emplace_back([&algo, t]() {
+      for (int i = 0; i < kIters; ++i) {
+        algo.markDelete(t);    // += vector_size_
+        algo.unmarkDelete(t);  // -= vector_size_  (net per cycle: 0)
+      }
+    });
+  }
+  for (auto& th : threads) {
+    th.join();
+  }
+
+  // Correct behavior: perfectly balanced ops return to baseline. Current code
+  // loses updates under contention, so the counter drifts off baseline.
+  EXPECT_EQ(static_cast<int64_t>(Metrics::GetStats().reclaimable_memory),
+            baseline);
+}
+
 }  // namespace
 
 }  // namespace valkey_search::indexes

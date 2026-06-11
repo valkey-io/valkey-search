@@ -910,9 +910,10 @@ class MemtierProcess:
 
 
 def parse_memtier_error_line(line: str):
+    # Actual memtier format: [RUN #1 1%,   0 secs] 10 threads 10 conns:        4408 ops,    8807 (avg:    8807) ops/sec, 4.24MB/sec (avg: 4.24MB/sec), 30.95 (avg: 30.95) msec latency
     progress_pattern = (
         r"\[RUN #(\d+)"
-        r" ([\d\.]+)%?,\s+([\d\.]+)\s+secs\]\s+([\d\.]+)\s+threads:\s+(\d+)\s+ops,\s+([\d\.]+)\s+\(avg:\s+([\d\.]+)\)\s+ops\/sec,\s+([\d\.]+[KMG]B\/sec)\s+\(avg:\s+(\d+\.\d+[KMG]?B\/sec)\),\s+(-nan|[\d\.]+)\s+\(avg:\s+(\d+\.\d+)\)\s+msec\s+latency"
+        r"\s+([\d\.]+)%?,\s+([\d\.]+)\s+secs\]\s+(\d+)\s+threads\s+\d+\s+conns:\s+(\d+)\s+ops,\s+([\d\.]+)\s+\(avg:\s+([\d\.]+)\)\s+ops\/sec,\s+([\d\.]+[KMG]?B\/sec)\s+\(avg:\s+([\d\.]+[KMG]?B\/sec)\),\s+(-nan|[\d\.]+)\s+\(avg:\s+([\d\.]+)\)\s+msec\s+latency"
     )
     match = re.search(progress_pattern, line)
 

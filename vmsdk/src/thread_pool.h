@@ -55,8 +55,8 @@ class ThreadPool {
   /// method will internally call `JoinTerminatedWorkers`
   void JoinWorkers();
 
-  /// Cleanup after threads that self terminated after pool resize operation and
-  /// were placed in the `pending_join_threads_` queue.
+  /// Reap any workers that have flagged themselves as joinable (e.g. after a
+  /// pool resize). Acquires no locks while calling pthread_join.
   void JoinTerminatedWorkers();
 
   absl::Status MarkForStop(StopMode stop_mode);
@@ -68,7 +68,7 @@ class ThreadPool {
   absl::Status ResumeWorkers();
   virtual ~ThreadPool();
 
-  size_t Size() const { return threads_.Size(); }
+  size_t Size() const;
   size_t QueueSize() const ABSL_LOCKS_EXCLUDED(queue_mutex_);
   enum class Priority { kLow = 0, kHigh = 1, kMax = 2 };
   virtual bool Schedule(absl::AnyInvocable<void()> task, Priority priority)
@@ -82,19 +82,12 @@ class ThreadPool {
   /// A struct representing a worker thread
   struct Thread {
     bool IsShutdown() const { return shutdown_flag.load(); }
-    void Shutdown(absl::AnyInvocable<void()> callback = nullptr) {
-      if (callback != nullptr) {
-        shutdown_callback = std::move(callback);
-      }
-      shutdown_flag.store(true);
-    }
+    void Shutdown() { shutdown_flag.store(true); }
 
-    /// If `shutdown_callback is` not null, call it
-    void InvokeShutdownCallback() {
-      if (shutdown_callback.has_value()) {
-        (*shutdown_callback)();
-      }
-    }
+    /// True once the worker has returned from its main loop and the underlying
+    /// pthread is safe to pthread_join.
+    bool IsJoinable() const { return joinable_flag.load(); }
+    void MarkJoinable() { joinable_flag.store(true); }
 
     absl::StatusOr<double> GetThreadCPUPercentage() {
       if (!thread_monitor_) {
@@ -109,10 +102,10 @@ class ThreadPool {
 
     pthread_t thread_id = 0;
     std::atomic_bool shutdown_flag = false;
-    /// If not null, the thread will call this callback when it exits via the
-    /// shutdown_flag
-    std::optional<absl::AnyInvocable<void()>> shutdown_callback = std::nullopt;
+    std::atomic_bool joinable_flag = false;
     std::unique_ptr<vmsdk::ThreadMonitor> thread_monitor_;
+    /// Set at thread creation; used for hung-thread diagnostics in JoinWorkers.
+    std::string name;
   };
 
   absl::StatusOr<double> GetAvgCPUPercentage();
@@ -163,7 +156,6 @@ class ThreadPool {
   }
   size_t initial_thread_count_ = 0;
   ThreadSafeVector<std::shared_ptr<Thread>> threads_;
-  ThreadSafeVector<std::shared_ptr<Thread>> pending_join_threads_;
   mutable absl::Mutex queue_mutex_;
   absl::CondVar condition_ ABSL_GUARDED_BY(queue_mutex_);
   std::vector<std::queue<TaskWithTime>> priority_tasks_

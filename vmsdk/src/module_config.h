@@ -248,14 +248,25 @@ class ConfigBase : public Registerable {
 
 class Number : public ConfigBase<long long> {
  public:
-  Number(std::string_view name, int64_t default_value, int64_t min_value,
-         int64_t max_value);
+  Number(std::string_view name, long long default_value, long long min_value,
+         long long max_value);
   ~Number() override = default;
   absl::Status FromString(std::string_view value) override;
 
   // Getters for min/max values
-  int64_t GetMinValue() const { return min_value_; }
-  int64_t GetMaxValue() const { return max_value_; }
+  long long GetMinValue() const { return min_value_; }
+  long long GetMaxValue() const { return max_value_; }
+
+  absl::Status Validate(long long val) const override {
+    VMSDK_RETURN_IF_ERROR(ConfigBase<long long>::Validate(val));
+    // Custom callback overrides the default validation
+    if (!validate_callback_ && (val < min_value_ || val > max_value_)) {
+      return absl::OutOfRangeError(
+          absl::StrFormat("%s must be between %lld and %lld", GetName(),
+                          min_value_, max_value_));
+    }
+    return absl::OkStatus();
+  }
 
  protected:
   // Implementation specific
@@ -270,10 +281,10 @@ class Number : public ConfigBase<long long> {
     current_value_.store(val, std::memory_order_relaxed);
   }
 
-  int64_t default_value_{0};
-  int64_t min_value_{0};
-  int64_t max_value_{0};
-  std::atomic_int64_t current_value_{0};
+  long long default_value_{0};
+  long long min_value_{0};
+  long long max_value_{0};
+  std::atomic<long long> current_value_{0};
   FRIEND_TEST(Builder, ConfigBuilder);
 };
 
@@ -282,7 +293,7 @@ class Enum : public ConfigBase<int> {
  public:
   Enum(std::string_view name, int default_value,
        const std::vector<std::string_view> &names,
-       const std::vector<int> &value);
+       const std::vector<int> &values);
   ~Enum() override = default;
   absl::Status FromString(std::string_view value) override;
 
@@ -634,15 +645,6 @@ template <typename... Args>
 ConfigBuilder<vmsdk::ValkeyVersion> VersionBuilder(Args &&...args) {
   return Builder<vmsdk::ValkeyVersion>(std::forward<Args>(args)...);
 }
-
-#define CHECK_RANGE(MIN, MAX, CONFIG_NAME)                         \
-  [](const int value) {                                            \
-    if (value < MIN || value > MAX) {                              \
-      return absl::OutOfRangeError(absl::StrFormat(                \
-          "%s must be between %u and %u", CONFIG_NAME, MIN, MAX)); \
-    }                                                              \
-    return absl::OkStatus();                                       \
-  }
 
 }  // namespace config
 }  // namespace vmsdk

@@ -42,7 +42,6 @@ static auto max_knn =
                                  kDefaultKnnLimit,  // default size
                                  1,                 // min size
                                  kMaxKnn)           // max size
-        .WithValidationCallback(CHECK_RANGE(1, kMaxKnn, kMaxKnnConfig))
         .Build();
 
 namespace options {

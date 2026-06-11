@@ -187,8 +187,8 @@ absl::Status ModuleConfigManager::UpdateConfigFromKeyVal(
   return absl::OkStatus();
 }
 
-Number::Number(std::string_view name, int64_t default_value, int64_t min_value,
-               int64_t max_value)
+Number::Number(std::string_view name, long long default_value,
+               long long min_value, long long max_value)
     : ConfigBase(name),
       default_value_(default_value),
       min_value_(min_value),

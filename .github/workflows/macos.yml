@@ -10,10 +10,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Silently skip (rather than fail) on non-release branches, for both push
-  # and pull_request events. The allowed branches are listed in
-  # .github/release-branches.txt. A job whose `if` is false is reported as
-  # skipped, so feature-branch pushes no longer show up as failed checks.
   check-branch:
     runs-on: ubuntu-latest
     outputs:

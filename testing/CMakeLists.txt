@@ -168,7 +168,7 @@ target_link_libraries(valkey_utils_test PRIVATE segment_tree)
 finalize_test_flags(valkey_utils_test)
 
 # 7. Text Index Test Suite
-add_executable(text_index_test 
+add_executable(text_index_test
     ${CMAKE_CURRENT_LIST_DIR}/flat_position_map_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/radix_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/rax_wrapper_test.cc
@@ -178,5 +178,13 @@ target_link_libraries(text_index_test PRIVATE testing_common_base)
 target_link_libraries(text_index_test PRIVATE text)
 finalize_test_flags(text_index_test)
 
-# 8. Expr Test Suite
+# 8. Scoring Test Suite
+add_executable(scoring_test
+    ${CMAKE_CURRENT_LIST_DIR}/scoring/bm25std_scorer_test.cc)
+target_include_directories(scoring_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(scoring_test PRIVATE testing_common_base)
+target_link_libraries(scoring_test PRIVATE scoring)
+finalize_test_flags(scoring_test)
+
+# 9. Expr Test Suite
 add_subdirectory(expr)

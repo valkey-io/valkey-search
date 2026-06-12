@@ -28,6 +28,8 @@
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/vector_base.h"
+#include "src/multi_language.h"
+#include "src/version.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -214,7 +216,24 @@ static auto default_timeout_ms =
 
 const absl::NoDestructor<
     absl::flat_hash_map<absl::string_view, data_model::Language>>
-    kLanguageByStr({{"ENGLISH", data_model::LANGUAGE_ENGLISH}});
+    kLanguageByStr([] {
+      absl::flat_hash_map<absl::string_view, data_model::Language> m{
+          {"ENGLISH", data_model::LANGUAGE_ENGLISH}};
+      if constexpr (kModuleVersion >= valkey_search::kRelease14) {
+        m.insert({{"FRENCH", data_model::LANGUAGE_FRENCH},
+                  {"GERMAN", data_model::LANGUAGE_GERMAN},
+                  {"SPANISH", data_model::LANGUAGE_SPANISH},
+                  {"ITALIAN", data_model::LANGUAGE_ITALIAN},
+                  {"PORTUGUESE", data_model::LANGUAGE_PORTUGUESE},
+                  {"RUSSIAN", data_model::LANGUAGE_RUSSIAN},
+                  {"SWEDISH", data_model::LANGUAGE_SWEDISH},
+                  {"TURKISH", data_model::LANGUAGE_TURKISH},
+                  {"DUTCH", data_model::LANGUAGE_DUTCH},
+                  {"INDONESIAN", data_model::LANGUAGE_INDONESIAN},
+                  {"ARABIC", data_model::LANGUAGE_ARABIC}});
+      }
+      return m;
+    }());
 const absl::NoDestructor<
     absl::flat_hash_map<absl::string_view, data_model::AttributeDataType>>
     kOnDataTypeByStr({{"HASH", data_model::ATTRIBUTE_DATA_TYPE_HASH},
@@ -278,6 +297,13 @@ absl::Status ParseLanguage(vmsdk::ArgsIterator &itr,
   if (res) {
     return absl::InvalidArgumentError(
         NotSupportedParamErrorMsg(kLanguageFieldParam));
+  }
+
+  if (!IsLanguageSupported(language)) {
+    return absl::InvalidArgumentError(
+        absl::StrCat(data_model::Language_Name(language),
+                     " requires the multi-language-support config to be "
+                     "enabled"));
   }
 
   index_schema_proto.set_language(language);

@@ -146,5 +146,8 @@ config::Number& GetMutationWeightTag();
 /// FT.AGGREGATE commands
 config::Number& GetQueryStringDepth();
 
+/// Return the configuration entry for multi-language support feature flag
+const config::Boolean& GetMultiLanguageSupport();
+
 }  // namespace options
 }  // namespace valkey_search

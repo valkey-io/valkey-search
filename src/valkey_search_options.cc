@@ -743,5 +743,17 @@ config::Number& GetMutationWeightTag() {
   return dynamic_cast<config::Number&>(*mutation_weight_tag);
 }
 
+/// Register the "--multi-language-support" flag. Controls whether non-English
+/// text indexes can be created. Marked as Dev() so it can only be set at
+/// startup (or at runtime when debug-mode is enabled).
+constexpr absl::string_view kMultiLanguageSupportConfig{
+    "multi-language-support"};
+static auto multi_language_support =
+    config::BooleanBuilder(kMultiLanguageSupportConfig, false).Dev().Build();
+
+const vmsdk::config::Boolean& GetMultiLanguageSupport() {
+  return dynamic_cast<const vmsdk::config::Boolean&>(*multi_language_support);
+}
+
 }  // namespace options
 }  // namespace valkey_search

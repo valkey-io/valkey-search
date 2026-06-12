@@ -12,9 +12,9 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
-#include <thread>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"

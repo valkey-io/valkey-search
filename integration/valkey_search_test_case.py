@@ -110,8 +110,8 @@ class ReplicationGroup:
         return True
 
     def _replication_lag(self, index) -> int:
-        primary_offset = self.primary.client.info("REPLICATION")['master_repl_offset']
         replica_offset = self.replicas[index].client.info("REPLICATION")['slave_repl_offset']
+        primary_offset = self.primary.client.info("REPLICATION")['master_repl_offset']
         assert primary_offset >= replica_offset
         return primary_offset - replica_offset
 

@@ -38,11 +38,7 @@ class PatriciaNode {
       std::string, std::unique_ptr<PatriciaNode<T, Hasher, Equaler, SetType_>>>
       children;
   int64_t subtree_values_count = 0;
-  // SetType_ is required to default-construct to an empty state and to expose
-  // empty() / size() / insert() / erase() / begin() / end(). Both
-  // absl::flat_hash_set<T> and BagOfInternedStringPtrs satisfy that, so we
-  // store the set inline rather than wrapping it in std::optional.
-  SetType_ value;
+  std::optional<SetType_> value;
   void PrintValue() {}
 };
 
@@ -62,7 +58,10 @@ class PatriciaTree {
     while (true) {
       node->subtree_values_count++;
       if (remaining_key.empty()) {
-        node->value.insert(value);
+        if (!node->value.has_value()) {
+          node->value.emplace();
+        }
+        node->value->insert(value);
         return;
       }
       bool found = false;
@@ -103,15 +102,14 @@ class PatriciaTree {
     }
   }
 
-  // Returns a pointer to the set of values for the given key (nullptr if no
-  // matching node, or if the matched node has an empty set). If exact_match
-  // is false, returns the set at the longest matching prefix.
-  const SetType *GetValue(absl::string_view key, bool exact_match) const {
+  // Returns the set of values for the given key. If exact_match is false,
+  // returns the set of values for the longest prefix of the key.
+  SetType *GetValue(absl::string_view key, bool exact_match) const {
     PatriciaNodeType *node = GetLeafNodeForKey(key, exact_match);
     if (node == nullptr) {
       return nullptr;
     }
-    return node->value.empty() ? nullptr : &node->value;
+    return !node->value.has_value() ? nullptr : &node->value.value();
   }
 
   int64_t GetQualifiedElementsCount(absl::string_view key,
@@ -121,7 +119,7 @@ class PatriciaTree {
       return 0;
     }
     if (exact_match) {
-      return static_cast<int64_t>(node->value.size());
+      return !node->value.has_value() ? 0 : node->value.value().size();
     }
     return node->subtree_values_count;
   }
@@ -177,7 +175,7 @@ class PatriciaTree {
     }
 
     void DfsHelper(PatriciaNodeType *node) const {
-      if (!node->value.empty()) {
+      if (node->value.has_value()) {
         values_.push(node);
       }
       for (const auto &[child_key, child_node] : node->children) {
@@ -205,7 +203,7 @@ class PatriciaTree {
     TriePathIterator(PatriciaNodeType *root, absl::string_view str,
                      bool case_sensitive) {
       case_sensitive_ = case_sensitive;
-      if (!root->value.empty()) {
+      if (root->value != std::nullopt) {
         values_.push(root);
       }
       while (!str.empty()) {
@@ -213,7 +211,7 @@ class PatriciaTree {
         for (const auto &child : root->children) {
           if (str.compare(0, child.first.size(), child.first) == 0) {
             found = true;
-            if (!child.second->value.empty()) {
+            if (child.second->value != std::nullopt) {
               values_.push(child.second.get());
             }
             str = str.substr(child.first.size());
@@ -246,10 +244,6 @@ class PatriciaTree {
     return TriePathIterator(root_.get(), str, case_sensitive_);
   }
 
-  // Read-only access to the root for external structural walks (e.g. memory
-  // estimators that need to visit every node, not just value-bearing ones).
-  const PatriciaNodeType *Root() const { return root_.get(); }
-
  private:
   std::unique_ptr<PatriciaNodeType> root_;
   bool case_sensitive_;
@@ -273,7 +267,12 @@ class PatriciaTree {
   bool RemoveHelper(PatriciaNodeType *node, absl::string_view key,
                     const T &value) {
     if (key.empty()) {
-      if (node->value.erase(value) > 0) {
+      if (!node->value) {
+        return false;  // Key not found
+      }
+      auto itr = node->value.value().find(value);
+      if (itr != node->value.value().end()) {
+        node->value.value().erase(itr);
         node->subtree_values_count--;
         return true;
       }
@@ -289,7 +288,9 @@ class PatriciaTree {
             RemoveHelper(child_node, key.substr(common_prefix.size()), value);
         if (found) {
           node->subtree_values_count--;
-          if (child_node->children.empty() && child_node->value.empty()) {
+          if (child_node->children.empty() &&
+              (!child_node->value.has_value() ||
+               child_node->value.value().empty())) {
             node->children.erase(it);
           }
           return found;

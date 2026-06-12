@@ -140,6 +140,69 @@ INSTANTIATE_TEST_SUITE_P(StringInterningTests, StringInterningTest,
                            return std::to_string(info.param);
                          });
 
+class BorrowedInternedStringPtrTest : public vmsdk::ValkeyTest {};
+
+TEST_F(BorrowedInternedStringPtrTest, BasicBorrowAndAccess) {
+  auto owned = StringInternStore::Intern("borrowed_test");
+  EXPECT_EQ(owned.RefCount(), 1);
+
+  BorrowedInternedStringPtr borrowed(owned);
+  // Borrowing does not increment ref count.
+  EXPECT_EQ(owned.RefCount(), 1);
+  EXPECT_EQ(borrowed.Str(), "borrowed_test");
+  EXPECT_TRUE(borrowed);
+}
+
+TEST_F(BorrowedInternedStringPtrTest, CopyDoesNotRefCount) {
+  auto owned = StringInternStore::Intern("copy_test");
+  BorrowedInternedStringPtr b1(owned);
+  BorrowedInternedStringPtr b2 = b1;
+  BorrowedInternedStringPtr b3;
+  b3 = b2;
+  // Three borrowed copies, ref count still 1.
+  EXPECT_EQ(owned.RefCount(), 1);
+  EXPECT_EQ(b1.Str(), "copy_test");
+  EXPECT_EQ(b2.Str(), "copy_test");
+  EXPECT_EQ(b3.Str(), "copy_test");
+}
+
+TEST_F(BorrowedInternedStringPtrTest, DestroyDoesNotDecrementRefCount) {
+  auto owned = StringInternStore::Intern("destroy_test");
+  {
+    BorrowedInternedStringPtr borrowed(owned);
+    EXPECT_EQ(owned.RefCount(), 1);
+  }
+  // After borrowed goes out of scope, ref count unchanged.
+  EXPECT_EQ(owned.RefCount(), 1);
+  EXPECT_EQ(owned->Str(), "destroy_test");
+}
+
+TEST_F(BorrowedInternedStringPtrTest, MaterializeIncrementsRefCount) {
+  auto owned = StringInternStore::Intern("materialize_test");
+  EXPECT_EQ(owned.RefCount(), 1);
+
+  BorrowedInternedStringPtr borrowed(owned);
+  InternedStringPtr materialized = borrowed.Materialize();
+
+  EXPECT_EQ(owned.RefCount(), 2);
+  EXPECT_EQ(materialized->Str(), "materialize_test");
+  EXPECT_EQ(materialized, owned);
+}
+
+TEST_F(BorrowedInternedStringPtrTest, MaterializedPtrKeepsStringAlive) {
+  InternedStringPtr materialized;
+  {
+    auto owned = StringInternStore::Intern("lifetime_test");
+    BorrowedInternedStringPtr borrowed(owned);
+    materialized = borrowed.Materialize();
+    EXPECT_EQ(owned.RefCount(), 2);
+  }
+  // Original owned is gone, but materialized keeps it alive.
+  EXPECT_EQ(materialized.RefCount(), 1);
+  EXPECT_EQ(materialized->Str(), "lifetime_test");
+  EXPECT_EQ(StringInternStore::Instance().UniqueStrings(), 1);
+}
+
 class StringInterningMultithreadTest : public vmsdk::ValkeyTest {};
 
 TEST_F(StringInterningMultithreadTest, Simple) {
@@ -227,11 +290,18 @@ TEST_F(BagOfInternedStringPtrsTest, InsertDuplicateInSingleMode) {
   BagOfInternedStringPtrs bag;
   bag.insert(k);
   EXPECT_EQ(k.RefCount(), 2);
+  EXPECT_EQ(bag.TestModeForTesting(),
+            BagOfInternedStringPtrs::TestMode::kSingle);
   auto [it, inserted] = bag.insert(k);
   EXPECT_FALSE(inserted);
   EXPECT_EQ(bag.size(), 1u);
   EXPECT_EQ(k.RefCount(), 2);
   EXPECT_NE(it, bag.end());
+  // Sanity: the duplicate insert must not have promoted out of Single mode,
+  // and the bag itself remains 8 bytes regardless of representation.
+  EXPECT_EQ(bag.TestModeForTesting(),
+            BagOfInternedStringPtrs::TestMode::kSingle);
+  static_assert(sizeof(BagOfInternedStringPtrs) == 8);
 }
 
 TEST_F(BagOfInternedStringPtrsTest, PromoteSingleToMulti) {
@@ -239,7 +309,11 @@ TEST_F(BagOfInternedStringPtrsTest, PromoteSingleToMulti) {
   auto b = StringInternStore::Intern("b");
   BagOfInternedStringPtrs bag;
   bag.insert(a);
+  EXPECT_EQ(bag.TestModeForTesting(),
+            BagOfInternedStringPtrs::TestMode::kSingle);
   bag.insert(b);
+  EXPECT_EQ(bag.TestModeForTesting(),
+            BagOfInternedStringPtrs::TestMode::kArray4);
   EXPECT_EQ(bag.size(), 2u);
   EXPECT_TRUE(bag.contains(a));
   EXPECT_TRUE(bag.contains(b));
@@ -284,9 +358,16 @@ TEST_F(BagOfInternedStringPtrsTest, DemoteMultiToSingleOnErase) {
   bag.insert(b);
   bag.insert(c);
   EXPECT_EQ(bag.size(), 3u);
+  EXPECT_EQ(bag.TestModeForTesting(),
+            BagOfInternedStringPtrs::TestMode::kArray4);
   EXPECT_EQ(bag.erase(b), 1u);
+  EXPECT_EQ(bag.TestModeForTesting(),
+            BagOfInternedStringPtrs::TestMode::kArray4);
   EXPECT_EQ(bag.erase(c), 1u);
   EXPECT_EQ(bag.size(), 1u);
+  // Demote happens at count==1: Array4 -> Single.
+  EXPECT_EQ(bag.TestModeForTesting(),
+            BagOfInternedStringPtrs::TestMode::kSingle);
   EXPECT_TRUE(bag.contains(a));
   EXPECT_FALSE(bag.contains(b));
   EXPECT_FALSE(bag.contains(c));
@@ -300,6 +381,8 @@ TEST_F(BagOfInternedStringPtrsTest, DemoteMultiToSingleOnErase) {
   // Removing the lone element returns to empty.
   EXPECT_EQ(bag.erase(a), 1u);
   EXPECT_TRUE(bag.empty());
+  EXPECT_EQ(bag.TestModeForTesting(),
+            BagOfInternedStringPtrs::TestMode::kEmpty);
   EXPECT_EQ(a.RefCount(), 1);
 }
 
@@ -570,32 +653,39 @@ void ExpectBagContains(const BagOfInternedStringPtrs& bag,
 }  // namespace
 
 TEST_F(BagOfInternedStringPtrsTest, InsertProgressionEmptyToSet) {
-  // Insert keys one at a time and verify size + content + ref counts at
-  // every mode boundary.
+  using Mode = BagOfInternedStringPtrs::TestMode;
+  // Insert keys one at a time and verify size + content + ref counts + mode
+  // at every boundary.
   auto keys = MakeKeys(10, "ipe_");
 
   BagOfInternedStringPtrs bag;
   EXPECT_EQ(bag.size(), 0u);
+  EXPECT_EQ(bag.TestModeForTesting(), Mode::kEmpty);
 
   // Empty -> Single (1 element).
   bag.insert(keys[0]);
   ExpectBagContains(bag, keys, 1);
+  EXPECT_EQ(bag.TestModeForTesting(), Mode::kSingle);
   EXPECT_EQ(keys[0].RefCount(), 2);
 
   // Single -> Array4 (2 elements).
   bag.insert(keys[1]);
   ExpectBagContains(bag, keys, 2);
+  EXPECT_EQ(bag.TestModeForTesting(), Mode::kArray4);
   EXPECT_EQ(keys[1].RefCount(), 2);
 
   // Array4 stays Array4 (3, 4 elements).
   bag.insert(keys[2]);
   ExpectBagContains(bag, keys, 3);
+  EXPECT_EQ(bag.TestModeForTesting(), Mode::kArray4);
   bag.insert(keys[3]);
   ExpectBagContains(bag, keys, 4);
+  EXPECT_EQ(bag.TestModeForTesting(), Mode::kArray4);
 
   // Array4 -> Array8 (5 elements).
   bag.insert(keys[4]);
   ExpectBagContains(bag, keys, 5);
+  EXPECT_EQ(bag.TestModeForTesting(), Mode::kArray8);
   EXPECT_EQ(keys[4].RefCount(), 2);
 
   // Array8 stays Array8 (6, 7, 8 elements).
@@ -603,20 +693,24 @@ TEST_F(BagOfInternedStringPtrsTest, InsertProgressionEmptyToSet) {
   bag.insert(keys[6]);
   bag.insert(keys[7]);
   ExpectBagContains(bag, keys, 8);
+  EXPECT_EQ(bag.TestModeForTesting(), Mode::kArray8);
 
   // Array8 -> Set (9 elements).
   bag.insert(keys[8]);
   ExpectBagContains(bag, keys, 9);
+  EXPECT_EQ(bag.TestModeForTesting(), Mode::kSet);
 
   // Set stays Set.
   bag.insert(keys[9]);
   ExpectBagContains(bag, keys, 10);
+  EXPECT_EQ(bag.TestModeForTesting(), Mode::kSet);
   for (const auto& k : keys) {
     EXPECT_EQ(k.RefCount(), 2);
   }
 }
 
 TEST_F(BagOfInternedStringPtrsTest, EraseProgressionSetToEmpty) {
+  using Mode = BagOfInternedStringPtrs::TestMode;
   // Inverse of the previous test: starting from 10 elements (Set mode),
   // erase one at a time and verify mode-boundary demotions.
   auto keys = MakeKeys(10, "ese_");
@@ -625,6 +719,7 @@ TEST_F(BagOfInternedStringPtrsTest, EraseProgressionSetToEmpty) {
     bag.insert(k);
   }
   ExpectBagContains(bag, keys, 10);
+  EXPECT_EQ(bag.TestModeForTesting(), Mode::kSet);
   for (const auto& k : keys) {
     EXPECT_EQ(k.RefCount(), 2);
   }
@@ -633,37 +728,45 @@ TEST_F(BagOfInternedStringPtrsTest, EraseProgressionSetToEmpty) {
   bag.erase(keys[9]);
   EXPECT_EQ(keys[9].RefCount(), 1);
   ExpectBagContains(bag, keys, 9);
+  EXPECT_EQ(bag.TestModeForTesting(), Mode::kSet);
 
   // Set -> Array8 (9 -> 8).
   bag.erase(keys[8]);
   EXPECT_EQ(keys[8].RefCount(), 1);
   ExpectBagContains(bag, keys, 8);
+  EXPECT_EQ(bag.TestModeForTesting(), Mode::kArray8);
 
   // Array8 -> Array8 (8 -> 7, 6, 5).
   bag.erase(keys[7]);
+  EXPECT_EQ(bag.TestModeForTesting(), Mode::kArray8);
   bag.erase(keys[6]);
   bag.erase(keys[5]);
   ExpectBagContains(bag, keys, 5);
+  EXPECT_EQ(bag.TestModeForTesting(), Mode::kArray8);
 
   // Array8 -> Array4 (5 -> 4).
   bag.erase(keys[4]);
   EXPECT_EQ(keys[4].RefCount(), 1);
   ExpectBagContains(bag, keys, 4);
+  EXPECT_EQ(bag.TestModeForTesting(), Mode::kArray4);
 
   // Array4 -> Array4 (4 -> 3, 2).
   bag.erase(keys[3]);
   bag.erase(keys[2]);
   ExpectBagContains(bag, keys, 2);
+  EXPECT_EQ(bag.TestModeForTesting(), Mode::kArray4);
 
   // Array4 -> Single (2 -> 1).
   bag.erase(keys[1]);
   EXPECT_EQ(keys[1].RefCount(), 1);
   ExpectBagContains(bag, keys, 1);
+  EXPECT_EQ(bag.TestModeForTesting(), Mode::kSingle);
 
   // Single -> Empty.
   bag.erase(keys[0]);
   EXPECT_EQ(keys[0].RefCount(), 1);
   EXPECT_TRUE(bag.empty());
+  EXPECT_EQ(bag.TestModeForTesting(), Mode::kEmpty);
 }
 
 TEST_F(BagOfInternedStringPtrsTest, ArrayPacksToFrontAfterMidErase) {
@@ -826,6 +929,162 @@ TEST_F(BagOfInternedStringPtrsTest, EraseByIteratorAllArrayModes) {
     EXPECT_EQ(bag.size(), 9u);
     EXPECT_FALSE(bag.contains(keys[4]));
     EXPECT_EQ(keys[4].RefCount(), 1);
+  }
+}
+
+TEST_F(BagOfInternedStringPtrsTest, RvalueInsertIntoArrayAndSetModes) {
+  // Walk a moving InternedStringPtr into the bag at every mode boundary and
+  // confirm the rvalue path adopts the ref count rather than copying it.
+  auto keys = MakeKeys(10, "rva_");
+  BagOfInternedStringPtrs bag;
+  // Single mode (Empty -> Single).
+  {
+    InternedStringPtr local = keys[0];
+    EXPECT_EQ(keys[0].RefCount(), 2);
+    bag.insert(std::move(local));
+    // local was emptied; ref count moved to bag.
+    EXPECT_EQ(keys[0].RefCount(), 2);
+    EXPECT_EQ(bag.TestModeForTesting(),
+              BagOfInternedStringPtrs::TestMode::kSingle);
+  }
+  // Array4 promotion (Single -> Array4).
+  {
+    InternedStringPtr local = keys[1];
+    EXPECT_EQ(keys[1].RefCount(), 2);
+    bag.insert(std::move(local));
+    EXPECT_EQ(keys[1].RefCount(), 2);
+    EXPECT_EQ(bag.TestModeForTesting(),
+              BagOfInternedStringPtrs::TestMode::kArray4);
+  }
+  // Array4 fill via rvalue (still Array4).
+  for (int i = 2; i < 4; ++i) {
+    InternedStringPtr local = keys[i];
+    bag.insert(std::move(local));
+    EXPECT_EQ(keys[i].RefCount(), 2);
+  }
+  EXPECT_EQ(bag.TestModeForTesting(),
+            BagOfInternedStringPtrs::TestMode::kArray4);
+  // Array4 -> Array8 promotion via rvalue.
+  {
+    InternedStringPtr local = keys[4];
+    bag.insert(std::move(local));
+    EXPECT_EQ(keys[4].RefCount(), 2);
+    EXPECT_EQ(bag.TestModeForTesting(),
+              BagOfInternedStringPtrs::TestMode::kArray8);
+  }
+  // Array8 fill via rvalue.
+  for (int i = 5; i < 8; ++i) {
+    InternedStringPtr local = keys[i];
+    bag.insert(std::move(local));
+    EXPECT_EQ(keys[i].RefCount(), 2);
+  }
+  EXPECT_EQ(bag.TestModeForTesting(),
+            BagOfInternedStringPtrs::TestMode::kArray8);
+  // Array8 -> Set promotion via rvalue.
+  {
+    InternedStringPtr local = keys[8];
+    bag.insert(std::move(local));
+    EXPECT_EQ(keys[8].RefCount(), 2);
+    EXPECT_EQ(bag.TestModeForTesting(),
+              BagOfInternedStringPtrs::TestMode::kSet);
+  }
+  // Set insert via rvalue (no mode change).
+  {
+    InternedStringPtr local = keys[9];
+    bag.insert(std::move(local));
+    EXPECT_EQ(keys[9].RefCount(), 2);
+    EXPECT_EQ(bag.TestModeForTesting(),
+              BagOfInternedStringPtrs::TestMode::kSet);
+  }
+  EXPECT_EQ(bag.size(), 10u);
+}
+
+TEST_F(BagOfInternedStringPtrsTest, EraseNonexistentInEveryMode) {
+  auto present = MakeKeys(10, "enpr_");
+  auto missing = StringInternStore::Intern("enpr_missing");
+  // Single mode.
+  {
+    BagOfInternedStringPtrs bag;
+    bag.insert(present[0]);
+    EXPECT_EQ(bag.erase(missing), 0u);
+    EXPECT_EQ(bag.size(), 1u);
+    EXPECT_EQ(bag.TestModeForTesting(),
+              BagOfInternedStringPtrs::TestMode::kSingle);
+  }
+  // Array4 mode.
+  {
+    BagOfInternedStringPtrs bag;
+    for (int i = 0; i < 3; ++i) bag.insert(present[i]);
+    EXPECT_EQ(bag.erase(missing), 0u);
+    EXPECT_EQ(bag.size(), 3u);
+    EXPECT_EQ(bag.TestModeForTesting(),
+              BagOfInternedStringPtrs::TestMode::kArray4);
+  }
+  // Array8 mode.
+  {
+    BagOfInternedStringPtrs bag;
+    for (int i = 0; i < 6; ++i) bag.insert(present[i]);
+    EXPECT_EQ(bag.erase(missing), 0u);
+    EXPECT_EQ(bag.size(), 6u);
+    EXPECT_EQ(bag.TestModeForTesting(),
+              BagOfInternedStringPtrs::TestMode::kArray8);
+  }
+  // Set mode.
+  {
+    BagOfInternedStringPtrs bag;
+    for (int i = 0; i < 10; ++i) bag.insert(present[i]);
+    EXPECT_EQ(bag.erase(missing), 0u);
+    EXPECT_EQ(bag.size(), 10u);
+    EXPECT_EQ(bag.TestModeForTesting(),
+              BagOfInternedStringPtrs::TestMode::kSet);
+  }
+  // Erasing the absent key must not have inadvertently bumped its ref count.
+  EXPECT_EQ(missing.RefCount(), 1);
+}
+
+TEST_F(BagOfInternedStringPtrsTest, ReservePicksCorrectMode) {
+  using Mode = BagOfInternedStringPtrs::TestMode;
+  // reserve(n) on a fresh bag should pre-pick a representation that fits n
+  // elements, so subsequent inserts don't trigger any promotions.
+  struct Case {
+    size_t n;
+    Mode expected_after_reserve;
+    Mode expected_after_insert_all;
+  };
+  for (Case c :
+       {Case{0, Mode::kEmpty, Mode::kEmpty},
+        Case{1, Mode::kEmpty, Mode::kSingle},  // <=1 stays lazy
+        Case{2, Mode::kArray4, Mode::kArray4},
+        Case{4, Mode::kArray4, Mode::kArray4},
+        Case{5, Mode::kArray8, Mode::kArray8},
+        Case{8, Mode::kArray8, Mode::kArray8}, Case{9, Mode::kSet, Mode::kSet},
+        Case{20, Mode::kSet, Mode::kSet}}) {
+    BagOfInternedStringPtrs bag;
+    bag.reserve(c.n);
+    EXPECT_EQ(bag.TestModeForTesting(), c.expected_after_reserve)
+        << "n=" << c.n;
+    auto keys =
+        MakeKeys(static_cast<int>(c.n), "rsv_" + std::to_string(c.n) + "_");
+    for (const auto& k : keys) {
+      bag.insert(k);
+    }
+    EXPECT_EQ(bag.size(), c.n) << "n=" << c.n;
+    EXPECT_EQ(bag.TestModeForTesting(), c.expected_after_insert_all)
+        << "n=" << c.n;
+  }
+}
+
+TEST_F(BagOfInternedStringPtrsTest, ReserveIsNoopOnNonEmptyBag) {
+  // reserve() should not corrupt a bag that already has elements.
+  auto keys = MakeKeys(3, "rsvne_");
+  BagOfInternedStringPtrs bag;
+  for (const auto& k : keys) bag.insert(k);
+  auto mode_before = bag.TestModeForTesting();
+  bag.reserve(100);  // would promote to Set if we honored this; we don't.
+  EXPECT_EQ(bag.TestModeForTesting(), mode_before);
+  EXPECT_EQ(bag.size(), 3u);
+  for (const auto& k : keys) {
+    EXPECT_TRUE(bag.contains(k));
   }
 }
 

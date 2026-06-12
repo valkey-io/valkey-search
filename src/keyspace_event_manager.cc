@@ -44,7 +44,7 @@ void KeyspaceEventManager::NotifySubscribers(ValkeyModuleCtx *ctx, int type,
     auto key_view = vmsdk::ToStringView(key);
     for (auto match_itr = subscription_trie_.Get().PathIterator(key_view);
          !match_itr.Done(); match_itr.Next()) {
-      for (const auto &subscription : match_itr.Value().value) {
+      for (const auto &subscription : *match_itr.Value().value) {
         if (subscription->GetAttributeDataType().GetValkeyEventTypes() & type) {
           subscriptions_to_notify.push_back(subscription);
         }

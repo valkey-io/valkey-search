@@ -95,7 +95,7 @@ TEST_F(PatriciaTreeSetTest, PrefixMatcher) {
   auto cnt = 0;
   auto itr = tree_->PrefixMatcher("appl");
   while (!itr.Done()) {
-    EXPECT_THAT(itr.Value()->value, testing::UnorderedElementsAre(1));
+    EXPECT_THAT(*itr.Value()->value, testing::UnorderedElementsAre(1));
     itr.Next();
     cnt++;
   }
@@ -180,7 +180,7 @@ TEST_F(PatriciaTreeSetTest, TriePathIterator) {
   std::unordered_set<int> expected = {1, 2, 3, 4, 5};
   std::unordered_set<int> got;
   for (auto itr = tree_->PathIterator("apple"); !itr.Done(); itr.Next()) {
-    got.insert(itr.Value().value.begin(), itr.Value().value.end());
+    got.insert(itr.Value().value->begin(), itr.Value().value->end());
   }
   EXPECT_EQ(got, expected);
 }

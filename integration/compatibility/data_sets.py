@@ -596,24 +596,38 @@ def compute_text_data_sets(dataset_name, seed=123, schema_type="default"):
 ### Helper Functions ###
 def compute_alias_data():
     """Return alias compatibility dataset in the standard compute_data_sets() shape.
+    Supports both hash and json key types.
     """
     data = {"alias": {}}
-    key_type = "hash"
-    # Use hash_idx1 so the generic "{key_type}_idx1" waiter in
-    # compatibility_test.py works without any dataset-specific special-casing.
-    data["alias"][CREATES_KEY(key_type)] = [
-        "FT.CREATE hash_idx1 ON HASH PREFIX 1 adoc: SCHEMA price NUMERIC category TAG",
-    ]
-    data["alias"][SETS_KEY(key_type)] = [
-        (f"adoc:{i}", {"price": str(i * 10),
-                       "category": "electronics" if i % 2 == 0 else "books"})
-        for i in range(5)
-    ]
-    # Post-load alias setup: each entry is a flat arg list for execute_command.
-    data["alias"][SETUP_KEY(key_type)] = [
-        ["FT.ALIASADD", "alias_search", "hash_idx1"],
-        ["FT.ALIASADD", "alias_agg",    "hash_idx1"],
-    ]
+    for key_type in ["hash", "json"]:
+        if key_type == "hash":
+            data["alias"][CREATES_KEY(key_type)] = [
+                "FT.CREATE hash_idx1 ON HASH PREFIX 1 adoc: SCHEMA price NUMERIC category TAG",
+                "FT.CREATE hash_idx2 ON HASH PREFIX 1 empty: SCHEMA price NUMERIC category TAG",
+            ]
+            data["alias"][SETS_KEY(key_type)] = [
+                (f"adoc:{i}", {"price": str(i * 10),
+                               "category": "electronics" if i % 2 == 0 else "books"})
+                for i in range(5)
+            ]
+            data["alias"][SETUP_KEY(key_type)] = [
+                ["FT.ALIASADD", "alias_search", "hash_idx1"],
+                ["FT.ALIASADD", "alias_agg",    "hash_idx1"],
+            ]
+        else:
+            data["alias"][CREATES_KEY(key_type)] = [
+                "FT.CREATE json_idx1 ON JSON PREFIX 1 jdoc: SCHEMA $.price AS price NUMERIC $.category AS category TAG",
+                "FT.CREATE json_idx2 ON JSON PREFIX 1 jempty: SCHEMA $.price AS price NUMERIC $.category AS category TAG",
+            ]
+            data["alias"][SETS_KEY(key_type)] = [
+                (f"jdoc:{i}", {"price": i * 10,
+                               "category": "electronics" if i % 2 == 0 else "books"})
+                for i in range(5)
+            ]
+            data["alias"][SETUP_KEY(key_type)] = [
+                ["FT.ALIASADD", "alias_search", "json_idx1"],
+                ["FT.ALIASADD", "alias_agg",    "json_idx1"],
+            ]
     return data
 
 
@@ -630,7 +644,6 @@ def load_data(client, data_set, key_type, data_source=None, schema_type="default
     match data_source:
         case "alias":
             data = compute_alias_data()
-            key_type = "hash"  # alias dataset is hash-only
         case "vector":
             data = compute_data_sets()
         case "text":

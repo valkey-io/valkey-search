@@ -423,7 +423,6 @@ def _first_index_name(data_set_name, key_type):
     """Return the first index name created by a dataset's CREATES_KEY commands."""
     if data_set_name == "alias":
         data = compute_alias_data()
-        key_type = "hash"
     elif data_set_name in TEXT_DATASETS:
         data = compute_text_data_sets(data_set_name)
     else:

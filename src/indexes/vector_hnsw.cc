@@ -152,14 +152,14 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
     // initial_cap needs to be provided to retain the original initial_cap if
     // the index being loaded is empty.
 
+    index->algo_->allow_replace_deleted_ =
+        options::GetHNSWAllowReplaceDeleted().GetValue();
     RDBChunkInputStream input(std::move(iter));
     VMSDK_RETURN_IF_ERROR(
         index->algo_->LoadIndex(input, index->space_.get(),
                                 vector_index_proto.initial_cap(), index.get()));
     // ef_runtime is not persisted in the index contents
     index->algo_->setEf(vector_index_proto.hnsw_algorithm().ef_runtime());
-    index->algo_->allow_replace_deleted_ =
-        options::GetHNSWAllowReplaceDeleted().GetValue();
     return index;
   } catch (const std::exception &e) {
     ++Metrics::GetStats().hnsw_create_exceptions_cnt;

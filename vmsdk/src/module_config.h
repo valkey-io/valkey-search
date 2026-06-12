@@ -399,8 +399,12 @@ class TypedConfig : public ConfigBase<T> {
  public:
   ~TypedConfig() override = default;
   absl::Status FromString(std::string_view value) override {
-    VMSDK_ASSIGN_OR_RETURN(default_value_, ConfigTraits<T>::Parse(value));
-    return this->SetValueOrLog(default_value_, WARNING);
+    VMSDK_ASSIGN_OR_RETURN(T parsed, ConfigTraits<T>::Parse(value));
+    // Validate before touching any state so a rejected value leaves both the
+    // current value and the default untouched.
+    VMSDK_RETURN_IF_ERROR(this->SetValueOrLog(parsed, WARNING));
+    default_value_ = parsed;
+    return absl::OkStatus();
   }
 
   std::optional<T> GetMinValueOpt() const { return min_value_; }
@@ -444,14 +448,23 @@ class TypedConfig : public ConfigBase<T> {
   // declared the bounds.
   absl::Status Validate(T value) const override {
     VMSDK_RETURN_IF_ERROR(ConfigBase<T>::Validate(value));
-    if ((min_value_ && value < *min_value_) ||
-        (max_value_ && value > *max_value_)) {
-      return absl::OutOfRangeError(
-          absl::StrFormat("%s must be between %s and %s", this->GetName(),
-                          ConfigTraits<T>::Format(*min_value_),
-                          ConfigTraits<T>::Format(*max_value_)));
+    bool below_min = min_value_ && value < *min_value_;
+    bool above_max = max_value_ && value > *max_value_;
+    if (!below_min && !above_max) {
+      return absl::OkStatus();
     }
-    return absl::OkStatus();
+    std::string range;
+    if (min_value_ && max_value_) {
+      range = absl::StrFormat("between %s and %s",
+                              ConfigTraits<T>::Format(*min_value_),
+                              ConfigTraits<T>::Format(*max_value_));
+    } else if (min_value_) {
+      range = absl::StrFormat(">= %s", ConfigTraits<T>::Format(*min_value_));
+    } else {
+      range = absl::StrFormat("<= %s", ConfigTraits<T>::Format(*max_value_));
+    }
+    return absl::OutOfRangeError(
+        absl::StrFormat("%s must be %s", this->GetName(), range));
   }
 
   T default_value_;

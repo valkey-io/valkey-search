@@ -175,6 +175,9 @@ class IndexSchema : public KeyspaceEventSubscription,
 
   inline const std::string &GetName() const { return name_; }
   inline std::uint32_t GetDBNum() const { return db_num_; }
+  inline const std::optional<uint16_t> &GetSingleSlotNumber() const {
+    return single_slot_number_;
+  }
   inline float GetScore() const { return score_; }
   inline const std::string &GetScoreField() const {
     CHECK(score_field_.has_value())
@@ -417,6 +420,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   std::unique_ptr<AttributeDataType> attribute_data_type_;
   std::string name_;
   uint32_t db_num_{0};
+  std::optional<uint16_t> single_slot_number_;
   data_model::Language language_{data_model::LANGUAGE_ENGLISH};
   std::string punctuation_;
   bool with_offsets_{true};

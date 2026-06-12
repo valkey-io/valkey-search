@@ -257,7 +257,7 @@ const absl::flat_hash_set<absl::string_view>* Tag::GetValue(
 Tag::EntriesFetcherIterator::EntriesFetcherIterator(
     const PatriciaTreeIndex& tree,
     absl::flat_hash_set<PatriciaNodeIndex*>& entries,
-    const InternedStringSet& untracked_keys, bool negate)
+    const KeySet& untracked_keys, bool negate)
     : tree_(tree),
       entries_(entries),
       untracked_keys_(untracked_keys),

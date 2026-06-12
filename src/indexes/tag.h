@@ -73,15 +73,19 @@ class Tag : public IndexBase {
   const absl::flat_hash_set<absl::string_view>* GetValue(
       const InternedStringPtr& key,
       bool& case_sensitive) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
-  using PatriciaTreeIndex = PatriciaTree<InternedStringPtr>;
-  using PatriciaNodeIndex = PatriciaNode<InternedStringPtr>;
+  using KeySet = BagOfInternedStringPtrs;
+  using PatriciaTreeIndex =
+      PatriciaTree<InternedStringPtr, absl::Hash<InternedStringPtr>,
+                   std::equal_to<InternedStringPtr>, KeySet>;
+  using PatriciaNodeIndex =
+      PatriciaNode<InternedStringPtr, absl::Hash<InternedStringPtr>,
+                   std::equal_to<InternedStringPtr>, KeySet>;
 
   class EntriesFetcherIterator : public EntriesFetcherIteratorBase {
    public:
     EntriesFetcherIterator(const PatriciaTreeIndex& tree,
                            absl::flat_hash_set<PatriciaNodeIndex*>& entries,
-                           const InternedStringSet& untracked_keys,
-                           bool negate);
+                           const KeySet& untracked_keys, bool negate);
     bool Done() const override;
     void Next() override;
     const InternedStringPtr& operator*() const override;
@@ -102,10 +106,10 @@ class Tag : public IndexBase {
     absl::flat_hash_set<PatriciaNodeIndex*>& entries_;
 
     PatriciaNodeIndex* next_node_{nullptr};
-    InternedStringSet::const_iterator next_iter_;
-    const InternedStringSet& untracked_keys_;
+    KeySet::const_iterator next_iter_;
+    const KeySet& untracked_keys_;
     bool negate_;
-    std::optional<InternedStringSet::const_iterator> untracked_keys_iter_;
+    std::optional<KeySet::const_iterator> untracked_keys_iter_;
     void NextNegate();
     void EnsureNegateRootIter();
   };
@@ -114,7 +118,7 @@ class Tag : public IndexBase {
    public:
     EntriesFetcher(const PatriciaTreeIndex& tree,
                    absl::flat_hash_set<PatriciaNodeIndex*> entries, size_t size,
-                   bool negate, const InternedStringSet& untracked_keys)
+                   bool negate, const KeySet& untracked_keys)
         : tree_(tree),
           size_(size),
           entries_(entries),
@@ -128,7 +132,7 @@ class Tag : public IndexBase {
     size_t size_{0};
     absl::flat_hash_set<PatriciaNodeIndex*> entries_;
     bool negate_;
-    const InternedStringSet& untracked_keys_;
+    const KeySet& untracked_keys_;
   };
 
   virtual std::unique_ptr<EntriesFetcher> Search(
@@ -153,7 +157,7 @@ class Tag : public IndexBase {
   InternedStringHashMap<TagInfo> tracked_tags_by_keys_
       ABSL_GUARDED_BY(index_mutex_);
   // untracked and tracked_ keys are mutually exclusive.
-  InternedStringSet untracked_keys_ ABSL_GUARDED_BY(index_mutex_);
+  KeySet untracked_keys_ ABSL_GUARDED_BY(index_mutex_);
   const char separator_;
   const bool case_sensitive_;
   PatriciaTreeIndex tree_ ABSL_GUARDED_BY(index_mutex_);

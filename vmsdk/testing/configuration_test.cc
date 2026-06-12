@@ -403,12 +403,21 @@ TEST_F(ConfigTest, CheckDouble) {
   EXPECT_FALSE(under.ok());
   EXPECT_TRUE(absl::IsOutOfRange(under));
 
-  // FromString happy path.
+  // FromString happy path — succeeds and shifts the default.
   EXPECT_TRUE(cfg->FromString("3.75").ok());
   EXPECT_DOUBLE_EQ(cfg->GetValue(), 3.75);
+  EXPECT_DOUBLE_EQ(cfg->GetDefaultValue(), 3.75);
 
   // FromString malformed.
   EXPECT_FALSE(cfg->FromString("not-a-number").ok());
+
+  // FromString that fails the bounds check must leave both current value
+  // and default untouched.
+  auto bad = cfg->FromString("99.0");
+  EXPECT_FALSE(bad.ok());
+  EXPECT_TRUE(absl::IsOutOfRange(bad));
+  EXPECT_DOUBLE_EQ(cfg->GetValue(), 3.75);
+  EXPECT_DOUBLE_EQ(cfg->GetDefaultValue(), 3.75);
 }
 
 TEST_F(ConfigTest, CheckVersion) {
@@ -440,12 +449,21 @@ TEST_F(ConfigTest, CheckVersion) {
   EXPECT_FALSE(over.ok());
   EXPECT_TRUE(absl::IsOutOfRange(over));
 
-  // FromString happy path.
+  // FromString happy path — succeeds and shifts the default.
   EXPECT_TRUE(cfg->FromString("1.2.3").ok());
   EXPECT_EQ(cfg->GetValue(), vmsdk::ValkeyVersion(1, 2, 3));
+  EXPECT_EQ(cfg->GetDefaultValue(), vmsdk::ValkeyVersion(1, 2, 3));
 
   // FromString malformed.
   EXPECT_FALSE(cfg->FromString("1.2").ok());
+
+  // FromString that fails the bounds check must leave both current value
+  // and default untouched.
+  auto bad = cfg->FromString("3.0.0");
+  EXPECT_FALSE(bad.ok());
+  EXPECT_TRUE(absl::IsOutOfRange(bad));
+  EXPECT_EQ(cfg->GetValue(), vmsdk::ValkeyVersion(1, 2, 3));
+  EXPECT_EQ(cfg->GetDefaultValue(), vmsdk::ValkeyVersion(1, 2, 3));
 }
 
 }  // namespace

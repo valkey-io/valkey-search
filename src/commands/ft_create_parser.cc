@@ -465,6 +465,7 @@ absl::Status ParseStopWords(vmsdk::ArgsIterator &itr,
                             PerIndexTextParams &params) {
   uint32_t count;
   VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, count));
+  params.use_default_stop_words = false;
   if (count == 0) {
     params.stop_words.clear();
     return absl::OkStatus();
@@ -501,8 +502,15 @@ vmsdk::KeyValueParser<PerIndexTextParams> CreateSchemaTextParser() {
   parser.AddParamParser(kNoStemParam,
                         GENERATE_FLAG_PARSER(PerIndexTextParams, no_stem));
 
-  parser.AddParamParser(kNoStopWordsParam, GENERATE_CLEAR_CONTAINER_PARSER(
-                                               PerIndexTextParams, stop_words));
+  parser.AddParamParser(
+      kNoStopWordsParam,
+      std::make_unique<vmsdk::ParamParser<PerIndexTextParams>>(
+          [](PerIndexTextParams &params,
+             vmsdk::ArgsIterator &) -> absl::Status {
+            params.stop_words.clear();
+            params.use_default_stop_words = false;
+            return absl::OkStatus();
+          }));
 
   parser.AddParamParser(
       kStopWordsParam, std::make_unique<vmsdk::ParamParser<PerIndexTextParams>>(
@@ -680,7 +688,6 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
   schema_text_defaults.with_offsets = true;
   schema_text_defaults.no_stem = false;
   schema_text_defaults.language = data_model::LANGUAGE_ENGLISH;
-  schema_text_defaults.stop_words = kDefaultStopWords;
 
   // Parse pre-SCHEMA parameters in flexible order
   static auto schema_text_parser = CreateSchemaTextParser();
@@ -735,6 +742,12 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
 
   // updating the local schema_text_defaults with language for consistency
   schema_text_defaults.language = index_schema_proto.language();
+
+  // If no explicit stop words were provided, apply per-language defaults
+  if (schema_text_defaults.use_default_stop_words) {
+    schema_text_defaults.stop_words = indexes::text::GetDefaultStopWords(
+        schema_text_defaults.language);
+  }
 
   // Apply global text defaults to the schema
   index_schema_proto.set_punctuation(schema_text_defaults.punctuation);

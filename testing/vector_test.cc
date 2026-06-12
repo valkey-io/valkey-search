@@ -616,7 +616,7 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
 
 // verify reclaimable_memory is correctly synchronized and writes are not lost
 // lost writes can lead to negative integer underflow issue
-TEST_F(VectorIndexTest, ReclaimableMemoryRaceDoesNotReturnToBaseline)
+TEST_F(VectorIndexTest, ReclaimableMemoryRaceReturnsToBaseline)
 ABSL_NO_THREAD_SAFETY_ANALYSIS {
   constexpr int kThreads = 8;
   constexpr int kIters = 50000;
@@ -629,8 +629,9 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
     algo.addPoint(v.data(), t);  // one element owned per thread
   }
 
-  const int64_t baseline =
-      static_cast<int64_t>(Metrics::GetStats().reclaimable_memory);
+  // baseline is unsigned 64-bit integer, if goes to negative it underflows to a
+  // large positive integer
+  const uint64_t baseline = Metrics::GetStats().reclaimable_memory;
 
   std::vector<std::thread> threads;
   threads.reserve(kThreads);
@@ -646,10 +647,9 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
     th.join();
   }
 
-  // Correct behavior: perfectly balanced ops return to baseline. Current code
-  // loses updates under contention, so the counter drifts off baseline.
-  EXPECT_EQ(static_cast<int64_t>(Metrics::GetStats().reclaimable_memory),
-            baseline);
+  // With atomic RMW ops, perfectly balanced mark/unmark cycles must net to
+  // zero, so the counter must return to its pre-test baseline.
+  EXPECT_EQ(Metrics::GetStats().reclaimable_memory, baseline);
 }
 
 }  // namespace

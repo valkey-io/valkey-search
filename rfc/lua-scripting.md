@@ -9,7 +9,7 @@ Status: (Change to Proposed when it's ready for review)
 
 This proposal adds user-supplied [Lua](https://www.lua.org/) scripting to the Valkey Search
 aggregation pipeline. Scripts are managed as named, server-side objects through a new
-`FT.SCRIPT` command (which can `ADD`, `DEL`, and `LIST` scripts) and live in a dedicated,
+`FT.SCRIPT` command (which can `ADD`, `DEL`, `GET`, and `LIST` scripts) and live in a dedicated,
 global script namespace that is independent of indexes, keyspaces, and databases. A new
 `FT.AGGREGATE` pipeline stage, `SCRIPT`, invokes a previously registered script so that an
 arbitrary, user-defined transformation can participate in an aggregation pipeline as a
@@ -19,7 +19,7 @@ A `SCRIPT` stage receives the current ordered list of aggregation records as inp
 produces a new ordered list of records as output, exactly like the built-in stages
 (`APPLY`, `FILTER`, `SORTBY`, `LIMIT`, `GROUPBY`). The input and output lists are exposed to
 Lua as deque-like objects supporting push/pop at both ends, and each record is exposed as a
-mutable, ordered map of name/value pairs. An optional `SHARDABLE` keyword declares that the
+mutable, unordered map of name/value pairs. An optional `SHARDABLE` keyword declares that the
 script processes each input record independently, reserving the ability for a future
 implementation to distribute (shard) the stage's computation across cluster nodes in a
 map/reduce fashion. The `SHARDABLE` optimization is specified here but is **not** implemented
@@ -74,23 +74,30 @@ In the context of this RFC:
 - **Consistency with existing stages.** A `SCRIPT` stage must behave like any other stage:
   consume the input record set, produce an output record set, and compose freely with the
   stages before and after it. The data model exposed to Lua must therefore be the existing
-  record-set / record model, not a bespoke representation.
+  record-set / record model, not a bespoke representation. A pipeline may contain **multiple
+  `SCRIPT` stages**, in any positions and intermixed with the built-in stages; each is an
+  independent invocation with its own fresh execution environment, and they share no state
+  beyond the record set that flows from one to the next.
 
 - **Zero-copy where possible.** The aggregation engine already represents the inter-stage
   result as a `std::deque<std::unique_ptr<Record>>` (`aggregate::RecordSet`) and each record
   as a vector of positionally-addressed values (`Record::fields_`) plus a small list of
-  dynamically-named values (`Record::extra_fields_`). The Lua bindings should wrap these
-  in-place rather than serialize records into native Lua tables, both for performance and so
-  that a script can mutate records cheaply.
+  dynamically-named values (`Record::extra_fields_`). `Record::fields_` holds exactly the
+  fields that are **known at command-parsing time** — those explicitly referenced anywhere in
+  the `FT.AGGREGATE` command, i.e. any loaded field and any field named as an input or output
+  of another stage — each assigned a fixed position. `Record::extra_fields_` holds all other
+  fields, i.e. those not known until a script (or other stage) creates them at run time. The
+  Lua bindings should wrap these in-place rather than serialize records into native Lua tables,
+  both for performance and so that a script can mutate records cheaply.
 
 - **Field addressing.** The primary addressing mode is by **string name**, which works
   uniformly for every field of a record regardless of how it is stored. On top of that, the
-  design offers a _locator_ object as an optimization: named index fields that are explicitly
-  loaded (via `LOAD`, including alias names) and fields produced by an earlier `APPLY` or a
-  reducer have a stable, known position in `Record::fields_`, and accessing them by string name
-  on every touch would require a hash lookup per access. A locator resolves the name to its
-  position once and then provides O(1) access for those fields, while still working (falling
-  back to a by-name lookup) for any other field.
+  design offers a _locator_ object as an optimization: fields that are **known at
+  command-parsing time** (see _Zero-copy_ above) have a stable,
+  known index in `Record::fields_`, and accessing them by string name on every touch would
+  require a hash lookup per access. A locator resolves the name to its position once and then
+  provides O(1) access for those parse-time-known fields, while still working (falling back to a
+  by-name lookup) for any other field.
 
 - **Safety and resource limits.** User scripts are untrusted code running inside the server
   process. The execution environment must be sandboxed (no file system, no network, no host
@@ -102,7 +109,11 @@ In the context of this RFC:
   to index definitions. valkey-search already distributes index schemas to every node through
   `coordinator::MetadataManager` (see `MetadataManager::RegisterType`); scripts must use the
   same mechanism so that `FT.SCRIPT ADD`/`DEL` on any node is reflected on all nodes and a
-  `SCRIPT` stage resolves identically everywhere.
+  `SCRIPT` stage resolves identically everywhere. Like `FT.CREATE`/`FT.DROPINDEX`,
+  `FT.SCRIPT ADD`/`DEL` are synchronous with respect to cluster consistency: the command does
+  not complete successfully until the mutation has been propagated to full cluster consistency,
+  and it fails (rather than returning early) if that consistency cannot be reached within the
+  operation's timeout.
 
 - **Forward compatibility for sharding.** The execution model must not bake in assumptions
   that would prevent a future map/reduce distribution of a `SHARDABLE` stage. In particular,
@@ -116,8 +127,14 @@ In the context of this RFC:
   offers a fixed function set in `APPLY`/`FILTER` and `LOAD`-time field extraction. This
   proposal is strictly more expressive for the transformation step.
 - **Valkey/Redis `EVAL` and `FUNCTION`** run Lua against the keyspace with a request/response
-  shape. This proposal differs in that the script operates on an in-flight aggregation record
-  set rather than on keys, and is composed into a pipeline rather than invoked standalone.
+  shape. This proposal reuses the very same Valkey Lua interpreter and sandbox (see
+  [Valkey Lua API](https://valkey.io/topics/lua-api/) and _Execution environment and isolation_),
+  but differs in that the script operates on an in-flight aggregation record set rather than on
+  keys, and is composed into a pipeline rather than invoked standalone. Crucially, unlike
+  `EVAL`/`FUNCTION` scripts, an `FT.AGGREGATE` script **cannot call back into Valkey to execute
+  commands and cannot read or mutate the key database** — `server.call`/`server.pcall` are
+  removed from its `server` library, leaving no keyspace access at all. Its only effect is to
+  transform the record set flowing through its stage.
 - **Map/Reduce systems** (e.g. Hadoop/Spark) separate a per-record `map` from a cross-record
   `reduce`. The `SHARDABLE` keyword is the `map` analog: it is the user's assertion that the
   stage is a pure per-record map and may be distributed.
@@ -169,7 +186,7 @@ Manages the global script namespace.
 FT.SCRIPT ADD  <name> <body>
 FT.SCRIPT GET  <name>
 FT.SCRIPT DEL  <name>
-FT.SCRIPT LIST
+FT.SCRIPT LIST [<regex>]
 ```
 
 - `FT.SCRIPT ADD <name> <body>` — Registers (or replaces) the script `<name>` with the Lua
@@ -178,7 +195,9 @@ FT.SCRIPT LIST
   atomically replaces the prior body (and bumps its metadata version in CME). Fails if the
   body exceeds `max-script-size`, or if registering a new name would exceed `max-scripts`.
 
-  **Response**: `+OK` on success; an error reply otherwise (compile error, limit exceeded).
+  **Response**: `+OK` on success; an error reply otherwise — compile error, limit exceeded
+  (`max-scripts`/`max-script-size`), or, in CME, the cluster could not reach consistency within
+  the timeout (cluster-not-consistent).
 
 - `FT.SCRIPT GET <name>` — Returns the Lua source body registered under `<name>`, exactly as
   supplied to `ADD` (the stored source, not a recompiled form).
@@ -190,9 +209,12 @@ FT.SCRIPT LIST
   affect aggregations already in flight (which hold their resolved script for the duration of
   the command); subsequent `FT.AGGREGATE` invocations referencing the name fail at parse time.
 
-  **Response**: `+OK` if a script was removed; error reply if the name does not exist.
+  **Response**: `+OK` if a script was removed; an error reply if the name does not exist or,
+  in CME, the cluster could not reach consistency within the timeout (cluster-not-consistent).
 
-- `FT.SCRIPT LIST` — Returns the names of all registered scripts.
+- `FT.SCRIPT LIST [<regex>]` — Returns the names of registered scripts. With no argument, all
+  names are returned; with a `<regex>` argument, only names matching the regular expression are
+  returned.
 
   **Response**: an array of bulk-string script names. (Bodies are retrieved individually with
   `FT.SCRIPT GET`, not via `LIST`.)
@@ -201,17 +223,18 @@ FT.SCRIPT LIST
 
 ```
 > FT.SCRIPT ADD topk "
-    -- keep only records whose @score field is above the running max so far
-    local out = output
-    local score = locator('score')   -- resolve the field name once
-    local hi = -math.huge
+    -- keep the K records with the highest @score, where K is the stage's first parameter
+    local k = tonumber(...) or 10             -- first vararg; default to 10 if omitted
+    local score = locator('score')            -- resolve the field name once
+    local recs = {}
     while #input > 0 do
-        local rec = input:pop_front()
-        local s = rec[score]         -- fast access: 'score' maps to fields_
-        if s ~= nil and s > hi then
-            hi = s
-            out:push_back(rec)
-        end
+        recs[#recs + 1] = input:pop_front()   -- drain all input into a Lua array
+    end
+    table.sort(recs, function(x, y)           -- order by @score, descending
+        return (x[score] or -math.huge) > (y[score] or -math.huge)
+    end)
+    for i = 1, math.min(k, #recs) do          -- emit the top K
+        output:push_back(recs[i])
     end
   "
 +OK
@@ -220,7 +243,7 @@ FT.SCRIPT LIST
 1) "topk"
 
 > FT.SCRIPT GET topk
-"\n    -- keep only records whose @score field is above the running max so far\n    ..."
+"\n    -- keep the K records with the highest @score, where K is the stage's first parameter\n    ..."
 
 > FT.SCRIPT DEL topk
 +OK
@@ -231,11 +254,19 @@ FT.SCRIPT LIST
 The `FT.AGGREGATE` stage grammar gains one production:
 
 ```
-SCRIPT <name> [SHARDABLE]
+SCRIPT <name> <count> [param ...] [SHARDABLE]
 ```
 
 - `<name>` must name a script that exists in the namespace at parse time; otherwise the
   command fails before execution begins.
+- `<count>` is the number of stage parameters that follow, and may be `0`. The `count` `param`
+  tokens after it are passed into the script as its chunk-level varargs (`...`), in order — the
+  same way arguments reach the top of a Lua chunk. Each parameter is delivered to the script as
+  a Lua **string**; a script converts as needed (e.g. `tonumber`). Like other `FT.AGGREGATE`
+  argument values, a `param` may be given literally or as a `$name` reference, in which case the
+  value bound to `name` by the command's `PARAMS` clause is substituted before the parameter is
+  passed to the script — for example `SCRIPT topk 1 $k` with `PARAMS 2 k 5` passes the string
+  `5` as the first vararg.
 - `SHARDABLE` is an optional assertion by the caller that the script is a pure per-record map
   (see _Sharding_). It is accepted and validated syntactically by this RFC, and recorded on
   the stage, but does not change execution behavior in this implementation: a `SHARDABLE`
@@ -251,19 +282,22 @@ APPLY   expression AS name
 LIMIT   offset num
 GROUPBY count property [property ...] [REDUCE ...]
 SORTBY  count [ property ASC | DESC ... ] [MAX num]
-SCRIPT  name [SHARDABLE]
+SCRIPT  name count [param ...] [SHARDABLE]
 ```
 
 **Example**
 
+Invoking the `topk` script defined above, passing `k = 5` as the stage's single parameter (the
+script reads it as its first vararg, `...`):
+
 ```
 FT.AGGREGATE idx "*"
-   LOAD 2 @title @score
-   APPLY "@score * 2" AS boosted
-   SCRIPT rerank
-   SORTBY 2 @boosted DESC
-   LIMIT 0 10
+   LOAD 1 @score
+   SCRIPT topk 1 5
 ```
+
+This returns the 5 highest-scoring records. In `SCRIPT topk 1 5`, the `1` is the parameter
+count and `5` is that one parameter, delivered to the script as its first vararg.
 
 ### Execution model
 
@@ -275,6 +309,8 @@ A `SCRIPT` stage implements the existing `aggregate::Stage` interface
 2. Binds two deque-like objects into the script's environment:
    - `input` — the incoming record set (the `RecordSet&` passed to `Execute`).
    - `output` — a fresh, empty record set that the script fills.
+     The stage's `count` parameters are passed to the chunk as its varargs (`...`), so the script
+     can read them with `local a, b = ...` or `local args = {...}`.
 3. Runs the script body. By convention the script drains records from `input`, transforms
    them, and pushes results onto `output`. (For a pure in-place mutation the script may move
    each record straight from `input` to `output`; see the `topk` example above.)
@@ -284,7 +320,10 @@ A `SCRIPT` stage implements the existing `aggregate::Stage` interface
    aggregation with an error reply.
 
 This input → output substitution is what makes the stage able to grow or shrink the record
-count, exactly as `GROUPBY` and `LIMIT` already do.
+count, exactly as `GROUPBY`, `LIMIT`, and `FILTER` already do. (`FILTER` likewise changes the
+number of records by dropping those that fail its predicate, and because each drop/keep decision
+depends only on the record being tested, `FILTER` is itself effectively shardable — the same
+property the `SHARDABLE` keyword lets a `SCRIPT` stage assert.)
 
 #### Execution environment and isolation
 
@@ -298,31 +337,81 @@ it is private to that single command invocation. Concretely:
   survives the command that ran it.
 - A script can access **only** what the engine explicitly places into its environment for that
   command: the `input` and `output` record-set objects, the records and locators derived from
-  them, the value of any helper functions provided by the engine (below), and the script's own
-  local variables. It has **no** access to anything outside this environment — no Valkey
+  them, the stage's own parameters (its varargs, `...`), the helper functions provided by the
+  engine (below), and the script's own local variables. It has **no** access to anything outside
+  this environment — no Valkey
   keyspace, no other databases, no indexes, no other scripts, no server configuration, no
   other commands' state, and no host facilities (file system, network, processes, clock,
   environment variables, randomness).
-- The standard Lua library is correspondingly restricted to a sandboxed subset: pure
-  computational facilities are available (string/number/table manipulation), while `io`, `os`,
-  `package`/`require`, `dofile`/`loadfile`, raw memory/debug access, and any other escape from
-  the sandbox are removed or stubbed. Any nondeterministic or host-affecting global is either
-  absent or deterministic.
+- **The sandbox is the one Valkey already defines for scripting.** This feature does not invent
+  a new Lua environment; it reuses mainline Valkey's embedded Lua sandbox as documented in the
+  [Valkey Lua API](https://valkey.io/topics/lua-api/). Specifically, a `SCRIPT` stage runs on
+  **the same Lua interpreter**, with **the same preloaded libraries** (the standard `string`,
+  `table`, `math`, `struct`, `cjson`, `cmsgpack`, `bit`, and the limited `os` subset Valkey
+  exposes), and **the same restrictions on global variables** (global protection — scripts may
+  not create or rely on arbitrary globals, and `require`/`loadfile`/`dofile` and similar escapes
+  are unavailable) that Valkey applies to `EVAL`/`FUNCTION` scripts.
+- **The `server` library is included, but trimmed.** The Valkey `server` library is present, with three deliberate differences from `EVAL`:
+  - **No command execution.** `server.call` and `server.pcall` — and every function tied to
+    command execution and replication (e.g. `server.error_reply`/`server.status_reply`,
+    `server.setresp`, `server.set_repl`, `server.replicate_commands`) — are **removed**. This is
+    what enforces the "cannot execute Valkey commands or touch the key database" guarantee.
+  - **No debugging support.** The Lua debugging hooks (e.g. `server.breakpoint`, `server.debug`,
+    and the `debug` library) are **removed**.
+  - **Logging is retained.** `server.log` and its associated log-level constants
+    (`server.LOG_DEBUG`/`LOG_VERBOSE`/`LOG_NOTICE`/`LOG_WARNING`) remain available so a script
+    can emit diagnostics to the server log.
 
-Because the only data a script can reach is the record set it is handed, a script is a pure
-transformation of (its input record set, the provided functions) → (its output record set).
-This isolation is what later permits a `SHARDABLE` stage to be relocated to another node: there
-is, by construction, nothing in the environment for it to depend on except the records it
-processes.
+Because the only data a script can reach is the record set it is handed (plus the stage's
+varargs, which are constant for the whole stage), a script is a pure transformation of (its
+input record set, the stage parameters, the provided functions) → (its output record set). This
+isolation is what later permits a `SHARDABLE` stage to be relocated to another node: the
+parameters are identical on every node, so by construction there is nothing in the environment
+for it to depend on except the records it processes.
 
 #### Provided functions
 
 The sandboxed Lua standard library already covers most of the `FT.AGGREGATE` expression
 engine's function set — `math.log`/`math.abs`/`math.sqrt` and `string.upper`/`string.lower`/
 `string.sub` are direct equivalents of the engine's numeric and string functions — so no
-parallel helper library is needed for those. Any additional engine-provided helpers (names,
-signatures, and the table they live under) are **TBD** and will be specified in the implementing
-PR; the only constraints are that each must be deterministic and sandbox-safe.
+parallel helper library is needed for those.
+
+**The `vector` table.** Because vector fields are delivered to a script as binary strings (see
+_Field value types_), the engine provides a built-in Lua table named `vector` whose functions
+let a script compare and convert vectors without decoding the bytes by hand:
+
+| Function                        | Returns                                                                   |
+| ------------------------------- | ------------------------------------------------------------------------- |
+| `vector.l2(encoding, a, b)`     | Euclidean (L2) distance between vectors `a` and `b`.                      |
+| `vector.cosine(encoding, a, b)` | Cosine distance between vectors `a` and `b`.                              |
+| `vector.ip(encoding, a, b)`     | Inner (dot) product of vectors `a` and `b`.                               |
+| `vector.totable(encoding, v)`   | A Lua table of numbers (1-based) holding the components of vector `v`.    |
+| `vector.fromtable(encoding, t)` | A vector (binary string) built from the numbers in the 1-based table `t`. |
+
+- `encoding` selects how the bytes are interpreted: one of `'FP32'`, `'FP16'`, or `'BFLOAT16'`.
+  For the distance functions both operands are interpreted under the same encoding.
+- The vector operands (`a`, `b`, `v`) are Lua strings whose bytes are the vector components in
+  that encoding (the same native-endian binary representation a vector field reads as). Typically
+  they come straight from a vector-typed field of a record.
+- `vector.l2`/`vector.cosine`/`vector.ip` each return a scalar Lua `number`.
+- `vector.totable` decodes a vector into a plain Lua sequence (a table indexed `1..n` with no
+  gaps, following Lua's standard 1-based convention), each element a Lua `number`, so a script
+  can inspect or manipulate individual components.
+- `vector.fromtable` is the inverse: given an `encoding` and a 1-based table of numbers, it
+  encodes the components into a vector (binary string) under that encoding — suitable for storing
+  back into a vector-typed field or passing to another `vector` function. `totable` and
+  `fromtable` round-trip under the same encoding (subject to the precision of `FP16`/`BFLOAT16`).
+- **Errors are raised as standard Lua errors.** If the inputs are invalid for any reason —
+  operand lengths that are not equal (distance functions), a length that is not a whole number of
+  elements for the encoding, a table element that is not a number (`fromtable`), an unknown
+  `encoding`, or otherwise undecodable bytes — the function raises a Lua error (i.e. it calls
+  `error(...)`), exactly as a malformed call to a standard library function would. An uncaught
+  error aborts the stage and fails the `FT.AGGREGATE` command; a script that wants to tolerate
+  bad input can wrap the call in `pcall`.
+
+Any further engine-provided helpers (names, signatures, and the table they live under) are
+**TBD** and will be specified in the implementing PR; the only constraints are that each must be
+deterministic and sandbox-safe.
 
 #### Object model exposed to Lua
 
@@ -345,9 +434,9 @@ These map one-to-one onto `RecordSet`'s existing `push_front`/`push_back`/`pop_f
 pushed onto a record set; pushing transfers ownership (matching the `RecordPtr` move
 semantics already used by `RecordSet`).
 
-**Record object** — a mutable, ordered map of name/value pairs (analogous to
-`std::unordered_map`, but iteration order is the record's field order). Backed by
-`Record::fields_` (named, positional fields) and `Record::extra_fields_` (dynamically named
+**Record object** — a mutable, unordered map of name/value pairs (analogous to
+`std::unordered_map`, meaning that `pairs(rec)` visits the fields in an unspecified order). Backed by
+`Record::fields_` (named, positional fields known at command parsing time) and `Record::extra_fields_` (dynamically named
 fields). This split is an implementation detail: **string addressing works uniformly for every
 field of the record**, regardless of which backing store holds it. The locator (below) is an
 optional optimization layered on top, not a separate set of addressable fields.
@@ -360,20 +449,20 @@ optional optimization layered on top, not a separate set of addressable fields.
 | `rec[loc] = value`  | Write via a locator (same performance characteristics as the read).                                                                                      |
 | `rec:delete(name)`  | Explicitly delete a field (equivalent to `rec[name] = nil`).                                                                                             |
 | `rec:has(name)`     | `true` if the field exists.                                                                                                                              |
-| `pairs(rec)`        | Iterate existing name/value pairs (read-only view during iteration).                                                                                     |
+| `pairs(rec)`        | Iterate existing name/value pairs in unspecified order (read-only view during iteration).                                                                |
 | `#rec`              | Number of fields.                                                                                                                                        |
 
 **Field value types.** A field value is an `expr::Value`. The mapping between an `expr::Value`
 and the Lua value a script sees is:
 
-| `expr::Value` type | Lua type seen by the script     | Notes                                                                                                                                                                                                                                                                                                                                                                                                      |
-| ------------------ | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Nil`              | `nil`                           | A missing field also reads as `nil`. Assigning `nil` deletes the field.                                                                                                                                                                                                                                                                                                                                    |
-| Number (`double`)  | `number`                        | Values round-trip as Lua 64-bit floats.                                                                                                                                                                                                                                                                                                                                                                    |
-| `Bool`             | `boolean`                       | Maps directly to Lua `true`/`false`.                                                                                                                                                                                                                                                                                                                                                                       |
-| String             | `string`                        | Byte-exact; strings are binary-safe (not assumed UTF-8).                                                                                                                                                                                                                                                                                                                                                   |
-| Vector             | `string` (binary)               | A vector field is delivered as a Lua **string** whose bytes are the vector's components encoded as binary floating-point in the **native byte order of the CPU executing the script**. A script that interprets the bytes (e.g. via `string.unpack`) must assume host endianness. Writing a vector-typed field back is symmetric: a string of correctly-sized native-endian floats.                        |
-| Array              | `table` with dense integer keys | The `Array` value type (to be added; it is the value produced by the `TOLIST` reducer/function — see _Open questions_ / Appendix) is presented as a Lua table indexed `1..n` with no gaps, i.e. a Lua sequence (`#t` is its length). Element types are the scalar mappings above, applied recursively. Constructing an `Array` to store into a field is done by building such a dense-integer-keyed table. |
+| `expr::Value` type | Lua type seen by the script     | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------------ | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Nil`              | `nil`                           | A missing field also reads as `nil`. Assigning `nil` deletes the field.                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Number (`double`)  | `number`                        | Values round-trip as Lua 64-bit floats.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `Bool`             | `boolean`                       | Maps directly to Lua `true`/`false`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| String             | `string`                        | Byte-exact; strings are binary-safe (not assumed UTF-8).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Vector             | `string` (binary)               | A vector field is delivered as a Lua **string** whose bytes are the vector's components encoded as binary floating-point in the **native byte order of the CPU executing the script**. A script that interprets the bytes directly (e.g. via `string.unpack`) must assume host endianness; more conveniently, `vector.totable`/`vector.fromtable` (see _The `vector` table_) decode and re-encode a vector to and from a table of Lua numbers. Writing a vector-typed field back is symmetric: a string of correctly-sized native-endian floats. |
+| Array              | `table` with dense integer keys | The `Array` value type (to be added; it is the value produced by the `TOLIST` reducer/function — see _Open questions_ / Appendix) is presented as a Lua table indexed `1..n` with no gaps, i.e. a Lua sequence (`#t` is its length). Element types are the scalar mappings above, applied recursively. Constructing an `Array` to store into a field is done by building such a dense-integer-keyed table.                                                                                                                                       |
 
 Writing a field with a Lua type that isn't in the table above
 (e.g. a function, a coroutine, etc.), raises an error.
@@ -473,12 +562,62 @@ Used in a pipeline, this collapses any result set into one summary row:
 ```
 FT.AGGREGATE idx "*"
    LOAD 2 @score @title
-   SCRIPT summarize
+   SCRIPT summarize 0
 ```
 
 Because the script produces its single output from characteristics computed across _all_ input
 records (`num_records`, and the maxima), it is inherently cross-record and is **not** marked
 `SHARDABLE` — the per-record independence rule does not hold for it.
+
+#### Worked example: per-record vector distance and rerank
+
+This script annotates each record with the cosine distance between two of its own vector fields
+— `title_vec` (a loaded field, addressed through a locator) and `body_vec` (addressed by
+string) — then drops any record for which the distance could not be computed. It uses the
+built-in `vector.cosine` distance function with the `FP32` encoding, catching the Lua error that
+`vector.cosine` raises on bad input via `pcall`, and it processes each record **independently**
+of every other record, so it is a legitimate `SHARDABLE` stage.
+
+```
+> FT.SCRIPT ADD title_body_sim "
+    local tvec = locator('title_vec')   -- fast path: 'title_vec' is a loaded field
+    local out = output
+
+    while #input > 0 do
+        local rec = input:pop_front()
+
+        local a = rec[tvec]              -- vector field -> binary string
+        local b = rec['body_vec']        -- string-addressed vector field
+
+        -- cosine distance between the two FP32 vectors; vector.cosine() raises on bad
+        -- input, so wrap it in pcall and keep only the records that computed cleanly
+        local ok, d = pcall(vector.cosine, 'FP32', a, b)
+
+        if ok then
+            rec['sim'] = d               -- annotate with the computed distance
+            out:push_back(rec)
+        end
+        -- records that errored (mismatched size, missing field, etc.) are dropped
+    end
+  "
++OK
+```
+
+Used in a pipeline that sorts the survivors by the computed similarity:
+
+```
+FT.AGGREGATE idx "*"
+   LOAD 2 @title_vec @body_vec
+   SCRIPT title_body_sim 0 SHARDABLE
+   SORTBY 2 @sim ASC
+   LIMIT 0 10
+```
+
+The output for each input record depends only on that record's own two vector fields, so the
+`SHARDABLE` annotation is honest: a future implementation is free to run this stage on remote
+nodes over partitions of the record set. (A missing or malformed field makes `vector.cosine`
+raise an error, which the `pcall` catches and turns into a dropped record, so the script is
+robust to records that lack one of the vectors.)
 
 ### Sharding (reserved, not implemented)
 
@@ -542,12 +681,11 @@ contractually required to touch only keys in one slot).
 
 ### Configuration
 
-| Option                     | Type   | Default                             | Purpose                                                                                                                 |
-| -------------------------- | ------ | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `search.scripting-enabled` | bool   | `no`                                | Master switch. When disabled, `FT.SCRIPT` and the `SCRIPT` stage are rejected. Off by default so the feature is opt-in. |
-| `search.max-scripts`       | number | 1024                                | Maximum number of scripts in the namespace.                                                                             |
-| `search.max-script-size`   | number | 65536                               | Maximum size (bytes) of a single script body.                                                                           |
-| `search.script-timeout-ms` | number | (inherits `FT.AGGREGATE` `TIMEOUT`) | Optional per-stage execution ceiling, bounded by the command `TIMEOUT`.                                                 |
+| Option                     | Type   | Default | Purpose                                                                        |
+| -------------------------- | ------ | ------- | ------------------------------------------------------------------------------ |
+| `search.scripting-enabled` | bool   | `yes`   | Master switch. When disabled, `FT.SCRIPT` and the `SCRIPT` stage are rejected. |
+| `search.max-scripts`       | number | 1024    | Maximum number of scripts in the namespace.                                    |
+| `search.max-script-size`   | number | 65536   | Maximum size (bytes) of a single script body.                                  |
 
 Options follow the existing pattern in `valkey_search_options.cc` (default/min/max bounded
 numeric options, boolean toggles).
@@ -577,12 +715,13 @@ No new public module API is required. Internally the feature adds:
 
 ### Dependencies
 
-Lua is already an accepted dependency of the project (it is listed as an existing dependency in
-the RFC template and is used by the broader Valkey scripting facilities). This feature requires
-an embeddable Lua interpreter with a sandboxed environment (no `io`, `os`, `package`,
-`require`, file, or network access; deterministic globals only). No new third-party library is
-expected beyond Lua itself; if a specific sandbox/runtime variant must be vendored, that will
-be justified in the implementing PR.
+No new dependency is introduced. This feature reuses mainline Valkey's existing embedded Lua
+interpreter and sandbox — the same one `EVAL`/`FUNCTION` use, documented in the
+[Valkey Lua API](https://valkey.io/topics/lua-api/) — including its preloaded libraries and
+global-variable restrictions (see _Execution environment and isolation_). The only additions are
+the engine-provided helpers this RFC defines (the `vector` table) and the trimming of the
+`server` library (removal of command execution, replication, and debugging functions while
+retaining logging); no new third-party library is vendored.
 
 ### Networking
 
@@ -600,12 +739,6 @@ Proposed metrics/stats:
   timeout/memory).
 - per-command timing for `SCRIPT` stages surfaced through existing `FT.AGGREGATE` profiling.
 
-### Debug mechanism
-
-- The `Dump`/explain output of an aggregation includes `SCRIPT <name> [SHARDABLE]` so operators
-  can see where a script runs in a pipeline and whether it is declared shardable.
-- `FT.SCRIPT GET <name>` retrieves a registered body for inspection.
-
 ### Testing
 
 - **Unit tests** for `FT.SCRIPT ADD/GET/DEL/LIST`: registration, replacement, byte-exact
@@ -613,29 +746,34 @@ Proposed metrics/stats:
   `max-script-size`), compile-error rejection, and `scripting-enabled` gating.
 - **Unit tests** for the object model: deque push/pop at both ends on `input`/`output`; record
   read/update/delete/add; iteration via `pairs`; string vs. locator addressing equivalence;
-  locator rejection for non-positional fields; type marshaling for every value type
-  (`nil`/number/boolean/string, vector-as-native-endian-binary-string, and `Array`-as-dense-
-  integer-keyed-table, including recursive element marshaling) and rejection of unsupported
-  Lua types (functions, coroutines, sparse/string-keyed tables where an `Array` is expected).
+  locator fast-path (resolves to `fields_`) vs. by-name fallback (non-positional fields); type
+  marshaling for every value type (`nil`/number/boolean/string,
+  vector-as-native-endian-binary-string, and `Array`-as-dense-integer-keyed-table, including
+  recursive element marshaling) and rejection of unsupported Lua types (functions, coroutines,
+  sparse/string-keyed tables where an `Array` is expected).
+- **Unit tests** for the `vector` table: distance functions (`vector.l2`/`vector.cosine`/
+  `vector.ip`) give correct values for each encoding (`FP32`/`FP16`/`BFLOAT16`) against known
+  references; `vector.totable` decodes to a correct 1-based table of numbers and
+  `vector.fromtable` round-trips back to the original bytes (within `FP16`/`BFLOAT16` precision);
+  and every error case (mismatched lengths, non-element-aligned length, non-number table element,
+  unknown encoding, undecodable bytes) raises a Lua error catchable via `pcall`.
+- **Parsing/stage tests** for `SCRIPT name count [param ...]`: `count` of `0` (no varargs),
+  `count` > 0 delivered to the chunk as `...` in order and as strings, `count` mismatch against
+  the actual token run rejected at parse time, `$name` parameters substituted from the command's
+  `PARAMS` clause, and correct placement of an optional trailing `SHARDABLE`.
 - **Stage tests** verifying a `SCRIPT` stage composes with `LOAD`, `APPLY`, `FILTER`,
-  `SORTBY`, `LIMIT`, `GROUPBY`, including stages that grow and shrink the record count.
+  `SORTBY`, `LIMIT`, `GROUPBY`, and with **other `SCRIPT` stages** (multiple independent scripts
+  in one pipeline), including stages that grow and shrink the record count.
+- **`FT.SCRIPT LIST` tests**: no-argument lists all names; a `<regex>` argument returns only
+  matching names (including no-match and match-all patterns).
 - **Resource tests**: `TIMEOUT`/memory enforcement aborts cleanly; runtime `error()` produces
   a proper error reply; sandbox escapes (`io`/`os`/`require`) are unavailable.
 - **Integration / cluster tests** (`build.sh --run-integration-tests=test_...`): script
   namespace propagation across CME nodes via the metadata manager, RDB save/load round-trip,
-  and replica consistency.
+  replica consistency, and that `FT.SCRIPT ADD`/`DEL` block until full cluster consistency and
+  return a cluster-not-consistent error on timeout.
 - **Sharding contract tests**: confirm that `SHARDABLE` is parsed and recorded but runs
   identically to the non-shardable path (regression guard for when distribution lands).
-
-### Benchmarking
-
-Scenarios to measure once implemented:
-
-- Per-record overhead of a trivial `SCRIPT` stage versus an equivalent `APPLY`, isolating
-  Lua-call and binding overhead.
-- Locator vs. string field access throughput over large record sets.
-- A representative re-rank pipeline (`SEARCH` → `APPLY` → `SCRIPT` → `SORTBY` → `LIMIT`)
-  versus performing the same transformation on the client, to quantify the data-locality win.
 
 ## Open questions
 
@@ -645,13 +783,12 @@ Scenarios to measure once implemented:
   signatures, and the table/namespace they are exposed under is TBD (see _Provided functions_).
 - **RDB version skew.** On load, should a script that fails to recompile under the current
   server version skip-and-warn (proposed) or abort the load?
-- **Lua dialect / sandbox.** Which Lua version and sandbox configuration should be standardized
-  on?
-- **`SHARDABLE` verification.** Should the engine attempt any best-effort static checks
-  (e.g. forbidding upvalue mutation across the record loop), or remain purely contractual?
 
 ## Appendix
 
+- [Valkey Lua API](https://valkey.io/topics/lua-api/) — the existing mainline Valkey Lua
+  scripting environment (interpreter, preloaded libraries, global restrictions, and `server`
+  library) that this feature reuses.
 - `rfc/ft-aggregate.md` — the base `FT.AGGREGATE` design this stage extends.
 - `rfc/TEMPLATE.md` — RFC structure.
 - Existing implementation touch points: `src/commands/ft_aggregate_parser.h`

@@ -1073,6 +1073,18 @@ int IndexSchema::GetTextItemCount() const {
   return text_index_schema->GetTrackedKeyCount(true);
 }
 
+std::vector<
+    std::reference_wrapper<const std::pair<const std::string, Attribute>>>
+IndexSchema::GetSortedAttributes() const {
+  std::vector<
+      std::reference_wrapper<const std::pair<const std::string, Attribute>>>
+      sorted(attributes_.begin(), attributes_.end());
+  std::sort(sorted.begin(), sorted.end(), [](const auto &a, const auto &b) {
+    return a.get().first < b.get().first;
+  });
+  return sorted;
+}
+
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   int arrSize = 28;
   // Text-attribute info fields
@@ -1102,8 +1114,8 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "attributes");
   ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
   int attribute_array_len = 0;
-  for (const auto &attribute : attributes_) {
-    attribute_array_len += attribute.second.RespondWithInfo(ctx, this);
+  for (const auto &attribute : GetSortedAttributes()) {
+    attribute_array_len += attribute.get().second.RespondWithInfo(ctx, this);
   }
   ValkeyModule_ReplySetArrayLength(ctx, attribute_array_len);
 
@@ -1200,11 +1212,10 @@ std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
 
   auto stats = index_schema_proto->mutable_stats();
   stats->set_documents_count(stats_.document_cnt);
-  std::transform(
-      attributes_.begin(), attributes_.end(),
-      google::protobuf::RepeatedPtrFieldBackInserter(
-          index_schema_proto->mutable_attributes()),
-      [](const auto &attribute) { return *attribute.second.ToProto(); });
+  for (const auto &attribute : GetSortedAttributes()) {
+    *index_schema_proto->mutable_attributes()->Add() =
+        *attribute.get().second.ToProto();
+  }
 
   return index_schema_proto;
 }
@@ -1268,7 +1279,8 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
   VMSDK_LOG(NOTICE, nullptr)
       << "Starting to save " << attributes_.size() << " attributes.";
 
-  for (auto &attribute : attributes_) {
+  for (const auto &attribute_ref : GetSortedAttributes()) {
+    const auto &attribute = attribute_ref.get();
     VMSDK_LOG(DEBUG, nullptr)
         << "Starting to save attribute: "
         << vmsdk::config::RedactIfNeeded(attribute.second.GetAlias());

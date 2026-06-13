@@ -181,7 +181,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.check(dialect, *orig_cmd)
 
     @pytest.mark.skip(reason="Needs fix for ingesting invalid data")
-    def test_bad_numeric_data(self, key_type, dialect):
+    def test_bad_numeric_data(self, key_type, dialect, vector_data_type):
         self.setup_data("bad numbers", key_type)
         self.check(dialect, "ft.search", f"{key_type}_idx1", "@n1:[-inf inf]")
         self.check(dialect, "ft.search", f"{key_type}_idx1", "-@n1:[-inf inf]")
@@ -189,13 +189,13 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.check(dialect, "ft.search", f"{key_type}_idx1", "-@n2:[-inf inf]")
 
     @pytest.mark.skip(reason="Needs research")
-    def test_search_reverse(self, key_type, dialect):
+    def test_search_reverse(self, key_type, dialect, vector_data_type):
         self.setup_data("reverse vector numbers", key_type)
         self.checkall(dialect, f"ft.search {key_type}_idx1 *")
         self.checkall(dialect, f"ft.search {key_type}_idx1 * limit 0 5")
 
     @pytest.mark.skip(reason="Needs research")
-    def test_search(self, key_type, dialect):
+    def test_search(self, key_type, dialect, vector_data_type):
         self.setup_data("sortable numbers", key_type)
         self.checkall(dialect, f"ft.search {key_type}_idx1 *")
     
@@ -487,7 +487,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                         "nn",
                 )
     @pytest.mark.skip(reason="Needs research")
-    def test_search_sortby(self, key_type, dialect):
+    def test_search_sortby(self, key_type, dialect, vector_data_type):
         self.setup_data("sortable numbers", key_type)
 
         for sort_key in ["n1", "n2"]:

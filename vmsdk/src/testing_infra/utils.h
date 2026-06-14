@@ -23,13 +23,13 @@ using ::testing::TestWithParam;
 
 struct RLimitGuard {
   RLimitGuard(size_t type, size_t new_size) : type_(type) {
-    new_size_ = rlimit{.rlim_cur = new_size};
     EXPECT_EQ(getrlimit(type_, &saved_size_), 0);
-    EXPECT_EQ(setrlimit(type_, &new_size_), 0);
+    struct rlimit new_sizer = saved_size_;
+    new_sizer.rlim_cur = new_size;
+    EXPECT_EQ(setrlimit(type_, &new_sizer), 0);
   }
   ~RLimitGuard() { EXPECT_EQ(setrlimit(type_, &saved_size_), 0); }
   size_t type_;
-  struct rlimit new_size_;
   struct rlimit saved_size_;
 };
 

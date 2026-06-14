@@ -21,26 +21,28 @@
 
 using ::testing::TestWithParam;
 
-#define VMSDK_EXPECT_DEATH(statement, matcher)              \
-  {                                                         \
-    struct rlimit vmsdk_saved_core_limit_;                  \
-    getrlimit(RLIMIT_CORE, &vmsdk_saved_core_limit_);       \
-    struct rlimit vmsdk_no_core_ = vmsdk_saved_core_limit_; \
-    vmsdk_no_core_.rlim_cur = 0;                            \
-    setrlimit(RLIMIT_CORE, &vmsdk_no_core_);                \
-    EXPECT_DEATH(statement, matcher);                       \
-    setrlimit(RLIMIT_CORE, &vmsdk_saved_core_limit_);       \
+struct RLimitGuard {
+  RLimitGuard(size_t type, size_t new_size) : type_(type) {
+    new_size_ = rlimit{.rlim_cur = new_size};
+    EXPECT_EQ(getrlimit(type_, &saved_size_), 0);
+    EXPECT_EQ(setrlimit(type_, &new_size_), 0);
+  }
+  ~RLimitGuard() { EXPECT_EQ(setrlimit(type_, &saved_size_), 0); }
+  size_t type_;
+  struct rlimit new_size_;
+  struct rlimit saved_size_;
+};
+
+#define VMSDK_EXPECT_DEATH(statement, matcher) \
+  {                                            \
+    RLimitGuard core(RLIMIT_CORE, 0);          \
+    EXPECT_DEATH(statement, matcher);          \
   }
 
-#define VMSDK_ASSERT_DEATH(statement, matcher)              \
-  {                                                         \
-    struct rlimit vmsdk_saved_core_limit_;                  \
-    getrlimit(RLIMIT_CORE, &vmsdk_saved_core_limit_);       \
-    struct rlimit vmsdk_no_core_ = vmsdk_saved_core_limit_; \
-    vmsdk_no_core_.rlim_cur = 0;                            \
-    setrlimit(RLIMIT_CORE, &vmsdk_no_core_);                \
-    ASSERT_DEATH(statement, matcher);                       \
-    setrlimit(RLIMIT_CORE, &vmsdk_saved_core_limit_);       \
+#define VMSDK_ASSERT_DEATH(statement, matcher) \
+  {                                            \
+    RLimitGuard core(RLIMIT_CORE, 0);          \
+    ASSERT_DEATH(statement, matcher);          \
   }
 
 #define VMSDK_EXPECT_OK(status) EXPECT_TRUE((status).ok())

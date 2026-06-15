@@ -37,6 +37,7 @@ constexpr uint8_t kSevenBitMask = 0x7F;    // Bits 0-6: data
 constexpr uint8_t kBitsPerByte = 7;        // 7 bits of data per byte
 constexpr uint8_t kTerminatorByte = 0x00;  // Terminator byte
 constexpr uint8_t kPartitionDeltaBytes = 4;
+constexpr size_t kTermFrequencyBytes = 4;  // Pre-computed TF stored at start
 
 // Type conversion helpers
 inline uint8_t U8(char c) { return static_cast<uint8_t>(c); }
@@ -109,6 +110,12 @@ FlatPositionMap* FlatPositionMap::Create(
   CHECK(!position_map.empty())
       << "Cannot create FlatPositionMap from empty position_map";
 
+  // Pre-compute term frequency from the position map
+  size_t tf = ComputeTermFrequency(position_map);
+  CHECK_LE(tf, static_cast<size_t>(UINT32_MAX))
+      << "Term frequency exceeds FlatPositionMap storage";
+  uint32_t term_frequency = static_cast<uint32_t>(tf);
+
   // First pass: compute data size (same logic as old constructor)
   uint32_t num_positions = position_map.size();
 
@@ -162,7 +169,8 @@ FlatPositionMap* FlatPositionMap::Create(
   uint8_t part_bytes = BytesNeeded(num_partitions) - 1;
   size_t partition_map_size = num_partitions * kPartitionDeltaBytes * 2;
   size_t counts_size = (pos_bytes + 1) + (part_bytes + 1);
-  size_t data_size = counts_size + partition_map_size + position_data.size();
+  size_t data_size = kTermFrequencyBytes + counts_size + partition_map_size +
+                     position_data.size();
   size_t total_size = sizeof(FlatPositionMap) + data_size;
 
   // Allocate single block: [FlatPositionMap | data...]
@@ -178,6 +186,10 @@ FlatPositionMap* FlatPositionMap::Create(
 
   // Write data immediately after struct
   char* p = map->data();
+
+  // Write pre-computed term frequency first (4 bytes, little-endian)
+  std::memcpy(p, &term_frequency, kTermFrequencyBytes);
+  p += kTermFrequencyBytes;
 
   // Write counts
   map->WriteCounts(p, num_positions, num_partitions);
@@ -235,7 +247,7 @@ void FlatPositionMap::WriteCounts(char*& p, uint32_t num_positions,
 //=============================================================================
 
 PositionIterator::PositionIterator(const FlatPositionMap& flat_map)
-    : flat_map_(flat_map.data()),
+    : flat_map_(flat_map.data() + kTermFrequencyBytes),
       current_ptr_(nullptr),
       data_start_(nullptr),
       cumulative_position_(0),
@@ -388,21 +400,28 @@ uint64_t PositionIterator::GetFieldMask() const { return current_field_mask_; }
 //=============================================================================
 
 uint32_t FlatPositionMap::CountPositions() const {
-  const char* p = data();
+  const char* p = data() + kTermFrequencyBytes;  // Skip pre-computed TF
   auto [num_positions, _] = ReadCounts(p);
   return num_positions;
 }
 
 uint32_t FlatPositionMap::GetNumPartitions() const {
-  const char* p = data();
+  const char* p = data() + kTermFrequencyBytes;  // Skip pre-computed TF
   auto [_, num_partitions] = ReadCounts(p);
   return num_partitions;
 }
 
-size_t FlatPositionMap::CountTermFrequency() const {
+size_t FlatPositionMap::GetTermFrequency() const {
+  uint32_t tf = 0;
+  std::memcpy(&tf, data(), kTermFrequencyBytes);
+  return static_cast<size_t>(tf);
+}
+
+size_t FlatPositionMap::ComputeTermFrequency(
+    const absl::btree_map<Position, FieldMask>& position_map) {
   size_t total_frequency = 0;
-  for (PositionIterator iter(*this); iter.IsValid(); iter.NextPosition()) {
-    total_frequency += __builtin_popcountll(iter.GetFieldMask());
+  for (const auto& [pos, field_mask] : position_map) {
+    total_frequency += __builtin_popcountll(field_mask.GetMask());
   }
   return total_frequency;
 }

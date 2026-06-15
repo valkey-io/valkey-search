@@ -47,6 +47,8 @@ struct TextIndexMetadata {
   std::atomic<uint64_t> total_positions{0};
   std::atomic<uint64_t> num_unique_terms{0};
   std::atomic<uint64_t> total_term_frequency{0};
+  std::atomic<uint64_t> total_doc_len{
+      0};  // Sum of all doc_lens for avg_doc_len
 
   // Memory pools for text index components
   MemoryPool posting_memory_pool_{0};
@@ -96,7 +98,13 @@ class TextIndexSchema {
                                           absl::string_view data,
                                           size_t text_field_number, bool stem,
                                           bool suffix);
-  void CommitKeyData(const InternedStringPtr &key);
+  // Commits staged key data into the text index structures.
+  // Returns the document length and norm (max term frequency).
+  struct CommitResult {
+    uint32_t doc_len{0};
+    uint32_t norm{0};
+  };
+  CommitResult CommitKeyData(const InternedStringPtr &key);
   void DeleteKeyData(const InternedStringPtr &key);
 
   uint8_t AllocateTextFieldNumber() { return num_text_fields_++; }
@@ -107,6 +115,17 @@ class TextIndexSchema {
 
   // Access to metadata for memory pool usage
   TextIndexMetadata &GetMetadata() { return metadata_; }
+
+  uint32_t GetKeyDocLen(const InternedStringPtr &key) const {
+    std::lock_guard<std::mutex> guard(per_key_text_indexes_mutex_);
+    auto itr = per_key_scoring_info_.find(key);
+    return itr != per_key_scoring_info_.end() ? itr->second.doc_len : 0;
+  }
+  uint32_t GetKeyNorm(const InternedStringPtr &key) const {
+    std::lock_guard<std::mutex> guard(per_key_text_indexes_mutex_);
+    auto itr = per_key_scoring_info_.find(key);
+    return itr != per_key_scoring_info_.end() ? itr->second.norm : 0;
+  }
 
   // Access stem tree for word expansion during search
   const Rax &GetStemTree() const { return stem_tree_; }
@@ -169,8 +188,16 @@ class TextIndexSchema {
   //
   absl::node_hash_map<Key, TextIndex> per_key_text_indexes_;
 
-  // Prevent concurrent mutations to per-key text index map
-  std::mutex per_key_text_indexes_mutex_;
+  // Per-key scoring metadata (doc_len and norm), populated alongside
+  // per_key_text_indexes_ during CommitKeyData/DeleteKeyData.
+  struct KeyScoringInfo {
+    uint32_t doc_len{0};
+    uint32_t norm{0};
+  };
+  absl::node_hash_map<Key, KeyScoringInfo> per_key_scoring_info_;
+
+  // Prevent concurrent mutations to per-key text index map and scoring info
+  mutable std::mutex per_key_text_indexes_mutex_;
 
   Lexer lexer_;
 

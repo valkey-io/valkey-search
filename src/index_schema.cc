@@ -650,7 +650,7 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
                                       const Key &key) {
   if (text_index_schema_) {
     // Always clean up indexed words from all text attributes of the key up
-    // front
+    // front. DeleteKeyData also decrements total_doc_len internally.
     text_index_schema_->DeleteKeyData(key);
   }
   bool all_deletes = true;
@@ -675,7 +675,8 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
   }
   if (text_index_schema_) {
     // Text index structures operate at the schema-level so we commit the
-    // updates to all Text attributes in one operation for efficiency
+    // updates to all Text attributes in one operation for efficiency.
+    // CommitKeyData stores doc_len/norm in TextIndexSchema internally.
     text_index_schema_->CommitKeyData(key);
   }
 }

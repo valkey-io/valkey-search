@@ -12,6 +12,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -613,6 +614,45 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
     }
   }
 }
+
+// verify reclaimable_memory is correctly synchronized and writes are not lost
+// lost writes can lead to negative integer underflow issue
+TEST_F(VectorIndexTest, ReclaimableMemoryRaceReturnsToBaseline)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  constexpr int kThreads = 8;
+  constexpr int kIters = 50000;
+  hnswlib::L2Space l2_space{kDimensions};
+  hnswlib::HierarchicalNSW<float> algo(&l2_space, /*max_elements=*/kThreads, kM,
+                                       kEFConstruction, /*random_seed=*/100,
+                                       /*allow_replace_deleted=*/false);
+  std::vector<float> v(kDimensions, 1.0f);
+  for (int t = 0; t < kThreads; ++t) {
+    algo.addPoint(v.data(), t);  // one element owned per thread
+  }
+
+  // baseline is unsigned 64-bit integer, if goes to negative it underflows to a
+  // large positive integer
+  const uint64_t baseline = Metrics::GetStats().reclaimable_memory;
+
+  std::vector<std::thread> threads;
+  threads.reserve(kThreads);
+  for (int t = 0; t < kThreads; ++t) {
+    threads.emplace_back([&algo, t]() {
+      for (int i = 0; i < kIters; ++i) {
+        algo.markDelete(t);    // += vector_size_
+        algo.unmarkDelete(t);  // -= vector_size_  (net per cycle: 0)
+      }
+    });
+  }
+  for (auto& th : threads) {
+    th.join();
+  }
+
+  // With atomic RMW ops, perfectly balanced mark/unmark cycles must net to
+  // zero, so the counter must return to its pre-test baseline.
+  EXPECT_EQ(Metrics::GetStats().reclaimable_memory, baseline);
+}
+
 }  // namespace
 
 }  // namespace valkey_search::indexes

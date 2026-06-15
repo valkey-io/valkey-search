@@ -26,7 +26,15 @@ void ResolveContent(std::unique_ptr<SearchParameters> params) {
     return;
   }
 
-  // 2. If kContentionCheckRequired, check for in-flight mutations
+  // 2. Check if index is dropped
+  if (params->index_schema->IsMarkedDestructing()) {
+    params->search_result.status = GenerateIndexNotFoundError(
+        params->index_schema->GetDBNum(), params->index_schema->GetName());
+    params->QueryCompleteMainThread(std::move(params));
+    return;
+  }
+
+  // 3. If kContentionCheckRequired, check for in-flight mutations
   if (params->GetContentProcessing() == kContentionCheckRequired) {
     if (params->index_schema->PerformKeyContentionCheck(
             params->search_result.neighbors, std::move(params))) {
@@ -39,7 +47,7 @@ void ResolveContent(std::unique_ptr<SearchParameters> params) {
     // moved). Fall through to content fetch.
   }
 
-  // 3. Content fetch + filter via ProcessNeighborsForReply
+  // 4. Content fetch + filter via ProcessNeighborsForReply
   auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
   const auto& attribute_data_type =
       params->index_schema->GetAttributeDataType();
@@ -57,7 +65,7 @@ void ResolveContent(std::unique_ptr<SearchParameters> params) {
                                   params->search_result.neighbors, *params,
                                   vector_identifier, params->sortby_parameter);
 
-  // 4. Adjust search_result.total_count for removed neighbors
+  // 5. Adjust search_result.total_count for removed neighbors
   size_t removed = original_size - params->search_result.neighbors.size();
   if (params->search_result.total_count > removed) {
     params->search_result.total_count -= removed;
@@ -65,7 +73,7 @@ void ResolveContent(std::unique_ptr<SearchParameters> params) {
     params->search_result.total_count = 0;
   }
 
-  // 5. Call QueryCompleteMainThread
+  // 6. Call QueryCompleteMainThread
   params->QueryCompleteMainThread(std::move(params));
 }
 

@@ -519,6 +519,20 @@ static auto max_nonvector_search_results_fetched =
         kMaximumMaxNonVectorSearchResultsFetched)  // UINT32_MAX
         .Build();
 
+/// Register the "--query-string-depth" flag. Controls the depth of the query
+/// string parsing from the FT.SEARCH cmd.
+constexpr absl::string_view kQueryStringDepthConfig{"query-string-depth"};
+constexpr uint32_t kDefaultQueryStringDepth{1000};
+constexpr uint32_t kMinimumQueryStringDepth{1};
+static auto query_string_depth =
+    config::NumberBuilder(kQueryStringDepthConfig,   // name
+                          kDefaultQueryStringDepth,  // default size
+                          kMinimumQueryStringDepth,  // min size
+                          UINT_MAX)                  // max size
+        .WithValidationCallback(CHECK_RANGE(kMinimumQueryStringDepth, UINT_MAX,
+                                            kQueryStringDepthConfig))
+        .Build();
+
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 
 vmsdk::config::Number& GetHNSWBlockSize() {
@@ -644,6 +658,10 @@ config::Number& GetRaxTargetMutexPoolSize() {
 vmsdk::config::Number& GetMaxNonVectorSearchResultsFetched() {
   return dynamic_cast<vmsdk::config::Number&>(
       *max_nonvector_search_results_fetched);
+}
+
+vmsdk::config::Number& GetQueryStringDepth() {
+  return dynamic_cast<vmsdk::config::Number&>(*query_string_depth);
 }
 
 }  // namespace options

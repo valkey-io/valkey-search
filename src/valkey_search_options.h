@@ -124,5 +124,9 @@ config::Number& GetRaxTargetMutexPoolSize();
 /// Return the maximum number of keys to accumulate before content fetching
 config::Number& GetMaxNonVectorSearchResultsFetched();
 
+/// Return the recursion depth of the query string from FT.SEARCH and
+/// FT.AGGREGATE commands
+config::Number& GetQueryStringDepth();
+
 }  // namespace options
 }  // namespace valkey_search

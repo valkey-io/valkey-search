@@ -310,7 +310,7 @@ TEST_F(VectorIndexTest, ResizeHNSW) ABSL_NO_THREAD_SAFETY_ANALYSIS {
                                    kM, kEFConstruction, kEFRuntime),
         "attribute_identifier_1",
         data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
-    ValkeySearch::Instance().SetHNSWBlockSize(1024);
+    EXPECT_TRUE(ValkeySearch::Instance().SetHNSWBlockSize(1024).ok());
     uint32_t block_size = ValkeySearch::Instance().GetHNSWBlockSize();
     EXPECT_EQ(index.value()->GetCapacity(), initial_cap);
     auto vectors = DeterministicallyGenerateVectors(

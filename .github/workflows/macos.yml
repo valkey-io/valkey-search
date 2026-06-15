@@ -2,7 +2,19 @@ name: unittests-macos
 
 on:
   pull_request:
+    branches:
+      - main
+      - "[0-9].[0-9]"
+    paths-ignore:
+      - '**/*.md'
+      - '**/00-RELEASENOTES'
   push:
+    branches:
+      - main
+      - "[0-9].[0-9]"
+    paths-ignore:
+      - '**/*.md'
+      - '**/00-RELEASENOTES'
   workflow_dispatch:
 
 concurrency:

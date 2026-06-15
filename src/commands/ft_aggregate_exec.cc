@@ -413,9 +413,9 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> RandomSampleReducerParser(
 
   // Evaluate the sample-size expression (arg 1) at parse time.
   expr::Expression::EvalContext ctx;
-  expr::Expression::Record record;
+  Record record(parameters.record_info_by_index_.size());
   auto size_opt = r->args_[1]->Evaluate(ctx, record).AsDouble();
-  if (!size_opt.has_value() || *size_opt < 0 ||
+  if (!size_opt.has_value() || !std::isfinite(*size_opt) || *size_opt < 0 ||
       *size_opt != std::floor(*size_opt)) {
     return absl::InvalidArgumentError(absl::StrCat(
         name, " sample size must be a non-negative integer constant"));

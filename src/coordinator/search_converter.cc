@@ -296,10 +296,10 @@ absl::Status GRPCSearchRequestToParameters(
       static_cast<QueryOperations>(request.query_operations());
   parameters->sortby_parameter = SortByFromGRPC(request);
   parameters->scorer = ScorerFromGRPC(request.scorer());
-  if (!request.inkeys().empty()) {
+  if (request.has_inkeys()) {
     auto &dest = parameters->inkeys.emplace();
-    dest.reserve(request.inkeys().size());
-    for (const auto& key : request.inkeys()) {
+    dest.reserve(request.inkeys().keys().size());
+    for (const auto& key : request.inkeys().keys()) {
       dest.insert(key);
     }
   }
@@ -475,8 +475,9 @@ std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
   SortByToGRPC(parameters.sortby_parameter, request.get());
   request->set_scorer(ScorerToGRPC(parameters.scorer));
   if (parameters.inkeys.has_value()) {
+    auto* inkeys_filter = request->mutable_inkeys();
     for (const auto& key : *parameters.inkeys) {
-      request->add_inkeys(key);
+      inkeys_filter->add_keys(key);
     }
   }
   return request;

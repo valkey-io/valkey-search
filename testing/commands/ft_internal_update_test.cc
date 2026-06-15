@@ -70,7 +70,7 @@ TEST_F(FTInternalUpdateTest, ParseErrorMetadata) {
 
 // A corrupt entry during loading with the skip flag disabled (the default)
 // must NOT abort the process. It returns a recoverable DataLossError that
-// points at the skip flag. Regression test for #1109 (was a fatal CHECK).
+// points at the skip flag.
 TEST_F(FTInternalUpdateTest, ParseErrorWhileLoadingReturnsErrorNoCrash) {
   EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))
       .WillRepeatedly(testing::Return(VALKEYMODULE_CTX_FLAGS_LOADING));
@@ -94,7 +94,6 @@ TEST_F(FTInternalUpdateTest, ParseErrorWhileLoadingReturnsErrorNoCrash) {
 
 // With the skip flag enabled, a corrupt entry during loading is skipped: the
 // command returns OK, increments the skipped metric, and does not crash.
-// Regression test for #1109 (the flag used to log "SKIPPING" then SIGSEGV).
 TEST_F(FTInternalUpdateTest, ParseErrorWhileLoadingSkippedWhenConfigured) {
   VMSDK_EXPECT_OK(const_cast<vmsdk::config::Boolean&>(
                       options::GetSkipCorruptedInternalUpdateEntries())
@@ -124,7 +123,7 @@ TEST_F(FTInternalUpdateTest, ParseErrorWhileLoadingSkippedWhenConfigured) {
 
 // A valid entry replayed while loading, with no coordinator (MetadataManager
 // uninitialized — the standalone default), must not crash. It replies OK and
-// returns without touching the uninitialized singleton. Regression for #1108.
+// returns without touching the uninitialized singleton.
 TEST_F(FTInternalUpdateTest, ValidEntryWhileLoadingWithoutCoordinatorNoCrash) {
   ASSERT_FALSE(coordinator::MetadataManager::IsInitialized());
   EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))

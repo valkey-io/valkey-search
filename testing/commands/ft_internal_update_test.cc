@@ -20,17 +20,15 @@ class FTInternalUpdateTest : public ValkeySearchTest {
   void SetUp() override {
     ValkeySearchTest::SetUp();
     // Ensure each test starts with the skip flag disabled (the default).
-    VMSDK_EXPECT_OK(
-        const_cast<vmsdk::config::Boolean&>(
-            options::GetSkipCorruptedInternalUpdateEntries())
-            .SetValue(false));
+    VMSDK_EXPECT_OK(const_cast<vmsdk::config::Boolean&>(
+                        options::GetSkipCorruptedInternalUpdateEntries())
+                        .SetValue(false));
   }
 
   void TearDown() override {
-    VMSDK_EXPECT_OK(
-        const_cast<vmsdk::config::Boolean&>(
-            options::GetSkipCorruptedInternalUpdateEntries())
-            .SetValue(false));
+    VMSDK_EXPECT_OK(const_cast<vmsdk::config::Boolean&>(
+                        options::GetSkipCorruptedInternalUpdateEntries())
+                        .SetValue(false));
     ValkeySearchTest::TearDown();
   }
 };
@@ -86,9 +84,8 @@ TEST_F(FTInternalUpdateTest, ParseErrorWhileLoadingReturnsErrorNoCrash) {
 
   auto status = FTInternalUpdateCmd(&fake_ctx_, argv, 4);
   EXPECT_EQ(status.code(), absl::StatusCode::kDataLoss);
-  EXPECT_THAT(
-      status.message(),
-      testing::HasSubstr("skip-corrupted-internal-update-entries"));
+  EXPECT_THAT(status.message(),
+              testing::HasSubstr("skip-corrupted-internal-update-entries"));
 
   for (int i = 0; i < 4; i++) {
     TestValkeyModule_FreeString(&fake_ctx_, argv[i]);
@@ -99,10 +96,9 @@ TEST_F(FTInternalUpdateTest, ParseErrorWhileLoadingReturnsErrorNoCrash) {
 // command returns OK, increments the skipped metric, and does not crash.
 // Regression test for #1109 (the flag used to log "SKIPPING" then SIGSEGV).
 TEST_F(FTInternalUpdateTest, ParseErrorWhileLoadingSkippedWhenConfigured) {
-  VMSDK_EXPECT_OK(
-      const_cast<vmsdk::config::Boolean&>(
-          options::GetSkipCorruptedInternalUpdateEntries())
-          .SetValue(true));
+  VMSDK_EXPECT_OK(const_cast<vmsdk::config::Boolean&>(
+                      options::GetSkipCorruptedInternalUpdateEntries())
+                      .SetValue(true));
   EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))
       .WillRepeatedly(testing::Return(VALKEYMODULE_CTX_FLAGS_LOADING));
 

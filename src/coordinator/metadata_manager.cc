@@ -923,11 +923,9 @@ absl::Status MetadataManager::CreateEntryOnReplica(
 
   auto obj_name = ObjName::Decode(id);
 
-  // Skip the registered update callback during loading. The callback applies
-  // the entry to the SchemaManager, whose state is not yet ready during early
-  // AOF/RDB replay (and would otherwise crash). Fingerprints/versions for the
-  // stored entries are re-applied to the schemas in OnLoadingEnded once loading
-  // completes, mirroring the staged-reconcile path used for RDB replication.
+  // Skip the callback during loading: the SchemaManager is not ready during
+  // early AOF/RDB replay and would crash. The entry is still stored below, and
+  // OnLoadingEnded re-applies fingerprints/versions to the schemas after load.
   if (!(ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_LOADING)) {
     auto callback_result =
         TriggerCallbacks(type_name, obj_name, *metadata_entry);

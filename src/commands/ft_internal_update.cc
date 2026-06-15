@@ -16,14 +16,10 @@ namespace valkey_search {
 
 constexpr int kFTInternalUpdateArgCount = 4;
 
-// Handles a parse/processing failure for an FT.INTERNAL_UPDATE entry. Returns a
-// status that the caller propagates by returning immediately (it never falls
-// through to applying a half-parsed entry).
-//
-// During AOF/RDB loading a failure is either skipped (when the operator opts in
-// via search.skip-corrupted-internal-update-entries) or surfaced as a
-// recoverable error. Corrupt persisted data must not abort the process, so this
-// never uses a fatal CHECK.
+// Handles an FT.INTERNAL_UPDATE failure. The caller must return its result
+// immediately (never fall through to applying a half-parsed entry). During
+// loading, a failure is either skipped (if the skip-corrupted config is set) or
+// returned as a recoverable error -- corrupt persisted data must not abort.
 absl::Status HandleInternalUpdateFailure(ValkeyModuleCtx *ctx,
                                          const std::string &operation_type,
                                          const std::string &id,
@@ -48,9 +44,8 @@ absl::Status HandleInternalUpdateFailure(ValkeyModuleCtx *ctx,
       return absl::OkStatus();
     }
     return absl::DataLossError(
-        "Corrupt FT.INTERNAL_UPDATE entry encountered during loading. Set "
-        "search.skip-corrupted-internal-update-entries=yes to skip such "
-        "entries, or repair/remove the offending AOF entry.");
+        "Corrupt FT.INTERNAL_UPDATE entry during loading; set "
+        "search.skip-corrupted-internal-update-entries=yes to skip it");
   }
 
   return error_status;
@@ -82,11 +77,10 @@ absl::Status FTInternalUpdateCmd(ValkeyModuleCtx *ctx,
             "Failed to parse GlobalMetadataVersionHeader"));
   }
 
-  // FT.INTERNAL_UPDATE only carries coordinator metadata. The MetadataManager
-  // is only initialized when the coordinator is enabled (cluster mode). If a
-  // node persisted these entries to its AOF and is later loaded without the
-  // coordinator (e.g. standalone), there is no MetadataManager to apply them
-  // to, so skip rather than dereference an uninitialized instance.
+  // The MetadataManager only exists when the coordinator is enabled (cluster
+  // mode). If these entries were persisted to the AOF and later loaded without
+  // the coordinator (e.g. standalone), skip rather than dereference the
+  // uninitialized instance.
   if (!coordinator::MetadataManager::IsInitialized()) {
     ValkeyModule_ReplyWithSimpleString(ctx, "OK");
     return absl::OkStatus();

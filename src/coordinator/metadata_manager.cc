@@ -772,6 +772,13 @@ void MetadataManager::OnLoadingEnded(ValkeyModuleCtx *ctx) {
           db_num, name, fingerprint, version);
     }
   }
+
+  // Reinstall aliases from coordinator metadata. ReconcileMetadata was called
+  // with trigger_callbacks=false so OnAliasMetadataCallback was never invoked.
+  // We trigger reinstallation now that indexes have been loaded and
+  // fingerprints populated.
+  SchemaManager::Instance().ReinstallAliasesFromCoordinatorMetadata(
+      ctx, std::nullopt);
 }
 
 void MetadataManager::OnReplicationLoadStart(ValkeyModuleCtx *ctx) {

@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -918,33 +919,13 @@ void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx) {
                                 << " on FLUSHDB of DB " << selected_db;
         continue;
       }
-      // Re-install aliases pointing to this index from MetadataManager.
-      auto global_metadata =
-          coordinator::MetadataManager::Instance().GetGlobalMetadata();
-      auto alias_ns_it =
-          global_metadata->type_namespace_map().find(kAliasMetadataTypeName);
-      if (alias_ns_it != global_metadata->type_namespace_map().end()) {
-        for (const auto &[encoded_alias, alias_entry] :
-             alias_ns_it->second.entries()) {
-          if (!alias_entry.has_content()) continue;
-          coordinator::AliasEntry unpacked;
-          if (!alias_entry.content().UnpackTo(&unpacked)) continue;
-          if (unpacked.index_name() != name) continue;
-          auto obj_name = coordinator::ObjName::Decode(encoded_alias);
-          if (obj_name.GetDbNum() != static_cast<uint32_t>(selected_db))
-            continue;
-          auto alias_status = AddAliasInternal(
-              obj_name.GetDbNum(), obj_name.GetName(), unpacked.index_name());
-          if (!alias_status.ok() && !absl::IsAlreadyExists(alias_status)) {
-            VMSDK_LOG(WARNING, ctx)
-                << "Unable to reinstall alias '"
-                << vmsdk::config::RedactIfNeeded(obj_name.GetName())
-                << "' after FLUSHDB of DB " << selected_db << ": "
-                << alias_status;
-          }
-        }
-      }
     }
+  }
+  if (coordinator_enabled_) {
+    // Re-install aliases for this DB from MetadataManager now that indexes
+    // have been recreated.
+    ReinstallAliasesFromCoordinatorMetadataInternal(
+        ctx, static_cast<uint32_t>(selected_db));
   }
 }
 
@@ -1303,6 +1284,51 @@ void SchemaManager::PopulateFingerprintVersionFromMetadata(
   if (existing_entry.ok()) {
     existing_entry.value()->SetFingerprint(fingerprint);
     existing_entry.value()->SetVersion(version);
+  }
+}
+
+void SchemaManager::ReinstallAliasesFromCoordinatorMetadata(
+    ValkeyModuleCtx *ctx, std::optional<uint32_t> db_num) {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  ReinstallAliasesFromCoordinatorMetadataInternal(ctx, db_num);
+}
+
+void SchemaManager::ReinstallAliasesFromCoordinatorMetadataInternal(
+    ValkeyModuleCtx *ctx, std::optional<uint32_t> db_num) {
+  auto global_metadata =
+      coordinator::MetadataManager::Instance().GetGlobalMetadata();
+  auto alias_ns_it =
+      global_metadata->type_namespace_map().find(kAliasMetadataTypeName);
+  if (alias_ns_it == global_metadata->type_namespace_map().end()) {
+    return;
+  }
+  for (const auto &[encoded_id, entry] : alias_ns_it->second.entries()) {
+    if (!entry.has_content()) continue;
+    coordinator::AliasEntry unpacked;
+    if (!entry.content().UnpackTo(&unpacked)) continue;
+    auto obj_name = coordinator::ObjName::Decode(encoded_id);
+    if (db_num.has_value() &&
+        obj_name.GetDbNum() != db_num.value()) {
+      continue;
+    }
+    if (!LookupInternal(obj_name.GetDbNum(), unpacked.index_name()).ok()) {
+      VMSDK_LOG(WARNING, ctx)
+          << "Alias reinstall: target index '"
+          << vmsdk::config::RedactIfNeeded(unpacked.index_name())
+          << "' not found for alias '"
+          << vmsdk::config::RedactIfNeeded(obj_name.GetName()) << "' in db "
+          << obj_name.GetDbNum()
+          << "; alias will be installed on next reconciliation";
+      continue;
+    }
+    auto status = AddAliasInternal(obj_name.GetDbNum(), obj_name.GetName(),
+                                   unpacked.index_name());
+    if (!status.ok() && !absl::IsAlreadyExists(status)) {
+      VMSDK_LOG(WARNING, ctx)
+          << "Unable to reinstall alias '"
+          << vmsdk::config::RedactIfNeeded(obj_name.GetName())
+          << "' in db " << obj_name.GetDbNum() << ": " << status;
+    }
   }
 }
 

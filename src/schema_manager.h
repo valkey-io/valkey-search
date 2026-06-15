@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -125,6 +126,14 @@ class SchemaManager {
                                               uint64_t fingerprint,
                                               uint32_t version);
 
+  // Reinstall aliases from coordinator metadata into local alias maps.
+  // Used after RDB load or FLUSHDB to restore alias state from the
+  // MetadataManager source of truth. If db_num is provided, only aliases
+  // for that database are reinstalled; otherwise all aliases are processed.
+  void ReinstallAliasesFromCoordinatorMetadata(ValkeyModuleCtx *ctx,
+                                               std::optional<uint32_t> db_num)
+      ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
+
   static void InitInstance(std::unique_ptr<SchemaManager> instance);
   static SchemaManager &Instance();
 
@@ -188,6 +197,11 @@ class SchemaManager {
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
   void EraseAliasMaps(uint32_t db_num, absl::string_view alias,
                       absl::string_view index_name)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
+
+  // Internal implementation called with db_to_index_schemas_mutex_ held.
+  void ReinstallAliasesFromCoordinatorMetadataInternal(
+      ValkeyModuleCtx *ctx, std::optional<uint32_t> db_num)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
 
   absl::Status CreateIndexSchemaInternal(

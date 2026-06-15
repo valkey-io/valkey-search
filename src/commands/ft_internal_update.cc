@@ -16,15 +16,18 @@ namespace valkey_search {
 
 constexpr int kFTInternalUpdateArgCount = 4;
 
-// Helper function to handle parse failures with poison pill recovery
-absl::Status HandleInternalUpdateFailure(
-    ValkeyModuleCtx *ctx, const std::string &operation_type,
-    const std::string &id,
-    const absl::Status &error_status = absl::OkStatus()) {
-  if (error_status.ok()) {
-    return absl::OkStatus();
-  }
-
+// Handles a parse/processing failure for an FT.INTERNAL_UPDATE entry. Returns a
+// status that the caller propagates by returning immediately (it never falls
+// through to applying a half-parsed entry).
+//
+// During AOF/RDB loading a failure is either skipped (when the operator opts in
+// via search.skip-corrupted-internal-update-entries) or surfaced as a
+// recoverable error. Corrupt persisted data must not abort the process, so this
+// never uses a fatal CHECK.
+absl::Status HandleInternalUpdateFailure(ValkeyModuleCtx *ctx,
+                                         const std::string &operation_type,
+                                         const std::string &id,
+                                         const absl::Status &error_status) {
   VMSDK_LOG(WARNING, ctx) << "CRITICAL: " << operation_type
                           << " failed in FT.INTERNAL_UPDATE. "
                           << "Index ID: " << vmsdk::config::RedactIfNeeded(id);
@@ -38,19 +41,19 @@ absl::Status HandleInternalUpdateFailure(
   if (ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_LOADING) {
     if (options::GetSkipCorruptedInternalUpdateEntries().GetValue()) {
       VMSDK_LOG(WARNING, ctx)
-          << "SKIPPING corrupted AOF entry due to configuration";
+          << "SKIPPING corrupted FT.INTERNAL_UPDATE AOF entry due to "
+             "configuration";
       Metrics::GetStats().ft_internal_update_skipped_entries_cnt++;
       ValkeyModule_ReplyWithSimpleString(ctx, "OK");
       return absl::OkStatus();
-    } else {
-      CHECK(false)
-          << "Internal update failure during AOF loading - cannot continue";
     }
+    return absl::DataLossError(
+        "Corrupt FT.INTERNAL_UPDATE entry encountered during loading. Set "
+        "search.skip-corrupted-internal-update-entries=yes to skip such "
+        "entries, or repair/remove the offending AOF entry.");
   }
 
-  return error_status.ok()
-             ? absl::InternalError("ERR " + operation_type + " failed")
-             : error_status;
+  return error_status;
 }
 
 absl::Status FTInternalUpdateCmd(ValkeyModuleCtx *ctx,
@@ -65,27 +68,40 @@ absl::Status FTInternalUpdateCmd(ValkeyModuleCtx *ctx,
   coordinator::GlobalMetadataEntry metadata_entry;
   if (!metadata_entry.ParseFromArray(metadata_view.data(),
                                      metadata_view.size())) {
-    VMSDK_RETURN_IF_ERROR(HandleInternalUpdateFailure(
+    return HandleInternalUpdateFailure(
         ctx, "GlobalMetadataEntry parse", id,
-        absl::InvalidArgumentError("Failed to parse GlobalMetadataEntry")));
+        absl::InvalidArgumentError("Failed to parse GlobalMetadataEntry"));
   }
 
   auto header_view = vmsdk::ToStringView(argv[3]);
   coordinator::GlobalMetadataVersionHeader version_header;
   if (!version_header.ParseFromArray(header_view.data(), header_view.size())) {
-    VMSDK_RETURN_IF_ERROR(HandleInternalUpdateFailure(
+    return HandleInternalUpdateFailure(
         ctx, "GlobalMetadataVersionHeader parse", id,
         absl::InvalidArgumentError(
-            "Failed to parse GlobalMetadataVersionHeader")));
+            "Failed to parse GlobalMetadataVersionHeader"));
   }
+
+  // FT.INTERNAL_UPDATE only carries coordinator metadata. The MetadataManager
+  // is only initialized when the coordinator is enabled (cluster mode). If a
+  // node persisted these entries to its AOF and is later loaded without the
+  // coordinator (e.g. standalone), there is no MetadataManager to apply them
+  // to, so skip rather than dereference an uninitialized instance.
+  if (!coordinator::MetadataManager::IsInitialized()) {
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+    return absl::OkStatus();
+  }
+
   int flags = ValkeyModule_GetContextFlags(ctx);
   if ((flags & VALKEYMODULE_CTX_FLAGS_SLAVE) ||
       (flags & VALKEYMODULE_CTX_FLAGS_LOADING)) {
     auto status = coordinator::MetadataManager::Instance().CreateEntryOnReplica(
         ctx, kSchemaManagerMetadataTypeName, id, &metadata_entry,
         &version_header);
-    VMSDK_RETURN_IF_ERROR(
-        HandleInternalUpdateFailure(ctx, "CreateEntryOnReplica", id, status));
+    if (!status.ok()) {
+      return HandleInternalUpdateFailure(ctx, "CreateEntryOnReplica", id,
+                                         status);
+    }
   }
 
   ValkeyModule_ReplicateVerbatim(ctx);

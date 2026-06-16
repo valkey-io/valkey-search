@@ -25,23 +25,30 @@ bool IsWhitespace(unsigned char c) {
   return std::isspace(c) || std::iscntrl(c);
 }
 
-using PunctuationBitmap = std::bitset<256>;
+// Build PunctuationSet from the PUNCTUATION string. Iterates as code points
+// (not bytes) so multi-byte chars like U+060C are stored correctly.
+PunctuationSet BuildPunctuationSet(const std::string& punctuation) {
+  PunctuationSet result;
 
-PunctuationBitmap BuildPunctuationBitmap(const std::string& punctuation) {
-  PunctuationBitmap bitmap;
-  bitmap.reset();
-
-  for (int i = 0; i < 256; ++i) {
+  // ASCII whitespace and control characters are always word boundaries.
+  for (int i = 0; i < 128; ++i) {
     if (IsWhitespace(static_cast<unsigned char>(i))) {
-      bitmap.set(i);
+      result.ascii.set(i);
     }
   }
 
-  for (char c : punctuation) {
-    bitmap.set(static_cast<unsigned char>(c));
+  // Iterate the user-supplied punctuation as code points, not bytes.
+  utils::Scanner scanner(punctuation);
+  utils::Scanner::Char cp;
+  while ((cp = scanner.NextUtf8()) != utils::Scanner::kEOF) {
+    if (utils::Scanner::IsAscii(cp)) {
+      result.ascii.set(cp);
+    } else {
+      result.non_ascii.insert(cp);
+    }
   }
 
-  return bitmap;
+  return result;
 }
 
 absl::flat_hash_set<std::string> BuildStopWordsSet(
@@ -79,7 +86,7 @@ thread_local absl::flat_hash_map<data_model::Language, StemmerPtr> stemmers_;
 Lexer::Lexer(data_model::Language language, const std::string& punctuation,
              const std::vector<std::string>& stop_words)
     : language_(language),
-      punct_bitmap_(BuildPunctuationBitmap(punctuation)),
+      punct_set_(BuildPunctuationSet(punctuation)),
       stop_words_set_(BuildStopWordsSet(stop_words)) {}
 
 absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
@@ -100,46 +107,50 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
   std::string word;
   word.reserve(64);
   size_t pos = 0;
+
   while (pos < text.size()) {
-    // Skip leading punctuation, but check for backslash escape sequences
-    while (pos < text.size() && IsPunctuation(text[pos])) {
+    // Skip leading punctuation. Decode code points so multi-byte chars are
+    // never confused with ASCII punctuation.
+    while (pos < text.size()) {
       if (text[pos] == '\\' && pos + 1 < text.size()) {
-        // Backslash at start - let word building handle escape
-        break;
+        break;  // Let word-building handle the escape.
       }
-      pos++;
+      utils::Scanner s(text.substr(pos));
+      auto cp = s.NextUtf8();
+      CHECK(cp != utils::Scanner::kInvalidCp)
+          << "Tokenize decoded invalid UTF-8 after IsValidUtf8 passed";
+      if (!IsPunctuation(cp)) break;
+      pos += s.LastUtf8ByteLen();
     }
 
     word.clear();
 
-    // Build word, handling backslash escape sequences
+    // Build word. Decode code points so multi-byte chars are treated correctly
+    // by IsPunctuation (which handles both ASCII and non-ASCII).
     while (pos < text.size()) {
-      char ch = text[pos];
-      if (ch == '\\' && pos + 1 < text.size()) {
-        char next_ch = text[pos + 1];
-        pos++;  // Consume the backslash
-        if (next_ch == '\\' || IsPunctuation(next_ch)) {
-          // Backslash escapes backslash or punctuation
-          word.push_back(text[pos++]);  // Keep the escaped character
-        } else {
-          // Backslash before non-punctuation
-          if (IsPunctuation('\\')) {
-            // Backslash is punctuation → end token (Standard Unicode
-            // segmentation)
-            break;
-          } else {
-            // Backslash not punctuation → keep letter
-            word.push_back(text[pos++]);
-          }
+      if (text[pos] == '\\' && pos + 1 < text.size()) {
+        pos++;  // Consume the backslash (a literal ASCII byte).
+        utils::Scanner s(text.substr(pos));
+        auto esc_cp = s.NextUtf8();
+        CHECK(esc_cp != utils::Scanner::kInvalidCp)
+            << "Tokenize decoded invalid UTF-8 after IsValidUtf8 passed";
+        uint8_t esc_len = s.LastUtf8ByteLen();
+        if (esc_cp != '\\' && !IsPunctuation(esc_cp) && IsPunctuation('\\')) {
+          break;  // Backslash is a boundary; leave the escaped char unconsumed.
         }
-      } else if (IsPunctuation(ch)) {
-        // Regular punctuation - end of word
-        break;
-      } else {
-        // Regular character
-        word.push_back(ch);
-        pos++;
+        word.append(text.data() + pos, esc_len);
+        pos += esc_len;
+        continue;
       }
+
+      utils::Scanner s(text.substr(pos));
+      auto cp = s.NextUtf8();
+      CHECK(cp != utils::Scanner::kInvalidCp)
+          << "Tokenize decoded invalid UTF-8 after IsValidUtf8 passed";
+      if (IsPunctuation(cp)) break;
+      uint8_t len = s.LastUtf8ByteLen();
+      word.append(text.data() + pos, len);
+      pos += len;
     }
 
     if (!word.empty()) {
@@ -173,21 +184,19 @@ sb_stemmer* Lexer::GetStemmer() const {
   return it->second.get();
 }
 
-// UTF-8 validation using Scanner
+// Strict UTF-8 validation. Gatekeeper for the tokenization pipeline: passing
+// input decodes without kInvalidCp, which is why the tokenization loop guards
+// decodes with CHECK. Rejecting overlong encodings (e.g. U+0000 as 0xC0 0x80)
+// is a security requirement — accepting them would let an attacker bypass
+// byte-level content filters looking for raw NUL.
 bool Lexer::IsValidUtf8(absl::string_view text) const {
-  valkey_search::utils::Scanner scanner(text);
-
-  // Try to parse each UTF-8 character - Scanner counts invalid sequences
+  utils::Scanner scanner(text);
   while (scanner.GetPosition() < text.size()) {
-    valkey_search::utils::Scanner::Char ch = scanner.NextUtf8();
-    if (ch == valkey_search::utils::Scanner::kEOF) {
-      break;
-    }
+    utils::Scanner::Char ch = scanner.NextUtf8();
+    if (ch == utils::Scanner::kEOF) break;
+    if (ch == utils::Scanner::kInvalidCp) return false;
   }
-
-  // If any invalid UTF-8 sequences were encountered, text is invalid
-  return scanner.GetInvalidUtf8Count() == 0 &&
-         scanner.GetPosition() == text.size();
+  return scanner.GetPosition() == text.size();
 }
 
 void Lexer::NormalizeLowerCaseInPlace(std::string& str) const {
@@ -200,9 +209,15 @@ void Lexer::NormalizeLowerCaseInPlace(std::string& str) const {
 
 std::string_view Lexer::DoStemming(absl::string_view word, sb_stemmer* stemmer,
                                    uint32_t min_stem_size) const {
-  if (word.empty() || word.length() < min_stem_size) {
+  if (word.empty()) {
     return word;
   }
+  // min_stem_size is a code point count, not byte count. "été" = 3 cps, 5
+  // bytes. Early-exit at min_stem_size avoids scanning long words fully.
+  if (!utils::Scanner::AtLeastNCodepoints(word, min_stem_size)) {
+    return word;
+  }
+
   CHECK(stemmer) << "Stemmer is not initialized";
   const sb_symbol* stemmed = sb_stemmer_stem(
       stemmer, reinterpret_cast<const sb_symbol*>(word.data()), word.length());

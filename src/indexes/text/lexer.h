@@ -25,6 +25,7 @@ Tokenization Pipeline:
 */
 
 #include <bitset>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -34,6 +35,7 @@ Tokenization Pipeline:
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "src/index_schema.pb.h"
+#include "src/utils/scanner.h"
 
 struct sb_stemmer;
 
@@ -48,6 +50,20 @@ using InProgressStemMap = absl::flat_hash_map<
     std::string,
     absl::InlinedVector<std::string, kInProgressStemVariantsInlineCapacity>>;
 
+// Punctuation lookup set. ASCII code points use a bitset; non-ASCII code
+// points (e.g. Arabic ، U+060C) use a hash set. Previously bitset<256> was
+// indexed by raw bytes, which broke when PUNCTUATION contained multi-byte
+// chars.
+struct PunctuationSet {
+  std::bitset<128> ascii;                   // Code points 0x00..0x7F
+  absl::flat_hash_set<uint32_t> non_ascii;  // Code points >= 0x80
+
+  bool Contains(uint32_t cp) const {
+    if (utils::Scanner::IsAscii(cp)) return ascii[cp];
+    return non_ascii.contains(cp);
+  }
+};
+
 struct Lexer {
   Lexer(data_model::Language language, const std::string& punctuation,
         const std::vector<std::string>& stop_words);
@@ -57,9 +73,10 @@ struct Lexer {
       absl::string_view text, bool stemming_enabled, uint32_t min_stem_size,
       InProgressStemMap* stem_mappings = nullptr) const;
 
-  bool IsPunctuation(char c) const {
-    return punct_bitmap_[static_cast<unsigned char>(c)];
-  }
+  // Returns true if cp is a configured word-boundary character.
+  // TODO(multi-lang): add language-default non-ASCII punctuation (Arabic
+  // U+060C, U+061F, U+061B) per multi-language support plan section 5.
+  bool IsPunctuation(uint32_t cp) const { return punct_set_.Contains(cp); }
 
   bool IsStopWord(absl::string_view lowercase_word) const {
     return stop_words_set_.contains(lowercase_word);
@@ -73,12 +90,11 @@ struct Lexer {
                      InProgressStemMap& stem_mappings) const;
 
  private:
-  data_model::Language language_;
-  std::bitset<256> punct_bitmap_;
-  absl::flat_hash_set<std::string> stop_words_set_;
-
-  // UTF-8 processing helpers
   bool IsValidUtf8(absl::string_view text) const;
+
+  data_model::Language language_;
+  PunctuationSet punct_set_;
+  absl::flat_hash_set<std::string> stop_words_set_;
   // Common stemming logic
   std::string_view DoStemming(absl::string_view word, sb_stemmer* stemmer,
                               uint32_t min_stem_size) const;

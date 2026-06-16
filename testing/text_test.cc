@@ -16,6 +16,7 @@
 #include "absl/status/statusor.h"
 #include "gtest/gtest.h"
 #include "src/index_schema.pb.h"
+#include "src/indexes/text/fuzzy.h"
 #include "src/indexes/text/invasive_ptr.h"
 #include "src/indexes/text/text_index.h"
 #include "src/utils/string_interning.h"
@@ -400,6 +401,198 @@ TEST_F(TextTest, StemmingBehavior) {
   }
 
   EXPECT_TRUE(has_tokens) << "Should create stemmed tokens";
+}
+
+// Fuzzy must decode UTF-8 across radix-tree edge boundaries. Two Arabic words
+// sharing only their first byte (0xD8) cause that byte to live on its own
+// edge, with the second byte of each word starting the next edge. A walker
+// that decodes per-edge sees two invalid bytes instead of one Arabic code
+// point and miscounts the edit distance.
+TEST_F(TextTest, FuzzySearchAcrossMultiByteEdgeSplit) {
+  AddRecordAndCommitKey(StringInternStore::Intern("doc:1"), "بالعالم");
+  AddRecordAndCommitKey(StringInternStore::Intern("doc:2"), "اختبار");
+
+  const auto& tree = text_index_schema_->GetTextIndex()->GetPrefix();
+  auto results = text::FuzzySearch::Search(tree, "بالعالم", /*max_distance=*/0,
+                                           /*max_words=*/100);
+  ASSERT_EQ(results.size(), 1u);
+  EXPECT_EQ(results[0].GetKey()->Str(), "doc:1");
+}
+
+// Edit distance is in code points, not bytes. "¡hola" and "hola" differ by
+// one inserted code point (¡ = U+00A1, 2 bytes). Distance 1 must match;
+// distance 0 must not.
+TEST_F(TextTest, FuzzySearchCodePointDistance) {
+  AddRecordAndCommitKey(StringInternStore::Intern("doc:1"), "¡hola");
+
+  const auto& tree = text_index_schema_->GetTextIndex()->GetPrefix();
+  auto exact = text::FuzzySearch::Search(tree, "hola", /*max_distance=*/0,
+                                         /*max_words=*/100);
+  EXPECT_EQ(exact.size(), 0u);
+
+  auto fuzzy = text::FuzzySearch::Search(tree, "hola", /*max_distance=*/1,
+                                         /*max_words=*/100);
+  ASSERT_EQ(fuzzy.size(), 1u);
+  EXPECT_EQ(fuzzy[0].GetKey()->Str(), "doc:1");
+}
+
+// Damerau-Levenshtein transposition counts as a single edit, and must operate
+// on code points. "café" vs "caéf" swaps the last two code points (é =
+// U+00E9, 2 bytes; f = 1 byte). A byte-wise DP would see a multi-byte
+// scramble; the code-point DP sees one transposition. Distance 1 matches,
+// distance 0 does not.
+TEST_F(TextTest, FuzzySearchMultiByteTransposition) {
+  AddRecordAndCommitKey(StringInternStore::Intern("doc:1"), "café");
+
+  const auto& tree = text_index_schema_->GetTextIndex()->GetPrefix();
+  auto exact = text::FuzzySearch::Search(tree, "caéf", /*max_distance=*/0,
+                                         /*max_words=*/100);
+  EXPECT_EQ(exact.size(), 0u);
+
+  auto fuzzy = text::FuzzySearch::Search(tree, "caéf", /*max_distance=*/1,
+                                         /*max_words=*/100);
+  ASSERT_EQ(fuzzy.size(), 1u);
+  EXPECT_EQ(fuzzy[0].GetKey()->Str(), "doc:1");
+}
+
+// 3-byte code points that share a multi-byte prefix exercise the Rax
+// edge-split decode path. ぁ (U+3041, E3 81 81) and あ (U+3042, E3 81 82)
+// share the first two bytes E3 81, so the radix tree splits the shared prefix
+// onto its own edge and the differing third byte starts the next edge. The
+// fuzzy walker must reassemble the full 3-byte code point across that split
+// rather than decoding partial bytes per edge.
+TEST_F(TextTest, FuzzySearchAcrossThreeByteEdgeSplit) {
+  AddRecordAndCommitKey(StringInternStore::Intern("doc:1"), "ぁ");
+  AddRecordAndCommitKey(StringInternStore::Intern("doc:2"), "あ");
+
+  const auto& tree = text_index_schema_->GetTextIndex()->GetPrefix();
+  auto results = text::FuzzySearch::Search(tree, "ぁ", /*max_distance=*/0,
+                                           /*max_words=*/100);
+  ASSERT_EQ(results.size(), 1u);
+  EXPECT_EQ(results[0].GetKey()->Str(), "doc:1");
+}
+
+// ==========================================================================
+// Scenario 1: Transposition straddling an edge split.
+// "café" and "cafx" share prefix "caf"; the tree splits edges there.
+// Querying "caéf" (transposition of é and f) forces the two swapped code
+// points to land on opposite sides of the edge boundary. The prev_tree_cp
+// carry and partial-byte buffering must combine correctly to detect that
+// a single transposition (distance 1) suffices.
+TEST_F(TextTest, FuzzyTranspositionAcrossEdgeSplit) {
+  // Insert two words that share prefix "caf" so the tree creates an edge
+  // split at that boundary. "café" has é (2-byte) after "caf".
+  AddRecordAndCommitKey(StringInternStore::Intern("doc:1"), "café");
+  AddRecordAndCommitKey(StringInternStore::Intern("doc:2"), "cafx");
+
+  const auto& tree = text_index_schema_->GetTextIndex()->GetPrefix();
+
+  // "caéf" is "café" with the last two code points transposed.
+  // The transposition crosses the edge split at "caf"|"é..." vs "caf"|"x".
+  auto exact = text::FuzzySearch::Search(tree, "caéf", /*max_distance=*/0,
+                                         /*max_words=*/100);
+  EXPECT_EQ(exact.size(), 0u);
+
+  auto fuzzy = text::FuzzySearch::Search(tree, "caéf", /*max_distance=*/1,
+                                         /*max_words=*/100);
+  ASSERT_EQ(fuzzy.size(), 1u);
+  EXPECT_EQ(fuzzy[0].GetKey()->Str(), "doc:1");
+}
+
+// ==========================================================================
+// Scenario 2: 4-byte code point (emoji) split across edges.
+// Two emoji that share a 3-byte prefix force the radix tree to split the
+// 4-byte sequence. The fuzzy walker must reassemble the full 4-byte code
+// point across the edge boundary.
+TEST_F(TextTest, FuzzySearchAcrossFourByteEdgeSplit) {
+  // 😀 = F0 9F 98 80, 😁 = F0 9F 98 81
+  // They share first 3 bytes F0 9F 98; the tree splits there.
+  AddRecordAndCommitKey(StringInternStore::Intern("doc:1"),
+                        "\xF0\x9F\x98\x80");  // 😀
+  AddRecordAndCommitKey(StringInternStore::Intern("doc:2"),
+                        "\xF0\x9F\x98\x81");  // 😁
+
+  const auto& tree = text_index_schema_->GetTextIndex()->GetPrefix();
+
+  // Exact match for 😀 at distance 0
+  auto results = text::FuzzySearch::Search(
+      tree, "\xF0\x9F\x98\x80", /*max_distance=*/0, /*max_words=*/100);
+  ASSERT_EQ(results.size(), 1u);
+  EXPECT_EQ(results[0].GetKey()->Str(), "doc:1");
+
+  // Distance 1: searching for 😀 should find both 😀 (exact) and 😁
+  // (1 substitution in code point space)
+  auto fuzzy = text::FuzzySearch::Search(tree, "\xF0\x9F\x98\x80",
+                                         /*max_distance=*/1, /*max_words=*/100);
+  ASSERT_EQ(fuzzy.size(), 2u);
+}
+
+// ==========================================================================
+// Scenario 3: Pruning on a partial-only edge.
+// When an edge contains only partial bytes of a multi-byte sequence (the
+// shared prefix of two code points), the min_dist init-from-prev must still
+// prune correctly: if the subtree can't possibly satisfy max_distance, the
+// walker must not descend.
+TEST_F(TextTest, FuzzyPruningOnPartialEdge) {
+  // Insert two 3-byte chars that share 2 bytes: ぁ (E3 81 81) and あ (E3 81 82)
+  // plus a totally different word so the tree has a branch to prune.
+  AddRecordAndCommitKey(StringInternStore::Intern("doc:ja1"), "ぁ");
+  AddRecordAndCommitKey(StringInternStore::Intern("doc:ja2"), "あ");
+  AddRecordAndCommitKey(StringInternStore::Intern("doc:en"), "xyz");
+
+  const auto& tree = text_index_schema_->GetTextIndex()->GetPrefix();
+
+  // Searching "ぁ" at distance 0 — "xyz" subtree should be pruned
+  // (completely different code points, distance would be >> 0).
+  auto results = text::FuzzySearch::Search(tree, "ぁ", /*max_distance=*/0,
+                                           /*max_words=*/100);
+  ASSERT_EQ(results.size(), 1u);
+  EXPECT_EQ(results[0].GetKey()->Str(), "doc:ja1");
+
+  // At distance 1, "あ" is reachable (1 substitution) but "xyz" is still
+  // unreachable (3 substitutions for a 1-cp query = distance 3).
+  auto fuzzy = text::FuzzySearch::Search(tree, "ぁ", /*max_distance=*/1,
+                                         /*max_words=*/100);
+  ASSERT_EQ(fuzzy.size(), 2u);
+  // Verify "xyz" is not in results
+  for (const auto& r : fuzzy) {
+    EXPECT_NE(r.GetKey()->Str(), "doc:en");
+  }
+}
+
+// ==========================================================================
+// Scenario 4: max_distance > 1 with multibyte characters.
+// All previous fuzzy multibyte tests use distance 0/1. This exercises
+// distance 2 with multi-byte code points to ensure the DP matrix handles
+// larger edit distances correctly across byte boundaries.
+TEST_F(TextTest, FuzzyMultiByteDistance2) {
+  // "München" — contains ü (U+00FC, 2 bytes)
+  AddRecordAndCommitKey(StringInternStore::Intern("doc:1"), "münchen");
+
+  const auto& tree = text_index_schema_->GetTextIndex()->GetPrefix();
+
+  // "munchen" differs by: ü→u (1 substitution). Distance 1 should match.
+  auto d1 = text::FuzzySearch::Search(tree, "munchen", /*max_distance=*/1,
+                                      /*max_words=*/100);
+  ASSERT_EQ(d1.size(), 1u);
+  EXPECT_EQ(d1[0].GetKey()->Str(), "doc:1");
+
+  // "munchn" differs by: ü→u (1 sub) + deletion of 'e'. Distance 2 matches.
+  auto d2_match = text::FuzzySearch::Search(tree, "munchn", /*max_distance=*/2,
+                                            /*max_words=*/100);
+  ASSERT_EQ(d2_match.size(), 1u);
+  EXPECT_EQ(d2_match[0].GetKey()->Str(), "doc:1");
+
+  // Same query at distance 1 should NOT match (needs 2 edits).
+  auto d1_miss = text::FuzzySearch::Search(tree, "munchn", /*max_distance=*/1,
+                                           /*max_words=*/100);
+  EXPECT_EQ(d1_miss.size(), 0u);
+
+  // "mcn" needs 4 edits from "münchen" (delete ü, delete n, delete h, delete
+  // e). Distance 2 should NOT match.
+  auto d2_miss = text::FuzzySearch::Search(tree, "mcn", /*max_distance=*/2,
+                                           /*max_words=*/100);
+  EXPECT_EQ(d2_miss.size(), 0u);
 }
 
 }  // namespace valkey_search::indexes

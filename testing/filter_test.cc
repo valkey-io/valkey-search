@@ -1656,10 +1656,113 @@ INSTANTIATE_TEST_SUITE_P(
             .evaluate_success = true,  // "a|b" should match, numeric doesn't
             .key = "key_pipe",
         },
+        // =================================================================
+        // Multi-byte UTF-8 token content: exercises PeekCodepoint()
+        // multi-byte path (Scanner::NextUtf8 branch) in FilterParser
+        // =================================================================
+        {
+            // "café" contains é (U+00E9 = 0xC3 0xA9, 2 bytes). The token
+            // content loop calls PeekCodepoint() which decodes the 2-byte
+            // sequence via Scanner::NextUtf8 and advances by byte_len=2
+            // instead of 1, ensuring pos_ is not corrupted after the
+            // multi-byte char.
+
+            .test_name = "text_multibyte_term_in_query",
+            .filter = "caf\xC3\xA9",
+            .create_success = true,
+            .expected_tree_structure =
+                "TEXT-TERM(\"caf\xC3\xA9\", field_mask=3)\n",
+        },
     }),
     [](const TestParamInfo<FilterTestCase> &info) {
       return info.param.test_name;
     });
+
+// Verifies the parser's PeekCodepoint() integration with the lexer's
+// multi-byte PunctuationSet: when a custom PUNCTUATION contains a multi-byte
+// code point (Arabic comma ، U+060C, bytes 0xD8 0x8C), ParseUnquotedTextToken
+// must terminate the token on the full code point — not on byte 0xD8 alone,
+// which would shred Arabic words and emit a partial UTF-8 token. Default
+// FilterTest fixtures use ASCII-only punctuation, so a dedicated fixture is
+// needed to plumb a multi-byte PUNCTUATION through the schema.
+class FilterMultiBytePunctuationTest : public ValkeySearchTest {};
+
+TEST_F(FilterMultiBytePunctuationTest,
+       UnquotedTokenBreaksOnMultiBytePunctuation) {
+  std::vector<absl::string_view> key_prefixes = {"prefix:"};
+  auto schema =
+      MockIndexSchema::Create(&fake_ctx_, "mb_punct_schema", key_prefixes,
+                              std::make_unique<HashAttributeDataType>(),
+                              /*mutations_thread_pool=*/nullptr,
+                              data_model::Language::LANGUAGE_ENGLISH,
+                              /*punctuation=*/"\xD8\x8C", /*with_offsets=*/true,
+                              /*stop_words=*/{})
+          .value();
+  schema->CreateTextIndexSchema();
+  auto text_index_schema = schema->GetTextIndexSchema();
+  data_model::TextIndex text_index_proto =
+      CreateTextIndexProto(true, false, 1.0);
+  auto text_index =
+      std::make_shared<indexes::Text>(text_index_proto, text_index_schema);
+  VMSDK_EXPECT_OK(schema->AddIndex("text_field1", "text_field1", text_index));
+  EXPECT_CALL(*schema, GetIdentifier(testing::_)).Times(testing::AnyNumber());
+
+  // "hello،world" — the parser must consume "hello", skip the multi-byte
+  // punctuation atomically (advancing 2 bytes for U+060C, not 1), then parse
+  // "world" cleanly. A 1-byte advance would leave the orphan continuation
+  // byte 0x8C in the stream and emit a corrupted "\x8Cworld" token that
+  // gets mojibake-replaced to "�world" during normalization.
+  std::string filter = "hello\xD8\x8Cworld";
+  TextParsingOptions options{};
+  FilterParser parser(*schema, filter, options);
+  auto parse_results = parser.Parse();
+  ASSERT_TRUE(parse_results.ok()) << parse_results.status().message();
+  std::string actual_tree =
+      PrintPredicateTree(parse_results.value().root_predicate.get());
+  EXPECT_EQ(actual_tree,
+            "AND{\n"
+            "  TEXT-TERM(\"hello\", field_mask=1)\n"
+            "  TEXT-TERM(\"world\", field_mask=1)\n"
+            "}\n");
+}
+
+// The query string is the user-input boundary, so malformed UTF-8 must be
+// tolerated rather than rejected (preserves 1.2 behavior). PeekCodepoint
+// reports Peeked::valid == false for an invalid byte; the token loops consume
+// it as opaque single-byte data and keep parsing. A query ending in a
+// truncated 2-byte lead (0xC3 with no continuation) must parse without error
+// and still produce a usable predicate; the invalid byte simply becomes token
+// content that matches nothing downstream.
+class FilterMalformedUtf8Test : public ValkeySearchTest {};
+
+TEST_F(FilterMalformedUtf8Test, TruncatedUtf8InQueryToleratedNoError) {
+  std::vector<absl::string_view> key_prefixes = {"prefix:"};
+  auto schema =
+      MockIndexSchema::Create(&fake_ctx_, "malformed_utf8_schema", key_prefixes,
+                              std::make_unique<HashAttributeDataType>(),
+                              /*mutations_thread_pool=*/nullptr,
+                              data_model::Language::LANGUAGE_ENGLISH,
+                              /*punctuation=*/" ", /*with_offsets=*/true,
+                              /*stop_words=*/{})
+          .value();
+  schema->CreateTextIndexSchema();
+  auto text_index_schema = schema->GetTextIndexSchema();
+  data_model::TextIndex text_index_proto =
+      CreateTextIndexProto(true, false, 1.0);
+  auto text_index =
+      std::make_shared<indexes::Text>(text_index_proto, text_index_schema);
+  VMSDK_EXPECT_OK(schema->AddIndex("text_field1", "text_field1", text_index));
+  EXPECT_CALL(*schema, GetIdentifier(testing::_)).Times(testing::AnyNumber());
+
+  // "hello " + lone 0xC3 (truncated 2-byte lead). Parsing must succeed; the
+  // malformed trailing byte is tolerated as opaque token content.
+  std::string filter = "hello \xC3";
+  TextParsingOptions options{};
+  FilterParser parser(*schema, filter, options);
+  auto parse_results = parser.Parse();
+  ASSERT_TRUE(parse_results.ok()) << parse_results.status().message();
+  EXPECT_NE(parse_results.value().root_predicate, nullptr);
+}
 
 }  // namespace
 }  // namespace valkey_search

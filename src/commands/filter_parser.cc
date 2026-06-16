@@ -531,12 +531,20 @@ absl::StatusOr<bool> FilterParser::HandleBackslashEscape(
     return true;
   }
   if (!IsEnd()) {
-    char next_ch = Peek();
-    if (next_ch == '\\' || lexer.IsPunctuation(next_ch)) {
+    Peeked pk = PeekCodepoint();
+    if (!pk.IsValid()) {
+      // TODO(compat): Once valkey-io/valkey-search#1063 merges, reject here
+      // with: return absl::InvalidArgumentError("Invalid UTF-8");
+      // This matches the ingestion path (Lexer::Tokenize) behavior. Currently
+      // tolerated for 1.2 backward compatibility — ICU normalizes the invalid
+      // bytes to U+FFFD which safely matches nothing downstream.
+      ConsumePeeked(pk, processed_content);
+      return true;
+    }
+    if (pk.cp == '\\' || lexer.IsPunctuation(pk.cp)) {
       // If Double backslash, retain the double backslash
       // If Single backslash with punct on right, retain the char on right
-      processed_content.push_back(next_ch);
-      ++pos_;
+      ConsumePeeked(pk, processed_content);
       // Continue parsing the same token.
       return true;
     } else {
@@ -547,8 +555,7 @@ absl::StatusOr<bool> FilterParser::HandleBackslashEscape(
         return false;
       } else {
         // Backslash not punctuation → keep letter, continue
-        processed_content.push_back(next_ch);
-        ++pos_;
+        ConsumePeeked(pk, processed_content);
         return true;
       }
     }
@@ -576,13 +583,24 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
     if (!should_continue) {
       break;
     }
-    // Break to complete an exact phrase or start a new exact phrase.
-    char ch = Peek();
-    if (ch == '"') break;
-    if (ch == '\\') continue;  // Don't break on backslash
-    if (lexer.IsPunctuation(ch)) break;
-    processed_content.push_back(ch);
-    ++pos_;
+    {
+      Peeked pk = PeekCodepoint();
+      if (!pk.IsValid()) {
+        // TODO(compat): Once valkey-io/valkey-search#1063 merges, reject here
+        // with: return absl::InvalidArgumentError("Invalid UTF-8");
+        // This matches the ingestion path (Lexer::Tokenize) behavior. Currently
+        // tolerated for 1.2 backward compatibility — ICU normalizes the invalid
+        // bytes to U+FFFD which safely matches nothing downstream.
+        ConsumePeeked(pk, processed_content);
+        continue;
+      }
+      if (pk.cp == '"') break;
+      if (pk.cp == '\\')
+        continue;  // Don't break on backslash; route to
+                   // HandleBackslashEscape on next iteration.
+      if (lexer.IsPunctuation(pk.cp)) break;
+      ConsumePeeked(pk, processed_content);
+    }
   }
   if (processed_content.empty()) {
     return FilterParser::TokenResult{nullptr, false};
@@ -626,29 +644,39 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     if (!should_continue) {
       break;
     }
-    char ch = Peek();
-    // Break on non text specific query syntax characters.
-    if (ch == ')' || ch == '|' || ch == '(' || ch == '@') {
+    Peeked pk = PeekCodepoint();
+    if (!pk.IsValid()) {
+      // TODO(compat): Once valkey-io/valkey-search#1063 merges, reject here
+      // with: return absl::InvalidArgumentError("Invalid UTF-8");
+      // This matches the ingestion path (Lexer::Tokenize) behavior. Currently
+      // tolerated for 1.2 backward compatibility — ICU normalizes the invalid
+      // bytes to U+FFFD which safely matches nothing downstream.
+      ConsumePeeked(pk, processed_content);
+      continue;
+    }
+    // Break on non text specific query syntax characters. ASCII code points
+    // compare identically to their byte values.
+    if (pk.cp == ')' || pk.cp == '|' || pk.cp == '(' || pk.cp == '@') {
       break_on_query_syntax = true;
       break;
     }
     // Reject reserved characters in unquoted text
-    if (ch == '{' || ch == '}' || ch == '[' || ch == ']' || ch == ':' ||
-        ch == ';' || ch == '$') {
+    if (pk.cp == '{' || pk.cp == '}' || pk.cp == '[' || pk.cp == ']' ||
+        pk.cp == ':' || pk.cp == ';' || pk.cp == '$') {
       return absl::InvalidArgumentError(
           absl::StrCat("Unexpected character at position ", pos_ + 1, ": `",
                        expression_.substr(pos_, 1), "`"));
     }
     // - characters in the middle of text tokens are not negate. If they are in
     // the beginning, break.
-    if (ch == '-' && processed_content.empty()) {
+    if (pk.cp == '-' && processed_content.empty()) {
       break_on_query_syntax = true;
       break;
     }
     // Break to complete an exact phrase or start a new exact phrase.
-    if (ch == '"') break;
+    if (pk.cp == '"') break;
     // Handle fuzzy token boundary detection
-    if (ch == '%') {
+    if (pk.cp == '%') {
       if (processed_content.empty()) {
         // Leading percent
         while (Match('%', false)) {
@@ -679,12 +707,11 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
         break;
       }
     }
-    if (ch == '\\') continue;  // Don't break on backslash
-    // Break on all punctuation characters.
-    if (lexer.IsPunctuation(ch)) break;
-    // Regular character
-    processed_content.push_back(ch);
-    ++pos_;
+    if (pk.cp == '\\')
+      continue;  // Don't break on backslash; route to
+                 // HandleBackslashEscape on next iteration.
+    if (lexer.IsPunctuation(pk.cp)) break;
+    ConsumePeeked(pk, processed_content);
   }
   lexer.NormalizeLowerCaseInPlace(processed_content);
   FieldMaskPredicate field_mask;
@@ -809,10 +836,10 @@ FilterParser::ParseTextTokens(
   bool in_quotes = false;
   bool exact_phrase = false;
   while (!IsEnd()) {
-    char c = Peek();
-    if (c == '"') {
+    Peeked pk = PeekCodepoint();
+    if (pk.cp == '"') {
       in_quotes = !in_quotes;
-      ++pos_;
+      SkipPeeked(pk);
       if (in_quotes && terms.empty()) {
         exact_phrase = true;
         continue;
@@ -835,9 +862,14 @@ FilterParser::ParseTextTokens(
       break;
     }
     // If this happens, we are either done (at the end of the prefilter string)
-    // or were on a punctuation character which should be consumed.
+    // or were on a punctuation character which should be consumed. Advance by
+    // the full code point's byte length so multi-byte punctuation (e.g. Arabic
+    // ، U+060C) is consumed atomically — advancing 1 byte would split the
+    // sequence and feed an orphan continuation byte to the next iteration.
     if (token_start == pos_) {
-      ++pos_;
+      Peeked pk = PeekCodepoint();
+      // For malformed input byte_len == 1, so this still advances one byte.
+      SkipPeeked(pk);
     }
   }
   std::unique_ptr<query::Predicate> pred;

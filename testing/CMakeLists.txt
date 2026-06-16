@@ -155,7 +155,9 @@ set(UTILS_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/utils/lru_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/utils/patricia_tree_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/utils/segment_tree_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/utils/scanner_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/utils/string_interning_test.cc)
+
 
 add_executable(valkey_utils_test ${UTILS_TEST_SOURCES})
 target_include_directories(valkey_utils_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
@@ -165,7 +167,9 @@ target_link_libraries(valkey_utils_test PRIVATE testing_common_base)
 target_link_libraries(valkey_utils_test PRIVATE intrusive_list)
 target_link_libraries(valkey_utils_test PRIVATE lru)
 target_link_libraries(valkey_utils_test PRIVATE segment_tree)
+target_link_libraries(valkey_utils_test PRIVATE scanner)
 finalize_test_flags(valkey_utils_test)
+
 
 # 7. Text Index Test Suite
 add_executable(text_index_test 

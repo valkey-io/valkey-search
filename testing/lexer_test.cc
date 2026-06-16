@@ -261,4 +261,60 @@ TEST_F(LexerTest, StemMappingsNoStemmingWhenDisabled) {
   EXPECT_TRUE(stem_mappings.empty());
 }
 
+// Custom PUNCTUATION may contain multi-byte characters (e.g. Arabic comma
+// ، U+060C, bytes 0xD8 0x8C). The lexer must treat the code point as a single
+// boundary, not split on each byte. Splitting on byte 0xD8 alone would also
+// shred every Arabic word, since all Arabic letters in U+0600..U+06FF start
+// with that lead byte.
+TEST_F(LexerTest, MultiBytePunctuation) {
+  lexer_ = CreateLexer("،", /*stop_words=*/{});
+  valkey_search::indexes::text::InProgressStemMap stem_mappings;
+  auto result = lexer_->Tokenize("hello،world", /*stemming_enabled=*/false,
+                                 /*min_stem_size=*/4, nullptr);
+  ASSERT_TRUE(result.ok());
+  std::vector<std::string> tokens(result->begin(), result->end());
+  EXPECT_EQ(tokens, std::vector<std::string>({"hello", "world"}));
+
+  result = lexer_->Tokenize("مرحبا بالعالم", /*stemming_enabled=*/false,
+                            /*min_stem_size=*/4, nullptr);
+  ASSERT_TRUE(result.ok());
+  tokens.assign(result->begin(), result->end());
+  EXPECT_EQ(tokens, std::vector<std::string>({"مرحبا", "بالعالم"}));
+}
+
+// Escaped multi-byte punctuation: when the Arabic comma ، (U+060C, bytes
+// 0xD8 0x8C) is configured punctuation, escaping it with a backslash must
+// fold the whole code point into a single token rather than breaking on it.
+// A 1-byte advance after the backslash would consume only 0xD8, leaving the
+// orphan continuation byte 0x8C to corrupt the token.
+TEST_F(LexerTest, EscapedMultiBytePunctuation) {
+  lexer_ = CreateLexer("،", /*stop_words=*/{});
+  valkey_search::indexes::text::InProgressStemMap stem_mappings;
+  auto result = lexer_->Tokenize("hello\\،world", /*stemming_enabled=*/false,
+                                 /*min_stem_size=*/4, nullptr);
+  ASSERT_TRUE(result.ok());
+  std::vector<std::string> tokens(result->begin(), result->end());
+  // The escaped punctuation is retained, so the whole thing is one token.
+  EXPECT_EQ(tokens, std::vector<std::string>({"hello،world"}));
+}
+
+// Stemming threshold uses a code-point count, not a byte count (see
+// DoStemming -> AtLeastNCodepoints). "été" (é = U+00E9, 2 bytes each) is
+// 3 code points / 5 bytes. With stemming enabled the multi-byte word must
+// tokenize to a single intact token at both a threshold it clears (3) and one
+// it doesn't (4) — a byte-based length check or a byte-wise decode would split
+// or corrupt the é. The token emitted is always the original word; stemming
+// only populates the side stem-map, so the token output is the stable signal.
+TEST_F(LexerTest, StemmingMultiByteWordTokenizesIntact) {
+  for (uint32_t min_stem_size : {3u, 4u}) {
+    valkey_search::indexes::text::InProgressStemMap stem_mappings;
+    auto result = lexer_->Tokenize("été", /*stemming_enabled=*/true,
+                                   min_stem_size, &stem_mappings);
+    ASSERT_TRUE(result.ok()) << "min_stem_size=" << min_stem_size;
+    std::vector<std::string> tokens(result->begin(), result->end());
+    EXPECT_EQ(tokens, std::vector<std::string>({"été"}))
+        << "min_stem_size=" << min_stem_size;
+  }
+}
+
 }  // namespace valkey_search::indexes::text

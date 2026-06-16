@@ -2,3 +2,7 @@ CompileFlags:
   Add:
     - "-ferror-limit=0"
     - "-DRunningClangd"
+
+Diagnostics:
+  UnusedIncludes: Strict
+

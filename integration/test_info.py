@@ -38,13 +38,6 @@ class TestVSSBasic(ValkeySearchTestCaseBase):
             "search_hnsw_modify_exceptions_count",
             "search_hnsw_search_exceptions_count",
             "search_hnsw_create_exceptions_count",
-            "search_string_interning_store_size",
-            "search_vector_externing_entry_count",
-            "search_vector_externing_hash_extern_errors",
-            "search_vector_externing_generated_value_cnt",
-            "search_vector_externing_num_lru_entries",
-            "search_vector_externing_lru_promote_cnt",
-            "search_vector_externing_deferred_entry_cnt",
             "search_number_of_attributes",
             "search_number_of_indexes",
             "search_total_indexed_documents",
@@ -159,13 +152,7 @@ class TestAppMetrics(ValkeySearchTestCaseDebugMode):
             "worker_pool_suspend_cnt",
             "writer_queue_size",
             "writer_resumed_cnt",
-            "writer_suspension_expired_cnt",
-            "vector_externing_deferred_entry_cnt",
-            "vector_externing_entry_count",
-            "vector_externing_generated_value_cnt",
-            "vector_externing_hash_extern_errors",
-            "vector_externing_lru_promote_cnt",
-            "vector_externing_num_lru_entries",
+            "writer_suspension_expired_cnt"
         }
         # Verify no metrics are missing
         missing = expected_metrics - actual_metrics_set

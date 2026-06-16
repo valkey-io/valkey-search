@@ -7,8 +7,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <deque>
-#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -22,6 +20,7 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
+#include "absl/strings/strip.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "src/attribute_data_type.h"
@@ -183,10 +182,10 @@ void TestIndex(T* index, int dimensions, int vector_size) {
   EXPECT_FALSE(res.ok());
   EXPECT_EQ(
       res.status().message(),
-      absl::StrCat(
-          "Error parsing vector similarity query: query vector blob size (",
-          vector.size(), ") does not match index's expected size (",
-          dimensions * sizeof(float), ")."));
+      absl::StrCat("Error parsing vector similarity embedding: embedding "
+                   "vector blob size (",
+                   vector.size(), ") does not match index's expected size (",
+                   dimensions * sizeof(float), ")."));
   for (size_t i = 1; i < vectors.size() - 1; ++i) {
     absl::string_view vector = VectorToStr(vectors[i]);
     auto res = index->Search(vector, 10, CancelNever());
@@ -458,6 +457,47 @@ TEST_F(VectorIndexTest, SaveAndLoadHnsw) {
       hnsw_proto = (*index_hnsw)->ToProto()->vector_index();
     }
 
+    ValkeyModuleString* records[vectors.size()];
+    for (size_t i = 0; i < vectors.size(); ++i) {
+      records[i] = new ValkeyModuleString{
+          std::string((char*)&vectors[i][0], kDimensions * sizeof(float))};
+    }
+
+    EXPECT_CALL(*kMockValkeyModule,
+                OpenKey(testing::_, testing::_, VALKEYMODULE_WRITE))
+        .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
+    std::vector<size_t> keys;
+    keys.reserve(vectors.size());
+    if (distance_metric == data_model::DISTANCE_METRIC_COSINE) {
+      EXPECT_CALL(*kMockValkeyModule,
+                  OpenKey(testing::_, testing::_,
+                          VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ))
+          .WillRepeatedly([&keys](ValkeyModuleCtx* ctx, ValkeyModuleString* key,
+                                  int flags) {
+            auto key_str = vmsdk::ToStringView(key);
+            CHECK(absl::ConsumeSuffix(&key_str, "_key"));
+            int index;
+            CHECK(absl::SimpleAtoi(key_str, &index));
+            keys.push_back(index);
+            return TestValkeyModule_OpenKeyDefaultImpl(ctx, key, flags);
+          });
+      EXPECT_CALL(*kMockValkeyModule,
+                  HashGet(testing::_, VALKEYMODULE_HASH_CFIELDS, testing::_,
+                          testing::An<ValkeyModuleString**>(),
+                          testing::TypedEq<void*>(nullptr)))
+          .WillRepeatedly([&records, &keys](ValkeyModuleKey*, int, const char*,
+                                            ValkeyModuleString** value_out,
+                                            void*) {
+            static size_t key_i = 0;
+            CHECK(key_i < keys.size());
+            auto vector_i = keys[key_i];
+            *value_out = records[vector_i];
+            ValkeyModule_RetainString(nullptr, records[vector_i]);
+            ++key_i;
+            return VALKEYMODULE_OK;
+          });
+    }
+
     // Load the HNSW index, populate data, validate recall, save again
     {
       auto loaded_index_hnsw = VectorHNSW<float>::LoadFromRDB(
@@ -497,6 +537,9 @@ TEST_F(VectorIndexTest, SaveAndLoadHnsw) {
           CalcRecall(index_flat->get(), loaded_index_hnsw->get(), k,
                      kDimensions, kEFRuntime);
       EXPECT_GE(default_ef_runtime_recall, 0.96f);
+    }
+    for (size_t i = 0; i < vectors.size(); ++i) {
+      delete records[i];
     }
   }
 }
@@ -565,6 +608,47 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
       flat_proto = (*index)->ToProto()->vector_index();
     }
 
+    ValkeyModuleString* records[vectors.size()];
+    for (size_t i = 0; i < vectors.size(); ++i) {
+      records[i] = new ValkeyModuleString{
+          std::string((char*)&vectors[i][0], kDimensions * sizeof(float))};
+    }
+
+    EXPECT_CALL(*kMockValkeyModule,
+                OpenKey(testing::_, testing::_, VALKEYMODULE_WRITE))
+        .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
+    std::vector<size_t> keys;
+    keys.reserve(vectors.size());
+    if (distance_metric == data_model::DISTANCE_METRIC_COSINE) {
+      EXPECT_CALL(*kMockValkeyModule,
+                  OpenKey(testing::_, testing::_,
+                          VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ))
+          .WillRepeatedly([&keys](ValkeyModuleCtx* ctx, ValkeyModuleString* key,
+                                  int flags) {
+            auto key_str = vmsdk::ToStringView(key);
+            CHECK(absl::ConsumeSuffix(&key_str, "_key"));
+            int index;
+            CHECK(absl::SimpleAtoi(key_str, &index));
+            keys.push_back(index);
+            return TestValkeyModule_OpenKeyDefaultImpl(ctx, key, flags);
+          });
+      EXPECT_CALL(*kMockValkeyModule,
+                  HashGet(testing::_, VALKEYMODULE_HASH_CFIELDS, testing::_,
+                          testing::An<ValkeyModuleString**>(),
+                          testing::TypedEq<void*>(nullptr)))
+          .WillRepeatedly([&records, &keys](ValkeyModuleKey*, int, const char*,
+                                            ValkeyModuleString** value_out,
+                                            void*) {
+            static size_t key_i = 0;
+            CHECK(key_i < keys.size());
+            auto vector_i = keys[key_i];
+            *value_out = records[vector_i];
+            ValkeyModule_RetainString(nullptr, records[vector_i]);
+            ++key_i;
+            return VALKEYMODULE_OK;
+          });
+    }
+
     // Load the index, populate data, perform search, save the index again
     {
       auto index_pr = VectorFlat<float>::LoadFromRDB(
@@ -611,6 +695,9 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
         VerifyModify(index.get(), vectors[i], i, ExpectedResults::kSkipped,
                      true);
       }
+    }
+    for (size_t i = 0; i < vectors.size(); ++i) {
+      delete records[i];
     }
   }
 }

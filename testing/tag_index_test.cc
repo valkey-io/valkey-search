@@ -270,7 +270,9 @@ TEST_F(TagIndexTest, DeletedKeysNegativeSearchTest) {
 static absl::flat_hash_set<std::string> ParseAndUnescapeTags(
     absl::string_view raw_tag_string, char separator) {
   auto parsed = indexes::Tag::ParseSearchTags(raw_tag_string, separator);
-  if (!parsed.ok()) return {};
+  if (!parsed.ok()) {
+    return {};
+  }
   absl::flat_hash_set<std::string> result;
   for (const auto& tag : parsed.value()) {
     result.insert(indexes::Tag::UnescapeTag(tag));

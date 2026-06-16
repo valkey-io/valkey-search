@@ -7,7 +7,6 @@
 
 #include "src/query/primary_info_fanout_operation.h"
 
-#include "src/coordinator/metadata_manager.h"
 #include "src/schema_manager.h"
 #include "vmsdk/src/info.h"
 

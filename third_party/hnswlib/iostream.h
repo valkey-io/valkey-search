@@ -20,10 +20,12 @@
 
 namespace hnswlib {
 
-class VectorTracker {
+class VectorCodec {
  public:
-  virtual ~VectorTracker() = default;
-  virtual char *TrackVector(uint64_t internal_id, char *vector, size_t len) = 0;
+  virtual ~VectorCodec() = default;
+  virtual char *Decode(uint64_t internal_id, char *vector, size_t len) = 0;
+  virtual std::vector<char> Encode(char *vector, size_t len,
+                                   bool is_marked_delete) const = 0;
 };
 
 class InputStream {

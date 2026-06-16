@@ -10,12 +10,10 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <memory>
 #include <utility>
 
 #include "absl/base/thread_annotations.h"
-#include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
@@ -24,7 +22,6 @@
 #include "src/indexes/vector_base.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/cancel.h"
-#include "src/utils/string_interning.h"
 #include "third_party/hnswlib/bruteforce.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -57,7 +54,7 @@ class VectorFlat : public VectorBase {
     return algo_->data_->getCapacity();
   }
   absl::StatusOr<std::vector<Neighbor>> Search(
-      absl::string_view query, uint64_t count,
+      absl::string_view embedding, uint64_t count,
       cancel::Token& cancellation_token,
       std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr)
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
@@ -78,18 +75,10 @@ class VectorFlat : public VectorBase {
   absl::StatusOr<std::pair<float, hnswlib::labeltype>>
   ComputeDistanceFromRecordImpl(uint64_t internal_id,
                                 absl::string_view query) const override;
-  char* GetValueImpl(uint64_t internal_id) const override
+  char** GetValueImpl(uint64_t internal_id) const override
       ABSL_NO_THREAD_SAFETY_ANALYSIS {
-    return algo_->getPoint(internal_id);
+    return algo_->getPointPtr(internal_id);
   }
-  void TrackVector(uint64_t internal_id,
-                   const InternedStringPtr& vector) override
-      ABSL_LOCKS_EXCLUDED(tracked_vectors_mutex_);
-  bool IsVectorMatch(uint64_t internal_id,
-                     const InternedStringPtr& vector) override
-      ABSL_LOCKS_EXCLUDED(tracked_vectors_mutex_);
-  void UnTrackVector(uint64_t internal_id) override
-      ABSL_LOCKS_EXCLUDED(tracked_vectors_mutex_);
 
  private:
   VectorFlat(int dimensions, data_model::DistanceMetric distance_metric,
@@ -100,9 +89,6 @@ class VectorFlat : public VectorBase {
   std::unique_ptr<hnswlib::SpaceInterface<T>> space_;
   uint32_t block_size_;
   mutable absl::Mutex resize_mutex_;
-  mutable absl::Mutex tracked_vectors_mutex_;
-  absl::flat_hash_map<uint64_t, InternedStringPtr> tracked_vectors_
-      ABSL_GUARDED_BY(tracked_vectors_mutex_);
 };
 }  // namespace valkey_search::indexes
 

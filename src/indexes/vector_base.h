@@ -128,7 +128,7 @@ absl::string_view LookupKeyByValue(
   }
 }
 
-class VectorBase : public IndexBase, public hnswlib::VectorTracker {
+class VectorBase : public IndexBase, public hnswlib::VectorCodec {
  public:
   absl::StatusOr<bool> AddRecord(const InternedStringPtr& key,
                                  absl::string_view record) override
@@ -146,10 +146,9 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const override;
   absl::Status SaveTrackedKeys(RDBChunkOutputStream chunked_out) const
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
-  absl::Status LoadTrackedKeys(ValkeyModuleCtx* ctx,
-                               const AttributeDataType* attribute_data_type,
-                               SupplementalContentChunkIter&& iter);
-
+  virtual absl::Status LoadTrackedKeys(
+      ValkeyModuleCtx* ctx, const AttributeDataType* attribute_data_type,
+      SupplementalContentChunkIter&& iter);
   uint32_t GetMutationWeight() const override;
 
   size_t GetTrackedKeyCount() const override
@@ -181,9 +180,16 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   absl::StatusOr<std::vector<char>> GetValue(const InternedStringPtr& key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
   int GetVectorDataSize() const { return GetDataTypeSize() * dimensions_; }
-  char* TrackVector(uint64_t internal_id, char* vector, size_t len) override;
+
+  // hnswlib::VectorCodec implementation
+  char* Decode(uint64_t internal_id, char* vector, size_t len) override;
+  std::vector<char> Encode(char *vector, size_t len,
+                           bool is_marked_delete) const override;
   InternedStringPtr InternVector(absl::string_view record,
-                                 std::optional<float>& magnitude);
+                                 const float* magnitude_ptr = nullptr) const;
+  bool IsValidSizeVector(absl::string_view record) const {
+    return record.size() == GetVectorDataSize();
+  }
   virtual uint64_t GetMaxInternalLabel() const { return 0; }
   virtual size_t GetLabelCount() const { return 0; }
 
@@ -198,16 +204,11 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
 #ifndef SAN_BUILD
         ,
         vector_allocator_(CREATE_UNIQUE_PTR(
-            FixedSizeAllocator, dimensions * sizeof(float) + 1, true))
+            FixedSizeAllocator, (dimensions + 1) * sizeof(float) + 1, true))
 #endif  // !SAN_BUILD
   {
   }
 
-  bool IsValidSizeVector(absl::string_view record) {
-    const auto data_type_size = GetDataTypeSize();
-    int32_t dim = record.size() / GetDataTypeSize();
-    return dim == dimensions_ && (record.size() % data_type_size == 0);
-  }
   int RespondWithInfo(ValkeyModuleCtx* ctx) const override;
   template <typename T>
   void Init(int dimensions, data_model::DistanceMetric distance_metric,
@@ -225,11 +226,7 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
       data_model::VectorIndex* vector_index_proto) const = 0;
   virtual absl::Status SaveIndexImpl(
       RDBChunkOutputStream chunked_out) const = 0;
-  void ExternalizeVector(ValkeyModuleCtx* ctx,
-                         const AttributeDataType* attribute_data_type,
-                         absl::string_view key_cstr,
-                         absl::string_view attribute_identifier);
-  virtual char* GetValueImpl(uint64_t internal_id) const = 0;
+  virtual char** GetValueImpl(uint64_t internal_id) const = 0;
 
   int dimensions_;
   std::string attribute_identifier_;
@@ -239,21 +236,23 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   virtual absl::StatusOr<std::pair<float, hnswlib::labeltype>>
   ComputeDistanceFromRecordImpl(uint64_t internal_id,
                                 absl::string_view query) const = 0;
-  virtual void TrackVector(uint64_t internal_id,
-                           const InternedStringPtr& vector) = 0;
-  virtual bool IsVectorMatch(uint64_t internal_id,
-                             const InternedStringPtr& vector) = 0;
-  virtual void UnTrackVector(uint64_t internal_id) = 0;
+  void TrackVector(uint64_t internal_id, const InternedStringPtr& vector);
+  bool IsVectorMatch(uint64_t internal_id,
+                     const InternedStringPtr& vector) const
+      ABSL_LOCKS_EXCLUDED(tracked_vectors_mutex_);
+  virtual void UnTrackVector(uint64_t internal_id,
+                             bool maintain_strong_reference = true)
+      ABSL_LOCKS_EXCLUDED(tracked_vectors_mutex_);
+  const InternedStringPtr GetTrackedVector(uint64_t internal_id) const
+      ABSL_LOCKS_EXCLUDED(tracked_vectors_mutex_);
 
  private:
   absl::StatusOr<uint64_t> TrackKey(const InternedStringPtr& key,
-                                    float magnitude,
                                     const InternedStringPtr& vector)
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
-  absl::StatusOr<std::optional<uint64_t>> UnTrackKey(
-      const InternedStringPtr& key) ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
+  absl::Status UnTrackKey(const InternedStringPtr& key, uint64_t internal_id)
+      ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::StatusOr<bool> UpdateMetadata(const InternedStringPtr& key,
-                                      float magnitude,
                                       const InternedStringPtr& vector)
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::StatusOr<uint64_t> GetInternalId(const InternedStringPtr& key) const
@@ -264,10 +263,7 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
       ABSL_GUARDED_BY(key_to_metadata_mutex_);
   struct TrackedKeyMetadata {
     uint64_t internal_id;
-    // If normalize_ is false, this will be -1.0f. Otherwise, it will be the
-    // magnitude of the vector. If the magnitude is not initialized, it will be
-    // -inf (this is an intermediate state during backfill when transitioning
-    // from the old RDB format that didn't include magnitudes).
+    // Maintained for backward compatibility while loading older RDB files.
     float magnitude;
   };
 
@@ -279,6 +275,9 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   ComputeDistanceFromRecord(const InternedStringPtr& key,
                             absl::string_view query) const;
   UniqueFixedSizeAllocatorPtr vector_allocator_{nullptr, nullptr};
+  mutable absl::Mutex tracked_vectors_mutex_;
+  absl::flat_hash_map<uint64_t, InternedStringPtr> tracked_vectors_
+      ABSL_GUARDED_BY(tracked_vectors_mutex_);
 };
 
 class PrefilterEvaluator : public query::Evaluator {
@@ -305,6 +304,73 @@ class PrefilterEvaluator : public query::Evaluator {
   const valkey_search::indexes::text::TextIndex* text_index_;
   const InternedStringPtr* key_{nullptr};
 };
+
+template <typename T>
+T CalcMagnitude(T* src, size_t size) {
+  T magnitude = static_cast<T>(0);
+  for (size_t i = 0; i < size; i++) {
+    magnitude += src[i] * src[i];
+  }
+  return (magnitude == static_cast<T>(0))
+             ? static_cast<T>(1)
+             : static_cast<T>(std::sqrt(magnitude));
+}
+
+template <typename T>
+void NormalizeVectorInto(T* dst, T* src, size_t size, T magnitude) {
+  T norm = static_cast<T>(1) / magnitude;
+  for (size_t i = 0; i < size; i++) {
+    dst[i] = norm * src[i];
+  }
+}
+
+template <typename T>
+T GetMagnitude(T* vector, size_t size) {
+  return vector[size];
+}
+
+template <typename T>
+std::vector<char> NormalizeVector(T* vector, size_t size) {
+  std::vector<char> ret(size * sizeof(T) + 1);
+  ret[size * sizeof(T)] = '\0';
+  NormalizeVectorInto((T*)ret.data(), vector, size, GetMagnitude(vector, size));
+  return ret;
+}
+
+template <typename T>
+std::vector<char> PackEmbeddingWithNormalized(absl::string_view embedding) {
+  std::vector<char> packed_embedding(embedding.size() * 2 + sizeof(T) + 1);
+  std::memcpy(packed_embedding.data(), embedding.data(), embedding.size());
+  T magnitude =
+      CalcMagnitude((T*)embedding.data(), embedding.size() / sizeof(T));
+  *(T*)(packed_embedding.data() + embedding.size()) = magnitude;
+  NormalizeVectorInto(
+      (T*)(packed_embedding.data() + embedding.size() + sizeof(T)),
+      (T*)embedding.data(), embedding.size() / sizeof(T), magnitude);
+  packed_embedding[packed_embedding.size() - 1] = '\0';
+  return packed_embedding;
+}
+
+template <typename T>
+T CopyAndNormalizeVector(T* dst, T* src, size_t size) {
+  T magnitude = CalcMagnitude(src, size);
+  T norm = (magnitude == 0.0f) ? 1.0f : (1.0f / magnitude);
+  for (size_t i = 0; i < size; i++) {
+    dst[i] = norm * src[i];
+  }
+  return magnitude;
+}
+
+template <typename T>
+std::vector<char> QueryWithNormalized(absl::string_view query) {
+  std::vector<char> query_with_normalized(query.size() * 2 + sizeof(T) + 1);
+  std::memcpy(query_with_normalized.data(), query.data(), query.size());
+  *(T*)(query_with_normalized.data() + query.size()) = CopyAndNormalizeVector(
+      (T*)(query_with_normalized.data() + query.size() + sizeof(T)),
+      (T*)query.data(), query.size() / sizeof(T));
+  query_with_normalized[query_with_normalized.size() - 1] = '\0';
+  return query_with_normalized;
+}
 
 }  // namespace valkey_search::indexes
 

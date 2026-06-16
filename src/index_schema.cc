@@ -9,14 +9,12 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <memory>
 #include <optional>
 #include <string>
-#include <thread>
 #include <utility>
 #include <vector>
 
@@ -582,17 +580,26 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
           nullptr, indexes::DeletionType::kRecord};
       continue;
     }
-    bool is_module_owned;
-    vmsdk::UniqueValkeyString record = VectorExternalizer::Instance().GetRecord(
-        ctx, attribute_data_type_.get(), key_obj.get(), key_cstr,
-        attribute.GetIdentifier(), is_module_owned);
-    if (!is_module_owned) {
-      // A record which are owned by the module were not modified and are
-      // already tracked in the vector registry.
-      VectorExternalizer(interned_key, attribute.GetIdentifier(), record);
+    vmsdk::UniqueValkeyString record_ptr;
+    {
+      auto record = attribute_data_type_->GetRecord(
+          ctx, key_obj.get(), key_cstr, attribute.GetIdentifier());
+      if (record.ok()) {
+        record_ptr = std::move(record.value());
+      }
+    }
+    // Early return on record not found just if the record not tracked or has
+    // a pending mutation. Otherwise, it will be processed as a delete
+    if (!record_ptr && !attribute.GetIndex()->IsTracked(interned_key) &&
+        !InTrackedMutationRecords(interned_key, attribute.GetIdentifier())) {
+      attribute.GetIndex()->UnTrack(interned_key);
+      continue;
+    }
+    if (record_ptr) {
+      VectorExternalizer(interned_key, attribute.GetIdentifier(), record_ptr);
     }
     if (AddAttributeData(mutated_attributes, attribute, *attribute_data_type_,
-                         std::move(record))) {
+                         std::move(record_ptr))) {
       added = true;
     }
   }
@@ -1319,6 +1326,7 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
     VMSDK_LOG(DEBUG, nullptr)
         << "Starting to save attribute: "
         << vmsdk::config::RedactIfNeeded(attribute.second.GetAlias());
+
     // Note that the serialized attribute proto is also stored as part of the
     // serialized index schema proto above. We store here again to avoid any
     // dependencies on the ordering of multiple attributes.
@@ -1331,10 +1339,9 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
         },
         std::bind_front(&indexes::IndexBase::SaveIndex,
                         attribute.second.GetIndex())));
-
-    // Key to ID mapping is stored as a separate chunked supplemental content
-    // for vector indexes.
     if (IsVectorIndex(attribute.second.GetIndex())) {
+      // Key to ID mapping is stored as a separate chunked supplemental content
+      // for vector indexes.
       VMSDK_RETURN_IF_ERROR(SaveSupplementalSection(
           rdb, data_model::SUPPLEMENTAL_CONTENT_KEY_TO_ID_MAP,
           [&](auto &header) {
@@ -2028,8 +2035,10 @@ size_t IndexSchema::GetMutatedRecordsSize() const {
 }
 
 void IndexSchema::SubscribeToVectorExternalizer(
-    absl::string_view attribute_identifier, indexes::VectorBase *vector_index) {
-  vector_externalizer_subscriptions_[attribute_identifier] = vector_index;
+    absl::string_view attribute_identifier,
+    const indexes::VectorBase *vector_index) {
+  vector_externalizer_subscriptions_[attribute_identifier].push_back(
+      vector_index);
 }
 
 void IndexSchema::VectorExternalizer(const Key &key,
@@ -2039,19 +2048,21 @@ void IndexSchema::VectorExternalizer(const Key &key,
   if (it == vector_externalizer_subscriptions_.end()) {
     return;
   }
-  if (record) {
-    std::optional<float> magnitude;
-    auto vector_str = vmsdk::ToStringView(record.get());
-    Key interned_vector = it->second->InternVector(vector_str, magnitude);
-    if (interned_vector) {
-      VectorExternalizer::Instance().Externalize(
-          key, attribute_identifier, attribute_data_type_->ToProto(),
-          interned_vector, magnitude);
-    }
+  if (!record) {
+    VectorExternalizer::Instance().UnTrack(key, attribute_identifier,
+                                           attribute_data_type_->ToProto());
     return;
   }
-  VectorExternalizer::Instance().Remove(key, attribute_identifier,
-                                        attribute_data_type_->ToProto());
+  auto record_str = vmsdk::ToStringView(record.get());
+  for (auto vec_index : it->second) {
+    if (vec_index->IsValidSizeVector(record_str)) {
+      auto vector = vec_index->InternVector(record_str);
+      VectorExternalizer::Instance().Externalize(
+          key, attribute_identifier, attribute_data_type_->ToProto(), vector,
+          record_str.size());
+      break;
+    }
+  }
 }
 
 IndexSchema::InfoIndexPartitionData IndexSchema::Stats::GetStats() const {
@@ -2092,8 +2103,8 @@ IndexSchema::InfoIndexPartitionData IndexSchema::GetInfoIndexPartitionData()
 }
 
 //
-// Determine the minimum encoding version required to interpret the metadata for
-// this Schema
+// Determine the minimum encoding version required to interpret the metadata
+// for this Schema
 //
 CONTROLLED_INT(override_min_version, -1);
 

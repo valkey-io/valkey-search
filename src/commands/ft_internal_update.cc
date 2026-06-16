@@ -78,12 +78,16 @@ absl::Status FTInternalUpdateCmd(ValkeyModuleCtx *ctx,
   }
 
   // The MetadataManager only exists when the coordinator is enabled (cluster
-  // mode). If these entries were persisted to the AOF and later loaded without
-  // the coordinator (e.g. standalone), skip rather than dereference the
-  // uninitialized instance.
+  // mode). Receiving an FT.INTERNAL_UPDATE without it (e.g. a coordinator-mode
+  // AOF replayed on a standalone node) is a misconfiguration: there is nowhere
+  // to apply the entry. Surface it as an error rather than dereferencing the
+  // uninitialized instance; during loading it is skippable like any other
+  // corrupt/unexpected entry.
   if (!coordinator::MetadataManager::IsInitialized()) {
-    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
-    return absl::OkStatus();
+    return HandleInternalUpdateFailure(
+        ctx, "MetadataManager not initialized", id,
+        absl::FailedPreconditionError(
+            "FT.INTERNAL_UPDATE received without the coordinator enabled"));
   }
 
   int flags = ValkeyModule_GetContextFlags(ctx);

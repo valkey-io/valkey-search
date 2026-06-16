@@ -121,15 +121,40 @@ TEST_F(FTInternalUpdateTest, ParseErrorWhileLoadingSkippedWhenConfigured) {
   }
 }
 
-// A valid entry replayed while loading, with no coordinator (MetadataManager
-// uninitialized — the standalone default), must not crash. It replies OK and
-// returns without touching the uninitialized singleton.
+// A valid entry replayed while loading with no coordinator (MetadataManager
+// uninitialized -- the standalone default) is a misconfiguration. It must not
+// crash on the uninitialized singleton; it returns a recoverable error.
 TEST_F(FTInternalUpdateTest, ValidEntryWhileLoadingWithoutCoordinatorNoCrash) {
   ASSERT_FALSE(coordinator::MetadataManager::IsInitialized());
   EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))
       .WillRepeatedly(testing::Return(VALKEYMODULE_CTX_FLAGS_LOADING));
 
   // Empty strings parse as valid (empty) protobufs.
+  ValkeyModuleString* argv[4];
+  argv[0] =
+      TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.INTERNAL_UPDATE");
+  argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_id");
+  argv[2] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "");
+  argv[3] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "");
+
+  auto status = FTInternalUpdateCmd(&fake_ctx_, argv, 4);
+  EXPECT_FALSE(status.ok());
+
+  for (int i = 0; i < 4; i++) {
+    TestValkeyModule_FreeString(&fake_ctx_, argv[i]);
+  }
+}
+
+// The same misconfiguration is skippable: with the skip flag set, a loading
+// node without a coordinator returns OK instead of erroring.
+TEST_F(FTInternalUpdateTest, WithoutCoordinatorWhileLoadingSkippable) {
+  ASSERT_FALSE(coordinator::MetadataManager::IsInitialized());
+  VMSDK_EXPECT_OK(const_cast<vmsdk::config::Boolean&>(
+                      options::GetSkipCorruptedInternalUpdateEntries())
+                      .SetValue(true));
+  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))
+      .WillRepeatedly(testing::Return(VALKEYMODULE_CTX_FLAGS_LOADING));
+
   ValkeyModuleString* argv[4];
   argv[0] =
       TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.INTERNAL_UPDATE");

@@ -15,6 +15,7 @@
 #include "libstemmer.h"
 #include "src/commands/ft_create_parser.h"
 #include "src/indexes/text/unicode_normalizer.h"
+#include "src/utils/scanner.h"
 
 namespace valkey_search::indexes::text {
 
@@ -88,9 +89,8 @@ sb_stemmer* SnowballProcessor::GetStemmer() const {
 std::string_view SnowballProcessor::DoStemming(absl::string_view word,
                                                sb_stemmer* stemmer,
                                                uint32_t min_stem_size) const {
-  // TODO: Refactor code to use UTFIterator8 class from Task 0 to handle
-  // multi-byte characters in non-English
-  if (word.empty() || word.length() < min_stem_size) {
+  if (word.empty() ||
+      !utils::Scanner::AtLeastNCodepoints(word, min_stem_size)) {
     return word;
   }
   CHECK(stemmer) << "Stemmer is not initialized";

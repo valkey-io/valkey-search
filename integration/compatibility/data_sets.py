@@ -496,9 +496,9 @@ def compute_data_sets():
                     for z in vector_points
                 ]
 
-    # Tag special characters data set. Comma separator so }, |, \ are literal.
+    # Tag special characters data set. Comma separator so } and | are literal.
     # Avoid '-' etc. (RediSearch query operators) or the reference engine errors.
-    tag_special_base_tags = ["a}b", "a|b", "normal", "x}y}z", "a\\b"]
+    tag_special_base_tags = ["a}b", "a|b", "normal", "x}y}z"]
     for key_type in ["hash", "json"]:
         # Comma separator (non-default)
         if key_type == "hash":

@@ -27,6 +27,8 @@
 #include "src/commands/filter_parser.h"
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/scoring/scorer.h"
+#include "src/indexes/scoring/scoring_session.h"
 #include "src/indexes/vector_base.h"
 #include "src/query/predicate.h"
 #include "src/utils/cancel.h"
@@ -382,6 +384,15 @@ size_t FindVectorDelimiter(absl::string_view expr);
 // Computes the weighted score for a predicate tree where the document is known
 // to match. Exposed for testing.
 float ComputeMatchedPredicateScore(const Predicate* predicate);
+
+// Scores admitted candidate documents by walking the predicate tree.
+// For each TermPredicate leaf, looks up each candidate's term frequency
+// and feeds the scorer. Writes scores into candidates in-place and sorts
+// by score desc, key string asc.
+void ScoreTextQuery(const IndexSchema& index_schema,
+                    const Predicate* root_predicate,
+                    const indexes::scoring::Scorer* scorer,
+                    std::vector<indexes::BorrowedNeighbor>& candidates);
 
 }  // namespace valkey_search::query
 #endif  // VALKEYSEARCH_SRC_QUERY_SEARCH_H_

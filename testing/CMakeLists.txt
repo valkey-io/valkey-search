@@ -115,7 +115,8 @@ set(QUERY_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/search_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/find_vector_delimiter_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/weight_score_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/query/response_generator_test.cc)
+    ${CMAKE_CURRENT_LIST_DIR}/query/response_generator_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/query/text_scoring_test.cc)
 
 add_executable(query_test ${QUERY_TEST_SOURCES})
 target_include_directories(query_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
@@ -125,6 +126,8 @@ target_link_libraries(query_test PRIVATE testing_common_coordinator)
 target_link_libraries(query_test PRIVATE fanout)
 target_link_libraries(query_test PRIVATE response_generator)
 target_link_libraries(query_test PRIVATE search_converter)
+target_link_libraries(query_test PRIVATE scoring)
+target_link_libraries(query_test PRIVATE text)
 finalize_test_flags(query_test)
 
 # 1. Coordinator Test Suite - consolidates coordinator related tests

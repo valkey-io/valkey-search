@@ -30,11 +30,17 @@
 #include "src/attribute_data_type.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
+#include "src/indexes/scoring/scorer.h"
+#include "src/indexes/scoring/scoring_session.h"
+#include "src/indexes/scoring/scoring_stats.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
 #include "src/indexes/text/orproximity.h"
+#include "src/indexes/text/posting.h"
 #include "src/indexes/text/proximity.h"
+#include "src/indexes/text/rax_wrapper.h"
 #include "src/indexes/text/text_fetcher.h"
+#include "src/indexes/text/text_index.h"
 #include "src/indexes/universal_set_fetcher.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
@@ -640,6 +646,109 @@ float ComputeMatchedPredicateScore(const Predicate *predicate) {
   }
 }
 
+void ScorePredicateTree(
+    const Predicate *predicate,
+    const std::vector<indexes::BorrowedNeighbor> &candidates,
+    const IndexSchema &index_schema, uint32_t total_docs, float avg_doc_len,
+    indexes::scoring::ScoringSession &session) {
+  CHECK(predicate != nullptr);
+
+  switch (predicate->GetType()) {
+    case PredicateType::kComposedAnd:
+    case PredicateType::kComposedOr: {
+      auto composed = dynamic_cast<const ComposedPredicate *>(predicate);
+      session.EnterGroup();
+      for (const auto &child : composed->GetChildren()) {
+        ScorePredicateTree(child.get(), candidates, index_schema, total_docs,
+                           avg_doc_len, session);
+      }
+      session.ExitGroup(predicate->GetWeight());
+      break;
+    }
+    case PredicateType::kText: {
+      auto text_pred = dynamic_cast<const TextPredicate *>(predicate);
+      auto term_pred = dynamic_cast<const TermPredicate *>(text_pred);
+
+      // non-TermPredicate text predicates (prefix/suffix/fuzzy), skip scoring
+      if (!term_pred) break;
+
+      auto text_index_schema = term_pred->GetTextIndexSchema();
+      CHECK(text_index_schema != nullptr);
+
+      auto text_index = text_index_schema->GetTextIndex();
+      CHECK(text_index != nullptr);
+
+      auto postings_ptr = text_index->GetPrefix().FindPostingsTarget(
+          term_pred->GetTextString());
+
+      // term not in index
+      if (!postings_ptr) break;
+
+      const uint32_t num_doc_contain_term = postings_ptr->GetKeyCount();
+
+      for (const auto &c : candidates) {
+        auto key = c.key.Materialize();
+        const auto *flat_map = postings_ptr->FindKey(key);
+
+        // candidate does not contain this term, skip
+        if (!flat_map) continue;
+
+        uint32_t tf = static_cast<uint32_t>(flat_map->GetTermFrequency());
+
+        // term frequency is 0, skip
+        if (tf == 0) continue;
+
+        indexes::scoring::Bm25StdStats stats;
+        stats.total_docs = total_docs;
+        stats.key = key;
+        stats.term = std::string(term_pred->GetTextString());
+        stats.num_doc_contain_term = num_doc_contain_term;
+        stats.term_frequency = tf;
+        stats.avg_doc_len = avg_doc_len;
+        stats.doc_len = index_schema.GetDocumentLength(key);
+        stats.document_score = index_schema.GetDocumentScore(key);
+
+        session.RecordLeaf(stats, predicate->GetWeight());
+      }
+      break;
+    }
+    // TODO: scoring for tag/numeric
+    case PredicateType::kNegate:
+    case PredicateType::kTag:
+    case PredicateType::kNumeric:
+    case PredicateType::kNone:
+      break;
+  }
+}
+
+void ScoreTextQuery(const IndexSchema &index_schema,
+                    const Predicate *root_predicate,
+                    const indexes::scoring::Scorer *scorer,
+                    std::vector<indexes::BorrowedNeighbor> &candidates) {
+  CHECK(root_predicate != nullptr);
+  CHECK(scorer != nullptr);
+  if (candidates.empty()) return;
+
+  const uint32_t total_docs = index_schema.GetIndexKeyInfoSize();
+  CHECK(total_docs > 0);
+
+  const uint64_t total_doc_len = index_schema.GetTotalDocumentLength();
+  const float avg_doc_len =
+      static_cast<float>(total_doc_len) / static_cast<float>(total_docs);
+
+  indexes::scoring::ScoringSession session(scorer);
+  ScorePredicateTree(root_predicate, candidates, index_schema, total_docs,
+                     avg_doc_len, session);
+
+  auto ranked = session.Rank();
+
+  candidates.clear();
+  candidates.reserve(ranked.size());
+  for (const auto &r : ranked) {
+    candidates.push_back({BorrowedInternedStringPtr(r.key), 0.0f, r.score});
+  }
+}
+
 absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
     const SearchParameters &parameters) {
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
@@ -730,6 +839,18 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
   }
   if (fetch_limited) {
     nonvector_results_fetched_limited_count.Increment();
+  }
+  // score all the candidates after prefilter
+  if (!borrowed.empty() && !parameters.filter_parse_results.is_match_all &&
+      parameters.filter_parse_results.query_operations &
+          QueryOperations::kContainsText) {
+    auto scorer_type = parameters.scorer == Scorer::kBM25STD
+                           ? indexes::scoring::ScorerType::kBm25Std
+                           : indexes::scoring::ScorerType::kTfidf;
+    const auto *scorer = indexes::scoring::GetScorer(scorer_type);
+    ScoreTextQuery(*parameters.index_schema,
+                   parameters.filter_parse_results.root_predicate.get(), scorer,
+                   borrowed);
   }
   return borrowed;
 }

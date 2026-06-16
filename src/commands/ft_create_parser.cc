@@ -7,7 +7,6 @@
 #include "src/commands/ft_create_parser.h"
 
 #include <sys/types.h>
-#include <unistd.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -67,16 +66,8 @@ constexpr int kDefaultTagFieldLenLimit{256};
 constexpr int kDefaultNumericFieldLenLimit{128};
 constexpr size_t kMaxAttributesCount{10000};
 constexpr int kMaxDimensionsCount{64000};
-// Cap a single vector-index preallocation (INITIAL_CAP / FLAT BLOCK_SIZE) at a
-// fraction of total system memory. The per-element cost depends on the vector
-// element size and, for HNSW, on the graph fan-out M:
-//   FLAT element_bytes = DIM * sizeof(float) + kFlatElementOverheadBytes
-//   HNSW element_bytes = DIM * sizeof(float) + kHnswBytesPerM * M
-//                                            + kHnswElementOverheadBytes
-//   limit = floor(ratio% * total_system_memory / element_bytes)
-constexpr int64_t kFlatElementOverheadBytes{16};
-constexpr int64_t kHnswElementOverheadBytes{99};
-constexpr int64_t kHnswBytesPerM{8};
+constexpr int kMaxInitialCap{10000000};
+constexpr int kMaxBlockSize{10000000};
 constexpr int kMaxM{2000000};
 constexpr int kMaxEfConstruction{1000000};
 constexpr int kMaxEfRuntime{1000000};
@@ -95,8 +86,6 @@ constexpr absl::string_view kMaxNumericFieldLenConfig{
 constexpr absl::string_view kMaxAttributesConfig{"max-attributes"};
 constexpr absl::string_view kMaxVectorAttributesConfig{"max-vector-attributes"};
 constexpr absl::string_view kMaxDimensionsConfig{"max-vector-dimensions"};
-constexpr absl::string_view kVectorPreallocMemoryRatioConfig{
-    "vector-prealloc-memory-ratio"};
 constexpr absl::string_view kMaxMConfig{"max-vector-m"};
 constexpr absl::string_view kMaxEfConstructionConfig{
     "max-vector-ef-construction"};
@@ -182,16 +171,6 @@ static auto max_dimensions =
                                  kMaxDimensionsCount)           // max size
         .WithValidationCallback(
             CHECK_RANGE(1, kMaxDimensionsCount, kMaxDimensionsConfig))
-        .Build();
-
-/// Register the "--vector-prealloc-memory-ratio" flag. Percent of total system
-/// memory that a single vector-index preallocation (INITIAL_CAP / FLAT
-/// BLOCK_SIZE) may consume.
-static auto vector_prealloc_memory_ratio =
-    vmsdk::config::NumberBuilder(kVectorPreallocMemoryRatioConfig,  // name
-                                 10,    // default: 10 (percent)
-                                 1,     // min: 1%
-                                 100)   // max: 100%
         .Build();
 
 /// Register the "--max-m" flag. Controls the max M parameter for HNSW
@@ -288,42 +267,6 @@ absl::Status ParsePrefixes(vmsdk::ArgsIterator &itr,
   }
   return absl::OkStatus();
 }
-// Total physical memory of the host, in bytes (== INFO total_system_memory).
-int64_t GetTotalSystemMemoryBytes() {
-  const long pages = sysconf(_SC_PHYS_PAGES);   // NOLINT(runtime/int)
-  const long page_size = sysconf(_SC_PAGESIZE);  // NOLINT(runtime/int)
-  if (pages <= 0 || page_size <= 0) {
-    return 0;
-  }
-  return static_cast<int64_t>(pages) * static_cast<int64_t>(page_size);
-}
-
-// Per-element bytes used to bound preallocations. HNSW adds graph links (~M).
-int64_t FlatBytesPerElement(int64_t dimensions) {
-  return dimensions * static_cast<int64_t>(sizeof(float)) +
-         kFlatElementOverheadBytes;
-}
-int64_t HnswBytesPerElement(int64_t dimensions, int64_t m) {
-  return dimensions * static_cast<int64_t>(sizeof(float)) + kHnswBytesPerM * m +
-         kHnswElementOverheadBytes;
-}
-// Max elements allowed in one preallocation given the per-element byte cost:
-//   limit = floor(ratio% * total_system_memory / bytes_per_element)
-int64_t MaxPreallocElements(int64_t bytes_per_element) {
-  if (bytes_per_element <= 0) {
-    return INT64_MAX;
-  }
-  const int64_t total_mem = GetTotalSystemMemoryBytes();
-  if (total_mem <= 0) {
-    return INT64_MAX;  // can't determine; don't block
-  }
-  const int64_t ratio_percent =
-      options::GetVectorPreallocMemoryRatio().GetValue();
-  const int64_t budget = (total_mem / 100) * ratio_percent;
-  int64_t limit = budget / bytes_per_element;
-  return limit > 0 ? limit : 1;
-}
-
 std::string NotSupportedParamErrorMsg(absl::string_view param) {
   return absl::StrCat("The parameter `", param, "` is not supported");
 }
@@ -842,18 +785,10 @@ absl::Status FTCreateVectorParameters::Verify() const {
          "less than or equal to "
       << max_dimensions_value << ".";
 
-  if (initial_cap <= 0) {
-    return absl::InvalidArgumentError(
-        "INITIAL_CAP must be a positive integer greater than 0.");
-  }
-  const int64_t max_initial_cap =
-      MaxPreallocElements(FlatBytesPerElement(dimensions.value()));
-  if (initial_cap > max_initial_cap) {
-    return absl::InvalidArgumentError(absl::StrCat(
-        "Vector index initial capacity ", initial_cap,
-        " exceeded server limit (", max_initial_cap,
-        " with the given parameters)."));
-  }
+  VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(initial_cap, 1, kMaxInitialCap))
+      << kInitialCapParam
+      << " must be a positive integer greater than 0 and cannot exceed "
+      << kMaxInitialCap << ".";
   FTCreateVectorParameters default_values;
   if (vector_data_type == default_values.vector_data_type) {
     return absl::InvalidArgumentError("Missing vector TYPE parameter.");
@@ -893,31 +828,14 @@ absl::Status HNSWParameters::Verify() const {
       << kEfRuntimeParam
       << " must be a positive integer greater than 0 and cannot exceed "
       << max_ef_runtime_value << ".";
-  // Bound INITIAL_CAP against the memory budget using the HNSW per-element cost.
-  // Done after M is validated, since the per-element size depends on M.
-  const int64_t max_initial_cap =
-      MaxPreallocElements(HnswBytesPerElement(dimensions.value(), m));
-  if (initial_cap > max_initial_cap) {
-    return absl::InvalidArgumentError(absl::StrCat(
-        "Vector index initial capacity ", initial_cap,
-        " exceeded server limit (", max_initial_cap,
-        " with the given parameters)."));
-  }
   return absl::OkStatus();
 }
 absl::Status FlatParameters::Verify() const {
   VMSDK_RETURN_IF_ERROR(FTCreateVectorParameters::Verify());
-  if (block_size == 0) {
-    return absl::InvalidArgumentError(
-        "BLOCK_SIZE must be a positive integer greater than 0.");
-  }
-  const int64_t max_block_size =
-      MaxPreallocElements(FlatBytesPerElement(dimensions.value()));
-  if (block_size > static_cast<uint64_t>(max_block_size)) {
-    return absl::InvalidArgumentError(absl::StrCat(
-        "Vector index block size ", block_size, " exceeded server limit (",
-        max_block_size, " with the given parameters)."));
-  }
+  VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(block_size, 1, kMaxBlockSize))
+      << kBlockSizeParam
+      << " must be a positive integer greater than 0 and cannot exceed "
+      << kMaxBlockSize << ".";
   return absl::OkStatus();
 }
 std::unique_ptr<data_model::VectorIndex> FlatParameters::ToProto() const {
@@ -953,10 +871,6 @@ vmsdk::config::Number &GetMaxVectorAttributes() {
 
 vmsdk::config::Number &GetMaxDimensions() {
   return dynamic_cast<vmsdk::config::Number &>(*max_dimensions);
-}
-
-vmsdk::config::Number &GetVectorPreallocMemoryRatio() {
-  return dynamic_cast<vmsdk::config::Number &>(*vector_prealloc_memory_ratio);
 }
 
 vmsdk::config::Number &GetMaxM() {

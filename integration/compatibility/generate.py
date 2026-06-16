@@ -482,6 +482,10 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.check(dialect, "ft.search", f"{key_type}_idx1", r"@tags:{ a\|b }")
         self.check(dialect, "ft.search", f"{key_type}_idx1", r"@tags:{ x\}y\}z }")
         self.check(dialect, "ft.search", f"{key_type}_idx1", r"@tags:{ normal }")
+        # Multi-byte / non-ASCII values.
+        self.check(dialect, "ft.search", f"{key_type}_idx1", "@tags:{ café }")
+        self.check(dialect, "ft.search", f"{key_type}_idx1", "@tags:{ 中文 }")
+        self.check(dialect, "ft.search", f"{key_type}_idx1", "@tags:{ 😀 }")
         # LIMIT 0 20: these match >10 docs; bound the set so it isn't truncated.
         self.check(dialect, "ft.search", f"{key_type}_idx1",
                    r"@tags:{ a\}b | normal }", "LIMIT", "0", "20")
@@ -491,4 +495,4 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                    r"@tags:{ a\|b | x\}y\}z }", "LIMIT", "0", "20")
         self.check(dialect, "ft.search", f"{key_type}_idx1",
                    r"@tags:{ a\}b | a\|b | x\}y\}z | normal }",
-                   "LIMIT", "0", "20")
+                   "LIMIT", "0", "40")

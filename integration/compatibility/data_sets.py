@@ -498,7 +498,9 @@ def compute_data_sets():
 
     # Tag special characters data set. Comma separator so } and | are literal.
     # Avoid '-' etc. (RediSearch query operators) or the reference engine errors.
-    tag_special_base_tags = ["a}b", "a|b", "normal", "x}y}z"]
+    # Multi-byte values (café, 中文, 😀) check UTF-8 / \uXXXX handling.
+    tag_special_base_tags = ["a}b", "a|b", "normal", "x}y}z",
+                             "café", "中文", "😀"]
     for key_type in ["hash", "json"]:
         # Comma separator (non-default)
         if key_type == "hash":

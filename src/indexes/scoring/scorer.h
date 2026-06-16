@@ -44,6 +44,8 @@ class Scorer {
                      float group_weight) const;
 };
 
+const Scorer* GetScorer(ScorerType type);
+
 }  // namespace valkey_search::indexes::scoring
 
 #endif

@@ -477,35 +477,32 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
 
     def test_tag_escaped_special_chars(self, key_type, dialect):
         """Compatibility test for escaped special characters in tag queries.
+
+        Goes through check() so the captured reference answers are actually
+        compared against valkey-search by compatibility_test.py. Every query
+        below is valid on the reference engine (no unescaped query special
+        characters such as '-') and matches at least one stored document, so
+        none are skipped as reference-side errors.
         Ref: https://github.com/valkey-io/valkey-search/issues/454
         """
         self.setup_data("tag special chars", key_type)
-        # Single-tag queries
-        self.execute_command(["FT.SEARCH", f"{key_type}_idx1",
-                              r"@tags:{ a\}b }", "DIALECT", str(dialect)])
-        self.execute_command(["FT.SEARCH", f"{key_type}_idx1",
-                              r"@tags:{ a\|b }", "DIALECT", str(dialect)])
-        self.execute_command(["FT.SEARCH", f"{key_type}_idx1",
-                              r"@tags:{ tag-containing-\}-and-\} }",
-                              "DIALECT", str(dialect)])
-        self.execute_command(["FT.SEARCH", f"{key_type}_idx1",
-                              r"@tags:{ normal }", "DIALECT", str(dialect)])
-        # Multi-tag OR queries mixing escaped and normal tags.
-        # Use LIMIT 0 20 to return all results and avoid ordering
-        # differences between Redis and Valkey when results exceed
-        # the default limit of 10.
-        self.execute_command(["FT.SEARCH", f"{key_type}_idx1",
-                              r"@tags:{ a\}b | normal }",
-                              "LIMIT", "0", "20", "DIALECT", str(dialect)])
-        self.execute_command(["FT.SEARCH", f"{key_type}_idx1",
-                              r"@tags:{ a\|b | a\}b }",
-                              "LIMIT", "0", "20", "DIALECT", str(dialect)])
-        self.execute_command(["FT.SEARCH", f"{key_type}_idx1",
-                              r"@tags:{ normal | a\|b | a\}b }",
-                              "LIMIT", "0", "20", "DIALECT", str(dialect)])
-        self.execute_command(["FT.SEARCH", f"{key_type}_idx1",
-                              r"@tags:{ tag-containing-\}-and-\} | a\\b }",
-                              "LIMIT", "0", "20", "DIALECT", str(dialect)])
-        self.execute_command(["FT.SEARCH", f"{key_type}_idx1",
-                              r"@tags:{ a\}b | a\|b | tag-containing-\}-and-\} | a\\b | normal }",
-                              "LIMIT", "0", "20", "DIALECT", str(dialect)])
+        # Single-tag queries: escaped '}', '|', '\', and multiple escaped
+        # braces in one value ("x}y}z"), plus a plain tag as a control.
+        self.check(dialect, "ft.search", f"{key_type}_idx1", r"@tags:{ a\}b }")
+        self.check(dialect, "ft.search", f"{key_type}_idx1", r"@tags:{ a\|b }")
+        self.check(dialect, "ft.search", f"{key_type}_idx1", r"@tags:{ a\\b }")
+        self.check(dialect, "ft.search", f"{key_type}_idx1", r"@tags:{ x\}y\}z }")
+        self.check(dialect, "ft.search", f"{key_type}_idx1", r"@tags:{ normal }")
+        # Multi-tag OR queries mixing escaped and normal tags. These can match
+        # more than the default 10 results, where the truncated subset is
+        # implementation-defined; "LIMIT 0 20" returns the full set so the
+        # comparison (sorted by __key) is deterministic across engines.
+        self.check(dialect, "ft.search", f"{key_type}_idx1",
+                   r"@tags:{ a\}b | normal }", "LIMIT", "0", "20")
+        self.check(dialect, "ft.search", f"{key_type}_idx1",
+                   r"@tags:{ a\|b | a\}b }", "LIMIT", "0", "20")
+        self.check(dialect, "ft.search", f"{key_type}_idx1",
+                   r"@tags:{ a\|b | x\}y\}z }", "LIMIT", "0", "20")
+        self.check(dialect, "ft.search", f"{key_type}_idx1",
+                   r"@tags:{ a\}b | a\|b | x\}y\}z | a\\b | normal }",
+                   "LIMIT", "0", "20")

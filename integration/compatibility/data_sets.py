@@ -498,7 +498,11 @@ def compute_data_sets():
 
     # Tag special characters data set
     # Uses comma separator so }, |, and \ appear literally in stored tags.
-    tag_special_base_tags = ["a}b", "a|b", "normal", "tag-containing-}-and-}", "a\\b"]
+    # NOTE: tags must not contain other RediSearch query special characters
+    # (e.g. '-' is the negation operator), otherwise the reference engine
+    # rejects the query with a syntax error and the comparison is skipped.
+    # "x}y}z" exercises multiple escaped closing braces in one tag value.
+    tag_special_base_tags = ["a}b", "a|b", "normal", "x}y}z", "a\\b"]
     for key_type in ["hash", "json"]:
         # Comma separator (non-default)
         if key_type == "hash":

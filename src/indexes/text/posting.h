@@ -93,6 +93,10 @@ struct Postings {
   // Total frequency of the term across all keys and positions
   size_t GetTotalTermFrequency() const;
 
+  // Look up the FlatPositionMap for a specific key. Returns nullptr if the key
+  // is not in this term's posting list.
+  const FlatPositionMap* FindKey(const Key& key) const;
+
   // Defrag this contents of this object. Returns the updated "this" pointer.
   Postings* Defrag();
 

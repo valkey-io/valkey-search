@@ -12,6 +12,7 @@
 #include <string>
 
 #include "absl/types/span.h"
+#include "src/utils/string_interning.h"
 
 namespace valkey_search::indexes::scoring {
 
@@ -19,7 +20,7 @@ struct ScoringStats {
   virtual ~ScoringStats() = default;
 
   uint32_t total_docs = 0;
-  uint64_t doc_id = 0;
+  InternedStringPtr key;
   float document_score = 1.0f;
   std::string term;
   uint32_t num_doc_contain_term = 0;

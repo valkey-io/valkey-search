@@ -8,19 +8,17 @@
 #ifndef VALKEYSEARCH_SRC_INDEXES_SCORING_SCORING_SESSION_H_
 #define VALKEYSEARCH_SRC_INDEXES_SCORING_SCORING_SESSION_H_
 
-#include <cstdint>
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
 #include "src/indexes/scoring/scorer.h"
 #include "src/indexes/scoring/scoring_stats.h"
+#include "src/utils/string_interning.h"
 
 namespace valkey_search::indexes::scoring {
 
-using DocId = uint64_t;
-
 struct RankedDoc {
-  DocId doc_id;
+  InternedStringPtr key;
   float score;
 };
 
@@ -34,8 +32,8 @@ struct RankedDoc {
 //   auto results = session.Rank();
 //
 // Doc-level fields in `stats` (e.g. document_score) must be invariant
-// across all leaves recorded for the same doc_id. Rank() returns every
-// candidate sorted by score desc, doc_id asc; LIMIT is applied by the
+// across all leaves recorded for the same key. Rank() returns every
+// candidate sorted by score desc, key asc; LIMIT is applied by the
 // caller.
 class ScoringSession {
  public:
@@ -53,9 +51,9 @@ class ScoringSession {
  private:
   const Scorer* scorer_;
 
-  std::vector<absl::flat_hash_map<DocId, float>> group_stack_;
+  std::vector<absl::flat_hash_map<InternedStringPtr, float>> group_stack_;
 
-  absl::flat_hash_map<DocId, float> doc_score_;
+  absl::flat_hash_map<InternedStringPtr, float> doc_score_;
 };
 
 }  // namespace valkey_search::indexes::scoring

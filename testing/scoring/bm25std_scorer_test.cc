@@ -15,6 +15,7 @@
 #include "src/indexes/scoring/scorer.h"
 #include "src/indexes/scoring/scoring_session.h"
 #include "src/indexes/scoring/scoring_stats.h"
+#include "src/utils/string_interning.h"
 #include "testing/scoring/scoring_test_data.h"
 
 namespace valkey_search::indexes::scoring {
@@ -23,6 +24,10 @@ namespace {
 using ::testing::ElementsAre;
 
 constexpr float kFloatTolerance = 1e-4f;
+
+InternedStringPtr Key(const char* name) {
+  return StringInternStore::Intern(name);
+}
 
 Bm25StdStats MakeStats(uint32_t total_docs, float avg_doc_len,
                        uint32_t num_doc_contain_term, uint32_t term_frequency,
@@ -37,18 +42,18 @@ Bm25StdStats MakeStats(uint32_t total_docs, float avg_doc_len,
   return s;
 }
 
-std::vector<DocId> RankOrder(const std::vector<RankedDoc>& ranked) {
-  std::vector<DocId> ids;
-  ids.reserve(ranked.size());
-  for (const auto& r : ranked) ids.push_back(r.doc_id);
-  return ids;
+std::vector<InternedStringPtr> RankOrder(const std::vector<RankedDoc>& ranked) {
+  std::vector<InternedStringPtr> keys;
+  keys.reserve(ranked.size());
+  for (const auto& r : ranked) keys.push_back(r.key);
+  return keys;
 }
 
-float ScoreFor(const std::vector<RankedDoc>& ranked, DocId id) {
+float ScoreFor(const std::vector<RankedDoc>& ranked, InternedStringPtr id) {
   for (const auto& r : ranked) {
-    if (r.doc_id == id) return r.score;
+    if (r.key == id) return r.score;
   }
-  ADD_FAILURE() << "doc_id " << id << " not in ranked results";
+  ADD_FAILURE() << "key " << id->Str() << " not in ranked results";
   return 0.0f;
 }
 
@@ -170,13 +175,15 @@ TEST(Bm25StdScorerQueryTest, SingleLeafHelloRankOrder) {
   for (const auto& s : stats) session.RecordLeaf(s, 1.0f);
 
   auto ranked = session.Rank();
-  EXPECT_THAT(RankOrder(ranked), ElementsAre(5, 4, 3, 2, 7, 1));
-  EXPECT_NEAR(ScoreFor(ranked, 5), 0.574385f, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 4), 0.523122f, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 3), 0.477286f, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 2), 0.430172f, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 7), 0.430172f, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 1), 0.331888f, kFloatTolerance);
+  EXPECT_THAT(RankOrder(ranked),
+              ElementsAre(Key("doc:5"), Key("doc:4"), Key("doc:3"),
+                          Key("doc:2"), Key("doc:7"), Key("doc:1")));
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:5")), 0.574385f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:4")), 0.523122f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:3")), 0.477286f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:2")), 0.430172f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:7")), 0.430172f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:1")), 0.331888f, kFloatTolerance);
 }
 
 TEST(Bm25StdScorerQueryTest, MultiLeafHelloWorld) {
@@ -198,12 +205,14 @@ TEST(Bm25StdScorerQueryTest, MultiLeafHelloWorld) {
   }
 
   auto ranked = session.Rank();
-  EXPECT_THAT(RankOrder(ranked), ElementsAre(4, 3, 2, 7, 1));
-  EXPECT_NEAR(ScoreFor(ranked, 4), 0.774956f, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 3), 0.763658f, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 2), 0.737626f, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 7), 0.737626f, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 1), 0.663776f, kFloatTolerance);
+  EXPECT_THAT(RankOrder(ranked),
+              ElementsAre(Key("doc:4"), Key("doc:3"), Key("doc:2"),
+                          Key("doc:7"), Key("doc:1")));
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:4")), 0.774956f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:3")), 0.763658f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:2")), 0.737626f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:7")), 0.737626f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:1")), 0.663776f, kFloatTolerance);
 }
 
 TEST(Bm25StdScorerQueryTest, LeafWeightScalesScore) {
@@ -213,13 +222,15 @@ TEST(Bm25StdScorerQueryTest, LeafWeightScalesScore) {
   for (const auto& s : stats) session.RecordLeaf(s, 5.0f);
 
   auto ranked = session.Rank();
-  EXPECT_THAT(RankOrder(ranked), ElementsAre(5, 4, 3, 2, 7, 1));
-  EXPECT_NEAR(ScoreFor(ranked, 5), 2.871923f, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 4), 2.615608f, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 3), 2.386431f, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 2), 2.150861f, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 7), 2.150861f, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 1), 1.659439f, kFloatTolerance);
+  EXPECT_THAT(RankOrder(ranked),
+              ElementsAre(Key("doc:5"), Key("doc:4"), Key("doc:3"),
+                          Key("doc:2"), Key("doc:7"), Key("doc:1")));
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:5")), 2.871923f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:4")), 2.615608f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:3")), 2.386431f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:2")), 2.150861f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:7")), 2.150861f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:1")), 1.659439f, kFloatTolerance);
 }
 
 TEST(Bm25StdScorerQueryTest, NestedGroupsLayeredWeights) {
@@ -244,12 +255,14 @@ TEST(Bm25StdScorerQueryTest, NestedGroupsLayeredWeights) {
   session.ExitGroup(2.0f);
 
   auto ranked = session.Rank();
-  EXPECT_THAT(RankOrder(ranked), ElementsAre(4, 3, 2, 7, 1));
-  EXPECT_NEAR(ScoreFor(ranked, 4), 5.695980f, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 3), 5.536520f, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 2), 5.286103f, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 7), 5.286103f, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 1), 4.646429f, kFloatTolerance);
+  EXPECT_THAT(RankOrder(ranked),
+              ElementsAre(Key("doc:4"), Key("doc:3"), Key("doc:2"),
+                          Key("doc:7"), Key("doc:1")));
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:4")), 5.695980f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:3")), 5.536520f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:2")), 5.286103f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:7")), 5.286103f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:1")), 4.646429f, kFloatTolerance);
 }
 
 TEST(Bm25StdScorerQueryTest, OrAtTopMixedAdmissionPaths) {
@@ -274,14 +287,13 @@ TEST(Bm25StdScorerQueryTest, OrAtTopMixedAdmissionPaths) {
   }
 
   auto ranked = session.Rank();
-  EXPECT_THAT(RankOrder(ranked), ElementsAre(8, 6, 4, 3, 2, 7, 1));
-  EXPECT_NEAR(ScoreFor(ranked, 8), 1.915183f, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 6), 1.419164f, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 4), 0.774956f, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 3), 0.763658f, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 2), 0.737626f, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 7), 0.737626f, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 1), 0.663776f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:8")), 1.915183f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:6")), 1.419164f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:4")), 0.774956f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:3")), 0.763658f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:2")), 0.737626f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:7")), 0.737626f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:1")), 0.663776f, kFloatTolerance);
 }
 
 TEST(Bm25StdScorerQueryTest, AndOfLeafAndOrGroup) {
@@ -310,12 +322,11 @@ TEST(Bm25StdScorerQueryTest, AndOfLeafAndOrGroup) {
   }
 
   auto ranked = session.Rank();
-  EXPECT_THAT(RankOrder(ranked), ElementsAre(4, 3, 2, 7, 1));
-  EXPECT_NEAR(ScoreFor(ranked, 4), 0.774956f, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 3), 0.763658f, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 2), 0.737626f, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 7), 0.737626f, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 1), 0.663776f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:4")), 0.774956f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:3")), 0.763658f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:2")), 0.737626f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:7")), 0.737626f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:1")), 0.663776f, kFloatTolerance);
 }
 
 TEST(Bm25StdScorerQueryTest, PerLeafWeightInsideOrWithGroupWeight) {
@@ -340,15 +351,14 @@ TEST(Bm25StdScorerQueryTest, PerLeafWeightInsideOrWithGroupWeight) {
   }
 
   auto ranked = session.Rank();
-  EXPECT_THAT(RankOrder(ranked), ElementsAre(8, 6, 5, 4, 3, 2, 7, 1));
-  EXPECT_NEAR(ScoreFor(ranked, 8), 11.491096f, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 6), 8.514985f, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 5), 6.892615f, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 4), 6.277460f, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 3), 5.727435f, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 2), 5.162066f, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 7), 5.162066f, kFloatTolerance);
-  EXPECT_NEAR(ScoreFor(ranked, 1), 3.982653f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:8")), 11.491096f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:6")), 8.514985f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:5")), 6.892615f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:4")), 6.277460f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:3")), 5.727435f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:2")), 5.162066f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:7")), 5.162066f, kFloatTolerance);
+  EXPECT_NEAR(ScoreFor(ranked, Key("doc:1")), 3.982653f, kFloatTolerance);
 }
 
 TEST(Bm25StdScorerQueryTest, NonExistentTermEmpty) {
@@ -358,7 +368,7 @@ TEST(Bm25StdScorerQueryTest, NonExistentTermEmpty) {
   EXPECT_TRUE(ranked.empty());
 }
 
-TEST(Bm25StdScorerQueryTest, TiesBrokenByDocIdAscending) {
+TEST(Bm25StdScorerQueryTest, TiesBrokenByKeyAscending) {
   Bm25StdScorer scorer;
   ScoringSession session(&scorer);
   auto stats = BuildStatsForTerm(test_data::StatsForHello);
@@ -366,9 +376,11 @@ TEST(Bm25StdScorerQueryTest, TiesBrokenByDocIdAscending) {
 
   auto ranked = session.Rank();
   int pos2 = -1, pos7 = -1;
+  auto key2 = Key("doc:2");
+  auto key7 = Key("doc:7");
   for (size_t i = 0; i < ranked.size(); ++i) {
-    if (ranked[i].doc_id == 2) pos2 = static_cast<int>(i);
-    if (ranked[i].doc_id == 7) pos7 = static_cast<int>(i);
+    if (ranked[i].key == key2) pos2 = static_cast<int>(i);
+    if (ranked[i].key == key7) pos7 = static_cast<int>(i);
   }
   ASSERT_NE(pos2, -1);
   ASSERT_NE(pos7, -1);

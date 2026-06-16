@@ -8,7 +8,6 @@
 #include "src/commands/ft_search_parser.h"
 
 #include <cctype>
-#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>

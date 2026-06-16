@@ -351,7 +351,7 @@ InnerProductDistanceSIMD4ExtResiduals(const void *pVect1v, const void *pVect2v, 
 #endif
 
 class InnerProductSpace : public SpaceInterface<float> {
-    DISTFUNC<float> fstdistfunc_;
+    DistFuncWrapper<float> fstdistfunc_;
     size_t data_size_;
     size_t dim_;
 
@@ -401,7 +401,7 @@ class InnerProductSpace : public SpaceInterface<float> {
         return data_size_;
     }
 
-    DISTFUNC<float> get_dist_func() {
+    DistFuncWrapper<float> get_dist_func() {
         return fstdistfunc_;
     }
 
@@ -409,7 +409,9 @@ class InnerProductSpace : public SpaceInterface<float> {
         return &dim_;
     }
 
-~InnerProductSpace() {}
+    ~InnerProductSpace() {}
+protected:
+    DistFuncWrapper<float> inner_get_dist_func() override { return fstdistfunc_; }
 };
 
 }  // namespace hnswlib

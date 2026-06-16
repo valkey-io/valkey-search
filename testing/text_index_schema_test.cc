@@ -12,8 +12,6 @@
 #include "src/index_schema.pb.h"
 #include "src/indexes/text.h"
 #include "src/indexes/text/text_index.h"
-#include "src/utils/string_interning.h"
-#include "testing/common.h"
 #include "vmsdk/src/testing_infra/utils.h"
 
 namespace valkey_search {
@@ -49,15 +47,19 @@ TEST_F(TextIndexSchemaTest, ConcurrentCommitKeyData) {
   };
 
   std::vector<std::thread> threads;
-  for (const auto &[key_str, content] : docs) {
-    threads.emplace_back([&schema, key_str, content]() {
-      auto key = StringInternStore::Intern(key_str);
-      auto result = schema->StageAttributeData(key, content, 0, false, false);
+  threads.reserve(docs.size());
+  for (const auto &doc : docs) {
+    threads.emplace_back([&schema, doc]() {
+      auto key = StringInternStore::Intern(doc.first);
+      auto result =
+          schema->StageAttributeData(key, doc.second, 0, false, false);
       EXPECT_TRUE(result.ok());
       schema->CommitKeyData(key);
     });
   }
-  for (auto &t : threads) t.join();
+  for (auto &t : threads) {
+    t.join();
+  }
 
   // Unique words across all documents: the, cat, sat, ran, dog, barked, howled
   EXPECT_EQ(schema->GetNumUniqueTerms(), 7);

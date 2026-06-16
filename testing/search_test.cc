@@ -9,7 +9,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -38,7 +37,6 @@
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
 #include "src/query/predicate.h"
-#include "src/utils/patricia_tree.h"
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -49,8 +47,6 @@ namespace valkey_search {
 namespace {
 
 using testing::_;
-using testing::ByMove;
-using testing::Return;
 using testing::TestParamInfo;
 using testing::ValuesIn;
 using ::valkey_search::indexes::IndexerType;

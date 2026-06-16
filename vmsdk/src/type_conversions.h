@@ -115,7 +115,7 @@ inline absl::StatusOr<uint64_t> To(absl::string_view str) {
   return ToNumeric<uint64_t>(str);
 }
 
-#if defined(__clang__) && !defined(RunningClangd)
+#if defined(__clang__) && !defined(RunningClangd) && defined(__APPLE__)
 template <>
 inline absl::StatusOr<unsigned long> To(absl::string_view str) {
   return ToNumeric<uint64_t>(str);

@@ -9,7 +9,6 @@
 #define VALKEYSEARCH_SRC_VALKEY_SEARCH_H_
 
 #include <atomic>
-#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -59,9 +58,15 @@ class ValkeySearch {
   // Intended for use during module shutdown before global destructors run,
   // to avoid worker threads racing with destruction of global state.
   void JoinAllThreadPools() {
-    if (reader_thread_pool_) reader_thread_pool_->JoinWorkers();
-    if (writer_thread_pool_) writer_thread_pool_->JoinWorkers();
-    if (utility_thread_pool_) utility_thread_pool_->JoinWorkers();
+    if (reader_thread_pool_) {
+      reader_thread_pool_->JoinWorkers();
+    }
+    if (writer_thread_pool_) {
+      writer_thread_pool_->JoinWorkers();
+    }
+    if (utility_thread_pool_) {
+      utility_thread_pool_->JoinWorkers();
+    }
   }
 
   std::shared_ptr<vmsdk::ThreadGroupCPUMonitor> GetCoordinatorThreadsMonitor()

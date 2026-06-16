@@ -2,14 +2,12 @@ from valkey import ResponseError
 from valkey.client import Valkey
 from valkey_search_test_case import (
     ValkeySearchTestCaseDebugMode,
-    ValkeySearchClusterTestCaseDebugMode,
 )
 from valkeytestframework.util import waiters
 from indexes import *
 from valkeytestframework.conftest import resource_port_tracker
-import logging, os, pytest
+import os, pytest
 from pprint import pprint
-from ft_info_parser import FTInfoParser
 from utils import IndexingTestHelper
 
 def GetStringPollStatus(client):
@@ -74,8 +72,8 @@ class TestFtDebugCommand(ValkeySearchTestCaseDebugMode):
         pprint(bysize)
 
         assert inline == {'Count': 10, 'Bytes': 140, 'AvgSize': b'14', 'Allocated': 320, 'AvgAllocated': b'32', 'Utilization': 43}
-        assert outofline == {'Count': 10, 'Bytes': 120, 'AvgSize': b'12', 'Allocated': 280, 'AvgAllocated': b'28', 'Utilization': 42}
-        assert byref[-1] == {'Count': 10, 'Bytes': 120, 'AvgSize': b'12', 'Allocated': 280, 'AvgAllocated': b'28', 'Utilization': 42}
+        assert outofline == {'Count': 10, 'Bytes': 160, 'AvgSize': b'16', 'Allocated': 320, 'AvgAllocated': b'32', 'Utilization': 50}
+        assert byref[-1] == {'Count': 10, 'Bytes': 160, 'AvgSize': b'16', 'Allocated': 320, 'AvgAllocated': b'32', 'Utilization': 50}
         assert byref[6] == {'Count': 10, 'Bytes': 140, 'AvgSize': b'14', 'Allocated': 320, 'AvgAllocated': b'32', 'Utilization': 43}
-        assert bysize[-12] == {'Count': 10, 'Bytes': 120, 'AvgSize': b'12', 'Allocated': 280, 'AvgAllocated': b'28', 'Utilization': 42}
+        assert bysize[-16] == {'Count': 10, 'Bytes': 160, 'AvgSize': b'16', 'Allocated': 320, 'AvgAllocated': b'32', 'Utilization': 50}
         assert bysize[14] == {'Count': 10, 'Bytes': 140, 'AvgSize': b'14', 'Allocated': 320, 'AvgAllocated': b'32', 'Utilization': 43}

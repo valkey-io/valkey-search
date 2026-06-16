@@ -10,7 +10,6 @@
 #include <absl/strings/str_split.h>
 
 #include <cstddef>
-#include <deque>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -19,7 +18,6 @@
 #include <vector>
 
 #include "absl/container/flat_hash_set.h"
-#include "absl/container/inlined_vector.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -32,7 +30,6 @@
 #include "src/indexes/text.h"
 #include "src/indexes/text/orproximity.h"
 #include "src/indexes/text/proximity.h"
-#include "src/indexes/text/text_fetcher.h"
 #include "src/indexes/universal_set_fetcher.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
@@ -218,7 +215,9 @@ BuildTextIterator(const Predicate *predicate, bool negate,
       }
       // The Composed AND only has non text predicates, return null
       // to have the caller handle it.
-      if (iterators.empty()) return {nullptr, 0};
+      if (iterators.empty()) {
+        return {nullptr, 0};
+      }
       bool skip_positional = !child_require_positions;
       size_t total_size = min_size == SIZE_MAX ? 0 : min_size;
       return {std::make_unique<indexes::text::ProximityIterator>(
@@ -242,7 +241,9 @@ BuildTextIterator(const Predicate *predicate, bool negate,
       }
       // If the Composed OR has any non text predicate, we cannot
       // build a text iterator.
-      if (iterators.empty() || has_non_text) return {nullptr, 0};
+      if (iterators.empty() || has_non_text) {
+        return {nullptr, 0};
+      }
       return {std::make_unique<indexes::text::OrProximityIterator>(
                   std::move(iterators)),
               total_size};
@@ -427,11 +428,19 @@ CalcBestMatchingPrefilteredKeys(
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     indexes::VectorBase *vector_index, size_t qualified_entries) {
   std::priority_queue<std::pair<float, hnswlib::labeltype>> results;
+  std::vector<char> query_with_normalized;
+  auto embedding = parameters.query;
+  if (vector_index->GetNormalize()) {
+    query_with_normalized =
+        indexes::QueryWithNormalized<float>(parameters.query);
+    embedding = absl::string_view(query_with_normalized.data(),
+                                  query_with_normalized.size());
+  }
   auto results_appender =
-      [&results, &parameters, vector_index](
+      [&results, &parameters, vector_index, embedding](
           const InternedStringPtr &key,
           absl::flat_hash_set<const char *> &top_keys) -> bool {
-    return vector_index->AddPrefilteredKey(parameters.query, parameters.k, key,
+    return vector_index->AddPrefilteredKey(embedding, parameters.k, key,
                                            results, top_keys);
   };
   EvaluatePrefilteredKeys(parameters, entries_fetchers,
@@ -598,7 +607,8 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
     borrowed.push_back({BorrowedInternedStringPtr(key), 0.0f});
     return true;
   };
-  // Cannot skip evaluation if the query contains unsolved composed operations.
+  // Cannot skip evaluation if the query contains unsolved composed
+  // operations.
   bool requires_prefilter_evaluation =
       IsUnsolvedQuery(parameters.filter_parse_results.query_operations,
                       parameters.filter_parse_results.is_match_all);
@@ -726,7 +736,9 @@ SearchResult::SearchResult(size_t total_count,
     : total_count(total_count),
       is_limited_with_buffer(false),
       is_offsetted(false) {
-  if (ShouldReturnNoResults(parameters)) return;
+  if (ShouldReturnNoResults(parameters)) {
+    return;
+  }
   if (!parameters.RequiresCompleteResults()) {
     TrimResults(borrowed, parameters, trim_offset_in_background);
   }
@@ -769,7 +781,6 @@ void SearchResult::TrimResults(std::vector<T> &vec,
   if (vec.size() <= max_needed) {
     return;
   }
-  // Apply limiting with buffer
   this->is_limited_with_buffer = true;
   vec.erase(vec.begin() + max_needed, vec.end());
 }
@@ -1025,8 +1036,8 @@ absl::Status ParseKNN(query::SearchParameters &parameters,
 }
 
 //
-// We don't have values for the $ substitution yet. so we break the parsing into
-// two pieces
+// We don't have values for the $ substitution yet. so we break the parsing
+// into two pieces
 //
 absl::Status query::SearchParameters::PreParseQueryString() {
   // Validate the query string's length.
@@ -1061,7 +1072,8 @@ absl::Status query::SearchParameters::PreParseQueryString() {
       _.SetPrepend() << "Invalid filter expression: `" << pre_filter << "`. ");
   if (!filter_parse_results.root_predicate && vector_filter.empty() &&
       !filter_parse_results.is_match_all) {
-    // Return an error if no valid pre-filter and no vector filter is provided.
+    // Return an error if no valid pre-filter and no vector filter is
+    // provided.
     return absl::InvalidArgumentError("Invalid query string syntax");
   }
   // Optionally parse the vector filter if it exists.

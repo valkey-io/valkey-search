@@ -8,7 +8,6 @@
 #include "src/query/response_generator.h"
 
 #include <algorithm>
-#include <deque>
 #include <optional>
 #include <string>
 #include <utility>
@@ -19,9 +18,7 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "src/attribute_data_type.h"
-#include "src/commands/ft_search_parser.h"
 #include "src/indexes/tag.h"
-#include "src/indexes/text.h"
 #include "src/indexes/text/text_index.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
@@ -87,7 +84,7 @@ class PredicateEvaluator : public query::Evaluator {
  public:
   PredicateEvaluator(const RecordsMap &records,
                      QueryOperations query_operations)
-      : Evaluator(query_operations), records_(records), text_index_(nullptr) {}
+      : Evaluator(query_operations), records_(records) {}
 
   PredicateEvaluator(const RecordsMap &records,
                      const valkey_search::indexes::text::TextIndex *text_index,

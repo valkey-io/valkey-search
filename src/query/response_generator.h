@@ -14,7 +14,6 @@
 #include "src/attribute_data_type.h"
 #include "src/indexes/vector_base.h"
 #include "src/query/search.h"
-#include "src/utils/string_interning.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 

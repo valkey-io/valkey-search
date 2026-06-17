@@ -9,6 +9,7 @@
 #define VALKEYSEARCH_SRC_QUERY_PREDICATE_H_
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -45,12 +46,14 @@ enum class PredicateType {
   kComposedOr,
   kNegate,
   kText,
+  kVectorRange,
   kNone
 };
 
 class TextPredicate;
 class TagPredicate;
 class NumericPredicate;
+class VectorRangePredicate;
 
 struct EvaluationResult {
   bool matches;
@@ -82,6 +85,8 @@ class Evaluator {
   virtual EvaluationResult EvaluateTags(const TagPredicate& predicate) = 0;
   virtual EvaluationResult EvaluateNumeric(
       const NumericPredicate& predicate) = 0;
+  virtual EvaluationResult EvaluateVectorRange(
+      const VectorRangePredicate& predicate) = 0;
   // Access target key for proximity validation (only for Text)
   virtual const InternedStringPtr& GetTargetKey() const = 0;
   virtual bool IsPrefilterEvaluator() const { return false; }
@@ -177,6 +182,52 @@ class TagPredicate : public Predicate {
   std::string alias_;
   std::string raw_tag_string_;
   absl::flat_hash_set<std::string> tags_;
+};
+
+class VectorRangePredicate : public Predicate {
+ public:
+  VectorRangePredicate(absl::string_view attribute_alias,
+                       absl::string_view identifier, double radius,
+                       absl::string_view vector_param_name,
+                       std::optional<std::string> score_as,
+                       std::optional<double> epsilon);
+
+  EvaluationResult Evaluate(Evaluator& evaluator) const override;
+
+  absl::string_view GetAlias() const { return alias_; }
+  absl::string_view GetIdentifier() const {
+    return vmsdk::ToStringView(identifier_.get());
+  }
+  double GetRadius() const { return radius_; }
+  absl::string_view GetVectorParamName() const { return vector_param_name_; }
+  const std::optional<std::string>& GetScoreAs() const { return score_as_; }
+  std::optional<double> GetEpsilon() const { return epsilon_; }
+
+  void SetResolvedQuery(std::string query);
+  absl::string_view GetResolvedQuery() const { return resolved_query_; }
+
+  void SetScoreAs(std::optional<std::string> score_as) {
+    score_as_ = std::move(score_as);
+  }
+  void SetEpsilon(std::optional<double> epsilon) { epsilon_ = epsilon; }
+  void SetRadius(double radius) { radius_ = radius; }
+
+  // Returns the PARAMS key for the radius, if the radius was specified as
+  // $param. Empty if the radius was a literal.
+  absl::string_view GetRadiusParamName() const { return radius_param_name_; }
+  void SetRadiusParamName(std::string name) {
+    radius_param_name_ = std::move(name);
+  }
+
+ private:
+  std::string alias_;
+  vmsdk::UniqueValkeyString identifier_;
+  double radius_;
+  std::string vector_param_name_;
+  std::optional<std::string> score_as_;
+  std::optional<double> epsilon_;
+  std::string resolved_query_;
+  std::string radius_param_name_;  // non-empty when radius is a $param
 };
 
 using FieldMaskPredicate = uint64_t;

@@ -76,6 +76,7 @@ set(INDEXES_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/lexer_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/numeric_index_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/posting_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/snowball_processor_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/tag_index_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/text_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/vector_test.cc)

@@ -247,9 +247,14 @@ absl::Status SearchCommand::PostParseQueryString() {
   VMSDK_RETURN_IF_ERROR(query::SearchParameters::PostParseQueryString());
 
   if (sortby_parameter.has_value()) {
-    // Validate sortby field exists in the index schema
-    VMSDK_RETURN_IF_ERROR(
-        index_schema->GetIdentifier(sortby_parameter->field).status());
+    // Allow sorting by the vector range distance alias (yield_distance_as)
+    // without requiring it to be a real index field.
+    std::string score_field = GetVectorRangeScoreFieldName();
+    if (score_field.empty() || sortby_parameter->field != score_field) {
+      // Validate sortby field exists in the index schema
+      VMSDK_RETURN_IF_ERROR(
+          index_schema->GetIdentifier(sortby_parameter->field).status());
+    }
   }
 
   return absl::OkStatus();

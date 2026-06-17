@@ -224,6 +224,20 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
 }
 
 }  // namespace
+
+template <typename Comparator>
+void PerformSortingOnRelevantPortion(std::vector<indexes::Neighbor> &neighbors,
+                                     const SearchCommand &parameters,
+                                     Comparator &&comparator) {
+  auto amountToKeep = parameters.limit.first_index + parameters.limit.number;
+  if (amountToKeep >= neighbors.size()) {
+    std::stable_sort(neighbors.begin(), neighbors.end(), comparator);
+  } else {
+    std::partial_sort(neighbors.begin(), neighbors.begin() + amountToKeep,
+                      neighbors.end(), comparator);
+  }
+}
+
 // Apply sorting to neighbors based on attribute values in attribute_contents
 void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
                   const SearchCommand &parameters) {
@@ -232,6 +246,25 @@ void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
   }
 
   auto sortby = parameters.sortby_parameter.value();
+
+  // If sorting by the vector range distance alias, sort directly by the
+  // precomputed neighbor distance rather than looking it up in
+  // attribute_contents.
+  std::string score_field = parameters.GetVectorRangeScoreFieldName();
+  if (!score_field.empty() && sortby.field == score_field) {
+    auto distance_compare = [&](const indexes::Neighbor &a,
+                                const indexes::Neighbor &b) -> bool {
+      if (a.distance < b.distance) {
+        return sortby.order == query::SortOrder::kAscending;
+      }
+      if (a.distance > b.distance) {
+        return sortby.order == query::SortOrder::kDescending;
+      }
+      return false;
+    };
+    PerformSortingOnRelevantPortion(neighbors, parameters, distance_compare);
+    return;
+  }
 
   // Check if field is a declared numeric attribute
   auto index_result = parameters.index_schema->GetIndex(sortby.field);
@@ -279,13 +312,7 @@ void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
     return false;
   };
 
-  auto amountToKeep = parameters.limit.first_index + parameters.limit.number;
-  if (amountToKeep >= neighbors.size()) {
-    std::stable_sort(neighbors.begin(), neighbors.end(), compare);
-  } else {
-    std::partial_sort(neighbors.begin(), neighbors.begin() + amountToKeep,
-                      neighbors.end(), compare);
-  }
+  PerformSortingOnRelevantPortion(neighbors, parameters, compare);
 }
 
 // Check for scenarios that require sending an early reply.

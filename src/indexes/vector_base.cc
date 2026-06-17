@@ -532,8 +532,7 @@ VectorBase::ComputeDistanceFromRecord(const InternedStringPtr &key,
   if (normalize_) {
     auto norm_query = NormalizeEmbedding(query, GetDataTypeSize());
     auto result = ComputeDistanceFromRecordImpl(
-        internal_id,
-        absl::string_view(norm_query.data(), norm_query.size()));
+        internal_id, absl::string_view(norm_query.data(), norm_query.size()));
     if (result.ok()) {
       // Cosine distance is defined in [0, 2], but float32 rounding can produce
       // values slightly outside this range.  Clamp to maintain correct

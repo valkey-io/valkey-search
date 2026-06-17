@@ -39,5 +39,6 @@ extend-ignore-re = [
     "bubu",
     "Teser",
     "hel",
-    'caf\\xC3\\xA9'
+    'caf\\xC3\\xA9',
+    "eit_.*"
 ]

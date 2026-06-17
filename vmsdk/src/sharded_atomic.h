@@ -77,6 +77,8 @@ class ShardedAtomic {
 
     void Unregister(ThreadLocalNode* node) {
       absl::MutexLock lock(&mutex_);
+      retired_total_.fetch_add(node->value.load(std::memory_order_relaxed),
+                               std::memory_order_relaxed);
       auto it = std::find(nodes_.begin(), nodes_.end(), node);
       if (it != nodes_.end()) {
         *it = nodes_.back();
@@ -85,7 +87,7 @@ class ShardedAtomic {
     }
 
     T GetTotal(std::memory_order order) const {
-      T total = 0;
+      T total = retired_total_.load(order);
       // We lock purely to ensure the vector doesn't change size (iterators
       // validity)
       absl::ReaderMutexLock lock(&mutex_);
@@ -100,6 +102,7 @@ class ShardedAtomic {
       // We lock purely to ensure the vector doesn't change size (iterators
       // validity)
       absl::ReaderMutexLock lock(&mutex_);
+      retired_total_.store(0, std::memory_order_seq_cst);
       for (auto* node : nodes_) {
         // Forcibly set value to 0.
         node->value.store(0, std::memory_order_seq_cst);
@@ -112,6 +115,12 @@ class ShardedAtomic {
                 RawSystemAllocator<ThreadLocalNode*,
                                    DisableRawSystemAllocatorReporting>>
         nodes_ ABSL_GUARDED_BY(mutex_);
+    // Carries over the value of threads that have exited. A ThreadLocalNode can
+    // hold a non-zero value at exit when an increment and its matching
+    // decrement happen on different threads (e.g. memory allocated on a worker
+    // thread and freed on the main thread); discarding it would make the
+    // reported total memory inaccurate.
+    std::atomic<T> retired_total_{0};
   };
 
   // ThreadLocalNode is the TLS container

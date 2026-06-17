@@ -588,13 +588,6 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
         record_ptr = std::move(record.value());
       }
     }
-    // Early return on record not found just if the record not tracked or has
-    // a pending mutation. Otherwise, it will be processed as a delete
-    if (!record_ptr && !attribute.GetIndex()->IsTracked(interned_key) &&
-        !InTrackedMutationRecords(interned_key, attribute.GetIdentifier())) {
-      attribute.GetIndex()->UnTrack(interned_key);
-      continue;
-    }
     if (record_ptr) {
       VectorExternalizer(interned_key, attribute.GetIdentifier(), record_ptr);
     }

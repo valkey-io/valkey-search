@@ -28,7 +28,6 @@
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/scoring/scorer.h"
-#include "src/indexes/scoring/scoring_session.h"
 #include "src/indexes/vector_base.h"
 #include "src/query/predicate.h"
 #include "src/utils/cancel.h"

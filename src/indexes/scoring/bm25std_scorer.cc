@@ -12,7 +12,7 @@
 #include <cstring>
 
 #include "absl/log/check.h"
-#include "src/indexes/scoring/scoring_stats.h"
+#include "src/indexes/scoring/scorer.h"
 
 namespace valkey_search::indexes::scoring {
 
@@ -27,19 +27,17 @@ float Idf(uint32_t total_docs, uint32_t num_doc_contain_term) {
 
 }  // namespace
 
-float Bm25StdScorer::ScoreLeaf(const ScoringStats& stats,
+float Bm25StdScorer::ScoreLeaf(const LeafInput& input,
                                float leaf_weight) const {
-  const auto* bm25_stats = dynamic_cast<const Bm25StdStats*>(&stats);
-  CHECK(bm25_stats != nullptr);
+  if (input.total_docs == 0) return 0.0f;
+  const float avgdl = static_cast<float>(input.total_doc_len) /
+                      static_cast<float>(input.total_docs);
+  if (avgdl <= 0.0f) return 0.0f;
 
-  if (bm25_stats->avg_doc_len <= 0.0f) return 0.0f;
+  const float idf = Idf(input.total_docs, input.num_doc_contain_term);
 
-  const float idf =
-      Idf(bm25_stats->total_docs, bm25_stats->num_doc_contain_term);
-
-  const float f = static_cast<float>(bm25_stats->term_frequency);
-  const float dl = static_cast<float>(bm25_stats->doc_len);
-  const float avgdl = bm25_stats->avg_doc_len;
+  const float f = static_cast<float>(input.term_frequency);
+  const float dl = static_cast<float>(input.doc_len);
 
   const float numerator = f * (kK1 + 1.0f);
   const float denominator = f + kK1 * (1.0f - kB + kB * dl / avgdl);

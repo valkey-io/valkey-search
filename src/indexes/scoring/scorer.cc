@@ -11,7 +11,6 @@
 #include <cstring>
 
 #include "absl/log/check.h"
-#include "absl/types/span.h"
 #include "src/indexes/scoring/bm25std_scorer.h"
 
 namespace valkey_search::indexes::scoring {
@@ -22,13 +21,6 @@ bool IsInf(float f) {
   uint32_t bits;
   std::memcpy(&bits, &f, sizeof(bits));
   return (bits & kExponentMask) == kExponentMask && (bits & kMantissaMask) == 0;
-}
-
-float Scorer::CombineGroup(absl::Span<const float> child_scores,
-                           float group_weight) const {
-  float sum = 0.0f;
-  for (float s : child_scores) sum += s;
-  return group_weight * sum;
 }
 
 const Scorer* GetScorer(ScorerType type) {

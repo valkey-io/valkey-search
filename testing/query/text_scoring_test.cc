@@ -148,9 +148,9 @@ TEST_F(TextScoringTest, NonMatchingDocsExcluded) {
   EXPECT_THAT(Order(ranked), ElementsAre("doc:1"));
 }
 
-// An AND group sums the per-term contributions; a doc matching both terms
-// outranks one matching only the shared term.
-TEST_F(TextScoringTest, AndGroupSumsTermContributions) {
+// An AND group scores only documents matching every child; a doc missing one
+// term is excluded entirely (not scored on the term it does have).
+TEST_F(TextScoringTest, AndGroupRequiresAllTerms) {
   AddDoc("doc:1", "apple banana");
   AddDoc("doc:2", "apple cherry");
 
@@ -162,9 +162,37 @@ TEST_F(TextScoringTest, AndGroupSumsTermContributions) {
 
   auto ranked = Score(group.get());
 
-  // doc:1 matches both apple+banana; doc:2 matches only apple.
-  EXPECT_THAT(Order(ranked), ElementsAre("doc:1", "doc:2"));
-  EXPECT_GT(ScoreOf(ranked, "doc:1"), ScoreOf(ranked, "doc:2"));
+  // doc:1 matches both apple+banana; doc:2 lacks banana so the AND excludes it.
+  EXPECT_THAT(Order(ranked), ElementsAre("doc:1"));
+}
+
+// A doc admitted via one branch of an OR is not scored on the leaves of a
+// sibling AND branch it never satisfied. Query: (apple banana) | cherry.
+// doc:2 has cherry and banana but not apple; it must be scored on cherry only,
+// not on the banana leaf inside the AND branch it failed.
+TEST_F(TextScoringTest, OrBranchDoesNotLeakAndSiblingLeaf) {
+  AddDoc("doc:1", "apple banana");   // matches the (apple banana) AND
+  AddDoc("doc:2", "cherry banana");  // matches only the cherry branch
+
+  std::vector<std::unique_ptr<query::Predicate>> and_children;
+  and_children.push_back(Term("apple"));
+  and_children.push_back(Term("banana"));
+  auto and_group = std::make_unique<query::ComposedPredicate>(
+      query::LogicalOperator::kAnd, std::move(and_children));
+
+  std::vector<std::unique_ptr<query::Predicate>> or_children;
+  or_children.push_back(std::move(and_group));
+  or_children.push_back(Term("cherry"));
+  auto or_group = std::make_unique<query::ComposedPredicate>(
+      query::LogicalOperator::kOr, std::move(or_children));
+
+  auto ranked = Score(or_group.get());
+
+  // Both docs are admitted (doc:1 via AND, doc:2 via cherry). doc:2's score
+  // must equal a plain "cherry" query — its banana token must NOT contribute.
+  auto cherry = Term("cherry");
+  auto cherry_only = Score(cherry.get());
+  EXPECT_NEAR(ScoreOf(ranked, "doc:2"), ScoreOf(cherry_only, "doc:2"), 1e-5f);
 }
 
 // An empty candidate set yields no scores and does not crash.

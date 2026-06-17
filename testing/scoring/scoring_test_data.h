@@ -11,7 +11,7 @@
 #include <cstdint>
 #include <string>
 
-#include "src/indexes/scoring/scoring_stats.h"
+#include "src/indexes/scoring/scorer.h"
 #include "src/utils/string_interning.h"
 
 // Shared test data for Bm25StdScorer and ScoringSession unit tests.
@@ -19,7 +19,7 @@ namespace valkey_search::indexes::scoring::test_data {
 
 inline constexpr uint32_t kTotalDocs = 8;
 // total_doc_len = 5+6+7+9+4+4+6+1 = 42; avg = 42 / 8 = 5.25.
-inline constexpr float kAvgDocLen = 5.25f;
+inline constexpr uint64_t kTotalDocLen = 42;
 inline constexpr uint32_t kDtHello = 6;
 inline constexpr uint32_t kDtWorld = 6;
 inline constexpr uint32_t kDtRare = 2;
@@ -47,52 +47,30 @@ inline const DocInfo kDocs[] = {
     {"doc:7", 6, 2, 1, 0, 0}, {"doc:8", 1, 0, 0, 1, 0},
 };
 
-inline Bm25StdStats StatsForHello(const DocInfo& doc) {
-  Bm25StdStats s;
-  s.total_docs = kTotalDocs;
-  s.key = doc.GetKey();
-  s.term = "hello";
-  s.num_doc_contain_term = kDtHello;
-  s.term_frequency = doc.f_hello;
-  s.avg_doc_len = kAvgDocLen;
-  s.doc_len = doc.doc_len;
-  return s;
+inline LeafInput LeafFor(const DocInfo& doc, uint32_t dt, uint32_t f) {
+  LeafInput in;
+  in.total_docs = kTotalDocs;
+  in.total_doc_len = kTotalDocLen;
+  in.num_doc_contain_term = dt;
+  in.term_frequency = f;
+  in.doc_len = doc.doc_len;
+  return in;
 }
 
-inline Bm25StdStats StatsForWorld(const DocInfo& doc) {
-  Bm25StdStats s;
-  s.total_docs = kTotalDocs;
-  s.key = doc.GetKey();
-  s.term = "world";
-  s.num_doc_contain_term = kDtWorld;
-  s.term_frequency = doc.f_world;
-  s.avg_doc_len = kAvgDocLen;
-  s.doc_len = doc.doc_len;
-  return s;
+inline LeafInput LeafForHello(const DocInfo& doc) {
+  return LeafFor(doc, kDtHello, doc.f_hello);
 }
 
-inline Bm25StdStats StatsForRare(const DocInfo& doc) {
-  Bm25StdStats s;
-  s.total_docs = kTotalDocs;
-  s.key = doc.GetKey();
-  s.term = "rare";
-  s.num_doc_contain_term = kDtRare;
-  s.term_frequency = doc.f_rare;
-  s.avg_doc_len = kAvgDocLen;
-  s.doc_len = doc.doc_len;
-  return s;
+inline LeafInput LeafForWorld(const DocInfo& doc) {
+  return LeafFor(doc, kDtWorld, doc.f_world);
 }
 
-inline Bm25StdStats StatsForUnique(const DocInfo& doc) {
-  Bm25StdStats s;
-  s.total_docs = kTotalDocs;
-  s.key = doc.GetKey();
-  s.term = "unique";
-  s.num_doc_contain_term = kDtUnique;
-  s.term_frequency = doc.f_unique;
-  s.avg_doc_len = kAvgDocLen;
-  s.doc_len = doc.doc_len;
-  return s;
+inline LeafInput LeafForRare(const DocInfo& doc) {
+  return LeafFor(doc, kDtRare, doc.f_rare);
+}
+
+inline LeafInput LeafForUnique(const DocInfo& doc) {
+  return LeafFor(doc, kDtUnique, doc.f_unique);
 }
 
 }  // namespace valkey_search::indexes::scoring::test_data

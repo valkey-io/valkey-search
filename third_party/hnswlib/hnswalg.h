@@ -762,7 +762,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     header.set_serialize_size_data_per_element(
         serialize_size_data_per_element_);
     header.set_label_offset(label_offset_);
-    header.set_offset_data(offsetData_);
+    header.set_offset_data(size_links_level0_);
     header.set_max_level(maxlevel_);
     header.set_enterpoint_node(enterpoint_node_);
     header.set_max_m(maxM_);
@@ -828,7 +828,6 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     serialize_size_data_per_element_ =
         header->serialize_size_data_per_element();
     label_offset_ = header->label_offset();
-    offsetData_ = header->offset_data();
     maxlevel_ = header->max_level();
     enterpoint_node_ = header->enterpoint_node();
     maxM_ = header->max_m();
@@ -844,6 +843,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     max_elements_ = max_elements;
 
     size_links_level0_ = maxM0_ * sizeof(tableint) + sizeof(linklistsizeint);
+    offsetData_ =
+        (size_links_level0_ + alignof(char *) - 1) & ~(alignof(char *) - 1);
 
     vector_size_ = s->get_data_size();
     size_data_per_element_ =

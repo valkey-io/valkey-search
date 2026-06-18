@@ -25,7 +25,7 @@ class BaseMultiVectorSpace : public SpaceInterface<float> {
 
 template<typename DOCIDTYPE>
 class MultiVectorL2Space : public BaseMultiVectorSpace<DOCIDTYPE> {
-    DISTFUNC<float> fstdistfunc_;
+    DistFuncWrapper<float> fstdistfunc_;
     size_t data_size_;
     size_t vector_size_;
     size_t dim_;
@@ -66,10 +66,6 @@ class MultiVectorL2Space : public BaseMultiVectorSpace<DOCIDTYPE> {
         return data_size_;
     }
 
-    DISTFUNC<float> get_dist_func() override {
-        return fstdistfunc_;
-    }
-
     void *get_dist_func_param() override {
         return &dim_;
     }
@@ -83,12 +79,14 @@ class MultiVectorL2Space : public BaseMultiVectorSpace<DOCIDTYPE> {
     }
 
     ~MultiVectorL2Space() {}
+protected:
+    DistFuncWrapper<float> inner_get_dist_func() override { return fstdistfunc_; }
 };
 
 
 template<typename DOCIDTYPE>
 class MultiVectorInnerProductSpace : public BaseMultiVectorSpace<DOCIDTYPE> {
-    DISTFUNC<float> fstdistfunc_;
+    DistFuncWrapper<float> fstdistfunc_;
     size_t data_size_;
     size_t vector_size_;
     size_t dim_;
@@ -139,9 +137,6 @@ class MultiVectorInnerProductSpace : public BaseMultiVectorSpace<DOCIDTYPE> {
         return data_size_;
     }
 
-    DISTFUNC<float> get_dist_func() override {
-        return fstdistfunc_;
-    }
 
     void *get_dist_func_param() override {
         return &dim_;
@@ -154,8 +149,9 @@ class MultiVectorInnerProductSpace : public BaseMultiVectorSpace<DOCIDTYPE> {
     void set_doc_id(void *datapoint, DOCIDTYPE doc_id) override {
         *(DOCIDTYPE*)((char *)datapoint + vector_size_) = doc_id;
     }
-
     ~MultiVectorInnerProductSpace() {}
+protected:
+    DistFuncWrapper<float> inner_get_dist_func() override { return fstdistfunc_; }
 };
 
 

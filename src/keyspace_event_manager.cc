@@ -54,7 +54,6 @@ void KeyspaceEventManager::NotifySubscribers(ValkeyModuleCtx *ctx, int type,
   for (const auto &subscription : subscriptions_to_notify) {
     subscription->OnKeyspaceNotification(ctx, type, event, key);
   }
-  VectorExternalizer::Instance().ProcessEngineUpdateQueue();
 }
 
 absl::Status KeyspaceEventManager::RemoveSubscription(

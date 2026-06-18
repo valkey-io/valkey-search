@@ -14,7 +14,8 @@
         "--background-index",
         "--header-insertion=never",
         "--compile-commands-dir=${workspaceFolder}/",
-        "--query-driver=**"
+        "--query-driver=**",
+        "--enable-config"
     ],
     "clangd.inactiveRegions.useBackgroundHighlight": true,
     "clangd.enableCodeCompletion": true

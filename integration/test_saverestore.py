@@ -7,7 +7,7 @@ import subprocess
 import shutil
 import socket
 from valkey import ResponseError, Valkey
-from valkey_search_test_case import ValkeySearchTestCaseDebugMode, ValkeySearchTestCaseDebugMode
+from valkey_search_test_case import ValkeySearchTestCaseDebugMode 
 from valkeytestframework.conftest import resource_port_tracker
 from indexes import *
 import pytest

@@ -177,6 +177,7 @@ void SendReplyTest::DoSendReplyTest(
   EXPECT_CALL(*test_index_schema, GetIdentifier(input.attribute_alias))
       .WillRepeatedly(testing::Return(attribute_id));
   std::vector<indexes::Neighbor> neighbors;
+  neighbors.reserve(input.neighbors.size());
   for (const auto &neighbor : input.neighbors) {
     neighbors.push_back(ToIndexesNeighbor(neighbor));
   }

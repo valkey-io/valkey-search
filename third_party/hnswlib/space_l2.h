@@ -216,7 +216,7 @@ L2SqrSIMD4ExtResiduals(const void *pVect1v, const void *pVect2v, const void *qty
 #endif
 
 class L2Space : public SpaceInterface<float> {
-    DISTFUNC<float> fstdistfunc_;
+    DistFuncWrapper<float> fstdistfunc_;
     size_t data_size_;
     size_t dim_;
 
@@ -255,7 +255,7 @@ class L2Space : public SpaceInterface<float> {
         return data_size_;
     }
 
-    DISTFUNC<float> get_dist_func() {
+    DistFuncWrapper<float> get_dist_func() {
         return fstdistfunc_;
     }
 
@@ -264,76 +264,78 @@ class L2Space : public SpaceInterface<float> {
     }
 
     ~L2Space() {}
+protected:
+    DistFuncWrapper<float> inner_get_dist_func() override { return fstdistfunc_; }
 };
 
-static int
-L2SqrI4x(const void *__restrict pVect1, const void *__restrict pVect2, const void *__restrict qty_ptr) {
-    size_t qty = *((size_t *) qty_ptr);
-    int res = 0;
-    unsigned char *a = (unsigned char *) pVect1;
-    unsigned char *b = (unsigned char *) pVect2;
+static int L2SqrI4x(const void *__restrict pVect1,
+                    const void *__restrict pVect2,
+                    const void *__restrict qty_ptr) {
+  size_t qty = *((size_t *)qty_ptr);
+  int res = 0;
+  unsigned char *a = (unsigned char *)pVect1;
+  unsigned char *b = (unsigned char *)pVect2;
 
-    qty = qty >> 2;
-    for (size_t i = 0; i < qty; i++) {
-        res += ((*a) - (*b)) * ((*a) - (*b));
-        a++;
-        b++;
-        res += ((*a) - (*b)) * ((*a) - (*b));
-        a++;
-        b++;
-        res += ((*a) - (*b)) * ((*a) - (*b));
-        a++;
-        b++;
-        res += ((*a) - (*b)) * ((*a) - (*b));
-        a++;
-        b++;
-    }
-    return (res);
+  qty = qty >> 2;
+  for (size_t i = 0; i < qty; i++) {
+    res += ((*a) - (*b)) * ((*a) - (*b));
+    a++;
+    b++;
+    res += ((*a) - (*b)) * ((*a) - (*b));
+    a++;
+    b++;
+    res += ((*a) - (*b)) * ((*a) - (*b));
+    a++;
+    b++;
+    res += ((*a) - (*b)) * ((*a) - (*b));
+    a++;
+    b++;
+  }
+  return (res);
 }
 
-static int L2SqrI(const void* __restrict pVect1, const void* __restrict pVect2, const void* __restrict qty_ptr) {
-    size_t qty = *((size_t*)qty_ptr);
-    int res = 0;
-    unsigned char* a = (unsigned char*)pVect1;
-    unsigned char* b = (unsigned char*)pVect2;
+static int L2SqrI(const void *__restrict pVect1, const void *__restrict pVect2,
+                  const void *__restrict qty_ptr) {
+  size_t qty = *((size_t *)qty_ptr);
+  int res = 0;
+  unsigned char *a = (unsigned char *)pVect1;
+  unsigned char *b = (unsigned char *)pVect2;
 
-    for (size_t i = 0; i < qty; i++) {
-        res += ((*a) - (*b)) * ((*a) - (*b));
-        a++;
-        b++;
-    }
-    return (res);
+  for (size_t i = 0; i < qty; i++) {
+    res += ((*a) - (*b)) * ((*a) - (*b));
+    a++;
+    b++;
+  }
+  return (res);
 }
 
 class L2SpaceI : public SpaceInterface<int> {
-    DISTFUNC<int> fstdistfunc_;
-    size_t data_size_;
-    size_t dim_;
+  DistFuncWrapper<int> fstdistfunc_;
+  size_t data_size_;
+  size_t dim_;
 
  public:
-    L2SpaceI(size_t dim) {
-        if (dim % 4 == 0) {
-            fstdistfunc_ = L2SqrI4x;
-        } else {
-            fstdistfunc_ = L2SqrI;
-        }
-        dim_ = dim;
-        data_size_ = dim * sizeof(unsigned char);
+  L2SpaceI(size_t dim) {
+    if (dim % 4 == 0) {
+      fstdistfunc_ = L2SqrI4x;
+    } else {
+      fstdistfunc_ = L2SqrI;
     }
+    dim_ = dim;
+    data_size_ = dim * sizeof(unsigned char);
+  }
 
-    size_t get_data_size() {
-        return data_size_;
-    }
+  size_t get_data_size() { return data_size_; }
 
-    DISTFUNC<int> get_dist_func() {
-        return fstdistfunc_;
-    }
+  void *get_dist_func_param() { return &dim_; }
 
-    void *get_dist_func_param() {
-        return &dim_;
-    }
+  ~L2SpaceI() {}
 
-    ~L2SpaceI() {}
+ protected:
+  DistFuncWrapper<int> inner_get_dist_func() override {
+    return fstdistfunc_;
+  }
 };
+
 }  // namespace hnswlib
 #pragma GCC diagnostic pop

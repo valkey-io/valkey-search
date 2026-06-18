@@ -26,6 +26,7 @@
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "absl/strings/strip.h"
 #include "absl/types/optional.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -1241,16 +1242,17 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoadSingleSlotNumber) {
 TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   std::vector<absl::string_view> key_prefixes = {"prefix1", "prefix2"};
   std::string index_schema_name_str("index_schema_name");
-  int dimensions = 100;
+  const int dimensions = 100;
   auto distance_metric = data_model::DISTANCE_METRIC_COSINE;
   int initial_cap = 12;
   int m = 16;
   int ef_construction = 100;
   int ef_runtime = 5;
   int block_size = 250;
+  const int num_vectors = 10;
 
   FakeSafeRDB rdb_stream;
-
+  auto vectors = DeterministicallyGenerateVectors(num_vectors, dimensions, 2);
   // Construct and save index schema
   {
     auto index_schema = MockIndexSchema::Create(
@@ -1270,7 +1272,7 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
     auto itr = index_schema->attributes_.find("hnsw_attribute");
 
     EXPECT_FALSE(itr == index_schema->attributes_.end());
-    auto vectors = DeterministicallyGenerateVectors(10, dimensions, 2);
+
     for (size_t i = 0; i < vectors.size(); ++i) {
       vmsdk::UniqueValkeyString data =
           vmsdk::MakeUniqueValkeyString(absl::string_view(
@@ -1305,7 +1307,6 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
 
     VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream));
   }
-
   // Load the saved index schema and validate
   ValkeyModuleCtx parent_ctx;
   ValkeyModuleCtx scan_ctx;
@@ -1314,6 +1315,46 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   RDBSectionIter iter(&rdb_stream, 1);
   auto section = iter.Next();
   VMSDK_EXPECT_OK_STATUSOR(section);
+  EXPECT_CALL(*kMockValkeyModule,
+              OpenKey(testing::_, testing::_, VALKEYMODULE_WRITE))
+      .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
+  ValkeyModuleString *records[num_vectors];
+  for (size_t i = 0; i < vectors.size(); ++i) {
+    records[i] = new ValkeyModuleString{
+        std::string((char *)&vectors[i][0], dimensions * sizeof(float))};
+  }
+  std::vector<size_t> keys;
+  keys.reserve(num_vectors);
+  EXPECT_CALL(*kMockValkeyModule,
+              OpenKey(&parent_ctx, testing::_,
+                      VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ))
+      .WillRepeatedly(
+          [&keys](ValkeyModuleCtx *ctx, ValkeyModuleString *key, int flags) {
+            auto key_str = vmsdk::ToStringView(key);
+            CHECK(absl::ConsumePrefix(&key_str, "key"));
+            int index;
+            CHECK(absl::SimpleAtoi(key_str, &index));
+            keys.push_back(index);
+            return TestValkeyModule_OpenKeyDefaultImpl(ctx, key, flags);
+          });
+  EXPECT_CALL(*kMockValkeyModule,
+              HashGet(testing::_, VALKEYMODULE_HASH_CFIELDS, testing::_,
+                      testing::An<ValkeyModuleString **>(),
+                      testing::TypedEq<void *>(nullptr)))
+      .WillRepeatedly([&records, &keys](ValkeyModuleKey *, int, const char *,
+                                        ValkeyModuleString **value_out,
+                                        void *) {
+        static size_t key_i = 0;
+        CHECK(key_i < keys.size());
+        auto vector_i = keys[key_i];
+        *value_out = records[vector_i];
+        ++key_i;
+        return VALKEYMODULE_OK;
+      });
+  ON_CALL(*kMockValkeyModule,
+          HashSetStringRef(testing::_, testing::_, testing::_, testing::_))
+      .WillByDefault(TestValkeyModule_HashSetStringRefDefaultImpl);
+
   auto index_schema_or =
       IndexSchema::LoadFromRDB(&parent_ctx,
                                /*mutations_thread_pool=*/nullptr,
@@ -2142,7 +2183,9 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     RDBSectionIter iter(&rdb_stream_step1, 1);
     auto section = iter.Next();
     VMSDK_EXPECT_OK_STATUSOR(section);
-
+    ON_CALL(*kMockValkeyModule,
+            HashSetStringRef(testing::_, testing::_, testing::_, testing::_))
+        .WillByDefault(TestValkeyModule_HashSetStringRefDefaultImpl);
     auto schema_or =
         IndexSchema::LoadFromRDB(&parent_ctx, nullptr,
                                  std::make_unique<data_model::IndexSchema>(
@@ -2205,7 +2248,9 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     RDBSectionIter iter(&rdb_stream_step1, 1);
     auto section = iter.Next();
     VMSDK_EXPECT_OK_STATUSOR(section);
-
+    ON_CALL(*kMockValkeyModule,
+            HashSetStringRef(testing::_, testing::_, testing::_, testing::_))
+        .WillByDefault(TestValkeyModule_HashSetStringRefDefaultImpl);
     auto schema_or =
         IndexSchema::LoadFromRDB(&parent_ctx, nullptr,
                                  std::make_unique<data_model::IndexSchema>(
@@ -2341,7 +2386,9 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     RDBSectionIter iter(&rdb_stream_step4, 1);
     auto section = iter.Next();
     VMSDK_EXPECT_OK_STATUSOR(section);
-
+    ON_CALL(*kMockValkeyModule,
+            HashSetStringRef(testing::_, testing::_, testing::_, testing::_))
+        .WillByDefault(TestValkeyModule_HashSetStringRefDefaultImpl);
     auto schema_or =
         IndexSchema::LoadFromRDB(&parent_ctx, nullptr,
                                  std::make_unique<data_model::IndexSchema>(
@@ -2412,7 +2459,9 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     RDBSectionIter iter(&rdb_stream_step4, 1);
     auto section = iter.Next();
     VMSDK_EXPECT_OK_STATUSOR(section);
-
+    ON_CALL(*kMockValkeyModule,
+            HashSetStringRef(testing::_, testing::_, testing::_, testing::_))
+        .WillByDefault(TestValkeyModule_HashSetStringRefDefaultImpl);
     auto schema_or =
         IndexSchema::LoadFromRDB(&parent_ctx, nullptr,
                                  std::make_unique<data_model::IndexSchema>(

@@ -138,14 +138,27 @@ absl::Status NormalizeJsonRecord(absl::string_view record,
   if (!record.empty() && record[0] != '[') {
     return absl::NotFoundError("Invalid record");
   }
+  bool was_string = false;
   if (absl::ConsumePrefix(&record, "[")) {
     absl::ConsumeSuffix(&record, "]");
     if (absl::ConsumePrefix(&record, "\"")) {
       absl::ConsumeSuffix(&record, "\"");
+      was_string = true;
     }
   }
   if (record.empty()) {
     return absl::NotFoundError("Empty record");
+  }
+  // The JSON module returns string values still JSON-escaped; decode them so
+  // the indexed value matches the (already unescaped) query side.
+  if (was_string) {
+    auto decoded = vmsdk::JsonUnquote(record);
+    if (!decoded.has_value()) {
+      return absl::InvalidArgumentError("Invalid JSON string value");
+    }
+    auto record_ptr = vmsdk::MakeUniqueValkeyString(*decoded);
+    out_record.swap(record_ptr);
+    return absl::OkStatus();
   }
   auto record_ptr = vmsdk::MakeUniqueValkeyString(record);
   out_record.swap(record_ptr);

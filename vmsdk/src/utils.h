@@ -173,6 +173,34 @@ struct SocketAddress {
   auto operator<=>(const SocketAddress &) const = default;
 };
 
+// ValkeySelectDbGuard allows for selecting into the specified DB number while
+// ensuring the DB is selected back to the previous DB afterwards.
+class ValkeySelectDbGuard {
+ public:
+  ValkeySelectDbGuard(ValkeyModuleCtx *ctx, int db_index) : ctx_(ctx) {
+    old_db_ = ValkeyModule_GetSelectedDb(ctx_);
+    if (old_db_ != db_index) {
+      if (ValkeyModule_SelectDb(ctx_, db_index) == VALKEYMODULE_OK) {
+        switched_ = true;
+      }
+    }
+  }
+
+  ~ValkeySelectDbGuard() {
+    if (switched_) {
+      ValkeyModule_SelectDb(ctx_, old_db_);
+    }
+  }
+
+  ValkeySelectDbGuard(const ValkeySelectDbGuard &) = delete;
+  ValkeySelectDbGuard &operator=(const ValkeySelectDbGuard &) = delete;
+
+ private:
+  ValkeyModuleCtx *ctx_;
+  int old_db_;
+  bool switched_ = false;
+};
+
 }  // namespace vmsdk
 
 // Hash specialization for SocketAddress

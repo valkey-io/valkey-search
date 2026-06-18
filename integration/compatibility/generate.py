@@ -474,3 +474,25 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                     for wsk in ["", "WITHSORTKEYS"]:
                         for limit in ["LIMIT 0 5", "LIMIT 2 3", ""]:
                             self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY {sort_key} {direction} {return_keys} {limit} {wsk}")
+
+    def test_tag_escaped_special_chars(self, key_type, dialect):
+        """Escaped special characters in tag queries. Ref: #454."""
+        self.setup_data("tag special chars", key_type)
+        self.check(dialect, "ft.search", f"{key_type}_idx1", r"@tags:{ a\}b }")
+        self.check(dialect, "ft.search", f"{key_type}_idx1", r"@tags:{ a\|b }")
+        self.check(dialect, "ft.search", f"{key_type}_idx1", r"@tags:{ x\}y\}z }")
+        self.check(dialect, "ft.search", f"{key_type}_idx1", r"@tags:{ normal }")
+        # Multi-byte / non-ASCII values.
+        self.check(dialect, "ft.search", f"{key_type}_idx1", "@tags:{ café }")
+        self.check(dialect, "ft.search", f"{key_type}_idx1", "@tags:{ 中文 }")
+        self.check(dialect, "ft.search", f"{key_type}_idx1", "@tags:{ 😀 }")
+        # LIMIT 0 20: these match >10 docs; bound the set so it isn't truncated.
+        self.check(dialect, "ft.search", f"{key_type}_idx1",
+                   r"@tags:{ a\}b | normal }", "LIMIT", "0", "20")
+        self.check(dialect, "ft.search", f"{key_type}_idx1",
+                   r"@tags:{ a\|b | a\}b }", "LIMIT", "0", "20")
+        self.check(dialect, "ft.search", f"{key_type}_idx1",
+                   r"@tags:{ a\|b | x\}y\}z }", "LIMIT", "0", "20")
+        self.check(dialect, "ft.search", f"{key_type}_idx1",
+                   r"@tags:{ a\}b | a\|b | x\}y\}z | normal }",
+                   "LIMIT", "0", "40")

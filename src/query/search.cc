@@ -692,7 +692,6 @@ std::optional<float> ScoreNode(const Predicate *predicate,
                                const InternedStringPtr &key,
                                const IndexSchema &index_schema,
                                const indexes::scoring::Scorer *scorer,
-                               uint32_t total_docs, uint64_t total_doc_len,
                                const ResolvedLeaves &resolved) {
   CHECK(predicate != nullptr);
 
@@ -701,8 +700,8 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       auto composed = dynamic_cast<const ComposedPredicate *>(predicate);
       float sum = 0.0f;
       for (const auto &child : composed->GetChildren()) {
-        auto child_score = ScoreNode(child.get(), key, index_schema, scorer,
-                                     total_docs, total_doc_len, resolved);
+        auto child_score =
+            ScoreNode(child.get(), key, index_schema, scorer, resolved);
         // AND: every child must match, otherwise the document does not match
         // this group and contributes nothing from it.
         if (!child_score) return std::nullopt;
@@ -715,8 +714,8 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       float sum = 0.0f;
       bool matched = false;
       for (const auto &child : composed->GetChildren()) {
-        auto child_score = ScoreNode(child.get(), key, index_schema, scorer,
-                                     total_docs, total_doc_len, resolved);
+        auto child_score =
+            ScoreNode(child.get(), key, index_schema, scorer, resolved);
         // OR: any matching child contributes; non-matching children are
         // skipped.
         if (child_score) {
@@ -748,12 +747,13 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       if (tf == 0) return std::nullopt;
 
       indexes::scoring::LeafInput input;
-      input.total_docs = total_docs;
-      input.total_doc_len = total_doc_len;
+      input.total_docs = index_schema.GetIndexKeyInfoSize();
       input.num_doc_contain_term = leaf.num_doc_contain_term;
       input.term_frequency = tf;
-      input.doc_len = index_schema.GetDocumentLength(key);
-
+      if (scorer->Type() == indexes::scoring::ScorerType::kBm25Std) {
+        input.total_doc_len = index_schema.GetTotalDocumentLength();
+        input.doc_len = index_schema.GetDocumentLength(key);
+      }
       return scorer->ScoreLeaf(input, predicate->GetWeight());
     }
     // TODO: scoring for tag/numeric.
@@ -774,10 +774,7 @@ void ScoreTextQuery(const IndexSchema &index_schema,
   CHECK(scorer != nullptr);
   if (candidates.empty()) return;
 
-  const uint32_t total_docs = index_schema.GetIndexKeyInfoSize();
-  CHECK(total_docs > 0);
-
-  const uint64_t total_doc_len = index_schema.GetTotalDocumentLength();
+  CHECK(index_schema.GetIndexKeyInfoSize() > 0);
 
   // Resolve each term leaf's posting list once; the per-document walk below
   // then only does the cheap per-key lookup.
@@ -788,8 +785,7 @@ void ScoreTextQuery(const IndexSchema &index_schema,
   scored.reserve(candidates.size());
   for (const auto &c : candidates) {
     auto key = c.key.Materialize();
-    auto score = ScoreNode(root_predicate, key, index_schema, scorer,
-                           total_docs, total_doc_len, resolved);
+    auto score = ScoreNode(root_predicate, key, index_schema, scorer, resolved);
     if (!score) continue;
     const float final_score = scorer->ComposeDocumentScore(
         *score, index_schema.GetDocumentScore(key));
@@ -902,10 +898,7 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
   if (!borrowed.empty() && !parameters.filter_parse_results.is_match_all &&
       parameters.filter_parse_results.query_operations &
           QueryOperations::kContainsText) {
-    auto scorer_type = parameters.scorer == Scorer::kBM25STD
-                           ? indexes::scoring::ScorerType::kBm25Std
-                           : indexes::scoring::ScorerType::kTfidf;
-    const auto *scorer = indexes::scoring::GetScorer(scorer_type);
+    const auto *scorer = indexes::scoring::GetScorer(parameters.scorer);
     ScoreTextQuery(*parameters.index_schema,
                    parameters.filter_parse_results.root_predicate.get(), scorer,
                    borrowed);

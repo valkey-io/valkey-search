@@ -11,6 +11,10 @@
 #include <cstdint>
 #include <string_view>
 
+#include "absl/base/no_destructor.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/strings/string_view.h"
+
 namespace valkey_search::indexes::scoring {
 
 // std::isinf is unreliable under -ffast-math (which this code is built with);
@@ -21,6 +25,22 @@ enum class ScorerType {
   kBm25Std,
   kTfidf,
 };
+
+inline absl::string_view ScorerToString(ScorerType scorer) {
+  switch (scorer) {
+    case ScorerType::kBm25Std:
+      return "BM25STD";
+    case ScorerType::kTfidf:
+      return "TFIDF";
+  }
+  return "BM25STD";
+}
+
+const absl::NoDestructor<absl::flat_hash_map<absl::string_view, ScorerType>>
+    kScorerByStr({
+        {"BM25STD", ScorerType::kBm25Std},
+        {"TFIDF", ScorerType::kTfidf},
+    });
 
 // Additional inputs needed by future scorers (e.g. TFIDF's per-document norm)
 // are added here when that scorer is implemented.

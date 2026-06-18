@@ -237,9 +237,9 @@ vmsdk::KeyValueParser<SearchCommand> CreateSearchParser() {
                         GENERATE_FLAG_PARSER(SearchCommand, verbatim));
   parser.AddParamParser(query::kSlop,
                         GENERATE_VALUE_PARSER(SearchCommand, slop));
-  parser.AddParamParser(
-      query::kScorer,
-      GENERATE_ENUM_PARSER(SearchCommand, scorer, *query::kScorerByStr));
+  parser.AddParamParser(query::kScorer,
+                        GENERATE_ENUM_PARSER(SearchCommand, scorer,
+                                             *indexes::scoring::kScorerByStr));
 
   return parser;
 }

@@ -2,7 +2,7 @@
 
 The current list of maintainers is:
 
-| Maintainer       | Company | GitHub ID       |
+| Maintainer       | Company | Github ID       |
 | ---------------- | ------- | --------------- |
 | Yair Gottdenker  | GCP     | yairgott        |
 | Jacob Murphy     | GCP     | murphyjacob4    |

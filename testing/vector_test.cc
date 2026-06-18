@@ -655,11 +655,8 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   EXPECT_EQ(Metrics::GetStats().reclaimable_memory, baseline);
 }
 
-// The vector pointer slot at offsetData_ must be 8-byte aligned so its
-// read/write is atomic on weak memory models (ARM64); otherwise a concurrent
-// reader can observe a torn pointer and crash. maxM0_ = 2*M = 32 gives
-// size_links_level0_ = 32*4 + 4 = 132, which is not 8-aligned, so offsetData_
-// must be padded up to 136.
+// offsetData_ and the element stride must be 8-byte aligned so the vector
+// pointer read/write is atomic on ARM64 and avoids a torn-pointer crash.
 TEST_F(VectorIndexTest, OffsetDataIsPointerAlignedOnCreate) {
   hnswlib::L2Space l2_space{kDimensions};
   hnswlib::HierarchicalNSW<float> algo(&l2_space, /*max_elements=*/16, kM,
@@ -685,11 +682,9 @@ class SingleChunkInputStream : public hnswlib::InputStream {
 };
 }  // namespace
 
-// An index restored from an old snapshot stored the unpadded offset_data (132).
-// LoadIndex must recompute the aligned offset rather than trust the header,
-// otherwise the restored index keeps the misaligned layout and stays exposed to
-// the torn-pointer race. Builds an empty (curr_element_count=0) header with the
-// old offset_data and asserts the loaded index is aligned.
+// An old snapshot stores the unpadded offset_data (132). LoadIndex must
+// recompute the aligned offset rather than trust the header, else the restored
+// index stays misaligned and exposed to the torn-pointer race.
 TEST_F(VectorIndexTest, LoadRecomputesAlignedOffsetForOldSnapshot) {
   hnswlib::L2Space l2_space{kDimensions};
   const size_t unpadded_offset =

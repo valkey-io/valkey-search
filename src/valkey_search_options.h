@@ -56,12 +56,6 @@ const config::Boolean& GetSkipCorruptedInternalUpdateEntries();
 /// Return the log level
 config::Enum& GetLogLevel();
 
-/// Return the configuration entry for HNSW allow_replace_deleted flag
-const config::Boolean& GetHNSWAllowReplaceDeleted();
-
-/// Return a mutable reference for testing
-config::Boolean& GetHNSWAllowReplaceDeletedMutable();
-
 /// Reset the state of the options (mainly needed for testing)
 absl::Status Reset();
 
@@ -133,18 +127,6 @@ config::Number& GetMaxNonVectorSearchResultsFetched();
 /// Return the recursion depth of the query string from FT.SEARCH and
 /// FT.AGGREGATE commands
 config::Number& GetQueryStringDepth();
-
-/// Return the mutation weight for vector index types
-config::Number& GetMutationWeightVector();
-
-/// Return the mutation weight for text index types
-config::Number& GetMutationWeightText();
-
-/// Return the mutation weight for numeric index types
-config::Number& GetMutationWeightNumeric();
-
-/// Return the mutation weight for tag index types
-config::Number& GetMutationWeightTag();
 
 }  // namespace options
 }  // namespace valkey_search

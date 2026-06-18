@@ -122,6 +122,7 @@ struct FlatParameters : public FTCreateVectorParameters {
   // Block size holds the amount of vectors in a contiguous array. This is
   // useful when the index is dynamic with respect to addition and deletion.
   uint32_t block_size{kDefaultBlockSize};
+  absl::Status Verify() const;
   std::unique_ptr<data_model::VectorIndex> ToProto() const;
 };
 

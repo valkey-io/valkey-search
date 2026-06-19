@@ -678,7 +678,7 @@ TEST_P(MetadataManagerReconciliationTest, TestReconciliation) {
 
   if (expect_failure) {
     // Expect the process to crash when callback fails
-    ASSERT_DEATH(
+    VMSDK_ASSERT_DEATH(
         {
           test_metadata_manager_->HandleClusterMessage(
               &fake_ctx_, sender_id.c_str(),

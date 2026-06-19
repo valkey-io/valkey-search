@@ -5,6 +5,11 @@ set(SRCS_COMMANDS
     ${CMAKE_CURRENT_LIST_DIR}/ft_aggregate_parser.h
     ${CMAKE_CURRENT_LIST_DIR}/ft_aggregate_exec.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_aggregate_exec.h
+    ${CMAKE_CURRENT_LIST_DIR}/ft_alias_add.cc
+    ${CMAKE_CURRENT_LIST_DIR}/ft_alias_consistency.h
+    ${CMAKE_CURRENT_LIST_DIR}/ft_alias_del.cc
+    ${CMAKE_CURRENT_LIST_DIR}/ft_alias_list.cc
+    ${CMAKE_CURRENT_LIST_DIR}/ft_alias_update.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_create.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_debug.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_dropindex.cc

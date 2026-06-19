@@ -16,7 +16,17 @@ target_link_libraries(hnswlib_vmsdk INTERFACE iostream)
 target_link_libraries(hnswlib_vmsdk INTERFACE simsimd)
 target_link_libraries(hnswlib_vmsdk INTERFACE vmsdklib)
 target_compile_definitions(hnswlib_vmsdk
-                           INTERFACE VMSDK_ENABLE_MEMORY_ALLOCATION_OVERRIDES)
+                           INTERFACE VMSDK_ENABLE_MEMORY_ALLOCATION_OVERRIDES
+                           INTERFACE USE_SIMSIMD)
+
+# Enable SIMD codegen for SimSIMD runtime dispatch. SimSIMD detects CPU
+# capabilities at runtime and selects the best available kernel. We compile
+# all variants so the binary is portable across CPUs of the same architecture.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+  target_compile_options(hnswlib_vmsdk INTERFACE -march=armv8.2-a+sve)
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+  target_compile_options(hnswlib_vmsdk INTERFACE -mavx2 -mfma)
+endif()
 target_link_libraries(hnswlib_vmsdk INTERFACE index_cc_proto)
 
 set(SRCS_SIMSIMD ${CMAKE_CURRENT_LIST_DIR}/simsimd.h)

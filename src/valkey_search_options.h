@@ -24,6 +24,9 @@ uint32_t GetQueryStringBytes();
 /// Return a mutable reference to the HNSW resize configuration parameter
 config::Number& GetHNSWBlockSize();
 
+/// Return the current prefetch lookahead depth (0 = off, default 4)
+int GetPrefetchLookahead();
+
 /// Return the configuration entry that allows the caller to control the
 /// number of reader threads
 config::Number& GetReaderThreadCount();

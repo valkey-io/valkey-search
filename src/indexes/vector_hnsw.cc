@@ -332,6 +332,8 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
                             ABSL_NO_THREAD_SAFETY_ANALYSIS
       -> absl::StatusOr<std::priority_queue<std::pair<T, hnswlib::labeltype>>> {
     try {
+      // Update prefetch lookahead from runtime config
+      algo_->setPrefetchLookahead(options::GetPrefetchLookahead());
       CancelCondition cancel_condition(cancellation_token);
       auto res = algo_->searchKnn((T *)query.data(), count, ef_runtime,
                                   filter.get(), &cancel_condition);

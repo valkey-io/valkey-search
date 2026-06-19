@@ -102,6 +102,12 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
   std::unordered_set<tableint>
       deleted_elements;  // contains internal ids of deleted elements
 
+  // Configurable prefetch lookahead (0 = off, default 4)
+  std::atomic<int> prefetch_lookahead_{4};
+  void setPrefetchLookahead(int la) {
+    prefetch_lookahead_.store(la, std::memory_order_relaxed);
+  }
+
   HierarchicalNSW(SpaceInterface<dist_t> *s) {}
 
   HierarchicalNSW(SpaceInterface<dist_t> *s, const std::string &location,
@@ -390,16 +396,16 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       if (bare_bone_search) {
         flag_stop_search = candidate_dist > lowerBound;
       } else {
-        if (isCancelled && isCancelled->isCancelled()) { // VALKEYSEARCH
-          flag_stop_search = true; // VALKEYSEARCH
-        } else // VALKEYSEARCH
-        if (stop_condition) {
-          flag_stop_search =
-              stop_condition->should_stop_search(candidate_dist, lowerBound);
-        } else {
-          flag_stop_search =
-              candidate_dist > lowerBound && top_candidates.size() == ef;
-        }
+        if (isCancelled && isCancelled->isCancelled()) {  // VALKEYSEARCH
+          flag_stop_search = true;                        // VALKEYSEARCH
+        } else                                            // VALKEYSEARCH
+          if (stop_condition) {
+            flag_stop_search =
+                stop_condition->should_stop_search(candidate_dist, lowerBound);
+          } else {
+            flag_stop_search =
+                candidate_dist > lowerBound && top_candidates.size() == ef;
+          }
       }
       if (flag_stop_search) {
         break;
@@ -417,21 +423,34 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       }
 
 #ifdef USE_PREFETCH
-      __builtin_prefetch((char *)(visited_array + *(data + 1)), 0, 3);
-      __builtin_prefetch((char *)(visited_array + *(data + 1) + 64), 0, 3);
-      __builtin_prefetch((*data_level0_memory_)[(*(data + 1))] + offsetData_, 0,
-                         3);
-      __builtin_prefetch((char *)(data + 2), 0, 3);
+      // Prefetch ahead: issue prefetches for up to prefetch_lookahead_
+      // candidates so DRAM has time to deliver vector data before we need it.
+      const int LA = prefetch_lookahead_.load(std::memory_order_relaxed);
+      if (LA > 0) {
+        for (int la = 1; la <= std::min((int)size, LA); la++) {
+          int la_id = *(data + la);
+          __builtin_prefetch((char *)(visited_array + la_id), 0, 3);
+          char *node = (*data_level0_memory_)[la_id] + offsetData_;
+          __builtin_prefetch(node, 0, 3);
+          char *vec = *(char **)node;
+          __builtin_prefetch(vec, 0, 0);
+          __builtin_prefetch(vec + 64, 0, 0);
+        }
+      }
 #endif
 
       for (size_t j = 1; j <= size; j++) {
         int candidate_id = *(data + j);
-//                    if (candidate_id == 0) continue;
 #ifdef USE_PREFETCH
-        if (j + 1 < size) {
-          __builtin_prefetch((char *)(visited_array + *(data + j + 1)), 0, 3);
-          __builtin_prefetch(
-              (*data_level0_memory_)[(*(data + j + 1))] + offsetData_, 0, 3);
+        // Prefetch LA positions ahead
+        if (LA > 0 && j + LA <= size) {
+          int la_id = *(data + j + LA);
+          __builtin_prefetch((char *)(visited_array + la_id), 0, 3);
+          char *node = (*data_level0_memory_)[la_id] + offsetData_;
+          __builtin_prefetch(node, 0, 3);
+          char *vec = *(char **)node;
+          __builtin_prefetch(vec, 0, 0);
+          __builtin_prefetch(vec + 64, 0, 0);
         }
 #endif
         if (!(visited_array[candidate_id] == visited_array_tag)) {
@@ -1403,16 +1422,16 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
   std::priority_queue<std::pair<dist_t, labeltype>> searchKnn(
       const void *query_data, size_t k,
       BaseFilterFunctor *isIdAllowed = nullptr,
-      BaseCancellationFunctor *isCancelled = nullptr // VALKEYSEARCH
-    ) const {
+      BaseCancellationFunctor *isCancelled = nullptr  // VALKEYSEARCH
+  ) const {
     return searchKnn(query_data, k, std::nullopt, isIdAllowed, isCancelled);
   }
 
   std::priority_queue<std::pair<dist_t, labeltype>> searchKnn(
       const void *query_data, size_t k, std::optional<size_t> ef_runtime,
       BaseFilterFunctor *isIdAllowed = nullptr,
-      BaseCancellationFunctor *isCancelled = nullptr // VALKEYSEARCH
-    ) const {
+      BaseCancellationFunctor *isCancelled = nullptr  // VALKEYSEARCH
+  ) const {
     std::priority_queue<std::pair<dist_t, labeltype>> result;
     if (cur_element_count_ == 0) return result;
 
@@ -1452,7 +1471,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                         std::vector<std::pair<dist_t, tableint>>,
                         CompareByFirst>
         top_candidates;
-    bool bare_bone_search = !num_deleted_ && !isIdAllowed && !isCancelled; // VALKEYSEARCH
+    bool bare_bone_search =
+        !num_deleted_ && !isIdAllowed && !isCancelled;  // VALKEYSEARCH
     if (bare_bone_search) {
       top_candidates = searchBaseLayerST<true>(
           currObj, query_data, std::max(ef_runtime.value_or(ef_), k),
@@ -1517,8 +1537,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                         std::vector<std::pair<dist_t, tableint>>,
                         CompareByFirst>
         top_candidates;
-    top_candidates = searchBaseLayerST<false>(currObj, query_data, 0,
-                                              isIdAllowed, nullptr, &stop_condition);
+    top_candidates = searchBaseLayerST<false>(
+        currObj, query_data, 0, isIdAllowed, nullptr, &stop_condition);
 
     size_t sz = top_candidates.size();
     result.resize(sz);

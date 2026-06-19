@@ -111,6 +111,20 @@ static auto writer_threads_count =
             })
         .Build();
 
+/// Register the "--prefetch-lookahead" flag. Controls HNSW search prefetch
+/// depth
+constexpr absl::string_view kPrefetchLookaheadConfig{"prefetch-lookahead"};
+static std::atomic<int> g_prefetch_lookahead{4};
+static auto prefetch_lookahead =
+    config::NumberBuilder(kPrefetchLookaheadConfig,  // name
+                          4,                         // default (LA=4)
+                          0,                         // min (0 = off)
+                          64)                        // max
+        .WithModifyCallback([](auto new_value) {
+          g_prefetch_lookahead.store(new_value, std::memory_order_relaxed);
+        })
+        .Build();
+
 /// Register the "--utility-threads" flag. Controls the utility thread pool
 constexpr absl::string_view kUtilityThreadsConfig{"utility-threads"};
 static auto utility_threads_count =
@@ -509,6 +523,10 @@ uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 
 vmsdk::config::Number& GetHNSWBlockSize() {
   return dynamic_cast<vmsdk::config::Number&>(*hnsw_block_size);
+}
+
+int GetPrefetchLookahead() {
+  return g_prefetch_lookahead.load(std::memory_order_relaxed);
 }
 
 vmsdk::config::Number& GetReaderThreadCount() {

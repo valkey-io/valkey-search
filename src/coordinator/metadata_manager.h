@@ -98,7 +98,8 @@ class MetadataManager {
 
   absl::Status CallFTInternalUpdateForReconciliation(
       const std::string &id,
-      const coordinator::GlobalMetadataEntry &proposed_entry);
+      const coordinator::GlobalMetadataEntry &proposed_entry,
+      absl::string_view type_name);
 
   std::unique_ptr<GlobalMetadata> GetGlobalMetadata();
 
@@ -181,7 +182,7 @@ class MetadataManager {
   void ReplicateFTInternalUpdate(
       const coordinator::GlobalMetadataEntry &entry,
       const coordinator::GlobalMetadataVersionHeader &header,
-      absl::string_view id);
+      absl::string_view id, absl::string_view type_name);
   vmsdk::MainThreadAccessGuard<GlobalMetadata> metadata_;
   vmsdk::MainThreadAccessGuard<GlobalMetadata> staged_metadata_;
   vmsdk::MainThreadAccessGuard<bool> staging_metadata_due_to_repl_load_ = false;

@@ -381,7 +381,7 @@ absl::Status GenerateResponse(ValkeyModuleCtx *ctx,
     for (size_t i = 0; i < rec->fields_.size(); ++i) {
       if (ReplyWithValue(
               ctx, parameters.index_schema->GetAttributeDataType().ToProto(),
-              parameters.record_info_by_index_[i].identifier_,
+              parameters.record_info_by_index_[i].alias_,
               parameters.record_info_by_index_[i].data_type_, rec->fields_[i],
               parameters.dialect)) {
         array_count += 2;

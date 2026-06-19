@@ -5,6 +5,7 @@
  *
  */
 
+#include "absl/strings/numbers.h"
 #include "src/commands/commands.h"
 #include "src/coordinator/metadata_manager.h"
 #include "src/index_schema.pb.h"
@@ -14,7 +15,7 @@
 
 namespace valkey_search {
 
-constexpr int kFTInternalUpdateArgCount = 4;
+constexpr int kFTInternalUpdateMinArgCount = 4;
 
 // Handles an FT.INTERNAL_UPDATE failure. The caller must return its result
 // immediately (never fall through to applying a half-parsed entry). During
@@ -53,11 +54,54 @@ absl::Status HandleInternalUpdateFailure(ValkeyModuleCtx *ctx,
 
 absl::Status FTInternalUpdateCmd(ValkeyModuleCtx *ctx,
                                  ValkeyModuleString **argv, int argc) {
-  CHECK_EQ(argc, kFTInternalUpdateArgCount)
-      << "FT.INTERNAL_UPDATE called with wrong argument count: " << argc;
+  if (argc < kFTInternalUpdateMinArgCount) {
+    return absl::InvalidArgumentError(
+        "FT.INTERNAL_UPDATE called with wrong argument count");
+  }
 
   auto id_view = vmsdk::ToStringView(argv[1]);
   std::string id(id_view);
+
+  // Parse optional arguments (argv[4..argc-1]) using keyword/count/args
+  // format: KEYWORD <arg_count> <arg1> ... <argN>.
+  // Unrecognized keywords are silently skipped (using their declared count)
+  // for forward compatibility.
+  absl::string_view type_name = kSchemaManagerMetadataTypeName;
+  for (int i = kFTInternalUpdateMinArgCount; i < argc;) {
+    auto key = vmsdk::ToStringView(argv[i]);
+    i++;
+    if (i >= argc) {
+      VMSDK_RETURN_IF_ERROR(HandleInternalUpdateFailure(
+          ctx, "optional arguments parse", id,
+          absl::InvalidArgumentError("FT.INTERNAL_UPDATE: keyword '" +
+                                     std::string(key) +
+                                     "' missing arg count")));
+      break;
+    }
+    auto count_str = vmsdk::ToStringView(argv[i]);
+    int arg_count = 0;
+    if (!absl::SimpleAtoi(count_str, &arg_count) || arg_count < 0) {
+      VMSDK_RETURN_IF_ERROR(HandleInternalUpdateFailure(
+          ctx, "optional arguments parse", id,
+          absl::InvalidArgumentError(
+              "FT.INTERNAL_UPDATE: invalid arg count for keyword '" +
+              std::string(key) + "'")));
+      break;
+    }
+    i++;
+    if (i + arg_count > argc) {
+      VMSDK_RETURN_IF_ERROR(HandleInternalUpdateFailure(
+          ctx, "optional arguments parse", id,
+          absl::InvalidArgumentError(
+              "FT.INTERNAL_UPDATE: not enough args for keyword '" +
+              std::string(key) + "'")));
+      break;
+    }
+    if (key == "TYPE" && arg_count >= 1) {
+      type_name = vmsdk::ToStringView(argv[i]);
+    }
+    i += arg_count;
+  }
 
   auto metadata_view = vmsdk::ToStringView(argv[2]);
   coordinator::GlobalMetadataEntry metadata_entry;
@@ -94,12 +138,9 @@ absl::Status FTInternalUpdateCmd(ValkeyModuleCtx *ctx,
   if ((flags & VALKEYMODULE_CTX_FLAGS_SLAVE) ||
       (flags & VALKEYMODULE_CTX_FLAGS_LOADING)) {
     auto status = coordinator::MetadataManager::Instance().CreateEntryOnReplica(
-        ctx, kSchemaManagerMetadataTypeName, id, &metadata_entry,
-        &version_header);
-    if (!status.ok()) {
-      return HandleInternalUpdateFailure(ctx, "CreateEntryOnReplica", id,
-                                         status);
-    }
+        ctx, type_name, id, &metadata_entry, &version_header);
+    VMSDK_RETURN_IF_ERROR(
+        HandleInternalUpdateFailure(ctx, "CreateEntryOnReplica", id, status));
   }
 
   ValkeyModule_ReplicateVerbatim(ctx);

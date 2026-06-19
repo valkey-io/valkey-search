@@ -503,12 +503,7 @@ absl::Status IndexSchema::AddIndex(absl::string_view attribute_alias,
 }
 
 // INFO counter for the invalid-data compatibility defect (see COMPATIBILITY.md
-// and the "Compatibility Defects" section). Counts how many times the legacy
-// (incompatible) behavior was used because search.emulate-release is below the
-// fix version. Declared at namespace scope so it is constructed during static
-// initialization on the main thread: info fields must not be constructed from a
-// worker thread (info.cc CHECKs doing_startup || IsMainThread()), and the drop
-// decision below runs on the mutation worker threads.
+// and the "Compatibility Defects" section).
 static vmsdk::info_field::Integer invalid_data_drops_key_compat_counter(
     "compatibility", "compatibility-invalid_data_drops_key",
     vmsdk::info_field::IntegerBuilder().App());
@@ -555,12 +550,7 @@ void TrackResults(
   } else {
     ++counter.skipped_cnt;
   }
-  // Separate errors and successes so that they log on different timers.
-  if (ABSL_PREDICT_TRUE(status.ok())) {
-    VMSDK_LOG_EVERY_N_SEC(GetLogSeverity(status.ok()), ctx, 5)
-        << operation_str
-        << " succeeded with result: " << status.status().ToString();
-  } else {
+  if (ABSL_PREDICT_FALSE(!status.ok())) {
     VMSDK_LOG_EVERY_N_SEC(GetLogSeverity(status.ok()), ctx, 1)
         << operation_str
         << " failed with result: " << status.status().ToString();

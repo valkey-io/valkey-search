@@ -159,6 +159,14 @@ class FilterParser {
   // Advance past the peeked code point without copying it.
   void SkipPeeked(const Peeked& p) { pos_ += p.byte_len; }
 
+  // Replace a malformed code point with U+FFFD and skip it. Legacy (< 1.4.0)
+  // text-token path only; >= 1.4.0 rejects upfront in Parse(). Mirrors
+  // Scanner::ReplaceInvalidUtf8, applied per token here.
+  void ReplaceInvalidUtf8(const Peeked& p, std::string& dest) {
+    utils::Scanner::PushBackUtf8(dest, 0xFFFD);
+    SkipPeeked(p);
+  }
+
   bool IsEnd() const { return pos_ >= expression_.length(); }
   bool Match(char expected, bool skip_whitespace = true);
   bool MatchInsensitive(const std::string& expected);

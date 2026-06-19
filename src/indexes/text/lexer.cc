@@ -95,7 +95,7 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
   if (stemming_enabled) {
     CHECK(stem_mappings) << "stem_mappings must not be null";
   }
-  if (!IsValidUtf8(text)) {
+  if (!utils::Scanner::IsValidUtf8(text)) {
     return absl::InvalidArgumentError("Invalid UTF-8");
   }
 
@@ -184,25 +184,25 @@ sb_stemmer* Lexer::GetStemmer() const {
   return it->second.get();
 }
 
-// Strict UTF-8 validation. Gatekeeper for the tokenization pipeline: passing
-// input decodes without kInvalidCp, which is why the tokenization loop guards
-// decodes with CHECK. Rejecting overlong encodings (e.g. U+0000 as 0xC0 0x80)
-// is a security requirement — accepting them would let an attacker bypass
-// byte-level content filters looking for raw NUL.
-bool Lexer::IsValidUtf8(absl::string_view text) const {
-  utils::Scanner scanner(text);
-  while (scanner.GetPosition() < text.size()) {
-    utils::Scanner::Char ch = scanner.NextUtf8();
-    if (ch == utils::Scanner::kEOF) break;
-    if (ch == utils::Scanner::kInvalidCp) return false;
-  }
-  return scanner.GetPosition() == text.size();
-}
-
 void Lexer::NormalizeLowerCaseInPlace(std::string& str) const {
   if (absl::c_all_of(str, absl::ascii_isascii)) {
     absl::AsciiStrToLower(&str);
   } else {
+    // Precondition: `str` is well-formed UTF-8. Both callers guarantee this —
+    // the index path validates the whole document via IsValidUtf8 before
+    // tokenizing, and the query path either rejects malformed input or
+    // substitutes U+FFFD at the token boundary (see FilterParser). We therefore
+    // do NOT re-scan/sanitize here: doing so would add a redundant decode pass
+    // to the already-validated ingestion hot path. The ICU UTF-8 APIs below do
+    // not substitute, which is fine because the input is already well-formed.
+    //
+    // NFC normalize so canonically-equivalent forms (precomposed vs decomposed,
+    // e.g. "café" as U+00E9 vs U+0065 U+0301) collapse to the same bytes, then
+    // case-fold. Applied identically on the index and query paths since both
+    // call this function, which is what makes equivalent input match.
+    // TODO: move this into the language-aware processor and
+    // use NFKC for Arabic; fold normalize + case-fold into a single ICU pass.
+    str = UnicodeNormalizer::Normalize(str, NormalizationForm::NFC);
     UnicodeNormalizer::CaseFoldInPlace(str);
   }
 }

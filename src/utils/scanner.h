@@ -181,6 +181,36 @@ class Scanner {
     return count;
   }
 
+  // True iff `text` is well-formed UTF-8 (no overlong, surrogate,
+  // out-of-range, or truncated sequences). Single shared validation routine so
+  // the validity contract lives in exactly one place (e.g. Lexer::Tokenize's
+  // ingestion gate delegates here).
+  static bool IsValidUtf8(absl::string_view text) {
+    Scanner s(text);
+    Char cp;
+    while ((cp = s.NextUtf8()) != kEOF) {
+      if (cp == kInvalidCp) return false;
+    }
+    return true;
+  }
+
+  // Returns `text` with each malformed byte replaced by U+FFFD (the Unicode
+  // replacement character). Well-formed input is returned unchanged. This
+  // reproduces the legacy 1.2 "tolerate malformed input by substituting" policy
+  // so the result is well-formed UTF-8 that matches nothing downstream, without
+  // relying on an ICU side effect.
+  static std::string ReplaceInvalidUtf8(absl::string_view text) {
+    if (IsValidUtf8(text)) return std::string(text);
+    std::string out;
+    out.reserve(text.size());
+    Scanner s(text);
+    Char cp;
+    while ((cp = s.NextUtf8()) != kEOF) {
+      PushBackUtf8(out, cp == kInvalidCp ? 0xFFFD : cp);
+    }
+    return out;
+  }
+
   // True iff text contains at least n code points. Short-circuits at n.
   // Uses the UTF-8 invariant: every code point contributes exactly one
   // non-continuation byte (ASCII or lead). Continuation bytes match

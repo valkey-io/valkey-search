@@ -90,8 +90,6 @@ struct Lexer {
                      InProgressStemMap& stem_mappings) const;
 
  private:
-  bool IsValidUtf8(absl::string_view text) const;
-
   data_model::Language language_;
   PunctuationSet punct_set_;
   absl::flat_hash_set<std::string> stop_words_set_;

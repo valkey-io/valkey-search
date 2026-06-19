@@ -16,6 +16,8 @@
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
 #include "src/utils/string_interning.h"
+#include "src/valkey_search_options.h"
+#include "src/version.h"
 #include "testing/common.h"
 namespace valkey_search {
 
@@ -1828,6 +1830,80 @@ TEST_F(FilterMalformedUtf8Test, TruncatedUtf8InQueryToleratedNoError) {
   auto parse_results = parser.Parse();
   ASSERT_TRUE(parse_results.ok()) << parse_results.status().message();
   EXPECT_NE(parse_results.value().root_predicate, nullptr);
+}
+
+// Malformed UTF-8 at the query boundary is compat-gated (see COMPATIBILITY.md):
+// emulate-release >= 1.4.0 rejects with InvalidArgumentError (matching the
+// ingestion path), while < 1.4.0 preserves the legacy 1.2 tolerate behavior.
+class FilterMalformedUtf8CompatTest : public ValkeySearchTest {
+ protected:
+  void SetUp() override {
+    ValkeySearchTest::SetUp();
+    saved_emulate_release_ = options::GetEmulateRelease().GetValue();
+  }
+  void TearDown() override {
+    VMSDK_EXPECT_OK(
+        options::GetEmulateRelease().SetValue(saved_emulate_release_));
+    ValkeySearchTest::TearDown();
+  }
+
+  std::shared_ptr<MockIndexSchema> MakeTextSchema() {
+    std::vector<absl::string_view> key_prefixes = {"prefix:"};
+    auto schema = MockIndexSchema::Create(
+                      &fake_ctx_, "malformed_utf8_compat_schema", key_prefixes,
+                      std::make_unique<HashAttributeDataType>(),
+                      /*mutations_thread_pool=*/nullptr,
+                      data_model::Language::LANGUAGE_ENGLISH,
+                      /*punctuation=*/" ", /*with_offsets=*/true,
+                      /*stop_words=*/{})
+                      .value();
+    schema->CreateTextIndexSchema();
+    auto text_index_schema = schema->GetTextIndexSchema();
+    data_model::TextIndex text_index_proto =
+        CreateTextIndexProto(true, false, 1.0);
+    auto text_index =
+        std::make_shared<indexes::Text>(text_index_proto, text_index_schema);
+    VMSDK_EXPECT_OK(schema->AddIndex("text_field1", "text_field1", text_index));
+    EXPECT_CALL(*schema, GetIdentifier(testing::_)).Times(testing::AnyNumber());
+    return schema;
+  }
+
+ private:
+  vmsdk::ValkeyVersion saved_emulate_release_{0};
+};
+
+TEST_F(FilterMalformedUtf8CompatTest, RejectsWhenEmulatingCurrentRelease) {
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(kRelease14));
+  auto schema = MakeTextSchema();
+  std::string filter = "hello \xC3";  // truncated 2-byte lead
+  TextParsingOptions options{};
+  FilterParser parser(*schema, filter, options);
+  auto parse_results = parser.Parse();
+  ASSERT_FALSE(parse_results.ok());
+  EXPECT_EQ(parse_results.status().code(), absl::StatusCode::kInvalidArgument);
+  EXPECT_EQ(parse_results.status().message(),
+            "Invalid UTF-8 in query expression");
+}
+
+TEST_F(FilterMalformedUtf8CompatTest, ToleratesWhenEmulatingLegacyRelease) {
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(kRelease12));
+  auto schema = MakeTextSchema();
+  std::string filter = "hello \xC3";  // truncated 2-byte lead
+  TextParsingOptions options{};
+  FilterParser parser(*schema, filter, options);
+  auto parse_results = parser.Parse();
+  ASSERT_TRUE(parse_results.ok()) << parse_results.status().message();
+  ASSERT_NE(parse_results.value().root_predicate, nullptr);
+
+  // Legacy behavior must not just succeed — the malformed byte 0xC3 must have
+  // been replaced with U+FFFD (EF BF BD), so the resulting term matches nothing
+  // rather than carrying raw invalid bytes downstream.
+  std::string tree =
+      PrintPredicateTree(parse_results.value().root_predicate.get());
+  EXPECT_NE(tree.find("\xEF\xBF\xBD"), std::string::npos)
+      << "expected U+FFFD replacement in tree: " << tree;
+  EXPECT_EQ(tree.find('\xC3'), std::string::npos)
+      << "raw malformed byte must not survive: " << tree;
 }
 
 }  // namespace

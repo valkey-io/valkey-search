@@ -317,4 +317,29 @@ TEST_F(LexerTest, StemmingMultiByteWordTokenizesIntact) {
   }
 }
 
+// End-to-end equivalence: a precomposed "café" (é = U+00E9, C3 A9) and a
+// decomposed "café" (e + combining acute U+0301, 65 CC 81) are canonically
+// equivalent but byte-different. NFC normalization in NormalizeLowerCaseInPlace
+// must collapse them to the same token, so a document indexed in one form is
+// found by a query in the other.
+TEST_F(LexerTest, CanonicallyEquivalentFormsTokenizeIdentically) {
+  lexer_ = CreateLexer(default_punctuation_, /*stop_words=*/{});
+
+  auto precomposed = lexer_->Tokenize("caf\xC3\xA9", /*stemming_enabled=*/false,
+                                      /*min_stem_size=*/3, nullptr);
+  auto decomposed = lexer_->Tokenize("cafe\xCC\x81", /*stemming_enabled=*/false,
+                                     /*min_stem_size=*/3, nullptr);
+  ASSERT_TRUE(precomposed.ok());
+  ASSERT_TRUE(decomposed.ok());
+
+  std::vector<std::string> precomposed_tokens(precomposed->begin(),
+                                              precomposed->end());
+  std::vector<std::string> decomposed_tokens(decomposed->begin(),
+                                             decomposed->end());
+  ASSERT_EQ(precomposed_tokens.size(), 1u);
+  // Both forms tokenize to the same single term (NFC: precomposed bytes).
+  EXPECT_EQ(precomposed_tokens, decomposed_tokens);
+  EXPECT_EQ(precomposed_tokens[0], "caf\xC3\xA9");
+}
+
 }  // namespace valkey_search::indexes::text

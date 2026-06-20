@@ -69,12 +69,18 @@ size_t CalcChunkFreeGroup(size_t free_cnt) {
 }
 
 int UpperBoundToMultipleOf8(int num) { return (num + 7) & ~7; }
+// Round up to 16-byte alignment for SIMD operations
+// This is optimal for:
+// - ARM NEON (128-bit)
+// - x86 SSE (128-bit)
+// - x86 AVX (can use unaligned loads efficiently on modern CPUs)
+int UpperBoundToMultipleOf16(int num) { return (num + 15) & ~15; }
 
 // TODO: allow deletion of chunks when they are empty
 FixedSizeAllocator::FixedSizeAllocator(size_t size, bool require_ptr_alignment)
     : size_(size), require_ptr_alignment_(require_ptr_alignment) {
   if (require_ptr_alignment_) {
-    size_ = UpperBoundToMultipleOf8(size);
+    size_ = UpperBoundToMultipleOf16(size);
   }
 }
 
@@ -96,7 +102,7 @@ size_t FixedSizeAllocator::ChunkCount() const {
 
 char *FixedSizeAllocator::Allocate(size_t size) {
   if (require_ptr_alignment_) {
-    size = UpperBoundToMultipleOf8(size);
+    size = UpperBoundToMultipleOf16(size);
   }
   CHECK_EQ(size, size_);
   return Allocate();

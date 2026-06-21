@@ -65,8 +65,8 @@ class IndexTeser : public T {
     }
     return *res == indexes::RecordResult::kAdded;
   }
-  absl::StatusOr<indexes::RecordResult> AddRecordResult(absl::string_view key,
-                                                        absl::string_view data) {
+  absl::StatusOr<indexes::RecordResult> AddRecordResult(
+      absl::string_view key, absl::string_view data) {
     auto interned_key = StringInternStore::Intern(key);
     return T::AddRecord(interned_key, data);
   }

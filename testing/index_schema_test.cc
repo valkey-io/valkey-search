@@ -1890,8 +1890,8 @@ TEST_F(IndexSchemaFriendTest, InvalidDataDropsKey) {
   // tag field.
   auto numeric_index =
       std::make_shared<indexes::Numeric>(CreateNumericIndexProto());
-  VMSDK_EXPECT_OK(
-      index_schema->AddIndex("numeric_id", "numeric_identifier", numeric_index));
+  VMSDK_EXPECT_OK(index_schema->AddIndex("numeric_id", "numeric_identifier",
+                                         numeric_index));
   auto tag_index =
       std::make_shared<indexes::Tag>(CreateTagIndexProto(",", false));
   VMSDK_EXPECT_OK(

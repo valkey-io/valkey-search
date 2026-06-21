@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2026, valkey-search contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  * SPDX-License-Identifier: BSD 3-Clause
  */
@@ -34,7 +34,7 @@ namespace valkey_search::indexes {
 //
 // Storage model:
 //   - tracked_tags_by_keys_: doc-key → interned raw tag string.
-//   - untracked_keys_: keys present in the dataset but without any tag.
+//   - untracked_keys_: doc-keys present in the dataset but without any tag.
 //   - tree_ (rax): per-normalized-tag posting list. The rax key bytes are
 //     the lowercased tag (or raw bytes when case-sensitive); the rax value
 //     slot's 8 bytes ARE the storage of a BagOfInternedStringPtrs holding
@@ -93,12 +93,6 @@ class Tag : public IndexBase {
   std::optional<absl::flat_hash_set<absl::string_view>> GetValue(
       const InternedStringPtr& key,
       bool& case_sensitive) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
-
-  // Cheap estimate of the number of (tag, key) posting entries whose tag
-  // begins with `prefix`. O(prefix length) — does not iterate the matching
-  // keys. The result counts postings, not unique keys or unique tags.
-  size_t EstimatePrefixCount(absl::string_view prefix) const
-      ABSL_LOCKS_EXCLUDED(index_mutex_);
 
   // Iterator yielded by EntriesFetcher::Begin(). Walks a vector of rax slots
   // (each slot's 8 bytes encode a BagOfInternedStringPtrs); for negated

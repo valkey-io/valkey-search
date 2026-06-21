@@ -1,12 +1,11 @@
 /*
- * Copyright (c) 2026, valkey-search contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  * SPDX-License-Identifier: BSD 3-Clause
  */
 
 #include "src/indexes/tag.h"
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -132,6 +131,7 @@ std::string Tag::UnescapeTag(absl::string_view tag) {
   result.reserve(tag.size());
   for (size_t i = 0; i < tag.size(); ++i) {
     if (tag[i] == '\\' && i + 1 < tag.size()) {
+      // Escape sequence: consume next character literally
       result += tag[++i];
     } else {
       result += tag[i];
@@ -144,10 +144,11 @@ absl::StatusOr<absl::flat_hash_set<absl::string_view>> Tag::ParseSearchTags(
     absl::string_view data, char separator) {
   absl::flat_hash_set<absl::string_view> parsed_tags;
 
+  // Helper: validate and insert a single tag (handles prefix wildcards)
   auto InsertTag = [&](absl::string_view raw) -> absl::Status {
     auto tag = absl::StripAsciiWhitespace(raw);
     if (tag.empty()) {
-      return absl::OkStatus();
+      return absl::OkStatus();  // Empty tags are silently ignored
     }
     if (tag.back() == '*') {
       if (!IsValidPrefix(tag)) {
@@ -156,6 +157,8 @@ absl::StatusOr<absl::flat_hash_set<absl::string_view>> Tag::ParseSearchTags(
       }
       const auto min_prefix_length =
           options::GetTagMinPrefixLength().GetValue();
+
+      // Prefix tags shorter than min length are rejected.
       if (tag.length() <= min_prefix_length) {
         return absl::InvalidArgumentError(absl::StrCat(
             "Tag string `", tag, "` is too short for prefix wildcard."));
@@ -167,15 +170,23 @@ absl::StatusOr<absl::flat_hash_set<absl::string_view>> Tag::ParseSearchTags(
     return absl::OkStatus();
   };
 
+  // Parse respecting escape sequences:
+  //   - \<separator> is NOT a real separator
+  //   - \\ is an escaped backslash (not an escape prefix)
+  //   - Unescaped separator splits tags
+  // Returns string_view positions; unescaping happens later at TagPredicate.
   size_t tag_start = 0;
   for (size_t i = 0; i < data.size(); ++i) {
     if (data[i] == '\\' && i + 1 < data.size()) {
+      // Skip escaped character
       ++i;
     } else if (data[i] == separator) {
+      // Unescaped separator: extract tag
       VMSDK_RETURN_IF_ERROR(InsertTag(data.substr(tag_start, i - tag_start)));
       tag_start = i + 1;
     }
   }
+  // Handle the last tag (after final separator or if no separator)
   VMSDK_RETURN_IF_ERROR(InsertTag(data.substr(tag_start)));
   return parsed_tags;
 }
@@ -211,11 +222,13 @@ absl::StatusOr<bool> Tag::ModifyRecord(const InternedStringPtr& key,
   auto& tag_info = it->second;
   auto old_parsed_tags = ParseRecordTags(*tag_info.raw_tag_string, separator_);
 
+  // insert new tags that are not present in the old tags.
   for (const auto& tag : new_parsed_tags) {
     if (!old_parsed_tags.contains(tag)) {
       IndexTagForKey(tag, key);
     }
   }
+  // remove old tags that are not present in the new tags.
   for (const auto& tag : old_parsed_tags) {
     if (!new_parsed_tags.contains(tag)) {
       DeindexTagForKey(tag, key);
@@ -230,8 +243,10 @@ absl::StatusOr<bool> Tag::RemoveRecord(const InternedStringPtr& key,
                                        DeletionType deletion_type) {
   absl::MutexLock lock(&index_mutex_);
   if (deletion_type == DeletionType::kRecord) {
+    // If key is DELETED, remove it from untracked_keys_.
     untracked_keys_.erase(key);
   } else {
+    // If key doesn't have TAG but exists, insert it to untracked_keys_.
     untracked_keys_.insert(key);
   }
   auto it = tracked_tags_by_keys_.find(key);
@@ -277,6 +292,8 @@ uint32_t Tag::GetMutationWeight() const {
 }
 
 InternedStringPtr Tag::GetRawValue(const InternedStringPtr& key) const {
+  // Note that the Tag index is not mutated while the time sliced mutex is
+  // in a read mode and therefore it is safe to skip lock acquiring.
   if (auto it = tracked_tags_by_keys_.find(key);
       it != tracked_tags_by_keys_.end()) {
     return it->second.raw_tag_string;
@@ -286,6 +303,8 @@ InternedStringPtr Tag::GetRawValue(const InternedStringPtr& key) const {
 
 std::optional<absl::flat_hash_set<absl::string_view>> Tag::GetValue(
     const InternedStringPtr& key, bool& case_sensitive) const {
+  // Note that the Tag index is not mutated while the time sliced mutex is
+  // in a read mode and therefore it is safe to skip lock acquiring.
   if (auto it = tracked_tags_by_keys_.find(key);
       it != tracked_tags_by_keys_.end()) {
     case_sensitive = case_sensitive_;
@@ -367,7 +386,7 @@ std::unique_ptr<EntriesFetcherBase> Tag::Search(
   std::vector<void*> matched_slots;
   size_t total = 0;
 
-  auto consume_slot = [&](void* slot) {
+  auto collect_slot = [&](void* slot) {
     if (slot == nullptr) return;
     if (!seen.insert(slot).second) return;
     matched_slots.push_back(slot);
@@ -384,16 +403,17 @@ std::unique_ptr<EntriesFetcherBase> Tag::Search(
         reinterpret_cast<unsigned char*>(const_cast<char*>(norm.data()));
 
     if (!is_prefix) {
+      // exact search
       void* p = nullptr;
       if (raxFind(tree_, qbytes, norm.size(), &p) == 1) {
-        consume_slot(p);
+        collect_slot(p);
       }
     } else {
       raxIterator it;
       raxStart(&it, tree_);
       raxSeekSubTree(&it, qbytes, norm.size());
       while (raxNext(&it)) {
-        consume_slot(it.data);
+        collect_slot(it.data);
       }
       raxStop(&it);
     }
@@ -474,13 +494,6 @@ absl::Status Tag::ForEachUnTrackedKey(
     VMSDK_RETURN_IF_ERROR(fn(key));
   }
   return absl::OkStatus();
-}
-
-size_t Tag::EstimatePrefixCount(absl::string_view prefix) const {
-  absl::MutexLock lock(&index_mutex_);
-  std::string norm = Normalize(prefix);
-  return static_cast<size_t>(raxGetSubtreeItemCount(
-      tree_, reinterpret_cast<unsigned char*>(norm.data()), norm.size()));
 }
 
 }  // namespace valkey_search::indexes

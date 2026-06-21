@@ -1,0 +1,1 @@
+*=>[KNN 10 @vec $blob]

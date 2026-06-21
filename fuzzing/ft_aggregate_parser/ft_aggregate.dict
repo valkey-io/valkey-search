@@ -1,0 +1,52 @@
+# FT.AGGREGATE command option keywords
+
+# Stage keywords
+"LOAD"
+"GROUPBY"
+"REDUCE"
+"SORTBY"
+"LIMIT"
+"APPLY"
+"FILTER"
+
+# Common options
+"AS"
+"ASC"
+"DESC"
+"MAX"
+"DIALECT"
+"TIMEOUT"
+"PARAMS"
+"ADDSCORES"
+"INORDER"
+"VERBATIM"
+"SLOP"
+
+# Reduce functions
+"COUNT"
+"SUM"
+"MIN"
+"MAX"
+"AVG"
+"TOLIST"
+"FIRST_VALUE"
+"RANDOM_SAMPLE"
+"QUANTILE"
+"STDDEV"
+
+# Common values and patterns
+"*"
+"@n1"
+"@n2"
+"@title"
+"@price"
+"@status"
+"0"
+"1"
+"2"
+"3"
+"5"
+"10"
+"@n1+@n2"
+"@n1>5"
+"@n1*@n2"

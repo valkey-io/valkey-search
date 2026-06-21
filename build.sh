@@ -12,6 +12,7 @@ RUN_BUILD="yes"
 DUMP_TEST_ERRORS_STDOUT="no"
 INTEGRATION_TEST="no"
 SAN_BUILD="no"
+FUZZ_BUILD="no"
 ARGV=$@
 EXIT_CODE=0
 INTEG_RETRIES=1
@@ -35,6 +36,7 @@ Usage: build.sh [options...]
     --test-errors-stdout              When a test fails, dump the captured tests output to stdout.
     --run-integration-tests[=pattern] Run integration tests.
     --use-system-modules              Use system's installed gRPC, Protobuf & Abseil dependencies.
+    --fuzz                            Build with AFL fuzzer instrumentation (uses afl-gcc/afl-g++).
     --asan                            Build with address sanitizer enabled.
     --tsan                            Build with thread sanitizer enabled.
     --retries=N                       Attempt to run integration tests N times. Default is 1.
@@ -47,6 +49,12 @@ Example usage:
 
     # Force run cmake and build the debug configuration
     build.sh --configure --debug
+
+    # Build with AFL fuzzer instrumentation
+    build.sh --fuzz
+
+    # Build with AFL instrumentation + address sanitizer
+    build.sh --fuzz --asan
 
 EOF
 }
@@ -125,6 +133,12 @@ while [ $# -gt 0 ]; do
         CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DWITH_SUBMODULES_SYSTEM=ON"
         shift || true
         echo "Using extra cmake arguments: ${CMAKE_EXTRA_ARGS}"
+        ;;
+    --fuzz)
+        FUZZ_BUILD="yes"
+        RUN_CMAKE="yes"
+        shift || true
+        echo "AFL fuzzer instrumentation enabled"
         ;;
     --asan)
         CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DSAN_BUILD=address"
@@ -391,7 +405,7 @@ function is_configure_required() {
 
     local build_file_lastmodified=$(get_file_last_modified "${top_level_build_file}")
     local IFS=$'\n'
-    local cmake_files=$(find "${ROOT_DIR}" -name "CMakeLists.txt" -o -name "*.cmake" | grep -v ".build-release" | grep -v ".build-debug")
+    local cmake_files=$(find "${ROOT_DIR}" -name "CMakeLists.txt" -o -name "*.cmake" | grep -v ".build-release" | grep -v ".build-debug" | grep -v ".build-fuzz")
     for cmake_file in $cmake_files; do
         local cmake_file_modified=$(get_file_last_modified "${cmake_file}")
         if [ "${cmake_file_modified}" -gt "${build_file_lastmodified}" ]; then
@@ -430,6 +444,24 @@ if [[ "${SAN_BUILD}" != "no" ]]; then
     else
         BUILD_DIR=${BUILD_DIR}-tsan
     fi
+fi
+
+if [[ "${FUZZ_BUILD}" == "yes" ]]; then
+    # Verify AFL compiler wrappers are installed
+    if ! command -v afl-gcc &>/dev/null || ! command -v afl-g++ &>/dev/null; then
+        printf "${RED}ERROR: afl-gcc/afl-g++ not found. Install AFL++ first.${RESET}\n"
+        printf "  See: https://github.com/AFLplusplus/AFLplusplus\n"
+        exit 1
+    fi
+    export CC=afl-gcc
+    export CXX=afl-g++
+    BUILD_DIR=${ROOT_DIR}/.build-fuzz
+    if [[ "${SAN_BUILD}" == "address" ]]; then
+        export AFL_USE_ASAN=1
+        BUILD_DIR=${BUILD_DIR}-asan
+    fi
+    printf "${BOLD_PINK}AFL fuzz build: CC=afl-gcc CXX=afl-g++${RESET}\n"
+    printf "${BOLD_PINK}Build directory: ${BUILD_DIR}${RESET}\n"
 fi
 
 TESTS_DIR=${BUILD_DIR}/tests

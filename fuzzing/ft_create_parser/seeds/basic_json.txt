@@ -1,0 +1,1 @@
+myidx ON JSON PREFIX 1 doc: SCHEMA $.title AS title TEXT

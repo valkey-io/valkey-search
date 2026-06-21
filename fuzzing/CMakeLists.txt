@@ -1,0 +1,6 @@
+add_subdirectory(common)
+add_subdirectory(query_parser)
+add_subdirectory(ft_create_parser)
+add_subdirectory(ft_search_parser)
+add_subdirectory(ft_aggregate_parser)
+add_subdirectory(expr)

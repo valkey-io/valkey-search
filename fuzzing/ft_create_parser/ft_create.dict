@@ -1,0 +1,72 @@
+# FT.CREATE command keywords
+
+# Index type
+"ON"
+"HASH"
+"JSON"
+
+# Key prefix
+"PREFIX"
+
+# Schema
+"SCHEMA"
+
+# Field types
+"TEXT"
+"VECTOR"
+"TAG"
+"NUMERIC"
+
+# Vector index types
+"HNSW"
+"FLAT"
+
+# Field options
+"SORTABLE"
+"AS"
+"SEPARATOR"
+"CASESENSITIVE"
+"NOSTEM"
+"WEIGHT"
+"NOOFFSETS"
+"WITHOFFSETS"
+"NOSUFFIXTRIE"
+"WITHSUFFIXTRIE"
+
+# Index options
+"SKIPINITIALSCAN"
+"LANGUAGE"
+"SCORE"
+"STOPWORDS"
+"NOSTOPWORDS"
+"PUNCTUATION"
+"MINSTEMSIZE"
+
+# Vector parameters
+"TYPE"
+"FLOAT32"
+"FLOAT64"
+"DIM"
+"DISTANCE_METRIC"
+"COSINE"
+"L2"
+"IP"
+"INITIAL_CAP"
+"M"
+"EF_CONSTRUCTION"
+"EF_RUNTIME"
+"BLOCK_SIZE"
+
+# Common values
+"1"
+"2"
+"3"
+"6"
+"128"
+"0.5"
+"2.0"
+","
+"."
+"doc:"
+"item:"
+"prefix:"

@@ -134,7 +134,7 @@ auto IndexToKey = [](int i) {
 // to span many cache lines (dim 768 -> ~48 lines) so the prefetch pipeline is
 // exercised under realistic memory pressure.
 TEST_F(VectorIndexTest, DISABLED_PrefetchBenchmark)
-    ABSL_NO_THREAD_SAFETY_ANALYSIS {
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
   auto env_int = [](const char* name, int dflt) {
     const char* v = std::getenv(name);
     return v ? std::atoi(v) : dflt;
@@ -163,8 +163,8 @@ TEST_F(VectorIndexTest, DISABLED_PrefetchBenchmark)
 
   // Warmup (also pages in the graph / vector storage).
   for (int i = 0; i < kWarmup; ++i) {
-    auto r = index->Search(VectorToStr(vectors[(i * 7919) % kN]), kK,
-                           CancelNever());
+    auto r =
+        index->Search(VectorToStr(vectors[(i * 7919) % kN]), kK, CancelNever());
     VMSDK_EXPECT_OK(r);
   }
 
@@ -190,8 +190,8 @@ TEST_F(VectorIndexTest, DISABLED_PrefetchBenchmark)
                "\n[PrefetchBenchmark] dim=%d N=%d M=%d efc=%d efr=%d k=%d "
                "queries=%zu\n  min=%.1f  p50=%.1f  p90=%.1f  p99=%.1f  "
                "max=%.1f  mean=%.1f  (us/query)\n",
-               kDim, kN, kMParam, kEfC, kEfR, kK, lat_us.size(),
-               lat_us.front(), pct(50), pct(90), pct(99), lat_us.back(), mean);
+               kDim, kN, kMParam, kEfC, kEfR, kK, lat_us.size(), lat_us.front(),
+               pct(50), pct(90), pct(99), lat_us.back(), mean);
 }
 
 void VerifyResult(const absl::StatusOr<bool>& res,

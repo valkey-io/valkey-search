@@ -10,8 +10,8 @@
 namespace valkey_search::indexes::text {
 
 TermIterator::TermIterator(
-    absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>&&
-        key_iterators,
+    absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>
+        &&key_iterators,
     const FieldMaskPredicate query_field_mask, const bool require_positions,
     const FieldMaskPredicate stem_field_mask, bool has_original)
     : query_field_mask_(query_field_mask),
@@ -41,7 +41,7 @@ bool TermIterator::DoneKeys() const {
   return !current_key_;
 }
 
-const InternedStringPtr& TermIterator::CurrentKey() const {
+const InternedStringPtr &TermIterator::CurrentKey() const {
   CHECK(current_key_);
   return *current_key_;
 }
@@ -49,7 +49,7 @@ const InternedStringPtr& TermIterator::CurrentKey() const {
 // Helper function to advance key iterators and populate the heap with valid
 // iterators for the new key.
 void TermIterator::InsertValidKeyIterator(size_t idx) {
-  auto& key_iter = key_iterators_[idx];
+  auto &key_iter = key_iterators_[idx];
   // Use query_field_mask for the original word (idx 0) or if no stem mask is
   // provided.
   const auto field_mask = ((idx == 0 && has_original_) || stem_field_mask_ == 0)
@@ -115,7 +115,7 @@ bool TermIterator::NextKey() {
   return FindMinimumValidKey();
 }
 
-bool TermIterator::SeekForwardKey(const InternedStringPtr& target_key) {
+bool TermIterator::SeekForwardKey(const InternedStringPtr &target_key) {
   if (current_key_ && *current_key_ >= target_key) return true;
   // Drain laggards from the heap that are behind the target.
   while (!key_set_.empty() && *key_set_.min().key < target_key) {
@@ -139,7 +139,7 @@ bool TermIterator::DonePositions() const {
   return !current_position_.has_value();
 }
 
-const PositionRange& TermIterator::CurrentPosition() const {
+const PositionRange &TermIterator::CurrentPosition() const {
   CHECK(current_position_.has_value());
   return current_position_.value();
 }
@@ -147,7 +147,7 @@ const PositionRange& TermIterator::CurrentPosition() const {
 // Helper function to advance position iterators and populate the heap with
 // valid iterators for the new position.
 void TermIterator::InsertValidPositionIterator(size_t idx) {
-  auto& pos_iter = pos_iterators_[idx];
+  auto &pos_iter = pos_iterators_[idx];
   // Skip positions that don't match the query field mask.
   while (pos_iter.IsValid() &&
          (!(pos_iter.GetFieldMask() & query_field_mask_))) {

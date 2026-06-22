@@ -31,12 +31,12 @@
 
 namespace valkey_search::coordinator {
 
-void SortByToGRPC(const std::optional<query::SortByParameter>& sortby,
-                  SearchIndexPartitionRequest* request) {
+void SortByToGRPC(const std::optional<query::SortByParameter> &sortby,
+                  SearchIndexPartitionRequest *request) {
   if (!sortby.has_value()) {
     return;
   }
-  auto* proto = request->mutable_sortby();
+  auto *proto = request->mutable_sortby();
   proto->set_field(sortby->field);
   proto->set_order(sortby->order == query::SortOrder::kAscending
                        ? coordinator::SORT_ORDER_ASCENDING
@@ -44,7 +44,7 @@ void SortByToGRPC(const std::optional<query::SortByParameter>& sortby,
 }
 
 std::optional<query::SortByParameter> SortByFromGRPC(
-    const SearchIndexPartitionRequest& request) {
+    const SearchIndexPartitionRequest &request) {
   if (!request.has_sortby()) {
     return std::nullopt;
   }
@@ -57,8 +57,8 @@ std::optional<query::SortByParameter> SortByFromGRPC(
 }
 
 absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
-    const Predicate& predicate, std::shared_ptr<IndexSchema> index_schema,
-    absl::flat_hash_set<std::string>& attribute_identifiers) {
+    const Predicate &predicate, std::shared_ptr<IndexSchema> index_schema,
+    absl::flat_hash_set<std::string> &attribute_identifiers) {
   switch (predicate.predicate_case()) {
     case Predicate::kTag: {
       VMSDK_ASSIGN_OR_RETURN(
@@ -73,7 +73,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
           auto identifier,
           index_schema->GetIdentifier(predicate.tag().attribute_alias()));
       attribute_identifiers.insert(identifier);
-      auto tag_index = dynamic_cast<indexes::Tag*>(index.get());
+      auto tag_index = dynamic_cast<indexes::Tag *>(index.get());
 
       // Parsing QUERY STRING: raw_tag_string originates from user query.
       // Use FilterParser::ParseQueryTags to ensure consistent parsing with '|'
@@ -99,7 +99,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
           auto identifier,
           index_schema->GetIdentifier(predicate.numeric().attribute_alias()));
       attribute_identifiers.insert(identifier);
-      auto numeric_index = dynamic_cast<indexes::Numeric*>(index.get());
+      auto numeric_index = dynamic_cast<indexes::Numeric *>(index.get());
       auto numeric_predicate = std::make_unique<query::NumericPredicate>(
           numeric_index, predicate.numeric().attribute_alias(), identifier,
           predicate.numeric().start(), predicate.numeric().is_inclusive_start(),
@@ -109,7 +109,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
     case Predicate::kAnd: {
       std::vector<std::unique_ptr<query::Predicate>> children;
       children.reserve(predicate.and_().children_size());
-      for (const auto& child_predicate : predicate.and_().children()) {
+      for (const auto &child_predicate : predicate.and_().children()) {
         VMSDK_ASSIGN_OR_RETURN(
             auto child, GRPCPredicateToPredicate(child_predicate, index_schema,
                                                  attribute_identifiers));
@@ -129,7 +129,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
     case Predicate::kOr: {
       std::vector<std::unique_ptr<query::Predicate>> children;
       children.reserve(predicate.or_().children_size());
-      for (const auto& child_predicate : predicate.or_().children()) {
+      for (const auto &child_predicate : predicate.or_().children()) {
         VMSDK_ASSIGN_OR_RETURN(
             auto child, GRPCPredicateToPredicate(child_predicate, index_schema,
                                                  attribute_identifiers));
@@ -212,8 +212,8 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
 }
 
 absl::Status GRPCSearchRequestToParameters(
-    const SearchIndexPartitionRequest& request,
-    grpc::CallbackServerContext* context, query::SearchParameters* parameters) {
+    const SearchIndexPartitionRequest &request,
+    grpc::CallbackServerContext *context, query::SearchParameters *parameters) {
   parameters->timeout_ms = request.timeout_ms();
   parameters->cancellation_token = cancel::Make(request.timeout_ms(), context);
   parameters->db_num = request.db_num();
@@ -245,7 +245,7 @@ absl::Status GRPCSearchRequestToParameters(
             request.root_filter_predicate(), parameters->index_schema,
             parameters->filter_parse_results.filter_identifiers));
   }
-  for (auto& return_parameter : request.return_parameters()) {
+  for (auto &return_parameter : request.return_parameters()) {
     parameters->return_attributes.emplace_back(query::ReturnAttribute(
         vmsdk::MakeUniqueValkeyString(return_parameter.identifier()),
         vmsdk::MakeUniqueValkeyString(return_parameter.alias())));
@@ -259,11 +259,12 @@ absl::Status GRPCSearchRequestToParameters(
 }
 
 std::unique_ptr<Predicate> PredicateToGRPCPredicate(
-    const query::Predicate& predicate) {
+    const query::Predicate &predicate) {
   switch (predicate.GetType()) {
     // TODO: Support CME Fanouts of TextPredicate
     case query::PredicateType::kTag: {
-      auto tag_predicate = dynamic_cast<const query::TagPredicate*>(&predicate);
+      auto tag_predicate =
+          dynamic_cast<const query::TagPredicate *>(&predicate);
       auto tag_predicate_proto = std::make_unique<Predicate>();
       tag_predicate_proto->mutable_tag()->set_attribute_alias(
           tag_predicate->GetAlias());
@@ -273,7 +274,7 @@ std::unique_ptr<Predicate> PredicateToGRPCPredicate(
     }
     case query::PredicateType::kNumeric: {
       auto numeric_predicate =
-          dynamic_cast<const query::NumericPredicate*>(&predicate);
+          dynamic_cast<const query::NumericPredicate *>(&predicate);
       auto numeric_predicate_proto = std::make_unique<Predicate>();
       numeric_predicate_proto->mutable_numeric()->set_attribute_alias(
           std::string(numeric_predicate->GetAlias()));
@@ -290,8 +291,8 @@ std::unique_ptr<Predicate> PredicateToGRPCPredicate(
     case query::PredicateType::kComposedAnd: {
       auto and_predicate_proto = std::make_unique<Predicate>();
       auto composed_and_predicate =
-          dynamic_cast<const query::ComposedPredicate*>(&predicate);
-      for (const auto& child : composed_and_predicate->GetChildren()) {
+          dynamic_cast<const query::ComposedPredicate *>(&predicate);
+      for (const auto &child : composed_and_predicate->GetChildren()) {
         auto child_proto = PredicateToGRPCPredicate(*child);
         and_predicate_proto->mutable_and_()->mutable_children()->AddAllocated(
             child_proto.release());
@@ -308,8 +309,8 @@ std::unique_ptr<Predicate> PredicateToGRPCPredicate(
     case query::PredicateType::kComposedOr: {
       auto or_predicate_proto = std::make_unique<Predicate>();
       auto composed_or_predicate =
-          dynamic_cast<const query::ComposedPredicate*>(&predicate);
-      for (const auto& child : composed_or_predicate->GetChildren()) {
+          dynamic_cast<const query::ComposedPredicate *>(&predicate);
+      for (const auto &child : composed_or_predicate->GetChildren()) {
         auto child_proto = PredicateToGRPCPredicate(*child);
         or_predicate_proto->mutable_or_()->mutable_children()->AddAllocated(
             child_proto.release());
@@ -319,42 +320,42 @@ std::unique_ptr<Predicate> PredicateToGRPCPredicate(
     case query::PredicateType::kNegate: {
       auto negate_predicate_proto = std::make_unique<Predicate>();
       auto negate_predicate =
-          dynamic_cast<const query::NegatePredicate*>(&predicate);
+          dynamic_cast<const query::NegatePredicate *>(&predicate);
       negate_predicate_proto->mutable_negate()->set_allocated_predicate(
           PredicateToGRPCPredicate(*negate_predicate->GetPredicate())
               .release());
       return negate_predicate_proto;
     }
     case query::PredicateType::kText: {
-      if (auto term = dynamic_cast<const query::TermPredicate*>(&predicate)) {
+      if (auto term = dynamic_cast<const query::TermPredicate *>(&predicate)) {
         auto proto = std::make_unique<Predicate>();
         proto->mutable_term()->set_field_mask(term->GetFieldMask());
         proto->mutable_term()->set_content(std::string(term->GetTextString()));
         proto->mutable_term()->set_exact(term->IsExact());
         return proto;
       } else if (auto prefix =
-                     dynamic_cast<const query::PrefixPredicate*>(&predicate)) {
+                     dynamic_cast<const query::PrefixPredicate *>(&predicate)) {
         auto proto = std::make_unique<Predicate>();
         proto->mutable_prefix()->set_field_mask(prefix->GetFieldMask());
         proto->mutable_prefix()->set_content(
             std::string(prefix->GetTextString()));
         return proto;
       } else if (auto suffix =
-                     dynamic_cast<const query::SuffixPredicate*>(&predicate)) {
+                     dynamic_cast<const query::SuffixPredicate *>(&predicate)) {
         auto proto = std::make_unique<Predicate>();
         proto->mutable_suffix()->set_field_mask(suffix->GetFieldMask());
         proto->mutable_suffix()->set_content(
             std::string(suffix->GetTextString()));
         return proto;
       } else if (auto infix =
-                     dynamic_cast<const query::InfixPredicate*>(&predicate)) {
+                     dynamic_cast<const query::InfixPredicate *>(&predicate)) {
         auto proto = std::make_unique<Predicate>();
         proto->mutable_infix()->set_field_mask(infix->GetFieldMask());
         proto->mutable_infix()->set_content(
             std::string(infix->GetTextString()));
         return proto;
       } else if (auto fuzzy =
-                     dynamic_cast<const query::FuzzyPredicate*>(&predicate)) {
+                     dynamic_cast<const query::FuzzyPredicate *>(&predicate)) {
         auto proto = std::make_unique<Predicate>();
         proto->mutable_fuzzy()->set_field_mask(fuzzy->GetFieldMask());
         proto->mutable_fuzzy()->set_content(
@@ -372,7 +373,7 @@ std::unique_ptr<Predicate> PredicateToGRPCPredicate(
 }
 
 std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
-    const query::SearchParameters& parameters) {
+    const query::SearchParameters &parameters) {
   auto request = std::make_unique<SearchIndexPartitionRequest>();
   request->set_db_num(parameters.db_num);
   request->set_index_schema_name(parameters.index_schema_name);
@@ -399,7 +400,7 @@ std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
   } else {
     request->clear_root_filter_predicate();
   }
-  for (const auto& return_attribute : parameters.return_attributes) {
+  for (const auto &return_attribute : parameters.return_attributes) {
     auto return_parameter = request->add_return_parameters();
     return_parameter->set_identifier(
         vmsdk::ToStringView(return_attribute.identifier.get()));

@@ -25,7 +25,7 @@ namespace {
 class SafeRDBTest : public ValkeySearchTest {
  protected:
   void SetUp() override { TestValkeyModule_Init(); }
-  ValkeyModuleIO* fake_valkey_module_io_ = (ValkeyModuleIO*)0xBADF00D1;
+  ValkeyModuleIO *fake_valkey_module_io_ = (ValkeyModuleIO *)0xBADF00D1;
 };
 
 TEST_F(SafeRDBTest, LoadSizeTSuccess) {
@@ -123,7 +123,7 @@ TEST_F(SafeRDBTest, LoadDoubleFailure) {
 }
 
 TEST_F(SafeRDBTest, LoadStringSuccess) {
-  ValkeyModuleString* expected_value =
+  ValkeyModuleString *expected_value =
       TestValkeyModule_CreateStringPrintf(nullptr, "test");
   EXPECT_CALL(*kMockValkeyModule, LoadString(fake_valkey_module_io_))
       .WillOnce(testing::Return(expected_value));
@@ -136,7 +136,7 @@ TEST_F(SafeRDBTest, LoadStringSuccess) {
 }
 
 TEST_F(SafeRDBTest, LoadStringFailure) {
-  ValkeyModuleString* expected_value =
+  ValkeyModuleString *expected_value =
       TestValkeyModule_CreateStringPrintf(nullptr, "test");
   EXPECT_CALL(*kMockValkeyModule, LoadString(fake_valkey_module_io_))
       .WillOnce(testing::Return(expected_value));
@@ -245,9 +245,9 @@ class MockRDBSectionCallback {
   MOCK_METHOD(absl::Status, load,
               (ValkeyModuleCtx * ctx,
                std::unique_ptr<data_model::RDBSection> section,
-               SupplementalContentIter&& iter));
+               SupplementalContentIter &&iter));
   MOCK_METHOD(absl::Status, save,
-              (ValkeyModuleCtx * ctx, SafeRDB* rdb, int when));
+              (ValkeyModuleCtx * ctx, SafeRDB *rdb, int when));
   MOCK_METHOD(int, section_count, (ValkeyModuleCtx * ctx, int when));
   MOCK_METHOD(int, minimum_semantic_version, (ValkeyModuleCtx * ctx, int when));
 };
@@ -268,21 +268,21 @@ class RDBSerializationTest : public ValkeySearchTest {
         std::make_shared<testing::NiceMock<MockRDBSectionCallback>>();
     RDBSectionCallbacks callbacks_struct{
         .load =
-            [mock_callbacks](ValkeyModuleCtx* ctx,
+            [mock_callbacks](ValkeyModuleCtx *ctx,
                              std::unique_ptr<data_model::RDBSection> section,
-                             SupplementalContentIter&& iter) {
+                             SupplementalContentIter &&iter) {
               return mock_callbacks->load(ctx, std::move(section),
                                           std::move(iter));
             },
         .save = [mock_callbacks](
-                    ValkeyModuleCtx* ctx, SafeRDB* rdb,
+                    ValkeyModuleCtx *ctx, SafeRDB *rdb,
                     int when) { return mock_callbacks->save(ctx, rdb, when); },
         .section_count =
-            [mock_callbacks](ValkeyModuleCtx* ctx, int when) {
+            [mock_callbacks](ValkeyModuleCtx *ctx, int when) {
               return mock_callbacks->section_count(ctx, when);
             },
         .minimum_semantic_version =
-            [mock_callbacks](ValkeyModuleCtx* ctx, int when) {
+            [mock_callbacks](ValkeyModuleCtx *ctx, int when) {
               return mock_callbacks->minimum_semantic_version(ctx, when);
             },
     };
@@ -298,14 +298,16 @@ TEST_F(RDBSerializationTest, RegisterModuleTypeHappyPath) {
       *kMockValkeyModule,
       CreateDataType(&fake_ctx_, testing::StrEq(kValkeySearchModuleTypeName),
                      kCurrentEncVer, testing::_))
-      .WillOnce([](ValkeyModuleCtx* ctx, const char* name, int encver,
-                   ValkeyModuleTypeMethods* type_methods) -> ValkeyModuleType* {
-        EXPECT_EQ(type_methods->aux_load, AuxLoadCallback);
-        EXPECT_EQ(type_methods->aux_save2, AuxSaveCallback);
-        EXPECT_EQ(type_methods->aux_save, nullptr);
-        EXPECT_EQ(type_methods->aux_save_triggers, VALKEYMODULE_AUX_AFTER_RDB);
-        return (ValkeyModuleType*)0xBAADF00D;
-      });
+      .WillOnce(
+          [](ValkeyModuleCtx *ctx, const char *name, int encver,
+             ValkeyModuleTypeMethods *type_methods) -> ValkeyModuleType * {
+            EXPECT_EQ(type_methods->aux_load, AuxLoadCallback);
+            EXPECT_EQ(type_methods->aux_save2, AuxSaveCallback);
+            EXPECT_EQ(type_methods->aux_save, nullptr);
+            EXPECT_EQ(type_methods->aux_save_triggers,
+                      VALKEYMODULE_AUX_AFTER_RDB);
+            return (ValkeyModuleType *)0xBAADF00D;
+          });
   VMSDK_EXPECT_OK(RegisterModuleType(&fake_ctx_));
 }
 
@@ -314,10 +316,11 @@ TEST_F(RDBSerializationTest, RegisterModuleTypeReturnNullptr) {
       *kMockValkeyModule,
       CreateDataType(&fake_ctx_, testing::StrEq(kValkeySearchModuleTypeName),
                      kCurrentEncVer, testing::_))
-      .WillOnce([](ValkeyModuleCtx* ctx, const char* name, int encver,
-                   ValkeyModuleTypeMethods* type_methods) -> ValkeyModuleType* {
-        return nullptr;
-      });
+      .WillOnce(
+          [](ValkeyModuleCtx *ctx, const char *name, int encver,
+             ValkeyModuleTypeMethods *type_methods) -> ValkeyModuleType * {
+            return nullptr;
+          });
   EXPECT_EQ(RegisterModuleType(&fake_ctx_).code(), absl::StatusCode::kInternal);
 }
 
@@ -355,7 +358,7 @@ TEST_F(RDBSerializationTest, PerformRDBSaveOneRDBSection) {
       .Times(0);
   EXPECT_CALL(*test_cb.mock_callbacks, save(testing::_, testing::_, testing::_))
       .WillOnce(
-          [](ValkeyModuleCtx* ctx, SafeRDB* rdb, int when) -> absl::Status {
+          [](ValkeyModuleCtx *ctx, SafeRDB *rdb, int when) -> absl::Status {
             EXPECT_EQ(when, VALKEYMODULE_AUX_BEFORE_RDB);
             VMSDK_EXPECT_OK(rdb->SaveStringBuffer("test-string"));
             return absl::OkStatus();
@@ -392,7 +395,7 @@ TEST_F(RDBSerializationTest, PerformRDBSaveTwoRDBSection) {
     EXPECT_CALL(*test_cb.mock_callbacks,
                 save(testing::_, testing::_, testing::_))
         .WillOnce(
-            [i](ValkeyModuleCtx* ctx, SafeRDB* rdb, int when) -> absl::Status {
+            [i](ValkeyModuleCtx *ctx, SafeRDB *rdb, int when) -> absl::Status {
               EXPECT_EQ(when, VALKEYMODULE_AUX_BEFORE_RDB);
               std::string save_value = absl::StrCat("test-string-", i);
               VMSDK_EXPECT_OK(rdb->SaveStringBuffer(save_value));
@@ -440,7 +443,7 @@ TEST_F(RDBSerializationTest, PerformRDBSaveSectionSaveFail) {
       .Times(0);
   EXPECT_CALL(*test_cb.mock_callbacks, save(testing::_, testing::_, testing::_))
       .WillOnce(
-          [](ValkeyModuleCtx* ctx, SafeRDB* rdb, int when) -> absl::Status {
+          [](ValkeyModuleCtx *ctx, SafeRDB *rdb, int when) -> absl::Status {
             return absl::InternalError("test error");
           });
   EXPECT_CALL(*test_cb.mock_callbacks,
@@ -468,7 +471,7 @@ TEST_F(RDBSerializationTest, PerformRDBSaveTwoRDBSectionOneEmpty) {
     if (i == 0) {
       EXPECT_CALL(*test_cb.mock_callbacks,
                   save(testing::_, testing::_, testing::_))
-          .WillOnce([i](ValkeyModuleCtx* ctx, SafeRDB* rdb,
+          .WillOnce([i](ValkeyModuleCtx *ctx, SafeRDB *rdb,
                         int when) -> absl::Status {
             EXPECT_EQ(when, VALKEYMODULE_AUX_BEFORE_RDB);
             std::string save_value = absl::StrCat("test-string-", i);
@@ -568,9 +571,9 @@ TEST_F(RDBSerializationTest, PerformRDBLoadRDBSectionRegistered) {
 
   auto test_cb = GenerateRDBSectionCallbacks();
   EXPECT_CALL(*test_cb.mock_callbacks, load(testing::_, testing::_, testing::_))
-      .WillOnce([](ValkeyModuleCtx* ctx,
+      .WillOnce([](ValkeyModuleCtx *ctx,
                    std::unique_ptr<data_model::RDBSection> section,
-                   SupplementalContentIter&& iter) {
+                   SupplementalContentIter &&iter) {
         EXPECT_EQ(section->type(), data_model::RDB_SECTION_INDEX_SCHEMA);
         EXPECT_EQ(
             section->index_schema_contents().subscribed_key_prefixes_size(), 1);
@@ -603,9 +606,9 @@ TEST_F(RDBSerializationTest, PerformRDBLoadRDBSectionCallbackFailure) {
 
   auto test_cb = GenerateRDBSectionCallbacks();
   EXPECT_CALL(*test_cb.mock_callbacks, load(testing::_, testing::_, testing::_))
-      .WillOnce([](ValkeyModuleCtx* ctx,
+      .WillOnce([](ValkeyModuleCtx *ctx,
                    std::unique_ptr<data_model::RDBSection> section,
-                   SupplementalContentIter&& iter) {
+                   SupplementalContentIter &&iter) {
         return absl::InternalError("test");
       });
   EXPECT_CALL(*test_cb.mock_callbacks, save(testing::_, testing::_, testing::_))

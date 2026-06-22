@@ -133,13 +133,13 @@ static bool AVX512Capable() {
 #include <vector>
 
 namespace hnswlib {
-typedef size_t labeltype;
+using labeltype = size_t;
 
 // This can be extended to store state for filtering (e.g. from a std::set)
 class BaseFilterFunctor {
  public:
   virtual bool operator()(hnswlib::labeltype id) { return true; }
-  virtual ~BaseFilterFunctor(){};
+  virtual ~BaseFilterFunctor() {};
 };
 
 // VALKEYSEARCH BEGIN
@@ -147,9 +147,9 @@ class BaseFilterFunctor {
 // When true, early cancellation is requested
 //
 class BaseCancellationFunctor {
-  public:
+ public:
   virtual bool isCancelled() { return false; }
-  virtual ~BaseCancellationFunctor(){};
+  virtual ~BaseCancellationFunctor() {};
 };
 // VALKEYSEARCH END
 
@@ -197,57 +197,41 @@ using DISTFUNC = MTYPE (*)(const void *, const void *, const void *);
 template <typename MTYPE>
 class SpaceInterface {
  public:
-  // virtual void search(void *);
   virtual size_t get_data_size() = 0;
-
   virtual DISTFUNC<MTYPE> get_dist_func() = 0;
-
   virtual void *get_dist_func_param() = 0;
-
   virtual ~SpaceInterface() {}
 };
 
-template <typename dist_t>
+template <typename dist_t, typename InputVectorT>
 class AlgorithmInterface {
  public:
-  virtual void addPoint(const void *datapoint, labeltype label,
+  virtual void addPoint(const InputVectorT &datapoint, labeltype label,
                         bool replace_deleted = false) = 0;
-
   virtual std::priority_queue<std::pair<dist_t, labeltype>> searchKnn(
-      const void *, size_t, BaseFilterFunctor *isIdAllowed = nullptr,
-      BaseCancellationFunctor *isCancelled = nullptr // VALKEYSEARCH
-    ) const = 0;
-
-  // Return k nearest neighbor in the order of closer fist
-  virtual std::vector<std::pair<dist_t, labeltype>> searchKnnCloserFirst(
-      const void *query_data, size_t k,
+      const InputVectorT &query_data, size_t k,
       BaseFilterFunctor *isIdAllowed = nullptr,
-      BaseCancellationFunctor *isCancelled = nullptr // VALKEYSEARCH
-    ) const;
-
+      BaseCancellationFunctor *isCancelled = nullptr) const = 0;
+  virtual std::vector<std::pair<dist_t, labeltype>> searchKnnCloserFirst(
+      const InputVectorT &query_data, size_t k,
+      BaseFilterFunctor *isIdAllowed = nullptr,
+      BaseCancellationFunctor *isCancelled = nullptr) const;
   virtual absl::Status SaveIndex(OutputStream &output) = 0;
   virtual ~AlgorithmInterface() {}
 };
 
-template <typename dist_t>
+template <typename dist_t, typename InputVectorT>
 std::vector<std::pair<dist_t, labeltype>>
-AlgorithmInterface<dist_t>::searchKnnCloserFirst(
-    const void *query_data, size_t k, BaseFilterFunctor *isIdAllowed,
-    BaseCancellationFunctor *isCancelled // VALKEYSEARCH
-  ) const {
-  std::vector<std::pair<dist_t, labeltype>> result;
-
-  // here searchKnn returns the result in the order of further first
-  auto ret = searchKnn(query_data, k, isIdAllowed, isCancelled); // VALKEYSEARCH
-  {
-    size_t sz = ret.size();
-    result.resize(sz);
-    while (!ret.empty()) {
-      result[--sz] = ret.top();
-      ret.pop();
-    }
+AlgorithmInterface<dist_t, InputVectorT>::searchKnnCloserFirst(
+    const InputVectorT &query_data, size_t k, BaseFilterFunctor *isIdAllowed,
+    BaseCancellationFunctor *isCancelled) const {
+  auto ret = searchKnn(query_data, k, isIdAllowed, isCancelled);
+  std::vector<std::pair<dist_t, labeltype>> result(ret.size());
+  size_t sz = ret.size();
+  while (!ret.empty()) {
+    result[--sz] = ret.top();
+    ret.pop();
   }
-
   return result;
 }
 

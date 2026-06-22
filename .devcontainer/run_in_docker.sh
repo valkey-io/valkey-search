@@ -3,10 +3,14 @@
 # Find the workspace root (parent of .devcontainer)
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 WORKSPACE_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
+WORKSPACE_BASENAME=$(basename "$WORKSPACE_DIR")
+CONTAINER_WORKSPACE="/workspaces/$WORKSPACE_BASENAME"
 
 # Get the current user's UID and GID to avoid permission mismatch issues
-USER_UID=$(id -u)
-USER_GID=$(id -g)
+HOST_USER_NAME=$(id -un)
+HOST_USER_GNAME=$(id -gn)
+CONTAINER_USER_NAME="${CONTAINER_USER_NAME:-ubuntu}"
+CONTAINER_HOME="/home/$CONTAINER_USER_NAME"
 USER_NAME=$(id -un)
 USER_GNAME=$(id -gn)
 
@@ -34,7 +38,7 @@ if [ -S "$SSH_AUTH_SOCK" ]; then
   # Wait briefly to ensure the socket file is created
   sleep 0.1
   # Set the SSH_AUTH_SOCK path to be used inside the container
-  SSH_AUTH_SOCK_CONTAINER="/workspaces/valkey-search4/.ssh-agent.sock"
+   SSH_AUTH_SOCK_CONTAINER="$CONTAINER_WORKSPACE/.ssh-agent.sock"
 fi
 
 cleanup() {
@@ -56,15 +60,20 @@ if [ -n "$CONTAINER_ID" ]; then
   
   # Copy .gitconfig from host if it exists to ensure git settings are available inside
   if [ -f "$HOME/.gitconfig" ]; then
-    docker cp "$HOME/.gitconfig" "$CONTAINER_ID:/home/$USER_NAME/.gitconfig"
-    docker exec -u root "$CONTAINER_ID" chown "$USER_UID:$USER_GID" "/home/$USER_NAME/.gitconfig"
+    docker cp "$HOME/.gitconfig" "$CONTAINER_ID:$CONTAINER_HOME/.gitconfig"
+    docker exec -u root "$CONTAINER_ID" chown "$CONTAINER_USER_NAME:$CONTAINER_USER_NAME" "$CONTAINER_HOME/.gitconfig"
   fi
 
-  # Copy .ssh folder from host if it exists to ensure git SSH configs are available inside
+  # Copy only non-secret SSH metadata; authentication should use the forwarded agent.
   if [ -d "$HOME/.ssh" ]; then
-    docker cp "$HOME/.ssh" "$CONTAINER_ID:/home/$USER_NAME/.ssh"
+    docker exec -u root "$CONTAINER_ID" install -d -m 700 "/home/$USER_NAME/.ssh"
+    for ssh_file in config known_hosts known_hosts2; do
+      if [ -f "$HOME/.ssh/$ssh_file" ]; then
+        docker cp "$HOME/.ssh/$ssh_file" "$CONTAINER_ID:/home/$USER_NAME/.ssh/$ssh_file"
+      fi
+    done
     docker exec -u root "$CONTAINER_ID" chown -R "$USER_UID:$USER_GID" "/home/$USER_NAME/.ssh"
-    docker exec -u "$USER_NAME" "$CONTAINER_ID" chmod 700 "/home/$USER_NAME/.ssh"
+    docker exec -u "$CONTAINER_USER_NAME" "$CONTAINER_ID" chmod 700 "$CONTAINER_HOME/.ssh"
     docker exec -u "$USER_NAME" "$CONTAINER_ID" find "/home/$USER_NAME/.ssh" -type f -exec chmod 600 {} + 2>/dev/null || true
   fi
   
@@ -75,9 +84,9 @@ if [ -n "$CONTAINER_ID" ]; then
   fi
 
   if [ "$CMD" = "bash" ]; then
-    docker exec $INTERACTIVE_FLAGS "${ENV_FLAGS[@]}" -u "$USER_NAME" -w "/workspaces/valkey-search4" "$CONTAINER_ID" bash
+    docker exec $INTERACTIVE_FLAGS "${ENV_FLAGS[@]}" -u "$CONTAINER_USER_NAME" -w "$CONTAINER_WORKSPACE" "$CONTAINER_ID" bash
   else
-    docker exec $INTERACTIVE_FLAGS "${ENV_FLAGS[@]}" -u "$USER_NAME" -w "/workspaces/valkey-search4" "$CONTAINER_ID" bash -c "$CMD"
+    docker exec $INTERACTIVE_FLAGS "${ENV_FLAGS[@]}" -u "$CONTAINER_USER_NAME" -w "$CONTAINER_WORKSPACE" "$CONTAINER_ID" bash -c "$CMD"
   fi
 else
   # Fallback: Build and run a new container
@@ -93,15 +102,15 @@ else
     "$WORKSPACE_DIR/.devcontainer"
 
   # Mount .gitconfig if it exists on the host
-  GITCONFIG_MOUNT=""
+  GITCONFIG_MOUNT=()
   if [ -f "$HOME/.gitconfig" ]; then
-    GITCONFIG_MOUNT="-v $HOME/.gitconfig:/home/$USER_NAME/.gitconfig:ro"
+    GITCONFIG_MOUNT=(-v "$HOME/.gitconfig:/home/$USER_NAME/.gitconfig:ro")
   fi
 
   # Mount .ssh if it exists on the host
-  SSH_MOUNT=""
+  SSH_MOUNT=()
   if [ -d "$HOME/.ssh" ]; then
-    SSH_MOUNT="-v $HOME/.ssh:/home/$USER_NAME/.ssh:ro"
+    SSH_MOUNT=(-v "$HOME/.ssh:/home/$USER_NAME/.ssh:ro")
   fi
 
   ENV_FLAGS=("-e" "TERM=$TERM")
@@ -111,11 +120,11 @@ else
 
   if [ "$CMD" = "bash" ]; then
     docker run $INTERACTIVE_FLAGS --rm \
-      -v "$WORKSPACE_DIR":"/workspaces/valkey-search4" \
-      -w "/workspaces/valkey-search4" \
+      -v "$WORKSPACE_DIR":"$CONTAINER_WORKSPACE" \
+      -w "$CONTAINER_WORKSPACE" \
       -u "$USER_UID:$USER_GID" \
-      $GITCONFIG_MOUNT \
-      $SSH_MOUNT \
+      "${GITCONFIG_MOUNT[@]}" \
+      "${SSH_MOUNT[@]}" \
       "${ENV_FLAGS[@]}" \
       "$IMAGE_NAME" \
       bash
@@ -124,8 +133,8 @@ else
       -v "$WORKSPACE_DIR":"/workspaces/valkey-search4" \
       -w "/workspaces/valkey-search4" \
       -u "$USER_UID:$USER_GID" \
-      $GITCONFIG_MOUNT \
-      $SSH_MOUNT \
+      "${GITCONFIG_MOUNT[@]}" \
+      "${SSH_MOUNT[@]}" \
       "${ENV_FLAGS[@]}" \
       "$IMAGE_NAME" \
       bash -c "$CMD"

@@ -62,14 +62,18 @@ class BruteforceSearch : public AlgorithmInterface<dist_t, InputVectorT> {
                 maxElements);
     }
 
-    ~BruteforceSearch() {
-        if (data_ != nullptr) {
-            for (size_t i = 0; i < cur_element_count_; i++) {
-                std::destroy_at(reinterpret_cast<SavedVectorT *>((*data_)[i]));
-            }
-        }
-    }
+    ~BruteforceSearch() override { clear(); }
 
+    void clear() {
+      if (data_ != nullptr) {
+        for (size_t i = 0; i < cur_element_count_; i++) {
+          std::destroy_at(reinterpret_cast<SavedVectorT *>((*data_)[i]));
+        }
+        data_->clear();
+      }
+      dict_external_to_internal.clear();
+      cur_element_count_ = 0;
+    }
 
     void addPoint(const InputVectorT &datapoint, labeltype label, bool replace_deleted = false) {
         int idx;
@@ -189,18 +193,13 @@ class BruteforceSearch : public AlgorithmInterface<dist_t, InputVectorT> {
     template <typename FunctorT>
     absl::Status LoadIndex(InputStream &input, SpaceInterface<dist_t> *s,
                           FunctorT vector_constructor) {
-      if (data_ != nullptr) {
-        for (size_t i = 0; i < cur_element_count_; i++) {
-          std::destroy_at(reinterpret_cast<SavedVectorT *>((*data_)[i]));
-        }
-        data_->clear();
-      }
+      clear();
       VMSDK_ASSIGN_OR_RETURN(auto serialized_header, input.LoadChunk());
       auto header = std::make_unique<data_model::BruteForceIndexHeader>();
       if (!header->ParseFromString(*serialized_header)) {
         return absl::InternalError("Could not deserialize bruteforce header");
       }
-      cur_element_count_ = header->curr_element_count();
+      const size_t saved_element_count = header->curr_element_count();
 
       vector_size_ = s->get_data_size();
       fstdistfunc_ = s->get_dist_func();
@@ -215,7 +214,7 @@ class BruteforceSearch : public AlgorithmInterface<dist_t, InputVectorT> {
                                             k_elements_per_chunk,
                                             header->max_elements());
 
-      for (int i = 0; i < cur_element_count_; i++) {
+      for (size_t i = 0; i < saved_element_count; i++) {
         VMSDK_ASSIGN_OR_RETURN(auto chunk, input.LoadChunk());
         labeltype id;
         memcpy((char *)&id, chunk->data() + vector_size_, sizeof(labeltype));

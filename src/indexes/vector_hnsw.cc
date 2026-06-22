@@ -120,9 +120,8 @@ bool VectorHNSW<T>::IsVectorMatch(uint64_t internal_id,
     if (!id.has_value()) {
       return false;
     }
-    const char *data_ptrv = algo_->getDataByInternalId(*id);
-    size_t dim = *((size_t *)algo_->dist_func_param_);
-    absl::string_view record(data_ptrv, dim * sizeof(T));
+    const auto &stored_record = algo_->getDataByInternalId(*id);
+    absl::string_view record(stored_record.GetRawVector(), GetVectorDataSize());
     return vector->Str() == record;
   }
 }

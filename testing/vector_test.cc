@@ -51,11 +51,11 @@ constexpr static int kEFRuntime = 20;
 const hnswlib::InnerProductSpace kInnerProductSpace{kDimensions};
 const hnswlib::L2Space kL2Space{kDimensions};
 const absl::flat_hash_map<data_model::DistanceMetric, std::string>
-    kExpectedSpaces = {
+    kExpectedSpaces = {{
         {data_model::DISTANCE_METRIC_COSINE, typeid(kInnerProductSpace).name()},
         {data_model::DISTANCE_METRIC_IP, typeid(kInnerProductSpace).name()},
         {data_model::DISTANCE_METRIC_L2, typeid(kL2Space).name()},
-    };
+    }};
 
 static cancel::Token &CancelNever() {
   static cancel::Token cancel_never = cancel::Make(1000000, nullptr);

@@ -515,13 +515,24 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         # (value_field, group_field, load_fields, by_field, order)
         # order=None means default (3-arg form, no explicit ASC/DESC)
         cases = [
+            # Numeric value sorted by numeric field
             ("@n1", "@n2", "3 @__key @n1 @n2", "@n1", "ASC"),
             ("@n1", "@n2", "3 @__key @n1 @n2", "@n1", "DESC"),
             ("@n1", "@n2", "3 @__key @n1 @n2", "@n1", None),   # default order
+            # String value sorted by string field
             ("@t1", "@t2", "3 @__key @t1 @t2", "@t1", "ASC"),
             ("@t1", "@t2", "3 @__key @t1 @t2", "@t1", "DESC"),
-            ("@t1", "@n2", "4 @__key @t1 @n1 @n2", "@n1", "ASC"),  # cross-field
-            ("@n1", "@n2", "3 @__key @n1 @n2", "@n2", "ASC"),  # tie-breaking
+            ("@t1", "@t2", "3 @__key @t1 @t2", "@t1", None),   # default order
+            # String value grouped by numeric, sorted by string
+            ("@t1", "@n2", "3 @__key @t1 @n2", "@t1", "ASC"),
+            ("@t1", "@n2", "3 @__key @t1 @n2", "@t1", "DESC"),
+            # Numeric value sorted by string field
+            ("@n1", "@t2", "4 @__key @n1 @t1 @t2", "@t1", "ASC"),
+            ("@n1", "@t2", "4 @__key @n1 @t1 @t2", "@t1", "DESC"),
+            # Cross-field: string value sorted by numeric
+            ("@t1", "@n2", "4 @__key @t1 @n1 @n2", "@n1", "ASC"),
+            # Numeric value sorted by different numeric (tie-breaking)
+            ("@n1", "@n2", "3 @__key @n1 @n2", "@n2", "ASC"),
         ]
         for val, group, load, by, order in cases:
             if order is None:

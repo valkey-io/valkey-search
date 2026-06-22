@@ -32,40 +32,40 @@ class OStringStream final : public std::ostream {
   //
   // The destructor of OStringStream doesn't use the std::string. It's OK to
   // destroy the std::string before the stream.
-  explicit OStringStream(std::string* str) : std::ostream(&buf_), buf_(str) {}
-  OStringStream(OStringStream&& that)
-      : std::ostream(std::move(static_cast<std::ostream&>(that))),
+  explicit OStringStream(std::string *str) : std::ostream(&buf_), buf_(str) {}
+  OStringStream(OStringStream &&that)
+      : std::ostream(std::move(static_cast<std::ostream &>(that))),
         buf_(that.buf_) {
     rdbuf(&buf_);
   }
-  OStringStream& operator=(OStringStream&& that) {
-    std::ostream::operator=(std::move(static_cast<std::ostream&>(that)));
+  OStringStream &operator=(OStringStream &&that) {
+    std::ostream::operator=(std::move(static_cast<std::ostream &>(that)));
     buf_ = that.buf_;
     rdbuf(&buf_);
     return *this;
   }
 
-  std::string* str() { return buf_.str(); }
-  const std::string* str() const { return buf_.str(); }
-  void str(std::string* str) { buf_.str(str); }
+  std::string *str() { return buf_.str(); }
+  const std::string *str() const { return buf_.str(); }
+  void str(std::string *str) { buf_.str(str); }
 
  private:
   class Streambuf final : public std::streambuf {
    public:
-    explicit Streambuf(std::string* str) : str_(str) {}
-    Streambuf(const Streambuf&) = default;
-    Streambuf& operator=(const Streambuf&) = default;
+    explicit Streambuf(std::string *str) : str_(str) {}
+    Streambuf(const Streambuf &) = default;
+    Streambuf &operator=(const Streambuf &) = default;
 
-    std::string* str() { return str_; }
-    const std::string* str() const { return str_; }
-    void str(std::string* str) { str_ = str; }
+    std::string *str() { return str_; }
+    const std::string *str() const { return str_; }
+    void str(std::string *str) { str_ = str; }
 
    protected:
     int_type overflow(int c) override;
-    std::streamsize xsputn(const char* s, std::streamsize n) override;
+    std::streamsize xsputn(const char *s, std::streamsize n) override;
 
    private:
-    std::string* str_;
+    std::string *str_;
   } buf_;
 };
 
@@ -107,9 +107,9 @@ class ABSL_MUST_USE_RESULT StatusBuilder {
   // enabled, it will use `location` as the location from which the log message
   // occurs.  A typical user will not specify `location`, allowing it to default
   // to the current location.
-  explicit StatusBuilder(const absl::Status& original_status,
+  explicit StatusBuilder(const absl::Status &original_status,
                          SourceLocation location VMSDK_LOC_CURRENT_DEFAULT_ARG);
-  explicit StatusBuilder(absl::Status&& original_status,
+  explicit StatusBuilder(absl::Status &&original_status,
                          SourceLocation location VMSDK_LOC_CURRENT_DEFAULT_ARG);
 
   // Creates a `StatusBuilder` from a status code in
@@ -120,10 +120,10 @@ class ABSL_MUST_USE_RESULT StatusBuilder {
   explicit StatusBuilder(absl::StatusCode code,
                          SourceLocation location VMSDK_LOC_CURRENT_DEFAULT_ARG);
 
-  StatusBuilder(const StatusBuilder& sb);
-  StatusBuilder& operator=(const StatusBuilder& sb);
-  StatusBuilder(StatusBuilder&&) = default;
-  StatusBuilder& operator=(StatusBuilder&&) = default;
+  StatusBuilder(const StatusBuilder &sb);
+  StatusBuilder &operator=(const StatusBuilder &sb);
+  StatusBuilder(StatusBuilder &&) = default;
+  StatusBuilder &operator=(StatusBuilder &&) = default;
 
   // Mutates the builder so that the final additional message is prepended to
   // the original error message in the status.  A convenience separator is not
@@ -133,8 +133,8 @@ class ABSL_MUST_USE_RESULT StatusBuilder {
   // behavior of the final join of the original status with the extra message.
   //
   // Returns `*this` to allow method chaining.
-  StatusBuilder& SetPrepend() &;
-  ABSL_MUST_USE_RESULT StatusBuilder&& SetPrepend() &&;
+  StatusBuilder &SetPrepend() &;
+  ABSL_MUST_USE_RESULT StatusBuilder &&SetPrepend() &&;
 
   // Mutates the builder so that the final additional message is appended to the
   // original error message in the status.  A convenience separator is not
@@ -144,30 +144,30 @@ class ABSL_MUST_USE_RESULT StatusBuilder {
   // behavior of the final join of the original status with the extra message.
   //
   // Returns `*this` to allow method chaining.
-  StatusBuilder& SetAppend() &;
-  ABSL_MUST_USE_RESULT StatusBuilder&& SetAppend() &&;
+  StatusBuilder &SetAppend() &;
+  ABSL_MUST_USE_RESULT StatusBuilder &&SetAppend() &&;
 
   // Mutates the builder to disable any logging that was set using any of the
   // logging functions below.  Returns `*this` to allow method chaining.
-  StatusBuilder& SetNoLogging() &;
-  ABSL_MUST_USE_RESULT StatusBuilder&& SetNoLogging() &&;
+  StatusBuilder &SetNoLogging() &;
+  ABSL_MUST_USE_RESULT StatusBuilder &&SetNoLogging() &&;
 
   // Mutates the builder so that the result status will be logged (without a
   // stack trace) when this builder is converted to a Status.  This overrides
   // the logging settings from earlier calls to any of the logging mutator
   // functions.  Returns `*this` to allow method chaining.
-  StatusBuilder& Log(absl::LogSeverity level) &;
-  ABSL_MUST_USE_RESULT StatusBuilder&& Log(absl::LogSeverity level) &&;
-  StatusBuilder& LogError() & { return Log(absl::LogSeverity::kError); }
-  ABSL_MUST_USE_RESULT StatusBuilder&& LogError() && {
+  StatusBuilder &Log(absl::LogSeverity level) &;
+  ABSL_MUST_USE_RESULT StatusBuilder &&Log(absl::LogSeverity level) &&;
+  StatusBuilder &LogError() & { return Log(absl::LogSeverity::kError); }
+  ABSL_MUST_USE_RESULT StatusBuilder &&LogError() && {
     return std::move(LogError());
   }
-  StatusBuilder& LogWarning() & { return Log(absl::LogSeverity::kWarning); }
-  ABSL_MUST_USE_RESULT StatusBuilder&& LogWarning() && {
+  StatusBuilder &LogWarning() & { return Log(absl::LogSeverity::kWarning); }
+  ABSL_MUST_USE_RESULT StatusBuilder &&LogWarning() && {
     return std::move(LogWarning());
   }
-  StatusBuilder& LogInfo() & { return Log(absl::LogSeverity::kInfo); }
-  ABSL_MUST_USE_RESULT StatusBuilder&& LogInfo() && {
+  StatusBuilder &LogInfo() & { return Log(absl::LogSeverity::kInfo); }
+  ABSL_MUST_USE_RESULT StatusBuilder &&LogInfo() && {
     return std::move(LogInfo());
   }
 
@@ -175,8 +175,8 @@ class ABSL_MUST_USE_RESULT StatusBuilder {
   // invocations (without a stack trace) when this builder is converted to a
   // Status.  This overrides the logging settings from earlier calls to any of
   // the logging mutator functions.  Returns `*this` to allow method chaining.
-  StatusBuilder& LogEveryN(absl::LogSeverity level, int n) &;
-  ABSL_MUST_USE_RESULT StatusBuilder&& LogEveryN(absl::LogSeverity level,
+  StatusBuilder &LogEveryN(absl::LogSeverity level, int n) &;
+  ABSL_MUST_USE_RESULT StatusBuilder &&LogEveryN(absl::LogSeverity level,
                                                  int n) &&;
 
   // Mutates the builder so that the result status will be logged once per
@@ -185,8 +185,8 @@ class ABSL_MUST_USE_RESULT StatusBuilder {
   // logging mutator functions.  Returns `*this` to allow method chaining.
   // If period is absl::ZeroDuration() or less, then this is equivalent to
   // calling the Log() method.
-  StatusBuilder& LogEvery(absl::LogSeverity level, absl::Duration period) &;
-  ABSL_MUST_USE_RESULT StatusBuilder&& LogEvery(absl::LogSeverity level,
+  StatusBuilder &LogEvery(absl::LogSeverity level, absl::Duration period) &;
+  ABSL_MUST_USE_RESULT StatusBuilder &&LogEvery(absl::LogSeverity level,
                                                 absl::Duration period) &&;
 
   // Mutates the builder so that the result status will be VLOGged (without a
@@ -194,30 +194,30 @@ class ABSL_MUST_USE_RESULT StatusBuilder {
   // indicates the verbosity level that would be passed to VLOG().  This
   // overrides the logging settings from earlier calls to any of the logging
   // mutator functions.  Returns `*this` to allow method chaining.
-  StatusBuilder& VLog(int verbose_level) &;
-  ABSL_MUST_USE_RESULT StatusBuilder&& VLog(int verbose_level) &&;
+  StatusBuilder &VLog(int verbose_level) &;
+  ABSL_MUST_USE_RESULT StatusBuilder &&VLog(int verbose_level) &&;
 
   // Mutates the builder so that a stack trace will be logged if the status is
   // logged. One of the logging setters above should be called as well. If
   // logging is not yet enabled this behaves as if LogInfo().EmitStackTrace()
   // was called. Returns `*this` to allow method chaining.
-  StatusBuilder& EmitStackTrace() &;
-  ABSL_MUST_USE_RESULT StatusBuilder&& EmitStackTrace() &&;
+  StatusBuilder &EmitStackTrace() &;
+  ABSL_MUST_USE_RESULT StatusBuilder &&EmitStackTrace() &&;
 
   // Appends to the extra message that will be added to the original status.  By
   // default, the extra message is added to the original message as if by
   // `util::Annotate`, which includes a convenience separator between the
   // original message and the enriched one.
   template <typename T>
-  StatusBuilder& operator<<(const T& value) &;
+  StatusBuilder &operator<<(const T &value) &;
 
   template <typename T>
-  ABSL_MUST_USE_RESULT StatusBuilder&& operator<<(const T& value) &&;
+  ABSL_MUST_USE_RESULT StatusBuilder &&operator<<(const T &value) &&;
 
   // Sets the status code for the status that will be returned by this
   // StatusBuilder. Returns `*this` to allow method chaining.
-  StatusBuilder& SetCode(absl::StatusCode code) &;
-  ABSL_MUST_USE_RESULT StatusBuilder&& SetCode(absl::StatusCode code) &&;
+  StatusBuilder &SetCode(absl::StatusCode code) &;
+  ABSL_MUST_USE_RESULT StatusBuilder &&SetCode(absl::StatusCode code) &&;
 
   ///////////////////////////////// Adaptors /////////////////////////////////
   //
@@ -322,13 +322,12 @@ class ABSL_MUST_USE_RESULT StatusBuilder {
   // `adaptor`, which may be any type including `void`. See comments above.
   template <typename Adaptor>
   auto With(
-      Adaptor&& adaptor) & -> decltype(std::forward<Adaptor>(adaptor)(*this)) {
+      Adaptor &&adaptor) & -> decltype(std::forward<Adaptor>(adaptor)(*this)) {
     return std::forward<Adaptor>(adaptor)(*this);
   }
   template <typename Adaptor>
-  ABSL_MUST_USE_RESULT auto
-  With(Adaptor&& adaptor) && -> decltype(std::forward<Adaptor>(adaptor)(
-                                 std::move(*this))) {
+  ABSL_MUST_USE_RESULT auto With(Adaptor &&adaptor)
+      && -> decltype(std::forward<Adaptor>(adaptor)(std::move(*this))) {
     return std::forward<Adaptor>(adaptor)(std::move(*this));
   }
 
@@ -343,8 +342,8 @@ class ABSL_MUST_USE_RESULT StatusBuilder {
   // Careful: this operator has side effects, so it should be called at
   // most once. In particular, do NOT use this conversion operator to inspect
   // the status from an adapter object passed into With().
-  operator absl::Status() const&;  // NOLINT: Builder converts implicitly.
-  operator absl::Status() &&;      // NOLINT: Builder converts implicitly.
+  operator absl::Status() const &;  // NOLINT: Builder converts implicitly.
+  operator absl::Status() &&;       // NOLINT: Builder converts implicitly.
 
   // Returns the source location used to create this builder.
   ABSL_MUST_USE_RESULT SourceLocation source_location() const;
@@ -370,7 +369,7 @@ class ABSL_MUST_USE_RESULT StatusBuilder {
   // Conditionally logs if the builder has been configured to log.  This method
   // is split from the above to isolate the portability issues around logging
   // into a single place.
-  void ConditionallyLog(const absl::Status& status) const;
+  void ConditionallyLog(const absl::Status &status) const;
 
   // Infrequently set builder options, instantiated lazily. This reduces
   // average construction/destruction time (e.g. the `stream` is fairly
@@ -379,9 +378,9 @@ class ABSL_MUST_USE_RESULT StatusBuilder {
   // re-use stack space within a function across the sub-scopes used by
   // status macros.
   struct Rep {
-    explicit Rep(const absl::Status& s);
-    explicit Rep(absl::Status&& s);
-    explicit Rep(const Rep& r);
+    explicit Rep(const absl::Status &s);
+    explicit Rep(absl::Status &&s);
+    explicit Rep(const Rep &r);
 
     // The status that the result will be based on.  Can be modified by
     // util::AttachPayload().
@@ -422,7 +421,7 @@ class ABSL_MUST_USE_RESULT StatusBuilder {
     MessageJoinStyle message_join_style = MessageJoinStyle::kAnnotate;
   };
 
-  static Rep* InitRep(const absl::Status& s) {
+  static Rep *InitRep(const absl::Status &s) {
     if (s.ok()) {
       return nullptr;
     } else {
@@ -430,7 +429,7 @@ class ABSL_MUST_USE_RESULT StatusBuilder {
     }
   }
 
-  static Rep* InitRep(absl::Status&& s) {
+  static Rep *InitRep(absl::Status &&s) {
     if (s.ok()) {
       return nullptr;
     } else {
@@ -438,8 +437,8 @@ class ABSL_MUST_USE_RESULT StatusBuilder {
     }
   }
 
-  const absl::Status& RepStatusOrOk() const {
-    static absl::Status* ok = new absl::Status;
+  const absl::Status &RepStatusOrOk() const {
+    static absl::Status *ok = new absl::Status;
     return rep_ == nullptr ? *ok : rep_->status;
   }
 
@@ -452,8 +451,8 @@ class ABSL_MUST_USE_RESULT StatusBuilder {
 };
 
 // Implicitly converts `builder` to `Status` and write it to `os`.
-std::ostream& operator<<(std::ostream& os, const StatusBuilder& builder);
-std::ostream& operator<<(std::ostream& os, StatusBuilder&& builder);
+std::ostream &operator<<(std::ostream &os, const StatusBuilder &builder);
+std::ostream &operator<<(std::ostream &os, StatusBuilder &&builder);
 
 // Each of the functions below creates StatusBuilder with a canonical error.
 // The error code of the StatusBuilder matches the name of the function.
@@ -520,7 +519,7 @@ class ExtraMessage {
   // `util::Annotate`, which includes a convenience separator between the
   // original message and the enriched one.
   template <typename T>
-  ExtraMessage& operator<<(const T& value) {
+  ExtraMessage &operator<<(const T &value) {
     stream_ << value;
     return *this;
   }
@@ -541,15 +540,15 @@ class ExtraMessage {
 
 // Implementation details follow; clients should ignore.
 
-inline StatusBuilder::StatusBuilder(const absl::Status& original_status,
+inline StatusBuilder::StatusBuilder(const absl::Status &original_status,
                                     SourceLocation location)
     : loc_(location), rep_(InitRep(original_status)) {}
 
-inline StatusBuilder::StatusBuilder(absl::Status&& original_status,
+inline StatusBuilder::StatusBuilder(absl::Status &&original_status,
                                     SourceLocation location)
     : loc_(location), rep_(InitRep(std::move(original_status))) {}
 
-inline StatusBuilder::StatusBuilder(const StatusBuilder& sb) : loc_(sb.loc_) {
+inline StatusBuilder::StatusBuilder(const StatusBuilder &sb) : loc_(sb.loc_) {
   if (sb.rep_ != nullptr) {
     rep_ = std::make_unique<Rep>(*sb.rep_);
   }
@@ -559,7 +558,7 @@ inline StatusBuilder::StatusBuilder(absl::StatusCode code,
                                     SourceLocation location)
     : loc_(location), rep_(InitRep(absl::Status(code, ""))) {}
 
-inline StatusBuilder& StatusBuilder::operator=(const StatusBuilder& sb) {
+inline StatusBuilder &StatusBuilder::operator=(const StatusBuilder &sb) {
   loc_ = sb.loc_;
   if (sb.rep_ != nullptr) {
     rep_ = std::make_unique<Rep>(*sb.rep_);
@@ -569,46 +568,46 @@ inline StatusBuilder& StatusBuilder::operator=(const StatusBuilder& sb) {
   return *this;
 }
 
-inline StatusBuilder& StatusBuilder::SetPrepend() & {
+inline StatusBuilder &StatusBuilder::SetPrepend() & {
   if (rep_ == nullptr) return *this;
   rep_->message_join_style = MessageJoinStyle::kPrepend;
   return *this;
 }
-inline StatusBuilder&& StatusBuilder::SetPrepend() && {
+inline StatusBuilder &&StatusBuilder::SetPrepend() && {
   return std::move(SetPrepend());
 }
 
-inline StatusBuilder& StatusBuilder::SetAppend() & {
+inline StatusBuilder &StatusBuilder::SetAppend() & {
   if (rep_ == nullptr) return *this;
   rep_->message_join_style = MessageJoinStyle::kAppend;
   return *this;
 }
-inline StatusBuilder&& StatusBuilder::SetAppend() && {
+inline StatusBuilder &&StatusBuilder::SetAppend() && {
   return std::move(SetAppend());
 }
 
-inline StatusBuilder& StatusBuilder::SetNoLogging() & {
+inline StatusBuilder &StatusBuilder::SetNoLogging() & {
   if (rep_ != nullptr) {
     rep_->logging_mode = Rep::LoggingMode::kDisabled;
     rep_->should_log_stack_trace = false;
   }
   return *this;
 }
-inline StatusBuilder&& StatusBuilder::SetNoLogging() && {
+inline StatusBuilder &&StatusBuilder::SetNoLogging() && {
   return std::move(SetNoLogging());
 }
 
-inline StatusBuilder& StatusBuilder::Log(absl::LogSeverity level) & {
+inline StatusBuilder &StatusBuilder::Log(absl::LogSeverity level) & {
   if (rep_ == nullptr) return *this;
   rep_->logging_mode = Rep::LoggingMode::kLog;
   rep_->log_severity = level;
   return *this;
 }
-inline StatusBuilder&& StatusBuilder::Log(absl::LogSeverity level) && {
+inline StatusBuilder &&StatusBuilder::Log(absl::LogSeverity level) && {
   return std::move(Log(level));
 }
 
-inline StatusBuilder& StatusBuilder::LogEveryN(absl::LogSeverity level,
+inline StatusBuilder &StatusBuilder::LogEveryN(absl::LogSeverity level,
                                                int n) & {
   if (rep_ == nullptr) return *this;
   if (n < 1) return Log(level);
@@ -617,22 +616,22 @@ inline StatusBuilder& StatusBuilder::LogEveryN(absl::LogSeverity level,
   rep_->n = n;
   return *this;
 }
-inline StatusBuilder&& StatusBuilder::LogEveryN(absl::LogSeverity level,
+inline StatusBuilder &&StatusBuilder::LogEveryN(absl::LogSeverity level,
                                                 int n) && {
   return std::move(LogEveryN(level, n));
 }
 
-inline StatusBuilder& StatusBuilder::VLog(int verbose_level) & {
+inline StatusBuilder &StatusBuilder::VLog(int verbose_level) & {
   if (rep_ == nullptr) return *this;
   rep_->logging_mode = Rep::LoggingMode::kVLog;
   rep_->verbose_level = verbose_level;
   return *this;
 }
-inline StatusBuilder&& StatusBuilder::VLog(int verbose_level) && {
+inline StatusBuilder &&StatusBuilder::VLog(int verbose_level) && {
   return std::move(VLog(verbose_level));
 }
 
-inline StatusBuilder& StatusBuilder::EmitStackTrace() & {
+inline StatusBuilder &StatusBuilder::EmitStackTrace() & {
   if (rep_ == nullptr) return *this;
   if (rep_->logging_mode == Rep::LoggingMode::kDisabled) {
     // Default to INFO logging; otherwise, nothing would be emitted.
@@ -642,18 +641,18 @@ inline StatusBuilder& StatusBuilder::EmitStackTrace() & {
   rep_->should_log_stack_trace = true;
   return *this;
 }
-inline StatusBuilder&& StatusBuilder::EmitStackTrace() && {
+inline StatusBuilder &&StatusBuilder::EmitStackTrace() && {
   return std::move(EmitStackTrace());
 }
 
 template <typename T>
-StatusBuilder& StatusBuilder::operator<<(const T& value) & {
+StatusBuilder &StatusBuilder::operator<<(const T &value) & {
   if (rep_ == nullptr) return *this;
   rep_->stream << value;
   return *this;
 }
 template <typename T>
-StatusBuilder&& StatusBuilder::operator<<(const T& value) && {
+StatusBuilder &&StatusBuilder::operator<<(const T &value) && {
   return std::move(operator<<(value));
 }
 
@@ -665,7 +664,7 @@ inline absl::StatusCode StatusBuilder::code() const {
   return rep_ == nullptr ? absl::StatusCode::kOk : rep_->status.code();
 }
 
-inline StatusBuilder::operator absl::Status() const& {
+inline StatusBuilder::operator absl::Status() const & {
   if (rep_ == nullptr) return absl::Status();
   return StatusBuilder(*this).CreateStatusAndConditionallyLog();
 }

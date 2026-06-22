@@ -43,20 +43,20 @@ from all the posting iterators that are on the current key and field mask.
 class TermIterator : public TextIterator {
  public:
   TermIterator(
-      absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>&&
-          key_iterators,
+      absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>
+          &&key_iterators,
       const FieldMaskPredicate query_field_mask, const bool require_positions,
       const FieldMaskPredicate stem_field_mask = 0, bool has_original = false);
   /* Implementation of TextIterator APIs */
   FieldMaskPredicate QueryFieldMask() const override;
   // Key-level iteration
   bool DoneKeys() const override;
-  const Key& CurrentKey() const override;
+  const Key &CurrentKey() const override;
   bool NextKey() override;
-  bool SeekForwardKey(const Key& target_key) override;
+  bool SeekForwardKey(const Key &target_key) override;
   // Position-level iteration
   bool DonePositions() const override;
-  const PositionRange& CurrentPosition() const override;
+  const PositionRange &CurrentPosition() const override;
   bool NextPosition() override;
   bool SeekForwardPosition(Position target_position) override;
   FieldMaskPredicate CurrentFieldMask() const override;
@@ -84,7 +84,7 @@ class TermIterator : public TextIterator {
   // Raw pointer to the current key in the underlying btree_map. Safe to use
   // because the map is immutable while the reader lock is held (no inserts or
   // deletes during search).
-  const Key* current_key_{nullptr};
+  const Key *current_key_{nullptr};
   std::optional<PositionRange> current_position_;
   FieldMaskPredicate current_field_mask_;
   const bool require_positions_;

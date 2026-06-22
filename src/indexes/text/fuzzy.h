@@ -25,7 +25,7 @@ struct FuzzySearch {
   // Returns KeyIterators for all words within edit distance <= max_distance
   static absl::InlinedVector<Postings::KeyIterator,
                              kWordExpansionInlineCapacity>
-  Search(const Rax& tree, absl::string_view pattern, size_t max_distance,
+  Search(const Rax &tree, absl::string_view pattern, size_t max_distance,
          uint32_t max_words) {
     absl::InlinedVector<indexes::text::Postings::KeyIterator,
                         kWordExpansionInlineCapacity>
@@ -58,15 +58,15 @@ struct FuzzySearch {
       Rax::PathIterator iter, absl::string_view pattern, size_t max_distance,
       std::string word,   // Current word being built
       char prev_tree_ch,  // Previous character (for transposition detection)
-      absl::InlinedVector<size_t, 32>&
-          prev_prev,  // Row i-2 of DP matrix (for transposition)
-      absl::InlinedVector<size_t, 32>&
-          prev,  // Row i-1 of DP matrix (previous row)
-      absl::InlinedVector<size_t, 32>&
-          curr,  // Row i of DP matrix (current row being computed)
+      absl::InlinedVector<size_t, 32>
+          &prev_prev,  // Row i-2 of DP matrix (for transposition)
+      absl::InlinedVector<size_t, 32>
+          &prev,  // Row i-1 of DP matrix (previous row)
+      absl::InlinedVector<size_t, 32>
+          &curr,  // Row i of DP matrix (current row being computed)
       absl::InlinedVector<indexes::text::Postings::KeyIterator,
-                          kWordExpansionInlineCapacity>& key_iterators,
-      uint32_t max_words, uint32_t& word_count) {
+                          kWordExpansionInlineCapacity> &key_iterators,
+      uint32_t max_words, uint32_t &word_count) {
     // Iterate over children at current tree level
     while (!iter.Done() && word_count < max_words) {
       absl::string_view edge = iter.GetChildEdge();

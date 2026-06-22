@@ -25,19 +25,19 @@ namespace {
 class ModuleTypeTest : public vmsdk::ValkeyTest {
  protected:
   // Helper function to create ValkeyModuleString
-  ValkeyModuleString* CreateValkeyModuleString(const std::string& str) {
+  ValkeyModuleString *CreateValkeyModuleString(const std::string &str) {
     return ValkeyModule_CreateString(nullptr, str.c_str(), str.size());
   }
 };
 
 TEST_F(ModuleTypeTest, FailOpenRegisterKey) {
   EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
-      .WillOnce(
-          testing::Return(reinterpret_cast<ValkeyModuleKey*>(VALKEYMODULE_OK)));
+      .WillOnce(testing::Return(
+          reinterpret_cast<ValkeyModuleKey *>(VALKEYMODULE_OK)));
 
   std::string key = "test_key";
-  ValkeyModuleType* module_type = reinterpret_cast<ValkeyModuleType*>(2);
-  void* ptr = reinterpret_cast<void*>(3);
+  ValkeyModuleType *module_type = reinterpret_cast<ValkeyModuleType *>(2);
+  void *ptr = reinterpret_cast<void *>(3);
 
   // Call the Register function
   absl::Status result = ModuleType::Register(nullptr, key, ptr, module_type);
@@ -47,7 +47,7 @@ TEST_F(ModuleTypeTest, FailOpenRegisterKey) {
 }
 
 TEST_F(ModuleTypeTest, SuccessfullyRegistersKey) {
-  auto fake_key = reinterpret_cast<ValkeyModuleKey*>(1);
+  auto fake_key = reinterpret_cast<ValkeyModuleKey *>(1);
   EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
       .WillOnce(testing::Return(fake_key));
   EXPECT_CALL(*kMockValkeyModule, CloseKey(fake_key))
@@ -56,8 +56,8 @@ TEST_F(ModuleTypeTest, SuccessfullyRegistersKey) {
       .WillOnce(testing::Return(VALKEYMODULE_KEYTYPE_EMPTY));
 
   std::string key = "test_key";
-  ValkeyModuleType* module_type = reinterpret_cast<ValkeyModuleType*>(2);
-  void* ptr = reinterpret_cast<void*>(3);
+  ValkeyModuleType *module_type = reinterpret_cast<ValkeyModuleType *>(2);
+  void *ptr = reinterpret_cast<void *>(3);
   EXPECT_CALL(*kMockValkeyModule,
               ModuleTypeSetValue(fake_key, module_type, ptr))
       .WillOnce(testing::Return(VALKEYMODULE_OK));
@@ -70,7 +70,7 @@ TEST_F(ModuleTypeTest, SuccessfullyRegistersKey) {
 }
 
 TEST_F(ModuleTypeTest, RegisterKeyAlreadyExistsError) {
-  auto fake_key = reinterpret_cast<ValkeyModuleKey*>(1);
+  auto fake_key = reinterpret_cast<ValkeyModuleKey *>(1);
   EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
       .WillOnce(testing::Return(fake_key));
   EXPECT_CALL(*kMockValkeyModule, CloseKey(fake_key))
@@ -79,8 +79,8 @@ TEST_F(ModuleTypeTest, RegisterKeyAlreadyExistsError) {
       .WillOnce(testing::Return(VALKEYMODULE_KEYTYPE_STRING));
 
   std::string key = "test_key";
-  ValkeyModuleType* module_type = reinterpret_cast<ValkeyModuleType*>(2);
-  void* ptr = reinterpret_cast<void*>(3);
+  ValkeyModuleType *module_type = reinterpret_cast<ValkeyModuleType *>(2);
+  void *ptr = reinterpret_cast<void *>(3);
 
   // Call the Register function
   absl::Status result = ModuleType::Register(nullptr, key, ptr, module_type);
@@ -90,7 +90,7 @@ TEST_F(ModuleTypeTest, RegisterKeyAlreadyExistsError) {
 }
 
 TEST_F(ModuleTypeTest, RegisterInternalError) {
-  auto fake_key = reinterpret_cast<ValkeyModuleKey*>(1);
+  auto fake_key = reinterpret_cast<ValkeyModuleKey *>(1);
   EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
       .WillOnce(testing::Return(fake_key));
   EXPECT_CALL(*kMockValkeyModule, CloseKey(fake_key))
@@ -105,8 +105,8 @@ TEST_F(ModuleTypeTest, RegisterInternalError) {
       .WillOnce(testing::Return(1));
 
   std::string key = "test_key";
-  ValkeyModuleType* module_type = reinterpret_cast<ValkeyModuleType*>(2);
-  void* ptr = reinterpret_cast<void*>(3);
+  ValkeyModuleType *module_type = reinterpret_cast<ValkeyModuleType *>(2);
+  void *ptr = reinterpret_cast<void *>(3);
 
   // Call the Register function
   absl::Status result = ModuleType::Register(nullptr, key, ptr, module_type);
@@ -115,7 +115,7 @@ TEST_F(ModuleTypeTest, RegisterInternalError) {
 }
 
 TEST_F(ModuleTypeTest, DeregisterSuccessfully) {
-  auto fake_key = reinterpret_cast<ValkeyModuleKey*>(1);
+  auto fake_key = reinterpret_cast<ValkeyModuleKey *>(1);
   EXPECT_CALL(*kMockValkeyModule, KeyExists(testing::_, testing::_))
       .WillOnce(testing::Return(1));
   EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))

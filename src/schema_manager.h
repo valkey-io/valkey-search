@@ -157,8 +157,7 @@ class SchemaManager {
   // Normalizes proto fields to match the defaults applied by the IndexSchema
   // constructor. Ensures the stored proto matches what ToProto() produces,
   // preventing spurious MessageDifferencer mismatches.
-  static void NormalizeIndexSchemaProtoDefaults(
-      data_model::IndexSchema &proto);
+  static void NormalizeIndexSchemaProtoDefaults(data_model::IndexSchema &proto);
 
   absl::StatusOr<std::shared_ptr<IndexSchema>> RemoveIndexSchemaInternal(
       uint32_t db_num, absl::string_view name)

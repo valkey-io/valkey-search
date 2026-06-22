@@ -232,8 +232,7 @@ absl::Status SchemaManager::CreateIndexSchemaInternal(
     auto existing_it = db_to_aliases_.find(db_num);
     if (existing_it != db_to_aliases_.end()) {
       auto conflict = existing_it->second.find(alias);
-      if (conflict != existing_it->second.end() &&
-          conflict->second != name) {
+      if (conflict != existing_it->second.end() && conflict->second != name) {
         VMSDK_LOG(WARNING, detached_ctx_.get())
             << "Alias '" << alias << "' reassigned from index '"
             << conflict->second << "' to '" << name << "' in db " << db_num;
@@ -698,10 +697,9 @@ void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx) {
       }
       data_model::IndexSchema stored_schema;
       if (!stored_proto_or.value().UnpackTo(&stored_schema)) {
-        VMSDK_LOG(WARNING, ctx)
-            << "Unable to unpack stored proto for "
-            << vmsdk::config::RedactIfNeeded(name)
-            << " on FLUSHDB of DB " << selected_db;
+        VMSDK_LOG(WARNING, ctx) << "Unable to unpack stored proto for "
+                                << vmsdk::config::RedactIfNeeded(name)
+                                << " on FLUSHDB of DB " << selected_db;
         continue;
       }
       auto add_status = CreateIndexSchemaInternal(ctx, stored_schema);
@@ -737,8 +735,7 @@ void SchemaManager::OnSwapDB(ValkeyModuleSwapDbInfo *swap_db_info) {
   std::swap(db_to_index_schemas_[swap_db_info->dbnum_first],
             db_to_index_schemas_[swap_db_info->dbnum_second]);
   // Swap the forward alias map between the two databases.
-  db_to_aliases_.insert(
-      {static_cast<uint32_t>(swap_db_info->dbnum_first), {}});
+  db_to_aliases_.insert({static_cast<uint32_t>(swap_db_info->dbnum_first), {}});
   db_to_aliases_.insert(
       {static_cast<uint32_t>(swap_db_info->dbnum_second), {}});
   std::swap(db_to_aliases_[swap_db_info->dbnum_first],
@@ -1210,13 +1207,11 @@ absl::Status SchemaManager::RemoveAlias(uint32_t db_num,
       absl::MutexLock lock(&db_to_index_schemas_mutex_);
       auto db_alias_it = db_to_aliases_.find(db_num);
       if (db_alias_it == db_to_aliases_.end()) {
-        return absl::NotFoundError(
-            "Alias does not exist");
+        return absl::NotFoundError("Alias does not exist");
       }
       auto alias_it = db_alias_it->second.find(alias);
       if (alias_it == db_alias_it->second.end()) {
-        return absl::NotFoundError(
-            "Alias does not exist");
+        return absl::NotFoundError("Alias does not exist");
       }
       owning_index = alias_it->second;
     }
@@ -1241,9 +1236,9 @@ absl::Status SchemaManager::RemoveAlias(uint32_t db_num,
 
     // Remove the alias from the repeated field.
     auto *aliases = schema_proto.mutable_aliases();
-    aliases->erase(std::remove(aliases->begin(), aliases->end(),
-                               std::string(alias)),
-                   aliases->end());
+    aliases->erase(
+        std::remove(aliases->begin(), aliases->end(), std::string(alias)),
+        aliases->end());
 
     // Re-commit the modified proto.
     auto any_proto = std::make_unique<google::protobuf::Any>();
@@ -1276,9 +1271,9 @@ absl::Status SchemaManager::RemoveAlias(uint32_t db_num,
   auto target = LookupInternal(db_num, owning_index);
   if (target.ok()) {
     auto aliases = target.value()->GetAliases();
-    aliases.erase(std::remove(aliases.begin(), aliases.end(),
-                              std::string(alias)),
-                  aliases.end());
+    aliases.erase(
+        std::remove(aliases.begin(), aliases.end(), std::string(alias)),
+        aliases.end());
     target.value()->SetAliases(std::move(aliases));
   }
 
@@ -1469,9 +1464,9 @@ absl::Status SchemaManager::UpdateAlias(uint32_t db_num,
     auto old_target = LookupInternal(db_num, old_index);
     if (old_target.ok()) {
       auto old_aliases = old_target.value()->GetAliases();
-      old_aliases.erase(
-          std::remove(old_aliases.begin(), old_aliases.end(), std::string(alias)),
-          old_aliases.end());
+      old_aliases.erase(std::remove(old_aliases.begin(), old_aliases.end(),
+                                    std::string(alias)),
+                        old_aliases.end());
       old_target.value()->SetAliases(std::move(old_aliases));
     }
   }

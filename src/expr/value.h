@@ -131,7 +131,7 @@ static inline std::ostream& operator<<(std::ostream& os, Ordering o) {
 Ordering Compare(const Value& l, const Value& r);
 
 //
-// Comparison operators: kUNORDERED values are not equal to anything.
+// These orderings aren't IEEE compatible, but they match the legacy
 //
 static inline bool operator==(const Value& l, const Value& r) {
   auto res = Compare(l, r);

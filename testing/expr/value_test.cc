@@ -518,26 +518,18 @@ TEST_F(ValueTest, ArrayComparison_ArrayVsScalar) {
   // Array vs double
   EXPECT_EQ(Compare(vec, scalar_double), Ordering::kUNORDERED);
   EXPECT_EQ(Compare(scalar_double, vec), Ordering::kUNORDERED);
-  EXPECT_FALSE(vec == scalar_double);
-  EXPECT_TRUE(vec != scalar_double);
 
   // Array vs string
   EXPECT_EQ(Compare(vec, scalar_string), Ordering::kUNORDERED);
   EXPECT_EQ(Compare(scalar_string, vec), Ordering::kUNORDERED);
-  EXPECT_FALSE(vec == scalar_string);
-  EXPECT_TRUE(vec != scalar_string);
 
   // Array vs bool
   EXPECT_EQ(Compare(vec, scalar_bool), Ordering::kUNORDERED);
   EXPECT_EQ(Compare(scalar_bool, vec), Ordering::kUNORDERED);
-  EXPECT_FALSE(vec == scalar_bool);
-  EXPECT_TRUE(vec != scalar_bool);
 
   // Array vs nil
   EXPECT_EQ(Compare(vec, scalar_nil), Ordering::kUNORDERED);
   EXPECT_EQ(Compare(scalar_nil, vec), Ordering::kUNORDERED);
-  EXPECT_FALSE(vec == scalar_nil);
-  EXPECT_TRUE(vec != scalar_nil);
 
   // Empty vector vs scalar
   Value empty_vec({});

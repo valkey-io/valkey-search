@@ -62,6 +62,14 @@ class BruteforceSearch : public AlgorithmInterface<dist_t, InputVectorT> {
                 maxElements);
     }
 
+    ~BruteforceSearch() {
+        if (data_ != nullptr) {
+            for (size_t i = 0; i < cur_element_count_; i++) {
+                std::destroy_at(reinterpret_cast<SavedVectorT *>((*data_)[i]));
+            }
+        }
+    }
+
 
     void addPoint(const InputVectorT &datapoint, labeltype label, bool replace_deleted = false) {
         int idx;

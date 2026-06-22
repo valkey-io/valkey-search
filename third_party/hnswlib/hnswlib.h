@@ -207,20 +207,20 @@ class SpaceInterface {
   virtual ~SpaceInterface() {}
 };
 
-template <typename dist_t>
+template <typename dist_t, typename InputVectorT>
 class AlgorithmInterface {
  public:
-  virtual void addPoint(const void *datapoint, labeltype label,
+  virtual void addPoint(const InputVectorT &datapoint, labeltype label,
                         bool replace_deleted = false) = 0;
 
   virtual std::priority_queue<std::pair<dist_t, labeltype>> searchKnn(
-      const void *, size_t, BaseFilterFunctor *isIdAllowed = nullptr,
+      const InputVectorT &query_data, size_t k, BaseFilterFunctor *isIdAllowed = nullptr,
       BaseCancellationFunctor *isCancelled = nullptr // VALKEYSEARCH
     ) const = 0;
 
   // Return k nearest neighbor in the order of closer fist
   virtual std::vector<std::pair<dist_t, labeltype>> searchKnnCloserFirst(
-      const void *query_data, size_t k,
+      const InputVectorT &query_data, size_t k,
       BaseFilterFunctor *isIdAllowed = nullptr,
       BaseCancellationFunctor *isCancelled = nullptr // VALKEYSEARCH
     ) const;
@@ -229,10 +229,10 @@ class AlgorithmInterface {
   virtual ~AlgorithmInterface() {}
 };
 
-template <typename dist_t>
+template <typename dist_t, typename InputVectorT>
 std::vector<std::pair<dist_t, labeltype>>
-AlgorithmInterface<dist_t>::searchKnnCloserFirst(
-    const void *query_data, size_t k, BaseFilterFunctor *isIdAllowed,
+AlgorithmInterface<dist_t, InputVectorT>::searchKnnCloserFirst(
+    const InputVectorT &query_data, size_t k, BaseFilterFunctor *isIdAllowed,
     BaseCancellationFunctor *isCancelled // VALKEYSEARCH
   ) const {
   std::vector<std::pair<dist_t, labeltype>> result;

@@ -134,11 +134,13 @@ Ordering Compare(const Value& l, const Value& r);
 // Comparison operators: kUNORDERED values are not equal to anything.
 //
 static inline bool operator==(const Value& l, const Value& r) {
-  return Compare(l, r) == Ordering::kEQUAL;
+  auto res = Compare(l, r);
+  return res == Ordering::kEQUAL || res == Ordering::kUNORDERED;
 }
 
 static inline bool operator!=(const Value& l, const Value& r) {
-  return Compare(l, r) != Ordering::kEQUAL;
+  auto res = Compare(l, r);
+  return res == Ordering::kLESS || res == Ordering::kGREATER;
 }
 
 static inline bool operator<(const Value& l, const Value& r) {
@@ -147,7 +149,7 @@ static inline bool operator<(const Value& l, const Value& r) {
 
 static inline bool operator<=(const Value& l, const Value& r) {
   auto res = Compare(l, r);
-  return res == Ordering::kLESS || res == Ordering::kEQUAL;
+  return res != Ordering::kGREATER;
 }
 
 static inline bool operator>(const Value& l, const Value& r) {
@@ -156,7 +158,7 @@ static inline bool operator>(const Value& l, const Value& r) {
 
 static inline bool operator>=(const Value& l, const Value& r) {
   auto res = Compare(l, r);
-  return res == Ordering::kGREATER || res == Ordering::kEQUAL;
+  return res != Ordering::kLESS;
 }
 
 // Dyadic Numerical Functions

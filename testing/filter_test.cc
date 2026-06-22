@@ -67,6 +67,8 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
   VMSDK_EXPECT_OK(tag_index_1->AddRecord("key_backslash_pipe", R"(a\|b)"));
   // key_backslash has tag "a\" (trailing backslash)
   VMSDK_EXPECT_OK(tag_index_1->AddRecord("key_backslash", R"(a\)"));
+  // key_brace has tag "a}b" (literal closing brace in the stored value)
+  VMSDK_EXPECT_OK(tag_index_1->AddRecord("key_brace", "a}b"));
   VMSDK_EXPECT_OK(
       index_schema->AddIndex("tag_field_1", "tag_field_1", tag_index_1));
   auto tag_index_1_2 =
@@ -200,6 +202,53 @@ INSTANTIATE_TEST_SUITE_P(
                                        "  NUMERIC(num_field_2.0)\n"
                                        "  NUMERIC(num_field_1.5)\n"
                                        "}\n",
+        },
+        {
+            .test_name = "numeric_happy_path_3",
+            .filter = "@num_field_2.0:[-1.5 2.5] @num_field_1.5:[-1.0 2.0]",
+            .create_success = true,
+            .evaluate_success = true,
+            .expected_tree_structure = "AND{\n"
+                                       "  NUMERIC(num_field_2.0)\n"
+                                       "  NUMERIC(num_field_1.5)\n"
+                                       "}\n",
+        },
+        {
+            .test_name = "numeric_happy_path_scientific_notation",
+            .filter = "@num_field_2.0:[1.0 1e2] @num_field_1.5:[1e0 1.5]",
+            .create_success = true,
+            .evaluate_success = true,
+            .expected_tree_structure = "AND{\n"
+                                       "  NUMERIC(num_field_2.0)\n"
+                                       "  NUMERIC(num_field_1.5)\n"
+                                       "}\n",
+        },
+        {
+            .test_name = "numeric_happy_path_scientific_notation_negative",
+            .filter = "@num_field_2.0:[1e-2 1e+2] "
+                      "@num_field_1.5:[-1e2 1.5] "
+                      "@num_field_1.5:[-1e-2 1.5]",
+            .create_success = true,
+            .evaluate_success = true,
+            .expected_tree_structure = "AND{\n"
+                                       "  NUMERIC(num_field_2.0)\n"
+                                       "  NUMERIC(num_field_1.5)\n"
+                                       "  NUMERIC(num_field_1.5)\n"
+                                       "}\n",
+        },
+        {
+            .test_name = "numeric_invalid_embedded_minus",
+            .filter = "@num_field_1.5:[1-2 2.0]",
+            .create_success = false,
+            .create_expected_error_message =
+                "Expected space or `,` between start and end values of a "
+                "numeric field. Position: 17",
+        },
+        {
+            .test_name = "numeric_invalid_leading_plus",
+            .filter = "@num_field_1.5:[+1 2.0]",
+            .create_success = false,
+            .create_expected_error_message = "Invalid number: ",
         },
         {
             .test_name = "numeric_happy_path_inclusive_1",
@@ -1580,6 +1629,25 @@ INSTANTIATE_TEST_SUITE_P(
             .create_success = false,
             .create_expected_error_message = "Missing OR term",
         },
+        {
+            .test_name = "or_with_missing_right_operand_trailing_pipe",
+            .filter = "@num_field_1.5:[1.0 2.0]|",
+            .create_success = false,
+            .create_expected_error_message = "Missing OR term",
+        },
+        {
+            .test_name = "or_with_missing_right_operand_trailing_pipe_space",
+            .filter = "@num_field_1.5:[1.0 2.0] |",
+            .create_success = false,
+            .create_expected_error_message = "Missing OR term",
+        },
+        {
+            .test_name =
+                "or_with_missing_right_operand_trailing_pipe_in_parens",
+            .filter = "(@num_field_1.5:[1.0 2.0]|)",
+            .create_success = false,
+            .create_expected_error_message = "Missing OR term",
+        },
         // =================================================================
         // Tests for escaped pipe separator in tag values
         // =================================================================
@@ -1638,6 +1706,29 @@ INSTANTIATE_TEST_SUITE_P(
             .create_success = true,
             .evaluate_success = false,
             .key = "key1",
+        },
+        // =================================================================
+        // Test escaped closing brace tests
+        // =================================================================
+        {
+            .test_name = "tag_escaped_brace_matches_literal_brace",
+            .filter = R"(@tag_field_1:{a\}b})",
+            .create_success = true,
+            .evaluate_success = true,
+            .key = "key_brace",  // has tag "a}b"
+        },
+        {
+            .test_name = "tag_escaped_brace_no_match",
+            .filter = R"(@tag_field_1:{x\}y})",
+            .create_success = true,
+            .evaluate_success = false,
+            .key = "key1",
+        },
+        {
+            .test_name = "tag_escaped_brace_missing_close_bracket",
+            .filter = R"(@tag_field_1:{a\}b)",
+            .create_success = false,
+            .create_expected_error_message = "Missing closing TAG bracket, '}'",
         },
         // =================================================================
         // Hierarchical tests: ensure escaping works with AND/OR operators

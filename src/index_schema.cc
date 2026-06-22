@@ -112,6 +112,15 @@ static bool RDBValidateOnWrite() {
       .GetValue();
 }
 
+std::optional<uint16_t> ComputeSingleSlotNumber(absl::string_view index_name) {
+  if (!vmsdk::ParseHashTag(index_name).has_value()) {
+    return std::nullopt;
+  }
+
+  auto key = vmsdk::MakeUniqueValkeyString(index_name);
+  return ValkeyModule_ClusterKeySlot(key.get());
+}
+
 DEV_INTEGER_COUNTER(rdb_stats, rdb_save_keys);
 DEV_INTEGER_COUNTER(rdb_stats, rdb_load_keys);
 DEV_INTEGER_COUNTER(rdb_stats, rdb_save_sections);
@@ -291,6 +300,7 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
       attribute_data_type_(std::move(attribute_data_type)),
       name_(std::string(index_schema_proto.name())),
       db_num_(index_schema_proto.db_num()),
+      single_slot_number_(ComputeSingleSlotNumber(index_schema_proto.name())),
       language_(index_schema_proto.language()),
       punctuation_(index_schema_proto.punctuation()),
       with_offsets_(index_schema_proto.with_offsets()),
@@ -576,13 +586,6 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
     vmsdk::UniqueValkeyString record = VectorExternalizer::Instance().GetRecord(
         ctx, attribute_data_type_.get(), key_obj.get(), key_cstr,
         attribute.GetIdentifier(), is_module_owned);
-    // Early return on record not found just if the record not tracked.
-    // Otherwise, it will be processed as a delete
-    if (!record && !attribute.GetIndex()->IsTracked(interned_key) &&
-        !InTrackedMutationRecords(interned_key, attribute.GetIdentifier())) {
-      attribute.GetIndex()->UnTrack(interned_key);
-      continue;
-    }
     if (!is_module_owned) {
       // A record which are owned by the module were not modified and are
       // already tracked in the vector registry.

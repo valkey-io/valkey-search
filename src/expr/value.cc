@@ -270,13 +270,12 @@ Ordering Compare(const Value& l, const Value& r) {
 
   // Array comparisons
   if (l.IsArray() && r.IsArray()) {
-    // Lexicographic comparison for array-array
     auto lvec = l.GetArray();
     auto rvec = r.GetArray();
 
-    // Compare element-by-element until mismatch found
     size_t min_size = std::min(lvec->size(), rvec->size());
-    if(min_size > 0) {
+    if (min_size > 0) {
+      // Match RediSearch behavior by only comparing first elements
       return Compare((*lvec)[0], (*rvec)[0]);
     }
 
@@ -289,7 +288,7 @@ Ordering Compare(const Value& l, const Value& r) {
     return Ordering::kEQUAL;
   } else if (l.IsArray() || r.IsArray()) {
     // Array vs scalar
-    return CompareStrings(l.AsString(), r.AsString());
+    return Ordering::kUNORDERED;
   }
 
   // Need to handle non-equivalent types.

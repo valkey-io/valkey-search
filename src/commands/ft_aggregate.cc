@@ -72,7 +72,7 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
           indexer_type == indexes::IndexerType::kHNSW ||
           indexer_type == indexes::IndexerType::kFlat) {
         return absl::InvalidArgumentError(absl::StrCat(
-            "Loading of vector fields is not supported (field ", load, ")"));
+            "Loading of vector fields is not supported (field `", load, "`)"));
       }
       auto schema_identifier = params.index_schema->GetIdentifier(load);
       if (schema_identifier.ok()) {

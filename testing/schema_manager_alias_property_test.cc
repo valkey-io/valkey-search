@@ -100,8 +100,7 @@ class AliasOnlyChangeNoRebuildTest : public vmsdk::ValkeyTest {
             SendClusterMessage(testing::_, testing::_, testing::_, testing::_,
                                testing::_))
         .WillByDefault(testing::Return(VALKEYMODULE_OK));
-    ON_CALL(*kMockValkeyModule,
-            Replicate(testing::_, testing::_, testing::_))
+    ON_CALL(*kMockValkeyModule, Replicate(testing::_, testing::_, testing::_))
         .WillByDefault(testing::Return(VALKEYMODULE_OK));
 
     // Mock cluster operations to prevent abort in MetadataManager.
@@ -158,10 +157,8 @@ TEST_F(AliasOnlyChangeNoRebuildTest, PropertyAliasOnlyChangePreservesIndex) {
     data_model::IndexSchema base_proto;
     base_proto.set_name(index_name);
     base_proto.set_db_num(kDbNum);
-    base_proto.add_subscribed_key_prefixes(
-        "prefix_" + RandomString(rng, 4));
-    base_proto.set_attribute_data_type(
-        data_model::ATTRIBUTE_DATA_TYPE_HASH);
+    base_proto.add_subscribed_key_prefixes("prefix_" + RandomString(rng, 4));
+    base_proto.set_attribute_data_type(data_model::ATTRIBUTE_DATA_TYPE_HASH);
 
     // Add one vector attribute (required for a valid index).
     auto *attr = base_proto.add_attributes();
@@ -217,10 +214,9 @@ TEST_F(AliasOnlyChangeNoRebuildTest, PropertyAliasOnlyChangePreservesIndex) {
     auto packed = std::make_unique<google::protobuf::Any>();
     packed->PackFrom(mutated_proto);
 
-    auto entry_result =
-        coordinator::MetadataManager::Instance().CreateEntry(
-            kSchemaManagerMetadataTypeName,
-            coordinator::ObjName(kDbNum, index_name), std::move(packed));
+    auto entry_result = coordinator::MetadataManager::Instance().CreateEntry(
+        kSchemaManagerMetadataTypeName,
+        coordinator::ObjName(kDbNum, index_name), std::move(packed));
     ASSERT_TRUE(entry_result.ok())
         << "Iteration " << iteration
         << ": CreateEntry failed: " << entry_result.status();
@@ -337,7 +333,8 @@ TEST_F(AliasOnlyChangeNoRebuildTest,
     auto existing_schema_or =
         SchemaManager::Instance().GetIndexSchema(kDbNum, index_name);
     ASSERT_TRUE(existing_schema_or.ok()) << "Iteration " << iter;
-    data_model::IndexSchema alias_proto = *existing_schema_or.value()->ToProto();
+    data_model::IndexSchema alias_proto =
+        *existing_schema_or.value()->ToProto();
     alias_proto.clear_aliases();
     for (const auto &alias : expected_aliases) {
       alias_proto.add_aliases(alias);
@@ -347,10 +344,9 @@ TEST_F(AliasOnlyChangeNoRebuildTest,
     // RebuildAliasMapsForIndex since structure is unchanged).
     auto packed = std::make_unique<google::protobuf::Any>();
     packed->PackFrom(alias_proto);
-    auto entry_result =
-        coordinator::MetadataManager::Instance().CreateEntry(
-            kSchemaManagerMetadataTypeName,
-            coordinator::ObjName(kDbNum, index_name), std::move(packed));
+    auto entry_result = coordinator::MetadataManager::Instance().CreateEntry(
+        kSchemaManagerMetadataTypeName,
+        coordinator::ObjName(kDbNum, index_name), std::move(packed));
     ASSERT_TRUE(entry_result.ok())
         << "Iteration " << iter
         << ": CreateEntry failed: " << entry_result.status();
@@ -504,17 +500,15 @@ data_model::IndexSchema ApplyStructuralMutation(
       // Instead, toggle between HASH and UNSPECIFIED which is a structural
       // change the MessageDifferencer will detect.
       modified.set_attribute_data_type(
-          modified.attribute_data_type() ==
-                  data_model::ATTRIBUTE_DATA_TYPE_HASH
+          modified.attribute_data_type() == data_model::ATTRIBUTE_DATA_TYPE_HASH
               ? data_model::ATTRIBUTE_DATA_TYPE_UNSPECIFIED
               : data_model::ATTRIBUTE_DATA_TYPE_HASH);
       break;
     }
     case StructuralMutation::kChangeLanguage: {
-      modified.set_language(
-          modified.language() == data_model::LANGUAGE_ENGLISH
-              ? data_model::LANGUAGE_UNSPECIFIED
-              : data_model::LANGUAGE_ENGLISH);
+      modified.set_language(modified.language() == data_model::LANGUAGE_ENGLISH
+                                ? data_model::LANGUAGE_UNSPECIFIED
+                                : data_model::LANGUAGE_ENGLISH);
       break;
     }
     case StructuralMutation::kChangePunctuation: {
@@ -590,10 +584,10 @@ data_model::IndexSchema ApplyStructuralMutation(
         auto *vi = modified.mutable_attributes(0)
                        ->mutable_index()
                        ->mutable_vector_index();
-        vi->set_distance_metric(
-            vi->distance_metric() == data_model::DISTANCE_METRIC_COSINE
-                ? data_model::DISTANCE_METRIC_L2
-                : data_model::DISTANCE_METRIC_COSINE);
+        vi->set_distance_metric(vi->distance_metric() ==
+                                        data_model::DISTANCE_METRIC_COSINE
+                                    ? data_model::DISTANCE_METRIC_L2
+                                    : data_model::DISTANCE_METRIC_COSINE);
       }
       break;
     }
@@ -603,10 +597,10 @@ data_model::IndexSchema ApplyStructuralMutation(
         auto *vi = modified.mutable_attributes(0)
                        ->mutable_index()
                        ->mutable_vector_index();
-        vi->set_vector_data_type(
-            vi->vector_data_type() == data_model::VECTOR_DATA_TYPE_FLOAT32
-                ? data_model::VECTOR_DATA_TYPE_UNSPECIFIED
-                : data_model::VECTOR_DATA_TYPE_FLOAT32);
+        vi->set_vector_data_type(vi->vector_data_type() ==
+                                         data_model::VECTOR_DATA_TYPE_FLOAT32
+                                     ? data_model::VECTOR_DATA_TYPE_UNSPECIFIED
+                                     : data_model::VECTOR_DATA_TYPE_FLOAT32);
       }
       break;
     }
@@ -707,8 +701,7 @@ class StructuralProtoChangeRebuildTest : public vmsdk::ValkeyTest {
             SendClusterMessage(testing::_, testing::_, testing::_, testing::_,
                                testing::_))
         .WillByDefault(testing::Return(VALKEYMODULE_OK));
-    ON_CALL(*kMockValkeyModule,
-            Replicate(testing::_, testing::_, testing::_))
+    ON_CALL(*kMockValkeyModule, Replicate(testing::_, testing::_, testing::_))
         .WillByDefault(testing::Return(VALKEYMODULE_OK));
     ON_CALL(*kMockValkeyModule,
             Call(testing::_, testing::StrEq("CLUSTER"), testing::StrEq("c"),
@@ -749,8 +742,7 @@ class StructuralProtoChangeRebuildTest : public vmsdk::ValkeyTest {
 // Generate 120+ test cases covering all structural mutation types.
 std::vector<StructuralChangeTestCase> GenerateStructuralTestCases() {
   std::vector<StructuralChangeTestCase> cases;
-  const int num_mutations =
-      static_cast<int>(StructuralMutation::kCount);
+  const int num_mutations = static_cast<int>(StructuralMutation::kCount);
 
   // With 24 mutation types × 5 seeds = 120 test cases (> 100).
   std::mt19937 rng(42);  // Fixed seed for reproducibility.
@@ -796,8 +788,7 @@ TEST_F(StructuralProtoChangeRebuildTest,
     base_proto.set_name(index_name);
     base_proto.set_db_num(kDbNum);
     base_proto.add_subscribed_key_prefixes("prefix:");
-    base_proto.set_attribute_data_type(
-        data_model::ATTRIBUTE_DATA_TYPE_HASH);
+    base_proto.set_attribute_data_type(data_model::ATTRIBUTE_DATA_TYPE_HASH);
     base_proto.set_language(data_model::LANGUAGE_ENGLISH);
     base_proto.set_punctuation(".,!?");
     base_proto.set_with_offsets(true);
@@ -842,11 +833,9 @@ TEST_F(StructuralProtoChangeRebuildTest,
     //    (triggers OnMetadataCallback → detects structural change → rebuild).
     auto packed_modified = std::make_unique<google::protobuf::Any>();
     packed_modified->PackFrom(modified_proto);
-    auto update_result =
-        coordinator::MetadataManager::Instance().CreateEntry(
-            kSchemaManagerMetadataTypeName,
-            coordinator::ObjName(kDbNum, index_name),
-            std::move(packed_modified));
+    auto update_result = coordinator::MetadataManager::Instance().CreateEntry(
+        kSchemaManagerMetadataTypeName,
+        coordinator::ObjName(kDbNum, index_name), std::move(packed_modified));
     // Some mutations may produce an invalid proto that gets rejected
     // (e.g., unsupported attribute type). Skip these.
     if (!update_result.ok()) {
@@ -854,8 +843,7 @@ TEST_F(StructuralProtoChangeRebuildTest,
     }
 
     // 5. Verify the IndexSchema pointer CHANGED (full rebuild occurred).
-    auto new_or =
-        SchemaManager::Instance().GetIndexSchema(kDbNum, index_name);
+    auto new_or = SchemaManager::Instance().GetIndexSchema(kDbNum, index_name);
     if (!new_or.ok()) {
       // Index was removed but recreation failed — still confirms structural
       // change was detected (the Remove happened).
@@ -901,8 +889,7 @@ class AliasListDeterminismTest : public vmsdk::ValkeyTest {
         .WillByDefault(testing::Return());
     ON_CALL(*kMockValkeyModule, SelectDb(testing::_, kDbNum))
         .WillByDefault(testing::Return(VALKEYMODULE_OK));
-    ON_CALL(*kMockValkeyModule,
-            Replicate(testing::_, testing::_, testing::_))
+    ON_CALL(*kMockValkeyModule, Replicate(testing::_, testing::_, testing::_))
         .WillByDefault(testing::Return(VALKEYMODULE_OK));
 
     // Standalone mode: no coordinator, no MetadataManager needed.
@@ -964,8 +951,8 @@ TEST_F(AliasListDeterminismTest, PropertyAliasListAlwaysSorted) {
     // many exist.
     std::uniform_int_distribution<int> action_dist(0, 99);
     int action = action_dist(rng);
-    bool do_add = active_aliases.empty() ||
-                  (action < 70 && active_aliases.size() < 30);
+    bool do_add =
+        active_aliases.empty() || (action < 70 && active_aliases.size() < 30);
 
     if (do_add) {
       // Generate a random alias name.
@@ -983,8 +970,8 @@ TEST_F(AliasListDeterminismTest, PropertyAliasListAlwaysSorted) {
       auto it = active_aliases.begin();
       std::advance(it, idx_dist(rng));
       std::string alias_to_remove = *it;
-      auto status = SchemaManager::Instance().RemoveAlias(kDbNum,
-                                                          alias_to_remove);
+      auto status =
+          SchemaManager::Instance().RemoveAlias(kDbNum, alias_to_remove);
       if (status.ok()) {
         active_aliases.erase(alias_to_remove);
       }
@@ -1001,9 +988,8 @@ TEST_F(AliasListDeterminismTest, PropertyAliasListAlwaysSorted) {
     for (size_t i = 1; i < aliases.size(); ++i) {
       ASSERT_LT(aliases[i - 1], aliases[i])
           << "Iteration " << iter
-          << ": aliases not in sorted order at positions " << (i - 1)
-          << " and " << i << ": \"" << aliases[i - 1] << "\" >= \""
-          << aliases[i] << "\"";
+          << ": aliases not in sorted order at positions " << (i - 1) << " and "
+          << i << ": \"" << aliases[i - 1] << "\" >= \"" << aliases[i] << "\"";
     }
 
     // Also verify the alias count matches our tracking set.
@@ -1017,8 +1003,8 @@ TEST_F(AliasListDeterminismTest, PropertyAliasListAlwaysSorted) {
       ASSERT_LE(all_aliases[i - 1].first, all_aliases[i].first)
           << "Iteration " << iter
           << ": GetAllAliases() not in sorted order at positions " << (i - 1)
-          << " and " << i << ": \"" << all_aliases[i - 1].first
-          << "\" > \"" << all_aliases[i].first << "\"";
+          << " and " << i << ": \"" << all_aliases[i - 1].first << "\" > \""
+          << all_aliases[i].first << "\"";
     }
 
     // Verify GetAllAliases() count matches active aliases.
@@ -1054,8 +1040,7 @@ class AliasUpdateReachabilityTest : public vmsdk::ValkeyTest {
         .WillByDefault(testing::Return());
     ON_CALL(*kMockValkeyModule, SelectDb(testing::_, kDbNum))
         .WillByDefault(testing::Return(VALKEYMODULE_OK));
-    ON_CALL(*kMockValkeyModule,
-            Replicate(testing::_, testing::_, testing::_))
+    ON_CALL(*kMockValkeyModule, Replicate(testing::_, testing::_, testing::_))
         .WillByDefault(testing::Return(VALKEYMODULE_OK));
 
     SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
@@ -1160,18 +1145,16 @@ TEST_F(AliasUpdateReachabilityTest,
         SchemaManager::Instance().GetIndexSchema(kDbNum, index_x);
     ASSERT_TRUE(schema_x_before.ok()) << "Iteration " << iter;
     const auto &x_aliases_before = schema_x_before.value()->GetAliases();
-    ASSERT_NE(std::find(x_aliases_before.begin(), x_aliases_before.end(),
-                        alias),
-              x_aliases_before.end())
-        << "Iteration " << iter
-        << ": alias not found in X before UpdateAlias";
+    ASSERT_NE(
+        std::find(x_aliases_before.begin(), x_aliases_before.end(), alias),
+        x_aliases_before.end())
+        << "Iteration " << iter << ": alias not found in X before UpdateAlias";
 
     // Perform UpdateAlias: move alias from X to Y.
     auto update_status =
         SchemaManager::Instance().UpdateAlias(kDbNum, alias, index_y);
     ASSERT_TRUE(update_status.ok())
-        << "Iteration " << iter
-        << ": UpdateAlias failed: " << update_status;
+        << "Iteration " << iter << ": UpdateAlias failed: " << update_status;
 
     // Property verification: alias must be reachable — present in exactly
     // the target index Y.
@@ -1179,35 +1162,29 @@ TEST_F(AliasUpdateReachabilityTest,
         SchemaManager::Instance().GetIndexSchema(kDbNum, index_x);
     ASSERT_TRUE(schema_x_after.ok()) << "Iteration " << iter;
     const auto &x_aliases_after = schema_x_after.value()->GetAliases();
-    bool alias_in_x = std::find(x_aliases_after.begin(),
-                                x_aliases_after.end(),
+    bool alias_in_x = std::find(x_aliases_after.begin(), x_aliases_after.end(),
                                 alias) != x_aliases_after.end();
 
     auto schema_y_after =
         SchemaManager::Instance().GetIndexSchema(kDbNum, index_y);
     ASSERT_TRUE(schema_y_after.ok()) << "Iteration " << iter;
     const auto &y_aliases_after = schema_y_after.value()->GetAliases();
-    bool alias_in_y = std::find(y_aliases_after.begin(),
-                                y_aliases_after.end(),
+    bool alias_in_y = std::find(y_aliases_after.begin(), y_aliases_after.end(),
                                 alias) != y_aliases_after.end();
 
     // Core property: alias must NEVER be absent from both indexes.
     ASSERT_TRUE(alias_in_x || alias_in_y)
-        << "Iteration " << iter
-        << ": REACHABILITY VIOLATION — alias \"" << alias
-        << "\" is absent from both index X (\"" << index_x
+        << "Iteration " << iter << ": REACHABILITY VIOLATION — alias \""
+        << alias << "\" is absent from both index X (\"" << index_x
         << "\") and index Y (\"" << index_y << "\") after UpdateAlias";
 
     // After a successful UpdateAlias, alias should be in Y and NOT in X.
-    EXPECT_TRUE(alias_in_y)
-        << "Iteration " << iter
-        << ": alias \"" << alias << "\" not found in target index Y (\""
-        << index_y << "\") after UpdateAlias";
-    EXPECT_FALSE(alias_in_x)
-        << "Iteration " << iter
-        << ": alias \"" << alias
-        << "\" still present in source index X (\"" << index_x
-        << "\") after UpdateAlias";
+    EXPECT_TRUE(alias_in_y) << "Iteration " << iter << ": alias \"" << alias
+                            << "\" not found in target index Y (\"" << index_y
+                            << "\") after UpdateAlias";
+    EXPECT_FALSE(alias_in_x) << "Iteration " << iter << ": alias \"" << alias
+                             << "\" still present in source index X (\""
+                             << index_x << "\") after UpdateAlias";
 
     // Also verify the forward alias map points to Y.
     auto all_aliases = SchemaManager::Instance().GetAllAliases(kDbNum);
@@ -1215,17 +1192,15 @@ TEST_F(AliasUpdateReachabilityTest,
     for (const auto &[a, idx] : all_aliases) {
       if (a == alias) {
         EXPECT_EQ(idx, index_y)
-            << "Iteration " << iter
-            << ": Forward alias map has alias \"" << alias
-            << "\" pointing to \"" << idx << "\" instead of \"" << index_y
-            << "\"";
+            << "Iteration " << iter << ": Forward alias map has alias \""
+            << alias << "\" pointing to \"" << idx << "\" instead of \""
+            << index_y << "\"";
         found_in_map = true;
         break;
       }
     }
     EXPECT_TRUE(found_in_map)
-        << "Iteration " << iter
-        << ": alias \"" << alias
+        << "Iteration " << iter << ": alias \"" << alias
         << "\" not found in forward alias map after UpdateAlias";
   }
 }
@@ -1262,8 +1237,7 @@ class AliasSortInvariantTest : public vmsdk::ValkeyTest {
             SendClusterMessage(testing::_, testing::_, testing::_, testing::_,
                                testing::_))
         .WillByDefault(testing::Return(VALKEYMODULE_OK));
-    ON_CALL(*kMockValkeyModule,
-            Replicate(testing::_, testing::_, testing::_))
+    ON_CALL(*kMockValkeyModule, Replicate(testing::_, testing::_, testing::_))
         .WillByDefault(testing::Return(VALKEYMODULE_OK));
 
     // Mock cluster operations for MetadataManager.
@@ -1346,8 +1320,8 @@ TEST_F(AliasSortInvariantTest, PropertyAliasListAlwaysSorted) {
     // many exist.
     std::uniform_int_distribution<int> action_dist(0, 99);
     int action = action_dist(rng);
-    bool do_add = active_aliases.empty() ||
-                  (action < 70 && active_aliases.size() < 30);
+    bool do_add =
+        active_aliases.empty() || (action < 70 && active_aliases.size() < 30);
 
     if (do_add) {
       // Generate a random alias name.
@@ -1392,10 +1366,9 @@ TEST_F(AliasSortInvariantTest, PropertyAliasListAlwaysSorted) {
 
     // (b) Fetch the stored proto from MetadataManager and verify the
     // `aliases` repeated field is in lexicographic ascending order.
-    auto entry_or =
-        coordinator::MetadataManager::Instance().GetEntryContent(
-            kSchemaManagerMetadataTypeName,
-            coordinator::ObjName(kDbNum, index_name));
+    auto entry_or = coordinator::MetadataManager::Instance().GetEntryContent(
+        kSchemaManagerMetadataTypeName,
+        coordinator::ObjName(kDbNum, index_name));
     ASSERT_TRUE(entry_or.ok())
         << "Iteration " << iter
         << ": GetEntryContent failed: " << entry_or.status();
@@ -1445,8 +1418,7 @@ class NullByteAliasRejectionTest : public vmsdk::ValkeyTest {
         .WillByDefault(testing::Return());
     ON_CALL(*kMockValkeyModule, SelectDb(testing::_, kDbNum))
         .WillByDefault(testing::Return(VALKEYMODULE_OK));
-    ON_CALL(*kMockValkeyModule,
-            Replicate(testing::_, testing::_, testing::_))
+    ON_CALL(*kMockValkeyModule, Replicate(testing::_, testing::_, testing::_))
         .WillByDefault(testing::Return(VALKEYMODULE_OK));
 
     // Standalone mode: no coordinator needed for this validation test.
@@ -1599,8 +1571,7 @@ class DuplicateAliasAddTest : public vmsdk::ValkeyTest {
             SendClusterMessage(testing::_, testing::_, testing::_, testing::_,
                                testing::_))
         .WillByDefault(testing::Return(VALKEYMODULE_OK));
-    ON_CALL(*kMockValkeyModule,
-            Replicate(testing::_, testing::_, testing::_))
+    ON_CALL(*kMockValkeyModule, Replicate(testing::_, testing::_, testing::_))
         .WillByDefault(testing::Return(VALKEYMODULE_OK));
 
     // Mock cluster operations for MetadataManager.
@@ -1677,19 +1648,17 @@ TEST_F(DuplicateAliasAddTest, PropertyDuplicateAddReturnsAlreadyExists) {
 
   for (int iter = 0; iter < kIterations; ++iter) {
     // Generate a unique random alias for this iteration.
-    std::string alias = "alias_" + std::to_string(iter) + "_" +
-                        RandomString(rng, 8);
+    std::string alias =
+        "alias_" + std::to_string(iter) + "_" + RandomString(rng, 8);
 
     // First AddAlias — should succeed.
     auto first_add =
         SchemaManager::Instance().AddAlias(kDbNum, alias, index_name);
     ASSERT_TRUE(first_add.ok())
-        << "Iteration " << iter
-        << ": First AddAlias failed: " << first_add;
+        << "Iteration " << iter << ": First AddAlias failed: " << first_add;
 
     // Record alias count after first add.
-    auto aliases_after_first =
-        SchemaManager::Instance().GetAllAliases(kDbNum);
+    auto aliases_after_first = SchemaManager::Instance().GetAllAliases(kDbNum);
     size_t count_after_first = aliases_after_first.size();
 
     // Second AddAlias with the SAME alias to the SAME index — rejected.
@@ -1697,12 +1666,10 @@ TEST_F(DuplicateAliasAddTest, PropertyDuplicateAddReturnsAlreadyExists) {
         SchemaManager::Instance().AddAlias(kDbNum, alias, index_name);
     EXPECT_EQ(second_add.code(), absl::StatusCode::kAlreadyExists)
         << "Iteration " << iter
-        << ": Second AddAlias should return AlreadyExists, got: "
-        << second_add;
+        << ": Second AddAlias should return AlreadyExists, got: " << second_add;
 
     // Verify GetAllAliases count did NOT increase on duplicate attempt.
-    auto aliases_after_second =
-        SchemaManager::Instance().GetAllAliases(kDbNum);
+    auto aliases_after_second = SchemaManager::Instance().GetAllAliases(kDbNum);
     size_t count_after_second = aliases_after_second.size();
     EXPECT_EQ(count_after_second, count_after_first)
         << "Iteration " << iter
@@ -1711,10 +1678,9 @@ TEST_F(DuplicateAliasAddTest, PropertyDuplicateAddReturnsAlreadyExists) {
         << count_after_second;
 
     // Verify the alias appears exactly ONCE in the stored proto.
-    auto entry_or =
-        coordinator::MetadataManager::Instance().GetEntryContent(
-            kSchemaManagerMetadataTypeName,
-            coordinator::ObjName(kDbNum, index_name));
+    auto entry_or = coordinator::MetadataManager::Instance().GetEntryContent(
+        kSchemaManagerMetadataTypeName,
+        coordinator::ObjName(kDbNum, index_name));
     ASSERT_TRUE(entry_or.ok())
         << "Iteration " << iter
         << ": GetEntryContent failed: " << entry_or.status();
@@ -1731,9 +1697,8 @@ TEST_F(DuplicateAliasAddTest, PropertyDuplicateAddReturnsAlreadyExists) {
       }
     }
     EXPECT_EQ(alias_count, 1)
-        << "Iteration " << iter
-        << ": Alias \"" << alias << "\" appears " << alias_count
-        << " times in stored proto (expected exactly 1). "
+        << "Iteration " << iter << ": Alias \"" << alias << "\" appears "
+        << alias_count << " times in stored proto (expected exactly 1). "
         << "Duplicate attempt must not introduce a duplicate.";
   }
 }
@@ -1761,8 +1726,7 @@ class IndexDropAliasAtomicityTest : public vmsdk::ValkeyTest {
         .WillByDefault(testing::Return());
     ON_CALL(*kMockValkeyModule, SelectDb(testing::_, kDbNum))
         .WillByDefault(testing::Return(VALKEYMODULE_OK));
-    ON_CALL(*kMockValkeyModule,
-            Replicate(testing::_, testing::_, testing::_))
+    ON_CALL(*kMockValkeyModule, Replicate(testing::_, testing::_, testing::_))
         .WillByDefault(testing::Return(VALKEYMODULE_OK));
 
     // Standalone mode: no coordinator, no MetadataManager needed.
@@ -1839,9 +1803,8 @@ TEST_F(IndexDropAliasAtomicityTest, PropertyIndexDropRemovesAllAliases) {
     // Verify all aliases exist in the forward map before drop.
     auto aliases_before = SchemaManager::Instance().GetAllAliases(kDbNum);
     ASSERT_EQ(aliases_before.size(), aliases.size())
-        << "Iteration " << iter
-        << ": Expected " << aliases.size() << " aliases before drop, got "
-        << aliases_before.size();
+        << "Iteration " << iter << ": Expected " << aliases.size()
+        << " aliases before drop, got " << aliases_before.size();
 
     // Drop the index.
     auto remove_status =
@@ -1889,8 +1852,7 @@ class SwapDBAliasAtomicityTest : public vmsdk::ValkeyTest {
         .WillByDefault(testing::Return());
     ON_CALL(*kMockValkeyModule, SelectDb(testing::_, testing::_))
         .WillByDefault(testing::Return(VALKEYMODULE_OK));
-    ON_CALL(*kMockValkeyModule,
-            Replicate(testing::_, testing::_, testing::_))
+    ON_CALL(*kMockValkeyModule, Replicate(testing::_, testing::_, testing::_))
         .WillByDefault(testing::Return(VALKEYMODULE_OK));
 
     // Standalone mode: no coordinator, no MetadataManager needed.
@@ -2170,8 +2132,7 @@ TEST_F(StoredProtoRoundTripTest, StoredProtoMatchesToProto) {
   ASSERT_TRUE(create_result.ok()) << create_result.status();
 
   auto entry_or = coordinator::MetadataManager::Instance().GetEntryContent(
-      kSchemaManagerMetadataTypeName,
-      coordinator::ObjName(0, "test_idx"));
+      kSchemaManagerMetadataTypeName, coordinator::ObjName(0, "test_idx"));
   ASSERT_TRUE(entry_or.ok()) << entry_or.status();
   data_model::IndexSchema stored_proto;
   ASSERT_TRUE(entry_or.value().UnpackTo(&stored_proto));
@@ -2261,8 +2222,7 @@ TEST_F(InfoResponseConsistencyTest, RejectsMismatchedFingerprintVersion) {
   ifv->set_fingerprint(11111);
   ifv->set_version(5);
 
-  auto [status, response] =
-      coordinator::Service::GenerateInfoResponse(request);
+  auto [status, response] = coordinator::Service::GenerateInfoResponse(request);
 
   EXPECT_EQ(status.error_code(), grpc::StatusCode::FAILED_PRECONDITION);
 }
@@ -2287,8 +2247,7 @@ TEST_F(InfoResponseConsistencyTest, PassesWhenFingerprintVersionMatches) {
   ifv->set_fingerprint(5555);
   ifv->set_version(3);
 
-  auto [status, response] =
-      coordinator::Service::GenerateInfoResponse(request);
+  auto [status, response] = coordinator::Service::GenerateInfoResponse(request);
 
   EXPECT_TRUE(status.ok()) << status.error_message();
   EXPECT_TRUE(response.exists());

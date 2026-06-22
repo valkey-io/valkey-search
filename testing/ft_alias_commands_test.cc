@@ -740,12 +740,9 @@ TEST_F(FTAliasListTest, MultipleAliasesSortedByName) {
       std::string(kTestIndexSchemaPbtxt), &index_schema_proto));
   VMSDK_EXPECT_OK(SchemaManager::Instance().CreateIndexSchema(
       &fake_ctx_, index_schema_proto));
-  VMSDK_EXPECT_OK(
-      SchemaManager::Instance().AddAlias(0, "z_alias", "test_idx"));
-  VMSDK_EXPECT_OK(
-      SchemaManager::Instance().AddAlias(0, "a_alias", "test_idx"));
-  VMSDK_EXPECT_OK(
-      SchemaManager::Instance().AddAlias(0, "m_alias", "test_idx"));
+  VMSDK_EXPECT_OK(SchemaManager::Instance().AddAlias(0, "z_alias", "test_idx"));
+  VMSDK_EXPECT_OK(SchemaManager::Instance().AddAlias(0, "a_alias", "test_idx"));
+  VMSDK_EXPECT_OK(SchemaManager::Instance().AddAlias(0, "m_alias", "test_idx"));
 
   EXPECT_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
       .WillRepeatedly(testing::Return(0));

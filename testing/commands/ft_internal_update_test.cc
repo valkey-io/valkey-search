@@ -42,8 +42,7 @@ TEST_F(FTInternalUpdateTest, WrongArguments) {
   auto status = FTInternalUpdateCmd(&fake_ctx_, argv, 2);
   EXPECT_FALSE(status.ok());
   EXPECT_TRUE(absl::IsInvalidArgument(status));
-  EXPECT_THAT(status.message(),
-              testing::HasSubstr("wrong argument count"));
+  EXPECT_THAT(status.message(), testing::HasSubstr("wrong argument count"));
 
   TestValkeyModule_FreeString(&fake_ctx_, argv[0]);
   TestValkeyModule_FreeString(&fake_ctx_, argv[1]);

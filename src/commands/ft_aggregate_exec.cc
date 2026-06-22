@@ -483,17 +483,14 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> FirstValueReducerParser(
   VMSDK_ASSIGN_OR_RETURN(
       auto field_expr,
       expr::Expression::Compile(parameters, vmsdk::ToStringView(field_tok)),
-      _ << " in GROUPBY stage");
+      _ << " in FIRST_VALUE reducer");
   r->args_.push_back(std::move(field_expr));
 
   if (cnt >= 3) {
     // Expect "BY" keyword.
-    VMSDK_ASSIGN_OR_RETURN(auto by_tok, itr.PopNext(),
-                           _ << "Missing BY keyword");
-    auto by_upper = expr::FuncUpper(expr::Value(vmsdk::ToStringView(by_tok)));
-    if (by_upper.AsStringView() != "BY") {
-      return absl::InvalidArgumentError(absl::StrCat(
-          "FIRST_VALUE: expected BY, got `", vmsdk::ToStringView(by_tok), "`"));
+    if (!itr.PopIfNextIgnoreCase("BY")) {
+      return absl::InvalidArgumentError(
+          "FIRST_VALUE: expected BY keyword after field");
     }
 
     // arg 1: the field to sort by.
@@ -502,22 +499,19 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> FirstValueReducerParser(
     VMSDK_ASSIGN_OR_RETURN(
         auto sort_expr,
         expr::Expression::Compile(parameters, vmsdk::ToStringView(sort_tok)),
-        _ << " in GROUPBY stage");
+        _ << " in FIRST_VALUE reducer");
     r->args_.push_back(std::move(sort_expr));
     r->is_sorted_ = true;
 
     if (cnt == 4) {
-      VMSDK_ASSIGN_OR_RETURN(auto dir_tok, itr.PopNext(),
-                             _ << "Missing direction after sort field");
-      auto dir_upper =
-          expr::FuncUpper(expr::Value(vmsdk::ToStringView(dir_tok)));
-      auto dir_str = dir_upper.AsStringView();
-      if (dir_str != "ASC" && dir_str != "DESC") {
+      if (itr.PopIfNextIgnoreCase("DESC")) {
+        r->is_desc_ = true;
+      } else if (itr.PopIfNextIgnoreCase("ASC")) {
+        r->is_desc_ = false;
+      } else {
         return absl::InvalidArgumentError(
-            absl::StrCat("FIRST_VALUE: expected ASC or DESC, got `",
-                         vmsdk::ToStringView(dir_tok), "`"));
+            "FIRST_VALUE: expected ASC or DESC");
       }
-      r->is_desc_ = (dir_str == "DESC");
     }
   }
 

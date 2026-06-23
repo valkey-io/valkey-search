@@ -256,7 +256,7 @@ absl::StatusOr<bool> VectorBase::ModifyRecord(const InternedStringPtr &key,
              "in UntrackKey: "
           << untrack_result.status().message();
     }
-    return false;
+    return modify_result;
   }
   return true;
 }

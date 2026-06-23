@@ -67,7 +67,7 @@ class BruteforceSearch
 
   void addPoint(const InputVectorT &datapoint, labeltype label,
                 bool replace_deleted = false) override {
-    int idx;
+    size_t idx;
     std::unique_lock<std::mutex> lock(index_lock);
     auto search = dict_external_to_internal.find(label);
     if (search != dict_external_to_internal.end()) {

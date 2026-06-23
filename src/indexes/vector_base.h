@@ -62,7 +62,7 @@ class VectorRecord {
 
 class InputVector {
  public:
-  explicit InputVector(absl::string_view vector, Allocator *allocator)
+  explicit InputVector(absl::string_view vector, Allocator *allocator = nullptr)
       : raw_vector_(vector), vector_allocator_(allocator) {}
 
   inline const char *GetRawVector() const { return raw_vector_.data(); }

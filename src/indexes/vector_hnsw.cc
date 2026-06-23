@@ -311,7 +311,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
   }
   try {
     CancelCondition cancel_condition(cancellation_token);
-    InputVector embedding(query, nullptr);
+    InputVector embedding(query);
     auto res = algo_->searchKnn(embedding, count, ef_runtime, filter.get(),
                                 &cancel_condition);
     if (!enable_partial_results && cancellation_token->IsCancelled()) {

@@ -234,14 +234,16 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
 
   try {
     CancelCondition canceler(cancellation_token);
-    InputVector embedding(query, nullptr);
+    InputVector embedding(query);
     auto res = algo_->searchKnn(
         embedding,
         std::min(count, static_cast<uint64_t>(algo_->cur_element_count_)),
         filter.get(), &canceler);
-    if (cancellation_token->IsCancelled()) {
-      return absl::CancelledError("Search operation cancelled due to timeout");
-    }
+
+    // if (cancellation_token->IsCancelled()) {
+    //   return absl::CancelledError("Search operation cancelled due to
+    //   timeout");
+    // }
     return CreateReply(res);
   } catch (const std::exception &e) {
     Metrics::GetStats().flat_search_exceptions_cnt.fetch_add(

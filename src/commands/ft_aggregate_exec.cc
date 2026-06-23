@@ -472,18 +472,17 @@ class Quantile : public GroupBy::ReducerInstance {
     // Walk forward: find the first sample whose cumulative rank
     // plus uncertainty reaches the target.
     double rank = 0;
-    const Sample* prev = &samples_[0];
+    size_t result_idx = 0;
 
     for (size_t i = 1; i < samples_.size(); ++i) {
-      const Sample& cur = samples_[i];
-      if (rank + cur.g + cur.delta >= t) {
+      if (rank + samples_[i].g + samples_[i].delta >= t) {
         break;
       }
-      rank += cur.g;
-      prev = &cur;
+      rank += samples_[i].g;
+      result_idx = i;
     }
 
-    return prev->value;
+    return samples_[result_idx].value;
   }
 
   // Try to insert a single value. Returns true if it was numeric.

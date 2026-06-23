@@ -135,7 +135,9 @@ class BruteforceSearch
       return topResults;
     }
     const size_t initial_count = std::min(k, cur_element_count_);
-    for (size_t i = 0; i < initial_count; i++) {
+    size_t i = 0;
+    for (; i < initial_count && (!isCancelled || !isCancelled->isCancelled());
+         i++) {
       const SavedVectorT &stored_vector =
           *reinterpret_cast<const SavedVectorT *>((*data_)[i]);
       dist_t dist = fstdistfunc_(query_data, stored_vector, dist_func_param_);
@@ -144,11 +146,13 @@ class BruteforceSearch
         topResults.emplace(dist, label);
       }
     }
+    if (isCancelled && isCancelled->isCancelled()) {
+      return topResults;
+    }
     dist_t lastdist = topResults.size() < k ? std::numeric_limits<dist_t>::max()
                                             : topResults.top().first;
-    for (size_t i = initial_count;
-         i < cur_element_count_ &&
-         (!isCancelled || !isCancelled->isCancelled());
+    for (; i < cur_element_count_ &&
+           (!isCancelled || !isCancelled->isCancelled());
          i++) {
       const SavedVectorT &stored_vector =
           *reinterpret_cast<const SavedVectorT *>((*data_)[i]);
@@ -239,6 +243,12 @@ class BruteforceSearch
     return absl::OkStatus();
   }
 
-  void resizeIndex(size_t new_max_elements) { data_->resize(new_max_elements); }
+  void resizeIndex(size_t new_max_elements) {
+    std::unique_lock<std::mutex> lock(index_lock);
+    if (new_max_elements < cur_element_count_) {
+      return;
+    }
+    data_->resize(new_max_elements);
+  }
 };
 }  // namespace hnswlib

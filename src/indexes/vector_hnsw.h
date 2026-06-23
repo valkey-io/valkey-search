@@ -104,8 +104,8 @@ class VectorHNSW : public VectorBase {
              data_model::AttributeDataType attribute_data_type);
   static std::optional<hnswlib::tableint> GetInternalIdLockFree(
       const HNSWIndex *algo, uint64_t internal_id);
-  static std::optional<hnswlib::tableint> GetInternalId(
-      const HNSWIndex *algo, uint64_t internal_id);
+  static std::optional<hnswlib::tableint> GetInternalId(const HNSWIndex *algo,
+                                                        uint64_t internal_id);
 
   std::unique_ptr<HNSWIndex> algo_ ABSL_GUARDED_BY(resize_mutex_);
   std::unique_ptr<hnswlib::SpaceInterface<T>> space_;

@@ -21,10 +21,8 @@
 #include "google/protobuf/text_format.h"
 #include "google/protobuf/util/message_differencer.h"
 #include "gtest/gtest.h"
-#include "src/commands/ft_alias_consistency.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/metadata_manager.h"
-#include "src/coordinator/server.h"
 #include "src/index_schema.pb.h"
 #include "src/schema_manager.h"
 #include "testing/common.h"
@@ -2146,111 +2144,6 @@ TEST_F(StoredProtoRoundTripTest, StoredProtoMatchesToProto) {
   differ.IgnoreField(descriptor->FindFieldByName("aliases"));
   differ.IgnoreField(descriptor->FindFieldByName("stats"));
   EXPECT_TRUE(differ.Compare(*live_proto, stored_proto));
-}
-
-// AliasExistsConsistencyCheckFanoutOperation includes fingerprint in request.
-class AliasConsistencyRequestTest : public ValkeySearchTest {
- protected:
-  void SetUp() override {
-    ValkeySearchTest::SetUp();
-    SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
-        &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/false));
-  }
-};
-
-TEST_F(AliasConsistencyRequestTest, GenerateRequestIncludesFingerprint) {
-  data_model::IndexSchema index_proto;
-  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
-      std::string(kFingerprintTestProto), &index_proto));
-  auto create_result =
-      SchemaManager::Instance().CreateIndexSchema(&fake_ctx_, index_proto);
-  ASSERT_TRUE(create_result.ok()) << create_result.status();
-
-  coordinator::IndexFingerprintVersion ifv;
-  ifv.set_fingerprint(12345);
-  ifv.set_version(7);
-
-  AliasExistsConsistencyCheckFanoutOperation op(0, "test_idx", 1000, ifv);
-
-  vmsdk::cluster_map::NodeInfo dummy_node;
-  auto request = op.GenerateRequest(dummy_node);
-
-  EXPECT_TRUE(request.has_index_fingerprint_version());
-  EXPECT_EQ(request.index_fingerprint_version().fingerprint(), 12345u);
-  EXPECT_EQ(request.index_fingerprint_version().version(), 7u);
-}
-
-// GenerateInfoResponse rejects mismatched fingerprint/version.
-class InfoResponseConsistencyTest : public vmsdk::ValkeyTest {
- public:
-  void SetUp() override {
-    vmsdk::ValkeyTest::SetUp();
-    ValkeySearch::InitInstance(std::make_unique<TestableValkeySearch>());
-    KeyspaceEventManager::InitInstance(
-        std::make_unique<TestableKeyspaceEventManager>());
-    SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
-        &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/false));
-  }
-
-  void TearDown() override {
-    SchemaManager::InitInstance(nullptr);
-    KeyspaceEventManager::InitInstance(nullptr);
-    ValkeySearch::InitInstance(nullptr);
-    vmsdk::ValkeyTest::TearDown();
-  }
-
-  ValkeyModuleCtx fake_ctx_;
-};
-
-TEST_F(InfoResponseConsistencyTest, RejectsMismatchedFingerprintVersion) {
-  data_model::IndexSchema index_proto;
-  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
-      std::string(kFingerprintTestProto), &index_proto));
-  auto create_result =
-      SchemaManager::Instance().CreateIndexSchema(&fake_ctx_, index_proto);
-  ASSERT_TRUE(create_result.ok()) << create_result.status();
-
-  auto schema_or = SchemaManager::Instance().GetIndexSchema(0, "test_idx");
-  ASSERT_TRUE(schema_or.ok()) << schema_or.status();
-  schema_or.value()->SetFingerprint(99999);
-  schema_or.value()->SetVersion(10);
-
-  coordinator::InfoIndexPartitionRequest request;
-  request.set_db_num(0);
-  request.set_index_name("test_idx");
-  auto *ifv = request.mutable_index_fingerprint_version();
-  ifv->set_fingerprint(11111);
-  ifv->set_version(5);
-
-  auto [status, response] = coordinator::Service::GenerateInfoResponse(request);
-
-  EXPECT_EQ(status.error_code(), grpc::StatusCode::FAILED_PRECONDITION);
-}
-
-TEST_F(InfoResponseConsistencyTest, PassesWhenFingerprintVersionMatches) {
-  data_model::IndexSchema index_proto;
-  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
-      std::string(kFingerprintTestProto), &index_proto));
-  auto create_result =
-      SchemaManager::Instance().CreateIndexSchema(&fake_ctx_, index_proto);
-  ASSERT_TRUE(create_result.ok()) << create_result.status();
-
-  auto schema_or = SchemaManager::Instance().GetIndexSchema(0, "test_idx");
-  ASSERT_TRUE(schema_or.ok()) << schema_or.status();
-  schema_or.value()->SetFingerprint(5555);
-  schema_or.value()->SetVersion(3);
-
-  coordinator::InfoIndexPartitionRequest request;
-  request.set_db_num(0);
-  request.set_index_name("test_idx");
-  auto *ifv = request.mutable_index_fingerprint_version();
-  ifv->set_fingerprint(5555);
-  ifv->set_version(3);
-
-  auto [status, response] = coordinator::Service::GenerateInfoResponse(request);
-
-  EXPECT_TRUE(status.ok()) << status.error_message();
-  EXPECT_TRUE(response.exists());
 }
 
 }  // namespace

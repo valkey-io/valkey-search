@@ -202,8 +202,6 @@ void ReplicateIfNeeded(ValkeyModuleCtx *ctx) {
 
 }  // namespace
 
-
-
 absl::Status FTAliasAddCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                            int argc) {
   if (argc != 3) {

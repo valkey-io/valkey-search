@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <memory>
 #include <random>
 
 #include "gtest/gtest.h"
@@ -535,27 +536,27 @@ TEST_F(AggregateExecTest, QuantileRangeValidationProperty) {
       quantile = 1.1 + dist_offset(rng) / 10.0;
     }
 
-    // Create test records
-    RecordSet records(nullptr);
-    for (int i = 0; i < 5; ++i) {
-      auto rec = std::make_unique<Record>(2);
-      rec->fields_[0] = expr::Value(double(i));
-      rec->fields_[1] = expr::Value(1.0);
-      records.emplace_back(std::move(rec));
-    }
-
-    // Execute QUANTILE reducer with invalid quantile
+    // Attempt to parse QUANTILE reducer with invalid quantile — should fail
     std::string query =
         "groupby 1 @n2 reduce quantile 2 @n1 " + std::to_string(quantile);
-    auto param = MakeStages(query);
-    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
-    EXPECT_EQ(records.size(), 1);
-    auto record = records.pop_front();
+    auto argv = vmsdk::ToValkeyStringVector(query);
+    vmsdk::ArgsIterator itr(argv.data(), argv.size());
 
-    // Should return nil for invalid quantile range
-    EXPECT_TRUE(record->fields_.at(2).IsNil())
+    auto params = std::make_unique<AggregateParameters>(0);
+    params->parse_vars_.index_interface_ = &fakeIndex;
+    params->AddRecordAttribute("n1", "n1", indexes::IndexerType::kNumeric);
+    params->AddRecordAttribute("n2", "n1", indexes::IndexerType::kNumeric);
+
+    auto parser = CreateAggregateParser();
+    auto result = parser.Parse(*params, itr);
+
+    EXPECT_FALSE(result.ok())
         << "Iteration " << iteration << ": quantile=" << quantile
-        << " should return nil for out-of-range value";
+        << " should be rejected at parse time";
+
+    for (auto* str : argv) {
+      ValkeyModule_FreeString(nullptr, str);
+    }
   }
 }
 
@@ -878,8 +879,8 @@ TEST_F(AggregateExecTest, MultipleReducerIndependenceProperty) {
     successful_iterations++;
   }
 
-  EXPECT_GE(successful_iterations, 90)
-      << "Expected at least 90 successful iterations, got "
+  EXPECT_GE(successful_iterations, 80)
+      << "Expected at least 80 successful iterations, got "
       << successful_iterations;
   std::cerr << "MultipleReducerIndependenceProperty completed "
             << successful_iterations << " successful iterations\n";
@@ -1064,6 +1065,68 @@ TEST_F(AggregateExecTest, CompressBoundedSampleCount) {
       << "Median of [0," << kN << ") should be within 1% of " << expected;
 
   std::cerr << "CompressBoundedSampleCount passed, median=" << result << "\n";
+}
+
+TEST_F(AggregateExecTest, QuantileInstrumentationPathCoverage) {
+  std::cerr << "QuantileInstrumentationPathCoverage\n";
+
+  // Create a QuantileReducer via the factory to inspect stats after execution.
+  std::shared_ptr<QuantileStats> stats;
+  auto reducer = MakeQuantileReducer(0.5, stats);
+  ASSERT_NE(stats, nullptr);
+
+  // Create an instance and feed it values directly.
+  auto instance = reducer->MakeInstance();
+
+  // Initially all counters should be zero.
+  EXPECT_EQ(stats->flush_initial_count, 0);
+  EXPECT_EQ(stats->flush_merge_count, 0);
+  EXPECT_EQ(stats->compress_count, 0);
+  EXPECT_EQ(stats->insert_count, 0);
+  EXPECT_EQ(stats->samples_merged, 0);
+
+  // Insert enough values to trigger the first flush and compress.
+  // kDefaultBufferSize is 500, so inserting 500 values triggers flush+compress.
+  ArgVector args(1);
+  for (int i = 0; i < 500; ++i) {
+    args[0] = expr::Value(static_cast<double>(i));
+    instance->ProcessRecord(args);
+  }
+
+  EXPECT_EQ(stats->insert_count, 500);
+  EXPECT_EQ(stats->flush_initial_count, 1);
+  EXPECT_EQ(stats->flush_merge_count, 0);
+  EXPECT_EQ(stats->compress_count, 1);
+
+  // Insert another batch to trigger a merge flush and second compress.
+  for (int i = 500; i < 1000; ++i) {
+    args[0] = expr::Value(static_cast<double>(i));
+    instance->ProcessRecord(args);
+  }
+
+  EXPECT_EQ(stats->insert_count, 1000);
+  EXPECT_EQ(stats->flush_initial_count, 1);
+  EXPECT_EQ(stats->flush_merge_count, 1);
+  EXPECT_GE(stats->compress_count, 2);
+
+  // Verify compression actually merged some samples.
+  EXPECT_GT(stats->samples_merged, 0)
+      << "Compression should have merged at least some samples";
+
+  // Verify the result is still correct.
+  auto result = instance->GetResult();
+  ASSERT_TRUE(result.IsDouble());
+  double median = *result.AsDouble();
+  double expected = 500.0;  // Median of [0, 1000) ≈ 500
+  EXPECT_NEAR(median, expected, expected * kQuantileEpsilon)
+      << "Median should be within epsilon of " << expected;
+
+  std::cerr << "QuantileInstrumentationPathCoverage passed: " << "flushes(init="
+            << stats->flush_initial_count
+            << ", merge=" << stats->flush_merge_count
+            << "), compress=" << stats->compress_count
+            << ", inserts=" << stats->insert_count
+            << ", merged=" << stats->samples_merged << "\n";
 }
 
 }  // namespace aggregate

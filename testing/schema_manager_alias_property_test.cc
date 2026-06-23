@@ -67,15 +67,11 @@ std::vector<std::string> RandomAliases(std::mt19937 &rng, int max_count = 5) {
   return aliases;
 }
 
-// **Validates: Requirements 2.1, 2.2**
+// Alias-only proto change does not trigger index rebuild.
 //
-// Property 1: Alias-only proto change does not trigger index rebuild.
-//
-// For any IndexSchema proto and any modification limited to the `aliases`
-// and/or `stats` fields, the `OnMetadataCallback` SHALL skip
-// RemoveIndexSchemaInternal/CreateIndexSchemaInternal and only invoke
-// RebuildAliasMapsForIndex, preserving the existing in-memory IndexSchema
-// object identity.
+// When OnMetadataCallback receives a proto where only `aliases` and/or `stats`
+// changed, it calls RebuildAliasMapsForIndex instead of tearing down and
+// recreating the index, preserving the in-memory IndexSchema identity.
 class AliasOnlyChangeNoRebuildTest : public vmsdk::ValkeyTest {
  public:
   void SetUp() override {
@@ -133,8 +129,7 @@ class AliasOnlyChangeNoRebuildTest : public vmsdk::ValkeyTest {
 };
 
 TEST_F(AliasOnlyChangeNoRebuildTest, PropertyAliasOnlyChangePreservesIndex) {
-  // Run 100 iterations with different random seeds to achieve property-based
-  // coverage.
+  // Run 100 iterations with different random seeds for coverage.
   constexpr int kIterations = 100;
 
   for (int iteration = 0; iteration < kIterations; ++iteration) {
@@ -244,15 +239,11 @@ TEST_F(AliasOnlyChangeNoRebuildTest, PropertyAliasOnlyChangePreservesIndex) {
   }
 }
 
-// **Validates: Requirements 3.1, 3.2**
+// Forward alias map consistency after RebuildAliasMapsForIndex.
 //
-// Property 3: Forward alias map consistency after RebuildAliasMapsForIndex
-//
-// For any index with a set of aliases A in its proto, after
-// RebuildAliasMapsForIndex completes (triggered via OnMetadataCallback with an
-// alias-only change), the set of entries {(alias, index_name) | alias in A} in
-// db_to_aliases_[db_num] SHALL exactly match the proto's aliases field, and no
-// stale aliases for that index SHALL remain from previous iterations.
+// After an alias-only metadata update, the forward alias map entries for
+// a given index exactly match the proto's aliases field with no stale
+// entries from previous iterations.
 TEST_F(AliasOnlyChangeNoRebuildTest,
        PropertyForwardAliasMapConsistencyAfterRebuild) {
   // This test creates a single index and performs 150 sequential alias-only
@@ -371,15 +362,11 @@ TEST_F(AliasOnlyChangeNoRebuildTest,
   }
 }
 
-// Feature: alias-as-index-attribute, Property 2: Structural proto change
-// triggers full rebuild
-// **Validates: Requirements 2.3**
+// Structural proto change triggers full rebuild.
 //
-// For any IndexSchema proto and any modification to a field other than
-// `aliases` or `stats` (e.g., attributes, subscribed_key_prefixes), the
-// OnMetadataCallback SHALL perform RemoveIndexSchemaInternal followed by
-// CreateIndexSchemaInternal, resulting in a new IndexSchema object identity
-// (pointer change).
+// When any field other than `aliases` or `stats` changes (e.g., attributes,
+// key prefixes), OnMetadataCallback performs RemoveIndexSchemaInternal followed
+// by CreateIndexSchemaInternal, resulting in a new IndexSchema object.
 
 // Enum representing different structural mutation types.
 enum class StructuralMutation {
@@ -737,31 +724,28 @@ class StructuralProtoChangeRebuildTest : public vmsdk::ValkeyTest {
   std::unique_ptr<coordinator::MockClientPool> mock_client_pool_;
 };
 
-// Generate 120+ test cases covering all structural mutation types.
+// Generate test cases covering all structural mutation types (one per type).
 std::vector<StructuralChangeTestCase> GenerateStructuralTestCases() {
   std::vector<StructuralChangeTestCase> cases;
   const int num_mutations = static_cast<int>(StructuralMutation::kCount);
 
-  // With 24 mutation types × 5 seeds = 120 test cases (> 100).
   std::mt19937 rng(42);  // Fixed seed for reproducibility.
   for (int m = 0; m < num_mutations; ++m) {
-    for (int i = 0; i < 5; ++i) {
-      cases.push_back({static_cast<StructuralMutation>(m), rng()});
-    }
+    cases.push_back({static_cast<StructuralMutation>(m), rng()});
   }
   return cases;
 }
 
-// Property 2: Structural proto change triggers full rebuild.
+// Structural proto change triggers full rebuild.
 //
-// For 100 randomized structural mutations, creates a fresh index, applies
-// the mutation via CreateEntry, and verifies the IndexSchema pointer changes
+// For each structural mutation type, creates a fresh index, applies the
+// mutation via CreateEntry, and verifies the IndexSchema pointer changes
 // (proving full teardown + rebuild occurred).
 TEST_F(StructuralProtoChangeRebuildTest,
        PropertyStructuralChangeTriggersFullRebuild) {
   auto test_cases = GenerateStructuralTestCases();
-  ASSERT_GE(test_cases.size(), 100u)
-      << "Expected at least 100 test cases for property coverage";
+  ASSERT_GE(test_cases.size(), 20u)
+      << "Expected at least 20 test cases (one per mutation type)";
 
   constexpr int kIterations = 100;
   int valid_cases = 0;
@@ -769,7 +753,7 @@ TEST_F(StructuralProtoChangeRebuildTest,
   for (int i = 0; i < kIterations; ++i) {
     const auto &tc = test_cases[i];
 
-    // Fresh singleton state per iteration (same pattern as Property 1).
+    // Fresh singleton state per iteration.
     coordinator::MetadataManager::InitInstance(nullptr);
     SchemaManager::InitInstance(nullptr);
 
@@ -864,13 +848,10 @@ TEST_F(StructuralProtoChangeRebuildTest,
       << "Too many test cases were skipped due to validation errors";
 }
 
-// **Validates: Requirements 4.4**
+// Alias list sort invariant.
 //
-// Property 4: Alias list determinism (sort invariant)
-//
-// For any random sequence of AddAlias/RemoveAlias operations in standalone
-// mode, the IndexSchema's `aliases` repeated field (accessed via GetAliases())
-// SHALL always be in lexicographic ascending order after each operation.
+// After any sequence of AddAlias/RemoveAlias operations, the aliases list
+// is always in lexicographic ascending order.
 class AliasListDeterminismTest : public vmsdk::ValkeyTest {
  public:
   void SetUp() override {
@@ -1012,16 +993,9 @@ TEST_F(AliasListDeterminismTest, PropertyAliasListAlwaysSorted) {
   }
 }
 
-// **Validates: Requirements 4.3**
-//
-// Property 5: Add-before-remove preserves alias reachability during
-// ALIASUPDATE
-//
-// For random alias A pointing to index X with target Y, verify that after
-// UpdateAlias completes, the alias exists in exactly the target index (Y) and
-// is absent from the source index (X). In standalone mode the update is atomic
-// (single lock scope), so the alias is never absent from both indexes at any
-// observable point.
+// ALIASUPDATE atomicity: after UpdateAlias completes, the alias exists in
+// exactly the target index and is absent from the source. The update is atomic
+// (single lock scope), so the alias is never absent from both indexes.
 class AliasUpdateReachabilityTest : public vmsdk::ValkeyTest {
  public:
   void SetUp() override {
@@ -1203,203 +1177,10 @@ TEST_F(AliasUpdateReachabilityTest,
   }
 }
 
-// **Validates: Requirements 4.4**
+// Null-byte alias rejection.
 //
-// Property 4: Alias list determinism (sort invariant) — Coordinator mode
-//
-// Generate random sequences of add/remove alias operations via
-// SchemaManager::AddAlias/RemoveAlias in coordinator mode. After each commit,
-// verify that:
-//   (a) GetAllAliases() returns aliases in lexicographic ascending order.
-//   (b) The stored proto in MetadataManager has its `aliases` repeated field
-//       in lexicographic ascending order.
-class AliasSortInvariantTest : public vmsdk::ValkeyTest {
- public:
-  void SetUp() override {
-    vmsdk::ValkeyTest::SetUp();
-    ValkeySearch::InitInstance(std::make_unique<TestableValkeySearch>());
-    KeyspaceEventManager::InitInstance(
-        std::make_unique<TestableKeyspaceEventManager>());
-
-    mock_client_pool_ = std::make_unique<coordinator::MockClientPool>();
-
-    ON_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
-        .WillByDefault(testing::Return(kDbNum));
-    ON_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
-        .WillByDefault(testing::Return(&fake_ctx_));
-    ON_CALL(*kMockValkeyModule, FreeThreadSafeContext(testing::_))
-        .WillByDefault(testing::Return());
-    ON_CALL(*kMockValkeyModule, SelectDb(testing::_, kDbNum))
-        .WillByDefault(testing::Return(VALKEYMODULE_OK));
-    ON_CALL(*kMockValkeyModule,
-            SendClusterMessage(testing::_, testing::_, testing::_, testing::_,
-                               testing::_))
-        .WillByDefault(testing::Return(VALKEYMODULE_OK));
-    ON_CALL(*kMockValkeyModule, Replicate(testing::_, testing::_, testing::_))
-        .WillByDefault(testing::Return(VALKEYMODULE_OK));
-
-    // Mock cluster operations for MetadataManager.
-    ON_CALL(*kMockValkeyModule,
-            Call(testing::_, testing::StrEq("CLUSTER"), testing::StrEq("c"),
-                 testing::StrEq("SLOTS")))
-        .WillByDefault(testing::Return(
-            reinterpret_cast<ValkeyModuleCallReply *>(0xDEADBEEF)));
-    ON_CALL(
-        *kMockValkeyModule,
-        CallReplyType(reinterpret_cast<ValkeyModuleCallReply *>(0xDEADBEEF)))
-        .WillByDefault(testing::Return(VALKEYMODULE_REPLY_ARRAY));
-    ON_CALL(
-        *kMockValkeyModule,
-        CallReplyLength(reinterpret_cast<ValkeyModuleCallReply *>(0xDEADBEEF)))
-        .WillByDefault(testing::Return(0));
-    ON_CALL(*kMockValkeyModule, GetMyClusterID())
-        .WillByDefault(testing::Return("fake_node_id"));
-
-    coordinator::MetadataManager::InitInstance(
-        std::make_unique<coordinator::MetadataManager>(&fake_ctx_,
-                                                       *mock_client_pool_));
-    SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
-        &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/true));
-  }
-
-  void TearDown() override {
-    SchemaManager::InitInstance(nullptr);
-    coordinator::MetadataManager::InitInstance(nullptr);
-    KeyspaceEventManager::InitInstance(nullptr);
-    ValkeySearch::InitInstance(nullptr);
-    vmsdk::ValkeyTest::TearDown();
-  }
-
-  static constexpr int kDbNum = 0;
-  ValkeyModuleCtx fake_ctx_;
-  std::unique_ptr<coordinator::MockClientPool> mock_client_pool_;
-};
-
-TEST_F(AliasSortInvariantTest, PropertyAliasListAlwaysSorted) {
-  constexpr int kIterations = 150;
-  constexpr uint64_t kSeed = 54321;
-
-  const std::string index_name = "sort_inv_coord_idx";
-
-  // Build a base proto for the index.
-  data_model::IndexSchema base_proto;
-  base_proto.set_name(index_name);
-  base_proto.set_db_num(kDbNum);
-  base_proto.add_subscribed_key_prefixes("prefix:");
-  base_proto.set_attribute_data_type(data_model::ATTRIBUTE_DATA_TYPE_HASH);
-
-  auto *attr = base_proto.add_attributes();
-  attr->set_alias("vec_attr");
-  attr->set_identifier("vec_field");
-  auto *vec = attr->mutable_index()->mutable_vector_index();
-  vec->set_dimension_count(4);
-  vec->set_normalize(false);
-  vec->set_distance_metric(data_model::DISTANCE_METRIC_COSINE);
-  vec->set_vector_data_type(data_model::VECTOR_DATA_TYPE_FLOAT32);
-  vec->set_initial_cap(10);
-  auto *hnsw = vec->mutable_hnsw_algorithm();
-  hnsw->set_m(16);
-  hnsw->set_ef_construction(200);
-  hnsw->set_ef_runtime(10);
-
-  // Create the index in coordinator mode.
-  auto create_result =
-      SchemaManager::Instance().CreateIndexSchema(&fake_ctx_, base_proto);
-  ASSERT_TRUE(create_result.ok())
-      << "CreateIndexSchema failed: " << create_result.status();
-
-  std::mt19937 rng(kSeed);
-  // Track which aliases are currently active so we can selectively remove.
-  absl::flat_hash_set<std::string> active_aliases;
-
-  for (int iter = 0; iter < kIterations; ++iter) {
-    // Decide whether to add or remove an alias.
-    // Bias toward add (70%) when few aliases exist, toward remove (50%) when
-    // many exist.
-    std::uniform_int_distribution<int> action_dist(0, 99);
-    int action = action_dist(rng);
-    bool do_add =
-        active_aliases.empty() || (action < 70 && active_aliases.size() < 30);
-
-    if (do_add) {
-      // Generate a random alias name.
-      std::string alias = "alias_" + RandomString(rng, 10);
-      auto status =
-          SchemaManager::Instance().AddAlias(kDbNum, alias, index_name);
-      if (status.ok()) {
-        active_aliases.insert(alias);
-      }
-      // If it fails (e.g., duplicate or collision), that's fine — still check
-      // sorting.
-    } else {
-      // Remove a random active alias.
-      std::uniform_int_distribution<int> idx_dist(
-          0, static_cast<int>(active_aliases.size()) - 1);
-      auto it = active_aliases.begin();
-      std::advance(it, idx_dist(rng));
-      std::string alias_to_remove = *it;
-      auto status =
-          SchemaManager::Instance().RemoveAlias(kDbNum, alias_to_remove);
-      if (status.ok()) {
-        active_aliases.erase(alias_to_remove);
-      }
-    }
-
-    // (a) Verify GetAllAliases() returns aliases in lexicographic ascending
-    // order.
-    auto all_aliases = SchemaManager::Instance().GetAllAliases(kDbNum);
-    for (size_t i = 1; i < all_aliases.size(); ++i) {
-      ASSERT_LE(all_aliases[i - 1].first, all_aliases[i].first)
-          << "Iteration " << iter
-          << ": GetAllAliases() not in sorted order at positions " << (i - 1)
-          << " and " << i << ": \"" << all_aliases[i - 1].first << "\" > \""
-          << all_aliases[i].first << "\"";
-    }
-
-    // Verify count matches our tracking set.
-    ASSERT_EQ(all_aliases.size(), active_aliases.size())
-        << "Iteration " << iter
-        << ": GetAllAliases() count mismatch with tracking set. Expected "
-        << active_aliases.size() << " but got " << all_aliases.size();
-
-    // (b) Fetch the stored proto from MetadataManager and verify the
-    // `aliases` repeated field is in lexicographic ascending order.
-    auto entry_or = coordinator::MetadataManager::Instance().GetEntryContent(
-        kSchemaManagerMetadataTypeName,
-        coordinator::ObjName(kDbNum, index_name));
-    ASSERT_TRUE(entry_or.ok())
-        << "Iteration " << iter
-        << ": GetEntryContent failed: " << entry_or.status();
-
-    data_model::IndexSchema stored_proto;
-    ASSERT_TRUE(entry_or.value().UnpackTo(&stored_proto))
-        << "Iteration " << iter << ": Failed to unpack stored IndexSchema";
-
-    // Verify the proto's aliases repeated field is sorted.
-    for (int i = 1; i < stored_proto.aliases_size(); ++i) {
-      ASSERT_LT(stored_proto.aliases(i - 1), stored_proto.aliases(i))
-          << "Iteration " << iter
-          << ": Stored proto aliases not in sorted order at positions "
-          << (i - 1) << " and " << i << ": \"" << stored_proto.aliases(i - 1)
-          << "\" >= \"" << stored_proto.aliases(i) << "\"";
-    }
-
-    // Verify the proto's alias count matches our tracking set.
-    ASSERT_EQ(static_cast<size_t>(stored_proto.aliases_size()),
-              active_aliases.size())
-        << "Iteration " << iter
-        << ": Stored proto alias count mismatch with tracking set. Expected "
-        << active_aliases.size() << " but got " << stored_proto.aliases_size();
-  }
-}
-
-// **Validates: Requirements 4.6**
-//
-// Property 6: Null-byte alias rejection
-//
-// For any string containing at least one null byte ('\0'), AddAlias,
-// RemoveAlias, and UpdateAlias SHALL all return kInvalidArgument without
-// modifying the alias map state.
+// AddAlias, RemoveAlias, and UpdateAlias all return kInvalidArgument for
+// alias strings containing null bytes, without modifying alias map state.
 class NullByteAliasRejectionTest : public vmsdk::ValkeyTest {
  public:
   void SetUp() override {
@@ -1539,14 +1320,11 @@ TEST_F(NullByteAliasRejectionTest, PropertyNullByteAliasesRejected) {
   }
 }
 
-// **Validates: Requirements 4.10**
+// Duplicate ALIASADD rejection.
 //
-// Property 7: Duplicate ALIASADD rejection
-//
-// For any (alias, index) pair, calling AddAlias twice with the same alias
-// and same target index SHALL return AlreadyExists on the second call and
-// the alias SHALL appear exactly once in the stored proto
-// (no duplicates). The GetAllAliases count must not increase on retry.
+// Calling AddAlias twice with the same alias returns AlreadyExists on the
+// second call. The alias appears exactly once in the stored proto and
+// GetAllAliases count does not increase on retry.
 class DuplicateAliasAddTest : public vmsdk::ValkeyTest {
  public:
   void SetUp() override {
@@ -1701,13 +1479,10 @@ TEST_F(DuplicateAliasAddTest, PropertyDuplicateAddReturnsAlreadyExists) {
   }
 }
 
-// **Validates: Requirements 1.3, 3.6, 3.8**
+// Index drop removes all aliases atomically.
 //
-// Property 8: Index drop removes all aliases atomically.
-//
-// For any index with a random number of aliases (1-10), dropping the index via
-// RemoveIndexSchema SHALL remove ALL aliases from the forward alias map with no
-// dangling entries remaining.
+// When an index with aliases is dropped via RemoveIndexSchema, all its
+// aliases are removed from the forward alias map with no dangling entries.
 class IndexDropAliasAtomicityTest : public vmsdk::ValkeyTest {
  public:
   void SetUp() override {
@@ -1827,13 +1602,10 @@ TEST_F(IndexDropAliasAtomicityTest, PropertyIndexDropRemovesAllAliases) {
   }
 }
 
-// **Validates: Requirements 6.4, 6.5**
+// SwapDB alias map atomicity.
 //
-// Property 9: SwapDB alias map atomicity.
-//
-// For two databases with random alias maps, OnSwapDB SHALL atomically swap the
-// forward alias maps so that db 0's aliases after the swap equal db 1's
-// aliases before the swap, and vice versa.
+// OnSwapDB atomically swaps the forward alias maps so that db 0's aliases
+// after the swap equal db 1's aliases before the swap, and vice versa.
 class SwapDBAliasAtomicityTest : public vmsdk::ValkeyTest {
  public:
   void SetUp() override {

@@ -7,6 +7,7 @@
 #include "src/commands/ft_aggregate_exec.h"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <queue>
 
@@ -410,10 +411,7 @@ class Quantile : public GroupBy::ReducerInstance {
       }
       // Residual buffer values
       while (buf_idx < buffer_.size()) {
-        double max_val = GetMaxVal(r);
-        size_t delta =
-            max_val > 1.0 ? static_cast<size_t>(std::floor(max_val)) - 1 : 0;
-        merged.emplace_back(buffer_[buf_idx++], 1, delta);
+        merged.emplace_back(buffer_[buf_idx++], 1, 0);
       }
       // Residual samples
       while (samp_idx < samples_.size()) {
@@ -506,6 +504,7 @@ class Quantile : public GroupBy::ReducerInstance {
 
     auto d = val.AsDouble();
     if (!d) return false;
+    if (std::isnan(*d)) return false;
 
     buffer_.push_back(*d);
     n_++;
@@ -630,7 +629,8 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> QuantileReducerParser(
     return absl::InvalidArgumentError(
         "QUANTILE: quantile value must be a numeric literal");
   }
-  if (quantile_val < 0.0 || quantile_val > 1.0) {
+  if (!std::isfinite(quantile_val) || quantile_val < 0.0 ||
+      quantile_val > 1.0) {
     return absl::InvalidArgumentError(
         "QUANTILE: quantile value must be between 0.0 and 1.0");
   }

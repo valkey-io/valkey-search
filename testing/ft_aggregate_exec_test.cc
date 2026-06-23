@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <limits>
 #include <memory>
 #include <random>
 
@@ -545,7 +546,7 @@ TEST_F(AggregateExecTest, QuantileRangeValidationProperty) {
     auto params = std::make_unique<AggregateParameters>(0);
     params->parse_vars_.index_interface_ = &fakeIndex;
     params->AddRecordAttribute("n1", "n1", indexes::IndexerType::kNumeric);
-    params->AddRecordAttribute("n2", "n1", indexes::IndexerType::kNumeric);
+    params->AddRecordAttribute("n2", "n2", indexes::IndexerType::kNumeric);
 
     auto parser = CreateAggregateParser();
     auto result = parser.Parse(*params, itr);
@@ -824,26 +825,27 @@ TEST_F(AggregateExecTest, MultipleReducerIndependenceProperty) {
     auto param_same_prop = MakeStages(query_same_prop);
     auto exec_result = param_same_prop->stages_[0]->Execute(records_same_prop);
     if (!exec_result.ok()) {
-      std::cerr << "Iteration " << iteration
-                << ": Execute failed: " << exec_result << "\n";
-      continue;  // Skip this iteration
+      ADD_FAILURE() << "Iteration " << iteration
+                    << ": Execute failed: " << exec_result;
+      continue;
     }
 
     if (records_same_prop.size() != 1) {
-      std::cerr << "Iteration " << iteration
-                << ": Expected 1 result record, got "
-                << records_same_prop.size() << "\n";
-      continue;  // Skip this iteration
+      ADD_FAILURE() << "Iteration " << iteration
+                    << ": Expected 1 result record, got "
+                    << records_same_prop.size();
+      continue;
     }
 
     auto record_same_prop = records_same_prop.pop_front();
 
     // Check field count
     if (record_same_prop->fields_.size() != 4) {
-      std::cerr << "Iteration " << iteration << ": Unexpected field count: "
-                << record_same_prop->fields_.size() << " (expected 4)\n";
-      std::cerr << "Query was: " << query_same_prop << "\n";
-      continue;  // Skip this iteration instead of failing
+      ADD_FAILURE() << "Iteration " << iteration
+                    << ": Unexpected field count: "
+                    << record_same_prop->fields_.size() << " (expected 4)"
+                    << "\nQuery was: " << query_same_prop;
+      continue;
     }
 
     // Calculate expected results independently using GK algorithm
@@ -981,7 +983,8 @@ TEST_F(AggregateExecTest, NumericPrecisionConsistencyProperty) {
   {
     RecordSet records(nullptr);
     std::vector<double> edge_values = {
-        1.0, 2.0, 3.0, 1e308, 1e309  // 1e309 might overflow to infinity
+        1.0, 2.0, 3.0, 1e308,
+        std::numeric_limits<double>::infinity()
     };
 
     for (auto val : edge_values) {

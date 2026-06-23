@@ -90,7 +90,7 @@ query::EvaluationResult PrefilterEvaluator::EvaluateTags(
     const query::TagPredicate &predicate) {
   bool case_sensitive = true;
   auto tags = predicate.GetIndex()->GetValue(*key_, case_sensitive);
-  return predicate.Evaluate(tags, case_sensitive);
+  return predicate.Evaluate(tags ? &*tags : nullptr, case_sensitive);
 }
 
 query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(

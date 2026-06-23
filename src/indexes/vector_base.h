@@ -61,6 +61,18 @@ class VectorRecord {
   InternedStringPtr raw_vector_;
 };
 
+class Embedding {
+ public:
+  explicit Embedding(absl::string_view vector) : raw_vector_(vector) {}
+
+  inline const char *GetRawVector() const { return raw_vector_.data(); }
+  inline operator const void *() const { return GetRawVector(); }
+  inline operator const char *() const { return GetRawVector(); }
+
+ private:
+  absl::string_view raw_vector_;
+};
+
 std::vector<char> NormalizeEmbedding(absl::string_view record, size_t type_size,
                                      float *magnitude = nullptr);
 

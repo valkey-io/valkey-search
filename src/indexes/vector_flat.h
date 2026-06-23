@@ -32,7 +32,7 @@ namespace valkey_search::indexes {
 template <typename T>
 class VectorFlat : public VectorBase {
  public:
-  using FlatIndex = hnswlib::BruteforceSearch<T, VectorRecord, VectorRecord>;
+  using FlatIndex = hnswlib::BruteforceSearch<T, Embedding, VectorRecord>;
 
   static absl::StatusOr<std::shared_ptr<VectorFlat<T>>> Create(
       const data_model::VectorIndex &vector_index_proto,

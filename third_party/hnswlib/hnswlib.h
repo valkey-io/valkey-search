@@ -207,34 +207,35 @@ class SpaceInterface {
   virtual ~SpaceInterface() {}
 };
 
-template <typename dist_t, typename InputVectorT>
+template <typename dist_t, typename EmbeddingT, typename SavedVectorT>
 class AlgorithmInterface {
  public:
-  virtual void addPoint(const InputVectorT &datapoint, labeltype label,
+  virtual void addPoint(const SavedVectorT &datapoint, labeltype label,
                         bool replace_deleted = false) = 0;
 
   virtual std::priority_queue<std::pair<dist_t, labeltype>> searchKnn(
-      const InputVectorT &query_data, size_t k, BaseFilterFunctor *isIdAllowed = nullptr,
-      BaseCancellationFunctor *isCancelled = nullptr // VALKEYSEARCH
-    ) const = 0;
+      const EmbeddingT &query_data, size_t k,
+      BaseFilterFunctor *isIdAllowed = nullptr,
+      BaseCancellationFunctor *isCancelled = nullptr  // VALKEYSEARCH
+  ) const = 0;
 
   // Return k nearest neighbor in the order of closer fist
   virtual std::vector<std::pair<dist_t, labeltype>> searchKnnCloserFirst(
-      const InputVectorT &query_data, size_t k,
+      const EmbeddingT &query_data, size_t k,
       BaseFilterFunctor *isIdAllowed = nullptr,
-      BaseCancellationFunctor *isCancelled = nullptr // VALKEYSEARCH
-    ) const;
+      BaseCancellationFunctor *isCancelled = nullptr  // VALKEYSEARCH
+  ) const;
 
   virtual absl::Status SaveIndex(OutputStream &output) = 0;
   virtual ~AlgorithmInterface() {}
 };
 
-template <typename dist_t, typename InputVectorT>
+template <typename dist_t, typename EmbeddingT, typename SavedVectorT>
 std::vector<std::pair<dist_t, labeltype>>
-AlgorithmInterface<dist_t, InputVectorT>::searchKnnCloserFirst(
-    const InputVectorT &query_data, size_t k, BaseFilterFunctor *isIdAllowed,
-    BaseCancellationFunctor *isCancelled // VALKEYSEARCH
-  ) const {
+AlgorithmInterface<dist_t, EmbeddingT, SavedVectorT>::searchKnnCloserFirst(
+    const EmbeddingT &query_data, size_t k, BaseFilterFunctor *isIdAllowed,
+    BaseCancellationFunctor *isCancelled  // VALKEYSEARCH
+) const {
   std::vector<std::pair<dist_t, labeltype>> result;
 
   // here searchKnn returns the result in the order of further first

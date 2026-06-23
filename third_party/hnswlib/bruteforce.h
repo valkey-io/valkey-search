@@ -25,8 +25,9 @@
 #endif
 
 namespace hnswlib {
-template <typename dist_t, typename InputVectorT, typename SavedVectorT>
-class BruteforceSearch : public AlgorithmInterface<dist_t, InputVectorT> {
+template <typename dist_t, typename EmbeddingT, typename SavedVectorT>
+class BruteforceSearch
+    : public AlgorithmInterface<dist_t, EmbeddingT, SavedVectorT> {
  public:
   std::unique_ptr<ChunkedArray> data_;
   size_t cur_element_count_;
@@ -64,7 +65,7 @@ class BruteforceSearch : public AlgorithmInterface<dist_t, InputVectorT> {
     cur_element_count_ = 0;
   }
 
-  void addPoint(const InputVectorT &datapoint, labeltype label,
+  void addPoint(const SavedVectorT &datapoint, labeltype label,
                 bool replace_deleted = false) override {
     int idx;
     std::unique_lock<std::mutex> lock(index_lock);
@@ -126,7 +127,7 @@ class BruteforceSearch : public AlgorithmInterface<dist_t, InputVectorT> {
   }
 
   std::priority_queue<std::pair<dist_t, labeltype>> searchKnn(
-      const InputVectorT &query_data, size_t k,
+      const EmbeddingT &query_data, size_t k,
       BaseFilterFunctor *isIdAllowed = nullptr,
       BaseCancellationFunctor *isCancelled = nullptr) const override {
     std::priority_queue<std::pair<dist_t, labeltype>> topResults;

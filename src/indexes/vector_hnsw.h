@@ -32,7 +32,7 @@ namespace valkey_search::indexes {
 template <typename T>
 class VectorHNSW : public VectorBase {
  public:
-  using HNSWIndex = hnswlib::HierarchicalNSW<T, VectorRecord, VectorRecord>;
+  using HNSWIndex = hnswlib::HierarchicalNSW<T, Embedding, VectorRecord>;
 
   static absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> Create(
       const data_model::VectorIndex &vector_index_proto,
@@ -102,6 +102,11 @@ class VectorHNSW : public VectorBase {
  private:
   VectorHNSW(int dimensions, absl::string_view attribute_identifier,
              data_model::AttributeDataType attribute_data_type);
+  static std::optional<hnswlib::tableint> GetInternalIdLockFree(
+      const HNSWIndex *algo, uint64_t internal_id);
+  static std::optional<hnswlib::tableint> GetInternalId(
+      const HNSWIndex *algo, uint64_t internal_id);
+
   std::unique_ptr<HNSWIndex> algo_ ABSL_GUARDED_BY(resize_mutex_);
   std::unique_ptr<hnswlib::SpaceInterface<T>> space_;
   mutable absl::Mutex resize_mutex_;

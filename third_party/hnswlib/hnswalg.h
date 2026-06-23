@@ -40,8 +40,9 @@ namespace hnswlib {
 typedef unsigned int tableint;
 typedef unsigned int linklistsizeint;
 
-template <typename dist_t, typename InputVectorT, typename SavedVectorT>
-class HierarchicalNSW : public AlgorithmInterface<dist_t, InputVectorT> {
+template <typename dist_t, typename EmbeddingT, typename SavedVectorT>
+class HierarchicalNSW
+    : public AlgorithmInterface<dist_t, EmbeddingT, SavedVectorT> {
  public:
   static const tableint MAX_LABEL_OPERATION_LOCKS = 65536;
   static const unsigned char DELETE_MARK = 0x01;
@@ -242,13 +243,13 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t, InputVectorT> {
   }
 
   inline void setDataByInternalId(tableint internal_id,
-                                  const InputVectorT &datapoint) {
+                                  const SavedVectorT &datapoint) {
     *reinterpret_cast<SavedVectorT *>(getDataPtrByInternalId(internal_id)) =
         datapoint;
   }
 
   inline void initDataByInternalId(tableint internal_id,
-                                   const InputVectorT &datapoint) {
+                                   const SavedVectorT &datapoint) {
     new (getDataPtrByInternalId(internal_id)) SavedVectorT(datapoint);
   }
 
@@ -271,7 +272,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t, InputVectorT> {
 
   std::priority_queue<std::pair<dist_t, tableint>,
                       std::vector<std::pair<dist_t, tableint>>, CompareByFirst>
-  searchBaseLayer(tableint ep_id, const InputVectorT &data_point, int layer) {
+  searchBaseLayer(tableint ep_id, const SavedVectorT &data_point, int layer) {
     VisitedList *vl = visited_list_pool_->getFreeVisitedList();
     vl_type *visited_array = vl->mass;
     vl_type visited_array_tag = vl->curV;
@@ -376,7 +377,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t, InputVectorT> {
   std::priority_queue<std::pair<dist_t, tableint>,
                       std::vector<std::pair<dist_t, tableint>>, CompareByFirst>
   searchBaseLayerST(
-      tableint ep_id, const InputVectorT &data_point, size_t ef,
+      tableint ep_id, const EmbeddingT &data_point, size_t ef,
       BaseFilterFunctor *isIdAllowed = nullptr,
       BaseCancellationFunctor *isCancelled = nullptr,  // VALKEYSEARCH
       BaseSearchStopCondition<dist_t> *stop_condition = nullptr) const {
@@ -592,7 +593,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t, InputVectorT> {
   }
 
   tableint mutuallyConnectNewElement(
-      const InputVectorT &data_point, tableint cur_c,
+      const SavedVectorT &data_point, tableint cur_c,
       std::priority_queue<std::pair<dist_t, tableint>,
                           std::vector<std::pair<dist_t, tableint>>,
                           CompareByFirst> &top_candidates,
@@ -1084,7 +1085,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t, InputVectorT> {
    * If replacement of deleted elements is enabled: replaces previously deleted
    * point if any, updating it with new point
    */
-  void addPoint(const InputVectorT &data_point, labeltype label,
+  void addPoint(const SavedVectorT &data_point, labeltype label,
                 bool replace_deleted = false) override {
     if ((allow_replace_deleted_ == false) && (replace_deleted == true)) {
       throw std::runtime_error(
@@ -1126,7 +1127,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t, InputVectorT> {
     }
   }
 
-  void updatePoint(const InputVectorT &dataPoint, tableint internalId,
+  void updatePoint(const SavedVectorT &dataPoint, tableint internalId,
                    float updateNeighborProbability) {
     // update the feature vector associated with existing point with new vector
     setDataByInternalId(internalId, dataPoint);
@@ -1214,7 +1215,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t, InputVectorT> {
                                maxLevelCopy);
   }
 
-  void repairConnectionsForUpdate(const InputVectorT &dataPoint,
+  void repairConnectionsForUpdate(const SavedVectorT &dataPoint,
                                   tableint entryPointInternalId,
                                   tableint dataPointInternalId,
                                   int dataPointLevel, int maxLevel) {
@@ -1306,7 +1307,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t, InputVectorT> {
     return result;
   }
 
-  tableint addPoint(const InputVectorT &data_point, labeltype label,
+  tableint addPoint(const SavedVectorT &data_point, labeltype label,
                     int level) {
     tableint cur_c = 0;
     {
@@ -1435,7 +1436,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t, InputVectorT> {
     return cur_c;
   }
   std::priority_queue<std::pair<dist_t, labeltype>> searchKnn(
-      const InputVectorT &query_data, size_t k,
+      const EmbeddingT &query_data, size_t k,
       BaseFilterFunctor *isIdAllowed = nullptr,
       BaseCancellationFunctor *isCancelled = nullptr  // VALKEYSEARCH
   ) const override {
@@ -1443,8 +1444,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t, InputVectorT> {
   }
 
   std::priority_queue<std::pair<dist_t, labeltype>> searchKnn(
-      const InputVectorT &query_data, size_t k,
-      std::optional<size_t> ef_runtime,
+      const EmbeddingT &query_data, size_t k, std::optional<size_t> ef_runtime,
       BaseFilterFunctor *isIdAllowed = nullptr,
       BaseCancellationFunctor *isCancelled = nullptr  // VALKEYSEARCH
   ) const {
@@ -1512,7 +1512,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t, InputVectorT> {
   }
 
   std::vector<std::pair<dist_t, labeltype>> searchStopConditionClosest(
-      const InputVectorT &query_data,
+      const EmbeddingT &query_data,
       BaseSearchStopCondition<dist_t> &stop_condition,
       BaseFilterFunctor *isIdAllowed = nullptr) const {
     std::vector<std::pair<dist_t, labeltype>> result;

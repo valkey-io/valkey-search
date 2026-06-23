@@ -235,9 +235,9 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
     absl::ReaderMutexLock lock(&resize_mutex_);
     try {
       CancelCondition canceler(cancellation_token);
-      VectorRecord query_record(query);
+      Embedding embedding(query);
       return algo_->searchKnn(
-          query_record,
+          embedding,
           std::min(count, static_cast<uint64_t>(algo_->cur_element_count_)),
           filter.get(), &canceler);
     } catch (const std::exception &e) {

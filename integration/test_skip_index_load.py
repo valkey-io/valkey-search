@@ -4,12 +4,12 @@ import time
 import logging
 
 from valkey import ResponseError
-from valkey_search_test_case import ValkeySearchTestCaseBase, LOGS_DIR
+from valkey_search_test_case import ValkeySearchTestCaseCommon, LOGS_DIR
 from valkeytestframework.conftest import resource_port_tracker
 import pytest
 
 
-class TestRDBCorruptedIndex(ValkeySearchTestCaseBase):
+class TestRDBCorruptedIndex(ValkeySearchTestCaseCommon):
     """Test handling of corrupted index in RDB file"""
 
     RDB_FILENAME = "dump.rdb"

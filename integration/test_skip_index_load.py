@@ -1,19 +1,18 @@
 import base64
 import os
-import tempfile
 import time
-import subprocess
-import shutil
-import socket
-from valkey import ResponseError, Valkey
-from valkey_search_test_case import ValkeySearchTestCaseBase
+import logging
+
+from valkey import ResponseError
+from valkey_search_test_case import ValkeySearchTestCaseBase, LOGS_DIR
 from valkeytestframework.conftest import resource_port_tracker
 import pytest
-import logging
 
 
 class TestRDBCorruptedIndex(ValkeySearchTestCaseBase):
     """Test handling of corrupted index in RDB file"""
+
+    RDB_FILENAME = "dump.rdb"
 
     # Corrupted RDB with vector index
     RDB_BASE64 = (
@@ -34,192 +33,89 @@ class TestRDBCorruptedIndex(ValkeySearchTestCaseBase):
         "BQ4KDAoFZG9jOjEdAACAPwUAAP+auuFfJikt2g=="
     )
 
-    def setup_method(self, method):
-        """Set up test method - create temporary RDB file."""
-        self.temp_dir = tempfile.mkdtemp()
-        self.rdb_path = os.path.join(self.temp_dir, "corrupted.rdb")
+    def _setup_rdb_in_testdir(self, testdir):
+        """Decode the corrupted RDB and write it into testdir as dump.rdb.
 
-        # Write RDB file from base64
-        rdb_data = base64.b64decode(self.RDB_BASE64)
-        with open(self.rdb_path, "wb") as f:
-            f.write(rdb_data)
-
-        logging.info(f"Created test RDB at: {self.rdb_path}")
-
-    def teardown_method(self, method):
-        """Clean up test method - remove temporary files."""
-        import shutil
-
-        if hasattr(self, "temp_dir") and os.path.exists(self.temp_dir):
-            shutil.rmtree(self.temp_dir)
-            logging.info(f"Removed temporary directory: {self.temp_dir}")
-
-    def _start_server(self, port, test_name, rdbfile="dump.rdb", search_module_args=""):
-        server_path = os.getenv("VALKEY_SERVER_PATH")
-        testdir = f"/tmp/valkey-test-framework-files/{test_name}"
-
+        The directory is created if it doesn't exist (we need the RDB in place
+        before starting the server so it can be loaded).  Cleanup of the RDB
+        file is handled by the framework's server.exit(cleanup=True).
+        """
         os.makedirs(testdir, exist_ok=True)
-        curdir = os.getcwd()
-        os.chdir(testdir)
+        rdb_path = os.path.join(testdir, self.RDB_FILENAME)
+        rdb_data = base64.b64decode(self.RDB_BASE64)
+        with open(rdb_path, "wb") as f:
+            f.write(rdb_data)
+        logging.info(f"Created corrupted RDB at: {rdb_path} ({len(rdb_data)} bytes)")
 
-        # Copy RDB file to testdir if it's a path (not just a filename)
-        if "/" in rdbfile:
-            # It's a path, copy the file to testdir
-            rdb_filename = os.path.basename(rdbfile)
-            dest_path = os.path.join(testdir, rdb_filename)
-            shutil.copy2(rdbfile, dest_path)
-            rdbfile = rdb_filename  # Use just the filename
-            logging.info(f"Copied RDB file from {rdbfile} to {dest_path}")
+    def _start_server(self, test_name, search_module_args=""):
+        """Start a server loading the corrupted RDB. Returns (server, client, logfile)."""
+        server_path = os.getenv("VALKEY_SERVER_PATH")
+        testdir = f"{LOGS_DIR}/{test_name}"
+        port = self.get_bind_port()
 
-        # Verify RDB file exists
-        rdb_path_in_testdir = os.path.join(testdir, rdbfile)
-        if os.path.exists(rdb_path_in_testdir):
-            logging.info(
-                f"RDB file exists at: {rdb_path_in_testdir}, size: {os.path.getsize(rdb_path_in_testdir)} bytes"
-            )
-        else:
-            logging.error(f"RDB file NOT found at: {rdb_path_in_testdir}")
+        # Place the corrupted RDB in testdir before starting
+        self._setup_rdb_in_testdir(testdir)
 
         lines = [
             "enable-debug-command yes",
-            f"dbfilename {rdbfile}",
+            f"dbfilename {self.RDB_FILENAME}",
             f"dir {testdir}",
             f"port {port}",
-            f"logfile logfile_{port}",
             f"loadmodule {os.getenv('JSON_MODULE_PATH')}",
             f"loadmodule {os.getenv('MODULE_PATH')} {search_module_args}",
         ]
 
-        conf_file = f"{testdir}/valkey_{port}.conf"
-        with open(conf_file, "w+") as f:
+        conf_file = os.path.join(testdir, f"valkey_{port}.conf")
+        with open(conf_file, "w") as f:
             for line in lines:
                 f.write(f"{line}\n")
-            f.write("\n")
-            f.close()
 
         logging.info(f"Starting server with config: {conf_file}")
 
-        # Start server directly using subprocess instead of test framework
-        cmd = [server_path, conf_file]
-        logging.info(f"Server command: {' '.join(cmd)}")
-
-        process = subprocess.Popen(
-            cmd,
-            cwd=testdir,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
+        server, client = self.create_server(
+            testdir=testdir,
+            server_path=server_path,
+            port=port,
+            conf_file=conf_file,
+            args={"logfile": f"logfile_{port}", "dbfilename": self.RDB_FILENAME},
         )
 
-        # Give server time to start
-        time.sleep(1)
-
-        # Create client
-        try:
-            client = Valkey(host="localhost", port=port, socket_connect_timeout=5)
-            client.ping()  # Test connection
-        except Exception as e:
-            logging.error(f"Failed to connect to server: {e}")
-            if process.poll() is None:
-                process.terminate()
-            raise
-
-        os.chdir(curdir)
-        logfile = f"{testdir}/logfile_{port}"
-
-        # Return a simple server handle
-        class ServerHandle:
-            def __init__(self, process, port):
-                self.process = process
-                self.port = port
-
-            def is_alive(self):
-                return self.process.poll() is None
-
-            def exit(self):
-                if self.process.poll() is None:
-                    self.process.terminate()
-                    self.process.wait(timeout=5)
-
-        return ServerHandle(process, port), client, logfile
+        logfile = os.path.join(testdir, f"logfile_{port}")
+        return server, client, logfile
 
     def test_corrupted_rdb_load_fails(self):
         """Test that loading corrupted RDB fails without skip option."""
-        # This should fail because the RDB is corrupted and we're not skipping index load
         try:
-            server, client, logfile = self._start_server(
-                self.get_bind_port(), "corrupted_rdb_test_fail", self.rdb_path
-            )
-
-            # If we get here, the server started (which shouldn't happen)
-            logging.error(
+            server, client, logfile = self._start_server("corrupted_rdb_test_fail")
+            pytest.fail(
                 "Server started successfully but should have failed with corrupted RDB"
             )
+        except RuntimeError:
+            pass  # Expected: server startup failed due to corrupted RDB
 
-            # Check if it actually loaded the data
-            try:
-                dbsize = client.dbsize()
-                logging.info(f"Database size: {dbsize}")
-                if dbsize > 0:
-                    pytest.fail("Server loaded corrupted RDB data, expected failure")
-            except Exception as e:
-                logging.info(f"Client connection failed: {e}")
+        # Verify the logfile confirms the failure was due to RDB corruption
+        testdir = f"{LOGS_DIR}/corrupted_rdb_test_fail"
+        for filename in os.listdir(testdir):
+            if not filename.startswith("logfile_"):
+                continue
+            log_path = os.path.join(testdir, filename)
+            with open(log_path, "r") as f:
+                log_content = f.read()
+            logging.info(f"Server log:\n{log_content}")
 
-            server.exit()
-            pytest.fail("Server should have failed to start with corrupted RDB")
+            if "Failed to load ValkeySearch aux section from RDB" in log_content:
+                return
+            elif "Short read or OOM loading DB" in log_content:
+                return
+            elif "Internal error in RDB reading" in log_content:
+                return
 
-        except Exception as e:
-            # This is expected - server should fail to start
-            logging.info(f"Server failed to start as expected: {e}")
-
-            # Now check the logs to verify it was actually the RDB corruption that caused the failure
-            test_dirs = [f"/tmp/valkey-test-framework-files/corrupted_rdb_test_fail"]
-            log_found = False
-
-            for test_dir in test_dirs:
-                if os.path.exists(test_dir):
-                    for logfile in os.listdir(test_dir):
-                        if logfile.startswith("logfile_"):
-                            log_path = os.path.join(test_dir, logfile)
-                            with open(log_path, "r") as f:
-                                log_content = f.read()
-                                logging.info(
-                                    f"Server log content from {log_path}:\n{log_content}"
-                                )
-                                log_found = True
-
-                                # Verify the failure was due to RDB corruption
-                                if (
-                                    "Failed to load ValkeySearch aux section from RDB"
-                                    in log_content
-                                ):
-                                    logging.info(
-                                        "✅ Confirmed: Server failed due to corrupted search index in RDB"
-                                    )
-                                    return  # Test passed
-                                elif "Short read or OOM loading DB" in log_content:
-                                    logging.info(
-                                        "✅ Confirmed: Server failed due to RDB corruption"
-                                    )
-                                    return  # Test passed
-                                elif "Internal error in RDB reading" in log_content:
-                                    logging.info(
-                                        "✅ Confirmed: Server failed due to RDB reading error"
-                                    )
-                                    return  # Test passed
-
-            if not log_found:
-                logging.warning("No server logs found to verify failure cause")
-
-            # If we get here, the server failed for the right reason
-            logging.info("✅ Server correctly failed to load corrupted RDB file")
+        pytest.fail("Server startup failed but logfile did not contain expected error message")
 
     def test_corrupted_rdb_skip_index_load_succeeds(self):
         """Test that loading corrupted RDB succeeds with skip index option and verify schema."""
-        # Create a server with RDB file and skip index option using proper test framework
-        available_port = self.get_bind_port()
         server, client, logfile = self._start_server(
-            available_port, "corrupted_rdb_test", self.rdb_path, "--skip-rdb-load yes"
+            "corrupted_rdb_test_skip", "--skip-rdb-load yes"
         )
 
         try:

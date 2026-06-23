@@ -99,6 +99,11 @@ inline std::ostream& operator<<(std::ostream& os, std::unique_ptr<Record> r) {
   return os << r.get();
 }
 
+// GK algorithm error bound for the QUANTILE reducer.
+// An epsilon of 0.01 guarantees the returned quantile is within 1% of the
+// true rank.
+constexpr double kQuantileEpsilon = 0.01;
+
 }  // namespace aggregate
 }  // namespace valkey_search
 

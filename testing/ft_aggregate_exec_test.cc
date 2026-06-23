@@ -25,8 +25,7 @@ static double CalculateGKQuantile(const std::vector<double>& sorted_values,
   if (n == 1) return sorted_values[0];
 
   double t = std::ceil(quantile * n);
-  double epsilon = 0.01;
-  double max_val = epsilon * 2.0 * t;
+  double max_val = kQuantileEpsilon * 2.0 * t;
   t += std::floor(max_val / 2.0);
 
   size_t rank = 0;

@@ -96,7 +96,7 @@
         "optional": true
       },
       {
-        "name": "timeout",
+        "name": "TIMEOUT",
         "token": "TIMEOUT",
         "type": "integer",
         "optional": true

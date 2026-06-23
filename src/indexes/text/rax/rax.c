@@ -1338,6 +1338,8 @@ int raxMutate(rax *rax, unsigned char *s, size_t len, raxMutateCallback callback
     }
     return success;
 }
+/* END SEARCH */
+
 /* This is the core of raxFree(): performs a depth-first scan of the
  * tree and releases all the nodes found. */
 void raxRecursiveFree(rax *rax, raxNode *n, void (*free_callback)(void *)) {

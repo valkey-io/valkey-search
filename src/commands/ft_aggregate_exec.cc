@@ -489,33 +489,16 @@ class Quantile : public GroupBy::ReducerInstance {
   bool InsertValue(const expr::Value& val) {
     if (val.IsNil()) return false;
 
-    // Direct numeric
     auto d = val.AsDouble();
-    if (d) {
-      buffer_.push_back(*d);
-      n_++;
-      if (buffer_.size() >= kDefaultBufferSize) {
-        Flush();
-        Compress();
-      }
-      return true;
-    }
+    if (!d) return false;
 
-    // String that can be parsed as a number
-    if (val.IsString()) {
-      double parsed;
-      if (absl::SimpleAtod(val.AsStringView(), &parsed)) {
-        buffer_.push_back(parsed);
-        n_++;
-        if (buffer_.size() >= kDefaultBufferSize) {
-          Flush();
-          Compress();
-        }
-        return true;
-      }
+    buffer_.push_back(*d);
+    n_++;
+    if (buffer_.size() >= kDefaultBufferSize) {
+      Flush();
+      Compress();
     }
-
-    return false;
+    return true;
   }
 
   void ProcessRecord(const ArgVector& values) override {

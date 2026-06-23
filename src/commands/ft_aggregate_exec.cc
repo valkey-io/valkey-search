@@ -385,28 +385,29 @@ class Quantile : public GroupBy::ReducerInstance {
       size_t samp_idx = 0;
       double r = 0;
 
-      while (buf_idx < buffer_.size() || samp_idx < samples_.size()) {
-        if (samp_idx >= samples_.size()) {
-          // Remaining buffer values
-          double max_val = GetMaxVal(r);
-          size_t delta =
-              max_val > 1.0 ? static_cast<size_t>(std::floor(max_val)) - 1 : 0;
-          merged.emplace_back(buffer_[buf_idx++], 1, delta);
-        } else if (buf_idx >= buffer_.size()) {
-          // Remaining samples
-          r += samples_[samp_idx].g;
-          merged.push_back(samples_[samp_idx++]);
-        } else if (buffer_[buf_idx] < samples_[samp_idx].value) {
-          // Insert buffer value before current sample
+      // Main merge: both sequences have elements
+      while (buf_idx < buffer_.size() && samp_idx < samples_.size()) {
+        if (buffer_[buf_idx] < samples_[samp_idx].value) {
           double max_val = GetMaxVal(r);
           size_t delta =
               max_val > 1.0 ? static_cast<size_t>(std::floor(max_val)) - 1 : 0;
           merged.emplace_back(buffer_[buf_idx++], 1, delta);
         } else {
-          // Keep existing sample, advance rank
           r += samples_[samp_idx].g;
           merged.push_back(samples_[samp_idx++]);
         }
+      }
+      // Residual buffer values
+      while (buf_idx < buffer_.size()) {
+        double max_val = GetMaxVal(r);
+        size_t delta =
+            max_val > 1.0 ? static_cast<size_t>(std::floor(max_val)) - 1 : 0;
+        merged.emplace_back(buffer_[buf_idx++], 1, delta);
+      }
+      // Residual samples
+      while (samp_idx < samples_.size()) {
+        r += samples_[samp_idx].g;
+        merged.push_back(samples_[samp_idx++]);
       }
 
       samples_ = std::move(merged);

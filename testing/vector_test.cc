@@ -12,6 +12,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -33,6 +34,8 @@
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
 #include "testing/common.h"
+#include "third_party/hnswlib/index.pb.h"
+#include "third_party/hnswlib/iostream.h"
 #include "third_party/hnswlib/space_ip.h"
 #include "third_party/hnswlib/space_l2.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -310,7 +313,7 @@ TEST_F(VectorIndexTest, ResizeHNSW) ABSL_NO_THREAD_SAFETY_ANALYSIS {
                                    kM, kEFConstruction, kEFRuntime),
         "attribute_identifier_1",
         data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
-    ValkeySearch::Instance().SetHNSWBlockSize(1024);
+    EXPECT_TRUE(ValkeySearch::Instance().SetHNSWBlockSize(1024).ok());
     uint32_t block_size = ValkeySearch::Instance().GetHNSWBlockSize();
     EXPECT_EQ(index.value()->GetCapacity(), initial_cap);
     auto vectors = DeterministicallyGenerateVectors(
@@ -613,6 +616,107 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
     }
   }
 }
+
+// verify reclaimable_memory is correctly synchronized and writes are not lost
+// lost writes can lead to negative integer underflow issue
+TEST_F(VectorIndexTest, ReclaimableMemoryRaceReturnsToBaseline)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  constexpr int kThreads = 8;
+  constexpr int kIters = 50000;
+  hnswlib::L2Space l2_space{kDimensions};
+  hnswlib::HierarchicalNSW<float> algo(&l2_space, /*max_elements=*/kThreads, kM,
+                                       kEFConstruction, /*random_seed=*/100,
+                                       /*allow_replace_deleted=*/false);
+  std::vector<float> v(kDimensions, 1.0f);
+  for (int t = 0; t < kThreads; ++t) {
+    algo.addPoint(v.data(), t);  // one element owned per thread
+  }
+
+  // baseline is unsigned 64-bit integer, if goes to negative it underflows to a
+  // large positive integer
+  const uint64_t baseline = Metrics::GetStats().reclaimable_memory;
+
+  std::vector<std::thread> threads;
+  threads.reserve(kThreads);
+  for (int t = 0; t < kThreads; ++t) {
+    threads.emplace_back([&algo, t]() {
+      for (int i = 0; i < kIters; ++i) {
+        algo.markDelete(t);    // += vector_size_
+        algo.unmarkDelete(t);  // -= vector_size_  (net per cycle: 0)
+      }
+    });
+  }
+  for (auto& th : threads) {
+    th.join();
+  }
+
+  // With atomic RMW ops, perfectly balanced mark/unmark cycles must net to
+  // zero, so the counter must return to its pre-test baseline.
+  EXPECT_EQ(Metrics::GetStats().reclaimable_memory, baseline);
+}
+
+// offsetData_ and the element stride must be 8-byte aligned so the vector
+// pointer read/write is atomic on ARM64 and avoids a torn-pointer crash.
+TEST_F(VectorIndexTest, OffsetDataIsPointerAlignedOnCreate) {
+  hnswlib::L2Space l2_space{kDimensions};
+  hnswlib::HierarchicalNSW<float> algo(&l2_space, /*max_elements=*/16, kM,
+                                       kEFConstruction, /*random_seed=*/100,
+                                       /*allow_replace_deleted=*/false);
+  EXPECT_EQ(algo.offsetData_ % alignof(char*), 0u);
+  EXPECT_EQ(algo.size_data_per_element_ % alignof(char*), 0u);
+  EXPECT_GE(algo.offsetData_, algo.size_links_level0_);
+}
+
+namespace {
+// InputStream that yields a single pre-built chunk (the index header).
+class SingleChunkInputStream : public hnswlib::InputStream {
+ public:
+  explicit SingleChunkInputStream(std::string chunk)
+      : chunk_(std::move(chunk)) {}
+  absl::StatusOr<std::unique_ptr<std::string>> LoadChunk() override {
+    return std::make_unique<std::string>(chunk_);
+  }
+
+ private:
+  std::string chunk_;
+};
+}  // namespace
+
+// An old snapshot stores the unpadded offset_data (132). LoadIndex must
+// recompute the aligned offset rather than trust the header, else the restored
+// index stays misaligned and exposed to the torn-pointer race.
+TEST_F(VectorIndexTest, LoadRecomputesAlignedOffsetForOldSnapshot) {
+  hnswlib::L2Space l2_space{kDimensions};
+  const size_t unpadded_offset =
+      kM * 2 * sizeof(unsigned int) + sizeof(unsigned int);  // 132
+  ASSERT_NE(unpadded_offset % alignof(char*), 0u);
+
+  hnswlib::data_model::HNSWIndexHeader header;
+  header.set_offset_level_0(0);
+  header.set_max_elements(16);
+  header.set_curr_element_count(0);
+  header.set_serialize_size_data_per_element(
+      unpadded_offset + kDimensions * sizeof(float) + sizeof(size_t));
+  header.set_label_offset(unpadded_offset + sizeof(char*));
+  header.set_offset_data(unpadded_offset);
+  header.set_max_level(-1);
+  header.set_enterpoint_node(0);
+  header.set_max_m(kM);
+  header.set_max_m_0(kM * 2);
+  header.set_m(kM);
+  header.set_mult(1.0);
+  header.set_ef_construction(kEFConstruction);
+  std::string serialized;
+  ASSERT_TRUE(header.SerializeToString(&serialized));
+
+  hnswlib::HierarchicalNSW<float> algo(&l2_space);
+  SingleChunkInputStream input(serialized);
+  VMSDK_EXPECT_OK(
+      algo.LoadIndex(input, &l2_space, /*max_elements_i=*/16, nullptr));
+  EXPECT_EQ(algo.offsetData_ % alignof(char*), 0u);
+  EXPECT_EQ(algo.size_data_per_element_ % alignof(char*), 0u);
+}
+
 }  // namespace
 
 }  // namespace valkey_search::indexes

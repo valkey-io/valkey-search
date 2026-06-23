@@ -43,7 +43,7 @@ bool TermIterator::DoneKeys() const {
 
 const InternedStringPtr& TermIterator::CurrentKey() const {
   CHECK(current_key_);
-  return current_key_;
+  return *current_key_;
 }
 
 // Helper function to advance key iterators and populate the heap with valid
@@ -60,7 +60,8 @@ void TermIterator::InsertValidKeyIterator(size_t idx) {
     key_iter.NextKey();
   }
   if (key_iter.IsValid()) {
-    key_set_.push_back_unsorted(key_iter.GetKey(), idx);
+    key_set_.push_back_unsorted(
+        valkey_search::PriorityQueueEntry<Key>{&key_iter.GetKey(), idx});
   }
 }
 
@@ -80,13 +81,13 @@ bool TermIterator::FindMinimumValidKey() {
   }
   // 2. Restore the min-heap property. O(K).
   key_set_.heapify();
-  current_key_ = key_set_.min().first;
+  current_key_ = key_set_.min().key;
   current_key_indices_.clear();
   // 3. Extract all iterators that share this minimum key.
   // This physically removes them from the heap (making it "empty" if all
   // match).
-  while (!key_set_.empty() && key_set_.min().first == current_key_) {
-    current_key_indices_.push_back(key_set_.min().second);
+  while (!key_set_.empty() && *key_set_.min().key == *current_key_) {
+    current_key_indices_.push_back(key_set_.min().idx);
     key_set_.pop_min();  // O(log K)
   }
   // 4. Initialize position iteration for the specific new key if required.
@@ -115,10 +116,10 @@ bool TermIterator::NextKey() {
 }
 
 bool TermIterator::SeekForwardKey(const InternedStringPtr& target_key) {
-  if (current_key_ && current_key_ >= target_key) return true;
+  if (current_key_ && *current_key_ >= target_key) return true;
   // Drain laggards from the heap that are behind the target.
-  while (!key_set_.empty() && key_set_.min().first < target_key) {
-    size_t idx = key_set_.min().second;
+  while (!key_set_.empty() && *key_set_.min().key < target_key) {
+    size_t idx = key_set_.min().idx;
     key_set_.pop_min();
     key_iterators_[idx].SkipForwardKey(target_key);
     InsertValidKeyIterator(idx);
@@ -235,7 +236,7 @@ FieldMaskPredicate TermIterator::CurrentFieldMask() const {
 }
 
 void TermIterator::ClearKeyState() {
-  current_key_ = {};
+  current_key_ = nullptr;
   key_set_.clear();
   current_key_indices_.clear();
   ClearPositionState();

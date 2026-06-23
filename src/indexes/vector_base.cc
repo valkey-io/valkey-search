@@ -303,9 +303,6 @@ absl::StatusOr<bool> VectorBase::RemoveRecord(
 
 absl::StatusOr<std::optional<uint64_t>> VectorBase::UnTrackKey(
     const InternedStringPtr &key) {
-  if (key->Str().empty()) {
-    return std::nullopt;
-  }
   absl::WriterMutexLock lock(&key_to_metadata_mutex_);
   auto it = tracked_metadata_by_key_.find(key);
   if (it == tracked_metadata_by_key_.end()) {
@@ -334,9 +331,6 @@ char *VectorBase::TrackVector(uint64_t internal_id, char *vector, size_t len) {
 absl::StatusOr<uint64_t> VectorBase::TrackKey(const InternedStringPtr &key,
                                               float magnitude,
                                               const InternedStringPtr &vector) {
-  if (key->Str().empty()) {
-    return absl::InvalidArgumentError("key can't be empty");
-  }
   absl::WriterMutexLock lock(&key_to_metadata_mutex_);
   auto id = inc_id_++;
   auto [_, succ] = tracked_metadata_by_key_.insert(
@@ -350,15 +344,12 @@ absl::StatusOr<uint64_t> VectorBase::TrackKey(const InternedStringPtr &key,
   key_by_internal_id_.insert({id, key});
   return id;
 }
-// Return an error if the key is empty or not being tracked.
+// Return an error if the key is not being tracked.
 // Return false if the tracked vector matches the input vector.
 // Otherwise, track the new vector and return true.
 absl::StatusOr<bool> VectorBase::UpdateMetadata(
     const InternedStringPtr &key, float magnitude,
     const InternedStringPtr &vector) {
-  if (key->Str().empty()) {
-    return absl::InvalidArgumentError("key can't be empty");
-  }
   uint64_t internal_id;
   {
     absl::WriterMutexLock lock(&key_to_metadata_mutex_);

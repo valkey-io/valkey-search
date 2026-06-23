@@ -8,6 +8,8 @@ from valkey.cluster import ValkeyCluster
 from valkey_search_test_case import ValkeySearchClusterTestCase
 import time
 import pytest
+from utils import IndexingTestHelper
+from valkeytestframework.util import waiters
 
 """
 This file contains tests for non vector (numeric and tag) queries on Hash/JSON documents in Valkey Search - in CME / CMD.
@@ -575,6 +577,50 @@ class TestNonVector(ValkeySearchTestCaseBase):
         result = client.execute_command("FT.SEARCH", "multifield_products", "@category:{books} @price:[10 30] @rating:[4.7 +inf]")
         assert result[0] == 1
         assert result[1] == b'multifield_product:4'
+
+    def test_zero_length_json_key_is_indexed(self):
+        client: Valkey = self.server.get_new_client()
+
+        assert client.execute_command(
+            "JSON.SET", "", "$",
+            json.dumps({"category": "books", "price": 19.99, "rating": 4.8})
+        ) == b"OK"
+        assert client.execute_command(
+            "FT.CREATE", "idx", "ON", "JSON", "PREFIX", "1", "",
+            "SCHEMA",
+            "$.category", "AS", "category", "TAG",
+            "$.price", "AS", "price", "NUMERIC",
+            "$.rating", "AS", "rating", "NUMERIC"
+        ) == b"OK"
+
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+
+        result = client.execute_command(
+            "FT.SEARCH", "idx", "@category:{books} @price:[19 20]"
+        )
+        assert result[0] == 1
+        assert result[1] == b""
+        assert result[2][0] == b"$"
+        assert json.loads(result[2][1].decode("utf-8")) == {
+            "category": "books",
+            "price": 19.99,
+            "rating": 4.8,
+        }
+
+        assert client.execute_command(
+            "JSON.SET", "", "$",
+            json.dumps({"category": "books", "price": 25.0, "rating": 4.8})
+        ) == b"OK"
+        waiters.wait_for_true(
+            lambda: client.execute_command(
+                "FT.SEARCH", "idx", "@category:{books} @price:[25 25]", "NOCONTENT"
+            )[0] == 1
+        )
+        waiters.wait_for_true(
+            lambda: client.execute_command(
+                "FT.SEARCH", "idx", "@category:{books} @price:[19 20]", "NOCONTENT"
+            )[0] == 0
+        )
 
     def test_bulk_limit_background_changes(self):
         """

@@ -434,7 +434,6 @@ class Quantile : public GroupBy::ReducerInstance {
     Sample(double v, size_t g_val, size_t d) : value(v), g(g_val), delta(d) {}
   };
 
-  static constexpr double EPSILON = 0.01;  // 1% error bound
   static constexpr size_t kDefaultBufferSize = 500;
 
   mutable std::vector<double> buffer_;
@@ -445,7 +444,7 @@ class Quantile : public GroupBy::ReducerInstance {
   bool quantile_initialized_{false};
 
   // Calculate maximum allowed error for a given rank
-  double GetMaxVal(double rank) const { return EPSILON * 2.0 * rank; }
+  double GetMaxVal(double rank) const { return kQuantileEpsilon * 2.0 * rank; }
 
   // Flush buffer: sort and merge into samples
   // Walk the existing sample list forward while merging

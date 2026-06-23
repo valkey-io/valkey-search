@@ -32,7 +32,7 @@ namespace valkey_search::indexes {
 template <typename T>
 class VectorHNSW : public VectorBase {
  public:
-  using HNSWIndex = hnswlib::HierarchicalNSW<T, Embedding, VectorRecord>;
+  using HNSWIndex = hnswlib::HierarchicalNSW<T, InputVector, VectorRecord>;
 
   static absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> Create(
       const data_model::VectorIndex &vector_index_proto,
@@ -76,13 +76,13 @@ class VectorHNSW : public VectorBase {
  protected:
   absl::Status ResizeIfFull() ABSL_LOCKS_EXCLUDED(resize_mutex_);
   absl::Status AddRecordImpl(uint64_t internal_id,
-                             const InternedStringPtr &vector) override
+                             absl::string_view record) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
 
   absl::Status RemoveRecordImpl(uint64_t internal_id) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
   absl::Status ModifyRecordImpl(uint64_t internal_id,
-                                const InternedStringPtr &vector) override
+                                absl::string_view record) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
   void ToProtoImpl(data_model::VectorIndex *vector_index_proto) const override;
   int RespondWithInfoImpl(ValkeyModuleCtx *ctx) const override;
@@ -94,8 +94,7 @@ class VectorHNSW : public VectorBase {
       ABSL_NO_THREAD_SAFETY_ANALYSIS {
     return algo_->getPoint(internal_id)->GetRawVector();
   }
-  bool IsVectorMatch(uint64_t internal_id,
-                     const InternedStringPtr &vector) override;
+  bool IsVectorMatch(uint64_t internal_id, absl::string_view vector) override;
   uint64_t GetMaxInternalLabel() const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
   size_t GetLabelCount() const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
 

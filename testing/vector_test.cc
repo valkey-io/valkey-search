@@ -8,13 +8,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <string>
-#include <thread>
 #include <utility>
 #include <vector>
 
-#include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -622,7 +619,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   constexpr int kThreads = 8;
   constexpr int kIters = 50000;
   hnswlib::L2Space l2_space{kDimensions};
-  hnswlib::HierarchicalNSW<float, valkey_search::indexes::VectorRecord,
+  hnswlib::HierarchicalNSW<float, valkey_search::indexes::InputVector,
                            valkey_search::indexes::VectorRecord>
       algo(&l2_space, /*max_elements=*/kThreads, kM, kEFConstruction,
            /*random_seed=*/100,
@@ -630,9 +627,10 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   std::vector<float> v(kDimensions, 1.0f);
   absl::string_view v_bytes(reinterpret_cast<const char *>(v.data()),
                             v.size() * sizeof(float));
-  auto interned_vector = StringInternStore::Intern(v_bytes);
+  auto vector_allocator = CREATE_UNIQUE_PTR(
+      FixedSizeAllocator, kDimensions * sizeof(float) + 1, true);
   for (int t = 0; t < kThreads; ++t) {
-    algo.addPoint(VectorRecord(interned_vector),
+    algo.addPoint(InputVector(v_bytes, vector_allocator.get()),
                   t);  // one element owned per thread
   }
 
@@ -663,7 +661,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
 // pointer read/write is atomic on ARM64 and avoids a torn-pointer crash.
 TEST_F(VectorIndexTest, OffsetDataIsPointerAlignedOnCreate) {
   hnswlib::L2Space l2_space{kDimensions};
-  hnswlib::HierarchicalNSW<float, valkey_search::indexes::VectorRecord,
+  hnswlib::HierarchicalNSW<float, valkey_search::indexes::InputVector,
                            valkey_search::indexes::VectorRecord>
       algo(&l2_space, /*max_elements=*/16, kM, kEFConstruction,
            /*random_seed=*/100,
@@ -715,15 +713,14 @@ TEST_F(VectorIndexTest, LoadRecomputesAlignedOffsetForOldSnapshot) {
   std::string serialized;
   ASSERT_TRUE(header.SerializeToString(&serialized));
 
-  hnswlib::HierarchicalNSW<float, valkey_search::indexes::VectorRecord,
+  hnswlib::HierarchicalNSW<float, valkey_search::indexes::InputVector,
                            valkey_search::indexes::VectorRecord>
       algo(&l2_space);
   SingleChunkInputStream input(serialized);
-  auto vector_constructor = [](absl::string_view vector_bytes) {
-    return StringInternStore::Intern(vector_bytes, nullptr);
-  };
+  auto vector_allocator = CREATE_UNIQUE_PTR(
+      FixedSizeAllocator, kDimensions * sizeof(float) + 1, true);
   VMSDK_EXPECT_OK(algo.LoadIndex(input, &l2_space, /*max_elements_i=*/16,
-                                 vector_constructor));
+                                 vector_allocator.get()));
   EXPECT_EQ(algo.offsetData_ % alignof(char *), 0u);
   EXPECT_EQ(algo.size_data_per_element_ % alignof(char *), 0u);
 }

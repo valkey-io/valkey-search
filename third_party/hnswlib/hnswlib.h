@@ -139,7 +139,7 @@ typedef size_t labeltype;
 class BaseFilterFunctor {
  public:
   virtual bool operator()(hnswlib::labeltype id) { return true; }
-  virtual ~BaseFilterFunctor(){};
+  virtual ~BaseFilterFunctor() {};
 };
 
 // VALKEYSEARCH BEGIN
@@ -147,9 +147,9 @@ class BaseFilterFunctor {
 // When true, early cancellation is requested
 //
 class BaseCancellationFunctor {
-  public:
+ public:
   virtual bool isCancelled() { return false; }
-  virtual ~BaseCancellationFunctor(){};
+  virtual ~BaseCancellationFunctor() {};
 };
 // VALKEYSEARCH END
 
@@ -207,21 +207,21 @@ class SpaceInterface {
   virtual ~SpaceInterface() {}
 };
 
-template <typename dist_t, typename EmbeddingT, typename SavedVectorT>
+template <typename dist_t, typename InputVectorT, typename SavedVectorT>
 class AlgorithmInterface {
  public:
-  virtual void addPoint(const SavedVectorT &datapoint, labeltype label,
+  virtual void addPoint(const InputVectorT &datapoint, labeltype label,
                         bool replace_deleted = false) = 0;
 
   virtual std::priority_queue<std::pair<dist_t, labeltype>> searchKnn(
-      const EmbeddingT &query_data, size_t k,
+      const InputVectorT &query_data, size_t k,
       BaseFilterFunctor *isIdAllowed = nullptr,
       BaseCancellationFunctor *isCancelled = nullptr  // VALKEYSEARCH
   ) const = 0;
 
   // Return k nearest neighbor in the order of closer fist
   virtual std::vector<std::pair<dist_t, labeltype>> searchKnnCloserFirst(
-      const EmbeddingT &query_data, size_t k,
+      const InputVectorT &query_data, size_t k,
       BaseFilterFunctor *isIdAllowed = nullptr,
       BaseCancellationFunctor *isCancelled = nullptr  // VALKEYSEARCH
   ) const;
@@ -230,16 +230,17 @@ class AlgorithmInterface {
   virtual ~AlgorithmInterface() {}
 };
 
-template <typename dist_t, typename EmbeddingT, typename SavedVectorT>
+template <typename dist_t, typename InputVectorT, typename SavedVectorT>
 std::vector<std::pair<dist_t, labeltype>>
-AlgorithmInterface<dist_t, EmbeddingT, SavedVectorT>::searchKnnCloserFirst(
-    const EmbeddingT &query_data, size_t k, BaseFilterFunctor *isIdAllowed,
+AlgorithmInterface<dist_t, InputVectorT, SavedVectorT>::searchKnnCloserFirst(
+    const InputVectorT &query_data, size_t k, BaseFilterFunctor *isIdAllowed,
     BaseCancellationFunctor *isCancelled  // VALKEYSEARCH
 ) const {
   std::vector<std::pair<dist_t, labeltype>> result;
 
   // here searchKnn returns the result in the order of further first
-  auto ret = searchKnn(query_data, k, isIdAllowed, isCancelled); // VALKEYSEARCH
+  auto ret =
+      searchKnn(query_data, k, isIdAllowed, isCancelled);  // VALKEYSEARCH
   {
     size_t sz = ret.size();
     result.resize(sz);

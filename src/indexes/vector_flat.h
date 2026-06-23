@@ -32,7 +32,7 @@ namespace valkey_search::indexes {
 template <typename T>
 class VectorFlat : public VectorBase {
  public:
-  using FlatIndex = hnswlib::BruteforceSearch<T, Embedding, VectorRecord>;
+  using FlatIndex = hnswlib::BruteforceSearch<T, InputVector, VectorRecord>;
 
   static absl::StatusOr<std::shared_ptr<VectorFlat<T>>> Create(
       const data_model::VectorIndex &vector_index_proto,
@@ -65,13 +65,13 @@ class VectorFlat : public VectorBase {
  protected:
   absl::Status ResizeIfFull() ABSL_LOCKS_EXCLUDED(resize_mutex_);
   absl::Status AddRecordImpl(uint64_t internal_id,
-                             const InternedStringPtr &vector) override
+                             absl::string_view record) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
 
   absl::Status RemoveRecordImpl(uint64_t internal_id) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
   absl::Status ModifyRecordImpl(uint64_t internal_id,
-                                const InternedStringPtr &vector) override
+                                absl::string_view record) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
   void ToProtoImpl(data_model::VectorIndex *vector_index_proto) const override;
   int RespondWithInfoImpl(ValkeyModuleCtx *ctx) const override;
@@ -83,8 +83,7 @@ class VectorFlat : public VectorBase {
       ABSL_NO_THREAD_SAFETY_ANALYSIS {
     return algo_->getPoint(internal_id)->GetRawVector();
   }
-  bool IsVectorMatch(uint64_t internal_id,
-                     const InternedStringPtr &vector) override;
+  bool IsVectorMatch(uint64_t internal_id, absl::string_view vector) override;
 
  private:
   VectorFlat(int dimensions, data_model::DistanceMetric distance_metric,

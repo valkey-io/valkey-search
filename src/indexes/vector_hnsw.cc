@@ -97,7 +97,7 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::Create(
 
 template <typename T>
 bool VectorHNSW<T>::IsVectorMatch(uint64_t internal_id,
-                                  const InternedStringPtr &vector) {
+                                  absl::string_view vector) {
   absl::ReaderMutexLock lock(&resize_mutex_);
   {
     std::unique_lock<std::mutex> lock_label(
@@ -108,7 +108,7 @@ bool VectorHNSW<T>::IsVectorMatch(uint64_t internal_id,
     }
     const auto &stored_record = algo_->getDataByInternalId(*id);
     absl::string_view record(stored_record.GetRawVector(), GetVectorDataSize());
-    return vector->Str() == record;
+    return vector == record;
   }
 }
 
@@ -132,14 +132,10 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
     index->algo_->allow_replace_deleted_ =
         options::GetHNSWAllowReplaceDeleted().GetValue();
     RDBChunkInputStream input(std::move(iter));
-    auto vector_constructor =
-        [raw_index = index.get()](absl::string_view vector_bytes) {
-          return StringInternStore::Intern(vector_bytes,
-                                           raw_index->GetVectorAllocator());
-        };
+
     VMSDK_RETURN_IF_ERROR(index->algo_->LoadIndex(
         input, index->space_.get(), vector_index_proto.initial_cap(),
-        vector_constructor));
+        index->GetVectorAllocator()));
     // ef_runtime is not persisted in the index contents
     index->algo_->setEf(vector_index_proto.hnsw_algorithm().ef_runtime());
     return index;
@@ -159,12 +155,12 @@ VectorHNSW<T>::VectorHNSW(int dimensions,
 
 template <typename T>
 absl::Status VectorHNSW<T>::AddRecordImpl(uint64_t internal_id,
-                                          const InternedStringPtr &vector) {
+                                          absl::string_view record) {
   do {
     try {
       absl::ReaderMutexLock lock(&resize_mutex_);
 
-      algo_->addPoint(VectorRecord(vector), internal_id,
+      algo_->addPoint(InputVector(record, GetVectorAllocator()), internal_id,
                       algo_->allow_replace_deleted_);
       return absl::OkStatus();
     } catch (const std::exception &e) {
@@ -256,14 +252,14 @@ absl::Status VectorHNSW<T>::ResizeIfFull() {
 
 template <typename T>
 absl::Status VectorHNSW<T>::ModifyRecordImpl(uint64_t internal_id,
-                                             const InternedStringPtr &vector) {
+                                             absl::string_view record) {
   try {
     absl::ReaderMutexLock lock(&resize_mutex_);
     // TODO - an alternative approach is to call HierarchicalNSW::updatePoint.
     // The concern with calling updatePoint is that it might have implications
     // on the search accuracy. Need to revisit this in the future.
     algo_->markDelete(internal_id);
-    algo_->addPoint(VectorRecord(vector), internal_id,
+    algo_->addPoint(InputVector(record, GetVectorAllocator()), internal_id,
                     algo_->allow_replace_deleted_);
   } catch (const std::exception &e) {
     ++Metrics::GetStats().hnsw_modify_exceptions_cnt;
@@ -308,37 +304,25 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
         query.size(), ") does not match index's expected size (",
         dimensions_ * GetDataTypeSize(), ")."));
   }
-  auto perform_search = [this, count, &filter, enable_partial_results,
-                         &ef_runtime,
-                         &cancellation_token](absl::string_view query)
-                            ABSL_NO_THREAD_SAFETY_ANALYSIS
-      -> absl::StatusOr<std::priority_queue<std::pair<T, hnswlib::labeltype>>> {
-    try {
-      CancelCondition cancel_condition(cancellation_token);
-      Embedding embedding(query);
-      auto res = algo_->searchKnn(embedding, count, ef_runtime, filter.get(),
-                                  &cancel_condition);
-      if (!enable_partial_results && cancellation_token->IsCancelled()) {
-        return absl::CancelledError(
-            "Search operation cancelled due to timeout");
-      }
-      return res;
-    } catch (const std::exception &e) {
-      Metrics::GetStats().hnsw_search_exceptions_cnt.fetch_add(
-          1, std::memory_order_relaxed);
-      return absl::InternalError(e.what());
-    }
-  };
+  std::vector<char> norm_record;
   if (normalize_) {
-    auto norm_record = NormalizeEmbedding(query, GetDataTypeSize());
-    VMSDK_ASSIGN_OR_RETURN(
-        auto search_result,
-        perform_search(absl::string_view((const char *)norm_record.data(),
-                                         norm_record.size())));
-    return CreateReply(search_result);
+    norm_record = NormalizeEmbedding(query, GetDataTypeSize());
+    query = absl::string_view(norm_record.data(), norm_record.size());
   }
-  VMSDK_ASSIGN_OR_RETURN(auto search_result, perform_search(query));
-  return CreateReply(search_result);
+  try {
+    CancelCondition cancel_condition(cancellation_token);
+    InputVector embedding(query, nullptr);
+    auto res = algo_->searchKnn(embedding, count, ef_runtime, filter.get(),
+                                &cancel_condition);
+    if (!enable_partial_results && cancellation_token->IsCancelled()) {
+      return absl::CancelledError("Search operation cancelled due to timeout");
+    }
+    return CreateReply(res);
+  } catch (const std::exception &e) {
+    Metrics::GetStats().hnsw_search_exceptions_cnt.fetch_add(
+        1, std::memory_order_relaxed);
+    return absl::InternalError(e.what());
+  }
 }
 
 template <typename T>

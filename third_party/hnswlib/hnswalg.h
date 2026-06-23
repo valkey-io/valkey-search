@@ -40,9 +40,9 @@ namespace hnswlib {
 typedef unsigned int tableint;
 typedef unsigned int linklistsizeint;
 
-template <typename dist_t, typename EmbeddingT, typename SavedVectorT>
+template <typename dist_t, typename InputVectorT, typename SavedVectorT>
 class HierarchicalNSW
-    : public AlgorithmInterface<dist_t, EmbeddingT, SavedVectorT> {
+    : public AlgorithmInterface<dist_t, InputVectorT, SavedVectorT> {
  public:
   static const tableint MAX_LABEL_OPERATION_LOCKS = 65536;
   static const unsigned char DELETE_MARK = 0x01;
@@ -104,13 +104,6 @@ class HierarchicalNSW
       deleted_elements;  // contains internal ids of deleted elements
 
   HierarchicalNSW(SpaceInterface<dist_t> *s) {}
-
-  HierarchicalNSW(SpaceInterface<dist_t> *s, const std::string &location,
-                  bool nmslib = false, size_t max_elements = 0,
-                  bool allow_replace_deleted = false)
-      : allow_replace_deleted_(allow_replace_deleted) {
-    LoadIndex(location, s, max_elements);
-  }
 
   HierarchicalNSW(SpaceInterface<dist_t> *s, size_t max_elements, size_t M = 16,
                   size_t ef_construction = 200, size_t random_seed = 100,
@@ -243,14 +236,15 @@ class HierarchicalNSW
   }
 
   inline void setDataByInternalId(tableint internal_id,
-                                  const SavedVectorT &datapoint) {
+                                  const InputVectorT &datapoint) {
     *reinterpret_cast<SavedVectorT *>(getDataPtrByInternalId(internal_id)) =
-        datapoint;
+        datapoint.ToVectorRecord();
   }
 
   inline void initDataByInternalId(tableint internal_id,
-                                   const SavedVectorT &datapoint) {
-    new (getDataPtrByInternalId(internal_id)) SavedVectorT(datapoint);
+                                   const InputVectorT &datapoint) {
+    new (getDataPtrByInternalId(internal_id))
+        SavedVectorT(datapoint.ToVectorRecord());
   }
 
   inline dist_t evaluateDistance(const SavedVectorT &a,
@@ -272,7 +266,7 @@ class HierarchicalNSW
 
   std::priority_queue<std::pair<dist_t, tableint>,
                       std::vector<std::pair<dist_t, tableint>>, CompareByFirst>
-  searchBaseLayer(tableint ep_id, const SavedVectorT &data_point, int layer) {
+  searchBaseLayer(tableint ep_id, const InputVectorT &data_point, int layer) {
     VisitedList *vl = visited_list_pool_->getFreeVisitedList();
     vl_type *visited_array = vl->mass;
     vl_type visited_array_tag = vl->curV;
@@ -377,7 +371,7 @@ class HierarchicalNSW
   std::priority_queue<std::pair<dist_t, tableint>,
                       std::vector<std::pair<dist_t, tableint>>, CompareByFirst>
   searchBaseLayerST(
-      tableint ep_id, const EmbeddingT &data_point, size_t ef,
+      tableint ep_id, const InputVectorT &data_point, size_t ef,
       BaseFilterFunctor *isIdAllowed = nullptr,
       BaseCancellationFunctor *isCancelled = nullptr,  // VALKEYSEARCH
       BaseSearchStopCondition<dist_t> *stop_condition = nullptr) const {
@@ -593,7 +587,7 @@ class HierarchicalNSW
   }
 
   tableint mutuallyConnectNewElement(
-      const SavedVectorT &data_point, tableint cur_c,
+      const InputVectorT &data_point, tableint cur_c,
       std::priority_queue<std::pair<dist_t, tableint>,
                           std::vector<std::pair<dist_t, tableint>>,
                           CompareByFirst> &top_candidates,
@@ -844,9 +838,10 @@ class HierarchicalNSW
     return absl::OkStatus();
   }
 
-  template <typename FunctorT>
+  template <typename VectorAllocator>
   absl::Status LoadIndex(InputStream &input, SpaceInterface<dist_t> *s,
-                         size_t max_elements_i, FunctorT vector_constructor) {
+                         size_t max_elements_i,
+                         VectorAllocator vector_allocator) {
     clear();
 
     VMSDK_ASSIGN_OR_RETURN(auto serialized_header, input.LoadChunk());
@@ -896,9 +891,10 @@ class HierarchicalNSW
       labeltype id;
       memcpy((char *)&id, chunk->data() + size_links_level0_ + vector_size_,
              sizeof(labeltype));
-      initDataByInternalId(
-          i, SavedVectorT(vector_constructor(absl::string_view(
-                 chunk->data() + size_links_level0_, vector_size_))));
+      InputVectorT vector_record(
+          absl::string_view(chunk->data() + size_links_level0_, vector_size_),
+          vector_allocator);
+      initDataByInternalId(i, vector_record);
       memcpy((*data_level0_memory_)[i] + label_offset_, (char *)&id,
              sizeof(labeltype));
       cur_element_count_++;
@@ -1085,7 +1081,7 @@ class HierarchicalNSW
    * If replacement of deleted elements is enabled: replaces previously deleted
    * point if any, updating it with new point
    */
-  void addPoint(const SavedVectorT &data_point, labeltype label,
+  void addPoint(const InputVectorT &data_point, labeltype label,
                 bool replace_deleted = false) override {
     if ((allow_replace_deleted_ == false) && (replace_deleted == true)) {
       throw std::runtime_error(
@@ -1127,7 +1123,7 @@ class HierarchicalNSW
     }
   }
 
-  void updatePoint(const SavedVectorT &dataPoint, tableint internalId,
+  void updatePoint(const InputVectorT &dataPoint, tableint internalId,
                    float updateNeighborProbability) {
     // update the feature vector associated with existing point with new vector
     setDataByInternalId(internalId, dataPoint);
@@ -1215,7 +1211,7 @@ class HierarchicalNSW
                                maxLevelCopy);
   }
 
-  void repairConnectionsForUpdate(const SavedVectorT &dataPoint,
+  void repairConnectionsForUpdate(const InputVectorT &dataPoint,
                                   tableint entryPointInternalId,
                                   tableint dataPointInternalId,
                                   int dataPointLevel, int maxLevel) {
@@ -1307,7 +1303,7 @@ class HierarchicalNSW
     return result;
   }
 
-  tableint addPoint(const SavedVectorT &data_point, labeltype label,
+  tableint addPoint(const InputVectorT &data_point, labeltype label,
                     int level) {
     tableint cur_c = 0;
     {
@@ -1436,7 +1432,7 @@ class HierarchicalNSW
     return cur_c;
   }
   std::priority_queue<std::pair<dist_t, labeltype>> searchKnn(
-      const EmbeddingT &query_data, size_t k,
+      const InputVectorT &query_data, size_t k,
       BaseFilterFunctor *isIdAllowed = nullptr,
       BaseCancellationFunctor *isCancelled = nullptr  // VALKEYSEARCH
   ) const override {
@@ -1444,7 +1440,8 @@ class HierarchicalNSW
   }
 
   std::priority_queue<std::pair<dist_t, labeltype>> searchKnn(
-      const EmbeddingT &query_data, size_t k, std::optional<size_t> ef_runtime,
+      const InputVectorT &query_data, size_t k,
+      std::optional<size_t> ef_runtime,
       BaseFilterFunctor *isIdAllowed = nullptr,
       BaseCancellationFunctor *isCancelled = nullptr  // VALKEYSEARCH
   ) const {
@@ -1512,7 +1509,7 @@ class HierarchicalNSW
   }
 
   std::vector<std::pair<dist_t, labeltype>> searchStopConditionClosest(
-      const EmbeddingT &query_data,
+      const InputVectorT &query_data,
       BaseSearchStopCondition<dist_t> &stop_condition,
       BaseFilterFunctor *isIdAllowed = nullptr) const {
     std::vector<std::pair<dist_t, labeltype>> result;

@@ -8,6 +8,7 @@
 #ifndef VALKEYSEARCH_SRC_INDEXES_VECTOR_BASE_H_
 #define VALKEYSEARCH_SRC_INDEXES_VECTOR_BASE_H_
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -48,8 +49,6 @@ class VectorRecord {
  public:
   explicit VectorRecord(const InternedStringPtr &vector)
       : raw_vector_(vector) {}
-  explicit VectorRecord(absl::string_view vector)
-      : raw_vector_(StringInternStore::Intern(vector)) {}
 
   inline const char *GetRawVector() const {
     return const_cast<char *>(raw_vector_->Str().data());
@@ -61,20 +60,40 @@ class VectorRecord {
   InternedStringPtr raw_vector_;
 };
 
-class Embedding {
+class InputVector {
  public:
-  explicit Embedding(absl::string_view vector) : raw_vector_(vector) {}
+  explicit InputVector(absl::string_view vector, Allocator *allocator)
+      : raw_vector_(vector), vector_allocator_(allocator) {}
 
   inline const char *GetRawVector() const { return raw_vector_.data(); }
   inline operator const void *() const { return GetRawVector(); }
   inline operator const char *() const { return GetRawVector(); }
+  VectorRecord ToVectorRecord() const {
+#ifndef SAN_BUILD
+    CHECK(vector_allocator_ != nullptr);
+#endif
+    return VectorRecord(
+        StringInternStore::Intern(raw_vector_, vector_allocator_));
+  }
 
  private:
   absl::string_view raw_vector_;
+  Allocator *vector_allocator_;
 };
 
 std::vector<char> NormalizeEmbedding(absl::string_view record, size_t type_size,
                                      float *magnitude = nullptr);
+
+template <typename T>
+T CalcMagnitude(const T *src, size_t size) {
+  T magnitude = static_cast<T>(0);
+  for (size_t i = 0; i < size; i++) {
+    magnitude += src[i] * src[i];
+  }
+  return (magnitude == static_cast<T>(0))
+             ? static_cast<T>(1)
+             : static_cast<T>(std::sqrt(magnitude));
+}
 
 // Lightweight result entry used during non-vector search collection.
 // Trivially destructible — destroying a vector of 10K of these is a no-op.
@@ -242,11 +261,11 @@ class VectorBase : public IndexBase {
   void Init(int dimensions, data_model::DistanceMetric distance_metric,
             std::unique_ptr<hnswlib::SpaceInterface<T>> &space);
   virtual absl::Status AddRecordImpl(uint64_t internal_id,
-                                     const InternedStringPtr &vector) = 0;
+                                     absl::string_view record) = 0;
 
   virtual absl::Status RemoveRecordImpl(uint64_t internal_id) = 0;
   virtual absl::Status ModifyRecordImpl(uint64_t internal_id,
-                                        const InternedStringPtr &vector) = 0;
+                                        absl::string_view record) = 0;
   virtual int RespondWithInfoImpl(ValkeyModuleCtx *ctx) const = 0;
 
   virtual size_t GetDataTypeSize() const = 0;
@@ -269,7 +288,7 @@ class VectorBase : public IndexBase {
   ComputeDistanceFromRecordImpl(uint64_t internal_id,
                                 absl::string_view query) const = 0;
   virtual bool IsVectorMatch(uint64_t internal_id,
-                             const InternedStringPtr &vector) = 0;
+                             absl::string_view vector) = 0;
 
  private:
   absl::StatusOr<uint64_t> TrackKey(const InternedStringPtr &key,
@@ -278,8 +297,7 @@ class VectorBase : public IndexBase {
   absl::StatusOr<std::optional<uint64_t>> UnTrackKey(
       const InternedStringPtr &key) ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::StatusOr<bool> UpdateMetadata(const InternedStringPtr &key,
-                                      float magnitude,
-                                      const InternedStringPtr &vector)
+                                      float magnitude, absl::string_view vector)
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::StatusOr<uint64_t> GetInternalId(const InternedStringPtr &key) const
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);

@@ -25,9 +25,9 @@
 #endif
 
 namespace hnswlib {
-template <typename dist_t, typename EmbeddingT, typename SavedVectorT>
+template <typename dist_t, typename InputVectorT, typename SavedVectorT>
 class BruteforceSearch
-    : public AlgorithmInterface<dist_t, EmbeddingT, SavedVectorT> {
+    : public AlgorithmInterface<dist_t, InputVectorT, SavedVectorT> {
  public:
   std::unique_ptr<ChunkedArray> data_;
   size_t cur_element_count_;
@@ -65,14 +65,15 @@ class BruteforceSearch
     cur_element_count_ = 0;
   }
 
-  void addPoint(const SavedVectorT &datapoint, labeltype label,
+  void addPoint(const InputVectorT &datapoint, labeltype label,
                 bool replace_deleted = false) override {
     int idx;
     std::unique_lock<std::mutex> lock(index_lock);
     auto search = dict_external_to_internal.find(label);
     if (search != dict_external_to_internal.end()) {
       idx = search->second;
-      *reinterpret_cast<SavedVectorT *>((*data_)[idx]) = datapoint;
+      *reinterpret_cast<SavedVectorT *>((*data_)[idx]) =
+          datapoint.ToVectorRecord();
     } else {
       if (cur_element_count_ >= data_->getCapacity()) {
         throw std::runtime_error(
@@ -83,7 +84,7 @@ class BruteforceSearch
       cur_element_count_++;
       SavedVectorT *stored_vector =
           reinterpret_cast<SavedVectorT *>((*data_)[idx]);
-      new (stored_vector) SavedVectorT(datapoint);
+      new (stored_vector) SavedVectorT(datapoint.ToVectorRecord());
     }
     memcpy((*data_)[idx] + sizeof(SavedVectorT), &label, sizeof(labeltype));
   }
@@ -127,7 +128,7 @@ class BruteforceSearch
   }
 
   std::priority_queue<std::pair<dist_t, labeltype>> searchKnn(
-      const EmbeddingT &query_data, size_t k,
+      const InputVectorT &query_data, size_t k,
       BaseFilterFunctor *isIdAllowed = nullptr,
       BaseCancellationFunctor *isCancelled = nullptr) const override {
     std::priority_queue<std::pair<dist_t, labeltype>> topResults;
@@ -201,10 +202,9 @@ class BruteforceSearch
     }
     return absl::OkStatus();
   }
-
-  template <typename FunctorT>
+  template <typename VectorAllocator>
   absl::Status LoadIndex(InputStream &input, SpaceInterface<dist_t> *s,
-                         FunctorT vector_constructor) {
+                         VectorAllocator vector_allocator) {
     clear();
     VMSDK_ASSIGN_OR_RETURN(auto serialized_header, input.LoadChunk());
     auto header = std::make_unique<data_model::BruteForceIndexHeader>();
@@ -233,7 +233,9 @@ class BruteforceSearch
       SavedVectorT *stored_vector =
           reinterpret_cast<SavedVectorT *>((*data_)[i]);
       new (stored_vector) SavedVectorT(
-          vector_constructor(absl::string_view(chunk->data(), vector_size_)));
+          InputVectorT(absl::string_view(chunk->data(), vector_size_),
+                       vector_allocator)
+              .ToVectorRecord());
       memcpy((*data_)[i] + sizeof(SavedVectorT), (char *)&id,
              sizeof(labeltype));
       dict_external_to_internal[id] = i;
@@ -244,7 +246,6 @@ class BruteforceSearch
   }
 
   void resizeIndex(size_t new_max_elements) {
-    std::unique_lock<std::mutex> lock(index_lock);
     if (new_max_elements < cur_element_count_) {
       return;
     }

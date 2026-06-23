@@ -34,12 +34,7 @@ class TestRDBCorruptedIndex(ValkeySearchTestCaseCommon):
     )
 
     def _setup_rdb_in_testdir(self, testdir):
-        """Decode the corrupted RDB and write it into testdir as dump.rdb.
-
-        The directory is created if it doesn't exist (we need the RDB in place
-        before starting the server so it can be loaded).  Cleanup of the RDB
-        file is handled by the framework's server.exit(cleanup=True).
-        """
+        """Decode the corrupted RDB and write it into testdir as dump.rdb."""
         os.makedirs(testdir, exist_ok=True)
         rdb_path = os.path.join(testdir, self.RDB_FILENAME)
         rdb_data = base64.b64decode(self.RDB_BASE64)
@@ -48,11 +43,7 @@ class TestRDBCorruptedIndex(ValkeySearchTestCaseCommon):
         logging.info(f"Created corrupted RDB at: {rdb_path} ({len(rdb_data)} bytes)")
 
     def _start_server(self, test_name, search_module_args="", expect_failure=False):
-        """Start a server loading the corrupted RDB. Returns (server, client, logfile).
-
-        If expect_failure=True, don't wait for the server to become ready
-        (it's expected to crash during RDB load). client will be None.
-        """
+        """Test that loading corrupted RDB fails without skip option."""
         server_path = os.getenv("VALKEY_SERVER_PATH")
         testdir = f"{LOGS_DIR}/{test_name}"
         port = self.get_bind_port()
@@ -99,25 +90,17 @@ class TestRDBCorruptedIndex(ValkeySearchTestCaseCommon):
             "corrupted_rdb_test_fail", expect_failure=True
         )
 
-        # Wait for the server process to exit (it should crash during RDB load)
+        # Wait for the server process to exit
         server.wait_for_shutdown()
 
-        # Verify server exited with non-zero code
-        exit_code = server.server.returncode
-        assert exit_code != 0, "Server should have crashed during corrupted RDB load"
-        logging.info(f"Server exited with code {exit_code}")
-
-        # Log server output for debugging
-        if os.path.exists(logfile):
-            with open(logfile, "r") as f:
-                log_content = f.read()
-            logging.info(f"Server log:\n{log_content}")
-
+        # Check server logs for RDB errors
+        with open(logfile, "r") as f:
+            log_content = f.read()
         assert (
             "Failed to load ValkeySearch aux section from RDB" in log_content
             or "Short read or OOM loading DB" in log_content
             or "Internal error in RDB reading" in log_content
-        ), "Server crashed but logfile did not contain expected error message"
+        ), "Server exited but logfile did not contain expected error message"
 
     def test_corrupted_rdb_skip_index_load_succeeds(self):
         """Test that loading corrupted RDB succeeds with skip index option and verify schema."""

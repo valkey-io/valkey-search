@@ -255,8 +255,6 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
   float magnitude = 1.0f;
   if (normalize_) {
     norm_record = NormalizeVector(query, &magnitude);
-    query =
-        absl::string_view((const char *)norm_record.data(), norm_record.size());
   }
 
   try {

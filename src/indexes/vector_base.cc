@@ -252,12 +252,12 @@ absl::StatusOr<bool> VectorBase::ModifyRecord(const InternedStringPtr &key,
   auto modify_result =
       ModifyRecordImpl(internal_id, record, magnitude, norm_record);
   if (!modify_result.ok()) {
-    auto untrack_result = UnTrackKey(key);
-    if (!untrack_result.ok()) {
+    auto res = RemoveRecord(key, indexes::DeletionType::kRecord);
+    if (!res.ok()) {
       VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
           << "While processing error for ModifyRecord, encountered error "
-             "in UntrackKey: "
-          << untrack_result.status().message();
+             "in RemoveRecord: "
+          << res.status().message();
     }
     return modify_result;
   }

@@ -39,6 +39,7 @@
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/thread_pool.h"
+#include "vmsdk/src/time_sliced_mrmw_mutex.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -317,7 +318,12 @@ absl::Status PerformSearchFanoutAsync(
     std::unique_ptr<SearchParameters> parameters,
     vmsdk::ThreadPool *thread_pool) {
   auto request = coordinator::ParametersToGRPCSearchRequest(*parameters);
-  uint64_t index_size = parameters->index_schema->GetIndexKeyInfoSize();
+  uint64_t index_size;
+  {
+    auto &time_sliced_mutex = parameters->index_schema->GetTimeSlicedMutex();
+    vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
+    index_size = parameters->index_schema->GetIndexKeyInfoSize();
+  }
   uint32_t min_index_size =
       options::GetFanoutUniformityMinIndexSize().GetValue();
   if (parameters->IsNonVectorQuery()) {

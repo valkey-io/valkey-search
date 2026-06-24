@@ -15,10 +15,8 @@
 #include "src/commands/commands.h"
 #include "src/commands/ft_create_parser.h"
 #include "src/indexes/index_base.h"
-#include "src/multi_language.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search_options.h"
-#include "src/version.h"
 #include "testing/common.h"
 #include "vmsdk/src/module.h"
 #include "vmsdk/src/testing_infra/module.h"
@@ -514,36 +512,9 @@ TEST_F(FTCreateTest, ReplicationBehaviorCoordinatorDisabled) {
   ExecuteFTCreateCommand(&fake_ctx_, argv);
 }
 
-// On versions < 1.4, non-English languages are not in kLanguageByStr, so
-// ParseParam rejects them with "Bad arguments for LANGUAGE: Unknown argument".
-TEST_F(FTCreateTest, NonEnglishLanguageRejectedBelow14) {
-  if constexpr (kModuleVersion >= valkey_search::kRelease14) {
-    GTEST_SKIP() << "Only applicable for module version < 1.4";
-  }
-
-  std::vector<std::string> non_english_languages = {
-      "FRENCH",  "GERMAN",  "SPANISH", "ITALIAN",    "PORTUGUESE", "RUSSIAN",
-      "SWEDISH", "TURKISH", "DUTCH",   "INDONESIAN", "ARABIC"};
-
-  for (const auto& lang : non_english_languages) {
-    std::vector<std::string> argv = {
-        "FT.CREATE", "test_idx_" + lang, "LANGUAGE", lang, "schema", "title",
-        "text"};
-    std::string expected_reply =
-        "-Bad arguments for LANGUAGE: Unknown "
-        "argument `" +
-        lang + "`\r\n";
-    ExecuteFTCreateCommand(&fake_ctx_, argv, VALKEYMODULE_OK, expected_reply);
-  }
-}
-
-// On version >= 1.4 with feature flag disabled, non-English languages are in
+// With feature flag disabled, non-English languages are in
 // the map but gated by IsLanguageSupported().
 TEST_F(FTCreateTest, NonEnglishLanguageRejectedFlagDisabled) {
-  if constexpr (kModuleVersion < valkey_search::kRelease14) {
-    GTEST_SKIP() << "Only applicable for module version >= 1.4";
-  }
-
   std::vector<std::string> non_english_languages = {
       "FRENCH",  "GERMAN",  "SPANISH", "ITALIAN",    "PORTUGUESE", "RUSSIAN",
       "SWEDISH", "TURKISH", "DUTCH",   "INDONESIAN", "ARABIC"};
@@ -559,12 +530,8 @@ TEST_F(FTCreateTest, NonEnglishLanguageRejectedFlagDisabled) {
   }
 }
 
-// On version >= 1.4 with feature flag enabled, non-English languages succeed.
+// With feature flag enabled, non-English languages succeed.
 TEST_F(FTCreateTest, NonEnglishLanguageAllowedFlagEnabled) {
-  if constexpr (kModuleVersion < valkey_search::kRelease14) {
-    GTEST_SKIP() << "Only applicable for module version >= 1.4";
-  }
-
   int db_num = 0;
   ON_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
       .WillByDefault(testing::Return(db_num));

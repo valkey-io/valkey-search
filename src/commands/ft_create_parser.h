@@ -28,13 +28,6 @@ static constexpr absl::string_view kDefaultPunctuation =
     ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|?";
 static constexpr uint32_t kDefaultMinStemSize = 4;
 
-// Default stop words set
-const std::vector<std::string> kDefaultStopWords{
-    "a",    "is",   "the", "an",   "and",  "are",   "as",   "at",    "be",
-    "but",  "by",   "for", "if",   "in",   "into",  "it",   "no",    "not",
-    "of",   "on",   "or",  "such", "that", "their", "then", "there", "these",
-    "they", "this", "to",  "was",  "will", "with"};
-
 struct FTCreateTagParameters {
   absl::string_view separator{","};
   bool case_sensitive{false};
@@ -58,7 +51,9 @@ struct PerIndexTextParams {
   std::string punctuation{kDefaultPunctuation};
   bool with_offsets{true};
   bool no_stem{false};
-  std::vector<std::string> stop_words{kDefaultStopWords};
+  // nullopt means "apply language defaults after parsing"; a value means "user
+  // set this explicitly" (including an empty vector for NOSTOPWORDS).
+  std::optional<std::vector<std::string>> stop_words;
   data_model::Language language{data_model::LANGUAGE_ENGLISH};
   int min_stem_size{4};
 };

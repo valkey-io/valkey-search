@@ -27,6 +27,7 @@
 #include "src/index_schema.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/text/stop_words.h"
 #include "src/indexes/vector_base.h"
 #include "src/multi_language.h"
 #include "src/version.h"
@@ -467,8 +468,8 @@ absl::Status ParseStopWords(vmsdk::ArgsIterator &itr,
                             PerIndexTextParams &params) {
   uint32_t count;
   VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, count));
+  params.stop_words.emplace();
   if (count == 0) {
-    params.stop_words.clear();
     return absl::OkStatus();
   }
 
@@ -479,11 +480,10 @@ absl::Status ParseStopWords(vmsdk::ArgsIterator &itr,
         "of arguments provided for STOPWORDS");
   }
 
-  params.stop_words.clear();
   for (uint32_t i = 0; i < count; ++i) {
     std::string word;
     VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, word));
-    params.stop_words.push_back(word);
+    params.stop_words->push_back(std::move(word));
   }
   return absl::OkStatus();
 }
@@ -503,7 +503,7 @@ vmsdk::KeyValueParser<PerIndexTextParams> CreateSchemaTextParser() {
   parser.AddParamParser(kNoStemParam,
                         GENERATE_FLAG_PARSER(PerIndexTextParams, no_stem));
 
-  parser.AddParamParser(kNoStopWordsParam, GENERATE_CLEAR_CONTAINER_PARSER(
+  parser.AddParamParser(kNoStopWordsParam, GENERATE_EMPLACE_PARSER(
                                                PerIndexTextParams, stop_words));
 
   parser.AddParamParser(
@@ -682,7 +682,6 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
   schema_text_defaults.with_offsets = true;
   schema_text_defaults.no_stem = false;
   schema_text_defaults.language = data_model::LANGUAGE_ENGLISH;
-  schema_text_defaults.stop_words = kDefaultStopWords;
 
   // Parse pre-SCHEMA parameters in flexible order
   static auto schema_text_parser = CreateSchemaTextParser();
@@ -744,8 +743,15 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
   index_schema_proto.set_min_stem_size(schema_text_defaults.min_stem_size);
 
   // Add stop words to the schema
-  for (const auto &word : schema_text_defaults.stop_words) {
-    index_schema_proto.add_stop_words(word);
+  if (!schema_text_defaults.stop_words.has_value()) {
+    for (const auto &w :
+         indexes::text::GetDefaultStopWords(index_schema_proto.language())) {
+      index_schema_proto.add_stop_words(w);
+    }
+  } else {
+    for (const auto &w : *schema_text_defaults.stop_words) {
+      index_schema_proto.add_stop_words(w);
+    }
   }
 
   absl::string_view schema;

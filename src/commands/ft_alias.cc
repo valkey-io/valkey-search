@@ -21,6 +21,7 @@
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
 #include "src/valkey_search_options.h"
+#include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
@@ -145,14 +146,21 @@ absl::Status RejectIfMultiExecInCme(ValkeyModuleCtx *ctx) {
   return absl::OkStatus();
 }
 
-// Performs the cluster consistency fanout for alias add/update operations,
-// waiting until the alias resolves to the expected index on all nodes.
+// Performs the cluster consistency fanout for alias add/update operations.
+// The primary check is alias resolution: the fanout retries until every node
+// can resolve the alias name to an index via GetIndexSchema. The IFV
+// (fingerprint/version) check is secondary — it guards against stale index
+// state but is not the mechanism that ensures alias visibility.
 void FanoutAliasExists(ValkeyModuleCtx *ctx, absl::string_view alias) {
   const bool is_loading =
       ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_LOADING;
   if (ValkeySearch::Instance().IsCluster() &&
       ValkeySearch::Instance().UsingCoordinator()) {
     if (!is_loading) {
+      // NOTE: We look up the IFV after the alias is created rather than
+      // passing it from CreateEntry because the index already exists and
+      // concurrent modifications could bump its version, causing the
+      // exact-match consistency check to retry until timeout.
       auto schema_or = SchemaManager::Instance().GetIndexSchema(
           ValkeyModule_GetSelectedDb(ctx), alias);
       if (schema_or.ok()) {
@@ -166,6 +174,10 @@ void FanoutAliasExists(ValkeyModuleCtx *ctx, absl::string_view alias) {
         op->StartOperation(ctx);
         return;
       }
+      VMSDK_LOG(WARNING, ctx)
+          << "FanoutAliasExists: failed to resolve alias '"
+          << alias << "' locally, skipping cluster consistency fanout: "
+          << schema_or.status().message();
     }
     ValkeyModule_ReplyWithSimpleString(ctx, "OK");
   } else {
@@ -264,8 +276,9 @@ absl::Status FTAliasListCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
       SchemaManager::Instance().GetAllAliases(ValkeyModule_GetSelectedDb(ctx));
   ValkeyModule_ReplyWithArray(ctx, aliases.size() * 2);
   for (const auto &[alias, index_name] : aliases) {
-    ValkeyModule_ReplyWithSimpleString(ctx, alias.c_str());
-    ValkeyModule_ReplyWithSimpleString(ctx, index_name.c_str());
+    ValkeyModule_ReplyWithStringBuffer(ctx, alias.data(), alias.size());
+    ValkeyModule_ReplyWithStringBuffer(ctx, index_name.data(),
+                                       index_name.size());
   }
   return absl::OkStatus();
 }

@@ -1,5 +1,5 @@
 import pytest
-from .data_sets import *
+from .data_sets import load_data
 from .generate import BaseCompatibilityTest
 
 '''

@@ -270,14 +270,15 @@ TEST_F(FTAliasAddTest, AliasCollidesWithExistingIndexName) {
   VMSDK_EXPECT_OK(
       SchemaManager::Instance().CreateIndexSchema(&fake_ctx_, second_proto));
 
-  // FT.ALIASADD permits an alias name that matches a different existing index;
-  // direct index lookup wins so the alias is shadowed. Matches RediSearch.
+  // FT.ALIASADD rejects an alias whose name matches a different existing index
+  // to prevent ambiguous resolution.
   ValkeyModuleString* argv[3];
   argv[0] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.ALIASADD");
   argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_idx2");
   argv[2] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_idx");
 
-  EXPECT_EQ(FTAliasAddCmd(&fake_ctx_, argv, 3).code(), absl::StatusCode::kOk);
+  EXPECT_EQ(FTAliasAddCmd(&fake_ctx_, argv, 3).code(),
+            absl::StatusCode::kAlreadyExists);
 
   for (auto* arg : argv) {
     TestValkeyModule_FreeString(&fake_ctx_, arg);
@@ -725,7 +726,7 @@ TEST_F(FTAliasListTest, SingleAlias) {
 
   // Expected reply: array of 2 elements (alias, index_name).
   EXPECT_EQ(fake_ctx_.reply_capture.GetReply(),
-            "*2\r\n+my_alias\r\n+test_idx\r\n");
+            "*2\r\n$8\r\nmy_alias\r\n$8\r\ntest_idx\r\n");
 
   TestValkeyModule_FreeString(&fake_ctx_, argv[0]);
 }
@@ -754,9 +755,9 @@ TEST_F(FTAliasListTest, MultipleAliasesSortedByName) {
 
   // Sorted: a_alias, m_alias, z_alias — each with its index_name.
   EXPECT_EQ(fake_ctx_.reply_capture.GetReply(),
-            "*6\r\n+a_alias\r\n+test_idx\r\n"
-            "+m_alias\r\n+test_idx\r\n"
-            "+z_alias\r\n+test_idx\r\n");
+            "*6\r\n$7\r\na_alias\r\n$8\r\ntest_idx\r\n"
+            "$7\r\nm_alias\r\n$8\r\ntest_idx\r\n"
+            "$7\r\nz_alias\r\n$8\r\ntest_idx\r\n");
 
   TestValkeyModule_FreeString(&fake_ctx_, argv[0]);
 }
@@ -796,7 +797,7 @@ TEST_F(FTAliasListTest, OnlyShowsCurrentDbAliases) {
   VMSDK_EXPECT_OK(FTAliasListCmd(&fake_ctx_, argv, 1));
 
   EXPECT_EQ(fake_ctx_.reply_capture.GetReply(),
-            "*2\r\n+db0_alias\r\n+test_idx\r\n");
+            "*2\r\n$9\r\ndb0_alias\r\n$8\r\ntest_idx\r\n");
 
   TestValkeyModule_FreeString(&fake_ctx_, argv[0]);
 }

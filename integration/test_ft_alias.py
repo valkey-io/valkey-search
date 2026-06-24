@@ -419,6 +419,7 @@ class TestFTAliasSwapDB(ValkeySearchTestCaseBase):
 import os
 from valkey_search_test_case import ValkeySearchTestCaseDebugMode
 from util import waiters
+from utils import IndexingTestHelper
 
 def _restart_and_wait(test_case, index_name):
     """Save, restart the server, and wait until the index is ready."""
@@ -430,7 +431,8 @@ def _restart_and_wait(test_case, index_name):
         test_case.client.ping()
         # Wait until the index has finished loading/backfilling before querying.
         waiters.wait_for_true(
-            lambda: test_case.client.execute_command("FT.INFO", index_name) is not None,
+            lambda: IndexingTestHelper.is_indexing_complete_on_node(
+                test_case.client, index_name),
             timeout=30,
         )
     finally:

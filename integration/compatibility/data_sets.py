@@ -8,9 +8,16 @@ import itertools, valkey, json, struct, random
 NUM_KEYS = 10
 VECTOR_DIM = 3
 
-SETS_KEY = lambda key_type: f"{key_type} sets"
-CREATES_KEY = lambda key_type: f"{key_type} creates"
-SETUP_KEY = lambda key_type: f"{key_type} setup"
+def SETS_KEY(key_type):
+    return f"{key_type} sets"
+
+
+def CREATES_KEY(key_type):
+    return f"{key_type} creates"
+
+
+def SETUP_KEY(key_type):
+    return f"{key_type} setup"
 
 # Text data configuration
 TEXT_SCHEMA = {

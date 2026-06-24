@@ -21,6 +21,7 @@
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
 #include "src/valkey_search_options.h"
+#include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
@@ -166,6 +167,10 @@ void FanoutAliasExists(ValkeyModuleCtx *ctx, absl::string_view alias) {
         op->StartOperation(ctx);
         return;
       }
+      VMSDK_LOG(WARNING, ctx)
+          << "FanoutAliasExists: failed to resolve alias '"
+          << alias << "' locally, skipping cluster consistency fanout: "
+          << schema_or.status().message();
     }
     ValkeyModule_ReplyWithSimpleString(ctx, "OK");
   } else {
@@ -264,8 +269,9 @@ absl::Status FTAliasListCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
       SchemaManager::Instance().GetAllAliases(ValkeyModule_GetSelectedDb(ctx));
   ValkeyModule_ReplyWithArray(ctx, aliases.size() * 2);
   for (const auto &[alias, index_name] : aliases) {
-    ValkeyModule_ReplyWithSimpleString(ctx, alias.c_str());
-    ValkeyModule_ReplyWithSimpleString(ctx, index_name.c_str());
+    ValkeyModule_ReplyWithStringBuffer(ctx, alias.data(), alias.size());
+    ValkeyModule_ReplyWithStringBuffer(ctx, index_name.data(),
+                                       index_name.size());
   }
   return absl::OkStatus();
 }

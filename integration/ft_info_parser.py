@@ -132,10 +132,10 @@ class FTInfoParser:
 
     @property
     def aliases(self) -> List[str]:
-        """Get sorted list of aliases for this index."""
+        """Get list of aliases for this index."""
         raw = self.parsed_data.get("aliases", [])
         if isinstance(raw, list):
-            return sorted(raw)
+            return raw
         return []
 
     @property

@@ -294,7 +294,7 @@ class VectorBase : public IndexBase {
       ABSL_GUARDED_BY(key_to_metadata_mutex_);
   struct TrackedKeyMetadata {
     uint64_t internal_id;
-    // If normalize_ is false, this will be -1.0f. Otherwise, it will be the
+    // If normalize_ is false, this will be 1.0f. Otherwise, it will be the
     // magnitude of the vector. If the magnitude is not initialized, it will
     // be -inf (this is an intermediate state during backfill when
     // transitioning from the old RDB format that didn't include magnitudes).

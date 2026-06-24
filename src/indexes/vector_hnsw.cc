@@ -282,13 +282,13 @@ absl::Status VectorHNSW<T>::ResizeIfFull() {
 
 template <typename T>
 absl::Status VectorHNSW<T>::AlgoDeleteRecord(uint64_t label) {
+  std::unique_lock<std::mutex> lock_label(algo_->getLabelOpMutex(label));
   auto hnsw_internal_id = GetAlgoInternalId<T>(algo_.get(), label);
   if (!hnsw_internal_id.has_value()) {
     return absl::NotFoundError(
         absl::StrCat("Internal ID not found for label: ", label));
   }
   if (!normalize_) {
-    std::unique_lock<std::mutex> lock_label(algo_->getLabelOpMutex(label));
     algo_->markDeletedInternal(*hnsw_internal_id);
     return absl::OkStatus();
   }
@@ -301,7 +301,6 @@ absl::Status VectorHNSW<T>::AlgoDeleteRecord(uint64_t label) {
   absl::string_view norm_view(norm_record.data(), norm_record.size());
   InputVector normalized_input(norm_view, 1.0f, norm_record,
                                GetVectorAllocator());
-  std::unique_lock<std::mutex> lock_label(algo_->getLabelOpMutex(label));
   algo_->setDataByInternalId(*hnsw_internal_id, normalized_input);
   algo_->markDeletedInternal(*hnsw_internal_id);
   return absl::OkStatus();

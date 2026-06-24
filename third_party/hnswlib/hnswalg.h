@@ -251,8 +251,10 @@ class HierarchicalNSW
 
   inline dist_t evaluateDistance(const SavedVectorT &a,
                                  const SavedVectorT &b) const {
+    float mag_product =
+        normalized_ ? a.GetMagnitude() * b.GetMagnitude() : 1.0f;
     return fstdistfunc_(a.GetRawVector(), b.GetRawVector(), dist_func_param_,
-                        a.GetMagnitude() * b.GetMagnitude());
+                        mag_product);
   }
   inline dist_t evaluateDistance(const InputVectorT &a, const SavedVectorT &b,
                                  bool is_rhs_marked_deleted) const {

@@ -24,11 +24,12 @@ def pipe(source, destination):
             pass
 
 def handle_client(client_sock, target_path):
+    target_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
-        target_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         target_sock.connect(target_path)
     except Exception as e:
         client_sock.close()
+        target_sock.close()
         return
 
     t1 = threading.Thread(target=pipe, args=(client_sock, target_sock))

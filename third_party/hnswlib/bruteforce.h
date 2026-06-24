@@ -213,13 +213,16 @@ class BruteforceSearch
   template <typename SavedVectorGenerator>
   absl::Status LoadIndex(InputStream &input, SpaceInterface<dist_t> *s,
                          SavedVectorGenerator generator) {
-    clear();
     VMSDK_ASSIGN_OR_RETURN(auto serialized_header, input.LoadChunk());
     auto header = std::make_unique<data_model::BruteForceIndexHeader>();
     if (!header->ParseFromString(*serialized_header)) {
       return absl::InternalError("Could not deserialize bruteforce header");
     }
     const size_t saved_element_count = header->curr_element_count();
+    if (saved_element_count > header->max_elements()) {
+      return absl::InvalidArgumentError(
+          "Persisted bruteforce element count exceeds max elements.");
+    }
 
     vector_size_ = s->get_data_size();
     fstdistfunc_ = s->get_dist_func();

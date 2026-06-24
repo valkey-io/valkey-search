@@ -44,45 +44,27 @@ enum class QueryOperations : uint64_t;
 }
 
 namespace valkey_search::indexes {
-
+constexpr float kDefaultMagnitude = 1.0f;
 class VectorRecord {
  public:
-  explicit VectorRecord(const InternedStringPtr &vector)
-      : raw_vector_(vector) {}
+  explicit VectorRecord(const InternedStringPtr &vector, float magnitude)
+      : raw_vector_(vector), magnitude_(magnitude) {}
 
-  inline const char *GetRawVector() const {
+  const char *GetRawVector() const {
     return const_cast<char *>(raw_vector_->Str().data());
   }
-  inline operator const void *() const { return GetRawVector(); }
-  inline operator const char *() const { return GetRawVector(); }
+  operator const void *() const { return GetRawVector(); }
+  operator const char *() const { return GetRawVector(); }
+  float GetMagnitude() const { return magnitude_; }
 
  private:
   InternedStringPtr raw_vector_;
+  float magnitude_;
 };
 
-class InputVector {
- public:
-  explicit InputVector(absl::string_view vector, Allocator *allocator = nullptr)
-      : raw_vector_(vector), vector_allocator_(allocator) {}
-
-  inline const char *GetRawVector() const { return raw_vector_.data(); }
-  inline operator const void *() const { return GetRawVector(); }
-  inline operator const char *() const { return GetRawVector(); }
-  VectorRecord ToVectorRecord() const {
-#ifndef SAN_BUILD
-    CHECK(vector_allocator_ != nullptr);
-#endif
-    return VectorRecord(
-        StringInternStore::Intern(raw_vector_, vector_allocator_));
-  }
-
- private:
-  absl::string_view raw_vector_;
-  Allocator *vector_allocator_;
-};
-
-std::vector<char> NormalizeEmbedding(absl::string_view record, size_t type_size,
-                                     float *magnitude = nullptr);
+std::vector<char> NormalizeVector(absl::string_view record,
+                                  float *magnitude = nullptr);
+std::vector<char> DenormalizeVector(absl::string_view record, float magnitude);
 
 template <typename T>
 T CalcMagnitude(const T *src, size_t size) {
@@ -217,7 +199,8 @@ class VectorBase : public IndexBase {
   absl::StatusOr<InternedStringPtr> GetKeyDuringSearch(
       uint64_t internal_id) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
   bool AddPrefilteredKey(
-      absl::string_view query, uint64_t count, const InternedStringPtr &key,
+      absl::string_view query, float product_magnitude, uint64_t count,
+      const InternedStringPtr &key,
       std::priority_queue<std::pair<float, hnswlib::labeltype>> &results,
       absl::flat_hash_set<const char *> &top_keys) const;
   vmsdk::UniqueValkeyString NormalizeStringRecord(
@@ -225,8 +208,8 @@ class VectorBase : public IndexBase {
   template <typename T>
   absl::StatusOr<std::vector<Neighbor>> CreateReply(
       std::priority_queue<std::pair<T, hnswlib::labeltype>> &knn_res);
-  absl::StatusOr<std::vector<char>> GetValue(const InternedStringPtr &key) const
-      ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
+  absl::StatusOr<std::vector<char>> GetVector(const InternedStringPtr &key)
+      const ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   int GetVectorDataSize() const { return GetDataTypeSize() * dimensions_; }
 
   InternedStringPtr InternVector(absl::string_view record,
@@ -236,6 +219,8 @@ class VectorBase : public IndexBase {
   Allocator *GetVectorAllocator() const { return vector_allocator_.get(); }
 
  protected:
+  virtual void DenormalizeRecordInPlace(uint64_t internal_id,
+                                        float magnitude) = 0;
   VectorBase(IndexerType indexer_type, int dimensions,
              data_model::AttributeDataType attribute_data_type,
              absl::string_view attribute_identifier)
@@ -261,11 +246,13 @@ class VectorBase : public IndexBase {
   void Init(int dimensions, data_model::DistanceMetric distance_metric,
             std::unique_ptr<hnswlib::SpaceInterface<T>> &space);
   virtual absl::Status AddRecordImpl(uint64_t internal_id,
-                                     absl::string_view record) = 0;
+                                     absl::string_view record, float magnitude,
+                                     const std::vector<char> &norm_record) = 0;
 
   virtual absl::Status RemoveRecordImpl(uint64_t internal_id) = 0;
-  virtual absl::Status ModifyRecordImpl(uint64_t internal_id,
-                                        absl::string_view record) = 0;
+  virtual absl::Status ModifyRecordImpl(
+      uint64_t internal_id, absl::string_view record, float magnitude,
+      const std::vector<char> &norm_record) = 0;
   virtual int RespondWithInfoImpl(ValkeyModuleCtx *ctx) const = 0;
 
   virtual size_t GetDataTypeSize() const = 0;
@@ -277,7 +264,7 @@ class VectorBase : public IndexBase {
                          const AttributeDataType *attribute_data_type,
                          absl::string_view key_cstr,
                          absl::string_view attribute_identifier);
-  virtual const char *GetValueImpl(uint64_t internal_id) const = 0;
+  virtual const char *GetVectorImpl(uint64_t internal_id) const = 0;
 
   int dimensions_;
   std::string attribute_identifier_;
@@ -285,8 +272,8 @@ class VectorBase : public IndexBase {
   data_model::AttributeDataType attribute_data_type_;
   data_model::DistanceMetric distance_metric_;
   virtual absl::StatusOr<std::pair<float, hnswlib::labeltype>>
-  ComputeDistanceFromRecordImpl(uint64_t internal_id,
-                                absl::string_view query) const = 0;
+  ComputeDistanceFromRecordImpl(uint64_t internal_id, absl::string_view query,
+                                float query_magnitude) const = 0;
   virtual bool IsVectorMatch(uint64_t internal_id,
                              absl::string_view vector) = 0;
 
@@ -308,9 +295,9 @@ class VectorBase : public IndexBase {
   struct TrackedKeyMetadata {
     uint64_t internal_id;
     // If normalize_ is false, this will be -1.0f. Otherwise, it will be the
-    // magnitude of the vector. If the magnitude is not initialized, it will be
-    // -inf (this is an intermediate state during backfill when transitioning
-    // from the old RDB format that didn't include magnitudes).
+    // magnitude of the vector. If the magnitude is not initialized, it will
+    // be -inf (this is an intermediate state during backfill when
+    // transitioning from the old RDB format that didn't include magnitudes).
     float magnitude;
   };
 
@@ -320,7 +307,8 @@ class VectorBase : public IndexBase {
   mutable absl::Mutex key_to_metadata_mutex_;
   absl::StatusOr<std::pair<float, hnswlib::labeltype>>
   ComputeDistanceFromRecord(const InternedStringPtr &key,
-                            absl::string_view query) const;
+                            absl::string_view query,
+                            float product_magnitude) const;
   UniqueFixedSizeAllocatorPtr vector_allocator_{nullptr, nullptr};
 };
 

@@ -22,7 +22,6 @@
 #include "src/indexes/vector_base.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/cancel.h"
-#include "src/utils/string_interning.h"
 #include "third_party/hnswlib/bruteforce.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -32,7 +31,7 @@ namespace valkey_search::indexes {
 template <typename T>
 class VectorFlat : public VectorBase {
  public:
-  using FlatIndex = hnswlib::BruteforceSearch<T, InputVector, VectorRecord>;
+  using FlatIndex = hnswlib::BruteforceSearch<T, VectorRecord>;
 
   static absl::StatusOr<std::shared_ptr<VectorFlat<T>>> Create(
       const data_model::VectorIndex &vector_index_proto,
@@ -64,26 +63,29 @@ class VectorFlat : public VectorBase {
 
  protected:
   absl::Status ResizeIfFull() ABSL_LOCKS_EXCLUDED(resize_mutex_);
-  absl::Status AddRecordImpl(uint64_t internal_id,
-                             absl::string_view record) override
+  absl::Status AddRecordImpl(uint64_t internal_id, absl::string_view record,
+                             float magnitude,
+                             const std::vector<char> &norm_record) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
 
   absl::Status RemoveRecordImpl(uint64_t internal_id) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
-  absl::Status ModifyRecordImpl(uint64_t internal_id,
-                                absl::string_view record) override
+  absl::Status ModifyRecordImpl(uint64_t internal_id, absl::string_view record,
+                                float magnitude,
+                                const std::vector<char> &norm_record) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
   void ToProtoImpl(data_model::VectorIndex *vector_index_proto) const override;
   int RespondWithInfoImpl(ValkeyModuleCtx *ctx) const override;
   absl::Status SaveIndexImpl(RDBChunkOutputStream chunked_out) const override;
   absl::StatusOr<std::pair<float, hnswlib::labeltype>>
-  ComputeDistanceFromRecordImpl(uint64_t internal_id,
-                                absl::string_view query) const override;
-  const char *GetValueImpl(uint64_t internal_id) const override
+  ComputeDistanceFromRecordImpl(uint64_t internal_id, absl::string_view query,
+                                float query_magnitude) const override;
+  const char *GetVectorImpl(uint64_t internal_id) const override
       ABSL_NO_THREAD_SAFETY_ANALYSIS {
     return algo_->getPoint(internal_id)->GetRawVector();
   }
   bool IsVectorMatch(uint64_t internal_id, absl::string_view vector) override;
+  void DenormalizeRecordInPlace(uint64_t internal_id, float magnitude) override;
 
  private:
   VectorFlat(int dimensions, data_model::DistanceMetric distance_metric,

@@ -22,12 +22,43 @@
 #include "src/indexes/vector_base.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/cancel.h"
-#include "src/utils/string_interning.h"
 #include "third_party/hnswlib/hnswalg.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
+
+class InputVector {
+ public:
+  explicit InputVector(absl::string_view raw_vector, float magnitude,
+                       const std::vector<char> &normalized_vector,
+                       Allocator *allocator = nullptr)
+      : raw_vector_(raw_vector),
+        magnitude_(magnitude),
+        vector_allocator_(allocator),
+        normalized_vector_(normalized_vector) {}
+
+  inline const char *GetRawVector() const { return raw_vector_.data(); }
+  inline float GetMagnitude() const { return magnitude_; }
+  inline const char *GetNormalizedVector() const {
+    return normalized_vector_.data();
+  }
+  inline operator const void *() const { return GetRawVector(); }
+  inline operator const char *() const { return GetRawVector(); }
+  VectorRecord ToVectorRecord() const {
+#ifndef SAN_BUILD
+    CHECK(vector_allocator_ != nullptr);
+#endif
+    return VectorRecord(
+        StringInternStore::Intern(raw_vector_, vector_allocator_), magnitude_);
+  }
+
+ private:
+  absl::string_view raw_vector_;
+  Allocator *vector_allocator_;
+  float magnitude_;
+  const std::vector<char> &normalized_vector_;
+};
 
 template <typename T>
 class VectorHNSW : public VectorBase {
@@ -75,36 +106,38 @@ class VectorHNSW : public VectorBase {
 
  protected:
   absl::Status ResizeIfFull() ABSL_LOCKS_EXCLUDED(resize_mutex_);
-  absl::Status AddRecordImpl(uint64_t internal_id,
-                             absl::string_view record) override
+  absl::Status AddRecordImpl(uint64_t internal_id, absl::string_view record,
+                             float magnitude,
+                             const std::vector<char> &norm_record) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
 
   absl::Status RemoveRecordImpl(uint64_t internal_id) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
-  absl::Status ModifyRecordImpl(uint64_t internal_id,
-                                absl::string_view record) override
+  absl::Status ModifyRecordImpl(uint64_t internal_id, absl::string_view record,
+                                float magnitude,
+                                const std::vector<char> &norm_record) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
   void ToProtoImpl(data_model::VectorIndex *vector_index_proto) const override;
   int RespondWithInfoImpl(ValkeyModuleCtx *ctx) const override;
   absl::Status SaveIndexImpl(RDBChunkOutputStream chunked_out) const override;
   absl::StatusOr<std::pair<float, hnswlib::labeltype>>
-  ComputeDistanceFromRecordImpl(uint64_t internal_id, absl::string_view query)
-      const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
-  const char *GetValueImpl(uint64_t internal_id) const override
+  ComputeDistanceFromRecordImpl(uint64_t internal_id, absl::string_view query,
+                                float query_magnitude) const override
+      ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  const char *GetVectorImpl(uint64_t internal_id) const override
       ABSL_NO_THREAD_SAFETY_ANALYSIS {
     return algo_->getPoint(internal_id)->GetRawVector();
   }
   bool IsVectorMatch(uint64_t internal_id, absl::string_view vector) override;
   uint64_t GetMaxInternalLabel() const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
   size_t GetLabelCount() const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  void DenormalizeRecordInPlace(uint64_t internal_id, float magnitude) override;
 
  private:
   VectorHNSW(int dimensions, absl::string_view attribute_identifier,
              data_model::AttributeDataType attribute_data_type);
-  static std::optional<hnswlib::tableint> GetInternalIdLockFree(
-      const HNSWIndex *algo, uint64_t internal_id);
-  static std::optional<hnswlib::tableint> GetInternalId(const HNSWIndex *algo,
-                                                        uint64_t internal_id);
+  absl::Status AlgoDeleteRecord(uint64_t label)
+      ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_);
 
   std::unique_ptr<HNSWIndex> algo_ ABSL_GUARDED_BY(resize_mutex_);
   std::unique_ptr<hnswlib::SpaceInterface<T>> space_;

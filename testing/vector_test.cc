@@ -60,6 +60,23 @@ static cancel::Token &CancelNever() {
   return cancel_never;
 }
 
+static void ExpectNeighborsNear(const std::vector<NeighborTest> &act,
+                                const std::vector<NeighborTest> &exp,
+                                float tolerance = 1e-5f) {
+  ASSERT_EQ(act.size(), exp.size());
+  std::vector<NeighborTest> sorted_act = act;
+  std::vector<NeighborTest> sorted_exp = exp;
+  auto compare_by_id = [](const NeighborTest &a, const NeighborTest &b) {
+    return a.external_id < b.external_id;
+  };
+  std::sort(sorted_act.begin(), sorted_act.end(), compare_by_id);
+  std::sort(sorted_exp.begin(), sorted_exp.end(), compare_by_id);
+  for (size_t j = 0; j < sorted_act.size(); ++j) {
+    EXPECT_EQ(sorted_act[j].external_id, sorted_exp[j].external_id);
+    EXPECT_NEAR(sorted_act[j].distance, sorted_exp[j].distance, tolerance);
+  }
+}
+
 class VectorIndexTest : public ValkeySearchTest {
  public:
   HashAttributeDataType hash_attribute_data_type_;
@@ -600,8 +617,9 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
       for (size_t i = 0; i < search_vectors.size(); ++i) {
         absl::string_view vector = VectorToStr(search_vectors[i]);
         auto res = index->Search(vector, k, CancelNever());
-        EXPECT_EQ(ToVectorNeighborTest(*res),
-                  ToVectorNeighborTest(expected_results[i]));
+        auto act = ToVectorNeighborTest(*res);
+        auto exp = ToVectorNeighborTest(expected_results[i]);
+        ExpectNeighborsNear(act, exp);
       }
 
       // Re-insert the vectors
@@ -620,19 +638,21 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   constexpr int kThreads = 8;
   constexpr int kIters = 50000;
   hnswlib::L2Space l2_space{kDimensions};
-  hnswlib::HierarchicalNSW<float, valkey_search::indexes::InputVector,
-                           valkey_search::indexes::VectorRecord>
-      algo(&l2_space, /*max_elements=*/kThreads, kM, kEFConstruction,
-           /*random_seed=*/100,
-           /*allow_replace_deleted=*/false);
+  hnswlib::HierarchicalNSW<float, InputVector, VectorRecord> algo(
+      &l2_space, /*max_elements=*/kThreads, /*normalized=*/false, kM,
+      kEFConstruction, /*allow_replace_deleted=*/false, /*random_seed=*/100);
   std::vector<float> v(kDimensions, 1.0f);
   absl::string_view v_bytes(reinterpret_cast<const char *>(v.data()),
                             v.size() * sizeof(float));
   auto vector_allocator = CREATE_UNIQUE_PTR(
       FixedSizeAllocator, kDimensions * sizeof(float) + 1, true);
+
+  float magnitude = kDefaultMagnitude;
+  std::vector<char> norm_record;
   for (int t = 0; t < kThreads; ++t) {
-    algo.addPoint(InputVector(v_bytes, vector_allocator.get()),
-                  t);  // one element owned per thread
+    algo.addPoint(
+        InputVector(v_bytes, magnitude, norm_record, vector_allocator.get()),
+        t);
   }
 
   // baseline is unsigned 64-bit integer, if goes to negative it underflows to a
@@ -662,11 +682,9 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
 // pointer read/write is atomic on ARM64 and avoids a torn-pointer crash.
 TEST_F(VectorIndexTest, OffsetDataIsPointerAlignedOnCreate) {
   hnswlib::L2Space l2_space{kDimensions};
-  hnswlib::HierarchicalNSW<float, valkey_search::indexes::InputVector,
-                           valkey_search::indexes::VectorRecord>
-      algo(&l2_space, /*max_elements=*/16, kM, kEFConstruction,
-           /*random_seed=*/100,
-           /*allow_replace_deleted=*/false);
+  hnswlib::HierarchicalNSW<float, InputVector, VectorRecord> algo(
+      &l2_space, /*max_elements=*/16, /*normalized=*/false, kM, kEFConstruction,
+      /*allow_replace_deleted=*/false, /*random_seed=*/100);
   EXPECT_EQ(algo.offsetData_ % alignof(char *), 0u);
   EXPECT_EQ(algo.size_data_per_element_ % alignof(char *), 0u);
   EXPECT_GE(algo.offsetData_, algo.size_links_level0_);
@@ -714,14 +732,16 @@ TEST_F(VectorIndexTest, LoadRecomputesAlignedOffsetForOldSnapshot) {
   std::string serialized;
   ASSERT_TRUE(header.SerializeToString(&serialized));
 
-  hnswlib::HierarchicalNSW<float, valkey_search::indexes::InputVector,
-                           valkey_search::indexes::VectorRecord>
-      algo(&l2_space);
+  hnswlib::HierarchicalNSW<float, InputVector, VectorRecord> algo;
   SingleChunkInputStream input(serialized);
-  auto vector_allocator = CREATE_UNIQUE_PTR(
-      FixedSizeAllocator, kDimensions * sizeof(float) + 1, true);
-  VMSDK_EXPECT_OK(algo.LoadIndex(input, &l2_space, /*max_elements_i=*/16,
-                                 vector_allocator.get()));
+  auto generator = [](absl::string_view vector_data) {
+    float magnitude =
+        CalcMagnitude(reinterpret_cast<const float *>(vector_data.data()),
+                      vector_data.size() / sizeof(float));
+    return VectorRecord(StringInternStore::Intern(vector_data), magnitude);
+  };
+  VMSDK_EXPECT_OK(
+      algo.LoadIndex(input, &l2_space, /*max_elements_i=*/16, generator));
   EXPECT_EQ(algo.offsetData_ % alignof(char *), 0u);
   EXPECT_EQ(algo.size_data_per_element_ % alignof(char *), 0u);
 }

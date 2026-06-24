@@ -92,22 +92,24 @@ absl::Status IndexSchema::TextInfoCmd(ValkeyModuleCtx* ctx,
   if (subcommand == "PREFIX") {
     std::string word;
     VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, word));
-    auto wi = index_schema->GetTextIndexSchema()
-                  ->GetTextIndex()
-                  ->GetPrefix()
-                  .GetWordIterator(word);
+    auto text_index = index_schema->GetTextIndexSchema()->GetTextIndex();
+    size_t shard = text_index->GetShardIndex(word);
+    auto wi = text_index->GetPrefixShard(shard).GetWordIterator(word);
     bool with_keys = itr.PopIfNextIgnoreCase("WITHKEYS");
     bool with_positions = itr.PopIfNextIgnoreCase("WITHPOSITIONS");
     return DumpWordIterator(ctx, wi, with_keys, with_positions);
   } else if (subcommand == "SUFFIX") {
     std::string word;
     VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, word));
-    auto suffix =
-        index_schema->GetTextIndexSchema()->GetTextIndex()->GetSuffix();
-    if (!suffix) {
+    auto text_index = index_schema->GetTextIndexSchema()->GetTextIndex();
+    if (!text_index->GetSuffix().has_value()) {
       return absl::InvalidArgumentError("Suffix is not enabled");
     }
-    auto wi = suffix->get().GetWordIterator(word);
+    std::string reversed_word(word.rbegin(), word.rend());
+    size_t shard = text_index->GetShardIndex(reversed_word);
+    auto suffix_shard = text_index->GetSuffixShard(shard);
+    CHECK(suffix_shard.has_value()) << "Suffix not enabled";
+    auto wi = suffix_shard->get().GetWordIterator(reversed_word);
     bool with_keys = itr.PopIfNextIgnoreCase("WITHKEYS");
     bool with_positions = itr.PopIfNextIgnoreCase("WITHPOSITIONS");
     return DumpWordIterator(ctx, wi, with_keys, with_positions);

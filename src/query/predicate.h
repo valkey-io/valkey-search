@@ -15,6 +15,7 @@
 
 #include "absl/container/flat_hash_set.h"
 #include "absl/strings/string_view.h"
+#include "src/indexes/text/text_index.h"
 #include "src/indexes/text/text_iterator.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/type_conversions.h"
@@ -25,12 +26,6 @@ class Numeric;
 class Tag;
 class EntriesFetcherBase;
 }  // namespace valkey_search::indexes
-
-namespace valkey_search::indexes::text {
-class TextIterator;
-class TextIndexSchema;
-class TextIndex;
-}  // namespace valkey_search::indexes::text
 
 namespace valkey_search {
 enum class QueryOperations : uint64_t;
@@ -185,15 +180,16 @@ class TextPredicate : public Predicate {
  public:
   TextPredicate() : Predicate(PredicateType::kText) {}
   ~TextPredicate() override = default;
-  // Evaluate against per-key TextIndex
+  // Evaluate against per-key PerKeyTextIndex
   virtual EvaluationResult Evaluate(
-      const valkey_search::indexes::text::TextIndex& text_index,
+      const valkey_search::indexes::text::PerKeyTextIndex& text_index,
       const InternedStringPtr& target_key, bool require_positions) const = 0;
   virtual std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema()
       const = 0;
   virtual const FieldMaskPredicate GetFieldMask() const = 0;
   virtual std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
-      const std::shared_ptr<indexes::text::TextIndex>& text_index,
+      const std::shared_ptr<indexes::text::TextIndex<
+          indexes::text::kSchemaTextIndexShards>>& text_index,
       FieldMaskPredicate field_mask, bool require_positions) const = 0;
   virtual size_t EstimateSize(bool is_vec_query) const = 0;
 };
@@ -209,13 +205,14 @@ class TermPredicate : public TextPredicate {
   }
   absl::string_view GetTextString() const { return term_; }
   EvaluationResult Evaluate(Evaluator& evaluator) const override;
-  // Evaluate against per-key TextIndex
+  // Evaluate against per-key PerKeyTextIndex
   EvaluationResult Evaluate(
-      const valkey_search::indexes::text::TextIndex& text_index,
+      const valkey_search::indexes::text::PerKeyTextIndex& text_index,
       const InternedStringPtr& target_key,
       bool require_positions) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
-      const std::shared_ptr<indexes::text::TextIndex>& text_index,
+      const std::shared_ptr<indexes::text::TextIndex<
+          indexes::text::kSchemaTextIndexShards>>& text_index,
       FieldMaskPredicate field_mask, bool require_positions) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   bool IsExact() const { return exact_; }
@@ -239,13 +236,14 @@ class PrefixPredicate : public TextPredicate {
   }
   absl::string_view GetTextString() const { return term_; }
   EvaluationResult Evaluate(Evaluator& evaluator) const override;
-  // Evaluate against per-key TextIndex
+  // Evaluate against per-key PerKeyTextIndex
   EvaluationResult Evaluate(
-      const valkey_search::indexes::text::TextIndex& text_index,
+      const valkey_search::indexes::text::PerKeyTextIndex& text_index,
       const InternedStringPtr& target_key,
       bool require_positions) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
-      const std::shared_ptr<indexes::text::TextIndex>& text_index,
+      const std::shared_ptr<indexes::text::TextIndex<
+          indexes::text::kSchemaTextIndexShards>>& text_index,
       FieldMaskPredicate field_mask, bool require_positions) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   size_t EstimateSize(bool is_vec_query) const override;
@@ -267,13 +265,14 @@ class SuffixPredicate : public TextPredicate {
   }
   absl::string_view GetTextString() const { return term_; }
   EvaluationResult Evaluate(Evaluator& evaluator) const override;
-  // Evaluate against per-key TextIndex
+  // Evaluate against per-key PerKeyTextIndex
   EvaluationResult Evaluate(
-      const valkey_search::indexes::text::TextIndex& text_index,
+      const valkey_search::indexes::text::PerKeyTextIndex& text_index,
       const InternedStringPtr& target_key,
       bool require_positions) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
-      const std::shared_ptr<indexes::text::TextIndex>& text_index,
+      const std::shared_ptr<indexes::text::TextIndex<
+          indexes::text::kSchemaTextIndexShards>>& text_index,
       FieldMaskPredicate field_mask, bool require_positions) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   size_t EstimateSize(bool is_vec_query) const override;
@@ -295,13 +294,14 @@ class InfixPredicate : public TextPredicate {
   }
   absl::string_view GetTextString() const { return term_; }
   EvaluationResult Evaluate(Evaluator& evaluator) const override;
-  // Evaluate against per-key TextIndex
+  // Evaluate against per-key PerKeyTextIndex
   EvaluationResult Evaluate(
-      const valkey_search::indexes::text::TextIndex& text_index,
+      const valkey_search::indexes::text::PerKeyTextIndex& text_index,
       const InternedStringPtr& target_key,
       bool require_positions) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
-      const std::shared_ptr<indexes::text::TextIndex>& text_index,
+      const std::shared_ptr<indexes::text::TextIndex<
+          indexes::text::kSchemaTextIndexShards>>& text_index,
       FieldMaskPredicate field_mask, bool require_positions) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   size_t EstimateSize(bool is_vec_query) const override;
@@ -324,13 +324,14 @@ class FuzzyPredicate : public TextPredicate {
   absl::string_view GetTextString() const { return term_; }
   uint32_t GetDistance() const { return distance_; }
   EvaluationResult Evaluate(Evaluator& evaluator) const override;
-  // Evaluate against per-key TextIndex
+  // Evaluate against per-key PerKeyTextIndex
   EvaluationResult Evaluate(
-      const valkey_search::indexes::text::TextIndex& text_index,
+      const valkey_search::indexes::text::PerKeyTextIndex& text_index,
       const InternedStringPtr& target_key,
       bool require_positions) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
-      const std::shared_ptr<indexes::text::TextIndex>& text_index,
+      const std::shared_ptr<indexes::text::TextIndex<
+          indexes::text::kSchemaTextIndexShards>>& text_index,
       FieldMaskPredicate field_mask, bool require_positions) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   size_t EstimateSize(bool is_vec_query) const override;

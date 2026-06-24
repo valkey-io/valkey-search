@@ -112,9 +112,11 @@ class Text : public IndexBase {
   // Common EntriesFetcher impl for all Text operations.
   class EntriesFetcher : public EntriesFetcherBase {
    public:
-    EntriesFetcher(size_t size,
-                   const std::shared_ptr<text::TextIndex>& text_index,
-                   text::FieldMaskPredicate field_mask, bool require_positions)
+    EntriesFetcher(
+        size_t size,
+        const std::shared_ptr<text::TextIndex<text::kSchemaTextIndexShards>>&
+            text_index,
+        text::FieldMaskPredicate field_mask, bool require_positions)
         : size_(size),
           text_index_(text_index),
           field_mask_(field_mask),
@@ -130,7 +132,7 @@ class Text : public IndexBase {
     std::unique_ptr<EntriesFetcherIteratorBase> Begin() override;
 
     size_t size_;
-    std::shared_ptr<text::TextIndex> text_index_;
+    std::shared_ptr<text::TextIndex<text::kSchemaTextIndexShards>> text_index_;
     const query::TextPredicate* predicate_;
     text::FieldMaskPredicate field_mask_;
     bool require_positions_;

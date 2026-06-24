@@ -172,11 +172,17 @@ absl::StatusOr<bool> VectorBase::AddRecord(const InternedStringPtr &key,
   if (!interned_vector) {
     return false;
   }
-  VMSDK_ASSIGN_OR_RETURN(
-      auto internal_id,
-      TrackKey(key, magnitude.value_or(kDefaultMagnitude), interned_vector));
-  absl::Status add_result = AddRecordImpl(internal_id, interned_vector->Str());
+  VMSDK_ASSIGN_OR_RETURN(auto internal_id,
+                         TrackKey(key, magnitude.value_or(kDefaultMagnitude)));
+  absl::Status add_result = AddRecordImpl(internal_id, interned_vector);
   if (!add_result.ok()) {
+    auto remove_result = RemoveRecordImpl(internal_id);
+    if (!remove_result.ok()) {
+      VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
+          << "While processing error for AddRecord, encountered error in "
+             "RemoveRecordImpl: "
+          << remove_result.message();
+    }
     auto untrack_result = UnTrackKey(key);
     if (!untrack_result.ok()) {
       VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
@@ -236,7 +242,7 @@ absl::StatusOr<bool> VectorBase::ModifyRecord(const InternedStringPtr &key,
     return false;
   }
 
-  auto modify_result = ModifyRecordImpl(internal_id, interned_vector->Str());
+  auto modify_result = ModifyRecordImpl(internal_id, interned_vector);
   if (!modify_result.ok()) {
     auto untrack_result = UnTrackKey(key);
     if (!untrack_result.ok()) {
@@ -245,6 +251,7 @@ absl::StatusOr<bool> VectorBase::ModifyRecord(const InternedStringPtr &key,
              "in UntrackKey: "
           << untrack_result.status().message();
     }
+    return false;
   }
   return true;
 }
@@ -272,12 +279,13 @@ absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply(
 
 absl::StatusOr<std::vector<char>> VectorBase::GetValue(
     const InternedStringPtr &key) const {
+  absl::WriterMutexLock lock(&key_to_metadata_mutex_);
   auto it = tracked_metadata_by_key_.find(key);
   if (it == tracked_metadata_by_key_.end()) {
     return absl::NotFoundError("Record was not found");
   }
   std::vector<char> result;
-  char *value = GetValueImpl(it->second.internal_id);
+  const char *value = GetValueImpl(it->second.internal_id);
   if (normalize_) {
     if (it->second.magnitude < 0) {
       return absl::InternalError("Magnitude is not initialized");
@@ -312,7 +320,6 @@ absl::StatusOr<std::optional<uint64_t>> VectorBase::UnTrackKey(
     return std::nullopt;
   }
   auto id = it->second.internal_id;
-  UnTrackVector(id);
   tracked_metadata_by_key_.erase(it);
   auto key_by_internal_id_it = key_by_internal_id_.find(id);
   if (key_by_internal_id_it == key_by_internal_id_.end()) {
@@ -324,16 +331,8 @@ absl::StatusOr<std::optional<uint64_t>> VectorBase::UnTrackKey(
   return id;
 }
 
-char *VectorBase::TrackVector(uint64_t internal_id, char *vector, size_t len) {
-  auto interned_vector = StringInternStore::Intern(
-      absl::string_view(vector, len), vector_allocator_.get());
-  TrackVector(internal_id, interned_vector);
-  return (char *)interned_vector->Str().data();
-}
-
 absl::StatusOr<uint64_t> VectorBase::TrackKey(const InternedStringPtr &key,
-                                              float magnitude,
-                                              const InternedStringPtr &vector) {
+                                              float magnitude) {
   if (key->Str().empty()) {
     return absl::InvalidArgumentError("key can't be empty");
   }
@@ -346,7 +345,6 @@ absl::StatusOr<uint64_t> VectorBase::TrackKey(const InternedStringPtr &key,
     return absl::InvalidArgumentError(
         absl::StrCat("Embedding id already exists: ", key->Str()));
   }
-  TrackVector(id, vector);
   key_by_internal_id_.insert({id, key});
   return id;
 }
@@ -373,7 +371,6 @@ absl::StatusOr<bool> VectorBase::UpdateMetadata(
   if (IsVectorMatch(internal_id, vector)) {
     return false;
   }
-  TrackVector(internal_id, vector);
   return true;
 }
 

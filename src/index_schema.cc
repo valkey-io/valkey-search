@@ -16,6 +16,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -1217,6 +1218,12 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   }
 }
 
+bool IsVectorIndex(std::shared_ptr<indexes::IndexBase> index) {
+  return index->GetIndexerType() == indexes::IndexerType::kVector ||
+         index->GetIndexerType() == indexes::IndexerType::kHNSW ||
+         index->GetIndexerType() == indexes::IndexerType::kFlat;
+}
+
 std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
   auto index_schema_proto = std::make_unique<data_model::IndexSchema>();
   index_schema_proto->set_name(this->name_);
@@ -1291,7 +1298,7 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
       GetAttributeCount() +
       std::count_if(attributes_.begin(), attributes_.end(),
                     [](const auto &attribute) {
-                      return attribute.second.GetIndex()->IsVectorIndex();
+                      return IsVectorIndex(attribute.second.GetIndex());
                     });
   if (RDBWriteV2()) {
     supplemental_count += 1;  // For Index Extension
@@ -1327,7 +1334,7 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
 
     // Key to ID mapping is stored as a separate chunked supplemental content
     // for vector indexes.
-    if (attribute.second.GetIndex()->IsVectorIndex()) {
+    if (IsVectorIndex(attribute.second.GetIndex())) {
       VMSDK_RETURN_IF_ERROR(SaveSupplementalSection(
           rdb, data_model::SUPPLEMENTAL_CONTENT_KEY_TO_ID_MAP,
           [&](auto &header) {
@@ -1367,7 +1374,7 @@ absl::Status IndexSchema::ValidateIndex() const {
   std::string oracle_name;
 
   for (const auto &attribute : attributes_) {
-    if (!attribute.second.GetIndex()->IsVectorIndex()) {
+    if (!IsVectorIndex(attribute.second.GetIndex())) {
       oracle_index = attribute.second.GetIndex();
       oracle_name = attribute.first;
       break;
@@ -1388,8 +1395,8 @@ absl::Status IndexSchema::ValidateIndex() const {
   for (const auto &[name, attr] : attributes_) {
     auto idx = attr.GetIndex();
     size_t cnt = idx->GetTrackedKeyCount() + idx->GetUnTrackedKeyCount();
-    if (idx->IsVectorIndex() ? cnt <= oracle_key_count
-                             : cnt == oracle_key_count) {
+    if (IsVectorIndex(idx) ? cnt <= oracle_key_count
+                           : cnt == oracle_key_count) {
       continue;
     }
     VMSDK_LOG(WARNING, nullptr)
@@ -1661,7 +1668,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
           VMSDK_ASSIGN_OR_RETURN(
               auto index, index_schema->GetIndex(attribute.alias()),
               _ << "Key to ID mapping found before index definition.");
-          if (!index->IsVectorIndex()) {
+          if (!IsVectorIndex(index)) {
             return absl::InternalError(
                 "Key to ID mapping found for non vector index ");
           }

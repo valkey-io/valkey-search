@@ -10,7 +10,6 @@
 #include <absl/strings/str_split.h>
 
 #include <cstddef>
-#include <deque>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -32,7 +31,6 @@
 #include "src/indexes/text.h"
 #include "src/indexes/text/orproximity.h"
 #include "src/indexes/text/proximity.h"
-#include "src/indexes/text/text_fetcher.h"
 #include "src/indexes/universal_set_fetcher.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"

@@ -191,6 +191,13 @@ INSTANTIATE_TEST_SUITE_P(
             .pre_existing_alias = std::nullopt,
             .return_code = absl::StatusCode::kInvalidArgument,
         },
+        {
+            .test_name = "empty_alias_name",
+            .argv = {"FT.ALIASADD", "", "test_idx"},
+            .index_schema_pbtxt = std::string(kTestIndexSchemaPbtxt),
+            .pre_existing_alias = std::nullopt,
+            .return_code = absl::StatusCode::kInvalidArgument,
+        },
 
     }),
     [](const TestParamInfo<FTAliasAddTestCase>& info) {
@@ -370,6 +377,13 @@ INSTANTIATE_TEST_SUITE_P(
             .index_schema_pbtxt = std::nullopt,
             .pre_existing_alias = std::nullopt,
             .return_code = absl::StatusCode::kNotFound,
+        },
+        {
+            .test_name = "empty_alias_name",
+            .argv = {"FT.ALIASDEL", ""},
+            .index_schema_pbtxt = std::nullopt,
+            .pre_existing_alias = std::nullopt,
+            .return_code = absl::StatusCode::kInvalidArgument,
         },
     }),
     [](const TestParamInfo<FTAliasDelTestCase>& info) {
@@ -553,6 +567,14 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "arity_error_too_many_args",
             .argv = {"FT.ALIASUPDATE", "my_alias", "test_idx", "extra"},
             .index_schema_pbtxt = std::nullopt,
+            .pre_existing_alias = std::nullopt,
+            .second_index_pbtxt = std::nullopt,
+            .return_code = absl::StatusCode::kInvalidArgument,
+        },
+        {
+            .test_name = "empty_alias_name",
+            .argv = {"FT.ALIASUPDATE", "", "test_idx"},
+            .index_schema_pbtxt = std::string(kTestIndexSchemaPbtxt),
             .pre_existing_alias = std::nullopt,
             .second_index_pbtxt = std::nullopt,
             .return_code = absl::StatusCode::kInvalidArgument,

@@ -595,19 +595,28 @@ class TestFTAliasDropRecreateIndex(ValkeySearchTestCaseBase):
 class TestFTAliasNameBoundaries(ValkeySearchTestCaseBase):
     """Boundary tests for alias name values."""
 
-    def test_aliasadd_empty_alias_name_accepted(self):
-        """
-        FT.ALIASADD with an empty alias name is accepted by the server.
-        FT.ALIASADD "", FT.ALIASUPDATE "", and FT.ALIASDEL "" all return OK.
-        """
+    def test_aliasadd_empty_alias_name_rejected(self):
+        """FT.ALIASADD with an empty alias name returns an error."""
         client = self.client
         assert client.execute_command(*CREATE_TAG_INDEX) == b"OK"
-        # Empty string is accepted.
-        assert client.execute_command("FT.ALIASADD", "", INDEX_NAME) == b"OK"
-        # The empty-string alias resolves via FT.INFO.
-        assert client.execute_command("FT.INFO", "") is not None
-        # Clean up.
-        assert client.execute_command("FT.ALIASDEL", "") == b"OK"
+        with pytest.raises(ResponseError) as exc_info:
+            client.execute_command("FT.ALIASADD", "", INDEX_NAME)
+        assert "Alias name cannot be empty" in str(exc_info.value)
+
+    def test_aliasupdate_empty_alias_name_rejected(self):
+        """FT.ALIASUPDATE with an empty alias name returns an error."""
+        client = self.client
+        assert client.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        with pytest.raises(ResponseError) as exc_info:
+            client.execute_command("FT.ALIASUPDATE", "", INDEX_NAME)
+        assert "Alias name cannot be empty" in str(exc_info.value)
+
+    def test_aliasdel_empty_alias_name_rejected(self):
+        """FT.ALIASDEL with an empty alias name returns an error."""
+        client = self.client
+        with pytest.raises(ResponseError) as exc_info:
+            client.execute_command("FT.ALIASDEL", "")
+        assert "Alias name cannot be empty" in str(exc_info.value)
 
     def test_aliasadd_empty_index_name(self):
         """FT.ALIASADD with an empty index name is rejected."""

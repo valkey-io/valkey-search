@@ -140,8 +140,10 @@ absl::Status FTInternalUpdateCmd(ValkeyModuleCtx *ctx,
       (flags & VALKEYMODULE_CTX_FLAGS_LOADING)) {
     auto status = coordinator::MetadataManager::Instance().CreateEntryOnReplica(
         ctx, type_name, id, &metadata_entry, &version_header);
-    VMSDK_RETURN_IF_ERROR(
-        HandleInternalUpdateFailure(ctx, "CreateEntryOnReplica", id, status));
+    if (!status.ok()) {
+      return HandleInternalUpdateFailure(ctx, "CreateEntryOnReplica", id,
+                                         status);
+    }
   }
 
   ValkeyModule_ReplicateVerbatim(ctx);

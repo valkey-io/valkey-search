@@ -177,7 +177,7 @@ INSTANTIATE_TEST_SUITE_P(
             .return_code = absl::StatusCode::kInvalidArgument,
         },
         {
-            // alias == index_name is permitted, matches RediSearch behavior
+            // alias == index_name is permitted
             .test_name = "self_referential_alias",
             .argv = {"FT.ALIASADD", "test_idx", "test_idx"},
             .index_schema_pbtxt = std::string(kTestIndexSchemaPbtxt),
@@ -559,7 +559,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         {
             // ALIASUPDATE on an already-existing alias must succeed (upsert).
-            // Matches RediSearch: del old + add new, no "already exists" error.
+            // Upsert semantics: del old + add new, no "already exists" error.
             .test_name = "upsert_existing_alias",
             .argv = {"FT.ALIASUPDATE", "my_alias", "test_idx2"},
             .index_schema_pbtxt = std::string(kTestIndexSchemaPbtxt),

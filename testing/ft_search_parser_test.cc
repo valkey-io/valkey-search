@@ -68,6 +68,8 @@ struct FTSearchParserTestCase {
   std::unordered_map<std::string, std::string> return_attributes;
   bool no_content{false};
   std::string search_parameters_str;
+  absl::string_view jparams_str;
+  std::optional<std::string> jparam_blob_value;
   uint64_t timeout_ms{query::kTimeoutMS};
   bool vector_query{true};
   bool verbatim{false};
@@ -189,8 +191,26 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
   args.insert(args.end(), params_vec.begin(), params_vec.end());
   bool dialect_expected_success = true;
   if (test_case.vector_query) {
-    auto floats_vec = FloatToValkeyStringVector(floats);
-    args.insert(args.end(), floats_vec.begin(), floats_vec.end());
+    if (!test_case.params_str.empty()) {
+      auto floats_vec = FloatToValkeyStringVector(floats);
+      args.insert(args.end(), floats_vec.begin(), floats_vec.end());
+    }
+    if (test_case.jparam_blob_value.has_value()) {
+      auto jparams_vec = vmsdk::ToValkeyStringVector(test_case.jparams_str);
+      args.insert(args.end(), jparams_vec.begin(), jparams_vec.end());
+      const absl::string_view blob_str = "BLOB";
+      args.push_back(
+          ValkeyModule_CreateString(nullptr, blob_str.data(), blob_str.size()));
+      args.push_back(ValkeyModule_CreateString(
+          nullptr, test_case.jparam_blob_value->data(),
+          test_case.jparam_blob_value->size()));
+    } else if (!test_case.jparams_str.empty()) {
+      auto jparams_vec = vmsdk::ToValkeyStringVector(test_case.jparams_str);
+      args.insert(args.end(), jparams_vec.begin(), jparams_vec.end());
+    } else if (test_case.params_str.empty()) {
+      auto floats_vec = FloatToValkeyStringVector(floats);
+      args.insert(args.end(), floats_vec.begin(), floats_vec.end());
+    }
   }
   // Add search parameters for both vector and non-vector queries
   if (!test_case.search_parameters_str.empty()) {
@@ -850,6 +870,60 @@ INSTANTIATE_TEST_SUITE_P(
             .k = 5,
             .search_parameters_str = "SLOP 0",
             .slop = 0,
+        },
+        {
+            .test_name = "jparam_vector_happy_path",
+            .success = true,
+            .filter_str = "*=>[KNN 5 @vec $BLOB]",
+            .k = 5,
+            .jparams_str = " JPARAMS 2",
+            .jparam_blob_value = "[0.1, 0.2, 0.3]",
+        },
+        {
+            .test_name = "jparam_numeric_and_vector_happy_path",
+            .success = true,
+            .filter_str = "*=>[KNN $K @vec $BLOB]",
+            .k = 5,
+            .jparams_str = " JPARAMS 4 K 5",
+            .jparam_blob_value = "[0.1, 0.2, 0.3]",
+        },
+        {
+            .test_name = "jparams_numeric_only_with_params_blob_happy_path",
+            .success = true,
+            .params_str = " PARAMS 2",
+            .filter_str = "*=>[KNN $K @vec $BLOB]",
+            .k = 5,
+            .jparams_str = " JPARAMS 2 K 5",
+        },
+        {
+            .test_name = "jparam_duplicate_across_params",
+            .success = false,
+            .params_str = " PARAMS 2",
+            .filter_str = "*=>[KNN 5 @vec $BLOB]",
+            .expected_error_message =
+                "Error parsing value for the parameter `JPARAMS` - Parameter "
+                "BLOB is already defined.",
+            .jparams_str = " JPARAMS 2",
+            .jparam_blob_value = "[0.1, 0.2, 0.3]",
+        },
+        {
+            .test_name = "unused_jparams",
+            .success = false,
+            .params_str = " PARAMS 2",
+            .filter_str = "*=>[KNN 5 @vec $BLOB]",
+            .k = 5,
+            .expected_error_message = "Parameter `UNUSED` not used.",
+            .jparams_str = " JPARAMS 2 UNUSED 123",
+        },
+        {
+            .test_name = "jparam_invalid_vector_value",
+            .success = false,
+            .filter_str = "*=>[KNN 5 @vec $BLOB]",
+            .expected_error_message =
+                "Error parsing vector similarity parameters: JPARAMS `BLOB` is "
+                "not a valid vector value.",
+            .jparams_str = " JPARAMS 2",
+            .jparam_blob_value = "[0.1, nope, 0.3]",
         },
         // Combined parameter tests
         {

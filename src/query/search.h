@@ -56,6 +56,7 @@ constexpr uint32_t kDialect{2};
 
 // Parser keywords
 constexpr absl::string_view kParamsParam{"PARAMS"};
+constexpr absl::string_view kJParamsParam{"JPARAMS"};
 constexpr absl::string_view kDialectParam{"DIALECT"};
 constexpr absl::string_view kLimitParam{"LIMIT"};
 constexpr absl::string_view kNoContentParam{"NOCONTENT"};
@@ -188,6 +189,7 @@ struct SearchParameters {
   uint64_t slot_fingerprint;
   SearchResult search_result;
   struct ParseTimeVariables {
+    using ParamValue = std::pair<int, absl::string_view>;
     // Members of this struct are only valid during the parsing of
     // VectorSearchParameters on the mainthread. They get cleared
     // at the end of the parse to ensure no dangling pointers.
@@ -201,9 +203,8 @@ struct SearchParameters {
     // that is the string of the value AND a reference count so that we can
     // detect unused parameters.
     // Marked mutable so that const parsing functions can bump the ref-count
-    mutable absl::flat_hash_map<absl::string_view,
-                                std::pair<int, absl::string_view>>
-        params;
+    mutable absl::flat_hash_map<absl::string_view, ParamValue> params;
+    mutable absl::flat_hash_map<absl::string_view, ParamValue> jparams;
     void ClearAtEndOfParse() {
       query_string = absl::string_view();
       score_as_string = absl::string_view();
@@ -211,6 +212,7 @@ struct SearchParameters {
       k_string = absl::string_view();
       ef_string = absl::string_view();
       params.clear();
+      jparams.clear();
     }
   } parse_vars;
   bool IsNonVectorQuery() const { return attribute_alias.empty(); }

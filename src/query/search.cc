@@ -57,6 +57,15 @@
 
 namespace valkey_search::query {
 
+namespace {
+
+struct ParamSubstitution {
+  absl::string_view value;
+  bool is_json;
+};
+
+}  // namespace
+
 // Query operation counters
 DEV_INTEGER_COUNTER(query_stats, query_text_term_count);
 DEV_INTEGER_COUNTER(query_stats, query_text_prefix_count);
@@ -896,20 +905,24 @@ void IncrementQueryOperationMetrics(QueryOperations query_operations) {
   }
 }
 
-absl::StatusOr<absl::string_view> SubstituteParam(
+absl::StatusOr<ParamSubstitution> SubstituteParam(
     query::SearchParameters &parameters, absl::string_view source) {
   if (source.empty() || source[0] != '$') {
-    return source;
+    return ParamSubstitution{source, false};
   } else {
     source.remove_prefix(1);
     auto itr = parameters.parse_vars.params.find(source);
-    if (itr == parameters.parse_vars.params.end()) {
-      return absl::NotFoundError(
-          absl::StrCat("Parameter ", source, " not found."));
-    } else {
+    if (itr != parameters.parse_vars.params.end()) {
       itr->second.first++;
-      return itr->second.second;
+      return ParamSubstitution{itr->second.second, false};
     }
+    auto jitr = parameters.parse_vars.jparams.find(source);
+    if (jitr != parameters.parse_vars.jparams.end()) {
+      jitr->second.first++;
+      return ParamSubstitution{jitr->second.second, true};
+    }
+    return absl::NotFoundError(
+        absl::StrCat("Parameter ", source, " not found."));
   }
 }
 
@@ -1103,23 +1116,38 @@ absl::Status PostParseVectorParameters(query::SearchParameters &parameters) {
   VMSDK_ASSIGN_OR_RETURN(
       auto k_string,
       SubstituteParam(parameters, parameters.parse_vars.k_string));
-  VMSDK_ASSIGN_OR_RETURN(parameters.k, vmsdk::To<unsigned>(k_string));
+  VMSDK_ASSIGN_OR_RETURN(parameters.k, vmsdk::To<unsigned>(k_string.value));
 
   VMSDK_ASSIGN_OR_RETURN(
-      parameters.query,
+      auto query_vector,
       SubstituteParam(parameters, parameters.parse_vars.query_vector_string));
+  if (query_vector.is_json) {
+    VMSDK_ASSIGN_OR_RETURN(auto index, parameters.index_schema->GetIndex(
+                                           parameters.attribute_alias));
+    auto normalized_query = index->NormalizeStringRecord(
+        vmsdk::MakeUniqueValkeyString(std::string(query_vector.value)));
+    if (!normalized_query) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "JPARAMS `", parameters.parse_vars.query_vector_string.substr(1),
+          "` is not a valid vector value."));
+    }
+    parameters.query = std::string(vmsdk::ToStringView(normalized_query.get()));
+  } else {
+    parameters.query = std::string(query_vector.value);
+  }
 
   if (!parameters.parse_vars.ef_string.empty()) {
     VMSDK_ASSIGN_OR_RETURN(
         auto ef_string,
         SubstituteParam(parameters, parameters.parse_vars.ef_string));
-    VMSDK_ASSIGN_OR_RETURN(parameters.ef, vmsdk::To<unsigned>(ef_string));
+    VMSDK_ASSIGN_OR_RETURN(parameters.ef, vmsdk::To<unsigned>(ef_string.value));
   }
 
   if (!parameters.parse_vars.score_as_string.empty()) {
     VMSDK_ASSIGN_OR_RETURN(
-        parameters.parse_vars.score_as_string,
+        auto score_as_string,
         SubstituteParam(parameters, parameters.parse_vars.score_as_string));
+    parameters.parse_vars.score_as_string = score_as_string.value;
   }
   return absl::OkStatus();
 }

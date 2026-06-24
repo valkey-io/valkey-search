@@ -11,7 +11,7 @@ from typing import Any, Union
 from valkeytestframework.util import waiters
 import threading
 import time
-from utils import wait_for_pausepoint, wait_for_background_tasks
+from utils import pausepoint_hit, wait_for_background_tasks
 
 def canceller(client, client_id):
     my_id = client.execute_command("client id")
@@ -141,8 +141,7 @@ def run_pausepoint_timeout_test(self, pausepoint_name, setup_fn, search_cmd):
     thread = threading.Thread(target=run_search)
     thread.start()
 
-    assert wait_for_pausepoint(client, pausepoint_name), \
-        f"Pausepoint {pausepoint_name} was not hit"
+    waiters.wait_for_true(lambda: pausepoint_hit(client, pausepoint_name))
     assert client.ping() == True, "Server not responsive while pausepoint is held"
 
     thread.join()

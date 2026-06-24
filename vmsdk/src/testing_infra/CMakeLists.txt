@@ -1,6 +1,10 @@
-set(VMSDK_TESTING_INFRA_SRCS
-    ${CMAKE_CURRENT_LIST_DIR}/utils.cc ${CMAKE_CURRENT_LIST_DIR}/utils.h
-    ${CMAKE_CURRENT_LIST_DIR}/module.h)
+set(VMSDK_TESTING_SRCS
+    utils.cc
+    utils.h
+    module.h)
 
-valkey_search_add_static_library(vmsdk_testing_infra
-                                 "${VMSDK_TESTING_INFRA_SRCS}")
+add_library(vmsdk_testing SHARED ${VMSDK_TESTING_SRCS})
+target_link_libraries(vmsdk_testing PUBLIC absl::base absl::strings)
+target_include_directories(vmsdk_testing PUBLIC .)
+target_include_directories(vmsdk_testing PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../../include)
+target_include_directories(vmsdk_testing PRIVATE ${PROJECT_SOURCE_DIR})

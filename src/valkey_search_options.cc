@@ -6,8 +6,8 @@
  */
 #include "valkey_search_options.h"
 
-#include "absl/strings/numbers.h"
 #include "valkey_search.h"
+#include "version.h"
 #include "vmsdk/src/concurrency.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/thread_pool.h"
@@ -345,75 +345,39 @@ static auto tag_min_prefix_length =
 /// Controls when pre-filtering is used vs inline-filtering for hybrid queries
 constexpr absl::string_view kPrefilteringThresholdRatioConfig{
     "prefiltering-threshold-ratio"};
-constexpr absl::string_view kDefaultPrefilteringThresholdRatio{"0.001"};
+constexpr double kDefaultPrefilteringThresholdRatio{0.001};
 constexpr double kMinimumPrefilteringThresholdRatio{0.0};
 constexpr double kMaximumPrefilteringThresholdRatio{1.0};
-static double prefiltering_threshold_ratio{0.001};
 
 static auto prefiltering_threshold_ratio_config =
-    config::StringBuilder(kPrefilteringThresholdRatioConfig,
-                          kDefaultPrefilteringThresholdRatio)
-        .WithValidationCallback([](const std::string& value) -> absl::Status {
-          double parsed_value;
-          if (!absl::SimpleAtod(value, &parsed_value)) {
-            return absl::InvalidArgumentError(
-                "Prefiltering threshold ratio must be a valid number");
-          }
-          if (parsed_value < kMinimumPrefilteringThresholdRatio ||
-              parsed_value > kMaximumPrefilteringThresholdRatio) {
-            return absl::InvalidArgumentError(absl::StrFormat(
-                "Prefiltering threshold ratio must be between %.1f and %.1f",
-                kMinimumPrefilteringThresholdRatio,
-                kMaximumPrefilteringThresholdRatio));
-          }
-          return absl::OkStatus();
-        })
-        .WithModifyCallback([](const std::string& value) {
-          double parsed_value;
-          CHECK(absl::SimpleAtod(value, &parsed_value));
-          prefiltering_threshold_ratio = parsed_value;
-        })
+    config::DoubleBuilder(kPrefilteringThresholdRatioConfig,
+                          kDefaultPrefilteringThresholdRatio,
+                          kMinimumPrefilteringThresholdRatio,
+                          kMaximumPrefilteringThresholdRatio)
         .Dev()  // can only be set in debug mode
         .Build();
 
 /// Register the "search-result-buffer-multiplier" flag
 constexpr absl::string_view kSearchResultBufferMultiplierConfig{
     "search-result-buffer-multiplier"};
-constexpr absl::string_view kDefaultSearchResultBufferMultiplier{"1.5"};
+constexpr double kDefaultSearchResultBufferMultiplier{1.5};
 constexpr double kMinimumSearchResultBufferMultiplier{1.0};
 constexpr double kMaximumSearchResultBufferMultiplier{1000.0};
-static double search_result_buffer_multiplier{1.5};
 
 static auto search_result_buffer_multiplier_config =
-    config::StringBuilder(kSearchResultBufferMultiplierConfig,
-                          kDefaultSearchResultBufferMultiplier)
-        .WithValidationCallback([](const std::string& value) -> absl::Status {
-          double parsed_value;
-          if (!absl::SimpleAtod(value, &parsed_value)) {
-            return absl::InvalidArgumentError(
-                "Buffer multiplier must be a valid number");
-          }
-          if (parsed_value < kMinimumSearchResultBufferMultiplier ||
-              parsed_value > kMaximumSearchResultBufferMultiplier) {
-            return absl::InvalidArgumentError(absl::StrFormat(
-                "Buffer multiplier must be between %.1f and %.1f",
-                kMinimumSearchResultBufferMultiplier,
-                kMaximumSearchResultBufferMultiplier));
-          }
-          return absl::OkStatus();
-        })
-        .WithModifyCallback([](const std::string& value) {
-          double parsed_value;
-          CHECK(absl::SimpleAtod(value, &parsed_value));
-          search_result_buffer_multiplier = parsed_value;
-        })
+    config::DoubleBuilder(kSearchResultBufferMultiplierConfig,
+                          kDefaultSearchResultBufferMultiplier,
+                          kMinimumSearchResultBufferMultiplier,
+                          kMaximumSearchResultBufferMultiplier)
         .Build();
 
 double GetSearchResultBufferMultiplier() {
-  return search_result_buffer_multiplier;
+  return search_result_buffer_multiplier_config->GetValue();
 }
 
-double GetPrefilteringThresholdRatio() { return prefiltering_threshold_ratio; }
+double GetPrefilteringThresholdRatio() {
+  return prefiltering_threshold_ratio_config->GetValue();
+}
 
 /// Register the "drain-mutation-queue-on-load" flag
 /// Drain the mutation queue after RDB load
@@ -741,6 +705,42 @@ config::Number& GetMutationWeightNumeric() {
 
 config::Number& GetMutationWeightTag() {
   return dynamic_cast<config::Number&>(*mutation_weight_tag);
+}
+
+/// Register the "emulate-release" flag (see COMPATIBILITY.md).
+/// Default: current major.0.0 (SemVer-preserving when no opt-in).
+/// Min:     1.0.0 (oldest release whose behavior we can emulate).
+/// Max:     normally pinned to the running module version (can't emulate the
+///          future), but the upper bound is lifted while `debug-mode` is on so
+///          tests/dev sessions can pin to an unreleased version. The configured
+///          max stays at logical infinity for the type; the runtime check below
+///          enforces the production ceiling.
+constexpr absl::string_view kEmulateReleaseConfig{"emulate-release"};
+constexpr vmsdk::ValkeyVersion kEmulateReleaseMin{1, 0, 0};
+constexpr vmsdk::ValkeyVersion kEmulateReleaseMaxInfinity{0xFFFF, 0xFF, 0xFF};
+
+static absl::Status ValidateEmulateRelease(vmsdk::ValkeyVersion v) {
+  if (!config::IsDebugModeEnabled() && v > kModuleVersion) {
+    return absl::OutOfRangeError(absl::StrFormat(
+        "%s must be <= %s unless %s is enabled", kEmulateReleaseConfig,
+        kModuleVersion.ToString(), config::kDebugMode));
+  }
+  return absl::OkStatus();
+}
+
+static auto emulate_release_config =
+    config::VersionBuilder(kEmulateReleaseConfig,
+                           vmsdk::ValkeyVersion(kModuleVersion.Major(), 0, 0),
+                           kEmulateReleaseMin, kEmulateReleaseMaxInfinity)
+        .WithValidationCallback(ValidateEmulateRelease)
+        .Build();
+
+config::Version& GetEmulateRelease() {
+  return dynamic_cast<config::Version&>(*emulate_release_config);
+}
+
+bool EnabledInVersion(vmsdk::ValkeyVersion version) {
+  return GetEmulateRelease().GetValue() >= version;
 }
 
 }  // namespace options

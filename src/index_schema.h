@@ -86,8 +86,11 @@ struct AttributeInfo {
 class IndexSchema : public KeyspaceEventSubscription,
                     public std::enable_shared_from_this<IndexSchema> {
  public:
+  static constexpr float kDefaultDocumentScore = 1.0f;
+
   struct IndexKeyInfo {
     MutationSequenceNumber mutation_sequence_number_{0};
+    float document_score{kDefaultDocumentScore};
   };
 
   using IndexKeyInfoMap = absl::flat_hash_map<Key, IndexKeyInfo>;
@@ -172,6 +175,24 @@ class IndexSchema : public KeyspaceEventSubscription,
 
   inline const std::string &GetName() const { return name_; }
   inline std::uint32_t GetDBNum() const { return db_num_; }
+  inline const std::optional<uint16_t> &GetSingleSlotNumber() const {
+    return single_slot_number_;
+  }
+  inline float GetScore() const { return score_; }
+  inline const std::string &GetScoreField() const {
+    CHECK(score_field_.has_value())
+        << "GetScoreField() called without HasScoreField() guard";
+    return score_field_.value();
+  }
+  inline bool HasScoreField() const { return score_field_.has_value(); }
+  float GetDocumentScore(const Key &key) const
+      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
+    auto itr = index_key_info_.find(key);
+    if (itr == index_key_info_.end()) {
+      return score_;
+    }
+    return itr->second.document_score;
+  }
 
   void CreateTextIndexSchema() {
     text_index_schema_ = std::make_shared<indexes::text::TextIndexSchema>(
@@ -247,6 +268,7 @@ class IndexSchema : public KeyspaceEventSubscription,
     bool consume_in_progress{false};
     bool from_backfill{false};
     bool from_multi{false};
+    float document_score{kDefaultDocumentScore};
   };
   using MutatedAttributes =
       absl::flat_hash_map<std::string, DocumentMutation::AttributeData>;
@@ -398,11 +420,14 @@ class IndexSchema : public KeyspaceEventSubscription,
   std::unique_ptr<AttributeDataType> attribute_data_type_;
   std::string name_;
   uint32_t db_num_{0};
+  std::optional<uint16_t> single_slot_number_;
   data_model::Language language_{data_model::LANGUAGE_ENGLISH};
   std::string punctuation_;
   bool with_offsets_{true};
   std::vector<std::string> stop_words_;
   uint32_t min_stem_size_{4};
+  float score_{kDefaultDocumentScore};
+  std::optional<std::string> score_field_;
   std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
   // Precomputed text field information for searches
   uint64_t all_text_field_mask_{0ULL};
@@ -463,7 +488,8 @@ class IndexSchema : public KeyspaceEventSubscription,
   void ProcessMutation(ValkeyModuleCtx *ctx,
                        MutatedAttributes &mutated_attributes,
                        const Key &interned_key, bool from_backfill,
-                       bool is_delete);
+                       bool is_delete,
+                       float document_score = kDefaultDocumentScore);
   bool ScheduleMutation(bool from_backfill, const Key &key,
                         vmsdk::ThreadPool::Priority priority,
                         absl::BlockingCounter *blocking_counter);
@@ -490,7 +516,8 @@ class IndexSchema : public KeyspaceEventSubscription,
                           MutatedAttributes &&mutated_attributes,
                           MutationSequenceNumber sequence_number,
                           bool from_backfill, bool block_client,
-                          bool from_multi)
+                          bool from_multi,
+                          float document_score = kDefaultDocumentScore)
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
 
   size_t ComputeWeightedBufferSize(const MutatedAttributes &attributes) const;

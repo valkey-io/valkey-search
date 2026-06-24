@@ -311,6 +311,56 @@ def compare_results(expected, results):
         print(TEST_MARKER)
         return True
 
+    # For simple-compare commands, handle exception mismatches here before
+    # the generic skip logic, so alias negative cases are caught properly.
+    if _is_simple_compare_cmd(cmd):
+        if expected["exception"] and not results["exception"]:
+            print("RL Exception, skipped (simple cmd)")
+            print(TEST_MARKER)
+            return True
+        if results["exception"] and not expected["exception"]:
+            print(f"CMD: {cmd}")
+            print(f"RL: Result: {printable_result(expected['result'])}")
+            print(TEST_MARKER)
+            return False
+
+        # FT.INFO contains dynamic values (memory, timing), just verify both
+        # succeed with the same index name, or both return the same error.
+        if cmd[0].upper() == "FT.INFO":
+            exp = expected["result"]
+            act = results["result"]
+            # Both errors -> compare error text
+            if isinstance(exp, Exception) and isinstance(act, Exception):
+                return str(exp) == str(act)
+            # One error, one success -> mismatch
+            if isinstance(exp, Exception) or isinstance(act, Exception):
+                print(f"FT.INFO mismatch: expected={exp!r} got={act!r}")
+                return False
+            # Both lists - locate the index_name value in the flat key-value
+            # list and compare that rather than comparing the first element
+            # (which is just the field label).
+            if isinstance(exp, list) and isinstance(act, list) and len(exp) > 1 and len(act) > 1:
+                def _get_index_name(info_list):
+                    for i in range(0, len(info_list) - 1, 2):
+                        key = info_list[i]
+                        if isinstance(key, bytes):
+                            key = key.decode("utf-8", errors="replace")
+                        if key == "index_name":
+                            return info_list[i + 1]
+                    return None
+
+                exp_name = _get_index_name(exp)
+                act_name = _get_index_name(act)
+                if exp_name != act_name:
+                    print(f"FT.INFO index name mismatch: expected={exp_name!r} got={act_name!r}")
+                    return False
+                return True
+            return exp == act
+        match = expected["result"] == results["result"]
+        if not match:
+            print(f"Simple result mismatch: expected={expected['result']!r} got={results['result']!r}")
+        return match
+
     if expected["exception"]:
         print("RL Exception, skipped")
         #print(f"RL Exception: Raw: {printable_result(results['RL'])}")
@@ -324,32 +374,6 @@ def compare_results(expected, results):
         # print(f"VK: Exception Raw: {printable_result(results['result'])}")
         print(TEST_MARKER)
         return False
-
-    # Alias mutation commands return b'OK', not a result list.
-    if _is_simple_compare_cmd(cmd):
-        # FT.INFO contains dynamic values (memory, timing), just verify both
-        # succeed with the same index name, or both return the same error.
-        if cmd[0].upper() == "FT.INFO":
-            exp = expected["result"]
-            act = results["result"]
-            # Both errors -> compare error text
-            if isinstance(exp, Exception) and isinstance(act, Exception):
-                return str(exp) == str(act)
-            # One error, one success -> mismatch
-            if isinstance(exp, Exception) or isinstance(act, Exception):
-                print(f"FT.INFO mismatch: expected={exp!r} got={act!r}")
-                return False
-            # Both lists - compare index name (first element)
-            if isinstance(exp, list) and isinstance(act, list) and len(exp) > 0 and len(act) > 0:
-                if exp[0] != act[0]:
-                    print(f"FT.INFO index name mismatch: expected={exp[0]!r} got={act[0]!r}")
-                    return False
-                return True
-            return exp == act
-        match = expected["result"] == results["result"]
-        if not match:
-            print(f"Simple result mismatch: expected={expected['result']!r} got={results['result']!r}")
-        return match
 
     # Output raw results
     # print("Raw expected result:", expected["result"])
@@ -421,7 +445,7 @@ def mark_as_failed(testname):
     wrong_answers += 1
     assert not StopOnFailure, "Test failed, stopping execution"
 
-_SIMPLE_COMPARE_CMDS = {"FT.ALIASADD", "FT.ALIASDEL", "FT.ALIASUPDATE", "FT.INFO"}
+_SIMPLE_COMPARE_CMDS = {"FT.ALIASADD", "FT.ALIASDEL", "FT.ALIASUPDATE", "FT.ALIASLIST", "FT.INFO"}
 
 def _is_simple_compare_cmd(cmd):
     """Return True if cmd should use direct equality comparison (not search/aggregate unpacking)."""

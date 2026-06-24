@@ -1201,8 +1201,10 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, name_.data());
 
   ValkeyModule_ReplyWithSimpleString(ctx, "aliases");
-  ValkeyModule_ReplyWithArray(ctx, aliases_.size());
-  for (const auto &alias : aliases_) {
+  std::vector<std::string> sorted_aliases(aliases_.begin(), aliases_.end());
+  std::sort(sorted_aliases.begin(), sorted_aliases.end());
+  ValkeyModule_ReplyWithArray(ctx, sorted_aliases.size());
+  for (const auto &alias : sorted_aliases) {
     ValkeyModule_ReplyWithSimpleString(ctx, alias.c_str());
   }
 

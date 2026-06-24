@@ -5,7 +5,6 @@ Cluster propagation integration tests for FT.ALIASADD, FT.ALIASDEL, and FT.ALIAS
 import os
 import pytest
 import threading
-import time
 from valkey import ResponseError
 from valkey.client import Valkey
 from valkey_search_test_case import ValkeySearchClusterTestCase, ValkeySearchClusterTestCaseDebugMode
@@ -264,7 +263,8 @@ class TestFTAliasClusterPropagation(ValkeySearchClusterTestCase):
         assert node0.execute_command(*CREATE_TAG_INDEX) == b"OK"
         self._wait_for_index_on_all_nodes(INDEX_NAME)
 
-        node0.execute_command("HSET", "doc:1", "category", "books")
+        cluster_client = self.new_cluster_client()
+        cluster_client.execute_command("HSET", "doc:1", "category", "books")
         assert node0.execute_command(
             "FT.ALIASADD", ALIAS_NAME, INDEX_NAME
         ) == b"OK"
@@ -1049,8 +1049,17 @@ class TestFTAliasConcurrentOperationsCluster(ValkeySearchClusterTestCase):
 
         # The cluster must converge to a consistent state on all nodes.
         # Either the alias exists or it doesn't — but all nodes must agree.
-        import time
-        time.sleep(2)  # Allow propagation to settle.
+        def _alias_converged():
+            states = []
+            for node in self._all_primaries():
+                try:
+                    node.execute_command("FT.INFO", ALIAS_NAME)
+                    states.append(True)
+                except ResponseError:
+                    states.append(False)
+            return len(set(states)) == 1
+
+        waiters.wait_for_true(_alias_converged, timeout=15)
 
         alias_states = []
         for node in self._all_primaries():

@@ -571,7 +571,7 @@ absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
         }
         // Only replicate via FT.INTERNAL_UPDATE if the type is registered
         // locally — unregistered types are stored but not acted upon.
-        if (registered_types_.Get().contains(type_name)) {
+        if (rt_it != registered_types.end()) {
           auto status = CallFTInternalUpdateForReconciliation(
               id, proposed_entry, type_name);
           if (!status.ok()) {

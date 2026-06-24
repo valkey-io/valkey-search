@@ -203,6 +203,11 @@ void SchemaManager::NormalizeIndexSchemaProtoDefaults(
   if (!proto.has_score()) {
     proto.set_score(IndexSchema::kDefaultDocumentScore);
   }
+  // Insert the default empty prefix when none are specified, matching the
+  // IndexSchema constructor behavior.
+  if (proto.subscribed_key_prefixes().empty()) {
+    proto.add_subscribed_key_prefixes("");
+  }
   // Sort attributes by alias to match ToProto() output order.
   std::sort(proto.mutable_attributes()->begin(),
             proto.mutable_attributes()->end(),

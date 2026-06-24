@@ -266,8 +266,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
         filter.get(), &canceler);
 
     // if (cancellation_token->IsCancelled()) {
-    //   return absl::CancelledError("Search operation cancelled due to
-    //   timeout");
+    //   return absl::CancelledError("Search operation cancelled");
     // }
     return CreateReply(res);
   } catch (const std::exception &e) {

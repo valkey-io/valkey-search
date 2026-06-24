@@ -1,58 +1,74 @@
+include (object_library_helper)
+
 add_subdirectory(valkey_module_api)
 add_subdirectory(testing_infra)
 
 set(VMSDKLIB_SRCS
-    ${CMAKE_CURRENT_LIST_DIR}/log.cc
-    ${CMAKE_CURRENT_LIST_DIR}/log.h
-    ${CMAKE_CURRENT_LIST_DIR}/concurrency.cc
-    ${CMAKE_CURRENT_LIST_DIR}/concurrency.h
-    ${CMAKE_CURRENT_LIST_DIR}/debug.cc
-    ${CMAKE_CURRENT_LIST_DIR}/debug.h
-    ${CMAKE_CURRENT_LIST_DIR}/info.h
-    ${CMAKE_CURRENT_LIST_DIR}/info.cc
-    ${CMAKE_CURRENT_LIST_DIR}/utils.cc
-    ${CMAKE_CURRENT_LIST_DIR}/utils.h
-    ${CMAKE_CURRENT_LIST_DIR}/cluster_map.cc
-    ${CMAKE_CURRENT_LIST_DIR}/cluster_map.h
-    ${CMAKE_CURRENT_LIST_DIR}/latency_sampler.h
-    ${CMAKE_CURRENT_LIST_DIR}/module_type.cc
-    ${CMAKE_CURRENT_LIST_DIR}/module_type.h
-    ${CMAKE_CURRENT_LIST_DIR}/thread_pool.cc
-    ${CMAKE_CURRENT_LIST_DIR}/thread_pool.h
-    ${CMAKE_CURRENT_LIST_DIR}/thread_monitoring.h
-    ${CMAKE_CURRENT_LIST_DIR}/thread_monitoring.cc
-    ${CMAKE_CURRENT_LIST_DIR}/thread_group_cpu_monitor.h
-    ${CMAKE_CURRENT_LIST_DIR}/thread_group_cpu_monitor.cc
-    ${CMAKE_CURRENT_LIST_DIR}/time_sliced_mrmw_mutex.cc
-    ${CMAKE_CURRENT_LIST_DIR}/time_sliced_mrmw_mutex.h
-    ${CMAKE_CURRENT_LIST_DIR}/command_parser.h
-    ${CMAKE_CURRENT_LIST_DIR}/module.cc
-    ${CMAKE_CURRENT_LIST_DIR}/module.h
-    ${CMAKE_CURRENT_LIST_DIR}/module_config.cc
-    ${CMAKE_CURRENT_LIST_DIR}/module_config.h
-    ${CMAKE_CURRENT_LIST_DIR}/memory_allocation_overrides.cc
-    ${CMAKE_CURRENT_LIST_DIR}/memory_allocation_overrides.h
-    ${CMAKE_CURRENT_LIST_DIR}/memory_allocation.cc
-    ${CMAKE_CURRENT_LIST_DIR}/memory_allocation.h
-    ${CMAKE_CURRENT_LIST_DIR}/type_conversions.h
-    ${CMAKE_CURRENT_LIST_DIR}/managed_pointers.h
-    ${CMAKE_CURRENT_LIST_DIR}/blocked_client.cc
-    ${CMAKE_CURRENT_LIST_DIR}/blocked_client.h
-    ${CMAKE_CURRENT_LIST_DIR}/memory_tracker.cc
-    ${CMAKE_CURRENT_LIST_DIR}/memory_tracker.h
-    ${CMAKE_CURRENT_LIST_DIR}/status/status_builder.cc
-    ${CMAKE_CURRENT_LIST_DIR}/status/source_location.h
-    ${CMAKE_CURRENT_LIST_DIR}/status/status_builder.h
-    ${CMAKE_CURRENT_LIST_DIR}/status/status_macros.h)
+    log.cc
+    log.h
+    concurrency.cc
+    concurrency.h
+    debug.cc
+    debug.h
+    info.h
+    info.cc
+    utils.cc
+    utils.h
+    cluster_map.cc
+    cluster_map.h
+    latency_sampler.h
+    module_type.cc
+    module_type.h
+    thread_pool.cc
+    thread_pool.h
+    thread_monitoring.h
+    thread_monitoring.cc
+    thread_group_cpu_monitor.h
+    thread_group_cpu_monitor.cc
+    time_sliced_mrmw_mutex.cc
+    time_sliced_mrmw_mutex.h
+    command_parser.h
+    module.cc
+    module.h
+    module_config.cc
+    module_config.h
+    memory_allocation_overrides.cc
+    memory_allocation_overrides.h
+    memory_allocation.cc
+    memory_allocation.h
+    type_conversions.h
+    managed_pointers.h
+    blocked_client.cc
+    blocked_client.h
+    memory_tracker.cc
+    memory_tracker.h
+    status/status_builder.cc
+    status/source_location.h
+    status/status_builder.h
+    status/status_macros.h)
 
-valkey_search_add_static_library(vmsdklib "${VMSDKLIB_SRCS}")
-target_include_directories(vmsdklib PUBLIC ${CMAKE_CURRENT_LIST_DIR})
-target_include_directories(vmsdklib PUBLIC ${CMAKE_CURRENT_LIST_DIR}/status)
-target_link_libraries(vmsdklib INTERFACE hdrhistogram_c)
+add_library(vmsdk OBJECT ${VMSDKLIB_SRCS})
 
-if(APPLE)
-  target_link_libraries(vmsdklib PUBLIC absl::core_headers absl::base
-                                        absl::any_invocable)
-else()
-  target_link_libraries(vmsdklib PUBLIC ${GRPC_LIB})
-endif()
+target_include_directories(vmsdk PUBLIC .)
+target_include_directories(vmsdk PUBLIC status)
+target_include_directories(vmsdk PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+target_include_directories(vmsdk PRIVATE ${PROJECT_SOURCE_DIR})
+
+target_link_libraries(vmsdk PUBLIC hdrhistogram_c)
+target_link_libraries(vmsdk PUBLIC absl::core_headers
+        absl::base
+        absl::flat_hash_map
+        absl::any_invocable
+        absl::log
+        absl::statusor
+        absl::strings
+        absl::string_view
+        absl::synchronization
+        absl::random_random
+        absl::check)
+target_link_libraries(vmsdk PUBLIC ${GRPC_LIB})
+target_link_libraries(vmsdk PUBLIC highwayhash::highwayhash)
+
+add_library(vmsdk_dso SHARED)
+target_link_libraries(vmsdk_dso PRIVATE vmsdk)
+target_sources(vmsdk_dso PUBLIC $<TARGET_OBJECTS:vmsdk>)

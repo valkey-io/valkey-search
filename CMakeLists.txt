@@ -1,72 +1,86 @@
 cmake_minimum_required(VERSION 3.16)
 
-# Project definition
-
 project(
-  ValkeySearch
-  LANGUAGES C CXX)
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake/Modules/")
+    ValkeySearch
+    VERSION 1.0.0
+    LANGUAGES C CXX
+)
 
-# Use ccache to speed up incremental builds if available
-find_program(CCACHE_FOUND ccache)
-if(CCACHE_FOUND)
-  message(STATUS "Using ccache: ${CCACHE_FOUND}")
-  set(CMAKE_C_COMPILER_LAUNCHER ccache)
-  set(CMAKE_CXX_COMPILER_LAUNCHER ccache)
-endif()
-
-# This project can only compile macOS / Linux, we can use the UNIX predefined
-# variable to test this
-if(NOT UNIX)
-  message(FATAL_ERROR "valkey-search can only be built on Linux or macOS")
-endif()
-
-# Options
 option(BUILD_UNIT_TESTS "Build valkey-search unit tests" ON)
-option(WITH_SUBMODULES_SYSTEM "Use system submodules" OFF)
+option(VALKEY_VENDORED_DEPS "Use static vendored dependencies" OFF)
+set(SAN_BUILD "OFF" CACHE STRING "Build with sanitizers (OFF, address, thread, memory, undefined)")
 
-set(SAN_BUILD
-    ""
-    CACHE STRING "Sanitizer to enable: 'address' or 'thread'")
+# this is a built-in CMake variable.. but let's prefer SHARED_LIBS unless specifically disabled..
+set(BUILD_SHARED_LIBS ON CACHE BOOL "Build shared libraries by default")
 
-if(APPLE)
-  add_compile_options(-Wno-defaulted-function-deleted)
-endif()
-
-# Initialise submodules (gRPC, Protobuf, GTest & Abseil)
-add_subdirectory(submodules)
-
-if(SAN_BUILD STREQUAL "address" OR SAN_BUILD STREQUAL "thread")
-  message(STATUS "${SAN_BUILD} sanitizer is enabled")
-elseif(SAN_BUILD)
-  message(FATAL_ERROR "Supported sanitizers are 'address' or 'thread'")
-endif()
-
-message(STATUS "GRPC_CPP_PLUGIN_PATH is set to ${GRPC_CPP_PLUGIN_PATH}")
-message(STATUS "protoc_EXE is set to ${protoc_EXE}")
-message(STATUS "highwayhash include path: ${HIGHWAY_HASH_INCLUDE_PATH}")
-
-set(CMAKE_CXX_STANDARD 20 REQUIRED)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-include_directories(${CMAKE_SOURCE_DIR})
-include_directories(${CMAKE_BINARY_DIR}/.deps/install/include)
+# @TODO: these are only here for testing purposes.. should be removed.
+add_compile_options(-Wno-defaulted-function-deleted)
+add_compile_options(-Wno-deprecated-declarations)
+add_compile_options(-Wno-unknown-pragmas)
 
-include(valkey_search)
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake/Modules/")
 
+# Shared root for generated protobuf/grpc sources consumed across subdirectories.
+set(VALKEY_PROTOGEN_BINARY_DIR "${CMAKE_BINARY_DIR}/protogen")
+
+if (VALKEY_VENDORED_DEPS)
+    set(gRPC_USE_STATIC_LIBS ON)
+    set(Protobuf_USE_STATIC_LIBS ON)
+    set(absl_USE_STATIC_LIBS ON)
+    set(ICU_USE_STATIC_LIBS ON)
+    add_compile_definitions(U_STATIC_IMPLEMENTATION)
+endif()
+
+# Find Abseil, gRPC, etc
+# for some reason, if we're using vendored dependencies, the
+# search order for gRPC and Protobuf need to be reversed
+
+if (VALKEY_VENDORED_DEPS)
+    find_package(Protobuf REQUIRED)
+    find_package(gRPC REQUIRED)
+else()
+    find_package(gRPC REQUIRED)
+    find_package(Protobuf REQUIRED)
+endif()
+
+find_package(absl REQUIRED)
+find_package(ICU REQUIRED COMPONENTS uc i18n data)
+
+
+find_package(highwayhash REQUIRED)
+
+if (NOT TARGET highwayhash)
+    add_library(highwayhash UNKNOWN IMPORTED)
+    set_target_properties(highwayhash PROPERTIES
+        IMPORTED_LOCATION "${HIGHWAYHASH_LIBRARY}"
+        INTERFACE_INCLUDE_DIRECTORIES "${HIGHWAYHASH_INCLUDE_DIR}")
+endif()
+
+if (NOT TARGET highwayhash::highwayhash)
+    add_library(highwayhash::highwayhash ALIAS highwayhash)
+endif()
+
+add_subdirectory(protogen)
 add_subdirectory(vmsdk)
 add_subdirectory(third_party)
 add_subdirectory(src)
 
-if(BUILD_UNIT_TESTS)
-  message(STATUS "Building tests")
-  add_subdirectory(testing)
+add_dependencies(coordinator protogen)
+
+if (BUILD_UNIT_TESTS)
+    add_compile_definitions(VALKEYSEARCH_BUILD_TESTS)
+    find_package(GTest REQUIRED)
+    enable_testing()
+    add_subdirectory(testing)
 endif()
 
 # Create a symbolic link to the root directory for compile_commands.json
 execute_process(
-  COMMAND
-    ${CMAKE_COMMAND} -E create_symlink
-    ${CMAKE_BINARY_DIR}/compile_commands.json
-    ${CMAKE_SOURCE_DIR}/compile_commands.json)
+        COMMAND
+        ${CMAKE_COMMAND} -E create_symlink
+        ${CMAKE_BINARY_DIR}/compile_commands.json
+        ${CMAKE_SOURCE_DIR}/compile_commands.json)

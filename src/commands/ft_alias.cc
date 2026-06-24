@@ -146,14 +146,21 @@ absl::Status RejectIfMultiExecInCme(ValkeyModuleCtx *ctx) {
   return absl::OkStatus();
 }
 
-// Performs the cluster consistency fanout for alias add/update operations,
-// waiting until the alias resolves to the expected index on all nodes.
+// Performs the cluster consistency fanout for alias add/update operations.
+// The primary check is alias resolution: the fanout retries until every node
+// can resolve the alias name to an index via GetIndexSchema. The IFV
+// (fingerprint/version) check is secondary — it guards against stale index
+// state but is not the mechanism that ensures alias visibility.
 void FanoutAliasExists(ValkeyModuleCtx *ctx, absl::string_view alias) {
   const bool is_loading =
       ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_LOADING;
   if (ValkeySearch::Instance().IsCluster() &&
       ValkeySearch::Instance().UsingCoordinator()) {
     if (!is_loading) {
+      // NOTE: We look up the IFV after the alias is created rather than
+      // passing it from CreateEntry because the index already exists and
+      // concurrent modifications could bump its version, causing the
+      // exact-match consistency check to retry until timeout.
       auto schema_or = SchemaManager::Instance().GetIndexSchema(
           ValkeyModule_GetSelectedDb(ctx), alias);
       if (schema_or.ok()) {

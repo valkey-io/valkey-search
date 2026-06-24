@@ -38,7 +38,7 @@ absl::Status ValidateHNSWBlockSize(long long new_value) {
 }
 
 /// Resize `pool` to match its new value
-void UpdateThreadPoolCount(vmsdk::ThreadPool* pool, long long new_value) {
+void UpdateThreadPoolCount(vmsdk::ThreadPool *pool, long long new_value) {
   if (!pool) {
     return;
   }
@@ -301,7 +301,7 @@ static auto thread_pool_wait_time_samples =
         kMaximumThreadPoolWaitTimeSamples)  // max size (10k)
         .WithModifyCallback([](uint32_t new_size) {
           // Update thread pools when sample queue size changes
-          auto& instance = ValkeySearch::Instance();
+          auto &instance = ValkeySearch::Instance();
           if (auto reader_pool = instance.GetReaderThreadPool()) {
             reader_pool->ResizeSampleQueue(new_size);
           }
@@ -507,53 +507,53 @@ static auto query_string_depth =
 
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 
-vmsdk::config::Number& GetHNSWBlockSize() {
-  return dynamic_cast<vmsdk::config::Number&>(*hnsw_block_size);
+vmsdk::config::Number &GetHNSWBlockSize() {
+  return dynamic_cast<vmsdk::config::Number &>(*hnsw_block_size);
 }
 
-vmsdk::config::Number& GetReaderThreadCount() {
-  return dynamic_cast<vmsdk::config::Number&>(*reader_threads_count);
+vmsdk::config::Number &GetReaderThreadCount() {
+  return dynamic_cast<vmsdk::config::Number &>(*reader_threads_count);
 }
 
-vmsdk::config::Number& GetWriterThreadCount() {
-  return dynamic_cast<vmsdk::config::Number&>(*writer_threads_count);
+vmsdk::config::Number &GetWriterThreadCount() {
+  return dynamic_cast<vmsdk::config::Number &>(*writer_threads_count);
 }
 
-vmsdk::config::Number& GetUtilityThreadCount() {
-  return dynamic_cast<vmsdk::config::Number&>(*utility_threads_count);
+vmsdk::config::Number &GetUtilityThreadCount() {
+  return dynamic_cast<vmsdk::config::Number &>(*utility_threads_count);
 }
 
-vmsdk::config::Number& GetMaxWorkerSuspensionSecs() {
+vmsdk::config::Number &GetMaxWorkerSuspensionSecs() {
   return max_worker_suspension_secs;
 }
 
-const vmsdk::config::Boolean& GetUseCoordinator() {
-  return dynamic_cast<const vmsdk::config::Boolean&>(*use_coordinator);
+const vmsdk::config::Boolean &GetUseCoordinator() {
+  return dynamic_cast<const vmsdk::config::Boolean &>(*use_coordinator);
 }
 
-const vmsdk::config::Boolean& GetSkipIndexLoad() {
-  return dynamic_cast<const vmsdk::config::Boolean&>(*rdb_load_skip_index);
+const vmsdk::config::Boolean &GetSkipIndexLoad() {
+  return dynamic_cast<const vmsdk::config::Boolean &>(*rdb_load_skip_index);
 }
 
-vmsdk::config::Boolean& GetSkipIndexLoadMutable() {
-  return dynamic_cast<vmsdk::config::Boolean&>(*rdb_load_skip_index);
+vmsdk::config::Boolean &GetSkipIndexLoadMutable() {
+  return dynamic_cast<vmsdk::config::Boolean &>(*rdb_load_skip_index);
 }
 
-const vmsdk::config::Boolean& GetSkipCorruptedInternalUpdateEntries() {
-  return dynamic_cast<const vmsdk::config::Boolean&>(
+const vmsdk::config::Boolean &GetSkipCorruptedInternalUpdateEntries() {
+  return dynamic_cast<const vmsdk::config::Boolean &>(
       *skip_corrupted_internal_update_entries);
 }
 
-vmsdk::config::Enum& GetLogLevel() {
-  return dynamic_cast<vmsdk::config::Enum&>(*log_level);
+vmsdk::config::Enum &GetLogLevel() {
+  return dynamic_cast<vmsdk::config::Enum &>(*log_level);
 }
 
-const config::Boolean& GetHNSWAllowReplaceDeleted() {
-  return dynamic_cast<const config::Boolean&>(*hnsw_allow_replace_deleted);
+const config::Boolean &GetHNSWAllowReplaceDeleted() {
+  return dynamic_cast<const config::Boolean &>(*hnsw_allow_replace_deleted);
 }
 
-config::Boolean& GetHNSWAllowReplaceDeletedMutable() {
-  return dynamic_cast<config::Boolean&>(*hnsw_allow_replace_deleted);
+config::Boolean &GetHNSWAllowReplaceDeletedMutable() {
+  return dynamic_cast<config::Boolean &>(*hnsw_allow_replace_deleted);
 }
 
 absl::Status Reset() {
@@ -562,86 +562,87 @@ absl::Status Reset() {
   return absl::OkStatus();
 }
 
-const vmsdk::config::Boolean& GetPreferPartialResults() {
-  return static_cast<vmsdk::config::Boolean&>(prefer_partial_results);
+const vmsdk::config::Boolean &GetPreferPartialResults() {
+  return static_cast<vmsdk::config::Boolean &>(prefer_partial_results);
 }
 
-const vmsdk::config::Boolean& GetPreferConsistentResults() {
-  return static_cast<vmsdk::config::Boolean&>(prefer_consistent_results);
+const vmsdk::config::Boolean &GetPreferConsistentResults() {
+  return static_cast<vmsdk::config::Boolean &>(prefer_consistent_results);
 }
 
-const vmsdk::config::Boolean& GetSearchResultBackgroundCleanup() {
-  return static_cast<vmsdk::config::Boolean&>(search_result_background_cleanup);
+const vmsdk::config::Boolean &GetSearchResultBackgroundCleanup() {
+  return static_cast<vmsdk::config::Boolean &>(
+      search_result_background_cleanup);
 }
 
-vmsdk::config::Number& GetHighPriorityWeight() {
-  return dynamic_cast<vmsdk::config::Number&>(*high_priority_weight);
+vmsdk::config::Number &GetHighPriorityWeight() {
+  return dynamic_cast<vmsdk::config::Number &>(*high_priority_weight);
 }
 
-vmsdk::config::Number& GetFTInfoTimeoutMs() {
-  return dynamic_cast<vmsdk::config::Number&>(*ft_info_timeout_ms);
+vmsdk::config::Number &GetFTInfoTimeoutMs() {
+  return dynamic_cast<vmsdk::config::Number &>(*ft_info_timeout_ms);
 }
 
-vmsdk::config::Number& GetFTInfoRpcTimeoutMs() {
-  return dynamic_cast<vmsdk::config::Number&>(*ft_info_rpc_timeout_ms);
+vmsdk::config::Number &GetFTInfoRpcTimeoutMs() {
+  return dynamic_cast<vmsdk::config::Number &>(*ft_info_rpc_timeout_ms);
 }
 
-vmsdk::config::Number& GetLocalFanoutQueueWaitThreshold() {
-  return dynamic_cast<vmsdk::config::Number&>(
+vmsdk::config::Number &GetLocalFanoutQueueWaitThreshold() {
+  return dynamic_cast<vmsdk::config::Number &>(
       *local_fanout_queue_wait_threshold);
 }
 
-vmsdk::config::Number& GetThreadPoolWaitTimeSamples() {
-  return dynamic_cast<vmsdk::config::Number&>(*thread_pool_wait_time_samples);
+vmsdk::config::Number &GetThreadPoolWaitTimeSamples() {
+  return dynamic_cast<vmsdk::config::Number &>(*thread_pool_wait_time_samples);
 }
 
-vmsdk::config::Number& GetMaxTermExpansions() {
-  return dynamic_cast<vmsdk::config::Number&>(*max_term_expansions);
+vmsdk::config::Number &GetMaxTermExpansions() {
+  return dynamic_cast<vmsdk::config::Number &>(*max_term_expansions);
 }
 
-vmsdk::config::Number& GetTagMinPrefixLength() {
-  return dynamic_cast<vmsdk::config::Number&>(*tag_min_prefix_length);
+vmsdk::config::Number &GetTagMinPrefixLength() {
+  return dynamic_cast<vmsdk::config::Number &>(*tag_min_prefix_length);
 }
 
-const vmsdk::config::Boolean& GetDrainMutationQueueOnSave() {
-  return dynamic_cast<const vmsdk::config::Boolean&>(
+const vmsdk::config::Boolean &GetDrainMutationQueueOnSave() {
+  return dynamic_cast<const vmsdk::config::Boolean &>(
       *drain_mutation_queue_on_save);
 }
 
-const vmsdk::config::Boolean& GetDrainMutationQueueOnLoad() {
-  return dynamic_cast<const vmsdk::config::Boolean&>(
+const vmsdk::config::Boolean &GetDrainMutationQueueOnLoad() {
+  return dynamic_cast<const vmsdk::config::Boolean &>(
       *drain_mutation_queue_on_load);
 }
 
-vmsdk::config::Number& GetFanoutDataUniformity() {
-  return dynamic_cast<vmsdk::config::Number&>(*fanout_data_uniformity);
+vmsdk::config::Number &GetFanoutDataUniformity() {
+  return dynamic_cast<vmsdk::config::Number &>(*fanout_data_uniformity);
 }
 
-vmsdk::config::Number& GetFanoutUniformityMinIndexSize() {
-  return dynamic_cast<vmsdk::config::Number&>(
+vmsdk::config::Number &GetFanoutUniformityMinIndexSize() {
+  return dynamic_cast<vmsdk::config::Number &>(
       *fanout_uniformity_min_index_size);
 }
 
-vmsdk::config::Number& GetMaxMutationQueueSizeOnRestore() {
-  return dynamic_cast<vmsdk::config::Number&>(
+vmsdk::config::Number &GetMaxMutationQueueSizeOnRestore() {
+  return dynamic_cast<vmsdk::config::Number &>(
       *max_mutation_queue_size_on_restore);
 }
 
-vmsdk::config::Number& GetAsyncFanoutThreshold() {
-  return dynamic_cast<vmsdk::config::Number&>(*async_fanout_threshold);
+vmsdk::config::Number &GetAsyncFanoutThreshold() {
+  return dynamic_cast<vmsdk::config::Number &>(*async_fanout_threshold);
 }
 
-config::Number& GetRaxTargetMutexPoolSize() {
-  return dynamic_cast<config::Number&>(*rax_target_mutex_pool_size);
+config::Number &GetRaxTargetMutexPoolSize() {
+  return dynamic_cast<config::Number &>(*rax_target_mutex_pool_size);
 }
 
-vmsdk::config::Number& GetMaxNonVectorSearchResultsFetched() {
-  return dynamic_cast<vmsdk::config::Number&>(
+vmsdk::config::Number &GetMaxNonVectorSearchResultsFetched() {
+  return dynamic_cast<vmsdk::config::Number &>(
       *max_nonvector_search_results_fetched);
 }
 
-vmsdk::config::Number& GetQueryStringDepth() {
-  return dynamic_cast<vmsdk::config::Number&>(*query_string_depth);
+vmsdk::config::Number &GetQueryStringDepth() {
+  return dynamic_cast<vmsdk::config::Number &>(*query_string_depth);
 }
 
 /// Register the "--mutation-weight-vector" flag. Controls the weight multiplier
@@ -691,20 +692,20 @@ static auto mutation_weight_tag =
         .Dev()
         .Build();
 
-config::Number& GetMutationWeightVector() {
-  return dynamic_cast<config::Number&>(*mutation_weight_vector);
+config::Number &GetMutationWeightVector() {
+  return dynamic_cast<config::Number &>(*mutation_weight_vector);
 }
 
-config::Number& GetMutationWeightText() {
-  return dynamic_cast<config::Number&>(*mutation_weight_text);
+config::Number &GetMutationWeightText() {
+  return dynamic_cast<config::Number &>(*mutation_weight_text);
 }
 
-config::Number& GetMutationWeightNumeric() {
-  return dynamic_cast<config::Number&>(*mutation_weight_numeric);
+config::Number &GetMutationWeightNumeric() {
+  return dynamic_cast<config::Number &>(*mutation_weight_numeric);
 }
 
-config::Number& GetMutationWeightTag() {
-  return dynamic_cast<config::Number&>(*mutation_weight_tag);
+config::Number &GetMutationWeightTag() {
+  return dynamic_cast<config::Number &>(*mutation_weight_tag);
 }
 
 /// Register the "emulate-release" flag (see COMPATIBILITY.md).
@@ -735,8 +736,8 @@ static auto emulate_release_config =
         .WithValidationCallback(ValidateEmulateRelease)
         .Build();
 
-config::Version& GetEmulateRelease() {
-  return dynamic_cast<config::Version&>(*emulate_release_config);
+config::Version &GetEmulateRelease() {
+  return dynamic_cast<config::Version &>(*emulate_release_config);
 }
 
 bool EnabledInVersion(vmsdk::ValkeyVersion version) {

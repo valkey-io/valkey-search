@@ -10,7 +10,6 @@
 #include <absl/strings/str_split.h>
 
 #include <cstddef>
-#include <deque>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -32,7 +31,6 @@
 #include "src/indexes/text.h"
 #include "src/indexes/text/orproximity.h"
 #include "src/indexes/text/proximity.h"
-#include "src/indexes/text/text_fetcher.h"
 #include "src/indexes/universal_set_fetcher.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
@@ -218,7 +216,9 @@ BuildTextIterator(const Predicate *predicate, bool negate,
       }
       // The Composed AND only has non text predicates, return null
       // to have the caller handle it.
-      if (iterators.empty()) return {nullptr, 0};
+      if (iterators.empty()) {
+        return {nullptr, 0};
+      }
       bool skip_positional = !child_require_positions;
       size_t total_size = min_size == SIZE_MAX ? 0 : min_size;
       return {std::make_unique<indexes::text::ProximityIterator>(
@@ -242,7 +242,9 @@ BuildTextIterator(const Predicate *predicate, bool negate,
       }
       // If the Composed OR has any non text predicate, we cannot
       // build a text iterator.
-      if (iterators.empty() || has_non_text) return {nullptr, 0};
+      if (iterators.empty() || has_non_text) {
+        return {nullptr, 0};
+      }
       return {std::make_unique<indexes::text::OrProximityIterator>(
                   std::move(iterators)),
               total_size};
@@ -726,7 +728,9 @@ SearchResult::SearchResult(size_t total_count,
     : total_count(total_count),
       is_limited_with_buffer(false),
       is_offsetted(false) {
-  if (ShouldReturnNoResults(parameters)) return;
+  if (ShouldReturnNoResults(parameters)) {
+    return;
+  }
   if (!parameters.RequiresCompleteResults()) {
     TrimResults(borrowed, parameters, trim_offset_in_background);
   }

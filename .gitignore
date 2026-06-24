@@ -22,3 +22,4 @@ env/
 .venv/
 .env/
 .build_log
+integration/module/*.so

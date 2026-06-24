@@ -26,6 +26,11 @@
 namespace valkey_search::indexes {
 enum class IndexerType { kHNSW, kFlat, kNumeric, kTag, kVector, kNone, kText };
 
+inline bool IsVectorIndex(IndexerType type) {
+  return type == IndexerType::kVector || type == IndexerType::kHNSW ||
+         type == IndexerType::kFlat;
+}
+
 enum class DeletionType {
   kRecord,      // The record was deleted from the index.
   kIdentifier,  // One or more fields of the record were deleted.
@@ -76,11 +81,22 @@ class IndexBase {
   /// Returns the mutation weight for this index type
   virtual uint32_t GetMutationWeight() const = 0;
 
-  virtual bool IsVectorIndex() const { return false; }
-
  private:
   IndexerType indexer_type_{IndexerType::kNone};
 };
+
+inline bool IsVectorIndex(const IndexBase& index) {
+  return IsVectorIndex(index.GetIndexerType());
+}
+
+inline bool IsVectorIndex(const IndexBase* index) {
+  return index != nullptr && IsVectorIndex(index->GetIndexerType());
+}
+
+template <typename T>
+inline bool IsVectorIndex(const std::shared_ptr<T>& index) {
+  return index != nullptr && IsVectorIndex(index->GetIndexerType());
+}
 
 class EntriesFetcherIteratorBase {
  public:

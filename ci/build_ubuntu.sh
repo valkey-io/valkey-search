@@ -153,7 +153,7 @@ function build_and_run_tests() {
     # enable core dumps
     echo Enabling core dumps
     ulimit -c unlimited
-    echo 'core.%p' | sudo tee /proc/sys/kernel/core_pattern
+    echo 'core.%p' | sudo tee /proc/sys/kernel/core_pattern || true
 
     # Skip building C++ test binaries for integration tests (they only need libsearch.so)
     if [[ "${BUILD_SH_ARGS}" == *"--run-integration-tests"* ]] && [[ "${BUILD_SH_ARGS}" != *"--run-tests"* ]]; then

@@ -511,7 +511,7 @@ class TestFTAliasNameCollision(ValkeySearchTestCaseBase):
     def test_aliasupdate_name_same_as_existing_index_rejected(self):
         """
         Unlike ALIASADD, ALIASUPDATE rejects an alias name that matches a real
-        index. Matches RediSearch behaviour.
+        index.
         """
         client = self.client
         assert client.execute_command(*CREATE_TAG_INDEX) == b"OK"
@@ -597,13 +597,12 @@ class TestFTAliasNameBoundaries(ValkeySearchTestCaseBase):
 
     def test_aliasadd_empty_alias_name_accepted(self):
         """
-        FT.ALIASADD with an empty alias name is accepted by the server, matching
-        RediSearch behaviour (verified against redis-stack-server v21020:
-        FT.ALIASADD "", FT.ALIASUPDATE "", and FT.ALIASDEL "" all return OK).
+        FT.ALIASADD with an empty alias name is accepted by the server.
+        FT.ALIASADD "", FT.ALIASUPDATE "", and FT.ALIASDEL "" all return OK.
         """
         client = self.client
         assert client.execute_command(*CREATE_TAG_INDEX) == b"OK"
-        # Empty string is accepted — matches RediSearch.
+        # Empty string is accepted.
         assert client.execute_command("FT.ALIASADD", "", INDEX_NAME) == b"OK"
         # The empty-string alias resolves via FT.INFO.
         assert client.execute_command("FT.INFO", "") is not None

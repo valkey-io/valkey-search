@@ -72,31 +72,28 @@ absl::Status FTInternalUpdateCmd(ValkeyModuleCtx *ctx,
     auto key = vmsdk::ToStringView(argv[i]);
     i++;
     if (i >= argc) {
-      VMSDK_RETURN_IF_ERROR(HandleInternalUpdateFailure(
+      return HandleInternalUpdateFailure(
           ctx, "optional arguments parse", id,
           absl::InvalidArgumentError("FT.INTERNAL_UPDATE: keyword '" +
                                      std::string(key) +
-                                     "' missing arg count")));
-      break;
+                                     "' missing arg count"));
     }
     auto count_str = vmsdk::ToStringView(argv[i]);
     int arg_count = 0;
     if (!absl::SimpleAtoi(count_str, &arg_count) || arg_count < 0) {
-      VMSDK_RETURN_IF_ERROR(HandleInternalUpdateFailure(
+      return HandleInternalUpdateFailure(
           ctx, "optional arguments parse", id,
           absl::InvalidArgumentError(
               "FT.INTERNAL_UPDATE: invalid arg count for keyword '" +
-              std::string(key) + "'")));
-      break;
+              std::string(key) + "'"));
     }
     i++;
     if (i + arg_count > argc) {
-      VMSDK_RETURN_IF_ERROR(HandleInternalUpdateFailure(
+      return HandleInternalUpdateFailure(
           ctx, "optional arguments parse", id,
           absl::InvalidArgumentError(
               "FT.INTERNAL_UPDATE: not enough args for keyword '" +
-              std::string(key) + "'")));
-      break;
+              std::string(key) + "'"));
     }
     if (key == "TYPE" && arg_count >= 1) {
       type_name = vmsdk::ToStringView(argv[i]);

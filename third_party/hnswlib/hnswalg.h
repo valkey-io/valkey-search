@@ -143,12 +143,13 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     update_probability_generator_.seed(random_seed + 1);
 
     size_links_level0_ = maxM0_ * sizeof(tableint) + sizeof(linklistsizeint);
+    offsetData_ =
+        (size_links_level0_ + alignof(char *) - 1) & ~(alignof(char *) - 1);
     size_data_per_element_ =
-        size_links_level0_ + sizeof(char *) + sizeof(labeltype);
+        offsetData_ + sizeof(char *) + sizeof(labeltype);
     serialize_size_data_per_element_ =
         size_links_level0_ + vector_size_ + sizeof(labeltype);
-    offsetData_ = size_links_level0_;
-    label_offset_ = size_links_level0_ + sizeof(char *);
+    label_offset_ = offsetData_ + sizeof(char *);
     offsetLevel0_ = 0;
 
     data_level0_memory_ = std::make_unique<ChunkedArray>(
@@ -761,7 +762,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     header.set_serialize_size_data_per_element(
         serialize_size_data_per_element_);
     header.set_label_offset(label_offset_);
-    header.set_offset_data(offsetData_);
+    header.set_offset_data(size_links_level0_);
     header.set_max_level(maxlevel_);
     header.set_enterpoint_node(enterpoint_node_);
     header.set_max_m(maxM_);
@@ -827,7 +828,6 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     serialize_size_data_per_element_ =
         header->serialize_size_data_per_element();
     label_offset_ = header->label_offset();
-    offsetData_ = header->offset_data();
     maxlevel_ = header->max_level();
     enterpoint_node_ = header->enterpoint_node();
     maxM_ = header->max_m();
@@ -843,11 +843,13 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     max_elements_ = max_elements;
 
     size_links_level0_ = maxM0_ * sizeof(tableint) + sizeof(linklistsizeint);
+    offsetData_ =
+        (size_links_level0_ + alignof(char *) - 1) & ~(alignof(char *) - 1);
 
     vector_size_ = s->get_data_size();
     size_data_per_element_ =
-        size_links_level0_ + sizeof(char *) + sizeof(labeltype);
-    label_offset_ = size_links_level0_ + sizeof(char *);
+        offsetData_ + sizeof(char *) + sizeof(labeltype);
+    label_offset_ = offsetData_ + sizeof(char *);
 
     fstdistfunc_ = s->get_dist_func();
     dist_func_param_ = s->get_dist_func_param();
@@ -859,10 +861,10 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       VMSDK_ASSIGN_OR_RETURN(auto chunk, input.LoadChunk());
       memcpy((*data_level0_memory_)[i], chunk->data(), size_links_level0_);
       labeltype id;
-      memcpy((char *)&id, chunk->data() + offsetData_ + vector_size_,
+      memcpy((char *)&id, chunk->data() + size_links_level0_ + vector_size_,
              sizeof(labeltype));
       *(char **)((*data_level0_memory_)[i] + offsetData_) =
-          vector_tracker->TrackVector(id, chunk->data() + offsetData_,
+          vector_tracker->TrackVector(id, chunk->data() + size_links_level0_,
                                       vector_size_);
       memcpy((*data_level0_memory_)[i] + label_offset_, (char *)&id,
              sizeof(labeltype));

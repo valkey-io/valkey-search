@@ -9,7 +9,9 @@
 
 #include <absl/strings/str_split.h>
 
+#include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <memory>
 #include <optional>
@@ -56,6 +58,36 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::query {
+
+namespace {
+// Process-global count of live SearchParameters objects. See
+// GetSearchParametersInFlight() in the header for the rationale.
+std::atomic<int64_t> &SearchParametersInFlightCounter() {
+  static std::atomic<int64_t> counter{0};
+  return counter;
+}
+}  // namespace
+
+int64_t GetSearchParametersInFlight() {
+  return SearchParametersInFlightCounter().load(std::memory_order_relaxed);
+}
+
+namespace detail {
+SearchParametersInFlightGuard::SearchParametersInFlightGuard() {
+  SearchParametersInFlightCounter().fetch_add(1, std::memory_order_relaxed);
+}
+SearchParametersInFlightGuard::SearchParametersInFlightGuard(
+    const SearchParametersInFlightGuard &) {
+  SearchParametersInFlightCounter().fetch_add(1, std::memory_order_relaxed);
+}
+SearchParametersInFlightGuard::SearchParametersInFlightGuard(
+    SearchParametersInFlightGuard &&) noexcept {
+  SearchParametersInFlightCounter().fetch_add(1, std::memory_order_relaxed);
+}
+SearchParametersInFlightGuard::~SearchParametersInFlightGuard() {
+  SearchParametersInFlightCounter().fetch_sub(1, std::memory_order_relaxed);
+}
+}  // namespace detail
 
 // Query operation counters
 DEV_INTEGER_COUNTER(query_stats, query_text_term_count);

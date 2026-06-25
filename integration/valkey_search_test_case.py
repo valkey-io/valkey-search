@@ -534,6 +534,26 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
     def replication_lag(self) -> int:
         return max([rg.replication_lag() for rg in self.replication_groups])
 
+    def _cluster_slots_complete(self, client, expected_nodes_per_shard: int) -> bool:
+        """Check if CLUSTER SLOTS returns complete topology with all replicas."""
+        slots = client.execute_command("CLUSTER", "SLOTS")
+        for slot_range in slots:
+            # slot_range format: [start, end, [primary_ip, port, id, ...], [replica1...], ...]
+            # Length should be 2 (start, end) + expected_nodes_per_shard (1 primary + N replicas)
+            if len(slot_range) < 2 + expected_nodes_per_shard:
+                return False
+        return True
+
+    def wait_for_cluster_setup(self):
+        """Wait for cluster topology to propagate to all nodes."""
+        replica_count = len(self.replication_groups[0].replicas)
+        expected_nodes_per_shard = 1 + replica_count
+        for node in self.get_nodes():
+            waiters.wait_for_true(
+                lambda n=node: self._cluster_slots_complete(n.client, expected_nodes_per_shard),
+                timeout=30
+            )
+
 class ValkeySearchClusterTestCaseDebugMode(ValkeySearchClusterTestCase):
     '''
     Same as ValkeySearchClusterTestCase, except that "debug-mode" is enabled.

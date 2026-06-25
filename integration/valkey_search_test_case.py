@@ -537,6 +537,8 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
     def _cluster_slots_complete(self, client, expected_nodes_per_shard: int) -> bool:
         """Check if CLUSTER SLOTS returns complete topology with all replicas."""
         slots = client.execute_command("CLUSTER", "SLOTS")
+        if not slots:
+            return False
         for slot_range in slots:
             # slot_range format: [start, end, [primary_ip, port, id, ...], [replica1...], ...]
             # Length should be 2 (start, end) + expected_nodes_per_shard (1 primary + N replicas)

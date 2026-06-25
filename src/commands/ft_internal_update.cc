@@ -75,8 +75,7 @@ absl::Status FTInternalUpdateCmd(ValkeyModuleCtx *ctx,
       return HandleInternalUpdateFailure(
           ctx, "optional arguments parse", id,
           absl::InvalidArgumentError("FT.INTERNAL_UPDATE: keyword '" +
-                                     std::string(key) +
-                                     "' missing arg count"));
+                                     std::string(key) + "' missing arg count"));
     }
     auto count_str = vmsdk::ToStringView(argv[i]);
     int arg_count = 0;

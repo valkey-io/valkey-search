@@ -175,8 +175,8 @@ void FanoutAliasExists(ValkeyModuleCtx *ctx, absl::string_view alias) {
         return;
       }
       VMSDK_LOG(WARNING, ctx)
-          << "FanoutAliasExists: failed to resolve alias '"
-          << alias << "' locally, skipping cluster consistency fanout: "
+          << "FanoutAliasExists: failed to resolve alias '" << alias
+          << "' locally, skipping cluster consistency fanout: "
           << schema_or.status().message();
     }
     ValkeyModule_ReplyWithSimpleString(ctx, "OK");

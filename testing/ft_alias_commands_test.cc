@@ -177,12 +177,12 @@ INSTANTIATE_TEST_SUITE_P(
             .return_code = absl::StatusCode::kInvalidArgument,
         },
         {
-            // alias == index_name is permitted
+            // alias == index_name is rejected (self-referential).
             .test_name = "self_referential_alias",
             .argv = {"FT.ALIASADD", "test_idx", "test_idx"},
             .index_schema_pbtxt = std::string(kTestIndexSchemaPbtxt),
             .pre_existing_alias = std::nullopt,
-            .return_code = absl::StatusCode::kOk,
+            .return_code = absl::StatusCode::kAlreadyExists,
         },
         {
             .test_name = "arity_error_too_many_args",
@@ -670,7 +670,7 @@ TEST_F(FTAliasUpdateTest, AliasCollidesWithExistingIndexName) {
   }
 }
 
-TEST_F(FTAliasUpdateTest, SelfReferentialAliasPermitted) {
+TEST_F(FTAliasUpdateTest, SelfReferentialAliasRejected) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 5);
   SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
       &fake_ctx_, []() {}, &mutations_thread_pool, false));
@@ -686,7 +686,8 @@ TEST_F(FTAliasUpdateTest, SelfReferentialAliasPermitted) {
   argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_idx");
   argv[2] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_idx");
 
-  VMSDK_EXPECT_OK(FTAliasUpdateCmd(&fake_ctx_, argv, 3));
+  EXPECT_EQ(FTAliasUpdateCmd(&fake_ctx_, argv, 3).code(),
+            absl::StatusCode::kAlreadyExists);
 
   for (auto* arg : argv) {
     TestValkeyModule_FreeString(&fake_ctx_, arg);

@@ -325,7 +325,7 @@ Adds an alias to an existing index. The alias can then be used in place of the i
 - **\<alias\>** (required): The alias name to create.
 - **\<index-name\>** (required): The name of an existing index to associate with the alias.
 
-An alias cannot point to another alias. Multiple aliases may point to the same index.
+An alias cannot point to another alias. Multiple aliases may point to the same index. The alias name must differ from all existing index names, including the target index itself (self-referential aliases are not allowed).
 
 **RESPONSE** OK or error.
 
@@ -351,6 +351,8 @@ Adds or updates an alias. If the alias does not exist it is created (equivalent 
 
 - **\<alias\>** (required): The alias name to create or update.
 - **\<index-name\>** (required): The name of an existing index to associate with the alias.
+
+The alias name must differ from all existing index names, including the target index itself (self-referential aliases are not allowed). The target must be a real index, not another alias.
 
 **RESPONSE** OK or error.
 

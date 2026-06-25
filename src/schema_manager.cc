@@ -1080,6 +1080,12 @@ absl::Status SchemaManager::AddAlias(uint32_t db_num, absl::string_view alias,
     return absl::InvalidArgumentError("Alias name must not contain null bytes");
   }
 
+  // Reject self-referential alias (alias same as the target index name).
+  if (alias == index_name) {
+    return absl::AlreadyExistsError(
+        "Alias collides with existing index name");
+  }
+
   if (coordinator_enabled_) {
     // Coordinator mode: validate under lock, then release before calling
     // MetadataManager (which invokes OnMetadataCallback, acquiring the lock).
@@ -1091,12 +1097,10 @@ absl::Status SchemaManager::AddAlias(uint32_t db_num, absl::string_view alias,
       absl::MutexLock lock(&db_to_index_schemas_mutex_);
 
       // Reject if alias collides with an existing real index name.
-      if (alias != index_name) {
-        auto collision = LookupInternal(db_num, alias);
-        if (collision.ok()) {
-          return absl::AlreadyExistsError(
-              "Alias collides with existing index name");
-        }
+      auto collision = LookupInternal(db_num, alias);
+      if (collision.ok()) {
+        return absl::AlreadyExistsError(
+            "Alias collides with existing index name");
       }
 
       // Check if alias already exists in this db.
@@ -1155,12 +1159,10 @@ absl::Status SchemaManager::AddAlias(uint32_t db_num, absl::string_view alias,
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
 
   // Reject if alias collides with an existing real index name.
-  if (alias != index_name) {
-    auto collision = LookupInternal(db_num, alias);
-    if (collision.ok()) {
-      return absl::AlreadyExistsError(
-          "Alias collides with existing index name");
-    }
+  auto collision = LookupInternal(db_num, alias);
+  if (collision.ok()) {
+    return absl::AlreadyExistsError(
+        "Alias collides with existing index name");
   }
 
   // Check if alias already exists.
@@ -1290,6 +1292,12 @@ absl::Status SchemaManager::UpdateAlias(uint32_t db_num,
     return absl::InvalidArgumentError("Alias name must not contain null bytes");
   }
 
+  // Reject self-referential alias (alias same as the target index name).
+  if (alias == index_name) {
+    return absl::AlreadyExistsError(
+        "Alias collides with existing index name");
+  }
+
   if (coordinator_enabled_) {
     // Coordinator mode: look up current alias owner under lock, then release
     // before calling MetadataManager (which invokes OnMetadataCallback,
@@ -1298,13 +1306,11 @@ absl::Status SchemaManager::UpdateAlias(uint32_t db_num,
     {
       absl::MutexLock lock(&db_to_index_schemas_mutex_);
 
-      // Check if alias collides with an existing index name (non-self).
-      if (alias != index_name) {
-        auto collision = LookupInternal(db_num, alias);
-        if (collision.ok()) {
-          return absl::AlreadyExistsError(
-              "Alias collides with existing index name");
-        }
+      // Check if alias collides with an existing index name.
+      auto collision = LookupInternal(db_num, alias);
+      if (collision.ok()) {
+        return absl::AlreadyExistsError(
+            "Alias collides with existing index name");
       }
 
       auto db_alias_it = db_to_aliases_.find(db_num);
@@ -1455,13 +1461,11 @@ absl::Status SchemaManager::UpdateAlias(uint32_t db_num,
   // Standalone (non-coordinator) mode: modify in-memory state directly.
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
 
-  // Check if alias collides with an existing index name (non-self).
-  if (alias != index_name) {
-    auto collision = LookupInternal(db_num, alias);
-    if (collision.ok()) {
-      return absl::AlreadyExistsError(
-          "Alias collides with existing index name");
-    }
+  // Check if alias collides with an existing index name.
+  auto collision = LookupInternal(db_num, alias);
+  if (collision.ok()) {
+    return absl::AlreadyExistsError(
+        "Alias collides with existing index name");
   }
 
   // Look up if alias currently exists.

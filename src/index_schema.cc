@@ -1823,6 +1823,14 @@ bool IndexSchema::InTrackedMutationRecords(
   if (ABSL_PREDICT_FALSE(itr == tracked_mutated_records_.end())) {
     return false;
   }
+  // ConsumeTrackedMutatedAttribute moves the attribute map out and sets
+  // attributes = std::nullopt, leaving the entry in the map. After that
+  // sequence, attributes is disengaged and `attributes->find(...)` would
+  // dereference an empty optional (UB; observed crashing under ASAN in the
+  // backfill scan path). No pending mutation == false.
+  if (!itr->second.attributes.has_value()) {
+    return false;
+  }
   if (itr->second.attributes->find(identifier) ==
       itr->second.attributes->end()) {
     return false;

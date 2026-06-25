@@ -232,12 +232,14 @@ ConstructGroupByParser() {
                 absl::StrCat("incorrect number of arguments (", cnt,
                              ") to reducer ", uc_name.AsStringView()));
           }
+          std::vector<std::string> arg_texts;
           for (int i = 0; i < cnt; ++i) {
             VMSDK_ASSIGN_OR_RETURN(auto arg, itr.PopNext(),
                                    _ << "Missing Reducer argument " << i);
+            auto arg_sv = vmsdk::ToStringView(arg);
+            arg_texts.emplace_back(arg_sv);
             VMSDK_ASSIGN_OR_RETURN(
-                auto expr,
-                expr::Expression::Compile(parameters, vmsdk::ToStringView(arg)),
+                auto expr, expr::Expression::Compile(parameters, arg_sv),
                 _ << " in GROUPBY stage");
             r.args_.emplace_back(std::move(expr));
           }
@@ -250,10 +252,21 @@ ConstructGroupByParser() {
             r.output_ = std::unique_ptr<Attribute>(
                 dynamic_cast<Attribute *>(output.release()));
           } else {
-            std::ostringstream os;
-            os << r;
-            VMSDK_ASSIGN_OR_RETURN(auto output,
-                                   parameters.MakeReference(os.str(), true));
+            // TODO(https://github.com/valkey-io/valkey-search/issues/965):
+            // Workaround for memory allocator issue causing ostringstream to
+            // crash. Build the default reducer name manually instead of
+            // `os << r`.
+            std::string default_name(r.info_->name_);
+            default_name += '(';
+            for (size_t i = 0; i < arg_texts.size(); ++i) {
+              if (i > 0) {
+                default_name += ',';
+              }
+              default_name += arg_texts[i];
+            }
+            default_name += ')';
+            VMSDK_ASSIGN_OR_RETURN(
+                auto output, parameters.MakeReference(default_name, true));
             r.output_ = std::unique_ptr<Attribute>(
                 dynamic_cast<Attribute *>(output.release()));
           }

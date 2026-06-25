@@ -265,8 +265,8 @@ ConstructGroupByParser() {
               default_name += arg_texts[i];
             }
             default_name += ')';
-            VMSDK_ASSIGN_OR_RETURN(auto output,
-                                   parameters.MakeReference(default_name, true));
+            VMSDK_ASSIGN_OR_RETURN(
+                auto output, parameters.MakeReference(default_name, true));
             r.output_ = std::unique_ptr<Attribute>(
                 dynamic_cast<Attribute *>(output.release()));
           }

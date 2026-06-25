@@ -27,6 +27,7 @@
 #include "src/index_schema.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/text/punctuation.h"
 #include "src/indexes/text/stop_words.h"
 #include "src/indexes/vector_base.h"
 #include "src/multi_language.h"
@@ -571,7 +572,7 @@ absl::StatusOr<indexes::IndexerType> ParseIndexerType(
 
 absl::Status ValidateAttributeAlias(absl::string_view alias) {
   for (const char ch : alias) {
-    if (kDefaultPunctuation.find(ch) != absl::string_view::npos) {
+    if (indexes::text::kAsciiPunctuation.find(ch) != std::string::npos) {
       return absl::InvalidArgumentError(absl::StrCat(
           "Attribute alias `", alias, "` contains invalid character `",
           std::string(1, ch), "`"));
@@ -677,7 +678,6 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
   // Parse schema-level text parameters before SCHEMA
   PerIndexTextParams schema_text_defaults;
   // Initialize with defaults for each parse call
-  schema_text_defaults.punctuation = kDefaultPunctuation;
   schema_text_defaults.min_stem_size = kDefaultMinStemSize;
   schema_text_defaults.with_offsets = true;
   schema_text_defaults.no_stem = false;
@@ -730,15 +730,23 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
   }
 
   // Validate global text parameters
-  if (schema_text_defaults.punctuation.empty()) {
+  if (schema_text_defaults.punctuation.has_value() &&
+      schema_text_defaults.punctuation->empty()) {
     return absl::InvalidArgumentError("PUNCTUATION string cannot be empty");
   }
 
   // updating the local schema_text_defaults with language for consistency
   schema_text_defaults.language = index_schema_proto.language();
 
+  // Apply punctuation: use user-provided value or per-language defaults
+  if (!schema_text_defaults.punctuation.has_value()) {
+    index_schema_proto.set_punctuation(
+        indexes::text::GetDefaultPunctuation(schema_text_defaults.language));
+  } else {
+    index_schema_proto.set_punctuation(*schema_text_defaults.punctuation);
+  }
+
   // Apply global text defaults to the schema
-  index_schema_proto.set_punctuation(schema_text_defaults.punctuation);
   index_schema_proto.set_with_offsets(schema_text_defaults.with_offsets);
   index_schema_proto.set_min_stem_size(schema_text_defaults.min_stem_size);
 

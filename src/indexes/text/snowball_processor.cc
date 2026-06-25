@@ -13,7 +13,7 @@
 #include "absl/log/check.h"
 #include "absl/strings/ascii.h"
 #include "libstemmer.h"
-#include "src/commands/ft_create_parser.h"
+#include "src/indexes/text/punctuation.h"
 #include "src/indexes/text/unicode_normalizer.h"
 #include "src/utils/scanner.h"
 
@@ -33,7 +33,7 @@ thread_local absl::flat_hash_map<data_model::Language, StemmerPtr> stemmers_;
 
 SnowballProcessor::SnowballProcessor(data_model::Language language)
     : language_(language),
-      default_punctuation_(valkey_search::kDefaultPunctuation) {}
+      default_punctuation_(GetDefaultPunctuation(language)) {}
 
 const char* SnowballProcessor::GetLanguageString(
     data_model::Language language) {

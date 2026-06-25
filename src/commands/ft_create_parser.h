@@ -24,8 +24,6 @@
 
 namespace valkey_search {
 
-static constexpr absl::string_view kDefaultPunctuation =
-    ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|?";
 static constexpr uint32_t kDefaultMinStemSize = 4;
 
 struct FTCreateTagParameters {
@@ -48,7 +46,9 @@ struct FTCreateVectorParameters {
 
 // Global text parameters (per-index) - populated in IndexSchema
 struct PerIndexTextParams {
-  std::string punctuation{kDefaultPunctuation};
+  // nullopt indicates apply language defaults after parsing
+  // a value (including empty string) indicates user set this explicitly
+  std::optional<std::string> punctuation;
   bool with_offsets{true};
   bool no_stem{false};
   // nullopt means "apply language defaults after parsing"; a value means "user

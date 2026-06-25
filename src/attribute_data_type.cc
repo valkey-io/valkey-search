@@ -146,11 +146,10 @@ absl::Status NormalizeJsonRecord(absl::string_view record,
       was_string = true;
     }
   }
-  if (record.empty()) {
-    return absl::NotFoundError("Empty record");
-  }
   // The JSON module returns string values still JSON-escaped; decode them so
-  // the indexed value matches the (already unescaped) query side.
+  // the indexed value matches the (already unescaped) query side. Done before
+  // the empty check so a valid empty string ("") indexes as "" rather than
+  // being treated as a missing record.
   if (was_string) {
     auto decoded = vmsdk::JsonUnquote(record);
     if (!decoded.has_value()) {
@@ -159,6 +158,9 @@ absl::Status NormalizeJsonRecord(absl::string_view record,
     auto record_ptr = vmsdk::MakeUniqueValkeyString(*decoded);
     out_record.swap(record_ptr);
     return absl::OkStatus();
+  }
+  if (record.empty()) {
+    return absl::NotFoundError("Empty record");
   }
   auto record_ptr = vmsdk::MakeUniqueValkeyString(record);
   out_record.swap(record_ptr);

@@ -306,6 +306,8 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
       stop_words_(index_schema_proto.stop_words().begin(),
                   index_schema_proto.stop_words().end()),
       skip_initial_scan_(index_schema_proto.skip_initial_scan()),
+      aliases_(index_schema_proto.aliases().begin(),
+               index_schema_proto.aliases().end()),
       min_stem_size_(index_schema_proto.min_stem_size() > 0
                          ? index_schema_proto.min_stem_size()
                          : 4),
@@ -1114,7 +1116,7 @@ IndexSchema::GetSortedAttributes() const {
 }
 
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
-  int arrSize = 28;
+  int arrSize = 30;
   // Text-attribute info fields
   if (text_index_schema_) {
     arrSize += 8;  // punctuation, stop_words, with_offsets, min_stem_size (4
@@ -1123,6 +1125,14 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithArray(ctx, arrSize);
   ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
   ValkeyModule_ReplyWithSimpleString(ctx, name_.data());
+
+  ValkeyModule_ReplyWithSimpleString(ctx, "aliases");
+  std::vector<std::string> sorted_aliases(aliases_.begin(), aliases_.end());
+  std::sort(sorted_aliases.begin(), sorted_aliases.end());
+  ValkeyModule_ReplyWithArray(ctx, sorted_aliases.size());
+  for (const auto &alias : sorted_aliases) {
+    ValkeyModule_ReplyWithSimpleString(ctx, alias.c_str());
+  }
 
   ValkeyModule_ReplyWithSimpleString(ctx, "index_definition");
   ValkeyModule_ReplyWithArray(ctx, 8);
@@ -1233,6 +1243,8 @@ std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
   index_schema_proto->mutable_stop_words()->Assign(stop_words_.begin(),
                                                    stop_words_.end());
   index_schema_proto->set_skip_initial_scan(skip_initial_scan_);
+  index_schema_proto->mutable_aliases()->Assign(aliases_.begin(),
+                                                aliases_.end());
   index_schema_proto->set_score(score_);
   if (score_field_.has_value()) {
     index_schema_proto->set_score_field(score_field_.value());
@@ -2126,6 +2138,10 @@ absl::StatusOr<vmsdk::ValkeyVersion> IndexSchema::GetMinVersion(
   } else {
     return kRelease10;
   }
+}
+
+void IndexSchema::SetAliases(std::vector<std::string> aliases) {
+  aliases_ = std::move(aliases);
 }
 
 }  // namespace valkey_search

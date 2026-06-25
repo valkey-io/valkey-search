@@ -301,6 +301,56 @@ def compare_results(expected, results):
         print(TEST_MARKER)
         return True
 
+    # For simple-compare commands, handle exception mismatches here before
+    # the generic skip logic, so alias negative cases are caught properly.
+    if _is_simple_compare_cmd(cmd):
+        if expected["exception"] and not results["exception"]:
+            print("RL Exception, skipped (simple cmd)")
+            print(TEST_MARKER)
+            return True
+        if results["exception"] and not expected["exception"]:
+            print(f"CMD: {cmd}")
+            print(f"RL: Result: {printable_result(expected['result'])}")
+            print(TEST_MARKER)
+            return False
+
+        # FT.INFO contains dynamic values (memory, timing), just verify both
+        # succeed with the same index name, or both return the same error.
+        if cmd[0].upper() == "FT.INFO":
+            exp = expected["result"]
+            act = results["result"]
+            # Both errors -> compare error text
+            if isinstance(exp, Exception) and isinstance(act, Exception):
+                return str(exp) == str(act)
+            # One error, one success -> mismatch
+            if isinstance(exp, Exception) or isinstance(act, Exception):
+                print(f"FT.INFO mismatch: expected={exp!r} got={act!r}")
+                return False
+            # Both lists - locate the index_name value in the flat key-value
+            # list and compare that rather than comparing the first element
+            # (which is just the field label).
+            if isinstance(exp, list) and isinstance(act, list) and len(exp) > 1 and len(act) > 1:
+                def _get_index_name(info_list):
+                    for i in range(0, len(info_list) - 1, 2):
+                        key = info_list[i]
+                        if isinstance(key, bytes):
+                            key = key.decode("utf-8", errors="replace")
+                        if key == "index_name":
+                            return info_list[i + 1]
+                    return None
+
+                exp_name = _get_index_name(exp)
+                act_name = _get_index_name(act)
+                if exp_name != act_name:
+                    print(f"FT.INFO index name mismatch: expected={exp_name!r} got={act_name!r}")
+                    return False
+                return True
+            return exp == act
+        match = expected["result"] == results["result"]
+        if not match:
+            print(f"Simple result mismatch: expected={expected['result']!r} got={results['result']!r}")
+        return match
+
     if expected["exception"]:
         print("RL Exception, skipped")
         #print(f"RL Exception: Raw: {printable_result(results['RL'])}")
@@ -385,9 +435,34 @@ def mark_as_failed(testname):
     wrong_answers += 1
     assert not StopOnFailure, "Test failed, stopping execution"
 
+_SIMPLE_COMPARE_CMDS = {"FT.ALIASADD", "FT.ALIASDEL", "FT.ALIASUPDATE", "FT.ALIASLIST", "FT.INFO"}
+
+def _is_simple_compare_cmd(cmd):
+    """Return True if cmd should use direct equality comparison (not search/aggregate unpacking)."""
+    return cmd and cmd[0].upper() in _SIMPLE_COMPARE_CMDS
+
+_ALIAS_MUTATION_VERBS = {"FT.ALIASADD", "FT.ALIASDEL", "FT.ALIASUPDATE"}
+
+def _is_alias_mutation_cmd(cmd):
+    """Return True if cmd is an alias mutation command (needs cluster routing)."""
+    return cmd and cmd[0].upper() in _ALIAS_MUTATION_VERBS
+
+def _first_index_name(data_set_name, key_type):
+    """Return the first index name created by a dataset's CREATES_KEY commands."""
+    if data_set_name == "alias":
+        data = compute_alias_data()
+    elif data_set_name in TEXT_DATASETS:
+        data = compute_text_data_sets(data_set_name)
+    else:
+        data = compute_data_sets()
+    create_cmd = data[data_set_name][CREATES_KEY(key_type)][0]
+    # FT.CREATE <index_name> ... — index name is the second token.
+    return create_cmd.split()[1]
+
 def do_answer(client, expected, data_set):
     global correct_answers, failed_tests, passed_tests
-    if (expected['data_set_name'], expected['key_type'], expected.get('schema_type')) != data_set:
+    reload = expected.get('reload', False)
+    if reload or (expected['data_set_name'], expected['key_type'], expected.get('schema_type')) != data_set:
         print("Loading data set:", expected['data_set_name'], "key type:", expected['key_type'])
         client.execute_command("FLUSHALL SYNC")
         load_data(client, expected['data_set_name'], expected['key_type'], schema_type=expected.get('schema_type', 'default'))
@@ -433,20 +508,27 @@ def do_answer(client, expected, data_set):
     return data_set
 
 def drop_index_cluster(test_case, key_type):
-    index_name = "json_idx1" if key_type == "json" else "hash_idx1"
     primary0 = test_case.new_client_for_primary(0)
     try:
-        primary0.execute_command("FT.DROPINDEX", index_name)
-        print(f"Dropped index {index_name}")
+        indexes = primary0.execute_command("FT._LIST")
+        for index_name in indexes:
+            if isinstance(index_name, bytes):
+                index_name = index_name.decode()
+            try:
+                primary0.execute_command("FT.DROPINDEX", index_name)
+                print(f"Dropped index {index_name}")
+            except valkey.ResponseError:
+                pass
     except valkey.ResponseError:
-        pass  # index may not exist yet
+        pass
 
 def do_answer_cluster(cluster_client, expected, data_set, test_case):
     global correct_answers, failed_tests, passed_tests
 
     next_data_set = (expected["data_set_name"], expected["key_type"])
+    reload = expected.get("reload", False)
 
-    if data_set != next_data_set:
+    if reload or data_set != next_data_set:
         print(
             "Loading CLUSTER data set:",
             expected["data_set_name"],
@@ -466,6 +548,43 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
         )
 
         data_set = next_data_set
+
+    # Replay alias commands via primary 0 (can't be slot-routed by cluster client).
+    if _is_alias_mutation_cmd(expected["cmd"]):
+        result = {}
+        result["cmd"] = expected["cmd"]
+        try:
+            # Route to primary 0 — cluster client can't slot FT.ALIAS* commands.
+            primary0 = test_case.new_client_for_primary(0)
+            result["result"] = primary0.execute_command(*expected["cmd"])
+            result["exception"] = False
+            print(f"Alias cmd (cluster): {expected['cmd']} -> {result['result']!r}")
+        except valkey.ResponseError as e:
+            result["result"] = {}
+            result["exception"] = True
+            print(f"Alias cmd (cluster) error: {expected['cmd']} -> {e}")
+
+        if compare_results(expected, result):
+            mark_as_passed(expected.get('testname', f"alias_cmd_{expected['cmd'][0]}"))
+        else:
+            mark_as_failed(expected.get('testname', f"alias_cmd_{expected['cmd'][0]}"))
+
+        # Wait for alias to be visible on all primaries after successful add/update.
+        cmd = expected["cmd"]
+        if not result["exception"] and len(cmd) >= 2 and cmd[0].upper() in ("FT.ALIASADD", "FT.ALIASUPDATE"):
+            alias_name = cmd[1]
+            def _alias_visible_on_all():
+                for i in range(test_case.CLUSTER_SIZE):
+                    try:
+                        test_case.new_client_for_primary(i).execute_command(
+                            "FT.INFO", alias_name
+                        )
+                    except valkey.ResponseError:
+                        return False
+                return True
+            waiters.wait_for_true(_alias_visible_on_all, timeout=15)
+
+        return data_set
 
     result = {}
     try:

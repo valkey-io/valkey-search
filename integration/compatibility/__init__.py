@@ -9,8 +9,9 @@ _COMPAT_DIR = os.path.dirname(os.path.abspath(__file__))
 # ANSWER_FILE_NAME) and add an entry here. regenerate.sh and
 # compatibility_test.py both read from this list.
 GENERATORS = [
-    {"generator": "generate.py",      "answers": "aggregate-answers.pickle.gz",   "cluster": True},
-    {"generator": "generate_text.py", "answers": "text-search-answers.pickle.gz", "cluster": False},
+    {"generator": "generate.py",       "answers": "aggregate-answers.pickle.gz",   "cluster": True},
+    {"generator": "generate_alias.py", "answers": "alias-answers.pickle.gz",       "cluster": True},
+    {"generator": "generate_text.py",  "answers": "text-search-answers.pickle.gz", "cluster": False},
 ]
 
 

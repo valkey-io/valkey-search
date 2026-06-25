@@ -54,6 +54,7 @@ set(COMMANDS_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/ft_search_parser_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_search_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_dropindex_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/ft_alias_commands_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_list_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_info_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_create_test.cc
@@ -108,6 +109,18 @@ target_link_libraries(core_test PRIVATE commands)
 target_link_libraries(core_test PRIVATE acl)
 target_link_libraries(core_test PRIVATE vmsdklib)
 finalize_test_flags(core_test)
+
+# Alias Property Test Suite - property-based tests for alias-as-index-attribute
+set(ALIAS_PROPERTY_TEST_SOURCES
+    ${CMAKE_CURRENT_LIST_DIR}/schema_manager_alias_property_test.cc)
+
+add_executable(alias_property_test ${ALIAS_PROPERTY_TEST_SOURCES})
+target_include_directories(alias_property_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(alias_property_test PRIVATE testing_common_base)
+target_link_libraries(alias_property_test PRIVATE testing_common_coordinator)
+target_link_libraries(alias_property_test PRIVATE commands)
+target_link_libraries(alias_property_test PRIVATE vmsdklib)
+finalize_test_flags(alias_property_test)
 
 # 1. Query Test Suite - consolidates query and search related tests
 set(QUERY_TEST_SOURCES

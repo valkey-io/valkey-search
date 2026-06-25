@@ -1376,6 +1376,19 @@ inline ValkeyModuleCallReply *TestValkeyModule_Call(ValkeyModuleCtx *ctx,
                                        arg3, arg3_len);
     return ret;
   }
+  if (format == "!Kcbbccc") {
+    const char *arg1 = va_arg(args, const char *);
+    const char *arg2 = va_arg(args, const char *);
+    size_t arg2_len = va_arg(args, size_t);
+    const char *arg3 = va_arg(args, const char *);
+    size_t arg3_len = va_arg(args, size_t);
+    [[maybe_unused]] const char *arg4 = va_arg(args, const char *);
+    [[maybe_unused]] const char *arg5 = va_arg(args, const char *);
+    [[maybe_unused]] const char *arg6 = va_arg(args, const char *);
+    auto ret = kMockValkeyModule->Call(ctx, cmdname, fmt, arg1, arg2, arg2_len,
+                                       arg3, arg3_len);
+    return ret;
+  }
   CHECK(false && "Unsupported format specifier");
   return nullptr;
 }

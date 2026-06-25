@@ -665,7 +665,7 @@ TEST_P(MetadataManagerReconciliationTest, TestReconciliation) {
   if (!test_case.expected_callbacks.empty() && !expect_failure) {
     EXPECT_CALL(*kMockValkeyModule,
                 Call(testing::_, testing::StrEq("FT.INTERNAL_UPDATE"),
-                     testing::StrEq("!Kcbb"), testing::_, testing::_,
+                     testing::StrEq("!Kcbbccc"), testing::_, testing::_,
                      testing::_, testing::_, testing::_))
         .Times(test_case.expected_callbacks.size());
   }
@@ -1998,8 +1998,8 @@ TEST_F(MetadataManagerTimestampTest,
 
   EXPECT_CALL(*kMockValkeyModule,
               Call(testing::_, testing::StrEq("FT.INTERNAL_UPDATE"),
-                   testing::StrEq("!Kcbb"), testing::_, testing::_, testing::_,
-                   testing::_, testing::_))
+                   testing::StrEq("!Kcbbccc"), testing::_, testing::_,
+                   testing::_, testing::_, testing::_))
       .WillOnce(testing::Return(nullptr));
 
   // Reconciliation should fail due to FT.INTERNAL_UPDATE failure

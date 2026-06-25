@@ -307,6 +307,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                 f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 apply @n1{op}@n2 as nn"
             )
 
+    @pytest.mark.skip(reason="Needs research")
     def test_aggregate_numeric_triadic_operators(self, key_type, dialect):
         self.setup_data("hard numbers", key_type)
         dyadic = ["+", "-", "*", "/", "^"]

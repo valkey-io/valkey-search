@@ -750,7 +750,9 @@ TEST_F(StructuralProtoChangeRebuildTest,
   constexpr int kIterations = 100;
   int valid_cases = 0;
 
-  for (int i = 0; i < kIterations; ++i) {
+  const int loop_count =
+      std::min(kIterations, static_cast<int>(test_cases.size()));
+  for (int i = 0; i < loop_count; ++i) {
     const auto &tc = test_cases[i];
 
     // Fresh singleton state per iteration.
@@ -844,7 +846,7 @@ TEST_F(StructuralProtoChangeRebuildTest,
   }
 
   // Ensure we validated a significant number of cases.
-  EXPECT_GE(valid_cases, 80)
+  EXPECT_GE(valid_cases, static_cast<int>(test_cases.size()) * 80 / 100)
       << "Too many test cases were skipped due to validation errors";
 }
 

@@ -91,10 +91,16 @@ class AliasRemovedConsistencyCheckFanoutOperation
     return req;
   }
 
-  void OnResponse(const coordinator::InfoIndexPartitionResponse &,
+  void OnResponse(const coordinator::InfoIndexPartitionResponse &response,
                   const vmsdk::cluster_map::NodeInfo &target) override {
     absl::MutexLock lock(&mutex_);
-    inconsistent_state_error_nodes.push_back(target);
+    if (response.exists()) {
+      // Alias still resolves on this node — needs retry.
+      inconsistent_state_error_nodes.push_back(target);
+    } else {
+      // Alias confirmed gone on this node.
+      index_name_error_nodes.push_back(target);
+    }
   }
 
   std::pair<grpc::Status, coordinator::InfoIndexPartitionResponse>

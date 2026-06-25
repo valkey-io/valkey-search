@@ -241,6 +241,15 @@ absl::Status SchemaManager::CreateIndexSchemaInternal(
         VMSDK_LOG(WARNING, detached_ctx_.get())
             << "Alias '" << alias << "' reassigned from index '"
             << conflict->second << "' to '" << name << "' in db " << db_num;
+        // Remove the alias from the previous owner's aliases_ vector.
+        auto prev_it = db_to_index_schemas_[db_num].find(conflict->second);
+        if (prev_it != db_to_index_schemas_[db_num].end()) {
+          auto prev_aliases = prev_it->second->GetAliases();
+          prev_aliases.erase(
+              std::remove(prev_aliases.begin(), prev_aliases.end(), alias),
+              prev_aliases.end());
+          prev_it->second->SetAliases(std::move(prev_aliases));
+        }
       }
     }
     db_to_aliases_[db_num][alias] = std::string(name);
@@ -690,13 +699,21 @@ void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx) {
               kSchemaManagerMetadataTypeName,
               coordinator::ObjName(selected_db, name));
       if (!stored_proto_or.ok()) {
-        // Fall back to ToProto() if entry not found in MetadataManager.
-        auto to_add = old_schema.value()->ToProto();
-        auto add_status = CreateIndexSchemaInternal(ctx, *to_add);
-        if (!add_status.ok()) {
-          VMSDK_LOG(WARNING, ctx) << "Unable to recreate index schema "
-                                  << vmsdk::config::RedactIfNeeded(name)
-                                  << " on FLUSHDB of DB " << selected_db;
+        if (absl::IsNotFound(stored_proto_or.status())) {
+          // Entry genuinely absent — fall back to ToProto().
+          auto to_add = old_schema.value()->ToProto();
+          auto add_status = CreateIndexSchemaInternal(ctx, *to_add);
+          if (!add_status.ok()) {
+            VMSDK_LOG(WARNING, ctx) << "Unable to recreate index schema "
+                                    << vmsdk::config::RedactIfNeeded(name)
+                                    << " on FLUSHDB of DB " << selected_db;
+          }
+        } else {
+          VMSDK_LOG(WARNING, ctx)
+              << "MetadataManager lookup failed for "
+              << vmsdk::config::RedactIfNeeded(name)
+              << " on FLUSHDB of DB " << selected_db << ": "
+              << stored_proto_or.status().message();
         }
         continue;
       }
@@ -1414,8 +1431,40 @@ absl::Status SchemaManager::UpdateAlias(uint32_t db_num,
           VMSDK_LOG(WARNING, nullptr)
               << "UpdateAlias: failed to remove alias '" << alias
               << "' from old index '" << old_index
-              << "' proto; reconciliation will clean up: "
+              << "' proto; rolling back add to target: "
               << result.status().message();
+
+          // Roll back: remove the alias we already added to index B.
+          auto rollback_entry_or =
+              coordinator::MetadataManager::Instance().GetEntryContent(
+                  kSchemaManagerMetadataTypeName,
+                  coordinator::ObjName(db_num, index_name));
+          if (rollback_entry_or.ok()) {
+            data_model::IndexSchema rollback_proto;
+            if (rollback_entry_or.value().UnpackTo(&rollback_proto)) {
+              NormalizeIndexSchemaProtoDefaults(rollback_proto);
+              auto *rb_aliases = rollback_proto.mutable_aliases();
+              rb_aliases->erase(
+                  std::remove(rb_aliases->begin(), rb_aliases->end(),
+                              std::string(alias)),
+                  rb_aliases->end());
+              auto rb_any = std::make_unique<google::protobuf::Any>();
+              rb_any->PackFrom(rollback_proto);
+              auto rb_result =
+                  coordinator::MetadataManager::Instance().CreateEntry(
+                      kSchemaManagerMetadataTypeName,
+                      coordinator::ObjName(db_num, index_name),
+                      std::move(rb_any));
+              if (!rb_result.ok()) {
+                VMSDK_LOG(WARNING, nullptr)
+                    << "UpdateAlias: rollback of alias '" << alias
+                    << "' from target index '" << index_name
+                    << "' also failed: " << rb_result.status().message();
+              }
+            }
+          }
+          return absl::InternalError(
+              "Failed to remove alias from old index; update rolled back");
         }
       }
     }

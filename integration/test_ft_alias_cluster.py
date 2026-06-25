@@ -459,13 +459,6 @@ class TestFTAliasClusterPropagation(ValkeySearchClusterTestCase):
         ) == b"OK"
         assert node0.execute_command("FT.DROPINDEX", INDEX_NAME) == b"OK"
 
-        # Poll until alias list is empty on all nodes.
-        def _aliaslist_empty():
-            for node in self._all_primaries():
-                if node.execute_command("FT.ALIASLIST") != []:
-                    return False
-            return True
-
         _wait_for_alias_on_all_nodes(
             self._all_primaries(), ALIAS_NAME, expect_present=False
         )

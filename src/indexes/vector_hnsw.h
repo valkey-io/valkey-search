@@ -34,12 +34,12 @@ class InputVector {
                        const std::vector<char> &normalized_vector,
                        Allocator *allocator = nullptr)
       : raw_vector_(raw_vector),
-        magnitude_(magnitude),
+        reciprocal_magnitude_(1.0f / magnitude),
         vector_allocator_(allocator),
         normalized_vector_(normalized_vector) {}
 
   inline const char *GetRawVector() const { return raw_vector_.data(); }
-  inline float GetMagnitude() const { return magnitude_; }
+  inline float GetReciprocalMagnitude() const { return reciprocal_magnitude_; }
   inline const char *GetNormalizedVector() const {
     return normalized_vector_.data();
   }
@@ -50,13 +50,14 @@ class InputVector {
     CHECK(vector_allocator_ != nullptr);
 #endif
     return VectorRecord(
-        StringInternStore::Intern(raw_vector_, vector_allocator_), magnitude_);
+        StringInternStore::Intern(raw_vector_, vector_allocator_),
+        reciprocal_magnitude_);
   }
 
  private:
   absl::string_view raw_vector_;
   Allocator *vector_allocator_;
-  float magnitude_;
+  float reciprocal_magnitude_;
   const std::vector<char> &normalized_vector_;
 };
 
@@ -128,10 +129,14 @@ class VectorHNSW : public VectorBase {
       ABSL_NO_THREAD_SAFETY_ANALYSIS {
     return algo_->getPoint(internal_id)->GetRawVector();
   }
-  bool IsVectorMatch(uint64_t internal_id, absl::string_view vector) override;
+  bool IsVectorMatch(uint64_t internal_id,
+                     absl::string_view vector) const override
+      ABSL_LOCKS_EXCLUDED(resize_mutex_);
   uint64_t GetMaxInternalLabel() const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
   size_t GetLabelCount() const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
-  void DenormalizeRecordInPlace(uint64_t internal_id, float magnitude) override;
+  void DenormalizeRecordInPlace(uint64_t internal_id,
+                                absl::string_view denorm_vector,
+                                float magnitude) override;
 
  private:
   VectorHNSW(int dimensions, absl::string_view attribute_identifier,

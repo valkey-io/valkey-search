@@ -47,19 +47,20 @@ namespace valkey_search::indexes {
 constexpr float kDefaultMagnitude = 1.0f;
 class VectorRecord {
  public:
-  explicit VectorRecord(const InternedStringPtr &vector, float magnitude)
-      : raw_vector_(vector), magnitude_(magnitude) {}
+  explicit VectorRecord(const InternedStringPtr &vector,
+                        float reciprocal_magnitude)
+      : raw_vector_(vector), reciprocal_magnitude_(reciprocal_magnitude) {}
 
   const char *GetRawVector() const {
     return const_cast<char *>(raw_vector_->Str().data());
   }
   operator const void *() const { return GetRawVector(); }
   operator const char *() const { return GetRawVector(); }
-  float GetMagnitude() const { return magnitude_; }
+  float GetReciprocalMagnitude() const { return reciprocal_magnitude_; }
 
  private:
   InternedStringPtr raw_vector_;
-  float magnitude_;
+  float reciprocal_magnitude_;
 };
 
 std::vector<char> NormalizeVector(absl::string_view record,
@@ -220,6 +221,7 @@ class VectorBase : public IndexBase {
 
  protected:
   virtual void DenormalizeRecordInPlace(uint64_t internal_id,
+                                        absl::string_view denorm_vector,
                                         float magnitude) = 0;
   VectorBase(IndexerType indexer_type, int dimensions,
              data_model::AttributeDataType attribute_data_type,
@@ -275,7 +277,7 @@ class VectorBase : public IndexBase {
   ComputeDistanceFromRecordImpl(uint64_t internal_id, absl::string_view query,
                                 float query_magnitude) const = 0;
   virtual bool IsVectorMatch(uint64_t internal_id,
-                             absl::string_view vector) = 0;
+                             absl::string_view vector) const = 0;
 
  private:
   absl::StatusOr<uint64_t> TrackKey(const InternedStringPtr &key,

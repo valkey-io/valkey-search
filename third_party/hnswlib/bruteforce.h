@@ -142,7 +142,8 @@ class BruteforceSearch
           *reinterpret_cast<const SavedVectorT *>((*data_)[i]);
       dist_t dist = fstdistfunc_(
           query_data, stored_vector, dist_func_param_,
-          normalize_ ? query_data.GetMagnitude() * stored_vector.GetMagnitude()
+          normalize_ ? query_data.GetReciprocalMagnitude() *
+                           stored_vector.GetReciprocalMagnitude()
                      : 1.0f);
       labeltype label = *((labeltype *)((*data_)[i] + sizeof(SavedVectorT)));
       if ((!isIdAllowed) || (*isIdAllowed)(label)) {
@@ -161,7 +162,8 @@ class BruteforceSearch
           *reinterpret_cast<const SavedVectorT *>((*data_)[i]);
       dist_t dist = fstdistfunc_(
           query_data, stored_vector, dist_func_param_,
-          normalize_ ? query_data.GetMagnitude() * stored_vector.GetMagnitude()
+          normalize_ ? query_data.GetReciprocalMagnitude() *
+                           stored_vector.GetReciprocalMagnitude()
                      : 1.0f);
       if (topResults.size() < k || dist <= lastdist) {
         labeltype label = *((labeltype *)((*data_)[i] + sizeof(SavedVectorT)));

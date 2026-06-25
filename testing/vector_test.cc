@@ -18,6 +18,7 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
+#include "absl/strings/strip.h"
 #include "gtest/gtest.h"
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"
@@ -472,7 +473,32 @@ TEST_F(VectorIndexTest, SaveAndLoadHnsw) {
           (*index_hnsw)->SaveTrackedKeys(RDBChunkOutputStream(&rdb)));
       hnsw_proto = (*index_hnsw)->ToProto()->vector_index();
     }
+    ValkeyModuleString *records[vectors.size()];
+    for (size_t i = 0; i < vectors.size(); ++i) {
+      records[i] = new ValkeyModuleString{
+          std::string((char *)&vectors[i][0], kDimensions * sizeof(float))};
+    }
 
+    EXPECT_CALL(*kMockValkeyModule,
+                OpenKey(testing::_, testing::_, testing::_))
+        .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
+    if (distance_metric == data_model::DISTANCE_METRIC_COSINE) {
+      EXPECT_CALL(*kMockValkeyModule,
+                  HashGet(testing::_, VALKEYMODULE_HASH_CFIELDS, testing::_,
+                          testing::An<ValkeyModuleString **>(),
+                          testing::TypedEq<void *>(nullptr)))
+          .WillRepeatedly(
+              [&records](ValkeyModuleKey *key, int, const char *,
+                         ValkeyModuleString **value_out, void *) {
+                auto key_str = absl::string_view(key->key);
+                CHECK(absl::ConsumeSuffix(&key_str, "_key"));
+                int index;
+                CHECK(absl::SimpleAtoi(key_str, &index));
+                *value_out = records[index];
+                ValkeyModule_RetainString(nullptr, records[index]);
+                return VALKEYMODULE_OK;
+              });
+    }
     // Load the HNSW index, populate data, validate recall, save again
     {
       auto loaded_index_hnsw = VectorHNSW<float>::LoadFromRDB(
@@ -512,6 +538,9 @@ TEST_F(VectorIndexTest, SaveAndLoadHnsw) {
           CalcRecall(index_flat->get(), loaded_index_hnsw->get(), k,
                      kDimensions, kEFRuntime);
       EXPECT_GE(default_ef_runtime_recall, 0.96f);
+    }
+    for (size_t i = 0; i < vectors.size(); ++i) {
+      delete records[i];
     }
   }
 }
@@ -579,7 +608,32 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
       VMSDK_EXPECT_OK((*index)->SaveTrackedKeys(RDBChunkOutputStream(&rdb)));
       flat_proto = (*index)->ToProto()->vector_index();
     }
+    ValkeyModuleString *records[vectors.size()];
+    for (size_t i = 0; i < vectors.size(); ++i) {
+      records[i] = new ValkeyModuleString{
+          std::string((char *)&vectors[i][0], kDimensions * sizeof(float))};
+    }
 
+    EXPECT_CALL(*kMockValkeyModule,
+                OpenKey(testing::_, testing::_, testing::_))
+        .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
+    if (distance_metric == data_model::DISTANCE_METRIC_COSINE) {
+      EXPECT_CALL(*kMockValkeyModule,
+                  HashGet(testing::_, VALKEYMODULE_HASH_CFIELDS, testing::_,
+                          testing::An<ValkeyModuleString **>(),
+                          testing::TypedEq<void *>(nullptr)))
+          .WillRepeatedly(
+              [&records](ValkeyModuleKey *key, int, const char *,
+                         ValkeyModuleString **value_out, void *) {
+                auto key_str = absl::string_view(key->key);
+                CHECK(absl::ConsumeSuffix(&key_str, "_key"));
+                int index;
+                CHECK(absl::SimpleAtoi(key_str, &index));
+                *value_out = records[index];
+                ValkeyModule_RetainString(nullptr, records[index]);
+                return VALKEYMODULE_OK;
+              });
+    }
     // Load the index, populate data, perform search, save the index again
     {
       auto index_pr = VectorFlat<float>::LoadFromRDB(
@@ -627,6 +681,9 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
         VerifyModify(index.get(), vectors[i], i, ExpectedResults::kSkipped,
                      true);
       }
+    }
+    for (size_t i = 0; i < vectors.size(); ++i) {
+      delete records[i];
     }
   }
 }

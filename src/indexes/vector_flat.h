@@ -84,8 +84,12 @@ class VectorFlat : public VectorBase {
       ABSL_NO_THREAD_SAFETY_ANALYSIS {
     return algo_->getPoint(internal_id)->GetRawVector();
   }
-  bool IsVectorMatch(uint64_t internal_id, absl::string_view vector) override;
-  void DenormalizeRecordInPlace(uint64_t internal_id, float magnitude) override;
+  bool IsVectorMatch(uint64_t internal_id,
+                     absl::string_view vector) const override
+      ABSL_LOCKS_EXCLUDED(resize_mutex_);
+  void DenormalizeRecordInPlace(uint64_t internal_id,
+                                absl::string_view denorm_vector,
+                                float magnitude) override;
 
  private:
   VectorFlat(int dimensions, data_model::DistanceMetric distance_metric,

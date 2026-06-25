@@ -251,10 +251,10 @@ class HierarchicalNSW
 
   inline dist_t evaluateDistance(const SavedVectorT &a,
                                  const SavedVectorT &b) const {
-    float mag_product =
-        normalized_ ? a.GetMagnitude() * b.GetMagnitude() : 1.0f;
+    float reciprocal_mag_product =
+        normalized_ ? a.GetReciprocalMagnitude() * b.GetReciprocalMagnitude() : 1.0f;
     return fstdistfunc_(a.GetRawVector(), b.GetRawVector(), dist_func_param_,
-                        mag_product);
+                        reciprocal_mag_product);
   }
   inline dist_t evaluateDistance(const InputVectorT &a, const SavedVectorT &b,
                                  bool is_rhs_marked_deleted) const {
@@ -263,9 +263,10 @@ class HierarchicalNSW
           normalized_ ? a.GetNormalizedVector() : a.GetRawVector();
       return fstdistfunc_(query_vec, b.GetRawVector(), dist_func_param_, 1);
     }
-    float mag_product = normalized_ ? a.GetMagnitude() * b.GetMagnitude() : 1.0;
+    float reciprocal_mag_product =
+        normalized_ ? a.GetReciprocalMagnitude() * b.GetReciprocalMagnitude() : 1.0f;
     return fstdistfunc_(a.GetRawVector(), b.GetRawVector(), dist_func_param_,
-                        mag_product);
+                        reciprocal_mag_product);
   }
 
   int getRandomLevel(double reverse_size) {
@@ -967,12 +968,13 @@ class HierarchicalNSW
     return absl::OkStatus();
   }
 
-  const SavedVectorT *getPoint(labeltype label) const {
+  SavedVectorT *getPoint(labeltype label) const {
     auto search = label_lookup_.find(label);
     if (search == label_lookup_.end() || isMarkedDeleted(search->second)) {
       return nullptr;
     }
-    return &getDataByInternalId(search->second);
+    return reinterpret_cast<SavedVectorT *>(
+        getDataPtrByInternalId(search->second));
   }
 
   template <typename data_t>

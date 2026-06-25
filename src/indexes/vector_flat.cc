@@ -73,30 +73,13 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::Create(
 
 template <typename T>
 bool VectorFlat<T>::IsVectorMatch(uint64_t internal_id,
-                                  absl::string_view vector) {
-  std::unique_lock<std::mutex> index_lock(algo_->index_lock);
-  auto found = algo_->dict_external_to_internal.find(internal_id);
-  if (found == algo_->dict_external_to_internal.end()) {
+                                  absl::string_view vector) const {
+  absl::ReaderMutexLock lock(&resize_mutex_);
+  const VectorRecord *stored_vec = algo_->getPoint(internal_id);
+  if (!stored_vec) {
     return false;
   }
-  const char *stored_vec =
-      reinterpret_cast<VectorRecord *>((*algo_->data_)[found->second])
-          ->GetRawVector();
-
-  if constexpr (std::is_floating_point_v<T>) {
-    if (normalize_) {
-      const T *p1 = reinterpret_cast<const T *>(vector.data());
-      const T *p2 = reinterpret_cast<const T *>(stored_vec);
-      bool match = true;
-      for (int i = 0; i < dimensions_; ++i) {
-        if (std::abs(p1[i] - p2[i]) > 1e-5f) {
-          match = false;
-        }
-      }
-      return match;
-    }
-  }
-  absl::string_view record(stored_vec, dimensions_ * sizeof(T));
+  absl::string_view record(stored_vec->GetRawVector(), dimensions_ * sizeof(T));
   return vector == record;
 }
 
@@ -124,7 +107,7 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
           CalcMagnitude(reinterpret_cast<const T *>(vector_data.data()),
                         vector_data.size() / sizeof(T));
       return VectorRecord(StringInternStore::Intern(vector_data, allocator),
-                          magnitude);
+                          1.0f / magnitude);
     };
     VMSDK_RETURN_IF_ERROR(
         index->algo_->LoadIndex(input, index->space_.get(), generator));
@@ -175,7 +158,7 @@ absl::Status VectorFlat<T>::AddRecordImpl(
     try {
       absl::ReaderMutexLock lock(&resize_mutex_);
       VectorRecord vector_record(
-          StringInternStore::Intern(record, GetVectorAllocator()), magnitude);
+          StringInternStore::Intern(record, GetVectorAllocator()), 1.0f / magnitude);
       algo_->addPoint(vector_record, internal_id);
     } catch (const std::exception &e) {
       ++Metrics::GetStats().flat_add_exceptions_cnt;
@@ -198,7 +181,7 @@ absl::Status VectorFlat<T>::ModifyRecordImpl(
     uint64_t internal_id, absl::string_view record, float magnitude,
     [[maybe_unused]] const std::vector<char> &norm_record) {
   VectorRecord vector_record(
-      StringInternStore::Intern(record, GetVectorAllocator()), magnitude);
+      StringInternStore::Intern(record, GetVectorAllocator()), 1.0f / magnitude);
   absl::ReaderMutexLock lock(&resize_mutex_);
   std::unique_lock<std::mutex> index_lock(algo_->index_lock);
   auto found = algo_->dict_external_to_internal.find(internal_id);
@@ -259,7 +242,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
 
   try {
     CancelCondition canceler(cancellation_token);
-    VectorRecord embedding(StringInternStore::Intern(query), magnitude);
+    VectorRecord embedding(StringInternStore::Intern(query), 1.0f / magnitude);
     auto res = algo_->searchKnn(
         embedding,
         std::min(count, static_cast<uint64_t>(algo_->cur_element_count_)),
@@ -290,7 +273,7 @@ VectorFlat<T>::ComputeDistanceFromRecordImpl(uint64_t internal_id,
   const auto &stored_record =
       *reinterpret_cast<const VectorRecord *>((*algo_->data_)[search->second]);
   if (normalize_) {
-    query_magnitude *= stored_record.GetMagnitude();
+    query_magnitude *= stored_record.GetReciprocalMagnitude();
   }
   return (std::pair<float, hnswlib::labeltype>){
       algo_->fstdistfunc_(query.data(), stored_record, algo_->dist_func_param_,
@@ -360,21 +343,15 @@ absl::Status VectorFlat<T>::SaveIndexImpl(
 
 template <typename T>
 void VectorFlat<T>::DenormalizeRecordInPlace(uint64_t internal_id,
+                                             absl::string_view denorm_vector,
                                              float magnitude) {
-  VectorRecord *stored_record =
-      const_cast<VectorRecord *>(algo_->getPoint(internal_id));
-  CHECK(stored_record);
-  absl::string_view norm_vector(stored_record->GetRawVector(),
-                                GetVectorDataSize());
-  std::vector<char> denorm_vector = DenormalizeVector(norm_vector, magnitude);
-
-  *stored_record =
-      VectorRecord(StringInternStore::Intern(
-                       absl::string_view(
-                           reinterpret_cast<const char *>(denorm_vector.data()),
-                           norm_vector.size()),
-                       GetVectorAllocator()),
-                   magnitude);
+  VectorRecord *stored_record = algo_->getPoint(internal_id);
+  if (!stored_record) {
+    return;
+  }
+  *stored_record = VectorRecord(
+      StringInternStore::Intern(denorm_vector, GetVectorAllocator()),
+      1.0f / magnitude);
 }
 
 template class VectorFlat<float>;

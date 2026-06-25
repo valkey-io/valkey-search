@@ -463,7 +463,16 @@ absl::Status VectorBase::LoadTrackedKeys(
     key_by_internal_id_.insert(
         {tracked_key_metadata.internal_id(), interned_key});
     if (normalize_) {
+      auto key = vmsdk::MakeUniqueValkeyString(interned_key->Str());
+      auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
+          ctx, key.get(), VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
+      CHECK(key_obj) << "Failed to open key during LoadTrackedKeys: "
+                     << interned_key->Str();
+      auto record = attribute_data_type->GetRecord(
+          ctx, key_obj.get(), interned_key->Str(), attribute_identifier_);
+      CHECK(record.ok());
       DenormalizeRecordInPlace(tracked_key_metadata.internal_id(),
+                               vmsdk::ToStringView(record.value().get()),
                                tracked_key_metadata.magnitude());
     }
     ExternalizeVector(ctx, attribute_data_type, tracked_key_metadata.key(),

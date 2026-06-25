@@ -26,11 +26,11 @@ static float InnerProduct(const void *pVect1, const void *pVect2,
 
 static float InnerProductDistance(const void *pVect1, const void *pVect2,
                                   const void *qty_ptr,
-                                  float product_magnitude) {
-  if (product_magnitude == 1.0f) {
+                                  float reciprocal_mag_product) {
+  if (reciprocal_mag_product == 1.0f) {
     return 1.0f - InnerProduct(pVect1, pVect2, qty_ptr);
   }
-  return 1.0f - (InnerProduct(pVect1, pVect2, qty_ptr) / product_magnitude);
+  return 1.0f - (InnerProduct(pVect1, pVect2, qty_ptr) * reciprocal_mag_product);
 }
 
 #if defined(USE_AVX)
@@ -87,12 +87,12 @@ static float InnerProductSIMD4ExtAVX(const void *pVect1v, const void *pVect2v,
 static float InnerProductDistanceSIMD4ExtAVX(const void *pVect1v,
                                              const void *pVect2v,
                                              const void *qty_ptr,
-                                             float product_magnitude) {
-  if (product_magnitude == 1.0f) {
+                                             float reciprocal_mag_product) {
+  if (reciprocal_mag_product == 1.0f) {
     return 1.0f - InnerProductSIMD4ExtAVX(pVect1v, pVect2v, qty_ptr);
   }
-  return 1.0f - (InnerProductSIMD4ExtAVX(pVect1v, pVect2v, qty_ptr) /
-                 product_magnitude);
+  return 1.0f - (InnerProductSIMD4ExtAVX(pVect1v, pVect2v, qty_ptr) *
+                 reciprocal_mag_product);
 }
 
 #endif
@@ -158,12 +158,12 @@ static float InnerProductSIMD4ExtSSE(const void *pVect1v, const void *pVect2v,
 static float InnerProductDistanceSIMD4ExtSSE(const void *pVect1v,
                                              const void *pVect2v,
                                              const void *qty_ptr,
-                                             float product_magnitude) {
-  if (product_magnitude == 1.0f) {
+                                             float reciprocal_mag_product) {
+  if (reciprocal_mag_product == 1.0f) {
     return 1.0f - InnerProductSIMD4ExtSSE(pVect1v, pVect2v, qty_ptr);
   }
-  return 1.0f - (InnerProductSIMD4ExtSSE(pVect1v, pVect2v, qty_ptr) /
-                 product_magnitude);
+  return 1.0f - (InnerProductSIMD4ExtSSE(pVect1v, pVect2v, qty_ptr) *
+                 reciprocal_mag_product);
 }
 
 #endif
@@ -228,12 +228,12 @@ static float InnerProductSIMD16ExtAVX512(const void *pVect1v,
 static float InnerProductDistanceSIMD16ExtAVX512(const void *pVect1v,
                                                  const void *pVect2v,
                                                  const void *qty_ptr,
-                                                 float product_magnitude) {
-  if (product_magnitude == 1.0f) {
+                                                 float reciprocal_mag_product) {
+  if (reciprocal_mag_product == 1.0f) {
     return 1.0f - InnerProductSIMD16ExtAVX512(pVect1v, pVect2v, qty_ptr);
   }
-  return 1.0f - (InnerProductSIMD16ExtAVX512(pVect1v, pVect2v, qty_ptr) /
-                 product_magnitude);
+  return 1.0f - (InnerProductSIMD16ExtAVX512(pVect1v, pVect2v, qty_ptr) *
+                 reciprocal_mag_product);
 }
 
 #endif
@@ -279,12 +279,12 @@ static float InnerProductSIMD16ExtAVX(const void *pVect1v, const void *pVect2v,
 static float InnerProductDistanceSIMD16ExtAVX(const void *pVect1v,
                                               const void *pVect2v,
                                               const void *qty_ptr,
-                                              float product_magnitude) {
-  if (product_magnitude == 1.0f) {
+                                              float reciprocal_mag_product) {
+  if (reciprocal_mag_product == 1.0f) {
     return 1.0f - InnerProductSIMD16ExtAVX(pVect1v, pVect2v, qty_ptr);
   }
-  return 1.0f - (InnerProductSIMD16ExtAVX(pVect1v, pVect2v, qty_ptr) /
-                 product_magnitude);
+  return 1.0f - (InnerProductSIMD16ExtAVX(pVect1v, pVect2v, qty_ptr) *
+                 reciprocal_mag_product);
 }
 
 #endif
@@ -339,12 +339,12 @@ static float InnerProductSIMD16ExtSSE(const void *pVect1v, const void *pVect2v,
 static float InnerProductDistanceSIMD16ExtSSE(const void *pVect1v,
                                               const void *pVect2v,
                                               const void *qty_ptr,
-                                              float product_magnitude) {
-  if (product_magnitude == 1.0f) {
+                                              float reciprocal_mag_product) {
+  if (reciprocal_mag_product == 1.0f) {
     return 1.0f - InnerProductSIMD16ExtSSE(pVect1v, pVect2v, qty_ptr);
   }
-  return 1.0f - (InnerProductSIMD16ExtSSE(pVect1v, pVect2v, qty_ptr) /
-                 product_magnitude);
+  return 1.0f - (InnerProductSIMD16ExtSSE(pVect1v, pVect2v, qty_ptr) *
+                 reciprocal_mag_product);
 }
 
 #endif
@@ -360,7 +360,7 @@ static DISTFUNC<float> InnerProductDistanceSIMD4Ext =
 static float InnerProductDistanceSIMD16ExtResiduals(const void *pVect1v,
                                                     const void *pVect2v,
                                                     const void *qty_ptr,
-                                                    float product_magnitude) {
+                                                    float reciprocal_mag_product) {
   size_t qty = *((size_t *)qty_ptr);
   size_t qty16 = qty >> 4 << 4;
   float res = InnerProductSIMD16Ext(pVect1v, pVect2v, &qty16);
@@ -369,16 +369,16 @@ static float InnerProductDistanceSIMD16ExtResiduals(const void *pVect1v,
 
   size_t qty_left = qty - qty16;
   float res_tail = InnerProduct(pVect1, pVect2, &qty_left);
-  if (product_magnitude == 1.0f) {
+  if (reciprocal_mag_product == 1.0f) {
     return 1.0f - (res + res_tail);
   }
-  return 1.0f - ((res + res_tail) / product_magnitude);
+  return 1.0f - ((res + res_tail) * reciprocal_mag_product);
 }
 
 static float InnerProductDistanceSIMD4ExtResiduals(const void *pVect1v,
                                                    const void *pVect2v,
                                                    const void *qty_ptr,
-                                                   float product_magnitude) {
+                                                   float reciprocal_mag_product) {
   size_t qty = *((size_t *)qty_ptr);
   size_t qty4 = qty >> 2 << 2;
 
@@ -389,10 +389,10 @@ static float InnerProductDistanceSIMD4ExtResiduals(const void *pVect1v,
   float *pVect2 = (float *)pVect2v + qty4;
   float res_tail = InnerProduct(pVect1, pVect2, &qty_left);
 
-  if (product_magnitude == 1.0f) {
+  if (reciprocal_mag_product == 1.0f) {
     return 1.0f - (res + res_tail);
   }
-  return 1.0f - ((res + res_tail) / product_magnitude);
+  return 1.0f - ((res + res_tail) * reciprocal_mag_product);
 }
 #endif
 

@@ -94,8 +94,9 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::Create(
 
 template <typename T>
 bool VectorHNSW<T>::IsVectorMatch(uint64_t internal_id,
-                                  absl::string_view vector) {
+                                  absl::string_view vector) const {
   absl::ReaderMutexLock lock(&resize_mutex_);
+  hnswlib::tableint hnsw_id;
   {
     std::unique_lock<std::mutex> lock_label(
         algo_->getLabelOpMutex(internal_id));
@@ -103,23 +104,12 @@ bool VectorHNSW<T>::IsVectorMatch(uint64_t internal_id,
     if (!id.has_value()) {
       return false;
     }
-    const auto &stored_record = algo_->getDataByInternalId(*id);
-    const char *stored_vec = stored_record.GetRawVector();
-    if constexpr (std::is_floating_point_v<T>) {
-      if (normalize_) {
-        const T *p1 = reinterpret_cast<const T *>(vector.data());
-        const T *p2 = reinterpret_cast<const T *>(stored_vec);
-        for (int i = 0; i < dimensions_; ++i) {
-          if (std::abs(p1[i] - p2[i]) > 1e-5f) {
-            return false;
-          }
-        }
-        return true;
-      }
-    }
-    absl::string_view record(stored_vec, GetVectorDataSize());
-    return vector == record;
+    hnsw_id = *id;
   }
+  const auto &stored_record = algo_->getDataByInternalId(hnsw_id);
+
+  absl::string_view record(stored_record.GetRawVector(), GetVectorDataSize());
+  return vector == record;
 }
 
 template <typename T>
@@ -308,22 +298,15 @@ absl::Status VectorHNSW<T>::AlgoDeleteRecord(uint64_t label) {
 
 template <typename T>
 void VectorHNSW<T>::DenormalizeRecordInPlace(uint64_t internal_id,
+                                             absl::string_view denorm_vector,
                                              float magnitude) {
-  auto hnsw_internal_id =
-      GetAlgoInternalIdLockFree<T>(algo_.get(), internal_id);
-  if (!hnsw_internal_id.has_value()) {
+  auto stored_record = algo_->getPoint(internal_id);
+  if (!stored_record) {
     return;
   }
-  const auto &stored_record = algo_->getDataByInternalId(*hnsw_internal_id);
-  absl::string_view norm_vector(stored_record.GetRawVector(),
-                                GetVectorDataSize());
-  std::vector<char> denorm_vector = DenormalizeVector(norm_vector, magnitude);
-
-  absl::string_view denorm_view(
-      reinterpret_cast<const char *>(denorm_vector.data()), norm_vector.size());
-  InputVector denorm_input(denorm_view, magnitude, denorm_vector,
-                           GetVectorAllocator());
-  algo_->setDataByInternalId(*hnsw_internal_id, denorm_input);
+  *stored_record = VectorRecord(
+      StringInternStore::Intern(denorm_vector, GetVectorAllocator()),
+      1.0f / magnitude);
 }
 
 template <typename T>
@@ -436,7 +419,7 @@ VectorHNSW<T>::ComputeDistanceFromRecordImpl(uint64_t internal_id,
   }
   const auto &stored_record = algo_->getDataByInternalId(*id);
   if (normalize_) {
-    query_magnitude *= stored_record.GetMagnitude();
+    query_magnitude *= stored_record.GetReciprocalMagnitude();
   }
   return (std::pair<float, hnswlib::labeltype>){
       algo_->fstdistfunc_(query.data(), stored_record, algo_->dist_func_param_,

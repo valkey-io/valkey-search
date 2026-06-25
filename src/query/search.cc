@@ -431,7 +431,7 @@ CalcBestMatchingPrefilteredKeys(
   std::priority_queue<std::pair<float, hnswlib::labeltype>> results;
   float query_magnitude = indexes::kDefaultMagnitude;
   if (vector_index->GetNormalize()) {
-    query_magnitude = indexes::CalcMagnitude(
+    query_magnitude = 1.0f / indexes::CalcMagnitude(
         reinterpret_cast<const float *>(parameters.query.data()),
         parameters.query.size() / sizeof(float));
   }

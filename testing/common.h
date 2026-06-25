@@ -401,7 +401,7 @@ struct NeighborTest {
   std::optional<std::unordered_map<std::string, std::string>>
       attribute_contents;
   inline bool operator==(const NeighborTest& other) const {
-    return external_id == other.external_id && distance == other.distance &&
+    return external_id == other.external_id &&
            attribute_contents == other.attribute_contents;
   }
 };

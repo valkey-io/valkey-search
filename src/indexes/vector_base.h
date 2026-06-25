@@ -45,24 +45,33 @@ enum class QueryOperations : uint64_t;
 
 namespace valkey_search::indexes {
 constexpr float kDefaultMagnitude = 1.0f;
+
 class VectorRecord {
  public:
-  explicit VectorRecord(const InternedStringPtr &vector,
-                        float reciprocal_magnitude)
-      : raw_vector_(vector), reciprocal_magnitude_(reciprocal_magnitude) {}
+  // Disallow copy and move because it is variable-sized and should only be
+  // managed via std::shared_ptr.
+  VectorRecord(const VectorRecord &) = delete;
+  VectorRecord &operator=(const VectorRecord &) = delete;
+  VectorRecord(VectorRecord &&) = delete;
+  VectorRecord &operator=(VectorRecord &&) = delete;
+  ~VectorRecord() = default;
 
-  const char *GetRawVector() const {
-    return const_cast<char *>(raw_vector_->Str().data());
-  }
-  operator const void *() const { return GetRawVector(); }
-  operator const char *() const { return GetRawVector(); }
-  float GetReciprocalMagnitude() const { return reciprocal_magnitude_; }
+  // Static factory method to construct a VectorRecord managed by
+  // std::shared_ptr.
+  static std::shared_ptr<VectorRecord> Construct(
+      absl::string_view vector, float magnitude,
+      Allocator *allocator = nullptr);
+
+  inline const char *GetRawVector() const { return data_; }
+  inline float GetReciprocalMagnitude() const { return reciprocal_magnitude_; }
 
  private:
-  InternedStringPtr raw_vector_;
-  float reciprocal_magnitude_;
-};
+  // Constructor is private, called via placement new in Construct.
+  VectorRecord(absl::string_view vector, float reciprocal_magnitude);
 
+  const float reciprocal_magnitude_;
+  char data_[0];  // flexible array member
+};
 std::vector<char> NormalizeVector(absl::string_view record,
                                   float *magnitude = nullptr);
 std::vector<char> DenormalizeVector(absl::string_view record, float magnitude);
@@ -209,20 +218,18 @@ class VectorBase : public IndexBase {
   template <typename T>
   absl::StatusOr<std::vector<Neighbor>> CreateReply(
       std::priority_queue<std::pair<T, hnswlib::labeltype>> &knn_res);
-  absl::StatusOr<std::vector<char>> GetVector(const InternedStringPtr &key)
-      const ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
-  int GetVectorDataSize() const { return GetDataTypeSize() * dimensions_; }
+  absl::StatusOr<std::vector<char>> GetVectorDuringSearch(
+      const InternedStringPtr &key) const;
+  size_t GetVectorDataSize() const { return GetDataTypeSize() * dimensions_; }
 
   InternedStringPtr InternVector(absl::string_view record,
                                  std::optional<float> &magnitude);
   virtual uint64_t GetMaxInternalLabel() const { return 0; }
   virtual size_t GetLabelCount() const { return 0; }
   Allocator *GetVectorAllocator() const { return vector_allocator_.get(); }
+  int GetDimensions() const { return dimensions_; }
 
  protected:
-  virtual void DenormalizeRecordInPlace(uint64_t internal_id,
-                                        absl::string_view denorm_vector,
-                                        float magnitude) = 0;
   VectorBase(IndexerType indexer_type, int dimensions,
              data_model::AttributeDataType attribute_data_type,
              absl::string_view attribute_identifier)
@@ -233,27 +240,27 @@ class VectorBase : public IndexBase {
 #ifndef SAN_BUILD
         ,
         vector_allocator_(CREATE_UNIQUE_PTR(
-            FixedSizeAllocator, dimensions * sizeof(float) + 1, true))
+            FixedSizeAllocator,
+            sizeof(VectorRecord) + dimensions * sizeof(float), true))
 #endif  // !SAN_BUILD
   {
   }
 
-  bool IsValidSizeVector(absl::string_view record) {
-    const auto data_type_size = GetDataTypeSize();
-    int32_t dim = record.size() / GetDataTypeSize();
-    return dim == dimensions_ && (record.size() % data_type_size == 0);
+  bool IsValidSizeVector(absl::string_view record) const {
+    return record.size() == GetVectorDataSize();
   }
   int RespondWithInfo(ValkeyModuleCtx *ctx) const override;
   template <typename T>
   void Init(int dimensions, data_model::DistanceMetric distance_metric,
             std::unique_ptr<hnswlib::SpaceInterface<T>> &space);
-  virtual absl::Status AddRecordImpl(uint64_t internal_id,
-                                     absl::string_view record, float magnitude,
-                                     const std::vector<char> &norm_record) = 0;
+
+  virtual absl::Status AddRecordImpl(
+      uint64_t internal_id, const std::shared_ptr<VectorRecord> &vector_record,
+      const std::vector<char> &norm_record) = 0;
 
   virtual absl::Status RemoveRecordImpl(uint64_t internal_id) = 0;
   virtual absl::Status ModifyRecordImpl(
-      uint64_t internal_id, absl::string_view record, float magnitude,
+      uint64_t internal_id, const std::shared_ptr<VectorRecord> &vector_record,
       const std::vector<char> &norm_record) = 0;
   virtual int RespondWithInfoImpl(ValkeyModuleCtx *ctx) const = 0;
 
@@ -266,18 +273,20 @@ class VectorBase : public IndexBase {
                          const AttributeDataType *attribute_data_type,
                          absl::string_view key_cstr,
                          absl::string_view attribute_identifier);
-  virtual const char *GetVectorImpl(uint64_t internal_id) const = 0;
+  virtual std::shared_ptr<VectorRecord> &GetVectorLockFree(
+      uint64_t internal_id) const = 0;
 
   int dimensions_;
   std::string attribute_identifier_;
   bool normalize_{false};
   data_model::AttributeDataType attribute_data_type_;
   data_model::DistanceMetric distance_metric_;
-  virtual absl::StatusOr<std::pair<float, hnswlib::labeltype>>
-  ComputeDistanceFromRecordImpl(uint64_t internal_id, absl::string_view query,
+  virtual float ComputeDistance(absl::string_view query,
+                                VectorRecord *vector_record,
                                 float query_magnitude) const = 0;
-  virtual bool IsVectorMatch(uint64_t internal_id,
-                             absl::string_view vector) const = 0;
+  virtual std::optional<hnswlib::tableint> GetAlgoIdLockFree(
+      uint64_t internal_id) const = 0;
+  mutable absl::Mutex resize_mutex_;
 
  private:
   absl::StatusOr<uint64_t> TrackKey(const InternedStringPtr &key,
@@ -286,8 +295,9 @@ class VectorBase : public IndexBase {
   absl::StatusOr<std::optional<uint64_t>> UnTrackKey(
       const InternedStringPtr &key) ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::StatusOr<bool> UpdateMetadata(const InternedStringPtr &key,
-                                      float magnitude, absl::string_view vector)
-      ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
+                                      float magnitude,
+                                      const VectorRecord *vector_record)
+      ABSL_LOCKS_EXCLUDED(resize_mutex_, key_to_metadata_mutex_);
   absl::StatusOr<uint64_t> GetInternalId(const InternedStringPtr &key) const
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::StatusOr<uint64_t> GetInternalIdDuringSearch(

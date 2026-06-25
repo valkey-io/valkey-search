@@ -30,7 +30,7 @@
 
 namespace valkey_search {
 // Vector externalizer is not used and planned to be implemented differently
-#ifndef SAN_BUILD
+#if defined(ENABLE_VECTOR_EXTERNALIZER_TEST)
 namespace {
 class VectorExternalizerTest : public ValkeySearchTestWithParam<bool> {
  public:

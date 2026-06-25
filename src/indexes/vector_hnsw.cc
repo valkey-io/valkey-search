@@ -49,24 +49,6 @@
 namespace valkey_search::indexes {
 
 template <typename T>
-std::optional<hnswlib::tableint> GetAlgoInternalIdLockFree(
-    const typename VectorHNSW<T>::HNSWIndex *algo, uint64_t internal_id) {
-  auto search = algo->label_lookup_.find(internal_id);
-  if (search == algo->label_lookup_.end() ||
-      algo->isMarkedDeleted(search->second)) {
-    return std::nullopt;
-  }
-  return search->second;
-}
-
-template <typename T>
-std::optional<hnswlib::tableint> GetAlgoInternalId(
-    const typename VectorHNSW<T>::HNSWIndex *algo, uint64_t internal_id) {
-  std::unique_lock<std::mutex> lock_table(algo->label_lookup_lock);
-  return GetAlgoInternalIdLockFree<T>(algo, internal_id);
-}
-
-template <typename T>
 absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::Create(
     const data_model::VectorIndex &vector_index_proto,
     absl::string_view attribute_identifier,
@@ -93,23 +75,14 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::Create(
 }
 
 template <typename T>
-bool VectorHNSW<T>::IsVectorMatch(uint64_t internal_id,
-                                  absl::string_view vector) const {
-  absl::ReaderMutexLock lock(&resize_mutex_);
-  hnswlib::tableint hnsw_id;
-  {
-    std::unique_lock<std::mutex> lock_label(
-        algo_->getLabelOpMutex(internal_id));
-    auto id = GetAlgoInternalId<T>(algo_.get(), internal_id);
-    if (!id.has_value()) {
-      return false;
-    }
-    hnsw_id = *id;
+std::optional<hnswlib::tableint> VectorHNSW<T>::GetAlgoIdLockFree(
+    uint64_t internal_id) const {
+  auto search = algo_->label_lookup_.find(internal_id);
+  if (search == algo_->label_lookup_.end() ||
+      algo_->isMarkedDeleted(search->second)) {
+    return std::nullopt;
   }
-  const auto &stored_record = algo_->getDataByInternalId(hnsw_id);
-
-  absl::string_view record(stored_record.GetRawVector(), GetVectorDataSize());
-  return vector == record;
+  return search->second;
 }
 
 template <typename T>
@@ -135,12 +108,16 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
     index->algo_->normalized_ = index->normalize_;
 
     auto generator = [allocator = index->GetVectorAllocator()](
-                         absl::string_view vector_data) {
+                         absl::string_view vector_data,
+                         bool is_marked_deleted) {
+      if (!is_marked_deleted) {
+        return std::shared_ptr<VectorRecord>(nullptr);
+      }
       T magnitude =
           CalcMagnitude(reinterpret_cast<const T *>(vector_data.data()),
                         vector_data.size() / sizeof(T));
-      return VectorRecord(StringInternStore::Intern(vector_data, allocator),
-                          magnitude);
+      return VectorRecord::Construct(
+          vector_data, magnitude, static_cast<FixedSizeAllocator *>(allocator));
     };
     VMSDK_RETURN_IF_ERROR(
         index->algo_->LoadIndex(input, index->space_.get(),
@@ -164,15 +141,14 @@ VectorHNSW<T>::VectorHNSW(int dimensions,
 
 template <typename T>
 absl::Status VectorHNSW<T>::AddRecordImpl(
-    uint64_t internal_id, absl::string_view record, float magnitude,
+    uint64_t internal_id, const std::shared_ptr<VectorRecord> &vector_record,
     const std::vector<char> &norm_record) {
   do {
     try {
       absl::ReaderMutexLock lock(&resize_mutex_);
 
-      algo_->addPoint(
-          InputVector(record, magnitude, norm_record, GetVectorAllocator()),
-          internal_id, algo_->allow_replace_deleted_);
+      algo_->addPoint(InputVector(vector_record, norm_record), internal_id,
+                      algo_->allow_replace_deleted_);
       return absl::OkStatus();
     } catch (const std::exception &e) {
       std::string error_msg = e.what();
@@ -224,13 +200,14 @@ absl::Status VectorHNSW<T>::SaveIndexImpl(
     RDBChunkOutputStream chunked_out) const {
   absl::ReaderMutexLock lock(&resize_mutex_);
   auto serializer = [normalize = normalize_, vector_size = GetVectorDataSize()](
-                        const VectorRecord &record, bool is_marked_deleted) {
+                        const std::shared_ptr<VectorRecord> &record,
+                        bool is_marked_deleted) {
     if (normalize && !is_marked_deleted) {
       return NormalizeVector(
-          absl::string_view(record.GetRawVector(), vector_size));
+          absl::string_view(record->GetRawVector(), vector_size));
     }
-    return std::vector<char>(record.GetRawVector(),
-                             record.GetRawVector() + vector_size);
+    return std::vector<char>(record->GetRawVector(),
+                             record->GetRawVector() + vector_size);
   };
   return algo_->SaveIndex(chunked_out, serializer);
 }
@@ -273,7 +250,7 @@ absl::Status VectorHNSW<T>::ResizeIfFull() {
 template <typename T>
 absl::Status VectorHNSW<T>::AlgoDeleteRecord(uint64_t label) {
   std::unique_lock<std::mutex> lock_label(algo_->getLabelOpMutex(label));
-  auto hnsw_internal_id = GetAlgoInternalId<T>(algo_.get(), label);
+  auto hnsw_internal_id = GetAlgoIdLockFree(label);
   if (!hnsw_internal_id.has_value()) {
     return absl::NotFoundError(
         absl::StrCat("Internal ID not found for label: ", label));
@@ -283,44 +260,28 @@ absl::Status VectorHNSW<T>::AlgoDeleteRecord(uint64_t label) {
     return absl::OkStatus();
   }
   const auto &stored_record = algo_->getDataByInternalId(*hnsw_internal_id);
-  absl::string_view unnorm_vector(stored_record.GetRawVector(),
+  absl::string_view unnorm_vector(stored_record->GetRawVector(),
                                   GetVectorDataSize());
 
   auto norm_record = NormalizeVector(unnorm_vector);
 
   absl::string_view norm_view(norm_record.data(), norm_record.size());
-  InputVector normalized_input(norm_view, 1.0f, norm_record,
-                               GetVectorAllocator());
-  algo_->setDataByInternalId(*hnsw_internal_id, normalized_input);
+  auto vector_record =
+      VectorRecord::Construct(norm_view, 1.0f, GetVectorAllocator());
+  algo_->setDataByInternalId(*hnsw_internal_id, vector_record);
   algo_->markDeletedInternal(*hnsw_internal_id);
   return absl::OkStatus();
 }
 
 template <typename T>
-void VectorHNSW<T>::DenormalizeRecordInPlace(uint64_t internal_id,
-                                             absl::string_view denorm_vector,
-                                             float magnitude) {
-  auto stored_record = algo_->getPoint(internal_id);
-  if (!stored_record) {
-    return;
-  }
-  *stored_record = VectorRecord(
-      StringInternStore::Intern(denorm_vector, GetVectorAllocator()),
-      1.0f / magnitude);
-}
-
-template <typename T>
 absl::Status VectorHNSW<T>::ModifyRecordImpl(
-    uint64_t internal_id, absl::string_view record, float magnitude,
+    uint64_t internal_id, const std::shared_ptr<VectorRecord> &vector_record,
     const std::vector<char> &norm_record) {
   try {
     absl::ReaderMutexLock lock(&resize_mutex_);
-    // Normalize the old record before marking it deleted so that distance
-    // calculations against it (during search/traversal) use magnitude 1.0f.
     VMSDK_RETURN_IF_ERROR(AlgoDeleteRecord(internal_id));
-    algo_->addPoint(
-        InputVector(record, magnitude, norm_record, GetVectorAllocator()),
-        internal_id, algo_->allow_replace_deleted_);
+    algo_->addPoint(InputVector(vector_record, norm_record), internal_id,
+                    algo_->allow_replace_deleted_);
   } catch (const std::exception &e) {
     ++Metrics::GetStats().hnsw_modify_exceptions_cnt;
     return absl::InternalError(
@@ -373,7 +334,9 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
   }
   try {
     CancelCondition cancel_condition(cancellation_token);
-    InputVector embedding(query, magnitude, norm_record);
+    InputVector embedding(
+        VectorRecord::Construct(query, magnitude, GetVectorAllocator()),
+        norm_record);
     auto res = algo_->searchKnn(embedding, count, ef_runtime, filter.get(),
                                 &cancel_condition);
     if (!enable_partial_results && cancellation_token->IsCancelled()) {
@@ -408,23 +371,11 @@ void VectorHNSW<T>::ToProtoImpl(
 }
 
 template <typename T>
-absl::StatusOr<std::pair<float, hnswlib::labeltype>>
-VectorHNSW<T>::ComputeDistanceFromRecordImpl(uint64_t internal_id,
-                                             absl::string_view query,
-                                             float query_magnitude) const {
-  auto id = GetAlgoInternalIdLockFree<T>(algo_.get(), internal_id);
-  if (!id.has_value()) {
-    return absl::InternalError(
-        absl::StrCat("Couldn't find internal id: ", internal_id));
-  }
-  const auto &stored_record = algo_->getDataByInternalId(*id);
-  if (normalize_) {
-    query_magnitude *= stored_record.GetReciprocalMagnitude();
-  }
-  return (std::pair<float, hnswlib::labeltype>){
-      algo_->fstdistfunc_(query.data(), stored_record, algo_->dist_func_param_,
-                          query_magnitude),
-      internal_id};
+T VectorHNSW<T>::ComputeDistance(absl::string_view query,
+                                 VectorRecord *vector_record,
+                                 float query_magnitude) const {
+  return algo_->fstdistfunc_(query.data(), vector_record->GetRawVector(),
+                             algo_->dist_func_param_, query_magnitude);
 }
 
 // Getting max label from label_lookup_ (active + tombstoned).

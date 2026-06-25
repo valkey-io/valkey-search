@@ -40,6 +40,17 @@ if [ -S "$SSH_AUTH_SOCK" ]; then
 fi
 
 cleanup() {
+  if [ -f "$WORKSPACE_DIR/.build-debug/compile_commands.json" ]; then
+    python3 -c '
+import sys
+with open(sys.argv[1], "r") as f:
+    content = f.read()
+content = content.replace(sys.argv[2], sys.argv[3])
+with open(sys.argv[1], "w") as f:
+    f.write(content)
+' "$WORKSPACE_DIR/.build-debug/compile_commands.json" "/workspaces/$WORKSPACE_BASENAME" "$WORKSPACE_DIR" 2>/dev/null || true
+    ln -sfn .build-debug/compile_commands.json "$WORKSPACE_DIR/compile_commands.json" 2>/dev/null || true
+  fi
   if [ -n "$PROXY_PID" ]; then
     kill "$PROXY_PID" 2>/dev/null || true
   fi

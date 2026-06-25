@@ -173,8 +173,7 @@ class HierarchicalNSW
   void clear() {
     if (data_level0_memory_ != nullptr) {
       for (tableint i = 0; i < cur_element_count_; i++) {
-        std::destroy_at(
-            reinterpret_cast<SavedVectorT *>(getDataPtrByInternalId(i)));
+        std::destroy_at(getDataPtrByInternalId(i));
       }
       data_level0_memory_->clear();
     }
@@ -228,44 +227,49 @@ class HierarchicalNSW
     return (labeltype *)((*data_level0_memory_)[internal_id] + label_offset_);
   }
 
-  inline char *getDataPtrByInternalId(tableint internal_id) const {
-    return ((*data_level0_memory_)[internal_id] + offsetData_);
+  inline SavedVectorT *getDataPtrByInternalId(tableint internal_id) const {
+    return reinterpret_cast<SavedVectorT *>(
+        (*data_level0_memory_)[internal_id] + offsetData_);
   }
 
   inline const SavedVectorT &getDataByInternalId(tableint internal_id) const {
-    return *reinterpret_cast<const SavedVectorT *>(
-        getDataPtrByInternalId(internal_id));
+    return *(getDataPtrByInternalId(internal_id));
   }
 
   inline void setDataByInternalId(tableint internal_id,
                                   const InputVectorT &datapoint) {
-    *reinterpret_cast<SavedVectorT *>(getDataPtrByInternalId(internal_id)) =
-        datapoint.ToVectorRecord();
+    *(getDataPtrByInternalId(internal_id)) = datapoint.GetVectorRecord();
+  }
+  inline void setDataByInternalId(tableint internal_id,
+                                  const SavedVectorT &datapoint) {
+    *(getDataPtrByInternalId(internal_id)) = datapoint;
   }
 
   inline void initDataByInternalId(tableint internal_id,
                                    const InputVectorT &datapoint) {
     new (getDataPtrByInternalId(internal_id))
-        SavedVectorT(datapoint.ToVectorRecord());
+        SavedVectorT(datapoint.GetVectorRecord());
   }
 
   inline dist_t evaluateDistance(const SavedVectorT &a,
                                  const SavedVectorT &b) const {
     float reciprocal_mag_product =
-        normalized_ ? a.GetReciprocalMagnitude() * b.GetReciprocalMagnitude() : 1.0f;
-    return fstdistfunc_(a.GetRawVector(), b.GetRawVector(), dist_func_param_,
+        normalized_ ? a->GetReciprocalMagnitude() * b->GetReciprocalMagnitude()
+                    : 1.0f;
+    return fstdistfunc_(a->GetRawVector(), b->GetRawVector(), dist_func_param_,
                         reciprocal_mag_product);
   }
   inline dist_t evaluateDistance(const InputVectorT &a, const SavedVectorT &b,
                                  bool is_rhs_marked_deleted) const {
     if (is_rhs_marked_deleted) {
-      const void *query_vec =
+      const char *query_vec =
           normalized_ ? a.GetNormalizedVector() : a.GetRawVector();
-      return fstdistfunc_(query_vec, b.GetRawVector(), dist_func_param_, 1);
+      return fstdistfunc_(query_vec, b->GetRawVector(), dist_func_param_, 1);
     }
     float reciprocal_mag_product =
-        normalized_ ? a.GetReciprocalMagnitude() * b.GetReciprocalMagnitude() : 1.0f;
-    return fstdistfunc_(a.GetRawVector(), b.GetRawVector(), dist_func_param_,
+        normalized_ ? a.GetReciprocalMagnitude() * b->GetReciprocalMagnitude()
+                    : 1.0f;
+    return fstdistfunc_(a.GetRawVector(), b->GetRawVector(), dist_func_param_,
                         reciprocal_mag_product);
   }
 
@@ -337,10 +341,10 @@ class HierarchicalNSW
       __builtin_prefetch((char *)(visited_array + *(data + 1)), 0, 3);
       __builtin_prefetch((char *)(visited_array + *(data + 1) + 64), 0, 3);
       if (size > 0) {
-        __builtin_prefetch(getDataByInternalId(*datal).GetRawVector(), 0, 3);
+        __builtin_prefetch(getDataByInternalId(*datal)->GetRawVector(), 0, 3);
       }
       if (size > 1) {
-        __builtin_prefetch(getDataByInternalId(*(datal + 1)).GetRawVector(), 0,
+        __builtin_prefetch(getDataByInternalId(*(datal + 1))->GetRawVector(), 0,
                            3);
       }
 #endif
@@ -352,7 +356,7 @@ class HierarchicalNSW
         if (j + 1 < size) {
           __builtin_prefetch((char *)(visited_array + *(datal + j + 1)), 0, 3);
           __builtin_prefetch(
-              getDataByInternalId(*(datal + j + 1)).GetRawVector(), 0, 3);
+              getDataByInternalId(*(datal + j + 1))->GetRawVector(), 0, 3);
         }
 #endif
         if (visited_array[candidate_id] == visited_array_tag) continue;
@@ -365,7 +369,7 @@ class HierarchicalNSW
           candidateSet.emplace(-dist1, candidate_id);
 #ifdef USE_PREFETCH
           __builtin_prefetch(
-              getDataByInternalId(candidateSet.top().second).GetRawVector(), 0,
+              getDataByInternalId(candidateSet.top().second)->GetRawVector(), 0,
               3);
 #endif
 
@@ -417,7 +421,7 @@ class HierarchicalNSW
       top_candidates.emplace(dist, ep_id);
       if (!bare_bone_search && stop_condition) {
         stop_condition->add_point_to_result(getExternalLabel(ep_id),
-                                            ep_data.GetRawVector(), dist);
+                                            ep_data->GetRawVector(), dist);
       }
       candidate_set.emplace(-dist, ep_id);
     } else {
@@ -511,7 +515,7 @@ class HierarchicalNSW
               top_candidates.emplace(dist, candidate_id);
               if (!bare_bone_search && stop_condition) {
                 stop_condition->add_point_to_result(
-                    getExternalLabel(candidate_id), currObj1.GetRawVector(),
+                    getExternalLabel(candidate_id), currObj1->GetRawVector(),
                     dist);
               }
             }
@@ -528,7 +532,7 @@ class HierarchicalNSW
               if (!bare_bone_search && stop_condition) {
                 stop_condition->remove_point_from_result(
                     getExternalLabel(id),
-                    getDataByInternalId(id).GetRawVector(), dist);
+                    getDataByInternalId(id)->GetRawVector(), dist);
                 flag_remove_extra = stop_condition->should_remove_extra();
               } else {
                 flag_remove_extra = top_candidates.size() > ef;
@@ -867,8 +871,6 @@ class HierarchicalNSW
   absl::Status LoadIndex(InputStream &input, SpaceInterface<dist_t> *s,
                          size_t max_elements_i,
                          SavedVectorGenerator generator) {
-    clear();
-
     VMSDK_ASSIGN_OR_RETURN(auto serialized_header, input.LoadChunk());
     auto header = std::make_unique<data_model::HNSWIndexHeader>();
     if (!header->ParseFromString(*serialized_header)) {
@@ -917,7 +919,8 @@ class HierarchicalNSW
       memcpy((char *)&id, chunk->data() + size_links_level0_ + vector_size_,
              sizeof(labeltype));
       new (getDataPtrByInternalId(i)) SavedVectorT(generator(
-          absl::string_view(chunk->data() + size_links_level0_, vector_size_)));
+          absl::string_view(chunk->data() + size_links_level0_, vector_size_),
+          isMarkedDeleted(i)));
       memcpy((*data_level0_memory_)[i] + label_offset_, (char *)&id,
              sizeof(labeltype));
       cur_element_count_++;
@@ -973,8 +976,7 @@ class HierarchicalNSW
     if (search == label_lookup_.end() || isMarkedDeleted(search->second)) {
       return nullptr;
     }
-    return reinterpret_cast<SavedVectorT *>(
-        getDataPtrByInternalId(search->second));
+    return getDataPtrByInternalId(search->second);
   }
 
   template <typename data_t>
@@ -1253,13 +1255,13 @@ class HierarchicalNSW
           int size = getListCount(data);
           tableint *datal = (tableint *)(data + 1);
 #ifdef USE_PREFETCH
-          __builtin_prefetch(getDataByInternalId(*datal).GetRawVector(), 0, 3);
+          __builtin_prefetch(getDataByInternalId(*datal)->GetRawVector(), 0, 3);
 #endif
           for (int i = 0; i < size; i++) {
 #ifdef USE_PREFETCH
             if (i + 1 < size) {
               __builtin_prefetch(
-                  getDataByInternalId(*(datal + i + 1)).GetRawVector(), 1, 3);
+                  getDataByInternalId(*(datal + i + 1))->GetRawVector(), 1, 3);
             }
 #endif
             tableint cand = datal[i];

@@ -30,41 +30,35 @@ namespace valkey_search::indexes {
 
 class InputVector {
  public:
-  explicit InputVector(absl::string_view raw_vector, float magnitude,
-                       const std::vector<char> &normalized_vector,
-                       Allocator *allocator = nullptr)
-      : raw_vector_(raw_vector),
-        reciprocal_magnitude_(1.0f / magnitude),
-        vector_allocator_(allocator),
-        normalized_vector_(normalized_vector) {}
+  InputVector(const std::shared_ptr<VectorRecord> &vector_record,
+              const std::vector<char> &normalized_vector)
+      : reciprocal_magnitude_(vector_record->GetReciprocalMagnitude()),
+        normalized_vector_(normalized_vector),
+        vector_record_(vector_record) {}
 
-  inline const char *GetRawVector() const { return raw_vector_.data(); }
+  inline const char *GetRawVector() const {
+    return vector_record_->GetRawVector();
+  }
   inline float GetReciprocalMagnitude() const { return reciprocal_magnitude_; }
   inline const char *GetNormalizedVector() const {
     return normalized_vector_.data();
   }
-  inline operator const void *() const { return GetRawVector(); }
-  inline operator const char *() const { return GetRawVector(); }
-  VectorRecord ToVectorRecord() const {
-#ifndef SAN_BUILD
-    CHECK(vector_allocator_ != nullptr);
-#endif
-    return VectorRecord(
-        StringInternStore::Intern(raw_vector_, vector_allocator_),
-        reciprocal_magnitude_);
+
+  inline std::shared_ptr<VectorRecord> GetVectorRecord() const {
+    return vector_record_;
   }
 
  private:
-  absl::string_view raw_vector_;
-  Allocator *vector_allocator_;
   float reciprocal_magnitude_;
   const std::vector<char> &normalized_vector_;
+  std::shared_ptr<VectorRecord> vector_record_;
 };
 
 template <typename T>
 class VectorHNSW : public VectorBase {
  public:
-  using HNSWIndex = hnswlib::HierarchicalNSW<T, InputVector, VectorRecord>;
+  using HNSWIndex =
+      hnswlib::HierarchicalNSW<T, InputVector, std::shared_ptr<VectorRecord>>;
 
   static absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> Create(
       const data_model::VectorIndex &vector_index_proto,
@@ -83,7 +77,6 @@ class VectorHNSW : public VectorBase {
     return space_.get();
   }
 
-  int GetDimensions() const { return dimensions_; }
   size_t GetCapacity() const override
       ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_) {
     return algo_->max_elements_;
@@ -107,36 +100,30 @@ class VectorHNSW : public VectorBase {
 
  protected:
   absl::Status ResizeIfFull() ABSL_LOCKS_EXCLUDED(resize_mutex_);
-  absl::Status AddRecordImpl(uint64_t internal_id, absl::string_view record,
-                             float magnitude,
+  absl::Status AddRecordImpl(uint64_t internal_id,
+                             const std::shared_ptr<VectorRecord> &vector_record,
                              const std::vector<char> &norm_record) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
 
   absl::Status RemoveRecordImpl(uint64_t internal_id) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
-  absl::Status ModifyRecordImpl(uint64_t internal_id, absl::string_view record,
-                                float magnitude,
-                                const std::vector<char> &norm_record) override
+  absl::Status ModifyRecordImpl(
+      uint64_t internal_id, const std::shared_ptr<VectorRecord> &vector_record,
+      const std::vector<char> &norm_record) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
   void ToProtoImpl(data_model::VectorIndex *vector_index_proto) const override;
   int RespondWithInfoImpl(ValkeyModuleCtx *ctx) const override;
   absl::Status SaveIndexImpl(RDBChunkOutputStream chunked_out) const override;
-  absl::StatusOr<std::pair<float, hnswlib::labeltype>>
-  ComputeDistanceFromRecordImpl(uint64_t internal_id, absl::string_view query,
-                                float query_magnitude) const override
-      ABSL_NO_THREAD_SAFETY_ANALYSIS;
-  const char *GetVectorImpl(uint64_t internal_id) const override
-      ABSL_NO_THREAD_SAFETY_ANALYSIS {
-    return algo_->getPoint(internal_id)->GetRawVector();
+  T ComputeDistance(absl::string_view query, VectorRecord *vector_record,
+                    float query_magnitude) const override;
+  std::shared_ptr<VectorRecord> &GetVectorLockFree(
+      uint64_t internal_id) const override ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    return (*algo_->getPoint(internal_id));
   }
-  bool IsVectorMatch(uint64_t internal_id,
-                     absl::string_view vector) const override
-      ABSL_LOCKS_EXCLUDED(resize_mutex_);
+  std::optional<hnswlib::tableint> GetAlgoIdLockFree(
+      uint64_t internal_id) const override;
   uint64_t GetMaxInternalLabel() const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
   size_t GetLabelCount() const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
-  void DenormalizeRecordInPlace(uint64_t internal_id,
-                                absl::string_view denorm_vector,
-                                float magnitude) override;
 
  private:
   VectorHNSW(int dimensions, absl::string_view attribute_identifier,
@@ -146,7 +133,6 @@ class VectorHNSW : public VectorBase {
 
   std::unique_ptr<HNSWIndex> algo_ ABSL_GUARDED_BY(resize_mutex_);
   std::unique_ptr<hnswlib::SpaceInterface<T>> space_;
-  mutable absl::Mutex resize_mutex_;
 };
 
 }  // namespace valkey_search::indexes

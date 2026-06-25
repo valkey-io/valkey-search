@@ -72,7 +72,7 @@ class BruteforceSearch
     auto search = dict_external_to_internal.find(label);
     if (search != dict_external_to_internal.end()) {
       idx = search->second;
-      *reinterpret_cast<SavedVectorT *>((*data_)[idx]) = datapoint;
+      getPointByInternalId(idx) = datapoint;
     } else {
       if (cur_element_count_ >= data_->getCapacity()) {
         throw std::runtime_error(
@@ -81,20 +81,23 @@ class BruteforceSearch
       idx = cur_element_count_;
       dict_external_to_internal[label] = idx;
       cur_element_count_++;
-      SavedVectorT *stored_vector =
-          reinterpret_cast<SavedVectorT *>((*data_)[idx]);
+      SavedVectorT *stored_vector = &getPointByInternalId(idx);
       new (stored_vector) SavedVectorT(datapoint);
     }
     memcpy((*data_)[idx] + sizeof(SavedVectorT), &label, sizeof(labeltype));
   }
 
-  SavedVectorT *getPoint(labeltype cur_external) {
-    std::unique_lock<std::mutex> lock(index_lock);
-    auto found = dict_external_to_internal.find(cur_external);
+  inline SavedVectorT &getPointByInternalId(size_t internal_id) {
+    CHECK_LT(internal_id, cur_element_count_);
+    return *reinterpret_cast<SavedVectorT *>((*data_)[internal_id]);
+  }
+
+  inline SavedVectorT *getPointByExternalId(labeltype external_id) {
+    auto found = dict_external_to_internal.find(external_id);
     if (found == dict_external_to_internal.end()) {
       return nullptr;
     }
-    return reinterpret_cast<SavedVectorT *>((*data_)[found->second]);
+    return &(getPointByInternalId(found->second));
   }
 
   void removePoint(labeltype cur_external) {
@@ -140,11 +143,12 @@ class BruteforceSearch
          i++) {
       const SavedVectorT &stored_vector =
           *reinterpret_cast<const SavedVectorT *>((*data_)[i]);
-      dist_t dist = fstdistfunc_(
-          query_data, stored_vector, dist_func_param_,
-          normalize_ ? query_data.GetReciprocalMagnitude() *
-                           stored_vector.GetReciprocalMagnitude()
-                     : 1.0f);
+      dist_t dist =
+          fstdistfunc_(query_data->GetRawVector(),
+                       stored_vector->GetRawVector(), dist_func_param_,
+                       normalize_ ? query_data->GetReciprocalMagnitude() *
+                                        stored_vector->GetReciprocalMagnitude()
+                                  : 1.0f);
       labeltype label = *((labeltype *)((*data_)[i] + sizeof(SavedVectorT)));
       if ((!isIdAllowed) || (*isIdAllowed)(label)) {
         topResults.emplace(dist, label);
@@ -160,11 +164,12 @@ class BruteforceSearch
          i++) {
       const SavedVectorT &stored_vector =
           *reinterpret_cast<const SavedVectorT *>((*data_)[i]);
-      dist_t dist = fstdistfunc_(
-          query_data, stored_vector, dist_func_param_,
-          normalize_ ? query_data.GetReciprocalMagnitude() *
-                           stored_vector.GetReciprocalMagnitude()
-                     : 1.0f);
+      dist_t dist =
+          fstdistfunc_(query_data->GetRawVector(),
+                       stored_vector->GetRawVector(), dist_func_param_,
+                       normalize_ ? query_data->GetReciprocalMagnitude() *
+                                        stored_vector->GetReciprocalMagnitude()
+                                  : 1.0f);
       if (topResults.size() < k || dist <= lastdist) {
         labeltype label = *((labeltype *)((*data_)[i] + sizeof(SavedVectorT)));
         if ((!isIdAllowed) || (*isIdAllowed)(label)) {

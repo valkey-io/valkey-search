@@ -87,7 +87,7 @@ absl::Status FTInternalUpdateCmd(ValkeyModuleCtx *ctx,
               std::string(key) + "'"));
     }
     i++;
-    if (i + arg_count > argc) {
+    if (arg_count > argc - i) {
       return HandleInternalUpdateFailure(
           ctx, "optional arguments parse", id,
           absl::InvalidArgumentError(

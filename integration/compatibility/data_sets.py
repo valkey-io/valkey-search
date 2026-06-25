@@ -750,6 +750,21 @@ def load_data_cluster(cluster_client, test_case, data_set_name, key_type):
     for setup_cmd in data[data_set_name].get(SETUP_KEY(key_type), []):
         primary0.execute_command(*setup_cmd)
 
+    # Verify that each alias expected to be live after setup actually resolves,
+    # catching cluster-wide propagation failures early.
+    if data[data_set_name].get(SETUP_KEY(key_type)):
+        setup_cmds = data[data_set_name][SETUP_KEY(key_type)]
+        live_aliases: set[str] = set()
+        for cmd in setup_cmds:
+            verb = cmd[0].upper()
+            alias = cmd[1]
+            if verb in ("FT.ALIASADD", "FT.ALIASUPDATE"):
+                live_aliases.add(alias)
+            elif verb == "FT.ALIASDEL":
+                live_aliases.discard(alias)
+        for alias in live_aliases:
+            primary0.execute_command("FT.INFO", alias)
+
     print(f"cluster load completed {data_set_name} {key_type}")
 
 def extract_vocab_from_text_data(dataset_name, key_type):

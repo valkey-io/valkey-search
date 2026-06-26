@@ -93,6 +93,12 @@ if [ ! -f "${INSTALL_DIR}/include/highwayhash/highwayhash.h" ]; then
     cp -fr ${SRC_DIR}/highwayhash/highwayhash ${INSTALL_DIR}/include
 fi
 
+if [ ! -f "${INSTALL_DIR}/include/re2/re2.h" ]; then
+    clone_repo "https://github.com/google/re2" "2025-11-05"
+    RE2_ARGS="-DRE2_BUILD_TESTING=OFF -DBUILD_SHARED_LIBS=OFF -Dabsl_DIR=${INSTALL_DIR}/lib/cmake/absl"
+    build_submodule "re2" "${RE2_ARGS}" "install"
+fi
+
 if [[ "${SAN_BUILD}" != "no" && ! -f "${INSTALL_DIR}/include/benchmark/benchmark.h" ]]; then
     echo "Building Google Benchmark..."
     clone_repo "https://github.com/google/benchmark" "v1.8.3"

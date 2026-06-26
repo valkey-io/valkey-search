@@ -81,6 +81,8 @@ svs::runtime::v0::StorageKind ToSVSStorageKind(
       return svs::runtime::v0::StorageKind::LeanVec4x8;
     case data_model::SVS_COMPRESSION_LEANVEC8X8:
       return svs::runtime::v0::StorageKind::LeanVec8x8;
+    case data_model::SVS_COMPRESSION_SQ8:
+      return svs::runtime::v0::StorageKind::SQI8;
     default:
       return svs::runtime::v0::StorageKind::FP32;
   }
@@ -97,6 +99,7 @@ const char* CompressionTypeName(data_model::SVSCompressionType type) {
     case data_model::SVS_COMPRESSION_LEANVEC4X4: return "LEANVEC4X4";
     case data_model::SVS_COMPRESSION_LEANVEC4X8: return "LEANVEC4X8";
     case data_model::SVS_COMPRESSION_LEANVEC8X8: return "LEANVEC8X8";
+    case data_model::SVS_COMPRESSION_SQ8: return "SQ8";
     default: return "UNKNOWN";
   }
 }

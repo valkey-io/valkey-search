@@ -239,6 +239,7 @@ const absl::NoDestructor<
         {"LEANVEC4X4", data_model::SVS_COMPRESSION_LEANVEC4X4},
         {"LEANVEC4X8", data_model::SVS_COMPRESSION_LEANVEC4X8},
         {"LEANVEC8X8", data_model::SVS_COMPRESSION_LEANVEC8X8},
+        {"SQ8", data_model::SVS_COMPRESSION_SQ8},
     });
 const absl::NoDestructor<
     absl::flat_hash_map<absl::string_view, data_model::RawVectorStorage>>

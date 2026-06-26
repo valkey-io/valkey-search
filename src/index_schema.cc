@@ -639,7 +639,8 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
 
 void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
                                       MutatedAttributes &mutated_attributes,
-                                      const Key &key) {
+                                      const Key &key)
+    ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
   if (text_index_schema_) {
     // Always clean up indexed words from all text attributes of the key up
     // front

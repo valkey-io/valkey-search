@@ -10,7 +10,6 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <exception>
 #include <memory>
 #include <mutex>  // NOLINT(build/c++11)
@@ -109,28 +108,24 @@ template <typename T>
 void VectorHNSW<T>::TrackVector(uint64_t internal_id,
                                 const InternedStringPtr &vector) {
   absl::MutexLock lock(&tracked_vectors_mutex_);
-  tracked_vectors_.push_back(vector);
+  tracked_vectors_[internal_id] = vector;
 }
 
 template <typename T>
 bool VectorHNSW<T>::IsVectorMatch(uint64_t internal_id,
                                   const InternedStringPtr &vector) {
-  absl::ReaderMutexLock lock(&resize_mutex_);
-  {
-    std::unique_lock<std::mutex> lock_label(
-        algo_->getLabelOpMutex(internal_id));
-    auto id = hnswlib_helpers::GetInternalId(algo_.get(), internal_id);
-    if (!id.has_value()) {
-      return false;
-    }
-    char *data_ptrv = algo_->getDataByInternalId(*id);
-    size_t dim = *((size_t *)algo_->dist_func_param_);
-    absl::string_view record(data_ptrv, dim * sizeof(T));
-    return vector->Str() == record;
+  absl::ReaderMutexLock lock(&tracked_vectors_mutex_);
+  auto it = tracked_vectors_.find(internal_id);
+  if (it == tracked_vectors_.end()) {
+    return false;
   }
+  return it->second == vector;
 }
-// UnTrackVector does not delete the vector in VectorHNSW, as vectors are never
-// physically removed from the graph—only marked as deleted.
+
+// UnTrackVector is a no-op for HNSW because deleted nodes still participate
+// in graph routing. On key modification, the same internal_id is reused, so
+// TrackVector overwrites the map entry in-place (fixing the unbounded growth
+// the old deque had on repeated modifications).
 template <typename T>
 void VectorHNSW<T>::UnTrackVector(uint64_t internal_id) {}
 

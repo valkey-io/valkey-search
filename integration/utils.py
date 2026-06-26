@@ -88,13 +88,16 @@ def find_local_key(client: Valkey, prefix: str = "key:") -> str:
                     return key
     raise RuntimeError(f"No key found for node on port {node_port}")
 
-def wait_for_pausepoint(client, pausepoint_name, timeout=10):
-    """Wait for a pausepoint to be hit by at least one thread."""
-    waiters.wait_for_true(
-        lambda: client.execute_command("FT._DEBUG", "PAUSEPOINT", "TEST", pausepoint_name) > 0,
-        timeout=timeout
-    )
-    return True
+def pausepoint_hit(client, pausepoint_name):
+    """Predicate: True once at least one thread is paused at the pausepoint.
+
+    PAUSEPOINT TEST returns the number of threads currently paused at the
+    pausepoint. Use with the standard waiter, which scales its timeout up
+    automatically under ASAN:
+
+        waiters.wait_for_true(lambda: pausepoint_hit(client, pausepoint_name))
+    """
+    return client.execute_command("FT._DEBUG", "PAUSEPOINT", "TEST", pausepoint_name) > 0
 
 class IndexingTestHelper:
     """Helper class containing common functions for testing indexing operations."""

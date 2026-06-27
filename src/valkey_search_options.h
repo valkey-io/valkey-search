@@ -64,6 +64,12 @@ const config::Boolean& GetHNSWAllowReplaceDeleted();
 /// Return a mutable reference for testing
 config::Boolean& GetHNSWAllowReplaceDeletedMutable();
 
+/// Return the configuration entry for the HNSW load-time validation kill switch
+const config::Boolean& GetHNSWValidationEnable();
+
+/// Return a mutable reference for testing
+config::Boolean& GetHNSWValidationEnableMutable();
+
 /// Reset the state of the options (mainly needed for testing)
 absl::Status Reset();
 

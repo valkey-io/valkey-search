@@ -145,8 +145,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     size_links_level0_ = maxM0_ * sizeof(tableint) + sizeof(linklistsizeint);
     offsetData_ =
         (size_links_level0_ + alignof(char *) - 1) & ~(alignof(char *) - 1);
-    size_data_per_element_ =
-        offsetData_ + sizeof(char *) + sizeof(labeltype);
+    size_data_per_element_ = offsetData_ + sizeof(char *) + sizeof(labeltype);
     serialize_size_data_per_element_ =
         size_links_level0_ + vector_size_ + sizeof(labeltype);
     label_offset_ = offsetData_ + sizeof(char *);
@@ -391,16 +390,16 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       if (bare_bone_search) {
         flag_stop_search = candidate_dist > lowerBound;
       } else {
-        if (isCancelled && isCancelled->isCancelled()) { // VALKEYSEARCH
-          flag_stop_search = true; // VALKEYSEARCH
-        } else // VALKEYSEARCH
-        if (stop_condition) {
-          flag_stop_search =
-              stop_condition->should_stop_search(candidate_dist, lowerBound);
-        } else {
-          flag_stop_search =
-              candidate_dist > lowerBound && top_candidates.size() == ef;
-        }
+        if (isCancelled && isCancelled->isCancelled()) {  // VALKEYSEARCH
+          flag_stop_search = true;                        // VALKEYSEARCH
+        } else                                            // VALKEYSEARCH
+          if (stop_condition) {
+            flag_stop_search =
+                stop_condition->should_stop_search(candidate_dist, lowerBound);
+          } else {
+            flag_stop_search =
+                candidate_dist > lowerBound && top_candidates.size() == ef;
+          }
       }
       if (flag_stop_search) {
         break;
@@ -419,17 +418,20 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 
       // ---- Three-phase prefetch pipeline -----------------------------------
       // A candidate's vector lives behind a pointer indirection at offsetData_,
-      // so reaching it is a two-deep pointer chase (slot -> vec) layered on top
-      // of a random visited_array probe. Fusing all of that into one loop forces
-      // the chase to serialize per candidate. Instead we fission the expansion
-      // into three passes, each hiding exactly one level of memory latency with
-      // its own lookahead:
+      // so reaching it is a two-deep pointer chase (slot -> vec). Because the
+      // order of visitation to vectors is determined by the graph structure,
+      // the vector addresses look random -- defeating any HW prefetching and
+      // substantially increasing latency. Fusing all of that into one loop
+      // forces the chase to serialize per candidate. Instead we fission the
+      // expansion into three passes, each hiding exactly one level of memory
+      // latency with its own lookahead:
       //   Phase 1 - probe visited_array (random gather), collect unvisited ids.
       //   Phase 2 - resolve the slot indirection into concrete vector pointers.
       //   Phase 3 - compute distances + maintain the candidate heaps.
       // The first two are latency-bound gathers (deep lookahead helps); the
       // third is bandwidth-bound (lookahead of 1, head only, HW streams tail).
-      // Scratch is thread_local so reader threads each keep one reusable buffer.
+      // Scratch is thread_local so reader threads each keep one reusable
+      // buffer.
 #ifdef USE_PREFETCH
       constexpr int kVisitedLookahead = 4;  // P1
       constexpr int kSlotLookahead = 4;     // P2
@@ -447,7 +449,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
           __builtin_prefetch(
               (char *)(visited_array + *(data + j + kVisitedLookahead)), 0, 0);
 #endif
-        tableint candidate_id = (tableint)*(data + j);
+        tableint candidate_id = (tableint) * (data + j);
         if (visited_array[candidate_id] != visited_array_tag) {
           visited_array[candidate_id] = visited_array_tag;
           unvisited.push_back(candidate_id);
@@ -532,8 +534,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
             }
           }
 
-          if (!top_candidates.empty())
-            lowerBound = top_candidates.top().first;
+          if (!top_candidates.empty()) lowerBound = top_candidates.top().first;
         }
       }
     }
@@ -890,8 +891,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         (size_links_level0_ + alignof(char *) - 1) & ~(alignof(char *) - 1);
 
     vector_size_ = s->get_data_size();
-    size_data_per_element_ =
-        offsetData_ + sizeof(char *) + sizeof(labeltype);
+    size_data_per_element_ = offsetData_ + sizeof(char *) + sizeof(labeltype);
     label_offset_ = offsetData_ + sizeof(char *);
 
     fstdistfunc_ = s->get_dist_func();
@@ -1448,16 +1448,16 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
   std::priority_queue<std::pair<dist_t, labeltype>> searchKnn(
       const void *query_data, size_t k,
       BaseFilterFunctor *isIdAllowed = nullptr,
-      BaseCancellationFunctor *isCancelled = nullptr // VALKEYSEARCH
-    ) const {
+      BaseCancellationFunctor *isCancelled = nullptr  // VALKEYSEARCH
+  ) const {
     return searchKnn(query_data, k, std::nullopt, isIdAllowed, isCancelled);
   }
 
   std::priority_queue<std::pair<dist_t, labeltype>> searchKnn(
       const void *query_data, size_t k, std::optional<size_t> ef_runtime,
       BaseFilterFunctor *isIdAllowed = nullptr,
-      BaseCancellationFunctor *isCancelled = nullptr // VALKEYSEARCH
-    ) const {
+      BaseCancellationFunctor *isCancelled = nullptr  // VALKEYSEARCH
+  ) const {
     std::priority_queue<std::pair<dist_t, labeltype>> result;
     if (cur_element_count_ == 0) return result;
 
@@ -1497,7 +1497,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                         std::vector<std::pair<dist_t, tableint>>,
                         CompareByFirst>
         top_candidates;
-    bool bare_bone_search = !num_deleted_ && !isIdAllowed && !isCancelled; // VALKEYSEARCH
+    bool bare_bone_search =
+        !num_deleted_ && !isIdAllowed && !isCancelled;  // VALKEYSEARCH
     if (bare_bone_search) {
       top_candidates = searchBaseLayerST<true>(
           currObj, query_data, std::max(ef_runtime.value_or(ef_), k),
@@ -1562,8 +1563,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                         std::vector<std::pair<dist_t, tableint>>,
                         CompareByFirst>
         top_candidates;
-    top_candidates = searchBaseLayerST<false>(currObj, query_data, 0,
-                                              isIdAllowed, nullptr, &stop_condition);
+    top_candidates = searchBaseLayerST<false>(
+        currObj, query_data, 0, isIdAllowed, nullptr, &stop_condition);
 
     size_t sz = top_candidates.size();
     result.resize(sz);

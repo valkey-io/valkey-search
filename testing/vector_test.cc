@@ -713,7 +713,8 @@ TEST_F(VectorIndexTest, LoadRecomputesAlignedOffsetForOldSnapshot) {
   hnswlib::HierarchicalNSW<float> algo(&l2_space);
   SingleChunkInputStream input(serialized);
   VMSDK_EXPECT_OK(algo.LoadIndex(input, &l2_space, /*max_elements_i=*/16,
-                                 nullptr, /*expected_m=*/kM, /*validate=*/true));
+                                 nullptr, /*expected_m=*/kM,
+                                 /*validate=*/true));
   EXPECT_EQ(algo.offsetData_ % alignof(char*), 0u);
   EXPECT_EQ(algo.size_data_per_element_ % alignof(char*), 0u);
 }
@@ -769,10 +770,10 @@ class BufTracker : public hnswlib::VectorTracker {
 
 // On-disk geometry for kM / kDimensions, used to locate bytes for mutation.
 constexpr size_t kU32 = sizeof(uint32_t);
-constexpr size_t kStride = kM * kU32 + kU32;                   // 68
-constexpr size_t kLinks0 = 2 * kM * kU32 + kU32;               // 132
-constexpr size_t kVecBytes = kDimensions * sizeof(float);      // 400
-constexpr size_t kLabelOff = kLinks0 + kVecBytes;              // 532
+constexpr size_t kStride = kM * kU32 + kU32;               // 68
+constexpr size_t kLinks0 = 2 * kM * kU32 + kU32;           // 132
+constexpr size_t kVecBytes = kDimensions * sizeof(float);  // 400
+constexpr size_t kLabelOff = kLinks0 + kVecBytes;          // 532
 constexpr size_t kElemChunkBytes = kLabelOff + sizeof(hnswlib::labeltype);
 
 template <typename T>
@@ -794,13 +795,23 @@ void PokeAt(std::string* c, size_t off, T v) {
 ChunkStream BuildGoldenChunks(const std::vector<int>& force_levels,
                               size_t max_elements) {
   hnswlib::L2Space space{kDimensions};
-  hnswlib::HierarchicalNSW<float> algo(&space, max_elements, kM, kEFConstruction,
+  hnswlib::HierarchicalNSW<float> algo(&space, max_elements, kM,
+                                       kEFConstruction,
                                        /*random_seed=*/100,
                                        /*allow_replace_deleted=*/false);
+  // HNSW stores a POINTER to each vector (it does not copy). Both addPoint
+  // (distance computations against earlier elements) and SaveIndex dereference
+  // those pointers, so the source vectors must outlive SaveIndex. Own them all
+  // here until the index is serialized; reserve() keeps the backing buffers
+  // stable as the container grows. After SaveIndex the golden ChunkStream owns
+  // its bytes by value, so this storage can safely be destroyed.
+  std::vector<std::vector<float>> vectors;
+  vectors.reserve(force_levels.size());
   for (size_t i = 0; i < force_levels.size(); i++) {
     std::vector<float> v(kDimensions, 0.1f);
     v[i % kDimensions] = static_cast<float>(i + 1);
-    algo.addPoint(v.data(), /*label=*/i, force_levels[i]);
+    vectors.push_back(std::move(v));
+    algo.addPoint(vectors.back().data(), /*label=*/i, force_levels[i]);
   }
   ChunkStream golden;
   EXPECT_TRUE(algo.SaveIndex(golden).ok());
@@ -950,8 +961,8 @@ TEST_F(VectorIndexTest, RejectHeaderMaxLevelTooLarge) {
 TEST_F(VectorIndexTest, RejectHeaderSerializeSizeMismatch) {
   auto golden = MultiLayerGolden();
   auto h = GetHeader(golden);
-  h.set_serialize_size_data_per_element(
-      h.serialize_size_data_per_element() + 1);
+  h.set_serialize_size_data_per_element(h.serialize_size_data_per_element() +
+                                        1);
   SetHeader(&golden, h);
   ExpectReject(std::move(golden), "serialized element size is inconsistent");
 }
@@ -988,15 +999,16 @@ TEST_F(VectorIndexTest, RejectLevel0CountTooLarge) {
 
 TEST_F(VectorIndexTest, RejectLevel0NeighborOutOfRange) {
   auto golden = MultiLayerGolden();
-  PokeAt<uint16_t>(&golden.chunks[2], 0, 1);          // element 1: count = 1
-  PokeAt<uint32_t>(&golden.chunks[2], kU32, 9999);    // neighbor[0] out of range
+  PokeAt<uint16_t>(&golden.chunks[2], 0, 1);        // element 1: count = 1
+  PokeAt<uint32_t>(&golden.chunks[2], kU32, 9999);  // neighbor[0] out of range
   ExpectReject(std::move(golden), "level-0 neighbor id out of range");
 }
 
 TEST_F(VectorIndexTest, RejectDuplicateLabel) {
   auto golden = MultiLayerGolden();
   auto label0 = PeekAt<hnswlib::labeltype>(golden.chunks[1], kLabelOff);
-  PokeAt<hnswlib::labeltype>(&golden.chunks[3], kLabelOff, label0);  // element 2 dup
+  PokeAt<hnswlib::labeltype>(&golden.chunks[3], kLabelOff,
+                             label0);  // element 2 dup
   ExpectReject(std::move(golden), "duplicate label in index");
 }
 
@@ -1012,7 +1024,8 @@ TEST_F(VectorIndexTest, RejectSizeChunkWrongSize) {
 TEST_F(VectorIndexTest, RejectLinkListSizeNotMultiple) {
   auto golden = MultiLayerGolden();
   auto g = AnalyzeGolden(golden);
-  PokeAt<uint64_t>(&golden.chunks[g.size_chunk[g.enterpoint]], 0, 2 * kStride + 1);
+  PokeAt<uint64_t>(&golden.chunks[g.size_chunk[g.enterpoint]], 0,
+                   2 * kStride + 1);
   ExpectReject(std::move(golden), "not a multiple of the stride");
 }
 
@@ -1027,14 +1040,16 @@ TEST_F(VectorIndexTest, RejectElementLevelExceedsMaxLevel) {
 TEST_F(VectorIndexTest, RejectUpperChunkWrongSize) {
   auto golden = MultiLayerGolden();
   auto g = AnalyzeGolden(golden);
-  golden.chunks[g.data_chunk[g.enterpoint]].resize(kStride);  // declared 2 levels
+  golden.chunks[g.data_chunk[g.enterpoint]].resize(
+      kStride);  // declared 2 levels
   ExpectReject(std::move(golden), "upper-level link-list chunk has the wrong");
 }
 
 TEST_F(VectorIndexTest, RejectUpperCountTooLarge) {
   auto golden = MultiLayerGolden();
   auto g = AnalyzeGolden(golden);
-  PokeAt<uint16_t>(&golden.chunks[g.data_chunk[g.enterpoint]], 0, kM + 1);  // level 1
+  PokeAt<uint16_t>(&golden.chunks[g.data_chunk[g.enterpoint]], 0,
+                   kM + 1);  // level 1
   ExpectReject(std::move(golden), "upper-level neighbor count exceeds M");
 }
 
@@ -1051,7 +1066,8 @@ TEST_F(VectorIndexTest, RejectUpperNeighborAbsentAtLevel) {
   auto g = AnalyzeGolden(golden);
   // Entry point's level-2 list -> element 1, which exists only at level 1.
   PokeAt<uint16_t>(&golden.chunks[g.data_chunk[g.enterpoint]], kStride, 1);
-  PokeAt<uint32_t>(&golden.chunks[g.data_chunk[g.enterpoint]], kStride + kU32, 1);
+  PokeAt<uint32_t>(&golden.chunks[g.data_chunk[g.enterpoint]], kStride + kU32,
+                   1);
   ExpectReject(std::move(golden), "neighbor is absent at that level");
 }
 
@@ -1068,8 +1084,9 @@ TEST_F(VectorIndexTest, RejectEntrypointNotMaxLevel) {
 
 TEST_F(VectorIndexTest, ValidationDisabledBypassesChecks) {
   auto golden = MultiLayerGolden();
-  PokeAt<uint16_t>(&golden.chunks[2], 0, 1);        // element 1: count = 1
-  PokeAt<uint32_t>(&golden.chunks[2], kU32, 1);     // neighbor[0] == self (a self-loop)
+  PokeAt<uint16_t>(&golden.chunks[2], 0, 1);  // element 1: count = 1
+  PokeAt<uint32_t>(&golden.chunks[2], kU32,
+                   1);  // neighbor[0] == self (a self-loop)
   // Enabled: rejected. Disabled: loads (the self-loop is not memory-unsafe).
   EXPECT_FALSE(LoadGolden(golden, kGoldenMax, /*validate=*/true).ok());
   VMSDK_EXPECT_OK(LoadGolden(golden, kGoldenMax, /*validate=*/false));

@@ -245,7 +245,9 @@ absl::StatusOr<bool> VectorBase::ModifyRecord(const InternedStringPtr &key,
              "in UntrackKey: "
           << untrack_result.status().message();
     }
+    return modify_result;
   }
+  TrackVector(internal_id, interned_vector);
   return true;
 }
 
@@ -373,7 +375,6 @@ absl::StatusOr<bool> VectorBase::UpdateMetadata(
   if (IsVectorMatch(internal_id, vector)) {
     return false;
   }
-  TrackVector(internal_id, vector);
   return true;
 }
 

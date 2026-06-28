@@ -11,7 +11,7 @@ from typing import Any, Union
 from valkeytestframework.util import waiters
 import threading
 import time
-from utils import wait_for_pausepoint, wait_for_background_tasks
+from utils import pausepoint_hit, wait_for_background_tasks
 
 def canceller(client, client_id):
     my_id = client.execute_command("client id")
@@ -141,8 +141,7 @@ def run_pausepoint_timeout_test(self, pausepoint_name, setup_fn, search_cmd):
     thread = threading.Thread(target=run_search)
     thread.start()
 
-    assert wait_for_pausepoint(client, pausepoint_name, timeout=10), \
-        f"Pausepoint {pausepoint_name} was not hit"
+    waiters.wait_for_true(lambda: pausepoint_hit(client, pausepoint_name))
     assert client.ping() == True, "Server not responsive while pausepoint is held"
 
     thread.join()
@@ -507,9 +506,8 @@ class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
     def check_info_sum(self, name: str, sum_value: int):
         """Sum the values of a given info field across all servers"""
         waiters.wait_for_equal(
-          lambda: self._check_info_sum(name), 
-          sum_value, 
-          timeout=5
+          lambda: self._check_info_sum(name),
+          sum_value
         )
     
     def sum_docs(self, index: Index) -> int:
@@ -530,7 +528,7 @@ class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
         flat_index.create(client)
         hnsw_index.load_data(client, 100)
         # Let the index properly processed
-        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index), 100, timeout=10)
+        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index), 100)
 
         #
         # Nominal case
@@ -585,7 +583,7 @@ class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
         flat_index.create(client)
         hnsw_index.load_data(client, 1000)
 
-        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index), 1000, timeout=10)
+        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index), 1000)
         self.check_info_sum("search_test-counter-ForceTimeoutAggregateCancels", 0)
 
         self.control_set("ForceTimeoutAggregate", "yes")

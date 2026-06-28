@@ -78,7 +78,6 @@ class ReplicationGroup:
         # slave0:ip=127.0.0.1,port=14892,state=online,offset=98,lag=0,type=replica
         waiters.wait_for_true(
             lambda: self._check_all_replicas_are_connected(),
-            timeout=30,
         )
 
         # Now that we see all the replicas are connected, wait for their status to change
@@ -88,7 +87,6 @@ class ReplicationGroup:
             # Wait for the replication to complete for this replica
             waiters.wait_for_true(
                 lambda: self._check_is_replica_online(name),
-                timeout=30,
             )
 
     def _check_all_replicas_are_connected(self):
@@ -455,7 +453,6 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
                 self.CLUSTER_SIZE + (self.CLUSTER_SIZE * replica_count)
             ),
             True,
-            timeout=10,
         )
 
         # Wait for the cluster to be up
@@ -555,8 +552,7 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
         expected_nodes_per_shard = 1 + replica_count
         for node in self.get_nodes():
             waiters.wait_for_true(
-                lambda n=node: self._cluster_slots_complete(n.client, expected_nodes_per_shard),
-                timeout=30
+                lambda n=node: self._cluster_slots_complete(n.client, expected_nodes_per_shard)
             )
         # Then wait for the search module's cached cluster map to expire and update.
         # TODO: Replace the sleep with a wait on condition.

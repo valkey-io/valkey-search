@@ -1,4 +1,8 @@
 #include <cstdlib>
+#include <deque>
+#include <limits>
+#include <new>
+#include <stdexcept>
 
 #include "iostream.h"
 
@@ -254,9 +258,10 @@ AlgorithmInterface<dist_t>::searchKnnCloserFirst(
 class ChunkedArray {
  public:
   ChunkedArray(size_t element_byte_size, size_t elements_per_chunk,
-               size_t element_count)
+               size_t element_count, bool use_large_pages = false)
       : element_byte_size_(element_byte_size),
         elements_per_chunk_(elements_per_chunk),
+        use_large_pages_(use_large_pages),
         element_count_(0) {
     resize(element_count);
   }
@@ -284,7 +289,11 @@ class ChunkedArray {
 
   void clear() {
     for (auto chunk : chunks_) {
-      delete[] chunk;
+      if (use_large_pages_) {
+        operator delete[](chunk, std::align_val_t(kLargePageSize));
+      } else {
+        delete[] chunk;
+      }
     }
     chunks_.clear();
     element_count_ = 0;
@@ -296,7 +305,20 @@ class ChunkedArray {
 
     chunks_.resize(new_chunk_count);
     for (size_t i = chunk_count; i < new_chunk_count; i++) {
-      chunks_[i] = new char[elements_per_chunk_ * element_byte_size_];
+      size_t chunk_size = getSizePerChunk();
+      if (use_large_pages_) {
+        if (chunk_size >
+            std::numeric_limits<size_t>::max() - (kLargePageSize - 1)) {
+          throw std::overflow_error("Chunk allocation size overflow");
+        }
+        size_t rounded_size =
+            ((chunk_size + kLargePageSize - 1) / kLargePageSize) *
+            kLargePageSize;
+        chunks_[i] =
+            new (std::align_val_t(kLargePageSize)) char[rounded_size];
+      } else {
+        chunks_[i] = new char[chunk_size];
+      }
       // Note that we don't initialize the memory on purpose. The caller
       // is expected to track the initialization state.
     }
@@ -304,12 +326,15 @@ class ChunkedArray {
   }
 
  private:
+  static constexpr size_t kLargePageSize = 2 * 1024 * 1024;
+
   size_t getChunkCount(size_t element_count) const {
     return (element_count + elements_per_chunk_ - 1) / elements_per_chunk_;
   }
 
   size_t element_byte_size_;
   size_t elements_per_chunk_;
+  bool use_large_pages_;
   size_t element_count_;
   std::deque<char *> chunks_;
 };

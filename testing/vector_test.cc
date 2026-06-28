@@ -114,6 +114,13 @@ TEST_F(VectorIndexTest, InitializationFlat) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   }
 }
 
+TEST(ChunkedArrayTest, LargeChunksUseLargePageAlignment) {
+  constexpr size_t kLargePageSize = 2 * 1024 * 1024;
+  hnswlib::ChunkedArray chunked_array(1024, 1, 1, true);
+
+  EXPECT_EQ(reinterpret_cast<uintptr_t>(chunked_array[0]) % kLargePageSize, 0);
+}
+
 enum class ExpectedResults { kSuccess, kSkipped, kError };
 
 auto IndexToKey = [](int i) {

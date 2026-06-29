@@ -11,10 +11,12 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "absl/container/flat_hash_set.h"
 #include "absl/strings/string_view.h"
+#include "src/indexes/geoshape.h"
 #include "src/indexes/text/text_iterator.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/type_conversions.h"
@@ -23,6 +25,7 @@ namespace valkey_search::indexes {
 class Text;
 class Numeric;
 class Tag;
+class GeoShape;
 class EntriesFetcherBase;
 }  // namespace valkey_search::indexes
 
@@ -45,12 +48,14 @@ enum class PredicateType {
   kComposedOr,
   kNegate,
   kText,
+  kGeoShape,
   kNone
 };
 
 class TextPredicate;
 class TagPredicate;
 class NumericPredicate;
+class GeoShapePredicate;
 
 struct EvaluationResult {
   bool matches;
@@ -82,6 +87,8 @@ class Evaluator {
   virtual EvaluationResult EvaluateTags(const TagPredicate& predicate) = 0;
   virtual EvaluationResult EvaluateNumeric(
       const NumericPredicate& predicate) = 0;
+  virtual EvaluationResult EvaluateGeoShape(
+      const GeoShapePredicate& predicate) = 0;
   // Access target key for proximity validation (only for Text)
   virtual const InternedStringPtr& GetTargetKey() const = 0;
   virtual bool IsPrefilterEvaluator() const { return false; }
@@ -177,6 +184,35 @@ class TagPredicate : public Predicate {
   std::string alias_;
   std::string raw_tag_string_;
   absl::flat_hash_set<std::string> tags_;
+};
+
+class GeoShapePredicate : public Predicate {
+ public:
+  GeoShapePredicate(
+      const indexes::GeoShape* index, absl::string_view alias,
+      absl::string_view identifier, indexes::SpatialOp op,
+      std::variant<indexes::GeoPoint, indexes::GeoPolygon> query_shape);
+  EvaluationResult Evaluate(Evaluator& evaluator) const override;
+  const indexes::GeoShape* GetIndex() const { return index_; }
+  absl::string_view GetAlias() const { return alias_; }
+  absl::string_view GetIdentifier() const {
+    return vmsdk::ToStringView(identifier_.get());
+  }
+  vmsdk::UniqueValkeyString GetRetainedIdentifier() const {
+    return vmsdk::RetainUniqueValkeyString(identifier_.get());
+  }
+  indexes::SpatialOp GetOp() const { return op_; }
+  const std::variant<indexes::GeoPoint, indexes::GeoPolygon>& GetQueryShape()
+      const {
+    return query_shape_;
+  }
+
+ private:
+  const indexes::GeoShape* index_;
+  std::string alias_;
+  vmsdk::UniqueValkeyString identifier_;
+  indexes::SpatialOp op_;
+  std::variant<indexes::GeoPoint, indexes::GeoPolygon> query_shape_;
 };
 
 using FieldMaskPredicate = uint64_t;

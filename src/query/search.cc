@@ -28,6 +28,7 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "src/attribute_data_type.h"
+#include "src/indexes/geoshape.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
@@ -202,7 +203,8 @@ inline bool IsUnsolvedQuery(QueryOperations query_operations,
   return query_operations & (QueryOperations::kContainsNumeric |
                              QueryOperations::kContainsTag) &&
              query_operations & QueryOperations::kContainsAnd ||
-         (query_operations & QueryOperations::kContainsNegate);
+         (query_operations & QueryOperations::kContainsNegate) ||
+         (query_operations & QueryOperations::kContainsGeoShape);
 }
 
 // Helper fn to identify if deduplication is needed.
@@ -379,6 +381,34 @@ size_t EvaluateFilterAsPrimary(
         size, text_predicate->GetTextIndexSchema()->GetTextIndex(),
         text_predicate->GetFieldMask(), false);
     fetcher->predicate_ = text_predicate;
+    entries_fetchers.push(std::move(fetcher));
+    return size;
+  }
+  if (predicate->GetType() == PredicateType::kGeoShape) {
+    auto geoshape_predicate =
+        dynamic_cast<const GeoShapePredicate *>(predicate);
+    if (negate) {
+      // For negated GEOSHAPE, return all keys and let prefilter evaluator
+      // handle the negation logic
+      CHECK(index_schema != nullptr);
+      auto universal_fetcher =
+          std::make_unique<indexes::UniversalSetFetcher>(index_schema);
+      size_t size = universal_fetcher->Size();
+      entries_fetchers.push(std::move(universal_fetcher));
+      return size;
+    }
+    indexes::Geometry query_geom;
+    const auto &qs = geoshape_predicate->GetQueryShape();
+    if (std::holds_alternative<indexes::GeoPoint>(qs)) {
+      query_geom = std::get<indexes::GeoPoint>(qs);
+    } else {
+      query_geom = std::get<indexes::GeoPolygon>(qs);
+    }
+    auto candidates = geoshape_predicate->GetIndex()->SearchCandidates(
+        geoshape_predicate->GetOp(), query_geom);
+    auto fetcher = std::make_unique<indexes::GeoShape::EntriesFetcher>(
+        std::move(candidates));
+    size_t size = fetcher->Size();
     entries_fetchers.push(std::move(fetcher));
     return size;
   }
@@ -1033,7 +1063,8 @@ absl::StatusOr<FilterParseResults> ParsePreFilter(
   TextParsingOptions options{.verbatim = search_params.verbatim,
                              .inorder = search_params.inorder,
                              .slop = search_params.slop};
-  FilterParser parser(index_schema, pre_filter, options);
+  FilterParser parser(index_schema, pre_filter, options,
+                      &search_params.parse_vars.params);
   return parser.Parse();
 }
 

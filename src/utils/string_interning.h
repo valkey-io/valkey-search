@@ -624,28 +624,6 @@ class BagOfInternedStringPtrs {
     std::swap(storage_, other.storage_);
   }
 
-  // Construct a bag that takes ownership of the given encoded storage value
-  // (typically obtained from a prior Release() or held in an external 8-byte
-  // slot such as a rax tree value pointer). The storage value must be either
-  // 0 (empty) or a previously-released value from another bag -- passing
-  // arbitrary bit patterns is undefined behaviour. After Adopt the source
-  // location should be considered moved-from and not destructed independently.
-  static BagOfInternedStringPtrs Adopt(uintptr_t storage) noexcept {
-    BagOfInternedStringPtrs b;
-    b.storage_ = storage;
-    return b;
-  }
-
-  // Surrender ownership of the bag's encoded storage to the caller. After
-  // Release the bag is empty (storage_ == 0); its destructor is a no-op.
-  // Callers commonly hand the returned value to a rax slot or another bag's
-  // Adopt() call.
-  uintptr_t Release() noexcept {
-    uintptr_t s = storage_;
-    storage_ = 0;
-    return s;
-  }
-
   // Test-only: returns the current representation. Not part of the public
   // contract -- intended for white-box assertions that promote/demote
   // transitions happen at the expected boundaries.

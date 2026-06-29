@@ -101,13 +101,11 @@ struct SearchPartitionResultsTracker {
   void HandleResponse(coordinator::SearchIndexPartitionResponse &response,
                       const std::string &address, const grpc::Status &status) {
     if (!status.ok()) {
+      absl::MutexLock lock(&mutex);
       // Store first error for partial results disabled case
-      {
-        absl::MutexLock lock(&mutex);
-        if (!has_node_error.load()) {
-          has_node_error.store(true);
-          first_node_error = ToAbslStatus(status);
-        }
+      if (!has_node_error.load()) {
+        has_node_error.store(true);
+        first_node_error = ToAbslStatus(status);
       }
       if (parameters->enable_consistency &&
           status.error_code() == grpc::FAILED_PRECONDITION) {
@@ -276,6 +274,7 @@ class LocalResponderSearch : public query::SearchParameters {
     // to a local, clear the member, then stash.
     auto tracker_copy = tracker;
     tracker.reset();
+    absl::MutexLock lock(&tracker_copy->mutex);
     tracker_copy->parameters->local_responder_ = std::move(self);
   }
 };
@@ -318,7 +317,7 @@ absl::Status PerformSearchFanoutAsync(
     std::unique_ptr<SearchParameters> parameters,
     vmsdk::ThreadPool *thread_pool) {
   auto request = coordinator::ParametersToGRPCSearchRequest(*parameters);
-  uint64_t index_size = parameters->index_schema->GetIndexKeyInfoSize();
+  uint64_t index_size = parameters->index_schema->GetDbKeyInfoSize();
   uint32_t min_index_size =
       options::GetFanoutUniformityMinIndexSize().GetValue();
   if (parameters->IsNonVectorQuery()) {

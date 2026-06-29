@@ -273,7 +273,9 @@ TextIndexSchema::CommitResult TextIndexSchema::CommitKeyData(
 
   if (stem_text_field_mask_ && !stem_mappings.empty()) {
     absl::WriterMutexLock stem_lock(&stem_tree_mutex_);
-    for (const auto &[stemmed, originals] : stem_mappings) {
+    for (const auto &stem_entry : stem_mappings) {
+      const auto &stemmed = stem_entry.first;
+      const auto &originals = stem_entry.second;
       auto stem_mutate_fn = CreateSimpleTargetMutateFn<StemParents>(
           [&originals](InvasivePtr<StemParents> existing) {
             if (!existing) existing = InvasivePtr<StemParents>::Make();

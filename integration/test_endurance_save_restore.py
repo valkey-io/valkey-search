@@ -13,6 +13,7 @@ from valkey.client import Valkey
 
 from valkey_search_test_case import ValkeySearchTestCaseBase
 from valkeytestframework.conftest import resource_port_tracker
+from valkeytestframework.util import waiters
 from utils import IndexingTestHelper
 from ft_info_parser import FTInfoParser
 
@@ -184,19 +185,11 @@ class TestEnduranceSaveRestore(ValkeySearchTestCaseBase):
         self.client = self.server.get_new_client()
         
         # Wait for server to be ready
-        max_wait = 30
-        waited = 0
-        while waited < max_wait:
-            try:
-                self.client.ping()
-                print(f"  Server restarted and ready after {waited}s")
-                break
-            except Exception:
-                time.sleep(1)
-                waited += 1
-        else:
-            raise TimeoutError(f"Server did not become responsive after restart within {max_wait}s")
-        
+        waiters.wait_for_true(
+            lambda: self.client.ping(), ignore_exception=Exception
+        )
+        print("  Server restarted and ready")
+
         # Verify memory is back to baseline
         mem_info = self._print_memory_info(self.client, "AFTER CLEANUP")
         

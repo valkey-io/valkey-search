@@ -639,7 +639,8 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
 
 void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
                                       MutatedAttributes &mutated_attributes,
-                                      const Key &key) {
+                                      const Key &key)
+    ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
   if (text_index_schema_) {
     // Always clean up indexed words from all text attributes of the key up
     // front
@@ -1858,6 +1859,14 @@ bool IndexSchema::InTrackedMutationRecords(
   absl::MutexLock lock(&mutated_records_mutex_);
   auto itr = tracked_mutated_records_.find(key);
   if (ABSL_PREDICT_FALSE(itr == tracked_mutated_records_.end())) {
+    return false;
+  }
+  // ConsumeTrackedMutatedAttribute moves the attribute map out and sets
+  // attributes = std::nullopt, leaving the entry in the map. After that
+  // sequence, attributes is disengaged and `attributes->find(...)` would
+  // dereference an empty optional (UB; observed crashing under ASAN in the
+  // backfill scan path). No pending mutation == false.
+  if (!itr->second.attributes.has_value()) {
     return false;
   }
   if (itr->second.attributes->find(identifier) ==

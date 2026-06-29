@@ -6,6 +6,7 @@ import logging
 from valkey import ResponseError
 from valkey_search_test_case import ValkeySearchTestCaseCommon, LOGS_DIR
 from valkeytestframework.conftest import resource_port_tracker
+from valkeytestframework.util import waiters
 import pytest
 
 
@@ -201,22 +202,12 @@ class TestRDBCorruptedIndex(ValkeySearchTestCaseCommon):
             logging.info(f"Number of documents in index initially: {num_docs}")
 
             # Wait for mutation queue to be empty (all mutations processed)
-            max_wait_time = 10  # seconds
-            start_time = time.time()
-
-            while time.time() - start_time < max_wait_time:
+            def mutation_queue_empty():
                 info = client.execute_command("FT.INFO", "index_to_test_skip_load")
                 info_dict = {info[i]: info[i + 1] for i in range(0, len(info), 2)}
-                mutation_queue_size = int(info_dict.get(b"mutation_queue_size", 0))
+                return int(info_dict.get(b"mutation_queue_size", 0)) == 0
 
-                if mutation_queue_size == 0:
-                    logging.info("Mutation queue is empty, all mutations processed")
-                    break
-
-                logging.info(
-                    f"Waiting for mutations to process, queue size: {mutation_queue_size}"
-                )
-                time.sleep(0.5)
+            waiters.wait_for_true(mutation_queue_empty)
 
             # After mutations are processed, check final document count
             info = client.execute_command("FT.INFO", "index_to_test_skip_load")

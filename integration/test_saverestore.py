@@ -433,8 +433,7 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
         self.client.execute_command("ft._debug PAUSEPOINT RESET block_mutation_queue")
         self.client.execute_command("BGSAVE")
         waiters.wait_for_true(
-            lambda: self.client.info('persistence')['rdb_bgsave_in_progress'] == 0,
-            timeout=10
+            lambda: self.client.info('persistence')['rdb_bgsave_in_progress'] == 0
         )
 
         for t in client_threads:

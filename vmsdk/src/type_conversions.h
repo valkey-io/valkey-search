@@ -115,7 +115,10 @@ inline absl::StatusOr<uint64_t> To(absl::string_view str) {
   return ToNumeric<uint64_t>(str);
 }
 
-#if defined(__clang__) && !defined(RunningClangd)
+// On Apple Clang, uint64_t is unsigned long long, so unsigned long needs its
+// own specialization. On Linux (GCC and Clang), uint64_t IS unsigned long, so
+// providing this would be a redefinition.
+#if defined(__APPLE__) && defined(__clang__) && !defined(RunningClangd)
 template <>
 inline absl::StatusOr<unsigned long> To(absl::string_view str) {
   return ToNumeric<uint64_t>(str);

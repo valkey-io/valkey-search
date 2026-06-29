@@ -45,6 +45,33 @@ struct RealIndexInterface : public IndexInterface {
   RealIndexInterface(std::shared_ptr<IndexSchema> schema) : schema_(schema) {}
 };
 
+absl::Status FinalizeAggregateScoreAlias(AggregateParameters &parameters) {
+  if (!parameters.IsVectorQuery() ||
+      !parameters.parse_vars_.score_record_index_.has_value()) {
+    return absl::OkStatus();
+  }
+
+  const auto score_index = *parameters.parse_vars_.score_record_index_;
+  const auto score_alias = vmsdk::ToStringView(parameters.score_as.get());
+  auto &score_info = parameters.record_info_by_index_.at(score_index);
+  parameters.record_indexes_by_identifier_.erase(score_info.identifier_);
+  parameters.record_indexes_by_alias_.erase(score_info.alias_);
+  score_info.identifier_ = std::string(score_alias);
+  score_info.alias_ = std::string(score_alias);
+  parameters.record_indexes_by_identifier_[score_info.identifier_] =
+      score_index;
+  parameters.record_indexes_by_alias_[score_info.alias_] = score_index;
+
+  if (parameters.parse_vars_.deferred_score_alias_.has_value() &&
+      *parameters.parse_vars_.deferred_score_alias_ != score_alias) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Unknown field @", *parameters.parse_vars_.deferred_score_alias_,
+        " for vector score alias `", score_alias, "`."));
+  }
+
+  return absl::OkStatus();
+}
+
 absl::Status ManipulateReturnsClause(AggregateParameters &params) {
   // Figure out what fields actually need to be returned by the aggregation
   // operation. And modify the common search returns list accordingly
@@ -98,8 +125,9 @@ absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator &itr) {
   // Ensure that key is first value if it gets included...
   CHECK(AddRecordAttribute("__key", "__key", indexes::IndexerType::kNone) == 0);
   auto score_sv = vmsdk::ToStringView(score_as.get());
-  CHECK(AddRecordAttribute(score_sv, score_sv, indexes::IndexerType::kNone) ==
-        1);
+  parse_vars_.score_record_index_ =
+      AddRecordAttribute(score_sv, score_sv, indexes::IndexerType::kNone);
+  CHECK(*parse_vars_.score_record_index_ == 1);
 
   VMSDK_RETURN_IF_ERROR(parser.Parse(*this, itr, true));
   if (itr.DistanceEnd() > 0) {
@@ -118,6 +146,7 @@ absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator &itr) {
   limit.number = range.end_index - range.start_index;
 
   VMSDK_RETURN_IF_ERROR(PostParseQueryString());
+  VMSDK_RETURN_IF_ERROR(FinalizeAggregateScoreAlias(*this));
   VMSDK_RETURN_IF_ERROR(VerifyQueryString(*this));
   VMSDK_RETURN_IF_ERROR(ManipulateReturnsClause(*this));
 

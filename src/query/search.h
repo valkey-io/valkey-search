@@ -97,6 +97,7 @@ inline std::ostream& operator<<(std::ostream& os, const ReturnAttribute& r) {
 
 struct SearchParameters;
 struct SerializationRange;
+absl::Status ResolveVectorScoreAs(SearchParameters& parameters);
 
 //
 // The output of the query pipeline

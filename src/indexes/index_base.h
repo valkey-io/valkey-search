@@ -75,8 +75,6 @@ class IndexBase {
 
   virtual bool IsVectorIndex() const { return false; }
 
-  virtual bool IsVectorIndex() const { return false; }
-
  private:
   IndexerType indexer_type_{IndexerType::kNone};
 };

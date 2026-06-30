@@ -1126,6 +1126,18 @@ absl::Status PostParseVectorParameters(query::SearchParameters &parameters) {
       parameters.query,
       SubstituteParam(parameters, parameters.parse_vars.query_vector_string));
 
+  VMSDK_ASSIGN_OR_RETURN(auto index, parameters.index_schema->GetIndex(
+                                         parameters.attribute_alias));
+  auto *vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
+  CHECK(vector_index != nullptr);
+  if (parameters.query.size() !=
+      static_cast<size_t>(vector_index->GetVectorDataSize())) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("query vector blob size (", parameters.query.size(),
+                     ") does not match index's expected size (",
+                     vector_index->GetVectorDataSize(), ")."));
+  }
+
   if (!parameters.parse_vars.ef_string.empty()) {
     VMSDK_ASSIGN_OR_RETURN(
         auto ef_string,

@@ -428,6 +428,14 @@ INSTANTIATE_TEST_SUITE_P(
             .score_as = "as_test",
         },
         {
+            .test_name = "happy_path_score_as_param",
+            .success = true,
+            .params_str = " PARAMS 4 ALIAS my_score",
+            .filter_str = "*=>[KNN 10 @vec $BLOB AS $ALIAS]",
+            .k = 10,
+            .score_as = "my_score",
+        },
+        {
             .test_name = "happy_path_numeric",
             .success = true,
             .params_str = "",

@@ -223,13 +223,6 @@ constexpr absl::string_view kSearchResultBackgroundCleanup{
 static config::Boolean search_result_background_cleanup(
     kSearchResultBackgroundCleanup, false);
 
-/// Enable async index destruction
-/// If set to true (default), index schema destruction is deferred to a
-/// background thread, avoiding main-thread blocking during FLUSHALL or
-/// FT.DROPINDEX on large indexes.
-constexpr absl::string_view kAsyncIndexDestruction{"async-index-destruction"};
-static config::Boolean async_index_destruction(kAsyncIndexDestruction, true);
-
 /// Configure the weight for high priority tasks in thread pools (0-100)
 /// Low priority weight = 100 - high_priority_weight
 constexpr absl::string_view kHighPriorityWeight{"high-priority-weight"};
@@ -579,10 +572,6 @@ const vmsdk::config::Boolean& GetPreferConsistentResults() {
 
 const vmsdk::config::Boolean& GetSearchResultBackgroundCleanup() {
   return static_cast<vmsdk::config::Boolean&>(search_result_background_cleanup);
-}
-
-const vmsdk::config::Boolean& GetAsyncIndexDestruction() {
-  return static_cast<vmsdk::config::Boolean&>(async_index_destruction);
 }
 
 vmsdk::config::Number& GetHighPriorityWeight() {

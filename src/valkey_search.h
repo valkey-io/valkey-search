@@ -91,13 +91,10 @@ class ValkeySearch {
     }
   }
 
-  // Schedule index schema destruction on background thread (if enabled).
-  // When async-index-destruction is false, runs synchronously on main thread.
+  // Schedule index schema destruction on a background thread to avoid
+  // blocking the main thread during FLUSHALL or FT.DROPINDEX.
   void ScheduleIndexDestruction(std::shared_ptr<IndexSchema> schema) {
-    if (options::GetAsyncIndexDestruction().GetValue()) {
-      ScheduleUtilityTask([s = std::move(schema)]() mutable { s.reset(); });
-    }
-    // else: schema goes out of scope here, destroyed on main thread
+    ScheduleUtilityTask([s = std::move(schema)]() mutable { s.reset(); });
   }
 
   void Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const;

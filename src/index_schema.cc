@@ -2203,7 +2203,10 @@ bool IndexSchema::EvaluateFilter(
   FilterRecord record(&mutated_attributes);
   expr::Expression::EvalContext ctx;
   auto result = compiled_filter_->Evaluate(ctx, record);
-  return result.IsTrue();
+  // A Nil ("unknown") result means the filter referenced a missing field;
+  // matching Redisearch, such a document is kept. Only a definite false
+  // excludes it.
+  return result.IsNil() || result.IsTrue();
 }
 
 }  // namespace valkey_search

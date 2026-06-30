@@ -91,12 +91,6 @@ class ValkeySearch {
     }
   }
 
-  // Schedule index schema destruction on a background thread to avoid
-  // blocking the main thread during FLUSHALL or FT.DROPINDEX.
-  void ScheduleIndexDestruction(std::shared_ptr<IndexSchema> schema) {
-    ScheduleUtilityTask([s = std::move(schema)]() mutable { s.reset(); });
-  }
-
   void Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const;
 
   IndexSchema::Stats::ResultCnt<uint64_t> AccumulateIndexSchemaResults(

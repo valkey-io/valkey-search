@@ -304,8 +304,8 @@ absl::Status SchemaManager::RemoveIndexSchema(uint32_t db_num,
   if (!old_schema.ok()) {
     return old_schema.status();
   }
-  ValkeySearch::Instance().ScheduleIndexDestruction(
-      std::move(old_schema.value()));
+  ValkeySearch::Instance().ScheduleUtilityTask(
+      [s = std::move(old_schema.value())]() mutable { s.reset(); });
   return absl::OkStatus();
 }
 
@@ -390,8 +390,8 @@ absl::Status SchemaManager::OnMetadataCallback(
     }
   }
   if (old_schema.ok()) {
-    ValkeySearch::Instance().ScheduleIndexDestruction(
-        std::move(old_schema.value()));
+    ValkeySearch::Instance().ScheduleUtilityTask(
+        [s = std::move(old_schema.value())]() mutable { s.reset(); });
   }
   return result;
 }
@@ -547,8 +547,8 @@ void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx) {
     // Move expensive destruction (radix trees, posting lists, per-key indexes)
     // off the main thread. MarkAsDestructing() was already called in
     // RemoveIndexSchemaInternal.
-    ValkeySearch::Instance().ScheduleIndexDestruction(
-        std::move(old_schema.value()));
+    ValkeySearch::Instance().ScheduleUtilityTask(
+        [s = std::move(old_schema.value())]() mutable { s.reset(); });
   }
 }
 

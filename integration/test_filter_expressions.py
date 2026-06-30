@@ -308,6 +308,53 @@ class TestFilterExpressions(ValkeySearchTestCaseBase):
             assert 0 <= price <= 100, f"Price {price} out of range"
             assert 50 <= stock <= 250, f"Stock {stock} out of range"
 
+    def test_hybrid_query_vector_blob_size_validation(self):
+        """
+        LEVEL 2: Test that the query vector blob size is validated against the
+        index dimensions at parse time.
+        A KNN query whose PARAMS blob does not match DIM * sizeof(FLOAT32) is
+        rejected with a parse error, while a correctly sized blob succeeds.
+        """
+        client: Valkey = self.server.get_new_client()
+
+        # Create index with numeric and vector fields (DIM 3 FLOAT32 -> 12 bytes)
+        assert client.execute_command(
+            "FT.CREATE", "blob_size_idx",
+            "ON", "HASH",
+            "PREFIX", "1", "doc:",
+            "SCHEMA",
+            "price", "NUMERIC",
+            "embedding", "VECTOR", "FLAT", "6",
+            "TYPE", "FLOAT32",
+            "DIM", "3",
+            "DISTANCE_METRIC", "COSINE"
+        ) == b"OK"
+
+        # A correctly sized blob (3 floats * 4 bytes) parses successfully and
+        # returns no results on an empty index.
+        valid_vec = struct.pack('3f', 1.0, 0.0, 0.0)
+        assert client.execute_command(
+            "FT.SEARCH", "blob_size_idx",
+            "@price:[10 20]=>[KNN 5 @embedding $vec]",
+            "PARAMS", "2", "vec", valid_vec,
+            "NOCONTENT"
+        ) == [0]
+
+        # Wrong sized blobs (too small and too large) are rejected at parse
+        # time, before any search is executed.
+        too_small_vec = struct.pack('2f', 1.0, 0.0)
+        too_large_vec = struct.pack('4f', 1.0, 0.0, 0.0, 0.0)
+        for bad_vec in (too_small_vec, too_large_vec):
+            with pytest.raises(ResponseError) as excinfo:
+                client.execute_command(
+                    "FT.SEARCH", "blob_size_idx",
+                    "@price:[10 20]=>[KNN 5 @embedding $vec]",
+                    "PARAMS", "2", "vec", bad_vec,
+                    "NOCONTENT"
+                )
+            assert "query vector blob size" in str(excinfo.value)
+            assert "does not match index's expected size" in str(excinfo.value)
+
     # =====================================================================
     # LEVEL 3 - Operator Precedence & Complex Logic
     # =====================================================================

@@ -44,8 +44,7 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
             )
         )
         waiters.wait_for_true(
-            lambda: client.execute_command("FT._DEBUG PAUSEPOINT TEST mutation_processing") > 0,
-            timeout=5
+            lambda: client.execute_command("FT._DEBUG PAUSEPOINT TEST mutation_processing") > 0
         )
 
         # Search blocks on doc:1
@@ -69,8 +68,7 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
             )
         )
         waiters.wait_for_true(
-            lambda: client.execute_command("FT._DEBUG PAUSEPOINT TEST block_mutation_queue") > 0,
-            timeout=5
+            lambda: client.execute_command("FT._DEBUG PAUSEPOINT TEST block_mutation_queue") > 0
         )
 
         # Release doc:1 to be indexed
@@ -118,8 +116,7 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
         )
 
         waiters.wait_for_true(
-            lambda: client.execute_command("FT._DEBUG PAUSEPOINT TEST mutation_processing") > 0,
-            timeout=5
+            lambda: client.execute_command("FT._DEBUG PAUSEPOINT TEST mutation_processing") > 0
         )
 
         # Hybrid query with text component SHOULD block
@@ -165,8 +162,7 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
         )
 
         waiters.wait_for_true(
-            lambda: client.execute_command("FT._DEBUG PAUSEPOINT TEST mutation_processing") > 0,
-            timeout=5
+            lambda: client.execute_command("FT._DEBUG PAUSEPOINT TEST mutation_processing") > 0
         )
 
         # TAG-only query should NOT block even though index has TEXT field
@@ -201,8 +197,7 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
             )
         )
         waiters.wait_for_true(
-            lambda: client.execute_command("FT._DEBUG PAUSEPOINT TEST mutation_processing") > 0,
-            timeout=5
+            lambda: client.execute_command("FT._DEBUG PAUSEPOINT TEST mutation_processing") > 0
         )
 
         # Expect the search to be blocked on a conflict with the in flight mutation
@@ -252,8 +247,7 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
             )
         )
         waiters.wait_for_true(
-            lambda: client.execute_command("FT._DEBUG PAUSEPOINT TEST mutation_processing") > 0,
-            timeout=5
+            lambda: client.execute_command("FT._DEBUG PAUSEPOINT TEST mutation_processing") > 0
         )
 
         # Pause queries before they exit the background execution
@@ -266,8 +260,7 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
             )
         )
         waiters.wait_for_true(
-            lambda: client.execute_command("FT._DEBUG PAUSEPOINT TEST background_search_completing") > 0,
-            timeout=5
+            lambda: client.execute_command("FT._DEBUG PAUSEPOINT TEST background_search_completing") > 0
         )
 
         # Drop the index

@@ -29,24 +29,26 @@
 namespace valkey_search {
 
 template <typename T, typename Hasher = absl::Hash<T>,
-          typename Equaler = std::equal_to<T>>
+          typename Equaler = std::equal_to<T>,
+          typename SetType_ = absl::flat_hash_set<T, Hasher, Equaler>>
 class PatriciaNode {
  public:
   PatriciaNode() = default;
-  absl::flat_hash_map<std::string,
-                      std::unique_ptr<PatriciaNode<T, Hasher, Equaler>>>
+  absl::flat_hash_map<
+      std::string, std::unique_ptr<PatriciaNode<T, Hasher, Equaler, SetType_>>>
       children;
   int64_t subtree_values_count = 0;
-  std::optional<absl::flat_hash_set<T, Hasher, Equaler>> value;
+  std::optional<SetType_> value;
   void PrintValue() {}
 };
 
 template <typename T, typename Hasher = absl::Hash<T>,
-          typename Equaler = std::equal_to<T>>
+          typename Equaler = std::equal_to<T>,
+          typename SetType_ = absl::flat_hash_set<T, Hasher, Equaler>>
 class PatriciaTree {
  public:
-  using SetType = absl::flat_hash_set<T, Hasher, Equaler>;
-  using PatriciaNodeType = PatriciaNode<T, Hasher, Equaler>;
+  using SetType = SetType_;
+  using PatriciaNodeType = PatriciaNode<T, Hasher, Equaler, SetType_>;
   PatriciaTree(bool case_sensitive)
       : root_(std::make_unique<PatriciaNodeType>()),
         case_sensitive_(case_sensitive) {}
@@ -57,10 +59,9 @@ class PatriciaTree {
       node->subtree_values_count++;
       if (remaining_key.empty()) {
         if (!node->value.has_value()) {
-          node->value.emplace(std::move(SetType{value}));
-        } else {
-          node->value.value().insert(value);
+          node->value.emplace();
         }
+        node->value->insert(value);
         return;
       }
       bool found = false;

@@ -9,13 +9,13 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <memory>
 #include <optional>
 #include <string>
-#include <thread>
 #include <utility>
 #include <vector>
 
@@ -24,6 +24,7 @@
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
@@ -109,6 +110,15 @@ static bool RDBWriteV2() {
 static bool RDBValidateOnWrite() {
   return dynamic_cast<vmsdk::config::Boolean &>(*config_rdb_validate_on_write)
       .GetValue();
+}
+
+std::optional<uint16_t> ComputeSingleSlotNumber(absl::string_view index_name) {
+  if (!vmsdk::ParseHashTag(index_name).has_value()) {
+    return std::nullopt;
+  }
+
+  auto key = vmsdk::MakeUniqueValkeyString(index_name);
+  return ValkeyModule_ClusterKeySlot(key.get());
 }
 
 DEV_INTEGER_COUNTER(rdb_stats, rdb_save_keys);
@@ -296,6 +306,7 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
       attribute_data_type_(std::move(attribute_data_type)),
       name_(std::string(index_schema_proto.name())),
       db_num_(index_schema_proto.db_num()),
+      single_slot_number_(ComputeSingleSlotNumber(index_schema_proto.name())),
       language_(index_schema_proto.language()),
       punctuation_(index_schema_proto.punctuation()),
       with_offsets_(index_schema_proto.with_offsets()),
@@ -307,6 +318,11 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
       min_stem_size_(index_schema_proto.min_stem_size() > 0
                          ? index_schema_proto.min_stem_size()
                          : 4),
+      score_(index_schema_proto.has_score() ? index_schema_proto.score()
+                                            : kDefaultDocumentScore),
+      score_field_(index_schema_proto.has_score_field()
+                       ? std::make_optional(index_schema_proto.score_field())
+                       : std::nullopt),
       mutations_thread_pool_(mutations_thread_pool),
       time_sliced_mutex_(CreateMrmwMutexOptions()) {
   ValkeyModule_SelectDb(detached_ctx_.get(), db_num_);
@@ -578,13 +594,6 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
     vmsdk::UniqueValkeyString record = VectorExternalizer::Instance().GetRecord(
         ctx, attribute_data_type_.get(), key_obj.get(), key_cstr,
         attribute.GetIdentifier(), is_module_owned);
-    // Early return on record not found just if the record not tracked.
-    // Otherwise, it will be processed as a delete
-    if (!record && !attribute.GetIndex()->IsTracked(interned_key) &&
-        !InTrackedMutationRecords(interned_key, attribute.GetIdentifier())) {
-      attribute.GetIndex()->UnTrack(interned_key);
-      continue;
-    }
     if (!is_module_owned) {
       // A record which are owned by the module were not modified and are
       // already tracked in the vector registry.
@@ -595,6 +604,24 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
       added = true;
     }
   }
+
+  // Read the per-document score from SCORE_FIELD if configured
+  float document_score = score_;
+  if (key_obj && HasScoreField()) {
+    auto score_record = attribute_data_type_->GetRecord(
+        ctx, key_obj.get(), key_cstr, score_field_.value());
+    if (score_record.ok()) {
+      // Parse the value as a float. If it fails (non-numeric), fall back to
+      // the default score silently. Raw value is stored without clamping.
+      // The scoring algorithm decides how to handle values at query time.
+      float value;
+      auto str_view = vmsdk::ToStringView(score_record.value().get());
+      if (absl::SimpleAtof(str_view, &value) && value == value) {  // NaN check
+        document_score = value;
+      }
+    }
+  }
+
   if (added) {
     switch (attribute_data_type_->ToProto()) {
       case data_model::ATTRIBUTE_DATA_TYPE_HASH:
@@ -615,13 +642,14 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
         CHECK(false);
     }
     ProcessMutation(ctx, mutated_attributes, interned_key, from_backfill,
-                    key_obj == nullptr);
+                    key_obj == nullptr, document_score);
   }
 }
 
 void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
                                       MutatedAttributes &mutated_attributes,
-                                      const Key &key) {
+                                      const Key &key)
+    ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
   if (text_index_schema_) {
     // Always clean up indexed words from all text attributes of the key up
     // front
@@ -891,13 +919,14 @@ MutationSequenceNumber IndexSchema::UpdateDbInfoKey(
 void IndexSchema::ProcessMutation(ValkeyModuleCtx *ctx,
                                   MutatedAttributes &mutated_attributes,
                                   const Key &interned_key, bool from_backfill,
-                                  bool is_delete) {
+                                  bool is_delete, float document_score) {
   auto this_mutation = UpdateDbInfoKey(ctx, mutated_attributes, interned_key,
                                        from_backfill, is_delete);
 
   if (ABSL_PREDICT_FALSE(!mutations_thread_pool_ ||
                          mutations_thread_pool_->Size() == 0)) {
     vmsdk::WriterMutexLock lock(&time_sliced_mutex_);
+    index_key_info_[interned_key].document_score = document_score;
     SyncProcessMutation(ctx, mutated_attributes, interned_key);
     return;
   }
@@ -910,7 +939,7 @@ void IndexSchema::ProcessMutation(ValkeyModuleCtx *ctx,
 
   if (ABSL_PREDICT_FALSE(!TrackMutatedRecord(
           ctx, interned_key, std::move(mutated_attributes), this_mutation,
-          from_backfill, block_client, inside_multi_exec)) ||
+          from_backfill, block_client, inside_multi_exec, document_score)) ||
       inside_multi_exec) {
     // Skip scheduling if the mutation key has already been tracked or is part
     // of a multi exec command.
@@ -1124,7 +1153,7 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, name_.data());
 
   ValkeyModule_ReplyWithSimpleString(ctx, "index_definition");
-  int index_def_size = 6;
+  int index_def_size = 8;
   if (compiled_filter_) {
     index_def_size += 2;
   }
@@ -1137,10 +1166,12 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   for (const auto &prefix : subscribed_key_prefixes_) {
     ValkeyModule_ReplyWithSimpleString(ctx, prefix.c_str());
   }
-  // hard-code default score of 1 as it's the only value we currently
-  // supported.
   ValkeyModule_ReplyWithSimpleString(ctx, "default_score");
-  ValkeyModule_ReplyWithCString(ctx, "1");
+  ValkeyModule_ReplyWithDouble(ctx, static_cast<double>(score_));
+
+  ValkeyModule_ReplyWithSimpleString(ctx, "score_field");
+  ValkeyModule_ReplyWithSimpleString(
+      ctx, score_field_.has_value() ? score_field_.value().c_str() : "");
   if (compiled_filter_) {
     ValkeyModule_ReplyWithSimpleString(ctx, "filter");
     ValkeyModule_ReplyWithSimpleString(ctx, filter_expression_str_.c_str());
@@ -1222,12 +1253,6 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   }
 }
 
-bool IsVectorIndex(std::shared_ptr<indexes::IndexBase> index) {
-  return index->GetIndexerType() == indexes::IndexerType::kVector ||
-         index->GetIndexerType() == indexes::IndexerType::kHNSW ||
-         index->GetIndexerType() == indexes::IndexerType::kFlat;
-}
-
 std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
   auto index_schema_proto = std::make_unique<data_model::IndexSchema>();
   index_schema_proto->set_name(this->name_);
@@ -1244,6 +1269,10 @@ std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
   index_schema_proto->mutable_stop_words()->Assign(stop_words_.begin(),
                                                    stop_words_.end());
   index_schema_proto->set_skip_initial_scan(skip_initial_scan_);
+  index_schema_proto->set_score(score_);
+  if (score_field_.has_value()) {
+    index_schema_proto->set_score_field(score_field_.value());
+  }
   if (!filter_expression_str_.empty()) {
     index_schema_proto->set_filter(filter_expression_str_);
   }
@@ -1301,7 +1330,7 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
       GetAttributeCount() +
       std::count_if(attributes_.begin(), attributes_.end(),
                     [](const auto &attribute) {
-                      return IsVectorIndex(attribute.second.GetIndex());
+                      return attribute.second.GetIndex()->IsVectorIndex();
                     });
   if (RDBWriteV2()) {
     supplemental_count += 1;  // For Index Extension
@@ -1337,7 +1366,7 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
 
     // Key to ID mapping is stored as a separate chunked supplemental content
     // for vector indexes.
-    if (IsVectorIndex(attribute.second.GetIndex())) {
+    if (attribute.second.GetIndex()->IsVectorIndex()) {
       VMSDK_RETURN_IF_ERROR(SaveSupplementalSection(
           rdb, data_model::SUPPLEMENTAL_CONTENT_KEY_TO_ID_MAP,
           [&](auto &header) {
@@ -1377,7 +1406,7 @@ absl::Status IndexSchema::ValidateIndex() const {
   std::string oracle_name;
 
   for (const auto &attribute : attributes_) {
-    if (!IsVectorIndex(attribute.second.GetIndex())) {
+    if (!attribute.second.GetIndex()->IsVectorIndex()) {
       oracle_index = attribute.second.GetIndex();
       oracle_name = attribute.first;
       break;
@@ -1398,8 +1427,8 @@ absl::Status IndexSchema::ValidateIndex() const {
   for (const auto &[name, attr] : attributes_) {
     auto idx = attr.GetIndex();
     size_t cnt = idx->GetTrackedKeyCount() + idx->GetUnTrackedKeyCount();
-    if (IsVectorIndex(idx) ? cnt <= oracle_key_count
-                           : cnt == oracle_key_count) {
+    if (idx->IsVectorIndex() ? cnt <= oracle_key_count
+                             : cnt == oracle_key_count) {
       continue;
     }
     VMSDK_LOG(WARNING, nullptr)
@@ -1671,7 +1700,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
           VMSDK_ASSIGN_OR_RETURN(
               auto index, index_schema->GetIndex(attribute.alias()),
               _ << "Key to ID mapping found before index definition.");
-          if (!IsVectorIndex(index)) {
+          if (!index->IsVectorIndex()) {
             return absl::InternalError(
                 "Key to ID mapping found for non vector index ");
           }
@@ -1870,6 +1899,14 @@ bool IndexSchema::InTrackedMutationRecords(
   if (ABSL_PREDICT_FALSE(itr == tracked_mutated_records_.end())) {
     return false;
   }
+  // ConsumeTrackedMutatedAttribute moves the attribute map out and sets
+  // attributes = std::nullopt, leaving the entry in the map. After that
+  // sequence, attributes is disengaged and `attributes->find(...)` would
+  // dereference an empty optional (UB; observed crashing under ASAN in the
+  // backfill scan path). No pending mutation == false.
+  if (!itr->second.attributes.has_value()) {
+    return false;
+  }
   if (itr->second.attributes->find(identifier) ==
       itr->second.attributes->end()) {
     return false;
@@ -1902,7 +1939,7 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx, const Key &key,
                                      MutatedAttributes &&mutated_attributes,
                                      MutationSequenceNumber sequence_number,
                                      bool from_backfill, bool block_client,
-                                     bool from_multi) {
+                                     bool from_multi, float document_score) {
   absl::MutexLock lock(&mutated_records_mutex_);
   auto [itr, inserted] =
       tracked_mutated_records_.insert({key, DocumentMutation{}});
@@ -1912,6 +1949,7 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx, const Key &key,
     itr->second.from_backfill = from_backfill;
     itr->second.from_multi = from_multi;
     itr->second.sequence_number = sequence_number;
+    itr->second.document_score = document_score;
     // Allocate memory buffer proportional to data size and mutation weights
     // Buffer is freed when the mutation record is erased.
     itr->second.weighted_buffer.resize(
@@ -1926,6 +1964,7 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx, const Key &key,
   }
 
   itr->second.sequence_number = sequence_number;
+  itr->second.document_score = document_score;
 
   if (!itr->second.from_multi && from_multi) {
     itr->second.from_multi = from_multi;
@@ -2003,8 +2042,9 @@ IndexSchema::ConsumeTrackedMutatedAttribute(const Key &key, bool first_time) {
       tracked_mutated_records_.erase(itr);
       // Will notify after releasing lock
     } else {
-      index_key_info_[key].mutation_sequence_number_ =
-          itr->second.sequence_number;
+      auto &key_info = index_key_info_[key];
+      key_info.mutation_sequence_number_ = itr->second.sequence_number;
+      key_info.document_score = itr->second.document_score;
       // Track entry is now first consumed
       auto mutated_attributes = std::move(itr->second.attributes.value());
       itr->second.attributes = std::nullopt;

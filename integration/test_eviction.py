@@ -1,3 +1,4 @@
+import os
 import time
 import pytest
 from valkey.client import Valkey
@@ -27,6 +28,9 @@ class TestEviction(ValkeySearchTestCaseBase):
         Test that evicted hashes are properly removed from search indexes
         and new data can still be added and searched after eviction.
         """
+        if os.environ.get("SAN_BUILD", "no") == "address":
+            pytest.skip("flaky under ASAN: sanitizer memory overhead skews eviction accounting")
+
         index_name = "eviction_test_index"
         client: Valkey = self.server.get_new_client()
 

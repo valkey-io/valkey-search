@@ -1193,6 +1193,51 @@ class IndexSchemaRDBTest : public ValkeySearchTest {
   }
 };
 
+TEST_F(IndexSchemaRDBTest, SingleSlotNumberComputedOnCreate) {
+  std::vector<absl::string_view> key_prefixes = {"doc:{slot1}:"};
+  std::string single_slot_index_name("index_schema_name{slot1}");
+  auto single_slot_schema =
+      MockIndexSchema::Create(&fake_ctx_, single_slot_index_name, key_prefixes,
+                              std::make_unique<HashAttributeDataType>(),
+                              nullptr)
+          .value();
+
+  ASSERT_TRUE(single_slot_schema->GetSingleSlotNumber().has_value());
+
+  std::string multi_slot_index_name("index_schema_name");
+  auto multi_slot_schema =
+      MockIndexSchema::Create(&fake_ctx_, multi_slot_index_name, key_prefixes,
+                              std::make_unique<HashAttributeDataType>(),
+                              nullptr)
+          .value();
+  EXPECT_FALSE(multi_slot_schema->GetSingleSlotNumber().has_value());
+}
+
+TEST_F(IndexSchemaRDBTest, SaveAndLoadSingleSlotNumber) {
+  std::vector<absl::string_view> key_prefixes = {"doc:{slot2}:"};
+  std::string index_schema_name_str("index_schema_name{slot2}");
+
+  auto index_schema = MockIndexSchema::Create(
+                          &fake_ctx_, index_schema_name_str, key_prefixes,
+                          std::make_unique<HashAttributeDataType>(), nullptr)
+                          .value();
+  ASSERT_TRUE(index_schema->GetSingleSlotNumber().has_value());
+  auto slot_number = index_schema->GetSingleSlotNumber();
+  auto proto = index_schema->ToProto();
+
+  ValkeyModuleCtx load_ctx;
+  EXPECT_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(&load_ctx))
+      .WillRepeatedly(Return(&load_ctx));
+  auto loaded_schema_or =
+      IndexSchema::Create(&load_ctx, *proto, /*mutations_thread_pool=*/nullptr,
+                          /*skip_attributes=*/false, /*reload=*/true);
+  VMSDK_EXPECT_OK_STATUSOR(loaded_schema_or);
+  auto loaded_schema = loaded_schema_or.value();
+
+  ASSERT_TRUE(loaded_schema->GetSingleSlotNumber().has_value());
+  EXPECT_EQ(*loaded_schema->GetSingleSlotNumber(), *slot_number);
+}
+
 TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   std::vector<absl::string_view> key_prefixes = {"prefix1", "prefix2"};
   std::string index_schema_name_str("index_schema_name");
@@ -1734,6 +1779,50 @@ TEST_F(IndexSchemaFriendTest, MutatedAttributesSanity) {
   consumed_data = index_schema->ConsumeTrackedMutatedAttribute(key, false);
   EXPECT_FALSE(consumed_data.has_value());
   EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 0);
+}
+
+// Regression test for a pre-existing crash in InTrackedMutationRecords.
+//
+// DocumentMutation::attributes is std::optional<flat_hash_map<...>>.
+// ConsumeTrackedMutatedAttribute, after extracting the attribute map, sets
+// `attributes = std::nullopt` but leaves the entry in tracked_mutated_records_
+// (it only erases the entry when there was nothing to consume). A subsequent
+// call to InTrackedMutationRecords(key, identifier) on that same key would
+// then dereference the disengaged optional via `attributes->find(...)`, which
+// is UB. Under ASAN the bad dereference trips absl's SwissTable iterator
+// generation guard and crashes the server (observed in CI as a SIGSEGV from
+// the backfill scan path during a fulltext test).
+//
+// Repro: track a mutation, consume it (disengaging `attributes` while leaving
+// the entry in the map), then call InTrackedMutationRecords. With the fix it
+// returns false cleanly; without the fix it crashes under ASAN.
+TEST_F(IndexSchemaFriendTest, InTrackedMutationRecordsAfterConsumeNoCrash) {
+  absl::string_view data_ptr;
+  auto mutated_attributes =
+      CreateMutatedAttributes(attribute_identifier, data_ptr);
+  EXPECT_TRUE(index_schema->TrackMutatedRecord(
+      nullptr, key, std::move(mutated_attributes), 0, false, false, false));
+  EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 1u);
+
+  // Consume the mutation. Because attributes was engaged, the entry stays in
+  // the map with attributes = std::nullopt (see index_schema.cc:1997-2008).
+  auto consumed = index_schema->ConsumeTrackedMutatedAttribute(key, true);
+  EXPECT_TRUE(consumed.has_value());
+  EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 1u);
+
+  // Verify our reading of the state: entry present, attributes disengaged.
+  {
+    absl::MutexLock lock(&index_schema->mutated_records_mutex_);
+    auto itr = index_schema->tracked_mutated_records_.find(key);
+    ASSERT_NE(itr, index_schema->tracked_mutated_records_.end());
+    EXPECT_FALSE(itr->second.attributes.has_value());
+  }
+
+  // The crash: without the fix this dereferences a disengaged optional.
+  // Expected behavior with the fix: returns false (no pending mutation for
+  // this (key, identifier) pair after the consume drained it).
+  EXPECT_FALSE(
+      index_schema->InTrackedMutationRecords(key, attribute_identifier));
 }
 
 TEST_F(IndexSchemaFriendTest, MutatedAttributes) {
@@ -2496,6 +2585,141 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
   // Cleanup
   VMSDK_EXPECT_OK(options::GetSkipIndexLoadMutable().SetValue(false));
   LOG(INFO) << "=== Comprehensive Skip Load Test Completed ===";
+}
+
+class IndexSchemaScoreFieldTest : public ValkeySearchTest {};
+
+TEST_F(IndexSchemaScoreFieldTest, IngestsDocumentScoreFromScoreField) {
+  vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
+  mutations_thread_pool.StartWorkers();
+
+  std::vector<absl::string_view> key_prefixes = {"product:"};
+  // Create schema with SCORE_FIELD "priority" and default score 0.5
+  auto index_schema =
+      MockIndexSchema::Create(&fake_ctx_, "test_index", key_prefixes,
+                              std::make_unique<HashAttributeDataType>(),
+                              &mutations_thread_pool,
+                              data_model::Language::LANGUAGE_ENGLISH, ".", true,
+                              {}, 0.5, "priority")
+          .value();
+  EXPECT_TRUE(
+      KeyspaceEventManager::Instance().HasSubscription(index_schema.get()));
+  auto mock_index = std::make_shared<MockIndex>(indexes::IndexerType::kTag);
+  VMSDK_EXPECT_OK(index_schema->AddIndex("name", "name", mock_index));
+
+  auto key = StringInternStore::Intern("product:1");
+  auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key->Str().data());
+
+  EXPECT_CALL(*mock_index, IsTracked(key)).WillRepeatedly(Return(false));
+  EXPECT_CALL(*mock_index, AddRecord(key, absl::string_view("Widget")))
+      .WillOnce(Return(true));
+
+  // Mock the key type
+  EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
+      .WillRepeatedly(TestValkeyModule_KeyTypeDefaultImpl);
+  EXPECT_CALL(*kMockValkeyModule,
+              KeyType(vmsdk::ValkeyModuleKeyIsForString(key->Str())))
+      .WillRepeatedly(Return(VALKEYMODULE_KEYTYPE_HASH));
+
+  // Mock HashGet for the "name" attribute field
+  ValkeyModuleString *name_value =
+      TestValkeyModule_CreateStringPrintf(nullptr, "%s", "Widget");
+  EXPECT_CALL(*kMockValkeyModule,
+              HashGet(vmsdk::ValkeyModuleKeyIsForString(key->Str()),
+                      VALKEYMODULE_HASH_CFIELDS, StrEq("name"),
+                      An<ValkeyModuleString **>(), TypedEq<void *>(nullptr)))
+      .WillOnce([name_value](ValkeyModuleKey *key, int flags, const char *field,
+                             ValkeyModuleString **value_out,
+                             void *terminating_null) {
+        *value_out = name_value;
+        return VALKEYMODULE_OK;
+      });
+
+  // Mock HashGet for the "priority" score field
+  ValkeyModuleString *score_value =
+      TestValkeyModule_CreateStringPrintf(nullptr, "%s", "0.8");
+  EXPECT_CALL(*kMockValkeyModule,
+              HashGet(vmsdk::ValkeyModuleKeyIsForString(key->Str()),
+                      VALKEYMODULE_HASH_CFIELDS, StrEq("priority"),
+                      An<ValkeyModuleString **>(), TypedEq<void *>(nullptr)))
+      .WillOnce([score_value](ValkeyModuleKey *key, int flags,
+                              const char *field, ValkeyModuleString **value_out,
+                              void *terminating_null) {
+        *value_out = score_value;
+        return VALKEYMODULE_OK;
+      });
+
+  // Trigger ingestion
+  index_schema->OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
+                                       "hset", key_valkey_str.get());
+  WaitWorkerTasksAreCompleted(mutations_thread_pool);
+
+  // Verify the document score was stored
+  vmsdk::ReaderMutexLock lock(&index_schema->GetTimeSlicedMutex());
+  EXPECT_FLOAT_EQ(index_schema->GetDocumentScore(key), 0.8f);
+}
+
+TEST_F(IndexSchemaScoreFieldTest, FallsBackToDefaultScoreWhenFieldMissing) {
+  vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
+  mutations_thread_pool.StartWorkers();
+
+  std::vector<absl::string_view> key_prefixes = {"product:"};
+  auto index_schema =
+      MockIndexSchema::Create(&fake_ctx_, "test_index", key_prefixes,
+                              std::make_unique<HashAttributeDataType>(),
+                              &mutations_thread_pool,
+                              data_model::Language::LANGUAGE_ENGLISH, ".", true,
+                              {}, 0.5, "priority")
+          .value();
+
+  auto mock_index = std::make_shared<MockIndex>(indexes::IndexerType::kTag);
+  VMSDK_EXPECT_OK(index_schema->AddIndex("name", "name", mock_index));
+
+  auto key = StringInternStore::Intern("product:2");
+  auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key->Str().data());
+
+  EXPECT_CALL(*mock_index, IsTracked(key)).WillRepeatedly(Return(false));
+  EXPECT_CALL(*mock_index, AddRecord(key, absl::string_view("Gadget")))
+      .WillOnce(Return(true));
+
+  EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
+      .WillRepeatedly(TestValkeyModule_KeyTypeDefaultImpl);
+  EXPECT_CALL(*kMockValkeyModule,
+              KeyType(vmsdk::ValkeyModuleKeyIsForString(key->Str())))
+      .WillRepeatedly(Return(VALKEYMODULE_KEYTYPE_HASH));
+
+  // Mock HashGet for "name" — returns data
+  ValkeyModuleString *name_value =
+      TestValkeyModule_CreateStringPrintf(nullptr, "%s", "Gadget");
+  EXPECT_CALL(*kMockValkeyModule,
+              HashGet(vmsdk::ValkeyModuleKeyIsForString(key->Str()),
+                      VALKEYMODULE_HASH_CFIELDS, StrEq("name"),
+                      An<ValkeyModuleString **>(), TypedEq<void *>(nullptr)))
+      .WillOnce([name_value](ValkeyModuleKey *key, int flags, const char *field,
+                             ValkeyModuleString **value_out,
+                             void *terminating_null) {
+        *value_out = name_value;
+        return VALKEYMODULE_OK;
+      });
+
+  // Mock HashGet for "priority" — field doesn't exist (returns nullptr)
+  EXPECT_CALL(*kMockValkeyModule,
+              HashGet(vmsdk::ValkeyModuleKeyIsForString(key->Str()),
+                      VALKEYMODULE_HASH_CFIELDS, StrEq("priority"),
+                      An<ValkeyModuleString **>(), TypedEq<void *>(nullptr)))
+      .WillOnce([](ValkeyModuleKey *key, int flags, const char *field,
+                   ValkeyModuleString **value_out, void *terminating_null) {
+        *value_out = nullptr;
+        return VALKEYMODULE_OK;
+      });
+
+  index_schema->OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
+                                       "hset", key_valkey_str.get());
+  WaitWorkerTasksAreCompleted(mutations_thread_pool);
+
+  // Should fall back to default score (0.5)
+  vmsdk::ReaderMutexLock lock(&index_schema->GetTimeSlicedMutex());
+  EXPECT_FLOAT_EQ(index_schema->GetDocumentScore(key), 0.5f);
 }
 
 }  // namespace valkey_search

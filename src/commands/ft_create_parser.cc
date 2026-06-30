@@ -24,6 +24,7 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "src/attribute_data_type.h"
+#include "src/index_schema.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/vector_base.h"
@@ -65,6 +66,8 @@ constexpr int kDefaultTagFieldLenLimit{256};
 constexpr int kDefaultNumericFieldLenLimit{128};
 constexpr size_t kMaxAttributesCount{10000};
 constexpr int kMaxDimensionsCount{64000};
+constexpr int kMaxInitialCap{10000000};
+constexpr int kMaxBlockSize{10000000};
 constexpr int kMaxM{2000000};
 constexpr int kMaxEfConstruction{1000000};
 constexpr int kMaxEfRuntime{1000000};
@@ -284,21 +287,26 @@ absl::Status ParseLanguage(vmsdk::ArgsIterator &itr,
 }
 absl::Status ParseScore(vmsdk::ArgsIterator &itr,
                         data_model::IndexSchema &index_schema_proto) {
-  float score{1.0};
+  float score{IndexSchema::kDefaultDocumentScore};
   VMSDK_ASSIGN_OR_RETURN(auto res,
                          vmsdk::ParseParam(kScoreParam, false, itr, score));
-  if (res && score != 1.0) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("`", kScoreParam, "` parameter with a value `", score,
-                     "` is not supported. The only supported value is `1.0`"));
-  }
-  VMSDK_ASSIGN_OR_RETURN(res,
-                         vmsdk::IsParamKeyMatch(kScoreFieldParam, false, itr));
   if (res) {
-    return absl::InvalidArgumentError(
-        NotSupportedParamErrorMsg(kScoreFieldParam));
+    if (score < 0.0 || score > 1.0) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("`", kScoreParam, "` parameter with a value `", score,
+                       "` is not supported. The value must be between "
+                       "0.0 and 1.0"));
+    }
+    index_schema_proto.set_score(score);
   }
-  index_schema_proto.set_score(score);
+  // Parse SCORE_FIELD: the name of the document field whose numeric value
+  // is used as the document's custom score. Only one per index.
+  std::string score_field;
+  VMSDK_ASSIGN_OR_RETURN(
+      res, vmsdk::ParseParam(kScoreFieldParam, false, itr, score_field));
+  if (res) {
+    index_schema_proto.set_score_field(score_field);
+  }
   return absl::OkStatus();
 }
 vmsdk::KeyValueParser<HNSWParameters> CreateHNSWParser() {
@@ -782,10 +790,10 @@ absl::Status FTCreateVectorParameters::Verify() const {
          "less than or equal to "
       << max_dimensions_value << ".";
 
-  if (initial_cap <= 0) {
-    return absl::InvalidArgumentError(
-        "INITIAL_CAP must be a positive integer greater than 0.");
-  }
+  VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(initial_cap, 1, kMaxInitialCap))
+      << kInitialCapParam
+      << " must be a positive integer greater than 0 and cannot exceed "
+      << kMaxInitialCap << ".";
   FTCreateVectorParameters default_values;
   if (vector_data_type == default_values.vector_data_type) {
     return absl::InvalidArgumentError("Missing vector TYPE parameter.");
@@ -825,6 +833,14 @@ absl::Status HNSWParameters::Verify() const {
       << kEfRuntimeParam
       << " must be a positive integer greater than 0 and cannot exceed "
       << max_ef_runtime_value << ".";
+  return absl::OkStatus();
+}
+absl::Status FlatParameters::Verify() const {
+  VMSDK_RETURN_IF_ERROR(FTCreateVectorParameters::Verify());
+  VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(block_size, 1, kMaxBlockSize))
+      << kBlockSizeParam
+      << " must be a positive integer greater than 0 and cannot exceed "
+      << kMaxBlockSize << ".";
   return absl::OkStatus();
 }
 std::unique_ptr<data_model::VectorIndex> FlatParameters::ToProto() const {

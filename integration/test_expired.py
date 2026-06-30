@@ -31,7 +31,6 @@ class TestExpired(ValkeySearchTestCaseBase):
         waiters.wait_for_equal(
             lambda: hnsw_index.info(client).num_docs,
             num_of_docs / 2,
-            timeout=5,
         )
 
     def test_hash_field_expiration_should_update_index(self):
@@ -57,6 +56,5 @@ class TestExpired(ValkeySearchTestCaseBase):
         waiters.wait_for_equal(
             lambda: client.execute_command("FT.SEARCH", index_name, "@t:{mytag}")[0],
             0,
-            timeout=5,
         )
         assert index.info(client).num_docs == 1

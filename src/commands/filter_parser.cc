@@ -593,7 +593,8 @@ absl::StatusOr<bool> FilterParser::HandleBackslashEscape(
 // Quoted Text Syntax:
 // word1 word2<delim> word3 -> word1
 // word2<delim> word3 -> word2
-// Token boundaries (separated by space): <delim> <punctuation> \<non-punctuation>
+// Token boundaries (separated by space): <delim> <punctuation>
+// \<non-punctuation>
 absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
     const std::optional<std::string>& field_or_default, char delim) {
@@ -842,8 +843,8 @@ FilterParser::ParseTextTokens(
   // the parse of queries like `great'wall great'wall`. Gate behind
   // search.emulate-release per COMPATIBILITY.md.
   const bool apostrophe_phrases_enabled = VALKEY_SEARCH_COMPATIBILITY_FIX(
-      1, 2, 1, "ft_search_apostrophe_phrase",
-      [&] { return true; }, [&] { return false; });
+      1, 2, 1, "ft_search_apostrophe_phrase", [&] { return true; },
+      [&] { return false; });
   auto has_matching_apostrophe_ahead = [&](size_t start) {
     for (size_t i = start; i < expression_.size(); ++i) {
       if (expression_[i] == '\\' && i + 1 < expression_.size()) {
@@ -865,9 +866,8 @@ FilterParser::ParseTextTokens(
     char c = Peek();
     const bool is_phrase_open =
         (phrase_delim == 0 &&
-         (c == '"' ||
-          (apostrophe_phrases_enabled && c == '\'' &&
-           has_matching_apostrophe_ahead(pos_ + 1))));
+         (c == '"' || (apostrophe_phrases_enabled && c == '\'' &&
+                       has_matching_apostrophe_ahead(pos_ + 1))));
     const bool is_phrase_close = (phrase_delim != 0 && c == phrase_delim);
     if (is_phrase_open || is_phrase_close) {
       phrase_delim = is_phrase_open ? c : 0;

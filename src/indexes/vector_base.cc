@@ -90,7 +90,7 @@ query::EvaluationResult PrefilterEvaluator::EvaluateTags(
     const query::TagPredicate &predicate) {
   bool case_sensitive = true;
   auto tags = predicate.GetIndex()->GetValue(*key_, case_sensitive);
-  return predicate.Evaluate(tags, case_sensitive);
+  return predicate.Evaluate(tags ? &*tags : nullptr, case_sensitive);
 }
 
 query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(
@@ -249,7 +249,9 @@ absl::StatusOr<RecordResult> VectorBase::ModifyRecord(
              "in UntrackKey: "
           << untrack_result.status().message();
     }
+    return modify_result;
   }
+  TrackVector(internal_id, interned_vector);
   return RecordResult::kAdded;
 }
 
@@ -377,7 +379,6 @@ absl::StatusOr<bool> VectorBase::UpdateMetadata(
   if (IsVectorMatch(internal_id, vector)) {
     return false;
   }
-  TrackVector(internal_id, vector);
   return true;
 }
 

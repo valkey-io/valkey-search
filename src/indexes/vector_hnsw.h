@@ -9,13 +9,13 @@
 #define VALKEYSEARCH_SRC_INDEXES_VECTOR_HNSW_H_
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <memory>
 #include <optional>
 #include <type_traits>
 #include <utility>
 
 #include "absl/base/thread_annotations.h"
+#include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
@@ -126,7 +126,7 @@ class VectorHNSW : public VectorBase {
   std::unique_ptr<hnswlib::SpaceInterface<float>> space_;
   mutable absl::Mutex resize_mutex_;
   mutable absl::Mutex tracked_vectors_mutex_;
-  std::deque<InternedStringPtr> tracked_vectors_
+  absl::flat_hash_map<uint64_t, InternedStringPtr> tracked_vectors_
       ABSL_GUARDED_BY(tracked_vectors_mutex_);
 };
 

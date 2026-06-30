@@ -338,9 +338,8 @@ class ClusterTestUtils:
     def check_info_sum(self, name: str, sum_value: int):
         """Wait for the sum of a given info field across all servers to reach expected value"""
         waiters.wait_for_equal(
-            lambda: self._check_info_sum(name), 
-            sum_value, 
-            timeout=5
+            lambda: self._check_info_sum(name),
+            sum_value
         )
 
     def sum_docs(self, index: Index) -> int:

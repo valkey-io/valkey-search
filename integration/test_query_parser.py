@@ -1,8 +1,15 @@
+import struct
+
 import pytest
 from valkey import ResponseError
 from valkey.client import Valkey
 from valkey_search_test_case import ValkeySearchTestCaseBase
 from valkeytestframework.conftest import resource_port_tracker
+
+# A correctly sized query vector for the DIM 128 / FLOAT32 indexes used in these
+# tests (128 * 4 = 512 bytes). These tests exercise query-string parsing limits,
+# not vector contents, so any in-range vector blob works.
+VECTOR_BLOB_DIM128 = struct.pack("<128f", *([1.0] * 128))
 
 
 class TestQueryParser(ValkeySearchTestCaseBase):
@@ -19,7 +26,7 @@ class TestQueryParser(ValkeySearchTestCaseBase):
         command_args = [
             "FT.SEARCH", "my_index",
             query,
-            "PARAMS", 2, "BLOB", "<your_vector_blob>",
+            "PARAMS", 2, "BLOB", VECTOR_BLOB_DIM128,
             "RETURN", 1, "doc_embedding"
         ]
         # Validate the query strings above the limit are rejected.
@@ -44,7 +51,7 @@ class TestQueryParser(ValkeySearchTestCaseBase):
         assert client.execute_command(
             "FT.SEARCH", "my_index",
             "@price:[10 20] =>[KNN 10 @doc_embedding $BLOB]",
-            "PARAMS", 2, "BLOB", "<your_vector_blob>",
+            "PARAMS", 2, "BLOB", VECTOR_BLOB_DIM128,
             "RETURN", 1, "doc_embedding"
         ) == [0]
         # Validate the failure case with a query of depth 2.
@@ -52,7 +59,7 @@ class TestQueryParser(ValkeySearchTestCaseBase):
             client.execute_command(
                 "FT.SEARCH", "my_index",
                 "@price:[10 20] | @category:{electronics|books} =>[KNN 10 @doc_embedding $BLOB]",
-                "PARAMS", 2, "BLOB", "<your_vector_blob>",
+                "PARAMS", 2, "BLOB", VECTOR_BLOB_DIM128,
                 "RETURN", 1, "doc_embedding"
             )
             assert False
@@ -63,13 +70,13 @@ class TestQueryParser(ValkeySearchTestCaseBase):
         assert client.execute_command(
             "FT.SEARCH", "my_index",
             "(((((((((@price:[10 20]))))))))) =>[KNN 10 @doc_embedding $BLOB]",
-            "PARAMS", 2, "BLOB", "<your_vector_blob>",
+            "PARAMS", 2, "BLOB", VECTOR_BLOB_DIM128,
             "RETURN", 1, "doc_embedding"
         ) == [0]
         assert client.execute_command(
             "FT.SEARCH", "my_index",
             "((((((((@price:[10 20] | @category:{electronics|books})))))))) =>[KNN 10 @doc_embedding $BLOB]",
-            "PARAMS", 2, "BLOB", "<your_vector_blob>",
+            "PARAMS", 2, "BLOB", VECTOR_BLOB_DIM128,
             "RETURN", 1, "doc_embedding"
         ) == [0]
         # Validate the failure case with a query of depth 11.
@@ -77,7 +84,7 @@ class TestQueryParser(ValkeySearchTestCaseBase):
             client.execute_command(
                 "FT.SEARCH", "my_index",
                 "((((((((((@price:[10 20])))))))))) =>[KNN 10 @doc_embedding $BLOB]",
-                "PARAMS", 2, "BLOB", "<your_vector_blob>",
+                "PARAMS", 2, "BLOB", VECTOR_BLOB_DIM128,
                 "RETURN", 1, "doc_embedding"
             )
             assert False
@@ -112,7 +119,7 @@ class TestQueryParser(ValkeySearchTestCaseBase):
         assert client.execute_command(
             "FT.SEARCH", "my_index",
             "@price:[10 20] @price:[30 40] @price:[50 60] =>[KNN 10 @doc_embedding $BLOB]",
-            "PARAMS", 2, "BLOB", "<your_vector_blob>",
+            "PARAMS", 2, "BLOB", VECTOR_BLOB_DIM128,
             "RETURN", 1, "doc_embedding"
         ) == [0]
         
@@ -121,7 +128,7 @@ class TestQueryParser(ValkeySearchTestCaseBase):
             client.execute_command(
                 "FT.SEARCH", "my_index",
                 "@price:[10 20] @price:[30 40] @price:[50 60] @price:[70 80] =>[KNN 10 @doc_embedding $BLOB]",
-                "PARAMS", 2, "BLOB", "<your_vector_blob>",
+                "PARAMS", 2, "BLOB", VECTOR_BLOB_DIM128,
                 "RETURN", 1, "doc_embedding"
             )
             assert False
@@ -133,7 +140,7 @@ class TestQueryParser(ValkeySearchTestCaseBase):
         assert client.execute_command(
             "FT.SEARCH", "my_index",
             "@price:[10 20] @price:[30 40] @price:[50 60] @price:[70 80] =>[KNN 10 @doc_embedding $BLOB]",
-            "PARAMS", 2, "BLOB", "<your_vector_blob>",
+            "PARAMS", 2, "BLOB", VECTOR_BLOB_DIM128,
             "RETURN", 1, "doc_embedding"
         ) == [0]
         
@@ -141,7 +148,7 @@ class TestQueryParser(ValkeySearchTestCaseBase):
         assert client.execute_command(
             "FT.SEARCH", "my_index",
             "@price:[10 20] | @price:[30 40] | @price:[50 60] =>[KNN 10 @doc_embedding $BLOB]",
-            "PARAMS", 2, "BLOB", "<your_vector_blob>",
+            "PARAMS", 2, "BLOB", VECTOR_BLOB_DIM128,
             "RETURN", 1, "doc_embedding"
         ) == [0]
         

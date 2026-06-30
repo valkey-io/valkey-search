@@ -11,7 +11,7 @@ from typing import Any, Union
 from valkeytestframework.util import waiters
 import threading
 import time
-from utils import wait_for_pausepoint
+from utils import pausepoint_hit, wait_for_background_tasks
 
 def canceller(client, client_id):
     my_id = client.execute_command("client id")
@@ -141,8 +141,7 @@ def run_pausepoint_timeout_test(self, pausepoint_name, setup_fn, search_cmd):
     thread = threading.Thread(target=run_search)
     thread.start()
 
-    assert wait_for_pausepoint(client, pausepoint_name, timeout=10), \
-        f"Pausepoint {pausepoint_name} was not hit"
+    waiters.wait_for_true(lambda: pausepoint_hit(client, pausepoint_name))
     assert client.ping() == True, "Server not responsive while pausepoint is held"
 
     thread.join()
@@ -155,6 +154,7 @@ def run_pausepoint_timeout_test(self, pausepoint_name, setup_fn, search_cmd):
 
 class TestCancelCMD(ValkeySearchTestCaseDebugMode):
 
+    @wait_for_background_tasks()
     def test_timeoutCMD(self):
         """
         Test CMD timeout logic
@@ -270,6 +270,7 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
         )
         assert(client.execute_command("FT._DEBUG PAUSEPOINT LIST") == [])
 
+    @wait_for_background_tasks()
     def test_pausepoint_entries_fetcher(self):
         """
         Test timeout in entries fetcher loop (Issue #686 path 1).
@@ -285,6 +286,7 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
             ["FT.SEARCH", "idx", "@tag:{value1}", "TIMEOUT", "5000"]
         )
 
+    @wait_for_background_tasks()
     def test_pausepoint_prefilter_eval(self):
         """
         Test timeout in prefilter evaluation loop
@@ -299,6 +301,7 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
             ["FT.SEARCH", "idx", "@num:[0 50] @tag:{val5}", "TIMEOUT", "5000"]
         )
 
+    @wait_for_background_tasks()
     def test_pausepoint_inline_filter(self):
         """
         Test timeout in HNSW inline filter callback
@@ -318,6 +321,7 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
              "TIMEOUT", "5000"]
         )
 
+    @wait_for_background_tasks()
     def test_pausepoint_term_predicate(self):
         """
         Test timeout in term predicate stem variant evaluation
@@ -338,6 +342,7 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
         )
 
 
+    @wait_for_background_tasks()
     def test_pausepoint_prefix_predicate(self):
         """
         Test timeout in prefix predicate word expansion
@@ -353,6 +358,7 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
             ["FT.SEARCH", "idx", "-@text:notexist @text:prefix* @num:[0 500]", "TIMEOUT", "5000"]
         )
 
+    @wait_for_background_tasks()
     def test_pausepoint_suffix_predicate(self):
         """
         Test timeout in suffix predicate word expansion
@@ -368,6 +374,7 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
             ["FT.SEARCH", "idx", "-@text:notexist @text:*suffix @num:[0 500]", "TIMEOUT", "5000"]
         )
 
+    @wait_for_background_tasks()
     def test_pausepoint_fuzzy_predicate(self):
         """
         Test timeout in fuzzy predicate search loop
@@ -383,6 +390,7 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
             ["FT.SEARCH", "idx", "-@text:notexist @text:%fuzzy% @num:[0 500]", "TIMEOUT", "5000"]
         )
 
+    @wait_for_background_tasks()
     def test_pausepoint_composed_predicate(self):
         """
         Test timeout in composed predicate children iteration
@@ -402,6 +410,7 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
             ["FT.SEARCH", "idx", "(@text:word* | @tag:{tag1}) @num:[0 500]", "TIMEOUT", "5000"]
         )
 
+    @wait_for_background_tasks()
     def test_aggregate_timeout(self):
         """Test FT.AGGREGATE timeout handling across all aggregation stages."""
         client: Valkey = self.server.get_new_client()
@@ -497,14 +506,14 @@ class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
     def check_info_sum(self, name: str, sum_value: int):
         """Sum the values of a given info field across all servers"""
         waiters.wait_for_equal(
-          lambda: self._check_info_sum(name), 
-          sum_value, 
-          timeout=5
+          lambda: self._check_info_sum(name),
+          sum_value
         )
     
     def sum_docs(self, index: Index) -> int:
         return sum([index.info(self.client_for_primary(i)).num_docs for i in range(len(self.replication_groups))])
 
+    @wait_for_background_tasks()
     def test_timeoutCME(self):
         self.execute_primaries(["flushall sync"])
 
@@ -519,7 +528,7 @@ class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
         flat_index.create(client)
         hnsw_index.load_data(client, 100)
         # Let the index properly processed
-        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index), 100, timeout=10)
+        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index), 100)
 
         #
         # Nominal case
@@ -560,6 +569,7 @@ class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
         self.check_info_sum("search_prefiltering_requests_count", 6)
         self.check_info_sum("search_test-counter-ForceCancels", 9)
 
+    @wait_for_background_tasks()
     def test_aggregate_timeout_cluster(self):
         """Test FT.AGGREGATE timeout handling in cluster mode."""
         self.config_set("search.info-developer-visible", "yes")
@@ -573,7 +583,7 @@ class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
         flat_index.create(client)
         hnsw_index.load_data(client, 1000)
 
-        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index), 1000, timeout=10)
+        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index), 1000)
         self.check_info_sum("search_test-counter-ForceTimeoutAggregateCancels", 0)
 
         self.control_set("ForceTimeoutAggregate", "yes")

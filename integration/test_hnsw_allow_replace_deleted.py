@@ -42,8 +42,7 @@ class TestHNSWAllowReplaceDeleted(ValkeySearchTestCaseDebugMode):
         # Wait for backfill/indexing to complete
         waiters.wait_for_equal(
             lambda: hnsw_index.info(client).num_docs,
-            num_vecs,
-            timeout=10
+            num_vecs
         )
 
         # Delete highest-labeled vectors (8 and 9)
@@ -55,8 +54,7 @@ class TestHNSWAllowReplaceDeleted(ValkeySearchTestCaseDebugMode):
 
         waiters.wait_for_equal(
             lambda: hnsw_index.info(client).num_docs,
-            surviving,
-            timeout=10
+            surviving
         )
 
         # RDB save + reload
@@ -71,8 +69,7 @@ class TestHNSWAllowReplaceDeleted(ValkeySearchTestCaseDebugMode):
 
         # Wait for index to be loaded
         waiters.wait_for_true(
-            lambda: hnsw_index.backfill_complete(client),
-            timeout=30
+            lambda: hnsw_index.backfill_complete(client)
         )
 
         # Add 5 new vectors after reload
@@ -85,8 +82,7 @@ class TestHNSWAllowReplaceDeleted(ValkeySearchTestCaseDebugMode):
 
         waiters.wait_for_equal(
             lambda: hnsw_index.info(client).num_docs,
-            expected_total,
-            timeout=10
+            expected_total
         )
 
         info_after = client.info("SEARCH")
@@ -169,7 +165,7 @@ class TestReplaceDeletedOnLoad(ValkeySearchTestCaseDebugMode):
         client = self.server.get_new_client()
 
         waiters.wait_for_true(
-            lambda: hnsw_index.backfill_complete(client), timeout=30
+            lambda: hnsw_index.backfill_complete(client)
         )
 
         # Add new vectors — these should reuse deleted slots

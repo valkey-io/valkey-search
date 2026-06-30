@@ -86,6 +86,11 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
       VMSDK_ASSIGN_OR_RETURN(auto indexer,
                              params.index_schema->GetIndex(identifier));
       auto indexer_type = indexer->GetIndexerType();
+      if (indexer->IsVectorIndex()) {
+        return absl::InvalidArgumentError(
+            absl::StrCat("Loading of vector fields is not supported (field `",
+                         identifier, "`)"));
+      }
       auto schema_identifier = params.index_schema->GetIdentifier(identifier);
       size_t record_index;
       if (schema_identifier.ok()) {
@@ -167,6 +172,7 @@ bool ReplyWithValue(ValkeyModuleCtx *ctx,
     } else {
       switch (indexer_type) {
         case indexes::IndexerType::kTag:
+        case indexes::IndexerType::kText:
         case indexes::IndexerType::kNone: {
           value_view = value.AsStringView();
           break;
@@ -241,17 +247,10 @@ absl::StatusOr<expr::Value> ProcessFieldValue(
       }
     }
     default:
-      if (data_type ==
-          data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH) {
-        return expr::Value(value);
-      } else {
-        auto v = vmsdk::JsonUnquote(value);
-        if (v) {
-          return expr::Value(std::move(*v));
-        } else {
-          return absl::InvalidArgumentError("Failed to unquote JSON value");
-        }
-      }
+      // JSON string values are already JSON-decoded when fetched/indexed
+      // (NormalizeJsonRecord), so they are treated the same as HASH values
+      // here. Decoding again would double-decode and corrupt escapes.
+      return expr::Value(value);
   }
 }
 

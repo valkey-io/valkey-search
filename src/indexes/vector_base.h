@@ -187,6 +187,8 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   virtual uint64_t GetMaxInternalLabel() const { return 0; }
   virtual size_t GetLabelCount() const { return 0; }
 
+  bool IsVectorIndex() const override { return true; }
+
  protected:
   VectorBase(IndexerType indexer_type, int dimensions,
              data_model::AttributeDataType attribute_data_type,

@@ -915,16 +915,25 @@ absl::Status MetadataManager::CreateEntryOnReplica(
     ValkeyModuleCtx *ctx, absl::string_view type_name, absl::string_view id,
     const coordinator::GlobalMetadataEntry *metadata_entry,
     const coordinator::GlobalMetadataVersionHeader *global_version_header) {
-  // Verify this is only called on replica nodes or during loading
-  CHECK((ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_SLAVE) ||
-        (ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_LOADING))
-      << "CreateEntryOnReplica should only be called on replica nodes or "
-         "during loading";
-
   auto obj_name = ObjName::Decode(id);
-  auto callback_result = TriggerCallbacks(type_name, obj_name, *metadata_entry);
-  if (!callback_result.ok()) {
-    return callback_result;
+
+  if (ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_SLAVE) {
+    // On a live replica, apply the entry to the SchemaManager immediately.
+    auto callback_result =
+        TriggerCallbacks(type_name, obj_name, *metadata_entry);
+    if (!callback_result.ok()) {
+      return callback_result;
+    }
+  } else {
+    // The only other valid caller is AOF/RDB loading. The SchemaManager is not
+    // ready during early replay, so the callback is skipped here; the entry is
+    // still stored below. Schemas themselves are recreated from their own AOF
+    // commands (FT.CREATE/FT.DROP/...), and OnLoadingEnded then re-applies the
+    // coordinator fingerprint/version onto them via
+    // PopulateFingerprintVersionFromMetadata.
+    CHECK(ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_LOADING)
+        << "CreateEntryOnReplica should only be called on a replica or during "
+           "loading";
   }
 
   auto result = metadata_.Get();

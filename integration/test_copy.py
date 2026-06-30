@@ -32,7 +32,6 @@ class TestCopy(ValkeySearchTestCaseBase):
         waiters.wait_for_equal(
             lambda: hnsw_index.info(client).num_docs,
             int(num_of_docs * 1.5),
-            timeout=5,
         )
 
         assert client.execute_command("FT._LIST") == [hnsw_index.name.encode()]

@@ -367,38 +367,33 @@ absl::Status SchemaManager::OnMetadataCallback(
   if (!old_schema.ok() && !absl::IsNotFound(old_schema.status())) {
     return old_schema.status();
   }
-
+  absl::Status result = absl::OkStatus();
   if (metadata == nullptr) {
-    if (old_schema.ok()) {
-      ValkeySearch::Instance().ScheduleIndexDestruction(
-          std::move(old_schema.value()));
+    // Nothing to create — just clean up the old schema below.
+  } else {
+    auto proposed_schema = std::make_unique<data_model::IndexSchema>();
+    if (!metadata->UnpackTo(proposed_schema.get())) {
+      result = absl::InternalError(absl::StrCat(
+          "Unable to unpack metadata for index schema ", obj_name));
+    } else {
+      auto create_status =
+          CreateIndexSchemaInternal(detached_ctx_.get(), *proposed_schema);
+      if (!create_status.ok()) {
+        result = create_status;
+      } else {
+        auto created_schema =
+            LookupInternal(obj_name.GetDbNum(), obj_name.GetName()).value();
+        CHECK(created_schema != nullptr);
+        created_schema->SetFingerprint(fingerprint);
+        created_schema->SetVersion(version);
+      }
     }
-    return absl::OkStatus();
   }
-  auto proposed_schema = std::make_unique<data_model::IndexSchema>();
-  if (!metadata->UnpackTo(proposed_schema.get())) {
-    if (old_schema.ok()) {
-      ValkeySearch::Instance().ScheduleIndexDestruction(
-          std::move(old_schema.value()));
-    }
-    return absl::InternalError(
-        absl::StrCat("Unable to unpack metadata for index schema ", obj_name));
-  }
-
-  VMSDK_RETURN_IF_ERROR(
-      CreateIndexSchemaInternal(detached_ctx_.get(), *proposed_schema));
-
-  auto created_schema =
-      LookupInternal(obj_name.GetDbNum(), obj_name.GetName()).value();
-  CHECK(created_schema != nullptr);
-  created_schema->SetFingerprint(fingerprint);
-  created_schema->SetVersion(version);
-
   if (old_schema.ok()) {
     ValkeySearch::Instance().ScheduleIndexDestruction(
         std::move(old_schema.value()));
   }
-  return absl::OkStatus();
+  return result;
 }
 
 uint64_t SchemaManager::GetNumberOfIndexSchemas() const {

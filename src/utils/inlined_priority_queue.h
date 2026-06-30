@@ -8,6 +8,17 @@
 
 namespace valkey_search {
 
+// Entry for InlinedPriorityQueue that stores a non-owning pointer to a value
+// paired with an index. Ordered by dereferencing the pointer.
+template <typename T>
+struct PriorityQueueEntry {
+  const T* key;
+  size_t idx;
+  bool operator>(const PriorityQueueEntry& o) const { return *key > *o.key; }
+  bool operator<(const PriorityQueueEntry& o) const { return *key < *o.key; }
+  bool operator==(const PriorityQueueEntry& o) const { return *key == *o.key; }
+};
+
 template <typename T, size_t N>
 class InlinedPriorityQueue {
  public:
@@ -17,14 +28,14 @@ class InlinedPriorityQueue {
 
   // Maintains the Heap invariant on every insertion
   template <typename... Args>
-  void emplace(Args &&...args) {
+  void emplace(Args&&... args) {
     storage_.emplace_back(std::forward<Args>(args)...);
     std::push_heap(storage_.begin(), storage_.end(), std::greater<T>());
   }
 
   // To support batching: push multiple, then call heapify()
   template <typename... Args>
-  void push_back_unsorted(Args &&...args) {
+  void push_back_unsorted(Args&&... args) {
     storage_.emplace_back(std::forward<Args>(args)...);
   }
 
@@ -42,7 +53,7 @@ class InlinedPriorityQueue {
   }
 
   // Access the minimum element in O(1)
-  const T &min() const { return storage_.front(); }
+  const T& min() const { return storage_.front(); }
 
   // NOTE: Iterating a heap is NOT sorted.
   // If you need sorted iteration, you must convert it or use sort().

@@ -300,7 +300,13 @@ absl::Status SchemaManager::RemoveIndexSchema(uint32_t db_num,
 
   // In non-coordinated mode, apply the update inline.
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  return RemoveIndexSchemaInternal(db_num, name).status();
+  auto old_schema = RemoveIndexSchemaInternal(db_num, name);
+  if (!old_schema.ok()) {
+    return old_schema.status();
+  }
+  ValkeySearch::Instance().ScheduleIndexDestruction(
+      std::move(old_schema.value()));
+  return absl::OkStatus();
 }
 
 absl::flat_hash_set<std::string> SchemaManager::GetIndexSchemasInDBInternal(
@@ -356,17 +362,25 @@ absl::Status SchemaManager::OnMetadataCallback(
     const coordinator::ObjName &obj_name, const google::protobuf::Any *metadata,
     uint64_t fingerprint, uint32_t version) {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  auto status =
+  auto old_schema =
       RemoveIndexSchemaInternal(obj_name.GetDbNum(), obj_name.GetName());
-  if (!status.ok() && !absl::IsNotFound(status.status())) {
-    return status.status();
+  if (!old_schema.ok() && !absl::IsNotFound(old_schema.status())) {
+    return old_schema.status();
   }
 
   if (metadata == nullptr) {
+    if (old_schema.ok()) {
+      ValkeySearch::Instance().ScheduleIndexDestruction(
+          std::move(old_schema.value()));
+    }
     return absl::OkStatus();
   }
   auto proposed_schema = std::make_unique<data_model::IndexSchema>();
   if (!metadata->UnpackTo(proposed_schema.get())) {
+    if (old_schema.ok()) {
+      ValkeySearch::Instance().ScheduleIndexDestruction(
+          std::move(old_schema.value()));
+    }
     return absl::InternalError(
         absl::StrCat("Unable to unpack metadata for index schema ", obj_name));
   }
@@ -380,6 +394,10 @@ absl::Status SchemaManager::OnMetadataCallback(
   created_schema->SetFingerprint(fingerprint);
   created_schema->SetVersion(version);
 
+  if (old_schema.ok()) {
+    ValkeySearch::Instance().ScheduleIndexDestruction(
+        std::move(old_schema.value()));
+  }
   return absl::OkStatus();
 }
 
@@ -531,6 +549,11 @@ void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx) {
         continue;
       }
     }
+    // Move expensive destruction (radix trees, posting lists, per-key indexes)
+    // off the main thread. MarkAsDestructing() was already called in
+    // RemoveIndexSchemaInternal.
+    ValkeySearch::Instance().ScheduleIndexDestruction(
+        std::move(old_schema.value()));
   }
 }
 

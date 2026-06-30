@@ -89,6 +89,7 @@ struct FTSearchParserTestCase {
   bool no_content{false};
   std::string search_parameters_str;
   uint64_t timeout_ms{kTimeoutMS};
+  std::optional<size_t> query_blob_num_floats;
 };
 
 class FTSearchParserTest
@@ -121,6 +122,9 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
   std::cerr << ", no_content: " << no_content << "\n";
 
   std::vector<float> floats = {0.1, 0.2, 0.3};
+  if (test_case.query_blob_num_floats.has_value()) {
+    floats.assign(*test_case.query_blob_num_floats, 0.1f);
+  }
   std::vector<RedisModuleString *> args;
   const std::string key_str = "my_schema_name";
   RedisModuleCtx fake_ctx;
@@ -420,6 +424,26 @@ INSTANTIATE_TEST_SUITE_P(
             .params_str = " PARAMS 2",
             .filter_str = " * => [KNN 10 @vec $BLOB]",
             .k = 10,
+        },
+        {
+            .test_name = "vector_blob_size_too_small",
+            .success = false,
+            .params_str = " PARAMS 2",
+            .filter_str = " * => [KNN 10 @vec $BLOB]",
+            .expected_error_message =
+                "Error parsing vector similarity parameters: query vector "
+                "blob size",
+            .query_blob_num_floats = 2,
+        },
+        {
+            .test_name = "vector_blob_size_too_large",
+            .success = false,
+            .params_str = " PARAMS 2",
+            .filter_str = " * => [KNN 10 @vec $BLOB]",
+            .expected_error_message =
+                "Error parsing vector similarity parameters: query vector "
+                "blob size",
+            .query_blob_num_floats = 4,
         },
         {
             .test_name = "happy_path_1_with_score_as",

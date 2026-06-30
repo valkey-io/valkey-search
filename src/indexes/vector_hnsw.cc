@@ -332,12 +332,6 @@ absl::StatusOr<std::deque<Neighbor>> VectorHNSW<T>::Search(
     absl::string_view query, uint64_t count,
     std::unique_ptr<hnswlib::BaseFilterFunctor> filter,
     std::optional<size_t> ef_runtime) {
-  if (!IsValidSizeVector(query)) {
-    return absl::InvalidArgumentError(absl::StrCat(
-        "Error parsing vector similarity query: query vector blob size (",
-        query.size(), ") does not match index's expected size (",
-        dimensions_ * GetDataTypeSize(), ")."));
-  }
   auto perform_search =
       [this, count, &filter, &ef_runtime](absl::string_view query)
           ABSL_NO_THREAD_SAFETY_ANALYSIS

@@ -307,7 +307,7 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
         # Fill the mutation queue with only backfills on an index that's not done backfilling and assert that no keys get saved.
         #
         self.client.execute_command("CONFIG SET search.info-developer-visible yes")
-        self.client.execute_command("ft._debug PAUSEPOINT SET block_mutation_queue")
+        self.client.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET StopBackfill yes")
         load_data(self.client)
         index.create(self.client, False)
         self.client.execute_command("save")
@@ -317,7 +317,6 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
         assert i["search_rdb_save_mutation_entries"] == 0
         assert i["search_rdb_save_backfilling_indexes"] == 1
         os.environ["SKIPLOGCLEAN"] = "1"
-        self.client.execute_command("ft._debug pausepoint reset block_mutation_queue")
         self.server.restart(remove_rdb=False)
         self.client.execute_command("CONFIG SET search.info-developer-visible yes")
         i = self.client.info("search")

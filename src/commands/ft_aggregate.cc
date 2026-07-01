@@ -55,36 +55,61 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
     return absl::OkStatus();
   } else {
     for (const auto &load : params.loads_) {
+      const std::string &identifier = load.identifier;
+      const std::string &alias = load.alias;  // output name (== identifier
+                                              // when there is no AS clause)
+      const bool renamed = alias != identifier;
+      // Apply a LOAD ... AS rename to an attribute already present in the
+      // record table: emit it under `alias` and let `@alias` resolve in later
+      // pipeline stages (APPLY/SORTBY/FILTER).
+      auto apply_rename = [&](size_t record_index) {
+        params.record_info_by_index_[record_index].output_name_ = alias;
+        params.record_indexes_by_alias_.emplace(alias, record_index);
+      };
       //
       // Skip loading of the score and the key, we always get those...
       //
-      if (load == "__key") {
+      if (identifier == "__key") {
         params.load_key = true;
+        if (renamed) {
+          apply_rename(params.record_indexes_by_alias_.at("__key"));
+        }
         continue;
       }
-      if (load == vmsdk::ToStringView(params.score_as.get())) {
+      if (identifier == vmsdk::ToStringView(params.score_as.get())) {
+        if (renamed) {
+          apply_rename(params.record_indexes_by_identifier_.at(identifier));
+        }
         continue;
       }
       content = true;
-      VMSDK_ASSIGN_OR_RETURN(auto indexer, params.index_schema->GetIndex(load));
+      VMSDK_ASSIGN_OR_RETURN(auto indexer,
+                             params.index_schema->GetIndex(identifier));
       auto indexer_type = indexer->GetIndexerType();
       if (indexer->IsVectorIndex()) {
-        return absl::InvalidArgumentError(absl::StrCat(
-            "Loading of vector fields is not supported (field `", load, "`)"));
+        return absl::InvalidArgumentError(
+            absl::StrCat("Loading of vector fields is not supported (field `",
+                         identifier, "`)"));
       }
-      auto schema_identifier = params.index_schema->GetIdentifier(load);
+      auto schema_identifier = params.index_schema->GetIdentifier(identifier);
+      size_t record_index;
       if (schema_identifier.ok()) {
         params.return_attributes.emplace_back(query::ReturnAttribute{
             .identifier = vmsdk::MakeUniqueValkeyString(*schema_identifier),
-            .attribute_alias = vmsdk::MakeUniqueValkeyString(load),
-            .alias = vmsdk::MakeUniqueValkeyString(load)});
-        params.AddRecordAttribute(*schema_identifier, load, indexer_type);
+            .attribute_alias = vmsdk::MakeUniqueValkeyString(identifier),
+            .alias = vmsdk::MakeUniqueValkeyString(alias)});
+        record_index = params.AddRecordAttribute(*schema_identifier, identifier,
+                                                 indexer_type);
       } else {
         params.return_attributes.emplace_back(query::ReturnAttribute{
-            .identifier = vmsdk::MakeUniqueValkeyString(load),
+            .identifier = vmsdk::MakeUniqueValkeyString(identifier),
             .attribute_alias = vmsdk::UniqueValkeyString(),
-            .alias = vmsdk::MakeUniqueValkeyString(load)});
-        params.AddRecordAttribute(load, load, indexes::IndexerType::kNone);
+            .alias = vmsdk::MakeUniqueValkeyString(alias)});
+        record_index = params.AddRecordAttribute(identifier, identifier,
+                                                 indexes::IndexerType::kNone);
+      }
+      if (renamed) {
+        apply_rename(record_index);
       }
     }
   }
@@ -236,8 +261,11 @@ absl::Status CreateRecordsFromNeighbors(
   auto data_type = parameters.index_schema->GetAttributeDataType().ToProto();
 
   for (auto &n : neighbors) {
+    // One slot per record column. A LOAD ... AS rename adds an extra entry to
+    // record_indexes_by_alias_ (alias -> existing column) without adding a
+    // column, so size by record_info_by_index_ rather than the alias map.
     auto rec =
-        std::make_unique<Record>(parameters.record_indexes_by_alias_.size());
+        std::make_unique<Record>(parameters.record_info_by_index_.size());
 
     // Set key field if requested
     if (parameters.load_key) {
@@ -342,7 +370,7 @@ absl::Status GenerateResponse(ValkeyModuleCtx *ctx,
     for (size_t i = 0; i < rec->fields_.size(); ++i) {
       if (ReplyWithValue(
               ctx, parameters.index_schema->GetAttributeDataType().ToProto(),
-              parameters.record_info_by_index_[i].identifier_,
+              parameters.record_info_by_index_[i].output_name_,
               parameters.record_info_by_index_[i].data_type_, rec->fields_[i],
               parameters.dialect)) {
         array_count += 2;

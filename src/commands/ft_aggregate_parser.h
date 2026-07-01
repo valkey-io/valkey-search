@@ -34,6 +34,15 @@ class SortBy;
 
 using ArgVector = absl::InlinedVector<expr::Value, 4>;
 
+// A single entry of the LOAD clause. `identifier` is the field/path named in
+// the command (with any leading '@' stripped); `alias` is the output name.
+// When the LOAD clause has no `AS` alias for the entry, `alias == identifier`.
+// Member names mirror query::ReturnAttribute (identifier + alias).
+struct LoadField {
+  std::string identifier;
+  std::string alias;
+};
+
 struct IndexInterface {
   virtual absl::StatusOr<indexes::IndexerType> GetFieldType(
       absl::string_view s) const = 0;
@@ -50,7 +59,7 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   absl::Status ParseCommand(vmsdk::ArgsIterator& itr) override;
   void SendReply(ValkeyModuleCtx* ctx, query::SearchResult& result) override;
   bool loadall_{false};
-  std::vector<std::string> loads_;
+  std::vector<LoadField> loads_;
   bool load_key{false};
   bool addscores_{false};
   std::vector<std::unique_ptr<Stage>> stages_;
@@ -85,6 +94,10 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   struct AttributeRecordInfo {
     std::string identifier_;  // The identifier of the attribute
     std::string alias_;
+    // The name this attribute is emitted under in the FT.AGGREGATE reply.
+    // Defaults to identifier_ (preserving legacy behavior); a LOAD ... AS
+    // rename overrides it with the requested alias.
+    std::string output_name_;
     indexes::IndexerType data_type_;
   };
 
@@ -124,6 +137,7 @@ struct AggregateParameters : public expr::Expression::CompileContext,
     record_info_by_index_.push_back(
         AttributeRecordInfo{.identifier_ = std::string(identifier),
                             .alias_ = std::string(alias),
+                            .output_name_ = std::string(identifier),
                             .data_type_ = data_type});
     return new_index;
   }

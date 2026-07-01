@@ -288,6 +288,43 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.checkvec(dialect, f"ft.aggregate {key_type}_idx1  *")
         self.checkvec(dialect, f"ft.aggregate {key_type}_idx1  * load *")
 
+    def test_aggregate_load_rename(self, key_type, dialect):
+        # The LOAD <count> includes the AS keyword and its alias.
+        self.setup_data("sortable numbers", key_type)
+        # Single rename.
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 4 @__key @n1 as num1")
+        # Multiple renames.
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 7 @__key @n1 as a @n2 as b")
+        # Proof: a renamed field is usable in a subsequent APPLY.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 7 @__key @n1 as a @n2 as b apply @a+@b as total"
+        )
+        # Renamed field reused across two APPLY stages.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 4 @__key @n1 as a apply @a*2 as dbl apply @dbl+@a as tripled"
+        )
+        # Mix of a renamed and a non-renamed load, both used in APPLY.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 5 @__key @n1 @n2 as b apply @n1+@b as total"
+        )
+        # Rename a tag field and use it in a string APPLY. No spaces in the
+        # expression so the whitespace-split in check() keeps it one token.
+        self.check(dialect,
+            f'ft.aggregate {key_type}_idx1 * load 4 @__key @t1 as tag1 apply contains(@tag1,"one") as has_one'
+        )
+
+    def test_aggregate_load_rename_json_path(self, key_type, dialect):
+        # Loading a field by its JSON path only applies to JSON keys.
+        if key_type != "json":
+            pytest.skip("JSON-path loads apply only to JSON keys")
+        self.setup_data("sortable numbers", key_type)
+        # Load by JSON path with a rename, then use the rename in APPLY.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 4 @__key $.n1 as a apply @a+1 as b"
+        )
+        # Load by JSON path without a rename: emitted under the path.
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 2 @__key $.n1")
+
     def test_aggregate_numeric_dyadic_operators(self, key_type, dialect):
         self.setup_data("hard numbers", key_type)
         dyadic = ["+", "-", "*", "/", "^"]

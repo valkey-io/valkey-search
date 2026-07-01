@@ -6,6 +6,7 @@ Or, to regenerate just one, cd to this directory and run pytest directly:
 
     pytest generate.py        # produces aggregate-answers.pickle.gz
     pytest generate_text.py   # produces text-search-answers.pickle.gz
+    pytest generate_filter.py # produces filter-answers.pickle.gz
 
 Both forms require Docker. The generators spin up redis/redis-stack-server on
 port 6380 to capture reference answers; the docker handling is sometimes flaky

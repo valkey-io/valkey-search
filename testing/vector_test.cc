@@ -7,12 +7,13 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <deque>
-#include <limits>
 #include <memory>
 #include <numeric>
 #include <optional>
@@ -23,6 +24,7 @@
 
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
+#include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
@@ -775,17 +777,393 @@ TEST_F(VectorIndexTest, LoadRecomputesAlignedOffsetForOldSnapshot) {
   header.set_max_m(kM);
   header.set_max_m_0(kM * 2);
   header.set_m(kM);
-  header.set_mult(1.0);
+  header.set_mult(1.0 / std::log(static_cast<double>(kM)));  // == 1/log(M)
   header.set_ef_construction(kEFConstruction);
   std::string serialized;
   ASSERT_TRUE(header.SerializeToString(&serialized));
 
   hnswlib::HierarchicalNSW<float> algo(&l2_space);
   SingleChunkInputStream input(serialized);
-  VMSDK_EXPECT_OK(
-      algo.LoadIndex(input, &l2_space, /*max_elements_i=*/16, nullptr));
+  VMSDK_EXPECT_OK(algo.LoadIndex(input, &l2_space, /*max_elements_i=*/16,
+                                 nullptr, /*expected_m=*/kM,
+                                 /*validate=*/true));
   EXPECT_EQ(algo.offsetData_ % alignof(char*), 0u);
   EXPECT_EQ(algo.size_data_per_element_ % alignof(char*), 0u);
+}
+
+// ---------------------------------------------------------------------------
+// HNSW load-validation tests (corruption hardening).
+//
+// These exercise HierarchicalNSW::LoadIndex directly via in-memory chunk
+// streams, so a golden serialization can be built deterministically and then
+// surgically corrupted. A valid index must load; a corrupt one must be
+// rejected (status error) without crashing.
+// ---------------------------------------------------------------------------
+namespace {
+
+// A chunk store that is both an InputStream and an OutputStream. SaveIndex
+// writes into `chunks`, tests mutate `chunks` in place, and LoadIndex replays
+// it from the front -- so there is no copying between separate stream objects.
+// LoadChunk mirrors the real stream's exhaustion behavior (NotFound) so a
+// truncated input is realistic.
+class ChunkStream : public hnswlib::InputStream, public hnswlib::OutputStream {
+ public:
+  std::vector<std::string> chunks;
+
+  absl::Status SaveChunk(const char* data, size_t len) override {
+    chunks.emplace_back(data, len);
+    return absl::OkStatus();
+  }
+  absl::StatusOr<std::unique_ptr<std::string>> LoadChunk() override {
+    if (read_idx_ >= chunks.size()) {
+      return absl::NotFoundError("No more elements remaining");
+    }
+    return std::make_unique<std::string>(chunks[read_idx_++]);
+  }
+  // Reset the read cursor so the same store can be replayed again.
+  void Rewind() { read_idx_ = 0; }
+
+ private:
+  size_t read_idx_ = 0;
+};
+
+// VectorTracker that copies each vector into stable storage and hands back a
+// pointer to it (LoadIndex stores that pointer in the level-0 record).
+class BufTracker : public hnswlib::VectorTracker {
+ public:
+  char* TrackVector(uint64_t /*id*/, char* vector, size_t len) override {
+    storage_.emplace_back(vector, len);
+    return storage_.back().data();
+  }
+
+ private:
+  std::deque<std::string> storage_;
+};
+
+// On-disk geometry for kM / kDimensions, used to locate bytes for mutation.
+constexpr size_t kU32 = sizeof(uint32_t);
+constexpr size_t kStride = kM * kU32 + kU32;               // 68
+constexpr size_t kLinks0 = 2 * kM * kU32 + kU32;           // 132
+constexpr size_t kVecBytes = kDimensions * sizeof(float);  // 400
+constexpr size_t kLabelOff = kLinks0 + kVecBytes;          // 532
+constexpr size_t kElemChunkBytes = kLabelOff + sizeof(hnswlib::labeltype);
+
+template <typename T>
+T PeekAt(const std::string& c, size_t off) {
+  CHECK_LE(off + sizeof(T), c.size()) << "PeekAt out of bounds";
+  T v;
+  std::memcpy(&v, c.data() + off, sizeof(T));
+  return v;
+}
+template <typename T>
+void PokeAt(std::string* c, size_t off, T v) {
+  CHECK_LE(off + sizeof(T), c->size()) << "PokeAt out of bounds";
+  std::memcpy(c->data() + off, &v, sizeof(T));
+}
+
+// Build a deterministic HNSW index with explicit per-element levels (a level of
+// 0 falls back to the seeded RNG, since addPoint only forces level > 0) and
+// serialize it into a golden ChunkStream.
+ChunkStream BuildGoldenChunks(const std::vector<int>& force_levels,
+                              size_t max_elements) {
+  hnswlib::L2Space space{kDimensions};
+  hnswlib::HierarchicalNSW<float> algo(&space, max_elements, kM,
+                                       kEFConstruction,
+                                       /*random_seed=*/100,
+                                       /*allow_replace_deleted=*/false);
+  // HNSW stores a POINTER to each vector (it does not copy). Both addPoint
+  // (distance computations against earlier elements) and SaveIndex dereference
+  // those pointers, so the source vectors must outlive SaveIndex. Own them all
+  // here until the index is serialized; reserve() keeps the backing buffers
+  // stable as the container grows. After SaveIndex the golden ChunkStream owns
+  // its bytes by value, so this storage can safely be destroyed.
+  std::vector<std::vector<float>> vectors;
+  vectors.reserve(force_levels.size());
+  for (size_t i = 0; i < force_levels.size(); i++) {
+    std::vector<float> v(kDimensions, 0.1f);
+    v[i % kDimensions] = static_cast<float>(i + 1);
+    vectors.push_back(std::move(v));
+    algo.addPoint(vectors.back().data(), /*label=*/i, force_levels[i]);
+  }
+  ChunkStream golden;
+  EXPECT_TRUE(algo.SaveIndex(golden).ok());
+  return golden;
+}
+
+// Load a golden ChunkStream, returning a Status (validation throws; mirror the
+// real LoadFromRDB by converting the exception into an error status).
+absl::Status LoadGolden(ChunkStream& golden, size_t max_elements,
+                        bool validate) {
+  golden.Rewind();
+  hnswlib::L2Space space{kDimensions};
+  hnswlib::HierarchicalNSW<float> algo(&space);
+  BufTracker tracker;
+  try {
+    return algo.LoadIndex(golden, &space, max_elements, &tracker, kM, validate);
+  } catch (const std::exception& e) {
+    return absl::InternalError(e.what());
+  }
+}
+
+// Walk the golden stream and record, per element, the index of its link-list
+// size chunk and (if present) its upper-level data chunk. Robust to whatever
+// levels the RNG assigned to the un-forced elements.
+struct GoldenLayout {
+  uint32_t enterpoint = 0;
+  int32_t maxlevel = 0;
+  size_t num_elements = 0;
+  std::vector<size_t> size_chunk;
+  std::vector<int> data_chunk;  // -1 if the element has no upper levels
+};
+GoldenLayout AnalyzeGolden(const ChunkStream& golden) {
+  const std::vector<std::string>& chunks = golden.chunks;
+  GoldenLayout g;
+  hnswlib::data_model::HNSWIndexHeader h;
+  EXPECT_TRUE(h.ParseFromString(chunks[0]));
+  g.enterpoint = h.enterpoint_node();
+  g.maxlevel = h.max_level();
+  g.num_elements = h.curr_element_count();
+  size_t idx = 1 + g.num_elements;  // first link-list size chunk
+  for (size_t i = 0; i < g.num_elements; i++) {
+    g.size_chunk.push_back(idx);
+    // The size chunk holds the link-list BYTE size as a size_t (8 bytes); the
+    // layer count is derived from it, not stored directly.
+    uint64_t lls = PeekAt<uint64_t>(chunks[idx], 0);  // LE host == on-disk LE
+    idx++;
+    if (lls != 0) {
+      g.data_chunk.push_back(static_cast<int>(idx));
+      idx++;
+    } else {
+      g.data_chunk.push_back(-1);
+    }
+  }
+  return g;
+}
+
+hnswlib::data_model::HNSWIndexHeader GetHeader(const ChunkStream& golden) {
+  hnswlib::data_model::HNSWIndexHeader h;
+  EXPECT_TRUE(h.ParseFromString(golden.chunks[0]));
+  return h;
+}
+void SetHeader(ChunkStream* golden,
+               const hnswlib::data_model::HNSWIndexHeader& h) {
+  std::string s;
+  EXPECT_TRUE(h.SerializeToString(&s));
+  golden->chunks[0] = s;
+}
+
+// Multi-layer golden index reused across corruption tests: element 0 is forced
+// to level 2 (the entry point), element 1 to level 1, the rest level 0.
+constexpr size_t kGoldenMax = 32;
+ChunkStream MultiLayerGolden() {
+  return BuildGoldenChunks({2, 1, 0, 0, 0, 0, 0, 0}, kGoldenMax);
+}
+
+void ExpectReject(ChunkStream golden, absl::string_view substr) {
+  auto status = LoadGolden(golden, kGoldenMax, /*validate=*/true);
+  ASSERT_FALSE(status.ok());
+  EXPECT_THAT(std::string(status.message()), ::testing::HasSubstr(substr));
+}
+
+}  // namespace
+
+// ---- Happy path ----------------------------------------------------------
+
+TEST_F(VectorIndexTest, LoadValidatesEmptyIndex) {
+  auto golden = BuildGoldenChunks({}, kGoldenMax);
+  VMSDK_EXPECT_OK(LoadGolden(golden, kGoldenMax, /*validate=*/true));
+}
+
+TEST_F(VectorIndexTest, LoadValidatesSingleVector) {
+  auto golden = BuildGoldenChunks({0}, kGoldenMax);
+  VMSDK_EXPECT_OK(LoadGolden(golden, kGoldenMax, /*validate=*/true));
+}
+
+TEST_F(VectorIndexTest, LoadValidatesMultiLayerRoundTripIdentity) {
+  auto golden = MultiLayerGolden();
+  hnswlib::L2Space space{kDimensions};
+  hnswlib::HierarchicalNSW<float> algo(&space);
+  BufTracker tracker;
+  golden.Rewind();
+  VMSDK_EXPECT_OK(algo.LoadIndex(golden, &space, kGoldenMax, &tracker, kM,
+                                 /*validate=*/true));
+  EXPECT_EQ(algo.cur_element_count_, 8u);
+  EXPECT_EQ(algo.maxlevel_, 2);
+  EXPECT_EQ(algo.element_levels_[algo.enterpoint_node_], 2);
+  // save -> load -> save must be byte-identical for a valid index.
+  ChunkStream resaved;
+  VMSDK_EXPECT_OK(algo.SaveIndex(resaved));
+  EXPECT_EQ(resaved.chunks, golden.chunks);
+}
+
+// ---- Header corruption ---------------------------------------------------
+
+TEST_F(VectorIndexTest, RejectHeaderMMismatch) {
+  auto golden = MultiLayerGolden();
+  auto h = GetHeader(golden);
+  h.set_m(kM + 1);
+  SetHeader(&golden, h);
+  ExpectReject(std::move(golden), "header M does not match");
+}
+
+TEST_F(VectorIndexTest, RejectHeaderMaxM0Mismatch) {
+  auto golden = MultiLayerGolden();
+  auto h = GetHeader(golden);
+  h.set_max_m_0(2 * kM + 1);
+  SetHeader(&golden, h);
+  ExpectReject(std::move(golden), "maxM0 does not equal 2*M");
+}
+
+TEST_F(VectorIndexTest, RejectHeaderEnterpointOutOfRange) {
+  auto golden = MultiLayerGolden();
+  auto h = GetHeader(golden);
+  h.set_enterpoint_node(h.curr_element_count());  // == cur, out of range
+  SetHeader(&golden, h);
+  ExpectReject(std::move(golden), "enterpoint_node is out of range");
+}
+
+TEST_F(VectorIndexTest, RejectHeaderMaxLevelTooLarge) {
+  auto golden = MultiLayerGolden();
+  auto h = GetHeader(golden);
+  h.set_max_level(1000);
+  SetHeader(&golden, h);
+  ExpectReject(std::move(golden), "max_level exceeds the element count");
+}
+
+TEST_F(VectorIndexTest, RejectHeaderSerializeSizeMismatch) {
+  auto golden = MultiLayerGolden();
+  auto h = GetHeader(golden);
+  h.set_serialize_size_data_per_element(h.serialize_size_data_per_element() +
+                                        1);
+  SetHeader(&golden, h);
+  ExpectReject(std::move(golden), "serialized element size is inconsistent");
+}
+
+TEST_F(VectorIndexTest, RejectHeaderOffsetLevel0Nonzero) {
+  auto golden = MultiLayerGolden();
+  auto h = GetHeader(golden);
+  h.set_offset_level_0(8);
+  SetHeader(&golden, h);
+  ExpectReject(std::move(golden), "offset_level_0 must be 0");
+}
+
+TEST_F(VectorIndexTest, RejectHeaderMultInconsistentWithM) {
+  auto golden = MultiLayerGolden();
+  auto h = GetHeader(golden);
+  // 0.5 is well-formed (0 < 0.5 <= 2) but != 1/log(kM); the tightened check
+  // recomputes 1/log(M) and rejects it, where the old range check would not.
+  h.set_mult(0.5);
+  SetHeader(&golden, h);
+  ExpectReject(std::move(golden), "mult is inconsistent with M");
+}
+
+// ---- Level-0 record corruption -------------------------------------------
+
+TEST_F(VectorIndexTest, RejectLevel0ChunkWrongSize) {
+  auto golden = MultiLayerGolden();
+  golden.chunks[1].resize(kElemChunkBytes - 1);  // truncate element 0's chunk
+  ExpectReject(std::move(golden), "level-0 element chunk has the wrong size");
+}
+
+TEST_F(VectorIndexTest, RejectLevel0CountTooLarge) {
+  auto golden = MultiLayerGolden();
+  PokeAt<uint16_t>(&golden.chunks[1], 0, 2 * kM + 1);  // count > maxM0_
+  ExpectReject(std::move(golden), "level-0 neighbor count exceeds 2*M");
+}
+
+TEST_F(VectorIndexTest, RejectLevel0NeighborOutOfRange) {
+  auto golden = MultiLayerGolden();
+  PokeAt<uint16_t>(&golden.chunks[2], 0, 1);        // element 1: count = 1
+  PokeAt<uint32_t>(&golden.chunks[2], kU32, 9999);  // neighbor[0] out of range
+  ExpectReject(std::move(golden), "level-0 neighbor id out of range");
+}
+
+TEST_F(VectorIndexTest, RejectDuplicateLabel) {
+  auto golden = MultiLayerGolden();
+  auto label0 = PeekAt<hnswlib::labeltype>(golden.chunks[1], kLabelOff);
+  PokeAt<hnswlib::labeltype>(&golden.chunks[3], kLabelOff,
+                             label0);  // element 2 dup
+  ExpectReject(std::move(golden), "duplicate label in index");
+}
+
+// ---- Upper-level record corruption ---------------------------------------
+
+TEST_F(VectorIndexTest, RejectSizeChunkWrongSize) {
+  auto golden = MultiLayerGolden();
+  auto g = AnalyzeGolden(golden);
+  golden.chunks[g.size_chunk[g.enterpoint]].resize(4);  // not sizeof(size_t)
+  ExpectReject(std::move(golden), "link-list size chunk has the wrong size");
+}
+
+TEST_F(VectorIndexTest, RejectLinkListSizeNotMultiple) {
+  auto golden = MultiLayerGolden();
+  auto g = AnalyzeGolden(golden);
+  PokeAt<uint64_t>(&golden.chunks[g.size_chunk[g.enterpoint]], 0,
+                   2 * kStride + 1);
+  ExpectReject(std::move(golden), "not a multiple of the stride");
+}
+
+TEST_F(VectorIndexTest, RejectElementLevelExceedsMaxLevel) {
+  auto golden = MultiLayerGolden();
+  auto g = AnalyzeGolden(golden);
+  // Declare level 3 (> maxlevel 2) for the entry point.
+  PokeAt<uint64_t>(&golden.chunks[g.size_chunk[g.enterpoint]], 0, 3 * kStride);
+  ExpectReject(std::move(golden), "element level exceeds max_level");
+}
+
+TEST_F(VectorIndexTest, RejectUpperChunkWrongSize) {
+  auto golden = MultiLayerGolden();
+  auto g = AnalyzeGolden(golden);
+  golden.chunks[g.data_chunk[g.enterpoint]].resize(
+      kStride);  // declared 2 levels
+  ExpectReject(std::move(golden), "upper-level link-list chunk has the wrong");
+}
+
+TEST_F(VectorIndexTest, RejectUpperCountTooLarge) {
+  auto golden = MultiLayerGolden();
+  auto g = AnalyzeGolden(golden);
+  PokeAt<uint16_t>(&golden.chunks[g.data_chunk[g.enterpoint]], 0,
+                   kM + 1);  // level 1
+  ExpectReject(std::move(golden), "upper-level neighbor count exceeds M");
+}
+
+TEST_F(VectorIndexTest, RejectUpperNeighborOutOfRange) {
+  auto golden = MultiLayerGolden();
+  auto g = AnalyzeGolden(golden);
+  PokeAt<uint16_t>(&golden.chunks[g.data_chunk[g.enterpoint]], 0, 1);
+  PokeAt<uint32_t>(&golden.chunks[g.data_chunk[g.enterpoint]], kU32, 9999);
+  ExpectReject(std::move(golden), "upper-level neighbor id out of range");
+}
+
+TEST_F(VectorIndexTest, RejectUpperNeighborAbsentAtLevel) {
+  auto golden = MultiLayerGolden();
+  auto g = AnalyzeGolden(golden);
+  // Entry point's level-2 list -> element 1, which exists only at level 1.
+  PokeAt<uint16_t>(&golden.chunks[g.data_chunk[g.enterpoint]], kStride, 1);
+  PokeAt<uint32_t>(&golden.chunks[g.data_chunk[g.enterpoint]], kStride + kU32,
+                   1);
+  ExpectReject(std::move(golden), "neighbor is absent at that level");
+}
+
+TEST_F(VectorIndexTest, RejectEntrypointNotMaxLevel) {
+  auto golden = MultiLayerGolden();
+  auto g = AnalyzeGolden(golden);
+  // Demote the entry point to level 1 while the header still claims maxlevel 2.
+  PokeAt<uint64_t>(&golden.chunks[g.size_chunk[g.enterpoint]], 0, kStride);
+  golden.chunks[g.data_chunk[g.enterpoint]].resize(kStride);
+  ExpectReject(std::move(golden), "enterpoint node is not at max_level");
+}
+
+// ---- Kill switch ---------------------------------------------------------
+
+TEST_F(VectorIndexTest, ValidationDisabledBypassesChecks) {
+  auto golden = MultiLayerGolden();
+  PokeAt<uint16_t>(&golden.chunks[2], 0, 1);  // element 1: count = 1
+  PokeAt<uint32_t>(&golden.chunks[2], kU32,
+                   1);  // neighbor[0] == self (a self-loop)
+  // Enabled: rejected. Disabled: loads (the self-loop is not memory-unsafe).
+  EXPECT_FALSE(LoadGolden(golden, kGoldenMax, /*validate=*/true).ok());
+  VMSDK_EXPECT_OK(LoadGolden(golden, kGoldenMax, /*validate=*/false));
 }
 
 }  // namespace

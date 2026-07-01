@@ -55,9 +55,6 @@ static auto max_search_result_record_size =
         kMaxSearchResultRecordSize / 2,    // default size
         kMinSearchResultRecordSize,        // min size
         kMaxSearchResultRecordSize)        // max size
-        .WithValidationCallback(CHECK_RANGE(kMinSearchResultRecordSize,
-                                            kMaxSearchResultRecordSize,
-                                            kMaxSearchResultRecordSizeConfig))
         .Build();
 
 /// Register the "--max-search-result-fields-count" flag. Controls the max
@@ -68,8 +65,6 @@ static auto max_search_result_fields_count =
         kMaxSearchResultFieldsCount / 2,    // default size
         1,                                  // min size
         kMaxSearchResultFieldsCount)        // max size
-        .WithValidationCallback(CHECK_RANGE(1, kMaxSearchResultFieldsCount,
-                                            kMaxSearchResultFieldsCountConfig))
         .Build();
 
 vmsdk::config::Number &GetMaxSearchResultRecordSize() {

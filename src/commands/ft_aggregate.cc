@@ -137,19 +137,20 @@ bool ReplyWithValue(ValkeyModuleCtx *ctx,
   }
   if (data_type == data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH) {
     ValkeyModule_ReplyWithSimpleString(ctx, name.data());
-    auto value_sv = value.AsStringView();
+    // Guarded by IsNil() check above; AsStringView always succeeds here.
+    auto value_sv = *value.AsStringView();
     ValkeyModule_ReplyWithStringBuffer(ctx, value_sv.data(), value_sv.size());
   } else {
     char double_storage[50];
     std::string_view value_view;
     if (name == "$") {
-      value_view = value.AsStringView();
+      value_view = *value.AsStringView();
     } else {
       switch (indexer_type) {
         case indexes::IndexerType::kTag:
         case indexes::IndexerType::kText:
         case indexes::IndexerType::kNone: {
-          value_view = value.AsStringView();
+          value_view = *value.AsStringView();
           break;
         }
         case indexes::IndexerType::kNumeric: {

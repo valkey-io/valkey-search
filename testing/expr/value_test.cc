@@ -7,14 +7,52 @@
 #include "src/expr/value.h"
 
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 
 #include "gtest/gtest.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/testing_infra/utils.h"
 
 namespace valkey_search::expr {
 
 class ValueTest : public vmsdk::ValkeyTest {
  protected:
+  // Save+restore the default emulate-release so tests that flip it
+  // (to exercise both the legacy and fixed VALKEY_SEARCH_COMPATIBILITY_FIX
+  // branches) don't bleed state to subsequent tests. Note: debug-mode
+  // defaults to true in the unit-test environment (no ParseAndLoadArgv
+  // flips it to false), so SetValue past kModuleVersion is permitted.
+  void SetUp() override {
+    vmsdk::ValkeyTest::SetUp();
+    saved_emulate_release_ = options::GetEmulateRelease().GetValue();
+  }
+  void TearDown() override {
+    auto ok = options::GetEmulateRelease().SetValue(saved_emulate_release_);
+    ASSERT_TRUE(ok.ok()) << ok.message();
+    vmsdk::ValkeyTest::TearDown();
+  }
+
+  // RAII wrapper: pins emulate-release for the duration of its scope and
+  // restores the value that was in effect when the scope started. Nestable.
+  class ScopedEmulateRelease {
+   public:
+    explicit ScopedEmulateRelease(vmsdk::ValkeyVersion v)
+        : prev_(options::GetEmulateRelease().GetValue()) {
+      auto ok = options::GetEmulateRelease().SetValue(v);
+      EXPECT_TRUE(ok.ok()) << ok.message();
+    }
+    ~ScopedEmulateRelease() {
+      auto ok = options::GetEmulateRelease().SetValue(prev_);
+      EXPECT_TRUE(ok.ok()) << ok.message();
+    }
+
+   private:
+    vmsdk::ValkeyVersion prev_;
+  };
+
+  vmsdk::ValkeyVersion saved_emulate_release_{0};
+
   Value pos_inf = Value(std::numeric_limits<double>::infinity());
   Value neg_inf = Value(-std::numeric_limits<double>::infinity());
   Value pos_zero = Value(0.0);
@@ -247,7 +285,10 @@ TEST_F(ValueTest, case_test) {
 }
 
 TEST_F(ValueTest, timetest) {
-  // 1739565015 corresponds to Fri Feb 14 2025 20:30:15 (GMT)
+  // 1739565015 corresponds to Fri Feb 14 2025 20:30:15 (GMT). This value
+  // is positive, finite, and post-epoch, so all VALKEY_SEARCH_COMPATIBILITY
+  // _FIX guards in the date functions evaluate to the same answer on both
+  // branches EXCEPT FuncMonth (which has a tm_mday=0-vs-1 off-by-one fix).
   Value ts(double(1739565015));
   EXPECT_EQ(FuncYear(ts), Value(2025));
   EXPECT_EQ(FuncDayofmonth(ts), Value(14));
@@ -256,12 +297,128 @@ TEST_F(ValueTest, timetest) {
   EXPECT_EQ(FuncMonthofyear(ts), Value(1));
 
   EXPECT_EQ(FuncTimefmt(ts, Value("%c")), Value("Fri Feb 14 20:30:15 2025"));
-  EXPECT_EQ(FuncTimefmt(ts, Value("")), Value(""));
   EXPECT_EQ(FuncParsetime(Value("Fri Feb 14 20:30:15 2025"), Value("%c")), ts);
 
   EXPECT_EQ(FuncMinute(ts), Value(1739565000));
   EXPECT_EQ(FuncHour(ts), Value(1739563200));
   EXPECT_EQ(FuncDay(ts), Value(1739491200));
-  EXPECT_EQ(FuncMonth(ts), Value(1738281600));
+
+  // FuncMonth differs across the compatibility branches:
+  //   legacy (pre-1.2.1): tm_mday=0 → mktime rolls back to last day of
+  //     previous month, returning Jan 31 2025 00:00:00 UTC = 1738281600.
+  //   fixed (>= 1.2.1):  tm_mday=1 → first day of the month, returning
+  //     Feb  1 2025 00:00:00 UTC = 1738368000.
+  // Default emulate-release in tests is 1.0.0 (legacy).
+  EXPECT_EQ(FuncMonth(ts), Value(1738281600))
+      << "default (pre-1.2.1) emulate-release should run legacy FuncMonth";
+  {
+    ScopedEmulateRelease s({1, 2, 1});
+    EXPECT_EQ(FuncMonth(ts), Value(1738368000))
+        << "emulate-release >= 1.2.1 should run the off-by-one fix";
+  }
+}
+
+// Walk every COMPATIBILITY_FIX site in value.cc through both branches and
+// verify the result actually differs as documented. Pin emulate-release
+// explicitly per phase rather than relying on the runtime default.
+TEST_F(ValueTest, CompatibilityFixGates) {
+  // Force the legacy branch first — explicit pin (don't rely on default).
+  ScopedEmulateRelease legacy_scope({1, 0, 0});
+
+  // --- asbool_string_truthy ---------------------------------------------
+  // FuncLand(string, true): the new branch promotes non-empty strings to
+  // true, so true && "a" == true (1); legacy: true && "a" == false (0).
+  Value s_a(std::string("a"));
+  EXPECT_EQ(FuncLand(Value(true), s_a), Value(false)) << "legacy AsBool";
+  {
+    ScopedEmulateRelease scope({1, 2, 1});
+    EXPECT_EQ(FuncLand(Value(true), s_a), Value(true))
+        << "fix: non-empty truthy";
+  }
+
+  // --- numeric_unary_nan_on_unparsable ---------------------------------
+  // abs("a"): legacy → Nil; fix → NaN.
+  // std::isnan is unreliable under -ffast-math, so do a bit-pattern check
+  // (same approach as the IsNan helper in value.cc).
+  auto is_nan_bits = [](double d) {
+    uint64_t bits;
+    std::memcpy(&bits, &d, sizeof(bits));
+    constexpr uint64_t kExp = 0x7FF0000000000000ull;
+    constexpr uint64_t kMant = 0x000FFFFFFFFFFFFFull;
+    return (bits & kExp) == kExp && (bits & kMant) != 0;
+  };
+  {
+    auto legacy = FuncAbs(s_a);
+    EXPECT_TRUE(legacy.IsNil()) << "legacy abs(\"a\") should be Nil";
+  }
+  {
+    ScopedEmulateRelease scope({1, 2, 1});
+    auto fixed = FuncAbs(s_a);
+    ASSERT_TRUE(fixed.IsDouble());
+    EXPECT_TRUE(is_nan_bits(fixed.AsDouble().value()))
+        << "fix abs(\"a\") should be NaN";
+  }
+
+  // --- lower_non_string_to_nil / upper_non_string_to_nil ----------------
+  // lower(0) / upper(0): legacy passes through ("0"); fix → Nil.
+  Value zero(0.0);
+  {
+    auto l = FuncLower(zero);
+    ASSERT_TRUE(l.IsString());
+    EXPECT_EQ(l.AsStringView().value(), "0")
+        << "legacy lower(0) passes through";
+    auto u = FuncUpper(zero);
+    ASSERT_TRUE(u.IsString());
+    EXPECT_EQ(u.AsStringView().value(), "0");
+  }
+  {
+    ScopedEmulateRelease scope({1, 2, 1});
+    EXPECT_TRUE(FuncLower(zero).IsNil()) << "fix lower(0) → Nil";
+    EXPECT_TRUE(FuncUpper(zero).IsNil()) << "fix upper(0) → Nil";
+  }
+
+  // --- timefmt_empty_format_to_nil --------------------------------------
+  // timefmt(0, ""): legacy → ""; fix → Nil.
+  {
+    auto t = FuncTimefmt(zero, Value(""));
+    ASSERT_TRUE(t.IsString());
+    EXPECT_EQ(t.AsStringView().value(), "") << "legacy timefmt(_, \"\") → \"\"";
+  }
+  {
+    ScopedEmulateRelease scope({1, 2, 1});
+    EXPECT_TRUE(FuncTimefmt(zero, Value("")).IsNil())
+        << "fix timefmt(_, \"\") → Nil";
+  }
+
+  // --- parsetime_format_mismatch_to_nil ---------------------------------
+  // parsetime("","a"): strptime returns NULL. Legacy uses the zero-tm and
+  // returns the constant -2209075200; fix → Nil.
+  {
+    auto p = FuncParsetime(Value(""), Value("a"));
+    ASSERT_TRUE(p.IsDouble());
+    EXPECT_EQ(p.AsDouble().value(), -2209075200.0)
+        << "legacy parsetime on format-mismatch falls back to zero-tm";
+  }
+  {
+    ScopedEmulateRelease scope({1, 2, 1});
+    EXPECT_TRUE(FuncParsetime(Value(""), Value("a")).IsNil())
+        << "fix parsetime on format-mismatch → Nil";
+  }
+
+  // --- date_fn_negative_ts_to_nil ---------------------------------------
+  // hour(-1): legacy computes -3600 (one second before epoch, rounded);
+  // fix → Nil. Spot-check one date function; the gate is shared by all
+  // nine via DateNegativeTsReturnsNil.
+  Value neg_one(-1.0);
+  {
+    auto h = FuncHour(neg_one);
+    ASSERT_TRUE(h.IsDouble());
+    EXPECT_EQ(h.AsDouble().value(), -3600.0)
+        << "legacy hour(-1) computes the pre-epoch rounded value";
+  }
+  {
+    ScopedEmulateRelease scope({1, 2, 1});
+    EXPECT_TRUE(FuncHour(neg_one).IsNil()) << "fix hour(-1) → Nil";
+  }
 }
 }  // namespace valkey_search::expr

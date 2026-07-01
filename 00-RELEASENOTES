@@ -1,39 +1,91 @@
-Valkey Search 1.0.0 release notes
-=================================
+Valkey Search 1.2 release notes
+===============================
 
 ================================================================================
-Valkey Search 1.0.0 RC1 - Released Fri 28 Mar 2025
+Valkey Search 1.2.0 GA - Released Tue 17 March 2026
 ================================================================================
-This is the first release candidate of valkey-search 1.0 that is a high-performance Vector Similarity Search engine optimized for AI-driven workloads. It delivers single-digit millisecond latency and high QPS, capable of handling billions of vectors with over 99% recall.
 
-Valkey-Search allows users to create indexes and perform similarity searches, incorporating complex filters. It supports Approximate Nearest Neighbor (ANN) search with HNSW and exact matching using K-Nearest Neighbors (KNN). Users can index data using either Valkey Hash or Valkey-JSON data types.
+This is the official release of Valkey Search 1.2. Like valkey-search 1.1, this
+release requires Valkey core 9.0.1 release or higher.
 
-Major API and Functionality
-=========================
-* Add the search module data type which can handle RDB load, RDB save, free, and memory usage
-* Add the following search module commands: 
-    ** FT.CREATE
-    ** FT.DROPINDEX
-    ** FT.INFO
-    ** FT._LIST
-    ** FT.SEARCH
-* Supported indexes
-    ** Vector: HNSW and Flat
-    ** Non-vector: Numeric and Tag
-* Index data types include Valkey Hash and Valkey JSON.
-* Cluster support
-* Linear scaling of keyspace and compute
-* ACL support
-* RDB serialization of metadata including the search index
-* Hybrid queries combining vector and non vector indexes
-* Handle key space events for data mutation
-* Expose statistics and reporting memory usage to the core valkey engine
+Major New Features / Updates
+============================
+* Adding text search capability. This includes updates to the FT.CREATE, FT.SEARCH, FT.AGGREGATE, Ingestion, etc.
+    ** Refer to documentation on how to use the feature: https://valkey.io/topics/search/
+* Support for SKIPINITIALSCAN option on the FT.CREATE command
+* Single Slot Query support
+* Added support for SORTBY functionality on the FT.SEARCH command
+* Enhanced RDB format to eliminate backfill after load
+* Increase default for allowed number of indexes to 1000
+* Increased limit on number of fields with default updated to 1000 and max to 10000
+* Add Memory Tracking for Index Schema Attributes
+* Replica nodes no longer participate in metadata consistency protocol. All mutation information comes from the Primary
+* Enhanced FT.INFO command with additional information in Cluster mode
 
-New configurations
-===========================
-* Add support for the following configurations: reader-threads, writer-threads, use-coordinator, log-level
+================================================================================
+Valkey Search 1.2.0 RC3 - Released Wed 11 March 2026
+================================================================================
+
+Bug fixes / Improvements
+========================
+* Fixed a crash caused by lazy expiration during active search commands by using VALKEYMODULE_OPEN_KEY_NOEXPIRE and explicit expiration checks.
+* Index Creation Validation: Added check for the limit of 64 text fields per index.
+* Timeout Handling: Added timeout logic in aggregation stages and added comprehensive timeout tests for FT.AGGREGATE and all FT.SEARCH execution paths.
+* Removed stemmed word length restrictions to support cases where a stem root can be longer than the original word.
+* Support was added for the Valkey 9 CME Multi-DB feature by updating the select DB logic during RDB Load.
+* Fixed GetSerializationRange logic for Aggregation.
+
+Optimizations
+=============
+* Concurrent Indexing: Implemented a sharded PostingsMutexPool and utilizing Reader-Writer tree locks to improve throughput for parallel writes.
+* Lock Contention: Reduced lock contention on per_key_text_indexes_ during query evaluation.
+* Stemming Performance: Achieved up to 25-42% peak improvement for Snowball stemming by optimizing compiler flags.
+* Tokenization improvements to reduce allocations during normalization, stemming, etc.
+* Switched PositionMap to absl::btree_map, stem variants storage to vector and temporary stem mappings to InlinedVector for improved cache locality and reduced memory overhead.
+* Optimized raxMutate to complete mutation operations in a single tree traversal.
+* Resource Control: Introduced search.max-nonvector-search-results-fetched to limit ephemeral memory usage during non vector query searches.
+* Shard Efficiency: Introduced a development (usable in debug mode) fanout-data-uniformity configuration to reduce cross shard network traffic by optimizing fanout fetching.
+
+================================================================================
+Valkey Search 1.2.0 RC2 - Released Fri 27 February 2026
+================================================================================
+
+Bug fixes
+=========
+* Fix mutation sequence number timing bug to prevent race conditions with key deletions
+* Fix to ensure an RDB from a search module loaded valkey-server (after deleting the pre-existing indexes) can be loaded onto the valkey servers without the search module
+* Add null check for thread_monitor_ to prevent crashes in GetAvgCPUPercentage
+* Fix unhandled text path in PreFilter Evaluators for complex OR queries
+* Remove unnecessary allocation in text search operations
+
+Optimizations
+=============
+* Replace linear scan with min-heap approach in TermIterator for faster term searches
+* Optimize FlatPositionMap::ReadCounts by replacing memcpy with loop-based byte reading
+* Implement Size Estimation of Text Predicate key results size to help with the decision of pre-filtering vs inline-filtering in vector queries
+
+================================================================================
+Valkey Search 1.2.0 RC1 - Released Thu 19 February 2026
+================================================================================
+
+This is the first release candidate of valkey-search 1.2. Like valkey-search 1.1,
+this release requires Valkey core 9.0.1 release or higher.
+
+Major New Features / Updates
+============================
+* Adding text search capability. This includes updates to the FT.CREATE, FT.SEARCH, FT.AGGREGATE, Ingestion, etc.
+    ** Refer to documentation on how to use the feature: https://valkey.io/topics/search/
+* Support for SKIPINITIALSCAN option on the FT.CREATE command
+* Single Slot Query support
+* Added support for SORTBY functionality on the FT.SEARCH command
+* Enhanced RDB format to eliminate backfill after load
+* Increase default for allowed number of indexes to 1000
+* Increased limit on number of fields with default updated to 1000 and max to 10000
+* FT.SEARCH and FT.AGGREGATE commands are no longer marked as denyoom
+* Add Memory Tracking for Index Schema Attributes
+* Replica nodes no longer participate in metadata consistency protocol. All mutation information comes from the Primary
+* Enhanced FT.INFO command with additional information in Cluster mode
 
 We appreciate the efforts of all who contributed code to this release!
 
-Yair Gottdenker (yairgott), Allen Samuels (allenss-amazon), Eran Ifrah (eifrah-aws), Jacob Murphy (murphyjacob4), Chanil Jeon (jeon1226), Qu Chen (QuChen88), DP (dpbnasika)
-
+@Aksha1812, @AlexFilipImproving, @allenss-amazon, @baswanth09, @BCathcart, @daddaman-amz, @eifrah-aws, @eliastam, @eric-musliner, @murphyjacob4, @KarthikSubbarao, @otherscase, @boda26, @Arunsarma07, @Nivesh-01, @VoletiRam, @yairgott, @yanamolo, @zvi-code, @rlunar, @bandalgomsu

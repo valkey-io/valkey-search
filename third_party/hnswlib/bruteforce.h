@@ -11,10 +11,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
-#include "absl/status/statusor.h"
-#include "absl/strings/str_cat.h"
 #include "hnswlib.h"
 #include "iostream.h"
 #include "third_party/hnswlib/index.pb.h"
@@ -25,9 +22,9 @@
 #endif
 
 namespace hnswlib {
-template <typename dist_t, typename InputVectorT, typename SavedVectorT>
+template <typename dist_t, typename SavedVectorT>
 class BruteforceSearch
-    : public AlgorithmInterface<dist_t, InputVectorT, SavedVectorT> {
+    : public AlgorithmInterface<dist_t, SavedVectorT, SavedVectorT> {
  public:
   std::unique_ptr<ChunkedArray> data_;
   size_t cur_element_count_;
@@ -37,14 +34,17 @@ class BruteforceSearch
   void *dist_func_param_;
   std::mutex index_lock;
   const size_t k_elements_per_chunk{10 * 1024};
+  bool normalize_ = false;
 
   std::unordered_map<labeltype, size_t> dict_external_to_internal;
 
-  BruteforceSearch(SpaceInterface<dist_t> *s, size_t maxElements = 0) {
+  BruteforceSearch(SpaceInterface<dist_t> *s, bool normalize,
+                   size_t maxElements = 0) {
     cur_element_count_ = 0;
     vector_size_ = s->get_data_size();
     fstdistfunc_ = s->get_dist_func();
     dist_func_param_ = s->get_dist_func_param();
+    normalize_ = normalize;
     if (maxElements > 0) {
       data_ = std::make_unique<ChunkedArray>(
           sizeof(SavedVectorT) + sizeof(labeltype), k_elements_per_chunk,
@@ -65,15 +65,14 @@ class BruteforceSearch
     cur_element_count_ = 0;
   }
 
-  void addPoint(const InputVectorT &datapoint, labeltype label,
+  void addPoint(const SavedVectorT &datapoint, labeltype label,
                 bool replace_deleted = false) override {
     size_t idx;
     std::unique_lock<std::mutex> lock(index_lock);
     auto search = dict_external_to_internal.find(label);
     if (search != dict_external_to_internal.end()) {
       idx = search->second;
-      *reinterpret_cast<SavedVectorT *>((*data_)[idx]) =
-          datapoint.ToVectorRecord();
+      getPointByInternalId(idx) = datapoint;
     } else {
       if (cur_element_count_ >= data_->getCapacity()) {
         throw std::runtime_error(
@@ -82,20 +81,23 @@ class BruteforceSearch
       idx = cur_element_count_;
       dict_external_to_internal[label] = idx;
       cur_element_count_++;
-      SavedVectorT *stored_vector =
-          reinterpret_cast<SavedVectorT *>((*data_)[idx]);
-      new (stored_vector) SavedVectorT(datapoint.ToVectorRecord());
+      SavedVectorT *stored_vector = &getPointByInternalId(idx);
+      new (stored_vector) SavedVectorT(datapoint);
     }
     memcpy((*data_)[idx] + sizeof(SavedVectorT), &label, sizeof(labeltype));
   }
 
-  SavedVectorT *getPoint(labeltype cur_external) {
-    std::unique_lock<std::mutex> lock(index_lock);
-    auto found = dict_external_to_internal.find(cur_external);
+  inline SavedVectorT &getPointByInternalId(size_t internal_id) {
+    CHECK_LT(internal_id, cur_element_count_);
+    return *reinterpret_cast<SavedVectorT *>((*data_)[internal_id]);
+  }
+
+  inline SavedVectorT *getPointByExternalId(labeltype external_id) {
+    auto found = dict_external_to_internal.find(external_id);
     if (found == dict_external_to_internal.end()) {
       return nullptr;
     }
-    return reinterpret_cast<SavedVectorT *>((*data_)[found->second]);
+    return &(getPointByInternalId(found->second));
   }
 
   void removePoint(labeltype cur_external) {
@@ -128,7 +130,7 @@ class BruteforceSearch
   }
 
   std::priority_queue<std::pair<dist_t, labeltype>> searchKnn(
-      const InputVectorT &query_data, size_t k,
+      const SavedVectorT &query_data, size_t k,
       BaseFilterFunctor *isIdAllowed = nullptr,
       BaseCancellationFunctor *isCancelled = nullptr) const override {
     std::priority_queue<std::pair<dist_t, labeltype>> topResults;
@@ -141,7 +143,12 @@ class BruteforceSearch
          i++) {
       const SavedVectorT &stored_vector =
           *reinterpret_cast<const SavedVectorT *>((*data_)[i]);
-      dist_t dist = fstdistfunc_(query_data, stored_vector, dist_func_param_);
+      dist_t dist =
+          fstdistfunc_(query_data->GetRawVector(),
+                       stored_vector->GetRawVector(), dist_func_param_,
+                       normalize_ ? query_data->GetReciprocalMagnitude() *
+                                        stored_vector->GetReciprocalMagnitude()
+                                  : 1.0f);
       labeltype label = *((labeltype *)((*data_)[i] + sizeof(SavedVectorT)));
       if ((!isIdAllowed) || (*isIdAllowed)(label)) {
         topResults.emplace(dist, label);
@@ -157,7 +164,12 @@ class BruteforceSearch
          i++) {
       const SavedVectorT &stored_vector =
           *reinterpret_cast<const SavedVectorT *>((*data_)[i]);
-      dist_t dist = fstdistfunc_(query_data, stored_vector, dist_func_param_);
+      dist_t dist =
+          fstdistfunc_(query_data->GetRawVector(),
+                       stored_vector->GetRawVector(), dist_func_param_,
+                       normalize_ ? query_data->GetReciprocalMagnitude() *
+                                        stored_vector->GetReciprocalMagnitude()
+                                  : 1.0f);
       if (topResults.size() < k || dist <= lastdist) {
         labeltype label = *((labeltype *)((*data_)[i] + sizeof(SavedVectorT)));
         if ((!isIdAllowed) || (*isIdAllowed)(label)) {
@@ -177,7 +189,9 @@ class BruteforceSearch
     return topResults;
   }
 
-  absl::Status SaveIndex(OutputStream &output) override {
+  template <typename SavedVectorSerializer>
+  absl::Status SaveIndex(OutputStream &output,
+                         SavedVectorSerializer serializer) {
     data_model::BruteForceIndexHeader header;
     const size_t size_per_element = vector_size_ + sizeof(labeltype);
     header.set_max_elements(data_->getCapacity());
@@ -195,23 +209,27 @@ class BruteforceSearch
     for (int i = 0; i < cur_element_count_; i++) {
       const SavedVectorT &stored_vector =
           *reinterpret_cast<const SavedVectorT *>((*data_)[i]);
-      memcpy(buf.data(), stored_vector.GetRawVector(), vector_size_);
+      std::vector<char> serialized_vector = serializer(stored_vector);
+      memcpy(buf.data(), serialized_vector.data(), vector_size_);
       memcpy(buf.data() + vector_size_, (*data_)[i] + sizeof(SavedVectorT),
              sizeof(labeltype));
       VMSDK_RETURN_IF_ERROR(output.SaveChunk(buf.data(), size_per_element));
     }
     return absl::OkStatus();
   }
-  template <typename VectorAllocator>
+  template <typename SavedVectorGenerator>
   absl::Status LoadIndex(InputStream &input, SpaceInterface<dist_t> *s,
-                         VectorAllocator vector_allocator) {
-    clear();
+                         SavedVectorGenerator generator) {
     VMSDK_ASSIGN_OR_RETURN(auto serialized_header, input.LoadChunk());
     auto header = std::make_unique<data_model::BruteForceIndexHeader>();
     if (!header->ParseFromString(*serialized_header)) {
       return absl::InternalError("Could not deserialize bruteforce header");
     }
     const size_t saved_element_count = header->curr_element_count();
+    if (saved_element_count > header->max_elements()) {
+      return absl::InvalidArgumentError(
+          "Persisted bruteforce element count exceeds max elements.");
+    }
 
     vector_size_ = s->get_data_size();
     fstdistfunc_ = s->get_dist_func();
@@ -233,15 +251,12 @@ class BruteforceSearch
       SavedVectorT *stored_vector =
           reinterpret_cast<SavedVectorT *>((*data_)[i]);
       new (stored_vector) SavedVectorT(
-          InputVectorT(absl::string_view(chunk->data(), vector_size_),
-                       vector_allocator)
-              .ToVectorRecord());
+          generator(absl::string_view(chunk->data(), vector_size_)));
       memcpy((*data_)[i] + sizeof(SavedVectorT), (char *)&id,
              sizeof(labeltype));
       dict_external_to_internal[id] = i;
       cur_element_count_++;
     }
-
     return absl::OkStatus();
   }
 

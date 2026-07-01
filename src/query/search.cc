@@ -429,12 +429,19 @@ CalcBestMatchingPrefilteredKeys(
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     indexes::VectorBase *vector_index, size_t qualified_entries) {
   std::priority_queue<std::pair<float, hnswlib::labeltype>> results;
+  float query_magnitude = indexes::kDefaultMagnitude;
+  if (vector_index->GetNormalize()) {
+    query_magnitude = 1.0f / indexes::CalcMagnitude(
+        reinterpret_cast<const float *>(parameters.query.data()),
+        parameters.query.size() / sizeof(float));
+  }
   auto results_appender =
-      [&results, &parameters, vector_index](
+      [&results, &parameters, vector_index, query_magnitude](
           const InternedStringPtr &key,
           absl::flat_hash_set<const char *> &top_keys) -> bool {
-    return vector_index->AddPrefilteredKey(parameters.query, parameters.k, key,
-                                           results, top_keys);
+    return vector_index->AddPrefilteredKey(parameters.query, query_magnitude,
+                                           parameters.k, key, results,
+                                           top_keys);
   };
   EvaluatePrefilteredKeys(parameters, entries_fetchers,
                           std::move(results_appender), qualified_entries,
@@ -515,8 +522,9 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
         case indexes::IndexerType::kHNSW:
         case indexes::IndexerType::kFlat: {
           auto vector_index =
-              dynamic_cast<indexes::VectorBase *>(attribute_info.index);
-          auto vector = vector_index->GetValue(neighbor.external_id);
+              dynamic_cast<const indexes::VectorBase*>(attribute_info.index);
+          auto vector =
+              vector_index->GetVectorDuringSearch(neighbor.external_id);
           if (vector.ok()) {
             if (parameters.index_schema->GetAttributeDataType().ToProto() ==
                 data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON) {

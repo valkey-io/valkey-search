@@ -192,7 +192,10 @@ static void readBinaryPOD(std::istream &in, T &podRef) {
 }
 
 template <typename MTYPE>
-using DISTFUNC = MTYPE (*)(const void *, const void *, const void *);
+using DISTFUNC = MTYPE (*)(const void *, const void *, const void *,
+                           MTYPE magnitude);
+template <typename MTYPE>
+using ProductFUNC = MTYPE (*)(const void *, const void *, const void *);
 
 template <typename MTYPE>
 class SpaceInterface {
@@ -226,7 +229,6 @@ class AlgorithmInterface {
       BaseCancellationFunctor *isCancelled = nullptr  // VALKEYSEARCH
   ) const;
 
-  virtual absl::Status SaveIndex(OutputStream &output) = 0;
   virtual ~AlgorithmInterface() {}
 };
 

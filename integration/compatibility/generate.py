@@ -497,9 +497,9 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                         for limit in ["LIMIT 0 5", "LIMIT 2 3", ""]:
                             self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY {sort_key} {direction} {return_keys} {limit} {wsk}")
 
-    def test_tag_escaped_special_chars(self, key_type, dialect):
+    def test_tag_escaped_special_chars(self, key_type, dialect, vector_data_type):
         """Escaped special characters in tag queries. Ref: #454."""
-        self.setup_data("tag special chars", key_type)
+        self.setup_data("tag special chars", key_type, vector_data_type=vector_data_type)
         self.check(dialect, "ft.search", f"{key_type}_idx1", r"@tags:{ a\}b }")
         self.check(dialect, "ft.search", f"{key_type}_idx1", r"@tags:{ a\|b }")
         self.check(dialect, "ft.search", f"{key_type}_idx1", r"@tags:{ x\}y\}z }")

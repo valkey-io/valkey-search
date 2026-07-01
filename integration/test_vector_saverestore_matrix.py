@@ -17,13 +17,13 @@ For each combination the test:
   1. creates the index
   2. ingests a small deterministic dataset (DIM=4, N=80)
   3. takes a KNN-rank fingerprint at several anchor rows and K values
-  4. SAVEs, restarts the server, waits for backfill
+  4. runs SAVE, restarts the server, waits for backfill
   5. asserts the post-restart fingerprint matches the pre-save fingerprint
      exactly (rank order and reported distances)
 
-If a code path mis-dispatches by element size instead of by the
-VectorDataType enum (e.g. parsing JSON BF16 as if it were FP16), the
-post-restart distances would shift and the fingerprint match would fail.
+If a code path routes by element size instead of by the VectorDataType
+enum (e.g. parsing JSON BF16 as if it were FP16), the post-restart
+distances would shift and the fingerprint match would fail.
 """
 
 import json

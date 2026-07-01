@@ -9,7 +9,7 @@ numpy-computed FLOAT32 ground truth.
 
 Recall@10 is asserted to be >= MIN_RECALL_* (absolute thresholds; see
 constants below) for each data type. The measured values are printed in
-the test output so the constants can be retuned if the embedding
+the test output so the constants can be adjusted if the embedding
 distribution changes.
 
 First run downloads ~258 MB of parquet, extracts a ~33 MB numpy subset

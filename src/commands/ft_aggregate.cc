@@ -4,7 +4,9 @@
  * SPDX-License-Identifier: BSD 3-Clause
  */
 
+#include <algorithm>
 #include <ranges>
+#include <vector>
 
 #include "absl/log/check.h"
 #include "absl/status/status.h"
@@ -54,7 +56,26 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
     CHECK(params.return_attributes.empty());
     return absl::OkStatus();
   } else {
-    for (const auto &load : params.loads_) {
+    std::vector<std::string> loads_to_process = params.loads_;
+
+    for (const auto &stage : params.stages_) {
+      const auto *groupby = dynamic_cast<const GroupBy *>(stage.get());
+      if (groupby == nullptr) continue;
+      for (const auto &group_attr : groupby->groups_) {
+        const auto &name = group_attr->name_;
+        if (name == "__key" ||
+            name == vmsdk::ToStringView(params.score_as.get())) {
+          continue;
+        }
+        if (!params.index_schema->GetIndex(name).ok()) continue;
+        if (std::find(loads_to_process.begin(), loads_to_process.end(), name) ==
+            loads_to_process.end()) {
+          loads_to_process.push_back(name);
+        }
+      }
+    }
+
+    for (const auto &load : loads_to_process) {
       //
       // Skip loading of the score and the key, we always get those...
       //

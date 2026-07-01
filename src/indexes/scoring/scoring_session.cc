@@ -21,7 +21,9 @@ ScoringSession::ScoringSession(const Scorer* scorer) : scorer_(scorer) {
 void ScoringSession::RecordLeaf(const ScoringStats& stats, float leaf_weight) {
   CHECK(!group_stack_.empty());
 
-  const float leaf_score = scorer_->ScoreLeaf(stats, leaf_weight);
+  const float idf =
+      scorer_->PrecomputeIDF(stats.total_docs, stats.num_doc_contain_term);
+  const float leaf_score = scorer_->ScoreLeaf(idf, stats, leaf_weight);
   group_stack_.back()[stats.doc_id] += leaf_score;
 
   doc_score_.try_emplace(stats.doc_id, stats.document_score);

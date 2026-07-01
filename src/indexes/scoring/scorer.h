@@ -8,6 +8,7 @@
 #ifndef VALKEYSEARCH_SRC_INDEXES_SCORING_SCORER_H_
 #define VALKEYSEARCH_SRC_INDEXES_SCORING_SCORER_H_
 
+#include <cstdint>
 #include <string_view>
 
 #include "absl/types/span.h"
@@ -34,7 +35,15 @@ class Scorer {
   virtual std::string_view Name() const = 0;
   virtual ScorerType Type() const = 0;
 
-  virtual float ScoreLeaf(const ScoringStats& stats,
+  // Query-invariant inverse document frequency. Depends only on the corpus
+  // size and the term's document count, so callers precompute it once per term
+  // and pass it to ScoreLeaf for every matching document.
+  virtual float PrecomputeIDF(uint32_t total_docs,
+                              uint32_t num_doc_contain_term) const = 0;
+
+  // Scores one matching (term, document) leaf given a precomputed IDF. Concrete
+  // scorers CHECK the stats subtype.
+  virtual float ScoreLeaf(float idf, const ScoringStats& stats,
                           float leaf_weight) const = 0;
 
   virtual float ComposeDocumentScore(float sum_of_terms,

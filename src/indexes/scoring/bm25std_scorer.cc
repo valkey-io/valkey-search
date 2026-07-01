@@ -16,33 +16,27 @@
 
 namespace valkey_search::indexes::scoring {
 
-namespace {
-
-float Idf(uint32_t total_docs, uint32_t num_doc_contain_term) {
+float Bm25StdScorer::PrecomputeIDF(uint32_t total_docs,
+                                   uint32_t num_doc_contain_term) const {
   CHECK_LE(num_doc_contain_term, total_docs);
   const float n = static_cast<float>(total_docs);
   const float dt = static_cast<float>(num_doc_contain_term);
   return std::log1pf((n - dt + 0.5f) / (dt + 0.5f));
 }
 
-}  // namespace
-
-float Bm25StdScorer::ScoreLeaf(const ScoringStats& stats,
+float Bm25StdScorer::ScoreLeaf(float idf, const ScoringStats& stats,
                                float leaf_weight) const {
   const auto* bm25_stats = dynamic_cast<const Bm25StdStats*>(&stats);
   CHECK(bm25_stats != nullptr);
 
   if (bm25_stats->avg_doc_len <= 0.0f) return 0.0f;
 
-  const float idf =
-      Idf(bm25_stats->total_docs, bm25_stats->num_doc_contain_term);
-
   const float f = static_cast<float>(bm25_stats->term_frequency);
   const float dl = static_cast<float>(bm25_stats->doc_len);
-  const float avgdl = bm25_stats->avg_doc_len;
 
   const float numerator = f * (kK1 + 1.0f);
-  const float denominator = f + kK1 * (1.0f - kB + kB * dl / avgdl);
+  const float denominator =
+      f + kK1 * (1.0f - kB + kB * dl / bm25_stats->avg_doc_len);
   return leaf_weight * idf * (numerator / denominator);
 }
 

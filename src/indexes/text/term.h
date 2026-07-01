@@ -8,13 +8,19 @@
 #ifndef _VALKEY_SEARCH_INDEXES_TEXT_TERM_H_
 #define _VALKEY_SEARCH_INDEXES_TEXT_TERM_H_
 
+#include <cstdint>
 #include <utility>
 
 #include "absl/container/inlined_vector.h"
 #include "src/indexes/text.h"
 #include "src/indexes/text/flat_position_map.h"
+#include "src/indexes/text/scoring_context.h"
 #include "src/indexes/text/text_iterator.h"
 #include "src/utils/inlined_priority_queue.h"
+
+namespace valkey_search::indexes::scoring {
+class Bm25StdScorer;
+}  // namespace valkey_search::indexes::scoring
 
 namespace valkey_search::indexes::text {
 
@@ -46,7 +52,9 @@ class TermIterator : public TextIterator {
       absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>&&
           key_iterators,
       const FieldMaskPredicate query_field_mask, const bool require_positions,
-      const FieldMaskPredicate stem_field_mask = 0, bool has_original = false);
+      const FieldMaskPredicate stem_field_mask = 0, bool has_original = false,
+      float leaf_weight = 1.0f, uint32_t num_doc_contain_term = 0,
+      const ScoringContext* scoring_ctx = nullptr);
   /* Implementation of TextIterator APIs */
   FieldMaskPredicate QueryFieldMask() const override;
   // Key-level iteration
@@ -70,9 +78,10 @@ class TermIterator : public TextIterator {
     return current_key_ != nullptr;
   }
 
-  // Stub scorer: returns 1.0 for any matched document.
-  // Will be replaced with real TF-IDF/BM25 when ingestion precomputes land.
-  float GetScore() const override { return DoneKeys() ? 0.0f : 1.0f; }
+  // Computes the leaf BM25 score for the current document via the active
+  // scorer. Falls back to the constant stub (1.0 for any match) when no
+  // scoring context is supplied.
+  float GetScore() const override;
 
  private:
   const FieldMaskPredicate query_field_mask_;
@@ -89,6 +98,20 @@ class TermIterator : public TextIterator {
   FieldMaskPredicate current_field_mask_;
   const bool require_positions_;
   const bool has_original_;
+
+  // Scoring inputs. leaf_weight_ is the query-tree weight applied to this leaf;
+  // num_doc_contain_term_ (dt) is the per-term document count captured at build
+  // time; scoring_ctx_ holds the query-invariant corpus stats (null disables
+  // scoring).
+  const float leaf_weight_;
+  const uint32_t num_doc_contain_term_;
+  const ScoringContext* const scoring_ctx_;
+
+  // Typed scorer and IDF cached at construction. IDF is query-invariant for a
+  // term, so it is computed once here rather than per document in GetScore().
+  // Null bm25_scorer_ means scoring is disabled (constant-stub fallback).
+  const scoring::Bm25StdScorer* bm25_scorer_{nullptr};
+  float idf_{0.0f};
 
   // Pending queue: heap of valid iterators not currently being processed.
   // Provides O(1) access to the minimum key and O(log K) extraction.

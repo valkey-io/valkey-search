@@ -7,20 +7,42 @@
 
 #include "src/indexes/text/term.h"
 
+#include <cstdint>
+#include <utility>
+
+#include "src/indexes/scoring/bm25std_scorer.h"
+#include "src/indexes/scoring/scorer.h"
+
 namespace valkey_search::indexes::text {
 
 TermIterator::TermIterator(
     absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>&&
         key_iterators,
     const FieldMaskPredicate query_field_mask, const bool require_positions,
-    const FieldMaskPredicate stem_field_mask, bool has_original)
+    const FieldMaskPredicate stem_field_mask, bool has_original,
+    float leaf_weight, uint32_t num_doc_contain_term,
+    const ScoringContext* scoring_ctx)
     : query_field_mask_(query_field_mask),
       stem_field_mask_(stem_field_mask),
       key_iterators_(std::move(key_iterators)),
       current_position_(std::nullopt),
       current_field_mask_(0ULL),
       require_positions_(require_positions),
-      has_original_(has_original) {
+      has_original_(has_original),
+      leaf_weight_(leaf_weight),
+      num_doc_contain_term_(num_doc_contain_term),
+      scoring_ctx_(scoring_ctx) {
+  // Resolve the typed scorer and precompute the query-invariant IDF once, so
+  // GetScore() avoids a per-document dynamic_cast and log call.
+  if (scoring_ctx_ != nullptr && scoring_ctx_->scorer != nullptr) {
+    bm25_scorer_ =
+        dynamic_cast<const scoring::Bm25StdScorer*>(scoring_ctx_->scorer);
+    if (bm25_scorer_ != nullptr) {
+      idf_ = bm25_scorer_->PrecomputeIDF(scoring_ctx_->total_docs,
+                                         num_doc_contain_term_);
+    }
+  }
+
   // Populate the key_set_ heap.
   for (size_t i = 0; i < key_iterators_.size(); ++i) {
     InsertValidKeyIterator(i);
@@ -29,6 +51,34 @@ TermIterator::TermIterator(
   if (!key_set_.empty()) {
     TermIterator::NextKey();
   }
+}
+
+float TermIterator::GetScore() const {
+  if (DoneKeys()) {
+    return 0.0f;
+  }
+  // No scoring context: preserve the constant stub used before scoring landed.
+  if (bm25_scorer_ == nullptr) {
+    return 1.0f;
+  }
+
+  // F is document-wide: sum the term frequency across every word/field
+  // iterator currently positioned on this key (§5.2).
+  uint32_t term_frequency = 0;
+  for (size_t idx : current_key_indices_) {
+    term_frequency += key_iterators_[idx].GetCurrentKeyTermFrequency();
+  }
+
+  const uint32_t doc_len =
+      scoring_ctx_->text_index_schema
+          ? scoring_ctx_->text_index_schema->GetKeyDocLen(*current_key_)
+          : 0;
+
+  scoring::Bm25StdStats stats;
+  stats.term_frequency = term_frequency;
+  stats.doc_len = doc_len;
+  stats.avg_doc_len = scoring_ctx_->avg_doc_len;
+  return bm25_scorer_->ScoreLeaf(idf_, stats, leaf_weight_);
 }
 
 FieldMaskPredicate TermIterator::QueryFieldMask() const {

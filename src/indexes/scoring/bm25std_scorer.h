@@ -8,6 +8,7 @@
 #ifndef VALKEYSEARCH_SRC_INDEXES_SCORING_BM25STD_SCORER_H_
 #define VALKEYSEARCH_SRC_INDEXES_SCORING_BM25STD_SCORER_H_
 
+#include <cstdint>
 #include <string_view>
 
 #include "src/indexes/scoring/scorer.h"
@@ -31,7 +32,14 @@ class Bm25StdScorer : public Scorer {
   std::string_view Name() const override { return kName; }
   ScorerType Type() const override { return ScorerType::kBm25Std; }
 
-  float ScoreLeaf(const ScoringStats& stats, float leaf_weight) const override;
+  // IDF = ln(1 + (N - dt + 0.5) / (dt + 0.5)).
+  float PrecomputeIDF(uint32_t total_docs,
+                      uint32_t num_doc_contain_term) const override;
+
+  // Scores one leaf given a precomputed IDF. Returns 0 for a degenerate corpus
+  // (avg_doc_len <= 0). CHECKs that stats is a Bm25StdStats.
+  float ScoreLeaf(float idf, const ScoringStats& stats,
+                  float leaf_weight) const override;
 
   float ComposeDocumentScore(float sum_of_terms,
                              float document_score) const override;

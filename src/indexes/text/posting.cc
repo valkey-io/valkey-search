@@ -177,4 +177,10 @@ PositionIterator Postings::KeyIterator::GetPositionIterator() const {
   return PositionIterator(*flat_map);
 }
 
+size_t Postings::KeyIterator::GetCurrentKeyTermFrequency() const {
+  CHECK(key_map_ != nullptr && current_ != end_)
+      << "KeyIterator is invalid or exhausted";
+  return current_->second->GetTermFrequency();
+}
+
 }  // namespace valkey_search::indexes::text

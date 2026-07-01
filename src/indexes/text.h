@@ -15,6 +15,7 @@ namespace valkey_search::indexes::text {
 constexpr size_t kWordExpansionInlineCapacity = 200;
 // Inline capacity for proximity terms
 constexpr size_t kProximityTermsInlineCapacity = 64;
+struct ScoringContext;
 }  // namespace valkey_search::indexes::text
 
 #include "absl/base/thread_annotations.h"
@@ -134,6 +135,7 @@ class Text : public IndexBase {
     const query::TextPredicate* predicate_;
     text::FieldMaskPredicate field_mask_;
     bool require_positions_;
+    const text::ScoringContext* scoring_ctx_{nullptr};
   };
 
   size_t GetTextFieldNumber() const { return text_field_number_; }

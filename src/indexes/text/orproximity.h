@@ -32,7 +32,8 @@ class OrProximityIterator : public TextIterator {
  public:
   OrProximityIterator(
       absl::InlinedVector<std::unique_ptr<TextIterator>,
-                          kProximityTermsInlineCapacity>&& iters);
+                          kProximityTermsInlineCapacity>&& iters,
+      float weight = 1.0f);
 
   /* Implementation of TextIterator APIs */
   FieldMaskPredicate QueryFieldMask() const override;
@@ -49,20 +50,24 @@ class OrProximityIterator : public TextIterator {
   FieldMaskPredicate CurrentFieldMask() const override;
   bool IsIteratorValid() const override;
 
-  // OR semantics: take the max score among active children on the current key.
+  // OR semantics: every term present in the document is scored; sum the
+  // weighted scores of active children on the current key.
   float GetScore() const override {
-    float best = 0.0f;
+    float total = 0.0f;
     for (size_t idx : current_key_indices_) {
-      float s = iters_[idx]->GetScore() * iters_[idx]->GetWeight();
-      if (s > best) best = s;
+      total += iters_[idx]->GetScore() * iters_[idx]->GetWeight();
     }
-    return best;
+    return total;
   }
+
+  // Group weight applied by the parent (or read at the root) to this composite.
+  float GetWeight() const override { return weight_; }
 
  private:
   absl::InlinedVector<std::unique_ptr<TextIterator>,
                       kProximityTermsInlineCapacity>
       iters_;
+  float weight_;
   Key current_key_;
   std::optional<PositionRange> current_position_;
   FieldMaskPredicate current_field_mask_;

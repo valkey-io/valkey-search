@@ -117,12 +117,10 @@ class TextIndexSchema {
   TextIndexMetadata &GetMetadata() { return metadata_; }
 
   uint32_t GetKeyDocLen(const InternedStringPtr &key) const {
-    std::lock_guard<std::mutex> guard(per_key_text_indexes_mutex_);
     auto itr = per_key_scoring_info_.find(key);
     return itr != per_key_scoring_info_.end() ? itr->second.doc_len : 0;
   }
   uint32_t GetKeyNorm(const InternedStringPtr &key) const {
-    std::lock_guard<std::mutex> guard(per_key_text_indexes_mutex_);
     auto itr = per_key_scoring_info_.find(key);
     return itr != per_key_scoring_info_.end() ? itr->second.norm : 0;
   }

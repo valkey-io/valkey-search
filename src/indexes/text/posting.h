@@ -121,6 +121,9 @@ struct Postings {
     // Get Position Iterator
     PositionIterator GetPositionIterator() const;
 
+    // Document-wide term frequency for the current key
+    size_t GetCurrentKeyTermFrequency() const;
+
    private:
     friend struct Postings;
 

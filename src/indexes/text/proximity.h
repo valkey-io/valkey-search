@@ -49,7 +49,7 @@ class ProximityIterator : public TextIterator {
   ProximityIterator(absl::InlinedVector<std::unique_ptr<TextIterator>,
                                         kProximityTermsInlineCapacity>&& iters,
                     const std::optional<uint32_t> slop, const bool in_order,
-                    bool skip_positional_checks);
+                    bool skip_positional_checks, float weight = 1.0f);
   /* Implementation of TextIterator APIs */
   FieldMaskPredicate QueryFieldMask() const override;
   // Key-level iteration
@@ -82,6 +82,9 @@ class ProximityIterator : public TextIterator {
     return total;
   }
 
+  // Group weight applied by the parent (or read at the root) to this composite.
+  float GetWeight() const override { return weight_; }
+
  private:
   // List of all the Text Predicates contained in the Proximity AND.
   absl::InlinedVector<std::unique_ptr<TextIterator>,
@@ -89,6 +92,7 @@ class ProximityIterator : public TextIterator {
       iters_;
   std::optional<uint32_t> slop_;
   bool in_order_;
+  float weight_;
   FieldMaskPredicate query_field_mask_;
   // Current key/position/field
   Key current_key_;

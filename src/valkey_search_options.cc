@@ -145,6 +145,15 @@ static auto use_coordinator = config::BooleanBuilder(kUseCoordinator, false)
                                   .Hidden()  // can only be set during start-up
                                   .Build();
 
+// Kill switch for HNSW index load-time validation (corruption hardening).
+// Default true; can be disabled in the field if a bug in the validation logic
+// were to reject otherwise-valid indexes.
+constexpr absl::string_view kHNSWValidationEnable{"hnsw-validation-enable"};
+static auto hnsw_validation_enable =
+    config::BooleanBuilder(kHNSWValidationEnable, true)  // default true
+        .Dev()
+        .Build();
+
 // Register an enumerator for the log level
 static const std::vector<std::string_view> kLogLevelNames = {
     VALKEYMODULE_LOGLEVEL_WARNING,
@@ -370,6 +379,14 @@ vmsdk::config::Boolean& GetSkipIndexLoadMutable() {
 
 vmsdk::config::Enum& GetLogLevel() {
   return dynamic_cast<vmsdk::config::Enum&>(*log_level);
+}
+
+const config::Boolean& GetHNSWValidationEnable() {
+  return dynamic_cast<const config::Boolean&>(*hnsw_validation_enable);
+}
+
+config::Boolean& GetHNSWValidationEnableMutable() {
+  return dynamic_cast<config::Boolean&>(*hnsw_validation_enable);
 }
 
 absl::Status Reset() {

@@ -4,6 +4,7 @@
 #include <stdlib.h>
 
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <deque>
@@ -23,6 +24,7 @@
 #include "iostream.h"
 #include "third_party/hnswlib/index.pb.h"
 #include "visited_list_pool.h"
+#include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 
 #ifdef VMSDK_ENABLE_MEMORY_ALLOCATION_OVERRIDES
@@ -90,6 +92,10 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 
   bool allow_replace_deleted_ = false;  // flag to replace deleted elements
                                         // (marked as deleted) during insertions
+
+  // Gate for load-time corruption validation, wired from the
+  // hnsw-validation-enable config via LoadIndex. Consulted only in loadCheck().
+  bool load_validation_enabled_ = false;
 
   std::mutex deleted_elements_lock;  // lock for deleted_elements
   std::unordered_set<tableint>
@@ -798,9 +804,31 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     return absl::OkStatus();
   }
 
+  // Single choke-point for load-time validation. The kill switch
+  // (load_validation_enabled_, wired from the hnsw-validation-enable config) is
+  // consulted here and nowhere else, so a defective check can be globally
+  // disabled. On failure it throws; VectorHNSW::LoadFromRDB converts the
+  // exception into a failed (rejected) RDB load.
+  inline void loadCheck(bool ok, absl::string_view msg) const {
+    if (ok) {
+      return;
+    }
+    if (load_validation_enabled_) {
+      throw std::runtime_error(
+          absl::StrCat("HNSW index load validation failed: ", msg));
+    }
+    // Validation disabled: don't fail the load, but log (throttled) the defect.
+    VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
+        << "HNSW load validation is disabled; ignoring detected index "
+           "corruption: "
+        << msg;
+  }
+
   absl::Status LoadIndex(InputStream &input, SpaceInterface<dist_t> *s,
-                         size_t max_elements_i, VectorTracker *vector_tracker) {
+                         size_t max_elements_i, VectorTracker *vector_tracker,
+                         size_t expected_m, bool validate) {
     clear();
+    load_validation_enabled_ = validate;
 
     VMSDK_ASSIGN_OR_RETURN(auto serialized_header, input.LoadChunk());
     auto header = std::make_unique<data_model::HNSWIndexHeader>();
@@ -808,6 +836,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       return absl::InternalError("Could not deserialize HNSW header");
     }
 
+    // --- Read raw header fields (untrusted) ---
     offsetLevel0_ = header->offset_level_0();
     max_elements_ = header->max_elements();
     cur_element_count_ = header->curr_element_count();
@@ -823,27 +852,88 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     mult_ = header->mult();
     ef_construction_ = header->ef_construction();
 
-    size_t max_elements = max_elements_i;
-    if (max_elements < cur_element_count_) {
-      max_elements = max_elements_;
-    }
-    max_elements_ = max_elements;
+    // Authoritative parameters come from the index definition (the space and
+    // expected_m), never from the untrusted header.
+    vector_size_ = s->get_data_size();
+    fstdistfunc_ = s->get_dist_func();
+    dist_func_param_ = s->get_dist_func_param();
 
+    // Recompute the geometry that governs memory layout. When validation is
+    // enabled these are cross-checked against the header below; the header's
+    // own copies are only ever used as values to validate against.
     size_links_level0_ = maxM0_ * sizeof(tableint) + sizeof(linklistsizeint);
 
-    vector_size_ = s->get_data_size();
+    offsetData_ = size_links_level0_;
     size_data_per_element_ =
         size_links_level0_ + sizeof(char *) + sizeof(labeltype);
     label_offset_ = size_links_level0_ + sizeof(char *);
+    size_links_per_element_ =
+        maxM_ * sizeof(tableint) + sizeof(linklistsizeint);
 
-    fstdistfunc_ = s->get_dist_func();
-    dist_func_param_ = s->get_dist_func_param();
+    // Resolve capacity: at least the live element count, honoring the larger of
+    // the caller-requested cap and the file's recorded capacity.
+    size_t cur_count = cur_element_count_;
+    size_t max_elements =
+        std::max(cur_count, std::max(max_elements_i, max_elements_));
+    max_elements_ = max_elements;
+
+    // --- Header validation (the kill switch lives inside loadCheck) ---
+    {
+      const size_t exp_m = expected_m > 10000 ? 10000 : expected_m;
+      // Layout parameters must match the index definition exactly.
+      loadCheck(exp_m >= 1, "M must be >= 1");
+      loadCheck(M_ == exp_m, "header M does not match index definition");
+      loadCheck(maxM_ == M_, "header maxM does not equal M");
+      loadCheck(maxM0_ == 2 * M_, "header maxM0 does not equal 2*M");
+      loadCheck(maxM0_ <= 0xFFFF,
+                "maxM0 exceeds the 16-bit neighbor-count field");
+      loadCheck(vector_size_ > 0, "vector size must be > 0");
+      loadCheck(serialize_size_data_per_element_ ==
+                    size_links_level0_ + vector_size_ + sizeof(labeltype),
+                "serialized element size is inconsistent with the geometry");
+      loadCheck(offsetLevel0_ == 0, "offset_level_0 must be 0");
+      // Recompute mult=1/log(M) and match within a guardband (cross-arch libm);
+      // skip M<2 where 1/log(M) is not finite. Soft, non-safety check.
+      if (M_ >= 2) {
+        const double expected_mult = 1.0 / std::log(static_cast<double>(M_));
+        loadCheck(mult_ > 0.0 &&
+                      std::fabs(mult_ - expected_mult) <= 1e-6 * expected_mult,
+                  "mult is inconsistent with M");
+      }
+
+      // Element-count / level / entry-point consistency.
+      loadCheck(cur_element_count_ <= max_elements_,
+                "curr_element_count exceeds max_elements");
+      if (cur_element_count_ == 0) {
+        loadCheck(maxlevel_ == -1 || maxlevel_ == 0,
+                  "empty index has a non-trivial max_level");
+      } else {
+        loadCheck(maxlevel_ >= 0, "non-empty index has a negative max_level");
+        loadCheck(maxlevel_ <= static_cast<int>(cur_element_count_),
+                  "max_level exceeds the element count");
+        loadCheck(enterpoint_node_ < cur_element_count_,
+                  "enterpoint_node is out of range");
+      }
+
+      // Guard every load allocation against size_t overflow / address-space
+      // wraparound, which also bounds an absurd element count.
+      loadCheck(size_data_per_element_ > 0, "size_data_per_element is 0");
+      loadCheck(max_elements_ <= SIZE_MAX / size_data_per_element_,
+                "level-0 allocation size overflows");
+      loadCheck(max_elements_ <= SIZE_MAX / sizeof(void *),
+                "linkLists allocation size overflows");
+      loadCheck(max_elements_ <= SIZE_MAX / sizeof(int),
+                "element_levels allocation size overflows");
+    }
 
     data_level0_memory_ = std::make_unique<ChunkedArray>(
         size_data_per_element_, k_elements_per_chunk, max_elements);
 
     for (size_t i = 0; i < cur_element_count_; i++) {
       VMSDK_ASSIGN_OR_RETURN(auto chunk, input.LoadChunk());
+      loadCheck(chunk->size() ==
+                    size_links_level0_ + vector_size_ + sizeof(labeltype),
+                "level-0 element chunk has the wrong size");
       memcpy((*data_level0_memory_)[i], chunk->data(), size_links_level0_);
       labeltype id;
       memcpy((char *)&id, chunk->data() + offsetData_ + vector_size_,
@@ -853,10 +943,21 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                                       vector_size_);
       memcpy((*data_level0_memory_)[i] + label_offset_, (char *)&id,
              sizeof(labeltype));
-    }
 
-    size_links_per_element_ =
-        maxM_ * sizeof(tableint) + sizeof(linklistsizeint);
+      // Validate the level-0 link list now that it is in place. The neighbor
+      // scan is clamped to maxM0_ so it stays within the record even when the
+      // (corrupt) count is larger and validation is disabled.
+      linklistsizeint *ll0 = get_linklist0(i);
+      size_t l0_count = getListCount(ll0);
+      loadCheck(l0_count <= maxM0_, "level-0 neighbor count exceeds 2*M");
+      tableint *l0_neighbors = (tableint *)(ll0 + 1);
+      size_t l0_scan = std::min(l0_count, maxM0_);
+      for (size_t j = 0; j < l0_scan; j++) {
+        loadCheck(l0_neighbors[j] < cur_element_count_,
+                  "level-0 neighbor id out of range");
+        loadCheck(l0_neighbors[j] != i, "level-0 self-loop");
+      }
+    }
 
     std::vector<std::mutex>(max_elements).swap(link_list_locks_);
     std::vector<std::mutex>(MAX_LABEL_OPERATION_LOCKS).swap(label_op_locks_);
@@ -870,21 +971,85 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     revSize_ = 1.0 / mult_;
     ef_ = 10;
     for (size_t i = 0; i < cur_element_count_; i++) {
-      label_lookup_[getExternalLabel(i)] = i;
+      // Establish safe defaults first: element_levels_[i] stays 0 and the
+      // link-list pointer stays null until a valid allocation is stored, so an
+      // early return / thrown validation cannot leave clear() freeing an
+      // uninitialized pointer (ChunkedArray memory is not zeroed).
+      element_levels_[i] = 0;
+      *reinterpret_cast<char **>((*linkLists_)[i]) = nullptr;
+
+      labeltype ext_label = getExternalLabel(i);
+      loadCheck(label_lookup_.find(ext_label) == label_lookup_.end(),
+                "duplicate label in index");
+      label_lookup_[ext_label] = i;
       size_t linkListSize;
       VMSDK_ASSIGN_OR_RETURN(auto size_chunk, input.LoadChunk());
+      loadCheck(size_chunk->size() == sizeof(size_t),
+                "link-list size chunk has the wrong size");
       memcpy(&linkListSize, size_chunk->data(), sizeof(size_t));
       linkListSize = le64toh(linkListSize);
-      if (linkListSize == 0) {
-        element_levels_[i] = 0;
-        *reinterpret_cast<char **>((*linkLists_)[i]) = nullptr;
-      } else {
-        element_levels_[i] = linkListSize / size_links_per_element_;
+      if (linkListSize != 0) {
+        loadCheck(linkListSize % size_links_per_element_ == 0,
+                  "upper-level link-list size is not a multiple of the stride");
+        int level = linkListSize / size_links_per_element_;
+        loadCheck(level <= maxlevel_, "element level exceeds max_level");
         VMSDK_ASSIGN_OR_RETURN(auto link_list_chunk, input.LoadChunk());
-        *reinterpret_cast<char **>((*linkLists_)[i]) =
-            new char[link_list_chunk->size()];
-        memcpy(*reinterpret_cast<char **>((*linkLists_)[i]),
-               link_list_chunk->data(), link_list_chunk->size());
+        loadCheck(link_list_chunk->size() == linkListSize,
+                  "upper-level link-list chunk has the wrong size");
+        // Allocate from the derived level count (== linkListSize for valid
+        // data) so get_linklist() stays in-bounds for levels 1..level
+        // regardless of whether validation is enabled.
+        size_t alloc_size =
+            static_cast<size_t>(level) * size_links_per_element_;
+        char *links = new char[alloc_size];
+        memset(links, 0, alloc_size);
+        memcpy(links, link_list_chunk->data(),
+               std::min(alloc_size, link_list_chunk->size()));
+        // Store the pointer, then publish the level, so the two stay in sync
+        // for clear() even if a later check throws.
+        *reinterpret_cast<char **>((*linkLists_)[i]) = links;
+        element_levels_[i] = level;
+        // Validate per-level neighbor counts. Neighbor ids are validated in the
+        // global pass, since their target slots may not be loaded yet.
+        for (int l = 1; l <= level; l++) {
+          loadCheck(getListCount(get_linklist(i, l)) <= maxM_,
+                    "upper-level neighbor count exceeds M");
+        }
+      }
+    }
+
+    // --- Global graph-invariant pass (requires all element_levels_ loaded) ---
+    // The entry point must be one of the tallest nodes (proven invariant:
+    // maxlevel_ is only ever raised together with enterpoint_node_). The
+    // short-circuit also guards the array access if validation is disabled and
+    // enterpoint_node_ is out of range.
+    if (cur_element_count_ > 0) {
+      loadCheck(enterpoint_node_ < cur_element_count_ &&
+                    element_levels_[enterpoint_node_] == maxlevel_,
+                "enterpoint node is not at max_level");
+    }
+    // Every upper-level link must target a slot that actually exists at that
+    // level; otherwise a graph descent would over-read the target's smaller
+    // link-list allocation. This needs the full element_levels_, so it cannot
+    // be done in the streaming load loop above.
+    for (size_t i = 0; i < cur_element_count_; i++) {
+      for (int level = 1; level <= element_levels_[i]; level++) {
+        linklistsizeint *ll = get_linklist(i, level);
+        size_t count = getListCount(ll);
+        // count was bounded to maxM_ per-record; clamp the scan so a corrupt
+        // count cannot over-read the per-level region when validation is off.
+        size_t scan = std::min(count, maxM_);
+        tableint *neighbors = (tableint *)(ll + 1);
+        for (size_t j = 0; j < scan; j++) {
+          tableint e = neighbors[j];
+          loadCheck(e < cur_element_count_,
+                    "upper-level neighbor id out of range");
+          loadCheck(e != i, "upper-level self-loop");
+          // Short-circuit guards element_levels_[e] when validation is off and
+          // e is out of range (the first check above did not throw).
+          loadCheck(e >= cur_element_count_ || element_levels_[e] >= level,
+                    "upper-level neighbor is absent at that level");
+        }
       }
     }
 

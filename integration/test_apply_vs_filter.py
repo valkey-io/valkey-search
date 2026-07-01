@@ -12,7 +12,9 @@ whether the underlying expression evaluator itself has these issues, or whether
 the problems are specific to the FILTER code path.
 """
 import pytest
+from valkey import ResponseError
 from valkey_search_test_case import ValkeySearchTestCaseBase
+from valkeytestframework.conftest import resource_port_tracker
 from utils import IndexingTestHelper
 
 
@@ -157,21 +159,19 @@ class TestApplyVsFilter(ValkeySearchTestCaseBase):
 
     @pytest.mark.parametrize("key_type", ["hash", "json"])
     def test_contains_on_text(self, key_type):
-        """APPLY contains(@title,'slow') — title is TEXT."""
+        """APPLY contains(@title,'slow') — title is TEXT.
+
+        This documents an APPLY/FILTER asymmetry: FILTER can reference a TEXT
+        field (see the "filter contains text" compatibility case), but the
+        FT.AGGREGATE parser only admits TAG/NUMERIC/VECTOR attributes in an
+        expression and rejects a TEXT field reference at parse time
+        (ft_aggregate_parser.cc MakeReference). So the same contains() over a
+        TEXT field that works in FILTER is a parse error in APPLY."""
         client = self.server.get_new_client()
         if key_type == "hash":
             _load_hash(client, DOCS)
         else:
             _load_json(client, JSON_DOCS)
 
-        results = _run_apply(client, "contains(@title,'slow')")
-        print(f"\n[{key_type}] APPLY contains(@title,'slow') results:")
-        for k in sorted(results.keys()):
-            print(f"  {k} => {results[k]}")
-
-        assert len(results) == 10, f"Expected 10 docs, got {len(results)}: {sorted(results.keys())}"
-
-        # doc:01 title="slow turtle walks far", doc:09 title="big cake bakes slow"
-        # These should return 1 (true)
-        for doc_key in [b"doc:01", b"doc:09"]:
-            print(f"  {doc_key} => {results[doc_key]}  (expected: 1 = contains 'slow')")
+        with pytest.raises(ResponseError, match="Invalid data type for @title"):
+            _run_apply(client, "contains(@title,'slow')")

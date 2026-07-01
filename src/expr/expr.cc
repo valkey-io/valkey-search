@@ -383,8 +383,8 @@ struct Compiler {
             DBG << "Dyadic: " << lvalue << ' ' << op.first << ' ' << rvalue
                 << " Remaining: '" << s_.GetUnscanned() << "'\n";
             if (short_circuit_logical) {
-              auto kind = op.first == "&&" ? FilterLogical::kAnd
-                                           : FilterLogical::kOr;
+              auto kind =
+                  op.first == "&&" ? FilterLogical::kAnd : FilterLogical::kOr;
               lvalue = std::make_unique<FilterLogical>(
                   std::move(lvalue), std::move(rvalue), kind, op.first);
             } else {

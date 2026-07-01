@@ -1,12 +1,12 @@
 Hello! This file is just a placeholder, since this is the "main" branch
 of Valkey Search, the place where all the development happens.
 
-There is no release notes for this branch, it gets forked into another branch
+There are no release notes for this branch, it gets forked into another branch
 every time there is a partial feature freeze in order to eventually create
 a new stable release.
 
-Usually "main" is stable enough for you to use it in development environments
-however you should never use it in production environments. It is possible
+Usually "main" is stable enough for you to use it in development environments.
+However, you should never use it in production environments. It is possible
 to download the latest stable release here:
 
     https://github.com/valkey-io/valkey-search/releases

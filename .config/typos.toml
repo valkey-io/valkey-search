@@ -19,6 +19,7 @@ extend-ignore-re = [
     ".*unning"
 ]
 [default.extend-words]
+continuent = "continuent"
 caf = "caf"
 Fo = "Fo"
 InFo = "InFo"

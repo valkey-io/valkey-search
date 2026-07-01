@@ -651,26 +651,33 @@ float ComputeMatchedPredicateScore(const Predicate *predicate) {
 struct ResolvedLeaf {
   indexes::text::InvasivePtr<indexes::text::Postings> postings;
   uint32_t num_doc_contain_term = 0;
+  // Query-invariant per-term weight (BM25 IDF), computed once here instead of
+  // per candidate document.
+  float term_weight = 0.0f;
 };
 
 using ResolvedLeaves = absl::flat_hash_map<const TermPredicate *, ResolvedLeaf>;
 
 // Walks the predicate tree once and resolves each TermPredicate leaf's posting
-// list (the expensive radix-tree lookup), so the per-document scoring walk only
-// does the cheap per-key lookup. A leaf whose term is absent from the index
-// maps to an empty (null) postings pointer.
-void ResolveLeaves(const Predicate *predicate, ResolvedLeaves &resolved) {
+// list (the expensive radix-tree lookup) and per-term weight, so the
+// per-document scoring walk only does the cheap per-key lookup. A leaf whose
+// term is absent from the index maps to an empty (null) postings pointer.
+void ResolveLeaves(const Predicate *predicate, uint32_t total_docs,
+                   const indexes::scoring::Scorer *scorer,
+                   ResolvedLeaves &resolved) {
   CHECK(predicate != nullptr);
   switch (predicate->GetType()) {
     case PredicateType::kComposedAnd:
     case PredicateType::kComposedOr: {
-      auto composed = dynamic_cast<const ComposedPredicate *>(predicate);
+      auto composed = static_cast<const ComposedPredicate *>(predicate);
       for (const auto &child : composed->GetChildren()) {
-        ResolveLeaves(child.get(), resolved);
+        ResolveLeaves(child.get(), total_docs, scorer, resolved);
       }
       break;
     }
     case PredicateType::kText: {
+      // kText is shared by Term/Prefix/Suffix/Infix predicates; only
+      // TermPredicate is scored, so this cast must stay dynamic.
       auto term_pred = dynamic_cast<const TermPredicate *>(predicate);
       if (!term_pred || resolved.contains(term_pred)) break;
       auto text_index_schema = term_pred->GetTextIndexSchema();
@@ -680,7 +687,9 @@ void ResolveLeaves(const Predicate *predicate, ResolvedLeaves &resolved) {
       auto postings = text_index->GetPrefix().FindPostingsTarget(
           term_pred->GetTextString());
       const uint32_t dt = postings ? postings->GetKeyCount() : 0;
-      resolved.emplace(term_pred, ResolvedLeaf{std::move(postings), dt});
+      const float term_weight = scorer->PrecomputeIDF(total_docs, dt);
+      resolved.emplace(term_pred,
+                       ResolvedLeaf{std::move(postings), dt, term_weight});
       break;
     }
     default:
@@ -688,20 +697,32 @@ void ResolveLeaves(const Predicate *predicate, ResolvedLeaves &resolved) {
   }
 }
 
+// Query-invariant scoring inputs, captured once per query so the per-document
+// walk only does per-key lookups.
+struct ScoreContext {
+  const IndexSchema &index_schema;
+  const indexes::scoring::Scorer *scorer;
+  const ResolvedLeaves &resolved;
+  uint32_t total_docs = 0;
+  uint64_t total_doc_len = 0;
+  bool needs_doc_len = false;
+  // When the index has no SCORE field, every document carries the same constant
+  // document score, so the per-candidate GetDocumentScore lookup is skipped.
+  bool has_score_field = false;
+  float default_document_score = 1.0f;
+};
+
 std::optional<float> ScoreNode(const Predicate *predicate,
                                const InternedStringPtr &key,
-                               const IndexSchema &index_schema,
-                               const indexes::scoring::Scorer *scorer,
-                               const ResolvedLeaves &resolved) {
+                               const ScoreContext &ctx) {
   CHECK(predicate != nullptr);
 
   switch (predicate->GetType()) {
     case PredicateType::kComposedAnd: {
-      auto composed = dynamic_cast<const ComposedPredicate *>(predicate);
+      auto composed = static_cast<const ComposedPredicate *>(predicate);
       float sum = 0.0f;
       for (const auto &child : composed->GetChildren()) {
-        auto child_score =
-            ScoreNode(child.get(), key, index_schema, scorer, resolved);
+        auto child_score = ScoreNode(child.get(), key, ctx);
         // AND: every child must match, otherwise the document does not match
         // this group and contributes nothing from it.
         if (!child_score) return std::nullopt;
@@ -710,12 +731,11 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       return predicate->GetWeight() * sum;
     }
     case PredicateType::kComposedOr: {
-      auto composed = dynamic_cast<const ComposedPredicate *>(predicate);
+      auto composed = static_cast<const ComposedPredicate *>(predicate);
       float sum = 0.0f;
       bool matched = false;
       for (const auto &child : composed->GetChildren()) {
-        auto child_score =
-            ScoreNode(child.get(), key, index_schema, scorer, resolved);
+        auto child_score = ScoreNode(child.get(), key, ctx);
         // OR: any matching child contributes; non-matching children are
         // skipped.
         if (child_score) {
@@ -727,6 +747,8 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       return predicate->GetWeight() * sum;
     }
     case PredicateType::kText: {
+      // kText is shared by Term/Prefix/Suffix/Infix predicates; only
+      // TermPredicate is scored, so this cast must stay dynamic.
       auto term_pred = dynamic_cast<const TermPredicate *>(predicate);
 
       // non-TermPredicate text predicates (prefix/suffix/fuzzy): not yet
@@ -734,8 +756,8 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       // rather than a non-match.
       if (!term_pred) return 0.0f;
 
-      auto it = resolved.find(term_pred);
-      CHECK(it != resolved.end());
+      auto it = ctx.resolved.find(term_pred);
+      CHECK(it != ctx.resolved.end());
       const ResolvedLeaf &leaf = it->second;
       if (!leaf.postings) return std::nullopt;
 
@@ -747,14 +769,15 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       if (tf == 0) return std::nullopt;
 
       indexes::scoring::LeafInput input;
-      input.total_docs = index_schema.GetIndexKeyInfoSize();
+      input.total_docs = ctx.total_docs;
       input.num_doc_contain_term = leaf.num_doc_contain_term;
       input.term_frequency = tf;
-      if (scorer->Type() == indexes::scoring::ScorerType::kBm25Std) {
-        input.total_doc_len = index_schema.GetTotalDocumentLength();
-        input.doc_len = index_schema.GetDocumentLength(key);
+      if (ctx.needs_doc_len) {
+        input.total_doc_len = ctx.total_doc_len;
+        input.doc_len = ctx.index_schema.GetDocumentLength(key);
       }
-      return scorer->ScoreLeaf(input, predicate->GetWeight());
+      return ctx.scorer->ScoreLeaf(leaf.term_weight, input,
+                                   predicate->GetWeight());
     }
     // TODO: scoring for tag/numeric.
     case PredicateType::kNegate:
@@ -774,21 +797,36 @@ void ScoreTextQuery(const IndexSchema &index_schema,
   CHECK(scorer != nullptr);
   if (candidates.empty()) return;
 
-  CHECK(index_schema.GetIndexKeyInfoSize() > 0);
+  const uint32_t total_docs = index_schema.GetIndexKeyInfoSize();
+  CHECK(total_docs > 0);
 
-  // Resolve each term leaf's posting list once; the per-document walk below
-  // then only does the cheap per-key lookup.
+  // Resolve each term leaf's posting list and per-term weight once; the
+  // per-document walk below then only does the cheap per-key lookup.
   ResolvedLeaves resolved;
-  ResolveLeaves(root_predicate, resolved);
+  ResolveLeaves(root_predicate, total_docs, scorer, resolved);
+
+  const bool needs_doc_len =
+      scorer->Type() == indexes::scoring::ScorerType::kBm25Std;
+  ScoreContext ctx{index_schema,
+                   scorer,
+                   resolved,
+                   total_docs,
+                   needs_doc_len ? index_schema.GetTotalDocumentLength() : 0,
+                   needs_doc_len,
+                   index_schema.HasScoreField(),
+                   index_schema.GetScore()};
 
   std::vector<indexes::BorrowedNeighbor> scored;
   scored.reserve(candidates.size());
   for (const auto &c : candidates) {
     auto key = c.key.Materialize();
-    auto score = ScoreNode(root_predicate, key, index_schema, scorer, resolved);
+    auto score = ScoreNode(root_predicate, key, ctx);
     if (!score) continue;
-    const float final_score = scorer->ComposeDocumentScore(
-        *score, index_schema.GetDocumentScore(key));
+    const float document_score = ctx.has_score_field
+                                     ? index_schema.GetDocumentScore(key)
+                                     : ctx.default_document_score;
+    const float final_score =
+        scorer->ComposeDocumentScore(*score, document_score);
     scored.push_back({c.key, 0.0f, final_score});
   }
 

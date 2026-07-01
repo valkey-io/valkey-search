@@ -30,7 +30,12 @@ class Bm25StdScorer : public Scorer {
   std::string_view Name() const override { return kName; }
   ScorerType Type() const override { return ScorerType::kBm25Std; }
 
-  float ScoreLeaf(const LeafInput& input, float leaf_weight) const override;
+  // IDF = ln(1 + (N - dt + 0.5) / (dt + 0.5)).
+  float PrecomputeIDF(uint32_t total_docs,
+                      uint32_t num_doc_contain_term) const override;
+
+  float ScoreLeaf(float term_weight, const LeafInput& input,
+                  float leaf_weight) const override;
 
   float ComposeDocumentScore(float sum_of_terms,
                              float document_score) const override;

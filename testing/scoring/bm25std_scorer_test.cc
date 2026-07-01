@@ -31,6 +31,15 @@ LeafInput MakeLeaf(uint32_t total_docs, uint64_t total_doc_len,
   return in;
 }
 
+// Precomputes the term weight from the leaf, then scores it. The production
+// path precomputes the weight once per term; tests recompute per call.
+float ScoreLeaf(const Bm25StdScorer& scorer, const LeafInput& leaf,
+                float leaf_weight) {
+  const float term_weight =
+      scorer.PrecomputeIDF(leaf.total_docs, leaf.num_doc_contain_term);
+  return scorer.ScoreLeaf(term_weight, leaf, leaf_weight);
+}
+
 // --- Direct scorer math ---
 
 TEST(Bm25StdScorerTest, IdentityNameAndType) {
@@ -42,39 +51,39 @@ TEST(Bm25StdScorerTest, IdentityNameAndType) {
 TEST(Bm25StdScorerTest, ScoreLeafCorpusReference) {
   Bm25StdScorer scorer;
   LeafInput leaf = test_data::LeafForHello(test_data::kDocs[4]);
-  EXPECT_NEAR(scorer.ScoreLeaf(leaf, 1.0f), 0.574385f, kFloatTolerance);
+  EXPECT_NEAR(ScoreLeaf(scorer, leaf, 1.0f), 0.574385f, kFloatTolerance);
 }
 
 TEST(Bm25StdScorerTest, ScoreLeafLeafWeightScalesLinearly) {
   Bm25StdScorer scorer;
   LeafInput leaf = test_data::LeafForHello(test_data::kDocs[0]);
-  const float base = scorer.ScoreLeaf(leaf, 1.0f);
-  EXPECT_NEAR(scorer.ScoreLeaf(leaf, 5.0f), 5.0f * base, kFloatTolerance);
-  EXPECT_EQ(scorer.ScoreLeaf(leaf, 0.0f), 0.0f);
+  const float base = ScoreLeaf(scorer, leaf, 1.0f);
+  EXPECT_NEAR(ScoreLeaf(scorer, leaf, 5.0f), 5.0f * base, kFloatTolerance);
+  EXPECT_EQ(ScoreLeaf(scorer, leaf, 0.0f), 0.0f);
 }
 
 TEST(Bm25StdScorerTest, ScoreLeafZeroFrequencyReturnsZero) {
   Bm25StdScorer scorer;
   LeafInput leaf = test_data::LeafForWorld(test_data::kDocs[4]);
   ASSERT_EQ(leaf.term_frequency, 0u);
-  EXPECT_EQ(scorer.ScoreLeaf(leaf, 1.0f), 0.0f);
+  EXPECT_EQ(ScoreLeaf(scorer, leaf, 1.0f), 0.0f);
 }
 
 TEST(Bm25StdScorerTest, ScoreLeafEmptyIndexReturnsZero) {
   Bm25StdScorer scorer;
   LeafInput leaf = MakeLeaf(/*N=*/0, /*total_doc_len=*/0,
                             /*dt=*/0, /*F=*/0, /*doc_len=*/0);
-  EXPECT_EQ(scorer.ScoreLeaf(leaf, 1.0f), 0.0f);
+  EXPECT_EQ(ScoreLeaf(scorer, leaf, 1.0f), 0.0f);
 }
 
 TEST(Bm25StdScorerTest, IdfDifferentiatesByDt) {
   Bm25StdScorer scorer;
   const float hello =
-      scorer.ScoreLeaf(test_data::LeafForHello(test_data::kDocs[0]), 1.0f);
+      ScoreLeaf(scorer, test_data::LeafForHello(test_data::kDocs[0]), 1.0f);
   const float rare =
-      scorer.ScoreLeaf(test_data::LeafForRare(test_data::kDocs[5]), 1.0f);
+      ScoreLeaf(scorer, test_data::LeafForRare(test_data::kDocs[5]), 1.0f);
   const float unique =
-      scorer.ScoreLeaf(test_data::LeafForUnique(test_data::kDocs[5]), 1.0f);
+      ScoreLeaf(scorer, test_data::LeafForUnique(test_data::kDocs[5]), 1.0f);
   EXPECT_GT(rare, hello);
   EXPECT_GT(unique, rare);
 }
@@ -82,9 +91,9 @@ TEST(Bm25StdScorerTest, IdfDifferentiatesByDt) {
 TEST(Bm25StdScorerTest, LengthNormalizationFavorsShorterDoc) {
   Bm25StdScorer scorer;
   const float doc4 =
-      scorer.ScoreLeaf(test_data::LeafForHello(test_data::kDocs[3]), 1.0f);
+      ScoreLeaf(scorer, test_data::LeafForHello(test_data::kDocs[3]), 1.0f);
   const float doc5 =
-      scorer.ScoreLeaf(test_data::LeafForHello(test_data::kDocs[4]), 1.0f);
+      ScoreLeaf(scorer, test_data::LeafForHello(test_data::kDocs[4]), 1.0f);
   EXPECT_GT(doc5, doc4);
 }
 
@@ -92,7 +101,7 @@ TEST(Bm25StdScorerDeathTest, DtGreaterThanNCrashes) {
   Bm25StdScorer scorer;
   LeafInput leaf = MakeLeaf(/*N=*/2, /*total_doc_len=*/20,
                             /*dt=*/3, /*F=*/1, /*doc_len=*/10);
-  EXPECT_DEATH(scorer.ScoreLeaf(leaf, 1.0f), "");
+  EXPECT_DEATH(ScoreLeaf(scorer, leaf, 1.0f), "");
 }
 
 TEST(Bm25StdScorerTest, ComposeMultipliesByDocumentScore) {

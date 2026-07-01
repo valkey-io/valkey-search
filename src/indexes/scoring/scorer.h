@@ -61,8 +61,17 @@ class Scorer {
   virtual std::string_view Name() const = 0;
   virtual ScorerType Type() const = 0;
 
-  // Scores one matching (term, document) leaf from scorer-agnostic raw inputs.
-  virtual float ScoreLeaf(const LeafInput& input, float leaf_weight) const = 0;
+  // Query-invariant per-term weight (e.g. BM25 IDF). Depends only on corpus
+  // size and the term's document count, so the search path computes it once per
+  // distinct term and reuses it across every matching document.
+  virtual float PrecomputeIDF(uint32_t total_docs,
+                              uint32_t num_doc_contain_term) const = 0;
+
+  // Scores one matching (term, document) leaf. Takes the term weight from
+  // PrecomputeIDF so the per-document walk skips recomputing it (the
+  // BM25 IDF involves a log).
+  virtual float ScoreLeaf(float term_weight, const LeafInput& input,
+                          float leaf_weight) const = 0;
 
   virtual float ComposeDocumentScore(float sum_of_terms,
                                      float document_score) const = 0;

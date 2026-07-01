@@ -119,7 +119,7 @@ TEST_F(VectorIndexTest, InitializationFlat) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   }
 }
 
-enum class ExpectedResults { kSuccess, kSkipped, kError };
+enum class ExpectedResults { kSuccess, kMissing, kInvalidData, kError };
 
 auto IndexToKey = [](int i) {
   return StringInternStore::Intern(std::to_string(i) + "_key");
@@ -194,14 +194,17 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
                pct(50), pct(90), pct(99), lat_us.back(), mean);
 }
 
-void VerifyResult(const absl::StatusOr<bool>& res,
+void VerifyResult(const absl::StatusOr<indexes::RecordResult>& res,
                   ExpectedResults expected_result) {
   if (expected_result == ExpectedResults::kSuccess) {
     VMSDK_EXPECT_OK(res);
-    EXPECT_TRUE(res.value());
-  } else if (expected_result == ExpectedResults::kSkipped) {
+    EXPECT_EQ(res.value(), indexes::RecordResult::kAdded);
+  } else if (expected_result == ExpectedResults::kMissing) {
     VMSDK_EXPECT_OK(res);
-    EXPECT_FALSE(res.value());
+    EXPECT_EQ(res.value(), indexes::RecordResult::kMissing);
+  } else if (expected_result == ExpectedResults::kInvalidData) {
+    VMSDK_EXPECT_OK(res);
+    EXPECT_EQ(res.value(), indexes::RecordResult::kInvalidData);
   } else {
     EXPECT_FALSE(res.status().ok());
   }
@@ -239,8 +242,8 @@ void TestIndex(T* index, int dimensions, int vector_size) {
   VerifyAdd(index, vectors, 0, ExpectedResults::kError);
   auto vectors_small_dim =
       DeterministicallyGenerateVectors(vectors.size(), dimensions - 1, 1.0);
-  VerifyAdd(index, vectors_small_dim, 0, ExpectedResults::kSkipped);
-  VerifyModify(index, vectors_small_dim[0], 0, ExpectedResults::kSkipped,
+  VerifyAdd(index, vectors_small_dim, 0, ExpectedResults::kInvalidData);
+  VerifyModify(index, vectors_small_dim[0], 0, ExpectedResults::kInvalidData,
                false);
 
   VerifyModify(index, vectors[0], 0, ExpectedResults::kError, false);
@@ -601,7 +604,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
     absl::string_view vec_str = VectorToStr(new_vectors[i]);
     auto res = (*index)->AddRecord(key, vec_str);
     VMSDK_EXPECT_OK(res) << "AddRecord failed for new vector " << i;
-    EXPECT_TRUE(res.value());
+    EXPECT_EQ(res.value(), indexes::RecordResult::kAdded);
   }
   EXPECT_EQ(base->GetTrackedKeyCount(), 13u);
   // Verifies we reused tombstoned hnsw nodes
@@ -681,7 +684,7 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
 
       // Re-insert the vectors
       for (size_t i = 0; i < vectors.size(); ++i) {
-        VerifyModify(index.get(), vectors[i], i, ExpectedResults::kSkipped,
+        VerifyModify(index.get(), vectors[i], i, ExpectedResults::kMissing,
                      true);
       }
     }

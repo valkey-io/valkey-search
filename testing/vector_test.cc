@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -776,7 +777,7 @@ TEST_F(VectorIndexTest, LoadRecomputesAlignedOffsetForOldSnapshot) {
   header.set_max_m(kM);
   header.set_max_m_0(kM * 2);
   header.set_m(kM);
-  header.set_mult(1.0);
+  header.set_mult(1.0 / std::log(static_cast<double>(kM)));  // == 1/log(M)
   header.set_ef_construction(kEFConstruction);
   std::string serialized;
   ASSERT_TRUE(header.SerializeToString(&serialized));
@@ -1046,12 +1047,14 @@ TEST_F(VectorIndexTest, RejectHeaderOffsetLevel0Nonzero) {
   ExpectReject(std::move(golden), "offset_level_0 must be 0");
 }
 
-TEST_F(VectorIndexTest, RejectHeaderMultOutOfRange) {
+TEST_F(VectorIndexTest, RejectHeaderMultInconsistentWithM) {
   auto golden = MultiLayerGolden();
   auto h = GetHeader(golden);
-  h.set_mult(0.0);
+  // 0.5 is well-formed (0 < 0.5 <= 2) but != 1/log(kM); the tightened check
+  // recomputes 1/log(M) and rejects it, where the old range check would not.
+  h.set_mult(0.5);
   SetHeader(&golden, h);
-  ExpectReject(std::move(golden), "mult is out of range");
+  ExpectReject(std::move(golden), "mult is inconsistent with M");
 }
 
 // ---- Level-0 record corruption -------------------------------------------

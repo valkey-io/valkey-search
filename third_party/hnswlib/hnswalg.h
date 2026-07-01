@@ -25,6 +25,7 @@
 #include "src/metrics.h"
 #include "third_party/hnswlib/index.pb.h"
 #include "visited_list_pool.h"
+#include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 
 #ifdef VMSDK_ENABLE_MEMORY_ALLOCATION_OVERRIDES
@@ -867,10 +868,18 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
   // disabled. On failure it throws; VectorHNSW::LoadFromRDB converts the
   // exception into a failed (rejected) RDB load.
   inline void loadCheck(bool ok, absl::string_view msg) const {
-    if (load_validation_enabled_ && !ok) {
+    if (ok) {
+      return;
+    }
+    if (load_validation_enabled_) {
       throw std::runtime_error(
           absl::StrCat("HNSW index load validation failed: ", msg));
     }
+    // Validation disabled: don't fail the load, but log (throttled) the defect.
+    VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
+        << "HNSW load validation is disabled; ignoring detected index "
+           "corruption: "
+        << msg;
   }
 
   absl::Status LoadIndex(InputStream &input, SpaceInterface<dist_t> *s,
@@ -939,11 +948,14 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                     size_links_level0_ + vector_size_ + sizeof(labeltype),
                 "serialized element size is inconsistent with the geometry");
       loadCheck(offsetLevel0_ == 0, "offset_level_0 must be 0");
-      // mult_ = 1/log(M_) is always in (0, ~1.45] for M_ >= 2. A range check
-      // (rather than std::isfinite, which is unreliable under finite-math
-      // build flags) rejects inf / out-of-range garbage. mult_ only affects
-      // future-insert level assignment, so this is a soft, non-safety check.
-      loadCheck(mult_ > 0.0 && mult_ <= 2.0, "mult is out of range");
+      // Recompute mult=1/log(M) and match within a guardband (cross-arch libm);
+      // skip M<2 where 1/log(M) is not finite. Soft, non-safety check.
+      if (M_ >= 2) {
+        const double expected_mult = 1.0 / std::log(static_cast<double>(M_));
+        loadCheck(mult_ > 0.0 &&
+                      std::fabs(mult_ - expected_mult) <= 1e-6 * expected_mult,
+                  "mult is inconsistent with M");
+      }
 
       // Element-count / level / entry-point consistency.
       loadCheck(cur_element_count_ <= max_elements_,

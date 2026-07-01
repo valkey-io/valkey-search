@@ -12,7 +12,8 @@
 namespace valkey_search::indexes::text {
 
 std::shared_ptr<LanguageProcessor> LanguageProcessor::Create(
-    data_model::Language language) {
+    data_model::Language language, const std::string& punctuation,
+    const std::vector<std::string>& stop_words) {
   switch (language) {
     // TODO: ICUSegmenter class to be implemented
     case data_model::LANGUAGE_ENGLISH:
@@ -28,11 +29,11 @@ std::shared_ptr<LanguageProcessor> LanguageProcessor::Create(
     case data_model::LANGUAGE_INDONESIAN:
     case data_model::LANGUAGE_ARABIC:
       return std::shared_ptr<SnowballProcessor>(
-          new SnowballProcessor(language));
+          new SnowballProcessor(language, punctuation, stop_words));
 
     default:
-      return std::shared_ptr<SnowballProcessor>(
-          new SnowballProcessor(data_model::LANGUAGE_ENGLISH));
+      return std::shared_ptr<SnowballProcessor>(new SnowballProcessor(
+          data_model::LANGUAGE_ENGLISH, punctuation, stop_words));
   }
 }
 

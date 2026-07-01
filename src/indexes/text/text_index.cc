@@ -13,7 +13,6 @@
 #include "absl/status/status.h"
 #include "absl/strings/ascii.h"
 #include "absl/synchronization/mutex.h"
-#include "libstemmer.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/memory_allocation.h"
 namespace valkey_search::indexes::text {
@@ -142,7 +141,7 @@ TextIndexSchema::TextIndexSchema(data_model::Language language,
                                  const std::vector<std::string> &stop_words,
                                  uint32_t min_stem_size)
     : with_offsets_(with_offsets),
-      lexer_(language, punctuation, stop_words),
+      processor_(LanguageProcessor::Create(language, punctuation, stop_words)),
       stem_tree_(FreeStemParentsCallback),
       min_stem_size_(min_stem_size),
       rax_target_mutex_pool_(options::GetRaxTargetMutexPoolSize().GetValue()) {}
@@ -158,7 +157,8 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
   }
 
   // Tokenize and collect stem mappings
-  auto tokens = lexer_.Tokenize(data, stem, min_stem_size_, stem_mappings_ptr);
+  auto tokens =
+      processor_->Tokenize(data, stem, min_stem_size_, stem_mappings_ptr);
 
   if (!tokens.ok()) {
     if (tokens.status().code() == absl::StatusCode::kInvalidArgument) {
@@ -339,7 +339,7 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
     absl::WriterMutexLock stem_lock(&stem_tree_mutex_);
     for (const auto &word : empty_words) {
       std::string stem(word);
-      lexer_.StemWordInPlace(stem, lexer_.GetStemmer(), min_stem_size_);
+      processor_->StemWordInPlace(stem, min_stem_size_);
       if (stem != word) {
         auto stem_remove_fn = CreateSimpleTargetMutateFn<StemParents>(
             [&word](InvasivePtr<StemParents> existing) {
@@ -382,7 +382,7 @@ std::string TextIndexSchema::GetAllStemVariants(
     uint64_t stem_enabled_mask, bool lock_needed) {
   // Stem the search term
   std::string stemmed(search_term);
-  lexer_.StemWordInPlace(stemmed, lexer_.GetStemmer());
+  processor_->StemWordInPlace(stemmed);
 
   std::optional<absl::ReaderMutexLock> stem_guard;
   if (lock_needed) stem_guard.emplace(&stem_tree_mutex_);

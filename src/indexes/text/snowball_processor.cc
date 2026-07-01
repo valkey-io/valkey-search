@@ -7,13 +7,17 @@
 
 #include "src/indexes/text/snowball_processor.h"
 
+#include <algorithm>
 #include <memory>
 
+#include "absl/algorithm/container.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
+#include "absl/status/status.h"
 #include "absl/strings/ascii.h"
 #include "libstemmer.h"
 #include "src/indexes/text/punctuation.h"
+#include "src/indexes/text/stop_words.h"
 #include "src/indexes/text/unicode_normalizer.h"
 #include "src/utils/scanner.h"
 
@@ -31,9 +35,15 @@ thread_local absl::flat_hash_map<data_model::Language, StemmerPtr> stemmers_;
 
 }  // namespace
 
-SnowballProcessor::SnowballProcessor(data_model::Language language)
+SnowballProcessor::SnowballProcessor(data_model::Language language,
+                                     const std::string& punctuation,
+                                     const std::vector<std::string>& stop_words)
     : language_(language),
-      default_punctuation_(GetDefaultPunctuation(language)) {}
+      norm_form_(language == data_model::LANGUAGE_ARABIC
+                     ? NormalizationForm::NFKC
+                     : NormalizationForm::NFC),
+      punct_set_(BuildPunctuationSet(punctuation)),
+      stop_words_set_(BuildStopWordsSet(stop_words)) {}
 
 const char* SnowballProcessor::GetLanguageString(
     data_model::Language language) {
@@ -132,17 +142,105 @@ void SnowballProcessor::BuildStemMap(const std::vector<std::string>& tokens,
   }
 }
 
-std::vector<std::string> SnowballProcessor::Tokenize(
-    absl::string_view text) const {
-  // TODO: This will be wired up when Lexer delegates tokenization to the
-  // processor. For now, tokenization (punct splitting, lowercasing, stop words)
-  // still lives in Lexer. This method will eventually contain the punct/space
-  // split + NFC normalize logic for Snowball languages.
-  return {};
+absl::StatusOr<std::vector<std::string>> SnowballProcessor::Tokenize(
+    absl::string_view text, bool stemming_enabled, uint32_t min_stem_size,
+    InProgressStemMap* stem_map) const {
+  if (!utils::Scanner::IsValidUtf8(text)) {
+    return absl::InvalidArgumentError("Invalid UTF-8");
+  }
+
+  sb_stemmer* stemmer = stemming_enabled ? GetStemmer() : nullptr;
+  std::vector<std::string> tokens;
+  std::string word;
+  word.reserve(64);
+  size_t pos = 0;
+
+  while (pos < text.size()) {
+    // Skip leading punctuation (code-point aware)
+    while (pos < text.size()) {
+      if (text[pos] == '\\' && pos + 1 < text.size()) break;
+      utils::Scanner s(text.substr(pos));
+      auto cp = s.NextUtf8();
+      CHECK(cp != utils::Scanner::kInvalidCp)
+          << "Tokenize decoded invalid UTF-8 after IsValidUtf8 passed";
+      if (!IsPunctuation(cp)) break;
+      pos += s.LastUtf8ByteLen();
+    }
+
+    word.clear();
+
+    // Build word until next punctuation boundary
+    while (pos < text.size()) {
+      if (text[pos] == '\\' && pos + 1 < text.size()) {
+        pos++;
+        utils::Scanner s(text.substr(pos));
+        auto esc_cp = s.NextUtf8();
+        CHECK(esc_cp != utils::Scanner::kInvalidCp)
+            << "Tokenize decoded invalid UTF-8 after IsValidUtf8 passed";
+        uint8_t esc_len = s.LastUtf8ByteLen();
+        if (esc_cp != '\\' && !IsPunctuation(esc_cp) && IsPunctuation('\\')) {
+          break;
+        }
+        word.append(text.data() + pos, esc_len);
+        pos += esc_len;
+        continue;
+      }
+
+      utils::Scanner s(text.substr(pos));
+      auto cp = s.NextUtf8();
+      CHECK(cp != utils::Scanner::kInvalidCp)
+          << "Tokenize decoded invalid UTF-8 after IsValidUtf8 passed";
+      if (IsPunctuation(cp)) break;
+      uint8_t len = s.LastUtf8ByteLen();
+      word.append(text.data() + pos, len);
+      pos += len;
+    }
+
+    if (!word.empty()) {
+      NormalizeLowerCaseInPlace(word);
+
+      if (IsStopWord(word)) {
+        word.clear();
+        continue;
+      }
+
+      if (stemming_enabled && stem_map) {
+        std::string_view stemmed = DoStemming(word, stemmer, min_stem_size);
+        if (stemmed != word) {
+          auto it = stem_map->find(stemmed);
+          if (it == stem_map->end()) {
+            it = stem_map->try_emplace(std::string(stemmed)).first;
+          }
+          auto& variants = it->second;
+          if (std::find(variants.begin(), variants.end(), word) ==
+              variants.end()) {
+            variants.emplace_back(word);
+          }
+        }
+      }
+
+      tokens.push_back(std::move(word));
+      word.clear();
+    }
+  }
+  return tokens;
 }
 
-const std::string& SnowballProcessor::DefaultPunctuation() const {
-  return default_punctuation_;
+void SnowballProcessor::NormalizeLowerCaseInPlace(std::string& word) const {
+  if (absl::c_all_of(word, absl::ascii_isascii)) {
+    absl::AsciiStrToLower(&word);
+  } else {
+    word = UnicodeNormalizer::Normalize(word, norm_form_);
+    UnicodeNormalizer::CaseFoldInPlace(word);
+  }
+}
+
+bool SnowballProcessor::IsPunctuation(uint32_t cp) const {
+  return punct_set_.Contains(cp);
+}
+
+bool SnowballProcessor::IsStopWord(absl::string_view word) const {
+  return stop_words_set_.contains(word);
 }
 
 }  // namespace valkey_search::indexes::text

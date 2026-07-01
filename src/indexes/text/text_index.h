@@ -24,12 +24,10 @@
 #include "absl/synchronization/mutex.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/text/invasive_ptr.h"
-#include "src/indexes/text/lexer.h"
+#include "src/indexes/text/language_processor.h"
 #include "src/indexes/text/posting.h"
 #include "src/indexes/text/rax_target_mutex_pool.h"
 #include "src/indexes/text/rax_wrapper.h"
-
-struct sb_stemmer;
 
 namespace valkey_search::indexes::text {
 
@@ -103,7 +101,9 @@ class TextIndexSchema {
   bool HasTextOffsets() const { return with_offsets_; }
   uint8_t GetNumTextFields() const { return num_text_fields_; }
   std::shared_ptr<TextIndex> GetTextIndex() const { return text_index_; }
-  Lexer GetLexer() const { return lexer_; }
+  const std::shared_ptr<LanguageProcessor> &GetProcessor() const {
+    return processor_;
+  }
 
   // Access to metadata for memory pool usage
   TextIndexMetadata &GetMetadata() { return metadata_; }
@@ -172,7 +172,7 @@ class TextIndexSchema {
   // Prevent concurrent mutations to per-key text index map
   std::mutex per_key_text_indexes_mutex_;
 
-  Lexer lexer_;
+  std::shared_ptr<LanguageProcessor> processor_;
 
   // Key updates are fanned out to each attribute's IndexBase object. Since text
   // indexing operates at the schema-level, any new text data to insert for a

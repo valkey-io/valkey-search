@@ -29,6 +29,8 @@
 #include <string>
 #include <vector>
 
+#include "absl/container/flat_hash_set.h"
+#include "absl/strings/ascii.h"
 #include "src/index_schema.pb.h"
 
 namespace valkey_search::indexes::text {
@@ -474,6 +476,16 @@ inline const std::vector<std::string>& GetDefaultStopWords(
     default:
       return kEnglishStopWords;
   }
+}
+
+// Build a stop words hash set from a vector. Lowercases all entries.
+inline absl::flat_hash_set<std::string> BuildStopWordsSet(
+    const std::vector<std::string>& stop_words) {
+  absl::flat_hash_set<std::string> stop_words_set;
+  for (const auto& word : stop_words) {
+    stop_words_set.insert(absl::AsciiStrToLower(word));
+  }
+  return stop_words_set;
 }
 
 }  // namespace valkey_search::indexes::text

@@ -182,9 +182,8 @@ class Scanner {
   }
 
   // True iff `text` is well-formed UTF-8 (no overlong, surrogate,
-  // out-of-range, or truncated sequences). Single shared validation routine so
-  // the validity contract lives in exactly one place (e.g. Lexer::Tokenize's
-  // ingestion gate delegates here).
+  // out-of-range, or truncated sequences). Used as the ingestion gate in
+  // LanguageProcessor::Tokenize implementations.
   static bool IsValidUtf8(absl::string_view text) {
     Scanner s(text);
     Char cp;

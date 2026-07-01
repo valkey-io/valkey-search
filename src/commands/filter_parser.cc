@@ -27,7 +27,6 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
-#include "src/indexes/text/lexer.h"
 #include "src/query/predicate.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -564,7 +563,8 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
 // \<non-punctuation> -> (break to new token)<non-punctuation>...
 // \<EOL> -> Return error
 absl::StatusOr<bool> FilterParser::HandleBackslashEscape(
-    const indexes::text::Lexer& lexer, std::string& processed_content) {
+    const indexes::text::LanguageProcessor& processor,
+    std::string& processed_content) {
   if (!Match('\\', false)) {
     // No backslash, continue normal processing of the same token.
     return true;
@@ -575,7 +575,7 @@ absl::StatusOr<bool> FilterParser::HandleBackslashEscape(
       ReplaceInvalidUtf8(pk, processed_content);
       return true;
     }
-    if (pk.cp == '\\' || lexer.IsPunctuation(pk.cp)) {
+    if (pk.cp == '\\' || processor.IsPunctuation(pk.cp)) {
       // If Double backslash, retain the double backslash
       // If Single backslash with punct on right, retain the char on right
       ConsumePeeked(pk, processed_content);
@@ -583,7 +583,7 @@ absl::StatusOr<bool> FilterParser::HandleBackslashEscape(
       return true;
     } else {
       // Backslash before non-punctuation
-      if (lexer.IsPunctuation('\\')) {
+      if (processor.IsPunctuation('\\')) {
         // Backslash is punctuation → break to new token (standard unicode
         // segmentation)
         return false;
@@ -609,11 +609,11 @@ absl::StatusOr<bool> FilterParser::HandleBackslashEscape(
 absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
     const std::optional<std::string>& field_or_default) {
-  const auto& lexer = text_index_schema->GetLexer();
+  const auto& processor = *text_index_schema->GetProcessor();
   std::string processed_content;
   while (!IsEnd()) {
     VMSDK_ASSIGN_OR_RETURN(bool should_continue,
-                           HandleBackslashEscape(lexer, processed_content));
+                           HandleBackslashEscape(processor, processed_content));
     if (!should_continue) {
       break;
     }
@@ -627,14 +627,14 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
       if (pk.cp == '\\')
         continue;  // Don't break on backslash; route to
                    // HandleBackslashEscape on next iteration.
-      if (lexer.IsPunctuation(pk.cp)) break;
+      if (processor.IsPunctuation(pk.cp)) break;
       ConsumePeeked(pk, processed_content);
     }
   }
   if (processed_content.empty()) {
     return FilterParser::TokenResult{nullptr, false};
   }
-  lexer.NormalizeLowerCaseInPlace(processed_content);
+  processor.NormalizeLowerCaseInPlace(processed_content);
   FieldMaskPredicate field_mask;
   VMSDK_RETURN_IF_ERROR(
       SetupTextFieldConfiguration(field_mask, field_or_default, false));
@@ -660,7 +660,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
 absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
     const std::optional<std::string>& field_or_default) {
-  const auto& lexer = text_index_schema->GetLexer();
+  const auto& processor = *text_index_schema->GetProcessor();
   std::string processed_content;
   bool starts_with_star = false;
   bool ends_with_star = false;
@@ -669,7 +669,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
   bool break_on_query_syntax = false;
   while (!IsEnd()) {
     VMSDK_ASSIGN_OR_RETURN(bool should_continue,
-                           HandleBackslashEscape(lexer, processed_content));
+                           HandleBackslashEscape(processor, processed_content));
     if (!should_continue) {
       break;
     }
@@ -734,10 +734,10 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     if (pk.cp == '\\')
       continue;  // Don't break on backslash; route to
                  // HandleBackslashEscape on next iteration.
-    if (lexer.IsPunctuation(pk.cp)) break;
+    if (processor.IsPunctuation(pk.cp)) break;
     ConsumePeeked(pk, processed_content);
   }
-  lexer.NormalizeLowerCaseInPlace(processed_content);
+  processor.NormalizeLowerCaseInPlace(processed_content);
   FieldMaskPredicate field_mask;
   // Build predicate directly based on detected pattern
   if (leading_percent_count > 0) {
@@ -788,7 +788,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
   } else {
     // Term predicate handling:
     bool exact = options_.verbatim;
-    if (lexer.IsStopWord(processed_content) || processed_content.empty()) {
+    if (processor.IsStopWord(processed_content) || processed_content.empty()) {
       // Skip stop words and empty words.
       return FilterParser::TokenResult{nullptr, break_on_query_syntax};
     }

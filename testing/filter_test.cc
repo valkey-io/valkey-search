@@ -1771,7 +1771,7 @@ INSTANTIATE_TEST_SUITE_P(
       return info.param.test_name;
     });
 
-// Verifies the parser's PeekCodepoint() integration with the lexer's
+// Verifies the parser's PeekCodepoint() integration with the processor's
 // multi-byte PunctuationSet: when a custom PUNCTUATION contains a multi-byte
 // code point (Arabic comma ، U+060C, bytes 0xD8 0x8C), ParseUnquotedTextToken
 // must terminate the token on the full code point — not on byte 0xD8 alone,

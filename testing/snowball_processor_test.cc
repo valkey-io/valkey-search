@@ -15,9 +15,17 @@
 #include "gtest/gtest.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/text/language_processor.h"
-#include "src/indexes/text/lexer.h"
+#include "src/indexes/text/punctuation.h"
+#include "src/indexes/text/stop_words.h"
 
 namespace valkey_search::indexes::text {
+
+// Helper: create a processor with language defaults
+inline std::shared_ptr<LanguageProcessor> CreateProcessor(
+    data_model::Language language) {
+  return LanguageProcessor::Create(language, GetDefaultPunctuation(language),
+                                   GetDefaultStopWords(language));
+}
 
 // =============================================================================
 // Parameterized test: Per-language Stemming Correctness
@@ -98,7 +106,7 @@ class SnowballStemmingTest : public ::testing::TestWithParam<StemmingTestCase> {
 
 TEST_P(SnowballStemmingTest, ProducesExpectedStem) {
   const auto& tc = GetParam();
-  auto processor = LanguageProcessor::Create(tc.language);
+  auto processor = CreateProcessor(tc.language);
   ASSERT_NE(processor, nullptr);
 
   std::string word = tc.input;
@@ -201,7 +209,7 @@ class SnowballStemMapTest : public ::testing::TestWithParam<StemMapTestCase> {};
 
 TEST_P(SnowballStemMapTest, VariantsConvergeToSameStem) {
   const auto& tc = GetParam();
-  auto processor = LanguageProcessor::Create(tc.language);
+  auto processor = CreateProcessor(tc.language);
   ASSERT_NE(processor, nullptr);
 
   InProgressStemMap stem_mappings;
@@ -225,7 +233,7 @@ class SnowballProcessorFactoryTest
     : public ::testing::TestWithParam<data_model::Language> {
  protected:
   void SetUp() override {
-    processor_ = LanguageProcessor::Create(GetParam());
+    processor_ = CreateProcessor(GetParam());
     ASSERT_NE(processor_, nullptr);
   }
   std::shared_ptr<LanguageProcessor> processor_;
@@ -239,10 +247,6 @@ TEST_P(SnowballProcessorFactoryTest, SupportsStemming) {
   EXPECT_TRUE(processor_->SupportsStemming());
 }
 
-TEST_P(SnowballProcessorFactoryTest, DefaultPunctuationNotEmpty) {
-  EXPECT_FALSE(processor_->DefaultPunctuation().empty());
-}
-
 INSTANTIATE_TEST_SUITE_P(
     AllLanguages, SnowballProcessorFactoryTest,
     ::testing::Values(
@@ -254,7 +258,7 @@ INSTANTIATE_TEST_SUITE_P(
         data_model::LANGUAGE_INDONESIAN, data_model::LANGUAGE_ARABIC));
 
 TEST(SnowballProcessorFactoryEdgeTest, UnspecifiedLanguageReturnsNonNull) {
-  auto processor = LanguageProcessor::Create(data_model::LANGUAGE_UNSPECIFIED);
+  auto processor = CreateProcessor(data_model::LANGUAGE_UNSPECIFIED);
   EXPECT_NE(processor, nullptr);
 }
 
@@ -265,7 +269,7 @@ TEST(SnowballProcessorFactoryEdgeTest, UnspecifiedLanguageReturnsNonNull) {
 class SnowballProcessorSharedTest : public ::testing::Test {
  protected:
   std::shared_ptr<LanguageProcessor> processor_ =
-      LanguageProcessor::Create(data_model::LANGUAGE_ENGLISH);
+      CreateProcessor(data_model::LANGUAGE_ENGLISH);
 };
 
 // min_stem_size guard: word with fewer codepoints than threshold is not stemmed
@@ -353,11 +357,222 @@ TEST_F(SnowballProcessorSharedTest, BuildStemMap_MultipleDistinctStems) {
 // =============================================================================
 
 TEST(SnowballProcessorMultiByteTest, FrenchCodePointCounting) {
-  auto processor = LanguageProcessor::Create(data_model::LANGUAGE_FRENCH);
+  auto processor = CreateProcessor(data_model::LANGUAGE_FRENCH);
   // "né" = 'n' (1 byte) + 'é' (2 bytes) = 2 codepoints, 3 bytes
   std::string word = "n\xc3\xa9";
   processor->StemWordInPlace(word, 3);
   EXPECT_EQ(word, "n\xc3\xa9");
+}
+
+// =============================================================================
+// Tokenize() pipeline tests — coverage from lexer_test.cc
+//
+// Tests the full 6-step pipeline: validate UTF-8 → punct split → normalize →
+// stop words → stem map → emit.
+// =============================================================================
+
+class SnowballProcessorTokenizeTest : public ::testing::Test {
+ protected:
+  std::shared_ptr<LanguageProcessor> processor_ =
+      CreateProcessor(data_model::LANGUAGE_ENGLISH);
+};
+
+TEST_F(SnowballProcessorTokenizeTest, EmptyStringReturnsNoTokens) {
+  auto result = processor_->Tokenize("", true, 3, nullptr);
+  ASSERT_TRUE(result.ok());
+  EXPECT_TRUE(result->empty());
+}
+
+TEST_F(SnowballProcessorTokenizeTest, OnlyPunctuationReturnsNoTokens) {
+  auto result = processor_->Tokenize("   \t\n!@#$%^&*()   ", true, 3, nullptr);
+  ASSERT_TRUE(result.ok());
+  EXPECT_TRUE(result->empty());
+}
+
+TEST_F(SnowballProcessorTokenizeTest, DefaultPunctuationSplitting) {
+  auto result =
+      processor_->Tokenize("hello,world!nice-day.today", false, 3, nullptr);
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(*result, std::vector<std::string>(
+                         {"hello", "world", "nice", "day", "today"}));
+}
+
+TEST_F(SnowballProcessorTokenizeTest, CaseConversion) {
+  auto result = processor_->Tokenize("HELLO World miXeD", false, 3, nullptr);
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(*result, std::vector<std::string>({"hello", "world", "mixed"}));
+}
+
+TEST_F(SnowballProcessorTokenizeTest, Utf8Support) {
+  auto result = processor_->Tokenize("hello \xe4\xb8\x96\xe7\x95\x8c test",
+                                     false, 3, nullptr);
+  ASSERT_TRUE(result.ok());
+  // 世界 is not punctuation — should be preserved as a token
+  EXPECT_EQ(*result, std::vector<std::string>(
+                         {"hello", "\xe4\xb8\x96\xe7\x95\x8c", "test"}));
+}
+
+TEST_F(SnowballProcessorTokenizeTest, TabsAndNewlines) {
+  auto result = processor_->Tokenize("hello\tworld\ntest", false, 3, nullptr);
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(*result, std::vector<std::string>({"hello", "world", "test"}));
+}
+
+TEST_F(SnowballProcessorTokenizeTest, InvalidUtf8ReturnsError) {
+  auto result = processor_->Tokenize("hello \xFF\xFE world", true, 3, nullptr);
+  EXPECT_FALSE(result.ok());
+  EXPECT_EQ(result.status().code(), absl::StatusCode::kInvalidArgument);
+  EXPECT_EQ(result.status().message(), "Invalid UTF-8");
+}
+
+TEST_F(SnowballProcessorTokenizeTest, StopWordsFiltered) {
+  // English default stop words include "the", "and"
+  auto processor = LanguageProcessor::Create(
+      data_model::LANGUAGE_ENGLISH,
+      GetDefaultPunctuation(data_model::LANGUAGE_ENGLISH),
+      {"the", "and", "or"});
+  auto result = processor->Tokenize("the cat and dog", false, 3, nullptr);
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(*result, std::vector<std::string>({"cat", "dog"}));
+}
+
+TEST_F(SnowballProcessorTokenizeTest, StemmingProducesStemMap) {
+  InProgressStemMap stem_map;
+  auto result = processor_->Tokenize("running jumps", true, 3, &stem_map);
+  ASSERT_TRUE(result.ok());
+  // Tokens are the original (lowercased) words, not stems
+  EXPECT_EQ(*result, std::vector<std::string>({"running", "jumps"}));
+  // Stem map records the mappings
+  EXPECT_TRUE(stem_map.contains("run"));
+  EXPECT_TRUE(stem_map.contains("jump"));
+}
+
+TEST_F(SnowballProcessorTokenizeTest, StemmingDisabledNoStemMap) {
+  InProgressStemMap stem_map;
+  auto result = processor_->Tokenize("running jumps", false, 3, &stem_map);
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(*result, std::vector<std::string>({"running", "jumps"}));
+  EXPECT_TRUE(stem_map.empty());
+}
+
+TEST_F(SnowballProcessorTokenizeTest, NonAsciiNotTreatedAsPunctuation) {
+  // Emoji is not punctuation — should stay as part of the word
+  auto result =
+      processor_->Tokenize("hello\xf0\x9f\x99\x82world", false, 3, nullptr);
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(*result, std::vector<std::string>({"hello\xf0\x9f\x99\x82world"}));
+}
+
+TEST_F(SnowballProcessorTokenizeTest, CustomPunctuation) {
+  // Create processor with minimal punctuation (only space and comma)
+  auto processor =
+      LanguageProcessor::Create(data_model::LANGUAGE_ENGLISH, " ,", {});
+  auto result =
+      processor->Tokenize("hello,world!this-is_a.test", false, 3, nullptr);
+  ASSERT_TRUE(result.ok());
+  // Only space and comma split — everything else stays in the token
+  EXPECT_EQ(*result,
+            std::vector<std::string>({"hello", "world!this-is_a.test"}));
+}
+
+TEST_F(SnowballProcessorTokenizeTest, LongWord) {
+  std::string long_word(1000, 'a');
+  auto result = processor_->Tokenize(long_word, true, 3, nullptr);
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(*result, std::vector<std::string>({long_word}));
+}
+
+TEST_F(SnowballProcessorTokenizeTest, EmptyStopWordsAllWordsPassThrough) {
+  auto processor = LanguageProcessor::Create(
+      data_model::LANGUAGE_ENGLISH,
+      GetDefaultPunctuation(data_model::LANGUAGE_ENGLISH), {});
+  auto result = processor->Tokenize(
+      "hello, world! testing 123 with-dashes and/or symbols", true, 3, nullptr);
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(*result, std::vector<std::string>({"hello", "world", "testing",
+                                               "123", "with", "dashes", "and",
+                                               "or", "symbols"}));
+}
+
+TEST_F(SnowballProcessorTokenizeTest, MultiBytePunctuation) {
+  // Arabic comma ، (U+060C) as punctuation must split correctly without
+  // corrupting Arabic text (all Arabic letters U+0600..U+06FF share lead byte
+  // 0xD8 — byte-level splitting would shred them).
+  auto processor = LanguageProcessor::Create(data_model::LANGUAGE_ENGLISH,
+                                             "\xd8\x8c",  // ، U+060C only
+                                             {});
+  auto result = processor->Tokenize("hello\xd8\x8cworld", false, 4, nullptr);
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(*result, std::vector<std::string>({"hello", "world"}));
+
+  // Arabic text split on whitespace (not on the shared 0xD8 byte)
+  // Uses English processor with custom punctuation to isolate the multi-byte
+  // handling in BuildPunctuationSet — avoids Arabic stop words/NFKC/stemming
+  // confounding the result.
+  result = processor->Tokenize(
+      "\xd9\x85\xd8\xb1\xd8\xad\xd8\xa8\xd8\xa7 "
+      "\xd8\xa8\xd8\xa7\xd9\x84\xd8\xb9\xd8\xa7\xd9\x84\xd9\x85",
+      false, 4, nullptr);
+  ASSERT_TRUE(result.ok());
+  // مرحبا بالعالم → two tokens
+  EXPECT_EQ(result->size(), 2);
+}
+
+TEST_F(SnowballProcessorTokenizeTest, EscapedMultiBytePunctuation) {
+  // Backslash-escaped Arabic comma should be retained in the token
+  auto processor = LanguageProcessor::Create(data_model::LANGUAGE_ENGLISH,
+                                             "\xd8\x8c",  // ، U+060C only
+                                             {});
+  auto result = processor->Tokenize("hello\\\xd8\x8cworld", false, 4, nullptr);
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(*result, std::vector<std::string>({"hello\xd8\x8cworld"}));
+}
+
+TEST_F(SnowballProcessorTokenizeTest,
+       CanonicallyEquivalentFormsTokenizeIdentically) {
+  // Precomposed "café" (é = U+00E9, C3 A9) and decomposed "café"
+  // (e + combining acute U+0301, 65 CC 81) must produce the same token
+  // after NFC normalization.
+  auto processor = LanguageProcessor::Create(
+      data_model::LANGUAGE_ENGLISH,
+      GetDefaultPunctuation(data_model::LANGUAGE_ENGLISH), {});
+
+  auto precomposed = processor->Tokenize("caf\xc3\xa9", false, 3, nullptr);
+  auto decomposed = processor->Tokenize("cafe\xcc\x81", false, 3, nullptr);
+  ASSERT_TRUE(precomposed.ok());
+  ASSERT_TRUE(decomposed.ok());
+  ASSERT_EQ(precomposed->size(), 1u);
+  ASSERT_EQ(decomposed->size(), 1u);
+  EXPECT_EQ((*precomposed)[0], (*decomposed)[0]);
+  EXPECT_EQ((*precomposed)[0], "caf\xc3\xa9");
+}
+
+// =============================================================================
+// Arabic NFKC normalization — verifies presentation forms collapse to base
+// forms during tokenization (exercises the norm_form_ = NFKC code path).
+// =============================================================================
+
+TEST(SnowballProcessorArabicNFKCTest, PresentationFormsCollapseToBase) {
+  auto processor = LanguageProcessor::Create(
+      data_model::LANGUAGE_ARABIC,
+      GetDefaultPunctuation(data_model::LANGUAGE_ARABIC), {});
+
+  // Token with presentation form: ﻛﺘﺎﺏ (using presentation forms)
+  // After NFKC: كتاب (base forms)
+  std::string presentation_form =
+      "\xef\xbb\x9b\xef\xba\x98\xef\xba\x8e\xef\xba\x8f";
+  auto result = processor->Tokenize(presentation_form, false, 3, nullptr);
+  ASSERT_TRUE(result.ok());
+  ASSERT_EQ(result->size(), 1);
+
+  // Same word with base characters: كتاب
+  std::string base_form = "\xd9\x83\xd8\xaa\xd8\xa7\xd8\xa8";
+  auto result2 = processor->Tokenize(base_form, false, 3, nullptr);
+  ASSERT_TRUE(result2.ok());
+  ASSERT_EQ(result2->size(), 1);
+
+  // Both should produce the same normalized token
+  EXPECT_EQ((*result)[0], (*result2)[0]);
 }
 
 }  // namespace valkey_search::indexes::text

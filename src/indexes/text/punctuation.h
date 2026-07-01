@@ -21,9 +21,13 @@
 #ifndef VALKEYSEARCH_SRC_INDEXES_TEXT_PUNCTUATION_H_
 #define VALKEYSEARCH_SRC_INDEXES_TEXT_PUNCTUATION_H_
 
+#include <bitset>
+#include <cstdint>
 #include <string>
 
+#include "absl/container/flat_hash_set.h"
 #include "src/index_schema.pb.h"
+#include "src/utils/scanner.h"
 
 namespace valkey_search::indexes::text {
 
@@ -117,7 +121,7 @@ inline const std::string kArabicPunctuation = kAsciiPunctuation + kArabicExtra;
 
 // Returns the default punctuation string for the given language.
 // Returns English (ASCII-only) punctuation for LANGUAGE_UNSPECIFIED.
-inline const std::string &GetDefaultPunctuation(data_model::Language language) {
+inline const std::string& GetDefaultPunctuation(data_model::Language language) {
   switch (language) {
     case data_model::LANGUAGE_FRENCH:
       return kFrenchPunctuation;
@@ -146,6 +150,41 @@ inline const std::string &GetDefaultPunctuation(data_model::Language language) {
     default:
       return kEnglishPunctuation;
   }
+}
+
+// Punctuation lookup set. ASCII code points use a bitset; non-ASCII code
+// points (e.g. Arabic ، U+060C) use a hash set.
+struct PunctuationSet {
+  std::bitset<128> ascii;                   // Code points 0x00..0x7F
+  absl::flat_hash_set<uint32_t> non_ascii;  // Code points >= 0x80
+
+  bool Contains(uint32_t cp) const {
+    if (utils::Scanner::IsAscii(cp)) return ascii[cp];
+    return non_ascii.contains(cp);
+  }
+};
+
+// Build a PunctuationSet from a punctuation string. Iterates as code points
+// (not bytes) so multi-byte chars like U+060C are stored correctly.
+// ASCII whitespace and control characters are always included as boundaries.
+inline PunctuationSet BuildPunctuationSet(const std::string& punctuation) {
+  PunctuationSet result;
+  for (int i = 0; i < 128; ++i) {
+    if (std::isspace(static_cast<unsigned char>(i)) ||
+        std::iscntrl(static_cast<unsigned char>(i))) {
+      result.ascii.set(i);
+    }
+  }
+  utils::Scanner scanner(punctuation);
+  utils::Scanner::Char cp;
+  while ((cp = scanner.NextUtf8()) != utils::Scanner::kEOF) {
+    if (utils::Scanner::IsAscii(cp)) {
+      result.ascii.set(cp);
+    } else {
+      result.non_ascii.insert(cp);
+    }
+  }
+  return result;
 }
 
 }  // namespace valkey_search::indexes::text

@@ -929,7 +929,7 @@ FilterParser::ParseTextTokens(
 // 14. Numeric filters are inclusive. Exclusive min or max are expressed with (
 // prepended to the number, for example, [(100 (200].
 absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
-    uint32_t level) {
+    uint32_t level, const std::optional<std::string>& default_field) {
   if (level++ >= options::GetQueryStringDepth().GetValue()) {
     return absl::InvalidArgumentError("Query string is too complex");
   }
@@ -950,7 +950,8 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
     std::unique_ptr<query::Predicate> predicate;
     bool negate = Match('-');
     if (Match('(')) {
-      VMSDK_ASSIGN_OR_RETURN(auto sub_result, ParseExpression(level));
+      VMSDK_ASSIGN_OR_RETURN(auto sub_result,
+                             ParseExpression(level, default_field));
       if (!Match(')')) {
         return absl::InvalidArgumentError(
             absl::StrCat("Expected ')' after expression got '",
@@ -983,7 +984,8 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
       if (negate) {
         return UnexpectedChar(expression_, pos_ - 1);
       }
-      VMSDK_ASSIGN_OR_RETURN(auto sub_result, ParseExpression(level));
+      VMSDK_ASSIGN_OR_RETURN(auto sub_result,
+                             ParseExpression(level, default_field));
       predicate = std::move(sub_result.prev_predicate);
       if (!predicate) {
         return absl::InvalidArgumentError("Missing OR term");
@@ -1005,7 +1007,7 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
       // bracket and we do not want stale results to propagate.
       result.not_rightmost_bracket = true;
     } else {
-      std::optional<std::string> field_name;
+      std::optional<std::string> field_name = default_field;
       bool non_text = false;
       if (Peek() == '@') {
         std::string parsed_field;
@@ -1018,6 +1020,22 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
         } else if (Match('{')) {
           node_count_++;
           VMSDK_ASSIGN_OR_RETURN(predicate, ParseTagPredicate(*field_name));
+          non_text = true;
+        } else if (Match('(')) {
+          // Field-scoped group: @field:(a|b|c) applies the field to each text
+          // term inside the parentheses.
+          VMSDK_ASSIGN_OR_RETURN(auto sub_result,
+                                 ParseExpression(level, field_name));
+          if (!Match(')')) {
+            return absl::InvalidArgumentError(absl::StrCat(
+                "Expected ')' after expression got '",
+                expression_.substr(pos_, 1), "'. Position: ", pos_));
+          }
+          predicate = std::move(sub_result.prev_predicate);
+          if (!predicate) {
+            return absl::InvalidArgumentError(
+                absl::StrCat("Empty brackets detected at Position: ", pos_ - 1));
+          }
           non_text = true;
         }
       }

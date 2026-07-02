@@ -1747,6 +1747,68 @@ INSTANTIATE_TEST_SUITE_P(
             .evaluate_success = true,  // "a|b" should match, numeric doesn't
             .key = "key_pipe",
         },
+        // =================================================================
+        // Field-scoped text group: @field:(a|b|c) — issue #1214
+        // =================================================================
+        {
+            .test_name = "text_field_group_or",
+            .filter = "@text_field1:(word|missing)",
+            .create_success = true,
+            .evaluate_success = true,  // key1 text_field1 contains "word"
+            .key = "key1",
+            .expected_tree_structure = "OR{\n"
+                                       "  TEXT-TERM(\"word\", field_mask=1)\n"
+                                       "  TEXT-TERM(\"missing\", field_mask=1)\n"
+                                       "}\n",
+        },
+        {
+            .test_name = "text_field_group_single_term",
+            .filter = "@text_field1:(word)",
+            .create_success = true,
+            .evaluate_success = true,
+            .key = "key1",
+            .expected_tree_structure = "TEXT-TERM(\"word\", field_mask=1)\n",
+        },
+        {
+            .test_name = "text_field_group_scopes_field",
+            // Bare terms inside the group are scoped to text_field1 (mask=1),
+            // not all text fields (mask=3).
+            .filter = "@text_field2:(word)",
+            .create_success = true,
+            .evaluate_success = true,
+            .key = "key1",
+            .expected_tree_structure = "TEXT-TERM(\"word\", field_mask=2)\n",
+        },
+        {
+            .test_name = "text_field_group_and",
+            .filter = "@text_field1:(hello name)",
+            .create_success = true,
+            .evaluate_success = true,  // both words present in text_field1
+            .key = "key1",
+            .expected_tree_structure = "AND{\n"
+                                       "  TEXT-TERM(\"hello\", field_mask=1)\n"
+                                       "  TEXT-TERM(\"name\", field_mask=1)\n"
+                                       "}\n",
+        },
+        {
+            .test_name = "text_field_group_inner_override",
+            // Explicit field inside the group overrides the scoped default.
+            .filter = "@text_field1:(word | @text_field2:hello)",
+            .create_success = true,
+            .evaluate_success = true,
+            .key = "key1",
+            .expected_tree_structure = "OR{\n"
+                                       "  TEXT-TERM(\"word\", field_mask=1)\n"
+                                       "  TEXT-TERM(\"hello\", field_mask=2)\n"
+                                       "}\n",
+        },
+        {
+            .test_name = "text_field_group_empty",
+            .filter = "@text_field1:()",
+            .create_success = false,
+            .create_expected_error_message =
+                "Empty brackets detected at Position: 14",
+        },
     }),
     [](const TestParamInfo<FilterTestCase> &info) {
       return info.param.test_name;

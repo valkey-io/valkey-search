@@ -128,7 +128,7 @@ class TestRdbLoadErrorCleanup(ValkeySearchTestCaseDebugMode):
                 n = replica.client.execute_command(
                     "FT._DEBUG", "PAUSEPOINT", "TEST", self.PAUSEPOINT_NAME)
                 return int(n) >= 1
-            except Exception:
+            except (TypeError, ValueError):
                 return False
 
         try:
@@ -136,6 +136,17 @@ class TestRdbLoadErrorCleanup(ValkeySearchTestCaseDebugMode):
                 lambda: error_logged() and workers_paused(),
                 timeout=60)
         except Exception:
+            # If the replica died during the waiter loop, that IS the crash
+            # we're testing for. Detect it here so we fail loudly instead of
+            # falling through to pytest.skip below.
+            try:
+                replica.client.ping()
+            except Exception as exc:
+                pytest.fail(
+                    "Replica died before the bug window could be verified. "
+                    "This is the crash the test is designed to catch, but it "
+                    f"happened during setup instead of at the release point: "
+                    f"{exc!r}")
             err = error_logged()
             paused = workers_paused()
             load_ran = replica.does_logfile_contains("Loading Index Extension")

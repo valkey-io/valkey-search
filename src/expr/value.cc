@@ -12,6 +12,7 @@
 #include <sstream>
 
 #include "src/utils/scanner.h"
+#include "src/valkey_search_options.h"
 
 // #define DBG std::cerr
 #define DBG 0 && std::cerr
@@ -279,19 +280,23 @@ Value FuncMul(const Value& l, const Value& r) {
 Value FuncDiv(const Value& l, const Value& r) {
   auto lv = l.AsDouble();
   auto rv = r.AsDouble();
-  if (lv && rv) {
-    if (rv.value() == 0) {
-      // if (std::signbit(lv.value())) {
-      return Value(std::nan(""));
-      //} else {
-      //  return Value(-std::abs(std::nan("nan")));
-      //}
-    } else {
-      return Value(lv.value() / rv.value());
-    }
-  } else {
+  if (!lv || !rv) {
     return Value(Value::Nil("Divide requires numeric operands"));
   }
+  // Redisearch returns IEEE 754 division semantics for divide-by-zero:
+  // positive/0 -> +inf, negative/0 -> -inf, 0/0 -> NaN. Valkey-search 1.2.0
+  // and earlier collapsed all divide-by-zero cases to a plain NaN, which is
+  // observably different from Redisearch. Gate the fixed behavior behind
+  // search.emulate-release per COMPATIBILITY.md.
+  return VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 2, 1, "ft_aggregate_divide_by_zero",
+      [&] { return Value(lv.value() / rv.value()); },
+      [&] {
+        if (rv.value() == 0) {
+          return Value(std::nan(""));
+        }
+        return Value(lv.value() / rv.value());
+      });
 }
 
 Value FuncPower(const Value& l, const Value& r) {

@@ -12,8 +12,8 @@ ALL_ANSWER_FILES = [g["answers"] for g in GENERATORS]
 CLUSTER_ANSWER_FILES = [g["answers"] for g in GENERATORS if g["cluster"]]
 TEST_MARKER = "*" * 100
 from valkey_search_test_case import (
-    ValkeySearchClusterTestCase,
-    ValkeySearchTestCaseBase,
+    ValkeySearchClusterTestCaseDebugMode,
+    ValkeySearchTestCaseDebugMode,
 )
 from valkeytestframework.conftest import resource_port_tracker
 from utils import IndexingTestHelper
@@ -537,7 +537,7 @@ def _load_answers_with_hash_check(answer_file_name):
     return answers
 
 
-class TestAnswersCMD(ValkeySearchTestCaseBase):
+class TestAnswersCMD(ValkeySearchTestCaseDebugMode):
     @pytest.mark.parametrize("answers", ALL_ANSWER_FILES)
     def test_answers(self, answers):
         global client, data_set
@@ -554,6 +554,18 @@ class TestAnswersCMD(ValkeySearchTestCaseBase):
 
         data_set = None
         client = self.server.get_new_client()
+        # Pin VK to the most-compatible behavior shipped by the module so the
+        # answer comparison reflects every fix (see COMPATIBILITY.md
+        # "Compatibility Defects"). The configured upper bound on
+        # search.emulate-release is logical infinity, but the production
+        # validator caps it at the current kModuleVersion; the cap is lifted
+        # while search.debug-mode is on (set at module load by the
+        # *DebugMode base class), so the infinity value below is accepted.
+        # Failure here means none of the compatibility fixes will run during
+        # the test, which would silently produce a misleading baseline-style
+        # failure mode — fail loudly instead.
+        client.execute_command(
+            "CONFIG", "SET", "search.emulate-release", "65535.255.255")
         for i in range(len(answers)):
             data_set = do_answer(client, answers[i], data_set)
 
@@ -596,7 +608,7 @@ class TestAnswersCMD(ValkeySearchTestCaseBase):
     '''
 
 # TODO: fix cluster mode test failures
-class TestAnswersCME(ValkeySearchClusterTestCase):
+class TestAnswersCME(ValkeySearchClusterTestCaseDebugMode):
     @pytest.mark.parametrize("answers", CLUSTER_ANSWER_FILES)
     def test_answers(self, answers):
         global correct_answers, wrong_answers, failed_tests, passed_tests
@@ -612,6 +624,13 @@ class TestAnswersCME(ValkeySearchClusterTestCase):
 
         data_set = None
         cluster_client = self.new_cluster_client()
+        # Pin VK to the most-compatible behavior on every primary in the
+        # cluster (see TestAnswersCMD comment above). debug-mode is enabled
+        # at module load by the *DebugMode base class. Fail loudly on error
+        # so a misconfigured fixture can't produce a silent baseline run.
+        for rg in self.replication_groups:
+            rg.primary.client.execute_command(
+                "CONFIG", "SET", "search.emulate-release", "65535.255.255")
 
         for expected in answers:
             data_set = do_answer_cluster(

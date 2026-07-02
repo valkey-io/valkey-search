@@ -151,8 +151,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     size_links_level0_ = maxM0_ * sizeof(tableint) + sizeof(linklistsizeint);
     offsetData_ =
         (size_links_level0_ + alignof(char *) - 1) & ~(alignof(char *) - 1);
-    size_data_per_element_ =
-        offsetData_ + sizeof(char *) + sizeof(labeltype);
+    size_data_per_element_ = offsetData_ + sizeof(char *) + sizeof(labeltype);
     serialize_size_data_per_element_ =
         size_links_level0_ + vector_size_ + sizeof(labeltype);
     label_offset_ = offsetData_ + sizeof(char *);
@@ -397,16 +396,16 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       if (bare_bone_search) {
         flag_stop_search = candidate_dist > lowerBound;
       } else {
-        if (isCancelled && isCancelled->isCancelled()) { // VALKEYSEARCH
-          flag_stop_search = true; // VALKEYSEARCH
-        } else // VALKEYSEARCH
-        if (stop_condition) {
-          flag_stop_search =
-              stop_condition->should_stop_search(candidate_dist, lowerBound);
-        } else {
-          flag_stop_search =
-              candidate_dist > lowerBound && top_candidates.size() == ef;
-        }
+        if (isCancelled && isCancelled->isCancelled()) {  // VALKEYSEARCH
+          flag_stop_search = true;                        // VALKEYSEARCH
+        } else                                            // VALKEYSEARCH
+          if (stop_condition) {
+            flag_stop_search =
+                stop_condition->should_stop_search(candidate_dist, lowerBound);
+          } else {
+            flag_stop_search =
+                candidate_dist > lowerBound && top_candidates.size() == ef;
+          }
       }
       if (flag_stop_search) {
         break;
@@ -423,80 +422,125 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         metric_distance_computations += size;
       }
 
+      // ---- Three-phase prefetch pipeline -----------------------------------
+      // A candidate's vector lives behind a pointer indirection at offsetData_,
+      // so reaching it is a two-deep pointer chase (slot -> vec). Because the
+      // order of visitation to vectors is determined by the graph structure,
+      // the vector addresses look random -- defeating any HW prefetching and
+      // substantially increasing latency. Fusing all of that into one loop
+      // forces the chase to serialize per candidate. Instead we fission the
+      // expansion into three passes, each hiding exactly one level of memory
+      // latency with its own lookahead:
+      //   Phase 1 - probe visited_array (random gather), collect unvisited ids.
+      //   Phase 2 - resolve the slot indirection into concrete vector pointers.
+      //   Phase 3 - compute distances + maintain the candidate heaps.
+      // The first two are latency-bound gathers (deep lookahead helps); the
+      // third is bandwidth-bound (lookahead of 1, head only, HW streams tail).
+      // Scratch is thread_local so reader threads each keep one reusable
+      // buffer.
 #ifdef USE_PREFETCH
-      __builtin_prefetch((char *)(visited_array + *(data + 1)), 0, 3);
-      __builtin_prefetch((char *)(visited_array + *(data + 1) + 64), 0, 3);
-      __builtin_prefetch((*data_level0_memory_)[(*(data + 1))] + offsetData_, 0,
-                         3);
-      __builtin_prefetch((char *)(data + 2), 0, 3);
+      constexpr int kVisitedLookahead = 4;  // P1
+      constexpr int kSlotLookahead = 4;     // P2
+      constexpr int kVectorLookahead = 1;   // P3
 #endif
+      thread_local std::vector<tableint> unvisited;
+      thread_local std::vector<char *> vptrs;
+      unvisited.clear();
 
+      // Phase 1: filter visited. Preserve neighbor-list order so the heap/
+      // lowerBound evolution in phase 3 is identical to the fused loop.
       for (size_t j = 1; j <= size; j++) {
-        int candidate_id = *(data + j);
-//                    if (candidate_id == 0) continue;
 #ifdef USE_PREFETCH
-        if (j + 1 < size) {
-          __builtin_prefetch((char *)(visited_array + *(data + j + 1)), 0, 3);
+        if (j + kVisitedLookahead <= size)
           __builtin_prefetch(
-              (*data_level0_memory_)[(*(data + j + 1))] + offsetData_, 0, 3);
+              (char *)(visited_array + *(data + j + kVisitedLookahead)), 0, 0);
+#endif
+        tableint candidate_id = (tableint) * (data + j);
+        if (visited_array[candidate_id] != visited_array_tag) {
+          visited_array[candidate_id] = visited_array_tag;
+          unvisited.push_back(candidate_id);
+        }
+      }
+      const size_t n_unvisited = unvisited.size();
+
+      // Phase 2: resolve slot indirection. Prefetch the pointer slot ahead,
+      // then dereference the now-resident slot to the actual vector address.
+      vptrs.resize(n_unvisited);
+      for (size_t k = 0; k < n_unvisited; k++) {
+#ifdef USE_PREFETCH
+        if (k + kSlotLookahead < n_unvisited)
+          __builtin_prefetch(
+              (*data_level0_memory_)[unvisited[k + kSlotLookahead]] +
+                  offsetData_,
+              0, 0);
+#endif
+        vptrs[k] =
+            *(char **)((*data_level0_memory_)[unvisited[k]] + offsetData_);
+      }
+
+      // Phase 3: distance compute. Prefetch the head (~3 lines, two 128B
+      // sectors) of the next vector to cover the cold head and bridge the HW
+      // streamer's training window; the streamer covers the multi-line tail.
+      for (size_t k = 0; k < n_unvisited; k++) {
+#ifdef USE_PREFETCH
+        if (k + kVectorLookahead < n_unvisited) {
+          char *h = vptrs[k + kVectorLookahead];
+          __builtin_prefetch(h, 0, 0);
+          __builtin_prefetch(h + 128, 0, 0);
         }
 #endif
-        if (!(visited_array[candidate_id] == visited_array_tag)) {
-          visited_array[candidate_id] = visited_array_tag;
+        tableint candidate_id = unvisited[k];
+        char *currObj1 = vptrs[k];
+        dist_t dist = fstdistfunc_(data_point, currObj1, dist_func_param_);
 
-          char *currObj1 = (getDataByInternalId(candidate_id));
-          dist_t dist = fstdistfunc_(data_point, currObj1, dist_func_param_);
+        bool flag_consider_candidate;
+        if (!bare_bone_search && stop_condition) {
+          flag_consider_candidate =
+              stop_condition->should_consider_candidate(dist, lowerBound);
+        } else {
+          flag_consider_candidate =
+              top_candidates.size() < ef || lowerBound > dist;
+        }
 
-          bool flag_consider_candidate;
-          if (!bare_bone_search && stop_condition) {
-            flag_consider_candidate =
-                stop_condition->should_consider_candidate(dist, lowerBound);
-          } else {
-            flag_consider_candidate =
-                top_candidates.size() < ef || lowerBound > dist;
-          }
-
-          if (flag_consider_candidate) {
-            candidate_set.emplace(-dist, candidate_id);
+        if (flag_consider_candidate) {
+          candidate_set.emplace(-dist, candidate_id);
 #ifdef USE_PREFETCH
-            __builtin_prefetch(
-                (*data_level0_memory_)[candidate_set.top().second] +
-                    offsetLevel0_,  ///////////
-                0, 3);              ////////////////////////
+          __builtin_prefetch(
+              (*data_level0_memory_)[candidate_set.top().second] +
+                  offsetLevel0_,
+              0, 3);
 #endif
 
-            if (bare_bone_search ||
-                (!isMarkedDeleted(candidate_id) &&
-                 ((!isIdAllowed) ||
-                  (*isIdAllowed)(getExternalLabel(candidate_id))))) {
-              top_candidates.emplace(dist, candidate_id);
-              if (!bare_bone_search && stop_condition) {
-                stop_condition->add_point_to_result(
-                    getExternalLabel(candidate_id), currObj1, dist);
-              }
-            }
-
-            bool flag_remove_extra = false;
+          if (bare_bone_search ||
+              (!isMarkedDeleted(candidate_id) &&
+               ((!isIdAllowed) ||
+                (*isIdAllowed)(getExternalLabel(candidate_id))))) {
+            top_candidates.emplace(dist, candidate_id);
             if (!bare_bone_search && stop_condition) {
+              stop_condition->add_point_to_result(
+                  getExternalLabel(candidate_id), currObj1, dist);
+            }
+          }
+
+          bool flag_remove_extra = false;
+          if (!bare_bone_search && stop_condition) {
+            flag_remove_extra = stop_condition->should_remove_extra();
+          } else {
+            flag_remove_extra = top_candidates.size() > ef;
+          }
+          while (flag_remove_extra) {
+            tableint id = top_candidates.top().second;
+            top_candidates.pop();
+            if (!bare_bone_search && stop_condition) {
+              stop_condition->remove_point_from_result(
+                  getExternalLabel(id), getDataByInternalId(id), dist);
               flag_remove_extra = stop_condition->should_remove_extra();
             } else {
               flag_remove_extra = top_candidates.size() > ef;
             }
-            while (flag_remove_extra) {
-              tableint id = top_candidates.top().second;
-              top_candidates.pop();
-              if (!bare_bone_search && stop_condition) {
-                stop_condition->remove_point_from_result(
-                    getExternalLabel(id), getDataByInternalId(id), dist);
-                flag_remove_extra = stop_condition->should_remove_extra();
-              } else {
-                flag_remove_extra = top_candidates.size() > ef;
-              }
-            }
-
-            if (!top_candidates.empty())
-              lowerBound = top_candidates.top().first;
           }
+
+          if (!top_candidates.empty()) lowerBound = top_candidates.top().first;
         }
       }
     }
@@ -1567,16 +1611,16 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
   std::priority_queue<std::pair<dist_t, labeltype>> searchKnn(
       const void *query_data, size_t k,
       BaseFilterFunctor *isIdAllowed = nullptr,
-      BaseCancellationFunctor *isCancelled = nullptr // VALKEYSEARCH
-    ) const {
+      BaseCancellationFunctor *isCancelled = nullptr  // VALKEYSEARCH
+  ) const {
     return searchKnn(query_data, k, std::nullopt, isIdAllowed, isCancelled);
   }
 
   std::priority_queue<std::pair<dist_t, labeltype>> searchKnn(
       const void *query_data, size_t k, std::optional<size_t> ef_runtime,
       BaseFilterFunctor *isIdAllowed = nullptr,
-      BaseCancellationFunctor *isCancelled = nullptr // VALKEYSEARCH
-    ) const {
+      BaseCancellationFunctor *isCancelled = nullptr  // VALKEYSEARCH
+  ) const {
     std::priority_queue<std::pair<dist_t, labeltype>> result;
     if (cur_element_count_ == 0) return result;
 
@@ -1616,7 +1660,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                         std::vector<std::pair<dist_t, tableint>>,
                         CompareByFirst>
         top_candidates;
-    bool bare_bone_search = !num_deleted_ && !isIdAllowed && !isCancelled; // VALKEYSEARCH
+    bool bare_bone_search =
+        !num_deleted_ && !isIdAllowed && !isCancelled;  // VALKEYSEARCH
     if (bare_bone_search) {
       top_candidates = searchBaseLayerST<true>(
           currObj, query_data, std::max(ef_runtime.value_or(ef_), k),
@@ -1681,8 +1726,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                         std::vector<std::pair<dist_t, tableint>>,
                         CompareByFirst>
         top_candidates;
-    top_candidates = searchBaseLayerST<false>(currObj, query_data, 0,
-                                              isIdAllowed, nullptr, &stop_condition);
+    top_candidates = searchBaseLayerST<false>(
+        currObj, query_data, 0, isIdAllowed, nullptr, &stop_condition);
 
     size_t sz = top_candidates.size();
     result.resize(sz);

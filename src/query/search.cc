@@ -18,6 +18,7 @@
 #include <optional>
 #include <queue>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -776,12 +777,6 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
         break;
       }
     }
-    // Sort by score descending (higher = more relevant) before LIMIT is
-    // applied.
-    std::stable_sort(
-        borrowed.begin(), borrowed.end(),
-        [](const indexes::BorrowedNeighbor &a,
-           const indexes::BorrowedNeighbor &b) { return a.score > b.score; });
   } else {
     EvaluatePrefilteredKeys(parameters, entries_fetchers,
                             std::move(results_appender), qualified_entries,
@@ -790,11 +785,6 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
   if (fetch_limited) {
     nonvector_results_fetched_limited_count.Increment();
   }
-  // Sort by score descending before LIMIT is applied.
-  std::stable_sort(
-      borrowed.begin(), borrowed.end(),
-      [](const indexes::BorrowedNeighbor &a,
-         const indexes::BorrowedNeighbor &b) { return a.score > b.score; });
   return borrowed;
 }
 
@@ -892,6 +882,20 @@ void SearchResult::TrimResults(std::vector<T> &vec,
   SerializationRange range = GetSerializationRange(parameters, vec.size());
   size_t max_needed = static_cast<size_t>(
       range.end_index * options::GetSearchResultBufferMultiplier());
+  // Sort by score descending. For non-vector results (BorrowedNeighbor), use
+  // partial_sort to only order the elements we'll actually keep.
+  if constexpr (std::is_same_v<T, indexes::BorrowedNeighbor>) {
+    auto cmp = [](const indexes::BorrowedNeighbor &a,
+                  const indexes::BorrowedNeighbor &b) {
+      return a.score > b.score;
+    };
+    size_t sort_limit = std::min(max_needed, vec.size());
+    if (sort_limit < vec.size()) {
+      std::partial_sort(vec.begin(), vec.begin() + sort_limit, vec.end(), cmp);
+    } else {
+      std::sort(vec.begin(), vec.end(), cmp);
+    }
+  }
   // In standalone mode, we can optimize by trimming from front first.
   // In cluster mode on remote searches on individual shards, we cannot trim
   // from the front yet because each shard produces X results. However, the

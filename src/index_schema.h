@@ -278,8 +278,6 @@ class IndexSchema : public KeyspaceEventSubscription,
   void MarkAsDestructing();
   bool IsMarkedDestructing() { return is_destructing_; };
   void ProcessMultiQueue();
-  void SubscribeToVectorExternalizer(absl::string_view attribute_identifier,
-                                     indexes::VectorBase *vector_index);
   uint64_t GetBackfillScannedKeyCount() const;
   uint64_t GetBackfillDbSize() const;
   InfoIndexPartitionData GetInfoIndexPartitionData() const;
@@ -474,11 +472,6 @@ class IndexSchema : public KeyspaceEventSubscription,
   };
 
   vmsdk::MainThreadAccessGuard<std::optional<BackfillJob>> backfill_job_;
-  absl::flat_hash_map<std::string, indexes::VectorBase *>
-      vector_externalizer_subscriptions_;
-  void VectorExternalizer(const Key &key,
-                          absl::string_view attribute_identifier,
-                          vmsdk::UniqueValkeyString &record);
 
   mutable Stats stats_;
 

@@ -145,6 +145,11 @@ static auto use_coordinator = config::BooleanBuilder(kUseCoordinator, false)
                                   .Hidden()  // can only be set during start-up
                                   .Build();
 
+// Enable vector sharing
+constexpr absl::string_view kEnableVectorSharing{"enable-vector-sharing"};
+static auto enable_vector_sharing =
+    config::BooleanBuilder(kEnableVectorSharing, true).Hidden().Build();
+
 // Not allowing replace delete is aligned with RediSearch
 constexpr absl::string_view kHNSWAllowReplaceDeleted{
     "hnsw-allow-replace-deleted"};
@@ -531,6 +536,10 @@ const vmsdk::config::Boolean &GetUseCoordinator() {
   return dynamic_cast<const vmsdk::config::Boolean &>(*use_coordinator);
 }
 
+const vmsdk::config::Boolean &GetEnableVectorSharing() {
+  return dynamic_cast<const vmsdk::config::Boolean &>(*enable_vector_sharing);
+}
+
 const vmsdk::config::Boolean &GetSkipIndexLoad() {
   return dynamic_cast<const vmsdk::config::Boolean &>(*rdb_load_skip_index);
 }
@@ -559,6 +568,7 @@ config::Boolean &GetHNSWAllowReplaceDeletedMutable() {
 absl::Status Reset() {
   VMSDK_RETURN_IF_ERROR(use_coordinator->SetValue(false));
   VMSDK_RETURN_IF_ERROR(rdb_load_skip_index->SetValue(false));
+  VMSDK_RETURN_IF_ERROR(enable_vector_sharing->SetValue(true));
   return absl::OkStatus();
 }
 

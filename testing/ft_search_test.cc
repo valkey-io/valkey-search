@@ -42,7 +42,7 @@
 #include "src/schema_manager.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
-#include "src/vector_externalizer.h"
+#include "src/vector_registry.h"
 #include "testing/common.h"
 #include "testing/coordinator/common.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -586,7 +586,7 @@ TEST_P(FTSearchTest, FTSearchTests) {
         return VALKEYMODULE_OK;
       });
   EXPECT_CALL(*kMockValkeyModule,
-              OpenKey(VectorExternalizer::Instance().GetCtx(),
+              OpenKey(VectorRegistry::Instance().GetCtx(),
                       An<ValkeyModuleString *>(), testing::_))
       .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
   EXPECT_CALL(*kMockValkeyModule,

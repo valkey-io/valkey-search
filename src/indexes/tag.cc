@@ -149,8 +149,7 @@ absl::StatusOr<bool> Tag::ModifyRecord(const InternedStringPtr& key,
   auto interned_data = StringInternStore::Intern(data);
   auto new_parsed_tags = ParseRecordTags(*interned_data, separator_);
   if (new_parsed_tags.empty()) {
-    [[maybe_unused]] auto res =
-        RemoveRecord(key, indexes::DeletionType::kIdentifier);
+    [[maybe_unused]] auto res = RemoveRecord(key, indexes::DeletionType::kNone);
     return false;
   }
   absl::MutexLock lock(&index_mutex_);

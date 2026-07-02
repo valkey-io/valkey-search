@@ -126,19 +126,17 @@ class MockTag : public indexes::Tag {
  public:
   MockTag(const data_model::TagIndex &tag_index_proto)
       : indexes::Tag(tag_index_proto) {}
-  MOCK_METHOD(std::unique_ptr<indexes::Tag::EntriesFetcher>, Search,
+  MOCK_METHOD(std::unique_ptr<indexes::EntriesFetcherBase>, Search,
               (const query::TagPredicate &predicate, bool negate),
               (const, override));
 };
 
 class TestedTagEntriesFetcher : public indexes::Tag::EntriesFetcher {
  public:
-  TestedTagEntriesFetcher(
-      size_t size, PatriciaTree<InternedStringPtr> &tree,
-      absl::flat_hash_set<PatriciaNode<InternedStringPtr> *> &entries,
-      bool negate, InternedStringSet &untracked_keys)
-      : indexes::Tag::EntriesFetcher(tree, entries, size, negate,
-                                     untracked_keys),
+  explicit TestedTagEntriesFetcher(size_t size)
+      : indexes::Tag::EntriesFetcher(/*matched_slots=*/{},
+                                     /*extras=*/{},
+                                     /*size=*/size),
         size_(size) {}
 
   size_t Size() const override { return size_; }
@@ -215,16 +213,11 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
 
   VMSDK_EXPECT_OK(index_schema->AddIndex("tag_index_100_15", "tag_index_100_15",
                                          tag_index_100_15));
-  static PatriciaTree<InternedStringPtr> tree(false);
-  static absl::flat_hash_set<PatriciaNode<InternedStringPtr> *> entries;
-  static InternedStringSet untracked_keys;
   EXPECT_CALL(*tag_index_100_15, Search(_, false)).WillRepeatedly([]() {
-    return std::make_unique<TestedTagEntriesFetcher>(15, tree, entries, false,
-                                                     untracked_keys);
+    return std::make_unique<TestedTagEntriesFetcher>(15);
   });
   EXPECT_CALL(*tag_index_100_15, Search(_, true)).WillRepeatedly([]() {
-    return std::make_unique<TestedTagEntriesFetcher>(85, tree, entries, false,
-                                                     untracked_keys);
+    return std::make_unique<TestedTagEntriesFetcher>(85);
   });
 }
 

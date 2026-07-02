@@ -171,7 +171,7 @@ std::unique_ptr<Numeric::EntriesFetcher> Numeric::Search(
 
 bool Numeric::EntriesFetcherIterator::NextKeys(
     const Numeric::EntriesRange& range, BTreeNumericIndex::ConstIterator& iter,
-    std::optional<InternedStringSet::const_iterator>& keys_iter) {
+    std::optional<KeySet::const_iterator>& keys_iter) {
   while (iter != range.second) {
     if (!keys_iter.has_value()) {
       keys_iter = iter->second.begin();
@@ -190,7 +190,7 @@ bool Numeric::EntriesFetcherIterator::NextKeys(
 Numeric::EntriesFetcherIterator::EntriesFetcherIterator(
     const EntriesRange& entries_range,
     const std::optional<EntriesRange>& additional_entries_range,
-    const InternedStringSet* untracked_keys)
+    const KeySet* untracked_keys)
     : entries_range_(entries_range),
       entries_iter_(entries_range_.first),
       additional_entries_range_(additional_entries_range),

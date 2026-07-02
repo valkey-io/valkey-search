@@ -16,6 +16,7 @@
 #include "libstemmer.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/memory_allocation.h"
+#include "vmsdk/src/memory_tracker.h"
 namespace valkey_search::indexes::text {
 
 namespace {
@@ -53,10 +54,10 @@ InvasivePtr<Postings> AddKeyToPostings(InvasivePtr<Postings> existing_postings,
 
 InvasivePtr<Postings> RemoveKeyFromPostings(
     InvasivePtr<Postings> existing_postings, const InternedStringPtr &key,
-    TextIndexMetadata *metadata) {
+    TextIndexMetadata *metadata, MemoryPool *position_pool = nullptr) {
   CHECK(existing_postings) << "Per-key tree became unaligned";
 
-  existing_postings->RemoveKey(key, metadata);
+  existing_postings->RemoveKey(key, metadata, position_pool);
 
   if (existing_postings->IsEmpty()) {
     metadata->num_unique_terms--;
@@ -230,8 +231,11 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
     }
 
     // Create FlatPositionMap from PositionMap
-    FlatPositionMap *flat_map =
-        FlatPositionMap::Create(pos_map, num_text_fields_);
+    FlatPositionMap *flat_map;
+    {
+      IsolatedMemoryScope scope(metadata_.position_memory_pool_);
+      flat_map = FlatPositionMap::Create(pos_map, num_text_fields_);
+    }
 
     // The updated target gets set in target_add_fn and later used in
     // target_set_fn, so that all trees point to the same postings object
@@ -247,8 +251,11 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
       }
       bool is_new_word = !existing;
 
-      updated_target =
-          AddKeyToPostings(std::move(existing), key, flat_map, &metadata_);
+      {
+        IsolatedMemoryScope scope(metadata_.postings_memory_pool_);
+        updated_target =
+            AddKeyToPostings(std::move(existing), key, flat_map, &metadata_);
+      }
 
       if (is_new_word) {
         absl::WriterMutexLock tree_lock(&text_index_mutex_);
@@ -283,6 +290,7 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
 
   // Map the key to the newly created per-key index
   {
+    IsolatedMemoryScope scope(metadata_.postings_memory_pool_);
     std::lock_guard<std::mutex> per_key_guard(per_key_text_indexes_mutex_);
     per_key_text_indexes_.emplace(key, std::move(key_index));
   }
@@ -320,8 +328,12 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
       }
 
       InvasivePtr<Postings> updated_target;
-      updated_target =
-          RemoveKeyFromPostings(std::move(existing), key, &metadata_);
+      {
+        IsolatedMemoryScope scope(metadata_.postings_memory_pool_);
+        updated_target = RemoveKeyFromPostings(
+            std::move(existing), key, &metadata_,
+            &metadata_.position_memory_pool_);
+      }
 
       if (!updated_target) {
         absl::WriterMutexLock tree_lock(&text_index_mutex_);
@@ -373,6 +385,39 @@ uint64_t TextIndexSchema::GetNumUniqueTerms() const {
 
 uint64_t TextIndexSchema::GetTotalTermFrequency() const {
   return metadata_.total_term_frequency.load();
+}
+
+uint64_t TextIndexSchema::GetPostingsMemoryUsage() const {
+  return static_cast<uint64_t>(
+      std::max(int64_t{0}, metadata_.postings_memory_pool_.GetUsage()));
+}
+
+uint64_t TextIndexSchema::GetPositionMemoryUsage() const {
+  return static_cast<uint64_t>(
+      std::max(int64_t{0}, metadata_.position_memory_pool_.GetUsage()));
+}
+
+uint64_t TextIndexSchema::GetRadixTreeMemoryUsage() const {
+  // Main shared prefix + suffix tree
+  uint64_t total = text_index_->GetPrefix().GetAllocSize();
+  auto suffix = text_index_->GetSuffix();
+  if (suffix.has_value()) {
+    total += suffix->get().GetAllocSize();
+  }
+  // Per-key rax trees (one per indexed document)
+  for (const auto &[key, key_index] : per_key_text_indexes_) {
+    total += key_index.GetPrefix().GetAllocSize();
+    auto key_suffix = key_index.GetSuffix();
+    if (key_suffix.has_value()) {
+      total += key_suffix->get().GetAllocSize();
+    }
+  }
+  return total;
+}
+
+uint64_t TextIndexSchema::GetTotalTextIndexMemoryUsage() const {
+  return GetPostingsMemoryUsage() + GetPositionMemoryUsage() +
+         GetRadixTreeMemoryUsage();
 }
 
 std::string TextIndexSchema::GetAllStemVariants(

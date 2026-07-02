@@ -74,7 +74,8 @@ class VectorRecord {
 };
 std::vector<char> NormalizeVector(absl::string_view record,
                                   float *magnitude = nullptr);
-std::vector<char> DenormalizeVector(absl::string_view record, float magnitude);
+std::vector<char> NormalizeVector(absl::string_view record,
+                                  float reciprocal_magnitude);
 
 template <typename T>
 T CalcMagnitude(const T *src, size_t size) {
@@ -167,8 +168,18 @@ absl::string_view LookupKeyByValue(
   }
 }
 
+struct TrackedKeyMetadata {
+  uint64_t internal_id;
+  // If normalize_ is false, this will be 1.0f. Otherwise, it will be the
+  // magnitude of the vector. If the magnitude is not initialized, it will
+  // be -inf (this is an intermediate state during backfill when
+  // transitioning from the old RDB format that didn't include magnitudes).
+  float magnitude;
+};
+
 class VectorBase : public IndexBase {
  public:
+  ~VectorBase() override;
   absl::StatusOr<bool> AddRecord(const InternedStringPtr &key,
                                  absl::string_view record) override
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
@@ -198,7 +209,7 @@ class VectorBase : public IndexBase {
   bool IsTracked(const InternedStringPtr &key) const override
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   bool IsUnTracked(const InternedStringPtr &key) const override;
-  void UnTrack(const InternedStringPtr &key) override;
+  void UnTrack(const InternedStringPtr &key) override {}
   absl::Status ForEachTrackedKey(
       absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn)
       const override ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
@@ -213,8 +224,6 @@ class VectorBase : public IndexBase {
       const InternedStringPtr &key,
       std::priority_queue<std::pair<float, hnswlib::labeltype>> &results,
       absl::flat_hash_set<const char *> &top_keys) const;
-  vmsdk::UniqueValkeyString NormalizeStringRecord(
-      vmsdk::UniqueValkeyString record) const override;
   template <typename T>
   absl::StatusOr<std::vector<Neighbor>> CreateReply(
       std::priority_queue<std::pair<T, hnswlib::labeltype>> &knn_res);
@@ -222,12 +231,12 @@ class VectorBase : public IndexBase {
       const InternedStringPtr &key) const;
   size_t GetVectorDataSize() const { return GetDataTypeSize() * dimensions_; }
 
-  InternedStringPtr InternVector(absl::string_view record,
-                                 std::optional<float> &magnitude);
   virtual uint64_t GetMaxInternalLabel() const { return 0; }
   virtual size_t GetLabelCount() const { return 0; }
   Allocator *GetVectorAllocator() const { return vector_allocator_.get(); }
   int GetDimensions() const { return dimensions_; }
+  vmsdk::UniqueValkeyString NormalizeStringRecord(
+      vmsdk::UniqueValkeyString record) const override;
 
  protected:
   VectorBase(IndexerType indexer_type, int dimensions,
@@ -245,7 +254,9 @@ class VectorBase : public IndexBase {
 #endif  // !SAN_BUILD
   {
   }
-
+  void RemoveRecordDueToError(const InternedStringPtr &key,
+                              std::optional<uint64_t> internal_id)
+      ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   bool IsValidSizeVector(absl::string_view record) const {
     return record.size() == GetVectorDataSize();
   }
@@ -255,13 +266,12 @@ class VectorBase : public IndexBase {
             std::unique_ptr<hnswlib::SpaceInterface<T>> &space);
 
   virtual absl::Status AddRecordImpl(
-      uint64_t internal_id, const std::shared_ptr<VectorRecord> &vector_record,
-      const std::vector<char> &norm_record) = 0;
-
+      uint64_t internal_id,
+      const std::shared_ptr<VectorRecord> &vector_record) = 0;
   virtual absl::Status RemoveRecordImpl(uint64_t internal_id) = 0;
   virtual absl::Status ModifyRecordImpl(
-      uint64_t internal_id, const std::shared_ptr<VectorRecord> &vector_record,
-      const std::vector<char> &norm_record) = 0;
+      uint64_t internal_id,
+      const std::shared_ptr<VectorRecord> &vector_record) = 0;
   virtual int RespondWithInfoImpl(ValkeyModuleCtx *ctx) const = 0;
 
   virtual size_t GetDataTypeSize() const = 0;
@@ -269,10 +279,7 @@ class VectorBase : public IndexBase {
       data_model::VectorIndex *vector_index_proto) const = 0;
   virtual absl::Status SaveIndexImpl(
       RDBChunkOutputStream chunked_out) const = 0;
-  void ExternalizeVector(ValkeyModuleCtx *ctx,
-                         const AttributeDataType *attribute_data_type,
-                         absl::string_view key_cstr,
-                         absl::string_view attribute_identifier);
+
   virtual std::shared_ptr<VectorRecord> &GetVectorLockFree(
       uint64_t internal_id) const = 0;
 
@@ -304,14 +311,6 @@ class VectorBase : public IndexBase {
       const InternedStringPtr &key) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
   absl::flat_hash_map<uint64_t, InternedStringPtr> key_by_internal_id_
       ABSL_GUARDED_BY(key_to_metadata_mutex_);
-  struct TrackedKeyMetadata {
-    uint64_t internal_id;
-    // If normalize_ is false, this will be 1.0f. Otherwise, it will be the
-    // magnitude of the vector. If the magnitude is not initialized, it will
-    // be -inf (this is an intermediate state during backfill when
-    // transitioning from the old RDB format that didn't include magnitudes).
-    float magnitude;
-  };
 
   InternedStringHashMap<TrackedKeyMetadata> tracked_metadata_by_key_
       ABSL_GUARDED_BY(key_to_metadata_mutex_);

@@ -48,8 +48,6 @@ namespace valkey_search {
 namespace {
 
 using testing::_;
-using testing::ByMove;
-using testing::Return;
 using testing::TestParamInfo;
 using testing::ValuesIn;
 using ::valkey_search::indexes::IndexerType;

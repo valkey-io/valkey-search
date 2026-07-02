@@ -49,9 +49,9 @@ class FTDropIndexTest
     : public ValkeySearchTestWithParam<MultiFtDropIndexTestCase> {};
 
 TEST_P(FTDropIndexTest, FTDropIndexTests) {
-  const MultiFtDropIndexTestCase& test_cases = GetParam();
+  const MultiFtDropIndexTestCase &test_cases = GetParam();
   for (bool use_thread_pool : {true, false}) {
-    for (const auto& test_case : test_cases.test_cases) {
+    for (const auto &test_case : test_cases.test_cases) {
       // Set up the data structures for the test case.
       ValkeyModuleCtx fake_ctx;
       vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 5);
@@ -60,7 +60,7 @@ TEST_P(FTDropIndexTest, FTDropIndexTests) {
           use_thread_pool ? &mutations_thread_pool : nullptr, false));
 
       data_model::IndexSchema index_schema_proto;
-      IndexSchema* test_index_schema_raw = nullptr;
+      IndexSchema *test_index_schema_raw = nullptr;
       if (test_case.index_schema_pbtxt.has_value()) {
         ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
             test_case.index_schema_pbtxt.value(), &index_schema_proto));
@@ -74,7 +74,7 @@ TEST_P(FTDropIndexTest, FTDropIndexTests) {
       }
 
       // Run the command.
-      std::vector<ValkeyModuleString*> cmd_argv;
+      std::vector<ValkeyModuleString *> cmd_argv;
       std::transform(test_case.argv.begin(), test_case.argv.end(),
                      std::back_inserter(cmd_argv),
                      [&fake_ctx](std::string val) {
@@ -243,14 +243,14 @@ INSTANTIATE_TEST_SUITE_P(
                 },
         },
     }),
-    [](const TestParamInfo<MultiFtDropIndexTestCase>& info) {
+    [](const TestParamInfo<MultiFtDropIndexTestCase> &info) {
       return info.param.test_name;
     });
 
 // Test replication behavior based on coordinator setting
 TEST_F(FTDropIndexTest, ReplicationBehaviorCoordinatorEnabled) {
   VMSDK_EXPECT_OK(
-      const_cast<vmsdk::config::Boolean&>(options::GetUseCoordinator())
+      const_cast<vmsdk::config::Boolean &>(options::GetUseCoordinator())
           .SetValue(true));
 
   data_model::IndexSchema index_schema_proto;
@@ -287,7 +287,7 @@ TEST_F(FTDropIndexTest, ReplicationBehaviorCoordinatorEnabled) {
   EXPECT_CALL(*kMockValkeyModule, ReplicateVerbatim(&fake_ctx_))
       .Times(0);  // Should NOT replicate when coordinator enabled
 
-  ValkeyModuleString* argv[2];
+  ValkeyModuleString *argv[2];
   argv[0] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.DROPINDEX");
   argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_idx");
 
@@ -299,7 +299,7 @@ TEST_F(FTDropIndexTest, ReplicationBehaviorCoordinatorEnabled) {
 
 TEST_F(FTDropIndexTest, ReplicationBehaviorCoordinatorDisabled) {
   VMSDK_EXPECT_OK(
-      const_cast<vmsdk::config::Boolean&>(options::GetUseCoordinator())
+      const_cast<vmsdk::config::Boolean &>(options::GetUseCoordinator())
           .SetValue(false));
 
   data_model::IndexSchema index_schema_proto;
@@ -336,7 +336,7 @@ TEST_F(FTDropIndexTest, ReplicationBehaviorCoordinatorDisabled) {
   EXPECT_CALL(*kMockValkeyModule, ReplicateVerbatim(&fake_ctx_))
       .Times(1);  // Should replicate when coordinator disabled
 
-  ValkeyModuleString* argv[2];
+  ValkeyModuleString *argv[2];
   argv[0] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.DROPINDEX");
   argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_idx");
 

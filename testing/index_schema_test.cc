@@ -1337,6 +1337,7 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
             keys.push_back(index);
             return TestValkeyModule_OpenKeyDefaultImpl(ctx, key, flags);
           });
+
   EXPECT_CALL(*kMockValkeyModule,
               HashGet(testing::_, VALKEYMODULE_HASH_CFIELDS, testing::_,
                       testing::An<ValkeyModuleString **>(),
@@ -1659,6 +1660,7 @@ class IndexSchemaFriendTest : public ValkeySearchTest {
   void TearDown() override {
     mutations_thread_pool.JoinWorkers();
     index_schema.reset();
+    hnsw_index.reset();
     ValkeySearchTest::TearDown();
   }
 
@@ -1955,6 +1957,39 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
   auto itr = index_schema->attributes_.find(attribute_identifier);
 
   EXPECT_FALSE(itr == index_schema->attributes_.end());
+  ValkeyModuleString *records[1000];
+  for (size_t i = 0; i < vectors.size(); ++i) {
+    records[i] = new ValkeyModuleString{
+        std::string((char *)&vectors[i][0], dimensions * sizeof(float))};
+  }
+  std::vector<size_t> keys;
+  keys.reserve(vectors.size());
+  EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
+      .WillRepeatedly(
+          [&keys, key_prefix = std::string(*key)](
+              ValkeyModuleCtx *ctx, ValkeyModuleString *key, int flags) {
+            auto key_str = vmsdk::ToStringView(key);
+            CHECK(absl::ConsumePrefix(&key_str, key_prefix));
+            int index;
+            CHECK(absl::SimpleAtoi(key_str, &index));
+            keys.push_back(index);
+            return TestValkeyModule_OpenKeyDefaultImpl(ctx, key, flags);
+          });
+  EXPECT_CALL(*kMockValkeyModule,
+              HashGet(testing::_, VALKEYMODULE_HASH_CFIELDS, testing::_,
+                      testing::An<ValkeyModuleString **>(),
+                      testing::TypedEq<void *>(nullptr)))
+      .WillRepeatedly([&records, &keys](ValkeyModuleKey *, int, const char *,
+                                        ValkeyModuleString **value_out,
+                                        void *) {
+        static size_t key_i = 0;
+        CHECK(key_i < keys.size());
+        auto vector_i = keys[key_i];
+        *value_out = records[vector_i];
+        ValkeyModule_RetainString(nullptr, records[vector_i]);
+        ++key_i;
+        return VALKEYMODULE_OK;
+      });
   {
     // Verify that the mutations were processed asynchronous, by the writer
     // worker pool
@@ -2391,17 +2426,50 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     EXPECT_FALSE(num_itr == index_schema->attributes_.end());
     EXPECT_FALSE(tag_itr == index_schema->attributes_.end());
     EXPECT_FALSE(text_itr == index_schema->attributes_.end());
-
+    std::vector<vmsdk::UniqueValkeyString> vec_data;
+    vec_data.reserve(vectors.size());
+    for (const auto &vec : vectors) {
+      vec_data.push_back(vmsdk::MakeUniqueValkeyString(
+          absl::string_view((char *)&vec[0], dimensions * sizeof(float))));
+    }
+    for (size_t i = 0; i < vectors.size(); ++i) {
+      records[i] = new ValkeyModuleString{
+          std::string((char *)&vectors[i][0], dimensions * sizeof(float))};
+    }
+    std::vector<size_t> keys;
+    keys.reserve(num_vectors);
+    EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
+        .WillRepeatedly(
+            [&keys](ValkeyModuleCtx *ctx, ValkeyModuleString *key, int flags) {
+              auto key_str = vmsdk::ToStringView(key);
+              CHECK(absl::ConsumePrefix(&key_str, "key"));
+              int index;
+              CHECK(absl::SimpleAtoi(key_str, &index));
+              keys.push_back(index);
+              return TestValkeyModule_OpenKeyDefaultImpl(ctx, key, flags);
+            });
+    EXPECT_CALL(*kMockValkeyModule,
+                HashGet(testing::_, VALKEYMODULE_HASH_CFIELDS, testing::_,
+                        testing::An<ValkeyModuleString **>(),
+                        testing::TypedEq<void *>(nullptr)))
+        .WillRepeatedly([&records, &keys](ValkeyModuleKey *, int, const char *,
+                                          ValkeyModuleString **value_out,
+                                          void *) {
+          static size_t key_i = 0;
+          CHECK(key_i < keys.size());
+          auto vector_i = keys[key_i];
+          *value_out = records[vector_i];
+          ValkeyModule_RetainString(nullptr, records[vector_i]);
+          ++key_i;
+          return VALKEYMODULE_OK;
+        });
     for (size_t i = 0; i < vectors.size(); ++i) {
       auto interned_key = StringInternStore::Intern("key" + std::to_string(i));
 
       // Add vector data
-      vmsdk::UniqueValkeyString vec_data =
-          vmsdk::MakeUniqueValkeyString(absl::string_view(
-              (char *)&vectors[i][0], dimensions * sizeof(float)));
-      index_schema->ProcessAttributeMutation(&fake_ctx_, vec_itr->second,
-                                             interned_key, std::move(vec_data),
-                                             indexes::DeletionType::kNone);
+      index_schema->ProcessAttributeMutation(
+          &fake_ctx_, vec_itr->second, interned_key, std::move(vec_data[i]),
+          indexes::DeletionType::kNone);
 
       // Add numeric data (price)
       std::string price_str =

@@ -261,7 +261,9 @@ bool HandleEarlyReplyScenarios(ValkeyModuleCtx *ctx,
     return true;  // Early reply sent, stop processing
   }
 
-  if (command.no_content) {
+  // Without SORTBY, NOCONTENT can reply with ids directly. With SORTBY we must
+  // load the sort field and sort before replying, so fall through.
+  if (command.no_content && !command.sortby_parameter.has_value()) {
     SendReplyNoContent(ctx, search_result, command);
     return true;  // Early reply sent, stop processing
   }
@@ -324,8 +326,11 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
 
   ApplySorting(search_result.neighbors, *this);
 
-  // 3. Serialize neighbors based on query type
-  if (IsNonVectorQuery()) {
+  // 3. Serialize neighbors based on query type. NOCONTENT reaches here only
+  // when SORTBY forced content loading; reply with ids only after sorting.
+  if (no_content) {
+    SendReplyNoContent(ctx, search_result, *this);
+  } else if (IsNonVectorQuery()) {
     SerializeNonVectorNeighbors(ctx, search_result, *this);
   } else {
     SerializeNeighbors(ctx, search_result, *this);

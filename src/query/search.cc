@@ -1177,7 +1177,9 @@ absl::Status query::SearchParameters::PostParseQueryString() {
 }
 
 ContentProcessing SearchParameters::GetContentProcessing() const {
-  if (no_content) {
+  // NOCONTENT can skip content loading unless sorting needs the sort field
+  // (RequiresCompleteResults), in which case content must still be fetched.
+  if (no_content && !RequiresCompleteResults()) {
     return kNoContent;
   }
   // Currently, ContentAvailable isn't detected. Future use case.

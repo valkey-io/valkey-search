@@ -130,7 +130,10 @@ class RemoteResponderSearch : public query::SearchParameters {
   void QueryCompleteMainThread(
       std::unique_ptr<SearchParameters> self) override {
     CHECK(vmsdk::IsMainThread());
-    CHECK(!no_content);  // Shouldn't be here!
+    // Main-thread completion means content was fetched. That happens for
+    // content queries, and for NOCONTENT + SORTBY where the sort field must
+    // still be loaded (RequiresCompleteResults).
+    CHECK(!no_content || RequiresCompleteResults());
     QueryCompleteImpl();
   }
 

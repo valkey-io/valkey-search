@@ -10,12 +10,10 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
-#include <cstring>
 #include <exception>
 #include <memory>
 #include <mutex>  // NOLINT(build/c++11)
 #include <string>
-#include <string_view>
 #include <type_traits>
 #include <utility>
 
@@ -32,7 +30,6 @@
 #include "src/metrics.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/cancel.h"
-#include "src/utils/string_interning.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -88,24 +85,21 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
     absl::string_view attribute_identifier,
     SupplementalContentChunkIter &&iter) {
   try {
-    auto index = std::shared_ptr<VectorFlat<T>>(new VectorFlat<T>(
-        vector_index_proto.dimension_count(),
-        vector_index_proto.distance_metric(),
-        vector_index_proto.flat_algorithm().block_size(), attribute_identifier,
-        attribute_data_type->ToProto()));
+    auto index = std::shared_ptr<VectorFlat<T>>(
+        new VectorFlat<T>(vector_index_proto.dimension_count(),
+                          vector_index_proto.distance_metric(),
+                          vector_index_proto.flat_algorithm().block_size(),
+                          attribute_identifier, attribute_data_type->ToProto()),
+        vmsdk::DestructByMainThread<VectorFlat<T>>{});
     index->Init(vector_index_proto.dimension_count(),
                 vector_index_proto.distance_metric(), index->space_);
     index->algo_ =
         std::make_unique<FlatIndex>(index->space_.get(), index->normalize_);
     RDBChunkInputStream input(std::move(iter));
 
-    auto generator = [allocator = index->GetVectorAllocator()](
-                         absl::string_view vector_data) {
-      T magnitude =
-          CalcMagnitude(reinterpret_cast<const T *>(vector_data.data()),
-                        vector_data.size() / sizeof(T));
-      return VectorRecord::Construct(
-          vector_data, magnitude, static_cast<FixedSizeAllocator *>(allocator));
+    auto generator = [](absl::string_view vector_data) {
+      return std::shared_ptr<VectorRecord>(
+          nullptr);  // Placeholder, will be replaced in LoadTrackedKeys.
     };
     VMSDK_RETURN_IF_ERROR(
         index->algo_->LoadIndex(input, index->space_.get(), generator));
@@ -150,8 +144,7 @@ absl::Status VectorFlat<T>::ResizeIfFull() {
 
 template <typename T>
 absl::Status VectorFlat<T>::AddRecordImpl(
-    uint64_t internal_id, const std::shared_ptr<VectorRecord> &vector_record,
-    [[maybe_unused]] const std::vector<char> &norm_record) {
+    uint64_t internal_id, const std::shared_ptr<VectorRecord> &vector_record) {
   do {
     try {
       absl::ReaderMutexLock lock(&resize_mutex_);
@@ -174,8 +167,7 @@ absl::Status VectorFlat<T>::AddRecordImpl(
 
 template <typename T>
 absl::Status VectorFlat<T>::ModifyRecordImpl(
-    uint64_t internal_id, const std::shared_ptr<VectorRecord> &vector_record,
-    [[maybe_unused]] const std::vector<char> &norm_record) {
+    uint64_t internal_id, const std::shared_ptr<VectorRecord> &vector_record) {
   absl::ReaderMutexLock lock(&resize_mutex_);
   std::unique_lock<std::mutex> index_lock(algo_->index_lock);
   std::shared_ptr<VectorRecord> *stored_record =
@@ -309,7 +301,7 @@ absl::Status VectorFlat<T>::SaveIndexImpl(
   auto serializer = [normalize = normalize_, vector_size = GetVectorDataSize()](
                         const std::shared_ptr<VectorRecord> &record) {
     if (normalize) {
-      return NormalizeVector(
+      return NormalizeVector<T>(
           absl::string_view(record->GetRawVector(), vector_size));
     }
     return std::vector<char>(record->GetRawVector(),

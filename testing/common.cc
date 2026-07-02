@@ -326,6 +326,7 @@ void WaitWorkerTasksAreCompleted(vmsdk::ThreadPool &thread_pool) {
   blocking_refcount->Wait();
   absl::MutexLock lock(mutex.get());
   *is_completed = true;
+  kMockValkeyModule->RunPendingOneShots();
 }
 
 }  // namespace valkey_search

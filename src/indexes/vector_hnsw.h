@@ -11,13 +11,11 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
-#include <utility>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
-#include "absl/synchronization/mutex.h"
 #include "src/attribute_data_type.h"
 #include "src/indexes/vector_base.h"
 #include "src/rdb_serialization.h"
@@ -31,15 +29,13 @@ namespace valkey_search::indexes {
 class InputVector {
  public:
   InputVector(const std::shared_ptr<VectorRecord> &vector_record,
-              const std::vector<char> &normalized_vector)
-      : reciprocal_magnitude_(vector_record->GetReciprocalMagnitude()),
-        normalized_vector_(normalized_vector),
-        vector_record_(vector_record) {}
-
+              size_t vector_record_size, bool normalize);
   inline const char *GetRawVector() const {
     return vector_record_->GetRawVector();
   }
-  inline float GetReciprocalMagnitude() const { return reciprocal_magnitude_; }
+  inline float GetReciprocalMagnitude() const {
+    return vector_record_->GetReciprocalMagnitude();
+  }
   inline const char *GetNormalizedVector() const {
     return normalized_vector_.data();
   }
@@ -49,9 +45,8 @@ class InputVector {
   }
 
  private:
-  float reciprocal_magnitude_;
-  const std::vector<char> &normalized_vector_;
   std::shared_ptr<VectorRecord> vector_record_;
+  std::vector<char> normalized_vector_;
 };
 
 template <typename T>
@@ -101,15 +96,14 @@ class VectorHNSW : public VectorBase {
  protected:
   absl::Status ResizeIfFull() ABSL_LOCKS_EXCLUDED(resize_mutex_);
   absl::Status AddRecordImpl(uint64_t internal_id,
-                             const std::shared_ptr<VectorRecord> &vector_record,
-                             const std::vector<char> &norm_record) override
-      ABSL_LOCKS_EXCLUDED(resize_mutex_);
+                             const std::shared_ptr<VectorRecord> &vector_record)
+      override ABSL_LOCKS_EXCLUDED(resize_mutex_);
 
   absl::Status RemoveRecordImpl(uint64_t internal_id) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
   absl::Status ModifyRecordImpl(
-      uint64_t internal_id, const std::shared_ptr<VectorRecord> &vector_record,
-      const std::vector<char> &norm_record) override
+      uint64_t internal_id,
+      const std::shared_ptr<VectorRecord> &vector_record) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
   void ToProtoImpl(data_model::VectorIndex *vector_index_proto) const override;
   int RespondWithInfoImpl(ValkeyModuleCtx *ctx) const override;

@@ -21,7 +21,6 @@
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
-#include "absl/time/clock.h"
 #include "absl/time/time.h"
 #include "src/attribute_data_type.h"
 #include "src/coordinator/client_pool.h"
@@ -34,7 +33,7 @@
 #include "src/schema_manager.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
-#include "src/vector_externalizer.h"
+#include "src/vector_registry.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
@@ -337,7 +336,9 @@ static vmsdk::info_field::Float rdb_indexes_restored_percent(
     vmsdk::info_field::FloatBuilder().Dev().Computed([]() -> double {
       auto completed = Metrics::GetStats().rdb_restore_completed_indexes.load();
       auto total = Metrics::GetStats().rdb_restore_total_indexes.load();
-      if (total == 0) return 100.0;
+      if (total == 0) {
+        return 100.0;
+      }
       return (completed * 100.0) / total;
     }));
 
@@ -348,7 +349,9 @@ static vmsdk::info_field::Float rdb_current_index_keys_restored_percent(
           Metrics::GetStats().rdb_restore_current_index_keys_total.load();
       auto loaded =
           Metrics::GetStats().rdb_restore_current_index_keys_loaded.load();
-      if (total == 0) return 100.0;
+      if (total == 0) {
+        return 100.0;
+      }
       return (loaded * 100.0) / total;
     }));
 
@@ -377,6 +380,44 @@ static vmsdk::info_field::Integer ft_internal_update_call_failures_cnt(
     "coordinator", "ft_internal_update_call_failures_cnt",
     vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().ft_internal_update_call_failures_cnt;
+    }));
+
+static vmsdk::info_field::Integer vector_registry_entry_cnt(
+    "vector_registry", "vector_registry_entry_cnt",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return VectorRegistry::Instance().GetStats().entry_cnt;
+    }));
+
+static vmsdk::info_field::Integer vector_registry_shared_externally_cnt(
+    "vector_registry", "vector_registry_shared_externally_cnt",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return VectorRegistry::Instance()
+          .GetStats()
+          .shared_externally_cnt.GetTotal();
+    }));
+
+static vmsdk::info_field::Integer vector_registry_deduplication_hits(
+    "vector_registry", "vector_registry_deduplication_hits",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return VectorRegistry::Instance()
+          .GetStats()
+          .deduplication_hits.GetTotal();
+    }));
+
+static vmsdk::info_field::Integer vector_registry_deduplication_misses(
+    "vector_registry", "vector_registry_deduplication_misses",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return VectorRegistry::Instance()
+          .GetStats()
+          .deduplication_misses.GetTotal();
+    }));
+
+static vmsdk::info_field::Integer vector_registry_hash_extern_errors(
+    "vector_registry", "vector_registry_hash_extern_errors",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return VectorRegistry::Instance()
+          .GetStats()
+          .hash_extern_errors.GetTotal();
     }));
 
 static vmsdk::info_field::Integer ft_internal_update_process_failures_cnt(
@@ -485,42 +526,6 @@ static vmsdk::info_field::Integer string_interning_store_size(
     "string_interning", "string_interning_store_size",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
       return StringInternStore::Instance().UniqueStrings();
-    }));
-
-static vmsdk::info_field::Integer vector_externing_entry_count(
-    "vector_externing", "vector_externing_entry_count",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
-      return VectorExternalizer::Instance().GetStats().entry_cnt;
-    }));
-
-static vmsdk::info_field::Integer vector_externing_hash_extern_errors(
-    "vector_externing", "vector_externing_hash_extern_errors",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
-      return VectorExternalizer::Instance().GetStats().hash_extern_errors;
-    }));
-
-static vmsdk::info_field::Integer vector_externing_generated_value_cnt(
-    "vector_externing", "vector_externing_generated_value_cnt",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
-      return VectorExternalizer::Instance().GetStats().generated_value_cnt;
-    }));
-
-static vmsdk::info_field::Integer vector_externing_num_lru_entries(
-    "vector_externing", "vector_externing_num_lru_entries",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
-      return VectorExternalizer::Instance().GetStats().num_lru_entries;
-    }));
-
-static vmsdk::info_field::Integer vector_externing_lru_promote_cnt(
-    "vector_externing", "vector_externing_lru_promote_cnt",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
-      return VectorExternalizer::Instance().GetStats().lru_promote_cnt;
-    }));
-
-static vmsdk::info_field::Integer vector_externing_deferred_entry_cnt(
-    "vector_externing", "vector_externing_deferred_entry_cnt",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
-      return VectorExternalizer::Instance().GetStats().deferred_entry_cnt;
     }));
 
 static vmsdk::info_field::Integer coordinator_server_listening_port(
@@ -1255,7 +1260,7 @@ absl::Status ValkeySearch::OnLoad(ValkeyModuleCtx *ctx,
   VMSDK_LOG(NOTICE, ctx) << "Json "
                          << (IsJsonModuleSupported(ctx) ? "" : "not ")
                          << "supported!";
-  VectorExternalizer::Instance().Init(ctx_);
+  VectorRegistry::Construct(ctx_);
   ValkeyModule_Assert(vmsdk::info_field::Validate(ctx));
   VMSDK_LOG(DEBUG, ctx) << "Search module completed initialization!";
   return absl::OkStatus();

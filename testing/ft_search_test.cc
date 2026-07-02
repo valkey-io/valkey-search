@@ -42,7 +42,7 @@
 #include "src/schema_manager.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
-#include "src/vector_externalizer.h"
+#include "src/vector_registry.h"
 #include "testing/common.h"
 #include "testing/coordinator/common.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -177,6 +177,7 @@ void SendReplyTest::DoSendReplyTest(
   EXPECT_CALL(*test_index_schema, GetIdentifier(input.attribute_alias))
       .WillRepeatedly(testing::Return(attribute_id));
   std::vector<indexes::Neighbor> neighbors;
+  neighbors.reserve(input.neighbors.size());
   for (const auto &neighbor : input.neighbors) {
     neighbors.push_back(ToIndexesNeighbor(neighbor));
   }
@@ -586,7 +587,7 @@ TEST_P(FTSearchTest, FTSearchTests) {
         return VALKEYMODULE_OK;
       });
   EXPECT_CALL(*kMockValkeyModule,
-              OpenKey(VectorExternalizer::Instance().GetCtx(),
+              OpenKey(VectorRegistry::Instance().GetCtx(),
                       An<ValkeyModuleString *>(), testing::_))
       .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
   EXPECT_CALL(*kMockValkeyModule,

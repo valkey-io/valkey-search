@@ -24,14 +24,14 @@ struct StandardAtomicWrapper {
 
 static StandardAtomicWrapper global_std_atomic;
 
-static void BM_StandardAtomic_Add(benchmark::State& state) {
+static void BMStandardAtomicAdd(benchmark::State &state) {
   // Each thread runs this loop
   for (auto _ : state) {
     global_std_atomic.Add(1);
   }
 }
 
-static void BM_StandardAtomic_GetTotal(benchmark::State& state) {
+static void BMStandardAtomicGetTotal(benchmark::State &state) {
   for (auto _ : state) {
     benchmark::DoNotOptimize(global_std_atomic.GetTotal());
   }
@@ -39,7 +39,7 @@ static void BM_StandardAtomic_GetTotal(benchmark::State& state) {
 
 static vmsdk::ShardedAtomic<int64_t> global_sharded_atomic;
 
-static void BM_ShardedAtomic_Add(benchmark::State& state) {
+static void BMShardedAtomicAdd(benchmark::State &state) {
   // Each thread runs this loop
   for (auto _ : state) {
     // This hits the "Hot Path" (TLS lookup + relaxed store)
@@ -47,7 +47,7 @@ static void BM_ShardedAtomic_Add(benchmark::State& state) {
   }
 }
 
-static void BM_ShardedAtomic_GetTotal(benchmark::State& state) {
+static void BMShardedAtomicGetTotal(benchmark::State &state) {
   for (auto _ : state) {
     benchmark::DoNotOptimize(global_sharded_atomic.GetTotal());
   }
@@ -58,19 +58,19 @@ static void BM_ShardedAtomic_GetTotal(benchmark::State& state) {
 // ----------------------------------------------------------------------------
 
 // 1. Standard Atomic: Run with 1, 2, 4, 8... threads
-BENCHMARK(BM_StandardAtomic_Add)
+BENCHMARK(BMStandardAtomicAdd)
     ->ThreadRange(1, std::thread::hardware_concurrency())
     ->UseRealTime();  // Use wall clock time to measure throughput accurately
 
 // 2. Sharded Atomic: Run with 1, 2, 4, 8... threads
-BENCHMARK(BM_ShardedAtomic_Add)
+BENCHMARK(BMShardedAtomicAdd)
     ->ThreadRange(1, std::thread::hardware_concurrency())
     ->UseRealTime();
 
 // 3. Standard Atomic: Read Cost of a single thread
-BENCHMARK(BM_StandardAtomic_GetTotal);
+BENCHMARK(BMStandardAtomicGetTotal);
 // 4. Sharded Atomic: Read Cost of a single thread
-BENCHMARK(BM_ShardedAtomic_GetTotal);
+BENCHMARK(BMShardedAtomicGetTotal);
 
 }  // namespace
 

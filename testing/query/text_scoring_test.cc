@@ -96,7 +96,8 @@ class TextScoringTest : public ValkeySearchTest {
     const auto* scorer =
         indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std);
     vmsdk::ReaderMutexLock lock(&index_schema_->GetTimeSlicedMutex());
-    query::ScoreTextQuery(*index_schema_, root, scorer, candidates);
+    query::ScoreTextQuery(*index_schema_, root, scorer, candidates,
+                          candidates.size());
     return candidates;
   }
 
@@ -203,7 +204,8 @@ TEST_F(TextScoringTest, EmptyCandidatesYieldsEmpty) {
   const auto* scorer =
       indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std);
   vmsdk::ReaderMutexLock lock(&index_schema_->GetTimeSlicedMutex());
-  query::ScoreTextQuery(*index_schema_, term.get(), scorer, candidates);
+  query::ScoreTextQuery(*index_schema_, term.get(), scorer, candidates,
+                        candidates.size());
   EXPECT_TRUE(candidates.empty());
 }
 

@@ -792,7 +792,8 @@ std::optional<float> ScoreNode(const Predicate *predicate,
 void ScoreTextQuery(const IndexSchema &index_schema,
                     const Predicate *root_predicate,
                     const indexes::scoring::Scorer *scorer,
-                    std::vector<indexes::BorrowedNeighbor> &candidates) {
+                    std::vector<indexes::BorrowedNeighbor> &candidates,
+                    size_t top_k) {
   CHECK(root_predicate != nullptr);
   CHECK(scorer != nullptr);
   if (candidates.empty()) return;
@@ -830,13 +831,18 @@ void ScoreTextQuery(const IndexSchema &index_schema,
     scored.push_back({c.key, 0.0f, final_score});
   }
 
-  // Sort by score desc, key asc (stable tie-break by document key).
-  std::sort(scored.begin(), scored.end(),
-            [](const indexes::BorrowedNeighbor &a,
-               const indexes::BorrowedNeighbor &b) {
-              if (a.score != b.score) return a.score > b.score;
-              return a.key.Str() < b.key.Str();
-            });
+  auto cmp = [](const indexes::BorrowedNeighbor &a,
+                const indexes::BorrowedNeighbor &b) {
+    if (a.score != b.score) return a.score > b.score;
+    return a.key < b.key;
+  };
+  size_t k = std::min(top_k, scored.size());
+  if (k < scored.size()) {
+    std::partial_sort(scored.begin(), scored.begin() + k, scored.end(), cmp);
+    scored.resize(k);
+  } else {
+    std::sort(scored.begin(), scored.end(), cmp);
+  }
 
   candidates = std::move(scored);
 }
@@ -937,9 +943,11 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
       parameters.filter_parse_results.query_operations &
           QueryOperations::kContainsText) {
     const auto *scorer = indexes::scoring::GetScorer(parameters.scorer);
+    size_t top_k = static_cast<size_t>(parameters.limit.first_index +
+                                       parameters.limit.number);
     ScoreTextQuery(*parameters.index_schema,
                    parameters.filter_parse_results.root_predicate.get(), scorer,
-                   borrowed);
+                   borrowed, top_k);
   }
   return borrowed;
 }

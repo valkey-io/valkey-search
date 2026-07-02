@@ -364,12 +364,13 @@ float ComputeMatchedPredicateScore(const Predicate* predicate);
 
 // Scores admitted candidate documents by walking the predicate tree.
 // For each TermPredicate leaf, looks up each candidate's term frequency
-// and feeds the scorer. Writes scores into candidates in-place and sorts
-// by score desc, key string asc.
+// and feeds the scorer. Writes scores into candidates in-place and selects
+// the top_k results sorted by score desc.
 void ScoreTextQuery(const IndexSchema& index_schema,
                     const Predicate* root_predicate,
                     const indexes::scoring::Scorer* scorer,
-                    std::vector<indexes::BorrowedNeighbor>& candidates);
+                    std::vector<indexes::BorrowedNeighbor>& candidates,
+                    size_t top_k);
 
 }  // namespace valkey_search::query
 #endif  // VALKEYSEARCH_SRC_QUERY_SEARCH_H_

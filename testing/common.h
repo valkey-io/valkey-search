@@ -40,7 +40,7 @@
 #include "src/server_events.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
-#include "src/vector_externalizer.h"
+#include "src/vector_registry.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/testing_infra/module.h"
@@ -374,13 +374,13 @@ class ValkeySearchTest : public vmsdk::ValkeyTest {
         .WillByDefault([&](ValkeyModuleCtx* ctx) {
           return ctx == &registry_ctx_ ? ctx : nullptr;
         });
-    VectorExternalizer::Instance().Init(&registry_ctx_);
+    VectorRegistry::Instance().Init(&registry_ctx_);
   }
   void TearDown() override {
     SchemaManager::InitInstance(nullptr);
     ValkeySearch::InitInstance(nullptr);
     KeyspaceEventManager::InitInstance(nullptr);
-    VectorExternalizer::Instance().Reset();
+    VectorRegistry::Instance().Reset();
     ValkeyTest::TearDown();
   }
 };
@@ -436,13 +436,13 @@ class ValkeySearchTestWithParam : public vmsdk::ValkeyTestWithParam<T> {
         .WillByDefault([&](ValkeyModuleCtx* ctx) {
           return ctx == &registry_ctx_ ? ctx : nullptr;
         });
-    VectorExternalizer::Instance().Init(&registry_ctx_);
+    VectorRegistry::Instance().Init(&registry_ctx_);
   }
   void TearDown() override {
     SchemaManager::InitInstance(nullptr);
     ValkeySearch::InitInstance(nullptr);
     KeyspaceEventManager::InitInstance(nullptr);
-    VectorExternalizer::Instance().Reset();
+    VectorRegistry::Instance().Reset();
     vmsdk::ValkeyTestWithParam<T>::TearDown();
   }
 };

@@ -74,7 +74,6 @@ class VectorRecord {
 };
 std::vector<char> NormalizeVector(absl::string_view record,
                                   float *magnitude = nullptr);
-std::vector<char> DenormalizeVector(absl::string_view record, float magnitude);
 
 template <typename T>
 T CalcMagnitude(const T *src, size_t size) {
@@ -169,6 +168,7 @@ absl::string_view LookupKeyByValue(
 
 class VectorBase : public IndexBase {
  public:
+  ~VectorBase() override;
   absl::StatusOr<bool> AddRecord(const InternedStringPtr &key,
                                  absl::string_view record) override
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
@@ -198,7 +198,7 @@ class VectorBase : public IndexBase {
   bool IsTracked(const InternedStringPtr &key) const override
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   bool IsUnTracked(const InternedStringPtr &key) const override;
-  void UnTrack(const InternedStringPtr &key) override;
+  void UnTrack(const InternedStringPtr &key) override {}
   absl::Status ForEachTrackedKey(
       absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn)
       const override ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
@@ -213,8 +213,6 @@ class VectorBase : public IndexBase {
       const InternedStringPtr &key,
       std::priority_queue<std::pair<float, hnswlib::labeltype>> &results,
       absl::flat_hash_set<const char *> &top_keys) const;
-  vmsdk::UniqueValkeyString NormalizeStringRecord(
-      vmsdk::UniqueValkeyString record) const override;
   template <typename T>
   absl::StatusOr<std::vector<Neighbor>> CreateReply(
       std::priority_queue<std::pair<T, hnswlib::labeltype>> &knn_res);
@@ -222,12 +220,12 @@ class VectorBase : public IndexBase {
       const InternedStringPtr &key) const;
   size_t GetVectorDataSize() const { return GetDataTypeSize() * dimensions_; }
 
-  InternedStringPtr InternVector(absl::string_view record,
-                                 std::optional<float> &magnitude);
   virtual uint64_t GetMaxInternalLabel() const { return 0; }
   virtual size_t GetLabelCount() const { return 0; }
   Allocator *GetVectorAllocator() const { return vector_allocator_.get(); }
   int GetDimensions() const { return dimensions_; }
+  vmsdk::UniqueValkeyString NormalizeStringRecord(
+      vmsdk::UniqueValkeyString record) const;
 
  protected:
   VectorBase(IndexerType indexer_type, int dimensions,
@@ -245,7 +243,9 @@ class VectorBase : public IndexBase {
 #endif  // !SAN_BUILD
   {
   }
-
+  void RemoveRecordDueToError(const InternedStringPtr &key,
+                              std::optional<uint64_t> internal_id)
+      ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   bool IsValidSizeVector(absl::string_view record) const {
     return record.size() == GetVectorDataSize();
   }
@@ -269,10 +269,7 @@ class VectorBase : public IndexBase {
       data_model::VectorIndex *vector_index_proto) const = 0;
   virtual absl::Status SaveIndexImpl(
       RDBChunkOutputStream chunked_out) const = 0;
-  void ExternalizeVector(ValkeyModuleCtx *ctx,
-                         const AttributeDataType *attribute_data_type,
-                         absl::string_view key_cstr,
-                         absl::string_view attribute_identifier);
+
   virtual std::shared_ptr<VectorRecord> &GetVectorLockFree(
       uint64_t internal_id) const = 0;
 

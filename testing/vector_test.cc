@@ -36,7 +36,6 @@
 #include "third_party/hnswlib/space_ip.h"
 #include "third_party/hnswlib/space_l2.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/type_conversions.h"
 
 namespace valkey_search::indexes {
 
@@ -773,11 +772,11 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
       FixedSizeAllocator, kDimensions * sizeof(float) + 1, true);
 
   float magnitude = kDefaultMagnitude;
-  std::vector<char> norm_record;
   for (int t = 0; t < kThreads; ++t) {
+    std::vector<char> norm_record;
     algo.addPoint(InputVector(VectorRecord::Construct(v_bytes, magnitude,
                                                       vector_allocator.get()),
-                              norm_record),
+                              std::move(norm_record)),
                   t);
   }
 

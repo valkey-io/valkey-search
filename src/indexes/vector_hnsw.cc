@@ -56,7 +56,8 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::Create(
   try {
     auto index = std::shared_ptr<VectorHNSW<T>>(
         new VectorHNSW<T>(vector_index_proto.dimension_count(),
-                          attribute_identifier, attribute_data_type));
+                          attribute_identifier, attribute_data_type),
+        vmsdk::DestructByMainThread<VectorHNSW<T>>{});
     index->Init(vector_index_proto.dimension_count(),
                 vector_index_proto.distance_metric(), index->space_);
     const auto &hnsw_proto = vector_index_proto.hnsw_algorithm();
@@ -92,9 +93,10 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
     absl::string_view attribute_identifier,
     SupplementalContentChunkIter &&iter) {
   try {
-    auto index = std::shared_ptr<VectorHNSW<T>>(new VectorHNSW<T>(
-        vector_index_proto.dimension_count(), attribute_identifier,
-        attribute_data_type->ToProto()));
+    auto index = std::shared_ptr<VectorHNSW<T>>(
+        new VectorHNSW<T>(vector_index_proto.dimension_count(),
+                          attribute_identifier, attribute_data_type->ToProto()),
+        vmsdk::DestructByMainThread<VectorHNSW<T>>{});
     index->Init(vector_index_proto.dimension_count(),
                 vector_index_proto.distance_metric(), index->space_);
 
@@ -147,8 +149,8 @@ absl::Status VectorHNSW<T>::AddRecordImpl(
     try {
       absl::ReaderMutexLock lock(&resize_mutex_);
 
-      algo_->addPoint(InputVector(vector_record, norm_record), internal_id,
-                      algo_->allow_replace_deleted_);
+      algo_->addPoint(InputVector(vector_record, std::move(norm_record)),
+                      internal_id, algo_->allow_replace_deleted_);
       return absl::OkStatus();
     } catch (const std::exception &e) {
       std::string error_msg = e.what();
@@ -280,8 +282,8 @@ absl::Status VectorHNSW<T>::ModifyRecordImpl(
   try {
     absl::ReaderMutexLock lock(&resize_mutex_);
     VMSDK_RETURN_IF_ERROR(AlgoDeleteRecord(internal_id));
-    algo_->addPoint(InputVector(vector_record, norm_record), internal_id,
-                    algo_->allow_replace_deleted_);
+    algo_->addPoint(InputVector(vector_record, std::move(norm_record)),
+                    internal_id, algo_->allow_replace_deleted_);
   } catch (const std::exception &e) {
     ++Metrics::GetStats().hnsw_modify_exceptions_cnt;
     return absl::InternalError(
@@ -336,7 +338,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
     CancelCondition cancel_condition(cancellation_token);
     InputVector embedding(
         VectorRecord::Construct(query, magnitude, GetVectorAllocator()),
-        norm_record);
+        std::move(norm_record));
     auto res = algo_->searchKnn(embedding, count, ef_runtime, filter.get(),
                                 &cancel_condition);
     if (!enable_partial_results && cancellation_token->IsCancelled()) {

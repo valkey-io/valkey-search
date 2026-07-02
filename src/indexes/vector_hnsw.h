@@ -31,15 +31,16 @@ namespace valkey_search::indexes {
 class InputVector {
  public:
   InputVector(const std::shared_ptr<VectorRecord> &vector_record,
-              const std::vector<char> &normalized_vector)
-      : reciprocal_magnitude_(vector_record->GetReciprocalMagnitude()),
-        normalized_vector_(normalized_vector),
-        vector_record_(vector_record) {}
+              const std::vector<char> &&normalized_vector)
+      : vector_record_(std::move(vector_record)),
+        normalized_vector_(normalized_vector) {}
 
   inline const char *GetRawVector() const {
     return vector_record_->GetRawVector();
   }
-  inline float GetReciprocalMagnitude() const { return reciprocal_magnitude_; }
+  inline float GetReciprocalMagnitude() const {
+    return vector_record_->GetReciprocalMagnitude();
+  }
   inline const char *GetNormalizedVector() const {
     return normalized_vector_.data();
   }
@@ -49,9 +50,8 @@ class InputVector {
   }
 
  private:
-  float reciprocal_magnitude_;
-  const std::vector<char> &normalized_vector_;
   std::shared_ptr<VectorRecord> vector_record_;
+  const std::vector<char> &normalized_vector_;
 };
 
 template <typename T>

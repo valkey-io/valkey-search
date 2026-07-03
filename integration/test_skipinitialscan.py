@@ -139,7 +139,6 @@ def check_skipinitialscan_cme(self, rdb_version_2):
             self.CLUSTER_SIZE
         ),
         True,
-        timeout=10,
     )
 
     client = self.new_cluster_client()

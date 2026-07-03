@@ -8,34 +8,258 @@
 #include "src/coordinator/client.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <utility>
 
-#include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/metrics.h"
-#include "testing/common.h"
-#include "testing/coordinator/common.h"
-#include "vmsdk/src/testing_infra/module.h"
+#include "vmsdk/src/testing_infra/utils.h"
 
 namespace valkey_search::coordinator {
 
-// Test to verify the byte counting functionality in client.cc
-class ClientByteCountingTest : public ::testing::Test {
- protected:
-  void SetUp() override {
-    // Reset metrics before each test
-    Metrics::GetStats().coordinator_bytes_out.store(0);
-    Metrics::GetStats().coordinator_bytes_in.store(0);
+namespace {
 
-    // Create a mock client for testing
-    mock_client_ = std::make_shared<MockClient>();
+class FakeCoordinatorAsync final
+    : public Coordinator::StubInterface::async_interface {
+ public:
+  void GetGlobalMetadata(::grpc::ClientContext *,
+                         const GetGlobalMetadataRequest *,
+                         GetGlobalMetadataResponse *,
+                         std::function<void(::grpc::Status)> done) override {
+    ADD_FAILURE() << "Unexpected GetGlobalMetadata async call";
+    done(grpc::Status(grpc::StatusCode::UNIMPLEMENTED, ""));
   }
 
-  std::shared_ptr<MockClient> mock_client_;
+  void GetGlobalMetadata(::grpc::ClientContext *,
+                         const GetGlobalMetadataRequest *,
+                         GetGlobalMetadataResponse *,
+                         ::grpc::ClientUnaryReactor *) override {
+    ADD_FAILURE() << "Unexpected GetGlobalMetadata reactor call";
+  }
+
+  void SearchIndexPartition(::grpc::ClientContext *,
+                            const SearchIndexPartitionRequest *,
+                            SearchIndexPartitionResponse *response,
+                            std::function<void(::grpc::Status)> done) override {
+    *response = search_response;
+    done(search_status);
+  }
+
+  void SearchIndexPartition(::grpc::ClientContext *,
+                            const SearchIndexPartitionRequest *,
+                            SearchIndexPartitionResponse *,
+                            ::grpc::ClientUnaryReactor *) override {
+    ADD_FAILURE() << "Unexpected SearchIndexPartition reactor call";
+  }
+
+  void InfoIndexPartition(::grpc::ClientContext *,
+                          const InfoIndexPartitionRequest *,
+                          InfoIndexPartitionResponse *response,
+                          std::function<void(::grpc::Status)> done) override {
+    *response = info_response;
+    done(info_status);
+  }
+
+  void InfoIndexPartition(::grpc::ClientContext *,
+                          const InfoIndexPartitionRequest *,
+                          InfoIndexPartitionResponse *,
+                          ::grpc::ClientUnaryReactor *) override {
+    ADD_FAILURE() << "Unexpected InfoIndexPartition reactor call";
+  }
+
+  void MultiSearchIndexPartition(
+      ::grpc::ClientContext *, const MultiSearchIndexPartitionRequest *,
+      MultiSearchIndexPartitionResponse *response,
+      std::function<void(::grpc::Status)> done) override {
+    *response = multi_search_response;
+    done(multi_search_status);
+  }
+
+  void MultiSearchIndexPartition(::grpc::ClientContext *,
+                                 const MultiSearchIndexPartitionRequest *,
+                                 MultiSearchIndexPartitionResponse *,
+                                 ::grpc::ClientUnaryReactor *) override {
+    ADD_FAILURE() << "Unexpected MultiSearchIndexPartition reactor call";
+  }
+
+  SearchIndexPartitionResponse search_response;
+  grpc::Status search_status = grpc::Status::OK;
+  InfoIndexPartitionResponse info_response;
+  grpc::Status info_status = grpc::Status::OK;
+  MultiSearchIndexPartitionResponse multi_search_response;
+  grpc::Status multi_search_status = grpc::Status::OK;
 };
+
+class FakeCoordinatorStub final : public Coordinator::StubInterface {
+ public:
+  FakeCoordinatorAsync *async_stub() { return &async_; }
+
+  grpc::Status GetGlobalMetadata(::grpc::ClientContext *,
+                                 const GetGlobalMetadataRequest &,
+                                 GetGlobalMetadataResponse *) override {
+    ADD_FAILURE() << "Unexpected GetGlobalMetadata sync call";
+    return grpc::Status(grpc::StatusCode::UNIMPLEMENTED, "");
+  }
+
+  grpc::Status SearchIndexPartition(::grpc::ClientContext *,
+                                    const SearchIndexPartitionRequest &,
+                                    SearchIndexPartitionResponse *) override {
+    ADD_FAILURE() << "Unexpected SearchIndexPartition sync call";
+    return grpc::Status(grpc::StatusCode::UNIMPLEMENTED, "");
+  }
+
+  grpc::Status InfoIndexPartition(::grpc::ClientContext *,
+                                  const InfoIndexPartitionRequest &,
+                                  InfoIndexPartitionResponse *) override {
+    ADD_FAILURE() << "Unexpected InfoIndexPartition sync call";
+    return grpc::Status(grpc::StatusCode::UNIMPLEMENTED, "");
+  }
+
+  grpc::Status MultiSearchIndexPartition(
+      ::grpc::ClientContext *, const MultiSearchIndexPartitionRequest &,
+      MultiSearchIndexPartitionResponse *) override {
+    ADD_FAILURE() << "Unexpected MultiSearchIndexPartition sync call";
+    return grpc::Status(grpc::StatusCode::UNIMPLEMENTED, "");
+  }
+
+  Coordinator::StubInterface::async_interface *async() override {
+    return &async_;
+  }
+
+ private:
+  ::grpc::ClientAsyncResponseReaderInterface<GetGlobalMetadataResponse> *
+  AsyncGetGlobalMetadataRaw(::grpc::ClientContext *,
+                            const GetGlobalMetadataRequest &,
+                            ::grpc::CompletionQueue *) override {
+    ADD_FAILURE() << "Unexpected AsyncGetGlobalMetadataRaw call";
+    return nullptr;
+  }
+
+  ::grpc::ClientAsyncResponseReaderInterface<GetGlobalMetadataResponse> *
+  PrepareAsyncGetGlobalMetadataRaw(::grpc::ClientContext *,
+                                   const GetGlobalMetadataRequest &,
+                                   ::grpc::CompletionQueue *) override {
+    ADD_FAILURE() << "Unexpected PrepareAsyncGetGlobalMetadataRaw call";
+    return nullptr;
+  }
+
+  ::grpc::ClientAsyncResponseReaderInterface<SearchIndexPartitionResponse> *
+  AsyncSearchIndexPartitionRaw(::grpc::ClientContext *,
+                               const SearchIndexPartitionRequest &,
+                               ::grpc::CompletionQueue *) override {
+    ADD_FAILURE() << "Unexpected AsyncSearchIndexPartitionRaw call";
+    return nullptr;
+  }
+
+  ::grpc::ClientAsyncResponseReaderInterface<SearchIndexPartitionResponse> *
+  PrepareAsyncSearchIndexPartitionRaw(::grpc::ClientContext *,
+                                      const SearchIndexPartitionRequest &,
+                                      ::grpc::CompletionQueue *) override {
+    ADD_FAILURE() << "Unexpected PrepareAsyncSearchIndexPartitionRaw call";
+    return nullptr;
+  }
+
+  ::grpc::ClientAsyncResponseReaderInterface<InfoIndexPartitionResponse> *
+  AsyncInfoIndexPartitionRaw(::grpc::ClientContext *,
+                             const InfoIndexPartitionRequest &,
+                             ::grpc::CompletionQueue *) override {
+    ADD_FAILURE() << "Unexpected AsyncInfoIndexPartitionRaw call";
+    return nullptr;
+  }
+
+  ::grpc::ClientAsyncResponseReaderInterface<InfoIndexPartitionResponse> *
+  PrepareAsyncInfoIndexPartitionRaw(::grpc::ClientContext *,
+                                    const InfoIndexPartitionRequest &,
+                                    ::grpc::CompletionQueue *) override {
+    ADD_FAILURE() << "Unexpected PrepareAsyncInfoIndexPartitionRaw call";
+    return nullptr;
+  }
+
+  ::grpc::ClientAsyncResponseReaderInterface<MultiSearchIndexPartitionResponse> *
+  AsyncMultiSearchIndexPartitionRaw(::grpc::ClientContext *,
+                                    const MultiSearchIndexPartitionRequest &,
+                                    ::grpc::CompletionQueue *) override {
+    ADD_FAILURE() << "Unexpected AsyncMultiSearchIndexPartitionRaw call";
+    return nullptr;
+  }
+
+  ::grpc::ClientAsyncResponseReaderInterface<MultiSearchIndexPartitionResponse> *
+  PrepareAsyncMultiSearchIndexPartitionRaw(
+      ::grpc::ClientContext *, const MultiSearchIndexPartitionRequest &,
+      ::grpc::CompletionQueue *) override {
+    ADD_FAILURE() << "Unexpected PrepareAsyncMultiSearchIndexPartitionRaw call";
+    return nullptr;
+  }
+
+  FakeCoordinatorAsync async_;
+};
+
+}  // namespace
+
+// Test to verify the byte counting functionality in client.cc
+class ClientByteCountingTest : public vmsdk::ValkeyTest {
+ protected:
+  void SetUp() override {
+    vmsdk::ValkeyTest::SetUp();
+    Metrics::GetStats().coordinator_bytes_out.store(0);
+    Metrics::GetStats().coordinator_bytes_in.store(0);
+  }
+};
+
+TEST_F(ClientByteCountingTest, CountsResponseBytesBeforeCallbackMutation) {
+  auto request = std::make_unique<SearchIndexPartitionRequest>();
+  request->set_timeout_ms(1000);
+  request->set_index_schema_name("test_index_schema");
+  request->set_attribute_alias("test_alias");
+  request->set_query("test query data");
+  request->set_k(2);
+
+  const size_t actual_request_size = request->ByteSizeLong();
+  ASSERT_GT(actual_request_size, 0);
+
+  SearchIndexPartitionResponse response;
+  response.set_total_count(2);
+
+  auto *neighbor1 = response.add_neighbors();
+  neighbor1->set_key("neighbor1");
+  neighbor1->set_score(0.95);
+  auto *attribute1 = neighbor1->add_attribute_contents();
+  attribute1->set_identifier("title");
+  attribute1->set_content("first neighbor payload");
+
+  auto *neighbor2 = response.add_neighbors();
+  neighbor2->set_key("neighbor2");
+  neighbor2->set_score(0.85);
+  auto *attribute2 = neighbor2->add_attribute_contents();
+  attribute2->set_identifier("body");
+  attribute2->set_content("second neighbor payload");
+
+  const size_t actual_response_size = response.ByteSizeLong();
+  ASSERT_GT(actual_response_size, 0);
+
+  auto stub = std::make_unique<FakeCoordinatorStub>();
+  stub->async_stub()->search_response = response;
+  ClientImpl client(nullptr, "test_address", std::move(stub));
+
+  bool callback_called = false;
+  client.SearchIndexPartition(
+      std::move(request),
+      [&](grpc::Status status, SearchIndexPartitionResponse &resp) {
+        EXPECT_TRUE(status.ok());
+        callback_called = true;
+        resp.clear_neighbors();
+        EXPECT_LT(resp.ByteSizeLong(), actual_response_size);
+      });
+
+  EXPECT_TRUE(callback_called);
+  EXPECT_EQ(Metrics::GetStats().coordinator_bytes_out.load(),
+            actual_request_size);
+  EXPECT_EQ(Metrics::GetStats().coordinator_bytes_in.load(),
+            actual_response_size);
+}
 
 // Test that we correctly count bytes for successful requests using real
 // protobuf objects
@@ -67,14 +291,14 @@ TEST_F(ClientByteCountingTest, CountsCorrectBytesOnSuccess) {
   SearchIndexPartitionResponse response;
 
   // Add some neighbor entries to make it non-empty
-  auto* neighbor1 = response.add_neighbors();
+  auto *neighbor1 = response.add_neighbors();
   if (neighbor1) {
     // Set fields based on the NeighborEntry proto definition
     neighbor1->set_key("neighbor1");
     neighbor1->set_score(0.95);
   }
 
-  auto* neighbor2 = response.add_neighbors();
+  auto *neighbor2 = response.add_neighbors();
   if (neighbor2) {
     // Set fields based on the NeighborEntry proto definition
     neighbor2->set_key("neighbor2");
@@ -85,33 +309,15 @@ TEST_F(ClientByteCountingTest, CountsCorrectBytesOnSuccess) {
   const size_t actual_response_size = response.ByteSizeLong();
   ASSERT_GT(actual_response_size, 0);
 
-  // Mock the SearchIndexPartition method to simulate the real implementation
-  EXPECT_CALL(*mock_client_, SearchIndexPartition(testing::_, testing::_))
-      .WillOnce([&](std::unique_ptr<SearchIndexPartitionRequest> req,
-                    SearchIndexPartitionCallback done) {
-        // Verify we're working with the same request
-        EXPECT_EQ(req->timeout_ms(), 1000);
+  auto stub = std::make_unique<FakeCoordinatorStub>();
+  stub->async_stub()->search_response = response;
+  ClientImpl client(nullptr, "test_address", std::move(stub));
 
-        // Simulate what happens in ClientImpl::SearchIndexPartition
-        // Count the exact request size before sending
-        Metrics::GetStats().coordinator_bytes_out.fetch_add(
-            req->ByteSizeLong(), std::memory_order_relaxed);
-
-        // In the real implementation, we count bytes inside this callback
-        // for successful responses, right before calling the user's callback
-        Metrics::GetStats().coordinator_bytes_in.fetch_add(
-            response.ByteSizeLong(), std::memory_order_relaxed);
-
-        // Call the callback with success status
-        done(grpc::Status::OK, response);
-      });
-
-  // Call the method
   bool callback_called = false;
-  mock_client_->SearchIndexPartition(
+  client.SearchIndexPartition(
       std::move(request),
       [&callback_called](grpc::Status status,
-                         SearchIndexPartitionResponse& resp) {
+                         SearchIndexPartitionResponse &resp) {
         EXPECT_TRUE(status.ok());
         callback_called = true;
       });
@@ -146,36 +352,23 @@ TEST_F(ClientByteCountingTest, DoesNotCountResponseBytesOnError) {
   SearchIndexPartitionResponse response;
 
   // Add neighbor entries to make it non-empty, just like in the success case
-  auto* neighbor = response.add_neighbors();
+  auto *neighbor = response.add_neighbors();
   if (neighbor) {
     neighbor->set_key("error_neighbor");
     neighbor->set_score(0.75);
   }
 
-  // Mock the SearchIndexPartition method to simulate the real implementation
-  EXPECT_CALL(*mock_client_, SearchIndexPartition(testing::_, testing::_))
-      .WillOnce([&](std::unique_ptr<SearchIndexPartitionRequest> req,
-                    SearchIndexPartitionCallback done) {
-        // Verify we're working with the same request
-        EXPECT_EQ(req->timeout_ms(), 1000);
+  auto stub = std::make_unique<FakeCoordinatorStub>();
+  stub->async_stub()->search_response = response;
+  stub->async_stub()->search_status =
+      grpc::Status(grpc::StatusCode::UNAVAILABLE, "Service unavailable");
+  ClientImpl client(nullptr, "test_address", std::move(stub));
 
-        // Simulate what happens in ClientImpl::SearchIndexPartition
-        // Count the exact request size before sending
-        Metrics::GetStats().coordinator_bytes_out.fetch_add(
-            req->ByteSizeLong(), std::memory_order_relaxed);
-
-        // Call the callback with error status
-        // Do NOT count response bytes on error
-        done(grpc::Status(grpc::StatusCode::UNAVAILABLE, "Service unavailable"),
-             response);
-      });
-
-  // Call the method
   bool callback_called = false;
-  mock_client_->SearchIndexPartition(
+  client.SearchIndexPartition(
       std::move(request),
       [&callback_called](grpc::Status status,
-                         SearchIndexPartitionResponse& resp) {
+                         SearchIndexPartitionResponse &resp) {
         EXPECT_FALSE(status.ok());
         callback_called = true;
       });
@@ -186,6 +379,50 @@ TEST_F(ClientByteCountingTest, DoesNotCountResponseBytesOnError) {
   EXPECT_EQ(Metrics::GetStats().coordinator_bytes_out.load(),
             actual_request_size);
   EXPECT_EQ(Metrics::GetStats().coordinator_bytes_in.load(), 0);
+}
+
+TEST_F(ClientByteCountingTest, CountsInfoResponseBytesBeforeCallbackMutation) {
+  auto request = std::make_unique<InfoIndexPartitionRequest>();
+  request->set_db_num(0);
+  request->set_index_name("test_index_schema");
+  request->set_require_consistency(true);
+
+  const size_t actual_request_size = request->ByteSizeLong();
+  ASSERT_GT(actual_request_size, 0);
+
+  InfoIndexPartitionResponse response;
+  response.set_exists(true);
+  response.set_index_name("test_index_schema");
+  response.set_num_docs(10);
+  response.set_num_records(20);
+  auto *attribute = response.add_attributes();
+  attribute->set_identifier("title");
+  attribute->set_alias("title_alias");
+  attribute->set_user_indexed_memory(1024);
+  attribute->set_num_records(20);
+
+  const size_t actual_response_size = response.ByteSizeLong();
+  ASSERT_GT(actual_response_size, 0);
+
+  auto stub = std::make_unique<FakeCoordinatorStub>();
+  stub->async_stub()->info_response = response;
+  ClientImpl client(nullptr, "test_address", std::move(stub));
+
+  bool callback_called = false;
+  client.InfoIndexPartition(
+      std::move(request),
+      [&](grpc::Status status, InfoIndexPartitionResponse &resp) {
+        EXPECT_TRUE(status.ok());
+        callback_called = true;
+        resp.clear_attributes();
+        EXPECT_LT(resp.ByteSizeLong(), actual_response_size);
+      });
+
+  EXPECT_TRUE(callback_called);
+  EXPECT_EQ(Metrics::GetStats().coordinator_bytes_out.load(),
+            actual_request_size);
+  EXPECT_EQ(Metrics::GetStats().coordinator_bytes_in.load(),
+            actual_response_size);
 }
 
 }  // namespace valkey_search::coordinator

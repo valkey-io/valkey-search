@@ -370,13 +370,15 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> BasicReducerParser(
     return absl::OutOfRangeError(absl::StrCat("incorrect number of arguments (",
                                               cnt, ") to reducer ", name));
   }
+  std::vector<std::string> arg_texts;
   for (int i = 0; i < cnt; ++i) {
     VMSDK_ASSIGN_OR_RETURN(auto arg, itr.PopNext(),
                            _ << "Missing Reducer argument " << i);
-    VMSDK_ASSIGN_OR_RETURN(
-        auto expr,
-        expr::Expression::Compile(parameters, vmsdk::ToStringView(arg)),
-        _ << " in GROUPBY stage");
+    auto arg_sv = vmsdk::ToStringView(arg);
+    arg_texts.emplace_back(arg_sv);
+    VMSDK_ASSIGN_OR_RETURN(auto expr,
+                           expr::Expression::Compile(parameters, arg_sv),
+                           _ << " in GROUPBY stage");
     r->args_.emplace_back(std::move(expr));
   }
   if (itr.PopIfNextIgnoreCase(valkey_search::aggregate::kAsParam)) {
@@ -387,10 +389,21 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> BasicReducerParser(
     r->output_ =
         std::unique_ptr<Attribute>(dynamic_cast<Attribute*>(output.release()));
   } else {
-    std::ostringstream os;
-    os << *r;
+    // TODO(https://github.com/valkey-io/valkey-search/issues/965): Workaround
+    // for memory allocator issue causing ostringstream to crash.
+    // std::ostringstream os;
+    // os << *r;
+    // VMSDK_ASSIGN_OR_RETURN(auto output,
+    //                        parameters.MakeReference(os.str(), true));
+    std::string default_name(r->name_);
+    default_name += '(';
+    for (size_t i = 0; i < arg_texts.size(); ++i) {
+      if (i > 0) default_name += ',';
+      default_name += arg_texts[i];
+    }
+    default_name += ')';
     VMSDK_ASSIGN_OR_RETURN(auto output,
-                           parameters.MakeReference(os.str(), true));
+                           parameters.MakeReference(default_name, true));
     r->output_ =
         std::unique_ptr<Attribute>(dynamic_cast<Attribute*>(output.release()));
   }
@@ -438,6 +451,7 @@ bool ReplyWithValue(ValkeyModuleCtx* ctx,
     } else {
       switch (indexer_type) {
         case indexes::IndexerType::kTag:
+        case indexes::IndexerType::kText:
         case indexes::IndexerType::kNone: {
           value_view = value.AsStringView();
           break;
@@ -511,17 +525,10 @@ absl::StatusOr<expr::Value> ProcessFieldValue(
       }
     }
     default:
-      if (data_type ==
-          data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH) {
-        return expr::Value(value);
-      } else {
-        auto v = vmsdk::JsonUnquote(value);
-        if (v) {
-          return expr::Value(std::move(*v));
-        } else {
-          return absl::InvalidArgumentError("Failed to unquote JSON value");
-        }
-      }
+      // JSON string values are already JSON-decoded when fetched/indexed
+      // (NormalizeJsonRecord), so they are treated the same as HASH values
+      // here. Decoding again would double-decode and corrupt escapes.
+      return expr::Value(value);
   }
 }
 

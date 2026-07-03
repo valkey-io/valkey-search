@@ -861,6 +861,39 @@ INSTANTIATE_TEST_SUITE_P(
                  "integer greater than 0 and cannot exceed 1000000.",
          },
          {
+             .test_name = "invalid_block_size_zero",
+             .success = false,
+             .command_str = "idx1 SChema hash_field1 as "
+                            "hash_field11 vector flat 10 TYPE  FLOAT32 DIM 3 "
+                            "DISTANCE_METRIC IP INITIAL_CAP 15000 BLOCK_SIZE 0",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Invalid range: "
+                 "Value below minimum; BLOCK_SIZE must be a positive integer "
+                 "greater than 0 and cannot exceed 10000000.",
+         },
+         {
+             .test_name = "invalid_block_size_too_big",
+             .success = false,
+             .command_str = "idx1 SChema hash_field1 as "
+                            "hash_field11 vector flat 8 TYPE  FLOAT32 DIM 3 "
+                            "DISTANCE_METRIC IP BLOCK_SIZE 20000000",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Invalid range: "
+                 "Value above maximum; BLOCK_SIZE must be a positive integer "
+                 "greater than 0 and cannot exceed 10000000.",
+         },
+         {
+             .test_name = "invalid_initial_cap_too_big",
+             .success = false,
+             .command_str = "idx1 SChema hash_field1 as "
+                            "hash_field11 vector hnsw 8 TYPE  FLOAT32 DIM 3 "
+                            "DISTANCE_METRIC IP INITIAL_CAP 2147483647",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Invalid range: "
+                 "Value above maximum; INITIAL_CAP must be a positive integer "
+                 "greater than 0 and cannot exceed 10000000.",
+         },
+         {
              .test_name = "invalid_as",
              .success = false,
              .command_str = "idx1 SChema hash_field1 asa "

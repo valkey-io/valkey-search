@@ -24,7 +24,7 @@ The following are explicitly **not** goals of Valkey Search compatibility with R
 
 This section describes the areas where Valkey Search intends to behave the same as Redisearch from an application's point of view. **Observable differences in these areas are considered bugs.** If an application written against Redisearch produces different results, fails where it previously succeeded, or succeeds where it previously failed in any of the following dimensions, that is a defect in Valkey Search and should be reported as such.
 
-The contract applies only to features that Valkey Search actually implements. Valkey Search does not include every feature of Redisearch; its supported feature set is a subset. An application that attempts to use a Redisearch feature Valkey Search does not support will receive an error — typically indicating that the command, option, field type, or query construct is not recognized or not implemented. That error is the intended behavior and is **not** a compatibility bug. The authoritative source for which features are supported is the Valkey Search documentation and the release notes for the specific release of Valkey Search being deployed; those should be consulted to determine the supported surface.
+The contract applies only to features that Valkey Search actually implements. Valkey Search may not include every feature of Redisearch. An application that attempts to use a Redisearch feature Valkey Search does not support will receive an error — typically indicating that the command, option, field type, or query construct is not recognized or not implemented. That error is the intended behavior and is **not** a compatibility bug. The supported surface may also _exceed_ Redisearch: Valkey Search may add new syntax and commands, or accept combinations of existing elements that Redisearch rejects (see [Extensions](#extensions) below). The authoritative source for which features are supported is the Valkey Search documentation and the release notes for the specific release of Valkey Search being deployed; those should be consulted to determine the supported surface.
 
 ### Command and argument syntax
 
@@ -98,7 +98,13 @@ This section describes areas where Valkey Search intentionally diverges from Red
 
 ## Extensions
 
-Valkey Search may extend the syntax and semantics beyond what Redisearch provides. Where an extension is additive — for example, a new option on an existing command, a new field type, a new query operator, or a new command entirely — it is not considered an incompatibility: applications written against Redisearch do not exercise these surfaces and are unaffected. Extensions are, however, Valkey-Search-specific: applications that adopt them lose portability back to Redisearch.
+Valkey Search may extend functionality beyond what Redisearch provides. These extensions take two forms.
+
+**New syntax and commands.** Valkey Search may add surfaces that Redisearch does not have at all — for example, a new option on an existing command, a new field type, a new query operator, or an entirely new command. Because Redisearch has no such surface, an application written against Redisearch cannot be exercising it, so its addition cannot change the behavior of any existing application.
+
+**New combinations of existing elements.** Valkey Search may also support combinations of already-existing commands, options, field types, or query constructs that Redisearch recognizes individually but rejects (or does not support) when used together. Where Redisearch would have returned an error for such a combination, no compatible application can depend on it succeeding, so accepting it is additive rather than a behavioral change. (If, instead, Redisearch accepts the combination and produces a _different_ result than Valkey Search, that is not an extension — it is tracked as an intentional incompatibility or, on a compatible surface, a compatibility bug.)
+
+In both forms, an extension is not considered an incompatibility: applications written against Redisearch do not exercise these surfaces and are unaffected. Extensions are, however, Valkey-Search-specific: applications that adopt them lose portability back to Redisearch.
 
 Extensions are documented alongside the features they extend rather than centralized here. When an extension modifies the behavior of an existing Redisearch surface in a non-additive way, that change is tracked as an intentional incompatibility in the section above, not as an extension.
 
@@ -157,12 +163,16 @@ A fix for a compatibility bug released in a minor or patch release selectively p
 
 It may be judged that a compatibility defect cannot reasonably be fixed while preserving the old behavior. In this case, the fix cannot be made until the next major release and will ignore the `search.emulate-release` mechanism. In other words, fixes made under this clause cannot be undone using the `search.emulate-release` override.
 
-When feasible the old (non-compatible) behavior will be preserved for _at least_ one additional major release. If a bug was fixed in 1.x.x, then the 2.y.y will support emulating the 1.x.x release. However support in the 3. release or later releases is not ensured. Similar to the above clause, if retaining the parallel behavior becomes unreasonable to support, then it can be removed on the next major version.
+### Sunsetting of Incompatible Behavior
+
+When feasible the old (non-compatible) behavior will be preserved for _at least_ one additional major release. If a bug was fixed in 1.x.x, then the 2.y.y will support emulating the 1.x.x release. However support in the 3. release or later releases is not ensured. Similar to the above clause, if retaining the parallel behavior becomes unreasonable to support, then it can be removed on the next major version (see the release notes for that release).
+
+To ease application migration, incompatible behavior controlled by `search.emulate-release` is tracked by INFO fields. These fields count the number of uses of incompatible behavior by an application.
 
 ### Known Compatibility Defect Corrections
 
 A list of the compatibility issues that have been fixed.
 
-| Release            | Description |
-| ------------------ | ----------- |
-| under construction | n/a         |
+| Release            | INFO field | Old Behavior | New Behavior |
+| ------------------ | ---------- | ------------ | ------------ |
+| under construction | n/a        | ---          | ---          |

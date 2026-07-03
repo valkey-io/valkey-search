@@ -33,9 +33,9 @@ def run_pausepoint_reset(type, node0, node1):
             return count > 0
 
         # wait for reaching consistency check pausepoint
-        waiters.wait_for_true(wait_for_pausepoint, timeout=5)
+        waiters.wait_for_true(wait_for_pausepoint)
         # wait for reaching handle cluster message pausepoint
-        waiters.wait_for_true(counter_is_increasing, timeout=5)
+        waiters.wait_for_true(counter_is_increasing)
 
         if type == 0:
             metadata_reconciliation_completed_count_before = node1.info("SEARCH")["search_coordinator_metadata_reconciliation_completed_count"]
@@ -43,9 +43,8 @@ def run_pausepoint_reset(type, node0, node1):
             reset_pause_handle_message_result = node1.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage no")
             # wait for metadata to reconcile
             waiters.wait_for_true(
-                lambda: int(node1.info("SEARCH")["search_coordinator_metadata_reconciliation_completed_count"]) 
-                    > metadata_reconciliation_completed_count_before, 
-                timeout=5
+                lambda: int(node1.info("SEARCH")["search_coordinator_metadata_reconciliation_completed_count"])
+                    > metadata_reconciliation_completed_count_before
             )
             # reset consistency check pausepoint second
             reset_pausepoint_result = node0.execute_command("FT._DEBUG PAUSEPOINT RESET fanout_remote_pausepoint")

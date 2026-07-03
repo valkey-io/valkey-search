@@ -27,6 +27,7 @@
 #include "testing/common.h"
 #include "testing/coordinator/common.h"
 #include "valkey_search_options.h"
+#include "vmsdk/src/info.h"
 #include "vmsdk/src/memory_allocation_overrides.h"
 #include "vmsdk/src/module.h"
 #include "vmsdk/src/testing_infra/module.h"
@@ -568,6 +569,105 @@ TEST_F(ValkeySearchTest, OnForkChildBornCallback) {
   EXPECT_EQ(
       Metrics::GetStats().writer_worker_thread_pool_suspension_expired_cnt, 0);
   EXPECT_EQ(Metrics::GetStats().writer_worker_thread_pool_resumed_cnt, 1);
+}
+
+// Tests for VALKEY_SEARCH_COMPATIBILITY_FIX (see src/valkey_search_options.h
+// and the "Compatibility Defects" section of COMPATIBILITY.md). Uses fix
+// version 1.1.0 so SetEmulateRelease can move both above and below it within
+// the configured [1.0.0, kModuleVersion] range.
+class CompatibilityFixTest : public vmsdk::ValkeyTest {
+ protected:
+  void SetUp() override {
+    vmsdk::ValkeyTest::SetUp();
+    saved_emulate_release_ = options::GetEmulateRelease().GetValue();
+  }
+  void TearDown() override {
+    VMSDK_EXPECT_OK(
+        options::GetEmulateRelease().SetValue(saved_emulate_release_));
+    vmsdk::ValkeyTest::TearDown();
+  }
+
+  void SetEmulateRelease(vmsdk::ValkeyVersion v) {
+    VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(v));
+  }
+
+  std::string DumpCompatibilitySection() {
+    ValkeyModuleInfoCtx info_ctx;
+    vmsdk::info_field::DoSection(&info_ctx, "compatibility",
+                                 /*for_crash_report=*/0);
+    return info_ctx.info_capture.GetInfo();
+  }
+
+ private:
+  vmsdk::ValkeyVersion saved_emulate_release_{0};
+};
+
+struct CompatibilityFixPathCase {
+  std::string name;
+  vmsdk::ValkeyVersion emulate_release;
+  char expected;  // 'F' if fixed branch must run, 'O' if legacy branch must run
+};
+
+class CompatibilityFixPathTest
+    : public CompatibilityFixTest,
+      public ::testing::WithParamInterface<CompatibilityFixPathCase> {};
+
+// Fix declared at 1.1.0; rows exercise emulate-release below/at/above it. All
+// rows share the same macro call site, so iterating across them also verifies
+// that the per-site state correctly tracks dynamic SET-config changes.
+TEST_P(CompatibilityFixPathTest, SelectsPathFromEmulateRelease) {
+  SetEmulateRelease(GetParam().emulate_release);
+  char result = VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 1, 0, "compat_test_path_selection", [] { return 'F'; },
+      [] { return 'O'; });
+  EXPECT_EQ(result, GetParam().expected);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    EmulateRelease, CompatibilityFixPathTest,
+    ::testing::Values(CompatibilityFixPathCase{"below_fix", {1, 0, 0}, 'O'},
+                      CompatibilityFixPathCase{"equals_fix", {1, 1, 0}, 'F'},
+                      CompatibilityFixPathCase{"above_fix", {1, 2, 0}, 'F'}),
+    [](const ::testing::TestParamInfo<CompatibilityFixPathCase>& info) {
+      return info.param.name;
+    });
+
+TEST_F(CompatibilityFixTest, SupportsVoidReturn) {
+  SetEmulateRelease({1, 0, 0});
+  int fixed_calls = 0;
+  int old_calls = 0;
+  VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 1, 0, "test_void_return", [&] { ++fixed_calls; },
+      [&] { ++old_calls; });
+  EXPECT_EQ(fixed_calls, 0);
+  EXPECT_EQ(old_calls, 1);
+}
+
+TEST_F(CompatibilityFixTest, OldPathIncrementsLabelInfoField) {
+  SetEmulateRelease({1, 0, 0});
+
+  for (int i = 0; i < 3; ++i) {
+    VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 1, 0, "test_label_increments", [&] { return 0; }, [&] { return 0; });
+  }
+
+  EXPECT_THAT(DumpCompatibilitySection(),
+              ::testing::HasSubstr("compatibility-test_label_increments: 3"));
+}
+
+TEST_F(CompatibilityFixTest, FixedPathDoesNotIncrementCounter) {
+  SetEmulateRelease({1, 1, 0});
+
+  for (int i = 0; i < 3; ++i) {
+    VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 1, 0, "test_label_no_increment", [&] { return 0; },
+        [&] { return 0; });
+  }
+
+  // The counter is initialized on first macro invocation regardless of which
+  // path runs, but the fixed path must not increment it.
+  EXPECT_THAT(DumpCompatibilitySection(),
+              ::testing::HasSubstr("compatibility-test_label_no_increment: 0"));
 }
 
 class MockPthreadAtfork {

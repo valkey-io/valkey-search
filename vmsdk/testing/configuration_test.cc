@@ -363,5 +363,108 @@ TEST_F(ConfigTest, defaultValue) {
   FreeValkeyArgs(args);
 }
 
+TEST_F(ConfigTest, ValkeyVersionFromString) {
+  auto ok = vmsdk::ValkeyVersion::FromString("1.2.3");
+  ASSERT_TRUE(ok.ok());
+  EXPECT_EQ(ok->Major(), 1u);
+  EXPECT_EQ(ok->Minor(), 2u);
+  EXPECT_EQ(ok->Patch(), 3u);
+
+  EXPECT_FALSE(vmsdk::ValkeyVersion::FromString("1.2").ok());
+  EXPECT_FALSE(vmsdk::ValkeyVersion::FromString("1.2.3.4").ok());
+  EXPECT_FALSE(vmsdk::ValkeyVersion::FromString("abc").ok());
+  EXPECT_FALSE(vmsdk::ValkeyVersion::FromString("1..3").ok());
+  EXPECT_FALSE(vmsdk::ValkeyVersion::FromString("100000.0.0").ok());  // > u16
+  EXPECT_FALSE(vmsdk::ValkeyVersion::FromString("1.500.0").ok());     // > u8
+}
+
+TEST_F(ConfigTest, CheckDouble) {
+  size_t modify_calls = 0;
+  auto cfg = config::DoubleBuilder("my-double", 1.5, 0.0, 10.0)
+                 .WithModifyCallback(
+                     [&]([[maybe_unused]] double v) { ++modify_calls; })
+                 .Build();
+
+  EXPECT_DOUBLE_EQ(cfg->GetValue(), 1.5);
+  EXPECT_DOUBLE_EQ(cfg->GetDefaultValue(), 1.5);
+
+  EXPECT_TRUE(cfg->SetValue(2.25).ok());
+  EXPECT_DOUBLE_EQ(cfg->GetValue(), 2.25);
+  EXPECT_EQ(modify_calls, 1);
+
+  // Range rejection (above max).
+  auto over = cfg->SetValue(11.0);
+  EXPECT_FALSE(over.ok());
+  EXPECT_TRUE(absl::IsOutOfRange(over));
+  EXPECT_DOUBLE_EQ(cfg->GetValue(), 2.25);
+
+  // Range rejection (below min).
+  auto under = cfg->SetValue(-0.5);
+  EXPECT_FALSE(under.ok());
+  EXPECT_TRUE(absl::IsOutOfRange(under));
+
+  // FromString happy path — succeeds and shifts the default.
+  EXPECT_TRUE(cfg->FromString("3.75").ok());
+  EXPECT_DOUBLE_EQ(cfg->GetValue(), 3.75);
+  EXPECT_DOUBLE_EQ(cfg->GetDefaultValue(), 3.75);
+
+  // FromString malformed.
+  EXPECT_FALSE(cfg->FromString("not-a-number").ok());
+
+  // FromString that fails the bounds check must leave both current value
+  // and default untouched.
+  auto bad = cfg->FromString("99.0");
+  EXPECT_FALSE(bad.ok());
+  EXPECT_TRUE(absl::IsOutOfRange(bad));
+  EXPECT_DOUBLE_EQ(cfg->GetValue(), 3.75);
+  EXPECT_DOUBLE_EQ(cfg->GetDefaultValue(), 3.75);
+}
+
+TEST_F(ConfigTest, CheckVersion) {
+  size_t modify_calls = 0;
+  vmsdk::ValkeyVersion last_seen{0, 0, 0};
+  auto cfg = config::VersionBuilder("my-version", vmsdk::ValkeyVersion(1, 2, 0),
+                                    vmsdk::ValkeyVersion(1, 0, 0),
+                                    vmsdk::ValkeyVersion(2, 0, 0))
+                 .WithModifyCallback([&](vmsdk::ValkeyVersion v) {
+                   ++modify_calls;
+                   last_seen = v;
+                 })
+                 .Build();
+
+  EXPECT_EQ(cfg->GetValue(), vmsdk::ValkeyVersion(1, 2, 0));
+
+  EXPECT_TRUE(cfg->SetValue(vmsdk::ValkeyVersion(1, 0, 0)).ok());
+  EXPECT_EQ(cfg->GetValue(), vmsdk::ValkeyVersion(1, 0, 0));
+  EXPECT_EQ(modify_calls, 1);
+  EXPECT_EQ(last_seen, vmsdk::ValkeyVersion(1, 0, 0));
+
+  // Below min.
+  auto under = cfg->SetValue(vmsdk::ValkeyVersion(0, 9, 0));
+  EXPECT_FALSE(under.ok());
+  EXPECT_TRUE(absl::IsOutOfRange(under));
+
+  // Above max.
+  auto over = cfg->SetValue(vmsdk::ValkeyVersion(3, 0, 0));
+  EXPECT_FALSE(over.ok());
+  EXPECT_TRUE(absl::IsOutOfRange(over));
+
+  // FromString happy path — succeeds and shifts the default.
+  EXPECT_TRUE(cfg->FromString("1.2.3").ok());
+  EXPECT_EQ(cfg->GetValue(), vmsdk::ValkeyVersion(1, 2, 3));
+  EXPECT_EQ(cfg->GetDefaultValue(), vmsdk::ValkeyVersion(1, 2, 3));
+
+  // FromString malformed.
+  EXPECT_FALSE(cfg->FromString("1.2").ok());
+
+  // FromString that fails the bounds check must leave both current value
+  // and default untouched.
+  auto bad = cfg->FromString("3.0.0");
+  EXPECT_FALSE(bad.ok());
+  EXPECT_TRUE(absl::IsOutOfRange(bad));
+  EXPECT_EQ(cfg->GetValue(), vmsdk::ValkeyVersion(1, 2, 3));
+  EXPECT_EQ(cfg->GetDefaultValue(), vmsdk::ValkeyVersion(1, 2, 3));
+}
+
 }  // namespace
 }  // namespace vmsdk

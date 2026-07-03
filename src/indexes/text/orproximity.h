@@ -8,12 +8,12 @@
 #ifndef _VALKEY_SEARCH_INDEXES_TEXT_ORPROXIMITY_H_
 #define _VALKEY_SEARCH_INDEXES_TEXT_ORPROXIMITY_H_
 
-#include <set>
 #include <vector>
 
 #include "absl/container/inlined_vector.h"
 #include "src/indexes/text.h"
 #include "src/indexes/text/text_iterator.h"
+#include "src/utils/inlined_priority_queue.h"
 
 namespace valkey_search::indexes::text {
 
@@ -58,13 +58,17 @@ class OrProximityIterator : public TextIterator {
   FieldMaskPredicate current_field_mask_;
   FieldMaskPredicate query_field_mask_;
 
-  // Multiset for efficient key management
-  std::multiset<std::pair<Key, size_t>> key_set_;
+  // InlinedPriorityQueue for efficient key management (no heap allocation).
+  valkey_search::InlinedPriorityQueue<std::pair<Key, size_t>,
+                                      kProximityTermsInlineCapacity>
+      key_set_;
   // Current iterators on same key
   absl::InlinedVector<size_t, kProximityTermsInlineCapacity>
       current_key_indices_;
-  // Multiset for position optimization (supports future SeekForwardPosition)
-  std::multiset<std::pair<Position, size_t>> pos_set_;
+  // InlinedPriorityQueue for position management (no heap allocation)
+  valkey_search::InlinedPriorityQueue<std::pair<Position, size_t>,
+                                      kProximityTermsInlineCapacity>
+      pos_set_;
   absl::InlinedVector<size_t, kProximityTermsInlineCapacity>
       current_pos_indices_;
 

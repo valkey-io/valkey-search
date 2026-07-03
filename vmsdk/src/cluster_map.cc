@@ -140,15 +140,21 @@ std::vector<NodeInfo> ClusterMap::GetTargetsForSlot(FanoutTargetMode mode,
   if (slot_to_shard_map_.empty()) {
     return {};
   }
-  auto iter = slot_to_shard_map_.lower_bound(slot);
-  if (iter == slot_to_shard_map_.end()) {
-    iter--;
+  // Find the range [start_slot, end_slot] that contains `slot`. The map is
+  // keyed by start_slot, so the candidate range is the last one whose start is
+  // <= slot, i.e. the entry just before the first start > slot.
+  auto iter = slot_to_shard_map_.upper_bound(slot);
+  if (iter == slot_to_shard_map_.begin()) {
+    return {};  // slot is before the first range.
+  }
+  --iter;
+  uint16_t start_slot = iter->first;
+  uint16_t end_slot = iter->second.first;  // end_slot is inclusive.
+  if (slot < start_slot || slot > end_slot) {
+    return {};  // Slot is in a gap; no shard owns it.
   }
   const ShardInfo* shard = iter->second.second;
   CHECK(shard);
-  if (slot < iter->first || slot >= iter->second.first) {
-    return {};  // Slot not in range means no shard has this slot.
-  }
 
   //
   // We have the right shard, pick from it.

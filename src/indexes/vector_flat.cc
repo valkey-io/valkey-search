@@ -143,6 +143,9 @@ absl::Status VectorFlat<T>::ResizeIfFull() {
   absl::WriterMutexLock lock(&resize_mutex_);
   std::unique_lock<std::mutex> index_lock(algo_->index_lock);
   if (algo_->cur_element_count_ == GetCapacity()) {
+    if (block_size_ == 0) {
+      return absl::InternalError("Cannot resize FLAT index: block_size is 0");
+    }
     VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
         << "Resizing FLAT Index, current size: " << GetCapacity()
         << ", expand by: " << block_size_;
@@ -222,12 +225,6 @@ template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
     absl::string_view query, uint64_t count, cancel::Token &cancellation_token,
     std::unique_ptr<hnswlib::BaseFilterFunctor> filter) {
-  if (!IsValidSizeVector(query)) {
-    return absl::InvalidArgumentError(absl::StrCat(
-        "Error parsing vector similarity query: query vector blob size (",
-        query.size(), ") does not match index's expected size (",
-        dimensions_ * GetDataTypeSize(), ")."));
-  }
   auto perform_search = [this, count, &filter,
                          &cancellation_token](absl::string_view query)
       -> absl::StatusOr<std::priority_queue<std::pair<T, hnswlib::labeltype>>> {

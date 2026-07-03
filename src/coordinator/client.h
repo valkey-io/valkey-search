@@ -48,7 +48,7 @@ class ClientImpl : public Client {
  public:
   ClientImpl(vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx,
              absl::string_view address,
-             std::unique_ptr<Coordinator::Stub> stub);
+             std::unique_ptr<Coordinator::StubInterface> stub);
   static std::shared_ptr<Client> MakeInsecureClient(
       vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx,
       absl::string_view address);
@@ -70,7 +70,7 @@ class ClientImpl : public Client {
  private:
   vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx_;
   std::string address_;
-  std::unique_ptr<Coordinator::Stub> stub_;
+  std::unique_ptr<Coordinator::StubInterface> stub_;
 };
 
 }  // namespace valkey_search::coordinator

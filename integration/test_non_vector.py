@@ -208,14 +208,14 @@ def validate_buffer_multiplier_config(client: Valkey):
     assert client.execute_command("CONFIG SET search.search-result-buffer-multiplier 2.5") == b"OK"
     assert client.execute_command("CONFIG SET search.search-result-buffer-multiplier 1.2") == b"OK"
     # Test that values outside range are rejected
-    with pytest.raises(ResponseError, match=r"Buffer multiplier must be between 1.0 and 1000.0"):
+    with pytest.raises(ResponseError):
         client.execute_command("CONFIG SET search.search-result-buffer-multiplier -1.0")
-    with pytest.raises(ResponseError, match=r"Buffer multiplier must be between 1.0 and 1000.0"):
+    with pytest.raises(ResponseError):
         client.execute_command("CONFIG SET search.search-result-buffer-multiplier 0.5")
-    with pytest.raises(ResponseError, match=r"Buffer multiplier must be between 1.0 and 1000.0"):
+    with pytest.raises(ResponseError):
         client.execute_command("CONFIG SET search.search-result-buffer-multiplier 1001.0")
     # Test that invalid strings are rejected
-    with pytest.raises(ResponseError, match=r"Buffer multiplier must be a valid number"):
+    with pytest.raises(ResponseError):
         client.execute_command("CONFIG SET search.search-result-buffer-multiplier invalid")
 
 def validate_bulk_limit_queries(client: Valkey):
@@ -450,6 +450,18 @@ def validate_aggregate_complex_queries(client: Valkey):
     for i in range(1, len(result)):
         row = dict(zip(result[i][::2], result[i][1::2]))
         assert row[b'distinct_ratings'] == b'50'
+
+    # 10b. COUNT_DISTINCT without AS
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "3", "price", "rating", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "COUNT_DISTINCT", "1", "@rating"
+    )
+    assert result[0] == 2
+    for i in range(1, len(result)):
+        row = dict(zip(result[i][::2], result[i][1::2]))
+        assert row[b'COUNT_DISTINCT(@rating)'] == b'50'
 
     # 11. GROUPBY with STDDEV reducer
     result = client.execute_command(

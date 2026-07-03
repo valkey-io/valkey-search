@@ -111,7 +111,7 @@ class ValkeySearch {
   static void InitInstance(std::unique_ptr<ValkeySearch> instance);
 
   uint32_t GetHNSWBlockSize() const;
-  void SetHNSWBlockSize(uint32_t block_size);
+  absl::Status SetHNSWBlockSize(uint32_t block_size);
 
   absl::Status OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                       int argc);

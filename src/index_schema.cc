@@ -16,11 +16,11 @@
 #include <memory>
 #include <optional>
 #include <string>
-#include <thread>
 #include <utility>
 #include <vector>
 
 #include "absl/base/optimization.h"
+#include "absl/cleanup/cleanup.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
@@ -110,6 +110,15 @@ static bool RDBWriteV2() {
 static bool RDBValidateOnWrite() {
   return dynamic_cast<vmsdk::config::Boolean &>(*config_rdb_validate_on_write)
       .GetValue();
+}
+
+std::optional<uint16_t> ComputeSingleSlotNumber(absl::string_view index_name) {
+  if (!vmsdk::ParseHashTag(index_name).has_value()) {
+    return std::nullopt;
+  }
+
+  auto key = vmsdk::MakeUniqueValkeyString(index_name);
+  return ValkeyModule_ClusterKeySlot(key.get());
 }
 
 DEV_INTEGER_COUNTER(rdb_stats, rdb_save_keys);
@@ -291,6 +300,7 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
       attribute_data_type_(std::move(attribute_data_type)),
       name_(std::string(index_schema_proto.name())),
       db_num_(index_schema_proto.db_num()),
+      single_slot_number_(ComputeSingleSlotNumber(index_schema_proto.name())),
       language_(index_schema_proto.language()),
       punctuation_(index_schema_proto.punctuation()),
       with_offsets_(index_schema_proto.with_offsets()),
@@ -576,13 +586,6 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
     vmsdk::UniqueValkeyString record = VectorExternalizer::Instance().GetRecord(
         ctx, attribute_data_type_.get(), key_obj.get(), key_cstr,
         attribute.GetIdentifier(), is_module_owned);
-    // Early return on record not found just if the record not tracked.
-    // Otherwise, it will be processed as a delete
-    if (!record && !attribute.GetIndex()->IsTracked(interned_key) &&
-        !InTrackedMutationRecords(interned_key, attribute.GetIdentifier())) {
-      attribute.GetIndex()->UnTrack(interned_key);
-      continue;
-    }
     if (!is_module_owned) {
       // A record which are owned by the module were not modified and are
       // already tracked in the vector registry.
@@ -637,7 +640,8 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
 
 void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
                                       MutatedAttributes &mutated_attributes,
-                                      const Key &key) {
+                                      const Key &key)
+    ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
   if (text_index_schema_) {
     // Always clean up indexed words from all text attributes of the key up
     // front
@@ -964,6 +968,7 @@ void IndexSchema::BackfillScanCallback(ValkeyModuleCtx *ctx,
 }
 
 CONTROLLED_BOOLEAN(StopBackfill, false);
+CONTROLLED_BOOLEAN(ForceRDBLoadFailure, false);
 
 uint32_t IndexSchema::PerformBackfill(ValkeyModuleCtx *ctx,
                                       uint32_t batch_size) {
@@ -1215,12 +1220,6 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   }
 }
 
-bool IsVectorIndex(std::shared_ptr<indexes::IndexBase> index) {
-  return index->GetIndexerType() == indexes::IndexerType::kVector ||
-         index->GetIndexerType() == indexes::IndexerType::kHNSW ||
-         index->GetIndexerType() == indexes::IndexerType::kFlat;
-}
-
 std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
   auto index_schema_proto = std::make_unique<data_model::IndexSchema>();
   index_schema_proto->set_name(this->name_);
@@ -1295,7 +1294,7 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
       GetAttributeCount() +
       std::count_if(attributes_.begin(), attributes_.end(),
                     [](const auto &attribute) {
-                      return IsVectorIndex(attribute.second.GetIndex());
+                      return attribute.second.GetIndex()->IsVectorIndex();
                     });
   if (RDBWriteV2()) {
     supplemental_count += 1;  // For Index Extension
@@ -1331,7 +1330,7 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
 
     // Key to ID mapping is stored as a separate chunked supplemental content
     // for vector indexes.
-    if (IsVectorIndex(attribute.second.GetIndex())) {
+    if (attribute.second.GetIndex()->IsVectorIndex()) {
       VMSDK_RETURN_IF_ERROR(SaveSupplementalSection(
           rdb, data_model::SUPPLEMENTAL_CONTENT_KEY_TO_ID_MAP,
           [&](auto &header) {
@@ -1371,7 +1370,7 @@ absl::Status IndexSchema::ValidateIndex() const {
   std::string oracle_name;
 
   for (const auto &attribute : attributes_) {
-    if (!IsVectorIndex(attribute.second.GetIndex())) {
+    if (!attribute.second.GetIndex()->IsVectorIndex()) {
       oracle_index = attribute.second.GetIndex();
       oracle_name = attribute.first;
       break;
@@ -1392,8 +1391,8 @@ absl::Status IndexSchema::ValidateIndex() const {
   for (const auto &[name, attr] : attributes_) {
     auto idx = attr.GetIndex();
     size_t cnt = idx->GetTrackedKeyCount() + idx->GetUnTrackedKeyCount();
-    if (IsVectorIndex(idx) ? cnt <= oracle_key_count
-                           : cnt == oracle_key_count) {
+    if (idx->IsVectorIndex() ? cnt <= oracle_key_count
+                             : cnt == oracle_key_count) {
       continue;
     }
     VMSDK_LOG(WARNING, nullptr)
@@ -1553,6 +1552,11 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
     Metrics::GetStats().rdb_restore_current_index_keys_loaded = i + 1;
   }
 
+  if (ForceRDBLoadFailure.GetValue()) {
+    return absl::InternalError(
+        "Simulated IO error during RDB load (ForceRDBLoadFailure)");
+  }
+
   if (Metrics::GetStats().rdb_restore_backpressure_wait_cycles > 0) {
     VMSDK_LOG(NOTICE, ctx)
         << "RDB restore completed with backpressure. Total wait cycles: "
@@ -1631,6 +1635,12 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
       IndexSchema::Create(ctx, *index_schema_proto, mutations_thread_pool,
                           !load_attributes_on_create, true));
 
+  // If we exit early after creating a new schema, workers may already hold
+  // strong references via ValkeyModule_Yield. Ensure MarkAsDestructing is
+  // called so the destructor won't attempt main-thread-only cleanup.
+  auto mark_destructing_on_error =
+      absl::MakeCleanup([&]() { index_schema->MarkAsDestructing(); });
+
   // Supplemental content will include indices and any content for them
   while (supplemental_iter.HasNext()) {
     rdb_load_sections.Increment();
@@ -1665,7 +1675,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
           VMSDK_ASSIGN_OR_RETURN(
               auto index, index_schema->GetIndex(attribute.alias()),
               _ << "Key to ID mapping found before index definition.");
-          if (!IsVectorIndex(index)) {
+          if (!index->IsVectorIndex()) {
             return absl::InternalError(
                 "Key to ID mapping found for non vector index ");
           }
@@ -1710,6 +1720,8 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
   }
   VMSDK_LOG(NOTICE, ctx) << "Loaded index schema with "
                          << index_schema->GetAttributeCount() << " attributes";
+  std::move(mark_destructing_on_error)
+      .Cancel();  // Don't mark for destruction since no error has been returned
   return index_schema;
 }
 
@@ -1862,6 +1874,14 @@ bool IndexSchema::InTrackedMutationRecords(
   absl::MutexLock lock(&mutated_records_mutex_);
   auto itr = tracked_mutated_records_.find(key);
   if (ABSL_PREDICT_FALSE(itr == tracked_mutated_records_.end())) {
+    return false;
+  }
+  // ConsumeTrackedMutatedAttribute moves the attribute map out and sets
+  // attributes = std::nullopt, leaving the entry in the map. After that
+  // sequence, attributes is disengaged and `attributes->find(...)` would
+  // dereference an empty optional (UB; observed crashing under ASAN in the
+  // backfill scan path). No pending mutation == false.
+  if (!itr->second.attributes.has_value()) {
     return false;
   }
   if (itr->second.attributes->find(identifier) ==

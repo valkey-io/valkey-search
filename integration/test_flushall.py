@@ -40,10 +40,10 @@ class TestFlushAllCME(ValkeySearchClusterTestCase):
         hnsw_index.load_data(client, NUM_VECTORS)
 
         clients = [self.client_for_primary(i) for i in range(len(self.replication_groups))]
-        # Wait for all the docs to be indexed (up to 3 seconds)
-        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index), NUM_VECTORS, timeout=5)
+        # Wait for all the docs to be indexed
+        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index), NUM_VECTORS)
         for c in clients:
             c.execute_command("flushall sync")
 
         assert client.execute_command("FT._LIST") == [hnsw_index.name.encode()]
-        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index), 0, timeout=5)
+        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index), 0)

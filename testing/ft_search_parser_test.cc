@@ -70,6 +70,7 @@ struct FTSearchParserTestCase {
   std::string search_parameters_str;
   uint64_t timeout_ms{query::kTimeoutMS};
   bool vector_query{true};
+  std::optional<size_t> query_blob_num_floats;
   bool verbatim{false};
   bool inorder{false};
   std::optional<unsigned> slop;
@@ -111,6 +112,9 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
   std::cerr << "\n";
 
   std::vector<float> floats = {0.1, 0.2, 0.3};
+  if (test_case.query_blob_num_floats.has_value()) {
+    floats.assign(*test_case.query_blob_num_floats, 0.1f);
+  }
   std::vector<ValkeyModuleString *> args;
   const std::string key_str = "my_schema_name";
   ValkeyModuleCtx fake_ctx;
@@ -439,6 +443,17 @@ INSTANTIATE_TEST_SUITE_P(
             .vector_query = false,
         },
         {
+            .test_name = "happy_path_numeric_scientific_notation",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[-1e-2 1e+3]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .vector_query = false,
+        },
+        {
             .test_name = "happy_path_tag",
             .success = true,
             .params_str = "",
@@ -517,6 +532,26 @@ INSTANTIATE_TEST_SUITE_P(
             .params_str = " PARAMS 2",
             .filter_str = " * => [KNN 10 @vec $BLOB]",
             .k = 10,
+        },
+        {
+            .test_name = "vector_blob_size_too_small",
+            .success = false,
+            .params_str = " PARAMS 2",
+            .filter_str = " * => [KNN 10 @vec $BLOB]",
+            .expected_error_message =
+                "Error parsing vector similarity parameters: query vector "
+                "blob size",
+            .query_blob_num_floats = 2,
+        },
+        {
+            .test_name = "vector_blob_size_too_large",
+            .success = false,
+            .params_str = " PARAMS 2",
+            .filter_str = " * => [KNN 10 @vec $BLOB]",
+            .expected_error_message =
+                "Error parsing vector similarity parameters: query vector "
+                "blob size",
+            .query_blob_num_floats = 4,
         },
         {
             .test_name = "happy_path_1_with_score_as",

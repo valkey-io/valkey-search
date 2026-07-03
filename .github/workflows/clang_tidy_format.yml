@@ -77,13 +77,25 @@ jobs:
           echo "Processing the following files:"
           echo "$MODIFIED_FILES"
 
+          # Thread-safety-only clang-tidy config: -* drops every check from
+          # .clang-tidy, then we re-enable thread-safety. A single benign
+          # readability check is added because clang-tidy refuses to run with
+          # no real checks selected (clang-diagnostic-* checks alone don't
+          # count). ExtraArgs ensures -Wthread-safety is passed even when
+          # compile_commands.json was produced by a non-Clang build.
+          TS_CONFIG="{Checks: '-*,readability-redundant-control-flow,clang-diagnostic-thread-safety*', WarningsAsErrors: 'clang-diagnostic-thread-safety*', ExtraArgs: ['-Wthread-safety']}"
+
           for FILE in $MODIFIED_FILES; do
             echo "Running clang-format check on $FILE"
             docker run --rm --privileged -v "$(pwd):/workspace" --user "ubuntu:ubuntu" presubmit-image \
             bash -c "ci/check_clang_format.sh \"$FILE\""
-            
-            # TODO: Enable clang tidy after the existing code is tidied
-            # echo "Running clang-tidy on $FILE"
+
+            echo "Running clang-tidy thread-safety check on $FILE"
+            docker run --rm -v "$(pwd):/workspace" --user "ubuntu:ubuntu" \
+              -e TS_FILE="$FILE" -e TS_CONFIG="$TS_CONFIG" presubmit-image \
+              bash -c 'clang-tidy --quiet -p compile_commands.json --config="$TS_CONFIG" "$TS_FILE" 2>&1 | tail -n +3'
+
+            # TODO: Enable full clang-tidy after the existing code is tidied
             # docker run --rm  -v "$(pwd):/workspace" --user "ubuntu:ubuntu" presubmit-image \
             # bash -c "clang-tidy --quiet -p compile_commands.json \"$FILE\" 2>&1 | tail -n +3"
           done

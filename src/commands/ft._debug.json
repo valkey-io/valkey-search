@@ -3,7 +3,7 @@
     "acl_categories": [
       "ADMIN",
       "SLOW",
-      "READ",
+      "DANGEROUS",
       "SEARCH"
     ],
     "arguments": [],

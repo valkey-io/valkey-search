@@ -8,6 +8,8 @@
 #ifndef _VALKEY_SEARCH_INDEXES_TEXT_TERM_H_
 #define _VALKEY_SEARCH_INDEXES_TEXT_TERM_H_
 
+#include <utility>
+
 #include "absl/container/inlined_vector.h"
 #include "src/indexes/text.h"
 #include "src/indexes/text/flat_position_map.h"
@@ -65,7 +67,7 @@ class TermIterator : public TextIterator {
       return current_key_ && current_position_.has_value() &&
              current_field_mask_ != 0ULL;
     }
-    return current_key_ ? true : false;
+    return current_key_ != nullptr;
   }
   /* Implementation of APIs unique to TermIterator */
   // It is possible to implement a `CurrentKeyIterVecIdx` API that returns the
@@ -79,7 +81,10 @@ class TermIterator : public TextIterator {
       key_iterators_;
   absl::InlinedVector<PositionIterator, kWordExpansionInlineCapacity>
       pos_iterators_;
-  Key current_key_;
+  // Raw pointer to the current key in the underlying btree_map. Safe to use
+  // because the map is immutable while the reader lock is held (no inserts or
+  // deletes during search).
+  const Key* current_key_{nullptr};
   std::optional<PositionRange> current_position_;
   FieldMaskPredicate current_field_mask_;
   const bool require_positions_;
@@ -87,7 +92,10 @@ class TermIterator : public TextIterator {
 
   // Pending queue: heap of valid iterators not currently being processed.
   // Provides O(1) access to the minimum key and O(log K) extraction.
-  valkey_search::InlinedPriorityQueue<std::pair<Key, size_t>,
+  // Uses PriorityQueueEntry (raw pointer) instead of copying Key to avoid
+  // atomic ref counting. Safe because pointers reference btree_map entries
+  // which are immutable during search (reader lock held).
+  valkey_search::InlinedPriorityQueue<valkey_search::PriorityQueueEntry<Key>,
                                       kWordExpansionInlineCapacity>
       key_set_;
   // Pending queue: heap of valid iterators not currently being processed.

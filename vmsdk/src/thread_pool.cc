@@ -20,9 +20,13 @@
 #include "absl/functional/any_invocable.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
+#include "absl/strings/str_join.h"
 #include "absl/synchronization/blocking_counter.h"
 #include "absl/synchronization/mutex.h"
+#include "absl/time/clock.h"
+#include "absl/time/time.h"
 #include "status/status_macros.h"
+#include "vmsdk/src/log.h"
 #include "vmsdk/src/module_config.h"
 
 namespace {
@@ -135,16 +139,44 @@ void ThreadPool::JoinWorkers() {
     suspend_workers_ = false;
   }
 
-  threads_.ClearWithCallback(
-      [](auto thread) { pthread_join(thread->thread_id, nullptr); });
+  // Wait up to 5s for every worker in threads_ to flag itself joinable.
+  const absl::Time deadline = absl::Now() + absl::Seconds(5);
+  auto count_unjoinable = [this]() {
+    return threads_.CountIf(
+        [](const std::shared_ptr<Thread> &t) { return !t->IsJoinable(); });
+  };
+  while (count_unjoinable() > 0 && absl::Now() < deadline) {
+    absl::SleepFor(absl::Milliseconds(10));
+  }
+  if (count_unjoinable() > 0) {
+    std::vector<std::string> hung;
+    threads_.ForEach([&hung](const std::shared_ptr<Thread> &t) {
+      if (!t->IsJoinable()) {
+        hung.push_back(t->name);
+      }
+    });
+    VMSDK_LOG(WARNING, nullptr)
+        << "ThreadPool shutdown timed out after 5s waiting for workers to exit;"
+        << " hung threads: " << absl::StrJoin(hung, ", ");
+    CHECK(false) << "ThreadPool shutdown timeout: " << hung.size()
+                 << " worker(s) did not become joinable within 5s";
+  }
   started_ = false;
-
   JoinTerminatedWorkers();
+  CHECK(threads_.IsEmpty())
+      << "threads_ not empty after JoinTerminatedWorkers in JoinWorkers";
 }
 
 void ThreadPool::JoinTerminatedWorkers() {
-  pending_join_threads_.ClearWithCallback(
-      [](auto thread) { pthread_join(thread->thread_id, nullptr); });
+  while (true) {
+    auto thread = threads_.PopIf(
+        [](const std::shared_ptr<Thread> &t) { return t->IsJoinable(); });
+    if (!thread.has_value()) {
+      break;
+    }
+    // pthread_join intentionally runs with no ThreadSafeVector mutex held.
+    pthread_join((*thread)->thread_id, nullptr);
+  }
 }
 
 absl::Status ThreadPool::SuspendWorkers() {
@@ -218,13 +250,7 @@ void ThreadPool::WorkerThread(std::shared_ptr<Thread> thread) {
       while (!condition.Eval()) {
         condition_.WaitWithTimeout(&queue_mutex_, absl::Seconds(1));
         if (thread->IsShutdown()) {
-          thread->InvokeShutdownCallback();
-          // remove this thread from the threads list and place it in the
-          // pending join list
-          threads_.PopIf([thread](std::shared_ptr<Thread> t) {
-            return t->thread_id == thread->thread_id;
-          });
-          pending_join_threads_.Add(thread);
+          thread->MarkJoinable();
           return;
         }
       }
@@ -232,6 +258,7 @@ void ThreadPool::WorkerThread(std::shared_ptr<Thread> thread) {
           (stop_mode_.value() == StopMode::kAbrupt ||
            std::all_of(priority_tasks_.begin(), priority_tasks_.end(),
                        [](const auto &tasks) { return tasks.empty(); }))) {
+        thread->MarkJoinable();
         return;
       }
       if (suspend_workers_) {
@@ -261,31 +288,50 @@ void ThreadPool::IncrThreadCountBy(size_t count) {
     std::shared_ptr<Thread> thread_ptr = std::make_shared<Thread>();
     ThreadRunContext *context = new ThreadRunContext{this, thread_ptr};
     pthread_create(&thread_ptr->thread_id, nullptr, RunWorkerThread, context);
-#ifndef __APPLE__
     size_t thread_num = threads_.Size();
-    pthread_setname_np(thread_ptr->thread_id,
-                       (name_prefix_ + std::to_string(thread_num)).c_str());
+    thread_ptr->name = name_prefix_ + std::to_string(thread_num);
+#ifndef __APPLE__
+    pthread_setname_np(thread_ptr->thread_id, thread_ptr->name.c_str());
 #endif
     threads_.Add(thread_ptr);
   }
 }
 
 void ThreadPool::DecrThreadCountBy(size_t count, bool sync) {
-  auto threads = threads_.PopBackMulti(count);
-  absl::BlockingCounter counter{static_cast<int>(threads.size())};
-  for (const auto &thread : threads) {
-    if (sync) {
-      thread->Shutdown([&counter]() {
-        counter.DecrementCount();
-      });  // signal the thread to exit
-    } else {
-      thread->Shutdown();
+  // Don't pop: leave the targeted threads in threads_ so JoinTerminatedWorkers
+  // can reap them via the joinable_flag once they actually exit. We pick the
+  // *last* `count` threads that are still active (not already shutdown).
+  std::vector<std::shared_ptr<Thread>> targets;
+  threads_.ForEach([&targets](const std::shared_ptr<Thread> &t) {
+    if (!t->IsShutdown()) {
+      targets.push_back(t);
     }
+  });
+  if (targets.size() > count) {
+    targets.erase(targets.begin(), targets.end() - count);
   }
-
+  for (const auto &thread : targets) {
+    thread->Shutdown();
+  }
+  // Wake idle workers so they observe shutdown_flag without waiting 1s.
+  {
+    absl::MutexLock lock(&queue_mutex_);
+    condition_.SignalAll();
+  }
   if (sync) {
-    counter.Wait();
+    for (const auto &thread : targets) {
+      while (!thread->IsJoinable()) {
+        absl::SleepFor(absl::Milliseconds(1));
+      }
+    }
+    JoinTerminatedWorkers();
   }
+}
+
+size_t ThreadPool::Size() const {
+  return threads_.CountIf([](const std::shared_ptr<Thread> &t) {
+    return !t->IsShutdown() && !t->IsJoinable();
+  });
 }
 
 void ThreadPool::Resize(size_t count, bool wait_for_resize) {

@@ -4,6 +4,7 @@
 #include <stdlib.h>
 
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <deque>
@@ -24,6 +25,7 @@
 #include "src/metrics.h"
 #include "third_party/hnswlib/index.pb.h"
 #include "visited_list_pool.h"
+#include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 
 #ifdef VMSDK_ENABLE_MEMORY_ALLOCATION_OVERRIDES
@@ -98,6 +100,10 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
   bool allow_replace_deleted_ = false;  // flag to replace deleted elements
                                         // (marked as deleted) during insertions
 
+  // Gate for load-time corruption validation, wired from the
+  // hnsw-validation-enable config via LoadIndex. Consulted only in loadCheck().
+  bool load_validation_enabled_ = false;
+
   std::mutex deleted_elements_lock;  // lock for deleted_elements
   std::unordered_set<tableint>
       deleted_elements;  // contains internal ids of deleted elements
@@ -143,12 +149,12 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     update_probability_generator_.seed(random_seed + 1);
 
     size_links_level0_ = maxM0_ * sizeof(tableint) + sizeof(linklistsizeint);
-    size_data_per_element_ =
-        size_links_level0_ + sizeof(char *) + sizeof(labeltype);
+    offsetData_ =
+        (size_links_level0_ + alignof(char *) - 1) & ~(alignof(char *) - 1);
+    size_data_per_element_ = offsetData_ + sizeof(char *) + sizeof(labeltype);
     serialize_size_data_per_element_ =
         size_links_level0_ + vector_size_ + sizeof(labeltype);
-    offsetData_ = size_links_level0_;
-    label_offset_ = size_links_level0_ + sizeof(char *);
+    label_offset_ = offsetData_ + sizeof(char *);
     offsetLevel0_ = 0;
 
     data_level0_memory_ = std::make_unique<ChunkedArray>(
@@ -390,16 +396,16 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       if (bare_bone_search) {
         flag_stop_search = candidate_dist > lowerBound;
       } else {
-        if (isCancelled && isCancelled->isCancelled()) { // VALKEYSEARCH
-          flag_stop_search = true; // VALKEYSEARCH
-        } else // VALKEYSEARCH
-        if (stop_condition) {
-          flag_stop_search =
-              stop_condition->should_stop_search(candidate_dist, lowerBound);
-        } else {
-          flag_stop_search =
-              candidate_dist > lowerBound && top_candidates.size() == ef;
-        }
+        if (isCancelled && isCancelled->isCancelled()) {  // VALKEYSEARCH
+          flag_stop_search = true;                        // VALKEYSEARCH
+        } else                                            // VALKEYSEARCH
+          if (stop_condition) {
+            flag_stop_search =
+                stop_condition->should_stop_search(candidate_dist, lowerBound);
+          } else {
+            flag_stop_search =
+                candidate_dist > lowerBound && top_candidates.size() == ef;
+          }
       }
       if (flag_stop_search) {
         break;
@@ -416,80 +422,125 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         metric_distance_computations += size;
       }
 
+      // ---- Three-phase prefetch pipeline -----------------------------------
+      // A candidate's vector lives behind a pointer indirection at offsetData_,
+      // so reaching it is a two-deep pointer chase (slot -> vec). Because the
+      // order of visitation to vectors is determined by the graph structure,
+      // the vector addresses look random -- defeating any HW prefetching and
+      // substantially increasing latency. Fusing all of that into one loop
+      // forces the chase to serialize per candidate. Instead we fission the
+      // expansion into three passes, each hiding exactly one level of memory
+      // latency with its own lookahead:
+      //   Phase 1 - probe visited_array (random gather), collect unvisited ids.
+      //   Phase 2 - resolve the slot indirection into concrete vector pointers.
+      //   Phase 3 - compute distances + maintain the candidate heaps.
+      // The first two are latency-bound gathers (deep lookahead helps); the
+      // third is bandwidth-bound (lookahead of 1, head only, HW streams tail).
+      // Scratch is thread_local so reader threads each keep one reusable
+      // buffer.
 #ifdef USE_PREFETCH
-      __builtin_prefetch((char *)(visited_array + *(data + 1)), 0, 3);
-      __builtin_prefetch((char *)(visited_array + *(data + 1) + 64), 0, 3);
-      __builtin_prefetch((*data_level0_memory_)[(*(data + 1))] + offsetData_, 0,
-                         3);
-      __builtin_prefetch((char *)(data + 2), 0, 3);
+      constexpr int kVisitedLookahead = 4;  // P1
+      constexpr int kSlotLookahead = 4;     // P2
+      constexpr int kVectorLookahead = 1;   // P3
 #endif
+      thread_local std::vector<tableint> unvisited;
+      thread_local std::vector<char *> vptrs;
+      unvisited.clear();
 
+      // Phase 1: filter visited. Preserve neighbor-list order so the heap/
+      // lowerBound evolution in phase 3 is identical to the fused loop.
       for (size_t j = 1; j <= size; j++) {
-        int candidate_id = *(data + j);
-//                    if (candidate_id == 0) continue;
 #ifdef USE_PREFETCH
-        if (j + 1 < size) {
-          __builtin_prefetch((char *)(visited_array + *(data + j + 1)), 0, 3);
+        if (j + kVisitedLookahead <= size)
           __builtin_prefetch(
-              (*data_level0_memory_)[(*(data + j + 1))] + offsetData_, 0, 3);
+              (char *)(visited_array + *(data + j + kVisitedLookahead)), 0, 0);
+#endif
+        tableint candidate_id = (tableint) * (data + j);
+        if (visited_array[candidate_id] != visited_array_tag) {
+          visited_array[candidate_id] = visited_array_tag;
+          unvisited.push_back(candidate_id);
+        }
+      }
+      const size_t n_unvisited = unvisited.size();
+
+      // Phase 2: resolve slot indirection. Prefetch the pointer slot ahead,
+      // then dereference the now-resident slot to the actual vector address.
+      vptrs.resize(n_unvisited);
+      for (size_t k = 0; k < n_unvisited; k++) {
+#ifdef USE_PREFETCH
+        if (k + kSlotLookahead < n_unvisited)
+          __builtin_prefetch(
+              (*data_level0_memory_)[unvisited[k + kSlotLookahead]] +
+                  offsetData_,
+              0, 0);
+#endif
+        vptrs[k] =
+            *(char **)((*data_level0_memory_)[unvisited[k]] + offsetData_);
+      }
+
+      // Phase 3: distance compute. Prefetch the head (~3 lines, two 128B
+      // sectors) of the next vector to cover the cold head and bridge the HW
+      // streamer's training window; the streamer covers the multi-line tail.
+      for (size_t k = 0; k < n_unvisited; k++) {
+#ifdef USE_PREFETCH
+        if (k + kVectorLookahead < n_unvisited) {
+          char *h = vptrs[k + kVectorLookahead];
+          __builtin_prefetch(h, 0, 0);
+          __builtin_prefetch(h + 128, 0, 0);
         }
 #endif
-        if (!(visited_array[candidate_id] == visited_array_tag)) {
-          visited_array[candidate_id] = visited_array_tag;
+        tableint candidate_id = unvisited[k];
+        char *currObj1 = vptrs[k];
+        dist_t dist = fstdistfunc_(data_point, currObj1, dist_func_param_);
 
-          char *currObj1 = (getDataByInternalId(candidate_id));
-          dist_t dist = fstdistfunc_(data_point, currObj1, dist_func_param_);
+        bool flag_consider_candidate;
+        if (!bare_bone_search && stop_condition) {
+          flag_consider_candidate =
+              stop_condition->should_consider_candidate(dist, lowerBound);
+        } else {
+          flag_consider_candidate =
+              top_candidates.size() < ef || lowerBound > dist;
+        }
 
-          bool flag_consider_candidate;
-          if (!bare_bone_search && stop_condition) {
-            flag_consider_candidate =
-                stop_condition->should_consider_candidate(dist, lowerBound);
-          } else {
-            flag_consider_candidate =
-                top_candidates.size() < ef || lowerBound > dist;
-          }
-
-          if (flag_consider_candidate) {
-            candidate_set.emplace(-dist, candidate_id);
+        if (flag_consider_candidate) {
+          candidate_set.emplace(-dist, candidate_id);
 #ifdef USE_PREFETCH
-            __builtin_prefetch(
-                (*data_level0_memory_)[candidate_set.top().second] +
-                    offsetLevel0_,  ///////////
-                0, 3);              ////////////////////////
+          __builtin_prefetch(
+              (*data_level0_memory_)[candidate_set.top().second] +
+                  offsetLevel0_,
+              0, 3);
 #endif
 
-            if (bare_bone_search ||
-                (!isMarkedDeleted(candidate_id) &&
-                 ((!isIdAllowed) ||
-                  (*isIdAllowed)(getExternalLabel(candidate_id))))) {
-              top_candidates.emplace(dist, candidate_id);
-              if (!bare_bone_search && stop_condition) {
-                stop_condition->add_point_to_result(
-                    getExternalLabel(candidate_id), currObj1, dist);
-              }
-            }
-
-            bool flag_remove_extra = false;
+          if (bare_bone_search ||
+              (!isMarkedDeleted(candidate_id) &&
+               ((!isIdAllowed) ||
+                (*isIdAllowed)(getExternalLabel(candidate_id))))) {
+            top_candidates.emplace(dist, candidate_id);
             if (!bare_bone_search && stop_condition) {
+              stop_condition->add_point_to_result(
+                  getExternalLabel(candidate_id), currObj1, dist);
+            }
+          }
+
+          bool flag_remove_extra = false;
+          if (!bare_bone_search && stop_condition) {
+            flag_remove_extra = stop_condition->should_remove_extra();
+          } else {
+            flag_remove_extra = top_candidates.size() > ef;
+          }
+          while (flag_remove_extra) {
+            tableint id = top_candidates.top().second;
+            top_candidates.pop();
+            if (!bare_bone_search && stop_condition) {
+              stop_condition->remove_point_from_result(
+                  getExternalLabel(id), getDataByInternalId(id), dist);
               flag_remove_extra = stop_condition->should_remove_extra();
             } else {
               flag_remove_extra = top_candidates.size() > ef;
             }
-            while (flag_remove_extra) {
-              tableint id = top_candidates.top().second;
-              top_candidates.pop();
-              if (!bare_bone_search && stop_condition) {
-                stop_condition->remove_point_from_result(
-                    getExternalLabel(id), getDataByInternalId(id), dist);
-                flag_remove_extra = stop_condition->should_remove_extra();
-              } else {
-                flag_remove_extra = top_candidates.size() > ef;
-              }
-            }
-
-            if (!top_candidates.empty())
-              lowerBound = top_candidates.top().first;
           }
+
+          if (!top_candidates.empty()) lowerBound = top_candidates.top().first;
         }
       }
     }
@@ -761,7 +812,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     header.set_serialize_size_data_per_element(
         serialize_size_data_per_element_);
     header.set_label_offset(label_offset_);
-    header.set_offset_data(offsetData_);
+    header.set_offset_data(size_links_level0_);
     header.set_max_level(maxlevel_);
     header.set_enterpoint_node(enterpoint_node_);
     header.set_max_m(maxM_);
@@ -811,9 +862,31 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     return absl::OkStatus();
   }
 
+  // Single choke-point for load-time validation. The kill switch
+  // (load_validation_enabled_, wired from the hnsw-validation-enable config) is
+  // consulted here and nowhere else, so a defective check can be globally
+  // disabled. On failure it throws; VectorHNSW::LoadFromRDB converts the
+  // exception into a failed (rejected) RDB load.
+  inline void loadCheck(bool ok, absl::string_view msg) const {
+    if (ok) {
+      return;
+    }
+    if (load_validation_enabled_) {
+      throw std::runtime_error(
+          absl::StrCat("HNSW index load validation failed: ", msg));
+    }
+    // Validation disabled: don't fail the load, but log (throttled) the defect.
+    VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
+        << "HNSW load validation is disabled; ignoring detected index "
+           "corruption: "
+        << msg;
+  }
+
   absl::Status LoadIndex(InputStream &input, SpaceInterface<dist_t> *s,
-                         size_t max_elements_i, VectorTracker *vector_tracker) {
+                         size_t max_elements_i, VectorTracker *vector_tracker,
+                         size_t expected_m, bool validate) {
     clear();
+    load_validation_enabled_ = validate;
 
     VMSDK_ASSIGN_OR_RETURN(auto serialized_header, input.LoadChunk());
     auto header = std::make_unique<data_model::HNSWIndexHeader>();
@@ -821,13 +894,13 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       return absl::InternalError("Could not deserialize HNSW header");
     }
 
+    // --- Read raw header fields (untrusted) ---
     offsetLevel0_ = header->offset_level_0();
     max_elements_ = header->max_elements();
     cur_element_count_ = header->curr_element_count();
     serialize_size_data_per_element_ =
         header->serialize_size_data_per_element();
     label_offset_ = header->label_offset();
-    offsetData_ = header->offset_data();
     maxlevel_ = header->max_level();
     enterpoint_node_ = header->enterpoint_node();
     maxM_ = header->max_m();
@@ -836,40 +909,111 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     mult_ = header->mult();
     ef_construction_ = header->ef_construction();
 
-    size_t max_elements = max_elements_i;
-    if (max_elements < cur_element_count_) {
-      max_elements = max_elements_;
-    }
-    max_elements_ = max_elements;
-
-    size_links_level0_ = maxM0_ * sizeof(tableint) + sizeof(linklistsizeint);
-
+    // Authoritative parameters come from the index definition (the space and
+    // expected_m), never from the untrusted header.
     vector_size_ = s->get_data_size();
-    size_data_per_element_ =
-        size_links_level0_ + sizeof(char *) + sizeof(labeltype);
-    label_offset_ = size_links_level0_ + sizeof(char *);
-
     fstdistfunc_ = s->get_dist_func();
     dist_func_param_ = s->get_dist_func_param();
+
+    // Recompute the geometry that governs memory layout. When validation is
+    // enabled these are cross-checked against the header below; the header's
+    // own copies are only ever used as values to validate against.
+    size_links_level0_ = maxM0_ * sizeof(tableint) + sizeof(linklistsizeint);
+    offsetData_ =
+        (size_links_level0_ + alignof(char *) - 1) & ~(alignof(char *) - 1);
+    size_data_per_element_ = offsetData_ + sizeof(char *) + sizeof(labeltype);
+    label_offset_ = offsetData_ + sizeof(char *);
+    size_links_per_element_ =
+        maxM_ * sizeof(tableint) + sizeof(linklistsizeint);
+
+    // Resolve capacity: at least the live element count, honoring the larger of
+    // the caller-requested cap and the file's recorded capacity.
+    size_t cur_count = cur_element_count_;
+    size_t max_elements =
+        std::max(cur_count, std::max(max_elements_i, max_elements_));
+    max_elements_ = max_elements;
+
+    // --- Header validation (the kill switch lives inside loadCheck) ---
+    {
+      const size_t exp_m = expected_m > 10000 ? 10000 : expected_m;
+      // Layout parameters must match the index definition exactly.
+      loadCheck(exp_m >= 1, "M must be >= 1");
+      loadCheck(M_ == exp_m, "header M does not match index definition");
+      loadCheck(maxM_ == M_, "header maxM does not equal M");
+      loadCheck(maxM0_ == 2 * M_, "header maxM0 does not equal 2*M");
+      loadCheck(maxM0_ <= 0xFFFF,
+                "maxM0 exceeds the 16-bit neighbor-count field");
+      loadCheck(vector_size_ > 0, "vector size must be > 0");
+      loadCheck(serialize_size_data_per_element_ ==
+                    size_links_level0_ + vector_size_ + sizeof(labeltype),
+                "serialized element size is inconsistent with the geometry");
+      loadCheck(offsetLevel0_ == 0, "offset_level_0 must be 0");
+      // Recompute mult=1/log(M) and match within a guardband (cross-arch libm);
+      // skip M<2 where 1/log(M) is not finite. Soft, non-safety check.
+      if (M_ >= 2) {
+        const double expected_mult = 1.0 / std::log(static_cast<double>(M_));
+        loadCheck(mult_ > 0.0 &&
+                      std::fabs(mult_ - expected_mult) <= 1e-6 * expected_mult,
+                  "mult is inconsistent with M");
+      }
+
+      // Element-count / level / entry-point consistency.
+      loadCheck(cur_element_count_ <= max_elements_,
+                "curr_element_count exceeds max_elements");
+      if (cur_element_count_ == 0) {
+        loadCheck(maxlevel_ == -1 || maxlevel_ == 0,
+                  "empty index has a non-trivial max_level");
+      } else {
+        loadCheck(maxlevel_ >= 0, "non-empty index has a negative max_level");
+        loadCheck(maxlevel_ <= static_cast<int>(cur_element_count_),
+                  "max_level exceeds the element count");
+        loadCheck(enterpoint_node_ < cur_element_count_,
+                  "enterpoint_node is out of range");
+      }
+
+      // Guard every load allocation against size_t overflow / address-space
+      // wraparound, which also bounds an absurd element count.
+      loadCheck(size_data_per_element_ > 0, "size_data_per_element is 0");
+      loadCheck(max_elements_ <= SIZE_MAX / size_data_per_element_,
+                "level-0 allocation size overflows");
+      loadCheck(max_elements_ <= SIZE_MAX / sizeof(void *),
+                "linkLists allocation size overflows");
+      loadCheck(max_elements_ <= SIZE_MAX / sizeof(int),
+                "element_levels allocation size overflows");
+    }
 
     data_level0_memory_ = std::make_unique<ChunkedArray>(
         size_data_per_element_, k_elements_per_chunk, max_elements);
 
     for (size_t i = 0; i < cur_element_count_; i++) {
       VMSDK_ASSIGN_OR_RETURN(auto chunk, input.LoadChunk());
+      loadCheck(chunk->size() ==
+                    size_links_level0_ + vector_size_ + sizeof(labeltype),
+                "level-0 element chunk has the wrong size");
       memcpy((*data_level0_memory_)[i], chunk->data(), size_links_level0_);
       labeltype id;
-      memcpy((char *)&id, chunk->data() + offsetData_ + vector_size_,
+      memcpy((char *)&id, chunk->data() + size_links_level0_ + vector_size_,
              sizeof(labeltype));
       *(char **)((*data_level0_memory_)[i] + offsetData_) =
-          vector_tracker->TrackVector(id, chunk->data() + offsetData_,
+          vector_tracker->TrackVector(id, chunk->data() + size_links_level0_,
                                       vector_size_);
       memcpy((*data_level0_memory_)[i] + label_offset_, (char *)&id,
              sizeof(labeltype));
-    }
 
-    size_links_per_element_ =
-        maxM_ * sizeof(tableint) + sizeof(linklistsizeint);
+      // Validate the level-0 link list now that it is in place. The neighbor
+      // scan is clamped to maxM0_ so it stays within the record even when the
+      // (corrupt) count is larger and validation is disabled.
+      linklistsizeint *ll0 = get_linklist0(i);
+      size_t l0_count = getListCount(ll0);
+      loadCheck(l0_count <= maxM0_, "level-0 neighbor count exceeds 2*M");
+      tableint *l0_neighbors = (tableint *)(ll0 + 1);
+      size_t l0_scan = std::min(l0_count, maxM0_);
+      for (size_t j = 0; j < l0_scan; j++) {
+        loadCheck(l0_neighbors[j] < cur_element_count_,
+                  "level-0 neighbor id out of range");
+        loadCheck(l0_neighbors[j] != i, "level-0 self-loop");
+      }
+    }
 
     std::vector<std::mutex>(max_elements).swap(link_list_locks_);
     std::vector<std::mutex>(MAX_LABEL_OPERATION_LOCKS).swap(label_op_locks_);
@@ -883,21 +1027,85 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     revSize_ = 1.0 / mult_;
     ef_ = 10;
     for (size_t i = 0; i < cur_element_count_; i++) {
-      label_lookup_[getExternalLabel(i)] = i;
+      // Establish safe defaults first: element_levels_[i] stays 0 and the
+      // link-list pointer stays null until a valid allocation is stored, so an
+      // early return / thrown validation cannot leave clear() freeing an
+      // uninitialized pointer (ChunkedArray memory is not zeroed).
+      element_levels_[i] = 0;
+      *reinterpret_cast<char **>((*linkLists_)[i]) = nullptr;
+
+      labeltype ext_label = getExternalLabel(i);
+      loadCheck(label_lookup_.find(ext_label) == label_lookup_.end(),
+                "duplicate label in index");
+      label_lookup_[ext_label] = i;
       size_t linkListSize;
       VMSDK_ASSIGN_OR_RETURN(auto size_chunk, input.LoadChunk());
+      loadCheck(size_chunk->size() == sizeof(size_t),
+                "link-list size chunk has the wrong size");
       memcpy(&linkListSize, size_chunk->data(), sizeof(size_t));
       linkListSize = le64toh(linkListSize);
-      if (linkListSize == 0) {
-        element_levels_[i] = 0;
-        *reinterpret_cast<char **>((*linkLists_)[i]) = nullptr;
-      } else {
-        element_levels_[i] = linkListSize / size_links_per_element_;
+      if (linkListSize != 0) {
+        loadCheck(linkListSize % size_links_per_element_ == 0,
+                  "upper-level link-list size is not a multiple of the stride");
+        int level = linkListSize / size_links_per_element_;
+        loadCheck(level <= maxlevel_, "element level exceeds max_level");
         VMSDK_ASSIGN_OR_RETURN(auto link_list_chunk, input.LoadChunk());
-        *reinterpret_cast<char **>((*linkLists_)[i]) =
-            new char[link_list_chunk->size()];
-        memcpy(*reinterpret_cast<char **>((*linkLists_)[i]),
-               link_list_chunk->data(), link_list_chunk->size());
+        loadCheck(link_list_chunk->size() == linkListSize,
+                  "upper-level link-list chunk has the wrong size");
+        // Allocate from the derived level count (== linkListSize for valid
+        // data) so get_linklist() stays in-bounds for levels 1..level
+        // regardless of whether validation is enabled.
+        size_t alloc_size =
+            static_cast<size_t>(level) * size_links_per_element_;
+        char *links = new char[alloc_size];
+        memset(links, 0, alloc_size);
+        memcpy(links, link_list_chunk->data(),
+               std::min(alloc_size, link_list_chunk->size()));
+        // Store the pointer, then publish the level, so the two stay in sync
+        // for clear() even if a later check throws.
+        *reinterpret_cast<char **>((*linkLists_)[i]) = links;
+        element_levels_[i] = level;
+        // Validate per-level neighbor counts. Neighbor ids are validated in the
+        // global pass, since their target slots may not be loaded yet.
+        for (int l = 1; l <= level; l++) {
+          loadCheck(getListCount(get_linklist(i, l)) <= maxM_,
+                    "upper-level neighbor count exceeds M");
+        }
+      }
+    }
+
+    // --- Global graph-invariant pass (requires all element_levels_ loaded) ---
+    // The entry point must be one of the tallest nodes (proven invariant:
+    // maxlevel_ is only ever raised together with enterpoint_node_). The
+    // short-circuit also guards the array access if validation is disabled and
+    // enterpoint_node_ is out of range.
+    if (cur_element_count_ > 0) {
+      loadCheck(enterpoint_node_ < cur_element_count_ &&
+                    element_levels_[enterpoint_node_] == maxlevel_,
+                "enterpoint node is not at max_level");
+    }
+    // Every upper-level link must target a slot that actually exists at that
+    // level; otherwise a graph descent would over-read the target's smaller
+    // link-list allocation. This needs the full element_levels_, so it cannot
+    // be done in the streaming load loop above.
+    for (size_t i = 0; i < cur_element_count_; i++) {
+      for (int level = 1; level <= element_levels_[i]; level++) {
+        linklistsizeint *ll = get_linklist(i, level);
+        size_t count = getListCount(ll);
+        // count was bounded to maxM_ per-record; clamp the scan so a corrupt
+        // count cannot over-read the per-level region when validation is off.
+        size_t scan = std::min(count, maxM_);
+        tableint *neighbors = (tableint *)(ll + 1);
+        for (size_t j = 0; j < scan; j++) {
+          tableint e = neighbors[j];
+          loadCheck(e < cur_element_count_,
+                    "upper-level neighbor id out of range");
+          loadCheck(e != i, "upper-level self-loop");
+          // Short-circuit guards element_levels_[e] when validation is off and
+          // e is out of range (the first check above did not throw).
+          loadCheck(e >= cur_element_count_ || element_levels_[e] >= level,
+                    "upper-level neighbor is absent at that level");
+        }
       }
     }
 
@@ -1403,16 +1611,16 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
   std::priority_queue<std::pair<dist_t, labeltype>> searchKnn(
       const void *query_data, size_t k,
       BaseFilterFunctor *isIdAllowed = nullptr,
-      BaseCancellationFunctor *isCancelled = nullptr // VALKEYSEARCH
-    ) const {
+      BaseCancellationFunctor *isCancelled = nullptr  // VALKEYSEARCH
+  ) const {
     return searchKnn(query_data, k, std::nullopt, isIdAllowed, isCancelled);
   }
 
   std::priority_queue<std::pair<dist_t, labeltype>> searchKnn(
       const void *query_data, size_t k, std::optional<size_t> ef_runtime,
       BaseFilterFunctor *isIdAllowed = nullptr,
-      BaseCancellationFunctor *isCancelled = nullptr // VALKEYSEARCH
-    ) const {
+      BaseCancellationFunctor *isCancelled = nullptr  // VALKEYSEARCH
+  ) const {
     std::priority_queue<std::pair<dist_t, labeltype>> result;
     if (cur_element_count_ == 0) return result;
 
@@ -1452,7 +1660,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                         std::vector<std::pair<dist_t, tableint>>,
                         CompareByFirst>
         top_candidates;
-    bool bare_bone_search = !num_deleted_ && !isIdAllowed && !isCancelled; // VALKEYSEARCH
+    bool bare_bone_search =
+        !num_deleted_ && !isIdAllowed && !isCancelled;  // VALKEYSEARCH
     if (bare_bone_search) {
       top_candidates = searchBaseLayerST<true>(
           currObj, query_data, std::max(ef_runtime.value_or(ef_), k),
@@ -1517,8 +1726,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                         std::vector<std::pair<dist_t, tableint>>,
                         CompareByFirst>
         top_candidates;
-    top_candidates = searchBaseLayerST<false>(currObj, query_data, 0,
-                                              isIdAllowed, nullptr, &stop_condition);
+    top_candidates = searchBaseLayerST<false>(
+        currObj, query_data, 0, isIdAllowed, nullptr, &stop_condition);
 
     size_t sz = top_candidates.size();
     result.resize(sz);

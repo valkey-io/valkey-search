@@ -48,6 +48,15 @@ namespace valkey_search::indexes {
 std::vector<char> NormalizeEmbedding(absl::string_view record, size_t type_size,
                                      float* magnitude = nullptr);
 
+// Lightweight result entry used during non-vector search collection.
+// Trivially destructible — destroying a vector of 10K of these is a no-op.
+struct BorrowedNeighbor {
+  BorrowedInternedStringPtr key;
+  float distance;
+};
+static_assert(std::is_trivially_destructible_v<BorrowedNeighbor>,
+              "BorrowedNeighbor must be trivially destructible");
+
 struct Neighbor {
   InternedStringPtr external_id;
   float distance;
@@ -177,6 +186,8 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
                                  std::optional<float>& magnitude);
   virtual uint64_t GetMaxInternalLabel() const { return 0; }
   virtual size_t GetLabelCount() const { return 0; }
+
+  bool IsVectorIndex() const override { return true; }
 
  protected:
   VectorBase(IndexerType indexer_type, int dimensions,

@@ -61,7 +61,7 @@ class TestFanoutBase(ValkeySearchClusterTestCaseDebugMode):
             except ConnectionError:
                 return True
     
-        waiters.wait_for_true(lambda: is_node_down(node1), timeout=5)
+        waiters.wait_for_true(lambda: is_node_down(node1))
         
         with pytest.raises(ResponseError) as excinfo:
             node0.execute_command("FT.INFO", index_name, "CLUSTER", "ALLSHARDS")

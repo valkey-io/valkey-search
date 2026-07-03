@@ -15,6 +15,7 @@
 
 #include "absl/functional/any_invocable.h"
 #include "absl/log/check.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
@@ -150,6 +151,11 @@ class ValkeyVersion {
   friend void AbslStringify(Sink &sink, const ValkeyVersion &sv) {
     absl::Format(&sink, "%d.%d.%d", sv.Major(), sv.Minor(), sv.Patch());
   }
+
+  // Parse exactly "<major>.<minor>.<patch>". Rejects any other shape (including
+  // bare integers, which would otherwise collide with the implicit int ctor)
+  // and rejects components out of their declared bit-widths.
+  static absl::StatusOr<ValkeyVersion> FromString(absl::string_view text);
 
  private:
   unsigned version_;

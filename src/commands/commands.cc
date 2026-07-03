@@ -27,6 +27,21 @@
 #include "vmsdk/src/utils.h"
 
 namespace valkey_search {
+
+// Number of in-flight query operations (FT.SEARCH / FT.AGGREGATE), reported as
+// the count of currently-live SearchParameters objects. A SearchParameters is
+// alive for the whole duration of a (possibly asynchronous) query - while
+// queued on the reader thread pool, awaiting main-thread completion, or pending
+// background cleanup - and holds the shared_ptr to the IndexSchema it queries.
+// Exposed as a developer-visible INFO field (search_async_queries_in_flight) so
+// tests can wait for the system to become idle before shutting the server down,
+// avoiding spurious leak reports from in-flight query state at process exit.
+static vmsdk::info_field::Integer async_queries_in_flight(
+    "query", "async_queries_in_flight",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return query::GetSearchParametersInFlight();
+    }));
+
 namespace async {
 
 struct Result {
@@ -82,7 +97,27 @@ void Free([[maybe_unused]] ValkeyModuleCtx *ctx, void *privdata) {
 CONTROLLED_BOOLEAN(ForceReplicasOnly, false);
 DEV_INTEGER_COUNTER(stats, single_slot_queries);
 
-// Duck-typed over Cmd: only requires a `index_schema_name` member. Used by
+// Duck-typed over Cmd: only requires an `index_schema` member. Used by
+// ExecuteCommand<Cmd>; declared before that template so its body is visible
+// at the template's point of instantiation.
+template <typename Cmd>
+bool IsSingleSlotQueryRoutedToLocalNode(ValkeyModuleCtx *ctx,
+                                        const Cmd &parameters) {
+  if (!parameters.index_schema) {
+    return false;
+  }
+
+  const auto &single_slot_number =
+      parameters.index_schema->GetSingleSlotNumber();
+  if (!single_slot_number.has_value()) {
+    return false;
+  }
+
+  const auto cluster_map = ValkeySearch::Instance().GetOrRefreshClusterMap(ctx);
+  return cluster_map && cluster_map->IOwnSlot(*single_slot_number);
+}
+
+// Duck-typed over Cmd: only requires an `index_schema` member. Used by
 // ExecuteCommand<Cmd>; declared before that template so its body is visible
 // at the template's point of instantiation.
 template <typename Cmd>
@@ -92,12 +127,13 @@ std::vector<vmsdk::cluster_map::NodeInfo> ComputeSearchTargetsT(
                   ? vmsdk::cluster_map::FanoutTargetMode::kOneReplicaPerShard
                   : vmsdk::cluster_map::FanoutTargetMode::kRandom;
   auto cluster_map = ValkeySearch::Instance().GetOrRefreshClusterMap(ctx);
-  if (vmsdk::ParseHashTag(parameters.index_schema_name).has_value()) {
-    auto key = vmsdk::MakeUniqueValkeyString(parameters.index_schema_name);
-    auto this_slot = ValkeyModule_ClusterKeySlot(key.get());
+  const auto &single_slot_number =
+      parameters.index_schema->GetSingleSlotNumber();
+  if (single_slot_number.has_value()) {
     single_slot_queries.Increment();
     return cluster_map->GetTargetsForSlot(
-        mode, query::fanout::IsSystemUnderLowUtilization(), this_slot);
+        mode, query::fanout::IsSystemUnderLowUtilization(),
+        *single_slot_number);
   } else {
     return cluster_map->GetTargets(
         mode, query::fanout::IsSystemUnderLowUtilization());
@@ -139,9 +175,11 @@ absl::Status ExecuteCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                            ValkeySearch::Instance().IsCluster() &&
                            !parameters->local_only;
 
-    if (ABSL_PREDICT_FALSE(inside_multi_exec && do_fanout)) {
+    if (ABSL_PREDICT_FALSE(inside_multi_exec && do_fanout) &&
+        !IsSingleSlotQueryRoutedToLocalNode(ctx, *parameters)) {
       return absl::InvalidArgumentError(
-          "MULTI/EXEC or Lua script are not supported in CME mode.");
+          "MULTI/EXEC or Lua script are not supported in CME mode unless the "
+          "query targets a single-slot index on the local node.");
     }
 
     if (ABSL_PREDICT_FALSE(!ValkeySearch::Instance().SupportParallelQueries() ||

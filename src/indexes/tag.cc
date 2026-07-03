@@ -2,7 +2,6 @@
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  * SPDX-License-Identifier: BSD 3-Clause
- *
  */
 
 #include "src/indexes/tag.h"
@@ -12,6 +11,7 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
@@ -22,24 +22,87 @@
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/text/rax/rax.h"
 #include "src/query/predicate.h"
-#include "src/utils/patricia_tree.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
 
-static bool IsValidPrefix(absl::string_view str) {
+namespace {
+
+inline uintptr_t SlotToStorage(void* p) {
+  return reinterpret_cast<uintptr_t>(p);
+}
+inline void* StorageToSlot(uintptr_t s) { return reinterpret_cast<void*>(s); }
+
+// rax free-callback — invoked once per surviving slot during raxFree.
+// The slot's bits are the bag's storage; adopting them into a local bag and
+// letting it destruct frees any heap payload it owns.
+extern "C" void TagFreeCallback(void* p) {
+  (void)BagOfInternedStringPtrs::Adopt(SlotToStorage(p));
+}
+
+// Mutation trampoline for raxMutate.
+struct MutateCtx {
+  const InternedStringPtr* key;
+  bool insert;
+};
+
+extern "C" void* TagMutateTrampoline(void* current, void* ctx) {
+  auto* a = static_cast<MutateCtx*>(ctx);
+  auto bag = BagOfInternedStringPtrs::Adopt(SlotToStorage(current));
+  if (a->insert) {
+    bag.insert(*a->key);
+  } else {
+    bag.erase(*a->key);
+  }
+  // If the bag is empty, Release returns 0 and raxMutate then erases the rax
+  // key. Otherwise the storage bits get planted back into the slot.
+  return StorageToSlot(bag.Release());
+}
+
+bool IsValidPrefix(absl::string_view str) {
   return str.length() < 2 || str[str.length() - 1] != '*' ||
          str[str.length() - 2] != '*';
 }
+
+}  // namespace
 
 Tag::Tag(const data_model::TagIndex& tag_index_proto)
     : IndexBase(IndexerType::kTag),
       separator_(tag_index_proto.separator()[0]),
       case_sensitive_(tag_index_proto.case_sensitive()),
-      tree_(case_sensitive_) {}
+      tree_(raxNew()) {}
+
+Tag::~Tag() { raxFreeWithCallback(tree_, &TagFreeCallback); }
+
+std::string Tag::Normalize(absl::string_view tag) const {
+  if (case_sensitive_) {
+    return std::string(tag);
+  }
+  std::string out(tag);
+  for (auto& c : out) {
+    c = absl::ascii_tolower(static_cast<unsigned char>(c));
+  }
+  return out;
+}
+
+void Tag::IndexTagForKey(absl::string_view tag, const InternedStringPtr& key) {
+  std::string norm = Normalize(tag);
+  MutateCtx ctx{&key, /*insert=*/true};
+  raxMutate(tree_, reinterpret_cast<unsigned char*>(norm.data()), norm.size(),
+            &TagMutateTrampoline, &ctx, ADD);
+}
+
+void Tag::DeindexTagForKey(absl::string_view tag,
+                           const InternedStringPtr& key) {
+  std::string norm = Normalize(tag);
+  MutateCtx ctx{&key, /*insert=*/false};
+  raxMutate(tree_, reinterpret_cast<unsigned char*>(norm.data()), norm.size(),
+            &TagMutateTrampoline, &ctx, SUBTRACT);
+}
 
 absl::StatusOr<bool> Tag::AddRecord(const InternedStringPtr& key,
                                     absl::string_view data) {
@@ -51,15 +114,14 @@ absl::StatusOr<bool> Tag::AddRecord(const InternedStringPtr& key,
     return false;
   }
   auto [_, succ] = tracked_tags_by_keys_.insert(
-      {key, TagInfo{.raw_tag_string = std::move(interned_data),
-                    .tags = parsed_tags}});
+      {key, TagInfo{.raw_tag_string = std::move(interned_data)}});
   if (!succ) {
     return absl::AlreadyExistsError(
         absl::StrCat("Key `", key->Str(), "` already exists"));
   }
   untracked_keys_.erase(key);
   for (const auto& tag : parsed_tags) {
-    tree_.AddKeyValue(tag, key);
+    IndexTagForKey(tag, key);
   }
   return true;
 }
@@ -109,9 +171,9 @@ absl::StatusOr<absl::flat_hash_set<absl::string_view>> Tag::ParseSearchTags(
   };
 
   // Parse respecting escape sequences:
-  // - \<separator> is NOT a real separator
-  // - \\ is an escaped backslash (not an escape prefix)
-  // - Unescaped separator splits tags
+  //   - \<separator> is NOT a real separator
+  //   - \\ is an escaped backslash (not an escape prefix)
+  //   - Unescaped separator splits tags
   // Returns string_view positions; unescaping happens later at TagPredicate.
   size_t tag_start = 0;
   for (size_t i = 0; i < data.size(); ++i) {
@@ -124,10 +186,8 @@ absl::StatusOr<absl::flat_hash_set<absl::string_view>> Tag::ParseSearchTags(
       tag_start = i + 1;
     }
   }
-
   // Handle the last tag (after final separator or if no separator)
   VMSDK_RETURN_IF_ERROR(InsertTag(data.substr(tag_start)));
-
   return parsed_tags;
 }
 
@@ -145,7 +205,6 @@ absl::flat_hash_set<absl::string_view> Tag::ParseRecordTags(
 
 absl::StatusOr<bool> Tag::ModifyRecord(const InternedStringPtr& key,
                                        absl::string_view data) {
-  // TODO: implement operator [] in patricia_tree.
   auto interned_data = StringInternStore::Intern(data);
   auto new_parsed_tags = ParseRecordTags(*interned_data, separator_);
   if (new_parsed_tags.empty()) {
@@ -161,22 +220,21 @@ absl::StatusOr<bool> Tag::ModifyRecord(const InternedStringPtr& key,
         absl::StrCat("Key `", key->Str(), "` not found"));
   }
   auto& tag_info = it->second;
+  auto old_parsed_tags = ParseRecordTags(*tag_info.raw_tag_string, separator_);
 
   // insert new tags that are not present in the old tags.
   for (const auto& tag : new_parsed_tags) {
-    if (!tag_info.tags.contains(tag)) {
-      tree_.AddKeyValue(tag, key);
+    if (!old_parsed_tags.contains(tag)) {
+      IndexTagForKey(tag, key);
     }
   }
-
   // remove old tags that are not present in the new tags.
-  for (const auto& tag : tag_info.tags) {
+  for (const auto& tag : old_parsed_tags) {
     if (!new_parsed_tags.contains(tag)) {
-      tree_.Remove(tag, key);
+      DeindexTagForKey(tag, key);
     }
   }
 
-  tag_info.tags = new_parsed_tags;
   tag_info.raw_tag_string = std::move(interned_data);
   return true;
 }
@@ -196,8 +254,9 @@ absl::StatusOr<bool> Tag::RemoveRecord(const InternedStringPtr& key,
     return false;
   }
   auto& tag_info = it->second;
-  for (const auto& tag : tag_info.tags) {
-    tree_.Remove(tag, key);
+  auto parsed_tags = ParseRecordTags(*tag_info.raw_tag_string, separator_);
+  for (const auto& tag : parsed_tags) {
+    DeindexTagForKey(tag, key);
   }
   tracked_tags_by_keys_.erase(it);
   return true;
@@ -234,7 +293,7 @@ uint32_t Tag::GetMutationWeight() const {
 
 InternedStringPtr Tag::GetRawValue(const InternedStringPtr& key) const {
   // Note that the Tag index is not mutated while the time sliced mutex is
-  // in a read mode and therefor it is safe to skip lock acquiring.
+  // in a read mode and therefore it is safe to skip lock acquiring.
   if (auto it = tracked_tags_by_keys_.find(key);
       it != tracked_tags_by_keys_.end()) {
     return it->second.raw_tag_string;
@@ -242,146 +301,156 @@ InternedStringPtr Tag::GetRawValue(const InternedStringPtr& key) const {
   return {};
 }
 
-const absl::flat_hash_set<absl::string_view>* Tag::GetValue(
+std::optional<absl::flat_hash_set<absl::string_view>> Tag::GetValue(
     const InternedStringPtr& key, bool& case_sensitive) const {
   // Note that the Tag index is not mutated while the time sliced mutex is
-  // in a read mode and therefor it is safe to skip lock acquiring.
+  // in a read mode and therefore it is safe to skip lock acquiring.
   if (auto it = tracked_tags_by_keys_.find(key);
       it != tracked_tags_by_keys_.end()) {
     case_sensitive = case_sensitive_;
-    return &it->second.tags;
+    return ParseRecordTags(*it->second.raw_tag_string, separator_);
   }
-  return nullptr;
+  return std::nullopt;
 }
 
-Tag::EntriesFetcherIterator::EntriesFetcherIterator(
-    const PatriciaTreeIndex& tree,
-    absl::flat_hash_set<PatriciaNodeIndex*>& entries,
-    const InternedStringSet& untracked_keys, bool negate)
-    : tree_(tree),
-      entries_(entries),
-      untracked_keys_(untracked_keys),
-      negate_(negate) {}
+// -- Search / EntriesFetcher / EntriesFetcherIterator --------------------
 
-void Tag::EntriesFetcherIterator::EnsureNegateRootIter() {
-  if (!negate_root_iter_.has_value()) {
-    negate_root_iter_.emplace(tree_.RootIterator());
-  }
+Tag::EntriesFetcherIterator::EntriesFetcherIterator(
+    const std::vector<void*>& slots,
+    const std::vector<InternedStringPtr>& extras)
+    : slots_(slots), extras_(extras) {
+  AdvanceToNextNonEmpty();
+}
+
+Tag::EntriesFetcherIterator::~EntriesFetcherIterator() {
+  // The bag's storage lives in the rax slot — Release so our local copy's
+  // destructor doesn't free it.
+  (void)bag_.Release();
 }
 
 bool Tag::EntriesFetcherIterator::Done() const {
-  if (negate_) {
-    return negate_root_iter_.has_value() && negate_root_iter_->Done() &&
-           (untracked_keys_.empty() ||
-            (untracked_keys_iter_.has_value() &&
-             untracked_keys_iter_.value() == untracked_keys_.end()));
-  }
-  return entries_.empty() && next_node_ == nullptr;
-}
-
-void Tag::EntriesFetcherIterator::NextNegate() {
-  EnsureNegateRootIter();
-  if (next_node_) {
-    ++next_iter_;
-    if (next_iter_ != next_node_->value.value().end()) {
-      return;
-    }
-    negate_root_iter_->Next();
-  }
-  while (!negate_root_iter_->Done()) {
-    next_node_ = negate_root_iter_->Value();
-    if (next_node_ && !entries_.contains(next_node_) &&
-        next_node_->value.has_value() && !next_node_->value.value().empty()) {
-      next_iter_ = next_node_->value.value().begin();
-      return;
-    }
-    negate_root_iter_->Next();
-  }
-  next_node_ = nullptr;
-  if (!untracked_keys_iter_.has_value()) {
-    untracked_keys_iter_ = untracked_keys_.begin();
-    return;
-  }
-  ++untracked_keys_iter_.value();
+  return slots_done_ && extras_idx_ >= extras_.size();
 }
 
 void Tag::EntriesFetcherIterator::Next() {
-  if (negate_) {
-    NextNegate();
+  if (!slots_done_) {
+    ++bag_it_;
+    if (bag_it_ != bag_end_) {
+      current_ = *bag_it_;
+      return;
+    }
+    (void)bag_.Release();
+    ++slot_idx_;
+    AdvanceToNextNonEmpty();
     return;
   }
-  if (next_node_) {
-    ++next_iter_;
-    if (next_iter_ != next_node_->value.value().end()) {
-      return;
-    }
+  ++extras_idx_;
+  if (extras_idx_ < extras_.size()) {
+    current_ = extras_[extras_idx_];
   }
-  while (!entries_.empty()) {
-    auto itr = entries_.begin();
-    next_node_ = *itr;
-    entries_.erase(itr);
-    if (next_node_->value.has_value() && !next_node_->value.value().empty()) {
-      next_iter_ = next_node_->value.value().begin();
-      return;
-    }
-  }
-  next_node_ = nullptr;
 }
 
 const InternedStringPtr& Tag::EntriesFetcherIterator::operator*() const {
-  if (negate_ && negate_root_iter_.has_value() && negate_root_iter_->Done()) {
-    return *untracked_keys_iter_.value();
-  }
-  return *next_iter_;
+  return current_;
 }
 
-// TODO: b/357027854 - Support Suffix/Infix Search
-std::unique_ptr<Tag::EntriesFetcher> Tag::Search(
-    const query::TagPredicate& predicate, bool negate) const {
-  absl::flat_hash_set<PatriciaNodeIndex*> entries;
-  size_t size = 0;
-
-  for (const auto& tag : predicate.GetTags()) {
-    if (tag.back() == '*') {
-      auto prefix_tag = tag.substr(0, tag.length() - 1);
-      for (auto it = tree_.PrefixMatcher(prefix_tag); !it.Done(); it.Next()) {
-        PatriciaNodeIndex* node = it.Value();
-        if (node != nullptr) {
-          auto res = entries.insert(node);
-          if (res.second && node->value.has_value()) {
-            size += node->value.value().size();
-          }
-        }
-      }
-    } else {
-      // exact search
-      PatriciaNodeIndex* node = tree_.ExactMatcher(tag);
-      if (node != nullptr) {
-        auto res = entries.insert(node);
-        if (res.second && node->value.has_value()) {
-          size += node->value.value().size();
-        }
-      }
+void Tag::EntriesFetcherIterator::AdvanceToNextNonEmpty() {
+  while (slot_idx_ < slots_.size()) {
+    bag_ = BagOfInternedStringPtrs::Adopt(
+        reinterpret_cast<uintptr_t>(slots_[slot_idx_]));
+    bag_it_ = bag_.begin();
+    bag_end_ = bag_.end();
+    if (bag_it_ != bag_end_) {
+      current_ = *bag_it_;
+      return;
     }
+    (void)bag_.Release();
+    ++slot_idx_;
   }
-  if (negate) {
-    size = tracked_tags_by_keys_.size() > size
-               ? tracked_tags_by_keys_.size() - size
-               : tracked_tags_by_keys_.size();
-    size += untracked_keys_.size();
+  slots_done_ = true;
+  if (extras_idx_ < extras_.size()) {
+    current_ = extras_[extras_idx_];
   }
-  return std::make_unique<Tag::EntriesFetcher>(tree_, entries, size, negate,
-                                               untracked_keys_);
 }
 
 std::unique_ptr<EntriesFetcherIteratorBase> Tag::EntriesFetcher::Begin() {
-  auto itr = std::make_unique<EntriesFetcherIterator>(tree_, entries_,
-                                                      untracked_keys_, negate_);
-  itr->Next();
-  return itr;
+  return std::make_unique<EntriesFetcherIterator>(matched_slots_, extras_);
 }
 
-size_t Tag::EntriesFetcher::Size() const { return size_; }
+// TODO: b/357027854 - Support Suffix/Infix Search
+std::unique_ptr<EntriesFetcherBase> Tag::Search(
+    const query::TagPredicate& predicate, bool negate) const {
+  // Collect matched rax slots (each slot's 8 bytes encode a bag) without
+  // iterating their postings; the iterator yields lazily during Begin().
+  absl::flat_hash_set<void*> seen;
+  std::vector<void*> matched_slots;
+  size_t total = 0;
+
+  auto collect_slot = [&](void* slot) {
+    if (slot == nullptr) return;
+    if (!seen.insert(slot).second) return;
+    matched_slots.push_back(slot);
+    auto bag = BagOfInternedStringPtrs::Adopt(SlotToStorage(slot));
+    total += bag.size();
+    (void)bag.Release();
+  };
+
+  for (absl::string_view tag : predicate.GetTags()) {
+    const bool is_prefix = !tag.empty() && tag.back() == '*';
+    absl::string_view q = is_prefix ? tag.substr(0, tag.size() - 1) : tag;
+    std::string norm = Normalize(q);
+    auto* qbytes =
+        reinterpret_cast<unsigned char*>(const_cast<char*>(norm.data()));
+
+    if (!is_prefix) {
+      // exact search
+      void* p = nullptr;
+      if (raxFind(tree_, qbytes, norm.size(), &p) == 1) {
+        collect_slot(p);
+      }
+    } else {
+      raxIterator it;
+      raxStart(&it, tree_);
+      raxSeekSubTree(&it, qbytes, norm.size());
+      while (raxNext(&it)) {
+        collect_slot(it.data);
+      }
+      raxStop(&it);
+    }
+  }
+
+  std::vector<InternedStringPtr> extras;
+  size_t out_size = total;
+
+  if (negate) {
+    // Yield every posting NOT in `seen`, plus every untracked key.
+    std::vector<void*> negate_slots;
+    size_t negate_total = 0;
+    raxIterator it;
+    raxStart(&it, tree_);
+    unsigned char empty = 0;
+    raxSeekSubTree(&it, &empty, 0);
+    while (raxNext(&it)) {
+      if (it.data && !seen.contains(it.data)) {
+        negate_slots.push_back(it.data);
+        auto bag = BagOfInternedStringPtrs::Adopt(SlotToStorage(it.data));
+        negate_total += bag.size();
+        (void)bag.Release();
+      }
+    }
+    raxStop(&it);
+    extras.reserve(untracked_keys_.size());
+    for (const auto& k : untracked_keys_) {
+      extras.push_back(k);
+    }
+    out_size = negate_total + extras.size();
+    return std::make_unique<EntriesFetcher>(std::move(negate_slots),
+                                            std::move(extras), out_size);
+  }
+
+  return std::make_unique<EntriesFetcher>(std::move(matched_slots),
+                                          std::move(extras), out_size);
+}
 
 size_t Tag::GetTrackedKeyCount() const {
   absl::MutexLock lock(&index_mutex_);

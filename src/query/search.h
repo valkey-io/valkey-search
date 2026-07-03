@@ -114,15 +114,21 @@ struct SearchResult {
   SearchResult(size_t total_count, std::vector<indexes::Neighbor> neighbors,
                const SearchParameters& parameters,
                bool trim_offset_in_background = false);
+  // Constructor for borrowed results — trims then materializes survivors.
+  SearchResult(size_t total_count,
+               std::vector<indexes::BorrowedNeighbor> borrowed,
+               const SearchParameters& parameters,
+               bool trim_offset_in_background = false);
   // Get the range of neighbors to serialize in response.
   SerializationRange GetSerializationRange(
-      const SearchParameters& parameters) const;
+      const SearchParameters& parameters,
+      std::optional<size_t> override_size = std::nullopt) const;
 
   SearchResult();
 
  private:
-  void TrimResults(std::vector<indexes::Neighbor>& neighbors,
-                   const SearchParameters& parameters,
+  template <typename T>
+  void TrimResults(std::vector<T>& vec, const SearchParameters& parameters,
                    bool trim_offset_in_background);
 };
 
@@ -153,6 +159,36 @@ enum ContentProcessing {
   kContentRequired,          // Content, but no contention check is needed
   kContentionCheckRequired,  // Content and contention check is required.
 };
+
+// Returns the process-global count of currently-live SearchParameters objects
+// (including all derived query/aggregate command types). A SearchParameters is
+// alive for the entire duration of a (possibly asynchronous) query operation -
+// while it is queued on the reader thread pool, awaiting main-thread
+// completion, or pending background cleanup - and it holds a shared_ptr to the
+// IndexSchema it queries. Tests use this (via the developer-visible INFO field
+// search_async_queries_in_flight) to wait until all query operations have
+// drained before shutting the server down, so that an in-flight query does not
+// leave the index reachable-but-unreleased and get reported as a leak at
+// process exit under ASAN.
+int64_t GetSearchParametersInFlight();
+
+namespace detail {
+// RAII counter for GetSearchParametersInFlight(). Held as a member of
+// SearchParameters so that *every* constructor (including the defaulted move
+// constructor) increments the count and the destructor decrements it exactly
+// once, regardless of how the object was created.
+class SearchParametersInFlightGuard {
+ public:
+  SearchParametersInFlightGuard();
+  SearchParametersInFlightGuard(const SearchParametersInFlightGuard&);
+  SearchParametersInFlightGuard(SearchParametersInFlightGuard&&) noexcept;
+  SearchParametersInFlightGuard& operator=(
+      const SearchParametersInFlightGuard&) = default;
+  SearchParametersInFlightGuard& operator=(
+      SearchParametersInFlightGuard&&) noexcept = default;
+  ~SearchParametersInFlightGuard();
+};
+}  // namespace detail
 
 struct SearchParameters {
   mutable cancel::Token cancellation_token;
@@ -255,6 +291,13 @@ struct SearchParameters {
       : timeout_ms(timeout_ms), cancellation_token(token), db_num_(db_num) {}
 
   SearchParameters(SearchParameters&&) = default;
+
+ private:
+  // Keeps GetSearchParametersInFlight() in sync with this object's lifetime.
+  // Declared last so it is destroyed first; its position does not otherwise
+  // matter since construction/destruction of any SearchParameters adjusts the
+  // count by exactly one.
+  detail::SearchParametersInFlightGuard in_flight_guard_;
 };
 
 // Indicates the range of neighbors to serialize in a search response.

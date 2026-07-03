@@ -63,6 +63,10 @@ set(SRCS_UNIVERSAL_SET_FETCHER ${CMAKE_CURRENT_LIST_DIR}/universal_set_fetcher.c
 valkey_search_add_static_library(universal_set_fetcher "${SRCS_UNIVERSAL_SET_FETCHER}")
 target_link_libraries(universal_set_fetcher PUBLIC index_base)
 
+set(SRCS_RAX_LIB ${CMAKE_CURRENT_LIST_DIR}/text/rax/rax.c)
+valkey_search_add_static_library(rax_lib "${SRCS_RAX_LIB}")
+target_include_directories(rax_lib PUBLIC ${CMAKE_CURRENT_LIST_DIR}/text)
+
 set(SRCS_TAG ${CMAKE_CURRENT_LIST_DIR}/tag.cc ${CMAKE_CURRENT_LIST_DIR}/tag.h)
 
 valkey_search_add_static_library(tag "${SRCS_TAG}")
@@ -70,11 +74,11 @@ target_include_directories(tag PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(tag PUBLIC index_base)
 target_link_libraries(tag PUBLIC rdb_serialization)
 target_link_libraries(tag PUBLIC predicate_header)
-target_link_libraries(tag PUBLIC patricia_tree)
 target_link_libraries(tag PUBLIC string_interning)
 target_link_libraries(tag PUBLIC valkey_module)
 target_link_libraries(tag PUBLIC vmsdklib)
 target_link_libraries(tag PUBLIC ${INDEX_SCHEMA_PROTO_LIB})
+target_link_libraries(tag PUBLIC rax_lib)
 
 set(SRCS_VECTOR_FLAT ${CMAKE_CURRENT_LIST_DIR}/vector_flat.cc
                      ${CMAKE_CURRENT_LIST_DIR}/vector_flat.h)
@@ -115,8 +119,7 @@ set(SRCS_TEXT ${CMAKE_CURRENT_LIST_DIR}/text/text_index.h
               ${CMAKE_CURRENT_LIST_DIR}/text/fuzzy.h
               ${CMAKE_CURRENT_LIST_DIR}/text/flat_position_map.cc
               ${CMAKE_CURRENT_LIST_DIR}/text/flat_position_map.h
-              ${CMAKE_CURRENT_LIST_DIR}/text/rax_wrapper.cc
-              ${CMAKE_CURRENT_LIST_DIR}/text/rax/rax.c)
+              ${CMAKE_CURRENT_LIST_DIR}/text/rax_wrapper.cc)
 
 valkey_search_add_static_library(text "${SRCS_TEXT}")
 target_include_directories(text PUBLIC ${CMAKE_CURRENT_LIST_DIR})
@@ -127,4 +130,5 @@ target_link_libraries(text PUBLIC string_interning)
 target_link_libraries(text PUBLIC valkey_module)
 target_link_libraries(text PUBLIC snowball)
 target_link_libraries(text PUBLIC scanner)
-target_link_libraries(text PUBLIC icu) 
+target_link_libraries(text PUBLIC icu)
+target_link_libraries(text PUBLIC rax_lib)

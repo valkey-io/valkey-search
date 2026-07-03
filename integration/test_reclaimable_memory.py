@@ -2,6 +2,7 @@ import struct
 from valkey.client import Valkey
 from valkey_search_test_case import ValkeySearchTestCaseBase
 from valkeytestframework.conftest import resource_port_tracker
+from valkeytestframework.util import waiters
 
 
 class TestReclaimableMemory(ValkeySearchTestCaseBase):
@@ -91,10 +92,12 @@ class TestReclaimableMemory(ValkeySearchTestCaseBase):
         # Drop the index
         client.execute_command("FT.DROPINDEX", index_name)
         
-        # Check that reclaimable memory is 0 after dropping the index
-        info_data = client.info("SEARCH")
-        after_drop_reclaimable = int(info_data["search_index_reclaimable_memory"])
-        assert after_drop_reclaimable == 0
+        # Index destruction is async — wait for reclaimable memory to reach 0
+        waiters.wait_for_equal(
+            lambda: int(client.info("SEARCH")["search_index_reclaimable_memory"]),
+            0,
+            timeout=5
+        )
 
 
     def test_reclaimable_memory_multiple_indexes(self):

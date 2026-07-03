@@ -1952,6 +1952,62 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         result = client.execute_command("FT.SEARCH", "idx1", 'race', "RETURN", "6", "content", "AS", "text_content", "price", "AS", "numeric_content")
         assert result == [1, b"doc:1", [b"text_content", b"I am going to a race", b"numeric_content", b"100"]]
 
+    def test_content_fetch_specific_and_all_fields(self):
+        """Test that content fetch works correctly for both the HashGet path
+        (RETURN fewer than half the fields) and the scan path (RETURN all or
+        no RETURN clause). Exercises FetchSpecificFields and FetchAllFields."""
+        client: Valkey = self.server.get_new_client()
+        # Create index with 10 TEXT fields
+        fields = [f"f{i}" for i in range(1, 11)]
+        schema_args = []
+        for f in fields:
+            schema_args.extend([f, "TEXT", "NOSTEM"])
+        client.execute_command("FT.CREATE", "idx_content", "ON", "HASH",
+                              "SCHEMA", *schema_args)
+        # Insert docs with all 10 fields populated
+        field_values = {f"f{i}": f"value{i}" for i in range(1, 11)}
+        for doc_id in range(1, 4):
+            args = []
+            for k, v in field_values.items():
+                args.extend([k, f"{v}_doc{doc_id}"])
+            client.execute_command("HSET", f"doc:{doc_id}", *args)
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx_content")
+
+        # Path 1: FetchSpecificFields - RETURN 2 fields (2 <= 10/2=5)
+        result = client.execute_command("FT.SEARCH", "idx_content", "value1_doc1",
+                                        "RETURN", "2", "f1", "f2")
+        assert result[0] == 1
+        doc_fields = dict(zip(result[2][::2], result[2][1::2]))
+        assert doc_fields == {b"f1": b"value1_doc1", b"f2": b"value2_doc1"}
+
+        # Path 1b: RETURN 1 field
+        result = client.execute_command("FT.SEARCH", "idx_content", "value1_doc1",
+                                        "RETURN", "1", "f5")
+        assert result[0] == 1
+        assert result[2] == [b"f5", b"value5_doc1"]
+
+        # Path 2: FetchAllFields (scan) - RETURN 8 fields (8 > 10/2=5)
+        ret_fields = [f"f{i}" for i in range(1, 9)]
+        result = client.execute_command("FT.SEARCH", "idx_content", "value1_doc1",
+                                        "RETURN", "8", *ret_fields)
+        assert result[0] == 1
+        doc_fields = dict(zip(result[2][::2], result[2][1::2]))
+        for i in range(1, 9):
+            assert doc_fields[f"f{i}".encode()] == f"value{i}_doc1".encode()
+
+        # Path 3: FetchAllFields (scan) - no RETURN clause (all fields)
+        result = client.execute_command("FT.SEARCH", "idx_content", "value1_doc1")
+        assert result[0] == 1
+        doc_fields = dict(zip(result[2][::2], result[2][1::2]))
+        for i in range(1, 11):
+            assert doc_fields[f"f{i}".encode()] == f"value{i}_doc1".encode()
+
+        # Path 1c: RETURN non-existent field (should be empty)
+        result = client.execute_command("FT.SEARCH", "idx_content", "value1_doc1",
+                                        "RETURN", "1", "nonexistent")
+        assert result[0] == 1
+        assert result[2] == []
+
     def test_nested_composed_or_with_slop(self):
         """Test nested composed OR queries with SLOP parameter"""
         client: Valkey = self.server.get_new_client()

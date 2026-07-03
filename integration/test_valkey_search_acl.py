@@ -15,35 +15,88 @@ class TestCommandsACLs(ValkeySearchTestCaseBase):
     def _verify_user_permissions(
         self, client: Valkey, cmd: List[str], should_access: bool
     ):
-        try:
+        if should_access:
+            try:
+                client.execute_command(*cmd)
+            except ResponseError as e:
+                # Non-ACL errors are acceptable here, such as missing indexes.
+                error = str(e).lower()
+                assert "no permissions" not in error
+                assert "permission to access" not in error
+            return
+
+        with pytest.raises(ResponseError) as exc_info:
             client.execute_command(*cmd)
-        except ResponseError as e:
-            if should_access:
-                # Make sure the error is not related to permission issues
-                assert "has no permissions to run" not in str(e)
-        except Exception as e:
-            # Any other error is acceptable. This is done to avoid errors
-            # Of missing index
-            assert True
+        error = str(exc_info.value).lower()
+        assert "no permissions" in error or "permission to access" in error
 
     @pytest.mark.parametrize(
-        "user,should_access_read,should_access_write",
+        "user,should_access_search,should_access_info,should_access_write,should_access_list,should_access_debug",
         [
-            ("ACL SETUSER user1 on >search_pass -@search", False, False),
-            ("ACL SETUSER user1 on >search_pass -@all", False, False),
-            ("ACL SETUSER user1 on >search_pass ~* &* +@all", True, True),
-            ("ACL SETUSER user1 on >search_pass ~* &* -@all +@search", True, True),
+            ("ACL SETUSER user1 on >search_pass -@search", False, False, False, False, False),
+            ("ACL SETUSER user1 on >search_pass -@all", False, False, False, False, False),
+            ("ACL SETUSER user1 on >search_pass ~* &* +@all", True, True, True, True, True),
+            (
+                "ACL SETUSER user1 on >search_pass ~* &* -@all +@search",
+                True,
+                True,
+                True,
+                True,
+                True,
+            ),
             (
                 "ACL SETUSER user1 on >search_pass ~* &* -@all +@write +@read",
                 True,
                 True,
+                True,
+                True,
+                False,
             ),
-            ("ACL SETUSER user1 on >search_pass ~* &* -@all +@write", False, True),
-            ("ACL SETUSER user1 on >search_pass ~* &* -@all +@read", True, False),
+            (
+                "ACL SETUSER user1 on >search_pass ~* &* -@all +@write",
+                False,
+                False,
+                True,
+                False,
+                False,
+            ),
+            (
+                "ACL SETUSER user1 on >search_pass ~* &* -@all +@read",
+                True,
+                True,
+                False,
+                True,
+                False,
+            ),
+            (
+                "ACL SETUSER user1 on >search_pass ~* &* -@all +@slow",
+                True,
+                False,
+                False,
+                True,
+                True,
+            ),
+            (
+                "ACL SETUSER user1 on >search_pass ~* &* -@all +@dangerous",
+                False,
+                False,
+                False,
+                False,
+                True,
+            ),
+            (
+                "ACL SETUSER user1 on >search_pass ~* &* -@all +@admin",
+                False,
+                False,
+                False,
+                True,
+                True,
+            ),
         ],
     )
     def test_acl_category_permissions(
-        self, user, should_access_read, should_access_write
+        self, user, should_access_search, should_access_info, should_access_write,
+        should_access_list, should_access_debug
     ):
         search_vector = struct.pack("<3f", *[1.0, 2.0, 3.0])
         # List of search commands
@@ -76,11 +129,11 @@ class TestCommandsACLs(ValkeySearchTestCaseBase):
                     "query_vector",
                     search_vector,
                 ],
-                should_access_read,
+                should_access_search,
             ),
-            (["FT.INFO", INDEX_NAME], should_access_read),
-            (["FT._LIST"], should_access_read),
-            (["FT._DEBUG", "SHOW_INFO"], should_access_read),
+            (["FT.INFO", INDEX_NAME], should_access_info),
+            (["FT._LIST"], should_access_list),
+            (["FT._DEBUG", "SHOW_INFO"], should_access_debug),
             (["FT.DROPINDEX", INDEX_NAME], should_access_write),
         ]
         client: Valkey = self.server.get_new_client()
@@ -224,17 +277,18 @@ class TestCommandsACLs(ValkeySearchTestCaseBase):
             ),
             (
                 "FT._DEBUG",
-                [b"readonly", b"module", b"admin"],
-                [b"@read", b"@slow", b"@search", b"@admin"],
+                [
+                    b"module",
+                    b"admin",
+                    b"noscript",
+                    b"loading",
+                    b"stale",
+                ],
+                [b"@admin", b"@slow", b"@dangerous", b"@search"],
             ),
         ]
         for cmd in valkey_search_commands:
             # Get the info of the commands and compare the acl categories
             cmd_info = client.execute_command(f"COMMAND INFO {cmd[0]}")
-            for flag in cmd[1]:
-                import logging
-
-                logging.info(cmd_info[0][2])
-                assert flag in cmd_info[0][2]
-            for category in cmd[2]:
-                assert category in cmd_info[0][6]
+            assert set(cmd_info[0][2]) == set(cmd[1])
+            assert set(cmd_info[0][6]) == set(cmd[2])

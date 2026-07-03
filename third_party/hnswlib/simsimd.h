@@ -3,8 +3,12 @@
 
 #include <cstddef>
 
-#include "third_party/simsimd/c/lib.c"
-
+// SimSIMD's dynamic-dispatch unit (c/lib.c) DEFINES the simsimd_* entry points
+// with external linkage and is meant to be compiled exactly once. This header
+// is pulled into many translation units, so it must include only the
+// declarations; c/lib.c is compiled once as the `simsimd` static library (see
+// CMakeLists.txt). Including it here instead produces duplicate symbols at link
+// time -- a hard error under macOS/Mach-O ld.
 #include "third_party/simsimd/include/simsimd/simsimd.h"
 #include "third_party/simsimd/include/simsimd/types.h"
 

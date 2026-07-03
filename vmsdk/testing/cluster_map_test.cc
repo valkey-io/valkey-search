@@ -490,6 +490,72 @@ TEST_F(ClusterMapTest, GetShardBySlotTest) {
   EXPECT_EQ(cluster_map->GetShardBySlot(16384), nullptr);  // Invalid slot
 }
 
+TEST_F(ClusterMapTest, GetTargetsForSlotTest) {
+  // Standard 3-shard config: [0-5460], [5461-10922], [10923-16383].
+  auto ranges = CreateStandard3ShardConfig();
+  auto cluster_map = CreateClusterMapWithConfig(ranges, primary_ids.at(0));
+  ASSERT_NE(cluster_map, nullptr);
+
+  // For every range, the start, middle, and (inclusive) end slot must all
+  // resolve to that range's primary. A lower_bound based lookup only works
+  // for the start slot, so the middle/end cases guard the regression.
+  struct Case {
+    uint16_t slot;
+    int shard;  // index into primary_ids
+  };
+  const std::vector<Case> cases = {
+      {0, 0},     {2730, 0},  {5460, 0},   // first range: start/middle/end
+      {5461, 1},  {8191, 1},  {10922, 1},  // middle range: start/middle/end
+      {10923, 2}, {13653, 2}, {16383, 2},  // last range: start/middle/end
+  };
+  for (const auto& c : cases) {
+    auto targets = cluster_map->GetTargetsForSlot(FanoutTargetMode::kPrimary,
+                                                  false, c.slot);
+    ASSERT_EQ(targets.size(), 1u) << "no target for slot " << c.slot;
+    EXPECT_EQ(targets[0].node_id, primary_ids.at(c.shard))
+        << "wrong shard for slot " << c.slot;
+  }
+
+  // A slot beyond the covered range resolves to no target.
+  EXPECT_TRUE(
+      cluster_map->GetTargetsForSlot(FanoutTargetMode::kPrimary, false, 16384)
+          .empty());
+}
+
+TEST_F(ClusterMapTest, GetTargetsForSlotGapTest) {
+  // Two ranges with a gap [5001-9999] between them.
+  std::vector<SlotRangeConfig> ranges = {
+      {.start_slot = 0,
+       .end_slot = 5000,
+       .primary = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0), {}},
+       .replicas = {}},
+      {.start_slot = 10000,
+       .end_slot = 16383,
+       .primary = NodeConfig{"127.0.0.1", 30002, primary_ids.at(1), {}},
+       .replicas = {}}};
+  auto cluster_map = CreateClusterMapWithConfig(ranges, primary_ids.at(0));
+  ASSERT_NE(cluster_map, nullptr);
+
+  // Slots inside a covered range resolve; slots in the gap do not.
+  EXPECT_EQ(
+      cluster_map->GetTargetsForSlot(FanoutTargetMode::kPrimary, false, 5000)
+          .size(),
+      1u);
+  EXPECT_TRUE(
+      cluster_map->GetTargetsForSlot(FanoutTargetMode::kPrimary, false, 5001)
+          .empty());
+  EXPECT_TRUE(
+      cluster_map->GetTargetsForSlot(FanoutTargetMode::kPrimary, false, 7500)
+          .empty());
+  EXPECT_TRUE(
+      cluster_map->GetTargetsForSlot(FanoutTargetMode::kPrimary, false, 9999)
+          .empty());
+  EXPECT_EQ(
+      cluster_map->GetTargetsForSlot(FanoutTargetMode::kPrimary, false, 10000)
+          .size(),
+      1u);
+}
+
 TEST_F(ClusterMapTest, GetShardByIdTest) {
   std::vector<SlotRangeConfig> ranges = {
       {.start_slot = 0,

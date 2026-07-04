@@ -50,8 +50,8 @@ set(VMSDKLIB_SRCS
 add_library(vmsdk OBJECT ${VMSDKLIB_SRCS})
 
 target_include_directories(vmsdk PUBLIC .)
-target_include_directories(vmsdk PUBLIC status)
-target_include_directories(vmsdk PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+target_include_directories(vmsdk PRIVATE status)
+target_include_directories(vmsdk PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
 target_include_directories(vmsdk PRIVATE ${PROJECT_SOURCE_DIR})
 
 target_link_libraries(vmsdk PUBLIC hdrhistogram_c)
@@ -70,5 +70,5 @@ target_link_libraries(vmsdk PUBLIC ${GRPC_LIB})
 target_link_libraries(vmsdk PUBLIC highwayhash::highwayhash)
 
 add_library(vmsdk_dso SHARED)
-target_link_libraries(vmsdk_dso PRIVATE vmsdk)
-target_sources(vmsdk_dso PUBLIC $<TARGET_OBJECTS:vmsdk>)
+target_link_libraries(vmsdk_dso PUBLIC vmsdk)
+target_sources(vmsdk_dso PRIVATE $<TARGET_OBJECTS:vmsdk>)

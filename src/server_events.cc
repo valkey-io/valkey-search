@@ -9,9 +9,9 @@
 
 #include <cstdint>
 
-#include "src/coordinator/metadata_manager.h"
-#include "src/schema_manager.h"
-#include "src/valkey_search.h"
+#include "coordinator/metadata_manager.h"
+#include "schema_manager.h"
+#include "valkey_search.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"

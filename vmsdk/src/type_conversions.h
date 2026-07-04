@@ -24,7 +24,7 @@
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
+#include <valkey/valkey_module.h>
 
 namespace vmsdk {
 

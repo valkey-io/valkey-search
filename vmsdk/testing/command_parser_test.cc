@@ -5,7 +5,7 @@
  *
  */
 
-#include "vmsdk/src/command_parser.h"
+#include "command_parser.h"
 
 #include <iostream>
 #include <optional>
@@ -16,10 +16,10 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "gtest/gtest.h"
-#include "vmsdk/src/status/status_macros.h"
-#include "vmsdk/src/testing_infra/module.h"
-#include "vmsdk/src/testing_infra/utils.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
+#include "status/status_macros.h"
+#include "testing_infra/module.h"
+#include "testing_infra/utils.h"
+#include <valkey/valkey_module.h>
 
 namespace vmsdk {
 

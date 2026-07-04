@@ -16,7 +16,7 @@
 #include "invasive_ptr.h"
 #include "posting.h"
 #include "rax_wrapper.h"
-#include "text.h"
+#include "../text.h"
 
 namespace valkey_search::indexes::text {
 

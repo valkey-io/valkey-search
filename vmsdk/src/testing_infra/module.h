@@ -26,10 +26,10 @@
 #include "absl/strings/str_format.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
-#include "vmsdk/src/log.h"
-#include "vmsdk/src/type_conversions.h"
-#include "vmsdk/src/utils.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
+#include "type_conversions.h"
+#include <valkey/module_sdk/log.h>
+#include <valkey/module_sdk/utils.h>
+#include <valkey/valkey_module.h>
 
 class MockValkeyModule {
  public:

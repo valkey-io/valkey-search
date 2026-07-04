@@ -14,7 +14,7 @@
 #include "absl/base/no_destructor.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/synchronization/mutex.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
+#include <valkey/valkey_module.h>
 
 namespace vmsdk {
 // External mutex for thread safety of BlockedClientTracker

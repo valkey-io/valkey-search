@@ -56,7 +56,7 @@ function(valkey_search_add_static_library name sources)
   message(STATUS "Adding static library ${name}")
   add_library(${name} STATIC ${sources})
   valkey_search_target_update_compile_flags(${name})
-  # Needed for gtest_prod.h
+  # Needed for vendored_gtest_prod.h
   target_link_libraries(${name} PRIVATE GTest::gtest)
 endfunction()
 
@@ -84,7 +84,7 @@ function(valkey_search_add_shared_library name sources)
   valkey_search_target_update_compile_flags(${name})
   set_target_properties(${name} PROPERTIES LIBRARY_OUTPUT_DIRECTORY
                                            "${CMAKE_BINARY_DIR}")
-  # Needed for gtest_prod.h
+  # Needed for vendored_gtest_prod.h
   target_link_libraries(${name} PRIVATE GTest::gtest)
   if(SAN_BUILD)
     target_link_options(${name} PRIVATE "-fsanitize=${SAN_BUILD}")

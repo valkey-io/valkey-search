@@ -30,8 +30,8 @@ add_generated_proto_sources(search_base index_schema)
 add_generated_proto_sources(search_base rdb_section)
 
 add_library(mydeps INTERFACE)
-target_include_directories(mydeps INTERFACE ${CMAKE_SOURCE_DIR}/include)
-target_include_directories(mydeps INTERFACE ${CMAKE_SOURCE_DIR})
+target_include_directories(mydeps INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}) # src/
+target_include_directories(mydeps INTERFACE ${CMAKE_SOURCE_DIR}) # top-level
 target_include_directories(mydeps INTERFACE ${CMAKE_SOURCE_DIR}/include)
 target_include_directories(mydeps INTERFACE ${CMAKE_SOURCE_DIR}/vmsdk/include)
 target_include_directories(mydeps INTERFACE ${VALKEY_PROTOGEN_BINARY_DIR})
@@ -65,6 +65,7 @@ set (SEARCH_LIBS
         valkey_search::utils
         hnswlib
         hdrhistogram_c
+        simsimd_c
         mydeps)
 
 foreach (lib IN LISTS SEARCH_LIBS)

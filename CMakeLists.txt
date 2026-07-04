@@ -21,6 +21,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 add_compile_options(-Wno-defaulted-function-deleted)
 add_compile_options(-Wno-deprecated-declarations)
 add_compile_options(-Wno-unknown-pragmas)
+add_compile_definitions(-DTESTING_TMP_DISABLED)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake/Modules/")
 
@@ -64,6 +65,12 @@ if (NOT TARGET highwayhash::highwayhash)
     add_library(highwayhash::highwayhash ALIAS highwayhash)
 endif()
 
+if (BUILD_UNIT_TESTS)
+    find_package(GTest REQUIRED)
+    find_package(benchmark REQUIRED)
+    enable_testing()
+endif()
+
 add_subdirectory(protogen)
 add_subdirectory(vmsdk)
 add_subdirectory(third_party)
@@ -73,8 +80,6 @@ add_dependencies(coordinator protogen)
 
 if (BUILD_UNIT_TESTS)
     add_compile_definitions(VALKEYSEARCH_BUILD_TESTS)
-    find_package(GTest REQUIRED)
-    enable_testing()
     add_subdirectory(testing)
 endif()
 

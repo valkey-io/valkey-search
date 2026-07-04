@@ -18,7 +18,7 @@
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
-#include "gtest/gtest_prod.h"
+#include "valkey/module_sdk/vendored_gtest_prod.h"
 #include "managed_pointers.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"

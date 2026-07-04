@@ -24,7 +24,7 @@
 #include "absl/status/status.h"
 #include "absl/synchronization/blocking_counter.h"
 #include "absl/synchronization/mutex.h"
-#include "gtest/gtest_prod.h"
+#include "valkey/module_sdk/vendored_gtest_prod.h"
 #include "vmsdk/src/thread_monitoring.h"
 #include "vmsdk/src/thread_safe_vector.h"
 

@@ -26,7 +26,7 @@
 #include "absl/synchronization/blocking_counter.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/time/time.h"
-#include "gtest/gtest_prod.h"
+#include "valkey/module_sdk/vendored_gtest_prod.h"
 #include "src/attribute.h"
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"

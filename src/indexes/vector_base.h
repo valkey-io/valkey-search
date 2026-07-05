@@ -189,8 +189,11 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
       absl::string_view query, uint64_t count, const InternedStringPtr& key,
       std::priority_queue<std::pair<float, hnswlib::labeltype>>& results,
       absl::flat_hash_set<const char*>& top_keys) const;
+  // Provided by VectorType<T> so the per-element byte width and format
+  // conversion come from sizeof(T) + if-constexpr on T instead of a
+  // runtime switch on GetVectorDataType().
   vmsdk::UniqueValkeyString NormalizeStringRecord(
-      vmsdk::UniqueValkeyString record) const override;
+      vmsdk::UniqueValkeyString record) const override = 0;
   template <typename T>
   absl::StatusOr<std::vector<Neighbor>> CreateReply(
       std::priority_queue<std::pair<T, hnswlib::labeltype>>& knn_res);
@@ -233,9 +236,6 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
     return dim == dimensions_ && (record.size() % data_type_size == 0);
   }
   int RespondWithInfo(ValkeyModuleCtx* ctx) const override;
-  template <typename StorageT>
-  void Init(int dimensions, data_model::DistanceMetric distance_metric,
-            std::unique_ptr<hnswlib::SpaceInterface<float>>& space);
   virtual absl::Status AddRecordImpl(uint64_t internal_id,
                                      absl::string_view record) = 0;
 

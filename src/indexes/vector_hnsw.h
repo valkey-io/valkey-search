@@ -11,7 +11,6 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
-#include <type_traits>
 #include <utility>
 
 #include "absl/base/thread_annotations.h"
@@ -24,6 +23,7 @@
 #include "src/indexes/bfloat16.h"
 #include "src/indexes/fp16.h"
 #include "src/indexes/vector_base.h"
+#include "src/indexes/vector_type.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/cancel.h"
 #include "src/utils/string_interning.h"
@@ -34,7 +34,7 @@
 namespace valkey_search::indexes {
 
 template <typename T>
-class VectorHNSW : public VectorBase {
+class VectorHNSW : public VectorType<T> {
  public:
   static absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> Create(
       const data_model::VectorIndex& vector_index_proto,
@@ -47,24 +47,12 @@ class VectorHNSW : public VectorBase {
       absl::string_view attribute_identifier,
       SupplementalContentChunkIter&& iter) ABSL_NO_THREAD_SAFETY_ANALYSIS;
   ~VectorHNSW() override = default;
-  size_t GetDataTypeSize() const override { return sizeof(T); }
-  data_model::VectorDataType GetVectorDataType() const override {
-    if constexpr (std::is_same_v<T, float>) {
-      return data_model::VECTOR_DATA_TYPE_FLOAT32;
-    } else if constexpr (std::is_same_v<T, float16>) {
-      return data_model::VECTOR_DATA_TYPE_FLOAT16;
-    } else if constexpr (std::is_same_v<T, bfloat16>) {
-      return data_model::VECTOR_DATA_TYPE_BFLOAT16;
-    } else {
-      static_assert(sizeof(T) == 0, "unsupported vector storage type");
-    }
-  }
 
   const hnswlib::SpaceInterface<float>* GetSpace() const {
-    return space_.get();
+    return this->space_.get();
   }
 
-  int GetDimensions() const { return dimensions_; }
+  int GetDimensions() const { return this->dimensions_; }
   size_t GetCapacity() const override
       ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_) {
     return algo_->max_elements_;
@@ -123,7 +111,6 @@ class VectorHNSW : public VectorBase {
              data_model::AttributeDataType attribute_data_type);
   std::unique_ptr<hnswlib::HierarchicalNSW<float>> algo_
       ABSL_GUARDED_BY(resize_mutex_);
-  std::unique_ptr<hnswlib::SpaceInterface<float>> space_;
   mutable absl::Mutex resize_mutex_;
   mutable absl::Mutex tracked_vectors_mutex_;
   absl::flat_hash_map<uint64_t, InternedStringPtr> tracked_vectors_

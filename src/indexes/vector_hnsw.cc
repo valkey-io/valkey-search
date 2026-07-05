@@ -16,7 +16,6 @@
 #include <optional>
 #include <queue>
 #include <string>
-#include <type_traits>
 #include <utility>
 
 #include "absl/base/thread_annotations.h"
@@ -51,9 +50,8 @@
 
 namespace hnswlib_helpers {
 
-template <typename T>
-std::optional<hnswlib::tableint> GetInternalIdLockFree(
-    hnswlib::HierarchicalNSW<T> *algo, uint64_t internal_id) {
+inline std::optional<hnswlib::tableint> GetInternalIdLockFree(
+    hnswlib::HierarchicalNSW<float> *algo, uint64_t internal_id) {
   auto search = algo->label_lookup_.find(internal_id);
   if (search == algo->label_lookup_.end() ||
       algo->isMarkedDeleted(search->second)) {
@@ -62,16 +60,14 @@ std::optional<hnswlib::tableint> GetInternalIdLockFree(
   return search->second;
 }
 
-template <typename T>
-std::optional<hnswlib::tableint> GetInternalId(
-    hnswlib::HierarchicalNSW<T> *algo, uint64_t internal_id) {
+inline std::optional<hnswlib::tableint> GetInternalId(
+    hnswlib::HierarchicalNSW<float> *algo, uint64_t internal_id) {
   std::unique_lock<std::mutex> lock_table(algo->label_lookup_lock);
   return GetInternalIdLockFree(algo, internal_id);
 }
 
-template <typename T>
-std::optional<hnswlib::tableint> GetInternalIdDuringSearch(
-    hnswlib::HierarchicalNSW<T> *algo, uint64_t internal_id) {
+inline std::optional<hnswlib::tableint> GetInternalIdDuringSearch(
+    hnswlib::HierarchicalNSW<float> *algo, uint64_t internal_id) {
   return GetInternalIdLockFree(algo, internal_id);
 }
 }  // namespace hnswlib_helpers
@@ -87,10 +83,9 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::Create(
     auto index = std::shared_ptr<VectorHNSW<T>>(
         new VectorHNSW<T>(vector_index_proto.dimension_count(),
                           attribute_identifier, attribute_data_type));
-    index->Init(vector_index_proto.dimension_count(),
-                vector_index_proto.distance_metric(), index->space_);
+    index->Init(vector_index_proto.distance_metric());
     const auto &hnsw_proto = vector_index_proto.hnsw_algorithm();
-    index->algo_ = std::make_unique<hnswlib::HierarchicalNSW<T>>(
+    index->algo_ = std::make_unique<hnswlib::HierarchicalNSW<float>>(
         index->space_.get(), vector_index_proto.initial_cap(), hnsw_proto.m(),
         hnsw_proto.ef_construction());
     index->algo_->setEf(hnsw_proto.ef_runtime());
@@ -139,11 +134,10 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
     auto index = std::shared_ptr<VectorHNSW<T>>(new VectorHNSW<T>(
         vector_index_proto.dimension_count(), attribute_identifier,
         attribute_data_type->ToProto()));
-    index->Init(vector_index_proto.dimension_count(),
-                vector_index_proto.distance_metric(), index->space_);
+    index->Init(vector_index_proto.distance_metric());
 
     index->algo_ =
-        std::make_unique<hnswlib::HierarchicalNSW<T>>(index->space_.get());
+        std::make_unique<hnswlib::HierarchicalNSW<float>>(index->space_.get());
     // initial_cap needs to be provided to retain the original initial_cap if
     // the index being loaded is empty.
 
@@ -168,8 +162,8 @@ template <typename T>
 VectorHNSW<T>::VectorHNSW(int dimensions,
                           absl::string_view attribute_identifier,
                           data_model::AttributeDataType attribute_data_type)
-    : VectorBase(IndexerType::kHNSW, dimensions, attribute_data_type,
-                 attribute_identifier) {}
+    : VectorType<T>(IndexerType::kHNSW, dimensions, attribute_data_type,
+                    attribute_identifier) {}
 
 template <typename T>
 absl::Status VectorHNSW<T>::AddRecordImpl(uint64_t internal_id,
@@ -178,7 +172,7 @@ absl::Status VectorHNSW<T>::AddRecordImpl(uint64_t internal_id,
     try {
       absl::ReaderMutexLock lock(&resize_mutex_);
 
-      algo_->addPoint((T *)record.data(), internal_id,
+      algo_->addPoint((void *)record.data(), internal_id,
                       algo_->allow_replace_deleted_);
       return absl::OkStatus();
     } catch (const std::exception &e) {
@@ -198,16 +192,7 @@ absl::Status VectorHNSW<T>::AddRecordImpl(uint64_t internal_id,
 
 template <typename T>
 int VectorHNSW<T>::RespondWithInfoImpl(ValkeyModuleCtx *ctx) const {
-  ValkeyModule_ReplyWithSimpleString(ctx, "data_type");
-  if constexpr (std::is_same_v<T, float>) {
-    ValkeyModule_ReplyWithSimpleString(
-        ctx,
-        LookupKeyByValue(*kVectorDataTypeByStr,
-                         data_model::VectorDataType::VECTOR_DATA_TYPE_FLOAT32)
-            .data());
-  } else {
-    ValkeyModule_ReplyWithSimpleString(ctx, "UNKNOWN");
-  }
+  this->EmitDataTypeInfo(ctx);
   ValkeyModule_ReplyWithSimpleString(ctx, "algorithm");
   ValkeyModule_ReplyWithArray(ctx, 8);
   ValkeyModule_ReplyWithSimpleString(ctx, "name");
@@ -277,7 +262,7 @@ absl::Status VectorHNSW<T>::ModifyRecordImpl(uint64_t internal_id,
     // The concern with calling updatePoint is that it might have implications
     // on the search accuracy. Need to revisit this in the future.
     algo_->markDelete(internal_id);
-    algo_->addPoint((T *)record.data(), internal_id,
+    algo_->addPoint((void *)record.data(), internal_id,
                     algo_->allow_replace_deleted_);
   } catch (const std::exception &e) {
     ++Metrics::GetStats().hnsw_modify_exceptions_cnt;
@@ -320,10 +305,11 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
                          &ef_runtime,
                          &cancellation_token](absl::string_view query)
                             ABSL_NO_THREAD_SAFETY_ANALYSIS
-      -> absl::StatusOr<std::priority_queue<std::pair<T, hnswlib::labeltype>>> {
+      -> absl::StatusOr<
+          std::priority_queue<std::pair<float, hnswlib::labeltype>>> {
     try {
       CancelCondition cancel_condition(cancellation_token);
-      auto res = algo_->searchKnn((T *)query.data(), count, ef_runtime,
+      auto res = algo_->searchKnn((void *)query.data(), count, ef_runtime,
                                   filter.get(), &cancel_condition);
       if (!enable_partial_results && cancellation_token->IsCancelled()) {
         return absl::CancelledError(
@@ -336,29 +322,22 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
       return absl::InternalError(e.what());
     }
   };
-  if (normalize_) {
-    auto norm_record = NormalizeEmbedding(query, GetDataTypeSize());
+  if (this->normalize_) {
+    auto norm_record = NormalizeEmbedding(query, this->GetVectorDataType());
     VMSDK_ASSIGN_OR_RETURN(
         auto search_result,
         perform_search(absl::string_view((const char *)norm_record.data(),
                                          norm_record.size())));
-    return CreateReply(search_result);
+    return this->CreateReply(search_result);
   }
   VMSDK_ASSIGN_OR_RETURN(auto search_result, perform_search(query));
-  return CreateReply(search_result);
+  return this->CreateReply(search_result);
 }
 
 template <typename T>
 void VectorHNSW<T>::ToProtoImpl(
     data_model::VectorIndex *vector_index_proto) const {
-  data_model::VectorDataType data_type;
-  if constexpr (std::is_same_v<T, float>) {
-    data_type = data_model::VectorDataType::VECTOR_DATA_TYPE_FLOAT32;
-  } else {
-    DCHECK(false) << "Unsupported type: " << typeid(T).name();
-    data_type = data_model::VectorDataType::VECTOR_DATA_TYPE_UNSPECIFIED;
-  }
-  vector_index_proto->set_vector_data_type(data_type);
+  this->SetProtoDataType(vector_index_proto);
   absl::ReaderMutexLock lock(&resize_mutex_);
   auto hnsw_algorithm_proto = std::make_unique<data_model::HNSWAlgorithm>();
   hnsw_algorithm_proto->set_ef_construction(GetEfConstruction());
@@ -379,7 +358,7 @@ VectorHNSW<T>::ComputeDistanceFromRecordImpl(uint64_t internal_id,
         absl::StrCat("Couldn't find internal id: ", internal_id));
   }
   return (std::pair<float, hnswlib::labeltype>){
-      algo_->fstdistfunc_((T *)query.data(), algo_->getDataByInternalId(*id),
+      algo_->fstdistfunc_((void *)query.data(), algo_->getDataByInternalId(*id),
                           algo_->dist_func_param_),
       internal_id};
 }
@@ -402,5 +381,7 @@ size_t VectorHNSW<T>::GetLabelCount() const {
 }
 
 template class VectorHNSW<float>;
+template class VectorHNSW<float16>;
+template class VectorHNSW<bfloat16>;
 
 }  // namespace valkey_search::indexes

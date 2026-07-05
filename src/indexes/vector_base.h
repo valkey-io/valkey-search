@@ -29,6 +29,7 @@
 #include "absl/synchronization/mutex.h"
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"
+#include "src/indexes/fp16.h"
 #include "src/indexes/index_base.h"
 #include "src/query/predicate.h"
 #include "src/rdb_serialization.h"
@@ -45,8 +46,21 @@ enum class QueryOperations : uint64_t;
 
 namespace valkey_search::indexes {
 
-std::vector<char> NormalizeEmbedding(absl::string_view record, size_t type_size,
+std::vector<char> NormalizeEmbedding(absl::string_view record,
+                                     data_model::VectorDataType data_type,
                                      float* magnitude = nullptr);
+
+// Verify the running CPU exposes a SIMD-targeted BF16 path required by the
+// current simsimd build. Returns OkStatus when:
+//   - This build of simsimd does not enable native BF16 (the serial path is
+//     then bit-correct), or
+//   - The CPU advertises Haswell/Genoa/Sapphire on x86, or NEON-BF16/SVE-BF16
+//     on ARM.
+// Otherwise returns FailedPreconditionError; callers should refuse to create
+// or load a BFLOAT16 index on this host. Called at index-create / RDB-load
+// time rather than module load so that nodes lacking a SIMD BF16 path can
+// still serve FLOAT32 and FLOAT16 indexes.
+absl::Status CheckSimsimdBf16Capability();
 
 // Lightweight result entry used during non-vector search collection.
 // Trivially destructible — destroying a vector of 10K of these is a no-op.
@@ -113,7 +127,9 @@ const absl::NoDestructor<
 
 const absl::NoDestructor<
     absl::flat_hash_map<absl::string_view, data_model::VectorDataType>>
-    kVectorDataTypeByStr({{"FLOAT32", data_model::VECTOR_DATA_TYPE_FLOAT32}});
+    kVectorDataTypeByStr({{"FLOAT32", data_model::VECTOR_DATA_TYPE_FLOAT32},
+                          {"FLOAT16", data_model::VECTOR_DATA_TYPE_FLOAT16},
+                          {"BFLOAT16", data_model::VECTOR_DATA_TYPE_BFLOAT16}});
 
 template <typename V>
 absl::string_view LookupKeyByValue(
@@ -173,13 +189,22 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
       absl::string_view query, uint64_t count, const InternedStringPtr& key,
       std::priority_queue<std::pair<float, hnswlib::labeltype>>& results,
       absl::flat_hash_set<const char*>& top_keys) const;
+  // Provided by VectorType<T> so the per-element byte width and format
+  // conversion come from sizeof(T) + if-constexpr on T instead of a
+  // runtime switch on GetVectorDataType().
   vmsdk::UniqueValkeyString NormalizeStringRecord(
-      vmsdk::UniqueValkeyString record) const override;
+      vmsdk::UniqueValkeyString record) const override = 0;
   template <typename T>
   absl::StatusOr<std::vector<Neighbor>> CreateReply(
       std::priority_queue<std::pair<T, hnswlib::labeltype>>& knn_res);
   absl::StatusOr<std::vector<char>> GetValue(const InternedStringPtr& key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  virtual size_t GetDataTypeSize() const = 0;
+  // Returns the vector data type enum. Used to disambiguate FLOAT16 from
+  // BFLOAT16 in normalize/denormalize dispatch — both are 2 bytes, so a
+  // size-based check would silently route the wrong format through the wrong
+  // helper.
+  virtual data_model::VectorDataType GetVectorDataType() const = 0;
   int GetVectorDataSize() const { return GetDataTypeSize() * dimensions_; }
   char* TrackVector(uint64_t internal_id, char* vector, size_t len) override;
   InternedStringPtr InternVector(absl::string_view record,
@@ -190,7 +215,7 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   bool IsVectorIndex() const override { return true; }
 
  protected:
-  VectorBase(IndexerType indexer_type, int dimensions,
+  VectorBase(IndexerType indexer_type, int dimensions, size_t element_size,
              data_model::AttributeDataType attribute_data_type,
              absl::string_view attribute_identifier)
       : IndexBase(indexer_type),
@@ -200,7 +225,7 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
 #ifndef SAN_BUILD
         ,
         vector_allocator_(CREATE_UNIQUE_PTR(
-            FixedSizeAllocator, dimensions * sizeof(float) + 1, true))
+            FixedSizeAllocator, dimensions * element_size + 1, true))
 #endif  // !SAN_BUILD
   {
   }
@@ -211,9 +236,6 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
     return dim == dimensions_ && (record.size() % data_type_size == 0);
   }
   int RespondWithInfo(ValkeyModuleCtx* ctx) const override;
-  template <typename T>
-  void Init(int dimensions, data_model::DistanceMetric distance_metric,
-            std::unique_ptr<hnswlib::SpaceInterface<T>>& space);
   virtual absl::Status AddRecordImpl(uint64_t internal_id,
                                      absl::string_view record) = 0;
 
@@ -222,7 +244,6 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
                                         absl::string_view record) = 0;
   virtual int RespondWithInfoImpl(ValkeyModuleCtx* ctx) const = 0;
 
-  virtual size_t GetDataTypeSize() const = 0;
   virtual void ToProtoImpl(
       data_model::VectorIndex* vector_index_proto) const = 0;
   virtual absl::Status SaveIndexImpl(

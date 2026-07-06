@@ -12,6 +12,7 @@
 #include <queue>
 
 #include "absl/container/flat_hash_map.h"
+#include "src/expr/value.h"
 #include "absl/status/status.h"
 #include "absl/strings/numbers.h"
 #include "src/commands/ft_aggregate_parser.h"
@@ -643,7 +644,7 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> QuantileReducerParser(
     return absl::InvalidArgumentError(
         "QUANTILE: quantile value must be a numeric literal");
   }
-  if (!std::isfinite(quantile_val) || quantile_val < 0.0 ||
+  if (expr::IsNan(quantile_val) || quantile_val < 0.0 ||
       quantile_val > 1.0) {
     return absl::InvalidArgumentError(
         "QUANTILE: quantile value must be between 0.0 and 1.0");

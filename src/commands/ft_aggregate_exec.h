@@ -116,10 +116,10 @@ struct QuantileStats {
 };
 
 // Creates a QuantileReducer configured with the given quantile value.
-// The returned reducer's stats can be inspected after Execute() via the
-// shared_ptr returned in `stats_out`.
+// The returned reducer owns its stats, `stats_out` points into the reducer
+// and remains valid for the reducer's lifetime.
 std::unique_ptr<GroupBy::Reducer> MakeQuantileReducer(
-    double quantile, std::shared_ptr<QuantileStats>& stats_out);
+    double quantile, QuantileStats *&stats_out);
 
 }  // namespace aggregate
 }  // namespace valkey_search

@@ -480,9 +480,12 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> FirstValueReducerParser(
   // arg 0: the field whose value to return.
   VMSDK_ASSIGN_OR_RETURN(auto field_tok, itr.PopNext(),
                          _ << "Missing Reducer argument 0");
+  auto field_sv = vmsdk::ToStringView(field_tok);
+  std::vector<std::string> arg_texts;
+  arg_texts.emplace_back(field_sv);
   VMSDK_ASSIGN_OR_RETURN(
       auto field_expr,
-      expr::Expression::Compile(parameters, vmsdk::ToStringView(field_tok)),
+      expr::Expression::Compile(parameters, field_sv),
       _ << " in FIRST_VALUE reducer");
   r->args_.push_back(std::move(field_expr));
 
@@ -496,9 +499,11 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> FirstValueReducerParser(
     // arg 1: the field to sort by.
     VMSDK_ASSIGN_OR_RETURN(auto sort_tok, itr.PopNext(),
                            _ << "Missing sort field after BY");
+    auto sort_sv = vmsdk::ToStringView(sort_tok);
+    arg_texts.emplace_back(sort_sv);
     VMSDK_ASSIGN_OR_RETURN(
         auto sort_expr,
-        expr::Expression::Compile(parameters, vmsdk::ToStringView(sort_tok)),
+        expr::Expression::Compile(parameters, sort_sv),
         _ << " in FIRST_VALUE reducer");
     r->args_.push_back(std::move(sort_expr));
     r->is_sorted_ = true;
@@ -523,10 +528,17 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> FirstValueReducerParser(
     r->output_ =
         std::unique_ptr<Attribute>(dynamic_cast<Attribute*>(output.release()));
   } else {
-    std::ostringstream os;
-    os << *r;
+    // TODO(https://github.com/valkey-io/valkey-search/issues/965): Workaround
+    // for memory allocator issue causing ostringstream to crash.
+    std::string default_name(r->name_);
+    default_name += '(';
+    for (size_t i = 0; i < arg_texts.size(); ++i) {
+      if (i > 0) default_name += ',';
+      default_name += arg_texts[i];
+    }
+    default_name += ')';
     VMSDK_ASSIGN_OR_RETURN(auto output,
-                           parameters.MakeReference(os.str(), true));
+                           parameters.MakeReference(default_name, true));
     r->output_ =
         std::unique_ptr<Attribute>(dynamic_cast<Attribute*>(output.release()));
   }

@@ -180,6 +180,9 @@ Value FuncDayofyear(const Value& t);
 Value FuncYear(const Value& t);
 Value FuncMonthofyear(const Value& t);
 
+// Returns true if d is NaN. Safe under -ffast-math (bitwise check).
+bool IsNan(const double& d);
+
 }  // namespace expr
 }  // namespace valkey_search
 

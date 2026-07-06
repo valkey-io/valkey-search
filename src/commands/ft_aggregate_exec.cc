@@ -360,14 +360,15 @@ class Quantile : public GroupBy::ReducerInstance {
   size_t n_{0};  // Total number of values inserted
   double quantile_{0.0};
 
-  std::shared_ptr<QuantileStats> stats_{std::make_shared<QuantileStats>()};
+  // Borrowed from the owning QuantileReducer, lifetime guaranteed because
+  // ReducerInstances are created and destroyed within GroupBy::Execute while
+  // the Reducer outlives that scope.
+  QuantileStats *stats_{nullptr};
 
 
  public:
   void SetQuantile(double q) { quantile_ = q; }
-  void SetStats(std::shared_ptr<QuantileStats> stats) {
-    stats_ = std::move(stats);
-  }
+  void SetStats(QuantileStats *stats) { stats_ = stats; }
   const QuantileStats& GetStats() const { return *stats_; }
 
 
@@ -599,12 +600,12 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> BasicReducerParser(
 
 struct QuantileReducer : GroupBy::Reducer {
   double quantile_{0.0};
-  std::shared_ptr<QuantileStats> stats_{std::make_shared<QuantileStats>()};
+  QuantileStats stats_;  // Outlives all ReducerInstances created below.
 
   std::unique_ptr<GroupBy::ReducerInstance> MakeInstance() override {
     auto instance = std::make_unique<Quantile>();
     instance->SetQuantile(quantile_);
-    instance->SetStats(stats_);
+    instance->SetStats(&stats_);
     return instance;
   }
 };
@@ -680,10 +681,10 @@ absl::flat_hash_map<std::string, GroupBy::ReducerInfo> GroupBy::reducerTable{
 };
 
 std::unique_ptr<GroupBy::Reducer> MakeQuantileReducer(
-    double quantile, std::shared_ptr<QuantileStats>& stats_out) {
+    double quantile, QuantileStats *&stats_out) {
   auto r = std::make_unique<QuantileReducer>();
   r->quantile_ = quantile;
-  stats_out = r->stats_;
+  stats_out = &r->stats_;
   return r;
 }
 

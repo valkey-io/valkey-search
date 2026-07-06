@@ -1074,7 +1074,7 @@ TEST_F(AggregateExecTest, QuantileInstrumentationPathCoverage) {
   std::cerr << "QuantileInstrumentationPathCoverage\n";
 
   // Create a QuantileReducer via the factory to inspect stats after execution.
-  std::shared_ptr<QuantileStats> stats;
+  QuantileStats *stats = nullptr;
   auto reducer = MakeQuantileReducer(0.5, stats);
   ASSERT_NE(stats, nullptr);
 

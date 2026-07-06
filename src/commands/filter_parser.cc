@@ -918,6 +918,9 @@ FilterParser::ParseTextTokens(
 // 7. A tag field has the following pattern: @field_name:{tag1|tag2|tag3}.
 // 8. A text field has the following pattern : @field_name:phrase. Where phrase
 // can be a combination of different words, *, % for different text operations.
+// A text field can also scope a group: @field_name:(a|b|c) applies the field
+// to every bare term inside, e.g. @f:(a|b) => OR(@f:a, @f:b). An explicit
+// @other:term inside the group overrides the scoped field.
 // 9. The tag separator character is configurable with a default value of '|'.
 // 10. A field name can be wrapped with `()` to group multiple predicates.
 // 11. Space between predicates is considered as AND while '|' is considered as
@@ -1033,8 +1036,8 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
           }
           predicate = std::move(sub_result.prev_predicate);
           if (!predicate) {
-            return absl::InvalidArgumentError(
-                absl::StrCat("Empty brackets detected at Position: ", pos_ - 1));
+            return absl::InvalidArgumentError(absl::StrCat(
+                "Empty brackets detected at Position: ", pos_ - 1));
           }
           non_text = true;
         }

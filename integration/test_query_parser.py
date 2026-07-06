@@ -226,6 +226,52 @@ class TestQueryParser(ValkeySearchTestCaseBase):
         result = client.execute_command("FT.SEARCH", "idx1", 'con*+ | word1!!')
         assert result[0] == 2
 
+    def test_text_field_scoped_group(self):
+        """
+        #1214: @field:(a|b|c) scopes a group of text terms to a field, matching
+        RediSearch. Previously returned "Invalid Query Syntax".
+        """
+        client: Valkey = self.server.get_new_client()
+        client.execute_command(
+            "FT.CREATE", "grpidx", "ON", "HASH", "SCHEMA",
+            "f1", "TEXT", "f2", "TEXT")
+        client.execute_command("HSET", "d1", "f1", "foo")
+        client.execute_command("HSET", "d2", "f1", "bar")
+        client.execute_command("HSET", "d3", "f1", "baz")
+        client.execute_command("HSET", "d4", "f1", "qux")
+        client.execute_command("HSET", "d5", "f2", "foo")
+
+        # OR group: matches foo, bar, baz on f1.
+        result = client.execute_command(
+            "FT.SEARCH", "grpidx", "@f1:(foo|bar|baz)", "NOCONTENT")
+        assert result[0] == 3
+        assert set(result[1:]) == {b"d1", b"d2", b"d3"}
+
+        # Single term in parentheses.
+        result = client.execute_command(
+            "FT.SEARCH", "grpidx", "@f1:(foo)", "NOCONTENT")
+        assert result[0] == 1
+        assert result[1] == b"d1"
+
+        # Field scoping: @f1:(foo) must not match d5 (f2=foo).
+        assert b"d5" not in result[1:]
+
+        # AND semantics inside the group (space): no doc has both.
+        result = client.execute_command(
+            "FT.SEARCH", "grpidx", "@f1:(foo bar)", "NOCONTENT")
+        assert result[0] == 0
+
+        # Explicit field inside the group overrides the scoped default.
+        result = client.execute_command(
+            "FT.SEARCH", "grpidx", "@f1:(foo | @f2:foo)", "NOCONTENT")
+        assert result[0] == 2
+        assert set(result[1:]) == {b"d1", b"d5"}
+
+        # Empty group is rejected.
+        with pytest.raises(ResponseError):
+            client.execute_command(
+                "FT.SEARCH", "grpidx", "@f1:()", "NOCONTENT")
+
     def test_tag_min_prefix_length_config(self):
         """
         Test that search.tag-min-prefix-length dynamically controls TAG wildcard

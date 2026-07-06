@@ -1756,10 +1756,11 @@ INSTANTIATE_TEST_SUITE_P(
             .create_success = true,
             .evaluate_success = true,  // key1 text_field1 contains "word"
             .key = "key1",
-            .expected_tree_structure = "OR{\n"
-                                       "  TEXT-TERM(\"word\", field_mask=1)\n"
-                                       "  TEXT-TERM(\"missing\", field_mask=1)\n"
-                                       "}\n",
+            .expected_tree_structure =
+                "OR{\n"
+                "  TEXT-TERM(\"word\", field_mask=1)\n"
+                "  TEXT-TERM(\"missing\", field_mask=1)\n"
+                "}\n",
         },
         {
             .test_name = "text_field_group_single_term",

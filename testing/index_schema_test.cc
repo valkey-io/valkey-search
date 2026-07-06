@@ -1193,6 +1193,51 @@ class IndexSchemaRDBTest : public ValkeySearchTest {
   }
 };
 
+TEST_F(IndexSchemaRDBTest, SingleSlotNumberComputedOnCreate) {
+  std::vector<absl::string_view> key_prefixes = {"doc:{slot1}:"};
+  std::string single_slot_index_name("index_schema_name{slot1}");
+  auto single_slot_schema =
+      MockIndexSchema::Create(&fake_ctx_, single_slot_index_name, key_prefixes,
+                              std::make_unique<HashAttributeDataType>(),
+                              nullptr)
+          .value();
+
+  ASSERT_TRUE(single_slot_schema->GetSingleSlotNumber().has_value());
+
+  std::string multi_slot_index_name("index_schema_name");
+  auto multi_slot_schema =
+      MockIndexSchema::Create(&fake_ctx_, multi_slot_index_name, key_prefixes,
+                              std::make_unique<HashAttributeDataType>(),
+                              nullptr)
+          .value();
+  EXPECT_FALSE(multi_slot_schema->GetSingleSlotNumber().has_value());
+}
+
+TEST_F(IndexSchemaRDBTest, SaveAndLoadSingleSlotNumber) {
+  std::vector<absl::string_view> key_prefixes = {"doc:{slot2}:"};
+  std::string index_schema_name_str("index_schema_name{slot2}");
+
+  auto index_schema = MockIndexSchema::Create(
+                          &fake_ctx_, index_schema_name_str, key_prefixes,
+                          std::make_unique<HashAttributeDataType>(), nullptr)
+                          .value();
+  ASSERT_TRUE(index_schema->GetSingleSlotNumber().has_value());
+  auto slot_number = index_schema->GetSingleSlotNumber();
+  auto proto = index_schema->ToProto();
+
+  ValkeyModuleCtx load_ctx;
+  EXPECT_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(&load_ctx))
+      .WillRepeatedly(Return(&load_ctx));
+  auto loaded_schema_or =
+      IndexSchema::Create(&load_ctx, *proto, /*mutations_thread_pool=*/nullptr,
+                          /*skip_attributes=*/false, /*reload=*/true);
+  VMSDK_EXPECT_OK_STATUSOR(loaded_schema_or);
+  auto loaded_schema = loaded_schema_or.value();
+
+  ASSERT_TRUE(loaded_schema->GetSingleSlotNumber().has_value());
+  EXPECT_EQ(*loaded_schema->GetSingleSlotNumber(), *slot_number);
+}
+
 TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   std::vector<absl::string_view> key_prefixes = {"prefix1", "prefix2"};
   std::string index_schema_name_str("index_schema_name");
@@ -1734,6 +1779,50 @@ TEST_F(IndexSchemaFriendTest, MutatedAttributesSanity) {
   consumed_data = index_schema->ConsumeTrackedMutatedAttribute(key, false);
   EXPECT_FALSE(consumed_data.has_value());
   EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 0);
+}
+
+// Regression test for a pre-existing crash in InTrackedMutationRecords.
+//
+// DocumentMutation::attributes is std::optional<flat_hash_map<...>>.
+// ConsumeTrackedMutatedAttribute, after extracting the attribute map, sets
+// `attributes = std::nullopt` but leaves the entry in tracked_mutated_records_
+// (it only erases the entry when there was nothing to consume). A subsequent
+// call to InTrackedMutationRecords(key, identifier) on that same key would
+// then dereference the disengaged optional via `attributes->find(...)`, which
+// is UB. Under ASAN the bad dereference trips absl's SwissTable iterator
+// generation guard and crashes the server (observed in CI as a SIGSEGV from
+// the backfill scan path during a fulltext test).
+//
+// Repro: track a mutation, consume it (disengaging `attributes` while leaving
+// the entry in the map), then call InTrackedMutationRecords. With the fix it
+// returns false cleanly; without the fix it crashes under ASAN.
+TEST_F(IndexSchemaFriendTest, InTrackedMutationRecordsAfterConsumeNoCrash) {
+  absl::string_view data_ptr;
+  auto mutated_attributes =
+      CreateMutatedAttributes(attribute_identifier, data_ptr);
+  EXPECT_TRUE(index_schema->TrackMutatedRecord(
+      nullptr, key, std::move(mutated_attributes), 0, false, false, false));
+  EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 1u);
+
+  // Consume the mutation. Because attributes was engaged, the entry stays in
+  // the map with attributes = std::nullopt (see index_schema.cc:1997-2008).
+  auto consumed = index_schema->ConsumeTrackedMutatedAttribute(key, true);
+  EXPECT_TRUE(consumed.has_value());
+  EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 1u);
+
+  // Verify our reading of the state: entry present, attributes disengaged.
+  {
+    absl::MutexLock lock(&index_schema->mutated_records_mutex_);
+    auto itr = index_schema->tracked_mutated_records_.find(key);
+    ASSERT_NE(itr, index_schema->tracked_mutated_records_.end());
+    EXPECT_FALSE(itr->second.attributes.has_value());
+  }
+
+  // The crash: without the fix this dereferences a disengaged optional.
+  // Expected behavior with the fix: returns false (no pending mutation for
+  // this (key, identifier) pair after the consume drained it).
+  EXPECT_FALSE(
+      index_schema->InTrackedMutationRecords(key, attribute_identifier));
 }
 
 TEST_F(IndexSchemaFriendTest, MutatedAttributes) {

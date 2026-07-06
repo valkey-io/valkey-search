@@ -18,11 +18,9 @@
 #include <utility>
 #include <vector>
 
-#include "absl/base/no_destructor.h"
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
-#include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
@@ -47,6 +45,15 @@ namespace valkey_search::indexes {
 
 std::vector<char> NormalizeEmbedding(absl::string_view record, size_t type_size,
                                      float* magnitude = nullptr);
+
+// Lightweight result entry used during non-vector search collection.
+// Trivially destructible — destroying a vector of 10K of these is a no-op.
+struct BorrowedNeighbor {
+  BorrowedInternedStringPtr key;
+  float distance;
+};
+static_assert(std::is_trivially_destructible_v<BorrowedNeighbor>,
+              "BorrowedNeighbor must be trivially destructible");
 
 struct Neighbor {
   InternedStringPtr external_id;
@@ -171,12 +178,15 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
       std::priority_queue<std::pair<T, hnswlib::labeltype>>& knn_res);
   absl::StatusOr<std::vector<char>> GetValue(const InternedStringPtr& key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  virtual size_t GetDataTypeSize() const = 0;
   int GetVectorDataSize() const { return GetDataTypeSize() * dimensions_; }
   char* TrackVector(uint64_t internal_id, char* vector, size_t len) override;
   InternedStringPtr InternVector(absl::string_view record,
                                  std::optional<float>& magnitude);
   virtual uint64_t GetMaxInternalLabel() const { return 0; }
   virtual size_t GetLabelCount() const { return 0; }
+
+  bool IsVectorIndex() const override { return true; }
 
  protected:
   VectorBase(IndexerType indexer_type, int dimensions,
@@ -211,7 +221,6 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
                                         absl::string_view record) = 0;
   virtual int RespondWithInfoImpl(ValkeyModuleCtx* ctx) const = 0;
 
-  virtual size_t GetDataTypeSize() const = 0;
   virtual void ToProtoImpl(
       data_model::VectorIndex* vector_index_proto) const = 0;
   virtual absl::Status SaveIndexImpl(

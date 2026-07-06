@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
+#include <type_traits>
 #include <utility>
 
 #include "absl/base/thread_annotations.h"
@@ -31,6 +32,7 @@ namespace valkey_search {
 
 class InternedStringImpl;
 class InternedStringPtr;
+class BorrowedInternedStringPtr;
 
 //
 // An interned string. This is a reference-counted object of variable size.
@@ -54,6 +56,7 @@ class InternedString {
   ~InternedString() = default;
 
   friend class InternedStringPtr;
+  friend class BorrowedInternedStringPtr;
   static InternedString *Constructor(absl::string_view str,
                                      Allocator *allocator);
   void Destructor();
@@ -164,11 +167,66 @@ class InternedStringPtr {
 
   size_t RefCount() const { return impl_ ? impl_->RefCount() : 0; }
 
+  // Access the raw pointer (used by BorrowedInternedStringPtr).
+  const InternedString *RawPtr() const { return impl_; }
+
  private:
   InternedStringPtr(InternedString *impl) : impl_(impl) {}
   InternedString *impl_{nullptr};
   friend class StringInternStore;
+  friend class BorrowedInternedStringPtr;
 };
+
+//
+// A non-owning (borrowed) pointer to an InternedString. This class is
+// trivially destructible — destroying a vector of these is a no-op.
+//
+// Safety contract: The caller MUST guarantee that the underlying
+// InternedString outlives this pointer. Typically this means the reader lock
+// that protects the index must be held for the lifetime of all
+// BorrowedInternedStringPtr instances.
+//
+// Call Materialize() to convert to an owning InternedStringPtr (increments
+// ref count) before releasing the lock.
+//
+class BorrowedInternedStringPtr {
+ public:
+  BorrowedInternedStringPtr() = default;
+  explicit BorrowedInternedStringPtr(const InternedStringPtr &owned)
+      : ptr_(owned.RawPtr()) {}
+
+  // Trivially copyable, trivially destructible — no ref counting.
+  BorrowedInternedStringPtr(const BorrowedInternedStringPtr &) = default;
+  BorrowedInternedStringPtr &operator=(const BorrowedInternedStringPtr &) =
+      default;
+  ~BorrowedInternedStringPtr() = default;
+
+  absl::string_view Str() const { return ptr_->Str(); }
+  const InternedString *operator->() const { return ptr_; }
+  const InternedString &operator*() const { return *ptr_; }
+  explicit operator bool() const { return ptr_ != nullptr; }
+
+  // Convert to an owning pointer (increments ref count).
+  InternedStringPtr Materialize() const {
+    if (ptr_) {
+      const_cast<InternedString *>(ptr_)->IncrementRefCount();
+    }
+    return InternedStringPtr(const_cast<InternedString *>(ptr_));
+  }
+
+  auto operator<=>(const BorrowedInternedStringPtr &other) const {
+    return ptr_ <=> other.ptr_;
+  }
+  bool operator==(const BorrowedInternedStringPtr &other) const = default;
+  size_t Hash() const { return absl::HashOf(ptr_); }
+
+ private:
+  const InternedString *ptr_{nullptr};
+  friend class InternedStringPtr;
+};
+
+static_assert(std::is_trivially_destructible_v<BorrowedInternedStringPtr>,
+              "BorrowedInternedStringPtr must be trivially destructible");
 
 inline std::ostream &operator<<(std::ostream &os,
                                 const InternedStringPtr &str) {
@@ -465,10 +523,10 @@ class BagOfInternedStringPtrs {
   }
 
   std::pair<const_iterator, bool> insert(const InternedStringPtr &key) {
-    return InsertImpl(key, /*is_rvalue=*/false);
+    return InsertImpl<const InternedStringPtr &>(key);
   }
   std::pair<const_iterator, bool> insert(InternedStringPtr &&key) {
-    return InsertImpl(std::move(key), /*is_rvalue=*/true);
+    return InsertImpl<InternedStringPtr &&>(std::move(key));
   }
 
   size_type erase(const InternedStringPtr &key) {
@@ -567,6 +625,73 @@ class BagOfInternedStringPtrs {
     std::swap(storage_, other.storage_);
   }
 
+  // Construct a bag that takes ownership of the given encoded storage value
+  // (typically obtained from a prior Release() or held in an external 8-byte
+  // slot such as a rax tree value pointer). The storage value must be either
+  // 0 (empty) or a previously-released value from another bag -- passing
+  // arbitrary bit patterns is undefined behaviour. After Adopt the source
+  // location should be considered moved-from and not destructed independently.
+  static BagOfInternedStringPtrs Adopt(uintptr_t storage) noexcept {
+    BagOfInternedStringPtrs b;
+    b.storage_ = storage;
+    return b;
+  }
+
+  // Surrender ownership of the bag's encoded storage to the caller. After
+  // Release the bag is empty (storage_ == 0); its destructor is a no-op.
+  // Callers commonly hand the returned value to a rax slot or another bag's
+  // Adopt() call.
+  uintptr_t Release() noexcept {
+    uintptr_t s = storage_;
+    storage_ = 0;
+    return s;
+  }
+
+  // Test-only: returns the current representation. Not part of the public
+  // contract -- intended for white-box assertions that promote/demote
+  // transitions happen at the expected boundaries.
+  enum class TestMode { kEmpty, kSingle, kArray4, kArray8, kSet };
+  TestMode TestModeForTesting() const {
+    if (storage_ == 0) {
+      return TestMode::kEmpty;
+    }
+    switch (storage_ & kTagMask) {
+      case kSingleTag:
+        return TestMode::kSingle;
+      case kArray4Tag:
+        return TestMode::kArray4;
+      case kArray8Tag:
+        return TestMode::kArray8;
+      case kSetTag:
+        return TestMode::kSet;
+    }
+    return TestMode::kEmpty;
+  }
+
+  // Hint: reserve space for an expected element count and pre-pick the
+  // matching representation. Only effective on a freshly-constructed empty
+  // bag (no-op otherwise). Lets bulk-loading paths -- RDB restore, backfill,
+  // batch inserts -- skip the intermediate promotions through Single ->
+  // Array4 -> Array8 -> Set, avoiding three new+delete cycles and two data
+  // migrations per bucket.
+  void reserve(std::size_t n) {
+    if (!empty()) {
+      return;
+    }
+    if (n <= 1) {
+      return;
+    }
+    if (n <= kArray4Cap) {
+      SetArray4(new Array4());
+    } else if (n <= kArray8Cap) {
+      SetArray8(new Array8());
+    } else {
+      auto *set = new InternedStringSet();
+      set->reserve(n);
+      SetSet(set);
+    }
+  }
+
  private:
   static constexpr std::size_t kArray4Cap = 4;
   static constexpr std::size_t kArray8Cap = 8;
@@ -650,15 +775,11 @@ class BagOfInternedStringPtrs {
   }
 
   template <typename Key>
-  std::pair<const_iterator, bool> InsertImpl(Key &&key, bool is_rvalue) {
+  std::pair<const_iterator, bool> InsertImpl(Key &&key) {
     switch (storage_ & kTagMask) {
       case kSingleTag:
         if (storage_ == 0) {
-          if (is_rvalue) {
-            new (&storage_) InternedStringPtr(std::move(key));
-          } else {
-            new (&storage_) InternedStringPtr(key);
-          }
+          new (&storage_) InternedStringPtr(std::forward<Key>(key));
           return {const_iterator(const_iterator::Tag::kSingle, this), true};
         }
         if (SingleRef() == key) {
@@ -668,25 +789,16 @@ class BagOfInternedStringPtrs {
         {
           auto *arr = new Array4();
           (*arr)[0] = std::move(SingleRefMut());
-          if (is_rvalue) {
-            (*arr)[1] = std::move(key);
-          } else {
-            (*arr)[1] = key;
-          }
+          (*arr)[1] = std::forward<Key>(key);
           SetArray4(arr);
           return {const_iterator(this, arr->data(), 2, 1), true};
         }
       case kArray4Tag:
-        return InsertIntoArray4(std::forward<Key>(key), is_rvalue);
+        return InsertIntoArray4(std::forward<Key>(key));
       case kArray8Tag:
-        return InsertIntoArray8(std::forward<Key>(key), is_rvalue);
+        return InsertIntoArray8(std::forward<Key>(key));
       case kSetTag: {
-        auto *set = GetSet();
-        if (is_rvalue) {
-          auto [it, inserted] = set->insert(std::move(key));
-          return {const_iterator(this, it), inserted};
-        }
-        auto [it, inserted] = set->insert(key);
+        auto [it, inserted] = GetSet()->insert(std::forward<Key>(key));
         return {const_iterator(this, it), inserted};
       }
     }
@@ -694,15 +806,11 @@ class BagOfInternedStringPtrs {
   }
 
   template <typename Key>
-  std::pair<const_iterator, bool> InsertIntoArray4(Key &&key, bool is_rvalue) {
+  std::pair<const_iterator, bool> InsertIntoArray4(Key &&key) {
     auto *arr = GetArray4();
     for (std::size_t i = 0; i < kArray4Cap; ++i) {
       if (!(*arr)[i]) {
-        if (is_rvalue) {
-          (*arr)[i] = std::move(key);
-        } else {
-          (*arr)[i] = key;
-        }
+        (*arr)[i] = std::forward<Key>(key);
         return {const_iterator(this, arr->data(), i + 1, i), true};
       }
       if ((*arr)[i] == key) {
@@ -715,25 +823,17 @@ class BagOfInternedStringPtrs {
       (*arr8)[i] = std::move((*arr)[i]);
     }
     delete arr;
-    if (is_rvalue) {
-      (*arr8)[4] = std::move(key);
-    } else {
-      (*arr8)[4] = key;
-    }
+    (*arr8)[4] = std::forward<Key>(key);
     SetArray8(arr8);
     return {const_iterator(this, arr8->data(), 5, 4), true};
   }
 
   template <typename Key>
-  std::pair<const_iterator, bool> InsertIntoArray8(Key &&key, bool is_rvalue) {
+  std::pair<const_iterator, bool> InsertIntoArray8(Key &&key) {
     auto *arr = GetArray8();
     for (std::size_t i = 0; i < kArray8Cap; ++i) {
       if (!(*arr)[i]) {
-        if (is_rvalue) {
-          (*arr)[i] = std::move(key);
-        } else {
-          (*arr)[i] = key;
-        }
+        (*arr)[i] = std::forward<Key>(key);
         return {const_iterator(this, arr->data(), i + 1, i), true};
       }
       if ((*arr)[i] == key) {
@@ -746,17 +846,7 @@ class BagOfInternedStringPtrs {
       set->insert(std::move((*arr)[i]));
     }
     delete arr;
-    InternedStringSet::const_iterator it;
-    bool inserted;
-    if (is_rvalue) {
-      auto pr = set->insert(std::move(key));
-      it = pr.first;
-      inserted = pr.second;
-    } else {
-      auto pr = set->insert(key);
-      it = pr.first;
-      inserted = pr.second;
-    }
+    auto [it, inserted] = set->insert(std::forward<Key>(key));
     SetSet(set);
     return {const_iterator(this, it), inserted};
   }
@@ -817,15 +907,31 @@ class BagOfInternedStringPtrs {
     }
     auto *arr8 = new Array8();
     std::size_t i = 0;
-    for (const auto &elem : *set) {
-      (*arr8)[i++] = elem;  // copy bumps ref count
+    // The set is about to be destroyed and we own all the elements, so move
+    // them out instead of copying. absl::flat_hash_set exposes its keys as
+    // const to enforce the no-mutate contract for hashed lookup; the
+    // const_cast is safe here because no further hashing will happen before
+    // delete. Moving avoids 2N atomic ref-count operations (one inc on copy,
+    // one dec when the set is destroyed) per demote.
+    for (auto &elem : *set) {
+      (*arr8)[i++] = std::move(const_cast<InternedStringPtr &>(elem));
     }
-    delete set;  // dec ref count for each element
+    delete set;  // moved-from elements are nullptr; their dtors are no-ops
     SetArray8(arr8);
   }
 };
 static_assert(sizeof(BagOfInternedStringPtrs) == 8,
               "BagOfInternedStringPtrs must fit in 8 bytes");
+// The Single-mode representation stores an InternedStringPtr in-place inside
+// the bag's 8-byte storage_ slot via placement-new and reinterpret_cast. That
+// requires the pointer type to be exactly one machine word in both size and
+// alignment.
+static_assert(sizeof(InternedStringPtr) == sizeof(uintptr_t),
+              "BagOfInternedStringPtrs assumes InternedStringPtr is exactly "
+              "one word in size");
+static_assert(alignof(InternedStringPtr) == alignof(uintptr_t),
+              "BagOfInternedStringPtrs assumes InternedStringPtr aligns to a "
+              "machine word");
 
 class StringInternStore {
  public:

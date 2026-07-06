@@ -231,6 +231,9 @@ Value FuncFlatten(const Value& vec, const Value& depth);
 // Handles arrays recursively to support nested vectors
 expr::Value DeserializeValueFromResp(ValkeyModuleCallReply* reply);
 
+// Returns true if d is NaN. Safe under -ffast-math (bitwise check).
+bool IsNan(const double& d);
+
 }  // namespace expr
 }  // namespace valkey_search
 

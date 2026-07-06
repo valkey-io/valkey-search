@@ -659,10 +659,16 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> QuantileReducerParser(
     r->output_ =
         std::unique_ptr<Attribute>(dynamic_cast<Attribute*>(output.release()));
   } else {
-    std::ostringstream os;
-    os << *r << ',' << vmsdk::ToStringView(quantile_tok);
+    // Workaround for memory allocator issue causing ostringstream to crash.
+    // See https://github.com/valkey-io/valkey-search/issues/965
+    std::string default_name(r->name_);
+    default_name += '(';
+    default_name += vmsdk::ToStringView(field_tok);
+    default_name += ',';
+    default_name += vmsdk::ToStringView(quantile_tok);
+    default_name += ')';
     VMSDK_ASSIGN_OR_RETURN(auto output,
-                           parameters.MakeReference(os.str(), true));
+                           parameters.MakeReference(default_name, true));
     r->output_ =
         std::unique_ptr<Attribute>(dynamic_cast<Attribute*>(output.release()));
   }

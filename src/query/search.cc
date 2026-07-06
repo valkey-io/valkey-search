@@ -455,12 +455,19 @@ CalcBestMatchingPrefilteredKeys(
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     indexes::VectorBase *vector_index, size_t qualified_entries) {
   std::priority_queue<std::pair<float, hnswlib::labeltype>> results;
+  std::vector<char> normalized_vec;
+  absl::string_view query = parameters.query;
+  if (vector_index->GetNormalize()) {
+    normalized_vec = indexes::NormalizeEmbedding(
+        parameters.query, vector_index->GetDataTypeSize());
+    query = absl::string_view(normalized_vec.data(), normalized_vec.size());
+  }
   auto results_appender =
-      [&results, &parameters, vector_index](
+      [&results, &parameters, vector_index, query](
           const InternedStringPtr &key,
           absl::flat_hash_set<const char *> &top_keys) -> bool {
-    return vector_index->AddPrefilteredKey(parameters.query, parameters.k, key,
-                                           results, top_keys);
+    return vector_index->AddPrefilteredKey(query, parameters.k, key, results,
+                                           top_keys);
   };
   EvaluatePrefilteredKeys(parameters, entries_fetchers,
                           std::move(results_appender), qualified_entries,

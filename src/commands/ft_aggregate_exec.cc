@@ -483,10 +483,9 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> FirstValueReducerParser(
   auto field_sv = vmsdk::ToStringView(field_tok);
   std::vector<std::string> arg_texts;
   arg_texts.emplace_back(field_sv);
-  VMSDK_ASSIGN_OR_RETURN(
-      auto field_expr,
-      expr::Expression::Compile(parameters, field_sv),
-      _ << " in FIRST_VALUE reducer");
+  VMSDK_ASSIGN_OR_RETURN(auto field_expr,
+                         expr::Expression::Compile(parameters, field_sv),
+                         _ << " in FIRST_VALUE reducer");
   r->args_.push_back(std::move(field_expr));
 
   if (cnt >= 3) {
@@ -501,10 +500,9 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> FirstValueReducerParser(
                            _ << "Missing sort field after BY");
     auto sort_sv = vmsdk::ToStringView(sort_tok);
     arg_texts.emplace_back(sort_sv);
-    VMSDK_ASSIGN_OR_RETURN(
-        auto sort_expr,
-        expr::Expression::Compile(parameters, sort_sv),
-        _ << " in FIRST_VALUE reducer");
+    VMSDK_ASSIGN_OR_RETURN(auto sort_expr,
+                           expr::Expression::Compile(parameters, sort_sv),
+                           _ << " in FIRST_VALUE reducer");
     r->args_.push_back(std::move(sort_expr));
     r->is_sorted_ = true;
 
@@ -514,8 +512,7 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> FirstValueReducerParser(
       } else if (itr.PopIfNextIgnoreCase("ASC")) {
         r->is_desc_ = false;
       } else {
-        return absl::InvalidArgumentError(
-            "FIRST_VALUE: expected ASC or DESC");
+        return absl::InvalidArgumentError("FIRST_VALUE: expected ASC or DESC");
       }
     }
   }

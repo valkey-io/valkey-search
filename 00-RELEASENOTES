@@ -2,6 +2,53 @@ Valkey Search 1.2 release notes
 ===============================
 
 ================================================================================
+Valkey Search 1.2.1 GA - Released Tue 07 July 2026
+================================================================================
+
+A patch release on top of 1.2.0 focused on stability, correctness, and
+efficiency. It hardens command and load paths against crashes found through
+fuzzing, fixes concurrency and shutdown issues, tightens cluster and query
+correctness, and lands vector, tag, numeric, and text index optimizations.
+Like the 1.2 release, this version requires Valkey core 9.0.1 release or
+higher.
+
+Bug fixes
+=========
+* Hardened load and command paths against crashes found through fuzzing: added validation for HNSW index data loaded from an external file and for query vector size against index dimensions at parse time (#1191, #1192)
+* Fixed FT.INTERNAL_UPDATE crashes during AOF and RDB load that could leave a server in a restart loop (#1146)
+* Fixed a FLAT index ingestion livelock when BLOCK_SIZE is 0, and bounded BLOCK_SIZE and INITIAL_CAP so a single command cannot OOM-kill the server (#1122)
+* Fixed several crashes on malformed or edge-case commands: FT.SEARCH with an empty right-hand side of an OR, empty FT.AGGREGATE expressions, REDUCE COUNT_DISTINCT, loading text values from JSON in FT.AGGREGATE, and FT.DROPINDEX while queries are in flight (#1115, #966, #1032, #999, #956)
+* Fixed a race condition in concurrent HSET operations against an HNSW vector index (#1079)
+* Fixed a replica crash in RemoveSubscription when an index schema fails to load partway through RDB load (#1187)
+* Fixed HNSW replacement of deleted elements, including allow_replace_deleted labeling and ensuring it is set before index load (#926, #1019)
+* Enabled thread-safety checking and fixed the violations it surfaced (#1082)
+* Reworked index schema destruction to run asynchronously and restored background result cleanup (#1202, #1203)
+* Fixed shutdown leaks and timing holes: ThreadPool shutdown timing, RunByMain draining pending one-shots, in-flight async queries drained on cancel and timeout, and a heap-use-after-free in PausePoint during multi-database shutdown (#1062, #1029, #1087, #958)
+* Fixed a race in untracked-keys ingestion access versus negative queries, and guarded against a disengaged optional in tracked-mutation handling (#1060, #1120)
+* In cluster mode, treat an empty CLUSTER SLOTS response as incomplete, and correctly resolve slots in the middle or end of a range during fanout (#1181, #1117)
+* Fixed the query vector not being normalized on the prefiltering execution path for cosine-distance vector indexes (#1222)
+* Tag queries now handle an escaped closing brace correctly (#1148)
+* JSON string values containing backslash escapes are now decoded before indexing rather than stored raw (#1174)
+* Numeric range searches now accept values in scientific notation (#937)
+* Field serialization now uses a fixed ordering, which matters for text indexes (#1003)
+* Corrected memory and INFO reporting: accurate memory reporting when reader/writer thread counts change at runtime, a reclaimable_memory underflow, and coordinator bytes-in counting before response mutation (#1119, #1131, #1046)
+* search_number_of_indexes is now updated correctly during restore, and aggregate recursion depth is handled correctly (#974, #973)
+* Included a set of thread-sanitizer (TSAN) fixes (#860)
+* Improvements to tests and test infrastructure with no corresponding module code changes.
+
+Optimizations
+=============
+* Vector search performance improvement (#1163)
+* Space savings for tag and numeric indexes (#1026)
+* Reduced reference counting in text iterators with short-circuited field-containment checks, backed by borrowed interned-string pointers (#1044, #1043)
+* Optimized content fetch to eliminate a double key open and use HashGet for specific field access (#1045)
+* Removed a reader-thread scaling bottleneck caused by the PausePoint mutex (#1037)
+* Used a protobuf arena for fanout response deserialization (#1040)
+* Optimized tag search to avoid relying on the root iterator in common cases (#994)
+* Replaced a deque with a flat hash map for tracked_vectors (#1015)
+* Added memory reservation based on the mutation queue (#934)
+
+================================================================================
 Valkey Search 1.2.0 GA - Released Tue 17 March 2026
 ================================================================================
 
@@ -86,6 +133,8 @@ Major New Features / Updates
 * Replica nodes no longer participate in metadata consistency protocol. All mutation information comes from the Primary
 * Enhanced FT.INFO command with additional information in Cluster mode
 
-We appreciate the efforts of all who contributed code to this release!
+================================================================================
+Contributors
+================================================================================
 
-@Aksha1812, @AlexFilipImproving, @allenss-amazon, @baswanth09, @BCathcart, @daddaman-amz, @eifrah-aws, @eliastam, @eric-musliner, @murphyjacob4, @KarthikSubbarao, @otherscase, @boda26, @Arunsarma07, @Nivesh-01, @VoletiRam, @yairgott, @yanamolo, @zvi-code, @rlunar, @bandalgomsu
+@Aksha1812, @AlexFilipImproving, @allenss-amazon, @baswanth09, @BCathcart, @daddaman-amz, @eifrah-aws, @eliastam, @eric-musliner, @murphyjacob4, @KarthikSubbarao, @otherscase, @boda26, @Arunsarma07, @Nivesh-01, @VoletiRam, @yairgott, @yanamolo, @zvi-code, @rlunar, @bandalgomsu, @Frank-Gu-81, @hjkwon0, @smkher, @linbran5123

@@ -15,11 +15,12 @@
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
 #include "gtest/gtest.h"
+#include "vmsdk/src/testing_infra/utils.h"
 
 namespace vmsdk {
 namespace {
 
-class LatencySamplerTest : public ::testing::Test {};
+class LatencySamplerTest : public vmsdk::ValkeyTest {};
 
 TEST_F(LatencySamplerTest, ValidSampler_RecordsSamples) {
   LatencySampler sampler(1, 1000000000, 2);

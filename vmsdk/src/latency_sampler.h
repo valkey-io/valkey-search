@@ -17,6 +17,7 @@
 #include "absl/synchronization/mutex.h"
 #include "absl/time/time.h"
 #include "third_party/hdrhistogram_c/src/hdr_histogram.h"
+#include "vmsdk/src/log.h"
 #include "vmsdk/src/utils.h"
 
 namespace vmsdk {
@@ -55,7 +56,9 @@ class LatencySampler {
     absl::MutexLock lock(&histogram_lock_);
     if (!initialized_) {
       if (hdr_init(min_value_, max_value_, precision_, &histogram_) != 0) {
-        return;  // Drop sample on allocation failure (OOM or invalid params)
+        VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 60)
+            << "Failed to initialize latency histogram, dropping sample";
+        return;
       }
       initialized_ = true;
     }
@@ -91,7 +94,7 @@ class LatencySampler {
   absl::Duration sample_unit_;
   absl::Duration reporting_unit_;
   bool initialized_ ABSL_GUARDED_BY(histogram_lock_) = false;
-  hdr_histogram *histogram_ ABSL_GUARDED_BY(histogram_lock_);
+  hdr_histogram *histogram_ ABSL_GUARDED_BY(histogram_lock_) = nullptr;
 };
 
 #define SAMPLE_EVERY_N(interval)                   \

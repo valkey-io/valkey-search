@@ -329,6 +329,50 @@ class Stddev : public GroupBy::ReducerInstance {
   }
 };
 
+class FirstValue : public GroupBy::ReducerInstance {
+  expr::Value result_value_;
+  bool seen_first_{false};
+  // Sorted mode state.
+  expr::Value comparison_value_;
+  bool is_sorted_{false};
+  bool is_desc_{false};
+
+ public:
+  void SetSorted(bool is_desc) {
+    is_sorted_ = true;
+    is_desc_ = is_desc;
+  }
+
+  void ProcessRecord(const ArgVector& values) override {
+    if (!is_sorted_) {
+      // Simple mode: first record wins unconditionally, including nil.
+      if (!seen_first_) {
+        result_value_ = values[0];
+        seen_first_ = true;
+      }
+      return;
+    }
+    // Sorted mode: args layout is [return_field, sort_field].
+    const expr::Value& comparison_val = values[1];
+    if (comparison_val.IsNil()) {
+      return;
+    }
+    if (comparison_value_.IsNil()) {
+      result_value_ = values[0];
+      comparison_value_ = comparison_val;
+      return;
+    }
+    // Strict < / > preserves first-encountered tie-breaking semantics.
+    if (is_desc_ ? (comparison_val > comparison_value_)
+                 : (comparison_val < comparison_value_)) {
+      result_value_ = values[0];
+      comparison_value_ = comparison_val;
+    }
+  }
+
+  expr::Value GetResult() const override { return result_value_; }
+};
+
 class CountDistinct : public GroupBy::ReducerInstance {
   absl::flat_hash_set<expr::Value> values_;
   void ProcessRecord(const ArgVector& values) override {
@@ -403,10 +447,107 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> BasicReducerParser(
   return std::unique_ptr<GroupBy::Reducer>(std::move(r));
 }
 
+struct FirstValueReducer : GroupBy::Reducer {
+  bool is_desc_{false};
+  bool is_sorted_{false};
+
+  std::unique_ptr<GroupBy::ReducerInstance> MakeInstance() override {
+    auto instance = std::make_unique<FirstValue>();
+    if (is_sorted_) {
+      instance->SetSorted(is_desc_);
+    }
+    return instance;
+  }
+};
+
+// Custom parser for FIRST_VALUE.
+// Syntax: FIRST_VALUE <nargs> <field> [BY <sort_field> [ASC|DESC]]
+// nargs=1: simple mode, nargs=3: sorted (default ASC), nargs=4: sorted with
+// explicit direction.
+absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> FirstValueReducerParser(
+    std::string_view name, AggregateParameters& parameters,
+    vmsdk::ArgsIterator& itr) {
+  auto r = std::make_unique<FirstValueReducer>();
+  r->name_ = name;
+
+  uint32_t cnt{0};
+  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, cnt));
+  if (cnt != 1 && cnt != 3 && cnt != 4) {
+    return absl::OutOfRangeError(absl::StrCat("incorrect number of arguments (",
+                                              cnt, ") to reducer ", name));
+  }
+
+  // arg 0: the field whose value to return.
+  VMSDK_ASSIGN_OR_RETURN(auto field_tok, itr.PopNext(),
+                         _ << "Missing Reducer argument 0");
+  auto field_sv = vmsdk::ToStringView(field_tok);
+  std::vector<std::string> arg_texts;
+  arg_texts.emplace_back(field_sv);
+  VMSDK_ASSIGN_OR_RETURN(auto field_expr,
+                         expr::Expression::Compile(parameters, field_sv),
+                         _ << " in FIRST_VALUE reducer");
+  r->args_.push_back(std::move(field_expr));
+
+  if (cnt >= 3) {
+    // Expect "BY" keyword.
+    if (!itr.PopIfNextIgnoreCase("BY")) {
+      return absl::InvalidArgumentError(
+          "FIRST_VALUE: expected BY keyword after field");
+    }
+
+    // arg 1: the field to sort by.
+    VMSDK_ASSIGN_OR_RETURN(auto sort_tok, itr.PopNext(),
+                           _ << "Missing sort field after BY");
+    auto sort_sv = vmsdk::ToStringView(sort_tok);
+    arg_texts.emplace_back(sort_sv);
+    VMSDK_ASSIGN_OR_RETURN(auto sort_expr,
+                           expr::Expression::Compile(parameters, sort_sv),
+                           _ << " in FIRST_VALUE reducer");
+    r->args_.push_back(std::move(sort_expr));
+    r->is_sorted_ = true;
+
+    if (cnt == 4) {
+      if (itr.PopIfNextIgnoreCase("DESC")) {
+        r->is_desc_ = true;
+      } else if (itr.PopIfNextIgnoreCase("ASC")) {
+        r->is_desc_ = false;
+      } else {
+        return absl::InvalidArgumentError("FIRST_VALUE: expected ASC or DESC");
+      }
+    }
+  }
+
+  if (itr.PopIfNextIgnoreCase(valkey_search::aggregate::kAsParam)) {
+    VMSDK_ASSIGN_OR_RETURN(auto alias, itr.PopNext(),
+                           _ << "Missing Reducer alias");
+    VMSDK_ASSIGN_OR_RETURN(auto output, parameters.MakeReference(
+                                            vmsdk::ToStringView(alias), true));
+    r->output_ =
+        std::unique_ptr<Attribute>(dynamic_cast<Attribute*>(output.release()));
+  } else {
+    // TODO(https://github.com/valkey-io/valkey-search/issues/965): Workaround
+    // for memory allocator issue causing ostringstream to crash.
+    std::string default_name(r->name_);
+    default_name += '(';
+    for (size_t i = 0; i < arg_texts.size(); ++i) {
+      if (i > 0) default_name += ',';
+      default_name += arg_texts[i];
+    }
+    default_name += ')';
+    VMSDK_ASSIGN_OR_RETURN(auto output,
+                           parameters.MakeReference(default_name, true));
+    r->output_ =
+        std::unique_ptr<Attribute>(dynamic_cast<Attribute*>(output.release()));
+  }
+
+  return std::unique_ptr<GroupBy::Reducer>(std::move(r));
+}
+
 absl::flat_hash_map<std::string, GroupBy::ReducerInfo> GroupBy::reducerTable{
     {"AVG", &BasicReducerParser<Avg, 1, 1>},
     {"COUNT", &BasicReducerParser<Count, 0, 0>},
     {"COUNT_DISTINCT", &BasicReducerParser<CountDistinct, 1, 1>},
+    {"FIRST_VALUE", &FirstValueReducerParser},
     {"MIN", &BasicReducerParser<Min, 1, 1>},
     {"MAX", &BasicReducerParser<Max, 1, 1>},
     {"STDDEV", &BasicReducerParser<Stddev, 1, 1>},

@@ -54,7 +54,9 @@ class LatencySampler {
   void SubmitSample(absl::Duration latency) {
     absl::MutexLock lock(&histogram_lock_);
     if (!initialized_) {
-      hdr_init(min_value_, max_value_, precision_, &histogram_);
+      if (hdr_init(min_value_, max_value_, precision_, &histogram_) != 0) {
+        return;  // Drop sample on allocation failure (OOM or invalid params)
+      }
       initialized_ = true;
     }
     hdr_record_value(histogram_, absl::ToInt64Nanoseconds(latency) /

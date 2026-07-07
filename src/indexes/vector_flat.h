@@ -22,7 +22,6 @@
 #include "src/indexes/vector_base.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/cancel.h"
-#include "src/utils/string_interning.h"
 #include "third_party/hnswlib/bruteforce.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -32,7 +31,7 @@ namespace valkey_search::indexes {
 template <typename T>
 class VectorFlat : public VectorBase {
  public:
-  using FlatIndex = hnswlib::BruteforceSearch<T, InputVector, VectorRecord>;
+  using FlatIndex = hnswlib::BruteforceSearch<T, VectorRecord>;
 
   static absl::StatusOr<std::shared_ptr<VectorFlat<T>>> Create(
       const data_model::VectorIndex &vector_index_proto,

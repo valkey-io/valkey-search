@@ -22,12 +22,27 @@
 #include "src/indexes/vector_base.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/cancel.h"
-#include "src/utils/string_interning.h"
 #include "third_party/hnswlib/hnswalg.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
+
+class InputVector {
+ public:
+  explicit InputVector(absl::string_view vector, Allocator *allocator = nullptr)
+      : raw_vector_(vector), vector_allocator_(allocator) {}
+
+  inline const char *GetRawVector() const { return raw_vector_.data(); }
+  VectorRecord ToVectorRecord() const {
+    return VectorRecord(
+        StringInternStore::Intern(raw_vector_, vector_allocator_));
+  }
+
+ private:
+  absl::string_view raw_vector_;
+  Allocator *vector_allocator_;
+};
 
 template <typename T>
 class VectorHNSW : public VectorBase {

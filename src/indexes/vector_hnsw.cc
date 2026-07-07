@@ -14,12 +14,10 @@
 #include <memory>
 #include <mutex>  // NOLINT(build/c++11)
 #include <optional>
-#include <queue>
 #include <string>
 #include <type_traits>
 #include <utility>
 
-#include "absl/base/thread_annotations.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -33,7 +31,6 @@
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
 #include "src/rdb_serialization.h"
-#include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
 #include "valkey_search_options.h"
 #include "vmsdk/src/log.h"
@@ -106,7 +103,7 @@ bool VectorHNSW<T>::IsVectorMatch(uint64_t internal_id,
     if (!id.has_value()) {
       return false;
     }
-    const auto &stored_record = algo_->getDataByInternalId(*id);
+    const auto &stored_record = algo_->GetDataByInternalId(*id);
     absl::string_view record(stored_record.GetRawVector(), GetVectorDataSize());
     return vector == record;
   }
@@ -132,10 +129,14 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
     index->algo_->allow_replace_deleted_ =
         options::GetHNSWAllowReplaceDeleted().GetValue();
     RDBChunkInputStream input(std::move(iter));
-
+    auto generator = [allocator = index->GetVectorAllocator()](
+                         absl::string_view vector_data) {
+      return VectorRecord(StringInternStore::Intern(vector_data, allocator));
+    };
     VMSDK_RETURN_IF_ERROR(index->algo_->LoadIndex(
         input, index->space_.get(), vector_index_proto.initial_cap(),
-        index->GetVectorAllocator()));
+        vector_index_proto.hnsw_algorithm().m(),
+        options::GetHNSWValidationEnable().GetValue(), generator));
     // ef_runtime is not persisted in the index contents
     index->algo_->setEf(vector_index_proto.hnsw_algorithm().ef_runtime());
     return index;
@@ -212,7 +213,13 @@ template <typename T>
 absl::Status VectorHNSW<T>::SaveIndexImpl(
     RDBChunkOutputStream chunked_out) const {
   absl::ReaderMutexLock lock(&resize_mutex_);
-  return algo_->SaveIndex(chunked_out);
+  auto serializer = [vector_size =
+                         GetVectorDataSize()](const VectorRecord &record) {
+    return std::vector<char>(record.GetRawVector(),
+                             record.GetRawVector() + vector_size);
+  };
+
+  return algo_->SaveIndex(chunked_out, serializer);
 }
 
 template <typename T>
@@ -354,9 +361,10 @@ VectorHNSW<T>::ComputeDistanceFromRecordImpl(uint64_t internal_id,
     return absl::InternalError(
         absl::StrCat("Couldn't find internal id: ", internal_id));
   }
+  VectorRecord query_vector(
+      StringInternStore::Intern(query, GetVectorAllocator()));
   return (std::pair<float, hnswlib::labeltype>){
-      algo_->fstdistfunc_(query.data(), algo_->getDataByInternalId(*id),
-                          algo_->dist_func_param_),
+      algo_->EvaluateDistance(query_vector, algo_->GetDataByInternalId(*id)),
       internal_id};
 }
 

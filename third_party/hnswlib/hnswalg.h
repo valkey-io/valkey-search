@@ -1,13 +1,7 @@
 #pragma once
 
-#include <assert.h>
-#include <stdlib.h>
-
 #include <atomic>
-#include <cstdint>
 #include <cstring>
-#include <deque>
-#include <list>
 #include <memory>
 #include <optional>
 #include <random>
@@ -15,10 +9,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
-#include "absl/status/statusor.h"
-#include "absl/strings/str_cat.h"
 #include "hnswlib.h"
 #include "iostream.h"
 #include "src/metrics.h"
@@ -99,6 +90,10 @@ class HierarchicalNSW
   bool allow_replace_deleted_ = false;  // flag to replace deleted elements
                                         // (marked as deleted) during insertions
 
+  // Gate for load-time corruption validation, wired from the
+  // hnsw-validation-enable config via LoadIndex. Consulted only in loadCheck().
+  bool load_validation_enabled_ = false;
+
   std::mutex deleted_elements_lock;  // lock for deleted_elements
   std::unordered_set<tableint>
       deleted_elements;  // contains internal ids of deleted elements
@@ -171,8 +166,7 @@ class HierarchicalNSW
   void clear() {
     if (data_level0_memory_ != nullptr) {
       for (tableint i = 0; i < cur_element_count_; i++) {
-        std::destroy_at(
-            reinterpret_cast<SavedVectorT *>(getDataPtrByInternalId(i)));
+        std::destroy_at(GetDataPtrByInternalId(i));
       }
       data_level0_memory_->clear();
     }
@@ -210,46 +204,51 @@ class HierarchicalNSW
     return label_op_locks_[lock_id];
   }
 
-  inline labeltype getExternalLabel(tableint internal_id) const {
+  inline labeltype GetExternalLabel(tableint internal_id) const {
     labeltype return_label;
     memcpy(&return_label, ((*data_level0_memory_)[internal_id] + label_offset_),
            sizeof(labeltype));
     return return_label;
   }
 
-  inline void setExternalLabel(tableint internal_id, labeltype label) const {
+  inline void SetExternalLabel(tableint internal_id, labeltype label) const {
     memcpy(((*data_level0_memory_)[internal_id] + label_offset_), &label,
            sizeof(labeltype));
   }
 
-  inline labeltype *getExternalLabeLp(tableint internal_id) const {
+  inline labeltype *GetExternalLabeLp(tableint internal_id) const {
     return (labeltype *)((*data_level0_memory_)[internal_id] + label_offset_);
   }
 
-  inline char *getDataPtrByInternalId(tableint internal_id) const {
-    return ((*data_level0_memory_)[internal_id] + offsetData_);
+  inline SavedVectorT *GetDataPtrByInternalId(tableint internal_id) const {
+    return reinterpret_cast<SavedVectorT *>(
+        (*data_level0_memory_)[internal_id] + offsetData_);
   }
 
-  inline const SavedVectorT &getDataByInternalId(tableint internal_id) const {
-    return *reinterpret_cast<const SavedVectorT *>(
-        getDataPtrByInternalId(internal_id));
+  inline const SavedVectorT &GetDataByInternalId(tableint internal_id) const {
+    return *(GetDataPtrByInternalId(internal_id));
   }
 
-  inline void setDataByInternalId(tableint internal_id,
+  inline void SetDataByInternalId(tableint internal_id,
                                   const InputVectorT &datapoint) {
-    *reinterpret_cast<SavedVectorT *>(getDataPtrByInternalId(internal_id)) =
-        datapoint.ToVectorRecord();
+    *(GetDataPtrByInternalId(internal_id)) = datapoint.ToVectorRecord();
   }
 
-  inline void initDataByInternalId(tableint internal_id,
+  inline void InitDataByInternalId(tableint internal_id,
                                    const InputVectorT &datapoint) {
-    new (getDataPtrByInternalId(internal_id))
+    new (GetDataPtrByInternalId(internal_id))
         SavedVectorT(datapoint.ToVectorRecord());
   }
 
-  inline dist_t evaluateDistance(const SavedVectorT &a,
+  inline dist_t EvaluateDistance(const SavedVectorT &a,
                                  const SavedVectorT &b) const {
     return fstdistfunc_(a.GetRawVector(), b.GetRawVector(), dist_func_param_);
+  }
+
+  inline dist_t EvaluateDistance(const InputVectorT &a,
+                                 const SavedVectorT &b) const {
+    return fstdistfunc_(a.ToVectorRecord().GetRawVector(), b.GetRawVector(),
+                        dist_func_param_);
   }
 
   int getRandomLevel(double reverse_size) {
@@ -282,8 +281,7 @@ class HierarchicalNSW
 
     dist_t lowerBound;
     if (!isMarkedDeleted(ep_id)) {
-      dist_t dist = fstdistfunc_(data_point, getDataByInternalId(ep_id),
-                                 dist_func_param_);
+      dist_t dist = EvaluateDistance(data_point, GetDataByInternalId(ep_id));
       top_candidates.emplace(dist, ep_id);
       lowerBound = dist;
       candidateSet.emplace(-dist, ep_id);
@@ -320,10 +318,10 @@ class HierarchicalNSW
       __builtin_prefetch((char *)(visited_array + *(data + 1)), 0, 3);
       __builtin_prefetch((char *)(visited_array + *(data + 1) + 64), 0, 3);
       if (size > 0) {
-        __builtin_prefetch(getDataByInternalId(*datal).GetRawVector(), 0, 3);
+        __builtin_prefetch(GetDataByInternalId(*datal).GetRawVector(), 0, 3);
       }
       if (size > 1) {
-        __builtin_prefetch(getDataByInternalId(*(datal + 1)).GetRawVector(), 0,
+        __builtin_prefetch(GetDataByInternalId(*(datal + 1)).GetRawVector(), 0,
                            3);
       }
 #endif
@@ -335,19 +333,19 @@ class HierarchicalNSW
         if (j + 1 < size) {
           __builtin_prefetch((char *)(visited_array + *(datal + j + 1)), 0, 3);
           __builtin_prefetch(
-              getDataByInternalId(*(datal + j + 1)).GetRawVector(), 0, 3);
+              GetDataByInternalId(*(datal + j + 1)).GetRawVector(), 0, 3);
         }
 #endif
         if (visited_array[candidate_id] == visited_array_tag) continue;
         visited_array[candidate_id] = visited_array_tag;
-        const SavedVectorT &currObj1 = (getDataByInternalId(candidate_id));
+        const SavedVectorT &currObj1 = (GetDataByInternalId(candidate_id));
 
-        dist_t dist1 = fstdistfunc_(data_point, currObj1, dist_func_param_);
+        dist_t dist1 = EvaluateDistance(data_point, currObj1);
         if (top_candidates.size() < ef_construction_ || lowerBound > dist1) {
           candidateSet.emplace(-dist1, candidate_id);
 #ifdef USE_PREFETCH
           __builtin_prefetch(
-              getDataByInternalId(candidateSet.top().second).GetRawVector(), 0,
+              GetDataByInternalId(candidateSet.top().second).GetRawVector(), 0,
               3);
 #endif
 
@@ -391,13 +389,13 @@ class HierarchicalNSW
     dist_t lowerBound;
     if (bare_bone_search ||
         (!isMarkedDeleted(ep_id) &&
-         ((!isIdAllowed) || (*isIdAllowed)(getExternalLabel(ep_id))))) {
-      const SavedVectorT &ep_data = getDataByInternalId(ep_id);
-      dist_t dist = fstdistfunc_(data_point, ep_data, dist_func_param_);
+         ((!isIdAllowed) || (*isIdAllowed)(GetExternalLabel(ep_id))))) {
+      const SavedVectorT &ep_data = GetDataByInternalId(ep_id);
+      dist_t dist = EvaluateDistance(data_point, ep_data);
       lowerBound = dist;
       top_candidates.emplace(dist, ep_id);
       if (!bare_bone_search && stop_condition) {
-        stop_condition->add_point_to_result(getExternalLabel(ep_id),
+        stop_condition->add_point_to_result(GetExternalLabel(ep_id),
                                             ep_data.GetRawVector(), dist);
       }
       candidate_set.emplace(-dist, ep_id);
@@ -442,82 +440,127 @@ class HierarchicalNSW
         metric_distance_computations += size;
       }
 
+      // ---- Three-phase prefetch pipeline -----------------------------------
+      // A candidate's vector lives behind a pointer indirection at offsetData_,
+      // so reaching it is a two-deep pointer chase (slot -> vec). Because the
+      // order of visitation to vectors is determined by the graph structure,
+      // the vector addresses look random -- defeating any HW prefetching and
+      // substantially increasing latency. Fusing all of that into one loop
+      // forces the chase to serialize per candidate. Instead we fission the
+      // expansion into three passes, each hiding exactly one level of memory
+      // latency with its own lookahead:
+      //   Phase 1 - probe visited_array (random gather), collect unvisited ids.
+      //   Phase 2 - resolve the slot indirection into concrete vector pointers.
+      //   Phase 3 - compute distances + maintain the candidate heaps.
+      // The first two are latency-bound gathers (deep lookahead helps); the
+      // third is bandwidth-bound (lookahead of 1, head only, HW streams tail).
+      // Scratch is thread_local so reader threads each keep one reusable
+      // buffer.
 #ifdef USE_PREFETCH
-      __builtin_prefetch((char *)(visited_array + *(data + 1)), 0, 3);
-      __builtin_prefetch((char *)(visited_array + *(data + 1) + 64), 0, 3);
-      __builtin_prefetch((*data_level0_memory_)[(*(data + 1))] + offsetData_, 0,
-                         3);
-      __builtin_prefetch((char *)(data + 2), 0, 3);
+      constexpr int kVisitedLookahead = 4;  // P1
+      constexpr int kSlotLookahead = 4;     // P2
+      constexpr int kVectorLookahead = 1;   // P3
 #endif
+      thread_local std::vector<tableint> unvisited;
+      thread_local std::vector<const SavedVectorT *> vptrs;
+      unvisited.clear();
 
+      // Phase 1: filter visited. Preserve neighbor-list order so the heap/
+      // lowerBound evolution in phase 3 is identical to the fused loop.
       for (size_t j = 1; j <= size; j++) {
-        int candidate_id = *(data + j);
-//                    if (candidate_id == 0) continue;
 #ifdef USE_PREFETCH
-        if (j + 1 < size) {
-          __builtin_prefetch((char *)(visited_array + *(data + j + 1)), 0, 3);
+        if (j + kVisitedLookahead <= size) {
           __builtin_prefetch(
-              (*data_level0_memory_)[(*(data + j + 1))] + offsetData_, 0, 3);
+              (char *)(visited_array + *(data + j + kVisitedLookahead)), 0, 0);
         }
 #endif
-        if (!(visited_array[candidate_id] == visited_array_tag)) {
+        tableint candidate_id = (tableint) * (data + j);
+        if (visited_array[candidate_id] != visited_array_tag) {
           visited_array[candidate_id] = visited_array_tag;
+          unvisited.push_back(candidate_id);
+        }
+      }
+      const size_t n_unvisited = unvisited.size();
 
-          const SavedVectorT &currObj1 = (getDataByInternalId(candidate_id));
-          dist_t dist = fstdistfunc_(data_point, currObj1, dist_func_param_);
-
-          bool flag_consider_candidate;
-          if (!bare_bone_search && stop_condition) {
-            flag_consider_candidate =
-                stop_condition->should_consider_candidate(dist, lowerBound);
-          } else {
-            flag_consider_candidate =
-                top_candidates.size() < ef || lowerBound > dist;
-          }
-
-          if (flag_consider_candidate) {
-            candidate_set.emplace(-dist, candidate_id);
+      // Phase 2: resolve slot indirection. Prefetch the pointer slot ahead,
+      // then dereference the now-resident slot to the actual vector address.
+      vptrs.resize(n_unvisited);
+      for (size_t k = 0; k < n_unvisited; k++) {
 #ifdef USE_PREFETCH
-            __builtin_prefetch(
-                (*data_level0_memory_)[candidate_set.top().second] +
-                    offsetLevel0_,  ///////////
-                0, 3);              ////////////////////////
+        if (k + kSlotLookahead < n_unvisited) {
+          __builtin_prefetch(
+              GetDataPtrByInternalId(unvisited[k + kSlotLookahead])
+                  ->GetRawVector(),
+              0, 0);
+        }
+#endif
+        vptrs[k] = GetDataPtrByInternalId(unvisited[k]);
+      }
+
+      // Phase 3: distance compute. Prefetch the head (~3 lines, two 128B
+      // sectors) of the next vector to cover the cold head and bridge the HW
+      // streamer's training window; the streamer covers the multi-line tail.
+      for (size_t k = 0; k < n_unvisited; k++) {
+#ifdef USE_PREFETCH
+        if (k + kVectorLookahead < n_unvisited) {
+          const char *h = vptrs[k + kVectorLookahead]->GetRawVector();
+          __builtin_prefetch(h, 0, 0);
+          __builtin_prefetch(h + 128, 0, 0);
+        }
+#endif
+        tableint candidate_id = unvisited[k];
+        const SavedVectorT *currObj1 = vptrs[k];
+        dist_t dist = EvaluateDistance(data_point, *currObj1);
+
+        bool flag_consider_candidate;
+        if (!bare_bone_search && stop_condition) {
+          flag_consider_candidate =
+              stop_condition->should_consider_candidate(dist, lowerBound);
+        } else {
+          flag_consider_candidate =
+              top_candidates.size() < ef || lowerBound > dist;
+        }
+
+        if (flag_consider_candidate) {
+          candidate_set.emplace(-dist, candidate_id);
+#ifdef USE_PREFETCH
+          __builtin_prefetch(
+              (*data_level0_memory_)[candidate_set.top().second] +
+                  offsetLevel0_,  ///////////
+              0, 3);              ////////////////////////
 #endif
 
-            if (bare_bone_search ||
-                (!isMarkedDeleted(candidate_id) &&
-                 ((!isIdAllowed) ||
-                  (*isIdAllowed)(getExternalLabel(candidate_id))))) {
-              top_candidates.emplace(dist, candidate_id);
-              if (!bare_bone_search && stop_condition) {
-                stop_condition->add_point_to_result(
-                    getExternalLabel(candidate_id), currObj1.GetRawVector(),
-                    dist);
-              }
-            }
-
-            bool flag_remove_extra = false;
+          if (bare_bone_search ||
+              (!isMarkedDeleted(candidate_id) &&
+               ((!isIdAllowed) ||
+                (*isIdAllowed)(GetExternalLabel(candidate_id))))) {
+            top_candidates.emplace(dist, candidate_id);
             if (!bare_bone_search && stop_condition) {
+              stop_condition->add_point_to_result(
+                  GetExternalLabel(candidate_id), currObj1, dist);
+            }
+          }
+
+          bool flag_remove_extra = false;
+          if (!bare_bone_search && stop_condition) {
+            flag_remove_extra = stop_condition->should_remove_extra();
+          } else {
+            flag_remove_extra = top_candidates.size() > ef;
+          }
+          while (flag_remove_extra) {
+            tableint id = top_candidates.top().second;
+            top_candidates.pop();
+            if (!bare_bone_search && stop_condition) {
+              stop_condition->remove_point_from_result(
+                  GetExternalLabel(id), GetDataByInternalId(id).GetRawVector(),
+                  dist);
               flag_remove_extra = stop_condition->should_remove_extra();
             } else {
               flag_remove_extra = top_candidates.size() > ef;
             }
-            while (flag_remove_extra) {
-              tableint id = top_candidates.top().second;
-              top_candidates.pop();
-              if (!bare_bone_search && stop_condition) {
-                stop_condition->remove_point_from_result(
-                    getExternalLabel(id),
-                    getDataByInternalId(id).GetRawVector(), dist);
-                flag_remove_extra = stop_condition->should_remove_extra();
-              } else {
-                flag_remove_extra = top_candidates.size() > ef;
-              }
-            }
-
-            if (!top_candidates.empty())
-              lowerBound = top_candidates.top().first;
           }
+
+          if (!top_candidates.empty()) lowerBound = top_candidates.top().first;
         }
       }
     }
@@ -552,8 +595,8 @@ class HierarchicalNSW
 
       for (std::pair<dist_t, tableint> second_pair : return_list) {
         dist_t curdist =
-            evaluateDistance(getDataByInternalId(second_pair.second),
-                             getDataByInternalId(current_pair.second));
+            EvaluateDistance(GetDataByInternalId(second_pair.second),
+                             GetDataByInternalId(current_pair.second));
         if (curdist < dist_to_query) {
           good = false;
           break;
@@ -685,8 +728,8 @@ class HierarchicalNSW
         } else {
           // finding the "weakest" element to replace it with the new one
           dist_t d_max =
-              evaluateDistance(getDataByInternalId(cur_c),
-                               getDataByInternalId(selectedNeighbors[idx]));
+              EvaluateDistance(GetDataByInternalId(cur_c),
+                               GetDataByInternalId(selectedNeighbors[idx]));
           // Heuristic:
           std::priority_queue<std::pair<dist_t, tableint>,
                               std::vector<std::pair<dist_t, tableint>>,
@@ -696,8 +739,8 @@ class HierarchicalNSW
 
           for (size_t j = 0; j < sz_link_list_other; j++) {
             candidates.emplace(
-                evaluateDistance(getDataByInternalId(data[j]),
-                                 getDataByInternalId(selectedNeighbors[idx])),
+                EvaluateDistance(GetDataByInternalId(data[j]),
+                                 GetDataByInternalId(selectedNeighbors[idx])),
                 data[j]);
           }
 
@@ -714,8 +757,8 @@ class HierarchicalNSW
           // Nearest K:
           /*int indx = -1;
            for (int j = 0; j < sz_link_list_other; j++) {
-               dist_t d = fstdistfunc_(getDataByInternalId(data[j]),
-           getDataByInternalId(rez[idx]), dist_func_param_); if (d > d_max) {
+               dist_t d = fstdistfunc_(GetDataByInternalId(data[j]),
+           GetDataByInternalId(rez[idx]), dist_func_param_); if (d > d_max) {
                    indx = j;
                    d_max = d;
                }
@@ -779,8 +822,9 @@ class HierarchicalNSW
     }
     return size;
   }
-
-  absl::Status SaveIndex(OutputStream &output) override {
+  template <typename SavedVectorSerializer>
+  absl::Status SaveIndex(OutputStream &output,
+                         const SavedVectorSerializer &serializer) {
     data_model::HNSWIndexHeader header;
     header.set_offset_level_0(offsetLevel0_);
     header.set_max_elements(max_elements_);
@@ -815,8 +859,10 @@ class HierarchicalNSW
     std::vector<char> buf(serialize_size_data_per_element_);
     for (int i = 0; i < cur_element_count_; i++) {
       memcpy(buf.data(), (*data_level0_memory_)[i], size_links_level0_);
-      memcpy(buf.data() + size_links_level0_,
-             getDataByInternalId(i).GetRawVector(), vector_size_);
+      const SavedVectorT &record = GetDataByInternalId(i);
+      std::vector<char> serialized_vector = serializer(record);
+      memcpy(buf.data() + size_links_level0_, serialized_vector.data(),
+             vector_size_);
       memcpy(buf.data() + size_links_level0_ + vector_size_,
              (*data_level0_memory_)[i] + label_offset_, sizeof(labeltype));
       VMSDK_RETURN_IF_ERROR(
@@ -838,10 +884,10 @@ class HierarchicalNSW
     return absl::OkStatus();
   }
 
-  template <typename VectorAllocator>
+  template <typename SavedVectorGenerator>
   absl::Status LoadIndex(InputStream &input, SpaceInterface<dist_t> *s,
-                         size_t max_elements_i,
-                         VectorAllocator vector_allocator) {
+                         size_t max_elements_i, size_t expected_m,
+                         bool validate, const SavedVectorGenerator &generator) {
     clear();
 
     VMSDK_ASSIGN_OR_RETURN(auto serialized_header, input.LoadChunk());
@@ -887,14 +933,13 @@ class HierarchicalNSW
 
     for (size_t i = 0; i < curr_element_count_val; i++) {
       VMSDK_ASSIGN_OR_RETURN(auto chunk, input.LoadChunk());
-      memcpy((*data_level0_memory_)[i], chunk->data(), size_links_level0_);
+      std::string tmp_chunk = *chunk;
+      memcpy((*data_level0_memory_)[i], tmp_chunk.data(), size_links_level0_);
       labeltype id;
-      memcpy((char *)&id, chunk->data() + size_links_level0_ + vector_size_,
+      memcpy((char *)&id, tmp_chunk.data() + size_links_level0_ + vector_size_,
              sizeof(labeltype));
-      InputVectorT vector_record(
-          absl::string_view(chunk->data() + size_links_level0_, vector_size_),
-          vector_allocator);
-      initDataByInternalId(i, vector_record);
+      new (GetDataPtrByInternalId(i)) SavedVectorT(generator(
+          absl::string_view(tmp_chunk.data() + size_links_level0_, vector_size_)));
       memcpy((*data_level0_memory_)[i] + label_offset_, (char *)&id,
              sizeof(labeltype));
       cur_element_count_++;
@@ -915,7 +960,7 @@ class HierarchicalNSW
     revSize_ = 1.0 / mult_;
     ef_ = 10;
     for (size_t i = 0; i < cur_element_count_; i++) {
-      label_lookup_[getExternalLabel(i)] = i;
+      label_lookup_[GetExternalLabel(i)] = i;
       size_t linkListSize;
       VMSDK_ASSIGN_OR_RETURN(auto size_chunk, input.LoadChunk());
       memcpy(&linkListSize, size_chunk->data(), sizeof(size_t));
@@ -950,7 +995,7 @@ class HierarchicalNSW
     if (search == label_lookup_.end() || isMarkedDeleted(search->second)) {
       return nullptr;
     }
-    return &getDataByInternalId(search->second);
+    return &GetDataByInternalId(search->second);
   }
 
   template <typename data_t>
@@ -966,7 +1011,7 @@ class HierarchicalNSW
     tableint internalId = search->second;
     lock_table.unlock();
 
-    const SavedVectorT &data_ptrv = getDataByInternalId(internalId);
+    const SavedVectorT &data_ptrv = GetDataByInternalId(internalId);
     size_t dim = *((size_t *)dist_func_param_);
     std::vector<data_t> data(dim);
     memcpy(data.data(), data_ptrv.GetRawVector(), dim * sizeof(data_t));
@@ -1110,8 +1155,8 @@ class HierarchicalNSW
       addPoint(data_point, label, -1);
     } else {
       // we assume that there are no concurrent operations on deleted element
-      labeltype label_replaced = getExternalLabel(internal_id_replaced);
-      setExternalLabel(internal_id_replaced, label);
+      labeltype label_replaced = GetExternalLabel(internal_id_replaced);
+      SetExternalLabel(internal_id_replaced, label);
 
       std::unique_lock<std::mutex> lock_table(label_lookup_lock);
       label_lookup_.erase(label_replaced);
@@ -1126,7 +1171,7 @@ class HierarchicalNSW
   void updatePoint(const InputVectorT &dataPoint, tableint internalId,
                    float updateNeighborProbability) {
     // update the feature vector associated with existing point with new vector
-    setDataByInternalId(internalId, dataPoint);
+    SetDataByInternalId(internalId, dataPoint);
 
     int maxLevelCopy = maxlevel_;
     tableint entryPointCopy = enterpoint_node_;
@@ -1177,8 +1222,8 @@ class HierarchicalNSW
         for (auto &&cand : sCand) {
           if (cand == neigh) continue;
 
-          dist_t distance = evaluateDistance(getDataByInternalId(neigh),
-                                             getDataByInternalId(cand));
+          dist_t distance = EvaluateDistance(GetDataByInternalId(neigh),
+                                             GetDataByInternalId(cand));
           if (candidates.size() < elementsToKeep) {
             candidates.emplace(distance, cand);
           } else {
@@ -1217,8 +1262,8 @@ class HierarchicalNSW
                                   int dataPointLevel, int maxLevel) {
     tableint currObj = entryPointInternalId;
     if (dataPointLevel < maxLevel) {
-      dist_t curdist = fstdistfunc_(dataPoint, getDataByInternalId(currObj),
-                                    dist_func_param_);
+      dist_t curdist =
+          EvaluateDistance(dataPoint, GetDataByInternalId(currObj));
       for (int level = maxLevel; level > dataPointLevel; level--) {
         bool changed = true;
         while (changed) {
@@ -1229,18 +1274,17 @@ class HierarchicalNSW
           int size = getListCount(data);
           tableint *datal = (tableint *)(data + 1);
 #ifdef USE_PREFETCH
-          __builtin_prefetch(getDataByInternalId(*datal).GetRawVector(), 0, 3);
+          __builtin_prefetch(GetDataByInternalId(*datal).GetRawVector(), 0, 3);
 #endif
           for (int i = 0; i < size; i++) {
 #ifdef USE_PREFETCH
             if (i + 1 < size) {
               __builtin_prefetch(
-                  getDataByInternalId(*(datal + i + 1)).GetRawVector(), 1, 3);
+                  GetDataByInternalId(*(datal + i + 1)).GetRawVector(), 1, 3);
             }
 #endif
             tableint cand = datal[i];
-            dist_t d = fstdistfunc_(dataPoint, getDataByInternalId(cand),
-                                    dist_func_param_);
+            dist_t d = EvaluateDistance(dataPoint, GetDataByInternalId(cand));
             if (d < curdist) {
               curdist = d;
               currObj = cand;
@@ -1280,8 +1324,8 @@ class HierarchicalNSW
         bool epDeleted = isMarkedDeleted(entryPointInternalId);
         if (epDeleted) {
           filteredTopCandidates.emplace(
-              fstdistfunc_(dataPoint, getDataByInternalId(entryPointInternalId),
-                           dist_func_param_),
+              EvaluateDistance(dataPoint,
+                               GetDataByInternalId(entryPointInternalId)),
               entryPointInternalId);
           if (filteredTopCandidates.size() > ef_construction_)
             filteredTopCandidates.pop();
@@ -1356,8 +1400,8 @@ class HierarchicalNSW
            size_data_per_element_);
 
     // Initialisation of the data and label
-    memcpy(getExternalLabeLp(cur_c), &label, sizeof(labeltype));
-    initDataByInternalId(cur_c, data_point);
+    memcpy(GetExternalLabeLp(cur_c), &label, sizeof(labeltype));
+    InitDataByInternalId(cur_c, data_point);
 
     if (curlevel) {
       *reinterpret_cast<char **>((*linkLists_)[cur_c]) =
@@ -1371,8 +1415,8 @@ class HierarchicalNSW
 
     if ((signed)currObj != -1) {
       if (curlevel < maxlevelcopy) {
-        dist_t curdist = fstdistfunc_(data_point, getDataByInternalId(currObj),
-                                      dist_func_param_);
+        dist_t curdist =
+            EvaluateDistance(data_point, GetDataByInternalId(currObj));
         for (int level = maxlevelcopy; level > curlevel; level--) {
           bool changed = true;
           while (changed) {
@@ -1387,8 +1431,8 @@ class HierarchicalNSW
               tableint cand = datal[i];
               if (cand < 0 || cand > max_elements_)
                 throw std::runtime_error("cand error");
-              dist_t d = fstdistfunc_(data_point, getDataByInternalId(cand),
-                                      dist_func_param_);
+              dist_t d =
+                  EvaluateDistance(data_point, GetDataByInternalId(cand));
               if (d < curdist) {
                 curdist = d;
                 currObj = cand;
@@ -1410,8 +1454,8 @@ class HierarchicalNSW
             top_candidates = searchBaseLayer(currObj, data_point, level);
         if (epDeleted) {
           top_candidates.emplace(
-              fstdistfunc_(data_point, getDataByInternalId(enterpoint_copy),
-                           dist_func_param_),
+              EvaluateDistance(data_point,
+                               GetDataByInternalId(enterpoint_copy)),
               enterpoint_copy);
           if (top_candidates.size() > ef_construction_) top_candidates.pop();
         }
@@ -1449,8 +1493,8 @@ class HierarchicalNSW
     if (cur_element_count_ == 0) return result;
 
     tableint currObj = enterpoint_node_;
-    dist_t curdist = fstdistfunc_(
-        query_data, getDataByInternalId(enterpoint_node_), dist_func_param_);
+    dist_t curdist =
+        EvaluateDistance(query_data, GetDataByInternalId(enterpoint_node_));
 
     for (int level = maxlevel_; level > 0; level--) {
       bool changed = true;
@@ -1468,9 +1512,7 @@ class HierarchicalNSW
           tableint cand = datal[i];
           if (cand < 0 || cand > max_elements_)
             throw std::runtime_error("cand error");
-          dist_t d = fstdistfunc_(query_data, getDataByInternalId(cand),
-                                  dist_func_param_);
-
+          dist_t d = EvaluateDistance(query_data, GetDataByInternalId(cand));
           if (d < curdist) {
             curdist = d;
             currObj = cand;
@@ -1502,7 +1544,7 @@ class HierarchicalNSW
     while (top_candidates.size() > 0) {
       std::pair<dist_t, tableint> rez = top_candidates.top();
       result.push(std::pair<dist_t, labeltype>(rez.first,
-                                               getExternalLabel(rez.second)));
+                                               GetExternalLabel(rez.second)));
       top_candidates.pop();
     }
     return result;
@@ -1516,8 +1558,8 @@ class HierarchicalNSW
     if (cur_element_count_ == 0) return result;
 
     tableint currObj = enterpoint_node_;
-    dist_t curdist = fstdistfunc_(
-        query_data, getDataByInternalId(enterpoint_node_), dist_func_param_);
+    dist_t curdist =
+        EvaluateDistance(query_data, GetDataByInternalId(enterpoint_node_));
 
     for (int level = maxlevel_; level > 0; level--) {
       bool changed = true;
@@ -1535,8 +1577,7 @@ class HierarchicalNSW
           tableint cand = datal[i];
           if (cand < 0 || cand > max_elements_)
             throw std::runtime_error("cand error");
-          dist_t d = fstdistfunc_(query_data, getDataByInternalId(cand),
-                                  dist_func_param_);
+          dist_t d = EvaluateDistance(query_data, GetDataByInternalId(cand));
 
           if (d < curdist) {
             curdist = d;

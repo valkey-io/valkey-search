@@ -69,7 +69,7 @@ class Value {
   double GetDouble() const;
   absl::string_view GetStringView() const;
   Array GetArray() const;
-  std::optional<Value> GetArrayElement(size_t index) const;
+  Value GetArrayElement(size_t index) const;
 
   // convert to type
   std::optional<Nil> AsNil() const;

@@ -186,12 +186,12 @@ std::optional<Value::Array> Value::AsArray() const {
 
 Value::Array Value::GetArray() const { return std::get<Array>(value_); }
 
-std::optional<Value> Value::GetArrayElement(size_t index) const {
+Value Value::GetArrayElement(size_t index) const {
   auto arr = GetArray();
-  if (index >= arr->size()) {
-    return std::nullopt;
-  }
-  return std::make_optional((*arr)[index]);
+
+  CHECK(index < arr->size()) << "GetArrayElement called with index out of range: " << index << ". Array size = " << arr->size();
+
+  return (*arr)[index];
 }
 
 std::ostream& operator<<(std::ostream& os, const Value& v) {

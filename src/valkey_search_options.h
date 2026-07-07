@@ -6,7 +6,6 @@
  */
 #pragma once
 
-#include "vmsdk/src/info.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/utils.h"
 
@@ -22,79 +21,85 @@ uint32_t GetQueryStringBytes();
 uint32_t GetQueryStringBytes();
 
 /// Return a mutable reference to the HNSW resize configuration parameter
-config::Number& GetHNSWBlockSize();
+config::Number &GetHNSWBlockSize();
 
 /// Return the configuration entry that allows the caller to control the
 /// number of reader threads
-config::Number& GetReaderThreadCount();
+config::Number &GetReaderThreadCount();
 
 /// Return the configuration entry that allows the caller to control the
 /// number of writer threads
-config::Number& GetWriterThreadCount();
+config::Number &GetWriterThreadCount();
 
 /// Return the configuration entry that allows the caller to control the
 /// number of utility threads
-config::Number& GetUtilityThreadCount();
+config::Number &GetUtilityThreadCount();
 
 /// Return the configuration entry for search result background cleanup
-const config::Boolean& GetSearchResultBackgroundCleanup();
+const config::Boolean &GetSearchResultBackgroundCleanup();
 
 /// Return the max time in seconds that the worker thread pool is
 /// suspended after fork started
-config::Number& GetMaxWorkerSuspensionSecs();
+config::Number &GetMaxWorkerSuspensionSecs();
 
 /// Return an immutable reference to the "use-coordinator" flag
-const config::Boolean& GetUseCoordinator();
+const config::Boolean &GetUseCoordinator();
 
 /// Return the configuration entry for skipping vector index RDB loading
-const config::Boolean& GetSkipIndexLoad();
+const config::Boolean &GetSkipIndexLoad();
 
 /// Return a mutable reference for testing
-config::Boolean& GetSkipIndexLoadMutable();
+config::Boolean &GetSkipIndexLoadMutable();
 
 /// Return the configuration entry for skipping corrupted AOF entries
-const config::Boolean& GetSkipCorruptedInternalUpdateEntries();
+const config::Boolean &GetSkipCorruptedInternalUpdateEntries();
 
 /// Return the log level
-config::Enum& GetLogLevel();
+config::Enum &GetLogLevel();
 
 /// Return the configuration entry for HNSW allow_replace_deleted flag
-const config::Boolean& GetHNSWAllowReplaceDeleted();
+const config::Boolean &GetHNSWAllowReplaceDeleted();
 
 /// Return a mutable reference for testing
-config::Boolean& GetHNSWAllowReplaceDeletedMutable();
+config::Boolean &GetHNSWAllowReplaceDeletedMutable();
+
+/// Return the configuration entry for the HNSW load-time validation kill switch
+const config::Boolean &GetHNSWValidationEnable();
+
+/// Return a mutable reference for testing
+config::Boolean &GetHNSWValidationEnableMutable();
 
 /// Reset the state of the options (mainly needed for testing)
 absl::Status Reset();
 
 /// Default option of delivering partial results when timeout occurs
-const config::Boolean& GetPreferPartialResults();
+const config::Boolean &GetPreferPartialResults();
 
 /// Default option of delivering consistent results when timeout occurs
-const config::Boolean& GetPreferConsistentResults();
+const config::Boolean &GetPreferConsistentResults();
 
 /// Return the configuration entry for high priority weight in thread pools
-config::Number& GetHighPriorityWeight();
+config::Number &GetHighPriorityWeight();
 
 /// Return the timeout for ft.info fanout command
-config::Number& GetFTInfoTimeoutMs();
+config::Number &GetFTInfoTimeoutMs();
 
 /// Return the rpc timeout for ft.info fanout command
-config::Number& GetFTInfoRpcTimeoutMs();
+config::Number &GetFTInfoRpcTimeoutMs();
 
 /// Return the queue wait threshold for preferring local node in fanout
 /// (milliseconds)
-config::Number& GetLocalFanoutQueueWaitThreshold();
+config::Number &GetLocalFanoutQueueWaitThreshold();
 
 /// Return the sample queue size for thread pool wait time tracking
-config::Number& GetThreadPoolWaitTimeSamples();
+config::Number &GetThreadPoolWaitTimeSamples();
 
 /// Return the maximum number of words to search in text operations (prefix,
 /// suffix, fuzzy)
-config::Number& GetMaxTermExpansions();
+config::Number &GetMaxTermExpansions();
 
 /// Return the minimum TAG prefix length for wildcard queries (excluding '*')
-config::Number& GetTagMinPrefixLength();
+config::Number &GetTagMinPrefixLength();
 
 /// Return the search result buffer multiplier value
 double GetSearchResultBufferMultiplier();
@@ -103,54 +108,54 @@ double GetSearchResultBufferMultiplier();
 double GetPrefilteringThresholdRatio();
 
 /// Return the configuration entry for draining mutation queue on save
-const config::Boolean& GetDrainMutationQueueOnSave();
+const config::Boolean &GetDrainMutationQueueOnSave();
 
 /// Return the configuration entry for draining mutation queue on load
-const config::Boolean& GetDrainMutationQueueOnLoad();
+const config::Boolean &GetDrainMutationQueueOnLoad();
 
 /// Return the fanout data uniformity configuration (0-100)
-config::Number& GetFanoutDataUniformity();
+config::Number &GetFanoutDataUniformity();
 
 /// Return the minimum index size for applying fanout uniformity logic
-config::Number& GetFanoutUniformityMinIndexSize();
+config::Number &GetFanoutUniformityMinIndexSize();
 
 /// Return the configuration entry for max mutation queue size during restore
-config::Number& GetMaxMutationQueueSizeOnRestore();
+config::Number &GetMaxMutationQueueSizeOnRestore();
 
 /// Return the configuration entry for RDB write v2
-const config::Boolean& GetRdbWriteV2();
+const config::Boolean &GetRdbWriteV2();
 
 /// Return the configuration entry for RDB read v2
-const config::Boolean& GetRdbReadV2();
+const config::Boolean &GetRdbReadV2();
 
 /// Return the threshold for async fanout operations
-config::Number& GetAsyncFanoutThreshold();
+config::Number &GetAsyncFanoutThreshold();
 
 /// Return the pool size for per-word Postings bucket mutexes
-config::Number& GetRaxTargetMutexPoolSize();
+config::Number &GetRaxTargetMutexPoolSize();
 
 /// Return the maximum number of keys to accumulate before content fetching
-config::Number& GetMaxNonVectorSearchResultsFetched();
+config::Number &GetMaxNonVectorSearchResultsFetched();
 
 /// Return the mutation weight for vector index types
-config::Number& GetMutationWeightVector();
+config::Number &GetMutationWeightVector();
 
 /// Return the mutation weight for text index types
-config::Number& GetMutationWeightText();
+config::Number &GetMutationWeightText();
 
 /// Return the mutation weight for numeric index types
-config::Number& GetMutationWeightNumeric();
+config::Number &GetMutationWeightNumeric();
 
 /// Return the mutation weight for tag index types
-config::Number& GetMutationWeightTag();
+config::Number &GetMutationWeightTag();
 
 /// Return the recursion depth of the query string from FT.SEARCH and
 /// FT.AGGREGATE commands
-config::Number& GetQueryStringDepth();
+config::Number &GetQueryStringDepth();
 
 /// Return the configuration entry that controls compatibility-bug emulation.
 /// See COMPATIBILITY.md for the semantics.
-config::Version& GetEmulateRelease();
+config::Version &GetEmulateRelease();
 
 /// Return true if search.emulate-release >= version. Use this at sites that
 /// gate the compatible vs legacy behavior of a fix described in

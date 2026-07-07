@@ -19,11 +19,9 @@
 #include <utility>
 #include <vector>
 
-#include "absl/base/no_destructor.h"
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
-#include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
@@ -53,32 +51,9 @@ class VectorRecord {
   inline const char *GetRawVector() const {
     return const_cast<char *>(raw_vector_->Str().data());
   }
-  inline operator const void *() const { return GetRawVector(); }
-  inline operator const char *() const { return GetRawVector(); }
 
  private:
   InternedStringPtr raw_vector_;
-};
-
-class InputVector {
- public:
-  explicit InputVector(absl::string_view vector, Allocator *allocator = nullptr)
-      : raw_vector_(vector), vector_allocator_(allocator) {}
-
-  inline const char *GetRawVector() const { return raw_vector_.data(); }
-  inline operator const void *() const { return GetRawVector(); }
-  inline operator const char *() const { return GetRawVector(); }
-  VectorRecord ToVectorRecord() const {
-#ifndef SAN_BUILD
-    CHECK(vector_allocator_ != nullptr);
-#endif
-    return VectorRecord(
-        StringInternStore::Intern(raw_vector_, vector_allocator_));
-  }
-
- private:
-  absl::string_view raw_vector_;
-  Allocator *vector_allocator_;
 };
 
 std::vector<char> NormalizeEmbedding(absl::string_view record, size_t type_size,
@@ -227,6 +202,7 @@ class VectorBase : public IndexBase {
       std::priority_queue<std::pair<T, hnswlib::labeltype>> &knn_res);
   absl::StatusOr<std::vector<char>> GetValue(const InternedStringPtr &key) const
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
+  virtual size_t GetDataTypeSize() const = 0;
   int GetVectorDataSize() const { return GetDataTypeSize() * dimensions_; }
 
   InternedStringPtr InternVector(absl::string_view record,
@@ -268,7 +244,6 @@ class VectorBase : public IndexBase {
                                         absl::string_view record) = 0;
   virtual int RespondWithInfoImpl(ValkeyModuleCtx *ctx) const = 0;
 
-  virtual size_t GetDataTypeSize() const = 0;
   virtual void ToProtoImpl(
       data_model::VectorIndex *vector_index_proto) const = 0;
   virtual absl::Status SaveIndexImpl(

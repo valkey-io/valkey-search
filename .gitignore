@@ -2,6 +2,7 @@ __pycache__/
 resolved_deps.py
 *.swp
 compile_commands.json
+.clangd
 .devcontainer/devcontainer.json
 .devcontainer/._devcontainer.json
 .codelite/

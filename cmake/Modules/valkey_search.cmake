@@ -142,6 +142,14 @@ function(valkey_search_target_update_compile_flags TARGET)
   endif()
   target_compile_options(${TARGET} PRIVATE -Wno-sign-compare)
   target_compile_options(${TARGET} PRIVATE -Wno-uninitialized)
+  # Enable Clang's thread-safety analysis for code under src/ and vmsdk/src/.
+  # The annotations themselves (ABSL_GUARDED_BY etc.) are already present
+  # throughout the codebase; this flag turns them into real diagnostics.
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
+     AND CMAKE_CURRENT_SOURCE_DIR MATCHES
+         "^${CMAKE_SOURCE_DIR}/(src|vmsdk/src)(/|$)")
+    target_compile_options(${TARGET} PRIVATE -Wthread-safety)
+  endif()
   if(ABSL_INCLUDE_PATH)
     target_include_directories(${TARGET} PRIVATE ${ABSL_INCLUDE_PATH})
   endif()
@@ -150,13 +158,6 @@ function(valkey_search_target_update_compile_flags TARGET)
   endif()
   if(HIGHWAY_HASH_INCLUDE_PATH)
     target_include_directories(${TARGET} PRIVATE ${HIGHWAY_HASH_INCLUDE_PATH})
-  endif()
-  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND UNIX AND NOT APPLE)
-    include(CheckCompilerFlag)
-    check_compiler_flag(CXX "-Xassembler --gsframe=no" COMPILER_SUPPORTS_GSFRAME_NO)
-    if(COMPILER_SUPPORTS_GSFRAME_NO)
-      target_compile_options(${TARGET} PRIVATE -Xassembler --gsframe=no)
-    endif()
   endif()
 endfunction()
 

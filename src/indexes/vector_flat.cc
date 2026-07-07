@@ -14,9 +14,7 @@
 #include <exception>
 #include <memory>
 #include <mutex>  // NOLINT(build/c++11)
-#include <queue>
 #include <string>
-#include <string_view>
 #include <type_traits>
 #include <utility>
 
@@ -33,7 +31,6 @@
 #include "src/metrics.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/cancel.h"
-#include "src/utils/string_interning.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -80,9 +77,7 @@ bool VectorFlat<T>::IsVectorMatch(uint64_t internal_id,
     return false;
   }
   const char *stored_vec =
-      reinterpret_cast<VectorRecord *>((*algo_->data_)[found->second])
-          ->GetRawVector();
-
+      algo_->GetDataPtrByInternalId(found->second)->GetRawVector();
   absl::string_view record(stored_vec, dimensions_ * sizeof(T));
   return vector == record;
 }
@@ -103,9 +98,12 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
                 vector_index_proto.distance_metric(), index->space_);
     index->algo_ = std::make_unique<FlatIndex>(index->space_.get());
     RDBChunkInputStream input(std::move(iter));
-
-    VMSDK_RETURN_IF_ERROR(index->algo_->LoadIndex(input, index->space_.get(),
-                                                  index->GetVectorAllocator()));
+    auto generator = [allocator = index->GetVectorAllocator()](
+                         absl::string_view vector_data) {
+      return VectorRecord(StringInternStore::Intern(vector_data, allocator));
+    };
+    VMSDK_RETURN_IF_ERROR(
+        index->algo_->LoadIndex(input, index->space_.get(), generator));
     return index;
   } catch (const std::exception &e) {
     ++Metrics::GetStats().flat_create_exceptions_cnt;
@@ -152,7 +150,9 @@ absl::Status VectorFlat<T>::AddRecordImpl(uint64_t internal_id,
     try {
       absl::ReaderMutexLock lock(&resize_mutex_);
 
-      algo_->addPoint(InputVector(record, GetVectorAllocator()), internal_id);
+      algo_->addPoint(
+          VectorRecord(StringInternStore::Intern(record, GetVectorAllocator())),
+          internal_id);
     } catch (const std::exception &e) {
       ++Metrics::GetStats().flat_add_exceptions_cnt;
       std::string error_msg = e.what();
@@ -183,9 +183,9 @@ absl::Status VectorFlat<T>::ModifyRecordImpl(uint64_t internal_id,
   memcpy((*algo_->data_)[found->second] + algo_->data_ptr_size_, &internal_id,
          sizeof(hnswlib::labeltype));
 
-  VectorRecord *stored_vector =
-      reinterpret_cast<VectorRecord *>((*algo_->data_)[found->second]);
-  *stored_vector = InputVector(record, GetVectorAllocator()).ToVectorRecord();
+  VectorRecord *stored_vector = algo_->GetDataPtrByInternalId(found->second);
+  *stored_vector =
+      VectorRecord(StringInternStore::Intern(record, GetVectorAllocator()));
 
   return absl::OkStatus();
 }
@@ -234,7 +234,8 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
 
   try {
     CancelCondition canceler(cancellation_token);
-    InputVector embedding(query);
+    VectorRecord embedding(
+        StringInternStore::Intern(query, GetVectorAllocator()));
     auto res = algo_->searchKnn(
         embedding,
         std::min(count, static_cast<uint64_t>(algo_->cur_element_count_)),
@@ -262,11 +263,11 @@ VectorFlat<T>::ComputeDistanceFromRecordImpl(uint64_t internal_id,
     return absl::InternalError(
         absl::StrCat("Couldn't find internal id: ", internal_id));
   }
+  VectorRecord query_vector(
+      StringInternStore::Intern(query, GetVectorAllocator()));
   return (std::pair<float, hnswlib::labeltype>){
-      algo_->fstdistfunc_(query.data(),
-                          *reinterpret_cast<const VectorRecord *>(
-                              (*algo_->data_)[search->second]),
-                          algo_->dist_func_param_),
+      algo_->EvaluateDistance(query_vector,
+                              *algo_->GetDataPtrByInternalId(search->second)),
       internal_id};
 }
 
@@ -318,7 +319,12 @@ template <typename T>
 absl::Status VectorFlat<T>::SaveIndexImpl(
     RDBChunkOutputStream chunked_out) const {
   absl::ReaderMutexLock lock(&resize_mutex_);
-  return algo_->SaveIndex(chunked_out);
+  auto serializer = [vector_size =
+                         GetVectorDataSize()](const VectorRecord &record) {
+    return std::vector<char>(record.GetRawVector(),
+                             record.GetRawVector() + vector_size);
+  };
+  return algo_->SaveIndex(chunked_out, serializer);
 }
 
 template class VectorFlat<float>;

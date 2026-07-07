@@ -2,15 +2,15 @@ Valkey Search 1.2 release notes
 ===============================
 
 ================================================================================
-Valkey Search 1.2.1 GA - Released Mon 06 July 2026
+Valkey Search 1.2.1 GA - Released Tue 07 July 2026
 ================================================================================
 
 A patch release on top of 1.2.0 focused on stability, correctness, and
 efficiency. It hardens command and load paths against crashes found through
 fuzzing, fixes concurrency and shutdown issues, tightens cluster and query
 correctness, and lands vector, tag, numeric, and text index optimizations.
-There are no breaking changes. Like the 1.2 release, this version requires
-Valkey core 9.0.1 release or higher.
+Like the 1.2 release, this version requires Valkey core 9.0.1 release or
+higher.
 
 Bug fixes
 =========

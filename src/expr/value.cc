@@ -25,7 +25,7 @@ static const uint64_t kMantissaMask = 0x000FFFFFFFFFFFFFull;
 
 // Built-in isnan doesn't work when compiling with fast-math, which is what we
 // want to do.
-static bool IsNan(const double& d) {
+bool IsNan(const double& d) {
   uint64_t v = *(uint64_t*)&d;
   return ((v & kExponentMask) == kExponentMask) && ((v & kMantissaMask) != 0);
 }

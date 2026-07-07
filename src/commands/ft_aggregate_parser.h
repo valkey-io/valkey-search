@@ -46,7 +46,7 @@ struct IndexInterface {
 struct AggregateParameters : public expr::Expression::CompileContext,
                              public QueryCommand {
   ~AggregateParameters() override = default;
-  AggregateParameters(int db_num) : QueryCommand(db_num){};
+  AggregateParameters(int db_num) : QueryCommand(db_num) {};
   absl::Status ParseCommand(vmsdk::ArgsIterator& itr) override;
   void SendReply(ValkeyModuleCtx* ctx, query::SearchResult& result) override;
   bool loadall_{false};
@@ -260,9 +260,11 @@ class GroupBy : public Stage {
   absl::InlinedVector<std::unique_ptr<Reducer>, 4> reducers_;
 
   void Dump(std::ostream& os) const override {
-    os << "GROUPBY ";
+    os << "GROUPBY";
     for (auto& g : groups_) {
-      if (&g != &groups_[0]) {
+      if (&g == &groups_[0]) {
+        os << ' ';
+      } else {
         os << ',';
       }
       os << '@' << g.get();

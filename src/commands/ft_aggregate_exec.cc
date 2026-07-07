@@ -7,11 +7,15 @@
 #include "src/commands/ft_aggregate_exec.h"
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <queue>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
+#include "absl/strings/numbers.h"
 #include "src/commands/ft_aggregate_parser.h"
+#include "src/expr/value.h"
 #include "vmsdk/src/info.h"
 
 // #define DBG std::cerr
@@ -341,6 +345,196 @@ class CountDistinct : public GroupBy::ReducerInstance {
   }
 };
 
+class Quantile : public GroupBy::ReducerInstance {
+  struct Sample {
+    double value;
+    size_t g;      // Number of ranks this sample represents
+    size_t delta;  // Uncertainty between ranks
+
+    Sample(double v, size_t g_val, size_t d) : value(v), g(g_val), delta(d) {}
+  };
+
+  static constexpr size_t kDefaultBufferSize = 500;
+
+  mutable std::vector<double> buffer_;
+  mutable std::vector<Sample> samples_;
+  size_t n_{0};  // Total number of values inserted
+  double quantile_{0.0};
+
+  // Borrowed from the owning QuantileReducer, lifetime guaranteed because
+  // ReducerInstances are created and destroyed within GroupBy::Execute while
+  // the Reducer outlives that scope.
+  QuantileStats* stats_{nullptr};
+
+ public:
+  void SetQuantile(double q) { quantile_ = q; }
+  void SetStats(QuantileStats* stats) { stats_ = stats; }
+  const QuantileStats& GetStats() const { return *stats_; }
+
+ private:
+  // Calculate maximum allowed error for a given rank
+  double GetMaxVal(double rank) const { return kQuantileEpsilon * 2.0 * rank; }
+
+  // Flush buffer: sort and merge into samples
+  // Walk the existing sample list forward while merging
+  // sorted buffer values in order.
+  void Flush() const {
+    if (buffer_.empty()) return;
+
+    std::sort(buffer_.begin(), buffer_.end());
+
+    if (samples_.empty()) {
+      // First flush: create samples from buffer
+      for (double val : buffer_) {
+        samples_.emplace_back(val, 1, 0);
+      }
+      stats_->flush_initial_count++;
+    } else {
+      // Merge sorted buffer into existing samples
+      std::vector<Sample> merged;
+      size_t buf_idx = 0;
+      size_t samp_idx = 0;
+      double r = 0;
+
+      // Main merge: both sequences have elements
+      while (buf_idx < buffer_.size() && samp_idx < samples_.size()) {
+        if (buffer_[buf_idx] < samples_[samp_idx].value) {
+          double max_val = GetMaxVal(r);
+          size_t delta =
+              max_val > 1.0 ? static_cast<size_t>(std::floor(max_val)) - 1 : 0;
+          merged.emplace_back(buffer_[buf_idx++], 1, delta);
+        } else {
+          // Keep existing sample, advance rank
+          r += samples_[samp_idx].g;
+          merged.push_back(samples_[samp_idx++]);
+        }
+      }
+      // Residual buffer values
+      while (buf_idx < buffer_.size()) {
+        merged.emplace_back(buffer_[buf_idx++], 1, 0);
+      }
+      // Residual samples
+      while (samp_idx < samples_.size()) {
+        r += samples_[samp_idx].g;
+        merged.push_back(samples_[samp_idx++]);
+      }
+
+      samples_ = std::move(merged);
+      stats_->flush_merge_count++;
+    }
+
+    buffer_.clear();
+  }
+
+  // Compress samples to maintain space bounds.
+  // Walks backward from the second-to-last sample so that merges
+  // propagate toward the tail where error bounds are largest.
+  // parent_idx tracks the nearest live (non-merged) sample to the right of
+  // the current position, preventing merged (g==0) zombie samples from being
+  // used as merge targets and silently absorbing subsequent merges.
+  void Compress() const {
+    if (samples_.size() < 2) return;
+
+    // Compute rank of the last sample (n - 1 - last.g)
+    double r =
+        static_cast<double>(n_) - 1.0 - static_cast<double>(samples_.back().g);
+
+    // Walk backward from second-to-last to first, always merging into the
+    // nearest live parent to the right.
+    size_t parent_idx = samples_.size() - 1;
+    for (int i = static_cast<int>(samples_.size()) - 2; i >= 0; --i) {
+      Sample& curr = samples_[i];
+      Sample& parent = samples_[parent_idx];
+      double g_curr = curr.g;
+
+      if (curr.g + parent.g + parent.delta <=
+          static_cast<size_t>(GetMaxVal(r))) {
+        // Merge curr into parent; parent_idx stays — keep accumulating into
+        // the same live sample.
+        parent.g += curr.g;
+        curr.g = 0;
+      } else {
+        // curr survives; it becomes the new live parent for i-1.
+        parent_idx = static_cast<size_t>(i);
+      }
+      r -= g_curr;
+    }
+
+    // Remove merged samples (g == 0)
+    size_t before = samples_.size();
+    samples_.erase(std::remove_if(samples_.begin(), samples_.end(),
+                                  [](const Sample& s) { return s.g == 0; }),
+                   samples_.end());
+    stats_->samples_merged += before - samples_.size();
+    stats_->compress_count++;
+  }
+
+  // Query for quantile value
+  double Query(double q) const {
+    Flush();
+
+    if (samples_.empty()) {
+      return std::numeric_limits<double>::quiet_NaN();
+    }
+
+    // Calculate target rank
+    double t = std::ceil(q * n_);
+    double max_val = GetMaxVal(t);
+    t += std::floor(max_val / 2.0);
+
+    // Walk forward: find the first sample whose cumulative rank
+    // plus uncertainty reaches the target.
+    double rank = 0;
+    size_t result_idx = 0;
+
+    for (size_t i = 1; i < samples_.size(); ++i) {
+      if (rank + samples_[i].g + samples_[i].delta >= t) {
+        break;
+      }
+      rank += samples_[i].g;
+      result_idx = i;
+    }
+
+    return samples_[result_idx].value;
+  }
+
+  // Try to insert a single value. Returns true if it was numeric.
+  bool InsertValue(const expr::Value& val) {
+    if (val.IsNil()) return false;
+
+    auto d = val.AsDouble();
+    if (!d) return false;
+    if (expr::IsNan(*d)) return false;
+
+    buffer_.push_back(*d);
+    n_++;
+    stats_->insert_count++;
+    if (buffer_.size() >= kDefaultBufferSize) {
+      Flush();
+      Compress();
+    }
+    return true;
+  }
+
+  void ProcessRecord(const ArgVector& values) override {
+    InsertValue(values[0]);
+  }
+
+  expr::Value GetResult() const override {
+    if (n_ == 0) {
+      return expr::Value();
+    }
+
+    double result = Query(quantile_);
+
+    if (expr::IsNan(result)) {
+      return expr::Value();
+    }
+
+    return expr::Value(result);
+  }
+};
+
 template <typename T>
 struct BasicReducer : GroupBy::Reducer {
   // BasicReducer(std::string name) : GroupBy::Reducer(std::move(name)) {}
@@ -403,15 +597,100 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> BasicReducerParser(
   return std::unique_ptr<GroupBy::Reducer>(std::move(r));
 }
 
+struct QuantileReducer : GroupBy::Reducer {
+  double quantile_{0.0};
+  QuantileStats stats_;  // Outlives all ReducerInstances created below.
+
+  std::unique_ptr<GroupBy::ReducerInstance> MakeInstance() override {
+    auto instance = std::make_unique<Quantile>();
+    instance->SetQuantile(quantile_);
+    instance->SetStats(&stats_);
+    return instance;
+  }
+};
+
+// Custom parser for QUANTILE.
+// Syntax: QUANTILE <nargs> <field> <quantile_value>
+// The quantile value must be a numeric literal in [0.0, 1.0].
+absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> QuantileReducerParser(
+    std::string_view name, AggregateParameters& parameters,
+    vmsdk::ArgsIterator& itr) {
+  auto r = std::make_unique<QuantileReducer>();
+  r->name_ = name;
+
+  uint32_t cnt{0};
+  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, cnt));
+  if (cnt != 2) {
+    return absl::OutOfRangeError(absl::StrCat("incorrect number of arguments (",
+                                              cnt, ") to reducer ", name));
+  }
+
+  // arg 0: the field to compute quantile over.
+  VMSDK_ASSIGN_OR_RETURN(auto field_tok, itr.PopNext(),
+                         _ << "Missing Reducer argument 0");
+  VMSDK_ASSIGN_OR_RETURN(
+      auto field_expr,
+      expr::Expression::Compile(parameters, vmsdk::ToStringView(field_tok)),
+      _ << " in QUANTILE reducer");
+  r->args_.push_back(std::move(field_expr));
+
+  // arg 1: quantile value — must be a numeric literal in [0.0, 1.0].
+  VMSDK_ASSIGN_OR_RETURN(auto quantile_tok, itr.PopNext(),
+                         _ << "Missing quantile value argument");
+  double quantile_val;
+  if (!absl::SimpleAtod(vmsdk::ToStringView(quantile_tok), &quantile_val)) {
+    return absl::InvalidArgumentError(
+        "QUANTILE: quantile value must be a numeric literal");
+  }
+  if (expr::IsNan(quantile_val) || quantile_val < 0.0 || quantile_val > 1.0) {
+    return absl::InvalidArgumentError(
+        "QUANTILE: quantile value must be between 0.0 and 1.0");
+  }
+  r->quantile_ = quantile_val;
+
+  if (itr.PopIfNextIgnoreCase(valkey_search::aggregate::kAsParam)) {
+    VMSDK_ASSIGN_OR_RETURN(auto alias, itr.PopNext(),
+                           _ << "Missing Reducer alias");
+    VMSDK_ASSIGN_OR_RETURN(auto output, parameters.MakeReference(
+                                            vmsdk::ToStringView(alias), true));
+    r->output_ =
+        std::unique_ptr<Attribute>(dynamic_cast<Attribute*>(output.release()));
+  } else {
+    // Workaround for memory allocator issue causing ostringstream to crash.
+    // See https://github.com/valkey-io/valkey-search/issues/965
+    std::string default_name(r->name_);
+    default_name += '(';
+    default_name += vmsdk::ToStringView(field_tok);
+    default_name += ',';
+    default_name += vmsdk::ToStringView(quantile_tok);
+    default_name += ')';
+    VMSDK_ASSIGN_OR_RETURN(auto output,
+                           parameters.MakeReference(default_name, true));
+    r->output_ =
+        std::unique_ptr<Attribute>(dynamic_cast<Attribute*>(output.release()));
+  }
+
+  return std::unique_ptr<GroupBy::Reducer>(std::move(r));
+}
+
 absl::flat_hash_map<std::string, GroupBy::ReducerInfo> GroupBy::reducerTable{
     {"AVG", &BasicReducerParser<Avg, 1, 1>},
     {"COUNT", &BasicReducerParser<Count, 0, 0>},
     {"COUNT_DISTINCT", &BasicReducerParser<CountDistinct, 1, 1>},
     {"MIN", &BasicReducerParser<Min, 1, 1>},
     {"MAX", &BasicReducerParser<Max, 1, 1>},
+    {"QUANTILE", &QuantileReducerParser},
     {"STDDEV", &BasicReducerParser<Stddev, 1, 1>},
     {"SUM", &BasicReducerParser<Sum, 1, 1>},
 };
+
+std::unique_ptr<GroupBy::Reducer> MakeQuantileReducer(
+    double quantile, QuantileStats*& stats_out) {
+  auto r = std::make_unique<QuantileReducer>();
+  r->quantile_ = quantile;
+  stats_out = &r->stats_;
+  return r;
+}
 
 }  // namespace aggregate
 }  // namespace valkey_search

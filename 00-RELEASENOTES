@@ -133,6 +133,8 @@ Major New Features / Updates
 * Replica nodes no longer participate in metadata consistency protocol. All mutation information comes from the Primary
 * Enhanced FT.INFO command with additional information in Cluster mode
 
-We appreciate the efforts of all who contributed code to this release!
+================================================================================
+Contributors
+================================================================================
 
 @Aksha1812, @AlexFilipImproving, @allenss-amazon, @baswanth09, @BCathcart, @daddaman-amz, @eifrah-aws, @eliastam, @eric-musliner, @murphyjacob4, @KarthikSubbarao, @otherscase, @boda26, @Arunsarma07, @Nivesh-01, @VoletiRam, @yairgott, @yanamolo, @zvi-code, @rlunar, @bandalgomsu, @Frank-Gu-81, @hjkwon0, @smkher, @linbran5123

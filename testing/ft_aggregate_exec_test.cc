@@ -841,8 +841,7 @@ TEST_F(AggregateExecTest, MultipleReducerIndependenceProperty) {
 
     // Check field count
     if (record_same_prop->fields_.size() != 4) {
-      ADD_FAILURE() << "Iteration " << iteration
-                    << ": Unexpected field count: "
+      ADD_FAILURE() << "Iteration " << iteration << ": Unexpected field count: "
                     << record_same_prop->fields_.size() << " (expected 4)"
                     << "\nQuery was: " << query_same_prop;
       continue;
@@ -982,10 +981,8 @@ TEST_F(AggregateExecTest, NumericPrecisionConsistencyProperty) {
   // Test edge cases: infinity and very large numbers
   {
     RecordSet records(nullptr);
-    std::vector<double> edge_values = {
-        1.0, 2.0, 3.0, 1e308,
-        std::numeric_limits<double>::infinity()
-    };
+    std::vector<double> edge_values = {1.0, 2.0, 3.0, 1e308,
+                                       std::numeric_limits<double>::infinity()};
 
     for (auto val : edge_values) {
       auto rec = std::make_unique<Record>(2);
@@ -1074,7 +1071,7 @@ TEST_F(AggregateExecTest, QuantileInstrumentationPathCoverage) {
   std::cerr << "QuantileInstrumentationPathCoverage\n";
 
   // Create a QuantileReducer via the factory to inspect stats after execution.
-  QuantileStats *stats = nullptr;
+  QuantileStats* stats = nullptr;
   auto reducer = MakeQuantileReducer(0.5, stats);
   ASSERT_NE(stats, nullptr);
 

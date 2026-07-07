@@ -12,10 +12,10 @@
 #include <queue>
 
 #include "absl/container/flat_hash_map.h"
-#include "src/expr/value.h"
 #include "absl/status/status.h"
 #include "absl/strings/numbers.h"
 #include "src/commands/ft_aggregate_parser.h"
+#include "src/expr/value.h"
 #include "vmsdk/src/info.h"
 
 // #define DBG std::cerr
@@ -364,14 +364,12 @@ class Quantile : public GroupBy::ReducerInstance {
   // Borrowed from the owning QuantileReducer, lifetime guaranteed because
   // ReducerInstances are created and destroyed within GroupBy::Execute while
   // the Reducer outlives that scope.
-  QuantileStats *stats_{nullptr};
-
+  QuantileStats* stats_{nullptr};
 
  public:
   void SetQuantile(double q) { quantile_ = q; }
-  void SetStats(QuantileStats *stats) { stats_ = stats; }
+  void SetStats(QuantileStats* stats) { stats_ = stats; }
   const QuantileStats& GetStats() const { return *stats_; }
-
 
  private:
   // Calculate maximum allowed error for a given rank
@@ -644,8 +642,7 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> QuantileReducerParser(
     return absl::InvalidArgumentError(
         "QUANTILE: quantile value must be a numeric literal");
   }
-  if (expr::IsNan(quantile_val) || quantile_val < 0.0 ||
-      quantile_val > 1.0) {
+  if (expr::IsNan(quantile_val) || quantile_val < 0.0 || quantile_val > 1.0) {
     return absl::InvalidArgumentError(
         "QUANTILE: quantile value must be between 0.0 and 1.0");
   }
@@ -688,7 +685,7 @@ absl::flat_hash_map<std::string, GroupBy::ReducerInfo> GroupBy::reducerTable{
 };
 
 std::unique_ptr<GroupBy::Reducer> MakeQuantileReducer(
-    double quantile, QuantileStats *&stats_out) {
+    double quantile, QuantileStats*& stats_out) {
   auto r = std::make_unique<QuantileReducer>();
   r->quantile_ = quantile;
   stats_out = &r->stats_;

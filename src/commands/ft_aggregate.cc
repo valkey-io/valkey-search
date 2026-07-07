@@ -257,17 +257,10 @@ absl::StatusOr<expr::Value> ProcessFieldValue(
       }
     }
     default:
-      if (data_type ==
-          data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH) {
-        return expr::Value(value);
-      } else {
-        auto v = vmsdk::JsonUnquote(value);
-        if (v) {
-          return expr::Value(std::move(*v));
-        } else {
-          return absl::InvalidArgumentError("Failed to unquote JSON value");
-        }
-      }
+      // JSON string values are already JSON-decoded when fetched/indexed
+      // (NormalizeJsonRecord), so they are treated the same as HASH values
+      // here. Decoding again would double-decode and corrupt escapes.
+      return expr::Value(value);
   }
 }
 

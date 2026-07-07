@@ -142,7 +142,8 @@ void SerializeValueToResp(ValkeyModuleCtx *ctx, const expr::Value &value) {
   if (value.IsArray()) {
     SerializeArrayToResp(ctx, value.GetArray());
   } else if (value.IsBool()) {
-    ValkeyModule_ReplyWithLongLong(ctx, value.GetBool() ? 1 : 0);
+    auto value_sv = value.AsStringView();
+    ValkeyModule_ReplyWithStringBuffer(ctx, value_sv.data(), value_sv.size());
   } else if (value.IsDouble()) {
     auto value_str = value.AsString();
     ValkeyModule_ReplyWithStringBuffer(ctx, value_str.data(), value_str.size());

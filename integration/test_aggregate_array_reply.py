@@ -470,6 +470,38 @@ class TestAggregateReplyParity(ValkeySearchTestCaseBase):
             f"JSON dialect 3 should wrap tag values in brackets: got {j_t1}"
         )
 
+    def test_boolean_reply_format_consistent(self):
+        """Boolean APPLY results must serialize as bulk strings '0'/'1' regardless
+        of whether they appear as scalars or as elements inside an array-valued
+        field.  Previously booleans inside arrays were emitted as RESP integers
+        via ReplyWithLongLong, causing a client-visible type mismatch with the
+        scalar path which uses bulk strings.
+        """
+        client: Valkey = self.server.get_new_client()
+        self._setup_hash_index(client)
+        self._setup_json_index(client)
+
+        for index, label in [("hidx", "HASH"), ("jidx", "JSON")]:
+            # Scalar boolean: contains() returns 0 or 1 as a bulk string
+            rows = self._run_aggregate(
+                client, index, "@n1:[1 inf]",
+                "LOAD", "2", "@n1", "@t1",
+                "APPLY", 'contains(@t1, "tag")', "AS", "has_tag",
+                "SORTBY", "2", "@n1", "ASC",
+                "LIMIT", "0", "3",
+                "DIALECT", "2",
+            )
+            for row in rows:
+                val = row["has_tag"]
+                assert isinstance(val, str), (
+                    f"{label}: boolean scalar reply should be a string, "
+                    f"got {type(val).__name__}: {val!r}"
+                )
+                assert val in ("0", "1"), (
+                    f"{label}: boolean scalar reply should be '0' or '1', "
+                    f"got {val!r}"
+                )
+
     def test_apply_math_functions_parity(self):
         """Verify math functions in APPLY produce matching results."""
         client: Valkey = self.server.get_new_client()

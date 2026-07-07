@@ -380,8 +380,12 @@ TEST_F(ValueTest, ArrayAccessors) {
   EXPECT_EQ(vec.GetArrayElement(2).GetDouble(), 3.0);
 
   // Test GetArrayElement() with out of bounds index (should CHECK-fail)
-  VMSDK_EXPECT_DEATH(vec.GetArrayElement(3), "GetArrayElement called with index out of range: 3. Array size = 3");
-  VMSDK_EXPECT_DEATH(vec.GetArrayElement(100), "GetArrayElement called with index out of range: 100. Array size = 3");
+  VMSDK_EXPECT_DEATH(
+      vec.GetArrayElement(3),
+      "GetArrayElement called with index out of range: 3. Array size = 3");
+  VMSDK_EXPECT_DEATH(
+      vec.GetArrayElement(100),
+      "GetArrayElement called with index out of range: 100. Array size = 3");
 
   // Test AsArray() on vector values
   auto opt_vec = vec.AsArray();

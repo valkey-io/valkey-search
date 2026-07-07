@@ -34,6 +34,7 @@ Bug fixes
 * Corrected memory and INFO reporting: accurate memory reporting when reader/writer thread counts change at runtime, a reclaimable_memory underflow, and coordinator bytes-in counting before response mutation (#1119, #1131, #1046)
 * search_number_of_indexes is now updated correctly during restore, and aggregate recursion depth is handled correctly (#974, #973)
 * Included a set of thread-sanitizer (TSAN) fixes (#860)
+* Improvements to tests and test infrastructure with no corresponding module code changes.
 
 Optimizations
 =============
@@ -46,10 +47,6 @@ Optimizations
 * Optimized tag search to avoid relying on the root iterator in common cases (#994)
 * Replaced a deque with a flat hash map for tracked_vectors (#1015)
 * Added memory reservation based on the mutation queue (#934)
-
-Tests, CI, and build
-====================
-* Improvements to tests and test infrastructure with no corresponding module code changes.
 
 Contributors
 ============

@@ -12,8 +12,8 @@ correctness, and lands vector, tag, numeric, and text index optimizations.
 There are no breaking changes. Like the 1.2 release, this version requires
 Valkey core 9.0.1 release or higher.
 
-Bug fixes / Improvements
-========================
+Bug fixes
+=========
 * Hardened load and command paths against crashes found through fuzzing: added validation for HNSW index data loaded from an external file and for query vector size against index dimensions at parse time (#1191, #1192)
 * Fixed FT.INTERNAL_UPDATE crashes during AOF and RDB load that could leave a server in a restart loop (#1146)
 * Fixed a FLAT index ingestion livelock when BLOCK_SIZE is 0, and bounded BLOCK_SIZE and INITIAL_CAP so a single command cannot OOM-kill the server (#1122)
@@ -49,7 +49,7 @@ Optimizations
 
 Tests, CI, and build
 ====================
-* A round of test, CI, and build stabilization: deflaked several ASAN and integration tests, suppressed spurious core dumps in death tests, fixed a use-after-free in a drop-index test, added macOS test-runner compatibility and ASAN build-script fixes, corrected an ASAN module config type mismatch, and enabled CI to run across all release branches (#868, #863, #1067, #950, #933, #929, #961, #1014, #777, #1027, #1007, #943, #1058, #1130, #942)
+* Improvements to tests and test infrastructure with no corresponding module code changes.
 
 Contributors
 ============

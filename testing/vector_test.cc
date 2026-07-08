@@ -865,8 +865,9 @@ TEST_F(VectorIndexTest, LoadRecomputesAlignedOffsetForOldSnapshot) {
                       vector_data.size() / sizeof(float));
     return VectorRecord::Construct(vector_data, magnitude);
   };
-  VMSDK_EXPECT_OK(
-      algo.LoadIndex(input, &l2_space, /*max_elements_i=*/16, generator));
+  VMSDK_EXPECT_OK(algo.LoadIndex(input, &l2_space, /*max_elements_i=*/16,
+                                 /*expected_m=*/kM, /*validate=*/true,
+                                 generator));
   EXPECT_EQ(algo.offsetData_ % alignof(char *), 0u);
   EXPECT_EQ(algo.size_data_per_element_ % alignof(char *), 0u);
 }

@@ -27,6 +27,7 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
+#include "src/indexes/text/query_tokenizer.h"
 #include "src/query/predicate.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -84,6 +85,15 @@ constexpr double kNegativeInf = std::numeric_limits<double>::lowest();
 constexpr double kPositiveInf = std::numeric_limits<double>::infinity();
 constexpr double kNegativeInf = -std::numeric_limits<double>::infinity();
 #endif
+
+// Returns true if the code point is a query-language reserved character.
+// These are characters that have syntactic meaning in the query grammar
+// and must not be consumed by the tokenizer as word content.
+bool IsQuerySyntaxChar(uint32_t cp) {
+  return cp == ')' || cp == '|' || cp == '(' || cp == '@' || cp == '"' ||
+         cp == '%' || cp == '*' || cp == '-' || cp == '{' || cp == '}' ||
+         cp == '[' || cp == ']' || cp == ':' || cp == ';' || cp == '$';
+}
 }  // namespace
 
 // Helper function to print predicate tree structure using DFS
@@ -556,60 +566,6 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
       logical_operator, std::move(children), options_.slop, options_.inorder);
 };
 
-// Handles backslash escape sequences in query text.
-//
-// Escape contract (mirrors the Segmenter's escape rules):
-//   - `\\` → append literal `\` to token, continue same token
-//   - `\<delimiter>` → append the delimiter char literally, continue same token
-//   - `\<non-delimiter>` where `\` is a delimiter → break to new token
-//   - `\<non-delimiter>` where `\` is NOT a delimiter → append char, continue
-//   - `\` at end of input → error
-//   - `\` + invalid UTF-8 → replace with U+FFFD, continue
-//
-// Returns:
-//   true  → backslash handled, caller should `continue`
-//   false → current char is not a backslash (or token should break)
-//
-// When break_token is set to true, the caller should break the current token
-// (backslash before non-delimiter when backslash is a delimiter).
-absl::StatusOr<bool> FilterParser::HandleBackslashEscape(
-    const indexes::text::Segmenter& segmenter, std::string& raw_content,
-    bool& break_token) {
-  if (IsEnd()) {
-    return false;
-  }
-  Peeked pk = PeekCodepoint();
-  if (!pk.IsValid() || pk.cp != '\\') {
-    return false;
-  }
-  SkipPeeked(pk);  // consume the backslash
-  if (IsEnd()) {
-    return absl::InvalidArgumentError(
-        "Invalid escape sequence: backslash at end of input");
-  }
-  Peeked esc = PeekCodepoint();
-  if (!esc.IsValid()) {
-    ReplaceInvalidUtf8(esc, raw_content);
-    return true;
-  }
-  if (esc.cp == '\\' || segmenter.IsDelimiter(esc.cp)) {
-    // Double backslash or backslash + delimiter → keep the escaped char,
-    // continue same token.
-    ConsumePeeked(esc, raw_content);
-    return true;
-  }
-  // Backslash before non-delimiter character
-  if (segmenter.IsDelimiter('\\')) {
-    // Backslash is a delimiter → break to new token (the non-delimiter char
-    // starts the next token).
-    break_token = true;
-    return true;
-  }
-  // Backslash is NOT a delimiter → keep the non-delimiter char, continue
-  ConsumePeeked(esc, raw_content);
-  return true;
-}
-
 // Returns a token within an exact phrase parsing it until reaching the
 // token boundary while handling escape chars.
 // Quoted Text Syntax:
@@ -620,33 +576,19 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
     const std::optional<std::string>& field_or_default) {
   const auto& processor = *text_index_schema->GetProcessor();
-  const auto* segmenter = processor.GetSegmenter();
-  // Extract raw text until the next token boundary (quote, delimiter, or end).
-  // Escape handling is delegated to HandleBackslashEscape which uses
-  // IsDelimiter to determine token boundaries.
+  const auto* tokenizer = processor.GetQueryTokenizer();
   std::string raw_text;
-  while (!IsEnd()) {
-    Peeked pk = PeekCodepoint();
-    if (!pk.IsValid()) {
-      ReplaceInvalidUtf8(pk, raw_text);
-      continue;
+  if (tokenizer) {
+    VMSDK_ASSIGN_OR_RETURN(auto result,
+                           tokenizer->NextQuotedToken(expression_, pos_));
+    if (result.has_value()) {
+      pos_ += result->bytes_consumed;
+      raw_text = std::move(result->content);
     }
-    if (pk.cp == '"') break;
-    if (segmenter) {
-      bool break_token = false;
-      VMSDK_ASSIGN_OR_RETURN(
-          bool handled,
-          HandleBackslashEscape(*segmenter, raw_text, break_token));
-      if (break_token) break;
-      if (handled) continue;
-      if (segmenter->IsDelimiter(pk.cp)) break;
-    }
-    ConsumePeeked(pk, raw_text);
   }
   if (raw_text.empty()) {
     return FilterParser::TokenResult{nullptr, false};
   }
-  // The parser has already handled escape resolution and token boundaries.
   // Apply only normalization (no re-segmentation) to the collected token.
   auto* normalizer = processor.GetNormalizer();
   if (normalizer) {
@@ -683,83 +625,94 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
     const std::optional<std::string>& field_or_default) {
   const auto& processor = *text_index_schema->GetProcessor();
-  const auto* segmenter = processor.GetSegmenter();
+  const auto* tokenizer = processor.GetQueryTokenizer();
   std::string raw_content;
   bool starts_with_star = false;
   bool ends_with_star = false;
   size_t leading_percent_count = 0;
   size_t trailing_percent_count = 0;
   bool break_on_query_syntax = false;
+
+  // Phase 1: Consume leading modifiers (*, %) and check for immediate
+  // query-syntax or reserved characters that precede any word content.
   while (!IsEnd()) {
     Peeked pk = PeekCodepoint();
-    if (!pk.IsValid()) {
-      ReplaceInvalidUtf8(pk, raw_content);
-      continue;
-    }
-    // Break on query syntax characters.
+    if (!pk.IsValid()) break;
     if (pk.cp == ')' || pk.cp == '|' || pk.cp == '(' || pk.cp == '@') {
       break_on_query_syntax = true;
       break;
     }
-    // Reject reserved characters in unquoted text
     if (pk.cp == '{' || pk.cp == '}' || pk.cp == '[' || pk.cp == ']' ||
         pk.cp == ':' || pk.cp == ';' || pk.cp == '$') {
       return absl::InvalidArgumentError(
           absl::StrCat("Unexpected character at position ", pos_ + 1, ": `",
                        expression_.substr(pos_, 1), "`"));
     }
-    // - at the beginning is negate syntax, not text content.
-    if (pk.cp == '-' && raw_content.empty()) {
+    if (pk.cp == '-') {
       break_on_query_syntax = true;
       break;
     }
-    // Break to complete an exact phrase or start a new exact phrase.
     if (pk.cp == '"') break;
-    // Handle fuzzy token boundary detection
     if (pk.cp == '%') {
-      if (raw_content.empty()) {
-        // Leading percent
-        while (Match('%', false)) {
-          leading_percent_count++;
-          if (leading_percent_count > options::GetFuzzyMaxDistance().GetValue())
-            break;
+      while (Match('%', false)) {
+        leading_percent_count++;
+        if (leading_percent_count > options::GetFuzzyMaxDistance().GetValue())
+          break;
+      }
+      break;
+    }
+    if (pk.cp == '*') {
+      SkipPeeked(pk);
+      starts_with_star = true;
+      break;
+    }
+    // Not a modifier — move to phase 2
+    break;
+  }
+
+  // Phase 2: Extract word content via the tokenizer.
+  if (tokenizer && !IsEnd() && !break_on_query_syntax) {
+    bool hit_syntax = false;
+    VMSDK_ASSIGN_OR_RETURN(
+        auto result, tokenizer->NextUnquotedToken(expression_, pos_, hit_syntax,
+                                                  IsQuerySyntaxChar));
+    if (result.has_value()) {
+      pos_ += result->bytes_consumed;
+      raw_content = std::move(result->content);
+    }
+    if (hit_syntax) {
+      break_on_query_syntax = true;
+      // If the tokenizer stopped on a reserved character,
+      // reject it with an unexpected character error
+      if (!IsEnd()) {
+        Peeked pk = PeekCodepoint();
+        if (pk.IsValid() &&
+            (pk.cp == '{' || pk.cp == '}' || pk.cp == '[' || pk.cp == ']' ||
+             pk.cp == ':' || pk.cp == ';' || pk.cp == '$')) {
+          return absl::InvalidArgumentError(
+              absl::StrCat("Unexpected character at position ", pos_ + 1, ": `",
+                           expression_.substr(pos_, 1), "`"));
         }
-        continue;
-      } else {
-        // If there was no leading percent, we break.
-        // Else, we keep consuming trailing percent (to match the leading count)
-        // - count them
+      }
+    }
+  }
+
+  // Phase 3: Consume trailing modifiers (*, %).
+  if (!IsEnd() && !raw_content.empty()) {
+    Peeked pk = PeekCodepoint();
+    if (pk.IsValid()) {
+      if (pk.cp == '*') {
+        SkipPeeked(pk);
+        ends_with_star = true;
+      } else if (pk.cp == '%' && leading_percent_count > 0) {
         while (trailing_percent_count < leading_percent_count &&
                Match('%', false)) {
           trailing_percent_count++;
         }
-        break;
       }
     }
-    // Handle wildcard token boundary detection
-    if (Match('*', false)) {
-      if (raw_content.empty() && !starts_with_star) {
-        starts_with_star = true;
-        continue;
-      } else {
-        // Trailing star
-        ends_with_star = true;
-        break;
-      }
-    }
-    // Handle escape: \<char> with token breaking logic
-    if (segmenter) {
-      bool break_token = false;
-      VMSDK_ASSIGN_OR_RETURN(
-          bool handled,
-          HandleBackslashEscape(*segmenter, raw_content, break_token));
-      if (break_token) break;
-      if (handled) continue;
-      // Break on delimiter characters (word boundaries as defined by segmenter)
-      if (segmenter->IsDelimiter(pk.cp)) break;
-    }
-    ConsumePeeked(pk, raw_content);
   }
+
   // Normalize the collected token (case folding etc.) — applies to all paths.
   auto* normalizer = processor.GetNormalizer();
   if (normalizer) {

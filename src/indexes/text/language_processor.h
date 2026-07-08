@@ -16,6 +16,7 @@
 #include "absl/strings/string_view.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/text/normalizer.h"
+#include "src/indexes/text/query_tokenizer.h"
 #include "src/indexes/text/segmenter.h"
 #include "src/indexes/text/stemmer.h"
 #include "src/indexes/text/stop_word_filter.h"
@@ -54,8 +55,13 @@ class LanguageProcessor {
   /// O(1) access.
   Normalizer* GetNormalizer() const { return normalizer_.get(); }
 
-  /// Get the primary segmenter. Used by the query parser to check word
-  /// boundaries (IsDelimiter). If there are multiple segmenters in the
+  /// Get the query tokenizer strategy. Used by the filter parser for
+  /// determining word boundaries in query text. O(1) access.
+  const QueryTokenizer* GetQueryTokenizer() const {
+    return query_tokenizer_.get();
+  }
+
+  /// Get the primary segmenter. If there are multiple segmenters in the
   /// pipeline, this returns the first one. O(1) access.
   const Segmenter* GetSegmenter() const {
     return segmenters_.empty() ? nullptr : segmenters_[0].get();
@@ -84,6 +90,7 @@ class LanguageProcessor {
 
   std::vector<std::shared_ptr<Segmenter>> segmenters_;
   std::vector<std::shared_ptr<TokenFilter>> filters_;
+  std::shared_ptr<QueryTokenizer> query_tokenizer_;
 
   // O(1) accessors for components used outside the pipeline.
   // Normalizer is also in the filter chain but exposed for direct use

@@ -115,6 +115,8 @@ set(SRCS_TEXT ${CMAKE_CURRENT_LIST_DIR}/text/text_index.h
               ${CMAKE_CURRENT_LIST_DIR}/text/language_processor.cc
               ${CMAKE_CURRENT_LIST_DIR}/text/language_processor.h
               ${CMAKE_CURRENT_LIST_DIR}/text/segmenter.h
+              ${CMAKE_CURRENT_LIST_DIR}/text/query_tokenizer.h
+              ${CMAKE_CURRENT_LIST_DIR}/text/delimiter_query_tokenizer.h
               ${CMAKE_CURRENT_LIST_DIR}/text/token_filter.h
               ${CMAKE_CURRENT_LIST_DIR}/text/normalizer.h
               ${CMAKE_CURRENT_LIST_DIR}/text/stemmer.h

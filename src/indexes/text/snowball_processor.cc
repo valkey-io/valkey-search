@@ -7,6 +7,7 @@
 
 #include "src/indexes/text/snowball_processor.h"
 
+#include "src/indexes/text/delimiter_query_tokenizer.h"
 #include "src/indexes/text/normalize_case_fold_filter.h"
 #include "src/indexes/text/punctuation_segmenter.h"
 #include "src/indexes/text/snowball_stem_filter.h"
@@ -16,13 +17,17 @@
 namespace valkey_search::indexes::text {
 
 std::shared_ptr<LanguageProcessor> CreateSnowballProcessor(
-    data_model::Language language, const std::string &punctuation,
-    const std::vector<std::string> &stop_words) {
+    data_model::Language language, const std::string& punctuation,
+    const std::vector<std::string>& stop_words) {
   auto processor = std::make_shared<LanguageProcessor>();
 
   // Segmenter: punctuation-based splitting for all Snowball languages
-  processor->segmenters_.push_back(
-      std::make_shared<PunctuationSegmenter>(punctuation));
+  auto punct_segmenter = std::make_shared<PunctuationSegmenter>(punctuation);
+  processor->segmenters_.push_back(punct_segmenter);
+
+  // Query tokenizer: delimiter-based (uses the same punctuation segmenter)
+  processor->query_tokenizer_ =
+      std::make_shared<DelimiterQueryTokenizer>(*punct_segmenter);
 
   // Filter 1: Unicode normalization + case folding
   NormalizationForm norm_form = (language == data_model::LANGUAGE_ARABIC)

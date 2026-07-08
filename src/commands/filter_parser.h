@@ -99,15 +99,6 @@ class FilterParser {
       std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
       const std::optional<std::string>& field_or_default);
 
-  // Handles backslash escape sequences in query text. Uses the segmenter's
-  // IsDelimiter to determine whether to keep escaped chars in the current token
-  // or break. Sets break_token=true when the parser should end the current
-  // token (backslash before non-delimiter when backslash is itself a
-  // delimiter). Returns true if a backslash was handled (caller should
-  // continue), false if the current char is not a backslash.
-  absl::StatusOr<bool> HandleBackslashEscape(
-      const indexes::text::Segmenter& segmenter, std::string& raw_content,
-      bool& break_token);
   absl::Status SetupTextFieldConfiguration(
       FieldMaskPredicate& field_mask,
       const std::optional<std::string>& field_name, bool with_suffix);

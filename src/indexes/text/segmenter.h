@@ -8,7 +8,6 @@
 #ifndef VALKEY_SEARCH_INDEXES_TEXT_SEGMENTER_H_
 #define VALKEY_SEARCH_INDEXES_TEXT_SEGMENTER_H_
 
-#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -34,10 +33,6 @@ class Segmenter {
   /// Returns an error if the input contains invalid UTF-8.
   virtual absl::StatusOr<std::vector<std::string>> Segment(
       absl::string_view text) const = 0;
-
-  /// Returns true if this segmenter treats the given code point as a word
-  /// boundary (delimiter). Used by the query parser for escape handling.
-  virtual bool IsDelimiter(uint32_t cp) const = 0;
 };
 
 }  // namespace valkey_search::indexes::text

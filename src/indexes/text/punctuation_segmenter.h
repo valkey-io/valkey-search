@@ -27,13 +27,16 @@ namespace valkey_search::indexes::text {
 /// don't treat it as a delimiter."
 class PunctuationSegmenter : public Segmenter {
  public:
-  explicit PunctuationSegmenter(const std::string &punctuation);
+  explicit PunctuationSegmenter(const std::string& punctuation);
   PunctuationSegmenter(PunctuationSet punct_set);
 
   absl::StatusOr<std::vector<std::string>> Segment(
       absl::string_view text) const override;
 
-  bool IsDelimiter(uint32_t cp) const override;
+  /// Returns true if the given code point is treated as a word boundary
+  /// (delimiter) by this segmenter. Used by DelimiterQueryTokenizer and
+  /// internally by Segment().
+  bool IsDelimiter(uint32_t cp) const;
 
  private:
   PunctuationSet punct_set_;

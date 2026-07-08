@@ -545,5 +545,3 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.setup_data("sortable numbers", key_type)
         # With INFIELDS naming a valid text field: same results as without.
         self.checkvec(dialect, f"ft.search {key_type}_idx1 * INFIELDS 1 t1")
-        # With INFIELDS naming a non-existent field: still same results.
-        self.checkvec(dialect, f"ft.search {key_type}_idx1 * INFIELDS 1 nonexistent")

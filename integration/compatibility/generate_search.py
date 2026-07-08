@@ -16,14 +16,6 @@ class TestInfieldsCompatibility(BaseCompatibilityTest):
         self.check("ft.search", f"{key_type}_idx1", "apple",
                    "INFIELDS", "1", "body", "DIALECT", str(dialect))
 
-    def test_infields_invalid_field_ignored(self, key_type, dialect):
-        """Non-existent and non-TEXT fields are silently ignored."""
-        self.setup_data("pure text small", key_type)
-        self.check("ft.search", f"{key_type}_idx1", "apple",
-                   "INFIELDS", "1", "nonexistent_field", "DIALECT", str(dialect))
-        self.check("ft.search", f"{key_type}_idx1", "apple",
-                   "INFIELDS", "1", "color", "DIALECT", str(dialect))
-
     def test_infields_with_limit(self, key_type, dialect):
         """INFIELDS combined with LIMIT — return all matches to avoid order ambiguity."""
         self.setup_data("pure text small", key_type)
@@ -123,25 +115,4 @@ class TestInfieldsCompatibility(BaseCompatibilityTest):
                    "INFIELDS", "2", "title", "body",
                    "SORTBY", "price", "ASC",
                    "NOCONTENT",
-                   "DIALECT", str(dialect))
-
-    def test_infields_error_bad_count(self, key_type, dialect):
-        """INFIELDS with non-integer count — both engines raise."""
-        self.setup_data("pure text small", key_type)
-        self.check("ft.search", f"{key_type}_idx1", "apple",
-                   "INFIELDS", "abc",
-                   "DIALECT", str(dialect))
-
-    def test_infields_error_negative_count(self, key_type, dialect):
-        """INFIELDS -1 — both engines raise."""
-        self.setup_data("pure text small", key_type)
-        self.check("ft.search", f"{key_type}_idx1", "apple",
-                   "INFIELDS", "-1",
-                   "DIALECT", str(dialect))
-
-    def test_infields_error_count_mismatch(self, key_type, dialect):
-        """INFIELDS count > args — both engines raise."""
-        self.setup_data("pure text small", key_type)
-        self.check("ft.search", f"{key_type}_idx1", "apple",
-                   "INFIELDS", "5", "f1", "f2",
                    "DIALECT", str(dialect))

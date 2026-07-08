@@ -193,6 +193,38 @@ function setup_valkey_server() {
   if [ ! -z "${SAN_BUILD}" ] && [[ "${SAN_BUILD}" != "no" ]]; then
     VALKEY_CMAKE_EXTRA_ARGS="-DBUILD_SANITIZER=${SAN_BUILD}"
     LOG_INFO "Building Valkey with Sanitizer options: -DBUILD_SANITIZER=${SAN_BUILD}"
+
+    # Force libstdc++ into valkey-server's DT_NEEDED for ASAN builds.
+    #
+    # When the process starts, ld.so walks valkey-server's DT_NEEDED in order.
+    # libasan.so.8 is first, so its .init runs early. libasan's .init calls
+    # dlsym(RTLD_NEXT, "__cxa_throw") to record the "real" (uninstrumented)
+    # exception-throw entry point that its interceptor will forward to.
+    # __cxa_throw lives in libstdc++.so.6. On some distributions the packaged
+    # libasan itself DT_NEEDEDs libstdc++ (Amazon's GCC toolchain does), which
+    # transitively pulls it in before this dlsym runs and everything works.
+    # On other distributions (notably the GitHub Actions Ubuntu runner used
+    # for CI) it does not, so at libasan-init time no library in the process
+    # yet exports __cxa_throw. dlsym returns NULL, libasan stores that in
+    # real___cxa_throw, and libstdc++ only gets loaded much later when we
+    # dlopen libsearch.so. When our HNSW load-validation path (or any other
+    # code) then does `throw`, libasan's interceptor fires and its internal
+    # CHECK(real___cxa_throw != nullptr) fails, killing the process instantly
+    # with:
+    #   AddressSanitizer: CHECK failed: asan_interceptors.cpp:458
+    #     "((__interception::real___cxa_throw)) != (0)" (0x0, 0x0)
+    # No exception is thrown, no catch runs, no error is logged - just a
+    # cryptic abort. This masks whatever the code was actually trying to
+    # report and makes tests that exercise throw paths (e.g. integration
+    # tests for corrupt-input rejection) flaky-to-broken on ASAN CI.
+    #
+    # Preload libstdc++ into valkey-server itself via LDFLAGS. --no-as-needed
+    # keeps it in DT_NEEDED even though we don't reference any C++ symbols
+    # directly from Valkey's C sources. Order matters: it must come after the
+    # sanitizer flags so it doesn't get elided.
+    export LDFLAGS="${LDFLAGS} -Wl,--push-state,--no-as-needed,-lstdc++,--pop-state"
+    LOG_INFO "Forcing libstdc++ into valkey-server DT_NEEDED for reliable ASAN __cxa_throw interception (LDFLAGS: ${LDFLAGS})"
+
     # Temporary workaround until these are merged into core upstream:
     # 1. IFUNC resolvers run before TSAN runtime initializes, so no_sanitize("thread") is required.
     # https://github.com/valkey-io/valkey/blob/4dee322edeb9c96029d89cfaf1600abad2afead0/src/util.c#L640-L642

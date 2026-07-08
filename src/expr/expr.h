@@ -60,6 +60,12 @@ class Expression {
     virtual absl::StatusOr<std::unique_ptr<AttributeReference>> MakeReference(
         const absl::string_view s, bool create) = 0;
     virtual absl::StatusOr<Value> GetParam(const absl::string_view s) const = 0;
+    // Filter expressions use three-valued (SQL NULL-like) logic to match
+    // Redisearch: a comparison involving a Nil (missing field) yields Nil
+    // ("unknown") instead of true/false, Nil propagates through && / || / !,
+    // and a top-level Nil keeps the document. The default (APPLY) treats
+    // kUNORDERED as equal for == and as not-less for >=, etc.
+    virtual bool UseFilterComparisonSemantics() const = 0;
   };
 
   // The two basic operations for Expression(s).

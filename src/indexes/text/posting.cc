@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 
 #include "absl/log/check.h"
 #include "src/index_schema.h"
@@ -38,8 +39,8 @@ uint64_t FieldMask::GetMask() const { return mask_; }
 
 // Destructor: clean up all FlatPositionMaps
 Postings::~Postings() {
-  for (auto& [key, flat_map] : key_to_positions_) {
-    FlatPositionMap::Destroy(flat_map);
+  for (auto& [key, value] : key_to_positions_) {
+    FlatPositionMap::Destroy(value.map);
   }
 }
 
@@ -56,8 +57,10 @@ unsigned int count_num_terms(const PositionMap& pos_map) {
 }
 
 void Postings::InsertKey(const Key& key, FlatPositionMap* flat_map) {
-  // Insert FlatPositionMap pointer into map
-  key_to_positions_.emplace(key, flat_map);
+  // Insert FlatPositionMap pointer plus a mirror of its (immutable) tf.
+  key_to_positions_.emplace(
+      key, PostingValue{flat_map,
+                        static_cast<uint32_t>(flat_map->GetTermFrequency())});
 }
 
 // Remove a document key and all its positions
@@ -65,7 +68,7 @@ void Postings::RemoveKey(const Key& key, TextIndexMetadata* metadata) {
   auto node = key_to_positions_.extract(key);
   if (node.empty()) return;
 
-  FlatPositionMap* flat_map = node.mapped();
+  FlatPositionMap* flat_map = node.mapped().map;
 
   // Use member functions to get counts
   size_t position_count = flat_map->CountPositions();
@@ -84,8 +87,8 @@ size_t Postings::GetKeyCount() const { return key_to_positions_.size(); }
 // Get total number of position entries across all keys
 size_t Postings::GetPositionCount() const {
   size_t total = 0;
-  for (const auto& [key, flat_map] : key_to_positions_) {
-    total += flat_map->CountPositions();
+  for (const auto& [key, value] : key_to_positions_) {
+    total += value.map->CountPositions();
   }
   return total;
 }
@@ -93,8 +96,8 @@ size_t Postings::GetPositionCount() const {
 // Get total term frequency (sum of field occurrences across all positions)
 size_t Postings::GetTotalTermFrequency() const {
   size_t total_frequency = 0;
-  for (const auto& [key, flat_map] : key_to_positions_) {
-    total_frequency += flat_map->GetTermFrequency();
+  for (const auto& [key, value] : key_to_positions_) {
+    total_frequency += value.tf;
   }
   return total_frequency;
 }
@@ -104,7 +107,15 @@ const FlatPositionMap* Postings::FindKey(const Key& key) const {
   if (it == key_to_positions_.end()) {
     return nullptr;
   }
-  return it->second;
+  return it->second.map;
+}
+
+std::optional<uint32_t> Postings::GetTermFrequencyForKey(const Key& key) const {
+  auto it = key_to_positions_.find(key);
+  if (it == key_to_positions_.end()) {
+    return std::nullopt;
+  }
+  return it->second.tf;
 }
 
 // Defragment posting list
@@ -138,14 +149,14 @@ bool Postings::KeyIterator::ContainsFields(uint64_t field_mask) const {
   CHECK(key_map_ != nullptr && current_ != end_)
       << "KeyIterator is invalid or exhausted";
 
-  CHECK(current_->second != nullptr)
+  CHECK(current_->second.map != nullptr)
       << "Posting list contains a key with no FlatPositionMap";
 
   // When querying all fields (~0ULL), any non-zero position mask will match,
   // and every key in the posting list has at least one position entry.
   if (field_mask == ~0ULL) return true;
 
-  FlatPositionMap* flat_map = current_->second;
+  FlatPositionMap* flat_map = current_->second.map;
 
   // Check all positions for this key to see if any of the requested fields are
   // set
@@ -181,7 +192,7 @@ PositionIterator Postings::KeyIterator::GetPositionIterator() const {
   CHECK(key_map_ != nullptr && current_ != end_)
       << "KeyIterator is invalid or exhausted";
 
-  FlatPositionMap* flat_map = current_->second;
+  FlatPositionMap* flat_map = current_->second.map;
   return PositionIterator(*flat_map);
 }
 

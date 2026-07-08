@@ -761,10 +761,10 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       const ResolvedLeaf &leaf = it->second;
       if (!leaf.postings) return std::nullopt;
 
-      const auto *flat_map = leaf.postings->FindKey(key);
-      if (!flat_map) return std::nullopt;
+      auto tf_opt = leaf.postings->GetTermFrequencyForKey(key);
+      if (!tf_opt) return std::nullopt;
 
-      uint32_t tf = static_cast<uint32_t>(flat_map->GetTermFrequency());
+      uint32_t tf = *tf_opt;
 
       if (tf == 0) return std::nullopt;
 

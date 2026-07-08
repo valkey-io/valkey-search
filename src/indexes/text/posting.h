@@ -34,6 +34,7 @@ Key.
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -69,6 +70,14 @@ static_assert(sizeof(FieldMask) == 16, "FieldMask should exactly be 16 bytes");
 
 using PositionMap = absl::btree_map<Position, FieldMask>;
 
+// Btree value: the position map pointer plus a mirror of its (immutable)
+// term frequency, co-located so tf reads avoid chasing into the separately
+// allocated FlatPositionMap block.
+struct PostingValue {
+  FlatPositionMap* map;
+  uint32_t tf;
+};
+
 struct Postings {
   struct KeyIterator;
 
@@ -96,6 +105,11 @@ struct Postings {
   // Look up the FlatPositionMap for a specific key. Returns nullptr if the key
   // is not in this term's posting list.
   const FlatPositionMap* FindKey(const Key& key) const;
+
+  // Term frequency for a specific key in this posting list. Returns nullopt if
+  // the key is absent. Reads the tf mirror stored in the btree node, so it
+  // does not dereference the FlatPositionMap block.
+  std::optional<uint32_t> GetTermFrequencyForKey(const Key& key) const;
 
   // Defrag this contents of this object. Returns the updated "this" pointer.
   Postings* Defrag();
@@ -129,13 +143,13 @@ struct Postings {
     friend struct Postings;
 
     // Iterator state - pointer to key_to_positions map
-    const absl::btree_map<Key, FlatPositionMap*>* key_map_;
-    absl::btree_map<Key, FlatPositionMap*>::const_iterator current_;
-    absl::btree_map<Key, FlatPositionMap*>::const_iterator end_;
+    const absl::btree_map<Key, PostingValue>* key_map_;
+    absl::btree_map<Key, PostingValue>::const_iterator current_;
+    absl::btree_map<Key, PostingValue>::const_iterator end_;
   };
 
  private:
-  absl::btree_map<Key, FlatPositionMap*> key_to_positions_;
+  absl::btree_map<Key, PostingValue> key_to_positions_;
 };
 
 }  // namespace valkey_search::indexes::text

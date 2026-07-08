@@ -11,13 +11,11 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
-#include <utility>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
-#include "absl/synchronization/mutex.h"
 #include "src/attribute_data_type.h"
 #include "src/indexes/vector_base.h"
 #include "src/rdb_serialization.h"

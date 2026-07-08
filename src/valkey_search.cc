@@ -21,7 +21,6 @@
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
-#include "absl/time/clock.h"
 #include "absl/time/time.h"
 #include "src/attribute_data_type.h"
 #include "src/coordinator/client_pool.h"
@@ -337,7 +336,9 @@ static vmsdk::info_field::Float rdb_indexes_restored_percent(
     vmsdk::info_field::FloatBuilder().Dev().Computed([]() -> double {
       auto completed = Metrics::GetStats().rdb_restore_completed_indexes.load();
       auto total = Metrics::GetStats().rdb_restore_total_indexes.load();
-      if (total == 0) return 100.0;
+      if (total == 0) {
+        return 100.0;
+      }
       return (completed * 100.0) / total;
     }));
 
@@ -348,7 +349,9 @@ static vmsdk::info_field::Float rdb_current_index_keys_restored_percent(
           Metrics::GetStats().rdb_restore_current_index_keys_total.load();
       auto loaded =
           Metrics::GetStats().rdb_restore_current_index_keys_loaded.load();
-      if (total == 0) return 100.0;
+      if (total == 0) {
+        return 100.0;
+      }
       return (loaded * 100.0) / total;
     }));
 

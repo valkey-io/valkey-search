@@ -57,8 +57,8 @@ def main():
             pass
             
     server.bind(listen_path)
-    # Restrict access to the owner; the container should run with a matching UID.
-    os.chmod(listen_path, 0o600)
+    # Allow read/write access to the socket for the container user
+    os.chmod(listen_path, 0o666)
     server.listen(5)
 
     def sig_handler(signum, frame):

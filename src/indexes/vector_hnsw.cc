@@ -259,7 +259,7 @@ absl::Status VectorHNSW<T>::AlgoDeleteRecord(uint64_t label) {
     algo_->markDeletedInternal(*hnsw_internal_id);
     return absl::OkStatus();
   }
-  const auto &stored_record = algo_->getDataByInternalId(*hnsw_internal_id);
+  const auto &stored_record = algo_->GetDataByInternalId(*hnsw_internal_id);
   absl::string_view unnorm_vector(stored_record->GetRawVector(),
                                   GetVectorDataSize());
 
@@ -268,7 +268,7 @@ absl::Status VectorHNSW<T>::AlgoDeleteRecord(uint64_t label) {
   absl::string_view norm_view(norm_record.data(), norm_record.size());
   auto vector_record =
       VectorRecord::Construct(norm_view, 1.0f, GetVectorAllocator());
-  algo_->setDataByInternalId(*hnsw_internal_id, vector_record);
+  algo_->SetDataByInternalId(*hnsw_internal_id, vector_record);
   algo_->markDeletedInternal(*hnsw_internal_id);
   return absl::OkStatus();
 }

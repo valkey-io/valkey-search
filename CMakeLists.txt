@@ -22,7 +22,7 @@ if(NOT UNIX)
 endif()
 
 # Options
-option(BUILD_UNIT_TESTS "Build valkey-search unit tests" ON)
+option(BUILD_UNIT_TESTS "Build valkey-search unit tests" OFF)
 option(WITH_SUBMODULES_SYSTEM "Use system submodules" OFF)
 
 set(SAN_BUILD

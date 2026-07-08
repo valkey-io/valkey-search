@@ -435,6 +435,35 @@ TEST_F(VectorIndexTest, ResizeFlat) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   }
 }
 
+TEST_F(VectorIndexTest, VectorFlatCosineNormalizationDistance)
+    ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  const int dimensions = 4;
+  auto index = VectorFlat<float>::Create(
+      CreateFlatVectorIndexProto(dimensions, data_model::DISTANCE_METRIC_COSINE,
+                                 10, 10),
+      attribute_identifier, attribute_data_type);
+  ASSERT_TRUE(index.ok());
+
+  // Non-unit vector [3.0, 0.0, 0.0, 0.0] with magnitude 3.0
+  std::vector<float> vec1 = {3.0f, 0.0f, 0.0f, 0.0f};
+  std::string vec1_bytes(reinterpret_cast<const char *>(vec1.data()),
+                         vec1.size() * sizeof(float));
+
+  auto key1 = IndexToKey(1);
+  VMSDK_EXPECT_OK(index.value()->AddRecord(key1, vec1_bytes));
+
+  // Search query [5.0, 0.0, 0.0, 0.0] pointing in exact same direction.
+  // Cosine distance should be 0.0 (1 - (3*5)/(3*5) = 0).
+  std::vector<float> query = {5.0f, 0.0f, 0.0f, 0.0f};
+  std::string query_bytes(reinterpret_cast<const char *>(query.data()),
+                          query.size() * sizeof(float));
+
+  auto search_res = index.value()->Search(query_bytes, 1, CancelNever());
+  ASSERT_TRUE(search_res.ok());
+  ASSERT_EQ(search_res.value().size(), 1);
+  EXPECT_NEAR(search_res.value()[0].distance, 0.0f, 1e-5f);
+}
+
 float CalcRecall(VectorFlat<float> *flat_index, VectorHNSW<float> *hnsw_index,
                  uint64_t k, int dimensions, std::optional<size_t> ef_runtime) {
   auto search_vectors = DeterministicallyGenerateVectors(50, dimensions, 1.5);

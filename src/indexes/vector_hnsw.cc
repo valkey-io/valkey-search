@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, valkey-search contributors
+ * Copyright (c) 2026, valkey-search contributors
  * All rights reserved.
  * SPDX-License-Identifier: BSD 3-Clause
  *
@@ -141,25 +141,26 @@ VectorHNSW<T>::VectorHNSW(int dimensions,
     : VectorBase(IndexerType::kHNSW, dimensions, attribute_data_type,
                  attribute_identifier) {}
 
-InputVector::InputVector(const std::shared_ptr<VectorRecord> &vector_record,
-                         size_t vector_record_size, bool normalize)
+InputVector::InputVector(
+    const std::shared_ptr<const VectorRecord> &vector_record,
+    size_t vector_record_size, bool normalize)
     : vector_record_(std::move(vector_record)) {
   if (normalize) {
-    normalized_vector_ = NormalizeVector<float>(
+    normalized_vector_ = NormalizeVector(
         absl::string_view(vector_record->GetRawVector(), vector_record_size),
         vector_record->GetReciprocalMagnitude());
   }
 }
 template <typename T>
 absl::Status VectorHNSW<T>::AddRecordImpl(
-    uint64_t internal_id, const std::shared_ptr<VectorRecord> &vector_record) {
+    uint64_t internal_id, std::shared_ptr<const VectorRecord> &&vector_record) {
   do {
     try {
       absl::ReaderMutexLock lock(&resize_mutex_);
 
-      algo_->addPoint(
-          InputVector(vector_record, GetVectorDataSize(), normalize_),
-          internal_id, algo_->allow_replace_deleted_);
+      algo_->addPoint(InputVector(std::move(vector_record), GetVectorDataSize(),
+                                  normalize_),
+                      internal_id, algo_->allow_replace_deleted_);
       return absl::OkStatus();
     } catch (const std::exception &e) {
       std::string error_msg = e.what();
@@ -211,10 +212,10 @@ absl::Status VectorHNSW<T>::SaveIndexImpl(
     RDBChunkOutputStream chunked_out) const {
   absl::ReaderMutexLock lock(&resize_mutex_);
   auto serializer = [normalize = normalize_, vector_size = GetVectorDataSize()](
-                        const std::shared_ptr<VectorRecord> &record,
+                        const std::shared_ptr<const VectorRecord> &record,
                         bool is_marked_deleted) {
     if (normalize && !is_marked_deleted) {
-      return NormalizeVector<T>(
+      return NormalizeVector(
           absl::string_view(record->GetRawVector(), vector_size));
     }
     return std::vector<char>(record->GetRawVector(),
@@ -274,24 +275,25 @@ absl::Status VectorHNSW<T>::AlgoDeleteRecord(uint64_t label) {
   absl::string_view unnorm_vector(stored_record->GetRawVector(),
                                   GetVectorDataSize());
 
-  auto norm_record = NormalizeVector<T>(unnorm_vector);
+  auto norm_record = NormalizeVector(unnorm_vector);
 
   absl::string_view norm_view(norm_record.data(), norm_record.size());
   auto vector_record =
       VectorRecord::Construct(norm_view, 1.0f, GetVectorAllocator());
-  algo_->SetDataByInternalId(*hnsw_internal_id, vector_record);
+  algo_->SetDataByInternalId(*hnsw_internal_id, std::move(vector_record));
   algo_->markDeletedInternal(*hnsw_internal_id);
   return absl::OkStatus();
 }
 
 template <typename T>
 absl::Status VectorHNSW<T>::ModifyRecordImpl(
-    uint64_t internal_id, const std::shared_ptr<VectorRecord> &vector_record) {
+    uint64_t internal_id, std::shared_ptr<const VectorRecord> &&vector_record) {
   try {
     absl::ReaderMutexLock lock(&resize_mutex_);
     VMSDK_RETURN_IF_ERROR(AlgoDeleteRecord(internal_id));
-    algo_->addPoint(InputVector(vector_record, GetVectorDataSize(), normalize_),
-                    internal_id, algo_->allow_replace_deleted_);
+    algo_->addPoint(
+        InputVector(std::move(vector_record), GetVectorDataSize(), normalize_),
+        internal_id, algo_->allow_replace_deleted_);
   } catch (const std::exception &e) {
     ++Metrics::GetStats().hnsw_modify_exceptions_cnt;
     return absl::InternalError(
@@ -381,7 +383,7 @@ void VectorHNSW<T>::ToProtoImpl(
 
 template <typename T>
 T VectorHNSW<T>::ComputeDistance(absl::string_view query,
-                                 VectorRecord *vector_record,
+                                 const VectorRecord *vector_record,
                                  float query_magnitude) const {
   return algo_->fstdistfunc_(query.data(), vector_record->GetRawVector(),
                              algo_->dist_func_param_, query_magnitude);

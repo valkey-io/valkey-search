@@ -29,7 +29,8 @@ namespace valkey_search::indexes {
 template <typename T>
 class VectorFlat : public VectorBase {
  public:
-  using FlatIndex = hnswlib::BruteforceSearch<T, std::shared_ptr<VectorRecord>>;
+  using FlatIndex =
+      hnswlib::BruteforceSearch<T, std::shared_ptr<const VectorRecord>>;
 
   static absl::StatusOr<std::shared_ptr<VectorFlat<T>>> Create(
       const data_model::VectorIndex &vector_index_proto,
@@ -60,21 +61,22 @@ class VectorFlat : public VectorBase {
 
  protected:
   absl::Status ResizeIfFull() ABSL_LOCKS_EXCLUDED(resize_mutex_);
-  absl::Status AddRecordImpl(uint64_t internal_id,
-                             const std::shared_ptr<VectorRecord> &vector_record)
-      override ABSL_LOCKS_EXCLUDED(resize_mutex_);
+  absl::Status AddRecordImpl(
+      uint64_t internal_id,
+      std::shared_ptr<const VectorRecord> &&vector_record) override
+      ABSL_LOCKS_EXCLUDED(resize_mutex_);
   absl::Status RemoveRecordImpl(uint64_t internal_id) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
   absl::Status ModifyRecordImpl(
       uint64_t internal_id,
-      const std::shared_ptr<VectorRecord> &vector_record) override
+      std::shared_ptr<const VectorRecord> &&vector_record) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
   void ToProtoImpl(data_model::VectorIndex *vector_index_proto) const override;
   int RespondWithInfoImpl(ValkeyModuleCtx *ctx) const override;
   absl::Status SaveIndexImpl(RDBChunkOutputStream chunked_out) const override;
-  T ComputeDistance(absl::string_view query, VectorRecord *vector_record,
+  T ComputeDistance(absl::string_view query, const VectorRecord *vector_record,
                     float query_magnitude) const override;
-  std::shared_ptr<VectorRecord> &GetVectorLockFree(
+  std::shared_ptr<const VectorRecord> &GetVectorLockFree(
       uint64_t internal_id) const override;
   std::optional<hnswlib::tableint> GetAlgoIdLockFree(
       uint64_t internal_id) const override;

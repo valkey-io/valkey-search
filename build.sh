@@ -317,6 +317,8 @@ function print_test_error_and_exit() {
         # Only dump the failed test's output, not the entire accumulated log
         if [ -f "${CURRENT_TEST_OUTPUT_FILE}" ]; then
             cat "${CURRENT_TEST_OUTPUT_FILE}"
+        else
+            printf "${RED}No test output produced (test crashed or was terminated).${RESET}\n"
         fi
     fi
 
@@ -463,30 +465,53 @@ if [[ "${SAN_BUILD}" != "no" ]]; then
     export ASAN_OPTIONS="detect_odr_violation=0"
 fi
 
+function run_single_test() {
+    local test_exec="$1"
+    echo "==> Running executable: ${test_exec}" >> "${TEST_OUTPUT_FILE}"
+    echo "" >> "${TEST_OUTPUT_FILE}"
+    rm -f "${CURRENT_TEST_OUTPUT_FILE}"
+    print_test_prefix "${test_exec}"
+    if "${test_exec}" --gtest_brief=1 > "${CURRENT_TEST_OUTPUT_FILE}" 2>&1; then
+        cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}"
+        print_test_ok
+    else
+        if [ -f "${CURRENT_TEST_OUTPUT_FILE}" ]; then
+            cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}"
+        fi
+        print_test_error_and_exit
+    fi
+}
+
 if [[ "${RUN_TEST}" == "all" ]]; then
     rm -f "${TEST_OUTPUT_FILE}"
     CURRENT_TEST_OUTPUT_FILE="${BUILD_DIR}/current_test.out"
     while read -r test; do
-        echo "==> Running executable: ${test}" >> "${TEST_OUTPUT_FILE}"
-        echo "" >> "${TEST_OUTPUT_FILE}"
-        # Write each test's output to a per-test file so on failure we only dump the relevant output
-        rm -f "${CURRENT_TEST_OUTPUT_FILE}"
-        print_test_prefix "${test}"
-        ("${test}" --gtest_brief=1 > "${CURRENT_TEST_OUTPUT_FILE}" 2>&1 && cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}" && print_test_ok) || { cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}"; print_test_error_and_exit; }
+        run_single_test "${test}"
     done < <(find "${TESTS_DIR}" -name "*_test" -type f)
     rm -f "${CURRENT_TEST_OUTPUT_FILE}"
     print_test_summary
 elif [ ! -z "${RUN_TEST}" ]; then
     rm -f "${TEST_OUTPUT_FILE}"
     CURRENT_TEST_OUTPUT_FILE="${BUILD_DIR}/current_test.out"
-    echo "==> Running executable: ${TESTS_DIR}/${RUN_TEST}" >> "${TEST_OUTPUT_FILE}"
-    echo "" >> "${TEST_OUTPUT_FILE}"
-    rm -f "${CURRENT_TEST_OUTPUT_FILE}"
-    print_test_prefix "${TESTS_DIR}/${RUN_TEST}"
-    ("${TESTS_DIR}/${RUN_TEST}" --gtest_brief=1 > "${CURRENT_TEST_OUTPUT_FILE}" 2>&1 && cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}" && print_test_ok) || { cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}"; print_test_error_and_exit; }
+    run_single_test "${TESTS_DIR}/${RUN_TEST}"
     rm -f "${CURRENT_TEST_OUTPUT_FILE}"
     print_test_summary
 elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
+    params=""
+    if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then
+        params=" --test-errors-stdout"
+    fi
+    if [[ "${BUILD_CONFIG}" == "debug" ]]; then
+        params="${params} --debug"
+    fi
+
+    if [[ "${SAN_BUILD}" == "address" ]]; then
+        params="${params} --asan"
+    fi
+    if [[ "${SAN_BUILD}" == "thread" ]]; then
+        params="${params} --tsan"
+    fi
+
     if [ ! -z "${TEST_PATTERN}" ]; then
         echo ""
         LOG_WARNING " ** TEST_PATTERN is found, skipping Abseil based integration tests **"
@@ -495,20 +520,6 @@ elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
         # Abseil based tests do not support filtering tests based on "-k" flag
         # so when the TEST_PATTERN env variable is found, skip Abseil based tests
         pushd testing/integration >/dev/null
-        params=""
-        if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then
-            params=" --test-errors-stdout"
-        fi
-        if [[ "${BUILD_CONFIG}" == "debug" ]]; then
-            params="${params} --debug"
-        fi
-
-        if [[ "${SAN_BUILD}" == "address" ]]; then
-            params="${params} --asan"
-        fi
-        if [[ "${SAN_BUILD}" == "thread" ]]; then
-            params="${params} --tsan"
-        fi
         ./run.sh ${params}
         popd >/dev/null
     fi
@@ -521,7 +532,7 @@ elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
     export TEST_PATTERN=${TEST_PATTERN}
     export INTEG_RETRIES=${INTEG_RETRIES}
     # Run will run ASan or normal tests based on the environment variable SAN_BUILD
-    ./run.sh || EXIT_CODE=1
+    ./run.sh ${params} || EXIT_CODE=1
     popd >/dev/null
 fi
 

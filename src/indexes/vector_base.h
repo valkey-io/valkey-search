@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, valkey-search contributors
+ * Copyright (c) 2026, valkey-search contributors
  * All rights reserved.
  * SPDX-License-Identifier: BSD 3-Clause
  *
@@ -8,7 +8,6 @@
 #ifndef VALKEYSEARCH_SRC_INDEXES_VECTOR_BASE_H_
 #define VALKEYSEARCH_SRC_INDEXES_VECTOR_BASE_H_
 
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -72,50 +71,14 @@ class VectorRecord {
   const float reciprocal_magnitude_;
   char data_[0];  // flexible array member
 };
+
+float CalcMagnitude(const float *src, size_t size);
+
+std::vector<char> NormalizeVector(absl::string_view record,
+                                  float reciprocal_magnitude);
+
 std::vector<char> NormalizeVector(absl::string_view record,
                                   float *magnitude = nullptr);
-std::vector<char> DenormalizeVector(absl::string_view record, float magnitude);
-
-template <typename T>
-T CalcMagnitude(const T *src, size_t size) {
-  T magnitude = static_cast<T>(0);
-  for (size_t i = 0; i < size; i++) {
-    magnitude += src[i] * src[i];
-  }
-  return (magnitude == static_cast<T>(0))
-             ? static_cast<T>(1)
-             : static_cast<T>(std::sqrt(magnitude));
-}
-
-template <typename T>
-std::vector<char> NormalizeVector(absl::string_view record,
-                                  T reciprocal_magnitude) {
-  if (ABSL_PREDICT_FALSE(reciprocal_magnitude == static_cast<T>(0))) {
-    reciprocal_magnitude = static_cast<T>(1);
-  }
-  size_t dimensions = record.size() / sizeof(T);
-  T *src = (T *)record.data();
-  std::vector<char> ret(record.size());
-  T *dst = (T *)&ret[0];
-  for (size_t i = 0; i < dimensions; i++) {
-    dst[i] = reciprocal_magnitude * src[i];
-  }
-  return ret;
-}
-
-template <typename T>
-std::vector<char> NormalizeVector(absl::string_view record,
-                                  T *magnitude = nullptr) {
-  T calc_magnitude =
-      CalcMagnitude((T *)record.data(), record.size() / sizeof(T));
-  std::vector<char> ret =
-      NormalizeVector(record, static_cast<T>(1) / calc_magnitude);
-
-  if (magnitude) {
-    *magnitude = calc_magnitude;
-  }
-  return ret;
-}
 
 // Lightweight result entry used during non-vector search collection.
 // Trivially destructible — destroying a vector of 10K of these is a no-op.
@@ -200,9 +163,7 @@ absl::string_view LookupKeyByValue(
 struct TrackedKeyMetadata {
   uint64_t internal_id;
   // If normalize_ is false, this will be 1.0f. Otherwise, it will be the
-  // magnitude of the vector. If the magnitude is not initialized, it will
-  // be -inf (this is an intermediate state during backfill when
-  // transitioning from the old RDB format that didn't include magnitudes).
+  // magnitude of the vector.
   float magnitude;
 };
 
@@ -266,6 +227,12 @@ class VectorBase : public IndexBase {
   int GetDimensions() const { return dimensions_; }
   vmsdk::UniqueValkeyString NormalizeStringRecord(
       vmsdk::UniqueValkeyString record) const override;
+  bool IsValidSizeVector(absl::string_view record) const {
+    return record.size() == GetVectorDataSize();
+  }
+  const InternedStringPtr &GetInternedAttributeIdentifier() const {
+    return interned_attribute_identifier_;
+  }
 
  protected:
   VectorBase(IndexerType indexer_type, int dimensions,
@@ -274,6 +241,8 @@ class VectorBase : public IndexBase {
       : IndexBase(indexer_type),
         dimensions_(dimensions),
         attribute_identifier_(attribute_identifier),
+        interned_attribute_identifier_(
+            StringInternStore::Intern(attribute_identifier)),
         attribute_data_type_(attribute_data_type)
 #ifndef SAN_BUILD
         ,
@@ -286,9 +255,7 @@ class VectorBase : public IndexBase {
   void RemoveRecordDueToError(const InternedStringPtr &key,
                               std::optional<uint64_t> internal_id)
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
-  bool IsValidSizeVector(absl::string_view record) const {
-    return record.size() == GetVectorDataSize();
-  }
+
   int RespondWithInfo(ValkeyModuleCtx *ctx) const override;
   template <typename T>
   void Init(int dimensions, data_model::DistanceMetric distance_metric,
@@ -296,11 +263,11 @@ class VectorBase : public IndexBase {
 
   virtual absl::Status AddRecordImpl(
       uint64_t internal_id,
-      const std::shared_ptr<VectorRecord> &vector_record) = 0;
+      std::shared_ptr<const VectorRecord> &&vector_record) = 0;
   virtual absl::Status RemoveRecordImpl(uint64_t internal_id) = 0;
   virtual absl::Status ModifyRecordImpl(
       uint64_t internal_id,
-      const std::shared_ptr<VectorRecord> &vector_record) = 0;
+      std::shared_ptr<const VectorRecord> &&vector_record) = 0;
   virtual int RespondWithInfoImpl(ValkeyModuleCtx *ctx) const = 0;
 
   virtual size_t GetDataTypeSize() const = 0;
@@ -309,16 +276,17 @@ class VectorBase : public IndexBase {
   virtual absl::Status SaveIndexImpl(
       RDBChunkOutputStream chunked_out) const = 0;
 
-  virtual std::shared_ptr<VectorRecord> &GetVectorLockFree(
+  virtual std::shared_ptr<const VectorRecord> &GetVectorLockFree(
       uint64_t internal_id) const = 0;
 
   int dimensions_;
   std::string attribute_identifier_;
+  InternedStringPtr interned_attribute_identifier_;
   bool normalize_{false};
   data_model::AttributeDataType attribute_data_type_;
   data_model::DistanceMetric distance_metric_;
   virtual float ComputeDistance(absl::string_view query,
-                                VectorRecord *vector_record,
+                                const VectorRecord *vector_record,
                                 float query_magnitude) const = 0;
   virtual std::optional<hnswlib::tableint> GetAlgoIdLockFree(
       uint64_t internal_id) const = 0;
@@ -349,6 +317,8 @@ class VectorBase : public IndexBase {
   ComputeDistanceFromRecord(const InternedStringPtr &key,
                             absl::string_view query,
                             float product_magnitude) const;
+  std::shared_ptr<const VectorRecord> GetOrConstructVectorRecord(
+      const InternedStringPtr &key, absl::string_view record) const;
   UniqueFixedSizeAllocatorPtr vector_allocator_{nullptr, nullptr};
 };
 

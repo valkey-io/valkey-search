@@ -218,7 +218,7 @@ class SpaceInterface {
 template <typename dist_t, typename InputVectorT, typename SavedVectorT>
 class AlgorithmInterface {
  public:
-  virtual void addPoint(const InputVectorT &datapoint, labeltype label,
+  virtual void addPoint(InputVectorT &&datapoint, labeltype label,
                         bool replace_deleted = false) = 0;
 
   virtual std::priority_queue<std::pair<dist_t, labeltype>> searchKnn(

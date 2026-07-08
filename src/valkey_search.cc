@@ -384,40 +384,38 @@ static vmsdk::info_field::Integer ft_internal_update_call_failures_cnt(
 
 static vmsdk::info_field::Integer vector_registry_entry_cnt(
     "vector_registry", "vector_registry_entry_cnt",
-    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
       return VectorRegistry::Instance().GetStats().entry_cnt;
     }));
 
 static vmsdk::info_field::Integer vector_registry_shared_externally_cnt(
     "vector_registry", "vector_registry_shared_externally_cnt",
-    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
-      return VectorRegistry::Instance()
-          .GetStats()
-          .shared_externally_cnt.GetTotal();
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return VectorRegistry::Instance().GetStats().hash_sharing_hits.GetTotal();
     }));
 
-static vmsdk::info_field::Integer vector_registry_deduplication_hits(
-    "vector_registry", "vector_registry_deduplication_hits",
-    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+static vmsdk::info_field::Integer vector_registry_get_record_hits(
+    "vector_registry", "vector_registry_get_record_hits",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
       return VectorRegistry::Instance()
           .GetStats()
-          .deduplication_hits.GetTotal();
+          .lookup_record_hits.GetTotal();
     }));
 
-static vmsdk::info_field::Integer vector_registry_deduplication_misses(
-    "vector_registry", "vector_registry_deduplication_misses",
-    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+static vmsdk::info_field::Integer vector_registry_get_record_misses(
+    "vector_registry", "vector_registry_get_record_misses",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
       return VectorRegistry::Instance()
           .GetStats()
-          .deduplication_misses.GetTotal();
+          .lookup_record_misses.GetTotal();
     }));
 
-static vmsdk::info_field::Integer vector_registry_hash_extern_errors(
-    "vector_registry", "vector_registry_hash_extern_errors",
+static vmsdk::info_field::Integer vector_registry_shared_externally_errors(
+    "vector_registry", "vector_registry_shared_externally_errors",
     vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return VectorRegistry::Instance()
           .GetStats()
-          .hash_extern_errors.GetTotal();
+          .hash_sharing_errors.GetTotal();
     }));
 
 static vmsdk::info_field::Integer ft_internal_update_process_failures_cnt(

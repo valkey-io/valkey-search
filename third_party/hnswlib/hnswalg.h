@@ -234,16 +234,16 @@ class HierarchicalNSW
   }
 
   inline void SetDataByInternalId(tableint internal_id,
-                                  const InputVectorT &datapoint) {
+                                  InputVectorT &&datapoint) {
     *(GetDataPtrByInternalId(internal_id)) = datapoint.GetVectorRecord();
   }
   inline void SetDataByInternalId(tableint internal_id,
-                                  const SavedVectorT &datapoint) {
-    *(GetDataPtrByInternalId(internal_id)) = datapoint;
+                                  SavedVectorT &&datapoint) {
+    *(GetDataPtrByInternalId(internal_id)) = std::move(datapoint);
   }
 
   inline void InitDataByInternalId(tableint internal_id,
-                                   const InputVectorT &datapoint) {
+                                   InputVectorT &&datapoint) {
     new (GetDataPtrByInternalId(internal_id))
         SavedVectorT(datapoint.GetVectorRecord());
   }
@@ -256,6 +256,7 @@ class HierarchicalNSW
     return fstdistfunc_(a->GetRawVector(), b->GetRawVector(), dist_func_param_,
                         reciprocal_mag_product);
   }
+
   inline dist_t EvaluateDistance(const InputVectorT &a, const SavedVectorT &b,
                                  bool is_rhs_marked_deleted) const {
     if (is_rhs_marked_deleted) {
@@ -300,7 +301,8 @@ class HierarchicalNSW
 
     dist_t lowerBound;
     if (!isMarkedDeleted(ep_id)) {
-      dist_t dist = EvaluateDistance(data_point, GetDataByInternalId(ep_id), false);
+      dist_t dist =
+          EvaluateDistance(data_point, GetDataByInternalId(ep_id), false);
       top_candidates.emplace(dist, ep_id);
       lowerBound = dist;
       candidateSet.emplace(-dist, ep_id);
@@ -359,7 +361,8 @@ class HierarchicalNSW
         visited_array[candidate_id] = visited_array_tag;
         const SavedVectorT &currObj1 = (GetDataByInternalId(candidate_id));
 
-        dist_t dist1 = EvaluateDistance(data_point, currObj1, isMarkedDeleted(candidate_id));
+        dist_t dist1 = EvaluateDistance(data_point, currObj1,
+                                        isMarkedDeleted(candidate_id));
         if (top_candidates.size() < ef_construction_ || lowerBound > dist1) {
           candidateSet.emplace(-dist1, candidate_id);
 #ifdef USE_PREFETCH
@@ -410,7 +413,8 @@ class HierarchicalNSW
         (!isMarkedDeleted(ep_id) &&
          ((!isIdAllowed) || (*isIdAllowed)(GetExternalLabel(ep_id))))) {
       const SavedVectorT &ep_data = GetDataByInternalId(ep_id);
-      dist_t dist = EvaluateDistance(data_point, ep_data, isMarkedDeleted(ep_id));
+      dist_t dist =
+          EvaluateDistance(data_point, ep_data, isMarkedDeleted(ep_id));
       lowerBound = dist;
       top_candidates.emplace(dist, ep_id);
       if (!bare_bone_search && stop_condition) {
@@ -529,7 +533,8 @@ class HierarchicalNSW
 #endif
         tableint candidate_id = unvisited[k];
         const SavedVectorT *currObj1 = vptrs[k];
-        dist_t dist = EvaluateDistance(data_point, *currObj1, isMarkedDeleted(candidate_id));
+        dist_t dist = EvaluateDistance(data_point, *currObj1,
+                                       isMarkedDeleted(candidate_id));
 
         bool flag_consider_candidate;
         if (!bare_bone_search && stop_condition) {
@@ -556,7 +561,8 @@ class HierarchicalNSW
             top_candidates.emplace(dist, candidate_id);
             if (!bare_bone_search && stop_condition) {
               stop_condition->add_point_to_result(
-                  GetExternalLabel(candidate_id), (*currObj1)->GetRawVector(), dist);
+                  GetExternalLabel(candidate_id), (*currObj1)->GetRawVector(),
+                  dist);
             }
           }
 
@@ -878,7 +884,8 @@ class HierarchicalNSW
     for (int i = 0; i < cur_element_count_; i++) {
       memcpy(buf.data(), (*data_level0_memory_)[i], size_links_level0_);
       const SavedVectorT &record = GetDataByInternalId(i);
-      std::vector<char> serialized_vector = serializer(record, isMarkedDeleted(i));
+      std::vector<char> serialized_vector =
+          serializer(record, isMarkedDeleted(i));
       memcpy(buf.data() + size_links_level0_, serialized_vector.data(),
              vector_size_);
       memcpy(buf.data() + size_links_level0_ + vector_size_,
@@ -915,8 +922,7 @@ class HierarchicalNSW
   template <typename SavedVectorGenerator>
   absl::Status LoadIndex(InputStream &input, SpaceInterface<dist_t> *s,
                          size_t max_elements_i, size_t expected_m,
-                         bool validate,
-                         const SavedVectorGenerator &generator) {
+                         bool validate, const SavedVectorGenerator &generator) {
     load_validation_enabled_ = validate;
     VMSDK_ASSIGN_OR_RETURN(auto serialized_header, input.LoadChunk());
     auto header = std::make_unique<data_model::HNSWIndexHeader>();
@@ -1258,7 +1264,7 @@ class HierarchicalNSW
    * If replacement of deleted elements is enabled: replaces previously deleted
    * point if any, updating it with new point
    */
-  void addPoint(const InputVectorT &data_point, labeltype label,
+  void addPoint(InputVectorT &&data_point, labeltype label,
                 bool replace_deleted = false) override {
     if ((allow_replace_deleted_ == false) && (replace_deleted == true)) {
       throw std::runtime_error(
@@ -1268,7 +1274,7 @@ class HierarchicalNSW
     // lock all operations with element by label
     std::unique_lock<std::mutex> lock_label(getLabelOpMutex(label));
     if (!replace_deleted) {
-      addPoint(data_point, label, -1);
+      addPoint(std::move(data_point), label, -1);
       return;
     }
     // check if there is vacant place
@@ -1284,7 +1290,7 @@ class HierarchicalNSW
     // if there is no vacant place then add or update point
     // else add point to vacant place
     if (!is_vacant_place) {
-      addPoint(data_point, label, -1);
+      addPoint(std::move(data_point), label, -1);
     } else {
       // we assume that there are no concurrent operations on deleted element
       labeltype label_replaced = GetExternalLabel(internal_id_replaced);
@@ -1296,14 +1302,14 @@ class HierarchicalNSW
       lock_table.unlock();
 
       unmarkDeletedInternal(internal_id_replaced);
-      updatePoint(data_point, internal_id_replaced, 1.0);
+      updatePoint(std::move(data_point), internal_id_replaced, 1.0);
     }
   }
 
-  void updatePoint(const InputVectorT &dataPoint, tableint internalId,
+  void updatePoint(InputVectorT &&dataPoint, tableint internalId,
                    float updateNeighborProbability) {
     // update the feature vector associated with existing point with new vector
-    SetDataByInternalId(internalId, dataPoint);
+    SetDataByInternalId(internalId, std::move(dataPoint));
 
     int maxLevelCopy = maxlevel_;
     tableint entryPointCopy = enterpoint_node_;
@@ -1394,8 +1400,8 @@ class HierarchicalNSW
                                   int dataPointLevel, int maxLevel) {
     tableint currObj = entryPointInternalId;
     if (dataPointLevel < maxLevel) {
-      dist_t curdist =
-          EvaluateDistance(dataPoint, GetDataByInternalId(currObj), isMarkedDeleted(currObj));
+      dist_t curdist = EvaluateDistance(dataPoint, GetDataByInternalId(currObj),
+                                        isMarkedDeleted(currObj));
       for (int level = maxLevel; level > dataPointLevel; level--) {
         bool changed = true;
         while (changed) {
@@ -1416,7 +1422,8 @@ class HierarchicalNSW
             }
 #endif
             tableint cand = datal[i];
-            dist_t d = EvaluateDistance(dataPoint, GetDataByInternalId(cand), isMarkedDeleted(cand));
+            dist_t d = EvaluateDistance(dataPoint, GetDataByInternalId(cand),
+                                        isMarkedDeleted(cand));
             if (d < curdist) {
               curdist = d;
               currObj = cand;
@@ -1479,7 +1486,7 @@ class HierarchicalNSW
     return result;
   }
 
-  tableint addPoint(const InputVectorT &data_point, labeltype label,
+  tableint addPoint(InputVectorT &&data_point, labeltype label,
                     int level) {
     tableint cur_c = 0;
     {
@@ -1501,7 +1508,7 @@ class HierarchicalNSW
         if (isMarkedDeleted(existingInternalId)) {
           unmarkDeletedInternal(existingInternalId);
         }
-        updatePoint(data_point, existingInternalId, 1.0);
+        updatePoint(std::move(data_point), existingInternalId, 1.0);
 
         return existingInternalId;
       }
@@ -1533,7 +1540,7 @@ class HierarchicalNSW
 
     // Initialisation of the data and label
     memcpy(GetExternalLabeLp(cur_c), &label, sizeof(labeltype));
-    InitDataByInternalId(cur_c, data_point);
+    InitDataByInternalId(cur_c, std::move(data_point));
 
     if (curlevel) {
       *reinterpret_cast<char **>((*linkLists_)[cur_c]) =
@@ -1547,8 +1554,8 @@ class HierarchicalNSW
 
     if ((signed)currObj != -1) {
       if (curlevel < maxlevelcopy) {
-        dist_t curdist =
-            EvaluateDistance(data_point, GetDataByInternalId(currObj), isMarkedDeleted(currObj));
+        dist_t curdist = EvaluateDistance(
+            data_point, GetDataByInternalId(currObj), isMarkedDeleted(currObj));
         for (int level = maxlevelcopy; level > curlevel; level--) {
           bool changed = true;
           while (changed) {
@@ -1563,8 +1570,8 @@ class HierarchicalNSW
               tableint cand = datal[i];
               if (cand < 0 || cand > max_elements_)
                 throw std::runtime_error("cand error");
-              dist_t d =
-                  EvaluateDistance(data_point, GetDataByInternalId(cand), isMarkedDeleted(cand));
+              dist_t d = EvaluateDistance(data_point, GetDataByInternalId(cand),
+                                          isMarkedDeleted(cand));
               if (d < curdist) {
                 curdist = d;
                 currObj = cand;

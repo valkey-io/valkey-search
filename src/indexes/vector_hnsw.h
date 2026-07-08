@@ -28,7 +28,7 @@ namespace valkey_search::indexes {
 
 class InputVector {
  public:
-  InputVector(const std::shared_ptr<VectorRecord> &vector_record,
+  InputVector(const std::shared_ptr<const VectorRecord> &vector_record,
               size_t vector_record_size, bool normalize);
   inline const char *GetRawVector() const {
     return vector_record_->GetRawVector();
@@ -40,12 +40,12 @@ class InputVector {
     return normalized_vector_.data();
   }
 
-  inline std::shared_ptr<VectorRecord> GetVectorRecord() const {
+  inline std::shared_ptr<const VectorRecord> GetVectorRecord() const {
     return vector_record_;
   }
 
  private:
-  std::shared_ptr<VectorRecord> vector_record_;
+  std::shared_ptr<const VectorRecord> vector_record_;
   std::vector<char> normalized_vector_;
 };
 
@@ -53,7 +53,8 @@ template <typename T>
 class VectorHNSW : public VectorBase {
  public:
   using HNSWIndex =
-      hnswlib::HierarchicalNSW<T, InputVector, std::shared_ptr<VectorRecord>>;
+      hnswlib::HierarchicalNSW<T, InputVector,
+                               std::shared_ptr<const VectorRecord>>;
 
   static absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> Create(
       const data_model::VectorIndex &vector_index_proto,
@@ -95,22 +96,23 @@ class VectorHNSW : public VectorBase {
 
  protected:
   absl::Status ResizeIfFull() ABSL_LOCKS_EXCLUDED(resize_mutex_);
-  absl::Status AddRecordImpl(uint64_t internal_id,
-                             const std::shared_ptr<VectorRecord> &vector_record)
-      override ABSL_LOCKS_EXCLUDED(resize_mutex_);
+  absl::Status AddRecordImpl(
+      uint64_t internal_id,
+      std::shared_ptr<const VectorRecord> &&vector_record) override
+      ABSL_LOCKS_EXCLUDED(resize_mutex_);
 
   absl::Status RemoveRecordImpl(uint64_t internal_id) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
   absl::Status ModifyRecordImpl(
       uint64_t internal_id,
-      const std::shared_ptr<VectorRecord> &vector_record) override
+      std::shared_ptr<const VectorRecord> &&vector_record) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
   void ToProtoImpl(data_model::VectorIndex *vector_index_proto) const override;
   int RespondWithInfoImpl(ValkeyModuleCtx *ctx) const override;
   absl::Status SaveIndexImpl(RDBChunkOutputStream chunked_out) const override;
-  T ComputeDistance(absl::string_view query, VectorRecord *vector_record,
+  T ComputeDistance(absl::string_view query, const VectorRecord *vector_record,
                     float query_magnitude) const override;
-  std::shared_ptr<VectorRecord> &GetVectorLockFree(
+  std::shared_ptr<const VectorRecord> &GetVectorLockFree(
       uint64_t internal_id) const override ABSL_NO_THREAD_SAFETY_ANALYSIS {
     return (*algo_->getPoint(internal_id));
   }

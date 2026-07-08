@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, valkey-search contributors
+ * Copyright (c) 2026, valkey-search contributors
  * All rights reserved.
  * SPDX-License-Identifier: BSD 3-Clause
  *
@@ -76,6 +76,41 @@ std::unique_ptr<hnswlib::SpaceInterface<T>> CreateSpace(
 }  // namespace
 
 namespace indexes {
+
+float CalcMagnitude(const float *src, size_t size) {
+  float magnitude = 0.0f;
+  for (size_t i = 0; i < size; i++) {
+    magnitude += src[i] * src[i];
+  }
+  return (magnitude == 0.0f) ? 1.0f : std::sqrt(magnitude);
+}
+
+std::vector<char> NormalizeVector(absl::string_view record,
+                                  float reciprocal_magnitude) {
+  if (ABSL_PREDICT_FALSE(reciprocal_magnitude == 0.0f)) {
+    reciprocal_magnitude = 1.0f;
+  }
+  size_t dimensions = record.size() / sizeof(float);
+  float *src = (float *)record.data();
+  std::vector<char> ret(record.size());
+  float *dst = (float *)&ret[0];
+  for (size_t i = 0; i < dimensions; i++) {
+    dst[i] = reciprocal_magnitude * src[i];
+  }
+  return ret;
+}
+
+std::vector<char> NormalizeVector(absl::string_view record, float *magnitude) {
+  float calc_magnitude =
+      CalcMagnitude((float *)record.data(), record.size() / sizeof(float));
+  std::vector<char> ret = NormalizeVector(record, 1.0f / calc_magnitude);
+
+  if (magnitude) {
+    *magnitude = calc_magnitude;
+  }
+  return ret;
+}
+
 bool PrefilterEvaluator::Evaluate(const query::Predicate &predicate,
                                   const InternedStringPtr &key) {
   key_ = &key;
@@ -119,25 +154,36 @@ void VectorBase::Init(int dimensions,
   }
 }
 
+std::shared_ptr<const VectorRecord> VectorBase::GetOrConstructVectorRecord(
+    const InternedStringPtr &key, absl::string_view record) const {
+  auto [vector_record, vector_record_size] =
+      VectorRegistry::Instance().LookupRecord(key,
+                                              interned_attribute_identifier_);
+  if (vector_record && vector_record_size == record.size() &&
+      std::memcmp(vector_record->GetRawVector(), record.data(),
+                  record.size()) == 0) {
+    return vector_record;
+  }
+  float magnitude = CalcMagnitude(
+      reinterpret_cast<const float *>(record.data()), dimensions_);
+  return VectorRecord::Construct(record, magnitude, vector_allocator_.get());
+}
+
 absl::StatusOr<bool> VectorBase::AddRecord(const InternedStringPtr &key,
                                            absl::string_view record) {
   if (!IsValidSizeVector(record)) {
     return false;
   }
-  float magnitude = CalcMagnitude(
-      reinterpret_cast<const float *>(record.data()), dimensions_);
 
-  auto vector_record = VectorRegistry::Instance().DedupConstruct(
-      key, attribute_identifier_, record, magnitude, vector_allocator_.get());
+  auto vector_record = GetOrConstructVectorRecord(key, record);
+  float magnitude = 1.0f / vector_record->GetReciprocalMagnitude();
   VMSDK_ASSIGN_OR_RETURN(auto internal_id, TrackKey(key, magnitude));
-  absl::Status add_result = AddRecordImpl(internal_id, vector_record);
+  absl::Status add_result =
+      AddRecordImpl(internal_id, std::move(vector_record));
   if (!add_result.ok()) {
     RemoveRecordDueToError(key, internal_id);
     return add_result;
   }
-  VectorRegistry::Instance().EngineShare(key, attribute_identifier_,
-                                         vector_record, record.size(),
-                                         attribute_data_type_);
   return true;
 }
 
@@ -177,10 +223,8 @@ absl::StatusOr<bool> VectorBase::ModifyRecord(const InternedStringPtr &key,
         key, id_res.ok() ? std::make_optional(*id_res) : std::nullopt);
     return false;
   }
-  float magnitude = CalcMagnitude(
-      reinterpret_cast<const float *>(record.data()), dimensions_);
-  auto vector_record = VectorRegistry::Instance().DedupConstruct(
-      key, attribute_identifier_, record, magnitude, vector_allocator_.get());
+  auto vector_record = GetOrConstructVectorRecord(key, record);
+  float magnitude = 1.0f / vector_record->GetReciprocalMagnitude();
   VMSDK_ASSIGN_OR_RETURN(auto internal_id, GetInternalId(key));
   VMSDK_ASSIGN_OR_RETURN(bool res,
                          UpdateMetadata(key, magnitude, vector_record.get()));
@@ -188,14 +232,11 @@ absl::StatusOr<bool> VectorBase::ModifyRecord(const InternedStringPtr &key,
     return false;
   }
 
-  auto modify_result = ModifyRecordImpl(internal_id, vector_record);
+  auto modify_result = ModifyRecordImpl(internal_id, std::move(vector_record));
   if (!modify_result.ok()) {
     RemoveRecordDueToError(key, internal_id);
     return modify_result;
   }
-  VectorRegistry::Instance().EngineShare(key, attribute_identifier_,
-                                         vector_record, record.size(),
-                                         attribute_data_type_);
   return true;
 }
 
@@ -235,7 +276,6 @@ absl::StatusOr<std::vector<char>> VectorBase::GetVectorDuringSearch(
 absl::StatusOr<bool> VectorBase::RemoveRecord(
     const InternedStringPtr &key, indexes::DeletionType deletion_type) {
   VMSDK_ASSIGN_OR_RETURN(auto res, UnTrackKey(key));
-  VectorRegistry::Instance().Untrack(key, attribute_identifier_);
   if (!res.has_value()) {
     return false;
   }
@@ -262,7 +302,8 @@ void VectorBase::RemoveRecordDueToError(const InternedStringPtr &key,
           << internal_id.value() << ": " << remove_vector_res.message();
     }
   }
-  VectorRegistry::Instance().UntrackExpired(key, attribute_identifier_);
+  VectorRegistry::Instance().UntrackIfUnused(key,
+                                             interned_attribute_identifier_);
 }
 
 absl::StatusOr<std::optional<uint64_t>> VectorBase::UnTrackKey(
@@ -404,12 +445,9 @@ absl::Status VectorBase::LoadTrackedKeys(
     if (attribute_data_type->RecordsProvidedAsString()) {
       record.value() = NormalizeStringRecord(std::move(record.value()));
     }
-    auto record_str = vmsdk::ToStringView(record.value().get());
-    const float magnitude = CalcMagnitude(
-        reinterpret_cast<const float *>(record_str.data()), dimensions_);
-    auto vector_record = VectorRegistry::Instance().DedupConstruct(
-        interned_key, attribute_identifier_, record_str, magnitude,
-        vector_allocator_.get());
+    auto vector_record = VectorRegistry::Instance().Track(
+        interned_key, interned_attribute_identifier_, record.value().get(),
+        vector_allocator_.get(), attribute_data_type->ToProto());
     auto &save_vector = GetVectorLockFree(tracked_key_metadata.internal_id());
     save_vector = vector_record;
   }
@@ -531,10 +569,8 @@ absl::Status VectorBase::ForEachUnTrackedKey(
 }
 
 VectorBase::~VectorBase() {
-  if (VectorRegistry::IsConstructed()) {
-    VectorRegistry::Instance().BatchUntrackExpired(
-        attribute_identifier_, std::move(tracked_metadata_by_key_));
-  }
+  VectorRegistry::Instance().BatchUntrackIfUnused(
+      interned_attribute_identifier_, std::move(tracked_metadata_by_key_));
 }
 
 template void VectorBase::Init<float>(

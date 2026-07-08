@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, valkey-search contributors
+ * Copyright (c) 2026, valkey-search contributors
  * All rights reserved.
  * SPDX-License-Identifier: BSD 3-Clause
  *
@@ -49,6 +49,7 @@
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
 #include "src/valkey_search_options.h"
+#include "src/vector_registry.h"
 #include "version.h"
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/debug.h"
@@ -553,6 +554,26 @@ bool AddAttributeData(IndexSchema::MutatedAttributes &mutated_attributes,
   return true;
 }
 
+void TrackRecord(const Key &key, const Attribute &attribute,
+                 const data_model::AttributeDataType &attribute_data_type,
+                 ValkeyModuleString *record) {
+  if (!indexes::IsVectorIndex(attribute.GetIndex())) {
+    return;
+  }
+  auto vector_base =
+      dynamic_cast<indexes::VectorBase *>(attribute.GetIndex().get());
+  if (vector_base &&
+      !vector_base->IsValidSizeVector(vmsdk::ToStringView(record))) {
+    return;
+  }
+  VectorRegistry::Instance().Track(
+      key,
+      vector_base ? vector_base->GetInternedAttributeIdentifier()
+                  : StringInternStore::Intern(attribute.GetIdentifier()),
+      record, vector_base ? vector_base->GetVectorAllocator() : nullptr,
+      attribute_data_type);
+}
+
 void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
                                               ValkeyModuleString *key,
                                               bool from_backfill) {
@@ -581,6 +602,8 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
         attribute_data_type_
             ->GetRecord(ctx, key_obj.get(), key_cstr, attribute.GetIdentifier())
             .value_or(vmsdk::UniqueValkeyString());
+    TrackRecord(interned_key, attribute, attribute_data_type_->ToProto(),
+                record.get());
     if (AddAttributeData(mutated_attributes, attribute, *attribute_data_type_,
                          std::move(record))) {
       added = true;

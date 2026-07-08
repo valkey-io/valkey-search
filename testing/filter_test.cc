@@ -1777,7 +1777,13 @@ TEST_P(InfieldsFilterTest, ParseParams) {
   InitIndexSchema(index_schema.get());
   TextParsingOptions options{
       .infields = test_case.infields.empty() ? nullptr : &test_case.infields};
-  options.PrecomputeInfieldsMasks(*index_schema);
+  auto precompute_status = options.PrecomputeInfieldsMasks(*index_schema);
+  if (!precompute_status.ok()) {
+    EXPECT_FALSE(test_case.create_success);
+    EXPECT_EQ(precompute_status.message(),
+              test_case.create_expected_error_message);
+    return;
+  }
   FilterParser parser(*index_schema, test_case.filter, options);
   auto parse_results = parser.Parse();
   EXPECT_EQ(test_case.create_success, parse_results.ok());
@@ -1829,29 +1835,35 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "infields_nonexistent_field_only_error",
             .filter = "hello",
             .infields = {"nonexistent_field"},
-            .create_success = true,
-            .evaluate_success = false,
+            .create_success = false,
+            .create_expected_error_message =
+                "INFIELDS field 'nonexistent_field' does not exist in the "
+                "index",
         },
         {
             .test_name = "infields_non_text_field_only_error",
             .filter = "hello",
             .infields = {"num_field_1.5"},
-            .create_success = true,
-            .evaluate_success = false,
+            .create_success = false,
+            .create_expected_error_message =
+                "INFIELDS field 'num_field_1.5' is not a TEXT field",
         },
         {
             .test_name = "infields_mix_valid_and_nonexistent",
             .filter = "hello",
             .infields = {"text_field1", "nonexistent_field"},
-            .create_success = true,
-            .evaluate_success = true,
+            .create_success = false,
+            .create_expected_error_message =
+                "INFIELDS field 'nonexistent_field' does not exist in the "
+                "index",
         },
         {
             .test_name = "infields_mix_valid_and_non_text",
             .filter = "hello",
             .infields = {"text_field1", "num_field_1.5"},
-            .create_success = true,
-            .evaluate_success = true,
+            .create_success = false,
+            .create_expected_error_message =
+                "INFIELDS field 'num_field_1.5' is not a TEXT field",
         },
         {
             .test_name = "infields_null_uses_all_text_fields",
@@ -1860,14 +1872,14 @@ INSTANTIATE_TEST_SUITE_P(
             .create_success = true,
             .evaluate_success = true,
         },
-        // Explicit @field: is intersected with INFIELDS. If the field isn't
-        // in INFIELDS, the term matches nothing (Redis Stack parity).
+        // Explicit @field: that is not in INFIELDS set is an error.
         {
-            .test_name = "infields_explicit_field_not_in_infields_no_match",
+            .test_name = "infields_explicit_field_not_in_infields_error",
             .filter = "@text_field1:hello",
             .infields = {"text_field2"},
-            .create_success = true,
-            .evaluate_success = false,
+            .create_success = false,
+            .create_expected_error_message =
+                "Field 'text_field1' is not in INFIELDS list",
         },
         {
             .test_name = "infields_explicit_field_in_infields_matches",
@@ -1941,13 +1953,14 @@ INSTANTIATE_TEST_SUITE_P(
             .create_success = true,
             .evaluate_success = true,
         },
-        // Case-sensitive field name: uppercase field name doesn't match.
+        // Case-sensitive field name: uppercase field name doesn't exist.
         {
             .test_name = "infields_case_sensitive_field_name",
             .filter = "hello",
             .infields = {"TEXT_FIELD1"},
-            .create_success = true,
-            .evaluate_success = false,
+            .create_success = false,
+            .create_expected_error_message =
+                "INFIELDS field 'TEXT_FIELD1' does not exist in the index",
         },
     }),
     [](const TestParamInfo<InfieldsFilterTestCase> &info) {

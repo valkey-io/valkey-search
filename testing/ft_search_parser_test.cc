@@ -24,6 +24,7 @@
 #include "src/index_schema.pb.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
+#include "src/indexes/text.h"
 #include "src/indexes/vector_flat.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
@@ -149,6 +150,14 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
                      .value();
     VMSDK_EXPECT_OK(
         index_schema->AddIndex(test_case.attribute_alias, "id1", index));
+    // Add TEXT fields so INFIELDS validation passes for vector+INFIELDS tests.
+    index_schema->CreateTextIndexSchema();
+    auto text_schema = index_schema->GetTextIndexSchema();
+    data_model::TextIndex text_proto;
+    auto tf1 = std::make_shared<indexes::Text>(text_proto, text_schema);
+    auto tf2 = std::make_shared<indexes::Text>(text_proto, text_schema);
+    VMSDK_EXPECT_OK(index_schema->AddIndex("text_field_1", "tid1", tf1));
+    VMSDK_EXPECT_OK(index_schema->AddIndex("text_field_2", "tid2", tf2));
   } else {
     // Non Vector index setup
     data_model::NumericIndex numeric_index_proto;
@@ -160,6 +169,14 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
     auto tag_index = std::make_shared<indexes::Tag>(tag_index_proto);
     VMSDK_EXPECT_OK(
         index_schema->AddIndex("attribute_identifier_2", "id2", tag_index));
+    // Add TEXT fields for INFIELDS tests.
+    index_schema->CreateTextIndexSchema();
+    auto text_schema = index_schema->GetTextIndexSchema();
+    data_model::TextIndex text_proto;
+    auto tf1 = std::make_shared<indexes::Text>(text_proto, text_schema);
+    auto tf2 = std::make_shared<indexes::Text>(text_proto, text_schema);
+    VMSDK_EXPECT_OK(index_schema->AddIndex("text_field_1", "tid1", tf1));
+    VMSDK_EXPECT_OK(index_schema->AddIndex("text_field_2", "tid2", tf2));
   }
   args.push_back(
       ValkeyModule_CreateString(nullptr, key_str.data(), key_str.size()));
@@ -1056,10 +1073,10 @@ INSTANTIATE_TEST_SUITE_P(
             .k = 0,
             .ef = 0,
             .score_as = "",
-            .search_parameters_str = "INFIELDS 1 attribute_identifier_1",
+            .search_parameters_str = "INFIELDS 1 text_field_1",
             .vector_query = false,
             .expected_infields =
-                absl::flat_hash_set<std::string>{"attribute_identifier_1"},
+                absl::flat_hash_set<std::string>{"text_field_1"},
         },
         {
             .test_name = "infields_multiple_fields",
@@ -1070,10 +1087,11 @@ INSTANTIATE_TEST_SUITE_P(
             .k = 0,
             .ef = 0,
             .score_as = "",
-            .search_parameters_str = "INFIELDS 3 f1 f2 f3",
+            .search_parameters_str = "INFIELDS 2 text_field_1 text_field_2",
             .vector_query = false,
-            .expected_infields = absl::flat_hash_set<std::string>{"f1", "f2",
-                                                                  "f3"},
+            .expected_infields =
+                absl::flat_hash_set<std::string>{"text_field_1",
+                                                 "text_field_2"},
         },
         {
             .test_name = "infields_duplicate_fields_deduped",
@@ -1084,9 +1102,12 @@ INSTANTIATE_TEST_SUITE_P(
             .k = 0,
             .ef = 0,
             .score_as = "",
-            .search_parameters_str = "INFIELDS 3 f1 f1 f2",
+            .search_parameters_str =
+                "INFIELDS 3 text_field_1 text_field_1 text_field_2",
             .vector_query = false,
-            .expected_infields = absl::flat_hash_set<std::string>{"f1", "f2"},
+            .expected_infields =
+                absl::flat_hash_set<std::string>{"text_field_1",
+                                                 "text_field_2"},
         },
         {
             .test_name = "infields_zero_count_no_op",
@@ -1138,8 +1159,10 @@ INSTANTIATE_TEST_SUITE_P(
             .params_str = " PARAMS 2",
             .filter_str = "* =>[KNN 5 @vec $BLOB]",
             .k = 5,
-            .search_parameters_str = "INFIELDS 2 f1 f2",
-            .expected_infields = absl::flat_hash_set<std::string>{"f1", "f2"},
+            .search_parameters_str = "INFIELDS 2 text_field_1 text_field_2",
+            .expected_infields =
+                absl::flat_hash_set<std::string>{"text_field_1",
+                                                 "text_field_2"},
         },
         {
             .test_name = "infields_negative_count_error",

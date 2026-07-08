@@ -146,6 +146,8 @@ class TestedTagEntriesFetcher : public indexes::Tag::EntriesFetcher {
   size_t size_;
 };
 
+#if !defined(TEST_SUITE_LOCAL) && !defined(TEST_SUITE_CONTENT) && \
+    !defined(TEST_SUITE_SEARCH)
 struct EvaluateFilterAsPrimaryTestCase {
   std::string test_name;
   std::string filter;
@@ -154,7 +156,6 @@ struct EvaluateFilterAsPrimaryTestCase {
   std::string expected_tree_structure;
 };
 
-#if !defined(TEST_SUITE_LOCAL) && !defined(TEST_SUITE_CONTENT)
 class EvaluateFilterAsPrimaryTest
     : public ValkeySearchTestWithParam<EvaluateFilterAsPrimaryTestCase> {};
 
@@ -463,6 +464,8 @@ INSTANTIATE_TEST_SUITE_P(
       return info.param.test_name;
     });
 
+#endif  // !defined(TEST_SUITE_LOCAL) && !defined(TEST_SUITE_CONTENT) && !defined(TEST_SUITE_SEARCH)
+
 std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
     const IndexerType vector_indexer_type = indexes::IndexerType::kHNSW,
     data_model::DistanceMetric distance_metric =
@@ -540,6 +543,8 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
   return index_schema;
 }
 
+#if !defined(TEST_SUITE_FILTER) && !defined(TEST_SUITE_CONTENT) && \
+    !defined(TEST_SUITE_SEARCH)
 struct LocalSearchTestCase {
   std::string test_name;
   int k;  // The number of neighbors to return.
@@ -548,9 +553,6 @@ struct LocalSearchTestCase {
   bool is_vector_search_query = true;
 };
 
-#endif  // !defined(TEST_SUITE_LOCAL) && !defined(TEST_SUITE_CONTENT)
-
-#if !defined(TEST_SUITE_FILTER) && !defined(TEST_SUITE_CONTENT)
 class LocalSearchTest
     : public ValkeySearchTestWithParam<
           std::tuple<data_model::DistanceMetric, LocalSearchTestCase>> {};
@@ -678,6 +680,10 @@ INSTANTIATE_TEST_SUITE_P(
              std::get<1>(info.param).test_name;
     });
 
+#endif  // !defined(TEST_SUITE_FILTER) && !defined(TEST_SUITE_CONTENT) && !defined(TEST_SUITE_SEARCH)
+
+#if !defined(TEST_SUITE_LOCAL) && !defined(TEST_SUITE_CONTENT) && \
+    !defined(TEST_SUITE_SEARCH)
 struct FetchFilteredKeysTestCase {
   std::string test_name;
   std::string filter;
@@ -685,9 +691,6 @@ struct FetchFilteredKeysTestCase {
   std::unordered_set<std::string> expected_keys;
 };
 
-#endif  // !defined(TEST_SUITE_FILTER) && !defined(TEST_SUITE_CONTENT)
-
-#if !defined(TEST_SUITE_LOCAL) && !defined(TEST_SUITE_CONTENT)
 class FetchFilteredKeysTest
     : public ValkeySearchTestWithParam<FetchFilteredKeysTestCase> {};
 
@@ -755,6 +758,10 @@ INSTANTIATE_TEST_SUITE_P(
       return info.param.test_name;
     });
 
+#endif  // !defined(TEST_SUITE_LOCAL) && !defined(TEST_SUITE_CONTENT) && !defined(TEST_SUITE_SEARCH)
+
+#if !defined(TEST_SUITE_FILTER) && !defined(TEST_SUITE_CONTENT) && \
+    !defined(TEST_SUITE_LOCAL)
 struct SearchTestCase {
   std::string test_name;
   std::string filter;
@@ -762,9 +769,6 @@ struct SearchTestCase {
   std::unordered_set<std::string> expected_keys;
 };
 
-#endif  // !defined(TEST_SUITE_LOCAL) && !defined(TEST_SUITE_CONTENT)
-
-#if !defined(TEST_SUITE_FILTER) && !defined(TEST_SUITE_CONTENT)
 class SearchTest : public ValkeySearchTestWithParam<
                        std::tuple<IndexerType, SearchTestCase>> {};
 
@@ -908,6 +912,10 @@ INSTANTIATE_TEST_SUITE_P(
       return test_name;
     });
 
+#endif  // !defined(TEST_SUITE_FILTER) && !defined(TEST_SUITE_CONTENT) && !defined(TEST_SUITE_LOCAL)
+
+#if !defined(TEST_SUITE_FILTER) && !defined(TEST_SUITE_LOCAL) && \
+    !defined(TEST_SUITE_SEARCH)
 struct IndexedContentTestCase {
   struct TestReturnAttribute {
     std::string identifier;
@@ -987,7 +995,8 @@ struct IndexedContentTestCase {
 
 #endif  // !defined(TEST_SUITE_FILTER) && !defined(TEST_SUITE_CONTENT)
 
-#if !defined(TEST_SUITE_FILTER) && !defined(TEST_SUITE_LOCAL)
+#if !defined(TEST_SUITE_FILTER) && !defined(TEST_SUITE_LOCAL) && \
+    !defined(TEST_SUITE_SEARCH)
 class IndexedContentTest
     : public ValkeySearchTestWithParam<
           std::tuple<data_model::DistanceMetric, IndexedContentTestCase>> {};
@@ -1391,6 +1400,6 @@ INSTANTIATE_TEST_SUITE_P(
           absl::StrCat(distance_metric, "_", std::get<1>(info.param).test_name);
       return test_name;
     });
-#endif  // !defined(TEST_SUITE_FILTER) && !defined(TEST_SUITE_LOCAL)
+#endif  // !defined(TEST_SUITE_FILTER) && !defined(TEST_SUITE_LOCAL) && !defined(TEST_SUITE_SEARCH)
 }  // namespace
 }  // namespace valkey_search

@@ -46,29 +46,41 @@ target_link_libraries(testing_common_coordinator INTERFACE util)
 target_link_libraries(testing_common_coordinator INTERFACE client)
 target_link_libraries(testing_common_coordinator INTERFACE client_pool)
 
-# 1. Commands Test Suite - consolidates FT command related tests
-set(COMMANDS_TEST_SOURCES
+# 1. Commands Test Suite - split into modular tests for faster execution
+set(COMMANDS_SEARCH_TEST_SOURCES
+    ${CMAKE_CURRENT_LIST_DIR}/ft_search_parser_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/ft_search_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/filter_test.cc)
+
+add_executable(commands_search_test ${COMMANDS_SEARCH_TEST_SOURCES})
+target_include_directories(commands_search_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(commands_search_test PRIVATE testing_common_base)
+target_link_libraries(commands_search_test PRIVATE testing_common_coordinator)
+target_link_libraries(commands_search_test PRIVATE ft_create_parser)
+target_link_libraries(commands_search_test PRIVATE ft_search_parser)
+target_link_libraries(commands_search_test PRIVATE commands)
+target_link_libraries(commands_search_test PRIVATE vmsdklib)
+finalize_test_flags(commands_search_test)
+
+set(COMMANDS_ADMIN_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/ft_aggregate_exec_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_aggregate_parser_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_create_parser_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/ft_search_parser_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/ft_search_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_dropindex_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_list_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_info_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_create_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/commands/ft_internal_update_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/filter_test.cc)
+    ${CMAKE_CURRENT_LIST_DIR}/commands/ft_internal_update_test.cc)
 
-add_executable(commands_test ${COMMANDS_TEST_SOURCES})
-target_include_directories(commands_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
-target_link_libraries(commands_test PRIVATE testing_common_base)
-target_link_libraries(commands_test PRIVATE testing_common_coordinator)
-target_link_libraries(commands_test PRIVATE ft_create_parser)
-target_link_libraries(commands_test PRIVATE ft_search_parser)
-target_link_libraries(commands_test PRIVATE commands)
-target_link_libraries(commands_test PRIVATE vmsdklib)
-finalize_test_flags(commands_test)
+add_executable(commands_admin_test ${COMMANDS_ADMIN_TEST_SOURCES})
+target_include_directories(commands_admin_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(commands_admin_test PRIVATE testing_common_base)
+target_link_libraries(commands_admin_test PRIVATE testing_common_coordinator)
+target_link_libraries(commands_admin_test PRIVATE ft_create_parser)
+target_link_libraries(commands_admin_test PRIVATE ft_search_parser)
+target_link_libraries(commands_admin_test PRIVATE commands)
+target_link_libraries(commands_admin_test PRIVATE vmsdklib)
+finalize_test_flags(commands_admin_test)
 
 # 1. Indexes Test Suite - split into modular tests for faster execution
 add_executable(vector_index_test ${CMAKE_CURRENT_LIST_DIR}/vector_test.cc)
@@ -143,6 +155,17 @@ target_link_libraries(query_search_local_test PRIVATE fanout)
 target_link_libraries(query_search_local_test PRIVATE response_generator)
 target_link_libraries(query_search_local_test PRIVATE search_converter)
 finalize_test_flags(query_search_local_test)
+
+add_executable(query_search_params_test ${CMAKE_CURRENT_LIST_DIR}/search_test.cc)
+target_compile_definitions(query_search_params_test PRIVATE TEST_SUITE_SEARCH)
+target_include_directories(query_search_params_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_include_directories(query_search_params_test PUBLIC ${CMAKE_CURRENT_LIST_DIR}/query)
+target_link_libraries(query_search_params_test PRIVATE testing_common_base)
+target_link_libraries(query_search_params_test PRIVATE testing_common_coordinator)
+target_link_libraries(query_search_params_test PRIVATE fanout)
+target_link_libraries(query_search_params_test PRIVATE response_generator)
+target_link_libraries(query_search_params_test PRIVATE search_converter)
+finalize_test_flags(query_search_params_test)
 
 add_executable(query_search_content_test ${CMAKE_CURRENT_LIST_DIR}/search_test.cc)
 target_compile_definitions(query_search_content_test PRIVATE TEST_SUITE_CONTENT)

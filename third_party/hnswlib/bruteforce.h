@@ -1,8 +1,6 @@
 #pragma once
-#include <assert.h>
 
 #include <cstddef>
-#include <cstdint>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -34,17 +32,17 @@ class BruteforceSearch
   void *dist_func_param_;
   std::mutex index_lock;
   const size_t k_elements_per_chunk{10 * 1024};
-  bool normalize_ = false;
+  bool normalized_{false};
 
   std::unordered_map<labeltype, size_t> dict_external_to_internal;
 
-  BruteforceSearch(SpaceInterface<dist_t> *s, bool normalize,
-                   size_t maxElements = 0) {
+  BruteforceSearch(SpaceInterface<dist_t> *s, bool normalized,
+                   size_t maxElements = 0)
+      : normalized_(normalized) {
     cur_element_count_ = 0;
     vector_size_ = s->get_data_size();
     fstdistfunc_ = s->get_dist_func();
     dist_func_param_ = s->get_dist_func_param();
-    normalize_ = normalize;
     if (maxElements > 0) {
       data_ = std::make_unique<ChunkedArray>(
           sizeof(SavedVectorT) + sizeof(labeltype), k_elements_per_chunk,
@@ -53,11 +51,22 @@ class BruteforceSearch
   }
 
   ~BruteforceSearch() override { clear(); }
+  inline SavedVectorT *GetDataPtrByInternalId(size_t internal_id) const {
+    return reinterpret_cast<SavedVectorT *>((*data_)[internal_id]);
+  }
+  inline dist_t EvaluateDistance(const SavedVectorT &a,
+                                 const SavedVectorT &b) const {
+    float reciprocal_mag_product =
+        normalized_ ? a->GetReciprocalMagnitude() * b->GetReciprocalMagnitude()
+                    : 1.0f;
+    return fstdistfunc_(a->GetRawVector(), b->GetRawVector(), dist_func_param_,
+                        reciprocal_mag_product);
+  }
 
   void clear() {
     if (data_ != nullptr) {
       for (size_t i = 0; i < cur_element_count_; i++) {
-        std::destroy_at(reinterpret_cast<SavedVectorT *>((*data_)[i]));
+        std::destroy_at(GetDataPtrByInternalId(i));
       }
       data_->clear();
     }
@@ -72,7 +81,7 @@ class BruteforceSearch
     auto search = dict_external_to_internal.find(label);
     if (search != dict_external_to_internal.end()) {
       idx = search->second;
-      getPointByInternalId(idx) = datapoint;
+      *GetDataPtrByInternalId(idx) = datapoint;
     } else {
       if (cur_element_count_ >= data_->getCapacity()) {
         throw std::runtime_error(
@@ -81,23 +90,21 @@ class BruteforceSearch
       idx = cur_element_count_;
       dict_external_to_internal[label] = idx;
       cur_element_count_++;
-      SavedVectorT *stored_vector = &getPointByInternalId(idx);
+      SavedVectorT *stored_vector = GetDataPtrByInternalId(idx);
       new (stored_vector) SavedVectorT(datapoint);
     }
-    memcpy((*data_)[idx] + sizeof(SavedVectorT), &label, sizeof(labeltype));
+    memcpy(reinterpret_cast<char *>(GetDataPtrByInternalId(idx)) +
+               sizeof(SavedVectorT),
+           &label, sizeof(labeltype));
   }
 
-  inline SavedVectorT &getPointByInternalId(size_t internal_id) {
-    CHECK_LT(internal_id, cur_element_count_);
-    return *reinterpret_cast<SavedVectorT *>((*data_)[internal_id]);
-  }
-
-  inline SavedVectorT *getPointByExternalId(labeltype external_id) {
-    auto found = dict_external_to_internal.find(external_id);
+  SavedVectorT *getPoint(labeltype cur_external) {
+    std::unique_lock<std::mutex> lock(index_lock);
+    auto found = dict_external_to_internal.find(cur_external);
     if (found == dict_external_to_internal.end()) {
       return nullptr;
     }
-    return &(getPointByInternalId(found->second));
+    return GetDataPtrByInternalId(found->second);
   }
 
   void removePoint(labeltype cur_external) {
@@ -111,21 +118,25 @@ class BruteforceSearch
     size_t cur_c = found->second;
     dict_external_to_internal.erase(found);
     if (cur_element_count_ - 1 == cur_c) {
-      std::destroy_at(reinterpret_cast<SavedVectorT *>((*data_)[cur_c]));
+      std::destroy_at(GetDataPtrByInternalId(cur_c));
       cur_element_count_--;
       return;
     }
 
-    labeltype label = *(
-        (labeltype *)((*data_)[cur_element_count_ - 1] + sizeof(SavedVectorT)));
+    labeltype label =
+        *((labeltype *)(reinterpret_cast<const char *>(
+                            GetDataPtrByInternalId(cur_element_count_ - 1)) +
+                        sizeof(SavedVectorT)));
     dict_external_to_internal[label] = cur_c;
-    *reinterpret_cast<SavedVectorT *>((*data_)[cur_c]) = std::move(
-        *reinterpret_cast<SavedVectorT *>((*data_)[cur_element_count_ - 1]));
-    memcpy((*data_)[cur_c] + sizeof(SavedVectorT),
-           (*data_)[cur_element_count_ - 1] + sizeof(SavedVectorT),
+    *GetDataPtrByInternalId(cur_c) =
+        *GetDataPtrByInternalId(cur_element_count_ - 1);
+    memcpy(reinterpret_cast<char *>(GetDataPtrByInternalId(cur_c)) +
+               sizeof(SavedVectorT),
+           reinterpret_cast<const char *>(
+               GetDataPtrByInternalId(cur_element_count_ - 1)) +
+               sizeof(SavedVectorT),
            sizeof(labeltype));
-    std::destroy_at(
-        reinterpret_cast<SavedVectorT *>((*data_)[cur_element_count_ - 1]));
+    std::destroy_at(GetDataPtrByInternalId(cur_element_count_ - 1));
     cur_element_count_--;
   }
 
@@ -141,15 +152,11 @@ class BruteforceSearch
     size_t i = 0;
     for (; i < initial_count && (!isCancelled || !isCancelled->isCancelled());
          i++) {
-      const SavedVectorT &stored_vector =
-          *reinterpret_cast<const SavedVectorT *>((*data_)[i]);
-      dist_t dist =
-          fstdistfunc_(query_data->GetRawVector(),
-                       stored_vector->GetRawVector(), dist_func_param_,
-                       normalize_ ? query_data->GetReciprocalMagnitude() *
-                                        stored_vector->GetReciprocalMagnitude()
-                                  : 1.0f);
-      labeltype label = *((labeltype *)((*data_)[i] + sizeof(SavedVectorT)));
+      const SavedVectorT &stored_vector = *GetDataPtrByInternalId(i);
+      dist_t dist = EvaluateDistance(query_data, stored_vector);
+      labeltype label =
+          *((labeltype *)(reinterpret_cast<const char *>(&stored_vector) +
+                          sizeof(SavedVectorT)));
       if ((!isIdAllowed) || (*isIdAllowed)(label)) {
         topResults.emplace(dist, label);
       }
@@ -162,16 +169,12 @@ class BruteforceSearch
     for (; i < cur_element_count_ &&
            (!isCancelled || !isCancelled->isCancelled());
          i++) {
-      const SavedVectorT &stored_vector =
-          *reinterpret_cast<const SavedVectorT *>((*data_)[i]);
-      dist_t dist =
-          fstdistfunc_(query_data->GetRawVector(),
-                       stored_vector->GetRawVector(), dist_func_param_,
-                       normalize_ ? query_data->GetReciprocalMagnitude() *
-                                        stored_vector->GetReciprocalMagnitude()
-                                  : 1.0f);
+      const SavedVectorT *stored_vector = GetDataPtrByInternalId(i);
+      dist_t dist = EvaluateDistance(query_data, *stored_vector);
       if (topResults.size() < k || dist <= lastdist) {
-        labeltype label = *((labeltype *)((*data_)[i] + sizeof(SavedVectorT)));
+        labeltype label =
+            *((labeltype *)(reinterpret_cast<const char *>(stored_vector) +
+                            sizeof(SavedVectorT)));
         if ((!isIdAllowed) || (*isIdAllowed)(label)) {
           topResults.emplace(dist, label);
         }
@@ -191,7 +194,7 @@ class BruteforceSearch
 
   template <typename SavedVectorSerializer>
   absl::Status SaveIndex(OutputStream &output,
-                         SavedVectorSerializer serializer) {
+                         const SavedVectorSerializer &serializer) {
     data_model::BruteForceIndexHeader header;
     const size_t size_per_element = vector_size_ + sizeof(labeltype);
     header.set_max_elements(data_->getCapacity());
@@ -208,10 +211,12 @@ class BruteforceSearch
     std::vector<char> buf(size_per_element);
     for (int i = 0; i < cur_element_count_; i++) {
       const SavedVectorT &stored_vector =
-          *reinterpret_cast<const SavedVectorT *>((*data_)[i]);
-      std::vector<char> serialized_vector = serializer(stored_vector);
-      memcpy(buf.data(), serialized_vector.data(), vector_size_);
-      memcpy(buf.data() + vector_size_, (*data_)[i] + sizeof(SavedVectorT),
+          *reinterpret_cast<const SavedVectorT *>(GetDataPtrByInternalId(i));
+      auto ser_vec = serializer(stored_vector);
+      memcpy(buf.data(), ser_vec.data(), ser_vec.size());
+      memcpy(buf.data() + vector_size_,
+             reinterpret_cast<const char *>(GetDataPtrByInternalId(i)) +
+                 sizeof(SavedVectorT),
              sizeof(labeltype));
       VMSDK_RETURN_IF_ERROR(output.SaveChunk(buf.data(), size_per_element));
     }
@@ -219,17 +224,14 @@ class BruteforceSearch
   }
   template <typename SavedVectorGenerator>
   absl::Status LoadIndex(InputStream &input, SpaceInterface<dist_t> *s,
-                         SavedVectorGenerator generator) {
+                         const SavedVectorGenerator &generator) {
+    clear();
     VMSDK_ASSIGN_OR_RETURN(auto serialized_header, input.LoadChunk());
     auto header = std::make_unique<data_model::BruteForceIndexHeader>();
     if (!header->ParseFromString(*serialized_header)) {
       return absl::InternalError("Could not deserialize bruteforce header");
     }
     const size_t saved_element_count = header->curr_element_count();
-    if (saved_element_count > header->max_elements()) {
-      return absl::InvalidArgumentError(
-          "Persisted bruteforce element count exceeds max elements.");
-    }
 
     vector_size_ = s->get_data_size();
     fstdistfunc_ = s->get_dist_func();
@@ -248,15 +250,16 @@ class BruteforceSearch
       VMSDK_ASSIGN_OR_RETURN(auto chunk, input.LoadChunk());
       labeltype id;
       memcpy((char *)&id, chunk->data() + vector_size_, sizeof(labeltype));
-      SavedVectorT *stored_vector =
-          reinterpret_cast<SavedVectorT *>((*data_)[i]);
+      SavedVectorT *stored_vector = GetDataPtrByInternalId(i);
       new (stored_vector) SavedVectorT(
           generator(absl::string_view(chunk->data(), vector_size_)));
-      memcpy((*data_)[i] + sizeof(SavedVectorT), (char *)&id,
-             sizeof(labeltype));
+      memcpy(reinterpret_cast<char *>(GetDataPtrByInternalId(i)) +
+                 sizeof(SavedVectorT),
+             (char *)&id, sizeof(labeltype));
       dict_external_to_internal[id] = i;
       cur_element_count_++;
     }
+
     return absl::OkStatus();
   }
 

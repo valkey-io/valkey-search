@@ -174,6 +174,11 @@ std::vector<NodeInfo> ClusterMap::GetTargetsForSlot(FanoutTargetMode mode,
       } else {
         return {};
       }
+    case FanoutTargetMode::kOneReplicaPerShard:
+      if (!shard->replicas.empty()) {
+        return {shard->GetRandomNode(true, prefer_local)};
+      }
+      return {};
     case FanoutTargetMode::kRandom:
       return {shard->GetRandomNode(false, prefer_local)};
     default:

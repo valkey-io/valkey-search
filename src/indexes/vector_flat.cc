@@ -10,12 +10,10 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
-#include <cstring>
 #include <exception>
 #include <memory>
 #include <mutex>  // NOLINT(build/c++11)
 #include <string>
-#include <string_view>
 #include <type_traits>
 #include <utility>
 
@@ -32,7 +30,6 @@
 #include "src/metrics.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/cancel.h"
-#include "src/utils/string_interning.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -179,7 +176,7 @@ absl::Status VectorFlat<T>::ModifyRecordImpl(
   absl::ReaderMutexLock lock(&resize_mutex_);
   std::unique_lock<std::mutex> index_lock(algo_->index_lock);
   std::shared_ptr<VectorRecord> *stored_record =
-      algo_->getPointByExternalId(internal_id);
+      algo_->GetDataPtrByInternalId(internal_id);
   if (!stored_record) {
     return absl::InternalError(
         absl::StrCat("Couldn't find internal id: ", internal_id));
@@ -321,7 +318,7 @@ absl::Status VectorFlat<T>::SaveIndexImpl(
 template <typename T>
 std::shared_ptr<VectorRecord> &VectorFlat<T>::GetVectorLockFree(
     uint64_t internal_id) const {
-  return *algo_->getPointByExternalId(internal_id);
+  return *algo_->getPoint(internal_id);
 }
 
 template class VectorFlat<float>;

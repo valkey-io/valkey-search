@@ -40,12 +40,16 @@ endif()
 # for some reason, if we're using vendored dependencies, the
 # search order for gRPC and Protobuf need to be reversed
 
-if (VALKEY_VENDORED_DEPS)
+# grpc depends on protobuf (not the other way around), but some versions of gRPC
+# expect protobuf to already be installed, while some versions of protobuf complain
+# if gRPC is already found as a package. To solve this, we first search for gRPC.
+# if it's found then we assume protobuf is also found; otherwise we assume that
+# gRPC requires protobuf and we try that route instead.
+
+find_package(gRPC QUIET)
+if (NOT gRPC_FOUND)
     find_package(Protobuf REQUIRED)
     find_package(gRPC REQUIRED)
-else()
-    find_package(gRPC REQUIRED)
-    find_package(Protobuf REQUIRED)
 endif()
 
 find_package(absl REQUIRED)

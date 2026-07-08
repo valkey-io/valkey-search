@@ -45,10 +45,8 @@ class Value {
   explicit Value(std::string&& s) : value_(std::move(s)) {}
 
   // Array constructors
-  explicit Value(const Array& vec)
-      : value_(vec ? vec : std::make_shared<std::vector<Value>>()) {}
-  explicit Value(Array&& vec)
-      : value_(vec ? std::move(vec) : std::make_shared<std::vector<Value>>()) {}
+  explicit Value(const Array& vec) : value_(vec) {}
+  explicit Value(Array&& vec) : value_(std::move(vec)) {}
   explicit Value(std::initializer_list<Value> elements)
       : value_(std::make_shared<std::vector<Value>>(elements)) {}
   explicit Value(std::vector<Value>&& vec)

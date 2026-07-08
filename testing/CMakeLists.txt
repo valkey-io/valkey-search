@@ -70,22 +70,34 @@ target_link_libraries(commands_test PRIVATE commands)
 target_link_libraries(commands_test PRIVATE vmsdklib)
 finalize_test_flags(commands_test)
 
-# 1. Indexes Test Suite - consolidates index-related tests
-set(INDEXES_TEST_SOURCES
-    ${CMAKE_CURRENT_LIST_DIR}/index_schema_test.cc
+# 1. Indexes Test Suite - split into modular tests for faster execution
+add_executable(vector_index_test ${CMAKE_CURRENT_LIST_DIR}/vector_test.cc)
+target_include_directories(vector_index_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(vector_index_test PRIVATE testing_common_base)
+target_link_libraries(vector_index_test PRIVATE text)
+target_link_libraries(vector_index_test PRIVATE hnswlib_vmsdk)
+finalize_test_flags(vector_index_test)
+
+add_executable(index_schema_test ${CMAKE_CURRENT_LIST_DIR}/index_schema_test.cc)
+target_include_directories(index_schema_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(index_schema_test PRIVATE testing_common_base)
+target_link_libraries(index_schema_test PRIVATE text)
+target_link_libraries(index_schema_test PRIVATE hnswlib_vmsdk)
+finalize_test_flags(index_schema_test)
+
+set(SCALAR_INDEXES_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/lexer_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/numeric_index_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/posting_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/tag_index_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/text_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/vector_test.cc)
+    ${CMAKE_CURRENT_LIST_DIR}/text_test.cc)
 
-add_executable(indexes_test ${INDEXES_TEST_SOURCES})
-target_include_directories(indexes_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
-target_link_libraries(indexes_test PRIVATE testing_common_base)
-target_link_libraries(indexes_test PRIVATE text)
-target_link_libraries(indexes_test PRIVATE hnswlib_vmsdk)
-finalize_test_flags(indexes_test)
+add_executable(scalar_indexes_test ${SCALAR_INDEXES_TEST_SOURCES})
+target_include_directories(scalar_indexes_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(scalar_indexes_test PRIVATE testing_common_base)
+target_link_libraries(scalar_indexes_test PRIVATE text)
+target_link_libraries(scalar_indexes_test PRIVATE hnswlib_vmsdk)
+finalize_test_flags(scalar_indexes_test)
 
 # 1. Core Test Suite - consolidates core functionality tests
 set(CORE_TEST_SOURCES
@@ -109,20 +121,49 @@ target_link_libraries(core_test PRIVATE acl)
 target_link_libraries(core_test PRIVATE vmsdklib)
 finalize_test_flags(core_test)
 
-# 1. Query Test Suite - consolidates query and search related tests
-set(QUERY_TEST_SOURCES
-    ${CMAKE_CURRENT_LIST_DIR}/search_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/query/response_generator_test.cc)
+# 1. Query Test Suite - split into modular tests for faster execution
+add_executable(query_search_filter_test ${CMAKE_CURRENT_LIST_DIR}/search_test.cc)
+target_compile_definitions(query_search_filter_test PRIVATE TEST_SUITE_FILTER)
+target_include_directories(query_search_filter_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_include_directories(query_search_filter_test PUBLIC ${CMAKE_CURRENT_LIST_DIR}/query)
+target_link_libraries(query_search_filter_test PRIVATE testing_common_base)
+target_link_libraries(query_search_filter_test PRIVATE testing_common_coordinator)
+target_link_libraries(query_search_filter_test PRIVATE fanout)
+target_link_libraries(query_search_filter_test PRIVATE response_generator)
+target_link_libraries(query_search_filter_test PRIVATE search_converter)
+finalize_test_flags(query_search_filter_test)
 
-add_executable(query_test ${QUERY_TEST_SOURCES})
-target_include_directories(query_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
-target_include_directories(query_test PUBLIC ${CMAKE_CURRENT_LIST_DIR}/query)
-target_link_libraries(query_test PRIVATE testing_common_base)
-target_link_libraries(query_test PRIVATE testing_common_coordinator)
-target_link_libraries(query_test PRIVATE fanout)
-target_link_libraries(query_test PRIVATE response_generator)
-target_link_libraries(query_test PRIVATE search_converter)
-finalize_test_flags(query_test)
+add_executable(query_search_local_test ${CMAKE_CURRENT_LIST_DIR}/search_test.cc)
+target_compile_definitions(query_search_local_test PRIVATE TEST_SUITE_LOCAL)
+target_include_directories(query_search_local_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_include_directories(query_search_local_test PUBLIC ${CMAKE_CURRENT_LIST_DIR}/query)
+target_link_libraries(query_search_local_test PRIVATE testing_common_base)
+target_link_libraries(query_search_local_test PRIVATE testing_common_coordinator)
+target_link_libraries(query_search_local_test PRIVATE fanout)
+target_link_libraries(query_search_local_test PRIVATE response_generator)
+target_link_libraries(query_search_local_test PRIVATE search_converter)
+finalize_test_flags(query_search_local_test)
+
+add_executable(query_search_content_test ${CMAKE_CURRENT_LIST_DIR}/search_test.cc)
+target_compile_definitions(query_search_content_test PRIVATE TEST_SUITE_CONTENT)
+target_include_directories(query_search_content_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_include_directories(query_search_content_test PUBLIC ${CMAKE_CURRENT_LIST_DIR}/query)
+target_link_libraries(query_search_content_test PRIVATE testing_common_base)
+target_link_libraries(query_search_content_test PRIVATE testing_common_coordinator)
+target_link_libraries(query_search_content_test PRIVATE fanout)
+target_link_libraries(query_search_content_test PRIVATE response_generator)
+target_link_libraries(query_search_content_test PRIVATE search_converter)
+finalize_test_flags(query_search_content_test)
+
+add_executable(query_response_test ${CMAKE_CURRENT_LIST_DIR}/query/response_generator_test.cc)
+target_include_directories(query_response_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_include_directories(query_response_test PUBLIC ${CMAKE_CURRENT_LIST_DIR}/query)
+target_link_libraries(query_response_test PRIVATE testing_common_base)
+target_link_libraries(query_response_test PRIVATE testing_common_coordinator)
+target_link_libraries(query_response_test PRIVATE fanout)
+target_link_libraries(query_response_test PRIVATE response_generator)
+target_link_libraries(query_response_test PRIVATE search_converter)
+finalize_test_flags(query_response_test)
 
 # 1. Coordinator Test Suite - consolidates coordinator related tests
 set(COORDINATOR_TEST_SOURCES

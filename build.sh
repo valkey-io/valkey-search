@@ -465,16 +465,36 @@ fi
 
 if [[ "${RUN_TEST}" == "all" ]]; then
     rm -f "${TEST_OUTPUT_FILE}"
-    CURRENT_TEST_OUTPUT_FILE="${BUILD_DIR}/current_test.out"
+    pids=()
+    test_files=()
     while read -r test; do
+        test_files+=("${test}")
+        test_name=$(basename "${test}")
+        out_file="${BUILD_DIR}/${test_name}.out"
+        rm -f "${out_file}"
+        "${test}" --gtest_brief=1 > "${out_file}" 2>&1 &
+        pids+=($!)
+    done < <(find "${TESTS_DIR}" -name "*_test" -type f | sort)
+
+    for i in "${!test_files[@]}"; do
+        test="${test_files[$i]}"
+        pid="${pids[$i]}"
+        test_name=$(basename "${test}")
+        out_file="${BUILD_DIR}/${test_name}.out"
         echo "==> Running executable: ${test}" >> "${TEST_OUTPUT_FILE}"
         echo "" >> "${TEST_OUTPUT_FILE}"
-        # Write each test's output to a per-test file so on failure we only dump the relevant output
-        rm -f "${CURRENT_TEST_OUTPUT_FILE}"
         print_test_prefix "${test}"
-        ("${test}" --gtest_brief=1 > "${CURRENT_TEST_OUTPUT_FILE}" 2>&1 && cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}" && print_test_ok) || { cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}"; print_test_error_and_exit; }
-    done < <(find "${TESTS_DIR}" -name "*_test" -type f)
-    rm -f "${CURRENT_TEST_OUTPUT_FILE}"
+        if wait "${pid}"; then
+            cat "${out_file}" >> "${TEST_OUTPUT_FILE}"
+            print_test_ok
+        else
+            cat "${out_file}" >> "${TEST_OUTPUT_FILE}"
+            cat "${out_file}"
+            rm -f "${out_file}"
+            print_test_error_and_exit
+        fi
+        rm -f "${out_file}"
+    done
     print_test_summary
 elif [ ! -z "${RUN_TEST}" ]; then
     rm -f "${TEST_OUTPUT_FILE}"

@@ -154,6 +154,7 @@ struct EvaluateFilterAsPrimaryTestCase {
   std::string expected_tree_structure;
 };
 
+#if !defined(TEST_SUITE_LOCAL) && !defined(TEST_SUITE_CONTENT)
 class EvaluateFilterAsPrimaryTest
     : public ValkeySearchTestWithParam<EvaluateFilterAsPrimaryTestCase> {};
 
@@ -547,6 +548,9 @@ struct LocalSearchTestCase {
   bool is_vector_search_query = true;
 };
 
+#endif  // !defined(TEST_SUITE_LOCAL) && !defined(TEST_SUITE_CONTENT)
+
+#if !defined(TEST_SUITE_FILTER) && !defined(TEST_SUITE_CONTENT)
 class LocalSearchTest
     : public ValkeySearchTestWithParam<
           std::tuple<data_model::DistanceMetric, LocalSearchTestCase>> {};
@@ -681,6 +685,9 @@ struct FetchFilteredKeysTestCase {
   std::unordered_set<std::string> expected_keys;
 };
 
+#endif  // !defined(TEST_SUITE_FILTER) && !defined(TEST_SUITE_CONTENT)
+
+#if !defined(TEST_SUITE_LOCAL) && !defined(TEST_SUITE_CONTENT)
 class FetchFilteredKeysTest
     : public ValkeySearchTestWithParam<FetchFilteredKeysTestCase> {};
 
@@ -755,6 +762,9 @@ struct SearchTestCase {
   std::unordered_set<std::string> expected_keys;
 };
 
+#endif  // !defined(TEST_SUITE_LOCAL) && !defined(TEST_SUITE_CONTENT)
+
+#if !defined(TEST_SUITE_FILTER) && !defined(TEST_SUITE_CONTENT)
 class SearchTest : public ValkeySearchTestWithParam<
                        std::tuple<IndexerType, SearchTestCase>> {};
 
@@ -975,6 +985,9 @@ struct IndexedContentTestCase {
   absl::StatusOr<std::vector<TestNeighbor>> expected_output;
 };
 
+#endif  // !defined(TEST_SUITE_FILTER) && !defined(TEST_SUITE_CONTENT)
+
+#if !defined(TEST_SUITE_FILTER) && !defined(TEST_SUITE_LOCAL)
 class IndexedContentTest
     : public ValkeySearchTestWithParam<
           std::tuple<data_model::DistanceMetric, IndexedContentTestCase>> {};
@@ -1378,5 +1391,6 @@ INSTANTIATE_TEST_SUITE_P(
           absl::StrCat(distance_metric, "_", std::get<1>(info.param).test_name);
       return test_name;
     });
+#endif  // !defined(TEST_SUITE_FILTER) && !defined(TEST_SUITE_LOCAL)
 }  // namespace
 }  // namespace valkey_search

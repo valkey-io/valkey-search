@@ -851,7 +851,7 @@ TEST_F(VectorIndexTest, LoadRecomputesAlignedOffsetForOldSnapshot) {
   header.set_max_m(kM);
   header.set_max_m_0(kM * 2);
   header.set_m(kM);
-  header.set_mult(1.0);
+  header.set_mult(1.0 / std::log(kM));
   header.set_ef_construction(kEFConstruction);
   std::string serialized;
   ASSERT_TRUE(header.SerializeToString(&serialized));

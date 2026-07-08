@@ -938,10 +938,29 @@ class HierarchicalNSW
     mult_ = header->mult();
     ef_construction_ = header->ef_construction();
 
-    size_t max_elements = max_elements_i;
-    if (max_elements < curr_element_count_val) {
-      max_elements = max_elements_;
-    }
+    // Authoritative parameters come from the index definition (the space and
+    // expected_m), never from the untrusted header.
+    vector_size_ = s->get_data_size();
+    fstdistfunc_ = s->get_dist_func();
+    dist_func_param_ = s->get_dist_func_param();
+
+    // Recompute the geometry that governs memory layout. When validation is
+    // enabled these are cross-checked against the header below; the header's
+    // own copies are only ever used as values to validate against.
+    size_links_level0_ = maxM0_ * sizeof(tableint) + sizeof(linklistsizeint);
+    offsetData_ = (size_links_level0_ + alignof(SavedVectorT) - 1) &
+                  ~(alignof(SavedVectorT) - 1);
+    size_data_per_element_ =
+        offsetData_ + sizeof(SavedVectorT) + sizeof(labeltype);
+    label_offset_ = offsetData_ + sizeof(SavedVectorT);
+    size_links_per_element_ =
+        maxM_ * sizeof(tableint) + sizeof(linklistsizeint);
+
+    // Resolve capacity: at least the live element count, honoring the larger of
+    // the caller-requested cap and the file's recorded capacity.
+    size_t cur_count = cur_element_count_;
+    size_t max_elements =
+        std::max(cur_count, std::max(max_elements_i, max_elements_));
     max_elements_ = max_elements;
 
     // --- Header validation (the kill switch lives inside LoadCheck) ---
@@ -964,16 +983,16 @@ class HierarchicalNSW
                       std::fabs(mult_ - expected_mult) <= 1e-6 * expected_mult,
                   "mult is inconsistent with M");
       }
-      LoadCheck(cur_element_count_ <= max_elements_,
+      LoadCheck(curr_element_count_val <= max_elements_,
                 "curr_element_count exceeds max_elements");
-      if (cur_element_count_ == 0) {
+      if (curr_element_count_val == 0) {
         LoadCheck(maxlevel_ == -1 || maxlevel_ == 0,
                   "empty index has a non-trivial max_level");
       } else {
         LoadCheck(maxlevel_ >= 0, "non-empty index has a negative max_level");
-        LoadCheck(maxlevel_ <= static_cast<int>(cur_element_count_),
+        LoadCheck(maxlevel_ <= static_cast<int>(curr_element_count_val),
                   "max_level exceeds the element count");
-        LoadCheck(enterpoint_node_ < cur_element_count_,
+        LoadCheck(enterpoint_node_ < curr_element_count_val,
                   "enterpoint_node is out of range");
       }
       LoadCheck(size_data_per_element_ > 0, "size_data_per_element is 0");
@@ -984,15 +1003,6 @@ class HierarchicalNSW
       LoadCheck(max_elements_ <= SIZE_MAX / sizeof(int),
                 "element_levels allocation size overflows");
     }
-
-    size_links_level0_ = maxM0_ * sizeof(tableint) + sizeof(linklistsizeint);
-    offsetData_ = (size_links_level0_ + alignof(SavedVectorT) - 1) &
-                  ~(alignof(SavedVectorT) - 1);
-
-    vector_size_ = s->get_data_size();
-    size_data_per_element_ =
-        offsetData_ + sizeof(SavedVectorT) + sizeof(labeltype);
-    label_offset_ = offsetData_ + sizeof(SavedVectorT);
 
     fstdistfunc_ = s->get_dist_func();
     dist_func_param_ = s->get_dist_func_param();

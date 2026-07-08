@@ -158,6 +158,12 @@ static auto hnsw_allow_replace_deleted =
         .Dev()
         .Build();
 
+constexpr absl::string_view kHNSWValidationEnable{"hnsw-validation-enable"};
+static auto hnsw_validation_enable =
+    config::BooleanBuilder(kHNSWValidationEnable, true)  // default true
+        .Dev()
+        .Build();
+
 // Register an enumerator for the log level
 static const std::vector<std::string_view> kLogLevelNames = {
     VALKEYMODULE_LOGLEVEL_WARNING,
@@ -563,6 +569,14 @@ const config::Boolean &GetHNSWAllowReplaceDeleted() {
 
 config::Boolean &GetHNSWAllowReplaceDeletedMutable() {
   return dynamic_cast<config::Boolean &>(*hnsw_allow_replace_deleted);
+}
+
+const config::Boolean &GetHNSWValidationEnable() {
+  return dynamic_cast<const config::Boolean &>(*hnsw_validation_enable);
+}
+
+config::Boolean &GetHNSWValidationEnableMutable() {
+  return dynamic_cast<config::Boolean &>(*hnsw_validation_enable);
 }
 
 absl::Status Reset() {

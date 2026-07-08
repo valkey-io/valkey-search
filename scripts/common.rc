@@ -194,16 +194,21 @@ function setup_valkey_server() {
     VALKEY_CMAKE_EXTRA_ARGS="-DBUILD_SANITIZER=${SAN_BUILD}"
     LOG_INFO "Building Valkey with Sanitizer options: -DBUILD_SANITIZER=${SAN_BUILD}"
 
-    # Make libstdc++ a direct dependency of valkey-server on sanitizer builds.
-    # libasan intercepts C++ __cxa_throw and at startup looks up the real one
-    # in libstdc++. If libstdc++ isn't loaded yet at that point, it caches
-    # nullptr and every later `throw` triggers a fatal libasan CHECK. Loading
-    # libstdc++ from valkey-server's own NEEDED list guarantees it's there
-    # early enough for the lookup to succeed. --no-as-needed keeps it linked
-    # despite Valkey's C sources not referencing any C++ symbols; push/pop
-    # scopes that override to just -lstdc++.
-    export LDFLAGS="${LDFLAGS} -Wl,--push-state,--no-as-needed,-lstdc++,--pop-state"
-    LOG_INFO "Forcing libstdc++ into valkey-server DT_NEEDED for reliable ASAN __cxa_throw interception (LDFLAGS: ${LDFLAGS})"
+    # On Linux, make libstdc++ a direct dependency of valkey-server for
+    # sanitizer builds. libasan intercepts C++ __cxa_throw and at startup
+    # looks up the real one in libstdc++. If libstdc++ isn't loaded yet at
+    # that point, it caches nullptr and every later `throw` triggers a
+    # fatal libasan CHECK. Loading libstdc++ from valkey-server's own
+    # NEEDED list guarantees it's there early enough for the lookup to
+    # succeed. --no-as-needed keeps it linked despite Valkey's C sources
+    # not referencing any C++ symbols; push/pop scopes that override to
+    # just -lstdc++. These are GNU ld / ELF-specific flags, and macOS
+    # sanitizer builds use libc++ instead of libstdc++, so this only
+    # applies to Linux.
+    if [[ "${UNAME_S}" == "Linux" ]]; then
+      export LDFLAGS="${LDFLAGS} -Wl,--push-state,--no-as-needed,-lstdc++,--pop-state"
+      LOG_INFO "Forcing libstdc++ into valkey-server DT_NEEDED for reliable ASAN __cxa_throw interception (LDFLAGS: ${LDFLAGS})"
+    fi
 
     # Temporary workaround until these are merged into core upstream:
     # 1. IFUNC resolvers run before TSAN runtime initializes, so no_sanitize("thread") is required.

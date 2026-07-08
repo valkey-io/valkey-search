@@ -836,7 +836,7 @@ SIMSIMD_PUBLIC void simsimd_dot_f16_haswell(simsimd_f16_t const* a, simsimd_f16_
     *result = f32_result;
 }
 
-inline simsimd_f64_t _mm256_reduce_add_ps_dbl(__m256 vec) {
+static inline simsimd_f64_t _mm256_reduce_add_ps_dbl(__m256 vec) {
     // Convert the lower and higher 128-bit lanes of the input vector to double precision
     __m128 low_f32 = _mm256_castps256_ps128(vec);
     __m128 high_f32 = _mm256_extractf128_ps(vec, 1);

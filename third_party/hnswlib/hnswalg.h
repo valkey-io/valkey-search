@@ -870,23 +870,10 @@ class HierarchicalNSW
       return absl::OkStatus();
     }
 
-  inline void LoadCheck(bool ok, absl::string_view msg) const {
-    if (ok) {
-      return;
-    }
-    if (load_validation_enabled_) {
-      throw std::runtime_error(
-          absl::StrCat("HNSW index load validation failed: ", msg));
-    }
-  }
-
-  template <typename SavedVectorGenerator>
-
     // Resize internal data structures to match the true max elements so
     // that the saved index is self-consistent.
     data_level0_memory_->resize(max_elements_);
     linkLists_->resize(max_elements_);
-
     std::vector<char> buf(serialize_size_data_per_element_);
     for (int i = 0; i < cur_element_count_; i++) {
       memcpy(buf.data(), (*data_level0_memory_)[i], size_links_level0_);
@@ -913,6 +900,16 @@ class HierarchicalNSW
       }
     }
     return absl::OkStatus();
+  }
+
+  inline void LoadCheck(bool ok, absl::string_view msg) const {
+    if (ok) {
+      return;
+    }
+    if (load_validation_enabled_) {
+      throw std::runtime_error(
+          absl::StrCat("HNSW index load validation failed: ", msg));
+    }
   }
 
   template <typename SavedVectorGenerator>

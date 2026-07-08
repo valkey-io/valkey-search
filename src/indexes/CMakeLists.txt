@@ -114,8 +114,20 @@ set(SRCS_TEXT ${CMAKE_CURRENT_LIST_DIR}/text/text_index.h
               ${CMAKE_CURRENT_LIST_DIR}/text/term.h
               ${CMAKE_CURRENT_LIST_DIR}/text/language_processor.cc
               ${CMAKE_CURRENT_LIST_DIR}/text/language_processor.h
+              ${CMAKE_CURRENT_LIST_DIR}/text/segmenter.h
+              ${CMAKE_CURRENT_LIST_DIR}/text/token_filter.h
+              ${CMAKE_CURRENT_LIST_DIR}/text/normalizer.h
+              ${CMAKE_CURRENT_LIST_DIR}/text/stemmer.h
               ${CMAKE_CURRENT_LIST_DIR}/text/snowball_processor.cc
               ${CMAKE_CURRENT_LIST_DIR}/text/snowball_processor.h
+              ${CMAKE_CURRENT_LIST_DIR}/text/punctuation_segmenter.cc
+              ${CMAKE_CURRENT_LIST_DIR}/text/punctuation_segmenter.h
+              ${CMAKE_CURRENT_LIST_DIR}/text/normalize_case_fold_filter.cc
+              ${CMAKE_CURRENT_LIST_DIR}/text/normalize_case_fold_filter.h
+              ${CMAKE_CURRENT_LIST_DIR}/text/stop_word_filter.cc
+              ${CMAKE_CURRENT_LIST_DIR}/text/stop_word_filter.h
+              ${CMAKE_CURRENT_LIST_DIR}/text/snowball_stem_filter.cc
+              ${CMAKE_CURRENT_LIST_DIR}/text/snowball_stem_filter.h
               ${CMAKE_CURRENT_LIST_DIR}/text/unicode_normalizer.cc
               ${CMAKE_CURRENT_LIST_DIR}/text/unicode_normalizer.h
               ${CMAKE_CURRENT_LIST_DIR}/text/fuzzy.h

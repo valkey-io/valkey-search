@@ -147,8 +147,7 @@ absl::Status IndexSchema::TextInfoCmd(ValkeyModuleCtx* ctx,
     std::string text;
     VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, text));
     const auto& processor = index_schema->GetTextIndexSchema()->GetProcessor();
-    VMSDK_ASSIGN_OR_RETURN(auto result,
-                           processor->Tokenize(text, false, 0, nullptr));
+    VMSDK_ASSIGN_OR_RETURN(auto result, processor->Process(text));
     ValkeyModule_ReplyWithArray(ctx, result.size());
     for (auto& token : result) {
       ValkeyModule_ReplyWithStringBuffer(ctx, token.data(), token.size());

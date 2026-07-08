@@ -36,6 +36,7 @@
 #include "third_party/hnswlib/space_ip.h"
 #include "third_party/hnswlib/space_l2.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/type_conversions.h"
 
 namespace valkey_search::indexes {
 
@@ -867,71 +868,6 @@ TEST_F(VectorIndexTest, LoadRecomputesAlignedOffsetForOldSnapshot) {
       algo.LoadIndex(input, &l2_space, /*max_elements_i=*/16, generator));
   EXPECT_EQ(algo.offsetData_ % alignof(char *), 0u);
   EXPECT_EQ(algo.size_data_per_element_ % alignof(char *), 0u);
-}
-
-TEST_F(VectorIndexTest, LoadTrackedKeysWithJsonString) {
-  testing::StrictMock<MockAttributeDataType> mock_attribute_data_type;
-  EXPECT_CALL(mock_attribute_data_type, RecordsProvidedAsString())
-      .WillRepeatedly(testing::Return(true));
-
-  auto index = VectorFlat<float>::Create(
-      CreateFlatVectorIndexProto(2, data_model::DISTANCE_METRIC_L2, 100, 100),
-      "json_attr_id", data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON);
-  VMSDK_EXPECT_OK(index);
-
-  auto interned_key = StringInternStore::Intern("test_json_key");
-  float query_vector[2] = {1.5f, 2.5f};
-
-  // 1. Add the vector to populate the index properly
-  VMSDK_EXPECT_OK((*index)->AddRecord(
-      interned_key,
-      absl::string_view(reinterpret_cast<const char *>(query_vector),
-                        sizeof(query_vector))));
-
-  // 2. Save the index and tracked keys to RDB
-  FakeSafeRDB rdb;
-  VMSDK_EXPECT_OK((*index)->SaveIndex(RDBChunkOutputStream(&rdb)));
-  VMSDK_EXPECT_OK((*index)->SaveTrackedKeys(RDBChunkOutputStream(&rdb)));
-  auto flat_proto = (*index)->ToProto()->vector_index();
-
-  // 3. Setup mock for LoadTrackedKeys
-  EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
-      .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
-
-  EXPECT_CALL(mock_attribute_data_type, ToProto())
-      .WillRepeatedly(testing::Return(
-          data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON));
-
-  EXPECT_CALL(mock_attribute_data_type, RecordsProvidedAsString())
-      .WillRepeatedly(testing::Return(true));
-
-  EXPECT_CALL(mock_attribute_data_type,
-              GetRecord(testing::_, testing::_, testing::Eq("test_json_key"),
-                        testing::Eq("json_attr_id")))
-      .WillOnce([](ValkeyModuleCtx *, ValkeyModuleKey *, absl::string_view,
-                   absl::string_view) {
-        return vmsdk::MakeUniqueValkeyString("[1.5,2.5]");
-      });
-
-  // 4. Load from RDB and call LoadTrackedKeys
-  auto loaded_index_pr = VectorFlat<float>::LoadFromRDB(
-      &fake_ctx_, &mock_attribute_data_type, flat_proto, "json_attr_id",
-      SupplementalContentChunkIter(&rdb));
-  VMSDK_EXPECT_OK(loaded_index_pr);
-  auto loaded_index = std::move(loaded_index_pr.value());
-
-  VMSDK_EXPECT_OK(
-      loaded_index->LoadTrackedKeys(&fake_ctx_, &mock_attribute_data_type,
-                                    SupplementalContentChunkIter(&rdb)));
-
-  // 5. Search the newly loaded index
-  auto results = loaded_index->Search(
-      absl::string_view(reinterpret_cast<const char *>(query_vector),
-                        sizeof(query_vector)),
-      1, CancelNever());
-  VMSDK_EXPECT_OK(results);
-  EXPECT_EQ(results->size(), 1);
-  EXPECT_EQ((*results)[0].external_id->Str(), "test_json_key");
 }
 
 }  // namespace

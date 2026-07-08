@@ -914,12 +914,13 @@ class HierarchicalNSW
 
     for (size_t i = 0; i < curr_element_count_val; i++) {
       VMSDK_ASSIGN_OR_RETURN(auto chunk, input.LoadChunk());
-      memcpy((*data_level0_memory_)[i], chunk->data(), size_links_level0_);
+      std::string tmp_chunk = *chunk;
+      memcpy((*data_level0_memory_)[i], tmp_chunk.data(), size_links_level0_);
       labeltype id;
-      memcpy((char *)&id, chunk->data() + size_links_level0_ + vector_size_,
+      memcpy((char *)&id, tmp_chunk.data() + size_links_level0_ + vector_size_,
              sizeof(labeltype));
       new (getDataPtrByInternalId(i)) SavedVectorT(generator(
-          absl::string_view(chunk->data() + size_links_level0_, vector_size_),
+          absl::string_view(tmp_chunk.data() + size_links_level0_, vector_size_),
           isMarkedDeleted(i)));
       memcpy((*data_level0_memory_)[i] + label_offset_, (char *)&id,
              sizeof(labeltype));

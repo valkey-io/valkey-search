@@ -212,8 +212,8 @@ class BruteforceSearch
     for (int i = 0; i < cur_element_count_; i++) {
       const SavedVectorT &stored_vector =
           *reinterpret_cast<const SavedVectorT *>(GetDataPtrByInternalId(i));
-      auto ser_vec = serializer(stored_vector);
-      memcpy(buf.data(), ser_vec.data(), ser_vec.size());
+      auto serialized_vec = serializer(stored_vector);
+      memcpy(buf.data(), serialized_vec.data(), serialized_vec.size());
       memcpy(buf.data() + vector_size_,
              reinterpret_cast<const char *>(GetDataPtrByInternalId(i)) +
                  sizeof(SavedVectorT),

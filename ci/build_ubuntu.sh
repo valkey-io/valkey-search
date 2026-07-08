@@ -41,6 +41,11 @@ do
         shift || true
         echo "Unit Test Output Directory: ${UNITTEST_OUTPUT}"
         ;;
+    --skip-prepare-env)
+        SKIP_PREPARE_ENV="1"
+        BUILD_SH_ARGS="${BUILD_SH_ARGS/--skip-prepare-env/}"
+        shift || true
+        ;;
     *)
         shift || true
         ;;
@@ -150,17 +155,23 @@ function build_and_run_tests() {
     local CMAKE_DIR=${DEPS_DIR}/lib/cmake
     # Let CMake find <Package>-config.cmake files by updating the CMAKE_PREFIX_PATH variable
     export CMAKE_PREFIX_PATH=${CMAKE_DIR}/protobuf:${CMAKE_DIR}/absl:${CMAKE_DIR}/grpc:${CMAKE_DIR}/GTest:${CMAKE_DIR}/utf8_range:${DEPS_DIR}
-    # enable core dumps
-    echo Enabling core dumps
-    ulimit -c unlimited
-    echo 'core.%p' | sudo tee /proc/sys/kernel/core_pattern || true
+    # enable core dumps if building and sudo is available without password
+    if [[ "${BUILD_SH_ARGS}" != *"--no-build"* ]] && sudo -n true 2>/dev/null; then
+        echo Enabling core dumps
+        ulimit -c unlimited || true
+        echo 'core.%p' | sudo -n tee /proc/sys/kernel/core_pattern || true
+    fi
 
     # Skip building C++ test binaries for integration tests (they only need libsearch.so)
     if [[ "${BUILD_SH_ARGS}" == *"--run-integration-tests"* ]] && [[ "${BUILD_SH_ARGS}" != *"--run-tests"* ]]; then
         export CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DBUILD_UNIT_TESTS=OFF"
     fi
 
-    (cd ${ROOT_DIR} && ./build.sh --use-system-modules --test-errors-stdout ${BUILD_SH_ARGS})
+    local system_modules_flag="--use-system-modules"
+    if ! command -v grpc_cpp_plugin >/dev/null 2>&1 && [ ! -f "${DEPS_DIR}/bin/grpc_cpp_plugin" ]; then
+        system_modules_flag=""
+    fi
+    (cd ${ROOT_DIR} && ./build.sh ${system_modules_flag} --test-errors-stdout ${BUILD_SH_ARGS})
 }
 
 # Write a success or error message on exit
@@ -168,6 +179,8 @@ trap cleanup EXIT
 
 cd ${CI_DIR}
 
-prepare_env
+if [[ -z "${SKIP_PREPARE_ENV}" ]]; then
+    prepare_env
+fi
 build_and_run_tests
 

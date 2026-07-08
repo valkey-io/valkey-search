@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "absl/base/optimization.h"
+#include "absl/cleanup/cleanup.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
@@ -534,20 +535,21 @@ bool AddAttributeData(IndexSchema::MutatedAttributes &mutated_attributes,
                       const Attribute &attribute,
                       const AttributeDataType &attribute_data_type,
                       vmsdk::UniqueValkeyString record) {
-  if (!record) {
+  if (record) {
+    if (attribute_data_type.RecordsProvidedAsString()) {
+      auto normalized_record =
+          attribute.GetIndex()->NormalizeStringRecord(std::move(record));
+      if (!normalized_record) {
+        return false;
+      }
+      mutated_attributes[attribute.GetAlias()].data =
+          std::move(normalized_record);
+    } else {
+      mutated_attributes[attribute.GetAlias()].data = std::move(record);
+    }
+  } else {
     mutated_attributes[attribute.GetAlias()].data = nullptr;
-    return true;
   }
-  if (!attribute_data_type.RecordsProvidedAsString()) {
-    mutated_attributes[attribute.GetAlias()].data = std::move(record);
-    return true;
-  }
-  auto normalized_record =
-      attribute.GetIndex()->NormalizeStringRecord(std::move(record));
-  if (!normalized_record) {
-    return false;
-  }
-  mutated_attributes[attribute.GetAlias()].data = std::move(normalized_record);
   return true;
 }
 
@@ -579,7 +581,6 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
         attribute_data_type_
             ->GetRecord(ctx, key_obj.get(), key_cstr, attribute.GetIdentifier())
             .value_or(vmsdk::UniqueValkeyString());
-
     if (AddAttributeData(mutated_attributes, attribute, *attribute_data_type_,
                          std::move(record))) {
       added = true;
@@ -629,7 +630,8 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
 
 void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
                                       MutatedAttributes &mutated_attributes,
-                                      const Key &key) {
+                                      const Key &key)
+    ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
   if (text_index_schema_) {
     // Always clean up indexed words from all text attributes of the key up
     // front
@@ -956,6 +958,7 @@ void IndexSchema::BackfillScanCallback(ValkeyModuleCtx *ctx,
 }
 
 CONTROLLED_BOOLEAN(StopBackfill, false);
+CONTROLLED_BOOLEAN(ForceRDBLoadFailure, false);
 
 uint32_t IndexSchema::PerformBackfill(ValkeyModuleCtx *ctx,
                                       uint32_t batch_size) {
@@ -1539,6 +1542,11 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
     Metrics::GetStats().rdb_restore_current_index_keys_loaded = i + 1;
   }
 
+  if (ForceRDBLoadFailure.GetValue()) {
+    return absl::InternalError(
+        "Simulated IO error during RDB load (ForceRDBLoadFailure)");
+  }
+
   if (Metrics::GetStats().rdb_restore_backpressure_wait_cycles > 0) {
     VMSDK_LOG(NOTICE, ctx)
         << "RDB restore completed with backpressure. Total wait cycles: "
@@ -1616,6 +1624,12 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
       auto index_schema,
       IndexSchema::Create(ctx, *index_schema_proto, mutations_thread_pool,
                           !load_attributes_on_create, true));
+
+  // If we exit early after creating a new schema, workers may already hold
+  // strong references via ValkeyModule_Yield. Ensure MarkAsDestructing is
+  // called so the destructor won't attempt main-thread-only cleanup.
+  auto mark_destructing_on_error =
+      absl::MakeCleanup([&]() { index_schema->MarkAsDestructing(); });
 
   // Supplemental content will include indices and any content for them
   while (supplemental_iter.HasNext()) {
@@ -1696,6 +1710,8 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
   }
   VMSDK_LOG(NOTICE, ctx) << "Loaded index schema with "
                          << index_schema->GetAttributeCount() << " attributes";
+  std::move(mark_destructing_on_error)
+      .Cancel();  // Don't mark for destruction since no error has been returned
   return index_schema;
 }
 
@@ -1850,6 +1866,14 @@ bool IndexSchema::InTrackedMutationRecords(
   if (ABSL_PREDICT_FALSE(itr == tracked_mutated_records_.end())) {
     return false;
   }
+  // ConsumeTrackedMutatedAttribute moves the attribute map out and sets
+  // attributes = std::nullopt, leaving the entry in the map. After that
+  // sequence, attributes is disengaged and `attributes->find(...)` would
+  // dereference an empty optional (UB; observed crashing under ASAN in the
+  // backfill scan path). No pending mutation == false.
+  if (!itr->second.attributes.has_value()) {
+    return false;
+  }
   if (itr->second.attributes->find(identifier) ==
       itr->second.attributes->end()) {
     return false;
@@ -1994,12 +2018,11 @@ IndexSchema::ConsumeTrackedMutatedAttribute(const Key &key, bool first_time) {
       return mutated_attributes;
     }
   }
-  if (!queries_to_notify.empty()) {
+  // Reschedule waiting queries outside the lock via ResolveContent
+  for (auto &params : queries_to_notify) {
     vmsdk::RunByMain(
-        [queries = std::move(queries_to_notify)]() mutable {
-          for (auto &params : queries) {
-            query::ResolveContent(std::move(params));
-          }
+        [p = std::move(params)]() mutable {
+          query::ResolveContent(std::move(p));
         },
         /*force_async=*/true);
   }

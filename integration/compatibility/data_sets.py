@@ -496,11 +496,12 @@ def compute_data_sets():
                     for z in vector_points
                 ]
 
-    # Tag special characters data set. Comma separator so } and | are literal.
-    # Avoid '-' etc. (RediSearch query operators) or the reference engine errors.
-    # Multi-byte values (café, 中文, 😀) check UTF-8 / \uXXXX handling.
+    # Tag special characters data set. Comma separator so } and | are literal;
+    # avoid '-' etc. (query operators) or the reference engine rejects the query.
     tag_special_base_tags = ["a}b", "a|b", "normal", "x}y}z",
-                             "café", "中文", "😀"]
+                             "café", "中文", "😀", "a\\b"]
+    # Backslash-escaped values, kept out of the comma-separated pairwise combos.
+    tag_escape_only_tags = ['a"b', "a\tb", "a\nb"]
     for key_type in ["hash", "json"]:
         # Comma separator (non-default)
         if key_type == "hash":
@@ -519,6 +520,10 @@ def compute_data_sets():
         # Multi-tag combinations (all pairs)
         for t1, t2 in itertools.combinations(tag_special_base_tags, 2):
             docs.append((f"{key_type}:{doc_id}", {"tags": f"{t1},{t2}"}))
+            doc_id += 1
+        # Escape-only single-tag documents
+        for tag in tag_escape_only_tags:
+            docs.append((f"{key_type}:{doc_id}", {"tags": tag}))
             doc_id += 1
 
         data["tag special chars"][CREATES_KEY(key_type)] = [create_cmd]

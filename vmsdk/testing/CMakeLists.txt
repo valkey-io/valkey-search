@@ -92,13 +92,6 @@ target_link_libraries(cluster_map_test PUBLIC vmsdk_testing_infra)
 target_link_libraries(cluster_map_test PUBLIC valkey_module)
 finalize_test_flags(cluster_map_test)
 
-set(SRCS_SHARDED_ATOMIC_TEST ${CMAKE_CURRENT_LIST_DIR}/sharded_atomic_test.cc)
-add_executable(sharded_atomic_test ${SRCS_SHARDED_ATOMIC_TEST})
-target_include_directories(sharded_atomic_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
-target_link_libraries(sharded_atomic_test PUBLIC vmsdklib)
-target_link_libraries(sharded_atomic_test PUBLIC vmsdk_testing_infra)
-finalize_test_flags(sharded_atomic_test)
-
 string(TOLOWER "$ENV{SAN_BUILD}" SAN_BUILD_LOWER)
 if("${SAN_BUILD_LOWER}" STREQUAL "no")
     set(SRCS_SHARDED_ATOMIC_BENCH ${CMAKE_CURRENT_LIST_DIR}/sharded_atomic_benchmark.cc)

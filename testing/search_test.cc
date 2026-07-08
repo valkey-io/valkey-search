@@ -48,6 +48,8 @@ namespace valkey_search {
 namespace {
 
 using testing::_;
+using testing::ByMove;
+using testing::Return;
 using testing::TestParamInfo;
 using testing::ValuesIn;
 using ::valkey_search::indexes::IndexerType;
@@ -123,19 +125,17 @@ class MockTag : public indexes::Tag {
  public:
   MockTag(const data_model::TagIndex &tag_index_proto)
       : indexes::Tag(tag_index_proto) {}
-  MOCK_METHOD(std::unique_ptr<indexes::Tag::EntriesFetcher>, Search,
+  MOCK_METHOD(std::unique_ptr<indexes::EntriesFetcherBase>, Search,
               (const query::TagPredicate &predicate, bool negate),
               (const, override));
 };
 
 class TestedTagEntriesFetcher : public indexes::Tag::EntriesFetcher {
  public:
-  TestedTagEntriesFetcher(
-      size_t size, indexes::Tag::PatriciaTreeIndex &tree,
-      absl::flat_hash_set<indexes::Tag::PatriciaNodeIndex *> &entries,
-      bool negate, indexes::Tag::KeySet &untracked_keys)
-      : indexes::Tag::EntriesFetcher(tree, entries, size, negate,
-                                     untracked_keys),
+  explicit TestedTagEntriesFetcher(size_t size)
+      : indexes::Tag::EntriesFetcher(/*matched_slots=*/{},
+                                     /*extras=*/{},
+                                     /*size=*/size),
         size_(size) {}
 
   size_t Size() const override { return size_; }
@@ -212,16 +212,11 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
 
   VMSDK_EXPECT_OK(index_schema->AddIndex("tag_index_100_15", "tag_index_100_15",
                                          tag_index_100_15));
-  static indexes::Tag::PatriciaTreeIndex tree(false);
-  static absl::flat_hash_set<indexes::Tag::PatriciaNodeIndex *> entries;
-  static indexes::Tag::KeySet untracked_keys;
   EXPECT_CALL(*tag_index_100_15, Search(_, false)).WillRepeatedly([]() {
-    return std::make_unique<TestedTagEntriesFetcher>(15, tree, entries, false,
-                                                     untracked_keys);
+    return std::make_unique<TestedTagEntriesFetcher>(15);
   });
   EXPECT_CALL(*tag_index_100_15, Search(_, true)).WillRepeatedly([]() {
-    return std::make_unique<TestedTagEntriesFetcher>(85, tree, entries, false,
-                                                     untracked_keys);
+    return std::make_unique<TestedTagEntriesFetcher>(85);
   });
 }
 
@@ -467,7 +462,9 @@ INSTANTIATE_TEST_SUITE_P(
     });
 
 std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
-    const IndexerType vector_indexer_type = indexes::IndexerType::kHNSW) {
+    const IndexerType vector_indexer_type = indexes::IndexerType::kHNSW,
+    data_model::DistanceMetric distance_metric =
+        data_model::DISTANCE_METRIC_L2) {
   auto index_schema = CreateIndexSchema(kIndexSchemaName).value();
   EXPECT_CALL(*index_schema, GetIdentifier(::testing::_))
       .Times(::testing::AnyNumber());
@@ -475,21 +472,20 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
   // Add vector index
   std::shared_ptr<indexes::IndexBase> vector_index;
   if (vector_indexer_type == IndexerType::kHNSW) {
-    vector_index = indexes::VectorHNSW<float>::Create(
-                       CreateHNSWVectorIndexProto(
-                           kVectorDimensions, data_model::DISTANCE_METRIC_L2,
-                           1000, 10, 300, 30),
-                       "vector_attribute_identifier",
-                       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
-                       .value();
-  } else {
     vector_index =
-        indexes::VectorFlat<float>::Create(
-            CreateFlatVectorIndexProto(
-                kVectorDimensions, data_model::DISTANCE_METRIC_L2, 1000, 250),
+        indexes::VectorHNSW<float>::Create(
+            CreateHNSWVectorIndexProto(kVectorDimensions, distance_metric, 1000,
+                                       10, 300, 30),
             "vector_attribute_identifier",
             data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
             .value();
+  } else {
+    vector_index = indexes::VectorFlat<float>::Create(
+                       CreateFlatVectorIndexProto(kVectorDimensions,
+                                                  distance_metric, 1000, 250),
+                       "vector_attribute_identifier",
+                       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+                       .value();
   }
   VMSDK_EXPECT_OK(index_schema->AddIndex(kVectorAttributeAlias,
                                          kVectorAttributeAlias, vector_index));
@@ -550,12 +546,16 @@ struct LocalSearchTestCase {
   bool is_vector_search_query = true;
 };
 
-class LocalSearchTest : public ValkeySearchTestWithParam<LocalSearchTestCase> {
-};
+class LocalSearchTest
+    : public ValkeySearchTestWithParam<
+          std::tuple<data_model::DistanceMetric, LocalSearchTestCase>> {};
 
 TEST_P(LocalSearchTest, LocalSearchTest) {
-  auto index_schema = CreateIndexSchemaWithMultipleAttributes();
-  const LocalSearchTestCase &test_case = GetParam();
+  const auto &param = GetParam();
+  data_model::DistanceMetric distance_metric = std::get<0>(param);
+  const LocalSearchTestCase &test_case = std::get<1>(param);
+  auto index_schema = CreateIndexSchemaWithMultipleAttributes(
+      indexes::IndexerType::kFlat, distance_metric);
   UnitTestSearchParameters params;
   params.index_schema_name = kIndexSchemaName;
   if (test_case.is_vector_search_query) {
@@ -571,81 +571,106 @@ TEST_P(LocalSearchTest, LocalSearchTest) {
   FilterParser parser(*index_schema, test_case.filter, options);
   params.filter_parse_results = std::move(parser.Parse().value());
   params.index_schema = index_schema;
+
+  auto prefiltering_requests =
+      Metrics::GetStats().query_prefiltering_requests_cnt.load();
   auto time_slice_queries = Metrics::GetStats().time_slice_queries.load();
   auto status = Search(params, valkey_search::query::SearchMode::kLocal);
+
+  if (test_case.is_vector_search_query) {
+    EXPECT_EQ(prefiltering_requests + 1,
+              Metrics::GetStats().query_prefiltering_requests_cnt.load());
+  }
+
   EXPECT_EQ(time_slice_queries + 1,
             Metrics::GetStats().time_slice_queries.load());
   VMSDK_EXPECT_OK(status);
   EXPECT_EQ(params.search_result.neighbors.size(),
             test_case.expected_neighbors_size);
+  if (test_case.is_vector_search_query &&
+      !params.search_result.neighbors.empty()) {
+    if (distance_metric == data_model::DISTANCE_METRIC_COSINE) {
+      for (const auto &neighbor : params.search_result.neighbors) {
+        EXPECT_GE(neighbor.distance, 0.0f);
+        EXPECT_LE(neighbor.distance, 2.0f);
+      }
+    }
+  }
 }
 
 INSTANTIATE_TEST_SUITE_P(
     LocalSearchTests, LocalSearchTest,
-    testing::ValuesIn<LocalSearchTestCase>({
-        {
-            .test_name = "numeric_filter_k_eligible_candidates",
-            .k = 10,
-            .filter = "@numeric:[10 20]",
-            .expected_neighbors_size = 10,
-        },
-        {
-            .test_name = "numeric_filter_less_than_k_eligible_candidates",
-            .k = 10,
-            .filter = "@numeric:[99 99]",
-            .expected_neighbors_size = 1,
-        },
-        {
-            .test_name = "numeric_filter_no_eligible_candidates",
-            .k = 10,
-            .filter = "@numeric:[10000 20000]",
-            .expected_neighbors_size = 0,
-        },
-        {
-            .test_name = "tag_filter_k_eligible_candidates",
-            .k = 5,
-            .filter = "@tag:{LT5}",
-            .expected_neighbors_size = 5,
-        },
-        {
-            .test_name = "tag_filter_less_than_k_eligible_candidates",
-            .k = 5,
-            .filter = "@tag:{LT3}",
-            .expected_neighbors_size = 3,
-        },
-        {
-            .test_name = "tag_filter_all_candidates_eligible",
-            .k = 10,
-            .filter = "@tag:{Lt*}",
-            .expected_neighbors_size = 10,
-        },
-        {
-            .test_name = "tag_filter_no_eligible_candidates",
-            .k = 10,
-            .filter = "@tag:{random}",
-            .expected_neighbors_size = 0,
-        },
-        {
-            .test_name = "non_vector_numeric_filter_eligible_candidates",
-            .filter = "@numeric:[1 10]",
-            .expected_neighbors_size = 10,
-            .is_vector_search_query = false,
-        },
-        {
-            .test_name = "non_vector_numeric_and_tag_filter",
-            .filter = "@numeric:[1 10] @tag:{LT5}",
-            .expected_neighbors_size = 4,
-            .is_vector_search_query = false,
-        },
-        {
-            .test_name = "non_vector_numeric_or_numeric_filter",
-            .filter = "@numeric:[1 10] | @numeric:[21 25]",
-            .expected_neighbors_size = 15,
-            .is_vector_search_query = false,
-        },
-    }),
-    [](const testing::TestParamInfo<LocalSearchTestCase> &info) {
-      return info.param.test_name;
+    testing::Combine(
+        testing::ValuesIn({data_model::DISTANCE_METRIC_L2,
+                           data_model::DISTANCE_METRIC_COSINE}),
+        testing::ValuesIn<LocalSearchTestCase>({
+            {
+                .test_name = "numeric_filter_k_eligible_candidates",
+                .k = 10,
+                .filter = "@numeric:[10 20]",
+                .expected_neighbors_size = 10,
+            },
+            {
+                .test_name = "numeric_filter_less_than_k_eligible_candidates",
+                .k = 10,
+                .filter = "@numeric:[99 99]",
+                .expected_neighbors_size = 1,
+            },
+            {
+                .test_name = "numeric_filter_no_eligible_candidates",
+                .k = 10,
+                .filter = "@numeric:[10000 20000]",
+                .expected_neighbors_size = 0,
+            },
+            {
+                .test_name = "tag_filter_k_eligible_candidates",
+                .k = 5,
+                .filter = "@tag:{LT5}",
+                .expected_neighbors_size = 5,
+            },
+            {
+                .test_name = "tag_filter_less_than_k_eligible_candidates",
+                .k = 5,
+                .filter = "@tag:{LT3}",
+                .expected_neighbors_size = 3,
+            },
+            {
+                .test_name = "tag_filter_all_candidates_eligible",
+                .k = 10,
+                .filter = "@tag:{Lt*}",
+                .expected_neighbors_size = 10,
+            },
+            {
+                .test_name = "tag_filter_no_eligible_candidates",
+                .k = 10,
+                .filter = "@tag:{random}",
+                .expected_neighbors_size = 0,
+            },
+            {
+                .test_name = "non_vector_numeric_filter_eligible_candidates",
+                .filter = "@numeric:[1 10]",
+                .expected_neighbors_size = 10,
+                .is_vector_search_query = false,
+            },
+            {
+                .test_name = "non_vector_numeric_and_tag_filter",
+                .filter = "@numeric:[1 10] @tag:{LT5}",
+                .expected_neighbors_size = 4,
+                .is_vector_search_query = false,
+            },
+            {
+                .test_name = "non_vector_numeric_or_numeric_filter",
+                .filter = "@numeric:[1 10] | @numeric:[21 25]",
+                .expected_neighbors_size = 15,
+                .is_vector_search_query = false,
+            },
+        })),
+    [](const testing::TestParamInfo<
+        std::tuple<data_model::DistanceMetric, LocalSearchTestCase>> &info) {
+      return (std::get<0>(info.param) == data_model::DISTANCE_METRIC_L2
+                  ? "L2_"
+                  : "COSINE_") +
+             std::get<1>(info.param).test_name;
     });
 
 struct FetchFilteredKeysTestCase {

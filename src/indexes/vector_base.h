@@ -72,6 +72,9 @@ class VectorRecord {
   const float reciprocal_magnitude_;
   char data_[0];  // flexible array member
 };
+std::vector<char> NormalizeVector(absl::string_view record,
+                                  float *magnitude = nullptr);
+std::vector<char> DenormalizeVector(absl::string_view record, float magnitude);
 
 template <typename T>
 T CalcMagnitude(const T *src, size_t size) {

@@ -88,7 +88,7 @@ query::EvaluationResult PrefilterEvaluator::EvaluateTags(
     const query::TagPredicate &predicate) {
   bool case_sensitive = true;
   auto tags = predicate.GetIndex()->GetValue(*key_, case_sensitive);
-  return predicate.Evaluate(tags, case_sensitive);
+  return predicate.Evaluate(tags ? &*tags : nullptr, case_sensitive);
 }
 
 query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(
@@ -531,8 +531,10 @@ absl::Status VectorBase::ForEachUnTrackedKey(
 }
 
 VectorBase::~VectorBase() {
-  VectorRegistry::Instance().BatchUntrackExpired(
-      attribute_identifier_, std::move(tracked_metadata_by_key_));
+  if (VectorRegistry::IsConstructed()) {
+    VectorRegistry::Instance().BatchUntrackExpired(
+        attribute_identifier_, std::move(tracked_metadata_by_key_));
+  }
 }
 
 template void VectorBase::Init<float>(

@@ -45,6 +45,7 @@ class VectorRegistry {
  public:
   bool assert_on_delete{false};
   static VectorRegistry &Instance() { return *InstancePtr(); }
+  static bool IsConstructed() { return InstancePtr() != nullptr; }
   static void Construct(ValkeyModuleCtx *ctx) {
     Destruct();
     InstancePtr() = new VectorRegistry();

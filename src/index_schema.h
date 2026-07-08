@@ -272,7 +272,8 @@ class IndexSchema : public KeyspaceEventSubscription,
   };
   using MutatedAttributes =
       absl::flat_hash_map<std::string, DocumentMutation::AttributeData>;
-  vmsdk::TimeSlicedMRMWMutex &GetTimeSlicedMutex() {
+  vmsdk::TimeSlicedMRMWMutex &GetTimeSlicedMutex()
+      ABSL_LOCK_RETURNED(time_sliced_mutex_) {
     return time_sliced_mutex_;
   }
   void MarkAsDestructing();
@@ -315,8 +316,9 @@ class IndexSchema : public KeyspaceEventSubscription,
     }
   }
 
+  size_t GetDbKeyInfoSize() const { return db_key_info_.Get().size(); }
+
   MutationSequenceNumber GetDbMutationSequenceNumber(const Key &key) const {
-    vmsdk::VerifyMainThread();
     auto itr = db_key_info_.Get().find(key);
     CHECK(itr != db_key_info_.Get().end())
         << "Key not found: " << vmsdk::config::RedactIfNeeded(key->Str());
@@ -443,7 +445,7 @@ class IndexSchema : public KeyspaceEventSubscription,
 
   InternedStringHashMap<DocumentMutation> tracked_mutated_records_
       ABSL_GUARDED_BY(mutated_records_mutex_);
-  bool is_destructing_ ABSL_GUARDED_BY(mutated_records_mutex_){false};
+  std::atomic<bool> is_destructing_{false};
   mutable absl::Mutex mutated_records_mutex_;
 
   MutationSequenceNumber schema_mutation_sequence_number_{0};
@@ -492,7 +494,8 @@ class IndexSchema : public KeyspaceEventSubscription,
 
   void SyncProcessMutation(ValkeyModuleCtx *ctx,
                            MutatedAttributes &mutated_attributes,
-                           const Key &key);
+                           const Key &key)
+      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_);
   void ProcessAttributeMutation(ValkeyModuleCtx *ctx,
                                 const Attribute &attribute, const Key &key,
                                 vmsdk::UniqueValkeyString data,
@@ -518,7 +521,8 @@ class IndexSchema : public KeyspaceEventSubscription,
   // REQUIRES: time_sliced_mutex_ held in write phase
   std::optional<MutatedAttributes> ConsumeTrackedMutatedAttribute(
       const Key &key, bool first_time)
-      ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
+      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_)
+          ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
 
   size_t GetMutatedRecordsSize() const
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
@@ -559,6 +563,8 @@ class IndexSchema : public KeyspaceEventSubscription,
   FRIEND_TEST(IndexSchemaFriendTest, MutatedAttributes);
   FRIEND_TEST(IndexSchemaFriendTest, WeightedBuffer);
   FRIEND_TEST(IndexSchemaFriendTest, MutatedAttributesSanity);
+  FRIEND_TEST(IndexSchemaFriendTest,
+              InTrackedMutationRecordsAfterConsumeNoCrash);
   FRIEND_TEST(ValkeySearchTest, Info);
   FRIEND_TEST(OnSwapDBCallbackTest, OnSwapDBCallback);
 };

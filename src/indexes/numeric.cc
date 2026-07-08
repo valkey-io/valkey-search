@@ -65,7 +65,8 @@ absl::StatusOr<bool> Numeric::ModifyRecord(const InternedStringPtr& key,
                                            absl::string_view data) {
   auto value = ParseNumber(data);
   if (!value.has_value()) {
-    [[maybe_unused]] auto res = RemoveRecord(key, indexes::DeletionType::kNone);
+    [[maybe_unused]] auto res =
+        RemoveRecord(key, indexes::DeletionType::kIdentifier);
     return false;
   }
   absl::MutexLock lock(&index_mutex_);

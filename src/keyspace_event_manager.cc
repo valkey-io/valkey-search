@@ -14,7 +14,6 @@
 #include "absl/base/no_destructor.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
-#include "absl/strings/string_view.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"

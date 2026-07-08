@@ -55,6 +55,36 @@
 
 namespace valkey_search::query {
 
+namespace {
+// Process-global count of live SearchParameters objects. See
+// GetSearchParametersInFlight() in the header for the rationale.
+std::atomic<int64_t> &SearchParametersInFlightCounter() {
+  static std::atomic<int64_t> counter{0};
+  return counter;
+}
+}  // namespace
+
+int64_t GetSearchParametersInFlight() {
+  return SearchParametersInFlightCounter().load(std::memory_order_relaxed);
+}
+
+namespace detail {
+SearchParametersInFlightGuard::SearchParametersInFlightGuard() {
+  SearchParametersInFlightCounter().fetch_add(1, std::memory_order_relaxed);
+}
+SearchParametersInFlightGuard::SearchParametersInFlightGuard(
+    const SearchParametersInFlightGuard &) {
+  SearchParametersInFlightCounter().fetch_add(1, std::memory_order_relaxed);
+}
+SearchParametersInFlightGuard::SearchParametersInFlightGuard(
+    SearchParametersInFlightGuard &&) noexcept {
+  SearchParametersInFlightCounter().fetch_add(1, std::memory_order_relaxed);
+}
+SearchParametersInFlightGuard::~SearchParametersInFlightGuard() {
+  SearchParametersInFlightCounter().fetch_sub(1, std::memory_order_relaxed);
+}
+}  // namespace detail
+
 // Query operation counters
 DEV_INTEGER_COUNTER(query_stats, query_text_term_count);
 DEV_INTEGER_COUNTER(query_stats, query_text_prefix_count);
@@ -431,10 +461,9 @@ CalcBestMatchingPrefilteredKeys(
   std::priority_queue<std::pair<float, hnswlib::labeltype>> results;
   float query_magnitude = indexes::kDefaultMagnitude;
   if (vector_index->GetNormalize()) {
-    query_magnitude =
-        1.0f / indexes::CalcMagnitude(
-                   reinterpret_cast<const float *>(parameters.query.data()),
-                   parameters.query.size() / sizeof(float));
+    query_magnitude = 1.0f / indexes::CalcMagnitude(
+        reinterpret_cast<const float *>(parameters.query.data()),
+        parameters.query.size() / sizeof(float));
   }
   auto results_appender =
       [&results, &parameters, vector_index, query_magnitude](
@@ -523,7 +552,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
         case indexes::IndexerType::kHNSW:
         case indexes::IndexerType::kFlat: {
           auto vector_index =
-              dynamic_cast<const indexes::VectorBase *>(attribute_info.index);
+              dynamic_cast<const indexes::VectorBase*>(attribute_info.index);
           auto vector =
               vector_index->GetVectorDuringSearch(neighbor.external_id);
           if (vector.ok()) {
@@ -1121,6 +1150,18 @@ absl::Status PostParseVectorParameters(query::SearchParameters &parameters) {
   VMSDK_ASSIGN_OR_RETURN(
       parameters.query,
       SubstituteParam(parameters, parameters.parse_vars.query_vector_string));
+
+  VMSDK_ASSIGN_OR_RETURN(auto index, parameters.index_schema->GetIndex(
+                                         parameters.attribute_alias));
+  auto *vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
+  CHECK(vector_index != nullptr);
+  if (parameters.query.size() !=
+      static_cast<size_t>(vector_index->GetVectorDataSize())) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("query vector blob size (", parameters.query.size(),
+                     ") does not match index's expected size (",
+                     vector_index->GetVectorDataSize(), ")."));
+  }
 
   if (!parameters.parse_vars.ef_string.empty()) {
     VMSDK_ASSIGN_OR_RETURN(

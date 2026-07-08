@@ -9,6 +9,10 @@
       [
         "1.2.0",
         "Added Text Indexing and Search support"
+      ],
+      [
+        "2.0.0",
+        "Added INFIELDS support"
       ]
     ],
     "arguments": [

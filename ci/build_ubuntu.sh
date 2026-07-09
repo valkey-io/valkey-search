@@ -84,8 +84,20 @@ function download_deb() {
     ${WGET} ${HOSTADDR}/${deb_package} -O ${ROOT_DIR}/debs/${deb_package}
 }
 
+function install_required_apt_packages() {
+    if dpkg -s libbenchmark-dev libicu-dev >/dev/null 2>&1; then
+        LOG_INFO "APT packages libbenchmark-dev and libicu-dev already installed"
+        return
+    fi
+
+    LOG_INFO "Installing APT packages: libbenchmark-dev libicu-dev"
+    sudo apt-get update
+    sudo apt-get install -y --no-install-recommends libbenchmark-dev libicu-dev
+}
+
 # Prepare the environment before getting started
 function prepare_env() {
+    install_required_apt_packages
     local deb_package=$(get_deb_suffix)
     if [ ! -d /opt/valkey-search-deps${san_suffix}/ ]; then
         # Fetch the deb from github
@@ -170,4 +182,3 @@ cd ${CI_DIR}
 
 prepare_env
 build_and_run_tests
-

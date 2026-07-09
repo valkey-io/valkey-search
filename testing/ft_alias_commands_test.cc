@@ -177,12 +177,13 @@ INSTANTIATE_TEST_SUITE_P(
             .return_code = absl::StatusCode::kInvalidArgument,
         },
         {
-            // alias == index_name is rejected (self-referential).
-            .test_name = "self_referential_alias",
+            // alias == index_name is allowed (shadows the index until
+            // the index is resolved by direct lookup).
+            .test_name = "alias_same_as_index_name",
             .argv = {"FT.ALIASADD", "test_idx", "test_idx"},
             .index_schema_pbtxt = std::string(kTestIndexSchemaPbtxt),
             .pre_existing_alias = std::nullopt,
-            .return_code = absl::StatusCode::kAlreadyExists,
+            .return_code = absl::StatusCode::kOk,
         },
         {
             .test_name = "arity_error_too_many_args",
@@ -260,7 +261,7 @@ TEST_F(FTAliasAddTest, AlwaysReplicatesVerbatim_CoordinatorDisabled) {
   VMSDK_EXPECT_OK(coordinator_flag.SetValue(original_coordinator_value));
 }
 
-TEST_F(FTAliasAddTest, AliasCollidesWithExistingIndexName) {
+TEST_F(FTAliasAddTest, AliasMatchingExistingIndexNameSucceeds) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 5);
   SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
       &fake_ctx_, []() {}, &mutations_thread_pool, false));
@@ -277,15 +278,13 @@ TEST_F(FTAliasAddTest, AliasCollidesWithExistingIndexName) {
   VMSDK_EXPECT_OK(
       SchemaManager::Instance().CreateIndexSchema(&fake_ctx_, second_proto));
 
-  // FT.ALIASADD rejects an alias whose name matches a different existing index
-  // to prevent ambiguous resolution.
+  // FT.ALIASADD allows an alias whose name matches a different existing index.
   ValkeyModuleString* argv[3];
   argv[0] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.ALIASADD");
   argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_idx2");
   argv[2] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_idx");
 
-  EXPECT_EQ(FTAliasAddCmd(&fake_ctx_, argv, 3).code(),
-            absl::StatusCode::kAlreadyExists);
+  VMSDK_EXPECT_OK(FTAliasAddCmd(&fake_ctx_, argv, 3));
 
   for (auto* arg : argv) {
     TestValkeyModule_FreeString(&fake_ctx_, arg);
@@ -640,7 +639,7 @@ TEST_F(FTAliasUpdateTest, AlwaysReplicatesVerbatim_CoordinatorDisabled) {
   VMSDK_EXPECT_OK(coordinator_flag.SetValue(original_coordinator_value));
 }
 
-TEST_F(FTAliasUpdateTest, AliasCollidesWithExistingIndexName) {
+TEST_F(FTAliasUpdateTest, AliasMatchingExistingIndexNameSucceeds) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 5);
   SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
       &fake_ctx_, []() {}, &mutations_thread_pool, false));
@@ -662,15 +661,14 @@ TEST_F(FTAliasUpdateTest, AliasCollidesWithExistingIndexName) {
   argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_idx2");
   argv[2] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_idx");
 
-  EXPECT_EQ(FTAliasUpdateCmd(&fake_ctx_, argv, 3).code(),
-            absl::StatusCode::kAlreadyExists);
+  VMSDK_EXPECT_OK(FTAliasUpdateCmd(&fake_ctx_, argv, 3));
 
   for (auto* arg : argv) {
     TestValkeyModule_FreeString(&fake_ctx_, arg);
   }
 }
 
-TEST_F(FTAliasUpdateTest, SelfReferentialAliasRejected) {
+TEST_F(FTAliasUpdateTest, SelfReferentialAliasSucceeds) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 5);
   SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
       &fake_ctx_, []() {}, &mutations_thread_pool, false));
@@ -686,8 +684,7 @@ TEST_F(FTAliasUpdateTest, SelfReferentialAliasRejected) {
   argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_idx");
   argv[2] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_idx");
 
-  EXPECT_EQ(FTAliasUpdateCmd(&fake_ctx_, argv, 3).code(),
-            absl::StatusCode::kAlreadyExists);
+  VMSDK_EXPECT_OK(FTAliasUpdateCmd(&fake_ctx_, argv, 3));
 
   for (auto* arg : argv) {
     TestValkeyModule_FreeString(&fake_ctx_, arg);

@@ -352,19 +352,17 @@ class TestFTAliasClusterPropagation(ValkeySearchClusterTestCase):
             )
         assert "no_such_index" in str(exc_info.value)
 
-    def test_aliasupdate_collides_with_index_name_cluster(self):
-        """FT.ALIASUPDATE rejects alias that shadows an existing index in cluster."""
+    def test_aliasupdate_name_same_as_index_name_cluster(self):
+        """FT.ALIASUPDATE allows alias that matches an existing index in cluster."""
         node0 = self.new_client_for_primary(0)
         assert node0.execute_command(*CREATE_TAG_INDEX) == b"OK"
         assert node0.execute_command(*CREATE_TAG_INDEX_2) == b"OK"
         self._wait_for_index_on_all_nodes(INDEX_NAME)
         self._wait_for_index_on_all_nodes(INDEX_NAME_2)
 
-        with pytest.raises(ResponseError) as exc_info:
-            node0.execute_command(
-                "FT.ALIASUPDATE", INDEX_NAME, INDEX_NAME_2
-            )
-        assert "Alias collides with existing index name" in str(exc_info.value)
+        assert node0.execute_command(
+            "FT.ALIASUPDATE", INDEX_NAME, INDEX_NAME_2
+        ) == b"OK"
 
     # ------------------------------------------------------------------
     # FT.ALIASLIST cluster tests
@@ -660,7 +658,7 @@ class TestFTAliasDelEdgeCasesCluster(ValkeySearchClusterTestCase):
 
 
 class TestFTAliasNameCollisionCluster(ValkeySearchClusterTestCase):
-    """Cluster tests for alias name colliding with an existing index name."""
+    """Cluster tests for alias name matching an existing index name."""
 
     def _all_primaries(self):
         return [self.new_client_for_primary(i)
@@ -673,28 +671,26 @@ class TestFTAliasNameCollisionCluster(ValkeySearchClusterTestCase):
         )
 
     def test_aliasadd_name_same_as_existing_index_cluster(self):
-        """FT.ALIASADD rejects alias name matching a real index in cluster."""
+        """FT.ALIASADD allows alias name matching a real index in cluster."""
         node0 = self.new_client_for_primary(0)
         assert node0.execute_command(*CREATE_TAG_INDEX) == b"OK"
         assert node0.execute_command(*CREATE_TAG_INDEX_2) == b"OK"
         self._wait_for_index_on_all_nodes(INDEX_NAME)
         self._wait_for_index_on_all_nodes(INDEX_NAME_2)
 
-        with pytest.raises(ResponseError):
-            node0.execute_command("FT.ALIASADD", INDEX_NAME, INDEX_NAME_2)
+        assert node0.execute_command("FT.ALIASADD", INDEX_NAME, INDEX_NAME_2) == b"OK"
 
-    def test_aliasupdate_name_same_as_existing_index_rejected_cluster(self):
-        """FT.ALIASUPDATE rejects alias name matching a real index in cluster."""
+    def test_aliasupdate_name_same_as_existing_index_allowed_cluster(self):
+        """FT.ALIASUPDATE allows alias name matching a real index in cluster."""
         node0 = self.new_client_for_primary(0)
         assert node0.execute_command(*CREATE_TAG_INDEX) == b"OK"
         assert node0.execute_command(*CREATE_TAG_INDEX_2) == b"OK"
         self._wait_for_index_on_all_nodes(INDEX_NAME)
         self._wait_for_index_on_all_nodes(INDEX_NAME_2)
 
-        with pytest.raises(ResponseError):
-            node0.execute_command(
-                "FT.ALIASUPDATE", INDEX_NAME, INDEX_NAME_2
-            )
+        assert node0.execute_command(
+            "FT.ALIASUPDATE", INDEX_NAME, INDEX_NAME_2
+        ) == b"OK"
 
 
 class TestFTListDoesNotExposeAliasesCluster(ValkeySearchClusterTestCase):

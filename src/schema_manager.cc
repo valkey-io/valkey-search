@@ -755,9 +755,8 @@ void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx) {
         } else {
           VMSDK_LOG(WARNING, ctx)
               << "MetadataManager lookup failed for "
-              << vmsdk::config::RedactIfNeeded(name)
-              << " on FLUSHDB of DB " << selected_db << ": "
-              << stored_proto_or.status().message();
+              << vmsdk::config::RedactIfNeeded(name) << " on FLUSHDB of DB "
+              << selected_db << ": " << stored_proto_or.status().message();
         }
         continue;
       }
@@ -1150,12 +1149,6 @@ absl::Status SchemaManager::AddAlias(uint32_t db_num, absl::string_view alias,
     }
   }
 
-  // Reject self-referential alias (alias same as the target index name).
-  if (alias == index_name) {
-    return absl::AlreadyExistsError(
-        "Alias collides with existing index name");
-  }
-
   if (coordinator_enabled_) {
     // Coordinator mode: validate under lock, then release before calling
     // MetadataManager (which invokes OnMetadataCallback, acquiring the lock).
@@ -1165,13 +1158,6 @@ absl::Status SchemaManager::AddAlias(uint32_t db_num, absl::string_view alias,
     // CreateEntry determines the authoritative alias mapping.
     {
       absl::MutexLock lock(&db_to_index_schemas_mutex_);
-
-      // Reject if alias collides with an existing real index name.
-      auto collision = LookupInternal(db_num, alias);
-      if (collision.ok()) {
-        return absl::AlreadyExistsError(
-            "Alias collides with existing index name");
-      }
 
       // Check if alias already exists in this db.
       auto db_alias_it = db_to_aliases_.find(db_num);
@@ -1227,13 +1213,6 @@ absl::Status SchemaManager::AddAlias(uint32_t db_num, absl::string_view alias,
 
   // Standalone (non-coordinator) mode: modify in-memory state directly.
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
-
-  // Reject if alias collides with an existing real index name.
-  auto collision = LookupInternal(db_num, alias);
-  if (collision.ok()) {
-    return absl::AlreadyExistsError(
-        "Alias collides with existing index name");
-  }
 
   // Check if alias already exists.
   auto db_alias_it = db_to_aliases_.find(db_num);
@@ -1363,12 +1342,6 @@ absl::Status SchemaManager::UpdateAlias(uint32_t db_num,
     }
   }
 
-  // Reject self-referential alias (alias same as the target index name).
-  if (alias == index_name) {
-    return absl::AlreadyExistsError(
-        "Alias collides with existing index name");
-  }
-
   if (coordinator_enabled_) {
     // Coordinator mode: look up current alias owner under lock, then release
     // before calling MetadataManager (which invokes OnMetadataCallback,
@@ -1376,13 +1349,6 @@ absl::Status SchemaManager::UpdateAlias(uint32_t db_num,
     std::string old_index;
     {
       absl::MutexLock lock(&db_to_index_schemas_mutex_);
-
-      // Check if alias collides with an existing index name.
-      auto collision = LookupInternal(db_num, alias);
-      if (collision.ok()) {
-        return absl::AlreadyExistsError(
-            "Alias collides with existing index name");
-      }
 
       auto db_alias_it = db_to_aliases_.find(db_num);
       if (db_alias_it != db_to_aliases_.end()) {
@@ -1531,13 +1497,6 @@ absl::Status SchemaManager::UpdateAlias(uint32_t db_num,
 
   // Standalone (non-coordinator) mode: modify in-memory state directly.
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
-
-  // Check if alias collides with an existing index name.
-  auto collision = LookupInternal(db_num, alias);
-  if (collision.ok()) {
-    return absl::AlreadyExistsError(
-        "Alias collides with existing index name");
-  }
 
   // Look up if alias currently exists.
   std::string old_index;

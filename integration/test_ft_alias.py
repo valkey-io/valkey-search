@@ -497,27 +497,29 @@ class TestFTAliasRDBPersistence(ValkeySearchTestCaseDebugMode):
 class TestFTAliasNameCollision(ValkeySearchTestCaseBase):
     """Tests behaviour when an alias name matches an existing index name."""
 
-    def test_aliasadd_name_same_as_existing_index_rejected(self):
+    def test_aliasadd_name_same_as_existing_index_allowed(self):
         """
-        ALIASADD rejects an alias whose name matches an existing real index,
-        returning an error to prevent ambiguous resolution.
+        ALIASADD allows an alias whose name matches an existing real index.
+        The real index takes precedence during name resolution.
         """
         client = self.client
         assert client.execute_command(*CREATE_TAG_INDEX) == b"OK"
         assert client.execute_command(*CREATE_TAG_INDEX_2) == b"OK"
-        with pytest.raises(ResponseError):
-            client.execute_command("FT.ALIASADD", INDEX_NAME, INDEX_NAME_2)
+        assert client.execute_command("FT.ALIASADD", INDEX_NAME, INDEX_NAME_2) == b"OK"
+        # Real index still resolves directly via its own name.
+        info = list(client.execute_command("FT.INFO", INDEX_NAME))
+        idx = next((i for i, v in enumerate(info) if v == b"index_name"), None)
+        assert idx is not None
+        assert info[idx + 1] == INDEX_NAME.encode()
 
-    def test_aliasupdate_name_same_as_existing_index_rejected(self):
+    def test_aliasupdate_name_same_as_existing_index_allowed(self):
         """
-        Unlike ALIASADD, ALIASUPDATE rejects an alias name that matches a real
-        index.
+        ALIASUPDATE allows an alias name that matches a real index.
         """
         client = self.client
         assert client.execute_command(*CREATE_TAG_INDEX) == b"OK"
         assert client.execute_command(*CREATE_TAG_INDEX_2) == b"OK"
-        with pytest.raises(ResponseError):
-            client.execute_command("FT.ALIASUPDATE", INDEX_NAME, INDEX_NAME_2)
+        assert client.execute_command("FT.ALIASUPDATE", INDEX_NAME, INDEX_NAME_2) == b"OK"
         # Real index still resolves directly.
         info = list(client.execute_command("FT.INFO", INDEX_NAME))
         idx = next((i for i, v in enumerate(info) if v == b"index_name"), None)

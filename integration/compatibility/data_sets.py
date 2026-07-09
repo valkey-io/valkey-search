@@ -697,12 +697,13 @@ def compute_alias_data():
 def load_data(client, data_set, key_type, data_source=None, schema_type="default"):
     # Auto-detect data source based on data_set name
     if data_source is None:
-        if data_set == "alias":
-            data_source = "alias"
-        elif data_set in TEXT_DATASETS:
-            data_source = "text"
-        else:
-            data_source = "vector"
+        match data_set:
+            case "alias":
+                data_source = "alias"
+            case _ if data_set in TEXT_DATASETS:
+                data_source = "text"
+            case _:
+                data_source = "vector"
 
     match data_source:
         case "alias":
@@ -760,12 +761,13 @@ def load_data(client, data_set, key_type, data_source=None, schema_type="default
     return len(load_list)
 
 def load_data_cluster(cluster_client, test_case, data_set_name, key_type):
-    if data_set_name == "alias":
-        data = compute_alias_data()
-    elif data_set_name in TEXT_DATASETS:
-        data = compute_text_data_sets(data_set_name)
-    else:
-        data = compute_data_sets()
+    match data_set_name:
+        case "alias":
+            data = compute_alias_data()
+        case _ if data_set_name in TEXT_DATASETS:
+            data = compute_text_data_sets(data_set_name)
+        case _:
+            data = compute_data_sets()
 
     primary0 = test_case.new_client_for_primary(0)
     for create_cmd in data[data_set_name][CREATES_KEY(key_type)]:

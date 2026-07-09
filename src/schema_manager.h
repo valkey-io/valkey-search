@@ -163,10 +163,11 @@ class SchemaManager {
       uint32_t db_num, absl::string_view name)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
 
-  // Clears all Forward_Alias_Map entries for the given index and repopulates
-  // from the proto's aliases field. Must be called with mutex held.
+  // Rebuilds forward alias map entries for `index_name` from `proto`.
+  // Uses `incoming_version` for deterministic cross-index conflict resolution.
   void RebuildAliasMapsForIndex(uint32_t db_num, absl::string_view index_name,
-                                const data_model::IndexSchema &proto)
+                                const data_model::IndexSchema &proto,
+                                uint32_t incoming_version = 0)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
 
   // Erases all Forward_Alias_Map entries in db_num whose value equals

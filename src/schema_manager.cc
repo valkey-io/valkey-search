@@ -459,7 +459,7 @@ void SchemaManager::EraseAliasesForIndex(uint32_t db_num,
 
 void SchemaManager::RebuildAliasMapsForIndex(
     uint32_t db_num, absl::string_view index_name,
-    const data_model::IndexSchema &proto) {
+    const data_model::IndexSchema &proto, uint32_t incoming_version) {
   // Remove all existing forward map entries pointing to this index.
   EraseAliasesForIndex(db_num, index_name);
 
@@ -470,10 +470,44 @@ void SchemaManager::RebuildAliasMapsForIndex(
       auto conflict = existing_it->second.find(alias);
       if (conflict != existing_it->second.end() &&
           conflict->second != index_name) {
+        // Deterministic conflict resolution: higher version wins, then
+        // lexicographically greater index name breaks ties.
+        uint32_t conflict_version = 0;
+        auto conflict_schema = LookupInternal(db_num, conflict->second);
+        if (conflict_schema.ok()) {
+          conflict_version = conflict_schema.value()->GetVersion();
+        }
+
+        bool current_wins = false;
+        if (incoming_version > conflict_version) {
+          current_wins = true;
+        } else if (incoming_version == conflict_version) {
+          current_wins = (index_name > conflict->second);
+        }
+
+        if (!current_wins) {
+          VMSDK_LOG(WARNING, detached_ctx_.get())
+              << "Alias '" << alias << "' conflict: index '" << index_name
+              << "' (v" << incoming_version << ") loses to '"
+              << conflict->second << "' (v" << conflict_version << ") in db "
+              << db_num;
+          continue;
+        }
+
         VMSDK_LOG(WARNING, detached_ctx_.get())
-            << "Alias '" << alias << "' reassigned from index '"
-            << conflict->second << "' to '" << index_name << "' in db "
-            << db_num;
+            << "Alias '" << alias << "' conflict: index '" << index_name
+            << "' (v" << incoming_version << ") wins over '" << conflict->second
+            << "' (v" << conflict_version << ") in db " << db_num;
+
+        // Remove the alias from the losing index's aliases vector.
+        auto prev_it = db_to_index_schemas_[db_num].find(conflict->second);
+        if (prev_it != db_to_index_schemas_[db_num].end()) {
+          auto prev_aliases = prev_it->second->GetAliases();
+          prev_aliases.erase(
+              std::remove(prev_aliases.begin(), prev_aliases.end(), alias),
+              prev_aliases.end());
+          prev_it->second->SetAliases(std::move(prev_aliases));
+        }
       }
     }
     db_to_aliases_[db_num][alias] = std::string(index_name);
@@ -519,10 +553,19 @@ absl::Status SchemaManager::OnMetadataCallback(
       // Alias-only change: rebuild maps, update alias list and
       // fingerprint/version.
       RebuildAliasMapsForIndex(obj_name.GetDbNum(), obj_name.GetName(),
-                               *proposed_schema);
-      std::vector<std::string> new_aliases(proposed_schema->aliases().begin(),
-                                           proposed_schema->aliases().end());
-      existing.value()->SetAliases(std::move(new_aliases));
+                               *proposed_schema, version);
+      // Only keep aliases this index actually owns after conflict resolution.
+      std::vector<std::string> owned_aliases;
+      auto db_alias_it = db_to_aliases_.find(obj_name.GetDbNum());
+      if (db_alias_it != db_to_aliases_.end()) {
+        for (const auto &[alias, owner] : db_alias_it->second) {
+          if (owner == obj_name.GetName()) {
+            owned_aliases.push_back(alias);
+          }
+        }
+      }
+      std::sort(owned_aliases.begin(), owned_aliases.end());
+      existing.value()->SetAliases(std::move(owned_aliases));
       existing.value()->SetFingerprint(fingerprint);
       existing.value()->SetVersion(version);
       return absl::OkStatus();

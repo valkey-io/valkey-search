@@ -193,7 +193,10 @@ class TextIndexSchema {
     uint32_t doc_len{0};
     uint32_t norm{0};
   };
-  absl::node_hash_map<Key, KeyScoringInfo> per_key_scoring_info_;
+  // flat_hash_map (not node_hash_map): KeyScoringInfo is 8 bytes and needs no
+  // pointer stability, so storing it inline avoids a per-document cache miss on
+  // the GetKeyDocLen() scoring hot path.
+  absl::flat_hash_map<Key, KeyScoringInfo> per_key_scoring_info_;
 
   // Prevent concurrent mutations to per-key text index map and scoring info
   mutable std::mutex per_key_text_indexes_mutex_;

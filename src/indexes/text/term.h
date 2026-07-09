@@ -12,15 +12,12 @@
 #include <utility>
 
 #include "absl/container/inlined_vector.h"
+#include "src/indexes/scoring/bm25std_scorer.h"
 #include "src/indexes/text.h"
 #include "src/indexes/text/flat_position_map.h"
 #include "src/indexes/text/scoring_context.h"
 #include "src/indexes/text/text_iterator.h"
 #include "src/utils/inlined_priority_queue.h"
-
-namespace valkey_search::indexes::scoring {
-class Bm25StdScorer;
-}  // namespace valkey_search::indexes::scoring
 
 namespace valkey_search::indexes::text {
 
@@ -107,11 +104,13 @@ class TermIterator : public TextIterator {
   const uint32_t num_doc_contain_term_;
   const ScoringContext* const scoring_ctx_;
 
-  // Typed scorer and IDF cached at construction. IDF is query-invariant for a
-  // term, so it is computed once here rather than per document in GetScore().
+  // Typed scorer and per-leaf BM25 coefficients cached at construction. The
+  // coefficients fold every query-invariant input (IDF, leaf weight,
+  // avg_doc_len, k1, b) into three weights so GetScore() reduces to a single
+  // multiply-add and divide per document -- see Bm25StdScorer::LeafCoeffs.
   // Null bm25_scorer_ means scoring is disabled (constant-stub fallback).
   const scoring::Bm25StdScorer* bm25_scorer_{nullptr};
-  float idf_{0.0f};
+  scoring::Bm25StdScorer::LeafCoeffs leaf_coeffs_{};
 
   // Pending queue: heap of valid iterators not currently being processed.
   // Provides O(1) access to the minimum key and O(log K) extraction.

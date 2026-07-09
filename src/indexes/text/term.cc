@@ -32,14 +32,17 @@ TermIterator::TermIterator(
       leaf_weight_(leaf_weight),
       num_doc_contain_term_(num_doc_contain_term),
       scoring_ctx_(scoring_ctx) {
-  // Resolve the typed scorer and precompute the query-invariant IDF once, so
-  // GetScore() avoids a per-document dynamic_cast and log call.
+  // Resolve the typed scorer and fold every query-invariant BM25 input (IDF,
+  // leaf weight, avg_doc_len, k1, b) into per-leaf coefficients once, so
+  // GetScore() avoids a per-document dynamic_cast, log call, and divide.
   if (scoring_ctx_ != nullptr && scoring_ctx_->scorer != nullptr) {
     bm25_scorer_ =
         dynamic_cast<const scoring::Bm25StdScorer*>(scoring_ctx_->scorer);
     if (bm25_scorer_ != nullptr) {
-      idf_ = bm25_scorer_->PrecomputeIDF(scoring_ctx_->total_docs,
-                                         num_doc_contain_term_);
+      const float idf = bm25_scorer_->PrecomputeIDF(scoring_ctx_->total_docs,
+                                                    num_doc_contain_term_);
+      leaf_coeffs_ = bm25_scorer_->PrecomputeLeafCoeffs(
+          idf, scoring_ctx_->avg_doc_len, leaf_weight_);
     }
   }
 
@@ -74,11 +77,11 @@ float TermIterator::GetScore() const {
           ? scoring_ctx_->text_index_schema->GetKeyDocLen(*current_key_)
           : 0;
 
-  scoring::Bm25StdStats stats;
-  stats.term_frequency = term_frequency;
-  stats.doc_len = doc_len;
-  stats.avg_doc_len = scoring_ctx_->avg_doc_len;
-  return bm25_scorer_->ScoreLeaf(idf_, stats, leaf_weight_);
+  // Fast path: coefficients are precomputed at construction, so this is a
+  // single multiply-add plus divide -- no dynamic_cast, no polymorphic stats,
+  // and no per-document avg_doc_len divide.
+  return scoring::Bm25StdScorer::ScoreLeafFast(leaf_coeffs_, term_frequency,
+                                               doc_len);
 }
 
 FieldMaskPredicate TermIterator::QueryFieldMask() const {

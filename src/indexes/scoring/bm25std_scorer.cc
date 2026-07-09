@@ -29,15 +29,8 @@ float Bm25StdScorer::ScoreLeaf(float idf, const ScoringStats& stats,
   const auto* bm25_stats = dynamic_cast<const Bm25StdStats*>(&stats);
   CHECK(bm25_stats != nullptr);
 
-  if (bm25_stats->avg_doc_len <= 0.0f) return 0.0f;
-
-  const float f = static_cast<float>(bm25_stats->term_frequency);
-  const float dl = static_cast<float>(bm25_stats->doc_len);
-
-  const float numerator = f * (kK1 + 1.0f);
-  const float denominator =
-      f + kK1 * (1.0f - kB + kB * dl / bm25_stats->avg_doc_len);
-  return leaf_weight * idf * (numerator / denominator);
+  return ScoreLeaf(idf, bm25_stats->term_frequency, bm25_stats->doc_len,
+                   bm25_stats->avg_doc_len, leaf_weight);
 }
 
 float Bm25StdScorer::ComposeDocumentScore(float sum_of_terms,

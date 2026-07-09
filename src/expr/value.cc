@@ -12,6 +12,7 @@
 #include <sstream>
 
 #include "src/utils/scanner.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 // #define DBG std::cerr
 #define DBG 0 && std::cerr
@@ -41,6 +42,20 @@ bool Value::IsDouble() const { return std::get_if<double>(&value_); }
 bool Value::IsString() const {
   return std::get_if<absl::string_view>(&value_) ||
          std::get_if<std::string>(&value_);
+}
+
+bool Value::IsArray() const { return std::holds_alternative<Array>(value_); }
+
+size_t Value::ArraySize() const {
+  CHECK(IsArray());
+  return std::get<Array>(value_)->size();
+}
+
+bool Value::IsEmptyArray() const {
+  if (auto vec_ptr = std::get_if<Array>(&value_)) {
+    return (*vec_ptr)->empty();
+  }
+  return false;
 }
 
 Value::Nil Value::GetNil() const { return std::get<Nil>(value_); }
@@ -155,9 +170,30 @@ std::string Value::AsString() const {
     return std::string(*result);
   } else if (auto result = std::get_if<std::string>(&value_)) {
     return *result;
+  } else if (auto result = std::get_if<Value::Array>(&value_)) {
+    return "";
   } else {
     CHECK(false);
   }
+}
+
+std::optional<Value::Array> Value::AsArray() const {
+  if (auto result = std::get_if<Array>(&value_)) {
+    return *result;
+  }
+  return std::nullopt;
+}
+
+Value::Array Value::GetArray() const { return std::get<Array>(value_); }
+
+Value Value::GetArrayElement(size_t index) const {
+  auto arr = GetArray();
+
+  CHECK(index < arr->size())
+      << "GetArrayElement called with index out of range: " << index
+      << ". Array size = " << arr->size();
+
+  return (*arr)[index];
 }
 
 std::ostream& operator<<(std::ostream& os, const Value& v) {
@@ -234,9 +270,31 @@ Ordering Compare(const Value& l, const Value& r) {
     return CompareStrings(l.GetStringView(), r.GetStringView());
   }
 
+  // Array comparisons
+  if (l.IsArray() && r.IsArray()) {
+    auto lvec = l.GetArray();
+    auto rvec = r.GetArray();
+
+    size_t min_size = std::min(lvec->size(), rvec->size());
+    if (min_size > 0) {
+      // Match RediSearch behavior by only comparing first elements
+      return Compare((*lvec)[0], (*rvec)[0]);
+    }
+
+    // All elements equal, compare by length
+    if (lvec->size() < rvec->size()) {
+      return Ordering::kLESS;
+    } else if (lvec->size() > rvec->size()) {
+      return Ordering::kGREATER;
+    }
+    return Ordering::kEQUAL;
+  } else if (l.IsArray() || r.IsArray()) {
+    // Array vs scalar
+    return Ordering::kUNORDERED;
+  }
+
   // Need to handle non-equivalent types.
   // Prefer to promote to double unless that fails.
-
   auto ld = l.AsDouble();
   auto rd = r.AsDouble();
   if (ld && rd) {
@@ -281,11 +339,7 @@ Value FuncDiv(const Value& l, const Value& r) {
   auto rv = r.AsDouble();
   if (lv && rv) {
     if (rv.value() == 0) {
-      // if (std::signbit(lv.value())) {
       return Value(std::nan(""));
-      //} else {
-      //  return Value(-std::abs(std::nan("nan")));
-      //}
     } else {
       return Value(lv.value() / rv.value());
     }
@@ -397,10 +451,16 @@ Value FuncSqrt(const Value& o) {
 }
 
 Value FuncStrlen(const Value& o) {
+  if (o.IsArray()) {
+    return Value();
+  }
   return Value(double(o.AsStringView().size()));
 }
 
 Value FuncStartswith(const Value& l, const Value& r) {
+  if (l.IsArray() || r.IsArray()) {
+    return Value();
+  }
   auto ls = l.AsStringView();
   auto rs = r.AsStringView();
   if (rs.size() > ls.size()) {
@@ -411,6 +471,10 @@ Value FuncStartswith(const Value& l, const Value& r) {
 }
 
 Value FuncContains(const Value& l, const Value& r) {
+  if (l.IsArray() || r.IsArray()) {
+    return Value();
+  }
+
   auto ls = l.AsStringView();
   auto rs = r.AsStringView();
   size_t count = 0;
@@ -427,6 +491,10 @@ Value FuncContains(const Value& l, const Value& r) {
 }
 
 Value FuncSubstr(const Value& l, const Value& m, const Value& r) {
+  if (l.IsArray() || m.IsArray() || r.IsArray()) {
+    return Value(Value::Nil("Invalid type for substr. Expected string"));
+  }
+
   auto ls = l.AsStringView();
   auto offset_p = m.AsInteger();
   auto length_p = r.AsInteger();
@@ -452,6 +520,9 @@ Value FuncSubstr(const Value& l, const Value& m, const Value& r) {
 }
 
 Value FuncLower(const Value& o) {
+  if (o.IsArray()) {
+    return Value();
+  }
   auto os = o.AsStringView();
   std::string result;
   result.reserve(os.size());
@@ -467,6 +538,9 @@ Value FuncLower(const Value& o) {
 }
 
 Value FuncUpper(const Value& o) {
+  if (o.IsArray()) {
+    return Value();
+  }
   auto os = o.AsStringView();
   std::string result;
   result.reserve(os.size());

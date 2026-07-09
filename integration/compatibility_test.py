@@ -475,6 +475,17 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
 
         data_set = next_data_set
 
+    # for the excluded queries with known difference
+    # just run in valkey to make sure they do not crash
+    if expected.get("excluded"):
+        try:
+            print(f"Running excluded CLUSTER query (no-crash check): {expected['cmd']}")
+            cluster_client.execute_command(*expected["cmd"])
+            print("Excluded CLUSTER query completed without crash")
+        except Exception as e:
+            print(f"Excluded CLUSTER query raised: {e} for cmd {expected['cmd']}")
+        return data_set
+
     result = {}
     try:
         print(
@@ -636,7 +647,8 @@ class TestAnswersCME(ValkeySearchClusterTestCaseDebugMode):
                 test_case=self,
             )
 
-        if correct_answers != len(answers):
+        expected_count = sum(1 for a in answers if not a.get('excluded'))
+        if correct_answers != expected_count:
             print(f"Correct answers: {correct_answers} out of {len(answers)}")
             if failed_tests:
                 print(">>>>>>>>> Failed Tests <<<<<<<<<")

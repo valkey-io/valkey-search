@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "absl/base/optimization.h"
+#include "absl/cleanup/cleanup.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
@@ -967,6 +968,7 @@ void IndexSchema::BackfillScanCallback(ValkeyModuleCtx *ctx,
 }
 
 CONTROLLED_BOOLEAN(StopBackfill, false);
+CONTROLLED_BOOLEAN(ForceRDBLoadFailure, false);
 
 uint32_t IndexSchema::PerformBackfill(ValkeyModuleCtx *ctx,
                                       uint32_t batch_size) {
@@ -1550,6 +1552,11 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
     Metrics::GetStats().rdb_restore_current_index_keys_loaded = i + 1;
   }
 
+  if (ForceRDBLoadFailure.GetValue()) {
+    return absl::InternalError(
+        "Simulated IO error during RDB load (ForceRDBLoadFailure)");
+  }
+
   if (Metrics::GetStats().rdb_restore_backpressure_wait_cycles > 0) {
     VMSDK_LOG(NOTICE, ctx)
         << "RDB restore completed with backpressure. Total wait cycles: "
@@ -1627,6 +1634,12 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
       auto index_schema,
       IndexSchema::Create(ctx, *index_schema_proto, mutations_thread_pool,
                           !load_attributes_on_create, true));
+
+  // If we exit early after creating a new schema, workers may already hold
+  // strong references via ValkeyModule_Yield. Ensure MarkAsDestructing is
+  // called so the destructor won't attempt main-thread-only cleanup.
+  auto mark_destructing_on_error =
+      absl::MakeCleanup([&]() { index_schema->MarkAsDestructing(); });
 
   // Supplemental content will include indices and any content for them
   while (supplemental_iter.HasNext()) {
@@ -1707,6 +1720,8 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
   }
   VMSDK_LOG(NOTICE, ctx) << "Loaded index schema with "
                          << index_schema->GetAttributeCount() << " attributes";
+  std::move(mark_destructing_on_error)
+      .Cancel();  // Don't mark for destruction since no error has been returned
   return index_schema;
 }
 

@@ -6,7 +6,7 @@
 
 #include "src/commands/ft_aggregate_parser.h"
 
-#include "absl/container/flat_hash_set.h"
+#include "absl/container/flat_hash_map.h"
 #include "absl/container/inlined_vector.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -57,9 +57,11 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
         // followed by `AS <alias>`; the `AS` keyword and its alias count
         // against the budget (matching RediSearch).
         uint32_t consumed = 0;
-        // Output names already assigned by an `AS` rename in this clause. Two
-        // renames targeting the same alias are rejected (see below).
-        absl::flat_hash_set<std::string> renamed_aliases;
+        // Output names claimed so far by this clause, mapped to whether the
+        // claim came from an `AS` rename. A name claimed twice is rejected when
+        // a rename is involved (see below); two plain loads of the same field
+        // keep their long-standing de-duplicating behavior.
+        absl::flat_hash_map<std::string, bool> claimed_names;
         while (consumed < cnt) {
           std::string load;
           VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, load));
@@ -107,14 +109,18 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
               },
               []() -> absl::Status { return absl::OkStatus(); });
           VMSDK_RETURN_IF_ERROR(as_status);
-          if (alias != identifier) {
-            if (!renamed_aliases.insert(alias).second) {
-              // Intentionally stricter than RediSearch (which keeps the first
-              // and silently drops the rest): reject two LOAD ... AS renames
-              // that target the same alias.
-              return absl::InvalidArgumentError(absl::StrCat(
-                  "Duplicate `AS` alias `", alias, "` in LOAD clause"));
-            }
+          const bool renamed = alias != identifier;
+          // Intentionally stricter than RediSearch (which keeps the first claim
+          // of a name and silently drops the rest): reject a LOAD clause that
+          // names the same output twice when an `AS` rename is involved. Left
+          // to itself such a collision aliases two entries onto one record
+          // column, so the emitted value would depend on fetch order.
+          if (auto [it, inserted] = claimed_names.emplace(alias, renamed);
+              !inserted && (renamed || it->second)) {
+            return absl::InvalidArgumentError(absl::StrCat(
+                "Duplicate `AS` alias `", alias, "` in LOAD clause"));
+          }
+          if (renamed) {
             // LOAD precedes APPLY/SORTBY/FILTER in the command, so register
             // the rename now to make `@alias` resolvable in those later
             // stages. Entries that can't be resolved against the index here

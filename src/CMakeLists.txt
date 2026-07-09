@@ -25,27 +25,22 @@ set(SEARCH_SRCS
         vector_externalizer.h
         version.h)
 
+# search_base is the collection of compiled objects that forms the final library/module
 add_library(search_base OBJECT ${SEARCH_SRCS})
 add_generated_proto_sources(search_base index_schema)
 add_generated_proto_sources(search_base rdb_section)
 
+# mydeps is the dependency bundle; it contains no objects, only include paths
 add_library(mydeps INTERFACE)
 target_include_directories(mydeps INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}) # src/
 target_include_directories(mydeps INTERFACE ${CMAKE_SOURCE_DIR}) # top-level
 target_include_directories(mydeps INTERFACE ${CMAKE_SOURCE_DIR}/include)
 target_include_directories(mydeps INTERFACE ${CMAKE_SOURCE_DIR}/vmsdk/include)
 target_include_directories(mydeps INTERFACE ${VALKEY_PROTOGEN_BINARY_DIR})
-
-target_link_libraries(mydeps INTERFACE vmsdk)
-target_sources(mydeps INTERFACE $<TARGET_OBJECTS:vmsdk>)
+target_include_directories(mydeps INTERFACE $<TARGET_PROPERTY:vmsdk,INTERFACE_INCLUDE_DIRECTORIES>)
+target_include_directories(mydeps INTERFACE $<TARGET_PROPERTY:absl::base,INTERFACE_INCLUDE_DIRECTORIES>)
 
 add_dependencies(mydeps protogen)
-
-# hack so we don't need to get every single subcomponent explicitly
-# link against abseil (Which the entire application uses anyway)..
-get_target_property(ABSL_INCLUDE_DIRS absl::base INTERFACE_INCLUDE_DIRECTORIES)
-message(STATUS "Abseil include directories: ${ABSL_INCLUDE_DIRS}")
-target_include_directories(mydeps INTERFACE ${ABSL_INCLUDE_DIRS})
 
 add_subdirectory(coordinator)
 add_subdirectory(commands)
@@ -74,7 +69,17 @@ foreach (lib IN LISTS SEARCH_LIBS)
 endforeach()
 
 add_library (search MODULE $<TARGET_OBJECTS:search_base>)
-add_library (search_dso SHARED $<TARGET_OBJECTS:search_base>)
+target_link_libraries(search PRIVATE search_base)
+target_sources(search PRIVATE $<TARGET_OBJECTS:vmsdk>)
 
-target_link_libraries(search PUBLIC search_base)
-target_link_libraries(search_dso PUBLIC search_base)
+add_library (search_dso SHARED $<TARGET_OBJECTS:search_base>)
+target_link_libraries(search_dso PRIVATE search_base)
+
+target_link_libraries(search_dso PUBLIC
+        vmsdk_dso
+        gRPC::grpc++
+        absl::base
+        protobuf::libprotobuf)
+
+target_link_libraries(search_dso INTERFACE mydeps)
+target_link_libraries(search_dso INTERFACE ICU::uc ICU::i18n ICU::data)

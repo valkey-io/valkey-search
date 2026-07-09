@@ -2013,5 +2013,231 @@ TEST_F(StoredProtoRoundTripTest, StoredProtoMatchesToProto) {
   EXPECT_TRUE(differ.Compare(*live_proto, stored_proto));
 }
 
+// Cross-index alias conflict resolution: higher version wins, then
+// lexicographically greater index name breaks ties.
+class CrossIndexAliasConflictTest : public vmsdk::ValkeyTest {
+ public:
+  void SetUp() override {
+    vmsdk::ValkeyTest::SetUp();
+    ValkeySearch::InitInstance(std::make_unique<TestableValkeySearch>());
+    KeyspaceEventManager::InitInstance(
+        std::make_unique<TestableKeyspaceEventManager>());
+    mock_client_pool_ = std::make_unique<coordinator::MockClientPool>();
+
+    ON_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
+        .WillByDefault(testing::Return(kDbNum));
+    ON_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
+        .WillByDefault(testing::Return(&fake_ctx_));
+    ON_CALL(*kMockValkeyModule, FreeThreadSafeContext(testing::_))
+        .WillByDefault(testing::Return());
+    ON_CALL(*kMockValkeyModule, SelectDb(testing::_, kDbNum))
+        .WillByDefault(testing::Return(VALKEYMODULE_OK));
+    ON_CALL(*kMockValkeyModule,
+            SendClusterMessage(testing::_, testing::_, testing::_, testing::_,
+                               testing::_))
+        .WillByDefault(testing::Return(VALKEYMODULE_OK));
+    ON_CALL(*kMockValkeyModule, Replicate(testing::_, testing::_, testing::_))
+        .WillByDefault(testing::Return(VALKEYMODULE_OK));
+    ON_CALL(*kMockValkeyModule,
+            Call(testing::_, testing::StrEq("CLUSTER"), testing::StrEq("c"),
+                 testing::StrEq("SLOTS")))
+        .WillByDefault(testing::Return(
+            reinterpret_cast<ValkeyModuleCallReply *>(0xDEADBEEF)));
+    ON_CALL(
+        *kMockValkeyModule,
+        CallReplyType(reinterpret_cast<ValkeyModuleCallReply *>(0xDEADBEEF)))
+        .WillByDefault(testing::Return(VALKEYMODULE_REPLY_ARRAY));
+    ON_CALL(
+        *kMockValkeyModule,
+        CallReplyLength(reinterpret_cast<ValkeyModuleCallReply *>(0xDEADBEEF)))
+        .WillByDefault(testing::Return(0));
+    ON_CALL(*kMockValkeyModule, GetMyClusterID())
+        .WillByDefault(testing::Return("fake_node_id"));
+
+    coordinator::MetadataManager::InitInstance(
+        std::make_unique<coordinator::MetadataManager>(&fake_ctx_,
+                                                       *mock_client_pool_));
+    SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+        &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/true));
+  }
+
+  void TearDown() override {
+    SchemaManager::InitInstance(nullptr);
+    coordinator::MetadataManager::InitInstance(nullptr);
+    KeyspaceEventManager::InitInstance(nullptr);
+    ValkeySearch::InitInstance(nullptr);
+    vmsdk::ValkeyTest::TearDown();
+  }
+
+  void CreateIndex(const std::string &name) {
+    data_model::IndexSchema proto;
+    proto.set_name(name);
+    proto.set_db_num(kDbNum);
+    proto.add_subscribed_key_prefixes("prefix_" + name + ":");
+    proto.set_attribute_data_type(data_model::ATTRIBUTE_DATA_TYPE_HASH);
+    auto *attr = proto.add_attributes();
+    attr->set_alias("attr_" + name);
+    attr->set_identifier("field_" + name);
+    auto *vec = attr->mutable_index()->mutable_vector_index();
+    vec->set_dimension_count(4);
+    vec->set_normalize(false);
+    vec->set_distance_metric(data_model::DISTANCE_METRIC_COSINE);
+    vec->set_vector_data_type(data_model::VECTOR_DATA_TYPE_FLOAT32);
+    vec->set_initial_cap(10);
+    auto *hnsw = vec->mutable_hnsw_algorithm();
+    hnsw->set_m(16);
+    hnsw->set_ef_construction(200);
+    hnsw->set_ef_runtime(10);
+
+    auto result =
+        SchemaManager::Instance().CreateIndexSchema(&fake_ctx_, proto);
+    ASSERT_TRUE(result.ok()) << result.status();
+  }
+
+  void SimulateAliasCallback(const std::string &index_name,
+                             const std::vector<std::string> &aliases,
+                             uint32_t version) {
+    auto schema_or =
+        SchemaManager::Instance().GetIndexSchema(kDbNum, index_name);
+    ASSERT_TRUE(schema_or.ok()) << schema_or.status();
+    auto proto = schema_or.value()->ToProto();
+    proto->clear_aliases();
+    for (const auto &alias : aliases) {
+      proto->add_aliases(alias);
+    }
+    std::sort(proto->mutable_aliases()->begin(),
+              proto->mutable_aliases()->end());
+
+    auto packed = std::make_unique<google::protobuf::Any>();
+    packed->PackFrom(*proto);
+    auto entry_result = coordinator::MetadataManager::Instance().CreateEntry(
+        kSchemaManagerMetadataTypeName,
+        coordinator::ObjName(kDbNum, index_name), std::move(packed));
+    ASSERT_TRUE(entry_result.ok()) << entry_result.status();
+  }
+
+  static constexpr int kDbNum = 0;
+  ValkeyModuleCtx fake_ctx_;
+  std::unique_ptr<coordinator::MockClientPool> mock_client_pool_;
+};
+
+TEST_F(CrossIndexAliasConflictTest, HigherVersionWins) {
+  CreateIndex("idx_a");
+  CreateIndex("idx_b");
+
+  SimulateAliasCallback("idx_a", {"shared_alias"}, 1);
+  SimulateAliasCallback("idx_b", {"shared_alias"}, 2);
+
+  auto aliases = SchemaManager::Instance().GetAllAliases(kDbNum);
+  ASSERT_EQ(aliases.size(), 1);
+  EXPECT_EQ(aliases[0].first, "shared_alias");
+  EXPECT_EQ(aliases[0].second, "idx_b");
+
+  auto schema_a = SchemaManager::Instance().GetIndexSchema(kDbNum, "idx_a");
+  ASSERT_TRUE(schema_a.ok());
+  auto a_aliases = schema_a.value()->GetAliases();
+  EXPECT_TRUE(std::find(a_aliases.begin(), a_aliases.end(), "shared_alias") ==
+              a_aliases.end());
+}
+
+TEST_F(CrossIndexAliasConflictTest, EqualVersionLexicographicTieBreak) {
+  CreateIndex("idx_a");
+  CreateIndex("idx_z");
+
+  SimulateAliasCallback("idx_a", {"shared_alias"}, 1);
+  SimulateAliasCallback("idx_z", {"shared_alias"}, 1);
+
+  auto aliases = SchemaManager::Instance().GetAllAliases(kDbNum);
+  ASSERT_EQ(aliases.size(), 1);
+  EXPECT_EQ(aliases[0].first, "shared_alias");
+  EXPECT_EQ(aliases[0].second, "idx_z");
+}
+
+TEST_F(CrossIndexAliasConflictTest, CallbackOrderDoesNotAffectWinner) {
+  CreateIndex("idx_a");
+  CreateIndex("idx_z");
+
+  SimulateAliasCallback("idx_z", {"shared_alias"}, 1);
+  SimulateAliasCallback("idx_a", {"shared_alias"}, 1);
+
+  auto aliases = SchemaManager::Instance().GetAllAliases(kDbNum);
+  ASSERT_EQ(aliases.size(), 1);
+  EXPECT_EQ(aliases[0].first, "shared_alias");
+  EXPECT_EQ(aliases[0].second, "idx_z");
+}
+
+TEST_F(CrossIndexAliasConflictTest, LoserAliasVectorCleaned) {
+  CreateIndex("idx_a");
+  CreateIndex("idx_z");
+
+  SimulateAliasCallback("idx_a", {"shared_alias", "only_a"}, 1);
+  SimulateAliasCallback("idx_z", {"shared_alias"}, 1);
+
+  auto aliases = SchemaManager::Instance().GetAllAliases(kDbNum);
+  std::sort(aliases.begin(), aliases.end());
+  ASSERT_EQ(aliases.size(), 2);
+  EXPECT_EQ(aliases[0].first, "only_a");
+  EXPECT_EQ(aliases[0].second, "idx_a");
+  EXPECT_EQ(aliases[1].first, "shared_alias");
+  EXPECT_EQ(aliases[1].second, "idx_z");
+
+  auto schema_a = SchemaManager::Instance().GetIndexSchema(kDbNum, "idx_a");
+  ASSERT_TRUE(schema_a.ok());
+  auto a_aliases = schema_a.value()->GetAliases();
+  EXPECT_EQ(a_aliases.size(), 1);
+  EXPECT_EQ(a_aliases[0], "only_a");
+}
+
+TEST_F(CrossIndexAliasConflictTest, VersionTakesPrecedenceOverName) {
+  CreateIndex("idx_z");
+  CreateIndex("idx_a");
+
+  SimulateAliasCallback("idx_z", {"shared_alias"}, 1);
+
+  // Bump idx_a's version higher via intermediate updates.
+  SimulateAliasCallback("idx_a", {"other_alias"}, 1);
+  SimulateAliasCallback("idx_a", {"other_alias2"}, 2);
+  SimulateAliasCallback("idx_a", {"shared_alias"}, 3);
+
+  auto aliases = SchemaManager::Instance().GetAllAliases(kDbNum);
+  ASSERT_EQ(aliases.size(), 1);
+  EXPECT_EQ(aliases[0].first, "shared_alias");
+  EXPECT_EQ(aliases[0].second, "idx_a");
+}
+
+TEST_F(CrossIndexAliasConflictTest, LowerVersionLosesEvenIfCallbackLater) {
+  CreateIndex("idx_a");
+  CreateIndex("idx_b");
+
+  // Bump idx_b to version 3.
+  SimulateAliasCallback("idx_b", {"temp_alias"}, 1);
+  SimulateAliasCallback("idx_b", {"temp_alias2"}, 2);
+  SimulateAliasCallback("idx_b", {"shared_alias"}, 3);
+
+  // idx_a claims at version 1 — loses.
+  SimulateAliasCallback("idx_a", {"shared_alias"}, 1);
+
+  auto aliases = SchemaManager::Instance().GetAllAliases(kDbNum);
+  ASSERT_EQ(aliases.size(), 1);
+  EXPECT_EQ(aliases[0].first, "shared_alias");
+  EXPECT_EQ(aliases[0].second, "idx_b");
+}
+
+TEST_F(CrossIndexAliasConflictTest, NoConflictDifferentAliasesCoexist) {
+  CreateIndex("idx_a");
+  CreateIndex("idx_b");
+
+  SimulateAliasCallback("idx_a", {"alias_a"}, 1);
+  SimulateAliasCallback("idx_b", {"alias_b"}, 1);
+
+  auto aliases = SchemaManager::Instance().GetAllAliases(kDbNum);
+  std::sort(aliases.begin(), aliases.end());
+  ASSERT_EQ(aliases.size(), 2);
+  EXPECT_EQ(aliases[0].first, "alias_a");
+  EXPECT_EQ(aliases[0].second, "idx_a");
+  EXPECT_EQ(aliases[1].first, "alias_b");
+  EXPECT_EQ(aliases[1].second, "idx_b");
+}
+
 }  // namespace
 }  // namespace valkey_search

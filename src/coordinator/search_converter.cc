@@ -403,8 +403,16 @@ std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
     auto return_parameter = request->add_return_parameters();
     return_parameter->set_identifier(
         vmsdk::ToStringView(return_attribute.identifier.get()));
+    // The receiving node consumes this as `attribute_alias` and uses it to look
+    // up the index to fetch from. It must therefore be the *source* attribute
+    // alias, never the (possibly renamed) output alias -- otherwise a rename
+    // onto the name of another declared field would fetch that other field.
+    // The output alias never crosses the wire: the requesting node labels the
+    // reply from its own copy of `return_attributes`.
     return_parameter->set_alias(
-        vmsdk::ToStringView(return_attribute.alias.get()));
+        vmsdk::ToStringView(return_attribute.attribute_alias
+                                ? return_attribute.attribute_alias.get()
+                                : return_attribute.identifier.get()));
   }
   *request->mutable_index_fingerprint_version() =
       parameters.index_fingerprint_version;

@@ -175,4 +175,4 @@ A list of the compatibility issues that have been fixed.
 
 | Release | INFO Field | New Behavior | Old Behavior |
 | ------- | ---------- | ------------ | ------------ |
-| 1.3 | `search_compatibility-ft_aggregate_load_as` | `FT.AGGREGATE` `LOAD` honors the `AS <alias>` rename clause and accepts a JSON path as the field to load; two renames to the same alias are rejected. | `AS` is treated as an ordinary field name, and a JSON path cannot be used as a `LOAD` field. |
+| 1.3 | `search_compatibility-ft_aggregate_load_as` | `FT.AGGREGATE` `LOAD` honors the `AS <alias>` rename clause and accepts a JSON path as the field to load. A `LOAD` clause that names the same output twice is rejected when an `AS` rename is involved; loading the same field twice without a rename is still de-duplicated. | `AS` is treated as an ordinary field name, and a JSON path cannot be used as a `LOAD` field. |

@@ -586,6 +586,98 @@ class TestFTAliasDropIndexCluster(ValkeySearchClusterTestCase):
             self._all_primaries(), "alias_idx2", expect_present=True
         )
 
+    def test_aliasupdate_racing_with_dropindex_cluster(self):
+        """ALIASUPDATE racing with FT.DROPINDEX converges to a clean state."""
+        node0 = self.new_client_for_primary(0)
+        node1 = self.new_client_for_primary(1)
+
+        assert node0.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        assert node0.execute_command(*CREATE_TAG_INDEX_2) == b"OK"
+        self._wait_for_index_on_all_nodes(INDEX_NAME)
+        self._wait_for_index_on_all_nodes(INDEX_NAME_2)
+
+        # Create alias pointing to INDEX_NAME.
+        assert node0.execute_command(
+            "FT.ALIASADD", ALIAS_NAME, INDEX_NAME
+        ) == b"OK"
+        _wait_for_alias_on_all_nodes(
+            self._all_primaries(), ALIAS_NAME, expect_present=True
+        )
+
+        # Race: update alias to point to INDEX_NAME_2 while dropping
+        # INDEX_NAME concurrently. Both outcomes are acceptable.
+        results = {}
+        errors = {}
+
+        def do_update():
+            try:
+                client = self.new_client_for_primary(0)
+                results["update"] = client.execute_command(
+                    "FT.ALIASUPDATE", ALIAS_NAME, INDEX_NAME_2
+                )
+            except ResponseError as e:
+                errors["update"] = e
+
+        def do_drop():
+            try:
+                client = self.new_client_for_primary(1)
+                results["drop"] = client.execute_command(
+                    "FT.DROPINDEX", INDEX_NAME
+                )
+            except ResponseError as e:
+                errors["drop"] = e
+
+        t_update = threading.Thread(target=do_update)
+        t_drop = threading.Thread(target=do_drop)
+        t_update.start()
+        t_drop.start()
+        t_update.join()
+        t_drop.join()
+
+        # Wait for cluster convergence: all nodes agree on alias state.
+        def _alias_converged():
+            states = []
+            for node in self._all_primaries():
+                try:
+                    node.execute_command("FT.INFO", ALIAS_NAME)
+                    states.append("present")
+                except ResponseError:
+                    states.append("absent")
+            return len(set(states)) == 1
+
+        waiters.wait_for_true(_alias_converged, timeout=30)
+
+        # All nodes agree on alias state.
+        alias_present = []
+        for node in self._all_primaries():
+            try:
+                node.execute_command("FT.INFO", ALIAS_NAME)
+                alias_present.append(True)
+            except ResponseError:
+                alias_present.append(False)
+
+        assert len(set(alias_present)) == 1, (
+            f"Cluster not converged: alias states = {alias_present}")
+
+        # If alias survived, it must point to INDEX_NAME_2 (the update target)
+        # and not the dropped INDEX_NAME.
+        if alias_present[0]:
+            for node in self._all_primaries():
+                info = list(node.execute_command("FT.INFO", ALIAS_NAME))
+                idx = next(
+                    (i for i, v in enumerate(info) if v == b"index_name"),
+                    None)
+                assert idx is not None
+                assert info[idx + 1] != INDEX_NAME.encode(), (
+                    f"Alias still points to dropped index: {info[idx + 1]}")
+
+        # No cruft — FT.ALIASLIST consistent across all nodes.
+        alias_lists = set()
+        for node in self._all_primaries():
+            alias_lists.add(str(node.execute_command("FT.ALIASLIST")))
+        assert len(alias_lists) == 1, (
+            f"FT.ALIASLIST inconsistent across nodes: {alias_lists}")
+
     def test_alias_readd_after_drop_and_recreate_cluster(self):
         """After drop+recreate, an alias can be re-added in cluster mode."""
         node0 = self.new_client_for_primary(0)

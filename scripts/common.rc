@@ -68,7 +68,13 @@ function findup() {
 
 # Determine pip command
 PYTHON_PATH="${PYTHON_PATH:=}"
-_WORKSPACE_HOME=$(findup QUICK_START.md)
+if [ -n "${WORKSPACE_HOME}" ] && [ -f "${WORKSPACE_HOME}/QUICK_START.md" ]; then
+  _WORKSPACE_HOME="${WORKSPACE_HOME}"
+elif [ -n "${ROOT_DIR}" ] && [ -f "${ROOT_DIR}/QUICK_START.md" ]; then
+  _WORKSPACE_HOME="${ROOT_DIR}"
+else
+  _WORKSPACE_HOME=$(findup QUICK_START.md)
+fi
 export MODULE_ROOT=${_WORKSPACE_HOME}
 _THIRD_PARTY_COMPONENTS_BUILD_DIR=${_WORKSPACE_HOME}/.build-release
 

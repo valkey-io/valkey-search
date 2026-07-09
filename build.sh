@@ -12,6 +12,7 @@ RUN_BUILD="yes"
 DUMP_TEST_ERRORS_STDOUT="no"
 INTEGRATION_TEST="no"
 SAN_BUILD="no"
+BUILD_DIR_ARG=""
 ARGV=$@
 EXIT_CODE=0
 INTEG_RETRIES=1
@@ -30,6 +31,7 @@ Usage: build.sh [options...]
     --debug                           Build for debug version.
     --clean                           Clean the current build configuration (debug or release).
     --format                          Applies clang-format. (Run in dev container environment to ensure correct clang-format version)
+    --build-dir[=PATH]                Use an alternate build directory.
     --run-tests                       Run all tests. Optionally, pass a test name to run: "--run-tests=<test-name>".
     --no-build                        By default, build.sh always triggers a build. This option disables this behavior.
     --test-errors-stdout              When a test fails, dump the captured tests output to stdout.
@@ -69,6 +71,22 @@ while [ $# -gt 0 ]; do
         shift || true
         RUN_CMAKE="yes"
         echo "Running cmake: true"
+        ;;
+    --build-dir)
+        shift || true
+        if [ $# -eq 0 ]; then
+            echo "Missing value for --build-dir"
+            print_usage
+            exit 1
+        fi
+        BUILD_DIR_ARG=$1
+        shift || true
+        echo "Using build directory ${BUILD_DIR_ARG}"
+        ;;
+    --build-dir=*)
+        BUILD_DIR_ARG=${arg#*=}
+        shift || true
+        echo "Using build directory ${BUILD_DIR_ARG}"
         ;;
     --no-build)
         shift || true
@@ -173,25 +191,28 @@ fi
 function configure() {
     printf "${BOLD_PINK}Running cmake...${RESET}\n"
     printf "Generating ${GREEN}${CMAKE_GENERATOR}${RESET} build files\n"
-    mkdir -p ${BUILD_DIR}
-    cd $_
     local BUILD_TYPE=$(capitalize_string ${BUILD_CONFIG})
-    rm -f CMakeCache.txt
-    printf "Running: cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBUILD_UNIT_TESTS=ON -Wno-dev -G"${CMAKE_GENERATOR}" ${CMAKE_EXTRA_ARGS}\n"
-    cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBUILD_UNIT_TESTS=ON -Wno-dev -G"${CMAKE_GENERATOR}" ${CMAKE_EXTRA_ARGS}
-    cd ${ROOT_DIR}
+    mkdir -p "${BUILD_DIR}"
+    rm -f "${BUILD_DIR}/CMakeCache.txt"
+    printf "Running: cmake -S %s -B %s -DCMAKE_BUILD_TYPE=%s -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBUILD_UNIT_TESTS=ON -Wno-dev -G\"%s\" %s\n" \
+        "${ROOT_DIR}" "${BUILD_DIR}" "${BUILD_TYPE}" "${CMAKE_GENERATOR}" "${CMAKE_EXTRA_ARGS}"
+    cmake -S "${ROOT_DIR}" -B "${BUILD_DIR}" -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBUILD_UNIT_TESTS=ON -Wno-dev -G"${CMAKE_GENERATOR}" ${CMAKE_EXTRA_ARGS}
 }
 
 function build() {
     printf "${BOLD_PINK}Building${RESET}\n"
     if [ -d "${BUILD_DIR}" ]; then
-        cd "${BUILD_DIR}"
-        if [ -z "${JOBS}" ]; then
-            ${BUILD_TOOL} ${VERBOSE_ARGS} ${CMAKE_TARGET}
-        else
-            ${BUILD_TOOL} -j ${JOBS} ${VERBOSE_ARGS} ${CMAKE_TARGET}
+        local build_args=()
+        if [ -n "${JOBS}" ]; then
+            build_args+=(--parallel "${JOBS}")
         fi
-        cd "${ROOT_DIR}"
+        if [ -n "${VERBOSE_ARGS}" ]; then
+            build_args+=(--verbose)
+        fi
+        if [ -n "${CMAKE_TARGET}" ]; then
+            build_args+=(--target "${CMAKE_TARGET}")
+        fi
+        cmake --build "${BUILD_DIR}" "${build_args[@]}"
 
         printf "\n${GREEN}Build Successful!${RESET}\n\n"
         printf "${BOLD_PINK}Module path:${RESET} ${BUILD_DIR}/libsearch.${MODULE_EXT}\n\n"
@@ -305,7 +326,9 @@ function is_configure_required() {
 
     local build_file_lastmodified=$(get_file_last_modified "${top_level_build_file}")
     local IFS=$'\n'
-    local cmake_files=$(find "${ROOT_DIR}" -name "CMakeLists.txt" -o -name "*.cmake" | grep -v ".build-release" | grep -v ".build-debug")
+    local cmake_files=$(find "${ROOT_DIR}" \
+        \( -path "${BUILD_DIR}" -o -path "${BUILD_DIR}/*" \) -prune -o \
+        \( -name "CMakeLists.txt" -o -name "*.cmake" \) -print)
     for cmake_file in $cmake_files; do
         local cmake_file_modified=$(get_file_last_modified "${cmake_file}")
         if [ "${cmake_file_modified}" -gt "${build_file_lastmodified}" ]; then
@@ -336,12 +359,20 @@ if [[ "${FORMAT}" == "yes" ]]; then
     format
 fi
 
-BUILD_DIR=${ROOT_DIR}/.build-${BUILD_CONFIG}
 if [[ "${SAN_BUILD}" != "no" ]]; then
     printf "${BOLD_PINK}${SAN_BUILD} sanitizer build is enabled${RESET}\n"
+fi
+
+if [ -n "${BUILD_DIR_ARG}" ]; then
+    case "${BUILD_DIR_ARG}" in
+        /*) BUILD_DIR="${BUILD_DIR_ARG}" ;;
+        *) BUILD_DIR="$(pwd)/${BUILD_DIR_ARG}" ;;
+    esac
+else
+    BUILD_DIR=${ROOT_DIR}/.build-${BUILD_CONFIG}
     if [[ "${SAN_BUILD}" == "address" ]]; then
         BUILD_DIR=${BUILD_DIR}-asan
-    else
+    elif [[ "${SAN_BUILD}" == "thread" ]]; then
         BUILD_DIR=${BUILD_DIR}-tsan
     fi
 fi

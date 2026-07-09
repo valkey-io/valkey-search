@@ -31,7 +31,9 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
         )
         client.execute_command("HSET", "doc:1", "content", "hello world")
         client.execute_command("HSET", "doc:2", "content", "hello there")
-        IndexingTestHelper.is_indexing_complete_on_node(client, "idx")
+        waiters.wait_for_true(
+            lambda: IndexingTestHelper.is_indexing_complete_on_node(client, "idx")
+        )
         assert client.execute_command("FT.SEARCH", "idx", "@content:hello")[0] == 2
 
         # Pause mutation processing to keep key in-flight
@@ -105,7 +107,9 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
         vec1 = struct.pack('<4f', 0.0, 0.0, 0.0, 0.0)
         vec2 = struct.pack('<4f', 1.0, 1.0, 1.0, 1.0)
         client.execute_command("HSET", "doc:1", "content", "hello world", "vec", vec1)
-        IndexingTestHelper.is_indexing_complete_on_node(client, "idx")
+        waiters.wait_for_true(
+            lambda: IndexingTestHelper.is_indexing_complete_on_node(client, "idx")
+        )
 
         client.execute_command("FT._DEBUG PAUSEPOINT SET mutation_processing")
 
@@ -151,7 +155,9 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
             "SCHEMA", "content", "TEXT", "category", "TAG"
         )
         client.execute_command("HSET", "doc:1", "content", "hello world", "category", "news")
-        IndexingTestHelper.is_indexing_complete_on_node(client, "idx")
+        waiters.wait_for_true(
+            lambda: IndexingTestHelper.is_indexing_complete_on_node(client, "idx")
+        )
 
         client.execute_command("FT._DEBUG PAUSEPOINT SET mutation_processing")
 
@@ -186,7 +192,9 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
             "SCHEMA", "content", "TEXT"
         )
         client.execute_command("HSET", "doc:1", "content", "hello world")
-        IndexingTestHelper.is_indexing_complete_on_node(client, "idx")
+        waiters.wait_for_true(
+            lambda: IndexingTestHelper.is_indexing_complete_on_node(client, "idx")
+        )
 
         # Plug the mutation queue
         client.execute_command("FT._DEBUG PAUSEPOINT SET mutation_processing")
@@ -236,7 +244,9 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
             "SCHEMA", "content", "TEXT"
         )
         client.execute_command("HSET", "doc:1", "content", "hello world")
-        IndexingTestHelper.is_indexing_complete_on_node(client, "idx")
+        waiters.wait_for_true(
+            lambda: IndexingTestHelper.is_indexing_complete_on_node(client, "idx")
+        )
 
         # Plug the mutation queue
         client.execute_command("FT._DEBUG PAUSEPOINT SET mutation_processing")

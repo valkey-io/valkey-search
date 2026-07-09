@@ -5,6 +5,7 @@ Cluster propagation integration tests for FT.ALIASADD, FT.ALIASDEL, and FT.ALIAS
 import os
 import pytest
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from valkey import ResponseError
 from valkey.client import Valkey
 from valkey_search_test_case import ValkeySearchClusterTestCase, ValkeySearchClusterTestCaseDebugMode
@@ -31,8 +32,7 @@ CREATE_TAG_INDEX_2 = [
 ]
 
 
-def _wait_for_alias_on_all_nodes(nodes, alias_name, expect_present=True,
-                                  timeout=10):
+def _wait_for_alias_on_all_nodes(nodes, alias_name, expect_present=True):
     """
     Poll until alias_name is (or is not) resolvable via FT.INFO on every node.
     """
@@ -47,7 +47,7 @@ def _wait_for_alias_on_all_nodes(nodes, alias_name, expect_present=True,
                     return False
         return True
 
-    waiters.wait_for_true(check, timeout=timeout)
+    waiters.wait_for_true(check)
 
 
 class TestFTAliasClusterPropagation(ValkeySearchClusterTestCase):

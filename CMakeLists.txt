@@ -46,10 +46,16 @@ endif()
 # if it's found then we assume protobuf is also found; otherwise we assume that
 # gRPC requires protobuf and we try that route instead.
 
-find_package(gRPC QUIET)
+# use CONFIG to find the CMake files from gRPC rather than the built-in
+# cmake "MODULE" mode which uses CMake's own helpers (which might be stale).
+# We can set 'CMAKE_FIND_PACKAGE_PREFER_CONFIG' .. but this doesn't have
+# similar behavior..
+
+find_package(gRPC CONFIG QUIET)
+
 if (NOT gRPC_FOUND)
-    find_package(Protobuf REQUIRED)
-    find_package(gRPC REQUIRED)
+    find_package(Protobuf CONFIG REQUIRED)
+    find_package(gRPC CONFIG REQUIRED)
 endif()
 
 find_package(absl REQUIRED)

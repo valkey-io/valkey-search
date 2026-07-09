@@ -1,6 +1,6 @@
-Aliases provide alternative names for indexes. Once created, an alias can be used in place of the real index name in `FT.SEARCH`, `FT.AGGREGATE`, `FT.INFO`, and `FT.DROPINDEX` commands. Multiple aliases can point to the same index. Aliases are per-database and are persisted across server restarts.
+Aliases provide alternative names for indexes. Once created, an alias can be used in place of the real index name in `FT.SEARCH`, `FT.AGGREGATE`, `FT.INFO`, and `FT.DROPINDEX` commands. Multiple aliases can point to the same index. Alias definitions are global and stored as part of the aliased index definition.
 
-Alias names must be non-empty strings that do not contain null bytes. An alias name must not match the name of an existing index (to avoid ambiguous resolution). The target index name must refer to a real index, not another alias (alias chaining is not supported).
+Alias names must be non-empty strings. The target index name must refer to a real index, not another alias (alias chaining is not supported). For single-slot indexes (those with a `{hashtag}` in the name), aliases must contain the same hashtag to ensure correct cluster slot routing. An alias name may match an existing index name; in that case the real index takes precedence during name resolution until it is dropped, at which point the alias becomes effective.
 
 # FT.ALIASADD
 
@@ -10,7 +10,7 @@ Creates a new alias that resolves to the specified index.
 FT.ALIASADD <alias> <index-name>
 ```
 
-- `<alias>` (required): The alias name to create. Must be non-empty and must not already exist as an alias or match an existing index name.
+- `<alias>` (required): The alias name to create. Must be non-empty and must not already exist as an alias.
 - `<index-name>` (required): The name of the target index. Must be an existing index (not an alias).
 
 ## Result
@@ -20,11 +20,11 @@ Returns `OK` on success or an error.
 ## Errors
 
 - `Alias name cannot be empty` — the alias argument is an empty string.
-- `Alias name must not contain null bytes` — the alias contains embedded null characters.
 - `Alias already exists` — an alias with this name is already registered.
-- `Alias collides with existing index name` — the alias matches a real index name.
+- `Alias hashtag does not match index hashtag` — the alias does not route to the same cluster slot as the target single-slot index.
 - `Unknown index name or name is an alias` — the target does not exist or is itself an alias.
 - `Index with name '<name>' not found in database <N>` — the target index does not exist.
+- Cluster inconsistency timeout — the fanout to verify alias propagation across all nodes timed out.
 
 ## Example
 
@@ -41,7 +41,7 @@ Creates a new alias or reassigns an existing alias to a different index (upsert 
 FT.ALIASUPDATE <alias> <index-name>
 ```
 
-- `<alias>` (required): The alias name to create or reassign. Must be non-empty and must not match an existing index name.
+- `<alias>` (required): The alias name to create or reassign. Must be non-empty.
 - `<index-name>` (required): The name of the target index. Must be an existing index (not an alias).
 
 ## Result
@@ -51,10 +51,10 @@ Returns `OK` on success or an error.
 ## Errors
 
 - `Alias name cannot be empty` — the alias argument is an empty string.
-- `Alias name must not contain null bytes` — the alias contains embedded null characters.
-- `Alias collides with existing index name` — the alias matches a real index name.
+- `Alias hashtag does not match index hashtag` — the alias does not route to the same cluster slot as the target single-slot index.
 - `Unknown index name or name is an alias` — the target does not exist or is itself an alias.
 - `Index with name '<name>' not found in database <N>` — the target index does not exist.
+- Cluster inconsistency timeout — the fanout to verify alias propagation across all nodes timed out.
 
 ## Example
 
@@ -80,8 +80,8 @@ Returns `OK` on success or an error.
 ## Errors
 
 - `Alias name cannot be empty` — the alias argument is an empty string.
-- `Alias name must not contain null bytes` — the alias contains embedded null characters.
 - `Alias does not exist` — no alias with this name is registered.
+- Cluster inconsistency timeout — the fanout to verify alias removal across all nodes timed out.
 
 ## Example
 

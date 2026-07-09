@@ -1179,11 +1179,8 @@ TEST_F(AliasUpdateReachabilityTest,
   }
 }
 
-// Null-byte alias rejection.
-//
-// AddAlias, RemoveAlias, and UpdateAlias all return kInvalidArgument for
-// alias strings containing null bytes, without modifying alias map state.
-class NullByteAliasRejectionTest : public vmsdk::ValkeyTest {
+// Null-byte alias acceptance: aliases with embedded null bytes are valid.
+class NullByteAliasAcceptanceTest : public vmsdk::ValkeyTest {
  public:
   void SetUp() override {
     vmsdk::ValkeyTest::SetUp();
@@ -1218,10 +1215,7 @@ class NullByteAliasRejectionTest : public vmsdk::ValkeyTest {
   ValkeyModuleCtx fake_ctx_;
 };
 
-TEST_F(NullByteAliasRejectionTest, PropertyNullByteAliasesRejected) {
-  constexpr int kIterations = 120;
-  constexpr uint64_t kSeed = 77713;
-
+TEST_F(NullByteAliasAcceptanceTest, PropertyNullByteAliasesAccepted) {
   const std::string index_name = "null_byte_test_idx";
 
   // Build a base proto for the index.
@@ -1251,75 +1245,174 @@ TEST_F(NullByteAliasRejectionTest, PropertyNullByteAliasesRejected) {
   ASSERT_TRUE(create_result.ok())
       << "CreateIndexSchema failed: " << create_result.status();
 
-  // Verify initial state: no aliases.
-  auto initial_aliases = SchemaManager::Instance().GetAllAliases(kDbNum);
-  ASSERT_TRUE(initial_aliases.empty());
+  // Alias containing a null byte.
+  std::string null_alias = "alias_with";
+  null_alias.push_back('\0');
+  null_alias += "null";
 
-  std::mt19937 rng(kSeed);
+  auto add_status =
+      SchemaManager::Instance().AddAlias(kDbNum, null_alias, index_name);
+  EXPECT_TRUE(add_status.ok()) << add_status;
 
-  for (int iter = 0; iter < kIterations; ++iter) {
-    // Generate a random string with at least one null byte.
-    // Strategy: create a random-length string and insert '\0' at random
-    // positions.
-    std::uniform_int_distribution<int> len_dist(1, 20);
-    int total_len = len_dist(rng);
-    std::string null_alias;
-    null_alias.reserve(total_len);
+  auto aliases = SchemaManager::Instance().GetAllAliases(kDbNum);
+  EXPECT_EQ(aliases.size(), 1);
 
-    // Fill with random characters.
-    std::uniform_int_distribution<int> char_dist(1, 255);
-    for (int i = 0; i < total_len; ++i) {
-      null_alias.push_back(static_cast<char>(char_dist(rng)));
-    }
+  auto remove_status =
+      SchemaManager::Instance().RemoveAlias(kDbNum, null_alias);
+  EXPECT_TRUE(remove_status.ok()) << remove_status;
 
-    // Insert at least one null byte at a random position.
-    std::uniform_int_distribution<int> pos_dist(0, total_len - 1);
-    int null_pos = pos_dist(rng);
-    null_alias[null_pos] = '\0';
+  // UpdateAlias with a null-byte alias.
+  std::string null_alias2 = "other";
+  null_alias2.push_back('\0');
+  null_alias2 += "alias";
 
-    // Optionally insert additional null bytes (0-2 more).
-    std::uniform_int_distribution<int> extra_nulls_dist(0, 2);
-    int extra_nulls = extra_nulls_dist(rng);
-    for (int i = 0; i < extra_nulls; ++i) {
-      int extra_pos = pos_dist(rng);
-      null_alias[extra_pos] = '\0';
-    }
+  auto update_status =
+      SchemaManager::Instance().UpdateAlias(kDbNum, null_alias2, index_name);
+  EXPECT_TRUE(update_status.ok()) << update_status;
+}
 
-    // Snapshot alias map state before calls.
-    auto aliases_before = SchemaManager::Instance().GetAllAliases(kDbNum);
+// Hashtag validation for single-slot indexes.
+class HashtagAliasValidationTest : public vmsdk::ValkeyTest {
+ public:
+  void SetUp() override {
+    vmsdk::ValkeyTest::SetUp();
+    ValkeySearch::InitInstance(std::make_unique<TestableValkeySearch>());
+    KeyspaceEventManager::InitInstance(
+        std::make_unique<TestableKeyspaceEventManager>());
 
-    // Test AddAlias with null-byte alias.
-    auto add_status =
-        SchemaManager::Instance().AddAlias(kDbNum, null_alias, index_name);
-    EXPECT_EQ(add_status.code(), absl::StatusCode::kInvalidArgument)
-        << "Iteration " << iter
-        << ": AddAlias with null-byte alias should return InvalidArgument, "
-        << "got: " << add_status;
+    ON_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
+        .WillByDefault(testing::Return(kDbNum));
+    ON_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
+        .WillByDefault(testing::Return(&fake_ctx_));
+    ON_CALL(*kMockValkeyModule, FreeThreadSafeContext(testing::_))
+        .WillByDefault(testing::Return());
+    ON_CALL(*kMockValkeyModule, SelectDb(testing::_, kDbNum))
+        .WillByDefault(testing::Return(VALKEYMODULE_OK));
+    ON_CALL(*kMockValkeyModule, Replicate(testing::_, testing::_, testing::_))
+        .WillByDefault(testing::Return(VALKEYMODULE_OK));
 
-    // Test RemoveAlias with null-byte alias.
-    auto remove_status =
-        SchemaManager::Instance().RemoveAlias(kDbNum, null_alias);
-    EXPECT_EQ(remove_status.code(), absl::StatusCode::kInvalidArgument)
-        << "Iteration " << iter
-        << ": RemoveAlias with null-byte alias should return "
-        << "InvalidArgument, got: " << remove_status;
-
-    // Test UpdateAlias with null-byte alias.
-    auto update_status =
-        SchemaManager::Instance().UpdateAlias(kDbNum, null_alias, index_name);
-    EXPECT_EQ(update_status.code(), absl::StatusCode::kInvalidArgument)
-        << "Iteration " << iter
-        << ": UpdateAlias with null-byte alias should return "
-        << "InvalidArgument, got: " << update_status;
-
-    // Verify alias map is unchanged after all three calls.
-    auto aliases_after = SchemaManager::Instance().GetAllAliases(kDbNum);
-    ASSERT_EQ(aliases_after, aliases_before)
-        << "Iteration " << iter
-        << ": Alias map was modified by a null-byte alias operation. "
-        << "Expected " << aliases_before.size() << " entries, got "
-        << aliases_after.size();
+    // Standalone mode: no coordinator needed for this validation test.
+    SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+        &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/false));
   }
+
+  void TearDown() override {
+    SchemaManager::InitInstance(nullptr);
+    KeyspaceEventManager::InitInstance(nullptr);
+    ValkeySearch::InitInstance(nullptr);
+    vmsdk::ValkeyTest::TearDown();
+  }
+
+  static constexpr int kDbNum = 0;
+  ValkeyModuleCtx fake_ctx_;
+};
+
+TEST_F(HashtagAliasValidationTest, AliasWithMatchingHashtagSucceeds) {
+  const std::string index_name = "my_idx{slot1}";
+
+  data_model::IndexSchema base_proto;
+  base_proto.set_name(index_name);
+  base_proto.set_db_num(kDbNum);
+  base_proto.add_subscribed_key_prefixes("doc:{slot1}:");
+  base_proto.set_attribute_data_type(data_model::ATTRIBUTE_DATA_TYPE_HASH);
+
+  auto *attr = base_proto.add_attributes();
+  attr->set_alias("tag_attr");
+  attr->set_identifier("tag_field");
+  attr->mutable_index()->mutable_tag_index();
+
+  auto create_result =
+      SchemaManager::Instance().CreateIndexSchema(&fake_ctx_, base_proto);
+  ASSERT_TRUE(create_result.ok()) << create_result.status();
+
+  auto status =
+      SchemaManager::Instance().AddAlias(kDbNum, "alias{slot1}", index_name);
+  EXPECT_TRUE(status.ok()) << status;
+
+  auto update_status = SchemaManager::Instance().UpdateAlias(
+      kDbNum, "other_alias{slot1}", index_name);
+  EXPECT_TRUE(update_status.ok()) << update_status;
+}
+
+TEST_F(HashtagAliasValidationTest, AliasWithoutHashtagRejected) {
+  const std::string index_name = "my_idx{slot1}";
+
+  data_model::IndexSchema base_proto;
+  base_proto.set_name(index_name);
+  base_proto.set_db_num(kDbNum);
+  base_proto.add_subscribed_key_prefixes("doc:{slot1}:");
+  base_proto.set_attribute_data_type(data_model::ATTRIBUTE_DATA_TYPE_HASH);
+
+  auto *attr = base_proto.add_attributes();
+  attr->set_alias("tag_attr");
+  attr->set_identifier("tag_field");
+  attr->mutable_index()->mutable_tag_index();
+
+  auto create_result =
+      SchemaManager::Instance().CreateIndexSchema(&fake_ctx_, base_proto);
+  ASSERT_TRUE(create_result.ok()) << create_result.status();
+
+  auto status =
+      SchemaManager::Instance().AddAlias(kDbNum, "plain_alias", index_name);
+  EXPECT_EQ(status.code(), absl::StatusCode::kInvalidArgument);
+  EXPECT_THAT(status.message(), testing::HasSubstr("hashtag does not match"));
+
+  auto update_status =
+      SchemaManager::Instance().UpdateAlias(kDbNum, "plain_alias", index_name);
+  EXPECT_EQ(update_status.code(), absl::StatusCode::kInvalidArgument);
+  EXPECT_THAT(update_status.message(),
+              testing::HasSubstr("hashtag does not match"));
+}
+
+TEST_F(HashtagAliasValidationTest, AliasWithDifferentHashtagRejected) {
+  const std::string index_name = "my_idx{slot1}";
+
+  data_model::IndexSchema base_proto;
+  base_proto.set_name(index_name);
+  base_proto.set_db_num(kDbNum);
+  base_proto.add_subscribed_key_prefixes("doc:{slot1}:");
+  base_proto.set_attribute_data_type(data_model::ATTRIBUTE_DATA_TYPE_HASH);
+
+  auto *attr = base_proto.add_attributes();
+  attr->set_alias("tag_attr");
+  attr->set_identifier("tag_field");
+  attr->mutable_index()->mutable_tag_index();
+
+  auto create_result =
+      SchemaManager::Instance().CreateIndexSchema(&fake_ctx_, base_proto);
+  ASSERT_TRUE(create_result.ok()) << create_result.status();
+
+  auto status = SchemaManager::Instance().AddAlias(kDbNum, "alias{different}",
+                                                   index_name);
+  EXPECT_EQ(status.code(), absl::StatusCode::kInvalidArgument);
+  EXPECT_THAT(status.message(), testing::HasSubstr("hashtag does not match"));
+}
+
+TEST_F(HashtagAliasValidationTest, NonHashtagIndexAllowsAnyAlias) {
+  const std::string index_name = "regular_index";
+
+  data_model::IndexSchema base_proto;
+  base_proto.set_name(index_name);
+  base_proto.set_db_num(kDbNum);
+  base_proto.add_subscribed_key_prefixes("doc:");
+  base_proto.set_attribute_data_type(data_model::ATTRIBUTE_DATA_TYPE_HASH);
+
+  auto *attr = base_proto.add_attributes();
+  attr->set_alias("tag_attr");
+  attr->set_identifier("tag_field");
+  attr->mutable_index()->mutable_tag_index();
+
+  auto create_result =
+      SchemaManager::Instance().CreateIndexSchema(&fake_ctx_, base_proto);
+  ASSERT_TRUE(create_result.ok()) << create_result.status();
+
+  auto status1 =
+      SchemaManager::Instance().AddAlias(kDbNum, "plain_alias", index_name);
+  EXPECT_TRUE(status1.ok()) << status1;
+
+  auto status2 =
+      SchemaManager::Instance().AddAlias(kDbNum, "alias{anything}", index_name);
+  EXPECT_TRUE(status2.ok()) << status2;
 }
 
 // Duplicate ALIASADD rejection.

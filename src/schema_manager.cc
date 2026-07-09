@@ -44,6 +44,7 @@
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/thread_pool.h"
+#include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
@@ -1095,9 +1096,15 @@ static vmsdk::info_field::Integer total_active_write_threads(
 
 absl::Status SchemaManager::AddAlias(uint32_t db_num, absl::string_view alias,
                                      absl::string_view index_name) {
-  // Validate: no null bytes in alias.
-  if (alias.find('\0') != absl::string_view::npos) {
-    return absl::InvalidArgumentError("Alias name must not contain null bytes");
+  // For single-slot indexes (those with a {hashtag} in the name), the alias
+  // must contain the same hashtag so that cluster slot routing is consistent.
+  auto index_tag = vmsdk::ParseHashTag(index_name);
+  if (index_tag.has_value()) {
+    auto alias_tag = vmsdk::ParseHashTag(alias);
+    if (!alias_tag.has_value() || *alias_tag != *index_tag) {
+      return absl::InvalidArgumentError(
+          "Alias hashtag does not match index hashtag");
+    }
   }
 
   // Reject self-referential alias (alias same as the target index name).
@@ -1217,11 +1224,6 @@ absl::Status SchemaManager::AddAlias(uint32_t db_num, absl::string_view alias,
 
 absl::Status SchemaManager::RemoveAlias(uint32_t db_num,
                                         absl::string_view alias) {
-  // Validate: no null bytes in alias.
-  if (alias.find('\0') != absl::string_view::npos) {
-    return absl::InvalidArgumentError("Alias name must not contain null bytes");
-  }
-
   if (coordinator_enabled_) {
     // Coordinator mode: look up owning index under lock, then release before
     // calling MetadataManager (which invokes OnMetadataCallback, acquiring the
@@ -1307,9 +1309,15 @@ absl::Status SchemaManager::RemoveAlias(uint32_t db_num,
 absl::Status SchemaManager::UpdateAlias(uint32_t db_num,
                                         absl::string_view alias,
                                         absl::string_view index_name) {
-  // Validate: no null bytes in alias.
-  if (alias.find('\0') != absl::string_view::npos) {
-    return absl::InvalidArgumentError("Alias name must not contain null bytes");
+  // For single-slot indexes (those with a {hashtag} in the name), the alias
+  // must contain the same hashtag so that cluster slot routing is consistent.
+  auto index_tag = vmsdk::ParseHashTag(index_name);
+  if (index_tag.has_value()) {
+    auto alias_tag = vmsdk::ParseHashTag(alias);
+    if (!alias_tag.has_value() || *alias_tag != *index_tag) {
+      return absl::InvalidArgumentError(
+          "Alias hashtag does not match index hashtag");
+    }
   }
 
   // Reject self-referential alias (alias same as the target index name).

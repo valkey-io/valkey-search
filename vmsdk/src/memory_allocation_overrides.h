@@ -16,11 +16,7 @@
 
 #include "vmsdk/src/memory_allocation.h"
 
-#if defined(__clang__)
 #define WEAK_SYMBOL __attribute__((weak))
-#else
-#define WEAK_SYMBOL
-#endif
 
 extern "C" {
 // NOLINTNEXTLINE

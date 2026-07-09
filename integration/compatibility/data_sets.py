@@ -798,6 +798,30 @@ MISSING_FIELD_FILTER_EXPRS = {
     # (concern #2 + #4). Under VK both `!(Nil=='active')` and
     # `Nil!='active'` are TRUE; under classic semantics one would be FALSE.
     "filter neg of eq":          "!(@status=='active')",
+    # --- Bare single-operator comparisons against a missing field ---
+    # Each isolates ONE FilterFunc* operator's nil semantics with no
+    # surrounding boolean composition, mirroring the per-operator review
+    # analysis (FilterFuncEq/Ne/Lt/Le/Gt/Ge). @status is missing on R8, so
+    # every one of these applies its operator directly to a Nil operand.
+    # VK: a comparison touching a missing field yields Nil ("unknown"),
+    # which the filter keeps -- matching RediSearch (missing field -> NULL,
+    # NULL kept). The earlier composition tests only exercised ==, != and <
+    # against a missing field; <=, > and >= were never applied to one.
+    "filter bare eq nil":        "@status=='active'",  # == FilterFuncEq
+    "filter bare ne nil":        "@status!='active'",  # != FilterFuncNe
+    "filter bare lt nil":        "@status<'m'",         # <  FilterFuncLt
+    "filter bare le nil":        "@status<='m'",        # <= FilterFuncLe
+    "filter bare gt nil":        "@status>'m'",         # >  FilterFuncGt
+    "filter bare ge nil":        "@status>='m'",        # >= FilterFuncGe
+    # Same six operators against a missing NUMERIC field (R7 has no rating),
+    # which resolves through the numeric attribute path in
+    # FilterAttributeReference rather than the string path.
+    "filter bare num eq nil":    "@rating==3",
+    "filter bare num ne nil":    "@rating!=3",
+    "filter bare num lt nil":    "@rating<3",
+    "filter bare num le nil":    "@rating<=3",
+    "filter bare num gt nil":    "@rating>3",
+    "filter bare num ge nil":    "@rating>=3",
 }
 
 FILTER_DATASETS = {

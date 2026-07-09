@@ -58,6 +58,15 @@ find_package(ICU REQUIRED COMPONENTS uc i18n data)
 
 find_package(highwayhash REQUIRED)
 
+include(${CMAKE_SOURCE_DIR}/protogen/protogen.cmake)
+protogen_setup(
+    ${VALKEY_PROTOGEN_BINARY_DIR}
+    src/coordinator/coordinator
+    src/rdb_section
+    src/index_schema
+    third_party/hnswlib/index
+)
+
 if (NOT TARGET highwayhash)
     add_library(highwayhash UNKNOWN IMPORTED)
     set_target_properties(highwayhash PROPERTIES
@@ -75,7 +84,6 @@ if (BUILD_UNIT_TESTS)
     enable_testing()
 endif()
 
-add_subdirectory(protogen)
 add_subdirectory(vmsdk)
 add_subdirectory(third_party)
 add_subdirectory(src)

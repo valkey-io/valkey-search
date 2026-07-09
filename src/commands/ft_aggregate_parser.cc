@@ -217,7 +217,8 @@ ConstructGroupByParser() {
                                  _ << "Missing Reducer name");
           auto uc_name =
               expr::FuncUpper(expr::Value(vmsdk::ToStringView(name)));
-          auto reducer_itr = GroupBy::reducerTable.find(uc_name.AsStringView());
+          auto reducer_itr =
+              GroupBy::reducerTable.find(*uc_name.AsStringView());
           if (reducer_itr == GroupBy::reducerTable.end()) {
             return absl::NotFoundError(absl::StrCat("reducer function `",
                                                     vmsdk::ToStringView(name),
@@ -226,7 +227,7 @@ ConstructGroupByParser() {
 
           VMSDK_ASSIGN_OR_RETURN(
               std::unique_ptr<GroupBy::Reducer> r,
-              reducer_itr->second(uc_name.AsStringView(), parameters, itr));
+              reducer_itr->second(*uc_name.AsStringView(), parameters, itr));
           groupby->reducers_.emplace_back(std::move(r));
         }
         parameters.stages_.emplace_back(std::move(groupby));

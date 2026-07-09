@@ -41,6 +41,8 @@ RUN apt update && \
         clangd \
         jq \
         ccache \
+        libbenchmark-dev \
+        libicu-dev \
         memtier-benchmark && \
     # Update certificates
     update-ca-certificates && \

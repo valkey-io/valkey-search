@@ -1,6 +1,5 @@
 # Base common test library - used by all test suites
-set(SRCS_COMMON common.cc
-                common.h)
+set(SRCS_COMMON common.cc common.h)
 
 add_library(testing_common_base SHARED ${SRCS_COMMON})
 target_link_libraries(testing_common_base PUBLIC search_dso)

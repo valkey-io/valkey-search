@@ -78,4 +78,30 @@ class TestAliasCompatibility(BaseCompatibilityTest):
         """FT.ALIASUPDATE for a non-existent index returns an error."""
         self.execute_command(["FT.ALIASUPDATE", "new_alias", "no_such_index"])
 
+    # Alias name restriction tests (divergence: we reject empty aliases)
+
+    def test_aliasadd_null_byte_in_name(self, key_type):
+        """FT.ALIASADD with embedded null byte in alias name."""
+        self.execute_command(["FT.ALIASADD", "alias\x00bad", f"{key_type}_idx1"])
+
+    def test_aliasupdate_null_byte_in_name(self, key_type):
+        """FT.ALIASUPDATE with embedded null byte in alias name."""
+        self.execute_command(["FT.ALIASUPDATE", "alias\x00bad", f"{key_type}_idx1"])
+
+    def test_null_byte_alias_functional(self, key_type):
+        """Create a null-byte alias and verify it works for INFO, SEARCH, and DEL."""
+        alias_name = "null\x00alias"
+        self.execute_command(["FT.ALIASADD", alias_name, f"{key_type}_idx1"])
+        self.execute_command(["FT.INFO", alias_name])
+        self.execute_command(["FT.SEARCH", alias_name, "@price:[0 +inf]"])
+        self.execute_command(["FT.ALIASDEL", alias_name])
+
+    def test_aliasadd_collides_with_index_name(self, key_type):
+        """FT.ALIASADD where alias name equals an existing index name."""
+        self.execute_command(["FT.ALIASADD", f"{key_type}_idx2", f"{key_type}_idx1"])
+
+    def test_aliasupdate_collides_with_index_name(self, key_type):
+        """FT.ALIASUPDATE where alias name equals an existing index name."""
+        self.execute_command(["FT.ALIASUPDATE", f"{key_type}_idx2", f"{key_type}_idx1"])
+
 

@@ -142,10 +142,12 @@ void SerializeValueToResp(ValkeyModuleCtx *ctx, const expr::Value &value) {
   if (value.IsArray()) {
     SerializeArrayToResp(ctx, value.GetArray());
   } else if (value.IsBool()) {
-    auto value_sv = value.AsStringView();
+    // IsBool() guarantees AsStringView() returns a value.
+    auto value_sv = *value.AsStringView();
     ValkeyModule_ReplyWithStringBuffer(ctx, value_sv.data(), value_sv.size());
   } else if (value.IsDouble()) {
-    auto value_str = value.AsString();
+    // IsDouble() guarantees AsString() returns a value.
+    auto value_str = *value.AsString();
     ValkeyModule_ReplyWithStringBuffer(ctx, value_str.data(), value_str.size());
   } else if (value.IsString()) {
     auto value_sv = value.GetStringView();
@@ -173,19 +175,20 @@ bool ReplyWithValue(ValkeyModuleCtx *ctx,
 
   if (data_type == data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH) {
     ValkeyModule_ReplyWithSimpleString(ctx, name.data());
-    auto value_sv = value.AsStringView();
+    // Guarded by IsNil() check above; AsStringView always succeeds here.
+    auto value_sv = *value.AsStringView();
     ValkeyModule_ReplyWithStringBuffer(ctx, value_sv.data(), value_sv.size());
   } else {
     char double_storage[50];
     std::string_view value_view;
     if (name == "$") {
-      value_view = value.AsStringView();
+      value_view = *value.AsStringView();
     } else {
       switch (indexer_type) {
         case indexes::IndexerType::kTag:
         case indexes::IndexerType::kText:
         case indexes::IndexerType::kNone: {
-          value_view = value.AsStringView();
+          value_view = *value.AsStringView();
           break;
         }
         case indexes::IndexerType::kNumeric: {

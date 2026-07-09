@@ -976,15 +976,24 @@ absl::Status MetadataManager::CallFTInternalUpdateForReconciliation(
   std::string metadata_binary, header_binary;
   proposed_entry.SerializeToString(&metadata_binary);
   version_header.SerializeToString(&header_binary);
-  std::string type_name_str(type_name);
 
   ValkeyModuleCallReply *reply;
   ValkeyModuleCtx *safe_context = detached_ctx_.get();
 
-  reply = ValkeyModule_Call(
-      safe_context, "FT.INTERNAL_UPDATE", "!Kcbbccc", id.c_str(),
-      metadata_binary.data(), metadata_binary.size(), header_binary.data(),
-      header_binary.size(), "TYPE", "1", type_name_str.c_str());
+  // Only emit the TYPE keyword when the type is non-default, improving
+  // inter-release compatibility (older nodes don't see unknown arguments).
+  if (type_name == kSchemaManagerMetadataTypeName) {
+    reply = ValkeyModule_Call(safe_context, "FT.INTERNAL_UPDATE", "!Kcbb",
+                              id.c_str(), metadata_binary.data(),
+                              metadata_binary.size(), header_binary.data(),
+                              header_binary.size());
+  } else {
+    std::string type_name_str(type_name);
+    reply = ValkeyModule_Call(
+        safe_context, "FT.INTERNAL_UPDATE", "!Kcbbccc", id.c_str(),
+        metadata_binary.data(), metadata_binary.size(), header_binary.data(),
+        header_binary.size(), "TYPE", "1", type_name_str.c_str());
+  }
 
   if (reply == nullptr ||
       ValkeyModule_CallReplyType(reply) == VALKEYMODULE_REPLY_ERROR) {
@@ -1005,13 +1014,21 @@ void MetadataManager::ReplicateFTInternalUpdate(
   entry.SerializeToString(&metadata_binary);
   header.SerializeToString(&header_binary);
 
-  // Always emit TYPE keyword for consistency
-  std::string type_name_str(type_name);
-  ValkeyModule_Replicate(detached_ctx_.get(), "FT.INTERNAL_UPDATE", "cbbccc",
-                         std::string(encoded_id).c_str(),
-                         metadata_binary.data(), metadata_binary.size(),
-                         header_binary.data(), header_binary.size(), "TYPE",
-                         "1", type_name_str.c_str());
+  // Only emit the TYPE keyword when the type is non-default, improving
+  // inter-release compatibility (older nodes don't see unknown arguments).
+  if (type_name == kSchemaManagerMetadataTypeName) {
+    ValkeyModule_Replicate(detached_ctx_.get(), "FT.INTERNAL_UPDATE", "cbb",
+                           std::string(encoded_id).c_str(),
+                           metadata_binary.data(), metadata_binary.size(),
+                           header_binary.data(), header_binary.size());
+  } else {
+    std::string type_name_str(type_name);
+    ValkeyModule_Replicate(detached_ctx_.get(), "FT.INTERNAL_UPDATE", "cbbccc",
+                           std::string(encoded_id).c_str(),
+                           metadata_binary.data(), metadata_binary.size(),
+                           header_binary.data(), header_binary.size(), "TYPE",
+                           "1", type_name_str.c_str());
+  }
 }
 
 }  // namespace valkey_search::coordinator

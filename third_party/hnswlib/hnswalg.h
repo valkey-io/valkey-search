@@ -158,7 +158,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     offsetLevel0_ = 0;
 
     data_level0_memory_ = std::make_unique<ChunkedArray>(
-        size_data_per_element_, k_elements_per_chunk, max_elements);
+        size_data_per_element_, k_elements_per_chunk, max_elements, true);
 
     cur_element_count_ = 0;
 
@@ -983,7 +983,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     }
 
     data_level0_memory_ = std::make_unique<ChunkedArray>(
-        size_data_per_element_, k_elements_per_chunk, max_elements);
+        size_data_per_element_, k_elements_per_chunk, max_elements, true);
 
     for (size_t i = 0; i < cur_element_count_; i++) {
       VMSDK_ASSIGN_OR_RETURN(auto chunk, input.LoadChunk());

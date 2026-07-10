@@ -62,6 +62,7 @@ class ExprTest : public vmsdk::ValkeyTest {
         return absl::NotFoundError("param not found");
       }
     }
+    bool UseFilterComparisonSemantics() const override { return false; }
   } cc;
   std::unique_ptr<Record> record_;
 

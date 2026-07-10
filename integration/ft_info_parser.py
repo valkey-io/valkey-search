@@ -146,6 +146,11 @@ class FTInfoParser:
         return self.parsed_data.get("hash_indexing_failures", 0)
 
     @property
+    def filter_numeric_conversion_failures(self) -> int:
+        """Get the number of FILTER numeric-field conversion failures."""
+        return self.parsed_data.get("filter_numeric_conversion_failures", 0)
+
+    @property
     def backfill_in_progress(self) -> bool:
         """Check if backfill is in progress."""
         return bool(self.parsed_data.get("backfill_in_progress", 0))

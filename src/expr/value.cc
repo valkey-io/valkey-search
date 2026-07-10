@@ -384,6 +384,66 @@ Value FuncGt(const Value& l, const Value& r) { return Value(l > r); }
 
 Value FuncGe(const Value& l, const Value& r) { return Value(l >= r); }
 
+// Filter comparison semantics (matches Redisearch FT.CREATE FILTER): a
+// comparison that involves a missing field (Nil) yields Nil ("unknown")
+// rather than a definite true/false. Nil then propagates through the filter
+// logical operators (the FilterLogical && / || node and the filter-context
+// negation in Not), and a top-level Nil keeps the document (see
+// IndexSchema::EvaluateFilter). This is three-valued (SQL NULL-like) logic,
+// not IEEE unordered comparison.
+//
+// The guard is on IsNil() specifically, not on Compare()==kUNORDERED:
+// kUNORDERED also arises from NaN (e.g. a division by zero), which is a real
+// computed value, not a missing field, and must keep the legacy comparison
+// behavior. For all non-Nil operands these fall through to the same operators
+// as before.
+static bool EitherNil(const Value& l, const Value& r) {
+  return l.IsNil() || r.IsNil();
+}
+
+Value FilterFuncEq(const Value& l, const Value& r) {
+  if (EitherNil(l, r)) {
+    return Value(Value::Nil("filter ==: missing field"));
+  }
+  return Value(l == r);
+}
+
+Value FilterFuncNe(const Value& l, const Value& r) {
+  if (EitherNil(l, r)) {
+    return Value(Value::Nil("filter !=: missing field"));
+  }
+  auto res = Compare(l, r);
+  return Value(res != Ordering::kEQUAL);
+}
+
+Value FilterFuncLt(const Value& l, const Value& r) {
+  if (EitherNil(l, r)) {
+    return Value(Value::Nil("filter <: missing field"));
+  }
+  return Value(l < r);
+}
+
+Value FilterFuncLe(const Value& l, const Value& r) {
+  if (EitherNil(l, r)) {
+    return Value(Value::Nil("filter <=: missing field"));
+  }
+  return Value(l <= r);
+}
+
+Value FilterFuncGt(const Value& l, const Value& r) {
+  if (EitherNil(l, r)) {
+    return Value(Value::Nil("filter >: missing field"));
+  }
+  return Value(l > r);
+}
+
+Value FilterFuncGe(const Value& l, const Value& r) {
+  if (EitherNil(l, r)) {
+    return Value(Value::Nil("filter >=: missing field"));
+  }
+  return Value(l >= r);
+}
+
 Value FuncLor(const Value& l, const Value& r) {
   DBG << "FuncLor: " << l << " || " << r << "\n";
   auto lv = l.AsBool();
@@ -481,6 +541,9 @@ Value FuncSqrt(const Value& o) {
 }
 
 Value FuncStrlen(const Value& o) {
+  if (o.IsNil()) {
+    return Value(Value::Nil("strlen of nil"));
+  }
   if (o.IsArray()) {
     return Value();
   }
@@ -492,6 +555,9 @@ Value FuncStrlen(const Value& o) {
 }
 
 Value FuncStartswith(const Value& l, const Value& r) {
+  if (l.IsNil() || r.IsNil()) {
+    return Value(Value::Nil("startswith with nil"));
+  }
   if (l.IsArray() || r.IsArray()) {
     return Value();
   }
@@ -509,10 +575,12 @@ Value FuncStartswith(const Value& l, const Value& r) {
 }
 
 Value FuncContains(const Value& l, const Value& r) {
+  if (l.IsNil() || r.IsNil()) {
+    return Value(Value::Nil("contains with nil"));
+  }
   if (l.IsArray() || r.IsArray()) {
     return Value();
   }
-
   auto ls = l.AsStringView();
   auto rs = r.AsStringView();
   if (!ls || !rs) {
@@ -532,10 +600,12 @@ Value FuncContains(const Value& l, const Value& r) {
 }
 
 Value FuncSubstr(const Value& l, const Value& m, const Value& r) {
+  if (l.IsNil()) {
+    return Value(Value::Nil("substr of nil"));
+  }
   if (l.IsArray() || m.IsArray() || r.IsArray()) {
     return Value(Value::Nil("Invalid type for substr. Expected string"));
   }
-
   auto ls = l.AsStringView();
   auto offset_p = m.AsInteger();
   auto length_p = r.AsInteger();
@@ -565,6 +635,9 @@ Value FuncSubstr(const Value& l, const Value& m, const Value& r) {
 }
 
 Value FuncLower(const Value& o) {
+  if (o.IsNil()) {
+    return Value(Value::Nil("lower of nil"));
+  }
   if (o.IsArray()) {
     return Value();
   }
@@ -594,6 +667,9 @@ Value FuncLower(const Value& o) {
 }
 
 Value FuncUpper(const Value& o) {
+  if (o.IsNil()) {
+    return Value(Value::Nil("upper of nil"));
+  }
   if (o.IsArray()) {
     return Value();
   }
@@ -631,6 +707,11 @@ static bool DateNegativeTsReturnsNil() {
 }
 
 Value FuncConcat(const absl::InlinedVector<Value, 4>& values) {
+  for (auto& v : values) {
+    if (v.IsNil()) {
+      return Value(Value::Nil("concat with nil"));
+    }
+  }
   std::string result;
   for (auto& v : values) {
     auto s = v.AsStringView();

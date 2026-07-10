@@ -143,7 +143,7 @@ absl::Status IndexSchema::TextInfoCmd(ValkeyModuleCtx* ctx,
       stem_wi.Next();
     }
     ValkeyModule_ReplySetArrayLength(ctx, count);
-  } else if (subcommand == "TOKENIZE") {
+  } else if (subcommand == "LEXER") {
     std::string text;
     VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, text));
     const auto& processor = index_schema->GetTextIndexSchema()->GetProcessor();

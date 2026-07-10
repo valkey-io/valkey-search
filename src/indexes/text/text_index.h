@@ -28,7 +28,6 @@
 #include "src/indexes/text/posting.h"
 #include "src/indexes/text/rax_target_mutex_pool.h"
 #include "src/indexes/text/rax_wrapper.h"
-#include "src/indexes/text/stemmer.h"
 
 namespace valkey_search::indexes::text {
 

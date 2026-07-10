@@ -27,7 +27,7 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
-#include "src/indexes/text/query_tokenizer.h"
+#include "src/indexes/text/language_processor.h"
 #include "src/query/predicate.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/status/status_macros.h"

@@ -97,8 +97,8 @@ LANGUAGE_STEMMING_DATA = {
         "description": "correndo/corremos -> corr-",
     },
     "RUSSIAN": {
-        "doc_text": "\u0414\u0435\u0442\u0438 \u0431\u0435\u0433\u0443\u0449\u0438\u0435 \u0432 \u043f\u0430\u0440\u043a\u0435",
-        "stem_query": "\u0431\u0435\u0433\u0443\u0449\u0438\u0439",
+        "doc_text": "Дети бегущие в парке",
+        "stem_query": "бегущий",
         "description": "бегущие/бегущий share stem бегущ",
     },
     "SWEDISH": {
@@ -107,8 +107,8 @@ LANGUAGE_STEMMING_DATA = {
         "description": "springer/springande -> spring",
     },
     "TURKISH": {
-        "doc_text": "Çocuklar parkta ko\u015fuyorlar",
-        "stem_query": "ko\u015fuyor",
+        "doc_text": "Çocuklar parkta koşuyorlar",
+        "stem_query": "koşuyor",
         "description": "koşuyorlar/koşuyor share stem",
     },
     "DUTCH": {
@@ -122,8 +122,8 @@ LANGUAGE_STEMMING_DATA = {
         "description": "berlari/pelari -> lari",
     },
     "ARABIC": {
-        "doc_text": "\u0627\u0644\u0623\u0637\u0641\u0627\u0644 \u064a\u0631\u0643\u0636\u0648\u0646 \u0641\u064a \u0627\u0644\u062d\u062f\u064a\u0642\u0629",
-        "stem_query": "\u0627\u0644\u0623\u0637\u0641\u0627\u0644",
+        "doc_text": "الأطفال يركضون في الحديقة",
+        "stem_query": "أطفال",
         "description": "Arabic definite article prefix removal",
     },
 }
@@ -502,8 +502,10 @@ class TestQueryParserNonAscii(ValkeySearchTestCaseBase):
         )
 
         # Query with Chinese chars: "世界" = 6 bytes (2 * 3-byte UTF-8)
+        # U+4E16 (世) encodes to 3 bytes: E4 B8 96
+        # U+754C (界) encodes to 3 bytes: E7 95 8C
         # Total query: "@content:世界 =>[KNN 10 @doc_embedding $BLOB]"
-        query = "@content:\xe4\xb8\x96\xe7\x95\x8c =>[KNN 10 @doc_embedding $BLOB]"
+        query = "@content:\u4e16\u754c =>[KNN 10 @doc_embedding $BLOB]"
         query_bytes = len(query.encode("utf-8"))
 
         # Set limit to exactly the query byte length — should pass

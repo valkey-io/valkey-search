@@ -5,20 +5,17 @@
  *
  */
 
-#ifndef VALKEY_SEARCH_INDEXES_TEXT_SNOWBALL_STEM_FILTER_H_
-#define VALKEY_SEARCH_INDEXES_TEXT_SNOWBALL_STEM_FILTER_H_
+#ifndef VALKEY_SEARCH_INDEXES_TEXT_SNOWBALL_STEM_H_
+#define VALKEY_SEARCH_INDEXES_TEXT_SNOWBALL_STEM_H_
 
 #include <cstdint>
-#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
-#include "absl/container/flat_hash_map.h"
-#include "absl/container/inlined_vector.h"
 #include "absl/strings/string_view.h"
 #include "src/index_schema.pb.h"
-#include "src/indexes/text/stemmer.h"
+#include "src/indexes/text/language_processor.h"
 
 struct sb_stemmer;
 
@@ -34,16 +31,16 @@ class SnowballStemFilter : public Stemmer {
                               uint32_t default_min_stem_size = 0);
 
   /// TokenFilter interface — applies stemming as part of the pipeline.
-  /// Returns the stemmed form of the token.
-  std::optional<std::string> Apply(absl::string_view token) const override;
+  /// Mutates the token to its stemmed form. Always returns true (keeps token).
+  bool Apply(std::string& token) const override;
 
   /// Stemmer interface
   std::string GetStemRoot(absl::string_view token,
                           uint32_t min_stem_size = 0) const override;
 
-  void BuildStemMap(const std::vector<std::string> &tokens,
+  void BuildStemMap(const std::vector<std::string>& tokens,
                     uint32_t min_stem_size,
-                    InProgressStemMap &stem_mappings) const override;
+                    InProgressStemMap& stem_mappings) const override;
 
   /// Get the language this filter was configured for.
   data_model::Language GetLanguage() const { return language_; }
@@ -52,12 +49,12 @@ class SnowballStemFilter : public Stemmer {
   data_model::Language language_;
   uint32_t default_min_stem_size_;
 
-  sb_stemmer *GetStemmer() const;
-  std::string_view DoStemming(absl::string_view word, sb_stemmer *stemmer,
+  sb_stemmer* GetStemmer() const;
+  std::string_view DoStemming(absl::string_view word, sb_stemmer* stemmer,
                               uint32_t min_stem_size) const;
-  static const char *GetLanguageString(data_model::Language language);
+  static const char* GetLanguageString(data_model::Language language);
 };
 
 }  // namespace valkey_search::indexes::text
 
-#endif  // VALKEY_SEARCH_INDEXES_TEXT_SNOWBALL_STEM_FILTER_H_
+#endif  // VALKEY_SEARCH_INDEXES_TEXT_SNOWBALL_STEM_H_

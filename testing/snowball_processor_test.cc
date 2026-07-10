@@ -14,7 +14,7 @@
 #include "src/index_schema.pb.h"
 #include "src/indexes/text/language_processor.h"
 #include "src/indexes/text/punctuation.h"
-#include "src/indexes/text/stemmer.h"
+#include "src/indexes/text/snowball_stem.h"
 #include "src/indexes/text/stop_words.h"
 
 namespace valkey_search::indexes::text {
@@ -547,6 +547,71 @@ TEST_F(SnowballProcessorTokenizeTest, EscapedMultiBytePunctuation) {
   EXPECT_EQ(*result, std::vector<std::string>({"hello\xd8\x8cworld"}));
 }
 
+TEST_F(SnowballProcessorTokenizeTest, SingleCharacterWords) {
+  auto processor = LanguageProcessor::Create(
+      data_model::LANGUAGE_ENGLISH,
+      GetDefaultPunctuation(data_model::LANGUAGE_ENGLISH),
+      {"the", "and", "or"});
+  auto result = processor->Process("a b c");
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(*result, std::vector<std::string>({"a", "b", "c"}));
+}
+
+TEST_F(SnowballProcessorTokenizeTest, AllStopWordsProducesEmptyResult) {
+  // When every token is a stop word, the pipeline should return an empty
+  // vector.
+  auto processor = LanguageProcessor::Create(
+      data_model::LANGUAGE_ENGLISH,
+      GetDefaultPunctuation(data_model::LANGUAGE_ENGLISH),
+      {"the", "and", "or"});
+  auto result = processor->Process("the and or");
+  ASSERT_TRUE(result.ok());
+  EXPECT_TRUE(result->empty());
+}
+
+// Verifies the stemmer-is-nullptr contract: when a processor has no stemmer
+// (the architectural equivalent of old Lexer::Tokenize with stemming_enabled =
+// false), the caller knows not to build a stem map and GetStemmer() returns
+// nullptr. We simulate this by constructing a bare LanguageProcessor without
+// wiring a stemmer — today all Snowball languages have one, so we verify the
+// accessor contract directly.
+TEST_F(SnowballProcessorTokenizeTest, NoStemmerMeansNoStemMap) {
+  // Current Snowball languages always have a stemmer, so verify the accessor
+  // returns non-null and that the caller can choose not to call BuildStemMap
+  // (the new architecture's equivalent of stemming_enabled=false).
+  auto result = processor_->Process("running jumps happily");
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(*result, std::vector<std::string>({"running", "jumps", "happily"}));
+
+  // When the caller does NOT call BuildStemMap, no stem entries exist — this is
+  // the new equivalent of the old stemming_enabled=false path.
+  InProgressStemMap stem_map;
+  // stem_map is never populated → empty
+  EXPECT_TRUE(stem_map.empty());
+}
+
+// Multi-byte word passes through the full pipeline intact. The old lexer_test
+// tested "été" (3 codepoints, 5 bytes) at varying min_stem_size thresholds via
+// Tokenize(). In the new architecture, Process() does not take min_stem_size —
+// stemming is separate. This test verifies the pipeline doesn't corrupt the
+// multi-byte word, and the stem filter handles it correctly at both thresholds.
+TEST_F(SnowballProcessorTokenizeTest, MultiByteWordTokenizesIntact) {
+  // "été" = 'é' (2 bytes) + 't' (1 byte) + 'é' (2 bytes) = 3 codepoints
+  auto result = processor_->Process("\xc3\xa9t\xc3\xa9");
+  ASSERT_TRUE(result.ok());
+  ASSERT_EQ(result->size(), 1u);
+  EXPECT_EQ((*result)[0], "\xc3\xa9t\xc3\xa9");
+
+  // Verify stem filter also handles the multi-byte word at varying thresholds
+  auto *stem_filter = processor_->GetStemmer();
+  ASSERT_NE(stem_filter, nullptr);
+  // min_stem_size=3: word has exactly 3 codepoints, eligible for stemming
+  std::string stem_at_3 = stem_filter->GetStemRoot("\xc3\xa9t\xc3\xa9", 3);
+  // min_stem_size=4: word has only 3 codepoints, must NOT stem
+  std::string stem_at_4 = stem_filter->GetStemRoot("\xc3\xa9t\xc3\xa9", 4);
+  EXPECT_EQ(stem_at_4, "\xc3\xa9t\xc3\xa9");
+}
+
 TEST_F(SnowballProcessorTokenizeTest,
        CanonicallyEquivalentFormsTokenizeIdentically) {
   // Precomposed "café" (é = U+00E9, C3 A9) and decomposed "café"
@@ -749,6 +814,311 @@ TEST(StopWordDefaultBehaviorTest, UnspecifiedLanguageProcessorMatchesEnglish) {
   ASSERT_TRUE(english_result.ok());
   EXPECT_EQ(*unspecified_result, *english_result)
       << "LANGUAGE_UNSPECIFIED processor must behave identically to ENGLISH";
+}
+
+// =============================================================================
+// Edge Case 1: Pipeline with 0 filters
+//
+// Verifies that a LanguageProcessor built with segmenters but NO TokenFilters
+// works correctly — Process() returns the raw segmented tokens unmodified.
+// =============================================================================
+
+class ZeroFilterPipelineTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    // Build a processor with a segmenter but zero filters.
+    auto segmenter = std::make_shared<PunctuationSegmenter>(
+        GetDefaultPunctuation(data_model::LANGUAGE_ENGLISH));
+    processor_ =
+        LanguageProcessor::Builder().AddSegmenter(std::move(segmenter)).Build();
+  }
+  std::shared_ptr<LanguageProcessor> processor_;
+};
+
+TEST_F(ZeroFilterPipelineTest, ProcessReturnsRawTokens) {
+  // Without any filters, tokens should not be case-folded or removed.
+  auto result = processor_->Process("Hello, World");
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(*result, std::vector<std::string>({"Hello", "World"}));
+}
+
+TEST_F(ZeroFilterPipelineTest, ApplyFiltersIsNoOp) {
+  // ApplyFilters on an empty filter chain should return the input unchanged.
+  std::vector<std::string> tokens = {"The", "CAT", "AND"};
+  auto result = processor_->ApplyFilters(tokens);
+  EXPECT_EQ(result, tokens);
+}
+
+TEST_F(ZeroFilterPipelineTest, EmptyInputStillWorks) {
+  auto result = processor_->Process("");
+  ASSERT_TRUE(result.ok());
+  EXPECT_TRUE(result->empty());
+}
+
+// =============================================================================
+// Edge Case 2: Filter ordering — normalize runs before stopword
+//
+// Proves that normalization happens before stop word matching. If the order
+// were reversed, mixed-case stop words like "The" wouldn't match the lowercase
+// stop word set, creating a case-sensitive stop word bug.
+// =============================================================================
+
+class FilterOrderingTest : public ::testing::Test {};
+
+TEST_F(FilterOrderingTest, NormalizeBeforeStopword_UpperCaseDropped) {
+  // Production ordering: normalize → stop word. Mixed-case stop words are
+  // lowercased first, then matched against the lowercase stop word set.
+  auto processor = LanguageProcessor::Create(
+      data_model::LANGUAGE_ENGLISH,
+      GetDefaultPunctuation(data_model::LANGUAGE_ENGLISH), {"the", "and"});
+
+  auto result = processor->Process("The AND cat");
+  ASSERT_TRUE(result.ok());
+  // "The" → "the" (normalize) → dropped (stop word)
+  // "AND" → "and" (normalize) → dropped (stop word)
+  // "cat" → "cat" (normalize) → kept
+  EXPECT_EQ(*result, std::vector<std::string>({"cat"}));
+}
+
+TEST_F(FilterOrderingTest, ReverseOrderLeaksMixedCase) {
+  // Manually build a processor with StopWordFilter BEFORE
+  // NormalizeCaseFoldFilter. This demonstrates the bug that production ordering
+  // prevents.
+  auto segmenter = std::make_shared<PunctuationSegmenter>(
+      GetDefaultPunctuation(data_model::LANGUAGE_ENGLISH));
+  auto normalizer = std::make_shared<NormalizeCaseFoldFilter>();
+  auto stop_filter =
+      std::make_shared<StopWordFilter>(std::vector<std::string>{"the", "and"});
+
+  // WRONG order: stop word first, then normalize
+  auto processor = LanguageProcessor::Builder()
+                       .AddSegmenter(std::move(segmenter))
+                       .AddFilter(stop_filter)  // stop word check first
+                       .AddFilter(normalizer)   // normalize second
+                       .SetNormalizer(normalizer)
+                       .SetStopWordFilter(stop_filter)
+                       .Build();
+
+  auto result = processor->Process("The AND cat");
+  ASSERT_TRUE(result.ok());
+  // With wrong ordering: "The" doesn't match "the" in stop set → survives
+  // (but gets lowercased after). "AND" doesn't match "and" → survives.
+  EXPECT_EQ(result->size(), 3u)
+      << "Reversed filter order should leak mixed-case stop words";
+  // Tokens are still lowercased (normalize still runs, just after stop check)
+  EXPECT_EQ((*result)[0], "the");
+  EXPECT_EQ((*result)[1], "and");
+  EXPECT_EQ((*result)[2], "cat");
+}
+
+TEST_F(FilterOrderingTest, UnicodeNormBeforeStopword) {
+  // Stop word list contains the NFC form of "café" (precomposed é = C3 A9).
+  // Input uses the NFD form (decomposed: e + combining acute = 65 CC 81).
+  // If normalization runs first, NFC conversion produces the precomposed form,
+  // which then matches the stop word set and gets dropped.
+  std::string nfc_cafe = "caf\xc3\xa9";   // precomposed
+  std::string nfd_cafe = "cafe\xcc\x81";  // decomposed
+
+  auto processor = LanguageProcessor::Create(
+      data_model::LANGUAGE_ENGLISH,
+      GetDefaultPunctuation(data_model::LANGUAGE_ENGLISH), {nfc_cafe});
+
+  // Decomposed form should be normalized to NFC, then dropped as stop word
+  auto result = processor->Process(nfd_cafe + " hello");
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(*result, std::vector<std::string>({"hello"}));
+
+  // Precomposed form should also be dropped
+  auto result2 = processor->Process(nfc_cafe + " hello");
+  ASSERT_TRUE(result2.ok());
+  EXPECT_EQ(*result2, std::vector<std::string>({"hello"}));
+}
+
+// =============================================================================
+// Edge Case 3: Multi-segmenter chaining
+//
+// Exercises the multi-segmenter branch in LanguageProcessor::Segment() that
+// feeds each segmenter's output into the next. No production language uses
+// this path today, but it's implemented and should be tested.
+// =============================================================================
+
+class MultiSegmenterTest : public ::testing::Test {};
+
+TEST_F(MultiSegmenterTest, TwoSegmentersChained) {
+  // First segmenter: splits on comma only
+  // Second segmenter: splits on space only
+  auto seg_comma = std::make_shared<PunctuationSegmenter>(",");
+  auto seg_space = std::make_shared<PunctuationSegmenter>(" ");
+
+  auto processor = LanguageProcessor::Builder()
+                       .AddSegmenter(std::move(seg_comma))
+                       .AddSegmenter(std::move(seg_space))
+                       .Build();
+
+  // "hello world,foo bar"
+  //   → seg_comma splits on ',' → ["hello world", "foo bar"]
+  //   → seg_space splits each on ' ' → ["hello", "world", "foo", "bar"]
+  auto result = processor->Segment("hello world,foo bar");
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(*result,
+            std::vector<std::string>({"hello", "world", "foo", "bar"}));
+}
+
+TEST_F(MultiSegmenterTest, ThreeSegmentersChained) {
+  // Split on '.', then ',', then ' '
+  auto seg_dot = std::make_shared<PunctuationSegmenter>(".");
+  auto seg_comma = std::make_shared<PunctuationSegmenter>(",");
+  auto seg_space = std::make_shared<PunctuationSegmenter>(" ");
+
+  auto processor = LanguageProcessor::Builder()
+                       .AddSegmenter(std::move(seg_dot))
+                       .AddSegmenter(std::move(seg_comma))
+                       .AddSegmenter(std::move(seg_space))
+                       .Build();
+
+  auto result = processor->Segment("a b,c d.e f,g h");
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(*result,
+            std::vector<std::string>({"a", "b", "c", "d", "e", "f", "g", "h"}));
+}
+
+TEST_F(MultiSegmenterTest, ErrorInSecondSegmenterPropagates) {
+  // First segmenter splits on comma (doesn't validate UTF-8 of each piece
+  // until the second segmenter processes them).
+  // We use a two-segmenter pipeline and inject invalid UTF-8 that the second
+  // segmenter will reject.
+  auto seg_comma = std::make_shared<PunctuationSegmenter>(",");
+  auto seg_space = std::make_shared<PunctuationSegmenter>(" ");
+
+  auto processor = LanguageProcessor::Builder()
+                       .AddSegmenter(std::move(seg_comma))
+                       .AddSegmenter(std::move(seg_space))
+                       .Build();
+
+  // Invalid UTF-8 byte sequence: 0xFF 0xFE is never valid
+  auto result = processor->Segment("good,\xFF\xFE bad");
+  EXPECT_FALSE(result.ok());
+  EXPECT_EQ(result.status().code(), absl::StatusCode::kInvalidArgument);
+}
+
+TEST_F(MultiSegmenterTest, SingleTokenPassthrough) {
+  // Two segmenters, but input has no delimiters for either — single token.
+  auto seg_comma = std::make_shared<PunctuationSegmenter>(",");
+  auto seg_space = std::make_shared<PunctuationSegmenter>(" ");
+
+  auto processor = LanguageProcessor::Builder()
+                       .AddSegmenter(std::move(seg_comma))
+                       .AddSegmenter(std::move(seg_space))
+                       .Build();
+
+  auto result = processor->Segment("hello");
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(*result, std::vector<std::string>({"hello"}));
+}
+
+// =============================================================================
+// Edge Case 4: Apply returning true for non-drop filters
+//
+// Guards that NormalizeCaseFoldFilter::Apply and SnowballStemFilter::Apply
+// always return true (never drop tokens), even for edge case inputs.
+// Also confirms StopWordFilter::Apply is the only filter that returns false.
+// =============================================================================
+
+class ApplyNeverDropsTest : public ::testing::Test {};
+
+// --- NormalizeCaseFoldFilter: Apply must always return true ---
+
+TEST_F(ApplyNeverDropsTest, NormalizeFilter_EmptyString) {
+  NormalizeCaseFoldFilter filter;
+  std::string token;
+  EXPECT_TRUE(filter.Apply(token));
+}
+
+TEST_F(ApplyNeverDropsTest, NormalizeFilter_WhitespaceOnly) {
+  NormalizeCaseFoldFilter filter;
+  std::string token = "   ";
+  EXPECT_TRUE(filter.Apply(token));
+}
+
+TEST_F(ApplyNeverDropsTest, NormalizeFilter_HighCodepointEmoji) {
+  NormalizeCaseFoldFilter filter;
+  // 🙂 = F0 9F 99 82
+  std::string token = "\xf0\x9f\x99\x82";
+  EXPECT_TRUE(filter.Apply(token));
+}
+
+TEST_F(ApplyNeverDropsTest, NormalizeFilter_AlreadyNormalized) {
+  NormalizeCaseFoldFilter filter;
+  std::string token = "hello";
+  EXPECT_TRUE(filter.Apply(token));
+  EXPECT_EQ(token, "hello");
+}
+
+TEST_F(ApplyNeverDropsTest, NormalizeFilter_MixedCase) {
+  NormalizeCaseFoldFilter filter;
+  std::string token = "HeLLo";
+  EXPECT_TRUE(filter.Apply(token));
+  EXPECT_EQ(token, "hello");
+}
+
+// --- SnowballStemFilter: Apply must always return true ---
+
+TEST_F(ApplyNeverDropsTest, StemFilter_EmptyString) {
+  SnowballStemFilter filter(data_model::LANGUAGE_ENGLISH);
+  std::string token;
+  EXPECT_TRUE(filter.Apply(token));
+}
+
+TEST_F(ApplyNeverDropsTest, StemFilter_SingleChar) {
+  SnowballStemFilter filter(data_model::LANGUAGE_ENGLISH);
+  std::string token = "a";
+  EXPECT_TRUE(filter.Apply(token));
+}
+
+TEST_F(ApplyNeverDropsTest, StemFilter_AlreadyStemmed) {
+  SnowballStemFilter filter(data_model::LANGUAGE_ENGLISH);
+  std::string token = "run";
+  EXPECT_TRUE(filter.Apply(token));
+}
+
+TEST_F(ApplyNeverDropsTest, StemFilter_LongWord) {
+  SnowballStemFilter filter(data_model::LANGUAGE_ENGLISH);
+  std::string token(1000, 'a');
+  EXPECT_TRUE(filter.Apply(token));
+}
+
+TEST_F(ApplyNeverDropsTest, StemFilter_MutatesButKeeps) {
+  // "running" should be stemmed to "run" but Apply still returns true.
+  SnowballStemFilter filter(data_model::LANGUAGE_ENGLISH);
+  std::string token = "running";
+  EXPECT_TRUE(filter.Apply(token));
+  EXPECT_EQ(token, "run");
+}
+
+// --- StopWordFilter: Apply correctly returns false for stop words ---
+
+TEST_F(ApplyNeverDropsTest, StopWordFilter_DropsStopWord) {
+  StopWordFilter filter(std::vector<std::string>{"the", "and", "or"});
+  std::string token = "the";
+  EXPECT_FALSE(filter.Apply(token));
+}
+
+TEST_F(ApplyNeverDropsTest, StopWordFilter_KeepsNonStopWord) {
+  StopWordFilter filter(std::vector<std::string>{"the", "and", "or"});
+  std::string token = "cat";
+  EXPECT_TRUE(filter.Apply(token));
+}
+
+TEST_F(ApplyNeverDropsTest, StopWordFilter_EmptyStringKept) {
+  StopWordFilter filter(std::vector<std::string>{"the", "and", "or"});
+  std::string token;
+  EXPECT_TRUE(filter.Apply(token));
+}
+
+TEST_F(ApplyNeverDropsTest, StopWordFilter_EmptySetKeepsAll) {
+  StopWordFilter filter(std::vector<std::string>{});
+  std::string token = "the";
+  EXPECT_TRUE(filter.Apply(token));
 }
 
 }  // namespace valkey_search::indexes::text

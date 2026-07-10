@@ -5,7 +5,7 @@
  *
  */
 
-#include "src/indexes/text/snowball_stem_filter.h"
+#include "src/indexes/text/snowball_stem.h"
 
 #include <algorithm>
 #include <memory>
@@ -96,11 +96,13 @@ std::string_view SnowballStemFilter::DoStemming(absl::string_view word,
           static_cast<std::string_view::size_type>(stemmed_length)};
 }
 
-std::optional<std::string> SnowballStemFilter::Apply(
-    absl::string_view token) const {
+bool SnowballStemFilter::Apply(std::string& token) const {
   sb_stemmer* stemmer = GetStemmer();
   std::string_view stemmed = DoStemming(token, stemmer, default_min_stem_size_);
-  return std::string(stemmed);
+  if (stemmed.data() != token.data() || stemmed.size() != token.size()) {
+    token.assign(stemmed.data(), stemmed.size());
+  }
+  return true;
 }
 
 std::string SnowballStemFilter::GetStemRoot(absl::string_view token,

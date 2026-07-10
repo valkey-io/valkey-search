@@ -276,6 +276,25 @@ Service::GenerateInfoResponse(
   }
   auto schema = std::move(status_or_schema.value());
 
+  // If the name resolved via alias to a different index AND the caller
+  // provided a fingerprint/version that doesn't match the resolved schema,
+  // the original index is gone — treat it as not found rather than
+  // inconsistent.  When no fingerprint is provided (e.g. alias-deletion
+  // consistency check), skip this guard and let downstream logic handle it.
+  if (schema->GetName() != index_name &&
+      request.has_index_fingerprint_version() &&
+      (schema->GetFingerprint() !=
+           request.index_fingerprint_version().fingerprint() ||
+       schema->GetVersion() != request.index_fingerprint_version().version())) {
+    response.set_exists(false);
+    response.set_index_name(index_name);
+    response.set_error("Index resolved via alias to a different index");
+    response.set_error_type(coordinator::FanoutErrorType::INDEX_NAME_ERROR);
+    grpc::Status error_status(grpc::StatusCode::NOT_FOUND,
+                              "Index resolved via alias to a different index");
+    return std::make_pair(error_status, response);
+  }
+
   auto set_inconsistent_error = [&]() {
     response.set_exists(true);
     response.set_index_name(index_name);

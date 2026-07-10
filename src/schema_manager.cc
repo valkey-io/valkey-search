@@ -464,53 +464,49 @@ void SchemaManager::RebuildAliasMapsForIndex(
   EraseAliasesForIndex(db_num, index_name);
 
   // Repopulate from proto.
+  auto &alias_map = db_to_aliases_[db_num];
   for (const auto &alias : proto.aliases()) {
-    auto existing_it = db_to_aliases_.find(db_num);
-    if (existing_it != db_to_aliases_.end()) {
-      auto conflict = existing_it->second.find(alias);
-      if (conflict != existing_it->second.end() &&
-          conflict->second != index_name) {
-        // Deterministic conflict resolution: higher version wins, then
-        // lexicographically greater index name breaks ties.
-        uint32_t conflict_version = 0;
-        auto conflict_schema = LookupInternal(db_num, conflict->second);
-        if (conflict_schema.ok()) {
-          conflict_version = conflict_schema.value()->GetVersion();
-        }
+    auto conflict = alias_map.find(alias);
+    if (conflict != alias_map.end() && conflict->second != index_name) {
+      // Deterministic conflict resolution: higher version wins, then
+      // lexicographically greater index name breaks ties.
+      uint32_t conflict_version = 0;
+      auto conflict_schema = LookupInternal(db_num, conflict->second);
+      if (conflict_schema.ok()) {
+        conflict_version = conflict_schema.value()->GetVersion();
+      }
 
-        bool current_wins = false;
-        if (incoming_version > conflict_version) {
-          current_wins = true;
-        } else if (incoming_version == conflict_version) {
-          current_wins = (index_name > conflict->second);
-        }
+      bool current_wins = false;
+      if (incoming_version > conflict_version) {
+        current_wins = true;
+      } else if (incoming_version == conflict_version) {
+        current_wins = (index_name > conflict->second);
+      }
 
-        if (!current_wins) {
-          VMSDK_LOG(WARNING, detached_ctx_.get())
-              << "Alias '" << alias << "' conflict: index '" << index_name
-              << "' (v" << incoming_version << ") loses to '"
-              << conflict->second << "' (v" << conflict_version << ") in db "
-              << db_num;
-          continue;
-        }
-
+      if (!current_wins) {
         VMSDK_LOG(WARNING, detached_ctx_.get())
             << "Alias '" << alias << "' conflict: index '" << index_name
-            << "' (v" << incoming_version << ") wins over '" << conflict->second
+            << "' (v" << incoming_version << ") loses to '" << conflict->second
             << "' (v" << conflict_version << ") in db " << db_num;
+        continue;
+      }
 
-        // Remove the alias from the losing index's aliases vector.
-        auto prev_it = db_to_index_schemas_[db_num].find(conflict->second);
-        if (prev_it != db_to_index_schemas_[db_num].end()) {
-          auto prev_aliases = prev_it->second->GetAliases();
-          prev_aliases.erase(
-              std::remove(prev_aliases.begin(), prev_aliases.end(), alias),
-              prev_aliases.end());
-          prev_it->second->SetAliases(std::move(prev_aliases));
-        }
+      VMSDK_LOG(WARNING, detached_ctx_.get())
+          << "Alias '" << alias << "' conflict: index '" << index_name << "' (v"
+          << incoming_version << ") wins over '" << conflict->second << "' (v"
+          << conflict_version << ") in db " << db_num;
+
+      // Remove the alias from the losing index's aliases vector.
+      auto prev_it = db_to_index_schemas_[db_num].find(conflict->second);
+      if (prev_it != db_to_index_schemas_[db_num].end()) {
+        auto prev_aliases = prev_it->second->GetAliases();
+        prev_aliases.erase(
+            std::remove(prev_aliases.begin(), prev_aliases.end(), alias),
+            prev_aliases.end());
+        prev_it->second->SetAliases(std::move(prev_aliases));
       }
     }
-    db_to_aliases_[db_num][alias] = std::string(index_name);
+    alias_map[alias] = std::string(index_name);
   }
 }
 

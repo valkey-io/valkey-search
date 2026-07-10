@@ -356,6 +356,17 @@ def compare_results(expected, results):
                     return False
                 return True
             return exp == act
+        # FT._LIST returns index names in unspecified order.
+        if cmd[0].upper() == "FT._LIST":
+            exp = expected["result"]
+            act = results["result"]
+            if isinstance(exp, list) and isinstance(act, list):
+                match = sorted(exp) == sorted(act)
+            else:
+                match = exp == act
+            if not match:
+                print(f"FT._LIST mismatch: expected={exp!r} got={act!r}")
+            return match
         match = expected["result"] == results["result"]
         if not match:
             print(f"Simple result mismatch: expected={expected['result']!r} got={results['result']!r}")
@@ -445,7 +456,7 @@ def mark_as_failed(testname):
     wrong_answers += 1
     assert not StopOnFailure, "Test failed, stopping execution"
 
-_SIMPLE_COMPARE_CMDS = {"FT.ALIASADD", "FT.ALIASDEL", "FT.ALIASUPDATE", "FT.ALIASLIST", "FT.INFO"}
+_SIMPLE_COMPARE_CMDS = {"FT.ALIASADD", "FT.ALIASDEL", "FT.ALIASUPDATE", "FT.ALIASLIST", "FT.INFO", "FT.DROPINDEX", "FT._LIST"}
 
 def _is_simple_compare_cmd(cmd):
     """Return True if cmd should use direct equality comparison (not search/aggregate unpacking)."""
@@ -559,28 +570,31 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
 
         data_set = next_data_set
 
-    # Replay alias commands via primary 0 (can't be slot-routed by cluster client).
-    if _is_alias_mutation_cmd(expected["cmd"]):
+    # Replay alias, index-mutation, and simple-compare commands via primary 0.
+    # These commands can't be reliably slot-routed by the cluster client.
+    if _is_alias_mutation_cmd(expected["cmd"]) or (
+        expected["cmd"] and expected["cmd"][0].upper() in ("FT.DROPINDEX", "FT.INFO", "FT._LIST")
+    ):
         result = {}
         result["cmd"] = expected["cmd"]
         try:
-            # Route to primary 0 — cluster client can't slot FT.ALIAS* commands.
             primary0 = test_case.new_client_for_primary(0)
             result["result"] = primary0.execute_command(*expected["cmd"])
             result["exception"] = False
-            print(f"Alias cmd (cluster): {expected['cmd']} -> {result['result']!r}")
+            print(f"Routed cmd (cluster): {expected['cmd']} -> {result['result']!r}")
         except valkey.ResponseError as e:
             result["result"] = {}
             result["exception"] = True
-            print(f"Alias cmd (cluster) error: {expected['cmd']} -> {e}")
+            print(f"Routed cmd (cluster) error: {expected['cmd']} -> {e}")
 
         if compare_results(expected, result):
             mark_as_passed(expected.get('testname', f"alias_cmd_{expected['cmd'][0]}"))
         else:
             mark_as_failed(expected.get('testname', f"alias_cmd_{expected['cmd'][0]}"))
 
-        # Wait for alias to be visible on all primaries after successful add/update.
         cmd = expected["cmd"]
+
+        # Wait for alias to be visible on all primaries after successful add/update.
         if not result["exception"] and len(cmd) >= 2 and cmd[0].upper() in ("FT.ALIASADD", "FT.ALIASUPDATE"):
             alias_name = cmd[1]
             def _alias_visible_on_all():
@@ -593,6 +607,32 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
                         return False
                 return True
             waiters.wait_for_true(_alias_visible_on_all, timeout=15)
+
+        # Wait for index drop to propagate to all nodes.
+        if not result["exception"] and len(cmd) >= 2 and cmd[0].upper() == "FT.DROPINDEX":
+            dropped_name = cmd[1]
+            def _drop_visible_on_all():
+                for i in range(test_case.CLUSTER_SIZE):
+                    try:
+                        info = test_case.new_client_for_primary(i).execute_command(
+                            "FT.INFO", dropped_name
+                        )
+                        # FT.INFO succeeded — if it resolved via alias (different
+                        # index_name), the drop propagated. If it still returns
+                        # the dropped index itself, the drop hasn't propagated.
+                        if isinstance(info, list):
+                            for j in range(0, len(info) - 1, 2):
+                                key = info[j]
+                                if isinstance(key, bytes):
+                                    key = key.decode()
+                                if key == "index_name":
+                                    if info[j + 1] == dropped_name.encode():
+                                        return False  # still sees the real index
+                                    break
+                    except valkey.ResponseError:
+                        pass  # index gone on this node — expected
+                return True
+            waiters.wait_for_true(_drop_visible_on_all, timeout=15)
 
         return data_set
 

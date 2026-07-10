@@ -73,7 +73,6 @@ class NumericBTree {
   struct NodeBase {
     Kind kind;
     uint16_t n;
-    NodeBase* parent;
     bool IsLeaf() const { return kind == Kind::kLeaf; }
   };
 
@@ -84,7 +83,6 @@ class NumericBTree {
     Leaf() {
       this->kind = Kind::kLeaf;
       this->n = 0;
-      this->parent = nullptr;
       this->prev = nullptr;
       this->next = nullptr;
     }
@@ -99,7 +97,6 @@ class NumericBTree {
     Internal() {
       this->kind = Kind::kInternal;
       this->n = 0;
-      this->parent = nullptr;
       for (int i = 0; i <= kInternalCap; ++i) {
         children[i] = nullptr;
         subtree_count[i] = 0;
@@ -248,7 +245,6 @@ class NumericBTree {
       l->next->prev = right;
     }
     l->next = right;
-    right->parent = l->parent;
     ++unique_values_;
     return InsertOut{true, right, right->entries[0].value};
   }
@@ -263,7 +259,6 @@ class NumericBTree {
       return InsertOut{sub.new_posting, nullptr, 0.0};
     }
 
-    sub.split_right->parent = in;
     if (in->n < kInternalCap) {
       for (int i = in->n; i > ci; --i) {
         in->separators[i] = in->separators[i - 1];
@@ -314,9 +309,6 @@ class NumericBTree {
     for (int i = 0; i <= mid; ++i) {
       in->children[i] = kids[i];
       in->subtree_count[i] = cnts[i];
-      if (in->children[i]) {
-        in->children[i]->parent = in;
-      }
     }
     for (int i = mid + 1; i <= kInternalCap; ++i) {
       in->children[i] = nullptr;
@@ -330,11 +322,7 @@ class NumericBTree {
     for (int i = 0; i <= rseps; ++i) {
       right->children[i] = kids[mid + 1 + i];
       right->subtree_count[i] = cnts[mid + 1 + i];
-      if (right->children[i]) {
-        right->children[i]->parent = right;
-      }
     }
-    right->parent = in->parent;
     return InsertOut{sub.new_posting, right, seps[mid]};
   }
 
@@ -426,9 +414,6 @@ class NumericBTree {
       R->separators[0] = in->separators[ci - 1];
       R->children[0] = L->children[L->n];
       R->subtree_count[0] = moved;
-      if (R->children[0]) {
-        R->children[0]->parent = R;
-      }
       in->separators[ci - 1] = L->separators[L->n - 1];
       L->children[L->n] = nullptr;
       L->subtree_count[L->n] = 0;
@@ -463,9 +448,6 @@ class NumericBTree {
       L->separators[L->n] = in->separators[ci];
       L->children[L->n + 1] = R->children[0];
       L->subtree_count[L->n + 1] = moved;
-      if (L->children[L->n + 1]) {
-        L->children[L->n + 1]->parent = L;
-      }
       in->separators[ci] = R->separators[0];
       for (int i = 0; i < R->n - 1; ++i) {
         R->separators[i] = R->separators[i + 1];
@@ -509,9 +491,6 @@ class NumericBTree {
       for (int j = 0; j <= RR->n; ++j) {
         LL->children[LL->n + 1 + j] = RR->children[j];
         LL->subtree_count[LL->n + 1 + j] = RR->subtree_count[j];
-        if (LL->children[LL->n + 1 + j]) {
-          LL->children[LL->n + 1 + j]->parent = LL;
-        }
         RR->children[j] = nullptr;
       }
       LL->n += RR->n + 1;
@@ -728,8 +707,6 @@ inline bool NumericBTree::Insert(double value, const InternedStringPtr& key) {
     new_root->subtree_count[0] = SubtreePostings(root_);
     new_root->subtree_count[1] = SubtreePostings(r.split_right);
     new_root->n = 1;
-    root_->parent = new_root;
-    r.split_right->parent = new_root;
     root_ = new_root;
   }
   ++total_postings_;
@@ -766,9 +743,6 @@ inline bool NumericBTree::Erase(double value, const InternedStringPtr& key) {
       in->children[0] = nullptr;
       delete in;
       root_ = new_root;
-      if (root_) {
-        root_->parent = nullptr;
-      }
     }
   }
   return true;

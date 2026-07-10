@@ -123,6 +123,9 @@ class IndexSchema : public KeyspaceEventSubscription,
     ResultCnt<std::atomic<uint64_t>> subscription_add;
     std::atomic<uint32_t> document_cnt{0};
     std::atomic<uint32_t> backfill_inqueue_tasks{0};
+    // Number of times a FILTER expression referenced a NUMERIC field whose
+    // raw value could not be parsed as a double during index-time evaluation.
+    std::atomic<uint64_t> filter_numeric_conversion_failures{0};
     uint64_t mutation_queue_size_ ABSL_GUARDED_BY(mutex_){0};
     absl::Duration mutations_queue_delay_ ABSL_GUARDED_BY(mutex_);
     mutable absl::Mutex mutex_;

@@ -162,3 +162,37 @@ class TestFTCreateFilter(ValkeySearchTestCaseBase):
         assert result[0] == 2
         returned_keys = {result[i] for i in range(1, len(result), 2)}
         assert returned_keys == {b"pre:1", b"pre:3"}
+
+    def test_filter_numeric_conversion_failures_counter(self):
+        """A FILTER over a NUMERIC field whose raw value is not parseable as a
+        number does not crash or log; it is counted in the FT.INFO
+        filter_numeric_conversion_failures field."""
+        client: Valkey = self.server.get_new_client()
+
+        assert client.execute_command(
+            "FT.CREATE", "conv_idx",
+            "ON", "HASH",
+            "PREFIX", "1", "conv:",
+            "FILTER", "@price > 5",
+            "SCHEMA", "price", "NUMERIC", "name", "TAG"
+        ) == b"OK"
+
+        # Baseline: no conversion failures yet.
+        info = FTInfoParser(client.execute_command("FT.INFO", "conv_idx"))
+        assert int(info.filter_numeric_conversion_failures) == 0
+
+        # A parseable numeric value must not count as a failure.
+        client.execute_command("HSET", "conv:ok", "price", "100", "name", "a")
+        # Non-numeric values in the NUMERIC field trigger conversion failures
+        # during FILTER evaluation.
+        client.execute_command("HSET", "conv:bad1", "price", "abc", "name", "b")
+        client.execute_command("HSET", "conv:bad2", "price", "xyz", "name", "c")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "conv_idx")
+
+        # The counter must have advanced (at least once per bad document).
+        # Reaching this FT.INFO call at all also confirms no crash.
+        info = FTInfoParser(client.execute_command("FT.INFO", "conv_idx"))
+        assert int(info.filter_numeric_conversion_failures) >= 2, (
+            f"expected >=2 conversion failures, got "
+            f"{info.filter_numeric_conversion_failures}"
+        )

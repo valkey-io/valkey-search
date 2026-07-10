@@ -36,20 +36,6 @@ class FilterAttributeReference : public expr::Expression::AttributeReference {
   data_model::AttributeDataType data_type_;
 };
 
-// Adapter that makes MutatedAttributes accessible through the expression
-// Record interface. Stores a type-erased pointer to MutatedAttributes
-// to avoid circular header dependencies with index_schema.h.
-class FilterRecord : public expr::Expression::Record {
- public:
-  explicit FilterRecord(const void* mutated_attributes)
-      : mutated_attributes_(mutated_attributes) {}
-
-  const void* GetMutatedAttributes() const { return mutated_attributes_; }
-
- private:
-  const void* mutated_attributes_;
-};
-
 }  // namespace valkey_search
 
 #endif  // VALKEYSEARCH_SRC_FILTER_EXPR_H_

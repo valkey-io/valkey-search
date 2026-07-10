@@ -1144,7 +1144,7 @@ IndexSchema::GetSortedAttributes() const {
 }
 
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
-  int arrSize = 28;
+  int arrSize = 30;  // includes filter_numeric_conversion_failures
   // Text-attribute info fields
   if (text_index_schema_) {
     arrSize += 8;  // punctuation, stop_words, with_offsets, min_stem_size (4
@@ -1204,6 +1204,13 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "hash_indexing_failures");
   ValkeyModule_ReplyWithCString(
       ctx, absl::StrFormat("%lu", stats_.subscription_add.skipped_cnt).c_str());
+
+  ValkeyModule_ReplyWithSimpleString(ctx, "filter_numeric_conversion_failures");
+  ValkeyModule_ReplyWithCString(
+      ctx,
+      absl::StrFormat("%lu", stats_.filter_numeric_conversion_failures.load(
+                                 std::memory_order_relaxed))
+          .c_str());
 
   ValkeyModule_ReplyWithSimpleString(ctx, "backfill_in_progress");
   ValkeyModule_ReplyWithCString(
@@ -2211,17 +2218,6 @@ IndexSchema::MakeReference(absl::string_view name, bool create) {
 
 absl::StatusOr<expr::Value> IndexSchema::GetParam(absl::string_view s) const {
   return absl::NotFoundError(absl::StrCat("Parameter `", s, "` not found"));
-}
-
-bool IndexSchema::EvaluateFilter(
-    const MutatedAttributes &mutated_attributes) const {
-  FilterRecord record(&mutated_attributes);
-  expr::Expression::EvalContext ctx;
-  auto result = compiled_filter_->Evaluate(ctx, record);
-  // A Nil ("unknown") result means the filter referenced a missing field;
-  // matching Redisearch, such a document is kept. Only a definite false
-  // excludes it.
-  return result.IsNil() || result.IsTrue();
 }
 
 }  // namespace valkey_search

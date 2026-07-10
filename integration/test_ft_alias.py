@@ -734,3 +734,96 @@ class TestFTAliasListRDBPersistence(ValkeySearchTestCaseDebugMode):
 
         result = client.execute_command("FT.ALIASLIST")
         assert result == []
+
+
+class TestFTAliasHashtagValidation(ValkeySearchTestCaseBase):
+    """Tests hashtag validation for aliases targeting single-slot indexes."""
+
+    def test_aliasadd_matching_hashtag_succeeds(self):
+        """ALIASADD with same hashtag as target index succeeds."""
+        client = self.client
+        assert client.execute_command(
+            "FT.CREATE", "idx{slot1}",
+            "ON", "HASH",
+            "PREFIX", "1", "doc:{slot1}",
+            "SCHEMA", "category", "TAG",
+        ) == b"OK"
+        assert client.execute_command(
+            "FT.ALIASADD", "alias{slot1}", "idx{slot1}"
+        ) == b"OK"
+        # Alias resolves to the index.
+        info = list(client.execute_command("FT.INFO", "alias{slot1}"))
+        idx = next((i for i, v in enumerate(info) if v == b"index_name"), None)
+        assert idx is not None
+        assert info[idx + 1] == b"idx{slot1}"
+
+    def test_aliasadd_different_hashtag_rejected(self):
+        """ALIASADD with different hashtag than target index is rejected."""
+        client = self.client
+        assert client.execute_command(
+            "FT.CREATE", "idx{slot1}",
+            "ON", "HASH",
+            "PREFIX", "1", "doc:{slot1}",
+            "SCHEMA", "category", "TAG",
+        ) == b"OK"
+        with pytest.raises(ResponseError) as exc_info:
+            client.execute_command(
+                "FT.ALIASADD", "alias{slot2}", "idx{slot1}"
+            )
+        assert "hashtag does not match" in str(exc_info.value)
+
+    def test_aliasadd_no_hashtag_in_alias_rejected(self):
+        """ALIASADD without hashtag targeting a single-slot index is rejected."""
+        client = self.client
+        assert client.execute_command(
+            "FT.CREATE", "idx{slot1}",
+            "ON", "HASH",
+            "PREFIX", "1", "doc:{slot1}",
+            "SCHEMA", "category", "TAG",
+        ) == b"OK"
+        with pytest.raises(ResponseError) as exc_info:
+            client.execute_command(
+                "FT.ALIASADD", "plain_alias", "idx{slot1}"
+            )
+        assert "hashtag does not match" in str(exc_info.value)
+
+    def test_aliasupdate_matching_hashtag_succeeds(self):
+        """ALIASUPDATE with same hashtag as target index succeeds."""
+        client = self.client
+        assert client.execute_command(
+            "FT.CREATE", "idx{slot1}",
+            "ON", "HASH",
+            "PREFIX", "1", "doc:{slot1}",
+            "SCHEMA", "category", "TAG",
+        ) == b"OK"
+        assert client.execute_command(
+            "FT.ALIASUPDATE", "alias{slot1}", "idx{slot1}"
+        ) == b"OK"
+
+    def test_aliasupdate_different_hashtag_rejected(self):
+        """ALIASUPDATE with different hashtag than target index is rejected."""
+        client = self.client
+        assert client.execute_command(
+            "FT.CREATE", "idx{slot1}",
+            "ON", "HASH",
+            "PREFIX", "1", "doc:{slot1}",
+            "SCHEMA", "category", "TAG",
+        ) == b"OK"
+        with pytest.raises(ResponseError) as exc_info:
+            client.execute_command(
+                "FT.ALIASUPDATE", "alias{slot2}", "idx{slot1}"
+            )
+        assert "hashtag does not match" in str(exc_info.value)
+
+    def test_aliasadd_non_hashtag_index_allows_any_alias(self):
+        """Aliases for non-hashtag indexes have no hashtag restriction."""
+        client = self.client
+        assert client.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        # Alias with a hashtag pointing to a non-hashtag index: allowed.
+        assert client.execute_command(
+            "FT.ALIASADD", "alias{anything}", INDEX_NAME
+        ) == b"OK"
+        # Plain alias pointing to a non-hashtag index: allowed.
+        assert client.execute_command(
+            "FT.ALIASADD", "plain_alias", INDEX_NAME
+        ) == b"OK"

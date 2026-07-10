@@ -1699,7 +1699,6 @@ class TestFTAliasConcurrentCollisionNoCruft(ValkeySearchClusterTestCaseDebugMode
 
         contested_alias = "collision_alias"
 
-        import threading
         barrier = threading.Barrier(2, timeout=5)
 
         def _add_with_barrier(node, index):
@@ -1796,7 +1795,6 @@ class TestFTAliasConcurrentCollisionNoCruft(ValkeySearchClusterTestCaseDebugMode
         _wait_for_alias_on_all_nodes(
             self._all_primaries(), contested_alias, expect_present=True)
 
-        import threading
         barrier = threading.Barrier(2, timeout=5)
 
         def _update_with_barrier(node, target_index):
@@ -1852,7 +1850,6 @@ class TestFTAliasDropIndexCollision(ValkeySearchClusterTestCaseDebugMode):
 
     def test_aliasadd_racing_dropindex_no_dangling_alias(self):
         """ALIASADD then DROPINDEX leaves no dangling alias entries."""
-        import time
         node0 = self.new_client_for_primary(0)
         node1 = self.new_client_for_primary(1)
 
@@ -1899,7 +1896,6 @@ class TestFTAliasDropIndexCollision(ValkeySearchClusterTestCaseDebugMode):
 
     def test_aliasupdate_racing_dropindex_target_no_dangling(self):
         """ALIASUPDATE to index B, then DROPINDEX B — no alias points to B."""
-        import time
         node0 = self.new_client_for_primary(0)
         node1 = self.new_client_for_primary(1)
 
@@ -1955,7 +1951,6 @@ class TestFTAliasDropIndexCollision(ValkeySearchClusterTestCaseDebugMode):
 
     def test_aliasdel_racing_dropindex_no_stale_state(self):
         """ALIASDEL then DROPINDEX leaves no stale alias state."""
-        import time
         node0 = self.new_client_for_primary(0)
         node1 = self.new_client_for_primary(1)
 
@@ -2010,7 +2005,6 @@ class TestAliasCollisionDiagnostic(ValkeySearchClusterTestCaseDebugMode):
     def test_collision_reconciliation_diagnostic(self):
         """Pause node1, both nodes add the same alias to different indexes,
         release, and verify reconciliation produces consistent state."""
-        import time
 
         node0 = self.new_client_for_primary(0)
         node1 = self.new_client_for_primary(1)
@@ -2045,7 +2039,15 @@ class TestAliasCollisionDiagnostic(ValkeySearchClusterTestCaseDebugMode):
         node1.execute_command(
             "FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage no")
 
-        time.sleep(10)
+        # Wait for all nodes to converge on the same alias list.
+        def _reconciliation_converged():
+            alias_lists = set()
+            for i in range(self.CLUSTER_SIZE):
+                node = self.new_client_for_primary(i)
+                alias_lists.add(str(node.execute_command("FT.ALIASLIST")))
+            return len(alias_lists) == 1
+
+        waiters.wait_for_true(_reconciliation_converged, timeout=30)
 
         final_states = {}
         for i in range(self.CLUSTER_SIZE):

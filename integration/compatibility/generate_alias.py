@@ -104,4 +104,63 @@ class TestAliasCompatibility(BaseCompatibilityTest):
         """FT.ALIASUPDATE where alias name equals an existing index name."""
         self.execute_command(["FT.ALIASUPDATE", f"{key_type}_idx2", f"{key_type}_idx1"])
 
+    # --- FT.INFO and FT.DROPINDEX alias resolution tests ---
+
+    def test_ft_info_on_alias(self, key_type):
+        """FT.INFO on an alias — does it resolve to the underlying index?"""
+        # Verify alias exists first
+        self.execute_command(["FT.INFO", "alias_search"])
+        # Compare with direct index access
+        self.execute_command(["FT.INFO", f"{key_type}_idx1"])
+
+    def test_ft_info_alias_same_name_as_other_index(self, key_type):
+        """FT.INFO where alias name equals a *different* existing index name.
+
+        Creates alias 'idx2' -> idx1, then FT.INFO 'idx2'. Does RediSearch
+        return info for the alias target (idx1) or the index named idx2?
+        """
+        # Verify idx2 exists as an index before aliasing
+        self.execute_command(["FT.INFO", f"{key_type}_idx2"])
+        # Create an alias whose name matches the other existing index
+        self.execute_command(
+            ["FT.ALIASADD", f"{key_type}_idx2", f"{key_type}_idx1"])
+        # Now query FT.INFO with the name that is both an alias and an index
+        self.execute_command(["FT.INFO", f"{key_type}_idx2"])
+
+    def test_ft_dropindex_on_alias(self, key_type):
+        """FT.DROPINDEX on an alias — does it drop the alias or the index?"""
+        # Verify alias and index exist before drop
+        self.execute_command(["FT.INFO", "alias_search"])
+        self.execute_command(["FT.INFO", f"{key_type}_idx1"])
+        # Drop via alias
+        self.execute_command(["FT.DROPINDEX", "alias_search"])
+        # Check if the underlying index still exists after dropping via alias
+        self.execute_command(["FT.INFO", f"{key_type}_idx1"])
+        # Check if the alias still resolves
+        self.execute_command(["FT.INFO", "alias_search"])
+
+    def test_ft_dropindex_alias_same_name_as_other_index(self, key_type):
+        """FT.DROPINDEX where alias name equals a different existing index.
+
+        Creates alias 'idx2' -> idx1, then FT.DROPINDEX 'idx2'. Does
+        RediSearch drop the alias target (idx1), the index named idx2, or
+        the alias mapping itself?
+        """
+        # Verify both indexes exist before
+        self.execute_command(["FT.INFO", f"{key_type}_idx1"])
+        self.execute_command(["FT.INFO", f"{key_type}_idx2"])
+        # Create alias with same name as idx2, pointing to idx1
+        self.execute_command(
+            ["FT.ALIASADD", f"{key_type}_idx2", f"{key_type}_idx1"])
+        # Verify alias resolves (should show idx2 the index, since index wins)
+        self.execute_command(["FT.INFO", f"{key_type}_idx2"])
+        # Drop using the ambiguous name
+        self.execute_command(["FT.DROPINDEX", f"{key_type}_idx2"])
+        # Check what survived: is idx1 still alive?
+        self.execute_command(["FT.INFO", f"{key_type}_idx1"])
+        # Is idx2 accessible? (now should resolve via alias to idx1)
+        self.execute_command(["FT.INFO", f"{key_type}_idx2"])
+        # Does FT._LIST show what's left?
+        self.execute_command(["FT._LIST"])
+
 

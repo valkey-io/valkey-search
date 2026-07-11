@@ -313,5 +313,95 @@ TEST_F(NumericBTreeTest, EraseAllDownToEmpty) {
   EXPECT_TRUE(t.Begin() == t.End());
 }
 
+TEST_F(NumericBTreeTest, RandomCrossCheckDeepTree) {
+  // Like RandomCrossCheck, but with a large distinct-value keyspace so the
+  // tree grows to several internal levels and internal nodes overflow at
+  // interior child positions. That exercises the internal-node split path
+  // which partitions a child's subtree_count across the two split halves via
+  // right_postings (rather than recomputing it), plus the internal-node merge
+  // path as the tree shrinks. Count() -- the only observable consumer of
+  // subtree_count -- is checked periodically during the op stream, not just
+  // at the end, so a corrupted count is caught close to the op that caused it.
+  NumericBTree t;
+  Reference ref;
+  std::mt19937 rng(0xBADDCAFE);
+  // ~12k candidate values -> hundreds of leaves -> a 3+ level tree.
+  std::uniform_int_distribution<int> dval(0, 12000);
+  std::uniform_int_distribution<int> dop(0, 99);
+  std::uniform_int_distribution<int> dkey(0, 999999);
+  std::uniform_real_distribution<double> dq(-100.0, 12100.0);
+
+  auto check_counts = [&](int op) {
+    EXPECT_EQ(t.TotalPostings(), ref.data.size()) << "op=" << op;
+    // Random half-open/closed ranges descend the spine, summing
+    // subtree_count along the way -- the values the optimization maintains.
+    for (int q = 0; q < 8; ++q) {
+      double a = dq(rng), b = dq(rng);
+      if (a > b) {
+        std::swap(a, b);
+      }
+      bool si = (q & 1) != 0;
+      bool ei = (q & 2) != 0;
+      EXPECT_EQ(t.Count(a, b, si, ei), ref.Count(a, b, si, ei))
+          << "op=" << op << " a=" << a << " b=" << b << " si=" << si
+          << " ei=" << ei;
+    }
+  };
+
+  // Grow-heavy phase: bias toward insert to build a deep tree, with erases
+  // mixed in to rebalance at depth.
+  for (int op = 0; op < 30000; ++op) {
+    int choice = dop(rng);
+    if (choice < 75 || ref.data.size() < 200) {
+      double v = static_cast<double>(dval(rng));
+      int k = dkey(rng);
+      std::string ks = "k" + std::to_string(k);
+      bool tree_ins = t.Insert(v, Key(k));
+      auto [_, ref_ins] = ref.data.insert({v, ks});
+      EXPECT_EQ(tree_ins, ref_ins) << "op=" << op;
+    } else {
+      auto it = ref.data.begin();
+      std::advance(it, std::uniform_int_distribution<size_t>(
+                           0, ref.data.size() - 1)(rng));
+      auto [v, ks] = *it;
+      int k = std::stoi(ks.substr(1));
+      EXPECT_TRUE(t.Erase(v, Key(k))) << "op=" << op;
+      ref.data.erase(it);
+    }
+    if (op % 1000 == 0) {
+      check_counts(op);
+    }
+  }
+
+  // The keyspace guarantees the tree is well past a single internal node.
+  EXPECT_GT(t.UniqueValues(), 2000u);
+  check_counts(30000);
+
+  // Exhaustive multiset check.
+  auto all = ToVector(t.Begin(), t.End());
+  ASSERT_EQ(all.size(), ref.data.size());
+  std::set<std::pair<double, std::string>> tree_set(all.begin(), all.end());
+  EXPECT_EQ(tree_set, ref.data);
+
+  // Shrink phase: erase most postings, validating counts as internal nodes
+  // rotate and merge at depth.
+  std::vector<std::pair<double, std::string>> live(ref.data.begin(),
+                                                   ref.data.end());
+  std::shuffle(live.begin(), live.end(), rng);
+  int op = 30000;
+  for (auto& [val, ks] : live) {
+    if (ref.data.size() <= 100) {
+      break;
+    }
+    int k = std::stoi(ks.substr(1));
+    EXPECT_TRUE(t.Erase(val, Key(k))) << "op=" << op;
+    ref.data.erase({val, ks});
+    if (++op % 1000 == 0) {
+      check_counts(op);
+    }
+  }
+  check_counts(op);
+}
+
 }  // namespace
 }  // namespace valkey_search::utils

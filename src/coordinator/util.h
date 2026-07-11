@@ -11,12 +11,12 @@
 #include <string>
 
 #include "absl/status/status.h"
-#include "absl/strings/string_view.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
 #include "grpcpp/support/status.h"
 
 namespace valkey_search {
-inline grpc::Status ToGrpcStatus(const absl::Status& status) {
+inline grpc::Status ToGrpcStatus(const absl::Status &status) {
   if (status.ok()) {
     return grpc::Status::OK;
   }
@@ -24,7 +24,7 @@ inline grpc::Status ToGrpcStatus(const absl::Status& status) {
           std::string(status.message())};
 }
 
-inline absl::Status ToAbslStatus(const grpc::Status& status) {
+inline absl::Status ToAbslStatus(const grpc::Status &status) {
   if (status.ok()) {
     return absl::OkStatus();
   }

@@ -694,6 +694,7 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
       invalid_data = true;
     }
   }
+  CHECK(!all_deletes || !invalid_data);
   if (all_deletes) {
     // If all attributes are deletes, we can remove the key from the tracked
     // mutation records.

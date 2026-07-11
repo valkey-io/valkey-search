@@ -20,11 +20,11 @@ namespace valkey_search::utils {
 
 // An order-statistic B+-tree whose leaf entries pair a unique double value
 // with the BagOfInternedStringPtrs containing every key indexed at that
-// value. All entries live at leaves; leaves are linked in a doubly-linked
-// list. Each internal-node child link carries the count of POSTINGS (sum of
-// bag sizes) in its subtree, so range counts run in O(log V) where V is the
-// number of unique doubles. Range scans yield individual keys in
-// (value, key) order.
+// value. All entries live at leaves; leaves are singly linked (forward) to
+// support ordered range scans. Each internal-node child link carries the
+// count of POSTINGS (sum of bag sizes) in its subtree, so range counts run
+// in O(log V) where V is the number of unique doubles. Range scans yield
+// individual keys in (value, key) order.
 class NumericBTree {
  public:
   using Bag = BagOfInternedStringPtrs;
@@ -77,13 +77,11 @@ class NumericBTree {
   };
 
   struct Leaf : NodeBase {
-    Leaf* prev;
     Leaf* next;
     LeafEntry entries[kLeafCap];
     Leaf() {
       this->kind = Kind::kLeaf;
       this->n = 0;
-      this->prev = nullptr;
       this->next = nullptr;
     }
   };
@@ -159,7 +157,8 @@ class NumericBTree {
     return i;
   }
 
-  // For value-only RankLT (count of values strictly less than v).
+  // For value-only RankLT (count of values strictly less than v). The LE
+  // variant is identical to InternalChildForValue, so callers use that.
   static int InternalChildForValueLT(const Internal* in, double v) {
     int i = 0;
     while (i < in->n && in->separators[i] < v) {
@@ -167,21 +166,17 @@ class NumericBTree {
     }
     return i;
   }
-  static int InternalChildForValueLE(const Internal* in, double v) {
-    int i = 0;
-    while (i < in->n && in->separators[i] <= v) {
-      ++i;
-    }
-    return i;
-  }
 
   struct InsertOut {
-    bool new_posting;       // whether a new (value, key) pair was added
-    NodeBase* split_right;  // non-null on split
-    double split_sep;       // smallest value of split_right subtree
+    bool new_posting;         // whether a new (value, key) pair was added
+    NodeBase* split_right;    // non-null on split
+    double split_sep;         // smallest value of split_right subtree
+    uint64_t right_postings;  // postings in split_right; 0 when no split
   };
 
-  static InsertOut NoOp(bool added) { return InsertOut{added, nullptr, 0.0}; }
+  static InsertOut NoOp(bool added) {
+    return InsertOut{added, nullptr, 0.0, 0};
+  }
 
   InsertOut InsertRec(NodeBase* node, double v, const InternedStringPtr& k) {
     if (node->IsLeaf()) {
@@ -239,14 +234,14 @@ class NumericBTree {
       right->n = j;
       l->n = mid;
     }
-    right->prev = l;
     right->next = l->next;
-    if (l->next) {
-      l->next->prev = right;
-    }
     l->next = right;
     ++unique_values_;
-    return InsertOut{true, right, right->entries[0].value};
+    uint64_t right_postings = 0;
+    for (int i = 0; i < right->n; ++i) {
+      right_postings += right->entries[i].keys.size();
+    }
+    return InsertOut{true, right, right->entries[0].value, right_postings};
   }
 
   InsertOut InsertInternal(Internal* in, double v, const InternedStringPtr& k) {
@@ -256,7 +251,7 @@ class NumericBTree {
       ++in->subtree_count[ci];
     }
     if (sub.split_right == nullptr) {
-      return InsertOut{sub.new_posting, nullptr, 0.0};
+      return InsertOut{sub.new_posting, nullptr, 0.0, 0};
     }
 
     if (in->n < kInternalCap) {
@@ -269,11 +264,14 @@ class NumericBTree {
       }
       in->separators[ci] = sub.split_sep;
       in->children[ci + 1] = sub.split_right;
-      // Recompute counts for the two children touched by the split.
-      in->subtree_count[ci] = SubtreePostings(in->children[ci]);
-      in->subtree_count[ci + 1] = SubtreePostings(sub.split_right);
+      // subtree_count[ci] already holds the full pre-split total for this
+      // child (it was incremented above for the new posting); the split
+      // moved right_postings of them into the new right node, so partition
+      // that total across the two children without walking either subtree.
+      in->subtree_count[ci + 1] = sub.right_postings;
+      in->subtree_count[ci] -= sub.right_postings;
       ++in->n;
-      return InsertOut{sub.new_posting, nullptr, 0.0};
+      return InsertOut{sub.new_posting, nullptr, 0.0, 0};
     }
 
     // Split internal node.
@@ -293,8 +291,10 @@ class NumericBTree {
       cnts[i] = in->subtree_count[i];
     }
     kids[ci + 1] = sub.split_right;
-    cnts[ci + 1] = SubtreePostings(sub.split_right);
-    cnts[ci] = SubtreePostings(in->children[ci]);
+    // cnts[ci] currently holds the full pre-split total for this child;
+    // partition it across the two split halves without walking subtrees.
+    cnts[ci + 1] = sub.right_postings;
+    cnts[ci] -= sub.right_postings;
     for (int i = ci + 1; i <= kInternalCap; ++i) {
       kids[i + 1] = in->children[i];
       cnts[i + 1] = in->subtree_count[i];
@@ -319,11 +319,13 @@ class NumericBTree {
     for (int i = 0; i < rseps; ++i) {
       right->separators[i] = seps[mid + 1 + i];
     }
+    uint64_t right_postings = 0;
     for (int i = 0; i <= rseps; ++i) {
       right->children[i] = kids[mid + 1 + i];
       right->subtree_count[i] = cnts[mid + 1 + i];
+      right_postings += cnts[mid + 1 + i];
     }
-    return InsertOut{sub.new_posting, right, seps[mid]};
+    return InsertOut{sub.new_posting, right, seps[mid], right_postings};
   }
 
   // Returns true iff posting was found and removed.
@@ -477,9 +479,6 @@ class NumericBTree {
       }
       LL->n += RR->n;
       LL->next = RR->next;
-      if (RR->next) {
-        RR->next->prev = LL;
-      }
       delete RR;
     } else {
       Internal* LL = static_cast<Internal*>(L);
@@ -529,8 +528,8 @@ class NumericBTree {
       return r;
     }
     Internal* in = static_cast<Internal*>(node);
-    int ci = strict ? InternalChildForValueLT(in, v)
-                    : InternalChildForValueLE(in, v);
+    int ci =
+        strict ? InternalChildForValueLT(in, v) : InternalChildForValue(in, v);
     uint64_t r = 0;
     for (int j = 0; j < ci; ++j) {
       r += in->subtree_count[j];
@@ -639,7 +638,7 @@ class NumericBTree {
     while (!node->IsLeaf()) {
       Internal* in = static_cast<Internal*>(node);
       int ci = strict ? InternalChildForValueLT(in, v)
-                      : InternalChildForValueLE(in, v);
+                      : InternalChildForValue(in, v);
       node = in->children[ci];
     }
     Leaf* l = static_cast<Leaf*>(node);
@@ -705,7 +704,7 @@ inline bool NumericBTree::Insert(double value, const InternedStringPtr& key) {
     new_root->children[0] = root_;
     new_root->children[1] = r.split_right;
     new_root->subtree_count[0] = SubtreePostings(root_);
-    new_root->subtree_count[1] = SubtreePostings(r.split_right);
+    new_root->subtree_count[1] = r.right_postings;
     new_root->n = 1;
     root_ = new_root;
   }

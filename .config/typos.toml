@@ -7,7 +7,8 @@ extend-exclude = [
     "third_party/icu/**",
     "src/indexes/text/rax/**",
     "src/indexes/text/stop_words.h",
-    "testing/snowball_processor_test.cc"
+    "testing/language_processor_test.cc",
+    "testing/snowball_stem_test.cc"
 ]
 
 [default]

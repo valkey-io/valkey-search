@@ -435,9 +435,9 @@ absl::StatusOr<std::vector<std::string>> LanguageProcessor::Segment(
   // Multi-segmenter chaining: feed each segmenter's output into the next.
   std::vector<std::string> current = {std::string(text)};
 
-  for (const auto &segmenter : segmenters_) {
+  for (const auto& segmenter : segmenters_) {
     std::vector<std::string> next;
-    for (const auto &input : current) {
+    for (const auto& input : current) {
       auto result = segmenter->Segment(input);
       if (!result.ok()) {
         return result.status();
@@ -523,8 +523,8 @@ std::shared_ptr<LanguageProcessor> CreateSnowballProcessor(
 }  // namespace
 
 std::shared_ptr<LanguageProcessor> LanguageProcessor::Create(
-    data_model::Language language, const std::string &punctuation,
-    const std::vector<std::string> &stop_words) {
+    data_model::Language language, const std::string& punctuation,
+    const std::vector<std::string>& stop_words) {
   switch (language) {
       // TODO: Add ICU processor cases here when implemented
       // case data_model::LANGUAGE_CHINESE:

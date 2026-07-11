@@ -50,8 +50,12 @@ INFINITY_LITERALS = {"+inf", "-inf"}
 #    lower/upper); arithmetic and the rest coerce cleanly and agree.
 HASH_BLOB_FIELDS = {"@v1"}
 HASH_NUMERIC_FIELDS = {"@n1", "@price"}
-TYPING_SENSITIVE = {"||", "&&", "!", "<", "<=", "==", "!=", ">=", ">",
-                    "lower", "upper"}
+BOOLEAN_OPS = {"||", "&&", "!"}
+COMPARISON_OPS = {"<", "<=", "==", "!=", ">=", ">"}
+STRING_COERCION_FNS = {"lower", "upper"}
+# Operands that coerce cleanly to a number, so a numeric-field comparison
+# against them stays numeric (and agrees) in both engines.
+NUMERIC_OPERANDS = {"0", "-1", "3.14", "-0.5", "+inf", "-inf"} | HASH_NUMERIC_FIELDS
 
 
 def _skip_hash_case(key_type, name, operands):
@@ -60,10 +64,22 @@ def _skip_hash_case(key_type, name, operands):
     `operands` the operand literals/field-refs it is applied to."""
     if key_type != "hash":
         return False
+    # @v1 is a raw float32 blob: Redisearch's coercion is arbitrary, so exclude
+    # every op/function that touches it (some happen to agree, but only by
+    # coincidence of the coercion, not by any stable rule).
     if any(o in HASH_BLOB_FIELDS for o in operands):
         return True
-    if name in TYPING_SENSITIVE and any(o in HASH_NUMERIC_FIELDS for o in operands):
-        return True
+    if any(o in HASH_NUMERIC_FIELDS for o in operands):
+        # Boolean ops and lower/upper on a hash numeric field: Redisearch's
+        # numeric-vs-string typing is self-inconsistent -> exclude.
+        if name in BOOLEAN_OPS or name in STRING_COERCION_FNS:
+            return True
+        # Comparisons diverge only when the numeric field is compared against a
+        # non-numeric (string/tag/text) operand; numeric-vs-numeric agrees, so
+        # keep those.
+        if name in COMPARISON_OPS and any(o not in NUMERIC_OPERANDS
+                                          for o in operands):
+            return True
     return False
 
 # (filter, operand_values). The filter must match the same set of rows in

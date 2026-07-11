@@ -246,14 +246,6 @@ def compare_number_eq(l, r):
         
     
 def compare_row(l, r, key_type):
-    # A computed field (APPLY result / reducer output) that evaluated to nil is
-    # emitted differently by the two engines: Redisearch replies `field: (nil)`,
-    # valkey omits the field entirely. Treat "present with nil value" and
-    # "absent" as equivalent by dropping nil-valued entries from both sides
-    # before comparing. Loaded/stored fields are never nil, so this only affects
-    # computed fields.
-    l = {k: v for k, v in l.items() if v is not None}
-    r = {k: v for k, v in r.items() if v is not None}
     lks = sorted(list(l.keys()))
     rks = sorted(list(r.keys()))
     #print("Comparing row: ", l, " and ", r)

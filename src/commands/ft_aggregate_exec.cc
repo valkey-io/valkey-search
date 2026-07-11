@@ -104,7 +104,15 @@ absl::Status Apply::Execute(RecordSet& records) const {
   agg_apply_stages.Increment();
   agg_apply_records.Increment(records.size());
   for (auto& r : records) {
-    SetField(*r, *name_, expr_->Evaluate(ctx, *r));
+    auto value = expr_->Evaluate(ctx, *r);
+    // A computed field that evaluated to nil must not carry the missing-field
+    // sentinel (e.g. `APPLY @missing AS x` passes an unset slot straight
+    // through). Re-stamp any nil result with a plain computed-nil reason so the
+    // reply layer emits it as a RESP null rather than omitting it.
+    if (value.IsNil()) {
+      value = expr::Value(expr::Value::Nil("apply"));
+    }
+    SetField(*r, *name_, std::move(value));
   }
   return absl::OkStatus();
 }

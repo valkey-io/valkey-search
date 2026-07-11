@@ -17,9 +17,23 @@
 namespace valkey_search {
 namespace aggregate {
 
+// The reason string of an expr::Value::Nil is otherwise diagnostic-only (only
+// operator<< reads it; Compare and hashing ignore it). This one value is
+// load-bearing: a record slot allocated for a LOAD attribute but never
+// populated retains this sentinel, which lets the reply layer OMIT the field
+// (matching Redisearch's treatment of a missing loaded field). A *computed*
+// nil (APPLY/reducer output) carries any other reason and is emitted as a RESP
+// null instead. Control characters make an accidental collision with a real
+// reason string impossible. Apply::Execute re-stamps computed nils so a
+// missing-field value passed straight through an APPLY never keeps this marker.
+inline constexpr absl::string_view kMissingFieldNil =
+    "\x01__vs_missing_field__\x01";
+
 class Record : public expr::Expression::Record {
  public:
-  Record(size_t fields) : fields_(fields) {}
+  Record(size_t fields)
+      : fields_(fields,
+                expr::Value(expr::Value::Nil(std::string(kMissingFieldNil)))) {}
   std::vector<expr::Value> fields_;
   std::vector<std::pair<std::string, expr::Value>> extra_fields_;
   bool operator==(const Record& r) const {

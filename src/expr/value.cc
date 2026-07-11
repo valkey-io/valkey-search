@@ -92,11 +92,31 @@ std::string FormatDouble(double d) {
     } else {
       return "nan";
     }
-  } else {
-    char storage[50];
-    size_t output_chars = snprintf(storage, sizeof(storage), "%.11g", d);
-    return {storage, output_chars};
   }
+  // 1.2.1 fix: match Redisearch's numeric formatting — 12 significant digits
+  // (was 11) and normalize negative zero to "0" (Redisearch prints "0" for
+  // -0.0, valkey previously printed "-0"). Pre-1.2.1 used "%.11g" and preserved
+  // "-0". nan sign is left untouched: Redisearch emits both "nan" and "-nan"
+  // depending on the operation, so it isn't a formatting-only difference.
+  return VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 2, 1, "formatdouble_redisearch_precision",
+      [d] {  // new: 12 sig digits, -0.0 -> "0"
+        char storage[50];
+        size_t output_chars = snprintf(storage, sizeof(storage), "%.12g", d);
+        std::string out(storage, output_chars);
+        // Normalize negative zero at the string level: the module is built with
+        // -ffast-math (assumes no signed zeros), so a `d == 0.0 ? 0.0 : d`
+        // guard is optimized away, but snprintf still reads the sign bit.
+        if (out == "-0") {
+          out = "0";
+        }
+        return out;
+      },
+      [d] {  // legacy: 11 sig digits, preserves "-0"
+        char storage[50];
+        size_t output_chars = snprintf(storage, sizeof(storage), "%.11g", d);
+        return std::string(storage, output_chars);
+      });
 }
 
 std::optional<bool> Value::AsBool() const {
@@ -707,7 +727,7 @@ Value FuncTimefmt(const Value& ts, const Value& fmt) {
   if (!fmtstr) {
     return Value(Value::Nil("timefmt: format has no string representation"));
   }
-  if (fmtstr->empty()) {
+  if (fmtstr->empty() || (*fmtstr)[0] == 0) {
     // 1.2.1 fix: empty format → Nil (matches Redisearch).
     // Pre-1.2.1: returned an empty string as a fast-path.
     return VALKEY_SEARCH_COMPATIBILITY_FIX(

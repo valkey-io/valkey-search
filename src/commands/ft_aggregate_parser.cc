@@ -280,6 +280,7 @@ AggregateParameters::MakeReference(const absl::string_view name, bool create) {
       case indexes::IndexerType::kVector:
       case indexes::IndexerType::kFlat:
       case indexes::IndexerType::kHNSW:
+      case indexes::IndexerType::kText:
         break;
       default:
         return absl::InvalidArgumentError(

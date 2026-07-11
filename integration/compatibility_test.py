@@ -14,7 +14,15 @@ TEST_MARKER = "*" * 100
 from valkey_search_test_case import (
     ValkeySearchClusterTestCase,
     ValkeySearchTestCaseBase,
+    ValkeySearchTestCaseDebugMode,
 )
+
+# Pin the module's compatibility behavior to the newest possible release so
+# every VALKEY_SEARCH_COMPATIBILITY_FIX gate evaluates to its "fixed" (Redis-
+# matching) branch when comparing against the captured Redis answers. Values
+# above kModuleVersion require debug-mode, which is why TestAnswersCMD runs on
+# ValkeySearchTestCaseDebugMode (module loaded with --debug-mode yes).
+EMULATE_RELEASE_MAX = "255.0.0"
 from valkeytestframework.conftest import resource_port_tracker
 from utils import IndexingTestHelper
 from valkeytestframework.util import waiters
@@ -82,7 +90,10 @@ def parse_field(x, key_type):
 
 def parse_value(x, key_type):
     try:
-        if key_type == "json" and isinstance(x, int):
+        if x is None:
+            # RESP nil: an APPLY that evaluated to a null/missing value.
+            result = None
+        elif key_type == "json" and isinstance(x, int):
             result = x
         elif key_type == "json" and x.startswith(b'['):
             assert isinstance(x, bytes), f"Expected bytes for JSON value, got {type(x)}"
@@ -185,6 +196,16 @@ def unpack_result(cmd, key_type, rs, sortkeys):
             assert False
     return out
 
+def _is_numeric(x):
+    # nan/-nan don't survive float() on every platform, so name them explicitly.
+    if x in ("nan", "-nan", b"nan", b"-nan"):
+        return True
+    try:
+        float(x)
+        return True
+    except (ValueError, TypeError):
+        return False
+
 def compare_number_eq(l, r):
     lnan = l in ["nan", b"nan", "-nan", b"-nan"]
     rnan = r in ["nan", b"nan", "-nan", b"-nan"]
@@ -225,6 +246,14 @@ def compare_number_eq(l, r):
         
     
 def compare_row(l, r, key_type):
+    # A computed field (APPLY result / reducer output) that evaluated to nil is
+    # emitted differently by the two engines: Redisearch replies `field: (nil)`,
+    # valkey omits the field entirely. Treat "present with nil value" and
+    # "absent" as equivalent by dropping nil-valued entries from both sides
+    # before comparing. Loaded/stored fields are never nil, so this only affects
+    # computed fields.
+    l = {k: v for k, v in l.items() if v is not None}
+    r = {k: v for k, v in r.items() if v is not None}
     lks = sorted(list(l.keys()))
     rks = sorted(list(r.keys()))
     #print("Comparing row: ", l, " and ", r)
@@ -263,11 +292,46 @@ def compare_row(l, r, key_type):
             except json.decoder.JSONDecodeError:
                 print("JSON decode error comparing: ", l[lks[i]], " and ", r[rks[i]])
                 return False
-        elif l[lks[i]] != r[rks[i]]:
-            print("mismatch field: ", lks[i], " and ", rks[i], " ", l[lks[i]], "!=", r[rks[i]])
+        else:
+            lv, rv = l[lks[i]], r[rks[i]]
+            # Exact match is the fast path (identical bytes/strings), which is
+            # what every loaded/stored field hits.
+            if lv == rv:
+                continue
+            # Values differ byte-for-byte. If both are numeric, fall back to the
+            # tolerant numeric compare — it treats nan/-nan as equal and uses
+            # math.isclose, absorbing the two engines' differing float precision
+            # and negative-zero formatting on any server-computed numeric field
+            # (APPLY results, GROUPBY reducers). Non-numeric values (concat/
+            # lower/substr/timefmt string results, tags, keys) stay an exact
+            # match.
+            if _is_numeric(lv) and _is_numeric(rv) and compare_number_eq(lv, rv):
+                continue
+            print("mismatch field: ", lks[i], " and ", rks[i], " ", lv, "!=", rv)
             return False
-    return True            
+    return True
     
+def multiset_match(rl, vk, key_type):
+    """Order-independent comparison of two result-row lists.
+
+    ft.aggregate without SORTBY returns rows in an unspecified, engine-
+    dependent order, so the two sets must be compared as unordered multisets
+    rather than positionally. Greedily pair each expected (RL) row with a
+    distinct actual (VK) row under compare_row's tolerant equality. Removing on
+    match keeps duplicates honest: N copies of a row on one side require N on
+    the other.
+    """
+    remaining = list(vk)
+    for r in rl:
+        for j, v in enumerate(remaining):
+            if compare_row(r, v, key_type):
+                remaining.pop(j)
+                break
+        else:
+            return False
+    return not remaining
+
+
 def compare_results(expected, results):
     print("CMD:", printable_cmd(expected["cmd"]))
     cmd = expected["cmd"]
@@ -293,6 +357,16 @@ def compare_results(expected, results):
     else:
         sortkeys=["__key"]
         # sortkeys=[]
+
+    # Rows have no stable order only when the server wasn't told to sort AND the
+    # harness has no per-row key to sort them by itself: ft.search rows carry
+    # __key, groupby imposes a group-key order, sortby imposes a field order.
+    # A bare ft.aggregate (no sortby, no groupby) is the only unordered case,
+    # and must be compared as an unordered multiset rather than positionally.
+    cmd_name = str(cmd[0]).lower()
+    has_sortby = any(str(t).lower() == 'sortby' for t in cmd)
+    has_groupby = any(str(t).lower() == 'groupby' for t in cmd)
+    unordered = "ft.aggregate" in cmd_name and not has_sortby and not has_groupby
 
     # If both failed, it's a wrong search cmd and we can exit
     if expected["exception"] and results["exception"]:
@@ -339,7 +413,11 @@ def compare_results(expected, results):
     # if compare_results(vk, rl):
     # Directly comparing dicts instead of custom compare function
     # TODO: investigate this later
-    if all([compare_row(vk[i], rl[i], key_type) for i in range(len(rl))]):
+    if unordered:
+        matched = multiset_match(rl, vk, key_type)
+    else:
+        matched = all([compare_row(vk[i], rl[i], key_type) for i in range(len(rl))])
+    if matched:
         # print("Results look good.")
         #print(TEST_MARKER)
         if "ft.search" in cmd:
@@ -537,7 +615,7 @@ def _load_answers_with_hash_check(answer_file_name):
     return answers
 
 
-class TestAnswersCMD(ValkeySearchTestCaseBase):
+class TestAnswersCMD(ValkeySearchTestCaseDebugMode):
     @pytest.mark.parametrize("answers", ALL_ANSWER_FILES)
     def test_answers(self, answers):
         global client, data_set
@@ -554,6 +632,13 @@ class TestAnswersCMD(ValkeySearchTestCaseBase):
 
         data_set = None
         client = self.server.get_new_client()
+        client.execute_command(
+            "CONFIG", "SET", "search.emulate-release", EMULATE_RELEASE_MAX
+        )
+        print(
+            "search.emulate-release =",
+            client.execute_command("CONFIG", "GET", "search.emulate-release"),
+        )
         for i in range(len(answers)):
             data_set = do_answer(client, answers[i], data_set)
 

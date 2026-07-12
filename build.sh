@@ -164,6 +164,11 @@ export SAN_BUILD
 export ROOT_DIR
 . "${ROOT_DIR}/scripts/common.rc"
 
+# Build unit tests only when they will be run
+if [ ! -z "${RUN_TEST}" ]; then
+    CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DBUILD_UNIT_TESTS=ON"
+fi
+
 if [[ "${CMAKE_GENERATOR}" == "Ninja" ]]; then
   BUILD_TOOL="ninja"
 else
@@ -263,8 +268,8 @@ function configure() {
     cd $_
     local BUILD_TYPE=$(capitalize_string ${BUILD_CONFIG})
     rm -f CMakeCache.txt
-    printf "Running: cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBUILD_UNIT_TESTS=ON -Wno-dev -G"${CMAKE_GENERATOR}" ${CMAKE_EXTRA_ARGS}\n"
-    cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBUILD_UNIT_TESTS=ON -Wno-dev -G"${CMAKE_GENERATOR}" ${CMAKE_EXTRA_ARGS}
+    printf "Running: cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -Wno-dev -G"${CMAKE_GENERATOR}" ${CMAKE_EXTRA_ARGS}\n"
+    cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -Wno-dev -G"${CMAKE_GENERATOR}" ${CMAKE_EXTRA_ARGS}
     cd ${ROOT_DIR}
 }
 

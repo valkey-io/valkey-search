@@ -496,22 +496,32 @@ struct Compiler {
   // The precedence ordering is (highest to lowest)
   //
   //  Primary: Number, Field, ()
-  //  MulOp: * / ^
-  //  AddOp: + -
-  //  CmpOp: < <= == != > >=
-  //  LandOp: &&
-  //  LorOp: ||
+  //  PowOp:   ^                 (Redisearch-compatible since 1.2.1)
+  //  MulOp:   * /
+  //  AddOp:   + -
+  //  CmpOp:   < <= == != > >=
+  //  LandOp:  &&                (Redisearch-compatible since 1.2.1)
+  //  LorOp:   ||
   //
+  // Pre-1.2.1 valkey-search put `^` at the same precedence as `*` and `/`,
+  // making expressions like `@a*@b^@c` parse as `(@a*@b)^@c` instead of the
+  // Redisearch-compatible `@a*(@b^@c)`. Pre-1.2.1 also put `&&` and `||` at
+  // the same level, making `@a||@b&&@c` parse as `(@a||@b)&&@c` instead of
+  // the C/SQL-standard `@a||(@b&&@c)` that Redisearch follows. Both fixes are
+  // gated by search.emulate-release per COMPATIBILITY.md.
   absl::StatusOr<ExprPtr> LorOp(CompileContext& ctx) {
-    static std::vector<DyadicOp> ops{
-        {"||", &FuncLor},
+    static const std::vector<DyadicOp> kFixedLorOps{{"||", &FuncLor}};
+    static const std::vector<DyadicOp> kLegacyLogicalOps{{"||", &FuncLor},
+                                                         {"&&", &FuncLand}};
+    auto fixed = [&] { return DoDyadic(ctx, &Compiler::LandOp, kFixedLorOps); };
+    auto legacy = [&] {
+      return DoDyadic(ctx, &Compiler::CmpOp, kLegacyLogicalOps);
     };
-    return DoDyadic(ctx, &Compiler::LandOp, ops);
+    return VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 2, 1, "ft_aggregate_logical_precedence", fixed, legacy);
   }
   absl::StatusOr<ExprPtr> LandOp(CompileContext& ctx) {
-    static std::vector<DyadicOp> ops{
-        {"&&", &FuncLand},
-    };
+    static const std::vector<DyadicOp> ops{{"&&", &FuncLand}};
     return DoDyadic(ctx, &Compiler::CmpOp, ops);
   }
   absl::StatusOr<ExprPtr> CmpOp(CompileContext& ctx) {
@@ -525,9 +535,43 @@ struct Compiler {
     return DoDyadic(ctx, &Compiler::MulOp, ops);
   }
   absl::StatusOr<ExprPtr> MulOp(CompileContext& ctx) {
-    static std::vector<DyadicOp> ops{
+    // Hoisted out of the lambda bodies because the preprocessor splits macro
+    // arguments on commas and would see the brace-initializers as multiple
+    // args.
+    static const std::vector<DyadicOp> kFixedMulOps{{"*", &FuncMul},
+                                                    {"/", &FuncDiv}};
+    static const std::vector<DyadicOp> kLegacyMulOps{
         {"*", &FuncMul}, {"/", &FuncDiv}, {"^", &FuncPower}};
-    return DoDyadic(ctx, &Compiler::Primary, ops);
+    auto fixed = [&] { return DoDyadic(ctx, &Compiler::PowOp, kFixedMulOps); };
+    auto legacy = [&] {
+      return DoDyadic(ctx, &Compiler::Primary, kLegacyMulOps);
+    };
+    return VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 2, 1, "ft_aggregate_pow_precedence", fixed, legacy);
+  }
+  // `^` is right-associative in Redisearch: `a^b^c` == `a^(b^c)`. DoDyadic
+  // would produce a left-fold (`(a^b)^c`), so recurse into PowOp for the rhs
+  // instead. Each recursion grows the C++ stack, so this level must guard the
+  // depth counter itself — Primary's DepthGuard releases on every return and
+  // would otherwise let `a^b^c^…^z` bypass search.query-string-depth.
+  absl::StatusOr<ExprPtr> PowOp(CompileContext& ctx) {
+    DepthGuard guard(depth_);
+    if (depth_ > options::GetQueryStringDepth().GetValue()) {
+      return absl::InvalidArgumentError("Expression too complex");
+    }
+    VMSDK_ASSIGN_OR_RETURN(auto lvalue, Primary(ctx));
+    if (!lvalue) {
+      return nullptr;
+    }
+    if (s_.SkipWhiteSpacePopWord("^")) {
+      VMSDK_ASSIGN_OR_RETURN(auto rvalue, PowOp(ctx));
+      if (!rvalue) {
+        return absl::InvalidArgumentError("Invalid or missing expression");
+      }
+      lvalue = std::make_unique<Dyadic>(std::move(lvalue), std::move(rvalue),
+                                        &FuncPower, "^");
+    }
+    return lvalue;
   }
 
   absl::StatusOr<ExprPtr> ParseExpression(CompileContext& ctx) {

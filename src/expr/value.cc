@@ -159,6 +159,17 @@ std::optional<double> Value::AsDouble() const {
   } else {
     return std::nullopt;
   }
+  // 1.2.1 fix: an empty string is not a number. strtod("") consumes nothing
+  // and returns 0.0 (which passes the end-of-string check below), so pre-1.2.1
+  // AsDouble("") == 0 -- making abs("")/timefmt("")/(0)==("") diverge from
+  // Redisearch (redis:latest), which treats "" as non-numeric (nan / nil /
+  // not-equal). Gate per COMPATIBILITY.md.
+  if (sv.empty()) {
+    return VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 2, 1, "empty_string_not_numeric",
+        [&]() -> std::optional<double> { return std::nullopt; },
+        [&]() -> std::optional<double> { return 0.0; });
+  }
   char* end{nullptr};
   double val = std::strtod(sv.begin(), &end);
   if (end != sv.end() || IsNan(val)) {
@@ -371,15 +382,23 @@ Value FuncMul(const Value& l, const Value& r) {
 Value FuncDiv(const Value& l, const Value& r) {
   auto lv = l.AsDouble();
   auto rv = r.AsDouble();
-  if (lv && rv) {
-    if (rv.value() == 0) {
-      return Value(std::nan(""));
-    } else {
-      return Value(lv.value() / rv.value());
-    }
-  } else {
+  if (!lv || !rv) {
     return Value(Value::Nil("Divide requires numeric operands"));
   }
+  // Redisearch returns IEEE 754 division semantics for divide-by-zero:
+  // positive/0 -> +inf, negative/0 -> -inf, 0/0 -> NaN. Valkey-search 1.2.0
+  // and earlier collapsed all divide-by-zero cases to a plain NaN, which is
+  // observably different from Redisearch. Gate the fixed behavior behind
+  // search.emulate-release per COMPATIBILITY.md.
+  return VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 2, 1, "ft_aggregate_divide_by_zero",
+      [&] { return Value(lv.value() / rv.value()); },
+      [&] {
+        if (rv.value() == 0) {
+          return Value(std::nan(""));
+        }
+        return Value(lv.value() / rv.value());
+      });
 }
 
 Value FuncPower(const Value& l, const Value& r) {

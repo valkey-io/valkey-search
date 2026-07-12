@@ -586,14 +586,18 @@ absl::StatusOr<bool> FilterParser::HandleBackslashEscape(
 }
 
 // Returns a token within an exact phrase parsing it until reaching the
-// token boundary while handling escape chars.
+// token boundary while handling escape chars. `delim` is the character that
+// closes the phrase: `"` for double-quoted phrases, `'` for apostrophe-phrases
+// (the latter is enabled by the search.emulate-release >= 1.2.1 gate in
+// ParseTextTokens; see COMPATIBILITY.md).
 // Quoted Text Syntax:
-// word1 word2" word3 -> word1
-// word2" word3 -> word2
-// Token boundaries (separated by space): " <punctuation> \<non-punctuation>
+// word1 word2<delim> word3 -> word1
+// word2<delim> word3 -> word2
+// Token boundaries (separated by space): <delim> <punctuation>
+// \<non-punctuation>
 absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-    const std::optional<std::string>& field_or_default) {
+    const std::optional<std::string>& field_or_default, char delim) {
   const auto& lexer = text_index_schema->GetLexer();
   std::string processed_content;
   while (!IsEnd()) {
@@ -604,7 +608,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
     }
     // Break to complete an exact phrase or start a new exact phrase.
     char ch = Peek();
-    if (ch == '"') break;
+    if (ch == delim) break;
     if (ch == '\\') continue;  // Don't break on backslash
     if (lexer.IsPunctuation(ch)) break;
     processed_content.push_back(ch);
@@ -829,17 +833,44 @@ FilterParser::ParseTextTokens(
   if (!text_index_schema) {
     return absl::InvalidArgumentError("Index does not have any text field");
   }
+  // Redisearch treats unescaped `'` as a secondary phrase delimiter, paired
+  // left-to-right and structurally equivalent to `"`. An apostrophe with no
+  // matching close ahead is silently treated as a separator — so we look
+  // ahead before entering phrase mode. Pre-1.2.1 valkey-search dropped
+  // unescaped apostrophes as ordinary punctuation, which silently changed
+  // the parse of queries like `great'wall great'wall`. Gate behind
+  // search.emulate-release per COMPATIBILITY.md.
+  const bool apostrophe_phrases_enabled = VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 2, 1, "ft_search_apostrophe_phrase", [&] { return true; },
+      [&] { return false; });
+  auto has_matching_apostrophe_ahead = [&](size_t start) {
+    for (size_t i = start; i < expression_.size(); ++i) {
+      if (expression_[i] == '\\' && i + 1 < expression_.size()) {
+        ++i;  // skip escaped char
+        continue;
+      }
+      if (expression_[i] == '\'') return true;
+    }
+    return false;
+  };
   absl::InlinedVector<std::unique_ptr<query::TextPredicate>,
                       indexes::text::kProximityTermsInlineCapacity>
       terms;
-  bool in_quotes = false;
+  // 0 when not inside a phrase; otherwise the character (`"` or `'`) that
+  // opened the phrase. The same character must close it.
+  char phrase_delim = 0;
   bool exact_phrase = false;
   while (!IsEnd()) {
     char c = Peek();
-    if (c == '"') {
-      in_quotes = !in_quotes;
+    const bool is_phrase_open =
+        (phrase_delim == 0 &&
+         (c == '"' || (apostrophe_phrases_enabled && c == '\'' &&
+                       has_matching_apostrophe_ahead(pos_ + 1))));
+    const bool is_phrase_close = (phrase_delim != 0 && c == phrase_delim);
+    if (is_phrase_open || is_phrase_close) {
+      phrase_delim = is_phrase_open ? c : 0;
       ++pos_;
-      if (in_quotes && terms.empty()) {
+      if (is_phrase_open && terms.empty()) {
         exact_phrase = true;
         continue;
       }
@@ -848,8 +879,9 @@ FilterParser::ParseTextTokens(
     size_t token_start = pos_;
     VMSDK_ASSIGN_OR_RETURN(
         auto result,
-        in_quotes
-            ? ParseQuotedTextToken(text_index_schema, field_or_default)
+        (phrase_delim != 0)
+            ? ParseQuotedTextToken(text_index_schema, field_or_default,
+                                   phrase_delim)
             : ParseUnquotedTextToken(text_index_schema, field_or_default));
     if (result.predicate) {
       terms.push_back(std::move(result.predicate));

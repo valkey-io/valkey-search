@@ -45,8 +45,8 @@ class BaseCompatibilityTest:
         if cls.ANSWER_FILE_NAME is None:
             raise NotImplementedError("Subclass must define ANSWER_FILE_NAME")
             
-        if os.system("docker run --rm -d --name Generate-search -p 6380:6379 redis/redis-stack-server") != 0:
-            print("Failed to start Redis Stack server, please check your Docker setup.")
+        if os.system("docker run --rm -d --name Generate-search -p 6380:6379 redis:latest") != 0:
+            print("Failed to start Redis server, please check your Docker setup.")
             sys.exit(1)
         print("Started Generate-search server")
         cls.answers = []

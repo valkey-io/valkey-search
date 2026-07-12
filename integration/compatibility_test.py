@@ -13,16 +13,19 @@ CLUSTER_ANSWER_FILES = [g["answers"] for g in GENERATORS if g["cluster"]]
 TEST_MARKER = "*" * 100
 from valkey_search_test_case import (
     ValkeySearchClusterTestCase,
+    ValkeySearchClusterTestCaseDebugMode,
     ValkeySearchTestCaseBase,
     ValkeySearchTestCaseDebugMode,
 )
 
-# Pin the module's compatibility behavior to the newest possible release so
+# The compatibility pickles capture Redisearch behavior, which is the
+# compatible target. Pin search.emulate-release to the newest possible value so
 # every VALKEY_SEARCH_COMPATIBILITY_FIX gate evaluates to its "fixed" (Redis-
-# matching) branch when comparing against the captured Redis answers. Values
-# above kModuleVersion require debug-mode, which is why TestAnswersCMD runs on
-# ValkeySearchTestCaseDebugMode (module loaded with --debug-mode yes).
-EMULATE_RELEASE_MAX = "255.0.0"
+# matching) branch — this covers both the invalid-data whole-key-drop fix and
+# the earlier expr/formatting fixes. Values above kModuleVersion require
+# debug-mode, which the *DebugMode base classes enable. Datasets without invalid
+# data are unaffected by this setting.
+COMPAT_EMULATE_RELEASE = "255.0.0"
 from valkeytestframework.conftest import resource_port_tracker
 from utils import IndexingTestHelper
 from valkeytestframework.util import waiters
@@ -625,11 +628,7 @@ class TestAnswersCMD(ValkeySearchTestCaseDebugMode):
         data_set = None
         client = self.server.get_new_client()
         client.execute_command(
-            "CONFIG", "SET", "search.emulate-release", EMULATE_RELEASE_MAX
-        )
-        print(
-            "search.emulate-release =",
-            client.execute_command("CONFIG", "GET", "search.emulate-release"),
+            "CONFIG", "SET", "search.emulate-release", COMPAT_EMULATE_RELEASE
         )
         for i in range(len(answers)):
             data_set = do_answer(client, answers[i], data_set)
@@ -673,7 +672,7 @@ class TestAnswersCMD(ValkeySearchTestCaseDebugMode):
     '''
 
 # TODO: fix cluster mode test failures
-class TestAnswersCME(ValkeySearchClusterTestCase):
+class TestAnswersCME(ValkeySearchClusterTestCaseDebugMode):
     @pytest.mark.parametrize("answers", CLUSTER_ANSWER_FILES)
     def test_answers(self, answers):
         global correct_answers, wrong_answers, failed_tests, passed_tests
@@ -689,6 +688,13 @@ class TestAnswersCME(ValkeySearchClusterTestCase):
 
         data_set = None
         cluster_client = self.new_cluster_client()
+
+        # Pin every primary to the compatible (whole-key-drop) behavior so the
+        # invalid-data datasets match the Redisearch reference answers.
+        for node_idx in range(self.CLUSTER_SIZE):
+            self.client_for_primary(node_idx).execute_command(
+                "CONFIG", "SET", "search.emulate-release", COMPAT_EMULATE_RELEASE
+            )
 
         for expected in answers:
             data_set = do_answer_cluster(

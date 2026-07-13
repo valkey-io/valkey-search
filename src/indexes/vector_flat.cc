@@ -230,12 +230,6 @@ template <typename T>
 absl::StatusOr<std::deque<Neighbor>> VectorFlat<T>::Search(
     absl::string_view query, uint64_t count,
     std::unique_ptr<hnswlib::BaseFilterFunctor> filter) {
-  if (!IsValidSizeVector(query)) {
-    return absl::InvalidArgumentError(absl::StrCat(
-        "Error parsing vector similarity query: query vector blob size (",
-        query.size(), ") does not match index's expected size (",
-        dimensions_ * GetDataTypeSize(), ")."));
-  }
   auto perform_search = [this, count, &filter](absl::string_view query)
       -> absl::StatusOr<std::priority_queue<std::pair<T, hnswlib::labeltype>>> {
     absl::ReaderMutexLock lock(&resize_mutex_);

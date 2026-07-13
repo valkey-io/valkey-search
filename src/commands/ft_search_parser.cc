@@ -38,6 +38,7 @@
 #include <vector>
 
 #include "absl/container/inlined_vector.h"
+#include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/ascii.h"
@@ -48,6 +49,7 @@
 #include "src/commands/filter_parser.h"
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/vector_base.h"
 #include "src/metrics.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
@@ -367,6 +369,16 @@ absl::Status ParseQueryString(query::VectorSearchParameters &parameters) {
     return absl::InvalidArgumentError(absl::StrCat("Index field `",
                                                    parameters.attribute_alias,
                                                    "` is not a Vector index "));
+  }
+
+  auto *vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
+  CHECK(vector_index != nullptr);
+  if (parameters.query.size() !=
+      static_cast<size_t>(vector_index->GetVectorDataSize())) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Error parsing vector similarity parameters: query vector blob size (",
+        parameters.query.size(), ") does not match index's expected size (",
+        vector_index->GetVectorDataSize(), ")."));
   }
 
   if (parameters.parse_vars.score_as_string.empty()) {

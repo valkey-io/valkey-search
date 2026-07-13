@@ -88,6 +88,7 @@ if (BUILD_UNIT_TESTS)
     find_package(GTest REQUIRED)
     find_package(benchmark REQUIRED)
     enable_testing()
+    include(GoogleTest)
 endif()
 
 add_subdirectory(vmsdk)

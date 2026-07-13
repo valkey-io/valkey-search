@@ -34,15 +34,17 @@ Usage: build.sh [options...]
     --clean                           Clean the current build configuration (debug or release).
     --format                          Applies clang-format. (Run in dev container environment to ensure correct clang-format version)
     --build-dir[=PATH]                Use an alternate build directory.
-    --run-tests                       Run all tests. Optionally, pass a test name to run: "--run-tests=<test-name>".
+    --run-tests                       Run all unit tests via CTest. Optionally, pass a ctest -R regex to
+                                       filter: "--run-tests=<pattern>" (e.g. "SchemaManagerTest" or
+                                       "SchemaManagerTest.SomeCase").
     --no-build                        By default, build.sh always triggers a build. This option disables this behavior.
-    --test-errors-stdout              When a test fails, dump the captured tests output to stdout.
+    --test-errors-stdout              When a test fails, dump the captured tests output to stdout (ctest --output-on-failure).
     --run-integration-tests[=pattern] Run integration tests.
     --use-system-modules              Use system's installed gRPC, Protobuf & Abseil dependencies.
     --asan                            Build with address sanitizer enabled.
     --tsan                            Build with thread sanitizer enabled.
     --retries=N                       Attempt to run integration tests N times. Default is 1.
-    --jobs=N                          Limit the build workers to N. Default: use all available cores.
+    --jobs=N                          Limit the build workers and CTest's parallel test jobs to N. Default: use all available cores for the build, run tests serially.
 
 Example usage:
 
@@ -304,21 +306,6 @@ function build() {
     fi
 }
 
-# CMake emits each test binary into a build sub-directory that mirrors its
-# source location (e.g. testing/, testing/expr/, vmsdk/testing/). The rest of
-# this script (and the CI output-collection step) expects every test binary in
-# a single flat directory, referenced by name. Rather than teach those call
-# sites to search recursively, gather the binaries here by symlinking them
-# (flat) into ${TESTS_DIR}.
-function collect_test_binaries() {
-    rm -rf "${TESTS_DIR}"
-    mkdir -p "${TESTS_DIR}"
-    while read -r test_bin; do
-        ln -sf "${test_bin}" "${TESTS_DIR}/$(basename "${test_bin}")"
-    done < <(find "${BUILD_DIR}" -type f -name "*_test" \
-        -not -path "${TESTS_DIR}/*" -not -path "*/CMakeFiles/*")
-}
-
 function format() {
     cd "${ROOT_DIR}"
     printf "Formatting...\n"
@@ -326,36 +313,33 @@ function format() {
     printf "Applied clang-format\n"
 }
 
-function print_test_prefix() {
-    printf "${BOLD_PINK}Running:${RESET} $1"
-}
-
-function print_test_ok() {
-    printf " ... ${GREEN}ok${RESET}\n"
-}
-
 function print_test_summary() {
-    printf "${BLUE}Test output can be found here:${RESET} ${TEST_OUTPUT_FILE}\n"
+    printf "${BLUE}CTest JUnit report:${RESET} ${BUILD_DIR}/test-results.xml\n"
+    printf "${BLUE}Full test output:${RESET} ${BUILD_DIR}/Testing/Temporary/LastTest.log\n"
 }
 
-function print_test_error_and_exit() {
-    printf " ... ${RED}failed${RESET}\n"
+# Runs the unit tests registered with CTest (via gtest_discover_tests). $1,
+# if non-empty, is passed to ctest's "-R" regex test filter.
+function run_unit_tests() {
+    local filter="$1"
+    printf "${BOLD_PINK}Running unit tests (via CTest)${RESET}\n"
+
+    local ctest_args=(--output-junit "test-results.xml")
     if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then
-        # Only dump the failed test's output, not the entire accumulated log
-        if [ -f "${CURRENT_TEST_OUTPUT_FILE}" ]; then
-            cat "${CURRENT_TEST_OUTPUT_FILE}"
-        fi
+        ctest_args+=(--output-on-failure)
+    fi
+    if [ -n "${JOBS}" ]; then
+        ctest_args+=(--parallel "${JOBS}")
+    fi
+    if [ -n "${filter}" ]; then
+        ctest_args+=(-R "${filter}")
     fi
 
-    # When running tests with sanitizer enabled, do not terminate the execution after the first failure continue
-    # running the remainder of the tests
-    if [[ "${SAN_BUILD}" == "no" ]]; then
-        print_test_summary
-        exit 1
-    else
-        # Make sure to exit the script with an error
-        EXIT_CODE=1
-    fi
+    # CTest already runs every registered test and reports pass/fail for each
+    # one (regardless of sanitizer build), so just propagate its exit code.
+    # Run in a subshell so we don't disturb the caller's working directory.
+    (cd "${BUILD_DIR}" && ctest "${ctest_args[@]}") || EXIT_CODE=1
+    print_test_summary
 }
 
 function check_tool() {
@@ -385,7 +369,7 @@ function determine_ninja() {
 }
 
 function check_tools() {
-    local tools="cmake g++ gcc"
+    local tools="cmake ctest g++ gcc"
     for tool in $tools; do
         check_tool ${tool}
     done
@@ -453,6 +437,11 @@ fi
 
 if [[ "${SAN_BUILD}" != "no" ]]; then
     printf "${BOLD_PINK}${SAN_BUILD} sanitizer build is enabled${RESET}\n"
+    # Needed before the build step, not just the test-run step: CMake's default
+    # gtest_discover_tests() runs each test binary's --gtest_list_tests as part
+    # of the build itself, which would otherwise hit an ASan ODR-violation
+    # false positive.
+    export ASAN_OPTIONS="detect_odr_violation=0"
 fi
 
 if [ -n "${BUILD_DIR_ARG}" ]; then
@@ -468,9 +457,6 @@ else
         BUILD_DIR=${BUILD_DIR}-tsan
     fi
 fi
-
-TESTS_DIR=${BUILD_DIR}/tests
-TEST_OUTPUT_FILE=${BUILD_DIR}/tests.out
 
 printf "Checking if configure is required..."
 
@@ -493,37 +479,10 @@ BUILD_RUNTIME=$((END_TIME - START_TIME))
 
 START_TIME=$(date +%s)
 
-if [[ "${SAN_BUILD}" != "no" ]]; then
-    export ASAN_OPTIONS="detect_odr_violation=0"
-fi
-
-if [ -n "${RUN_TEST}" ]; then
-    collect_test_binaries
-fi
-
 if [[ "${RUN_TEST}" == "all" ]]; then
-    rm -f "${TEST_OUTPUT_FILE}"
-    CURRENT_TEST_OUTPUT_FILE="${BUILD_DIR}/current_test.out"
-    while read -r test; do
-        echo "==> Running executable: ${test}" >> "${TEST_OUTPUT_FILE}"
-        echo "" >> "${TEST_OUTPUT_FILE}"
-        # Write each test's output to a per-test file so on failure we only dump the relevant output
-        rm -f "${CURRENT_TEST_OUTPUT_FILE}"
-        print_test_prefix "${test}"
-        ("${test}" --gtest_brief=1 > "${CURRENT_TEST_OUTPUT_FILE}" 2>&1 && cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}" && print_test_ok) || { cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}"; print_test_error_and_exit; }
-    done < <(find -L "${TESTS_DIR}" -name "*_test" -type f)
-    rm -f "${CURRENT_TEST_OUTPUT_FILE}"
-    print_test_summary
+    run_unit_tests ""
 elif [ ! -z "${RUN_TEST}" ]; then
-    rm -f "${TEST_OUTPUT_FILE}"
-    CURRENT_TEST_OUTPUT_FILE="${BUILD_DIR}/current_test.out"
-    echo "==> Running executable: ${TESTS_DIR}/${RUN_TEST}" >> "${TEST_OUTPUT_FILE}"
-    echo "" >> "${TEST_OUTPUT_FILE}"
-    rm -f "${CURRENT_TEST_OUTPUT_FILE}"
-    print_test_prefix "${TESTS_DIR}/${RUN_TEST}"
-    ("${TESTS_DIR}/${RUN_TEST}" --gtest_brief=1 > "${CURRENT_TEST_OUTPUT_FILE}" 2>&1 && cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}" && print_test_ok) || { cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}"; print_test_error_and_exit; }
-    rm -f "${CURRENT_TEST_OUTPUT_FILE}"
-    print_test_summary
+    run_unit_tests "${RUN_TEST}"
 elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
     if [ ! -z "${TEST_PATTERN}" ]; then
         echo ""

@@ -35,7 +35,7 @@
 #include "vmsdk/src/module.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
-#define MODULE_VERSION 10002
+#define MODULE_VERSION 10003
 /* The release stage is used in order to provide release status information.
  * In unstable branch the status is always "dev".
  * During release process the status will be set to rc1,rc2...rcN.

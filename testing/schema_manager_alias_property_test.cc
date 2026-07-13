@@ -2095,8 +2095,7 @@ class CrossIndexAliasConflictTest : public vmsdk::ValkeyTest {
   }
 
   void SimulateAliasCallback(const std::string &index_name,
-                             const std::vector<std::string> &aliases,
-                             uint32_t version) {
+                             const std::vector<std::string> &aliases) {
     auto schema_or =
         SchemaManager::Instance().GetIndexSchema(kDbNum, index_name);
     ASSERT_TRUE(schema_or.ok()) << schema_or.status();
@@ -2122,30 +2121,39 @@ class CrossIndexAliasConflictTest : public vmsdk::ValkeyTest {
 };
 
 TEST_F(CrossIndexAliasConflictTest, HigherVersionWins) {
+  // Use names where lexicographic tie-break would favor idx_z (idx_z > idx_a),
+  // but give idx_a the higher metadata version.  The higher version must win
+  // regardless of the name ordering.
   CreateIndex("idx_a");
-  CreateIndex("idx_b");
+  CreateIndex("idx_z");
 
-  SimulateAliasCallback("idx_a", {"shared_alias"}, 1);
-  SimulateAliasCallback("idx_b", {"shared_alias"}, 2);
+  // idx_z gets version 0 (one CreateEntry call).
+  SimulateAliasCallback("idx_z", {"shared_alias"});
+
+  // Bump idx_a to version 1 via intermediate update, then claim the alias.
+  // Without version-based resolution, idx_z would win the lexicographic
+  // tie-break at equal versions.
+  SimulateAliasCallback("idx_a", {"other_alias"});
+  SimulateAliasCallback("idx_a", {"shared_alias"});
 
   auto aliases = SchemaManager::Instance().GetAllAliases(kDbNum);
   ASSERT_EQ(aliases.size(), 1);
   EXPECT_EQ(aliases[0].first, "shared_alias");
-  EXPECT_EQ(aliases[0].second, "idx_b");
+  EXPECT_EQ(aliases[0].second, "idx_a");
 
-  auto schema_a = SchemaManager::Instance().GetIndexSchema(kDbNum, "idx_a");
-  ASSERT_TRUE(schema_a.ok());
-  auto a_aliases = schema_a.value()->GetAliases();
-  EXPECT_TRUE(std::find(a_aliases.begin(), a_aliases.end(), "shared_alias") ==
-              a_aliases.end());
+  auto schema_z = SchemaManager::Instance().GetIndexSchema(kDbNum, "idx_z");
+  ASSERT_TRUE(schema_z.ok());
+  auto z_aliases = schema_z.value()->GetAliases();
+  EXPECT_TRUE(std::find(z_aliases.begin(), z_aliases.end(), "shared_alias") ==
+              z_aliases.end());
 }
 
 TEST_F(CrossIndexAliasConflictTest, EqualVersionLexicographicTieBreak) {
   CreateIndex("idx_a");
   CreateIndex("idx_z");
 
-  SimulateAliasCallback("idx_a", {"shared_alias"}, 1);
-  SimulateAliasCallback("idx_z", {"shared_alias"}, 1);
+  SimulateAliasCallback("idx_a", {"shared_alias"});
+  SimulateAliasCallback("idx_z", {"shared_alias"});
 
   auto aliases = SchemaManager::Instance().GetAllAliases(kDbNum);
   ASSERT_EQ(aliases.size(), 1);
@@ -2157,8 +2165,8 @@ TEST_F(CrossIndexAliasConflictTest, CallbackOrderDoesNotAffectWinner) {
   CreateIndex("idx_a");
   CreateIndex("idx_z");
 
-  SimulateAliasCallback("idx_z", {"shared_alias"}, 1);
-  SimulateAliasCallback("idx_a", {"shared_alias"}, 1);
+  SimulateAliasCallback("idx_z", {"shared_alias"});
+  SimulateAliasCallback("idx_a", {"shared_alias"});
 
   auto aliases = SchemaManager::Instance().GetAllAliases(kDbNum);
   ASSERT_EQ(aliases.size(), 1);
@@ -2170,8 +2178,8 @@ TEST_F(CrossIndexAliasConflictTest, LoserAliasVectorCleaned) {
   CreateIndex("idx_a");
   CreateIndex("idx_z");
 
-  SimulateAliasCallback("idx_a", {"shared_alias", "only_a"}, 1);
-  SimulateAliasCallback("idx_z", {"shared_alias"}, 1);
+  SimulateAliasCallback("idx_a", {"shared_alias", "only_a"});
+  SimulateAliasCallback("idx_z", {"shared_alias"});
 
   auto aliases = SchemaManager::Instance().GetAllAliases(kDbNum);
   std::sort(aliases.begin(), aliases.end());
@@ -2192,12 +2200,12 @@ TEST_F(CrossIndexAliasConflictTest, VersionTakesPrecedenceOverName) {
   CreateIndex("idx_z");
   CreateIndex("idx_a");
 
-  SimulateAliasCallback("idx_z", {"shared_alias"}, 1);
+  SimulateAliasCallback("idx_z", {"shared_alias"});
 
   // Bump idx_a's version higher via intermediate updates.
-  SimulateAliasCallback("idx_a", {"other_alias"}, 1);
-  SimulateAliasCallback("idx_a", {"other_alias2"}, 2);
-  SimulateAliasCallback("idx_a", {"shared_alias"}, 3);
+  SimulateAliasCallback("idx_a", {"other_alias"});
+  SimulateAliasCallback("idx_a", {"other_alias2"});
+  SimulateAliasCallback("idx_a", {"shared_alias"});
 
   auto aliases = SchemaManager::Instance().GetAllAliases(kDbNum);
   ASSERT_EQ(aliases.size(), 1);
@@ -2209,13 +2217,13 @@ TEST_F(CrossIndexAliasConflictTest, LowerVersionLosesEvenIfCallbackLater) {
   CreateIndex("idx_a");
   CreateIndex("idx_b");
 
-  // Bump idx_b to version 3.
-  SimulateAliasCallback("idx_b", {"temp_alias"}, 1);
-  SimulateAliasCallback("idx_b", {"temp_alias2"}, 2);
-  SimulateAliasCallback("idx_b", {"shared_alias"}, 3);
+  // Bump idx_b to version 2 (three CreateEntry calls).
+  SimulateAliasCallback("idx_b", {"temp_alias"});
+  SimulateAliasCallback("idx_b", {"temp_alias2"});
+  SimulateAliasCallback("idx_b", {"shared_alias"});
 
-  // idx_a claims at version 1 — loses.
-  SimulateAliasCallback("idx_a", {"shared_alias"}, 1);
+  // idx_a claims at version 0 — loses.
+  SimulateAliasCallback("idx_a", {"shared_alias"});
 
   auto aliases = SchemaManager::Instance().GetAllAliases(kDbNum);
   ASSERT_EQ(aliases.size(), 1);
@@ -2227,8 +2235,8 @@ TEST_F(CrossIndexAliasConflictTest, NoConflictDifferentAliasesCoexist) {
   CreateIndex("idx_a");
   CreateIndex("idx_b");
 
-  SimulateAliasCallback("idx_a", {"alias_a"}, 1);
-  SimulateAliasCallback("idx_b", {"alias_b"}, 1);
+  SimulateAliasCallback("idx_a", {"alias_a"});
+  SimulateAliasCallback("idx_b", {"alias_b"});
 
   auto aliases = SchemaManager::Instance().GetAllAliases(kDbNum);
   std::sort(aliases.begin(), aliases.end());

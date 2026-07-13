@@ -80,7 +80,12 @@ bool verifyLoadedOnlyOnce() {
 }
 
 void TrackCurrentAsMainThread() {
-  CHECK(!set_main_thread);
+  if (set_main_thread) {
+    // Idempotent when re-called from the thread that's already marked as
+    // main; only a *different* thread claiming main-thread status is a bug.
+    CHECK(is_main_thread);
+    return;
+  }
   is_main_thread = true;
   set_main_thread = true;
 }

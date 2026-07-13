@@ -607,18 +607,25 @@ class TestFTAliasDropIndexCluster(ValkeySearchClusterTestCase):
         )
 
         # Issue both rapidly — propagation delay creates the race window.
-        result_update = None
+        update_succeeded = False
+        update_error = None
         try:
             result_update = node0.execute_command(
                 "FT.ALIASUPDATE", ALIAS_NAME, INDEX_NAME_2)
+            assert result_update == b"OK", (
+                f"FT.ALIASUPDATE unexpected result: {result_update}")
+            update_succeeded = True
         except ResponseError as e:
-            result_update = str(e)
+            update_error = e
 
         result_drop = None
         try:
             result_drop = node1.execute_command("FT.DROPINDEX", INDEX_NAME)
         except ResponseError as e:
             result_drop = str(e)
+
+        assert result_drop == b"OK", (
+            f"FT.DROPINDEX should succeed: {result_drop}")
 
         def _alias_converged():
             states = []
@@ -644,17 +651,27 @@ class TestFTAliasDropIndexCluster(ValkeySearchClusterTestCase):
         assert len(set(alias_present)) == 1, (
             f"Cluster not converged: alias states = {alias_present}")
 
-        # If alias survived, it must point to INDEX_NAME_2 (the update target)
-        # and not the dropped INDEX_NAME.
-        if alias_present[0]:
+        if update_succeeded:
+            # ALIASUPDATE moved the alias to INDEX_NAME_2 before the drop
+            # removed INDEX_NAME — alias must survive pointing to INDEX_NAME_2.
+            assert alias_present[0], (
+                "Alias should be present when ALIASUPDATE succeeded")
             for node in self._all_primaries():
                 info = list(node.execute_command("FT.INFO", ALIAS_NAME))
                 idx = next(
                     (i for i, v in enumerate(info) if v == b"index_name"),
                     None)
                 assert idx is not None
-                assert info[idx + 1] != INDEX_NAME.encode(), (
-                    f"Alias still points to dropped index: {info[idx + 1]}")
+                assert info[idx + 1] == INDEX_NAME_2.encode(), (
+                    f"Alias should point to {INDEX_NAME_2}, got: "
+                    f"{info[idx + 1]}")
+        else:
+            # ALIASUPDATE failed (e.g. index already gone) — alias must be
+            # absent since DROPINDEX removes aliases targeting the dropped
+            # index.
+            assert not alias_present[0], (
+                f"Alias should be absent when ALIASUPDATE failed with: "
+                f"{update_error}")
 
         # No cruft — FT.ALIASLIST consistent across all nodes.
         alias_lists = set()
@@ -1347,14 +1364,23 @@ def _run_alias_pausepoint_reset(order, node0, node1):
             node1.execute_command(
                 "FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage no")
         else:
-            # Safety fallback.
-            node0.execute_command(
-                "FT._DEBUG PAUSEPOINT RESET fanout_remote_pausepoint")
-            node1.execute_command(
-                "FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage no")
             exception = ValueError(f"Invalid order: {order}")
     except Exception as e:
         exception = e
+    finally:
+        # Unconditionally release debug controls so tests don't hang on
+        # failure.
+        try:
+            node0.execute_command(
+                "FT._DEBUG PAUSEPOINT RESET fanout_remote_pausepoint")
+        except Exception:
+            pass
+        try:
+            node1.execute_command(
+                "FT._DEBUG CONTROLLED_VARIABLE SET "
+                "PauseHandleClusterMessage no")
+        except Exception:
+            pass
     return exception
 
 

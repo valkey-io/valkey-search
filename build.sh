@@ -188,15 +188,68 @@ else
   BUILD_TOOL="make -j$(num_proc)"
 fi
 
+# Compute the compiler/linker flags valkey-search is built with and export
+# them as VALKEY_SEARCH_{C,CXX}_FLAGS / VALKEY_SEARCH_{SHARED,MODULE}_LINKER_FLAGS.
+# These used to live in cmake/Modules/valkey_search.cmake as a set of
+# per-target CMake functions; they now live here so build.sh can pass them to
+# cmake as plain -DCMAKE_*_FLAGS arguments instead of CMakeLists.txt having to
+# know about build configs/architectures/sanitizers.
+function compute_build_flags() {
+    local is_x86="no"
+    if [[ "$(uname -m)" == "x86_64" ]]; then
+        is_x86="yes"
+    fi
+
+    local flags="-falign-functions=5 -fmath-errno -ffp-contract=off -fno-rounding-math"
+    if [[ "${is_x86}" == "yes" ]]; then
+        flags="${flags} -mcx16 -msse4.2 -mpclmul -mavx -mavx2 -maes -mfma -mprfchw"
+    fi
+    flags="${flags} -mtune=generic -gdwarf-5 -gz=zlib"
+    if [[ "${BUILD_CONFIG}" != "debug" ]]; then
+        flags="${flags} -ffile-prefix-map=${ROOT_DIR}="
+    fi
+    flags="${flags} -ffast-math -funroll-loops -ftree-vectorize"
+    if [[ "${UNAME_S}" != "Darwin" ]]; then
+        flags="${flags} -fopenmp"
+    fi
+    flags="${flags} -flax-vector-conversions -Wno-unknown-pragmas -Wno-sign-compare -Wno-uninitialized -DTESTING_TMP_DISABLED"
+
+    local lto_flags=""
+    if [[ "${SAN_BUILD}" != "no" ]]; then
+        # Sanitizer build: prefer accurate stack traces over optimized code, and LTO
+        # is incompatible with the sanitizer runtimes we use here.
+        flags="${flags} -O1 -fno-omit-frame-pointer -fsanitize=${SAN_BUILD} -fno-lto -DSAN_BUILD=${SAN_BUILD}"
+        lto_flags="-fsanitize=${SAN_BUILD}"
+    elif [[ "${BUILD_CONFIG}" == "debug" ]]; then
+        flags="${flags} -O0 -fno-omit-frame-pointer -fno-lto"
+    else
+        # Release build: emit fat LTO objects (both IR and native code) so we can
+        # defer the actual LTO optimization to link time.
+        flags="${flags} -ffat-lto-objects"
+        lto_flags="-flto"
+    fi
+
+    VALKEY_SEARCH_C_FLAGS="${flags}"
+    VALKEY_SEARCH_CXX_FLAGS="${flags}"
+    VALKEY_SEARCH_SHARED_LINKER_FLAGS="${lto_flags}"
+    VALKEY_SEARCH_MODULE_LINKER_FLAGS="${lto_flags}"
+}
+
 function configure() {
     printf "${BOLD_PINK}Running cmake...${RESET}\n"
     printf "Generating ${GREEN}${CMAKE_GENERATOR}${RESET} build files\n"
     local BUILD_TYPE=$(capitalize_string ${BUILD_CONFIG})
     mkdir -p "${BUILD_DIR}"
     rm -f "${BUILD_DIR}/CMakeCache.txt"
-    printf "Running: cmake -S %s -B %s -DCMAKE_BUILD_TYPE=%s -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBUILD_UNIT_TESTS=ON -Wno-dev -G\"%s\" %s\n" \
-        "${ROOT_DIR}" "${BUILD_DIR}" "${BUILD_TYPE}" "${CMAKE_GENERATOR}" "${CMAKE_EXTRA_ARGS}"
-    cmake -S "${ROOT_DIR}" -B "${BUILD_DIR}" -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBUILD_UNIT_TESTS=ON -Wno-dev -G"${CMAKE_GENERATOR}" ${CMAKE_EXTRA_ARGS}
+    compute_build_flags
+    printf "Running: cmake -S %s -B %s -DCMAKE_BUILD_TYPE=%s -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBUILD_UNIT_TESTS=ON -DCMAKE_C_FLAGS=\"%s\" -DCMAKE_CXX_FLAGS=\"%s\" -DCMAKE_SHARED_LINKER_FLAGS=\"%s\" -DCMAKE_MODULE_LINKER_FLAGS=\"%s\" -Wno-dev -G\"%s\" %s\n" \
+        "${ROOT_DIR}" "${BUILD_DIR}" "${BUILD_TYPE}" "${VALKEY_SEARCH_C_FLAGS}" "${VALKEY_SEARCH_CXX_FLAGS}" "${VALKEY_SEARCH_SHARED_LINKER_FLAGS}" "${VALKEY_SEARCH_MODULE_LINKER_FLAGS}" "${CMAKE_GENERATOR}" "${CMAKE_EXTRA_ARGS}"
+    cmake -S "${ROOT_DIR}" -B "${BUILD_DIR}" -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBUILD_UNIT_TESTS=ON \
+        -DCMAKE_C_FLAGS="${VALKEY_SEARCH_C_FLAGS}" \
+        -DCMAKE_CXX_FLAGS="${VALKEY_SEARCH_CXX_FLAGS}" \
+        -DCMAKE_SHARED_LINKER_FLAGS="${VALKEY_SEARCH_SHARED_LINKER_FLAGS}" \
+        -DCMAKE_MODULE_LINKER_FLAGS="${VALKEY_SEARCH_MODULE_LINKER_FLAGS}" \
+        -Wno-dev -G"${CMAKE_GENERATOR}" ${CMAKE_EXTRA_ARGS}
 }
 
 function build() {

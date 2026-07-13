@@ -1,5 +1,36 @@
-Valkey Search 1.0.0 release notes
-=================================
+Valkey Search 1.1 release notes
+===============================
+
+================================================================================
+Valkey Search 1.1.1 - Released <RELEASE DATE TBD>
+================================================================================
+
+Bug fixes
+=========
+* Hardened load and command paths against crashes found through fuzzing: added validation for HNSW index data loaded from an external file and for query vector size against index dimensions at parse time (#1191, #1192)
+* Fixed a use-after-free race in DefaultReplyScoreAs() (#565)
+* Fixed a cross-module memory allocator crash by hiding wrapper symbols (#569)
+* Fixed tag OR syntax in hybrid queries and tag query parsing (#452, #602)
+* Fixed a RETURN clause bug and now return the alias field when an alias is specified (#568)
+* Avoid a deadlock while processing MULTI/EXEC mutations (#629)
+* Fixed an unexpected vk-search flag left in the RDB after all indexes are dropped (#848)
+* Allow a local node to have no primary endpoint
+
+================================================================================
+Valkey Search 1.1.0 GA - Released Wed 24 December 2025
+================================================================================
+
+This release requires Valkey core 9.0.1 release or higher.
+
+Major New Features / Updates
+============================
+* FT.AGGREGATE command is implemented.
+* Indexes and query operations no longer require a vector component.
+* Consistency of operations across the cluster is substantially improved.
+* The RDB format now includes information to avoid generating a backfill on reload when it's not required. (Backward compatible with 1.0 release)
+* The build system has switched to cmake.
+* A pytest-based integration test environment was added
+* Full DBNum support for cluster mode is implemented.
 
 ================================================================================
 Valkey Search 1.0.0 RC1 - Released Fri 28 Mar 2025
@@ -33,7 +64,9 @@ New configurations
 ===========================
 * Add support for the following configurations: reader-threads, writer-threads, use-coordinator, log-level
 
-We appreciate the efforts of all who contributed code to this release!
+================================================================================
+Contributors
+================================================================================
 
-Yair Gottdenker (yairgott), Allen Samuels (allenss-amazon), Eran Ifrah (eifrah-aws), Jacob Murphy (murphyjacob4), Chanil Jeon (jeon1226), Qu Chen (QuChen88), DP (dpbnasika)
+@yairgott, @allenss-amazon, @eifrah-aws, @murphyjacob4, @jeon1226, @QuChen88, @dpbnasika, @zvi-code, @daddaman-amz, @boda26, @baswanth09, @KarthikSubbarao, @Aksha1812
 

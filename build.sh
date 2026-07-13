@@ -227,6 +227,21 @@ function build() {
     fi
 }
 
+# CMake emits each test binary into a build sub-directory that mirrors its
+# source location (e.g. testing/, testing/expr/, vmsdk/testing/). The rest of
+# this script (and the CI output-collection step) expects every test binary in
+# a single flat directory, referenced by name. Rather than teach those call
+# sites to search recursively, gather the binaries here by symlinking them
+# (flat) into ${TESTS_DIR}.
+function collect_test_binaries() {
+    rm -rf "${TESTS_DIR}"
+    mkdir -p "${TESTS_DIR}"
+    while read -r test_bin; do
+        ln -sf "${test_bin}" "${TESTS_DIR}/$(basename "${test_bin}")"
+    done < <(find "${BUILD_DIR}" -type f -name "*_test" \
+        -not -path "${TESTS_DIR}/*" -not -path "*/CMakeFiles/*")
+}
+
 function format() {
     cd "${ROOT_DIR}"
     printf "Formatting...\n"
@@ -405,6 +420,10 @@ if [[ "${SAN_BUILD}" != "no" ]]; then
     export ASAN_OPTIONS="detect_odr_violation=0"
 fi
 
+if [ -n "${RUN_TEST}" ]; then
+    collect_test_binaries
+fi
+
 if [[ "${RUN_TEST}" == "all" ]]; then
     rm -f "${TEST_OUTPUT_FILE}"
     CURRENT_TEST_OUTPUT_FILE="${BUILD_DIR}/current_test.out"
@@ -415,7 +434,7 @@ if [[ "${RUN_TEST}" == "all" ]]; then
         rm -f "${CURRENT_TEST_OUTPUT_FILE}"
         print_test_prefix "${test}"
         ("${test}" --gtest_brief=1 > "${CURRENT_TEST_OUTPUT_FILE}" 2>&1 && cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}" && print_test_ok) || { cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}"; print_test_error_and_exit; }
-    done < <(find "${TESTS_DIR}" -name "*_test" -type f)
+    done < <(find -L "${TESTS_DIR}" -name "*_test" -type f)
     rm -f "${CURRENT_TEST_OUTPUT_FILE}"
     print_test_summary
 elif [ ! -z "${RUN_TEST}" ]; then

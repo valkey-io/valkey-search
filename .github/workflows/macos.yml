@@ -30,6 +30,19 @@ jobs:
     - name: Checkout Code
       uses: actions/checkout@v3
 
-    # Set up Docker to build and run the container
+    - name: Expose runner image identity for cache key
+      run: |
+        echo "IMAGE_OS=$ImageOS" >> "$GITHUB_ENV"
+        echo "IMAGE_VERSION=$ImageVersion" >> "$GITHUB_ENV"
+
+    - name: Restore highwayhash cache
+      uses: actions/cache@v4
+      with:
+        path: ~/valkey-search-deps
+        key: macos-highwayhash-${{ runner.os }}-${{ env.IMAGE_OS }}-${{ env.IMAGE_VERSION }}-${{ hashFiles('ci/build_macos.sh') }}
+        # No restore-keys deliberately: an exact-match-only key means a cache miss
+        # (OS bump, image refresh, or a ref change in the script) always triggers a
+        # clean rebuild rather than risking a stale/incompatible binary being reused.
+
     - name: Build Code
-      run: ./build.sh
+      run: ci/build_macos.sh

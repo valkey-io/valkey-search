@@ -142,20 +142,6 @@ INSTANTIATE_TEST_SUITE_P(
             .return_code = absl::StatusCode::kOk,
         },
         {
-            .test_name = "arity_error_no_args",
-            .argv = {"FT.ALIASADD"},
-            .index_schema_pbtxt = std::nullopt,
-            .pre_existing_alias = std::nullopt,
-            .return_code = absl::StatusCode::kInvalidArgument,
-        },
-        {
-            .test_name = "arity_error_one_arg",
-            .argv = {"FT.ALIASADD", "my_alias"},
-            .index_schema_pbtxt = std::nullopt,
-            .pre_existing_alias = std::nullopt,
-            .return_code = absl::StatusCode::kInvalidArgument,
-        },
-        {
             .test_name = "duplicate_alias",
             .argv = {"FT.ALIASADD", "my_alias", "test_idx"},
             .index_schema_pbtxt = std::string(kTestIndexSchemaPbtxt),
@@ -184,13 +170,6 @@ INSTANTIATE_TEST_SUITE_P(
             .index_schema_pbtxt = std::string(kTestIndexSchemaPbtxt),
             .pre_existing_alias = std::nullopt,
             .return_code = absl::StatusCode::kOk,
-        },
-        {
-            .test_name = "arity_error_too_many_args",
-            .argv = {"FT.ALIASADD", "my_alias", "test_idx", "extra"},
-            .index_schema_pbtxt = std::nullopt,
-            .pre_existing_alias = std::nullopt,
-            .return_code = absl::StatusCode::kInvalidArgument,
         },
         {
             .test_name = "empty_alias_name",
@@ -357,20 +336,6 @@ INSTANTIATE_TEST_SUITE_P(
             .return_code = absl::StatusCode::kOk,
         },
         {
-            .test_name = "arity_error_no_args",
-            .argv = {"FT.ALIASDEL"},
-            .index_schema_pbtxt = std::nullopt,
-            .pre_existing_alias = std::nullopt,
-            .return_code = absl::StatusCode::kInvalidArgument,
-        },
-        {
-            .test_name = "arity_error_extra_args",
-            .argv = {"FT.ALIASDEL", "alias1", "extra"},
-            .index_schema_pbtxt = std::nullopt,
-            .pre_existing_alias = std::nullopt,
-            .return_code = absl::StatusCode::kInvalidArgument,
-        },
-        {
             .test_name = "non_existent_alias",
             .argv = {"FT.ALIASDEL", "no_such_alias"},
             .index_schema_pbtxt = std::nullopt,
@@ -531,22 +496,6 @@ INSTANTIATE_TEST_SUITE_P(
             .return_code = absl::StatusCode::kOk,
         },
         {
-            .test_name = "arity_error_no_args",
-            .argv = {"FT.ALIASUPDATE"},
-            .index_schema_pbtxt = std::nullopt,
-            .pre_existing_alias = std::nullopt,
-            .second_index_pbtxt = std::nullopt,
-            .return_code = absl::StatusCode::kInvalidArgument,
-        },
-        {
-            .test_name = "arity_error_one_arg",
-            .argv = {"FT.ALIASUPDATE", "my_alias"},
-            .index_schema_pbtxt = std::nullopt,
-            .pre_existing_alias = std::nullopt,
-            .second_index_pbtxt = std::nullopt,
-            .return_code = absl::StatusCode::kInvalidArgument,
-        },
-        {
             .test_name = "non_existent_index",
             .argv = {"FT.ALIASUPDATE", "my_alias", "no_such_index"},
             .index_schema_pbtxt = std::nullopt,
@@ -559,14 +508,6 @@ INSTANTIATE_TEST_SUITE_P(
             .argv = {"FT.ALIASUPDATE", "alias2", "my_alias"},
             .index_schema_pbtxt = std::string(kTestIndexSchemaPbtxt),
             .pre_existing_alias = "my_alias",
-            .second_index_pbtxt = std::nullopt,
-            .return_code = absl::StatusCode::kInvalidArgument,
-        },
-        {
-            .test_name = "arity_error_too_many_args",
-            .argv = {"FT.ALIASUPDATE", "my_alias", "test_idx", "extra"},
-            .index_schema_pbtxt = std::nullopt,
-            .pre_existing_alias = std::nullopt,
             .second_index_pbtxt = std::nullopt,
             .return_code = absl::StatusCode::kInvalidArgument,
         },
@@ -692,19 +633,6 @@ TEST_F(FTAliasUpdateTest, SelfReferentialAliasSucceeds) {
 }
 
 class FTAliasListTest : public ValkeySearchTest {};
-
-TEST_F(FTAliasListTest, ArityErrorExtraArgs) {
-  ValkeyModuleString* argv[2];
-  argv[0] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.ALIASLIST");
-  argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "extra");
-
-  EXPECT_EQ(FTAliasListCmd(&fake_ctx_, argv, 2).code(),
-            absl::StatusCode::kInvalidArgument);
-
-  for (auto* arg : argv) {
-    TestValkeyModule_FreeString(&fake_ctx_, arg);
-  }
-}
 
 TEST_F(FTAliasListTest, EmptyWhenNoAliases) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 5);

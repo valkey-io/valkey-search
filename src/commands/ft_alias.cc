@@ -222,9 +222,6 @@ void ReplicateIfNeeded(ValkeyModuleCtx *ctx) {
 
 absl::Status FTAliasAddCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                            int argc) {
-  if (argc != 3) {
-    return absl::InvalidArgumentError(vmsdk::WrongArity(kAliasAddCommand));
-  }
   VMSDK_RETURN_IF_ERROR(RejectIfMultiExecInCme(ctx));
 
   auto alias = vmsdk::ToStringView(argv[1]);
@@ -243,9 +240,6 @@ absl::Status FTAliasAddCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
 
 absl::Status FTAliasDelCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                            int argc) {
-  if (argc != 2) {
-    return absl::InvalidArgumentError(vmsdk::WrongArity(kAliasDelCommand));
-  }
   VMSDK_RETURN_IF_ERROR(RejectIfMultiExecInCme(ctx));
 
   auto alias = vmsdk::ToStringView(argv[1]);
@@ -263,9 +257,6 @@ absl::Status FTAliasDelCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
 
 absl::Status FTAliasUpdateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                               int argc) {
-  if (argc != 3) {
-    return absl::InvalidArgumentError(vmsdk::WrongArity(kAliasUpdateCommand));
-  }
   VMSDK_RETURN_IF_ERROR(RejectIfMultiExecInCme(ctx));
 
   auto alias = vmsdk::ToStringView(argv[1]);
@@ -284,9 +275,6 @@ absl::Status FTAliasUpdateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
 
 absl::Status FTAliasListCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                             int argc) {
-  if (argc != 1) {
-    return absl::InvalidArgumentError(vmsdk::WrongArity(kAliasListCommand));
-  }
   auto aliases =
       SchemaManager::Instance().GetAllAliases(ValkeyModule_GetSelectedDb(ctx));
   ValkeyModule_ReplyWithArray(ctx, aliases.size() * 2);

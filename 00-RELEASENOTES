@@ -32,37 +32,90 @@ Major New Features / Updates
 * A pytest-based integration test environment was added
 * Full DBNum support for cluster mode is implemented.
 
-================================================================================
-Valkey Search 1.0.0 RC1 - Released Fri 28 Mar 2025
-================================================================================
-This is the first release candidate of valkey-search 1.0 that is a high-performance Vector Similarity Search engine optimized for AI-driven workloads. It delivers single-digit millisecond latency and high QPS, capable of handling billions of vectors with over 99% recall.
-
-Valkey-Search allows users to create indexes and perform similarity searches, incorporating complex filters. It supports Approximate Nearest Neighbor (ANN) search with HNSW and exact matching using K-Nearest Neighbors (KNN). Users can index data using either Valkey Hash or Valkey-JSON data types.
-
-Major API and Functionality
-=========================
-* Add the search module data type which can handle RDB load, RDB save, free, and memory usage
-* Add the following search module commands: 
-    ** FT.CREATE
-    ** FT.DROPINDEX
-    ** FT.INFO
-    ** FT._LIST
-    ** FT.SEARCH
-* Supported indexes
-    ** Vector: HNSW and Flat
-    ** Non-vector: Numeric and Tag
-* Index data types include Valkey Hash and Valkey JSON.
-* Cluster support
-* Linear scaling of keyspace and compute
-* ACL support
-* RDB serialization of metadata including the search index
-* Hybrid queries combining vector and non vector indexes
-* Handle key space events for data mutation
-* Expose statistics and reporting memory usage to the core valkey engine
-
-New configurations
-===========================
-* Add support for the following configurations: reader-threads, writer-threads, use-coordinator, log-level
+What's Changed
+==============
+* Add integration test framework (#20)
+* CMake support (#33)
+* Ensure that Index names and Prefixes do not have a slot tag, closes #31 (#57)
+* Enforce vector indexed attribute (#63)
+* Add ACL support to Valkey Search (#49)
+* Automatically configure threadpool size based on physical cpu core count (#60)
+* Implement new RDB format (#68)
+* Add ASAN build option (#100)
+* Adding support for blocking clients during keyspace notification (#95)
+* FT.SEARCH - Update neighbor sorting to always be asc (#104)
+* Rename ValkeySearch to valkey-search (#119)
+* Dynamic thread pool (#126)
+* Command registration permissions alignment with ACL prefix permissions (#125)
+* Introduce RFC for RDB format (#28)
+* Add OOM checking to index backfill (#135)
+* Renaming total_indexed_hash_keys to total_indexed_documents (#137)
+* Fixing empty vector query clause ft.search cmd parsing (#138)
+* Allow changing the reader/writer threads count at runtime (#129)
+* Module-Config: fix a possibility of a double free (#149)
+* Enable integration tests + ASan (#162)
+* Search trigger for Valkey Extension Automation (#163)
+* Fix bug resulting in no ingestion to indexes with the same prefix as a dropped index (#166)
+* Alpine Linux related fixes (#168)
+* Fix GetRedisLocalPort function to support TLS (#144)
+* Add coordinator port info metric (#177)
+* The module can now be built on macOS (#178)
+* We renamed Valkey-Extensions to Valkey-Bundle (#189)
+* Valkey Test Framework: load JSON module (#198)
+* Revision of info framework (#202)
+* Add FT._DEBUG command (#207)
+* Limit FT.SEARCH query string parsing recursive depth by a module config (#182)
+* Add network byte counting to coordinator client (#212)
+* Add operational limits to create command (#214)
+* Add CPU metrics for reader and writer threads (#217)
+* Add query string bytes limit using a module config (#222)
+* Add a limit on the number of terms in a search query (#229)
+* Add limit to the K value in FT.SEARCH cmd (#231)
+* Limit the result record in ft.search cmd (#239)
+* Supporting tsan build and addressing the time slice mutex test issues (#236)
+* Add metric for reclaimable memory (#240)
+* Adding support for non vector queries (#218)
+* Fix ACL bug where commands were allowed when user has no permissions for one of the index prefixes (#246)
+* Reimplement timeout handling (#249)
+* Change visibility for some of info fields to developer only (#281)
+* Handle OOM during search command fanout (#268)
+* Reject queries when no valid pre-filter and no vector filter is provided (#283)
+* Add coordinator metadata health monitoring info field (#284)
+* Added support for cluster with replicas (#313)
+* Properly wait for replication group to reach stabilization status (#315)
+* Fanout operation base and cluster-wide primary and cluster fanout operation modes (#310)
+* Strip the complete build path from logs (#308)
+* feat: memory scope & memory usage for string interning store (#153)
+* Expose global symbols so that crash dump backtraces are useful (#329)
+* Add a configuration for resuming workers after fork (#301)
+* Introduced new "debug-mode" configuration entry (#339)
+* Add support to retrieving JSON values via the JSON shared API (#287)
+* Add configurable thread pool fairness mechanism with comprehensive testing (#362)
+* Respect valkey and json module versions defined in build and integration tests (#363)
+* Remove command allowed acl checks if it is already done by Valkey (#387)
+* Added and removed stats and attributes from ft.info (#370)
+* Tag casesensitive updated to be key-value pair (#395)
+* Add --format option to build script (#384)
+* FT.CREATE consistency check (#386)
+* FT.DROPINDEX consistency check (#393)
+* Implement server version checking on load (#408)
+* Implementation of FT.AGGREGATE Command (#345)
+* Addressing non-vector search issues (#400)
+* Prevent Valkey crash when module is loaded twice (#415)
+* Prevent crash on Valkey 7.2 when loading valkey-search (#427)
+* Cluster Map Implementation (#435)
+* Replace multiple utility libraries with unified vmsdklib dependency (#477)
+* Update ProcessKeyspaceNotification to not return before trying out all attributes (#489)
+* Revise Save/Restore for true pit snapshot (#401)
+* Add support for checking ACL key prefix permissions using the new Valkey module API (#479)
+* Populate fingerprint and version to IndexSchema (#480)
+* feat: set command info for ft.create (#299)
+* FT.SEARCH partition and consistency controls (#464)
+* FT.INFO partition and consistency controls (#469)
+* Change default Valkey to 9.0.1 release (#528)
+* Feature/ft create sortable (#533)
+* Add general utility thread pool for "execute later at low priority" routines and schedule Search Result deletions on this (#542)
+* Update arguments for ft.create and ft.search json (#369) (#504)
 
 ================================================================================
 Contributors

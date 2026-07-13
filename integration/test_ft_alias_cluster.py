@@ -4,7 +4,6 @@ Cluster propagation integration tests for FT.ALIASADD, FT.ALIASDEL, and FT.ALIAS
 
 import os
 import pytest
-import threading
 from concurrent.futures import ThreadPoolExecutor
 from valkey import ResponseError
 from valkey.client import Valkey
@@ -587,7 +586,11 @@ class TestFTAliasDropIndexCluster(ValkeySearchClusterTestCase):
         )
 
     def test_aliasupdate_racing_with_dropindex_cluster(self):
-        """ALIASUPDATE racing with FT.DROPINDEX converges to a clean state."""
+        """ALIASUPDATE racing with FT.DROPINDEX converges to a clean state.
+
+        Sequential operations (not truly concurrent) — the propagation
+        delay is the race window.
+        """
         node0 = self.new_client_for_primary(0)
         node1 = self.new_client_for_primary(1)
 
@@ -596,7 +599,6 @@ class TestFTAliasDropIndexCluster(ValkeySearchClusterTestCase):
         self._wait_for_index_on_all_nodes(INDEX_NAME)
         self._wait_for_index_on_all_nodes(INDEX_NAME_2)
 
-        # Create alias pointing to INDEX_NAME.
         assert node0.execute_command(
             "FT.ALIASADD", ALIAS_NAME, INDEX_NAME
         ) == b"OK"
@@ -604,37 +606,20 @@ class TestFTAliasDropIndexCluster(ValkeySearchClusterTestCase):
             self._all_primaries(), ALIAS_NAME, expect_present=True
         )
 
-        # Race: update alias to point to INDEX_NAME_2 while dropping
-        # INDEX_NAME concurrently. Both outcomes are acceptable.
-        results = {}
-        errors = {}
+        # Issue both rapidly — propagation delay creates the race window.
+        result_update = None
+        try:
+            result_update = node0.execute_command(
+                "FT.ALIASUPDATE", ALIAS_NAME, INDEX_NAME_2)
+        except ResponseError as e:
+            result_update = str(e)
 
-        def do_update():
-            try:
-                client = self.new_client_for_primary(0)
-                results["update"] = client.execute_command(
-                    "FT.ALIASUPDATE", ALIAS_NAME, INDEX_NAME_2
-                )
-            except ResponseError as e:
-                errors["update"] = e
+        result_drop = None
+        try:
+            result_drop = node1.execute_command("FT.DROPINDEX", INDEX_NAME)
+        except ResponseError as e:
+            result_drop = str(e)
 
-        def do_drop():
-            try:
-                client = self.new_client_for_primary(1)
-                results["drop"] = client.execute_command(
-                    "FT.DROPINDEX", INDEX_NAME
-                )
-            except ResponseError as e:
-                errors["drop"] = e
-
-        t_update = threading.Thread(target=do_update)
-        t_drop = threading.Thread(target=do_drop)
-        t_update.start()
-        t_drop.start()
-        t_update.join()
-        t_drop.join()
-
-        # Wait for cluster convergence: all nodes agree on alias state.
         def _alias_converged():
             states = []
             for node in self._all_primaries():
@@ -1048,112 +1033,6 @@ class TestFTAliasConcurrentOperationsCluster(ValkeySearchClusterTestCase):
             _wait_for_alias_on_all_nodes(
                 self._all_primaries(), f"alias_from_node_{i}", expect_present=True
             )
-
-    def test_concurrent_aliasadd_same_alias_one_wins(self):
-        """Multiple nodes adding the same alias concurrently — all may succeed
-        (coordinator uses eventual consistency for alias mutations)."""
-        node0 = self.new_client_for_primary(0)
-        assert node0.execute_command(*CREATE_TAG_INDEX) == b"OK"
-        self._wait_for_index_on_all_nodes(INDEX_NAME)
-
-        results = [None] * self.CLUSTER_SIZE
-        errors = [None] * self.CLUSTER_SIZE
-
-        def add_alias(node_idx):
-            try:
-                client = self.new_client_for_primary(node_idx)
-                results[node_idx] = client.execute_command(
-                    "FT.ALIASADD", "contested_alias", INDEX_NAME
-                )
-            except ResponseError as e:
-                errors[node_idx] = e
-
-        threads = [
-            threading.Thread(target=add_alias, args=(i,))
-            for i in range(self.CLUSTER_SIZE)
-        ]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-
-        # At least one should succeed. Due to eventual consistency, multiple
-        # nodes may independently succeed before propagation occurs.
-        successes = sum(1 for r in results if r == b"OK")
-        assert successes >= 1, f"Expected at least 1 success, got {successes}"
-
-        # The alias should resolve on all nodes after propagation settles.
-        _wait_for_alias_on_all_nodes(
-            self._all_primaries(), "contested_alias", expect_present=True
-        )
-
-    def test_concurrent_aliasadd_and_aliasdel(self):
-        """Adding and deleting an alias concurrently from different nodes converges."""
-        node0 = self.new_client_for_primary(0)
-        assert node0.execute_command(*CREATE_TAG_INDEX) == b"OK"
-        self._wait_for_index_on_all_nodes(INDEX_NAME)
-
-        # Pre-create the alias so DEL has something to delete.
-        assert node0.execute_command(
-            "FT.ALIASADD", ALIAS_NAME, INDEX_NAME
-        ) == b"OK"
-        _wait_for_alias_on_all_nodes(
-            self._all_primaries(), ALIAS_NAME, expect_present=True
-        )
-
-        # Concurrently: node 0 deletes, node 1 re-adds (or they race).
-        results = {}
-        errors = {}
-
-        def do_del():
-            try:
-                client = self.new_client_for_primary(0)
-                results["del"] = client.execute_command("FT.ALIASDEL", ALIAS_NAME)
-            except ResponseError as e:
-                errors["del"] = e
-
-        def do_add():
-            try:
-                client = self.new_client_for_primary(1)
-                results["add"] = client.execute_command(
-                    "FT.ALIASADD", ALIAS_NAME, INDEX_NAME
-                )
-            except ResponseError as e:
-                errors["add"] = e
-
-        t_del = threading.Thread(target=do_del)
-        t_add = threading.Thread(target=do_add)
-        t_del.start()
-        t_add.start()
-        t_del.join()
-        t_add.join()
-
-        # The cluster must converge to a consistent state on all nodes.
-        # Either the alias exists or it doesn't — but all nodes must agree.
-        def _alias_converged():
-            states = []
-            for node in self._all_primaries():
-                try:
-                    node.execute_command("FT.INFO", ALIAS_NAME)
-                    states.append(True)
-                except ResponseError:
-                    states.append(False)
-            return len(set(states)) == 1
-
-        waiters.wait_for_true(_alias_converged, timeout=15)
-
-        alias_states = []
-        for node in self._all_primaries():
-            try:
-                node.execute_command("FT.INFO", ALIAS_NAME)
-                alias_states.append(True)
-            except ResponseError:
-                alias_states.append(False)
-
-        # All nodes must agree.
-        assert len(set(alias_states)) == 1, (
-            f"Cluster not converged: alias states = {alias_states}"
-        )
 
 
 class TestFTAliasRDBPersistenceCluster(ValkeySearchClusterTestCaseDebugMode):
@@ -1674,168 +1553,6 @@ class TestFTAliasDelConsistency(ValkeySearchClusterTestCaseDebugMode):
             f"Expected many retries, got {retry_after - retry_before}")
 
 
-class TestFTAliasConcurrentCollisionNoCruft(ValkeySearchClusterTestCaseDebugMode):
-    """Concurrent alias operations must leave no stale state."""
-
-    def _all_primaries(self):
-        return [self.new_client_for_primary(i)
-                for i in range(self.CLUSTER_SIZE)]
-
-    def _wait_for_index_on_all_nodes(self, index_name):
-        nodes = self._all_primaries()
-        IndexingTestHelper.wait_for_indexing_complete_on_all_nodes(
-            nodes, index_name)
-
-    def test_concurrent_aliasadd_same_alias_different_indexes_no_cruft(self):
-        """Two concurrent ALIASADD for the same alias on different indexes."""
-        node0 = self.new_client_for_primary(0)
-        node1 = self.new_client_for_primary(1)
-
-        # Create two indexes.
-        assert node0.execute_command(*CREATE_TAG_INDEX) == b"OK"
-        assert node0.execute_command(*CREATE_TAG_INDEX_2) == b"OK"
-        self._wait_for_index_on_all_nodes(INDEX_NAME)
-        self._wait_for_index_on_all_nodes(INDEX_NAME_2)
-
-        contested_alias = "collision_alias"
-
-        barrier = threading.Barrier(2, timeout=5)
-
-        def _add_with_barrier(node, index):
-            barrier.wait()
-            return _do_aliasadd(node, contested_alias, index)
-
-        with ThreadPoolExecutor() as executor:
-            future_add0 = executor.submit(
-                _add_with_barrier, node0, INDEX_NAME)
-            future_add1 = executor.submit(
-                _add_with_barrier, node1, INDEX_NAME_2)
-
-            waiters.wait_for_true(
-                lambda: future_add0.done() and future_add1.done(),
-                timeout=30,
-            )
-
-            result0 = future_add0.result()
-            result1 = future_add1.result()
-
-        # Concurrent race outcomes are non-deterministic; only internal errors
-        # are unexpected.
-        for r in [result0, result1]:
-            if isinstance(r, Exception):
-                err_msg = str(r)
-                assert ("Unable to contact all cluster members" in err_msg or
-                        "Alias already exists" in err_msg), (
-                    f"Unexpected error: {r}")
-
-        # Wait for cluster to converge.
-        def _cluster_converged():
-            alias_lists = []
-            for node in self._all_primaries():
-                alias_lists.append(str(node.execute_command("FT.ALIASLIST")))
-            return len(set(alias_lists)) == 1
-
-        waiters.wait_for_true(_cluster_converged, timeout=30)
-
-        # Exactly one alias entry exists on every node.
-        for node in self._all_primaries():
-            alias_list = node.execute_command("FT.ALIASLIST")
-            assert len(alias_list) == 2, (
-                f"Expected exactly 1 alias (2 entries), got {len(alias_list)}: "
-                f"{alias_list}")
-            assert alias_list[0] == contested_alias.encode(), (
-                f"Expected alias name '{contested_alias}', got {alias_list[0]}")
-            assert alias_list[1] in (
-                INDEX_NAME.encode(), INDEX_NAME_2.encode()), (
-                f"Alias points to unexpected index: {alias_list[1]}")
-
-        # All nodes agree on the same winner.
-        winners = set()
-        for node in self._all_primaries():
-            alias_list = node.execute_command("FT.ALIASLIST")
-            winners.add(alias_list[1])
-        assert len(winners) == 1, (
-            f"Nodes disagree on alias target: {winners}")
-
-        # No stale entries — the loser index does NOT list the alias.
-        winner_index = winners.pop()
-        loser_index = (INDEX_NAME_2.encode() if winner_index == INDEX_NAME.encode()
-                       else INDEX_NAME.encode())
-
-        for node in self._all_primaries():
-            info = list(node.execute_command("FT.INFO", contested_alias))
-            idx = next(
-                (i for i, v in enumerate(info) if v == b"index_name"), None)
-            assert idx is not None
-            assert info[idx + 1] == winner_index
-
-            loser_info = list(node.execute_command("FT.INFO", loser_index))
-            alias_idx = next(
-                (i for i, v in enumerate(loser_info) if v == b"aliases"), None)
-            if alias_idx is not None:
-                loser_aliases = loser_info[alias_idx + 1]
-                if isinstance(loser_aliases, list):
-                    assert contested_alias.encode() not in loser_aliases, (
-                        f"Loser index still references alias: {loser_aliases}")
-
-    def test_concurrent_aliasadd_and_aliasupdate_same_alias_no_cruft(self):
-        """Concurrent ALIASUPDATE from different nodes for the same alias."""
-        node0 = self.new_client_for_primary(0)
-        node1 = self.new_client_for_primary(1)
-
-        assert node0.execute_command(*CREATE_TAG_INDEX) == b"OK"
-        assert node0.execute_command(*CREATE_TAG_INDEX_2) == b"OK"
-        self._wait_for_index_on_all_nodes(INDEX_NAME)
-        self._wait_for_index_on_all_nodes(INDEX_NAME_2)
-
-        contested_alias = "race_alias"
-
-        assert node0.execute_command(
-            "FT.ALIASADD", contested_alias, INDEX_NAME) == b"OK"
-        _wait_for_alias_on_all_nodes(
-            self._all_primaries(), contested_alias, expect_present=True)
-
-        barrier = threading.Barrier(2, timeout=5)
-
-        def _update_with_barrier(node, target_index):
-            barrier.wait()
-            try:
-                return node.execute_command(
-                    "FT.ALIASUPDATE", contested_alias, target_index)
-            except Exception as e:
-                return e
-
-        with ThreadPoolExecutor() as executor:
-            future_update0 = executor.submit(
-                _update_with_barrier, node0, INDEX_NAME_2)
-            future_update1 = executor.submit(
-                _update_with_barrier, node1, INDEX_NAME)
-
-            waiters.wait_for_true(
-                lambda: future_update0.done() and future_update1.done(),
-                timeout=30,
-            )
-
-        # Wait for cluster convergence.
-        def _converged():
-            lists = [
-                str(node.execute_command("FT.ALIASLIST"))
-                for node in self._all_primaries()
-            ]
-            return len(set(lists)) == 1
-        waiters.wait_for_true(_converged, timeout=15)
-
-        # Exactly one alias entry, consistent across all nodes.
-        for node in self._all_primaries():
-            alias_list = node.execute_command("FT.ALIASLIST")
-            assert len(alias_list) == 2, (
-                f"Expected exactly 1 alias, got {len(alias_list) // 2}: "
-                f"{alias_list}")
-            assert alias_list[0] == contested_alias.encode()
-            assert alias_list[1] in (
-                INDEX_NAME.encode(), INDEX_NAME_2.encode())
-
-
 class TestFTAliasDropIndexCollision(ValkeySearchClusterTestCaseDebugMode):
     """Alias operations colliding with FT.DROPINDEX converge cleanly."""
 
@@ -1990,8 +1707,8 @@ class TestFTAliasDropIndexCollision(ValkeySearchClusterTestCaseDebugMode):
                 node.execute_command("FT.INFO", alias_name)
 
 
-class TestAliasCollisionDiagnostic(ValkeySearchClusterTestCaseDebugMode):
-    """Diagnostic: ALIASADD collision with paused cluster messages."""
+class TestFTAliasCollisionWithPausepoints(ValkeySearchClusterTestCaseDebugMode):
+    """Guaranteed alias collisions via pausepoints with retry-count assertions."""
 
     def _all_primaries(self):
         return [self.new_client_for_primary(i)
@@ -2002,10 +1719,8 @@ class TestAliasCollisionDiagnostic(ValkeySearchClusterTestCaseDebugMode):
         IndexingTestHelper.wait_for_indexing_complete_on_all_nodes(
             nodes, index_name)
 
-    def test_collision_reconciliation_diagnostic(self):
-        """Pause node1, both nodes add the same alias to different indexes,
-        release, and verify reconciliation produces consistent state."""
-
+    def test_aliasadd_collision_guaranteed_with_retry_proof(self):
+        """Pause node1, both nodes ALIASADD same alias to different indexes."""
         node0 = self.new_client_for_primary(0)
         node1 = self.new_client_for_primary(1)
 
@@ -2014,77 +1729,284 @@ class TestAliasCollisionDiagnostic(ValkeySearchClusterTestCaseDebugMode):
         self._wait_for_index_on_all_nodes(INDEX_NAME)
         self._wait_for_index_on_all_nodes(INDEX_NAME_2)
 
-        # Pause cluster message handling on node1.
+        retry_before = int(
+            node0.info("SEARCH")["search_info_fanout_retry_count"])
+
         assert node1.execute_command(
             "FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage yes"
         ) == b"OK"
 
-        # Node0 adds alias -> INDEX_NAME (fanout will timeout).
         result0 = None
         try:
             result0 = node0.execute_command(
-                "FT.ALIASADD", "shared_alias", INDEX_NAME)
+                "FT.ALIASADD", "pausepoint_alias", INDEX_NAME)
         except ResponseError as e:
             result0 = str(e)
 
-        # Node1 adds same alias -> INDEX_NAME_2 (doesn't know it exists).
         result1 = None
         try:
             result1 = node1.execute_command(
-                "FT.ALIASADD", "shared_alias", INDEX_NAME_2)
+                "FT.ALIASADD", "pausepoint_alias", INDEX_NAME_2)
         except ResponseError as e:
             result1 = str(e)
 
-        # Release pause — reconciliation should run.
         node1.execute_command(
             "FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage no")
 
-        # Wait for all nodes to converge on the same alias list.
-        def _reconciliation_converged():
+        def _converged():
             alias_lists = set()
-            for i in range(self.CLUSTER_SIZE):
-                node = self.new_client_for_primary(i)
+            for node in self._all_primaries():
                 alias_lists.add(str(node.execute_command("FT.ALIASLIST")))
             return len(alias_lists) == 1
 
-        waiters.wait_for_true(_reconciliation_converged, timeout=30)
+        waiters.wait_for_true(_converged, timeout=30)
 
-        final_states = {}
-        for i in range(self.CLUSTER_SIZE):
-            node = self.new_client_for_primary(i)
-            final_states[i] = {
-                "aliaslist": node.execute_command("FT.ALIASLIST"),
-            }
+        retry_after = int(
+            node0.info("SEARCH")["search_info_fanout_retry_count"])
+        assert retry_after > retry_before, (
+            f"Expected fanout retry count to increase, "
+            f"but before={retry_before}, after={retry_after}")
+
+        for node in self._all_primaries():
+            alias_list = node.execute_command("FT.ALIASLIST")
+            assert len(alias_list) == 2, (
+                f"Expected exactly 1 alias, got {len(alias_list) // 2}: "
+                f"{alias_list}")
+            assert alias_list[0] == b"pausepoint_alias"
+            assert alias_list[1] in (
+                INDEX_NAME.encode(), INDEX_NAME_2.encode())
+
+        winners = set()
+        for node in self._all_primaries():
+            alias_list = node.execute_command("FT.ALIASLIST")
+            winners.add(alias_list[1])
+        assert len(winners) == 1, f"Nodes disagree on winner: {winners}"
+
+        winner_index = winners.pop()
+        loser_index = (INDEX_NAME_2.encode()
+                       if winner_index == INDEX_NAME.encode()
+                       else INDEX_NAME.encode())
+        for node in self._all_primaries():
+            loser_info = list(node.execute_command("FT.INFO", loser_index))
+            alias_idx = next(
+                (i for i, v in enumerate(loser_info) if v == b"aliases"),
+                None)
+            if alias_idx is not None:
+                loser_aliases = loser_info[alias_idx + 1]
+                if isinstance(loser_aliases, list):
+                    assert b"pausepoint_alias" not in loser_aliases, (
+                        f"Loser still references alias: {loser_aliases}")
+
+    def test_aliasupdate_collision_guaranteed_with_retry_proof(self):
+        """Pause node1, both nodes ALIASUPDATE same alias to different targets."""
+        node0 = self.new_client_for_primary(0)
+        node1 = self.new_client_for_primary(1)
+
+        assert node0.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        assert node0.execute_command(*CREATE_TAG_INDEX_2) == b"OK"
+        self._wait_for_index_on_all_nodes(INDEX_NAME)
+        self._wait_for_index_on_all_nodes(INDEX_NAME_2)
+
+        alias_name = "update_collision_alias"
+        assert node0.execute_command(
+            "FT.ALIASADD", alias_name, INDEX_NAME) == b"OK"
+        _wait_for_alias_on_all_nodes(
+            self._all_primaries(), alias_name, expect_present=True)
+
+        retry_before = int(
+            node0.info("SEARCH")["search_info_fanout_retry_count"])
+
+        assert node1.execute_command(
+            "FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage yes"
+        ) == b"OK"
+
+        result0 = None
+        try:
+            result0 = node0.execute_command(
+                "FT.ALIASUPDATE", alias_name, INDEX_NAME_2)
+        except ResponseError as e:
+            result0 = str(e)
+
+        result1 = None
+        try:
+            result1 = node1.execute_command(
+                "FT.ALIASUPDATE", alias_name, INDEX_NAME)
+        except ResponseError as e:
+            result1 = str(e)
+
+        node1.execute_command(
+            "FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage no")
+
+        def _converged():
+            alias_lists = set()
+            for node in self._all_primaries():
+                alias_lists.add(str(node.execute_command("FT.ALIASLIST")))
+            return len(alias_lists) == 1
+
+        waiters.wait_for_true(_converged, timeout=30)
+
+        retry_after = int(
+            node0.info("SEARCH")["search_info_fanout_retry_count"])
+        assert retry_after > retry_before, (
+            f"Expected fanout retry count to increase, "
+            f"but before={retry_before}, after={retry_after}")
+
+        for node in self._all_primaries():
+            alias_list = node.execute_command("FT.ALIASLIST")
+            assert len(alias_list) == 2, (
+                f"Expected exactly 1 alias, got {len(alias_list) // 2}: "
+                f"{alias_list}")
+            assert alias_list[0] == alias_name.encode()
+            assert alias_list[1] in (
+                INDEX_NAME.encode(), INDEX_NAME_2.encode())
+
+        winners = set()
+        for node in self._all_primaries():
+            alias_list = node.execute_command("FT.ALIASLIST")
+            winners.add(alias_list[1])
+        assert len(winners) == 1, f"Nodes disagree on alias target: {winners}"
+
+    def test_aliasdel_vs_aliasupdate_collision_guaranteed_with_retry_proof(self):
+        """Pause node1, node0 deletes alias, node1 updates it. Verify convergence."""
+        node0 = self.new_client_for_primary(0)
+        node1 = self.new_client_for_primary(1)
+
+        assert node0.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        self._wait_for_index_on_all_nodes(INDEX_NAME)
+
+        alias_name = "del_collision_alias"
+        assert node0.execute_command(
+            "FT.ALIASADD", alias_name, INDEX_NAME) == b"OK"
+        _wait_for_alias_on_all_nodes(
+            self._all_primaries(), alias_name, expect_present=True)
+
+        retry_before = int(
+            node0.info("SEARCH")["search_info_fanout_retry_count"])
+
+        assert node1.execute_command(
+            "FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage yes"
+        ) == b"OK"
+
+        result0 = None
+        try:
+            result0 = node0.execute_command("FT.ALIASDEL", alias_name)
+        except ResponseError as e:
+            result0 = str(e)
+
+        result1 = None
+        try:
+            result1 = node1.execute_command(
+                "FT.ALIASUPDATE", alias_name, INDEX_NAME)
+        except ResponseError as e:
+            result1 = str(e)
+
+        node1.execute_command(
+            "FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage no")
+
+        def _converged():
+            alias_lists = set()
+            for node in self._all_primaries():
+                alias_lists.add(str(node.execute_command("FT.ALIASLIST")))
+            return len(alias_lists) == 1
+
+        waiters.wait_for_true(_converged, timeout=30)
+
+        retry_after = int(
+            node0.info("SEARCH")["search_info_fanout_retry_count"])
+        assert retry_after > retry_before, (
+            f"Expected fanout retry count to increase, "
+            f"but before={retry_before}, after={retry_after}")
+
+        final_alias_lists = []
+        for node in self._all_primaries():
+            final_alias_lists.append(node.execute_command("FT.ALIASLIST"))
+        for i in range(1, len(final_alias_lists)):
+            assert final_alias_lists[i] == final_alias_lists[0], (
+                f"Nodes disagree: node0={final_alias_lists[0]}, "
+                f"node{i}={final_alias_lists[i]}")
+
+    def test_aliasupdate_vs_dropindex_collision_guaranteed(self):
+        """Pause node1, node0 updates alias to INDEX_NAME_2, node1 drops INDEX_NAME."""
+        node0 = self.new_client_for_primary(0)
+        node1 = self.new_client_for_primary(1)
+
+        assert node0.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        assert node0.execute_command(*CREATE_TAG_INDEX_2) == b"OK"
+        self._wait_for_index_on_all_nodes(INDEX_NAME)
+        self._wait_for_index_on_all_nodes(INDEX_NAME_2)
+
+        assert node0.execute_command(
+            "FT.ALIASADD", ALIAS_NAME, INDEX_NAME) == b"OK"
+        _wait_for_alias_on_all_nodes(
+            self._all_primaries(), ALIAS_NAME, expect_present=True)
+
+        retry_before = int(
+            node0.info("SEARCH")["search_info_fanout_retry_count"])
+
+        assert node1.execute_command(
+            "FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage yes"
+        ) == b"OK"
+
+        result_update = None
+        try:
+            result_update = node0.execute_command(
+                "FT.ALIASUPDATE", ALIAS_NAME, INDEX_NAME_2)
+        except ResponseError as e:
+            result_update = str(e)
+
+        result_drop = None
+        try:
+            result_drop = node1.execute_command("FT.DROPINDEX", INDEX_NAME)
+        except ResponseError as e:
+            result_drop = str(e)
+
+        node1.execute_command(
+            "FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage no")
+
+        def _converged():
+            states = []
+            for node in self._all_primaries():
+                try:
+                    node.execute_command("FT.INFO", ALIAS_NAME)
+                    states.append("present")
+                except ResponseError:
+                    states.append("absent")
+            return len(set(states)) == 1
+
+        waiters.wait_for_true(_converged, timeout=30)
+
+        retry_after = int(
+            node0.info("SEARCH")["search_info_fanout_retry_count"])
+        assert retry_after > retry_before, (
+            f"Expected fanout retry count to increase, "
+            f"but before={retry_before}, after={retry_after}")
+
+        alias_present = []
+        for node in self._all_primaries():
             try:
-                info = list(node.execute_command("FT.INFO", "shared_alias"))
+                node.execute_command("FT.INFO", ALIAS_NAME)
+                alias_present.append(True)
+            except ResponseError:
+                alias_present.append(False)
+
+        assert len(set(alias_present)) == 1, (
+            f"Cluster not converged: alias states = {alias_present}")
+
+        if alias_present[0]:
+            for node in self._all_primaries():
+                info = list(node.execute_command("FT.INFO", ALIAS_NAME))
                 idx = next(
-                    (j for j, v in enumerate(info) if v == b"index_name"),
+                    (i for i, v in enumerate(info) if v == b"index_name"),
                     None)
-                final_states[i]["resolves_to"] = (
-                    info[idx + 1] if idx is not None else None)
-            except ResponseError as e:
-                final_states[i]["resolves_to"] = f"ERROR: {e}"
+                assert idx is not None
+                assert info[idx + 1] != INDEX_NAME.encode(), (
+                    f"Alias still points to dropped index: {info[idx + 1]}")
 
-        print(f"\n  result0 (node0 ALIASADD -> idx1): {result0}")
-        print(f"  result1 (node1 ALIASADD -> idx2): {result1}")
-        for i, state in final_states.items():
-            print(f"  Node {i}: aliaslist={state['aliaslist']}, "
-                  f"resolves_to={state['resolves_to']}")
-
-        # All nodes must agree on the same alias list.
-        alias_lists = [str(final_states[i]["aliaslist"])
-                       for i in range(self.CLUSTER_SIZE)]
-        assert len(set(alias_lists)) == 1, (
-            f"Nodes do NOT agree on alias state after reconciliation!\n"
-            f"  Node states: {final_states}")
-
-        # Exactly one alias entry exists (no duplicates).
-        alias_list = final_states[0]["aliaslist"]
-        assert len(alias_list) == 2, (
-            f"Expected exactly 1 alias (2 entries), got {len(alias_list)}: "
-            f"{alias_list}")
-        assert alias_list[0] == b"shared_alias"
-        assert alias_list[1] in (INDEX_NAME.encode(), INDEX_NAME_2.encode())
+        alias_lists = set()
+        for node in self._all_primaries():
+            alias_lists.add(str(node.execute_command("FT.ALIASLIST")))
+        assert len(alias_lists) == 1, (
+            f"FT.ALIASLIST inconsistent: {alias_lists}")
 
 
 class TestFTAliasHashtagValidationCluster(ValkeySearchClusterTestCase):

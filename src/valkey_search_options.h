@@ -53,6 +53,12 @@ config::Boolean& GetSkipIndexLoadMutable();
 /// Return the log level
 config::Enum& GetLogLevel();
 
+/// Return the configuration entry for the HNSW load-time validation kill switch
+const config::Boolean& GetHNSWValidationEnable();
+
+/// Return a mutable reference for testing
+config::Boolean& GetHNSWValidationEnableMutable();
+
 /// Reset the state of the options (mainly needed for testing)
 absl::Status Reset();
 

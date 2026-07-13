@@ -47,14 +47,24 @@ absl::StatusOr<std::vector<std::string>> PunctuationSegmenter::Segment(
       if (text[pos] == '\\' && pos + 1 < text.size()) {
         break;
       }
-      utils::Scanner s(text.substr(pos));
-      auto cp = s.NextUtf8();
-      CHECK(cp != utils::Scanner::kInvalidCp)
-          << "Segment decoded invalid UTF-8 after IsValidUtf8 passed";
-      if (!IsDelimiter(cp)) {
-        break;
+      uint8_t lead = static_cast<uint8_t>(text[pos]);
+      if (lead < 0x80) {
+        // ASCII fast path: direct bitset lookup, no Scanner needed
+        if (!punct_set_.ascii[lead]) {
+          break;
+        }
+        pos++;
+      } else {
+        // Multi-byte: use Scanner for proper UTF-8 decode
+        utils::Scanner s(text.substr(pos));
+        auto cp = s.NextUtf8();
+        CHECK(cp != utils::Scanner::kInvalidCp)
+            << "Segment decoded invalid UTF-8 after IsValidUtf8 passed";
+        if (!IsDelimiter(cp)) {
+          break;
+        }
+        pos += s.LastUtf8ByteLen();
       }
-      pos += s.LastUtf8ByteLen();
     }
 
     word.clear();
@@ -64,32 +74,52 @@ absl::StatusOr<std::vector<std::string>> PunctuationSegmenter::Segment(
       // Handle backslash escape
       if (text[pos] == '\\' && pos + 1 < text.size()) {
         pos++;
-        utils::Scanner s(text.substr(pos));
-        auto esc_cp = s.NextUtf8();
-        CHECK(esc_cp != utils::Scanner::kInvalidCp)
-            << "Segment decoded invalid UTF-8 after IsValidUtf8 passed";
-        uint8_t esc_len = s.LastUtf8ByteLen();
-        // If the escaped char is not a backslash and not a delimiter,
-        // but backslash itself is a delimiter, break to new token.
-        if (esc_cp != '\\' && !IsDelimiter(esc_cp) && IsDelimiter('\\')) {
-          break;
+        uint8_t esc_lead = static_cast<uint8_t>(text[pos]);
+        if (esc_lead < 0x80) {
+          // ASCII escaped char: fast path
+          bool esc_is_delim = punct_set_.ascii[esc_lead];
+          if (esc_lead != '\\' && !esc_is_delim && punct_set_.ascii['\\']) {
+            break;
+          }
+          word.push_back(text[pos]);
+          pos++;
+        } else {
+          // Multi-byte escaped char
+          utils::Scanner s(text.substr(pos));
+          auto esc_cp = s.NextUtf8();
+          CHECK(esc_cp != utils::Scanner::kInvalidCp)
+              << "Segment decoded invalid UTF-8 after IsValidUtf8 passed";
+          uint8_t esc_len = s.LastUtf8ByteLen();
+          if (esc_cp != '\\' && !IsDelimiter(esc_cp) && IsDelimiter('\\')) {
+            break;
+          }
+          word.append(text.data() + pos, esc_len);
+          pos += esc_len;
         }
-        // Otherwise, include the escaped character literally
-        word.append(text.data() + pos, esc_len);
-        pos += esc_len;
         continue;
       }
 
-      utils::Scanner s(text.substr(pos));
-      auto cp = s.NextUtf8();
-      CHECK(cp != utils::Scanner::kInvalidCp)
-          << "Segment decoded invalid UTF-8 after IsValidUtf8 passed";
-      if (IsDelimiter(cp)) {
-        break;
+      uint8_t lead = static_cast<uint8_t>(text[pos]);
+      if (lead < 0x80) {
+        // ASCII fast path: direct bitset lookup, no Scanner needed
+        if (punct_set_.ascii[lead]) {
+          break;
+        }
+        word.push_back(text[pos]);
+        pos++;
+      } else {
+        // Multi-byte: use Scanner for proper UTF-8 decode
+        utils::Scanner s(text.substr(pos));
+        auto cp = s.NextUtf8();
+        CHECK(cp != utils::Scanner::kInvalidCp)
+            << "Segment decoded invalid UTF-8 after IsValidUtf8 passed";
+        if (IsDelimiter(cp)) {
+          break;
+        }
+        uint8_t len = s.LastUtf8ByteLen();
+        word.append(text.data() + pos, len);
+        pos += len;
       }
-      uint8_t len = s.LastUtf8ByteLen();
-      word.append(text.data() + pos, len);
-      pos += len;
     }
 
     if (!word.empty()) {

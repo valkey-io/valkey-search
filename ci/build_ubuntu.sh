@@ -123,9 +123,13 @@ function save_unittest_output() {
     echo Saving unit test output to ${UNITTEST_OUTPUT}
     local result_dir=${ROOT_DIR}/.build-release${san_suffix}
     echo Results Directory is ${result_dir}
-    ls -l ${result_dir}/tests
-    cp -r -P ${result_dir}/tests ${UNITTEST_OUTPUT}
-    cp ${result_dir}/tests.out ${UNITTEST_OUTPUT}
+    # CTest's own JUnit report and full per-test output log (see run_unit_tests() in build.sh)
+    if [ -f "${result_dir}/test-results.xml" ]; then
+        cp ${result_dir}/test-results.xml ${UNITTEST_OUTPUT}
+    fi
+    if [ -d "${result_dir}/Testing/Temporary" ]; then
+        cp -r ${result_dir}/Testing/Temporary ${UNITTEST_OUTPUT}/ctest-logs
+    fi
 }
 
 function cleanup() {

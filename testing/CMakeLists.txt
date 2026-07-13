@@ -24,6 +24,7 @@ set(COMMANDS_TEST_SOURCES
 add_executable(commands_test ${COMMANDS_TEST_SOURCES})
 target_include_directories(commands_test PUBLIC .)
 target_link_libraries(commands_test PRIVATE testing_common_base)
+gtest_discover_tests(commands_test)
 
 # 1. Indexes Test Suite - consolidates index-related tests
 set(INDEXES_TEST_SOURCES
@@ -38,6 +39,7 @@ set(INDEXES_TEST_SOURCES
 add_executable(indexes_test ${INDEXES_TEST_SOURCES})
 target_include_directories(indexes_test PUBLIC .)
 target_link_libraries(indexes_test PRIVATE testing_common_base)
+gtest_discover_tests(indexes_test)
 
 # 1. Core Test Suite - consolidates core functionality tests
 set(CORE_TEST_SOURCES
@@ -54,6 +56,7 @@ set(CORE_TEST_SOURCES
 add_executable(core_test ${CORE_TEST_SOURCES})
 target_include_directories(core_test PUBLIC .)
 target_link_libraries(core_test PRIVATE testing_common_base)
+gtest_discover_tests(core_test)
 
 # 1. Query Test Suite - consolidates query and search related tests
 set(QUERY_TEST_SOURCES
@@ -63,6 +66,7 @@ set(QUERY_TEST_SOURCES
 add_executable(query_test ${QUERY_TEST_SOURCES})
 target_include_directories(query_test PUBLIC .)
 target_link_libraries(query_test PRIVATE testing_common_base)
+gtest_discover_tests(query_test)
 
 # 1. Coordinator Test Suite - consolidates coordinator related tests
 set(COORDINATOR_TEST_SOURCES
@@ -74,6 +78,7 @@ target_include_directories(coordinator_test PUBLIC .)
 target_include_directories(coordinator_test
                            PUBLIC coordinator)
 target_link_libraries(coordinator_test PRIVATE testing_common_base)
+gtest_discover_tests(coordinator_test)
 
 # 1. Utils Test Suite - consolidates utility tests
 set(UTILS_TEST_SOURCES
@@ -90,6 +95,7 @@ target_include_directories(valkey_utils_test PUBLIC .)
 target_include_directories(valkey_utils_test
                            PUBLIC utils)
 target_link_libraries(valkey_utils_test PUBLIC testing_common_base)
+gtest_discover_tests(valkey_utils_test)
 
 # 7. Text Index Test Suite
 add_executable(text_index_test
@@ -99,3 +105,4 @@ add_executable(text_index_test
     text_index_schema_test.cc)
 target_include_directories(text_index_test PUBLIC .)
 target_link_libraries(text_index_test PRIVATE testing_common_base)
+gtest_discover_tests(text_index_test)

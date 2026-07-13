@@ -62,6 +62,7 @@ vmsdk::module::Options options = {
                     valkey_search::kAliasAddCmdPermissions),
                 .flags = {vmsdk::module::kWriteFlag, vmsdk::module::kFastFlag},
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTAliasAddCmd>,
+                .arity = 3,
             },
             {
                 .cmd_name = valkey_search::kAliasDelCommand,
@@ -69,6 +70,7 @@ vmsdk::module::Options options = {
                     valkey_search::kAliasDelCmdPermissions),
                 .flags = {vmsdk::module::kWriteFlag, vmsdk::module::kFastFlag},
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTAliasDelCmd>,
+                .arity = 2,
             },
             {
                 .cmd_name = valkey_search::kAliasUpdateCommand,
@@ -77,6 +79,7 @@ vmsdk::module::Options options = {
                 .flags = {vmsdk::module::kWriteFlag, vmsdk::module::kFastFlag},
                 .cmd_func =
                     &vmsdk::CreateCommand<valkey_search::FTAliasUpdateCmd>,
+                .arity = 3,
             },
             {
                 .cmd_name = valkey_search::kAliasListCommand,
@@ -86,6 +89,7 @@ vmsdk::module::Options options = {
                           vmsdk::module::kFastFlag},
                 .cmd_func =
                     &vmsdk::CreateCommand<valkey_search::FTAliasListCmd>,
+                .arity = 1,
             },
             {
                 .cmd_name = valkey_search::kInfoCommand,

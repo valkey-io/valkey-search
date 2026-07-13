@@ -108,16 +108,23 @@ bool PunctuationSegmenter::IsDelimiter(uint32_t cp) const {
 // NormalizeCaseFoldFilter implementation
 // ============================================================================
 
-NormalizeCaseFoldFilter::NormalizeCaseFoldFilter(NormalizationForm form)
-    : norm_form_(form) {}
+NormalizeCaseFoldFilter::NormalizeCaseFoldFilter(NormalizationForm form,
+                                                 const std::string &locale)
+    : norm_form_(form), locale_(locale) {}
 
-bool NormalizeCaseFoldFilter::Apply(std::string& token) const {
+bool NormalizeCaseFoldFilter::Apply(std::string &token) const {
   NormalizeInPlace(token);
   return true;
 }
 
-void NormalizeCaseFoldFilter::NormalizeInPlace(std::string& token) const {
-  if (absl::c_all_of(token, absl::ascii_isascii)) {
+void NormalizeCaseFoldFilter::NormalizeInPlace(std::string &token) const {
+  if (!locale_.empty()) {
+    // Locale-aware path: required for Turkish (and Azerbaijani) where the
+    // standard Unicode case folding produces incorrect results.
+    // Turkish I→ı (not I→i) and İ→i require locale-specific toLower rules.
+    token = UnicodeNormalizer::Normalize(token, norm_form_);
+    token = UnicodeNormalizer::LocaleAwareCaseFold(token, locale_);
+  } else if (absl::c_all_of(token, absl::ascii_isascii)) {
     absl::AsciiStrToLower(&token);
   } else {
     token = UnicodeNormalizer::Normalize(token, norm_form_);
@@ -496,10 +503,17 @@ std::shared_ptr<LanguageProcessor> CreateSnowballProcessor(
       std::make_shared<DelimiterQueryTokenizer>(*punct_segmenter);
 
   // Filter 1: Unicode normalization + case folding
+  // Turkish requires locale-aware case folding for correct İ/I handling:
+  //   I (U+0049) → ı (U+0131)  — dotless lowercase i
+  //   İ (U+0130) → i (U+0069)  — standard lowercase i
+  // Generic Unicode case folding maps both to 'i', which is incorrect for
+  // Turkish and causes retrieval failures on words containing dotless-ı.
   NormalizationForm norm_form = (language == data_model::LANGUAGE_ARABIC)
                                     ? NormalizationForm::NFKC
                                     : NormalizationForm::NFC;
-  auto normalizer = std::make_shared<NormalizeCaseFoldFilter>(norm_form);
+  std::string locale = (language == data_model::LANGUAGE_TURKISH) ? "tr" : "";
+  auto normalizer =
+      std::make_shared<NormalizeCaseFoldFilter>(norm_form, locale);
 
   // Filter 2: Stop word removal
   auto stop_filter = std::make_shared<StopWordFilter>(stop_words);

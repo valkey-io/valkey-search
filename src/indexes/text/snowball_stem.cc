@@ -87,12 +87,18 @@ std::string_view SnowballStemFilter::DoStemming(absl::string_view word,
     return word;
   }
   CHECK(stemmer) << "Stemmer is not initialized";
-  const sb_symbol* stemmed = sb_stemmer_stem(
-      stemmer, reinterpret_cast<const sb_symbol*>(word.data()), word.length());
+  const sb_symbol *stemmed = sb_stemmer_stem(
+      stemmer, reinterpret_cast<const sb_symbol *>(word.data()), word.length());
   CHECK(stemmed) << "Stemming failed";
   int stemmed_length = sb_stemmer_length(stemmer);
-  CHECK(stemmed_length > 0) << "Stemming failed";
-  return {reinterpret_cast<const char*>(stemmed),
+  // The Turkish Snowball stemmer can legitimately reduce a word to zero length
+  // due to its aggressive r_remove_proper_noun_suffix step combined with noun/
+  // verb suffix chains. This is a valid outcome, not an error — return the
+  // original word unchanged when it happens.
+  if (stemmed_length <= 0) {
+    return word;
+  }
+  return {reinterpret_cast<const char *>(stemmed),
           static_cast<std::string_view::size_type>(stemmed_length)};
 }
 

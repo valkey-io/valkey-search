@@ -216,22 +216,29 @@ class PunctuationSegmenter : public Segmenter {
 
 /// Concrete Normalizer that performs Unicode normalization and case folding.
 ///
-/// For ASCII-only tokens, applies simple ASCII lowercasing.
+/// For ASCII-only tokens, applies simple ASCII lowercasing (unless a locale
+/// is configured that requires special handling, e.g. Turkish).
 /// For tokens containing non-ASCII characters, applies the configured
 /// Unicode normalization form (NFC or NFKC) followed by Unicode case folding.
+///
+/// When a locale is set, locale-aware case folding is used instead of generic
+/// Unicode case folding. This is required for Turkish where I→ı and İ→i
+/// (dotted/dotless I) mappings differ from the default Unicode rules.
 class NormalizeCaseFoldFilter : public Normalizer {
  public:
   explicit NormalizeCaseFoldFilter(
-      NormalizationForm form = NormalizationForm::NFC);
+      NormalizationForm form = NormalizationForm::NFC,
+      const std::string &locale = "");
 
-  bool Apply(std::string& token) const override;
-  void NormalizeInPlace(std::string& token) const override;
+  bool Apply(std::string &token) const override;
+  void NormalizeInPlace(std::string &token) const override;
 
   /// Get the normalization form used by this filter.
   NormalizationForm GetNormForm() const { return norm_form_; }
 
  private:
   NormalizationForm norm_form_;
+  std::string locale_;  // Empty = generic folding; "tr" = Turkish-aware
 };
 
 /// TokenFilter that removes stop words.

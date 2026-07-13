@@ -95,4 +95,29 @@ void UnicodeNormalizer::CaseFoldInPlace(std::string& str) {
   str = std::move(out);
 }
 
+std::string UnicodeNormalizer::LocaleAwareCaseFold(absl::string_view text,
+                                                   const std::string &locale) {
+  if (text.empty()) {
+    return std::string();
+  }
+
+  // Turkish (and Azerbaijani) require locale-aware case mapping because:
+  //   - U+0049 (I) must map to U+0131 (ı) — dotless lowercase i
+  //   - U+0130 (İ) must map to U+0069 (i) — regular lowercase i
+  // Generic Unicode case folding maps both I and İ to i, which breaks
+  // Turkish text retrieval (queries for "ılık" won't match "ILIK").
+  //
+  // We use ICU's utf8ToLower with the Turkish locale rather than utf8Fold,
+  // because utf8Fold is locale-independent by design (Unicode CaseFolding.txt
+  // does not have Turkish-specific mappings).
+  std::string out;
+  icu::StringByteSink<std::string> sink(&out);
+  UErrorCode ec = U_ZERO_ERROR;
+  icu::CaseMap::utf8ToLower(locale.c_str(), /*options=*/0, ToStringPiece(text),
+                            sink, /*edits=*/nullptr, ec);
+  CHECK(U_SUCCESS(ec)) << "ICU utf8ToLower failed for locale '" << locale
+                       << "': " << u_errorName(ec);
+  return out;
+}
+
 }  // namespace valkey_search::indexes::text

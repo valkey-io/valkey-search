@@ -75,7 +75,7 @@ class TestAggregateLoadTextVector(ValkeySearchTestCaseBase):
             "LOAD", "1", "@title",
         )
 
-        expected_field = b"title"
+        expected_field = b"title" if key_type == "HASH" else b"$.title"
 
         assert result[0] == 3
         for row in result[1:]:

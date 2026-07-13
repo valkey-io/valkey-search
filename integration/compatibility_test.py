@@ -84,6 +84,9 @@ def parse_field(x, key_type):
     if isinstance(x, bytes):
         return parse_field(x.decode("utf-8"), key_type)
     if isinstance(x, str):
+        # Strip "$." prefix from JSON identifiers so field names are compared
+        # using the user-facing alias (e.g. "title" not "$.title").
+        # See: https://github.com/valkey-io/valkey-search/issues/1243
         return x[2::] if x.startswith("$.") else x
     if isinstance(x, int):
         return x

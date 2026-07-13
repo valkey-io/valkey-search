@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "absl/container/inlined_vector.h"
+#include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/ascii.h"
@@ -27,6 +28,7 @@
 #include "src/commands/filter_parser.h"
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/vector_base.h"
 #include "src/metrics.h"
 #include "src/query/search.h"
 #include "src/valkey_search_options.h"
@@ -390,6 +392,18 @@ absl::Status PostParseVectorParameters(query::SearchParameters &parameters) {
   VMSDK_ASSIGN_OR_RETURN(
       parameters.query,
       SubstituteParam(parameters, parameters.parse_vars.query_vector_string));
+
+  VMSDK_ASSIGN_OR_RETURN(auto index, parameters.index_schema->GetIndex(
+                                         parameters.attribute_alias));
+  auto *vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
+  CHECK(vector_index != nullptr);
+  if (parameters.query.size() !=
+      static_cast<size_t>(vector_index->GetVectorDataSize())) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("query vector blob size (", parameters.query.size(),
+                     ") does not match index's expected size (",
+                     vector_index->GetVectorDataSize(), ")."));
+  }
 
   if (!parameters.parse_vars.ef_string.empty()) {
     VMSDK_ASSIGN_OR_RETURN(

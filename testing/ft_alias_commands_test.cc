@@ -163,8 +163,9 @@ INSTANTIATE_TEST_SUITE_P(
             .return_code = absl::StatusCode::kInvalidArgument,
         },
         {
-            // alias == index_name is allowed (shadows the index until
-            // the index is resolved by direct lookup).
+            // alias == index_name is allowed. Real index lookup takes
+            // precedence over alias resolution, so the alias is inert
+            // but still recorded in the alias map.
             .test_name = "alias_same_as_index_name",
             .argv = {"FT.ALIASADD", "test_idx", "test_idx"},
             .index_schema_pbtxt = std::string(kTestIndexSchemaPbtxt),
@@ -258,12 +259,26 @@ TEST_F(FTAliasAddTest, AliasMatchingExistingIndexNameSucceeds) {
       SchemaManager::Instance().CreateIndexSchema(&fake_ctx_, second_proto));
 
   // FT.ALIASADD allows an alias whose name matches a different existing index.
+  // Real index lookup takes precedence: resolving "test_idx2" must return the
+  // real "test_idx2" index, not follow the alias to "test_idx".
   ValkeyModuleString* argv[3];
   argv[0] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.ALIASADD");
   argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_idx2");
   argv[2] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_idx");
 
   VMSDK_EXPECT_OK(FTAliasAddCmd(&fake_ctx_, argv, 3));
+
+  // Verify real-index-precedence: "test_idx2" resolves to the real index, not
+  // following the alias chain to "test_idx".
+  auto resolved = SchemaManager::Instance().GetIndexSchema(0, "test_idx2");
+  VMSDK_EXPECT_OK(resolved);
+  EXPECT_EQ(resolved.value()->GetName(), "test_idx2");
+
+  // Verify the alias mapping is still recorded.
+  auto aliases = SchemaManager::Instance().GetAllAliases(0);
+  ASSERT_EQ(aliases.size(), 1);
+  EXPECT_EQ(aliases[0].first, "test_idx2");
+  EXPECT_EQ(aliases[0].second, "test_idx");
 
   for (auto* arg : argv) {
     TestValkeyModule_FreeString(&fake_ctx_, arg);
@@ -597,12 +612,26 @@ TEST_F(FTAliasUpdateTest, AliasMatchingExistingIndexNameSucceeds) {
   VMSDK_EXPECT_OK(
       SchemaManager::Instance().CreateIndexSchema(&fake_ctx_, second_proto));
 
+  // ALIASUPDATE with alias name matching an existing index is allowed.
+  // Real index lookup takes precedence over alias resolution.
   ValkeyModuleString* argv[3];
   argv[0] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT.ALIASUPDATE");
   argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_idx2");
   argv[2] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_idx");
 
   VMSDK_EXPECT_OK(FTAliasUpdateCmd(&fake_ctx_, argv, 3));
+
+  // Verify real-index-precedence: "test_idx2" resolves to the real index, not
+  // following the alias chain to "test_idx".
+  auto resolved = SchemaManager::Instance().GetIndexSchema(0, "test_idx2");
+  VMSDK_EXPECT_OK(resolved);
+  EXPECT_EQ(resolved.value()->GetName(), "test_idx2");
+
+  // Verify the alias mapping is still recorded.
+  auto aliases = SchemaManager::Instance().GetAllAliases(0);
+  ASSERT_EQ(aliases.size(), 1);
+  EXPECT_EQ(aliases[0].first, "test_idx2");
+  EXPECT_EQ(aliases[0].second, "test_idx");
 
   for (auto* arg : argv) {
     TestValkeyModule_FreeString(&fake_ctx_, arg);
@@ -626,6 +655,17 @@ TEST_F(FTAliasUpdateTest, SelfReferentialAliasSucceeds) {
   argv[2] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "test_idx");
 
   VMSDK_EXPECT_OK(FTAliasUpdateCmd(&fake_ctx_, argv, 3));
+
+  // Real index lookup takes precedence: "test_idx" resolves to the index
+  // directly, the self-referential alias is inert but recorded.
+  auto resolved = SchemaManager::Instance().GetIndexSchema(0, "test_idx");
+  VMSDK_EXPECT_OK(resolved);
+  EXPECT_EQ(resolved.value()->GetName(), "test_idx");
+
+  auto aliases = SchemaManager::Instance().GetAllAliases(0);
+  ASSERT_EQ(aliases.size(), 1);
+  EXPECT_EQ(aliases[0].first, "test_idx");
+  EXPECT_EQ(aliases[0].second, "test_idx");
 
   for (auto* arg : argv) {
     TestValkeyModule_FreeString(&fake_ctx_, arg);

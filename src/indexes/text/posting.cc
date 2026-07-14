@@ -58,9 +58,9 @@ unsigned int count_num_terms(const PositionMap& pos_map) {
 
 void Postings::InsertKey(const Key& key, FlatPositionMap* flat_map) {
   // Insert FlatPositionMap pointer plus a mirror of its (immutable) tf.
-  key_to_positions_.emplace(
-      key, PostingValue{flat_map,
-                        static_cast<uint32_t>(flat_map->GetTermFrequency())});
+  PostingValue value{flat_map,
+                     static_cast<uint32_t>(flat_map->GetTermFrequency())};
+  key_to_positions_.emplace(key, value);
 }
 
 // Remove a document key and all its positions
@@ -110,8 +110,9 @@ const FlatPositionMap* Postings::FindKey(const Key& key) const {
   return it->second.map;
 }
 
-std::optional<uint32_t> Postings::GetTermFrequencyForKey(const Key& key) const {
-  auto it = key_to_positions_.find(key);
+std::optional<uint32_t> Postings::GetTermFrequencyForKey(
+    BorrowedInternedStringPtr key) const {
+  auto it = key_to_positions_.find(key.AsInternedRef());
   if (it == key_to_positions_.end()) {
     return std::nullopt;
   }

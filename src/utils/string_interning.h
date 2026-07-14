@@ -213,6 +213,16 @@ class BorrowedInternedStringPtr {
     return InternedStringPtr(const_cast<InternedString *>(ptr_));
   }
 
+  // Reinterpret this borrowed pointer as a non-owning InternedStringPtr
+  // reference without touching the ref count. Both types are single-pointer
+  // wrappers with identical layout (asserted below), so the reference aliases
+  // the same InternedString. Valid only for read-only use (map lookups,
+  // hashing) while the underlying InternedString is alive; the callee must not
+  // take ownership (copy/move) of the reference.
+  const InternedStringPtr &AsInternedRef() const {
+    return *reinterpret_cast<const InternedStringPtr *>(this);
+  }
+
   auto operator<=>(const BorrowedInternedStringPtr &other) const {
     return ptr_ <=> other.ptr_;
   }
@@ -226,6 +236,8 @@ class BorrowedInternedStringPtr {
 
 static_assert(std::is_trivially_destructible_v<BorrowedInternedStringPtr>,
               "BorrowedInternedStringPtr must be trivially destructible");
+static_assert(sizeof(BorrowedInternedStringPtr) == sizeof(InternedStringPtr),
+              "AsInternedRef() requires identical single-pointer layout");
 
 inline std::ostream &operator<<(std::ostream &os,
                                 const InternedStringPtr &str) {

@@ -109,7 +109,8 @@ struct Postings {
   // Term frequency for a specific key in this posting list. Returns nullopt if
   // the key is absent. Reads the tf mirror stored in the btree node, so it
   // does not dereference the FlatPositionMap block.
-  std::optional<uint32_t> GetTermFrequencyForKey(const Key& key) const;
+  std::optional<uint32_t> GetTermFrequencyForKey(
+      BorrowedInternedStringPtr key) const;
 
   // Defrag this contents of this object. Returns the updated "this" pointer.
   Postings* Defrag();

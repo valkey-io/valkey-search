@@ -656,7 +656,10 @@ struct ResolvedLeaf {
   float term_weight = 0.0f;
 };
 
-using ResolvedLeaves = absl::flat_hash_map<const TermPredicate *, ResolvedLeaf>;
+// Keyed on the base Predicate* (not TermPredicate*) so the per-document scoring
+// walk can look leaves up without a dynamic_cast: a hit is a scored term leaf,
+// a miss is a non-scored text predicate (prefix/suffix/fuzzy).
+using ResolvedLeaves = absl::flat_hash_map<const Predicate *, ResolvedLeaf>;
 
 // Walks the predicate tree once and resolves each TermPredicate leaf's posting
 // list (the expensive radix-tree lookup) and per-term weight, so the
@@ -713,7 +716,7 @@ struct ScoreContext {
 };
 
 std::optional<float> ScoreNode(const Predicate *predicate,
-                               const InternedStringPtr &key,
+                               BorrowedInternedStringPtr key,
                                const ScoreContext &ctx) {
   CHECK(predicate != nullptr);
 
@@ -748,16 +751,12 @@ std::optional<float> ScoreNode(const Predicate *predicate,
     }
     case PredicateType::kText: {
       // kText is shared by Term/Prefix/Suffix/Infix predicates; only
-      // TermPredicate is scored, so this cast must stay dynamic.
-      auto term_pred = dynamic_cast<const TermPredicate *>(predicate);
-
-      // non-TermPredicate text predicates (prefix/suffix/fuzzy): not yet
+      // TermPredicate is present in the resolved map (see ResolveLeaves). A
+      // miss here is a non-scored text predicate (prefix/suffix/fuzzy): not
       // scored, but the document still matched, so treat as a zero contribution
-      // rather than a non-match.
-      if (!term_pred) return 0.0f;
-
-      auto it = ctx.resolved.find(term_pred);
-      CHECK(it != ctx.resolved.end());
+      // rather than a non-match. This avoids a per-candidate dynamic_cast.
+      auto it = ctx.resolved.find(predicate);
+      if (it == ctx.resolved.end()) return 0.0f;
       const ResolvedLeaf &leaf = it->second;
       if (!leaf.postings) return std::nullopt;
 
@@ -820,7 +819,9 @@ void ScoreTextQuery(const IndexSchema &index_schema,
   std::vector<indexes::BorrowedNeighbor> scored;
   scored.reserve(candidates.size());
   for (const auto &c : candidates) {
-    auto key = c.key.Materialize();
+    // Non-owning view: scoring runs under the shared index lock, so the
+    // InternedString outlives the loop and no ref-count churn is needed.
+    const BorrowedInternedStringPtr &key = c.key;
     auto score = ScoreNode(root_predicate, key, ctx);
     if (!score) continue;
     const float document_score = ctx.has_score_field

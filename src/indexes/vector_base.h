@@ -128,15 +128,15 @@ absl::string_view LookupKeyByValue(
 
 class VectorBase : public IndexBase, public hnswlib::VectorTracker {
  public:
-  absl::StatusOr<bool> AddRecord(const InternedStringPtr& key,
-                                 absl::string_view record) override
+  absl::StatusOr<RecordResult> AddRecord(const InternedStringPtr& key,
+                                         absl::string_view record) override
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::StatusOr<bool> RemoveRecord(const InternedStringPtr& key,
                                     indexes::DeletionType deletion_type =
                                         indexes::DeletionType::kNone) override
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
-  absl::StatusOr<bool> ModifyRecord(const InternedStringPtr& key,
-                                    absl::string_view record) override
+  absl::StatusOr<RecordResult> ModifyRecord(const InternedStringPtr& key,
+                                            absl::string_view record) override
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   virtual size_t GetCapacity() const = 0;
   bool GetNormalize() const { return normalize_; }

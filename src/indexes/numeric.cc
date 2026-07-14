@@ -41,13 +41,16 @@ Numeric::Numeric(const data_model::NumericIndex& numeric_index_proto)
   index_ = std::make_unique<TreeType>();
 }
 
-absl::StatusOr<bool> Numeric::AddRecord(const InternedStringPtr& key,
-                                        absl::string_view data) {
+absl::StatusOr<RecordResult> Numeric::AddRecord(const InternedStringPtr& key,
+                                                absl::string_view data) {
   auto value = ParseNumber(data);
   absl::MutexLock lock(&index_mutex_);
   if (!value.has_value()) {
+    // A NUMERIC field whose value does not parse as a number is invalid data,
+    // not a missing field. Track it as untracked so the legacy (field-treated-
+    // as-missing) behavior is preserved when the caller ignores the signal.
     untracked_keys_.insert(key);
-    return false;
+    return RecordResult::kInvalidData;
   }
   auto [_, succ] = tracked_keys_.insert({key, *value});
   if (!succ) {
@@ -56,16 +59,16 @@ absl::StatusOr<bool> Numeric::AddRecord(const InternedStringPtr& key,
   }
   untracked_keys_.erase(key);
   index_->Insert(*value, key);
-  return true;
+  return RecordResult::kAdded;
 }
 
-absl::StatusOr<bool> Numeric::ModifyRecord(const InternedStringPtr& key,
-                                           absl::string_view data) {
+absl::StatusOr<RecordResult> Numeric::ModifyRecord(const InternedStringPtr& key,
+                                                   absl::string_view data) {
   auto value = ParseNumber(data);
   if (!value.has_value()) {
     [[maybe_unused]] auto res =
         RemoveRecord(key, indexes::DeletionType::kIdentifier);
-    return false;
+    return RecordResult::kInvalidData;
   }
   absl::MutexLock lock(&index_mutex_);
   auto it = tracked_keys_.find(key);
@@ -77,7 +80,7 @@ absl::StatusOr<bool> Numeric::ModifyRecord(const InternedStringPtr& key,
   index_->Erase(it->second, it->first);
   index_->Insert(*value, it->first);
   it->second = *value;
-  return true;
+  return RecordResult::kAdded;
 }
 
 absl::StatusOr<bool> Numeric::RemoveRecord(const InternedStringPtr& key,

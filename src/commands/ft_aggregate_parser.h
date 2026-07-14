@@ -46,7 +46,7 @@ struct IndexInterface {
 struct AggregateParameters : public expr::Expression::CompileContext,
                              public QueryCommand {
   ~AggregateParameters() override = default;
-  AggregateParameters(int db_num) : QueryCommand(db_num) {};
+  AggregateParameters(int db_num) : QueryCommand(db_num){};
   absl::Status ParseCommand(vmsdk::ArgsIterator& itr) override;
   void SendReply(ValkeyModuleCtx* ctx, query::SearchResult& result) override;
   bool loadall_{false};

@@ -791,8 +791,7 @@ std::optional<float> ScoreNode(const Predicate *predicate,
 void ScoreTextQuery(const IndexSchema &index_schema,
                     const Predicate *root_predicate,
                     const indexes::scoring::Scorer *scorer,
-                    std::vector<indexes::BorrowedNeighbor> &candidates,
-                    size_t top_k) {
+                    std::vector<indexes::BorrowedNeighbor> &candidates) {
   CHECK(root_predicate != nullptr);
   CHECK(scorer != nullptr);
   if (candidates.empty()) return;
@@ -830,19 +829,6 @@ void ScoreTextQuery(const IndexSchema &index_schema,
     const float final_score =
         scorer->ComposeDocumentScore(*score, document_score);
     scored.push_back({c.key, 0.0f, final_score});
-  }
-
-  auto cmp = [](const indexes::BorrowedNeighbor &a,
-                const indexes::BorrowedNeighbor &b) {
-    if (a.score != b.score) return a.score > b.score;
-    return a.key < b.key;
-  };
-  size_t k = std::min(top_k, scored.size());
-  if (k < scored.size()) {
-    std::partial_sort(scored.begin(), scored.begin() + k, scored.end(), cmp);
-    scored.resize(k);
-  } else {
-    std::sort(scored.begin(), scored.end(), cmp);
   }
 
   candidates = std::move(scored);
@@ -944,11 +930,9 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
       parameters.filter_parse_results.query_operations &
           QueryOperations::kContainsText) {
     const auto *scorer = indexes::scoring::GetScorer(parameters.scorer);
-    size_t top_k = static_cast<size_t>(parameters.limit.first_index +
-                                       parameters.limit.number);
     ScoreTextQuery(*parameters.index_schema,
                    parameters.filter_parse_results.root_predicate.get(), scorer,
-                   borrowed, top_k);
+                   borrowed);
   }
   return borrowed;
 }
@@ -1047,6 +1031,20 @@ void SearchResult::TrimResults(std::vector<T> &vec,
   SerializationRange range = GetSerializationRange(parameters, vec.size());
   size_t max_needed = static_cast<size_t>(
       range.end_index * options::GetSearchResultBufferMultiplier());
+  // Sort by score descending. For non-vector results (BorrowedNeighbor), use
+  // partial_sort to only order the elements we'll actually keep.
+  if constexpr (std::is_same_v<T, indexes::BorrowedNeighbor>) {
+    auto cmp = [](const indexes::BorrowedNeighbor &a,
+                  const indexes::BorrowedNeighbor &b) {
+      return a.score > b.score;
+    };
+    size_t sort_limit = std::min(max_needed, vec.size());
+    if (sort_limit < vec.size()) {
+      std::partial_sort(vec.begin(), vec.begin() + sort_limit, vec.end(), cmp);
+    } else {
+      std::sort(vec.begin(), vec.end(), cmp);
+    }
+  }
   // In standalone mode, we can optimize by trimming from front first.
   // In cluster mode on remote searches on individual shards, we cannot trim
   // from the front yet because each shard produces X results. However, the

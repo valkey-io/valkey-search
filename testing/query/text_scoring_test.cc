@@ -5,6 +5,7 @@
  *
  */
 
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <vector>
@@ -83,7 +84,7 @@ class TextScoringTest : public ValkeySearchTest {
   }
 
   // Runs ScoreTextQuery over all currently-indexed keys and returns the ranked
-  // results (already sorted by score desc, key asc).
+  // results (sorted by score desc).
   std::vector<indexes::BorrowedNeighbor> Score(const query::Predicate* root) {
     std::vector<indexes::BorrowedNeighbor> candidates;
     {
@@ -96,8 +97,14 @@ class TextScoringTest : public ValkeySearchTest {
     const auto* scorer =
         indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std);
     vmsdk::ReaderMutexLock lock(&index_schema_->GetTimeSlicedMutex());
-    query::ScoreTextQuery(*index_schema_, root, scorer, candidates,
-                          candidates.size());
+    query::ScoreTextQuery(*index_schema_, root, scorer, candidates);
+    // ScoreTextQuery no longer sorts (that now happens in TrimResults); order
+    // by score desc here to preserve this helper's ranked contract.
+    std::sort(candidates.begin(), candidates.end(),
+              [](const indexes::BorrowedNeighbor& a,
+                 const indexes::BorrowedNeighbor& b) {
+                return a.score > b.score;
+              });
     return candidates;
   }
 
@@ -204,8 +211,7 @@ TEST_F(TextScoringTest, EmptyCandidatesYieldsEmpty) {
   const auto* scorer =
       indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std);
   vmsdk::ReaderMutexLock lock(&index_schema_->GetTimeSlicedMutex());
-  query::ScoreTextQuery(*index_schema_, term.get(), scorer, candidates,
-                        candidates.size());
+  query::ScoreTextQuery(*index_schema_, term.get(), scorer, candidates);
   EXPECT_TRUE(candidates.empty());
 }
 

@@ -117,26 +117,6 @@ class NumericBTree {
     }
   }
 
-  static uint64_t SubtreePostings(NodeBase* node) {
-    if (!node) {
-      return 0;
-    }
-    if (node->IsLeaf()) {
-      Leaf* l = static_cast<Leaf*>(node);
-      uint64_t s = 0;
-      for (int i = 0; i < l->n; ++i) {
-        s += l->entries[i].keys.size();
-      }
-      return s;
-    }
-    auto* in = static_cast<Internal*>(node);
-    uint64_t s = 0;
-    for (int i = 0; i <= in->n; ++i) {
-      s += in->subtree_count[i];
-    }
-    return s;
-  }
-
   // First leaf-entry index whose value >= v.
   static int LeafLowerPos(const Leaf* l, double v) {
     int pos = 0;

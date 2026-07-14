@@ -680,7 +680,7 @@ inline bool NumericBTree::Insert(double value, const InternedStringPtr& key) {
   }
   ++total_postings_;
   if (r.split_right) {
-    auto *new_root = new Internal();
+    auto* new_root = new Internal();
     new_root->separators[0] = r.split_sep;
     new_root->children[0] = root_;
     new_root->children[1] = r.split_right;

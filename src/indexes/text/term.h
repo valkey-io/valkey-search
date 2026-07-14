@@ -15,7 +15,6 @@
 #include "src/indexes/scoring/bm25std_scorer.h"
 #include "src/indexes/text.h"
 #include "src/indexes/text/flat_position_map.h"
-#include "src/indexes/text/scoring_context.h"
 #include "src/indexes/text/text_iterator.h"
 #include "src/utils/inlined_priority_queue.h"
 
@@ -51,7 +50,7 @@ class TermIterator : public TextIterator {
       const FieldMaskPredicate query_field_mask, const bool require_positions,
       const FieldMaskPredicate stem_field_mask = 0, bool has_original = false,
       float leaf_weight = 1.0f, uint32_t num_doc_contain_term = 0,
-      const ScoringContext* scoring_ctx = nullptr);
+      const TextIndexSchema* text_index_schema = nullptr);
   /* Implementation of TextIterator APIs */
   FieldMaskPredicate QueryFieldMask() const override;
   // Key-level iteration
@@ -98,11 +97,11 @@ class TermIterator : public TextIterator {
 
   // Scoring inputs. leaf_weight_ is the query-tree weight applied to this leaf;
   // num_doc_contain_term_ (dt) is the per-term document count captured at build
-  // time; scoring_ctx_ holds the query-invariant corpus stats (null disables
-  // scoring).
+  // time; text_index_schema_ supplies the query-invariant corpus stats and the
+  // per-document doc_len (null disables scoring).
   const float leaf_weight_;
   const uint32_t num_doc_contain_term_;
-  const ScoringContext* const scoring_ctx_;
+  const TextIndexSchema* const text_index_schema_;
 
   // Typed scorer and per-leaf BM25 coefficients cached at construction. The
   // coefficients fold every query-invariant input (IDF, leaf weight,

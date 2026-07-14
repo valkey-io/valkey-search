@@ -145,7 +145,7 @@ size_t Text::EntriesFetcher::Size() const { return size_; }
 
 std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
   auto iter = predicate_->BuildTextIterator(text_index_, field_mask_,
-                                            require_positions_, scoring_ctx_);
+                                            require_positions_);
   return std::make_unique<text::TextFetcher>(std::move(iter));
 }
 
@@ -174,8 +174,7 @@ bool TryAddWordKeyIterator(
 
 std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
     const std::shared_ptr<indexes::text::TextIndex> &text_index,
-    FieldMaskPredicate field_mask, bool require_positions,
-    const indexes::text::ScoringContext *scoring_ctx) const {
+    FieldMaskPredicate field_mask, bool require_positions) const {
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
@@ -223,13 +222,13 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
   // first pass)
   return std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), field_mask, require_positions, stem_field_mask,
-      found_original, GetWeight(), num_doc_contain_term, scoring_ctx);
+      found_original, GetWeight(), num_doc_contain_term,
+      GetTextIndexSchema().get());
 }
 
 std::unique_ptr<indexes::text::TextIterator> PrefixPredicate::BuildTextIterator(
     const std::shared_ptr<indexes::text::TextIndex> &text_index,
-    FieldMaskPredicate field_mask, bool require_positions,
-    const indexes::text::ScoringContext * /*scoring_ctx*/) const {
+    FieldMaskPredicate field_mask, bool require_positions) const {
   auto word_iter = text_index->GetPrefix().GetWordIterator(GetTextString());
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
@@ -248,8 +247,7 @@ std::unique_ptr<indexes::text::TextIterator> PrefixPredicate::BuildTextIterator(
 
 std::unique_ptr<indexes::text::TextIterator> SuffixPredicate::BuildTextIterator(
     const std::shared_ptr<indexes::text::TextIndex> &text_index,
-    FieldMaskPredicate field_mask, bool require_positions,
-    const indexes::text::ScoringContext * /*scoring_ctx*/) const {
+    FieldMaskPredicate field_mask, bool require_positions) const {
   CHECK(text_index->GetSuffix().has_value())
       << "Text index does not have suffix trie enabled.";
   std::string reversed_word(GetTextString().rbegin(), GetTextString().rend());
@@ -272,15 +270,13 @@ std::unique_ptr<indexes::text::TextIterator> SuffixPredicate::BuildTextIterator(
 
 std::unique_ptr<indexes::text::TextIterator> InfixPredicate::BuildTextIterator(
     const std::shared_ptr<indexes::text::TextIndex> &text_index,
-    FieldMaskPredicate field_mask, bool require_positions,
-    const indexes::text::ScoringContext * /*scoring_ctx*/) const {
+    FieldMaskPredicate field_mask, bool require_positions) const {
   CHECK(false) << "Unsupported TextPredicate type";
 }
 
 std::unique_ptr<indexes::text::TextIterator> FuzzyPredicate::BuildTextIterator(
     const std::shared_ptr<indexes::text::TextIndex> &text_index,
-    FieldMaskPredicate field_mask, bool require_positions,
-    const indexes::text::ScoringContext * /*scoring_ctx*/) const {
+    FieldMaskPredicate field_mask, bool require_positions) const {
   // Limit the number of term word expansions
   uint32_t max_words = options::GetMaxTermExpansions().GetValue();
   auto key_iterators = indexes::text::FuzzySearch::Search(

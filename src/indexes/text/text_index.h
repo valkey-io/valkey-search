@@ -116,6 +116,21 @@ class TextIndexSchema {
   // Access to metadata for memory pool usage
   TextIndexMetadata &GetMetadata() { return metadata_; }
 
+  // Index-wide, query-invariant scoring inputs. avg_doc_len is 0 for an empty
+  // index, which callers treat as "scoring disabled".
+  struct IndexScoringStats {
+    uint32_t total_docs = 0;
+    float avg_doc_len = 0.0f;
+  };
+  IndexScoringStats GetIndexScoringStats() const {
+    const uint32_t total_docs = GetTrackedKeyCount();
+    const float avg_doc_len =
+        total_docs > 0
+            ? static_cast<float>(metadata_.total_doc_len.load()) / total_docs
+            : 0.0f;
+    return {total_docs, avg_doc_len};
+  }
+
   uint32_t GetKeyDocLen(const InternedStringPtr &key) const {
     auto itr = per_key_scoring_info_.find(key);
     return itr != per_key_scoring_info_.end() ? itr->second.doc_len : 0;

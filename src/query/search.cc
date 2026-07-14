@@ -37,7 +37,6 @@
 #include "src/indexes/text.h"
 #include "src/indexes/text/orproximity.h"
 #include "src/indexes/text/proximity.h"
-#include "src/indexes/text/scoring_context.h"
 #include "src/indexes/text/text_fetcher.h"
 #include "src/indexes/universal_set_fetcher.h"
 #include "src/indexes/vector_base.h"
@@ -92,6 +91,9 @@ SearchParametersInFlightGuard::~SearchParametersInFlightGuard() {
   SearchParametersInFlightCounter().fetch_sub(1, std::memory_order_relaxed);
 }
 }  // namespace detail
+
+// TODO: in-iterator scoring approach
+constexpr bool kIteratorScoringEnabled = true;
 
 // Query operation counters
 DEV_INTEGER_COUNTER(query_stats, query_text_term_count);
@@ -229,8 +231,7 @@ inline bool NeedsDeduplication(QueryOperations query_operations) {
 // estimated size.
 std::pair<std::unique_ptr<indexes::text::TextIterator>, size_t>
 BuildTextIterator(const Predicate *predicate, bool negate,
-                  bool require_positions, bool is_vec_query,
-                  const indexes::text::ScoringContext *scoring_ctx) {
+                  bool require_positions, bool is_vec_query) {
   if (predicate->GetType() == PredicateType::kComposedAnd ||
       predicate->GetType() == PredicateType::kComposedOr) {
     auto composed_predicate =
@@ -246,9 +247,8 @@ BuildTextIterator(const Predicate *predicate, bool negate,
           iterators;
       size_t min_size = SIZE_MAX;
       for (const auto &child : composed_predicate->GetChildren()) {
-        auto [iter, size] =
-            BuildTextIterator(child.get(), negate, child_require_positions,
-                              is_vec_query, scoring_ctx);
+        auto [iter, size] = BuildTextIterator(
+            child.get(), negate, child_require_positions, is_vec_query);
         if (iter) {
           iterators.push_back(std::move(iter));
           min_size = std::min(min_size, size);
@@ -270,9 +270,8 @@ BuildTextIterator(const Predicate *predicate, bool negate,
       size_t total_size = 0;
       bool has_non_text = false;
       for (const auto &child : composed_predicate->GetChildren()) {
-        auto [iter, size] =
-            BuildTextIterator(child.get(), negate, child_require_positions,
-                              is_vec_query, scoring_ctx);
+        auto [iter, size] = BuildTextIterator(
+            child.get(), negate, child_require_positions, is_vec_query);
         if (iter) {
           iterators.push_back(std::move(iter));
           total_size += size;
@@ -293,8 +292,8 @@ BuildTextIterator(const Predicate *predicate, bool negate,
     auto text_index = text_predicate->GetTextIndexSchema()->GetTextIndex();
     auto field_mask = text_predicate->GetFieldMask();
     size_t size = text_predicate->EstimateSize(is_vec_query);
-    auto result = text_predicate->BuildTextIterator(
-        text_index, field_mask, require_positions, scoring_ctx);
+    auto result = text_predicate->BuildTextIterator(text_index, field_mask,
+                                                    require_positions);
     return {std::move(result), size};
   }
   if (predicate->GetType() == PredicateType::kNegate) {
@@ -308,7 +307,7 @@ BuildTextIterator(const Predicate *predicate, bool negate,
 size_t EvaluateFilterAsPrimary(
     const SearchParameters &parameters, const Predicate *predicate,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
-    bool negate, const indexes::text::ScoringContext *scoring_ctx) {
+    bool negate) {
   const QueryOperations query_operations =
       parameters.filter_parse_results.query_operations;
   const IndexSchema *index_schema = parameters.index_schema.get();
@@ -332,8 +331,8 @@ size_t EvaluateFilterAsPrimary(
     auto predicate_type =
         EvaluateAsComposedPredicate(composed_predicate, negate);
     if (predicate_type == PredicateType::kComposedAnd) {
-      auto [text_iter, size] = BuildTextIterator(
-          composed_predicate, negate, false, is_vec_query, scoring_ctx);
+      auto [text_iter, size] =
+          BuildTextIterator(composed_predicate, negate, false, is_vec_query);
       if (text_iter) {
         entries_fetchers.push(
             std::make_unique<indexes::text::TextIteratorFetcher>(
@@ -345,7 +344,7 @@ size_t EvaluateFilterAsPrimary(
       for (const auto &child : composed_predicate->GetChildren()) {
         std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
         size_t child_size = EvaluateFilterAsPrimary(
-            parameters, child.get(), child_fetchers, negate, scoring_ctx);
+            parameters, child.get(), child_fetchers, negate);
         if (child_size < min_size) {
           min_size = child_size;
           best_fetchers = std::move(child_fetchers);
@@ -358,8 +357,8 @@ size_t EvaluateFilterAsPrimary(
       // multiple branches is scored on the sum of those branches (and any group
       // weight applies). Falls back to per-child fetchers when the OR mixes in
       // non-text predicates.
-      auto [text_iter, size] = BuildTextIterator(
-          composed_predicate, negate, false, is_vec_query, scoring_ctx);
+      auto [text_iter, size] =
+          BuildTextIterator(composed_predicate, negate, false, is_vec_query);
       if (text_iter) {
         entries_fetchers.push(
             std::make_unique<indexes::text::TextIteratorFetcher>(
@@ -370,7 +369,7 @@ size_t EvaluateFilterAsPrimary(
       for (const auto &child : composed_predicate->GetChildren()) {
         std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
         size_t child_size = EvaluateFilterAsPrimary(
-            parameters, child.get(), child_fetchers, negate, scoring_ctx);
+            parameters, child.get(), child_fetchers, negate);
         AppendQueue(entries_fetchers, child_fetchers);
         total_size += child_size;
       }
@@ -399,7 +398,6 @@ size_t EvaluateFilterAsPrimary(
         size, text_predicate->GetTextIndexSchema()->GetTextIndex(),
         text_predicate->GetFieldMask(), false);
     fetcher->predicate_ = text_predicate;
-    fetcher->scoring_ctx_ = scoring_ctx;
     entries_fetchers.push(std::move(fetcher));
     return size;
   }
@@ -407,7 +405,7 @@ size_t EvaluateFilterAsPrimary(
     auto negate_predicate = dynamic_cast<const NegatePredicate *>(predicate);
     size_t result =
         EvaluateFilterAsPrimary(parameters, negate_predicate->GetPredicate(),
-                                entries_fetchers, !negate, scoring_ctx);
+                                entries_fetchers, !negate);
     return result;
   }
   CHECK(false);
@@ -669,22 +667,13 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
   const auto text_index_schema =
       index_schema ? index_schema->GetTextIndexSchema() : nullptr;
 
-  // Query-invariant scoring inputs, captured once under the reader lock held by
-  // the caller. N and avg_doc_len never change during a query; doc_len and
-  // document_score are looked up per key inside the search loop below.
   static const indexes::scoring::Bm25StdScorer kBm25StdScorer;
-  indexes::text::ScoringContext scoring_ctx;
-  if (text_index_schema) {
-    uint32_t total_docs = text_index_schema->GetTrackedKeyCount();
-    if (total_docs > 0) {
-      uint64_t total_doc_len = index_schema->GetTotalDocumentLength();
-      scoring_ctx.scorer = &kBm25StdScorer;
-      scoring_ctx.total_docs = total_docs;
-      scoring_ctx.avg_doc_len =
-          static_cast<float>(total_doc_len) / static_cast<float>(total_docs);
-      scoring_ctx.text_index_schema = text_index_schema.get();
-    }
-  }
+
+  // Scoring runs only when the text index has at
+  // least one indexed document.
+  const bool iterator_scoring_enabled =
+      kIteratorScoringEnabled && text_index_schema &&
+      text_index_schema->GetTrackedKeyCount() > 0;
 
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
   size_t qualified_entries = 0;
@@ -696,7 +685,7 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
   } else {
     qualified_entries = EvaluateFilterAsPrimary(
         parameters, parameters.filter_parse_results.root_predicate.get(),
-        entries_fetchers, false, &scoring_ctx);
+        entries_fetchers, false);
   }
 
   // Compute the weighted score for matching documents
@@ -757,14 +746,14 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
         }
         borrowed.push_back(
             {BorrowedInternedStringPtr(key), 0.0f, weighted_score});
-        // Score from the text iterator if available
-        if (auto *text_iter = iterator->GetTextIterator()) {
-          float raw = text_iter->GetScore() * text_iter->GetWeight();
-          if (scoring_ctx.scorer != nullptr) {
-            borrowed.back().score = scoring_ctx.scorer->ComposeDocumentScore(
+        // Overwrite the flat weighted_score with the per-document relevance
+        // score when scoring is enabled. When disabled, keep weighted_score --
+        // the original, pre-scoring evaluation path.
+        if (iterator_scoring_enabled) {
+          if (auto *text_iter = iterator->GetTextIterator()) {
+            float raw = text_iter->GetScore() * text_iter->GetWeight();
+            borrowed.back().score = kBm25StdScorer.ComposeDocumentScore(
                 raw, index_schema->GetDocumentScore(key));
-          } else {
-            borrowed.back().score = raw;
           }
         }
         iterator->Next();

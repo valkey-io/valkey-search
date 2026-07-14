@@ -11,9 +11,17 @@
 #include <utility>
 
 #include "src/indexes/scoring/bm25std_scorer.h"
-#include "src/indexes/scoring/scorer.h"
 
 namespace valkey_search::indexes::text {
+
+namespace {
+// The only scorer wired up today. Stateless, so a single shared instance backs
+// every leaf iterator.
+const scoring::Bm25StdScorer& StdScorer() {
+  static const scoring::Bm25StdScorer scorer;
+  return scorer;
+}
+}  // namespace
 
 TermIterator::TermIterator(
     absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>&&
@@ -21,7 +29,7 @@ TermIterator::TermIterator(
     const FieldMaskPredicate query_field_mask, const bool require_positions,
     const FieldMaskPredicate stem_field_mask, bool has_original,
     float leaf_weight, uint32_t num_doc_contain_term,
-    const ScoringContext* scoring_ctx)
+    const TextIndexSchema* text_index_schema)
     : query_field_mask_(query_field_mask),
       stem_field_mask_(stem_field_mask),
       key_iterators_(std::move(key_iterators)),
@@ -31,18 +39,19 @@ TermIterator::TermIterator(
       has_original_(has_original),
       leaf_weight_(leaf_weight),
       num_doc_contain_term_(num_doc_contain_term),
-      scoring_ctx_(scoring_ctx) {
-  // Resolve the typed scorer and fold every query-invariant BM25 input (IDF,
-  // leaf weight, avg_doc_len, k1, b) into per-leaf coefficients once, so
-  // GetScore() avoids a per-document dynamic_cast, log call, and divide.
-  if (scoring_ctx_ != nullptr && scoring_ctx_->scorer != nullptr) {
-    bm25_scorer_ =
-        dynamic_cast<const scoring::Bm25StdScorer*>(scoring_ctx_->scorer);
-    if (bm25_scorer_ != nullptr) {
-      const float idf = bm25_scorer_->PrecomputeIDF(scoring_ctx_->total_docs,
+      text_index_schema_(text_index_schema) {
+  // Derive the query-invariant corpus stats from the schema and fold every
+  // fixed BM25 input (IDF, leaf weight, avg_doc_len, k1, b) into per-leaf
+  // coefficients once, so GetScore() avoids a per-document log call and divide.
+  // A null schema or empty corpus disables scoring (constant-stub fallback).
+  if (text_index_schema_ != nullptr) {
+    const auto stats = text_index_schema_->GetIndexScoringStats();
+    if (stats.total_docs > 0) {
+      bm25_scorer_ = &StdScorer();
+      const float idf = bm25_scorer_->PrecomputeIDF(stats.total_docs,
                                                     num_doc_contain_term_);
       leaf_coeffs_ = bm25_scorer_->PrecomputeLeafCoeffs(
-          idf, scoring_ctx_->avg_doc_len, leaf_weight_);
+          idf, stats.avg_doc_len, leaf_weight_);
     }
   }
 
@@ -72,10 +81,8 @@ float TermIterator::GetScore() const {
     term_frequency += key_iterators_[idx].GetCurrentKeyTermFrequency();
   }
 
-  const uint32_t doc_len =
-      scoring_ctx_->text_index_schema
-          ? scoring_ctx_->text_index_schema->GetKeyDocLen(*current_key_)
-          : 0;
+  // text_index_schema_ is non-null whenever bm25_scorer_ was resolved above.
+  const uint32_t doc_len = text_index_schema_->GetKeyDocLen(*current_key_);
 
   // Fast path: coefficients are precomputed at construction, so this is a
   // single multiply-add plus divide -- no dynamic_cast, no polymorphic stats,

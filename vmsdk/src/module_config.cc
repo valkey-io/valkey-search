@@ -8,6 +8,8 @@
 
 #include <absl/base/no_destructor.h>
 
+#include <utility>
+
 #include "absl/log/check.h"
 #include "absl/strings/ascii.h"
 #include "absl/strings/numbers.h"
@@ -119,6 +121,16 @@ void ModuleConfigManager::RegisterConfig(Registerable *config_item) {
 
 void ModuleConfigManager::UnregisterConfig(Registerable *config_item) {
   entries_.erase(config_item->GetName());
+}
+
+absl::flat_hash_map<std::string, Registerable *>
+ModuleConfigManager::Stash() {
+  return std::exchange(entries_, {});
+}
+
+void ModuleConfigManager::Restore(
+    absl::flat_hash_map<std::string, Registerable *> saved) {
+  entries_ = std::move(saved);
 }
 
 absl::Status ModuleConfigManager::Init(ValkeyModuleCtx *ctx) {

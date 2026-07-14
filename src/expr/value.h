@@ -29,7 +29,7 @@ class Value {
     const char* reason_;
   };
 
-  Value() : value_(Nil()) {};
+  Value() : value_(Nil()){};
   explicit Value(Nil n) : value_(n) {}
   explicit Value(bool b) : value_(b) {}
   explicit Value(int i) : value_(double(i)) {}

@@ -25,9 +25,8 @@ enum class ScorerType {
   kTfidf,
 };
 
-// Stateless, thread-safe scoring algorithm. Per-query state lives in
-// ScoringSession. Concrete scorers expect a specific ScoringStats
-// subtype and CHECK the contract.
+// Stateless, thread-safe scoring algorithm. Concrete scorers expect a
+// specific ScoringStats subtype and CHECK the contract.
 class Scorer {
  public:
   virtual ~Scorer() = default;

@@ -12,7 +12,7 @@
 
 #include "src/indexes/scoring/scoring_stats.h"
 
-// Shared test data for Bm25StdScorer and ScoringSession unit tests.
+// Shared test data for Bm25StdScorer unit tests.
 namespace valkey_search::indexes::scoring::test_data {
 
 inline constexpr uint32_t kTotalDocs = 8;

@@ -6,9 +6,7 @@ set(SRCS_SCORING
     ${CMAKE_CURRENT_LIST_DIR}/scoring/scorer.h
     ${CMAKE_CURRENT_LIST_DIR}/scoring/scorer.cc
     ${CMAKE_CURRENT_LIST_DIR}/scoring/bm25std_scorer.h
-    ${CMAKE_CURRENT_LIST_DIR}/scoring/bm25std_scorer.cc
-    ${CMAKE_CURRENT_LIST_DIR}/scoring/scoring_session.h
-    ${CMAKE_CURRENT_LIST_DIR}/scoring/scoring_session.cc)
+    ${CMAKE_CURRENT_LIST_DIR}/scoring/bm25std_scorer.cc)
 
 valkey_search_add_static_library(scoring "${SRCS_SCORING}")
 target_include_directories(scoring PUBLIC ${CMAKE_CURRENT_LIST_DIR})

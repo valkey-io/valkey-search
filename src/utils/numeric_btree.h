@@ -698,17 +698,18 @@ inline bool NumericBTree::Insert(double value, const InternedStringPtr& key) {
   if (!r.new_posting) {
     return false;
   }
+  ++total_postings_;
   if (r.split_right) {
-    auto* new_root = new Internal();
+    auto *new_root = new Internal();
     new_root->separators[0] = r.split_sep;
     new_root->children[0] = root_;
     new_root->children[1] = r.split_right;
-    new_root->subtree_count[0] = SubtreePostings(root_);
     new_root->subtree_count[1] = r.right_postings;
+    new_root->subtree_count[0] =
+        static_cast<uint64_t>(total_postings_) - r.right_postings;
     new_root->n = 1;
     root_ = new_root;
   }
-  ++total_postings_;
   if (value < cached_min_) {
     cached_min_ = value;
   }

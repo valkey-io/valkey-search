@@ -150,6 +150,8 @@ struct Postings {
   };
 
  private:
+  // Cache tf in PostingValue to avoid a map lookup
+  // PostValue should be removed and restored if no extra-step
   absl::btree_map<Key, PostingValue> key_to_positions_;
 };
 

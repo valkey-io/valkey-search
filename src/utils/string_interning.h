@@ -219,6 +219,7 @@ class BorrowedInternedStringPtr {
   // the same InternedString. Valid only for read-only use (map lookups,
   // hashing) while the underlying InternedString is alive; the callee must not
   // take ownership (copy/move) of the reference.
+  // Delete this if extra-step scoring not used
   const InternedStringPtr &AsInternedRef() const {
     return *reinterpret_cast<const InternedStringPtr *>(this);
   }

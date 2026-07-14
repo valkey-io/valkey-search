@@ -343,8 +343,8 @@ size_t EvaluateFilterAsPrimary(
       std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> best_fetchers;
       for (const auto &child : composed_predicate->GetChildren()) {
         std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
-        size_t child_size = EvaluateFilterAsPrimary(
-            parameters, child.get(), child_fetchers, negate);
+        size_t child_size = EvaluateFilterAsPrimary(parameters, child.get(),
+                                                    child_fetchers, negate);
         if (child_size < min_size) {
           min_size = child_size;
           best_fetchers = std::move(child_fetchers);
@@ -368,8 +368,8 @@ size_t EvaluateFilterAsPrimary(
       size_t total_size = 0;
       for (const auto &child : composed_predicate->GetChildren()) {
         std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
-        size_t child_size = EvaluateFilterAsPrimary(
-            parameters, child.get(), child_fetchers, negate);
+        size_t child_size = EvaluateFilterAsPrimary(parameters, child.get(),
+                                                    child_fetchers, negate);
         AppendQueue(entries_fetchers, child_fetchers);
         total_size += child_size;
       }

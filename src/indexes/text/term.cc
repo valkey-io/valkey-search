@@ -48,10 +48,10 @@ TermIterator::TermIterator(
     const auto stats = text_index_schema_->GetIndexScoringStats();
     if (stats.total_docs > 0) {
       bm25_scorer_ = &StdScorer();
-      const float idf = bm25_scorer_->PrecomputeIDF(stats.total_docs,
-                                                    num_doc_contain_term_);
-      leaf_coeffs_ = bm25_scorer_->PrecomputeLeafCoeffs(
-          idf, stats.avg_doc_len, leaf_weight_);
+      const float idf =
+          bm25_scorer_->PrecomputeIDF(stats.total_docs, num_doc_contain_term_);
+      leaf_coeffs_ = bm25_scorer_->PrecomputeLeafCoeffs(idf, stats.avg_doc_len,
+                                                        leaf_weight_);
     }
   }
 

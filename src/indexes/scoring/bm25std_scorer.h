@@ -71,7 +71,8 @@ class Bm25StdScorer : public Scorer {
   // (b*dl/avgdl) is gone because avgdl is baked into w2 here, once per term.
   struct LeafCoeffs {
     float w0 = 0.0f;  // leaf_weight * idf * (k1 + 1)      -- numerator scale
-    float w1 = 0.0f;  // k1 * (1 - b)                      -- constant denom term
+    float w1 =
+        0.0f;  // k1 * (1 - b)                      -- constant denom term
     float w2 = 0.0f;  // k1 * b / avg_doc_len              -- per-dl denom slope
     bool valid = false;  // false for a degenerate corpus (avg_doc_len <= 0)
   };

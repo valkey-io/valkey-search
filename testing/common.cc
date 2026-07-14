@@ -175,8 +175,7 @@ data_model::TextIndex CreateTextIndexProto(bool with_suffix_trie, bool no_stem,
 indexes::Neighbor ToIndexesNeighbor(const NeighborTest &neighbor_test) {
   auto string_interned_external_id =
       StringInternStore::Intern(neighbor_test.external_id);
-  indexes::Neighbor neighbor(string_interned_external_id,
-                             neighbor_test.score);
+  indexes::Neighbor neighbor(string_interned_external_id, neighbor_test.score);
   if (neighbor_test.attribute_contents.has_value()) {
     std::optional<RecordsMap> attribute_contents;
     neighbor.attribute_contents.value() = RecordsMap();

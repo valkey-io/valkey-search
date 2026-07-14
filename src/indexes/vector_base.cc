@@ -267,8 +267,8 @@ absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply(
       knn_res.pop();
       continue;
     }
-    ret.emplace_back(
-        Neighbor{vector_key.value(), static_cast<float>(ele.first)});
+    // Insert in desc order. Will need an update with score in the future
+    ret.emplace_back(Neighbor{vector_key.value(), ele.first});
     knn_res.pop();
   }
   // Reverse to obtain asc order of closest neighbors first.
